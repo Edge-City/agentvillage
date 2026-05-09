@@ -38,6 +38,94 @@ Two paths:
 
 **2. I know what I'm doing.** Get your EdgeOS API token from the EdgeOS portal, clone this repo, and plug the skills into your existing agent (Hermes, Claude Code, custom Anthropic API setup). ~3 minutes.
 
+## Integration API
+
+The integration API is for **InstaClaw** and **EdgeOS** — the two systems that provision agents on behalf of attendees. End users do not call this directly.
+
+### Authentication
+
+All requests use the experiment network's **master key** as a bearer token:
+
+```
+x-api-key: <masterKey>
+```
+
+The master key is issued once when the experiment network is created in the Index Network dashboard and is never re-shown.
+
+### POST /api/networks/:id/signup
+
+Provisions (or re-provisions) an attendee's Index Network account and returns an API key bound to a network-scoped agent. No email is sent — the caller is responsible for delivering the key to the attendee.
+
+**Request**
+
+```
+POST https://protocol.index.network/api/networks/<NETWORK_ID>/signup
+Content-Type: application/json
+x-api-key: <masterKey>
+```
+
+**Body** (`email` is the only required field):
+
+```json
+{
+  "email": "alice@example.com",
+  "name": "Alice Example",
+  "bio": "Independent researcher on coordination problems.",
+  "location": "Healdsburg, CA",
+  "socials": [
+    { "label": "telegram", "value": "@alice" },
+    { "label": "twitter",  "value": "alice_eg" }
+  ]
+}
+```
+
+| Field | Required | Max | Notes |
+|---|---|---|---|
+| `email` | yes | — | Lowercased + trimmed. |
+| `name` | no | 200 chars | Overwrites stored name when present. |
+| `bio` | no | 2000 chars | |
+| `location` | no | 200 chars | |
+| `socials` | no | 32 entries | Open vocabulary — any string labels (`telegram`, `twitter`, `github`, `farcaster`, …). Upserted by label. |
+
+**Response**
+
+```json
+{
+  "user":   { "id": "<uuid>", "email": "alice@example.com" },
+  "apiKey": "ix_...",
+  "mcpServer": {
+    "name":    "index",
+    "url":     "https://protocol.index.network/mcp",
+    "headers": { "x-api-key": "ix_..." }
+  }
+}
+```
+
+HTTP `201` if the user was newly created; `200` if they already existed.
+
+`mcpServer` is the JSON object to write into the runtime's MCP servers config (standard across Claude Code, OpenClaw, Hermes, and most other MCP-compatible runtimes).
+
+**Idempotency**
+
+Every call with the same email returns the same user but a **fresh API key** — the previous key is revoked. Store the key returned by the latest call. If the integrator retries before delivering the key to the attendee, the retried call's key supersedes the earlier one.
+
+**Errors**
+
+| Code | Reason |
+|---|---|
+| 400 | Missing or invalid email; oversized field; malformed `socials` array. |
+| 401 | Missing `x-api-key` header. |
+| 403 | Master key invalid; network not in experiment mode; network deleted. |
+
+### What InstaClaw does after signup
+
+1. Runs the EdgeClaw installer with the returned `apiKey`: `bun packages/edgeclaw/install/install.ts <apiKey>` (or equivalent in the hosted runtime).
+2. In a follow-up step, captures the attendee's Telegram handle and binds it to their agent transport — this is entirely InstaClaw-owned and happens outside this endpoint.
+
+### What EdgeOS does after signup
+
+Displays the returned `mcpServer` object to the attendee as a copyable config snippet. The attendee pastes it into their agent's MCP servers config (or runs `bun packages/edgeclaw/install/install.ts <apiKey>` from a clone of this repo).
+
 ## Prerequisites
 
 - [OpenClaw](https://openclaw.dev) installed and configured (`openclaw onboard --mode local` or `openclaw setup`).
