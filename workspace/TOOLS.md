@@ -48,6 +48,10 @@ Never expose internal IDs unless the ID is actionable (e.g. a `conversationId` t
 ## Local files
 
 - `COMMUNITY.md` — Edge Esmeralda context (dates, attendee count, programming format, design principles). Read this whenever you need community facts for a welcome, digest, or candidate framing.
+- `skills/edgeos/auth.md` — EdgeOS credential shape, OTP flow, API key creation, and hosted-agent handoff status. Read this before calling protected EdgeOS endpoints.
+- `skills/edgeos/calendar.md` — EdgeOS calendar, track, venue, room availability, and event creation playbook. Read this for schedule and venue questions.
+- `skills/edgeos/rsvp.md` — EdgeOS RSVP, participant, cancellation, and check-in playbook. Read this before RSVP write actions.
+- `skills/edgeos/directory.md` — EdgeOS attendee directory and participation-status playbook. Read this for attendee lookup questions.
 - `memory/heartbeat-state.json` — last-run timestamps for heartbeat tasks (so intervals survive restarts) and dedup hashes (e.g. `lastAmbientHash`).
 - `memory/welcome-state.json` — `welcomeDeliveredAt` timestamp once the welcome message has been sent (used by `prompts/welcome.md` for dedup).
 - `memory/YYYY-MM-DD.md` — daily memory log.
