@@ -28,7 +28,7 @@ Send a morning brief to the user via the `message` tool.
    Skip a section that has zero candidates.
 
    **Critical rendering distinction for the introducer section:** these are *community intents* the user might know someone for — NOT opportunity cards.
-   - DO link the person's name to their `profileUrl` (the same Telegram-or-index.network resolution as the direct section).
+   - DO link the person's name to their `profileUrl` (the Index web profile URL — same shape as the direct section).
    - Do NOT link the opportunity — no `acceptUrl`. The trailing `make intro` is plain text, not a hyperlink. The connect/accept link belongs only in the direct (`connection`) section. If the user wants to act on an introducer item, they reply to the agent and the agent handles it next turn.
 
 4. **Quality bar (apply per candidate):** a candidate qualifies only if you can write a one-sentence reason that is specific to *this* user's situation and would not read identically for any other user. Drop generic framings.

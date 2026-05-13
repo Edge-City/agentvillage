@@ -39,14 +39,14 @@ Calm, direct, analytical, concise. Vocabulary: opportunity, overlap, signal, pat
    Lead-in line: `A few residents are looking for something specific. If you know someone who fits, a quick nudge goes a long way.`
 
    For each introducer (`connector-flow`), surface only the OTHER party's open intent — what they're looking for. **The receiver is being asked whether they know someone who fits, not asked to take an action right now.**
-   - **DO link the person's name** to their `profileUrl` (the same Telegram-or-index.network resolution as the direct section).
+   - **DO link the person's name** to their `profileUrl` (the Index web profile URL — same shape as the direct section).
    - **Do NOT link the opportunity** — no `acceptUrl`. The trailing `make intro` is plain text, not a hyperlink. The connect/accept action belongs only to direct candidates; for introducer candidates the user replies to the agent if they want to act.
    - **No greeting and no `acceptUrl`.**
    - Render the line as: `[{Name}]({profileUrl}) — {their need, 1–2 sentences drawn from `mainText`}. {short closing phrase}, make intro`
    - Examples (the literal target shape — match this):
-     - `[Remi](https://t.me/remi) — Looking for a technical co-founder for his regenerative education platform. Needs someone who thinks in systems and has shipped infra. Know anyone, make intro`
-     - `[Kai](https://t.me/kai) — Needs people deep in decentralized discovery — agent tooling, knowledge graphs, semantic search. Bring one to his 3pm open conversation, make intro`
-     - `[Celia](https://index.network/u/...) — Designing governance tooling for popup communities. Coordination, consent, collective decision-making. Point her at the right people, make intro`
+     - `[Remi](https://index.network/u/...?link_preview=false) — Looking for a technical co-founder for his regenerative education platform. Needs someone who thinks in systems and has shipped infra. Know anyone, make intro`
+     - `[Kai](https://index.network/u/...?link_preview=false) — Needs people deep in decentralized discovery — agent tooling, knowledge graphs, semantic search. Bring one to his 3pm open conversation, make intro`
+     - `[Celia](https://index.network/u/...?link_preview=false) — Designing governance tooling for popup communities. Coordination, consent, collective decision-making. Point her at the right people, make intro`
 
    If `totalPending` exceeds the candidates you surfaced, end with: `There are N more conversations waiting for you, let me know if you want to see them.`
 
