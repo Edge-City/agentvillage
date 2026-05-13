@@ -88,7 +88,7 @@ The welcome opener is a **single line** — `Welcome to Edge Esmeralda`. Do NOT 
 
 #### Ambient update (fires twice daily at 14:00 and 20:00 host-local)
 
-Two sections are possible: direct (the user is a party — link names, embed `&msg=` greetings) and introducer (the user is the introducer — render community intents, no name link, no `&msg=`). Skip a section that has no qualifying candidates. Per-pass cap: max 3 direct + 3 introducer.
+Two sections are possible: direct (the user is a party — link the name to `profileUrl`, embed `acceptUrl` + `&msg=` greeting) and introducer (the user is the introducer — render community intents, still link the name to `profileUrl`, but no `acceptUrl` and no `&msg=`). Skip a section that has no qualifying candidates. Per-pass cap: max 3 direct + 3 introducer.
 
 > **New conversations worth starting**
 > - [Erik Leibner](https://index.network/u/...?link_preview=false) — Senior software engineer focused on AI systems. There's a clear overlap with how you're thinking about decentralized search + agents. Feels like a "build together" type conversation, [message Erik](https://protocol.index.network/api/opportunities/.../connect?token=...&msg=...)
