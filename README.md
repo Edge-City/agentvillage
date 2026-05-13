@@ -26,7 +26,7 @@ See the project hub for the full diagram and decisions.
 
 - `workspace/IDENTITY.md` — what an EdgeClaw agent knows about itself and the village
 - `workspace/` — the full runtime workspace bundle (prompts, soul, heartbeat, community context)
-- `skills/` — directory for backend-specific skill bundles
+- `skills/`: backend-specific skill bundles, including EdgeOS calendar/RSVP/directory docs
 - `onboarding/` — intent-capture flow for new agents (1 to 2 questions during setup)
 - `install/` — bootstrap scripts for plugging EdgeClaw into a runtime
 
@@ -155,8 +155,9 @@ The installer:
 1. Writes `mcp.servers.index` in `~/.openclaw/openclaw.json`, pointed at `https://protocol.index.network/mcp` with your API key in `x-api-key`.
 2. Sets `channels.telegram.streaming.mode = off` so OpenClaw doesn't dump per-tool status drafts into your chat.
 3. Copies the workspace markdown bundle into `~/.openclaw/workspace/`. `USER.md` is preserved on re-install (it holds your lived notes from `BOOTSTRAP.md`); pass `--wipe-user` to overwrite it.
-4. Installs three cron jobs: daily digest (`0 8 * * *`), ambient discovery afternoon (`0 14 * * *`), ambient discovery evening (`0 20 * * *`).
-5. Restarts the gateway so all config changes take effect.
+4. Copies backend skill docs into `~/.openclaw/workspace/skills/`.
+5. Installs three cron jobs: daily digest (`0 8 * * *`), ambient discovery afternoon (`0 14 * * *`), ambient discovery evening (`0 20 * * *`).
+6. Restarts the gateway so all config changes take effect.
 
 Send any message in your chat to bring EdgeClaw online:
 
@@ -211,7 +212,7 @@ The remaining ambient/accepted/freshness/memory work stays on the heartbeat tick
 Skills in this repo are public. Each backend gates access with its own per-user credential, wired in by the matching per-backend installer:
 
 - **Index Network (today's wired backend)** — per-user API key returned by `POST /api/networks/:id/signup` (see [Integration API: Authentication](#authentication) above). `install/install_index.ts` writes it into `mcp.servers.index` as the `x-api-key` header.
-- **EdgeOS** — per-user token issued via OTP through the EdgeOS portal. Lands in `install/install_edgeos.ts` once that backend is wired.
+- **EdgeOS:** per-user API key or OTP-issued bearer token rooted in EdgeOS identity. The skill docs in `skills/edgeos/` describe calendar, RSVP, and directory calls. Credential provisioning lands in `install/install_edgeos.ts` once the portal / InstaClaw handoff is finalized.
 - **Geo** — per-user credential, mechanism TBD. Lands in `install/install_geo.ts` once that backend is wired.
 
 The skill files describe HOW to call each backend's APIs; the per-backend credential is what unlocks them.
