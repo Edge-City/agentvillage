@@ -1,230 +1,73 @@
-# EdgeClaw
+# Edge Esmeralda 2026 — Agent Skill
 
-The Agent Village experience for **Edge Esmeralda 2026** (May 30 – Jun 27, Healdsburg, CA).
+A single-file skill that gives AI agents access to Edge Esmeralda 2026 data: event schedule, attendee directory, wiki, newsletters, and organization info.
 
-EdgeClaw is the public skills package and onboarding scripts that an OpenClaw agent (whether running via InstaClaw or self-hosted) loads to participate in the Edge Esmeralda Agent Village. It's a multi-backend package: ambient discovery and intent negotiation through Index Network, knowledge graph through Geo, calendar and directory through EdgeOS. EdgeClaw defines what an agent knows, how it authenticates with each backend, and how it interacts with attendees.
+## For Users (Attendees)
 
-## What you get
+**Download [`SKILL.md`](./SKILL.md)** and add it to your agent's skill/context:
 
-Today, capabilities come from **Index Network** (ambient discovery + intent negotiation). **Geo** (knowledge graph) and **EdgeOS** (calendar + directory) are also in scope. Once installed, EdgeClaw:
+- **Claude Code**: Copy to `~/.claude/skills/edge-esmeralda/SKILL.md`
+- **OpenClaw / Hermes / NanoClaw**: Add to your agent's skill directory
 
-- **Runs onboarding** the first time you message it (greet → profile lookup → community discovery → first signal → `complete_onboarding` → silent capture of your platform handle).
-- **Sends a morning digest at 08:00 host-local time** with the connections worth your attention and the asks where you can help.
-- **Surfaces ambient discoveries twice daily at 14:00 and 20:00 host-local** — selective per pass: max 3 direct (you're a party) + 3 introducer (you'd make the intro), quality-bar gated. Anything skipped lands in tomorrow's digest.
-- **Notifies you when someone accepts** a connection on your behalf.
-- **Curates memory** every few days — distills daily notes into long-term `MEMORY.md`.
-
-EdgeClaw never names the plumbing in chat. You see EdgeClaw and (when relevant) your community.
-
-## Architecture
-
-EdgeClaw plugs into the EdgeOS portal (the identity + spine), with InstaClaw as the recommended runtime for non-technical attendees. Backends the agent calls: Geo (knowledge graph), Index (negotiation + ambient discovery), and EdgeOS APIs (calendar, directory).
-
-See the project hub for the full diagram and decisions.
-
-## What's here
-
-- `workspace/IDENTITY.md` — what an EdgeClaw agent knows about itself and the village
-- `workspace/` — the full runtime workspace bundle (prompts, soul, heartbeat, community context)
-- `skills/` — directory for backend-specific skill bundles
-- `onboarding/` — intent-capture flow for new agents (1 to 2 questions during setup)
-- `install/` — bootstrap scripts for plugging EdgeClaw into a runtime
-
-## Getting an agent connected
-
-Two paths:
-
-**1. I'm new to agents.** Sign up at `edgecity.live/agentvillage` and pick "Set one up for me." InstaClaw provisions a hosted agent with EdgeClaw preinstalled. ~5 minutes.
-
-**2. I'm self-hosting OpenClaw.** Set up a clean OpenClaw installation, then run the EdgeClaw installer from a clone of this repo.
-
-## Integration API
-
-The integration API is for **InstaClaw** and **EdgeOS** — the two systems that provision agents on behalf of attendees. End users do not call this directly.
-
-### Authentication
-
-All requests use the experiment network's **master key** as a bearer token:
-
-```
-x-api-key: <masterKey>
-```
-
-The master key is issued once when the experiment network is created in the Index Network dashboard and is never re-shown. It is **server-side only** — never expose it in the EdgeOS portal frontend, user-visible config, the public repo, or attendee-facing copy-paste.
-
-### POST /api/networks/:id/signup
-
-Provisions (or re-provisions) an attendee's Index Network account and returns an API key bound to a network-scoped agent. No email is sent — the caller is responsible for delivering the key to the attendee.
-
-**Request**
-
-```
-POST https://protocol.index.network/api/networks/<NETWORK_ID>/signup
-Content-Type: application/json
-x-api-key: <masterKey>
-```
-
-**Body** (`email` is the only required field):
-
-```json
-{
-  "email": "alice@example.com",
-  "name": "Alice Example",
-  "bio": "Independent researcher on coordination problems.",
-  "location": "Healdsburg, CA",
-  "socials": [
-    { "label": "telegram", "value": "@alice" },
-    { "label": "twitter",  "value": "alice_eg" }
-  ]
-}
-```
-
-| Field | Required | Max | Notes |
-|---|---|---|---|
-| `email` | yes | — | Lowercased + trimmed. |
-| `name` | no | 200 chars | Overwrites stored name when present. |
-| `bio` | no | 2000 chars | |
-| `location` | no | 200 chars | |
-| `socials` | no | 32 entries | Open vocabulary — any string labels (`telegram`, `twitter`, `github`, `farcaster`, …). Upserted by label. |
-
-**Response**
-
-```json
-{
-  "user":   { "id": "<uuid>", "email": "alice@example.com" },
-  "apiKey": "ix_...",
-  "mcpServer": {
-    "name":    "index",
-    "url":     "https://protocol.index.network/mcp",
-    "headers": { "x-api-key": "ix_..." }
-  }
-}
-```
-
-HTTP `201` if the user was newly created; `200` if they already existed.
-
-`mcpServer` is the standard MCP server config object that OpenClaw reads on startup.
-
-**Idempotency**
-
-Every call with the same email returns the same user but a **fresh API key** — the previous key is revoked. Store the key returned by the latest call. If the integrator retries before delivering the key to the attendee, the retried call's key supersedes the earlier one.
-
-**Errors**
-
-| Code | Reason |
-|---|---|
-| 400 | Missing or invalid email; oversized field; malformed `socials` array. |
-| 401 | Missing `x-api-key` header. |
-| 403 | Master key invalid; network not in experiment mode; network deleted. |
-
-### What InstaClaw does after signup
-
-1. Runs the EdgeClaw installer with the returned `apiKey`: `bun install/install.ts <apiKey>` (or equivalent in the hosted runtime).
-2. In a follow-up step, captures the attendee's Telegram handle and binds it to their agent transport — this is entirely InstaClaw-owned and happens outside this endpoint.
-
-### What EdgeOS does after signup
-
-Displays the returned `mcpServer` object to the attendee as a copyable config snippet. The attendee pastes it into their agent's MCP servers config (or runs `bun install/install.ts <apiKey>` from a clone of this repo).
-
-## Prerequisites
-
-- [OpenClaw](https://openclaw.dev) installed and configured (`openclaw onboard --mode local` or `openclaw setup`).
-- An API key for the Index protocol. Generate one on your agents page at [index.network](https://index.network) (or your community-branded node).
-- [Bun](https://bun.sh) — the installer is a Bun script (Node 20+ also works if you swap the shebang).
-
-## Install
-
-From a clone of this repo:
-
+Set environment variables:
 ```bash
-bun install/install.ts <YOUR_API_KEY>
-# or
-API_KEY=<YOUR_API_KEY> bun install/install.ts
+export EDGEOS_API_KEY="eos_live_..."      # Required for the calendar (events, RSVPs, venues)
+export EDGEOS_BEARER_TOKEN="your-token"   # Required for attendee directory search
 ```
 
-To target the dev environment (keys generated on `dev.index.network`), pass `--dev`:
+Generate the calendar token from the EdgeOS portal under `/portal/api-keys`.
 
+## For Maintainers
+
+This repo contains backend infrastructure that keeps the skill's reference content fresh.
+
+### Setup
 ```bash
-bun install/install.ts <YOUR_DEV_API_KEY> --dev
+bun install
 ```
 
-Or override the MCP URL explicitly via `INDEX_MCP_URL=…`. Without either, the installer points at `https://protocol.index.network/mcp` (production).
-
-The installer:
-
-1. Writes `mcp.servers.index` in `~/.openclaw/openclaw.json`, pointed at `https://protocol.index.network/mcp` with your API key in `x-api-key`.
-2. Sets `channels.telegram.streaming.mode = off` so OpenClaw doesn't dump per-tool status drafts into your chat.
-3. Copies the workspace markdown bundle into `~/.openclaw/workspace/`. `USER.md` is preserved on re-install (it holds your lived notes from `BOOTSTRAP.md`); pass `--wipe-user` to overwrite it.
-4. Installs three cron jobs: daily digest (`0 8 * * *`), ambient discovery afternoon (`0 14 * * *`), ambient discovery evening (`0 20 * * *`).
-5. Restarts the gateway so all config changes take effect.
-
-Send any message in your chat to bring EdgeClaw online:
-
-- **Not yet onboarded**: the agent calls `read_user_profiles()` at session start, sees `onboardingComplete: false`, and runs `BOOTSTRAP.md` — which delivers the welcome at the end of the ritual.
-- **Already onboarded** (e.g. you reinstalled or migrated machines): the agent skips `BOOTSTRAP.md` and chats normally. The next ambient pass (14:00 / 20:00) or daily digest (08:00) picks you back up.
-- **Onboarding got reset server-side**: the next session sees `onboardingComplete: false` and re-runs `BOOTSTRAP.md` from the still-staged file (it's *not* deleted at the end of onboarding, by design).
-
-## Reset
-
-To tear down EdgeClaw and start fresh (leaves Telegram token, OpenRouter key, and gateway config untouched):
-
+### Run indexer
 ```bash
-bun install/reset.ts
+bun run scripts/index.ts
 ```
 
-Then re-install:
+This fetches and preprocesses content from:
+- **Notion wiki** (Edge Esmeralda 2026 Wiki) → `references/wiki-content.md`
+- **Edge City website** (edgecity.live) → `references/website-content.md`
+- **Substack newsletter** (edgeesmeralda2026.substack.com) → `references/newsletter-digest.md`
 
-```bash
-bun install/install.ts <YOUR_API_KEY>
-```
+A GitHub Action runs the indexer every 15 minutes and commits any changes.
 
-Pass `--wipe-user` to also remove `USER.md` and the `memory/` directory:
+### Data Sources
 
-```bash
-bun install/reset.ts --wipe-user
-```
+| Source | Type | Auth | Status |
+|--------|------|------|--------|
+| EdgeOS Events (api.edgeos.world) | Live API | Bearer token (eos_live_...) | Live |
+| EdgeOS Attendees (api-citizen-portal.simplefi.tech) | Live API | Bearer token | Live |
+| Notion Wiki | Preprocessed | None (public) | Live |
+| Edge City Website | Preprocessed | None | Live |
+| Substack Newsletter | Preprocessed | None | Live |
+| Index Network (semantic search) | Live API | TBD | **Placeholder — awaiting PR** |
+| Geo Browser (spatial / map) | Live API | TBD | **Placeholder — awaiting PR** |
 
-## How it runs
+## Contributing tooling (Index Network, Geo Browser, others)
 
-Time-sensitive work (the daily digest) runs as an **OpenClaw cron job**, not a heartbeat task — cron has its own scheduler and runs in isolated sessions with `--light-context` so each tick is cheap. The cron jobs are installed by `install/install.ts` and restart with the gateway.
+Two sections in `SKILL.md` are reserved as stubs for external teams to PR concrete tooling into:
 
-The remaining ambient/accepted/freshness/memory work stays on the heartbeat tick because 30-minute latency is acceptable for those flows.
+- **§3 Knowledge Discovery (Index Network)** — marker: `<!-- INDEX_NETWORK_PLACEHOLDER ... END -->`
+- **§4 Spatial Browsing (Geo Browser)** — marker: `<!-- GEO_BROWSER_PLACEHOLDER ... END -->`
 
-## Workspace layout
+To contribute a section:
 
-| File | Purpose |
-| --- | --- |
-| `BOOTSTRAP.md` | First-run ritual: greet, run onboarding, capture platform handle, welcome. **Not** deleted at the end — the server's `onboardingComplete` flag is the source of truth, so the file stays around in case onboarding ever needs to be re-run. |
-| `AGENTS.md` | Operating instructions + canonical voice exemplars (welcome, morning digest, ambient update, greeting drafts). The first-run gate checks `onboardingComplete` from `read_user_profiles()`, not local file state. |
-| `COMMUNITY.md` | Edge Esmeralda context — dates, attendee count, programming format, design principles. The agent reads this when composing welcomes and digests. |
-| `SOUL.md` | Voice, banned vocabulary, "never name the plumbing", boundaries, continuity. |
-| `IDENTITY.md` | EdgeClaw identity — role, context, tone. |
-| `USER.md` | Lived notebook — populated by `BOOTSTRAP.md` from the user's onboarding answers. |
-| `TOOLS.md` | MCP endpoint, full tool family list, output translation table, channel formatting, URL preservation rule. |
-| `HEARTBEAT.md` | Background tasks that run on the OpenClaw heartbeat tick: accepted opportunities, signal freshness, memory curation. |
-| `prompts/welcome.md` | Self-contained prompt for the welcome pass — used by `BOOTSTRAP.md` Step 6. Self-dedupes via `memory/welcome-state.json` and gates on server-side `onboardingComplete`. |
-| `prompts/digest.md` | Self-contained prompt for the daily 08:00 digest cron. |
-| `prompts/ambient.md` | Self-contained prompt for the 14:00 + 20:00 ambient discovery crons. Selective: max 3 direct + 3 introducer per dispatch, dedup via `memory/heartbeat-state.json:lastAmbientHash`. |
+1. Open a PR replacing the placeholder block (everything between the marker comments) with:
+   - The endpoint(s) or SDK calls the agent should make
+   - Auth: env var name, scope, and how a user obtains a token
+   - 3–5 curl/SDK examples covering the common flows
+   - Expected response shape, including error codes
+   - When NOT to use the tool (overlap with EdgeOS or other sections)
+2. Remove the `<!-- ..._PLACEHOLDER ... END -->` marker comment.
+3. Update the row in the Data Sources table above (`Status: Live`, fill `Auth`).
+4. Bump the `version` field in `SKILL.md` frontmatter (e.g. 2.1.0 → 2.2.0).
+5. If your section needs env vars, add them to `.env.example`.
 
-## Auth
-
-Skills in this repo are public. Each backend gates access with its own per-user credential, wired in by the matching per-backend installer:
-
-- **Index Network (today's wired backend)** — per-user API key returned by `POST /api/networks/:id/signup` (see [Integration API: Authentication](#authentication) above). `install/install_index.ts` writes it into `mcp.servers.index` as the `x-api-key` header.
-- **EdgeOS** — per-user token issued via OTP through the EdgeOS portal. Lands in `install/install_edgeos.ts` once that backend is wired.
-- **Geo** — per-user credential, mechanism TBD. Lands in `install/install_geo.ts` once that backend is wired.
-
-The skill files describe HOW to call each backend's APIs; the per-backend credential is what unlocks them.
-
-## Contributing
-
-Maintained by the Edge City and YoursTruly teams. Direct push access is limited to project collaborators; PRs from the community are welcome and will be reviewed.
-
-## Project links
-
-- Edge Esmeralda 2026: https://edgeesmeralda.com
-- Substack post: https://edgeesmeralda2026.substack.com/p/the-agent-village-experiment-at-edge
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+Keep additions self-contained — the skill is a single file users download, so external imports / multi-file refactors aren't accepted.
