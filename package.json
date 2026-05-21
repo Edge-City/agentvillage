@@ -1,20 +1,20 @@
 {
-  "name": "edge-agent-skill",
+  "name": "@edge-city/edgeclaw",
+  "version": "0.10.0",
+  "description": "Agent Village workspace and installer for Edge Esmeralda — on-device agent that surfaces connections and runs discovery on the Index protocol.",
+  "license": "MIT",
   "type": "module",
-  "private": true,
-  "scripts": {
-    "index": "bun run scripts/index.ts"
+  "bin": {
+    "edgeclaw": "./install/install.ts"
   },
-  "devDependencies": {
-    "@types/bun": "latest"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
-  },
-  "dependencies": {
-    "axios": "^1.14.0",
-    "fast-xml-parser": "^5.5.10",
-    "html-to-text": "^9.0.5",
-    "notion-client": "^7.10.0"
+  "files": [
+    "install/*.ts",
+    "workspace/**/*.md",
+    "skills/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "bun": ">=1.0.0"
   }
 }
