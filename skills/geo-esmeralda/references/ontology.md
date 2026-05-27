@@ -3,7 +3,7 @@
 Prefer live ontology:
 
 ```bash
-geo-edge-esmeralda ontology
+npx -y @geoprotocol/geo-edge-esmeralda-cli ontology
 ```
 
 The ontology response lists node labels, fields, relationship triples, fixed

@@ -9,7 +9,7 @@
  *   - Edge skill bundles → `$HERMES_HOME/skills/{index-network,edgeos,edge-esmeralda,geo-esmeralda}/`
  *   - `terminal.cwd` in config.yaml → `$HERMES_HOME`
  *   - Index MCP + morning digest cron (`install_index.ts`)
- *   - Geo CLI wrapper (`install_geo.ts`)
+ *   - Geo CLI runtime note (`install_geo.ts`)
  *
  * Usage (from repo root):
  *   bun install/install.ts --index-api-key <KEY>
