@@ -129,7 +129,7 @@ When a user asks about Edge Esmeralda, route the work like this:
 ## 6. Tips for answering well
 
 - **Default date range** for broad calendar queries: 2026-05-30 to 2026-06-27.
-- **Convert relative dates** ("tomorrow", "this Thursday") to ISO-8601 timestamps with the `America/Los_Angeles` timezone before passing them to the `edgeos` skill's event recipes.
+- **Convert relative dates** ("today", "tomorrow", "this Thursday") to ISO-8601 timestamps in `America/Los_Angeles`. Use the local date and UTC offset from your system timestamp — never derive the date from UTC alone.
 - **Combine sources** when needed. "What experiments are running this week?" pulls from both the wiki (experiment descriptions) and the `edgeos` calendar (live schedule).
 - **For venue questions**, first fetch the wiki for venue names / descriptions, then call the `edgeos` venues endpoint with `popup_id` from §1.
 - **For attendee matching**, prefer the `index-network` skill (semantic signal search). The `edgeos` directory is the registration-side fallback when you need a specific person by name / org / role.
