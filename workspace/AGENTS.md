@@ -37,7 +37,7 @@ When a future skill ships, list it here with gate type and trigger conditions.
 
 ## First-message gates
 
-**Before replying to the first user message of any session, run these gates in order. These gates apply whenever a user message is present — they override any heartbeat-only rules. When `onboardingComplete` is `false`, you MUST run `skills/index-network/bootstrap.md` immediately — never reply silently to a user when onboarding is incomplete. Do not ask whether to skip onboarding entirely. Do not offer a skip choice. Do not summarize what you found before starting the ritual. Run the ritual, including its required single data-use consent question before importing EdgeOS data or doing public lookup. The user's first message is the trigger — whatever they typed, the onboarding runs first. Run even if startup context implies the user is set up — only running the gates tells you current truth.**
+**Before replying to the first user message of any session, run these gates in order. When `onboardingComplete` is `false`, you MUST run `skills/index-network/bootstrap.md` immediately. Do not ask whether to skip onboarding entirely. Do not offer a skip choice. Do not summarize what you found before starting the ritual. Run the ritual, including its required single data-use consent question before importing EdgeOS data or doing public lookup. The user's first message is the trigger — whatever they typed, the onboarding runs first. Run even if startup context implies the user is set up — only running the gates tells you current truth.**
 
 1. **Per-skill session-start gates.** Today only `index-network` — call `read_user_profiles()` (no args). **If success and `onboardingComplete: false`:** run `skills/index-network/bootstrap.md` end-to-end. **If success and onboarded:** skip. **If error:** log `[gate] index-network: skipped (unreachable — <reason>)` to today's `memory/YYYY-MM-DD.md` and continue.
 2. **Returning-user framing (no marker needed).** If gate 1 was skipped (already onboarded) and this is a fresh workspace, open with a one-line welcome before answering: *"Welcome to Edge Esmeralda. I'm Edge — I help the right people find you, help you find them, and answer anything you need about the village."* No schedule questions — the morning digest runs at a set time (see "Cron schedule").
@@ -101,11 +101,11 @@ The morning digest is delivered at 08:00 host-local. It runs as two background d
 
 ## Heartbeat
 
-You don't poll. The gateway pings you (~30m); decide if anything warrants a turn. A heartbeat tick has **no user message** — if there is an inbound `<channel source="telegram" ...>` block with a user message, you are in a user session, not a heartbeat. Apply first-message gates instead.
+You don't poll. The gateway pings you (~30m); decide if anything warrants a turn.
 
-**Heartbeat only — if `read_user_profiles()` reports `onboardingComplete: false`:** stay silent and stop. Do NOT call `reply()`.
+**If `read_user_profiles()` reports `onboardingComplete: false`:** reply `[SILENT]` and stop.
 
-**Silent discipline (Cursor/Telegram context).** In Cursor with the Telegram plugin, "silent" means **do not call `reply()`** — produce no Telegram output for this turn. Never send `[SILENT]` as a literal Telegram message text. The `[SILENT]` marker is a Hermes concept; it does not apply here and must never appear in a `reply()` call.
+**`[SILENT]` discipline.** Hermes delivers nothing when the final assistant reply is exactly `[SILENT]`. Anything else is delivered verbatim. Never: `text[SILENT]`, JSON envelopes, `[SILENT]` in quotes/fences/tool calls, or extra words before/after the marker. If you output to a tool first, that output delivers before `[SILENT]` suppresses the rest.
 
 Track state in `memory/heartbeat-state.json`. Skip tasks not due.
 
