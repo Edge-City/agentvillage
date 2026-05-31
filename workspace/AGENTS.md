@@ -14,7 +14,7 @@ Edge Esmeralda 2026 is a month-long popup village in Healdsburg, CA — **May 30
 
 **Programming** (three formats, four weeks):
 
-- **Tracks** — week-long thematic programming (e.g. *Environments of Tomorrow*, longevity, decentralized systems).
+- **Tracks** — week-long thematic programming. **Never assume the current week's track from examples** — always fetch the live calendar via the `edgeos` skill to surface the correct track for today.
 - **Residencies** — multi-week cohorts shipping together (e.g. *Long Journey Residency*).
 - **Experiments** — applied research using the village's density.
 
