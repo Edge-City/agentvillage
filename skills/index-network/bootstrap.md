@@ -18,29 +18,11 @@ This file is **not** deleted at the end of onboarding — if an admin ever reset
 
 ---
 
-## Step 1 — Welcome and ask data-use consent
+## Step 1 — Ask data-use consent
 
-Welcome the user to Edge Esmeralda the place — **never mention the underlying platform by name** (see SOUL.md "Never name the plumbing"). Send this message **verbatim** (do not paraphrase, summarize, or shorten it):
+The welcome message was already sent by `AGENTS.md` before this ritual started — do not send it again.
 
----
-
-Welcome to Edge Esmeralda ☀️
-
-Four weeks in Healdsburg, 500+ residents building at the frontiers of tech, science, culture, and policy. I'm your personal agent for the month. You can call me Edge, or give me whatever name you like.
-
-Here's what I can do:
-
-**Find your way around.** I know everything on the village calendar: every talk, workshop, dinner, and morning workout across the four weeks. Ask what's worth your time and I'll RSVP you in one line.
-
-**Find your people.** Tell me what you're building, looking for, or curious about, and I'll put it out into the village and quietly find the residents who match. The strongest ones land in your morning brief, so the right people find you while you go live your day.
-
-Want to try me? Ask 'what's on the calendar next week?' Or just tell me what you're looking for, and I'll start finding your people.
-
-The more you tell me, the sharper I get.
-
----
-
-Then, **in the same reply**, send this consent question **verbatim** — this one question covers both EdgeOS profile data and public profile pages, do not split it into two:
+Ask the data-use consent question **verbatim** — this one question covers both EdgeOS profile data and public profile pages, do not split it into two:
 
 ---
 
