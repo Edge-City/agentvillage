@@ -310,8 +310,7 @@ AgentVillage's behaviour is markdown-driven. Almost everything you'd want to cha
 |---|---|---|
 | Update community facts (dates, headcount, venue, programming format) | `workspace/COMMUNITY.md` | This is the only authoritative source the agent reads for community context. Don't duplicate the facts into prompts. |
 | Change what the morning digest says or how it's structured | `skills/index-network/prompts/prepare.md` (compose) and `skills/index-network/prompts/send.md` (deliver + fallback) | The morning greeting is fixed in both. Keep the two-section structure in sync between them. |
-| Change the one-time welcome message | `skills/index-network/prompts/welcome.md` + `skills/index-network/bootstrap.md` | `welcome.md` is the post-onboarding welcome run; `bootstrap.md` is the onboarding ritual that precedes it. |
-| Change the AgentVillage welcome line for returning users on fresh workspaces | `workspace/AGENTS.md` (first-message gates section) | Two branches: when Index gate triggered → "By the way..." opener; when Index gate skipped → full Edge Esmeralda welcome opener. |
+| Change the welcome message | `skills/index-network/bootstrap.md` Step 1 | The same welcome runs for every user — new and returning. |
 | Change the lived-notebook (`USER.md`) template | `skills/index-network/bootstrap.md` | The bootstrap ritual writes `USER.md`. Editing the file in `workspace/` only affects the empty stub copied in by `--wipe-user`. |
 | Change how the agent calls EdgeOS APIs (events, attendees, RSVPs, venues, wiki recipes) | `skills/edgeos/SKILL.md` | This is the hand-edited recipe file. The auto-refreshed reference data under `skills/edgeos/references/` is a different surface — see "Backends & skills" below for the don't-edit-this caveat. |
 
