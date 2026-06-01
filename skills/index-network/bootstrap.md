@@ -6,13 +6,10 @@ This file is the Index Network onboarding ritual. It is gated on Index Network's
 
 ## Session-start gate
 
-At session start, run these two checks in parallel: call `read_user_profiles()` (no args) and read `memory/<today>.md`.
+The Index Network server is the source of truth for Index onboarding — not local file state. At session start, call `read_user_profiles()` (no args) and check `onboardingComplete`:
 
-Evaluate in this order:
-
-- **If `memory/<today>.md` contains `[gate] index-network: suppressed by user`:** the user already dismissed onboarding earlier today. Skip the ritual for the rest of the day — do not re-greet, do not ask the consent question again. Answer the user's message directly. No new gate-trace line is needed.
+- **If `onboardingComplete` is `false`:** run this ritual immediately. Do not offer a way to skip onboarding entirely. Start with the welcome message in Step 1 and proceed in order, but ask the data-use consent question exactly where the ritual says to ask it. While the ritual is in progress, do not send unsolicited messages, do not call discovery tools, and do not run heartbeat tasks. After Step 5 (or any path that ends the ritual), append `[gate] index-network: triggered, ritual complete` to `memory/<today>.md` before handing back to `AGENTS.md` for the Edge gate.
 - **If `onboardingComplete` is `true`:** skip the ritual. Append `[gate] index-network: skipped (onboardingComplete=true)` to `memory/<today>.md`, then hand back to `AGENTS.md` for the Edge gate. Index Network is already onboarded server-side; Edge onboarding may or may not still need to run, which is handled by the next gate in `AGENTS.md` "First-message gates".
-- **If `onboardingComplete` is `false` and no suppression in memory:** start the ritual with Step 1. **Exception — suppress path:** if the user's first message clearly signals they want to skip setup and do something else (e.g. "skip", "later", "just tell me about events", or any direct question about the village unrelated to onboarding), acknowledge briefly ("Sure — we can finish setup anytime, just say 'set me up'"), append `[gate] index-network: suppressed by user` to `memory/<today>.md`, and answer their question. Do not force the ritual after a suppress signal. If the ritual is running (user is mid-step), complete the current step, then offer to pause: "Want to finish setup now, or pick it up later?" — do not redirect indefinitely. If they choose to defer, append `[gate] index-network: suppressed by user` to `memory/<today>.md`. After Step 5 (or any path that ends the ritual), append `[gate] index-network: triggered, ritual complete` to `memory/<today>.md` before handing back to `AGENTS.md` for the Edge gate.
 
 This file is **not** deleted at the end of onboarding — if an admin ever resets the user's `onboardingComplete` flag server-side, the next session will see `onboardingComplete: false` and run the ritual again from the still-staged file.
 
@@ -103,9 +100,9 @@ Detection by session key:
 - `agent:main:discord:...`, `agent:main:slack:...`, etc. → equivalent treatment if the platform's primary handle is recoverable from session metadata.
 - `agent:main:webchat` or any other context where no platform handle exists → skip the entire step.
 
-Also note the platform + handle in `USER.md` under **Notes** so future digest runs can compose contextual deep links without re-querying. One short line is enough (e.g. `Connected via Telegram (@yanekyuksel).`).
+Also note the platform + handle in `USER.md` under **Notes** so future heartbeat / digest runs can compose contextual deep links without re-querying. One short line is enough (e.g. `Connected via Telegram (@yanekyuksel).`).
 
-If `update_user_profile` returns an error (rate limit, transient failure), log it to `memory/<today>.md` and continue — do not block onboarding on this.
+If `update_user_profile` returns an error (rate limit, transient failure), log it to `memory/<today>.md` and continue — do not block onboarding on this. The next heartbeat tick can retry.
 
 ## Step 5 — Close out and populate USER.md
 
@@ -113,7 +110,7 @@ Call `complete_onboarding()`. This is required — do not skip it. The server au
 
 Update `USER.md` with what you learned in this conversation. Capture only the things the user said directly — name, what to call them, timezone, anything they explicitly told you to remember. Do **not** paraphrase what `preview_user_profile` or `confirm_user_profile` returned; that lives behind the protocol. `USER.md` is the lived notebook, not a duplicate of the structured record.
 
-After populating USER.md, append `[gate] index-network: triggered, ritual complete` to `memory/<today>.md` (the gate-trace line from the session-start gate).
+After populating USER.md, append `[gate] index-network: triggered, ritual complete` to `memory/<today>.md` (the gate-trace line from the session-start gate). The next accepted-opportunity heartbeat tick will pick up from here.
 
 Cron-schedule preferences are not asked about — the morning digest runs at a fixed time and is not user-configurable.
 
@@ -129,6 +126,6 @@ Cron-schedule preferences are not asked about — the morning digest runs at a f
 - Do not call `discover_opportunities`, `list_opportunities`, or any other discovery tool during onboarding. Opportunities surface on the first scheduled cron tick after onboarding completes.
 - Do not mention Gmail or email import — they are not available in this flow.
 - Call `create_intent` at most once per user response.
-- If the user tries to do something else mid-onboarding, complete the current step and offer to pause: "Want to finish setup now, or pick it up later?" — do not block indefinitely. If they choose to defer, append `[gate] index-network: suppressed by user` to `memory/<today>.md` and answer their question. This suppression persists for the rest of the calendar day.
+- If the user tries to do something else mid-onboarding, gently redirect: "Let's finish setting you up first, then we can dive into that."
 - Keep your tone calm, direct, concise — no "Great question!", no "I'd be happy to help!", no filler.
 - Edge is Edge Esmeralda's agent. Do not invite users to other communities, do not list networks — Edge Esmeralda is the only frame.

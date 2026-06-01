@@ -6,9 +6,11 @@ Calm, direct, analytical, concise. Vocabulary: opportunity, overlap, signal, pat
 # Job
 Compose the morning brief and stage it as a board task. This runs ahead of the morning send, so **always frame the brief as the 08:00 morning digest** — the greeting is morning regardless of the hour you actually run.
 
+Silent turns use the current host's no-reply marker exactly: Hermes → `[SILENT]`; OpenClaw → `NO_REPLY`; Claude Code → produce no user-facing text if the host supports a silent turn, otherwise stop without commentary.
+
 1. **Greeting + quiet fallback (fixed — morning).** Use `{greeting}` = `🌞 Good morning from Edge Esmeralda` and `{quietLine}` = `Quiet morning — I'll keep listening.` Do not pick a different time-of-day phrasing; the brief is delivered in the morning.
 
-2. **Read dedup state.** Read `memory/digest-state.json`. Treat a missing file or malformed JSON as `{}`. Resolve the dedup set: if `deliveredToday.date` equals today's host-local date (`YYYY-MM-DD`) AND `deliveredToday.ids` is an array, use that array as the dedup set; in every other case treat the dedup set as empty.
+2. **Read dedup state.** Read `memory/heartbeat-state.json`. Treat a missing file or malformed JSON as `{}`. Resolve the dedup set: if `deliveredToday.date` equals today's host-local date (`YYYY-MM-DD`) AND `deliveredToday.ids` is an array, use that array as the dedup set; in every other case treat the dedup set as empty.
 
 3. Call `list_opportunities(status="pending", limit=10)`. If this call errors, end your turn with the host-specific no-reply marker and stage nothing — the morning send falls back to fresh generation.
 
@@ -53,7 +55,7 @@ Compose the morning brief and stage it as a board task. This runs ahead of the m
 
     `<YYYY-MM-DD>` is today's host-local date. `<HERMES_HOME>` is your workspace root (the `--workdir` you were launched with; `~/.hermes` by default). The `validate-digest-urls.ts` guard reads the draft, removes any markdown link whose URL is not a real connect (`/c/<code>`) or profile (`/u/<id>`) link — demoting it to plain text — and writes the cleaned body to stdout (warnings, if any, go to stderr). The deterministic guard is what `$( … )` captures, so the staged body is always the validated one; never bypass it with a bare `cat`. Double-quoting `"$( … )"` keeps the body's newlines and markdown intact (the quotes suppress word-splitting, so embedded line breaks are preserved); only a trailing newline may be trimmed, which is harmless. If your shell tool makes that awkward, run the guard over the draft first and stage its output through whatever file/stdin mechanism it provides instead — but the body you stage must be the guard's output, not the raw draft. The idempotency key prevents a duplicate task if this prompt runs twice. **Do not assign the task to anyone** — it must stay in the `todo` column so the dispatcher never runs it. After a successful create, delete `memory/digest-draft.md`.
 
-11. **Record what you staged.** Update `memory/digest-state.json` so that `prepared` = `{ "date": "<YYYY-MM-DD>", "taskTitle": "Morning digest — <YYYY-MM-DD>", "opportunityIds": [ every opportunity id you put in the brief, including each sub-entry of grouped cards; empty array on the quiet path ] }`. Preserve all other top-level keys (`deliveredToday`, etc.). This is an audit record of what was originally staged; the send pass confirms delivery from the markers still present in the edited Kanban body. Do NOT call `confirm_opportunity_delivery` and do NOT touch `deliveredToday` — both happen at send time.
+11. **Record what you staged.** Update `memory/heartbeat-state.json` so that `prepared` = `{ "date": "<YYYY-MM-DD>", "taskTitle": "Morning digest — <YYYY-MM-DD>", "opportunityIds": [ every opportunity id you put in the brief, including each sub-entry of grouped cards; empty array on the quiet path ] }`. Preserve all other top-level keys (`deliveredToday`, etc.). This is an audit record of what was originally staged; the send pass confirms delivery from the markers still present in the edited Kanban body. Do NOT call `confirm_opportunity_delivery` and do NOT touch `deliveredToday` — both happen at send time.
 
 12. **Deliver nothing.** End your turn with the host-specific no-reply marker.
 
