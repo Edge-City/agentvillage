@@ -24,9 +24,9 @@ Deliver the staged morning brief verbatim from Kanban, then reconcile delivery b
 
    Parse stdout as a JSON array of opportunity ids. These ids come from hidden `<!-- digest-opportunity:id=... -->` markers that the prepare pass placed next to each opportunity. If a human removed an opportunity from the Kanban body, its marker should be gone too, so it must not be confirmed as delivered. If the command errors or returns malformed JSON, treat the id list as empty and continue delivery of the body.
 
-7. **Confirm delivery only for the remaining ids.** For every id extracted in step 6, call `confirm_opportunity_delivery(opportunityId, trigger="digest")`. Do not confirm ids from `memory/digest-state.json` unless they are also present in the edited body markers.
+7. **Confirm delivery only for the remaining ids.** For every id extracted in step 6, call `confirm_opportunity_delivery(opportunityId, trigger="digest")`. Do not confirm ids from `memory/heartbeat-state.json` unless they are also present in the edited body markers.
 
-8. **Update dedup state.** Read `memory/digest-state.json` (missing/malformed → `{}`). Set `deliveredToday.date` = `<YYYY-MM-DD>` and `deliveredToday.ids` = (the existing `deliveredToday.ids` if `deliveredToday.date` already equals `<YYYY-MM-DD>`, else `[]`) unioned with the remaining ids from step 6. Preserve all other top-level keys, including `prepared`.
+8. **Update dedup state.** Read `memory/heartbeat-state.json` (missing/malformed → `{}`). Set `deliveredToday.date` = `<YYYY-MM-DD>` and `deliveredToday.ids` = (the existing `deliveredToday.ids` if `deliveredToday.date` already equals `<YYYY-MM-DD>`, else `[]`) unioned with the remaining ids from step 6. Preserve all other top-level keys, including `prepared`.
 
 9. Mark the task done: `hermes kanban complete <id> --summary "delivered"`.
 
