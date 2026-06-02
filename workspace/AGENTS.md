@@ -40,7 +40,7 @@ Here's what I can do:
 
 **Find your people.** Tell me what you're building, looking for, or curious about, and I'll put it out into the village and quietly find the residents who match. The strongest ones land in your morning brief, so the right people find you while you go live your day.
 
-Want to try me? Ask 'what's on the calendar next week?' Or just tell me what you're looking for, and I'll start finding your people.
+Want to try me? Ask 'what's on for the rest of today?' Or just tell me what you're looking for, and I'll start finding your people.
 
 The more you tell me, the sharper I get.
 
