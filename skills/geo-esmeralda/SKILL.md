@@ -1,6 +1,6 @@
 ---
 name: geo-esmeralda
-description: Add attendee-authored content and query Geo community knowledge, relations, and ontology through the Geo CLI package.
+description: Add attendee-authored content, query Geo community knowledge, retrieve raw Telegram history, and inspect relations/ontology through the Geo CLI package.
 version: 1.0.0
 author: Edge City
 tags: [edge-city, edge-esmeralda, geo, graph, community]
@@ -17,11 +17,13 @@ metadata:
 # Geo Esmeralda
 
 Use this skill when an attendee wants to add community knowledge to Geo or work
-with the Geo knowledge graph's content, relations, and ontology. It is especially
-for creating notes, transcripts, essays, project pitches, comments, and photos;
-linking those contributions to events, venues, tracks, or other community
-context; and reading back knowledge graph-backed claims, content, source material,
-wiki-style knowledge, idea links, and ontology details.
+with the Geo knowledge graph's content, relations, ontology, or raw Telegram
+history. It is especially for creating notes, transcripts, essays, project
+pitches, comments, and photos; linking those contributions to events, venues,
+tracks, or other community context; reading back knowledge graph-backed claims,
+content, source material, wiki-style knowledge, idea links, and ontology details;
+and summarizing or answering questions about what happened in Telegram during a
+specific time window.
 
 Other sibling skills cover live EdgeOS schedule/directory operations and Index
 Network participant matching. Use this skill for the Geo knowledge graph and for all
@@ -77,10 +79,18 @@ npx -y @geoprotocol/geo-edge-esmeralda-cli create --event-id <event-id> --kind p
 npx -y @geoprotocol/geo-edge-esmeralda-cli auth
 npx -y @geoprotocol/geo-edge-esmeralda-cli ontology
 npx -y @geoprotocol/geo-edge-esmeralda-cli fixed --tool community_search --input '{"query":"housing coordination","limit":10}'
+npx -y @geoprotocol/geo-edge-esmeralda-cli telegram-messages --from 2026-06-02T00:00:00Z --to 2026-06-03T00:00:00Z --limit 50
 npx -y @geoprotocol/geo-edge-esmeralda-cli fixed --tool list_content --input '{"scopeKind":"event","scopeId":"<event-id>","limit":10}'
 npx -y @geoprotocol/geo-edge-esmeralda-cli fixed --tool list_idea_links --input '{"limit":20}'
 npx -y @geoprotocol/geo-edge-esmeralda-cli native --query 'MATCH (c:ContentItem) WHERE c.popupId = $popupId RETURN c.id AS id, c.title AS title, c.kind AS kind LIMIT 20'
 ```
+
+Use `telegram-messages` for bounded raw Telegram context, including messages
+that may not have become graph claims. Always prefer a `--from`/`--to` day window
+for summaries. Results are newest-first and include `nextCursor`; continue with
+`--cursor <nextCursor>` until `hasMore` is false. Optional `--chat-id=-100...`
+and `--thread-id <id>` filters narrow the raw history. The endpoint omits raw
+payloads, bearer tokens, and author external ids.
 
 Load `references/setup.md` when configuring the CLI or installing the skill.
 Load `references/examples.md` when choosing a fixed command or native-query
