@@ -1,7 +1,7 @@
 # Edge Esmeralda 2026 Wiki
 
 Source: https://www.notion.so/edgecity/Edge-Esmeralda-2026-Wiki-317d45cdfc5981d2a571f52b024c5141
-Last indexed: 2026-06-02T21:04:25.503Z
+Last indexed: 2026-06-02T23:34:41.717Z
 
 ---
 
@@ -201,7 +201,7 @@ Lunch Meal Plans
 
  Here's our post explaining our Lunch Meal Plans.  (https://edgeesmeralda2026.substack.com/p/meal-plans-at-edge-esmeralda-2026)TDLR; 
 
-- We’ve partnered with Jimtown and Then Sum (https://jimtown.com/) to provide fresh and healthy lunches Monday - Friday delivered to 405 Healdsburg from 12pm - 1pm!
+- We’ve partnered with Jimtown and Then Sum (https://jimtown.com/) to provide fresh and healthy lunches Monday - Friday delivered to 405 Healdsburg from 12pm - 1:30pm!
 - Participants must  (https://www.notion.so/a68d45cdfc59822aac5901fa5a80e783)pay for a pre-purchased meal ticket here (https://edgecity.simplefi.tech/portal/edge-esmeralda-2026/passes).
 - $90/week - 5 lunches, Monday - Friday ($18 each).
 - $360 for the full month.
