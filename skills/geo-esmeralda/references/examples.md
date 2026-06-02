@@ -20,6 +20,14 @@ npx -y @geoprotocol/geo-edge-esmeralda-cli fixed --tool get_event_content --inpu
 npx -y @geoprotocol/geo-edge-esmeralda-cli fixed --tool list_idea_links --input '{"limit":20}'
 ```
 
+Raw Telegram history:
+
+```bash
+npx -y @geoprotocol/geo-edge-esmeralda-cli telegram-messages --from 2026-06-02T00:00:00Z --to 2026-06-03T00:00:00Z --limit 50
+npx -y @geoprotocol/geo-edge-esmeralda-cli telegram-messages --cursor <nextCursor>
+npx -y @geoprotocol/geo-edge-esmeralda-cli telegram-messages --from 2026-06-02T00:00:00Z --to 2026-06-03T00:00:00Z --chat-id=-1001234567890
+```
+
 Ontology:
 
 ```bash
