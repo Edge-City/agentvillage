@@ -126,7 +126,7 @@ When a user asks about Edge Esmeralda, route the work like this:
 - **Calendar / RSVP / venue / directory API call** → `edgeos` skill. Pass `popup_id` from §1.
 - **Discovery, intent-based matching, "who should I meet?"** → `index-network` skill.
 - **Community knowledge** (logistics, organization, announcements, "what is Edge City?") → this skill, §5.
-- **Spatial / map / "what's near venue X"** → no Geo skill yet. Until one exists, use the `edgeos` venue endpoint's `geo_lat` / `geo_lng` fields with basic haversine math, plus the wiki (§5) for Healdsburg-area context.
+- **Spatial / map / "what's near venue X"** → `geo-esmeralda` skill. Query `Venue` nodes via native graph queries for coordinates, or use the `edgeos` venue endpoint's `geo_lat` / `geo_lng` fields with haversine math for proximity ranking. Use the wiki (§4) for Healdsburg-area context.
 
 ---
 
