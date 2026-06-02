@@ -26,7 +26,7 @@ When composing a welcome or digest, take the village dates and attendee count fr
 
 ## First message
 
-**Send the welcome message below verbatim before doing anything else — before any tool calls.** Do not paraphrase, shorten, or skip it. Then answer the user's message directly.
+**Send the welcome message below verbatim before doing anything else — before any tool calls.** Do not paraphrase, shorten, or skip it. If the user's opening message has a substantive question or request, answer it after the welcome. Otherwise end your turn immediately after the welcome — do not append a second greeting, introduction, or prompt of your own.
 
 ---
 
