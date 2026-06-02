@@ -4,7 +4,7 @@ The Index Network MCP (server `index`) is your tool surface for everything netwo
 
 ## Tool families
 
-- **Profile** — `read_user_profiles`, `record_onboarding_privacy_consent`, `preview_user_profile`, `confirm_user_profile`, `create_user_profile` (legacy/generic clients), `update_user_profile`
+- **Profile** — `read_user_profiles`, `record_onboarding_privacy_consent`, `preview_user_profile`, `get_profile_run`, `cancel_profile_run`, `confirm_user_profile`, `create_user_profile` (legacy/generic clients), `update_user_profile`
 - **Networks (communities)** — `read_networks`, `create_network`, `update_network`, `delete_network`, `read_network_memberships`, `create_network_membership`, `delete_network_membership`
 - **Signals (intents)** — `create_intent`, `read_intents`, `update_intent`, `delete_intent`, `search_intents`, `create_intent_index`, `read_intent_indexes`, `delete_intent_index`
 - **Discovery** — `discover_opportunities`, `get_discovery_run`, `cancel_discovery_run`, `list_opportunities`, `update_opportunity`, `confirm_opportunity_delivery`
@@ -12,10 +12,12 @@ The Index Network MCP (server `index`) is your tool surface for everything netwo
 - **Conversations** — `list_conversations`, `get_conversation`
 - **Contacts** — `add_contact`, `import_contacts`, `import_gmail_contacts`, `list_contacts`, `search_contacts`, `remove_contact`
 - **Agents (administrative)** — `list_agents`, `register_agent`, `update_agent`, `delete_agent`, `grant_agent_permission`, `revoke_agent_permission`
-- **Onboarding** — `record_onboarding_privacy_consent`, `preview_user_profile`, `confirm_user_profile`, `complete_onboarding`
+- **Onboarding** — `record_onboarding_privacy_consent`, `preview_user_profile`, `get_profile_run`, `confirm_user_profile`, `complete_onboarding`
 - **Reference** — `read_docs`, `scrape_url`
 
 Read the description on every tool you call — that is where the per-tool rules live (when to call, when NOT to call, prerequisites, post-call follow-ups).
+
+**Async profile rule.** In MCP, `preview_user_profile` or text-based `update_user_profile` may return `status="queued"` plus a `profileRunId`. When that happens, call `get_profile_run(profileRunId=...)` until the run is `succeeded`, `failed`, or `cancelled`, then present/use the `result` if it succeeded. Social-only `update_user_profile(socials=...)` usually completes immediately and does not need polling.
 
 ## Tool routing — finding people
 
@@ -42,7 +44,7 @@ Call `scrape_url(url, objective)` whenever the user shares a URL and you need it
 
 Always pass an `objective` describing why you're scraping — it guides extraction. Example: `scrape_url(url="linkedin.com/in/alex", objective="Update user profile from LinkedIn page")`.
 
-During AgentVillage onboarding there is a single data-use consent question, and it is a hard turn boundary. After asking it, stop and wait for the user's next message; do not record consent in the same turn as the question. The one question covers both EdgeOS/import data and public lookup/scraping — do not split it into two. Do not scrape, run public profile lookup, or use EdgeOS/import data until the user explicitly answers yes and both `record_onboarding_privacy_consent(edgeosImportGranted=true)` and `record_onboarding_privacy_consent(publicProfileLookupGranted=true)` have succeeded. Use `preview_user_profile` for drafts only after the consent question has an explicit answer, and use `confirm_user_profile` only after the user has seen and approved/corrected the draft. Do not use legacy `create_user_profile` for the AgentVillage onboarding ritual.
+During AgentVillage onboarding there is a single data-use consent question, and it is a hard turn boundary. After asking it, stop and wait for the user's next message; do not record consent in the same turn as the question. The one question covers both EdgeOS/import data and public lookup/scraping — do not split it into two. Do not scrape, run public profile lookup, or use EdgeOS/import data until the user explicitly answers yes and both `record_onboarding_privacy_consent(edgeosImportGranted=true)` and `record_onboarding_privacy_consent(publicProfileLookupGranted=true)` have succeeded. Use `preview_user_profile` for drafts only after the consent question has an explicit answer; if it returns `profileRunId`, poll `get_profile_run(profileRunId=...)` until `status="succeeded"` and use the returned `result` as the draft. Use `confirm_user_profile` only after the user has seen and approved/corrected the draft. Do not use legacy `create_user_profile` for the AgentVillage onboarding ritual.
 
 ## Output translation
 

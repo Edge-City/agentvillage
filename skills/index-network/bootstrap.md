@@ -54,6 +54,8 @@ Narrate while processing:
 
 > `> Drafting your profile…`
 
+If `preview_user_profile` returns `profileRunId` instead of a draft, call `get_profile_run(profileRunId=...)` until `status="succeeded"`, `status="failed"`, or `status="cancelled"`. When it succeeds, use its `result` as the profile draft. If it is still queued/running and you cannot continue polling in this turn, save the `profileRunId` in today's memory note, tell the user the draft is still being prepared, and ask them to send a short follow-up such as "done?" so you can check `get_profile_run` again. Do not call `confirm_user_profile` until you have shown the succeeded draft or the user has provided explicit approved profile text.
+
 Present the profile draft naturally:
 
 > "Here's the draft I have: [summary]. Does this look right?"

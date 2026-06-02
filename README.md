@@ -249,7 +249,7 @@ The installer:
 
 Send any message in your chat to bring AgentVillage online. AgentVillage has two independent onboarding gates that run at session start:
 
-- **Index Network onboarding** — gated on the server-side `onboardingComplete` flag returned by `read_user_profiles()`. Owned by `skills/index-network/bootstrap.md`. If `false`, the privacy-first ritual runs (greet → ask one data-use consent question covering EdgeOS/event profile data and public lookup → draft profile with `preview_user_profile` → show it for approval → save with `confirm_user_profile` → capture first signal → capture handle → `complete_onboarding()` → populate `USER.md`).
+- **Index Network onboarding** — gated on the server-side `onboardingComplete` flag returned by `read_user_profiles()`. Owned by `skills/index-network/bootstrap.md`. If `false`, the privacy-first ritual runs (greet → ask one data-use consent question covering EdgeOS/event profile data and public lookup → draft profile with `preview_user_profile`, polling `get_profile_run` when a `profileRunId` is returned → show it for approval → save with `confirm_user_profile` → capture first signal → capture handle → `complete_onboarding()` → populate `USER.md`).
 - **AgentVillage framing** — owned by `workspace/AGENTS.md` "First-message gates". There is no schedule-preferences dialog; the morning digest runs at a fixed time. The only first-message work beyond the Index ritual is a one-line welcome for returning users on a fresh workspace.
 
 An admin resetting `onboardingComplete` server-side re-triggers the Index ritual. Wiping local state via `install/install.ts --wipe-user` resets local markers without touching Index's flag.
