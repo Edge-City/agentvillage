@@ -38,7 +38,24 @@ function readApiKey(): string {
   return key;
 }
 
-function writeMcpServerEntry(apiKey: string): void {
+function readTelegramHandle(): string {
+  return readFlag("--telegram-handle")?.trim()
+    || process.env.INDEX_TELEGRAM_HANDLE?.trim()
+    || process.env.TELEGRAM_HANDLE?.trim()
+    || "";
+}
+
+export function buildIndexMcpHeaders(apiKey: string, telegramHandle = ""): Record<string, string> {
+  const headers: Record<string, string> = {
+    "x-api-key": apiKey,
+    "x-index-surface": "telegram",
+  };
+  const trimmedHandle = telegramHandle.trim();
+  if (trimmedHandle) headers["x-index-telegram-username"] = trimmedHandle;
+  return headers;
+}
+
+function writeMcpServerEntry(apiKey: string, telegramHandle: string): void {
   const configPath = join(hermesHome(), "config.yaml");
   let doc: Record<string, unknown> = {};
   if (existsSync(configPath)) {
@@ -47,10 +64,7 @@ function writeMcpServerEntry(apiKey: string): void {
   const mcpServers = { ...((doc.mcp_servers as Record<string, unknown>) ?? {}) };
   mcpServers.index = {
     url: PROTOCOL_MCP_URL,
-    headers: {
-      "x-api-key": apiKey,
-      "x-index-surface": "telegram",
-    },
+    headers: buildIndexMcpHeaders(apiKey, telegramHandle),
   };
   doc.mcp_servers = mcpServers;
   writeFileSync(configPath, YAML.stringify(doc));
@@ -275,11 +289,13 @@ function installCronJobs(env: NodeJS.ProcessEnv): void {
 
 export function installIndex(): void {
   const apiKey = readApiKey();
+  const telegramHandle = readTelegramHandle();
   console.log(
     `→ index network: target=${IS_DEV ? "dev" : "production"} (${PROTOCOL_MCP_URL})`,
   );
   upsertEnvVar("INDEX_API_KEY", apiKey);
-  writeMcpServerEntry(apiKey);
+  if (telegramHandle) upsertEnvVar("INDEX_TELEGRAM_HANDLE", telegramHandle);
+  writeMcpServerEntry(apiKey, telegramHandle);
 
   if (!process.argv.includes("--skip-crons")) {
     installCronJobs(hermesExecEnv());

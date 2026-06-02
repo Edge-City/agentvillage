@@ -2,6 +2,7 @@ import { test, expect } from "bun:test";
 
 import {
   DIGEST_CRON_SPECS,
+  buildIndexMcpHeaders,
   cronCreateArgs,
   isValidCron,
   resolveCronSchedule,
@@ -39,6 +40,19 @@ test("prepare cron args omit --deliver; send cron args include --deliver telegra
     "cron", "create", "0 8 * * *", "SEND_BODY",
     "--name", "Edge — daily digest", "--deliver", "telegram", "--workdir", home,
   ]);
+});
+
+test("index MCP headers include telegram surface and optional handle", () => {
+  expect(buildIndexMcpHeaders("ix_test")).toEqual({
+    "x-api-key": "ix_test",
+    "x-index-surface": "telegram",
+  });
+
+  expect(buildIndexMcpHeaders("ix_test", " @alice ")).toEqual({
+    "x-api-key": "ix_test",
+    "x-index-surface": "telegram",
+    "x-index-telegram-username": "@alice",
+  });
 });
 
 test("each spec declares its install-time override flag + env var", () => {

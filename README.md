@@ -129,8 +129,8 @@ Every call with the same email returns the same user but a **fresh API key** —
 
 ### What Portal does after signup
 
-1. Runs the AgentVillage installer with the returned `apiKey`: `bun install/install.ts --index-api-key <apiKey>` (or equivalent in the hosted runtime). If Portal has also fetched an EdgeOS personal access token for the attendee, it passes that on the same line: `bun install/install.ts --index-api-key <apiKey> --edgeos-api-key <eos_live_…> --edgeos-bearer-token <jwt>`.
-2. In a follow-up step, captures the attendee's Telegram handle and binds it to their agent transport — this is entirely Portal-owned and happens outside this endpoint.
+1. Runs the AgentVillage installer with the returned `apiKey`: `bun install/install.ts --index-api-key <apiKey>` (or equivalent in the hosted runtime). If Portal knows the attendee's Telegram handle, it passes it as `--telegram-handle @handle` so every Telegram-surface Index MCP request carries `x-index-telegram-username` and self-heals the user's public Telegram social. If Portal has also fetched an EdgeOS personal access token for the attendee, it passes that on the same line: `bun install/install.ts --index-api-key <apiKey> --telegram-handle @handle --edgeos-api-key <eos_live_…> --edgeos-bearer-token <jwt>`.
+2. If Portal learns or changes the attendee's Telegram handle later, it should rerun the installer or update `mcp_servers.index.headers.x-index-telegram-username` in the host config.
 
 ### What EdgeOS does after signup (BYOA flow)
 
@@ -148,7 +148,7 @@ claude plugin install agentvillage@agentvillage-skills
 **OpenClaw:**
 ```bash
 openclaw plugins install agentvillage --marketplace Edge-City/agentvillage-skills
-openclaw config set mcp.servers.index '{"url":"https://protocol.index.network/mcp","transport":"streamable-http","headers":{"x-api-key":"<apiKey>"}}'
+openclaw config set mcp.servers.index '{"url":"https://protocol.index.network/mcp","transport":"streamable-http","headers":{"x-api-key":"<apiKey>","x-index-surface":"telegram","x-index-telegram-username":"@handle"}}'
 openclaw config set env.vars.EDGEOS_BEARER_TOKEN '<jwt>'
 openclaw config set env.vars.EDGEOS_API_KEY '<eos_live_…>'
 openclaw gateway restart
@@ -161,6 +161,8 @@ hermes skills install Edge-City/agentvillage/skills/edgeos --force
 hermes skills install Edge-City/agentvillage/skills/index-network --force
 hermes config set mcp_servers.index.url 'https://protocol.index.network/mcp'
 hermes config set mcp_servers.index.headers.x-api-key '<apiKey>'
+hermes config set mcp_servers.index.headers.x-index-surface 'telegram'
+hermes config set mcp_servers.index.headers.x-index-telegram-username '@handle'
 hermes config set EDGEOS_BEARER_TOKEN '<jwt>'
 hermes config set EDGEOS_API_KEY '<eos_live_…>'
 ```
@@ -187,6 +189,12 @@ From a clone of this repo:
 
 ```bash
 bun install/install.ts --index-api-key <YOUR_API_KEY>
+```
+
+If this AgentVillage runtime is serving the user through Telegram, include their public Telegram handle. The installer stores it in the Index MCP headers so any Telegram-surface interaction can upsert the user's reachable Telegram social without waiting for onboarding:
+
+```bash
+bun install/install.ts --index-api-key <YOUR_API_KEY> --telegram-handle @handle
 ```
 
 To target the dev environment (keys generated on `dev.index.network`), pass `--dev`:
