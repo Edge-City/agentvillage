@@ -1,6 +1,6 @@
 ---
 name: edge-esmeralda-2026
-description: Edge Esmeralda 2026 — a month-long popup village (May 30 – Jun 27, Healdsburg, CA). Carries popup constants (popup id, week dates, themes), attendee directory field semantics, and the curated wiki / website / newsletter knowledge base. Pair with the `edgeos` skill for live API access and the `index-network` skill for discovery.
+description: Edge Esmeralda 2026 — a month-long popup village (May 30 – Jun 27, Healdsburg, CA). Carries popup constants (popup id, week dates, themes), attendee directory field semantics, and the curated wiki / website / newsletter knowledge base. Pair with the `edgeos` skill for live API access, the `index-network` skill for discovery, and the `geo-esmeralda` skill for community-authored content and main-chat history.
 version: 3.1.0
 author: Edge City
 tags: [edge-city, edge-esmeralda, popup-village, community]
@@ -105,7 +105,8 @@ If the `references/` directory is missing (the upstream CI workflow that generat
 - Check-in, wristbands → **wiki**
 - Health, gym, sauna, cold plunge → **wiki**
 - Kids, families, kids camp → **wiki**
-- Telegram groups, community chat → **wiki**
+- Telegram groups: which ones exist, how to join → **wiki**
+- What people are saying in the main village chat, chat summaries → **`geo-esmeralda` skill** (raw, time-windowed history of the main Telegram group; not covered by the wiki)
 - Transport, bikes, rideshare → **wiki**
 - Local discounts, merch → **wiki**
 - Outdoor adventures, Russian River, hikes → **wiki**
@@ -125,7 +126,8 @@ When a user asks about Edge Esmeralda, route the work like this:
 
 - **Calendar / RSVP / venue / directory API call** → `edgeos` skill. Pass `popup_id` from §1.
 - **Discovery, intent-based matching, "who should I meet?"** → `index-network` skill.
-- **Community knowledge** (logistics, organization, announcements, "what is Edge City?") → this skill, §5.
+- **Village chat ("what's the village discussing," "what's happening in the chat," "summarize the chat")** → `geo-esmeralda` skill (`telegram-messages` recipe) — raw, time-windowed history of the main Edge Esmeralda 2026 Telegram group. Synthesize a short bulleted summary; never dump raw messages or quote personal details beyond what the answer needs. If the local geo skill copy does not document `telegram-messages` yet, run `npx -y @geoprotocol/geo-edge-esmeralda-cli telegram-messages --help` for usage.
+- **Community knowledge** (logistics, organization, announcements, "what is Edge City?") → this skill, §4.
 - **Spatial / map / "what's near venue X"** → `geo-esmeralda` skill. Query `Venue` nodes via native graph queries for coordinates, or use the `edgeos` venue endpoint's `geo_lat` / `geo_lng` fields with haversine math for proximity ranking. Use the wiki (§4) for Healdsburg-area context.
 
 ---
