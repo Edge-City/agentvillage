@@ -6,9 +6,7 @@
  *   - Installs the digest crons: prepare (`Edge — digest prepare`, 02:00) and
  *     send (`Edge — daily digest`, 08:00) — both host-local; times overridable
  *     via --digest-prepare-cron / --digest-send-cron (or DIGEST_PREPARE_CRON /
- *     DIGEST_SEND_CRON). The send cron is created **paused** (staging still runs
- *     nightly via prepare, but nothing is auto-delivered until someone runs
- *     `hermes cron resume <id>`).
+ *     DIGEST_SEND_CRON). The morning send cron is enabled by default.
  */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -185,7 +183,7 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
     deliver: true,
     overrideFlag: "--digest-send-cron",
     overrideEnv: "DIGEST_SEND_CRON",
-    paused: true,
+    paused: false,
   },
 ];
 
