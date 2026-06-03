@@ -21,10 +21,10 @@ test("two digest cron specs: prepare (02:00, no deliver) then send (08:00, deliv
   expect(send.deliver).toBe(true);
 });
 
-test("prepare and morning send are created enabled by default", () => {
+test("prepare is enabled and morning send is installed paused by default", () => {
   const [prepare, send] = DIGEST_CRON_SPECS;
   expect(prepare.paused).toBe(false);
-  expect(send.paused).toBe(false);
+  expect(send.paused).toBe(true);
 });
 
 test("prepare cron args omit --deliver; send cron args include --deliver telegram", () => {

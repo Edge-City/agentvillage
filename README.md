@@ -9,7 +9,7 @@ AgentVillage is the public skills package and onboarding scripts that an agent (
 Today, capabilities come from **Index Network** (discovery + intent negotiation). **Geo** (knowledge graph) and **EdgeOS** (calendar + directory) are also in scope. Once installed, AgentVillage:
 
 - **Runs privacy-first onboarding** the first time you message it (greet → ask one data-use consent question covering EdgeOS data and public lookup → profile draft → user approval → first signal → silent handle capture → `complete_onboarding`).
-- **Sends a morning brief at 08:00 host-local time** with admin-set village announcements, today's EdgeOS calendar highlights, the connections worth your attention, and the asks where you can help.
+- **Prepares a morning brief for 08:00 host-local time** with admin-set village announcements, today's EdgeOS calendar highlights, the connections worth your attention, and the asks where you can help. The delivery cron is installed paused until operators explicitly resume it.
 - **Notifies you when someone accepts** a connection on your behalf.
 - **Curates memory** every few days — distills daily notes into long-term `MEMORY.md`.
 
@@ -244,7 +244,7 @@ The installer:
 4. Sets `channels.telegram.streaming.mode = off` so OpenClaw doesn't dump per-tool status drafts into your chat.
 5. Copies the workspace markdown bundle into `~/.openclaw/workspace/`. `USER.md` is preserved on re-install (it holds the lived notes the active skill's bootstrap ritual populated for you); pass `--wipe-user` to overwrite `USER.md` and delete the agent-curated `MEMORY.md`, OpenClaw's `workspace-state.json` first-run marker, and the local onboarding/welcome/cron-preference markers under `memory/` so the next session re-onboards from scratch.
 6. Copies backend skill bundles from `skills/` into `~/.openclaw/workspace/skills/` so OpenClaw registers them as workspace skills.
-7. Installs the two digest cron jobs: a prepare pass (`0 2 * * *`) that composes the morning brief and stages it as an editable Kanban task, and a send pass (`0 8 * * *`) that delivers the staged brief. The morning send is enabled by default. The end user can't change the schedule from chat, but the installer can override both times via `--digest-prepare-cron` / `--digest-send-cron` (or `DIGEST_PREPARE_CRON` / `DIGEST_SEND_CRON`) — see "Overriding the digest cron times" above.
+7. Installs the two digest cron jobs: a prepare pass (`0 2 * * *`) that composes the morning brief and stages it as an editable Kanban task, and a send pass (`0 8 * * *`) that delivers the staged brief. The morning send is installed paused by default to prevent accidental delivery; operators must explicitly resume it after validation. The end user can't change the schedule from chat, but the installer can override both times via `--digest-prepare-cron` / `--digest-send-cron` (or `DIGEST_PREPARE_CRON` / `DIGEST_SEND_CRON`) — see "Overriding the digest cron times" above.
 8. Restarts the gateway so all config changes take effect.
 
 Send any message in your chat to bring AgentVillage online. AgentVillage has two independent onboarding gates that run at session start:
