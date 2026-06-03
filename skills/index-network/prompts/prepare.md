@@ -83,20 +83,29 @@ Silent turns use the current host's no-reply marker exactly: Hermes → `[SILENT
 
 6. **URL rules.** Weave links into prose. The strip-the-URLs test is the rule: remove every link and the prose still reads coherently. No link tables, action strips, bare URLs, or fabricated URLs. The only links that may appear in the staged body are Index `profileUrl` (`/u/<uuid>`) and real `acceptUrl` links (`/c/<code>`) from direct connections or connector-flow intro approvals. Do not link calendar events because the current URL guard intentionally strips non-Index links.
 
-7. **Stage the brief on the board.** Write the composed body to `memory/digest-draft.md` (overwrite any existing file), then create the task through the deterministic URL guard:
+7. **Stage the brief on the board, then hold it for review.** Write the composed body to `memory/digest-draft.md` (overwrite any existing file), then create the task through the deterministic URL guard and capture its id with `--json`:
 
    ```
-   hermes kanban create "Morning digest — <YYYY-MM-DD>" --body "$(bun <HERMES_HOME>/skills/index-network/scripts/validate-digest-urls.ts <HERMES_HOME>/memory/digest-draft.md)" --idempotency-key "digest-<YYYY-MM-DD>"
+   hermes kanban create "Morning digest — <YYYY-MM-DD>" --body "$(bun <HERMES_HOME>/skills/index-network/scripts/validate-digest-urls.ts <HERMES_HOME>/memory/digest-draft.md)" --idempotency-key "digest-<YYYY-MM-DD>" --json
    ```
 
-   `<HERMES_HOME>` is your workspace root (the `--workdir` you were launched with; `~/.hermes` by default). The guard preserves `<!-- digest-opportunity:id=... -->` markers for editable delivery bookkeeping and strips fabricated markdown links. Never bypass it with a bare `cat`. Do not assign the task to anyone. After a successful create, delete `memory/digest-draft.md`.
+   `<HERMES_HOME>` is your workspace root (the `--workdir` you were launched with; `~/.hermes` by default). The guard preserves `<!-- digest-opportunity:id=... -->` markers for editable delivery bookkeeping and strips fabricated markdown links. Never bypass it with a bare `cat`. Parse the `--json` output for the created task's `id` (`<taskId>`). Do not assign the task to anyone.
 
-8. **Record what you staged.** Update `memory/heartbeat-state.json` so `prepared` equals `{ "date": "<YYYY-MM-DD>", "taskTitle": "Morning digest — <YYYY-MM-DD>", "opportunityIds": [ every `opportunityId` from context opportunities that you put in the brief; empty array when no opportunity ids are present ] }`. Preserve all other top-level keys. Do not call `confirm_opportunity_delivery` and do not touch `deliveredToday` — both happen at send time.
+   Then **block the task to hold it for human review:**
+
+   ```
+   hermes kanban block <taskId> --reason "review-required: morning brief — <YYYY-MM-DD>"
+   ```
+
+   This parks the brief in the **Blocked** column. The 08:00 send pass delivers it **only after a human approves it by unblocking it** (`hermes kanban unblock <taskId>`, or the board's unblock control). Never assign the task or move it to **Ready** — Ready/assigned hands the task to the dispatcher, which is not how the brief ships. After a successful create + block, delete `memory/digest-draft.md`. (Re-running this prompt is safe: the idempotency key prevents a duplicate task, and re-blocking an already-staged task is harmless.)
+
+8. **Record what you staged.** Update `memory/heartbeat-state.json` so `prepared` equals `{ "date": "<YYYY-MM-DD>", "taskId": "<taskId>", "taskTitle": "Morning digest — <YYYY-MM-DD>", "opportunityIds": [ every `opportunityId` from context opportunities that you put in the brief; empty array when no opportunity ids are present ] }`. Preserve all other top-level keys. The send pass finds the staged task by this `taskId`, so it must be recorded. Do not call `confirm_opportunity_delivery` and do not touch `deliveredToday` — both happen at send time.
 
 9. **Deliver nothing.** End your turn with the host-specific no-reply marker.
 
 # Hard rules
 - Never invent announcements, events, people, venues, times, tracks, or action URLs.
+- Always stage the brief **blocked** (held for review) and record its `taskId`; it ships only if a human unblocks (approves) it before the send pass. Never assign it or move it to **Ready**.
 - Calendar failures must not block launch: ship people-only plus the one-line calendar pointer, or the pointer-only fallback if there is nothing else.
 - Never confirm delivery here. Never write `deliveredToday` here.
 - The staged body is what the user receives in the morning after internal digest markers are stripped — make the visible prose complete and final.
