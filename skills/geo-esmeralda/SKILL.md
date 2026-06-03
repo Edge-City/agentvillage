@@ -1,6 +1,6 @@
 ---
 name: geo-esmeralda
-description: Add attendee-authored content, query Geo community knowledge, retrieve raw Telegram history, and inspect relations/ontology through the Geo CLI package.
+description: Add attendee-authored content, query Geo community knowledge, retrieve raw history of the main Edge Esmeralda 2026 Telegram group, and inspect relations/ontology through the Geo CLI package.
 version: 1.0.0
 author: Edge City
 tags: [edge-city, edge-esmeralda, geo, graph, community]
@@ -22,8 +22,9 @@ history. It is especially for creating notes, transcripts, essays, project
 pitches, comments, and photos; linking those contributions to events, venues,
 tracks, or other community context; reading back knowledge graph-backed claims,
 content, source material, wiki-style knowledge, idea links, and ontology details;
-and summarizing or answering questions about what happened in Telegram during a
-specific time window.
+and summarizing or answering questions about what happened in the main Edge
+Esmeralda 2026 Telegram group (the village-wide chat) during a specific time
+window.
 
 Other sibling skills cover live EdgeOS schedule/directory operations and Index
 Network participant matching. Use this skill for the Geo knowledge graph and for all
@@ -43,6 +44,9 @@ You need one token, read by the CLI from environment/config:
 
 - Never place bearer tokens in prompts, query text, native query parameters,
   answers, examples, transcripts, or shared notes.
+- When presenting Telegram messages or history to the user, synthesize a short
+  bulleted summary in your own words; never dump raw messages or quote personal
+  details beyond what the answer needs.
 - Prefer fixed commands before native graph queries.
 - Fetch live ontology before writing a native query unless the current session
   already fetched it.
@@ -85,11 +89,14 @@ npx -y @geoprotocol/geo-edge-esmeralda-cli fixed --tool list_idea_links --input 
 npx -y @geoprotocol/geo-edge-esmeralda-cli native --query 'MATCH (c:ContentItem) WHERE c.popupId = $popupId RETURN c.id AS id, c.title AS title, c.kind AS kind LIMIT 20'
 ```
 
-Use `telegram-messages` for bounded raw Telegram context, including messages
-that may not have become graph claims. Always prefer a `--from`/`--to` day window
+Use `telegram-messages` for bounded raw Telegram context from the main Edge
+Esmeralda 2026 Telegram group (the village-wide chat), including messages that
+may not have become graph claims. Always prefer a `--from`/`--to` day window
 for summaries. Results are newest-first and include `nextCursor`; continue with
-`--cursor <nextCursor>` until `hasMore` is false. Optional `--chat-id=-100...`
-and `--thread-id <id>` filters narrow the raw history. The endpoint omits raw
+`--cursor <nextCursor>` until `hasMore` is false, but fetch only as many pages
+as the question needs; for a daily summary the first page or two usually
+suffices. The served history covers only this group, so you should not normally
+need the optional `--chat-id` and `--thread-id` filters. The endpoint omits raw
 payloads, bearer tokens, and author external ids.
 
 Load `references/setup.md` when configuring the CLI or installing the skill.
