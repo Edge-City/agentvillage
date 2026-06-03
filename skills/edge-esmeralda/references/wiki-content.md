@@ -1,7 +1,7 @@
 # Edge Esmeralda 2026 Wiki
 
 Source: https://www.notion.so/edgecity/Edge-Esmeralda-2026-Wiki-317d45cdfc5981d2a571f52b024c5141
-Last indexed: 2026-06-02T23:34:41.717Z
+Last indexed: 2026-06-03T04:09:39.141Z
 
 ---
 
@@ -29,7 +29,7 @@ Edge Esmeralda 2026 is a month-long popup village (May 30 – June 27) happening
 
 ---
 
-### 💻 Coworking
+### 💻 Venue Hours
 
 ---
 
@@ -49,13 +49,13 @@ Edge Esmeralda 2026 is a month-long popup village (May 30 – June 27) happening
 
 ---
 
-### 💯 Local Discounts & Partners
-
 Welcome! We're so excited to have you with us ☀️
 
 This wiki has all the important information regarding Edge Esmeralda 2026. If you have further questions, please reach out to info@edgeesmeralda.com (mailto:info@edgeesmeralda.com).
 
 ### ❤️ Most Important Info & Links
+
+### 💯 Local Discounts & Partners
 
 ---
 
@@ -175,26 +175,24 @@ Before you arrive: Please sign your liability waiver (https://waiver.smartwaiver
 
 Read our full Opening Weekend guide (https://edgeesmeralda2026.substack.com/p/the-opening-weekend-of-edge-esmeralda) for everything happening May 30–31.
 
-Opening Weekend Special (Sat May 30 & Sun May 31)
-
-Location: The Loft, 120 North St (Map (https://maps.app.goo.gl/TfAJ4ixzfxQmLssB8))
-
-Hours: May 30: 11am – 5pm; May 31: 11am - 4pm
-
 June 1 - June 27 
 
-Location The Hub, 405 Healdsburg Ave (Map (https://maps.app.goo.gl/ErKaaNPEdMdcwnrg9))
-
-Hours: Sun & Mon: 11am – 4pm; Tues – Sat: 11am – 1pm
-
+- Location The Hub, 405 Healdsburg Ave (Map (https://maps.app.goo.gl/ErKaaNPEdMdcwnrg9))
+- Hours: 
 Meet people you'll actually want to know. Fill out the survey  (https://lovescience.club/ee26-connection-lab)and RSVP for the Connection Lab events (https://edgecity.edgeos.world/portal/edge-esmeralda-2026/events) to get matched and meet with the people at Edge you’ll click with—mostly friend-first crews built for exploring the week or month together. More info here (https://lovescience.club/).
 
 The most important communication channel is our Telegram group for all participants.
 
 → All ticket holders receive the invitation link via email to join.
 
-- Location: The Hub (https://maps.app.goo.gl/ErKaaNPEdMdcwnrg9), 405 Healdsburg Ave
-- Hours: daily, 7am - 10pm
+The Hub (https://maps.app.goo.gl/ErKaaNPEdMdcwnrg9) (405 Healdsburg Ave) | ‣
+
+- 7am - 9pm (daily)
+- Co-working, wellness space, meeting rooms
+The Loft (120 North Street) | ‣
+
+- 10am - 8pm
+- Main talk space
 We've partnered with local restaurants and businesses to offer EE26 participants exclusive discounts. Browse all offers on our Discounts & Partners page (https://www.notion.so/a68d45cdfc59822aac5901fa5a80e783). 
 
 Lunch Meal Plans
@@ -254,7 +252,7 @@ Edge Esmeralda is proudly multigenerational - kids, teens, and elders make the v
 - What: A hands-on creative residency where kids conceive, build, and present projects they design for the whole Edge community. Think: pop-up museums, cardboard worlds, short films, neighbourhood festivals.
 Full article: Announcing Edge Tomorrow (https://edgeesmeralda2026.substack.com/p/announcing-a-creative-residency-for)
 
-- Schedule: Monday–Friday, 9am–4pm
+- Schedule: Monday–Friday, 9am–4pm at 328 Mason St
 - Format: Weekly cohorts, each anchored by a theme-question. Kids lead the projects. Each week ends with a Friday showcase open to the whole village.
 Weekly structure:
 
@@ -424,6 +422,8 @@ Edge Esmeralda 2026 is organized by Edge City (https://www.edgecity.live/), a "s
 
 Email info@edgeesmeralda.com (mailto:info@edgeesmeralda.com) if you have any further questions.
 
+- Sun & Mon: 11am – 4pm
+- Tues – Sat: 11am – 1pm
 - → Apply here (https://edgecity.simplefi.tech/portal/edge-esmeralda-2026) for your kids to join
 For younger children, we're partnering with the wonderful Sonoma Arts School (https://sonomaartschool.org/). Contact Kelly, head of the school, for details and enrollment.
 
