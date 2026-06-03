@@ -88,14 +88,16 @@ This step is **silent** — produce no user-facing output, do not announce it, d
 
 Detection by session key:
 
-- `agent:main:telegram:direct:<chatId>` → Telegram. Look up the inbound message's sender metadata (it carries `from.username` for users who have a public handle). If `from.username` is present, call `update_user_profile(socials={ telegram: "@<username>" })`. If absent (the user has no public Telegram username), skip — do not write the chatId as a fallback.
+- `agent:main:telegram:direct:<chatId>` → Telegram. First try the inbound message's sender metadata (it carries `from.username` for users who have a public handle). If `from.username` is present, call `update_user_profile(socials={ telegram: "@<username>" })`. If sender metadata is unavailable or the username is absent, use the EdgeOS fallback below — do not write the chatId as a fallback.
 - `agent:main:whatsapp:...` → WhatsApp. The phone number is the handle; call `update_user_profile(socials={ whatsapp: "+<E.164>" })` if recoverable.
 - `agent:main:discord:...`, `agent:main:slack:...`, etc. → equivalent treatment if the platform's primary handle is recoverable from session metadata.
-- `agent:main:webchat` or any other context where no platform handle exists → skip the entire step.
+- `agent:main:webchat` or any other context where no platform handle exists → skip session-metadata capture.
 
-Also note the platform + handle in `USER.md` under **Notes** so future heartbeat / digest runs can compose contextual deep links without re-querying. One short line is enough (e.g. `Connected via Telegram (@yanekyuksel).`).
+EdgeOS fallback for Telegram: if the session is Telegram, no `from.username` was recoverable from the host, the user granted the Step 1 data-use consent, and `EDGEOS_BEARER_TOKEN` is available, read the user's own EdgeOS profile via the `edgeos` skill's `GET /api/v1/humans/me` recipe. If the response has a `telegram` value that is not empty and is not the hidden sentinel `"*"`, call `update_user_profile(socials={ telegram: "@<handle>" })`. This fallback is still silent. If the bearer token is missing, the EdgeOS call fails, or the EdgeOS profile has no public Telegram value, skip it without asking the user.
 
-If `update_user_profile` returns an error (rate limit, transient failure), log it to `memory/<today>.md` and continue — do not block onboarding on this. The next heartbeat tick can retry.
+Also note the platform + handle in `USER.md` under **Notes** when you successfully save one so future heartbeat / digest runs can compose contextual deep links without re-querying. One short line is enough (e.g. `Connected via Telegram (@yanekyuksel).`).
+
+If `update_user_profile` or the EdgeOS fallback returns an error (rate limit, transient failure), log it to `memory/<today>.md` and continue — do not block onboarding on this. The next heartbeat tick can retry.
 
 ## Step 5 — Close out and populate USER.md
 
