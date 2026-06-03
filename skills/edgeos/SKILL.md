@@ -106,8 +106,6 @@ For a recurring event, scope the RSVP lookup to one instance with `?occurrence_s
 
 **Pagination:** use `skip` and `limit` (max `100`). Stop when `results.length < limit`.
 
-**Highlighted events:** event records include a boolean `highlighted` field. The list endpoint does not provide a `highlighted` query parameter; fetch the relevant date range and filter client-side with `event.highlighted === true`.
-
 ## 4. Writing events (requires `events:write` scope on `$EDGEOS_API_KEY`)
 
 **Update an event you own:**
