@@ -8,12 +8,12 @@ import {
 
 describe("sanitizeDigestUrls", () => {
   test("strips a fabricated /accept/<n> link, keeping the link text as plain prose", () => {
-    const md = "- [Alex Rivera](https://index.network/u/11111111-1111-1111-1111-111111111111) — a specialist, [message Alex](https://index.network/accept/901)";
+    const md = "- [Alex Rivera](https://index.network/u/11111111-1111-1111-1111-111111111111) — a specialist, [say hi](https://index.network/accept/901)";
 
     const { output, stripped } = sanitizeDigestUrls(md);
 
     // The fabricated accept link is demoted to its label text.
-    expect(output).toContain("message Alex");
+    expect(output).toContain("say hi");
     expect(output).not.toContain("/accept/901");
     expect(output).not.toContain("(https://index.network/accept/901)");
     // The real profile link survives untouched.
@@ -22,7 +22,7 @@ describe("sanitizeDigestUrls", () => {
   });
 
   test("preserves a legitimate /c/<code> connect link including its query string", () => {
-    const md = "[message Maya](https://protocol.index.network/c/Abc1234567?link_preview=false)";
+    const md = "[say hi](https://protocol.index.network/c/Abc1234567?link_preview=false)";
 
     const { output, stripped } = sanitizeDigestUrls(md);
 
