@@ -6,9 +6,9 @@
  *   - Installs the digest crons: prepare (`Edge — digest prepare`, 02:00) and
  *     send (`Edge — daily digest`, 08:00) — both host-local; times overridable
  *     via --digest-prepare-cron / --digest-send-cron (or DIGEST_PREPARE_CRON /
- *     DIGEST_SEND_CRON). The send cron is created **paused** (staging still runs
- *     nightly via prepare, but nothing is auto-delivered until someone runs
- *     `hermes cron resume <id>`).
+ *     DIGEST_SEND_CRON). Both crons run enabled; the staged brief is held in the
+ *     Kanban Blocked column and is only delivered after a human unblocks
+ *     (approves) it, so no paused-cron resume step is needed.
  */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -165,8 +165,10 @@ export interface DigestCronSpec {
 
 /**
  * The morning digest runs as two fixed-time dispatches: a prepare pass that
- * composes the brief and stages it on the Kanban board (no delivery), and a
- * send pass that delivers the staged brief.
+ * composes the brief and stages it on the Kanban board as a blocked task (no
+ * delivery), and a send pass that delivers it only after a human has approved
+ * it by unblocking the staged task. Both crons run enabled — the Kanban
+ * block/unblock state is the approval gate, not a paused cron.
  */
 export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
   {
@@ -185,7 +187,9 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
     deliver: true,
     overrideFlag: "--digest-send-cron",
     overrideEnv: "DIGEST_SEND_CRON",
-    paused: true,
+    // Enabled: delivery is gated by the Kanban block/unblock approval state
+    // (see send.md), not by pausing the cron.
+    paused: false,
   },
 ];
 

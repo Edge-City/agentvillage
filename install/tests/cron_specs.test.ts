@@ -21,10 +21,10 @@ test("two digest cron specs: prepare (02:00, no deliver) then send (08:00, deliv
   expect(send.deliver).toBe(true);
 });
 
-test("prepare runs scheduled; send is created paused", () => {
+test("both digest crons run enabled — the brief is gated via Kanban block/unblock, not a paused cron", () => {
   const [prepare, send] = DIGEST_CRON_SPECS;
   expect(prepare.paused).toBe(false);
-  expect(send.paused).toBe(true);
+  expect(send.paused).toBe(false);
 });
 
 test("prepare cron args omit --deliver; send cron args include --deliver telegram", () => {
