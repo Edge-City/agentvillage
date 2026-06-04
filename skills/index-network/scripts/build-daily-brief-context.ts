@@ -275,7 +275,27 @@ export function selectEvents(events: EdgeEvent[], interestTags: string[]): { hig
   return { highlightedEvents, interestEvents };
 }
 
+function unwrapOpportunityTranscript(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{")) return text;
+  try {
+    const parsed = JSON.parse(trimmed) as {
+      message?: unknown;
+      data?: { message?: unknown };
+    };
+    const message = typeof parsed.data?.message === "string"
+      ? parsed.data.message
+      : typeof parsed.message === "string"
+        ? parsed.message
+        : "";
+    return message || text;
+  } catch {
+    return text;
+  }
+}
+
 export function parseOpportunityTranscript(text: string): BriefOpportunity[] {
+  const transcript = unwrapOpportunityTranscript(text);
   const cards: BriefOpportunity[] = [];
   let current: BriefOpportunity | null = null;
 
@@ -284,7 +304,7 @@ export function parseOpportunityTranscript(text: string): BriefOpportunity[] {
     current = null;
   };
 
-  for (const rawLine of text.split(/\r?\n/)) {
+  for (const rawLine of transcript.split(/\r?\n/)) {
     const line = rawLine.trimEnd();
     const header = line.match(/^\d+\.\s+(.+)$/);
     if (header) {

@@ -92,6 +92,31 @@ describe("build-daily-brief-context helpers", () => {
     ]);
   });
 
+  test("parseOpportunityTranscript unwraps direct MCP JSON tool results", () => {
+    const result = {
+      success: true,
+      data: {
+        found: true,
+        count: 1,
+        message: `You have 1 opportunity.\n\n1. Nathan Price\n   <!-- digest-opportunity:id=opp-direct-1 -->\n   builds the intelligence layer for human aging\n   status: pending\n   profileUrl: https://index.network/u/11111111-1111-1111-1111-111111111111\n   acceptUrl: https://index.network/c/abc123\n   feedCategory: connection`,
+      },
+    };
+
+    const parsed = parseOpportunityTranscript(JSON.stringify(result));
+
+    expect(parsed).toEqual([
+      {
+        name: "Nathan Price",
+        opportunityId: "opp-direct-1",
+        mainText: "builds the intelligence layer for human aging",
+        status: "pending",
+        profileUrl: "https://index.network/u/11111111-1111-1111-1111-111111111111",
+        acceptUrl: "https://index.network/c/abc123",
+        feedCategory: "connection",
+      },
+    ]);
+  });
+
   test("filterDedupedOpportunities keeps cards without ids and drops delivered ids", () => {
     expect(
       filterDedupedOpportunities(
