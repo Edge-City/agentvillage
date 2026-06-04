@@ -79,6 +79,38 @@ function normalizeOpportunityText(text: string): string {
     .trim();
 }
 
+function firstName(name: string): string {
+  return name.trim().split(/\s+/)[0] || name;
+}
+
+function opportunityTemplate(opp: BriefOpportunity, text: string): string | null {
+  const first = firstName(opp.name);
+  const escaped = first.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const profileExpertise = text.match(new RegExp(`(?:${escaped}\\s+\\w+|${escaped})['’]s profile indicates strong expertise in ([^,.]+)`, "i"));
+  if (profileExpertise?.[1]) return `${first} has strong ${profileExpertise[1].trim()} expertise`;
+
+  const wantsFeedback = text.match(new RegExp(`${escaped}[^.]*seeking feedback[^.]*?(?:on|about) ['“\"]?([^'.“”\"]+)`, "i"));
+  if (wantsFeedback?.[1]) return `${first} wants feedback on ${wantsFeedback[1].trim()}`;
+
+  const building = text.match(new RegExp(`${escaped}[^.]*building ['“\"]([^'“”\"]+)['”\"][^.]*seeking ([^.]+)`, "i"));
+  if (building?.[1]) return `${first} is building ${building[1].trim()}`;
+
+  const exploring = text.match(new RegExp(`${escaped}[^.]*exploration of ['“\"]([^'“”\"]+)['”\"][^.]*['“\"]([^'“”\"]+)['”\"]`, "i"));
+  if (exploring?.[1] && exploring?.[2]) return `${first} is exploring ${exploring[1].trim()} and ${exploring[2].trim()}`;
+
+  const focusing = text.match(new RegExp(`${escaped}[^.]*focusing on ([^,.;]+)`, "i"));
+  if (focusing?.[1]) return `${first} is focused on ${focusing[1].trim()}`;
+
+  return null;
+}
+
+function readableSentences(text: string): string[] {
+  return text
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence && !/\b(Yankı|you are|your)\b/i.test(sentence));
+}
+
 function truncateAtWord(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
   const slice = text.slice(0, maxChars + 1);
@@ -88,7 +120,9 @@ function truncateAtWord(text: string, maxChars: number): string {
 
 function opportunityReason(opp: BriefOpportunity, fallback: string): string {
   const cleaned = normalizeOpportunityText(opp.mainText || fallback);
-  return truncateAtWord(cleaned, OPPORTUNITY_REASON_MAX_CHARS).replace(/[,.]$/, "");
+  const templated = opportunityTemplate(opp, cleaned);
+  const sentence = templated ?? readableSentences(cleaned)[0] ?? cleaned;
+  return truncateAtWord(sentence, OPPORTUNITY_REASON_MAX_CHARS).replace(/[,.]$/, "");
 }
 
 export function composeDailyBrief(context: DailyBriefContext): { body: string; opportunityIds: string[] } {

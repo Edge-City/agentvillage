@@ -82,6 +82,48 @@ describe("composeDailyBrief", () => {
     expect(body).toContain("[Say hi](https://protocol.index.network/c/abc123)");
   });
 
+  test("renders common digest opportunity reasons as concise user-facing prose", () => {
+    const opportunities = [
+      {
+        name: "Seref Yarar",
+        opportunityId: "opp-seref",
+        mainText: "Seref Yarar's profile indicates strong expertise in AI, especially in user profiling and modeling, and he is involved with arXiv publications on these topics, suggesting deep engagement with advanced AI concepts relevant to the discoverer's query.",
+        profileUrl: "https://index.network/u/11111111-1111-1111-1111-111111111111",
+        acceptUrl: "https://protocol.index.network/c/seref",
+        feedCategory: "connection",
+      },
+      {
+        name: "Seren Sandikci",
+        opportunityId: "opp-seren",
+        mainText: "The discoverer, Seren, is seeking feedback and deep technical or design insights on 'protocol design'. Yankı is a tech professional with engineering expertise, focusing on back-end development and full-stack development.",
+        profileUrl: "https://index.network/u/22222222-2222-2222-2222-222222222222",
+        acceptUrl: "https://protocol.index.network/c/seren",
+        feedCategory: "connection",
+      },
+      {
+        name: "Helen Huang",
+        opportunityId: "opp-helen",
+        mainText: "The discoverer, Helen, is building 'portable digital identity of character and behavior through gameplay' and is seeking research collaboration. you, the candidate, is a tech professional with engineering expertise focusing on back-end development.",
+        profileUrl: "https://index.network/u/33333333-3333-3333-3333-333333333333",
+        acceptUrl: "https://protocol.index.network/c/helen",
+        feedCategory: "connection",
+      },
+    ];
+
+    const { body } = composeDailyBrief({
+      ...baseContext,
+      opportunities,
+      connectionOpportunities: opportunities,
+    });
+
+    expect(body).toContain("Seref has strong AI expertise. [Say hi]");
+    expect(body).toContain("Seren wants feedback on protocol design. [Say hi]");
+    expect(body).toContain("Helen is building portable digital identity of character and behavior through gameplay. [Say hi]");
+    expect(body).not.toContain("profile indicates");
+    expect(body).not.toContain("Yankı is a tech professional");
+    expect(body).not.toContain("you are a tech professional");
+  });
+
   test("keeps digest opportunity bullets short and drops raw presenter artifacts", () => {
     const longReason = "The discoverer, Helen, is building portable digital identity through gameplay and is seeking research collaboration. you, the candidate, is a tech professional with engineering expertise focusing on back-end development and has an intent to meet researchers. While their location is elsewhere, remote collaboration makes this less of a barrier.";
     const opportunities = Array.from({ length: 4 }, (_, idx) => ({
