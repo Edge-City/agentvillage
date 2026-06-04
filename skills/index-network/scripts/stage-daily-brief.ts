@@ -10,6 +10,7 @@
  */
 
 import { existsSync, rmSync } from "node:fs";
+import { access } from "node:fs/promises";
 
 import { buildDailyBriefContext, type BriefOpportunity, type DailyBriefContext } from "./build-daily-brief-context";
 import { sanitizeDigestUrls } from "./validate-digest-urls";
@@ -122,8 +123,24 @@ async function writeJson(path: string, value: unknown): Promise<void> {
   await Bun.write(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function runHermes(args: string[]): string {
-  const result = Bun.spawnSync(["hermes", ...args], {
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveHermesCommand(): Promise<string> {
+  if (process.env.HERMES_BIN) return process.env.HERMES_BIN;
+  if (await fileExists("/opt/hermes/.venv/bin/hermes")) return "/opt/hermes/.venv/bin/hermes";
+  return "hermes";
+}
+
+async function runHermes(args: string[]): Promise<string> {
+  const hermes = await resolveHermesCommand();
+  const result = Bun.spawnSync([hermes, ...args], {
     stdout: "pipe",
     stderr: "pipe",
     env: { ...process.env, HOME: process.env.HERMES_HOME ?? process.env.HOME, HERMES_HOME: process.env.HERMES_HOME ?? process.cwd() },
@@ -131,7 +148,7 @@ function runHermes(args: string[]): string {
   if (!result.success) {
     const stderr = new TextDecoder().decode(result.stderr).trim();
     const stdout = new TextDecoder().decode(result.stdout).trim();
-    throw new Error(`hermes ${args.join(" ")} failed: ${stderr || stdout}`);
+    throw new Error(`${hermes} ${args.join(" ")} failed: ${stderr || stdout}`);
   }
   return new TextDecoder().decode(result.stdout);
 }
@@ -168,7 +185,7 @@ export async function stageDailyBrief(options: {
   const { output: sanitizedBody } = sanitizeDigestUrls(body);
   await Bun.write("memory/digest-draft.md", `${sanitizedBody}\n`);
 
-  const createOutput = runHermes([
+  const createOutput = await runHermes([
     "kanban",
     "create",
     `Morning digest — ${date}`,
@@ -180,7 +197,7 @@ export async function stageDailyBrief(options: {
   ]);
   const taskId = extractTaskId(createOutput);
 
-  runHermes(["kanban", "block", taskId, `review-required: morning brief — ${date}`]);
+  await runHermes(["kanban", "block", taskId, `review-required: morning brief — ${date}`]);
 
   const state = await readJsonObject(stateFile);
   state.prepared = {

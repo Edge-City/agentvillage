@@ -11,6 +11,7 @@
  */
 
 import { existsSync } from "node:fs";
+import { access } from "node:fs/promises";
 
 import { extractDigestOpportunityIds, sanitizeDigestUrls } from "./validate-digest-urls";
 
@@ -31,7 +32,7 @@ interface HermesTask {
   body?: string;
 }
 
-type HermesRunner = (args: string[]) => string;
+type HermesRunner = (args: string[]) => string | Promise<string>;
 
 function argValue(args: string[], name: string): string | undefined {
   const idx = args.indexOf(name);
@@ -63,8 +64,24 @@ async function writeJson(path: string, value: unknown): Promise<void> {
   await Bun.write(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function runHermes(args: string[]): string {
-  const result = Bun.spawnSync(["hermes", ...args], {
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveHermesCommand(): Promise<string> {
+  if (process.env.HERMES_BIN) return process.env.HERMES_BIN;
+  if (await fileExists("/opt/hermes/.venv/bin/hermes")) return "/opt/hermes/.venv/bin/hermes";
+  return "hermes";
+}
+
+async function runHermes(args: string[]): Promise<string> {
+  const hermes = await resolveHermesCommand();
+  const result = Bun.spawnSync([hermes, ...args], {
     stdout: "pipe",
     stderr: "pipe",
     env: { ...process.env, HOME: process.env.HERMES_HOME ?? process.env.HOME, HERMES_HOME: process.env.HERMES_HOME ?? process.cwd() },
@@ -72,7 +89,7 @@ function runHermes(args: string[]): string {
   if (!result.success) {
     const stderr = new TextDecoder().decode(result.stderr).trim();
     const stdout = new TextDecoder().decode(result.stdout).trim();
-    throw new Error(`hermes ${args.join(" ")} failed: ${stderr || stdout}`);
+    throw new Error(`${hermes} ${args.join(" ")} failed: ${stderr || stdout}`);
   }
   return new TextDecoder().decode(result.stdout);
 }
@@ -113,7 +130,7 @@ export async function sendDailyBrief(options: {
     return { silent: true, reason: "no-staged-task" };
   }
 
-  const task = parseTask(hermes(["kanban", "show", taskId, "--json"]));
+  const task = parseTask(await hermes(["kanban", "show", taskId, "--json"]));
   if (!task) return { silent: true, reason: "task-unreadable" };
 
   const status = String(task.status ?? "").toLowerCase();
@@ -137,7 +154,7 @@ export async function sendDailyBrief(options: {
   };
   await writeJson(stateFile, state);
 
-  hermes(["kanban", "complete", taskId, "--summary", "delivered"]);
+  await hermes(["kanban", "complete", taskId, "--summary", "delivered"]);
 
   const { output: finalBrief } = sanitizeDigestUrls(body, { stripDigestMetadata: true });
   return { taskId, opportunityIds, finalBrief };
