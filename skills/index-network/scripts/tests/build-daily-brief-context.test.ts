@@ -101,9 +101,9 @@ describe("build-daily-brief-context helpers", () => {
     ).toEqual(["B", "C"]);
   });
 
-  test("formatPacificTime renders the live Pacific time zone abbreviation", () => {
-    expect(formatPacificTime("2026-06-04T16:30:00Z")).toBe("9:30 AM PDT");
-    expect(formatPacificTime("2026-12-04T17:30:00Z")).toBe("9:30 AM PST");
+  test("formatPacificTime renders Pacific time without a timezone suffix", () => {
+    expect(formatPacificTime("2026-06-04T16:30:00Z")).toBe("9:30 AM");
+    expect(formatPacificTime("2026-12-04T17:30:00Z")).toBe("9:30 AM");
   });
 
   test("pacificDayBounds respects daylight saving offsets", () => {

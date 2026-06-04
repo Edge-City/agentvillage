@@ -29,6 +29,8 @@
 const CONNECT_PATH = /^\/c\/[A-Za-z0-9_-]+\/?$/;
 /** Profile link: `/u/<uuid>`, optional trailing slash. */
 const PROFILE_PATH = /^\/u\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/?$/;
+/** Edge Esmeralda calendar event link. */
+const EDGE_ESMERALDA_EVENT_PATH = /^\/portal\/edge-esmeralda-2026\/events\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/?$/;
 
 /**
  * A markdown inline link: `[label](url)`. Label runs to the first `]`; url to the next `)`.
@@ -50,8 +52,10 @@ export interface SanitizeDigestOptions {
 }
 
 /**
- * Whether `url` is a legitimate digest action link (connect or profile shape).
- * Host-agnostic — only the path shape is checked, so dev/prod bases both pass.
+ * Whether `url` is a legitimate digest action link (connect/profile) or
+ * Edge Esmeralda calendar event link. Connect/profile links are host-agnostic
+ * by path shape so dev/prod bases both pass. Event links are intentionally
+ * pinned to the Edge City host + event path.
  * A non-absolute or unparseable URL is never allowed.
  */
 export function isAllowedDigestUrl(url: string): boolean {
@@ -61,7 +65,9 @@ export function isAllowedDigestUrl(url: string): boolean {
   } catch {
     return false;
   }
-  return CONNECT_PATH.test(parsed.pathname) || PROFILE_PATH.test(parsed.pathname);
+  return CONNECT_PATH.test(parsed.pathname)
+    || PROFILE_PATH.test(parsed.pathname)
+    || (parsed.hostname === "edgecity.simplefi.tech" && EDGE_ESMERALDA_EVENT_PATH.test(parsed.pathname));
 }
 
 /**
