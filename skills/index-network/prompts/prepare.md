@@ -94,7 +94,7 @@ Silent turns use the current host's no-reply marker exactly: Hermes → `[SILENT
    Then **block the task to hold it for human review:**
 
    ```
-   hermes kanban block <taskId> --reason "review-required: morning brief — <YYYY-MM-DD>"
+   hermes kanban block <taskId> "review-required: morning brief — <YYYY-MM-DD>"
    ```
 
    This parks the brief in the **Blocked** column. The 08:00 send pass delivers it **only after a human approves it by unblocking it** (`hermes kanban unblock <taskId>`, or the board's unblock control). Never assign the task or move it to **Ready** — Ready/assigned hands the task to the dispatcher, which is not how the brief ships. After a successful create + block, delete `memory/digest-draft.md`. (Re-running this prompt is safe: the idempotency key prevents a duplicate task, and re-blocking an already-staged task is harmless.)
