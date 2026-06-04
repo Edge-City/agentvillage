@@ -78,6 +78,8 @@ describe("composeDailyBrief", () => {
     });
 
     expect(opportunityIds).toEqual(["opp-1"]);
+    expect(body).toContain("**People worth meeting today:**");
+    expect(body).not.toContain("Potential connections via Index Network");
     expect(body).toContain("<!-- digest-opportunity:id=opp-1 -->[Maya]");
     expect(body).toContain("[Say hi](https://protocol.index.network/c/abc123)");
   });
