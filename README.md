@@ -340,7 +340,7 @@ The digest runs as a fixed prepare/send pair — **prepare `0 2 * * *`, send `0 
 |---|---|---|
 | Override the digest times for one install | `--digest-prepare-cron` / `--digest-send-cron` (or `DIGEST_PREPARE_CRON` / `DIGEST_SEND_CRON`) | Optional, full 5-field cron expressions. Flag wins over env; invalid values fall back to the default. |
 | Change the default digest schedule for everyone | `install/install_index.ts` (`DIGEST_CRON_SPECS`) | The installer writes the cron entries from this table. Existing installs pick up changes on the next `install.ts` run. |
-| Change a cron prompt without changing the schedule | the matching `skills/index-network/prompts/<name>.md` | The installer references prompt files by name via `DIGEST_CRON_SPECS`; rename only if you also rename there. |
+| Change a cron prompt without changing the schedule | the matching `skills/index-network/prompts/<name>.md` | Hermes stores prompt copies in cron jobs. Hosted residents are refreshed by the control-plane post-merge sync, which calls each sidecar's `/update` endpoint and reruns the installer. For non-control-plane installs or recovery, run `HERMES_HOME=<resident-home> bun install/reconcile_digest_crons.ts` after updated skill files are copied. |
 
 ### Backends & skills
 

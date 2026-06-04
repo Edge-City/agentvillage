@@ -246,7 +246,7 @@ function hermesAvailable(bin: string): boolean {
   }
 }
 
-function installCronJobs(env: NodeJS.ProcessEnv): void {
+export function reconcileDigestCronJobs(env: NodeJS.ProcessEnv = hermesExecEnv()): void {
   const home = hermesHome();
   const promptsDir = join(home, "skills/index-network/prompts");
 
@@ -260,7 +260,7 @@ function installCronJobs(env: NodeJS.ProcessEnv): void {
 
   // Ensure the Kanban store exists (idempotent; prepare/send stage tasks on it).
   try {
-    execFileSync(bin, ["kanban", "init"], { stdio: "ignore", env: hermesExecEnv() });
+    execFileSync(bin, ["kanban", "init"], { stdio: "ignore", env });
   } catch {
     console.warn("  warning: could not run `hermes kanban init` — board may auto-init on first use");
   }
@@ -280,14 +280,14 @@ function installCronJobs(env: NodeJS.ProcessEnv): void {
     try {
       execFileSync(bin, cronCreateArgs(resolved, promptBody, home), {
         stdio: ["ignore", "ignore", "inherit"],
-        env: hermesExecEnv(),
+        env,
       });
     } catch {
       console.warn(`  warning: could not install cron "${spec.name}" — gateway may still run`);
       continue;
     }
 
-    if (spec.paused) pauseCronByName(spec.name, hermesExecEnv());
+    if (spec.paused) pauseCronByName(spec.name, env);
   }
 }
 
@@ -302,6 +302,6 @@ export function installIndex(): void {
   writeMcpServerEntry(apiKey, telegramHandle);
 
   if (!process.argv.includes("--skip-crons")) {
-    installCronJobs(hermesExecEnv());
+    reconcileDigestCronJobs(hermesExecEnv());
   }
 }
