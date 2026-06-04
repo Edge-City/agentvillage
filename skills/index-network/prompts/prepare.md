@@ -19,92 +19,21 @@ Silent turns use the current host's no-reply marker exactly: Hermes → `[SILENT
 
 ## Steps
 
-1. **Resolve local date.** Determine today's America/Los_Angeles date as `<YYYY-MM-DD>` and display it as `{Weekday, Month D}`. Use greeting exactly:
+1. **Fetch and persist Index opportunities.** Call `list_opportunities(includeDigestMarkers=true)`. Write the exact tool result text to `memory/digest-opportunities.txt`. If the tool errors, write an empty file and continue — the brief can still ship with announcements/calendar.
 
-   `🌞 Good morning from Edge Esmeralda. It is {Weekday, Month D}`
-
-2. **Fetch and persist Index opportunities.** Call `list_opportunities(includeDigestMarkers=true)`. Write the exact tool result text to `memory/digest-opportunities.txt`. If the tool errors, write an empty file and continue — the brief can still ship with announcements/calendar.
-
-3. **Build structured brief context.** Run:
+2. **Run the deterministic staging script.** Do not compose the brief yourself, do not write ad-hoc Python/JavaScript, do not shell-quote a body, and do not call `hermes kanban create` or `hermes kanban block` directly. Run exactly:
 
    ```
-   bun skills/index-network/scripts/build-daily-brief-context.ts --date <YYYY-MM-DD> --opportunities-file memory/digest-opportunities.txt --state-file memory/heartbeat-state.json --out memory/daily-brief-context.json
+   bun skills/index-network/scripts/stage-daily-brief.ts --opportunities-file memory/digest-opportunities.txt --state-file memory/heartbeat-state.json --context-out memory/daily-brief-context.json
    ```
 
-   Then read and parse `memory/daily-brief-context.json`. Treat malformed JSON as an empty context with no announcements, no events, and no opportunities. The context shape is:
+   The script resolves the America/Los_Angeles date, builds structured context, composes the markdown body, runs the URL guard, creates the Kanban task with argv-safe `--body`, blocks it for review, and records `prepared.taskId` in `memory/heartbeat-state.json`. Its JSON stdout is for diagnostics only; do not expose it.
 
-   ```json
-   {
-     "announcements": [],
-     "highlightedEvents": [],
-     "interestEvents": [],
-     "opportunities": [],
-     "connectionOpportunities": [],
-     "communityOpportunities": [],
-     "diagnostics": { "calendarSource": "edgeos|unavailable", "warnings": [] }
-   }
-   ```
-
-4. **Compose the brief in this structure.** Omit any section that has no verified content, except the calendar fallback rule below.
-
-   ```
-   🌞 Good morning from Edge Esmeralda. It is {Weekday, Month D}
-
-   Here's what you need to know today:
-
-   **Announcements**
-   - {One current organizer announcement, only if verified}
-
-   **The calendar today:**
-   - {EdgeOS highlighted event, if any}
-   - {Second EdgeOS highlighted event, if any}
-   - {Interest-relevant event selected from remaining today's events, if any}
-
-   **Potential connections via Index Network:**
-   - <!-- digest-opportunity:id=<opportunityId when present> -->[Name](profileUrl) — 1–2 specific sentences on why this person matters to the user, [say hi](acceptUrl)
-
-   **Help your community**
-   - <!-- digest-opportunity:id=<opportunityId when present> -->[Name](profileUrl) — {their need / what they're looking for, 1–2 sentences from mainText}. Know someone, [make intro](acceptUrl).
-
-   That's it for now. You can always ask me for more detail, or any other questions you have!
-   ```
-
-   For **The calendar today:** render `highlightedEvents` first, then `interestEvents`. Use each event's `timePacific`, `title`, optional `venue`, and `reasonHint`. Do not add events that are not present in the context JSON.
-
-   If `diagnostics.calendarSource` is `"unavailable"` and there are people sections, omit **The calendar today:** and add one plain line before the closing sentence: `I couldn't check the live calendar this morning — ask me what's on today and I'll look it up.` If the calendar is unavailable and there are no people or announcements either, stage only that one-line calendar pointer plus the closing sentence under the greeting.
-
-5. **Opportunity rendering rules.**
-   - **Potential connections via Index Network** is for direct `connection` candidates where the receiver is a party, not the introducer.
-   - **Help your community** is for `connector-flow` / introducer candidates where the receiver is the introducer.
-   - When a context opportunity has `opportunityId`, include it in an HTML marker immediately before the visible text: `<!-- digest-opportunity:id=<opportunityId> -->`. These markers let the send pass confirm only opportunities still present after Kanban edits. Some actionable MCP cards expose `acceptUrl` but not `opportunityId`; render those without a marker rather than inventing one.
-   - For direct connections, link the person's name to `profileUrl` and embed the real `acceptUrl` verbatim on a short phrase such as `[say hi](acceptUrl)`. If no `acceptUrl` is present, render the action phrase as plain text — do not invent a link.
-   - For community asks, link the person's name to `profileUrl`. If the connector-flow card includes a real `acceptUrl`, embed it verbatim on `[make intro](acceptUrl)`. If no `acceptUrl` is present, render `make intro` as plain text — do not invent a link.
-   - A candidate qualifies only if you can write a reason specific to this user's situation. Drop generic people matches.
-
-6. **URL rules.** Weave links into prose. The strip-the-URLs test is the rule: remove every link and the prose still reads coherently. No link tables, action strips, bare URLs, or fabricated URLs. The only links that may appear in the staged body are Index `profileUrl` (`/u/<uuid>`) and real `acceptUrl` links (`/c/<code>`) from direct connections or connector-flow intro approvals. Do not link calendar events because the current URL guard intentionally strips non-Index links.
-
-7. **Stage the brief on the board, then hold it for review.** Write the composed body to `memory/digest-draft.md` (overwrite any existing file), then create the task through the deterministic URL guard and capture its id with `--json`:
-
-   ```
-   hermes kanban create "Morning digest — <YYYY-MM-DD>" --body "$(bun <HERMES_HOME>/skills/index-network/scripts/validate-digest-urls.ts <HERMES_HOME>/memory/digest-draft.md)" --idempotency-key "digest-<YYYY-MM-DD>" --json
-   ```
-
-   `<HERMES_HOME>` is your workspace root (the `--workdir` you were launched with; `~/.hermes` by default). The guard preserves `<!-- digest-opportunity:id=... -->` markers for editable delivery bookkeeping and strips fabricated markdown links. Never bypass it with a bare `cat`. Parse the `--json` output for the created task's `id` (`<taskId>`). Do not assign the task to anyone.
-
-   Then **block the task to hold it for human review:**
-
-   ```
-   hermes kanban block <taskId> "review-required: morning brief — <YYYY-MM-DD>"
-   ```
-
-   This parks the brief in the **Blocked** column. The 08:00 send pass delivers it **only after a human approves it by unblocking it** (`hermes kanban unblock <taskId>`, or the board's unblock control). Never assign the task or move it to **Ready** — Ready/assigned hands the task to the dispatcher, which is not how the brief ships. After a successful create + block, delete `memory/digest-draft.md`. (Re-running this prompt is safe: the idempotency key prevents a duplicate task, and re-blocking an already-staged task is harmless.)
-
-8. **Record what you staged.** Update `memory/heartbeat-state.json` so `prepared` equals `{ "date": "<YYYY-MM-DD>", "taskId": "<taskId>", "taskTitle": "Morning digest — <YYYY-MM-DD>", "opportunityIds": [ every `opportunityId` from context opportunities that you put in the brief; empty array when no opportunity ids are present ] }`. Preserve all other top-level keys. The send pass finds the staged task by this `taskId`, so it must be recorded. Do not call `confirm_opportunity_delivery` and do not touch `deliveredToday` — both happen at send time.
-
-9. **Deliver nothing.** End your turn with the host-specific no-reply marker.
+3. **Deliver nothing.** End your turn with the host-specific no-reply marker.
 
 # Hard rules
 - Never invent announcements, events, people, venues, times, tracks, or action URLs.
+- Do not compose or stage the Kanban card manually; `stage-daily-brief.ts` is the only allowed staging path.
 - Always stage the brief **blocked** (held for review) and record its `taskId`; it ships only if a human unblocks (approves) it before the send pass. Never assign it or move it to **Ready**.
 - Calendar failures must not block launch: ship people-only plus the one-line calendar pointer, or the pointer-only fallback if there is nothing else.
 - Never confirm delivery here. Never write `deliveredToday` here.
