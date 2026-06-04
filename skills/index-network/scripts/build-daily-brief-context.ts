@@ -128,8 +128,49 @@ export function pacificDate(now = new Date()): string {
   return `${lookup.year}-${lookup.month}-${lookup.day}`;
 }
 
+function parseDateParts(date: string): { year: number; month: number; day: number } {
+  const match = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) throw new Error(`expected YYYY-MM-DD date, got ${date}`);
+  return { year: Number(match[1]), month: Number(match[2]), day: Number(match[3]) };
+}
+
+function addDays(date: string, days: number): string {
+  const { year, month, day } = parseDateParts(date);
+  return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+}
+
+function timeZoneOffsetMs(instant: Date): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: PACIFIC_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(instant);
+  const lookup = Object.fromEntries(parts.map((p) => [p.type, p.value]));
+  const zonedAsUtc = Date.UTC(
+    Number(lookup.year),
+    Number(lookup.month) - 1,
+    Number(lookup.day),
+    Number(lookup.hour),
+    Number(lookup.minute),
+    Number(lookup.second),
+  );
+  return zonedAsUtc - instant.getTime();
+}
+
+function pacificLocalTimeToUtc(date: string, hour = 0): Date {
+  const { year, month, day } = parseDateParts(date);
+  const utcGuess = Date.UTC(year, month - 1, day, hour);
+  const firstPass = new Date(utcGuess - timeZoneOffsetMs(new Date(utcGuess)));
+  return new Date(utcGuess - timeZoneOffsetMs(firstPass));
+}
+
 export function displayDate(date: string): string {
-  const d = new Date(`${date}T12:00:00-08:00`);
+  const d = pacificLocalTimeToUtc(date, 12);
   return new Intl.DateTimeFormat("en-US", {
     timeZone: PACIFIC_TZ,
     weekday: "long",
@@ -139,20 +180,20 @@ export function displayDate(date: string): string {
 }
 
 export function pacificDayBounds(date: string): { startIso: string; endIso: string } {
-  const start = new Date(`${date}T00:00:00-08:00`);
-  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  const start = pacificLocalTimeToUtc(date, 0);
+  const end = pacificLocalTimeToUtc(addDays(date, 1), 0);
   return { startIso: start.toISOString(), endIso: end.toISOString() };
 }
 
 export function formatPacificTime(iso: string): string {
   const d = new Date(iso);
-  const time = new Intl.DateTimeFormat("en-US", {
+  return new Intl.DateTimeFormat("en-US", {
     timeZone: PACIFIC_TZ,
     hour: "numeric",
     minute: "2-digit",
     hour12: true,
+    timeZoneName: "short",
   }).format(d);
-  return `${time} PST`;
 }
 
 export function extractInterestTags(text: string): string[] {

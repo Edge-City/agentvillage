@@ -4,6 +4,7 @@ import {
   extractInterestTags,
   filterDedupedOpportunities,
   formatPacificTime,
+  pacificDayBounds,
   parseOpportunityTranscript,
   selectEvents,
 } from "../build-daily-brief-context";
@@ -100,7 +101,19 @@ describe("build-daily-brief-context helpers", () => {
     ).toEqual(["B", "C"]);
   });
 
-  test("formatPacificTime renders PST label per product language", () => {
-    expect(formatPacificTime("2026-06-04T16:30:00Z")).toMatch(/PST$/);
+  test("formatPacificTime renders the live Pacific time zone abbreviation", () => {
+    expect(formatPacificTime("2026-06-04T16:30:00Z")).toBe("9:30 AM PDT");
+    expect(formatPacificTime("2026-12-04T17:30:00Z")).toBe("9:30 AM PST");
+  });
+
+  test("pacificDayBounds respects daylight saving offsets", () => {
+    expect(pacificDayBounds("2026-06-04")).toEqual({
+      startIso: "2026-06-04T07:00:00.000Z",
+      endIso: "2026-06-05T07:00:00.000Z",
+    });
+    expect(pacificDayBounds("2026-12-04")).toEqual({
+      startIso: "2026-12-04T08:00:00.000Z",
+      endIso: "2026-12-05T08:00:00.000Z",
+    });
   });
 });

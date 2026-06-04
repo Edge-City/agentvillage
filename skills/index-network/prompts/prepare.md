@@ -10,7 +10,7 @@ Silent turns use the current host's no-reply marker exactly: Hermes → `[SILENT
 
 ## Data sources and dates
 
-- Use **America/Los_Angeles** for all date boundaries and displayed event times. Render event times as `PST` in the brief. Do not derive today's local date from UTC alone.
+- Use **America/Los_Angeles** for all date boundaries and displayed event times. Render event times from each event's `timePacific` value exactly; it includes the correct `PST`/`PDT` label for that date. Do not derive today's local date from UTC alone.
 - Edge Esmeralda popup id for EdgeOS calendar calls: `43746fd0-bce2-472b-93e4-a438177b2dff`.
 - Build deterministic non-prose context with `skills/index-network/scripts/build-daily-brief-context.ts`. The script fetches admin announcements from the AgentVillage control plane, pulls today's EdgeOS calendar, filters `highlighted === true` events first, selects one interest-fill event from local memory, parses the `list_opportunities` transcript you provide, and writes structured JSON. Do not manually re-fetch announcements or calendar outside this script.
 - Index people sections use `list_opportunities(includeDigestMarkers=true)`, saved to `memory/digest-opportunities.txt` for the context builder. The hidden digest markers are internal delivery-confirmation metadata, not visible prose.

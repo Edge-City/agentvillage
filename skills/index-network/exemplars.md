@@ -14,9 +14,9 @@ Calendar bullets should put EdgeOS `highlighted: true` events first, then fill w
 > - The organizer team moved tonight's community dinner to the plaza because of the weather window. Same time, different place.
 >
 > **The calendar today:**
-> - 9:00 AM PST — Morning workout at the Plaza. A useful reset before the day gets full.
-> - 11:30 AM PST — Longevity Tools Show-and-Tell at Buck Institute. Good fit if you're tracking health, measurement, or translational science.
-> - 4:00 PM PST — Governance Lab: Consent in Popup Communities. Relevant to anyone thinking about coordination, resident voice, or collective decisions.
+> - 9:00 AM PDT — Morning workout at the Plaza. A useful reset before the day gets full.
+> - 11:30 AM PDT — Longevity Tools Show-and-Tell at Buck Institute. Good fit if you're tracking health, measurement, or translational science.
+> - 4:00 PM PDT — Governance Lab: Consent in Popup Communities. Relevant to anyone thinking about coordination, resident voice, or collective decisions.
 >
 > **Potential connections via Index Network:**
 > - [Maya]({profileUrl}) — Talk to them about agent memory layers for long-running workflows. Direct overlap with how Index handles persistent context, [say hi]({acceptUrl})
@@ -36,8 +36,8 @@ When there is no current organizer announcement you can verify, omit the section
 > Here's what you need to know today:
 >
 > **The calendar today:**
-> - 10:00 AM PST — AI Agents Breakfast Salon at Hotel Trio. A straightforward place to hear what people are building this week.
-> - 2:00 PM PST — Neurotech Open Demos at Buck Institute. Relevant if you're following applied science and human performance.
+> - 10:00 AM PDT — AI Agents Breakfast Salon at Hotel Trio. A straightforward place to hear what people are building this week.
+> - 2:00 PM PDT — Neurotech Open Demos at Buck Institute. Relevant if you're following applied science and human performance.
 >
 > **Potential connections via Index Network:**
 > - [Priya]({profileUrl}) — Building community-owned data infrastructure. Aligned on the ownership layer and complementary on discovery, [say hi]({acceptUrl})
@@ -68,8 +68,8 @@ When `list_opportunities` returns multiple opportunities for the same person, re
 > Here's what you need to know today:
 >
 > **The calendar today:**
-> - 9:30 AM PST — Creative AI Crit at the Studio. Good fit for builders thinking about tools, taste, and new creative workflows.
-> - 3:00 PM PST — Spatial Computing Walkthrough at the Plaza. Useful if you want to see concrete demos rather than a panel.
+> - 9:30 AM PDT — Creative AI Crit at the Studio. Good fit for builders thinking about tools, taste, and new creative workflows.
+> - 3:00 PM PDT — Spatial Computing Walkthrough at the Plaza. Useful if you want to see concrete demos rather than a panel.
 >
 > **Potential connections via Index Network:**
 > - [Ashish]({profileUrl}) — An experienced technologist spanning [generative software]({acceptUrl1}), [AI infrastructure]({acceptUrl2}), [creative AI design]({acceptUrl3}), and [deep learning research]({acceptUrl4}). Several angles worth exploring.
