@@ -16,6 +16,7 @@
 
 const POPUP_ID = "43746fd0-bce2-472b-93e4-a438177b2dff";
 const EDGEOS_BASE = "https://api.edgeos.world/api/v1";
+const EDGE_ESMERALDA_EVENT_BASE_URL = "https://edgecity.simplefi.tech/portal/edge-esmeralda-2026/events";
 const PACIFIC_TZ = "America/Los_Angeles";
 
 const EDGE_TAGS = [
@@ -71,6 +72,7 @@ export interface BriefEvent {
   endTime?: string | null;
   timePacific: string;
   venue?: string | null;
+  eventUrl?: string | null;
   tags: string[];
   highlighted: boolean;
   reasonHint: string;
@@ -192,7 +194,6 @@ export function formatPacificTime(iso: string): string {
     hour: "numeric",
     minute: "2-digit",
     hour12: true,
-    timeZoneName: "short",
   }).format(d);
 }
 
@@ -210,6 +211,10 @@ export function extractInterestTags(text: string): string[] {
 
 function eventVenue(event: EdgeEvent): string | null {
   return event.venue_title ?? event.custom_location_name ?? null;
+}
+
+function eventUrl(event: EdgeEvent): string | null {
+  return event.id ? `${EDGE_ESMERALDA_EVENT_BASE_URL}/${event.id}` : null;
 }
 
 function eventScore(event: EdgeEvent, interestTags: string[]): number {
@@ -234,6 +239,7 @@ function toBriefEvent(event: EdgeEvent, reasonHint: string): BriefEvent | null {
     endTime: event.end_time,
     timePacific: formatPacificTime(event.start_time),
     venue: eventVenue(event),
+    eventUrl: eventUrl(event),
     tags: Array.isArray(event.tags) ? event.tags : [],
     highlighted: event.highlighted === true,
     reasonHint,

@@ -32,8 +32,8 @@ function pacificDate(): string {
 
 function eventLine(event: DailyBriefContext["highlightedEvents"][number]): string {
   const venue = event.venue ? ` at ${event.venue}` : "";
-  const hint = event.reasonHint ? ` (${event.reasonHint})` : "";
-  return `- ${event.timePacific} — ${event.title}${venue}${hint}`;
+  const title = event.eventUrl ? `[${event.title}](${event.eventUrl})` : event.title;
+  return `- ${event.timePacific} — ${title}${venue}`;
 }
 
 function opportunityLabel(opp: BriefOpportunity): string {

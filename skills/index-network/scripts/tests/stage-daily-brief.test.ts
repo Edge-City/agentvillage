@@ -31,8 +31,9 @@ describe("composeDailyBrief", () => {
           id: "event-1",
           title: "GNOSIS Journey",
           startTime: "2026-06-04T16:00:00Z",
-          timePacific: "9:00 AM PDT",
+          timePacific: "9:00 AM",
           venue: "The Hub",
+          eventUrl: "https://edgecity.simplefi.tech/portal/edge-esmeralda-2026/events/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
           tags: [],
           highlighted: true,
           reasonHint: "Highlighted by the EdgeOS calendar.",
@@ -43,7 +44,9 @@ describe("composeDailyBrief", () => {
 
     expect(body).toContain("🌞 Good morning from Edge Esmeralda. It is Thursday, June 4");
     expect(body).toContain("**The calendar today:**");
-    expect(body).toContain("9:00 AM PDT — GNOSIS Journey at The Hub");
+    expect(body).toContain("9:00 AM — [GNOSIS Journey](https://edgecity.simplefi.tech/portal/edge-esmeralda-2026/events/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa) at The Hub");
+    expect(body).not.toContain("PDT");
+    expect(body).not.toContain("Highlighted by the EdgeOS calendar");
     expect(body).not.toContain("I couldn't check the live calendar this morning");
     expect(body).not.toContain("\\n");
     expect(body).not.toContain("\\ud83c");

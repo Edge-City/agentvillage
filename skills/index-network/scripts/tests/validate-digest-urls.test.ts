@@ -48,7 +48,16 @@ describe("sanitizeDigestUrls", () => {
     expect(stripped).toEqual([]);
   });
 
-  test("strips fabricated path shapes other than /c/ and /u/", () => {
+  test("preserves Edge Esmeralda event links", () => {
+    const md = "[GNOSIS Journey](https://edgecity.simplefi.tech/portal/edge-esmeralda-2026/events/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa)";
+
+    const { output, stripped } = sanitizeDigestUrls(md);
+
+    expect(output).toBe(md);
+    expect(stripped).toEqual([]);
+  });
+
+  test("strips fabricated path shapes other than /c/, /u/, and known event links", () => {
     const md = "[x](https://index.network/profile/42) [y](https://index.network/opportunity/create?id=7) [z](https://index.network/connect/8)";
 
     const { output, stripped } = sanitizeDigestUrls(md);
