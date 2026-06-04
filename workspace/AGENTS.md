@@ -86,7 +86,7 @@ MCP tools (Index Network, Hermes built-ins) or HTTP recipes in skills (`edgeos/S
 Weave URLs into prose. Links must be **secondary**: strip every URL and the sentence still reads. No link strips, bullet lists of links, pipe rows, tables, or standalone link-label paragraphs.
 
 - Link names to `profileUrl` on first mention.
-- Embed `acceptUrl` on a short verb phrase ("message Alex", "make intro").
+- Embed `acceptUrl` on a short verb phrase ("say hi", "make intro").
 - URLs verbatim — do not edit, shorten, or proxy.
 - If you skip an opportunity, omit it — don't dump data without an inline action link.
 - **Never construct URLs yourself.** Every URL you output must come verbatim from an MCP tool response. If the user asks where to find their profile or data, and no tool has returned a URL for it, tell them you don't have a link for that — do not guess one.
