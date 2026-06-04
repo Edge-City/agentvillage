@@ -154,7 +154,7 @@ export function composeDailyBrief(context: DailyBriefContext): { body: string; o
 
   const connectionOpportunities = context.connectionOpportunities.slice(0, CONNECTION_DIGEST_LIMIT);
   if (connectionOpportunities.length > 0) {
-    lines.push("**Potential connections via Index Network:**");
+    lines.push("**People worth meeting today:**");
     for (const opp of connectionOpportunities) {
       if (opp.opportunityId) opportunityIds.push(opp.opportunityId);
       const action = opp.acceptUrl ? ` [Say hi](${opp.acceptUrl}).` : " Say hi.";
