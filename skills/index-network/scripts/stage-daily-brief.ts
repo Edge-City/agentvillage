@@ -15,6 +15,10 @@ import { access } from "node:fs/promises";
 import { buildDailyBriefContext, type BriefOpportunity, type DailyBriefContext } from "./build-daily-brief-context";
 import { sanitizeDigestUrls } from "./validate-digest-urls";
 
+const CONNECTION_DIGEST_LIMIT = 3;
+const COMMUNITY_DIGEST_LIMIT = 2;
+const OPPORTUNITY_REASON_MAX_CHARS = 170;
+
 function argValue(args: string[], name: string): string | undefined {
   const idx = args.indexOf(name);
   return idx >= 0 ? args[idx + 1] : undefined;
@@ -45,6 +49,48 @@ function opportunityMarker(opp: BriefOpportunity): string {
   return opp.opportunityId ? `<!-- digest-opportunity:id=${opp.opportunityId} -->` : "";
 }
 
+function stripFillerSentences(text: string): string {
+  return text
+    .split(/(?<=[.!?])\s+/)
+    .filter((sentence) => {
+      const lower = sentence.toLowerCase();
+      return !lower.includes("while his location")
+        && !lower.includes("while her location")
+        && !lower.includes("while their location")
+        && !lower.includes("remote collaboration")
+        && !lower.includes("less of a barrier")
+        && !lower.includes("shared presence at edge esmeralda")
+        && !lower.includes("co-attending the event")
+        && !lower.includes("making an in-person meeting feasible");
+    })
+    .join(" ");
+}
+
+function normalizeOpportunityText(text: string): string {
+  return stripFillerSentences(text)
+    .replace(/\b[Tt]he discoverer,\s*([^,]+),\s*/g, "$1 ")
+    .replace(/\b[Tt]he discoverer\b/g, "they")
+    .replace(/\b[Tt]he discoverer's\b/g, "their")
+    .replace(/\byou,\s*the candidate,\s*is\b/gi, "you are")
+    .replace(/\byou is\b/gi, "you are")
+    .replace(/\byour profile indicates\b/gi, "you have")
+    .replace(/\bthe candidate\b/gi, "you")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function truncateAtWord(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const slice = text.slice(0, maxChars + 1);
+  const boundary = slice.lastIndexOf(" ");
+  return `${slice.slice(0, boundary > 80 ? boundary : maxChars).trimEnd()}…`;
+}
+
+function opportunityReason(opp: BriefOpportunity, fallback: string): string {
+  const cleaned = normalizeOpportunityText(opp.mainText || fallback);
+  return truncateAtWord(cleaned, OPPORTUNITY_REASON_MAX_CHARS).replace(/[,.]$/, "");
+}
+
 export function composeDailyBrief(context: DailyBriefContext): { body: string; opportunityIds: string[] } {
   const lines: string[] = [
     `🌞 Good morning from Edge Esmeralda. It is ${context.displayDate}`,
@@ -72,24 +118,26 @@ export function composeDailyBrief(context: DailyBriefContext): { body: string; o
     hasVerifiedContent = true;
   }
 
-  if (context.connectionOpportunities.length > 0) {
+  const connectionOpportunities = context.connectionOpportunities.slice(0, CONNECTION_DIGEST_LIMIT);
+  if (connectionOpportunities.length > 0) {
     lines.push("**Potential connections via Index Network:**");
-    for (const opp of context.connectionOpportunities) {
+    for (const opp of connectionOpportunities) {
       if (opp.opportunityId) opportunityIds.push(opp.opportunityId);
-      const action = opp.acceptUrl ? `, [say hi](${opp.acceptUrl})` : ", say hi";
-      const reason = opp.mainText || "Relevant overlap with your current signals.";
-      lines.push(`- ${opportunityMarker(opp)}${opportunityLabel(opp)} — ${reason}${action}`);
+      const action = opp.acceptUrl ? ` [Say hi](${opp.acceptUrl}).` : " Say hi.";
+      const reason = opportunityReason(opp, "Relevant overlap with your current signals.");
+      lines.push(`- ${opportunityMarker(opp)}${opportunityLabel(opp)} — ${reason}.${action}`);
     }
     lines.push("");
     hasVerifiedContent = true;
   }
 
-  if (context.communityOpportunities.length > 0) {
+  const communityOpportunities = context.communityOpportunities.slice(0, COMMUNITY_DIGEST_LIMIT);
+  if (communityOpportunities.length > 0) {
     lines.push("**Help your community**");
-    for (const opp of context.communityOpportunities) {
+    for (const opp of communityOpportunities) {
       if (opp.opportunityId) opportunityIds.push(opp.opportunityId);
-      const action = opp.acceptUrl ? ` Know someone, [make intro](${opp.acceptUrl}).` : " Know someone, make intro.";
-      const reason = opp.mainText || "They are looking for a relevant introduction.";
+      const action = opp.acceptUrl ? ` Know someone? [Make intro](${opp.acceptUrl}).` : " Know someone? Make intro.";
+      const reason = opportunityReason(opp, "They are looking for a relevant introduction.");
       lines.push(`- ${opportunityMarker(opp)}${opportunityLabel(opp)} — ${reason}.${action}`);
     }
     lines.push("");

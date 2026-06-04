@@ -79,6 +79,35 @@ describe("composeDailyBrief", () => {
 
     expect(opportunityIds).toEqual(["opp-1"]);
     expect(body).toContain("<!-- digest-opportunity:id=opp-1 -->[Maya]");
-    expect(body).toContain("[say hi](https://protocol.index.network/c/abc123)");
+    expect(body).toContain("[Say hi](https://protocol.index.network/c/abc123)");
+  });
+
+  test("keeps digest opportunity bullets short and drops raw presenter artifacts", () => {
+    const longReason = "The discoverer, Helen, is building portable digital identity through gameplay and is seeking research collaboration. you, the candidate, is a tech professional with engineering expertise focusing on back-end development and has an intent to meet researchers. While their location is elsewhere, remote collaboration makes this less of a barrier.";
+    const opportunities = Array.from({ length: 4 }, (_, idx) => ({
+      name: `Person ${idx + 1}`,
+      opportunityId: `opp-${idx + 1}`,
+      mainText: longReason,
+      profileUrl: `https://index.network/u/11111111-1111-1111-1111-11111111111${idx}`,
+      acceptUrl: `https://protocol.index.network/c/abc12${idx}`,
+      feedCategory: "connection",
+    }));
+
+    const { body, opportunityIds } = composeDailyBrief({
+      ...baseContext,
+      opportunities,
+      connectionOpportunities: opportunities,
+    });
+
+    expect(opportunityIds).toEqual(["opp-1", "opp-2", "opp-3"]);
+    expect(body).toContain("Person 1");
+    expect(body).toContain("Person 3");
+    expect(body).not.toContain("Person 4");
+    expect(body).not.toContain("The discoverer");
+    expect(body).not.toContain("candidate");
+    expect(body).not.toContain("remote collaboration");
+    const bullets = body.split("\n").filter((line) => line.startsWith("- <!-- digest-opportunity"));
+    expect(bullets).toHaveLength(3);
+    expect(bullets.every((line) => line.length < 360)).toBe(true);
   });
 });
