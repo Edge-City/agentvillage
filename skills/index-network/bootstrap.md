@@ -39,15 +39,18 @@ Only after the user's next message explicitly answers yes/no, record that one an
 
 Then:
 
-- If granted: `preview_user_profile` may use any server-staged signup/import profile seed automatically, and you may set `allowPublicLookup=true`. You may also use EdgeOS recipes only for the user's own available profile/directory data. Do not use hidden values such as literal `"*"`; omit them.
+- If granted: `preview_user_profile` may use any server-staged signup/import profile seed automatically, and you may use EdgeOS recipes only for the user's own available profile/directory data. Do not use hidden values such as literal `"*"`; omit them. **Do not set `allowPublicLookup=true` yet unless you have at least one explicit or allowed public social/profile URL for this user** (for example LinkedIn, GitHub, a personal site, X/Twitter, Farcaster, or another professional page). A name, email, location, bio, Telegram handle, or other non-URL handle is not enough for public lookup; broad name-based internet lookup can target the wrong person.
+- If granted but no public social/profile URL is available: ask for one concise follow-up before drafting — e.g. "Do you have a LinkedIn, GitHub, personal site, or other public profile I should use? If not, I can draft from what you already gave Edge Esmeralda." If they share a URL, include it and set `allowPublicLookup=true`; if they decline or provide only prose/handles, call `preview_user_profile` without public lookup.
 - If denied: do not fetch or use EdgeOS profile/directory data, do not rely on staged signup/import profile data, and do not run public lookup or scraping. Ask for a short self-description instead.
 
 ## Step 2 — Draft and confirm their profile
 
 Start this step only after the data-use consent question has been asked, the user's reply has been received, and both consent-recording calls have completed successfully. Call `preview_user_profile(...)` using only allowed inputs:
 
-- Include EdgeOS/event profile text, rely on staged signup/import profile data, and set `allowPublicLookup=true` only if the user granted the data-use consent question.
+- Include EdgeOS/event profile text and rely on staged signup/import profile data only if the user granted the data-use consent question.
 - Include social/profile URLs only if the user explicitly provided them or they came from allowed EdgeOS data.
+- Set `allowPublicLookup=true` only when the user granted consent **and** at least one included social/profile value is a public URL that identifies this exact user. Do not run public lookup from name/email/location/bio alone, and do not treat Telegram/WhatsApp/Discord handles as enough evidence for public lookup.
+- If consent was granted but no public profile URL is available, ask for one or proceed without public lookup; do not broaden the lookup.
 - If consent was denied, use the user's self-description.
 
 Narrate while processing:
@@ -117,6 +120,7 @@ Cron-schedule preferences are not asked about — the morning digest runs at a f
 - The data-use consent question is a turn boundary: ask the one question, then stop. The matching `record_onboarding_privacy_consent` calls belong only in a later turn after the user's explicit answer.
 - Ask a single data-use consent question covering both EdgeOS data and public lookup/scraping — never split it into two.
 - Do not import EdgeOS data, run public lookup, or scrape without the recorded consent based on an explicit user answer.
+- Even with consent, do not run public lookup unless you have an explicit or allowed public social/profile URL for this user. If no such URL is available, ask for one or draft without internet lookup; never do broad name-based lookup during onboarding.
 - Do not call `preview_user_profile` until the consent question has an explicit user answer and both consent calls have succeeded.
 - Do not call `discover_opportunities`, `list_opportunities`, or any other discovery tool during onboarding. Opportunities surface on the first scheduled cron tick after onboarding completes.
 - Do not mention Gmail or email import — they are not available in this flow.

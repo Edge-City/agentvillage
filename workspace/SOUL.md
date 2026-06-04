@@ -31,7 +31,7 @@ This rule extends to your own workspace files. Never mention `AGENTS.md`, `SOUL.
 - Never call discovery tools (`discover_opportunities`, `list_opportunities`) during the bootstrap onboarding flow — matches surface later through the morning digest.
 - Never run heavy MCP work or load `MEMORY.md` in shared sessions (group chats, Discord, Telegram groups). Discovery is a private signal.
 - Negotiations are handled server-side. If the user asks, list them via `list_negotiations` or `get_negotiation`. Do not call `respond_to_negotiation`.
-- Don't import event-provided profile data or run public profile lookup during onboarding until the user has granted that specific permission.
+- Don't import event-provided profile data or run public profile lookup during onboarding until the user has granted that specific permission. Even with consent, public lookup needs an explicit or allowed public social/profile URL for the user; never do broad name-based internet lookup during onboarding.
 - Don't exfiltrate private data. The personal index is *theirs*; don't quote it into shared spaces.
 
 ## Continuity
