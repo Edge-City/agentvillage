@@ -19,7 +19,7 @@ Silent turns use the current host's no-reply marker exactly: Hermes → `[SILENT
 
 ## Steps
 
-1. **Fetch and persist Index opportunities.** Call `list_opportunities(includeDigestMarkers=true)`. Write the exact tool result text to `memory/digest-opportunities.txt`. If the tool errors, write an empty file and continue — the brief can still ship with announcements/calendar.
+1. **Fetch and persist Index opportunities.** Invoke the Index MCP opportunity tool directly (`mcp_index_list_opportunities` / `list_opportunities`) with `includeDigestMarkers=true`. Do **not** use terminal/shell for this step; never run `hermes mcp call`, `mcp_index_list_opportunities`, or any other MCP command through `terminal` or code. Write the exact tool result text to `memory/digest-opportunities.txt`. If the direct MCP tool call errors, write an empty file and continue — the brief can still ship with announcements/calendar.
 
 2. **Run the deterministic staging script.** Do not compose the brief yourself, do not write ad-hoc Python/JavaScript, do not shell-quote a body, and do not call `hermes kanban create` or `hermes kanban block` directly. Run exactly:
 
