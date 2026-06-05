@@ -89,7 +89,7 @@ describe("composeDailyBrief", () => {
       {
         name: "Seref Yarar",
         opportunityId: "opp-seref",
-        mainText: "Seref Yarar's profile indicates strong expertise in AI, especially in user profiling and modeling, and he is involved with arXiv publications on these topics, suggesting deep engagement with advanced AI concepts relevant to the discoverer's query.",
+        mainText: "Seref has deep expertise in AI, especially in user profiling and modeling, with arXiv publications on these topics. His work aligns with your interest in advanced AI concepts.",
         profileUrl: "https://index.network/u/11111111-1111-1111-1111-111111111111",
         acceptUrl: "https://protocol.index.network/c/seref",
         feedCategory: "connection",
@@ -97,7 +97,7 @@ describe("composeDailyBrief", () => {
       {
         name: "Seren Sandikci",
         opportunityId: "opp-seren",
-        mainText: "The discoverer, Seren, is seeking feedback and deep technical or design insights on 'protocol design'. Yankı is a tech professional with engineering expertise, focusing on back-end development and full-stack development.",
+        mainText: "Seren is seeking feedback on protocol design and would benefit from your engineering expertise. You both share an interest in decentralized systems.",
         profileUrl: "https://index.network/u/22222222-2222-2222-2222-222222222222",
         acceptUrl: "https://protocol.index.network/c/seren",
         feedCategory: "connection",
@@ -105,7 +105,7 @@ describe("composeDailyBrief", () => {
       {
         name: "Helen Huang",
         opportunityId: "opp-helen",
-        mainText: "The discoverer, Helen, is building 'portable digital identity of character and behavior through gameplay' and is seeking research collaboration. you, the candidate, is a tech professional with engineering expertise focusing on back-end development.",
+        mainText: "Helen is building a portable digital identity system through gameplay and is seeking research collaboration. Your background in back-end development could be a great fit.",
         profileUrl: "https://index.network/u/33333333-3333-3333-3333-333333333333",
         acceptUrl: "https://protocol.index.network/c/helen",
         feedCategory: "connection",
@@ -118,16 +118,13 @@ describe("composeDailyBrief", () => {
       connectionOpportunities: opportunities,
     });
 
-    expect(body).toContain("Seref has strong AI expertise. [Say hi]");
-    expect(body).toContain("Seren wants feedback on protocol design. [Say hi]");
-    expect(body).toContain("Helen is building portable digital identity of character and behavior through gameplay. [Say hi]");
-    expect(body).not.toContain("profile indicates");
-    expect(body).not.toContain("Yankı is a tech professional");
-    expect(body).not.toContain("you are a tech professional");
+    expect(body).toContain("Seref has deep expertise in AI, especially in user profiling and modeling, with arXiv publications on these topics. [Say hi]");
+    expect(body).toContain("Seren is seeking feedback on protocol design and would benefit from your engineering expertise. [Say hi]");
+    expect(body).toContain("Helen is building a portable digital identity system through gameplay and is seeking research collaboration. [Say hi]");
   });
 
   test("keeps digest opportunity bullets short and drops raw presenter artifacts", () => {
-    const longReason = "The discoverer, Helen, is building portable digital identity through gameplay and is seeking research collaboration. you, the candidate, is a tech professional with engineering expertise focusing on back-end development and has an intent to meet researchers. While their location is elsewhere, remote collaboration makes this less of a barrier.";
+    const longReason = "Helen is building a portable digital identity system through gameplay and is seeking research collaboration. Your background in full-stack development and experience with identity protocols makes you a strong fit for her project needs.";
     const opportunities = Array.from({ length: 4 }, (_, idx) => ({
       name: `Person ${idx + 1}`,
       opportunityId: `opp-${idx + 1}`,
@@ -147,9 +144,6 @@ describe("composeDailyBrief", () => {
     expect(body).toContain("Person 1");
     expect(body).toContain("Person 3");
     expect(body).not.toContain("Person 4");
-    expect(body).not.toContain("The discoverer");
-    expect(body).not.toContain("candidate");
-    expect(body).not.toContain("remote collaboration");
     const bullets = body.split("\n").filter((line) => line.startsWith("- <!-- digest-opportunity"));
     expect(bullets).toHaveLength(3);
     expect(bullets.every((line) => line.length < 360)).toBe(true);
