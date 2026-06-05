@@ -144,7 +144,7 @@ function pauseCronByName(name: string, env: NodeJS.ProcessEnv): void {
 export interface DigestCronSpec {
   /** Default cron schedule (overridable at install time). */
   schedule: string;
-  /** Prompt file under skills/index-network/prompts/. */
+  /** Prompt file under skills/edge-esmeralda/prompts/. */
   promptFile: string;
   /** Full Hermes cron name (kept under the CRON_NAME_PREFIX). */
   name: string;
@@ -243,7 +243,7 @@ function hermesAvailable(bin: string): boolean {
 
 export function reconcileDigestCronJobs(env: NodeJS.ProcessEnv = hermesExecEnv()): void {
   const home = hermesHome();
-  const promptsDir = join(home, "skills/index-network/prompts");
+  const promptsDir = join(home, "skills/edge-esmeralda/prompts");
 
   const bin = hermesBin();
   if (!hermesAvailable(bin)) {

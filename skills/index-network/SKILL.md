@@ -1,6 +1,6 @@
 ---
 name: index-network
-description: Edge Esmeralda's Index Network bundle. Surfaces opportunities through a morning 08:00 brief (composed ahead by a prepare pass, delivered by a send pass) alongside calendar highlights, plus accepted-opportunity notifications on the heartbeat tick. Prunes stale signals weekly. Read when surfacing opportunities, drafting introductions, onboarding a user who has expressed social intent, composing the brief flow, or handling anything backed by the Index Network MCP (server `index`).
+description: Edge Esmeralda's Index Network bundle. Surfaces opportunities, drafts introductions, and prunes stale signals. Read when surfacing opportunities, drafting introductions, onboarding a user who has expressed social intent, or handling anything backed by the Index Network MCP (server `index`).
 metadata:
   openclaw:
     requires:
@@ -18,8 +18,6 @@ Edge's bundle for surfacing opportunities through Edge Esmeralda's Index Network
 - **Composing user-facing opportunity renderings** → [exemplars.md](exemplars.md). Canonical morning-digest voice samples; greeting-draft format for `&msg=`.
 - **User expresses social intent** → [bootstrap.md](bootstrap.md). Five-step Index Network onboarding ritual; gated on `onboardingComplete` and triggered by user intent, not session start.
 - **Heartbeat tick** → [heartbeat.md](heartbeat.md). Accepted-opportunity notifications and signal-freshness pruning.
-
-Cron prompts in `prompts/` (`prepare.md`, `send.md`) are loaded by the cron runner via `--message`; you do not read them yourself. The crons are fixed Edge infrastructure — their schedule is not user-configurable. The brief prompts route their body through `scripts/validate-digest-urls.ts` — a deterministic URL guard that strips any link that is not a real connect (`/c/<code>`) or profile (`/u/<id>`) link, so a fabricated action URL can never ship.
 
 ## Handoff
 
