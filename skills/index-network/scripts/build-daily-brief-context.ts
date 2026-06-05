@@ -112,7 +112,7 @@ export interface DailyBriefContext {
     calendarSource: "edgeos" | "unavailable";
     rsvpSource: "edgeos" | "unavailable";
     opportunitySource: "file" | "unavailable";
-    weatherSource: "open-meteo" | "unavailable";
+    weatherSource?: "open-meteo" | "unavailable";
     warnings: string[];
     interestTags: string[];
   };
