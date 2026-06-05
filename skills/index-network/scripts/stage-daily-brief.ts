@@ -49,66 +49,12 @@ function opportunityMarker(opp: BriefOpportunity): string {
   return opp.opportunityId ? `<!-- digest-opportunity:id=${opp.opportunityId} -->` : "";
 }
 
-function stripFillerSentences(text: string): string {
-  return text
-    .split(/(?<=[.!?])\s+/)
-    .filter((sentence) => {
-      const lower = sentence.toLowerCase();
-      return !lower.includes("while his location")
-        && !lower.includes("while her location")
-        && !lower.includes("while their location")
-        && !lower.includes("remote collaboration")
-        && !lower.includes("less of a barrier")
-        && !lower.includes("shared presence at edge esmeralda")
-        && !lower.includes("co-attending the event")
-        && !lower.includes("making an in-person meeting feasible");
-    })
-    .join(" ");
-}
-
 function normalizeOpportunityText(text: string): string {
-  return stripFillerSentences(text)
-    .replace(/\b[Tt]he discoverer,\s*([^,]+),\s*/g, "$1 ")
-    .replace(/\b[Tt]he discoverer\b/g, "they")
-    .replace(/\b[Tt]he discoverer's\b/g, "their")
-    .replace(/\byou,\s*the candidate,\s*is\b/gi, "you are")
-    .replace(/\byou is\b/gi, "you are")
-    .replace(/\byour profile indicates\b/gi, "you have")
-    .replace(/\bthe candidate\b/gi, "you")
-    .replace(/\s+/g, " ")
-    .trim();
+  return text.replace(/\s+/g, " ").trim();
 }
 
 function firstName(name: string): string {
   return name.trim().split(/\s+/)[0] || name;
-}
-
-function opportunityTemplate(opp: BriefOpportunity, text: string): string | null {
-  const first = firstName(opp.name);
-  const escaped = first.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const profileExpertise = text.match(new RegExp(`(?:${escaped}\\s+\\w+|${escaped})['’]s profile indicates strong expertise in ([^,.]+)`, "i"));
-  if (profileExpertise?.[1]) return `${first} has strong ${profileExpertise[1].trim()} expertise`;
-
-  const wantsFeedback = text.match(new RegExp(`${escaped}[^.]*seeking feedback[^.]*?(?:on|about) ['“\"]?([^'.“”\"]+)`, "i"));
-  if (wantsFeedback?.[1]) return `${first} wants feedback on ${wantsFeedback[1].trim()}`;
-
-  const building = text.match(new RegExp(`${escaped}[^.]*building ['“\"]([^'“”\"]+)['”\"][^.]*seeking ([^.]+)`, "i"));
-  if (building?.[1]) return `${first} is building ${building[1].trim()}`;
-
-  const exploring = text.match(new RegExp(`${escaped}[^.]*exploration of ['“\"]([^'“”\"]+)['”\"][^.]*['“\"]([^'“”\"]+)['”\"]`, "i"));
-  if (exploring?.[1] && exploring?.[2]) return `${first} is exploring ${exploring[1].trim()} and ${exploring[2].trim()}`;
-
-  const focusing = text.match(new RegExp(`${escaped}[^.]*focusing on ([^,.;]+)`, "i"));
-  if (focusing?.[1]) return `${first} is focused on ${focusing[1].trim()}`;
-
-  return null;
-}
-
-function readableSentences(text: string): string[] {
-  return text
-    .split(/(?<=[.!?])\s+/)
-    .map((sentence) => sentence.trim())
-    .filter((sentence) => sentence && !/\b(Yankı|you are|your)\b/i.test(sentence));
 }
 
 function truncateAtWord(text: string, maxChars: number): string {
@@ -119,10 +65,9 @@ function truncateAtWord(text: string, maxChars: number): string {
 }
 
 function opportunityReason(opp: BriefOpportunity, fallback: string): string {
-  const cleaned = normalizeOpportunityText(opp.mainText || fallback);
-  const templated = opportunityTemplate(opp, cleaned);
-  const sentence = templated ?? readableSentences(cleaned)[0] ?? cleaned;
-  return truncateAtWord(sentence, OPPORTUNITY_REASON_MAX_CHARS).replace(/[,.]$/, "");
+  const text = normalizeOpportunityText(opp.mainText || fallback);
+  const firstSentence = text.split(/(?<=[.!?])\s+/)[0]?.trim() ?? text;
+  return truncateAtWord(firstSentence, OPPORTUNITY_REASON_MAX_CHARS).replace(/[,.]$/, "");
 }
 
 export function composeDailyBrief(context: DailyBriefContext): { body: string; opportunityIds: string[] } {

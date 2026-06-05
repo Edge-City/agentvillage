@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * Reconcile AgentVillage's stored Hermes digest cron jobs with the currently
- * installed prompt files under `$HERMES_HOME/skills/index-network/prompts`.
+ * installed prompt files under `$HERMES_HOME/skills/edge-esmeralda/prompts`.
  *
  * Hermes stores a copy of each cron prompt at creation time, so updating the
  * workspace files alone does not update existing residents' scheduled jobs.

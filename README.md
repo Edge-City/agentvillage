@@ -310,14 +310,14 @@ AgentVillage's behaviour is markdown-driven. Almost everything you'd want to cha
 | Change banned vocabulary (e.g. drop a word, ban a new one) | `workspace/SOUL.md` | Bans propagate to all skill prompts via SOUL.md. |
 | Change the canonical look of welcome / digest messages | `skills/index-network/exemplars.md` | These exemplars are the bar the agent imitates. Edit the literal sample messages, not abstract rules. |
 | Rename the agent (rebrand for another event) | `workspace/IDENTITY.md` + every `prompts/*.md` and `bootstrap.md` referring to "AgentVillage" | Grep `AgentVillage` under `workspace/` and `skills/`. Also update `COMMUNITY.md` and `package.json` `name` if forking. |
-| Add or change emoji conventions | `skills/index-network/exemplars.md` and `skills/index-network/prompts/*.md` | Exemplars set the look; the morning greeting is fixed in `prepare.md` / `send.md`. |
+| Add or change emoji conventions | `skills/index-network/exemplars.md` and `skills/edge-esmeralda/prompts/*.md` | Exemplars set the look; the morning greeting is fixed in `prepare.md` / `send.md`. |
 
 ### Content
 
 | You want to… | Edit | Notes |
 |---|---|---|
 | Update community facts (dates, headcount, venue, programming format) | `workspace/COMMUNITY.md` | This is the only authoritative source the agent reads for community context. Don't duplicate the facts into prompts. |
-| Change what the morning brief says or how it's structured | `skills/index-network/prompts/prepare.md` (compose), `skills/index-network/scripts/build-daily-brief-context.ts` (structured announcements/calendar/opportunity context), and `skills/index-network/prompts/send.md` (deliver + fallback) | The morning greeting is fixed in both. Keep the announcements/calendar/people/community-asks structure in sync with `skills/index-network/exemplars.md`. |
+| Change what the morning brief says or how it's structured | `skills/edge-esmeralda/prompts/prepare.md` (compose), `skills/index-network/scripts/build-daily-brief-context.ts` (structured announcements/calendar/opportunity context), and `skills/edge-esmeralda/prompts/send.md` (deliver + fallback) | The morning greeting is fixed in both. Keep the announcements/calendar/people/community-asks structure in sync with `skills/index-network/exemplars.md`. |
 | Change the welcome message | `skills/index-network/bootstrap.md` Step 1 | The same welcome runs for every user — new and returning. |
 | Change the lived-notebook (`USER.md`) template | `skills/index-network/bootstrap.md` | The bootstrap ritual writes `USER.md`. Editing the file in `workspace/` only affects the empty stub copied in by `--wipe-user`. |
 | Change how the agent calls EdgeOS APIs (events, attendees, RSVPs, venues, wiki recipes) | `skills/edgeos/SKILL.md` | This is the hand-edited recipe file. The auto-refreshed reference data under `skills/edgeos/references/` is a different surface — see "Backends & skills" below for the don't-edit-this caveat. |
@@ -340,7 +340,7 @@ The digest runs as a fixed prepare/send pair — **prepare `0 2 * * *`, send `0 
 |---|---|---|
 | Override the digest times for one install | `--digest-prepare-cron` / `--digest-send-cron` (or `DIGEST_PREPARE_CRON` / `DIGEST_SEND_CRON`) | Optional, full 5-field cron expressions. Flag wins over env; invalid values fall back to the default. |
 | Change the default digest schedule for everyone | `install/install_index.ts` (`DIGEST_CRON_SPECS`) | The installer writes the cron entries from this table. Existing installs pick up changes on the next `install.ts` run. |
-| Change a cron prompt without changing the schedule | the matching `skills/index-network/prompts/<name>.md` | Hermes stores prompt copies in cron jobs. Hosted residents are refreshed by the control-plane post-merge sync, which calls each sidecar's `/update` endpoint and reruns the installer. For non-control-plane installs or recovery, run `HERMES_HOME=<resident-home> bun install/reconcile_digest_crons.ts` after updated skill files are copied. |
+| Change a cron prompt without changing the schedule | the matching `skills/edge-esmeralda/prompts/<name>.md` | Hermes stores prompt copies in cron jobs. Hosted residents are refreshed by the control-plane post-merge sync, which calls each sidecar's `/update` endpoint and reruns the installer. For non-control-plane installs or recovery, run `HERMES_HOME=<resident-home> bun install/reconcile_digest_crons.ts` after updated skill files are copied. |
 
 ### Backends & skills
 
