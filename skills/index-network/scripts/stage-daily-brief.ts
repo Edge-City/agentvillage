@@ -15,8 +15,8 @@ import { access } from "node:fs/promises";
 import { buildDailyBriefContext, type BriefOpportunity, type DailyBriefContext } from "./build-daily-brief-context";
 import { sanitizeDigestUrls } from "./validate-digest-urls";
 
-const CONNECTION_DIGEST_LIMIT = 3;
-const COMMUNITY_DIGEST_LIMIT = 2;
+const CONNECTION_DIGEST_LIMIT = 1;
+const COMMUNITY_DIGEST_LIMIT = 1;
 const OPPORTUNITY_REASON_MAX_CHARS = 170;
 
 function argValue(args: string[], name: string): string | undefined {
@@ -71,8 +71,12 @@ function opportunityReason(opp: BriefOpportunity, fallback: string): string {
 }
 
 export function composeDailyBrief(context: DailyBriefContext): { body: string; opportunityIds: string[] } {
+  const greetingParts = [`🌞 Good morning from Edge Esmeralda. It is ${context.displayDate}`];
+  if (context.weather?.source !== "unavailable" && context.weather?.forecast) {
+    greetingParts.push(`${context.weather.emoji} ${context.weather.forecast}`);
+  }
   const lines: string[] = [
-    `🌞 Good morning from Edge Esmeralda. It is ${context.displayDate}`,
+    `${greetingParts.join(". ")}.`,
     "",
     "Here's what you need to know today:",
     "",

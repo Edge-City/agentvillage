@@ -160,8 +160,8 @@ describe("composeDailyBrief", () => {
     });
 
     expect(body).toContain("Seref has deep expertise in AI, especially in user profiling and modeling, with arXiv publications on these topics. [Say hi]");
-    expect(body).toContain("Seren is seeking feedback on protocol design and would benefit from your engineering expertise. [Say hi]");
-    expect(body).toContain("Helen is building a portable digital identity system through gameplay and is seeking research collaboration. [Say hi]");
+    expect(body).not.toContain("Seren");
+    expect(body).not.toContain("Helen");
   });
 
   test("keeps digest opportunity bullets short and drops raw presenter artifacts", () => {
@@ -181,12 +181,11 @@ describe("composeDailyBrief", () => {
       connectionOpportunities: opportunities,
     });
 
-    expect(opportunityIds).toEqual(["opp-1", "opp-2", "opp-3"]);
+    expect(opportunityIds).toEqual(["opp-1"]);
     expect(body).toContain("Person 1");
-    expect(body).toContain("Person 3");
-    expect(body).not.toContain("Person 4");
+    expect(body).not.toContain("Person 2");
     const bullets = body.split("\n").filter((line) => line.startsWith("- <!-- digest-opportunity"));
-    expect(bullets).toHaveLength(3);
+    expect(bullets).toHaveLength(1);
     expect(bullets.every((line) => line.length < 360)).toBe(true);
   });
 });
