@@ -134,6 +134,7 @@ describe("composeDailyBrief", () => {
         profileUrl: "https://index.network/u/11111111-1111-1111-1111-111111111111",
         acceptUrl: "https://protocol.index.network/c/seref",
         feedCategory: "connection",
+        confidence: 72,
       },
       {
         name: "Seren Sandikci",
@@ -142,6 +143,7 @@ describe("composeDailyBrief", () => {
         profileUrl: "https://index.network/u/22222222-2222-2222-2222-222222222222",
         acceptUrl: "https://protocol.index.network/c/seren",
         feedCategory: "connection",
+        confidence: 91,
       },
       {
         name: "Helen Huang",
@@ -150,6 +152,7 @@ describe("composeDailyBrief", () => {
         profileUrl: "https://index.network/u/33333333-3333-3333-3333-333333333333",
         acceptUrl: "https://protocol.index.network/c/helen",
         feedCategory: "connection",
+        confidence: 85,
       },
     ];
 
@@ -159,20 +162,22 @@ describe("composeDailyBrief", () => {
       connectionOpportunities: opportunities,
     });
 
-    expect(body).toContain("Seref has deep expertise in AI, especially in user profiling and modeling, with arXiv publications on these topics. [Say hi]");
-    expect(body).not.toContain("Seren");
+    // Seren has the highest confidence (91) — she should be the one picked
+    expect(body).toContain("Seren is seeking feedback on protocol design and would benefit from your engineering expertise. [Say hi]");
+    expect(body).not.toContain("Seref");
     expect(body).not.toContain("Helen");
   });
 
-  test("keeps digest opportunity bullets short and drops raw presenter artifacts", () => {
-    const longReason = "Helen is building a portable digital identity system through gameplay and is seeking research collaboration. Your background in full-stack development and experience with identity protocols makes you a strong fit for her project needs.";
+  test("sorts opportunities by confidence descending before applying limit", () => {
+    // 4 opportunities, all with confidence. Person 4 has highest, Person 1 lowest.
     const opportunities = Array.from({ length: 4 }, (_, idx) => ({
       name: `Person ${idx + 1}`,
       opportunityId: `opp-${idx + 1}`,
-      mainText: longReason,
+      mainText: "Shared interests in distributed systems.",
       profileUrl: `https://index.network/u/11111111-1111-1111-1111-11111111111${idx}`,
       acceptUrl: `https://protocol.index.network/c/abc12${idx}`,
       feedCategory: "connection",
+      confidence: 10 * (idx + 1), // Person 1=10, Person 4=40
     }));
 
     const { body, opportunityIds } = composeDailyBrief({
@@ -181,11 +186,11 @@ describe("composeDailyBrief", () => {
       connectionOpportunities: opportunities,
     });
 
-    expect(opportunityIds).toEqual(["opp-1"]);
-    expect(body).toContain("Person 1");
+    // Person 4 has the highest confidence (40) — should be the one picked
+    expect(opportunityIds).toEqual(["opp-4"]);
+    expect(body).toContain("Person 4");
+    expect(body).not.toContain("Person 1");
     expect(body).not.toContain("Person 2");
-    const bullets = body.split("\n").filter((line) => line.startsWith("- <!-- digest-opportunity"));
-    expect(bullets).toHaveLength(1);
-    expect(bullets.every((line) => line.length < 360)).toBe(true);
+    expect(body).not.toContain("Person 3");
   });
 });

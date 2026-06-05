@@ -114,7 +114,9 @@ export function composeDailyBrief(context: DailyBriefContext): { body: string; o
     hasVerifiedContent = true;
   }
 
-  const connectionOpportunities = context.connectionOpportunities.slice(0, CONNECTION_DIGEST_LIMIT);
+  const connectionOpportunities = [...context.connectionOpportunities]
+    .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))
+    .slice(0, CONNECTION_DIGEST_LIMIT);
   if (connectionOpportunities.length > 0) {
     lines.push("**People worth meeting today:**");
     for (const opp of connectionOpportunities) {
@@ -127,7 +129,9 @@ export function composeDailyBrief(context: DailyBriefContext): { body: string; o
     hasVerifiedContent = true;
   }
 
-  const communityOpportunities = context.communityOpportunities.slice(0, COMMUNITY_DIGEST_LIMIT);
+  const communityOpportunities = [...context.communityOpportunities]
+    .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))
+    .slice(0, COMMUNITY_DIGEST_LIMIT);
   if (communityOpportunities.length > 0) {
     lines.push("**Help your community**");
     for (const opp of communityOpportunities) {

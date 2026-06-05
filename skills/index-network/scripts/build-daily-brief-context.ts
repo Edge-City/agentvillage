@@ -92,6 +92,7 @@ export interface BriefOpportunity {
   acceptUrl?: string;
   feedCategory?: string;
   opportunityId?: string;
+  confidence?: number;
 }
 
 export interface DailyBriefContext {
@@ -334,10 +335,15 @@ export function parseOpportunityTranscript(text: string): BriefOpportunity[] {
       continue;
     }
 
-    const field = line.trim().match(/^(status|profileUrl|acceptUrl|feedCategory|opportunityId):\s*(.+)$/);
+    const field = line.trim().match(/^(status|profileUrl|acceptUrl|feedCategory|opportunityId|confidence):\s*(.+)$/);
     if (field) {
       const key = field[1] as keyof BriefOpportunity;
-      current[key] = field[2].trim();
+      if (key === "confidence") {
+        const val = parseFloat(field[2].trim());
+        if (!isNaN(val)) current[key] = val;
+      } else {
+        current[key] = field[2].trim();
+      }
       continue;
     }
 
