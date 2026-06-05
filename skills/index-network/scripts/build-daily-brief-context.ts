@@ -59,6 +59,12 @@ const TAG_KEYWORDS: Record<string, string[]> = {
   "Art & Culture": ["art", "culture", "music", "film", "storytelling"],
 };
 
+export interface DailyBriefWeather {
+  forecast: string;
+  emoji: string;
+  source: "open-meteo" | "unavailable";
+}
+
 export interface BriefAnnouncement {
   id?: string;
   body: string;
@@ -86,6 +92,7 @@ export interface BriefOpportunity {
   acceptUrl?: string;
   feedCategory?: string;
   opportunityId?: string;
+  confidence?: number;
 }
 
 export interface DailyBriefContext {
@@ -99,11 +106,13 @@ export interface DailyBriefContext {
   opportunities: BriefOpportunity[];
   connectionOpportunities: BriefOpportunity[];
   communityOpportunities: BriefOpportunity[];
+  weather?: DailyBriefWeather;
   diagnostics: {
     announcementsSource: "control-plane" | "unavailable";
     calendarSource: "edgeos" | "unavailable";
     rsvpSource: "edgeos" | "unavailable";
     opportunitySource: "file" | "unavailable";
+    weatherSource?: "open-meteo" | "unavailable";
     warnings: string[];
     interestTags: string[];
   };
@@ -326,10 +335,15 @@ export function parseOpportunityTranscript(text: string): BriefOpportunity[] {
       continue;
     }
 
-    const field = line.trim().match(/^(status|profileUrl|acceptUrl|feedCategory|opportunityId):\s*(.+)$/);
+    const field = line.trim().match(/^(status|profileUrl|acceptUrl|feedCategory|opportunityId|confidence):\s*(.+)$/);
     if (field) {
       const key = field[1] as keyof BriefOpportunity;
-      current[key] = field[2].trim();
+      if (key === "confidence") {
+        const val = parseFloat(field[2].trim());
+        if (!isNaN(val)) current[key] = val;
+      } else {
+        current[key] = field[2].trim();
+      }
       continue;
     }
 
@@ -365,6 +379,37 @@ async function readDeliveredIds(stateFile: string, date: string): Promise<Set<st
     // missing/malformed state should not block the brief
   }
   return new Set();
+}
+
+async function fetchWeather(date: string, warnings: string[]): Promise<DailyBriefWeather> {
+  try {
+    const params = new URLSearchParams({
+      latitude: String(HEALDSBURG_LAT),
+      longitude: String(HEALDSBURG_LON),
+      daily: "temperature_2m_max,weather_code",
+      temperature_unit: "fahrenheit",
+      timezone: PACIFIC_TZ,
+      start_date: date,
+      end_date: date,
+    });
+    const res = await fetch(`https://api.open-meteo.com/v1/forecast?${params.toString()}`);
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    const data = (await res.json()) as {
+      daily?: { temperature_2m_max?: number[]; weather_code?: number[] };
+    };
+    const high = data.daily?.temperature_2m_max?.[0];
+    const code = data.daily?.weather_code?.[0];
+    if (high == null || code == null) throw new Error("missing daily forecast data");
+    const mapping = WEATHER_CODE_MAP[code] ?? { description: "mixed conditions", emoji: "🌤️" };
+    return {
+      forecast: `Expect ${mapping.description} and a high of ${Math.round(high)}°F`,
+      emoji: mapping.emoji,
+      source: "open-meteo",
+    };
+  } catch (err) {
+    warnings.push(`weather unavailable: ${err instanceof Error ? err.message : String(err)}`);
+    return { forecast: "", emoji: "", source: "unavailable" };
+  }
 }
 
 async function fetchAnnouncements(date: string, warnings: string[]): Promise<{ source: "control-plane" | "unavailable"; announcements: BriefAnnouncement[] }> {
@@ -444,6 +489,45 @@ async function fetchRsvps(date: string, warnings: string[]): Promise<{ source: "
   }
 }
 
+/** Healdsburg, CA — Edge Esmeralda location. */
+const HEALDSBURG_LAT = 38.6105;
+const HEALDSBURG_LON = -122.8686;
+
+/**
+ * Map WMO weather codes to human-readable descriptions and emojis.
+ * https://www.nodc.noaa.gov/archive/arc0021/0002199/1.1/data/0-data/HTML/WMO-CODE/WMO4677.HTM
+ */
+const WEATHER_CODE_MAP: Record<number, { description: string; emoji: string }> = {
+  0: { description: "sunshine all day", emoji: "☀️" },
+  1: { description: "mostly clear skies", emoji: "🌤️" },
+  2: { description: "partly cloudy skies", emoji: "⛅" },
+  3: { description: "overcast skies", emoji: "☁️" },
+  45: { description: "fog", emoji: "🌫️" },
+  48: { description: "depositing rime fog", emoji: "🌫️" },
+  51: { description: "light drizzle", emoji: "🌧️" },
+  53: { description: "moderate drizzle", emoji: "🌧️" },
+  55: { description: "dense drizzle", emoji: "🌧️" },
+  56: { description: "light freezing drizzle", emoji: "🌧️" },
+  57: { description: "dense freezing drizzle", emoji: "🌧️" },
+  61: { description: "light rain", emoji: "🌧️" },
+  63: { description: "moderate rain", emoji: "🌧️" },
+  65: { description: "heavy rain", emoji: "🌧️" },
+  66: { description: "light freezing rain", emoji: "🌧️" },
+  67: { description: "heavy freezing rain", emoji: "🌧️" },
+  71: { description: "light snow", emoji: "❄️" },
+  73: { description: "moderate snow", emoji: "❄️" },
+  75: { description: "heavy snow", emoji: "❄️" },
+  77: { description: "snow grains", emoji: "❄️" },
+  80: { description: "rain showers", emoji: "🌦️" },
+  81: { description: "moderate rain showers", emoji: "🌦️" },
+  82: { description: "violent rain showers", emoji: "🌦️" },
+  85: { description: "light snow showers", emoji: "🌨️" },
+  86: { description: "heavy snow showers", emoji: "🌨️" },
+  95: { description: "thunderstorms", emoji: "⛈️" },
+  96: { description: "thunderstorms with light hail", emoji: "⛈️" },
+  99: { description: "thunderstorms with heavy hail", emoji: "⛈️" },
+};
+
 function argValue(args: string[], name: string): string | undefined {
   const idx = args.indexOf(name);
   return idx >= 0 ? args[idx + 1] : undefined;
@@ -461,10 +545,11 @@ export async function buildDailyBriefContext(options: {
   const interestText = (await Promise.all(userFiles.map(readIfExists))).join("\n");
   const interestTags = extractInterestTags(interestText);
 
-  const [announcementResult, eventResult, rsvpResult] = await Promise.all([
+  const [announcementResult, eventResult, rsvpResult, weather] = await Promise.all([
     fetchAnnouncements(date, warnings),
     fetchEvents(date, interestTags, warnings),
     fetchRsvps(date, warnings),
+    fetchWeather(date, warnings),
   ]);
 
   let opportunities: BriefOpportunity[] = [];
@@ -489,11 +574,13 @@ export async function buildDailyBriefContext(options: {
     opportunities,
     connectionOpportunities: opportunities.filter((opp) => opp.feedCategory === "connection"),
     communityOpportunities: opportunities.filter((opp) => opp.feedCategory === "connector-flow"),
+    weather: weather.source !== "unavailable" ? weather : undefined,
     diagnostics: {
       announcementsSource: announcementResult.source,
       calendarSource: eventResult.source,
       rsvpSource: rsvpResult.source,
       opportunitySource,
+      weatherSource: weather.source,
       warnings,
       interestTags,
     },

@@ -15,8 +15,8 @@ import { access } from "node:fs/promises";
 import { buildDailyBriefContext, type BriefOpportunity, type DailyBriefContext } from "./build-daily-brief-context";
 import { sanitizeDigestUrls } from "./validate-digest-urls";
 
-const CONNECTION_DIGEST_LIMIT = 3;
-const COMMUNITY_DIGEST_LIMIT = 2;
+const CONNECTION_DIGEST_LIMIT = 1;
+const COMMUNITY_DIGEST_LIMIT = 1;
 const OPPORTUNITY_REASON_MAX_CHARS = 170;
 
 function argValue(args: string[], name: string): string | undefined {
@@ -71,8 +71,13 @@ function opportunityReason(opp: BriefOpportunity, fallback: string): string {
 }
 
 export function composeDailyBrief(context: DailyBriefContext): { body: string; opportunityIds: string[] } {
+  const greetingParts = [`🌞 Good morning from Edge Esmeralda. It is ${context.displayDate}`];
+  if (context.weather?.source !== "unavailable" && context.weather?.forecast) {
+    greetingParts.push(`${context.weather.emoji} ${context.weather.forecast}`);
+  }
+  const greeting = greetingParts.length > 1 ? `${greetingParts.join(". ")}.` : greetingParts[0];
   const lines: string[] = [
-    `🌞 Good morning from Edge Esmeralda. It is ${context.displayDate}`,
+    greeting,
     "",
     "Here's what you need to know today:",
     "",
@@ -110,7 +115,9 @@ export function composeDailyBrief(context: DailyBriefContext): { body: string; o
     hasVerifiedContent = true;
   }
 
-  const connectionOpportunities = context.connectionOpportunities.slice(0, CONNECTION_DIGEST_LIMIT);
+  const connectionOpportunities = [...context.connectionOpportunities]
+    .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))
+    .slice(0, CONNECTION_DIGEST_LIMIT);
   if (connectionOpportunities.length > 0) {
     lines.push("**People worth meeting today:**");
     for (const opp of connectionOpportunities) {
@@ -123,7 +130,9 @@ export function composeDailyBrief(context: DailyBriefContext): { body: string; o
     hasVerifiedContent = true;
   }
 
-  const communityOpportunities = context.communityOpportunities.slice(0, COMMUNITY_DIGEST_LIMIT);
+  const communityOpportunities = [...context.communityOpportunities]
+    .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))
+    .slice(0, COMMUNITY_DIGEST_LIMIT);
   if (communityOpportunities.length > 0) {
     lines.push("**Help your community**");
     for (const opp of communityOpportunities) {
