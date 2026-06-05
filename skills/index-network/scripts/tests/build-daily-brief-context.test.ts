@@ -117,6 +117,31 @@ describe("build-daily-brief-context helpers", () => {
     ]);
   });
 
+  test("parseOpportunityTranscript parses confidence as a number and ignores invalid values", () => {
+    const parsed = parseOpportunityTranscript(`1. Alice
+   <!-- digest-opportunity:id=alice -->
+   builds agents
+   status: draft
+   profileUrl: https://index.network/u/alice
+   confidence: 92
+
+2. Bob
+   <!-- digest-opportunity:id=bob -->
+   seeks collaborators
+   status: draft
+   confidence: not-a-number
+
+3. Carol
+   <!-- digest-opportunity:id=carol -->
+   no confidence field at all`);
+
+    expect(parsed[0]).toMatchObject({ name: "Alice", confidence: 92 });
+    expect(parsed[1]).toMatchObject({ name: "Bob" });
+    expect(parsed[1].confidence).toBeUndefined();
+    expect(parsed[2]).toMatchObject({ name: "Carol" });
+    expect(parsed[2].confidence).toBeUndefined();
+  });
+
   test("filterDedupedOpportunities keeps cards without ids and drops delivered ids", () => {
     expect(
       filterDedupedOpportunities(

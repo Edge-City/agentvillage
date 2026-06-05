@@ -193,4 +193,43 @@ describe("composeDailyBrief", () => {
     expect(body).not.toContain("Person 2");
     expect(body).not.toContain("Person 3");
   });
+
+  test("sorts community opportunities by confidence before limit", () => {
+    const opportunities = [
+      { name: "Low", opportunityId: "comm-low", mainText: "Needs a mentor.", profileUrl: "https://index.network/u/low", acceptUrl: "https://index.network/c/low", feedCategory: "connector-flow", confidence: 35 },
+      { name: "High", opportunityId: "comm-high", mainText: "Looking for legal advice.", profileUrl: "https://index.network/u/high", acceptUrl: "https://index.network/c/high", feedCategory: "connector-flow", confidence: 88 },
+      { name: "Mid", opportunityId: "comm-mid", mainText: "Seeking co-founder.", profileUrl: "https://index.network/u/mid", acceptUrl: "https://index.network/c/mid", feedCategory: "connector-flow", confidence: 60 },
+    ];
+
+    const { body, opportunityIds } = composeDailyBrief({
+      ...baseContext,
+      opportunities,
+      communityOpportunities: opportunities,
+    });
+
+    // "High" has the highest confidence (88) — should be the one picked
+    expect(opportunityIds).toEqual(["comm-high"]);
+    expect(body).toContain("High");
+    expect(body).not.toContain("Low");
+  });
+
+  test("greeting includes weather when available and omits trailing period without weather", () => {
+    // Without weather — should match exemplar (no trailing period)
+    const { body: noWeather } = composeDailyBrief(baseContext);
+    expect(noWeather.split("\n")[0]).toBe("🌞 Good morning from Edge Esmeralda. It is Thursday, June 4");
+
+    // With weather — should append weather sentence with period
+    const { body: withWeather } = composeDailyBrief({
+      ...baseContext,
+      weather: { forecast: "Expect sunshine and a high of 75°F", emoji: "☀️", source: "open-meteo" },
+    });
+    expect(withWeather).toContain("☀️ Expect sunshine and a high of 75°F.");
+
+    // Weather unavailable — should fall back to no-weather format
+    const { body: weatherDown } = composeDailyBrief({
+      ...baseContext,
+      weather: { forecast: "", emoji: "", source: "unavailable" },
+    });
+    expect(weatherDown.split("\n")[0]).toBe("🌞 Good morning from Edge Esmeralda. It is Thursday, June 4");
+  });
 });

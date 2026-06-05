@@ -75,8 +75,9 @@ export function composeDailyBrief(context: DailyBriefContext): { body: string; o
   if (context.weather?.source !== "unavailable" && context.weather?.forecast) {
     greetingParts.push(`${context.weather.emoji} ${context.weather.forecast}`);
   }
+  const greeting = greetingParts.length > 1 ? `${greetingParts.join(". ")}.` : greetingParts[0];
   const lines: string[] = [
-    `${greetingParts.join(". ")}.`,
+    greeting,
     "",
     "Here's what you need to know today:",
     "",

@@ -389,7 +389,8 @@ async function fetchWeather(date: string, warnings: string[]): Promise<DailyBrie
       daily: "temperature_2m_max,weather_code",
       temperature_unit: "fahrenheit",
       timezone: PACIFIC_TZ,
-      forecast_days: "1",
+      start_date: date,
+      end_date: date,
     });
     const res = await fetch(`https://api.open-meteo.com/v1/forecast?${params.toString()}`);
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
