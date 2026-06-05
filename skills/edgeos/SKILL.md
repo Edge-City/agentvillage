@@ -55,7 +55,7 @@ In every curl example below, `<EDGEOS_API_KEY>` and `<EDGEOS_BEARER_TOKEN>` are 
 ## 2. Conventions
 
 - List endpoints return a `results: T[]` array plus a paging object whose key name varies by endpoint (`paging` for events, `pagination` for the directory). Single-resource endpoints return the resource directly. When in doubt, consult the response shape documented in the relevant section, or the OpenAPI spec via §11.
-- Times are ISO-8601 with timezone. UUIDs are RFC-4122.
+- Times from the API are ISO-8601, typically UTC (e.g. `2026-06-04T15:00:00Z`). **Before you show any event time to the user, convert it from UTC to America/Los_Angeles and label it (PDT/PST). Never read the UTC clock value out as the local time.** Example: `15:00:00Z` is **8:00 AM PDT**, not 3:00 PM. The user is on the ground in Healdsburg (Pacific), so every time you display, every reminder you set, and every "is it soon?" judgment must be in their local timezone. UUIDs are RFC-4122.
 - Recurring events expand into virtual occurrences when `start_after` is set. When RSVPing to one instance of a recurring event, pass that occurrence's `start_time` as `occurrence_start`.
 - Error codes: `401` missing/expired token · `403` token lacks the required scope · `404` not visible to caller · `409` resource has dependents · `422` validation · `429` rate limit (see `Retry-After`).
 
