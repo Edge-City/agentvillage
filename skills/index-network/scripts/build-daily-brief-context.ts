@@ -93,6 +93,7 @@ export interface DailyBriefContext {
   displayDate: string;
   timezone: "America/Los_Angeles";
   announcements: BriefAnnouncement[];
+  rsvpEvents: BriefEvent[];
   highlightedEvents: BriefEvent[];
   interestEvents: BriefEvent[];
   opportunities: BriefOpportunity[];
@@ -101,11 +102,16 @@ export interface DailyBriefContext {
   diagnostics: {
     announcementsSource: "control-plane" | "unavailable";
     calendarSource: "edgeos" | "unavailable";
+    rsvpSource: "edgeos" | "unavailable";
     opportunitySource: "file" | "unavailable";
     warnings: string[];
     interestTags: string[];
   };
 }
+
+const HIGHLIGHTED_EVENT_LIMIT = 6;
+const DISCOVERY_EVENT_TARGET = 6;
+const RSVP_EVENT_LIMIT = 6;
 
 type EdgeEvent = Record<string, unknown> & {
   id?: string;
@@ -252,7 +258,7 @@ export function selectEvents(events: EdgeEvent[], interestTags: string[]): { hig
     .filter((event) => event.highlighted === true)
     .map((event) => toBriefEvent(event, "Highlighted by the EdgeOS calendar."))
     .filter((event): event is BriefEvent => Boolean(event))
-    .slice(0, 2);
+    .slice(0, HIGHLIGHTED_EVENT_LIMIT);
 
   const used = new Set(highlightedEvents.map((event) => event.id ?? `${event.title}:${event.startTime}`));
   const scored = byStart
@@ -260,7 +266,7 @@ export function selectEvents(events: EdgeEvent[], interestTags: string[]): { hig
     .map((event) => ({ event, score: eventScore(event, interestTags) }))
     .sort((a, b) => b.score - a.score || String(a.event.start_time ?? "").localeCompare(String(b.event.start_time ?? "")));
 
-  const fillCount = highlightedEvents.length > 0 ? Math.max(0, 3 - highlightedEvents.length) : 3;
+  const fillCount = Math.max(0, DISCOVERY_EVENT_TARGET - highlightedEvents.length);
   const interestEvents = scored
     .filter((entry) => highlightedEvents.length === 0 || entry.score > 0)
     .slice(0, fillCount)
@@ -408,6 +414,36 @@ async function fetchEvents(date: string, interestTags: string[], warnings: strin
   }
 }
 
+async function fetchRsvps(date: string, warnings: string[]): Promise<{ source: "edgeos" | "unavailable"; rsvpEvents: BriefEvent[] }> {
+  const token = process.env.EDGEOS_API_KEY;
+  if (!token) return { source: "unavailable", rsvpEvents: [] };
+  const { startIso, endIso } = pacificDayBounds(date);
+  const params = new URLSearchParams({
+    popup_id: POPUP_ID,
+    event_status: "published",
+    rsvped_only: "true",
+    start_after: startIso,
+    start_before: endIso,
+    limit: "100",
+  });
+  try {
+    const res = await fetch(`${EDGEOS_BASE}/events/portal/events?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    const data = (await res.json()) as { results?: EdgeEvent[] };
+    const rsvpEvents = [...(data.results ?? [])]
+      .sort((a, b) => String(a.start_time ?? "").localeCompare(String(b.start_time ?? "")))
+      .map((event) => toBriefEvent(event, "You RSVPed to this."))
+      .filter((event): event is BriefEvent => Boolean(event))
+      .slice(0, RSVP_EVENT_LIMIT);
+    return { source: "edgeos", rsvpEvents };
+  } catch (err) {
+    warnings.push(`rsvps unavailable: ${err instanceof Error ? err.message : String(err)}`);
+    return { source: "unavailable", rsvpEvents: [] };
+  }
+}
+
 function argValue(args: string[], name: string): string | undefined {
   const idx = args.indexOf(name);
   return idx >= 0 ? args[idx + 1] : undefined;
@@ -425,9 +461,10 @@ export async function buildDailyBriefContext(options: {
   const interestText = (await Promise.all(userFiles.map(readIfExists))).join("\n");
   const interestTags = extractInterestTags(interestText);
 
-  const [announcementResult, eventResult] = await Promise.all([
+  const [announcementResult, eventResult, rsvpResult] = await Promise.all([
     fetchAnnouncements(date, warnings),
     fetchEvents(date, interestTags, warnings),
+    fetchRsvps(date, warnings),
   ]);
 
   let opportunities: BriefOpportunity[] = [];
@@ -446,6 +483,7 @@ export async function buildDailyBriefContext(options: {
     displayDate: displayDate(date),
     timezone: PACIFIC_TZ,
     announcements: announcementResult.announcements,
+    rsvpEvents: rsvpResult.rsvpEvents,
     highlightedEvents: eventResult.highlightedEvents,
     interestEvents: eventResult.interestEvents,
     opportunities,
@@ -454,6 +492,7 @@ export async function buildDailyBriefContext(options: {
     diagnostics: {
       announcementsSource: announcementResult.source,
       calendarSource: eventResult.source,
+      rsvpSource: rsvpResult.source,
       opportunitySource,
       warnings,
       interestTags,

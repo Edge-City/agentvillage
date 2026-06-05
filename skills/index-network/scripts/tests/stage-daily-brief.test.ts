@@ -8,6 +8,7 @@ const baseContext: DailyBriefContext = {
   displayDate: "Thursday, June 4",
   timezone: "America/Los_Angeles",
   announcements: [],
+  rsvpEvents: [],
   highlightedEvents: [],
   interestEvents: [],
   opportunities: [],
@@ -16,6 +17,7 @@ const baseContext: DailyBriefContext = {
   diagnostics: {
     announcementsSource: "unavailable",
     calendarSource: "unavailable",
+    rsvpSource: "unavailable",
     opportunitySource: "unavailable",
     warnings: [],
     interestTags: [],
@@ -43,13 +45,52 @@ describe("composeDailyBrief", () => {
     });
 
     expect(body).toContain("🌞 Good morning from Edge Esmeralda. It is Thursday, June 4");
-    expect(body).toContain("**The calendar today:**");
+    expect(body).toContain("**A few things on today:**");
     expect(body).toContain("9:00 AM — [GNOSIS Journey](https://edgecity.simplefi.tech/portal/edge-esmeralda-2026/events/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa) at The Hub");
     expect(body).not.toContain("PDT");
     expect(body).not.toContain("Highlighted by the EdgeOS calendar");
     expect(body).not.toContain("I couldn't check the live calendar this morning");
     expect(body).not.toContain("\\n");
     expect(body).not.toContain("\\ud83c");
+  });
+
+  test("renders an RSVP section and excludes RSVPed events from the discovery list", () => {
+    const rsvped = {
+      id: "event-rsvp",
+      title: "Qi Gong",
+      startTime: "2026-06-04T15:00:00Z",
+      timePacific: "8:00 AM",
+      venue: "Plaza",
+      eventUrl: "https://edgecity.simplefi.tech/portal/edge-esmeralda-2026/events/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      tags: [],
+      highlighted: true,
+      reasonHint: "You RSVPed to this.",
+    };
+    const otherHighlighted = {
+      id: "event-1",
+      title: "GNOSIS Journey",
+      startTime: "2026-06-04T16:00:00Z",
+      timePacific: "9:00 AM",
+      venue: "The Hub",
+      eventUrl: "https://edgecity.simplefi.tech/portal/edge-esmeralda-2026/events/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      tags: [],
+      highlighted: true,
+      reasonHint: "Highlighted by the EdgeOS calendar.",
+    };
+
+    const { body } = composeDailyBrief({
+      ...baseContext,
+      rsvpEvents: [rsvped],
+      highlightedEvents: [rsvped, otherHighlighted],
+      diagnostics: { ...baseContext.diagnostics, calendarSource: "edgeos", rsvpSource: "edgeos" },
+    });
+
+    expect(body).toContain("**On your calendar today (your RSVPs):**");
+    expect(body).toContain("8:00 AM — [Qi Gong]");
+    expect(body).toContain("**Also on today:**");
+    expect(body).toContain("That's a selection, not the whole day — ask me for the full calendar anytime.");
+    // Qi Gong is an RSVP, so it must not also appear in the discovery list.
+    expect(body.match(/Qi Gong/g) ?? []).toHaveLength(1);
   });
 
   test("renders opportunities with digest markers and collects ids", () => {

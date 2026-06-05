@@ -89,10 +89,23 @@ export function composeDailyBrief(context: DailyBriefContext): { body: string; o
     hasVerifiedContent = true;
   }
 
-  const events = [...context.highlightedEvents, ...context.interestEvents];
+  if (context.rsvpEvents.length > 0) {
+    lines.push("**On your calendar today (your RSVPs):**");
+    for (const event of context.rsvpEvents) lines.push(eventLine(event));
+    lines.push("");
+    hasVerifiedContent = true;
+  }
+
+  // Key on id + start time so distinct occurrences of a recurring event are not collapsed.
+  const eventKey = (event: DailyBriefContext["highlightedEvents"][number]) => `${event.id ?? event.title}:${event.startTime}`;
+  const rsvpKeys = new Set(context.rsvpEvents.map(eventKey));
+  const events = [...context.highlightedEvents, ...context.interestEvents].filter((event) => !rsvpKeys.has(eventKey(event)));
   if (events.length > 0) {
-    lines.push("**The calendar today:**");
+    lines.push(context.rsvpEvents.length > 0 ? "**Also on today:**" : "**A few things on today:**");
     for (const event of events) lines.push(eventLine(event));
+    if (context.diagnostics.calendarSource === "edgeos") {
+      lines.push("That's a selection, not the whole day — ask me for the full calendar anytime.");
+    }
     lines.push("");
     hasVerifiedContent = true;
   }
