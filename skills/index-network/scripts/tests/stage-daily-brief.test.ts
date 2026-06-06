@@ -168,6 +168,36 @@ describe("composeDailyBrief", () => {
     expect(body).not.toContain("Helen");
   });
 
+  test("does not truncate presenter-provided digest summaries", () => {
+    const longSummary = "You might like meeting Paul because his online trust work overlaps with your AI orchestration interests and his builder-investor background could make for a useful conversation.";
+    const { body } = composeDailyBrief({
+      ...baseContext,
+      opportunities: [
+        {
+          name: "Paul McKellar",
+          opportunityId: "opp-paul",
+          mainText: longSummary,
+          profileUrl: "https://index.network/u/paul",
+          acceptUrl: "https://protocol.index.network/c/paul",
+          feedCategory: "connection",
+        },
+      ],
+      connectionOpportunities: [
+        {
+          name: "Paul McKellar",
+          opportunityId: "opp-paul",
+          mainText: longSummary,
+          profileUrl: "https://index.network/u/paul",
+          acceptUrl: "https://protocol.index.network/c/paul",
+          feedCategory: "connection",
+        },
+      ],
+    });
+
+    expect(body).toContain("could make for a useful conversation. [Say hi]");
+    expect(body).not.toContain("…");
+  });
+
   test("prefixes the linked name when presenter summary omits it", () => {
     const { body } = composeDailyBrief({
       ...baseContext,

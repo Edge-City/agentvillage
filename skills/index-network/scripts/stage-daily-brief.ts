@@ -17,7 +17,6 @@ import { sanitizeDigestUrls } from "./validate-digest-urls";
 
 const CONNECTION_DIGEST_LIMIT = 1;
 const COMMUNITY_DIGEST_LIMIT = 1;
-const OPPORTUNITY_REASON_MAX_CHARS = 170;
 
 function argValue(args: string[], name: string): string | undefined {
   const idx = args.indexOf(name);
@@ -57,13 +56,6 @@ function firstName(name: string): string {
   return name.trim().split(/\s+/)[0] || name;
 }
 
-function truncateAtWord(text: string, maxChars: number): string {
-  if (text.length <= maxChars) return text;
-  const slice = text.slice(0, maxChars + 1);
-  const boundary = slice.lastIndexOf(" ");
-  return `${slice.slice(0, boundary > 80 ? boundary : maxChars).trimEnd()}…`;
-}
-
 function linkifyOpportunityName(text: string, opp: BriefOpportunity): { text: string; includesLabel: boolean } {
   if (!opp.profileUrl) return { text, includesLabel: false };
 
@@ -88,7 +80,7 @@ function opportunityReason(
 ): { text: string; includesLabel: boolean } {
   const text = normalizeOpportunityText(opp.mainText || fallback);
   const firstSentence = text.split(/(?<=[.!?])\s+/)[0]?.trim() ?? text;
-  const reason = truncateAtWord(firstSentence, OPPORTUNITY_REASON_MAX_CHARS).replace(/[,.]$/, "");
+  const reason = firstSentence.replace(/[,.]$/, "");
   return linkifyOpportunityName(reason, opp);
 }
 
