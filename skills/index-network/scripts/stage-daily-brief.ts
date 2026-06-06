@@ -93,6 +93,13 @@ function thirdPersonToTheyClause(text: string, name: string): string {
   if (/^who\s+is\s+/i.test(withoutName)) return withoutName.replace(/^who\s+is\s+/i, "they’re ");
   if (/^who\s+are\s+/i.test(withoutName)) return withoutName.replace(/^who\s+are\s+/i, "they’re ");
   if (/^who\s+has\s+/i.test(withoutName)) return withoutName.replace(/^who\s+has\s+/i, "they have ");
+  const appositive = withoutName.match(/^((?:a|an|the)\s+.+?),\s+(is|are|has|needs|wants|seeks)\s+(.+)$/i);
+  if (appositive) {
+    const descriptor = appositive[1];
+    const verb = appositive[2].toLowerCase();
+    const rest = appositive[3];
+    return `they’re ${descriptor} who ${verb} ${rest}`;
+  }
   if (/^(?:a|an|the)\s+/i.test(withoutName)) return `they’re ${withoutName}`;
   if (/^is\s+/i.test(withoutName)) return withoutName.replace(/^is\s+/i, "they’re ");
   if (/^are\s+/i.test(withoutName)) return withoutName.replace(/^are\s+/i, "they’re ");
