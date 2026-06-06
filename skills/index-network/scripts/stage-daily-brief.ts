@@ -85,9 +85,15 @@ function thirdPersonToTheyClause(text: string, name: string): string {
     .join("|");
   if (!namePattern) return text;
 
-  const withoutName = text.replace(new RegExp(`^(?:${namePattern})\\s+`, "i"), "").trim();
+  const withoutName = text
+    .replace(new RegExp(`^(?:${namePattern})(?:\\s+|[,—–-]\\s*)`, "i"), "")
+    .trim();
   if (withoutName === text) return text;
 
+  if (/^who\s+is\s+/i.test(withoutName)) return withoutName.replace(/^who\s+is\s+/i, "they’re ");
+  if (/^who\s+are\s+/i.test(withoutName)) return withoutName.replace(/^who\s+are\s+/i, "they’re ");
+  if (/^who\s+has\s+/i.test(withoutName)) return withoutName.replace(/^who\s+has\s+/i, "they have ");
+  if (/^(?:a|an|the)\s+/i.test(withoutName)) return `they’re ${withoutName}`;
   if (/^is\s+/i.test(withoutName)) return withoutName.replace(/^is\s+/i, "they’re ");
   if (/^are\s+/i.test(withoutName)) return withoutName.replace(/^are\s+/i, "they’re ");
   if (/^has\s+/i.test(withoutName)) return withoutName.replace(/^has\s+/i, "they have ");

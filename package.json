@@ -1,6 +1,6 @@
 {
   "name": "@edge-city/agentvillage",
-  "version": "0.3.23",
+  "version": "0.3.24",
   "description": "Agent Village workspace and installer for Edge Esmeralda.",
   "license": "MIT",
   "type": "module",
