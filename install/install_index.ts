@@ -28,7 +28,10 @@ const PROTOCOL_MCP_URL =
   process.env.INDEX_MCP_URL?.trim() || (IS_DEV ? DEV_MCP_URL : PROD_MCP_URL);
 
 function readApiKey(): string {
-  const key = readFlag("--index-api-key")?.trim() || process.env.INDEX_API_KEY?.trim();
+  const key =
+    readFlag("--index-api-key")?.trim()
+    || process.env.INDEX_API_KEY?.trim()
+    || readPersistedEnvVar("INDEX_API_KEY");
   if (!key) {
     console.error("error: --index-api-key required (or set INDEX_API_KEY)");
     console.error("usage: bun install/install.ts --index-api-key <KEY> [--dev]");
