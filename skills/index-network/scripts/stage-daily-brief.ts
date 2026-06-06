@@ -64,115 +64,32 @@ function truncateAtWord(text: string, maxChars: number): string {
   return `${slice.slice(0, boundary > 80 ? boundary : maxChars).trimEnd()}…`;
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
+function linkifyOpportunityName(text: string, opp: BriefOpportunity): { text: string; includesLabel: boolean } {
+  if (!opp.profileUrl) return { text, includesLabel: false };
 
-function startsViewerCentered(text: string): boolean {
-  return /^\s*(you|your|you're|you’re|you'll|you’ll|you'd|you’d)\b/i.test(text);
-}
-
-function lowerFirst(value: string): string {
-  return value ? `${value[0].toLowerCase()}${value.slice(1)}` : value;
-}
-
-function normalizeViewerGrammar(text: string): string {
-  return text
-    .replace(/^\s*you\s+is\b/i, "You are")
-    .replace(/\byou\s+is\b/gi, "you are")
-    .replace(/\bthe discoverer's query\b/gi, "this connection")
-    .replace(/\bdiscoverer's query\b/gi, "this connection");
-}
-
-function normalizeTheyAgreement(text: string): string {
-  return text
-    .replace(/\b(and|but)\s+is\b/gi, "$1 are")
-    .replace(/\b(and|but)\s+has\b/gi, "$1 have")
-    .replace(/\b(and|but)\s+he(?:'|’)s\b/gi, "$1 they’re")
-    .replace(/\b(and|but)\s+she(?:'|’)s\b/gi, "$1 they’re")
-    .replace(/\bhe(?:'|’)s\b/gi, "they’re")
-    .replace(/\bshe(?:'|’)s\b/gi, "they’re");
-}
-
-function appositiveDescriptor(descriptor: string): string {
-  const trimmed = descriptor.trim();
-  return /^(?:a|an|the)\s+/i.test(trimmed) ? trimmed : `the ${trimmed}`;
-}
-
-function thirdPersonToTheyClause(text: string, name: string): string {
-  const first = firstName(name);
-  const namePattern = [name, first]
-    .filter(Boolean)
-    .sort((a, b) => b.length - a.length)
-    .map(escapeRegExp)
-    .join("|");
-
-  let remainder = text.trim();
-  let strippedName = false;
-  if (namePattern) {
-    const withoutName = remainder
-      .replace(new RegExp(`^(?:${namePattern})(?:\\s+|[,—–-]\\s*)`, "i"), "")
-      .trim();
-    strippedName = withoutName !== remainder;
-    remainder = withoutName;
+  const label = opportunityLabel(opp);
+  const candidates = [opp.name, firstName(opp.name)].filter(Boolean);
+  for (const candidate of candidates) {
+    const idx = text.indexOf(candidate);
+    if (idx >= 0) {
+      return {
+        text: `${text.slice(0, idx)}${label}${text.slice(idx + candidate.length)}`,
+        includesLabel: true,
+      };
+    }
   }
 
-  if (/^who\s+is\s+/i.test(remainder)) return normalizeTheyAgreement(remainder.replace(/^who\s+is\s+/i, "they’re "));
-  if (/^who\s+are\s+/i.test(remainder)) return normalizeTheyAgreement(remainder.replace(/^who\s+are\s+/i, "they’re "));
-  if (/^who\s+has\s+/i.test(remainder)) return normalizeTheyAgreement(remainder.replace(/^who\s+has\s+/i, "they have "));
-
-  const appositive = remainder.match(/^(.{3,100}?),\s+(is|are|has|needs|wants|seeks)\s+(.+)$/i);
-  if (appositive && !/^(?:this|that|it|they|you|your)\b/i.test(appositive[1])) {
-    const descriptor = appositiveDescriptor(appositive[1]);
-    const verb = appositive[2].toLowerCase();
-    const rest = appositive[3];
-    return normalizeTheyAgreement(`they’re ${descriptor} who ${verb} ${rest}`);
-  }
-
-  if (/^(?:a|an|the)\s+/i.test(remainder)) return normalizeTheyAgreement(`they’re ${remainder}`);
-  if (/^is\s+/i.test(remainder)) return normalizeTheyAgreement(remainder.replace(/^is\s+/i, "they’re "));
-  if (/^are\s+/i.test(remainder)) return normalizeTheyAgreement(remainder.replace(/^are\s+/i, "they’re "));
-  if (/^has\s+/i.test(remainder)) return normalizeTheyAgreement(remainder.replace(/^has\s+/i, "they have "));
-  if (/^needs\s+/i.test(remainder)) return normalizeTheyAgreement(remainder.replace(/^needs\s+/i, "they need "));
-  if (/^wants\s+/i.test(remainder)) return normalizeTheyAgreement(remainder.replace(/^wants\s+/i, "they want "));
-  if (/^seeks\s+/i.test(remainder)) return normalizeTheyAgreement(remainder.replace(/^seeks\s+/i, "they seek "));
-  if (/^would\s+/i.test(remainder)) return normalizeTheyAgreement(`they ${remainder}`);
-
-  return normalizeTheyAgreement(strippedName ? lowerFirst(remainder) : remainder);
+  return { text, includesLabel: false };
 }
 
 function opportunityReason(
   opp: BriefOpportunity,
   fallback: string,
-  kind: "connection" | "community",
 ): { text: string; includesLabel: boolean } {
-  const text = normalizeViewerGrammar(normalizeOpportunityText(opp.mainText || fallback));
+  const text = normalizeOpportunityText(opp.mainText || fallback);
   const firstSentence = text.split(/(?<=[.!?])\s+/)[0]?.trim() ?? text;
-  let reason = firstSentence;
-  let includesLabel = false;
-
-  if (!startsViewerCentered(reason)) {
-    const label = opportunityLabel(opp);
-    const visiblePrefix = kind === "community"
-      ? `You may be able to help ${opp.name}: `
-      : `You might like meeting ${opp.name}: `;
-    const markdownPrefix = kind === "community"
-      ? `You may be able to help ${label}: `
-      : `You might like meeting ${label}: `;
-    const clauseMaxChars = Math.max(80, OPPORTUNITY_REASON_MAX_CHARS - visiblePrefix.length);
-    const clause = truncateAtWord(
-      thirdPersonToTheyClause(reason, opp.name).replace(/[,.]$/, ""),
-      clauseMaxChars,
-    ).replace(/[,.]$/, "");
-    reason = `${markdownPrefix}${clause}`;
-    includesLabel = true;
-    return { text: reason, includesLabel };
-  }
-
-  return {
-    text: truncateAtWord(reason, OPPORTUNITY_REASON_MAX_CHARS).replace(/[,.]$/, ""),
-    includesLabel,
-  };
+  const reason = truncateAtWord(firstSentence, OPPORTUNITY_REASON_MAX_CHARS).replace(/[,.]$/, "");
+  return linkifyOpportunityName(reason, opp);
 }
 
 export function composeDailyBrief(context: DailyBriefContext): { body: string; opportunityIds: string[] } {
@@ -228,7 +145,7 @@ export function composeDailyBrief(context: DailyBriefContext): { body: string; o
     for (const opp of connectionOpportunities) {
       if (opp.opportunityId) opportunityIds.push(opp.opportunityId);
       const action = opp.acceptUrl ? ` [Say hi](${opp.acceptUrl}).` : " Say hi.";
-      const reason = opportunityReason(opp, "Relevant overlap with your current signals.", "connection");
+      const reason = opportunityReason(opp, "Relevant overlap with your current signals.");
       const lineBody = reason.includesLabel ? reason.text : `${opportunityLabel(opp)} — ${reason.text}`;
       lines.push(`- ${opportunityMarker(opp)}${lineBody}.${action}`);
     }
@@ -244,7 +161,7 @@ export function composeDailyBrief(context: DailyBriefContext): { body: string; o
     for (const opp of communityOpportunities) {
       if (opp.opportunityId) opportunityIds.push(opp.opportunityId);
       const action = opp.acceptUrl ? ` Know someone? [Make intro](${opp.acceptUrl}).` : " Know someone? Make intro.";
-      const reason = opportunityReason(opp, "They are looking for a relevant introduction.", "community");
+      const reason = opportunityReason(opp, "They are looking for a relevant introduction.");
       const lineBody = reason.includesLabel ? reason.text : `${opportunityLabel(opp)} — ${reason.text}`;
       lines.push(`- ${opportunityMarker(opp)}${lineBody}.${action}`);
     }
