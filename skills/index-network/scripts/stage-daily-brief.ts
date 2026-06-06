@@ -64,10 +64,72 @@ function truncateAtWord(text: string, maxChars: number): string {
   return `${slice.slice(0, boundary > 80 ? boundary : maxChars).trimEnd()}…`;
 }
 
-function opportunityReason(opp: BriefOpportunity, fallback: string): string {
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function startsViewerCentered(text: string): boolean {
+  return /\b(you|your|you're|you’re|you'll|you’ll|you'd|you’d)\b/i.test(text);
+}
+
+function lowerFirst(value: string): string {
+  return value ? `${value[0].toLowerCase()}${value.slice(1)}` : value;
+}
+
+function thirdPersonToTheyClause(text: string, name: string): string {
+  const first = firstName(name);
+  const namePattern = [name, first]
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length)
+    .map(escapeRegExp)
+    .join("|");
+  if (!namePattern) return text;
+
+  const withoutName = text.replace(new RegExp(`^(?:${namePattern})\\s+`, "i"), "").trim();
+  if (withoutName === text) return text;
+
+  if (/^is\s+/i.test(withoutName)) return withoutName.replace(/^is\s+/i, "they’re ");
+  if (/^are\s+/i.test(withoutName)) return withoutName.replace(/^are\s+/i, "they’re ");
+  if (/^has\s+/i.test(withoutName)) return withoutName.replace(/^has\s+/i, "they have ");
+  if (/^needs\s+/i.test(withoutName)) return withoutName.replace(/^needs\s+/i, "they need ");
+  if (/^wants\s+/i.test(withoutName)) return withoutName.replace(/^wants\s+/i, "they want ");
+  if (/^seeks\s+/i.test(withoutName)) return withoutName.replace(/^seeks\s+/i, "they seek ");
+  if (/^would\s+/i.test(withoutName)) return `they ${withoutName}`;
+  return lowerFirst(withoutName);
+}
+
+function opportunityReason(
+  opp: BriefOpportunity,
+  fallback: string,
+  kind: "connection" | "community",
+): { text: string; includesLabel: boolean } {
   const text = normalizeOpportunityText(opp.mainText || fallback);
   const firstSentence = text.split(/(?<=[.!?])\s+/)[0]?.trim() ?? text;
-  return truncateAtWord(firstSentence, OPPORTUNITY_REASON_MAX_CHARS).replace(/[,.]$/, "");
+  let reason = firstSentence;
+  let includesLabel = false;
+
+  if (!startsViewerCentered(reason)) {
+    const label = opportunityLabel(opp);
+    const visiblePrefix = kind === "community"
+      ? `You may be able to help ${opp.name}: `
+      : `You might like meeting ${opp.name}: `;
+    const markdownPrefix = kind === "community"
+      ? `You may be able to help ${label}: `
+      : `You might like meeting ${label}: `;
+    const clauseMaxChars = Math.max(80, OPPORTUNITY_REASON_MAX_CHARS - visiblePrefix.length);
+    const clause = truncateAtWord(
+      thirdPersonToTheyClause(reason, opp.name).replace(/[,.]$/, ""),
+      clauseMaxChars,
+    ).replace(/[,.]$/, "");
+    reason = `${markdownPrefix}${clause}`;
+    includesLabel = true;
+    return { text: reason, includesLabel };
+  }
+
+  return {
+    text: truncateAtWord(reason, OPPORTUNITY_REASON_MAX_CHARS).replace(/[,.]$/, ""),
+    includesLabel,
+  };
 }
 
 export function composeDailyBrief(context: DailyBriefContext): { body: string; opportunityIds: string[] } {
@@ -123,8 +185,9 @@ export function composeDailyBrief(context: DailyBriefContext): { body: string; o
     for (const opp of connectionOpportunities) {
       if (opp.opportunityId) opportunityIds.push(opp.opportunityId);
       const action = opp.acceptUrl ? ` [Say hi](${opp.acceptUrl}).` : " Say hi.";
-      const reason = opportunityReason(opp, "Relevant overlap with your current signals.");
-      lines.push(`- ${opportunityMarker(opp)}${opportunityLabel(opp)} — ${reason}.${action}`);
+      const reason = opportunityReason(opp, "Relevant overlap with your current signals.", "connection");
+      const lineBody = reason.includesLabel ? reason.text : `${opportunityLabel(opp)} — ${reason.text}`;
+      lines.push(`- ${opportunityMarker(opp)}${lineBody}.${action}`);
     }
     lines.push("");
     hasVerifiedContent = true;
@@ -138,8 +201,9 @@ export function composeDailyBrief(context: DailyBriefContext): { body: string; o
     for (const opp of communityOpportunities) {
       if (opp.opportunityId) opportunityIds.push(opp.opportunityId);
       const action = opp.acceptUrl ? ` Know someone? [Make intro](${opp.acceptUrl}).` : " Know someone? Make intro.";
-      const reason = opportunityReason(opp, "They are looking for a relevant introduction.");
-      lines.push(`- ${opportunityMarker(opp)}${opportunityLabel(opp)} — ${reason}.${action}`);
+      const reason = opportunityReason(opp, "They are looking for a relevant introduction.", "community");
+      const lineBody = reason.includesLabel ? reason.text : `${opportunityLabel(opp)} — ${reason.text}`;
+      lines.push(`- ${opportunityMarker(opp)}${lineBody}.${action}`);
     }
     lines.push("");
     hasVerifiedContent = true;

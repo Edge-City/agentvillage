@@ -168,6 +168,35 @@ describe("composeDailyBrief", () => {
     expect(body).not.toContain("Helen");
   });
 
+  test("rewrites third-person presenter summaries into warmer viewer-centered digest reasons", () => {
+    const { body } = composeDailyBrief({
+      ...baseContext,
+      opportunities: [
+        {
+          name: "Paul McKellar",
+          opportunityId: "opp-paul",
+          mainText: "Paul McKellar is deeply involved in online trust and AI orchestration, living fully in the AI mania.",
+          profileUrl: "https://index.network/u/paul",
+          acceptUrl: "https://protocol.index.network/c/paul",
+          feedCategory: "connection",
+        },
+      ],
+      connectionOpportunities: [
+        {
+          name: "Paul McKellar",
+          opportunityId: "opp-paul",
+          mainText: "Paul McKellar is deeply involved in online trust and AI orchestration, living fully in the AI mania.",
+          profileUrl: "https://index.network/u/paul",
+          acceptUrl: "https://protocol.index.network/c/paul",
+          feedCategory: "connection",
+        },
+      ],
+    });
+
+    expect(body).toContain("You might like meeting [Paul McKellar](https://index.network/u/paul): they’re deeply involved in online trust and AI orchestration");
+    expect(body).not.toContain("[Paul McKellar](https://index.network/u/paul) — Paul McKellar is deeply involved");
+  });
+
   test("sorts opportunities by confidence descending before applying limit", () => {
     // 4 opportunities, all with confidence. Person 4 has highest, Person 1 lowest.
     const opportunities = Array.from({ length: 4 }, (_, idx) => ({
