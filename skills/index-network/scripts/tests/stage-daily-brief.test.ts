@@ -222,8 +222,38 @@ describe("composeDailyBrief", () => {
       ],
     });
 
-    expect(body).toContain("You might like meeting [Paul McKellar](https://index.network/u/paul): they’re an experienced founder and investor");
+    expect(body).toContain("You might like meeting [Paul McKellar](https://index.network/u/paul): they’re an experienced founder and investor who is keenly interested in connecting with creative builders");
     expect(body).not.toContain("mcKellar");
+    expect(body).not.toContain(", is keenly interested");
+  });
+
+  test("rewrites appositive summaries with following verbs into grammatical clauses", () => {
+    const { body } = composeDailyBrief({
+      ...baseContext,
+      opportunities: [
+        {
+          name: "Paul McKellar",
+          opportunityId: "opp-paul",
+          mainText: "Paul McKellar, an experienced founder and angel investor, is actively seeking creative builders with skills in art, craft, design, tech, and software.",
+          profileUrl: "https://index.network/u/paul",
+          acceptUrl: "https://protocol.index.network/c/paul",
+          feedCategory: "connection",
+        },
+      ],
+      connectionOpportunities: [
+        {
+          name: "Paul McKellar",
+          opportunityId: "opp-paul",
+          mainText: "Paul McKellar, an experienced founder and angel investor, is actively seeking creative builders with skills in art, craft, design, tech, and software.",
+          profileUrl: "https://index.network/u/paul",
+          acceptUrl: "https://protocol.index.network/c/paul",
+          feedCategory: "connection",
+        },
+      ],
+    });
+
+    expect(body).toContain("You might like meeting [Paul McKellar](https://index.network/u/paul): they’re an experienced founder and angel investor who is actively seeking creative builders");
+    expect(body).not.toContain("they’re an experienced founder and angel investor, is actively seeking");
   });
 
   test("sorts opportunities by confidence descending before applying limit", () => {
