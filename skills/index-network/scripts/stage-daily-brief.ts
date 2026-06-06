@@ -69,11 +69,34 @@ function escapeRegExp(value: string): string {
 }
 
 function startsViewerCentered(text: string): boolean {
-  return /\b(you|your|you're|you’re|you'll|you’ll|you'd|you’d)\b/i.test(text);
+  return /^\s*(you|your|you're|you’re|you'll|you’ll|you'd|you’d)\b/i.test(text);
 }
 
 function lowerFirst(value: string): string {
   return value ? `${value[0].toLowerCase()}${value.slice(1)}` : value;
+}
+
+function normalizeViewerGrammar(text: string): string {
+  return text
+    .replace(/^\s*you\s+is\b/i, "You are")
+    .replace(/\byou\s+is\b/gi, "you are")
+    .replace(/\bthe discoverer's query\b/gi, "this connection")
+    .replace(/\bdiscoverer's query\b/gi, "this connection");
+}
+
+function normalizeTheyAgreement(text: string): string {
+  return text
+    .replace(/\b(and|but)\s+is\b/gi, "$1 are")
+    .replace(/\b(and|but)\s+has\b/gi, "$1 have")
+    .replace(/\b(and|but)\s+he(?:'|’)s\b/gi, "$1 they’re")
+    .replace(/\b(and|but)\s+she(?:'|’)s\b/gi, "$1 they’re")
+    .replace(/\bhe(?:'|’)s\b/gi, "they’re")
+    .replace(/\bshe(?:'|’)s\b/gi, "they’re");
+}
+
+function appositiveDescriptor(descriptor: string): string {
+  const trimmed = descriptor.trim();
+  return /^(?:a|an|the)\s+/i.test(trimmed) ? trimmed : `the ${trimmed}`;
 }
 
 function thirdPersonToTheyClause(text: string, name: string): string {
@@ -83,32 +106,39 @@ function thirdPersonToTheyClause(text: string, name: string): string {
     .sort((a, b) => b.length - a.length)
     .map(escapeRegExp)
     .join("|");
-  if (!namePattern) return text;
 
-  const withoutName = text
-    .replace(new RegExp(`^(?:${namePattern})(?:\\s+|[,—–-]\\s*)`, "i"), "")
-    .trim();
-  if (withoutName === text) return text;
+  let remainder = text.trim();
+  let strippedName = false;
+  if (namePattern) {
+    const withoutName = remainder
+      .replace(new RegExp(`^(?:${namePattern})(?:\\s+|[,—–-]\\s*)`, "i"), "")
+      .trim();
+    strippedName = withoutName !== remainder;
+    remainder = withoutName;
+  }
 
-  if (/^who\s+is\s+/i.test(withoutName)) return withoutName.replace(/^who\s+is\s+/i, "they’re ");
-  if (/^who\s+are\s+/i.test(withoutName)) return withoutName.replace(/^who\s+are\s+/i, "they’re ");
-  if (/^who\s+has\s+/i.test(withoutName)) return withoutName.replace(/^who\s+has\s+/i, "they have ");
-  const appositive = withoutName.match(/^((?:a|an|the)\s+.+?),\s+(is|are|has|needs|wants|seeks)\s+(.+)$/i);
-  if (appositive) {
-    const descriptor = appositive[1];
+  if (/^who\s+is\s+/i.test(remainder)) return normalizeTheyAgreement(remainder.replace(/^who\s+is\s+/i, "they’re "));
+  if (/^who\s+are\s+/i.test(remainder)) return normalizeTheyAgreement(remainder.replace(/^who\s+are\s+/i, "they’re "));
+  if (/^who\s+has\s+/i.test(remainder)) return normalizeTheyAgreement(remainder.replace(/^who\s+has\s+/i, "they have "));
+
+  const appositive = remainder.match(/^(.{3,100}?),\s+(is|are|has|needs|wants|seeks)\s+(.+)$/i);
+  if (appositive && !/^(?:this|that|it|they|you|your)\b/i.test(appositive[1])) {
+    const descriptor = appositiveDescriptor(appositive[1]);
     const verb = appositive[2].toLowerCase();
     const rest = appositive[3];
-    return `they’re ${descriptor} who ${verb} ${rest}`;
+    return normalizeTheyAgreement(`they’re ${descriptor} who ${verb} ${rest}`);
   }
-  if (/^(?:a|an|the)\s+/i.test(withoutName)) return `they’re ${withoutName}`;
-  if (/^is\s+/i.test(withoutName)) return withoutName.replace(/^is\s+/i, "they’re ");
-  if (/^are\s+/i.test(withoutName)) return withoutName.replace(/^are\s+/i, "they’re ");
-  if (/^has\s+/i.test(withoutName)) return withoutName.replace(/^has\s+/i, "they have ");
-  if (/^needs\s+/i.test(withoutName)) return withoutName.replace(/^needs\s+/i, "they need ");
-  if (/^wants\s+/i.test(withoutName)) return withoutName.replace(/^wants\s+/i, "they want ");
-  if (/^seeks\s+/i.test(withoutName)) return withoutName.replace(/^seeks\s+/i, "they seek ");
-  if (/^would\s+/i.test(withoutName)) return `they ${withoutName}`;
-  return lowerFirst(withoutName);
+
+  if (/^(?:a|an|the)\s+/i.test(remainder)) return normalizeTheyAgreement(`they’re ${remainder}`);
+  if (/^is\s+/i.test(remainder)) return normalizeTheyAgreement(remainder.replace(/^is\s+/i, "they’re "));
+  if (/^are\s+/i.test(remainder)) return normalizeTheyAgreement(remainder.replace(/^are\s+/i, "they’re "));
+  if (/^has\s+/i.test(remainder)) return normalizeTheyAgreement(remainder.replace(/^has\s+/i, "they have "));
+  if (/^needs\s+/i.test(remainder)) return normalizeTheyAgreement(remainder.replace(/^needs\s+/i, "they need "));
+  if (/^wants\s+/i.test(remainder)) return normalizeTheyAgreement(remainder.replace(/^wants\s+/i, "they want "));
+  if (/^seeks\s+/i.test(remainder)) return normalizeTheyAgreement(remainder.replace(/^seeks\s+/i, "they seek "));
+  if (/^would\s+/i.test(remainder)) return normalizeTheyAgreement(`they ${remainder}`);
+
+  return normalizeTheyAgreement(strippedName ? lowerFirst(remainder) : remainder);
 }
 
 function opportunityReason(
@@ -116,7 +146,7 @@ function opportunityReason(
   fallback: string,
   kind: "connection" | "community",
 ): { text: string; includesLabel: boolean } {
-  const text = normalizeOpportunityText(opp.mainText || fallback);
+  const text = normalizeViewerGrammar(normalizeOpportunityText(opp.mainText || fallback));
   const firstSentence = text.split(/(?<=[.!?])\s+/)[0]?.trim() ?? text;
   let reason = firstSentence;
   let includesLabel = false;
