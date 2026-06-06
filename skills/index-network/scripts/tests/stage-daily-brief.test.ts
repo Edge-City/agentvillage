@@ -125,12 +125,12 @@ describe("composeDailyBrief", () => {
     expect(body).toContain("[Say hi](https://protocol.index.network/c/abc123)");
   });
 
-  test("renders common digest opportunity reasons as concise user-facing prose", () => {
+  test("renders digest-ready presenter summaries and linkifies the person name", () => {
     const opportunities = [
       {
         name: "Seref Yarar",
         opportunityId: "opp-seref",
-        mainText: "Seref has deep expertise in AI, especially in user profiling and modeling, with arXiv publications on these topics. His work aligns with your interest in advanced AI concepts.",
+        mainText: "You might like meeting Seref because his protocol work overlaps with your interest in advanced AI concepts.",
         profileUrl: "https://index.network/u/11111111-1111-1111-1111-111111111111",
         acceptUrl: "https://protocol.index.network/c/seref",
         feedCategory: "connection",
@@ -139,7 +139,7 @@ describe("composeDailyBrief", () => {
       {
         name: "Seren Sandikci",
         opportunityId: "opp-seren",
-        mainText: "Seren is seeking feedback on protocol design and would benefit from your engineering expertise. You both share an interest in decentralized systems.",
+        mainText: "You might like meeting Seren because she wants protocol design feedback and your engineering expertise is directly relevant.",
         profileUrl: "https://index.network/u/22222222-2222-2222-2222-222222222222",
         acceptUrl: "https://protocol.index.network/c/seren",
         feedCategory: "connection",
@@ -148,7 +148,7 @@ describe("composeDailyBrief", () => {
       {
         name: "Helen Huang",
         opportunityId: "opp-helen",
-        mainText: "Helen is building a portable digital identity system through gameplay and is seeking research collaboration. Your background in back-end development could be a great fit.",
+        mainText: "You might like meeting Helen because her digital identity work overlaps with your backend development background.",
         profileUrl: "https://index.network/u/33333333-3333-3333-3333-333333333333",
         acceptUrl: "https://protocol.index.network/c/helen",
         feedCategory: "connection",
@@ -162,20 +162,20 @@ describe("composeDailyBrief", () => {
       connectionOpportunities: opportunities,
     });
 
-    // Seren has the highest confidence (91) — she should be the one picked
-    expect(body).toContain("You might like meeting [Seren Sandikci](https://index.network/u/22222222-2222-2222-2222-222222222222): they’re seeking feedback on protocol design and would benefit from your engineering expertise. [Say hi]");
+    // Seren has the highest confidence (91) — she should be the one picked.
+    expect(body).toContain("You might like meeting [Seren Sandikci](https://index.network/u/22222222-2222-2222-2222-222222222222) because she wants protocol design feedback and your engineering expertise is directly relevant. [Say hi]");
     expect(body).not.toContain("Seref");
     expect(body).not.toContain("Helen");
   });
 
-  test("rewrites third-person presenter summaries into warmer viewer-centered digest reasons", () => {
+  test("prefixes the linked name when presenter summary omits it", () => {
     const { body } = composeDailyBrief({
       ...baseContext,
       opportunities: [
         {
           name: "Paul McKellar",
           opportunityId: "opp-paul",
-          mainText: "Paul McKellar is deeply involved in online trust and AI orchestration, living fully in the AI mania.",
+          mainText: "Worth meeting because his online trust work overlaps with your AI orchestration interests.",
           profileUrl: "https://index.network/u/paul",
           acceptUrl: "https://protocol.index.network/c/paul",
           feedCategory: "connection",
@@ -185,7 +185,7 @@ describe("composeDailyBrief", () => {
         {
           name: "Paul McKellar",
           opportunityId: "opp-paul",
-          mainText: "Paul McKellar is deeply involved in online trust and AI orchestration, living fully in the AI mania.",
+          mainText: "Worth meeting because his online trust work overlaps with your AI orchestration interests.",
           profileUrl: "https://index.network/u/paul",
           acceptUrl: "https://protocol.index.network/c/paul",
           feedCategory: "connection",
@@ -193,121 +193,7 @@ describe("composeDailyBrief", () => {
       ],
     });
 
-    expect(body).toContain("You might like meeting [Paul McKellar](https://index.network/u/paul): they’re deeply involved in online trust and AI orchestration");
-    expect(body).not.toContain("[Paul McKellar](https://index.network/u/paul) — Paul McKellar is deeply involved");
-  });
-
-  test("preserves full names when rewriting appositive presenter summaries", () => {
-    const { body } = composeDailyBrief({
-      ...baseContext,
-      opportunities: [
-        {
-          name: "Paul McKellar",
-          opportunityId: "opp-paul",
-          mainText: "Paul McKellar, an experienced founder and investor, is keenly interested in connecting with creative builders in tech and software.",
-          profileUrl: "https://index.network/u/paul",
-          acceptUrl: "https://protocol.index.network/c/paul",
-          feedCategory: "connection",
-        },
-      ],
-      connectionOpportunities: [
-        {
-          name: "Paul McKellar",
-          opportunityId: "opp-paul",
-          mainText: "Paul McKellar, an experienced founder and investor, is keenly interested in connecting with creative builders in tech and software.",
-          profileUrl: "https://index.network/u/paul",
-          acceptUrl: "https://protocol.index.network/c/paul",
-          feedCategory: "connection",
-        },
-      ],
-    });
-
-    expect(body).toContain("You might like meeting [Paul McKellar](https://index.network/u/paul): they’re an experienced founder and investor who is keenly interested in connecting with creative builders");
-    expect(body).not.toContain("mcKellar");
-    expect(body).not.toContain(", is keenly interested");
-  });
-
-  test("rewrites appositive summaries with following verbs into grammatical clauses", () => {
-    const { body } = composeDailyBrief({
-      ...baseContext,
-      opportunities: [
-        {
-          name: "Paul McKellar",
-          opportunityId: "opp-paul",
-          mainText: "Paul McKellar, an experienced founder and angel investor, is actively seeking creative builders with skills in art, craft, design, tech, and software.",
-          profileUrl: "https://index.network/u/paul",
-          acceptUrl: "https://protocol.index.network/c/paul",
-          feedCategory: "connection",
-        },
-      ],
-      connectionOpportunities: [
-        {
-          name: "Paul McKellar",
-          opportunityId: "opp-paul",
-          mainText: "Paul McKellar, an experienced founder and angel investor, is actively seeking creative builders with skills in art, craft, design, tech, and software.",
-          profileUrl: "https://index.network/u/paul",
-          acceptUrl: "https://protocol.index.network/c/paul",
-          feedCategory: "connection",
-        },
-      ],
-    });
-
-    expect(body).toContain("You might like meeting [Paul McKellar](https://index.network/u/paul): they’re an experienced founder and angel investor who is actively seeking creative builders");
-    expect(body).not.toContain("they’re an experienced founder and angel investor, is actively seeking");
-  });
-
-  test("repairs fleet-observed digest grammar issues", () => {
-    const samples = [
-      {
-        name: "Amer Ameen",
-        text: "Amer Ameen is building 'Pluto' in Toronto as a 'fourth space,' directly inspired by Edge Esmeralda, and is developing co-living hubs.",
-        expected: "they’re building 'Pluto' in Toronto as a 'fourth space,' directly inspired by Edge Esmeralda, and are developing",
-        forbidden: "and is developing",
-      },
-      {
-        name: "Scott Brylow",
-        text: "Scott Brylow has extensive experience in cutting-edge hardware, including cameras for Mars missions, and is keenly interested in future tools.",
-        expected: "they have extensive experience in cutting-edge hardware, including cameras for Mars missions, and are keenly interested",
-        forbidden: "and is keenly interested",
-      },
-      {
-        name: "Scott Brylow",
-        text: "Scott Brylow is a retired engineer with deep experience in spaceflight imaging and early web/VR, and he's actively looking to connect with builders.",
-        expected: "they’re a retired engineer with deep experience in spaceflight imaging and early web/VR, and they’re actively looking",
-        forbidden: "and he's actively looking",
-      },
-      {
-        name: "Seref Yarar",
-        text: "co-founder of Index Network, is deeply involved in Web3, decentralized technology, and programmable discovery protocols.",
-        expected: "they’re the co-founder of Index Network who is deeply involved in Web3",
-        forbidden: "co-founder of Index Network, is deeply involved",
-      },
-      {
-        name: "Athena Aktipis",
-        text: "you is an AI researcher whose primary focus areas directly align with the discoverer's query.",
-        expected: "You are an AI researcher whose primary focus areas directly align with this connection",
-        forbidden: "you is",
-      },
-    ];
-
-    for (const sample of samples) {
-      const opp = {
-        name: sample.name,
-        opportunityId: `opp-${sample.name}`,
-        mainText: sample.text,
-        profileUrl: `https://index.network/u/${encodeURIComponent(sample.name)}`,
-        acceptUrl: "https://protocol.index.network/c/sample",
-        feedCategory: "connection",
-      };
-      const { body } = composeDailyBrief({
-        ...baseContext,
-        opportunities: [opp],
-        connectionOpportunities: [opp],
-      });
-      expect(body).toContain(sample.expected);
-      expect(body).not.toContain(sample.forbidden);
-      expect(body).not.toContain("discoverer's query");
-    }
+    expect(body).toContain("[Paul McKellar](https://index.network/u/paul) — Worth meeting because his online trust work overlaps with your AI orchestration interests. [Say hi]");
   });
 
   test("sorts opportunities by confidence descending before applying limit", () => {
