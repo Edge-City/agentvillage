@@ -6,8 +6,8 @@
  *   - Installs the digest crons: prepare (`Edge — digest prepare`, 02:00) and
  *     send (`Edge — daily digest`, 08:00) — both host-local; times overridable
  *     via --digest-prepare-cron / --digest-send-cron (or DIGEST_PREPARE_CRON /
- *     DIGEST_SEND_CRON). Both crons are created **paused** until someone runs
- *     `hermes cron resume <id>`.
+ *     DIGEST_SEND_CRON). New installs create enabled crons; reconcile updates
+ *     prompt bodies only and preserves each job's schedule and pause state.
  */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -105,39 +105,20 @@ function removeEdgeCronJobs(env: NodeJS.ProcessEnv): void {
   }
 }
 
-/**
- * Pause a freshly-created cron by its human-friendly name. Resolves the job id
- * from `$HERMES_HOME/cron/jobs.json` (the same store `removeEdgeCronJobs` reads)
- * and runs `hermes cron pause <id>`. Best-effort: a missing store, unreadable
- * JSON, or missing job only warns — the cron is left scheduled rather than
- * failing the install.
- */
-function pauseCronByName(name: string, env: NodeJS.ProcessEnv): void {
+interface StoredCronJob {
+  id: string;
+  name: string;
+  prompt?: string;
+}
+
+function readCronJobs(): StoredCronJob[] {
   const jobsPath = join(hermesHome(), "cron", "jobs.json");
-  if (!existsSync(jobsPath)) {
-    console.warn(`  warning: cron jobs store missing — could not pause "${name}"`);
-    return;
-  }
-
-  let parsed: { jobs?: Array<{ id: string; name: string }> };
+  if (!existsSync(jobsPath)) return [];
   try {
-    parsed = JSON.parse(readFileSync(jobsPath, "utf8"));
+    const parsed = JSON.parse(readFileSync(jobsPath, "utf8")) as { jobs?: StoredCronJob[] };
+    return parsed.jobs ?? [];
   } catch {
-    console.warn(`  warning: could not read cron jobs store — could not pause "${name}"`);
-    return;
-  }
-
-  const job = (parsed.jobs ?? []).find((entry) => entry.name === name);
-  if (!job) {
-    console.warn(`  warning: could not find cron "${name}" to pause`);
-    return;
-  }
-
-  try {
-    execFileSync(hermesBin(), ["cron", "pause", job.id], { stdio: "ignore", env });
-    console.log(`→ paused cron "${name}"`);
-  } catch {
-    console.warn(`  warning: could not pause cron "${name}"`);
+    return [];
   }
 }
 
@@ -154,19 +135,9 @@ export interface DigestCronSpec {
   overrideFlag: string;
   /** Env var that overrides `schedule` at install time (flag wins). */
   overrideEnv: string;
-  /**
-   * When true, the cron is created and then immediately paused via
-   * `hermes cron pause <id>`, so it stays installed but is never scheduled
-   * until someone runs `hermes cron resume <id>`.
-   */
-  paused: boolean;
 }
 
-/**
- * The morning digest runs as two fixed-time dispatches: a prepare pass that
- * composes the brief and stages it on the Kanban board (no delivery), and a
- * send pass that delivers the staged brief. Both are installed paused.
- */
+/** Prepare (02:00, no deliver) then send (08:00, deliver telegram). */
 export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
   {
     schedule: "0 2 * * *",
@@ -175,7 +146,6 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
     deliver: false,
     overrideFlag: "--digest-prepare-cron",
     overrideEnv: "DIGEST_PREPARE_CRON",
-    paused: true,
   },
   {
     schedule: "0 8 * * *",
@@ -184,7 +154,6 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
     deliver: true,
     overrideFlag: "--digest-send-cron",
     overrideEnv: "DIGEST_SEND_CRON",
-    paused: true,
   },
 ];
 
@@ -194,6 +163,11 @@ export function cronCreateArgs(spec: DigestCronSpec, promptBody: string, home: s
   if (spec.deliver) args.push("--deliver", "telegram");
   args.push("--workdir", home);
   return args;
+}
+
+/** Build the argv for `hermes cron edit` — prompt only; schedule/pause unchanged. */
+export function cronEditPromptArgs(jobId: string, promptBody: string): string[] {
+  return ["cron", "edit", jobId, "--prompt", promptBody];
 }
 
 /** True for a standard 5-field cron expression (minute hour day-of-month month day-of-week). */
@@ -251,7 +225,18 @@ export function reconcileDigestCronJobs(env: NodeJS.ProcessEnv = hermesExecEnv()
     return;
   }
 
-  removeEdgeCronJobs(env);
+  const existing = readCronJobs();
+  const specNames = new Set(DIGEST_CRON_SPECS.map((s) => s.name));
+
+  for (const job of existing) {
+    if (!job.name.startsWith(CRON_NAME_PREFIX) || specNames.has(job.name)) continue;
+    try {
+      execFileSync(bin, ["cron", "remove", job.id], { stdio: "ignore", env });
+      console.log(`→ removed retired cron ${job.name}`);
+    } catch {
+      console.warn(`  warning: could not remove cron ${job.name}`);
+    }
+  }
 
   // Ensure the Kanban store exists (idempotent; prepare/send stage tasks on it).
   try {
@@ -267,11 +252,29 @@ export function reconcileDigestCronJobs(env: NodeJS.ProcessEnv = hermesExecEnv()
       process.exit(1);
     }
     const promptBody = readFileSync(promptPath, "utf8");
+    const job = existing.find((entry) => entry.name === spec.name);
+
+    if (job) {
+      if (job.prompt === promptBody) {
+        console.log(`→ cron "${spec.name}" prompt up to date`);
+        continue;
+      }
+      console.log(`→ updating cron "${spec.name}" prompt`);
+      try {
+        execFileSync(bin, cronEditPromptArgs(job.id, promptBody), {
+          stdio: ["ignore", "ignore", "inherit"],
+          env,
+        });
+      } catch {
+        console.warn(`  warning: could not update cron "${spec.name}" — gateway may still run`);
+      }
+      continue;
+    }
+
     const schedule = resolveCronSchedule(spec);
     const resolved = { ...spec, schedule };
     const suffix = schedule === spec.schedule ? "" : " [overridden]";
-    const pausedNote = spec.paused ? " [paused]" : "";
-    console.log(`→ installing cron "${spec.name}" (${schedule})${suffix}${pausedNote}`);
+    console.log(`→ installing cron "${spec.name}" (${schedule})${suffix}`);
     try {
       execFileSync(bin, cronCreateArgs(resolved, promptBody, home), {
         stdio: ["ignore", "ignore", "inherit"],
@@ -279,10 +282,7 @@ export function reconcileDigestCronJobs(env: NodeJS.ProcessEnv = hermesExecEnv()
       });
     } catch {
       console.warn(`  warning: could not install cron "${spec.name}" — gateway may still run`);
-      continue;
     }
-
-    if (spec.paused) pauseCronByName(spec.name, env);
   }
 }
 

@@ -4,6 +4,7 @@ import {
   DIGEST_CRON_SPECS,
   buildIndexMcpHeaders,
   cronCreateArgs,
+  cronEditPromptArgs,
   isValidCron,
   resolveCronSchedule,
 } from "../install_index";
@@ -21,12 +22,6 @@ test("two digest cron specs: prepare (02:00, no deliver) then send (08:00, deliv
   expect(send.deliver).toBe(true);
 });
 
-test("both digest crons are created paused", () => {
-  const [prepare, send] = DIGEST_CRON_SPECS;
-  expect(prepare.paused).toBe(true);
-  expect(send.paused).toBe(true);
-});
-
 test("prepare cron args omit --deliver; send cron args include --deliver telegram", () => {
   const home = "/home/x/.hermes";
   const [prepare, send] = DIGEST_CRON_SPECS;
@@ -39,6 +34,12 @@ test("prepare cron args omit --deliver; send cron args include --deliver telegra
   expect(cronCreateArgs(send, "SEND_BODY", home)).toEqual([
     "cron", "create", "0 8 * * *", "SEND_BODY",
     "--name", "Edge — daily digest", "--deliver", "telegram", "--workdir", home,
+  ]);
+});
+
+test("cronEditPromptArgs updates prompt only", () => {
+  expect(cronEditPromptArgs("abc123", "NEW_BODY")).toEqual([
+    "cron", "edit", "abc123", "--prompt", "NEW_BODY",
   ]);
 });
 
