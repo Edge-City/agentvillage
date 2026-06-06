@@ -197,6 +197,35 @@ describe("composeDailyBrief", () => {
     expect(body).not.toContain("[Paul McKellar](https://index.network/u/paul) — Paul McKellar is deeply involved");
   });
 
+  test("preserves full names when rewriting appositive presenter summaries", () => {
+    const { body } = composeDailyBrief({
+      ...baseContext,
+      opportunities: [
+        {
+          name: "Paul McKellar",
+          opportunityId: "opp-paul",
+          mainText: "Paul McKellar, an experienced founder and investor, is keenly interested in connecting with creative builders in tech and software.",
+          profileUrl: "https://index.network/u/paul",
+          acceptUrl: "https://protocol.index.network/c/paul",
+          feedCategory: "connection",
+        },
+      ],
+      connectionOpportunities: [
+        {
+          name: "Paul McKellar",
+          opportunityId: "opp-paul",
+          mainText: "Paul McKellar, an experienced founder and investor, is keenly interested in connecting with creative builders in tech and software.",
+          profileUrl: "https://index.network/u/paul",
+          acceptUrl: "https://protocol.index.network/c/paul",
+          feedCategory: "connection",
+        },
+      ],
+    });
+
+    expect(body).toContain("You might like meeting [Paul McKellar](https://index.network/u/paul): they’re an experienced founder and investor");
+    expect(body).not.toContain("mcKellar");
+  });
+
   test("sorts opportunities by confidence descending before applying limit", () => {
     // 4 opportunities, all with confidence. Person 4 has highest, Person 1 lowest.
     const opportunities = Array.from({ length: 4 }, (_, idx) => ({
