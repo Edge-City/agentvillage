@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  buildDailyBriefContext,
   extractInterestTags,
   filterDedupedOpportunities,
   formatPacificTime,
@@ -117,6 +118,23 @@ describe("build-daily-brief-context helpers", () => {
     ]);
   });
 
+  test("parseOpportunityTranscript tolerates malformed MCP wrappers with escaped message JSON", () => {
+    const malformed = `{"success":true,"data":{"message":"You have 1 opportunity.\\n\\n1. Athena Aktipis\\n   <!-- digest-opportunity:id=opp-athena -->\\n   Athena is seeking collaboration.\\n   status: draft\\n   profileUrl: https://index.network/u/athena\\n   acceptUrl: https://protocol.index.network/c/athena\\n   feedCategory: connection\\n   confidence: 85"}},path:`;
+
+    expect(parseOpportunityTranscript(malformed)).toEqual([
+      {
+        name: "Athena Aktipis",
+        opportunityId: "opp-athena",
+        mainText: "Athena is seeking collaboration.",
+        status: "draft",
+        profileUrl: "https://index.network/u/athena",
+        acceptUrl: "https://protocol.index.network/c/athena",
+        feedCategory: "connection",
+        confidence: 85,
+      },
+    ]);
+  });
+
   test("parseOpportunityTranscript parses confidence as a number and ignores invalid values", () => {
     const parsed = parseOpportunityTranscript(`1. Alice
    <!-- digest-opportunity:id=alice -->
@@ -165,5 +183,59 @@ describe("build-daily-brief-context helpers", () => {
       startIso: "2026-12-04T08:00:00.000Z",
       endIso: "2026-12-05T08:00:00.000Z",
     });
+  });
+
+  test("buildDailyBriefContext falls back to NWS when Open-Meteo rate limits", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalEdgeosKey = process.env.EDGEOS_API_KEY;
+    const originalControlPlaneUrl = process.env.EDGE_AGENT_CONTROL_PLANE_URL;
+    const originalAdminToken = process.env.ADMIN_TOKEN;
+    delete process.env.EDGEOS_API_KEY;
+    delete process.env.EDGE_AGENT_CONTROL_PLANE_URL;
+    delete process.env.ADMIN_TOKEN;
+
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("https://api.open-meteo.com/")) {
+        return new Response("rate limited", { status: 429, statusText: "Too Many Requests" });
+      }
+      if (url.startsWith("https://api.weather.gov/points/")) {
+        return Response.json({ properties: { forecast: "https://api.weather.gov/gridpoints/MTR/84,106/forecast" } });
+      }
+      if (url === "https://api.weather.gov/gridpoints/MTR/84,106/forecast") {
+        return Response.json({
+          properties: {
+            periods: [
+              {
+                startTime: "2026-06-06T06:00:00-07:00",
+                isDaytime: true,
+                temperature: 82,
+                shortForecast: "Mostly Cloudy",
+              },
+            ],
+          },
+        });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    try {
+      const context = await buildDailyBriefContext({ date: "2026-06-06", userFiles: [] });
+      expect(context.weather).toEqual({
+        forecast: "Expect mostly cloudy and a high of 82°F",
+        emoji: "⛅",
+        source: "nws",
+      });
+      expect(context.diagnostics.weatherSource).toBe("nws");
+      expect(context.diagnostics.warnings).toContain("open-meteo weather unavailable: 429 Too Many Requests");
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalEdgeosKey === undefined) delete process.env.EDGEOS_API_KEY;
+      else process.env.EDGEOS_API_KEY = originalEdgeosKey;
+      if (originalControlPlaneUrl === undefined) delete process.env.EDGE_AGENT_CONTROL_PLANE_URL;
+      else process.env.EDGE_AGENT_CONTROL_PLANE_URL = originalControlPlaneUrl;
+      if (originalAdminToken === undefined) delete process.env.ADMIN_TOKEN;
+      else process.env.ADMIN_TOKEN = originalAdminToken;
+    }
   });
 });

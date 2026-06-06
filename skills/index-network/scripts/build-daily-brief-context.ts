@@ -62,7 +62,7 @@ const TAG_KEYWORDS: Record<string, string[]> = {
 export interface DailyBriefWeather {
   forecast: string;
   emoji: string;
-  source: "open-meteo" | "unavailable";
+  source: "open-meteo" | "nws" | "unavailable";
 }
 
 export interface BriefAnnouncement {
@@ -112,7 +112,7 @@ export interface DailyBriefContext {
     calendarSource: "edgeos" | "unavailable";
     rsvpSource: "edgeos" | "unavailable";
     opportunitySource: "file" | "unavailable";
-    weatherSource?: "open-meteo" | "unavailable";
+    weatherSource?: "open-meteo" | "nws" | "unavailable";
     warnings: string[];
     interestTags: string[];
   };
@@ -290,6 +290,20 @@ export function selectEvents(events: EdgeEvent[], interestTags: string[]): { hig
   return { highlightedEvents, interestEvents };
 }
 
+function decodeJsonStringLiteral(raw: string): string | null {
+  try {
+    return JSON.parse(`"${raw}"`) as string;
+  } catch {
+    return null;
+  }
+}
+
+function extractMessageFieldFromMalformedJson(text: string): string | null {
+  const match = text.match(/"message"\s*:\s*"((?:\\.|[^"\\])*)"/s);
+  if (!match) return null;
+  return decodeJsonStringLiteral(match[1]);
+}
+
 function unwrapOpportunityTranscript(text: string): string {
   const trimmed = text.trim();
   if (!trimmed.startsWith("{")) return text;
@@ -305,7 +319,7 @@ function unwrapOpportunityTranscript(text: string): string {
         : "";
     return message || text;
   } catch {
-    return text;
+    return extractMessageFieldFromMalformedJson(trimmed) ?? text;
   }
 }
 
@@ -381,33 +395,80 @@ async function readDeliveredIds(stateFile: string, date: string): Promise<Set<st
   return new Set();
 }
 
+async function fetchOpenMeteoWeather(date: string): Promise<DailyBriefWeather> {
+  const params = new URLSearchParams({
+    latitude: String(HEALDSBURG_LAT),
+    longitude: String(HEALDSBURG_LON),
+    daily: "temperature_2m_max,weather_code",
+    temperature_unit: "fahrenheit",
+    timezone: PACIFIC_TZ,
+    start_date: date,
+    end_date: date,
+  });
+  const res = await fetch(`https://api.open-meteo.com/v1/forecast?${params.toString()}`);
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  const data = (await res.json()) as {
+    daily?: { temperature_2m_max?: number[]; weather_code?: number[] };
+  };
+  const high = data.daily?.temperature_2m_max?.[0];
+  const code = data.daily?.weather_code?.[0];
+  if (high == null || code == null) throw new Error("missing daily forecast data");
+  const mapping = WEATHER_CODE_MAP[code] ?? { description: "mixed conditions", emoji: "🌤️" };
+  return {
+    forecast: `Expect ${mapping.description} and a high of ${Math.round(high)}°F`,
+    emoji: mapping.emoji,
+    source: "open-meteo",
+  };
+}
+
+function nwsEmoji(shortForecast: string): string {
+  const text = shortForecast.toLowerCase();
+  if (text.includes("thunder")) return "⛈️";
+  if (text.includes("rain") || text.includes("shower")) return "🌦️";
+  if (text.includes("snow")) return "❄️";
+  if (text.includes("fog")) return "🌫️";
+  if (text.includes("sunny") || text.includes("clear")) return "☀️";
+  if (text.includes("cloud")) return text.includes("partly") || text.includes("mostly") ? "⛅" : "☁️";
+  return "🌤️";
+}
+
+async function fetchNwsWeather(date: string): Promise<DailyBriefWeather> {
+  const headers = { "User-Agent": "AgentVillage daily digest (https://github.com/Edge-City/agentvillage)" };
+  const pointRes = await fetch(`https://api.weather.gov/points/${HEALDSBURG_LAT},${HEALDSBURG_LON}`, { headers });
+  if (!pointRes.ok) throw new Error(`${pointRes.status} ${pointRes.statusText}`);
+  const pointData = (await pointRes.json()) as { properties?: { forecast?: string } };
+  if (!pointData.properties?.forecast) throw new Error("missing NWS forecast URL");
+
+  const forecastRes = await fetch(pointData.properties.forecast, { headers });
+  if (!forecastRes.ok) throw new Error(`${forecastRes.status} ${forecastRes.statusText}`);
+  const forecastData = (await forecastRes.json()) as {
+    properties?: {
+      periods?: Array<{ startTime?: string; isDaytime?: boolean; temperature?: number; shortForecast?: string }>;
+    };
+  };
+  const periods = forecastData.properties?.periods ?? [];
+  const period = periods.find((p) => p.isDaytime === true && p.startTime && pacificDate(new Date(p.startTime)) === date)
+    ?? periods.find((p) => p.isDaytime === true);
+  if (!period?.shortForecast || period.temperature == null) throw new Error("missing NWS daytime forecast");
+  const description = period.shortForecast.trim().toLowerCase();
+  return {
+    forecast: `Expect ${description} and a high of ${Math.round(period.temperature)}°F`,
+    emoji: nwsEmoji(period.shortForecast),
+    source: "nws",
+  };
+}
+
 async function fetchWeather(date: string, warnings: string[]): Promise<DailyBriefWeather> {
   try {
-    const params = new URLSearchParams({
-      latitude: String(HEALDSBURG_LAT),
-      longitude: String(HEALDSBURG_LON),
-      daily: "temperature_2m_max,weather_code",
-      temperature_unit: "fahrenheit",
-      timezone: PACIFIC_TZ,
-      start_date: date,
-      end_date: date,
-    });
-    const res = await fetch(`https://api.open-meteo.com/v1/forecast?${params.toString()}`);
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-    const data = (await res.json()) as {
-      daily?: { temperature_2m_max?: number[]; weather_code?: number[] };
-    };
-    const high = data.daily?.temperature_2m_max?.[0];
-    const code = data.daily?.weather_code?.[0];
-    if (high == null || code == null) throw new Error("missing daily forecast data");
-    const mapping = WEATHER_CODE_MAP[code] ?? { description: "mixed conditions", emoji: "🌤️" };
-    return {
-      forecast: `Expect ${mapping.description} and a high of ${Math.round(high)}°F`,
-      emoji: mapping.emoji,
-      source: "open-meteo",
-    };
+    return await fetchOpenMeteoWeather(date);
   } catch (err) {
-    warnings.push(`weather unavailable: ${err instanceof Error ? err.message : String(err)}`);
+    warnings.push(`open-meteo weather unavailable: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  try {
+    return await fetchNwsWeather(date);
+  } catch (err) {
+    warnings.push(`nws weather unavailable: ${err instanceof Error ? err.message : String(err)}`);
     return { forecast: "", emoji: "", source: "unavailable" };
   }
 }
