@@ -163,7 +163,7 @@ describe("composeDailyBrief", () => {
     });
 
     // Seren has the highest confidence (91) — she should be the one picked
-    expect(body).toContain("Seren is seeking feedback on protocol design and would benefit from your engineering expertise. [Say hi]");
+    expect(body).toContain("You might like meeting [Seren Sandikci](https://index.network/u/22222222-2222-2222-2222-222222222222): they’re seeking feedback on protocol design and would benefit from your engineering expertise. [Say hi]");
     expect(body).not.toContain("Seref");
     expect(body).not.toContain("Helen");
   });
@@ -254,6 +254,60 @@ describe("composeDailyBrief", () => {
 
     expect(body).toContain("You might like meeting [Paul McKellar](https://index.network/u/paul): they’re an experienced founder and angel investor who is actively seeking creative builders");
     expect(body).not.toContain("they’re an experienced founder and angel investor, is actively seeking");
+  });
+
+  test("repairs fleet-observed digest grammar issues", () => {
+    const samples = [
+      {
+        name: "Amer Ameen",
+        text: "Amer Ameen is building 'Pluto' in Toronto as a 'fourth space,' directly inspired by Edge Esmeralda, and is developing co-living hubs.",
+        expected: "they’re building 'Pluto' in Toronto as a 'fourth space,' directly inspired by Edge Esmeralda, and are developing",
+        forbidden: "and is developing",
+      },
+      {
+        name: "Scott Brylow",
+        text: "Scott Brylow has extensive experience in cutting-edge hardware, including cameras for Mars missions, and is keenly interested in future tools.",
+        expected: "they have extensive experience in cutting-edge hardware, including cameras for Mars missions, and are keenly interested",
+        forbidden: "and is keenly interested",
+      },
+      {
+        name: "Scott Brylow",
+        text: "Scott Brylow is a retired engineer with deep experience in spaceflight imaging and early web/VR, and he's actively looking to connect with builders.",
+        expected: "they’re a retired engineer with deep experience in spaceflight imaging and early web/VR, and they’re actively looking",
+        forbidden: "and he's actively looking",
+      },
+      {
+        name: "Seref Yarar",
+        text: "co-founder of Index Network, is deeply involved in Web3, decentralized technology, and programmable discovery protocols.",
+        expected: "they’re the co-founder of Index Network who is deeply involved in Web3",
+        forbidden: "co-founder of Index Network, is deeply involved",
+      },
+      {
+        name: "Athena Aktipis",
+        text: "you is an AI researcher whose primary focus areas directly align with the discoverer's query.",
+        expected: "You are an AI researcher whose primary focus areas directly align with this connection",
+        forbidden: "you is",
+      },
+    ];
+
+    for (const sample of samples) {
+      const opp = {
+        name: sample.name,
+        opportunityId: `opp-${sample.name}`,
+        mainText: sample.text,
+        profileUrl: `https://index.network/u/${encodeURIComponent(sample.name)}`,
+        acceptUrl: "https://protocol.index.network/c/sample",
+        feedCategory: "connection",
+      };
+      const { body } = composeDailyBrief({
+        ...baseContext,
+        opportunities: [opp],
+        connectionOpportunities: [opp],
+      });
+      expect(body).toContain(sample.expected);
+      expect(body).not.toContain(sample.forbidden);
+      expect(body).not.toContain("discoverer's query");
+    }
   });
 
   test("sorts opportunities by confidence descending before applying limit", () => {
