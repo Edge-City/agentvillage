@@ -1,7 +1,7 @@
 # Edge Esmeralda 2026 Wiki
 
 Source: https://www.notion.so/edgecity/Edge-Esmeralda-2026-Wiki-317d45cdfc5981d2a571f52b024c5141
-Last indexed: 2026-06-07T18:43:30.426Z
+Last indexed: 2026-06-07T19:49:38.964Z
 
 ---
 
@@ -101,6 +101,8 @@ This wiki has all the important information regarding Edge Esmeralda 2026. If yo
 - Housing: Once you have your ticket, make sure you book accommodation. You can book our discounted rates for Hotel Trio here (https://edgeevents.bed-booking.com/). Browse housing resources here (https://docs.google.com/spreadsheets/d/1U0iLx54TBN7tjhXvhnvnE893EllAfC-fMRxakObB4F0/edit?gid=1200229816#gid=1200229816). 
 - Join our Housing Telegram group: https://t.me/+9XnxQWWwVvo4ZTUx (https://t.me/+9XnxQWWwVvo4ZTUx) to coordinate shared housing and meet other participants. Please read the 'Read This First' channel that is pinned at the top as soon as you enter.
 - Community Calendar: browse all events of Edge Esmeralda 2026 here (https://edgecity.edgeos.world/portal/edge-esmeralda-2026). Once you have a ticket, you’ll be able to create and host your own sessions as well.
+- Public calendar (share with external friends): https://edgecity.edgeos.world/edge-esmeralda-2026/calendar
+- Drive link for all recorded talks: https://drive.google.com/drive/u/4/folders/1lfYKCo9BP5qFPAKjV_0MtuvmCl01CFc1 (https://drive.google.com/drive/u/4/folders/1lfYKCo9BP5qFPAKjV_0MtuvmCl01CFc1)
 - Edge Esmeralda 2026 Blog: (https://edgeesmeralda2026.substack.com/) Search through this if you have further questions!
 - Google Maps List (https://maps.app.goo.gl/Njy5vqkPutL9Ffcv5) of key places in town
 Tickets do not include accommodation; you need to organize your own housing. Here are the main options:
