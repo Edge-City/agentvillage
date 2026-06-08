@@ -64,7 +64,7 @@ If `preview_user_profile` returns `profileRunId` instead of a draft, call `get_p
 The succeeded result includes a `publicLookup` block describing what (if anything) public lookup found. Branch on it **before** presenting the draft:
 
 - **`publicLookup` is absent** (older server) → skip this check; present the draft as usual below.
-- **`publicLookup.used` is `false`** → no public lookup ran; present the draft as usual below.
+- **`publicLookup.used` is `false`** → no looked-up candidate to confirm (lookup either didn't run or ran and found nothing); present the draft as usual below.
 - **`publicLookup.used` is `true` and `publicLookup.confidentMatch` is `false`** → the public lookup was not a confident match. None of those looked-up details were used in the draft — the server drops low-confidence lookups — so the draft already reflects only what you were told and any allowed event data. Say so plainly (e.g. "I couldn't confidently find you from public pages, so this is based on what you told me."), then present the draft as usual below.
 - **`publicLookup.used` is `true` and `publicLookup.confidentMatch` is `true`** → before showing the full draft, confirm identity. Present **only** the looked-up identifying facts — `publicLookup.identity.name`, `publicLookup.identity.role`, `publicLookup.identity.location`, and one identifying source from `publicLookup.socials` shown **verbatim** (never construct, compose, or guess a URL; if several are present, pick the single most identifying one) — and ask one question, then stop and end your turn:
 
