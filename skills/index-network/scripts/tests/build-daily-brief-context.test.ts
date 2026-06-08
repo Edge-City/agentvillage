@@ -189,6 +189,7 @@ describe("build-daily-brief-context helpers", () => {
   test("buildDailyBriefContext sets opportunitySource to mcp when INDEX_API_KEY is set", async () => {
     const originalFetch = globalThis.fetch;
     const originalApiKey = process.env.INDEX_API_KEY;
+    const originalMcpUrl = process.env.INDEX_MCP_URL;
     const originalEdgeosKey = process.env.EDGEOS_API_KEY;
     const originalControlPlaneUrl = process.env.EDGE_AGENT_CONTROL_PLANE_URL;
     const originalAdminToken = process.env.ADMIN_TOKEN;
@@ -196,6 +197,7 @@ describe("build-daily-brief-context helpers", () => {
     delete process.env.EDGE_AGENT_CONTROL_PLANE_URL;
     delete process.env.ADMIN_TOKEN;
     process.env.INDEX_API_KEY = "test-key";
+    process.env.INDEX_MCP_URL = "https://test.example.com/mcp";
 
     const opportunityText = "1. Nathan Price\n   <!-- digest-opportunity:id=opp-mcp-1 -->\n   builds AI agents\n   status: pending\n   profileUrl: https://index.network/u/abc\n   acceptUrl: https://index.network/c/xyz\n   feedCategory: connection";
 
@@ -204,7 +206,7 @@ describe("build-daily-brief-context helpers", () => {
       if (url.includes("open-meteo") || url.includes("weather.gov")) {
         return new Response("unavailable", { status: 503, statusText: "Service Unavailable" });
       }
-      if (url.includes("/mcp")) {
+      if (url === "https://test.example.com/mcp") {
         const body = JSON.parse(init?.body as string ?? "{}") as { method: string };
         if (body.method === "initialize") {
           return Response.json({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", capabilities: {} } });
@@ -226,6 +228,8 @@ describe("build-daily-brief-context helpers", () => {
       globalThis.fetch = originalFetch;
       if (originalApiKey === undefined) delete process.env.INDEX_API_KEY;
       else process.env.INDEX_API_KEY = originalApiKey;
+      if (originalMcpUrl === undefined) delete process.env.INDEX_MCP_URL;
+      else process.env.INDEX_MCP_URL = originalMcpUrl;
       if (originalEdgeosKey === undefined) delete process.env.EDGEOS_API_KEY;
       else process.env.EDGEOS_API_KEY = originalEdgeosKey;
       if (originalControlPlaneUrl === undefined) delete process.env.EDGE_AGENT_CONTROL_PLANE_URL;
