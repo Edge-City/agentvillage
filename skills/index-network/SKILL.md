@@ -14,10 +14,10 @@ Edge's bundle for surfacing opportunities through Edge Esmeralda's Index Network
 
 ## When to read each file
 
-- **Any non-trivial tool call** → [tools.md](tools.md). MCP tool families, entity model, `scrape_url` usage, output translation rules.
+- **Any non-trivial tool call** → [tools.md](tools.md). MCP tool families, entity model, capturing new signal from conversation, `scrape_url` usage, output translation rules.
 - **Composing user-facing opportunity renderings** → [exemplars.md](exemplars.md). Canonical morning-digest voice samples; greeting-draft format for `&msg=`.
 - **User expresses social intent** → [bootstrap.md](bootstrap.md). Five-step Index Network onboarding ritual; gated on `onboardingComplete` and triggered by user intent, not session start.
-- **Heartbeat tick** → [heartbeat.md](heartbeat.md). Accepted-opportunity notifications and signal-freshness pruning.
+- **Heartbeat tick** → [heartbeat.md](heartbeat.md). Accepted-opportunity notifications, signal-freshness pruning, and signal-elicitation re-engagement for thin-signal users.
 
 ## Handoff
 
