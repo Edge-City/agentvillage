@@ -620,12 +620,22 @@ async function postMcpMessage(mcpUrl: string, apiKey: string, body: unknown): Pr
   const contentType = res.headers.get("content-type") ?? "";
   if (contentType.includes("text/event-stream")) {
     const text = await res.text();
+    let response: McpJsonRpcResponse | null = null;
     for (const line of text.split("\n")) {
-      if (line.startsWith("data: ")) {
-        try { return JSON.parse(line.slice(6)) as McpJsonRpcResponse; } catch { /* skip non-JSON lines */ }
+      // SSE spec allows "data:value" with or without the space after the colon.
+      const dataLine = line.startsWith("data: ") ? line.slice(6)
+                     : line.startsWith("data:") ? line.slice(5)
+                     : null;
+      if (dataLine !== null) {
+        try {
+          const msg = JSON.parse(dataLine) as McpJsonRpcResponse;
+          // Keep only JSON-RPC responses (have result or error); skip notifications.
+          if ("result" in msg || "error" in msg) response = msg;
+        } catch { /* skip non-JSON or comment lines */ }
       }
     }
-    throw new Error("no parseable JSON in MCP SSE response");
+    if (response) return response;
+    throw new Error("no JSON-RPC response in MCP SSE stream");
   }
 
   return (await res.json()) as McpJsonRpcResponse;
