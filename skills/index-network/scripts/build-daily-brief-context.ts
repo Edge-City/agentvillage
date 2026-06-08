@@ -622,8 +622,8 @@ export async function fetchOpportunitiesFromApi(opts: {
   );
   if (!res.ok) throw new Error(`opportunities API: ${res.status} ${res.statusText}`);
 
-  const data = (await res.json()) as { opportunities?: ApiOpportunity[] };
-  const rows = data.opportunities ?? [];
+  const data = (await res.json()) as { opportunities?: unknown };
+  const rows = Array.isArray(data.opportunities) ? (data.opportunities as ApiOpportunity[]) : [];
 
   return rows.map((opp): BriefOpportunity => {
     const name = opp.counterpartName ?? "Unknown";
@@ -633,7 +633,7 @@ export async function fetchOpportunitiesFromApi(opts: {
       typeof opp.interpretation?.confidence === "number"
         ? opp.interpretation.confidence
         : typeof opp.confidence === "string"
-          ? parseFloat(opp.confidence) || undefined
+          ? parseFloat(opp.confidence)
           : undefined;
     return {
       name,
