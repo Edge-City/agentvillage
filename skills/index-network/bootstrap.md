@@ -59,6 +59,24 @@ Narrate while processing:
 
 If `preview_user_profile` returns `profileRunId` instead of a draft, call `get_profile_run(profileRunId=...)` until `status="succeeded"`, `status="failed"`, or `status="cancelled"`. When it succeeds, use its `result` as the profile draft. If it is still queued/running and you cannot continue polling in this turn, save the `profileRunId` in today's memory note, tell the user the draft is still being prepared, and ask them to send a short follow-up such as "done?" so you can check `get_profile_run` again. Do not call `confirm_user_profile` until you have shown the succeeded draft or the user has provided explicit approved profile text.
 
+### Identity check — only when public lookup ran
+
+The succeeded result includes a `publicLookup` block describing what (if anything) public lookup found. Branch on it **before** presenting the draft:
+
+- **`publicLookup` is absent** (older server) → skip this check; present the draft as usual below.
+- **`publicLookup.used` is `false`** → no looked-up candidate to confirm (lookup either didn't run or ran and found nothing); present the draft as usual below.
+- **`publicLookup.used` is `true` and `publicLookup.confidentMatch` is `false`** → the public lookup was not a confident match. None of those looked-up details were used in the draft — the server drops low-confidence lookups — so the draft already reflects only what you were told and any allowed event data. Say so plainly (e.g. "I couldn't confidently find you from public pages, so this is based on what you told me."), then present the draft as usual below.
+- **`publicLookup.used` is `true` and `publicLookup.confidentMatch` is `true`** → before showing the full draft, confirm identity. Present **only** the looked-up identifying facts — `publicLookup.identity.name`, `publicLookup.identity.role`, `publicLookup.identity.location`, and one identifying source from `publicLookup.socials` shown **verbatim** (never construct, compose, or guess a URL; if several are present, pick the single most identifying one) — skipping any of these that is empty rather than emitting a blank or placeholder — and ask one question, then stop and end your turn:
+
+  > "From public pages I found: [name], [role], [location] ([source]). Is this you?" — drop any of these parts you don't have.
+
+  When the user answers in their next message:
+
+  - **Yes** → present the draft as usual below and continue to confirm.
+  - **No** → discard this draft. Call `preview_user_profile` again with the same self-described inputs but `allowPublicLookup=false` (drop any social URL the user says was the wrong person). If that call returns a `profileRunId`, poll `get_profile_run` the same way as above before continuing. Then present that lookup-free draft below. Do not save the public-lookup draft.
+
+This identity question is a turn boundary: ask it, end the turn, and wait for the user's answer before calling `confirm_user_profile`.
+
 Present the profile draft naturally:
 
 > "Here's the draft I have: [summary]. Does this look right?"
@@ -122,7 +140,7 @@ Cron-schedule preferences are not asked about — the morning digest runs at a f
 - The data-use consent question is a turn boundary: ask the one question, then stop. The matching `record_onboarding_privacy_consent` calls belong only in a later turn after the user's explicit answer.
 - Ask a single data-use consent question covering both EdgeOS data and public lookup/scraping — never split it into two.
 - Do not import EdgeOS data, run public lookup, or scrape without the recorded consent based on an explicit user answer.
-- Even with consent, do not run public lookup unless you have an explicit or allowed public social/profile URL for this user. If no such URL is available, ask for one or draft without internet lookup; never do broad name-based lookup during onboarding.
+- Even with consent, do not run public lookup unless you have an explicit or allowed public social/profile URL for this user. A name alone is never enough — however distinctive it seems. The only thing that unlocks lookup is a public profile URL (for example LinkedIn, GitHub, a personal site, X/Twitter, Farcaster, or another professional page — the list is not exhaustive): ask the user for one, and if they don't give a URL, draft without internet lookup. Never do broad name-based lookup during onboarding.
 - Do not call `preview_user_profile` until the consent question has an explicit user answer and both consent calls have succeeded.
 - Do not call `discover_opportunities`, `list_opportunities`, or any other discovery tool during onboarding. Opportunities surface on the first scheduled cron tick after onboarding completes.
 - Do not mention Gmail or email import — they are not available in this flow.
