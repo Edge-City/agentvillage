@@ -692,7 +692,7 @@ export async function buildDailyBriefContext(options: {
   let opportunitySource: "mcp" | "file" | "unavailable" = "unavailable";
 
   const apiKey = process.env.INDEX_API_KEY?.trim();
-  const mcpUrl = process.env.INDEX_MCP_URL?.trim() ?? "https://protocol.index.network/mcp";
+  const mcpUrl = process.env.INDEX_MCP_URL?.trim() || "https://protocol.index.network/mcp";
 
   if (apiKey) {
     try {
