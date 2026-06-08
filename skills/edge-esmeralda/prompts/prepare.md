@@ -29,11 +29,14 @@ Silent turns use the current host's no-reply marker exactly: Hermes → `[SILENT
 
    The script resolves the America/Los_Angeles date, builds structured context, composes the markdown body, runs the URL guard, creates the Kanban task with argv-safe `--body`, blocks it for review, and records `prepared.taskId` in `memory/heartbeat-state.json`. Its JSON stdout is for diagnostics only; do not expose it.
 
+   If the script exits with a non-zero code, end your turn immediately with the host-specific no-reply marker. Do not diagnose the failure, retry the script, or attempt alternative staging paths. One attempt only.
+
 3. **Deliver nothing.** End your turn with the host-specific no-reply marker.
 
 # Hard rules
 - Never invent announcements, events, people, venues, times, tracks, or action URLs.
 - Do not compose or stage the Kanban card manually; `stage-daily-brief.ts` is the only allowed staging path.
+- One attempt at the staging script. If it fails, end immediately with the no-reply marker — no retries, no diagnosis, no alternative paths.
 - Always stage the brief **blocked** (held for review) and record its `taskId`; it ships only if a human unblocks (approves) it before the send pass. Never assign it or move it to **Ready**.
 - Calendar failures must not block launch: ship people-only plus the one-line calendar pointer, or the pointer-only fallback if there is nothing else.
 - Never confirm delivery here. Never write `deliveredToday` here.
