@@ -119,7 +119,9 @@ function copyWorkspaceFiles(wipeUser: boolean): void {
   if (wipeUser) {
     const filesToWipe = [
       join(TARGET_HOME, "MEMORY.md"),
+      join(TARGET_HOME, "memory", "agentvillage-state.json"),
       join(TARGET_HOME, "memory", "edge-state.json"),
+      join(TARGET_HOME, "memory", "welcome-state.json"),
     ];
     for (const path of filesToWipe) {
       if (existsSync(path)) {
