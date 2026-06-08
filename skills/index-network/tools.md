@@ -33,6 +33,16 @@ When the user wants to **find people to connect with, meet, or talk to** ("find 
 When the user wants to **look up a specific person** by name or check a known profile:
 → Use `read_user_profiles(query=name)`. Returns profile data but no actionable URLs.
 
+## Capturing new signal in conversation
+
+Onboarding captures one signal; after that, the graph only thickens if you capture what the user tells you. When an **onboarded** user (`onboardingComplete=true`) shares something new in ordinary conversation, route it into the pipeline — this is how a thin-signal user who has no opportunities eventually gets matched. Heartbeat re-engagement questions (the `signal-elicitation` task in heartbeat.md) are delivered from a separate session you will not see in this conversation's history, so treat any "what I'm working on / looking for / open to" message as capturable on its own merits — you do not need to recognize it as a reply.
+
+- **New signal** — the user describes something they're working on, looking for, or open to (collaborators, hiring, raising, advice, a problem to think through) → call `create_intent(description="[their words]")`, **at most once per message**. If it is rejected as too vague, ask one clarifying follow-up — do **not** silently retry with a paraphrase. Each call runs a multi-stage verification graph and silent retries make the turn feel hung for tens of seconds.
+- **Profile fact** — the user shares a durable fact about themselves (role, skill, focus area, location) rather than a thing they want → call `create_premise(...)` instead.
+- **Then re-check discovery.** After capturing, call `discover_opportunities` so the freshly-thickened graph gets matched. Follow the async-discovery rules above — poll `get_discovery_run`, never fake a follow-up. Surface any opportunity that comes back; if none, say so plainly.
+
+Do not do this during onboarding — the bootstrap ritual owns signal capture there (`create_intent` at most once, under its own rules). This guidance is for users who have already completed onboarding.
+
 ## `scrape_url` — when to use it
 
 Call `scrape_url(url, objective)` whenever the user shares a URL and you need its content:
