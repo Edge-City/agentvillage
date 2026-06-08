@@ -268,7 +268,7 @@ Then re-install:
 bun install/install.ts --index-api-key <YOUR_API_KEY>
 ```
 
-Pass `--wipe-user` to also remove `USER.md`, `MEMORY.md`, and the local welcome/onboarding markers under `memory/` (including `agentvillage-state.json` and `welcome-state.json`) — so the next message can run the first-install gates again:
+Pass `--wipe-user` to also remove `USER.md`, `MEMORY.md`, and the entire `memory/` directory — including `agentvillage-state.json`, `welcome-state.json`, daily notes, and any other local memory files — so the next message can run the first-install gates again:
 
 ```bash
 bun install/reset.ts --wipe-user

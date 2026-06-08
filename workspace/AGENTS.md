@@ -35,7 +35,7 @@ The welcome is a durable first-install greeting, not a per-session greeting. A H
 Before sending the welcome, read `memory/welcome-state.json` if it exists:
 
 - If it records `welcomeSent: true`, do **not** send the welcome. Answer the user's message directly.
-- If the file is missing, unreadable, or does not record `welcomeSent: true`, send the welcome below verbatim, then create `memory/` if needed and write `memory/welcome-state.json` with `welcomeSent: true` and the current timestamp. If the user's opening message has a substantive question or request, answer it after the welcome. Otherwise end your turn immediately after the welcome — do not append a second greeting, introduction, or prompt of your own.
+- If the file is missing, unreadable, or does not record `welcomeSent: true`, send the welcome below verbatim, then create `memory/` if needed and write `memory/welcome-state.json` as exact JSON with this shape: `{ "welcomeSent": true, "sentAt": "<current ISO-8601 timestamp>" }`. Use the `sentAt` field name and an ISO-8601 timestamp string such as `2026-06-08T13:00:00Z`; do not write prose, Markdown, or any non-JSON content to this file. If the user's opening message has a substantive question or request, answer it after the welcome. Otherwise end your turn immediately after the welcome — do not append a second greeting, introduction, or prompt of your own.
 
 Do not let the server-side Index onboarding state (`onboardingComplete`) decide whether to send this welcome. That flag controls profile/signal setup, not AgentVillage's greeting.
 
