@@ -14,6 +14,8 @@ Deliver the staged morning brief verbatim from Kanban, then reconcile delivery b
 
    Do not write Python, shell pipelines, or replacement delivery logic. The script resolves today's America/Los_Angeles date, reads `memory/heartbeat-state.json`, checks the Kanban approval gate, writes `memory/digest-outgoing.md`, extracts digest opportunity markers, updates delivery state, marks the task complete, strips unsafe URLs/internal metadata, and prints either `[SILENT]` or one JSON object.
 
+   If the script exits with a non-zero code, end your turn immediately with `[SILENT]`. Do not diagnose, retry, or attempt alternatives. One attempt only.
+
 2. **If stdout is exactly `[SILENT]`, end your turn with exactly `[SILENT]`.** Do not add commentary and do not try a fallback.
 
 3. **If stdout is JSON, parse it.** It has this shape:
@@ -29,6 +31,7 @@ Deliver the staged morning brief verbatim from Kanban, then reconcile delivery b
 # Hard rules
 - The Kanban task body is the source of truth. Never regenerate the brief in this send pass.
 - Never reimplement the send flow in generated code. Always call `bun skills/index-network/scripts/send-daily-brief.ts` exactly once.
+- One attempt at the send script. If it fails, end immediately with `[SILENT]` — no retries, no diagnosis, no alternative paths.
 - Deliver only a brief a human has approved by unblocking it (status `ready` or `todo`, depending on Hermes version). A still-`blocked` task means no approval yet — stay silent; the next prepare pass can try again.
 - Confirm delivery only for opportunity ids returned by the deterministic script.
 - Never expose internal IDs, raw JSON, internal marker comments, or internal vocabulary in the reply.
