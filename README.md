@@ -247,12 +247,12 @@ The installer:
 7. Installs the two digest cron jobs: a prepare pass (`0 2 * * *`) that composes the morning brief and stages it as an editable Kanban task, and a send pass (`0 8 * * *`) that delivers the staged brief. The prepare pass stages each brief as a **blocked** Kanban task; the send pass delivers it only after an operator approves it by unblocking that task (`hermes kanban unblock <id>` or the board's unblock control), so accidental delivery is prevented without pausing the cron. The end user can't change the schedule from chat, but the installer can override both times via `--digest-prepare-cron` / `--digest-send-cron` (or `DIGEST_PREPARE_CRON` / `DIGEST_SEND_CRON`) — see "Overriding the digest cron times" above.
 8. Restarts the gateway so all config changes take effect.
 
-Send any message in your chat to bring AgentVillage online. AgentVillage has two independent onboarding gates that run at session start:
+Send any message in your chat to bring AgentVillage online. AgentVillage has two independent onboarding gates:
 
 - **Index Network onboarding** — gated on the server-side `onboardingComplete` flag returned by `read_user_profiles()`. Owned by `skills/index-network/bootstrap.md`. If `false`, the privacy-first ritual runs (greet → ask one data-use consent question covering EdgeOS/event profile data and public lookup → only run internet lookup when an explicit or allowed public social/profile URL is available → draft profile with `preview_user_profile`, polling `get_profile_run` when a `profileRunId` is returned → show it for approval → save with `confirm_user_profile` → capture first signal → capture handle → `complete_onboarding()` → populate `USER.md`).
-- **AgentVillage framing** — owned by `workspace/AGENTS.md` "First-message gates". There is no schedule-preferences dialog; the morning digest runs at a fixed time. The only first-message work beyond the Index ritual is a one-line welcome for returning users on a fresh workspace.
+- **AgentVillage welcome** — owned by `workspace/AGENTS.md` "First-message gates" and gated by the local durable marker `memory/welcome-state.json`. Hermes sessions can reset daily or after idle time, so the welcome must not key off session freshness. If the marker says `welcomeSent: true`, the agent skips the welcome and answers normally.
 
-An admin resetting `onboardingComplete` server-side re-triggers the Index ritual. Wiping local state via `install/install.ts --wipe-user` resets local markers without touching Index's flag.
+An admin resetting `onboardingComplete` server-side re-triggers only the Index ritual. Wiping local state via `install/install.ts --wipe-user` resets local markers without touching Index's flag.
 
 ## Reset
 
@@ -268,7 +268,7 @@ Then re-install:
 bun install/install.ts --index-api-key <YOUR_API_KEY>
 ```
 
-Pass `--wipe-user` to also remove `USER.md`, `MEMORY.md`, the `.openclaw/` first-run marker, the entire `memory/` directory (including `agentvillage-state.json`, `welcome-state.json`, and daily notes), and all agent sessions under `~/.openclaw/agents/main/sessions/` — so the next message spawns a brand new session against a freshly-bootstrapped workspace:
+Pass `--wipe-user` to also remove `USER.md`, `MEMORY.md`, and the local welcome/onboarding markers under `memory/` (including `agentvillage-state.json` and `welcome-state.json`) — so the next message can run the first-install gates again:
 
 ```bash
 bun install/reset.ts --wipe-user
@@ -318,7 +318,7 @@ AgentVillage's behaviour is markdown-driven. Almost everything you'd want to cha
 |---|---|---|
 | Update community facts (dates, headcount, venue, programming format) | `workspace/COMMUNITY.md` | This is the only authoritative source the agent reads for community context. Don't duplicate the facts into prompts. |
 | Change what the morning brief says or how it's structured | `skills/edge-esmeralda/prompts/prepare.md` (compose), `skills/index-network/scripts/build-daily-brief-context.ts` (structured announcements/calendar/opportunity context), and `skills/edge-esmeralda/prompts/send.md` (deliver + fallback) | The morning greeting is fixed in both. Keep the announcements/calendar/people/community-asks structure in sync with `skills/index-network/exemplars.md`. |
-| Change the welcome message | `skills/index-network/bootstrap.md` Step 1 | The same welcome runs for every user — new and returning. |
+| Change the welcome message | `workspace/AGENTS.md` "First-message gates" | The welcome is gated by `memory/welcome-state.json` and should run once per install, not once per Hermes session. |
 | Change the lived-notebook (`USER.md`) template | `skills/index-network/bootstrap.md` | The bootstrap ritual writes `USER.md`. Editing the file in `workspace/` only affects the empty stub copied in by `--wipe-user`. |
 | Change how the agent calls EdgeOS APIs (events, attendees, RSVPs, venues, wiki recipes) | `skills/edgeos/SKILL.md` | This is the hand-edited recipe file. The auto-refreshed reference data under `skills/edgeos/references/` is a different surface — see "Backends & skills" below for the don't-edit-this caveat. |
 

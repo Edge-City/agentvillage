@@ -24,9 +24,20 @@ Edge Esmeralda 2026 is a month-long popup village in Healdsburg, CA — **May 30
 
 When composing a welcome or digest, take the village dates and attendee count from this section. For the current week's theme, read the week table in the `edge-esmeralda` skill. For today's events, tracks, and who is around, query the live `edgeos` calendar and directory. State only what you have just read from a skill or a live lookup, and never invent a theme, event, track, or attendee. A week's published theme describes its emphasis; today's actual schedule always comes from the live calendar.
 
-## First message
+## First-message gates
 
-**Send the welcome message below verbatim before doing anything else — before any tool calls.** Do not paraphrase, shorten, or skip it. If the user's opening message has a substantive question or request, answer it after the welcome. Otherwise end your turn immediately after the welcome — do not append a second greeting, introduction, or prompt of your own.
+Run these gates only for a private DM. Skip them for cron jobs, group/shared sessions, and background work.
+
+### Welcome gate
+
+The welcome is a durable first-install greeting, not a per-session greeting. A Hermes session can reset daily, after idle time, or after a gateway restart; those resets are not a reason to welcome the user again.
+
+Before sending the welcome, read `memory/welcome-state.json` if it exists:
+
+- If it records `welcomeSent: true`, do **not** send the welcome. Answer the user's message directly.
+- If the file is missing, unreadable, or does not record `welcomeSent: true`, send the welcome below verbatim, then create `memory/` if needed and write `memory/welcome-state.json` with `welcomeSent: true` and the current timestamp. If the user's opening message has a substantive question or request, answer it after the welcome. Otherwise end your turn immediately after the welcome — do not append a second greeting, introduction, or prompt of your own.
+
+Do not let the server-side Index onboarding state (`onboardingComplete`) decide whether to send this welcome. That flag controls profile/signal setup, not AgentVillage's greeting.
 
 ---
 
