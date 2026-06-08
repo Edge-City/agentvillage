@@ -66,9 +66,9 @@ The succeeded result includes a `publicLookup` block describing what (if anythin
 - **`publicLookup` is absent** (older server) → skip this check; present the draft as usual below.
 - **`publicLookup.used` is `false`** → no looked-up candidate to confirm (lookup either didn't run or ran and found nothing); present the draft as usual below.
 - **`publicLookup.used` is `true` and `publicLookup.confidentMatch` is `false`** → the public lookup was not a confident match. None of those looked-up details were used in the draft — the server drops low-confidence lookups — so the draft already reflects only what you were told and any allowed event data. Say so plainly (e.g. "I couldn't confidently find you from public pages, so this is based on what you told me."), then present the draft as usual below.
-- **`publicLookup.used` is `true` and `publicLookup.confidentMatch` is `true`** → before showing the full draft, confirm identity. Present **only** the looked-up identifying facts — `publicLookup.identity.name`, `publicLookup.identity.role`, `publicLookup.identity.location`, and one identifying source from `publicLookup.socials` shown **verbatim** (never construct, compose, or guess a URL; if several are present, pick the single most identifying one) — and ask one question, then stop and end your turn:
+- **`publicLookup.used` is `true` and `publicLookup.confidentMatch` is `true`** → before showing the full draft, confirm identity. Present **only** the looked-up identifying facts — `publicLookup.identity.name`, `publicLookup.identity.role`, `publicLookup.identity.location`, and one identifying source from `publicLookup.socials` shown **verbatim** (never construct, compose, or guess a URL; if several are present, pick the single most identifying one) — skipping any of these that is empty rather than emitting a blank or placeholder — and ask one question, then stop and end your turn:
 
-  > "From public pages I found: [name], [role], [location] ([source]). Is this you?"
+  > "From public pages I found: [name], [role], [location] ([source]). Is this you?" — drop any of these parts you don't have.
 
   When the user answers in their next message:
 
@@ -140,7 +140,7 @@ Cron-schedule preferences are not asked about — the morning digest runs at a f
 - The data-use consent question is a turn boundary: ask the one question, then stop. The matching `record_onboarding_privacy_consent` calls belong only in a later turn after the user's explicit answer.
 - Ask a single data-use consent question covering both EdgeOS data and public lookup/scraping — never split it into two.
 - Do not import EdgeOS data, run public lookup, or scrape without the recorded consent based on an explicit user answer.
-- Even with consent, do not run public lookup unless you have an explicit or allowed public social/profile URL for this user. A single or common name with no public URL is never enough — ask for one disambiguator (LinkedIn, GitHub, personal site, or employer page) or draft without internet lookup. Never do broad name-based lookup during onboarding.
+- Even with consent, do not run public lookup unless you have an explicit or allowed public social/profile URL for this user. A name alone is never enough — however distinctive it seems — so always require a public URL (LinkedIn, GitHub, personal site, or employer page); ask for one disambiguator or draft without internet lookup. Never do broad name-based lookup during onboarding.
 - Do not call `preview_user_profile` until the consent question has an explicit user answer and both consent calls have succeeded.
 - Do not call `discover_opportunities`, `list_opportunities`, or any other discovery tool during onboarding. Opportunities surface on the first scheduled cron tick after onboarding completes.
 - Do not mention Gmail or email import — they are not available in this flow.
