@@ -111,7 +111,7 @@ export interface DailyBriefContext {
     announcementsSource: "control-plane" | "unavailable";
     calendarSource: "edgeos" | "unavailable";
     rsvpSource: "edgeos" | "unavailable";
-    opportunitySource: "file" | "unavailable";
+    opportunitySource: "api" | "file" | "unavailable";
     weatherSource?: "open-meteo" | "nws" | "unavailable";
     warnings: string[];
     interestTags: string[];
@@ -594,6 +594,60 @@ function argValue(args: string[], name: string): string | undefined {
   return idx >= 0 ? args[idx + 1] : undefined;
 }
 
+type ApiOpportunity = {
+  id: string;
+  status: string;
+  actors: Array<{ userId: string; role: string }>;
+  counterpartName?: string;
+  interpretation?: { reasoning?: string; confidence?: number };
+  confidence?: string;
+  profileUrl?: string;
+  acceptUrl?: string;
+  feedCategory?: string;
+};
+
+/**
+ * Fetch opportunities from the Index HTTP API with pre-built action links.
+ * Uses `GET /api/opportunities?status=pending&includeLinks=true` which returns
+ * profileUrl, acceptUrl, and feedCategory already minted by the backend —
+ * no agent LLM call or MCP tool involved.
+ */
+export async function fetchOpportunitiesFromApi(opts: {
+  apiKey: string;
+  apiBase: string;
+}): Promise<BriefOpportunity[]> {
+  const res = await fetch(
+    `${opts.apiBase}/api/opportunities?status=pending&includeLinks=true`,
+    { headers: { "x-api-key": opts.apiKey } },
+  );
+  if (!res.ok) throw new Error(`opportunities API: ${res.status} ${res.statusText}`);
+
+  const data = (await res.json()) as { opportunities?: ApiOpportunity[] };
+  const rows = data.opportunities ?? [];
+
+  return rows.map((opp): BriefOpportunity => {
+    const name = opp.counterpartName ?? "Unknown";
+    const mainText =
+      typeof opp.interpretation?.reasoning === "string" ? opp.interpretation.reasoning : undefined;
+    const confidence =
+      typeof opp.interpretation?.confidence === "number"
+        ? opp.interpretation.confidence
+        : typeof opp.confidence === "string"
+          ? parseFloat(opp.confidence) || undefined
+          : undefined;
+    return {
+      name,
+      mainText,
+      status: opp.status,
+      profileUrl: opp.profileUrl,
+      acceptUrl: opp.acceptUrl,
+      feedCategory: opp.feedCategory,
+      opportunityId: opp.id,
+      confidence: Number.isFinite(confidence) ? (confidence as number) : undefined,
+    };
+  });
+}
+
 export async function buildDailyBriefContext(options: {
   date?: string;
   stateFile?: string;
@@ -614,8 +668,23 @@ export async function buildDailyBriefContext(options: {
   ]);
 
   let opportunities: BriefOpportunity[] = [];
-  let opportunitySource: "file" | "unavailable" = "unavailable";
-  if (options.opportunitiesFile) {
+  let opportunitySource: "api" | "file" | "unavailable" = "unavailable";
+
+  const apiKey = process.env.INDEX_API_KEY?.trim();
+  const mcpUrl = process.env.INDEX_MCP_URL?.trim() ?? "https://protocol.index.network/mcp";
+  // Derive HTTP API base from MCP URL by stripping the /mcp suffix.
+  const apiBase = mcpUrl.replace(/\/mcp\/?$/, "");
+
+  if (apiKey) {
+    try {
+      const deliveredIds = await readDeliveredIds(options.stateFile ?? "memory/heartbeat-state.json", date);
+      const fetched = await fetchOpportunitiesFromApi({ apiKey, apiBase });
+      opportunities = filterDedupedOpportunities(fetched, deliveredIds);
+      opportunitySource = "api";
+    } catch (err) {
+      warnings.push(`opportunities API unavailable: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  } else if (options.opportunitiesFile) {
     const transcript = await readIfExists(options.opportunitiesFile);
     if (transcript.trim()) {
       opportunitySource = "file";
