@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   buildDailyBriefContext,
   extractInterestTags,
+  fetchOpportunitiesFromMcp,
   filterDedupedOpportunities,
   formatPacificTime,
   pacificDayBounds,
@@ -185,14 +186,69 @@ describe("build-daily-brief-context helpers", () => {
     });
   });
 
-  test("buildDailyBriefContext falls back to NWS when Open-Meteo rate limits", async () => {
+  test("buildDailyBriefContext sets opportunitySource to mcp when INDEX_API_KEY is set", async () => {
     const originalFetch = globalThis.fetch;
+    const originalApiKey = process.env.INDEX_API_KEY;
+    const originalMcpUrl = process.env.INDEX_MCP_URL;
     const originalEdgeosKey = process.env.EDGEOS_API_KEY;
     const originalControlPlaneUrl = process.env.EDGE_AGENT_CONTROL_PLANE_URL;
     const originalAdminToken = process.env.ADMIN_TOKEN;
     delete process.env.EDGEOS_API_KEY;
     delete process.env.EDGE_AGENT_CONTROL_PLANE_URL;
     delete process.env.ADMIN_TOKEN;
+    process.env.INDEX_API_KEY = "test-key";
+    process.env.INDEX_MCP_URL = "https://test.example.com/mcp";
+
+    const opportunityText = "1. Nathan Price\n   <!-- digest-opportunity:id=opp-mcp-1 -->\n   builds AI agents\n   status: pending\n   profileUrl: https://index.network/u/abc\n   acceptUrl: https://index.network/c/xyz\n   feedCategory: connection";
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("open-meteo") || url.includes("weather.gov")) {
+        return new Response("unavailable", { status: 503, statusText: "Service Unavailable" });
+      }
+      if (url === "https://test.example.com/mcp") {
+        const body = JSON.parse(init?.body as string ?? "{}") as { method: string };
+        if (body.method === "initialize") {
+          return Response.json({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", capabilities: {} } });
+        }
+        if (body.method === "tools/call") {
+          return Response.json({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: opportunityText }] } });
+        }
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    try {
+      const context = await buildDailyBriefContext({ date: "2026-06-10", userFiles: [] });
+      expect(context.diagnostics.opportunitySource).toBe("mcp");
+      expect(context.opportunities).toHaveLength(1);
+      expect(context.opportunities[0].name).toBe("Nathan Price");
+      expect(context.opportunities[0].opportunityId).toBe("opp-mcp-1");
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalApiKey === undefined) delete process.env.INDEX_API_KEY;
+      else process.env.INDEX_API_KEY = originalApiKey;
+      if (originalMcpUrl === undefined) delete process.env.INDEX_MCP_URL;
+      else process.env.INDEX_MCP_URL = originalMcpUrl;
+      if (originalEdgeosKey === undefined) delete process.env.EDGEOS_API_KEY;
+      else process.env.EDGEOS_API_KEY = originalEdgeosKey;
+      if (originalControlPlaneUrl === undefined) delete process.env.EDGE_AGENT_CONTROL_PLANE_URL;
+      else process.env.EDGE_AGENT_CONTROL_PLANE_URL = originalControlPlaneUrl;
+      if (originalAdminToken === undefined) delete process.env.ADMIN_TOKEN;
+      else process.env.ADMIN_TOKEN = originalAdminToken;
+    }
+  });
+
+  test("buildDailyBriefContext falls back to NWS when Open-Meteo rate limits", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalEdgeosKey = process.env.EDGEOS_API_KEY;
+    const originalControlPlaneUrl = process.env.EDGE_AGENT_CONTROL_PLANE_URL;
+    const originalAdminToken = process.env.ADMIN_TOKEN;
+    const originalApiKey = process.env.INDEX_API_KEY;
+    delete process.env.EDGEOS_API_KEY;
+    delete process.env.EDGE_AGENT_CONTROL_PLANE_URL;
+    delete process.env.ADMIN_TOKEN;
+    delete process.env.INDEX_API_KEY;
 
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -236,6 +292,102 @@ describe("build-daily-brief-context helpers", () => {
       else process.env.EDGE_AGENT_CONTROL_PLANE_URL = originalControlPlaneUrl;
       if (originalAdminToken === undefined) delete process.env.ADMIN_TOKEN;
       else process.env.ADMIN_TOKEN = originalAdminToken;
+      if (originalApiKey === undefined) delete process.env.INDEX_API_KEY;
+      else process.env.INDEX_API_KEY = originalApiKey;
+    }
+  });
+});
+
+describe("fetchOpportunitiesFromMcp", () => {
+  function makeMcpFetch(toolsCallFn: (init: RequestInit | undefined) => Response) {
+    return (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(init?.body as string ?? "{}") as { method: string };
+      if (body.method === "initialize") {
+        return Response.json({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", capabilities: {} } });
+      }
+      if (body.method === "tools/call") return toolsCallFn(init);
+      throw new Error(`unexpected method: ${body.method}`);
+    }) as typeof fetch;
+  }
+
+  const MCP_URL = "https://example.com/mcp";
+  const OPPORTUNITY_TEXT =
+    "1. Alice\n   <!-- digest-opportunity:id=opp-alice -->\n   builds open protocols\n   status: pending\n   profileUrl: https://index.network/u/alice\n   acceptUrl: https://index.network/c/alice-code\n   feedCategory: connection";
+
+  test("returns parsed opportunities from a JSON response", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = makeMcpFetch(() =>
+      Response.json({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: OPPORTUNITY_TEXT }] } }),
+    );
+    try {
+      const results = await fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL });
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({
+        name: "Alice",
+        opportunityId: "opp-alice",
+        profileUrl: "https://index.network/u/alice",
+        acceptUrl: "https://index.network/c/alice-code",
+        feedCategory: "connection",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("returns parsed opportunities from SSE response, skipping progress notifications", async () => {
+    const originalFetch = globalThis.fetch;
+    const finalResult = { jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: OPPORTUNITY_TEXT }] } };
+    const sseBody = [
+      `data: {"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":50}}`,
+      `data: ${JSON.stringify(finalResult)}`,
+      "",
+    ].join("\n");
+    globalThis.fetch = makeMcpFetch(() => new Response(sseBody, { headers: { "Content-Type": "text/event-stream" } }));
+    try {
+      const results = await fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL });
+      expect(results).toHaveLength(1);
+      expect(results[0].name).toBe("Alice");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("handles SSE data: lines without a space after the colon", async () => {
+    const originalFetch = globalThis.fetch;
+    const finalResult = { jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: OPPORTUNITY_TEXT }] } };
+    const sseBody = `data:${JSON.stringify(finalResult)}\n`;
+    globalThis.fetch = makeMcpFetch(() => new Response(sseBody, { headers: { "Content-Type": "text/event-stream" } }));
+    try {
+      const results = await fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL });
+      expect(results).toHaveLength(1);
+      expect(results[0].name).toBe("Alice");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("returns empty array when tool response text is empty", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = makeMcpFetch(() =>
+      Response.json({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: "" }] } }),
+    );
+    try {
+      const results = await fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL });
+      expect(results).toEqual([]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("throws when the MCP server returns an error", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = makeMcpFetch(() =>
+      Response.json({ jsonrpc: "2.0", id: 2, error: { code: -32601, message: "Method not found" } }),
+    );
+    try {
+      await expect(fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL })).rejects.toThrow("Method not found");
+    } finally {
+      globalThis.fetch = originalFetch;
     }
   });
 });

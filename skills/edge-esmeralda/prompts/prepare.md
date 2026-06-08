@@ -12,26 +12,24 @@ Silent turns use the current host's no-reply marker exactly: Hermes → `[SILENT
 
 - Use **America/Los_Angeles** for all date boundaries and displayed event times. Render event times from each event's `timePacific` value exactly; it includes the correct `PST`/`PDT` label for that date. Do not derive today's local date from UTC alone.
 - Edge Esmeralda popup id for EdgeOS calendar calls: `43746fd0-bce2-472b-93e4-a438177b2dff`.
-- Build deterministic non-prose context with `skills/index-network/scripts/build-daily-brief-context.ts`. The script fetches admin announcements from the AgentVillage control plane, pulls the user's RSVPs for today (`rsvped_only=true`), pulls today's EdgeOS calendar and selects highlighted plus interest-fill events (RSVPed events are de-duplicated out of that discovery list by the composer), parses the `list_opportunities` transcript you provide, and writes structured JSON. All event times are rendered from each event's `timePacific` value (America/Los_Angeles). Do not manually re-fetch announcements, RSVPs, or calendar outside this script.
-- Index people sections use `list_opportunities(includeDigestMarkers=true)`, saved to `memory/digest-opportunities.txt` for the context builder. The hidden digest markers are internal delivery-confirmation metadata, not visible prose.
+- Build deterministic non-prose context with `skills/index-network/scripts/build-daily-brief-context.ts`. The script fetches admin announcements from the AgentVillage control plane, pulls the user's RSVPs for today (`rsvped_only=true`), pulls today's EdgeOS calendar and selects highlighted plus interest-fill events (RSVPed events are de-duplicated out of that discovery list by the composer), calls the Index MCP server directly for opportunities, and writes structured JSON. All event times are rendered from each event's `timePacific` value (America/Los_Angeles). Do not manually re-fetch announcements, RSVPs, calendar, or opportunities outside this script.
+- Index people sections are fetched directly by the script from the Index MCP server using `INDEX_API_KEY` — you never need to call `list_opportunities` or write `memory/digest-opportunities.txt` yourself. Use `profileUrl` and `acceptUrl` exactly as provided in the script's output — never construct, shorten, or modify them.
 - Organizer announcements come only from the context builder's `announcements` array. Do not fill this section from chat, stale wiki/newsletter copy, generic community facts, or ordinary attendee chatter.
 - For user interests, rely on the context builder's `diagnostics.interestTags` and selected `interestEvents`. Do not import new private EdgeOS directory/profile data here.
 
 ## Steps
 
-1. **Fetch and persist Index opportunities.** Invoke the Index MCP opportunity tool directly (`mcp_index_list_opportunities` / `list_opportunities`) with `includeDigestMarkers=true`. Do **not** use terminal/shell for this step; never run `hermes mcp call`, `mcp_index_list_opportunities`, or any other MCP command through `terminal` or code. Write the exact tool result text to `memory/digest-opportunities.txt`. If the direct MCP tool call errors, write an empty file and continue — the brief can still ship with announcements/calendar.
-
-2. **Run the deterministic staging script.** Do not compose the brief yourself, do not write ad-hoc Python/JavaScript, do not shell-quote a body, and do not call `hermes kanban create` or `hermes kanban block` directly. Run exactly:
+1. **Run the deterministic staging script.** Do not compose the brief yourself, do not write ad-hoc Python/JavaScript, do not shell-quote a body, do not call `hermes kanban create` or `hermes kanban block` directly, and do not invoke any Index MCP tool manually. The script calls the Index MCP server directly via JSON-RPC using `INDEX_API_KEY` — no MCP tool call by you is needed or wanted. Run exactly:
 
    ```
-   bun skills/index-network/scripts/stage-daily-brief.ts --opportunities-file memory/digest-opportunities.txt --state-file memory/heartbeat-state.json --context-out memory/daily-brief-context.json
+   bun skills/index-network/scripts/stage-daily-brief.ts --state-file memory/heartbeat-state.json --context-out memory/daily-brief-context.json
    ```
 
-   The script resolves the America/Los_Angeles date, builds structured context, composes the markdown body, runs the URL guard, creates the Kanban task with argv-safe `--body`, blocks it for review, and records `prepared.taskId` in `memory/heartbeat-state.json`. Its JSON stdout is for diagnostics only; do not expose it.
+   The script resolves the America/Los_Angeles date, fetches opportunities from the Index MCP server, builds structured context, composes the markdown body, runs the URL guard, creates the Kanban task with argv-safe `--body`, blocks it for review, and records `prepared.taskId` in `memory/heartbeat-state.json`. Its JSON stdout is for diagnostics only; do not expose it.
 
    If the script exits with a non-zero code, end your turn immediately with the host-specific no-reply marker. Do not diagnose the failure, retry the script, or attempt alternative staging paths. One attempt only.
 
-3. **Deliver nothing.** End your turn with the host-specific no-reply marker.
+2. **Deliver nothing.** End your turn with the host-specific no-reply marker.
 
 # Hard rules
 - Never invent announcements, events, people, venues, times, tracks, or action URLs.
@@ -42,3 +40,4 @@ Silent turns use the current host's no-reply marker exactly: Hermes → `[SILENT
 - Never confirm delivery here. Never write `deliveredToday` here.
 - The staged body is what the user receives in the morning after internal digest markers are stripped — make the visible prose complete and final.
 - Never expose internal IDs, raw JSON, internal marker comments, or internal vocabulary in visible prose.
+- Do not call `list_opportunities` or any other MCP tool — the staging script handles all MCP calls deterministically.

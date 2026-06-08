@@ -111,7 +111,7 @@ export interface DailyBriefContext {
     announcementsSource: "control-plane" | "unavailable";
     calendarSource: "edgeos" | "unavailable";
     rsvpSource: "edgeos" | "unavailable";
-    opportunitySource: "file" | "unavailable";
+    opportunitySource: "mcp" | "file" | "unavailable";
     weatherSource?: "open-meteo" | "nws" | "unavailable";
     warnings: string[];
     interestTags: string[];
@@ -594,6 +594,91 @@ function argValue(args: string[], name: string): string | undefined {
   return idx >= 0 ? args[idx + 1] : undefined;
 }
 
+type McpJsonRpcResponse = {
+  jsonrpc: "2.0";
+  id: number;
+  result?: unknown;
+  error?: { code: number; message: string };
+};
+
+type McpToolResult = {
+  content?: Array<{ type: string; text?: string }>;
+};
+
+async function postMcpMessage(mcpUrl: string, apiKey: string, body: unknown): Promise<McpJsonRpcResponse> {
+  const res = await fetch(mcpUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Accept": "application/json, text/event-stream",
+      "x-api-key": apiKey,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`MCP HTTP ${res.status}: ${res.statusText}`);
+
+  const contentType = res.headers.get("content-type") ?? "";
+  if (contentType.includes("text/event-stream")) {
+    const text = await res.text();
+    let response: McpJsonRpcResponse | null = null;
+    for (const line of text.split("\n")) {
+      // SSE spec allows "data:value" with or without the space after the colon.
+      const dataLine = line.startsWith("data: ") ? line.slice(6)
+                     : line.startsWith("data:") ? line.slice(5)
+                     : null;
+      if (dataLine !== null) {
+        try {
+          const msg = JSON.parse(dataLine) as McpJsonRpcResponse;
+          // Keep only JSON-RPC responses (have result or error); skip notifications.
+          if ("result" in msg || "error" in msg) response = msg;
+        } catch { /* skip non-JSON or comment lines */ }
+      }
+    }
+    if (response) return response;
+    throw new Error("no JSON-RPC response in MCP SSE stream");
+  }
+
+  return (await res.json()) as McpJsonRpcResponse;
+}
+
+/**
+ * Fetch opportunities by calling the Index MCP server directly via JSON-RPC,
+ * bypassing any LLM agent. Uses list_opportunities with includeDigestMarkers:true
+ * to receive pre-built profileUrl, acceptUrl, and feedCategory in the text output,
+ * then parses through parseOpportunityTranscript — no synthesis possible.
+ */
+export async function fetchOpportunitiesFromMcp(opts: {
+  apiKey: string;
+  mcpUrl: string;
+}): Promise<BriefOpportunity[]> {
+  // Per MCP spec, send initialize before any tool calls.
+  const initResp = await postMcpMessage(opts.mcpUrl, opts.apiKey, {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "agentvillage-digest", version: "1.0.0" },
+    },
+  });
+  if (initResp.error) throw new Error(`MCP initialize: ${initResp.error.message}`);
+
+  const toolResp = await postMcpMessage(opts.mcpUrl, opts.apiKey, {
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/call",
+    params: { name: "list_opportunities", arguments: { includeDigestMarkers: true } },
+  });
+  if (toolResp.error) throw new Error(`MCP list_opportunities: ${toolResp.error.message}`);
+
+  const result = toolResp.result as McpToolResult | undefined;
+  const text = result?.content?.find((c) => c.type === "text")?.text ?? "";
+  if (!text.trim()) return [];
+
+  return parseOpportunityTranscript(text);
+}
+
 export async function buildDailyBriefContext(options: {
   date?: string;
   stateFile?: string;
@@ -614,8 +699,21 @@ export async function buildDailyBriefContext(options: {
   ]);
 
   let opportunities: BriefOpportunity[] = [];
-  let opportunitySource: "file" | "unavailable" = "unavailable";
-  if (options.opportunitiesFile) {
+  let opportunitySource: "mcp" | "file" | "unavailable" = "unavailable";
+
+  const apiKey = process.env.INDEX_API_KEY?.trim();
+  const mcpUrl = process.env.INDEX_MCP_URL?.trim() || "https://protocol.index.network/mcp";
+
+  if (apiKey) {
+    try {
+      const deliveredIds = await readDeliveredIds(options.stateFile ?? "memory/heartbeat-state.json", date);
+      const fetched = await fetchOpportunitiesFromMcp({ apiKey, mcpUrl });
+      opportunities = filterDedupedOpportunities(fetched, deliveredIds);
+      opportunitySource = "mcp";
+    } catch (err) {
+      warnings.push(`opportunities MCP unavailable: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  } else if (options.opportunitiesFile) {
     const transcript = await readIfExists(options.opportunitiesFile);
     if (transcript.trim()) {
       opportunitySource = "file";
