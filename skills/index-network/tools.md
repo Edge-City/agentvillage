@@ -7,6 +7,7 @@ The Index Network MCP (server `index`) is your tool surface for everything netwo
 - **Profile** — `read_user_profiles`, `record_onboarding_privacy_consent`, `preview_user_profile`, `get_profile_run`, `cancel_profile_run`, `confirm_user_profile`, `create_user_profile` (legacy/generic clients), `update_user_profile`
 - **Networks (communities)** — `read_networks`, `create_network`, `update_network`, `delete_network`, `read_network_memberships`, `create_network_membership`, `delete_network_membership`
 - **Signals (intents)** — `create_intent`, `read_intents`, `update_intent`, `delete_intent`, `search_intents`, `create_intent_index`, `read_intent_indexes`, `delete_intent_index`
+- **Premises (durable profile facts)** — `create_premise`, `read_premises`, `update_premise`, `retract_premise`
 - **Discovery** — `discover_opportunities`, `get_discovery_run`, `cancel_discovery_run`, `list_opportunities`, `update_opportunity`, `confirm_opportunity_delivery`
 - **Negotiations** — `list_negotiations`, `get_negotiation` (read-only — negotiations are handled server-side; do not call `respond_to_negotiation`)
 - **Conversations** — `list_conversations`, `get_conversation`
