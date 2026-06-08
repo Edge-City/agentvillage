@@ -65,8 +65,8 @@ The succeeded result includes a `publicLookup` block describing what (if anythin
 
 - **`publicLookup` is absent** (older server) → skip this check; present the draft as usual below.
 - **`publicLookup.used` is `false`** → no public lookup ran; present the draft as usual below.
-- **`publicLookup.used` is `true` and `confidentMatch` is `false`** → the public lookup was not a confident match. None of those looked-up details were used in the draft — the server drops low-confidence lookups — so the draft already reflects only what you were told and any allowed event data. Say so plainly (e.g. "I couldn't confidently find you from public pages, so this is based on what you told me."), then present the draft as usual below.
-- **`publicLookup.used` is `true` and `confidentMatch` is `true`** → before showing the full draft, confirm identity. Present **only** the looked-up identifying facts from `publicLookup` — `identity.name`, `identity.role`, `identity.location`, and the source handle/URL from `socials` — and ask one question, then stop and wait for the reply:
+- **`publicLookup.used` is `true` and `publicLookup.confidentMatch` is `false`** → the public lookup was not a confident match. None of those looked-up details were used in the draft — the server drops low-confidence lookups — so the draft already reflects only what you were told and any allowed event data. Say so plainly (e.g. "I couldn't confidently find you from public pages, so this is based on what you told me."), then present the draft as usual below.
+- **`publicLookup.used` is `true` and `publicLookup.confidentMatch` is `true`** → before showing the full draft, confirm identity. Present **only** the looked-up identifying facts — `publicLookup.identity.name`, `publicLookup.identity.role`, `publicLookup.identity.location`, and the source handle/URL from `publicLookup.socials` — and ask one question, then stop and wait for the reply:
 
   > "From public pages I found: [name], [role], [location] ([source]). Is this you?"
 
