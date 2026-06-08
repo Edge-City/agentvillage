@@ -73,7 +73,7 @@ The succeeded result includes a `publicLookup` block describing what (if anythin
   When the user answers in their next message:
 
   - **Yes** → present the draft as usual below and continue to confirm.
-  - **No** → discard this draft. Call `preview_user_profile` again with the same self-described inputs but `allowPublicLookup=false` (drop any social URL the user says was the wrong person), then present that lookup-free draft below. Do not save the public-lookup draft.
+  - **No** → discard this draft. Call `preview_user_profile` again with the same self-described inputs but `allowPublicLookup=false` (drop any social URL the user says was the wrong person). If that call returns a `profileRunId`, poll `get_profile_run` the same way as above before continuing. Then present that lookup-free draft below. Do not save the public-lookup draft.
 
 This identity question is a turn boundary: ask it, end the turn, and wait for the user's answer before calling `confirm_user_profile`.
 
