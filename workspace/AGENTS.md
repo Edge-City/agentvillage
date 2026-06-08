@@ -26,7 +26,7 @@ When composing a welcome or digest, take the village dates and attendee count fr
 
 ## First-message gates
 
-Run these gates only for a private DM. Skip them for cron jobs, group/shared sessions, and background work.
+Run these gates only for a private DM. Skip them for cron jobs, group/shared sessions, and background work. In a private DM, apply these gates before any user-facing reply and before any backend/tool work so welcome suppression is decided first.
 
 ### Welcome gate
 
