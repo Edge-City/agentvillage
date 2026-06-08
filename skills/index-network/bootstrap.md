@@ -66,9 +66,11 @@ The succeeded result includes a `publicLookup` block describing what (if anythin
 - **`publicLookup` is absent** (older server) → skip this check; present the draft as usual below.
 - **`publicLookup.used` is `false`** → no public lookup ran; present the draft as usual below.
 - **`publicLookup.used` is `true` and `publicLookup.confidentMatch` is `false`** → the public lookup was not a confident match. None of those looked-up details were used in the draft — the server drops low-confidence lookups — so the draft already reflects only what you were told and any allowed event data. Say so plainly (e.g. "I couldn't confidently find you from public pages, so this is based on what you told me."), then present the draft as usual below.
-- **`publicLookup.used` is `true` and `publicLookup.confidentMatch` is `true`** → before showing the full draft, confirm identity. Present **only** the looked-up identifying facts — `publicLookup.identity.name`, `publicLookup.identity.role`, `publicLookup.identity.location`, and the source handle/URL from `publicLookup.socials` — and ask one question, then stop and wait for the reply:
+- **`publicLookup.used` is `true` and `publicLookup.confidentMatch` is `true`** → before showing the full draft, confirm identity. Present **only** the looked-up identifying facts — `publicLookup.identity.name`, `publicLookup.identity.role`, `publicLookup.identity.location`, and one identifying source from `publicLookup.socials` shown **verbatim** (never construct, compose, or guess a URL; if several are present, pick the single most identifying one) — and ask one question, then stop and end your turn:
 
   > "From public pages I found: [name], [role], [location] ([source]). Is this you?"
+
+  When the user answers in their next message:
 
   - **Yes** → present the draft as usual below and continue to confirm.
   - **No** → discard this draft. Call `preview_user_profile` again with the same self-described inputs but `allowPublicLookup=false` (drop any social URL the user says was the wrong person), then present that lookup-free draft below. Do not save the public-lookup draft.
