@@ -34,9 +34,9 @@ tasks:
   prompt: |
     A thin-signal user gets no opportunities until we draw more signal out of them. Once a day, while the user has nothing live, ask one contextual question to elicit a new signal. Track dedup state in `memory/heartbeat-state.json` under `signalElicitation`.
 
-    This runs in a fresh session with no memory of past runs — every decision below comes from tool calls and files, never from recall.
+    This runs in a fresh session with no memory of past runs — every decision below comes from tool calls and files, never from recall. Resolve "today" as the calendar day in the village's timezone (America/Los_Angeles, Pacific) — the same day used for the `memory/<today>.md` filename — so the once-per-day gate, the recorded date, and the note all agree.
 
-    1. Gate on opportunities. Call `list_opportunities()`. If anything pending or accepted comes back, discovery is already working — reply silently using this host's no-reply marker and stop. Do not ask anything.
+    1. Gate on opportunities. Call `list_opportunities()` and read what comes back (check the tool description for the exact status values). If the user already has any live opportunity — pending/sent or accepted — discovery is already working: reply silently using this host's no-reply marker and stop. Ignore declined, archived, or expired ones; they do not count as live. Do not ask anything.
     2. Gate on suppression and once-per-day. Read `memory/<today>.md` and `memory/heartbeat-state.json`. Reply silently and stop if either holds:
        - `memory/<today>.md` contains `[gate] index-network: suppressed by user` (the user dismissed Index Network today).
        - `signalElicitation.lastAskedDate` already equals today's date (you have asked once today).
@@ -45,6 +45,6 @@ tasks:
        - If the user has almost nothing, ask a broad opener — "What are you working on this week?" or "Open to anything new — collaborators, hiring, advice?"
        - Do not repeat a question close to one already in `signalElicitation.recentQuestions`. Vary it.
        Ask exactly one question. Calm, direct, short — no preamble, no "Great question!", no filler.
-    4. Record and stop. After asking, update `memory/heartbeat-state.json`: set `signalElicitation.lastAskedDate` to today's date, increment `signalElicitation.askCount` (start at 1 if absent), and append the question you asked to `signalElicitation.recentQuestions`, keeping only the last 5. Preserve every other key in the file (e.g. `prepared`, `deliveredToday`) — read the whole object, add to it, write it back. Append one short line to `memory/<today>.md` noting you asked a re-engagement question.
+    4. Record and stop. After asking, update `memory/heartbeat-state.json`: set `signalElicitation.lastAskedDate` to today's date, increment `signalElicitation.askCount` (start at 1 if absent), and append the question you asked to `signalElicitation.recentQuestions`, keeping only the last 5. Preserve every other key in the file (e.g. `prepared`, `deliveredToday`) — read the whole object, add to it, write it back. Append the line `[gate] index-network: signal-elicitation asked` to `memory/<today>.md`, matching the established gate-note format.
 
     Do not call `create_intent` or `create_premise` here. The user's answer arrives later, in a normal conversation turn, and is captured then — see the "Capturing new signal in conversation" section of tools.md.
