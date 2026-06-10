@@ -41,6 +41,7 @@ import {
   skillsDir,
   targetWorkspace,
 } from "./paths";
+import { captureWelcomeState, restoreWelcomeState } from "./welcome_state";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const SOURCE_WORKSPACE = join(SCRIPT_DIR, "../workspace");
@@ -184,6 +185,7 @@ function main(): void {
   ensureHermesAvailable();
 
   const wipeUser = process.argv.includes("--wipe-user");
+  const welcomeState = wipeUser ? null : captureWelcomeState(TARGET_HOME);
 
   console.log("Edge Hermes installer");
   console.log("===================");
@@ -199,6 +201,7 @@ function main(): void {
   installIndex();
   installEdgeos();
   installGeo();
+  restoreWelcomeState(welcomeState);
 
   if (!process.argv.includes("--no-restart")) {
     restartGateway();
