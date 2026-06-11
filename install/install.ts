@@ -30,7 +30,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 
-import { installIndex } from "./install_index";
+import { installIndex, preflightIndexIdentity } from "./install_index";
 import { installEdgeos } from "./install_edgeos";
 import { installGeo } from "./install_geo";
 import { setTerminalCwd } from "./config";
@@ -183,6 +183,11 @@ function restartGateway(): void {
 async function main(): Promise<void> {
   ensureHermesAvailable();
 
+  // Pre-flight: verify Index credentials before any HERMES_HOME mutations.
+  // Throws IdentityVerificationError on rejected key or handle mismatch,
+  // which propagates to main().catch → exit 1.
+  await preflightIndexIdentity();
+
   const wipeUser = process.argv.includes("--wipe-user");
 
   console.log("Edge Hermes installer");
@@ -196,7 +201,7 @@ async function main(): Promise<void> {
   copySkillFiles();
   setTerminalCwd();
 
-  await installIndex();
+  installIndex();
   installEdgeos();
   installGeo();
 

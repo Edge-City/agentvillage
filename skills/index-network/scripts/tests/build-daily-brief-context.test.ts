@@ -239,6 +239,171 @@ describe("build-daily-brief-context helpers", () => {
     }
   });
 
+  test("buildDailyBriefContext identity check success does not add warnings", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalApiKey = process.env.INDEX_API_KEY;
+    const originalMcpUrl = process.env.INDEX_MCP_URL;
+    const originalEdgeosKey = process.env.EDGEOS_API_KEY;
+    const originalControlPlaneUrl = process.env.EDGE_AGENT_CONTROL_PLANE_URL;
+    const originalAdminToken = process.env.ADMIN_TOKEN;
+    delete process.env.EDGEOS_API_KEY;
+    delete process.env.EDGE_AGENT_CONTROL_PLANE_URL;
+    delete process.env.ADMIN_TOKEN;
+    process.env.INDEX_API_KEY = "test-key";
+    process.env.INDEX_MCP_URL = "https://test.example.com/mcp";
+
+    const opportunityText = "1. Nathan Price\n   <!-- digest-opportunity:id=opp-mcp-1 -->\n   builds AI agents\n   status: pending\n   profileUrl: https://index.network/u/abc\n   acceptUrl: https://index.network/c/xyz\n   feedCategory: connection";
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("open-meteo") || url.includes("weather.gov")) {
+        return new Response("unavailable", { status: 503, statusText: "Service Unavailable" });
+      }
+      if (url === "https://test.example.com/api/auth/me") {
+        return Response.json({ user: { id: "u1", name: "Alice", email: "alice@test.com" } });
+      }
+      if (url === "https://test.example.com/mcp") {
+        const body = JSON.parse(init?.body as string ?? "{}") as { method: string };
+        if (body.method === "initialize") {
+          return Response.json({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", capabilities: {} } });
+        }
+        if (body.method === "tools/call") {
+          return Response.json({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: opportunityText }] } });
+        }
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    try {
+      const context = await buildDailyBriefContext({ date: "2026-06-10", userFiles: [] });
+      // Identity check succeeded — no identity-related warnings
+      const identityWarnings = context.diagnostics.warnings.filter((w: string) => w.startsWith("identity check"));
+      expect(identityWarnings).toEqual([]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalApiKey === undefined) delete process.env.INDEX_API_KEY;
+      else process.env.INDEX_API_KEY = originalApiKey;
+      if (originalMcpUrl === undefined) delete process.env.INDEX_MCP_URL;
+      else process.env.INDEX_MCP_URL = originalMcpUrl;
+      if (originalEdgeosKey === undefined) delete process.env.EDGEOS_API_KEY;
+      else process.env.EDGEOS_API_KEY = originalEdgeosKey;
+      if (originalControlPlaneUrl === undefined) delete process.env.EDGE_AGENT_CONTROL_PLANE_URL;
+      else process.env.EDGE_AGENT_CONTROL_PLANE_URL = originalControlPlaneUrl;
+      if (originalAdminToken === undefined) delete process.env.ADMIN_TOKEN;
+      else process.env.ADMIN_TOKEN = originalAdminToken;
+    }
+  });
+
+  test("buildDailyBriefContext identity check non-ok pushes warning", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalApiKey = process.env.INDEX_API_KEY;
+    const originalMcpUrl = process.env.INDEX_MCP_URL;
+    const originalEdgeosKey = process.env.EDGEOS_API_KEY;
+    const originalControlPlaneUrl = process.env.EDGE_AGENT_CONTROL_PLANE_URL;
+    const originalAdminToken = process.env.ADMIN_TOKEN;
+    delete process.env.EDGEOS_API_KEY;
+    delete process.env.EDGE_AGENT_CONTROL_PLANE_URL;
+    delete process.env.ADMIN_TOKEN;
+    process.env.INDEX_API_KEY = "test-key";
+    process.env.INDEX_MCP_URL = "https://test.example.com/mcp";
+
+    const opportunityText = "1. Nathan Price\n   <!-- digest-opportunity:id=opp-mcp-1 -->\n   builds AI agents\n   status: pending\n   profileUrl: https://index.network/u/abc\n   acceptUrl: https://index.network/c/xyz\n   feedCategory: connection";
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("open-meteo") || url.includes("weather.gov")) {
+        return new Response("unavailable", { status: 503, statusText: "Service Unavailable" });
+      }
+      // Return 503 from /me endpoint
+      if (url === "https://test.example.com/api/auth/me") {
+        return new Response("Service Unavailable", { status: 503 });
+      }
+      if (url === "https://test.example.com/mcp") {
+        const body = JSON.parse(init?.body as string ?? "{}") as { method: string };
+        if (body.method === "initialize") {
+          return Response.json({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", capabilities: {} } });
+        }
+        if (body.method === "tools/call") {
+          return Response.json({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: opportunityText }] } });
+        }
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    try {
+      const context = await buildDailyBriefContext({ date: "2026-06-10", userFiles: [] });
+      expect(context.diagnostics.warnings).toContain("identity check failed: HTTP 503");
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalApiKey === undefined) delete process.env.INDEX_API_KEY;
+      else process.env.INDEX_API_KEY = originalApiKey;
+      if (originalMcpUrl === undefined) delete process.env.INDEX_MCP_URL;
+      else process.env.INDEX_MCP_URL = originalMcpUrl;
+      if (originalEdgeosKey === undefined) delete process.env.EDGEOS_API_KEY;
+      else process.env.EDGEOS_API_KEY = originalEdgeosKey;
+      if (originalControlPlaneUrl === undefined) delete process.env.EDGE_AGENT_CONTROL_PLANE_URL;
+      else process.env.EDGE_AGENT_CONTROL_PLANE_URL = originalControlPlaneUrl;
+      if (originalAdminToken === undefined) delete process.env.ADMIN_TOKEN;
+      else process.env.ADMIN_TOKEN = originalAdminToken;
+    }
+  });
+
+  test("buildDailyBriefContext identity check fetch error pushes warning", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalApiKey = process.env.INDEX_API_KEY;
+    const originalMcpUrl = process.env.INDEX_MCP_URL;
+    const originalEdgeosKey = process.env.EDGEOS_API_KEY;
+    const originalControlPlaneUrl = process.env.EDGE_AGENT_CONTROL_PLANE_URL;
+    const originalAdminToken = process.env.ADMIN_TOKEN;
+    delete process.env.EDGEOS_API_KEY;
+    delete process.env.EDGE_AGENT_CONTROL_PLANE_URL;
+    delete process.env.ADMIN_TOKEN;
+    process.env.INDEX_API_KEY = "test-key";
+    process.env.INDEX_MCP_URL = "https://test.example.com/mcp";
+
+    const opportunityText = "1. Nathan Price\n   <!-- digest-opportunity:id=opp-mcp-1 -->\n   builds AI agents\n   status: pending\n   profileUrl: https://index.network/u/abc\n   acceptUrl: https://index.network/c/xyz\n   feedCategory: connection";
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("open-meteo") || url.includes("weather.gov")) {
+        return new Response("unavailable", { status: 503, statusText: "Service Unavailable" });
+      }
+      // Throw network error from /me endpoint
+      if (url === "https://test.example.com/api/auth/me") {
+        throw new Error("ECONNREFUSED");
+      }
+      if (url === "https://test.example.com/mcp") {
+        const body = JSON.parse(init?.body as string ?? "{}") as { method: string };
+        if (body.method === "initialize") {
+          return Response.json({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", capabilities: {} } });
+        }
+        if (body.method === "tools/call") {
+          return Response.json({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: opportunityText }] } });
+        }
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    try {
+      const context = await buildDailyBriefContext({ date: "2026-06-10", userFiles: [] });
+      expect(context.diagnostics.warnings).toContain("identity check failed: ECONNREFUSED");
+      // Digest still completes — never-throw contract preserved
+      expect(context.diagnostics.opportunitySource).toBe("mcp");
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalApiKey === undefined) delete process.env.INDEX_API_KEY;
+      else process.env.INDEX_API_KEY = originalApiKey;
+      if (originalMcpUrl === undefined) delete process.env.INDEX_MCP_URL;
+      else process.env.INDEX_MCP_URL = originalMcpUrl;
+      if (originalEdgeosKey === undefined) delete process.env.EDGEOS_API_KEY;
+      else process.env.EDGEOS_API_KEY = originalEdgeosKey;
+      if (originalControlPlaneUrl === undefined) delete process.env.EDGE_AGENT_CONTROL_PLANE_URL;
+      else process.env.EDGE_AGENT_CONTROL_PLANE_URL = originalControlPlaneUrl;
+      if (originalAdminToken === undefined) delete process.env.ADMIN_TOKEN;
+      else process.env.ADMIN_TOKEN = originalAdminToken;
+    }
+  });
+
   test("buildDailyBriefContext falls back to NWS when Open-Meteo rate limits", async () => {
     const originalFetch = globalThis.fetch;
     const originalEdgeosKey = process.env.EDGEOS_API_KEY;

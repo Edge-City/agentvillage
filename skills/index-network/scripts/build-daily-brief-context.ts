@@ -708,7 +708,10 @@ export async function buildDailyBriefContext(options: {
     // Best-effort identity log before each MCP session. Never blocks digest.
     try {
       const baseUrl = mcpUrl.replace(/\/mcp$/, "");
-      const meResp = await fetch(`${baseUrl}/api/auth/me`, { headers: { "x-api-key": apiKey } });
+      const meResp = await fetch(`${baseUrl}/api/auth/me`, {
+        headers: { "x-api-key": apiKey },
+        signal: AbortSignal.timeout(10_000),
+      });
       if (meResp.ok) {
         const meJson = (await meResp.json()) as {
           user?: { id: string; name: string; email: string | null };
@@ -720,9 +723,14 @@ export async function buildDailyBriefContext(options: {
             email: meJson.user.email,
           });
         }
+      } else {
+        warnings.push(`identity check failed: HTTP ${meResp.status}`);
       }
-    } catch {
-      // best-effort; never propagate
+    } catch (err) {
+      const reason = err instanceof Error && err.name === "TimeoutError"
+        ? "timeout after 10 s"
+        : err instanceof Error ? err.message : String(err);
+      warnings.push(`identity check failed: ${reason}`);
     }
     try {
       const deliveredIds = await readDeliveredIds(options.stateFile ?? "memory/heartbeat-state.json", date);

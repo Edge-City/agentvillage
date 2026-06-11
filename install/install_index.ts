@@ -72,16 +72,29 @@ export function normalizeTelegramHandle(value: string): string {
 }
 
 /**
+ * Typed error for identity verification failures.
+ * `kind` distinguishes a rejected key (401/403) from a telegram handle mismatch.
+ * Thrown by `verifyIndexIdentity`; `main().catch` maps it to exit 1.
+ */
+export class IdentityVerificationError extends Error {
+  constructor(
+    message: string,
+    public readonly kind: "rejected" | "mismatch",
+  ) {
+    super(message);
+    this.name = "IdentityVerificationError";
+  }
+}
+
+/**
  * Verify that the given API key resolves to the expected resident on Index Network.
  * Calls GET /api/auth/me with the key and compares the profile telegram handle against
  * the expected handle (if provided).
  *
- * Exit codes:
- *   - HTTP 401/403: key is invalid/expired → exit 1
- *   - telegram handle mismatch: wrong key for this resident → exit 1
- *   - network error / missing profile handle: warn + continue
+ * @throws {IdentityVerificationError} kind='rejected' when HTTP 401/403 (invalid/expired key)
+ * @throws {IdentityVerificationError} kind='mismatch' when telegram handle does not match
  */
-async function verifyIndexIdentity(apiKey: string, telegramHandle: string): Promise<void> {
+export async function verifyIndexIdentity(apiKey: string, telegramHandle: string): Promise<void> {
   const baseUrl = PROTOCOL_MCP_URL.replace(/\/mcp$/, "");
   console.log("  verifying Index Network identity...");
 
@@ -101,10 +114,10 @@ async function verifyIndexIdentity(apiKey: string, telegramHandle: string): Prom
     });
 
     if (resp.status === 401 || resp.status === 403) {
-      console.error(
-        `error: API key rejected by Index Network (HTTP ${resp.status}) — invalid or expired key`,
+      throw new IdentityVerificationError(
+        `API key rejected by Index Network (HTTP ${resp.status}) — invalid or expired key`,
+        "rejected",
       );
-      process.exit(1);
     }
 
     if (!resp.ok) {
@@ -117,6 +130,7 @@ async function verifyIndexIdentity(apiKey: string, telegramHandle: string): Prom
     const json = (await resp.json()) as { user?: MeUser };
     identity = json.user ?? null;
   } catch (err) {
+    if (err instanceof IdentityVerificationError) throw err;
     const reason = err instanceof Error && err.name === "TimeoutError"
       ? "timeout after 10 s"
       : "network error";
@@ -153,10 +167,10 @@ async function verifyIndexIdentity(apiKey: string, telegramHandle: string): Prom
   const expectedHandle = normalizeTelegramHandle(telegramHandle);
 
   if (profileHandle !== expectedHandle) {
-    console.error(
-      `error: API key authenticates as @${profileHandle}, expected @${expectedHandle} — wrong key for this resident`,
+    throw new IdentityVerificationError(
+      `API key authenticates as @${profileHandle}, expected @${expectedHandle} — wrong key for this resident`,
+      "mismatch",
     );
-    process.exit(1);
   }
 
   console.log(`  authenticated as ${displayName} — telegram: @${profileHandle} ✓`);
@@ -394,13 +408,27 @@ export function reconcileDigestCronJobs(env: NodeJS.ProcessEnv = hermesExecEnv()
   }
 }
 
-export async function installIndex(): Promise<void> {
+/**
+ * Pre-flight identity verification. Reads the API key and telegram handle from
+ * CLI flags / env, then calls `verifyIndexIdentity`.
+ *
+ * Call this in `main()` *before* any HERMES_HOME mutations so a credential
+ * failure aborts a pristine install.
+ *
+ * @throws {IdentityVerificationError} on rejected key or handle mismatch
+ */
+export async function preflightIndexIdentity(): Promise<void> {
   const apiKey = readApiKey();
   const telegramHandle = readTelegramHandle();
   console.log(
     `→ index network: target=${IS_DEV ? "dev" : "production"} (${PROTOCOL_MCP_URL})`,
   );
   await verifyIndexIdentity(apiKey, telegramHandle);
+}
+
+export function installIndex(): void {
+  const apiKey = readApiKey();
+  const telegramHandle = readTelegramHandle();
   upsertEnvVar("INDEX_API_KEY", apiKey);
   if (telegramHandle) upsertEnvVar("INDEX_TELEGRAM_HANDLE", telegramHandle);
   writeMcpServerEntry(apiKey, telegramHandle);
