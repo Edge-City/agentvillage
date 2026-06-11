@@ -271,6 +271,33 @@ describe("composeDailyBrief", () => {
     expect(body).not.toContain("Low");
   });
 
+  test("renders a One for you section when questions are pending", () => {
+    const { body } = composeDailyBrief({
+      ...baseContext,
+      questions: [
+        {
+          id: "q-0001",
+          title: "Collaboration focus",
+          prompt: "What kind of collaboration are you most open to right now?",
+          mode: "profile",
+        },
+      ],
+    });
+    expect(body).toContain("**One for you:** What kind of collaboration are you most open to right now?");
+    expect(body).toContain("Reply to me anytime!");
+  });
+
+  test("does not render a One for you section when questions are absent", () => {
+    const { body } = composeDailyBrief({ ...baseContext });
+    expect(body).not.toContain("**One for you:**");
+    expect(body).not.toContain("Reply to me anytime!");
+  });
+
+  test("does not render a One for you section when questions array is empty", () => {
+    const { body } = composeDailyBrief({ ...baseContext, questions: [] });
+    expect(body).not.toContain("**One for you:**");
+  });
+
   test("greeting includes weather when available and omits trailing period without weather", () => {
     // Without weather — should match exemplar (no trailing period)
     const { body: noWeather } = composeDailyBrief(baseContext);

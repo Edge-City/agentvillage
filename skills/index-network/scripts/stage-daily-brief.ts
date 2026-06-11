@@ -171,6 +171,16 @@ export function composeDailyBrief(context: DailyBriefContext): { body: string; o
 
   lines.push("That's it for now. You can always ask me for more detail, or any other questions you have!");
 
+  const pendingQuestions = context.questions ?? [];
+  if (pendingQuestions.length > 0) {
+    lines.push("");
+    lines.push("---");
+    lines.push("");
+    lines.push(`**One for you:** ${pendingQuestions[0].prompt}`);
+    lines.push("");
+    lines.push("Reply to me anytime!");
+  }
+
   return { body: lines.join("\n").replace(/\n{3,}/g, "\n\n"), opportunityIds };
 }
 
