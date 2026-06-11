@@ -45,6 +45,10 @@ const MARKDOWN_LINK = /\[([^\]]*)\]\(([^)]*)\)/g;
 
 /** Hidden marker that ties an editable digest fragment to the opportunity it represents. */
 const DIGEST_OPPORTUNITY_MARKER = /<!--\s*digest-opportunity:id=([^\s>]+)\s*-->/g;
+/** Hidden marker that ties a digest question fragment to the question it represents. */
+const DIGEST_QUESTION_MARKER = /<!--\s*digest-question:id=([^\s>]+)\s*-->/g;
+/** Any internal digest metadata marker (opportunity or question) — the strip set. */
+const DIGEST_METADATA_MARKER = /<!--\s*digest-(?:opportunity|question):id=[^\s>]+\s*-->/g;
 
 export interface SanitizeDigestOptions {
   /** Strip internal digest metadata comments before user-facing delivery. */
@@ -98,13 +102,33 @@ export function extractDigestOpportunityIds(markdown: string): string[] {
 }
 
 /**
+ * Extract question ids from digest question markers that remain in the edited body.
+ *
+ * @param markdown - the editable digest body
+ * @returns unique question ids in first-seen order
+ */
+export function extractDigestQuestionIds(markdown: string): string[] {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+
+  for (const match of markdown.matchAll(DIGEST_QUESTION_MARKER)) {
+    const id = match[1];
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+
+  return ids;
+}
+
+/**
  * Remove internal digest metadata comments from user-facing output.
  *
  * @param markdown - the digest body
- * @returns markdown without digest opportunity markers
+ * @returns markdown without digest opportunity/question markers
  */
 export function stripDigestMetadata(markdown: string): string {
-  return markdown.replace(DIGEST_OPPORTUNITY_MARKER, "");
+  return markdown.replace(DIGEST_METADATA_MARKER, "");
 }
 
 export function sanitizeDigestUrls(
