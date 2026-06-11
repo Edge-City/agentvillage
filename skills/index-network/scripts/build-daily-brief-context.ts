@@ -120,6 +120,13 @@ export interface BriefEvent {
   reasonHint: string;
 }
 
+export interface BriefQuestion {
+  id: string;
+  title: string;
+  prompt: string;
+  mode: string;
+}
+
 export interface BriefOpportunity {
   name: string;
   mainText?: string;
@@ -143,11 +150,13 @@ export interface DailyBriefContext {
   connectionOpportunities: BriefOpportunity[];
   communityOpportunities: BriefOpportunity[];
   weather?: DailyBriefWeather;
+  questions?: BriefQuestion[];
   diagnostics: {
     announcementsSource: "control-plane" | "unavailable";
     calendarSource: "edgeos" | "unavailable";
     rsvpSource: "edgeos" | "unavailable";
     opportunitySource: "mcp" | "file" | "unavailable";
+    questionSource?: "mcp" | "unavailable";
     weatherSource?: "open-meteo" | "nws" | "unavailable";
     warnings: string[];
     interestTags: string[];
@@ -715,6 +724,60 @@ export async function fetchOpportunitiesFromMcp(opts: {
   return parseOpportunityTranscript(text);
 }
 
+/**
+ * Fetch the first pending question by calling the Index MCP server directly
+ * via JSON-RPC with read_pending_questions. Mirrors fetchOpportunitiesFromMcp.
+ *
+ * NEVER throws — all errors are caught internally.
+ * Returns `{ questions, source }` so callers can distinguish a successful
+ * (possibly-empty) fetch from a silent failure.
+ */
+export async function fetchPendingQuestionsFromMcp(opts: {
+  apiKey: string;
+  mcpUrl: string;
+}): Promise<{ questions: BriefQuestion[]; source: "mcp" | "unavailable" }> {
+  try {
+    const initResp = await postMcpMessage(opts.mcpUrl, opts.apiKey, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: { name: "agentvillage-digest", version: "1.0.0" },
+      },
+    });
+    if (initResp.error) return { questions: [], source: "unavailable" };
+
+    const toolResp = await postMcpMessage(opts.mcpUrl, opts.apiKey, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: "read_pending_questions", arguments: { limit: 1 } },
+    });
+    if (toolResp.error) return { questions: [], source: "unavailable" };
+
+    const result = toolResp.result as McpToolResult | undefined;
+    const text = result?.content?.find((c) => c.type === "text")?.text ?? "";
+    if (!text.trim()) return { questions: [], source: "mcp" };
+
+    const parsed = JSON.parse(text) as { success?: boolean; data?: { questions?: unknown[] } };
+    if (!parsed.data?.questions || !Array.isArray(parsed.data.questions)) return { questions: [], source: "mcp" };
+    const questions = parsed.data.questions
+      .filter((q): q is Record<string, unknown> => q !== null && typeof q === "object")
+      .map((q) => ({
+        id: String(q.id ?? ""),
+        title: String(q.title ?? ""),
+        prompt: String(q.prompt ?? ""),
+        mode: String(q.mode ?? ""),
+      }))
+      .filter((q) => q.id && q.prompt);
+    return { questions, source: "mcp" };
+  } catch {
+    return { questions: [], source: "unavailable" };
+  }
+}
+
 export async function buildDailyBriefContext(options: {
   date?: string;
   stateFile?: string;
@@ -758,6 +821,18 @@ export async function buildDailyBriefContext(options: {
     }
   }
 
+  let questions: BriefQuestion[] = [];
+  let questionSource: "mcp" | "unavailable" = "unavailable";
+
+  if (apiKey) {
+    const questionResult = await fetchPendingQuestionsFromMcp({ apiKey, mcpUrl });
+    questions = questionResult.questions;
+    questionSource = questionResult.source;
+    if (questionResult.source === "unavailable") {
+      warnings.push("questions MCP unavailable");
+    }
+  }
+
   return {
     date,
     displayDate: displayDate(date),
@@ -770,11 +845,13 @@ export async function buildDailyBriefContext(options: {
     connectionOpportunities: opportunities.filter((opp) => opp.feedCategory === "connection"),
     communityOpportunities: opportunities.filter((opp) => opp.feedCategory === "connector-flow"),
     weather: weather.source !== "unavailable" ? weather : undefined,
+    questions,
     diagnostics: {
       announcementsSource: announcementResult.source,
       calendarSource: eventResult.source,
       rsvpSource: rsvpResult.source,
       opportunitySource,
+      questionSource,
       weatherSource: weather.source,
       warnings,
       interestTags,

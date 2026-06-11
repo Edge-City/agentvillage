@@ -4,6 +4,7 @@ import {
   buildDailyBriefContext,
   extractInterestTags,
   fetchOpportunitiesFromMcp,
+  fetchPendingQuestionsFromMcp,
   filterDedupedOpportunities,
   formatPacificTime,
   pacificDayBounds,
@@ -212,6 +213,14 @@ describe("build-daily-brief-context helpers", () => {
           return Response.json({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", capabilities: {} } });
         }
         if (body.method === "tools/call") {
+          const params = (body as { params?: { name?: string } }).params;
+          if (params?.name === "read_pending_questions") {
+            return Response.json({
+              jsonrpc: "2.0",
+              id: 2,
+              result: { content: [{ type: "text", text: JSON.stringify({ success: true, data: { questions: [] } }) }] },
+            });
+          }
           return Response.json({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: opportunityText }] } });
         }
       }
@@ -386,6 +395,70 @@ describe("fetchOpportunitiesFromMcp", () => {
     );
     try {
       await expect(fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL })).rejects.toThrow("Method not found");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe("fetchPendingQuestionsFromMcp", () => {
+  const MCP_URL = "https://test.mcp.com/mcp";
+
+  test("returns questions and source mcp on success", async () => {
+    const originalFetch = globalThis.fetch;
+    const mockQuestion = {
+      id: "q-0001",
+      title: "Collaboration focus",
+      prompt: "What kind of collaboration are you most open to right now?",
+      mode: "profile",
+    };
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === MCP_URL) {
+        const body = JSON.parse(init?.body as string ?? "{}") as { method: string };
+        if (body.method === "initialize") {
+          return Response.json({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", capabilities: {} } });
+        }
+        if (body.method === "tools/call") {
+          return Response.json({
+            jsonrpc: "2.0",
+            id: 2,
+            result: { content: [{ type: "text", text: JSON.stringify({ success: true, data: { questions: [mockQuestion] } }) }] },
+          });
+        }
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    try {
+      const result = await fetchPendingQuestionsFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL });
+      expect(result.source).toBe("mcp");
+      expect(result.questions).toHaveLength(1);
+      expect(result.questions[0].id).toBe("q-0001");
+      expect(result.questions[0].prompt).toBe("What kind of collaboration are you most open to right now?");
+      expect(result.questions[0].mode).toBe("profile");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("returns source unavailable when response body is malformed", async () => {
+    const originalFetch = globalThis.fetch;
+
+    globalThis.fetch = (async () => {
+      return Response.json({
+        jsonrpc: "2.0",
+        id: 1,
+        result: { content: [{ type: "text", text: "not json {{{{" }] },
+      });
+    }) as typeof fetch;
+
+    try {
+      const result = await fetchPendingQuestionsFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL });
+      // Malformed JSON triggers the catch block—source is unavailable
+      expect(result.source).toBe("unavailable");
+      expect(result.questions).toEqual([]);
     } finally {
       globalThis.fetch = originalFetch;
     }
