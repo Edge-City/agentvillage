@@ -13,11 +13,13 @@
 import { existsSync } from "node:fs";
 import { access } from "node:fs/promises";
 
-import { extractDigestOpportunityIds, sanitizeDigestUrls } from "./validate-digest-urls";
+import { QUESTION_COOLDOWN_DAYS } from "./build-daily-brief-context";
+import { extractDigestOpportunityIds, extractDigestQuestionIds, sanitizeDigestUrls } from "./validate-digest-urls";
 
 interface SendResult {
   taskId: string;
   opportunityIds: string[];
+  questionIds: string[];
   finalBrief: string;
 }
 
@@ -48,6 +50,20 @@ function pacificDate(): string {
   }).formatToParts(new Date());
   const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
   return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+/**
+ * Whether a question delivery entry is still inside the re-delivery cooldown.
+ * Future-dated entries (clock skew) count as within cooldown — never re-spam
+ * on ambiguity, matching filterCooldownQuestions in build-daily-brief-context.
+ */
+function withinQuestionCooldown(deliveredOn: string, today: string): boolean {
+  const toUtc = (d: string) => {
+    const [year, month, day] = d.split("-").map(Number);
+    return Date.UTC(year, month - 1, day);
+  };
+  const elapsedDays = Math.floor((toUtc(today) - toUtc(deliveredOn)) / 86_400_000);
+  return elapsedDays < QUESTION_COOLDOWN_DAYS;
 }
 
 async function readJsonObject(path: string): Promise<Record<string, unknown>> {
@@ -143,6 +159,7 @@ export async function sendDailyBrief(options: {
 
   await Bun.write(outgoingFile, body);
   const opportunityIds = extractDigestOpportunityIds(body);
+  const questionIds = extractDigestQuestionIds(body);
 
   const deliveredToday = state.deliveredToday && typeof state.deliveredToday === "object" && !Array.isArray(state.deliveredToday)
     ? state.deliveredToday as Record<string, unknown>
@@ -152,12 +169,27 @@ export async function sendDailyBrief(options: {
     date,
     ids: Array.from(new Set([...currentIds, ...opportunityIds])),
   };
+
+  // Cross-day question delivery log: record today's delivered question ids and
+  // prune entries past the cooldown (they no longer affect filtering, so the
+  // prune is lossless and keeps the state file bounded).
+  const questionDelivery = state.questionDelivery && typeof state.questionDelivery === "object" && !Array.isArray(state.questionDelivery)
+    ? { ...(state.questionDelivery as Record<string, unknown>) }
+    : {};
+  for (const [id, deliveredOn] of Object.entries(questionDelivery)) {
+    if (typeof deliveredOn !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(deliveredOn) || !withinQuestionCooldown(deliveredOn, date)) {
+      delete questionDelivery[id];
+    }
+  }
+  for (const id of questionIds) questionDelivery[id] = date;
+  state.questionDelivery = questionDelivery;
+
   await writeJson(stateFile, state);
 
   await hermes(["kanban", "complete", taskId, "--summary", "delivered"]);
 
   const { output: finalBrief } = sanitizeDigestUrls(body, { stripDigestMetadata: true });
-  return { taskId, opportunityIds, finalBrief };
+  return { taskId, opportunityIds, questionIds, finalBrief };
 }
 
 async function main(): Promise<void> {
