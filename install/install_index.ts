@@ -57,6 +57,111 @@ export function buildIndexMcpHeaders(apiKey: string, telegramHandle = ""): Recor
   return headers;
 }
 
+/**
+ * Normalize a Telegram handle to a bare lowercase handle.
+ * Strips leading @, URL prefix (t.me/, https://t.me/, telegram.me/), and
+ * everything after the first /, ?, or # — matching the SQL normalization
+ * in database.adapter.ts:4483.
+ */
+export function normalizeTelegramHandle(value: string): string {
+  let v = value.trim().toLowerCase();
+  v = v.replace(/^(https?:\/\/)?(t\.me|telegram\.me)\//, "");
+  v = v.replace(/^@/, "");
+  v = v.replace(/[/?#].*$/, "");
+  return v;
+}
+
+/**
+ * Verify that the given API key resolves to the expected resident on Index Network.
+ * Calls GET /api/auth/me with the key and compares the profile telegram handle against
+ * the expected handle (if provided).
+ *
+ * Exit codes:
+ *   - HTTP 401/403: key is invalid/expired → exit 1
+ *   - telegram handle mismatch: wrong key for this resident → exit 1
+ *   - network error / missing profile handle: warn + continue
+ */
+async function verifyIndexIdentity(apiKey: string, telegramHandle: string): Promise<void> {
+  const baseUrl = PROTOCOL_MCP_URL.replace(/\/mcp$/, "");
+  console.log("  verifying Index Network identity...");
+
+  type MeUser = {
+    id: string;
+    name: string;
+    email: string | null;
+    socials?: Array<{ label: string; value: string }>;
+  };
+
+  let identity: MeUser | null = null;
+
+  try {
+    const resp = await fetch(`${baseUrl}/api/auth/me`, {
+      headers: { "x-api-key": apiKey },
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    if (resp.status === 401 || resp.status === 403) {
+      console.error(
+        `error: API key rejected by Index Network (HTTP ${resp.status}) — invalid or expired key`,
+      );
+      process.exit(1);
+    }
+
+    if (!resp.ok) {
+      console.warn(
+        `  warning: identity check unavailable (HTTP ${resp.status}) — proceeding without verification`,
+      );
+      return;
+    }
+
+    const json = (await resp.json()) as { user?: MeUser };
+    identity = json.user ?? null;
+  } catch (err) {
+    const reason = err instanceof Error && err.name === "TimeoutError"
+      ? "timeout after 10 s"
+      : "network error";
+    console.warn(
+      `  warning: identity check unavailable (${reason}) — proceeding without verification`,
+    );
+    return;
+  }
+
+  if (!identity) {
+    console.warn(
+      "  warning: identity check returned empty user — proceeding without verification",
+    );
+    return;
+  }
+
+  const displayName = `${identity.name}${identity.email ? ` (${identity.email})` : ""}`;
+
+  if (!telegramHandle) {
+    console.log(`  authenticated as ${displayName}`);
+    return;
+  }
+
+  const telegramSocial = identity.socials?.find((s) => s.label === "telegram");
+
+  if (!telegramSocial) {
+    console.warn(
+      `  warning: authenticated as ${displayName} — no telegram handle on profile, cannot verify @${telegramHandle}`,
+    );
+    return;
+  }
+
+  const profileHandle = normalizeTelegramHandle(telegramSocial.value);
+  const expectedHandle = normalizeTelegramHandle(telegramHandle);
+
+  if (profileHandle !== expectedHandle) {
+    console.error(
+      `error: API key authenticates as @${profileHandle}, expected @${expectedHandle} — wrong key for this resident`,
+    );
+    process.exit(1);
+  }
+
+  console.log(`  authenticated as ${displayName} — telegram: @${profileHandle} ✓`);
+}
+
 function writeMcpServerEntry(apiKey: string, telegramHandle: string): void {
   const configPath = join(hermesHome(), "config.yaml");
   let doc: Record<string, unknown> = {};
@@ -289,12 +394,13 @@ export function reconcileDigestCronJobs(env: NodeJS.ProcessEnv = hermesExecEnv()
   }
 }
 
-export function installIndex(): void {
+export async function installIndex(): Promise<void> {
   const apiKey = readApiKey();
   const telegramHandle = readTelegramHandle();
   console.log(
     `→ index network: target=${IS_DEV ? "dev" : "production"} (${PROTOCOL_MCP_URL})`,
   );
+  await verifyIndexIdentity(apiKey, telegramHandle);
   upsertEnvVar("INDEX_API_KEY", apiKey);
   if (telegramHandle) upsertEnvVar("INDEX_TELEGRAM_HANDLE", telegramHandle);
   writeMcpServerEntry(apiKey, telegramHandle);
