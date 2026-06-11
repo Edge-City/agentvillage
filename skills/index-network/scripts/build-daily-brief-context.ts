@@ -14,6 +14,42 @@
  *     --out memory/daily-brief-context.json
  */
 
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+/**
+ * Resolve the Index API key.
+ *
+ * The hermes agent framework does not reliably pass environment variables to
+ * cron subprocess chains, so `process.env.INDEX_API_KEY` can be missing (or
+ * stale) when this script runs. Fall back to the persisted $HERMES_HOME/.env
+ * file, which is the authoritative source written during tenant provisioning
+ * and is always available on the pod volume.
+ */
+export function resolveIndexApiKey(): string | undefined {
+  const fromEnv = process.env.INDEX_API_KEY?.trim();
+  if (fromEnv) return fromEnv;
+
+  const hermesHome = process.env.HERMES_HOME?.trim() || process.cwd();
+  const envFile = join(hermesHome, ".env");
+  if (!existsSync(envFile)) return undefined;
+
+  try {
+    for (const line of readFileSync(envFile, "utf8").split("\n")) {
+      const match = line.match(/^\s*(?:export\s+)?INDEX_API_KEY\s*=\s*(.*)$/);
+      if (!match?.[1]) continue;
+      const value = match[1].trim().replace(/^["']|["']$/g, "");
+      if (value) {
+        console.error("warning: INDEX_API_KEY resolved from .env fallback, not process.env");
+        return value;
+      }
+    }
+  } catch {
+    // unreadable .env — treat as unavailable
+  }
+  return undefined;
+}
+
 const POPUP_ID = "43746fd0-bce2-472b-93e4-a438177b2dff";
 const EDGEOS_BASE = "https://api.edgeos.world/api/v1";
 const EDGE_ESMERALDA_EVENT_BASE_URL = "https://edgecity.simplefi.tech/portal/edge-esmeralda-2026/events";
@@ -701,7 +737,7 @@ export async function buildDailyBriefContext(options: {
   let opportunities: BriefOpportunity[] = [];
   let opportunitySource: "mcp" | "file" | "unavailable" = "unavailable";
 
-  const apiKey = process.env.INDEX_API_KEY?.trim();
+  const apiKey = resolveIndexApiKey();
   const mcpUrl = process.env.INDEX_MCP_URL?.trim() || "https://protocol.index.network/mcp";
 
   if (apiKey) {
