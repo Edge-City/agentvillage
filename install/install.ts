@@ -180,7 +180,7 @@ function restartGateway(): void {
   }
 }
 
-function main(): void {
+async function main(): Promise<void> {
   ensureHermesAvailable();
 
   const wipeUser = process.argv.includes("--wipe-user");
@@ -196,7 +196,7 @@ function main(): void {
   copySkillFiles();
   setTerminalCwd();
 
-  installIndex();
+  await installIndex();
   installEdgeos();
   installGeo();
 
@@ -211,4 +211,4 @@ function main(): void {
   console.log("next: message your Telegram bot — gateway uses terminal.cwd above");
 }
 
-main();
+main().catch((err) => { console.error(err); process.exit(1); });

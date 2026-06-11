@@ -705,6 +705,25 @@ export async function buildDailyBriefContext(options: {
   const mcpUrl = process.env.INDEX_MCP_URL?.trim() || "https://protocol.index.network/mcp";
 
   if (apiKey) {
+    // Best-effort identity log before each MCP session. Never blocks digest.
+    try {
+      const baseUrl = mcpUrl.replace(/\/mcp$/, "");
+      const meResp = await fetch(`${baseUrl}/api/auth/me`, { headers: { "x-api-key": apiKey } });
+      if (meResp.ok) {
+        const meJson = (await meResp.json()) as {
+          user?: { id: string; name: string; email: string | null };
+        };
+        if (meJson.user) {
+          console.log("[build-daily-brief-context] authenticatedAs:", {
+            id: meJson.user.id,
+            name: meJson.user.name,
+            email: meJson.user.email,
+          });
+        }
+      }
+    } catch {
+      // best-effort; never propagate
+    }
     try {
       const deliveredIds = await readDeliveredIds(options.stateFile ?? "memory/heartbeat-state.json", date);
       const fetched = await fetchOpportunitiesFromMcp({ apiKey, mcpUrl });
