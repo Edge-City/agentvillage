@@ -271,6 +271,47 @@ describe("composeDailyBrief", () => {
     expect(body).not.toContain("Low");
   });
 
+  test("renders a gated One for you postscript with a digest-question marker", () => {
+    const { body, questionIds } = composeDailyBrief({
+      ...baseContext,
+      announcements: [{ body: "Town hall at 5pm." }],
+      questions: [
+        {
+          id: "q-0001",
+          title: "Collaboration focus",
+          prompt: "What kind of collaboration are you most open to right now?",
+          mode: "profile",
+        },
+      ],
+    });
+    expect(questionIds).toEqual(["q-0001"]);
+    expect(body).toContain("<!-- digest-question:id=q-0001 -->**One for you:** What kind of collaboration are you most open to right now?");
+    expect(body).toContain("Reply to me anytime!");
+    expect(body.indexOf("That's it for now")).toBeLessThan(body.indexOf("**One for you:**"));
+  });
+
+  test("omits the question postscript from the pointer-only fallback digest", () => {
+    const { body, questionIds } = composeDailyBrief({
+      ...baseContext,
+      questions: [{ id: "q-0001", title: "T", prompt: "Anything new?", mode: "profile" }],
+    });
+    expect(questionIds).toEqual([]);
+    expect(body).toContain("I couldn't check the live calendar this morning");
+    expect(body).not.toContain("**One for you:**");
+    expect(body).not.toContain("digest-question");
+  });
+
+  test("does not render a One for you section when questions are absent", () => {
+    const { body } = composeDailyBrief({ ...baseContext });
+    expect(body).not.toContain("**One for you:**");
+    expect(body).not.toContain("Reply to me anytime!");
+  });
+
+  test("does not render a One for you section when questions array is empty", () => {
+    const { body } = composeDailyBrief({ ...baseContext, questions: [] });
+    expect(body).not.toContain("**One for you:**");
+  });
+
   test("greeting includes weather when available and omits trailing period without weather", () => {
     // Without weather — should match exemplar (no trailing period)
     const { body: noWeather } = composeDailyBrief(baseContext);

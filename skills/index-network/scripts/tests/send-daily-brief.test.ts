@@ -89,4 +89,41 @@ describe("sendDailyBrief", () => {
       ["kanban", "complete", "t_digest", "--summary", "delivered"],
     ]);
   });
+
+  test("records question delivery dates, prunes stale entries, and preserves sibling state keys", async () => {
+    tempWorkspace();
+    await Bun.write("state.json", JSON.stringify({
+      prepared: { date: "2026-06-10", taskId: "t_digest" },
+      questionDelivery: { "q-old": "2026-06-01", "q-recent": "2026-06-09" },
+      signalElicitation: { lastAskedDate: "2026-06-09" },
+    }));
+    const body = [
+      "\u{1F31E} Good morning",
+      "**Announcements**",
+      "- Town hall at 5pm.",
+      "<!-- digest-question:id=q-0001 -->**One for you:** What are you building?",
+    ].join("\n");
+
+    const result = await sendDailyBrief({
+      date: "2026-06-10",
+      stateFile: "state.json",
+      outgoingFile: "outgoing.md",
+      hermes: (args) => {
+        if (args[0] === "kanban" && args[1] === "show") return JSON.stringify({ task: { id: "t_digest", status: "ready", body } });
+        if (args[0] === "kanban" && args[1] === "complete") return "completed";
+        throw new Error(`unexpected hermes call: ${args.join(" ")}`);
+      },
+    });
+
+    expect("silent" in result).toBe(false);
+    if ("silent" in result) throw new Error("unexpected silent result");
+    expect(result.questionIds).toEqual(["q-0001"]);
+    expect(result.finalBrief).not.toContain("digest-question");
+    expect(result.finalBrief).toContain("**One for you:** What are you building?");
+
+    const state = JSON.parse(await Bun.file("state.json").text());
+    // q-old (9 days ago, past the 3-day cooldown) pruned; q-recent kept; q-0001 recorded today.
+    expect(state.questionDelivery).toEqual({ "q-recent": "2026-06-09", "q-0001": "2026-06-10" });
+    expect(state.signalElicitation).toEqual({ lastAskedDate: "2026-06-09" });
+  });
 });

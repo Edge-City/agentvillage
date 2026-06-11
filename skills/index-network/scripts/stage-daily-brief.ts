@@ -84,7 +84,7 @@ function opportunityReason(
   return linkifyOpportunityName(reason, opp);
 }
 
-export function composeDailyBrief(context: DailyBriefContext): { body: string; opportunityIds: string[] } {
+export function composeDailyBrief(context: DailyBriefContext): { body: string; opportunityIds: string[]; questionIds: string[] } {
   const greetingParts = [`🌞 Good morning from Edge Esmeralda. It is ${context.displayDate}`];
   if (context.weather?.source !== "unavailable" && context.weather?.forecast) {
     greetingParts.push(`${context.weather.emoji} ${context.weather.forecast}`);
@@ -97,6 +97,7 @@ export function composeDailyBrief(context: DailyBriefContext): { body: string; o
     "",
   ];
   const opportunityIds: string[] = [];
+  const questionIds: string[] = [];
   let hasVerifiedContent = false;
 
   if (context.announcements.length > 0) {
@@ -171,7 +172,24 @@ export function composeDailyBrief(context: DailyBriefContext): { body: string; o
 
   lines.push("That's it for now. You can always ask me for more detail, or any other questions you have!");
 
-  return { body: lines.join("\n").replace(/\n{3,}/g, "\n\n"), opportunityIds };
+  // "One for you" postscript: deliberately placed after the sign-off as a P.S.
+  // (sanctioned in prepare.md). Gated on hasVerifiedContent so the pointer-only
+  // fallback digest stays pointer-only. The digest-question marker mirrors the
+  // opportunity marker: it survives human Kanban edits and lets the send pass
+  // record exactly which question actually shipped.
+  const pendingQuestions = context.questions ?? [];
+  const question = hasVerifiedContent ? pendingQuestions[0] : undefined;
+  if (question) {
+    questionIds.push(question.id);
+    lines.push("");
+    lines.push("---");
+    lines.push("");
+    lines.push(`<!-- digest-question:id=${question.id} -->**One for you:** ${question.prompt}`);
+    lines.push("");
+    lines.push("Reply to me anytime!");
+  }
+
+  return { body: lines.join("\n").replace(/\n{3,}/g, "\n\n"), opportunityIds, questionIds };
 }
 
 async function readJsonObject(path: string): Promise<Record<string, unknown>> {
@@ -237,7 +255,7 @@ export async function stageDailyBrief(options: {
   opportunitiesFile?: string;
   stateFile?: string;
   contextOut?: string;
-} = {}): Promise<{ taskId: string; body: string; opportunityIds: string[] }> {
+} = {}): Promise<{ taskId: string; body: string; opportunityIds: string[]; questionIds: string[] }> {
   const date = options.date ?? pacificDate();
   const opportunitiesFile = options.opportunitiesFile ?? "memory/digest-opportunities.txt";
   const stateFile = options.stateFile ?? "memory/heartbeat-state.json";
@@ -246,7 +264,7 @@ export async function stageDailyBrief(options: {
   const context = await buildDailyBriefContext({ date, opportunitiesFile, stateFile });
   await writeJson(contextOut, context);
 
-  const { body, opportunityIds } = composeDailyBrief(context);
+  const { body, opportunityIds, questionIds } = composeDailyBrief(context);
   const { output: sanitizedBody } = sanitizeDigestUrls(body);
   await Bun.write("memory/digest-draft.md", `${sanitizedBody}\n`);
 
@@ -270,12 +288,13 @@ export async function stageDailyBrief(options: {
     taskId,
     taskTitle: `Morning digest — ${date}`,
     opportunityIds,
+    questionIds,
   };
   await writeJson(stateFile, state);
 
   rmSync("memory/digest-draft.md", { force: true });
 
-  return { taskId, body: sanitizedBody, opportunityIds };
+  return { taskId, body: sanitizedBody, opportunityIds, questionIds };
 }
 
 async function main(): Promise<void> {
@@ -286,7 +305,7 @@ async function main(): Promise<void> {
     stateFile: argValue(args, "--state-file"),
     contextOut: argValue(args, "--context-out"),
   });
-  process.stdout.write(`${JSON.stringify({ taskId: result.taskId, opportunityIds: result.opportunityIds })}\n`);
+  process.stdout.write(`${JSON.stringify({ taskId: result.taskId, opportunityIds: result.opportunityIds, questionIds: result.questionIds })}\n`);
 }
 
 if (import.meta.main) {

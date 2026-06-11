@@ -120,6 +120,13 @@ export interface BriefEvent {
   reasonHint: string;
 }
 
+export interface BriefQuestion {
+  id: string;
+  title: string;
+  prompt: string;
+  mode: string;
+}
+
 export interface BriefOpportunity {
   name: string;
   mainText?: string;
@@ -143,11 +150,13 @@ export interface DailyBriefContext {
   connectionOpportunities: BriefOpportunity[];
   communityOpportunities: BriefOpportunity[];
   weather?: DailyBriefWeather;
+  questions?: BriefQuestion[];
   diagnostics: {
     announcementsSource: "control-plane" | "unavailable";
     calendarSource: "edgeos" | "unavailable";
     rsvpSource: "edgeos" | "unavailable";
     opportunitySource: "mcp" | "file" | "unavailable";
+    questionSource?: "mcp" | "unavailable";
     weatherSource?: "open-meteo" | "nws" | "unavailable";
     warnings: string[];
     interestTags: string[];
@@ -157,6 +166,14 @@ export interface DailyBriefContext {
 const HIGHLIGHTED_EVENT_LIMIT = 6;
 const DISCOVERY_EVENT_TARGET = 6;
 const RSVP_EVENT_LIMIT = 6;
+/** How many pending questions to fetch per digest run (tool caps at 10). */
+const QUESTION_FETCH_LIMIT = 5;
+/** Hard cap on a question prompt interpolated into the digest body. */
+const QUESTION_PROMPT_MAX_LENGTH = 300;
+/** Marker-safe question id shape — ids are interpolated into <!-- digest-question:id=… --> markers. */
+const QUESTION_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+/** Days a delivered question stays out of the digest before being re-offered. */
+export const QUESTION_COOLDOWN_DAYS = 3;
 
 type EdgeEvent = Record<string, unknown> & {
   id?: string;
@@ -429,6 +446,55 @@ async function readDeliveredIds(stateFile: string, date: string): Promise<Set<st
     // missing/malformed state should not block the brief
   }
   return new Set();
+}
+
+/** Whole days from `earlier` to `later` (both YYYY-MM-DD); negative when `earlier` is after `later`. */
+function daysBetween(earlier: string, later: string): number {
+  const a = parseDateParts(earlier);
+  const b = parseDateParts(later);
+  const ms = Date.UTC(b.year, b.month - 1, b.day) - Date.UTC(a.year, a.month - 1, a.day);
+  return Math.floor(ms / 86_400_000);
+}
+
+/**
+ * Read the cross-day question delivery log (`questionDelivery`:
+ * `{ [questionId]: "YYYY-MM-DD" }`) from heartbeat state. Unlike
+ * `deliveredToday`, entries persist across days — a question stays pending on
+ * Index until answered, so dedup must outlive a single date. Defensive like
+ * readDeliveredIds: missing/malformed state never blocks the brief.
+ */
+async function readQuestionDelivery(stateFile: string): Promise<Record<string, string>> {
+  try {
+    const raw = await Bun.file(stateFile).text();
+    const parsed = JSON.parse(raw) as { questionDelivery?: unknown };
+    if (parsed.questionDelivery && typeof parsed.questionDelivery === "object" && !Array.isArray(parsed.questionDelivery)) {
+      return Object.fromEntries(
+        Object.entries(parsed.questionDelivery as Record<string, unknown>)
+          .filter((entry): entry is [string, string] =>
+            Boolean(entry[0]) && typeof entry[1] === "string" && /^\d{4}-\d{2}-\d{2}$/.test(entry[1])),
+      );
+    }
+  } catch {
+    // missing/malformed state should not block the brief
+  }
+  return {};
+}
+
+/**
+ * Drop questions delivered within the last QUESTION_COOLDOWN_DAYS days.
+ * A question with a future-dated delivery entry (clock skew) is also dropped —
+ * never re-spam on ambiguity. Undelivered questions always pass.
+ */
+export function filterCooldownQuestions(
+  questions: BriefQuestion[],
+  delivery: Record<string, string>,
+  date: string,
+): BriefQuestion[] {
+  return questions.filter((q) => {
+    const deliveredOn = delivery[q.id];
+    if (!deliveredOn) return true;
+    return daysBetween(deliveredOn, date) >= QUESTION_COOLDOWN_DAYS;
+  });
 }
 
 async function fetchOpenMeteoWeather(date: string): Promise<DailyBriefWeather> {
@@ -715,6 +781,85 @@ export async function fetchOpportunitiesFromMcp(opts: {
   return parseOpportunityTranscript(text);
 }
 
+/**
+ * Sanitize an MCP-sourced question prompt before it is interpolated into the
+ * digest body: drop HTML-comment sequences (so a hostile prompt cannot forge
+ * digest-opportunity/digest-question markers), collapse all whitespace to a
+ * single line (so it cannot inject section headers), and cap the length.
+ */
+function sanitizeQuestionPrompt(raw: string): string {
+  const collapsed = raw
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<!--|-->/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (collapsed.length <= QUESTION_PROMPT_MAX_LENGTH) return collapsed;
+  return `${collapsed.slice(0, QUESTION_PROMPT_MAX_LENGTH - 1).trimEnd()}…`;
+}
+
+/**
+ * Fetch pending questions by calling the Index MCP server directly via
+ * JSON-RPC with read_pending_questions. Mirrors fetchOpportunitiesFromMcp.
+ *
+ * NEVER throws — all errors are caught internally.
+ * Returns `{ questions, source, reason? }`: `source: "mcp"` is reserved for
+ * genuinely successful fetches (possibly empty); every failure path returns
+ * `source: "unavailable"` with a `reason` for the diagnostics warning.
+ */
+export async function fetchPendingQuestionsFromMcp(opts: {
+  apiKey: string;
+  mcpUrl: string;
+}): Promise<{ questions: BriefQuestion[]; source: "mcp" | "unavailable"; reason?: string }> {
+  try {
+    const initResp = await postMcpMessage(opts.mcpUrl, opts.apiKey, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: { name: "agentvillage-digest", version: "1.0.0" },
+      },
+    });
+    if (initResp.error) {
+      return { questions: [], source: "unavailable", reason: `MCP initialize: ${initResp.error.message}` };
+    }
+
+    const toolResp = await postMcpMessage(opts.mcpUrl, opts.apiKey, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: "read_pending_questions", arguments: { limit: QUESTION_FETCH_LIMIT } },
+    });
+    if (toolResp.error) {
+      return { questions: [], source: "unavailable", reason: `MCP read_pending_questions: ${toolResp.error.message}` };
+    }
+
+    const result = toolResp.result as McpToolResult | undefined;
+    const text = result?.content?.find((c) => c.type === "text")?.text ?? "";
+    if (!text.trim()) return { questions: [], source: "mcp" };
+
+    const parsed = JSON.parse(text) as { success?: boolean; error?: unknown; data?: { questions?: unknown[] } };
+    if (parsed.success === false) {
+      const detail = typeof parsed.error === "string" && parsed.error.trim() ? parsed.error : "tool reported failure";
+      return { questions: [], source: "unavailable", reason: `read_pending_questions: ${detail}` };
+    }
+    if (!parsed.data?.questions || !Array.isArray(parsed.data.questions)) return { questions: [], source: "mcp" };
+    const questions = parsed.data.questions
+      .filter((q): q is Record<string, unknown> => q !== null && typeof q === "object")
+      .map((q) => ({
+        id: String(q.id ?? ""),
+        title: String(q.title ?? ""),
+        prompt: sanitizeQuestionPrompt(String(q.prompt ?? "")),
+        mode: String(q.mode ?? ""),
+      }))
+      .filter((q) => QUESTION_ID_PATTERN.test(q.id) && q.prompt);
+    return { questions, source: "mcp" };
+  } catch (err) {
+    return { questions: [], source: "unavailable", reason: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export async function buildDailyBriefContext(options: {
   date?: string;
   stateFile?: string;
@@ -758,6 +903,19 @@ export async function buildDailyBriefContext(options: {
     }
   }
 
+  let questions: BriefQuestion[] = [];
+  let questionSource: "mcp" | "unavailable" = "unavailable";
+
+  if (apiKey) {
+    const questionResult = await fetchPendingQuestionsFromMcp({ apiKey, mcpUrl });
+    const questionDelivery = await readQuestionDelivery(options.stateFile ?? "memory/heartbeat-state.json");
+    questions = filterCooldownQuestions(questionResult.questions, questionDelivery, date);
+    questionSource = questionResult.source;
+    if (questionResult.source === "unavailable") {
+      warnings.push(`questions MCP unavailable: ${questionResult.reason ?? "unknown"}`);
+    }
+  }
+
   return {
     date,
     displayDate: displayDate(date),
@@ -770,11 +928,13 @@ export async function buildDailyBriefContext(options: {
     connectionOpportunities: opportunities.filter((opp) => opp.feedCategory === "connection"),
     communityOpportunities: opportunities.filter((opp) => opp.feedCategory === "connector-flow"),
     weather: weather.source !== "unavailable" ? weather : undefined,
+    questions,
     diagnostics: {
       announcementsSource: announcementResult.source,
       calendarSource: eventResult.source,
       rsvpSource: rsvpResult.source,
       opportunitySource,
+      questionSource,
       weatherSource: weather.source,
       warnings,
       interestTags,

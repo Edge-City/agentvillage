@@ -2,6 +2,7 @@ import { test, expect, describe } from "bun:test";
 
 import {
   extractDigestOpportunityIds,
+  extractDigestQuestionIds,
   sanitizeDigestUrls,
   stripDigestMetadata,
 } from "../validate-digest-urls";
@@ -152,5 +153,34 @@ describe("sanitizeDigestUrls", () => {
     const md = "<!-- keep-me -->\n- <!-- digest-opportunity:id=opp-1 -->Maya";
 
     expect(stripDigestMetadata(md)).toBe("<!-- keep-me -->\n- Maya");
+  });
+
+  test("extracts unique question ids in order, ignoring opportunity markers", () => {
+    const md = [
+      "- <!-- digest-opportunity:id=opp-1 -->Maya — relevant",
+      "<!-- digest-question:id=q-1 -->**One for you:** What are you building?",
+      "<!-- digest-question:id=q-1 -->duplicate",
+      "<!-- digest-question:id=q-2 -->**One for you:** Something else?",
+    ].join("\n");
+
+    expect(extractDigestQuestionIds(md)).toEqual(["q-1", "q-2"]);
+    expect(extractDigestOpportunityIds(md)).toEqual(["opp-1"]);
+  });
+
+  test("stripDigestMetadata removes question markers as well as opportunity markers", () => {
+    const md = "<!-- keep-me -->\n- <!-- digest-opportunity:id=opp-1 -->Maya\n<!-- digest-question:id=q-1 -->**One for you:** What are you building?";
+
+    const stripped = stripDigestMetadata(md);
+
+    expect(stripped).toBe("<!-- keep-me -->\n- Maya\n**One for you:** What are you building?");
+    expect(stripped).not.toContain("digest-opportunity");
+    expect(stripped).not.toContain("digest-question");
+  });
+
+  test("sanitizeDigestUrls strips question markers on final delivery and preserves them by default", () => {
+    const md = "<!-- digest-question:id=q-1 -->**One for you:** Anything new?";
+
+    expect(sanitizeDigestUrls(md).output).toBe(md);
+    expect(sanitizeDigestUrls(md, { stripDigestMetadata: true }).output).toBe("**One for you:** Anything new?");
   });
 });
