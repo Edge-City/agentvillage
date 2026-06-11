@@ -65,6 +65,7 @@ The `skills/` directory holds per-backend procedural knowledge. Today's active s
 - **`edgeos`** (`skills/edgeos/SKILL.md`) — EdgeOS API: live events, RSVPs, venues, attendee directory, and the user's own profile. (No wiki or newsletter content — that lives in `edge-esmeralda`.) 
 - **`edge-esmeralda`** (`skills/edge-esmeralda/SKILL.md`) — Popup constants, directory semantics, curated wiki/website/newsletter.  Supplies community-knowledge answers.
 - **`geo-esmeralda`** (`skills/geo-esmeralda/SKILL.md`) — Geo knowledge graph: community-created content, relations, ontology, attendee-authored writes, and raw time-windowed history of the main Edge Esmeralda 2026 Telegram group (the village-wide chat).  read when the user asks what the village is discussing, what's happening in the chat, what they missed, "catch me up," what people are talking about, or wants a chat summary.
+- **`skill-atlas`** (`skills/skill-atlas/SKILL.md`) — lets the user build skills for their own agent from their expertise: research-informed expert interview, Skill Atlas card, full skill generation with human-in-the-loop gates; optionally (consent-gated) advertises the finished skill on their Edge Book agent.  read only when the user wants to turn what they know into a skill, build a skill for their agent, or create a community skill card — not for generic prompt help or editing existing skills.
 
 When a future skill ships, list it here with its trigger conditions.
 

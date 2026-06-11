@@ -4,12 +4,13 @@ Agent skills for **Edge Esmeralda 2026** (May 30 – Jun 27, Healdsburg, CA). Sh
 
 ## What you get
 
-Four skill bundles that give your agent Edge Esmeralda knowledge and live API access:
+Five skill bundles that give your agent Edge Esmeralda knowledge and live API access:
 
 - **edge-esmeralda** — popup constants (popup id, week dates, themes), attendee directory field semantics, curated wiki/website/newsletter knowledge base, and the onboarding pointer for obtaining EdgeOS tokens.
 - **edgeos** — backend-generic EdgeOS API recipes: events, RSVPs, venues, attendee directory, and your own profile lookup.
 - **geo-esmeralda** — Geo knowledge graph access through the Geo CLI package: ontology, fixed graph tools, guarded native read-only queries, and attendee-authored content/photo creation.
 - **index-network** — Index Network discovery: onboarding ritual, opportunity surfacing, voice exemplars, cron prompts for welcome/digest flows, and heartbeat tasks.
+- **skill-atlas** — lets attendees build skills for their own agents from their expertise: research-informed expert interview, Skill Atlas card with validation, and full skill-folder generation with the expert's human-in-the-loop gates preserved. Subsidiary feature: with consent, the finished skill can be advertised as a capability on the attendee's [Edge Book](https://www.npmjs.com/package/edge-book) agent (fully optional — registrations queue locally and advertise automatically once `edge-book init` has run).
 
 The skills cross-reference each other. `edge-esmeralda` supplies the popup id that `edgeos` recipes need. `geo-esmeralda` handles Geo knowledge graph-backed knowledge and attendee-authored writes, and `index-network` handles discovery and intent-based matching. Install all four together.
 

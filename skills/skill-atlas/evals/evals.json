@@ -1,0 +1,57 @@
+[
+  {
+    "skill": "skill-atlas",
+    "query": "I know a lot about agent payments but I do not know how to turn that into a skill for my agent.",
+    "expected_behavior": [
+      "Classifies this as expert elicitation, not a ready-made SOP",
+      "Runs domain research per references/domain-research.md before interviewing the expert",
+      "Presents adjacent skill directions before asking detailed interview questions"
+    ]
+  },
+  {
+    "skill": "skill-atlas",
+    "query": "Build a skill from this complete SOP: fetch orders, normalize CSV, upload to Shopify, then email a report.",
+    "expected_behavior": [
+      "Recognizes the user already has a workflow brief",
+      "Skips the interview and proceeds to generation per references/skill-generation.md",
+      "Still requires explicit approval of the design summary before writing files"
+    ]
+  },
+  {
+    "skill": "skill-atlas",
+    "query": "Create a public Skill Atlas card for my biosecurity expertise, but do not build the full skill yet.",
+    "expected_behavior": [
+      "Produces a skill-card.yaml artifact and validates it",
+      "Does not generate a full SKILL.md folder",
+      "Marks validation status no higher than expert-reviewed unless scenarios have been tested"
+    ]
+  },
+  {
+    "skill": "skill-atlas",
+    "query": "Interview me about my expertise and make a skill from it.",
+    "expected_behavior": [
+      "Starts from research-informed options, not generic process questions",
+      "Asks for a difficult real incident",
+      "Captures validation scenarios before recommending full skill generation",
+      "Preserves the expert's human review gates as hard pauses in the generated skill"
+    ]
+  },
+  {
+    "skill": "skill-atlas",
+    "query": "The skill is generated. Add it to my profile.",
+    "expected_behavior": [
+      "Asks for explicit consent naming exactly what is advertised (name, version, one-line summary) before registering",
+      "Runs scripts/register_capability.ts register with the skill card path",
+      "If Edge Book is not installed or not initialized, reports the capability is queued and will advertise automatically once edge-book init has run",
+      "Never transmits the expertise map or example content"
+    ]
+  },
+  {
+    "skill": "skill-atlas",
+    "query": "What's the weather at Edge Esmeralda today?",
+    "expected_behavior": [
+      "Does not activate skill-atlas",
+      "Answers normally or routes to the appropriate skill"
+    ]
+  }
+]

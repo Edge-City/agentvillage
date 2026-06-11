@@ -1,0 +1,33 @@
+title: ""
+slug: ""
+expert: ""
+expertise_basis: ""
+community_context: ""
+task: ""
+target_user: ""
+trigger: ""
+negative_trigger: ""
+output_contract: ""
+judgment_heavy_step: ""
+key_cues: []
+decision_criteria: []
+examples:
+  good: ""
+  messy: ""
+  edge: ""
+  negative: ""
+  novice_trap: ""
+novice_traps: []
+validation_cases: []
+known_limits: []
+status: "captured"
+artifacts:
+  skill_card: true
+  expertise_map: true
+  skill_folder: false
+links:
+  agent_card_url: ""
+  github_url: ""
+  contact: ""
+version: "0.1"
+updated: ""
