@@ -595,6 +595,29 @@ describe("fetchOpportunitiesFromMcp", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test("sends x-index-surface: telegram on every MCP request so minted links deep-link to t.me", async () => {
+    const originalFetch = globalThis.fetch;
+    const seenHeaders: Array<Record<string, string>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      seenHeaders.push({ ...(init?.headers as Record<string, string>) });
+      const body = JSON.parse(init?.body as string ?? "{}") as { method: string };
+      if (body.method === "initialize") {
+        return Response.json({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", capabilities: {} } });
+      }
+      return Response.json({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: "" }] } });
+    }) as typeof fetch;
+    try {
+      await fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL });
+      expect(seenHeaders.length).toBeGreaterThanOrEqual(2);
+      for (const headers of seenHeaders) {
+        expect(headers["x-index-surface"]).toBe("telegram");
+        expect(headers["x-api-key"]).toBe("test-key");
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 describe("filterCooldownQuestions", () => {

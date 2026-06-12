@@ -714,6 +714,13 @@ async function postMcpMessage(mcpUrl: string, apiKey: string, body: unknown): Pr
       "Content-Type": "application/json",
       "Accept": "application/json, text/event-stream",
       "x-api-key": apiKey,
+      // The digest is always delivered over Telegram (Hermes). Without this
+      // header the MCP server coerces the surface to "web", which stamps
+      // minted connect links with preferredSurface=web and breaks the
+      // click-time t.me deep-link redirect (links land on the web chat
+      // fallback instead of opening Telegram). Mirrors install_index.ts's
+      // buildIndexMcpHeaders.
+      "x-index-surface": "telegram",
     },
     body: JSON.stringify(body),
   });
