@@ -320,22 +320,30 @@ export function reconcileDigestCronJobs(env: NodeJS.ProcessEnv = hermesExecEnv()
         console.log(`→ cron "${spec.name}" up to date`);
         continue;
       }
-      const parts = [
-        ...(promptStale ? ["prompt"] : []),
-        ...(scheduleStale ? [`schedule → ${schedule}`] : []),
-      ];
-      console.log(`→ updating cron "${spec.name}" (${parts.join(", ")})`);
-      try {
-        execFileSync(
-          bin,
-          cronEditArgs(job.id, {
-            ...(promptStale ? { prompt: promptBody } : {}),
-            ...(scheduleStale ? { schedule } : {}),
-          }),
-          { stdio: ["ignore", "ignore", "inherit"], env },
-        );
-      } catch {
-        console.warn(`  warning: could not update cron "${spec.name}" — gateway may still run`);
+      // Prompt and schedule are updated in separate `cron edit` calls so a
+      // failure of one (e.g. an older Hermes without --schedule) cannot take
+      // down the other. Prompt first — it's the critical update.
+      if (promptStale) {
+        console.log(`→ updating cron "${spec.name}" prompt`);
+        try {
+          execFileSync(bin, cronEditArgs(job.id, { prompt: promptBody }), {
+            stdio: ["ignore", "ignore", "inherit"],
+            env,
+          });
+        } catch {
+          console.warn(`  warning: could not update cron "${spec.name}" prompt — gateway may still run`);
+        }
+      }
+      if (scheduleStale) {
+        console.log(`→ migrating cron "${spec.name}" schedule → ${schedule}`);
+        try {
+          execFileSync(bin, cronEditArgs(job.id, { schedule }), {
+            stdio: ["ignore", "ignore", "inherit"],
+            env,
+          });
+        } catch {
+          console.warn(`  warning: could not migrate cron "${spec.name}" schedule — still on "${spec.schedule}"`);
+        }
       }
       continue;
     }
