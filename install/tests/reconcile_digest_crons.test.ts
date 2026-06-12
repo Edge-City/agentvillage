@@ -16,7 +16,7 @@ import {
 } from "../install_index";
 
 const SEED = "ix_integration_seed";
-const [PREPARE, SEND] = DIGEST_CRON_SPECS;
+const [SIGNALS, PREPARE, SEND] = DIGEST_CRON_SPECS;
 
 let home: string;
 let stubLog: string;
@@ -60,6 +60,7 @@ function cronCalls(): string[][] {
 function writePrompts(): void {
   const prompts = join(home, "skills/edge-esmeralda/prompts");
   mkdirSync(prompts, { recursive: true });
+  writeFileSync(join(prompts, SIGNALS.promptFile), "SIGNALS_BODY");
   writeFileSync(join(prompts, PREPARE.promptFile), "PREPARE_BODY");
   writeFileSync(join(prompts, SEND.promptFile), "SEND_BODY");
 }
@@ -69,6 +70,16 @@ function writeJobs(jobs: unknown[]): void {
   writeFileSync(join(home, "cron", "jobs.json"), JSON.stringify({ jobs }));
 }
 
+/** An up-to-date signals job, for tests that only exercise prepare/send paths. */
+function currentSignalsJob() {
+  return {
+    id: "g1",
+    name: SIGNALS.name,
+    prompt: "SIGNALS_BODY",
+    schedule: { expr: staggeredSchedule(SIGNALS, SEED) },
+  };
+}
+
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "edge-reconcile-"));
   stubLog = join(home, "calls.log");
@@ -76,12 +87,14 @@ beforeEach(() => {
     HERMES_HOME: process.env.HERMES_HOME,
     HERMES_BIN: process.env.HERMES_BIN,
     INDEX_API_KEY: process.env.INDEX_API_KEY,
+    DIGEST_SIGNALS_CRON: process.env.DIGEST_SIGNALS_CRON,
     DIGEST_PREPARE_CRON: process.env.DIGEST_PREPARE_CRON,
     DIGEST_SEND_CRON: process.env.DIGEST_SEND_CRON,
   };
   process.env.HERMES_HOME = home;
   process.env.HERMES_BIN = writeStubHermes(home);
   process.env.INDEX_API_KEY = SEED;
+  delete process.env.DIGEST_SIGNALS_CRON;
   delete process.env.DIGEST_PREPARE_CRON;
   delete process.env.DIGEST_SEND_CRON;
   writePrompts();
@@ -95,14 +108,18 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-test("fresh install creates both crons on their staggered schedules", () => {
+test("fresh install creates all three crons on their staggered schedules", () => {
   reconcileDigestCronJobs({ ...process.env });
 
   const creates = cronCalls().filter((argv) => argv[1] === "create");
-  expect(creates).toHaveLength(2);
+  expect(creates).toHaveLength(3);
 
+  const signals = creates.find((argv) => argv.includes(SIGNALS.name))!;
   const prepare = creates.find((argv) => argv.includes(PREPARE.name))!;
   const send = creates.find((argv) => argv.includes(SEND.name))!;
+  expect(signals[2]).toBe(staggeredSchedule(SIGNALS, SEED));
+  expect(signals[3]).toBe("SIGNALS_BODY");
+  expect(signals).not.toContain("--deliver");
   expect(prepare[2]).toBe(staggeredSchedule(PREPARE, SEED));
   expect(prepare[3]).toBe("PREPARE_BODY");
   expect(send[2]).toBe(staggeredSchedule(SEND, SEED));
@@ -113,6 +130,7 @@ test("fresh install creates both crons on their staggered schedules", () => {
 
 test("job still on the old synchronized default gets a schedule-only migration", () => {
   writeJobs([
+    currentSignalsJob(),
     { id: "p1", name: PREPARE.name, prompt: "PREPARE_BODY", schedule: { expr: PREPARE.schedule } },
     { id: "s1", name: SEND.name, prompt: "SEND_BODY", schedule: { expr: SEND.schedule } },
   ]);
@@ -128,6 +146,7 @@ test("job still on the old synchronized default gets a schedule-only migration",
 
 test("custom schedule is preserved; stale prompt gets a prompt-only edit", () => {
   writeJobs([
+    currentSignalsJob(),
     { id: "p1", name: PREPARE.name, prompt: "OLD_BODY", schedule: { expr: "30 4 * * *" } },
     { id: "s1", name: SEND.name, prompt: "SEND_BODY", schedule: { expr: "15 9 * * *" } },
   ]);
@@ -155,6 +174,7 @@ test("stale prompt + old default schedule produce two independent edit calls", (
 
 test("up-to-date jobs (staggered schedule + current prompt) trigger no cron calls", () => {
   writeJobs([
+    currentSignalsJob(),
     {
       id: "p1",
       name: PREPARE.name,
@@ -189,6 +209,7 @@ test("retired Edge-prefixed crons are removed; foreign crons are untouched", () 
 test("a Hermes that rejects --schedule still gets the prompt update (degraded migration)", () => {
   process.env.HERMES_BIN = writeStubHermes(home, { rejectScheduleFlag: true });
   writeJobs([
+    currentSignalsJob(),
     {
       id: "p1",
       name: PREPARE.name,

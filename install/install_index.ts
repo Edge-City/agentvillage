@@ -3,13 +3,16 @@
  *
  *   - Merges `mcp_servers.index` into `$HERMES_HOME/config.yaml`
  *   - Writes `INDEX_API_KEY` to `$HERMES_HOME/.env`
- *   - Installs the digest crons: prepare (`Edge — digest prepare`, ~02:00) and
- *     send (`Edge — daily digest`, ~08:00) — both host-local; times overridable
- *     via --digest-prepare-cron / --digest-send-cron (or DIGEST_PREPARE_CRON /
- *     DIGEST_SEND_CRON). To avoid the whole fleet hitting the LLM provider in
- *     the same minute (OpenRouter caps gemini-flash at 300 req/min account-wide),
- *     each tenant gets a deterministic minute offset derived from its
- *     INDEX_API_KEY: prepare spreads over 02:00–02:49, send over 08:00–08:24.
+ *   - Installs the digest crons: memory signal sync (`Edge — memory signal
+ *     sync`, ~01:00), prepare (`Edge — digest prepare`, ~02:00) and send
+ *     (`Edge — daily digest`, ~08:00) — all host-local; times overridable via
+ *     --digest-signals-cron / --digest-prepare-cron / --digest-send-cron (or
+ *     DIGEST_SIGNALS_CRON / DIGEST_PREPARE_CRON / DIGEST_SEND_CRON). To avoid
+ *     the whole fleet hitting the LLM provider in the same minute (OpenRouter
+ *     caps gemini-flash at 300 req/min account-wide), each tenant gets a
+ *     deterministic minute offset derived from its INDEX_API_KEY: signal sync
+ *     spreads over 01:00–01:49, prepare over 02:00–02:49, send over
+ *     08:00–08:24.
  *     New installs create enabled crons; reconcile updates prompt bodies,
  *     migrates jobs still on the old synchronized defaults (0 2 / 0 8) to their
  *     staggered slot, and otherwise preserves each job's schedule and pause
@@ -156,8 +159,22 @@ export interface DigestCronSpec {
   overrideEnv: string;
 }
 
-/** Prepare (02:00, no deliver) then send (08:00, deliver telegram). */
+/**
+ * Memory signal sync (01:00, no deliver) then prepare (02:00, no deliver)
+ * then send (08:00, deliver telegram). Signal sync runs an hour before
+ * prepare so freshly-captured signals have time to produce opportunities
+ * before the brief is composed.
+ */
 export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
+  {
+    schedule: "0 1 * * *",
+    staggerWindowMinutes: 50,
+    promptFile: "memory-signals.md",
+    name: "Edge — memory signal sync",
+    deliver: false,
+    overrideFlag: "--digest-signals-cron",
+    overrideEnv: "DIGEST_SIGNALS_CRON",
+  },
   {
     schedule: "0 2 * * *",
     staggerWindowMinutes: 50,

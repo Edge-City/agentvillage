@@ -12,9 +12,13 @@ import {
   storedSchedule,
 } from "../install_index";
 
-test("two digest cron specs: prepare (02:00, no deliver) then send (08:00, deliver telegram)", () => {
-  expect(DIGEST_CRON_SPECS).toHaveLength(2);
-  const [prepare, send] = DIGEST_CRON_SPECS;
+test("three digest cron specs: signals (01:00), prepare (02:00, no deliver), send (08:00, deliver telegram)", () => {
+  expect(DIGEST_CRON_SPECS).toHaveLength(3);
+  const [signals, prepare, send] = DIGEST_CRON_SPECS;
+  expect(signals.schedule).toBe("0 1 * * *");
+  expect(signals.name).toBe("Edge — memory signal sync");
+  expect(signals.promptFile).toBe("memory-signals.md");
+  expect(signals.deliver).toBe(false);
   expect(prepare.schedule).toBe("0 2 * * *");
   expect(prepare.name).toBe("Edge — digest prepare");
   expect(prepare.promptFile).toBe("prepare.md");
@@ -25,9 +29,14 @@ test("two digest cron specs: prepare (02:00, no deliver) then send (08:00, deliv
   expect(send.deliver).toBe(true);
 });
 
-test("prepare cron args omit --deliver; send cron args include --deliver telegram", () => {
+test("signals/prepare cron args omit --deliver; send cron args include --deliver telegram", () => {
   const home = "/home/x/.hermes";
-  const [prepare, send] = DIGEST_CRON_SPECS;
+  const [signals, prepare, send] = DIGEST_CRON_SPECS;
+
+  expect(cronCreateArgs(signals, "SIGNALS_BODY", home)).toEqual([
+    "cron", "create", "0 1 * * *", "SIGNALS_BODY",
+    "--name", "Edge — memory signal sync", "--workdir", home,
+  ]);
 
   expect(cronCreateArgs(prepare, "PREP_BODY", home)).toEqual([
     "cron", "create", "0 2 * * *", "PREP_BODY",
@@ -53,9 +62,9 @@ test("cronEditArgs includes only the provided fields", () => {
 });
 
 test("staggeredSchedule derives a deterministic minute inside the spec's window", () => {
-  const [prepare, send] = DIGEST_CRON_SPECS;
+  const [signals, prepare, send] = DIGEST_CRON_SPECS;
 
-  for (const spec of [prepare, send]) {
+  for (const spec of [signals, prepare, send]) {
     const schedule = staggeredSchedule(spec, "ix_tenant_key");
     expect(staggeredSchedule(spec, "ix_tenant_key")).toBe(schedule); // deterministic
     const [minute, ...rest] = schedule.split(" ");
@@ -67,10 +76,12 @@ test("staggeredSchedule derives a deterministic minute inside the spec's window"
 
   // Different specs hash independently for the same tenant seed.
   expect(fnv1a(`seed:${prepare.name}`)).not.toBe(fnv1a(`seed:${send.name}`));
+  expect(fnv1a(`seed:${signals.name}`)).not.toBe(fnv1a(`seed:${prepare.name}`));
 });
 
-test("staggered windows keep prepare within 02:00–02:49 and send within 08:00–08:24", () => {
-  const [prepare, send] = DIGEST_CRON_SPECS;
+test("staggered windows keep signals within 01:00–01:49, prepare within 02:00–02:49, send within 08:00–08:24", () => {
+  const [signals, prepare, send] = DIGEST_CRON_SPECS;
+  expect(signals.staggerWindowMinutes).toBe(50);
   expect(prepare.staggerWindowMinutes).toBe(50);
   expect(send.staggerWindowMinutes).toBe(25);
 });
@@ -96,7 +107,9 @@ test("index MCP headers include telegram surface and optional handle", () => {
 });
 
 test("each spec declares its install-time override flag + env var", () => {
-  const [prepare, send] = DIGEST_CRON_SPECS;
+  const [signals, prepare, send] = DIGEST_CRON_SPECS;
+  expect(signals.overrideFlag).toBe("--digest-signals-cron");
+  expect(signals.overrideEnv).toBe("DIGEST_SIGNALS_CRON");
   expect(prepare.overrideFlag).toBe("--digest-prepare-cron");
   expect(prepare.overrideEnv).toBe("DIGEST_PREPARE_CRON");
   expect(send.overrideFlag).toBe("--digest-send-cron");
@@ -114,12 +127,13 @@ test("isValidCron accepts 5-field expressions and rejects malformed ones", () =>
 });
 
 test("resolveCronSchedule returns the default when no override is set", () => {
-  const [prepare] = DIGEST_CRON_SPECS;
+  const [signals, prepare] = DIGEST_CRON_SPECS;
+  expect(resolveCronSchedule(signals, [], {})).toBe("0 1 * * *");
   expect(resolveCronSchedule(prepare, [], {})).toBe("0 2 * * *");
 });
 
 test("resolveCronSchedule staggers from the seed when no override is set, but override wins", () => {
-  const [prepare, send] = DIGEST_CRON_SPECS;
+  const [, prepare, send] = DIGEST_CRON_SPECS;
   const seed = "ix_tenant_key";
 
   expect(resolveCronSchedule(prepare, [], {}, seed)).toBe(staggeredSchedule(prepare, seed));
@@ -133,7 +147,13 @@ test("resolveCronSchedule staggers from the seed when no override is set, but ov
 });
 
 test("resolveCronSchedule honors flag, then env, with flag winning over env", () => {
-  const [prepare, send] = DIGEST_CRON_SPECS;
+  const [signals, prepare, send] = DIGEST_CRON_SPECS;
+
+  expect(
+    resolveCronSchedule(signals, ["bun", "install", "--digest-signals-cron", "30 0 * * *"], {}),
+  ).toBe("30 0 * * *");
+
+  expect(resolveCronSchedule(signals, [], { DIGEST_SIGNALS_CRON: "45 0 * * *" })).toBe("45 0 * * *");
 
   expect(
     resolveCronSchedule(prepare, ["bun", "install", "--digest-prepare-cron", "0 3 * * *"], {}),
@@ -151,7 +171,7 @@ test("resolveCronSchedule honors flag, then env, with flag winning over env", ()
 });
 
 test("resolveCronSchedule ignores an invalid override and uses the default", () => {
-  const [prepare] = DIGEST_CRON_SPECS;
+  const [, prepare] = DIGEST_CRON_SPECS;
   expect(resolveCronSchedule(prepare, ["bun", "--digest-prepare-cron", "garbage"], {})).toBe("0 2 * * *");
   expect(resolveCronSchedule(prepare, [], { DIGEST_PREPARE_CRON: "0 2 * *" })).toBe("0 2 * * *");
 });
