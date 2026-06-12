@@ -3,11 +3,17 @@
  *
  *   - Merges `mcp_servers.index` into `$HERMES_HOME/config.yaml`
  *   - Writes `INDEX_API_KEY` to `$HERMES_HOME/.env`
- *   - Installs the digest crons: prepare (`Edge — digest prepare`, 02:00) and
- *     send (`Edge — daily digest`, 08:00) — both host-local; times overridable
+ *   - Installs the digest crons: prepare (`Edge — digest prepare`, ~02:00) and
+ *     send (`Edge — daily digest`, ~08:00) — both host-local; times overridable
  *     via --digest-prepare-cron / --digest-send-cron (or DIGEST_PREPARE_CRON /
- *     DIGEST_SEND_CRON). New installs create enabled crons; reconcile updates
- *     prompt bodies only and preserves each job's schedule and pause state.
+ *     DIGEST_SEND_CRON). To avoid the whole fleet hitting the LLM provider in
+ *     the same minute (OpenRouter caps gemini-flash at 300 req/min account-wide),
+ *     each tenant gets a deterministic minute offset derived from its
+ *     INDEX_API_KEY: prepare spreads over 02:00–02:49, send over 08:00–08:24.
+ *     New installs create enabled crons; reconcile updates prompt bodies,
+ *     migrates jobs still on the old synchronized defaults (0 2 / 0 8) to their
+ *     staggered slot, and otherwise preserves each job's schedule and pause
+ *     state (user-customized schedules are never touched).
  */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -112,6 +118,14 @@ interface StoredCronJob {
   id: string;
   name: string;
   prompt?: string;
+  schedule?: { expr?: string } | string;
+  schedule_display?: string;
+}
+
+/** Extract the cron expression a stored Hermes job currently runs on. */
+export function storedSchedule(job: StoredCronJob): string {
+  if (typeof job.schedule === "string") return job.schedule.trim();
+  return (job.schedule?.expr ?? job.schedule_display ?? "").trim();
 }
 
 function readCronJobs(): StoredCronJob[] {
@@ -128,6 +142,8 @@ function readCronJobs(): StoredCronJob[] {
 export interface DigestCronSpec {
   /** Default cron schedule (overridable at install time). */
   schedule: string;
+  /** Width of the per-tenant stagger window, in minutes from the default hour. */
+  staggerWindowMinutes: number;
   /** Prompt file under skills/edge-esmeralda/prompts/. */
   promptFile: string;
   /** Full Hermes cron name (kept under the CRON_NAME_PREFIX). */
@@ -144,6 +160,7 @@ export interface DigestCronSpec {
 export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
   {
     schedule: "0 2 * * *",
+    staggerWindowMinutes: 50,
     promptFile: "prepare.md",
     name: "Edge — digest prepare",
     deliver: false,
@@ -152,6 +169,7 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
   },
   {
     schedule: "0 8 * * *",
+    staggerWindowMinutes: 25,
     promptFile: "send.md",
     name: "Edge — daily digest",
     deliver: true,
@@ -159,6 +177,28 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
     overrideEnv: "DIGEST_SEND_CRON",
   },
 ];
+
+/** FNV-1a 32-bit hash — deterministic, dependency-free. */
+export function fnv1a(input: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash >>> 0;
+}
+
+/**
+ * Per-tenant staggered schedule: replace the minute field of the spec default
+ * with a deterministic offset in [0, staggerWindowMinutes) derived from a
+ * stable tenant seed. Spreads the fleet so simultaneous digest runs don't
+ * blow through the shared OpenRouter per-model rate limit.
+ */
+export function staggeredSchedule(spec: DigestCronSpec, seed: string): string {
+  const fields = spec.schedule.trim().split(/\s+/);
+  const minute = fnv1a(`${seed}:${spec.name}`) % Math.max(1, spec.staggerWindowMinutes);
+  return [String(minute), ...fields.slice(1)].join(" ");
+}
 
 /** Build the argv for `hermes cron create` from a spec + resolved prompt body. */
 export function cronCreateArgs(spec: DigestCronSpec, promptBody: string, home: string): string[] {
@@ -168,9 +208,15 @@ export function cronCreateArgs(spec: DigestCronSpec, promptBody: string, home: s
   return args;
 }
 
-/** Build the argv for `hermes cron edit` — prompt only; schedule/pause unchanged. */
-export function cronEditPromptArgs(jobId: string, promptBody: string): string[] {
-  return ["cron", "edit", jobId, "--prompt", promptBody];
+/** Build the argv for `hermes cron edit` — only the provided fields; pause state unchanged. */
+export function cronEditArgs(
+  jobId: string,
+  { prompt, schedule }: { prompt?: string; schedule?: string },
+): string[] {
+  const args = ["cron", "edit", jobId];
+  if (schedule !== undefined) args.push("--schedule", schedule);
+  if (prompt !== undefined) args.push("--prompt", prompt);
+  return args;
 }
 
 /** True for a standard 5-field cron expression (minute hour day-of-month month day-of-week). */
@@ -181,24 +227,27 @@ export function isValidCron(expr: string): boolean {
 
 /**
  * Resolve a spec's cron schedule, honoring an optional install-time override.
- * Precedence: CLI flag (`<overrideFlag> <expr>`) > env var (`overrideEnv`) > the
- * spec default. An override that is not a valid 5-field cron expression is
- * ignored (with a warning) and the default is used.
+ * Precedence: CLI flag (`<overrideFlag> <expr>`) > env var (`overrideEnv`) >
+ * per-tenant staggered default (when `staggerSeed` is provided) > the spec
+ * default. An override that is not a valid 5-field cron expression is ignored
+ * (with a warning) and the staggered/spec default is used.
  */
 export function resolveCronSchedule(
   spec: DigestCronSpec,
   argv: string[] = process.argv,
   env: NodeJS.ProcessEnv = process.env,
+  staggerSeed = "",
 ): string {
+  const fallback = staggerSeed ? staggeredSchedule(spec, staggerSeed) : spec.schedule;
   const flagIdx = argv.indexOf(spec.overrideFlag);
   const fromFlag = flagIdx >= 0 ? argv[flagIdx + 1]?.trim() : undefined;
   const override = fromFlag || env[spec.overrideEnv]?.trim();
-  if (!override) return spec.schedule;
+  if (!override) return fallback;
   if (!isValidCron(override)) {
     console.warn(
-      `  warning: ignoring invalid cron override for "${spec.name}" ("${override}") — using default "${spec.schedule}"`,
+      `  warning: ignoring invalid cron override for "${spec.name}" ("${override}") — using default "${fallback}"`,
     );
-    return spec.schedule;
+    return fallback;
   }
   return override;
 }
@@ -230,6 +279,9 @@ export function reconcileDigestCronJobs(env: NodeJS.ProcessEnv = hermesExecEnv()
 
   const existing = readCronJobs();
   const specNames = new Set(DIGEST_CRON_SPECS.map((s) => s.name));
+  // Stable per-tenant seed for schedule staggering. The tenant's own Index
+  // API key never changes across reinstalls, so the derived minute is stable.
+  const staggerSeed = process.env.INDEX_API_KEY?.trim() || readPersistedEnvVar("INDEX_API_KEY");
 
   for (const job of existing) {
     if (!job.name.startsWith(CRON_NAME_PREFIX) || specNames.has(job.name)) continue;
@@ -256,27 +308,48 @@ export function reconcileDigestCronJobs(env: NodeJS.ProcessEnv = hermesExecEnv()
     }
     const promptBody = readFileSync(promptPath, "utf8");
     const job = existing.find((entry) => entry.name === spec.name);
+    const schedule = resolveCronSchedule(spec, process.argv, process.env, staggerSeed);
 
     if (job) {
-      if (job.prompt === promptBody) {
-        console.log(`→ cron "${spec.name}" prompt up to date`);
+      const promptStale = job.prompt !== promptBody;
+      // Migrate only jobs still sitting on the old synchronized default
+      // (e.g. "0 8 * * *") to their staggered slot. Anything else is a
+      // deliberate per-tenant schedule and is preserved.
+      const scheduleStale = storedSchedule(job) === spec.schedule && schedule !== spec.schedule;
+      if (!promptStale && !scheduleStale) {
+        console.log(`→ cron "${spec.name}" up to date`);
         continue;
       }
-      console.log(`→ updating cron "${spec.name}" prompt`);
-      try {
-        execFileSync(bin, cronEditPromptArgs(job.id, promptBody), {
-          stdio: ["ignore", "ignore", "inherit"],
-          env,
-        });
-      } catch {
-        console.warn(`  warning: could not update cron "${spec.name}" — gateway may still run`);
+      // Prompt and schedule are updated in separate `cron edit` calls so a
+      // failure of one (e.g. an older Hermes without --schedule) cannot take
+      // down the other. Prompt first — it's the critical update.
+      if (promptStale) {
+        console.log(`→ updating cron "${spec.name}" prompt`);
+        try {
+          execFileSync(bin, cronEditArgs(job.id, { prompt: promptBody }), {
+            stdio: ["ignore", "ignore", "inherit"],
+            env,
+          });
+        } catch {
+          console.warn(`  warning: could not update cron "${spec.name}" prompt — gateway may still run`);
+        }
+      }
+      if (scheduleStale) {
+        console.log(`→ migrating cron "${spec.name}" schedule → ${schedule}`);
+        try {
+          execFileSync(bin, cronEditArgs(job.id, { schedule }), {
+            stdio: ["ignore", "ignore", "inherit"],
+            env,
+          });
+        } catch {
+          console.warn(`  warning: could not migrate cron "${spec.name}" schedule — still on "${spec.schedule}"`);
+        }
       }
       continue;
     }
 
-    const schedule = resolveCronSchedule(spec);
     const resolved = { ...spec, schedule };
-    const suffix = schedule === spec.schedule ? "" : " [overridden]";
+    const suffix = schedule === spec.schedule ? "" : " [staggered/overridden]";
     console.log(`→ installing cron "${spec.name}" (${schedule})${suffix}`);
     try {
       execFileSync(bin, cronCreateArgs(resolved, promptBody, home), {

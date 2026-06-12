@@ -4,9 +4,12 @@ import {
   DIGEST_CRON_SPECS,
   buildIndexMcpHeaders,
   cronCreateArgs,
-  cronEditPromptArgs,
+  cronEditArgs,
+  fnv1a,
   isValidCron,
   resolveCronSchedule,
+  staggeredSchedule,
+  storedSchedule,
 } from "../install_index";
 
 test("two digest cron specs: prepare (02:00, no deliver) then send (08:00, deliver telegram)", () => {
@@ -37,10 +40,46 @@ test("prepare cron args omit --deliver; send cron args include --deliver telegra
   ]);
 });
 
-test("cronEditPromptArgs updates prompt only", () => {
-  expect(cronEditPromptArgs("abc123", "NEW_BODY")).toEqual([
+test("cronEditArgs includes only the provided fields", () => {
+  expect(cronEditArgs("abc123", { prompt: "NEW_BODY" })).toEqual([
     "cron", "edit", "abc123", "--prompt", "NEW_BODY",
   ]);
+  expect(cronEditArgs("abc123", { schedule: "7 8 * * *" })).toEqual([
+    "cron", "edit", "abc123", "--schedule", "7 8 * * *",
+  ]);
+  expect(cronEditArgs("abc123", { prompt: "P", schedule: "7 8 * * *" })).toEqual([
+    "cron", "edit", "abc123", "--schedule", "7 8 * * *", "--prompt", "P",
+  ]);
+});
+
+test("staggeredSchedule derives a deterministic minute inside the spec's window", () => {
+  const [prepare, send] = DIGEST_CRON_SPECS;
+
+  for (const spec of [prepare, send]) {
+    const schedule = staggeredSchedule(spec, "ix_tenant_key");
+    expect(staggeredSchedule(spec, "ix_tenant_key")).toBe(schedule); // deterministic
+    const [minute, ...rest] = schedule.split(" ");
+    expect(Number(minute)).toBeGreaterThanOrEqual(0);
+    expect(Number(minute)).toBeLessThan(spec.staggerWindowMinutes);
+    expect(rest.join(" ")).toBe(spec.schedule.split(" ").slice(1).join(" "));
+    expect(isValidCron(schedule)).toBe(true);
+  }
+
+  // Different specs hash independently for the same tenant seed.
+  expect(fnv1a(`seed:${prepare.name}`)).not.toBe(fnv1a(`seed:${send.name}`));
+});
+
+test("staggered windows keep prepare within 02:00–02:49 and send within 08:00–08:24", () => {
+  const [prepare, send] = DIGEST_CRON_SPECS;
+  expect(prepare.staggerWindowMinutes).toBe(50);
+  expect(send.staggerWindowMinutes).toBe(25);
+});
+
+test("storedSchedule reads hermes jobs.json shapes", () => {
+  expect(storedSchedule({ id: "a", name: "x", schedule: { expr: "0 8 * * *" } })).toBe("0 8 * * *");
+  expect(storedSchedule({ id: "a", name: "x", schedule_display: "5 8 * * *" })).toBe("5 8 * * *");
+  expect(storedSchedule({ id: "a", name: "x", schedule: "1 2 * * *" })).toBe("1 2 * * *");
+  expect(storedSchedule({ id: "a", name: "x" })).toBe("");
 });
 
 test("index MCP headers include telegram surface and optional handle", () => {
@@ -77,6 +116,20 @@ test("isValidCron accepts 5-field expressions and rejects malformed ones", () =>
 test("resolveCronSchedule returns the default when no override is set", () => {
   const [prepare] = DIGEST_CRON_SPECS;
   expect(resolveCronSchedule(prepare, [], {})).toBe("0 2 * * *");
+});
+
+test("resolveCronSchedule staggers from the seed when no override is set, but override wins", () => {
+  const [prepare, send] = DIGEST_CRON_SPECS;
+  const seed = "ix_tenant_key";
+
+  expect(resolveCronSchedule(prepare, [], {}, seed)).toBe(staggeredSchedule(prepare, seed));
+  expect(resolveCronSchedule(send, [], {}, seed)).toBe(staggeredSchedule(send, seed));
+
+  // Explicit override beats the staggered default; invalid override falls back to it.
+  expect(resolveCronSchedule(send, [], { DIGEST_SEND_CRON: "0 9 * * *" }, seed)).toBe("0 9 * * *");
+  expect(resolveCronSchedule(send, [], { DIGEST_SEND_CRON: "garbage" }, seed)).toBe(
+    staggeredSchedule(send, seed),
+  );
 });
 
 test("resolveCronSchedule honors flag, then env, with flag winning over env", () => {
