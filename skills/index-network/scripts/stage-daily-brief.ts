@@ -140,7 +140,10 @@ export function composeDailyBrief(context: DailyBriefContext): { body: string; o
       const action = opp.acceptUrl ? ` [Say hi](${opp.acceptUrl}).` : " Say hi.";
       const reason = opportunityReason(opp, "Relevant overlap with your current signals.");
       const lineBody = reason.includesLabel ? reason.text : `${opportunityLabel(opp)} — ${reason.text}`;
-      lines.push(`- ${opportunityMarker(opp)}${lineBody}.${action}`);
+      // Cooldown re-shows are framed as reminders so the user knows this is a
+      // deliberate nudge about something still waiting, not a repeated rec.
+      const prefix = opp.redelivery ? "Still open — " : "";
+      lines.push(`- ${opportunityMarker(opp)}${prefix}${lineBody}.${action}`);
     }
     lines.push("");
     hasVerifiedContent = true;
@@ -156,7 +159,8 @@ export function composeDailyBrief(context: DailyBriefContext): { body: string; o
       const action = opp.acceptUrl ? ` Know someone? [Make intro](${opp.acceptUrl}).` : " Know someone? Make intro.";
       const reason = opportunityReason(opp, "They are looking for a relevant introduction.");
       const lineBody = reason.includesLabel ? reason.text : `${opportunityLabel(opp)} — ${reason.text}`;
-      lines.push(`- ${opportunityMarker(opp)}${lineBody}.${action}`);
+      const prefix = opp.redelivery ? "Still open — " : "";
+      lines.push(`- ${opportunityMarker(opp)}${prefix}${lineBody}.${action}`);
     }
     lines.push("");
     hasVerifiedContent = true;

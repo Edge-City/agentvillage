@@ -12,7 +12,7 @@ Deliver the staged morning brief verbatim from Kanban, then reconcile delivery b
    bun skills/index-network/scripts/send-daily-brief.ts
    ```
 
-   Do not write Python, shell pipelines, or replacement delivery logic. The script resolves today's America/Los_Angeles date, reads `memory/heartbeat-state.json`, checks the Kanban approval gate, writes `memory/digest-outgoing.md`, extracts digest opportunity and question markers, updates delivery state (today's opportunity ids plus the per-question 3-day re-delivery cooldown under `questionDelivery`), marks the task complete, strips unsafe URLs/internal metadata, and prints either `[SILENT]` or one JSON object.
+   Do not write Python, shell pipelines, or replacement delivery logic. The script resolves today's America/Los_Angeles date, reads `memory/heartbeat-state.json`, checks the Kanban approval gate, writes `memory/digest-outgoing.md`, extracts digest opportunity and question markers, updates delivery state (today's opportunity ids plus the per-question 3-day re-delivery cooldown under `questionDelivery`), marks the task complete, confirms digest delivery for every extracted opportunity id directly on the Index ledger, strips unsafe URLs/internal metadata, and prints either `[SILENT]` or one JSON object.
 
    If the script exits with a non-zero code, end your turn immediately with `[SILENT]`. Do not diagnose, retry, or attempt alternatives. One attempt only.
 
@@ -21,10 +21,10 @@ Deliver the staged morning brief verbatim from Kanban, then reconcile delivery b
 3. **If stdout is JSON, parse it.** It has this shape:
 
    ```json
-   { "taskId": "...", "opportunityIds": ["..."], "questionIds": ["..."], "finalBrief": "..." }
+   { "taskId": "...", "opportunityIds": ["..."], "questionIds": ["..."], "finalBrief": "...", "confirmedOpportunityIds": ["..."], "confirmFailed": [] }
    ```
 
-4. **Confirm delivery only for returned opportunity ids.** For every `opportunityIds[]` value, call `confirm_opportunity_delivery(opportunityId, trigger="digest")`. If the array is empty, skip this step. Never call any MCP tool for `questionIds[]` — question delivery bookkeeping is handled entirely by the script's state file; there is no question confirmation tool.
+4. **Do not confirm delivery yourself.** The script already calls `confirm_opportunity_delivery(trigger="digest")` on the Index ledger for every extracted opportunity id — `confirmedOpportunityIds` and `confirmFailed` are diagnostics only. Never call `confirm_opportunity_delivery` or any other MCP tool in this pass, for opportunities or for `questionIds[]`.
 
 5. **Deliver the final brief.** Your final assistant reply must be `finalBrief` verbatim and complete — nothing before it, nothing after it, no commentary, no reformatting. Hermes delivers it. End your turn.
 
@@ -33,6 +33,6 @@ Deliver the staged morning brief verbatim from Kanban, then reconcile delivery b
 - Never reimplement the send flow in generated code. Always call `bun skills/index-network/scripts/send-daily-brief.ts` exactly once.
 - One attempt at the send script. If it fails, end immediately with `[SILENT]` — no retries, no diagnosis, no alternative paths.
 - Deliver only a brief a human has approved by unblocking it (status `ready` or `todo`, depending on Hermes version). A still-`blocked` task means no approval yet — stay silent; the next prepare pass can try again.
-- Confirm delivery only for opportunity ids returned by the deterministic script.
+- Never call MCP tools in this pass — the script owns all ledger confirmation.
 - Never expose internal IDs, raw JSON, internal marker comments, or internal vocabulary in the reply.
 - Never construct URLs yourself. The URL guard strips anything except approved connect, profile, and Edge Esmeralda event links.

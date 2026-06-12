@@ -123,6 +123,41 @@ describe("composeDailyBrief", () => {
     expect(body).not.toContain("Potential connections via Index Network");
     expect(body).toContain("<!-- digest-opportunity:id=opp-1 -->[Maya]");
     expect(body).toContain("[Say hi](https://protocol.index.network/c/abc123)");
+    // Fresh opportunity — no reminder framing.
+    expect(body).not.toContain("Still open");
+  });
+
+  test("frames cooldown re-shows as 'Still open' reminders in both sections", () => {
+    const connection = {
+      name: "Maya",
+      opportunityId: "opp-1",
+      mainText: "You both care about privacy-preserving agents",
+      profileUrl: "https://index.network/u/11111111-1111-1111-1111-111111111111",
+      acceptUrl: "https://protocol.index.network/c/abc123",
+      feedCategory: "connection",
+      redelivery: true,
+    };
+    const community = {
+      name: "Remi",
+      opportunityId: "opp-2",
+      mainText: "Looking for a systems engineer.",
+      profileUrl: "https://index.network/u/22222222-2222-2222-2222-222222222222",
+      acceptUrl: "https://protocol.index.network/c/def456",
+      feedCategory: "connector-flow",
+      redelivery: true,
+    };
+    const { body } = composeDailyBrief({
+      ...baseContext,
+      opportunities: [connection, community],
+      connectionOpportunities: [connection],
+      communityOpportunities: [community],
+    });
+
+    expect(body).toContain("<!-- digest-opportunity:id=opp-1 -->Still open — ");
+    expect(body).toContain("<!-- digest-opportunity:id=opp-2 -->Still open — ");
+    // Reminder framing must not break action links.
+    expect(body).toContain("[Say hi](https://protocol.index.network/c/abc123)");
+    expect(body).toContain("[Make intro](https://protocol.index.network/c/def456)");
   });
 
   test("renders digest-ready presenter summaries and linkifies the person name", () => {
