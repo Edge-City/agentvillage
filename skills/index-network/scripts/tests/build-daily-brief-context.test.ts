@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import {
   buildDailyBriefContext,
+  confirmOpportunityDeliveriesViaMcp,
   extractInterestTags,
   fetchOpportunitiesFromMcp,
   fetchPendingQuestionsFromMcp,
@@ -164,6 +165,28 @@ describe("build-daily-brief-context helpers", () => {
     expect(parsed[1].confidence).toBeUndefined();
     expect(parsed[2]).toMatchObject({ name: "Carol" });
     expect(parsed[2].confidence).toBeUndefined();
+  });
+
+  test("parseOpportunityTranscript parses the redelivery flag as a boolean", () => {
+    const parsed = parseOpportunityTranscript(`1. Alice
+   <!-- digest-opportunity:id=alice -->
+   builds agents
+   status: pending
+   redelivery: true
+
+2. Bob
+   <!-- digest-opportunity:id=bob -->
+   seeks collaborators
+   status: pending
+
+3. Carol
+   <!-- digest-opportunity:id=carol -->
+   odd value
+   redelivery: yes-ish`);
+
+    expect(parsed[0]).toMatchObject({ name: "Alice", redelivery: true });
+    expect(parsed[1].redelivery).toBeUndefined();
+    expect(parsed[2].redelivery).toBe(false);
   });
 
   test("filterDedupedOpportunities keeps cards without ids and drops delivered ids", () => {
@@ -776,6 +799,124 @@ describe("fetchPendingQuestionsFromMcp", () => {
       expect(prompt).not.toContain("\n");
       expect(prompt.length).toBeLessThanOrEqual(300);
       expect(prompt.endsWith("…")).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe("confirmOpportunityDeliveriesViaMcp", () => {
+  const MCP_URL = "https://example.com/mcp";
+
+  type ConfirmCall = { opportunityId?: string; trigger?: string };
+
+  function makeConfirmFetch(
+    toolsCallFn: (args: ConfirmCall, callIndex: number) => Response,
+  ): { fetch: typeof fetch; calls: ConfirmCall[] } {
+    const calls: ConfirmCall[] = [];
+    const fetchFn = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(init?.body as string ?? "{}") as {
+        method: string;
+        params?: { name?: string; arguments?: ConfirmCall };
+      };
+      if (body.method === "initialize") {
+        return Response.json({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", capabilities: {} } });
+      }
+      if (body.method === "tools/call") {
+        expect(body.params?.name).toBe("confirm_opportunity_delivery");
+        const args = body.params?.arguments ?? {};
+        calls.push(args);
+        return toolsCallFn(args, calls.length - 1);
+      }
+      throw new Error(`unexpected method: ${body.method}`);
+    }) as typeof fetch;
+    return { fetch: fetchFn, calls };
+  }
+
+  test("confirms each id with trigger=digest and reports them confirmed", async () => {
+    const originalFetch = globalThis.fetch;
+    const { fetch: mockFetch, calls } = makeConfirmFetch(() =>
+      Response.json({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: JSON.stringify({ success: true, data: { status: "confirmed" } }) }] } }),
+    );
+    globalThis.fetch = mockFetch;
+    try {
+      const result = await confirmOpportunityDeliveriesViaMcp({
+        apiKey: "test-key",
+        mcpUrl: MCP_URL,
+        opportunityIds: ["opp-1", "opp-2"],
+      });
+      expect(result.confirmed).toEqual(["opp-1", "opp-2"]);
+      expect(result.failed).toEqual([]);
+      expect(calls).toEqual([
+        { opportunityId: "opp-1", trigger: "digest" },
+        { opportunityId: "opp-2", trigger: "digest" },
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("returns immediately for an empty id list without network calls", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      throw new Error("should not be called");
+    }) as typeof fetch;
+    try {
+      const result = await confirmOpportunityDeliveriesViaMcp({ apiKey: "k", mcpUrl: MCP_URL, opportunityIds: [] });
+      expect(result).toEqual({ confirmed: [], failed: [] });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("retries once and succeeds on the second attempt", async () => {
+    const originalFetch = globalThis.fetch;
+    const { fetch: mockFetch, calls } = makeConfirmFetch((_args, callIndex) =>
+      callIndex === 0
+        ? Response.json({ jsonrpc: "2.0", id: 2, error: { code: -32000, message: "transient" } })
+        : Response.json({ jsonrpc: "2.0", id: 3, result: { content: [{ type: "text", text: JSON.stringify({ success: true }) }] } }),
+    );
+    globalThis.fetch = mockFetch;
+    try {
+      const result = await confirmOpportunityDeliveriesViaMcp({ apiKey: "k", mcpUrl: MCP_URL, opportunityIds: ["opp-1"] });
+      expect(result.confirmed).toEqual(["opp-1"]);
+      expect(calls).toHaveLength(2);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("reports per-id failure when the tool keeps failing, without throwing", async () => {
+    const originalFetch = globalThis.fetch;
+    const { fetch: mockFetch } = makeConfirmFetch((args) =>
+      args.opportunityId === "opp-bad"
+        ? Response.json({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: JSON.stringify({ success: false, error: "not yours" }) }] } })
+        : Response.json({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: JSON.stringify({ success: true }) }] } }),
+    );
+    globalThis.fetch = mockFetch;
+    try {
+      const result = await confirmOpportunityDeliveriesViaMcp({
+        apiKey: "k",
+        mcpUrl: MCP_URL,
+        opportunityIds: ["opp-good", "opp-bad"],
+      });
+      expect(result.confirmed).toEqual(["opp-good"]);
+      expect(result.failed).toEqual([{ opportunityId: "opp-bad", reason: "not yours" }]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("fails every id when initialize fails, without throwing", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      throw new Error("network down");
+    }) as typeof fetch;
+    try {
+      const result = await confirmOpportunityDeliveriesViaMcp({ apiKey: "k", mcpUrl: MCP_URL, opportunityIds: ["opp-1", "opp-2"] });
+      expect(result.confirmed).toEqual([]);
+      expect(result.failed).toHaveLength(2);
+      expect(result.failed[0].reason).toContain("network down");
     } finally {
       globalThis.fetch = originalFetch;
     }

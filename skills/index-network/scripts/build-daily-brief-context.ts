@@ -136,6 +136,8 @@ export interface BriefOpportunity {
   feedCategory?: string;
   opportunityId?: string;
   confidence?: number;
+  /** Cooldown re-show — the user has already seen this card in a previous digest. */
+  redelivery?: boolean;
 }
 
 export interface DailyBriefContext {
@@ -402,12 +404,14 @@ export function parseOpportunityTranscript(text: string): BriefOpportunity[] {
       continue;
     }
 
-    const field = line.trim().match(/^(status|profileUrl|acceptUrl|feedCategory|opportunityId|confidence):\s*(.+)$/);
+    const field = line.trim().match(/^(status|profileUrl|acceptUrl|feedCategory|opportunityId|confidence|redelivery):\s*(.+)$/);
     if (field) {
       const key = field[1] as keyof BriefOpportunity;
       if (key === "confidence") {
         const val = parseFloat(field[2].trim());
         if (!isNaN(val)) current[key] = val;
+      } else if (key === "redelivery") {
+        current.redelivery = field[2].trim() === "true";
       } else {
         current[key] = field[2].trim();
       }
@@ -786,6 +790,87 @@ export async function fetchOpportunitiesFromMcp(opts: {
   if (!text.trim()) return [];
 
   return parseOpportunityTranscript(text);
+}
+
+/**
+ * Confirm digest delivery for a set of opportunity ids by calling the Index
+ * MCP server's `confirm_opportunity_delivery` tool directly via JSON-RPC.
+ *
+ * Owned by the deterministic send script (not the LLM prompt) so the delivery
+ * ledger is written reliably — a skipped confirm means the same opportunity
+ * reappears in later digests. Each id is confirmed independently with one
+ * retry; failures never throw, they are reported back for diagnostics.
+ *
+ * @returns per-id outcome: `confirmed` (includes already_delivered) or `failed` with reason.
+ */
+export async function confirmOpportunityDeliveriesViaMcp(opts: {
+  apiKey: string;
+  mcpUrl: string;
+  opportunityIds: string[];
+}): Promise<{ confirmed: string[]; failed: Array<{ opportunityId: string; reason: string }> }> {
+  const confirmed: string[] = [];
+  const failed: Array<{ opportunityId: string; reason: string }> = [];
+  if (opts.opportunityIds.length === 0) return { confirmed, failed };
+
+  try {
+    const initResp = await postMcpMessage(opts.mcpUrl, opts.apiKey, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: { name: "agentvillage-digest", version: "1.0.0" },
+      },
+    });
+    if (initResp.error) throw new Error(`MCP initialize: ${initResp.error.message}`);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    return { confirmed, failed: opts.opportunityIds.map((opportunityId) => ({ opportunityId, reason })) };
+  }
+
+  let rpcId = 2;
+  for (const opportunityId of opts.opportunityIds) {
+    let lastReason = "unknown";
+    let ok = false;
+    for (let attempt = 0; attempt < 2 && !ok; attempt++) {
+      try {
+        const resp = await postMcpMessage(opts.mcpUrl, opts.apiKey, {
+          jsonrpc: "2.0",
+          id: rpcId++,
+          method: "tools/call",
+          params: {
+            name: "confirm_opportunity_delivery",
+            arguments: { opportunityId, trigger: "digest" },
+          },
+        });
+        if (resp.error) {
+          lastReason = resp.error.message;
+          continue;
+        }
+        const result = resp.result as McpToolResult | undefined;
+        const text = result?.content?.find((c) => c.type === "text")?.text ?? "";
+        // The tool returns a success/error envelope; treat an explicit
+        // success:false as failure so we don't silently drop ledger writes.
+        try {
+          const parsed = JSON.parse(text) as { success?: boolean; error?: unknown };
+          if (parsed.success === false) {
+            lastReason = typeof parsed.error === "string" ? parsed.error : "tool reported failure";
+            continue;
+          }
+        } catch {
+          // Non-JSON tool text — the call itself succeeded; accept it.
+        }
+        ok = true;
+      } catch (err) {
+        lastReason = err instanceof Error ? err.message : String(err);
+      }
+    }
+    if (ok) confirmed.push(opportunityId);
+    else failed.push({ opportunityId, reason: lastReason });
+  }
+
+  return { confirmed, failed };
 }
 
 /**

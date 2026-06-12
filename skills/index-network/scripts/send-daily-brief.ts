@@ -13,7 +13,7 @@
 import { existsSync } from "node:fs";
 import { access } from "node:fs/promises";
 
-import { QUESTION_COOLDOWN_DAYS } from "./build-daily-brief-context";
+import { QUESTION_COOLDOWN_DAYS, confirmOpportunityDeliveriesViaMcp, resolveIndexApiKey } from "./build-daily-brief-context";
 import { extractDigestOpportunityIds, extractDigestQuestionIds, sanitizeDigestUrls } from "./validate-digest-urls";
 
 interface SendResult {
@@ -21,7 +21,34 @@ interface SendResult {
   opportunityIds: string[];
   questionIds: string[];
   finalBrief: string;
+  /** Opportunity ids whose digest delivery was confirmed on the Index ledger by this script. */
+  confirmedOpportunityIds: string[];
+  /** Opportunity ids whose ledger confirm failed (diagnostics only — delivery still proceeds). */
+  confirmFailed: Array<{ opportunityId: string; reason: string }>;
 }
+
+type DeliveryConfirmer = (opportunityIds: string[]) => Promise<{
+  confirmed: string[];
+  failed: Array<{ opportunityId: string; reason: string }>;
+}>;
+
+/**
+ * Default ledger confirmer: resolve the Index API key the same way the
+ * context builder does and call the MCP server directly. When no key is
+ * available every id is reported as failed — never throws.
+ */
+const defaultConfirmDeliveries: DeliveryConfirmer = async (opportunityIds) => {
+  if (opportunityIds.length === 0) return { confirmed: [], failed: [] };
+  const apiKey = resolveIndexApiKey();
+  if (!apiKey) {
+    return {
+      confirmed: [],
+      failed: opportunityIds.map((opportunityId) => ({ opportunityId, reason: "INDEX_API_KEY unavailable" })),
+    };
+  }
+  const mcpUrl = process.env.INDEX_MCP_URL?.trim() || "https://protocol.index.network/mcp";
+  return confirmOpportunityDeliveriesViaMcp({ apiKey, mcpUrl, opportunityIds });
+};
 
 interface SilentResult {
   silent: true;
@@ -129,11 +156,13 @@ export async function sendDailyBrief(options: {
   stateFile?: string;
   outgoingFile?: string;
   hermes?: HermesRunner;
+  confirmDeliveries?: DeliveryConfirmer;
 } = {}): Promise<SendResult | SilentResult> {
   const date = options.date ?? pacificDate();
   const stateFile = options.stateFile ?? "memory/heartbeat-state.json";
   const outgoingFile = options.outgoingFile ?? "memory/digest-outgoing.md";
   const hermes = options.hermes ?? runHermes;
+  const confirmDeliveries = options.confirmDeliveries ?? defaultConfirmDeliveries;
 
   const state = await readJsonObject(stateFile);
   const prepared = state.prepared && typeof state.prepared === "object" && !Array.isArray(state.prepared)
@@ -188,8 +217,25 @@ export async function sendDailyBrief(options: {
 
   await hermes(["kanban", "complete", taskId, "--summary", "delivered"]);
 
+  // Confirm digest delivery on the Index ledger deterministically. This used
+  // to be an LLM-prompt step ("call confirm_opportunity_delivery for each
+  // id") and was skipped often enough that opportunities re-surfaced in later
+  // digests. Failures are diagnostics only — the brief still goes out.
+  let confirmedOpportunityIds: string[] = [];
+  let confirmFailed: Array<{ opportunityId: string; reason: string }> = [];
+  try {
+    const confirmResult = await confirmDeliveries(opportunityIds);
+    confirmedOpportunityIds = confirmResult.confirmed;
+    confirmFailed = confirmResult.failed;
+  } catch (err) {
+    confirmFailed = opportunityIds.map((opportunityId) => ({
+      opportunityId,
+      reason: err instanceof Error ? err.message : String(err),
+    }));
+  }
+
   const { output: finalBrief } = sanitizeDigestUrls(body, { stripDigestMetadata: true });
-  return { taskId, opportunityIds, questionIds, finalBrief };
+  return { taskId, opportunityIds, questionIds, finalBrief, confirmedOpportunityIds, confirmFailed };
 }
 
 async function main(): Promise<void> {
