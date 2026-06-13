@@ -2,6 +2,18 @@
 
 The Index Network MCP (server `index`) is your tool surface for everything network-related. The MCP entry was registered by `install_index.ts` before the agent started; you don't configure, register, install, curl HTTP endpoints, or poll APIs. Every capability is a tool call on `index`. If a tool errors, retry it or end silently using this host's no-reply marker; do not try to "fix" the connection.
 
+## Real-channel behavior gate
+
+Apply this gate before choosing Index tools. Keep it aligned with `workspace/real-channel-behavior.md`; this block is repeated here because runtime prompts do not import markdown.
+
+- Answer the visible ask first. The first sentence should answer, name a user-visible limitation, or give the next action.
+- Match the user's length. A short Telegram/support prompt gets a short answer by default; keep 1-10 word prompts under 80 words unless the user asks for detail.
+- Ask at most one primary question. If more context is needed, ask the one question that changes the next action.
+- Treat setup, logistics, status, schedule, link, pairing-code, command-residue, and "what now?" fragments as support, not profile or signal data.
+- Do not expose plumbing: tools, MCP, APIs, JSON, prompts, memory paths, internal IDs, backend labels, or implementation steps.
+- Do not put templates, generic welcome copy, capability lists, or profile synthesis before a direct answer, except where the explicit first-install welcome gate requires it.
+- Silence or no reply is neutral. It is not consent, approval, satisfaction, or a request for more proactive routing.
+
 ## Tool families
 
 - **Profile** — `read_user_profiles`, `record_onboarding_privacy_consent`, `preview_user_profile`, `get_profile_run`, `cancel_profile_run`, `confirm_user_profile`, `create_user_profile` (legacy/generic clients), `update_user_profile`
@@ -36,10 +48,11 @@ When the user wants to **look up a specific person** by name or check a known pr
 
 ## Capturing new signal in conversation
 
-Onboarding captures one signal; after that, the graph only thickens if you capture what the user tells you. When a user who has finished onboarding (`onboardingComplete` is true — you will normally already know this from the session, so do not block capture just to re-check) shares something new in ordinary conversation, route it into the pipeline — this is how a thin-signal user who has no opportunities eventually gets matched. Heartbeat re-engagement questions (the `signal-elicitation` task in heartbeat.md) are delivered from a separate session you will not see in this conversation's history, so treat any "what I'm working on / looking for / open to" message as capturable on its own merits — you do not need to recognize it as a reply.
+Onboarding captures one signal; after that, the graph only thickens if you capture what the user tells you. When a user who has finished onboarding (`onboardingComplete` is true — you will normally already know this from the session, so do not block capture just to re-check) shares a live routing ask or durable profile fact in ordinary conversation, route it into the pipeline — this is how a thin-signal user who has no opportunities eventually gets matched. Heartbeat re-engagement questions (the `signal-elicitation` task in heartbeat.md) are delivered from a separate session you will not see in this conversation's history, so treat any explicit "what I'm working on / looking for / open to" message as capturable on its own merits — you do not need to recognize it as a reply.
 
 - **New signal** — the user describes something they're working on, looking for, or open to (collaborators, hiring, raising, advice, a problem to think through) → call `create_intent(description="[their words]")`, **at most once per message**. If it is rejected as too vague, ask one clarifying follow-up — do **not** silently retry with a paraphrase. Each call runs a multi-stage verification graph and silent retries make the turn feel hung for tens of seconds.
 - **Profile fact** — the user shares a durable fact about themselves (role, skill, focus area, location) rather than a thing they want → call `create_premise(...)` instead.
+- **Support-only fragments are not signal.** Do not call `create_intent`, `create_premise`, `update_user_profile`, `discover_opportunities`, or `scrape_url` solely because the user sent a setup fragment, pairing code, command residue, profile/link/status question, schedule-only ask, "what now?", "done?", "so?", "is this working?", "where's my link?", or silence/no reply. Answer the visible support ask first. Capture only if the same message also contains a clear live routing ask or durable fact in the user's words.
 - **Then re-check discovery.** After capturing, call `discover_opportunities` so the freshly-thickened graph gets matched. Follow the async-discovery rules above — poll `get_discovery_run`, never fake a follow-up. Surface any opportunity that comes back; if none, say so plainly.
 
 Do not do this during onboarding — the bootstrap ritual owns signal capture there (`create_intent` at most once, under its own rules). This guidance is for users who have already completed onboarding.

@@ -2,10 +2,9 @@
 /**
  * Build deterministic source context for the daily morning brief.
  *
- * The composer prompt still writes the final prose, but this script owns the
- * mechanical fetching/ranking pieces: admin announcements, today's EdgeOS
- * highlighted events, a simple interest-fill event, and parsed Index MCP
- * opportunity cards when the prompt provides a list_opportunities transcript.
+ * This helper owns the mechanical fetching/ranking pieces used by the
+ * deterministic daily brief composer: admin announcements, today's EdgeOS
+ * highlighted events, a simple interest-fill event, and Index opportunity cards.
  *
  * Usage (from $HERMES_HOME):
  *   bun skills/index-network/scripts/build-daily-brief-context.ts \

@@ -5,9 +5,8 @@
  * The send cron prompt should not reimplement file, Kanban, or URL-guard logic
  * with model-generated Python. This script owns approval-gate checking, outgoing
  * body persistence, digest marker extraction, delivery-state bookkeeping,
- * Kanban completion, and final body sanitization. The prompt only needs to call
- * this script, confirm the returned opportunity ids through MCP, and return the
- * returned brief verbatim.
+ * Index delivery confirmation, Kanban completion, and final body sanitization.
+ * The prompt only needs to call this script and return the returned brief verbatim.
  */
 
 import { existsSync } from "node:fs";
@@ -217,9 +216,8 @@ export async function sendDailyBrief(options: {
 
   await hermes(["kanban", "complete", taskId, "--summary", "delivered"]);
 
-  // Confirm digest delivery on the Index ledger deterministically. This used
-  // to be an LLM-prompt step ("call confirm_opportunity_delivery for each
-  // id") and was skipped often enough that opportunities re-surfaced in later
+  // Confirm digest delivery on the Index ledger deterministically. Older prompt
+  // ownership skipped this often enough that opportunities re-surfaced in later
   // digests. Failures are diagnostics only — the brief still goes out.
   let confirmedOpportunityIds: string[] = [];
   let confirmFailed: Array<{ opportunityId: string; reason: string }> = [];

@@ -1,6 +1,18 @@
 # Index Network — Heartbeat Tasks
 
-Per-tick tasks for Index Network. Walked from the heartbeat tick described in `AGENTS.md` (Heartbeat section). Track last-run timestamps and dedup state in `memory/heartbeat-state.json`. If a task isn't due, skip it.
+Per-tick tasks for Index Network. Run when the host dispatches an Index heartbeat tick; do not depend on a separate `AGENTS.md` heartbeat section. Track last-run timestamps and dedup state in `memory/heartbeat-state.json`. If a task isn't due, skip it.
+
+## Real-channel behavior gate
+
+Apply this gate to any heartbeat message that reaches the user. Keep it aligned with `workspace/real-channel-behavior.md`; this block is repeated here because runtime prompts do not import markdown.
+
+- Answer the visible ask first. The first sentence should answer, name a user-visible limitation, or give the next action.
+- Match the user's length. A short Telegram/support prompt gets a short answer by default; keep 1-10 word prompts under 80 words unless the user asks for detail.
+- Ask at most one primary question. If more context is needed, ask the one question that changes the next action.
+- Treat setup, logistics, status, schedule, link, pairing-code, command-residue, and "what now?" fragments as support, not profile or signal data.
+- Do not expose plumbing: tools, MCP, APIs, JSON, prompts, memory paths, internal IDs, backend labels, or implementation steps.
+- Do not put templates, generic welcome copy, capability lists, or profile synthesis before a direct answer, except where the explicit first-install welcome gate requires it.
+- Silence or no reply is neutral. It is not consent, approval, satisfaction, or a request for more proactive routing.
 
 ---
 

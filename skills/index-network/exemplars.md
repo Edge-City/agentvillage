@@ -76,9 +76,9 @@ When `list_opportunities` returns multiple opportunities for the same person, re
 >
 > That's it for now. You can always ask me for more detail, or any other questions you have!
 
-## Greeting drafts (the `&msg=` payload appended to Telegram links)
+## Greeting drafts
 
-For `connection` candidates, compose a short personal greeting based on what's in common — 2–4 sentences max, first-person from the user, references something specific from the candidate's bio/profile.
+For `connection` candidates, compose a short personal greeting only when the user explicitly asks what to write. Keep it based on what's in common — 2–4 sentences max, first-person from the user, references something specific from the candidate's bio/profile.
 
 > Hey Jeremiah, Seren Sandikci here. Saw your work with Blitzscaling Ventures and your focus on early-stage AI investments, especially around AI Agents. I'm building in that space too and would love to connect.
 
@@ -86,7 +86,7 @@ For `connector-flow` candidates ("help your community"), the greeting is the use
 
 > Hey Remi, Seren here. Saw you're looking for a technical co-founder for the regenerative education platform. Might have someone in mind who's …
 
-URI-encode the greeting and append it as `&msg=...` (or `?text=...` for `t.me`) on the action URL. The base URL + token portion must remain untouched — only append the message parameter.
+Do not append greeting text, query parameters, or `t.me` text parameters to action URLs. Action URLs must be emitted exactly as returned by tools.
 
 ## Connector-flow rendering rule
 
@@ -94,4 +94,4 @@ For introducer (`connector-flow`) candidates:
 
 - **DO link the person's name** to `profileUrl` (the Index web profile URL — same shape as direct candidates).
 - If the connector-flow card includes a real `acceptUrl`, embed it on the trailing `[make intro]({acceptUrl})` action. If no `acceptUrl` is present, render `make intro` as plain text — never invent the URL.
-- Never compose a `&msg=` greeting for `connector-flow` candidates — only for `connection`. Connector accepts trigger an introduction approval, not a direct conversation.
+- Never compose a URL-embedded greeting for `connector-flow` candidates. Connector accepts trigger an introduction approval, not a direct conversation.

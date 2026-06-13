@@ -2,11 +2,10 @@
 /**
  * Deterministically compose and stage the daily morning brief.
  *
- * The cron prompt still fetches Index opportunities through MCP and writes the
- * transcript to `memory/digest-opportunities.txt`. This script owns everything
- * after that: context building, markdown composition, URL validation, Kanban
- * create/block, and heartbeat bookkeeping. Keeping this deterministic avoids
- * prompt-generated shell quoting bugs and CLI flag drift.
+ * This script owns context building, Index opportunity fetching, markdown
+ * composition, URL validation, Kanban create/block, and heartbeat bookkeeping.
+ * Keeping this deterministic avoids prompt-generated shell quoting bugs and CLI
+ * flag drift.
  */
 
 import { existsSync, rmSync } from "node:fs";
