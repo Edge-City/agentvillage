@@ -65,8 +65,7 @@ The `skills/` directory holds per-backend procedural knowledge. Today's active s
 - **`edgeos`** (`skills/edgeos/SKILL.md`) — EdgeOS API: live events, RSVPs, venues, attendee directory, and the user's own profile. (No wiki or newsletter content — that lives in `edge-esmeralda`.) 
 - **`edge-esmeralda`** (`skills/edge-esmeralda/SKILL.md`) — Popup constants, directory semantics, curated wiki/website/newsletter.  Supplies community-knowledge answers.
 - **`geo-esmeralda`** (`skills/geo-esmeralda/SKILL.md`) — Geo knowledge graph: community-created content, relations, ontology, attendee-authored writes, and raw time-windowed history of the main Edge Esmeralda 2026 Telegram group (the village-wide chat).  read when the user asks what the village is discussing, what's happening in the chat, what they missed, "catch me up," what people are talking about, or wants a chat summary.
-
-When a future skill ships, list it here with its trigger conditions.
+- **`village-pulse`** (`skills/village-pulse/SKILL.md`) — one+1 collective-intelligence + per-human preference layer: onboarding profile, daily Village Pulse question, post-event check-in + prediction scoring, and "ask the village" review. Read on first run (after consent), on the daily pulse cron, after an RSVP'd event ends, or when the user says "village pulse", "Edge check-in", "what does the village think", "ask the village", or "should I…".
 
 ## Session context
 
