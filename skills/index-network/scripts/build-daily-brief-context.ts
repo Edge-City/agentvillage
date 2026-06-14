@@ -833,6 +833,10 @@ export async function confirmOpportunityDeliveriesViaMcp(opts: {
   for (const opportunityId of opts.opportunityIds) {
     let lastReason = "unknown";
     let ok = false;
+    // `confirm_opportunity_delivery` is idempotent, so transient failures are
+    // safe to retry. Permanent failures (opportunity deleted, caller not an
+    // actor) carry `retryable: false` — retrying them never succeeds and only
+    // hammers the MCP transport, so we stop early and report the reason.
     for (let attempt = 0; attempt < 2 && !ok; attempt++) {
       try {
         const resp = await postMcpMessage(opts.mcpUrl, opts.apiKey, {
@@ -853,9 +857,14 @@ export async function confirmOpportunityDeliveriesViaMcp(opts: {
         // The tool returns a success/error envelope; treat an explicit
         // success:false as failure so we don't silently drop ledger writes.
         try {
-          const parsed = JSON.parse(text) as { success?: boolean; error?: unknown };
+          const parsed = JSON.parse(text) as { success?: boolean; error?: unknown; code?: unknown; retryable?: unknown };
           if (parsed.success === false) {
-            lastReason = typeof parsed.error === "string" ? parsed.error : "tool reported failure";
+            const code = typeof parsed.code === "string" ? parsed.code : "";
+            lastReason = code
+              ? `${code}: ${typeof parsed.error === "string" ? parsed.error : "tool reported failure"}`
+              : (typeof parsed.error === "string" ? parsed.error : "tool reported failure");
+            // Permanent failure — do not burn the second attempt on it.
+            if (parsed.retryable === false) break;
             continue;
           }
         } catch {

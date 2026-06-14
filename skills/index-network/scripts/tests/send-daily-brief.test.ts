@@ -203,6 +203,82 @@ describe("sendDailyBrief", () => {
     expect(result.confirmFailed).toEqual([{ opportunityId: "opp-1", reason: "confirmer exploded" }]);
   });
 
+  test("carries a transient confirm failure into pendingDeliveryConfirms and retries it next run", async () => {
+    tempWorkspace();
+    await Bun.write("state.json", JSON.stringify({
+      prepared: { date: "2026-06-04", taskId: "t_digest" },
+    }));
+    const body = "<!-- digest-opportunity:id=opp-1 -->Maya — relevant";
+
+    // Run 1: confirm fails transiently — opp-1 is parked for retry.
+    const run1 = await sendDailyBrief({
+      date: "2026-06-04",
+      stateFile: "state.json",
+      outgoingFile: "outgoing.md",
+      hermes: (args) => {
+        if (args[0] === "kanban" && args[1] === "show") return JSON.stringify({ task: { id: "t_digest", status: "ready", body } });
+        if (args[0] === "kanban" && args[1] === "complete") return "completed";
+        throw new Error(`unexpected hermes call: ${args.join(" ")}`);
+      },
+      confirmDeliveries: async (ids) => ({ confirmed: [], failed: ids.map((opportunityId) => ({ opportunityId, reason: "mcp unreachable" })) }),
+    });
+    expect("silent" in run1).toBe(false);
+    expect(JSON.parse(await Bun.file("state.json").text()).pendingDeliveryConfirms).toEqual(["opp-1"]);
+
+    // Run 2: a fresh digest with opp-2; the parked opp-1 is retried alongside it.
+    await Bun.write("state.json", JSON.stringify({
+      prepared: { date: "2026-06-05", taskId: "t_digest2" },
+      pendingDeliveryConfirms: ["opp-1"],
+    }));
+    const body2 = "<!-- digest-opportunity:id=opp-2 -->Sam — relevant";
+    const confirmCalls: string[][] = [];
+    const run2 = await sendDailyBrief({
+      date: "2026-06-05",
+      stateFile: "state.json",
+      outgoingFile: "outgoing.md",
+      hermes: (args) => {
+        if (args[0] === "kanban" && args[1] === "show") return JSON.stringify({ task: { id: "t_digest2", status: "ready", body: body2 } });
+        if (args[0] === "kanban" && args[1] === "complete") return "completed";
+        throw new Error(`unexpected hermes call: ${args.join(" ")}`);
+      },
+      confirmDeliveries: async (ids) => {
+        confirmCalls.push(ids);
+        return { confirmed: ids, failed: [] };
+      },
+    });
+    expect("silent" in run2).toBe(false);
+    // Both the new id and the parked one are confirmed in one batch.
+    expect(confirmCalls).toEqual([["opp-2", "opp-1"]]);
+    // All landed — the retry queue is cleared from state.
+    expect(JSON.parse(await Bun.file("state.json").text()).pendingDeliveryConfirms).toBeUndefined();
+  });
+
+  test("a permanent confirm failure is NOT parked for retry", async () => {
+    tempWorkspace();
+    await Bun.write("state.json", JSON.stringify({
+      prepared: { date: "2026-06-04", taskId: "t_digest" },
+    }));
+    const body = "<!-- digest-opportunity:id=opp-1 -->Maya — relevant";
+
+    const result = await sendDailyBrief({
+      date: "2026-06-04",
+      stateFile: "state.json",
+      outgoingFile: "outgoing.md",
+      hermes: (args) => {
+        if (args[0] === "kanban" && args[1] === "show") return JSON.stringify({ task: { id: "t_digest", status: "ready", body } });
+        if (args[0] === "kanban" && args[1] === "complete") return "completed";
+        throw new Error(`unexpected hermes call: ${args.join(" ")}`);
+      },
+      confirmDeliveries: async (ids) => ({ confirmed: [], failed: ids.map((opportunityId) => ({ opportunityId, reason: "opportunity_not_found: deleted" })) }),
+    });
+
+    expect("silent" in result).toBe(false);
+    // Permanent failure still surfaces in diagnostics …
+    expect(result.confirmFailed).toEqual([{ opportunityId: "opp-1", reason: "opportunity_not_found: deleted" }]);
+    // … but is never parked for a doomed daily retry.
+    expect(JSON.parse(await Bun.file("state.json").text()).pendingDeliveryConfirms).toBeUndefined();
+  });
+
   test("silent results never invoke the confirmer", async () => {
     tempWorkspace();
     await Bun.write("state.json", JSON.stringify({ prepared: { date: "2026-06-03", taskId: "t_old" } }));
