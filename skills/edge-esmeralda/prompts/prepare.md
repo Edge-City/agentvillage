@@ -26,7 +26,9 @@ Silent turns use the current host's no-reply marker exactly: Hermes → `[SILENT
    bun skills/index-network/scripts/stage-daily-brief.ts --state-file memory/heartbeat-state.json --context-out memory/daily-brief-context.json
    ```
 
-   The script resolves the America/Los_Angeles date, fetches opportunities and pending questions from the Index MCP server, builds structured context, composes the markdown body (including the optional closing question postscript), runs the URL guard, creates the Kanban task with argv-safe `--body`, blocks it for review, and records `prepared.taskId` in `memory/heartbeat-state.json`. Its JSON stdout is for diagnostics only; do not expose it.
+   The script resolves the America/Los_Angeles date, fetches opportunities and pending questions from the Index MCP server, builds structured context, composes the markdown body (including the optional closing question postscript), runs the URL guard, creates the Kanban task with argv-safe `--body`, applies the review gate, and records `prepared.taskId` in `memory/heartbeat-state.json`. Its JSON stdout is for diagnostics only; do not expose it.
+
+   Default behavior is human review: the script blocks the staged card so it ships only after an operator approves it by unblocking. Operators can opt into fully automated delivery at install/runtime with `DIGEST_REVIEW_REQUIRED=false` (or, for a manual run, `--no-review-required`); in that mode the script leaves or unblocks the card into a deliverable `todo`/`ready` state for the send pass. Do not add that flag yourself unless the runtime/operator has explicitly opted in.
 
    If the script exits with a non-zero code, end your turn immediately with the host-specific no-reply marker. Do not diagnose the failure, retry the script, or attempt alternative staging paths. One attempt only.
 
@@ -36,7 +38,8 @@ Silent turns use the current host's no-reply marker exactly: Hermes → `[SILENT
 - Never invent announcements, events, people, venues, times, tracks, or action URLs.
 - Do not compose or stage the Kanban card manually; `stage-daily-brief.ts` is the only allowed staging path.
 - One attempt at the staging script. If it fails, end immediately with the no-reply marker — no retries, no diagnosis, no alternative paths.
-- Always stage the brief **blocked** (held for review) and record its `taskId`; it ships only if a human unblocks (approves) it before the send pass. Never assign it or move it to **Ready**.
+- By default, stage the brief **blocked** (held for review) and record its `taskId`; it ships only if a human unblocks (approves) it before the send pass.
+- Only when the runtime/operator has explicitly opted in with `DIGEST_REVIEW_REQUIRED=false` or `--no-review-required`, let the staging script skip the block/unblock into a deliverable `todo`/`ready` state. Do not manually assign or move the card.
 - Calendar failures must not block launch: ship people-only plus the one-line calendar pointer, or the pointer-only fallback if there is nothing else.
 - The question postscript is sanctioned: when the digest has verified content and a pending question exists, the body ends with `---` followed by a single `**One for you:**` question after the sign-off line. The pointer-only fallback digest never carries a question. The hidden `digest-question` marker beside it is delivery bookkeeping — like opportunity markers, it is stripped before the user sees the brief; do not remove or edit it.
 - Never confirm delivery here. Never write `deliveredToday` here.

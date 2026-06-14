@@ -5,7 +5,7 @@
  * The cron prompt still fetches Index opportunities through MCP and writes the
  * transcript to `memory/digest-opportunities.txt`. This script owns everything
  * after that: context building, markdown composition, URL validation, Kanban
- * create/block, and heartbeat bookkeeping. Keeping this deterministic avoids
+ * create/review-state, and heartbeat bookkeeping. Keeping this deterministic avoids
  * prompt-generated shell quoting bugs and CLI flag drift.
  */
 
@@ -18,9 +18,45 @@ import { sanitizeDigestUrls } from "./validate-digest-urls";
 const CONNECTION_DIGEST_LIMIT = 1;
 const COMMUNITY_DIGEST_LIMIT = 1;
 
+type HermesRunner = (args: string[]) => string | Promise<string>;
+type DailyBriefContextBuilder = typeof buildDailyBriefContext;
+
 function argValue(args: string[], name: string): string | undefined {
   const idx = args.indexOf(name);
   return idx >= 0 ? args[idx + 1] : undefined;
+}
+
+function hasFlag(args: string[], name: string): boolean {
+  return args.includes(name);
+}
+
+function booleanArgValue(args: string[], name: string): string | undefined {
+  const direct = argValue(args, name);
+  if (direct !== undefined) return direct;
+  const prefix = `${name}=`;
+  return args.find((arg) => arg.startsWith(prefix))?.slice(prefix.length);
+}
+
+function parseBoolean(value: string | undefined): boolean | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+  return undefined;
+}
+
+export function resolveReviewRequired(
+  args: string[] = process.argv.slice(2),
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (hasFlag(args, "--no-review-required") || hasFlag(args, "--no-digest-review-required")) return false;
+
+  const fromFlag = parseBoolean(booleanArgValue(args, "--review-required")
+    ?? booleanArgValue(args, "--digest-review-required"));
+  if (fromFlag !== undefined) return fromFlag;
+
+  const fromEnv = parseBoolean(env.DIGEST_REVIEW_REQUIRED);
+  return fromEnv ?? true;
 }
 
 function pacificDate(): string {
@@ -240,6 +276,40 @@ async function runHermes(args: string[]): Promise<string> {
   return new TextDecoder().decode(result.stdout);
 }
 
+function parseTaskStatus(raw: string): string {
+  try {
+    const parsed = JSON.parse(raw) as { status?: unknown; task?: { status?: unknown } };
+    const status = typeof parsed.status === "string"
+      ? parsed.status
+      : typeof parsed.task?.status === "string"
+        ? parsed.task.status
+        : "";
+    return status.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+async function markTaskDeliverable(hermes: HermesRunner, taskId: string): Promise<void> {
+  try {
+    await hermes(["kanban", "unblock", taskId]);
+    return;
+  } catch (unblockError) {
+    let status = "";
+    try {
+      status = parseTaskStatus(await hermes(["kanban", "show", taskId, "--json"]));
+    } catch (showError) {
+      const reason = showError instanceof Error ? showError.message : String(showError);
+      throw new Error(`could not verify automated digest task status after unblock failed: ${reason}`);
+    }
+
+    if (status === "todo" || status === "ready") return;
+
+    const reason = unblockError instanceof Error ? unblockError.message : String(unblockError);
+    throw new Error(`automated digest task is not deliverable after unblock failed: status=${status || "unknown"}; ${reason}`);
+  }
+}
+
 function extractTaskId(raw: string): string {
   const trimmed = raw.trim();
   try {
@@ -259,20 +329,26 @@ export async function stageDailyBrief(options: {
   opportunitiesFile?: string;
   stateFile?: string;
   contextOut?: string;
+  reviewRequired?: boolean;
+  hermes?: HermesRunner;
+  buildContext?: DailyBriefContextBuilder;
 } = {}): Promise<{ taskId: string; body: string; opportunityIds: string[]; questionIds: string[] }> {
   const date = options.date ?? pacificDate();
   const opportunitiesFile = options.opportunitiesFile ?? "memory/digest-opportunities.txt";
   const stateFile = options.stateFile ?? "memory/heartbeat-state.json";
   const contextOut = options.contextOut ?? "memory/daily-brief-context.json";
+  const reviewRequired = options.reviewRequired ?? true;
+  const hermes = options.hermes ?? runHermes;
+  const buildContext = options.buildContext ?? buildDailyBriefContext;
 
-  const context = await buildDailyBriefContext({ date, opportunitiesFile, stateFile });
+  const context = await buildContext({ date, opportunitiesFile, stateFile });
   await writeJson(contextOut, context);
 
   const { body, opportunityIds, questionIds } = composeDailyBrief(context);
   const { output: sanitizedBody } = sanitizeDigestUrls(body);
   await Bun.write("memory/digest-draft.md", `${sanitizedBody}\n`);
 
-  const createOutput = await runHermes([
+  const createOutput = await hermes([
     "kanban",
     "create",
     `Morning digest — ${date}`,
@@ -284,13 +360,19 @@ export async function stageDailyBrief(options: {
   ]);
   const taskId = extractTaskId(createOutput);
 
-  await runHermes(["kanban", "block", taskId, `review-required: morning brief — ${date}`]);
+  if (reviewRequired) {
+    await hermes(["kanban", "block", taskId, `review-required: morning brief — ${date}`]);
+  } else {
+    await markTaskDeliverable(hermes, taskId);
+  }
 
   const state = await readJsonObject(stateFile);
   state.prepared = {
     date,
     taskId,
     taskTitle: `Morning digest — ${date}`,
+    reviewRequired,
+    deliveryGate: reviewRequired ? "human-review" : "automated",
     opportunityIds,
     questionIds,
   };
@@ -308,6 +390,7 @@ async function main(): Promise<void> {
     opportunitiesFile: argValue(args, "--opportunities-file"),
     stateFile: argValue(args, "--state-file"),
     contextOut: argValue(args, "--context-out"),
+    reviewRequired: resolveReviewRequired(args),
   });
   process.stdout.write(`${JSON.stringify({ taskId: result.taskId, opportunityIds: result.opportunityIds, questionIds: result.questionIds })}\n`);
 }

@@ -9,7 +9,7 @@ AgentVillage is the public skills package and onboarding scripts that an agent (
 Today, capabilities come from **Index Network** (discovery + intent negotiation). **Geo** (knowledge graph) and **EdgeOS** (calendar + directory) are also in scope. Once installed, AgentVillage:
 
 - **Runs privacy-first onboarding** the first time you message it (greet → ask one data-use consent question covering EdgeOS data and public lookup → require a public social/profile URL before any internet lookup → profile draft → user approval → first signal → silent handle capture → `complete_onboarding`).
-- **Prepares a morning brief for 08:00 host-local time** with admin-set village announcements, today's EdgeOS calendar highlights, the connections worth your attention, and the asks where you can help. Each night's brief is staged and held for review; it is delivered at 08:00 only after an operator approves it by unblocking the staged card on the board.
+- **Prepares a morning brief for 08:00 host-local time** with admin-set village announcements, today's EdgeOS calendar highlights, the connections worth your attention, and the asks where you can help. Each night's brief is staged and held for review by default; it is delivered only after an operator approves it by unblocking the staged card on the board. Operators can opt into automated delivery with `DIGEST_REVIEW_REQUIRED=false`.
 - **Notifies you when someone accepts** a connection on your behalf.
 - **Curates memory** every few days — distills daily notes into long-term `MEMORY.md`.
 
@@ -216,23 +216,40 @@ bun install/install.ts \
 
 ### Overriding the digest cron times
 
-The morning digest runs as two fixed crons — **prepare at `0 2 * * *`** and **send at `0 8 * * *`** (host-local). To install them at different times (a different timezone, a test window, etc.), pass full 5-field cron expressions. A flag wins over the matching env var; an invalid expression is ignored with a warning and the default is kept.
+The morning digest runs as three host-local crons with deterministic per-tenant staggering by default: memory signal sync spreads across **01:00-01:49**, prepare spreads across **02:00-02:49**, and send spreads across **08:00-08:24**. To install them at exact times (a different timezone, a test window, etc.), pass full 5-field cron expressions. A flag wins over the matching env var; an invalid expression is ignored with a warning and the staggered default is kept.
 
 ```bash
 # via flags
 bun install/install.ts --index-api-key <YOUR_API_KEY> \
+  --digest-signals-cron "0 1 * * *" \
   --digest-prepare-cron "0 3 * * *" \
   --digest-send-cron    "0 9 * * *"
 
 # or via environment
-DIGEST_PREPARE_CRON="0 3 * * *" DIGEST_SEND_CRON="0 9 * * *" \
+DIGEST_SIGNALS_CRON="0 1 * * *" DIGEST_PREPARE_CRON="0 3 * * *" DIGEST_SEND_CRON="0 9 * * *" \
   bun install/install.ts --index-api-key <YOUR_API_KEY>
 ```
 
 | Cron | Flag | Env var | Default |
 |---|---|---|---|
-| Prepare pass | `--digest-prepare-cron "<expr>"` | `DIGEST_PREPARE_CRON` | `0 2 * * *` |
-| Send pass | `--digest-send-cron "<expr>"` | `DIGEST_SEND_CRON` | `0 8 * * *` |
+| Memory signal sync | `--digest-signals-cron "<expr>"` | `DIGEST_SIGNALS_CRON` | staggered from `0 1 * * *` over 01:00-01:49 |
+| Prepare pass | `--digest-prepare-cron "<expr>"` | `DIGEST_PREPARE_CRON` | staggered from `0 2 * * *` over 02:00-02:49 |
+| Send pass | `--digest-send-cron "<expr>"` | `DIGEST_SEND_CRON` | staggered from `0 8 * * *` over 08:00-08:24 |
+
+### Opting into automated digest delivery
+
+The human review gate is the default. The prepare pass creates a **blocked** Kanban task, and the send pass stays silent until an operator approves it by unblocking the task (`hermes kanban unblock <id>` or the board's unblock control).
+
+For hosted/operator-controlled installs where the morning brief should deliver without manual Kanban approval, set `DIGEST_REVIEW_REQUIRED=false` or pass `--no-digest-review-required` / `--no-review-required` during install:
+
+```bash
+DIGEST_REVIEW_REQUIRED=false bun install/install.ts --index-api-key <YOUR_API_KEY>
+
+# equivalent flag form
+bun install/install.ts --index-api-key <YOUR_API_KEY> --no-digest-review-required
+```
+
+The installer persists `DIGEST_REVIEW_REQUIRED=false` into the Hermes env only when this switch is provided. To return an install to the default gate, rerun with `--digest-review-required true` or set `DIGEST_REVIEW_REQUIRED=true`.
 
 The installer writes any tokens it finds into `env.vars.*` in `~/.openclaw/openclaw.json`; on the next gateway start they become process-env on the gateway and inherit into the agent's shell tool, so `curl -H "Authorization: Bearer $EDGEOS_API_KEY"` recipes and Geo CLI commands work without further plumbing.
 
@@ -244,7 +261,7 @@ The installer:
 4. Sets `channels.telegram.streaming.mode = off` so OpenClaw doesn't dump per-tool status drafts into your chat.
 5. Copies the workspace markdown bundle into `~/.openclaw/workspace/`. `USER.md` is preserved on re-install (it holds the lived notes the active skill's bootstrap ritual populated for you); pass `--wipe-user` to overwrite `USER.md` and delete the agent-curated `MEMORY.md`, OpenClaw's `workspace-state.json` first-run marker, and the local onboarding/welcome/cron-preference markers under `memory/` so the next session re-onboards from scratch.
 6. Copies backend skill bundles from `skills/` into `~/.openclaw/workspace/skills/` so OpenClaw registers them as workspace skills.
-7. Installs the two digest cron jobs: a prepare pass (`0 2 * * *`) that composes the morning brief and stages it as an editable Kanban task, and a send pass (`0 8 * * *`) that delivers the staged brief. The prepare pass stages each brief as a **blocked** Kanban task; the send pass delivers it only after an operator approves it by unblocking that task (`hermes kanban unblock <id>` or the board's unblock control), so accidental delivery is prevented without pausing the cron. The end user can't change the schedule from chat, but the installer can override both times via `--digest-prepare-cron` / `--digest-send-cron` (or `DIGEST_PREPARE_CRON` / `DIGEST_SEND_CRON`) — see "Overriding the digest cron times" above.
+7. Installs the three digest cron jobs: memory signal sync (staggered across 01:00-01:49), a prepare pass (staggered across 02:00-02:49) that composes the morning brief and stages it as an editable Kanban task, and a send pass (staggered across 08:00-08:24) that delivers the staged brief. By default, the prepare pass stages each brief as a **blocked** Kanban task; the send pass delivers it only after an operator approves it by unblocking that task (`hermes kanban unblock <id>` or the board's unblock control), so accidental delivery is prevented without pausing the cron. Operator-controlled installs can opt into automated delivery with `DIGEST_REVIEW_REQUIRED=false` / `--no-digest-review-required`, which stages the task in a deliverable state for the send pass. The end user can't change the schedule from chat, but the installer can override cron times via `--digest-signals-cron` / `--digest-prepare-cron` / `--digest-send-cron` (or matching `DIGEST_*_CRON` env vars) — see "Overriding the digest cron times" above.
 8. Restarts the gateway so all config changes take effect.
 
 Send any message in your chat to bring AgentVillage online. AgentVillage has two independent setup gates with different triggers:
@@ -276,7 +293,7 @@ bun install/reset.ts --wipe-user
 
 ## How it runs
 
-Time-sensitive prompts (the morning digest's prepare pass at 02:00 and send pass at 08:00 — host-local) run as **OpenClaw cron jobs**, not heartbeat tasks. Cron has its own scheduler and runs in isolated sessions with `--light-context` so each tick is cheap. Cron jobs are installed by `install/install.ts` and restart with the gateway. Future per-backend skills can add their own cron prompts the same way.
+Time-sensitive prompts (memory signal sync near 01:00, the morning digest prepare pass near 02:00, and the send pass near 08:00 — host-local, each staggered per tenant) run as **OpenClaw cron jobs**, not heartbeat tasks. Cron has its own scheduler and runs in isolated sessions with `--light-context` so each tick is cheap. Cron jobs are installed by `install/install.ts` and restart with the gateway. Future per-backend skills can add their own cron prompts the same way.
 
 Accepted-opportunity notifications, freshness audits, memory curation, and any other latency-tolerant background work stay on the heartbeat tick because 30-minute latency is acceptable for those flows.
 
@@ -334,11 +351,12 @@ AgentVillage's behaviour is markdown-driven. Almost everything you'd want to cha
 
 ### Schedule & cron
 
-The digest runs as a fixed prepare/send pair — **prepare `0 2 * * *`, send `0 8 * * *`** (host-local) — and the end user can't change it from chat. The installer can override either time (see "Overriding the digest cron times" under **Install**).
+The digest runs as a host-local cron sequence — memory signal sync around 01:00, prepare around 02:00, send around 08:00 — with deterministic per-tenant staggering. The end user can't change it from chat. The installer can override these times (see "Overriding the digest cron times" under **Install**).
 
 | You want to… | Edit | Notes |
 |---|---|---|
-| Override the digest times for one install | `--digest-prepare-cron` / `--digest-send-cron` (or `DIGEST_PREPARE_CRON` / `DIGEST_SEND_CRON`) | Optional, full 5-field cron expressions. Flag wins over env; invalid values fall back to the default. |
+| Override the digest times for one install | `--digest-signals-cron` / `--digest-prepare-cron` / `--digest-send-cron` (or matching `DIGEST_*_CRON` env vars) | Optional, full 5-field cron expressions. Flag wins over env; invalid values fall back to the staggered default. |
+| Opt into automated digest delivery for one install | `DIGEST_REVIEW_REQUIRED=false`, `--no-digest-review-required`, or `--no-review-required` | Default is human review: prepare blocks the card and send stays silent until approval. Automation mode skips the block/unblocks the card so send can deliver without manual Kanban approval. |
 | Change the default digest schedule for everyone | `install/install_index.ts` (`DIGEST_CRON_SPECS`) | The installer writes the cron entries from this table. Existing installs pick up changes on the next `install.ts` run. |
 | Change a cron prompt without changing the schedule | the matching `skills/edge-esmeralda/prompts/<name>.md` | Hermes stores prompt copies in cron jobs. Hosted residents are refreshed by the control-plane post-merge sync, which calls each sidecar's `/update` endpoint and reruns the installer. For non-control-plane installs or recovery, run `HERMES_HOME=<resident-home> bun install/reconcile_digest_crons.ts` after updated skill files are copied. |
 

@@ -1,6 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { composeDailyBrief } from "../stage-daily-brief";
+import { composeDailyBrief, resolveReviewRequired, stageDailyBrief } from "../stage-daily-brief";
 import type { DailyBriefContext } from "../build-daily-brief-context";
 
 const baseContext: DailyBriefContext = {
@@ -23,6 +26,158 @@ const baseContext: DailyBriefContext = {
     interestTags: [],
   },
 };
+
+let previousCwd = process.cwd();
+const tempDirs: string[] = [];
+
+function makeTempWorkdir(): string {
+  previousCwd = process.cwd();
+  const dir = mkdtempSync(join(tmpdir(), "stage-daily-brief-"));
+  tempDirs.push(dir);
+  mkdirSync(join(dir, "memory"), { recursive: true });
+  process.chdir(dir);
+  return dir;
+}
+
+afterEach(() => {
+  process.chdir(previousCwd);
+  for (const dir of tempDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+describe("resolveReviewRequired", () => {
+  test("defaults to requiring human review", () => {
+    expect(resolveReviewRequired([], {})).toBe(true);
+  });
+
+  test("honors env and CLI opt-out switches", () => {
+    expect(resolveReviewRequired([], { DIGEST_REVIEW_REQUIRED: "false" })).toBe(false);
+    expect(resolveReviewRequired(["--no-review-required"], {})).toBe(false);
+    expect(resolveReviewRequired(["--no-digest-review-required"], {})).toBe(false);
+    expect(resolveReviewRequired(["--digest-review-required=false"], { DIGEST_REVIEW_REQUIRED: "true" })).toBe(false);
+    expect(resolveReviewRequired(["--review-required", "true"], { DIGEST_REVIEW_REQUIRED: "false" })).toBe(true);
+  });
+});
+
+describe("stageDailyBrief", () => {
+  test("creates and blocks the Morning digest task by default", async () => {
+    makeTempWorkdir();
+    const calls: string[][] = [];
+    const hermes = async (args: string[]) => {
+      calls.push(args);
+      return args[1] === "create" ? JSON.stringify({ task: { id: "t_digest" } }) : "";
+    };
+
+    const result = await stageDailyBrief({
+      date: "2026-06-04",
+      stateFile: "memory/heartbeat-state.json",
+      contextOut: "memory/daily-brief-context.json",
+      hermes,
+      buildContext: async () => ({
+        ...baseContext,
+        announcements: [{ body: "Town hall at 5pm." }],
+      }),
+    });
+
+    expect(result.taskId).toBe("t_digest");
+    expect(calls).toEqual([
+      [
+        "kanban",
+        "create",
+        "Morning digest — 2026-06-04",
+        "--body",
+        result.body,
+        "--idempotency-key",
+        "digest-2026-06-04",
+        "--json",
+      ],
+      ["kanban", "block", "t_digest", "review-required: morning brief — 2026-06-04"],
+    ]);
+
+    const state = await Bun.file("memory/heartbeat-state.json").json();
+    expect(state.prepared).toMatchObject({
+      date: "2026-06-04",
+      taskId: "t_digest",
+      reviewRequired: true,
+      deliveryGate: "human-review",
+    });
+  });
+
+  test("automation mode creates and unblocks the Morning digest task", async () => {
+    makeTempWorkdir();
+    const calls: string[][] = [];
+    const hermes = async (args: string[]) => {
+      calls.push(args);
+      return args[1] === "create" ? JSON.stringify({ id: "t_digest" }) : "";
+    };
+
+    const result = await stageDailyBrief({
+      date: "2026-06-04",
+      stateFile: "memory/heartbeat-state.json",
+      contextOut: "memory/daily-brief-context.json",
+      reviewRequired: false,
+      hermes,
+      buildContext: async () => ({
+        ...baseContext,
+        announcements: [{ body: "Town hall at 5pm." }],
+      }),
+    });
+
+    expect(calls).toEqual([
+      [
+        "kanban",
+        "create",
+        "Morning digest — 2026-06-04",
+        "--body",
+        result.body,
+        "--idempotency-key",
+        "digest-2026-06-04",
+        "--json",
+      ],
+      ["kanban", "unblock", "t_digest"],
+    ]);
+
+    const state = await Bun.file("memory/heartbeat-state.json").json();
+    expect(state.prepared).toMatchObject({
+      date: "2026-06-04",
+      taskId: "t_digest",
+      reviewRequired: false,
+      deliveryGate: "automated",
+    });
+  });
+
+  test("automation mode rejects when an existing task remains blocked after unblock fails", async () => {
+    makeTempWorkdir();
+    const calls: string[][] = [];
+    const hermes = async (args: string[]) => {
+      calls.push(args);
+      if (args[1] === "create") return JSON.stringify({ id: "t_existing" });
+      if (args[1] === "unblock") throw new Error("cannot unblock");
+      if (args[1] === "show") return JSON.stringify({ task: { id: "t_existing", status: "blocked" } });
+      return "";
+    };
+
+    await expect(stageDailyBrief({
+      date: "2026-06-04",
+      stateFile: "memory/heartbeat-state.json",
+      contextOut: "memory/daily-brief-context.json",
+      reviewRequired: false,
+      hermes,
+      buildContext: async () => ({
+        ...baseContext,
+        announcements: [{ body: "Town hall at 5pm." }],
+      }),
+    })).rejects.toThrow("status=blocked");
+
+    expect(calls[0]?.slice(0, 4)).toEqual(["kanban", "create", "Morning digest — 2026-06-04", "--body"]);
+    expect(calls.slice(1)).toEqual([
+      ["kanban", "unblock", "t_existing"],
+      ["kanban", "show", "t_existing", "--json"],
+    ]);
+    expect(await Bun.file("memory/heartbeat-state.json").exists()).toBe(false);
+  });
+});
 
 describe("composeDailyBrief", () => {
   test("renders real calendar content instead of calendar-unavailable fallback", () => {
