@@ -1,7 +1,7 @@
 # Edge Esmeralda 2026 Wiki
 
 Source: https://www.notion.so/edgecity/Edge-Esmeralda-2026-Wiki-317d45cdfc5981d2a571f52b024c5141
-Last indexed: 2026-06-14T17:46:56.742Z
+Last indexed: 2026-06-14T19:10:15.551Z
 
 ---
 
@@ -435,12 +435,7 @@ Teens (13–18) attend free with a standard ticket. No residency program is incl
 
 Pick-up
 
-- May 30: 12pm – 5pm at Hotel Trio (rear parking lot)
-- May 31: 10am – 1pm at Hotel Trio (rear parking lot)
-- Jun 1: 2pm – 5pm in front of 150 North Street
 - Jun 2 onwards: 10am – 5pm in front of 150 North Street
-Bike Pickup.png
-
 Use the Drop Mobility app to scan and check out your bike: Andriod (https://play.google.com/store/apps/details?id=com.dropmobility.lab&pcampaignid=web_share) | IOS (https://apps.apple.com/us/app/drop-mobility-experiences/id6737418301)
 
 Drop-off
