@@ -56,6 +56,45 @@ function readTelegramHandle(): string {
     || "";
 }
 
+function parseBoolean(value: string | undefined): boolean | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+  return undefined;
+}
+
+function readOptionalFlag(argv: string[], name: string): string | undefined {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === name) return argv[i + 1]?.startsWith("--") ? undefined : argv[i + 1];
+    if (arg.startsWith(`${name}=`)) return arg.slice(name.length + 1);
+  }
+  return undefined;
+}
+
+export function readDigestReviewRequiredOverride(
+  argv: string[] = process.argv,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean | undefined {
+  if (argv.includes("--no-review-required") || argv.includes("--no-digest-review-required")) {
+    return false;
+  }
+
+  const fromFlag = parseBoolean(
+    readOptionalFlag(argv, "--digest-review-required") ?? readOptionalFlag(argv, "--review-required"),
+  );
+  if (fromFlag !== undefined) return fromFlag;
+
+  const rawEnv = env.DIGEST_REVIEW_REQUIRED;
+  const fromEnv = parseBoolean(rawEnv);
+  if (fromEnv !== undefined) return fromEnv;
+  if (rawEnv?.trim()) {
+    console.warn(`  warning: ignoring invalid DIGEST_REVIEW_REQUIRED value "${rawEnv}"`);
+  }
+  return undefined;
+}
+
 export function buildIndexMcpHeaders(apiKey: string, telegramHandle = ""): Record<string, string> {
   const headers: Record<string, string> = {
     "x-api-key": apiKey,
@@ -382,11 +421,16 @@ export function reconcileDigestCronJobs(env: NodeJS.ProcessEnv = hermesExecEnv()
 export function installIndex(): void {
   const apiKey = readApiKey();
   const telegramHandle = readTelegramHandle();
+  const digestReviewRequired = readDigestReviewRequiredOverride();
   console.log(
     `→ index network: target=${IS_DEV ? "dev" : "production"} (${PROTOCOL_MCP_URL})`,
   );
   upsertEnvVar("INDEX_API_KEY", apiKey);
   if (telegramHandle) upsertEnvVar("INDEX_TELEGRAM_HANDLE", telegramHandle);
+  if (digestReviewRequired !== undefined) {
+    upsertEnvVar("DIGEST_REVIEW_REQUIRED", digestReviewRequired ? "true" : "false");
+    console.log(`→ digest review gate: ${digestReviewRequired ? "required" : "automation opt-in"}`);
+  }
   writeMcpServerEntry(apiKey, telegramHandle);
 
   if (!process.argv.includes("--skip-crons")) {

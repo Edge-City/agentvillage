@@ -7,6 +7,7 @@ import {
   cronEditArgs,
   fnv1a,
   isValidCron,
+  readDigestReviewRequiredOverride,
   resolveCronSchedule,
   staggeredSchedule,
   storedSchedule,
@@ -104,6 +105,18 @@ test("index MCP headers include telegram surface and optional handle", () => {
     "x-index-surface": "telegram",
     "x-index-telegram-username": "@alice",
   });
+});
+
+test("digest review gate override is explicit and defaults to unchanged", () => {
+  expect(readDigestReviewRequiredOverride([], {})).toBeUndefined();
+  expect(readDigestReviewRequiredOverride(["bun", "--no-digest-review-required"], {})).toBe(false);
+  expect(readDigestReviewRequiredOverride(["bun", "--no-review-required"], {})).toBe(false);
+  expect(readDigestReviewRequiredOverride(["bun", "--digest-review-required=false"], {})).toBe(false);
+  expect(readDigestReviewRequiredOverride(["bun", "--review-required", "true"], {
+    DIGEST_REVIEW_REQUIRED: "false",
+  })).toBe(true);
+  expect(readDigestReviewRequiredOverride([], { DIGEST_REVIEW_REQUIRED: "false" })).toBe(false);
+  expect(readDigestReviewRequiredOverride([], { DIGEST_REVIEW_REQUIRED: "true" })).toBe(true);
 });
 
 test("each spec declares its install-time override flag + env var", () => {
