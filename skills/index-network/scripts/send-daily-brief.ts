@@ -151,6 +151,25 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
 }
 
+/**
+ * Error-code prefixes the Index `confirm_opportunity_delivery` tool marks as
+ * `retryable: false`. A failure whose reason starts with one of these will
+ * never succeed on retry (deleted opportunity, caller not an actor, malformed
+ * id, bad auth), so it must NOT be carried into the cross-run retry queue —
+ * otherwise it accumulates forever and re-hammers the MCP transport daily.
+ */
+const PERMANENT_CONFIRM_CODES = [
+  "opportunity_not_found",
+  "not_authorized",
+  "invalid_opportunity_id",
+  "unauthenticated",
+  "ledger_unavailable",
+];
+
+function isPermanentConfirmFailure(reason: string): boolean {
+  return PERMANENT_CONFIRM_CODES.some((code) => reason.startsWith(code));
+}
+
 export async function sendDailyBrief(options: {
   date?: string;
   stateFile?: string;
@@ -190,6 +209,15 @@ export async function sendDailyBrief(options: {
   const opportunityIds = extractDigestOpportunityIds(body);
   const questionIds = extractDigestQuestionIds(body);
 
+  // Cross-run retry: ids whose ledger confirm failed transiently on a previous
+  // run. Index's cross-day digest suppression reads the ledger (not Hermes'
+  // local deliveredToday state), so a confirm that never lands lets the same
+  // opportunity resurface in a later digest. Re-attempt those here — the tool
+  // is idempotent, so re-confirming an id that actually landed is a cheap
+  // 'already_delivered'.
+  const priorPendingConfirms = stringArray(state.pendingDeliveryConfirms);
+  const confirmBatch = Array.from(new Set([...opportunityIds, ...priorPendingConfirms]));
+
   const deliveredToday = state.deliveredToday && typeof state.deliveredToday === "object" && !Array.isArray(state.deliveredToday)
     ? state.deliveredToday as Record<string, unknown>
     : {};
@@ -224,14 +252,32 @@ export async function sendDailyBrief(options: {
   let confirmedOpportunityIds: string[] = [];
   let confirmFailed: Array<{ opportunityId: string; reason: string }> = [];
   try {
-    const confirmResult = await confirmDeliveries(opportunityIds);
+    const confirmResult = await confirmDeliveries(confirmBatch);
     confirmedOpportunityIds = confirmResult.confirmed;
     confirmFailed = confirmResult.failed;
   } catch (err) {
-    confirmFailed = opportunityIds.map((opportunityId) => ({
+    confirmFailed = confirmBatch.map((opportunityId) => ({
       opportunityId,
       reason: err instanceof Error ? err.message : String(err),
     }));
+  }
+
+  // Persist the still-pending (transient-only) failures for the next run. Drop
+  // permanent failures — retrying them never succeeds. Only re-write state when
+  // the pending set actually changes, to avoid a needless disk write.
+  const nextPendingConfirms = confirmFailed
+    .filter((f) => !isPermanentConfirmFailure(f.reason))
+    .map((f) => f.opportunityId);
+  const pendingChanged =
+    nextPendingConfirms.length !== priorPendingConfirms.length ||
+    nextPendingConfirms.some((id, i) => id !== priorPendingConfirms[i]);
+  if (pendingChanged || priorPendingConfirms.length > 0) {
+    if (nextPendingConfirms.length > 0) {
+      state.pendingDeliveryConfirms = nextPendingConfirms;
+    } else {
+      delete state.pendingDeliveryConfirms;
+    }
+    await writeJson(stateFile, state);
   }
 
   const { output: finalBrief } = sanitizeDigestUrls(body, { stripDigestMetadata: true });
