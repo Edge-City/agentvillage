@@ -54,7 +54,7 @@ describe("composeDailyBrief", () => {
     expect(body).not.toContain("\\ud83c");
   });
 
-  test("renders an RSVP section and excludes RSVPed events from the discovery list", () => {
+  test("renders RSVPs in chronological calendar order and excludes RSVPed events from discovery", () => {
     const rsvped = {
       id: "event-rsvp",
       title: "Qi Gong",
@@ -85,12 +85,50 @@ describe("composeDailyBrief", () => {
       diagnostics: { ...baseContext.diagnostics, calendarSource: "edgeos", rsvpSource: "edgeos" },
     });
 
-    expect(body).toContain("**On your calendar today (your RSVPs):**");
-    expect(body).toContain("8:00 AM — [Qi Gong]");
-    expect(body).toContain("**Also on today:**");
+    expect(body).toContain("**On today (your RSVPs marked):**");
+    expect(body).toContain("8:00 AM — [Qi Gong](https://edgecity.simplefi.tech/portal/edge-esmeralda-2026/events/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb) at Plaza (your RSVP)");
+    expect(body).toContain("9:00 AM — [GNOSIS Journey]");
+    expect(body).not.toContain("**Also on today:**");
     expect(body).toContain("That's a selection, not the whole day — ask me for the full calendar anytime.");
+    expect(body.indexOf("8:00 AM — [Qi Gong]")).toBeLessThan(body.indexOf("9:00 AM — [GNOSIS Journey]"));
     // Qi Gong is an RSVP, so it must not also appear in the discovery list.
     expect(body.match(/Qi Gong/g) ?? []).toHaveLength(1);
+  });
+
+  test("does not move backward in time when a suggested event starts before a later RSVP", () => {
+    const laterRsvp = {
+      id: "event-rsvp-late",
+      title: "Connection Lab",
+      startTime: "2026-06-04T23:30:00Z",
+      timePacific: "4:30 PM",
+      venue: "The Loft",
+      eventUrl: "https://edgecity.simplefi.tech/portal/edge-esmeralda-2026/events/cccccccc-cccc-cccc-cccc-cccccccccccc",
+      tags: [],
+      highlighted: true,
+      reasonHint: "You RSVPed to this.",
+    };
+    const earlierSuggestion = {
+      id: "event-suggested-earlier",
+      title: "Village Tours",
+      startTime: "2026-06-04T21:00:00Z",
+      timePacific: "2:00 PM",
+      venue: "Meet at the Hub",
+      eventUrl: "https://edgecity.simplefi.tech/portal/edge-esmeralda-2026/events/dddddddd-dddd-dddd-dddd-dddddddddddd",
+      tags: [],
+      highlighted: true,
+      reasonHint: "Highlighted by the EdgeOS calendar.",
+    };
+
+    const { body } = composeDailyBrief({
+      ...baseContext,
+      rsvpEvents: [laterRsvp],
+      highlightedEvents: [earlierSuggestion],
+      diagnostics: { ...baseContext.diagnostics, calendarSource: "edgeos", rsvpSource: "edgeos" },
+    });
+
+    expect(body).toContain("**On today (your RSVPs marked):**");
+    expect(body.indexOf("2:00 PM — [Village Tours]")).toBeLessThan(body.indexOf("4:30 PM — [Connection Lab]"));
+    expect(body).toContain("4:30 PM — [Connection Lab](https://edgecity.simplefi.tech/portal/edge-esmeralda-2026/events/cccccccc-cccc-cccc-cccc-cccccccccccc) at The Loft (your RSVP)");
   });
 
   test("renders opportunities with digest markers and collects ids", () => {

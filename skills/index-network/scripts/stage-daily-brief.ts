@@ -34,10 +34,20 @@ function pacificDate(): string {
   return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
-function eventLine(event: DailyBriefContext["highlightedEvents"][number]): string {
+function eventLine(event: DailyBriefContext["highlightedEvents"][number], label?: string): string {
   const venue = event.venue ? ` at ${event.venue}` : "";
   const title = event.eventUrl ? `[${event.title}](${event.eventUrl})` : event.title;
-  return `- ${event.timePacific} — ${title}${venue}`;
+  const suffix = label ? ` (${label})` : "";
+  return `- ${event.timePacific} — ${title}${venue}${suffix}`;
+}
+
+function compareEventsByStartTime(
+  a: DailyBriefContext["highlightedEvents"][number],
+  b: DailyBriefContext["highlightedEvents"][number],
+): number {
+  const byStart = a.startTime.localeCompare(b.startTime);
+  if (byStart !== 0) return byStart;
+  return a.title.localeCompare(b.title);
 }
 
 function opportunityLabel(opp: BriefOpportunity): string {
@@ -109,21 +119,20 @@ export function composeDailyBrief(context: DailyBriefContext): { body: string; o
     hasVerifiedContent = true;
   }
 
-  if (context.rsvpEvents.length > 0) {
-    lines.push("**On your calendar today (your RSVPs):**");
-    for (const event of context.rsvpEvents) lines.push(eventLine(event));
-    lines.push("");
-    hasVerifiedContent = true;
-  }
-
   // Key on id + start time so distinct occurrences of a recurring event are not collapsed.
   const eventKey = (event: DailyBriefContext["highlightedEvents"][number]) => `${event.id ?? event.title}:${event.startTime}`;
   const rsvpKeys = new Set(context.rsvpEvents.map(eventKey));
-  const events = [...context.highlightedEvents, ...context.interestEvents].filter((event) => !rsvpKeys.has(eventKey(event)));
-  if (events.length > 0) {
-    lines.push(context.rsvpEvents.length > 0 ? "**Also on today:**" : "**A few things on today:**");
-    for (const event of events) lines.push(eventLine(event));
-    if (context.diagnostics.calendarSource === "edgeos") {
+  const suggestedEvents = [...context.highlightedEvents, ...context.interestEvents]
+    .filter((event) => !rsvpKeys.has(eventKey(event)));
+  const calendarEvents = [
+    ...context.rsvpEvents.map((event) => ({ event, label: "your RSVP" })),
+    ...suggestedEvents.map((event) => ({ event, label: undefined })),
+  ].sort((a, b) => compareEventsByStartTime(a.event, b.event));
+
+  if (calendarEvents.length > 0) {
+    lines.push(context.rsvpEvents.length > 0 ? "**On today (your RSVPs marked):**" : "**A few things on today:**");
+    for (const item of calendarEvents) lines.push(eventLine(item.event, item.label));
+    if (suggestedEvents.length > 0 && context.diagnostics.calendarSource === "edgeos") {
       lines.push("That's a selection, not the whole day — ask me for the full calendar anytime.");
     }
     lines.push("");
