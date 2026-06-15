@@ -1,7 +1,7 @@
 {
   "name": "agentvillage",
   "description": "Edge Esmeralda 2026 — popup knowledge, EdgeOS calendar & directory, Geo knowledge graph access, and Index Network discovery skills for the Agent Village.",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "skills": "./",
   "author": {
     "name": "Edge City",
@@ -24,6 +24,24 @@
       "type": "string",
       "title": "EdgeOS API Key",
       "description": "Long-lived eos_live_... key for EdgeOS events and RSVPs.",
+      "sensitive": true
+    },
+    "villageApiBaseUrl": {
+      "type": "string",
+      "title": "Village Pulse API Base URL",
+      "description": "Base URL of the one+1 Village API (e.g. https://api.getoneplusone.com). Required for Village Pulse, post-event check-ins, and Ask the Village.",
+      "sensitive": false
+    },
+    "villageHumanId": {
+      "type": "string",
+      "title": "Village Human ID",
+      "description": "Identifier for this resident in the Village API (e.g. their Edge username or a UUID). Pre-filled by your community admin.",
+      "sensitive": false
+    },
+    "villageKey": {
+      "type": "string",
+      "title": "Village Key (optional)",
+      "description": "Optional shared secret for deployments that enable the X-Village-Key header. Leave blank if your admin hasn't provided one.",
       "sensitive": true
     }
   },

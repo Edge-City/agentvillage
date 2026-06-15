@@ -6,7 +6,7 @@
  *
  *   - `SOUL.md` → `$HERMES_HOME/SOUL.md` (identity; overwrites generic Hermes soul)
  *   - `AGENTS.md`, `USER.md` → `$HERMES_HOME/`
- *   - Edge skill bundles → `$HERMES_HOME/skills/{index-network,edgeos,edge-esmeralda,geo-esmeralda}/`
+ *   - Edge skill bundles → `$HERMES_HOME/skills/{index-network,edgeos,edge-esmeralda,geo-esmeralda,village-pulse}/`
  *   - `terminal.cwd` in config.yaml → `$HERMES_HOME`
  *   - Index MCP + morning digest cron (`install_index.ts`)
  *   - Geo CLI runtime note (`install_geo.ts`)
@@ -33,6 +33,7 @@ import { execSync } from "node:child_process";
 import { installIndex } from "./install_index";
 import { installEdgeos } from "./install_edgeos";
 import { installGeo } from "./install_geo";
+import { installVillagePulse } from "./install_village_pulse";
 import { setTerminalCwd } from "./config";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
 import {
@@ -201,6 +202,7 @@ function main(): void {
   installIndex();
   installEdgeos();
   installGeo();
+  installVillagePulse();
   restoreWelcomeState(welcomeState);
 
   if (!process.argv.includes("--no-restart")) {
