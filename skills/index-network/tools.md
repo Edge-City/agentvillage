@@ -48,7 +48,7 @@ Do not do this during onboarding — the bootstrap ritual owns signal capture th
 
 The `telegram-handle-reconciliation` heartbeat task may ask the resident which Telegram username is correct when EdgeOS, Index, and the local runtime disagree. If `memory/heartbeat-state.json` contains `telegramHandleReconciliation.pending=true`, handle the user's next handle-like answer before ordinary signal capture.
 
-1. Normalize the reply: trim, strip a leading `@`, strip `https://t.me/` / `https://telegram.me/`, drop query/hash/path suffixes, and require `[A-Za-z0-9_]{5,32}`. Store and write bare handles only — e.g. `alice_tg`, never `@alice_tg`.
+1. Normalize the reply: trim, strip a leading `@`, strip `https://t.me/` / `https://telegram.me/`, drop query/hash/path suffixes, and require `[A-Za-z0-9_]{5,32}`, then lowercase it (Telegram usernames are case-insensitive). Store and write bare, lowercase handles only — e.g. `alice_tg`, never `@alice_tg`.
 2. If the reply is not a valid Telegram username, ask one short follow-up: "What's your Telegram username? Send just the handle, without @." Do not write anything.
 3. If valid, update the independent systems that are available from this runtime:
    - Index: call `update_user_profile(socials={ telegram: "<bare-handle>" })`.
