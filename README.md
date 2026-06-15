@@ -294,6 +294,7 @@ Accepted-opportunity notifications, freshness audits, memory curation, and any o
 | `HEARTBEAT.md` | Generic heartbeat tick rules + the cross-backend `memory-curation` task. Backend-specific tasks live in each active skill's `heartbeat.md`. |
 | `skills/index-network/SKILL.md` | Index Network skill bundle entry point. Registered with OpenClaw on install; gates on `mcp.servers.index`. Body points at the bundle's sibling reference files. |
 | `skills/edgeos/SKILL.md` | EdgeOS-API skill: events + attendee directory + curated wiki/website/newsletter references. Currently scoped to Edge Esmeralda 2026. Loaded by OpenClaw alongside index-network. Vendored from `Edge-City/agentvillage-skills`. |
+| `skills/edge-esmeralda/scripts/imports-inbox.ts` | Scaffold for a future imports heartbeat: scans operator-provided `imports/**/*.md`, records hashes in `memory/imports-state.json`, and does not print imported contents. Not scheduled or installed as a heartbeat task by default. |
 | `skills/geo-esmeralda/SKILL.md` | Geo knowledge graph skill: community content, relations, ontology, and attendee-authored writes through the Geo CLI package. |
 
 ## Configuration guide
@@ -330,6 +331,7 @@ AgentVillage's behaviour is markdown-driven. Almost everything you'd want to cha
 | Add a new first-message gate (e.g. another skill needs onboarding) | `workspace/AGENTS.md` "Active skills" section + the new `skills/<name>/bootstrap.md` | Gates loop over the active-skills registry. Add the skill row first, then point its bootstrap at the trigger condition (server flag, local marker, …). |
 | Change the returning-user first-message framing | `workspace/AGENTS.md` "First-message gates" | The digest schedule is fixed (set in `install/install_index.ts`) and not adjustable from chat. |
 | Change heartbeat tick behaviour (what tasks fire, dedup rules) | `workspace/HEARTBEAT.md` for cross-backend rules; `skills/<backend>/heartbeat.md` for backend-specific tasks | The tick cadence itself (default ~30 min) is an OpenClaw-side setting, configured through `openclaw config` — not a file in this repo. |
+| Prototype a future imports heartbeat without rolling it out | `skills/edge-esmeralda/scripts/imports-inbox.ts` + `skills/edge-esmeralda/prompts/imports-ingest.md` | The scaffold is intentionally not referenced by any default cron or heartbeat task. Wire it only after the control-plane injection path and tenant rollout plan are ready. |
 | Change how URLs / formatting render per channel (Telegram, WhatsApp, Discord) | `workspace/TOOLS.md` | Cross-backend rule: Telegram is Markdown, not HTML — raw `<…>` tags get escaped. |
 
 ### Schedule & cron
