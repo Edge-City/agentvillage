@@ -33,7 +33,7 @@ import { execSync } from "node:child_process";
 import { installIndex } from "./install_index";
 import { installEdgeos } from "./install_edgeos";
 import { installGeo } from "./install_geo";
-import { setTerminalCwd } from "./config";
+import { capModelMaxTokens, setTerminalCwd } from "./config";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
 import {
   EDGE_SKILL_NAMES,
@@ -197,6 +197,7 @@ function main(): void {
   copyWorkspaceFiles(wipeUser);
   copySkillFiles();
   setTerminalCwd();
+  capModelMaxTokens();
 
   installIndex();
   installEdgeos();

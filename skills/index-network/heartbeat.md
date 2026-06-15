@@ -1,6 +1,14 @@
 # Index Network — Heartbeat Tasks
 
-Per-tick tasks for Index Network. Walked from the heartbeat tick described in `AGENTS.md` (Heartbeat section). Track last-run timestamps and dedup state in `memory/heartbeat-state.json`. If a task isn't due, skip it.
+Per-tick tasks for Index Network. Walked from the heartbeat tick described in `AGENTS.md` (Heartbeat section). This is background maintenance, not a chat check-in. **Silence is the default.** On Hermes, a silent tick ends with exactly `[SILENT]`.
+
+Hard gates for every tick:
+
+1. Read `memory/heartbeat-state.json` once at the start. Track task last-runs under `heartbeatTasks.<taskName>.lastRunAt` as ISO timestamps, plus each task's own dedup state. If the file is missing, treat state as `{}`.
+2. Run only tasks whose interval is due. If no task is due, end with `[SILENT]`.
+3. Run tasks in the order listed below. **At most one user-facing message per tick.** If any task sends or asks the user something, record its state, then stop immediately; do not continue into later tasks.
+4. Never message just to say you checked, synced, found nothing, updated memory, or had an internal problem. If a tool or file read fails and the task cannot safely continue, end with `[SILENT]`.
+5. For tasks that are due but produce no user-facing message, update `heartbeatTasks.<taskName>.lastRunAt` before moving on so the 30-minute heartbeat does not rerun daily/weekly work every tick.
 
 ---
 
@@ -12,12 +20,39 @@ tasks:
     Someone may have accepted a connection on the user's behalf — the user wants to know.
 
     1. Call `list_opportunities(status="accepted_unnotified")` (or the equivalent — read the tool description).
-    2. If empty, reply silently using this host's no-reply marker.
-    3. For each accepted opportunity:
+    2. Filter out any opportunity id already present in `acceptedOpportunities.notifiedIds` in `memory/heartbeat-state.json`; this local dedup prevents repeated Telegram pings if the ledger confirmation call fails.
+    3. If empty after filtering, update `heartbeatTasks.accepted-opportunities.lastRunAt`, write state, and end with `[SILENT]` unless a later due task should run.
+    4. For each accepted opportunity you will mention:
        - Embed `acceptUrl` on a verb phrase like "send {Name} a message". The URL is a short backend redirect — paste it verbatim, do not append query parameters, do not compose a `t.me` URL. The greeting and Telegram handle resolution happen server-side.
        - If `acceptUrl` is missing, embed `conversationUrl` on "continue the conversation".
-    4. Frame the notification warmly — this is good news.
-    5. For every opportunity you mention, call `confirm_opportunity_delivery(opportunityId, trigger="accepted")`.
+    5. Frame the notification warmly — this is good news. This is the only 30-minute task allowed to proactively message, and only for newly accepted, unnotified opportunities.
+    6. For every opportunity you mention, call `confirm_opportunity_delivery(opportunityId, trigger="accepted")` once. Regardless of confirmation success, append its id to `acceptedOpportunities.notifiedIds` (keep the last 100), update `heartbeatTasks.accepted-opportunities.lastRunAt`, write state, and stop.
+
+- name: telegram-handle-reconciliation
+  interval: 24h
+  prompt: |
+    Detect drift between the resident's independent Edge systems before Telegram handles route introductions to the wrong person. Do not choose a canonical source silently; when sources disagree, ask the resident which handle is correct and update only after they answer.
+
+    This runs in a fresh session with no memory of past runs — every decision below comes from files, environment, and tool/API reads. Resolve "today" as the calendar day in America/Los_Angeles for `memory/<today>.md`.
+
+    1. Gate on pending/asked state. Read `memory/heartbeat-state.json` and `memory/<today>.md`. Reply silently and stop if either is true:
+       - `telegramHandleReconciliation.pending` exists — the user has already been asked; wait for their answer in a normal conversation turn.
+       - `telegramHandleReconciliation.lastAskedDate` equals today — do not re-ask the same day.
+    2. Read candidate sources without mutating anything:
+       - Index: call `read_user_profiles()` and extract the user's `telegram` social if present.
+       - EdgeOS: if `EDGEOS_BEARER_TOKEN` is available, use the `edgeos` skill recipe `GET /api/v1/humans/me` and read its `telegram` field. If the value is the hidden sentinel `"*"`, treat it as unavailable, not a conflict.
+       - Runtime host: read `INDEX_TELEGRAM_HANDLE` from the environment if available; this is the Telegram handle currently forwarded in Index MCP headers.
+    3. Normalize every non-empty candidate for comparison: trim, strip a leading `@`, strip `https://t.me/` or `https://telegram.me/`, drop query/hash/path suffixes, and require `[A-Za-z0-9_]{5,32}`. Keep both the raw and normalized forms in notes. Values that fail validation (for example `Lauren Tannhauser`) are invalid candidates and should trigger reconciliation if any system stores them.
+    4. Decide:
+       - If there are zero valid candidates and no invalid candidates, reply silently.
+       - If there is exactly one valid normalized handle and no invalid candidates, reply silently. No system is drifting from another known system.
+       - If there are two or more distinct valid normalized handles, or any invalid candidate exists, ask exactly one concise question: "I found conflicting Telegram handles in your Edge setup: EdgeOS: `<x>`, Index: `<y>`, runtime: `<z>`. Which Telegram username should I use? Reply with the handle only, without @."
+         Omit unavailable sources from the sentence; label invalid values as "not a valid Telegram username".
+    5. Record and stop after asking. Update `memory/heartbeat-state.json` preserving all existing keys, under:
+       `telegramHandleReconciliation = { pending: true, lastAskedDate: "YYYY-MM-DD", sources: { edgeos, index, runtime }, askedQuestion: "..." }`.
+       Append `[gate] index-network: telegram-handle-reconciliation asked` to `memory/<today>.md`.
+
+    Do not call `update_user_profile`, patch EdgeOS, rerun the installer, or edit config in this heartbeat task. The user's answer arrives later in a normal conversation turn; handle it using `tools.md`.
 
 - name: telegram-handle-reconciliation
   interval: 24h
@@ -51,9 +86,10 @@ tasks:
     Once a week, prune.
 
     1. Call `read_intents()` for the user.
-    2. For each signal older than 60 days with no recent matches: ask the user (in their last-active channel) whether it's still active. If they say no, call `update_intent(id, status="archived")`. If they say yes, leave it. If they ignore, leave it — re-ask next cycle.
+    2. If any signal older than 60 days has no recent matches, ask about **one** stale signal only: whether it's still active. If they say no later, call `update_intent(id, status="archived")`. If they say yes, leave it. If they ignore, leave it — re-ask next cycle.
+    3. Record the asked signal id/date under `signalFreshness` and update `heartbeatTasks.signal-freshness.lastRunAt` before stopping.
 
-    Skip silently if nothing is stale. Do not invent things to ask about.
+    Skip silently if nothing is stale. Do not invent things to ask about. Never ask more than one freshness question in a tick.
 
 - name: signal-elicitation
   interval: 24h
