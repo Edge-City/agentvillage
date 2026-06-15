@@ -17,6 +17,12 @@
  *     migrates jobs still on the old synchronized defaults (0 2 / 0 8) to their
  *     staggered slot, and otherwise preserves each job's schedule and pause
  *     state (user-customized schedules are never touched).
+ *   - Daily-loop crons are a separate, additive, canary-only non-brief
+ *     evaluation layer. `--enable-daily-loop-crons` or
+ *     `ENABLE_DAILY_LOOP_CRONS=true` installs/reconciles internal wakeups at
+ *     14/17/20 prepare and 15/18/21 send host-local. Normal installs leave them
+ *     disabled, and these wakeups do not change morning digest or control-plane
+ *     evening behavior.
  */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -157,6 +163,10 @@ export interface DigestCronSpec {
   overrideFlag: string;
   /** Env var that overrides `schedule` at install time (flag wins). */
   overrideEnv: string;
+  /** Back-compat CLI flag accepted during the rename from check-in to daily loop. */
+  legacyOverrideFlag?: string;
+  /** Back-compat env var accepted during the rename from check-in to daily loop. */
+  legacyOverrideEnv?: string;
 }
 
 /**
@@ -194,6 +204,43 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
     overrideEnv: "DIGEST_SEND_CRON",
   },
 ];
+
+export const DAILY_LOOP_CRON_SPECS: DigestCronSpec[] = [
+  {
+    schedule: "0 14,17,20 * * *",
+    staggerWindowMinutes: 1,
+    promptFile: "daily-loop-prepare.md",
+    name: "Edge — daily loop prepare",
+    deliver: false,
+    overrideFlag: "--daily-loop-prepare-cron",
+    overrideEnv: "DAILY_LOOP_PREPARE_CRON",
+    legacyOverrideFlag: "--checkin-prepare-cron",
+    legacyOverrideEnv: "CHECKIN_PREPARE_CRON",
+  },
+  {
+    schedule: "0 15,18,21 * * *",
+    staggerWindowMinutes: 1,
+    promptFile: "daily-loop-send.md",
+    name: "Edge — daily loop send",
+    deliver: true,
+    overrideFlag: "--daily-loop-send-cron",
+    overrideEnv: "DAILY_LOOP_SEND_CRON",
+    legacyOverrideFlag: "--checkin-send-cron",
+    legacyOverrideEnv: "CHECKIN_SEND_CRON",
+  },
+];
+
+const EDGE_CRON_SPECS: DigestCronSpec[] = [...DIGEST_CRON_SPECS, ...DAILY_LOOP_CRON_SPECS];
+
+export function dailyLoopCronsEnabled(
+  argv: string[] = process.argv,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (argv.includes("--enable-daily-loop-crons")) return true;
+  if (argv.includes("--enable-checkin-crons")) return true;
+  const value = (env.ENABLE_DAILY_LOOP_CRONS ?? env.ENABLE_CHECKIN_CRONS)?.trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes";
+}
 
 /** FNV-1a 32-bit hash — deterministic, dependency-free. */
 export function fnv1a(input: string): number {
@@ -258,7 +305,12 @@ export function resolveCronSchedule(
   const fallback = staggerSeed ? staggeredSchedule(spec, staggerSeed) : spec.schedule;
   const flagIdx = argv.indexOf(spec.overrideFlag);
   const fromFlag = flagIdx >= 0 ? argv[flagIdx + 1]?.trim() : undefined;
-  const override = fromFlag || env[spec.overrideEnv]?.trim();
+  const legacyFlagIdx = spec.legacyOverrideFlag ? argv.indexOf(spec.legacyOverrideFlag) : -1;
+  const fromLegacyFlag = legacyFlagIdx >= 0 ? argv[legacyFlagIdx + 1]?.trim() : undefined;
+  const override = fromFlag
+    || fromLegacyFlag
+    || env[spec.overrideEnv]?.trim()
+    || (spec.legacyOverrideEnv ? env[spec.legacyOverrideEnv]?.trim() : undefined);
   if (!override) return fallback;
   if (!isValidCron(override)) {
     console.warn(
@@ -295,7 +347,10 @@ export function reconcileDigestCronJobs(env: NodeJS.ProcessEnv = hermesExecEnv()
   }
 
   const existing = readCronJobs();
-  const specNames = new Set(DIGEST_CRON_SPECS.map((s) => s.name));
+  const activeCronSpecs = dailyLoopCronsEnabled(process.argv, process.env)
+    ? EDGE_CRON_SPECS
+    : DIGEST_CRON_SPECS;
+  const specNames = new Set(activeCronSpecs.map((s) => s.name));
   // Stable per-tenant seed for schedule staggering. The tenant's own Index
   // API key never changes across reinstalls, so the derived minute is stable.
   const staggerSeed = process.env.INDEX_API_KEY?.trim() || readPersistedEnvVar("INDEX_API_KEY");
@@ -317,7 +372,11 @@ export function reconcileDigestCronJobs(env: NodeJS.ProcessEnv = hermesExecEnv()
     console.warn("  warning: could not run `hermes kanban init` — board may auto-init on first use");
   }
 
-  for (const spec of DIGEST_CRON_SPECS) {
+  if (!dailyLoopCronsEnabled(process.argv, process.env)) {
+    console.log("→ daily loop crons disabled (set --enable-daily-loop-crons or ENABLE_DAILY_LOOP_CRONS=true to install canary jobs)");
+  }
+
+  for (const spec of activeCronSpecs) {
     const promptPath = join(promptsDir, spec.promptFile);
     if (!existsSync(promptPath)) {
       console.error(`error: prompt missing at ${promptPath} — run install.ts first`);
