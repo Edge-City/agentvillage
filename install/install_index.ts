@@ -175,17 +175,16 @@ export interface DigestCronSpec {
  * deliver), prepare (02:00, no deliver), then send (08:00, deliver telegram).
  * Signal sync runs an hour before prepare so freshly-captured signals have time
  * to produce opportunities before the brief is composed.
+ *
+ * The 30-minute "Edge — heartbeat" cron was retired (see Edge-City/agentvillage#100
+ * "Heartbeat cron drains OpenRouter key budget"). Its prompt loaded the
+ * full agent context + Index MCP tool surface (~57k input tokens) every 30 min,
+ * which exhausted the per-tenant OpenRouter keys fleet-wide (HTTP 402). It is no
+ * longer in this list, so `reconcileDigestCronJobs` removes it from existing
+ * tenants on the next install/update (Edge-prefixed crons not in this list are
+ * retired). `index-network/heartbeat.md` is kept for reference/history only.
  */
 export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
-  {
-    schedule: "*/30 * * * *",
-    staggerWindowMinutes: 30,
-    promptFile: "index-network/heartbeat.md",
-    name: "Edge — heartbeat",
-    deliver: true,
-    overrideFlag: "--heartbeat-cron",
-    overrideEnv: "HEARTBEAT_CRON",
-  },
   {
     schedule: "0 1 * * *",
     staggerWindowMinutes: 50,
