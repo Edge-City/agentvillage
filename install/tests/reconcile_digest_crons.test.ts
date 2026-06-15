@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import {
   DIGEST_CRON_SPECS,
@@ -16,7 +16,13 @@ import {
 } from "../install_index";
 
 const SEED = "ix_integration_seed";
-const [SIGNALS, PREPARE, SEND] = DIGEST_CRON_SPECS;
+const [HEARTBEAT, SIGNALS, PREPARE, SEND] = DIGEST_CRON_SPECS;
+const PROMPT_BODIES = new Map([
+  [HEARTBEAT.promptFile, "HEARTBEAT_BODY"],
+  [SIGNALS.promptFile, "SIGNALS_BODY"],
+  [PREPARE.promptFile, "PREPARE_BODY"],
+  [SEND.promptFile, "SEND_BODY"],
+]);
 
 let home: string;
 let stubLog: string;
@@ -31,7 +37,7 @@ function writeStubHermes(dir: string, { rejectScheduleFlag = false } = {}): stri
     bin,
     `#!/usr/bin/env bash
 if [ "$1" = "--version" ]; then echo "stub 0.0.0"; exit 0; fi
-${rejectBlock}printf '%s\\n' "$(printf '%s\\x1f' "$@")" >> "${join(dir, "calls.log")}"
+${rejectBlock}printf '%s\n' "$(printf '%s\x1f' "$@")" >> "${join(dir, "calls.log")}"
 exit 0
 `,
   );
@@ -58,11 +64,12 @@ function cronCalls(): string[][] {
 }
 
 function writePrompts(): void {
-  const prompts = join(home, "skills/edge-esmeralda/prompts");
-  mkdirSync(prompts, { recursive: true });
-  writeFileSync(join(prompts, SIGNALS.promptFile), "SIGNALS_BODY");
-  writeFileSync(join(prompts, PREPARE.promptFile), "PREPARE_BODY");
-  writeFileSync(join(prompts, SEND.promptFile), "SEND_BODY");
+  const skills = join(home, "skills");
+  for (const [promptFile, body] of PROMPT_BODIES) {
+    const promptPath = join(skills, promptFile);
+    mkdirSync(dirname(promptPath), { recursive: true });
+    writeFileSync(promptPath, body);
+  }
 }
 
 function writeJobs(jobs: unknown[]): void {
@@ -70,13 +77,12 @@ function writeJobs(jobs: unknown[]): void {
   writeFileSync(join(home, "cron", "jobs.json"), JSON.stringify({ jobs }));
 }
 
-/** An up-to-date signals job, for tests that only exercise prepare/send paths. */
-function currentSignalsJob() {
+function currentJob(spec: typeof DIGEST_CRON_SPECS[number], id: string): Record<string, unknown> {
   return {
-    id: "g1",
-    name: SIGNALS.name,
-    prompt: "SIGNALS_BODY",
-    schedule: { expr: staggeredSchedule(SIGNALS, SEED) },
+    id,
+    name: spec.name,
+    prompt: PROMPT_BODIES.get(spec.promptFile),
+    schedule: { expr: staggeredSchedule(spec, SEED) },
   };
 }
 
@@ -87,6 +93,7 @@ beforeEach(() => {
     HERMES_HOME: process.env.HERMES_HOME,
     HERMES_BIN: process.env.HERMES_BIN,
     INDEX_API_KEY: process.env.INDEX_API_KEY,
+    HEARTBEAT_CRON: process.env.HEARTBEAT_CRON,
     DIGEST_SIGNALS_CRON: process.env.DIGEST_SIGNALS_CRON,
     DIGEST_PREPARE_CRON: process.env.DIGEST_PREPARE_CRON,
     DIGEST_SEND_CRON: process.env.DIGEST_SEND_CRON,
@@ -94,6 +101,7 @@ beforeEach(() => {
   process.env.HERMES_HOME = home;
   process.env.HERMES_BIN = writeStubHermes(home);
   process.env.INDEX_API_KEY = SEED;
+  delete process.env.HEARTBEAT_CRON;
   delete process.env.DIGEST_SIGNALS_CRON;
   delete process.env.DIGEST_PREPARE_CRON;
   delete process.env.DIGEST_SEND_CRON;
@@ -108,29 +116,34 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-test("fresh install creates all three crons on their staggered schedules", () => {
+test("fresh install creates heartbeat and digest crons on their staggered schedules", () => {
   reconcileDigestCronJobs({ ...process.env });
 
   const creates = cronCalls().filter((argv) => argv[1] === "create");
-  expect(creates).toHaveLength(3);
+  expect(creates).toHaveLength(4);
 
+  const heartbeat = creates.find((argv) => argv.includes(HEARTBEAT.name))!;
   const signals = creates.find((argv) => argv.includes(SIGNALS.name))!;
   const prepare = creates.find((argv) => argv.includes(PREPARE.name))!;
   const send = creates.find((argv) => argv.includes(SEND.name))!;
+  expect(heartbeat[2]).toBe(staggeredSchedule(HEARTBEAT, SEED));
+  expect(heartbeat[3]).toBe("HEARTBEAT_BODY");
   expect(signals[2]).toBe(staggeredSchedule(SIGNALS, SEED));
   expect(signals[3]).toBe("SIGNALS_BODY");
-  expect(signals).not.toContain("--deliver");
   expect(prepare[2]).toBe(staggeredSchedule(PREPARE, SEED));
   expect(prepare[3]).toBe("PREPARE_BODY");
   expect(send[2]).toBe(staggeredSchedule(SEND, SEED));
   expect(send[3]).toBe("SEND_BODY");
+  expect(heartbeat).toContain("--deliver");
   expect(send).toContain("--deliver");
+  expect(signals).not.toContain("--deliver");
   expect(prepare).not.toContain("--deliver");
 });
 
-test("job still on the old synchronized default gets a schedule-only migration", () => {
+test("jobs still on old synchronized defaults get schedule-only migrations", () => {
   writeJobs([
-    currentSignalsJob(),
+    { id: "h1", name: HEARTBEAT.name, prompt: "HEARTBEAT_BODY", schedule: { expr: HEARTBEAT.schedule } },
+    { id: "g1", name: SIGNALS.name, prompt: "SIGNALS_BODY", schedule: { expr: SIGNALS.schedule } },
     { id: "p1", name: PREPARE.name, prompt: "PREPARE_BODY", schedule: { expr: PREPARE.schedule } },
     { id: "s1", name: SEND.name, prompt: "SEND_BODY", schedule: { expr: SEND.schedule } },
   ]);
@@ -139,6 +152,8 @@ test("job still on the old synchronized default gets a schedule-only migration",
 
   const calls = cronCalls();
   expect(calls).toEqual([
+    ["cron", "edit", "h1", "--schedule", staggeredSchedule(HEARTBEAT, SEED)],
+    ["cron", "edit", "g1", "--schedule", staggeredSchedule(SIGNALS, SEED)],
     ["cron", "edit", "p1", "--schedule", staggeredSchedule(PREPARE, SEED)],
     ["cron", "edit", "s1", "--schedule", staggeredSchedule(SEND, SEED)],
   ]);
@@ -146,7 +161,8 @@ test("job still on the old synchronized default gets a schedule-only migration",
 
 test("custom schedule is preserved; stale prompt gets a prompt-only edit", () => {
   writeJobs([
-    currentSignalsJob(),
+    currentJob(HEARTBEAT, "h1"),
+    currentJob(SIGNALS, "g1"),
     { id: "p1", name: PREPARE.name, prompt: "OLD_BODY", schedule: { expr: "30 4 * * *" } },
     { id: "s1", name: SEND.name, prompt: "SEND_BODY", schedule: { expr: "15 9 * * *" } },
   ]);
@@ -160,6 +176,9 @@ test("custom schedule is preserved; stale prompt gets a prompt-only edit", () =>
 
 test("stale prompt + old default schedule produce two independent edit calls", () => {
   writeJobs([
+    currentJob(HEARTBEAT, "h1"),
+    currentJob(SIGNALS, "g1"),
+    currentJob(PREPARE, "p1"),
     { id: "s1", name: SEND.name, prompt: "OLD_BODY", schedule: { expr: SEND.schedule } },
   ]);
 
@@ -174,19 +193,10 @@ test("stale prompt + old default schedule produce two independent edit calls", (
 
 test("up-to-date jobs (staggered schedule + current prompt) trigger no cron calls", () => {
   writeJobs([
-    currentSignalsJob(),
-    {
-      id: "p1",
-      name: PREPARE.name,
-      prompt: "PREPARE_BODY",
-      schedule: { expr: staggeredSchedule(PREPARE, SEED) },
-    },
-    {
-      id: "s1",
-      name: SEND.name,
-      prompt: "SEND_BODY",
-      schedule: { expr: staggeredSchedule(SEND, SEED) },
-    },
+    currentJob(HEARTBEAT, "h1"),
+    currentJob(SIGNALS, "g1"),
+    currentJob(PREPARE, "p1"),
+    currentJob(SEND, "s1"),
   ]);
 
   reconcileDigestCronJobs({ ...process.env });
@@ -196,7 +206,7 @@ test("up-to-date jobs (staggered schedule + current prompt) trigger no cron call
 
 test("retired Edge-prefixed crons are removed; foreign crons are untouched", () => {
   writeJobs([
-    { id: "old1", name: "Edge — heartbeat", prompt: "X", schedule: { expr: "0 6 * * *" } },
+    { id: "old1", name: "Edge — old heartbeat", prompt: "X", schedule: { expr: "0 6 * * *" } },
     { id: "user1", name: "my own job", prompt: "Y", schedule: { expr: "0 7 * * *" } },
   ]);
 
@@ -209,13 +219,9 @@ test("retired Edge-prefixed crons are removed; foreign crons are untouched", () 
 test("a Hermes that rejects --schedule still gets the prompt update (degraded migration)", () => {
   process.env.HERMES_BIN = writeStubHermes(home, { rejectScheduleFlag: true });
   writeJobs([
-    currentSignalsJob(),
-    {
-      id: "p1",
-      name: PREPARE.name,
-      prompt: "PREPARE_BODY",
-      schedule: { expr: staggeredSchedule(PREPARE, SEED) },
-    },
+    currentJob(HEARTBEAT, "h1"),
+    currentJob(SIGNALS, "g1"),
+    currentJob(PREPARE, "p1"),
     { id: "s1", name: SEND.name, prompt: "OLD_BODY", schedule: { expr: SEND.schedule } },
   ]);
 
