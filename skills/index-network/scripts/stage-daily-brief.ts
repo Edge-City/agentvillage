@@ -18,6 +18,41 @@ import { sanitizeDigestUrls } from "./validate-digest-urls";
 const CONNECTION_DIGEST_LIMIT = 1;
 const COMMUNITY_DIGEST_LIMIT = 1;
 
+/**
+ * Kanban statuses that mean "today's digest card already exists and must not be
+ * disturbed by a re-run of the prepare step." When an admin clicks "Generate
+ * all" (or the prepare cron fires twice), stageDailyBrief must NOT knock a
+ * staged card back to blocked, overwrite an approved (ready) card, or re-stage a
+ * card that was already delivered (done). Only a missing card or an explicitly
+ * archived one is (re)generated. To force a fresh card, archive today's first,
+ * then regenerate.
+ */
+const PROTECTED_DIGEST_STATUSES = new Set([
+  "blocked",
+  "ready",
+  "todo",
+  "in_progress",
+  "doing",
+  "done",
+  "completed",
+]);
+
+type HermesRunner = (args: string[]) => string | Promise<string>;
+
+interface HermesTask {
+  id?: string;
+  status?: string;
+  body?: string;
+}
+
+interface ExistingDigestCard {
+  taskId: string;
+  status: string;
+  body: string;
+  opportunityIds: string[];
+  questionIds: string[];
+}
+
 function argValue(args: string[], name: string): string | undefined {
   const idx = args.indexOf(name);
   return idx >= 0 ? args[idx + 1] : undefined;
@@ -245,6 +280,60 @@ async function runHermes(args: string[]): Promise<string> {
   return new TextDecoder().decode(result.stdout);
 }
 
+function parseTask(raw: string): HermesTask | null {
+  try {
+    const parsed = JSON.parse(raw) as { task?: HermesTask } & HermesTask;
+    const task = parsed.task && typeof parsed.task === "object" ? parsed.task : parsed;
+    return task && typeof task === "object" ? task : null;
+  } catch {
+    return null;
+  }
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+/**
+ * Resolve the digest card already staged for `date`, if any. Reads the prior
+ * `prepared.taskId` recorded in the heartbeat state (idempotent across re-runs)
+ * and asks Hermes for its current status. Returns null when there is no card for
+ * today, when the recorded card can no longer be resolved, or when it has been
+ * archived — all cases where regeneration is the correct behavior.
+ */
+async function readExistingDigestCard(
+  hermes: HermesRunner,
+  stateFile: string,
+  date: string,
+): Promise<ExistingDigestCard | null> {
+  const state = await readJsonObject(stateFile);
+  const prepared = state.prepared && typeof state.prepared === "object" && !Array.isArray(state.prepared)
+    ? state.prepared as Record<string, unknown>
+    : {};
+  if (prepared.date !== date) return null;
+  const taskId = typeof prepared.taskId === "string" ? prepared.taskId : "";
+  if (!taskId) return null;
+
+  let task: HermesTask | null = null;
+  try {
+    task = parseTask(await hermes(["kanban", "show", taskId, "--json"]));
+  } catch {
+    return null; // card no longer resolvable → allow regeneration
+  }
+  if (!task) return null;
+
+  const status = String(task.status ?? "").toLowerCase();
+  if (!status || status === "archived") return null; // archived/unknown → regenerate
+
+  return {
+    taskId,
+    status,
+    body: typeof task.body === "string" ? task.body : "",
+    opportunityIds: stringArray(prepared.opportunityIds),
+    questionIds: stringArray(prepared.questionIds),
+  };
+}
+
 function extractTaskId(raw: string): string {
   const trimmed = raw.trim();
   try {
@@ -264,11 +353,31 @@ export async function stageDailyBrief(options: {
   opportunitiesFile?: string;
   stateFile?: string;
   contextOut?: string;
-} = {}): Promise<{ taskId: string; body: string; opportunityIds: string[]; questionIds: string[] }> {
+  hermes?: HermesRunner;
+} = {}): Promise<{ taskId: string; body: string; opportunityIds: string[]; questionIds: string[]; skipped?: boolean; reason?: string }> {
   const date = options.date ?? pacificDate();
   const opportunitiesFile = options.opportunitiesFile ?? "memory/digest-opportunities.txt";
   const stateFile = options.stateFile ?? "memory/heartbeat-state.json";
   const contextOut = options.contextOut ?? "memory/daily-brief-context.json";
+  const hermes = options.hermes ?? runHermes;
+
+  // Idempotency guard. A re-run of prepare (admin "Generate all", a double cron
+  // fire, or a manual per-pod generate) must leave an already-staged card alone
+  // instead of re-blocking it, overwriting approved content, or re-staging an
+  // already-delivered digest. Build context and create/block ONLY when there is
+  // no protected card for today. This short-circuits before buildDailyBriefContext
+  // so a no-op regenerate never re-queries opportunities or rewrites context.
+  const existing = await readExistingDigestCard(hermes, stateFile, date);
+  if (existing && PROTECTED_DIGEST_STATUSES.has(existing.status)) {
+    return {
+      taskId: existing.taskId,
+      body: existing.body,
+      opportunityIds: existing.opportunityIds,
+      questionIds: existing.questionIds,
+      skipped: true,
+      reason: `already-staged:${existing.status}`,
+    };
+  }
 
   const context = await buildDailyBriefContext({ date, opportunitiesFile, stateFile });
   await writeJson(contextOut, context);
@@ -277,7 +386,7 @@ export async function stageDailyBrief(options: {
   const { output: sanitizedBody } = sanitizeDigestUrls(body);
   await Bun.write("memory/digest-draft.md", `${sanitizedBody}\n`);
 
-  const createOutput = await runHermes([
+  const createOutput = await hermes([
     "kanban",
     "create",
     `Morning digest — ${date}`,
@@ -289,7 +398,7 @@ export async function stageDailyBrief(options: {
   ]);
   const taskId = extractTaskId(createOutput);
 
-  await runHermes(["kanban", "block", taskId, `review-required: morning brief — ${date}`]);
+  await hermes(["kanban", "block", taskId, `review-required: morning brief — ${date}`]);
 
   const state = await readJsonObject(stateFile);
   state.prepared = {
