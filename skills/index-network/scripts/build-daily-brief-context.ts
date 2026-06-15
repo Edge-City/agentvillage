@@ -789,6 +789,17 @@ export async function fetchOpportunitiesFromMcp(opts: {
   const text = result?.content?.find((c) => c.type === "text")?.text ?? "";
   if (!text.trim()) return [];
 
+  try {
+    const parsed = JSON.parse(text) as { success?: boolean; error?: unknown; message?: unknown };
+    const errorText = typeof parsed.error === "string" ? parsed.error : "";
+    const messageText = typeof parsed.message === "string" ? parsed.message : "";
+    if (parsed.success === false && /onboarding required|not completed onboarding/i.test(`${errorText}\n${messageText}`)) {
+      throw new Error("setup required before people suggestions");
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message === "setup required before people suggestions") throw err;
+  }
+
   return parseOpportunityTranscript(text);
 }
 

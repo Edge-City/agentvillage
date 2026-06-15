@@ -93,6 +93,38 @@ describe("composeDailyBrief", () => {
     expect(body.match(/Qi Gong/g) ?? []).toHaveLength(1);
   });
 
+  test("renders setup nudge instead of people suggestions when people setup is required", () => {
+    const { body, questionIds } = composeDailyBrief({
+      ...baseContext,
+      highlightedEvents: [
+        {
+          id: "event-1",
+          title: "GNOSIS Journey",
+          startTime: "2026-06-04T16:00:00Z",
+          timePacific: "9:00 AM",
+          venue: "The Hub",
+          eventUrl: "https://edgecity.simplefi.tech/portal/edge-esmeralda-2026/events/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+          tags: [],
+          highlighted: true,
+          reasonHint: "Highlighted by the EdgeOS calendar.",
+        },
+      ],
+      questions: [{ id: "q-0001", title: "Question", prompt: "What are you working on?", mode: "profile" }],
+      diagnostics: {
+        ...baseContext.diagnostics,
+        calendarSource: "edgeos",
+        warnings: ["opportunities MCP unavailable: setup required before people suggestions"],
+      },
+    });
+
+    expect(body).toContain("**People**");
+    expect(body).toContain("I need a quick setup first");
+    expect(body).toContain("Reply \"set me up\" anytime");
+    expect(body).not.toContain("Index");
+    expect(body).not.toContain("onboarding");
+    expect(questionIds).toEqual(["q-0001"]);
+  });
+
   test("renders opportunities with digest markers and collects ids", () => {
     const { body, opportunityIds } = composeDailyBrief({
       ...baseContext,

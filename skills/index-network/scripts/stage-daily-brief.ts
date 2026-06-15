@@ -130,6 +130,7 @@ export function composeDailyBrief(context: DailyBriefContext): { body: string; o
     hasVerifiedContent = true;
   }
 
+  const peopleSetupRequired = context.diagnostics.warnings.some((warning) => /setup required before people suggestions/i.test(warning));
   const connectionOpportunities = [...context.connectionOpportunities]
     .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))
     .slice(0, CONNECTION_DIGEST_LIMIT);
@@ -147,6 +148,10 @@ export function composeDailyBrief(context: DailyBriefContext): { body: string; o
     }
     lines.push("");
     hasVerifiedContent = true;
+  } else if (peopleSetupRequired) {
+    lines.push("**People**");
+    lines.push("- Want people suggestions in future briefs? I need a quick setup first: who you are and what you're open to. Reply \"set me up\" anytime.");
+    lines.push("");
   }
 
   const communityOpportunities = [...context.communityOpportunities]
