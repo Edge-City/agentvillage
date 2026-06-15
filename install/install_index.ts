@@ -64,7 +64,12 @@ function normalizeTelegramHandle(raw: string): string {
     .replace(/^(?:https?:\/\/)?(?:t\.me|telegram\.me)\//i, "")
     .replace(/^@/, "")
     .split(/[/?#]/)[0];
-  return /^[A-Za-z0-9_]{5,32}$/.test(bare) ? bare : "";
+  // Telegram usernames are case-insensitive (@Seref and @seref are the same
+  // account), so fold case to a canonical lowercase handle. Without this, a
+  // case-only difference between sources (e.g. EdgeOS "seref" vs runtime
+  // "@Seref") registers as a false-positive conflict in telegram-handle
+  // reconciliation.
+  return /^[A-Za-z0-9_]{5,32}$/.test(bare) ? bare.toLowerCase() : "";
 }
 
 export function buildIndexMcpHeaders(apiKey: string, telegramHandle = ""): Record<string, string> {
@@ -403,7 +408,10 @@ export function reconcileDigestCronJobs(env: NodeJS.ProcessEnv = hermesExecEnv()
 
 export function installIndex(): void {
   const apiKey = readApiKey();
-  const telegramHandle = readTelegramHandle();
+  // Persist the canonical (bare, lowercase) handle so the runtime source
+  // (INDEX_TELEGRAM_HANDLE / MCP headers) never drifts from other systems by
+  // a leading @ or letter case alone.
+  const telegramHandle = normalizeTelegramHandle(readTelegramHandle());
   console.log(
     `→ index network: target=${IS_DEV ? "dev" : "production"} (${PROTOCOL_MCP_URL})`,
   );

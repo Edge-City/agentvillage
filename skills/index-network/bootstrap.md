@@ -107,7 +107,7 @@ Once `create_intent` succeeds, briefly acknowledge:
 
 Before closing onboarding, note which platform the user connected through, but do **not** silently choose between independent Telegram handle sources. AgentVillage spans EdgeOS, Index, the local Hermes runtime, and the control plane; none of those should overwrite another merely because it happened to be read last.
 
-**Never fabricate a handle.** Do **not** derive, guess, or construct one from the user's name, display name, email, or chatId, and do not "tidy" a guess into something plausible. A Telegram username must match `[A-Za-z0-9_]{5,32}` exactly after stripping a leading `@`; if what you have doesn't match, it is not a real handle.
+**Never fabricate a handle.** Do **not** derive, guess, or construct one from the user's name, display name, email, or chatId, and do not "tidy" a guess into something plausible. A Telegram username must match `[A-Za-z0-9_]{5,32}` exactly after stripping a leading `@` (and is case-insensitive, so store it lowercased); if what you have doesn't match, it is not a real handle.
 
 Detection by session key:
 

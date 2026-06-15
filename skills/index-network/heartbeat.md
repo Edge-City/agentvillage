@@ -42,7 +42,7 @@ tasks:
        - Index: call `read_user_profiles()` and extract the user's `telegram` social if present.
        - EdgeOS: if `EDGEOS_BEARER_TOKEN` is available, use the `edgeos` skill recipe `GET /api/v1/humans/me` and read its `telegram` field. If the value is the hidden sentinel `"*"`, treat it as unavailable, not a conflict.
        - Runtime host: read `INDEX_TELEGRAM_HANDLE` from the environment if available; this is the Telegram handle currently forwarded in Index MCP headers.
-    3. Normalize every non-empty candidate for comparison: trim, strip a leading `@`, strip `https://t.me/` or `https://telegram.me/`, drop query/hash/path suffixes, and require `[A-Za-z0-9_]{5,32}`. Keep both the raw and normalized forms in notes. Values that fail validation (for example `Lauren Tannhauser`) are invalid candidates and should trigger reconciliation if any system stores them.
+    3. Normalize every non-empty candidate for comparison: trim, strip a leading `@`, strip `https://t.me/` or `https://telegram.me/`, drop query/hash/path suffixes, and require `[A-Za-z0-9_]{5,32}`, then lowercase the result (Telegram usernames are case-insensitive, so a case-only difference such as `seref` vs `@Seref` is the same handle and must not count as drift). Keep both the raw and normalized forms in notes. Values that fail validation (for example `Lauren Tannhauser`) are invalid candidates and should trigger reconciliation if any system stores them.
     4. Decide:
        - If there are zero valid candidates and no invalid candidates, reply silently.
        - If there is exactly one valid normalized handle and no invalid candidates, reply silently. No system is drifting from another known system.
@@ -68,7 +68,7 @@ tasks:
        - Index: call `read_user_profiles()` and extract the user's `telegram` social if present.
        - EdgeOS: if `EDGEOS_BEARER_TOKEN` is available, use the `edgeos` skill recipe `GET /api/v1/humans/me` and read its `telegram` field. If the value is the hidden sentinel `"*"`, treat it as unavailable, not a conflict.
        - Runtime host: read `INDEX_TELEGRAM_HANDLE` from the environment if available; this is the Telegram handle currently forwarded in Index MCP headers.
-    3. Normalize every non-empty candidate for comparison: trim, strip a leading `@`, strip `https://t.me/` or `https://telegram.me/`, drop query/hash/path suffixes, and require `[A-Za-z0-9_]{5,32}`. Keep both the raw and normalized forms in notes. Values that fail validation (for example `Lauren Tannhauser`) are invalid candidates and should trigger reconciliation if any system stores them.
+    3. Normalize every non-empty candidate for comparison: trim, strip a leading `@`, strip `https://t.me/` or `https://telegram.me/`, drop query/hash/path suffixes, and require `[A-Za-z0-9_]{5,32}`, then lowercase the result (Telegram usernames are case-insensitive, so a case-only difference such as `seref` vs `@Seref` is the same handle and must not count as drift). Keep both the raw and normalized forms in notes. Values that fail validation (for example `Lauren Tannhauser`) are invalid candidates and should trigger reconciliation if any system stores them.
     4. Decide:
        - If there are zero valid candidates and no invalid candidates, reply silently.
        - If there is exactly one valid normalized handle and no invalid candidates, reply silently. No system is drifting from another known system.
