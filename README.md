@@ -236,6 +236,8 @@ HEARTBEAT_CRON="*/30 * * * *" DIGEST_PREPARE_CRON="0 3 * * *" DIGEST_SEND_CRON="
 | Prepare pass | `--digest-prepare-cron "<expr>"` | `DIGEST_PREPARE_CRON` | `0 2 * * *` |
 | Send pass | `--digest-send-cron "<expr>"` | `DIGEST_SEND_CRON` | `0 8 * * *` |
 
+The installer also caps `model.max_tokens` in Hermes `config.yaml` at `4096` by default so background cron turns do not inherit large provider defaults (for example `65536`). Operators can raise or lower that cap for an install by setting `HERMES_MAX_TOKENS`.
+
 The installer writes any tokens it finds into `env.vars.*` in `~/.openclaw/openclaw.json`; on the next gateway start they become process-env on the gateway and inherit into the agent's shell tool, so `curl -H "Authorization: Bearer $EDGEOS_API_KEY"` recipes and Geo CLI commands work without further plumbing.
 
 The installer:

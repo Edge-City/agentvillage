@@ -1,6 +1,14 @@
 # Index Network — Heartbeat Tasks
 
-Per-tick tasks for Index Network. Walked from the heartbeat tick described in `AGENTS.md` (Heartbeat section). Track last-run timestamps and dedup state in `memory/heartbeat-state.json`. If a task isn't due, skip it.
+Per-tick tasks for Index Network. Walked from the heartbeat tick described in `AGENTS.md` (Heartbeat section). This is background maintenance, not a chat check-in. **Silence is the default.** On Hermes, a silent tick ends with exactly `[SILENT]`.
+
+Hard gates for every tick:
+
+1. Read `memory/heartbeat-state.json` once at the start. Track task last-runs under `heartbeatTasks.<taskName>.lastRunAt` as ISO timestamps, plus each task's own dedup state. If the file is missing, treat state as `{}`.
+2. Run only tasks whose interval is due. If no task is due, end with `[SILENT]`.
+3. Run tasks in the order listed below. **At most one user-facing message per tick.** If any task sends or asks the user something, record its state, then stop immediately; do not continue into later tasks.
+4. Never message just to say you checked, synced, found nothing, updated memory, or had an internal problem. If a tool or file read fails and the task cannot safely continue, end with `[SILENT]`.
+5. For tasks that are due but produce no user-facing message, update `heartbeatTasks.<taskName>.lastRunAt` before moving on so the 30-minute heartbeat does not rerun daily/weekly work every tick.
 
 ---
 
@@ -12,12 +20,13 @@ tasks:
     Someone may have accepted a connection on the user's behalf — the user wants to know.
 
     1. Call `list_opportunities(status="accepted_unnotified")` (or the equivalent — read the tool description).
-    2. If empty, reply silently using this host's no-reply marker.
-    3. For each accepted opportunity:
+    2. Filter out any opportunity id already present in `acceptedOpportunities.notifiedIds` in `memory/heartbeat-state.json`; this local dedup prevents repeated Telegram pings if the ledger confirmation call fails.
+    3. If empty after filtering, update `heartbeatTasks.accepted-opportunities.lastRunAt`, write state, and end with `[SILENT]` unless a later due task should run.
+    4. For each accepted opportunity you will mention:
        - Embed `acceptUrl` on a verb phrase like "send {Name} a message". The URL is a short backend redirect — paste it verbatim, do not append query parameters, do not compose a `t.me` URL. The greeting and Telegram handle resolution happen server-side.
        - If `acceptUrl` is missing, embed `conversationUrl` on "continue the conversation".
-    4. Frame the notification warmly — this is good news.
-    5. For every opportunity you mention, call `confirm_opportunity_delivery(opportunityId, trigger="accepted")`.
+    5. Frame the notification warmly — this is good news. This is the only 30-minute task allowed to proactively message, and only for newly accepted, unnotified opportunities.
+    6. For every opportunity you mention, call `confirm_opportunity_delivery(opportunityId, trigger="accepted")` once. Regardless of confirmation success, append its id to `acceptedOpportunities.notifiedIds` (keep the last 100), update `heartbeatTasks.accepted-opportunities.lastRunAt`, write state, and stop.
 
 - name: telegram-handle-reconciliation
   interval: 24h
@@ -51,9 +60,10 @@ tasks:
     Once a week, prune.
 
     1. Call `read_intents()` for the user.
-    2. For each signal older than 60 days with no recent matches: ask the user (in their last-active channel) whether it's still active. If they say no, call `update_intent(id, status="archived")`. If they say yes, leave it. If they ignore, leave it — re-ask next cycle.
+    2. If any signal older than 60 days has no recent matches, ask about **one** stale signal only: whether it's still active. If they say no later, call `update_intent(id, status="archived")`. If they say yes, leave it. If they ignore, leave it — re-ask next cycle.
+    3. Record the asked signal id/date under `signalFreshness` and update `heartbeatTasks.signal-freshness.lastRunAt` before stopping.
 
-    Skip silently if nothing is stale. Do not invent things to ask about.
+    Skip silently if nothing is stale. Do not invent things to ask about. Never ask more than one freshness question in a tick.
 
 - name: signal-elicitation
   interval: 24h
