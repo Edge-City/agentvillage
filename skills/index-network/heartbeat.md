@@ -19,6 +19,32 @@ tasks:
     4. Frame the notification warmly — this is good news.
     5. For every opportunity you mention, call `confirm_opportunity_delivery(opportunityId, trigger="accepted")`.
 
+- name: telegram-handle-reconciliation
+  interval: 24h
+  prompt: |
+    Detect drift between the resident's independent Edge systems before Telegram handles route introductions to the wrong person. Do not choose a canonical source silently; when sources disagree, ask the resident which handle is correct and update only after they answer.
+
+    This runs in a fresh session with no memory of past runs — every decision below comes from files, environment, and tool/API reads. Resolve "today" as the calendar day in America/Los_Angeles for `memory/<today>.md`.
+
+    1. Gate on pending/asked state. Read `memory/heartbeat-state.json` and `memory/<today>.md`. Reply silently and stop if either is true:
+       - `telegramHandleReconciliation.pending` exists — the user has already been asked; wait for their answer in a normal conversation turn.
+       - `telegramHandleReconciliation.lastAskedDate` equals today — do not re-ask the same day.
+    2. Read candidate sources without mutating anything:
+       - Index: call `read_user_profiles()` and extract the user's `telegram` social if present.
+       - EdgeOS: if `EDGEOS_BEARER_TOKEN` is available, use the `edgeos` skill recipe `GET /api/v1/humans/me` and read its `telegram` field. If the value is the hidden sentinel `"*"`, treat it as unavailable, not a conflict.
+       - Runtime host: read `INDEX_TELEGRAM_HANDLE` from the environment if available; this is the Telegram handle currently forwarded in Index MCP headers.
+    3. Normalize every non-empty candidate for comparison: trim, strip a leading `@`, strip `https://t.me/` or `https://telegram.me/`, drop query/hash/path suffixes, and require `[A-Za-z0-9_]{5,32}`. Keep both the raw and normalized forms in notes. Values that fail validation (for example `Lauren Tannhauser`) are invalid candidates and should trigger reconciliation if any system stores them.
+    4. Decide:
+       - If there are zero valid candidates and no invalid candidates, reply silently.
+       - If there is exactly one valid normalized handle and no invalid candidates, reply silently. No system is drifting from another known system.
+       - If there are two or more distinct valid normalized handles, or any invalid candidate exists, ask exactly one concise question: "I found conflicting Telegram handles in your Edge setup: EdgeOS: `<x>`, Index: `<y>`, runtime: `<z>`. Which Telegram username should I use? Reply with the handle only, without @."
+         Omit unavailable sources from the sentence; label invalid values as "not a valid Telegram username".
+    5. Record and stop after asking. Update `memory/heartbeat-state.json` preserving all existing keys, under:
+       `telegramHandleReconciliation = { pending: true, lastAskedDate: "YYYY-MM-DD", sources: { edgeos, index, runtime }, askedQuestion: "..." }`.
+       Append `[gate] index-network: telegram-handle-reconciliation asked` to `memory/<today>.md`.
+
+    Do not call `update_user_profile`, patch EdgeOS, rerun the installer, or edit config in this heartbeat task. The user's answer arrives later in a normal conversation turn; handle it using `tools.md`.
+
 - name: signal-freshness
   interval: 7d
   prompt: |

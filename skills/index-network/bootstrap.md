@@ -103,26 +103,22 @@ Once `create_intent` succeeds, briefly acknowledge:
 
 > "Got it — I'll keep an eye out for relevant people."
 
-## Step 4 — Capture chat-channel handle silently
+## Step 4 — Note chat channel and defer Telegram drift
 
-Before closing onboarding, recover the user's platform handle on whichever channel they connected through — but only from a **verifiable source**. A handle that routes an introduction to a stranger or a dead link is worse than no handle at all, so when in doubt, save nothing.
+Before closing onboarding, note which platform the user connected through, but do **not** silently choose between independent Telegram handle sources. AgentVillage spans EdgeOS, Index, the local Hermes runtime, and the control plane; none of those should overwrite another merely because it happened to be read last.
 
-This step is **silent** — produce no user-facing output, do not announce it, do not ask for confirmation. The user already authenticated via this channel; capturing the handle is an implementation detail of being reachable.
-
-**Never fabricate a handle.** Only ever write a handle that appears **verbatim** in a verifiable source. Do **not** derive, guess, or construct one from the user's name, display name, email, or chatId, and do not "tidy" a guess into something plausible. A Telegram username must match `[A-Za-z0-9_]{5,32}` exactly; if what you have doesn't match, it is not a real handle — skip it. When no verifiable handle exists, leave the social **blank** and move on; a later heartbeat tick can fill it.
+**Never fabricate a handle.** Do **not** derive, guess, or construct one from the user's name, display name, email, or chatId, and do not "tidy" a guess into something plausible. A Telegram username must match `[A-Za-z0-9_]{5,32}` exactly after stripping a leading `@`; if what you have doesn't match, it is not a real handle.
 
 Detection by session key:
 
-- `agent:main:telegram:direct:<chatId>` → Telegram. **Do not read or write the Telegram handle yourself.** When the user connected through Telegram, every Index MCP request already carries the verified `x-index-telegram-username` header (set by the host from the handle Portal captured), and the server self-heals the user's public Telegram social from it deterministically — no tool call from you. Do **not** pull `from.username` out of the inbound message and write it: that field is not reliably visible to you, and a guessed value routes introductions to the wrong person. You can't observe whether the host forwarded the header, so don't try to reason about it — instead, check the `read_user_profiles()` result: if the user **still has no Telegram social** by this step, none was captured (Portal had no handle to forward), so fall through to the EdgeOS fallback below.
+- `agent:main:telegram:direct:<chatId>` → Telegram. Note that the user is connected via Telegram. Do not pull `from.username` out of inbound messages and write it: that field is not reliably visible to you, and a guessed value routes introductions to the wrong person.
 - `agent:main:whatsapp:...` → WhatsApp. The phone number is the handle; call `update_user_profile(socials={ whatsapp: "+<E.164>" })` only if a real E.164 number is recoverable **verbatim** from session metadata. If not, skip — do not reconstruct one.
 - `agent:main:discord:...`, `agent:main:slack:...`, etc. → equivalent treatment only when the platform's primary handle is recoverable **verbatim** from session metadata. Otherwise skip.
 - `agent:main:webchat` or any other context where no platform handle exists → skip session-metadata capture.
 
-EdgeOS fallback for Telegram (the only Telegram handle you may write yourself): use it only when the user does **not** already have a Telegram social. Determine this from the `read_user_profiles()` result run in the Intent-trigger gate above (re-call it here if you no longer have that result) — if it already lists a Telegram social, the server captured it from the verified header and that value wins, so leave it untouched (overwriting with a different value would later fail server-side identity verification and break the user's own Telegram requests). Otherwise, if the user granted the Step 1 data-use consent and `EDGEOS_BEARER_TOKEN` is available, read the user's own EdgeOS profile via the `edgeos` skill's `GET /api/v1/humans/me` recipe. Take its `telegram` value only if it is non-empty, is not the hidden sentinel `"*"`, and matches `[A-Za-z0-9_]{5,32}` after stripping a leading `@`; then call `update_user_profile(socials={ telegram: "@<handle>" })` with that exact value. This fallback is still silent. If the bearer token is missing, the EdgeOS call fails, or the EdgeOS profile has no valid Telegram value, skip it without asking the user — never substitute a guess.
+For Telegram, do not run the old silent EdgeOS → Index fallback and do not treat any single system as authoritative when sources disagree. A later `telegram-handle-reconciliation` heartbeat compares EdgeOS, Index, and the local runtime header; if it finds drift or an invalid display-name value, it asks the resident which bare Telegram handle is correct and then updates the wrong systems from that explicit answer.
 
-Also note the platform in `USER.md` under **Notes**, and the handle alongside it only when you have one **verbatim**, so future heartbeat / digest runs have context without re-querying. One short line is enough — e.g. `Connected via Telegram (@yanekyuksel).` when you have the handle, or just `Connected via Telegram.` when you left it to server self-heal. Never write a handle into `USER.md` that you would not write into the profile.
-
-If `update_user_profile` or the EdgeOS fallback returns an error (rate limit, transient failure), log it to `memory/<today>.md` and continue — do not block onboarding on this. The next heartbeat tick can retry.
+Also note the platform in `USER.md` under **Notes** without inventing a handle. One short line is enough — e.g. `Connected via Telegram.` Never write a handle into `USER.md` that came from a display name, email, chatId, or an unresolved system conflict.
 
 ## Step 5 — Close out and populate USER.md
 
@@ -146,7 +142,7 @@ Cron-schedule preferences are not asked about — the morning digest runs at a f
 - Do not call `preview_user_profile` until the consent question has an explicit user answer and both consent calls have succeeded.
 - Do not call `discover_opportunities`, `list_opportunities`, or any other discovery tool during onboarding. Opportunities surface on the first scheduled cron tick after onboarding completes.
 - Do not mention Gmail or email import — they are not available in this flow.
-- Never write a guessed or derived contact handle (Telegram, WhatsApp, Discord, Slack). Persist a handle only when it appears verbatim in a verifiable source — the verified `x-index-telegram-username` header (handled server-side, not by you), real session metadata, or the user's own EdgeOS profile. If none is available, leave it blank; never construct one from the user's name, email, or chatId.
+- Never write a guessed or derived contact handle (Telegram, WhatsApp, Discord, Slack). During onboarding, do not silently reconcile Telegram across EdgeOS, Index, and runtime headers. If sources later disagree, the heartbeat reconciliation process asks the resident and writes only their explicit bare-handle answer.
 - Call `create_intent` at most once per user response.
 - If the user tries to do something else mid-onboarding, complete the current step and offer to pause: "Want to finish setup now, or pick it up later?" — do not block indefinitely. If they choose to defer, append `[gate] index-network: suppressed by user` to `memory/<today>.md` and answer their question. This suppression persists for the rest of the calendar day.
 - Keep your tone calm, direct, concise — no "Great question!", no "I'd be happy to help!", no filler.

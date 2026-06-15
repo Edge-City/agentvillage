@@ -44,6 +44,21 @@ Onboarding captures one signal; after that, the graph only thickens if you captu
 
 Do not do this during onboarding — the bootstrap ritual owns signal capture there (`create_intent` at most once, under its own rules). This guidance is for users who have already completed onboarding.
 
+## Telegram handle reconciliation replies
+
+The `telegram-handle-reconciliation` heartbeat task may ask the resident which Telegram username is correct when EdgeOS, Index, and the local runtime disagree. If `memory/heartbeat-state.json` contains `telegramHandleReconciliation.pending=true`, handle the user's next handle-like answer before ordinary signal capture.
+
+1. Normalize the reply: trim, strip a leading `@`, strip `https://t.me/` / `https://telegram.me/`, drop query/hash/path suffixes, and require `[A-Za-z0-9_]{5,32}`. Store and write bare handles only — e.g. `alice_tg`, never `@alice_tg`.
+2. If the reply is not a valid Telegram username, ask one short follow-up: "What's your Telegram username? Send just the handle, without @." Do not write anything.
+3. If valid, update the independent systems that are available from this runtime:
+   - Index: call `update_user_profile(socials={ telegram: "<bare-handle>" })`.
+   - EdgeOS: if `EDGEOS_BEARER_TOKEN` is available, use the `edgeos` skill's `PATCH /api/v1/humans/me` recipe with `{ "telegram": "<bare-handle>" }`. Do not patch application-form fields; only the own-profile `telegram` field.
+   - Local runtime header: if `INDEX_API_KEY` and `edge-src/install/install.ts` are available in the Hermes home, run the installer in no-restart mode with `--telegram-handle <bare-handle>` so future Index MCP calls forward the same user-confirmed handle. If that script is unavailable, skip this and note it in memory; do not hand-edit secrets in chat.
+4. Update `memory/heartbeat-state.json`: remove `telegramHandleReconciliation.pending`, set `telegramHandleReconciliation.resolvedAt` to today's date/time, set `telegramHandleReconciliation.confirmedHandle` to the bare handle, and preserve the recorded source snapshot for audit.
+5. Reply briefly: "Got it — I'll use `<bare-handle>` for your Telegram handle." Do not mention internal system names unless the user asks.
+
+Do not infer the correct handle from display name, email, chat id, or a conflict between sources. The resident's explicit answer is the authority for this Edge Esmeralda reconciliation process.
+
 ## `scrape_url` — when to use it
 
 Call `scrape_url(url, objective)` whenever the user shares a URL and you need its content:
