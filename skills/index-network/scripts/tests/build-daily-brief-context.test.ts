@@ -607,6 +607,22 @@ describe("fetchOpportunitiesFromMcp", () => {
     }
   });
 
+  test("throws setup-required diagnostic when opportunity tool is onboarding-gated", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = makeMcpFetch(() =>
+      Response.json({
+        jsonrpc: "2.0",
+        id: 2,
+        result: { content: [{ type: "text", text: JSON.stringify({ success: false, error: "Onboarding required", message: "This user has not completed onboarding." }) }] },
+      }),
+    );
+    try {
+      await expect(fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL })).rejects.toThrow("setup required before people suggestions");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("throws when the MCP server returns an error", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = makeMcpFetch(() =>
