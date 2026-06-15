@@ -229,10 +229,10 @@ Returns the human record for the bearer's owner — your own application content
 curl -s -X PATCH -H "Authorization: Bearer <EDGEOS_BEARER_TOKEN>" \
   -H "Content-Type: application/json" \
   "https://api.edgeos.world/api/v1/humans/me" \
-  -d '{"first_name":"...","last_name":"...","telegram":"@handle","residence":"...","picture_url":"https://..."}'
+  -d '{"first_name":"...","last_name":"...","telegram":"handle","residence":"...","picture_url":"https://..."}'
 ```
 
-Patchable fields: `first_name`, `last_name`, `telegram`, `gender`, `age`, `residence`, `picture_url`. All are optional — include only what you want to change. Application-specific fields (dietary preferences, "what I'm building", application answers) are **not** patchable through this endpoint — those live on the popup application form and must be edited in the EdgeOS portal UI.
+Patchable fields: `first_name`, `last_name`, `telegram`, `gender`, `age`, `residence`, `picture_url`. All are optional — include only what you want to change. Store Telegram usernames as bare handles (`handle`, not `@handle`) and only after the resident confirms the value when systems disagree. Application-specific fields (dietary preferences, "what I'm building", application answers) are **not** patchable through this endpoint — those live on the popup application form and must be edited in the EdgeOS portal UI.
 
 ## 9. Attendee directory (`portal:directory_read`)
 

@@ -3,15 +3,17 @@
  *
  *   - Merges `mcp_servers.index` into `$HERMES_HOME/config.yaml`
  *   - Writes `INDEX_API_KEY` to `$HERMES_HOME/.env`
- *   - Installs the digest crons: memory signal sync (`Edge — memory signal
- *     sync`, ~01:00), prepare (`Edge — digest prepare`, ~02:00) and send
- *     (`Edge — daily digest`, ~08:00) — all host-local; times overridable via
+ *   - Installs the Index crons: heartbeat (`Edge — heartbeat`, every 30m),
+ *     memory signal sync (`Edge — memory signal sync`, ~01:00), prepare
+ *     (`Edge — digest prepare`, ~02:00), and send (`Edge — daily digest`,
+ *     ~08:00) — all host-local; times overridable via --heartbeat-cron /
  *     --digest-signals-cron / --digest-prepare-cron / --digest-send-cron (or
- *     DIGEST_SIGNALS_CRON / DIGEST_PREPARE_CRON / DIGEST_SEND_CRON). To avoid
- *     the whole fleet hitting the LLM provider in the same minute (OpenRouter
- *     caps gemini-flash at 300 req/min account-wide), each tenant gets a
- *     deterministic minute offset derived from its INDEX_API_KEY: signal sync
- *     spreads over 01:00–01:49, prepare over 02:00–02:49, send over
+ *     HEARTBEAT_CRON / DIGEST_SIGNALS_CRON / DIGEST_PREPARE_CRON /
+ *     DIGEST_SEND_CRON). To avoid the whole fleet hitting the LLM provider in
+ *     the same minute (OpenRouter caps gemini-flash at 300 req/min account-wide),
+ *     each tenant gets a deterministic minute offset derived from its
+ *     INDEX_API_KEY: heartbeat spreads across two runs per hour, signal sync
+ *     spreads over 01:00–01:49, prepare over 02:00–02:49, and send over
  *     08:00–08:24.
  *     New installs create enabled crons; reconcile updates prompt bodies,
  *     migrates jobs still on the old synchronized defaults (0 2 / 0 8) to their
@@ -56,13 +58,22 @@ function readTelegramHandle(): string {
     || "";
 }
 
+function normalizeTelegramHandle(raw: string): string {
+  const bare = raw
+    .trim()
+    .replace(/^(?:https?:\/\/)?(?:t\.me|telegram\.me)\//i, "")
+    .replace(/^@/, "")
+    .split(/[/?#]/)[0];
+  return /^[A-Za-z0-9_]{5,32}$/.test(bare) ? bare : "";
+}
+
 export function buildIndexMcpHeaders(apiKey: string, telegramHandle = ""): Record<string, string> {
   const headers: Record<string, string> = {
     "x-api-key": apiKey,
     "x-index-surface": "telegram",
   };
-  const trimmedHandle = telegramHandle.trim();
-  if (trimmedHandle) headers["x-index-telegram-username"] = trimmedHandle;
+  const normalizedHandle = normalizeTelegramHandle(telegramHandle);
+  if (normalizedHandle) headers["x-index-telegram-username"] = normalizedHandle;
   return headers;
 }
 
@@ -147,7 +158,7 @@ export interface DigestCronSpec {
   schedule: string;
   /** Width of the per-tenant stagger window, in minutes from the default hour. */
   staggerWindowMinutes: number;
-  /** Prompt file under skills/edge-esmeralda/prompts/. */
+  /** Prompt file under skills/. */
   promptFile: string;
   /** Full Hermes cron name (kept under the CRON_NAME_PREFIX). */
   name: string;
@@ -160,16 +171,25 @@ export interface DigestCronSpec {
 }
 
 /**
- * Memory signal sync (01:00, no deliver) then prepare (02:00, no deliver)
- * then send (08:00, deliver telegram). Signal sync runs an hour before
- * prepare so freshly-captured signals have time to produce opportunities
- * before the brief is composed.
+ * Heartbeat (every 30m, deliver telegram), memory signal sync (01:00, no
+ * deliver), prepare (02:00, no deliver), then send (08:00, deliver telegram).
+ * Signal sync runs an hour before prepare so freshly-captured signals have time
+ * to produce opportunities before the brief is composed.
  */
 export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
   {
+    schedule: "*/30 * * * *",
+    staggerWindowMinutes: 30,
+    promptFile: "index-network/heartbeat.md",
+    name: "Edge — heartbeat",
+    deliver: true,
+    overrideFlag: "--heartbeat-cron",
+    overrideEnv: "HEARTBEAT_CRON",
+  },
+  {
     schedule: "0 1 * * *",
     staggerWindowMinutes: 50,
-    promptFile: "memory-signals.md",
+    promptFile: "edge-esmeralda/prompts/memory-signals.md",
     name: "Edge — memory signal sync",
     deliver: false,
     overrideFlag: "--digest-signals-cron",
@@ -178,7 +198,7 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
   {
     schedule: "0 2 * * *",
     staggerWindowMinutes: 50,
-    promptFile: "prepare.md",
+    promptFile: "edge-esmeralda/prompts/prepare.md",
     name: "Edge — digest prepare",
     deliver: false,
     overrideFlag: "--digest-prepare-cron",
@@ -187,7 +207,7 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
   {
     schedule: "0 8 * * *",
     staggerWindowMinutes: 25,
-    promptFile: "send.md",
+    promptFile: "edge-esmeralda/prompts/send.md",
     name: "Edge — daily digest",
     deliver: true,
     overrideFlag: "--digest-send-cron",
@@ -214,7 +234,10 @@ export function fnv1a(input: string): number {
 export function staggeredSchedule(spec: DigestCronSpec, seed: string): string {
   const fields = spec.schedule.trim().split(/\s+/);
   const minute = fnv1a(`${seed}:${spec.name}`) % Math.max(1, spec.staggerWindowMinutes);
-  return [String(minute), ...fields.slice(1)].join(" ");
+  const minuteField = fields[0] === "*/30" && spec.staggerWindowMinutes <= 30
+    ? `${minute},${minute + 30}`
+    : String(minute);
+  return [minuteField, ...fields.slice(1)].join(" ");
 }
 
 /** Build the argv for `hermes cron create` from a spec + resolved prompt body. */
@@ -286,11 +309,11 @@ function hermesAvailable(bin: string): boolean {
 
 export function reconcileDigestCronJobs(env: NodeJS.ProcessEnv = hermesExecEnv()): void {
   const home = hermesHome();
-  const promptsDir = join(home, "skills/edge-esmeralda/prompts");
+  const promptsDir = join(home, "skills");
 
   const bin = hermesBin();
   if (!hermesAvailable(bin)) {
-    console.warn("  warning: hermes CLI not found — skipping digest crons");
+    console.warn("  warning: hermes CLI not found — skipping Index crons");
     return;
   }
 

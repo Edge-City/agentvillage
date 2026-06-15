@@ -129,7 +129,7 @@ Every call with the same email returns the same user but a **fresh API key** —
 
 ### What Portal does after signup
 
-1. Runs the AgentVillage installer with the returned `apiKey`: `bun install/install.ts --index-api-key <apiKey>` (or equivalent in the hosted runtime). If Portal knows the attendee's Telegram handle, it passes it as `--telegram-handle @handle` so every Telegram-surface Index MCP request carries `x-index-telegram-username` and self-heals the user's public Telegram social. If Portal has also fetched an EdgeOS personal access token for the attendee, it passes that on the same line: `bun install/install.ts --index-api-key <apiKey> --telegram-handle @handle --edgeos-api-key <eos_live_…> --edgeos-bearer-token <jwt>`.
+1. Runs the AgentVillage installer with the returned `apiKey`: `bun install/install.ts --index-api-key <apiKey>` (or equivalent in the hosted runtime). If Portal has a resident-confirmed Telegram handle, it passes it as a bare handle (`--telegram-handle handle`) so every Telegram-surface Index MCP request carries `x-index-telegram-username`. If Portal has also fetched an EdgeOS personal access token for the attendee, it passes that on the same line: `bun install/install.ts --index-api-key <apiKey> --telegram-handle handle --edgeos-api-key <eos_live_…> --edgeos-bearer-token <jwt>`.
 2. If Portal learns or changes the attendee's Telegram handle later, it should rerun the installer or update `mcp_servers.index.headers.x-index-telegram-username` in the host config.
 
 ### What EdgeOS does after signup (BYOA flow)
@@ -148,7 +148,7 @@ claude plugin install agentvillage@agentvillage-skills
 **OpenClaw:**
 ```bash
 openclaw plugins install agentvillage --marketplace Edge-City/agentvillage-skills
-openclaw config set mcp.servers.index '{"url":"https://protocol.index.network/mcp","transport":"streamable-http","headers":{"x-api-key":"<apiKey>","x-index-surface":"telegram","x-index-telegram-username":"@handle"}}'
+openclaw config set mcp.servers.index '{"url":"https://protocol.index.network/mcp","transport":"streamable-http","headers":{"x-api-key":"<apiKey>","x-index-surface":"telegram","x-index-telegram-username":"handle"}}'
 openclaw config set env.vars.EDGEOS_BEARER_TOKEN '<jwt>'
 openclaw config set env.vars.EDGEOS_API_KEY '<eos_live_…>'
 openclaw gateway restart
@@ -162,7 +162,7 @@ hermes skills install Edge-City/agentvillage/skills/index-network --force
 hermes config set mcp_servers.index.url 'https://protocol.index.network/mcp'
 hermes config set mcp_servers.index.headers.x-api-key '<apiKey>'
 hermes config set mcp_servers.index.headers.x-index-surface 'telegram'
-hermes config set mcp_servers.index.headers.x-index-telegram-username '@handle'
+hermes config set mcp_servers.index.headers.x-index-telegram-username 'handle'
 hermes config set EDGEOS_BEARER_TOKEN '<jwt>'
 hermes config set EDGEOS_API_KEY '<eos_live_…>'
 ```
@@ -194,7 +194,7 @@ bun install/install.ts --index-api-key <YOUR_API_KEY>
 If this AgentVillage runtime is serving the user through Telegram, include their public Telegram handle. The installer stores it in the Index MCP headers so any Telegram-surface interaction can upsert the user's reachable Telegram social without waiting for onboarding:
 
 ```bash
-bun install/install.ts --index-api-key <YOUR_API_KEY> --telegram-handle @handle
+bun install/install.ts --index-api-key <YOUR_API_KEY> --telegram-handle handle
 ```
 
 To target the dev environment (keys generated on `dev.index.network`), pass `--dev`:
@@ -214,23 +214,25 @@ bun install/install.ts \
   --edgeos-bearer-token eyJ…
 ```
 
-### Overriding the digest cron times
+### Overriding the Index cron times
 
-The morning digest runs as two fixed crons — **prepare at `0 2 * * *`** and **send at `0 8 * * *`** (host-local). To install them at different times (a different timezone, a test window, etc.), pass full 5-field cron expressions. A flag wins over the matching env var; an invalid expression is ignored with a warning and the default is kept.
+Index background work is installed as three Hermes/OpenClaw cron jobs: **heartbeat at `*/30 * * * *`**, **digest prepare at `0 2 * * *`**, and **digest send at `0 8 * * *`** (host-local). To install them at different times (a different timezone, a test window, etc.), pass full 5-field cron expressions. A flag wins over the matching env var; an invalid expression is ignored with a warning and the default is kept.
 
 ```bash
 # via flags
 bun install/install.ts --index-api-key <YOUR_API_KEY> \
+  --heartbeat-cron      "*/30 * * * *" \
   --digest-prepare-cron "0 3 * * *" \
   --digest-send-cron    "0 9 * * *"
 
 # or via environment
-DIGEST_PREPARE_CRON="0 3 * * *" DIGEST_SEND_CRON="0 9 * * *" \
+HEARTBEAT_CRON="*/30 * * * *" DIGEST_PREPARE_CRON="0 3 * * *" DIGEST_SEND_CRON="0 9 * * *" \
   bun install/install.ts --index-api-key <YOUR_API_KEY>
 ```
 
 | Cron | Flag | Env var | Default |
 |---|---|---|---|
+| Heartbeat | `--heartbeat-cron "<expr>"` | `HEARTBEAT_CRON` | `*/30 * * * *` |
 | Prepare pass | `--digest-prepare-cron "<expr>"` | `DIGEST_PREPARE_CRON` | `0 2 * * *` |
 | Send pass | `--digest-send-cron "<expr>"` | `DIGEST_SEND_CRON` | `0 8 * * *` |
 
@@ -244,7 +246,7 @@ The installer:
 4. Sets `channels.telegram.streaming.mode = off` so OpenClaw doesn't dump per-tool status drafts into your chat.
 5. Copies the workspace markdown bundle into `~/.openclaw/workspace/`. `USER.md` is preserved on re-install (it holds the lived notes the active skill's bootstrap ritual populated for you); pass `--wipe-user` to overwrite `USER.md` and delete the agent-curated `MEMORY.md`, OpenClaw's `workspace-state.json` first-run marker, and the local onboarding/welcome/cron-preference markers under `memory/` so the next session re-onboards from scratch.
 6. Copies backend skill bundles from `skills/` into `~/.openclaw/workspace/skills/` so OpenClaw registers them as workspace skills.
-7. Installs the two digest cron jobs: a prepare pass (`0 2 * * *`) that composes the morning brief and stages it as an editable Kanban task, and a send pass (`0 8 * * *`) that delivers the staged brief. The prepare pass stages each brief as a **blocked** Kanban task; the send pass delivers it only after an operator approves it by unblocking that task (`hermes kanban unblock <id>` or the board's unblock control), so accidental delivery is prevented without pausing the cron. The end user can't change the schedule from chat, but the installer can override both times via `--digest-prepare-cron` / `--digest-send-cron` (or `DIGEST_PREPARE_CRON` / `DIGEST_SEND_CRON`) — see "Overriding the digest cron times" above.
+7. Installs the Index cron jobs: a heartbeat (`*/30 * * * *`) that runs `skills/index-network/heartbeat.md`, a prepare pass (`0 2 * * *`) that composes the morning brief and stages it as an editable Kanban task, and a send pass (`0 8 * * *`) that delivers the staged brief. The prepare pass stages each brief as a **blocked** Kanban task; the send pass delivers it only after an operator approves it by unblocking that task (`hermes kanban unblock <id>` or the board's unblock control), so accidental delivery is prevented without pausing the cron. The end user can't change the schedule from chat, but the installer can override the cron times via `--heartbeat-cron` / `--digest-prepare-cron` / `--digest-send-cron` (or `HEARTBEAT_CRON` / `DIGEST_PREPARE_CRON` / `DIGEST_SEND_CRON`) — see "Overriding the Index cron times" above.
 8. Restarts the gateway so all config changes take effect.
 
 Send any message in your chat to bring AgentVillage online. AgentVillage has two independent setup gates with different triggers:
@@ -276,9 +278,9 @@ bun install/reset.ts --wipe-user
 
 ## How it runs
 
-Time-sensitive prompts (the morning digest's prepare pass at 02:00 and send pass at 08:00 — host-local) run as **OpenClaw cron jobs**, not heartbeat tasks. Cron has its own scheduler and runs in isolated sessions with `--light-context` so each tick is cheap. Cron jobs are installed by `install/install.ts` and restart with the gateway. Future per-backend skills can add their own cron prompts the same way.
+Time-sensitive and background prompts run as **Hermes/OpenClaw cron jobs**. There is no separate heartbeat primitive in this repo: `Edge — heartbeat` is a scheduled cron prompt that runs `skills/index-network/heartbeat.md` roughly every 30 minutes, while the morning digest prepare/send prompts run at their own daily cron times. Cron has its own scheduler and runs isolated sessions, so each tick starts fresh from the workspace files. Cron jobs are installed by `install/install.ts` and restart with the gateway. Future per-backend skills can add their own cron prompts the same way.
 
-Accepted-opportunity notifications, freshness audits, memory curation, and any other latency-tolerant background work stay on the heartbeat tick because 30-minute latency is acceptable for those flows.
+Accepted-opportunity notifications, freshness audits, memory curation, Telegram-handle reconciliation, and other latency-tolerant background work belong in the heartbeat prompt because 30-minute latency is acceptable for those flows.
 
 ## Workspace layout
 
@@ -329,18 +331,18 @@ AgentVillage's behaviour is markdown-driven. Almost everything you'd want to cha
 | Add, remove, or reorder operating rules (memory contract, opportunity quality bar, red lines, group-chat rules) | `workspace/AGENTS.md` | This file is always injected by OpenClaw on every session — durable, unlike `BOOTSTRAP.md`. |
 | Add a new first-message gate (e.g. another skill needs onboarding) | `workspace/AGENTS.md` "Active skills" section + the new `skills/<name>/bootstrap.md` | Gates loop over the active-skills registry. Add the skill row first, then point its bootstrap at the trigger condition (server flag, local marker, …). |
 | Change the returning-user first-message framing | `workspace/AGENTS.md` "First-message gates" | The digest schedule is fixed (set in `install/install_index.ts`) and not adjustable from chat. |
-| Change heartbeat tick behaviour (what tasks fire, dedup rules) | `workspace/HEARTBEAT.md` for cross-backend rules; `skills/<backend>/heartbeat.md` for backend-specific tasks | The tick cadence itself (default ~30 min) is an OpenClaw-side setting, configured through `openclaw config` — not a file in this repo. |
+| Change heartbeat tick behaviour (what tasks fire, dedup rules) | `workspace/HEARTBEAT.md` for cross-backend rules; `skills/<backend>/heartbeat.md` for backend-specific tasks | The tick cadence is the `Edge — heartbeat` cron in `install/install_index.ts`; override one install with `--heartbeat-cron` / `HEARTBEAT_CRON`. |
 | Change how URLs / formatting render per channel (Telegram, WhatsApp, Discord) | `workspace/TOOLS.md` | Cross-backend rule: Telegram is Markdown, not HTML — raw `<…>` tags get escaped. |
 
 ### Schedule & cron
 
-The digest runs as a fixed prepare/send pair — **prepare `0 2 * * *`, send `0 8 * * *`** (host-local) — and the end user can't change it from chat. The installer can override either time (see "Overriding the digest cron times" under **Install**).
+Index background work runs as fixed cron prompts — **heartbeat `*/30 * * * *`, prepare `0 2 * * *`, send `0 8 * * *`** (host-local) — and the end user can't change those schedules from chat. The installer can override any time (see "Overriding the Index cron times" under **Install**).
 
 | You want to… | Edit | Notes |
 |---|---|---|
-| Override the digest times for one install | `--digest-prepare-cron` / `--digest-send-cron` (or `DIGEST_PREPARE_CRON` / `DIGEST_SEND_CRON`) | Optional, full 5-field cron expressions. Flag wins over env; invalid values fall back to the default. |
-| Change the default digest schedule for everyone | `install/install_index.ts` (`DIGEST_CRON_SPECS`) | The installer writes the cron entries from this table. Existing installs pick up changes on the next `install.ts` run. |
-| Change a cron prompt without changing the schedule | the matching `skills/edge-esmeralda/prompts/<name>.md` | Hermes stores prompt copies in cron jobs. Hosted residents are refreshed by the control-plane post-merge sync, which calls each sidecar's `/update` endpoint and reruns the installer. For non-control-plane installs or recovery, run `HERMES_HOME=<resident-home> bun install/reconcile_digest_crons.ts` after updated skill files are copied. |
+| Override the Index cron times for one install | `--heartbeat-cron` / `--digest-prepare-cron` / `--digest-send-cron` (or `HEARTBEAT_CRON` / `DIGEST_PREPARE_CRON` / `DIGEST_SEND_CRON`) | Optional, full 5-field cron expressions. Flag wins over env; invalid values fall back to the default. |
+| Change the default Index cron schedule for everyone | `install/install_index.ts` (`DIGEST_CRON_SPECS`) | The installer writes the cron entries from this table. Existing installs pick up changes on the next `install.ts` run. |
+| Change a cron prompt without changing the schedule | the matching prompt file (`skills/index-network/heartbeat.md` or `skills/edge-esmeralda/prompts/<name>.md`) | Hermes stores prompt copies in cron jobs. Hosted residents are refreshed by the control-plane post-merge sync, which calls each sidecar's `/update` endpoint and reruns the installer. For non-control-plane installs or recovery, run `HERMES_HOME=<resident-home> bun install/reconcile_digest_crons.ts` after updated skill files are copied. |
 
 ### Backends & skills
 

@@ -93,14 +93,14 @@ mcp_servers:
     headers:
       x-api-key: <YOUR_API_KEY>
       x-index-surface: telegram
-      x-index-telegram-username: @handle  # optional; lets any Telegram-surface MCP call self-heal the public Telegram social
+      x-index-telegram-username: handle  # optional; resident-confirmed bare Telegram handle forwarded on Telegram-surface MCP calls
 ```
 
 For workspace, installer, and cron jobs:
 
 ```bash
 bun install/install.ts --index-api-key <KEY>
-# add --telegram-handle @handle when this runtime serves the user over Telegram
+# add --telegram-handle handle when this runtime serves the user over Telegram and the resident confirmed that handle
 # add --edgeos-bearer-token for Geo knowledge graph access/content writes
 # add --edgeos-api-key for EdgeOS event, RSVP, and venue recipes
 # re-onboard: add --wipe-user
