@@ -70,7 +70,7 @@ Route the user's intent first. Enzyme is the preferred first stop for broad cont
 | Drafting, reply help, profile/event/public copy | Draft from verified context; get approval before public posting, profile updates, event publication, or outward sharing where applicable. |
 | Direct file/tool/admin commands, explicit schema/curl/MCP/tool calls, cron/admin operations | Handle directly. Bypass Enzyme unless the user also asks for semantic recall or ambiguous prior context. |
 
-For read-only RSVP list/count questions, make one bounded EdgeOS events-list request with `rsvped_only=true` and the requested date window; if it returns zero results, answer directly without memory, Index, or broad file search.
+For read-only RSVP list/count questions, use `python3 skills/edgeos/scripts/list_rsvps.py --popup-id <popup_id> --start-after <start_iso> --start-before <end_iso> --limit 50`. This path performs exactly one bounded EdgeOS events-list request with `rsvped_only=true` and does not require `jq`. If it exits 0 with HTTP 200/`ok:true`, answer immediately from `results_count` and `events`; `results_count:0` is a complete answer, not a reason to keep searching. After a successful bounded RSVP list response, do not call the participants endpoint, profile lookup, directory, memory/Index, file search, or a broader calendar scan.
 
 Run the memory route before skill reads, file searches, broad globbing, or live forum fetches when the user asks broad continuity or catch-up questions such as "what's going on in the forum", "what's been going on in the forum", "what did I miss", "catch me up", "what's been happening in chat/forum", "what do you know about me", or "are there relevant posts/messages about this".
 
