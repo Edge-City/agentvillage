@@ -109,7 +109,9 @@ bun install/install.ts --index-api-key <KEY>
 
 Installs flat under `~/.hermes/` (SOUL.md, AGENTS.md, skills/, `terminal.cwd`) — Hermes defaults, no subfolders.
 
-The installer also sets up `agent-memory-vault/`, writes `memory/enzyme-env.sh` with references only, and installs the memory heartbeat cron unless `--skip-crons` is passed. Normal install does not install Enzyme or run `enzyme init` / `enzyme refresh`. To validate provider env without printing secrets:
+The installer also sets up `agent-memory-vault/`, writes `memory/enzyme-env.sh` with references only, and installs the memory heartbeat cron unless `--skip-crons` is passed. Normal install does not install Enzyme, run `enzyme init` / `enzyme refresh`, or run `enzyme install hermes`. AgentVillage owns Hermes runtime memory instructions in `workspace/AGENTS.md`; Enzyme init/refresh only indexes the vault.
+
+To validate provider env without printing secrets:
 
 ```bash
 python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --check-enzyme-env
@@ -118,8 +120,11 @@ python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --check
 Hosted/default `enzyme refresh` may require `enzyme login`. Hosted AgentVillage operators with provider env should use the secret-safe check above, then:
 
 ```bash
+python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-enzyme status
 python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-enzyme refresh --use-env-llm
 ```
+
+When the CLI is available, targeted retrieval uses `enzyme catalyze -p agent-memory-vault -n 8 "<query>"`; broader exploration uses `enzyme petri -p agent-memory-vault -n 12`. Treat both as evidence routing, not canonical truth.
 
 To verify rendered vault output without printing secret values:
 

@@ -23,7 +23,9 @@ python3 skills/index-network/scripts/memory-workspace/setup_workspace.py \
   --install-cron
 ```
 
-If `--skip-crons` is passed to the AgentVillage installer, `--install-cron` is omitted. Normal install does not install Enzyme, run `enzyme init`, run `enzyme refresh`, or print provider secrets.
+If `--skip-crons` is passed to the AgentVillage installer, `--install-cron` is omitted. Normal install does not install Enzyme, run `enzyme init`, run `enzyme refresh`, run `enzyme install hermes`, or print provider secrets.
+
+AgentVillage writes Hermes runtime instructions manually in `workspace/AGENTS.md`. This setup script installs the vault folders, managed Enzyme vault config, non-secret env references, and heartbeat cron. Enzyme `init`/`refresh` only initialize or update the vault index; they do not rewrite AgentVillage runtime instructions.
 
 ## Enzyme Env
 
@@ -42,14 +44,28 @@ Secret-safe check:
 python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --check-enzyme-env
 ```
 
-For hosted AgentVillage operators, first verify provider env presence without values, then refresh with ambient provider keys only when intended:
+Check index status:
+
+```bash
+python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-enzyme status
+```
+
+For hosted AgentVillage operators, first verify provider env presence without values, then initialize or refresh with ambient provider keys only when intended:
 
 ```bash
 python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --check-enzyme-env
+python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-enzyme init --use-env-llm
 python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-enzyme refresh --use-env-llm
 ```
 
-Use `--run-enzyme init --use-env-llm` the same way when initializing with provider env. Agents can use Enzyme directly only when their runtime/tooling exposes it. Otherwise, read the materialized `agent-memory-vault/forum/`, `agent-memory-vault/irl/`, `USER.md`, `MEMORY.md`, and live canonical tools/files.
+Use Enzyme for retrieval only when runtime/tooling exposes the CLI or equivalent tools:
+
+```bash
+enzyme catalyze -p agent-memory-vault -n 8 "<query>"
+enzyme petri -p agent-memory-vault -n 12
+```
+
+Agents can use Enzyme directly only when their runtime/tooling exposes it. Otherwise, read the materialized `agent-memory-vault/forum/`, `agent-memory-vault/irl/`, `USER.md`, `MEMORY.md`, and live canonical tools/files. Do not run `enzyme install hermes` as part of normal rollout; AgentVillage owns the runtime instruction surface in `workspace/AGENTS.md`.
 
 ## Secret Scan
 
