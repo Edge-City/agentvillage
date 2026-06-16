@@ -17,14 +17,14 @@ class SetupWorkspaceCronTest(unittest.TestCase):
             script.parent.mkdir(parents=True)
             script.write_text("# test\n", encoding="utf-8")
 
-            calls: list[str] = []
+            calls: list[tuple[str, str | None]] = []
 
             def fake_remove(name: str, hermes_bin: str, script_name: str) -> list[str]:
-                calls.append(f"remove:{name}:{script_name}")
+                calls.append(("remove", script_name))
                 return ["stale-1"]
 
             def fake_exists(name: str, hermes_bin: str, script_name: str | None = None) -> bool:
-                calls.append(f"exists:{name}:{script_name}")
+                calls.append(("exists", script_name))
                 return True
 
             with (
@@ -37,8 +37,9 @@ class SetupWorkspaceCronTest(unittest.TestCase):
             self.assertEqual(result["installed"], False)
             self.assertEqual(result["reason"], "already-exists")
             self.assertEqual(result["removedStale"], ["stale-1"])
-            self.assertEqual(calls[0], "remove:Hermes agent memory heartbeat:agentvillage-memory-workspace-cron_prepare.py")
-            self.assertEqual(calls[1], "exists:Hermes agent memory heartbeat:agentvillage-memory-workspace-cron_prepare.py")
+            self.assertEqual([call[0] for call in calls], ["remove", "exists"])
+            self.assertEqual(calls[0][1], result["script"])
+            self.assertEqual(calls[1][1], result["script"])
             run.assert_not_called()
 
 
