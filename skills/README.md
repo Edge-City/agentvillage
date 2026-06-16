@@ -115,6 +115,18 @@ The installer also sets up `agent-memory-vault/`, writes `memory/enzyme-env.sh` 
 python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --check-enzyme-env
 ```
 
+Hosted/default `enzyme refresh` may require `enzyme login`. Hosted AgentVillage operators with provider env should use the secret-safe check above, then:
+
+```bash
+python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-enzyme refresh --use-env-llm
+```
+
+To verify rendered vault output without printing secret values:
+
+```bash
+python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --scan-vault-secrets
+```
+
 ### Claude Desktop
 
 Add the MCP server to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):

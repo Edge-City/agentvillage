@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 from common import context_path, default_state, state_path, vault_root, write_json
+from secret_redaction import scan_files
 
 
 ENZYME_BLOCK_BEGIN = "# BEGIN agentvillage-memory-workspace"
@@ -32,7 +33,11 @@ ENZYME_ENV_KEYS = [
 
 
 def enzyme_example(vault: Path) -> str:
-    return f'''[vaults."{vault}"]
+    return f'''# Prefer forum/ and irl/ for user-facing memory retrieval.
+# hermes/sessions is transcript provenance; rendered validation/debug sessions
+# include session_kind/retrieval_weight frontmatter and should be ignored or
+# down-ranked unless explicitly auditing the workspace.
+[vaults."{vault}"]
 entities = [
   {{ "folder:hermes/sessions" = {{ profile = "resonance_trace" }} }},
   {{ "folder:forum" = {{ profile = "resonance_trace" }} }},
@@ -231,6 +236,15 @@ def run_enzyme(vault: Path, action: str, enzyme_bin: str, root: Path, provider: 
     }
 
 
+def scan_vault_secrets(root: Path, include_memory: bool) -> dict:
+    files = list(vault_root(root).rglob("*.md"))
+    if include_memory:
+        memory = root / "memory"
+        if memory.exists():
+            files.extend(path for path in memory.rglob("*") if path.is_file())
+    return scan_files(files)
+
+
 def cron_prompt() -> str:
     return "\n".join(
         [
@@ -395,6 +409,8 @@ def main() -> None:
     parser.add_argument("--write-enzyme-env", action="store_true", help="Write memory/enzyme-env.sh with non-secret Enzyme environment exports")
     parser.add_argument("--enzyme-provider", choices=["auto", "openrouter", "openai"], default="auto", help="Provider env family to use for Enzyme subprocesses and env file references")
     parser.add_argument("--check-enzyme-env", action="store_true", help="Report Enzyme env presence and selected provider without printing values")
+    parser.add_argument("--scan-vault-secrets", action="store_true", help="Scan vault output and report secret counts/paths only")
+    parser.add_argument("--scan-include-memory", action="store_true", help="With --scan-vault-secrets, also scan memory/* operational files")
     parser.add_argument("--api-key-env", default=None, help="Deprecated; use --enzyme-provider. OPENROUTER_API_KEY selects openrouter, OPENAI_API_KEY selects openai.")
     parser.add_argument("--enzyme-bin", default=shutil.which("enzyme") or "enzyme", help="Enzyme executable")
     parser.add_argument(
@@ -439,6 +455,13 @@ def main() -> None:
     ]
     if args.check_enzyme_env:
         print(json.dumps(provider_presence(root), indent=2, sort_keys=True))
+        return
+
+    if args.scan_vault_secrets:
+        report = scan_vault_secrets(root, args.scan_include_memory)
+        print(json.dumps(report, indent=2, sort_keys=True))
+        if not report["ok"]:
+            raise SystemExit(1)
         return
 
     if args.check:

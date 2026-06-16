@@ -78,11 +78,11 @@ Use runtime startup context first. Do not re-read `AGENTS.md` or `USER.md` unles
 - **Long-term:** `MEMORY.md` — curated memories. **Main session only.** Not in group sessions.
 - **User notebook:** `USER.md` — direct user-authored local context and preferences.
 - **Hermes memory vault:** `agent-memory-vault/` — typed local sources:
-  - `hermes/sessions/` is transcript-shaped provenance. Preserve role, timestamp, order, and source context; do not treat it as interpretation by itself.
-  - `forum/` and `irl/` are agent-written observations from forum, calendar, people, and event context. They are useful for ranking, copy, and questions, but they are not enough on their own to create durable Index records.
+  - `forum/` and `irl/` are agent-written observations from forum, calendar, people, and event context. Prefer these distilled notes for user-facing memory retrieval, ranking, copy, and questions, but they are not enough on their own to create durable Index records.
+  - `hermes/sessions/` is transcript-shaped provenance/evidence. Preserve role, timestamp, order, and source context; do not treat it as interpretation by itself. Rendered validation/operator/debug sessions may be marked with `session_kind: operator_validation` or `session_kind: debug_validation`; ignore or down-rank them unless you are explicitly auditing workspace behavior.
 - **Operational state:** `memory/*.json` — gates, dedup, delivery, and scratch state. It is authoritative for workflow state, not semantic truth.
 
-For broad memory recall or pattern finding, use Enzyme through the Hermes memory workspace when it is available. Treat Enzyme as the preferred memory read gateway over the typed sources above: it can route you to relevant evidence, but it is not canonical truth. Before writing memory, creating Index premises/signals, staging nudges, or messaging the user based on memory, open or verify the cited canonical file or live tool result.
+For broad memory recall or pattern finding, use Enzyme through the Hermes memory workspace when the runtime/tooling exposes it. Treat Enzyme as the preferred memory read gateway over the typed sources above: it can route you to relevant evidence, but it is not canonical truth. If Enzyme is not exposed, use the materialized vault notes and canonical files/live tools directly. Before writing memory, creating Index premises/signals, staging nudges, or messaging the user based on memory, open or verify the cited canonical file or live tool result.
 
 The Hermes memory workspace is AgentVillage infrastructure under `skills/index-network/scripts/memory-workspace/`, not a separate user-facing skill. Enzyme is internal plumbing; do not mention its mechanics to the user unless they ask about memory internals.
 

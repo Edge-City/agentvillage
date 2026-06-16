@@ -27,7 +27,7 @@ If `--skip-crons` is passed to the AgentVillage installer, `--install-cron` is o
 
 ## Enzyme Env
 
-Enzyme v0.6 uses hosted credits/auth by default for `enzyme init` and `enzyme refresh`. Ambient provider keys are used only when `--use-env-llm` is passed intentionally.
+Enzyme v0.6 uses hosted credits/auth by default for `enzyme init` and `enzyme refresh`. That hosted/default path may require an interactive `enzyme login` before `enzyme refresh` succeeds. Ambient provider keys are used only when `--use-env-llm` is passed intentionally.
 
 Supported provider env families:
 
@@ -42,12 +42,41 @@ Secret-safe check:
 python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --check-enzyme-env
 ```
 
-Initialize or refresh with ambient provider keys only when intended:
+For hosted AgentVillage operators, first verify provider env presence without values, then refresh with ambient provider keys only when intended:
 
 ```bash
-python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-enzyme init --use-env-llm
+python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --check-enzyme-env
 python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-enzyme refresh --use-env-llm
 ```
+
+Use `--run-enzyme init --use-env-llm` the same way when initializing with provider env. Agents can use Enzyme directly only when their runtime/tooling exposes it. Otherwise, read the materialized `agent-memory-vault/forum/`, `agent-memory-vault/irl/`, `USER.md`, `MEMORY.md`, and live canonical tools/files.
+
+## Secret Scan
+
+Rendered sessions are redacted before writing, but operators should still scan after rendering or before rollout. The scan reports counts, kinds, and file paths only; it never prints matching lines or values:
+
+```bash
+python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --scan-vault-secrets
+```
+
+To include operational `memory/*` files in the same secret-safe report:
+
+```bash
+python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --scan-vault-secrets --scan-include-memory
+```
+
+The renderer also supports a post-render check:
+
+```bash
+python3 skills/index-network/scripts/memory-workspace/render_hermes_sessions.py \
+  --input "$HERMES_HOME/sessions" \
+  --output "$HERMES_HOME/agent-memory-vault/hermes/sessions" \
+  --scan-output-secrets
+```
+
+## Retrieval Policy
+
+`forum/` and `irl/` are the preferred folders for user-facing memory retrieval because they are distilled observations. `hermes/sessions/` remains indexed as transcript provenance/evidence, but rendered sessions carry `source_surface`, `session_kind`, and `retrieval_weight` frontmatter. Down-rank or ignore `session_kind: operator_validation` and `session_kind: debug_validation` unless explicitly auditing historical validation/debug work.
 
 ## Cron
 

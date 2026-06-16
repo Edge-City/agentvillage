@@ -11,14 +11,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-SECRET_PATTERNS = [
-    (re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._\-+/=]{16,}"), r"\1[REDACTED]"),
-    (re.compile(r"(?i)(x-api-key['\"\s:=]+)[A-Za-z0-9._\-+/=]{12,}"), r"\1[REDACTED]"),
-    (re.compile(r"(?i)(api[_-]?key['\"\s:=]+)[A-Za-z0-9._\-+/=]{12,}"), r"\1[REDACTED]"),
-    (re.compile(r"(?i)(secret['\"\s:=]+)[A-Za-z0-9._\-+/=]{12,}"), r"\1[REDACTED]"),
-    (re.compile(r"(?i)(token['\"\s:=]+)[A-Za-z0-9._\-+/=]{16,}"), r"\1[REDACTED]"),
-    (re.compile(r"sk-[A-Za-z0-9]{16,}"), "sk-[REDACTED]"),
-]
+from secret_redaction import redact as redact_secrets, scan_files
 
 
 def utc_now() -> str:
@@ -81,11 +74,7 @@ def yaml_scalar(value: Any) -> str:
 
 
 def redact(text: str, enabled: bool = True) -> str:
-    if not enabled:
-        return text
-    for pattern, repl in SECRET_PATTERNS:
-        text = pattern.sub(repl, text)
-    return text
+    return redact_secrets(text, enabled)
 
 
 def sha256_text(text: str) -> str:
@@ -227,6 +216,30 @@ def infer_source(meta: Dict[str, Any], path: Path) -> str:
     return "hermes"
 
 
+def infer_session_kind(meta: Dict[str, Any], path: Path, messages: List[Dict[str, Any]]) -> str:
+    haystack_parts: List[str] = [path.as_posix(), path.stem]
+    for key in ("title", "name", "source", "platform", "origin", "channel", "job_name", "cron_name"):
+        value = meta.get(key)
+        if isinstance(value, str):
+            haystack_parts.append(value)
+    for message in messages[:12]:
+        value = message.get("content")
+        if isinstance(value, str):
+            haystack_parts.append(value[:1000])
+    haystack = "\n".join(haystack_parts).lower()
+    if any(marker in haystack for marker in ("validation", "validate", "evaluator", "runtime feedback", "pr #", "pr104")):
+        if "debug" in haystack:
+            return "debug_validation"
+        return "operator_validation"
+    if any(marker in haystack for marker in ("debug", "diagnostic", "reproduction", "repro")):
+        return "debug_validation"
+    if "cron" in haystack or "heartbeat" in haystack:
+        return "cron"
+    if "telegram" in haystack:
+        return "telegram"
+    return "interactive"
+
+
 def session_id(meta: Dict[str, Any], path: Path) -> str:
     for key in ("session_id", "sessionId", "id"):
         val = meta.get(key)
@@ -267,6 +280,7 @@ def render_markdown(path: Path, rel_path: str, meta: Dict[str, Any], messages: L
     ts = first_timestamp(meta, messages, path)
     created = wikilink_date(ts, path.stat().st_mtime)
     source = infer_source(meta, path)
+    kind = infer_session_kind(meta, path, messages)
     date_dir = date_from_wikilink(created)
     out_name = f"{date_dir}--{source}--{stable_slug(sid, 40)}.md"
 
@@ -274,6 +288,9 @@ def render_markdown(path: Path, rel_path: str, meta: Dict[str, Any], messages: L
         "created": created,
         "rendered_at": utc_now(),
         "session_id": sid,
+        "source_surface": source,
+        "session_kind": kind,
+        "retrieval_weight": "low" if kind in {"operator_validation", "debug_validation"} else "normal",
         "source_kind": "hermes-jsonl" if path.suffix == ".jsonl" else "hermes-json",
         "source_file": rel_path,
         "message_count": len(messages),
@@ -288,6 +305,7 @@ def render_markdown(path: Path, rel_path: str, meta: Dict[str, Any], messages: L
         f"- Created: {created}",
         f"- Source file: `{rel_path}`",
         f"- Source kind: `{frontmatter['source_kind']}`",
+        f"- Session kind: `{kind}`",
         f"- Messages: {len(messages)}",
         f"- Derived observations: `false`",
         "",
@@ -332,6 +350,10 @@ privacy:
   raw_transcripts: true
   local_only: true
   default_redactions: true
+retrieval:
+  operator_validation_session_kind: "operator_validation"
+  debug_validation_session_kind: "debug_validation"
+  guidance: "Prefer forum/ and irl/ notes for user-facing recall; use hermes/sessions as provenance and down-rank validation/debug sessions unless auditing."
 """
     (output / "enzyme.hermes-sessions.yaml").write_text(config, encoding="utf-8")
 
@@ -361,6 +383,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--include-full-tool-output", action="store_true", help="Do not collapse large tool outputs")
     ap.add_argument("--no-enzyme-config", dest="enzyme_config", action="store_false", help="Do not write enzyme.hermes-sessions.yaml")
     ap.add_argument("--no-redact", dest="redact", action="store_false", help="Disable default secret redaction (not recommended)")
+    ap.add_argument("--scan-output-secrets", action="store_true", help="After rendering, scan output and report secret counts/paths only")
     ap.set_defaults(redact=True, enzyme_config=True)
     args = ap.parse_args(argv)
 
@@ -397,8 +420,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     write_index(output)
     if args.enzyme_config:
         write_enzyme_config(output)
-    print(json.dumps({"input": str(input_path), "output": str(output), "files_found": len(files), "rendered": rendered, "skipped": skipped, "errors": errors}, indent=2))
-    return 1 if errors else 0
+    report = {"input": str(input_path), "output": str(output), "files_found": len(files), "rendered": rendered, "skipped": skipped, "errors": errors}
+    secret_report = None
+    if args.scan_output_secrets:
+        secret_report = scan_files(output.rglob("*.md"))
+        report["secretScan"] = secret_report
+    print(json.dumps(report, indent=2))
+    return 1 if errors or (secret_report is not None and not secret_report["ok"]) else 0
 
 
 if __name__ == "__main__":
