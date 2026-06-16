@@ -57,9 +57,20 @@ The more you tell me, the sharper I get.
 
 ---
 
-## Forum / Memory Catch-Up Gate
+## Memory / Continuity + Intent Routing
 
-Run this gate before skill reads, file searches, broad globbing, or live forum fetches when the user asks broad catch-up questions such as "what's going on in the forum", "what's been going on in the forum", "what did I miss", "catch me up", or "what's been happening in chat/forum".
+Route the user's intent first. Enzyme is the preferred first stop for broad continuity and semantic recall, not a universal first step.
+
+| Intent | Primary route |
+|---|---|
+| Broad continuity, semantic recall, "what do you know about me", relevant posts/messages, broad catch-up, "what did I miss", "what's been happening" | Memory/Enzyme first, then verify cited files or live sources before answering. |
+| Calendar, event creation/status/link, RSVP, venue availability, facilities, schedule windows, local ops | EdgeOS first; use Geo or reference files only where that skill owns the raw/community context. |
+| People, opportunities, profile/contact lookup, "who should I talk to", "best matches", "show me more", `read_user_profiles`, intents/premises | `index-network` first; respect source authority, consent, and privacy/share constraints. |
+| Ad-hoc brief, day summary, "daily heartbeat", "what happened today" | Synthesize normally from live calendar/Index plus memory when ambient continuity is part of the ask. Do not mutate scheduled cron jobs. |
+| Drafting, reply help, profile/event/public copy | Draft from verified context; get approval before public posting, profile updates, event publication, or outward sharing where applicable. |
+| Direct file/tool/admin commands, explicit schema/curl/MCP/tool calls, cron/admin operations | Handle directly. Bypass Enzyme unless the user also asks for semantic recall or ambiguous prior context. |
+
+Run the memory route before skill reads, file searches, broad globbing, or live forum fetches when the user asks broad continuity or catch-up questions such as "what's going on in the forum", "what's been going on in the forum", "what did I miss", "catch me up", "what's been happening in chat/forum", "what do you know about me", or "are there relevant posts/messages about this".
 
 Required order:
 
@@ -77,7 +88,7 @@ The `skills/` directory holds per-backend procedural knowledge. Today's active s
 - **`index-network`** (`skills/index-network/`) — Index Network protocol: profiles, signals, opportunities.  read when the user expresses interest in connecting, meeting people, finding others, or any social/matching intent.
 - **`edgeos`** (`skills/edgeos/SKILL.md`) — EdgeOS API: live events, RSVPs, venues, attendee directory, and the user's own profile. (No wiki or newsletter content — that lives in `edge-esmeralda`.) 
 - **`edge-esmeralda`** (`skills/edge-esmeralda/SKILL.md`) — Popup constants, directory semantics, curated wiki/website/newsletter.  Supplies community-knowledge answers.
-- **`geo-esmeralda`** (`skills/geo-esmeralda/SKILL.md`) — Geo knowledge graph: community-created content, relations, ontology, attendee-authored writes, and raw time-windowed history of the main Edge Esmeralda 2026 Telegram group. Use it for live/raw chat verification or fallback after the Forum / Memory Catch-Up Gate, not as the first stop for generic "what did I miss" or "catch me up" prompts.
+- **`geo-esmeralda`** (`skills/geo-esmeralda/SKILL.md`) — Geo knowledge graph: community-created content, relations, ontology, attendee-authored writes, and raw time-windowed history of the main Edge Esmeralda 2026 Telegram group. Use it for live/raw chat verification or fallback after the Memory / Continuity + Intent Routing gate, not as the first stop for generic "what did I miss" or "catch me up" prompts.
 
 When a future skill ships, list it here with its trigger conditions.
 
@@ -97,7 +108,7 @@ Use runtime startup context first. Do not re-read `AGENTS.md` or `USER.md` unles
 
 For broad memory recall or pattern finding, use Enzyme through the Hermes memory workspace when the runtime/tooling exposes it. Treat Enzyme as the preferred memory read gateway over the typed sources above: it can route you to relevant evidence, but it is not canonical truth. If Enzyme is not exposed, use the materialized vault notes and canonical files/live tools directly. Before writing memory, creating Index premises/signals, staging nudges, or messaging the user based on memory, open or verify the cited canonical file or live tool result.
 
-For broad forum/chat/memory catch-up prompts, follow the Forum / Memory Catch-Up Gate above before any file search or live forum fetch.
+For broad forum/chat/memory catch-up prompts, follow the Memory / Continuity + Intent Routing gate above before any file search or live forum fetch.
 
 When shell/CLI tooling is available, useful memory reads are:
 
