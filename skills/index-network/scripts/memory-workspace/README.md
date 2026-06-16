@@ -65,12 +65,12 @@ To include operational `memory/*` files in the same secret-safe report:
 python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --scan-vault-secrets --scan-include-memory
 ```
 
-The renderer also supports a post-render check:
+The session rendering wrapper also supports a post-render check:
 
 ```bash
-python3 skills/index-network/scripts/memory-workspace/render_hermes_sessions.py \
+python3 skills/index-network/scripts/memory-workspace/render_vault_sessions.py \
+  --root "$HERMES_HOME" \
   --input "$HERMES_HOME/sessions" \
-  --output "$HERMES_HOME/agent-memory-vault/hermes/sessions" \
   --scan-output-secrets
 ```
 

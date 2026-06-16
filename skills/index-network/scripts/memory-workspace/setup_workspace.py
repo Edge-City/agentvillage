@@ -387,9 +387,9 @@ def install_cron(root: Path, schedule: str, name: str, hermes_bin: str) -> dict:
             }
         )
     wrapper = write_cron_wrapper(root, script)
-    if cron_exists(name, hermes_bin, wrapper.name):
-        return {"installed": False, "reason": "already-exists", "name": name, "schedule": schedule, "script": wrapper.name}
     removed_stale = remove_stale_crons(name, hermes_bin, wrapper.name)
+    if cron_exists(name, hermes_bin, wrapper.name):
+        return {"installed": False, "reason": "already-exists", "name": name, "schedule": schedule, "script": wrapper.name, "removedStale": removed_stale}
     args = [
         hermes_bin,
         "cron",

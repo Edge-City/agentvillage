@@ -25,6 +25,7 @@ def main() -> None:
     parser.add_argument("--root", default=".", help="Target Hermes workspace root")
     parser.add_argument("--input", help="Hermes sessions input directory")
     parser.add_argument("--mode", choices=["new", "all"], default="new")
+    parser.add_argument("--scan-output-secrets", action="store_true", help="Forward a post-render secret scan to the session renderer")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -50,6 +51,8 @@ def main() -> None:
         args.mode,
         "--no-enzyme-config",
     ]
+    if args.scan_output_secrets:
+        cmd.append("--scan-output-secrets")
     if args.dry_run:
         print({"dryRun": True, "cmd": cmd})
         return
