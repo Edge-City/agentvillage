@@ -137,6 +137,13 @@ Authority order for conflicts:
 
 User-facing provenance: in normal attendee-facing answers, do not name internal source labels, files, tools, commands, model plumbing, memory paths, `AGENTS.md`, `SOUL.md`, Enzyme, MCP, or implementation-specific backend names unless the user explicitly asks how the system works. Translate provenance into plain language such as "from your notes", "from the live calendar", "from village profiles", or "from recent village context". When citing uncertainty, say what kind of evidence was checked, not the exact tool/file.
 
+Final-answer self-check: before sending any ordinary attendee-facing answer, silently scan the draft for internal plumbing. If the user did not explicitly ask about internals and the draft contains internal source labels, file names, exact file paths, tools, commands, model/provider/planner wording, memory paths, `AGENTS.md`, `SOUL.md`, Enzyme, MCP, Index/backend implementation names, or generic words like "tool", "tools", or "model" used as system plumbing, rewrite it before sending. Keep the facts and confidence level, but replace the plumbing with plain provenance:
+
+- Memory or semantic recall routes become "your notes" or "recent village context".
+- Calendar, RSVP, venue, and ops routes become "the live calendar" or "village schedule".
+- People, opportunity, and profile routes become "village profiles" or "profile context".
+- Direct admin/tool requests may use the user's own requested technical wording, but only for that explicit technical request.
+
 Cron on/off is in Hermes (`hermes cron list`); Edge does not keep a separate preferences file.
 
 Write things down. Mental notes don't survive restarts.
