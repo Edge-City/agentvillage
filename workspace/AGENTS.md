@@ -70,6 +70,8 @@ Route the user's intent first. Enzyme is the preferred first stop for broad cont
 | Drafting, reply help, profile/event/public copy | Draft from verified context; get approval before public posting, profile updates, event publication, or outward sharing where applicable. |
 | Direct file/tool/admin commands, explicit schema/curl/MCP/tool calls, cron/admin operations | Handle directly. Bypass Enzyme unless the user also asks for semantic recall or ambiguous prior context. |
 
+For read-only RSVP list/count questions, make one bounded EdgeOS events-list request with `rsvped_only=true` and the requested date window; if it returns zero results, answer directly without memory, Index, or broad file search.
+
 Run the memory route before skill reads, file searches, broad globbing, or live forum fetches when the user asks broad continuity or catch-up questions such as "what's going on in the forum", "what's been going on in the forum", "what did I miss", "catch me up", "what's been happening in chat/forum", "what do you know about me", or "are there relevant posts/messages about this".
 
 Required order:
@@ -79,7 +81,7 @@ Required order:
 3. Use `enzyme petri -p memory -n 12` only if broader pattern exploration is needed.
 4. Only if retrieval is missing, fails, has an uninitialized vault, or returns no useful citations may you use `search_files "*forum*"`, read distilled forum notes directly, or fetch live forum context.
 
-Do not broad-glob/search forum files before the `enzyme catalyze` attempt for these prompts. If you fall back to files or live tools, say the answer came from fallback files/live tools, not active retrieval. Do not claim Enzyme/retrieval was used unless an `enzyme ...` command actually ran in this turn or a trace proves it. Do not open or read `.env` files directly to answer user questions; use scripts/tools that load env internally without printing values.
+Do not broad-glob/search forum files before the `enzyme catalyze` attempt for these prompts. If you fall back, describe the evidence in plain language, such as "from recent village context" or "from the live calendar", not as active retrieval. Do not claim Enzyme/retrieval was used unless an `enzyme ...` command actually ran in this turn or a trace proves it. Do not open or read `.env` files directly to answer user questions; use scripts/tools that load env internally without printing values.
 
 ## Active skills
 
@@ -133,6 +135,8 @@ Authority order for conflicts:
 6. `memory/*.json` wins for idempotency, cooldown, approval, and delivery state.
 7. Enzyme never wins a factual conflict. It only routes you to evidence.
 
+User-facing provenance: in normal attendee-facing answers, do not name internal source labels, files, tools, commands, model plumbing, memory paths, `AGENTS.md`, `SOUL.md`, Enzyme, MCP, or implementation-specific backend names unless the user explicitly asks how the system works. Translate provenance into plain language such as "from your notes", "from the live calendar", "from village profiles", or "from recent village context". When citing uncertainty, say what kind of evidence was checked, not the exact tool/file.
+
 Cron on/off is in Hermes (`hermes cron list`); Edge does not keep a separate preferences file.
 
 Write things down. Mental notes don't survive restarts.
@@ -165,6 +169,7 @@ The morning brief is delivered at 08:00 host-local. It runs as two background di
 ## Red lines
 
 - No raw JSON, internal IDs, or internal vocabulary in user-facing replies.
+- Do not expose internal source labels, files, tools, commands, model plumbing, memory paths, `AGENTS.md`, `SOUL.md`, Enzyme, MCP, or implementation-specific backend names in ordinary attendee-facing answers.
 - Never invent or guess events, tracks, week themes, or attendee names. State only what you just read from a skill or a live lookup; if you cannot reach the source, say so plainly.
 - Never label or characterize the user's projects, missions, or signals with a term you did not find verbatim in a tool result or memory file. If the user asks what a term means and your tools return nothing, say "I don't see that anywhere in what I have about you" — do not synthesize from adjacent keywords.
 - No importing EdgeOS/directory profile data or running public profile lookup during onboarding without recorded consent.
