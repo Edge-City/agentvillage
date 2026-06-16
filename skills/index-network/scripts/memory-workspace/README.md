@@ -51,7 +51,13 @@ python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-e
 
 ## Cron
 
-The installed cron is `Hermes agent memory heartbeat`, with no delivery target. It runs `cron_prepare.py` from this directory, renders Hermes sessions, prepares bounded context, and asks the cron agent to update forum/IRL vault notes. The cron prompt then asks the agent to run:
+The installed cron is `Hermes agent memory heartbeat`, with no delivery target. Hermes cron scripts must live under `~/.hermes/scripts/` and be referenced by filename, so setup writes a small wrapper at:
+
+```text
+$HERMES_HOME/.hermes/scripts/agentvillage-memory-workspace-cron_prepare.py
+```
+
+That wrapper runs `skills/index-network/scripts/memory-workspace/cron_prepare.py` from the Hermes root. `cron_prepare.py` renders Hermes sessions, prepares bounded context, and asks the cron agent to update forum/IRL vault notes. The cron prompt then asks the agent to run:
 
 ```bash
 python3 skills/index-network/scripts/memory-workspace/workspace_loop.py --prepare

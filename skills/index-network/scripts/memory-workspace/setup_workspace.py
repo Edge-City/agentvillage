@@ -17,6 +17,7 @@ ENZYME_BLOCK_BEGIN = "# BEGIN agentvillage-memory-workspace"
 ENZYME_BLOCK_END = "# END agentvillage-memory-workspace"
 DEFAULT_CRON_NAME = "Hermes agent memory heartbeat"
 DEFAULT_CRON_SCHEDULE = "0 2 * * *"
+DEFAULT_CRON_SCRIPT_NAME = "agentvillage-memory-workspace-cron_prepare.py"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_OPENROUTER_MODEL = "google/gemini-3-flash-preview"
 OFFICIAL_ENZYME_INSTALL = "curl -fsSL https://enzyme.garden/install.sh | bash"
@@ -243,21 +244,45 @@ def cron_prompt() -> str:
     )
 
 
-def json_contains_cron_name(value: object, name: str) -> bool:
+def json_cron_jobs_named(value: object, name: str) -> list[dict]:
+    jobs: list[dict] = []
     if isinstance(value, dict):
         if value.get("name") == name:
-            return True
-        return any(json_contains_cron_name(child, name) for child in value.values())
+            jobs.append(value)
+        for child in value.values():
+            jobs.extend(json_cron_jobs_named(child, name))
     if isinstance(value, list):
-        return any(json_contains_cron_name(child, name) for child in value)
-    return False
+        for child in value:
+            jobs.extend(json_cron_jobs_named(child, name))
+    return jobs
 
 
-def cron_exists(name: str, hermes_bin: str) -> bool:
+def cron_job_uses_script(job: dict, script_name: str) -> bool:
+    for key in ["script", "scriptPath", "script_path"]:
+        value = job.get(key)
+        if isinstance(value, str) and Path(value).name == script_name:
+            return True
+    return script_name in json.dumps(job, sort_keys=True)
+
+
+def remove_cron_job(job: dict, hermes_bin: str) -> bool:
+    job_id = str(job.get("id") or "").strip()
+    if not job_id:
+        return False
+    result = subprocess.run([hermes_bin, "cron", "remove", job_id], text=True, capture_output=True)
+    if result.returncode != 0:
+        return False
+    return True
+
+
+def cron_exists(name: str, hermes_bin: str, script_name: str | None = None) -> bool:
     json_result = subprocess.run([hermes_bin, "cron", "list", "--all", "--json"], text=True, capture_output=True)
     if json_result.returncode == 0 and json_result.stdout.strip():
         try:
-            return json_contains_cron_name(json.loads(json_result.stdout), name)
+            jobs = json_cron_jobs_named(json.loads(json_result.stdout), name)
+            if script_name is None:
+                return bool(jobs)
+            return any(cron_job_uses_script(job, script_name) for job in jobs)
         except json.JSONDecodeError:
             pass
 
@@ -267,10 +292,56 @@ def cron_exists(name: str, hermes_bin: str) -> bool:
     return bool(re.search(rf"(?m)^\s*Name:\s*{re.escape(name)}\s*$", result.stdout))
 
 
+def cron_prepare_script(root: Path) -> Path:
+    return root / "skills" / "index-network" / "scripts" / "memory-workspace" / "cron_prepare.py"
+
+
+def write_cron_wrapper(root: Path, script: Path, script_name: str = DEFAULT_CRON_SCRIPT_NAME) -> Path:
+    scripts_dir = root / ".hermes" / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    wrapper = scripts_dir / script_name
+    wrapper.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env python3",
+                "from pathlib import Path",
+                "import os",
+                "import subprocess",
+                "import sys",
+                "",
+                f'DEFAULT_ROOT = Path({str(root)!r})',
+                "root = Path(os.environ.get('HERMES_HOME') or DEFAULT_ROOT).expanduser().resolve()",
+                "os.chdir(root)",
+                f"script = root / {str(script.relative_to(root))!r}",
+                "raise SystemExit(subprocess.run(['python3', str(script)] + sys.argv[1:]).returncode)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    return wrapper
+
+
+def remove_stale_crons(name: str, hermes_bin: str, script_name: str) -> list[str]:
+    json_result = subprocess.run([hermes_bin, "cron", "list", "--all", "--json"], text=True, capture_output=True)
+    if json_result.returncode != 0 or not json_result.stdout.strip():
+        return []
+    try:
+        jobs = json_cron_jobs_named(json.loads(json_result.stdout), name)
+    except json.JSONDecodeError:
+        return []
+    removed: list[str] = []
+    for job in jobs:
+        if cron_job_uses_script(job, script_name):
+            continue
+        if remove_cron_job(job, hermes_bin):
+            removed.append(str(job.get("id") or "unknown"))
+    return removed
+
+
 def install_cron(root: Path, schedule: str, name: str, hermes_bin: str) -> dict:
-    if cron_exists(name, hermes_bin):
-        return {"installed": False, "reason": "already-exists", "name": name, "schedule": schedule}
-    script = root / "skills" / "index-network" / "scripts" / "memory-workspace" / "cron_prepare.py"
+    script = cron_prepare_script(root)
     if not script.exists():
         raise SystemExit(
             {
@@ -279,6 +350,10 @@ def install_cron(root: Path, schedule: str, name: str, hermes_bin: str) -> dict:
                 "detail": "Copy AgentVillage skills into the target Hermes root before creating the cron, then rerun setup from that root or pass --root.",
             }
         )
+    wrapper = write_cron_wrapper(root, script)
+    if cron_exists(name, hermes_bin, wrapper.name):
+        return {"installed": False, "reason": "already-exists", "name": name, "schedule": schedule, "script": wrapper.name}
+    removed_stale = remove_stale_crons(name, hermes_bin, wrapper.name)
     args = [
         hermes_bin,
         "cron",
@@ -288,7 +363,7 @@ def install_cron(root: Path, schedule: str, name: str, hermes_bin: str) -> dict:
         "--name",
         name,
         "--script",
-        str(script),
+        wrapper.name,
         "--workdir",
         str(root),
     ]
@@ -299,7 +374,7 @@ def install_cron(root: Path, schedule: str, name: str, hermes_bin: str) -> dict:
         if result.stderr.strip():
             print(result.stderr.strip(), file=sys.stderr)
         raise SystemExit(result.returncode)
-    if not cron_exists(name, hermes_bin):
+    if not cron_exists(name, hermes_bin, wrapper.name):
         raise SystemExit(
             {
                 "ok": False,
@@ -307,7 +382,7 @@ def install_cron(root: Path, schedule: str, name: str, hermes_bin: str) -> dict:
                 "detail": "Hermes accepted the cron create command, but `hermes cron list --all` did not show the job. Confirm HERMES_HOME/HERMES_BIN point at the target Hermes instance and create the cron there.",
             }
         )
-    return {"installed": True, "name": name, "schedule": schedule}
+    return {"installed": True, "name": name, "schedule": schedule, "script": wrapper.name, "removedStale": removed_stale}
 
 
 def main() -> None:
