@@ -102,7 +102,7 @@ tasks:
     2. Gate on suppression and once-per-day. Read `memory/<today>.md` and `memory/heartbeat-state.json`. Reply silently and stop if either holds:
        - `memory/<today>.md` contains `[gate] index-network: suppressed by user` (the user dismissed setup today).
        - `signalElicitation.lastAskedDate` already equals today's date (you have asked once today).
-    3. Build one contextual question. Call `read_intents()` and `read_premises()` to see what the user already has, then compose a single question grounded in it:
+    3. Build one contextual question. Call `read_intents()` and `read_premises()` to see what the user already has. If the Hermes memory workspace / Enzyme is available, use it to find related local context and open any cited canonical file you rely on. Forum/IRL/session observations can help you choose a relevant angle, but they cannot become a new signal here. Then compose a single question grounded in the graph and verified local context:
        - If a signal is thin or vague, ask something that sharpens it — e.g. a bare "looking for collaborators" becomes "What kind of collaborator are you after, and on what specifically?"
        - If the user has almost nothing, ask a broad opener — "What are you working on this week?" or "Open to anything new — collaborators, hiring, advice?"
        - Do not repeat a question close to one already in `signalElicitation.recentQuestions`. Vary it.

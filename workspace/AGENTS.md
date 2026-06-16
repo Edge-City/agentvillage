@@ -65,6 +65,7 @@ The `skills/` directory holds per-backend procedural knowledge. Today's active s
 - **`edgeos`** (`skills/edgeos/SKILL.md`) — EdgeOS API: live events, RSVPs, venues, attendee directory, and the user's own profile. (No wiki or newsletter content — that lives in `edge-esmeralda`.) 
 - **`edge-esmeralda`** (`skills/edge-esmeralda/SKILL.md`) — Popup constants, directory semantics, curated wiki/website/newsletter.  Supplies community-knowledge answers.
 - **`geo-esmeralda`** (`skills/geo-esmeralda/SKILL.md`) — Geo knowledge graph: community-created content, relations, ontology, attendee-authored writes, and raw time-windowed history of the main Edge Esmeralda 2026 Telegram group (the village-wide chat).  read when the user asks what the village is discussing, what's happening in the chat, what they missed, "catch me up," what people are talking about, or wants a chat summary.
+- **`hermes-agent-memory-workspace`** (`skills/hermes-agent-memory-workspace/SKILL.md`) — local Hermes memory vault and Enzyme read layer. Use it for broad private-memory recall, source-grounded memory search, forum/IRL/session distillation, and memory-to-Index candidate generation. Enzyme is an internal read gateway only; do not mention its mechanics to the user unless they ask about memory internals.
 
 When a future skill ships, list it here with its trigger conditions.
 
@@ -76,6 +77,23 @@ Use runtime startup context first. Do not re-read `AGENTS.md` or `USER.md` unles
 
 - **Daily notes:** `memory/YYYY-MM-DD.md` — raw log.
 - **Long-term:** `MEMORY.md` — curated memories. **Main session only.** Not in group sessions.
+- **User notebook:** `USER.md` — direct user-authored local context and preferences.
+- **Hermes memory vault:** `agent-memory-vault/` — typed local sources:
+  - `hermes/sessions/` is transcript-shaped provenance. Preserve role, timestamp, order, and source context; do not treat it as interpretation by itself.
+  - `forum/` and `irl/` are agent-written observations from forum, calendar, people, and event context. They are useful for ranking, copy, and questions, but they are not enough on their own to create durable Index records.
+- **Operational state:** `memory/*.json` — gates, dedup, delivery, and scratch state. It is authoritative for workflow state, not semantic truth.
+
+For broad memory recall or pattern finding, use Enzyme through the Hermes memory workspace when it is available. Treat Enzyme as the preferred memory read gateway over the typed sources above: it can route you to relevant evidence, but it is not canonical truth. Before writing memory, creating Index premises/signals, staging nudges, or messaging the user based on memory, open or verify the cited canonical file or live tool result.
+
+Authority order for conflicts:
+
+1. The user's current message wins for immediate intent, correction, consent, and refusal.
+2. Live EdgeOS wins for event, time, RSVP, venue, and attendee facts.
+3. Live Index wins for onboarding state, graph records, opportunities, statuses, and every action/profile URL.
+4. `USER.md` and `MEMORY.md` win over daily/session/forum/IRL observations for local private memory unless a newer user correction exists.
+5. Daily notes win for same-day gates and recent suppression traces.
+6. `memory/*.json` wins for idempotency, cooldown, approval, and delivery state.
+7. Enzyme never wins a factual conflict. It only routes you to evidence.
 
 Cron on/off is in Hermes (`hermes cron list`); Edge does not keep a separate preferences file.
 

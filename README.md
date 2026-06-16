@@ -30,6 +30,7 @@ See the project hub for the full diagram and decisions.
   - `skills/edgeos/` — backend-generic EdgeOS API recipes (events, RSVPs, venues, attendee directory, own profile). Reads `EDGEOS_BEARER_TOKEN` and `EDGEOS_API_KEY` from env; popup id is supplied by the active operator skill.
   - `skills/edge-esmeralda/` — Edge Esmeralda 2026 popup knowledge: popup constants (popup id, week dates, themes), attendee field semantics, the curated wiki/website/newsletter references (vendored from `Edge-City/agentvillage-skills`; refreshed by upstream CI every 15 min), and the onboarding pointer for obtaining EdgeOS tokens.
   - `skills/geo-esmeralda/` — Geo knowledge graph recipes and write guidance for attendee-authored content, relations, ontology, and media.
+  - `skills/hermes-agent-memory-workspace/` — Hermes memory vault setup, session rendering, forum/IRL distillation helpers, and Enzyme read-layer wiring.
 - `install/` — bootstrap scripts for plugging AgentVillage into a runtime
 
 ## Getting an agent connected
@@ -250,7 +251,8 @@ The installer:
 5. Copies the workspace markdown bundle into `~/.openclaw/workspace/`. `USER.md` is preserved on re-install (it holds the lived notes the active skill's bootstrap ritual populated for you); pass `--wipe-user` to overwrite `USER.md` and delete the agent-curated `MEMORY.md`, OpenClaw's `workspace-state.json` first-run marker, and the local onboarding/welcome/cron-preference markers under `memory/` so the next session re-onboards from scratch.
 6. Copies backend skill bundles from `skills/` into `~/.openclaw/workspace/skills/` so OpenClaw registers them as workspace skills.
 7. Installs the Index cron jobs: a memory signal sync (`0 1 * * *`), a prepare pass (`0 2 * * *`) that composes the morning brief and stages it as an editable Kanban task, and a send pass (`0 8 * * *`) that delivers the staged brief. (The 30-minute `Edge — heartbeat` cron was retired — see the note under "Overriding the Index cron times" — and is removed from existing tenants on update.) The prepare pass stages each brief as a **blocked** Kanban task; the send pass delivers it only after an operator approves it by unblocking that task (`hermes kanban unblock <id>` or the board's unblock control), so accidental delivery is prevented without pausing the cron. The end user can't change the schedule from chat, but the installer can override the cron times via `--digest-signals-cron` / `--digest-prepare-cron` / `--digest-send-cron` (or `DIGEST_SIGNALS_CRON` / `DIGEST_PREPARE_CRON` / `DIGEST_SEND_CRON`) — see "Overriding the Index cron times" above.
-8. Restarts the gateway so all config changes take effect.
+8. Sets up the Hermes memory workspace under `$HERMES_HOME`: creates the typed `agent-memory-vault/`, writes Enzyme config/env references without secrets, and installs the memory heartbeat cron unless `--skip-crons` is passed. It does not install Enzyme, run `enzyme init`, run `enzyme refresh`, or print provider secrets during normal install.
+9. Restarts the gateway so all config changes take effect.
 
 Send any message in your chat to bring AgentVillage online. AgentVillage has two independent setup gates with different triggers:
 
@@ -281,7 +283,7 @@ bun install/reset.ts --wipe-user
 
 ## How it runs
 
-Time-sensitive and background prompts run as **Hermes/OpenClaw cron jobs**. The morning digest prepare/send prompts and the daily memory signal sync run at their own daily cron times. Cron has its own scheduler and runs isolated sessions, so each tick starts fresh from the workspace files. Cron jobs are installed by `install/install.ts` and restart with the gateway. Future per-backend skills can add their own cron prompts the same way.
+Time-sensitive and background prompts run as **Hermes/OpenClaw cron jobs**. The morning digest prepare/send prompts and the daily memory signal sync run at their own daily cron times. Cron has its own scheduler and runs isolated sessions, so each tick starts fresh from the workspace files. Cron jobs are installed by `install/install.ts` and restart with the gateway. The Hermes memory workspace also installs a silent `Hermes agent memory heartbeat` cron unless `--skip-crons` is passed. Future per-backend skills can add their own cron prompts the same way.
 
 > **Retired:** a 30-minute `Edge — heartbeat` cron used to run `skills/index-network/heartbeat.md` for accepted-opportunity notifications, freshness audits, and Telegram-handle reconciliation. It was removed because each tick loaded ~57k input tokens (full agent context + Index MCP tool surface) and, at 48 runs/day/tenant, drained the per-tenant OpenRouter key budgets fleet-wide (HTTP 402). `skills/index-network/heartbeat.md` is kept for reference only and is no longer scheduled. Latency-tolerant background work should be folded into the daily digest, an event-driven push, or a cheap deterministic (`--no-agent`) cron instead — see Edge-City/agentvillage#100.
 
@@ -300,6 +302,7 @@ Time-sensitive and background prompts run as **Hermes/OpenClaw cron jobs**. The 
 | `skills/index-network/SKILL.md` | Index Network skill bundle entry point. Registered with OpenClaw on install; gates on `mcp.servers.index`. Body points at the bundle's sibling reference files. |
 | `skills/edgeos/SKILL.md` | EdgeOS-API skill: events + attendee directory + curated wiki/website/newsletter references. Currently scoped to Edge Esmeralda 2026. Loaded by OpenClaw alongside index-network. Vendored from `Edge-City/agentvillage-skills`. |
 | `skills/geo-esmeralda/SKILL.md` | Geo knowledge graph skill: community content, relations, ontology, and attendee-authored writes through the Geo CLI package. |
+| `skills/hermes-agent-memory-workspace/SKILL.md` | Hermes memory vault and Enzyme read-layer setup. Enzyme is the preferred read gateway over typed canonical memory sources; canonical files/tools remain the source of truth. |
 
 ## Configuration guide
 

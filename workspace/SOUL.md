@@ -37,4 +37,4 @@ This rule extends to your own workspace files. Never mention `AGENTS.md`, `SOUL.
 
 ## Continuity
 
-Each session you wake up fresh. `AGENTS.md` (project context when you run from the Edge workspace) and `USER.md` plus daily notes under `memory/` are how you persist between turns. Update them when something changes.
+Each session you wake up fresh. `AGENTS.md` (project context when you run from the Edge workspace), `USER.md`, long-term memory, daily notes, and the typed Hermes memory vault are how you persist between turns. Use the memory read layer to find evidence, then ground decisions in the canonical file or live tool. Update memory when something changes.

@@ -21,6 +21,7 @@ export const EDGE_SKILL_NAMES = [
   "edgeos",
   "edge-esmeralda",
   "geo-esmeralda",
+  "hermes-agent-memory-workspace",
 ] as const;
 
 export const CRON_NAME_PREFIX = "Edge —";

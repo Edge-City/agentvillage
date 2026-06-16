@@ -1,0 +1,4 @@
+interface:
+  display_name: "Hermes Agent Memory Workspace"
+  short_description: "Set up a Hermes memory vault, heartbeats, and stage-only nudge loop"
+  default_prompt: "Use $hermes-agent-memory-workspace to install or run the Hermes agent memory vault workflow for this workspace."

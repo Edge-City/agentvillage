@@ -4,14 +4,15 @@ Agent skills for **Edge Esmeralda 2026** (May 30 – Jun 27, Healdsburg, CA). Sh
 
 ## What you get
 
-Four skill bundles that give your agent Edge Esmeralda knowledge and live API access:
+Five skill bundles that give your agent Edge Esmeralda knowledge, live API access, and local memory retrieval:
 
 - **edge-esmeralda** — popup constants (popup id, week dates, themes), attendee directory field semantics, curated wiki/website/newsletter knowledge base, and the onboarding pointer for obtaining EdgeOS tokens.
 - **edgeos** — backend-generic EdgeOS API recipes: events, RSVPs, venues, attendee directory, and your own profile lookup.
 - **geo-esmeralda** — Geo knowledge graph access through the Geo CLI package: ontology, fixed graph tools, guarded native read-only queries, and attendee-authored content/photo creation.
+- **hermes-agent-memory-workspace** — Hermes memory vault setup, session rendering, forum/IRL distillation helpers, and Enzyme read-layer wiring.
 - **index-network** — Index Network discovery: onboarding ritual, opportunity surfacing, voice exemplars, cron prompts for welcome/digest flows, and heartbeat tasks.
 
-The skills cross-reference each other. `edge-esmeralda` supplies the popup id that `edgeos` recipes need. `geo-esmeralda` handles Geo knowledge graph-backed knowledge and attendee-authored writes, and `index-network` handles discovery and intent-based matching. Install all four together.
+The skills cross-reference each other. `edge-esmeralda` supplies the popup id that `edgeos` recipes need. `geo-esmeralda` handles Geo knowledge graph-backed knowledge and attendee-authored writes, `index-network` handles discovery and intent-based matching, and `hermes-agent-memory-workspace` provides the local memory read layer. Install all five together for Hermes tenants.
 
 ## Host-specific silence
 
@@ -37,6 +38,7 @@ All hosts read credentials from environment variables. Set these before installi
 | `INDEX_API_KEY`       | Index Network signup (BYOA page or [agent-ee26.edgecity.live](https://agent-ee26.edgecity.live/)) | Yes      |
 | `EDGEOS_BEARER_TOKEN` | EdgeOS email-OTP onboarding flow                                                                     | Yes for Geo knowledge graph access and content writes; also used for EdgeOS directory/profile |
 | `EDGEOS_API_KEY`      | EdgeOS email-OTP onboarding flow (`eos_live_...` key)                                                | Optional; needed for EdgeOS events, RSVPs, venues |
+| `OPENROUTER_API_KEY` or `OPENAI_API_KEY` | Optional Enzyme provider key family | Optional; only needed when running `enzyme init` / `enzyme refresh` with `--use-env-llm` |
 
 
 `INDEX_API_KEY` is required for the Index Network MCP server. `EDGEOS_BEARER_TOKEN` is required for `geo-esmeralda` auth, graph reads, and content writes. `EDGEOS_API_KEY` is only needed for EdgeOS event, RSVP, and venue recipes.
@@ -72,6 +74,7 @@ OpenClaw persists credentials in `~/.openclaw/openclaw.json` — no shell profil
 hermes skills install Edge-City/agentvillage/skills/edge-esmeralda --force
 hermes skills install Edge-City/agentvillage/skills/edgeos --force
 hermes skills install Edge-City/agentvillage/skills/geo-esmeralda --force
+hermes skills install Edge-City/agentvillage/skills/hermes-agent-memory-workspace --force
 hermes skills install Edge-City/agentvillage/skills/index-network --force
 ```
 
@@ -107,6 +110,12 @@ bun install/install.ts --index-api-key <KEY>
 ```
 
 Installs flat under `~/.hermes/` (SOUL.md, AGENTS.md, skills/, `terminal.cwd`) — Hermes defaults, no subfolders.
+
+The installer also sets up `agent-memory-vault/`, writes `memory/enzyme-env.sh` with references only, and installs the memory heartbeat cron unless `--skip-crons` is passed. Normal install does not install Enzyme or run `enzyme init` / `enzyme refresh`. To validate provider env without printing secrets:
+
+```bash
+python3 skills/hermes-agent-memory-workspace/scripts/setup_workspace.py --check-enzyme-env
+```
 
 ### Claude Desktop
 
