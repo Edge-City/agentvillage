@@ -412,7 +412,7 @@ def main() -> None:
         "sourcePath": source_detail,
         "sourceError": source_error,
         "sourceExcerpt": body[: args.source_excerpt_chars] if body else "",
-        "targetPath": f"agent-memory-vault/forum/{args.date}.md",
+        "targetPath": f"memory/forum/{args.date}.md",
         "instructions": [
             "Focus on how this agent's forum contributions interacted with other perspectives.",
             "Include themes, tensions, reframes, and any grounded social affordance.",

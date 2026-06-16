@@ -109,7 +109,7 @@ bun install/install.ts --index-api-key <KEY>
 
 Installs flat under `~/.hermes/` (SOUL.md, AGENTS.md, skills/, `terminal.cwd`) — Hermes defaults, no subfolders.
 
-The installer also sets up `agent-memory-vault/`, writes `memory/enzyme-env.sh` with references only, and installs the memory heartbeat cron unless `--skip-crons` is passed. Normal install does not install Enzyme, run `enzyme init` / `enzyme refresh`, or run `enzyme install hermes`. AgentVillage owns Hermes runtime memory instructions in `workspace/AGENTS.md`; Enzyme init/refresh only indexes the vault.
+The installer also sets up `memory/`, writes `memory/enzyme-env.sh` with references only, migrates legacy `agent-memory-vault/` content when safe, and installs the memory heartbeat cron unless `--skip-crons` is passed. Normal install does not install Enzyme, run `enzyme init` / `enzyme refresh`, or run `enzyme install hermes`. AgentVillage owns Hermes runtime memory instructions in `workspace/AGENTS.md`; Enzyme init/refresh only indexes memory.
 
 To validate provider env without printing secrets:
 
@@ -127,8 +127,8 @@ python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-e
 Hosted Hermes may have Enzyme at `$HERMES_HOME/.local/bin/enzyme` or `/opt/data/.local/bin/enzyme`. AgentVillage install adds those locations to Hermes terminal PATH so runtime agents can call `enzyme` directly:
 
 ```bash
-enzyme catalyze -p agent-memory-vault -n 8 "what's going on in the forum"
-enzyme petri -p agent-memory-vault -n 12
+enzyme catalyze -p memory -n 8 "what's going on in the forum"
+enzyme petri -p memory -n 12
 ```
 
 Broad forum/chat catch-up validation should show direct `enzyme catalyze` before any broad forum glob/file fallback. After retrieval, verify cited files or live tools. Treat retrieval as evidence routing, not canonical truth, and do not claim retrieval was used when it was not run. Operators can source `memory/enzyme-env.sh` in manual shells to add the same non-secret PATH entries.

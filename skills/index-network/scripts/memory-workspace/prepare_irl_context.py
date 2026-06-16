@@ -180,7 +180,7 @@ def main() -> None:
         "calendarDiagnostics": edgeos_meta,
         "people": people,
         "recentSessionExcerpt": session_text.strip()[:1800],
-        "targetPath": f"agent-memory-vault/irl/{args.date}.md",
+        "targetPath": f"memory/irl/{args.date}.md",
         "instructions": [
             "Capture people, events, opportunities, and uncertainty from Telegram/calendar context.",
             "Preserve uncertainty plainly: attended, maybe attended, RSVP'd, mentioned, proposed, or unclear.",

@@ -5,7 +5,7 @@ AgentVillage-managed Hermes memory infrastructure. This is not a standalone Herm
 It creates:
 
 ```text
-agent-memory-vault/
+memory/
   hermes/sessions/YYYY-MM-DD/*.md
   forum/YYYY-MM-DD.md
   irl/YYYY-MM-DD.md
@@ -25,7 +25,7 @@ python3 skills/index-network/scripts/memory-workspace/setup_workspace.py \
 
 If `--skip-crons` is passed to the AgentVillage installer, `--install-cron` is omitted. Normal install does not install Enzyme, run `enzyme init`, run `enzyme refresh`, run `enzyme install hermes`, or print provider secrets.
 
-AgentVillage writes Hermes runtime instructions manually in `workspace/AGENTS.md`. This setup script installs the vault folders, managed Enzyme vault config, non-secret env references, and heartbeat cron. Enzyme `init`/`refresh` only initialize or update the vault index; they do not rewrite AgentVillage runtime instructions.
+AgentVillage writes Hermes runtime instructions manually in `workspace/AGENTS.md`. This setup script installs the memory folders, managed Enzyme config, non-secret env references, and heartbeat cron. Existing legacy `agent-memory-vault/` installs are migrated into `memory/` during setup when safe. Enzyme `init`/`refresh` only initialize or update the memory index; they do not rewrite AgentVillage runtime instructions.
 
 ## Enzyme Env
 
@@ -63,11 +63,11 @@ python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-e
 Use direct Enzyme commands when runtime/tooling exposes shell access:
 
 ```bash
-enzyme catalyze -p agent-memory-vault -n 8 "what's going on in the forum"
-enzyme petri -p agent-memory-vault -n 12
+enzyme catalyze -p memory -n 8 "what's going on in the forum"
+enzyme petri -p memory -n 12
 ```
 
-For broad forum/chat catch-up validation, trace order should show direct `enzyme catalyze` before any broad forum glob/file fallback. After retrieval, open/verify cited paths or live tools before answering. Agents can use Enzyme directly only when their runtime/tooling exposes it. Otherwise, read the materialized `agent-memory-vault/forum/`, `agent-memory-vault/irl/`, `USER.md`, `MEMORY.md`, and live canonical tools/files. Do not overclaim: if retrieval was not run, say the answer comes from fallback distilled notes/live files. Do not run `enzyme install hermes` as part of normal rollout; AgentVillage owns the runtime instruction surface in `workspace/AGENTS.md`.
+For broad forum/chat catch-up validation, trace order should show direct `enzyme catalyze` before any broad forum glob/file fallback. After retrieval, open/verify cited paths or live tools before answering. Agents can use Enzyme directly only when their runtime/tooling exposes it. Otherwise, read `memory/forum/`, `memory/irl/`, `USER.md`, `MEMORY.md`, and live canonical tools/files. Do not overclaim: if retrieval was not run, say the answer comes from fallback distilled notes/live files. Do not run `enzyme install hermes` as part of normal rollout; AgentVillage owns the runtime instruction surface in `workspace/AGENTS.md`.
 
 ## Secret Scan
 

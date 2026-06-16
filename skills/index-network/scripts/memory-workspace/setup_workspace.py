@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from common import context_path, default_state, state_path, vault_root, write_json
+from common import context_path, default_state, legacy_vault_root, state_path, vault_root, write_json
 from secret_redaction import scan_files
 
 
@@ -53,8 +53,8 @@ def managed_enzyme_block(vault: Path) -> str:
     return f"{ENZYME_BLOCK_BEGIN}\n{enzyme_example(vault).rstrip()}\n{ENZYME_BLOCK_END}\n"
 
 
-def remove_unmanaged_target_vault_table(config: str, vault: Path) -> str:
-    target_header = f'[vaults."{vault}"]'
+def remove_unmanaged_target_vault_tables(config: str, vaults: list[Path]) -> str:
+    target_headers = {f'[vaults."{vault}"]' for vault in vaults}
     table_header = re.compile(r"^\s*\[[^\]]+\]\s*(?:#.*)?$")
     lines = config.splitlines()
     kept: list[str] = []
@@ -65,27 +65,72 @@ def remove_unmanaged_target_vault_table(config: str, vault: Path) -> str:
                 skipping = False
             else:
                 continue
-        if not skipping and line.strip() == target_header:
+        if not skipping and line.strip() in target_headers:
             skipping = True
             continue
         kept.append(line)
     return "\n".join(kept).strip()
 
 
-def install_enzyme_config(vault: Path, config_path: Path) -> None:
+def install_enzyme_config(vault: Path, config_path: Path, stale_vaults: list[Path] | None = None) -> None:
     config_path.parent.mkdir(parents=True, exist_ok=True)
     existing = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
     block = managed_enzyme_block(vault)
+    cleanup_vaults = [vault] + list(stale_vaults or [])
     if ENZYME_BLOCK_BEGIN in existing and ENZYME_BLOCK_END in existing:
         before, rest = existing.split(ENZYME_BLOCK_BEGIN, 1)
         _, after = rest.split(ENZYME_BLOCK_END, 1)
-        before = remove_unmanaged_target_vault_table(before, vault)
-        after = remove_unmanaged_target_vault_table(after, vault)
+        before = remove_unmanaged_target_vault_tables(before, cleanup_vaults)
+        after = remove_unmanaged_target_vault_tables(after, cleanup_vaults)
         updated = before.rstrip() + "\n\n" + block + after.lstrip()
     else:
-        existing = remove_unmanaged_target_vault_table(existing, vault)
+        existing = remove_unmanaged_target_vault_tables(existing, cleanup_vaults)
         updated = existing.rstrip() + ("\n\n" if existing.strip() else "") + block
     config_path.write_text(updated.rstrip() + "\n", encoding="utf-8")
+
+
+def merge_tree(source: Path, target: Path) -> None:
+    if not source.exists():
+        return
+    if source.is_file():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.exists():
+            source.replace(target)
+        return
+    target.mkdir(parents=True, exist_ok=True)
+    for child in sorted(source.iterdir()):
+        dest = target / child.name
+        if child.is_dir():
+            merge_tree(child, dest)
+            try:
+                child.rmdir()
+            except OSError:
+                pass
+        elif not dest.exists():
+            child.replace(dest)
+
+
+def migrate_legacy_vault(root: Path) -> dict:
+    legacy = legacy_vault_root(root)
+    canonical = vault_root(root)
+    if not legacy.exists() or legacy == canonical:
+        return {"migrated": False, "legacy": str(legacy), "canonical": str(canonical)}
+    moved: list[str] = []
+    for name in ["forum", "irl", "hermes"]:
+        source = legacy / name
+        if source.exists():
+            merge_tree(source, canonical / name)
+            moved.append(name)
+            try:
+                source.rmdir()
+            except OSError:
+                pass
+    try:
+        legacy.rmdir()
+        removed = True
+    except OSError:
+        removed = False
+    return {"migrated": bool(moved), "moved": moved, "legacy": str(legacy), "canonical": str(canonical), "legacyRemoved": removed}
 
 
 def dotenv_files(root: Path) -> list[Path]:
@@ -260,11 +305,11 @@ def run_enzyme(vault: Path, action: str, enzyme_bin: str, root: Path, provider: 
 
 
 def scan_vault_secrets(root: Path, include_memory: bool) -> dict:
-    files = list(vault_root(root).rglob("*.md"))
+    files = set(vault_root(root).rglob("*.md"))
     if include_memory:
         memory = root / "memory"
         if memory.exists():
-            files.extend(path for path in memory.rglob("*") if path.is_file())
+            files.update(path for path in memory.rglob("*") if path.is_file())
     return scan_files(files)
 
 
@@ -272,7 +317,7 @@ def cron_prompt() -> str:
     return "\n".join(
         [
             "Use the injected Hermes agent memory heartbeat context.",
-            "Write or update `agent-memory-vault/forum/YYYY-MM-DD.md` and `agent-memory-vault/irl/YYYY-MM-DD.md`.",
+            "Write or update `memory/forum/YYYY-MM-DD.md` and `memory/irl/YYYY-MM-DD.md`.",
             "Keep the notes concise, grounded, and uncertainty-aware.",
             "Do not copy `memory/hermes-workspace-context.json` wholesale into the vault.",
             "After writing the notes, run `python3 skills/index-network/scripts/memory-workspace/workspace_loop.py --prepare`.",
@@ -440,7 +485,7 @@ def main() -> None:
         "--run-enzyme",
         choices=["none", "init", "refresh", "status"],
         default="none",
-        help="Run an Enzyme command against agent-memory-vault after setup",
+        help="Run an Enzyme command against memory after setup",
     )
     parser.add_argument("--use-env-llm", action="store_true", help="Pass --use-env-llm to Enzyme init/refresh intentionally")
     parser.add_argument("--install-cron", action="store_true", help="Install the default 2am Hermes heartbeat cron")
@@ -457,6 +502,9 @@ def main() -> None:
             args.enzyme_provider = "openrouter"
 
     vault = vault_root(root)
+    legacy_vault = legacy_vault_root(root)
+    migration_result = {"migrated": False, "legacy": str(legacy_vault), "canonical": str(vault)}
+
     folders = [
         vault / "hermes" / "sessions",
         vault / "forum",
@@ -501,6 +549,8 @@ def main() -> None:
             raise SystemExit(1)
         return
 
+    migration_result = migrate_legacy_vault(root)
+
     for folder in folders:
         folder.mkdir(parents=True, exist_ok=True)
 
@@ -512,7 +562,7 @@ def main() -> None:
     (vault / "enzyme-config.example.toml").write_text(enzyme_example(vault), encoding="utf-8")
     enzyme_config = Path(args.enzyme_config).expanduser().resolve()
     if args.install_enzyme_config:
-        install_enzyme_config(vault, enzyme_config)
+        install_enzyme_config(vault, enzyme_config, stale_vaults=[legacy_vault])
     enzyme_cli_result = None
     if args.install_enzyme_cli:
         enzyme_cli_result = install_enzyme_cli(args.enzyme_bin)
@@ -536,6 +586,7 @@ def main() -> None:
         "enzymeEnv": str(enzyme_env_path) if enzyme_env_path else None,
         "enzymeRun": enzyme_run_result,
         "cron": cron_result,
+        "legacyVaultMigration": migration_result,
     })
 
 

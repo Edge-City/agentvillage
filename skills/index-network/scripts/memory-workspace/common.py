@@ -13,6 +13,10 @@ def workspace_root() -> Path:
 
 
 def vault_root(root: Path | None = None) -> Path:
+    return memory_dir(root)
+
+
+def legacy_vault_root(root: Path | None = None) -> Path:
     return (root or workspace_root()) / "agent-memory-vault"
 
 

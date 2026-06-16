@@ -11,10 +11,10 @@ from secret_redaction import scan_files
 
 
 def discover_files(root: Path, include_memory: bool) -> list[Path]:
-    candidates = list(vault_root(root).rglob("*.md"))
+    candidates = set(vault_root(root).rglob("*.md"))
     if include_memory:
-        candidates.extend(path for path in memory_dir(root).rglob("*") if path.is_file())
-    return candidates
+        candidates.update(path for path in memory_dir(root).rglob("*") if path.is_file())
+    return sorted(candidates)
 
 
 def main() -> int:

@@ -63,9 +63,9 @@ Run this gate before skill reads, file searches, broad globbing, or live forum f
 
 Required order:
 
-1. If shell/CLI tooling is available, first run `enzyme catalyze -p agent-memory-vault -n 8 "<user prompt>"`.
+1. If shell/CLI tooling is available, first run `enzyme catalyze -p memory -n 8 "<user prompt>"`.
 2. Open and verify cited paths from retrieval before answering. `forum/` and `irl/` are agent-written observations, not user-authored truth.
-3. Use `enzyme petri -p agent-memory-vault -n 12` only if broader pattern exploration is needed.
+3. Use `enzyme petri -p memory -n 12` only if broader pattern exploration is needed.
 4. Only if retrieval is missing, fails, has an uninitialized vault, or returns no useful citations may you use `search_files "*forum*"`, read distilled forum notes directly, or fetch live forum context.
 
 Do not broad-glob/search forum files before the `enzyme catalyze` attempt for these prompts. If you fall back to files or live tools, say the answer came from fallback files/live tools, not active retrieval. Do not claim Enzyme/retrieval was used unless an `enzyme ...` command actually ran in this turn or a trace proves it. Do not open or read `.env` files directly to answer user questions; use scripts/tools that load env internally without printing values.
@@ -77,7 +77,7 @@ The `skills/` directory holds per-backend procedural knowledge. Today's active s
 - **`index-network`** (`skills/index-network/`) — Index Network protocol: profiles, signals, opportunities.  read when the user expresses interest in connecting, meeting people, finding others, or any social/matching intent.
 - **`edgeos`** (`skills/edgeos/SKILL.md`) — EdgeOS API: live events, RSVPs, venues, attendee directory, and the user's own profile. (No wiki or newsletter content — that lives in `edge-esmeralda`.) 
 - **`edge-esmeralda`** (`skills/edge-esmeralda/SKILL.md`) — Popup constants, directory semantics, curated wiki/website/newsletter.  Supplies community-knowledge answers.
-- **`geo-esmeralda`** (`skills/geo-esmeralda/SKILL.md`) — Geo knowledge graph: community-created content, relations, ontology, attendee-authored writes, and raw time-windowed history of the main Edge Esmeralda 2026 Telegram group (the village-wide chat).  read when the user asks what the village is discussing, what's happening in the chat, what they missed, "catch me up," what people are talking about, or wants a chat summary.
+- **`geo-esmeralda`** (`skills/geo-esmeralda/SKILL.md`) — Geo knowledge graph: community-created content, relations, ontology, attendee-authored writes, and raw time-windowed history of the main Edge Esmeralda 2026 Telegram group. Use it for live/raw chat verification or fallback after the Forum / Memory Catch-Up Gate, not as the first stop for generic "what did I miss" or "catch me up" prompts.
 
 When a future skill ships, list it here with its trigger conditions.
 
@@ -90,7 +90,7 @@ Use runtime startup context first. Do not re-read `AGENTS.md` or `USER.md` unles
 - **Daily notes:** `memory/YYYY-MM-DD.md` — raw log.
 - **Long-term:** `MEMORY.md` — curated memories. **Main session only.** Not in group sessions.
 - **User notebook:** `USER.md` — direct user-authored local context and preferences.
-- **Hermes memory vault:** `agent-memory-vault/` — typed local sources:
+- **Memory:** `memory/` — local notes and state:
   - `forum/` and `irl/` are agent-written observations from forum, calendar, people, and event context. Prefer these distilled notes for user-facing memory retrieval, ranking, copy, and questions, but they are not enough on their own to create durable Index records.
   - `hermes/sessions/` is transcript-shaped provenance/evidence. Preserve role, timestamp, order, and source context; do not treat it as interpretation by itself. Rendered validation/operator/debug sessions may be marked with `session_kind: operator_validation` or `session_kind: debug_validation`; ignore or down-rank them unless you are explicitly auditing workspace behavior.
 - **Operational state:** `memory/*.json` — gates, dedup, delivery, and scratch state. It is authoritative for workflow state, not semantic truth.
@@ -102,8 +102,8 @@ For broad forum/chat/memory catch-up prompts, follow the Forum / Memory Catch-Up
 When shell/CLI tooling is available, useful memory reads are:
 
 - Check index health with `python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-enzyme status`.
-- Targeted retrieval: `enzyme catalyze -p agent-memory-vault -n 8 "<query>"`.
-- Broad exploration: `enzyme petri -p agent-memory-vault -n 12`.
+- Targeted retrieval: `enzyme catalyze -p memory -n 8 "<query>"`.
+- Broad exploration: `enzyme petri -p memory -n 12`.
 - After local memory changes, refresh only when appropriate. If provider env is present, first use `python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --check-enzyme-env`, then `python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-enzyme refresh --use-env-llm`.
 
 Do not casually run `enzyme install hermes` or assume Enzyme rewrites these runtime instructions. AgentVillage owns this instruction surface in `AGENTS.md`; Enzyme init/refresh only prepares and updates the vault index.

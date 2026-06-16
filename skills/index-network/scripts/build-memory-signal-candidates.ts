@@ -77,6 +77,16 @@ function recentMarkdownFiles(dir: string, limit: number): string[] {
     .slice(0, limit);
 }
 
+function recentTopLevelMarkdownFiles(dir: string, limit: number): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((entry) => entry.endsWith(".md"))
+    .map((entry) => join(dir, entry))
+    .filter((path) => statSync(path).isFile())
+    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
+    .slice(0, limit);
+}
+
 function linesOfInterest(text: string): string[] {
   return text
     .split(/\n+/)
@@ -136,16 +146,16 @@ function main(): void {
   candidates.push(...candidatesFromFile(join(ROOT, "USER.md"), "user_notebook"));
   candidates.push(...candidatesFromFile(join(ROOT, "MEMORY.md"), "curated_memory"));
 
-  for (const file of recentMarkdownFiles(join(ROOT, "memory"), 7)) {
+  for (const file of recentTopLevelMarkdownFiles(join(ROOT, "memory"), 7)) {
     candidates.push(...candidatesFromFile(file, "daily_note"));
   }
-  for (const file of recentMarkdownFiles(join(ROOT, "agent-memory-vault", "hermes", "sessions"), 6)) {
+  for (const file of recentMarkdownFiles(join(ROOT, "memory", "hermes", "sessions"), 6)) {
     candidates.push(...candidatesFromFile(file, "session_provenance"));
   }
-  for (const file of recentMarkdownFiles(join(ROOT, "agent-memory-vault", "forum"), 6)) {
+  for (const file of recentMarkdownFiles(join(ROOT, "memory", "forum"), 6)) {
     candidates.push(...candidatesFromFile(file, "forum_observation"));
   }
-  for (const file of recentMarkdownFiles(join(ROOT, "agent-memory-vault", "irl"), 8)) {
+  for (const file of recentMarkdownFiles(join(ROOT, "memory", "irl"), 8)) {
     candidates.push(...candidatesFromFile(file, "irl_observation"));
   }
 
