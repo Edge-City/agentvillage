@@ -53,6 +53,25 @@ def managed_enzyme_block(vault: Path) -> str:
     return f"{ENZYME_BLOCK_BEGIN}\n{enzyme_example(vault).rstrip()}\n{ENZYME_BLOCK_END}\n"
 
 
+def remove_unmanaged_target_vault_table(config: str, vault: Path) -> str:
+    target_header = f'[vaults."{vault}"]'
+    table_header = re.compile(r"^\s*\[[^\]]+\]\s*(?:#.*)?$")
+    lines = config.splitlines()
+    kept: list[str] = []
+    skipping = False
+    for line in lines:
+        if skipping:
+            if table_header.match(line):
+                skipping = False
+            else:
+                continue
+        if not skipping and line.strip() == target_header:
+            skipping = True
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip()
+
+
 def install_enzyme_config(vault: Path, config_path: Path) -> None:
     config_path.parent.mkdir(parents=True, exist_ok=True)
     existing = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
@@ -60,8 +79,11 @@ def install_enzyme_config(vault: Path, config_path: Path) -> None:
     if ENZYME_BLOCK_BEGIN in existing and ENZYME_BLOCK_END in existing:
         before, rest = existing.split(ENZYME_BLOCK_BEGIN, 1)
         _, after = rest.split(ENZYME_BLOCK_END, 1)
+        before = remove_unmanaged_target_vault_table(before, vault)
+        after = remove_unmanaged_target_vault_table(after, vault)
         updated = before.rstrip() + "\n\n" + block + after.lstrip()
     else:
+        existing = remove_unmanaged_target_vault_table(existing, vault)
         updated = existing.rstrip() + ("\n\n" if existing.strip() else "") + block
     config_path.write_text(updated.rstrip() + "\n", encoding="utf-8")
 
