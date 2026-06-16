@@ -172,6 +172,7 @@ def write_enzyme_env(root: Path, provider: str) -> Path:
     lines = [
         "# Source this before running Enzyme manually for the Hermes memory vault.",
         "# This file stores variable references only; it does not store API secrets.",
+        f'export PATH="{root}/.local/bin:${{HERMES_HOME:-{root}}}/.local/bin:$HOME/.local/bin:/opt/data/.local/bin:$PATH"',
     ]
     if selected == "openai":
         lines.append('export OPENAI_API_KEY="${OPENAI_API_KEY:?OPENAI_API_KEY must be set before running Enzyme}"')

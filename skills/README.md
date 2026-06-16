@@ -124,7 +124,15 @@ python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-e
 python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-enzyme refresh --use-env-llm
 ```
 
-When the CLI is available, targeted retrieval uses `enzyme catalyze -p agent-memory-vault -n 8 "<query>"`; broader exploration uses `enzyme petri -p agent-memory-vault -n 12`. Treat both as evidence routing, not canonical truth.
+Hosted Hermes may have Enzyme at `$HERMES_HOME/.local/bin/enzyme` or `/opt/data/.local/bin/enzyme` even if it is not on PATH. Resolve it before retrieval:
+
+```bash
+ENZYME_BIN="$(command -v enzyme || true)"
+[ -z "$ENZYME_BIN" ] && [ -x "${HERMES_HOME:-/opt/data}/.local/bin/enzyme" ] && ENZYME_BIN="${HERMES_HOME:-/opt/data}/.local/bin/enzyme"
+[ -z "$ENZYME_BIN" ] && [ -x /opt/data/.local/bin/enzyme ] && ENZYME_BIN=/opt/data/.local/bin/enzyme
+```
+
+When the CLI is available, targeted retrieval uses `$ENZYME_BIN catalyze -p agent-memory-vault -n 8 "<query>"`; broader exploration uses `$ENZYME_BIN petri -p agent-memory-vault -n 12`. Broad forum/chat catch-up should use retrieval first when available, then verify cited files or live tools. Treat retrieval as evidence routing, not canonical truth, and do not claim retrieval was used when it was not run.
 
 To verify rendered vault output without printing secret values:
 
