@@ -92,7 +92,9 @@ python3 skills/index-network/scripts/memory-workspace/render_vault_sessions.py \
 
 ## Retrieval Policy
 
-`forum/` and `irl/` are the preferred folders for user-facing memory retrieval because they are distilled observations. `hermes/sessions/` remains indexed as transcript provenance/evidence, but rendered sessions carry `source_surface`, `session_kind`, and `retrieval_weight` frontmatter. Down-rank or ignore `session_kind: operator_validation` and `session_kind: debug_validation` unless explicitly auditing historical validation/debug work.
+`forum/` and `irl/` are agent-written distilled observations. They are useful for memory retrieval, ranking, copy, and follow-up questions, but they are not user-authored statements and must not be treated as direct evidence that the user said, wants, or believes something. Before creating durable Index records or saying "the user said/wants", verify the claim against `USER.md`, `MEMORY.md`, a direct user transcript, or another canonical live source.
+
+`hermes/sessions/` remains indexed as transcript provenance/evidence, but rendered sessions carry `source_surface`, `session_kind`, and `retrieval_weight` frontmatter. Down-rank or ignore `session_kind: operator_validation` and `session_kind: debug_validation` unless explicitly auditing historical validation/debug work.
 
 ## Cron
 
