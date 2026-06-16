@@ -57,6 +57,19 @@ The more you tell me, the sharper I get.
 
 ---
 
+## Forum / Memory Catch-Up Gate
+
+Run this gate before skill reads, file searches, broad globbing, or live forum fetches when the user asks broad catch-up questions such as "what's going on in the forum", "what's been going on in the forum", "what did I miss", "catch me up", or "what's been happening in chat/forum".
+
+Required order:
+
+1. If shell/CLI tooling is available, first run `enzyme catalyze -p agent-memory-vault -n 8 "<user prompt>"`.
+2. Open and verify cited paths from retrieval before answering. `forum/` and `irl/` are agent-written observations, not user-authored truth.
+3. Use `enzyme petri -p agent-memory-vault -n 12` only if broader pattern exploration is needed.
+4. Only if retrieval is missing, fails, has an uninitialized vault, or returns no useful citations may you use `search_files "*forum*"`, read distilled forum notes directly, or fetch live forum context.
+
+Do not broad-glob/search forum files before the `enzyme catalyze` attempt for these prompts. If you fall back to files or live tools, say the answer came from fallback files/live tools, not active retrieval. Do not claim Enzyme/retrieval was used unless an `enzyme ...` command actually ran in this turn or a trace proves it. Do not open or read `.env` files directly to answer user questions; use scripts/tools that load env internally without printing values.
+
 ## Active skills
 
 The `skills/` directory holds per-backend procedural knowledge. Today's active skills:
@@ -84,11 +97,7 @@ Use runtime startup context first. Do not re-read `AGENTS.md` or `USER.md` unles
 
 For broad memory recall or pattern finding, use Enzyme through the Hermes memory workspace when the runtime/tooling exposes it. Treat Enzyme as the preferred memory read gateway over the typed sources above: it can route you to relevant evidence, but it is not canonical truth. If Enzyme is not exposed, use the materialized vault notes and canonical files/live tools directly. Before writing memory, creating Index premises/signals, staging nudges, or messaging the user based on memory, open or verify the cited canonical file or live tool result.
 
-For broad catch-up prompts such as "what's going on in the forum", "what did I miss", "what's been happening", village chat summaries, or forum catch-up, run active memory retrieval first when shell/CLI tooling is available, before broad file globbing or live forum fetches:
-
-`enzyme catalyze -p agent-memory-vault -n 8 "<user prompt>"`
-
-Open and verify cited paths before answering. Use `petri` only for broader pattern exploration: `enzyme petri -p agent-memory-vault -n 12`. Do not broad-glob/search forum files before trying active retrieval unless `enzyme` is unavailable, the vault is not initialized, the command fails, or it returns no useful citations. If you fall back to files or live tools, say the answer comes from fallback files/live tools, not active retrieval. Remember `forum/` and `irl/` are agent-written observations, not user-authored truth.
+For broad forum/chat/memory catch-up prompts, follow the Forum / Memory Catch-Up Gate above before any file search or live forum fetch.
 
 When shell/CLI tooling is available, useful memory reads are:
 

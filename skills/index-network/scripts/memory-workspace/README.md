@@ -67,7 +67,7 @@ enzyme catalyze -p agent-memory-vault -n 8 "what's going on in the forum"
 enzyme petri -p agent-memory-vault -n 12
 ```
 
-For broad forum/chat catch-up prompts, run retrieval first when available, then open/verify cited paths or live tools before answering. Agents can use Enzyme directly only when their runtime/tooling exposes it. Otherwise, read the materialized `agent-memory-vault/forum/`, `agent-memory-vault/irl/`, `USER.md`, `MEMORY.md`, and live canonical tools/files. Do not overclaim: if retrieval was not run, say the answer comes from fallback distilled notes/live files. Do not run `enzyme install hermes` as part of normal rollout; AgentVillage owns the runtime instruction surface in `workspace/AGENTS.md`.
+For broad forum/chat catch-up validation, trace order should show direct `enzyme catalyze` before any broad forum glob/file fallback. After retrieval, open/verify cited paths or live tools before answering. Agents can use Enzyme directly only when their runtime/tooling exposes it. Otherwise, read the materialized `agent-memory-vault/forum/`, `agent-memory-vault/irl/`, `USER.md`, `MEMORY.md`, and live canonical tools/files. Do not overclaim: if retrieval was not run, say the answer comes from fallback distilled notes/live files. Do not run `enzyme install hermes` as part of normal rollout; AgentVillage owns the runtime instruction surface in `workspace/AGENTS.md`.
 
 ## Secret Scan
 

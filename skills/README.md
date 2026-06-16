@@ -131,7 +131,7 @@ enzyme catalyze -p agent-memory-vault -n 8 "what's going on in the forum"
 enzyme petri -p agent-memory-vault -n 12
 ```
 
-Broad forum/chat catch-up should use retrieval first when available, then verify cited files or live tools. Treat retrieval as evidence routing, not canonical truth, and do not claim retrieval was used when it was not run. Operators can source `memory/enzyme-env.sh` in manual shells to add the same non-secret PATH entries.
+Broad forum/chat catch-up validation should show direct `enzyme catalyze` before any broad forum glob/file fallback. After retrieval, verify cited files or live tools. Treat retrieval as evidence routing, not canonical truth, and do not claim retrieval was used when it was not run. Operators can source `memory/enzyme-env.sh` in manual shells to add the same non-secret PATH entries.
 
 To verify rendered vault output without printing secret values:
 
