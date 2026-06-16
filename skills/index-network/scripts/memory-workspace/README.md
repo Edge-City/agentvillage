@@ -38,13 +38,7 @@ Supported provider env families:
 
 Resolution order is process env, `<root>/.env`, `$HERMES_HOME/.env`, then `~/.hermes/.env`. Only those names are read. `memory/enzyme-env.sh` stores references and non-secret defaults only.
 
-Hosted Hermes may have Enzyme at `$HERMES_HOME/.local/bin/enzyme` or `/opt/data/.local/bin/enzyme` even when it is not on PATH. `memory/enzyme-env.sh` adds the target root `.local/bin`, `$HERMES_HOME/.local/bin`, `$HOME/.local/bin`, and `/opt/data/.local/bin` to PATH without storing secrets. For one-off commands, resolve the binary explicitly:
-
-```bash
-ENZYME_BIN="$(command -v enzyme || true)"
-[ -z "$ENZYME_BIN" ] && [ -x "${HERMES_HOME:-/opt/data}/.local/bin/enzyme" ] && ENZYME_BIN="${HERMES_HOME:-/opt/data}/.local/bin/enzyme"
-[ -z "$ENZYME_BIN" ] && [ -x /opt/data/.local/bin/enzyme ] && ENZYME_BIN=/opt/data/.local/bin/enzyme
-```
+Hosted Hermes may have Enzyme at `$HERMES_HOME/.local/bin/enzyme` or `/opt/data/.local/bin/enzyme`. AgentVillage install adds those locations to Hermes terminal PATH, and `memory/enzyme-env.sh` adds the same non-secret PATH entries for manual operator shells.
 
 Secret-safe check:
 
@@ -66,14 +60,14 @@ python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-e
 python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-enzyme refresh --use-env-llm
 ```
 
-Use Enzyme for retrieval only when runtime/tooling exposes the CLI or equivalent tools:
+Use direct Enzyme commands when runtime/tooling exposes shell access:
 
 ```bash
-$ENZYME_BIN catalyze -p agent-memory-vault -n 8 "<query>"
-$ENZYME_BIN petri -p agent-memory-vault -n 12
+enzyme catalyze -p agent-memory-vault -n 8 "what's going on in the forum"
+enzyme petri -p agent-memory-vault -n 12
 ```
 
-For broad forum/chat catch-up prompts, use retrieval first when available, then open/verify cited files or live tools before answering. Agents can use Enzyme directly only when their runtime/tooling exposes it. Otherwise, read the materialized `agent-memory-vault/forum/`, `agent-memory-vault/irl/`, `USER.md`, `MEMORY.md`, and live canonical tools/files. Do not overclaim: if retrieval was not run, say the answer comes from distilled notes/live files. Do not run `enzyme install hermes` as part of normal rollout; AgentVillage owns the runtime instruction surface in `workspace/AGENTS.md`.
+For broad forum/chat catch-up prompts, run retrieval first when available, then open/verify cited paths or live tools before answering. Agents can use Enzyme directly only when their runtime/tooling exposes it. Otherwise, read the materialized `agent-memory-vault/forum/`, `agent-memory-vault/irl/`, `USER.md`, `MEMORY.md`, and live canonical tools/files. Do not overclaim: if retrieval was not run, say the answer comes from fallback distilled notes/live files. Do not run `enzyme install hermes` as part of normal rollout; AgentVillage owns the runtime instruction surface in `workspace/AGENTS.md`.
 
 ## Secret Scan
 

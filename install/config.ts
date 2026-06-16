@@ -29,10 +29,25 @@ export function setTerminalCwd(): void {
 
   const terminal = { ...((doc.terminal as Record<string, unknown>) ?? {}) };
   terminal.cwd = home;
+  const existingEnv = (terminal.env && typeof terminal.env === "object" && !Array.isArray(terminal.env))
+    ? terminal.env as Record<string, unknown>
+    : {};
+  const existingPath = typeof existingEnv.PATH === "string" ? existingEnv.PATH : process.env.PATH ?? "";
+  const pathParts = [
+    join(home, ".local", "bin"),
+    "${HERMES_HOME}/.local/bin",
+    "/opt/data/.local/bin",
+    "$HOME/.local/bin",
+    existingPath,
+  ].filter(Boolean);
+  terminal.env = {
+    ...existingEnv,
+    PATH: [...new Set(pathParts)].join(":"),
+  };
   doc.terminal = terminal;
 
   writeConfig(doc);
-  console.log(`→ set terminal.cwd to ${home}`);
+  console.log(`→ set terminal.cwd/PATH to ${home}`);
 }
 
 /** Ensure hosted cron turns never inherit a provider's enormous output-token default. */

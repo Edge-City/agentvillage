@@ -18,6 +18,8 @@ export function hermesExecEnv(): NodeJS.ProcessEnv {
   const pathParts = [
     binDir,
     "/opt/hermes/.venv/bin",
+    process.env.HERMES_HOME ? `${process.env.HERMES_HOME}/.local/bin` : "",
+    "/opt/data/.local/bin",
     `${process.env.HOME}/.npm/bin`,
     `${process.env.HOME}/.local/bin`,
     process.env.PATH ?? "",

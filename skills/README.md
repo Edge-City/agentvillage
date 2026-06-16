@@ -124,15 +124,14 @@ python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-e
 python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-enzyme refresh --use-env-llm
 ```
 
-Hosted Hermes may have Enzyme at `$HERMES_HOME/.local/bin/enzyme` or `/opt/data/.local/bin/enzyme` even if it is not on PATH. Resolve it before retrieval:
+Hosted Hermes may have Enzyme at `$HERMES_HOME/.local/bin/enzyme` or `/opt/data/.local/bin/enzyme`. AgentVillage install adds those locations to Hermes terminal PATH so runtime agents can call `enzyme` directly:
 
 ```bash
-ENZYME_BIN="$(command -v enzyme || true)"
-[ -z "$ENZYME_BIN" ] && [ -x "${HERMES_HOME:-/opt/data}/.local/bin/enzyme" ] && ENZYME_BIN="${HERMES_HOME:-/opt/data}/.local/bin/enzyme"
-[ -z "$ENZYME_BIN" ] && [ -x /opt/data/.local/bin/enzyme ] && ENZYME_BIN=/opt/data/.local/bin/enzyme
+enzyme catalyze -p agent-memory-vault -n 8 "what's going on in the forum"
+enzyme petri -p agent-memory-vault -n 12
 ```
 
-When the CLI is available, targeted retrieval uses `$ENZYME_BIN catalyze -p agent-memory-vault -n 8 "<query>"`; broader exploration uses `$ENZYME_BIN petri -p agent-memory-vault -n 12`. Broad forum/chat catch-up should use retrieval first when available, then verify cited files or live tools. Treat retrieval as evidence routing, not canonical truth, and do not claim retrieval was used when it was not run.
+Broad forum/chat catch-up should use retrieval first when available, then verify cited files or live tools. Treat retrieval as evidence routing, not canonical truth, and do not claim retrieval was used when it was not run. Operators can source `memory/enzyme-env.sh` in manual shells to add the same non-secret PATH entries.
 
 To verify rendered vault output without printing secret values:
 

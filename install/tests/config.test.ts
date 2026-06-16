@@ -5,11 +5,14 @@ import { join } from "node:path";
 import { afterEach, expect, test } from "bun:test";
 import YAML from "yaml";
 
-import { capModelMaxTokens } from "../config";
+import { capModelMaxTokens, setTerminalCwd } from "../config";
+import { hermesExecEnv } from "../hermes_cli";
 
 const ORIGINAL_ENV = {
+  HOME: process.env.HOME,
   HERMES_HOME: process.env.HERMES_HOME,
   HERMES_MAX_TOKENS: process.env.HERMES_MAX_TOKENS,
+  PATH: process.env.PATH,
 };
 
 afterEach(() => {
@@ -29,6 +32,35 @@ function withConfig(doc: Record<string, unknown>): string {
 function readConfig(path: string): Record<string, unknown> {
   return YAML.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
 }
+
+test("setTerminalCwd adds local bin paths to terminal env PATH", () => {
+  const configPath = withConfig({ terminal: { env: { PATH: "/usr/bin", KEEP: "yes" } } });
+
+  setTerminalCwd();
+
+  const terminal = readConfig(configPath).terminal as Record<string, unknown>;
+  const env = terminal.env as Record<string, string>;
+  expect(terminal.cwd).toBe(process.env.HERMES_HOME);
+  expect(env.KEEP).toBe("yes");
+  expect(env.PATH.split(":")).toContain(`${process.env.HERMES_HOME}/.local/bin`);
+  expect(env.PATH.split(":")).toContain("${HERMES_HOME}/.local/bin");
+  expect(env.PATH.split(":")).toContain("/opt/data/.local/bin");
+  expect(env.PATH.split(":")).toContain("$HOME/.local/bin");
+  expect(env.PATH.split(":")).toContain("/usr/bin");
+});
+
+test("hermesExecEnv includes hosted local bin paths", () => {
+  process.env.HERMES_HOME = "/opt/data";
+  process.env.HOME = "/opt/data";
+  process.env.PATH = "/usr/bin";
+
+  const env = hermesExecEnv();
+  const path = String(env.PATH).split(":");
+
+  expect(path).toContain("/opt/data/.local/bin");
+  expect(path).toContain("/opt/hermes/.venv/bin");
+  expect(path).toContain("/usr/bin");
+});
 
 test("capModelMaxTokens adds a safe default cap when missing", () => {
   const configPath = withConfig({
