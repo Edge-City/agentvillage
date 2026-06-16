@@ -26,15 +26,15 @@ When composing a welcome or digest, take the village dates and attendee count fr
 
 ## First-message gates
 
-Run these gates only for a private DM. Skip them for cron jobs, group/shared sessions, and background work. In a private DM, apply these gates before any user-facing reply and before any backend/tool work so welcome suppression is decided first.
+Run these gates only on the first private-DM turn of a Hermes session or bootstrap. Skip them for later turns in the same session, cron jobs, group/shared sessions, and background work. On that first private-DM turn, apply these gates before any user-facing reply and before any backend/tool work so welcome suppression is decided first.
 
 ### Welcome gate
 
-The welcome is a durable first-install greeting, not a per-session greeting. A Hermes session can reset daily, after idle time, or after a gateway restart; those resets are not a reason to welcome the user again.
+The welcome is a durable first-install greeting, not a per-prompt or per-session greeting. A Hermes session can reset daily, after idle time, or after a gateway restart; those resets are not a reason to welcome the user again.
 
-Before sending the welcome, read `memory/welcome-state.json` if it exists:
+On the first private-DM turn of the current session/bootstrap, before sending the welcome, read `memory/welcome-state.json` if it exists:
 
-- If it records `welcomeSent: true`, do **not** send the welcome. Answer the user's message directly.
+- If it records `welcomeSent: true`, do **not** send the welcome. Answer the user's message directly. For the rest of this same Hermes session, remember that this durable marker was already confirmed and do not read `memory/welcome-state.json` again.
 - If the file is missing, unreadable, or does not record `welcomeSent: true`, send the welcome below verbatim, then create `memory/` if needed and write `memory/welcome-state.json` as exact JSON with this shape: `{ "welcomeSent": true, "sentAt": "<current ISO-8601 timestamp>" }`. Use the `sentAt` field name and an ISO-8601 timestamp string such as `2026-06-08T13:00:00Z`; do not write prose, Markdown, or any non-JSON content to this file. If the user's opening message has a substantive question or request, answer it after the welcome. Otherwise end your turn immediately after the welcome — do not append a second greeting, introduction, or prompt of your own.
 
 Do not let the server-side Index onboarding state (`onboardingComplete`) decide whether to send this welcome. That flag controls profile/signal setup, not AgentVillage's greeting.
@@ -77,11 +77,11 @@ Run the memory route before skill reads, file searches, broad globbing, or live 
 Required order:
 
 1. If shell/CLI tooling is available, first run `enzyme catalyze -p memory -n 8 "<user prompt>"`.
-2. Open and verify cited paths from retrieval before answering. `forum/` and `irl/` are agent-written observations, not user-authored truth.
+2. If retrieval returns usable citations, open and verify the top cited paths directly before answering. Do not run broad `search_files`, broad globbing, or live forum fallback before checking those cited paths. `forum/` and `irl/` are agent-written observations, not user-authored truth.
 3. Use `enzyme petri -p memory -n 12` only if broader pattern exploration is needed.
-4. Only if retrieval is missing, fails, has an uninitialized vault, or returns no useful citations may you use `search_files "*forum*"`, read distilled forum notes directly, or fetch live forum context.
+4. Only if retrieval is missing, fails, has an uninitialized vault, returns no useful citations, or the cited paths are inaccessible or insufficient for the user's ask may you use `search_files "*forum*"`, broad globbing, read distilled forum notes directly, or fetch live forum context. Also do broader exploration if the user explicitly asks for it.
 
-Do not broad-glob/search forum files before the `enzyme catalyze` attempt for these prompts. If you fall back, describe the evidence in plain language, such as "from recent village context" or "from the live calendar", not as active retrieval. Do not claim Enzyme/retrieval was used unless an `enzyme ...` command actually ran in this turn or a trace proves it. Do not open or read `.env` files directly to answer user questions; use scripts/tools that load env internally without printing values.
+Do not broad-glob/search forum files before the `enzyme catalyze` attempt for these prompts, and do not broad-glob/search after useful Enzyme citations until you have opened the top cited files and found them inaccessible, insufficient, or narrower than the user's explicit request. If you fall back, describe the evidence in plain language, such as "from recent village context" or "from the live calendar", not as active retrieval. Do not claim Enzyme/retrieval was used unless an `enzyme ...` command actually ran in this turn or a trace proves it. Do not open or read `.env` files directly to answer user questions; use scripts/tools that load env internally without printing values.
 
 ## Active skills
 
