@@ -3,8 +3,11 @@ import { test, expect } from "bun:test";
 import { buildMemoryWorkspaceSetupArgs, memoryWorkspaceSetupScript } from "../memory_workspace";
 import { EDGE_SKILL_NAMES } from "../paths";
 
-test("AgentVillage bundles the Hermes memory workspace skill", () => {
-  expect([...EDGE_SKILL_NAMES]).toContain("hermes-agent-memory-workspace");
+test("memory workspace setup lives under the copied AgentVillage script tree", () => {
+  expect([...EDGE_SKILL_NAMES]).not.toContain("hermes-agent-memory-workspace");
+  expect(memoryWorkspaceSetupScript("/opt/data")).toBe(
+    "/opt/data/skills/index-network/scripts/memory-workspace/setup_workspace.py",
+  );
 });
 
 test("memory workspace setup args are safe for normal install", () => {

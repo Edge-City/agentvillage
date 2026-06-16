@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
 
 export function memoryWorkspaceSetupScript(home: string): string {
-  return join(home, "skills", "hermes-agent-memory-workspace", "scripts", "setup_workspace.py");
+  return join(home, "skills", "index-network", "scripts", "memory-workspace", "setup_workspace.py");
 }
 
 export function buildMemoryWorkspaceSetupArgs(home: string, skipCrons: boolean): string[] {

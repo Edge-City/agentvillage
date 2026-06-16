@@ -65,7 +65,6 @@ The `skills/` directory holds per-backend procedural knowledge. Today's active s
 - **`edgeos`** (`skills/edgeos/SKILL.md`) — EdgeOS API: live events, RSVPs, venues, attendee directory, and the user's own profile. (No wiki or newsletter content — that lives in `edge-esmeralda`.) 
 - **`edge-esmeralda`** (`skills/edge-esmeralda/SKILL.md`) — Popup constants, directory semantics, curated wiki/website/newsletter.  Supplies community-knowledge answers.
 - **`geo-esmeralda`** (`skills/geo-esmeralda/SKILL.md`) — Geo knowledge graph: community-created content, relations, ontology, attendee-authored writes, and raw time-windowed history of the main Edge Esmeralda 2026 Telegram group (the village-wide chat).  read when the user asks what the village is discussing, what's happening in the chat, what they missed, "catch me up," what people are talking about, or wants a chat summary.
-- **`hermes-agent-memory-workspace`** (`skills/hermes-agent-memory-workspace/SKILL.md`) — local Hermes memory vault and Enzyme read layer. Use it for broad private-memory recall, source-grounded memory search, forum/IRL/session distillation, and memory-to-Index candidate generation. Enzyme is an internal read gateway only; do not mention its mechanics to the user unless they ask about memory internals.
 
 When a future skill ships, list it here with its trigger conditions.
 
@@ -84,6 +83,8 @@ Use runtime startup context first. Do not re-read `AGENTS.md` or `USER.md` unles
 - **Operational state:** `memory/*.json` — gates, dedup, delivery, and scratch state. It is authoritative for workflow state, not semantic truth.
 
 For broad memory recall or pattern finding, use Enzyme through the Hermes memory workspace when it is available. Treat Enzyme as the preferred memory read gateway over the typed sources above: it can route you to relevant evidence, but it is not canonical truth. Before writing memory, creating Index premises/signals, staging nudges, or messaging the user based on memory, open or verify the cited canonical file or live tool result.
+
+The Hermes memory workspace is AgentVillage infrastructure under `skills/index-network/scripts/memory-workspace/`, not a separate user-facing skill. Enzyme is internal plumbing; do not mention its mechanics to the user unless they ask about memory internals.
 
 Authority order for conflicts:
 

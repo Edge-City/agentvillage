@@ -13,8 +13,8 @@ from pathlib import Path
 from common import context_path, default_state, state_path, vault_root, write_json
 
 
-ENZYME_BLOCK_BEGIN = "# BEGIN hermes-agent-memory-workspace"
-ENZYME_BLOCK_END = "# END hermes-agent-memory-workspace"
+ENZYME_BLOCK_BEGIN = "# BEGIN agentvillage-memory-workspace"
+ENZYME_BLOCK_END = "# END agentvillage-memory-workspace"
 DEFAULT_CRON_NAME = "Hermes agent memory heartbeat"
 DEFAULT_CRON_SCHEDULE = "0 2 * * *"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -237,7 +237,7 @@ def cron_prompt() -> str:
             "Write or update `agent-memory-vault/forum/YYYY-MM-DD.md` and `agent-memory-vault/irl/YYYY-MM-DD.md`.",
             "Keep the notes concise, grounded, and uncertainty-aware.",
             "Do not copy `memory/hermes-workspace-context.json` wholesale into the vault.",
-            "After writing the notes, run `python3 skills/hermes-agent-memory-workspace/scripts/workspace_loop.py --prepare`.",
+            "After writing the notes, run `python3 skills/index-network/scripts/memory-workspace/workspace_loop.py --prepare`.",
             "Return `[SILENT]` unless a local operator-facing summary is genuinely needed.",
         ]
     )
@@ -270,13 +270,13 @@ def cron_exists(name: str, hermes_bin: str) -> bool:
 def install_cron(root: Path, schedule: str, name: str, hermes_bin: str) -> dict:
     if cron_exists(name, hermes_bin):
         return {"installed": False, "reason": "already-exists", "name": name, "schedule": schedule}
-    script = root / "skills" / "hermes-agent-memory-workspace" / "scripts" / "cron_prepare.py"
+    script = root / "skills" / "index-network" / "scripts" / "memory-workspace" / "cron_prepare.py"
     if not script.exists():
         raise SystemExit(
             {
                 "ok": False,
                 "missingCronScript": str(script),
-                "detail": "Install this skill under the target Hermes root before creating the cron, then rerun setup from that root or pass --root.",
+                "detail": "Copy AgentVillage skills into the target Hermes root before creating the cron, then rerun setup from that root or pass --root.",
             }
         )
     args = [
@@ -287,8 +287,6 @@ def install_cron(root: Path, schedule: str, name: str, hermes_bin: str) -> dict:
         cron_prompt(),
         "--name",
         name,
-        "--skill",
-        "hermes-agent-memory-workspace",
         "--script",
         str(script),
         "--workdir",
@@ -359,8 +357,8 @@ def main() -> None:
     missing_files = [
         str(path)
         for path in [
-            root / "skills" / "hermes-agent-memory-workspace" / "scripts" / "cron_prepare.py",
-            root / "skills" / "hermes-agent-memory-workspace" / "scripts" / "render_hermes_sessions.py",
+            root / "skills" / "index-network" / "scripts" / "memory-workspace" / "cron_prepare.py",
+            root / "skills" / "index-network" / "scripts" / "memory-workspace" / "render_hermes_sessions.py",
         ]
         if not path.exists()
     ]

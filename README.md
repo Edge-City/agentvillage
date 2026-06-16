@@ -30,7 +30,7 @@ See the project hub for the full diagram and decisions.
   - `skills/edgeos/` — backend-generic EdgeOS API recipes (events, RSVPs, venues, attendee directory, own profile). Reads `EDGEOS_BEARER_TOKEN` and `EDGEOS_API_KEY` from env; popup id is supplied by the active operator skill.
   - `skills/edge-esmeralda/` — Edge Esmeralda 2026 popup knowledge: popup constants (popup id, week dates, themes), attendee field semantics, the curated wiki/website/newsletter references (vendored from `Edge-City/agentvillage-skills`; refreshed by upstream CI every 15 min), and the onboarding pointer for obtaining EdgeOS tokens.
   - `skills/geo-esmeralda/` — Geo knowledge graph recipes and write guidance for attendee-authored content, relations, ontology, and media.
-  - `skills/hermes-agent-memory-workspace/` — Hermes memory vault setup, session rendering, forum/IRL distillation helpers, and Enzyme read-layer wiring.
+  - `skills/index-network/scripts/memory-workspace/` — AgentVillage-managed Hermes memory vault setup, session rendering, forum/IRL distillation helpers, and Enzyme read-layer wiring.
 - `install/` — bootstrap scripts for plugging AgentVillage into a runtime
 
 ## Getting an agent connected
@@ -302,7 +302,7 @@ Time-sensitive and background prompts run as **Hermes/OpenClaw cron jobs**. The 
 | `skills/index-network/SKILL.md` | Index Network skill bundle entry point. Registered with OpenClaw on install; gates on `mcp.servers.index`. Body points at the bundle's sibling reference files. |
 | `skills/edgeos/SKILL.md` | EdgeOS-API skill: events + attendee directory + curated wiki/website/newsletter references. Currently scoped to Edge Esmeralda 2026. Loaded by OpenClaw alongside index-network. Vendored from `Edge-City/agentvillage-skills`. |
 | `skills/geo-esmeralda/SKILL.md` | Geo knowledge graph skill: community content, relations, ontology, and attendee-authored writes through the Geo CLI package. |
-| `skills/hermes-agent-memory-workspace/SKILL.md` | Hermes memory vault and Enzyme read-layer setup. Enzyme is the preferred read gateway over typed canonical memory sources; canonical files/tools remain the source of truth. |
+| `skills/index-network/scripts/memory-workspace/README.md` | Hermes memory vault and Enzyme read-layer setup. Enzyme is the preferred read gateway over typed canonical memory sources; canonical files/tools remain the source of truth. |
 
 ## Configuration guide
 
