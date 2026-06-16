@@ -34,7 +34,7 @@ import { execSync } from "node:child_process";
 import { installIndex } from "./install_index";
 import { installEdgeos } from "./install_edgeos";
 import { installGeo } from "./install_geo";
-import { capModelMaxTokens, setTerminalCwd } from "./config";
+import { capModelMaxTokens, exposeEnzymeOnTerminalPath, setTerminalCwd } from "./config";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
 import { setupHermesMemoryWorkspace } from "./memory_workspace";
 import {
@@ -202,6 +202,7 @@ function main(): void {
   copySkillFiles();
   setupHermesMemoryWorkspace(TARGET_HOME, process.argv.includes("--skip-crons"));
   setTerminalCwd();
+  exposeEnzymeOnTerminalPath();
   capModelMaxTokens();
 
   installIndex();

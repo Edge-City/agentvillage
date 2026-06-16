@@ -1,11 +1,11 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, expect, test } from "bun:test";
 import YAML from "yaml";
 
-import { capModelMaxTokens, setTerminalCwd } from "../config";
+import { capModelMaxTokens, exposeEnzymeOnTerminalPath, setTerminalCwd } from "../config";
 import { hermesExecEnv } from "../hermes_cli";
 
 const ORIGINAL_ENV = {
@@ -47,6 +47,24 @@ test("setTerminalCwd adds local bin paths to terminal env PATH", () => {
   expect(env.PATH.split(":")).toContain("/opt/data/.local/bin");
   expect(env.PATH.split(":")).toContain("$HOME/.local/bin");
   expect(env.PATH.split(":")).toContain("/usr/bin");
+});
+
+test("exposeEnzymeOnTerminalPath registers Hermes shell init file", () => {
+  const configPath = withConfig({ terminal: { shell_init_files: ["/existing/init.sh"] } });
+
+  exposeEnzymeOnTerminalPath();
+  exposeEnzymeOnTerminalPath();
+
+  const home = process.env.HERMES_HOME!;
+  const initPath = join(home, "memory", "hermes-terminal-path.sh");
+  const terminal = readConfig(configPath).terminal as Record<string, unknown>;
+  const shellInitFiles = terminal.shell_init_files as string[];
+
+  expect(existsSync(initPath)).toBe(true);
+  expect(readFileSync(initPath, "utf8")).toContain(`${home}/.local/bin`);
+  expect(readFileSync(initPath, "utf8")).toContain("/opt/data/.local/bin");
+  expect(shellInitFiles.filter((path) => path === initPath)).toHaveLength(1);
+  expect(shellInitFiles).toContain("/existing/init.sh");
 });
 
 test("hermesExecEnv includes hosted local bin paths", () => {
