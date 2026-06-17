@@ -6,7 +6,7 @@ Silent turns use the current host's no-reply marker exactly: Hermes → `[SILENT
 
 Build source-typed memory candidates, compare them against what the Index already has, and create only the grounded records that are missing. This runs in a fresh main session with no recall of past runs — every decision comes from tool calls and files. Track dedup state in `memory/heartbeat-state.json` under `memorySignals`.
 
-Enzyme is the preferred broad memory read gateway when available, but it is not canonical truth. Use it to find evidence across typed sources, then open or verify the cited canonical file before any Index write. The deterministic candidate builder may already have prepared `memory/memory-signal-candidates.json`; treat that artifact as bounded evidence to inspect, not as permission to write.
+Enzyme is the preferred broad memory read gateway when available, but it is not canonical truth. Use it to find evidence across typed sources, then open or verify the cited canonical file before any Index write. Do not use keyword extraction or line classification as permission to write; every candidate must come from direct reading of canonical memory and source-authority verification.
 
 Source authority for this pass:
 
@@ -22,17 +22,11 @@ Source authority for this pass:
    - The user has not completed onboarding (you will normally know this from session context; if genuinely unsure, check via `read_user_profiles` and stop silently if onboarding is incomplete).
    - `memorySignals.lastRunDate` in `memory/heartbeat-state.json` already equals today's date in America/Los_Angeles (you have already run today).
 
-2. **Build candidates.** Run:
-
-   ```bash
-   bun skills/index-network/scripts/build-memory-signal-candidates.ts --out memory/memory-signal-candidates.json
-   ```
-
-   If Enzyme is available and initialized, use it as an additional read gateway for broad recall before deciding, then open the cited canonical files. If Enzyme is unavailable, continue with the candidate artifact and canonical files. Do not install Enzyme, initialize it, refresh it, or run network setup from this cron.
+2. **Read memory evidence.** Open `USER.md` and `MEMORY.md` directly as canonical anchors. If Enzyme is available and initialized, use it as an additional read gateway for broad recall before deciding, then open the cited canonical files. If Enzyme is unavailable, continue with direct canonical reads and the typed memory vault. Do not install Enzyme, initialize it, refresh it, or run network setup from this cron.
 
 3. **Read the current graph.** Call `read_premises()` and `read_intents()`. These — plus `memorySignals.captured` in `memory/heartbeat-state.json` — are your dedup baseline.
 
-4. **Diff grounded candidates against the graph.** Go through `memory/memory-signal-candidates.json` and the cited canonical sources. Collect candidates:
+4. **Diff grounded memory against the graph.** Go through the canonical sources and any Enzyme-cited files you verified. Collect candidates:
    - **Durable profile facts** (role, skills, focus areas, location, affiliations) that no existing premise covers → candidates for `create_premise`.
    - **Active wants** (things the user is working on, looking for, hiring for, raising, open to) that no existing signal covers and that are still plausibly current → candidates for `create_intent`.
    Skip anything that is already represented (even loosely), anything listed in `memorySignals.captured`, anything stale or time-expired, anything speculative, and anything grounded only in forum/IRL/session interpretation. Memory you wrote about the user's plans is not the same as something they asked for. When in doubt, skip. An empty diff is a normal, successful outcome.
