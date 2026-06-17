@@ -308,6 +308,100 @@ describe("summarizeNegotiations", () => {
     expect("silent" in result).toBe(false);
   });
 
+  test("defaults signals to empty and leaves names unresolved when no enrichers passed", async () => {
+    tempWorkspace();
+    await Bun.write("state.json", "{}");
+    const neg = makeNegotiation({ status: "active", isUsersTurn: true });
+
+    const result = await summarizeNegotiations({
+      fetchNegotiations: async () => [neg],
+      stateFile: "state.json",
+    });
+
+    if ("silent" in result) throw new Error("unexpected silent");
+    expect(result.context.signals).toEqual([]);
+    expect(result.context.needsAttention[0].counterpartyName).toBeUndefined();
+  });
+
+  test("includes fetched signals in the context output", async () => {
+    tempWorkspace();
+    await Bun.write("state.json", "{}");
+    const neg = makeNegotiation({ status: "active", isUsersTurn: true });
+
+    const result = await summarizeNegotiations({
+      fetchNegotiations: async () => [neg],
+      stateFile: "state.json",
+      fetchSignals: async () => [
+        { id: "sig-1", summary: "Looking for AI safety collaborators." },
+        { id: "sig-2", summary: "Exploring frontier compute access." },
+      ],
+    });
+
+    if ("silent" in result) throw new Error("unexpected silent");
+    expect(result.context.signals).toHaveLength(2);
+    expect(result.context.signals[0].summary).toBe("Looking for AI safety collaborators.");
+  });
+
+  test("degrades to empty signals when the signal fetcher throws", async () => {
+    tempWorkspace();
+    await Bun.write("state.json", "{}");
+    const neg = makeNegotiation({ status: "active", isUsersTurn: true });
+
+    const result = await summarizeNegotiations({
+      fetchNegotiations: async () => [neg],
+      stateFile: "state.json",
+      fetchSignals: async () => { throw new Error("intents unreachable"); },
+    });
+
+    if ("silent" in result) throw new Error("unexpected silent");
+    expect(result.context.signals).toEqual([]);
+    expect(result.context.needsAttention).toHaveLength(1);
+  });
+
+  test("resolves counterparty names across all reported buckets, deduping calls", async () => {
+    tempWorkspace();
+    await Bun.write("state.json", "{}");
+    const a = makeNegotiation({ id: "aaa-1", counterpartyId: "user-x", status: "active", isUsersTurn: true });
+    const b = makeNegotiation({ id: "aaa-2", counterpartyId: "user-y", status: "active", isUsersTurn: false });
+    const c = makeNegotiation({ id: "aaa-3", counterpartyId: "user-x", status: "completed", isUsersTurn: false, updatedAt: NOW });
+
+    const calls: string[] = [];
+    const result = await summarizeNegotiations({
+      fetchNegotiations: async () => [a, b, c],
+      stateFile: "state.json",
+      recentDays: 7,
+      resolveProfile: async (userId) => {
+        calls.push(userId);
+        return userId === "user-x" ? "Ada Lovelace" : null;
+      },
+    });
+
+    if ("silent" in result) throw new Error("unexpected silent");
+    expect(result.context.needsAttention[0].counterpartyName).toBe("Ada Lovelace");
+    expect(result.context.waiting[0].counterpartyName).toBeNull();
+    expect(result.context.newlyResolved[0].counterpartyName).toBe("Ada Lovelace");
+    // user-x appears twice but is resolved once (dedup by id)
+    expect(calls.sort()).toEqual(["user-x", "user-y"]);
+  });
+
+  test("does not fetch signals or resolve names on a silent run", async () => {
+    tempWorkspace();
+    await Bun.write("state.json", "{}");
+    let signalCalls = 0;
+    let profileCalls = 0;
+
+    const result = await summarizeNegotiations({
+      fetchNegotiations: async () => [],
+      stateFile: "state.json",
+      fetchSignals: async () => { signalCalls++; return []; },
+      resolveProfile: async () => { profileCalls++; return null; },
+    });
+
+    expect(result).toEqual({ silent: true, reason: "nothing-to-report" });
+    expect(signalCalls).toBe(0);
+    expect(profileCalls).toBe(0);
+  });
+
   test("mixed bag: categorises correctly across all three groups", async () => {
     tempWorkspace();
     await Bun.write("state.json", "{}");
