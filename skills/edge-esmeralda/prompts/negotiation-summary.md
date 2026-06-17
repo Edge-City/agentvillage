@@ -54,7 +54,7 @@ Hey — here's a rundown of the negotiations I've been running on your behalf ac
 Rules for each section:
 
 - **Title + intro**: Always present. One short framing sentence. Don't pad it.
-- **🎯 Your signals**: One bullet per item in `signals`, using its `summary` verbatim or lightly tightened. If `signals` is empty, omit this whole section.
+- **🎯 Your signals**: One bullet per item in `signals`. **Condense each to one short, scannable phrase** (roughly 6–12 words) that captures the gist — do NOT paste the full `summary` verbatim, and don't repeat the same expansion across bullets (e.g. spell out "LLMs" once, not in every bullet). If `signals` is empty, omit this whole section.
 - **💬 Negotiations I've been running**: One bullet per negotiation across `needsAttention`, `waiting`, and `newlyResolved`. Each bullet states plainly what the conversation is about (draw on `indexContext.prompt`) and its current state — your move, waiting on them, or concluded (use `outcome` for resolved ones). Keep each to one line. Lead the bullets that are the user's turn with a short **Your move:** marker.
 - **👤 People I've been speaking to**: One bullet per distinct `counterpartyName` that is non-null, with a short phrase on the shared context. **Omit any negotiation whose `counterpartyName` is null** — never invent or guess a name, and never list a person by their community alone in this section. If every counterparty name is null, omit this whole section.
 
