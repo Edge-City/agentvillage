@@ -11,9 +11,14 @@
  * is never spammed about the same concluded negotiation twice.
  *
  * Outputs either exactly `[SILENT]` (nothing to report) or a JSON object that
- * the cron prompt feeds to the LLM for narrative composition:
+ * the cron prompt feeds to the LLM for the structured report:
  *
- *   { needsAttention: [...], waiting: [...], newlyResolved: [...] }
+ *   { signals: [...], needsAttention: [...], waiting: [...], newlyResolved: [...] }
+ *
+ * When there is something to report, it additionally fetches the user's own
+ * active signals (read_intents) and resolves each negotiation's counterparty to
+ * a display name (read_user_profiles). Both enrichments are best-effort: a
+ * failure degrades to empty signals / null names rather than aborting.
  *
  * Usage (from $HERMES_HOME):
  *   bun skills/index-network/scripts/summarize-negotiations.ts \
@@ -93,6 +98,12 @@ export interface RecentTurn {
 export interface NegotiationItem {
   id: string;
   counterpartyId: string;
+  /**
+   * Human-readable counterparty name, resolved post-fetch via read_user_profiles.
+   * Undefined until resolution runs; null when the counterparty has no profile
+   * (or resolution failed). The prompt falls back to indexContext when absent.
+   */
+  counterpartyName?: string | null;
   role: "source" | "candidate";
   turnCount: number;
   status: "active" | "waiting_for_agent" | "completed" | string;
@@ -125,13 +136,48 @@ interface NegotiationListResponse {
   };
 }
 
+/** A single signal (intent) the user has registered, condensed for the report. */
+export interface SignalItem {
+  id: string;
+  summary: string;
+}
+
+interface IntentListResponse {
+  success?: boolean;
+  error?: unknown;
+  data?: {
+    intents?: Array<{
+      id?: string;
+      summary?: string;
+      description?: string;
+      status?: string;
+    }>;
+  };
+}
+
+interface ProfileResponse {
+  success?: boolean;
+  error?: unknown;
+  data?: {
+    hasProfile?: boolean;
+    profile?: { name?: string };
+  };
+}
+
 export interface NegotiationSummaryState {
   reportedCompletedIds?: string[];
 }
 
 export type NegotiationFetcher = () => Promise<NegotiationItem[]>;
 
+/** Fetches the authenticated user's own active signals (intents). */
+export type SignalFetcher = () => Promise<SignalItem[]>;
+
+/** Resolves a counterparty userId to a display name, or null when unavailable. */
+export type ProfileResolver = (userId: string) => Promise<string | null>;
+
 export interface NegotiationContext {
+  signals: SignalItem[];
   needsAttention: NegotiationItem[];
   waiting: NegotiationItem[];
   newlyResolved: NegotiationItem[];
@@ -222,6 +268,110 @@ export function buildMcpFetcher(apiKey: string, mcpUrl: string): NegotiationFetc
   };
 }
 
+/**
+ * Build a fetcher for the user's own active signals via read_intents (no args →
+ * caller-owned active intents). Best-effort: the caller treats a throw as "no
+ * signals" rather than aborting the whole report.
+ */
+export function buildMcpSignalFetcher(apiKey: string, mcpUrl: string): SignalFetcher {
+  return async () => {
+    const initResp = await postMcpMessage(mcpUrl, apiKey, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: { name: "agentvillage-negotiation-summary", version: "1.0.0" },
+      },
+    });
+    if (initResp.error) throw new Error(`MCP initialize: ${initResp.error.message}`);
+
+    const toolResp = await postMcpMessage(mcpUrl, apiKey, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: "read_intents", arguments: { limit: 20 } },
+    });
+    if (toolResp.error) throw new Error(`MCP read_intents: ${toolResp.error.message}`);
+
+    const result = toolResp.result as McpToolResult | undefined;
+    const text = result?.content?.find((c) => c.type === "text")?.text ?? "";
+    if (!text.trim()) return [];
+
+    const parsed = JSON.parse(text) as IntentListResponse;
+    if (parsed.success === false) return [];
+
+    const intents = parsed.data?.intents;
+    if (!Array.isArray(intents)) return [];
+
+    return intents
+      .filter((i) => !i.status || i.status === "active")
+      .map((i) => ({ id: i.id ?? "", summary: (i.summary || i.description || "").trim() }))
+      .filter((s) => s.summary.length > 0);
+  };
+}
+
+/**
+ * Build a memoised resolver mapping a counterparty userId → display name via
+ * read_user_profiles. Initialises the MCP session lazily on first use and caches
+ * per-userId results (including null) so repeated counterparties cost one call.
+ * Any per-user failure resolves to null rather than throwing.
+ */
+export function buildMcpProfileResolver(apiKey: string, mcpUrl: string): ProfileResolver {
+  const cache = new Map<string, string | null>();
+  let initialized = false;
+  let nextId = 100;
+
+  return async (userId: string) => {
+    if (!userId) return null;
+    if (cache.has(userId)) return cache.get(userId) ?? null;
+
+    try {
+      if (!initialized) {
+        const initResp = await postMcpMessage(mcpUrl, apiKey, {
+          jsonrpc: "2.0",
+          id: nextId++,
+          method: "initialize",
+          params: {
+            protocolVersion: "2024-11-05",
+            capabilities: {},
+            clientInfo: { name: "agentvillage-negotiation-summary", version: "1.0.0" },
+          },
+        });
+        if (initResp.error) throw new Error(`MCP initialize: ${initResp.error.message}`);
+        initialized = true;
+      }
+
+      const toolResp = await postMcpMessage(mcpUrl, apiKey, {
+        jsonrpc: "2.0",
+        id: nextId++,
+        method: "tools/call",
+        params: { name: "read_user_profiles", arguments: { userId } },
+      });
+      if (toolResp.error) throw new Error(toolResp.error.message);
+
+      const result = toolResp.result as McpToolResult | undefined;
+      const text = result?.content?.find((c) => c.type === "text")?.text ?? "";
+      if (!text.trim()) {
+        cache.set(userId, null);
+        return null;
+      }
+
+      const parsed = JSON.parse(text) as ProfileResponse;
+      const name =
+        parsed.success !== false && parsed.data?.hasProfile && parsed.data.profile?.name
+          ? parsed.data.profile.name.trim() || null
+          : null;
+      cache.set(userId, name);
+      return name;
+    } catch {
+      cache.set(userId, null);
+      return null;
+    }
+  };
+}
+
 // ── Core logic (injectable) ───────────────────────────────────────────────────
 
 /**
@@ -236,8 +386,12 @@ export async function summarizeNegotiations(opts: {
   fetchNegotiations: NegotiationFetcher;
   stateFile: string;
   recentDays?: number;
+  /** Optional: fetch the user's own signals. Failures degrade to no signals. */
+  fetchSignals?: SignalFetcher;
+  /** Optional: resolve counterparty userId → name. Failures degrade to no name. */
+  resolveProfile?: ProfileResolver;
 }): Promise<ContextResult | SilentResult> {
-  const { fetchNegotiations, stateFile, recentDays = 7 } = opts;
+  const { fetchNegotiations, stateFile, recentDays = 7, fetchSignals, resolveProfile } = opts;
 
   let allNegotiations: NegotiationItem[];
   try {
@@ -287,7 +441,34 @@ export async function summarizeNegotiations(opts: {
   };
   await writeJsonObject(stateFile, updatedState);
 
-  return { context: { needsAttention, waiting, newlyResolved } };
+  // ── Enrich: signals + counterparty names (best-effort) ──────────────────────
+  // Only runs once we've decided there's something to report, so we never pay
+  // for these calls on a silent run.
+
+  let signals: SignalItem[] = [];
+  if (fetchSignals) {
+    try {
+      signals = await fetchSignals();
+    } catch (err) {
+      process.stderr.write(
+        `negotiation-summary: signal fetch failed — ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    }
+  }
+
+  const reported = [...needsAttention, ...waiting, ...newlyResolved];
+  if (resolveProfile) {
+    const uniqueIds = [...new Set(reported.map((n) => n.counterpartyId).filter(Boolean))];
+    const names = new Map<string, string | null>();
+    for (const id of uniqueIds) {
+      names.set(id, await resolveProfile(id));
+    }
+    for (const n of reported) {
+      n.counterpartyName = names.get(n.counterpartyId) ?? null;
+    }
+  }
+
+  return { context: { signals, needsAttention, waiting, newlyResolved } };
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -304,8 +485,15 @@ async function main(): Promise<void> {
 
   const mcpUrl = process.env.INDEX_MCP_URL?.trim() || "https://protocol.index.network/mcp";
   const fetchNegotiations = buildMcpFetcher(apiKey, mcpUrl);
+  const fetchSignals = buildMcpSignalFetcher(apiKey, mcpUrl);
+  const resolveProfile = buildMcpProfileResolver(apiKey, mcpUrl);
 
-  const result = await summarizeNegotiations({ fetchNegotiations, stateFile });
+  const result = await summarizeNegotiations({
+    fetchNegotiations,
+    stateFile,
+    fetchSignals,
+    resolveProfile,
+  });
 
   if ("silent" in result) {
     process.stdout.write("[SILENT]");
