@@ -35,6 +35,25 @@ export function setTerminalCwd(): void {
   console.log(`→ set terminal.cwd to ${home}`);
 }
 
+/**
+ * Disable Hermes auto-transcription so inbound voice notes are handed to the
+ * agent as a cached file path instead of a pre-made transcript. The
+ * `voice-gemini` plugin's `transcribe_voice` tool then transcribes the file via
+ * OpenRouter audio-in (see plugins/voice_gemini). Idempotent.
+ */
+export function disableAutoStt(): void {
+  const doc = readConfig();
+  const stt = { ...((doc.stt as Record<string, unknown>) ?? {}) };
+  if (stt.enabled === false) {
+    console.log("→ stt.enabled already false (voice notes handed to agent as file path)");
+    return;
+  }
+  stt.enabled = false;
+  doc.stt = stt;
+  writeConfig(doc);
+  console.log("→ set stt.enabled to false (voice notes transcribed via transcribe_voice tool)");
+}
+
 /** Ensure hosted cron turns never inherit a provider's enormous output-token default. */
 export function capModelMaxTokens(): void {
   const cap = configuredMaxTokens();
