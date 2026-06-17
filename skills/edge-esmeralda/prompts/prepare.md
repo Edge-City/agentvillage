@@ -77,24 +77,30 @@ It should not sound like:
 
 # Steps
 
-1. **Build deterministic context exactly once.** Run:
+Before running any command, move to the tenant home:
+
+```
+cd "${HERMES_HOME:-/opt/data}"
+```
+
+1. **Build deterministic context exactly once.** Run from `${HERMES_HOME:-/opt/data}`:
 
    ```
-   bun skills/index-network/scripts/stage-daily-brief.ts --prepare-context --state-file memory/heartbeat-state.json --context-out memory/daily-brief-context.json
+   bun skills/index-network/scripts/stage-daily-brief.ts --prepare-context --state-file memory/heartbeat-state.json --context-out /tmp/daily-brief-context.json
    ```
 
    If the command exits non-zero, end your turn immediately with the host-specific no-reply marker. Do not diagnose, retry, or attempt alternative staging paths.
 
    If stdout says `"skipped":true`, today's digest is already staged or delivered. End your turn with the host-specific no-reply marker.
 
-2. **Read `memory/daily-brief-context.json`.** Compose the final Kanban body from that context only. Do not call MCP tools, EdgeOS APIs, the control plane, or any other lookup manually.
+2. **Read `/tmp/daily-brief-context.json`.** Compose the final Kanban body from that context only. Do not call MCP tools, EdgeOS APIs, the control plane, or any other lookup manually.
 
 3. **Compose the final Kanban body in this turn.** Do not write it to `memory/` or any other durable workspace file. Files under `memory/` can become future source context, so the draft body must go directly to the staging script through stdin.
 
 4. **Stage the body exactly once through the deterministic guardrail script using a quoted heredoc pipe.** Replace `...composed brief markdown...` with the complete composed body. Run one command in this shape:
 
    ```
-   cat <<'DIGEST_BODY' | bun skills/index-network/scripts/stage-daily-brief.ts --state-file memory/heartbeat-state.json --context-out memory/daily-brief-context.json --body-stdin
+   cat <<'DIGEST_BODY' | bun skills/index-network/scripts/stage-daily-brief.ts --state-file memory/heartbeat-state.json --context-out /tmp/daily-brief-context.json --body-stdin
    ...composed brief markdown...
    DIGEST_BODY
    ```

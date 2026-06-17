@@ -11,6 +11,7 @@
 
 import { existsSync } from "node:fs";
 import { access } from "node:fs/promises";
+import { isAbsolute, join } from "node:path";
 
 import { buildDailyBriefContext, type DailyBriefContext } from "./build-daily-brief-context";
 import {
@@ -72,6 +73,14 @@ function argValue(args: string[], name: string): string | undefined {
   return idx >= 0 ? args[idx + 1] : undefined;
 }
 
+function hermesHome(): string {
+  return process.env.HERMES_HOME?.trim() || "/opt/data";
+}
+
+function resolveHermesPath(path: string): string {
+  return isAbsolute(path) ? path : join(hermesHome(), path);
+}
+
 function pacificDate(): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Los_Angeles",
@@ -127,7 +136,7 @@ async function runHermes(args: string[]): Promise<string> {
   const result = Bun.spawnSync([hermes, ...args], {
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, HOME: process.env.HERMES_HOME ?? process.env.HOME, HERMES_HOME: process.env.HERMES_HOME ?? process.cwd() },
+    env: { ...process.env, HOME: hermesHome(), HERMES_HOME: hermesHome() },
   });
   if (!result.success) {
     const stderr = new TextDecoder().decode(result.stderr).trim();
@@ -239,9 +248,9 @@ export async function prepareDailyBriefContext(options: {
   hermes?: HermesRunner;
 } = {}): Promise<PrepareContextResult> {
   const date = options.date ?? pacificDate();
-  const opportunitiesFile = options.opportunitiesFile ?? "memory/digest-opportunities.txt";
-  const stateFile = options.stateFile ?? "memory/heartbeat-state.json";
-  const contextOut = options.contextOut ?? "memory/daily-brief-context.json";
+  const opportunitiesFile = resolveHermesPath(options.opportunitiesFile ?? "memory/digest-opportunities.txt");
+  const stateFile = resolveHermesPath(options.stateFile ?? "memory/heartbeat-state.json");
+  const contextOut = resolveHermesPath(options.contextOut ?? "memory/daily-brief-context.json");
   const hermes = options.hermes ?? runHermes;
 
   const existing = await readExistingDigestCard(hermes, stateFile, date);
@@ -270,9 +279,10 @@ export async function stageDailyBrief(options: {
   hermes?: HermesRunner;
 } = {}): Promise<StageResult> {
   const date = options.date ?? pacificDate();
-  const opportunitiesFile = options.opportunitiesFile ?? "memory/digest-opportunities.txt";
-  const stateFile = options.stateFile ?? "memory/heartbeat-state.json";
-  const contextOut = options.contextOut ?? "memory/daily-brief-context.json";
+  const opportunitiesFile = resolveHermesPath(options.opportunitiesFile ?? "memory/digest-opportunities.txt");
+  const stateFile = resolveHermesPath(options.stateFile ?? "memory/heartbeat-state.json");
+  const contextOut = resolveHermesPath(options.contextOut ?? "memory/daily-brief-context.json");
+  const bodyFile = options.bodyFile ? resolveHermesPath(options.bodyFile) : undefined;
   const hermes = options.hermes ?? runHermes;
 
   const existing = await readExistingDigestCard(hermes, stateFile, date);
@@ -287,10 +297,10 @@ export async function stageDailyBrief(options: {
     };
   }
 
-  if (options.body !== undefined && options.bodyFile) {
+  if (options.body !== undefined && bodyFile) {
     throw new Error("stageDailyBrief accepts only one body input: --body-stdin or --body-file");
   }
-  if (options.body === undefined && !options.bodyFile) {
+  if (options.body === undefined && !bodyFile) {
     throw new Error("stageDailyBrief requires --body-stdin or --body-file unless today's digest is already staged");
   }
 
@@ -300,7 +310,7 @@ export async function stageDailyBrief(options: {
     await writeJson(contextOut, context);
   }
 
-  const rawBody = options.body ?? await Bun.file(options.bodyFile!).text();
+  const rawBody = options.body ?? await Bun.file(bodyFile!).text();
   if (!rawBody.trim()) throw new Error("digest body is empty");
 
   const { output: sanitizedBody } = sanitizeDigestUrls(rawBody.trim());

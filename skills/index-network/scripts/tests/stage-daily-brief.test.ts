@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -8,6 +8,8 @@ import type { DailyBriefContext } from "../build-daily-brief-context";
 
 const TODAY = "2026-06-15";
 const tmpDirs: string[] = [];
+const originalCwd = process.cwd();
+const originalHermesHome = process.env.HERMES_HOME;
 
 const baseContext: DailyBriefContext = {
   date: TODAY,
@@ -75,6 +77,12 @@ async function writeJson(path: string, value: unknown): Promise<void> {
 }
 
 afterEach(() => {
+  process.chdir(originalCwd);
+  if (originalHermesHome === undefined) {
+    delete process.env.HERMES_HOME;
+  } else {
+    process.env.HERMES_HOME = originalHermesHome;
+  }
   while (tmpDirs.length) {
     const dir = tmpDirs.pop();
     if (dir) rmSync(dir, { recursive: true, force: true });
@@ -221,6 +229,38 @@ describe("stageDailyBrief prompt-led staging guardrails", () => {
     await expect(stageDailyBrief({ date: TODAY, stateFile, contextOut, hermes: async () => "{}" }))
       .rejects
       .toThrow("requires --body-stdin or --body-file");
+  });
+
+  test("resolves defaults and relative body files under HERMES_HOME, not cwd", async () => {
+    const hermesHome = makeTmp();
+    const accidentalCwd = makeTmp();
+    const contextDir = makeTmp();
+    mkdirSync(join(hermesHome, "memory"), { recursive: true });
+    mkdirSync(join(hermesHome, "drafts"), { recursive: true });
+    await writeJson(join(hermesHome, "memory", "heartbeat-state.json"), {});
+    await writeJson(join(contextDir, "daily-brief-context.json"), baseContext);
+    await Bun.write(join(hermesHome, "drafts", "brief.md"), [
+      "Good morning from Edge Esmeralda.",
+      "",
+      "<!-- digest-question:id=daily-identity-2026-06-15 -->**One for you:** Which part of this thread feels most like you?",
+    ].join("\n"));
+
+    process.env.HERMES_HOME = hermesHome;
+    process.chdir(accidentalCwd);
+
+    const result = await stageDailyBrief({
+      date: TODAY,
+      contextOut: join(contextDir, "daily-brief-context.json"),
+      bodyFile: "drafts/brief.md",
+      hermes: async (args) => {
+        if (args[0] === "kanban" && args[1] === "create") return JSON.stringify({ task: { id: "t_home" } });
+        return "{}";
+      },
+    });
+
+    expect(result.taskId).toBe("t_home");
+    expect(JSON.parse(await Bun.file(join(hermesHome, "memory", "heartbeat-state.json")).text()).prepared.taskId).toBe("t_home");
+    expect(existsSync(join(accidentalCwd, "memory", "heartbeat-state.json"))).toBe(false);
   });
 
 });

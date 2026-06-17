@@ -1,22 +1,39 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { sendDailyBrief } from "../send-daily-brief";
 
 const originalCwd = process.cwd();
+const originalHermesHome = process.env.HERMES_HOME;
+const tmpDirs: string[] = [];
 
 function tempWorkspace(): string {
   const dir = mkdtempSync(join(tmpdir(), "send-daily-brief-"));
+  tmpDirs.push(dir);
   process.chdir(dir);
+  process.env.HERMES_HOME = dir;
+  return dir;
+}
+
+function makeTmp(): string {
+  const dir = mkdtempSync(join(tmpdir(), "send-daily-brief-"));
+  tmpDirs.push(dir);
   return dir;
 }
 
 afterEach(() => {
-  const cwd = process.cwd();
   process.chdir(originalCwd);
-  if (cwd !== originalCwd && cwd.includes("send-daily-brief-")) rmSync(cwd, { recursive: true, force: true });
+  if (originalHermesHome === undefined) {
+    delete process.env.HERMES_HOME;
+  } else {
+    process.env.HERMES_HOME = originalHermesHome;
+  }
+  while (tmpDirs.length) {
+    const dir = tmpDirs.pop();
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 describe("sendDailyBrief", () => {
@@ -295,5 +312,31 @@ describe("sendDailyBrief", () => {
     });
 
     expect(result).toEqual({ silent: true, reason: "no-staged-task" });
+  });
+
+  test("resolves default state and outgoing files under HERMES_HOME, not cwd", async () => {
+    const hermesHome = makeTmp();
+    const accidentalCwd = tempWorkspace();
+    mkdirSync(join(hermesHome, "memory"), { recursive: true });
+    await Bun.write(join(hermesHome, "memory", "heartbeat-state.json"), JSON.stringify({
+      prepared: { date: "2026-06-04", taskId: "t_digest" },
+    }));
+    process.env.HERMES_HOME = hermesHome;
+
+    const body = "<!-- digest-question:id=q-1 -->**One for you:** What are you building?";
+    const result = await sendDailyBrief({
+      date: "2026-06-04",
+      hermes: (args) => {
+        if (args[0] === "kanban" && args[1] === "show") return JSON.stringify({ task: { id: "t_digest", status: "ready", body } });
+        if (args[0] === "kanban" && args[1] === "complete") return "completed";
+        throw new Error(`unexpected hermes call: ${args.join(" ")}`);
+      },
+      confirmDeliveries: async (ids) => ({ confirmed: ids, failed: [] }),
+    });
+
+    expect("silent" in result).toBe(false);
+    expect(await Bun.file(join(hermesHome, "memory", "digest-outgoing.md")).text()).toBe(body);
+    expect(JSON.parse(await Bun.file(join(hermesHome, "memory", "heartbeat-state.json")).text()).questionDelivery).toEqual({ "q-1": "2026-06-04" });
+    expect(existsSync(join(accidentalCwd, "memory", "digest-outgoing.md"))).toBe(false);
   });
 });
