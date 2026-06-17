@@ -5,13 +5,13 @@
  * The send cron prompt should not reimplement file, Kanban, or URL-guard logic
  * with model-generated Python. This script owns approval-gate checking, outgoing
  * body persistence, digest marker extraction, delivery-state bookkeeping,
- * Kanban completion, and final body sanitization. The prompt only needs to call
- * this script, confirm the returned opportunity ids through MCP, and return the
- * returned brief verbatim.
+ * Kanban completion, ledger confirmation, and final body sanitization. The
+ * prompt only needs to call this script and return the returned brief verbatim.
  */
 
 import { existsSync } from "node:fs";
 import { access } from "node:fs/promises";
+import { isAbsolute, join } from "node:path";
 
 import { QUESTION_COOLDOWN_DAYS, confirmOpportunityDeliveriesViaMcp, resolveIndexApiKey } from "./build-daily-brief-context";
 import { extractDigestOpportunityIds, extractDigestQuestionIds, sanitizeDigestUrls } from "./validate-digest-urls";
@@ -66,6 +66,14 @@ type HermesRunner = (args: string[]) => string | Promise<string>;
 function argValue(args: string[], name: string): string | undefined {
   const idx = args.indexOf(name);
   return idx >= 0 ? args[idx + 1] : undefined;
+}
+
+function hermesHome(): string {
+  return process.env.HERMES_HOME?.trim() || "/opt/data";
+}
+
+function resolveHermesPath(path: string): string {
+  return isAbsolute(path) ? path : join(hermesHome(), path);
 }
 
 function pacificDate(): string {
@@ -127,7 +135,7 @@ async function runHermes(args: string[]): Promise<string> {
   const result = Bun.spawnSync([hermes, ...args], {
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, HOME: process.env.HERMES_HOME ?? process.env.HOME, HERMES_HOME: process.env.HERMES_HOME ?? process.cwd() },
+    env: { ...process.env, HOME: hermesHome(), HERMES_HOME: hermesHome() },
   });
   if (!result.success) {
     const stderr = new TextDecoder().decode(result.stderr).trim();
@@ -178,8 +186,8 @@ export async function sendDailyBrief(options: {
   confirmDeliveries?: DeliveryConfirmer;
 } = {}): Promise<SendResult | SilentResult> {
   const date = options.date ?? pacificDate();
-  const stateFile = options.stateFile ?? "memory/heartbeat-state.json";
-  const outgoingFile = options.outgoingFile ?? "memory/digest-outgoing.md";
+  const stateFile = resolveHermesPath(options.stateFile ?? "memory/heartbeat-state.json");
+  const outgoingFile = resolveHermesPath(options.outgoingFile ?? "memory/digest-outgoing.md");
   const hermes = options.hermes ?? runHermes;
   const confirmDeliveries = options.confirmDeliveries ?? defaultConfirmDeliveries;
 

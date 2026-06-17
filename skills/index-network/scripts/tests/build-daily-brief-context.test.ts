@@ -7,6 +7,7 @@ import {
   buildDailyBriefContext,
   confirmOpportunityDeliveriesViaMcp,
   extractInterestTags,
+  extractUserModelPhrases,
   fetchOpportunitiesFromMcp,
   fetchPendingQuestionsFromMcp,
   filterCooldownQuestions,
@@ -21,6 +22,22 @@ describe("build-daily-brief-context helpers", () => {
   test("extractInterestTags maps user text to EdgeOS tags", () => {
     expect(extractInterestTags("I build AI agents for longevity research and decentralized protocols"))
       .toEqual(expect.arrayContaining(["AI", "Health & Longevity", "Decentralized Tech"]));
+  });
+
+  test("extractUserModelPhrases keeps concise note text tied to selected interests", () => {
+    const text = [
+      "# USER",
+      "I build AI agents for civic coordination.",
+      "I work on AI bias measurement.",
+      "A very long line about privacy ".repeat(12),
+      "Website: https://example.com",
+      "I care about privacy-preserving protocols.",
+    ].join("\n");
+
+    expect(extractUserModelPhrases(text, ["AI", "Privacy", "Governance & Coordination"])).toEqual([
+      "I build AI agents for civic coordination.",
+      "I care about privacy-preserving protocols.",
+    ]);
   });
 
   test("selectEvents puts highlighted events first and fills with interest events", () => {

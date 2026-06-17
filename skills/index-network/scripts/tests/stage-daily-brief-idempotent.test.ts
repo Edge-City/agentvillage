@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { stageDailyBrief } from "../stage-daily-brief";
+import { prepareDailyBriefContext, stageDailyBrief } from "../stage-daily-brief";
 
 const TODAY = "2026-06-15";
 
@@ -63,4 +63,23 @@ describe("stageDailyBrief idempotency guard", () => {
       expect(calls.every((c) => c[1] === "show")).toBe(true);
     });
   }
+
+  test("prepareDailyBriefContext also skips when today's card is protected", async () => {
+    const stateFile = makeStateFile({
+      prepared: { date: TODAY, taskId: "t_existing", opportunityIds: ["opp-1"], questionIds: ["q-1"] },
+    });
+    const { calls, runner } = fakeHermes("ready");
+
+    const result = await prepareDailyBriefContext({
+      date: TODAY,
+      stateFile,
+      contextOut: join(tmpdir(), "should-not-write-daily-brief-context.json"),
+      hermes: runner,
+    });
+
+    expect(result.skipped).toBe(true);
+    expect(result.reason).toBe("already-staged:ready");
+    expect(result.taskId).toBe("t_existing");
+    expect(calls.every((c) => c[1] === "show")).toBe(true);
+  });
 });

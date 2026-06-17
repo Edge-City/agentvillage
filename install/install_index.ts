@@ -6,17 +6,20 @@
  *   - Installs the Index crons: heartbeat (`Edge — heartbeat`, every 30m),
  *     memory signal sync (`Edge — memory signal sync`, ~01:00), prepare
  *     (`Edge — digest prepare`, ~02:00), send (`Edge — daily digest`, ~08:00),
- *     and negotiation summary (`Edge — negotiation summary`, ~14:00) — all
- *     host-local; times overridable via --heartbeat-cron /
- *     --digest-signals-cron / --digest-prepare-cron / --digest-send-cron /
- *     --negotiation-summary-cron (or HEARTBEAT_CRON / DIGEST_SIGNALS_CRON /
- *     DIGEST_PREPARE_CRON / DIGEST_SEND_CRON / NEGOTIATION_SUMMARY_CRON). To
+ *     negotiation summary (`Edge — negotiation summary`, ~14:00), and evening
+ *     questions (`Edge — evening questions`, ~19:00) — all host-local; times
+ *     overridable via --heartbeat-cron / --digest-signals-cron /
+ *     --digest-prepare-cron / --digest-send-cron / --negotiation-summary-cron /
+ *     --evening-questions-cron (or HEARTBEAT_CRON / DIGEST_SIGNALS_CRON /
+ *     DIGEST_PREPARE_CRON / DIGEST_SEND_CRON / NEGOTIATION_SUMMARY_CRON /
+ *     EVENING_QUESTIONS_CRON). To
  *     avoid the whole fleet hitting the LLM provider in the same minute
  *     (OpenRouter caps gemini-flash at 300 req/min account-wide), each tenant
  *     gets a deterministic minute offset derived from its INDEX_API_KEY:
  *     heartbeat spreads across two runs per hour, signal sync spreads over
  *     01:00–01:49, prepare over 02:00–02:49, send over 08:00–08:24, and
- *     negotiation summary over 14:00–14:24.
+ *     negotiation summary over 14:00–14:24, and evening questions over
+ *     19:00–19:24.
  *     New installs create enabled crons; reconcile updates prompt bodies,
  *     migrates jobs still on the old synchronized defaults (0 2 / 0 8) to their
  *     staggered slot, and otherwise preserves each job's schedule and pause
@@ -179,9 +182,12 @@ export interface DigestCronSpec {
 
 /**
  * Heartbeat (every 30m, deliver telegram), memory signal sync (01:00, no
- * deliver), prepare (02:00, no deliver), then send (08:00, deliver telegram).
- * Signal sync runs an hour before prepare so freshly-captured signals have time
- * to produce opportunities before the brief is composed.
+ * deliver), prepare (02:00, no deliver), send (08:00, deliver telegram), then
+ * evening questions (19:00, deliver telegram). Signal sync runs an hour before
+ * prepare so freshly-captured signals have time to produce opportunities before
+ * the brief is composed. The evening questions pass asks the user one pending
+ * question from the protocol each evening, sharing the 3-day cooldown state
+ * with the morning digest to avoid repeating the same question.
  *
  * The 30-minute "Edge — heartbeat" cron was retired (see Edge-City/agentvillage#100
  * "Heartbeat cron drains OpenRouter key budget"). Its prompt loaded the
@@ -227,6 +233,15 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
     deliver: true,
     overrideFlag: "--negotiation-summary-cron",
     overrideEnv: "NEGOTIATION_SUMMARY_CRON",
+  },
+  {
+    schedule: "0 19 * * *",
+    staggerWindowMinutes: 25,
+    promptFile: "edge-esmeralda/prompts/ask-questions.md",
+    name: "Edge — evening questions",
+    deliver: true,
+    overrideFlag: "--evening-questions-cron",
+    overrideEnv: "EVENING_QUESTIONS_CRON",
   },
 ];
 

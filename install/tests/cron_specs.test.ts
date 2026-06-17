@@ -12,12 +12,12 @@ import {
   storedSchedule,
 } from "../install_index";
 
-test("three Index cron specs: signals, prepare, then send (heartbeat retired)", () => {
-  expect(DIGEST_CRON_SPECS).toHaveLength(3);
+test("five Index cron specs: signals, prepare, send, negotiation, evening (heartbeat retired)", () => {
+  expect(DIGEST_CRON_SPECS).toHaveLength(5);
   // The 30-minute "Edge — heartbeat" cron was retired (it drained OpenRouter
   // key budget fleet-wide); it must no longer be installed.
   expect(DIGEST_CRON_SPECS.some((s) => s.name === "Edge — heartbeat")).toBe(false);
-  const [signals, prepare, send] = DIGEST_CRON_SPECS;
+  const [signals, prepare, send, negotiation, evening] = DIGEST_CRON_SPECS;
   expect(signals.schedule).toBe("0 1 * * *");
   expect(signals.name).toBe("Edge — memory signal sync");
   expect(signals.promptFile).toBe("edge-esmeralda/prompts/memory-signals.md");
@@ -30,6 +30,14 @@ test("three Index cron specs: signals, prepare, then send (heartbeat retired)", 
   expect(send.name).toBe("Edge — daily digest");
   expect(send.promptFile).toBe("edge-esmeralda/prompts/send.md");
   expect(send.deliver).toBe(true);
+  expect(negotiation.schedule).toBe("0 14 * * *");
+  expect(negotiation.name).toBe("Edge — negotiation summary");
+  expect(negotiation.promptFile).toBe("edge-esmeralda/prompts/negotiation-summary.md");
+  expect(negotiation.deliver).toBe(true);
+  expect(evening.schedule).toBe("0 19 * * *");
+  expect(evening.name).toBe("Edge — evening questions");
+  expect(evening.promptFile).toBe("edge-esmeralda/prompts/ask-questions.md");
+  expect(evening.deliver).toBe(true);
 });
 
 test("send cron args include --deliver telegram; signals/prepare omit it", () => {
