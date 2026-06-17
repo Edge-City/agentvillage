@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -221,6 +222,37 @@ def int_env(name: str, default: int) -> int:
         return default
 
 
+def truthy_env(name: str) -> bool:
+    return (os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def is_valid_cron(expr: str) -> bool:
+    fields = expr.strip().split()
+    return len(fields) == 5 and all(re.fullmatch(r"[\d*,/-]+", field) for field in fields)
+
+
+def resolve_enzyme_refresh_cron(raw_schedule: str | None = None) -> str:
+    override = (raw_schedule or os.environ.get("ENZYME_REFRESH_CRON") or "").strip()
+    if not override:
+        return DEFAULT_REFRESH_CRON_SCHEDULE
+    if not is_valid_cron(override):
+        print(
+            f'warning: ignoring invalid Enzyme refresh cron override "{override}"; using default "{DEFAULT_REFRESH_CRON_SCHEDULE}"',
+            file=sys.stderr,
+        )
+        return DEFAULT_REFRESH_CRON_SCHEDULE
+    return override
+
+
+def should_install_enzyme_refresh_cron(flag_value: bool, raw_schedule: str | None = None) -> bool:
+    return (
+        flag_value
+        or bool((raw_schedule or "").strip())
+        or truthy_env("AGENTVILLAGE_ENZYME_REFRESH_CRON")
+        or bool((os.environ.get("ENZYME_REFRESH_CRON") or "").strip())
+    )
+
+
 def write_enzyme_env(root: Path, provider: str) -> Path:
     env_path = root / "memory" / "enzyme-env.sh"
     env_path.parent.mkdir(parents=True, exist_ok=True)
@@ -329,11 +361,28 @@ def enzyme_memory_inputs(root: Path) -> list[Path]:
 
 def memory_input_report(root: Path) -> dict:
     files = enzyme_memory_inputs(root)
-    newest_mtime = max((path.stat().st_mtime for path in files), default=None)
+    entries = []
+    for path in files:
+        stat = path.stat()
+        entries.append(
+            {
+                "path": path.relative_to(root).as_posix(),
+                "mtime": stat.st_mtime,
+                "size": stat.st_size,
+            }
+        )
+    newest_mtime = max((entry["mtime"] for entry in entries), default=None)
+    fingerprint_payload = json.dumps(entries, sort_keys=True, separators=(",", ":"))
+    fingerprint = {
+        "algorithm": "sha256:path-mtime-size-v1",
+        "digest": hashlib.sha256(fingerprint_payload.encode("utf-8")).hexdigest(),
+        "count": len(entries),
+    }
     return {
-        "count": len(files),
+        "count": len(entries),
         "newestMtime": newest_mtime,
         "newestMtimeIso": now_iso_from_timestamp(newest_mtime) if newest_mtime else None,
+        "fingerprint": fingerprint,
         "families": {
             "forum": len([path for path in files if path.parent == root / "memory" / "forum"]),
             "irl": len([path for path in files if path.parent == root / "memory" / "irl"]),
@@ -468,8 +517,8 @@ def refresh_enzyme_index(root: Path, enzyme_bin: str, provider: str, cooldown_mi
         except ValueError:
             pass
 
-    last_newest = last_success.get("sourceNewestMtime")
-    if isinstance(last_newest, (int, float)) and inputs["newestMtime"] is not None and inputs["newestMtime"] <= float(last_newest):
+    last_fingerprint = last_success.get("sourceFingerprint")
+    if isinstance(last_fingerprint, dict) and last_fingerprint == inputs.get("fingerprint"):
         return refresh_skip(root, "no-source-change", inputs, provider_report, {"lastSuccess": last_success})
 
     status_result = run_enzyme_subprocess(resolved_bin, vault, "status", root, provider, use_env_llm=False)
@@ -513,6 +562,7 @@ def refresh_enzyme_index(root: Path, enzyme_bin: str, provider: str, cooldown_mi
             "at": report["attemptedAt"],
             "sourceNewestMtime": inputs["newestMtime"],
             "sourceNewestMtimeIso": inputs["newestMtimeIso"],
+            "sourceFingerprint": inputs["fingerprint"],
         }
     elif last_success:
         report["lastSuccess"] = last_success
@@ -789,7 +839,7 @@ def main() -> None:
     parser.add_argument("--cron-schedule", default=DEFAULT_CRON_SCHEDULE, help="Hermes heartbeat cron schedule")
     parser.add_argument("--cron-name", default=DEFAULT_CRON_NAME, help="Hermes heartbeat cron name")
     parser.add_argument("--install-enzyme-refresh-cron", action="store_true", help="Install the opt-in Enzyme memory index refresh cron")
-    parser.add_argument("--enzyme-refresh-cron", default=DEFAULT_REFRESH_CRON_SCHEDULE, help="Enzyme refresh cron schedule")
+    parser.add_argument("--enzyme-refresh-cron", default=None, help="Enzyme refresh cron schedule")
     parser.add_argument("--enzyme-refresh-cron-name", default=DEFAULT_REFRESH_CRON_NAME, help="Enzyme refresh cron name")
     parser.add_argument("--hermes-bin", default=shutil.which("hermes") or "hermes", help="Hermes executable")
     args = parser.parse_args()
@@ -800,6 +850,11 @@ def main() -> None:
             args.enzyme_provider = "openai"
         elif args.api_key_env == "OPENROUTER_API_KEY":
             args.enzyme_provider = "openrouter"
+    args.install_enzyme_refresh_cron = should_install_enzyme_refresh_cron(
+        args.install_enzyme_refresh_cron,
+        args.enzyme_refresh_cron,
+    )
+    args.enzyme_refresh_cron = resolve_enzyme_refresh_cron(args.enzyme_refresh_cron)
 
     vault = vault_root(root)
     legacy_vault = legacy_vault_root(root)

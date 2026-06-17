@@ -74,13 +74,13 @@ The AgentVillage installer exposes the same path:
 bun install/install.ts --index-api-key <KEY> --install-enzyme-refresh-cron
 ```
 
-Default schedule is `30 2 * * *`, after the memory heartbeat default. Override with `--enzyme-refresh-cron "0 3 * * *"` or `ENZYME_REFRESH_CRON="0 3 * * *"`; setting `AGENTVILLAGE_ENZYME_REFRESH_CRON=1` also opts in. The refresh runner always uses `--use-env-llm`, never hosted/default unattended auth. It checks provider env by name only, checks that the Enzyme CLI exists, requires at least one generated memory input under `memory/forum/*.md`, `memory/irl/*.md`, or `memory/hermes/sessions/**/*.md`, runs `enzyme init --use-env-llm` when status indicates no index, then runs `enzyme refresh --use-env-llm`. It skips quietly for expected conditions and writes safe status to:
+Default schedule is `30 2 * * *`, after the memory heartbeat default. Override with `--enzyme-refresh-cron "0 3 * * *"` or `ENZYME_REFRESH_CRON="0 3 * * *"`; either schedule override also opts in. Setting `AGENTVILLAGE_ENZYME_REFRESH_CRON=1` also opts in. Invalid cron overrides are ignored with a warning and the default schedule is kept. The refresh runner always uses `--use-env-llm`, never hosted/default unattended auth. It checks provider env by name only, checks that the Enzyme CLI exists, requires at least one generated memory input under `memory/forum/*.md`, `memory/irl/*.md`, or `memory/hermes/sessions/**/*.md`, runs `enzyme init --use-env-llm` when status indicates no index, then runs `enzyme refresh --use-env-llm`. It skips quietly for expected conditions and writes safe status to:
 
 ```text
 memory/enzyme-refresh-status.json
 ```
 
-The status file records attempt/success/skipped reason, provider family and env var names only, source counts/mtimes, action return codes, and timestamps. It never stores key values.
+The status file records attempt/success/skipped reason, provider family and env var names only, source counts/mtimes, a SHA256 fingerprint over relative input paths/mtimes/sizes, action return codes, and timestamps. It never stores key values or memory file contents.
 
 Use direct Enzyme commands when runtime/tooling exposes shell access:
 
