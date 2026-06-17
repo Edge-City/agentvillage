@@ -14,6 +14,10 @@ const baseContext: DailyBriefContext = {
   opportunities: [],
   connectionOpportunities: [],
   communityOpportunities: [],
+  userModel: {
+    phrases: [],
+    interestTags: [],
+  },
   diagnostics: {
     announcementsSource: "unavailable",
     calendarSource: "unavailable",
@@ -45,7 +49,9 @@ describe("composeDailyBrief", () => {
     });
 
     expect(body).toContain("🌞 Good morning from Edge Esmeralda. It is Thursday, June 4");
-    expect(body).toContain("**A few things on today:**");
+    expect(body).toContain("Here is the shape of today:");
+    expect(body).toContain("GNOSIS Journey is the spine of the day.");
+    expect(body).toContain("**Calendar picks**");
     expect(body).toContain("9:00 AM — [GNOSIS Journey](https://edgecity.simplefi.tech/portal/edge-esmeralda-2026/events/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa) at The Hub");
     expect(body).not.toContain("PDT");
     expect(body).not.toContain("Highlighted by the EdgeOS calendar");
@@ -85,12 +91,12 @@ describe("composeDailyBrief", () => {
       diagnostics: { ...baseContext.diagnostics, calendarSource: "edgeos", rsvpSource: "edgeos" },
     });
 
-    expect(body).toContain("**On your calendar today (your RSVPs):**");
+    expect(body).toContain("**Already on your calendar**");
     expect(body).toContain("8:00 AM — [Qi Gong]");
-    expect(body).toContain("**Also on today:**");
+    expect(body).toContain("**Also worth noticing**");
     expect(body).toContain("That's a selection, not the whole day — ask me for the full calendar anytime.");
     // Qi Gong is an RSVP, so it must not also appear in the discovery list.
-    expect(body.match(/Qi Gong/g) ?? []).toHaveLength(1);
+    expect(body.match(/\d:\d\d AM — \[Qi Gong\]/g) ?? []).toHaveLength(1);
   });
 
   test("renders setup nudge instead of people suggestions when people setup is required", () => {
@@ -118,8 +124,8 @@ describe("composeDailyBrief", () => {
     });
 
     expect(body).toContain("**People**");
-    expect(body).toContain("I need a quick setup first");
-    expect(body).toContain("Reply \"set me up\" anytime");
+    expect(body).toContain("I do not have enough from you yet to include people here");
+    expect(body).toContain("what Edge Esmeralda should understand about you");
     expect(body).not.toContain("Index");
     expect(body).not.toContain("onboarding");
     expect(questionIds).toEqual(["q-0001"]);
@@ -132,7 +138,7 @@ describe("composeDailyBrief", () => {
         {
           name: "Maya",
           opportunityId: "opp-1",
-          mainText: "You both care about privacy-preserving agents",
+          mainText: "Maya is building an Index networking match around AI bias signals.",
           profileUrl: "https://index.network/u/11111111-1111-1111-1111-111111111111",
           acceptUrl: "https://protocol.index.network/c/abc123",
           feedCategory: "connection",
@@ -142,7 +148,7 @@ describe("composeDailyBrief", () => {
         {
           name: "Maya",
           opportunityId: "opp-1",
-          mainText: "You both care about privacy-preserving agents",
+          mainText: "Maya is building an Index networking match around AI bias signals.",
           profileUrl: "https://index.network/u/11111111-1111-1111-1111-111111111111",
           acceptUrl: "https://protocol.index.network/c/abc123",
           feedCategory: "connection",
@@ -151,9 +157,14 @@ describe("composeDailyBrief", () => {
     });
 
     expect(opportunityIds).toEqual(["opp-1"]);
-    expect(body).toContain("**People worth meeting today:**");
+    expect(body).toContain("**People, if useful**");
     expect(body).not.toContain("Potential connections via Index Network");
     expect(body).toContain("<!-- digest-opportunity:id=opp-1 -->[Maya]");
+    expect(body).toContain("community meeting people overlap around AI leaning interests");
+    const proseOnly = body
+      .replace(/<!--[^>]*-->/g, "")
+      .replace(/https?:\/\/\S+/g, "");
+    expect(proseOnly).not.toMatch(/\b(Index|opportunity|match|networking|signal|intent|bias)\b/i);
     expect(body).toContain("[Say hi](https://protocol.index.network/c/abc123)");
     // Fresh opportunity — no reminder framing.
     expect(body).not.toContain("Still open");
@@ -354,7 +365,7 @@ describe("composeDailyBrief", () => {
     expect(questionIds).toEqual(["q-0001"]);
     expect(body).toContain("<!-- digest-question:id=q-0001 -->**One for you:** What kind of collaboration are you most open to right now?");
     expect(body).toContain("Reply to me anytime!");
-    expect(body.indexOf("That's it for now")).toBeLessThan(body.indexOf("**One for you:**"));
+    expect(body.indexOf("If this is the wrong version of you for today")).toBeLessThan(body.indexOf("**One for you:**"));
   });
 
   test("omits the question postscript from the pointer-only fallback digest", () => {
@@ -364,6 +375,7 @@ describe("composeDailyBrief", () => {
     });
     expect(questionIds).toEqual([]);
     expect(body).toContain("I couldn't check the live calendar this morning");
+    expect(body).toContain("Ask me what's on today and I'll look it up.");
     expect(body).not.toContain("**One for you:**");
     expect(body).not.toContain("digest-question");
   });
@@ -397,5 +409,43 @@ describe("composeDailyBrief", () => {
       weather: { forecast: "", emoji: "", source: "unavailable" },
     });
     expect(weatherDown.split("\n")[0]).toBe("🌞 Good morning from Edge Esmeralda. It is Thursday, June 4");
+  });
+
+  test("renders a calendar-led thesis with a correctable user model", () => {
+    const { body } = composeDailyBrief({
+      ...baseContext,
+      userModel: {
+        phrases: ["I build privacy-preserving agents", "I care about protocol governance"],
+        interestTags: ["AI", "Privacy", "Governance & Coordination"],
+      },
+      rsvpEvents: [
+        {
+          id: "event-rsvp",
+          title: "Agent Systems Lab",
+          startTime: "2026-06-04T16:00:00Z",
+          timePacific: "9:00 AM",
+          tags: ["AI"],
+          highlighted: false,
+          reasonHint: "You RSVPed to this.",
+        },
+      ],
+      interestEvents: [
+        {
+          id: "event-2",
+          title: "Protocol Governance Roundtable",
+          startTime: "2026-06-04T20:00:00Z",
+          timePacific: "1:00 PM",
+          tags: ["Governance & Coordination"],
+          highlighted: false,
+          reasonHint: "Selected because it overlaps with the user's known interests.",
+        },
+      ],
+      diagnostics: { ...baseContext.diagnostics, calendarSource: "edgeos", rsvpSource: "edgeos" },
+    });
+
+    expect(body).toContain("Agent Systems Lab and Protocol Governance Roundtable are the spine of the day.");
+    expect(body).toContain("Against what I currently have about you — I build privacy-preserving agents and I care about protocol governance — this looks like a day for testing which parts still fit today.");
+    expect(body).toContain("If this is the wrong version of you for today, reply with the correction.");
+    expect(body).not.toMatch(/\b(Index|opportunity|match|networking|signal|intent|bias)\b/i);
   });
 });

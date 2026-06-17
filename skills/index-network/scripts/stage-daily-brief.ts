@@ -2,11 +2,11 @@
 /**
  * Deterministically compose and stage the daily morning brief.
  *
- * The cron prompt still fetches Index opportunities through MCP and writes the
- * transcript to `memory/digest-opportunities.txt`. This script owns everything
- * after that: context building, markdown composition, URL validation, Kanban
- * create/block, and heartbeat bookkeeping. Keeping this deterministic avoids
- * prompt-generated shell quoting bugs and CLI flag drift.
+ * This script owns the deterministic prepare path: context building, markdown
+ * composition, URL validation, Kanban create/block, and heartbeat bookkeeping.
+ * Context building fetches people/community cards through MCP when configured
+ * and keeps the old transcript fallback for tests/recovery. Keeping staging
+ * deterministic avoids prompt-generated shell quoting bugs and CLI flag drift.
  */
 
 import { existsSync, rmSync } from "node:fs";
@@ -75,6 +75,16 @@ function eventLine(event: DailyBriefContext["highlightedEvents"][number]): strin
   return `- ${event.timePacific} — ${title}${venue}`;
 }
 
+function plainEventTitle(event: DailyBriefContext["highlightedEvents"][number]): string {
+  return event.title.trim();
+}
+
+function joinNatural(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
+
 function opportunityLabel(opp: BriefOpportunity): string {
   return opp.profileUrl ? `[${opp.name}](${opp.profileUrl})` : opp.name;
 }
@@ -85,6 +95,22 @@ function opportunityMarker(opp: BriefOpportunity): string {
 
 function normalizeOpportunityText(text: string): string {
   return text.replace(/\s+/g, " ").trim();
+}
+
+function sanitizeVisibleProse(text: string): string {
+  return text
+    .replace(/\bIndex(?: Network)?\b/gi, "community")
+    .replace(/\bintents?\b/gi, "interests")
+    .replace(/\bsignals?\b/gi, "interests")
+    .replace(/\bopportunities\b/gi, "possibilities")
+    .replace(/\bopportunity\b/gi, "possibility")
+    .replace(/\bmatches\b/gi, "overlaps")
+    .replace(/\bmatching\b/gi, "finding overlap")
+    .replace(/\bmatch\b/gi, "overlap")
+    .replace(/\bnetworking\b/gi, "meeting people")
+    .replace(/\bbias(?:es|ed|ing)?\b/gi, "leaning")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function firstName(name: string): string {
@@ -115,7 +141,7 @@ function opportunityReason(
 ): { text: string; includesLabel: boolean } {
   const text = normalizeOpportunityText(opp.mainText || fallback);
   const firstSentence = text.split(/(?<=[.!?])\s+/)[0]?.trim() ?? text;
-  const reason = firstSentence.replace(/[,.]$/, "");
+  const reason = sanitizeVisibleProse(firstSentence.replace(/[,.]$/, ""));
   return linkifyOpportunityName(reason, opp);
 }
 
@@ -128,15 +154,32 @@ export function composeDailyBrief(context: DailyBriefContext): { body: string; o
   const lines: string[] = [
     greeting,
     "",
-    "Here's what you need to know today:",
+    "Here is the shape of today:",
     "",
   ];
   const opportunityIds: string[] = [];
   const questionIds: string[] = [];
   let hasVerifiedContent = false;
 
+  // Key on id + start time so distinct occurrences of a recurring event are not collapsed.
+  const eventKey = (event: DailyBriefContext["highlightedEvents"][number]) => `${event.id ?? event.title}:${event.startTime}`;
+  const rsvpKeys = new Set(context.rsvpEvents.map(eventKey));
+  const events = [...context.highlightedEvents, ...context.interestEvents].filter((event) => !rsvpKeys.has(eventKey(event)));
+
+  const allCalendarEvents = [...context.rsvpEvents, ...events];
+  if (allCalendarEvents.length > 0) {
+    const titles = allCalendarEvents.slice(0, 3).map(plainEventTitle);
+    const userPhrases = context.userModel?.phrases ?? [];
+    const profileClause = userPhrases.length > 0
+      ? `Against what I currently have about you — ${joinNatural(userPhrases.slice(0, 2))} — this looks like a day for testing which parts still fit today.`
+      : "I do not have much about you yet, so today is also a chance to tell me what I should carry forward.";
+    lines.push(`${joinNatural(titles)} ${titles.length === 1 ? "is" : "are"} the spine of the day. ${profileClause}`);
+    lines.push("");
+    hasVerifiedContent = true;
+  }
+
   if (context.announcements.length > 0) {
-    lines.push("**Announcements**");
+    lines.push("**From the village**");
     for (const announcement of context.announcements) {
       lines.push(`- ${announcement.body}`);
     }
@@ -145,18 +188,14 @@ export function composeDailyBrief(context: DailyBriefContext): { body: string; o
   }
 
   if (context.rsvpEvents.length > 0) {
-    lines.push("**On your calendar today (your RSVPs):**");
+    lines.push("**Already on your calendar**");
     for (const event of context.rsvpEvents) lines.push(eventLine(event));
     lines.push("");
     hasVerifiedContent = true;
   }
 
-  // Key on id + start time so distinct occurrences of a recurring event are not collapsed.
-  const eventKey = (event: DailyBriefContext["highlightedEvents"][number]) => `${event.id ?? event.title}:${event.startTime}`;
-  const rsvpKeys = new Set(context.rsvpEvents.map(eventKey));
-  const events = [...context.highlightedEvents, ...context.interestEvents].filter((event) => !rsvpKeys.has(eventKey(event)));
   if (events.length > 0) {
-    lines.push(context.rsvpEvents.length > 0 ? "**Also on today:**" : "**A few things on today:**");
+    lines.push(context.rsvpEvents.length > 0 ? "**Also worth noticing**" : "**Calendar picks**");
     for (const event of events) lines.push(eventLine(event));
     if (context.diagnostics.calendarSource === "edgeos") {
       lines.push("That's a selection, not the whole day — ask me for the full calendar anytime.");
@@ -170,11 +209,11 @@ export function composeDailyBrief(context: DailyBriefContext): { body: string; o
     .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))
     .slice(0, CONNECTION_DIGEST_LIMIT);
   if (connectionOpportunities.length > 0) {
-    lines.push("**People worth meeting today:**");
+    lines.push("**People, if useful**");
     for (const opp of connectionOpportunities) {
       if (opp.opportunityId) opportunityIds.push(opp.opportunityId);
       const action = opp.acceptUrl ? ` [Say hi](${opp.acceptUrl}).` : " Say hi.";
-      const reason = opportunityReason(opp, "Relevant overlap with your current signals.");
+      const reason = opportunityReason(opp, "Relevant to what you have shared.");
       const lineBody = reason.includesLabel ? reason.text : `${opportunityLabel(opp)} — ${reason.text}`;
       // Cooldown re-shows are framed as reminders so the user knows this is a
       // deliberate nudge about something still waiting, not a repeated rec.
@@ -185,7 +224,7 @@ export function composeDailyBrief(context: DailyBriefContext): { body: string; o
     hasVerifiedContent = true;
   } else if (peopleSetupRequired) {
     lines.push("**People**");
-    lines.push("- Want people suggestions in future briefs? I need a quick setup first: who you are and what you're open to. Reply \"set me up\" anytime.");
+    lines.push("- I do not have enough from you yet to include people here. Reply with one sentence about what Edge Esmeralda should understand about you.");
     lines.push("");
   }
 
@@ -193,7 +232,7 @@ export function composeDailyBrief(context: DailyBriefContext): { body: string; o
     .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))
     .slice(0, COMMUNITY_DIGEST_LIMIT);
   if (communityOpportunities.length > 0) {
-    lines.push("**Help your community**");
+    lines.push("**Someone else asked around**");
     for (const opp of communityOpportunities) {
       if (opp.opportunityId) opportunityIds.push(opp.opportunityId);
       const action = opp.acceptUrl ? ` Know someone? [Make intro](${opp.acceptUrl}).` : " Know someone? Make intro.";
@@ -214,7 +253,11 @@ export function composeDailyBrief(context: DailyBriefContext): { body: string; o
     lines.push("I couldn't check the live calendar this morning — ask me what's on today and I'll look it up.", "");
   }
 
-  lines.push("That's it for now. You can always ask me for more detail, or any other questions you have!");
+  if (hasVerifiedContent) {
+    lines.push("If this is the wrong version of you for today, reply with the correction.");
+  } else {
+    lines.push("Ask me what's on today and I'll look it up.");
+  }
 
   // "One for you" postscript: deliberately placed after the sign-off as a P.S.
   // (sanctioned in prepare.md). Gated on hasVerifiedContent so the pointer-only

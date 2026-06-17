@@ -2,10 +2,11 @@
 /**
  * Build deterministic source context for the daily morning brief.
  *
- * The composer prompt still writes the final prose, but this script owns the
+ * The prepare script writes the final prose, but this module owns the
  * mechanical fetching/ranking pieces: admin announcements, today's EdgeOS
- * highlighted events, a simple interest-fill event, and parsed Index MCP
- * opportunity cards when the prompt provides a list_opportunities transcript.
+ * highlighted events, interest-fill events, local user-model snippets, and
+ * Index MCP people/community cards (direct MCP fetch when configured, with a
+ * transcript fallback for tests/recovery).
  *
  * Usage (from $HERMES_HOME):
  *   bun skills/index-network/scripts/build-daily-brief-context.ts \
@@ -95,6 +96,8 @@ const TAG_KEYWORDS: Record<string, string[]> = {
   "Art & Culture": ["art", "culture", "music", "film", "storytelling"],
 };
 
+const INTERNAL_VISIBLE_WORD_PATTERN = /\b(?:bias|intents?|signals?|index|opportunit(?:y|ies)|match(?:es|ing)?|networking)\b/i;
+
 export interface DailyBriefWeather {
   forecast: string;
   emoji: string;
@@ -140,6 +143,11 @@ export interface BriefOpportunity {
   redelivery?: boolean;
 }
 
+export interface BriefUserModel {
+  phrases: string[];
+  interestTags: string[];
+}
+
 export interface DailyBriefContext {
   date: string;
   displayDate: string;
@@ -151,6 +159,7 @@ export interface DailyBriefContext {
   opportunities: BriefOpportunity[];
   connectionOpportunities: BriefOpportunity[];
   communityOpportunities: BriefOpportunity[];
+  userModel: BriefUserModel;
   weather?: DailyBriefWeather;
   questions?: BriefQuestion[];
   diagnostics: {
@@ -277,6 +286,45 @@ export function extractInterestTags(text: string): string[] {
     .filter((entry) => entry.score > 0)
     .sort((a, b) => b.score - a.score || a.tag.localeCompare(b.tag));
   return scored.map((entry) => entry.tag).slice(0, 6);
+}
+
+function stripMarkdownNoise(line: string): string {
+  return line
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(/^\s*[-*]\s+/, " ")
+    .replace(/[`*_>#]+/g, " ")
+    .replace(/\[[^\]]+\]\([^)]+\)/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function extractUserModelPhrases(text: string, interestTags: string[]): string[] {
+  const keywords = new Set<string>();
+  for (const tag of interestTags) {
+    keywords.add(tag.toLowerCase());
+    for (const keyword of TAG_KEYWORDS[tag] ?? []) keywords.add(keyword.toLowerCase());
+  }
+  if (keywords.size === 0) return [];
+
+  const seen = new Set<string>();
+  const phrases: string[] = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = stripMarkdownNoise(rawLine);
+    if (line.length < 8 || line.length > 180) continue;
+    if (/^(date|tags?|notes?|memory|user|today)\s*:/i.test(line)) continue;
+    const lower = line.toLowerCase();
+    if (INTERNAL_VISIBLE_WORD_PATTERN.test(lower)) continue;
+    if (![...keywords].some((keyword) => lower.includes(keyword))) continue;
+    const sentence = line.split(/(?<=[.!?])\s+/)[0]?.trim() ?? line;
+    const phrase = sentence.length > 120 ? `${sentence.slice(0, 119).trimEnd()}…` : sentence;
+    const key = phrase.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    phrases.push(phrase);
+    if (phrases.length >= 3) break;
+  }
+  return phrases;
 }
 
 function eventVenue(event: EdgeEvent): string | null {
@@ -983,6 +1031,10 @@ export async function buildDailyBriefContext(options: {
   const userFiles = options.userFiles ?? ["USER.md", "MEMORY.md", `memory/${date}.md`];
   const interestText = (await Promise.all(userFiles.map(readIfExists))).join("\n");
   const interestTags = extractInterestTags(interestText);
+  const userModel: BriefUserModel = {
+    phrases: extractUserModelPhrases(interestText, interestTags),
+    interestTags,
+  };
 
   const [announcementResult, eventResult, rsvpResult, weather] = await Promise.all([
     fetchAnnouncements(date, warnings),
@@ -1039,6 +1091,7 @@ export async function buildDailyBriefContext(options: {
     opportunities,
     connectionOpportunities: opportunities.filter((opp) => opp.feedCategory === "connection"),
     communityOpportunities: opportunities.filter((opp) => opp.feedCategory === "connector-flow"),
+    userModel,
     weather: weather.source !== "unavailable" ? weather : undefined,
     questions,
     diagnostics: {
