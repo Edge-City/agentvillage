@@ -10,6 +10,13 @@ import setup_workspace
 
 
 class SetupWorkspaceCronTest(unittest.TestCase):
+    def test_cron_prompt_keeps_enzyme_refresh_operator_gated(self) -> None:
+        prompt = setup_workspace.cron_prompt()
+
+        self.assertIn("workspace_loop.py --prepare", prompt)
+        self.assertIn("Do not run `enzyme refresh` from this heartbeat", prompt)
+        self.assertIn("provider-gated refresh path", prompt)
+
     def test_install_cron_removes_stale_same_name_even_when_valid_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

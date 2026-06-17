@@ -321,6 +321,7 @@ def cron_prompt() -> str:
             "Keep the notes concise, grounded, and uncertainty-aware.",
             "Do not copy `memory/hermes-workspace-context.json` wholesale into the vault.",
             "After writing the notes, run `python3 skills/index-network/scripts/memory-workspace/workspace_loop.py --prepare`.",
+            "Do not run `enzyme refresh` from this heartbeat; retrieval stays stale until an operator runs the provider-gated refresh path.",
             "Return `[SILENT]` unless a local operator-facing summary is genuinely needed.",
         ]
     )

@@ -25,7 +25,7 @@ python3 skills/index-network/scripts/memory-workspace/setup_workspace.py \
 
 If `--skip-crons` is passed to the AgentVillage installer, `--install-cron` is omitted. Normal install does not install Enzyme, run `enzyme init`, run `enzyme refresh`, run `enzyme install hermes`, or print provider secrets.
 
-AgentVillage writes Hermes runtime instructions manually in `workspace/AGENTS.md`. This setup script installs the memory folders, managed Enzyme config, non-secret env references, and heartbeat cron. Existing legacy `agent-memory-vault/` installs are migrated into `memory/` during setup when safe. Enzyme `init`/`refresh` only initialize or update the memory index; they do not rewrite AgentVillage runtime instructions.
+AgentVillage writes Hermes runtime instructions manually in `workspace/AGENTS.md`. This setup script installs the memory folders, managed Enzyme config, non-secret env references, and heartbeat cron. Existing legacy `agent-memory-vault/` installs are migrated into `memory/` during setup when safe. Enzyme `init`/`refresh` only initialize or update the memory index; they do not rewrite AgentVillage runtime instructions. `enzyme init` is safe as an optional operator bootstrap when provider env exists, even if the vault is still empty. It is not a substitute for later refreshes: after the heartbeat writes new forum/IRL/session markdown, semantic retrieval stays stale until `enzyme refresh` runs.
 
 ## Enzyme Env
 
@@ -59,6 +59,8 @@ python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --check
 python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-enzyme init --use-env-llm
 python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-enzyme refresh --use-env-llm
 ```
+
+The default heartbeat does not run refresh automatically, because `init`/`refresh` can use hosted credits or ambient provider keys. If a deployment wants automatic freshness, add a separately reviewed, provider-gated refresh cron rather than hiding model spend inside the memory heartbeat.
 
 Use direct Enzyme commands when runtime/tooling exposes shell access:
 
@@ -111,3 +113,5 @@ That wrapper runs `skills/index-network/scripts/memory-workspace/cron_prepare.py
 ```bash
 python3 skills/index-network/scripts/memory-workspace/workspace_loop.py --prepare
 ```
+
+The cron prompt explicitly tells the heartbeat not to run `enzyme refresh`. Run the provider-gated refresh command above after heartbeat output when retrieval freshness matters.
