@@ -120,6 +120,8 @@ python3 skills/index-network/scripts/memory-workspace/render_vault_sessions.py \
 
 `hermes/sessions/` remains indexed as transcript provenance/evidence, but rendered sessions carry `source_surface`, `session_kind`, and `retrieval_weight` frontmatter. Down-rank or ignore `session_kind: operator_validation` and `session_kind: debug_validation` unless explicitly auditing historical validation/debug work.
 
+For profile-generation prompts such as "create a profile from what you know about me", use Enzyme paths and folders as authority signals. `USER.md`, `MEMORY.md`, approved profile data, and direct user-authored session messages can support self-profile claims; `forum/` and `irl/` are context/affordance observations; rendered sessions require role, source-surface, timestamp, and session-kind scrutiny. For public or outward profile copy, draft from verified evidence and require explicit user approval before posting, updating a profile, sharing outward, or creating an external account.
+
 ## Cron
 
 The installed cron is `Hermes agent memory heartbeat`, with no delivery target. Hermes cron scripts must live under `~/.hermes/scripts/` and be referenced by filename, so setup writes a small wrapper at:
