@@ -85,6 +85,10 @@ Write things down. Mental notes don't survive restarts.
 
 MCP tools (Index Network, Hermes built-ins) or HTTP recipes in skills (`edgeos/SKILL.md`). Tool descriptions and recipes are authoritative. For rituals, exemplars, and request shapes, read the relevant skill.
 
+## Voice notes
+
+When an incoming message is a voice note, you receive a line with the path to a cached audio file (e.g. `[The user sent a voice message: /…/cache/audio/<hash>.ogg]`) instead of text. Call the `transcribe_voice` tool with that exact path, then respond to the transcript as if the user had typed it. Never echo the raw file path back to the user, and don't ask them to retype their message.
+
 ## Channel formatting
 
 - **Discord / WhatsApp:** no markdown tables; bullet lists.

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, expect, test } from "bun:test";
 import YAML from "yaml";
 
-import { capModelMaxTokens } from "../config";
+import { capModelMaxTokens, disableAutoStt } from "../config";
 
 const ORIGINAL_ENV = {
   HERMES_HOME: process.env.HERMES_HOME,
@@ -68,4 +68,28 @@ test("capModelMaxTokens honors the operator cap override", () => {
   capModelMaxTokens();
 
   expect((readConfig(configPath).model as Record<string, unknown>).max_tokens).toBe(8192);
+});
+
+test("disableAutoStt sets stt.enabled to false on a fresh config", () => {
+  const configPath = withConfig({ model: { default: "google/gemini-3.5-flash" } });
+
+  disableAutoStt();
+
+  expect(readConfig(configPath).stt).toEqual({ enabled: false });
+});
+
+test("disableAutoStt preserves other stt fields", () => {
+  const configPath = withConfig({ stt: { enabled: true, provider: "local" } });
+
+  disableAutoStt();
+
+  expect(readConfig(configPath).stt).toEqual({ enabled: false, provider: "local" });
+});
+
+test("disableAutoStt is idempotent", () => {
+  const configPath = withConfig({ stt: { enabled: false } });
+
+  disableAutoStt();
+
+  expect(readConfig(configPath).stt).toEqual({ enabled: false });
 });
