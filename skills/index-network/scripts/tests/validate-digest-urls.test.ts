@@ -100,16 +100,25 @@ describe("sanitizeDigestUrls", () => {
     expect(stripped).toEqual(["https://index.network/accept/901"]);
   });
 
-  test("known non-target: bare URLs and autolinks pass through unstripped (out of guard scope)", () => {
-    // Documents a deliberate limitation: the guard only covers inline `[label](url)`
-    // links — the only shape the digest prompts emit. A bare or autolinked fabricated
-    // URL is NOT caught. If the prompts ever start emitting these, this test should flip.
-    const md = "See https://index.network/accept/901 or <https://index.network/accept/901>";
+  test("strips fabricated bare URLs and autolinks", () => {
+    const md = "See https://index.network/accept/901, or <https://index.network/accept/902>";
 
     const { output, stripped } = sanitizeDigestUrls(md);
 
-    expect(output).toBe(md);
-    expect(stripped).toEqual([]);
+    expect(output).toBe("See , or ");
+    expect(stripped).toEqual([
+      "https://index.network/accept/902",
+      "https://index.network/accept/901",
+    ]);
+  });
+
+  test("preserves allowed markdown links while scanning bare URLs", () => {
+    const md = "[Maya](https://index.network/u/22222222-2222-2222-2222-222222222222) and https://index.network/accept/901.";
+
+    const { output, stripped } = sanitizeDigestUrls(md);
+
+    expect(output).toBe("[Maya](https://index.network/u/22222222-2222-2222-2222-222222222222) and .");
+    expect(stripped).toEqual(["https://index.network/accept/901"]);
   });
 
   test("does not treat a trailing-slash /c/ or /u/ path as fabricated", () => {
