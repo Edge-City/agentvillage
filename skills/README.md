@@ -109,7 +109,7 @@ bun install/install.ts --index-api-key <KEY>
 
 Installs flat under `~/.hermes/` (SOUL.md, AGENTS.md, skills/, `terminal.cwd`) — Hermes defaults, no subfolders.
 
-The installer also sets up `memory/`, writes `memory/enzyme-env.sh` with references only, migrates legacy `agent-memory-vault/` content when safe, and installs the memory heartbeat cron unless `--skip-crons` is passed. Normal install does not install Enzyme, run `enzyme init` / `enzyme refresh`, or run `enzyme install hermes`. AgentVillage owns Hermes runtime memory instructions in `workspace/AGENTS.md`; Enzyme init/refresh only indexes memory. `enzyme init` can be run during operator bootstrap when provider env exists, but it does not cover future heartbeat writes. After the heartbeat writes or updates forum/IRL/session markdown, retrieval stays stale until `enzyme refresh` runs.
+The installer also sets up `memory/`, writes `memory/enzyme-env.sh` with references only, migrates legacy `agent-memory-vault/` content when safe, and installs the memory heartbeat cron unless `--skip-crons` is passed. Normal install does not install Enzyme, run `enzyme init` / `enzyme refresh`, schedule automatic refresh spend, or run `enzyme install hermes`. AgentVillage owns Hermes runtime memory instructions in `workspace/AGENTS.md`; Enzyme init/refresh only indexes memory. `enzyme init` can be run during operator bootstrap when provider env exists, but it does not cover future heartbeat writes. After the heartbeat writes or updates forum/IRL/session markdown, retrieval stays stale until `enzyme refresh` runs.
 
 To validate provider env without printing secrets:
 
@@ -124,7 +124,15 @@ python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-e
 python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-enzyme refresh --use-env-llm
 ```
 
-The default heartbeat does not run this refresh automatically, to avoid hidden model/provider spend. Treat refresh as an explicit operator action or add a separately reviewed, provider-gated cron for deployments that accept that cost.
+The default heartbeat does not run this refresh automatically, to avoid hidden model/provider spend. Treat refresh as an explicit operator action or opt in to the separate provider-gated refresh cron for deployments that accept that cost:
+
+```bash
+bun install/install.ts --index-api-key <KEY> --install-enzyme-refresh-cron
+# optional schedule override:
+bun install/install.ts --index-api-key <KEY> --install-enzyme-refresh-cron --enzyme-refresh-cron "0 3 * * *"
+```
+
+The opt-in cron runs after the memory heartbeat by default (`30 2 * * *`), has no delivery target, runs through `$HERMES_HOME/.hermes/scripts/`, uses only `--use-env-llm`, self-inits when status indicates the vault has no index, then refreshes. It skips quietly when provider env, the Enzyme CLI, or generated memory input is missing, or when the sources have not changed. It records safe status in `memory/enzyme-refresh-status.json`.
 
 Hosted Hermes may have Enzyme at `$HERMES_HOME/.local/bin/enzyme` or `/opt/data/.local/bin/enzyme`. AgentVillage install adds those locations to Hermes terminal PATH so runtime agents can call `enzyme` directly:
 

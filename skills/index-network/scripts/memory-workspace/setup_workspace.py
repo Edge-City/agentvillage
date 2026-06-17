@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from common import context_path, default_state, legacy_vault_root, state_path, vault_root, write_json
+from common import context_path, default_state, legacy_vault_root, now_iso, read_json, state_path, vault_root, write_json
 from secret_redaction import scan_files
 
 
@@ -19,6 +19,10 @@ ENZYME_BLOCK_END = "# END agentvillage-memory-workspace"
 DEFAULT_CRON_NAME = "Hermes agent memory heartbeat"
 DEFAULT_CRON_SCHEDULE = "0 2 * * *"
 DEFAULT_CRON_SCRIPT_NAME = "agentvillage-memory-workspace-cron_prepare.py"
+DEFAULT_REFRESH_CRON_NAME = "Hermes agent memory index refresh"
+DEFAULT_REFRESH_CRON_SCHEDULE = "30 2 * * *"
+DEFAULT_REFRESH_CRON_SCRIPT_NAME = "agentvillage-memory-workspace-enzyme-refresh.py"
+ENZYME_REFRESH_STATE_NAME = "enzyme-refresh-status.json"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_OPENROUTER_MODEL = "google/gemini-3-flash-preview"
 OFFICIAL_ENZYME_INSTALL = "curl -fsSL https://enzyme.garden/install.sh | bash"
@@ -210,6 +214,13 @@ def provider_presence(root: Path) -> dict:
     return {"selectedProvider": selected, "vars": vars_report, "warnings": warnings}
 
 
+def int_env(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)) or str(default))
+    except ValueError:
+        return default
+
+
 def write_enzyme_env(root: Path, provider: str) -> Path:
     env_path = root / "memory" / "enzyme-env.sh"
     env_path.parent.mkdir(parents=True, exist_ok=True)
@@ -304,6 +315,211 @@ def run_enzyme(vault: Path, action: str, enzyme_bin: str, root: Path, provider: 
     }
 
 
+def refresh_state_path(root: Path) -> Path:
+    return root / "memory" / ENZYME_REFRESH_STATE_NAME
+
+
+def enzyme_memory_inputs(root: Path) -> list[Path]:
+    memory = root / "memory"
+    candidates: list[Path] = []
+    for pattern in ["forum/*.md", "irl/*.md", "hermes/sessions/**/*.md"]:
+        candidates.extend(path for path in memory.glob(pattern) if path.is_file())
+    return sorted(candidates)
+
+
+def memory_input_report(root: Path) -> dict:
+    files = enzyme_memory_inputs(root)
+    newest_mtime = max((path.stat().st_mtime for path in files), default=None)
+    return {
+        "count": len(files),
+        "newestMtime": newest_mtime,
+        "newestMtimeIso": now_iso_from_timestamp(newest_mtime) if newest_mtime else None,
+        "families": {
+            "forum": len([path for path in files if path.parent == root / "memory" / "forum"]),
+            "irl": len([path for path in files if path.parent == root / "memory" / "irl"]),
+            "hermesSessions": len([path for path in files if root / "memory" / "hermes" / "sessions" in path.parents]),
+        },
+    }
+
+
+def now_iso_from_timestamp(value: float) -> str:
+    import datetime as dt
+
+    return dt.datetime.fromtimestamp(value, tz=dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def provider_missing_keys(root: Path, provider: str) -> list[str]:
+    selected = select_provider(root, provider)
+    required = "OPENAI_API_KEY" if selected == "openai" else "OPENROUTER_API_KEY"
+    _, source = resolve_env_value(root, required)
+    return [] if source else [required]
+
+
+def provider_env_names(root: Path, provider: str) -> dict:
+    selected = select_provider(root, provider)
+    prefix = "OPENAI" if selected == "openai" else "OPENROUTER"
+    return {
+        "provider": selected,
+        "apiKey": f"{prefix}_API_KEY",
+        "baseUrl": f"{prefix}_BASE_URL",
+        "model": f"{prefix}_MODEL",
+        "useEnvLlm": True,
+    }
+
+
+def resolve_enzyme_bin(enzyme_bin: str) -> str | None:
+    resolved = shutil.which(enzyme_bin) if enzyme_bin == "enzyme" else shutil.which(enzyme_bin) or enzyme_bin
+    if resolved and Path(resolved).exists():
+        return resolved
+    return None
+
+
+def enzyme_status_needs_init(result: subprocess.CompletedProcess[str]) -> bool:
+    text = f"{result.stdout}\n{result.stderr}".lower()
+    if result.returncode != 0:
+        return True
+    return any(
+        marker in text
+        for marker in [
+            "not initialized",
+            "uninitialized",
+            "no index",
+            "index not found",
+            "missing index",
+            "run enzyme init",
+        ]
+    )
+
+
+def run_enzyme_subprocess(
+    resolved_bin: str,
+    vault: Path,
+    action: str,
+    root: Path,
+    provider: str,
+    use_env_llm: bool,
+) -> subprocess.CompletedProcess[str]:
+    cmd = [resolved_bin, action, "--vault", str(vault)]
+    env = os.environ.copy()
+    if use_env_llm:
+        cmd.append("--use-env-llm")
+        env = enzyme_env(root, provider)
+    return subprocess.run(cmd, text=True, capture_output=True, env=env)
+
+
+def write_refresh_attempt(root: Path, report: dict) -> None:
+    write_json(refresh_state_path(root), report)
+
+
+def refresh_skip(root: Path, reason: str, inputs: dict, provider_report: dict, extra: dict | None = None) -> dict:
+    report = {
+        "ok": True,
+        "status": "skipped",
+        "reason": reason,
+        "attemptedAt": now_iso(),
+        "providerEnv": provider_report,
+        "inputs": inputs,
+    }
+    if extra:
+        report.update(extra)
+    write_refresh_attempt(root, report)
+    return report
+
+
+def refresh_enzyme_index(root: Path, enzyme_bin: str, provider: str, cooldown_minutes: int) -> dict:
+    vault = vault_root(root)
+    inputs = memory_input_report(root)
+    provider_report = provider_env_names(root, provider)
+    missing_env = provider_missing_keys(root, provider)
+    if missing_env:
+        return refresh_skip(root, "missing-provider-env", inputs, provider_report, {"missingEnv": missing_env})
+
+    resolved_bin = resolve_enzyme_bin(enzyme_bin)
+    if not resolved_bin:
+        return refresh_skip(
+            root,
+            "missing-enzyme-cli",
+            inputs,
+            provider_report,
+            {"missingExecutable": enzyme_bin, "install": OFFICIAL_ENZYME_INSTALL},
+        )
+
+    if inputs["count"] == 0:
+        return refresh_skip(root, "no-memory-input", inputs, provider_report)
+
+    previous = read_json(refresh_state_path(root), {})
+    last_success = previous.get("lastSuccess") if isinstance(previous.get("lastSuccess"), dict) else {}
+    last_attempt_at = previous.get("attemptedAt")
+    if cooldown_minutes > 0 and isinstance(last_attempt_at, str):
+        # Keep cron quiet when operators set a short repeat schedule for testing.
+        import datetime as dt
+
+        try:
+            then = dt.datetime.fromisoformat(last_attempt_at.replace("Z", "+00:00"))
+            age = (dt.datetime.now(dt.timezone.utc) - then).total_seconds()
+            if age < cooldown_minutes * 60:
+                return refresh_skip(
+                    root,
+                    "cooldown",
+                    inputs,
+                    provider_report,
+                    {"cooldownMinutes": cooldown_minutes, "lastAttemptAt": last_attempt_at},
+                )
+        except ValueError:
+            pass
+
+    last_newest = last_success.get("sourceNewestMtime")
+    if isinstance(last_newest, (int, float)) and inputs["newestMtime"] is not None and inputs["newestMtime"] <= float(last_newest):
+        return refresh_skip(root, "no-source-change", inputs, provider_report, {"lastSuccess": last_success})
+
+    status_result = run_enzyme_subprocess(resolved_bin, vault, "status", root, provider, use_env_llm=False)
+    needs_init = enzyme_status_needs_init(status_result)
+    actions: list[dict] = [
+        {"action": "status", "returncode": status_result.returncode, "needsInit": needs_init},
+    ]
+
+    if needs_init:
+        init_result = run_enzyme_subprocess(resolved_bin, vault, "init", root, provider, use_env_llm=True)
+        actions.append({"action": "init", "returncode": init_result.returncode, "useEnvLlm": True})
+        if init_result.returncode != 0:
+            report = {
+                "ok": False,
+                "status": "failed",
+                "reason": "enzyme-init-failed",
+                "attemptedAt": now_iso(),
+                "providerEnv": provider_report,
+                "inputs": inputs,
+                "enzymeBin": resolved_bin,
+                "actions": actions,
+            }
+            write_refresh_attempt(root, report)
+            return report
+
+    refresh_result = run_enzyme_subprocess(resolved_bin, vault, "refresh", root, provider, use_env_llm=True)
+    actions.append({"action": "refresh", "returncode": refresh_result.returncode, "useEnvLlm": True})
+    success = refresh_result.returncode == 0
+    report = {
+        "ok": success,
+        "status": "success" if success else "failed",
+        "reason": None if success else "enzyme-refresh-failed",
+        "attemptedAt": now_iso(),
+        "providerEnv": provider_report,
+        "inputs": inputs,
+        "enzymeBin": resolved_bin,
+        "actions": actions,
+    }
+    if success:
+        report["lastSuccess"] = {
+            "at": report["attemptedAt"],
+            "sourceNewestMtime": inputs["newestMtime"],
+            "sourceNewestMtimeIso": inputs["newestMtimeIso"],
+        }
+    elif last_success:
+        report["lastSuccess"] = last_success
+    write_refresh_attempt(root, report)
+    return report
+
+
 def scan_vault_secrets(root: Path, include_memory: bool) -> dict:
     files = set(vault_root(root).rglob("*.md"))
     if include_memory:
@@ -323,6 +539,17 @@ def cron_prompt() -> str:
             "After writing the notes, run `python3 skills/index-network/scripts/memory-workspace/workspace_loop.py --prepare`.",
             "Do not run `enzyme refresh` from this heartbeat; retrieval stays stale until an operator runs the provider-gated refresh path.",
             "Return `[SILENT]` unless a local operator-facing summary is genuinely needed.",
+        ]
+    )
+
+
+def refresh_cron_prompt() -> str:
+    return "\n".join(
+        [
+            "The attached script already handled the AgentVillage memory index refresh.",
+            "Do not call Telegram, gateway, digest, send, Index, EdgeOS, or memory-writing tools.",
+            "Do not read or print secrets.",
+            "Return `[SILENT]`.",
         ]
     )
 
@@ -379,10 +606,15 @@ def cron_prepare_script(root: Path) -> Path:
     return root / "skills" / "index-network" / "scripts" / "memory-workspace" / "cron_prepare.py"
 
 
-def write_cron_wrapper(root: Path, script: Path, script_name: str = DEFAULT_CRON_SCRIPT_NAME) -> Path:
+def setup_workspace_script(root: Path) -> Path:
+    return root / "skills" / "index-network" / "scripts" / "memory-workspace" / "setup_workspace.py"
+
+
+def write_cron_wrapper(root: Path, script: Path, script_name: str = DEFAULT_CRON_SCRIPT_NAME, extra_args: list[str] | None = None) -> Path:
     scripts_dir = root / ".hermes" / "scripts"
     scripts_dir.mkdir(parents=True, exist_ok=True)
     wrapper = scripts_dir / script_name
+    args_repr = repr(extra_args or [])
     wrapper.write_text(
         "\n".join(
             [
@@ -396,7 +628,8 @@ def write_cron_wrapper(root: Path, script: Path, script_name: str = DEFAULT_CRON
                 "root = Path(os.environ.get('HERMES_HOME') or DEFAULT_ROOT).expanduser().resolve()",
                 "os.chdir(root)",
                 f"script = root / {str(script.relative_to(root))!r}",
-                "raise SystemExit(subprocess.run(['python3', str(script)] + sys.argv[1:]).returncode)",
+                f"extra_args = {args_repr}",
+                "raise SystemExit(subprocess.run(['python3', str(script)] + extra_args + sys.argv[1:]).returncode)",
                 "",
             ]
         ),
@@ -468,6 +701,62 @@ def install_cron(root: Path, schedule: str, name: str, hermes_bin: str) -> dict:
     return {"installed": True, "name": name, "schedule": schedule, "script": wrapper.name, "removedStale": removed_stale}
 
 
+def install_refresh_cron(root: Path, schedule: str, name: str, hermes_bin: str, provider: str, cooldown_minutes: int) -> dict:
+    script = setup_workspace_script(root)
+    if not script.exists():
+        raise SystemExit(
+            {
+                "ok": False,
+                "missingCronScript": str(script),
+                "detail": "Copy AgentVillage skills into the target Hermes root before creating the refresh cron, then rerun setup from that root or pass --root.",
+            }
+        )
+    wrapper = write_cron_wrapper(
+        root,
+        script,
+        DEFAULT_REFRESH_CRON_SCRIPT_NAME,
+        [
+            "--refresh-enzyme-index",
+            "--enzyme-provider",
+            provider,
+            "--enzyme-refresh-cooldown-minutes",
+            str(cooldown_minutes),
+        ],
+    )
+    removed_stale = remove_stale_crons(name, hermes_bin, wrapper.name)
+    if cron_exists(name, hermes_bin, wrapper.name):
+        return {"installed": False, "reason": "already-exists", "name": name, "schedule": schedule, "script": wrapper.name, "removedStale": removed_stale}
+    args = [
+        hermes_bin,
+        "cron",
+        "create",
+        schedule,
+        refresh_cron_prompt(),
+        "--name",
+        name,
+        "--script",
+        wrapper.name,
+        "--workdir",
+        str(root),
+    ]
+    result = subprocess.run(args, text=True, capture_output=True)
+    if result.returncode != 0:
+        if result.stdout.strip():
+            print(result.stdout.strip(), file=sys.stderr)
+        if result.stderr.strip():
+            print(result.stderr.strip(), file=sys.stderr)
+        raise SystemExit(result.returncode)
+    if not cron_exists(name, hermes_bin, wrapper.name):
+        raise SystemExit(
+            {
+                "ok": False,
+                "cronCreatedButNotVerified": name,
+                "detail": "Hermes accepted the cron create command, but `hermes cron list --all` did not show the refresh job. Confirm HERMES_HOME/HERMES_BIN point at the target Hermes instance and create the cron there.",
+            }
+        )
+    return {"installed": True, "name": name, "schedule": schedule, "script": wrapper.name, "removedStale": removed_stale}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=".", help="Target Hermes workspace root")
@@ -489,9 +778,19 @@ def main() -> None:
         help="Run an Enzyme command against memory after setup",
     )
     parser.add_argument("--use-env-llm", action="store_true", help="Pass --use-env-llm to Enzyme init/refresh intentionally")
+    parser.add_argument("--refresh-enzyme-index", action="store_true", help="Cron-safe Enzyme refresh runner: env-only init when needed, then refresh")
+    parser.add_argument(
+        "--enzyme-refresh-cooldown-minutes",
+        type=int,
+        default=int_env("ENZYME_REFRESH_COOLDOWN_MINUTES", 0),
+        help="Skip refresh if the previous attempt was within this many minutes",
+    )
     parser.add_argument("--install-cron", action="store_true", help="Install the default 2am Hermes heartbeat cron")
     parser.add_argument("--cron-schedule", default=DEFAULT_CRON_SCHEDULE, help="Hermes heartbeat cron schedule")
     parser.add_argument("--cron-name", default=DEFAULT_CRON_NAME, help="Hermes heartbeat cron name")
+    parser.add_argument("--install-enzyme-refresh-cron", action="store_true", help="Install the opt-in Enzyme memory index refresh cron")
+    parser.add_argument("--enzyme-refresh-cron", default=DEFAULT_REFRESH_CRON_SCHEDULE, help="Enzyme refresh cron schedule")
+    parser.add_argument("--enzyme-refresh-cron-name", default=DEFAULT_REFRESH_CRON_NAME, help="Enzyme refresh cron name")
     parser.add_argument("--hermes-bin", default=shutil.which("hermes") or "hermes", help="Hermes executable")
     args = parser.parse_args()
 
@@ -572,10 +871,26 @@ def main() -> None:
     enzyme_env_path = None
     if args.write_enzyme_env:
         enzyme_env_path = write_enzyme_env(root, args.enzyme_provider)
+    if args.refresh_enzyme_index:
+        refresh_result = refresh_enzyme_index(root, args.enzyme_bin, args.enzyme_provider, max(0, args.enzyme_refresh_cooldown_minutes))
+        print(json.dumps(refresh_result, indent=2, sort_keys=True))
+        if refresh_result.get("status") == "failed":
+            raise SystemExit(1)
+        return
     enzyme_run_result = run_enzyme(vault, args.run_enzyme, args.enzyme_bin, root, args.enzyme_provider, args.use_env_llm)
     cron_result = None
     if args.install_cron:
         cron_result = install_cron(root, args.cron_schedule, args.cron_name, args.hermes_bin)
+    refresh_cron_result = None
+    if args.install_enzyme_refresh_cron:
+        refresh_cron_result = install_refresh_cron(
+            root,
+            args.enzyme_refresh_cron,
+            args.enzyme_refresh_cron_name,
+            args.hermes_bin,
+            args.enzyme_provider,
+            max(0, args.enzyme_refresh_cooldown_minutes),
+        )
 
     print({
         "ok": True,
@@ -587,6 +902,7 @@ def main() -> None:
         "enzymeEnv": str(enzyme_env_path) if enzyme_env_path else None,
         "enzymeRun": enzyme_run_result,
         "cron": cron_result,
+        "enzymeRefreshCron": refresh_cron_result,
         "legacyVaultMigration": migration_result,
     })
 

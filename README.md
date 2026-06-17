@@ -240,6 +240,31 @@ DIGEST_PREPARE_CRON="0 3 * * *" DIGEST_SEND_CRON="0 9 * * *" \
 
 The installer also caps `model.max_tokens` in Hermes `config.yaml` at `4096` by default so background cron turns do not inherit large provider defaults (for example `65536`). Operators can raise or lower that cap for an install by setting `HERMES_MAX_TOKENS`.
 
+### Optional Enzyme refresh cron
+
+Normal install sets up the memory folders, Enzyme config/env references, and the silent memory heartbeat, but it does **not** run `enzyme init`, run `enzyme refresh`, install Enzyme, or schedule automatic refresh spend. Deployments that explicitly accept provider-key spend can opt in to a separate non-delivering memory index refresh cron:
+
+```bash
+bun install/install.ts --index-api-key <YOUR_API_KEY> --install-enzyme-refresh-cron
+```
+
+By default this cron runs at `30 2 * * *`, after the `Hermes agent memory heartbeat` default. Override it with:
+
+```bash
+bun install/install.ts --index-api-key <YOUR_API_KEY> \
+  --install-enzyme-refresh-cron \
+  --enzyme-refresh-cron "0 3 * * *"
+```
+
+Or with environment:
+
+```bash
+AGENTVILLAGE_ENZYME_REFRESH_CRON=1 ENZYME_REFRESH_CRON="0 3 * * *" \
+  bun install/install.ts --index-api-key <YOUR_API_KEY>
+```
+
+The refresh cron runs a wrapper under `$HERMES_HOME/.hermes/scripts/`, has no delivery target, and uses only `--use-env-llm` provider env (`OPENROUTER_API_KEY` or `OPENAI_API_KEY`). It skips quietly when Enzyme is missing, provider env is missing, no generated memory input exists, the cooldown applies, or sources have not changed since the last success. If the vault is uninitialized, it runs `enzyme init --use-env-llm` once before `enzyme refresh --use-env-llm`. Status is written to `memory/enzyme-refresh-status.json` with env var names, counts, mtimes, timestamps, and safe reason codes only.
+
 The installer writes any tokens it finds into `env.vars.*` in `~/.openclaw/openclaw.json`; on the next gateway start they become process-env on the gateway and inherit into the agent's shell tool, so `curl -H "Authorization: Bearer $EDGEOS_API_KEY"` recipes and Geo CLI commands work without further plumbing.
 
 The installer:
@@ -251,7 +276,7 @@ The installer:
 5. Copies the workspace markdown bundle into `~/.openclaw/workspace/`. `USER.md` is preserved on re-install (it holds the lived notes the active skill's bootstrap ritual populated for you); pass `--wipe-user` to overwrite `USER.md` and delete the agent-curated `MEMORY.md`, OpenClaw's `workspace-state.json` first-run marker, and the local onboarding/welcome/cron-preference markers under `memory/` so the next session re-onboards from scratch.
 6. Copies backend skill bundles from `skills/` into `~/.openclaw/workspace/skills/` so OpenClaw registers them as workspace skills.
 7. Installs the Index cron jobs: a memory signal sync (`0 1 * * *`), a prepare pass (`0 2 * * *`) that composes the morning brief and stages it as an editable Kanban task, and a send pass (`0 8 * * *`) that delivers the staged brief. (The 30-minute `Edge — heartbeat` cron was retired — see the note under "Overriding the Index cron times" — and is removed from existing tenants on update.) The prepare pass stages each brief as a **blocked** Kanban task; the send pass delivers it only after an operator approves it by unblocking that task (`hermes kanban unblock <id>` or the board's unblock control), so accidental delivery is prevented without pausing the cron. The end user can't change the schedule from chat, but the installer can override the cron times via `--digest-signals-cron` / `--digest-prepare-cron` / `--digest-send-cron` (or `DIGEST_SIGNALS_CRON` / `DIGEST_PREPARE_CRON` / `DIGEST_SEND_CRON`) — see "Overriding the Index cron times" above.
-8. Sets up the Hermes memory workspace under `$HERMES_HOME`: creates `memory/forum/`, `memory/irl/`, and `memory/hermes/sessions/`, writes Enzyme config/env references without secrets, migrates legacy `agent-memory-vault/` content when safe, and installs the memory heartbeat cron unless `--skip-crons` is passed. It does not install Enzyme, run `enzyme init`, run `enzyme refresh`, or print provider secrets during normal install. `enzyme init` is an optional operator bootstrap step when provider env exists; it is not enough after future heartbeat writes. After the heartbeat updates forum/IRL/session markdown, Enzyme retrieval remains stale until an operator runs a provider-gated `enzyme refresh`.
+8. Sets up the Hermes memory workspace under `$HERMES_HOME`: creates `memory/forum/`, `memory/irl/`, and `memory/hermes/sessions/`, writes Enzyme config/env references without secrets, migrates legacy `agent-memory-vault/` content when safe, and installs the memory heartbeat cron unless `--skip-crons` is passed. It does not install Enzyme, run `enzyme init`, run `enzyme refresh`, or print provider secrets during normal install. `enzyme init` is an optional operator bootstrap step when provider env exists; it is not enough after future heartbeat writes. After the heartbeat updates forum/IRL/session markdown, Enzyme retrieval remains stale until an operator runs a provider-gated refresh or installs the explicit `--install-enzyme-refresh-cron` path described above.
 9. Restarts the gateway so all config changes take effect.
 
 Send any message in your chat to bring AgentVillage online. AgentVillage has two independent setup gates with different triggers:
@@ -283,7 +308,7 @@ bun install/reset.ts --wipe-user
 
 ## How it runs
 
-Time-sensitive and background prompts run as **Hermes/OpenClaw cron jobs**. The morning digest prepare/send prompts and the daily memory signal sync run at their own daily cron times. Cron has its own scheduler and runs isolated sessions, so each tick starts fresh from the workspace files. Cron jobs are installed by `install/install.ts` and restart with the gateway. The Hermes memory workspace also installs a silent `Hermes agent memory heartbeat` cron unless `--skip-crons` is passed. That heartbeat renders sessions and asks the local agent to update `memory/forum/` and `memory/irl/`, but it does not refresh Enzyme automatically; operators must run the explicit refresh path when they want the semantic index to include new heartbeat output. Future per-backend skills can add their own cron prompts the same way.
+Time-sensitive and background prompts run as **Hermes/OpenClaw cron jobs**. The morning digest prepare/send prompts and the daily memory signal sync run at their own daily cron times. Cron has its own scheduler and runs isolated sessions, so each tick starts fresh from the workspace files. Cron jobs are installed by `install/install.ts` and restart with the gateway. The Hermes memory workspace also installs a silent `Hermes agent memory heartbeat` cron unless `--skip-crons` is passed. That heartbeat renders sessions and asks the local agent to update `memory/forum/` and `memory/irl/`, but it does not refresh Enzyme automatically. Operators can run refresh manually or opt in to the separate `Hermes agent memory index refresh` cron, which self-inits when needed and then refreshes with provider env only. Future per-backend skills can add their own cron prompts the same way.
 
 > **Retired:** a 30-minute `Edge — heartbeat` cron used to run `skills/index-network/heartbeat.md` for accepted-opportunity notifications, freshness audits, and Telegram-handle reconciliation. It was removed because each tick loaded ~57k input tokens (full agent context + Index MCP tool surface) and, at 48 runs/day/tenant, drained the per-tenant OpenRouter key budgets fleet-wide (HTTP 402). `skills/index-network/heartbeat.md` is kept for reference only and is no longer scheduled. Latency-tolerant background work should be folded into the daily digest, an event-driven push, or a cheap deterministic (`--no-agent`) cron instead — see Edge-City/agentvillage#100.
 

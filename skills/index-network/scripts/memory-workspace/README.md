@@ -25,7 +25,7 @@ python3 skills/index-network/scripts/memory-workspace/setup_workspace.py \
 
 If `--skip-crons` is passed to the AgentVillage installer, `--install-cron` is omitted. Normal install does not install Enzyme, run `enzyme init`, run `enzyme refresh`, run `enzyme install hermes`, or print provider secrets.
 
-AgentVillage writes Hermes runtime instructions manually in `workspace/AGENTS.md`. This setup script installs the memory folders, managed Enzyme config, non-secret env references, and heartbeat cron. Existing legacy `agent-memory-vault/` installs are migrated into `memory/` during setup when safe. Enzyme `init`/`refresh` only initialize or update the memory index; they do not rewrite AgentVillage runtime instructions. `enzyme init` is safe as an optional operator bootstrap when provider env exists, even if the vault is still empty. It is not a substitute for later refreshes: after the heartbeat writes new forum/IRL/session markdown, semantic retrieval stays stale until `enzyme refresh` runs.
+AgentVillage writes Hermes runtime instructions manually in `workspace/AGENTS.md`. This setup script installs the memory folders, managed Enzyme config, non-secret env references, and heartbeat cron. Existing legacy `agent-memory-vault/` installs are migrated into `memory/` during setup when safe. Enzyme `init`/`refresh` only initialize or update the memory index; they do not rewrite AgentVillage runtime instructions. `enzyme init` is safe as an optional operator bootstrap when provider env exists, even if the vault is still empty. It is not a substitute for later refreshes: after the heartbeat writes new forum/IRL/session markdown, semantic retrieval stays stale until `enzyme refresh` runs manually or the operator explicitly installs the refresh cron.
 
 ## Enzyme Env
 
@@ -60,7 +60,27 @@ python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-e
 python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-enzyme refresh --use-env-llm
 ```
 
-The default heartbeat does not run refresh automatically, because `init`/`refresh` can use hosted credits or ambient provider keys. If a deployment wants automatic freshness, add a separately reviewed, provider-gated refresh cron rather than hiding model spend inside the memory heartbeat.
+The default heartbeat does not run refresh automatically, because `init`/`refresh` can use hosted credits or ambient provider keys. If a deployment wants automatic freshness, install the explicit provider-gated refresh cron rather than hiding model spend inside the memory heartbeat:
+
+```bash
+python3 skills/index-network/scripts/memory-workspace/setup_workspace.py \
+  --root "$HERMES_HOME" \
+  --install-enzyme-refresh-cron
+```
+
+The AgentVillage installer exposes the same path:
+
+```bash
+bun install/install.ts --index-api-key <KEY> --install-enzyme-refresh-cron
+```
+
+Default schedule is `30 2 * * *`, after the memory heartbeat default. Override with `--enzyme-refresh-cron "0 3 * * *"` or `ENZYME_REFRESH_CRON="0 3 * * *"`; setting `AGENTVILLAGE_ENZYME_REFRESH_CRON=1` also opts in. The refresh runner always uses `--use-env-llm`, never hosted/default unattended auth. It checks provider env by name only, checks that the Enzyme CLI exists, requires at least one generated memory input under `memory/forum/*.md`, `memory/irl/*.md`, or `memory/hermes/sessions/**/*.md`, runs `enzyme init --use-env-llm` when status indicates no index, then runs `enzyme refresh --use-env-llm`. It skips quietly for expected conditions and writes safe status to:
+
+```text
+memory/enzyme-refresh-status.json
+```
+
+The status file records attempt/success/skipped reason, provider family and env var names only, source counts/mtimes, action return codes, and timestamps. It never stores key values.
 
 Use direct Enzyme commands when runtime/tooling exposes shell access:
 
@@ -115,3 +135,11 @@ python3 skills/index-network/scripts/memory-workspace/workspace_loop.py --prepar
 ```
 
 The cron prompt explicitly tells the heartbeat not to run `enzyme refresh`. Run the provider-gated refresh command above after heartbeat output when retrieval freshness matters.
+
+When explicitly opted in, setup also installs `Hermes agent memory index refresh`, with no delivery target, at:
+
+```text
+$HERMES_HOME/.hermes/scripts/agentvillage-memory-workspace-enzyme-refresh.py
+```
+
+That wrapper runs `setup_workspace.py --refresh-enzyme-index` from the Hermes root. It does not run Telegram, gateway, digest, send, Index, EdgeOS, or heartbeat write paths.

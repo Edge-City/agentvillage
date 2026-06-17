@@ -399,7 +399,7 @@ def main() -> None:
                 body = ""
                 source_kind = "agent-village-commons"
                 source_detail = str(commons_root)
-                source_error = str(exc)
+                source_error = f"fetch-error:{type(exc).__name__}"
                 print(f"forum source fetch skipped: {source_error}", file=sys.stderr)
         else:
             body = ""
