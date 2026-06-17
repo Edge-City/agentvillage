@@ -1,31 +1,29 @@
 #!/usr/bin/env bun
 /**
- * Deterministically compose and stage the daily morning brief.
+ * Deterministic guardrails for prompt-led daily brief preparation.
  *
- * This script owns the deterministic prepare path: context building, markdown
- * composition, URL validation, Kanban create/block, and heartbeat bookkeeping.
- * Context building fetches people/community cards through MCP when configured
- * and keeps the old transcript fallback for tests/recovery. Keeping staging
- * deterministic avoids prompt-generated shell quoting bugs and CLI flag drift.
+ * This script deliberately does not compose the user-facing brief. The prepare
+ * prompt owns wholesale synthesis from deterministic JSON context. This module
+ * owns the mechanical pieces around that creative step: context collection,
+ * idempotency, URL sanitization, marker validation, Kanban create/block, and
+ * heartbeat bookkeeping.
  */
 
 import { existsSync, rmSync } from "node:fs";
-import { access } from "node:fs/promises";
+import { access, mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
 
-import { buildDailyBriefContext, type BriefOpportunity, type DailyBriefContext } from "./build-daily-brief-context";
-import { sanitizeDigestUrls } from "./validate-digest-urls";
-
-const CONNECTION_DIGEST_LIMIT = 1;
-const COMMUNITY_DIGEST_LIMIT = 1;
+import { buildDailyBriefContext, type DailyBriefContext } from "./build-daily-brief-context";
+import {
+  extractDigestOpportunityIds,
+  extractDigestQuestionIds,
+  sanitizeDigestUrls,
+} from "./validate-digest-urls";
 
 /**
- * Kanban statuses that mean "today's digest card already exists and must not be
- * disturbed by a re-run of the prepare step." When an admin clicks "Generate
- * all" (or the prepare cron fires twice), stageDailyBrief must NOT knock a
- * staged card back to blocked, overwrite an approved (ready) card, or re-stage a
- * card that was already delivered (done). Only a missing card or an explicitly
- * archived one is (re)generated. To force a fresh card, archive today's first,
- * then regenerate.
+ * Kanban statuses that mean today's digest card already exists and must not be
+ * disturbed by a re-run of the prepare step. To force a fresh card, archive
+ * today's first, then regenerate.
  */
 const PROTECTED_DIGEST_STATUSES = new Set([
   "blocked",
@@ -53,6 +51,23 @@ interface ExistingDigestCard {
   questionIds: string[];
 }
 
+interface StageResult {
+  taskId: string;
+  body: string;
+  opportunityIds: string[];
+  questionIds: string[];
+  skipped?: boolean;
+  reason?: string;
+}
+
+interface PrepareContextResult {
+  date: string;
+  contextOut: string;
+  skipped?: boolean;
+  reason?: string;
+  taskId?: string;
+}
+
 function argValue(args: string[], name: string): string | undefined {
   const idx = args.indexOf(name);
   return idx >= 0 ? args[idx + 1] : undefined;
@@ -69,216 +84,6 @@ function pacificDate(): string {
   return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
-function eventLine(event: DailyBriefContext["highlightedEvents"][number]): string {
-  const venue = event.venue ? ` at ${event.venue}` : "";
-  const title = event.eventUrl ? `[${event.title}](${event.eventUrl})` : event.title;
-  return `- ${event.timePacific} — ${title}${venue}`;
-}
-
-function plainEventTitle(event: DailyBriefContext["highlightedEvents"][number]): string {
-  return event.title.trim();
-}
-
-function joinNatural(items: string[]): string {
-  if (items.length <= 1) return items[0] ?? "";
-  if (items.length === 2) return `${items[0]} and ${items[1]}`;
-  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
-}
-
-function opportunityLabel(opp: BriefOpportunity): string {
-  return opp.profileUrl ? `[${opp.name}](${opp.profileUrl})` : opp.name;
-}
-
-function opportunityMarker(opp: BriefOpportunity): string {
-  return opp.opportunityId ? `<!-- digest-opportunity:id=${opp.opportunityId} -->` : "";
-}
-
-function normalizeOpportunityText(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
-}
-
-function sanitizeVisibleProse(text: string): string {
-  return text
-    .replace(/\bIndex(?: Network)?\b/gi, "community")
-    .replace(/\bintents?\b/gi, "interests")
-    .replace(/\bsignals?\b/gi, "interests")
-    .replace(/\bopportunities\b/gi, "possibilities")
-    .replace(/\bopportunity\b/gi, "possibility")
-    .replace(/\bmatches\b/gi, "overlaps")
-    .replace(/\bmatching\b/gi, "finding overlap")
-    .replace(/\bmatch\b/gi, "overlap")
-    .replace(/\bnetworking\b/gi, "meeting people")
-    .replace(/\bbias(?:es|ed|ing)?\b/gi, "leaning")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function firstName(name: string): string {
-  return name.trim().split(/\s+/)[0] || name;
-}
-
-function linkifyOpportunityName(text: string, opp: BriefOpportunity): { text: string; includesLabel: boolean } {
-  if (!opp.profileUrl) return { text, includesLabel: false };
-
-  const label = opportunityLabel(opp);
-  const candidates = [opp.name, firstName(opp.name)].filter(Boolean);
-  for (const candidate of candidates) {
-    const idx = text.indexOf(candidate);
-    if (idx >= 0) {
-      return {
-        text: `${text.slice(0, idx)}${label}${text.slice(idx + candidate.length)}`,
-        includesLabel: true,
-      };
-    }
-  }
-
-  return { text, includesLabel: false };
-}
-
-function opportunityReason(
-  opp: BriefOpportunity,
-  fallback: string,
-): { text: string; includesLabel: boolean } {
-  const text = normalizeOpportunityText(opp.mainText || fallback);
-  const firstSentence = text.split(/(?<=[.!?])\s+/)[0]?.trim() ?? text;
-  const reason = sanitizeVisibleProse(firstSentence.replace(/[,.]$/, ""));
-  return linkifyOpportunityName(reason, opp);
-}
-
-export function composeDailyBrief(context: DailyBriefContext): { body: string; opportunityIds: string[]; questionIds: string[] } {
-  const greetingParts = [`🌞 Good morning from Edge Esmeralda. It is ${context.displayDate}`];
-  if (context.weather?.source !== "unavailable" && context.weather?.forecast) {
-    greetingParts.push(`${context.weather.emoji} ${context.weather.forecast}`);
-  }
-  const greeting = greetingParts.length > 1 ? `${greetingParts.join(". ")}.` : greetingParts[0];
-  const lines: string[] = [
-    greeting,
-    "",
-    "Here is the shape of today:",
-    "",
-  ];
-  const opportunityIds: string[] = [];
-  const questionIds: string[] = [];
-  let hasVerifiedContent = false;
-
-  // Key on id + start time so distinct occurrences of a recurring event are not collapsed.
-  const eventKey = (event: DailyBriefContext["highlightedEvents"][number]) => `${event.id ?? event.title}:${event.startTime}`;
-  const rsvpKeys = new Set(context.rsvpEvents.map(eventKey));
-  const events = [...context.highlightedEvents, ...context.interestEvents].filter((event) => !rsvpKeys.has(eventKey(event)));
-
-  const allCalendarEvents = [...context.rsvpEvents, ...events];
-  if (allCalendarEvents.length > 0) {
-    const titles = allCalendarEvents.slice(0, 3).map(plainEventTitle);
-    const userPhrases = context.userModel?.phrases ?? [];
-    const profileClause = userPhrases.length > 0
-      ? `Against what I currently have about you — ${joinNatural(userPhrases.slice(0, 2))} — this looks like a day for testing which parts still fit today.`
-      : "I do not have much about you yet, so today is also a chance to tell me what I should carry forward.";
-    lines.push(`${joinNatural(titles)} ${titles.length === 1 ? "is" : "are"} the spine of the day. ${profileClause}`);
-    lines.push("");
-    hasVerifiedContent = true;
-  }
-
-  if (context.announcements.length > 0) {
-    lines.push("**From the village**");
-    for (const announcement of context.announcements) {
-      lines.push(`- ${announcement.body}`);
-    }
-    lines.push("");
-    hasVerifiedContent = true;
-  }
-
-  if (context.rsvpEvents.length > 0) {
-    lines.push("**Already on your calendar**");
-    for (const event of context.rsvpEvents) lines.push(eventLine(event));
-    lines.push("");
-    hasVerifiedContent = true;
-  }
-
-  if (events.length > 0) {
-    lines.push(context.rsvpEvents.length > 0 ? "**Also worth noticing**" : "**Calendar picks**");
-    for (const event of events) lines.push(eventLine(event));
-    if (context.diagnostics.calendarSource === "edgeos") {
-      lines.push("That's a selection, not the whole day — ask me for the full calendar anytime.");
-    }
-    lines.push("");
-    hasVerifiedContent = true;
-  }
-
-  const peopleSetupRequired = context.diagnostics.warnings.some((warning) => /setup required before people suggestions/i.test(warning));
-  const connectionOpportunities = [...context.connectionOpportunities]
-    .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))
-    .slice(0, CONNECTION_DIGEST_LIMIT);
-  if (connectionOpportunities.length > 0) {
-    lines.push("**People, if useful**");
-    for (const opp of connectionOpportunities) {
-      if (opp.opportunityId) opportunityIds.push(opp.opportunityId);
-      const action = opp.acceptUrl ? ` [Say hi](${opp.acceptUrl}).` : " Say hi.";
-      const reason = opportunityReason(opp, "Relevant to what you have shared.");
-      const lineBody = reason.includesLabel ? reason.text : `${opportunityLabel(opp)} — ${reason.text}`;
-      // Cooldown re-shows are framed as reminders so the user knows this is a
-      // deliberate nudge about something still waiting, not a repeated rec.
-      const prefix = opp.redelivery ? "Still open — " : "";
-      lines.push(`- ${opportunityMarker(opp)}${prefix}${lineBody}.${action}`);
-    }
-    lines.push("");
-    hasVerifiedContent = true;
-  } else if (peopleSetupRequired) {
-    lines.push("**People**");
-    lines.push("- I do not have enough from you yet to include people here. Reply with one sentence about what Edge Esmeralda should understand about you.");
-    lines.push("");
-  }
-
-  const communityOpportunities = [...context.communityOpportunities]
-    .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))
-    .slice(0, COMMUNITY_DIGEST_LIMIT);
-  if (communityOpportunities.length > 0) {
-    lines.push("**Someone else asked around**");
-    for (const opp of communityOpportunities) {
-      if (opp.opportunityId) opportunityIds.push(opp.opportunityId);
-      const action = opp.acceptUrl ? ` Know someone? [Make intro](${opp.acceptUrl}).` : " Know someone? Make intro.";
-      const reason = opportunityReason(opp, "They are looking for a relevant introduction.");
-      const lineBody = reason.includesLabel ? reason.text : `${opportunityLabel(opp)} — ${reason.text}`;
-      const prefix = opp.redelivery ? "Still open — " : "";
-      lines.push(`- ${opportunityMarker(opp)}${prefix}${lineBody}.${action}`);
-    }
-    lines.push("");
-    hasVerifiedContent = true;
-  }
-
-  if (context.diagnostics.calendarSource === "unavailable" && (context.connectionOpportunities.length > 0 || context.communityOpportunities.length > 0)) {
-    lines.push("I couldn't check the live calendar this morning — ask me what's on today and I'll look it up.", "");
-  }
-
-  if (!hasVerifiedContent) {
-    lines.push("I couldn't check the live calendar this morning — ask me what's on today and I'll look it up.", "");
-  }
-
-  if (hasVerifiedContent) {
-    lines.push("If this is the wrong version of you for today, reply with the correction.");
-  } else {
-    lines.push("Ask me what's on today and I'll look it up.");
-  }
-
-  // "One for you" postscript: deliberately placed after the sign-off as a P.S.
-  // (sanctioned in prepare.md). Gated on hasVerifiedContent so the pointer-only
-  // fallback digest stays pointer-only. The digest-question marker mirrors the
-  // opportunity marker: it survives human Kanban edits and lets the send pass
-  // record exactly which question actually shipped.
-  const pendingQuestions = context.questions ?? [];
-  const question = hasVerifiedContent ? pendingQuestions[0] : undefined;
-  if (question) {
-    questionIds.push(question.id);
-    lines.push("");
-    lines.push("---");
-    lines.push("");
-    lines.push(`<!-- digest-question:id=${question.id} -->**One for you:** ${question.prompt}`);
-    lines.push("");
-    lines.push("Reply to me anytime!");
-  }
-
-  return { body: lines.join("\n").replace(/\n{3,}/g, "\n\n"), opportunityIds, questionIds };
-}
-
 async function readJsonObject(path: string): Promise<Record<string, unknown>> {
   try {
     if (!existsSync(path)) return {};
@@ -286,6 +91,16 @@ async function readJsonObject(path: string): Promise<Record<string, unknown>> {
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
   } catch {
     return {};
+  }
+}
+
+async function readDailyBriefContext(path: string): Promise<DailyBriefContext | null> {
+  try {
+    if (!existsSync(path)) return null;
+    const parsed = JSON.parse(await Bun.file(path).text()) as DailyBriefContext;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
   }
 }
 
@@ -337,13 +152,6 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
 }
 
-/**
- * Resolve the digest card already staged for `date`, if any. Reads the prior
- * `prepared.taskId` recorded in the heartbeat state (idempotent across re-runs)
- * and asks Hermes for its current status. Returns null when there is no card for
- * today, when the recorded card can no longer be resolved, or when it has been
- * archived — all cases where regeneration is the correct behavior.
- */
 async function readExistingDigestCard(
   hermes: HermesRunner,
   stateFile: string,
@@ -361,12 +169,12 @@ async function readExistingDigestCard(
   try {
     task = parseTask(await hermes(["kanban", "show", taskId, "--json"]));
   } catch {
-    return null; // card no longer resolvable → allow regeneration
+    return null;
   }
   if (!task) return null;
 
   const status = String(task.status ?? "").toLowerCase();
-  if (!status || status === "archived") return null; // archived/unknown → regenerate
+  if (!status || status === "archived") return null;
 
   return {
     taskId,
@@ -391,25 +199,82 @@ function extractTaskId(raw: string): string {
   throw new Error(`could not parse task id from kanban create output: ${trimmed.slice(0, 200)}`);
 }
 
-export async function stageDailyBrief(options: {
+function contextOpportunityIds(context: DailyBriefContext): Set<string> {
+  return new Set(
+    context.opportunities
+      .map((opp) => opp.opportunityId)
+      .filter((id): id is string => typeof id === "string" && id.length > 0),
+  );
+}
+
+function contextQuestionIds(context: DailyBriefContext): Set<string> {
+  return new Set([
+    ...(context.questions ?? []).map((question) => question.id),
+    `daily-identity-${context.date}`,
+  ]);
+}
+
+function validateMarkers(body: string, context: DailyBriefContext): { opportunityIds: string[]; questionIds: string[] } {
+  const opportunityIds = extractDigestOpportunityIds(body);
+  const questionIds = extractDigestQuestionIds(body);
+  const knownOpportunityIds = contextOpportunityIds(context);
+  const knownQuestionIds = contextQuestionIds(context);
+  const unknownOpportunityIds = opportunityIds.filter((id) => !knownOpportunityIds.has(id));
+  const unknownQuestionIds = questionIds.filter((id) => !knownQuestionIds.has(id));
+
+  if (unknownOpportunityIds.length > 0) {
+    throw new Error(`digest body contains unknown opportunity marker id(s): ${unknownOpportunityIds.join(", ")}`);
+  }
+  if (unknownQuestionIds.length > 0) {
+    throw new Error(`digest body contains unknown question marker id(s): ${unknownQuestionIds.join(", ")}`);
+  }
+
+  return { opportunityIds, questionIds };
+}
+
+export async function prepareDailyBriefContext(options: {
   date?: string;
   opportunitiesFile?: string;
   stateFile?: string;
   contextOut?: string;
   hermes?: HermesRunner;
-} = {}): Promise<{ taskId: string; body: string; opportunityIds: string[]; questionIds: string[]; skipped?: boolean; reason?: string }> {
+} = {}): Promise<PrepareContextResult> {
   const date = options.date ?? pacificDate();
   const opportunitiesFile = options.opportunitiesFile ?? "memory/digest-opportunities.txt";
   const stateFile = options.stateFile ?? "memory/heartbeat-state.json";
   const contextOut = options.contextOut ?? "memory/daily-brief-context.json";
   const hermes = options.hermes ?? runHermes;
 
-  // Idempotency guard. A re-run of prepare (admin "Generate all", a double cron
-  // fire, or a manual per-pod generate) must leave an already-staged card alone
-  // instead of re-blocking it, overwriting approved content, or re-staging an
-  // already-delivered digest. Build context and create/block ONLY when there is
-  // no protected card for today. This short-circuits before buildDailyBriefContext
-  // so a no-op regenerate never re-queries opportunities or rewrites context.
+  const existing = await readExistingDigestCard(hermes, stateFile, date);
+  if (existing && PROTECTED_DIGEST_STATUSES.has(existing.status)) {
+    return {
+      date,
+      contextOut,
+      taskId: existing.taskId,
+      skipped: true,
+      reason: `already-staged:${existing.status}`,
+    };
+  }
+
+  const context = await buildDailyBriefContext({ date, opportunitiesFile, stateFile });
+  await writeJson(contextOut, context);
+  return { date, contextOut };
+}
+
+export async function stageDailyBrief(options: {
+  date?: string;
+  bodyFile?: string;
+  opportunitiesFile?: string;
+  stateFile?: string;
+  contextOut?: string;
+  hermes?: HermesRunner;
+} = {}): Promise<StageResult> {
+  const date = options.date ?? pacificDate();
+  const opportunitiesFile = options.opportunitiesFile ?? "memory/digest-opportunities.txt";
+  const stateFile = options.stateFile ?? "memory/heartbeat-state.json";
+  const contextOut = options.contextOut ?? "memory/daily-brief-context.json";
+  const hermes = options.hermes ?? runHermes;
+
   const existing = await readExistingDigestCard(hermes, stateFile, date);
   if (existing && PROTECTED_DIGEST_STATUSES.has(existing.status)) {
     return {
@@ -422,12 +287,25 @@ export async function stageDailyBrief(options: {
     };
   }
 
-  const context = await buildDailyBriefContext({ date, opportunitiesFile, stateFile });
-  await writeJson(contextOut, context);
+  if (!options.bodyFile) {
+    throw new Error("stageDailyBrief requires --body-file unless today's digest is already staged");
+  }
 
-  const { body, opportunityIds, questionIds } = composeDailyBrief(context);
-  const { output: sanitizedBody } = sanitizeDigestUrls(body);
-  await Bun.write("memory/digest-draft.md", `${sanitizedBody}\n`);
+  let context = await readDailyBriefContext(contextOut);
+  if (!context || context.date !== date) {
+    context = await buildDailyBriefContext({ date, opportunitiesFile, stateFile });
+    await writeJson(contextOut, context);
+  }
+
+  const rawBody = await Bun.file(options.bodyFile).text();
+  if (!rawBody.trim()) throw new Error("digest body file is empty");
+
+  const { output: sanitizedBody } = sanitizeDigestUrls(rawBody.trim());
+  const { opportunityIds, questionIds } = validateMarkers(sanitizedBody, context);
+
+  const draftFile = "memory/digest-draft.md";
+  await mkdir(dirname(draftFile), { recursive: true });
+  await Bun.write(draftFile, `${sanitizedBody}\n`);
 
   const createOutput = await hermes([
     "kanban",
@@ -453,20 +331,31 @@ export async function stageDailyBrief(options: {
   };
   await writeJson(stateFile, state);
 
-  rmSync("memory/digest-draft.md", { force: true });
+  rmSync(draftFile, { force: true });
 
   return { taskId, body: sanitizedBody, opportunityIds, questionIds };
 }
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
-  const result = await stageDailyBrief({
+  const common = {
     date: argValue(args, "--date"),
     opportunitiesFile: argValue(args, "--opportunities-file"),
     stateFile: argValue(args, "--state-file"),
     contextOut: argValue(args, "--context-out"),
+  };
+
+  if (args.includes("--prepare-context")) {
+    const result = await prepareDailyBriefContext(common);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return;
+  }
+
+  const result = await stageDailyBrief({
+    ...common,
+    bodyFile: argValue(args, "--body-file"),
   });
-  process.stdout.write(`${JSON.stringify({ taskId: result.taskId, opportunityIds: result.opportunityIds, questionIds: result.questionIds })}\n`);
+  process.stdout.write(`${JSON.stringify({ taskId: result.taskId, opportunityIds: result.opportunityIds, questionIds: result.questionIds, skipped: result.skipped, reason: result.reason })}\n`);
 }
 
 if (import.meta.main) {

@@ -35,13 +35,12 @@ const EDGE_ESMERALDA_EVENT_PATH = /^\/portal\/edge-esmeralda-2026\/events\/[0-9a
 /**
  * A markdown inline link: `[label](url)`. Label runs to the first `]`; url to the next `)`.
  *
- * Scope is deliberately limited to inline markdown links — the only link shape the
- * digest prompts ever emit. Autolinks (`<https://…>`), bare URLs in prose, and labels
- * containing nested `]` are NOT covered; if the model ever emits one of those it is out
- * of this guard's reach (see the "known non-target" tests). Legitimate connect/profile
- * URLs contain no `(`/`)`/`]`, so this never truncates a real link.
+ * Legitimate connect/profile URLs contain no `(`/`)`/`]`, so this never
+ * truncates a real link.
  */
 const MARKDOWN_LINK = /\[([^\]]*)\]\(([^)]*)\)/g;
+const AUTOLINK = /<((?:https?:\/\/)[^>\s]+)>/g;
+const BARE_URL = /https?:\/\/[^\s<>)]+/g;
 
 /** Hidden marker that ties an editable digest fragment to the opportunity it represents. */
 const DIGEST_OPPORTUNITY_MARKER = /<!--\s*digest-opportunity:id=([^\s>]+)\s*-->/g;
@@ -136,12 +135,40 @@ export function sanitizeDigestUrls(
   options: SanitizeDigestOptions = {},
 ): { output: string; stripped: string[] } {
   const stripped: string[] = [];
-  const sanitizedLinks = markdown.replace(MARKDOWN_LINK, (match, label: string, url: string) => {
+  const preservedLinks: string[] = [];
+  const preserve = (value: string): string => {
+    const token = `\u0000DIGEST_URL_${preservedLinks.length}\u0000`;
+    preservedLinks.push(value);
+    return token;
+  };
+
+  const sanitizedMarkdownLinks = markdown.replace(MARKDOWN_LINK, (match, label: string, url: string) => {
     if (isAllowedDigestUrl(url)) return match;
     stripped.push(url);
     return label;
   });
-  const output = options.stripDigestMetadata ? stripDigestMetadata(sanitizedLinks) : sanitizedLinks;
+
+  const protectedMarkdownLinks = sanitizedMarkdownLinks.replace(MARKDOWN_LINK, (match, _label: string, url: string) => {
+    if (isAllowedDigestUrl(url)) return preserve(match);
+    return match;
+  });
+
+  const sanitizedAutolinks = protectedMarkdownLinks.replace(AUTOLINK, (match, url: string) => {
+    if (isAllowedDigestUrl(url)) return preserve(match);
+    stripped.push(url);
+    return "";
+  });
+
+  const sanitizedBareUrls = sanitizedAutolinks.replace(BARE_URL, (match: string) => {
+    const trailing = match.match(/[.,!?;:]+$/)?.[0] ?? "";
+    const url = trailing ? match.slice(0, -trailing.length) : match;
+    if (isAllowedDigestUrl(url)) return match;
+    stripped.push(url);
+    return trailing;
+  });
+
+  const restored = sanitizedBareUrls.replace(/\u0000DIGEST_URL_(\d+)\u0000/g, (_match, idx: string) => preservedLinks[Number(idx)] ?? "");
+  const output = options.stripDigestMetadata ? stripDigestMetadata(restored) : restored;
   return { output, stripped };
 }
 

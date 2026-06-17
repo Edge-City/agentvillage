@@ -5,9 +5,8 @@
  * The send cron prompt should not reimplement file, Kanban, or URL-guard logic
  * with model-generated Python. This script owns approval-gate checking, outgoing
  * body persistence, digest marker extraction, delivery-state bookkeeping,
- * Kanban completion, and final body sanitization. The prompt only needs to call
- * this script, confirm the returned opportunity ids through MCP, and return the
- * returned brief verbatim.
+ * Kanban completion, ledger confirmation, and final body sanitization. The
+ * prompt only needs to call this script and return the returned brief verbatim.
  */
 
 import { existsSync } from "node:fs";
