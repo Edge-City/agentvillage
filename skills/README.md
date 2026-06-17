@@ -4,14 +4,15 @@ Agent skills for **Edge Esmeralda 2026** (May 30 – Jun 27, Healdsburg, CA). Sh
 
 ## What you get
 
-Four skill bundles that give your agent Edge Esmeralda knowledge and live API access:
+AgentVillage ships user-facing backend skills plus one internal memory infrastructure bundle:
 
 - **edge-esmeralda** — popup constants (popup id, week dates, themes), attendee directory field semantics, curated wiki/website/newsletter knowledge base, and the onboarding pointer for obtaining EdgeOS tokens.
 - **edgeos** — backend-generic EdgeOS API recipes: events, RSVPs, venues, attendee directory, and your own profile lookup.
 - **geo-esmeralda** — Geo knowledge graph access through the Geo CLI package: ontology, fixed graph tools, guarded native read-only queries, and attendee-authored content/photo creation.
 - **index-network** — Index Network discovery: onboarding ritual, opportunity surfacing, voice exemplars, cron prompts for welcome/digest flows, and heartbeat tasks.
+- **memory-workspace** — Hermes memory workspace setup, session rendering, forum/IRL distillation helpers, and memory index maintenance. Infrastructure only; ordinary user answers should not name this plumbing.
 
-The skills cross-reference each other. `edge-esmeralda` supplies the popup id that `edgeos` recipes need. `geo-esmeralda` handles Geo knowledge graph-backed knowledge and attendee-authored writes, and `index-network` handles discovery and intent-based matching. AgentVillage's Hermes memory workspace is infrastructure under `skills/index-network/scripts/memory-workspace/`, not a separate skill.
+The skills cross-reference each other. `edge-esmeralda` supplies the popup id that `edgeos` recipes need. `geo-esmeralda` handles Geo knowledge graph-backed knowledge and attendee-authored writes, and `index-network` handles discovery and intent-based matching. AgentVillage's Hermes memory workspace is infrastructure under `skills/memory-workspace/`, not Index Network skill internals.
 
 ## Host-specific silence
 
@@ -74,6 +75,7 @@ hermes skills install Edge-City/agentvillage/skills/edge-esmeralda --force
 hermes skills install Edge-City/agentvillage/skills/edgeos --force
 hermes skills install Edge-City/agentvillage/skills/geo-esmeralda --force
 hermes skills install Edge-City/agentvillage/skills/index-network --force
+hermes skills install Edge-City/agentvillage/skills/memory-workspace --force
 ```
 
 Add to `~/.hermes/.env`:
@@ -114,14 +116,14 @@ The installer also sets up `memory/`, writes `memory/enzyme-env.sh` with referen
 To validate provider env without printing secrets:
 
 ```bash
-python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --check-enzyme-env
+python3 skills/memory-workspace/scripts/setup_workspace.py --check-enzyme-env
 ```
 
 Hosted/default `enzyme refresh` may require `enzyme login`. Hosted AgentVillage operators with provider env should use the secret-safe check above, then:
 
 ```bash
-python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-enzyme status
-python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-enzyme refresh --use-env-llm
+python3 skills/memory-workspace/scripts/setup_workspace.py --run-enzyme status
+python3 skills/memory-workspace/scripts/setup_workspace.py --run-enzyme refresh --use-env-llm
 ```
 
 The default heartbeat does not run this refresh automatically, to avoid hidden model/provider spend. Treat refresh as an explicit operator action or opt in to the separate provider-gated refresh cron for deployments that accept that cost:
@@ -146,7 +148,7 @@ Broad forum/chat catch-up validation should show direct `enzyme catalyze` before
 To verify rendered vault output without printing secret values:
 
 ```bash
-python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --scan-vault-secrets
+python3 skills/memory-workspace/scripts/setup_workspace.py --scan-vault-secrets
 ```
 
 ### Claude Desktop

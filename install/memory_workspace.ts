@@ -7,7 +7,7 @@ import { hermesBin, hermesExecEnv } from "./hermes_cli";
 const DEFAULT_ENZYME_REFRESH_CRON = "30 2 * * *";
 
 export function memoryWorkspaceSetupScript(home: string): string {
-  return join(home, "skills", "index-network", "scripts", "memory-workspace", "setup_workspace.py");
+  return join(home, "skills", "memory-workspace", "scripts", "setup_workspace.py");
 }
 
 function isTruthy(value: string | undefined): boolean {

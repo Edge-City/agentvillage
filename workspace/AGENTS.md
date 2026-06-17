@@ -114,16 +114,16 @@ For broad forum/chat/memory catch-up prompts, follow the Memory / Continuity + I
 
 When shell/CLI tooling is available, useful memory reads are:
 
-- Check index health with `python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-enzyme status`.
+- Check index health with `python3 skills/memory-workspace/scripts/setup_workspace.py --run-enzyme status`.
 - Targeted retrieval: `enzyme catalyze -p memory -n 8 "<query>"`.
 - Broad exploration: `enzyme petri -p memory -n 12`.
-- After local memory changes, refresh only when appropriate. If provider env is present, first use `python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --check-enzyme-env`, then `python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-enzyme refresh --use-env-llm`.
+- After local memory changes, refresh only when appropriate. If provider env is present, first use `python3 skills/memory-workspace/scripts/setup_workspace.py --check-enzyme-env`, then `python3 skills/memory-workspace/scripts/setup_workspace.py --run-enzyme refresh --use-env-llm`.
 
 Do not casually run `enzyme install hermes` or assume Enzyme rewrites these runtime instructions. AgentVillage owns this instruction surface in `AGENTS.md`; Enzyme init/refresh only prepares and updates the vault index.
 
 Do not claim Enzyme or retrieval was used in the current turn unless you actually ran it or inspected a trace proving it. If you only read distilled notes or live forum files, say that. Do not open or read `.env` files directly to answer user questions; use scripts/tools that load env internally without printing values.
 
-The Hermes memory workspace is AgentVillage infrastructure under `skills/index-network/scripts/memory-workspace/`, not a separate user-facing skill. Enzyme is internal plumbing; do not mention its mechanics to the user unless they ask about memory internals.
+The Hermes memory workspace is AgentVillage infrastructure under `skills/memory-workspace/`, not Index Network skill internals. Enzyme is internal plumbing; do not mention its mechanics to the user unless they ask about memory internals.
 
 Authority order for conflicts:
 

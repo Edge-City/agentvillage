@@ -7,6 +7,7 @@ test("memory workspace setup args are safe for install", () => {
   const args = buildMemoryWorkspaceSetupArgs(home, false);
 
   expect(args[0]).toBe(memoryWorkspaceSetupScript(home));
+  expect(args[0]).toBe("/opt/data/skills/memory-workspace/scripts/setup_workspace.py");
   expect(args).toContain("--root");
   expect(args).toContain(home);
   expect(args).toContain("--install-enzyme-config");

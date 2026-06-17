@@ -6,7 +6,7 @@
  *
  *   - `SOUL.md` → `$HERMES_HOME/SOUL.md` (identity; overwrites generic Hermes soul)
  *   - `AGENTS.md`, `USER.md` → `$HERMES_HOME/`
- *   - Edge skill bundles → `$HERMES_HOME/skills/{index-network,edgeos,edge-esmeralda,geo-esmeralda}/`
+ *   - Edge skill bundles → `$HERMES_HOME/skills/{index-network,memory-workspace,edgeos,edge-esmeralda,geo-esmeralda}/`
  *   - Hermes memory workspace + Enzyme config/cron scaffolding
  *   - `terminal.cwd` in config.yaml → `$HERMES_HOME`
  *   - Index MCP + morning digest cron (`install_index.ts`)

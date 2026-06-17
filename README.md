@@ -25,12 +25,12 @@ See the project hub for the full diagram and decisions.
 
 - `workspace/IDENTITY.md` — what an AgentVillage agent knows about itself and the village
 - `workspace/` — backend-agnostic agent core (identity, voice, community context, generic operating rules)
-- `skills/` — per-backend skill bundles registered with OpenClaw via per-bundle `SKILL.md`. Mirrors `Edge-City/agentvillage-skills` as a subtree; today this hosts:
+- `skills/` — per-backend skill bundles plus internal runtime infrastructure registered with OpenClaw/Hermes via per-bundle `SKILL.md`. Mirrors `Edge-City/agentvillage-skills` as a subtree; today this hosts:
   - `skills/index-network/` — Index Network MCP procedural knowledge (onboarding ritual, voice exemplars, cron prompts, heartbeat tasks)
   - `skills/edgeos/` — backend-generic EdgeOS API recipes (events, RSVPs, venues, attendee directory, own profile). Reads `EDGEOS_BEARER_TOKEN` and `EDGEOS_API_KEY` from env; popup id is supplied by the active operator skill.
   - `skills/edge-esmeralda/` — Edge Esmeralda 2026 popup knowledge: popup constants (popup id, week dates, themes), attendee field semantics, the curated wiki/website/newsletter references (vendored from `Edge-City/agentvillage-skills`; refreshed by upstream CI every 15 min), and the onboarding pointer for obtaining EdgeOS tokens.
   - `skills/geo-esmeralda/` — Geo knowledge graph recipes and write guidance for attendee-authored content, relations, ontology, and media.
-  - `skills/index-network/scripts/memory-workspace/` — AgentVillage-managed Hermes memory vault setup, session rendering, forum/IRL distillation helpers, and Enzyme read-layer wiring.
+  - `skills/memory-workspace/` — AgentVillage-managed Hermes memory vault setup, session rendering, forum/IRL distillation helpers, and Enzyme read-layer wiring.
 - `install/` — bootstrap scripts for plugging AgentVillage into a runtime
 
 ## Getting an agent connected
@@ -159,7 +159,9 @@ openclaw gateway restart
 ```bash
 hermes skills install Edge-City/agentvillage/skills/edge-esmeralda --force
 hermes skills install Edge-City/agentvillage/skills/edgeos --force
+hermes skills install Edge-City/agentvillage/skills/geo-esmeralda --force
 hermes skills install Edge-City/agentvillage/skills/index-network --force
+hermes skills install Edge-City/agentvillage/skills/memory-workspace --force
 hermes config set mcp_servers.index.url 'https://protocol.index.network/mcp'
 hermes config set mcp_servers.index.headers.x-api-key '<apiKey>'
 hermes config set mcp_servers.index.headers.x-index-surface 'telegram'
@@ -327,7 +329,7 @@ Time-sensitive and background prompts run as **Hermes/OpenClaw cron jobs**. The 
 | `skills/index-network/SKILL.md` | Index Network skill bundle entry point. Registered with OpenClaw on install; gates on `mcp.servers.index`. Body points at the bundle's sibling reference files. |
 | `skills/edgeos/SKILL.md` | EdgeOS-API skill: events + attendee directory + curated wiki/website/newsletter references. Currently scoped to Edge Esmeralda 2026. Loaded by OpenClaw alongside index-network. Vendored from `Edge-City/agentvillage-skills`. |
 | `skills/geo-esmeralda/SKILL.md` | Geo knowledge graph skill: community content, relations, ontology, and attendee-authored writes through the Geo CLI package. |
-| `skills/index-network/scripts/memory-workspace/README.md` | Hermes memory vault and Enzyme read-layer setup. Enzyme is the preferred read gateway over typed canonical memory sources; canonical files/tools remain the source of truth. |
+| `skills/memory-workspace/README.md` | Hermes memory vault and Enzyme read-layer setup. Enzyme is the preferred read gateway over typed canonical memory sources; canonical files/tools remain the source of truth. |
 
 ## Configuration guide
 

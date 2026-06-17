@@ -586,7 +586,7 @@ def cron_prompt() -> str:
             "Write or update `memory/forum/YYYY-MM-DD.md` and `memory/irl/YYYY-MM-DD.md`.",
             "Keep the notes concise, grounded, and uncertainty-aware.",
             "Do not copy `memory/hermes-workspace-context.json` wholesale into the vault.",
-            "After writing the notes, run `python3 skills/index-network/scripts/memory-workspace/workspace_loop.py --prepare`.",
+            "After writing the notes, run `python3 skills/memory-workspace/scripts/workspace_loop.py --prepare`.",
             "Do not run `enzyme refresh` from this heartbeat; retrieval stays stale until an operator runs the provider-gated refresh path.",
             "Return `[SILENT]` unless a local operator-facing summary is genuinely needed.",
         ]
@@ -653,11 +653,11 @@ def cron_exists(name: str, hermes_bin: str, script_name: str | None = None) -> b
 
 
 def cron_prepare_script(root: Path) -> Path:
-    return root / "skills" / "index-network" / "scripts" / "memory-workspace" / "cron_prepare.py"
+    return root / "skills" / "memory-workspace" / "scripts" / "cron_prepare.py"
 
 
 def setup_workspace_script(root: Path) -> Path:
-    return root / "skills" / "index-network" / "scripts" / "memory-workspace" / "setup_workspace.py"
+    return root / "skills" / "memory-workspace" / "scripts" / "setup_workspace.py"
 
 
 def write_cron_wrapper(root: Path, script: Path, script_name: str = DEFAULT_CRON_SCRIPT_NAME, extra_args: list[str] | None = None) -> Path:
@@ -874,8 +874,8 @@ def main() -> None:
     missing_files = [
         str(path)
         for path in [
-            root / "skills" / "index-network" / "scripts" / "memory-workspace" / "cron_prepare.py",
-            root / "skills" / "index-network" / "scripts" / "memory-workspace" / "render_hermes_sessions.py",
+            root / "skills" / "memory-workspace" / "scripts" / "cron_prepare.py",
+            root / "skills" / "memory-workspace" / "scripts" / "render_hermes_sessions.py",
         ]
         if not path.exists()
     ]

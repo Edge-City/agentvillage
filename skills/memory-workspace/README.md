@@ -1,6 +1,6 @@
 # AgentVillage Memory Workspace
 
-AgentVillage-managed Hermes memory infrastructure. This is not a standalone Hermes skill; it is copied with the `index-network` script bundle and installed by `install/install.ts`.
+AgentVillage-managed Hermes memory infrastructure. This is a dedicated infrastructure skill copied to `$HERMES_HOME/skills/memory-workspace/` and installed by `install/install.ts`.
 
 It creates:
 
@@ -16,7 +16,7 @@ memory/
 Normal AgentVillage install runs:
 
 ```bash
-python3 skills/index-network/scripts/memory-workspace/setup_workspace.py \
+python3 skills/memory-workspace/scripts/setup_workspace.py \
   --root "$HERMES_HOME" \
   --install-enzyme-config \
   --write-enzyme-env \
@@ -43,27 +43,27 @@ Hosted Hermes may have Enzyme at `$HERMES_HOME/.local/bin/enzyme` or `/opt/data/
 Secret-safe check:
 
 ```bash
-python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --check-enzyme-env
+python3 skills/memory-workspace/scripts/setup_workspace.py --check-enzyme-env
 ```
 
 Check index status:
 
 ```bash
-python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-enzyme status
+python3 skills/memory-workspace/scripts/setup_workspace.py --run-enzyme status
 ```
 
 For hosted AgentVillage operators, first verify provider env presence without values, then initialize or refresh with ambient provider keys only when intended:
 
 ```bash
-python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --check-enzyme-env
-python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-enzyme init --use-env-llm
-python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --run-enzyme refresh --use-env-llm
+python3 skills/memory-workspace/scripts/setup_workspace.py --check-enzyme-env
+python3 skills/memory-workspace/scripts/setup_workspace.py --run-enzyme init --use-env-llm
+python3 skills/memory-workspace/scripts/setup_workspace.py --run-enzyme refresh --use-env-llm
 ```
 
 The default heartbeat does not run refresh automatically, because `init`/`refresh` can use hosted credits or ambient provider keys. If a deployment wants automatic freshness, install the explicit provider-gated refresh cron rather than hiding model spend inside the memory heartbeat:
 
 ```bash
-python3 skills/index-network/scripts/memory-workspace/setup_workspace.py \
+python3 skills/memory-workspace/scripts/setup_workspace.py \
   --root "$HERMES_HOME" \
   --install-enzyme-refresh-cron
 ```
@@ -96,19 +96,19 @@ For broad forum/chat catch-up validation, trace order should show direct `enzyme
 Rendered sessions are redacted before writing, but operators should still scan after rendering or before rollout. The scan reports counts, kinds, and file paths only; it never prints matching lines or values:
 
 ```bash
-python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --scan-vault-secrets
+python3 skills/memory-workspace/scripts/setup_workspace.py --scan-vault-secrets
 ```
 
 To include operational `memory/*` files in the same secret-safe report:
 
 ```bash
-python3 skills/index-network/scripts/memory-workspace/setup_workspace.py --scan-vault-secrets --scan-include-memory
+python3 skills/memory-workspace/scripts/setup_workspace.py --scan-vault-secrets --scan-include-memory
 ```
 
 The session rendering wrapper also supports a post-render check:
 
 ```bash
-python3 skills/index-network/scripts/memory-workspace/render_vault_sessions.py \
+python3 skills/memory-workspace/scripts/render_vault_sessions.py \
   --root "$HERMES_HOME" \
   --input "$HERMES_HOME/sessions" \
   --scan-output-secrets
@@ -130,10 +130,10 @@ The installed cron is `Hermes agent memory heartbeat`, with no delivery target. 
 $HERMES_HOME/.hermes/scripts/agentvillage-memory-workspace-cron_prepare.py
 ```
 
-That wrapper runs `skills/index-network/scripts/memory-workspace/cron_prepare.py` from the Hermes root. `cron_prepare.py` renders Hermes sessions, prepares bounded context, and asks the cron agent to update forum/IRL vault notes. The cron prompt then asks the agent to run:
+That wrapper runs `skills/memory-workspace/scripts/cron_prepare.py` from the Hermes root. `cron_prepare.py` renders Hermes sessions, prepares bounded context, and asks the cron agent to update forum/IRL vault notes. The cron prompt then asks the agent to run:
 
 ```bash
-python3 skills/index-network/scripts/memory-workspace/workspace_loop.py --prepare
+python3 skills/memory-workspace/scripts/workspace_loop.py --prepare
 ```
 
 The cron prompt explicitly tells the heartbeat not to run `enzyme refresh`. Run the provider-gated refresh command above after heartbeat output when retrieval freshness matters.
