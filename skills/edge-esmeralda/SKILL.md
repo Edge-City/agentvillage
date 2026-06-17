@@ -126,7 +126,8 @@ When a user asks about Edge Esmeralda, route the work like this:
 
 - **Calendar / RSVP / venue / directory API call** → `edgeos` skill. Pass `popup_id` from §1.
 - **Discovery, intent-based matching, "who should I meet?"** → `index-network` skill.
-- **Village chat ("what's the village discussing," "what's happening in the chat," "summarize the chat")** → `geo-esmeralda` skill (`telegram-messages` recipe) — raw, time-windowed history of the main Edge Esmeralda 2026 Telegram group. Synthesize a short bulleted summary; never dump raw messages or quote personal details beyond what the answer needs. If the local geo skill copy does not document `telegram-messages` yet, run `npx -y @geoprotocol/geo-edge-esmeralda-cli telegram-messages --help` for usage.
+- **Broad village/chat continuity or catch-up** ("what did I miss?", "what's been happening?", "what's the village discussing?") → follow the workspace Memory / Continuity + Intent Routing gate first, then verify cited raw chat or live facts as needed.
+- **Bounded raw Telegram verification** (specific time window, exact message/thread check, "show/check messages from last night") → `geo-esmeralda` skill (`telegram-messages` recipe) directly. Synthesize a short bulleted summary; never dump raw messages or quote personal details beyond what the answer needs. If the local geo skill copy does not document `telegram-messages` yet, run `npx -y @geoprotocol/geo-edge-esmeralda-cli telegram-messages --help` for usage.
 - **Community knowledge** (logistics, organization, announcements, "what is Edge City?") → this skill, §4.
 - **Spatial / map / "what's near venue X"** → `geo-esmeralda` skill. Query `Venue` nodes via native graph queries for coordinates, or use the `edgeos` venue endpoint's `geo_lat` / `geo_lng` fields with haversine math for proximity ranking. Use the wiki (§4) for Healdsburg-area context.
 

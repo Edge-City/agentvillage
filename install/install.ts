@@ -6,7 +6,8 @@
  *
  *   - `SOUL.md` → `$HERMES_HOME/SOUL.md` (identity; overwrites generic Hermes soul)
  *   - `AGENTS.md`, `USER.md` → `$HERMES_HOME/`
- *   - Edge skill bundles → `$HERMES_HOME/skills/{index-network,edgeos,edge-esmeralda,geo-esmeralda}/`
+ *   - Edge skill bundles → `$HERMES_HOME/skills/{index-network,memory-workspace,edgeos,edge-esmeralda,geo-esmeralda}/`
+ *   - Hermes memory workspace + Enzyme config/cron scaffolding
  *   - `terminal.cwd` in config.yaml → `$HERMES_HOME`
  *   - Index MCP + morning digest cron (`install_index.ts`)
  *   - Geo CLI runtime note (`install_geo.ts`)
@@ -33,8 +34,9 @@ import { execSync } from "node:child_process";
 import { installIndex } from "./install_index";
 import { installEdgeos } from "./install_edgeos";
 import { installGeo } from "./install_geo";
-import { capModelMaxTokens, setTerminalCwd } from "./config";
+import { capModelMaxTokens, exposeEnzymeOnTerminalPath, setTerminalCwd } from "./config";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
+import { setupHermesMemoryWorkspace } from "./memory_workspace";
 import {
   EDGE_SKILL_NAMES,
   hermesHome,
@@ -138,6 +140,8 @@ function copyTree(sourceDir: string, targetDir: string): number {
 
   let copied = 0;
   for (const entry of readdirSync(sourceDir)) {
+    if (entry === "__pycache__" || entry.endsWith(".pyc")) continue;
+
     const sourcePath = join(sourceDir, entry);
     const targetPath = join(targetDir, entry);
     const stat = statSync(sourcePath);
@@ -196,7 +200,9 @@ function main(): void {
   copySoulFile();
   copyWorkspaceFiles(wipeUser);
   copySkillFiles();
+  setupHermesMemoryWorkspace(TARGET_HOME, process.argv.includes("--skip-crons"));
   setTerminalCwd();
+  exposeEnzymeOnTerminalPath();
   capModelMaxTokens();
 
   installIndex();

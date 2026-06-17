@@ -91,10 +91,24 @@ curl -s -H "Authorization: Bearer <EDGEOS_API_KEY>" \
 ```
 
 **Only events you've RSVPed to:**
+Use the deterministic helper for attendee questions such as "what have I RSVP'd
+for tomorrow?" or "how many RSVPs do I have Thursday?". It performs exactly one
+read-only `GET /events/portal/events` request, parses JSON without `jq`, and
+prints a safe summary.
+
 ```bash
-curl -s -H "Authorization: Bearer <EDGEOS_API_KEY>" \
-  "https://api.edgeos.world/api/v1/events/portal/events?popup_id={popup_id}&event_status=published&rsvped_only=true&limit=50"
+python3 skills/edgeos/scripts/list_rsvps.py \
+  --popup-id {popup_id} \
+  --start-after {start_iso} \
+  --start-before {end_iso} \
+  --limit 50
 ```
+
+For this RSVP list/count path, stop immediately after the helper exits 0 and
+prints `ok:true`, including when `results_count` is `0`. Do not call
+`/event-participants/portal/participants`, `/humans/me`, the attendee directory,
+memory/Index, file search, or a broader calendar scan after a successful bounded
+RSVP list response. Answer from the returned count and event summaries only.
 
 **Fetch a single event (includes caller's RSVP status):**
 ```bash
@@ -181,6 +195,9 @@ curl -s -X POST -H "Authorization: Bearer <EDGEOS_API_KEY>" \
 curl -s -H "Authorization: Bearer <EDGEOS_API_KEY>" \
   "https://api.edgeos.world/api/v1/event-participants/portal/participants"
 ```
+
+Do not use the participants endpoint for read-only RSVP list/count questions
+with a date window; use `skills/edgeos/scripts/list_rsvps.py` instead.
 
 ## 7. Venues
 

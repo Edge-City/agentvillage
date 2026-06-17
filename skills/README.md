@@ -4,14 +4,15 @@ Agent skills for **Edge Esmeralda 2026** (May 30 – Jun 27, Healdsburg, CA). Sh
 
 ## What you get
 
-Four skill bundles that give your agent Edge Esmeralda knowledge and live API access:
+AgentVillage ships user-facing backend skills plus one internal memory infrastructure bundle:
 
 - **edge-esmeralda** — popup constants (popup id, week dates, themes), attendee directory field semantics, curated wiki/website/newsletter knowledge base, and the onboarding pointer for obtaining EdgeOS tokens.
 - **edgeos** — backend-generic EdgeOS API recipes: events, RSVPs, venues, attendee directory, and your own profile lookup.
 - **geo-esmeralda** — Geo knowledge graph access through the Geo CLI package: ontology, fixed graph tools, guarded native read-only queries, and attendee-authored content/photo creation.
 - **index-network** — Index Network discovery: onboarding ritual, opportunity surfacing, voice exemplars, cron prompts for welcome/digest flows, and heartbeat tasks.
+- **memory-workspace** — Hermes memory workspace setup, session rendering, forum/IRL distillation helpers, and memory index maintenance. Infrastructure only; ordinary user answers should not name this plumbing.
 
-The skills cross-reference each other. `edge-esmeralda` supplies the popup id that `edgeos` recipes need. `geo-esmeralda` handles Geo knowledge graph-backed knowledge and attendee-authored writes, and `index-network` handles discovery and intent-based matching. Install all four together.
+The skills cross-reference each other. `edge-esmeralda` supplies the popup id that `edgeos` recipes need. `geo-esmeralda` handles Geo knowledge graph-backed knowledge and attendee-authored writes, and `index-network` handles discovery and intent-based matching. AgentVillage's Hermes memory workspace is infrastructure under `skills/memory-workspace/`, not Index Network skill internals.
 
 ## Host-specific silence
 
@@ -37,6 +38,7 @@ All hosts read credentials from environment variables. Set these before installi
 | `INDEX_API_KEY`       | Index Network signup (BYOA page or [agent-ee26.edgecity.live](https://agent-ee26.edgecity.live/)) | Yes      |
 | `EDGEOS_BEARER_TOKEN` | EdgeOS email-OTP onboarding flow                                                                     | Yes for Geo knowledge graph access and content writes; also used for EdgeOS directory/profile |
 | `EDGEOS_API_KEY`      | EdgeOS email-OTP onboarding flow (`eos_live_...` key)                                                | Optional; needed for EdgeOS events, RSVPs, venues |
+| `OPENROUTER_API_KEY` or `OPENAI_API_KEY` | Optional Enzyme provider key family | Optional; only needed when running `enzyme init` / `enzyme refresh` with `--use-env-llm` |
 
 
 `INDEX_API_KEY` is required for the Index Network MCP server. `EDGEOS_BEARER_TOKEN` is required for `geo-esmeralda` auth, graph reads, and content writes. `EDGEOS_API_KEY` is only needed for EdgeOS event, RSVP, and venue recipes.
@@ -73,6 +75,7 @@ hermes skills install Edge-City/agentvillage/skills/edge-esmeralda --force
 hermes skills install Edge-City/agentvillage/skills/edgeos --force
 hermes skills install Edge-City/agentvillage/skills/geo-esmeralda --force
 hermes skills install Edge-City/agentvillage/skills/index-network --force
+hermes skills install Edge-City/agentvillage/skills/memory-workspace --force
 ```
 
 Add to `~/.hermes/.env`:
@@ -107,6 +110,46 @@ bun install/install.ts --index-api-key <KEY>
 ```
 
 Installs flat under `~/.hermes/` (SOUL.md, AGENTS.md, skills/, `terminal.cwd`) — Hermes defaults, no subfolders.
+
+The installer also sets up `memory/`, writes `memory/enzyme-env.sh` with references only, migrates legacy `agent-memory-vault/` content when safe, and installs the memory heartbeat cron unless `--skip-crons` is passed. Normal install does not install Enzyme, run `enzyme init` / `enzyme refresh`, schedule automatic refresh spend, or run `enzyme install hermes`. AgentVillage owns Hermes runtime memory instructions in `workspace/AGENTS.md`; Enzyme init/refresh only indexes memory. `enzyme init` can be run during operator bootstrap when provider env exists, but it does not cover future heartbeat writes. After the heartbeat writes or updates forum/IRL/session markdown, retrieval stays stale until `enzyme refresh` runs.
+
+To validate provider env without printing secrets:
+
+```bash
+python3 skills/memory-workspace/scripts/setup_workspace.py --check-enzyme-env
+```
+
+Hosted/default `enzyme refresh` may require `enzyme login`. Hosted AgentVillage operators with provider env should use the secret-safe check above, then:
+
+```bash
+python3 skills/memory-workspace/scripts/setup_workspace.py --run-enzyme status
+python3 skills/memory-workspace/scripts/setup_workspace.py --run-enzyme refresh --use-env-llm
+```
+
+The default heartbeat does not run this refresh automatically, to avoid hidden model/provider spend. Treat refresh as an explicit operator action or opt in to the separate provider-gated refresh cron for deployments that accept that cost:
+
+```bash
+bun install/install.ts --index-api-key <KEY> --install-enzyme-refresh-cron
+# optional schedule override:
+bun install/install.ts --index-api-key <KEY> --install-enzyme-refresh-cron --enzyme-refresh-cron "0 3 * * *"
+```
+
+The opt-in cron runs after the memory heartbeat by default (`30 2 * * *`), has no delivery target, runs through `$HERMES_HOME/.hermes/scripts/`, uses only `--use-env-llm`, self-inits when status indicates the vault has no index, then refreshes. It skips quietly when provider env, the Enzyme CLI, or generated memory input is missing, or when the sources have not changed. It records safe status in `memory/enzyme-refresh-status.json`.
+
+Hosted Hermes may have Enzyme at `$HERMES_HOME/.local/bin/enzyme` or `/opt/data/.local/bin/enzyme`. AgentVillage install adds those locations to Hermes terminal PATH so runtime agents can call `enzyme` directly:
+
+```bash
+enzyme catalyze -p memory -n 8 "what's going on in the forum"
+enzyme petri -p memory -n 12
+```
+
+Broad forum/chat catch-up validation should show direct `enzyme catalyze` before any broad forum glob/file fallback. After retrieval, verify cited files or live tools. Treat retrieval as evidence routing, not canonical truth, and do not claim retrieval was used when it was not run. Operators can source `memory/enzyme-env.sh` in manual shells to add the same non-secret PATH entries.
+
+To verify rendered vault output without printing secret values:
+
+```bash
+python3 skills/memory-workspace/scripts/setup_workspace.py --scan-vault-secrets
+```
 
 ### Claude Desktop
 
