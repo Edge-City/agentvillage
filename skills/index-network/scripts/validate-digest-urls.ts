@@ -15,7 +15,7 @@
  * dev / railway / prod bases all pass — the path shape is the gate.
  *
  * Usage (from the digest agent's workdir, i.e. $HERMES_HOME):
- *   bun skills/index-network/scripts/validate-digest-urls.ts memory/digest-draft.md
+ *   bun skills/index-network/scripts/validate-digest-urls.ts /tmp/digest-draft.md
  *   bun skills/index-network/scripts/validate-digest-urls.ts --strip-digest-metadata memory/digest-outgoing.md
  *   bun skills/index-network/scripts/validate-digest-urls.ts --opportunity-ids memory/digest-outgoing.md
  * Reads the file (or stdin when no path is given), writes the sanitized body to

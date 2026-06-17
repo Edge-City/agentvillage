@@ -9,9 +9,8 @@
  * heartbeat bookkeeping.
  */
 
-import { existsSync, rmSync } from "node:fs";
-import { access, mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
+import { existsSync } from "node:fs";
+import { access } from "node:fs/promises";
 
 import { buildDailyBriefContext, type DailyBriefContext } from "./build-daily-brief-context";
 import {
@@ -263,6 +262,7 @@ export async function prepareDailyBriefContext(options: {
 
 export async function stageDailyBrief(options: {
   date?: string;
+  body?: string;
   bodyFile?: string;
   opportunitiesFile?: string;
   stateFile?: string;
@@ -287,8 +287,11 @@ export async function stageDailyBrief(options: {
     };
   }
 
-  if (!options.bodyFile) {
-    throw new Error("stageDailyBrief requires --body-file unless today's digest is already staged");
+  if (options.body !== undefined && options.bodyFile) {
+    throw new Error("stageDailyBrief accepts only one body input: --body-stdin or --body-file");
+  }
+  if (options.body === undefined && !options.bodyFile) {
+    throw new Error("stageDailyBrief requires --body-stdin or --body-file unless today's digest is already staged");
   }
 
   let context = await readDailyBriefContext(contextOut);
@@ -297,15 +300,11 @@ export async function stageDailyBrief(options: {
     await writeJson(contextOut, context);
   }
 
-  const rawBody = await Bun.file(options.bodyFile).text();
-  if (!rawBody.trim()) throw new Error("digest body file is empty");
+  const rawBody = options.body ?? await Bun.file(options.bodyFile!).text();
+  if (!rawBody.trim()) throw new Error("digest body is empty");
 
   const { output: sanitizedBody } = sanitizeDigestUrls(rawBody.trim());
   const { opportunityIds, questionIds } = validateMarkers(sanitizedBody, context);
-
-  const draftFile = "memory/digest-draft.md";
-  await mkdir(dirname(draftFile), { recursive: true });
-  await Bun.write(draftFile, `${sanitizedBody}\n`);
 
   const createOutput = await hermes([
     "kanban",
@@ -331,8 +330,6 @@ export async function stageDailyBrief(options: {
   };
   await writeJson(stateFile, state);
 
-  rmSync(draftFile, { force: true });
-
   return { taskId, body: sanitizedBody, opportunityIds, questionIds };
 }
 
@@ -351,8 +348,13 @@ async function main(): Promise<void> {
     return;
   }
 
+  const body = args.includes("--body-stdin")
+    ? await Bun.readableStreamToText(Bun.stdin.stream())
+    : undefined;
+
   const result = await stageDailyBrief({
     ...common,
+    body,
     bodyFile: argValue(args, "--body-file"),
   });
   process.stdout.write(`${JSON.stringify({ taskId: result.taskId, opportunityIds: result.opportunityIds, questionIds: result.questionIds, skipped: result.skipped, reason: result.reason })}\n`);

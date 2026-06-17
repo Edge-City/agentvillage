@@ -89,15 +89,17 @@ It should not sound like:
 
 2. **Read `memory/daily-brief-context.json`.** Compose the final Kanban body from that context only. Do not call MCP tools, EdgeOS APIs, the control plane, or any other lookup manually.
 
-3. **Write the composed markdown body to `memory/digest-body.md`.** Use a file-write mechanism, not a shell-quoted `hermes kanban create` command. The body in this file is exactly what a human reviewer will edit and what the user will receive after internal markers are stripped.
+3. **Compose the final Kanban body in this turn.** Do not write it to `memory/` or any other durable workspace file. Files under `memory/` can become future source context, so the draft body must go directly to the staging script through stdin.
 
-4. **Stage the body exactly once through the deterministic guardrail script.** Run:
+4. **Stage the body exactly once through the deterministic guardrail script using a quoted heredoc pipe.** Replace `...composed brief markdown...` with the complete composed body. Run one command in this shape:
 
    ```
-   bun skills/index-network/scripts/stage-daily-brief.ts --state-file memory/heartbeat-state.json --context-out memory/daily-brief-context.json --body-file memory/digest-body.md
+   cat <<'DIGEST_BODY' | bun skills/index-network/scripts/stage-daily-brief.ts --state-file memory/heartbeat-state.json --context-out memory/daily-brief-context.json --body-stdin
+   ...composed brief markdown...
+   DIGEST_BODY
    ```
 
-   The script validates markers against the context, strips unsafe URLs, creates the Kanban task with argv-safe `--body`, blocks it for review, and records `prepared.taskId`, delivered opportunity ids, and delivered question ids in `memory/heartbeat-state.json`.
+   The quoted heredoc keeps markdown intact without creating a persistent draft file. The script reads stdin, validates markers against the context, strips unsafe URLs, creates the Kanban task with argv-safe `--body`, blocks it for review, and records `prepared.taskId`, delivered opportunity ids, and delivered question ids in `memory/heartbeat-state.json`.
 
    If the command exits non-zero, end your turn immediately with the host-specific no-reply marker. Do not diagnose, retry, or attempt alternative staging paths.
 
@@ -108,7 +110,8 @@ It should not sound like:
 - One attempt at context collection and one attempt at staging. No retries.
 - Never invent announcements, events, people, venues, times, tracks, or action URLs.
 - Never call `list_opportunities`, `read_pending_questions`, or any other MCP tool here; the context script handles all MCP calls deterministically.
-- Never create or block the Kanban card manually; `stage-daily-brief.ts --body-file` is the only staging path.
+- Never create or block the Kanban card manually; `stage-daily-brief.ts --body-stdin` is the cron staging path.
+- Do not write the composed body into `memory/`; it is not memory and must not become future source context.
 - Always stage the brief **blocked** for review. It ships only if a human unblocks it before the send pass. Never assign it or move it to Ready.
 - Calendar failures must not block launch: compose from whatever verified context exists. If nothing verified exists, stage a brief pointer saying you couldn't check the live calendar this morning and the user can ask what's on today.
 - Never confirm delivery here. Never write `deliveredToday` here.

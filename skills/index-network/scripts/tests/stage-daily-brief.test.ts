@@ -82,6 +82,34 @@ afterEach(() => {
 });
 
 describe("stageDailyBrief prompt-led staging guardrails", () => {
+  test("stages a prompt-authored stdin body without requiring a body file", async () => {
+    const dir = makeTmp();
+    const stateFile = join(dir, "heartbeat-state.json");
+    const contextOut = join(dir, "daily-brief-context.json");
+    await writeJson(stateFile, {});
+    await writeJson(contextOut, baseContext);
+    const body = [
+      "Good morning from Edge Esmeralda.",
+      "",
+      "Creative AI Crit makes today less about tools in general and more about whether your memory work reads as product taste or infrastructure.",
+      "",
+      "<!-- digest-question:id=daily-identity-2026-06-15 -->**One for you:** Which part of that read feels most like you, and which part should I stop carrying forward?",
+    ].join("\n");
+
+    const calls: string[][] = [];
+    const hermes = async (args: string[]): Promise<string> => {
+      calls.push(args);
+      if (args[0] === "kanban" && args[1] === "create") return JSON.stringify({ task: { id: "t_stdin" } });
+      return "{}";
+    };
+
+    const result = await stageDailyBrief({ date: TODAY, stateFile, contextOut, body, hermes });
+
+    expect(result.taskId).toBe("t_stdin");
+    expect(result.questionIds).toEqual(["daily-identity-2026-06-15"]);
+    expect(calls[0]?.[4]).toBe(result.body);
+  });
+
   test("stages a prompt-authored body file, validates markers, blocks review, and records ids", async () => {
     const dir = makeTmp();
     const stateFile = join(dir, "heartbeat-state.json");
@@ -183,7 +211,7 @@ describe("stageDailyBrief prompt-led staging guardrails", () => {
     expect(calls).toEqual([]);
   });
 
-  test("requires a body file when no protected digest already exists", async () => {
+  test("requires stdin or a body file when no protected digest already exists", async () => {
     const dir = makeTmp();
     const stateFile = join(dir, "heartbeat-state.json");
     const contextOut = join(dir, "daily-brief-context.json");
@@ -192,6 +220,7 @@ describe("stageDailyBrief prompt-led staging guardrails", () => {
 
     await expect(stageDailyBrief({ date: TODAY, stateFile, contextOut, hermes: async () => "{}" }))
       .rejects
-      .toThrow("requires --body-file");
+      .toThrow("requires --body-stdin or --body-file");
   });
+
 });
