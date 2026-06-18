@@ -1,8 +1,0 @@
-name: voice-gemini
-version: 1.0.0
-description: Transcribe inbound Telegram voice notes via Gemini (audio-in) on OpenRouter.
-author: Edge City
-provides_tools:
-  - transcribe_voice
-requires_env:
-  - OPENROUTER_API_KEY

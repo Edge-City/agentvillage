@@ -15,10 +15,6 @@ export function skillsDir(): string {
   return join(hermesHome(), "skills");
 }
 
-export function pluginsDir(): string {
-  return join(hermesHome(), "plugins");
-}
-
 /** Skill bundles shipped by this repo (installed into `$HERMES_HOME/skills/<name>/`). */
 export const EDGE_SKILL_NAMES = [
   "index-network",

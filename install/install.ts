@@ -7,9 +7,8 @@
  *   - `SOUL.md` → `$HERMES_HOME/SOUL.md` (identity; overwrites generic Hermes soul)
  *   - `AGENTS.md`, `USER.md` → `$HERMES_HOME/`
  *   - Edge skill bundles → `$HERMES_HOME/skills/{index-network,edgeos,edge-esmeralda,geo-esmeralda}/`
- *   - Hermes plugins → `$HERMES_HOME/plugins/<name>/` (e.g. voice-gemini)
  *   - `terminal.cwd` in config.yaml → `$HERMES_HOME`
- *   - `stt.enabled: false` so voice notes reach the agent as a file path
+ *   - STT enabled with Groq Whisper so voice notes are auto-transcribed
  *   - Index MCP + morning digest cron (`install_index.ts`)
  *   - Geo CLI runtime note (`install_geo.ts`)
  *
@@ -35,12 +34,11 @@ import { execSync } from "node:child_process";
 import { installIndex } from "./install_index";
 import { installEdgeos } from "./install_edgeos";
 import { installGeo } from "./install_geo";
-import { capModelMaxTokens, disableAutoStt, setTerminalCwd } from "./config";
+import { capModelMaxTokens, configureStt, setTerminalCwd } from "./config";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
 import {
   EDGE_SKILL_NAMES,
   hermesHome,
-  pluginsDir,
   skillsDir,
   targetWorkspace,
 } from "./paths";
@@ -49,7 +47,6 @@ import { captureWelcomeState, restoreWelcomeState } from "./welcome_state";
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const SOURCE_WORKSPACE = join(SCRIPT_DIR, "../workspace");
 const SOURCE_SKILLS = join(SCRIPT_DIR, "../skills");
-const SOURCE_PLUGINS = join(SCRIPT_DIR, "../plugins");
 const TARGET_HOME = targetWorkspace();
 
 function ensureHermesAvailable(): void {
@@ -172,26 +169,6 @@ function copySkillFiles(): void {
   }
 }
 
-function copyPluginFiles(): void {
-  if (!existsSync(SOURCE_PLUGINS)) return;
-
-  const targetPluginsRoot = pluginsDir();
-  if (!existsSync(targetPluginsRoot)) mkdirSync(targetPluginsRoot, { recursive: true });
-
-  let copied = 0;
-  const names: string[] = [];
-  for (const entry of readdirSync(SOURCE_PLUGINS)) {
-    const sourcePath = join(SOURCE_PLUGINS, entry);
-    if (!statSync(sourcePath).isDirectory()) continue;
-    copied += copyTree(sourcePath, join(targetPluginsRoot, entry));
-    names.push(entry);
-  }
-
-  if (copied > 0) {
-    console.log(`→ staged ${copied} files into ${targetPluginsRoot}/{${names.join(",")}}`);
-  }
-}
-
 function restartGateway(): void {
   console.log("→ restarting gateway");
   try {
@@ -220,10 +197,9 @@ function main(): void {
   copySoulFile();
   copyWorkspaceFiles(wipeUser);
   copySkillFiles();
-  copyPluginFiles();
   setTerminalCwd();
   capModelMaxTokens();
-  disableAutoStt();
+  configureStt();
 
   installIndex();
   installEdgeos();
