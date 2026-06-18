@@ -37,45 +37,24 @@ export function setTerminalCwd(): void {
 
 /**
  * Configure Hermes speech-to-text so inbound voice notes are auto-transcribed
- * to text before reaching the agent.
- *
- * Default is `openrouter-whisper`: a `command`-type STT provider that shells out
- * to install/stt/openrouter_transcribe.py, which transcribes the cached audio
- * via OpenRouter's /audio/transcriptions endpoint using the tenant's own
- * OPENROUTER_API_KEY (already in $HERMES_HOME/.env). This reuses the per-tenant
- * OpenRouter key — no extra vendor key to provision fleet-wide.
- *
- * Override with `STT_PROVIDER` (e.g. `groq`, `openai`, `local`) to use a
- * built-in provider instead; the command block is only written for the
- * openrouter-whisper default.
+ * to text before reaching the agent. Uses Groq Whisper by default (fast, free
+ * tier); the gateway reads the `GROQ_API_KEY` env var at runtime. The provider
+ * is overridable via `STT_PROVIDER` for operators who prefer openai/local.
  *
  * Note: Hermes v2026.5.16 does NOT hand the agent a raw audio file path when
  * STT is disabled (it just refuses), so a real STT provider is required for
  * voice notes to work. Idempotent.
- *
- * @param scriptPath absolute path to openrouter_transcribe.py on disk (passed
- *   by the installer; defaults to the cloned edge-src location at runtime).
  */
-export function configureStt(scriptPath?: string): void {
-  const provider = process.env.STT_PROVIDER?.trim() || "openrouter-whisper";
+export function configureStt(): void {
+  const provider = process.env.STT_PROVIDER?.trim() || "groq";
   const doc = readConfig();
   const stt = { ...((doc.stt as Record<string, unknown>) ?? {}) };
+  if (stt.enabled === true && stt.provider === provider) {
+    console.log(`→ stt already enabled with provider "${provider}"`);
+    return;
+  }
   stt.enabled = true;
   stt.provider = provider;
-
-  if (provider === "openrouter-whisper") {
-    const script =
-      scriptPath || join(hermesHome(), "edge-src", "install", "stt", "openrouter_transcribe.py");
-    const providers = { ...((stt.providers as Record<string, unknown>) ?? {}) };
-    providers["openrouter-whisper"] = {
-      type: "command",
-      command: `python3 ${script} {input_path} {output_path}`,
-      format: "txt",
-      timeout: 120,
-    };
-    stt.providers = providers;
-  }
-
   doc.stt = stt;
   writeConfig(doc);
   console.log(`→ enabled stt with provider "${provider}" (voice notes auto-transcribed)`);
