@@ -8,7 +8,7 @@
  *   - `AGENTS.md`, `USER.md` → `$HERMES_HOME/`
  *   - Edge skill bundles → `$HERMES_HOME/skills/{index-network,edgeos,edge-esmeralda,geo-esmeralda}/`
  *   - `terminal.cwd` in config.yaml → `$HERMES_HOME`
- *   - STT enabled with Groq Whisper so voice notes are auto-transcribed
+ *   - STT enabled with OpenRouter Whisper (command provider) for voice notes
  *   - Index MCP + morning digest cron (`install_index.ts`)
  *   - Geo CLI runtime note (`install_geo.ts`)
  *
@@ -199,7 +199,7 @@ function main(): void {
   copySkillFiles();
   setTerminalCwd();
   capModelMaxTokens();
-  configureStt();
+  configureStt(join(SCRIPT_DIR, "stt", "openrouter_transcribe.py"));
 
   installIndex();
   installEdgeos();
