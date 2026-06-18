@@ -36,22 +36,28 @@ export function setTerminalCwd(): void {
 }
 
 /**
- * Disable Hermes auto-transcription so inbound voice notes are handed to the
- * agent as a cached file path instead of a pre-made transcript. The
- * `voice-gemini` plugin's `transcribe_voice` tool then transcribes the file via
- * OpenRouter audio-in (see plugins/voice_gemini). Idempotent.
+ * Configure Hermes speech-to-text so inbound voice notes are auto-transcribed
+ * to text before reaching the agent. Uses Groq Whisper by default (fast, free
+ * tier); the gateway reads the `GROQ_API_KEY` env var at runtime. The provider
+ * is overridable via `STT_PROVIDER` for operators who prefer openai/local.
+ *
+ * Note: Hermes v2026.5.16 does NOT hand the agent a raw audio file path when
+ * STT is disabled (it just refuses), so a real STT provider is required for
+ * voice notes to work. Idempotent.
  */
-export function disableAutoStt(): void {
+export function configureStt(): void {
+  const provider = process.env.STT_PROVIDER?.trim() || "groq";
   const doc = readConfig();
   const stt = { ...((doc.stt as Record<string, unknown>) ?? {}) };
-  if (stt.enabled === false) {
-    console.log("→ stt.enabled already false (voice notes handed to agent as file path)");
+  if (stt.enabled === true && stt.provider === provider) {
+    console.log(`→ stt already enabled with provider "${provider}"`);
     return;
   }
-  stt.enabled = false;
+  stt.enabled = true;
+  stt.provider = provider;
   doc.stt = stt;
   writeConfig(doc);
-  console.log("→ set stt.enabled to false (voice notes transcribed via transcribe_voice tool)");
+  console.log(`→ enabled stt with provider "${provider}" (voice notes auto-transcribed)`);
 }
 
 /** Ensure hosted cron turns never inherit a provider's enormous output-token default. */
