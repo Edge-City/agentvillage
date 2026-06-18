@@ -71,54 +71,38 @@ test("capModelMaxTokens honors the operator cap override", () => {
   expect((readConfig(configPath).model as Record<string, unknown>).max_tokens).toBe(8192);
 });
 
-test("configureStt writes the openrouter-whisper command provider by default", () => {
+test("configureStt enables groq by default on a fresh config", () => {
   delete process.env.STT_PROVIDER;
   const configPath = withConfig({ model: { default: "google/gemini-3.5-flash" } });
-
-  configureStt("/abs/install/stt/openrouter_transcribe.py");
-
-  expect(readConfig(configPath).stt).toEqual({
-    enabled: true,
-    provider: "openrouter-whisper",
-    providers: {
-      "openrouter-whisper": {
-        type: "command",
-        command: "python3 /abs/install/stt/openrouter_transcribe.py {input_path} {output_path}",
-        format: "txt",
-        timeout: 120,
-      },
-    },
-  });
-});
-
-test("configureStt flips a disabled stt block to the command provider", () => {
-  delete process.env.STT_PROVIDER;
-  const configPath = withConfig({ stt: { enabled: false } });
-
-  configureStt("/abs/x.py");
-
-  const stt = readConfig(configPath).stt as Record<string, unknown>;
-  expect(stt.enabled).toBe(true);
-  expect(stt.provider).toBe("openrouter-whisper");
-});
-
-test("configureStt honors the STT_PROVIDER override without a command block", () => {
-  process.env.STT_PROVIDER = "groq";
-  const configPath = withConfig({});
 
   configureStt();
 
   expect(readConfig(configPath).stt).toEqual({ enabled: true, provider: "groq" });
 });
 
-test("configureStt is idempotent for the command provider", () => {
+test("configureStt flips a disabled stt block to enabled groq", () => {
   delete process.env.STT_PROVIDER;
+  const configPath = withConfig({ stt: { enabled: false } });
+
+  configureStt();
+
+  expect(readConfig(configPath).stt).toEqual({ enabled: true, provider: "groq" });
+});
+
+test("configureStt honors the STT_PROVIDER override", () => {
+  process.env.STT_PROVIDER = "openai";
   const configPath = withConfig({});
 
-  configureStt("/abs/x.py");
-  const first = JSON.stringify(readConfig(configPath).stt);
-  configureStt("/abs/x.py");
-  const second = JSON.stringify(readConfig(configPath).stt);
+  configureStt();
 
-  expect(second).toBe(first);
+  expect(readConfig(configPath).stt).toEqual({ enabled: true, provider: "openai" });
+});
+
+test("configureStt is idempotent", () => {
+  delete process.env.STT_PROVIDER;
+  const configPath = withConfig({ stt: { enabled: true, provider: "groq" } });
+
+  configureStt();
+
+  expect(readConfig(configPath).stt).toEqual({ enabled: true, provider: "groq" });
 });
