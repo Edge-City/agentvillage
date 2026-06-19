@@ -17,7 +17,7 @@
  *
  * When there is something to report, it additionally fetches the user's own
  * active signals (read_intents) and resolves each negotiation's counterparty to
- * a display name (read_user_profiles). Both enrichments are best-effort: a
+ * a display name (read_user_contexts). Both enrichments are best-effort: a
  * failure degrades to empty signals / null names rather than aborting.
  *
  * Usage (from $HERMES_HOME):
@@ -99,7 +99,7 @@ export interface NegotiationItem {
   id: string;
   counterpartyId: string;
   /**
-   * Human-readable counterparty name, resolved post-fetch via read_user_profiles.
+   * Human-readable counterparty name, resolved post-fetch via read_user_contexts.
    * Undefined until resolution runs; null when the counterparty has no profile
    * (or resolution failed). The prompt falls back to indexContext when absent.
    */
@@ -160,6 +160,9 @@ interface ProfileResponse {
   error?: unknown;
   data?: {
     hasProfile?: boolean;
+    /** Flat identity shape (WS11+ protocol): name lives at data.name. */
+    name?: string;
+    /** Legacy nested shape (pre-WS11 protocol): name lived at data.profile.name. */
     profile?: { name?: string };
   };
 }
@@ -314,7 +317,7 @@ export function buildMcpSignalFetcher(apiKey: string, mcpUrl: string): SignalFet
 
 /**
  * Build a memoised resolver mapping a counterparty userId → display name via
- * read_user_profiles. Initialises the MCP session lazily on first use and caches
+ * read_user_contexts. Initialises the MCP session lazily on first use and caches
  * per-userId results (including null) so repeated counterparties cost one call.
  * Any per-user failure resolves to null rather than throwing.
  */
@@ -347,7 +350,7 @@ export function buildMcpProfileResolver(apiKey: string, mcpUrl: string): Profile
         jsonrpc: "2.0",
         id: nextId++,
         method: "tools/call",
-        params: { name: "read_user_profiles", arguments: { userId } },
+        params: { name: "read_user_contexts", arguments: { userId } },
       });
       if (toolResp.error) throw new Error(toolResp.error.message);
 
@@ -359,10 +362,13 @@ export function buildMcpProfileResolver(apiKey: string, mcpUrl: string): Profile
       }
 
       const parsed = JSON.parse(text) as ProfileResponse;
-      const name =
-        parsed.success !== false && parsed.data?.hasProfile && parsed.data.profile?.name
-          ? parsed.data.profile.name.trim() || null
-          : null;
+      // Read the flat identity shape (WS11+) first, falling back to the legacy
+      // nested shape so this works across the protocol rename transition.
+      const rawName =
+        parsed.success !== false && parsed.data?.hasProfile
+          ? parsed.data.name ?? parsed.data.profile?.name
+          : undefined;
+      const name = rawName?.trim() || null;
       cache.set(userId, name);
       return name;
     } catch {

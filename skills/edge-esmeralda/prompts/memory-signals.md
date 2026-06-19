@@ -10,7 +10,7 @@ Read `MEMORY.md`, compare it against what the Index already has, and create the 
 
 1. **Gate.** Reply silently and stop if any of these hold:
    - `MEMORY.md` does not exist or has no substantive content about the user.
-   - The user has not completed onboarding (you will normally know this from session context; if genuinely unsure, check via `read_user_profiles` and stop silently if onboarding is incomplete).
+   - The user has not completed onboarding (you will normally know this from session context; if genuinely unsure, check via `read_user_contexts` and stop silently if onboarding is incomplete).
    - `memorySignals.lastRunDate` in `memory/heartbeat-state.json` already equals today's date in America/Los_Angeles (you have already run today).
 
 2. **Read the current graph.** Call `read_premises()` and `read_intents()`. These — plus `memorySignals.captured` in `memory/heartbeat-state.json` — are your dedup baseline.
