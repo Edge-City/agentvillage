@@ -1,7 +1,7 @@
 # Edge Esmeralda 2026 Wiki
 
 Source: https://www.notion.so/edgecity/Edge-Esmeralda-2026-Wiki-317d45cdfc5981d2a571f52b024c5141
-Last indexed: 2026-06-19T19:33:49.581Z
+Last indexed: 2026-06-19T21:26:24.294Z
 
 ---
 
@@ -47,13 +47,13 @@ Edge Esmeralda 2026 is a month-long popup village (May 30 – June 27) happening
 
 ### 🐣 Kids & Families
 
----
-
 Welcome! We're so excited to have you with us ☀️
 
 This wiki has all the important information regarding Edge Esmeralda 2026. If you have further questions, please reach out to info@edgeesmeralda.com (mailto:info@edgeesmeralda.com).
 
 ### ❤️ Most Important Info & Links
+
+---
 
 ### 💯 Local Discounts & Partners
 
