@@ -160,6 +160,9 @@ interface ProfileResponse {
   error?: unknown;
   data?: {
     hasProfile?: boolean;
+    /** Flat identity shape (WS11+ protocol): name lives at data.name. */
+    name?: string;
+    /** Legacy nested shape (pre-WS11 protocol): name lived at data.profile.name. */
     profile?: { name?: string };
   };
 }
@@ -359,10 +362,13 @@ export function buildMcpProfileResolver(apiKey: string, mcpUrl: string): Profile
       }
 
       const parsed = JSON.parse(text) as ProfileResponse;
-      const name =
-        parsed.success !== false && parsed.data?.hasProfile && parsed.data.profile?.name
-          ? parsed.data.profile.name.trim() || null
-          : null;
+      // Read the flat identity shape (WS11+) first, falling back to the legacy
+      // nested shape so this works across the protocol rename transition.
+      const rawName =
+        parsed.success !== false && parsed.data?.hasProfile
+          ? parsed.data.name ?? parsed.data.profile?.name
+          : undefined;
+      const name = rawName?.trim() || null;
       cache.set(userId, name);
       return name;
     } catch {
