@@ -4,7 +4,7 @@ The Index Network MCP (server `index`) is your tool surface for everything netwo
 
 ## Tool families
 
-- **Profile** — `read_user_profiles`, `record_onboarding_privacy_consent`, `preview_user_profile`, `get_profile_run`, `cancel_profile_run`, `confirm_user_profile`, `create_user_profile` (legacy/generic clients), `update_user_profile`
+- **Profile** — `read_user_contexts`, `record_onboarding_privacy_consent`, `preview_user_context`, `get_enrichment_run`, `cancel_enrichment_run`, `confirm_user_context`, `create_user_context` (legacy/generic clients), `update_user_context`
 - **Networks (communities)** — `read_networks`, `create_network`, `update_network`, `delete_network`, `read_network_memberships`, `create_network_membership`, `delete_network_membership`
 - **Signals (intents)** — `create_intent`, `read_intents`, `update_intent`, `delete_intent`, `search_intents`, `create_intent_index`, `read_intent_indexes`, `delete_intent_index`
 - **Premises (durable profile facts)** — `create_premise`, `read_premises`, `update_premise`, `retract_premise`
@@ -13,12 +13,12 @@ The Index Network MCP (server `index`) is your tool surface for everything netwo
 - **Conversations** — `list_conversations`, `get_conversation`
 - **Contacts** — `add_contact`, `import_contacts`, `import_gmail_contacts`, `list_contacts`, `search_contacts`, `remove_contact`
 - **Agents (administrative)** — `list_agents`, `register_agent`, `update_agent`, `delete_agent`, `grant_agent_permission`, `revoke_agent_permission`
-- **Onboarding** — `record_onboarding_privacy_consent`, `preview_user_profile`, `get_profile_run`, `confirm_user_profile`, `complete_onboarding`
+- **Onboarding** — `record_onboarding_privacy_consent`, `preview_user_context`, `get_enrichment_run`, `confirm_user_context`, `complete_onboarding`
 - **Reference** — `read_docs`, `scrape_url`
 
 Read the description on every tool you call — that is where the per-tool rules live (when to call, when NOT to call, prerequisites, post-call follow-ups).
 
-**Async profile rule.** In MCP, `preview_user_profile` or text-based `update_user_profile` may return `status="queued"` plus a `profileRunId`. When that happens, call `get_profile_run(profileRunId=...)` until the run is `succeeded`, `failed`, or `cancelled`, then present/use the `result` if it succeeded. Social-only `update_user_profile(socials=...)` usually completes immediately and does not need polling.
+**Async profile rule.** In MCP, `preview_user_context` or text-based `update_user_context` may return `status="queued"` plus a `profileRunId`. When that happens, call `get_enrichment_run(profileRunId=...)` until the run is `succeeded`, `failed`, or `cancelled`, then present/use the `result` if it succeeded. Social-only `update_user_context(socials=...)` usually completes immediately and does not need polling.
 
 ## Tool routing — finding people
 
@@ -32,7 +32,7 @@ When the user wants to **find people to connect with, meet, or talk to** ("find 
 **If `discover_opportunities` returns no results, that is the answer.** Tell the user no connections were found. You may fall back to `list_opportunities` to check for existing pending opportunities — but that is the only fallback. Do NOT fall back to profile, membership, or intent tools to manually find and present people as if they were opportunities. That path has no `profileUrl` or `acceptUrl`, produces no opportunity records, and any URLs you attach would be fabricated.
 
 When the user wants to **look up a specific person** by name or check a known profile:
-→ Use `read_user_profiles(query=name)`. Returns profile data but no actionable URLs.
+→ Use `read_user_contexts(query=name)`. Returns profile data but no actionable URLs.
 
 ## Capturing new signal in conversation
 
@@ -51,7 +51,7 @@ The `telegram-handle-reconciliation` heartbeat task may ask the resident which T
 1. Normalize the reply: trim, strip a leading `@`, strip `https://t.me/` / `https://telegram.me/`, drop query/hash/path suffixes, and require `[A-Za-z0-9_]{5,32}`, then lowercase it (Telegram usernames are case-insensitive). Store and write bare, lowercase handles only — e.g. `alice_tg`, never `@alice_tg`.
 2. If the reply is not a valid Telegram username, ask one short follow-up: "What's your Telegram username? Send just the handle, without @." Do not write anything.
 3. If valid, update the independent systems that are available from this runtime:
-   - Index: call `update_user_profile(socials={ telegram: "<bare-handle>" })`.
+   - Index: call `update_user_context(socials={ telegram: "<bare-handle>" })`.
    - EdgeOS: if `EDGEOS_BEARER_TOKEN` is available, use the `edgeos` skill's `PATCH /api/v1/humans/me` recipe with `{ "telegram": "<bare-handle>" }`. Do not patch application-form fields; only the own-profile `telegram` field.
    - Local runtime header: if `INDEX_API_KEY` and `edge-src/install/install.ts` are available in the Hermes home, run the installer in no-restart mode with `--telegram-handle <bare-handle>` so future Index MCP calls forward the same user-confirmed handle. If that script is unavailable, skip this and note it in memory; do not hand-edit secrets in chat.
 4. Update `memory/heartbeat-state.json`: remove `telegramHandleReconciliation.pending`, set `telegramHandleReconciliation.resolvedAt` to today's date/time, set `telegramHandleReconciliation.confirmedHandle` to the bare handle, and preserve the recorded source snapshot for audit.
@@ -63,14 +63,14 @@ Do not infer the correct handle from display name, email, chat id, or a conflict
 
 Call `scrape_url(url, objective)` whenever the user shares a URL and you need its content:
 
-- **Profile enrichment** — user shares a LinkedIn, GitHub, personal site, or any professional URL → scrape it, then pass the content to `update_user_profile` or `create_user_profile`.
+- **Profile enrichment** — user shares a LinkedIn, GitHub, personal site, or any professional URL → scrape it, then pass the content to `update_user_context` or `create_user_context`.
 - **Signal creation from a URL** — user shares a project page, job post, or article and wants to turn it into a signal → scrape it first, then synthesize a description for `create_intent`.
 - **Research** — user asks "what is this?" or "who is this person?" about a URL → scrape and summarize.
 - **Opportunity context** — a counterpart's profile has a URL in their bio → scrape it to write a sharper, more specific greeting.
 
 Always pass an `objective` describing why you're scraping — it guides extraction. Example: `scrape_url(url="linkedin.com/in/alex", objective="Update user profile from LinkedIn page")`.
 
-During AgentVillage onboarding there is a single data-use consent question, and it is a hard turn boundary. After asking it, stop and wait for the user's next message; do not record consent in the same turn as the question. The one question covers both EdgeOS/import data and public lookup/scraping — do not split it into two. Do not scrape, run public profile lookup, or use EdgeOS/import data until the user explicitly answers yes and both `record_onboarding_privacy_consent(edgeosImportGranted=true)` and `record_onboarding_privacy_consent(publicProfileLookupGranted=true)` have succeeded. Even after consent, public profile lookup is URL-gated during onboarding: only set `allowPublicLookup=true` or scrape public pages when the user explicitly provided, or allowed EdgeOS/import data supplied, at least one public social/profile URL that identifies this exact user. Do not broaden from name, email, location, bio, Telegram handle, WhatsApp number, Discord handle, or other non-URL handles; ask for a LinkedIn/GitHub/personal-site/etc. URL or draft without public lookup. Use `preview_user_profile` for drafts only after the consent question has an explicit answer; if it returns `profileRunId`, poll `get_profile_run(profileRunId=...)` until `status="succeeded"` and use the returned `result` as the draft. Use `confirm_user_profile` only after the user has seen and approved/corrected the draft. Do not use legacy `create_user_profile` for the AgentVillage onboarding ritual.
+During AgentVillage onboarding there is a single data-use consent question, and it is a hard turn boundary. After asking it, stop and wait for the user's next message; do not record consent in the same turn as the question. The one question covers both EdgeOS/import data and public lookup/scraping — do not split it into two. Do not scrape, run public profile lookup, or use EdgeOS/import data until the user explicitly answers yes and both `record_onboarding_privacy_consent(edgeosImportGranted=true)` and `record_onboarding_privacy_consent(publicProfileLookupGranted=true)` have succeeded. Even after consent, public profile lookup is URL-gated during onboarding: only set `allowPublicLookup=true` or scrape public pages when the user explicitly provided, or allowed EdgeOS/import data supplied, at least one public social/profile URL that identifies this exact user. Do not broaden from name, email, location, bio, Telegram handle, WhatsApp number, Discord handle, or other non-URL handles; ask for a LinkedIn/GitHub/personal-site/etc. URL or draft without public lookup. Use `preview_user_context` for drafts only after the consent question has an explicit answer; if it returns `profileRunId`, poll `get_enrichment_run(profileRunId=...)` until `status="succeeded"` and use the returned `result` as the draft. Use `confirm_user_context` only after the user has seen and approved/corrected the draft. Do not use legacy `create_user_context` for the AgentVillage onboarding ritual.
 
 ## Output translation
 

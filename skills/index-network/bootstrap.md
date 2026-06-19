@@ -6,7 +6,7 @@ This file is the Index Network onboarding ritual. It is triggered when the user 
 
 ## Intent-trigger gate
 
-This ritual is triggered by user social intent, not session start. When you arrive here, run these two checks in parallel: call `read_user_profiles()` (no args) and read `memory/<today>.md`. The Index Network server is the source of truth for whether onboarding is complete; the memory note controls same-day suppression.
+This ritual is triggered by user social intent, not session start. When you arrive here, run these two checks in parallel: call `read_user_contexts()` (no args) and read `memory/<today>.md`. The Index Network server is the source of truth for whether onboarding is complete; the memory note controls same-day suppression.
 
 Evaluate in this order:
 
@@ -32,7 +32,7 @@ To draft your village profile, I can use the details you already gave Edge Esmer
 
 ---
 
-**Hard stop:** after sending this question, end the turn immediately. Do not call `record_onboarding_privacy_consent`, `preview_user_profile`, `scrape_url`, or any EdgeOS/profile/public-lookup tool in the same turn as this question. Wait for the user's next message. Do not infer consent from `/start`, `hi`, silence, prior setup, the existence of staged data, or the fact that the API key is network-scoped.
+**Hard stop:** after sending this question, end the turn immediately. Do not call `record_onboarding_privacy_consent`, `preview_user_context`, `scrape_url`, or any EdgeOS/profile/public-lookup tool in the same turn as this question. Wait for the user's next message. Do not infer consent from `/start`, `hi`, silence, prior setup, the existence of staged data, or the fact that the API key is network-scoped.
 
 Only after the user's next message explicitly answers yes/no, record that one answer to both consent flags. The tool records one flag per call and will not accept both in a single call, so make two calls with the same answer:
 
@@ -41,13 +41,13 @@ Only after the user's next message explicitly answers yes/no, record that one an
 
 Then:
 
-- If granted: `preview_user_profile` may use any server-staged signup/import profile seed automatically, and you may use EdgeOS recipes only for the user's own available profile/directory data. Do not use hidden values such as literal `"*"`; omit them. **Do not set `allowPublicLookup=true` yet unless you have at least one explicit or allowed public social/profile URL for this user** (for example LinkedIn, GitHub, a personal site, X/Twitter, Farcaster, or another professional page). A name, email, location, bio, Telegram handle, or other non-URL handle is not enough for public lookup; broad name-based internet lookup can target the wrong person.
-- If granted but no public social/profile URL is available: ask for one concise follow-up before drafting — e.g. "Do you have a LinkedIn, GitHub, personal site, or other public profile I should use? If not, I can draft from what you already gave Edge Esmeralda." If they share a URL, include it and set `allowPublicLookup=true`; if they decline or provide only prose/handles, call `preview_user_profile` without public lookup.
+- If granted: `preview_user_context` may use any server-staged signup/import profile seed automatically, and you may use EdgeOS recipes only for the user's own available profile/directory data. Do not use hidden values such as literal `"*"`; omit them. **Do not set `allowPublicLookup=true` yet unless you have at least one explicit or allowed public social/profile URL for this user** (for example LinkedIn, GitHub, a personal site, X/Twitter, Farcaster, or another professional page). A name, email, location, bio, Telegram handle, or other non-URL handle is not enough for public lookup; broad name-based internet lookup can target the wrong person.
+- If granted but no public social/profile URL is available: ask for one concise follow-up before drafting — e.g. "Do you have a LinkedIn, GitHub, personal site, or other public profile I should use? If not, I can draft from what you already gave Edge Esmeralda." If they share a URL, include it and set `allowPublicLookup=true`; if they decline or provide only prose/handles, call `preview_user_context` without public lookup.
 - If denied: do not fetch or use EdgeOS profile/directory data, do not rely on staged signup/import profile data, and do not run public lookup or scraping. Ask for a short self-description instead.
 
 ## Step 2 — Draft and confirm their profile
 
-Start this step only after the data-use consent question has been asked, the user's reply has been received, and both consent-recording calls have completed successfully. Call `preview_user_profile(...)` using only allowed inputs:
+Start this step only after the data-use consent question has been asked, the user's reply has been received, and both consent-recording calls have completed successfully. Call `preview_user_context(...)` using only allowed inputs:
 
 - Include EdgeOS/event profile text and rely on staged signup/import profile data only if the user granted the data-use consent question.
 - Include social/profile URLs only if the user explicitly provided them or they came from allowed EdgeOS data.
@@ -59,7 +59,7 @@ Narrate while processing:
 
 > `> Drafting your profile…`
 
-If `preview_user_profile` returns `profileRunId` instead of a draft, call `get_profile_run(profileRunId=...)` until `status="succeeded"`, `status="failed"`, or `status="cancelled"`. When it succeeds, use its `result` as the profile draft. If it is still queued/running and you cannot continue polling in this turn, save the `profileRunId` in today's memory note, tell the user the draft is still being prepared, and ask them to send a short follow-up such as "done?" so you can check `get_profile_run` again. Do not call `confirm_user_profile` until you have shown the succeeded draft or the user has provided explicit approved profile text.
+If `preview_user_context` returns `profileRunId` instead of a draft, call `get_enrichment_run(profileRunId=...)` until `status="succeeded"`, `status="failed"`, or `status="cancelled"`. When it succeeds, use its `result` as the profile draft. If it is still queued/running and you cannot continue polling in this turn, save the `profileRunId` in today's memory note, tell the user the draft is still being prepared, and ask them to send a short follow-up such as "done?" so you can check `get_enrichment_run` again. Do not call `confirm_user_context` until you have shown the succeeded draft or the user has provided explicit approved profile text.
 
 ### Identity check — only when public lookup ran
 
@@ -75,9 +75,9 @@ The succeeded result includes a `publicLookup` block describing what (if anythin
   When the user answers in their next message:
 
   - **Yes** → present the draft as usual below and continue to confirm.
-  - **No** → discard this draft. Call `preview_user_profile` again with the same self-described inputs but `allowPublicLookup=false` (drop any social URL the user says was the wrong person). If that call returns a `profileRunId`, poll `get_profile_run` the same way as above before continuing. Then present that lookup-free draft below. Do not save the public-lookup draft.
+  - **No** → discard this draft. Call `preview_user_context` again with the same self-described inputs but `allowPublicLookup=false` (drop any social URL the user says was the wrong person). If that call returns a `profileRunId`, poll `get_enrichment_run` the same way as above before continuing. Then present that lookup-free draft below. Do not save the public-lookup draft.
 
-This identity question is a turn boundary: ask it, end the turn, and wait for the user's answer before calling `confirm_user_profile`.
+This identity question is a turn boundary: ask it, end the turn, and wait for the user's answer before calling `confirm_user_context`.
 
 Present the profile draft naturally:
 
@@ -85,11 +85,11 @@ Present the profile draft naturally:
 
 Then:
 
-- If they confirm → call `confirm_user_profile(draft=<approved draft>)` and proceed to Step 3.
-- If they want edits → call `confirm_user_profile(bioOrDescription="[their correction]", name="...", location="...")` using their approved correction, then proceed to Step 3.
-- If the draft is too thin → ask them to describe themselves in a sentence, then call `confirm_user_profile(bioOrDescription="[their text]")`.
+- If they confirm → call `confirm_user_context(draft=<approved draft>)` and proceed to Step 3.
+- If they want edits → call `confirm_user_context(bioOrDescription="[their correction]", name="...", location="...")` using their approved correction, then proceed to Step 3.
+- If the draft is too thin → ask them to describe themselves in a sentence, then call `confirm_user_context(bioOrDescription="[their text]")`.
 
-Do not call legacy `create_user_profile` during AgentVillage onboarding. Do not save a profile before showing the draft and receiving approval/correction.
+Do not call legacy `create_user_context` during AgentVillage onboarding. Do not save a profile before showing the draft and receiving approval/correction.
 
 ## Step 3 — Capture their first signal
 
@@ -112,7 +112,7 @@ Before closing onboarding, note which platform the user connected through, but d
 Detection by session key:
 
 - `agent:main:telegram:direct:<chatId>` → Telegram. Note that the user is connected via Telegram. Do not pull `from.username` out of inbound messages and write it: that field is not reliably visible to you, and a guessed value routes introductions to the wrong person.
-- `agent:main:whatsapp:...` → WhatsApp. The phone number is the handle; call `update_user_profile(socials={ whatsapp: "+<E.164>" })` only if a real E.164 number is recoverable **verbatim** from session metadata. If not, skip — do not reconstruct one.
+- `agent:main:whatsapp:...` → WhatsApp. The phone number is the handle; call `update_user_context(socials={ whatsapp: "+<E.164>" })` only if a real E.164 number is recoverable **verbatim** from session metadata. If not, skip — do not reconstruct one.
 - `agent:main:discord:...`, `agent:main:slack:...`, etc. → equivalent treatment only when the platform's primary handle is recoverable **verbatim** from session metadata. Otherwise skip.
 - `agent:main:webchat` or any other context where no platform handle exists → skip session-metadata capture.
 
@@ -124,7 +124,7 @@ Also note the platform in `USER.md` under **Notes** without inventing a handle. 
 
 Call `complete_onboarding()`. This is required — do not skip it. The server auto-joins the user to Edge Esmeralda's community at this point (no separate `create_network_membership` call is needed).
 
-Update `USER.md` with what you learned in this conversation. Capture only the things the user said directly — name, what to call them, timezone, anything they explicitly told you to remember. Do **not** paraphrase what `preview_user_profile` or `confirm_user_profile` returned; that lives behind the protocol. `USER.md` is the lived notebook, not a duplicate of the structured record.
+Update `USER.md` with what you learned in this conversation. Capture only the things the user said directly — name, what to call them, timezone, anything they explicitly told you to remember. Do **not** paraphrase what `preview_user_context` or `confirm_user_context` returned; that lives behind the protocol. `USER.md` is the lived notebook, not a duplicate of the structured record.
 
 After populating USER.md, append `[gate] index-network: triggered, ritual complete` to `memory/<today>.md` (the gate-trace line for the Intent-trigger gate). The next accepted-opportunity heartbeat tick will pick up from here.
 
@@ -139,7 +139,7 @@ Cron-schedule preferences are not asked about — the morning digest runs at a f
 - Ask a single data-use consent question covering both EdgeOS data and public lookup/scraping — never split it into two.
 - Do not import EdgeOS data, run public lookup, or scrape without the recorded consent based on an explicit user answer.
 - Even with consent, do not run public lookup unless you have an explicit or allowed public social/profile URL for this user. A name alone is never enough — however distinctive it seems. The only thing that unlocks lookup is a public profile URL (for example LinkedIn, GitHub, a personal site, X/Twitter, Farcaster, or another professional page — the list is not exhaustive): ask the user for one, and if they don't give a URL, draft without internet lookup. Never do broad name-based lookup during onboarding.
-- Do not call `preview_user_profile` until the consent question has an explicit user answer and both consent calls have succeeded.
+- Do not call `preview_user_context` until the consent question has an explicit user answer and both consent calls have succeeded.
 - Do not call `discover_opportunities`, `list_opportunities`, or any other discovery tool during onboarding. Opportunities surface on the first scheduled cron tick after onboarding completes.
 - Do not mention Gmail or email import — they are not available in this flow.
 - Never write a guessed or derived contact handle (Telegram, WhatsApp, Discord, Slack). During onboarding, do not silently reconcile Telegram across EdgeOS, Index, and runtime headers. If sources later disagree, the heartbeat reconciliation process asks the resident and writes only their explicit bare-handle answer.

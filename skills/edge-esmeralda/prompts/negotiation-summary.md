@@ -68,7 +68,7 @@ Close with one short, natural question inviting the user to prioritise a thread,
 
 ## Hard rules
 - Keep the whole message tight and scannable. Bullets over prose. No storytelling, no flourishes.
-- Never call `list_negotiations`, `read_intents`, `read_user_profiles`, or any MCP tool — the script owns all data fetching.
+- Never call `list_negotiations`, `read_intents`, `read_user_contexts`, or any MCP tool — the script owns all data fetching.
 - Never reimplement the fetch or state logic.
 - One attempt at the script. Non-zero exit → `[SILENT]` immediately.
 - If the script returned `[SILENT]`, deliver nothing.
