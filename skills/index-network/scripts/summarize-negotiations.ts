@@ -309,7 +309,6 @@ export function buildMcpSignalFetcher(apiKey: string, mcpUrl: string): SignalFet
     if (!Array.isArray(intents)) return [];
 
     return intents
-      .filter((i) => !i.status || i.status === "active")
       .map((i) => ({ id: i.id ?? "", summary: (i.summary || i.description || "").trim() }))
       .filter((s) => s.summary.length > 0);
   };
