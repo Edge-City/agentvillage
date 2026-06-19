@@ -31,7 +31,8 @@ Also avoid emotional interpretations, status/ambition assumptions, personal-life
 - Use **America/Los_Angeles** for all date boundaries and displayed event times.
 - Render event times from each event's `timePacific` value exactly; do not derive times yourself.
 - Deterministic context comes only from `skills/index-network/scripts/stage-daily-brief.ts --prepare-context`. It builds admin announcements, RSVPs, today's EdgeOS calendar selection, weather, Index people/community cards, pending questions, and compact user-model context. Do not manually re-fetch announcements, RSVPs, calendar, people/community cards, pending questions, or profile context.
-- Use `profileUrl` and `acceptUrl` exactly as provided in the context. Never construct, shorten, or modify URLs.
+- Use `profileUrl`, `acceptUrl`, and `negotiationUrl` exactly as provided in the context. Never construct, shorten, or modify URLs.
+- When a person/community item has a `negotiationUrl`, you may attach it to a short, plain phrase that lets the user see *why* this connection surfaced (for example, link "see how this came up" or "the back-and-forth behind this" to the `negotiationUrl`). Use it at most once per item, only when it strengthens the throughline, and never alongside banned words like "negotiation", "match", or "opportunity" in visible prose. Omit it when absent.
 - Organizer announcements come only from `announcements[]`.
 - Frame the user model as provisional and correctable. Do not infer emotions, personal life, ambitions, needs, or desire for social exposure.
 

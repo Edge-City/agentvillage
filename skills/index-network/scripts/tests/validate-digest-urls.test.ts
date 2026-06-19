@@ -49,6 +49,15 @@ describe("sanitizeDigestUrls", () => {
     expect(stripped).toEqual([]);
   });
 
+  test("preserves a legitimate /chat/<uuid> negotiation-trace link", () => {
+    const md = "[see how this came up](https://index.network/chat/66666666-6666-6666-6666-666666666666?link_preview=false)";
+
+    const { output, stripped } = sanitizeDigestUrls(md);
+
+    expect(output).toBe(md);
+    expect(stripped).toEqual([]);
+  });
+
   test("preserves Edge Esmeralda event links", () => {
     const md = "[GNOSIS Journey](https://edgecity.simplefi.tech/portal/edge-esmeralda-2026/events/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa)";
 
