@@ -29,6 +29,8 @@
 const CONNECT_PATH = /^\/c\/[A-Za-z0-9_-]+\/?$/;
 /** Profile link: `/u/<uuid>`, optional trailing slash. */
 const PROFILE_PATH = /^\/u\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/?$/;
+/** Negotiation-trace link: `/chat/<conversationId-uuid>`, optional trailing slash. */
+const CHAT_PATH = /^\/chat\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/?$/;
 /** Edge Esmeralda calendar event link. */
 const EDGE_ESMERALDA_EVENT_PATH = /^\/portal\/edge-esmeralda-2026\/events\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/?$/;
 
@@ -70,6 +72,7 @@ export function isAllowedDigestUrl(url: string): boolean {
   }
   return CONNECT_PATH.test(parsed.pathname)
     || PROFILE_PATH.test(parsed.pathname)
+    || CHAT_PATH.test(parsed.pathname)
     || (parsed.hostname === "edgecity.simplefi.tech" && EDGE_ESMERALDA_EVENT_PATH.test(parsed.pathname));
 }
 

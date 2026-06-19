@@ -136,6 +136,8 @@ export interface BriefOpportunity {
   status?: string;
   profileUrl?: string;
   acceptUrl?: string;
+  /** Deep-link to the A2A negotiation trace that produced this opportunity. */
+  negotiationUrl?: string;
   feedCategory?: string;
   opportunityId?: string;
   confidence?: number;
@@ -452,7 +454,7 @@ export function parseOpportunityTranscript(text: string): BriefOpportunity[] {
       continue;
     }
 
-    const field = line.trim().match(/^(status|profileUrl|acceptUrl|feedCategory|opportunityId|confidence|redelivery):\s*(.+)$/);
+    const field = line.trim().match(/^(status|profileUrl|acceptUrl|negotiationUrl|feedCategory|opportunityId|confidence|redelivery):\s*(.+)$/);
     if (field) {
       const key = field[1] as keyof BriefOpportunity;
       if (key === "confidence") {

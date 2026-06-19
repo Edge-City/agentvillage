@@ -93,7 +93,7 @@ describe("build-daily-brief-context helpers", () => {
   });
 
   test("parseOpportunityTranscript reads MCP prose cards", () => {
-    const parsed = parseOpportunityTranscript(`Here are your opportunities:\n\n1. Nathan Price\n   <!-- digest-opportunity:id=opp-direct-1 -->\n   builds the intelligence layer for human aging\n   status: pending\n   profileUrl: https://index.network/u/11111111-1111-1111-1111-111111111111\n   acceptUrl: https://index.network/c/abc123\n   feedCategory: connection\n\n2. Remi\n   <!-- digest-opportunity:id=opp-intro-1 -->\n   looking for a systems engineer\n   status: latent\n   profileUrl: https://index.network/u/22222222-2222-2222-2222-222222222222\n   acceptUrl: https://index.network/c/def456\n   feedCategory: connector-flow`);
+    const parsed = parseOpportunityTranscript(`Here are your opportunities:\n\n1. Nathan Price\n   <!-- digest-opportunity:id=opp-direct-1 -->\n   builds the intelligence layer for human aging\n   status: pending\n   profileUrl: https://index.network/u/11111111-1111-1111-1111-111111111111\n   acceptUrl: https://index.network/c/abc123\n   negotiationUrl: https://index.network/chat/99999999-9999-9999-9999-999999999999\n   feedCategory: connection\n\n2. Remi\n   <!-- digest-opportunity:id=opp-intro-1 -->\n   looking for a systems engineer\n   status: latent\n   profileUrl: https://index.network/u/22222222-2222-2222-2222-222222222222\n   acceptUrl: https://index.network/c/def456\n   feedCategory: connector-flow`);
 
     expect(parsed).toEqual([
       {
@@ -103,6 +103,7 @@ describe("build-daily-brief-context helpers", () => {
         status: "pending",
         profileUrl: "https://index.network/u/11111111-1111-1111-1111-111111111111",
         acceptUrl: "https://index.network/c/abc123",
+        negotiationUrl: "https://index.network/chat/99999999-9999-9999-9999-999999999999",
         feedCategory: "connection",
       },
       {
