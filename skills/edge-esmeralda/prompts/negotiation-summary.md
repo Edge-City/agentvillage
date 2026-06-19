@@ -33,23 +33,23 @@ If the script exits with a non-zero code, end your turn immediately with `[SILEN
 
 ## Step 3 — Write the summary
 
-Compose a single reply with **a clear title and labeled sections**, in this exact order. Use the section headers verbatim (with the leading emoji). Skip any section whose data is empty (except the title and intro, which always appear).
+Compose a single reply with **a clear title and labeled sections**, in this exact order. Use the section headers verbatim (with the leading emoji). Put exactly one blank line between each section. Skip any section whose data is empty (except the title and intro, which always appear).
 
-```
-**Negotiation Summary**
+The template below shows the shape only — it is NOT a code block. Do not wrap your reply in code fences, and do not echo the angle-bracket placeholders. Your reply starts directly with the bold title line:
 
-Hey — here's a rundown of the negotiations I've been running on your behalf across the community.
+    **Negotiation Summary**
 
-🎯 *Your signals*
-• <signal summary 1>
-• <signal summary 2>
+    Hey — here's a rundown of the negotiations I've been running on your behalf across the community.
 
-💬 *Negotiations I've been running*
-• <one line per negotiation: what it's about, grounded in indexContext, and where it stands>
+    🎯 *Your signals*
+    • <signal summary 1>
+    • <signal summary 2>
 
-👤 *People I've been speaking to*
-• <counterpartyName> — <one phrase on the context/community>
-```
+    💬 *Negotiations I've been running*
+    • <one line per negotiation: what it's about, grounded in indexContext, and where it stands>
+
+    👤 *People I've been speaking to*
+    • <counterpartyName> — <one phrase on the context/community>
 
 Rules for each section:
 
@@ -67,6 +67,8 @@ Use the first 6 hex chars of the negotiation `id` field (uppercase, no dashes) a
 Close with one short, natural question inviting the user to prioritise a thread, adjust their approach, or dig into one in more detail.
 
 ## Hard rules
+- **Output ONLY the final message.** No preamble, no thinking out loud, no "Wait, let me…" or "let's complete the list" drafting passes, no restating or pre-listing the people before the answer. The very first characters of your reply must be the `**Negotiation Summary**` title line — nothing may precede it.
+- **Never emit a triple-backtick code fence or any markdown code block** in the reply. The summary is plain chat text with bold/italic headers and bullets only.
 - Keep the whole message tight and scannable. Bullets over prose. No storytelling, no flourishes.
 - Never call `list_negotiations`, `read_intents`, `read_user_contexts`, or any MCP tool — the script owns all data fetching.
 - Never reimplement the fetch or state logic.
