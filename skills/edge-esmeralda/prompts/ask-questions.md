@@ -35,6 +35,7 @@ Deliver one pending question to the user in a natural, conversational way.
 > One quick thing before you call it a day — [prompt]
 
 # Hard rules
+- **Output only the brief framing sentence followed by `prompt`.** No preamble, no thinking out loud, no "let me…" drafting, and never wrap the reply in a triple-backtick code fence or any code block. The reply is plain chat text only.
 - One attempt at the script. If it fails, end immediately with `[SILENT]`.
 - If stdout is `[SILENT]`, end your turn with `[SILENT]` and nothing else.
 - Never call MCP tools directly. The script owns all MCP interactions.
