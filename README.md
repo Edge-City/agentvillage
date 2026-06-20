@@ -30,6 +30,7 @@ See the project hub for the full diagram and decisions.
   - `skills/edgeos/` — backend-generic EdgeOS API recipes (events, RSVPs, venues, attendee directory, own profile). Reads `EDGEOS_BEARER_TOKEN` and `EDGEOS_API_KEY` from env; popup id is supplied by the active operator skill.
   - `skills/edge-esmeralda/` — Edge Esmeralda 2026 popup knowledge: popup constants (popup id, week dates, themes), attendee field semantics, the curated wiki/website/newsletter references (vendored from `Edge-City/agentvillage-skills`; refreshed by upstream CI every 15 min), and the onboarding pointer for obtaining EdgeOS tokens.
   - `skills/geo-esmeralda/` — Geo knowledge graph recipes and write guidance for attendee-authored content, relations, ontology, and media.
+  - `skills/turing-falls/` — dormant operator notes for a possible Turing Falls / Agent Plaza integration. Not copied into resident workspaces by the default installer.
 - `install/` — bootstrap scripts for plugging AgentVillage into a runtime
 
 ## Getting an agent connected
@@ -216,7 +217,7 @@ bun install/install.ts \
 
 ### Overriding the Index cron times
 
-Index background work is installed as three Hermes/OpenClaw cron jobs: **memory signal sync at `0 1 * * *`**, **digest prepare at `0 2 * * *`**, and **digest send at `0 8 * * *`** (host-local). To install them at different times (a different timezone, a test window, etc.), pass full 5-field cron expressions. A flag wins over the matching env var; an invalid expression is ignored with a warning and the default is kept.
+Index background work is installed as five Hermes/OpenClaw cron jobs: **memory signal sync at `0 1 * * *`**, **digest prepare at `0 2 * * *`**, **digest send at `0 8 * * *`**, **negotiation summary at `0 14 * * *`**, and **evening questions at `0 19 * * *`** (host-local). To install them at different times (a different timezone, a test window, etc.), pass full 5-field cron expressions. A flag wins over the matching env var; an invalid expression is ignored with a warning and the default is kept.
 
 > **Note:** the former 30-minute `Edge — heartbeat` cron was **retired** — it loaded the full agent context + Index MCP tool surface (~57k input tokens) every 30 minutes and exhausted the per-tenant OpenRouter key budgets fleet-wide (HTTP 402). `reconcileDigestCronJobs` removes any existing heartbeat cron on the next install/update. Accepted-opportunity notifications now surface through the morning digest; see #100 for richer replacements.
 
@@ -236,7 +237,8 @@ DIGEST_PREPARE_CRON="0 3 * * *" DIGEST_SEND_CRON="0 9 * * *" \
 | Memory signal sync | `--digest-signals-cron "<expr>"` | `DIGEST_SIGNALS_CRON` | `0 1 * * *` |
 | Prepare pass | `--digest-prepare-cron "<expr>"` | `DIGEST_PREPARE_CRON` | `0 2 * * *` |
 | Send pass | `--digest-send-cron "<expr>"` | `DIGEST_SEND_CRON` | `0 8 * * *` |
-
+| Negotiation summary | `--negotiation-summary-cron "<expr>"` | `NEGOTIATION_SUMMARY_CRON` | `0 14 * * *` |
+| Evening questions | `--evening-questions-cron "<expr>"` | `EVENING_QUESTIONS_CRON` | `0 19 * * *` |
 The installer also caps `model.max_tokens` in Hermes `config.yaml` at `4096` by default so background cron turns do not inherit large provider defaults (for example `65536`). Operators can raise or lower that cap for an install by setting `HERMES_MAX_TOKENS`.
 
 The installer writes any tokens it finds into `env.vars.*` in `~/.openclaw/openclaw.json`; on the next gateway start they become process-env on the gateway and inherit into the agent's shell tool, so `curl -H "Authorization: Bearer $EDGEOS_API_KEY"` recipes and Geo CLI commands work without further plumbing.
@@ -249,7 +251,7 @@ The installer:
 4. Sets `channels.telegram.streaming.mode = off` so OpenClaw doesn't dump per-tool status drafts into your chat.
 5. Copies the workspace markdown bundle into `~/.openclaw/workspace/`. `USER.md` is preserved on re-install (it holds the lived notes the active skill's bootstrap ritual populated for you); pass `--wipe-user` to overwrite `USER.md` and delete the agent-curated `MEMORY.md`, OpenClaw's `workspace-state.json` first-run marker, and the local onboarding/welcome/cron-preference markers under `memory/` so the next session re-onboards from scratch.
 6. Copies backend skill bundles from `skills/` into `~/.openclaw/workspace/skills/` so OpenClaw registers them as workspace skills.
-7. Installs the Index cron jobs: a memory signal sync (`0 1 * * *`), a prepare pass (`0 2 * * *`) that composes the morning brief and stages it as an editable Kanban task, and a send pass (`0 8 * * *`) that delivers the staged brief. (The 30-minute `Edge — heartbeat` cron was retired — see the note under "Overriding the Index cron times" — and is removed from existing tenants on update.) The prepare pass stages each brief as a **blocked** Kanban task; the send pass delivers it only after an operator approves it by unblocking that task (`hermes kanban unblock <id>` or the board's unblock control), so accidental delivery is prevented without pausing the cron. The end user can't change the schedule from chat, but the installer can override the cron times via `--digest-signals-cron` / `--digest-prepare-cron` / `--digest-send-cron` (or `DIGEST_SIGNALS_CRON` / `DIGEST_PREPARE_CRON` / `DIGEST_SEND_CRON`) — see "Overriding the Index cron times" above.
+7. Installs the Index cron jobs: a memory signal sync (`0 1 * * *`), a prepare pass (`0 2 * * *`) that composes the morning brief and stages it as an editable Kanban task, a send pass (`0 8 * * *`) that delivers the staged brief, a negotiation summary (`0 14 * * *`), and evening questions (`0 19 * * *`). (The 30-minute `Edge — heartbeat` cron was retired — see the note under "Overriding the Index cron times" — and is removed from existing tenants on update.) The prepare pass stages each brief as a **blocked** Kanban task; the send pass delivers it only after an operator approves it by unblocking that task (`hermes kanban unblock <id>` or the board's unblock control), so accidental delivery is prevented without pausing the cron. The end user can't change the schedule from chat, but the installer can override the recurring cron times via the flags and env vars in "Overriding the Index cron times" above.
 8. Restarts the gateway so all config changes take effect.
 
 Send any message in your chat to bring AgentVillage online. AgentVillage has two independent setup gates with different triggers:
@@ -281,7 +283,7 @@ bun install/reset.ts --wipe-user
 
 ## How it runs
 
-Time-sensitive and background prompts run as **Hermes/OpenClaw cron jobs**. The morning digest prepare/send prompts and the daily memory signal sync run at their own daily cron times. Cron has its own scheduler and runs isolated sessions, so each tick starts fresh from the workspace files. Cron jobs are installed by `install/install.ts` and restart with the gateway. Future per-backend skills can add their own cron prompts the same way.
+Time-sensitive and background prompts run as **Hermes/OpenClaw cron jobs**. The morning digest prepare/send prompts, daily memory signal sync, negotiation summary, and evening questions run at their own cron times. Cron has its own scheduler and runs isolated sessions, so each tick starts fresh from the workspace files. Cron jobs are installed by `install/install.ts` and restart with the gateway.
 
 > **Retired:** a 30-minute `Edge — heartbeat` cron used to run `skills/index-network/heartbeat.md` for accepted-opportunity notifications, freshness audits, and Telegram-handle reconciliation. It was removed because each tick loaded ~57k input tokens (full agent context + Index MCP tool surface) and, at 48 runs/day/tenant, drained the per-tenant OpenRouter key budgets fleet-wide (HTTP 402). `skills/index-network/heartbeat.md` is kept for reference only and is no longer scheduled. Latency-tolerant background work should be folded into the daily digest, an event-driven push, or a cheap deterministic (`--no-agent`) cron instead — see Edge-City/agentvillage#100.
 
@@ -339,11 +341,11 @@ AgentVillage's behaviour is markdown-driven. Almost everything you'd want to cha
 
 ### Schedule & cron
 
-Index background work runs as fixed cron prompts — **memory signal sync `0 1 * * *`, prepare `0 2 * * *`, send `0 8 * * *`** (host-local) — and the end user can't change those schedules from chat. The installer can override any time (see "Overriding the Index cron times" under **Install**). The 30-minute heartbeat cron was retired.
+Index background work runs as fixed cron prompts — **memory signal sync `0 1 * * *`, prepare `0 2 * * *`, send `0 8 * * *`, negotiation summary `0 14 * * *`, evening questions `0 19 * * *`** (host-local). The end user can't change those schedules from chat. The installer can override recurring times (see "Overriding the Index cron times" under **Install**). The 30-minute heartbeat cron was retired.
 
 | You want to… | Edit | Notes |
 |---|---|---|
-| Override the Index cron times for one install | `--digest-signals-cron` / `--digest-prepare-cron` / `--digest-send-cron` (or `DIGEST_SIGNALS_CRON` / `DIGEST_PREPARE_CRON` / `DIGEST_SEND_CRON`) | Optional, full 5-field cron expressions. Flag wins over env; invalid values fall back to the default. |
+| Override the Index cron times for one install | `--digest-signals-cron` / `--digest-prepare-cron` / `--digest-send-cron` / `--negotiation-summary-cron` / `--evening-questions-cron` (or matching env vars) | Optional, full 5-field cron expressions. Flag wins over env; invalid values fall back to the default. |
 | Change the default Index cron schedule for everyone | `install/install_index.ts` (`DIGEST_CRON_SPECS`) | The installer writes the cron entries from this table. Existing installs pick up changes on the next `install.ts` run. |
 | Change a cron prompt without changing the schedule | the matching prompt file (`skills/index-network/heartbeat.md` or `skills/edge-esmeralda/prompts/<name>.md`) | Hermes stores prompt copies in cron jobs. Hosted residents are refreshed by the control-plane post-merge sync, which calls each sidecar's `/update` endpoint and reruns the installer. For non-control-plane installs or recovery, run `HERMES_HOME=<resident-home> bun install/reconcile_digest_crons.ts` after updated skill files are copied. |
 
