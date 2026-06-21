@@ -202,3 +202,71 @@ describe("sanitizeDigestUrls", () => {
     expect(sanitizeDigestUrls(md, { stripDigestMetadata: true }).output).toBe("**One for you:** Anything new?");
   });
 });
+
+describe("digest markers without the id= prefix (LLM composer drift)", () => {
+  // The composer sometimes emits the marker without the canonical `id=` prefix,
+  // e.g. `<!-- digest-opportunity:<uuid> -->`. Before the fix this form was neither
+  // stripped (so it leaked into delivered prose) nor extracted (so the opportunity
+  // was silently lost from bookkeeping). Both forms must now behave identically.
+  const OPP_UUID = "d3f5ea4d-2171-46e2-9e1f-0effd4d13956";
+
+  test("stripDigestMetadata removes a bare opportunity marker (no id=)", () => {
+    const md = `- <!-- digest-opportunity:${OPP_UUID} -->Timour Kosters is looking at governance`;
+
+    const stripped = stripDigestMetadata(md);
+
+    expect(stripped).toBe("- Timour Kosters is looking at governance");
+    expect(stripped).not.toContain("digest-opportunity");
+  });
+
+  test("stripDigestMetadata removes a bare question marker (no id=)", () => {
+    const md = "<!-- digest-question:daily-identity-2026-06-21 -->**One for you:** Who are you today?";
+
+    const stripped = stripDigestMetadata(md);
+
+    expect(stripped).toBe("**One for you:** Who are you today?");
+    expect(stripped).not.toContain("digest-question");
+  });
+
+  test("sanitizeDigestUrls strips bare markers on final delivery, preserves them by default", () => {
+    const md = `- <!-- digest-opportunity:${OPP_UUID} -->Timour Kosters is looking at governance`;
+
+    expect(sanitizeDigestUrls(md).output).toBe(md);
+    expect(sanitizeDigestUrls(md, { stripDigestMetadata: true }).output).toBe(
+      "- Timour Kosters is looking at governance",
+    );
+  });
+
+  test("extractDigestOpportunityIds reads the uuid from a bare marker (no id= captured)", () => {
+    const md = `- <!-- digest-opportunity:${OPP_UUID} -->Timour`;
+
+    expect(extractDigestOpportunityIds(md)).toEqual([OPP_UUID]);
+  });
+
+  test("extractDigestQuestionIds reads the id from a bare question marker", () => {
+    const md = "<!-- digest-question:q-bare -->**One for you:** Anything new?";
+
+    expect(extractDigestQuestionIds(md)).toEqual(["q-bare"]);
+  });
+
+  test("id= and bare forms extract to the same id (canonical prefix is stripped, not captured)", () => {
+    expect(extractDigestOpportunityIds(`<!-- digest-opportunity:id=${OPP_UUID} -->x`)).toEqual([OPP_UUID]);
+    expect(extractDigestOpportunityIds(`<!-- digest-opportunity:${OPP_UUID} -->x`)).toEqual([OPP_UUID]);
+  });
+
+  test("mixed id= and bare markers in one body all strip and extract", () => {
+    const md = [
+      "- <!-- digest-opportunity:id=opp-1 -->Maya",
+      `- <!-- digest-opportunity:${OPP_UUID} -->Timour`,
+      "<!-- digest-question:id=q-1 -->**One for you:** A?",
+      "<!-- digest-question:q-2 -->**One for you:** B?",
+    ].join("\n");
+
+    expect(extractDigestOpportunityIds(md)).toEqual(["opp-1", OPP_UUID]);
+    expect(extractDigestQuestionIds(md)).toEqual(["q-1", "q-2"]);
+
+    const stripped = stripDigestMetadata(md);
+    expect(stripped).not.toContain("digest-opportunity");
+    expect(stripped).not.toContain("digest-question");
+  });
+});
