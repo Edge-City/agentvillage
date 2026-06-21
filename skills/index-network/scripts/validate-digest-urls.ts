@@ -44,12 +44,18 @@ const MARKDOWN_LINK = /\[([^\]]*)\]\(([^)]*)\)/g;
 const AUTOLINK = /<((?:https?:\/\/)[^>\s]+)>/g;
 const BARE_URL = /https?:\/\/[^\s<>)]+/g;
 
-/** Hidden marker that ties an editable digest fragment to the opportunity it represents. */
-const DIGEST_OPPORTUNITY_MARKER = /<!--\s*digest-opportunity:id=([^\s>]+)\s*-->/g;
-/** Hidden marker that ties a digest question fragment to the question it represents. */
-const DIGEST_QUESTION_MARKER = /<!--\s*digest-question:id=([^\s>]+)\s*-->/g;
-/** Any internal digest metadata marker (opportunity or question) — the strip set. */
-const DIGEST_METADATA_MARKER = /<!--\s*digest-(?:opportunity|question):id=[^\s>]+\s*-->/g;
+/**
+ * Hidden marker that ties an editable digest fragment to the opportunity it represents.
+ * The `id=` prefix is canonical (see prepare.md) but optional here: the LLM composer
+ * occasionally drops it, and an unmatched marker would both leak into delivered prose
+ * and silently lose the opportunity from extraction. The optional group is greedy, so
+ * `id=UUID` still captures just `UUID` and a bare `UUID` is captured verbatim.
+ */
+const DIGEST_OPPORTUNITY_MARKER = /<!--\s*digest-opportunity:(?:id=)?([^\s>]+)\s*-->/g;
+/** Hidden marker that ties a digest question fragment to the question it represents. `id=` optional — see above. */
+const DIGEST_QUESTION_MARKER = /<!--\s*digest-question:(?:id=)?([^\s>]+)\s*-->/g;
+/** Any internal digest metadata marker (opportunity or question) — the strip set. `id=` optional — see above. */
+const DIGEST_METADATA_MARKER = /<!--\s*digest-(?:opportunity|question):(?:id=)?[^\s>]+\s*-->/g;
 
 export interface SanitizeDigestOptions {
   /** Strip internal digest metadata comments before user-facing delivery. */
