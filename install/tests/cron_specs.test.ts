@@ -10,14 +10,15 @@ import {
   resolveCronSchedule,
   staggeredSchedule,
   storedSchedule,
+  tokenUsageAuditCronDisabled,
 } from "../install_index";
 
-test("five Index cron specs: signals, prepare, send, negotiation, evening (heartbeat retired)", () => {
-  expect(DIGEST_CRON_SPECS).toHaveLength(5);
+test("six Index cron specs: digest jobs plus token audit (heartbeat retired)", () => {
+  expect(DIGEST_CRON_SPECS).toHaveLength(6);
   // The 30-minute "Edge — heartbeat" cron was retired (it drained OpenRouter
   // key budget fleet-wide); it must no longer be installed.
   expect(DIGEST_CRON_SPECS.some((s) => s.name === "Edge — heartbeat")).toBe(false);
-  const [signals, prepare, send, negotiation, evening] = DIGEST_CRON_SPECS;
+  const [signals, prepare, send, negotiation, evening, tokenAudit] = DIGEST_CRON_SPECS;
   expect(signals.schedule).toBe("0 1 * * *");
   expect(signals.name).toBe("Edge — memory signal sync");
   expect(signals.promptFile).toBe("edge-esmeralda/prompts/memory-signals.md");
@@ -38,11 +39,17 @@ test("five Index cron specs: signals, prepare, send, negotiation, evening (heart
   expect(evening.name).toBe("Edge — evening questions");
   expect(evening.promptFile).toBe("edge-esmeralda/prompts/ask-questions.md");
   expect(evening.deliver).toBe(true);
+  expect(tokenAudit.schedule).toBe("0 9 * * *");
+  expect(tokenAudit.name).toBe("Edge — token usage audit");
+  expect(tokenAudit.scriptFile).toBe("token-usage-audit/scripts/audit_token_usage.py");
+  expect(tokenAudit.scriptInstallName).toBe("agentvillage_token_usage_audit.py");
+  expect(tokenAudit.skill).toBe("token-usage-audit");
+  expect(tokenAudit.deliver).toBe(true);
 });
 
-test("send cron args include --deliver telegram; signals/prepare omit it", () => {
+test("cron create args handle delivered and scripted specs", () => {
   const home = "/home/x/.hermes";
-  const [signals, prepare, send] = DIGEST_CRON_SPECS;
+  const [signals, prepare, send, , , tokenAudit] = DIGEST_CRON_SPECS;
 
   expect(cronCreateArgs(signals, "SIGNALS_BODY", home)).toEqual([
     "cron", "create", "0 1 * * *", "SIGNALS_BODY",
@@ -58,6 +65,13 @@ test("send cron args include --deliver telegram; signals/prepare omit it", () =>
     "cron", "create", "0 8 * * *", "SEND_BODY",
     "--name", "Edge — daily digest", "--deliver", "telegram", "--workdir", home,
   ]);
+
+  const tokenAuditArgs = cronCreateArgs(tokenAudit, "AUDIT_PROMPT", home);
+  expect(tokenAuditArgs).toContain("--deliver");
+  expect(tokenAuditArgs).toContain("--skill");
+  expect(tokenAuditArgs).toContain("token-usage-audit");
+  expect(tokenAuditArgs).toContain("--script");
+  expect(tokenAuditArgs).toContain("/home/x/.hermes/scripts/agentvillage_token_usage_audit.py");
 });
 
 test("cronEditArgs includes only the provided fields", () => {
@@ -129,13 +143,22 @@ test("invalid telegram MCP handle is omitted", () => {
 });
 
 test("each spec declares its install-time override flag + env var", () => {
-  const [signals, prepare, send] = DIGEST_CRON_SPECS;
+  const [signals, prepare, send, , , tokenAudit] = DIGEST_CRON_SPECS;
   expect(signals.overrideFlag).toBe("--digest-signals-cron");
   expect(signals.overrideEnv).toBe("DIGEST_SIGNALS_CRON");
   expect(prepare.overrideFlag).toBe("--digest-prepare-cron");
   expect(prepare.overrideEnv).toBe("DIGEST_PREPARE_CRON");
   expect(send.overrideFlag).toBe("--digest-send-cron");
   expect(send.overrideEnv).toBe("DIGEST_SEND_CRON");
+  expect(tokenAudit.overrideFlag).toBe("--token-usage-audit-cron");
+  expect(tokenAudit.overrideEnv).toBe("TOKEN_USAGE_AUDIT_CRON");
+});
+
+test("token usage audit cron opt-out accepts flag and env values", () => {
+  expect(tokenUsageAuditCronDisabled(["bun", "--skip-token-usage-audit-cron"], {})).toBe(true);
+  expect(tokenUsageAuditCronDisabled([], { TOKEN_USAGE_AUDIT_CRON: "off" })).toBe(true);
+  expect(tokenUsageAuditCronDisabled([], { TOKEN_USAGE_AUDIT_CRON: "disabled" })).toBe(true);
+  expect(tokenUsageAuditCronDisabled([], { TOKEN_USAGE_AUDIT_CRON: "15 4 * * *" })).toBe(false);
 });
 
 test("isValidCron accepts 5-field expressions and rejects malformed ones", () => {

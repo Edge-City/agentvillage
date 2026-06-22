@@ -26,7 +26,7 @@
  *     state (user-customized schedules are never touched).
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import YAML from "yaml";
@@ -142,6 +142,7 @@ interface StoredCronJob {
   id: string;
   name: string;
   prompt?: string;
+  script?: string;
   schedule?: { expr?: string } | string;
   schedule_display?: string;
 }
@@ -169,7 +170,15 @@ export interface DigestCronSpec {
   /** Width of the per-tenant stagger window, in minutes from the default hour. */
   staggerWindowMinutes: number;
   /** Prompt file under skills/. */
-  promptFile: string;
+  promptFile?: string;
+  /** Script file under skills/. for Hermes script crons. */
+  scriptFile?: string;
+  /** Installed script filename under $HERMES_HOME/scripts/. */
+  scriptInstallName?: string;
+  /** Skill name passed to Hermes for script crons. */
+  skill?: string;
+  /** Inline prompt used with script crons. */
+  promptBody?: string;
   /** Full Hermes cron name (kept under the CRON_NAME_PREFIX). */
   name: string;
   /** Whether to attach --deliver telegram. */
@@ -243,6 +252,23 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
     overrideFlag: "--evening-questions-cron",
     overrideEnv: "EVENING_QUESTIONS_CRON",
   },
+  {
+    schedule: "0 9 * * *",
+    staggerWindowMinutes: 50,
+    scriptFile: "token-usage-audit/scripts/audit_token_usage.py",
+    scriptInstallName: "agentvillage_token_usage_audit.py",
+    skill: "token-usage-audit",
+    promptBody: [
+      "A deterministic local token usage audit found an actionable driver.",
+      "Use the sanitized facts emitted by the script. Do not mention raw session ids, prompts, transcripts, private hosts, env values, or secrets.",
+      "If user-facing delivery is warranted, keep it brief: explain whether scheduled background work drove spend, name the likely cron only when confidence is high or medium, and suggest pausing or reporting the driver.",
+      "If the script emitted wakeAgent:false, return [SILENT].",
+    ].join(" "),
+    name: "Edge — token usage audit",
+    deliver: true,
+    overrideFlag: "--token-usage-audit-cron",
+    overrideEnv: "TOKEN_USAGE_AUDIT_CRON",
+  },
 ];
 
 /** FNV-1a 32-bit hash — deterministic, dependency-free. */
@@ -274,6 +300,8 @@ export function staggeredSchedule(spec: DigestCronSpec, seed: string): string {
 export function cronCreateArgs(spec: DigestCronSpec, promptBody: string, home: string): string[] {
   const args = ["cron", "create", spec.schedule, promptBody, "--name", spec.name];
   if (spec.deliver) args.push("--deliver", "telegram");
+  if (spec.skill) args.push("--skill", spec.skill);
+  if (spec.scriptFile) args.push("--script", expectedCronScriptPath(spec, home)!);
   args.push("--workdir", home);
   return args;
 }
@@ -322,6 +350,50 @@ export function resolveCronSchedule(
   return override;
 }
 
+export function tokenUsageAuditCronDisabled(
+  argv: string[] = process.argv,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const raw = env.TOKEN_USAGE_AUDIT_CRON?.trim().toLowerCase();
+  return argv.includes("--skip-token-usage-audit-cron")
+    || raw === "off"
+    || raw === "false"
+    || raw === "0"
+    || raw === "disabled";
+}
+
+function readCronPromptBody(spec: DigestCronSpec, promptsDir: string): string {
+  if (spec.promptFile) {
+    const promptPath = join(promptsDir, spec.promptFile);
+    if (!existsSync(promptPath)) {
+      console.error(`error: prompt missing at ${promptPath} — run install.ts first`);
+      process.exit(1);
+    }
+    return readFileSync(promptPath, "utf8");
+  }
+  if (spec.promptBody !== undefined) return spec.promptBody;
+  console.error(`error: cron "${spec.name}" has neither promptFile nor promptBody`);
+  process.exit(1);
+}
+
+function expectedCronScriptPath(spec: DigestCronSpec, home: string): string | undefined {
+  if (!spec.scriptFile) return undefined;
+  return join(home, "scripts", spec.scriptInstallName || spec.scriptFile.split("/").pop() || "agentvillage_cron.py");
+}
+
+function ensureCronScriptInstalled(spec: DigestCronSpec, home: string, promptsDir: string): string | undefined {
+  const expectedScript = expectedCronScriptPath(spec, home);
+  if (!expectedScript || !spec.scriptFile) return undefined;
+  const sourceScript = join(promptsDir, spec.scriptFile);
+  if (!existsSync(sourceScript)) {
+    console.error(`error: script missing at ${sourceScript} — run install.ts first`);
+    process.exit(1);
+  }
+  mkdirSync(join(home, "scripts"), { recursive: true });
+  copyFileSync(sourceScript, expectedScript);
+  return expectedScript;
+}
+
 /**
  * Probe whether the Hermes CLI can actually run. `hermesBin()` falls back to the
  * bare name `"hermes"` when it finds no fixed-path binary, but that name still
@@ -337,7 +409,10 @@ function hermesAvailable(bin: string): boolean {
   }
 }
 
-export function reconcileDigestCronJobs(env: NodeJS.ProcessEnv = hermesExecEnv()): void {
+export function reconcileDigestCronJobs(
+  env: NodeJS.ProcessEnv = hermesExecEnv(),
+  argv: string[] = process.argv,
+): void {
   const home = hermesHome();
   const promptsDir = join(home, "skills");
 
@@ -348,7 +423,10 @@ export function reconcileDigestCronJobs(env: NodeJS.ProcessEnv = hermesExecEnv()
   }
 
   const existing = readCronJobs();
-  const specNames = new Set(DIGEST_CRON_SPECS.map((s) => s.name));
+  const activeSpecs = DIGEST_CRON_SPECS.filter(
+    (spec) => spec.name !== "Edge — token usage audit" || !tokenUsageAuditCronDisabled(argv, env),
+  );
+  const specNames = new Set(activeSpecs.map((s) => s.name));
   // Stable per-tenant seed for schedule staggering. The tenant's own Index
   // API key never changes across reinstalls, so the derived minute is stable.
   const staggerSeed = process.env.INDEX_API_KEY?.trim() || readPersistedEnvVar("INDEX_API_KEY");
@@ -370,22 +448,32 @@ export function reconcileDigestCronJobs(env: NodeJS.ProcessEnv = hermesExecEnv()
     console.warn("  warning: could not run `hermes kanban init` — board may auto-init on first use");
   }
 
-  for (const spec of DIGEST_CRON_SPECS) {
-    const promptPath = join(promptsDir, spec.promptFile);
-    if (!existsSync(promptPath)) {
-      console.error(`error: prompt missing at ${promptPath} — run install.ts first`);
-      process.exit(1);
-    }
-    const promptBody = readFileSync(promptPath, "utf8");
+  for (const spec of activeSpecs) {
+    const expectedScript = ensureCronScriptInstalled(spec, home, promptsDir);
+    const promptBody = readCronPromptBody(spec, promptsDir);
     const job = existing.find((entry) => entry.name === spec.name);
     const schedule = resolveCronSchedule(spec, process.argv, process.env, staggerSeed);
 
     if (job) {
       const promptStale = job.prompt !== promptBody;
+      const scriptStale = expectedScript !== undefined && job.script !== expectedScript;
       // Migrate only jobs still sitting on the old synchronized default
       // (e.g. "0 8 * * *") to their staggered slot. Anything else is a
       // deliberate per-tenant schedule and is preserved.
       const scheduleStale = storedSchedule(job) === spec.schedule && schedule !== spec.schedule;
+      if (scriptStale) {
+        console.log(`→ recreating cron "${spec.name}" with current script`);
+        try {
+          execFileSync(bin, ["cron", "remove", job.id], { stdio: "ignore", env });
+          execFileSync(bin, cronCreateArgs({ ...spec, schedule }, promptBody, home), {
+            stdio: ["ignore", "ignore", "inherit"],
+            env,
+          });
+        } catch {
+          console.warn(`  warning: could not recreate cron "${spec.name}" — gateway may still run`);
+        }
+        continue;
+      }
       if (!promptStale && !scheduleStale) {
         console.log(`→ cron "${spec.name}" up to date`);
         continue;
