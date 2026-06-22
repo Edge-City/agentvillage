@@ -301,7 +301,7 @@ export function cronCreateArgs(spec: DigestCronSpec, promptBody: string, home: s
   const args = ["cron", "create", spec.schedule, promptBody, "--name", spec.name];
   if (spec.deliver) args.push("--deliver", "telegram");
   if (spec.skill) args.push("--skill", spec.skill);
-  if (spec.scriptFile) args.push("--script", expectedCronScriptPath(spec, home)!);
+  if (spec.scriptFile) args.push("--script", expectedCronScriptArg(spec)!);
   args.push("--workdir", home);
   return args;
 }
@@ -378,7 +378,12 @@ function readCronPromptBody(spec: DigestCronSpec, promptsDir: string): string {
 
 function expectedCronScriptPath(spec: DigestCronSpec, home: string): string | undefined {
   if (!spec.scriptFile) return undefined;
-  return join(home, "scripts", spec.scriptInstallName || spec.scriptFile.split("/").pop() || "agentvillage_cron.py");
+  return join(home, "scripts", expectedCronScriptArg(spec)!);
+}
+
+function expectedCronScriptArg(spec: DigestCronSpec): string | undefined {
+  if (!spec.scriptFile) return undefined;
+  return spec.scriptInstallName || spec.scriptFile.split("/").pop() || "agentvillage_cron.py";
 }
 
 function ensureCronScriptInstalled(spec: DigestCronSpec, home: string, promptsDir: string): string | undefined {
@@ -452,11 +457,12 @@ export function reconcileDigestCronJobs(
     const expectedScript = ensureCronScriptInstalled(spec, home, promptsDir);
     const promptBody = readCronPromptBody(spec, promptsDir);
     const job = existing.find((entry) => entry.name === spec.name);
-    const schedule = resolveCronSchedule(spec, process.argv, process.env, staggerSeed);
+    const schedule = resolveCronSchedule(spec, argv, env, staggerSeed);
 
     if (job) {
       const promptStale = job.prompt !== promptBody;
-      const scriptStale = expectedScript !== undefined && job.script !== expectedScript;
+      const expectedScriptArg = expectedCronScriptArg(spec);
+      const scriptStale = expectedScriptArg !== undefined && job.script !== expectedScriptArg;
       // Migrate only jobs still sitting on the old synchronized default
       // (e.g. "0 8 * * *") to their staggered slot. Anything else is a
       // deliberate per-tenant schedule and is preserved.

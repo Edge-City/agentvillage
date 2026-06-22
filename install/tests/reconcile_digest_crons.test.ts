@@ -95,7 +95,7 @@ function currentJob(spec: typeof DIGEST_CRON_SPECS[number], id: string): Record<
     prompt: spec.promptFile ? PROMPT_BODIES.get(spec.promptFile) : spec.promptBody,
     schedule: { expr: staggeredSchedule(spec, SEED) },
   };
-  if (spec.scriptFile) job.script = installedTokenAuditScript();
+  if (spec.scriptFile) job.script = spec.scriptInstallName;
   return job;
 }
 
@@ -159,7 +159,7 @@ test("fresh install creates digest crons (no heartbeat) on their staggered sched
   expect(audit).toContain("--skill");
   expect(audit).toContain("token-usage-audit");
   expect(audit).toContain("--script");
-  expect(audit).toContain(installedTokenAuditScript());
+  expect(audit).toContain(TOKEN_AUDIT.scriptInstallName);
   expect(readFileSync(installedTokenAuditScript(), "utf8")).toContain("wakeAgent");
   expect(send).toContain("--deliver");
   expect(negotiation).toContain("--deliver");
@@ -312,7 +312,7 @@ test("token usage audit cron is recreated when its script path is stale", () => 
   expect(create[1]).toBe("create");
   expect(create).toContain(TOKEN_AUDIT.name);
   expect(create).toContain("--script");
-  expect(create).toContain(installedTokenAuditScript());
+  expect(create).toContain(TOKEN_AUDIT.scriptInstallName);
 });
 
 test("a Hermes that rejects --schedule still gets the prompt update (degraded migration)", () => {

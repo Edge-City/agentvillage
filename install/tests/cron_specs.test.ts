@@ -71,7 +71,7 @@ test("cron create args handle delivered and scripted specs", () => {
   expect(tokenAuditArgs).toContain("--skill");
   expect(tokenAuditArgs).toContain("token-usage-audit");
   expect(tokenAuditArgs).toContain("--script");
-  expect(tokenAuditArgs).toContain("/home/x/.hermes/scripts/agentvillage_token_usage_audit.py");
+  expect(tokenAuditArgs).toContain("agentvillage_token_usage_audit.py");
 });
 
 test("cronEditArgs includes only the provided fields", () => {
