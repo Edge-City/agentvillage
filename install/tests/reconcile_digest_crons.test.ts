@@ -16,7 +16,7 @@ import {
 } from "../install_index";
 
 const SEED = "ix_integration_seed";
-const [SIGNALS, PREPARE, SEND, NEGOTIATION, EVENING] = DIGEST_CRON_SPECS;
+const [SIGNALS, PREPARE, SEND, NEGOTIATION, EVENING, TOKEN_AUDIT] = DIGEST_CRON_SPECS;
 // The retired "Edge — heartbeat" cron name — used to assert it is torn down.
 const RETIRED_HEARTBEAT_NAME = "Edge — heartbeat";
 const PROMPT_BODIES = new Map([
@@ -69,10 +69,14 @@ function cronCalls(): string[][] {
 function writePrompts(): void {
   const skills = join(home, "skills");
   for (const [promptFile, body] of PROMPT_BODIES) {
+    if (!promptFile) continue;
     const promptPath = join(skills, promptFile);
     mkdirSync(dirname(promptPath), { recursive: true });
     writeFileSync(promptPath, body);
   }
+  const scriptPath = join(skills, TOKEN_AUDIT.scriptFile!);
+  mkdirSync(dirname(scriptPath), { recursive: true });
+  writeFileSync(scriptPath, "#!/usr/bin/env python3\nprint('{\"wakeAgent\":false}')\n");
 }
 
 function writeJobs(jobs: unknown[]): void {
@@ -80,13 +84,19 @@ function writeJobs(jobs: unknown[]): void {
   writeFileSync(join(home, "cron", "jobs.json"), JSON.stringify({ jobs }));
 }
 
+function installedTokenAuditScript(): string {
+  return join(home, "scripts", TOKEN_AUDIT.scriptInstallName!);
+}
+
 function currentJob(spec: typeof DIGEST_CRON_SPECS[number], id: string): Record<string, unknown> {
-  return {
+  const job: Record<string, unknown> = {
     id,
     name: spec.name,
-    prompt: PROMPT_BODIES.get(spec.promptFile),
+    prompt: spec.promptFile ? PROMPT_BODIES.get(spec.promptFile) : spec.promptBody,
     schedule: { expr: staggeredSchedule(spec, SEED) },
   };
+  if (spec.scriptFile) job.script = installedTokenAuditScript();
+  return job;
 }
 
 beforeEach(() => {
@@ -100,6 +110,7 @@ beforeEach(() => {
     DIGEST_SIGNALS_CRON: process.env.DIGEST_SIGNALS_CRON,
     DIGEST_PREPARE_CRON: process.env.DIGEST_PREPARE_CRON,
     DIGEST_SEND_CRON: process.env.DIGEST_SEND_CRON,
+    TOKEN_USAGE_AUDIT_CRON: process.env.TOKEN_USAGE_AUDIT_CRON,
   };
   process.env.HERMES_HOME = home;
   process.env.HERMES_BIN = writeStubHermes(home);
@@ -108,6 +119,7 @@ beforeEach(() => {
   delete process.env.DIGEST_SIGNALS_CRON;
   delete process.env.DIGEST_PREPARE_CRON;
   delete process.env.DIGEST_SEND_CRON;
+  delete process.env.TOKEN_USAGE_AUDIT_CRON;
   writePrompts();
 });
 
@@ -131,6 +143,7 @@ test("fresh install creates digest crons (no heartbeat) on their staggered sched
   const send = creates.find((argv) => argv.includes(SEND.name))!;
   const negotiation = creates.find((argv) => argv.includes(NEGOTIATION.name))!;
   const evening = creates.find((argv) => argv.includes(EVENING.name))!;
+  const audit = creates.find((argv) => argv.includes(TOKEN_AUDIT.name))!;
   expect(signals[2]).toBe(staggeredSchedule(SIGNALS, SEED));
   expect(signals[3]).toBe("SIGNALS_BODY");
   expect(prepare[2]).toBe(staggeredSchedule(PREPARE, SEED));
@@ -141,9 +154,17 @@ test("fresh install creates digest crons (no heartbeat) on their staggered sched
   expect(negotiation[3]).toBe("NEGOTIATION_BODY");
   expect(evening[2]).toBe(staggeredSchedule(EVENING, SEED));
   expect(evening[3]).toBe("EVENING_BODY");
+  expect(audit[2]).toBe(staggeredSchedule(TOKEN_AUDIT, SEED));
+  expect(audit[3]).toContain("deterministic local token usage audit");
+  expect(audit).toContain("--skill");
+  expect(audit).toContain("token-usage-audit");
+  expect(audit).toContain("--script");
+  expect(audit).toContain(installedTokenAuditScript());
+  expect(readFileSync(installedTokenAuditScript(), "utf8")).toContain("wakeAgent");
   expect(send).toContain("--deliver");
   expect(negotiation).toContain("--deliver");
   expect(evening).toContain("--deliver");
+  expect(audit).toContain("--deliver");
   expect(signals).not.toContain("--deliver");
   expect(prepare).not.toContain("--deliver");
 });
@@ -156,6 +177,7 @@ test("an existing Edge — heartbeat cron is retired on reconcile", () => {
     currentJob(SEND, "s1"),
     currentJob(NEGOTIATION, "n1"),
     currentJob(EVENING, "e1"),
+    currentJob(TOKEN_AUDIT, "a1"),
   ]);
 
   reconcileDigestCronJobs({ ...process.env });
@@ -170,6 +192,7 @@ test("jobs still on old synchronized defaults get schedule-only migrations", () 
     { id: "s1", name: SEND.name, prompt: "SEND_BODY", schedule: { expr: SEND.schedule } },
     currentJob(NEGOTIATION, "n1"),
     currentJob(EVENING, "e1"),
+    currentJob(TOKEN_AUDIT, "a1"),
   ]);
 
   reconcileDigestCronJobs({ ...process.env });
@@ -189,6 +212,7 @@ test("custom schedule is preserved; stale prompt gets a prompt-only edit", () =>
     { id: "s1", name: SEND.name, prompt: "SEND_BODY", schedule: { expr: "15 9 * * *" } },
     currentJob(NEGOTIATION, "n1"),
     currentJob(EVENING, "e1"),
+    currentJob(TOKEN_AUDIT, "a1"),
   ]);
 
   reconcileDigestCronJobs({ ...process.env });
@@ -205,6 +229,7 @@ test("stale prompt + old default schedule produce two independent edit calls", (
     { id: "s1", name: SEND.name, prompt: "OLD_BODY", schedule: { expr: SEND.schedule } },
     currentJob(NEGOTIATION, "n1"),
     currentJob(EVENING, "e1"),
+    currentJob(TOKEN_AUDIT, "a1"),
   ]);
 
   reconcileDigestCronJobs({ ...process.env });
@@ -223,6 +248,7 @@ test("up-to-date jobs (staggered schedule + current prompt) trigger no cron call
     currentJob(SEND, "s1"),
     currentJob(NEGOTIATION, "n1"),
     currentJob(EVENING, "e1"),
+    currentJob(TOKEN_AUDIT, "a1"),
   ]);
 
   reconcileDigestCronJobs({ ...process.env });
@@ -234,12 +260,59 @@ test("retired Edge-prefixed crons are removed; foreign crons are untouched", () 
   writeJobs([
     { id: "old1", name: "Edge — old heartbeat", prompt: "X", schedule: { expr: "0 6 * * *" } },
     { id: "user1", name: "my own job", prompt: "Y", schedule: { expr: "0 7 * * *" } },
+    currentJob(SIGNALS, "g1"),
+    currentJob(PREPARE, "p1"),
+    currentJob(SEND, "s1"),
+    currentJob(NEGOTIATION, "n1"),
+    currentJob(EVENING, "e1"),
+    currentJob(TOKEN_AUDIT, "a1"),
   ]);
 
   reconcileDigestCronJobs({ ...process.env });
 
   const removes = cronCalls().filter((argv) => argv[1] === "remove");
   expect(removes).toEqual([["cron", "remove", "old1"]]);
+});
+
+test("token usage audit cron is removed when opted out", () => {
+  const env = { ...process.env, TOKEN_USAGE_AUDIT_CRON: "off" };
+  writeJobs([
+    currentJob(SIGNALS, "g1"),
+    currentJob(PREPARE, "p1"),
+    currentJob(SEND, "s1"),
+    currentJob(NEGOTIATION, "n1"),
+    currentJob(EVENING, "e1"),
+    currentJob(TOKEN_AUDIT, "a1"),
+  ]);
+
+  reconcileDigestCronJobs(env);
+
+  expect(cronCalls()).toEqual([["cron", "remove", "a1"]]);
+});
+
+test("token usage audit cron is recreated when its script path is stale", () => {
+  writeJobs([
+    currentJob(SIGNALS, "g1"),
+    currentJob(PREPARE, "p1"),
+    currentJob(SEND, "s1"),
+    currentJob(NEGOTIATION, "n1"),
+    currentJob(EVENING, "e1"),
+    {
+      ...currentJob(TOKEN_AUDIT, "a1"),
+      script: join(home, "skills", "token-usage-audit/scripts/old_audit.py"),
+    },
+  ]);
+
+  reconcileDigestCronJobs({ ...process.env });
+
+  const calls = cronCalls();
+  expect(calls[0]).toEqual(["cron", "remove", "a1"]);
+  const create = calls[1];
+  expect(create[0]).toBe("cron");
+  expect(create[1]).toBe("create");
+  expect(create).toContain(TOKEN_AUDIT.name);
+  expect(create).toContain("--script");
+  expect(create).toContain(installedTokenAuditScript());
 });
 
 test("a Hermes that rejects --schedule still gets the prompt update (degraded migration)", () => {
@@ -250,6 +323,7 @@ test("a Hermes that rejects --schedule still gets the prompt update (degraded mi
     { id: "s1", name: SEND.name, prompt: "OLD_BODY", schedule: { expr: SEND.schedule } },
     currentJob(NEGOTIATION, "n1"),
     currentJob(EVENING, "e1"),
+    currentJob(TOKEN_AUDIT, "a1"),
   ]);
 
   reconcileDigestCronJobs({ ...process.env });
