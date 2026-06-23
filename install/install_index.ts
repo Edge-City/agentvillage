@@ -4,7 +4,7 @@
  *   - Merges `mcp_servers.index` into `$HERMES_HOME/config.yaml`
  *   - Writes `INDEX_API_KEY` to `$HERMES_HOME/.env`
  *   - Installs the Index crons: heartbeat (`Edge — heartbeat`, every 30m),
- *     memory signal sync (`Edge — memory signal sync`, ~01:00), prepare
+ *     memory signal sync (`Edge — memory signal sync`, ~01:00; script-gated), prepare
  *     (`Edge — digest prepare`, ~02:00), send (`Edge — daily digest`, ~08:00),
  *     negotiation summary (`Edge — negotiation summary`, ~14:00), and evening
  *     questions (`Edge — evening questions`, ~19:00) — all host-local; times
@@ -191,7 +191,7 @@ export interface DigestCronSpec {
 
 /**
  * Heartbeat (every 30m, deliver telegram), memory signal sync (01:00, no
- * deliver), prepare (02:00, no deliver), send (08:00, deliver telegram), then
+ * deliver, script-gated so unchanged MEMORY.md does not wake the LLM), prepare (02:00, no deliver), send (08:00, deliver telegram), then
  * evening questions (19:00, deliver telegram). Signal sync runs an hour before
  * prepare so freshly-captured signals have time to produce opportunities before
  * the brief is composed. The evening questions pass asks the user one pending
@@ -211,6 +211,8 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
     schedule: "0 1 * * *",
     staggerWindowMinutes: 50,
     promptFile: "edge-esmeralda/prompts/memory-signals.md",
+    scriptFile: "edge-esmeralda/scripts/memory_signal_gate.py",
+    scriptInstallName: "agentvillage_memory_signal_gate.py",
     name: "Edge — memory signal sync",
     deliver: false,
     overrideFlag: "--digest-signals-cron",
@@ -309,11 +311,12 @@ export function cronCreateArgs(spec: DigestCronSpec, promptBody: string, home: s
 /** Build the argv for `hermes cron edit` — only the provided fields; pause state unchanged. */
 export function cronEditArgs(
   jobId: string,
-  { prompt, schedule }: { prompt?: string; schedule?: string },
+  { prompt, schedule, script }: { prompt?: string; schedule?: string; script?: string },
 ): string[] {
   const args = ["cron", "edit", jobId];
   if (schedule !== undefined) args.push("--schedule", schedule);
   if (prompt !== undefined) args.push("--prompt", prompt);
+  if (script !== undefined) args.push("--script", script);
   return args;
 }
 

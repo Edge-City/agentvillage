@@ -74,9 +74,12 @@ function writePrompts(): void {
     mkdirSync(dirname(promptPath), { recursive: true });
     writeFileSync(promptPath, body);
   }
-  const scriptPath = join(skills, TOKEN_AUDIT.scriptFile!);
-  mkdirSync(dirname(scriptPath), { recursive: true });
-  writeFileSync(scriptPath, "#!/usr/bin/env python3\nprint('{\"wakeAgent\":false}')\n");
+  for (const spec of DIGEST_CRON_SPECS) {
+    if (!spec.scriptFile) continue;
+    const scriptPath = join(skills, spec.scriptFile);
+    mkdirSync(dirname(scriptPath), { recursive: true });
+    writeFileSync(scriptPath, "#!/usr/bin/env python3\nprint('{\"wakeAgent\":false}')\n");
+  }
 }
 
 function writeJobs(jobs: unknown[]): void {
@@ -86,6 +89,10 @@ function writeJobs(jobs: unknown[]): void {
 
 function installedTokenAuditScript(): string {
   return join(home, "scripts", TOKEN_AUDIT.scriptInstallName!);
+}
+
+function installedMemorySignalScript(): string {
+  return join(home, "scripts", SIGNALS.scriptInstallName!);
 }
 
 function currentJob(spec: typeof DIGEST_CRON_SPECS[number], id: string): Record<string, unknown> {
@@ -146,6 +153,8 @@ test("fresh install creates digest crons (no heartbeat) on their staggered sched
   const audit = creates.find((argv) => argv.includes(TOKEN_AUDIT.name))!;
   expect(signals[2]).toBe(staggeredSchedule(SIGNALS, SEED));
   expect(signals[3]).toBe("SIGNALS_BODY");
+  expect(signals).toContain("--script");
+  expect(signals).toContain("agentvillage_memory_signal_gate.py");
   expect(prepare[2]).toBe(staggeredSchedule(PREPARE, SEED));
   expect(prepare[3]).toBe("PREPARE_BODY");
   expect(send[2]).toBe(staggeredSchedule(SEND, SEED));
@@ -160,6 +169,7 @@ test("fresh install creates digest crons (no heartbeat) on their staggered sched
   expect(audit).toContain("token-usage-audit");
   expect(audit).toContain("--script");
   expect(audit).toContain(TOKEN_AUDIT.scriptInstallName);
+  expect(readFileSync(installedMemorySignalScript(), "utf8")).toContain("wakeAgent");
   expect(readFileSync(installedTokenAuditScript(), "utf8")).toContain("wakeAgent");
   expect(send).toContain("--deliver");
   expect(negotiation).toContain("--deliver");
@@ -187,7 +197,7 @@ test("an existing Edge — heartbeat cron is retired on reconcile", () => {
 
 test("jobs still on old synchronized defaults get schedule-only migrations", () => {
   writeJobs([
-    { id: "g1", name: SIGNALS.name, prompt: "SIGNALS_BODY", schedule: { expr: SIGNALS.schedule } },
+    { id: "g1", name: SIGNALS.name, prompt: "SIGNALS_BODY", script: SIGNALS.scriptInstallName, schedule: { expr: SIGNALS.schedule } },
     { id: "p1", name: PREPARE.name, prompt: "PREPARE_BODY", schedule: { expr: PREPARE.schedule } },
     { id: "s1", name: SEND.name, prompt: "SEND_BODY", schedule: { expr: SEND.schedule } },
     currentJob(NEGOTIATION, "n1"),
@@ -220,6 +230,28 @@ test("custom schedule is preserved; stale prompt gets a prompt-only edit", () =>
   expect(cronCalls()).toEqual([
     ["cron", "edit", "p1", "--prompt", "PREPARE_BODY"],
   ]);
+});
+
+test("memory signal sync cron is recreated when its script path is stale", () => {
+  writeJobs([
+    { ...currentJob(SIGNALS, "g1"), script: undefined },
+    currentJob(PREPARE, "p1"),
+    currentJob(SEND, "s1"),
+    currentJob(NEGOTIATION, "n1"),
+    currentJob(EVENING, "e1"),
+    currentJob(TOKEN_AUDIT, "a1"),
+  ]);
+
+  reconcileDigestCronJobs({ ...process.env });
+
+  const calls = cronCalls();
+  expect(calls[0]).toEqual(["cron", "remove", "g1"]);
+  const create = calls[1];
+  expect(create[0]).toBe("cron");
+  expect(create[1]).toBe("create");
+  expect(create).toContain(SIGNALS.name);
+  expect(create).toContain("--script");
+  expect(create).toContain(SIGNALS.scriptInstallName);
 });
 
 test("stale prompt + old default schedule produce two independent edit calls", () => {

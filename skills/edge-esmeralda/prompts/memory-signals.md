@@ -4,14 +4,19 @@ Silent turns use the current host's no-reply marker exactly: Hermes → `[SILENT
 
 # Job
 
-Read `MEMORY.md`, compare it against what the Index already has, and create the records that are missing. This runs in a fresh main session with no recall of past runs — every decision comes from tool calls and files. Track dedup state in `memory/heartbeat-state.json` under `memorySignals`.
+A deterministic preflight script runs before this prompt. It reads local files only and wakes you only when `MEMORY.md` changed since the last successful sync. If the script reports unchanged/missing/empty memory, the host suppresses this turn and you should never run.
+
+When you do run, read `MEMORY.md`, compare it against what the Index already has, and create the records that are missing. This runs in a fresh main session with no recall of past runs — every decision comes from tool calls and files. Track dedup state in `memory/heartbeat-state.json` under `memorySignals`.
 
 ## Steps
 
 1. **Gate.** Reply silently and stop if any of these hold:
+   - The preflight script output says `wakeAgent:false`.
    - `MEMORY.md` does not exist or has no substantive content about the user.
    - The user has not completed onboarding (you will normally know this from session context; if genuinely unsure, check via `read_user_contexts` and stop silently if onboarding is incomplete).
-   - `memorySignals.lastRunDate` in `memory/heartbeat-state.json` already equals today's date in America/Los_Angeles (you have already run today).
+   - There is no preflight `memoryHash`, and `memorySignals.lastRunDate` in `memory/heartbeat-state.json` already equals today's date in America/Los_Angeles (you have already run today). If the preflight woke you with a `memoryHash`, process the changed memory even when `lastRunDate` is today.
+
+   The script may provide a `memoryHash`. Keep that value for the final state update; do not recompute it with generated code.
 
 2. **Read the current graph.** Call `read_premises()` and `read_intents()`. These — plus `memorySignals.captured` in `memory/heartbeat-state.json` — are your dedup baseline.
 
@@ -24,7 +29,7 @@ Read `MEMORY.md`, compare it against what the Index already has, and create the 
 
 5. **Re-check discovery.** If you created at least one record, call `discover_opportunities` once so the freshly-thickened graph is matched before the morning brief is prepared. If it returns `status="queued"`, that is fine — the run completes server-side; do not poll, do not wait, do not call `list_opportunities`.
 
-6. **Record and stop.** Update `memory/heartbeat-state.json`: set `memorySignals.lastRunDate` to today's Pacific date and append a short normalized fingerprint of each item you created (or that was rejected) to `memorySignals.captured`, keeping only the last 20. Preserve every other key in the file (e.g. `prepared`, `deliveredToday`, `signalElicitation`, `questionDelivery`) — read the whole object, add to it, write it back. End your turn with the host-specific no-reply marker.
+6. **Record and stop.** Update `memory/heartbeat-state.json`: set `memorySignals.lastRunDate` to today's Pacific date; if the preflight script provided `memoryHash`, set `memorySignals.lastMemoryHash` to exactly that value; append a short normalized fingerprint of each item you created (or that was rejected) to `memorySignals.captured`, keeping only the last 20. Preserve every other key in the file (e.g. `prepared`, `deliveredToday`, `signalElicitation`, `questionDelivery`) — read the whole object, add to it, write it back. End your turn with the host-specific no-reply marker.
 
 # Hard rules
 - Never message the user from this pass. No questions, no summaries, no "I noticed…". The only output is the no-reply marker.
@@ -33,4 +38,5 @@ Read `MEMORY.md`, compare it against what the Index already has, and create the 
 - Never delete, archive, or update existing premises/signals here — this pass only adds. Pruning belongs to the weekly signal-freshness task.
 - Do not stage Kanban cards, write digest files, or touch `prepared`/`deliveredToday` state — those belong to the digest passes.
 - If any tool call fails, end your turn silently. One pass, no diagnosis, no retries beyond the tool's own guidance.
+- Do not run custom shell/Python/JS to inspect, hash, diff, or rewrite memory; the preflight script owns hashing and wake/suppress decisions.
 - Never expose internal IDs, raw JSON, file names, or internal vocabulary anywhere.
