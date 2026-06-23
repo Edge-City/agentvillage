@@ -22,6 +22,8 @@ test("six Index cron specs: digest jobs plus token audit (heartbeat retired)", (
   expect(signals.schedule).toBe("0 1 * * *");
   expect(signals.name).toBe("Edge — memory signal sync");
   expect(signals.promptFile).toBe("edge-esmeralda/prompts/memory-signals.md");
+  expect(signals.scriptFile).toBe("edge-esmeralda/scripts/memory_signal_gate.py");
+  expect(signals.scriptInstallName).toBe("agentvillage_memory_signal_gate.py");
   expect(signals.deliver).toBe(false);
   expect(prepare.schedule).toBe("0 2 * * *");
   expect(prepare.name).toBe("Edge — digest prepare");
@@ -53,7 +55,7 @@ test("cron create args handle delivered and scripted specs", () => {
 
   expect(cronCreateArgs(signals, "SIGNALS_BODY", home)).toEqual([
     "cron", "create", "0 1 * * *", "SIGNALS_BODY",
-    "--name", "Edge — memory signal sync", "--workdir", home,
+    "--name", "Edge — memory signal sync", "--script", "agentvillage_memory_signal_gate.py", "--workdir", home,
   ]);
 
   expect(cronCreateArgs(prepare, "PREP_BODY", home)).toEqual([
@@ -83,6 +85,9 @@ test("cronEditArgs includes only the provided fields", () => {
   ]);
   expect(cronEditArgs("abc123", { prompt: "P", schedule: "7 8 * * *" })).toEqual([
     "cron", "edit", "abc123", "--schedule", "7 8 * * *", "--prompt", "P",
+  ]);
+  expect(cronEditArgs("abc123", { script: "gate.py" })).toEqual([
+    "cron", "edit", "abc123", "--script", "gate.py",
   ]);
 });
 
