@@ -159,8 +159,10 @@ test("each spec declares its install-time override flag + env var", () => {
   expect(tokenAudit.overrideEnv).toBe("TOKEN_USAGE_AUDIT_CRON");
 });
 
-test("token usage audit cron opt-out accepts flag and env values", () => {
+test("token usage audit cron is opt-in and accepts explicit opt-out values", () => {
+  expect(tokenUsageAuditCronDisabled([], {})).toBe(true);
   expect(tokenUsageAuditCronDisabled(["bun", "--skip-token-usage-audit-cron"], {})).toBe(true);
+  expect(tokenUsageAuditCronDisabled(["bun", "--token-usage-audit-cron", "15 4 * * *"], {})).toBe(false);
   expect(tokenUsageAuditCronDisabled([], { TOKEN_USAGE_AUDIT_CRON: "off" })).toBe(true);
   expect(tokenUsageAuditCronDisabled([], { TOKEN_USAGE_AUDIT_CRON: "disabled" })).toBe(true);
   expect(tokenUsageAuditCronDisabled([], { TOKEN_USAGE_AUDIT_CRON: "15 4 * * *" })).toBe(false);

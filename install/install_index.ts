@@ -357,9 +357,15 @@ export function tokenUsageAuditCronDisabled(
   argv: string[] = process.argv,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  const raw = env.TOKEN_USAGE_AUDIT_CRON?.trim().toLowerCase();
-  return argv.includes("--skip-token-usage-audit-cron")
-    || raw === "off"
+  if (argv.includes("--skip-token-usage-audit-cron")) return true;
+
+  const flagIdx = argv.indexOf("--token-usage-audit-cron");
+  const fromFlag = flagIdx >= 0 ? argv[flagIdx + 1]?.trim() : undefined;
+  const configured = fromFlag || env.TOKEN_USAGE_AUDIT_CRON?.trim();
+  if (!configured) return true;
+
+  const raw = configured.toLowerCase();
+  return raw === "off"
     || raw === "false"
     || raw === "0"
     || raw === "disabled";

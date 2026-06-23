@@ -1,11 +1,11 @@
 ---
 name: token-usage-audit
-description: Deterministic tenant-local token usage audit for AgentVillage Hermes installs. Runs as a script cron and wakes the agent only when a clear actionable token-spend driver is found.
+description: Deterministic tenant-local token usage audit for AgentVillage Hermes installs. When explicitly enabled, runs as a script cron and wakes the agent only when a clear actionable token-spend driver is found.
 ---
 
 # Token Usage Audit
 
-This skill owns the local token usage audit cron. It is operational plumbing for the resident's agent, not a chat skill the agent should mention by name.
+This skill owns the local token usage audit cron. It is disabled by default and is operational plumbing for the resident's agent, not a chat skill the agent should mention by name.
 
 ## What It Does
 
@@ -19,10 +19,10 @@ It does not call an LLM. It does not emit raw message content, prompts, raw sess
 
 ## Cron Contract
 
-The AgentVillage installer creates one Hermes cron:
+When explicitly enabled with `--token-usage-audit-cron "<expr>"` or `TOKEN_USAGE_AUDIT_CRON="<expr>"`, the AgentVillage installer creates one Hermes cron:
 
 - name: `Edge — token usage audit`
-- default schedule: `0 9 * * *` with deterministic per-tenant staggering
+- schedule: the configured cron expression
 - delivery: Telegram only after the script wake gate returns `wakeAgent:true`
 - skill: `token-usage-audit`
 - script: `skills/token-usage-audit/scripts/audit_token_usage.py`
@@ -52,7 +52,7 @@ The script wakes only for actionable drivers, such as:
 - unknown scheduled-work bucket is very large, but emitted as unknown rather than guessed
 - low-budget metadata is present and indicates a near-exhausted token budget
 
-Operators can opt out at install/reconcile time with `TOKEN_USAGE_AUDIT_CRON=off` or `--skip-token-usage-audit-cron`.
+Operators can disable or remove the managed cron at install/reconcile time by omitting `TOKEN_USAGE_AUDIT_CRON`, setting `TOKEN_USAGE_AUDIT_CRON=off`, or passing `--skip-token-usage-audit-cron`.
 
 ## Manual Validation
 

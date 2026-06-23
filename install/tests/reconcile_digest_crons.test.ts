@@ -126,7 +126,7 @@ beforeEach(() => {
   delete process.env.DIGEST_SIGNALS_CRON;
   delete process.env.DIGEST_PREPARE_CRON;
   delete process.env.DIGEST_SEND_CRON;
-  delete process.env.TOKEN_USAGE_AUDIT_CRON;
+  process.env.TOKEN_USAGE_AUDIT_CRON = TOKEN_AUDIT.schedule;
   writePrompts();
 });
 
@@ -163,7 +163,7 @@ test("fresh install creates digest crons (no heartbeat) on their staggered sched
   expect(negotiation[3]).toBe("NEGOTIATION_BODY");
   expect(evening[2]).toBe(staggeredSchedule(EVENING, SEED));
   expect(evening[3]).toBe("EVENING_BODY");
-  expect(audit[2]).toBe(staggeredSchedule(TOKEN_AUDIT, SEED));
+  expect(audit[2]).toBe(TOKEN_AUDIT.schedule);
   expect(audit[3]).toContain("deterministic local token usage audit");
   expect(audit).toContain("--skill");
   expect(audit).toContain("token-usage-audit");
@@ -308,6 +308,23 @@ test("retired Edge-prefixed crons are removed; foreign crons are untouched", () 
 
 test("token usage audit cron is removed when opted out", () => {
   const env = { ...process.env, TOKEN_USAGE_AUDIT_CRON: "off" };
+  writeJobs([
+    currentJob(SIGNALS, "g1"),
+    currentJob(PREPARE, "p1"),
+    currentJob(SEND, "s1"),
+    currentJob(NEGOTIATION, "n1"),
+    currentJob(EVENING, "e1"),
+    currentJob(TOKEN_AUDIT, "a1"),
+  ]);
+
+  reconcileDigestCronJobs(env);
+
+  expect(cronCalls()).toEqual([["cron", "remove", "a1"]]);
+});
+
+test("token usage audit cron is removed when no explicit schedule opts in", () => {
+  const env = { ...process.env };
+  delete env.TOKEN_USAGE_AUDIT_CRON;
   writeJobs([
     currentJob(SIGNALS, "g1"),
     currentJob(PREPARE, "p1"),
