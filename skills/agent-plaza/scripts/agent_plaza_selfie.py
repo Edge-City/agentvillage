@@ -365,6 +365,16 @@ def download_turing_image(
     return str(target), "ok"
 
 
+def trusted_turing_image_url(value: str) -> str:
+    url = safe_url(value)
+    if not url:
+        return ""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or parsed.netloc != "turingfalls.com":
+        return ""
+    return url
+
+
 def read_turing_falls_packet(
     root: Path,
     media_dir: Path,
@@ -407,9 +417,7 @@ def read_turing_falls_packet(
         return {}, "turing_falls_missing_selfie"
 
     nudge_id = f"turing-falls-{hashlib.sha256(f'{agent_id}:{selfie_url}:{iso_now()}'.encode('utf-8')).hexdigest()[:24]}"
-    image_path, reason = download_turing_image(media_dir, nudge_id, selfie_url, timeout_seconds, urlopen=urlopen)
-    if reason != "ok":
-        return {}, reason
+    image_path, image_reason = download_turing_image(media_dir, nudge_id, selfie_url, timeout_seconds, urlopen=urlopen)
 
     packet = {
         "packet_type": "agent_plaza_spatial_selfie",
@@ -421,7 +429,6 @@ def read_turing_falls_packet(
         "peopleHints": turing_people_hints(tick),
         "plaza_url": world_url,
         "image_url": selfie_url,
-        "image_path": image_path,
         "safety": {
             "plaza_opted_in": True,
             "credential_source": "turing_falls",
@@ -431,8 +438,11 @@ def read_turing_falls_packet(
             "your_location": clean_context_string(tick.get("your_location") or tick.get("location"), limit=80),
             "world_hour": tick.get("world_hour"),
             "is_night": tick.get("is_night"),
+            "selfie_download_reason": image_reason,
         },
     }
+    if image_path:
+        packet["image_path"] = image_path
     return packet, "ok"
 
 
@@ -681,6 +691,38 @@ def send_telegram_photo(
     return False, "telegram_rejected_photo"
 
 
+def send_telegram_photo_url(
+    *,
+    token: str,
+    chat_id: str,
+    photo_url: str,
+    caption: str,
+    timeout_seconds: float,
+    urlopen=urllib.request.urlopen,
+) -> tuple[bool, str]:
+    if not trusted_turing_image_url(photo_url):
+        return False, "untrusted_remote_image"
+    body = urllib.parse.urlencode({"chat_id": chat_id, "caption": caption, "photo": photo_url}).encode("utf-8")
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/sendPhoto",
+        data=body,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    try:
+        with urlopen(req, timeout=timeout_seconds) as res:
+            raw = res.read(128 * 1024)
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return False, "telegram_send_failed"
+    try:
+        parsed = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return False, "telegram_invalid_response"
+    if isinstance(parsed, dict) and parsed.get("ok") is True:
+        return True, "telegram_photo_sent"
+    return False, "telegram_rejected_photo"
+
+
 def emit(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
 
@@ -730,7 +772,10 @@ def main(argv: list[str]) -> int:
         return 0
 
     local_media_path = store_local_image(root, media_dir, nudge_id, packet, allow_local_paths=not packet_url_configured)
-    if not local_media_path:
+    remote_photo_url = ""
+    if not local_media_path and packet.get("source") == "turing_falls":
+        remote_photo_url = trusted_turing_image_url(first_string(packet, ["image_url", "selfie.image_url", "image.url"]))
+    if not local_media_path and not remote_photo_url:
         record_silence(state_path, events_path, state, "missing_local_image", nudge_id=nudge_id, packet_type=packet_type)
         emit({"wakeAgent": False, "reason": "missing_local_image", "nudgeId": nudge_id})
         return 0
@@ -746,13 +791,22 @@ def main(argv: list[str]) -> int:
         emit({"wakeAgent": False, "reason": "missing_telegram_home_channel", "nudgeId": nudge_id})
         return 0
 
-    sent, send_reason = send_telegram_photo(
-        token=bot_token,
-        chat_id=chat_id,
-        image_path=Path(local_media_path),
-        caption=CAPTION,
-        timeout_seconds=args.timeout_seconds,
-    )
+    if local_media_path:
+        sent, send_reason = send_telegram_photo(
+            token=bot_token,
+            chat_id=chat_id,
+            image_path=Path(local_media_path),
+            caption=CAPTION,
+            timeout_seconds=args.timeout_seconds,
+        )
+    else:
+        sent, send_reason = send_telegram_photo_url(
+            token=bot_token,
+            chat_id=chat_id,
+            photo_url=remote_photo_url,
+            caption=CAPTION,
+            timeout_seconds=args.timeout_seconds,
+        )
     if not sent:
         record_silence(state_path, events_path, state, send_reason, nudge_id=nudge_id, packet_type=packet_type)
         emit({"wakeAgent": False, "reason": send_reason, "nudgeId": nudge_id})
@@ -772,6 +826,7 @@ def main(argv: list[str]) -> int:
             "lastReason": "telegram_photo_sent",
             "lastNudgeId": nudge_id,
             "lastLocalMediaPath": local_media_path,
+            "lastRemotePhotoUrlHost": urllib.parse.urlparse(remote_photo_url).netloc if remote_photo_url else "",
             "lastFollowupContext": followup_context(
                 packet=packet,
                 nudge_id=nudge_id,
@@ -793,6 +848,7 @@ def main(argv: list[str]) -> int:
         "packet_type": packet_type[:80],
         "grounded_on": "world_packet" if "spatial" in packet_type else "social_packet",
         "has_local_media": bool(local_media_path),
+        "has_remote_photo_url": bool(remote_photo_url),
         "ts": iso_now(),
     }
     append_event(events_path, event)
