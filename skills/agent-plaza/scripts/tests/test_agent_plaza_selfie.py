@@ -316,7 +316,7 @@ class AgentPlazaSelfieTests(unittest.TestCase):
             self.assertTrue(str(packet["image_path"]).startswith(str(root)))
             self.assertEqual(len(calls), 3)
             action_body = json.loads(calls[1][1].decode("utf-8"))
-            self.assertEqual(action_body["action"], {"action": "selfie"})
+            self.assertEqual(action_body["action"], "selfie")
             self.assertNotIn("claim_token", action_body)
             self.assertEqual(calls[1][2], "Bearer secret-claim")
 

@@ -386,7 +386,7 @@ def read_turing_falls_packet(
     if reason != "ok":
         return {}, reason
 
-    action_body = json.dumps({"action": {"action": "selfie"}}).encode("utf-8")
+    action_body = json.dumps({"action": "selfie"}).encode("utf-8")
     action_req = urllib.request.Request(
         f"{origin}/api/agents/{safe_agent_id}/action",
         data=action_body,
