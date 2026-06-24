@@ -425,7 +425,7 @@ export async function summarizeNegotiations(opts: {
   const alreadyReported = new Set(summaryState.reportedCompletedIds ?? []);
 
   const newlyResolved = completed.filter(
-    (n) => !alreadyReported.has(n.id) && updatedWithinDays(n.updatedAt, recentDays),
+    (n) => n.outcome?.hasOpportunity === true && !alreadyReported.has(n.id) && updatedWithinDays(n.updatedAt, recentDays),
   );
 
   // ── Silent gate ─────────────────────────────────────────────────────────────

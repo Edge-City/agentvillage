@@ -233,6 +233,7 @@ function contextQuestionIds(context: DailyBriefContext): Set<string> {
 }
 
 function validateSelectedIds(
+  body: string,
   opportunityIds: string[],
   questionIds: string[],
   context: DailyBriefContext,
@@ -249,6 +250,32 @@ function validateSelectedIds(
   }
   if (unknownQuestionIds.length > 0) {
     throw new Error(`selected unknown question id(s): ${unknownQuestionIds.join(", ")}`);
+  }
+
+  const selectedOpportunityIds = new Set(uniqueOpportunityIds);
+  const missingOpportunityIds = context.opportunities
+    .filter((opp) => {
+      if (!opp.opportunityId || selectedOpportunityIds.has(opp.opportunityId)) return false;
+      return [opp.acceptUrl, opp.profileUrl, opp.negotiationUrl]
+        .filter((url): url is string => typeof url === "string" && url.length > 0)
+        .some((url) => body.includes(url));
+    })
+    .map((opp) => opp.opportunityId);
+  if (missingOpportunityIds.length > 0) {
+    throw new Error(`body includes unselected opportunity id(s): ${missingOpportunityIds.join(", ")}`);
+  }
+
+  const selectedQuestionIds = new Set(uniqueQuestionIds);
+  const missingPromptQuestionIds = (context.questions ?? [])
+    .filter((question) => !selectedQuestionIds.has(question.id) && body.includes(question.prompt))
+    .map((question) => question.id);
+  if (missingPromptQuestionIds.length > 0) {
+    throw new Error(`body includes unselected question id(s): ${missingPromptQuestionIds.join(", ")}`);
+  }
+
+  const dailyIdentityId = `daily-identity-${context.date}`;
+  if (uniqueQuestionIds.length === 0 && body.includes("**One for you:**")) {
+    throw new Error(`body includes unselected question id(s): ${dailyIdentityId}`);
   }
 
   return { opportunityIds: uniqueOpportunityIds, questionIds: uniqueQuestionIds };
@@ -331,6 +358,7 @@ export async function stageDailyBrief(options: {
 
   const { output: sanitizedBody } = sanitizeDigestUrls(rawBody.trim());
   const { opportunityIds, questionIds } = validateSelectedIds(
+    sanitizedBody,
     options.opportunityIds ?? [],
     options.questionIds ?? [],
     context,

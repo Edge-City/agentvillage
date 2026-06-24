@@ -209,6 +209,7 @@ describe("stageDailyBrief prompt-led staging guardrails", () => {
       stateFile,
       contextOut,
       bodyFile,
+      opportunityIds: ["opp-1"],
       questionIds: ["daily-identity-2026-06-15"],
       hermes,
     });
@@ -238,6 +239,54 @@ describe("stageDailyBrief prompt-led staging guardrails", () => {
     await expect(stageDailyBrief({ date: TODAY, stateFile, contextOut, bodyFile, opportunityIds: ["opp-forged"], hermes }))
       .rejects
       .toThrow("selected unknown opportunity id");
+    expect(calls).toEqual([]);
+  });
+
+  test("rejects a body with an opportunity CTA when the selected id is missing", async () => {
+    const dir = makeTmp();
+    const stateFile = join(dir, "heartbeat-state.json");
+    const contextOut = join(dir, "daily-brief-context.json");
+    const bodyFile = join(dir, "brief.md");
+    await writeJson(stateFile, {});
+    await writeJson(contextOut, baseContext);
+    await Bun.write(bodyFile, [
+      "Good morning.",
+      "[Maya](https://index.network/u/11111111-1111-1111-1111-111111111111) is worth a hello. [Say hi](https://protocol.index.network/c/abc123).",
+    ].join("\n"));
+
+    const calls: string[][] = [];
+    const hermes = async (args: string[]): Promise<string> => {
+      calls.push(args);
+      return "{}";
+    };
+
+    await expect(stageDailyBrief({ date: TODAY, stateFile, contextOut, bodyFile, opportunityIds: [], hermes }))
+      .rejects
+      .toThrow("body includes unselected opportunity id");
+    expect(calls).toEqual([]);
+  });
+
+  test("rejects a body with a closing question when the selected question id is missing", async () => {
+    const dir = makeTmp();
+    const stateFile = join(dir, "heartbeat-state.json");
+    const contextOut = join(dir, "daily-brief-context.json");
+    const bodyFile = join(dir, "brief.md");
+    await writeJson(stateFile, {});
+    await writeJson(contextOut, baseContext);
+    await Bun.write(bodyFile, [
+      "Good morning.",
+      "**One for you:** Which part of this read feels most like you?",
+    ].join("\n"));
+
+    const calls: string[][] = [];
+    const hermes = async (args: string[]): Promise<string> => {
+      calls.push(args);
+      return "{}";
+    };
+
+    await expect(stageDailyBrief({ date: TODAY, stateFile, contextOut, bodyFile, questionIds: [], hermes }))
+      .rejects
+      .toThrow(`body includes unselected question id(s): daily-identity-${TODAY}`);
     expect(calls).toEqual([]);
   });
 
