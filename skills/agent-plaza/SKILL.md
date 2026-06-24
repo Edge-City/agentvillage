@@ -6,9 +6,9 @@ description: Agent Plaza selfie delivery and follow-up guidance for AgentVillage
 # Agent Plaza
 
 This skill owns the default Agent Plaza selfie cron and the ordinary-chat
-follow-up behavior after a resident replies to that selfie. The selfie is a
-closeout bridge from virtual agent activity to real Edge activity, not a
-general Agent Plaza help surface.
+follow-up behavior after a resident replies to that selfie. The selfie is an
+IRL bridge from virtual agent activity to real Edge activity, not a general
+Agent Plaza help surface.
 
 ## Cron Contract
 
@@ -88,7 +88,7 @@ cron self-silences.
 
 The first wedge is intentionally small:
 
-> Your agent caught a little Plaza selfie today. Good nudge for the real village too: before Edge wraps, take a group photo, say goodbye, or follow up with someone you met. No need to send me anything. Reply more, who, done, or skip.
+> Your agent caught a little Plaza selfie today. Good nudge for the real village too: take a group photo, say goodbye, or follow up with someone you met. No need to send me anything. Reply more, who, done, or skip.
 
 If the user responds, use prompted interpretation rather than deterministic
 parsing. Treat minimal replies as hints:
@@ -106,7 +106,7 @@ parsing. Treat minimal replies as hints:
 - `skip`, `later`, or similar: acknowledge and drop the thread.
 
 Do not make Plaza, Commons, posting, voting, or virtual participation the point.
-The point is real connections, final-day stories, funnel evidence, and concrete
+The point is real connections, optional user-volunteered stories, funnel evidence, and concrete
 follow-through. Public posting, voting, contact sharing, or profile projection
 requires an exact preview and an explicit yes from the user.
 

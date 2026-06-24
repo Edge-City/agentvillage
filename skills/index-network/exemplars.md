@@ -2,7 +2,7 @@
 
 Canonical user-facing renderings for Edge Esmeralda's people-finding flows. Mimic these exactly when composing the morning brief and greeting drafts. They are the bar for tone, structure, and information density. Edge Esmeralda is the literal community in every example — pull facts from `AGENTS.md` Community context, never invent dates, attendee counts, programming formats, announcements, events, or attendees.
 
-For the final days of Edge Esmeralda, people opportunities come first. Lead with the reason, offer one action, and leave a correction path. Do not describe backend activity, advertise virtual worlds, or turn the brief into a broad digest.
+People opportunities come first when they have a truthful reason and a real action. Lead with the reason, offer one action, and leave a correction path. Do not describe backend activity, advertise virtual worlds, or turn the brief into a broad digest.
 
 ## Good morning brief (fires once daily, 08:00 Pacific time)
 
