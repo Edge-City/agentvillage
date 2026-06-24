@@ -277,10 +277,10 @@ class AgentPlazaSelfieTests(unittest.TestCase):
                 "TURING_FALLS_AGENT_ID=agent-123\nTURING_FALLS_CLAIM_TOKEN=secret-claim\n",
                 encoding="utf-8",
             )
-            calls: list[tuple[str, bytes | None]] = []
+            calls: list[tuple[str, bytes | None, str | None]] = []
 
             def fake_urlopen(req, timeout):
-                calls.append((req.full_url, req.data))
+                calls.append((req.full_url, req.data, req.get_header("Authorization")))
                 if req.full_url.endswith("/api/agents/agent-123/tick"):
                     return FakeHttpResponse(json.dumps({
                         "your_location": "pond",
@@ -317,7 +317,8 @@ class AgentPlazaSelfieTests(unittest.TestCase):
             self.assertEqual(len(calls), 3)
             action_body = json.loads(calls[1][1].decode("utf-8"))
             self.assertEqual(action_body["action"], {"action": "selfie"})
-            self.assertEqual(action_body["claim_token"], "secret-claim")
+            self.assertNotIn("claim_token", action_body)
+            self.assertEqual(calls[1][2], "Bearer secret-claim")
 
     def test_main_success_sends_photo_records_state_and_emits_structured_silence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
