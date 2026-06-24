@@ -151,7 +151,7 @@ describe("summarizeNegotiations", () => {
     expect(result.context.newlyResolved).toHaveLength(0);
   });
 
-  test("places active + !isUsersTurn negotiations in waiting", async () => {
+  test("returns silent when only active + !isUsersTurn negotiations are waiting", async () => {
     tempWorkspace();
     await Bun.write("state.json", "{}");
     const neg = makeNegotiation({ status: "active", isUsersTurn: false });
@@ -161,11 +161,25 @@ describe("summarizeNegotiations", () => {
       stateFile: "state.json",
     });
 
+    expect(result).toEqual({ silent: true, reason: "nothing-to-report" });
+  });
+
+  test("includes active + !isUsersTurn negotiations as context when another item is actionable", async () => {
+    tempWorkspace();
+    await Bun.write("state.json", "{}");
+    const attention = makeNegotiation({ id: "aaa-1", status: "active", isUsersTurn: true });
+    const waiting = makeNegotiation({ id: "aaa-2", status: "active", isUsersTurn: false });
+
+    const result = await summarizeNegotiations({
+      fetchNegotiations: async () => [attention, waiting],
+      stateFile: "state.json",
+    });
+
     expect("silent" in result).toBe(false);
     if ("silent" in result) throw new Error("unexpected silent");
+    expect(result.context.needsAttention).toHaveLength(1);
     expect(result.context.waiting).toHaveLength(1);
-    expect(result.context.waiting[0].id).toBe(neg.id);
-    expect(result.context.needsAttention).toHaveLength(0);
+    expect(result.context.waiting[0].id).toBe(waiting.id);
   });
 
   test("places waiting_for_agent + isUsersTurn in needsAttention", async () => {

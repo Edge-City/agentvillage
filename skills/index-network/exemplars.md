@@ -1,6 +1,8 @@
 # Index Network — Voice Exemplars
 
-Canonical user-facing renderings for Edge Esmeralda's Index Network flows. Mimic these exactly when composing the morning brief and greeting drafts. They are the bar for tone, structure, and information density. Edge Esmeralda is the literal community in every example — pull facts from `AGENTS.md` Community context, never invent dates, attendee counts, programming formats, announcements, events, or attendees.
+Canonical user-facing renderings for Edge Esmeralda's people-finding flows. Mimic these exactly when composing the morning brief and greeting drafts. They are the bar for tone, structure, and information density. Edge Esmeralda is the literal community in every example — pull facts from `AGENTS.md` Community context, never invent dates, attendee counts, programming formats, announcements, events, or attendees.
+
+For the final days of Edge Esmeralda, people opportunities come first. Lead with the reason, offer one action, and leave a correction path. Do not describe backend activity, advertise virtual worlds, or turn the brief into a broad digest.
 
 ## Good morning brief (fires once daily, 08:00 Pacific time)
 
@@ -18,9 +20,11 @@ Calendar bullets should put EdgeOS `highlighted: true` events first, then fill w
 > - 11:30 AM PDT — Longevity Tools Show-and-Tell at Buck Institute. Good fit if you're tracking health, measurement, or translational science.
 > - 4:00 PM PDT — Governance Lab: Consent in Popup Communities. Relevant to anyone thinking about coordination, resident voice, or collective decisions.
 >
-> **Potential connections via Index Network:**
-> - [Maya]({profileUrl}) — Talk to them about agent memory layers for long-running workflows. Direct overlap with how Index handles persistent context, [say hi]({acceptUrl})
-> - [Theo]({profileUrl}) — Researching how information surfaces in decentralized networks. That's the type of thinking that sharpens protocol design, [say hi]({acceptUrl})
+> **People worth a real hello**
+> - [Maya]({profileUrl}) — Strong reason to meet: both of you are working on long-running agent memory, but from different angles. [Say hi]({acceptUrl}).
+> - [Theo]({profileUrl}) — The useful overlap is information surfacing in decentralized networks; that could sharpen how you think about protocol design. [Say hi]({acceptUrl}).
+>
+> If any of these reads are off, reply with what I should correct.
 >
 > **Help your community**
 > - [Remi]({profileUrl}) — Looking for a technical co-founder for his regenerative education platform. Needs someone who thinks in systems and has shipped infrastructure. Know someone, [make intro]({acceptUrl}).
@@ -39,8 +43,10 @@ When there is no current organizer announcement you can verify, omit the section
 > - 10:00 AM PDT — AI Agents Breakfast Salon at Hotel Trio. A straightforward place to hear what people are building this week.
 > - 2:00 PM PDT — Neurotech Open Demos at Buck Institute. Relevant if you're following applied science and human performance.
 >
-> **Potential connections via Index Network:**
-> - [Priya]({profileUrl}) — Building community-owned data infrastructure. Aligned on the ownership layer and complementary on discovery, [say hi]({acceptUrl})
+> **People worth a real hello**
+> - [Priya]({profileUrl}) — Strong reason to meet: both of you are circling community-owned data infrastructure, with complementary angles on ownership and discovery. [Say hi]({acceptUrl}).
+>
+> If this read is off, reply with what I should correct.
 >
 > That's it for now. You can always ask me for more detail, or any other questions you have!
 
@@ -52,8 +58,10 @@ If the live calendar call fails, ship the people sections and include one plain 
 >
 > Here's what you need to know today:
 >
-> **Potential connections via Index Network:**
-> - [Ashish]({profileUrl}) — An experienced technologist spanning generative software, AI infrastructure, creative AI design, and deep learning research. Several angles worth exploring, [say hi]({acceptUrl})
+> **People worth a real hello**
+> - [Ashish]({profileUrl}) — Strong reason to meet: his work spans generative software, AI infrastructure, creative AI design, and deep learning research, which gives you several concrete angles for a first conversation. [Say hi]({acceptUrl}).
+>
+> If this read is off, reply with what I should correct.
 >
 > I couldn't check the live calendar this morning — ask me what's on today and I'll look it up.
 >
@@ -71,8 +79,10 @@ When `list_opportunities` returns multiple opportunities for the same person, re
 > - 9:30 AM PDT — Creative AI Crit at the Studio. Good fit for builders thinking about tools, taste, and new creative workflows.
 > - 3:00 PM PDT — Spatial Computing Walkthrough at the Plaza. Useful if you want to see concrete demos rather than a panel.
 >
-> **Potential connections via Index Network:**
-> - [Ashish]({profileUrl}) — An experienced technologist spanning [generative software]({acceptUrl1}), [AI infrastructure]({acceptUrl2}), [creative AI design]({acceptUrl3}), and [deep learning research]({acceptUrl4}). Several angles worth exploring.
+> **People worth a real hello**
+> - [Ashish]({profileUrl}) — Strong reason to meet: his work spans [generative software]({acceptUrl1}), [AI infrastructure]({acceptUrl2}), [creative AI design]({acceptUrl3}), and [deep learning research]({acceptUrl4}); pick the angle that is most real for you.
+>
+> If this read is off, reply with what I should correct.
 >
 > That's it for now. You can always ask me for more detail, or any other questions you have!
 

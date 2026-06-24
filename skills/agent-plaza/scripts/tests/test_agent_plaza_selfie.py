@@ -1,0 +1,277 @@
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+from contextlib import redirect_stdout
+from io import StringIO
+from pathlib import Path
+
+
+SCRIPT = Path(__file__).resolve().parents[1] / "agent_plaza_selfie.py"
+SPEC = importlib.util.spec_from_file_location("agent_plaza_selfie", SCRIPT)
+selfie = importlib.util.module_from_spec(SPEC)
+assert SPEC and SPEC.loader
+sys.modules["agent_plaza_selfie"] = selfie
+SPEC.loader.exec_module(selfie)
+
+
+def run_script(root: Path, *extra: str, env: dict[str, str] | None = None) -> tuple[str, dict]:
+    child_env = os.environ.copy()
+    if env:
+        child_env.update(env)
+    completed = subprocess.run(
+        [sys.executable, str(SCRIPT), "--root", str(root), "--json-only", *extra],
+        text=True,
+        capture_output=True,
+        check=True,
+        env=child_env,
+    )
+    lines = [line for line in completed.stdout.strip().splitlines() if line]
+    return completed.stdout, json.loads(lines[-1])
+
+
+class FakeTelegramResponse:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self, _size: int = -1) -> bytes:
+        return b'{"ok":true,"result":{"message_id":1}}'
+
+
+class AgentPlazaSelfieTests(unittest.TestCase):
+    def test_unconfigured_packet_self_silences_and_uses_ops_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, payload = run_script(root)
+
+            self.assertEqual(payload["wakeAgent"], False)
+            self.assertEqual(payload["reason"], "packet_unconfigured")
+            self.assertTrue((root / "ops/agentvillage/state/agent-plaza-selfie.json").exists())
+            self.assertTrue((root / "ops/agentvillage/events/agent-plaza-selfie.jsonl").exists())
+            self.assertFalse((root / "memory").exists())
+
+    def test_packet_with_only_image_url_self_silences_without_local_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            packet = {
+                "packet_type": "agent_plaza_spatial_selfie",
+                "id": "selfie-1",
+                "selfie": {
+                    "image_url": "https://plaza.example/selfie-1.png",
+                    "url": "https://plaza.example/spot/selfie-1",
+                },
+            }
+            packet_path = root / "packet.json"
+            packet_path.write_text(json.dumps(packet), encoding="utf-8")
+
+            _, payload = run_script(root, "--packet-file", str(packet_path), "--cooldown-hours", "0")
+
+            self.assertFalse(payload["wakeAgent"])
+            self.assertEqual(payload["nudgeId"], "selfie-1")
+            self.assertEqual(payload["reason"], "missing_local_image")
+            event_path = root / "ops/agentvillage/events/agent-plaza-selfie.jsonl"
+            event = json.loads(event_path.read_text(encoding="utf-8").strip())
+            self.assertEqual(event["event"], "selfie_silenced")
+            self.assertEqual(event["reason"], "missing_local_image")
+
+    def test_idless_local_image_packets_use_image_content_in_fallback_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image = root / "handoff.png"
+            packet = {
+                "packet_type": "agent_plaza_spatial_selfie",
+                "title": "Agent Plaza selfie",
+                "telegram_send_photo": {"photo_path": str(image)},
+            }
+
+            image.write_bytes(b"\x89PNG\r\n\x1a\nfirst")
+            first_id = selfie.packet_id(root, packet)
+            image.write_bytes(b"\x89PNG\r\n\x1a\nsecond")
+            second_id = selfie.packet_id(root, packet)
+
+            self.assertNotEqual(first_id, second_id)
+
+    def test_local_image_without_telegram_config_self_silences_without_secret_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image = root / "source.png"
+            image.write_bytes(b"\x89PNG\r\n\x1a\n")
+            packet_path = root / "packet.json"
+            packet_path.write_text(json.dumps({"id": "local", "image_path": str(image)}), encoding="utf-8")
+
+            _, payload = run_script(root, "--packet-file", str(packet_path), "--cooldown-hours", "0")
+
+            self.assertFalse(payload["wakeAgent"])
+            self.assertEqual(payload["reason"], "missing_telegram_bot_token")
+            self.assertTrue((root / "ops/agentvillage/media/agent-plaza-selfies/local.png").exists())
+            event_text = (root / "ops/agentvillage/events/agent-plaza-selfie.jsonl").read_text(encoding="utf-8")
+            self.assertIn("missing_telegram_bot_token", event_text)
+            self.assertNotIn("TELEGRAM_HOME_CHANNEL", event_text)
+
+    def test_read_dotenv_value_reads_telegram_config_without_printing_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".env").write_text(
+                "TELEGRAM_BOT_TOKEN='secret-token'\nTELEGRAM_HOME_CHANNEL=-100123\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(selfie.read_dotenv_value(root, "TELEGRAM_BOT_TOKEN"), "secret-token")
+            self.assertEqual(selfie.read_dotenv_value(root, "TELEGRAM_HOME_CHANNEL"), "-100123")
+
+    def test_send_telegram_photo_uses_bot_api_multipart(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image = root / "selfie.png"
+            image.write_bytes(b"\x89PNG\r\n\x1a\n")
+            captured = {}
+
+            def fake_urlopen(req, timeout):
+                captured["url"] = req.full_url
+                captured["timeout"] = timeout
+                captured["headers"] = dict(req.header_items())
+                captured["body"] = req.data
+                return FakeTelegramResponse()
+
+            ok, reason = selfie.send_telegram_photo(
+                token="secret-token",
+                chat_id="-100123",
+                image_path=image,
+                caption=selfie.CAPTION,
+                timeout_seconds=1.5,
+                urlopen=fake_urlopen,
+            )
+
+            self.assertTrue(ok)
+            self.assertEqual(reason, "telegram_photo_sent")
+            self.assertEqual(captured["url"], "https://api.telegram.org/botsecret-token/sendPhoto")
+            self.assertEqual(captured["timeout"], 1.5)
+            self.assertIn("multipart/form-data", captured["headers"]["Content-type"])
+            body = captured["body"]
+            self.assertIn(b'name="chat_id"', body)
+            self.assertIn(b"-100123", body)
+            self.assertIn(b'name="caption"', body)
+            self.assertIn(selfie.CAPTION.encode("utf-8"), body)
+            self.assertIn(b'name="photo"; filename="selfie.png"', body)
+
+    def test_followup_context_is_bounded_and_sanitized(self) -> None:
+        long_summary = " ".join(["closeout"] * 80)
+        packet = {
+            "packet_type": "agent_plaza_spatial_selfie",
+            "title": "  Pond   group  ",
+            "summary": long_summary,
+            "prompt": "Take the real photo too",
+            "plaza_url": "https://plaza.example/spot/pond",
+            "image_base64": "do-not-store",
+            "telegram_send_photo": {"photo_path": "/tmp/selfie.png"},
+            "neighbors": [
+                {"display": "Maya", "human_summary": "builder"},
+                {"display_name": "Sam"},
+                "Kai",
+                "Kai",
+                {"shared_signal": "agent memory"},
+                {"name": "Nia"},
+                "Extra",
+                "Overflow",
+            ],
+        }
+
+        context = selfie.followup_context(
+            packet=packet,
+            nudge_id="nudge-1",
+            packet_type="agent_plaza_spatial_selfie",
+            delivered_at="2026-06-24T12:00:00Z",
+            caption=selfie.CAPTION,
+        )
+
+        self.assertEqual(context["nudgeId"], "nudge-1")
+        self.assertEqual(context["title"], "Pond group")
+        self.assertLessEqual(len(context["summary"]), selfie.MAX_CONTEXT_STRING)
+        self.assertEqual(context["plazaUrl"], "https://plaza.example/spot/pond")
+        self.assertEqual(context["peopleHints"], ["Maya", "Sam", "Kai", "agent memory", "Nia", "Extra"])
+        self.assertNotIn("image_base64", context)
+        self.assertNotIn("telegram_send_photo", context)
+
+    def test_followup_context_omits_unsafe_url(self) -> None:
+        context = selfie.followup_context(
+            packet={"plaza_url": "https://plaza.example/bad path"},
+            nudge_id="nudge-1",
+            packet_type="agent_plaza_spatial_selfie",
+            delivered_at="2026-06-24T12:00:00Z",
+            caption=selfie.CAPTION,
+        )
+
+        self.assertNotIn("plazaUrl", context)
+
+    def test_main_success_sends_photo_records_state_and_emits_structured_silence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image = root / "source.png"
+            image.write_bytes(b"\x89PNG\r\n\x1a\n")
+            packet_path = root / "packet.json"
+            packet_path.write_text(json.dumps({
+                "id": "success-1",
+                "image_path": str(image),
+                "title": "Pond selfie",
+                "summary": "A small group was closing loops.",
+                "peopleHints": ["Maya", "Sam"],
+                "plaza_url": "https://plaza.example/spot/pond",
+            }), encoding="utf-8")
+            (root / ".env").write_text(
+                "TELEGRAM_BOT_TOKEN=secret-token\nTELEGRAM_HOME_CHANNEL=-100123\n",
+                encoding="utf-8",
+            )
+            calls = []
+            original_send = selfie.send_telegram_photo
+
+            def fake_send_telegram_photo(**kwargs):
+                calls.append(kwargs)
+                return True, "telegram_photo_sent"
+
+            try:
+                selfie.send_telegram_photo = fake_send_telegram_photo
+                stdout = StringIO()
+                with redirect_stdout(stdout):
+                    exit_code = selfie.main([
+                        "--root",
+                        str(root),
+                        "--packet-file",
+                        str(packet_path),
+                        "--cooldown-hours",
+                        "0",
+                    ])
+            finally:
+                selfie.send_telegram_photo = original_send
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(len(calls), 1)
+            self.assertNotIn("[SILENT]", stdout.getvalue())
+            payload = json.loads(stdout.getvalue().strip().splitlines()[-1])
+            self.assertEqual(payload["reason"], "telegram_photo_sent")
+            self.assertEqual(payload["nudgeId"], "success-1")
+            self.assertEqual(payload["wakeAgent"], False)
+
+            state = json.loads((root / "ops/agentvillage/state/agent-plaza-selfie.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["lastReason"], "telegram_photo_sent")
+            self.assertEqual(state["lastNudgeId"], "success-1")
+            self.assertIn("success-1", state["deliveredNudgeIds"])
+            self.assertEqual(state["lastFollowupContext"]["nudgeId"], "success-1")
+            self.assertEqual(state["lastFollowupContext"]["caption"], selfie.CAPTION)
+            self.assertEqual(state["lastFollowupContext"]["title"], "Pond selfie")
+            self.assertEqual(state["lastFollowupContext"]["summary"], "A small group was closing loops.")
+            self.assertEqual(state["lastFollowupContext"]["peopleHints"], ["Maya", "Sam"])
+            self.assertEqual(state["lastFollowupContext"]["plazaUrl"], "https://plaza.example/spot/pond")
+
+            event = json.loads((root / "ops/agentvillage/events/agent-plaza-selfie.jsonl").read_text(encoding="utf-8").strip())
+            self.assertEqual(event["event"], "telegram_photo_sent")
+            self.assertEqual(event["nudge_id"], "success-1")
+
+
+if __name__ == "__main__":
+    unittest.main()

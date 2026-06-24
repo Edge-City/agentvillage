@@ -430,7 +430,7 @@ export async function summarizeNegotiations(opts: {
 
   // ── Silent gate ─────────────────────────────────────────────────────────────
 
-  if (needsAttention.length === 0 && waiting.length === 0 && newlyResolved.length === 0) {
+  if (needsAttention.length === 0 && newlyResolved.length === 0) {
     return { silent: true, reason: "nothing-to-report" };
   }
 
