@@ -386,11 +386,15 @@ def read_turing_falls_packet(
     if reason != "ok":
         return {}, reason
 
-    action_body = json.dumps({"claim_token": claim_token, "action": {"action": "selfie"}}).encode("utf-8")
+    action_body = json.dumps({"action": {"action": "selfie"}}).encode("utf-8")
     action_req = urllib.request.Request(
         f"{origin}/api/agents/{safe_agent_id}/action",
         data=action_body,
-        headers={"Accept": "application/json", "Content-Type": "application/json"},
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {claim_token}",
+        },
         method="POST",
     )
     selfie_response, reason = read_turing_json(action_req, timeout_seconds, urlopen=urlopen)
