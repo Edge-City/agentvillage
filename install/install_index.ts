@@ -3,23 +3,25 @@
  *
  *   - Merges `mcp_servers.index` into `$HERMES_HOME/config.yaml`
  *   - Writes `INDEX_API_KEY` to `$HERMES_HOME/.env`
- *   - Installs the Index crons: heartbeat (`Edge — heartbeat`, every 30m),
- *     memory signal sync (`Edge — memory signal sync`, ~01:00; script-gated), prepare
+ *   - Installs the Index crons: memory signal sync
+ *     (`Edge — memory signal sync`, ~01:00; script-gated), prepare
  *     (`Edge — digest prepare`, ~02:00), send (`Edge — daily digest`, ~08:00),
- *     negotiation summary (`Edge — negotiation summary`, ~14:00), and evening
- *     questions (`Edge — evening questions`, ~19:00) — all host-local; times
- *     overridable via --heartbeat-cron / --digest-signals-cron /
+ *     negotiation summary (`Edge — negotiation summary`, ~14:00), Agent Plaza
+ *     selfie (`Edge — Agent Plaza selfie`, ~16:00), and evening questions
+ *     (`Edge — evening questions`, ~19:00) — all host-local; times
+ *     overridable via --digest-signals-cron /
  *     --digest-prepare-cron / --digest-send-cron / --negotiation-summary-cron /
- *     --evening-questions-cron (or HEARTBEAT_CRON / DIGEST_SIGNALS_CRON /
- *     DIGEST_PREPARE_CRON / DIGEST_SEND_CRON / NEGOTIATION_SUMMARY_CRON /
+ *     --agent-plaza-selfie-cron / --evening-questions-cron (or
+ *     DIGEST_SIGNALS_CRON / DIGEST_PREPARE_CRON / DIGEST_SEND_CRON /
+ *     NEGOTIATION_SUMMARY_CRON / AGENT_PLAZA_SELFIE_CRON /
  *     EVENING_QUESTIONS_CRON). To
  *     avoid the whole fleet hitting the LLM provider in the same minute
  *     (OpenRouter caps gemini-flash at 300 req/min account-wide), each tenant
  *     gets a deterministic minute offset derived from its INDEX_API_KEY:
- *     heartbeat spreads across two runs per hour, signal sync spreads over
- *     01:00–01:49, prepare over 02:00–02:49, send over 08:00–08:24, and
- *     negotiation summary over 14:00–14:24, and evening questions over
- *     19:00–19:24.
+ *     signal sync spreads over
+ *     01:00–01:49, prepare over 02:00–02:49, send over 08:00–08:24,
+ *     negotiation summary over 14:00–14:24, Agent Plaza selfie over
+ *     16:00–16:24, and evening questions over 19:00–19:24.
  *     New installs create enabled crons; reconcile updates prompt bodies,
  *     migrates jobs still on the old synchronized defaults (0 2 / 0 8) to their
  *     staggered slot, and otherwise preserves each job's schedule and pause
@@ -244,6 +246,18 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
     deliver: true,
     overrideFlag: "--negotiation-summary-cron",
     overrideEnv: "NEGOTIATION_SUMMARY_CRON",
+  },
+  {
+    schedule: "0 16 * * *",
+    staggerWindowMinutes: 25,
+    promptFile: "agent-plaza/prompts/selfie.md",
+    scriptFile: "agent-plaza/scripts/agent_plaza_selfie.py",
+    scriptInstallName: "agentvillage_agent_plaza_selfie.py",
+    skill: "agent-plaza",
+    name: "Edge — Agent Plaza selfie",
+    deliver: true,
+    overrideFlag: "--agent-plaza-selfie-cron",
+    overrideEnv: "AGENT_PLAZA_SELFIE_CRON",
   },
   {
     schedule: "0 19 * * *",

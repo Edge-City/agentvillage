@@ -13,12 +13,12 @@ import {
   tokenUsageAuditCronDisabled,
 } from "../install_index";
 
-test("six Index cron specs: digest jobs plus token audit (heartbeat retired)", () => {
-  expect(DIGEST_CRON_SPECS).toHaveLength(6);
+test("seven Index cron specs: digest jobs, Plaza selfie, plus token audit (heartbeat retired)", () => {
+  expect(DIGEST_CRON_SPECS).toHaveLength(7);
   // The 30-minute "Edge — heartbeat" cron was retired (it drained OpenRouter
   // key budget fleet-wide); it must no longer be installed.
   expect(DIGEST_CRON_SPECS.some((s) => s.name === "Edge — heartbeat")).toBe(false);
-  const [signals, prepare, send, negotiation, evening, tokenAudit] = DIGEST_CRON_SPECS;
+  const [signals, prepare, send, negotiation, plaza, evening, tokenAudit] = DIGEST_CRON_SPECS;
   expect(signals.schedule).toBe("0 1 * * *");
   expect(signals.name).toBe("Edge — memory signal sync");
   expect(signals.promptFile).toBe("edge-esmeralda/prompts/memory-signals.md");
@@ -37,6 +37,13 @@ test("six Index cron specs: digest jobs plus token audit (heartbeat retired)", (
   expect(negotiation.name).toBe("Edge — negotiation summary");
   expect(negotiation.promptFile).toBe("edge-esmeralda/prompts/negotiation-summary.md");
   expect(negotiation.deliver).toBe(true);
+  expect(plaza.schedule).toBe("0 16 * * *");
+  expect(plaza.name).toBe("Edge — Agent Plaza selfie");
+  expect(plaza.promptFile).toBe("agent-plaza/prompts/selfie.md");
+  expect(plaza.scriptFile).toBe("agent-plaza/scripts/agent_plaza_selfie.py");
+  expect(plaza.scriptInstallName).toBe("agentvillage_agent_plaza_selfie.py");
+  expect(plaza.skill).toBe("agent-plaza");
+  expect(plaza.deliver).toBe(true);
   expect(evening.schedule).toBe("0 19 * * *");
   expect(evening.name).toBe("Edge — evening questions");
   expect(evening.promptFile).toBe("edge-esmeralda/prompts/ask-questions.md");
@@ -51,7 +58,7 @@ test("six Index cron specs: digest jobs plus token audit (heartbeat retired)", (
 
 test("cron create args handle delivered and scripted specs", () => {
   const home = "/home/x/.hermes";
-  const [signals, prepare, send, , , tokenAudit] = DIGEST_CRON_SPECS;
+  const [signals, prepare, send, , plaza, , tokenAudit] = DIGEST_CRON_SPECS;
 
   expect(cronCreateArgs(signals, "SIGNALS_BODY", home)).toEqual([
     "cron", "create", "0 1 * * *", "SIGNALS_BODY",
@@ -74,6 +81,13 @@ test("cron create args handle delivered and scripted specs", () => {
   expect(tokenAuditArgs).toContain("token-usage-audit");
   expect(tokenAuditArgs).toContain("--script");
   expect(tokenAuditArgs).toContain("agentvillage_token_usage_audit.py");
+
+  const plazaArgs = cronCreateArgs(plaza, "PLAZA_PROMPT", home);
+  expect(plazaArgs).toContain("--deliver");
+  expect(plazaArgs).toContain("--skill");
+  expect(plazaArgs).toContain("agent-plaza");
+  expect(plazaArgs).toContain("--script");
+  expect(plazaArgs).toContain("agentvillage_agent_plaza_selfie.py");
 });
 
 test("cronEditArgs includes only the provided fields", () => {
@@ -148,13 +162,15 @@ test("invalid telegram MCP handle is omitted", () => {
 });
 
 test("each spec declares its install-time override flag + env var", () => {
-  const [signals, prepare, send, , , tokenAudit] = DIGEST_CRON_SPECS;
+  const [signals, prepare, send, , plaza, , tokenAudit] = DIGEST_CRON_SPECS;
   expect(signals.overrideFlag).toBe("--digest-signals-cron");
   expect(signals.overrideEnv).toBe("DIGEST_SIGNALS_CRON");
   expect(prepare.overrideFlag).toBe("--digest-prepare-cron");
   expect(prepare.overrideEnv).toBe("DIGEST_PREPARE_CRON");
   expect(send.overrideFlag).toBe("--digest-send-cron");
   expect(send.overrideEnv).toBe("DIGEST_SEND_CRON");
+  expect(plaza.overrideFlag).toBe("--agent-plaza-selfie-cron");
+  expect(plaza.overrideEnv).toBe("AGENT_PLAZA_SELFIE_CRON");
   expect(tokenAudit.overrideFlag).toBe("--token-usage-audit-cron");
   expect(tokenAudit.overrideEnv).toBe("TOKEN_USAGE_AUDIT_CRON");
 });
