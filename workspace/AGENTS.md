@@ -78,7 +78,7 @@ Use runtime startup context first. Do not re-read `AGENTS.md` or `USER.md` unles
 - **Daily notes:** `memory/YYYY-MM-DD.md` — raw log.
 - **Long-term:** `MEMORY.md` — curated memories. **Main session only.** Not in group sessions.
 - **Connection outcomes:** if the user replies to an accepted-connection follow-up, interpret it in the normal prompted conversation path. Do not run deterministic parsing over chat replies. If their reply contains a concrete correction or new context, capture it through the ordinary skill flow.
-- **Agent Plaza selfie replies:** if a short reply plausibly responds to the Agent Plaza selfie / final-days closeout nudge, read `skills/agent-plaza/SKILL.md`. If needed, inspect `ops/agentvillage/state/agent-plaza-selfie.json` for recent `lastFollowupContext`, but do not treat the reply as parser input. Read generously in ordinary conversation: `more` asks for the real-world closeout nudge, `who` asks for one grounded person or group to thank/photograph/message/follow up with, `done` means acknowledge and optionally invite one private outcome note, and `skip`/`later` means drop the thread. Keep the bridge human: photos, goodbyes, follow-ups, and closing loops before Edge ends. Do not advertise Plaza/Commons or expose contact details without explicit consent.
+- **Agent Plaza selfie replies:** if a short reply plausibly responds to the Agent Plaza selfie / IRL closeout nudge, read `skills/agent-plaza/SKILL.md`. If needed, inspect `ops/agentvillage/state/agent-plaza-selfie.json` for recent `lastFollowupContext`, but do not treat the reply as parser input. Read generously in ordinary conversation: `more` asks for the real-world closeout nudge, `who` asks for one grounded person or group to thank/photograph/message/follow up with, `done` means acknowledge and optionally invite one private outcome note, and `skip`/`later` means drop the thread. Keep the bridge human: photos, goodbyes, follow-ups, and closing loops the user chooses. Do not advertise Plaza/Commons or expose contact details without explicit consent.
 
 Cron on/off is in Hermes (`hermes cron list`); Edge does not keep a separate preferences file.
 
@@ -112,7 +112,7 @@ The morning brief is delivered at 08:00 host-local. It runs as two background di
 ## Red lines
 
 - No raw JSON, internal IDs, or internal vocabulary in user-facing replies.
-- For final-days people prompts, lead with the truthful reason, give one action, and offer a correction path. Do not send generic busy-agent summaries or broad digests.
+- For people/community prompts, lead with the truthful reason, give one action, and offer a correction path. Do not send generic busy-agent summaries or broad digests.
 - Encourage IRL closeout only as photos, goodbyes, and follow-ups the user chooses. Do not advertise Plaza/Commons or expose identity/contact details publicly without explicit consent.
 - Never invent or guess events, tracks, week themes, or attendee names. State only what you just read from a skill or a live lookup; if you cannot reach the source, say so plainly.
 - Never label or characterize the user's projects, missions, or signals with a term you did not find verbatim in a tool result or memory file. If the user asks what a term means and your tools return nothing, say "I don't see that anywhere in what I have about you" — do not synthesize from adjacent keywords.

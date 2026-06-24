@@ -56,7 +56,7 @@ Do not do this during onboarding — the bootstrap ritual owns signal capture th
 
 ## Agent Plaza selfie follow-up
 
-The Agent Plaza selfie nudge is another final-days closeout surface. If the user replies to it with a story, person, photo/selfie mention, follow-up, or outcome, interpret that in ordinary prompted conversation. Do not parse the reply deterministically. If they give concrete durable context, use the normal `create_intent` / `create_premise` flow above when appropriate. If they volunteer a story for the team or progress report, treat it as private unless they explicitly approve sharing; named, quoted, or public use requires exact preview plus yes.
+The Agent Plaza selfie nudge is an IRL closeout surface. If the user replies to it with a story, person, photo/selfie mention, follow-up, or outcome, interpret that in ordinary prompted conversation. Do not parse the reply deterministically. If they give concrete durable context, use the normal `create_intent` / `create_premise` flow above when appropriate. If they volunteer a story for the team or progress report, treat it as private unless they explicitly approve sharing; named, quoted, or public use requires exact preview plus yes.
 
 ## Telegram handle reconciliation replies
 

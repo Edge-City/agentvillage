@@ -4,17 +4,17 @@ Silent turns use the current host's no-reply marker exactly: Hermes → `[SILENT
 
 # Product Direction
 
-The brief should feel like a morning interpretation, not a deterministic report. In the final days of Edge Esmeralda, its center of gravity shifts to:
+The brief should feel like a morning interpretation, not a deterministic report. Its standing center of gravity is:
 
-**active people opportunities → IRL closeout bridge → final reflection**
+**active people opportunities → IRL closeout bridge → personal reflection**
 
-Prioritize active people/community items before ambient summary when they have a specific reason and real action URL. If there is a grounded world/selfie/plaza-style context in the deterministic input, use it only as a bridge to the real village: photos, goodbyes, and follow-ups with people the user met. Do not advertise Plaza, Commons, or any virtual surface as the point. On the final day, make the closeout question a short reflection on whether AgentVillage helped the user meet, message, or understand anyone.
+Prioritize active people/community items before ambient summary when they have a specific reason and real action URL. If there is a grounded world/selfie/plaza-style context in the deterministic input, use it only as a bridge to the real village: photos, goodbyes, and follow-ups with people the user met. Do not advertise Plaza, Commons, or any virtual surface as the point. The closing question can invite reflection on whether AgentVillage helped the user meet, message, or understand anyone, but it should still be grounded in the day and the user's context.
 
-Outside those final-day needs, the enduring center of gravity is:
+The enduring interpretive frame is still:
 
 **today's calendar × the user's evolving self-model**
 
-Use the calendar as the substrate: RSVPs, highlighted sessions, venues, timing, announcements, weather, and what the day makes possible. Use the user model as the lens: local user notes, memory notes, recent daily notes, profile phrases, prior corrections, and recent interests. In the final days, people and community asks are not filler; include the high-quality ones first when they can create real follow-through before the village closes.
+Use the calendar as the substrate: RSVPs, highlighted sessions, venues, timing, announcements, weather, and what the day makes possible. Use the user model as the lens: local user notes, memory notes, recent daily notes, profile phrases, prior corrections, and recent interests. People and community asks are not filler; include the high-quality ones first when they can create real follow-through.
 
 The brief should primarily answer:
 
@@ -38,7 +38,7 @@ Also avoid emotional interpretations, status/ambition assumptions, personal-life
 - Render event times from each event's `timePacific` value exactly; do not derive times yourself.
 - Deterministic context comes only from `skills/index-network/scripts/stage-daily-brief.ts --prepare-context`. It builds admin announcements, RSVPs, today's EdgeOS calendar selection, weather, Index people/community cards, pending questions, and compact user-model context. Do not manually re-fetch announcements, RSVPs, calendar, people/community cards, pending questions, or profile context.
 - Use `profileUrl`, `acceptUrl`, and `negotiationUrl` exactly as provided in the context. Never construct, shorten, or modify URLs.
-- Treat `negotiationUrl` as private context for understanding why the person/community item surfaced. Do not include it as a visible link in final-days people items; it creates a second action path and weakens click attribution.
+- Treat `negotiationUrl` as private context for understanding why the person/community item surfaced. Do not include it as a visible link in people/community items; it creates a second action path and weakens click attribution.
 - For each person/community item you include, lead with the reason: why this person, why now, and what makes the read truthful. Then offer exactly one CTA using the provided action URL, usually `acceptUrl`. If you include more than one item, add one compact correction path for the whole section: "If any of these reads are off, reply with what I should correct."
 - Organizer announcements come only from `announcements[]`.
 - Frame the user model as provisional and correctable. Do not infer emotions, personal life, ambitions, needs, or desire for social exposure.
@@ -65,7 +65,7 @@ A good note often has:
 - a brief morning opening, optionally including weather if present;
 - one interpreted throughline for the day;
 - a few concrete calendar anchors;
-- a small number of reason-first people/community items, especially in the final days, only when they support real follow-through;
+- a small number of reason-first people/community items, only when they support real follow-through;
 - one closing question that helps the user correct or sharpen the read.
 
 The question should sound like:
@@ -74,7 +74,7 @@ The question should sound like:
 - "What would be a sharper way to say what you want people here to understand about your work?"
 - "If someone met you through today's events, what would you want them to understand you're actually working toward?"
 - "Which part of this thread feels most like you, and which part should I stop carrying forward?"
-- "Before Edge wraps, who is one person you still want to thank, photograph, or follow up with?"
+- "Who is one person you still want to thank, photograph, or follow up with?"
 - "Quick closeout check: did AgentVillage help you meet, message, or better understand anyone this week?"
 
 It should not sound like:

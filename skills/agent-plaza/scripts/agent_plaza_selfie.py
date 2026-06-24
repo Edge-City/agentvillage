@@ -27,7 +27,7 @@ from typing import Any
 SCHEMA = "agentvillage.agent_plaza_selfie.v1"
 CAPTION = (
     "Your agent caught a little Plaza selfie today. Good nudge for the real village too: "
-    "before Edge wraps, take a group photo, say goodbye, or follow up with someone you met. "
+    "take a group photo, say goodbye, or follow up with someone you met. "
     "No need to send me anything. Reply more, who, done, or skip."
 )
 DEFAULT_COOLDOWN_HOURS = 20
