@@ -29,6 +29,13 @@ The script is deterministic and writes only under `$HERMES_HOME/ops`:
 
 It never writes experiment state, events, or media under `memory/`.
 
+The cron is installed by default, but delivery is still opt-in gated. A packet
+must include one of `safety.user_opted_in`, `safety.plaza_opted_in`,
+`consent.user_opted_in`, `consent.plaza_opted_in`, `user_opted_in`, or
+`plaza_opted_in` as `true`, or an operator must set
+`AGENT_PLAZA_SELFIE_ENABLED=true` for that tenant. Otherwise the script records
+`plaza_not_opted_in` and stays silent.
+
 On a successful send, the script also stores a small sanitized
 `lastFollowupContext` object in `ops/agentvillage/state/agent-plaza-selfie.json`
 so a later private chat turn has enough context to interpret short replies. It
@@ -59,15 +66,18 @@ Useful packet fields, all optional:
 - `packet_type`: `agent_plaza_spatial_selfie`, `agent_plaza_discourse_context`,
   or a future Agent Plaza packet type
 - `id`, `nudge_id`, or `selfie.id`
-- `image_path`, `selfie.image_path`, or `image.path`
+- `image_path`, `selfie.image_path`, or `image.path` for local packet/file
+  handoffs only. Local paths must resolve under `$HERMES_HOME`.
 - `telegram_send_photo.photo_path` from the Agent Plaza selfie artifact
 - `image_base64`, `selfie.image_base64`, or `image.base64` plus content type
   for PNG, JPEG, or WebP
 - `image_url`, `selfie.image_url`, `image.url`, or `media.url` can be included
   as packet metadata, but URL-only packets do not deliver a selfie.
 
-When a local image path is provided, the script copies it into the ops media
-directory before upload. The script uses the tenant's existing
+When a local image path is provided by a local handoff, the script copies it
+into the ops media directory before upload. URL-sourced packets may not point at
+local files; they must provide base64 image bytes if they want to deliver media.
+The script uses the tenant's existing
 `TELEGRAM_BOT_TOKEN` and `TELEGRAM_HOME_CHANNEL` environment variables, calls
 Telegram Bot API `sendPhoto`, records non-secret delivery state under `ops/`,
 and returns `wakeAgent:false` after a successful send so Hermes does not send a

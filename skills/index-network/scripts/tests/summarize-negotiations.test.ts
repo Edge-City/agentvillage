@@ -220,12 +220,37 @@ describe("summarizeNegotiations", () => {
     expect(result.context.newlyResolved[0].outcome?.hasOpportunity).toBe(true);
   });
 
+  test("returns silent for recently completed negotiations that produced no opportunity", async () => {
+    tempWorkspace();
+    await Bun.write("state.json", "{}");
+    const neg = makeNegotiation({
+      status: "completed",
+      isUsersTurn: false,
+      updatedAt: NOW,
+      outcome: { hasOpportunity: false, reasoning: "No strong overlap.", turnCount: 4 },
+    });
+
+    const result = await summarizeNegotiations({
+      fetchNegotiations: async () => [neg],
+      stateFile: "state.json",
+      recentDays: 7,
+    });
+
+    expect(result).toEqual({ silent: true, reason: "nothing-to-report" });
+  });
+
   test("persists newly reported completed IDs to the state file", async () => {
     tempWorkspace();
     await Bun.write("state.json", JSON.stringify({
       negotiationSummary: { reportedCompletedIds: ["old-id"] },
     }));
-    const neg = makeNegotiation({ id: "bbbbbbbb-0000-0000-0000-000000000002", status: "completed", isUsersTurn: false, updatedAt: NOW });
+    const neg = makeNegotiation({
+      id: "bbbbbbbb-0000-0000-0000-000000000002",
+      status: "completed",
+      isUsersTurn: false,
+      updatedAt: NOW,
+      outcome: { hasOpportunity: true, reasoning: "Strong alignment found.", turnCount: 4 },
+    });
 
     await summarizeNegotiations({
       fetchNegotiations: async () => [neg],
@@ -377,7 +402,14 @@ describe("summarizeNegotiations", () => {
     await Bun.write("state.json", "{}");
     const a = makeNegotiation({ id: "aaa-1", counterpartyId: "user-x", status: "active", isUsersTurn: true });
     const b = makeNegotiation({ id: "aaa-2", counterpartyId: "user-y", status: "active", isUsersTurn: false });
-    const c = makeNegotiation({ id: "aaa-3", counterpartyId: "user-x", status: "completed", isUsersTurn: false, updatedAt: NOW });
+    const c = makeNegotiation({
+      id: "aaa-3",
+      counterpartyId: "user-x",
+      status: "completed",
+      isUsersTurn: false,
+      updatedAt: NOW,
+      outcome: { hasOpportunity: true, reasoning: "Strong alignment found.", turnCount: 4 },
+    });
 
     const calls: string[] = [];
     const result = await summarizeNegotiations({
@@ -422,9 +454,27 @@ describe("summarizeNegotiations", () => {
 
     const attention = makeNegotiation({ id: "aaa-1", status: "active", isUsersTurn: true });
     const waiting = makeNegotiation({ id: "aaa-2", status: "active", isUsersTurn: false });
-    const resolved = makeNegotiation({ id: "aaa-3", status: "completed", isUsersTurn: false, updatedAt: NOW });
-    const alreadyReported = makeNegotiation({ id: "aaa-4", status: "completed", isUsersTurn: false, updatedAt: NOW });
-    const stale = makeNegotiation({ id: "aaa-5", status: "completed", isUsersTurn: false, updatedAt: EIGHT_DAYS_AGO });
+    const resolved = makeNegotiation({
+      id: "aaa-3",
+      status: "completed",
+      isUsersTurn: false,
+      updatedAt: NOW,
+      outcome: { hasOpportunity: true, reasoning: "Strong alignment found.", turnCount: 4 },
+    });
+    const alreadyReported = makeNegotiation({
+      id: "aaa-4",
+      status: "completed",
+      isUsersTurn: false,
+      updatedAt: NOW,
+      outcome: { hasOpportunity: true, reasoning: "Already reported.", turnCount: 3 },
+    });
+    const stale = makeNegotiation({
+      id: "aaa-5",
+      status: "completed",
+      isUsersTurn: false,
+      updatedAt: EIGHT_DAYS_AGO,
+      outcome: { hasOpportunity: true, reasoning: "Too old.", turnCount: 3 },
+    });
 
     await Bun.write("state.json", JSON.stringify({
       negotiationSummary: { reportedCompletedIds: [alreadyReported.id] },

@@ -62,6 +62,7 @@ class AgentPlazaSelfieTests(unittest.TestCase):
             packet = {
                 "packet_type": "agent_plaza_spatial_selfie",
                 "id": "selfie-1",
+                "safety": {"user_opted_in": True},
                 "selfie": {
                     "image_url": "https://plaza.example/selfie-1.png",
                     "url": "https://plaza.example/spot/selfie-1",
@@ -103,7 +104,7 @@ class AgentPlazaSelfieTests(unittest.TestCase):
             image = root / "source.png"
             image.write_bytes(b"\x89PNG\r\n\x1a\n")
             packet_path = root / "packet.json"
-            packet_path.write_text(json.dumps({"id": "local", "image_path": str(image)}), encoding="utf-8")
+            packet_path.write_text(json.dumps({"id": "local", "image_path": str(image), "safety": {"user_opted_in": True}}), encoding="utf-8")
 
             _, payload = run_script(root, "--packet-file", str(packet_path), "--cooldown-hours", "0")
 
@@ -209,6 +210,51 @@ class AgentPlazaSelfieTests(unittest.TestCase):
 
         self.assertNotIn("plazaUrl", context)
 
+    def test_store_local_image_rejects_paths_outside_hermes_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside_tmp:
+            root = Path(tmp)
+            outside = Path(outside_tmp) / "private.png"
+            outside.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+            result = selfie.store_local_image(
+                root,
+                root / "ops/agentvillage/media/agent-plaza-selfies",
+                "nudge-1",
+                {"image_path": str(outside)},
+                allow_local_paths=True,
+            )
+
+            self.assertEqual(result, "")
+
+    def test_store_local_image_ignores_local_paths_from_url_packets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image = root / "source.png"
+            image.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+            result = selfie.store_local_image(
+                root,
+                root / "ops/agentvillage/media/agent-plaza-selfies",
+                "nudge-1",
+                {"image_path": str(image)},
+                allow_local_paths=False,
+            )
+
+            self.assertEqual(result, "")
+
+    def test_packet_without_plaza_opt_in_self_silences(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image = root / "source.png"
+            image.write_bytes(b"\x89PNG\r\n\x1a\n")
+            packet_path = root / "packet.json"
+            packet_path.write_text(json.dumps({"id": "no-opt-in", "image_path": str(image)}), encoding="utf-8")
+
+            _, payload = run_script(root, "--packet-file", str(packet_path), "--cooldown-hours", "0")
+
+            self.assertFalse(payload["wakeAgent"])
+            self.assertEqual(payload["reason"], "plaza_not_opted_in")
+
     def test_main_success_sends_photo_records_state_and_emits_structured_silence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -222,6 +268,7 @@ class AgentPlazaSelfieTests(unittest.TestCase):
                 "summary": "A small group was closing loops.",
                 "peopleHints": ["Maya", "Sam"],
                 "plaza_url": "https://plaza.example/spot/pond",
+                "safety": {"user_opted_in": True},
             }), encoding="utf-8")
             (root / ".env").write_text(
                 "TELEGRAM_BOT_TOKEN=secret-token\nTELEGRAM_HOME_CHANNEL=-100123\n",

@@ -124,5 +124,5 @@ cd "${HERMES_HOME:-/opt/data}"
 - Stage the brief for automatic delivery by the send pass. Do not block it for review, assign it, or manually move it between statuses in this prepare pass.
 - Calendar failures must not block launch: compose from whatever verified context exists. If nothing verified exists, stage a brief pointer saying you couldn't check the live calendar this morning and the user can ask what's on today.
 - Never confirm delivery here. Never write `deliveredToday` here.
-- The composed body is plain brief markdown (prose, bullets, the hidden marker comments). Never wrap it in a triple-backtick code fence or any code block, and never include reasoning or "let me…" drafting text in the body.
+- The composed body is plain brief markdown: prose and bullets only, with no internal marker comments. Never wrap it in a triple-backtick code fence or any code block, and never include reasoning or "let me…" drafting text in the body.
 - Never expose internal IDs, raw JSON, internal marker comments, or internal vocabulary in visible prose.

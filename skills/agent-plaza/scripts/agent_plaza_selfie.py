@@ -42,6 +42,7 @@ IMAGE_EXTENSIONS = {
     "image/webp": ".webp",
 }
 ALLOWED_TELEGRAM_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
 def now_utc() -> datetime:
@@ -60,6 +61,14 @@ def hermes_home() -> Path:
 def resolve_path(root: Path, value: str) -> Path:
     path = Path(value).expanduser()
     return path if path.is_absolute() else root / path
+
+
+def path_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve(strict=False).relative_to(root.resolve(strict=False))
+        return True
+    except ValueError:
+        return False
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -159,6 +168,30 @@ def first_context_string(obj: dict[str, Any], paths: list[str], limit: int = MAX
         if cleaned:
             return cleaned
     return ""
+
+
+def truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in TRUE_VALUES
+    return False
+
+
+def plaza_selfie_enabled(packet: dict[str, Any]) -> bool:
+    if truthy(os.environ.get("AGENT_PLAZA_SELFIE_ENABLED", "")):
+        return True
+    for path in (
+        "safety.user_opted_in",
+        "safety.plaza_opted_in",
+        "consent.user_opted_in",
+        "consent.plaza_opted_in",
+        "user_opted_in",
+        "plaza_opted_in",
+    ):
+        if truthy(nested_get(packet, path)):
+            return True
+    return False
 
 
 def context_list_item(value: Any) -> str:
@@ -352,7 +385,14 @@ def mime_extension(content_type: str) -> str:
     return IMAGE_EXTENSIONS.get(content_type.lower().split(";")[0].strip(), "")
 
 
-def store_local_image(root: Path, media_dir: Path, nudge_id: str, packet: dict[str, Any]) -> str:
+def store_local_image(
+    root: Path,
+    media_dir: Path,
+    nudge_id: str,
+    packet: dict[str, Any],
+    *,
+    allow_local_paths: bool,
+) -> str:
     path_value = first_string(
         packet,
         [
@@ -371,8 +411,10 @@ def store_local_image(root: Path, media_dir: Path, nudge_id: str, packet: dict[s
     media_dir.mkdir(parents=True, exist_ok=True)
     safe_id = "".join(ch if ch.isalnum() or ch in ("-", "_") else "-" for ch in nudge_id)[:120] or "selfie"
 
-    if path_value:
+    if path_value and allow_local_paths:
         source = resolve_path(root, path_value)
+        if not path_within(source, root):
+            return ""
         if not source.exists() or not source.is_file():
             return ""
         try:
@@ -503,6 +545,7 @@ def main(argv: list[str]) -> int:
     now = now_utc()
 
     state = read_json(state_path)
+    packet_url_configured = bool((args.packet_url or os.environ.get("AGENT_PLAZA_SELFIE_PACKET_URL", "")).strip())
     packet, reason = read_packet(root, args)
     if reason != "ok" or not packet:
         record_silence(state_path, events_path, state, reason)
@@ -511,13 +554,18 @@ def main(argv: list[str]) -> int:
 
     nudge_id = packet_id(root, packet)
     packet_type = str(packet.get("packet_type") or "unknown")
+    if not plaza_selfie_enabled(packet):
+        record_silence(state_path, events_path, state, "plaza_not_opted_in", nudge_id=nudge_id, packet_type=packet_type)
+        emit({"wakeAgent": False, "reason": "plaza_not_opted_in", "nudgeId": nudge_id})
+        return 0
+
     suppressed = should_suppress(state, nudge_id, now, max(0, args.cooldown_hours))
     if suppressed:
         record_silence(state_path, events_path, state, suppressed, nudge_id=nudge_id, packet_type=packet_type)
         emit({"wakeAgent": False, "reason": suppressed, "nudgeId": nudge_id})
         return 0
 
-    local_media_path = store_local_image(root, media_dir, nudge_id, packet)
+    local_media_path = store_local_image(root, media_dir, nudge_id, packet, allow_local_paths=not packet_url_configured)
     if not local_media_path:
         record_silence(state_path, events_path, state, "missing_local_image", nudge_id=nudge_id, packet_type=packet_type)
         emit({"wakeAgent": False, "reason": "missing_local_image", "nudgeId": nudge_id})
