@@ -18,6 +18,7 @@ import os
 import shutil
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -43,6 +44,7 @@ IMAGE_EXTENSIONS = {
 }
 ALLOWED_TELEGRAM_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 TRUE_VALUES = {"1", "true", "yes", "on"}
+TURING_FALLS_ORIGIN = "https://turingfalls.com"
 
 
 def now_utc() -> datetime:
@@ -274,6 +276,160 @@ def read_dotenv_value(root: Path, key: str) -> str:
             value = value[1:-1]
         return value.strip()
     return ""
+
+
+def turing_falls_credentials(root: Path) -> tuple[str, str, str]:
+    origin = read_dotenv_value(root, "TURING_FALLS_ORIGIN") or TURING_FALLS_ORIGIN
+    origin = origin.rstrip("/")
+    agent_id = read_dotenv_value(root, "TURING_FALLS_AGENT_ID")
+    claim_token = read_dotenv_value(root, "TURING_FALLS_CLAIM_TOKEN")
+    if agent_id and claim_token:
+        return origin, agent_id, claim_token
+
+    for relative in (
+        "ops/agentvillage/state/turing-falls.json",
+        ".config/turing-falls/credentials.json",
+        "memory/turing-falls-state.json",
+    ):
+        data = read_json(root / relative)
+        agent_id = str(data.get("agent_id") or data.get("agentId") or "").strip()
+        claim_token = str(data.get("claim_token") or data.get("claimToken") or "").strip()
+        stored_origin = str(data.get("origin") or "").strip().rstrip("/")
+        if agent_id and claim_token:
+            return stored_origin or origin, agent_id, claim_token
+    return origin, "", ""
+
+
+def turing_people_hints(tick: dict[str, Any]) -> list[str]:
+    return first_context_list(tick, ["visible_neighbors", "neighbors", "nearby_agents"])
+
+
+def turing_summary(tick: dict[str, Any]) -> str:
+    location = clean_context_string(tick.get("your_location") or tick.get("location"), limit=80)
+    neighbors = turing_people_hints(tick)
+    if location and neighbors:
+        return f"Your agent is at {location} with {', '.join(neighbors[:3])}."
+    if location:
+        return f"Your agent is at {location}."
+    if neighbors:
+        return f"Your agent is near {', '.join(neighbors[:3])}."
+    return "Your agent is present in Turing Falls."
+
+
+def read_turing_json(req: urllib.request.Request, timeout: float, urlopen=urllib.request.urlopen) -> tuple[dict[str, Any], str]:
+    try:
+        with urlopen(req, timeout=timeout) as res:
+            raw = res.read(MAX_PACKET_BYTES + 1)
+            content_type = res.headers.get("content-type", "")
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return {}, "turing_falls_unavailable"
+    if len(raw) > MAX_PACKET_BYTES:
+        return {}, "turing_falls_packet_too_large"
+    if content_type and "json" not in content_type.lower():
+        return {}, "turing_falls_not_json"
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return {}, "turing_falls_invalid_json"
+    return (data if isinstance(data, dict) else {}), "ok"
+
+
+def download_turing_image(
+    media_dir: Path,
+    nudge_id: str,
+    image_url: str,
+    timeout_seconds: float,
+    urlopen=urllib.request.urlopen,
+) -> tuple[str, str]:
+    if not safe_url(image_url):
+        return "", "turing_falls_missing_selfie"
+    req = urllib.request.Request(image_url, headers={"Accept": "image/png,image/jpeg,image/webp"})
+    try:
+        with urlopen(req, timeout=timeout_seconds) as res:
+            raw = res.read(MAX_IMAGE_BYTES + 1)
+            content_type = res.headers.get("content-type", "")
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return "", "turing_falls_selfie_unavailable"
+    if not raw or len(raw) > MAX_IMAGE_BYTES:
+        return "", "turing_falls_selfie_size_invalid"
+    ext = mime_extension(content_type)
+    if not ext:
+        return "", "turing_falls_selfie_type_invalid"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    safe_id = "".join(ch if ch.isalnum() or ch in ("-", "_") else "-" for ch in nudge_id)[:120] or "turing-falls"
+    target = media_dir / f"{safe_id}-source{ext}"
+    try:
+        target.write_bytes(raw)
+    except OSError:
+        return "", "turing_falls_selfie_write_failed"
+    return str(target), "ok"
+
+
+def read_turing_falls_packet(
+    root: Path,
+    media_dir: Path,
+    timeout_seconds: float,
+    urlopen=urllib.request.urlopen,
+) -> tuple[dict[str, Any], str]:
+    origin, agent_id, claim_token = turing_falls_credentials(root)
+    if not agent_id or not claim_token:
+        return {}, "turing_falls_unconfigured"
+    if not safe_url(origin):
+        return {}, "turing_falls_invalid_origin"
+
+    safe_agent_id = urllib.parse.quote(agent_id, safe="")
+    tick_req = urllib.request.Request(
+        f"{origin}/api/agents/{safe_agent_id}/tick",
+        headers={"Accept": "application/json"},
+    )
+    tick, reason = read_turing_json(tick_req, timeout_seconds, urlopen=urlopen)
+    if reason != "ok":
+        return {}, reason
+
+    action_body = json.dumps({"claim_token": claim_token, "action": {"action": "selfie"}}).encode("utf-8")
+    action_req = urllib.request.Request(
+        f"{origin}/api/agents/{safe_agent_id}/action",
+        data=action_body,
+        headers={"Accept": "application/json", "Content-Type": "application/json"},
+        method="POST",
+    )
+    selfie_response, reason = read_turing_json(action_req, timeout_seconds, urlopen=urlopen)
+    if reason != "ok":
+        return {}, reason
+
+    selfie_url = safe_url(first_string(selfie_response, ["selfie_url", "latest_selfie_url", "selfie.url"]))
+    world_url = safe_url(first_string(selfie_response, ["world_url"]) or first_string(tick, ["world_url"]))
+    if not selfie_url:
+        return {}, "turing_falls_missing_selfie"
+
+    nudge_id = f"turing-falls-{hashlib.sha256(f'{agent_id}:{selfie_url}:{iso_now()}'.encode('utf-8')).hexdigest()[:24]}"
+    image_path, reason = download_turing_image(media_dir, nudge_id, selfie_url, timeout_seconds, urlopen=urlopen)
+    if reason != "ok":
+        return {}, reason
+
+    packet = {
+        "packet_type": "agent_plaza_spatial_selfie",
+        "id": nudge_id,
+        "source": "turing_falls",
+        "title": "Turing Falls selfie",
+        "summary": turing_summary(tick),
+        "prompt": clean_context_string(tick.get("social_prompt"), limit=MAX_CONTEXT_STRING),
+        "peopleHints": turing_people_hints(tick),
+        "plaza_url": world_url,
+        "image_url": selfie_url,
+        "image_path": image_path,
+        "safety": {
+            "plaza_opted_in": True,
+            "credential_source": "turing_falls",
+        },
+        "turing_falls": {
+            "agent_id": agent_id,
+            "your_location": clean_context_string(tick.get("your_location") or tick.get("location"), limit=80),
+            "world_hour": tick.get("world_hour"),
+            "is_night": tick.get("is_night"),
+        },
+    }
+    return packet, "ok"
 
 
 def read_packet_from_url(url: str, timeout: float) -> tuple[dict[str, Any], str]:
@@ -547,6 +703,10 @@ def main(argv: list[str]) -> int:
     state = read_json(state_path)
     packet_url_configured = bool((args.packet_url or os.environ.get("AGENT_PLAZA_SELFIE_PACKET_URL", "")).strip())
     packet, reason = read_packet(root, args)
+    if reason == "packet_unconfigured":
+        turing_packet, turing_reason = read_turing_falls_packet(root, media_dir, args.timeout_seconds)
+        if turing_reason != "turing_falls_unconfigured":
+            packet, reason = turing_packet, turing_reason
     if reason != "ok" or not packet:
         record_silence(state_path, events_path, state, reason)
         emit({"wakeAgent": False, "reason": reason})

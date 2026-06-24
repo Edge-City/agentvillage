@@ -44,6 +44,21 @@ class FakeTelegramResponse:
         return b'{"ok":true,"result":{"message_id":1}}'
 
 
+class FakeHttpResponse:
+    def __init__(self, body: bytes, content_type: str = "application/json"):
+        self._body = body
+        self.headers = {"content-type": content_type}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self, _size: int = -1) -> bytes:
+        return self._body
+
+
 class AgentPlazaSelfieTests(unittest.TestCase):
     def test_unconfigured_packet_self_silences_and_uses_ops_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -254,6 +269,55 @@ class AgentPlazaSelfieTests(unittest.TestCase):
 
             self.assertFalse(payload["wakeAgent"])
             self.assertEqual(payload["reason"], "plaza_not_opted_in")
+
+    def test_turing_falls_credentials_build_packet_with_downloaded_selfie(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".env").write_text(
+                "TURING_FALLS_AGENT_ID=agent-123\nTURING_FALLS_CLAIM_TOKEN=secret-claim\n",
+                encoding="utf-8",
+            )
+            calls: list[tuple[str, bytes | None]] = []
+
+            def fake_urlopen(req, timeout):
+                calls.append((req.full_url, req.data))
+                if req.full_url.endswith("/api/agents/agent-123/tick"):
+                    return FakeHttpResponse(json.dumps({
+                        "your_location": "pond",
+                        "world_hour": 14.5,
+                        "is_night": False,
+                        "world_url": "https://turingfalls.com/world/agent-123",
+                        "visible_neighbors": [{"display_name": "Maya"}, {"name": "Sam"}],
+                        "social_prompt": "A few agents are lingering by the pond.",
+                    }).encode("utf-8"))
+                if req.full_url.endswith("/api/agents/agent-123/action"):
+                    return FakeHttpResponse(json.dumps({
+                        "selfie_url": "https://turingfalls.com/selfies/agent-123.png",
+                        "world_url": "https://turingfalls.com/world/agent-123",
+                    }).encode("utf-8"))
+                if req.full_url == "https://turingfalls.com/selfies/agent-123.png":
+                    return FakeHttpResponse(b"\x89PNG\r\n\x1a\nselfie", "image/png")
+                raise AssertionError(f"unexpected URL {req.full_url}")
+
+            packet, reason = selfie.read_turing_falls_packet(
+                root,
+                root / "ops/agentvillage/media/agent-plaza-selfies",
+                1.0,
+                urlopen=fake_urlopen,
+            )
+
+            self.assertEqual(reason, "ok")
+            self.assertEqual(packet["packet_type"], "agent_plaza_spatial_selfie")
+            self.assertEqual(packet["source"], "turing_falls")
+            self.assertEqual(packet["safety"]["plaza_opted_in"], True)
+            self.assertEqual(packet["plaza_url"], "https://turingfalls.com/world/agent-123")
+            self.assertEqual(packet["peopleHints"], ["Maya", "Sam"])
+            self.assertTrue(Path(packet["image_path"]).exists())
+            self.assertTrue(str(packet["image_path"]).startswith(str(root)))
+            self.assertEqual(len(calls), 3)
+            action_body = json.loads(calls[1][1].decode("utf-8"))
+            self.assertEqual(action_body["action"], {"action": "selfie"})
+            self.assertEqual(action_body["claim_token"], "secret-claim")
 
     def test_main_success_sends_photo_records_state_and_emits_structured_silence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
