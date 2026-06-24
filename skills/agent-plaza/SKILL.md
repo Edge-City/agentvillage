@@ -59,7 +59,19 @@ Configure one of:
 
 If neither is set, the script also checks
 `ops/agentvillage/state/agent-plaza-selfie-packet.json` as a local handoff. If
-no packet is available, the cron self-silences.
+no packet is available, the cron can fall back to Turing Falls credentials:
+
+- `TURING_FALLS_AGENT_ID`
+- `TURING_FALLS_CLAIM_TOKEN`
+- optional `TURING_FALLS_ORIGIN` (defaults to `https://turingfalls.com`)
+
+When those exist, the script reads `GET /api/agents/{agent_id}/tick`, posts the
+Turing Falls `{ "action": "selfie" }` action with the claim token, downloads the
+returned PNG into `ops/agentvillage/media/agent-plaza-selfies/`, and converts it
+into the same Agent Plaza selfie packet shape. The claim token is sent only to
+the configured Turing Falls origin and is never stored in events, state, or
+`lastFollowupContext`. If neither a packet nor Turing Falls credentials are
+available, the cron self-silences.
 
 Useful packet fields, all optional:
 
