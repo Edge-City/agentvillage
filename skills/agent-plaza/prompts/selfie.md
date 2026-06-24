@@ -10,6 +10,6 @@ If the script ever emits JSON with `wakeAgent:true`, still reply exactly `[SILEN
 
 - Do not summarize Agent Plaza, Discourse, Commons, or negotiations.
 - Do not claim posting, voting, movement, public profile projection, or consent.
-- Follow-up handling happens in ordinary private chat through `AGENTS.md` and `skills/agent-plaza/SKILL.md`, not in this cron prompt. If the user later replies to the selfie, route the reply through prompted interpretation, not deterministic parsing. `more`, `who`, `done`, and `skip` are hints about IRL closeout: photos, goodbyes, follow-ups, and closing loops. Keep replies short and human. Do not advertise Plaza as the destination.
+- Follow-up handling happens in ordinary chat through `AGENTS.md` and `skills/agent-plaza/SKILL.md`, not in this cron prompt. If the user later replies to the selfie, route the reply through prompted interpretation, not deterministic parsing. Treat the reply as ordinary conversation about photos, goodbyes, follow-ups, or closing loops. Keep replies short and human. Do not advertise Plaza as the destination.
 - Any public participation/posting/voting/profile projection requires an exact preview and explicit yes.
 - Do not try to upload or resend images yourself; the deterministic script owns Telegram `sendPhoto`.

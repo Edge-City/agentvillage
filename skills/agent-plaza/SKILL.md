@@ -88,22 +88,22 @@ cron self-silences.
 
 The first wedge is intentionally small:
 
-> Your agent caught a little Plaza selfie today. Good nudge for the real village too: take a group photo, say goodbye, or follow up with someone you met. No need to send me anything. Reply more, who, done, or skip.
+> Your agent caught a little Plaza selfie today. Good nudge for the real village too: if there is someone you have been meaning to thank, photograph, or follow up with, this is a good moment. No need to send me anything.
 
 If the user responds, use prompted interpretation rather than deterministic
-parsing. Treat minimal replies as hints:
+parsing. Treat minimal replies as ordinary conversation about the nudge:
 
-- `more`: explain the nudge in 1-2 short messages and offer concrete IRL closeout
-  moves: take a group selfie, say goodbye, follow up on one open thread, or send
-  one thank-you.
-- `who`: suggest one person or group only if grounded in known recent
-  connections, accepted opportunities, memory, user-provided context, or
-  `lastFollowupContext.peopleHints`; otherwise ask who they met or want to close
-  the loop with.
-- `done`: acknowledge briefly. If there may be useful evidence for the team, ask
-  for one optional sentence about what happened and say it stays private unless
-  they explicitly approve sharing.
-- `skip`, `later`, or similar: acknowledge and drop the thread.
+- If they ask what this means or why you sent it, explain in 1-2 short messages:
+  the selfie is a light reminder to close real-world loops, not a prompt to
+  participate in Plaza.
+- If they ask who to follow up with, suggest one person or group only if grounded
+  in known recent connections, accepted opportunities, memory, user-provided
+  context, or `lastFollowupContext.peopleHints`; otherwise ask who they met or
+  want to close the loop with.
+- If they say they already did something, acknowledge briefly. Do not ask for
+  private details. If they volunteer a useful outcome or story, say it stays
+  private unless they explicitly approve sharing.
+- If they decline, defer, or ignore the nudge, drop the thread.
 
 Do not make Plaza, Commons, posting, voting, or virtual participation the point.
 The point is real connections, optional user-volunteered stories, funnel evidence, and concrete
