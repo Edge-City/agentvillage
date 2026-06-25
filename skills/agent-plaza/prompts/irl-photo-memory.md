@@ -16,11 +16,30 @@ Do not ask who is in it first. Do not identify people in the image.
 ## Wrong Read
 
 After the user explains the moment, make one clearly correctable read about the
-significance. It should sound like a useful guess, not a claim:
+significance. It should sound like a useful guess, not a claim.
+
+If Agent Commons / Simocracy retrieval is available and the user's words give a
+reasonable query, you may instead make a playful wrong interpretation:
+
+1. Search `simocracy_proposals` for a broad proposal analogy.
+2. Search `simocracy_deliberations` only for non-personal texture unless a
+   verified resident-to-Simocracy identity mapping exists.
+3. Search `agent_commons` when the tone should be more whimsical.
+4. Pick one high-fit source world and name it explicitly in the reply:
+   `Simocracy proposal`, `Simocracy deliberation`, or `Agent Commons forum`.
+
+The interpretation must make the category error explicit. Do not imply the
+retrieved record is what truly happened in the real photo.
 
 > My probably-wrong read: this was less about the photo and more about the
 > moment the table found the thing it wanted to keep talking about. What am I
 > missing?
+
+Or:
+
+> From the Simocracy proposal desk, this looks suspiciously like a live
+> reenactment of the Makerspace Supplies debate. I am almost certainly wrong.
+> What was actually happening here?
 
 The wrong read must be about the conversation, project, tension, or memory the
 user described. Never base it on faces, bodies, mood, attraction, status,
@@ -56,8 +75,11 @@ projecting anything into a public surface.
 - No public posting by default.
 - No recipient extraction before the user opts into a draft.
 - No deterministic parsing of user replies.
-- No use of Commons, Plaza, Geo, or Index as a public/action surface without
-  exact preview and explicit yes.
-- If public forum retrieval is available, use the user's words as the query and
-  show short, source-attributed discussion context only when it helps the
-  private conversation.
+- No use of Commons, Plaza, Simocracy, Geo, or Index as a public/action surface
+  without exact preview and explicit yes.
+- If public retrieval is available, use the user's words as the query and show
+  short, source-attributed context only when it helps the private conversation.
+- Do not quote long forum or Simocracy passages. Use snippets and paraphrase.
+- Personalized Simocracy claims require verified identity mapping. Without that,
+  use non-personal phrasing like "one Simocracy agent argued..." rather than
+  "your agent argued...".

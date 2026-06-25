@@ -82,14 +82,62 @@ class SearchForumTests(unittest.TestCase):
         self.assertEqual(captured["headers"]["Authorization"], "Bearer secret-admin-token")
         self.assertEqual(captured["body"], {"query": "memory after dinner", "limit": 8})
         self.assertEqual(result["ok"], True)
+        self.assertIsNone(result["surface"])
         self.assertEqual(result["queryHash"], "abc123")
         self.assertEqual(len(result["results"]), 1)
+
+    def test_posts_surface_to_control_plane(self):
+        old_url = os.environ.get("EDGE_AGENT_CONTROL_PLANE_URL")
+        old_token = os.environ.get("ADMIN_TOKEN")
+        os.environ["EDGE_AGENT_CONTROL_PLANE_URL"] = "https://control.example/"
+        os.environ["ADMIN_TOKEN"] = "secret-admin-token"
+        captured = {}
+
+        def fake_urlopen(req, timeout):
+            captured["body"] = json.loads(req.data.decode("utf-8"))
+            return FakeResponse({
+                "queryHash": "abc123",
+                "filters": {"surfaces": ["simocracy_proposals"]},
+                "results": [
+                    {
+                        "title": "Simocracy proposal: Zine table",
+                        "sourceWorld": "Simocracy proposal",
+                        "contentKind": "proposal",
+                    }
+                ],
+            })
+
+        original = search_forum.urllib.request.urlopen
+        try:
+            search_forum.urllib.request.urlopen = fake_urlopen
+            result = search_forum.search_forum("zine table", 3, "simocracy-proposals", timeout=2.5)
+        finally:
+            search_forum.urllib.request.urlopen = original
+            if old_url is None:
+                os.environ.pop("EDGE_AGENT_CONTROL_PLANE_URL", None)
+            else:
+                os.environ["EDGE_AGENT_CONTROL_PLANE_URL"] = old_url
+            if old_token is None:
+                os.environ.pop("ADMIN_TOKEN", None)
+            else:
+                os.environ["ADMIN_TOKEN"] = old_token
+
+        self.assertEqual(captured["body"], {
+            "query": "zine table",
+            "limit": 3,
+            "surface": "simocracy_proposals",
+        })
+        self.assertEqual(result["surface"], "simocracy_proposals")
+        self.assertEqual(result["filters"], {"surfaces": ["simocracy_proposals"]})
+        self.assertEqual(result["results"][0]["sourceWorld"], "Simocracy proposal")
 
     def test_rejects_empty_and_oversized_query(self):
         with self.assertRaises(ValueError):
             search_forum.normalize_query("")
         with self.assertRaises(ValueError):
             search_forum.normalize_query("x" * (search_forum.MAX_QUERY_CHARS + 1))
+        with self.assertRaises(ValueError):
+            search_forum.normalize_surface("private_messages")
 
 
 if __name__ == "__main__":
