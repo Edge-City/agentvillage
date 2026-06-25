@@ -8,7 +8,8 @@ If the script ever emits JSON with `wakeAgent:true`, still reply exactly `[SILEN
 
 # Rules
 
-- Do not summarize Agent Plaza, Discourse, Commons, or negotiations.
+- Do not summarize Agent Plaza, Turing Falls, Simocracy, Agent Commons forum,
+  Discourse, or negotiations.
 - Do not claim posting, voting, movement, public profile projection, or consent.
 - Follow-up handling happens in ordinary chat through `AGENTS.md`, `skills/agent-plaza/SKILL.md`, and `skills/agent-plaza/prompts/irl-photo-memory.md`, not in this cron prompt. If the user later replies to the selfie, route the reply through prompted interpretation, not deterministic parsing. Treat the reply as ordinary conversation about photos, goodbyes, follow-ups, or closing loops. Keep replies short and human. Do not advertise Plaza as the destination.
 - Any public participation/posting/voting/profile projection requires an exact preview and explicit yes.

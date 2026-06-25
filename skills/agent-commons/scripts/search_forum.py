@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Search public Agent Commons / forum context through the control plane."""
+"""Search public agent-world sources through the control plane.
+
+This compatibility entrypoint is named for the original Agent Commons forum
+search, but the control-plane endpoint now exposes explicit surfaces:
+Agent Commons forum plus Simocracy proposal/deliberation records.
+"""
 
 from __future__ import annotations
 
@@ -98,7 +103,7 @@ def search_forum(query: str, limit: int, surface: str = "", timeout: float = 8.0
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="Search public Agent Commons forum context")
+    parser = argparse.ArgumentParser(description="Search public agent-world source context")
     parser.add_argument("--query", required=True)
     parser.add_argument("--limit", type=int, default=5)
     parser.add_argument(
