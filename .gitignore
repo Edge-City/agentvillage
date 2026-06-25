@@ -1,5 +1,14 @@
 node_modules
 
+__pycache__/
+*.py[cod]
+
+# Local research/export artifacts. These may contain private chat content or
+# account session material and must never be committed.
+/.local/
+*.session
+*.session-journal
+
 # Private sibling checkouts for local development only.
 # These are cloned alongside AgentVillage for context but are not part of the public skills package.
 /controlplane/
