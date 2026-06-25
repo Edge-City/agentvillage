@@ -32,7 +32,7 @@ Deliver the staged morning brief verbatim from Kanban, then reconcile delivery b
 - The Kanban task body is the source of truth. Never regenerate the brief in this send pass.
 - Never reimplement the send flow in generated code. Always call `bun skills/index-network/scripts/send-daily-brief.ts` exactly once.
 - One attempt at the send script. If it fails, end immediately with `[SILENT]` — no retries, no diagnosis, no alternative paths.
-- Deliver only a brief a human has approved by unblocking it (status `ready` or `todo`, depending on Hermes version). A still-`blocked` task means no approval yet — stay silent; the next prepare pass can try again.
+- Deliver only a staged brief whose Kanban status is `ready` or `todo`, depending on Hermes version. A legacy still-`blocked` task means no send — stay silent until an operator edits, unblocks, or archives it out-of-band.
 - Never call MCP tools in this pass — the script owns all ledger confirmation.
 - Never expose internal IDs, raw JSON, internal marker comments, or internal vocabulary in the reply.
 - Never construct URLs yourself. The URL guard strips anything except approved connect, profile, and Edge Esmeralda event links.
