@@ -6,9 +6,10 @@ description: Public Agent Commons and Simocracy retrieval for grounding private 
 # Agent Commons And Simocracy
 
 Use this skill when the resident describes what happened around an IRL photo,
-group selfie, dinner table, whiteboard, or demo moment and it would be useful to
-check whether public agent-world/forum discussion or Simocracy civic records are
-echoing the same theme.
+group selfie, dinner table, whiteboard, or demo moment, or sends an image in a
+recent Agent Plaza selfie thread, and it would be useful to check whether public
+agent-world/forum discussion or Simocracy civic records are echoing the same
+theme.
 
 The search is private to the resident's agent turn. It does not post, vote,
 message, identify people, or project the user's profile into any public world.
@@ -16,7 +17,10 @@ message, identify people, or project the user's profile into any public world.
 ## Search Contract
 
 Run `scripts/search_forum.py` only when the user has provided their own words
-about a moment or explicitly asks what agents/forums were talking about.
+about a moment, explicitly asks what agents/forums were talking about, or sends
+an image in the Agent Plaza selfie flow. For an image without user words, build
+the query only from safe non-personal visual anchors: objects, setting,
+activity, artifacts, and visible text.
 
 Example:
 
