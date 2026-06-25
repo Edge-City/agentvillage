@@ -13,12 +13,12 @@ import {
   tokenUsageAuditCronDisabled,
 } from "../install_index";
 
-test("seven Index cron specs: digest jobs, Plaza selfie, plus token audit (heartbeat retired)", () => {
-  expect(DIGEST_CRON_SPECS).toHaveLength(7);
+test("nine Index cron specs: digest jobs, Plaza selfie, opportunity drops, plus token audit (heartbeat retired)", () => {
+  expect(DIGEST_CRON_SPECS).toHaveLength(9);
   // The 30-minute "Edge — heartbeat" cron was retired (it drained OpenRouter
   // key budget fleet-wide); it must no longer be installed.
   expect(DIGEST_CRON_SPECS.some((s) => s.name === "Edge — heartbeat")).toBe(false);
-  const [signals, prepare, send, negotiation, plaza, evening, tokenAudit] = DIGEST_CRON_SPECS;
+  const [signals, prepare, send, negotiation, plaza, evening, dropMidday, dropEvening, tokenAudit] = DIGEST_CRON_SPECS;
   expect(signals.schedule).toBe("0 1 * * *");
   expect(signals.name).toBe("Edge — memory signal sync");
   expect(signals.promptFile).toBe("edge-esmeralda/prompts/memory-signals.md");
@@ -48,6 +48,14 @@ test("seven Index cron specs: digest jobs, Plaza selfie, plus token audit (heart
   expect(evening.name).toBe("Edge — evening questions");
   expect(evening.promptFile).toBe("edge-esmeralda/prompts/ask-questions.md");
   expect(evening.deliver).toBe(true);
+  expect(dropMidday.schedule).toBe("0 12 * * *");
+  expect(dropMidday.name).toBe("Edge — opportunity drop (midday)");
+  expect(dropMidday.promptFile).toBe("edge-esmeralda/prompts/opportunity-drop.md");
+  expect(dropMidday.deliver).toBe(true);
+  expect(dropEvening.schedule).toBe("0 17 * * *");
+  expect(dropEvening.name).toBe("Edge — opportunity drop (evening)");
+  expect(dropEvening.promptFile).toBe("edge-esmeralda/prompts/opportunity-drop.md");
+  expect(dropEvening.deliver).toBe(true);
   expect(tokenAudit.schedule).toBe("0 9 * * *");
   expect(tokenAudit.name).toBe("Edge — token usage audit");
   expect(tokenAudit.scriptFile).toBe("token-usage-audit/scripts/audit_token_usage.py");
@@ -58,7 +66,7 @@ test("seven Index cron specs: digest jobs, Plaza selfie, plus token audit (heart
 
 test("cron create args handle delivered and scripted specs", () => {
   const home = "/home/x/.hermes";
-  const [signals, prepare, send, , plaza, , tokenAudit] = DIGEST_CRON_SPECS;
+  const [signals, prepare, send, , plaza, , , , tokenAudit] = DIGEST_CRON_SPECS;
 
   expect(cronCreateArgs(signals, "SIGNALS_BODY", home)).toEqual([
     "cron", "create", "0 1 * * *", "SIGNALS_BODY",
@@ -162,7 +170,7 @@ test("invalid telegram MCP handle is omitted", () => {
 });
 
 test("each spec declares its install-time override flag + env var", () => {
-  const [signals, prepare, send, , plaza, , tokenAudit] = DIGEST_CRON_SPECS;
+  const [signals, prepare, send, , plaza, , dropMidday, dropEvening, tokenAudit] = DIGEST_CRON_SPECS;
   expect(signals.overrideFlag).toBe("--digest-signals-cron");
   expect(signals.overrideEnv).toBe("DIGEST_SIGNALS_CRON");
   expect(prepare.overrideFlag).toBe("--digest-prepare-cron");
@@ -171,6 +179,10 @@ test("each spec declares its install-time override flag + env var", () => {
   expect(send.overrideEnv).toBe("DIGEST_SEND_CRON");
   expect(plaza.overrideFlag).toBe("--agent-plaza-selfie-cron");
   expect(plaza.overrideEnv).toBe("AGENT_PLAZA_SELFIE_CRON");
+  expect(dropMidday.overrideFlag).toBe("--opportunity-drop-midday-cron");
+  expect(dropMidday.overrideEnv).toBe("OPPORTUNITY_DROP_MIDDAY_CRON");
+  expect(dropEvening.overrideFlag).toBe("--opportunity-drop-evening-cron");
+  expect(dropEvening.overrideEnv).toBe("OPPORTUNITY_DROP_EVENING_CRON");
   expect(tokenAudit.overrideFlag).toBe("--token-usage-audit-cron");
   expect(tokenAudit.overrideEnv).toBe("TOKEN_USAGE_AUDIT_CRON");
 });

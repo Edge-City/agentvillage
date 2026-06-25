@@ -16,7 +16,7 @@ import {
 } from "../install_index";
 
 const SEED = "ix_integration_seed";
-const [SIGNALS, PREPARE, SEND, NEGOTIATION, PLAZA, EVENING, TOKEN_AUDIT] = DIGEST_CRON_SPECS;
+const [SIGNALS, PREPARE, SEND, NEGOTIATION, PLAZA, EVENING, DROP_MIDDAY, DROP_EVENING, TOKEN_AUDIT] = DIGEST_CRON_SPECS;
 // The retired "Edge — heartbeat" cron name — used to assert it is torn down.
 const RETIRED_HEARTBEAT_NAME = "Edge — heartbeat";
 const PROMPT_BODIES = new Map([
@@ -26,6 +26,8 @@ const PROMPT_BODIES = new Map([
   [NEGOTIATION.promptFile, "NEGOTIATION_BODY"],
   [PLAZA.promptFile, "PLAZA_BODY"],
   [EVENING.promptFile, "EVENING_BODY"],
+  // Both opportunity-drop crons share one prompt file.
+  [DROP_MIDDAY.promptFile, "DROP_BODY"],
 ]);
 
 let home: string;
@@ -204,6 +206,8 @@ test("an existing Edge — heartbeat cron is retired on reconcile", () => {
     currentJob(NEGOTIATION, "n1"),
     currentJob(PLAZA, "z1"),
     currentJob(EVENING, "e1"),
+    currentJob(DROP_MIDDAY, "dm1"),
+    currentJob(DROP_EVENING, "de1"),
     currentJob(TOKEN_AUDIT, "a1"),
   ]);
 
@@ -220,6 +224,8 @@ test("jobs still on old synchronized defaults get schedule-only migrations", () 
     currentJob(NEGOTIATION, "n1"),
     currentJob(PLAZA, "z1"),
     currentJob(EVENING, "e1"),
+    currentJob(DROP_MIDDAY, "dm1"),
+    currentJob(DROP_EVENING, "de1"),
     currentJob(TOKEN_AUDIT, "a1"),
   ]);
 
@@ -241,6 +247,8 @@ test("custom schedule is preserved; stale prompt gets a prompt-only edit", () =>
     currentJob(NEGOTIATION, "n1"),
     currentJob(PLAZA, "z1"),
     currentJob(EVENING, "e1"),
+    currentJob(DROP_MIDDAY, "dm1"),
+    currentJob(DROP_EVENING, "de1"),
     currentJob(TOKEN_AUDIT, "a1"),
   ]);
 
@@ -259,6 +267,8 @@ test("memory signal sync cron is recreated when its script path is stale", () =>
     currentJob(NEGOTIATION, "n1"),
     currentJob(PLAZA, "z1"),
     currentJob(EVENING, "e1"),
+    currentJob(DROP_MIDDAY, "dm1"),
+    currentJob(DROP_EVENING, "de1"),
     currentJob(TOKEN_AUDIT, "a1"),
   ]);
 
@@ -282,6 +292,8 @@ test("stale prompt + old default schedule produce two independent edit calls", (
     currentJob(NEGOTIATION, "n1"),
     currentJob(PLAZA, "z1"),
     currentJob(EVENING, "e1"),
+    currentJob(DROP_MIDDAY, "dm1"),
+    currentJob(DROP_EVENING, "de1"),
     currentJob(TOKEN_AUDIT, "a1"),
   ]);
 
@@ -302,6 +314,8 @@ test("up-to-date jobs (staggered schedule + current prompt) trigger no cron call
     currentJob(NEGOTIATION, "n1"),
     currentJob(PLAZA, "z1"),
     currentJob(EVENING, "e1"),
+    currentJob(DROP_MIDDAY, "dm1"),
+    currentJob(DROP_EVENING, "de1"),
     currentJob(TOKEN_AUDIT, "a1"),
   ]);
 
@@ -320,6 +334,8 @@ test("retired Edge-prefixed crons are removed; foreign crons are untouched", () 
     currentJob(NEGOTIATION, "n1"),
     currentJob(PLAZA, "z1"),
     currentJob(EVENING, "e1"),
+    currentJob(DROP_MIDDAY, "dm1"),
+    currentJob(DROP_EVENING, "de1"),
     currentJob(TOKEN_AUDIT, "a1"),
   ]);
 
@@ -338,6 +354,8 @@ test("token usage audit cron is removed when opted out", () => {
     currentJob(NEGOTIATION, "n1"),
     currentJob(PLAZA, "z1"),
     currentJob(EVENING, "e1"),
+    currentJob(DROP_MIDDAY, "dm1"),
+    currentJob(DROP_EVENING, "de1"),
     currentJob(TOKEN_AUDIT, "a1"),
   ]);
 
@@ -356,6 +374,8 @@ test("token usage audit cron is removed when no explicit schedule opts in", () =
     currentJob(NEGOTIATION, "n1"),
     currentJob(PLAZA, "z1"),
     currentJob(EVENING, "e1"),
+    currentJob(DROP_MIDDAY, "dm1"),
+    currentJob(DROP_EVENING, "de1"),
     currentJob(TOKEN_AUDIT, "a1"),
   ]);
 
@@ -372,6 +392,8 @@ test("token usage audit cron is recreated when its script path is stale", () => 
     currentJob(NEGOTIATION, "n1"),
     currentJob(PLAZA, "z1"),
     currentJob(EVENING, "e1"),
+    currentJob(DROP_MIDDAY, "dm1"),
+    currentJob(DROP_EVENING, "de1"),
     {
       ...currentJob(TOKEN_AUDIT, "a1"),
       script: join(home, "skills", "token-usage-audit/scripts/old_audit.py"),
@@ -399,6 +421,8 @@ test("a Hermes that rejects --schedule still gets the prompt update (degraded mi
     currentJob(NEGOTIATION, "n1"),
     currentJob(PLAZA, "z1"),
     currentJob(EVENING, "e1"),
+    currentJob(DROP_MIDDAY, "dm1"),
+    currentJob(DROP_EVENING, "de1"),
     currentJob(TOKEN_AUDIT, "a1"),
   ]);
 

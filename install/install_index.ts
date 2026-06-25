@@ -7,7 +7,9 @@
  *     (`Edge — memory signal sync`, ~01:00; script-gated), prepare
  *     (`Edge — digest prepare`, ~02:00), send (`Edge — daily digest`, ~08:00),
  *     negotiation summary (`Edge — negotiation summary`, ~14:00), Agent Plaza
- *     selfie (`Edge — Agent Plaza selfie`, ~16:00), and evening questions
+ *     selfie (`Edge — Agent Plaza selfie`, ~16:00), two single-opportunity
+ *     drops (`Edge — opportunity drop (midday)`, ~12:00 and
+ *     `Edge — opportunity drop (evening)`, ~17:00), and evening questions
  *     (`Edge — evening questions`, ~19:00) — all host-local; times
  *     overridable via --digest-signals-cron /
  *     --digest-prepare-cron / --digest-send-cron / --negotiation-summary-cron /
@@ -200,6 +202,11 @@ export interface DigestCronSpec {
  * question from the protocol each evening, sharing the 3-day cooldown state
  * with the morning digest to avoid repeating the same question.
  *
+ * On top of the morning brief, two lighter "opportunity drop" passes (12:00 and
+ * 17:00, deliver telegram) each surface a single fresh opportunity. They share
+ * the digest's per-day `deliveredToday` dedup state, so a drop never repeats an
+ * opportunity the brief (or the other drop) already sent that day, and vice versa.
+ *
  * The 30-minute "Edge — heartbeat" cron was retired (see Edge-City/agentvillage#100
  * "Heartbeat cron drains OpenRouter key budget"). Its prompt loaded the
  * full agent context + Index MCP tool surface (~57k input tokens) every 30 min,
@@ -267,6 +274,24 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
     deliver: true,
     overrideFlag: "--evening-questions-cron",
     overrideEnv: "EVENING_QUESTIONS_CRON",
+  },
+  {
+    schedule: "0 12 * * *",
+    staggerWindowMinutes: 25,
+    promptFile: "edge-esmeralda/prompts/opportunity-drop.md",
+    name: "Edge — opportunity drop (midday)",
+    deliver: true,
+    overrideFlag: "--opportunity-drop-midday-cron",
+    overrideEnv: "OPPORTUNITY_DROP_MIDDAY_CRON",
+  },
+  {
+    schedule: "0 17 * * *",
+    staggerWindowMinutes: 25,
+    promptFile: "edge-esmeralda/prompts/opportunity-drop.md",
+    name: "Edge — opportunity drop (evening)",
+    deliver: true,
+    overrideFlag: "--opportunity-drop-evening-cron",
+    overrideEnv: "OPPORTUNITY_DROP_EVENING_CRON",
   },
   {
     schedule: "0 9 * * *",

@@ -376,7 +376,9 @@ export async function stageDailyBrief(options: {
   ]);
   const taskId = extractTaskId(createOutput);
 
-  await hermes(["kanban", "block", taskId, `review-required: morning brief — ${date}`]);
+  // Daily briefs auto-send by default: leave the freshly-created card in its
+  // default (todo) status so sendDailyBrief delivers it without a manual
+  // review/unblock step.
 
   const state = await readJsonObject(stateFile);
   state.prepared = {
