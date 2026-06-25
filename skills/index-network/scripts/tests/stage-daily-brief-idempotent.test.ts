@@ -26,8 +26,9 @@ afterEach(() => {
 
 /**
  * Records every Hermes invocation and replies to `kanban show` with a card in
- * the given status. Any `create`/`block` call is a guard failure — a re-run of
- * prepare must never reach them when a protected card already exists.
+ * the given status. Any `create`, `promote`, or other status-mutating call is a
+ * guard failure — a re-run of prepare must never reach them when a protected
+ * card already exists.
  */
 function fakeHermes(status: string, body = "EXISTING BODY") {
   const calls: string[][] = [];
@@ -56,8 +57,9 @@ describe("stageDailyBrief idempotency guard", () => {
       expect(result.taskId).toBe("t_existing");
       expect(result.opportunityIds).toEqual(["opp-1"]);
       expect(result.questionIds).toEqual(["q-1"]);
-      // The guard must NOT recreate or re-block the card.
+      // The guard must NOT recreate or mutate the card's status.
       expect(calls.some((c) => c[1] === "create")).toBe(false);
+      expect(calls.some((c) => c[1] === "promote")).toBe(false);
       expect(calls.some((c) => c[1] === "block")).toBe(false);
       // Only a read (show) is allowed.
       expect(calls.every((c) => c[1] === "show")).toBe(true);
