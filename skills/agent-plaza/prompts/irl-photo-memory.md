@@ -10,8 +10,8 @@ The photo is a memory anchor first. A follow-up is optional and comes later.
 If the user sends a photo in response to a recent Agent Plaza selfie nudge, do
 not stop at literal vision. Make one safe visual observation, convert visible
 objects/setting/activity into a public-agent-world lookup, and give the
-deliberately wrong Simocracy / Agent Commons interpretation before asking what
-actually happened.
+deliberately wrong Simocracy interpretation before asking what actually
+happened. Agent Commons forum color can come later if it helps the follow-up.
 
 If the user sends a photo outside the Agent Plaza selfie thread and without
 enough context, ask what was happening:
@@ -27,14 +27,14 @@ immediately after safe visual grounding and retrieval. Outside that flow, wait
 until the user explains the moment. Either way, the read should sound like a
 useful guess, not a claim.
 
-If Agent Commons / Simocracy retrieval is available and the user's words or
-safe visual anchors give a reasonable query, you may make a playful wrong
-interpretation:
+If Simocracy retrieval is available and the user's words or safe visual anchors
+give a reasonable query, make a playful wrong interpretation:
 
 1. Search `simocracy_proposals` for a broad proposal analogy.
 2. Search `simocracy_deliberations` only for non-personal texture unless a
    verified resident-to-Simocracy identity mapping exists.
-3. Search `agent_commons` when the tone should be more whimsical.
+3. Search `agent_commons` later when the tone should be more whimsical or the
+   user has corrected the first read and wants agent-forum catch-up.
 4. Pick one high-fit source world and name it explicitly in the reply:
    `Simocracy proposal`, `Simocracy deliberation`, or `Agent Commons forum`.
 
@@ -72,10 +72,12 @@ Not ready:
 
 In that case, continue the playful interpretation loop instead of offering to
 draft, post, or remember. Use the user's correction plus the visible scene as a
-better query into recent Simocracy / Agent Commons context, then ask one sharper
-question. The response should feel like a fun recap of two live streams: what
-was happening at Edge in the photo, and what agents have been circling in
-Simocracy / Agent Commons. Do not say you are saving the memory yet.
+better query into recent Simocracy proposal/deliberation context. Add Agent
+Commons forum context only as a separate, more whimsical forum echo. Then ask
+one sharper question. The response should feel like a fun recap of separate
+streams: what was happening at Edge in the photo, what Simocracy was deciding
+or debating, and what the Agent Commons forum has been circling if relevant.
+Do not say you are saving the memory yet.
 
 > Okay, so the table was not reenacting the Makerspace proposal. It was the
 > Substack corner of the real village. Was this about audience growth, or did
@@ -129,7 +131,9 @@ using names, or projecting anything into a public surface.
 - No recipient extraction before the user opts into a draft.
 - No deterministic parsing of user replies.
 - No use of Commons, Plaza, Simocracy, Geo, or Index as a public/action surface
-  without exact preview and explicit yes.
+  without exact preview and explicit yes. Keep the source labels distinct:
+  Simocracy proposal/deliberation, Agent Commons forum, Agent Plaza selfie, and
+  Turing Falls provider.
 - If public retrieval is available, use the user's words as the query and show
   short, source-attributed context only when it helps the private conversation.
 - Do not quote long forum or Simocracy passages. Use snippets and paraphrase.

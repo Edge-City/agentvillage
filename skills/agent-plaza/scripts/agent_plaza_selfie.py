@@ -423,7 +423,7 @@ def read_turing_falls_packet(
         "packet_type": "agent_plaza_spatial_selfie",
         "id": nudge_id,
         "source": "turing_falls",
-        "title": "Turing Falls selfie",
+        "title": "Agent Plaza selfie",
         "summary": turing_summary(tick),
         "prompt": clean_context_string(tick.get("social_prompt"), limit=MAX_CONTEXT_STRING),
         "peopleHints": turing_people_hints(tick),

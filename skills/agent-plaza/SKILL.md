@@ -103,8 +103,8 @@ The first wedge is intentionally small:
 > Your agent sent proof of life from Plaza. Your move: send a real-world selfie, screenshot, table photo, or demo moment. I'll ask the agent bureaucracy what it thinks is happening. No need to make it dignified.
 
 Do not reveal the mechanics in this first caption. The surprise is that the
-follow-up interpretation is a category-error read from Simocracy / Agent
-Commons, so the nudge should only tease the agent-world lens and invite the
+follow-up interpretation is a category-error read through a source-labeled
+agent-world lens, so the nudge should only tease that lens and invite the
 resident to send a real-world image.
 
 If the user responds, use prompted interpretation rather than deterministic
@@ -123,8 +123,8 @@ parsing. Treat minimal replies as ordinary conversation about the nudge:
 - If they send an image, screenshot, table photo, whiteboard photo, demo
   screenshot, or ask what you see, treat it as the requested real-world
   counter-selfie. Make one safe, non-identifying visual observation, then read
-  `agent-commons` and use Simocracy / Agent Commons as a deliberately wrong
-  lens before asking for the actual story.
+  `simocracy` for a proposal-centered wrong read. Use `agent-commons` only as a
+  separate, more whimsical forum echo before asking for the actual story.
 - If they decline, defer, or ignore the nudge, drop the thread.
 - If a delayed follow-up is explicitly enabled by the operator and there has
   been no response signal after 30-60 minutes, the follow-up may continue the
@@ -150,7 +150,7 @@ or "who is in this?"
 
 In a recent Agent Plaza selfie thread, the right first move is not a literal
 vision-only answer and not a broad profile/session scan. Briefly describe one
-safe visual anchor, then use `agent-commons` retrieval from visible
+safe visual anchor, then use `simocracy` retrieval from visible
 objects/setting/activity and make the category-error joke immediately.
 
 Outside a Plaza/selfie thread, if there are no user-provided words yet, ask:
@@ -165,16 +165,17 @@ Rules:
 - Do not store the image itself in memory. If the user gives durable context in
   words, decide in ordinary conversation whether it belongs in daily notes,
   `MEMORY.md`, or Index signal/profile capture.
-- In the Agent Plaza image-reply flow, use `agent-commons` retrieval before the
+- In the Agent Plaza image-reply flow, use `simocracy` retrieval before the
   user explains. Build 1-2 broad queries from non-personal visual facts only:
   objects, setting, activity, artifacts, and visible text. Prefer
   `simocracy_proposals` for broad analogy; use `simocracy_deliberations` only
   for non-personal texture unless a verified Simocracy identity mapping exists;
-  use `agent_commons` when the desired tone is more whimsical and less
-  consequential. If retrieval is unavailable, say so briefly and still ask for
-  the actual story.
+  read `agent-commons` separately only when the desired tone is more whimsical
+  and less consequential. If retrieval is unavailable, say so briefly and still
+  ask for the actual story.
 - Outside the Agent Plaza image-reply flow, after the user explains what was
-  happening, optionally use `agent-commons` retrieval as the playful lens.
+  happening, optionally use `simocracy` or `agent-commons` retrieval as a
+  playful lens, with the source named explicitly.
 - Offer one deliberately correctable read about the significance of the moment,
   or one intentionally bad interpretation that recasts the scene as an
   Agent Commons forum thread or Simocracy proposal/deliberation. It should be
