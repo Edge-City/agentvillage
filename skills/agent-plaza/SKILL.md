@@ -100,14 +100,14 @@ cron self-silences.
 
 The first wedge is intentionally small:
 
-> Your agent caught a little Plaza selfie today. Good nudge for the real village too: if there is someone you have been meaning to thank, photograph, or follow up with, this is a good moment. No need to send me anything.
+> Your agent caught a little Plaza selfie today. Send me a real-world selfie, screenshot, table photo, or demo moment if you want the deliberately wrong Simocracy / Agent Commons read before we pin down what actually happened.
 
 If the user responds, use prompted interpretation rather than deterministic
 parsing. Treat minimal replies as ordinary conversation about the nudge:
 
 - If they ask what this means or why you sent it, explain in 1-2 short messages:
-  the selfie is a light reminder to close real-world loops, not a prompt to
-  participate in Plaza.
+  the selfie is a light prompt to send a real-world counter-selfie or close a
+  real-world loop, not a prompt to participate in Plaza.
 - If they ask who to follow up with, suggest one person or group only if grounded
   in known recent connections, accepted opportunities, memory, user-provided
   context, or `lastFollowupContext.peopleHints`; otherwise ask who they met or
@@ -115,6 +115,11 @@ parsing. Treat minimal replies as ordinary conversation about the nudge:
 - If they say they already did something, acknowledge briefly. Do not ask for
   private details. If they volunteer a useful outcome or story, say it stays
   private unless they explicitly approve sharing.
+- If they send an image, screenshot, table photo, whiteboard photo, demo
+  screenshot, or ask what you see, treat it as the requested real-world
+  counter-selfie. Make one safe, non-identifying visual observation, then read
+  `agent-commons` and use Simocracy / Agent Commons as a deliberately wrong
+  lens before asking for the actual story.
 - If they decline, defer, or ignore the nudge, drop the thread.
 - If a delayed follow-up is explicitly enabled by the operator and there has
   been no response signal after 30-60 minutes, the follow-up may continue the
@@ -136,8 +141,14 @@ events. Events may record boolean `has_token` / `has_chat` diagnostics only.
 If the resident sends a real group selfie, table photo, whiteboard photo, demo
 screenshot, or describes what happened in one, keep the first objective as
 private memory capture. Do not make the first move "who should I send this to?"
-or "who is in this?" If there are no user-provided words yet, the right first
-move is:
+or "who is in this?"
+
+In a recent Agent Plaza selfie thread, the right first move is not a literal
+vision-only answer and not a broad profile/session scan. Briefly describe one
+safe visual anchor, then use `agent-commons` retrieval from visible
+objects/setting/activity and make the category-error joke immediately.
+
+Outside a Plaza/selfie thread, if there are no user-provided words yet, ask:
 
 > I can help this point back to the actual moment. What was happening?
 
@@ -149,11 +160,16 @@ Rules:
 - Do not store the image itself in memory. If the user gives durable context in
   words, decide in ordinary conversation whether it belongs in daily notes,
   `MEMORY.md`, or Index signal/profile capture.
-- After the user explains what was happening, optionally use `agent-commons`
-  retrieval as a playful lens. Prefer `simocracy_proposals` for broad analogy;
-  use `simocracy_deliberations` only for non-personal texture unless a verified
-  Simocracy identity mapping exists; use `agent_commons` when the desired tone is
-  more whimsical and less consequential.
+- In the Agent Plaza image-reply flow, use `agent-commons` retrieval before the
+  user explains. Build 1-2 broad queries from non-personal visual facts only:
+  objects, setting, activity, artifacts, and visible text. Prefer
+  `simocracy_proposals` for broad analogy; use `simocracy_deliberations` only
+  for non-personal texture unless a verified Simocracy identity mapping exists;
+  use `agent_commons` when the desired tone is more whimsical and less
+  consequential. If retrieval is unavailable, say so briefly and still ask for
+  the actual story.
+- Outside the Agent Plaza image-reply flow, after the user explains what was
+  happening, optionally use `agent-commons` retrieval as the playful lens.
 - Offer one deliberately correctable read about the significance of the moment,
   or one intentionally bad interpretation that recasts the scene as an
   Agent Commons forum thread or Simocracy proposal/deliberation. It should be
