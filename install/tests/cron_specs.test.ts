@@ -13,12 +13,12 @@ import {
   tokenUsageAuditCronDisabled,
 } from "../install_index";
 
-test("six Index cron specs: digest jobs plus token audit (heartbeat retired)", () => {
-  expect(DIGEST_CRON_SPECS).toHaveLength(6);
+test("eight Index cron specs: digest jobs, opportunity drops, plus token audit (heartbeat retired)", () => {
+  expect(DIGEST_CRON_SPECS).toHaveLength(8);
   // The 30-minute "Edge — heartbeat" cron was retired (it drained OpenRouter
   // key budget fleet-wide); it must no longer be installed.
   expect(DIGEST_CRON_SPECS.some((s) => s.name === "Edge — heartbeat")).toBe(false);
-  const [signals, prepare, send, negotiation, evening, tokenAudit] = DIGEST_CRON_SPECS;
+  const [signals, prepare, send, negotiation, evening, dropMidday, dropEvening, tokenAudit] = DIGEST_CRON_SPECS;
   expect(signals.schedule).toBe("0 1 * * *");
   expect(signals.name).toBe("Edge — memory signal sync");
   expect(signals.promptFile).toBe("edge-esmeralda/prompts/memory-signals.md");
@@ -41,6 +41,14 @@ test("six Index cron specs: digest jobs plus token audit (heartbeat retired)", (
   expect(evening.name).toBe("Edge — evening questions");
   expect(evening.promptFile).toBe("edge-esmeralda/prompts/ask-questions.md");
   expect(evening.deliver).toBe(true);
+  expect(dropMidday.schedule).toBe("0 12 * * *");
+  expect(dropMidday.name).toBe("Edge — opportunity drop (midday)");
+  expect(dropMidday.promptFile).toBe("edge-esmeralda/prompts/opportunity-drop.md");
+  expect(dropMidday.deliver).toBe(true);
+  expect(dropEvening.schedule).toBe("0 17 * * *");
+  expect(dropEvening.name).toBe("Edge — opportunity drop (evening)");
+  expect(dropEvening.promptFile).toBe("edge-esmeralda/prompts/opportunity-drop.md");
+  expect(dropEvening.deliver).toBe(true);
   expect(tokenAudit.schedule).toBe("0 9 * * *");
   expect(tokenAudit.name).toBe("Edge — token usage audit");
   expect(tokenAudit.scriptFile).toBe("token-usage-audit/scripts/audit_token_usage.py");
@@ -51,7 +59,7 @@ test("six Index cron specs: digest jobs plus token audit (heartbeat retired)", (
 
 test("cron create args handle delivered and scripted specs", () => {
   const home = "/home/x/.hermes";
-  const [signals, prepare, send, , , tokenAudit] = DIGEST_CRON_SPECS;
+  const [signals, prepare, send, , , , , tokenAudit] = DIGEST_CRON_SPECS;
 
   expect(cronCreateArgs(signals, "SIGNALS_BODY", home)).toEqual([
     "cron", "create", "0 1 * * *", "SIGNALS_BODY",
@@ -148,13 +156,17 @@ test("invalid telegram MCP handle is omitted", () => {
 });
 
 test("each spec declares its install-time override flag + env var", () => {
-  const [signals, prepare, send, , , tokenAudit] = DIGEST_CRON_SPECS;
+  const [signals, prepare, send, , , dropMidday, dropEvening, tokenAudit] = DIGEST_CRON_SPECS;
   expect(signals.overrideFlag).toBe("--digest-signals-cron");
   expect(signals.overrideEnv).toBe("DIGEST_SIGNALS_CRON");
   expect(prepare.overrideFlag).toBe("--digest-prepare-cron");
   expect(prepare.overrideEnv).toBe("DIGEST_PREPARE_CRON");
   expect(send.overrideFlag).toBe("--digest-send-cron");
   expect(send.overrideEnv).toBe("DIGEST_SEND_CRON");
+  expect(dropMidday.overrideFlag).toBe("--opportunity-drop-midday-cron");
+  expect(dropMidday.overrideEnv).toBe("OPPORTUNITY_DROP_MIDDAY_CRON");
+  expect(dropEvening.overrideFlag).toBe("--opportunity-drop-evening-cron");
+  expect(dropEvening.overrideEnv).toBe("OPPORTUNITY_DROP_EVENING_CRON");
   expect(tokenAudit.overrideFlag).toBe("--token-usage-audit-cron");
   expect(tokenAudit.overrideEnv).toBe("TOKEN_USAGE_AUDIT_CRON");
 });
