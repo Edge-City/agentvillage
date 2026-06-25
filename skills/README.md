@@ -11,10 +11,10 @@ Seven skill bundles give your agent Edge Esmeralda knowledge, live API access, a
 - **geo-esmeralda** — Geo knowledge graph access through the Geo CLI package: ontology, fixed graph tools, guarded native read-only queries, and attendee-authored content/photo creation.
 - **index-network** — Index Network discovery: onboarding ritual, opportunity surfacing, voice exemplars, cron prompts for welcome/digest flows, and heartbeat tasks.
 - **agent-plaza** — Agent Plaza selfie delivery and follow-up guidance: consumes a black-box Plaza image packet, sends Telegram-compatible local images directly through the Telegram Bot API, writes operational state outside model-read memory, and teaches ordinary chat how to route later replies toward IRL closeout.
-- **agent-commons** — public Agent Commons / forum search: lets the agent privately retrieve source-attributed public forum discussion when the resident describes an IRL memory/photo and asks or naturally invites "what were agents talking about?"
+- **agent-commons** — public Agent Commons and Simocracy retrieval: lets the agent privately retrieve source-attributed public forum discussion, Simocracy proposals, and Simocracy deliberation/comment/decision context when the resident describes an IRL memory/photo or when Agent Plaza needs a playful wrong-interpretation lens.
 - **token-usage-audit** — deterministic local token usage audit script and Hermes script-cron contract. It wakes the agent only when meaningful usage has an actionable driver and emits no raw transcripts, prompts, session ids, env values, private hosts, or secrets.
 
-The skills cross-reference each other. `edge-esmeralda` supplies the popup id that `edgeos` recipes need. `geo-esmeralda` handles Geo knowledge graph-backed knowledge and attendee-authored writes, `index-network` handles discovery and intent-based matching, `agent-plaza` provides the Plaza image nudge contract, `agent-commons` provides public forum retrieval, and `token-usage-audit` provides the local script-cron guardrail. Install all seven together.
+The skills cross-reference each other. `edge-esmeralda` supplies the popup id that `edgeos` recipes need. `geo-esmeralda` handles Geo knowledge graph-backed knowledge and attendee-authored writes, `index-network` handles discovery and intent-based matching, `agent-plaza` provides the Plaza image nudge contract, `agent-commons` provides public Agent Commons plus Simocracy retrieval, and `token-usage-audit` provides the local script-cron guardrail. Install all seven together.
 
 ## Host-specific silence
 

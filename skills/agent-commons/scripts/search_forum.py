@@ -14,6 +14,7 @@ from typing import Any
 
 MAX_QUERY_CHARS = 500
 MAX_LIMIT = 8
+SURFACES = {"agent_commons", "simocracy_proposals", "simocracy_deliberations"}
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -35,6 +36,15 @@ def normalize_limit(value: int) -> int:
     return min(value, MAX_LIMIT)
 
 
+def normalize_surface(value: str) -> str:
+    surface = str(value or "").strip().lower().replace("-", "_")
+    if not surface:
+        return ""
+    if surface not in SURFACES:
+        raise ValueError(f"unsupported surface: {surface}")
+    return surface
+
+
 def endpoint_url() -> str:
     base = os.environ.get("EDGE_AGENT_CONTROL_PLANE_URL", "").strip().rstrip("/")
     if not base:
@@ -42,7 +52,7 @@ def endpoint_url() -> str:
     return f"{base}/community/forum/search"
 
 
-def search_forum(query: str, limit: int, timeout: float = 8.0) -> dict[str, Any]:
+def search_forum(query: str, limit: int, surface: str = "", timeout: float = 8.0) -> dict[str, Any]:
     url = endpoint_url()
     token = os.environ.get("ADMIN_TOKEN", "").strip()
     if not url:
@@ -50,7 +60,11 @@ def search_forum(query: str, limit: int, timeout: float = 8.0) -> dict[str, Any]
     if not token:
         return {"ok": False, "reason": "missing_admin_token", "results": []}
 
-    body = json.dumps({"query": normalize_query(query), "limit": normalize_limit(limit)}).encode("utf-8")
+    request_body: dict[str, Any] = {"query": normalize_query(query), "limit": normalize_limit(limit)}
+    normalized_surface = normalize_surface(surface)
+    if normalized_surface:
+        request_body["surface"] = normalized_surface
+    body = json.dumps(request_body).encode("utf-8")
     req = urllib.request.Request(
         url,
         data=body,
@@ -76,7 +90,9 @@ def search_forum(query: str, limit: int, timeout: float = 8.0) -> dict[str, Any]
         results = []
     return {
         "ok": True,
+        "surface": normalized_surface or None,
         "queryHash": parsed.get("queryHash") if isinstance(parsed, dict) else None,
+        "filters": parsed.get("filters") if isinstance(parsed, dict) else None,
         "results": results[: normalize_limit(limit)],
     }
 
@@ -85,11 +101,17 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Search public Agent Commons forum context")
     parser.add_argument("--query", required=True)
     parser.add_argument("--limit", type=int, default=5)
+    parser.add_argument(
+        "--surface",
+        choices=sorted(SURFACES),
+        default="",
+        help="Optional retrieval surface: agent_commons, simocracy_proposals, or simocracy_deliberations",
+    )
     parser.add_argument("--timeout-seconds", type=float, default=8.0)
     args = parser.parse_args(argv)
 
     try:
-        payload = search_forum(args.query, args.limit, timeout=args.timeout_seconds)
+        payload = search_forum(args.query, args.limit, args.surface, timeout=args.timeout_seconds)
     except ValueError as err:
         payload = {"ok": False, "reason": str(err), "results": []}
     emit(payload)
