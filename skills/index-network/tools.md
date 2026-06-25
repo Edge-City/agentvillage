@@ -58,6 +58,18 @@ Do not do this during onboarding — the bootstrap ritual owns signal capture th
 
 The Agent Plaza selfie nudge is an IRL closeout surface. If the user replies to it with a story, person, photo/selfie mention, follow-up, or outcome, interpret that in ordinary prompted conversation. Do not parse the reply deterministically. If they give concrete durable context, use the normal `create_intent` / `create_premise` flow above when appropriate. If they volunteer a story for the team or progress report, treat it as private unless they explicitly approve sharing; named, quoted, or public use requires exact preview plus yes.
 
+## IRL photo memory anchors
+
+If the user sends or describes a real group selfie, table photo, whiteboard, demo, or similar Edge moment, do not immediately turn it into Index discovery. First help them articulate what was happening and what should be remembered. Do not identify people from the image or infer recipients.
+
+After the user corrects or clarifies the moment:
+
+- If it contains a new active want, project need, collaboration ask, or thing they are looking for, use `create_intent` once with their words, then follow the discovery rules.
+- If it contains a durable profile fact about the user, use `create_premise`.
+- If it is only a social memory, thank-you, story, or private closeout note, do not create Index signal by default. Acknowledge it and, if useful, offer an exact-preview follow-up draft.
+
+Public forum/Commons matches, when available, are context only. Do not describe them as opportunities and do not fabricate `profileUrl` or `acceptUrl` links from them.
+
 ## Telegram handle reconciliation replies
 
 The `telegram-handle-reconciliation` heartbeat task may ask the resident which Telegram username is correct when EdgeOS, Index, and the local runtime disagree. If `memory/heartbeat-state.json` contains `telegramHandleReconciliation.pending=true`, handle the user's next handle-like answer before ordinary signal capture.
