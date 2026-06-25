@@ -25,8 +25,7 @@ tasks:
     4. For each accepted opportunity you will mention:
        - Embed `acceptUrl` on a verb phrase like "send {Name} a message". The URL is a short backend redirect — paste it verbatim, do not append query parameters, do not compose a `t.me` URL. The greeting and Telegram handle resolution happen server-side.
        - If `acceptUrl` is missing, embed `conversationUrl` on "continue the conversation".
-       - Ask for actual outcome evidence after follow-up: `met`, `not useful`, or `missed`.
-    5. Frame the notification as a closeout loop while everyone is still here, not as generic good news. This is the only 30-minute task allowed to proactively message, and only for newly accepted, unnotified opportunities.
+    5. Frame the notification warmly — this is good news. This is the only 30-minute task allowed to proactively message, and only for newly accepted, unnotified opportunities.
     6. For every opportunity you mention, call `confirm_opportunity_delivery(opportunityId, trigger="accepted")` once. Regardless of confirmation success, append its id to `acceptedOpportunities.notifiedIds` (keep the last 100), update `heartbeatTasks.accepted-opportunities.lastRunAt`, write state, and stop.
 
 - name: telegram-handle-reconciliation

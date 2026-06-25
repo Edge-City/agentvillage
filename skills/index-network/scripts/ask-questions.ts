@@ -26,12 +26,6 @@ import {
   resolveIndexApiKey,
 } from "./build-daily-brief-context";
 
-const FINAL_REFLECTION_DATE = "2026-06-27";
-const FINAL_REFLECTION_QUESTION_ID = "edge-closeout-final-reflection-2026-06-27";
-const FINAL_REFLECTION_MORNING_QUESTION_ID = `daily-identity-${FINAL_REFLECTION_DATE}`;
-const FINAL_REFLECTION_PROMPT =
-  "Quick closeout check: did AgentVillage help you meet, message, or better understand anyone this week? Reply with one sentence.";
-
 function pacificDate(): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Los_Angeles",
@@ -109,24 +103,6 @@ interface SilentResult {
 
 type FetchQuestionsFn = typeof fetchPendingQuestionsFromMcp;
 
-async function recordQuestionDelivery(
-  stateFile: string,
-  questionDelivery: Record<string, string>,
-  questionId: string,
-  date: string,
-): Promise<void> {
-  const state = await readJsonObject(stateFile);
-  const updatedDelivery: Record<string, string> = {};
-  for (const [id, deliveredOn] of Object.entries(questionDelivery)) {
-    if (daysBetween(deliveredOn, date) < QUESTION_COOLDOWN_DAYS) {
-      updatedDelivery[id] = deliveredOn;
-    }
-  }
-  updatedDelivery[questionId] = date;
-  state.questionDelivery = updatedDelivery;
-  await writeJson(stateFile, state);
-}
-
 export async function askQuestions(options: {
   date?: string;
   stateFile?: string;
@@ -138,18 +114,6 @@ export async function askQuestions(options: {
   const date = options.date ?? pacificDate();
   const stateFile = options.stateFile ?? "memory/heartbeat-state.json";
   const fetchQuestions = options.fetchQuestions ?? fetchPendingQuestionsFromMcp;
-  const questionDelivery = await readQuestionDelivery(stateFile);
-
-  if (date === FINAL_REFLECTION_DATE) {
-    if (
-      questionDelivery[FINAL_REFLECTION_QUESTION_ID] === date ||
-      questionDelivery[FINAL_REFLECTION_MORNING_QUESTION_ID] === date
-    ) {
-      return { silent: true, reason: "final-reflection-already-delivered" };
-    }
-    await recordQuestionDelivery(stateFile, questionDelivery, FINAL_REFLECTION_QUESTION_ID, date);
-    return { questionId: FINAL_REFLECTION_QUESTION_ID, prompt: FINAL_REFLECTION_PROMPT };
-  }
 
   const apiKey = options.apiKey ?? resolveIndexApiKey();
   if (!apiKey) return { silent: true, reason: "no-api-key" };
@@ -162,6 +126,7 @@ export async function askQuestions(options: {
     return { silent: true, reason: questionResult.reason ?? "no-pending-questions" };
   }
 
+  const questionDelivery = await readQuestionDelivery(stateFile);
   const available = filterCooldownQuestions(questionResult.questions, questionDelivery, date);
   if (available.length === 0) return { silent: true, reason: "all-questions-on-cooldown" };
 
@@ -171,7 +136,16 @@ export async function askQuestions(options: {
   // the cooldown fires even when the agent fails to deliver, preventing a
   // broken run from re-asking the same question on the very next cron tick.
   // Prune expired entries at the same time to keep the state file bounded.
-  await recordQuestionDelivery(stateFile, questionDelivery, question.id, date);
+  const state = await readJsonObject(stateFile);
+  const updatedDelivery: Record<string, string> = {};
+  for (const [id, deliveredOn] of Object.entries(questionDelivery)) {
+    if (daysBetween(deliveredOn, date) < QUESTION_COOLDOWN_DAYS) {
+      updatedDelivery[id] = deliveredOn;
+    }
+  }
+  updatedDelivery[question.id] = date;
+  state.questionDelivery = updatedDelivery;
+  await writeJson(stateFile, state);
 
   return { questionId: question.id, prompt: question.prompt };
 }

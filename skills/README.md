@@ -4,17 +4,15 @@ Agent skills for **Edge Esmeralda 2026** (May 30 – Jun 27, Healdsburg, CA). Sh
 
 ## What you get
 
-Seven skill bundles give your agent Edge Esmeralda knowledge, live API access, and local operational guardrails:
+Five skill bundles give your agent Edge Esmeralda knowledge, live API access, and local operational guardrails:
 
 - **edge-esmeralda** — popup constants (popup id, week dates, themes), attendee directory field semantics, curated wiki/website/newsletter knowledge base, and the onboarding pointer for obtaining EdgeOS tokens.
 - **edgeos** — backend-generic EdgeOS API recipes: events, RSVPs, venues, attendee directory, and your own profile lookup.
 - **geo-esmeralda** — Geo knowledge graph access through the Geo CLI package: ontology, fixed graph tools, guarded native read-only queries, and attendee-authored content/photo creation.
 - **index-network** — Index Network discovery: onboarding ritual, opportunity surfacing, voice exemplars, cron prompts for welcome/digest flows, and heartbeat tasks.
-- **agent-plaza** — Agent Plaza selfie delivery and follow-up guidance: consumes a black-box Plaza image packet, sends Telegram-compatible local images directly through the Telegram Bot API, writes operational state outside model-read memory, and teaches ordinary chat how to route later replies toward IRL closeout.
-- **agent-commons** — public Agent Commons / forum search: lets the agent privately retrieve source-attributed public forum discussion when the resident describes an IRL memory/photo and asks or naturally invites "what were agents talking about?"
 - **token-usage-audit** — deterministic local token usage audit script and Hermes script-cron contract. It wakes the agent only when meaningful usage has an actionable driver and emits no raw transcripts, prompts, session ids, env values, private hosts, or secrets.
 
-The skills cross-reference each other. `edge-esmeralda` supplies the popup id that `edgeos` recipes need. `geo-esmeralda` handles Geo knowledge graph-backed knowledge and attendee-authored writes, `index-network` handles discovery and intent-based matching, `agent-plaza` provides the Plaza image nudge contract, `agent-commons` provides public forum retrieval, and `token-usage-audit` provides the local script-cron guardrail. Install all seven together.
+The skills cross-reference each other. `edge-esmeralda` supplies the popup id that `edgeos` recipes need. `geo-esmeralda` handles Geo knowledge graph-backed knowledge and attendee-authored writes, `index-network` handles discovery and intent-based matching, and `token-usage-audit` provides the local script-cron guardrail. Install all five together.
 
 ## Host-specific silence
 
@@ -76,8 +74,6 @@ hermes skills install Edge-City/agentvillage/skills/edge-esmeralda --force
 hermes skills install Edge-City/agentvillage/skills/edgeos --force
 hermes skills install Edge-City/agentvillage/skills/geo-esmeralda --force
 hermes skills install Edge-City/agentvillage/skills/index-network --force
-hermes skills install Edge-City/agentvillage/skills/agent-plaza --force
-hermes skills install Edge-City/agentvillage/skills/agent-commons --force
 hermes skills install Edge-City/agentvillage/skills/token-usage-audit --force
 ```
 
@@ -87,7 +83,6 @@ Add to `~/.hermes/.env`:
 INDEX_API_KEY=<YOUR_API_KEY>
 EDGEOS_BEARER_TOKEN=<YOUR_TOKEN>   # Human session JWT for Geo knowledge graph access and content writes
 EDGEOS_API_KEY=<YOUR_KEY>          # Long-lived automation key for events, RSVPs, venues
-TELEGRAM_BOT_TOKEN=<YOUR_BOT_TOKEN>        # optional, required for Agent Plaza selfie photo delivery
 TELEGRAM_HOME_CHANNEL=<numeric_chat_id>   # optional, for cron delivery
 ```
 

@@ -425,12 +425,12 @@ export async function summarizeNegotiations(opts: {
   const alreadyReported = new Set(summaryState.reportedCompletedIds ?? []);
 
   const newlyResolved = completed.filter(
-    (n) => n.outcome?.hasOpportunity === true && !alreadyReported.has(n.id) && updatedWithinDays(n.updatedAt, recentDays),
+    (n) => !alreadyReported.has(n.id) && updatedWithinDays(n.updatedAt, recentDays),
   );
 
   // ── Silent gate ─────────────────────────────────────────────────────────────
 
-  if (needsAttention.length === 0 && newlyResolved.length === 0) {
+  if (needsAttention.length === 0 && waiting.length === 0 && newlyResolved.length === 0) {
     return { silent: true, reason: "nothing-to-report" };
   }
 

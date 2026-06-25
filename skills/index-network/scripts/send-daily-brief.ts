@@ -4,8 +4,8 @@
  *
  * The send cron prompt should not reimplement file, Kanban, or URL-guard logic
  * with model-generated Python. This script owns approval-gate checking, outgoing
- * body persistence, delivery-state bookkeeping, Kanban completion, ledger
- * confirmation, and final body sanitization. The
+ * body persistence, digest marker extraction, delivery-state bookkeeping,
+ * Kanban completion, ledger confirmation, and final body sanitization. The
  * prompt only needs to call this script and return the returned brief verbatim.
  */
 
@@ -14,7 +14,7 @@ import { access } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 
 import { QUESTION_COOLDOWN_DAYS, confirmOpportunityDeliveriesViaMcp, resolveIndexApiKey } from "./build-daily-brief-context";
-import { sanitizeDigestUrls } from "./validate-digest-urls";
+import { extractDigestOpportunityIds, extractDigestQuestionIds, sanitizeDigestUrls } from "./validate-digest-urls";
 
 interface SendResult {
   taskId: string;
@@ -214,8 +214,8 @@ export async function sendDailyBrief(options: {
   if (!body.trim()) return { silent: true, reason: "empty-body" };
 
   await Bun.write(outgoingFile, body);
-  const opportunityIds = stringArray(prepared.opportunityIds);
-  const questionIds = stringArray(prepared.questionIds);
+  const opportunityIds = extractDigestOpportunityIds(body);
+  const questionIds = extractDigestQuestionIds(body);
 
   // Cross-run retry: ids whose ledger confirm failed transiently on a previous
   // run. Index's cross-day digest suppression reads the ledger (not Hermes'

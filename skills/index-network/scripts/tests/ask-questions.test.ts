@@ -216,63 +216,6 @@ describe("askQuestions", () => {
     expect(fetchCalled).toBe(false);
   });
 
-  test("returns final closeout reflection on the final Edge day without MCP", async () => {
-    tempWorkspace();
-    let fetchCalled = false;
-
-    const result = await askQuestions({
-      date: "2026-06-27",
-      stateFile: "state.json",
-      apiKey: "",
-      fetchQuestions: async (_opts) => {
-        fetchCalled = true;
-        return { questions: [QUESTION_A], source: "mcp" as const };
-      },
-    });
-
-    expect(result).toEqual({
-      questionId: "edge-closeout-final-reflection-2026-06-27",
-      prompt: "Quick closeout check: did AgentVillage help you meet, message, or better understand anyone this week? Reply with one sentence.",
-    });
-    expect(fetchCalled).toBe(false);
-    const state = JSON.parse(await Bun.file("state.json").text());
-    expect(state.questionDelivery).toEqual({
-      "edge-closeout-final-reflection-2026-06-27": "2026-06-27",
-    });
-  });
-
-  test("does not repeat final closeout reflection after it is recorded", async () => {
-    tempWorkspace();
-    await Bun.write("state.json", JSON.stringify({
-      questionDelivery: { "edge-closeout-final-reflection-2026-06-27": "2026-06-27" },
-    }));
-
-    const result = await askQuestions({
-      date: "2026-06-27",
-      stateFile: "state.json",
-      apiKey: "test-key",
-      fetchQuestions: mockFetch([QUESTION_A]),
-    });
-
-    expect(result).toEqual({ silent: true, reason: "final-reflection-already-delivered" });
-  });
-
-  test("does not repeat final closeout reflection after the morning brief recorded it", async () => {
-    tempWorkspace();
-    await Bun.write("state.json", JSON.stringify({
-      questionDelivery: { "daily-identity-2026-06-27": "2026-06-27" },
-    }));
-
-    const result = await askQuestions({
-      date: "2026-06-27",
-      stateFile: "state.json",
-      apiKey: "test-key",
-      fetchQuestions: mockFetch([QUESTION_A]),
-    });
-
-    expect(result).toEqual({ silent: true, reason: "final-reflection-already-delivered" });
-  });
-
   test("future-dated delivery entry is kept in state and blocks re-delivery", async () => {
     tempWorkspace();
     // Clock skew: question recorded with a future date — should not be pruned

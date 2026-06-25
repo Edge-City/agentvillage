@@ -5,7 +5,7 @@
  * This script deliberately does not compose the user-facing brief. The prepare
  * prompt owns wholesale synthesis from deterministic JSON context. This module
  * owns the mechanical pieces around that creative step: context collection,
- * idempotency, URL sanitization, selected-id validation, Kanban create/block, and
+ * idempotency, URL sanitization, marker validation, Kanban create/block, and
  * heartbeat bookkeeping.
  */
 
@@ -14,7 +14,11 @@ import { access } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 
 import { buildDailyBriefContext, type DailyBriefContext } from "./build-daily-brief-context";
-import { sanitizeDigestUrls } from "./validate-digest-urls";
+import {
+  extractDigestOpportunityIds,
+  extractDigestQuestionIds,
+  sanitizeDigestUrls,
+} from "./validate-digest-urls";
 
 /**
  * Kanban statuses that mean today's digest card already exists and must not be
@@ -156,20 +160,6 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
 }
 
-function parseJsonStringArray(value: string | undefined, name: string): string[] {
-  if (!value || !value.trim()) return [];
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw new Error(`${name} must be a JSON array of strings`);
-  }
-  if (!Array.isArray(parsed) || parsed.some((entry) => typeof entry !== "string" || entry.length === 0)) {
-    throw new Error(`${name} must be a JSON array of non-empty strings`);
-  }
-  return parsed;
-}
-
 async function readExistingDigestCard(
   hermes: HermesRunner,
   stateFile: string,
@@ -232,53 +222,22 @@ function contextQuestionIds(context: DailyBriefContext): Set<string> {
   ]);
 }
 
-function validateSelectedIds(
-  body: string,
-  opportunityIds: string[],
-  questionIds: string[],
-  context: DailyBriefContext,
-): { opportunityIds: string[]; questionIds: string[] } {
+function validateMarkers(body: string, context: DailyBriefContext): { opportunityIds: string[]; questionIds: string[] } {
+  const opportunityIds = extractDigestOpportunityIds(body);
+  const questionIds = extractDigestQuestionIds(body);
   const knownOpportunityIds = contextOpportunityIds(context);
   const knownQuestionIds = contextQuestionIds(context);
-  const uniqueOpportunityIds = Array.from(new Set(opportunityIds));
-  const uniqueQuestionIds = Array.from(new Set(questionIds));
-  const unknownOpportunityIds = uniqueOpportunityIds.filter((id) => !knownOpportunityIds.has(id));
-  const unknownQuestionIds = uniqueQuestionIds.filter((id) => !knownQuestionIds.has(id));
+  const unknownOpportunityIds = opportunityIds.filter((id) => !knownOpportunityIds.has(id));
+  const unknownQuestionIds = questionIds.filter((id) => !knownQuestionIds.has(id));
 
   if (unknownOpportunityIds.length > 0) {
-    throw new Error(`selected unknown opportunity id(s): ${unknownOpportunityIds.join(", ")}`);
+    throw new Error(`digest body contains unknown opportunity marker id(s): ${unknownOpportunityIds.join(", ")}`);
   }
   if (unknownQuestionIds.length > 0) {
-    throw new Error(`selected unknown question id(s): ${unknownQuestionIds.join(", ")}`);
+    throw new Error(`digest body contains unknown question marker id(s): ${unknownQuestionIds.join(", ")}`);
   }
 
-  const selectedOpportunityIds = new Set(uniqueOpportunityIds);
-  const missingOpportunityIds = context.opportunities
-    .filter((opp) => {
-      if (!opp.opportunityId || selectedOpportunityIds.has(opp.opportunityId)) return false;
-      return [opp.acceptUrl, opp.profileUrl, opp.negotiationUrl]
-        .filter((url): url is string => typeof url === "string" && url.length > 0)
-        .some((url) => body.includes(url));
-    })
-    .map((opp) => opp.opportunityId);
-  if (missingOpportunityIds.length > 0) {
-    throw new Error(`body includes unselected opportunity id(s): ${missingOpportunityIds.join(", ")}`);
-  }
-
-  const selectedQuestionIds = new Set(uniqueQuestionIds);
-  const missingPromptQuestionIds = (context.questions ?? [])
-    .filter((question) => !selectedQuestionIds.has(question.id) && body.includes(question.prompt))
-    .map((question) => question.id);
-  if (missingPromptQuestionIds.length > 0) {
-    throw new Error(`body includes unselected question id(s): ${missingPromptQuestionIds.join(", ")}`);
-  }
-
-  const dailyIdentityId = `daily-identity-${context.date}`;
-  if (uniqueQuestionIds.length === 0 && body.includes("**One for you:**")) {
-    throw new Error(`body includes unselected question id(s): ${dailyIdentityId}`);
-  }
-
-  return { opportunityIds: uniqueOpportunityIds, questionIds: uniqueQuestionIds };
+  return { opportunityIds, questionIds };
 }
 
 export async function prepareDailyBriefContext(options: {
@@ -314,8 +273,6 @@ export async function stageDailyBrief(options: {
   date?: string;
   body?: string;
   bodyFile?: string;
-  opportunityIds?: string[];
-  questionIds?: string[];
   opportunitiesFile?: string;
   stateFile?: string;
   contextOut?: string;
@@ -357,12 +314,7 @@ export async function stageDailyBrief(options: {
   if (!rawBody.trim()) throw new Error("digest body is empty");
 
   const { output: sanitizedBody } = sanitizeDigestUrls(rawBody.trim());
-  const { opportunityIds, questionIds } = validateSelectedIds(
-    sanitizedBody,
-    options.opportunityIds ?? [],
-    options.questionIds ?? [],
-    context,
-  );
+  const { opportunityIds, questionIds } = validateMarkers(sanitizedBody, context);
 
   const createOutput = await hermes([
     "kanban",
@@ -416,8 +368,6 @@ async function main(): Promise<void> {
     ...common,
     body,
     bodyFile: argValue(args, "--body-file"),
-    opportunityIds: parseJsonStringArray(argValue(args, "--opportunity-ids-json"), "--opportunity-ids-json"),
-    questionIds: parseJsonStringArray(argValue(args, "--question-ids-json"), "--question-ids-json"),
   });
   process.stdout.write(`${JSON.stringify({ taskId: result.taskId, opportunityIds: result.opportunityIds, questionIds: result.questionIds, skipped: result.skipped, reason: result.reason })}\n`);
 }

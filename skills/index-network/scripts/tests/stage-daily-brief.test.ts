@@ -101,7 +101,7 @@ describe("stageDailyBrief prompt-led staging guardrails", () => {
       "",
       "Creative AI Crit makes today less about tools in general and more about whether your memory work reads as product taste or infrastructure.",
       "",
-      "**One for you:** Which part of that read feels most like you, and which part should I stop carrying forward?",
+      "<!-- digest-question:id=daily-identity-2026-06-15 -->**One for you:** Which part of that read feels most like you, and which part should I stop carrying forward?",
     ].join("\n");
 
     const calls: string[][] = [];
@@ -111,14 +111,7 @@ describe("stageDailyBrief prompt-led staging guardrails", () => {
       return "{}";
     };
 
-    const result = await stageDailyBrief({
-      date: TODAY,
-      stateFile,
-      contextOut,
-      body,
-      questionIds: ["daily-identity-2026-06-15"],
-      hermes,
-    });
+    const result = await stageDailyBrief({ date: TODAY, stateFile, contextOut, body, hermes });
 
     expect(result.taskId).toBe("t_stdin");
     expect(result.questionIds).toEqual(["daily-identity-2026-06-15"]);
@@ -137,11 +130,11 @@ describe("stageDailyBrief prompt-led staging guardrails", () => {
       "",
       "Creative AI Crit looks like the main test of the day: whether your work is best understood as memory infrastructure or as curation with product taste.",
       "",
-      "[Maya](https://index.network/u/11111111-1111-1111-1111-111111111111) is nearby enough to that thread to be worth a light hello. [Say hi](https://protocol.index.network/c/abc123).",
+      "<!-- digest-opportunity:id=opp-1 -->[Maya](https://index.network/u/11111111-1111-1111-1111-111111111111) is nearby enough to that thread to be worth a light hello. [Say hi](https://protocol.index.network/c/abc123).",
       "",
       "This is a provisional read; correct the part that is off.",
       "",
-      "**One for you:** What would be a sharper way to say what you want people here to understand about your work?",
+      "<!-- digest-question:id=q-1 -->**One for you:** What would be a sharper way to say what you want people here to understand about your work?",
     ].join("\n"));
 
     const calls: string[][] = [];
@@ -151,15 +144,7 @@ describe("stageDailyBrief prompt-led staging guardrails", () => {
       return "{}";
     };
 
-    const result = await stageDailyBrief({
-      date: TODAY,
-      stateFile,
-      contextOut,
-      bodyFile,
-      opportunityIds: ["opp-1"],
-      questionIds: ["q-1"],
-      hermes,
-    });
+    const result = await stageDailyBrief({ date: TODAY, stateFile, contextOut, bodyFile, hermes });
 
     expect(result.taskId).toBe("t_new");
     expect(result.opportunityIds).toEqual(["opp-1"]);
@@ -196,7 +181,7 @@ describe("stageDailyBrief prompt-led staging guardrails", () => {
       "Good morning.",
       "[Maya](https://index.network/u/11111111-1111-1111-1111-111111111111) is relevant.",
       "[Fake accept](https://index.network/accept/123) and https://index.network/accept/456.",
-      "**One for you:** Which part of this read feels most like you?",
+      "<!-- digest-question:id=daily-identity-2026-06-15 -->**One for you:** Which part of this read feels most like you?",
     ].join("\n"));
 
     const hermes = async (args: string[]): Promise<string> => {
@@ -204,15 +189,7 @@ describe("stageDailyBrief prompt-led staging guardrails", () => {
       return "{}";
     };
 
-    const result = await stageDailyBrief({
-      date: TODAY,
-      stateFile,
-      contextOut,
-      bodyFile,
-      opportunityIds: ["opp-1"],
-      questionIds: ["daily-identity-2026-06-15"],
-      hermes,
-    });
+    const result = await stageDailyBrief({ date: TODAY, stateFile, contextOut, bodyFile, hermes });
 
     expect(result.body).toContain("[Maya](https://index.network/u/11111111-1111-1111-1111-111111111111)");
     expect(result.body).toContain("Fake accept and .");
@@ -221,14 +198,14 @@ describe("stageDailyBrief prompt-led staging guardrails", () => {
     expect(result.questionIds).toEqual(["daily-identity-2026-06-15"]);
   });
 
-  test("rejects selected opportunity ids not present in context", async () => {
+  test("rejects body files with opportunity markers not present in context", async () => {
     const dir = makeTmp();
     const stateFile = join(dir, "heartbeat-state.json");
     const contextOut = join(dir, "daily-brief-context.json");
     const bodyFile = join(dir, "brief.md");
     await writeJson(stateFile, {});
     await writeJson(contextOut, baseContext);
-    await Bun.write(bodyFile, "Forged person");
+    await Bun.write(bodyFile, "<!-- digest-opportunity:id=opp-forged -->Forged person");
 
     const calls: string[][] = [];
     const hermes = async (args: string[]): Promise<string> => {
@@ -236,57 +213,9 @@ describe("stageDailyBrief prompt-led staging guardrails", () => {
       return "{}";
     };
 
-    await expect(stageDailyBrief({ date: TODAY, stateFile, contextOut, bodyFile, opportunityIds: ["opp-forged"], hermes }))
+    await expect(stageDailyBrief({ date: TODAY, stateFile, contextOut, bodyFile, hermes }))
       .rejects
-      .toThrow("selected unknown opportunity id");
-    expect(calls).toEqual([]);
-  });
-
-  test("rejects a body with an opportunity CTA when the selected id is missing", async () => {
-    const dir = makeTmp();
-    const stateFile = join(dir, "heartbeat-state.json");
-    const contextOut = join(dir, "daily-brief-context.json");
-    const bodyFile = join(dir, "brief.md");
-    await writeJson(stateFile, {});
-    await writeJson(contextOut, baseContext);
-    await Bun.write(bodyFile, [
-      "Good morning.",
-      "[Maya](https://index.network/u/11111111-1111-1111-1111-111111111111) is worth a hello. [Say hi](https://protocol.index.network/c/abc123).",
-    ].join("\n"));
-
-    const calls: string[][] = [];
-    const hermes = async (args: string[]): Promise<string> => {
-      calls.push(args);
-      return "{}";
-    };
-
-    await expect(stageDailyBrief({ date: TODAY, stateFile, contextOut, bodyFile, opportunityIds: [], hermes }))
-      .rejects
-      .toThrow("body includes unselected opportunity id");
-    expect(calls).toEqual([]);
-  });
-
-  test("rejects a body with a closing question when the selected question id is missing", async () => {
-    const dir = makeTmp();
-    const stateFile = join(dir, "heartbeat-state.json");
-    const contextOut = join(dir, "daily-brief-context.json");
-    const bodyFile = join(dir, "brief.md");
-    await writeJson(stateFile, {});
-    await writeJson(contextOut, baseContext);
-    await Bun.write(bodyFile, [
-      "Good morning.",
-      "**One for you:** Which part of this read feels most like you?",
-    ].join("\n"));
-
-    const calls: string[][] = [];
-    const hermes = async (args: string[]): Promise<string> => {
-      calls.push(args);
-      return "{}";
-    };
-
-    await expect(stageDailyBrief({ date: TODAY, stateFile, contextOut, bodyFile, questionIds: [], hermes }))
-      .rejects
-      .toThrow(`body includes unselected question id(s): daily-identity-${TODAY}`);
+      .toThrow("unknown opportunity marker");
     expect(calls).toEqual([]);
   });
 
@@ -313,7 +242,7 @@ describe("stageDailyBrief prompt-led staging guardrails", () => {
     await Bun.write(join(hermesHome, "drafts", "brief.md"), [
       "Good morning from Edge Esmeralda.",
       "",
-      "**One for you:** Which part of this thread feels most like you?",
+      "<!-- digest-question:id=daily-identity-2026-06-15 -->**One for you:** Which part of this thread feels most like you?",
     ].join("\n"));
 
     process.env.HERMES_HOME = hermesHome;
@@ -323,7 +252,6 @@ describe("stageDailyBrief prompt-led staging guardrails", () => {
       date: TODAY,
       contextOut: join(contextDir, "daily-brief-context.json"),
       bodyFile: "drafts/brief.md",
-      questionIds: ["daily-identity-2026-06-15"],
       hermes: async (args) => {
         if (args[0] === "kanban" && args[1] === "create") return JSON.stringify({ task: { id: "t_home" } });
         return "{}";
