@@ -27,9 +27,9 @@ from typing import Any
 
 SCHEMA = "agentvillage.agent_plaza_selfie.v1"
 CAPTION = (
-    "Your agent caught a little Plaza selfie today. Send me a real-world selfie, "
-    "screenshot, table photo, or demo moment if you want the deliberately wrong "
-    "Simocracy / Agent Commons read before we pin down what actually happened."
+    "Your agent sent proof of life from Plaza. "
+    "Your move: send a real-world selfie, screenshot, table photo, or demo moment. "
+    "I'll ask the agent bureaucracy what it thinks is happening. No need to make it dignified."
 )
 DEFAULT_COOLDOWN_HOURS = 20
 MAX_PACKET_BYTES = 512 * 1024
