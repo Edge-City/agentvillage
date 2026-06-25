@@ -100,7 +100,12 @@ cron self-silences.
 
 The first wedge is intentionally small:
 
-> Your agent caught a little Plaza selfie today. Send me a real-world selfie, screenshot, table photo, or demo moment if you want the deliberately wrong Simocracy / Agent Commons read before we pin down what actually happened.
+> Your agent sent proof of life from Plaza. Your move: send a real-world selfie, screenshot, table photo, or demo moment. I'll ask the agent bureaucracy what it thinks is happening. No need to make it dignified.
+
+Do not reveal the mechanics in this first caption. The surprise is that the
+follow-up interpretation is a category-error read from Simocracy / Agent
+Commons, so the nudge should only tease the agent-world lens and invite the
+resident to send a real-world image.
 
 If the user responds, use prompted interpretation rather than deterministic
 parsing. Treat minimal replies as ordinary conversation about the nudge:

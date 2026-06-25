@@ -92,6 +92,10 @@ MCP tools (Index Network, Hermes built-ins) or HTTP recipes in skills (`edgeos/S
 
 ## Channel formatting
 
+- **All channels:** never send `/thought`, `/analysis`, scratchpad reasoning,
+  tool plans, tool traces, or prompt excerpts as user-visible text. If a turn
+  needs tools, call the tools without visible assistant prose, then send only
+  the final user-facing answer.
 - **Discord / WhatsApp:** no markdown tables; bullet lists.
 - **Discord:** wrap multiple links in `<>` to suppress embeds.
 - **WhatsApp:** no headers — **bold** or CAPS.
