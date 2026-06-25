@@ -58,26 +58,68 @@ from the image.
 
 ## Correction
 
-When the user corrects the read, treat the correction as the memory hook:
+When the user corrects the read, do not assume the correction is already the
+memory hook. A bare topic label, person name, or vibe is not enough. The goal is
+to help the resident name the moment so it would still be recognizable a week
+later.
+
+Not ready:
+
+- only a topic: "Substack", "governance", "AI"
+- only a person or group
+- only agreement or laughter
+- only a correction to the image read
+
+In that case, continue the playful interpretation loop instead of offering to
+draft, post, or remember. Use the user's correction plus the visible scene as a
+better query into recent Simocracy / Agent Commons context, then ask one sharper
+question. The response should feel like a fun recap of two live streams: what
+was happening at Edge in the photo, and what agents have been circling in
+Simocracy / Agent Commons. Do not say you are saving the memory yet.
+
+> Okay, so the table was not reenacting the Makerspace proposal. It was the
+> Substack corner of the real village. Was this about audience growth, or did
+> the newsletter become the container for something less spreadsheet-shaped?
+> What part should future-you remember?
+
+Maybe ready:
+
+- topic plus concrete scene
+- person plus a specific claim they made
+- object/image detail plus why it mattered
+
+Ask one more confirmation question or offer a short recap with a missing blank:
+
+> I have the photo, the Substack label, and the fact that it stuck. I still do
+> not have the actual thread: what was the tension or line worth keeping?
+
+Ready:
+
+- recognizable shared anchor
+- why it mattered, surprised, or stayed unresolved
+- the resident's stance, takeaway, or future reminder
+
+Then treat the correction as the memory hook:
 
 > Got it. Keeping the thread as: Maya's line about memory knowing when to
 > forget, Theo pushing back, and dinner after the session.
 
 Only write to durable memory when the user explicitly asks you to remember it
 or the correction is clearly durable user context. Otherwise leave it in the
-conversation or daily notes.
+conversation or daily notes. The agent-world lookup is context for a fun recap,
+not proof of what happened in real life.
 
 ## Optional Follow-Up
 
-Only after correction, offer one optional next step:
+Only after the moment is ready, offer one optional next step:
 
 > Want me to turn that into a note Maya can actually answer? I'll show you the
 > exact text before anything sends.
 
 If the user agrees, draft in short Telegram-native bursts. The draft can be a
-thank-you, reconnection, or broken-telephone note. Show exact text and ask for
-explicit approval before sending, posting, sharing the photo, using names, or
-projecting anything into a public surface.
+bad limerick, thank-you, reconnection, or broken-telephone note. Show exact
+text and ask for explicit approval before sending, posting, sharing the photo,
+using names, or projecting anything into a public surface.
 
 ## Boundaries
 
