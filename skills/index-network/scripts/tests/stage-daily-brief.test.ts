@@ -118,7 +118,7 @@ describe("stageDailyBrief prompt-led staging guardrails", () => {
     expect(calls[0]?.[4]).toBe(result.body);
   });
 
-  test("stages a prompt-authored body file, validates markers, blocks review, and records ids", async () => {
+  test("stages a prompt-authored body file, validates markers, leaves it unblocked, and records ids", async () => {
     const dir = makeTmp();
     const stateFile = join(dir, "heartbeat-state.json");
     const contextOut = join(dir, "daily-brief-context.json");
@@ -159,7 +159,7 @@ describe("stageDailyBrief prompt-led staging guardrails", () => {
       `digest-${TODAY}`,
       "--json",
     ]);
-    expect(calls[1]).toEqual(["kanban", "block", "t_new", `review-required: morning brief — ${TODAY}`]);
+    expect(calls.some((c) => c[1] === "block")).toBe(false);
 
     const state = JSON.parse(await Bun.file(stateFile).text()) as { prepared: Record<string, unknown> };
     expect(state.prepared).toMatchObject({
