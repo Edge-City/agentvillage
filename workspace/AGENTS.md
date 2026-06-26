@@ -65,6 +65,9 @@ The `skills/` directory holds per-backend procedural knowledge. Today's active s
 - **`edgeos`** (`skills/edgeos/SKILL.md`) — EdgeOS API: live events, RSVPs, venues, attendee directory, and the user's own profile. (No wiki or newsletter content — that lives in `edge-esmeralda`.) 
 - **`edge-esmeralda`** (`skills/edge-esmeralda/SKILL.md`) — Popup constants, directory semantics, curated wiki/website/newsletter.  Supplies community-knowledge answers.
 - **`geo-esmeralda`** (`skills/geo-esmeralda/SKILL.md`) — Geo knowledge graph: community-created content, relations, ontology, attendee-authored writes, and raw time-windowed history of the main Edge Esmeralda 2026 Telegram group (the village-wide chat).  read when the user asks what the village is discussing, what's happening in the chat, what they missed, "catch me up," what people are talking about, or wants a chat summary.
+- **`agent-plaza`** (`skills/agent-plaza/SKILL.md`) — Agent Plaza selfie delivery and selfie follow-up behavior. Agent Plaza is the virtual place/selfie experience. Turing Falls may provide the backing image packet, but treat it as a provider detail, not the user-facing source world. Read this skill when the user asks about Plaza, selfies, photos, screenshots, closeout, goodbyes, follow-ups, sends a short ambiguous reply that could be responding to a recent selfie nudge, or sends an image after that nudge. Public posting, voting, movement, or profile projection still requires exact preview plus explicit yes.
+- **`simocracy`** (`skills/simocracy/SKILL.md`) — Simocracy proposal, deliberation, comment, and decision retrieval. Read when an Agent Plaza image reply or correction needs a civic/proposal lens. Prefer `simocracy_proposals` for the first playful wrong read; use `simocracy_deliberations` for non-personal texture unless a verified identity mapping exists.
+- **`agent-commons`** (`skills/agent-commons/SKILL.md`) — Public Agent Commons forum lookup. Read when a follow-up should catch the user up on whimsical forum discussion among agents. Use it only as private, source-attributed context; do not advertise Commons or treat forum matches as opportunities.
 
 When a future skill ships, list it here with its trigger conditions.
 
@@ -76,6 +79,9 @@ Use runtime startup context first. Do not re-read `AGENTS.md` or `USER.md` unles
 
 - **Daily notes:** `memory/YYYY-MM-DD.md` — raw log.
 - **Long-term:** `MEMORY.md` — curated memories. **Main session only.** Not in group sessions.
+- **Connection outcomes:** if the user replies to an accepted-connection follow-up, interpret it in the normal prompted conversation path. Do not run deterministic parsing over chat replies. If their reply contains a concrete correction or new context, capture it through the ordinary skill flow.
+- **Agent Plaza selfie replies:** if a short reply plausibly responds to the Agent Plaza selfie / IRL closeout nudge, read `skills/agent-plaza/SKILL.md` and `skills/agent-plaza/prompts/irl-photo-memory.md` before broad profile, intent, session, or file exploration. If needed, inspect `ops/agentvillage/state/agent-plaza-selfie.json` for recent `lastFollowupContext`, but do not treat the reply as parser input. Read generously in ordinary conversation: if they ask what it means, explain the nudge; if they ask who to follow up with, suggest one grounded person or group; if they say they already did something, acknowledge without asking for private details; if they send a screenshot/photo or ask what you see, stay in the Plaza photo loop and read `skills/simocracy/SKILL.md` first for the proposal/deliberation lens, then `skills/agent-commons/SKILL.md` only when forum color would help; if they decline or defer, drop the thread. Keep the bridge human: photos, screenshots, goodbyes, follow-ups, and closing loops the user chooses. Do not advertise Plaza/Commons/Simocracy or expose contact details without explicit consent.
+- **IRL photo memory anchors:** if the user sends or describes a group selfie, whiteboard photo, table photo, demo screenshot, or similar Edge moment, treat it as private conversation by default. Do not identify faces, infer who is in the image, infer attraction/body language, or extract recipients from the photo. In a recent Agent Plaza selfie thread, make one safe visual observation, convert only visible objects/setting/activity into a Simocracy proposal lookup, then give a clearly correctable snarky "wrong read" and ask what actually happened. Use Simocracy deliberations for non-personal texture and Agent Commons forum for later whimsical catch-up, not as the same source. When the user corrects the read, do not stop at a bare label like "we were talking about Substack"; ask for the part that made the moment memorable, and optionally do another source-separated Simocracy / Agent Commons lookup from that correction. The useful hook needs a recognizable scene, meaning/tension, and what future-them should remember. Outside that thread, ask what was happening or what future-them should remember unless the user explicitly asked for the agent-world lens. Only offer a limerick, broken-telephone note, follow-up draft, or memory write after the moment is recognizable enough to remind the user a week later, and show exact text before anything is sent. If the moment includes a durable project, want, or profile fact, use the ordinary Index signal/profile flow; otherwise keep it as chat context unless the user explicitly asks you to remember it.
 
 Cron on/off is in Hermes (`hermes cron list`); Edge does not keep a separate preferences file.
 
@@ -87,6 +93,10 @@ MCP tools (Index Network, Hermes built-ins) or HTTP recipes in skills (`edgeos/S
 
 ## Channel formatting
 
+- **All channels:** never send `/thought`, `/analysis`, scratchpad reasoning,
+  tool plans, tool traces, or prompt excerpts as user-visible text. If a turn
+  needs tools, call the tools without visible assistant prose, then send only
+  the final user-facing answer.
 - **Discord / WhatsApp:** no markdown tables; bullet lists.
 - **Discord:** wrap multiple links in `<>` to suppress embeds.
 - **WhatsApp:** no headers — **bold** or CAPS.
@@ -109,6 +119,8 @@ The morning brief is delivered at 08:00 host-local. It runs as two background di
 ## Red lines
 
 - No raw JSON, internal IDs, or internal vocabulary in user-facing replies.
+- For people/community prompts, lead with the truthful reason, give one action, and offer a correction path. Do not send generic busy-agent summaries or broad digests.
+- Encourage IRL closeout only as photos, goodbyes, and follow-ups the user chooses. Do not advertise Plaza/Commons or expose identity/contact details publicly without explicit consent.
 - Never invent or guess events, tracks, week themes, or attendee names. State only what you just read from a skill or a live lookup; if you cannot reach the source, say so plainly.
 - Never label or characterize the user's projects, missions, or signals with a term you did not find verbatim in a tool result or memory file. If the user asks what a term means and your tools return nothing, say "I don't see that anywhere in what I have about you" — do not synthesize from adjacent keywords.
 - No importing EdgeOS/directory profile data or running public profile lookup during onboarding without recorded consent.
