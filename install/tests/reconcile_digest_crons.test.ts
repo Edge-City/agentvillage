@@ -16,15 +16,15 @@ import {
 } from "../install_index";
 
 const SEED = "ix_integration_seed";
-const [SIGNALS, PREPARE, SEND, NEGOTIATION, PLAZA, EVENING, DROP_MIDDAY, DROP_EVENING, TOKEN_AUDIT] = DIGEST_CRON_SPECS;
+const [SIGNALS, PREPARE, SEND, NEGOTIATION, EVENING, DROP_MIDDAY, DROP_EVENING, TOKEN_AUDIT] = DIGEST_CRON_SPECS;
 // The retired "Edge — heartbeat" cron name — used to assert it is torn down.
 const RETIRED_HEARTBEAT_NAME = "Edge — heartbeat";
+const RETIRED_PLAZA_SELFIE_NAME = "Edge — Agent Plaza selfie";
 const PROMPT_BODIES = new Map([
   [SIGNALS.promptFile, "SIGNALS_BODY"],
   [PREPARE.promptFile, "PREPARE_BODY"],
   [SEND.promptFile, "SEND_BODY"],
   [NEGOTIATION.promptFile, "NEGOTIATION_BODY"],
-  [PLAZA.promptFile, "PLAZA_BODY"],
   [EVENING.promptFile, "EVENING_BODY"],
   // Both opportunity-drop crons share one prompt file.
   [DROP_MIDDAY.promptFile, "DROP_BODY"],
@@ -98,10 +98,6 @@ function installedMemorySignalScript(): string {
   return join(home, "scripts", SIGNALS.scriptInstallName!);
 }
 
-function installedPlazaScript(): string {
-  return join(home, "scripts", PLAZA.scriptInstallName!);
-}
-
 function currentJob(spec: typeof DIGEST_CRON_SPECS[number], id: string): Record<string, unknown> {
   const job: Record<string, unknown> = {
     id,
@@ -124,7 +120,6 @@ beforeEach(() => {
     DIGEST_SIGNALS_CRON: process.env.DIGEST_SIGNALS_CRON,
     DIGEST_PREPARE_CRON: process.env.DIGEST_PREPARE_CRON,
     DIGEST_SEND_CRON: process.env.DIGEST_SEND_CRON,
-    AGENT_PLAZA_SELFIE_CRON: process.env.AGENT_PLAZA_SELFIE_CRON,
     TOKEN_USAGE_AUDIT_CRON: process.env.TOKEN_USAGE_AUDIT_CRON,
   };
   process.env.HERMES_HOME = home;
@@ -134,7 +129,6 @@ beforeEach(() => {
   delete process.env.DIGEST_SIGNALS_CRON;
   delete process.env.DIGEST_PREPARE_CRON;
   delete process.env.DIGEST_SEND_CRON;
-  delete process.env.AGENT_PLAZA_SELFIE_CRON;
   process.env.TOKEN_USAGE_AUDIT_CRON = TOKEN_AUDIT.schedule;
   writePrompts();
 });
@@ -147,7 +141,7 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-test("fresh install creates digest crons (no heartbeat) on their staggered schedules", () => {
+test("fresh install creates digest crons (no heartbeat or Plaza selfie) on their staggered schedules", () => {
   reconcileDigestCronJobs({ ...process.env });
 
   const creates = cronCalls().filter((argv) => argv[1] === "create");
@@ -158,7 +152,6 @@ test("fresh install creates digest crons (no heartbeat) on their staggered sched
   const prepare = creates.find((argv) => argv.includes(PREPARE.name))!;
   const send = creates.find((argv) => argv.includes(SEND.name))!;
   const negotiation = creates.find((argv) => argv.includes(NEGOTIATION.name))!;
-  const plaza = creates.find((argv) => argv.includes(PLAZA.name))!;
   const evening = creates.find((argv) => argv.includes(EVENING.name))!;
   const audit = creates.find((argv) => argv.includes(TOKEN_AUDIT.name))!;
   expect(signals[2]).toBe(staggeredSchedule(SIGNALS, SEED));
@@ -171,12 +164,6 @@ test("fresh install creates digest crons (no heartbeat) on their staggered sched
   expect(send[3]).toBe("SEND_BODY");
   expect(negotiation[2]).toBe(staggeredSchedule(NEGOTIATION, SEED));
   expect(negotiation[3]).toBe("NEGOTIATION_BODY");
-  expect(plaza[2]).toBe(staggeredSchedule(PLAZA, SEED));
-  expect(plaza[3]).toBe("PLAZA_BODY");
-  expect(plaza).toContain("--skill");
-  expect(plaza).toContain("agent-plaza");
-  expect(plaza).toContain("--script");
-  expect(plaza).toContain(PLAZA.scriptInstallName);
   expect(evening[2]).toBe(staggeredSchedule(EVENING, SEED));
   expect(evening[3]).toBe("EVENING_BODY");
   expect(audit[2]).toBe(TOKEN_AUDIT.schedule);
@@ -186,11 +173,9 @@ test("fresh install creates digest crons (no heartbeat) on their staggered sched
   expect(audit).toContain("--script");
   expect(audit).toContain(TOKEN_AUDIT.scriptInstallName);
   expect(readFileSync(installedMemorySignalScript(), "utf8")).toContain("wakeAgent");
-  expect(readFileSync(installedPlazaScript(), "utf8")).toContain("wakeAgent");
   expect(readFileSync(installedTokenAuditScript(), "utf8")).toContain("wakeAgent");
   expect(send).toContain("--deliver");
   expect(negotiation).toContain("--deliver");
-  expect(plaza).toContain("--deliver");
   expect(evening).toContain("--deliver");
   expect(audit).toContain("--deliver");
   expect(signals).not.toContain("--deliver");
@@ -204,7 +189,6 @@ test("an existing Edge — heartbeat cron is retired on reconcile", () => {
     currentJob(PREPARE, "p1"),
     currentJob(SEND, "s1"),
     currentJob(NEGOTIATION, "n1"),
-    currentJob(PLAZA, "z1"),
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
@@ -216,13 +200,30 @@ test("an existing Edge — heartbeat cron is retired on reconcile", () => {
   expect(cronCalls()).toEqual([["cron", "remove", "h1"]]);
 });
 
+test("an existing Edge — Agent Plaza selfie cron is retired on reconcile", () => {
+  writeJobs([
+    { id: "z1", name: RETIRED_PLAZA_SELFIE_NAME, prompt: "PLAZA_BODY", schedule: { expr: "0 16 * * *" } },
+    currentJob(SIGNALS, "g1"),
+    currentJob(PREPARE, "p1"),
+    currentJob(SEND, "s1"),
+    currentJob(NEGOTIATION, "n1"),
+    currentJob(EVENING, "e1"),
+    currentJob(DROP_MIDDAY, "dm1"),
+    currentJob(DROP_EVENING, "de1"),
+    currentJob(TOKEN_AUDIT, "a1"),
+  ]);
+
+  reconcileDigestCronJobs({ ...process.env });
+
+  expect(cronCalls()).toEqual([["cron", "remove", "z1"]]);
+});
+
 test("jobs still on old synchronized defaults get schedule-only migrations", () => {
   writeJobs([
     { id: "g1", name: SIGNALS.name, prompt: "SIGNALS_BODY", script: SIGNALS.scriptInstallName, schedule: { expr: SIGNALS.schedule } },
     { id: "p1", name: PREPARE.name, prompt: "PREPARE_BODY", schedule: { expr: PREPARE.schedule } },
     { id: "s1", name: SEND.name, prompt: "SEND_BODY", schedule: { expr: SEND.schedule } },
     currentJob(NEGOTIATION, "n1"),
-    currentJob(PLAZA, "z1"),
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
@@ -245,7 +246,6 @@ test("custom schedule is preserved; stale prompt gets a prompt-only edit", () =>
     { id: "p1", name: PREPARE.name, prompt: "OLD_BODY", schedule: { expr: "30 4 * * *" } },
     { id: "s1", name: SEND.name, prompt: "SEND_BODY", schedule: { expr: "15 9 * * *" } },
     currentJob(NEGOTIATION, "n1"),
-    currentJob(PLAZA, "z1"),
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
@@ -265,7 +265,6 @@ test("memory signal sync cron is recreated when its script path is stale", () =>
     currentJob(PREPARE, "p1"),
     currentJob(SEND, "s1"),
     currentJob(NEGOTIATION, "n1"),
-    currentJob(PLAZA, "z1"),
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
@@ -290,7 +289,6 @@ test("stale prompt + old default schedule produce two independent edit calls", (
     currentJob(PREPARE, "p1"),
     { id: "s1", name: SEND.name, prompt: "OLD_BODY", schedule: { expr: SEND.schedule } },
     currentJob(NEGOTIATION, "n1"),
-    currentJob(PLAZA, "z1"),
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
@@ -312,7 +310,6 @@ test("up-to-date jobs (staggered schedule + current prompt) trigger no cron call
     currentJob(PREPARE, "p1"),
     currentJob(SEND, "s1"),
     currentJob(NEGOTIATION, "n1"),
-    currentJob(PLAZA, "z1"),
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
@@ -332,7 +329,6 @@ test("retired Edge-prefixed crons are removed; foreign crons are untouched", () 
     currentJob(PREPARE, "p1"),
     currentJob(SEND, "s1"),
     currentJob(NEGOTIATION, "n1"),
-    currentJob(PLAZA, "z1"),
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
@@ -352,7 +348,6 @@ test("token usage audit cron is removed when opted out", () => {
     currentJob(PREPARE, "p1"),
     currentJob(SEND, "s1"),
     currentJob(NEGOTIATION, "n1"),
-    currentJob(PLAZA, "z1"),
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
@@ -372,7 +367,6 @@ test("token usage audit cron is removed when no explicit schedule opts in", () =
     currentJob(PREPARE, "p1"),
     currentJob(SEND, "s1"),
     currentJob(NEGOTIATION, "n1"),
-    currentJob(PLAZA, "z1"),
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
@@ -390,7 +384,6 @@ test("token usage audit cron is recreated when its script path is stale", () => 
     currentJob(PREPARE, "p1"),
     currentJob(SEND, "s1"),
     currentJob(NEGOTIATION, "n1"),
-    currentJob(PLAZA, "z1"),
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
@@ -419,7 +412,6 @@ test("a Hermes that rejects --schedule still gets the prompt update (degraded mi
     currentJob(PREPARE, "p1"),
     { id: "s1", name: SEND.name, prompt: "OLD_BODY", schedule: { expr: SEND.schedule } },
     currentJob(NEGOTIATION, "n1"),
-    currentJob(PLAZA, "z1"),
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
