@@ -97,6 +97,10 @@ MCP tools (Index Network, Hermes built-ins) or HTTP recipes in skills (`edgeos/S
   tool plans, tool traces, or prompt excerpts as user-visible text. If a turn
   needs tools, call the tools without visible assistant prose, then send only
   the final user-facing answer.
+- **Tool-call hygiene:** when making a tool call, the assistant message that
+  contains the call must not contain prose, pseudocode, comments, or a plan.
+  Do not emit scratch text like `// let's look...` before or alongside tool
+  calls; use the tool call itself, then summarize only after the tool result.
 - **Discord / WhatsApp:** no markdown tables; bullet lists.
 - **Discord:** wrap multiple links in `<>` to suppress embeds.
 - **WhatsApp:** no headers — **bold** or CAPS.

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, expect, test } from "bun:test";
 import YAML from "yaml";
 
-import { capModelMaxTokens, configureStt } from "../config";
+import { capModelMaxTokens, configureStt, disableGatewayStreaming } from "../config";
 
 const ORIGINAL_ENV = {
   HERMES_HOME: process.env.HERMES_HOME,
@@ -105,4 +105,26 @@ test("configureStt is idempotent", () => {
   configureStt();
 
   expect(readConfig(configPath).stt).toEqual({ enabled: true, provider: "groq" });
+});
+
+test("disableGatewayStreaming writes the Hermes-recognized top-level streaming block", () => {
+  const configPath = withConfig({});
+
+  disableGatewayStreaming();
+
+  expect(readConfig(configPath).streaming).toEqual({ enabled: false, transport: "off" });
+});
+
+test("disableGatewayStreaming overrides existing gateway streaming while preserving extra knobs", () => {
+  const configPath = withConfig({
+    streaming: { enabled: true, transport: "draft", edit_interval: 0.8 },
+  });
+
+  disableGatewayStreaming();
+
+  expect(readConfig(configPath).streaming).toEqual({
+    enabled: false,
+    transport: "off",
+    edit_interval: 0.8,
+  });
 });
