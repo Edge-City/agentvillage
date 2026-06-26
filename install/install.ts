@@ -9,6 +9,7 @@
  *   - Edge skill bundles → `$HERMES_HOME/skills/{index-network,edgeos,edge-esmeralda,geo-esmeralda}/`
  *   - `terminal.cwd` in config.yaml → `$HERMES_HOME`
  *   - STT enabled with Groq Whisper so voice notes are auto-transcribed
+ *   - gateway token streaming disabled so intermediate tool-call text is never sent
  *   - Index MCP + morning digest cron (`install_index.ts`)
  *   - Geo CLI runtime note (`install_geo.ts`)
  *
@@ -34,7 +35,7 @@ import { execSync } from "node:child_process";
 import { installIndex } from "./install_index";
 import { installEdgeos } from "./install_edgeos";
 import { installGeo } from "./install_geo";
-import { capModelMaxTokens, configureStt, setTerminalCwd } from "./config";
+import { capModelMaxTokens, configureStt, disableGatewayStreaming, setTerminalCwd } from "./config";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
 import {
   EDGE_SKILL_NAMES,
@@ -199,6 +200,7 @@ function main(): void {
   copySkillFiles();
   setTerminalCwd();
   capModelMaxTokens();
+  disableGatewayStreaming();
   configureStt();
 
   installIndex();
