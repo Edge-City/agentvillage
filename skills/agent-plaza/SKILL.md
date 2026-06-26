@@ -5,21 +5,26 @@ description: Agent Plaza selfie delivery and follow-up guidance for AgentVillage
 
 # Agent Plaza
 
-This skill owns the default Agent Plaza selfie cron and the ordinary-chat
+This skill owns one-off Agent Plaza selfie delivery and the ordinary-chat
 follow-up behavior after a resident replies to that selfie. The selfie is an
 IRL bridge from virtual agent activity to real Edge activity, not a general
 Agent Plaza help surface.
 
-## Cron Contract
+## One-Off Delivery Contract
 
-The installer creates one managed Hermes cron:
+The installer does not create a recurring Agent Plaza selfie cron. Operators run
+the deterministic script explicitly for a closeout send on the resident's own
+tenant machine:
 
-- name: `Edge — Agent Plaza selfie`
-- schedule: around 16:00 host-local, staggered per tenant
-- delivery: direct Telegram `sendPhoto` from the deterministic script when a
-  local Telegram-compatible image is available
-- skill: `agent-plaza`
-- script: `agentvillage_agent_plaza_selfie.py`
+```bash
+python3 skills/agent-plaza/scripts/agent_plaza_selfie.py \
+  --root "$HERMES_HOME" \
+  --cooldown-hours 0
+```
+
+The script sends directly through Telegram `sendPhoto` when a local
+Telegram-compatible image is available. If no local packet is available, it may
+fall back to Turing Falls credentials.
 
 The script is deterministic and writes only under `$HERMES_HOME/ops`:
 
@@ -29,8 +34,8 @@ The script is deterministic and writes only under `$HERMES_HOME/ops`:
 
 It never writes experiment state, events, or media under `memory/`.
 
-The cron is installed by default, but delivery is still opt-in gated. A packet
-must include one of `safety.user_opted_in`, `safety.plaza_opted_in`,
+Delivery is still opt-in gated. A packet must include one of
+`safety.user_opted_in`, `safety.plaza_opted_in`,
 `consent.user_opted_in`, `consent.plaza_opted_in`, `user_opted_in`, or
 `plaza_opted_in` as `true`, or an operator must set
 `AGENT_PLAZA_SELFIE_ENABLED=true` for that tenant. Otherwise the script records
@@ -71,7 +76,7 @@ returned PNG into `ops/agentvillage/media/agent-plaza-selfies/`, and converts it
 into the same Agent Plaza selfie packet shape. The claim token is sent only to
 the configured Turing Falls origin and is never stored in events, state, or
 `lastFollowupContext`. If neither a packet nor Turing Falls credentials are
-available, the cron self-silences.
+available, the script self-silences.
 
 Useful packet fields, all optional:
 

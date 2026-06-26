@@ -266,10 +266,14 @@ def read_dotenv_value(root: Path, key: str) -> str:
         lines = env_path.read_text(encoding="utf-8").splitlines()
     except OSError:
         return ""
-    prefix = f"{key}="
     for line in lines:
         stripped = line.strip()
-        if not stripped or stripped.startswith("#") or not stripped.startswith(prefix):
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("export "):
+            stripped = stripped[len("export ") :].strip()
+        prefix = f"{key}="
+        if not stripped.startswith(prefix):
             continue
         value = stripped[len(prefix) :].strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:

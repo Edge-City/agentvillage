@@ -134,7 +134,7 @@ class AgentPlazaSelfieTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / ".env").write_text(
-                "TELEGRAM_BOT_TOKEN='secret-token'\nTELEGRAM_HOME_CHANNEL=-100123\n",
+                "export TELEGRAM_BOT_TOKEN='secret-token'\nTELEGRAM_HOME_CHANNEL=-100123\n",
                 encoding="utf-8",
             )
 

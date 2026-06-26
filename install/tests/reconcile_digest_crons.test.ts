@@ -19,6 +19,7 @@ const SEED = "ix_integration_seed";
 const [SIGNALS, PREPARE, SEND, NEGOTIATION, EVENING, DROP_MIDDAY, DROP_EVENING, TOKEN_AUDIT] = DIGEST_CRON_SPECS;
 // The retired "Edge — heartbeat" cron name — used to assert it is torn down.
 const RETIRED_HEARTBEAT_NAME = "Edge — heartbeat";
+const RETIRED_PLAZA_SELFIE_NAME = "Edge — Agent Plaza selfie";
 const PROMPT_BODIES = new Map([
   [SIGNALS.promptFile, "SIGNALS_BODY"],
   [PREPARE.promptFile, "PREPARE_BODY"],
@@ -140,7 +141,7 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-test("fresh install creates digest crons (no heartbeat) on their staggered schedules", () => {
+test("fresh install creates digest crons (no heartbeat or Plaza selfie) on their staggered schedules", () => {
   reconcileDigestCronJobs({ ...process.env });
 
   const creates = cronCalls().filter((argv) => argv[1] === "create");
@@ -197,6 +198,24 @@ test("an existing Edge — heartbeat cron is retired on reconcile", () => {
   reconcileDigestCronJobs({ ...process.env });
 
   expect(cronCalls()).toEqual([["cron", "remove", "h1"]]);
+});
+
+test("an existing Edge — Agent Plaza selfie cron is retired on reconcile", () => {
+  writeJobs([
+    { id: "z1", name: RETIRED_PLAZA_SELFIE_NAME, prompt: "PLAZA_BODY", schedule: { expr: "0 16 * * *" } },
+    currentJob(SIGNALS, "g1"),
+    currentJob(PREPARE, "p1"),
+    currentJob(SEND, "s1"),
+    currentJob(NEGOTIATION, "n1"),
+    currentJob(EVENING, "e1"),
+    currentJob(DROP_MIDDAY, "dm1"),
+    currentJob(DROP_EVENING, "de1"),
+    currentJob(TOKEN_AUDIT, "a1"),
+  ]);
+
+  reconcileDigestCronJobs({ ...process.env });
+
+  expect(cronCalls()).toEqual([["cron", "remove", "z1"]]);
 });
 
 test("jobs still on old synchronized defaults get schedule-only migrations", () => {
