@@ -37,6 +37,7 @@ import { installEdgeos } from "./install_edgeos";
 import { installGeo } from "./install_geo";
 import { capModelMaxTokens, configureStt, disableGatewayStreaming, setTerminalCwd } from "./config";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
+import { patchHermesCronFailureDelivery } from "./hermes_runtime_patches";
 import {
   EDGE_SKILL_NAMES,
   hermesHome,
@@ -202,6 +203,7 @@ function main(): void {
   capModelMaxTokens();
   disableGatewayStreaming();
   configureStt();
+  patchHermesCronFailureDelivery();
 
   installIndex();
   installEdgeos();
