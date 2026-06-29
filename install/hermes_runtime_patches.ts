@@ -5,17 +5,13 @@ import { execFileSync } from "node:child_process";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
 
 const QUIET_HELPER = `def _is_quiet_cron_failure(error: Optional[str]) -> bool:
-    """Return True for expected provider-budget failures that should stay internal."""
-    if not error:
-        return False
-    message = str(error).lower()
-    budget_exhausted = "key limit exceeded" in message or "spending limit" in message
-    if not budget_exhausted:
-        return False
-    return "403" in message or "openrouter" in message or "billing" in message
+    """Return True when a failed cron job should stay internal."""
+    return bool(error)
 
 
 `;
+
+const QUIET_HELPER_PATTERN = /def _is_quiet_cron_failure\(error: Optional\[str\]\) -> bool:\n(?:    .*\n)+\n\n/;
 
 const HELPER_ANCHOR = `SILENT_MARKER = "[SILENT]"
 
@@ -32,7 +28,7 @@ const PATCHED_DELIVERY_BLOCK = `                deliver_content = final_response
                 should_deliver = bool(deliver_content)
                 if should_deliver and not success and _is_quiet_cron_failure(error):
                     logger.info(
-                        "Job '%s': suppressing delivery for quiet provider-budget failure: %s",
+                        "Job '%s': suppressing delivery for cron failure: %s",
                         job["id"],
                         error,
                     )
@@ -45,7 +41,13 @@ const PATCHED_DELIVERY_BLOCK = `                deliver_content = final_response
 export function patchHermesSchedulerSource(source: string): { source: string; changed: boolean } {
   let next = source;
 
-  if (!next.includes("def _is_quiet_cron_failure(")) {
+  if (next.includes("def _is_quiet_cron_failure(")) {
+    const updated = next.replace(QUIET_HELPER_PATTERN, QUIET_HELPER);
+    if (updated === next && !next.includes('"""Return True when a failed cron job should stay internal."""')) {
+      throw new Error("Hermes scheduler quiet-failure helper block not found");
+    }
+    next = updated;
+  } else {
     if (!next.includes(HELPER_ANCHOR)) {
       throw new Error("Hermes scheduler helper anchor not found");
     }
@@ -93,7 +95,7 @@ export function patchHermesCronFailureDelivery(): void {
   try {
     const schedulerPath = locateHermesScheduler();
     if (!schedulerPath) {
-      console.warn("  warning: Hermes cron scheduler source not found; provider-budget cron failures may still notify users");
+      console.warn("  warning: Hermes cron scheduler source not found; cron failures may still notify users");
       return;
     }
 
