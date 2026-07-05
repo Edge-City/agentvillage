@@ -481,6 +481,31 @@ export function filterDedupedOpportunities(opportunities: BriefOpportunity[], de
   return opportunities.filter((opp) => !opp.opportunityId || !deliveredIds.has(opp.opportunityId));
 }
 
+/**
+ * Statuses a digest card may carry and still be actionable for the recipient.
+ * Mirrors the Index server's `list_opportunities` fetch filter
+ * (draft/pending/latent). Anything else — notably `stalled` (agents didn't
+ * converge; "human should take a look" is not "human should act"), plus
+ * `expired`/`rejected`/`accepted`/`negotiating` — must never be auto-included
+ * in a daily brief, because its acceptUrl resolves to a dead link.
+ */
+const ACTIONABLE_DIGEST_STATUSES = new Set(["draft", "pending", "latent"]);
+
+/**
+ * Drop cards whose status is present and not digest-actionable.
+ *
+ * Cards with a missing status are kept: the fresh MCP path is already
+ * status-filtered server-side, and legacy `--opportunities-file` transcripts
+ * may predate the `status:` field — dropping them wholesale would silently
+ * empty the brief. The guard exists chiefly for the file-replay path, where a
+ * stale snapshot can carry cards that stalled/expired after it was written.
+ */
+export function filterActionableOpportunities(opportunities: BriefOpportunity[]): BriefOpportunity[] {
+  return opportunities.filter(
+    (opp) => !opp.status || ACTIONABLE_DIGEST_STATUSES.has(opp.status.trim().toLowerCase()),
+  );
+}
+
 async function readIfExists(path: string): Promise<string> {
   try {
     return await Bun.file(path).text();
@@ -1055,7 +1080,13 @@ export async function buildDailyBriefContext(options: {
     try {
       const deliveredIds = await readDeliveredIds(options.stateFile ?? "memory/heartbeat-state.json", date);
       const fetched = await fetchOpportunitiesFromMcp({ apiKey, mcpUrl });
-      opportunities = filterDedupedOpportunities(fetched, deliveredIds);
+      const deduped = filterDedupedOpportunities(fetched, deliveredIds);
+      opportunities = filterActionableOpportunities(deduped);
+      if (opportunities.length < deduped.length) {
+        warnings.push(
+          `dropped ${deduped.length - opportunities.length} non-actionable opportunity card(s) (status outside draft/pending/latent)`,
+        );
+      }
       opportunitySource = "mcp";
     } catch (err) {
       warnings.push(`opportunities MCP unavailable: ${err instanceof Error ? err.message : String(err)}`);
@@ -1065,7 +1096,13 @@ export async function buildDailyBriefContext(options: {
     if (transcript.trim()) {
       opportunitySource = "file";
       const deliveredIds = await readDeliveredIds(options.stateFile ?? "memory/heartbeat-state.json", date);
-      opportunities = filterDedupedOpportunities(parseOpportunityTranscript(transcript), deliveredIds);
+      const deduped = filterDedupedOpportunities(parseOpportunityTranscript(transcript), deliveredIds);
+      opportunities = filterActionableOpportunities(deduped);
+      if (opportunities.length < deduped.length) {
+        warnings.push(
+          `dropped ${deduped.length - opportunities.length} non-actionable opportunity card(s) (status outside draft/pending/latent)`,
+        );
+      }
     }
   }
 
