@@ -1,7 +1,7 @@
 # Edge City Website Content
 
 Source: https://edgecity.live
-Last indexed: 2026-07-06T14:02:12.953Z
+Last indexed: 2026-07-06T17:14:48.414Z
 
 ---
 
@@ -1020,6 +1020,24 @@ Edge City Team
 Edge City India
 
 June 30, 2026
+
+INTRODUCING THE 2026 ZEE PRIME RESIDENTS
+
+Meet this year's Zee Prime Residency cohort: deep tech founders stress-testing what they're building with real users, real feedback, and real peers.
+
+Edge City Team
+
+Edge Esmeralda
+
+June 7, 2026
+
+MEET THE INFLECTION FELLOWSHIP COHORT AT EDGE ESMERALDA 2026
+
+Meet the people building the magically weird.
+
+Edge City Team
+
+June 4, 2026
 
 THE CONSCIOUSNESS RESIDENCY AT EDGE ESMERALDA 2026
 
