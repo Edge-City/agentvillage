@@ -1,7 +1,7 @@
 # Edge City Website Content
 
 Source: https://edgecity.live
-Last indexed: 2026-07-07T18:28:32.534Z
+Last indexed: 2026-07-07T20:25:55.931Z
 
 ---
 
@@ -20,7 +20,7 @@ IntroductionOur VillagesThe ExperienceThe ImpactOur TeamLet's Build
 
 EDGE CITY CONVENES PEOPLE WORKING AT THE FRONTIERS OF TECH, SCIENCE, AND SOCIETY IN POPUP VILLAGES ACROSS THE GLOBE.
 
-WE ASPIRE TO BE A ‘SOCIETY INCUBATOR': AN IRL LAB OF EXPERIMENTATION FOR NEW IDEAS, TECH, CULTURE, AND ORGANIZATIONS, ALL DEDICATED TO ACCELERATING HUMAN FLOURISHING.
+EDGE CITY IS A SOCIETY INCUBATOR: AN IRL LAB OF EXPERIMENTATION FOR NEW IDEAS, TECH, CULTURE, AND ORGANIZATIONS, ALL DEDICATED TO ACCELERATING HUMAN FLOURISHING.
 
 ‍READ OUR ROADMAP FOR MORE DETAILS.
 
@@ -48,11 +48,13 @@ By creating “micro-exits,” we create space to experiment with new systems, t
 
 OUR VILLAGES
 
-UPCOMING EDGE CITY GATHERINGS IN 2026:
+EDGE CITY GATHERINGS IN 2026:
 
 ‍
 
- * Edge Esmeralda 2026 [May 30th - June 27th]: Our annual flagship popup village in Healdsburg, CA. Co-organized with Esmeralda Institute, a new permanent village just 90 minutes north of SF, this month-long gathering serves as a living prototype for that vision - helping us test new ways of living, working, and thriving together. Apply here.
+ * Upcoming: Edge City India [October 11 – November 1, 2026]: Our first popup village in India, in Mandrem, North Goa.
+
+ * Edge Esmeralda 2026 [May 30th - June 27th]: Our annual flagship popup village in Healdsburg, CA. Co-organized with Esmeralda Institute, a new permanent village just 90 minutes north of SF, this month-long gathering served as a living prototype for that vision, helping us test new ways of living, working, and thriving together.
 
 IN 2025, WE HOSTED THESE POPUP VILLAGES AND EDGE EXPEDITIONS:
 
