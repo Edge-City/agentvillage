@@ -1,7 +1,7 @@
 # Edge Esmeralda 2026 Wiki
 
 Source: https://www.notion.so/edgecity/Edge-Esmeralda-2026-Wiki-317d45cdfc5981d2a571f52b024c5141
-Last indexed: 2026-07-07T16:26:33.004Z
+Last indexed: 2026-07-07T18:28:33.286Z
 
 ---
 
@@ -384,7 +384,7 @@ If you find a place worth a return visit, drop it on the shared community map (h
 
 photo_2026-05-11_19-36-53.jpg
 
-Recordings will be linked here during and after the event.
+Full drive here: https://drive.google.com/drive/u/4/folders/1V9yRppZVh-jXBzvTu8n4yJUqV-_zPmSu (https://drive.google.com/drive/u/4/folders/1V9yRppZVh-jXBzvTu8n4yJUqV-_zPmSu)
 
 Late May–June in Healdsburg, Northern California is warm and sunny, with mild evenings. Expect daytime temperatures of 20–30°C (70–85°F) and cooler nights around 10–15°C (50–60°F).
 
