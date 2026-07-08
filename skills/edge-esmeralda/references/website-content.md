@@ -1,7 +1,7 @@
 # Edge City Website Content
 
 Source: https://edgecity.live
-Last indexed: 2026-07-08T19:35:49.205Z
+Last indexed: 2026-07-08T20:46:00.816Z
 
 ---
 
@@ -1012,6 +1012,16 @@ Monthly Update
 Podcast
 Thank you! Your submission has been received!
 Oops! Something went wrong while submitting the form.
+
+EDGE ESMERALDA 2026: MONTH IN REVIEW
+
+Four weeks of living, learning, and building together in Northern California.
+
+Edge City Team
+
+Edge Esmeralda
+
+July 8, 2026
 
 WELCOME TO EDGE CITY INDIA
 
