@@ -1,7 +1,7 @@
 # Edge City Website Content
 
 Source: https://edgecity.live
-Last indexed: 2026-07-13T11:29:17.612Z
+Last indexed: 2026-07-13T13:40:13.455Z
 
 ---
 
@@ -1015,7 +1015,7 @@ Oops! Something went wrong while submitting the form.
 
 EDGE ESMERALDA 2026: MONTH IN REVIEW
 
-Four weeks of living, learning, and building together in Northern California.
+Four weeks of living, learning, and building together in Healdsburg, California.
 
 Edge City Team
 
