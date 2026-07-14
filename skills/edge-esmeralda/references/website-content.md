@@ -1,7 +1,7 @@
 # Edge City Website Content
 
 Source: https://edgecity.live
-Last indexed: 2026-07-14T14:27:48.122Z
+Last indexed: 2026-07-14T15:57:55.338Z
 
 ---
 
@@ -1012,6 +1012,16 @@ Monthly Update
 Podcast
 Thank you! Your submission has been received!
 Oops! Something went wrong while submitting the form.
+
+FROM EXPEDITION TO ECOSYSTEM: A NEW MENTOR RESIDENCY IN BHUTAN
+
+Edge City and Pelsung are inviting experienced founders and operators to spend one to two weeks working alongside Bhutanese builders.
+
+Timour Kosters
+
+Serj Hunt
+
+July 14, 2026
 
 EDGE ESMERALDA 2026: MONTH IN REVIEW
 
