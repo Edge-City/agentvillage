@@ -1,7 +1,7 @@
 # Edge City Website Content
 
 Source: https://edgecity.live
-Last indexed: 2026-07-15T07:22:57.453Z
+Last indexed: 2026-07-15T11:09:05.230Z
 
 ---
 
@@ -1013,6 +1013,16 @@ Podcast
 Thank you! Your submission has been received!
 Oops! Something went wrong while submitting the form.
 
+A MONTH AT THE CONSCIOUSNESS RESIDENCY 2026
+
+A recap of the experiments, conversations, and open questions from four weeks at Edge Esmeralda 2026.
+
+Edge City Team
+
+Edge Esmeralda
+
+July 15, 2026
+
 FROM EXPEDITION TO ECOSYSTEM: A NEW MENTOR RESIDENCY IN BHUTAN
 
 Edge City and Pelsung are inviting experienced founders and operators to spend one to two weeks working alongside Bhutanese builders.
@@ -1032,6 +1042,16 @@ Edge City Team
 Edge Esmeralda
 
 July 8, 2026
+
+OPTIMISM IS THE MOAT: NOTES FROM ZEE PRIME X EDGE CITY
+
+When the world subsidizes pessimism, optimism trades at a discount. Buy.
+
+Kimberly Adams
+
+Essay
+
+July 5, 2026
 
 WELCOME TO EDGE CITY INDIA
 
