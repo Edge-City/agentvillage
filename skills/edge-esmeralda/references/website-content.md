@@ -1,14 +1,14 @@
 # Edge City Website Content
 
 Source: https://edgecity.live
-Last indexed: 2026-07-16T12:08:43.144Z
+Last indexed: 2026-07-16T15:53:50.167Z
 
 ---
 
 ## About Edge City
 
-Next up: Edge Esmeralda 2026
-may 30 - june 27
+Next up: Edge india 2026
+oct 11 - nov 1
 
 IntroductionOur VillagesThe ExperienceThe ImpactOur TeamLet's Build
 
@@ -168,8 +168,8 @@ Follow us on Twitter and Instagram to stay in touch. If you’re interested in a
 
 ## Roadmap
 
-Next up: Edge Esmeralda 2026
-may 30 - june 27
+Next up: Edge india 2026
+oct 11 - nov 1
 
 1. Popup villages2. Global network3. Stack 4. Anchors5. Network city6. Better way of livingGet Involved
 Contents
@@ -994,8 +994,8 @@ NO RESULTS FOUND
 
 ## Media
 
-Next up: Edge Esmeralda 2026
-may 30 - june 27
+Next up: Edge india 2026
+oct 11 - nov 1
 
 MEDIA & UPDATES
 
