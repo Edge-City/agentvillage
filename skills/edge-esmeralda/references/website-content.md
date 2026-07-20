@@ -1,7 +1,7 @@
 # Edge City Website Content
 
 Source: https://edgecity.live
-Last indexed: 2026-07-20T10:47:36.729Z
+Last indexed: 2026-07-20T13:02:29.300Z
 
 ---
 
@@ -1013,9 +1013,9 @@ Podcast
 Thank you! Your submission has been received!
 Oops! Something went wrong while submitting the form.
 
-A MONTH AT THE CONSCIOUSNESS RESIDENCY 2026
+THE CONSCIOUSNESS RESIDENCY: A RECAP
 
-A recap of the experiments, conversations, and open questions from four weeks at Edge Esmeralda 2026.
+One month of consciousness research at Edge Esmeralda 2026, told through the residents, the experiments, and the questions that emerged.
 
 Edge City Team
 
