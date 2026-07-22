@@ -1,7 +1,7 @@
 # Edge City Website Content
 
 Source: https://edgecity.live
-Last indexed: 2026-07-22T12:55:23.160Z
+Last indexed: 2026-07-22T15:01:23.889Z
 
 ---
 
@@ -1012,6 +1012,18 @@ Monthly Update
 Podcast
 Thank you! Your submission has been received!
 Oops! Something went wrong while submitting the form.
+
+EDGE TOMORROW: A FOUR-WEEK CREATIVE RESIDENCY FOR FAMILIES
+
+How adults and kids practiced agency, resilience, and systems thinking inside a popup village.
+
+Mitra Martin
+
+Edge City Team
+
+Edge Esmeralda
+
+July 21, 2026
 
 THE CONSCIOUSNESS RESIDENCY: A RECAP
 
