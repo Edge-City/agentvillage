@@ -1,7 +1,7 @@
 # Edge City Website Content
 
 Source: https://edgecity.live
-Last indexed: 2026-08-03T14:29:26.233Z
+Last indexed: 2026-08-03T16:56:18.665Z
 
 ---
 
@@ -1012,6 +1012,16 @@ Monthly Update
 Podcast
 Thank you! Your submission has been received!
 Oops! Something went wrong while submitting the form.
+
+NOTES FROM THE EDGE (ESMERALDA)
+
+Reflections and Gems from the month that changed everything.
+
+Keri Shinn
+
+Essay
+
+August 3, 2026
 
 EDGE TOMORROW: A FOUR-WEEK CREATIVE RESIDENCY FOR FAMILIES
 
