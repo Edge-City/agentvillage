@@ -1,7 +1,7 @@
 # Edge City Website Content
 
 Source: https://edgecity.live
-Last indexed: 2026-08-12T08:45:26.297Z
+Last indexed: 2026-08-12T09:57:49.549Z
 
 ---
 
@@ -1013,6 +1013,16 @@ Podcast
 Thank you! Your submission has been received!
 Oops! Something went wrong while submitting the form.
 
+FROM "NON-TECHNICAL" TO MVP
+
+Krystal's reflections from the Inflection Fellowship on building SocratiCare, a patient-owned health tool, and choosing to build through medical school instead of after it.
+
+Krystal Grover
+
+Essay
+
+August 10, 2026
+
 NOTES FROM THE EDGE (ESMERALDA)
 
 Reflections and Gems from the month that changed everything.
@@ -1999,16 +2009,6 @@ Timour Kosters
 Monthly Update
 
 April 18, 2024
-
-EDGE CITY NEWSLETTER — MAR. 2024
-
-Edge Esmeralda, Edge Denver, and the Zuzalu Gitcoin QF round.
-
-Timour Kosters
-
-Monthly Update
-
-March 22, 2024
 
 ---
 
