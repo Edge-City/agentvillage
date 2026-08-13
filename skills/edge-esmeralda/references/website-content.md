@@ -1,7 +1,7 @@
 # Edge City Website Content
 
 Source: https://edgecity.live
-Last indexed: 2026-08-13T12:59:13.970Z
+Last indexed: 2026-08-13T15:29:48.158Z
 
 ---
 
@@ -1013,6 +1013,16 @@ Podcast
 Thank you! Your submission has been received!
 Oops! Something went wrong while submitting the form.
 
+EDGE CITY NEWSLETTER — AUGUST
+
+Between new residencies coming together, an auction that just raised $960K for young builders, and a live Town Hall we're hosting next week, there's a lot to catch you up on.
+
+Edge City Team
+
+Monthly Update
+
+August 13, 2026
+
 FROM "NON-TECHNICAL" TO MVP
 
 Krystal's reflections from the Inflection Fellowship on building SocratiCare, a patient-owned health tool, and choosing to build through medical school instead of after it.
@@ -1999,16 +2009,6 @@ Timour Kosters
 Essay
 
 May 17, 2024
-
-EDGE CITY NEWSLETTER — APR. 2024
-
-Announcing the Edge City Fellowship; Edge Esmeralda updates.
-
-Timour Kosters
-
-Monthly Update
-
-April 18, 2024
 
 ---
 
