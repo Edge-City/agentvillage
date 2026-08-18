@@ -1,7 +1,7 @@
 # Edge City Website Content
 
 Source: https://edgecity.live
-Last indexed: 2026-08-18T14:27:47.960Z
+Last indexed: 2026-08-18T15:01:59.176Z
 
 ---
 
@@ -333,14 +333,14 @@ ECOSYSTEM
 Edge City creates environments where breakthrough innovations emerge. Our popup villages have helped develop, accelerate, and strengthen projects and experiments pushing the boundaries of technology, science, and society. Explore projects in our ecosystem by type, focus area, or village. Each is an important piece shaping the future we're building.
 ‍
 If your project or collaboration was sparked, supported, or incubated at one of our villages, let us know; we’d love to include it here.
-8
-popup villages
-$1M
-grants allocated
-12k
-total participants
-182
-projects supported
+12,500+
+participants
+100+
+countries represented
+$2.5m
+in grants allocated to builders
+300+
+startups & projects
 
 Filters
 Reset All
