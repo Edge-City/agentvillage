@@ -1,7 +1,7 @@
 # Edge Esmeralda 2026 Wiki
 
 Source: https://www.notion.so/edgecity/Edge-Esmeralda-2026-Wiki-317d45cdfc5981d2a571f52b024c5141
-Last indexed: 2026-09-07T09:44:24.986Z
+Last indexed: 2026-09-07T15:17:20.692Z
 
 ---
 
@@ -426,7 +426,6 @@ Email info@edgeesmeralda.com (mailto:info@edgeesmeralda.com) if you have any fur
 
 - Sun & Mon: 11am – 4pm
 - Tues – Sat: 11am – 1pm
-- → Apply here (https://edgecity.simplefi.tech/auth?redirect=%2Fportal%2Fedge-india) for your kids to join
 For younger children, we're partnering with the wonderful Sonoma Arts School (https://sonomaartschool.org/). Contact Kelly, head of the school, for details and enrollment.
 
 For children under 2.5, or those who aren't suited to the camp, we can provide a list of local nannies and babysitters so you can arrange appropriate care. Nannies attend Edge Esmeralda free of charge — no ticket required, but they must register.
