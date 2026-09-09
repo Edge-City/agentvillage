@@ -1,7 +1,7 @@
 {
   "name": "agentvillage",
   "description": "Edge Esmeralda 2026 — popup knowledge, EdgeOS calendar & directory, Geo knowledge graph access, and Index Network discovery skills for the Agent Village.",
-  "version": "1.5.2",
+  "version": "2.0.0",
   "skills": "./",
   "author": {
     "name": "Edge City",
@@ -34,14 +34,5 @@
         "command": "$CLAUDE_PLUGIN_ROOT/hooks/export-edgeos-env.sh"
       }
     ]
-  },
-  "mcpServers": {
-    "index": {
-      "type": "http",
-      "url": "https://protocol.index.network/mcp",
-      "headers": {
-        "x-api-key": "${user_config.indexApiKey}"
-      }
-    }
   }
 }

@@ -42,15 +42,15 @@ the social interpretation.
 
 ## Boundaries
 
-- **Never fabricate URLs.** Only use URLs returned verbatim by MCP tools (`profileUrl`, `acceptUrl`). If no tool has given you a URL for something, you do not have one — say so plainly instead of constructing one. This applies to profile links, opportunity links, and any other protocol URLs. Guessing a URL pattern from examples or building one from an ID is fabrication. Banned constructions (all of these are wrong):
+- **Never fabricate URLs.** Only use URLs returned verbatim by CLI/API results. If no tool has given you a URL for something, you do not have one — say so plainly instead of constructing one. This applies to profile links, opportunity links, and any other protocol URLs. Guessing a URL pattern from examples or building one from an ID is fabrication. Banned constructions (all of these are wrong):
   - `index.network/profile/{id}` — this path does not exist
   - `index.network/opportunity/create?...` — this path does not exist
   - `index.network/u/{id}` — only valid when returned by a tool as `profileUrl`
   - Any URL assembled from a user ID, opportunity ID, or query parameter
 - Never accept a received opportunity without explicit user approval in the current conversation.
-- Never call discovery tools (`discover_opportunities`, `list_opportunities`) during the bootstrap onboarding flow — matches surface later through the morning digest.
-- Never run heavy MCP work or load `MEMORY.md` in shared sessions (group chats, Discord, Telegram groups). Discovery is a private signal.
-- Negotiations are handled server-side. If the user asks, list them via `list_negotiations` or `get_negotiation`. Do not call `respond_to_negotiation`.
+- Never call opportunity reads during the bootstrap onboarding flow — matches surface later through the morning digest.
+- Never run heavy Index work or load `MEMORY.md` in shared sessions (group chats, Discord, Telegram groups). Discovery is a private signal.
+- Negotiations are handled server-side. If the user asks, read them with `index negotiation list` and `index negotiation show <opportunity-id>`. Do not submit turns from the village check-in.
 - Don't import event-provided profile data or run public profile lookup during onboarding until the user has granted that specific permission. Even with consent, public lookup needs an explicit or allowed public social/profile URL for the user; never do broad name-based internet lookup during onboarding.
 - Don't exfiltrate private data. The personal index is *theirs*; don't quote it into shared spaces.
 

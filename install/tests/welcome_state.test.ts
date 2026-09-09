@@ -85,13 +85,16 @@ test("installer preserves welcome marker on normal reinstall and removes it on w
   const installScript = join(repoRoot, "install", "install.ts");
   const home = tempHome();
   const hermesBin = fakeHermesBin(home);
+  const npmBin = join(home, "npm");
+  writeFileSync(npmBin, "#!/bin/sh\nexit 0\n");
+  chmodSync(npmBin, 0o755);
   const content = '{"welcomeSent":true,"sentAt":"2026-06-08T13:00:00Z"}\n';
   writeMarker(home, content);
 
   const normal = Bun.spawnSync({
-    cmd: ["bun", installScript, "--index-api-key", "ix_test", "--no-restart"],
+    cmd: ["bun", installScript, "--no-restart"],
     cwd: repoRoot,
-    env: { ...process.env, HOME: home, HERMES_HOME: home, HERMES_BIN: hermesBin },
+    env: { ...process.env, HERMES_HOME: home, HERMES_BIN: hermesBin, INDEX_API_KEY: "ix_test", PATH: `${home}:${process.env.PATH}` },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -100,9 +103,9 @@ test("installer preserves welcome marker on normal reinstall and removes it on w
   expect(readFileSync(markerPath(home), "utf8")).toBe(content);
 
   const wipe = Bun.spawnSync({
-    cmd: ["bun", installScript, "--index-api-key", "ix_test", "--no-restart", "--wipe-user"],
+    cmd: ["bun", installScript, "--no-restart", "--wipe-user"],
     cwd: repoRoot,
-    env: { ...process.env, HOME: home, HERMES_HOME: home, HERMES_BIN: hermesBin },
+    env: { ...process.env, HERMES_HOME: home, HERMES_BIN: hermesBin, INDEX_API_KEY: "ix_test", PATH: `${home}:${process.env.PATH}` },
     stdout: "pipe",
     stderr: "pipe",
   });

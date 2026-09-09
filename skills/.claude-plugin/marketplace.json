@@ -2,7 +2,7 @@
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "agentvillage-skills",
   "metadata": {
-    "description": "Edge Esmeralda 2026 Agent Village skills — popup knowledge, EdgeOS APIs, Geo knowledge graph access, and Index Network discovery."
+    "description": "Edge Esmeralda 2026 Agent Village skills \u2014 popup knowledge, EdgeOS APIs, Geo knowledge graph access, and Index Network discovery."
   },
   "owner": {
     "name": "Edge City",
@@ -12,7 +12,7 @@
     {
       "name": "agentvillage",
       "description": "Edge Esmeralda 2026 — popup knowledge, EdgeOS calendar & directory, Geo knowledge graph access, and Index Network discovery.",
-      "version": "1.5.2",
+      "version": "2.0.0",
       "author": {
         "name": "Edge City",
         "url": "https://edgecity.live"
@@ -20,7 +20,13 @@
       "source": "./",
       "category": "productivity",
       "homepage": "https://edgecity.live",
-      "tags": ["edge-city", "edge-esmeralda", "popup-village", "community", "discovery"]
+      "tags": [
+        "edge-city",
+        "edge-esmeralda",
+        "popup-village",
+        "community",
+        "discovery"
+      ]
     }
   ]
 }

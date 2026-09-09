@@ -2,7 +2,6 @@ import { test, expect } from "bun:test";
 
 import {
   DIGEST_CRON_SPECS,
-  buildIndexMcpHeaders,
   cronCreateArgs,
   cronEditArgs,
   fnv1a,
@@ -135,26 +134,6 @@ test("storedSchedule reads hermes jobs.json shapes", () => {
   expect(storedSchedule({ id: "a", name: "x", schedule_display: "5 8 * * *" })).toBe("5 8 * * *");
   expect(storedSchedule({ id: "a", name: "x", schedule: "1 2 * * *" })).toBe("1 2 * * *");
   expect(storedSchedule({ id: "a", name: "x" })).toBe("");
-});
-
-test("index MCP headers include telegram surface and optional bare handle", () => {
-  expect(buildIndexMcpHeaders("ix_test")).toEqual({
-    "x-api-key": "ix_test",
-    "x-index-surface": "telegram",
-  });
-
-  expect(buildIndexMcpHeaders("ix_test", " @alice ")).toEqual({
-    "x-api-key": "ix_test",
-    "x-index-surface": "telegram",
-    "x-index-telegram-username": "alice",
-  });
-});
-
-test("invalid telegram MCP handle is omitted", () => {
-  expect(buildIndexMcpHeaders("ix_test", "Alice Example")).toEqual({
-    "x-api-key": "ix_test",
-    "x-index-surface": "telegram",
-  });
 });
 
 test("each spec declares its install-time override flag + env var", () => {

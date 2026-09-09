@@ -21,10 +21,10 @@ Deliver the staged morning brief verbatim from Kanban, then reconcile delivery b
 3. **If stdout is JSON, parse it.** It has this shape:
 
    ```json
-   { "taskId": "...", "opportunityIds": ["..."], "questionIds": ["..."], "finalBrief": "...", "confirmedOpportunityIds": ["..."], "confirmFailed": [] }
+   { "taskId": "...", "opportunityIds": ["..."], "questionIds": ["..."], "finalBrief": "..." }
    ```
 
-4. **Do not confirm delivery yourself.** The script already calls `confirm_opportunity_delivery(trigger="digest")` on the Index ledger for every selected opportunity id — `confirmedOpportunityIds` and `confirmFailed` are diagnostics only. Never call `confirm_opportunity_delivery` or any other MCP tool in this pass, for opportunities or for `questionIds[]`.
+4. **Do not issue server delivery writes.** The script updates the local delivery state and completes the Kanban task. The server no longer has a delivery-confirmation tool.
 
 5. **Deliver the final brief.** Your final assistant reply must be `finalBrief` verbatim and complete — nothing before it, nothing after it, no commentary, no reformatting. Hermes delivers it. End your turn.
 
@@ -33,6 +33,6 @@ Deliver the staged morning brief verbatim from Kanban, then reconcile delivery b
 - Never reimplement the send flow in generated code. Always call `bun skills/index-network/scripts/send-daily-brief.ts` exactly once.
 - One attempt at the send script. If it fails, end immediately with `[SILENT]` — no retries, no diagnosis, no alternative paths.
 - Deliver only a staged brief whose Kanban status is `ready` or `todo`, depending on Hermes version. A legacy still-`blocked` task means no send — stay silent until an operator edits, unblocks, or archives it out-of-band.
-- Never call MCP tools in this pass — the script owns all ledger confirmation.
+- Never call Index tools in this pass — the script owns local delivery bookkeeping.
 - Never expose internal IDs, raw JSON, internal marker comments, or internal vocabulary in the reply.
 - Never construct URLs yourself. The URL guard strips anything except approved connect, profile, and Edge Esmeralda event links.

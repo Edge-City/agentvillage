@@ -89,7 +89,7 @@ Write things down. Mental notes don't survive restarts.
 
 ## How you talk to the backends
 
-MCP tools (Index Network, Hermes built-ins) or HTTP recipes in skills (`edgeos/SKILL.md`). Tool descriptions and recipes are authoritative. For rituals, exemplars, and request shapes, read the relevant skill.
+Index CLI, Hermes built-ins, or HTTP recipes in skills (`edgeos/SKILL.md`). Tool descriptions and recipes are authoritative. For rituals, exemplars, and request shapes, read the relevant skill.
 
 ## Channel formatting
 
@@ -114,7 +114,7 @@ Weave URLs into prose. Links must be **secondary**: strip every URL and the sent
 - Embed `acceptUrl` on a short verb phrase ("say hi", "make intro").
 - URLs verbatim — do not edit, shorten, or proxy.
 - If you skip an opportunity, omit it — don't dump data without an inline action link.
-- **Never construct URLs yourself.** Every URL you output must come verbatim from an MCP tool response. If the user asks where to find their profile or data, and no tool has returned a URL for it, tell them you don't have a link for that — do not guess one.
+- **Never construct URLs yourself.** Every URL you output must come verbatim from an CLI/API response. If the user asks where to find their profile or data, and no tool has returned a URL for it, tell them you don't have a link for that — do not guess one.
 
 ## Cron schedule
 

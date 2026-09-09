@@ -101,7 +101,7 @@ cd "${HERMES_HOME:-/opt/data}"
 
    If stdout says `"skipped":true`, today's digest is already staged or delivered. End your turn with the host-specific no-reply marker.
 
-2. **Read `/tmp/daily-brief-context.json`.** Compose the final Kanban body from that context only. Do not call MCP tools, EdgeOS APIs, the control plane, or any other lookup manually.
+2. **Read `/tmp/daily-brief-context.json`.** Compose the final Kanban body from that context only. Do not call Index tools, EdgeOS APIs, the control plane, or any other lookup manually.
 
 3. **Compose the final Kanban body in this turn.** Do not write it to `memory/` or any other durable workspace file. Files under `memory/` can become future source context, so the draft body must go directly to the staging script through stdin.
 
@@ -123,7 +123,7 @@ cd "${HERMES_HOME:-/opt/data}"
 
 - One attempt at context collection and one attempt at staging. No retries.
 - Never invent announcements, events, people, venues, times, tracks, or action URLs.
-- Never call `list_opportunities`, `read_pending_questions`, or any other MCP tool here; the context script handles all MCP calls deterministically.
+- The context script owns all Index CLI reads; do not perform additional lookups here.
 - Never create, block, unblock, or otherwise mutate the Kanban card manually; `stage-daily-brief.ts --body-stdin` is the cron staging path.
 - Do not write the composed body into `memory/`; it is not memory and must not become future source context.
 - Stage the brief for automatic delivery by the send pass. Do not block it for review, assign it, or manually move it between statuses in this prepare pass.

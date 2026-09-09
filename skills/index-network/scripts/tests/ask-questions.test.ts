@@ -20,11 +20,11 @@ afterEach(() => {
   if (cwd !== originalCwd && cwd.includes("ask-questions-")) rmSync(cwd, { recursive: true, force: true });
 });
 
-const QUESTION_A: BriefQuestion = { id: "q-aaa", title: "Profile check", prompt: "What are you currently working on?", mode: "profile" };
-const QUESTION_B: BriefQuestion = { id: "q-bbb", title: "Intent check", prompt: "What kind of collaborators are you looking for?", mode: "intent" };
+const QUESTION_A: BriefQuestion = { id: "q-aaa", intentId: "intent-a", title: "Profile check", prompt: "What are you currently working on?", mode: "profile" };
+const QUESTION_B: BriefQuestion = { id: "q-bbb", intentId: "intent-b", title: "Intent check", prompt: "What kind of collaborators are you looking for?", mode: "intent" };
 
-function mockFetch(questions: BriefQuestion[], source: "mcp" | "unavailable" = "mcp") {
-  return async (_opts: { apiKey: string; mcpUrl: string }) =>
+function mockFetch(questions: BriefQuestion[], source: "cli" | "unavailable" = "cli") {
+  return async (_opts: { apiKey: string; apiUrl: string }) =>
     ({ questions, source, reason: source === "unavailable" ? "mock unavailable" : undefined });
 }
 
@@ -40,7 +40,7 @@ describe("askQuestions", () => {
     expect(result).toEqual({ silent: true, reason: "no-api-key" });
   });
 
-  test("returns silent when MCP is unavailable", async () => {
+  test("returns silent when CLI is unavailable", async () => {
     tempWorkspace();
     const result = await askQuestions({
       date: "2026-06-17",
@@ -89,7 +89,7 @@ describe("askQuestions", () => {
       fetchQuestions: mockFetch([QUESTION_A, QUESTION_B]),
     });
 
-    expect(result).toEqual({ questionId: "q-aaa", prompt: "What are you currently working on?" });
+    expect(result).toEqual({ questionId: "q-aaa", intentId: "intent-a", prompt: "What are you currently working on?" });
   });
 
   test("skips questions on cooldown and picks the next available one", async () => {
@@ -105,7 +105,7 @@ describe("askQuestions", () => {
       fetchQuestions: mockFetch([QUESTION_A, QUESTION_B]),
     });
 
-    expect(result).toEqual({ questionId: "q-bbb", prompt: "What kind of collaborators are you looking for?" });
+    expect(result).toEqual({ questionId: "q-bbb", intentId: "intent-b", prompt: "What kind of collaborators are you looking for?" });
   });
 
   test("records delivery in state before returning the question", async () => {
@@ -165,7 +165,7 @@ describe("askQuestions", () => {
       fetchQuestions: mockFetch([QUESTION_A]),
     });
 
-    expect(result).toEqual({ questionId: "q-aaa", prompt: "What are you currently working on?" });
+    expect(result).toEqual({ questionId: "q-aaa", intentId: "intent-a", prompt: "What are you currently working on?" });
   });
 
   test("treats a question delivered 2 days ago as still on cooldown", async () => {
@@ -195,7 +195,7 @@ describe("askQuestions", () => {
       fetchQuestions: mockFetch([QUESTION_A]),
     });
 
-    expect(result).toEqual({ questionId: "q-aaa", prompt: "What are you currently working on?" });
+    expect(result).toEqual({ questionId: "q-aaa", intentId: "intent-a", prompt: "What are you currently working on?" });
     const state = JSON.parse(await Bun.file("state.json").text());
     expect(state.questionDelivery).toEqual({ "q-aaa": "2026-06-17" });
   });
@@ -209,14 +209,14 @@ describe("askQuestions", () => {
       apiKey: "",
       fetchQuestions: async (_opts) => {
         fetchCalled = true;
-        return { questions: [QUESTION_A], source: "mcp" as const };
+        return { questions: [QUESTION_A], source: "cli" as const };
       },
     });
     expect(result).toEqual({ silent: true, reason: "no-api-key" });
     expect(fetchCalled).toBe(false);
   });
 
-  test("returns final closeout reflection on the final Edge day without MCP", async () => {
+  test("returns final closeout reflection on the final Edge day without an API call", async () => {
     tempWorkspace();
     let fetchCalled = false;
 
@@ -226,7 +226,7 @@ describe("askQuestions", () => {
       apiKey: "",
       fetchQuestions: async (_opts) => {
         fetchCalled = true;
-        return { questions: [QUESTION_A], source: "mcp" as const };
+        return { questions: [QUESTION_A], source: "cli" as const };
       },
     });
 
@@ -289,7 +289,7 @@ describe("askQuestions", () => {
     });
 
     // q-aaa is filtered out by filterCooldownQuestions (future-dated = within cooldown)
-    expect(result).toEqual({ questionId: "q-bbb", prompt: "What kind of collaborators are you looking for?" });
+    expect(result).toEqual({ questionId: "q-bbb", intentId: "intent-b", prompt: "What kind of collaborators are you looking for?" });
 
     // q-aaa must be preserved in state (not pruned) — daysBetween("2026-06-18", "2026-06-17") = -1 < 3
     const state = JSON.parse(await Bun.file("state.json").text());
@@ -311,7 +311,7 @@ describe("askQuestions", () => {
     });
 
     // Treats malformed delivery log as empty — question is available
-    expect(result).toEqual({ questionId: "q-aaa", prompt: "What are you currently working on?" });
+    expect(result).toEqual({ questionId: "q-aaa", intentId: "intent-a", prompt: "What are you currently working on?" });
     const state = JSON.parse(await Bun.file("state.json").text());
     expect(state.questionDelivery).toEqual({ "q-aaa": "2026-06-17" });
     // Unrelated state keys must not be touched

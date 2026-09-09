@@ -10,14 +10,14 @@
  *   - `terminal.cwd` in config.yaml → `$HERMES_HOME`
  *   - STT enabled with Groq Whisper so voice notes are auto-transcribed
  *   - gateway token streaming disabled so intermediate tool-call text is never sent
- *   - Index MCP + morning digest cron (`install_index.ts`)
+ *   - Index CLI + morning digest cron (`install_index.ts`)
  *   - Geo CLI runtime note (`install_geo.ts`)
  *
  * Usage (from repo root):
- *   bun install/install.ts --index-api-key <KEY>
- *   bun install/install.ts --index-api-key <KEY> --dev
- *   bun install/install.ts --index-api-key <KEY> --wipe-user
- *   bun install/install.ts --index-api-key <KEY> --no-restart   # containers (gateway starts after)
+ *   bun install/install.ts
+ *   bun install/install.ts --dev
+ *   bun install/install.ts --wipe-user
+ *   bun install/install.ts --no-restart   # containers (gateway starts after)
  */
 
 import {

@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@edge-city/edge-hermes",
+      "name": "@edge-city/agentvillage",
       "dependencies": {
         "yaml": "^2.8.0",
       },

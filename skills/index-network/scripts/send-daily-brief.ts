@@ -4,8 +4,7 @@
  *
  * The send cron prompt should not reimplement file, Kanban, or URL-guard logic
  * with model-generated Python. This script owns approval-gate checking, outgoing
- * body persistence, delivery-state bookkeeping, Kanban completion, ledger
- * confirmation, and final body sanitization. The
+ * body persistence, delivery-state bookkeeping, Kanban completion, and final body sanitization. The
  * prompt only needs to call this script and return the returned brief verbatim.
  */
 
@@ -13,7 +12,7 @@ import { existsSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 
-import { QUESTION_COOLDOWN_DAYS, confirmOpportunityDeliveriesViaMcp, resolveIndexApiKey } from "./build-daily-brief-context";
+import { QUESTION_COOLDOWN_DAYS } from "./build-daily-brief-context";
 import { sanitizeDigestUrls } from "./validate-digest-urls";
 
 interface SendResult {
@@ -21,34 +20,7 @@ interface SendResult {
   opportunityIds: string[];
   questionIds: string[];
   finalBrief: string;
-  /** Opportunity ids whose digest delivery was confirmed on the Index ledger by this script. */
-  confirmedOpportunityIds: string[];
-  /** Opportunity ids whose ledger confirm failed (diagnostics only — delivery still proceeds). */
-  confirmFailed: Array<{ opportunityId: string; reason: string }>;
 }
-
-type DeliveryConfirmer = (opportunityIds: string[]) => Promise<{
-  confirmed: string[];
-  failed: Array<{ opportunityId: string; reason: string }>;
-}>;
-
-/**
- * Default ledger confirmer: resolve the Index API key the same way the
- * context builder does and call the MCP server directly. When no key is
- * available every id is reported as failed — never throws.
- */
-const defaultConfirmDeliveries: DeliveryConfirmer = async (opportunityIds) => {
-  if (opportunityIds.length === 0) return { confirmed: [], failed: [] };
-  const apiKey = resolveIndexApiKey();
-  if (!apiKey) {
-    return {
-      confirmed: [],
-      failed: opportunityIds.map((opportunityId) => ({ opportunityId, reason: "INDEX_API_KEY unavailable" })),
-    };
-  }
-  const mcpUrl = process.env.INDEX_MCP_URL?.trim() || "https://protocol.index.network/mcp";
-  return confirmOpportunityDeliveriesViaMcp({ apiKey, mcpUrl, opportunityIds });
-};
 
 interface SilentResult {
   silent: true;
@@ -159,37 +131,16 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
 }
 
-/**
- * Error-code prefixes the Index `confirm_opportunity_delivery` tool marks as
- * `retryable: false`. A failure whose reason starts with one of these will
- * never succeed on retry (deleted opportunity, caller not an actor, malformed
- * id, bad auth), so it must NOT be carried into the cross-run retry queue —
- * otherwise it accumulates forever and re-hammers the MCP transport daily.
- */
-const PERMANENT_CONFIRM_CODES = [
-  "opportunity_not_found",
-  "not_authorized",
-  "invalid_opportunity_id",
-  "unauthenticated",
-  "ledger_unavailable",
-];
-
-function isPermanentConfirmFailure(reason: string): boolean {
-  return PERMANENT_CONFIRM_CODES.some((code) => reason.startsWith(code));
-}
-
 export async function sendDailyBrief(options: {
   date?: string;
   stateFile?: string;
   outgoingFile?: string;
   hermes?: HermesRunner;
-  confirmDeliveries?: DeliveryConfirmer;
 } = {}): Promise<SendResult | SilentResult> {
   const date = options.date ?? pacificDate();
   const stateFile = resolveHermesPath(options.stateFile ?? "memory/heartbeat-state.json");
   const outgoingFile = resolveHermesPath(options.outgoingFile ?? "memory/digest-outgoing.md");
   const hermes = options.hermes ?? runHermes;
-  const confirmDeliveries = options.confirmDeliveries ?? defaultConfirmDeliveries;
 
   const state = await readJsonObject(stateFile);
   const prepared = state.prepared && typeof state.prepared === "object" && !Array.isArray(state.prepared)
@@ -216,15 +167,6 @@ export async function sendDailyBrief(options: {
   await Bun.write(outgoingFile, body);
   const opportunityIds = stringArray(prepared.opportunityIds);
   const questionIds = stringArray(prepared.questionIds);
-
-  // Cross-run retry: ids whose ledger confirm failed transiently on a previous
-  // run. Index's cross-day digest suppression reads the ledger (not Hermes'
-  // local deliveredToday state), so a confirm that never lands lets the same
-  // opportunity resurface in a later digest. Re-attempt those here — the tool
-  // is idempotent, so re-confirming an id that actually landed is a cheap
-  // 'already_delivered'.
-  const priorPendingConfirms = stringArray(state.pendingDeliveryConfirms);
-  const confirmBatch = Array.from(new Set([...opportunityIds, ...priorPendingConfirms]));
 
   const deliveredToday = state.deliveredToday && typeof state.deliveredToday === "object" && !Array.isArray(state.deliveredToday)
     ? state.deliveredToday as Record<string, unknown>
@@ -253,43 +195,8 @@ export async function sendDailyBrief(options: {
 
   await hermes(["kanban", "complete", taskId, "--summary", "delivered"]);
 
-  // Confirm digest delivery on the Index ledger deterministically. This used
-  // to be an LLM-prompt step ("call confirm_opportunity_delivery for each
-  // id") and was skipped often enough that opportunities re-surfaced in later
-  // digests. Failures are diagnostics only — the brief still goes out.
-  let confirmedOpportunityIds: string[] = [];
-  let confirmFailed: Array<{ opportunityId: string; reason: string }> = [];
-  try {
-    const confirmResult = await confirmDeliveries(confirmBatch);
-    confirmedOpportunityIds = confirmResult.confirmed;
-    confirmFailed = confirmResult.failed;
-  } catch (err) {
-    confirmFailed = confirmBatch.map((opportunityId) => ({
-      opportunityId,
-      reason: err instanceof Error ? err.message : String(err),
-    }));
-  }
-
-  // Persist the still-pending (transient-only) failures for the next run. Drop
-  // permanent failures — retrying them never succeeds. Only re-write state when
-  // the pending set actually changes, to avoid a needless disk write.
-  const nextPendingConfirms = confirmFailed
-    .filter((f) => !isPermanentConfirmFailure(f.reason))
-    .map((f) => f.opportunityId);
-  const pendingChanged =
-    nextPendingConfirms.length !== priorPendingConfirms.length ||
-    nextPendingConfirms.some((id, i) => id !== priorPendingConfirms[i]);
-  if (pendingChanged || priorPendingConfirms.length > 0) {
-    if (nextPendingConfirms.length > 0) {
-      state.pendingDeliveryConfirms = nextPendingConfirms;
-    } else {
-      delete state.pendingDeliveryConfirms;
-    }
-    await writeJson(stateFile, state);
-  }
-
   const { output: finalBrief } = sanitizeDigestUrls(body, { stripDigestMetadata: true });
-  return { taskId, opportunityIds, questionIds, finalBrief, confirmedOpportunityIds, confirmFailed };
+  return { taskId, opportunityIds, questionIds, finalBrief };
 }
 
 async function main(): Promise<void> {

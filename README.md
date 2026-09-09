@@ -27,7 +27,7 @@ See the project hub for the full diagram and decisions.
 - `workspace/IDENTITY.md` — what an AgentVillage agent knows about itself and the village
 - `workspace/` — backend-agnostic agent core (identity, voice, community context, generic operating rules)
 - `skills/` — per-backend skill bundles registered with OpenClaw via per-bundle `SKILL.md`. Mirrors `Edge-City/agentvillage-skills` as a subtree; today this hosts:
-  - `skills/index-network/` — Index Network MCP procedural knowledge (onboarding ritual, voice exemplars, cron prompts, heartbeat tasks)
+  - `skills/index-network/` — Index Network CLI procedural knowledge (onboarding ritual, voice exemplars, cron prompts, heartbeat tasks)
   - `skills/edgeos/` — backend-generic EdgeOS API recipes (events, RSVPs, venues, attendee directory, own profile). Reads `EDGEOS_BEARER_TOKEN` and `EDGEOS_API_KEY` from env; popup id is supplied by the active operator skill.
   - `skills/edge-esmeralda/` — Edge Esmeralda 2026 popup knowledge: popup constants (popup id, week dates, themes), attendee field semantics, the curated wiki/website/newsletter references (vendored from `Edge-City/agentvillage-skills`; refreshed by upstream CI every 15 min), and the onboarding pointer for obtaining EdgeOS tokens.
   - `skills/geo-esmeralda/` — Geo knowledge graph recipes and write guidance for attendee-authored content, relations, ontology, and media.
@@ -104,18 +104,13 @@ x-api-key: <masterKey>
 ```json
 {
   "user":   { "id": "<uuid>", "email": "alice@example.com" },
-  "apiKey": "ix_...",
-  "mcpServer": {
-    "name":    "index",
-    "url":     "https://protocol.index.network/mcp",
-    "headers": { "x-api-key": "ix_..." }
-  }
+  "apiKey": "ix_..."
 }
 ```
 
 HTTP `201` if the user was newly created; `200` if they already existed.
 
-`mcpServer` is the standard MCP server config object that OpenClaw reads on startup.
+Set `INDEX_API_KEY` to the returned key and `INDEX_API_URL` to the API origin. The installer provisions the CLI; signup returns no transport configuration.
 
 **Idempotency**
 
@@ -131,8 +126,8 @@ Every call with the same email returns the same user but a **fresh API key** —
 
 ### What Portal does after signup
 
-1. Runs the AgentVillage installer with the returned `apiKey`: `bun install/install.ts --index-api-key <apiKey>` (or equivalent in the hosted runtime). If Portal has a resident-confirmed Telegram handle, it passes it as a bare handle (`--telegram-handle handle`) so every Telegram-surface Index MCP request carries `x-index-telegram-username`. If Portal has also fetched an EdgeOS personal access token for the attendee, it passes that on the same line: `bun install/install.ts --index-api-key <apiKey> --telegram-handle handle --edgeos-api-key <eos_live_…> --edgeos-bearer-token <jwt>`.
-2. If Portal learns or changes the attendee's Telegram handle later, it should rerun the installer or update `mcp_servers.index.headers.x-index-telegram-username` in the host config.
+1. Passes the returned key as `INDEX_API_KEY` in the installer's environment, with `INDEX_API_URL` set to the matching API origin, then runs `bun install/install.ts`.
+2. Passes a resident-confirmed Telegram handle with `--telegram-handle handle` when available. The installer stores it locally; it is not a transport header or an automatic profile write. Existing EdgeOS token options are unchanged.
 
 ### What EdgeOS does after signup (BYOA flow)
 
@@ -140,6 +135,8 @@ Displays per-host install commands with the attendee's credentials pre-filled. T
 
 **Claude Code:**
 ```bash
+npm install --global @indexnetwork/cli@0.24.0
+export INDEX_API_URL=https://protocol.index.network
 export INDEX_API_KEY=<apiKey>
 export EDGEOS_BEARER_TOKEN=<jwt>
 export EDGEOS_API_KEY=<eos_live_…>
@@ -150,7 +147,9 @@ claude plugin install agentvillage@agentvillage-skills
 **OpenClaw:**
 ```bash
 openclaw plugins install agentvillage --marketplace Edge-City/agentvillage-skills
-openclaw config set mcp.servers.index '{"url":"https://protocol.index.network/mcp","transport":"streamable-http","headers":{"x-api-key":"<apiKey>","x-index-surface":"telegram","x-index-telegram-username":"handle"}}'
+npm install --global @indexnetwork/cli@0.24.0
+openclaw config set env.vars.INDEX_API_KEY '<apiKey>'
+openclaw config set env.vars.INDEX_API_URL 'https://protocol.index.network'
 openclaw config set env.vars.EDGEOS_BEARER_TOKEN '<jwt>'
 openclaw config set env.vars.EDGEOS_API_KEY '<eos_live_…>'
 openclaw gateway restart
@@ -161,15 +160,15 @@ openclaw gateway restart
 hermes skills install Edge-City/agentvillage/skills/edge-esmeralda --force
 hermes skills install Edge-City/agentvillage/skills/edgeos --force
 hermes skills install Edge-City/agentvillage/skills/index-network --force
-hermes config set mcp_servers.index.url 'https://protocol.index.network/mcp'
-hermes config set mcp_servers.index.headers.x-api-key '<apiKey>'
-hermes config set mcp_servers.index.headers.x-index-surface 'telegram'
-hermes config set mcp_servers.index.headers.x-index-telegram-username 'handle'
+npm install --global @indexnetwork/cli@0.24.0
+# Persist in ~/.hermes/.env, then restart the runtime:
+# INDEX_API_KEY=<apiKey>
+# INDEX_API_URL=https://protocol.index.network
 hermes config set EDGEOS_BEARER_TOKEN '<jwt>'
 hermes config set EDGEOS_API_KEY '<eos_live_…>'
 ```
 
-**Claude Desktop / other MCP clients:** displays the `mcpServer` JSON with the API key baked in.
+**Other hosts:** require shell execution and the Index CLI. See the skill instructions for current schemas and protocol guidance.
 
 See `skills/README.md` for the full per-host reference.
 
@@ -187,31 +186,31 @@ See `skills/README.md` for the full per-host reference.
 
 ## Install
 
-From a clone of this repo:
+From a clone of this repo, set `INDEX_API_KEY` in the environment, then run:
 
 ```bash
-bun install/install.ts --index-api-key <YOUR_API_KEY>
+bun install/install.ts
 ```
 
-If this AgentVillage runtime is serving the user through Telegram, include their public Telegram handle. The installer stores it in the Index MCP headers so any Telegram-surface interaction can upsert the user's reachable Telegram social without waiting for onboarding:
+If this AgentVillage runtime is serving the user through Telegram, include their public Telegram handle. The installer stores it locally for delivery and resident context:
 
 ```bash
-bun install/install.ts --index-api-key <YOUR_API_KEY> --telegram-handle handle
+bun install/install.ts --telegram-handle handle
 ```
 
 To target the dev environment (keys generated on `dev.index.network`), pass `--dev`:
 
 ```bash
-bun install/install.ts --index-api-key <YOUR_DEV_API_KEY> --dev
+INDEX_API_KEY=<YOUR_DEV_API_KEY> bun install/install.ts --dev
 ```
 
-Or override the MCP URL explicitly via `INDEX_MCP_URL=…`. Without either, the installer points at `https://protocol.index.network/mcp` (production).
+Or set the API origin explicitly via `INDEX_API_URL=…`. Without an override, the installer uses `https://protocol.index.network` (production).
 
 To wire the optional EdgeOS tokens at the same time, pass them as flags:
 
 ```bash
 bun install/install.ts \
-  --index-api-key <YOUR_API_KEY> \
+   \
   --edgeos-api-key eos_live_… \
   --edgeos-bearer-token eyJ…
 ```
@@ -224,13 +223,13 @@ Index background work is installed as Hermes/OpenClaw cron jobs: **memory signal
 
 ```bash
 # via flags
-bun install/install.ts --index-api-key <YOUR_API_KEY> \
+bun install/install.ts  \
   --digest-prepare-cron "0 3 * * *" \
   --digest-send-cron    "0 9 * * *"
 
 # or via environment
 DIGEST_PREPARE_CRON="0 3 * * *" DIGEST_SEND_CRON="0 9 * * *" \
-  bun install/install.ts --index-api-key <YOUR_API_KEY>
+  bun install/install.ts
 ```
 
 | Cron | Flag | Env var | Default |
@@ -252,7 +251,7 @@ The installer writes any tokens it finds into `env.vars.*` in `~/.openclaw/openc
 
 The installer:
 
-1. Writes `mcp.servers.index` in `~/.openclaw/openclaw.json`, pointed at `https://protocol.index.network/mcp` with your API key in `x-api-key`.
+1. Installs CLI 0.24.0 and stores `INDEX_API_KEY` and `INDEX_API_URL` in the runtime environment. Removes the obsolete Index MCP registration while preserving other servers.
 2. If `--edgeos-api-key` and/or `--edgeos-bearer-token` are passed, writes each to `env.vars.<NAME>` so the gateway exposes them to the agent's subprocesses on its next start.
 3. Leaves Geo CLI execution to the skill recipes, which run the public package through `npx`.
 4. Sets Hermes gateway `streaming.enabled = false` and `streaming.transport = off` so intermediate tool-call text cannot be streamed into Telegram.
@@ -279,7 +278,7 @@ bun install/reset.ts
 Then re-install:
 
 ```bash
-bun install/install.ts --index-api-key <YOUR_API_KEY>
+bun install/install.ts
 ```
 
 Pass `--wipe-user` to also remove `USER.md`, `MEMORY.md`, and the entire `memory/` directory — including `agentvillage-state.json`, `welcome-state.json`, daily notes, and any other local memory files — so the next message can run the first-install gates again:
@@ -306,7 +305,7 @@ Time-sensitive and background prompts run as **Hermes/OpenClaw cron jobs**. The 
 | `USER.md` | Lived notebook — populated by the active skill's bootstrap ritual from the user's onboarding answers. |
 | `TOOLS.md` | Cross-backend rules: channel formatting (Discord/WhatsApp/Telegram), URL preservation, Local files index. Per-backend tool families live in the relevant skill. |
 | `HEARTBEAT.md` | Generic heartbeat tick rules + the cross-backend `memory-curation` task. Backend-specific tasks live in each active skill's `heartbeat.md`. |
-| `skills/index-network/SKILL.md` | Index Network skill bundle entry point. Registered with OpenClaw on install; gates on `mcp.servers.index`. Body points at the bundle's sibling reference files. |
+| `skills/index-network/SKILL.md` | Index Network skill bundle entry point. Registered with OpenClaw on install; requires the `index` executable and environment credentials. Body points at the bundle's sibling reference files. |
 | `skills/edgeos/SKILL.md` | EdgeOS-API skill: events + attendee directory + curated wiki/website/newsletter references. Currently scoped to Edge Esmeralda 2026. Loaded by OpenClaw alongside index-network. Vendored from `Edge-City/agentvillage-skills`. |
 | `skills/geo-esmeralda/SKILL.md` | Geo knowledge graph skill: community content, relations, ontology, and attendee-authored writes through the Geo CLI package. |
 
@@ -364,7 +363,7 @@ Index background work runs as fixed cron prompts — **memory signal sync `0 1 *
 
 | You want to… | Edit | Notes |
 |---|---|---|
-| Wire a brand-new backend | new `install/install_<name>.ts` (modeled on `install_index.ts` for MCP+cron wiring, `install_edgeos.ts` for env-token wiring, or `install_geo.ts` for CLI runtime guidance) + new `skills/<name>/` bundle with `SKILL.md` + register in `workspace/AGENTS.md` "Active skills" | Add the installer call to `install/install.ts` and include the skill in `EDGE_SKILL_NAMES` so it is copied into the runtime workspace. |
+| Wire a brand-new backend | new `install/install_<name>.ts` (modeled on `install_index.ts` for CLI+cron wiring, `install_edgeos.ts` for env-token wiring, or `install_geo.ts` for CLI runtime guidance) + new `skills/<name>/` bundle with `SKILL.md` + register in `workspace/AGENTS.md` "Active skills" | Add the installer call to `install/install.ts` and include the skill in `EDGE_SKILL_NAMES` so it is copied into the runtime workspace. |
 | Extend an existing backend (Index, EdgeOS, Geo) | The matching `install/install_<name>.ts` and `skills/<name>/` bundle | Runtime config (env vars, MCP entries, cron jobs, CLI commands) lives in `install_<name>.ts`; agent-facing instructions live in the skill bundle's `SKILL.md` and siblings. |
 | Wire optional env vars an existing backend needs | `install/install_<name>.ts` + the Prerequisites section of this README | The installer writes `env.vars.<NAME>`; the gateway exposes those to the agent's shell tools on next start. `install_edgeos.ts` is the worked example. |
 | Change which skills the agent loads | `workspace/AGENTS.md` "Active skills" section | Mark a skill as eager (gates fire at session start) or reactive (only consulted when needed). |
@@ -374,7 +373,7 @@ Index background work runs as fixed cron prompts — **memory signal sync `0 1 *
 
 Skills in this repo are public. Each backend gates access with its own per-user credential, wired in by the matching per-backend installer:
 
-- **Index Network (today's wired backend)** — per-user API key returned by `POST /api/networks/:id/signup` (see [Integration API: Authentication](#authentication) above). `install/install_index.ts` writes it into `mcp.servers.index` as the `x-api-key` header.
+- **Index Network (today's wired backend)** — per-user API key returned by `POST /api/networks/:id/signup` (see [Integration API: Authentication](#authentication) above). `install/install_index.ts` stores it as `INDEX_API_KEY` in the runtime environment.
 - **EdgeOS** — per-user tokens issued via OTP through the EdgeOS portal. `install/install_edgeos.ts` writes `EDGEOS_API_KEY` and `EDGEOS_BEARER_TOKEN` into the runtime environment when provided.
 - **Geo** — uses the attendee's `EDGEOS_BEARER_TOKEN` and the Geo CLI package. Skill recipes run it through `npx`.
 

@@ -1,6 +1,6 @@
 # Agentvillage Skills
 
-Agent skills for **Edge Esmeralda 2026** (May 30 – Jun 27, Healdsburg, CA). Shipped with [agentvillage](../README.md); also installable on Claude Code, OpenClaw, and other MCP hosts.
+Agent skills for **Edge Esmeralda 2026** (May 30 – Jun 27, Healdsburg, CA). Shipped with [agentvillage](../README.md); also installable on Claude Code, OpenClaw, and other shell-capable hosts.
 
 ## What you get
 
@@ -27,7 +27,7 @@ Some background prompts need to complete without sending a chat message. Use the
 | OpenClaw | `NO_REPLY` |
 | Claude Code | No user-facing text if the host supports a silent turn; otherwise stop without commentary |
 
-Shared skill files use host-neutral language like "reply silently" so the same skill bundle can run on Hermes, OpenClaw, Claude Code, and other MCP hosts.
+Shared skill files use host-neutral language like "reply silently" so the same skill bundle can run on Hermes, OpenClaw, Claude Code, and other shell-capable hosts.
 
 ## Install
 
@@ -43,7 +43,7 @@ All hosts read credentials from environment variables. Set these before installi
 | `EDGEOS_API_KEY`      | EdgeOS email-OTP onboarding flow (`eos_live_...` key)                                                | Optional; needed for EdgeOS events, RSVPs, venues |
 
 
-`INDEX_API_KEY` is required for the Index Network MCP server. `EDGEOS_BEARER_TOKEN` is required for `geo-esmeralda` auth, graph reads, and content writes. `EDGEOS_API_KEY` is only needed for EdgeOS event, RSVP, and venue recipes.
+`INDEX_API_KEY` is required for the Index CLI. `EDGEOS_BEARER_TOKEN` is required for `geo-esmeralda` auth, graph reads, and content writes. `EDGEOS_API_KEY` is only needed for EdgeOS event, RSVP, and venue recipes.
 
 ### BYOA flow
 
@@ -52,17 +52,20 @@ If you authenticated through the EdgeOS portal (https://agent-ee26.edgecity.live
 ### Claude Code
 
 ```bash
+npm install --global @indexnetwork/cli@0.24.0
 claude plugin marketplace add Edge-City/agentvillage-skills
 claude plugin install agentvillage@agentvillage-skills --config indexApiKey=<YOUR_API_KEY> --config edgeosToken=<YOUR_TOKEN> --config edgeosApiKey=<YOUR_KEY>
 ```
 
-`--config` values are stored in the plugin's `userConfig`. `indexApiKey` is wired to the Index Network MCP server header. A SessionStart hook exports `EDGEOS_API_KEY` and `EDGEOS_BEARER_TOKEN` into every session via `CLAUDE_ENV_FILE`, so the Geo CLI and edgeos skill's curl recipes work without manual shell exports.
+`--config` values are stored in the plugin's `userConfig`. `indexApiKey` is wired to the Index CLI header. A SessionStart hook exports `EDGEOS_API_KEY` and `EDGEOS_BEARER_TOKEN` into every session via `CLAUDE_ENV_FILE`, so the Geo CLI and edgeos skill's curl recipes work without manual shell exports.
 
 ### OpenClaw
 
 ```bash
 openclaw plugins install agentvillage --marketplace Edge-City/agentvillage-skills
-openclaw config set mcp.servers.index '{"url":"https://protocol.index.network/mcp","transport":"streamable-http","headers":{"x-api-key":"<YOUR_API_KEY>"}}'
+npm install --global @indexnetwork/cli@0.24.0
+openclaw config set env.vars.INDEX_API_KEY '<YOUR_API_KEY>'
+openclaw config set env.vars.INDEX_API_URL 'https://protocol.index.network'
 openclaw config set env.vars.EDGEOS_BEARER_TOKEN '<YOUR_TOKEN>'  # Human session JWT for Geo knowledge graph access and content writes
 openclaw config set env.vars.EDGEOS_API_KEY '<YOUR_KEY>'         # Long-lived automation key for events, RSVPs, venues
 openclaw gateway restart
@@ -73,6 +76,7 @@ OpenClaw persists credentials in `~/.openclaw/openclaw.json` — no shell profil
 ### Hermes (skills only)
 
 ```bash
+npm install --global @indexnetwork/cli@0.24.0
 hermes skills install Edge-City/agentvillage/skills/edge-esmeralda --force
 hermes skills install Edge-City/agentvillage/skills/edgeos --force
 hermes skills install Edge-City/agentvillage/skills/geo-esmeralda --force
@@ -87,28 +91,17 @@ Add to `~/.hermes/.env`:
 
 ```bash
 INDEX_API_KEY=<YOUR_API_KEY>
+INDEX_API_URL=https://protocol.index.network
 EDGEOS_BEARER_TOKEN=<YOUR_TOKEN>   # Human session JWT for Geo knowledge graph access and content writes
 EDGEOS_API_KEY=<YOUR_KEY>          # Long-lived automation key for events, RSVPs, venues
 TELEGRAM_BOT_TOKEN=<YOUR_BOT_TOKEN>        # optional, required for Agent Plaza selfie photo delivery
 TELEGRAM_HOME_CHANNEL=<numeric_chat_id>   # optional, for cron delivery
 ```
 
-Merge into `~/.hermes/config.yaml` under `mcp_servers.index`:
-
-```yaml
-mcp_servers:
-  index:
-    url: https://protocol.index.network/mcp
-    headers:
-      x-api-key: <YOUR_API_KEY>
-      x-index-surface: telegram
-      x-index-telegram-username: handle  # optional; resident-confirmed bare Telegram handle forwarded on Telegram-surface MCP calls
-```
-
 For workspace, installer, and cron jobs:
 
 ```bash
-bun install/install.ts --index-api-key <KEY>
+INDEX_API_KEY=<KEY> bun install/install.ts
 # add --telegram-handle handle when this runtime serves the user over Telegram and the resident confirmed that handle
 # add --edgeos-bearer-token for Geo knowledge graph access/content writes
 # add --edgeos-api-key for EdgeOS event, RSVP, and venue recipes
@@ -117,43 +110,12 @@ bun install/install.ts --index-api-key <KEY>
 
 Installs flat under `~/.hermes/` (SOUL.md, AGENTS.md, skills/, `terminal.cwd`) — Hermes defaults, no subfolders.
 
-### Claude Desktop
+### Other hosts
 
-Add the MCP server to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
-
-```json
-{
-  "mcpServers": {
-    "index": {
-      "url": "https://protocol.index.network/mcp",
-      "headers": {
-        "x-api-key": "<YOUR_API_KEY>"
-      }
-    }
-  }
-}
-```
-
-Claude Desktop provides MCP tools only (no skills).
-
-### Codex
-
-Not yet supported. Codex requires plugins in a `plugins/<name>/` subdirectory layout, which this repo doesn't use.
-
-### Other MCP-compatible agents
-
-Configure an HTTP MCP server with the following settings:
-
-```json
-{
-  "url": "https://protocol.index.network/mcp",
-  "headers": { "x-api-key": "<YOUR_API_KEY>" }
-}
-```
-
-Set `EDGEOS_BEARER_TOKEN` for Geo knowledge graph access and content writes. Set `EDGEOS_API_KEY` as well if the agent supports EdgeOS event, RSVP, or venue recipes.
-
-For Hermes with workspace + installer, use [agentvillage](https://github.com/Edge-City/agentvillage). For OpenClaw, use [agentvillage](https://github.com/Edge-City/agentvillage).
+Install CLI 0.24.0, load the skill bundle, and pass `INDEX_API_KEY` and
+`INDEX_API_URL` through the host's environment. Index requires shell execution.
+There is no Index MCP registration. Use `index --api-url "$INDEX_API_URL" tool
+list --json` and `read_docs` to discover the current surface.
 
 ## Contributing
 

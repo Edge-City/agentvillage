@@ -12,7 +12,7 @@ Deliver one pending question to the user in a natural, conversational way. If th
    bun skills/index-network/scripts/ask-questions.ts
    ```
 
-   Do not write Python, shell pipelines, or replacement logic. The script fetches pending questions from the Index MCP server, applies the 3-day re-ask cooldown (shared with the morning brief), records the chosen question in `memory/heartbeat-state.json`, and prints either `[SILENT]` or one JSON object.
+   Do not write Python, shell pipelines, or replacement logic. The script fetches pending questions from the scoped hosted-agent conversations, applies the 3-day re-ask cooldown (shared with the morning brief), records the chosen question in `memory/heartbeat-state.json`, and prints either `[SILENT]` or one JSON object.
 
    If the script exits with a non-zero code, end your turn immediately with `[SILENT]`. One attempt only.
 
@@ -21,7 +21,7 @@ Deliver one pending question to the user in a natural, conversational way. If th
 3. **If stdout is JSON, parse it.** It has this shape:
 
    ```json
-   { "questionId": "...", "prompt": "..." }
+   { "questionId": "...", "intentId": "...", "prompt": "..." }
    ```
 
 4. **Deliver the question naturally.** Your final assistant reply must be a single short message:
@@ -42,7 +42,9 @@ If the returned prompt asks about closing loops, photos, goodbyes, follow-ups, o
 - **Output only the brief framing sentence followed by `prompt`.** No preamble, no thinking out loud, no "let me…" drafting, and never wrap the reply in a triple-backtick code fence or any code block. The reply is plain chat text only.
 - One attempt at the script. If it fails, end immediately with `[SILENT]`.
 - If stdout is `[SILENT]`, end your turn with `[SILENT]` and nothing else.
-- Never call MCP tools directly. The script owns all MCP interactions.
+- The script owns all Index CLI reads.
 - Never expose `questionId`, internal IDs, raw JSON, or internal vocabulary.
 - Ask exactly the question returned in `prompt`. No paraphrasing, no additions.
 - Never expose the source or mechanism of the question to the user.
+
+Retain the returned intentId with the displayed questionId in conversation context. When the owner answers, follow the scoped conversation command and session requirements in the Index skill; never answer a different or stale question.
