@@ -4,16 +4,15 @@
  *
  * The morning digest delivers the full brief once a day; this powers the lighter
  * mid-day / evening "opportunity drop" crons that surface a single fresh
- * opportunity. It owns selection, dedup, and ledger confirmation so the prompt
+ * opportunity. It owns selection, dedup, and local delivery bookkeeping so the prompt
  * only has to render the one card it returns:
  *
  *   - Reads today's `deliveredToday` set from `memory/heartbeat-state.json` and
- *     filters it out of `list_opportunities`, so a drop never repeats anything the
+ *     filters it out of `index opportunity list`, so a drop never repeats anything the
  *     morning brief (or an earlier drop) already sent that day, and vice versa.
  *   - Picks the single best undelivered opportunity (fresh over re-show, then
  *     highest confidence).
- *   - Records its id in the same `deliveredToday` set and confirms delivery on the
- *     Index ledger, exactly like the daily send.
+ *   - Records its id in the same `deliveredToday` set, exactly like the daily send.
  *
  * Prints `[SILENT]` when there is nothing new to send, otherwise one JSON object
  * describing the chosen opportunity for the prompt to render.
@@ -24,8 +23,7 @@ import { isAbsolute, join } from "node:path";
 
 import {
   type BriefOpportunity,
-  confirmOpportunityDeliveriesViaMcp,
-  fetchOpportunitiesFromMcp,
+  fetchOpportunitiesFromCli,
   filterDedupedOpportunities,
   pacificDate,
   resolveIndexApiKey,
@@ -79,19 +77,18 @@ export async function dropOpportunity(options: {
   date?: string;
   stateFile?: string;
   apiKey?: string;
-  mcpUrl?: string;
-  fetchOpportunities?: typeof fetchOpportunitiesFromMcp;
-  confirmDeliveries?: (opportunityIds: string[]) => Promise<unknown>;
+  apiUrl?: string;
+  fetchOpportunities?: typeof fetchOpportunitiesFromCli;
 } = {}): Promise<DropResult | SilentResult> {
   const date = options.date ?? pacificDate();
   const stateFile = resolveHermesPath(options.stateFile ?? "memory/heartbeat-state.json");
   const apiKey = options.apiKey ?? resolveIndexApiKey();
   if (!apiKey) return { silent: true, reason: "no-api-key" };
-  const mcpUrl = options.mcpUrl ?? process.env.INDEX_MCP_URL?.trim() ?? "https://protocol.index.network/mcp";
+  const apiUrl = options.apiUrl ?? (process.env.INDEX_API_URL?.trim() || "https://protocol.index.network");
 
   const fetched = options.fetchOpportunities
-    ? await options.fetchOpportunities({ apiKey, mcpUrl })
-    : await fetchOpportunitiesFromMcp({ apiKey, mcpUrl });
+    ? await options.fetchOpportunities({ apiKey, apiUrl })
+    : await fetchOpportunitiesFromCli({ apiKey, apiUrl });
 
   const state = await readJsonObject(stateFile);
   const deliveredToday =
@@ -111,16 +108,6 @@ export async function dropOpportunity(options: {
     ids: Array.from(new Set([...deliveredIds, chosen.opportunityId])),
   };
   await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
-
-  const confirm = options.confirmDeliveries
-    ? options.confirmDeliveries
-    : (ids: string[]) => confirmOpportunityDeliveriesViaMcp({ apiKey, mcpUrl, opportunityIds: ids });
-  try {
-    await confirm([chosen.opportunityId]);
-  } catch {
-    // Ledger confirm is best-effort; the drop still ships. The id is already
-    // recorded in deliveredToday so it will not resurface today.
-  }
 
   return { opportunity: chosen };
 }

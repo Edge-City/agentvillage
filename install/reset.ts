@@ -175,7 +175,7 @@ function main(): void {
   console.log("✓ reset complete");
   console.log("");
   console.log("next:");
-  console.log("  re-install: bun install/install.ts --index-api-key <KEY>");
+  console.log("  re-install: INDEX_API_KEY=<KEY> bun install/install.ts");
 }
 
 main();

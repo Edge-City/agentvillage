@@ -17,23 +17,20 @@ const EIGHT_DAYS_AGO = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOStrin
 function makeNegotiation(overrides: Partial<NegotiationItem> = {}): NegotiationItem {
   return {
     id: "aaaaaaaa-0000-0000-0000-000000000001",
-    counterpartyId: "user-b",
-    role: "source",
+    opportunityId: "opp-1",
+    intentId: "intent-1",
+    awaitingUserId: "user-a",
     turnCount: 2,
-    status: "active",
-    isUsersTurn: true,
-    isContinuation: false,
-    priorTurnCount: 0,
-    latestAction: "propose",
-    latestMessagePreview: "Looking forward to exploring overlap.",
     createdAt: NOW,
     updatedAt: NOW,
-    indexContext: { networkId: "net-1", prompt: "A community for frontier AI researchers." },
-    recentTurns: [
-      { turnNumber: 1, speaker: "source", role: "own", action: "propose", message: "Interested in your AI safety work." },
-      { turnNumber: 2, speaker: "candidate", role: "other", action: "counter", message: "Happy to explore. What specifically?" },
+    counterparty: { userId: "user-b", intentId: "intent-b", name: "Ada", statement: "AI safety research" },
+    turns: [
+      { turnIndex: 0, seatUserId: "user-a", action: "propose", message: "Interested in your AI safety work.", createdAt: NOW },
+      { turnIndex: 1, seatUserId: "user-b", action: "counter", message: "Happy to explore. What specifically?", createdAt: NOW },
     ],
+    protocol: { availableActions: ["counter", "accept", "decline"], blockedReason: null, maxTurns: 12, messageLimit: 4000 },
     outcome: null,
+    settledAt: null,
     ...overrides,
   };
 }
@@ -76,16 +73,16 @@ describe("updatedWithinDays", () => {
 // ── summarizeNegotiations ─────────────────────────────────────────────────────
 
 describe("summarizeNegotiations", () => {
-  test("returns silent when the fetcher throws (non-fatal MCP failure)", async () => {
+  test("returns silent when the fetcher throws (non-fatal CLI failure)", async () => {
     tempWorkspace();
     await Bun.write("state.json", "{}");
 
     const result = await summarizeNegotiations({
-      fetchNegotiations: async () => { throw new Error("MCP unreachable"); },
+      fetchNegotiations: async () => { throw new Error("CLI unreachable"); },
       stateFile: "state.json",
     });
 
-    expect(result).toEqual({ silent: true, reason: "mcp-fetch-failed" });
+    expect(result).toEqual({ silent: true, reason: "cli-fetch-failed" });
   });
 
   test("returns silent when there are no negotiations at all", async () => {
@@ -102,7 +99,7 @@ describe("summarizeNegotiations", () => {
 
   test("returns silent when all negotiations are completed and already reported", async () => {
     tempWorkspace();
-    const neg = makeNegotiation({ status: "completed", isUsersTurn: false });
+    const neg = makeNegotiation({ settledAt: NOW, outcome: "agreed" });
     await Bun.write("state.json", JSON.stringify({
       negotiationSummary: { reportedCompletedIds: [neg.id] },
     }));
@@ -118,8 +115,7 @@ describe("summarizeNegotiations", () => {
   test("returns silent when completed negotiations are older than recentDays", async () => {
     tempWorkspace();
     const neg = makeNegotiation({
-      status: "completed",
-      isUsersTurn: false,
+      settledAt: NOW,
       updatedAt: EIGHT_DAYS_AGO,
     });
     await Bun.write("state.json", "{}");
@@ -133,10 +129,10 @@ describe("summarizeNegotiations", () => {
     expect(result).toEqual({ silent: true, reason: "nothing-to-report" });
   });
 
-  test("places active + isUsersTurn negotiations in needsAttention", async () => {
+  test("places open actionable negotiations in needsAttention", async () => {
     tempWorkspace();
     await Bun.write("state.json", "{}");
-    const neg = makeNegotiation({ status: "active", isUsersTurn: true });
+    const neg = makeNegotiation({ settledAt: null });
 
     const result = await summarizeNegotiations({
       fetchNegotiations: async () => [neg],
@@ -151,10 +147,10 @@ describe("summarizeNegotiations", () => {
     expect(result.context.newlyResolved).toHaveLength(0);
   });
 
-  test("returns silent when only active + !isUsersTurn negotiations are waiting", async () => {
+  test("returns silent when only open blocked negotiations are waiting", async () => {
     tempWorkspace();
     await Bun.write("state.json", "{}");
-    const neg = makeNegotiation({ status: "active", isUsersTurn: false });
+    const neg = makeNegotiation({ settledAt: null, protocol: { availableActions: [], blockedReason: "not_your_turn", maxTurns: 12, messageLimit: 4000 } });
 
     const result = await summarizeNegotiations({
       fetchNegotiations: async () => [neg],
@@ -164,11 +160,11 @@ describe("summarizeNegotiations", () => {
     expect(result).toEqual({ silent: true, reason: "nothing-to-report" });
   });
 
-  test("includes active + !isUsersTurn negotiations as context when another item is actionable", async () => {
+  test("includes open blocked negotiations as context when another item is actionable", async () => {
     tempWorkspace();
     await Bun.write("state.json", "{}");
-    const attention = makeNegotiation({ id: "aaa-1", status: "active", isUsersTurn: true });
-    const waiting = makeNegotiation({ id: "aaa-2", status: "active", isUsersTurn: false });
+    const attention = makeNegotiation({ id: "aaa-1", settledAt: null });
+    const waiting = makeNegotiation({ id: "aaa-2", settledAt: null, protocol: { availableActions: [], blockedReason: "not_your_turn", maxTurns: 12, messageLimit: 4000 } });
 
     const result = await summarizeNegotiations({
       fetchNegotiations: async () => [attention, waiting],
@@ -182,29 +178,13 @@ describe("summarizeNegotiations", () => {
     expect(result.context.waiting[0].id).toBe(waiting.id);
   });
 
-  test("places waiting_for_agent + isUsersTurn in needsAttention", async () => {
-    tempWorkspace();
-    await Bun.write("state.json", "{}");
-    const neg = makeNegotiation({ status: "waiting_for_agent", isUsersTurn: true });
-
-    const result = await summarizeNegotiations({
-      fetchNegotiations: async () => [neg],
-      stateFile: "state.json",
-    });
-
-    expect("silent" in result).toBe(false);
-    if ("silent" in result) throw new Error("unexpected silent");
-    expect(result.context.needsAttention).toHaveLength(1);
-  });
-
   test("surfaces recently completed negotiations not yet reported", async () => {
     tempWorkspace();
     await Bun.write("state.json", "{}");
     const neg = makeNegotiation({
-      status: "completed",
-      isUsersTurn: false,
+      settledAt: NOW,
       updatedAt: NOW,
-      outcome: { hasOpportunity: true, reasoning: "Strong alignment found.", turnCount: 4 },
+      outcome: "agreed",
     });
 
     const result = await summarizeNegotiations({
@@ -217,17 +197,16 @@ describe("summarizeNegotiations", () => {
     if ("silent" in result) throw new Error("unexpected silent");
     expect(result.context.newlyResolved).toHaveLength(1);
     expect(result.context.newlyResolved[0].id).toBe(neg.id);
-    expect(result.context.newlyResolved[0].outcome?.hasOpportunity).toBe(true);
+    expect(result.context.newlyResolved[0].outcome).toBe("agreed");
   });
 
   test("returns silent for recently completed negotiations that produced no opportunity", async () => {
     tempWorkspace();
     await Bun.write("state.json", "{}");
     const neg = makeNegotiation({
-      status: "completed",
-      isUsersTurn: false,
+      settledAt: NOW,
       updatedAt: NOW,
-      outcome: { hasOpportunity: false, reasoning: "No strong overlap.", turnCount: 4 },
+      outcome: "declined",
     });
 
     const result = await summarizeNegotiations({
@@ -244,13 +223,7 @@ describe("summarizeNegotiations", () => {
     await Bun.write("state.json", JSON.stringify({
       negotiationSummary: { reportedCompletedIds: ["old-id"] },
     }));
-    const neg = makeNegotiation({
-      id: "bbbbbbbb-0000-0000-0000-000000000002",
-      status: "completed",
-      isUsersTurn: false,
-      updatedAt: NOW,
-      outcome: { hasOpportunity: true, reasoning: "Strong alignment found.", turnCount: 4 },
-    });
+    const neg = makeNegotiation({ id: "bbbbbbbb-0000-0000-0000-000000000002", settledAt: NOW, outcome: "agreed", updatedAt: NOW });
 
     await summarizeNegotiations({
       fetchNegotiations: async () => [neg],
@@ -269,7 +242,7 @@ describe("summarizeNegotiations", () => {
       prepared: { date: "2026-06-17", taskId: "t_digest" },
       deliveredToday: { date: "2026-06-17", ids: ["opp-1"] },
     }));
-    const neg = makeNegotiation({ status: "active", isUsersTurn: true });
+    const neg = makeNegotiation({ settledAt: null });
 
     await summarizeNegotiations({
       fetchNegotiations: async () => [neg],
@@ -295,13 +268,13 @@ describe("summarizeNegotiations", () => {
     expect(state).toEqual(initial);
   });
 
-  test("does not mutate state when returning silent (MCP failure)", async () => {
+  test("does not mutate state when returning silent (CLI failure)", async () => {
     tempWorkspace();
     const initial = { prepared: { date: "2026-06-17", taskId: "t_digest" } };
     await Bun.write("state.json", JSON.stringify(initial));
 
     await summarizeNegotiations({
-      fetchNegotiations: async () => { throw new Error("MCP unreachable"); },
+      fetchNegotiations: async () => { throw new Error("CLI unreachable"); },
       stateFile: "state.json",
     });
 
@@ -313,11 +286,9 @@ describe("summarizeNegotiations", () => {
     tempWorkspace();
     await Bun.write("state.json", "{}");
     const neg = makeNegotiation({
-      status: "active",
-      isUsersTurn: true,
-      indexContext: { networkId: "net-1", prompt: "Frontier AI research community." },
-      recentTurns: [
-        { turnNumber: 1, speaker: "source", role: "own", action: "propose", message: "Interested in your work." },
+      settledAt: null,
+      turns: [
+        { turnIndex: 0, seatUserId: "user-a", action: "propose", message: "Interested in your work.", createdAt: NOW },
       ],
     });
 
@@ -329,15 +300,15 @@ describe("summarizeNegotiations", () => {
     expect("silent" in result).toBe(false);
     if ("silent" in result) throw new Error("unexpected silent");
     const item = result.context.needsAttention[0];
-    expect(item.indexContext?.prompt).toBe("Frontier AI research community.");
-    expect(item.recentTurns).toHaveLength(1);
-    expect(item.recentTurns[0].action).toBe("propose");
+    expect(item.counterparty.name).toBe("Ada");
+    expect(item.turns).toHaveLength(1);
+    expect(item.turns[0].action).toBe("propose");
   });
 
   test("handles missing state file gracefully (treats as empty)", async () => {
     tempWorkspace();
     // No state.json written — file does not exist
-    const neg = makeNegotiation({ status: "active", isUsersTurn: true });
+    const neg = makeNegotiation({ settledAt: null });
 
     const result = await summarizeNegotiations({
       fetchNegotiations: async () => [neg],
@@ -347,10 +318,10 @@ describe("summarizeNegotiations", () => {
     expect("silent" in result).toBe(false);
   });
 
-  test("defaults signals to empty and leaves names unresolved when no enrichers passed", async () => {
+  test("defaults signals to empty and preserves the server counterparty", async () => {
     tempWorkspace();
     await Bun.write("state.json", "{}");
-    const neg = makeNegotiation({ status: "active", isUsersTurn: true });
+    const neg = makeNegotiation({ settledAt: null });
 
     const result = await summarizeNegotiations({
       fetchNegotiations: async () => [neg],
@@ -359,13 +330,13 @@ describe("summarizeNegotiations", () => {
 
     if ("silent" in result) throw new Error("unexpected silent");
     expect(result.context.signals).toEqual([]);
-    expect(result.context.needsAttention[0].counterpartyName).toBeUndefined();
+    expect(result.context.needsAttention[0].counterparty.name).toBe("Ada");
   });
 
   test("includes fetched signals in the context output", async () => {
     tempWorkspace();
     await Bun.write("state.json", "{}");
-    const neg = makeNegotiation({ status: "active", isUsersTurn: true });
+    const neg = makeNegotiation({ settledAt: null });
 
     const result = await summarizeNegotiations({
       fetchNegotiations: async () => [neg],
@@ -384,7 +355,7 @@ describe("summarizeNegotiations", () => {
   test("degrades to empty signals when the signal fetcher throws", async () => {
     tempWorkspace();
     await Bun.write("state.json", "{}");
-    const neg = makeNegotiation({ status: "active", isUsersTurn: true });
+    const neg = makeNegotiation({ settledAt: null });
 
     const result = await summarizeNegotiations({
       fetchNegotiations: async () => [neg],
@@ -397,84 +368,30 @@ describe("summarizeNegotiations", () => {
     expect(result.context.needsAttention).toHaveLength(1);
   });
 
-  test("resolves counterparty names across all reported buckets, deduping calls", async () => {
-    tempWorkspace();
-    await Bun.write("state.json", "{}");
-    const a = makeNegotiation({ id: "aaa-1", counterpartyId: "user-x", status: "active", isUsersTurn: true });
-    const b = makeNegotiation({ id: "aaa-2", counterpartyId: "user-y", status: "active", isUsersTurn: false });
-    const c = makeNegotiation({
-      id: "aaa-3",
-      counterpartyId: "user-x",
-      status: "completed",
-      isUsersTurn: false,
-      updatedAt: NOW,
-      outcome: { hasOpportunity: true, reasoning: "Strong alignment found.", turnCount: 4 },
-    });
-
-    const calls: string[] = [];
-    const result = await summarizeNegotiations({
-      fetchNegotiations: async () => [a, b, c],
-      stateFile: "state.json",
-      recentDays: 7,
-      resolveProfile: async (userId) => {
-        calls.push(userId);
-        return userId === "user-x" ? "Ada Lovelace" : null;
-      },
-    });
-
-    if ("silent" in result) throw new Error("unexpected silent");
-    expect(result.context.needsAttention[0].counterpartyName).toBe("Ada Lovelace");
-    expect(result.context.waiting[0].counterpartyName).toBeNull();
-    expect(result.context.newlyResolved[0].counterpartyName).toBe("Ada Lovelace");
-    // user-x appears twice but is resolved once (dedup by id)
-    expect(calls.sort()).toEqual(["user-x", "user-y"]);
-  });
-
-  test("does not fetch signals or resolve names on a silent run", async () => {
+  test("does not fetch signals on a silent run", async () => {
     tempWorkspace();
     await Bun.write("state.json", "{}");
     let signalCalls = 0;
-    let profileCalls = 0;
 
     const result = await summarizeNegotiations({
       fetchNegotiations: async () => [],
       stateFile: "state.json",
       fetchSignals: async () => { signalCalls++; return []; },
-      resolveProfile: async () => { profileCalls++; return null; },
     });
 
     expect(result).toEqual({ silent: true, reason: "nothing-to-report" });
     expect(signalCalls).toBe(0);
-    expect(profileCalls).toBe(0);
   });
 
   test("mixed bag: categorises correctly across all three groups", async () => {
     tempWorkspace();
     await Bun.write("state.json", "{}");
 
-    const attention = makeNegotiation({ id: "aaa-1", status: "active", isUsersTurn: true });
-    const waiting = makeNegotiation({ id: "aaa-2", status: "active", isUsersTurn: false });
-    const resolved = makeNegotiation({
-      id: "aaa-3",
-      status: "completed",
-      isUsersTurn: false,
-      updatedAt: NOW,
-      outcome: { hasOpportunity: true, reasoning: "Strong alignment found.", turnCount: 4 },
-    });
-    const alreadyReported = makeNegotiation({
-      id: "aaa-4",
-      status: "completed",
-      isUsersTurn: false,
-      updatedAt: NOW,
-      outcome: { hasOpportunity: true, reasoning: "Already reported.", turnCount: 3 },
-    });
-    const stale = makeNegotiation({
-      id: "aaa-5",
-      status: "completed",
-      isUsersTurn: false,
-      updatedAt: EIGHT_DAYS_AGO,
-      outcome: { hasOpportunity: true, reasoning: "Too old.", turnCount: 3 },
-    });
+    const attention = makeNegotiation({ id: "aaa-1", settledAt: null });
+    const waiting = makeNegotiation({ id: "aaa-2", settledAt: null, protocol: { availableActions: [], blockedReason: "not_your_turn", maxTurns: 12, messageLimit: 4000 } });
+    const resolved = makeNegotiation({ id: "aaa-3", settledAt: NOW, outcome: "agreed", updatedAt: NOW });
+    const alreadyReported = makeNegotiation({ id: "aaa-4", settledAt: NOW, outcome: "agreed", updatedAt: NOW });
+    const stale = makeNegotiation({ id: "aaa-5", settledAt: NOW, outcome: "agreed", updatedAt: EIGHT_DAYS_AGO });
 
     await Bun.write("state.json", JSON.stringify({
       negotiationSummary: { reportedCompletedIds: [alreadyReported.id] },

@@ -3,7 +3,7 @@
  * Deterministically fetch and select a pending question for the evening pass.
  *
  * The ask-questions cron prompt calls this script to:
- * - Fetch pending questions from the Index MCP server via read_pending_questions.
+ * - Fetch pending questions from the scoped hosted-agent conversations through the CLI.
  * - Apply the cross-day cooldown filter (same QUESTION_COOLDOWN_DAYS as the
  *   morning digest) so the same question is never asked within 3 days.
  * - Record the chosen question in heartbeat-state.json under `questionDelivery`
@@ -21,7 +21,7 @@ import { existsSync } from "node:fs";
 
 import {
   QUESTION_COOLDOWN_DAYS,
-  fetchPendingQuestionsFromMcp,
+  fetchPendingQuestionsFromCli,
   filterCooldownQuestions,
   resolveIndexApiKey,
 } from "./build-daily-brief-context";
@@ -99,6 +99,7 @@ async function readQuestionDelivery(stateFile: string): Promise<Record<string, s
 
 export interface AskQuestionsResult {
   questionId: string;
+  intentId?: string;
   prompt: string;
 }
 
@@ -107,7 +108,7 @@ interface SilentResult {
   reason: string;
 }
 
-type FetchQuestionsFn = typeof fetchPendingQuestionsFromMcp;
+type FetchQuestionsFn = typeof fetchPendingQuestionsFromCli;
 
 async function recordQuestionDelivery(
   stateFile: string,
@@ -130,14 +131,14 @@ async function recordQuestionDelivery(
 export async function askQuestions(options: {
   date?: string;
   stateFile?: string;
-  /** Injectable for tests — defaults to fetchPendingQuestionsFromMcp. */
+  /** Injectable for tests — defaults to fetchPendingQuestionsFromCli. */
   fetchQuestions?: FetchQuestionsFn;
   /** Injectable for tests — defaults to resolveIndexApiKey(). */
   apiKey?: string;
 } = {}): Promise<AskQuestionsResult | SilentResult> {
   const date = options.date ?? pacificDate();
   const stateFile = options.stateFile ?? "memory/heartbeat-state.json";
-  const fetchQuestions = options.fetchQuestions ?? fetchPendingQuestionsFromMcp;
+  const fetchQuestions = options.fetchQuestions ?? fetchPendingQuestionsFromCli;
   const questionDelivery = await readQuestionDelivery(stateFile);
 
   if (date === FINAL_REFLECTION_DATE) {
@@ -154,10 +155,10 @@ export async function askQuestions(options: {
   const apiKey = options.apiKey ?? resolveIndexApiKey();
   if (!apiKey) return { silent: true, reason: "no-api-key" };
 
-  const mcpUrl =
-    process.env.INDEX_MCP_URL?.trim() || "https://protocol.index.network/mcp";
+  const apiUrl =
+    process.env.INDEX_API_URL?.trim() || "https://protocol.index.network";
 
-  const questionResult = await fetchQuestions({ apiKey, mcpUrl });
+  const questionResult = await fetchQuestions({ apiKey, apiUrl });
   if (questionResult.source === "unavailable" || questionResult.questions.length === 0) {
     return { silent: true, reason: questionResult.reason ?? "no-pending-questions" };
   }
@@ -173,7 +174,7 @@ export async function askQuestions(options: {
   // Prune expired entries at the same time to keep the state file bounded.
   await recordQuestionDelivery(stateFile, questionDelivery, question.id, date);
 
-  return { questionId: question.id, prompt: question.prompt };
+  return { questionId: question.id, intentId: question.intentId, prompt: question.prompt };
 }
 
 async function main(): Promise<void> {

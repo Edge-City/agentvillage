@@ -1,7 +1,7 @@
 /**
  * Index Network backend installer for Hermes.
  *
- *   - Merges `mcp_servers.index` into `$HERMES_HOME/config.yaml`
+ *   - Installs the matching Index CLI and removes the Index MCP registration
  *   - Writes `INDEX_API_KEY` to `$HERMES_HOME/.env`
  *   - Installs the Index crons: memory signal sync
  *     (`Edge — memory signal sync`, ~01:00; script-gated), prepare
@@ -41,21 +41,20 @@ import { upsertEnvVar } from "./env";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
 import { CRON_NAME_PREFIX, hermesHome } from "./paths";
 
-const PROD_MCP_URL = "https://protocol.index.network/mcp";
-const DEV_MCP_URL = "https://protocol.dev.index.network/mcp";
+const PROD_API_URL = "https://protocol.index.network";
+const DEV_API_URL = "https://protocol.dev.index.network";
 
 const IS_DEV = process.argv.slice(2).includes("--dev");
-const PROTOCOL_MCP_URL =
-  process.env.INDEX_MCP_URL?.trim() || (IS_DEV ? DEV_MCP_URL : PROD_MCP_URL);
+const PROTOCOL_API_URL =
+  process.env.INDEX_API_URL?.trim() || (IS_DEV ? DEV_API_URL : PROD_API_URL);
 
 function readApiKey(): string {
   const key =
-    readFlag("--index-api-key")?.trim()
-    || process.env.INDEX_API_KEY?.trim()
+    process.env.INDEX_API_KEY?.trim()
     || readPersistedEnvVar("INDEX_API_KEY");
   if (!key) {
-    console.error("error: --index-api-key required (or set INDEX_API_KEY)");
-    console.error("usage: bun install/install.ts --index-api-key <KEY> [--dev]");
+    console.error("error: INDEX_API_KEY is required");
+    console.error("usage: set INDEX_API_KEY in the environment, then bun install/install.ts [--dev]");
     process.exit(1);
   }
   return key;
@@ -82,30 +81,17 @@ function normalizeTelegramHandle(raw: string): string {
   return /^[A-Za-z0-9_]{5,32}$/.test(bare) ? bare.toLowerCase() : "";
 }
 
-export function buildIndexMcpHeaders(apiKey: string, telegramHandle = ""): Record<string, string> {
-  const headers: Record<string, string> = {
-    "x-api-key": apiKey,
-    "x-index-surface": "telegram",
-  };
-  const normalizedHandle = normalizeTelegramHandle(telegramHandle);
-  if (normalizedHandle) headers["x-index-telegram-username"] = normalizedHandle;
-  return headers;
-}
-
-function writeMcpServerEntry(apiKey: string, telegramHandle: string): void {
+function installCli(): void {
+  execFileSync("npm", ["install", "--global", "@indexnetwork/cli@0.24.0"], { stdio: "inherit" });
   const configPath = join(hermesHome(), "config.yaml");
-  let doc: Record<string, unknown> = {};
-  if (existsSync(configPath)) {
-    doc = YAML.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+  if (!existsSync(configPath)) return;
+  const doc = YAML.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+  const servers = doc.mcp_servers as Record<string, unknown> | undefined;
+  if (servers?.index) {
+    delete servers.index;
+    if (Object.keys(servers).length === 0) delete doc.mcp_servers;
+    writeFileSync(configPath, YAML.stringify(doc));
   }
-  const mcpServers = { ...((doc.mcp_servers as Record<string, unknown>) ?? {}) };
-  mcpServers.index = {
-    url: PROTOCOL_MCP_URL,
-    headers: buildIndexMcpHeaders(apiKey, telegramHandle),
-  };
-  doc.mcp_servers = mcpServers;
-  writeFileSync(configPath, YAML.stringify(doc));
-  console.log("→ wrote mcp_servers.index in config.yaml");
 }
 
 function readPersistedEnvVar(key: string): string {
@@ -210,7 +196,7 @@ export interface DigestCronSpec {
  *
  * The 30-minute "Edge — heartbeat" cron was retired (see Edge-City/agentvillage#100
  * "Heartbeat cron drains OpenRouter key budget"). Its prompt loaded the
- * full agent context + Index MCP tool surface (~57k input tokens) every 30 min,
+ * full agent context + Index CLI tool surface (~57k input tokens) every 30 min,
  * which exhausted the per-tenant OpenRouter keys fleet-wide (HTTP 402). It is no
  * longer in this list, so `reconcileDigestCronJobs` removes it from existing
  * tenants on the next install/update (Edge-prefixed crons not in this list are
@@ -566,15 +552,16 @@ export function reconcileDigestCronJobs(
 export function installIndex(): void {
   const apiKey = readApiKey();
   // Persist the canonical (bare, lowercase) handle so the runtime source
-  // (INDEX_TELEGRAM_HANDLE / MCP headers) never drifts from other systems by
+  // (INDEX_TELEGRAM_HANDLE) never drifts from other systems by
   // a leading @ or letter case alone.
   const telegramHandle = normalizeTelegramHandle(readTelegramHandle());
   console.log(
-    `→ index network: target=${IS_DEV ? "dev" : "production"} (${PROTOCOL_MCP_URL})`,
+    `→ index network: target=${IS_DEV ? "dev" : "production"} (${PROTOCOL_API_URL})`,
   );
   upsertEnvVar("INDEX_API_KEY", apiKey);
   if (telegramHandle) upsertEnvVar("INDEX_TELEGRAM_HANDLE", telegramHandle);
-  writeMcpServerEntry(apiKey, telegramHandle);
+  upsertEnvVar("INDEX_API_URL", PROTOCOL_API_URL);
+  installCli();
 
   if (!process.argv.includes("--skip-crons")) {
     reconcileDigestCronJobs(hermesExecEnv());
