@@ -101,26 +101,40 @@ def _unsign(token: str, secret: bytes, kind: str) -> Optional[dict]:
 
 
 def _patch_hermes_login() -> None:
-    """Keep Hermes's login page; show email first, then the one-time code."""
+    """Keep Hermes's login page; Edge City email first, then the one-time code."""
     try:
         from hermes_cli.dashboard_auth import login_page
     except ImportError:
         return
 
     original = login_page._render_password_form
-    if ".field[hidden]" not in login_page._LOGIN_HTML_TEMPLATE:
-        login_page._LOGIN_HTML_TEMPLATE = login_page._LOGIN_HTML_TEMPLATE.replace(
+    tpl = login_page._LOGIN_HTML_TEMPLATE
+    if "Edge City account" not in tpl:
+        tpl = (
+            tpl.replace("Nous<span class=\"dot\"></span>Research", "Edge<span class=\"dot\"></span>City")
+            .replace(
+                "Choose a sign-in method to continue to the Hermes Agent dashboard.",
+                "Sign in with your Edge City account to continue to the Hermes Agent dashboard.",
+            )
+            .replace("Public bind &middot; Auth required", "Nous<span class=\"dot\"></span>Research")
+            .replace("Public bind · Auth required", "Nous<span class=\"dot\"></span>Research")
+        )
+    if ".field[hidden]" not in tpl:
+        tpl = tpl.replace(
             ".field {{",
-            ".field[hidden] {{ display: none !important; }}\n  .field {{",
+            ".field[hidden] {{ display: none !important; }}\n  .form-title {{ display: none; }}\n  .field {{",
             1,
         )
+    login_page._LOGIN_HTML_TEMPLATE = tpl
 
     def render(provider, next_path: str) -> str:
         html = (
             original(provider, next_path)
-            .replace(">Username</span>", ">Email</span>")
-            .replace('type="text" name="username"', 'type="email" name="username"')
-            .replace('autocomplete="username"', 'autocomplete="email"')
+            .replace(">Username</span>", ">Edge City Email</span>")
+            .replace(
+                'type="text" name="username" autocomplete="username"',
+                'type="email" name="username" autocomplete="email" placeholder="you@edgecity.live"',
+            )
             .replace(">Password</span>", ">Code</span>")
             .replace(
                 'type="password" name="password" autocomplete="current-password" required',
