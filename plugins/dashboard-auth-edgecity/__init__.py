@@ -1,4 +1,4 @@
-"""Edge City dashboard auth: owner email OTP + landing admin SSO."""
+"""Edge City dashboard auth: owner email OTP on Hermes's login form."""
 
 from __future__ import annotations
 
@@ -10,15 +10,12 @@ import os
 import secrets
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from typing import Optional
 
 from hermes_cli.dashboard_auth import (
     DashboardAuthProvider,
-    InvalidCodeError,
     InvalidCredentialsError,
-    LoginStart,
     ProviderError,
     RefreshExpiredError,
     Session,
@@ -47,7 +44,7 @@ def _env(name: str) -> str:
 
 def _looks_like_code(password: str) -> bool:
     text = (password or "").strip()
-    return bool(text) and text.lower() != "send" and text.isdigit() and 4 <= len(text) <= 10
+    return bool(text) and text.isdigit() and 4 <= len(text) <= 10
 
 
 def _post_json(url: str, body: dict) -> tuple[int, dict]:
@@ -99,6 +96,35 @@ def _unsign(token: str, secret: bytes, kind: str) -> Optional[dict]:
     return payload
 
 
+def _patch_hermes_login() -> None:
+    """Keep Hermes's login page; relabel the form for email + one-time code."""
+    try:
+        from hermes_cli.dashboard_auth import login_page
+    except ImportError:
+        return
+
+    original = login_page._render_password_form
+
+    def render(provider, next_path: str) -> str:
+        html = original(provider, next_path)
+        return (
+            html.replace(">Username</span>", ">Email</span>")
+            .replace('type="text" name="username"', 'type="email" name="username"')
+            .replace('autocomplete="username"', 'autocomplete="email"')
+            .replace(">Password</span>", ">Code</span>")
+            .replace(
+                'type="password" name="password" autocomplete="current-password" required',
+                'type="text" name="password" autocomplete="one-time-code" inputmode="numeric"',
+            )
+        )
+
+    login_page._render_password_form = render
+    login_page._PASSWORD_FORM_SCRIPT = login_page._PASSWORD_FORM_SCRIPT.replace(
+        "(resp.status === 401 ? 'Invalid username or password.'",
+        "(resp.status === 401 ? (body.password ? 'Invalid email or code.' : 'Check your email for a code.')",
+    )
+
+
 class EdgeCityDashboardAuth(DashboardAuthProvider):
     name = "edgecity"
     display_name = "Edge City"
@@ -107,42 +133,16 @@ class EdgeCityDashboardAuth(DashboardAuthProvider):
     def __init__(self) -> None:
         self._tenant_id = _env("TENANT_ID")
         self._cp = _env("CONTROL_PLANE_URL").rstrip("/")
-        self._landing = _env("LANDING_URL").rstrip("/")
         raw = _env("HERMES_DASHBOARD_SESSION_SECRET")
         self._secret = raw.encode("utf-8") if raw else secrets.token_bytes(32)
         if not self._tenant_id or not self._cp:
             raise ValueError("TENANT_ID and CONTROL_PLANE_URL are required")
 
-    def start_login(self, *, redirect_uri: str) -> LoginStart:
-        if not self._landing:
-            raise ProviderError("LANDING_URL is not set")
-        parsed = urllib.parse.urlparse(redirect_uri)
-        if parsed.scheme not in ("http", "https") or not (parsed.path or "").endswith("/auth/callback"):
-            raise ProviderError("invalid redirect_uri")
-        code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(64)).rstrip(b"=").decode()
-        state = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
-        params = urllib.parse.urlencode(
-            {
-                "tenantId": self._tenant_id,
-                "redirect_uri": redirect_uri,
-                "state": state,
-            }
-        )
-        return LoginStart(
-            redirect_url=f"{self._landing}/admin/dashboard-sso?{params}",
-            cookie_payload={"hermes_session_pkce": f"state={state};verifier={code_verifier}"},
-        )
+    def start_login(self, *, redirect_uri: str):
+        raise NotImplementedError("email login only")
 
     def complete_login(self, *, code: str, state: str, code_verifier: str, redirect_uri: str) -> Session:
-        status, body = _post_json(
-            f"{self._cp}/dashboard-admin/exchange",
-            {"ticket": code, "tenantId": self._tenant_id},
-        )
-        if status == 400 or status == 401:
-            raise InvalidCodeError("admin ticket rejected")
-        if status != 200:
-            raise ProviderError(f"admin exchange failed ({status})")
-        return self._mint(str(body.get("user_id") or "admin"), str(body.get("email") or ""), "admin")
+        raise NotImplementedError("email login only")
 
     def complete_password_login(self, *, username: str, password: str) -> Session:
         email = (username or "").strip().lower()
@@ -222,3 +222,4 @@ def register(ctx) -> None:
         ctx.register_dashboard_auth_provider(EdgeCityDashboardAuth())
     except ValueError:
         return
+    _patch_hermes_login()
