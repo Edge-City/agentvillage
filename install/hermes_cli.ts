@@ -1,6 +1,12 @@
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
-const CANDIDATES = ["/opt/hermes/.venv/bin/hermes", "/usr/local/bin/hermes"];
+const CANDIDATES = [
+  join(homedir(), ".local/bin/hermes"),
+  "/opt/hermes/.venv/bin/hermes",
+  "/usr/local/bin/hermes",
+];
 
 /** Resolve Hermes CLI (container image installs under /opt/hermes/.venv/bin). */
 export function hermesBin(): string {

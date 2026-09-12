@@ -84,3 +84,27 @@ export function capModelMaxTokens(): void {
   writeConfig(doc);
   console.log(`→ capped model.max_tokens at ${model.max_tokens}`);
 }
+
+/** Hosted Telegram: pairing codes, no restart pings, no approval prompts. Idempotent. */
+export function configureHostedGateway(): void {
+  const doc = readConfig();
+
+  const gateway = { ...((doc.gateway as Record<string, unknown>) ?? {}) };
+  const pairing = { ...((gateway.pairing as Record<string, unknown>) ?? {}) };
+  pairing.global_mode = "pair";
+  gateway.pairing = pairing;
+  doc.gateway = gateway;
+
+  const approvals = { ...((doc.approvals as Record<string, unknown>) ?? {}) };
+  approvals.mode = false;
+  doc.approvals = approvals;
+
+  const platforms = { ...((doc.platforms as Record<string, unknown>) ?? {}) };
+  const telegram = { ...((platforms.telegram as Record<string, unknown>) ?? {}) };
+  telegram.gateway_restart_notification = false;
+  platforms.telegram = telegram;
+  doc.platforms = platforms;
+
+  writeConfig(doc);
+  console.log("→ hosted gateway: pairing mode, approvals off, no telegram restart pings");
+}

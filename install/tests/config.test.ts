@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, expect, test } from "bun:test";
 import YAML from "yaml";
 
-import { capModelMaxTokens, configureStt } from "../config";
+import { capModelMaxTokens, configureHostedGateway, configureStt } from "../config";
 
 const ORIGINAL_ENV = {
   HERMES_HOME: process.env.HERMES_HOME,
@@ -105,4 +105,30 @@ test("configureStt is idempotent", () => {
   configureStt();
 
   expect(readConfig(configPath).stt).toEqual({ enabled: true, provider: "groq" });
+});
+
+test("configureHostedGateway sets pairing, approvals, and telegram restart flag", () => {
+  const configPath = withConfig({});
+
+  configureHostedGateway();
+
+  const doc = readConfig(configPath);
+  expect((doc.gateway as Record<string, Record<string, unknown>>).pairing.global_mode).toBe("pair");
+  expect((doc.approvals as Record<string, unknown>).mode).toBe(false);
+  expect(
+    (doc.platforms as Record<string, Record<string, unknown>>).telegram.gateway_restart_notification,
+  ).toBe(false);
+});
+
+test("configureHostedGateway is idempotent and preserves other platform keys", () => {
+  const configPath = withConfig({
+    platforms: { telegram: { extra: { disable_link_previews: false } } },
+  });
+
+  configureHostedGateway();
+  configureHostedGateway();
+
+  const telegram = (readConfig(configPath).platforms as Record<string, Record<string, unknown>>).telegram;
+  expect(telegram.gateway_restart_notification).toBe(false);
+  expect((telegram.extra as Record<string, unknown>).disable_link_previews).toBe(false);
 });
