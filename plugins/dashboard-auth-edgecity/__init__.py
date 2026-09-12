@@ -100,6 +100,22 @@ def _unsign(token: str, secret: bytes, kind: str) -> Optional[dict]:
     return payload
 
 
+def _logo_svg() -> str:
+    path = os.path.join(os.path.dirname(__file__), "edge.svg")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            raw = handle.read()
+    except OSError:
+        return ""
+    raw = re.sub(
+        r"<svg\b[^>]*>",
+        '<svg class="brand-mark" viewBox="0 0 243 281" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">',
+        raw,
+        count=1,
+    )
+    return raw.replace('fill="white"', 'fill="currentColor"')
+
+
 def _patch_hermes_login() -> None:
     """Keep Hermes's login page; Edge City email first, then the one-time code."""
     try:
@@ -109,15 +125,30 @@ def _patch_hermes_login() -> None:
 
     original = login_page._render_password_form
     tpl = login_page._LOGIN_HTML_TEMPLATE
+    logo = _logo_svg()
     if "Edge City account" not in tpl:
+        brand = f'{logo}Edge<span class="dot"></span>City' if logo else 'Edge<span class="dot"></span>City'
         tpl = (
-            tpl.replace("Nous<span class=\"dot\"></span>Research", "Edge<span class=\"dot\"></span>City")
+            tpl.replace("Nous<span class=\"dot\"></span>Research", brand)
             .replace(
                 "Choose a sign-in method to continue to the Hermes Agent dashboard.",
                 "Sign in with your Edge City account to continue to the Hermes Agent dashboard.",
             )
             .replace("Public bind &middot; Auth required", "Nous<span class=\"dot\"></span>Research")
             .replace("Public bind · Auth required", "Nous<span class=\"dot\"></span>Research")
+        )
+    if ".brand-mark" not in tpl:
+        tpl = tpl.replace(
+            ".brand {{",
+            ".brand-mark {{\n"
+            "    display: block;\n"
+            "    width: 2.85rem;\n"
+            "    height: auto;\n"
+            "    margin: 0 auto 0.85rem;\n"
+            "    color: var(--midground);\n"
+            "  }}\n"
+            "  .brand {{",
+            1,
         )
     if ".field[hidden]" not in tpl:
         tpl = tpl.replace(
