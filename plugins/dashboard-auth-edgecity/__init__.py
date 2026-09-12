@@ -100,6 +100,88 @@ def _unsign(token: str, secret: bytes, kind: str) -> Optional[dict]:
     return payload
 
 
+_LOGIN_SCRIPT = """
+<script>
+(function () {
+  function handle(form) {
+    var emailInput = form.querySelector('input[name=username]');
+    var codeInput = form.querySelector('input[name=password]');
+    var emailWrap = emailInput && emailInput.closest('.field');
+    var codeWrap = codeInput && codeInput.closest('.field');
+    var codeLabel = codeWrap && codeWrap.querySelector('.field-label');
+    var back = form.querySelector('.back-email');
+    var title = document.querySelector('.card h1');
+    var subtitle = document.querySelector('.subtitle');
+    var btn = form.querySelector('button[type=submit]');
+    var emailTitle = title ? title.textContent : '';
+    var emailSubtitle = subtitle ? subtitle.textContent : '';
+    if (codeWrap) { codeWrap.hidden = true; codeWrap.style.display = 'none'; }
+    if (codeLabel) codeLabel.hidden = true;
+    function showCode(email) {
+      if (emailWrap) { emailWrap.hidden = true; emailWrap.style.display = 'none'; }
+      if (codeWrap) { codeWrap.hidden = false; codeWrap.style.display = ''; }
+      if (title) title.textContent = 'Enter verification code';
+      if (subtitle) subtitle.textContent = 'We sent a 6-digit code to ' + email;
+      if (btn) btn.textContent = 'Verify';
+      if (back) back.hidden = false;
+      if (codeInput) { codeInput.value = ''; codeInput.focus(); }
+    }
+    function showEmail() {
+      if (emailWrap) { emailWrap.hidden = false; emailWrap.style.display = ''; }
+      if (codeWrap) { codeWrap.hidden = true; codeWrap.style.display = 'none'; }
+      if (title) title.textContent = emailTitle;
+      if (subtitle) subtitle.textContent = emailSubtitle;
+      if (btn) btn.textContent = 'Sign in';
+      if (back) back.hidden = true;
+      if (codeInput) codeInput.value = '';
+      if (emailInput) emailInput.focus();
+    }
+    if (back) back.addEventListener('click', showEmail);
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      var err = form.querySelector('.form-error');
+      if (err) { err.hidden = true; err.textContent = ''; }
+      if (btn) btn.disabled = true;
+      var body = {
+        provider: form.getAttribute('data-provider') || '',
+        username: (emailInput && emailInput.value) || '',
+        password: (codeInput && codeInput.value) || '',
+        next: (form.querySelector('input[name=next]') || {}).value || ''
+      };
+      fetch('/auth/password-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        credentials: 'same-origin'
+      }).then(function (resp) {
+        if (resp.ok) {
+          return resp.json().then(function (data) {
+            window.location.assign((data && data.next) || '/');
+          });
+        }
+        if (resp.status === 401 && !body.password) {
+          showCode(body.username);
+          if (btn) btn.disabled = false;
+          return;
+        }
+        var msg = resp.status === 429
+          ? 'Too many attempts. Please wait and try again.'
+          : (resp.status === 401 ? 'Invalid email or code.' : 'Sign-in failed. Please try again.');
+        if (err) { err.textContent = msg; err.hidden = false; }
+        if (btn) btn.disabled = false;
+      }).catch(function () {
+        if (err) { err.textContent = 'Network error. Please try again.'; err.hidden = false; }
+        if (btn) btn.disabled = false;
+      });
+    });
+  }
+  var forms = document.querySelectorAll('form.provider-form');
+  for (var i = 0; i < forms.length; i++) { handle(forms[i]); }
+})();
+</script>
+"""
+
+
 def _logo_svg() -> str:
     path = os.path.join(os.path.dirname(__file__), "edge.svg")
     try:
@@ -153,7 +235,25 @@ def _patch_hermes_login() -> None:
     if ".field[hidden]" not in tpl:
         tpl = tpl.replace(
             ".field {{",
-            ".field[hidden] {{ display: none !important; }}\n  .form-title {{ display: none; }}\n  .field {{",
+            ".field[hidden] {{ display: none !important; }}\n"
+            "  .form-title {{ display: none; }}\n"
+            "  .back-email {{\n"
+            "    display: block;\n"
+            "    width: 100%;\n"
+            "    margin-top: 0.35rem;\n"
+            "    padding: 0.5rem 0;\n"
+            "    background: none;\n"
+            "    border: 0;\n"
+            "    color: color-mix(in srgb, var(--foreground) 55%, transparent);\n"
+            "    font-family: inherit;\n"
+            "    font-size: 0.75rem;\n"
+            "    letter-spacing: 0.1em;\n"
+            "    text-transform: uppercase;\n"
+            "    cursor: pointer;\n"
+            "  }}\n"
+            "  .back-email[hidden] {{ display: none !important; }}\n"
+            "  input[name=password] {{ text-align: center; letter-spacing: 0.35em; }}\n"
+            "  .field {{",
             1,
         )
     login_page._LOGIN_HTML_TEMPLATE = tpl
@@ -169,7 +269,12 @@ def _patch_hermes_login() -> None:
             .replace(">Password</span>", ">Code</span>")
             .replace(
                 'type="password" name="password" autocomplete="current-password" required',
-                'type="text" name="password" autocomplete="one-time-code" inputmode="numeric"',
+                'type="text" name="password" autocomplete="one-time-code" inputmode="numeric" maxlength="10" placeholder="000000"',
+            )
+            .replace(
+                '<button class="provider-btn" type="submit">Sign in</button>',
+                '<button class="provider-btn" type="submit">Sign in</button>\n'
+                '        <button type="button" class="back-email" hidden>Use a different email</button>',
             )
         )
         return re.sub(
@@ -180,24 +285,7 @@ def _patch_hermes_login() -> None:
         )
 
     login_page._render_password_form = render
-    login_page._PASSWORD_FORM_SCRIPT = login_page._PASSWORD_FORM_SCRIPT.replace(
-        "function handle(form) {\n    form.addEventListener('submit', function (ev) {",
-        "function handle(form) {\n"
-        "    var codeInput = form.querySelector('input[name=password]');\n"
-        "    var codeWrap = codeInput && codeInput.closest('.field');\n"
-        "    if (codeWrap) { codeWrap.hidden = true; codeWrap.style.display = 'none'; }\n"
-        "    form.addEventListener('submit', function (ev) {",
-    ).replace(
-        "(resp.status === 401 ? 'Invalid username or password.'",
-        "(resp.status === 401 ? (body.password ? 'Invalid email or code.' : 'Check your email for a code.')",
-    ).replace(
-        "if (err) { err.textContent = msg; err.hidden = false; }",
-        "if (resp.status === 401 && !body.password && codeWrap) {\n"
-        "          codeWrap.hidden = false;\n"
-        "          codeWrap.style.display = '';\n"
-        "        }\n"
-        "        if (err) { err.textContent = msg; err.hidden = false; }",
-    )
+    login_page._PASSWORD_FORM_SCRIPT = _LOGIN_SCRIPT
 
 
 class EdgeCityDashboardAuth(DashboardAuthProvider):
