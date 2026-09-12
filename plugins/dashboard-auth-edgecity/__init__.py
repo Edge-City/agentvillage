@@ -108,6 +108,12 @@ def _patch_hermes_login() -> None:
         return
 
     original = login_page._render_password_form
+    if ".field[hidden]" not in login_page._LOGIN_HTML_TEMPLATE:
+        login_page._LOGIN_HTML_TEMPLATE = login_page._LOGIN_HTML_TEMPLATE.replace(
+            ".field {{",
+            ".field[hidden] {{ display: none !important; }}\n  .field {{",
+            1,
+        )
 
     def render(provider, next_path: str) -> str:
         html = (
@@ -123,7 +129,7 @@ def _patch_hermes_login() -> None:
         )
         return re.sub(
             r'(<label class="field")(>\s*<span class="field-label">Code</span>)',
-            r'\1 hidden\2',
+            r'\1 hidden style="display:none"\2',
             html,
             count=1,
         )
@@ -134,14 +140,17 @@ def _patch_hermes_login() -> None:
         "function handle(form) {\n"
         "    var codeInput = form.querySelector('input[name=password]');\n"
         "    var codeWrap = codeInput && codeInput.closest('.field');\n"
-        "    if (codeWrap) codeWrap.hidden = true;\n"
+        "    if (codeWrap) { codeWrap.hidden = true; codeWrap.style.display = 'none'; }\n"
         "    form.addEventListener('submit', function (ev) {",
     ).replace(
         "(resp.status === 401 ? 'Invalid username or password.'",
         "(resp.status === 401 ? (body.password ? 'Invalid email or code.' : 'Check your email for a code.')",
     ).replace(
         "if (err) { err.textContent = msg; err.hidden = false; }",
-        "if (resp.status === 401 && !body.password && codeWrap) codeWrap.hidden = false;\n"
+        "if (resp.status === 401 && !body.password && codeWrap) {\n"
+        "          codeWrap.hidden = false;\n"
+        "          codeWrap.style.display = '';\n"
+        "        }\n"
         "        if (err) { err.textContent = msg; err.hidden = false; }",
     )
 

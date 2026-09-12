@@ -1,5 +1,5 @@
 name: dashboard-auth-edgecity
-version: 1.0.2
+version: 1.0.3
 description: "Dashboard auth — Edge City email OTP on Hermes's login form, plus landing admin SSO."
 author: Edge City
 kind: backend
