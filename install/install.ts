@@ -34,7 +34,7 @@ import { execSync } from "node:child_process";
 import { installIndex } from "./install_index";
 import { installEdgeos } from "./install_edgeos";
 import { installGeo } from "./install_geo";
-import { capModelMaxTokens, configureHostedGateway, configureStt, setTerminalCwd } from "./config";
+import { capModelMaxTokens, configureDashboardAuth, configureHostedGateway, configureStt, setTerminalCwd } from "./config";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
 import {
   EDGE_SKILL_NAMES,
@@ -47,6 +47,7 @@ import { captureWelcomeState, restoreWelcomeState } from "./welcome_state";
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const SOURCE_WORKSPACE = join(SCRIPT_DIR, "../workspace");
 const SOURCE_SKILLS = join(SCRIPT_DIR, "../skills");
+const SOURCE_PLUGINS = join(SCRIPT_DIR, "../plugins");
 const TARGET_HOME = targetWorkspace();
 
 function ensureHermesAvailable(): void {
@@ -153,6 +154,18 @@ function copyTree(sourceDir: string, targetDir: string): number {
   return copied;
 }
 
+function copyPluginFiles(): void {
+  const target = join(hermesHome(), "plugins");
+  if (!existsSync(SOURCE_PLUGINS)) return;
+  let copied = 0;
+  for (const name of readdirSync(SOURCE_PLUGINS)) {
+    const sourcePath = join(SOURCE_PLUGINS, name);
+    if (!statSync(sourcePath).isDirectory()) continue;
+    copied += copyTree(sourcePath, join(target, name));
+  }
+  if (copied > 0) console.log(`→ staged ${copied} plugin files into ${target}`);
+}
+
 function copySkillFiles(): void {
   const targetSkillsRoot = skillsDir();
   if (!existsSync(targetSkillsRoot)) mkdirSync(targetSkillsRoot, { recursive: true });
@@ -197,10 +210,12 @@ function main(): void {
   copySoulFile();
   copyWorkspaceFiles(wipeUser);
   copySkillFiles();
+  copyPluginFiles();
   setTerminalCwd();
   capModelMaxTokens();
   configureStt();
   configureHostedGateway();
+  configureDashboardAuth();
 
   installIndex();
   installEdgeos();

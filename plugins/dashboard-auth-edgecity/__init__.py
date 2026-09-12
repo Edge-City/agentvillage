@@ -1,0 +1,224 @@
+"""Edge City dashboard auth: owner email OTP + landing admin SSO."""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac
+import json
+import os
+import secrets
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from typing import Optional
+
+from hermes_cli.dashboard_auth import (
+    DashboardAuthProvider,
+    InvalidCodeError,
+    InvalidCredentialsError,
+    LoginStart,
+    ProviderError,
+    RefreshExpiredError,
+    Session,
+)
+
+_SIG_LEN = hashlib.sha256().digest_size
+_ACCESS_TTL = 12 * 60 * 60
+_REFRESH_TTL = 30 * 24 * 60 * 60
+
+
+def _env(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if value:
+        return value
+    path = os.path.join(os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes")), ".env")
+    try:
+        prefix = f"{name}="
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith(prefix):
+                    return line[len(prefix) :].strip().strip("'\"")
+    except OSError:
+        pass
+    return ""
+
+
+def _looks_like_code(password: str) -> bool:
+    text = (password or "").strip()
+    return bool(text) and text.lower() != "send" and text.isdigit() and 4 <= len(text) <= 10
+
+
+def _post_json(url: str, body: dict) -> tuple[int, dict]:
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            raw = response.read().decode("utf-8") or "{}"
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                parsed = {}
+            return response.status, parsed if isinstance(parsed, dict) else {}
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8") if exc.fp else ""
+        try:
+            parsed = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            parsed = {}
+        return exc.code, parsed if isinstance(parsed, dict) else {}
+    except urllib.error.URLError as exc:
+        raise ProviderError(f"control plane unreachable: {exc.reason}") from exc
+
+
+def _sign(payload: dict, secret: bytes) -> str:
+    raw = json.dumps(payload, separators=(",", ":")).encode()
+    sig = hmac.new(secret, raw, hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(raw + sig).decode()
+
+
+def _unsign(token: str, secret: bytes, kind: str) -> Optional[dict]:
+    try:
+        blob = base64.urlsafe_b64decode(token.encode())
+        if len(blob) <= _SIG_LEN:
+            return None
+        raw, sig = blob[:-_SIG_LEN], blob[-_SIG_LEN:]
+        expected = hmac.new(secret, raw, hashlib.sha256).digest()
+        if not hmac.compare_digest(sig, expected):
+            return None
+        payload = json.loads(raw)
+    except Exception:
+        return None
+    if payload.get("kind") != kind or payload.get("exp", 0) <= int(time.time()):
+        return None
+    return payload
+
+
+class EdgeCityDashboardAuth(DashboardAuthProvider):
+    name = "edgecity"
+    display_name = "Edge City"
+    supports_password = True
+
+    def __init__(self) -> None:
+        self._tenant_id = _env("TENANT_ID")
+        self._cp = _env("CONTROL_PLANE_URL").rstrip("/")
+        self._landing = _env("LANDING_URL").rstrip("/")
+        raw = _env("HERMES_DASHBOARD_SESSION_SECRET")
+        self._secret = raw.encode("utf-8") if raw else secrets.token_bytes(32)
+        if not self._tenant_id or not self._cp:
+            raise ValueError("TENANT_ID and CONTROL_PLANE_URL are required")
+
+    def start_login(self, *, redirect_uri: str) -> LoginStart:
+        if not self._landing:
+            raise ProviderError("LANDING_URL is not set")
+        parsed = urllib.parse.urlparse(redirect_uri)
+        if parsed.scheme not in ("http", "https") or not (parsed.path or "").endswith("/auth/callback"):
+            raise ProviderError("invalid redirect_uri")
+        code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(64)).rstrip(b"=").decode()
+        state = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
+        params = urllib.parse.urlencode(
+            {
+                "tenantId": self._tenant_id,
+                "redirect_uri": redirect_uri,
+                "state": state,
+            }
+        )
+        return LoginStart(
+            redirect_url=f"{self._landing}/admin/dashboard-sso?{params}",
+            cookie_payload={"hermes_session_pkce": f"state={state};verifier={code_verifier}"},
+        )
+
+    def complete_login(self, *, code: str, state: str, code_verifier: str, redirect_uri: str) -> Session:
+        status, body = _post_json(
+            f"{self._cp}/dashboard-admin/exchange",
+            {"ticket": code, "tenantId": self._tenant_id},
+        )
+        if status == 400 or status == 401:
+            raise InvalidCodeError("admin ticket rejected")
+        if status != 200:
+            raise ProviderError(f"admin exchange failed ({status})")
+        return self._mint(str(body.get("user_id") or "admin"), str(body.get("email") or ""), "admin")
+
+    def complete_password_login(self, *, username: str, password: str) -> Session:
+        email = (username or "").strip().lower()
+        if not email or "@" not in email:
+            raise InvalidCredentialsError("invalid credentials")
+        if not _looks_like_code(password):
+            status, _body = _post_json(
+                f"{self._cp}/tenants/{self._tenant_id}/dashboard-auth/send",
+                {"email": email},
+            )
+            if status >= 500:
+                raise ProviderError("could not send login code")
+            raise InvalidCredentialsError("code sent")
+        status, body = _post_json(
+            f"{self._cp}/tenants/{self._tenant_id}/dashboard-auth/verify",
+            {"email": email, "code": password.strip()},
+        )
+        if status != 200:
+            if status >= 500:
+                raise ProviderError("could not verify login code")
+            raise InvalidCredentialsError("invalid credentials")
+        return self._mint(str(body.get("user_id") or email), email, "owner")
+
+    def verify_session(self, *, access_token: str) -> Optional[Session]:
+        payload = _unsign(access_token, self._secret, "access")
+        if payload is None:
+            return None
+        return self._session(
+            str(payload.get("sub") or ""),
+            str(payload.get("email") or ""),
+            str(payload.get("role") or "owner"),
+            int(payload["exp"]),
+            access_token,
+            "",
+        )
+
+    def refresh_session(self, *, refresh_token: str) -> Session:
+        if not refresh_token:
+            raise RefreshExpiredError("no refresh token")
+        payload = _unsign(refresh_token, self._secret, "refresh")
+        if payload is None:
+            raise RefreshExpiredError("refresh token expired or invalid")
+        return self._mint(
+            str(payload.get("sub") or ""),
+            str(payload.get("email") or ""),
+            str(payload.get("role") or "owner"),
+        )
+
+    def revoke_session(self, *, refresh_token: str) -> None:
+        return None
+
+    def _mint(self, user_id: str, email: str, role: str) -> Session:
+        now = int(time.time())
+        exp = now + _ACCESS_TTL
+        access = _sign({"sub": user_id, "email": email, "role": role, "kind": "access", "exp": exp}, self._secret)
+        refresh = _sign(
+            {"sub": user_id, "email": email, "role": role, "kind": "refresh", "exp": now + _REFRESH_TTL},
+            self._secret,
+        )
+        return self._session(user_id, email, role, exp, access, refresh)
+
+    def _session(self, user_id: str, email: str, role: str, exp: int, access: str, refresh: str) -> Session:
+        return Session(
+            user_id=user_id,
+            email=email,
+            display_name=email or user_id,
+            org_id=role,
+            provider=self.name,
+            expires_at=exp,
+            access_token=access,
+            refresh_token=refresh,
+        )
+
+
+def register(ctx) -> None:
+    try:
+        ctx.register_dashboard_auth_provider(EdgeCityDashboardAuth())
+    except ValueError:
+        return

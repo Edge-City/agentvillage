@@ -108,3 +108,27 @@ export function configureHostedGateway(): void {
   writeConfig(doc);
   console.log("→ hosted gateway: pairing mode, approvals off, no telegram restart pings");
 }
+
+const DASHBOARD_PLUGIN = "dashboard-auth-edgecity";
+
+/** Enable the Edge City dashboard-auth plugin and public URL for hosted dashboards. */
+export function configureDashboardAuth(): void {
+  const doc = readConfig();
+  const plugins = { ...((doc.plugins as Record<string, unknown>) ?? {}) };
+  const enabled = Array.isArray(plugins.enabled)
+    ? (plugins.enabled as unknown[]).filter((n) => typeof n === "string") as string[]
+    : [];
+  if (!enabled.includes(DASHBOARD_PLUGIN)) enabled.push(DASHBOARD_PLUGIN);
+  plugins.enabled = enabled;
+  doc.plugins = plugins;
+
+  const publicUrl = process.env.HERMES_DASHBOARD_PUBLIC_URL?.trim();
+  if (publicUrl) {
+    const dashboard = { ...((doc.dashboard as Record<string, unknown>) ?? {}) };
+    dashboard.public_url = publicUrl.replace(/\/$/, "");
+    doc.dashboard = dashboard;
+  }
+
+  writeConfig(doc);
+  console.log(`→ enabled plugin ${DASHBOARD_PLUGIN}`);
+}
