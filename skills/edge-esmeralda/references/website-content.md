@@ -1,7 +1,7 @@
 # Edge City Website Content
 
 Source: https://edgecity.live
-Last indexed: 2026-09-15T12:09:57.700Z
+Last indexed: 2026-09-15T20:03:07.843Z
 
 ---
 
@@ -1013,6 +1013,16 @@ Podcast
 Thank you! Your submission has been received!
 Oops! Something went wrong while submitting the form.
 
+ODE TO EDGE
+
+Seb's reflections from the Inflection Fellowship on Meant, a tool for saying what you actually mean, and choosing to slow down and find the real question instead of shipping on someone else's clock.
+
+Sebastian Kot
+
+Essay
+
+September 15, 2026
+
 BRING YOUR FAMILY TO EDGE CITY INDIA
 
 Bring your family to Edge City India. Explore Edge Tomorrow, the family residency, caregiver expectations, and how to apply for Goa in October.
@@ -1999,16 +2009,6 @@ Jack Mielke
 Essay
 
 December 11, 2024
-
-EDGE CITY PODCAST: BRINK LINDSEY
-
-Human Flourishing, the Triple Crisis, and Societal Experiments.
-
-Edge City Team
-
-Podcast
-
-December 10, 2024
 
 ---
 
