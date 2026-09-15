@@ -60,17 +60,6 @@ export function configureStt(): void {
   console.log(`→ enabled stt with provider "${provider}" (voice notes auto-transcribed)`);
 }
 
-/** Disable gateway token streaming so intermediate tool-call text is never sent. */
-export function disableGatewayStreaming(): void {
-  const doc = readConfig();
-  const streaming = { ...((doc.streaming as Record<string, unknown>) ?? {}) };
-  streaming.enabled = false;
-  streaming.transport = "off";
-  doc.streaming = streaming;
-  writeConfig(doc);
-  console.log("→ disabled gateway token streaming");
-}
-
 /** Ensure hosted cron turns never inherit a provider's enormous output-token default. */
 export function capModelMaxTokens(): void {
   const cap = configuredMaxTokens();
@@ -94,4 +83,52 @@ export function capModelMaxTokens(): void {
   doc.model = model;
   writeConfig(doc);
   console.log(`→ capped model.max_tokens at ${model.max_tokens}`);
+}
+
+/** Hosted Telegram: pairing codes, no restart pings, no approval prompts. Idempotent. */
+export function configureHostedGateway(): void {
+  const doc = readConfig();
+
+  const gateway = { ...((doc.gateway as Record<string, unknown>) ?? {}) };
+  const pairing = { ...((gateway.pairing as Record<string, unknown>) ?? {}) };
+  pairing.global_mode = "pair";
+  gateway.pairing = pairing;
+  doc.gateway = gateway;
+
+  const approvals = { ...((doc.approvals as Record<string, unknown>) ?? {}) };
+  approvals.mode = false;
+  doc.approvals = approvals;
+
+  const platforms = { ...((doc.platforms as Record<string, unknown>) ?? {}) };
+  const telegram = { ...((platforms.telegram as Record<string, unknown>) ?? {}) };
+  telegram.gateway_restart_notification = false;
+  platforms.telegram = telegram;
+  doc.platforms = platforms;
+
+  writeConfig(doc);
+  console.log("→ hosted gateway: pairing mode, approvals off, no telegram restart pings");
+}
+
+const DASHBOARD_PLUGIN = "dashboard-auth-edgecity";
+
+/** Enable the Edge City dashboard-auth plugin and public URL for hosted dashboards. */
+export function configureDashboardAuth(): void {
+  const doc = readConfig();
+  const plugins = { ...((doc.plugins as Record<string, unknown>) ?? {}) };
+  const enabled = Array.isArray(plugins.enabled)
+    ? (plugins.enabled as unknown[]).filter((n) => typeof n === "string") as string[]
+    : [];
+  if (!enabled.includes(DASHBOARD_PLUGIN)) enabled.push(DASHBOARD_PLUGIN);
+  plugins.enabled = enabled;
+  doc.plugins = plugins;
+
+  const publicUrl = process.env.HERMES_DASHBOARD_PUBLIC_URL?.trim();
+  if (publicUrl) {
+    const dashboard = { ...((doc.dashboard as Record<string, unknown>) ?? {}) };
+    dashboard.public_url = publicUrl.replace(/\/$/, "");
+    doc.dashboard = dashboard;
+  }
+
+  writeConfig(doc);
+  console.log(`→ enabled plugin ${DASHBOARD_PLUGIN}`);
 }

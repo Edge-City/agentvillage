@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, expect, test } from "bun:test";
 import YAML from "yaml";
 
-import { capModelMaxTokens, configureStt, disableGatewayStreaming } from "../config";
+import { capModelMaxTokens, configureHostedGateway, configureStt } from "../config";
 
 const ORIGINAL_ENV = {
   HERMES_HOME: process.env.HERMES_HOME,
@@ -107,24 +107,28 @@ test("configureStt is idempotent", () => {
   expect(readConfig(configPath).stt).toEqual({ enabled: true, provider: "groq" });
 });
 
-test("disableGatewayStreaming writes the Hermes-recognized top-level streaming block", () => {
+test("configureHostedGateway sets pairing, approvals, and telegram restart flag", () => {
   const configPath = withConfig({});
 
-  disableGatewayStreaming();
+  configureHostedGateway();
 
-  expect(readConfig(configPath).streaming).toEqual({ enabled: false, transport: "off" });
+  const doc = readConfig(configPath);
+  expect((doc.gateway as Record<string, Record<string, unknown>>).pairing.global_mode).toBe("pair");
+  expect((doc.approvals as Record<string, unknown>).mode).toBe(false);
+  expect(
+    (doc.platforms as Record<string, Record<string, unknown>>).telegram.gateway_restart_notification,
+  ).toBe(false);
 });
 
-test("disableGatewayStreaming overrides existing gateway streaming while preserving extra knobs", () => {
+test("configureHostedGateway is idempotent and preserves other platform keys", () => {
   const configPath = withConfig({
-    streaming: { enabled: true, transport: "draft", edit_interval: 0.8 },
+    platforms: { telegram: { extra: { disable_link_previews: false } } },
   });
 
-  disableGatewayStreaming();
+  configureHostedGateway();
+  configureHostedGateway();
 
-  expect(readConfig(configPath).streaming).toEqual({
-    enabled: false,
-    transport: "off",
-    edit_interval: 0.8,
-  });
+  const telegram = (readConfig(configPath).platforms as Record<string, Record<string, unknown>>).telegram;
+  expect(telegram.gateway_restart_notification).toBe(false);
+  expect((telegram.extra as Record<string, unknown>).disable_link_previews).toBe(false);
 });

@@ -9,7 +9,6 @@
  *   - Edge skill bundles → `$HERMES_HOME/skills/{index-network,edgeos,edge-esmeralda,geo-esmeralda}/`
  *   - `terminal.cwd` in config.yaml → `$HERMES_HOME`
  *   - STT enabled with Groq Whisper so voice notes are auto-transcribed
- *   - gateway token streaming disabled so intermediate tool-call text is never sent
  *   - Index MCP + morning digest cron (`install_index.ts`)
  *   - Geo CLI runtime note (`install_geo.ts`)
  *
@@ -35,9 +34,8 @@ import { execSync } from "node:child_process";
 import { installIndex } from "./install_index";
 import { installEdgeos } from "./install_edgeos";
 import { installGeo } from "./install_geo";
-import { capModelMaxTokens, configureStt, disableGatewayStreaming, setTerminalCwd } from "./config";
+import { capModelMaxTokens, configureDashboardAuth, configureHostedGateway, configureStt, setTerminalCwd } from "./config";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
-import { patchHermesCronFailureDelivery } from "./hermes_runtime_patches";
 import {
   EDGE_SKILL_NAMES,
   hermesHome,
@@ -49,6 +47,7 @@ import { captureWelcomeState, restoreWelcomeState } from "./welcome_state";
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const SOURCE_WORKSPACE = join(SCRIPT_DIR, "../workspace");
 const SOURCE_SKILLS = join(SCRIPT_DIR, "../skills");
+const SOURCE_PLUGINS = join(SCRIPT_DIR, "../plugins");
 const TARGET_HOME = targetWorkspace();
 
 function ensureHermesAvailable(): void {
@@ -155,6 +154,18 @@ function copyTree(sourceDir: string, targetDir: string): number {
   return copied;
 }
 
+function copyPluginFiles(): void {
+  const target = join(hermesHome(), "plugins");
+  if (!existsSync(SOURCE_PLUGINS)) return;
+  let copied = 0;
+  for (const name of readdirSync(SOURCE_PLUGINS)) {
+    const sourcePath = join(SOURCE_PLUGINS, name);
+    if (!statSync(sourcePath).isDirectory()) continue;
+    copied += copyTree(sourcePath, join(target, name));
+  }
+  if (copied > 0) console.log(`→ staged ${copied} plugin files into ${target}`);
+}
+
 function copySkillFiles(): void {
   const targetSkillsRoot = skillsDir();
   if (!existsSync(targetSkillsRoot)) mkdirSync(targetSkillsRoot, { recursive: true });
@@ -199,11 +210,12 @@ function main(): void {
   copySoulFile();
   copyWorkspaceFiles(wipeUser);
   copySkillFiles();
+  copyPluginFiles();
   setTerminalCwd();
   capModelMaxTokens();
-  disableGatewayStreaming();
   configureStt();
-  patchHermesCronFailureDelivery();
+  configureHostedGateway();
+  configureDashboardAuth();
 
   installIndex();
   installEdgeos();
