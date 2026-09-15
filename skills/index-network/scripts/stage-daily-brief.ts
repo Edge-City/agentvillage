@@ -5,7 +5,7 @@
  * This script deliberately does not compose the user-facing brief. The prepare
  * prompt owns wholesale synthesis from deterministic JSON context. This module
  * owns the mechanical pieces around that creative step: context collection,
- * idempotency, URL sanitization, marker validation, Kanban create/block, and
+ * idempotency, URL sanitization, marker validation, Kanban create, and
  * heartbeat bookkeeping.
  */
 
@@ -328,9 +328,12 @@ export async function stageDailyBrief(options: {
   ]);
   const taskId = extractTaskId(createOutput);
 
-  // Daily briefs auto-send by default: leave the freshly-created card in its
-  // default (todo) status so sendDailyBrief delivers it without a manual
-  // review/unblock step.
+  await hermes(["kanban", "promote", taskId, `ready-for-send: morning brief — ${date}`]);
+  const promotedTask = parseTask(await hermes(["kanban", "show", taskId, "--json"]));
+  const promotedStatus = String(promotedTask?.status ?? "").toLowerCase();
+  if (promotedStatus !== "ready" && promotedStatus !== "todo") {
+    throw new Error(`daily brief card was not promoted to a sendable status: ${promotedStatus || "unknown"}`);
+  }
 
   const state = await readJsonObject(stateFile);
   state.prepared = {

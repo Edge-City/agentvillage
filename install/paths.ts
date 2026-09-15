@@ -22,6 +22,9 @@ export const EDGE_SKILL_NAMES = [
   "edge-esmeralda",
   "geo-esmeralda",
   "token-usage-audit",
+  "agent-plaza",
+  "agent-commons",
+  "simocracy",
 ] as const;
 
 export const CRON_NAME_PREFIX = "Edge —";

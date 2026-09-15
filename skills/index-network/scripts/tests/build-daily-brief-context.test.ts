@@ -11,6 +11,7 @@ import {
   fetchOpportunitiesFromMcp,
   fetchPendingQuestionsFromMcp,
   filterCooldownQuestions,
+  filterActionableOpportunities,
   filterDedupedOpportunities,
   formatPacificTime,
   pacificDayBounds,
@@ -214,6 +215,23 @@ describe("build-daily-brief-context helpers", () => {
         new Set(["opp-1"]),
       ).map((opp) => opp.name),
     ).toEqual(["B", "C"]);
+  });
+
+  test("filterActionableOpportunities drops stalled/expired/rejected cards, keeps actionable and status-less ones", () => {
+    expect(
+      filterActionableOpportunities([
+        { name: "A", status: "pending" },
+        { name: "B", status: "stalled" },
+        { name: "C", status: "expired" },
+        { name: "D", status: "rejected" },
+        { name: "E", status: "draft" },
+        { name: "F", status: "latent" },
+        { name: "G" },
+        { name: "H", status: " Pending " },
+        { name: "I", status: "accepted" },
+        { name: "J", status: "negotiating" },
+      ]).map((opp) => opp.name),
+    ).toEqual(["A", "E", "F", "G", "H"]);
   });
 
   test("formatPacificTime renders Pacific time without a timezone suffix", () => {

@@ -108,6 +108,8 @@ describe("stageDailyBrief prompt-led staging guardrails", () => {
     const hermes = async (args: string[]): Promise<string> => {
       calls.push(args);
       if (args[0] === "kanban" && args[1] === "create") return JSON.stringify({ task: { id: "t_stdin" } });
+      if (args[0] === "kanban" && args[1] === "promote") return "promoted";
+      if (args[0] === "kanban" && args[1] === "show") return JSON.stringify({ task: { id: "t_stdin", status: "ready" } });
       return "{}";
     };
 
@@ -116,9 +118,12 @@ describe("stageDailyBrief prompt-led staging guardrails", () => {
     expect(result.taskId).toBe("t_stdin");
     expect(result.questionIds).toEqual(["daily-identity-2026-06-15"]);
     expect(calls[0]?.[4]).toBe(result.body);
+    expect(calls[1]).toEqual(["kanban", "promote", "t_stdin", `ready-for-send: morning brief — ${TODAY}`]);
+    expect(calls[2]).toEqual(["kanban", "show", "t_stdin", "--json"]);
+    expect(calls.some((c) => c[0] === "kanban" && c[1] === "block")).toBe(false);
   });
 
-  test("stages a prompt-authored body file, validates markers, leaves it unblocked, and records ids", async () => {
+  test("stages a prompt-authored body file, validates markers, leaves it send-ready, and records ids", async () => {
     const dir = makeTmp();
     const stateFile = join(dir, "heartbeat-state.json");
     const contextOut = join(dir, "daily-brief-context.json");
@@ -141,6 +146,8 @@ describe("stageDailyBrief prompt-led staging guardrails", () => {
     const hermes = async (args: string[]): Promise<string> => {
       calls.push(args);
       if (args[0] === "kanban" && args[1] === "create") return JSON.stringify({ task: { id: "t_new" } });
+      if (args[0] === "kanban" && args[1] === "promote") return "promoted";
+      if (args[0] === "kanban" && args[1] === "show") return JSON.stringify({ task: { id: "t_new", status: "ready" } });
       return "{}";
     };
 
@@ -149,17 +156,21 @@ describe("stageDailyBrief prompt-led staging guardrails", () => {
     expect(result.taskId).toBe("t_new");
     expect(result.opportunityIds).toEqual(["opp-1"]);
     expect(result.questionIds).toEqual(["q-1"]);
-    expect(calls[0]).toEqual([
-      "kanban",
-      "create",
-      `Morning digest — ${TODAY}`,
-      "--body",
-      result.body,
-      "--idempotency-key",
-      `digest-${TODAY}`,
-      "--json",
+    expect(calls).toEqual([
+      [
+        "kanban",
+        "create",
+        `Morning digest — ${TODAY}`,
+        "--body",
+        result.body,
+        "--idempotency-key",
+        `digest-${TODAY}`,
+        "--json",
+      ],
+      ["kanban", "promote", "t_new", `ready-for-send: morning brief — ${TODAY}`],
+      ["kanban", "show", "t_new", "--json"],
     ]);
-    expect(calls.some((c) => c[1] === "block")).toBe(false);
+    expect(calls.some((c) => c[0] === "kanban" && c[1] === "block")).toBe(false);
 
     const state = JSON.parse(await Bun.file(stateFile).text()) as { prepared: Record<string, unknown> };
     expect(state.prepared).toMatchObject({
@@ -168,6 +179,43 @@ describe("stageDailyBrief prompt-led staging guardrails", () => {
       opportunityIds: ["opp-1"],
       questionIds: ["q-1"],
     });
+  });
+
+  test("rejects a newly-created card that cannot be promoted to a sendable status", async () => {
+    const dir = makeTmp();
+    const stateFile = join(dir, "heartbeat-state.json");
+    const contextOut = join(dir, "daily-brief-context.json");
+    await writeJson(stateFile, {});
+    await writeJson(contextOut, baseContext);
+    const body = "<!-- digest-question:id=daily-identity-2026-06-15 -->**One for you:** Which part of this thread feels most like you?";
+
+    const calls: string[][] = [];
+    const hermes = async (args: string[]): Promise<string> => {
+      calls.push(args);
+      if (args[0] === "kanban" && args[1] === "create") return JSON.stringify({ task: { id: "t_blocked" } });
+      if (args[0] === "kanban" && args[1] === "promote") return "promoted";
+      if (args[0] === "kanban" && args[1] === "show") return JSON.stringify({ task: { id: "t_blocked", status: "blocked" } });
+      return "{}";
+    };
+
+    await expect(stageDailyBrief({ date: TODAY, stateFile, contextOut, body, hermes }))
+      .rejects
+      .toThrow("not promoted to a sendable status: blocked");
+    expect(calls).toEqual([
+      [
+        "kanban",
+        "create",
+        `Morning digest — ${TODAY}`,
+        "--body",
+        body,
+        "--idempotency-key",
+        `digest-${TODAY}`,
+        "--json",
+      ],
+      ["kanban", "promote", "t_blocked", `ready-for-send: morning brief — ${TODAY}`],
+      ["kanban", "show", "t_blocked", "--json"],
+    ]);
+    expect(JSON.parse(await Bun.file(stateFile).text()).prepared).toBeUndefined();
   });
 
   test("sanitizes fabricated markdown and bare URLs before staging", async () => {
@@ -186,6 +234,8 @@ describe("stageDailyBrief prompt-led staging guardrails", () => {
 
     const hermes = async (args: string[]): Promise<string> => {
       if (args[0] === "kanban" && args[1] === "create") return JSON.stringify({ task: { id: "t_new" } });
+      if (args[0] === "kanban" && args[1] === "promote") return "promoted";
+      if (args[0] === "kanban" && args[1] === "show") return JSON.stringify({ task: { id: "t_new", status: "ready" } });
       return "{}";
     };
 
@@ -254,6 +304,8 @@ describe("stageDailyBrief prompt-led staging guardrails", () => {
       bodyFile: "drafts/brief.md",
       hermes: async (args) => {
         if (args[0] === "kanban" && args[1] === "create") return JSON.stringify({ task: { id: "t_home" } });
+        if (args[0] === "kanban" && args[1] === "promote") return "promoted";
+        if (args[0] === "kanban" && args[1] === "show") return JSON.stringify({ task: { id: "t_home", status: "ready" } });
         return "{}";
       },
     });

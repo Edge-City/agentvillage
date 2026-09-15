@@ -60,6 +60,17 @@ export function configureStt(): void {
   console.log(`→ enabled stt with provider "${provider}" (voice notes auto-transcribed)`);
 }
 
+/** Disable gateway token streaming so intermediate tool-call text is never sent. */
+export function disableGatewayStreaming(): void {
+  const doc = readConfig();
+  const streaming = { ...((doc.streaming as Record<string, unknown>) ?? {}) };
+  streaming.enabled = false;
+  streaming.transport = "off";
+  doc.streaming = streaming;
+  writeConfig(doc);
+  console.log("→ disabled gateway token streaming");
+}
+
 /** Ensure hosted cron turns never inherit a provider's enormous output-token default. */
 export function capModelMaxTokens(): void {
   const cap = configuredMaxTokens();

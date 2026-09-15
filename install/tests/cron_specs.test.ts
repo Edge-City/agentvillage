@@ -13,11 +13,13 @@ import {
   tokenUsageAuditCronDisabled,
 } from "../install_index";
 
-test("eight Index cron specs: digest jobs, opportunity drops, plus token audit (heartbeat retired)", () => {
+test("eight Index cron specs: digest jobs, opportunity drops, plus token audit (heartbeat and Plaza selfie retired)", () => {
   expect(DIGEST_CRON_SPECS).toHaveLength(8);
   // The 30-minute "Edge — heartbeat" cron was retired (it drained OpenRouter
   // key budget fleet-wide); it must no longer be installed.
   expect(DIGEST_CRON_SPECS.some((s) => s.name === "Edge — heartbeat")).toBe(false);
+  // The Agent Plaza selfie is an operator one-off, not a scheduled tenant cron.
+  expect(DIGEST_CRON_SPECS.some((s) => s.name === "Edge — Agent Plaza selfie")).toBe(false);
   const [signals, prepare, send, negotiation, evening, dropMidday, dropEvening, tokenAudit] = DIGEST_CRON_SPECS;
   expect(signals.schedule).toBe("0 1 * * *");
   expect(signals.name).toBe("Edge — memory signal sync");

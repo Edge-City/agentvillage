@@ -1,7 +1,7 @@
 # Edge Esmeralda 2026 Wiki
 
 Source: https://www.notion.so/edgecity/Edge-Esmeralda-2026-Wiki-317d45cdfc5981d2a571f52b024c5141
-Last indexed: 2026-06-25T01:17:40.045Z
+Last indexed: 2026-09-15T06:42:50.359Z
 
 ---
 
@@ -47,13 +47,13 @@ Edge Esmeralda 2026 is a month-long popup village (May 30 – June 27) happening
 
 ### 🐣 Kids & Families
 
+---
+
 Welcome! We're so excited to have you with us ☀️
 
 This wiki has all the important information regarding Edge Esmeralda 2026. If you have further questions, please reach out to info@edgeesmeralda.com (mailto:info@edgeesmeralda.com).
 
 ### ❤️ Most Important Info & Links
-
----
 
 ### 💯 Local Discounts & Partners
 
@@ -384,7 +384,7 @@ If you find a place worth a return visit, drop it on the shared community map (h
 
 photo_2026-05-11_19-36-53.jpg
 
-Recordings will be linked here during and after the event.
+Full drive here: https://drive.google.com/drive/u/4/folders/1V9yRppZVh-jXBzvTu8n4yJUqV-_zPmSu (https://drive.google.com/drive/u/4/folders/1V9yRppZVh-jXBzvTu8n4yJUqV-_zPmSu)
 
 Late May–June in Healdsburg, Northern California is warm and sunny, with mild evenings. Expect daytime temperatures of 20–30°C (70–85°F) and cooler nights around 10–15°C (50–60°F).
 
@@ -426,7 +426,6 @@ Email info@edgeesmeralda.com (mailto:info@edgeesmeralda.com) if you have any fur
 
 - Sun & Mon: 11am – 4pm
 - Tues – Sat: 11am – 1pm
-- → Apply here (https://edgecity.simplefi.tech/portal/edge-esmeralda-2026) for your kids to join
 For younger children, we're partnering with the wonderful Sonoma Arts School (https://sonomaartschool.org/). Contact Kelly, head of the school, for details and enrollment.
 
 For children under 2.5, or those who aren't suited to the camp, we can provide a list of local nannies and babysitters so you can arrange appropriate care. Nannies attend Edge Esmeralda free of charge — no ticket required, but they must register.
