@@ -1,7 +1,7 @@
 # Edge City Website Content
 
 Source: https://edgecity.live
-Last indexed: 2026-09-16T05:59:37.224Z
+Last indexed: 2026-09-16T11:21:25.829Z
 
 ---
 
@@ -494,7 +494,7 @@ AI & Computing
 
 Supporter
 Lisk
-A Layer 1 blockchain for interoperable apps with SDKs for Web3 development.
+Lisk is a Layer 2 blockchain designed for builders in high-growth markets — providing the ecosystem, support, and resources they need to launch and scale.
 Infrastructure
 Crypto & Cryptography
 Community Tools
