@@ -34,7 +34,7 @@ import { execSync } from "node:child_process";
 import { installIndex } from "./install_index";
 import { installEdgeos } from "./install_edgeos";
 import { installGeo } from "./install_geo";
-import { capModelMaxTokens, configureDashboardAuth, configureHostedGateway, configureStt, setTerminalCwd } from "./config";
+import { capModelMaxTokens, configureAvEvents, configureDashboardAuth, configureHostedGateway, configureStt, setTerminalCwd } from "./config";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
 import {
   EDGE_SKILL_NAMES,
@@ -216,6 +216,7 @@ function main(): void {
   configureStt();
   configureHostedGateway();
   configureDashboardAuth();
+  configureAvEvents();
 
   installIndex();
   installEdgeos();
