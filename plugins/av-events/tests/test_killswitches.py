@@ -60,10 +60,11 @@ def test_named_hooks_can_be_disabled_individually(plugin, ctx, monkeypatch, av):
     ctx.fire("on_session_start", session_id=SESSION, model="m", platform="telegram")
     assert av.read_buffer(plugin._COLLECTOR) == []
 
-    # An undisabled hook still opens the session lazily.
+    # An undisabled hook still opens the session lazily. It carries no
+    # `platform`, so `session.started` waits for a source (see test_review_findings).
     ctx.fire("pre_llm_call", session_id=SESSION, turn_id="t0", user_message="hi")
-    assert av.types_of(av.read_buffer(plugin._COLLECTOR)) == ["session.started"]
-    assert plugin._COLLECTOR.sessions[SESSION].tool_call_count == 0
+    assert SESSION in plugin._COLLECTOR.sessions
+    assert av.read_buffer(plugin._COLLECTOR) == []
 
     ctx.fire("pre_tool_call", session_id=SESSION, tool_name="shell")
     assert plugin._COLLECTOR.sessions[SESSION].tool_call_count == 0
@@ -89,7 +90,7 @@ def test_missing_token_idles_the_plugin(plugin, ctx, home, av):
 def test_idling_still_counts_nothing_as_a_failure(plugin, ctx):
     plugin.register(ctx)
     _drive(ctx)
-    assert plugin._COLLECTOR.failure_count == 0
+    assert plugin._COLLECTOR.total_failures == 0
 
 
 # --------------------------------------------------------------------------

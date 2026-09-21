@@ -13,24 +13,32 @@ import json
 import os
 import threading
 import time
+from collections import OrderedDict
 from typing import Any, Callable, Optional
 
 from ._core import (
     BACKOFF_BASE_S,
     BACKOFF_MAX_S,
     CAPTURE_MODES,
+    CONFIG_TTL_S,
     DEFAULT_CAPTURE,
+    DIR_MODE,
     EVIDENCE_CLASS,
     EXIT_FLUSH_BUDGET_S,
+    FILE_MODE,
     FLUSH_INTERVAL_S,
     HOOK_BUDGET_MS,
     MAX_BUFFER_AGE_S,
+    MAX_FILES_PER_TICK,
+    MAX_PROCESS_FAILURES,
     MAX_SESSION_FAILURES,
+    MAX_TRACKED_SESSIONS,
     SCHEMA_VERSION,
     TICK_INTERVAL_S,
     Buffer,
     SendResult,
     env,
+    env_flag_disabled,
     hermes_home,
     now_iso,
     post_events,
@@ -92,13 +100,15 @@ class Config:
     __slots__ = ("enabled", "url", "token", "capture", "disabled_hooks", "home", "buffer_dir", "state_dir")
 
     def __init__(self) -> None:
-        self.enabled = env("AV_EVENTS_ENABLED") != "0"
+        self.enabled = not env_flag_disabled("AV_EVENTS_ENABLED")
         self.url = env("AV_EVENTS_URL").rstrip("/")
         self.token = env("AV_EVENTS_TOKEN")
         capture = env("AV_CAPTURE").lower() or DEFAULT_CAPTURE
         self.capture = capture if capture in CAPTURE_MODES else DEFAULT_CAPTURE
+        # Case-insensitive, whitespace-tolerant: this is a switch an operator
+        # types into a Railway variable box, not a config file.
         self.disabled_hooks = frozenset(
-            part.strip() for part in env("AV_HOOKS_DISABLED").split(",") if part.strip()
+            part.strip().lower() for part in env("AV_HOOKS_DISABLED").split(",") if part.strip()
         )
         self.home = hermes_home()
         self.state_dir = os.path.join(self.home, "av-events")
@@ -126,29 +136,58 @@ class Config:
 
 
 class SessionState:
+    """Everything scoped to one session, the breaker included.
+
+    The failure counter and the degraded flag live here rather than on the
+    collector because the spec scopes them to a session and a Hermes process
+    interleaves sessions freely — a subagent turn, a cron run and a Telegram
+    conversation all pass through the same hooks. A counter shared across them
+    is a counter that unrelated traffic can reset.
+    """
+
     __slots__ = (
         "session_id",
         "source",
         "started_at",
+        "started_emitted",
         "message_count",
         "tool_call_count",
         "input_tokens",
         "output_tokens",
         "pending_llm",
         "ended",
+        "failure_count",
+        "failures_by_hook",
+        "degraded",
+        "degraded_emitted",
+        "hook_calls",
+        "hook_overruns",
+        "hook_max_ms",
+        "slowest_hook",
     )
 
-    def __init__(self, session_id: str, source: str) -> None:
+    def __init__(self, session_id: str, source: Optional[str] = None) -> None:
         self.session_id = session_id
-        self.source = source
+        #: None until a hook carrying `platform` arrives — not "unknown", which
+        #: would latch and stop the later `on_session_start` from correcting it.
+        self.source: Optional[str] = source
         self.started_at = time.time()
+        self.started_emitted = False
         self.message_count = 0
         self.tool_call_count = 0
         self.input_tokens = 0
         self.output_tokens = 0
-        #: Hashes and a perf_counter stamp left by pre_llm_call for post to use.
+        #: Hashes and request stamps left by pre_api_request for post to use.
         self.pending_llm: dict[str, dict] = {}
         self.ended = False
+        self.failure_count = 0
+        self.failures_by_hook: dict[str, int] = {}
+        self.degraded = False
+        self.degraded_emitted = False
+        self.hook_calls = 0
+        self.hook_overruns = 0
+        self.hook_max_ms = 0.0
+        self.slowest_hook: Optional[str] = None
 
 
 # --------------------------------------------------------------------------
@@ -166,12 +205,15 @@ class Collector:
     def __init__(self, config: Optional[Config] = None) -> None:
         self.config = config or Config()
         self.buffer: Optional[Buffer] = None
-        self.sessions: dict[str, SessionState] = {}
-        self.failure_count = 0
-        self.failures_by_hook: dict[str, int] = {}
+        self.sessions: "OrderedDict[str, SessionState]" = OrderedDict()
+        #: Process-wide backstop, independent of any session.
+        self.total_failures = 0
+        #: Process-wide diagnostics, kept alongside the per-session stats that
+        #: ride out on `session.ended`.
         self.overruns: dict[str, int] = {}
-        self.degraded = False
-        self._degraded_emitted = False
+        self.max_hook_ms = 0.0
+        self.plugin_disabled = False
+        self._plugin_disabled_emitted = False
         self._seen: dict[str, str] = {}
         self._seen_loaded = False
         self._lock = threading.RLock()
@@ -181,15 +223,23 @@ class Collector:
         self._backoff: dict[str, tuple[float, int]] = {}
         self._dropped: dict[str, Any] = {}
         self._atexit_registered = False
-        self._config_session_id: Optional[str] = None
+        #: Session ids that have already triggered a config reload, and when the
+        #: last reload happened. Together these keep the env sweep off the hot
+        #: path: one read per new session, plus a TTL for long-lived ones.
+        self._config_seen: "OrderedDict[str, bool]" = OrderedDict()
+        self._config_at = 0.0
+        #: `plugin.degraded` events owed but not yet buffered, because the hook
+        #: that tripped the breaker was one we must not do I/O in.
+        self._pending_degraded: list[tuple[str, dict]] = []
         #: Test seam. When set, used in place of `post_events`.
         self.sender: Optional[Callable[[str, str, list], SendResult]] = None
 
     # -- lifecycle --------------------------------------------------------
 
     def reload_config(self) -> None:
-        """Re-read the kill switches. Called at every session start."""
+        """Re-read the kill switches."""
         self.config = Config()
+        self._config_at = time.monotonic()
 
     def _ensure_buffer(self) -> Optional[Buffer]:
         if self.buffer is not None:
@@ -277,7 +327,7 @@ class Collector:
 
         Local and synchronous: a JSON dump and one appended line. No network.
         """
-        if self.degraded or not self.config.active:
+        if self.plugin_disabled or not self.config.active:
             return None
         buffer = self._ensure_buffer()
         if buffer is None:
@@ -290,43 +340,65 @@ class Collector:
     # -- sessions ---------------------------------------------------------
 
     def begin(self, session_id: Optional[str]) -> None:
-        """Session boundary: re-read the kill switches and clear the counters.
+        """Session boundary: re-read the kill switches.
 
-        Called before the enabled check on every hook, which is what makes
-        `AV_EVENTS_ENABLED=0` reversible without a restart (scenario 26): the
-        flag that disabled the plugin is also the flag being re-read. Bounded to
-        one reload per session id, so it costs a dict compare on the hot path.
+        This is what makes `AV_EVENTS_ENABLED=0` reversible without a restart
+        (scenario 26) — the flag that disabled the plugin is also the flag being
+        re-read. It reloads once per session id ever seen, plus a `CONFIG_TTL_S`
+        refresh so a single long-lived session still notices a flip, and it does
+        **not** touch any failure counter: those are per session now.
         """
-        if not session_id or session_id == self._config_session_id:
+        if self.plugin_disabled:
+            return
+        if session_id:
+            if session_id in self._config_seen:
+                if (time.monotonic() - self._config_at) < CONFIG_TTL_S:
+                    return
+            else:
+                with self._lock:
+                    self._config_seen[session_id] = True
+                    while len(self._config_seen) > MAX_TRACKED_SESSIONS:
+                        self._config_seen.popitem(last=False)
+        elif (time.monotonic() - self._config_at) < CONFIG_TTL_S:
             return
         with self._lock:
-            if session_id == self._config_session_id:
-                return
-            self._config_session_id = session_id
             self.reload_config()
-            self.failure_count = 0
-            self.failures_by_hook = {}
-            self.degraded = False
-            self._degraded_emitted = False
 
-    def session_started(self, session_id: str, source: str = "unknown", **extra: Any) -> Optional[SessionState]:
-        """Idempotent. Re-reads the kill switches, then emits `session.started`.
+    def peek_session(self, session_id: Optional[str]) -> Optional[SessionState]:
+        """The in-memory state for a session, or None. Never creates, never I/O."""
+        if not session_id:
+            return None
+        return self.sessions.get(session_id)
 
-        Callable from any hook, so a Hermes build with no session-start hook
-        still produces the event on the session's first observed activity.
+    def open_session(self, session_id: str, source: Optional[str] = None) -> Optional[SessionState]:
+        """Get or create the session, emitting `session.started` once a source is known.
+
+        The emit is deferred until some hook supplies a `platform`, because the
+        first hook to mention a session often does not carry one, and a `source`
+        of "unknown" written at that moment would latch: `on_session_start`
+        arrives later and could no longer correct it. `session_ended` forces the
+        emit if the source never turned up.
         """
-        self.begin(session_id)
         with self._lock:
-            existing = self.sessions.get(session_id)
-            if existing is not None:
-                return existing
-            state = SessionState(session_id, source)
-            self.sessions[session_id] = state
-        payload: dict[str, Any] = {"source": source}
-        if extra.get("cron_job_id"):
-            payload["cron_job_id"] = extra["cron_job_id"]
-        self.emit("session.started", payload, session_id=session_id)
+            state = self.sessions.get(session_id)
+            if state is None:
+                state = SessionState(session_id, source)
+                self.sessions[session_id] = state
+                while len(self.sessions) > MAX_TRACKED_SESSIONS:
+                    self.sessions.popitem(last=False)
+            elif source and state.source is None:
+                state.source = source
+        self._emit_started(state)
         return state
+
+    def _emit_started(self, state: SessionState, force: bool = False) -> None:
+        if state.started_emitted or (state.source is None and not force):
+            return
+        with self._lock:
+            if state.started_emitted:
+                return
+            state.started_emitted = True
+        self.emit("session.started", {"source": state.source or "unknown"}, session_id=state.session_id)
 
     def session_ended(self, session_id: str, **extra: Any) -> None:
         with self._lock:
@@ -334,17 +406,31 @@ class Collector:
             if state is None or state.ended:
                 return
             state.ended = True
+        # A session that never learned its source still gets a start event, so
+        # the pair is always well formed for the funnel.
+        self._emit_started(state, force=True)
+        self._drain_pending_degraded()
         payload: dict[str, Any] = {
-            "source": state.source,
+            "source": state.source or "unknown",
             "message_count": state.message_count,
             "tool_call_count": state.tool_call_count,
             "input_tokens": state.input_tokens,
             "output_tokens": state.output_tokens,
             "duration_ms": int((time.time() - state.started_at) * 1000),
+            # The data behind the guardrails p95 gate. Without these the 50 ms
+            # budget is measured and then thrown away.
+            "hook_calls": state.hook_calls,
+            "hook_failures": state.failure_count,
+            "hook_overruns": state.hook_overruns,
+            "hook_max_ms": round(state.hook_max_ms, 3),
+            "slowest_hook": state.slowest_hook,
+            "degraded": state.degraded,
         }
         if extra.get("cron_job_id"):
             payload["cron_job_id"] = extra["cron_job_id"]
         self.emit("session.ended", payload, session_id=session_id)
+        with self._lock:
+            self.sessions.pop(session_id, None)
         # Wake the flusher rather than sending inline: a hook never blocks on
         # the network (guardrails §2). atexit does the synchronous last pass.
         buffer = self.buffer
@@ -354,58 +440,130 @@ class Collector:
 
     def nudge_flush(self) -> None:
         """Ask the flusher to run now. Returns immediately; never sends inline."""
+        self._drain_pending_degraded()
         buffer = self.buffer
         if buffer is not None:
             buffer.rotate_if_due()
         self._wake.set()
 
-    def state_for(self, session_id: Optional[str], source: str = "unknown") -> Optional[SessionState]:
-        if not session_id:
-            return None
-        return self.session_started(session_id, source)
-
     # -- failures ---------------------------------------------------------
 
-    def record_failure(self, hook: str, exc: BaseException) -> None:
-        """Count a hook failure; trip the degraded switch at the tenth."""
-        try:
-            with self._lock:
-                if self.degraded:
-                    return
-                self.failure_count += 1
-                self.failures_by_hook[hook] = self.failures_by_hook.get(hook, 0) + 1
-                count = self.failure_count
-                tripped = count >= MAX_SESSION_FAILURES and not self._degraded_emitted
-                if tripped:
-                    self._degraded_emitted = True
-                    by_hook = dict(self.failures_by_hook)
-            if not tripped:
-                return
-            # Emit before disabling, so the one degraded event still goes out.
-            self.emit(
-                "plugin.degraded",
-                {
-                    "hook": hook,
-                    "error_count": count,
-                    "errors_by_hook": by_hook,
-                    "hermes_version": hermes_version(),
-                    "last_error": sanitize(f"{type(exc).__name__}: {exc}")[:200],
-                },
-            )
-            with self._lock:
-                self.degraded = True
-        except Exception:  # noqa: BLE001 - the failure path may not fail
-            pass
+    def record_stats(self, hook: str, session_id: Optional[str], elapsed_ms: float) -> None:
+        """Fold one hook call into its session's stats. Pure memory.
 
-    def record_overrun(self, hook: str, elapsed_ms: float) -> None:
+        Also kept process-wide, because a hook that overruns before its session
+        is open has no `session.ended` to be reported on, and that is precisely
+        the call worth knowing about.
+        """
         try:
-            with self._lock:
+            over = elapsed_ms > HOOK_BUDGET_MS
+            if over:
                 self.overruns[hook] = self.overruns.get(hook, 0) + 1
+            if elapsed_ms > self.max_hook_ms:
+                self.max_hook_ms = elapsed_ms
+            state = self.peek_session(session_id)
+            if state is None:
+                return
+            state.hook_calls += 1
+            if over:
+                state.hook_overruns += 1
+            if elapsed_ms > state.hook_max_ms:
+                state.hook_max_ms = elapsed_ms
+                state.slowest_hook = hook
         except Exception:  # noqa: BLE001
             pass
 
-    def hook_allowed(self, hook: str) -> bool:
-        return not self.degraded and self.config.enabled and hook not in self.config.disabled_hooks
+    def record_failure(
+        self, hook: str, exc: BaseException, session_id: Optional[str] = None, defer_emit: bool = False
+    ) -> None:
+        """Count a failure against its session, and against the process.
+
+        `defer_emit` is for hooks we must not do I/O in — `pre_tool_call` fails
+        closed in Hermes, so buffering a file from it could block a tool call.
+        The event is queued and written by the next hook that is allowed to.
+        """
+        try:
+            payload: Optional[dict] = None
+            with self._lock:
+                self.total_failures += 1
+                state = self.sessions.get(session_id) if session_id else None
+                if state is None and session_id:
+                    # A hook that throws before it opens the session is exactly
+                    # the case the breaker exists for, so give the failure
+                    # somewhere to land. Pure memory: a state with no source
+                    # emits nothing until something tells it one.
+                    state = SessionState(session_id)
+                    self.sessions[session_id] = state
+                    while len(self.sessions) > MAX_TRACKED_SESSIONS:
+                        self.sessions.popitem(last=False)
+                if state is None:
+                    tripped_session = False
+                else:
+                    if not state.degraded:
+                        state.failure_count += 1
+                        state.failures_by_hook[hook] = state.failures_by_hook.get(hook, 0) + 1
+                    tripped_session = (
+                        state.failure_count >= MAX_SESSION_FAILURES and not state.degraded_emitted
+                    )
+                    if tripped_session:
+                        state.degraded_emitted = True
+                        state.degraded = True
+                        payload = {
+                            "hook": hook,
+                            "scope": "session",
+                            "error_count": state.failure_count,
+                            "errors_by_hook": dict(state.failures_by_hook),
+                            "hermes_version": hermes_version(),
+                            # Class name only: an exception message can carry
+                            # the prompt or tool argument that caused it.
+                            "last_error": type(exc).__name__,
+                        }
+
+                tripped_process = (
+                    self.total_failures >= MAX_PROCESS_FAILURES and not self._plugin_disabled_emitted
+                )
+                if tripped_process:
+                    self._plugin_disabled_emitted = True
+                    payload = {
+                        "hook": hook,
+                        "scope": "process",
+                        "error_count": self.total_failures,
+                        "hermes_version": hermes_version(),
+                        "last_error": type(exc).__name__,
+                    }
+
+            if payload is None:
+                return
+            if defer_emit:
+                with self._lock:
+                    self._pending_degraded.append(("plugin.degraded", payload))
+                    if session_id:
+                        self._pending_degraded[-1][1].setdefault("session_id", session_id)
+            else:
+                self.emit("plugin.degraded", payload, session_id=session_id)
+            if payload.get("scope") == "process":
+                # Set last: the event above must still be allowed through.
+                self.plugin_disabled = True
+        except Exception:  # noqa: BLE001 - the failure path may not fail
+            pass
+
+    def _drain_pending_degraded(self) -> None:
+        """Write any `plugin.degraded` owed from a hook that could not do I/O."""
+        try:
+            with self._lock:
+                pending, self._pending_degraded = self._pending_degraded, []
+            for event_type, payload in pending:
+                self.emit(event_type, payload, session_id=payload.pop("session_id", None))
+        except Exception:  # noqa: BLE001
+            pass
+
+    def hook_allowed(self, hook: str, session_id: Optional[str] = None) -> bool:
+        if self.plugin_disabled or not self.config.enabled:
+            return False
+        if hook.lower() in self.config.disabled_hooks:
+            return False
+        state = self.peek_session(session_id)
+        return not (state is not None and state.degraded)
 
     # -- content-addressed prompt registry --------------------------------
 
@@ -430,8 +588,9 @@ class Collector:
         path = self._seen_path()
         tmp = f"{path}.{os.getpid()}.tmp"
         try:
-            os.makedirs(self.config.state_dir, exist_ok=True)
-            with open(tmp, "w", encoding="utf-8") as handle:
+            os.makedirs(self.config.state_dir, mode=DIR_MODE, exist_ok=True)
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, FILE_MODE)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 json.dump({"hashes": self._seen}, handle, separators=(",", ":"))
             os.replace(tmp, path)
         except OSError:
@@ -449,12 +608,20 @@ class Collector:
         if self.config.capture != "full" or not digest:
             return None
         with self._lock:
-            seen = self._load_seen()
-            if digest in seen:
+            if digest in self._load_seen():
                 return None
-            seen[digest] = kind
+        # Emit *before* recording the hash. Marking it seen first means that an
+        # emit which turns out to be inert — no token yet, plugin disabled, an
+        # unwritable buffer — loses the body permanently, while every later
+        # `llm.call` still carries the hash. An orphaned hash is worse than a
+        # duplicate `prompt.registered`, which ingest deduplicates anyway.
+        event = self.emit("prompt.registered", {"hash": digest, "kind": kind, "body": body}, **refs)
+        if event is None:
+            return None
+        with self._lock:
+            self._seen[digest] = kind
             self._save_seen()
-        return self.emit("prompt.registered", {"hash": digest, "kind": kind, "body": body}, **refs)
+        return event
 
     # -- flusher ----------------------------------------------------------
 
@@ -481,52 +648,82 @@ class Collector:
             # so dropping them would only destroy the dogfood evidence.
             return
         now = time.time()
+        attempted = 0
         for path in buffer.ready_files():
+            # A large backlog must not turn one tick into a long blocking walk;
+            # the rest are picked up on the next pass a second later.
+            if attempted >= MAX_FILES_PER_TICK:
+                break
             name = os.path.basename(path)
             next_at, attempts = self._backoff.get(name, (0.0, 0))
             if now < next_at:
                 continue
             age = now - (Buffer.file_started_ms(path) / 1000.0)
             if age > MAX_BUFFER_AGE_S:
-                self._drop_file(path)
+                self._discard_file(path, "expired")
                 continue
-            if self._send_file(path):
+            attempted += 1
+            ok, retryable = self._send_file(path)
+            if ok:
                 self._backoff.pop(name, None)
+            elif not retryable:
+                # Ingest will never accept this batch. Quarantine it so the
+                # queue behind it drains, and keep it on disk to look at.
+                self._discard_file(path, "rejected")
             else:
                 delay = min(BACKOFF_BASE_S * (2**attempts), BACKOFF_MAX_S)
                 self._backoff[name] = (time.time() + delay, attempts + 1)
 
-    def _send_file(self, path: str) -> bool:
+    def _send_file(self, path: str) -> tuple[bool, bool]:
+        """Returns (delivered, retryable)."""
         events = Buffer.read_events(path)
         if not events:
             try:
                 os.unlink(path)
             except OSError:
                 pass
-            return True
+            return True, True
         sender = self.sender or post_events
         result = sender(self.config.url, self.config.token, events)
         if not result.ok:
-            return False
+            return False, result.retryable
         try:
             os.unlink(path)
         except OSError:
             pass
         self._emit_drop_report()
-        return True
+        return True, True
 
-    def _drop_file(self, path: str) -> None:
-        """Past 72 h a batch is evidence of an outage, not evidence of a session."""
+    def _discard_file(self, path: str, reason: str) -> None:
+        """Take a batch out of the send queue for good.
+
+        `expired`: past 72 h it is evidence of an outage, not of a session, and
+        it is deleted. `rejected`: ingest refused it outright, so it is moved to
+        `buffer/rejected/` and kept — a 401 or a 413 is something a human needs
+        to see, and deleting the evidence of a misconfiguration would hide it.
+        """
         events = Buffer.read_events(path)
         stamps = sorted(str(e.get("emitted_at")) for e in events if e.get("emitted_at"))
-        try:
-            os.unlink(path)
-        except OSError:
-            return
+        buffer = self.buffer
+        if reason == "rejected" and buffer is not None:
+            if not buffer.reject(path):
+                return
+        else:
+            try:
+                os.unlink(path)
+            except OSError:
+                return
         self._backoff.pop(os.path.basename(path), None)
         record = self._dropped
         record["count"] = int(record.get("count", 0)) + len(events)
-        record["files"] = int(record.get("files", 0)) + 1
+        if reason == "rejected":
+            record["rejected_files"] = int(record.get("rejected_files", 0)) + 1
+            record["rejected_events"] = int(record.get("rejected_events", 0)) + len(events)
+        else:
+            record["files"] = int(record.get("files", 0)) + 1
+        reasons = set(record.get("reasons") or ())
+        reasons.add(reason)
+        record["reasons"] = sorted(reasons)
         if stamps:
             oldest = record.get("oldest_event_at")
             newest = record.get("newest_event_at")
@@ -534,10 +731,15 @@ class Collector:
             record["newest_event_at"] = max(newest, stamps[-1]) if newest else stamps[-1]
 
     def _emit_drop_report(self) -> None:
-        """One `plugin.buffer_dropped` on the first flush that succeeds after a drop."""
+        """One `plugin.buffer_dropped` on the first flush that succeeds after a loss."""
         if not self._dropped:
             return
         payload = dict(self._dropped)
+        reasons = payload.pop("reasons", []) or []
+        payload["reason"] = "+".join(reasons) if reasons else "expired"
+        payload.setdefault("files", 0)
+        payload.setdefault("rejected_files", 0)
+        payload.setdefault("rejected_events", 0)
         payload.setdefault("oldest_event_at", None)
         payload.setdefault("newest_event_at", None)
         payload["hook"] = "buffer"
@@ -551,12 +753,22 @@ class Collector:
 # --------------------------------------------------------------------------
 
 
-def guarded(hook: str, collector_ref: Callable[[], Optional[Collector]]) -> Callable:
+def guarded(
+    hook: str,
+    collector_ref: Callable[[], Optional[Collector]],
+    *,
+    quiet: bool = False,
+) -> Callable:
     """Wrap a hook body so nothing it does can reach Hermes.
 
     Catches `BaseException` deliberately: a `MemoryError` raised inside our hook
     must not take the turn loop with it either. `SystemExit` is re-raised,
     because swallowing a shutdown would be worse than losing an event.
+
+    `quiet=True` marks a hook that must perform no I/O at all — Hermes fails
+    *closed* on `pre_tool_call`, so a config reload or a buffer write there can
+    stall a tool call. A quiet hook skips the config refresh and queues any
+    `plugin.degraded` for the next hook that is allowed to write it.
 
     The wrapped function is called as `fn(collector, *args, **kwargs)`.
     """
@@ -567,11 +779,13 @@ def guarded(hook: str, collector_ref: Callable[[], Optional[Collector]]) -> Call
             collector = collector_ref()
             if collector is None:
                 return None
-            try:
-                collector.begin(kwargs.get("session_id") or kwargs.get("parent_session_id"))
-            except Exception:  # noqa: BLE001 - config reload must not break a hook
-                pass
-            if not collector.hook_allowed(hook):
+            session_id = kwargs.get("session_id") or kwargs.get("parent_session_id")
+            if not quiet:
+                try:
+                    collector.begin(session_id)
+                except Exception:  # noqa: BLE001 - a reload must not break a hook
+                    pass
+            if not collector.hook_allowed(hook, session_id):
                 return None
             start = time.perf_counter()
             try:
@@ -579,11 +793,9 @@ def guarded(hook: str, collector_ref: Callable[[], Optional[Collector]]) -> Call
             except SystemExit:
                 raise
             except BaseException as exc:  # noqa: BLE001 - the whole point
-                collector.record_failure(hook, exc)
+                collector.record_failure(hook, exc, session_id, defer_emit=quiet)
             finally:
-                elapsed_ms = (time.perf_counter() - start) * 1000.0
-                if elapsed_ms > HOOK_BUDGET_MS:
-                    collector.record_overrun(hook, elapsed_ms)
+                collector.record_stats(hook, session_id, (time.perf_counter() - start) * 1000.0)
             return None
 
         wrapper.av_hook_name = hook  # type: ignore[attr-defined]

@@ -152,7 +152,7 @@ def test_a_connection_refused_is_not_an_exception(plugin, monkeypatch, home, av)
     emit_n(collector, 50)
     collector.tick()  # must not raise
     assert len(ready_files(collector)) == 1
-    assert collector.failure_count == 0
+    assert collector.total_failures == 0
 
 
 # --------------------------------------------------------------------------

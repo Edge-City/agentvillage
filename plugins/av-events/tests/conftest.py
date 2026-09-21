@@ -219,6 +219,7 @@ def plugin(home):
     """A freshly imported plugin module with its singleton cleared."""
     module = load_plugin()
     module._COLLECTOR = None
+    module._REGISTERED = False
     sys.modules[f"{MODULE_NAME}._collector"].reset_runtime_cache()
     yield module
     collector = module._COLLECTOR
@@ -226,6 +227,7 @@ def plugin(home):
         collector._stop.set()
         collector._wake.set()
     module._COLLECTOR = None
+    module._REGISTERED = False
 
 
 @pytest.fixture()

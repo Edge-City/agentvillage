@@ -22,10 +22,10 @@ plugins/av-events/
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `AV_EVENTS_TOKEN` | *(unset)* | Per-tenant ingest token. **Unset means the plugin idles**: hooks are registered, nothing is emitted, nothing is buffered, no thread is started. |
+| `AV_EVENTS_TOKEN` | *(unset)* | Per-tenant ingest token. **Unset or blank means the plugin idles**: hooks are registered, nothing is emitted, nothing is buffered, no thread is started. |
 | `AV_EVENTS_URL` | *(unset)* | Ingest base URL. Events are POSTed to `{AV_EVENTS_URL}/v1/events`. Empty with a token set is **null-sink mode** (see below). |
-| `AV_EVENTS_ENABLED` | `1` | `0` disables everything. Re-read at every session boundary. |
-| `AV_HOOKS_DISABLED` | *(empty)* | Comma-separated hook names to disable individually, e.g. `pre_tool_call,post_tool_call`. |
+| `AV_EVENTS_ENABLED` | `1` | Any of `0`, `false`, `no`, `off` (case-insensitive, whitespace ignored) disables everything. Re-read at every session boundary. |
+| `AV_HOOKS_DISABLED` | *(empty)* | Comma-separated hook names to disable individually, e.g. `pre_tool_call,post_tool_call`. Matched case-insensitively, whitespace stripped. |
 | `AV_CAPTURE` | `sanitized` | `metadata` \| `sanitized` \| `full`. An unrecognised value falls back to `sanitized`. |
 | `HERMES_VERSION`, `OVERLAY_REF` | *(unset)* | Optional; populate the envelope fields of the same name. See "What the API does not provide". |
 
@@ -33,15 +33,21 @@ Every variable is read from the process environment first and then from `$HERMES
 same fallback `plugins/dashboard-auth-edgecity` uses. The dotfile is parsed once and memoised on its
 mtime, so a missing variable never costs a file open on the agent's hot path.
 
+**A variable present but blank in the process environment is authoritative and does not fall through
+to the dotfile.** `AV_EVENTS_TOKEN=""` is how the control plane revokes a tenant; a stale `.env` line
+must not be able to undo that. Only a variable that is *absent* falls back.
+
 `$HERMES_HOME` defaults to `~/.hermes` (and `%LOCALAPPDATA%\hermes` on Windows).
 
 ### Kill switches
 
-`AV_EVENTS_ENABLED` and `AV_HOOKS_DISABLED` are **re-read whenever a session id the plugin has not
-seen appears on a hook payload** — not only at plugin load. That is what makes spec scenario 26 work
-in both directions: setting `AV_EVENTS_ENABLED=0` stops events from the next session, and unsetting
-it resumes them, with no gateway restart. The reload is bounded to once per session id, so the check
-on the hot path is a string compare.
+`AV_EVENTS_ENABLED` and `AV_HOOKS_DISABLED` are **re-read at session boundaries**, not only at plugin
+load. That is what makes spec scenario 26 work in both directions: setting `AV_EVENTS_ENABLED=0`
+stops events from the next session, and unsetting it resumes them, with no gateway restart.
+
+The reload fires once per session id the plugin has not seen, plus a 60-second TTL so a single
+long-lived session still notices a flip. It is deliberately **not** per hook: a reload is five env
+reads and a dotfile stat, and `pre_tool_call` in particular must not pay that (see below).
 
 ---
 
@@ -86,17 +92,39 @@ downgrades anything stronger in any case (spec scenario 4). `event_id` is a uuid
 implemented here because the 3.11 stdlib has none) with a monotonic counter in `rand_a`, so ids sort
 in emission order.
 
+`occurred_at` is when the thing happened, not when we buffered it: `llm.call` takes the API
+request's `started_at` (with `occurred_at_earliest`/`latest` spanning the request), which under a
+backlog can differ from `emitted_at` by minutes. Every `marts` time series is built on `occurred_at`.
+
 | Event | Source hook | Payload |
 |---|---|---|
 | `session.started` | `on_session_start` | `source`, `cron_job_id?` |
-| `session.ended` | `on_session_finalize` | `source`, `message_count`, `tool_call_count`, `input_tokens`, `output_tokens`, `duration_ms` |
+| `session.ended` | `on_session_finalize` | `source`, `message_count`, `tool_call_count`, `input_tokens`, `output_tokens`, `duration_ms`, plus the hook stats below |
 | `llm.call` | `pre_api_request` + `post_api_request` | `model`, `provider`, the five token buckets, `latency_ms`, `finish_reason`, `tools_hash`, `system_prompt_hash`, plus lengths above `metadata` |
+| `llm.call` (failed) | `pre_api_request` + `api_request_error` | as above with `finish_reason: "error"`, `error_type`, `status_code`, `retryable`, and zeroed token counts |
 | `prompt.registered` | `pre_api_request` | `hash`, `kind` ∈ `tools`\|`system_prompt`, `body`. `full` only, once per hash ever |
-| `plugin.degraded` | the guard | `hook`, `error_count`, `errors_by_hook`, `hermes_version`, `last_error` (sanitised) |
-| `plugin.buffer_dropped` | the flusher | `count`, `files`, `oldest_event_at`, `newest_event_at` |
+| `plugin.degraded` | the guard | `hook`, `scope` ∈ `session`\|`process`, `error_count`, `errors_by_hook`, `hermes_version`, `last_error` |
+| `plugin.buffer_dropped` | the flusher | `reason`, `count`, `files`, `rejected_files`, `rejected_events`, `oldest_event_at`, `newest_event_at` |
 
 `prompt.registered` is content-addressed against a seen-set at `$HERMES_HOME/av-events/seen.json`,
-so the same tool schemas register once and never again, across sessions and process restarts.
+so the same tool schemas register once and never again, across sessions and process restarts. The
+hash is recorded **after** the event is buffered, never before: marking it seen first would lose the
+body permanently whenever the emit turned out to be inert (no token yet, plugin disabled, unwritable
+buffer) while every later `llm.call` still carried the orphaned hash.
+
+`session.ended` carries the per-session hook stats — `hook_calls`, `hook_failures`, `hook_overruns`,
+`hook_max_ms`, `slowest_hook`, `degraded`. That is the data source for the guardrails p95 latency
+gate; without it the 50 ms budget is measured and then thrown away.
+
+**`session.started` waits for a source.** Most hooks carry no `platform`, so a session opened lazily
+by one of them holds `source = None` and defers the event until `on_session_start` (or any hook with
+a `platform`) supplies one. Writing `"unknown"` at first sight would latch a value the real
+`on_session_start` could no longer correct. If the source never arrives, `session_ended` forces the
+pair out with `"unknown"`, so a `session.started`/`session.ended` pair is always well formed.
+
+**`evidence_class` is `agent_report` for everything.** Note that spec §4.1 caps several of these
+types at `platform_record` while scenario 4 requires ingest to downgrade any class a plugin token
+claims. The two disagree; this code follows scenario 4, which is the enforceable one.
 
 ---
 
@@ -108,7 +136,18 @@ Implements `launch-guardrails-draft.md` §2 and spec scenario 25.
   — a `MemoryError` from our hook must not take the turn loop either — re-raising only `SystemExit`,
   because swallowing a shutdown would be worse than losing an event.
 - **Ten failures in a session** (counted across all hooks) disable the plugin for that session and
-  emit exactly one `plugin.degraded`. A new session id re-arms it.
+  emit exactly one `plugin.degraded` with `scope: session`. Other sessions are unaffected.
+  The counter and the degraded flag live on the session, not the collector: a Hermes process
+  interleaves sessions freely (subagents, cron, a Telegram conversation), and a shared counter is one
+  that unrelated traffic can reset — alternating session ids could otherwise outrun the breaker
+  indefinitely.
+- **Fifty failures across the process**, regardless of session, disable the plugin entirely and emit
+  one `plugin.degraded` with `scope: process`. This is the backstop for churn that no per-session
+  breaker can catch, such as every failure landing on a fresh subagent id.
+- **`pre_tool_call` does no I/O at all.** Hermes fails *closed* on that hook, so it skips the config
+  reload, never opens a session lazily, and never writes to the buffer; a `plugin.degraded` it
+  triggers is queued and written by the next hook that is allowed to. An unknown session is simply
+  not counted — a missing tool-call count is worth far less than a tool call that never ran.
 - **50 ms budget per hook**, measured with `time.perf_counter`. Overruns are *counted, never
   enforced*: aborting a hook halfway is worse for the agent than a slow one. Counts live in
   `collector.overruns`.
@@ -125,10 +164,23 @@ Append-only JSONL under `$HERMES_HOME/av-events/buffer/`. Each process appends t
 seconds. The name carries the timestamp of the batch's *first* event, so a batch left behind by a
 crashed process is self-describing and still recoverable.
 
+Directories are created `0o700` and files `0o600` — this is per-tenant telemetry sitting in the
+agent's home directory.
+
 The flusher POSTs each batch to `{AV_EVENTS_URL}/v1/events` with `Authorization: Bearer
-$AV_EVENTS_TOKEN` and body `{"events": [...]}`. A batch that fails backs off exponentially (2 s
-doubling, capped at 300 s between attempts) and is retried until it is **72 hours old**, at which
-point it is dropped and one `plugin.buffer_dropped` is emitted on the next successful flush.
+$AV_EVENTS_TOKEN` and body `{"events": [...]}`, at most **5 files per pass** so a large backlog
+cannot turn one tick into a long blocking walk.
+
+A batch is retried only when retrying could ever work: network failures, 5xx, and 408/425/429. It
+backs off exponentially (2 s doubling, capped at 300 s between attempts) until it is **72 hours
+old**, at which point it is deleted. Any other 4xx — 400, 401, 403, 413, 422 — is a statement about
+this batch or this token that will not change on its own, so the file is moved to
+`buffer/rejected/` and never offered again. It is *kept* rather than deleted: a 401 or a 413 is a
+misconfiguration a human needs to see, and deleting the evidence would hide it.
+
+Either way one `plugin.buffer_dropped` is emitted on the next successful flush, carrying `reason`
+(`expired`, `rejected`, or both), `files` / `count` for expiries and `rejected_files` /
+`rejected_events` for refusals.
 
 Shutdown is a daemon thread plus an `atexit` hook that force-rotates and makes one bounded
 (5 second) attempt at each pending batch. Anything it cannot send survives on disk.
@@ -207,7 +259,8 @@ names; all eight the spec names exist, plus `on_session_start`, `on_session_fina
 | `pre_llm_call` | `agent/turn_context.py:1379` | `session_id`, `task_id`, `turn_id`, `user_message`, `conversation_history`, `is_first_turn`, `model`, `platform`, `parent_session_id`, `sender_id` |
 | `post_llm_call` | `agent/turn_finalizer.py:630` | `session_id`, `task_id`, `turn_id`, `user_message`, `assistant_response`, `conversation_history`, `model`, `platform` |
 | `pre_api_request` | `agent/conversation_loop.py:3185` | `api_request_id`, `system_prompt`, `request` (`{"method","body"}`), `tool_count`, `approx_input_tokens`, `model`, `provider`, `api_mode`, `message_count`, `max_tokens`, `started_at` |
-| `post_api_request` | `agent/conversation_loop.py:6993` | `api_request_id`, `usage`, `api_duration`, `finish_reason`, `response_model`, `assistant_content_chars`, `assistant_tool_call_count`, `provider`, `api_mode` |
+| `post_api_request` | `agent/conversation_loop.py:6993` | `api_request_id`, `usage`, `api_duration`, `finish_reason`, `response_model`, `assistant_content_chars`, `assistant_tool_call_count`, `provider`, `api_mode`, `started_at`, `ended_at` |
+| `api_request_error` | `run_agent.py:3130` | `api_request_id`, `error` (`{"type","message"}`), `status_code`, `retryable`, `retry_count`, `api_duration`, `started_at`, `ended_at`. Fired **instead of** `post_api_request` on a terminal failure |
 | `pre_tool_call` | `hermes_cli/plugins.py:6636` | `tool_name`, `args`, `session_id`, `task_id`, `turn_id`, `tool_call_id`, `api_request_id` |
 | `post_tool_call` | `model_tools.py:1220` | as above plus `result`, `duration_ms`, `status`, `error_type`, `error_message` |
 | `subagent_start` | `tools/delegate_tool.py:2197` | `parent_session_id`, `parent_turn_id`, `child_session_id`, `child_role`, `child_goal` |
@@ -286,7 +339,16 @@ These are the divergences this milestone had to resolve. Each one is a decision 
     (`run_agent.py:2907`). So `tools_hash` is a hash of *that view*. It is deterministic and stable
     across turns, so comparisons hold, but it is not the hash of the bytes sent to the provider. If
     the exact outbound payload is ever needed, `llm_request` middleware is the surface.
-12. **Registering `pre_api_request` has a cost.** Both API hooks are gated on `has_hook()`, so
+12. **`api_request_error` fires instead of `post_api_request` on a terminal failure**, so a plugin
+    that registers only the latter records nothing for a failed call — error rate reads as zero and
+    the `pre_api_request` stash for that request leaks. It is registered, and emits `llm.call` with
+    `finish_reason: "error"`. Only the exception *class* is reported: Hermes documents
+    `error_message` / `error_body` as possibly carrying an unredacted provider dump, which can
+    include the prompt that caused the failure.
+13. **`task_id` is not a run id on the conversation path** — Hermes sets it to the session id there.
+    `run_id` is populated from `task_id` only when the two differ, so per-run aggregates in `marts`
+    are not built on a column that merely repeats `session_id`.
+14. **Registering `pre_api_request` has a cost.** Both API hooks are gated on `has_hook()`, so
     Hermes builds and sanitises that payload on every API call *only because we registered*. If
     latency becomes a concern, `AV_HOOKS_DISABLED=pre_api_request` turns it off at the cost of
     `tools_hash` / `system_prompt_hash`.

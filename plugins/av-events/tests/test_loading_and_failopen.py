@@ -102,6 +102,7 @@ def test_exactly_one_plugin_degraded_per_session(exploding, ctx, av):
     assert len(degraded) == 1, av.types_of(events)
     payload = degraded[0]["payload"]
     assert payload["error_count"] == 10
+    assert payload["scope"] == "session"
     assert payload["hook"] in exploding.HOOK_BODIES
     assert sum(payload["errors_by_hook"].values()) == 10
 
@@ -109,29 +110,32 @@ def test_exactly_one_plugin_degraded_per_session(exploding, ctx, av):
 def test_remaining_hooks_are_no_ops_after_degrading(exploding, ctx, av):
     _drive_session(ctx, turns=4)
     collector = exploding._COLLECTOR
-    assert collector.degraded is True
+    state = collector.sessions["sess-1"]
+    assert state.degraded is True
     before = len(av.read_buffer(collector))
     # Everything from here is inert: no counting, no events, no exceptions.
     for _ in range(20):
         ctx.fire("pre_tool_call", session_id="sess-1", tool_name="shell")
-    assert collector.failure_count == 10
+    assert state.failure_count == 10
     assert len(av.read_buffer(collector)) == before
 
 
 def test_degrading_is_scoped_to_the_session(exploding, ctx):
+    collector = exploding._COLLECTOR
     _drive_session(ctx, session_id="sess-1", turns=4)
-    assert exploding._COLLECTOR.degraded is True
-    # A new session id is a new session: the plugin re-arms.
+    assert collector.sessions["sess-1"].degraded is True
+    # A different session is a different breaker, and is unaffected.
     ctx.fire("on_session_start", session_id="sess-2", model="m", platform="telegram")
-    assert exploding._COLLECTOR.degraded is False
+    assert collector.sessions["sess-2"].degraded is False
 
 
-def test_the_degraded_event_is_sanitised(exploding, ctx, av):
+def test_the_degraded_event_carries_no_exception_message(exploding, ctx, av):
+    """The message can quote the prompt or tool argument that caused the fault."""
     _drive_session(ctx, turns=4)
     events = av.read_buffer(exploding._COLLECTOR)
     degraded = [e for e in events if e["event_type"] == "plugin.degraded"][0]
-    assert "sk-ant-" not in degraded["payload"]["last_error"]
-    assert "[redacted:anthropic_key]" in degraded["payload"]["last_error"]
+    assert degraded["payload"]["last_error"] == "RuntimeError"
+    assert "sk-ant-" not in __import__("json").dumps(degraded)
 
 
 def test_a_slow_hook_is_counted_not_blocked(plugin, ctx, monkeypatch):
@@ -146,6 +150,7 @@ def test_a_slow_hook_is_counted_not_blocked(plugin, ctx, monkeypatch):
     plugin.register(ctx)
     ctx.fire("pre_tool_call", session_id="s", tool_name="shell")
     assert plugin._COLLECTOR.overruns.get("pre_tool_call") == 1
+    assert plugin._COLLECTOR.max_hook_ms >= 50
 
 
 def test_pre_tool_call_never_returns_a_directive(plugin, ctx, monkeypatch):

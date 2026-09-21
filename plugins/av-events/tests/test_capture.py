@@ -177,7 +177,7 @@ def test_a_response_without_usage_is_not_an_error(plugin, ctx, monkeypatch, av):
     fire_api_call(ctx, usage={})
     payload = [e for e in av.read_buffer(plugin._COLLECTOR) if e["event_type"] == "llm.call"][0]["payload"]
     assert payload["input_tokens"] == 0
-    assert plugin._COLLECTOR.failure_count == 0
+    assert plugin._COLLECTOR.total_failures == 0
 
 
 # --------------------------------------------------------------------------

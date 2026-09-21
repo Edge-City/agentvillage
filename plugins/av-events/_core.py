@@ -41,8 +41,27 @@ EVIDENCE_CLASS = "agent_report"
 #: hook halfway is worse for the agent than a slow one.
 HOOK_BUDGET_MS = 50.0
 
-#: Failures (any hook) in one session before the plugin disables itself.
+#: Failures in one session before the plugin disables itself *for that session*.
 MAX_SESSION_FAILURES = 10
+
+#: Failures across the whole process, regardless of session, before the plugin
+#: gives up entirely. A gateway process interleaves many sessions (subagents,
+#: cron), so a per-session breaker alone can be outrun by churn: every failure
+#: lands on a fresh id and no single session ever reaches ten.
+MAX_PROCESS_FAILURES = 50
+
+#: Upper bound on tracked sessions. Finished sessions are evicted on end; this
+#: is the backstop for the ones that never report an end.
+MAX_TRACKED_SESSIONS = 256
+
+#: How stale the resolved config may get when no new session appears. The kill
+#: switches are read at session boundaries; this bounds the long-lived-session
+#: case without putting an env sweep on the hot path.
+CONFIG_TTL_S = 60.0
+
+#: Files the flusher will attempt in one pass, so a large backlog cannot turn a
+#: single tick into a long blocking walk.
+MAX_FILES_PER_TICK = 5
 
 #: Buffer flush triggers.
 FLUSH_INTERVAL_S = 10.0
@@ -67,6 +86,20 @@ EXIT_FLUSH_BUDGET_S = 5.0
 
 CAPTURE_MODES = ("metadata", "sanitized", "full")
 DEFAULT_CAPTURE = "sanitized"
+
+#: Spellings of "off" accepted for `AV_EVENTS_ENABLED`, compared case-folded
+#: and stripped. An operator flipping a kill switch under pressure should not
+#: have to remember which word this particular plugin wanted.
+DISABLED_VALUES = frozenset({"0", "false", "no", "off"})
+
+#: Everything the buffer writes is per-tenant telemetry sitting in the agent's
+#: home directory: owner-only.
+DIR_MODE = 0o700
+FILE_MODE = 0o600
+
+#: HTTP statuses worth trying again. Everything else 4xx means this batch will
+#: never be accepted, so retrying it forever only delays the batches behind it.
+RETRYABLE_STATUSES = frozenset({408, 425, 429})
 
 #: uuid5 namespace for Agent Village derived ids (spec §4.3). Unused by this
 #: milestone — producer events get uuid v7 — but pinned here so the constant
@@ -121,13 +154,21 @@ def _read_dotenv() -> dict[str, str]:
 def env(name: str) -> str:
     """Read `name` from the process env, falling back to `$HERMES_HOME/.env`.
 
-    Same helper shape as `plugins/dashboard-auth-edgecity`: the sandbox writes
-    some values only into the dotfile.
+    Same helper shape as `plugins/dashboard-auth-edgecity`, with one deliberate
+    difference: a variable **present but blank** in the process environment is
+    authoritative and does *not* fall through to the dotfile. `AV_EVENTS_TOKEN=""`
+    is how the control plane revokes a tenant, and a stale `.env` line must not
+    be able to undo that.
     """
-    value = os.environ.get(name, "").strip()
-    if value:
-        return value
-    return _read_dotenv().get(name, "")
+    raw = os.environ.get(name)
+    if raw is not None:
+        return raw.strip()
+    return _read_dotenv().get(name, "").strip()
+
+
+def env_flag_disabled(name: str) -> bool:
+    """True when `name` holds any accepted spelling of "off"."""
+    return env(name).strip().lower() in DISABLED_VALUES
 
 
 # --------------------------------------------------------------------------
@@ -179,6 +220,20 @@ def uuid7() -> str:
 def now_iso() -> str:
     """RFC 3339 timestamptz, millisecond precision, always UTC."""
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def iso_from_epoch(value: Any) -> Optional[str]:
+    """Same format from a Unix timestamp, or None if it is not one.
+
+    Hermes hands hooks `started_at` / `ended_at` as `time.time()` floats.
+    """
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
+        return None
+    try:
+        stamp = datetime.fromtimestamp(float(value), tz=timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+    return stamp.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def canonical_json(obj: Any) -> str:
@@ -308,13 +363,25 @@ class Buffer:
 
     def __init__(self, root: str) -> None:
         self.root = root
+        #: Batches ingest refused outright. Kept on disk for a human to look at,
+        #: never offered to the server again.
+        self.rejected_root = os.path.join(root, "rejected")
         self._lock = threading.RLock()
         self._pid = os.getpid()
         self._current = os.path.join(root, f"current-{self._pid}.jsonl")
         self._started_ms: Optional[int] = None
         self._count = 0
         self._seq = 0
-        os.makedirs(root, exist_ok=True)
+        # `makedirs` applies `mode` to the leaf only; the `av-events/` parent it
+        # creates on the way would otherwise land at the process umask.
+        parent = os.path.dirname(root)
+        if parent:
+            os.makedirs(parent, mode=DIR_MODE, exist_ok=True)
+            try:
+                os.chmod(parent, DIR_MODE)
+            except OSError:
+                pass
+        os.makedirs(root, mode=DIR_MODE, exist_ok=True)
 
     # -- writing ----------------------------------------------------------
 
@@ -323,11 +390,27 @@ class Buffer:
         with self._lock:
             if self._started_ms is None:
                 self._started_ms = int(time.time() * 1000)
-            with open(self._current, "a", encoding="utf-8") as handle:
-                handle.write(line + "\n")
+            # `os.open` so the file is created 0o600 from the start rather than
+            # existing world-readable for the width of a chmod.
+            fd = os.open(self._current, os.O_WRONLY | os.O_CREAT | os.O_APPEND, FILE_MODE)
+            try:
+                with os.fdopen(fd, "a", encoding="utf-8") as handle:
+                    handle.write(line + "\n")
+            except Exception:
+                os.close(fd)
+                raise
             self._count += 1
             if self._count >= FLUSH_MAX_EVENTS:
                 self._rotate_locked()
+
+    def reject(self, path: str) -> bool:
+        """Move a refused batch out of the send queue, keeping it on disk."""
+        try:
+            os.makedirs(self.rejected_root, mode=DIR_MODE, exist_ok=True)
+            os.replace(path, os.path.join(self.rejected_root, os.path.basename(path)))
+            return True
+        except OSError:
+            return False
 
     def rotate_if_due(self, force: bool = False) -> None:
         with self._lock:
@@ -357,7 +440,11 @@ class Buffer:
     # -- reading ----------------------------------------------------------
 
     def ready_files(self) -> list[str]:
-        """Rotated batches, oldest first. Never includes any process's current file."""
+        """Rotated batches, oldest first. Never includes any process's current file.
+
+        `rejected/` is a subdirectory, so quarantined batches fall out of this
+        listing without any name filtering.
+        """
         try:
             names = os.listdir(self.root)
         except OSError:
@@ -413,6 +500,23 @@ class SendResult:
         self.ok = ok
         self.status = status
         self.reason = reason
+
+    @property
+    def retryable(self) -> bool:
+        """Whether offering this batch again could ever succeed.
+
+        No status means a network-level failure (DNS, refused, timeout, TLS) —
+        always worth retrying. 5xx is the server's problem, 408/425/429 are
+        explicit "try again". Every other 4xx is a statement about this batch or
+        this token: a malformed body, a wrong tenant, an oversized payload. That
+        will not change on its own, and retrying it for 72 hours only delays
+        every batch queued behind it.
+        """
+        if self.status is None:
+            return True
+        if self.status in RETRYABLE_STATUSES:
+            return True
+        return self.status >= 500
 
 
 def post_events(url: str, token: str, events: list[dict]) -> SendResult:

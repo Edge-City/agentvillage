@@ -22,6 +22,7 @@ from ._core import (
     UNLISTED_TOOL_CATEGORY,
     hash_obj,
     hash_text,
+    iso_from_epoch,
     sanitize,
     tool_category,
 )
@@ -69,21 +70,39 @@ EXTRA_HOOKS = (
     "on_session_start",
     "pre_api_request",
     "post_api_request",
+    "api_request_error",
     "on_session_finalize",
 )
+
+#: Hooks Hermes fails *closed* on: a callback that times out or is still
+#: running injects a block directive and the tool never runs
+#: (`hermes_cli/plugins.py:441`). Their bodies do no I/O whatsoever — no config
+#: reload, no lazy session open, no buffer write — so they cannot stall a tool.
+QUIET_HOOKS = frozenset({"pre_tool_call"})
 
 #: Module-level singleton. `register(ctx)` is called once per process by the
 #: Hermes loader (`hermes_cli/plugins.py:5282`).
 _COLLECTOR: Optional[Collector] = None
+
+#: Guards against a double `register()` appending a second copy of every hook.
+_REGISTERED = False
 
 
 def _collector() -> Optional[Collector]:
     return _COLLECTOR
 
 
-def _source_for(platform: Any) -> str:
+def _source_for(platform: Any) -> Optional[str]:
+    """Map Hermes's `platform` to the catalogue's `source`, or None if absent.
+
+    None rather than "unknown": most hooks carry no `platform`, and writing
+    "unknown" on the first of them would latch a wrong source that the later
+    `on_session_start` could not correct.
+    """
     text = str(platform or "").strip().lower()
-    return SOURCE_BY_PLATFORM.get(text, text or "unknown")
+    if not text:
+        return None
+    return SOURCE_BY_PLATFORM.get(text, text)
 
 
 def _session(collector: Collector, kwargs: dict) -> Any:
@@ -91,7 +110,24 @@ def _session(collector: Collector, kwargs: dict) -> Any:
     session_id = kwargs.get("session_id") or kwargs.get("parent_session_id")
     if not session_id:
         return None
-    return collector.session_started(str(session_id), _source_for(kwargs.get("platform")))
+    return collector.open_session(str(session_id), _source_for(kwargs.get("platform")))
+
+
+def _refs(kwargs: dict) -> dict:
+    """Envelope refs shared by the API-request hooks.
+
+    `run_id` is Hermes's `task_id`, but only when it actually names a distinct
+    run: Hermes sets `task_id` to the session id on the plain conversation path,
+    and a `run_id` that merely repeats `session_id` is noise that would make
+    per-run aggregates in `marts` wrong.
+    """
+    session_id = str(kwargs.get("session_id") or "") or None
+    task_id = kwargs.get("task_id") or None
+    return {
+        "session_id": session_id,
+        "turn_id": kwargs.get("turn_id") or None,
+        "run_id": task_id if task_id and task_id != session_id else None,
+    }
 
 
 # --------------------------------------------------------------------------
@@ -109,7 +145,9 @@ def _hook_on_session_start(collector: Collector, **kwargs: Any) -> None:
     session_id = kwargs.get("session_id")
     if not session_id:
         return
-    collector.session_started(str(session_id), _source_for(kwargs.get("platform")))
+    # The one hook that reliably carries `platform`, so this is usually where a
+    # deferred `session.started` finally gets its source and goes out.
+    collector.open_session(str(session_id), _source_for(kwargs.get("platform")))
 
 
 def _hook_pre_llm_call(collector: Collector, **kwargs: Any) -> None:
@@ -158,13 +196,10 @@ def _hook_pre_api_request(collector: Collector, **kwargs: Any) -> None:
             "system_prompt_length": len(prompt_text) if prompt_text else 0,
             "turn_id": kwargs.get("turn_id") or None,
             "task_id": kwargs.get("task_id") or None,
+            "started_at": kwargs.get("started_at"),
         }
 
-    refs = {
-        "session_id": str(kwargs.get("session_id") or "") or None,
-        "turn_id": kwargs.get("turn_id") or None,
-        "run_id": kwargs.get("task_id") or None,
-    }
+    refs = _refs(kwargs)
     # `full` capture only; content-addressed, so this is a no-op after the
     # first session that saw these bytes.
     if tools_hash:
@@ -214,26 +249,86 @@ def _hook_post_api_request(collector: Collector, **kwargs: Any) -> None:
         payload["assistant_tool_call_count"] = kwargs.get("assistant_tool_call_count")
         payload["approx_input_tokens"] = stashed.get("approx_input_tokens")
 
+    _emit_llm_call(collector, payload, stashed, kwargs)
+
+
+def _hook_api_request_error(collector: Collector, **kwargs: Any) -> None:
+    """A terminal API failure. Hermes fires this *instead of* `post_api_request`.
+
+    Without it every failed call is an `llm.call` that never arrives, so error
+    rate looks like zero and the stash for that request leaks until evicted.
+    """
+    state = _session(collector, kwargs)
+    if state is None:
+        return
+    request_id = str(kwargs.get("api_request_id") or "")
+    stashed = state.pending_llm.pop(request_id, {}) if request_id else {}
+
+    error = kwargs.get("error") if isinstance(kwargs.get("error"), dict) else {}
+    duration = kwargs.get("api_duration")
+    payload: dict[str, Any] = {
+        "model": kwargs.get("model"),
+        "provider": kwargs.get("provider"),
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "reasoning_tokens": 0,
+        "latency_ms": int(float(duration) * 1000) if isinstance(duration, (int, float)) else None,
+        "finish_reason": "error",
+        # Class name only. Hermes documents `error_message` / `error_body` as
+        # possibly carrying an unredacted provider dump, which can include the
+        # prompt that caused the failure.
+        "error_type": str(error.get("type") or kwargs.get("error_type") or "") or None,
+        "status_code": kwargs.get("status_code"),
+        "retryable": kwargs.get("retryable"),
+        "tools_hash": stashed.get("tools_hash"),
+        "system_prompt_hash": stashed.get("system_prompt_hash"),
+        "api_request_id": request_id or None,
+        "api_mode": kwargs.get("api_mode"),
+        "tool_count": stashed.get("tool_count"),
+        "api_call_count": kwargs.get("api_call_count"),
+    }
+    if collector.config.capture != "metadata":
+        payload["system_prompt_length"] = stashed.get("system_prompt_length")
+        payload["approx_input_tokens"] = stashed.get("approx_input_tokens")
+
+    _emit_llm_call(collector, payload, stashed, kwargs)
+
+
+def _emit_llm_call(collector: Collector, payload: dict, stashed: dict, kwargs: dict) -> None:
+    """Emit `llm.call`, stamped with the API request's own window.
+
+    `occurred_at` is when the request happened, not when we got round to
+    buffering it — under a backlog those differ by minutes, and `occurred_at` is
+    what every `marts` time series is built on.
+    """
+    started_at = stashed.get("started_at") or kwargs.get("started_at")
+    occurred_at = iso_from_epoch(started_at)
+    ended_at = iso_from_epoch(kwargs.get("ended_at"))
     collector.emit(
         "llm.call",
         payload,
-        session_id=str(kwargs.get("session_id") or "") or None,
-        turn_id=kwargs.get("turn_id") or None,
-        run_id=kwargs.get("task_id") or None,
+        occurred_at=occurred_at,
+        occurred_at_earliest=occurred_at,
+        occurred_at_latest=ended_at,
         model_id=kwargs.get("model"),
+        **_refs(kwargs),
     )
 
 
 def _hook_pre_tool_call(collector: Collector, **kwargs: Any) -> None:
-    """Counter only — and it must stay trivial.
+    """Counter only, against an already-open session. No I/O of any kind.
 
     `pre_tool_call` is the one hook Hermes fails *closed* on: a callback that
     times out or is still running injects a block directive and the tool never
-    runs (`hermes_cli/plugins.py:441`, `:3726`). No I/O belongs here, and this
-    body must never return a dict — `guarded` discards return values, so it
-    cannot accidentally block a tool call.
+    runs (`hermes_cli/plugins.py:441`, `:3726`). So this body must not open a
+    session lazily (a buffer write, a thread spawn and an `atexit.register`),
+    and `guarded` marks it quiet so it skips the config reload too. An unknown
+    session is simply not counted — a tool call is worth less than a tool call
+    that never happened.
     """
-    state = _session(collector, kwargs)
+    state = collector.peek_session(kwargs.get("session_id"))
     if state is None:
         return
     state.tool_call_count += 1
@@ -281,6 +376,7 @@ HOOK_BODIES = {
     "post_llm_call": _hook_post_llm_call,
     "pre_api_request": _hook_pre_api_request,
     "post_api_request": _hook_post_api_request,
+    "api_request_error": _hook_api_request_error,
     "pre_tool_call": _hook_pre_tool_call,
     "post_tool_call": _hook_post_tool_call,
     "on_session_end": _hook_on_session_end,
@@ -295,7 +391,7 @@ def build_hooks(collector_ref=_collector) -> dict:
     """Wrap every hook body in the fail-open guard. One decorator, no exceptions."""
     hooks = {}
     for name, body in HOOK_BODIES.items():
-        wrapped = guarded(name, collector_ref)(body)
+        wrapped = guarded(name, collector_ref, quiet=name in QUIET_HOOKS)(body)
         # Hermes decides what to pass by inspecting the callback signature, and
         # `inspect.signature` follows `__wrapped__` through `functools.wraps`.
         # Drop it so it sees the wrapper's own `(*args, **kwargs)`.
@@ -315,8 +411,15 @@ def register(ctx) -> None:
     tenant that gets its env fixed mid-process starts reporting on its next
     session without a restart, and a tenant that never gets a token runs a set
     of hooks that do nothing.
+
+    Idempotent. Hermes loads a plugin once per process, but a profile switch or
+    a `force=True` reload can call `register()` again on a module that is still
+    in `sys.modules` — and registering twice appends a second callback to every
+    hook list, which doubles every event and every counter.
     """
-    global _COLLECTOR
+    global _COLLECTOR, _REGISTERED
+    if _REGISTERED:
+        return
     if _COLLECTOR is None:
         _COLLECTOR = Collector()
 
@@ -325,6 +428,7 @@ def register(ctx) -> None:
             ctx.register_hook(name, callback)
         except Exception:  # noqa: BLE001 - one bad hook name must not lose the rest
             continue
+    _REGISTERED = True
 
 
 __all__ = [
