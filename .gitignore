@@ -2,6 +2,7 @@ node_modules
 
 __pycache__/
 *.py[cod]
+.pytest_cache/
 
 # Local research/export artifacts. These may contain private chat content or
 # account session material and must never be committed.

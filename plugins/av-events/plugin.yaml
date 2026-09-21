@@ -1,0 +1,26 @@
+name: av-events
+version: 0.1.0
+description: "Agent Village V2 telemetry — session, LLM-call and prompt events to the Agent Village ingest API. Fails open; idles without AV_EVENTS_TOKEN."
+author: Edge City
+kind: backend
+optional_env:
+  - AV_EVENTS_URL
+  - AV_EVENTS_TOKEN
+  - AV_EVENTS_ENABLED
+  - AV_CAPTURE
+  - AV_HOOKS_DISABLED
+# Documentation only — Hermes reads hooks from ctx.register_hook(), never from
+# this list (hermes_cli/plugins.py:4831).
+provides_hooks:
+  - on_session_start
+  - on_session_end
+  - on_session_finalize
+  - pre_llm_call
+  - post_llm_call
+  - pre_api_request
+  - post_api_request
+  - pre_tool_call
+  - post_tool_call
+  - subagent_start
+  - subagent_stop
+  - on_stream_end
