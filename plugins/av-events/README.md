@@ -105,8 +105,11 @@ random key at `$HERMES_HOME/av-events/hash.key` (64 hex characters, mode 0600). 
 the sandbox, so these digests count and join within a tenant and are useless to anyone else.
 **A key, once written, never rotates** (`load_or_create_key`): a missing file is created by linking a
 complete temp file into place, and the process that loses that race reads the winner's key, so
-concurrent first uses agree; only a file that reads successfully but is not 64 hex characters is
-replaced (`hash_key_replaced`); any other read error — permissions, I/O — disables keying for now
+concurrent first uses agree. On a filesystem without hard links (`os.link` raising, e.g. `EPERM`) the
+key is written in place with `O_CREAT | O_EXCL` and fsynced — still one winner — and a reader that
+catches it half-written (empty, or a hex prefix) waits up to 0.5 s for the rest instead of calling it
+corrupt. Only a file that reads successfully and is otherwise not 64 hex characters is replaced
+(`hash_key_replaced`); any other read error — permissions, I/O — disables keying for now
 (`hash_key_unavailable`, retried on the next hook) and never rewrites the file. Without a key the
 digests are null — never a plain hash in their place. The intention hashes and `user_md_hash`
 stay plain SHA-256: they are join keys with producers outside the sandbox (the Index poller hashes
@@ -365,15 +368,21 @@ Spec §4.1 `action.attempted/receipted/failed`, §2.1's receipt allowance, measu
 **How the plugin sees an RSVP.** There is no EdgeOS tool. The `edgeos` skill tells the agent to run
 `curl` through Hermes's `terminal` tool (`skills/edgeos/SKILL.md` §6). `edgeos_tool_allowlist.json`
 (`edgeos_tool_allowlist_v1`) names the carrier tools (`terminal`), the host (`api.edgeos.world`),
-and each operation by method and path. The command is tokenised as a shell would (`shlex`, with
-control operators split out) and read only when it is unambiguous:
+and each operation by method and path. Line continuations (backslash-newline) are joined first —
+the skill's own recipes are multi-line, and `tests/test_edgeos_skill_recipes.py` feeds every §6
+recipe verbatim. The command is then tokenised as a shell would (`shlex`, with control operators
+and newlines split out) and read only when it is unambiguous:
 
 - **every** http(s) URL anywhere in the command — headers, `echo`s, a second command — is on the
   EdgeOS host, with no userinfo and no port other than `:443`;
 - exactly one `curl` word, and it starts a command (`echo curl …` and a `for` body are not requests);
-- nothing follows it: no `;`, `&&`, `||`, `|`, redirect or new line after the curl, and no command
-  substitution (`$(…)`, backticks) anywhere — each could run a second request or rewrite what the
-  agent saw as the response;
+- after a **write** (anything but GET) nothing follows it: no `;`, `&&`, `||`, `|`, redirect or new
+  line — each could run a second request or rewrite what the agent saw as the response;
+- after a **read** (GET) only these may follow, in order: `2>&1`, a `| jq …` pipeline (arguments
+  only, no further operator), trailing newlines. A read whose output went through `jq` is labelled
+  but **never confirms** an action: its output is what the agent made of the response, and
+  `jq '.my_rsvp_status = "registered"'` would otherwise forge a receipt;
+- no command substitution (`$(…)`, backticks) anywhere;
 - no option that moves the request or drops the host check: `--resolve`, `--connect-to`,
   `-x`/`--proxy` (and the SOCKS/pre-proxy/DoH forms), `-K`/`--config`, `-k`/`--insecure`;
 - curl's own arguments give exactly one URL (`--url` or positional; the same URL twice is two), and
@@ -382,6 +391,11 @@ control operators split out) and read only when it is unambiguous:
   `-d`/`--data*`/`--json`/`-F` is POST; else GET. Combined short flags are read the way curl reads
   them (`-sX POST`, `-sXPOST`, `-sSfL`), and an option that takes a value consumes it;
 - path parameters are UUIDs.
+
+**Known misses**, all conservative (the call is just a `tool.call`): a body built by command
+substitution (`-d "$(cat body.json)"`; the skill does not do this); any command whose body carries a
+URL on another host — the skill's own §8 profile-update recipe includes `"picture_url":"https://…"`,
+so it goes unlabelled; a curl through `execute_code` or another tool.
 
 Anything else is just a `tool.call`. A recognised call labels its `tool.call` with `operation`
 (`edgeos.rsvp`, `edgeos.event_read`, `edgeos.profile_read`, …) and `target_system: "edgeos"`; the

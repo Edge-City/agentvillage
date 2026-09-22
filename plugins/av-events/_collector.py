@@ -90,6 +90,12 @@ def _bump(counters: Optional[dict], name: str) -> None:
         counters[name] = counters.get(name, 0) + 1
 
 
+#: How long a reader waits for a key another process is still writing (the
+#: `O_EXCL` fallback writes in place) before calling the file corrupt.
+KEY_WRITE_GRACE_S = 0.5
+_HEX_PREFIX = re.compile(r"^[0-9a-f]{0,63}$")
+
+
 def _write_new_key(directory: str) -> str:
     """A fresh key written to a private temp file in `directory`; returns its path."""
     temp = os.path.join(directory, f".hash.key.{os.getpid()}.{secrets.token_hex(4)}")
@@ -99,39 +105,71 @@ def _write_new_key(directory: str) -> str:
     return temp
 
 
+def _create_key(directory: str, path: str, counters: Optional[dict]) -> None:
+    """Put a key at `path` unless one is already there. Raises `OSError` on failure.
+
+    A complete temp file is hard-linked into place: the link fails if another
+    process got there first, and no reader ever sees a partial file. On a
+    filesystem without hard links (`os.link` raising anything but
+    `FileExistsError`), the key is written in place with `O_CREAT | O_EXCL`
+    and fsynced — still exactly one winner, and a reader that catches the
+    write half-done waits for it (`KEY_WRITE_GRACE_S`) rather than replacing it.
+    """
+    os.makedirs(directory, mode=DIR_MODE, exist_ok=True)
+    temp = _write_new_key(directory)
+    try:
+        os.link(temp, path)
+        _bump(counters, "hash_key_generated")
+        return
+    except FileExistsError:
+        return  # another process won
+    except OSError:
+        pass  # no hard links here: fall back below
+    finally:
+        try:
+            os.unlink(temp)
+        except FileNotFoundError:
+            pass
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, FILE_MODE)
+    except FileExistsError:
+        return
+    try:
+        os.write(fd, secrets.token_hex(32).encode("ascii"))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    _bump(counters, "hash_key_generated")
+
+
 def load_or_create_key(directory: str, counters: Optional[dict] = None) -> Optional[bytes]:
     """Per-tenant random key at `<directory>/hash.key`: 64 hex characters, mode 0600.
 
     A key, once written, is never rotated by a race or a hiccup:
 
     - read succeeds, content valid: that is the key;
-    - read succeeds, content not 64 hex: the file is corrupt and is replaced
-      (`os.replace` from a complete temp file), then read back;
-    - file absent: a complete temp file is *linked* into place, which fails
-      if another process got there first — and then the winner's key is read.
-      No reader ever sees a partial file, and every first use agrees;
+    - read succeeds, content empty or a hex prefix: another process is still
+      writing it (the no-hard-link fallback); re-read for up to
+      `KEY_WRITE_GRACE_S`;
+    - read succeeds, content otherwise not 64 hex: the file is corrupt and is
+      replaced (`os.replace` from a complete temp file), then read back;
+    - file absent: `_create_key`, then read whatever won;
     - any other `OSError` (permissions, I/O, a missing directory that cannot
       be made): None. The caller keys nothing for now and retries later.
     """
     path = os.path.join(directory, "hash.key")
-    for _ in range(3):
+    deadline = time.monotonic() + KEY_WRITE_GRACE_S
+    replaced = created = False
+    while True:
         try:
             with open(path, "rb") as handle:
                 raw = handle.read(256)
         except FileNotFoundError:
+            if created:
+                return None
+            created = True
             try:
-                os.makedirs(directory, mode=DIR_MODE, exist_ok=True)
-                temp = _write_new_key(directory)
-                try:
-                    os.link(temp, path)
-                    _bump(counters, "hash_key_generated")
-                except FileExistsError:
-                    pass  # another process won; read its key on the next pass
-                finally:
-                    try:
-                        os.unlink(temp)
-                    except FileNotFoundError:
-                        pass
+                _create_key(directory, path, counters)
             except OSError:
                 return None
             continue
@@ -140,6 +178,12 @@ def load_or_create_key(directory: str, counters: Optional[dict] = None) -> Optio
         text = raw.decode("ascii", errors="replace").strip()
         if _HEX64.match(text):
             return bytes.fromhex(text)
+        if _HEX_PREFIX.match(text) and not raw.endswith(b"\n") and time.monotonic() < deadline:
+            time.sleep(0.005)
+            continue
+        if replaced:
+            return None
+        replaced = True
         # Read fine, content invalid: the file is corrupt. Replace it.
         try:
             temp = _write_new_key(directory)
@@ -153,7 +197,6 @@ def load_or_create_key(directory: str, counters: Optional[dict] = None) -> Optio
                     pass
         except OSError:
             return None
-    return None
 
 
 # --------------------------------------------------------------------------

@@ -176,12 +176,15 @@ _LONG_WITH_ARG = _DATA_LONG | frozenset({
 
 
 class HttpCall:
-    __slots__ = ("method", "path", "query")
+    __slots__ = ("method", "path", "query", "piped")
 
-    def __init__(self, method: str, path: str, query: dict) -> None:
+    def __init__(self, method: str, path: str, query: dict, piped: bool = False) -> None:
         self.method = method
         self.path = path
         self.query = query
+        #: The output went through `| jq …` before the agent (and this plugin)
+        #: saw it. Recognised for the label, never trusted as a confirming read.
+        self.piped = piped
 
 
 def _host_allowed(authority: str, hosts: frozenset) -> bool:
@@ -203,13 +206,16 @@ def _tokens(command: str) -> Optional[list[str]]:
         return None
 
 
-def _curl_segment(tokens: list[str]) -> Optional[list[str]]:
-    """The arguments of the one `curl` command, or None unless there is exactly one.
+_STDERR_TO_STDOUT = "2>&1"
 
-    A `curl` word anywhere else — `echo curl …`, a `for` body, a second
-    command — makes the call ambiguous and it is not read. So does anything
-    after it: a pipe, `;`, `&&`, `||`, a redirect or a new line could run a
-    second request, or rewrite what the agent saw as the response.
+
+def _curl_segment(tokens: list[str]) -> Optional[tuple[list[str], list[str]]]:
+    """(the one `curl` command's arguments, whatever follows them), or None.
+
+    None unless there is exactly one `curl` word and it starts a command: one
+    anywhere else — `echo curl …`, a `for` body, a second command — makes the
+    call ambiguous. The arguments end at the first control operator or `2>&1`;
+    the rest is the tail, which `_read_tail_ok` judges.
     """
     starts = [i for i, t in enumerate(tokens) if t == "curl" or t.endswith("/curl")]
     if len(starts) != 1:
@@ -217,10 +223,44 @@ def _curl_segment(tokens: list[str]) -> Optional[list[str]]:
     start = starts[0]
     if start > 0 and not _is_operator(tokens[start - 1]):
         return None
-    segment = tokens[start + 1:]
-    if any(_is_operator(token) for token in segment):
-        return None
-    return segment
+    rest: list[str] = []
+    i = start + 1
+    while i < len(tokens):
+        if tokens[i:i + 3] == ["2", ">&", "1"]:
+            rest.append(_STDERR_TO_STDOUT)
+            i += 3
+            continue
+        rest.append(tokens[i])
+        i += 1
+    for index, token in enumerate(rest):
+        if token == _STDERR_TO_STDOUT or _is_operator(token):
+            return rest[:index], rest[index:]
+    return rest, []
+
+
+def _is_newlines(token: str) -> bool:
+    return bool(token) and set(token) == {"\n"}
+
+
+def _read_tail_ok(tail: list[str]) -> tuple[bool, bool]:
+    """(acceptable, piped) for what follows a *read*: optionally `2>&1`, then
+    optionally `| jq …` (arguments only, no further operator), then only
+    trailing newlines. A write accepts no tail at all: a pipe, `;`, `&&`,
+    `||`, a redirect or a new line after it could run a second request, or
+    rewrite what the agent saw as the response."""
+    i, piped = 0, False
+    if i < len(tail) and tail[i] == _STDERR_TO_STDOUT:
+        i += 1
+    if i < len(tail) and tail[i] == "|":
+        if i + 1 >= len(tail) or tail[i + 1] != "jq":
+            return False, False
+        piped = True
+        i += 2
+        while i < len(tail) and not _is_operator(tail[i]) and tail[i] != _STDERR_TO_STDOUT:
+            i += 1
+    while i < len(tail) and _is_newlines(tail[i]):
+        i += 1
+    return i == len(tail), piped
 
 
 def _parse_curl(args: list[str]) -> Optional[tuple[str, list[str]]]:
@@ -305,6 +345,9 @@ def http_call(tool_name: Any, args: Any, allowlist: Allowlist = ALLOWLIST) -> Op
     command = args.get("command")
     if not isinstance(command, str) or not command or len(command) > MAX_COMMAND_CHARS:
         return None
+    # A backslash-newline is a line continuation, not a new command: the
+    # skill's own recipes are written that way (`skills/edgeos/SKILL.md` §6).
+    command = command.replace("\\\r\n", " ").replace("\\\n", " ")
     if "`" in command or "$(" in command:  # command substitution: the shell decides, not us
         return None
     authorities = [m.group(1) for m in _ANY_URL.finditer(command)]
@@ -313,15 +356,23 @@ def http_call(tool_name: Any, args: Any, allowlist: Allowlist = ALLOWLIST) -> Op
     tokens = _tokens(command)
     if tokens is None:
         return None
-    segment = _curl_segment(tokens)
-    if segment is None:
+    found = _curl_segment(tokens)
+    if found is None:
         return None
+    segment, tail = found
     parsed = _parse_curl(segment)
     if parsed is None:
         return None
     method, urls = parsed
     if len(urls) != 1:
         return None
+    piped = False
+    if tail:
+        if method != "GET":
+            return None
+        acceptable, piped = _read_tail_ok(tail)
+        if not acceptable:
+            return None
     split = urllib.parse.urlsplit(urls[0])
     if split.scheme.lower() not in ("http", "https") or not _host_allowed(split.netloc, allowlist.hosts):
         return None
@@ -331,7 +382,7 @@ def http_call(tool_name: Any, args: Any, allowlist: Allowlist = ALLOWLIST) -> Op
     for match in re.finditer(r"https?://[^/\s'\"`<>|;&()\\]*(/[^\s'\"`?#<>|;&()\\]*)", command, re.IGNORECASE):
         if (match.group(1).rstrip("/") or "/") != path:
             return None
-    return HttpCall(method, path, parse_query(split.query))
+    return HttpCall(method, path, parse_query(split.query), piped)
 
 
 def parse_query(query: str) -> dict:
@@ -649,7 +700,9 @@ def plan(op: Operation, params: dict, call: HttpCall, *, ok: bool, status: Optio
         # No error and no record: the attempt is reported, and nothing waits on it.
         return out
 
-    if not ok or exit_code not in (None, 0):
+    if not ok or exit_code not in (None, 0) or call.piped:
+        # A read whose output went through `jq` is what the agent made of the
+        # response, not the response: it confirms nothing.
         return []
     out: list[Planned] = []
     for event_id, occurrence, rsvp in rsvp_statuses(body, call.query):

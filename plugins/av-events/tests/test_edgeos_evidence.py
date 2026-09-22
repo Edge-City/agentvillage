@@ -458,3 +458,67 @@ def test_parse_query_keeps_plus_and_blank_values(plugin):
         "occurrence_start": "2026-10-20T15:30:00+05:30", "x": ""}
     assert edgeos.parse_query("occurrence_start=2026-10-20T15%3A30%3A00%2B05%3A30") == {
         "occurrence_start": "2026-10-20T15:30:00+05:30"}
+
+
+# --------------------------------------------------------------------------
+# Recheck — what may follow a read, and nothing after a write
+# --------------------------------------------------------------------------
+
+READ = f"curl -s '{API}/events/portal/events/{EVENT}'"
+
+
+@pytest.mark.parametrize("command,piped", [
+    (READ + "\n", False),
+    (READ + " 2>&1", False),
+    (READ + " | jq .", True),
+    (READ + " | jq '.results[] | .title'", True),
+    (READ + " 2>&1 | jq -r .my_rsvp_status", True),
+    (READ + " | jq .\n", True),
+    (f"curl -s \\\n  '{API}/events/portal/events/{EVENT}' \\\n  | jq .", True),
+])
+def test_a_read_may_end_in_a_newline_stderr_redirect_or_jq(live, ctx, av, command, piped):
+    fire(ctx, command, terminal_result(REGISTERED))
+    assert of_type(av, live, "tool.call")[-1]["payload"]["operation"] == "edgeos.event_read"
+    assert live._edgeos.http_call("terminal", {"command": command}).piped is piped
+
+
+def test_a_plain_read_with_a_trailing_newline_still_confirms(live, ctx, av):
+    rsvp(ctx)
+    fire(ctx, READ + "\n", terminal_result(REGISTERED))
+    assert len(of_type(av, live, "action.receipted")) == 1
+
+
+@pytest.mark.parametrize("tail", [" | jq .", " 2>&1 | jq .", " | jq '.my_rsvp_status = \"registered\"'"])
+def test_a_read_through_jq_is_labelled_but_confirms_nothing(live, ctx, av, tail):
+    rsvp(ctx)
+    fire(ctx, READ + tail, terminal_result(REGISTERED))
+    assert of_type(av, live, "tool.call")[-1]["payload"]["operation"] == "edgeos.event_read"
+    assert of_type(av, live, "action.receipted") == []
+    assert len(live._COLLECTOR.edgeos.pending) == 1
+
+
+@pytest.mark.parametrize("command", [
+    READ + " | grep registered",
+    READ + " | jq . > out.json",
+    READ + " | jq . | cat",
+    READ + " | jq . ; echo done",
+    READ + " > out.json",
+    READ + " 2>/dev/null",
+    READ + " && echo ok",
+    READ + " |",
+])
+def test_anything_else_after_a_read_is_not_read(live, ctx, av, command):
+    fire(ctx, command, terminal_result(REGISTERED))
+    assert of_type(av, live, "tool.call")[-1]["payload"]["operation"] is None
+
+
+@pytest.mark.parametrize("tail", ["\n", " 2>&1", " | jq .", " 2>&1 | jq ."])
+def test_a_write_accepts_no_tail_at_all(live, ctx, av, tail):
+    fire(ctx, f"curl -s -X POST '{REGISTER_URL}' -d '{{}}'" + tail, terminal_result(participant()))
+    assert actions(av, live) == []
+    assert of_type(av, live, "tool.call")[-1]["payload"]["operation"] is None
+
+
+def test_a_body_from_command_substitution_is_a_known_miss(live, ctx, av):
+    fire(ctx, f"curl -s -X POST '{REGISTER_URL}' -d \"$(cat body.json)\"", terminal_result(participant()))
+    assert actions(av, live) == []

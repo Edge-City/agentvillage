@@ -238,6 +238,67 @@ def test_the_first_use_race_agrees_on_one_key(plugin, tmp_path):
         assert leftovers == [], leftovers
 
 
+def _no_hard_links(*args, **kwargs):
+    import errno
+
+    raise PermissionError(errno.EPERM, "Operation not permitted")
+
+
+def test_without_hard_links_the_key_is_created_once(plugin, tmp_path, monkeypatch):
+    collector_module = __import__(f"{plugin.__name__}._collector", fromlist=["_collector"])
+    monkeypatch.setattr(os, "link", _no_hard_links)
+    directory = tmp_path / "av-events"
+    counters: dict = {}
+    first = collector_module.load_or_create_key(str(directory), counters)
+    assert first is not None and counters == {"hash_key_generated": 1}
+    assert stat.S_IMODE(os.stat(directory / "hash.key").st_mode) == 0o600
+    assert [p.name for p in directory.iterdir()] == ["hash.key"]
+    for _ in range(3):
+        assert collector_module.load_or_create_key(str(directory), counters) == first
+    assert counters == {"hash_key_generated": 1}
+
+
+def test_without_hard_links_the_first_use_race_still_agrees(plugin, tmp_path, monkeypatch):
+    import multiprocessing
+
+    monkeypatch.setattr(os, "link", _no_hard_links)  # inherited by the forked workers
+    context = multiprocessing.get_context("fork")
+    for trial in range(100):
+        directory = str(tmp_path / f"t{trial}" / "av-events")
+        barrier = context.Barrier(8)
+        out = context.Queue()
+        workers = [context.Process(target=_race_worker, args=(plugin.__name__, directory, barrier, out))
+                   for _ in range(8)]
+        for worker in workers:
+            worker.start()
+        keys = {out.get(timeout=10) for _ in workers}
+        for worker in workers:
+            worker.join(timeout=10)
+        on_disk = (tmp_path / f"t{trial}" / "av-events" / "hash.key").read_text().strip()
+        assert keys == {on_disk}, (trial, keys)
+
+
+def test_a_key_caught_half_written_is_waited_for_not_replaced(plugin, tmp_path):
+    import threading
+
+    collector_module = __import__(f"{plugin.__name__}._collector", fromlist=["_collector"])
+    directory = tmp_path / "av-events"
+    directory.mkdir()
+    key = "cd" * 32
+    (directory / "hash.key").write_text(key[:10])
+
+    def finish():
+        time.sleep(0.05)
+        (directory / "hash.key").write_text(key)
+
+    writer = threading.Thread(target=finish)
+    writer.start()
+    counters: dict = {}
+    assert collector_module.load_or_create_key(str(directory), counters) == bytes.fromhex(key)
+    writer.join()
+    assert counters == {}
+
+
 def test_a_transient_read_error_does_not_rotate_the_key(live, ctx, av, home, monkeypatch):
     import builtins
 
