@@ -1,0 +1,472 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
+import {
+  cpSync,
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import {
+  assertIndexOutsideMemory,
+  chunkText,
+  fts5Available,
+  query,
+  queryTerms,
+  rebuild,
+  resolvePaths,
+  sessionIsPrivate,
+  validSince,
+  type Paths,
+} from "../recall";
+
+// Message dates are local calendar dates; pin the zone so fixtures are stable.
+process.env.TZ = "UTC";
+
+const FIXTURE = join(import.meta.dir, "fixtures", "workspace");
+const SCRIPT = join(import.meta.dir, "..", "recall.ts");
+const DM = { HERMES_SESSION_CHAT_TYPE: "dm" };
+
+const homes: string[] = [];
+
+afterEach(() => {
+  for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
+});
+
+/** A fresh `$HERMES_HOME` holding a copy of the fixture workspace. */
+function workspace(): Paths {
+  const home = mkdtempSync(join(tmpdir(), "recall-home-"));
+  homes.push(home);
+  cpSync(FIXTURE, home, { recursive: true });
+  return resolvePaths({ home });
+}
+
+/** Name → sha256 of every entry under `memory/`, recursively. */
+function snapshotMemory(home: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const walk = (dir: string, prefix: string) => {
+    for (const name of readdirSync(dir).sort()) {
+      const abs = join(dir, name);
+      const rel = `${prefix}${name}`;
+      if (statSync(abs).isDirectory()) walk(abs, `${rel}/`);
+      else out[rel] = `${statSync(abs).mtimeMs}:${createHash("sha256").update(readFileSync(abs)).digest("hex")}`;
+    }
+  };
+  walk(join(home, "memory"), "memory/");
+  return out;
+}
+
+const NOON_UTC = (date: string) => Date.parse(`${date}T12:00:00Z`) / 1000;
+
+/** A minimal Hermes `state.db` with the columns the indexer relies on. */
+function makeStateDb(path: string): Database {
+  const db = new Database(path, { create: true });
+  db.run("PRAGMA journal_mode = WAL");
+  db.run(`CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, chat_type TEXT, started_at REAL NOT NULL)`);
+  db.run(`CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, role TEXT NOT NULL,
+            content TEXT, timestamp REAL NOT NULL, active INTEGER NOT NULL DEFAULT 1,
+            _compressed_summary INTEGER NOT NULL DEFAULT 0)`);
+  const s = db.prepare("INSERT INTO sessions(id, source, chat_type, started_at) VALUES (?, ?, ?, 0)");
+  s.run("tg-dm", "telegram", "dm");
+  s.run("tg-group", "telegram", "group");
+  s.run("tg-forum", "telegram", "forum");
+  s.run("cron-1", "cron", null);
+  s.run("cli-1", "cli", null);
+  s.run("sub-1", "subagent", null);
+  const m = db.prepare("INSERT INTO messages(session_id, role, content, timestamp, active) VALUES (?, ?, ?, ?, ?)");
+  m.run("tg-dm", "user", "I went kiteboarding at Ashwem this morning", NOON_UTC("2026-09-19"), 1);
+  m.run("tg-dm", "assistant", "Noted the kiteboarding trip.\nWant me to find other riders?", NOON_UTC("2026-09-19"), 1);
+  m.run("tg-dm", "tool", "toolsecret raw tool output", NOON_UTC("2026-09-19"), 1);
+  m.run("tg-dm", "user", "rewoundsecret message", NOON_UTC("2026-09-19"), 0);
+  m.run("tg-group", "user", "groupsecret plans for the beach", NOON_UTC("2026-09-19"), 1);
+  m.run("tg-forum", "user", "forumsecret topic", NOON_UTC("2026-09-19"), 1);
+  m.run("cron-1", "assistant", "cronsecret draft brief body", NOON_UTC("2026-09-20"), 1);
+  m.run("cli-1", "user", "cli note about kiteboarding gear", NOON_UTC("2026-09-21"), 1);
+  m.run("sub-1", "user", "subagentsecret delegated goal", NOON_UTC("2026-09-21"), 1);
+  return db;
+}
+
+function fileHash(path: string): string {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+describe("runtime", () => {
+  test("bun:sqlite ships FTS5", () => {
+    expect(fts5Available()).toBe(true);
+  });
+});
+
+describe("chunking and parsing", () => {
+  test("chunks are cut at blank lines and headings, with 1-based line numbers", () => {
+    const chunks = chunkText("# Title\n- a\n- b\n\n## Next\n- c\n");
+    expect(chunks.map((c) => [c.lineStart, c.lineEnd])).toEqual([
+      [1, 3],
+      [5, 6],
+    ]);
+    expect(chunks[1]!.heading).toBe("Next");
+  });
+
+  test("long blocks are split", () => {
+    const text = Array.from({ length: 30 }, (_, i) => `- line ${i}`).join("\n");
+    const chunks = chunkText(text);
+    expect(chunks.length).toBe(3);
+    expect(chunks[2]!.lineEnd).toBe(30);
+  });
+
+  test("query terms are lowercased, de-duplicated, and stripped of FTS syntax", () => {
+    expect(queryTerms('Priya OR priya NEAR(x "y") *')).toEqual(["priya", "or", "near", "x", "y"]);
+    expect(queryTerms("  ...  ")).toEqual([]);
+  });
+
+  test("since accepts a date or an ISO timestamp, nothing else", () => {
+    expect(validSince("2026-09-20")).toBe("2026-09-20");
+    expect(validSince("2026-09-20T10:00:00Z")).toBe("2026-09-20");
+    expect(validSince(undefined)).toBeNull();
+    expect(validSince("")).toBeNull();
+    expect(validSince("last week")).toBe("invalid");
+    expect(validSince("2026-02-30")).toBe("invalid");
+  });
+});
+
+describe("index build and incremental rebuild", () => {
+  test("first build indexes MEMORY.md and dated daily notes only", () => {
+    const paths = workspace();
+    const stats = rebuild(paths);
+    expect(stats.files.indexed).toBe(4);
+    expect(stats.files.scanned).toBe(4);
+    expect(stats.sessions.status).toBe("no_session_store");
+    expect(existsSync(paths.index)).toBe(true);
+    // Drafts and JSON ledgers under memory/ are not source context.
+    const res = query(paths, { query: "zebracake", env: DM });
+    expect(res.status).toBe("ok");
+    expect(res.hit_count).toBe(0);
+  });
+
+  test("a second rebuild with nothing changed is stat-only", () => {
+    const paths = workspace();
+    rebuild(paths);
+    const stats = rebuild(paths);
+    expect(stats.files.indexed).toBe(0);
+    expect(stats.files.unchanged).toBe(4);
+    expect(stats.files.removed).toBe(0);
+  });
+
+  test("a touched but identical file is not re-indexed", () => {
+    const paths = workspace();
+    rebuild(paths);
+    const note = join(paths.home, "memory", "2026-09-20.md");
+    const later = new Date(Date.now() + 60_000);
+    utimesSync(note, later, later);
+    const stats = rebuild(paths);
+    expect(stats.files.indexed).toBe(0);
+    expect(stats.files.unchanged).toBe(4);
+    // And the new mtime is recorded, so the pass after is stat-only again.
+    expect(rebuild(paths).files.unchanged).toBe(4);
+  });
+
+  test("edits, additions and deletions are picked up", () => {
+    const paths = workspace();
+    rebuild(paths);
+    const edited = join(paths.home, "memory", "2026-09-21.md");
+    writeFileSync(edited, "# 2026-09-21\n\n- Swapped the LoRa radio for a mesh module.\n");
+    writeFileSync(join(paths.home, "memory", "2026-09-22.md"), "# 2026-09-22\n\n- Tried kombucha with Arjun.\n");
+    rmSync(join(paths.home, "memory", "2026-09-18.md"));
+
+    const stats = rebuild(paths);
+    expect(stats.files.indexed).toBe(2);
+    expect(stats.files.removed).toBe(1);
+
+    expect(query(paths, { query: "fermentation", env: DM }).hit_count).toBe(0);
+    expect(query(paths, { query: "kombucha", env: DM }).hit_count).toBe(1);
+    const mesh = query(paths, { query: "mesh module", env: DM });
+    expect(mesh.status === "ok" && mesh.hits[0]!.ref).toBe("memory/2026-09-21.md:3");
+    expect(query(paths, { query: "demo", env: DM }).hit_count).toBe(0);
+  });
+
+  test("a corrupt index is discarded and rebuilt", () => {
+    const paths = workspace();
+    rebuild(paths);
+    writeFileSync(paths.index, "this is not sqlite".repeat(100));
+    rmSync(`${paths.index}-wal`, { force: true });
+    rmSync(`${paths.index}-shm`, { force: true });
+    const stats = rebuild(paths);
+    expect(stats.files.indexed).toBe(4);
+  });
+});
+
+describe("query", () => {
+  test("returns dated snippets with file and line refs", () => {
+    const paths = workspace();
+    const res = query(paths, { query: "Priya battery enclosure", env: DM });
+    if (res.status !== "ok") throw new Error(res.reason);
+    expect(res.match).toBe("all");
+    const refs = res.hits.map((h) => h.ref).sort();
+    expect(refs).toEqual(["MEMORY.md:7-8", "memory/2026-09-20.md:3-4"].sort());
+    const daily = res.hits.find((h) => h.path === "memory/2026-09-20.md")!;
+    expect(daily.date).toBe("2026-09-20");
+    expect(daily.date_source).toBe("filename");
+    expect(daily.kind).toBe("daily_note");
+    expect(daily.snippet).toContain("battery enclosure");
+    const longTerm = res.hits.find((h) => h.path === "MEMORY.md")!;
+    expect(longTerm.date).toBe("2026-09-19");
+    expect(longTerm.date_source).toBe("inline");
+    expect(longTerm.kind).toBe("long_term");
+    expect(res.top_score).toBe(res.hits[0]!.score);
+    expect(res.top_score!).toBeGreaterThan(0);
+  });
+
+  test("falls back to any-term matching when no chunk has every term", () => {
+    const paths = workspace();
+    const res = query(paths, { query: "fermentation zzzunmatched", env: DM });
+    if (res.status !== "ok") throw new Error(res.reason);
+    expect(res.match).toBe("any");
+    expect(res.hits[0]!.ref).toBe("memory/2026-09-18.md:3-4");
+  });
+
+  test("porter stemming matches inflections", () => {
+    const paths = workspace();
+    expect(query(paths, { query: "microgrids", env: DM }).hit_count).toBe(2);
+  });
+
+  test("since excludes older notes and older inline-dated memory", () => {
+    const paths = workspace();
+    const all = query(paths, { query: "Priya", env: DM });
+    const recent = query(paths, { query: "Priya", since: "2026-09-20", env: DM });
+    if (all.status !== "ok" || recent.status !== "ok") throw new Error("not ok");
+    expect(all.hits.map((h) => h.date).sort()).toEqual(["2026-09-19", "2026-09-20"]);
+    expect(recent.since).toBe("2026-09-20");
+    expect(recent.hits.map((h) => h.ref)).toEqual(["memory/2026-09-20.md:3-4"]);
+    expect(recent.hits.every((h) => h.date >= "2026-09-20")).toBe(true);
+  });
+
+  test("invalid since is an error with no data", () => {
+    const paths = workspace();
+    expect(query(paths, { query: "Priya", since: "yesterday", env: DM })).toEqual({
+      status: "error",
+      reason: "invalid_since",
+      hit_count: 0,
+      hits: [],
+    });
+  });
+
+  test("empty, operator-only and oversized queries are errors", () => {
+    const paths = workspace();
+    expect(query(paths, { query: "   ", env: DM }).status).toBe("error");
+    expect(query(paths, { query: '"" * ()', env: DM }).status).toBe("error");
+    expect(query(paths, { query: "x".repeat(501), env: DM }).status).toBe("error");
+  });
+
+  test("FTS operators in user text are inert", () => {
+    const paths = workspace();
+    const res = query(paths, { query: 'Priya" OR NEAR(* firmware', env: DM });
+    expect(res.status).toBe("ok");
+  });
+
+  test("ordering is deterministic across runs", () => {
+    const paths = workspace();
+    const a = query(paths, { query: "microgrid firmware Priya coffee", env: DM });
+    const b = query(paths, { query: "microgrid firmware Priya coffee", env: DM });
+    if (a.status !== "ok" || b.status !== "ok") throw new Error("not ok");
+    expect(a.hits).toEqual(b.hits);
+    for (let i = 1; i < a.hits.length; i++) {
+      expect(a.hits[i - 1]!.score).toBeGreaterThanOrEqual(a.hits[i]!.score);
+    }
+  });
+
+  test("limit caps the hits but hit_count reports every match", () => {
+    const paths = workspace();
+    const res = query(paths, { query: "microgrid firmware Priya coffee", limit: 1, env: DM });
+    if (res.status !== "ok") throw new Error(res.reason);
+    expect(res.hits.length).toBe(1);
+    expect(res.hit_count).toBeGreaterThan(1);
+  });
+});
+
+describe("group-session refusal", () => {
+  for (const chatType of ["group", "forum", "channel", "thread", "guild", "something-new"]) {
+    test(`refuses in a ${chatType} session and returns no data`, () => {
+      const paths = workspace();
+      const res = query(paths, { query: "Priya", env: { HERMES_SESSION_CHAT_TYPE: chatType } });
+      expect(res).toEqual({ status: "unavailable", reason: "unavailable in group sessions", hit_count: 0, hits: [] });
+      // Refusal happens before the index is even touched.
+      expect(existsSync(paths.index)).toBe(false);
+    });
+  }
+
+  test("DM, unset, and local sessions are private", () => {
+    expect(sessionIsPrivate({ HERMES_SESSION_CHAT_TYPE: "dm" })).toBe(true);
+    expect(sessionIsPrivate({ HERMES_SESSION_CHAT_TYPE: "" })).toBe(true);
+    expect(sessionIsPrivate({})).toBe(true);
+    expect(sessionIsPrivate({ HERMES_SESSION_CHAT_TYPE: " DM " })).toBe(true);
+  });
+});
+
+describe("never writes into memory/", () => {
+  test("rebuild and query leave memory/ byte-for-byte unchanged", () => {
+    const paths = workspace();
+    const before = snapshotMemory(paths.home);
+    rebuild(paths);
+    query(paths, { query: "Priya microgrid", env: DM });
+    query(paths, { query: "Priya", since: "2026-09-20", env: DM });
+    rebuild(paths);
+    expect(snapshotMemory(paths.home)).toEqual(before);
+    expect(paths.index).toBe(join(paths.home, ".recall", "index.sqlite"));
+  });
+
+  test("an index path under memory/ is refused", () => {
+    const home = mkdtempSync(join(tmpdir(), "recall-home-"));
+    homes.push(home);
+    cpSync(FIXTURE, home, { recursive: true });
+    const inside = resolvePaths({ home, index: "memory/recall.sqlite" });
+    expect(() => assertIndexOutsideMemory(inside)).toThrow("index_path_inside_memory");
+    expect(() => rebuild(inside)).toThrow("index_path_inside_memory");
+    expect(existsSync(join(home, "memory", "recall.sqlite"))).toBe(false);
+  });
+
+  test("an index path routed into memory/ through a symlink is refused", () => {
+    const home = mkdtempSync(join(tmpdir(), "recall-home-"));
+    homes.push(home);
+    cpSync(FIXTURE, home, { recursive: true });
+    symlinkSync(join(home, "memory"), join(home, "sneaky"));
+    const routed = resolvePaths({ home, index: "sneaky/index.sqlite" });
+    expect(() => assertIndexOutsideMemory(routed)).toThrow("index_path_inside_memory");
+  });
+
+  test("the index cannot be MEMORY.md itself", () => {
+    const home = mkdtempSync(join(tmpdir(), "recall-home-"));
+    homes.push(home);
+    cpSync(FIXTURE, home, { recursive: true });
+    expect(() => assertIndexOutsideMemory(resolvePaths({ home, index: "MEMORY.md" }))).toThrow("index_path_is_source");
+  });
+});
+
+describe("session store", () => {
+  test("indexes only the owner's private user/assistant messages, read-only", () => {
+    const paths = workspace();
+    makeStateDb(paths.stateDb).close();
+    const before = fileHash(paths.stateDb);
+
+    const stats = rebuild(paths);
+    expect(stats.sessions.status).toBe("ok");
+    expect(stats.sessions.indexed).toBe(2); // tg-dm and cli-1
+
+    const res = query(paths, { query: "kiteboarding", env: DM });
+    if (res.status !== "ok") throw new Error(res.reason);
+    expect(res.hit_count).toBe(3);
+    const refs = res.hits.map((h) => h.ref).sort();
+    expect(refs).toEqual(["session:cli-1#8:1", "session:tg-dm#1:1", "session:tg-dm#2:1-2"]);
+    const dm = res.hits.find((h) => h.ref === "session:tg-dm#1:1")!;
+    expect(dm.kind).toBe("session");
+    expect(dm.date_source).toBe("message");
+
+    for (const secret of ["groupsecret", "forumsecret", "cronsecret", "toolsecret", "subagentsecret", "rewoundsecret"]) {
+      expect(query(paths, { query: secret, env: DM }).hit_count).toBe(0);
+    }
+    expect(fileHash(paths.stateDb)).toBe(before);
+  });
+
+  test("changed and deleted sessions are re-indexed and purged", () => {
+    const paths = workspace();
+    const store = makeStateDb(paths.stateDb);
+    rebuild(paths);
+    expect(rebuild(paths).sessions.unchanged).toBe(2);
+
+    store.run("INSERT INTO messages(session_id, role, content, timestamp) VALUES ('tg-dm', 'user', 'also paddleboarding', ?)", [
+      NOON_UTC("2026-09-22"),
+    ]);
+    store.run("DELETE FROM messages WHERE session_id = 'cli-1'");
+    store.run("DELETE FROM sessions WHERE id = 'cli-1'");
+    store.close();
+
+    const stats = rebuild(paths);
+    expect(stats.sessions.indexed).toBe(1);
+    expect(stats.sessions.removed).toBe(1);
+    expect(query(paths, { query: "paddleboarding", env: DM }).hit_count).toBe(1);
+    expect(query(paths, { query: "gear", env: DM }).hit_count).toBe(0);
+  });
+
+  test("a session store without chat_type is skipped entirely", () => {
+    const paths = workspace();
+    const db = new Database(paths.stateDb, { create: true });
+    db.run("CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL)");
+    db.run("CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, timestamp REAL)");
+    db.run("INSERT INTO sessions VALUES ('x', 'telegram')");
+    db.run("INSERT INTO messages VALUES (1, 'x', 'user', 'unverifiable kiteboarding', 0)");
+    db.close();
+    const stats = rebuild(paths);
+    expect(stats.sessions.status).toBe("session_schema_unsupported");
+    expect(query(paths, { query: "unverifiable", env: DM }).hit_count).toBe(0);
+  });
+
+  test("since applies to session messages by message date", () => {
+    const paths = workspace();
+    makeStateDb(paths.stateDb).close();
+    const res = query(paths, { query: "kiteboarding", since: "2026-09-20", env: DM });
+    if (res.status !== "ok") throw new Error(res.reason);
+    expect(res.hits.map((h) => h.ref)).toEqual(["session:cli-1#8:1"]);
+  });
+});
+
+describe("CLI", () => {
+  async function run(args: string[], env: Record<string, string>, stdin?: string) {
+    const proc = Bun.spawn(["bun", SCRIPT, ...args], {
+      env: { ...process.env, ...env },
+      stdin: stdin === undefined ? "ignore" : new TextEncoder().encode(stdin),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const out = await new Response(proc.stdout).text();
+    const code = await proc.exited;
+    return { code, json: JSON.parse(out.trim()) };
+  }
+
+  test("query reads the query from stdin and prints one JSON object", async () => {
+    const paths = workspace();
+    const { code, json } = await run(
+      ["query", "--query-stdin", "--since", "2026-09-20"],
+      { HERMES_HOME: paths.home, HERMES_SESSION_CHAT_TYPE: "dm" },
+      "Priya thermal",
+    );
+    expect(code).toBe(0);
+    expect(json.status).toBe("ok");
+    expect(json.hits[0].ref).toBe("memory/2026-09-20.md:3-4");
+  });
+
+  test("query refuses in a group session even when run from a terminal", async () => {
+    const paths = workspace();
+    const { code, json } = await run(
+      ["query", "--query-stdin"],
+      { HERMES_HOME: paths.home, HERMES_SESSION_CHAT_TYPE: "group" },
+      "Priya",
+    );
+    expect(code).toBe(0);
+    expect(json).toEqual({ status: "unavailable", reason: "unavailable in group sessions", hit_count: 0, hits: [] });
+    expect(existsSync(paths.index)).toBe(false);
+  });
+
+  test("rebuild prints counts only", async () => {
+    const paths = workspace();
+    const { code, json } = await run(["rebuild"], { HERMES_HOME: paths.home });
+    expect(code).toBe(0);
+    expect(json.status).toBe("ok");
+    expect(json.files.indexed).toBe(4);
+    expect(JSON.stringify(json)).not.toContain("Priya");
+  });
+
+  test("a refused index path is reported, not thrown", async () => {
+    const paths = workspace();
+    const { code, json } = await run(["rebuild"], { HERMES_HOME: paths.home, AV_RECALL_INDEX: "memory/x.sqlite" });
+    expect(code).toBe(0);
+    expect(json).toEqual({ status: "error", reason: "index_path_inside_memory", hit_count: 0, hits: [] });
+  });
+});
