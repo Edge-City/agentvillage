@@ -242,7 +242,9 @@ def canonical_json(obj: Any) -> str:
 
 
 def sha256_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    # `surrogatepass`: a lone surrogate (which JSON can carry and Python can
+    # hold) must hash, not raise. Well-formed text hashes exactly as UTF-8.
+    return hashlib.sha256(text.encode("utf-8", errors="surrogatepass")).hexdigest()
 
 
 def hash_obj(obj: Any) -> str:
@@ -386,19 +388,25 @@ class Buffer:
     # -- writing ----------------------------------------------------------
 
     def append(self, event: dict) -> None:
-        line = json.dumps(event, separators=(",", ":"), ensure_ascii=False)
+        # Encode before anything touches the file: a line that cannot be
+        # encoded (a lone surrogate) raises here, with no fd open and nothing
+        # half-written.
+        data = (json.dumps(event, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")
         with self._lock:
-            if self._started_ms is None:
-                self._started_ms = int(time.time() * 1000)
             # `os.open` so the file is created 0o600 from the start rather than
-            # existing world-readable for the width of a chmod.
+            # existing world-readable for the width of a chmod. Exactly one
+            # close, in `finally`: closing twice could close an fd another
+            # thread has since been handed.
             fd = os.open(self._current, os.O_WRONLY | os.O_CREAT | os.O_APPEND, FILE_MODE)
             try:
-                with os.fdopen(fd, "a", encoding="utf-8") as handle:
-                    handle.write(line + "\n")
-            except Exception:
+                view = memoryview(data)
+                while view:
+                    written = os.write(fd, view)
+                    view = view[written:]
+            finally:
                 os.close(fd)
-                raise
+            if self._started_ms is None:
+                self._started_ms = int(time.time() * 1000)
             self._count += 1
             if self._count >= FLUSH_MAX_EVENTS:
                 self._rotate_locked()
