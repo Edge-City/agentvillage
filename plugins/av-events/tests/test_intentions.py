@@ -146,6 +146,25 @@ def test_a_withdrawal_status_can_come_from_the_result(live, ctx, av):
     assert events[0]["payload"]["index_status"] == "archived"
 
 
+def test_a_withdrawn_result_status_wins_over_an_active_argument(live, ctx, av):
+    fire_tool(
+        ctx,
+        "mcp__index__update_intent",
+        {"id": "int-abc", "description": DESCRIPTION, "status": "active"},
+        created(status="archived"),
+    )
+    events = intention_events(av, live)
+    assert types(events) == ["intention.withdrawn"]
+    assert events[0]["payload"]["index_status"] == "archived"
+
+
+def test_a_withdrawn_argument_status_wins_over_an_active_result(live, ctx, av):
+    fire_tool(ctx, "mcp__index__update_intent", {"id": "int-abc", "status": "deleted"}, created(status="active"))
+    events = intention_events(av, live)
+    assert types(events) == ["intention.withdrawn"]
+    assert events[0]["payload"]["index_status"] == "deleted"
+
+
 def test_a_status_only_update_emits_nothing(live, ctx, av):
     fire_tool(ctx, "mcp__index__update_intent", {"id": "int-abc", "status": "active"}, created(status="active"))
     assert intention_events(av, live) == []
@@ -226,6 +245,28 @@ def test_only_the_first_json_object_of_joined_text_blocks_is_read(live, ctx, av)
     result = json.dumps({"result": first + "\nDiscovery will run next.\n" + second})
     fire_tool(ctx, "mcp__index__create_intent", {"description": DESCRIPTION}, result)
     assert [e["intention_id"] for e in intention_events(av, live)] == ["int-first"]
+
+
+def test_a_brace_inside_a_sentence_is_not_a_result(live, ctx, av):
+    """The "too vague" refusal quotes an example signal inline; it must not read as a create."""
+    example = json.dumps({"success": True, "data": {"intent": {"id": "int-example"}}})
+    result = json.dumps({"result": "Too vague. A good signal looks like " + example})
+    fire_tool(ctx, "mcp__index__create_intent", {"description": "stuff"}, result)
+    assert intention_events(av, live) == []
+
+
+def test_braces_in_a_prose_line_do_not_hide_the_json_line(live, ctx, av):
+    block = json.dumps({"success": True, "data": {"intent": {"id": "int-created"}}})
+    result = json.dumps({"result": "Created {1} signal.\n" + block})
+    fire_tool(ctx, "mcp__index__create_intent", {"description": DESCRIPTION}, result)
+    assert [e["intention_id"] for e in intention_events(av, live)] == ["int-created"]
+
+
+def test_a_pretty_printed_json_block_is_read(live, ctx, av):
+    block = json.dumps({"success": True, "data": {"intent": {"id": "int-pretty"}}}, indent=2)
+    result = json.dumps({"result": "Saved.\n" + block})
+    fire_tool(ctx, "mcp__index__create_intent", {"description": DESCRIPTION}, result)
+    assert [e["intention_id"] for e in intention_events(av, live)] == ["int-pretty"]
 
 
 def test_a_json_block_after_a_prose_block_is_read(live, ctx, av):
@@ -346,6 +387,39 @@ def test_a_cron_session_id_is_enough_without_a_session_start(live, ctx, av):
     assert intention_events(av, live)[0]["payload"]["source"] == "ambient"
 
 
+def _delegate(ctx, parent, child):
+    ctx.fire(
+        "subagent_start",
+        parent_session_id=parent,
+        parent_turn_id="t",
+        child_session_id=child,
+        child_role="r",
+        child_goal="g",
+    )
+
+
+def test_a_subagent_of_a_cron_run_is_ambient(live, ctx, av):
+    ctx.fire("on_session_start", session_id="sess-nightly", model="m", platform="cron")
+    _delegate(ctx, "sess-nightly", "sess-kid")
+    fire_tool(ctx, "mcp__index__create_intent", {"description": DESCRIPTION}, created(), session="sess-kid")
+    event = intention_events(av, live)[0]
+    assert event["payload"]["source"] == "ambient"
+    assert event["payload"]["parent_session_id"] == "sess-nightly"
+
+
+def test_a_grandchild_of_a_cron_session_id_is_ambient(live, ctx, av):
+    _delegate(ctx, "cron_job_20260922_031500", "sess-kid")
+    _delegate(ctx, "sess-kid", "sess-grandkid")
+    fire_tool(ctx, "mcp__index__create_intent", {"description": DESCRIPTION}, created(), session="sess-grandkid")
+    assert intention_events(av, live)[0]["payload"]["source"] == "ambient"
+
+
+def test_a_subagent_of_a_conversation_is_message(live, ctx, av):
+    _delegate(ctx, SESSION, "sess-kid")
+    fire_tool(ctx, "mcp__index__create_intent", {"description": DESCRIPTION}, created(), session="sess-kid")
+    assert intention_events(av, live)[0]["payload"]["source"] == "message"
+
+
 def test_record_onboarding_source_is_kept(live, ctx, av):
     record(ctx, {"action": "capture", "text": DESCRIPTION, "source": "onboarding"})
     assert intention_events(av, live)[0]["payload"]["source"] == "onboarding"
@@ -379,6 +453,38 @@ def test_record_in_a_cron_session_is_ambient_whatever_it_claims(live, ctx, av):
 def test_a_failed_or_blocked_call_records_nothing(live, ctx, av, status, result):
     """Hermes's status alone is enough, whatever the body looks like."""
     fire_tool(ctx, "mcp__index__create_intent", {"description": DESCRIPTION}, result, status=status)
+    assert intention_events(av, live) == []
+
+
+@pytest.mark.parametrize("status", ["timeout", "cancelled", "Timeout ", "interrupted"])
+@pytest.mark.parametrize(
+    "call",
+    [
+        ("mcp__index__create_intent", {"description": DESCRIPTION}),
+        ("mcp__index__update_intent", {"id": "int-abc", "status": "archived"}),
+        ("mcp__index__delete_intent", {"id": "int-abc"}),
+        ("record_intention", {"action": "capture", "text": DESCRIPTION}),
+        ("record_intention", {"action": "withdraw", "intention_id": "local-1"}),
+    ],
+    ids=["create", "withdraw-by-archive", "delete", "record-capture", "record-withdraw"],
+)
+def test_only_status_ok_records_an_intention(live, ctx, av, status, call):
+    """Hermes also reports `timeout` and `cancelled`; neither is a recorded intention."""
+    tool_name, args = call
+    fire_tool(ctx, tool_name, args, created(), status=status)
+    assert intention_events(av, live) == []
+
+
+@pytest.mark.parametrize("status", ["ok", "OK", "", None])
+def test_status_ok_or_empty_records(live, ctx, av, status):
+    fire_tool(ctx, "mcp__index__create_intent", {"description": DESCRIPTION}, created(), status=status)
+    assert len(intention_events(av, live)) == 1
+
+
+@pytest.mark.parametrize("success", ["false", "true", None, 1, 0, "yes"])
+def test_success_must_be_boolean_true(live, ctx, av, success):
+    result = json.dumps({"result": json.dumps({"success": success, "data": {"intent": {"id": "int-x"}}})})
+    fire_tool(ctx, "mcp__index__create_intent", {"description": DESCRIPTION}, result)
     assert intention_events(av, live) == []
 
 
@@ -477,7 +583,7 @@ def test_a_sentence_in_any_id_or_status_never_reaches_the_buffer(plugin, ctx, mo
     record(ctx, {"action": "update", "intention_id": SENTENCE, "text": DESCRIPTION})
     # index_intent_id named by record_intention
     record(ctx, {"action": "capture", "text": DESCRIPTION, "index_intent_id": SENTENCE})
-    # tool_call_id
+    # tool_call_id: Hermes's, so nulled and the event kept
     fire_tool(ctx, "mcp__index__create_intent", {"description": DESCRIPTION}, created("int-ok"), tool_call_id=SENTENCE)
     # status: kept, as `other`
     fire_tool(ctx, "mcp__index__update_intent", {"id": "int-ok", "description": DESCRIPTION, "status": SENTENCE}, "{}")
@@ -486,9 +592,11 @@ def test_a_sentence_in_any_id_or_status_never_reaches_the_buffer(plugin, ctx, mo
     assert SENTENCE not in buffered
     assert "Alice" not in buffered
     events = intention_events(av, plugin)
-    assert types(events) == ["intention.updated"]
-    assert events[0]["payload"]["index_status"] == "other"
-    assert plugin._COLLECTOR.intention_drops == {"intention_id": 2, "index_intent_id": 1, "tool_call_id": 1}
+    assert types(events) == ["intention.captured", "intention.updated"]
+    assert events[0]["intention_id"] == "int-ok"
+    assert events[0]["tool_call_id"] is None
+    assert events[1]["payload"]["index_status"] == "other"
+    assert plugin._COLLECTOR.intention_drops == {"intention_id": 2, "index_intent_id": 1}
 
 
 @pytest.mark.parametrize("bad_id", ["", "x" * 129, "int abc", "int/abc", "int\nabc"])
@@ -554,21 +662,30 @@ def test_an_unencodable_line_writes_nothing_and_the_buffer_keeps_working(plugin,
     assert buffer.pending_count == 2
 
 
+class _OsProxy:
+    """Forwards to `os` except `write` (fails) and `close` (counted)."""
+
+    def __init__(self) -> None:
+        self.closed: list[int] = []
+
+    def __getattr__(self, name):
+        return getattr(os, name)
+
+    def write(self, fd, data):
+        raise OSError("disk full")
+
+    def close(self, fd):
+        self.closed.append(fd)
+        os.close(fd)
+
+
 def test_a_failed_write_closes_its_fd_exactly_once(plugin, home, monkeypatch):
     core = sys.modules[f"{plugin.__name__}._core"]
     buffer = core.Buffer(str(home / "av-events" / "buffer"))
-    closed = []
-    real_close = os.close
-
-    def failing_write(fd, data):
-        raise OSError("disk full")
-
-    def counting_close(fd):
-        closed.append(fd)
-        real_close(fd)
-
-    monkeypatch.setattr(core.os, "write", failing_write)
-    monkeypatch.setattr(core.os, "close", counting_close)
+    proxy = _OsProxy()
+    closed = proxy.closed
+    # Only `_core`'s view of `os` changes; the global module is untouched.
+    monkeypatch.setattr(core, "os", proxy)
     with pytest.raises(OSError):
         buffer.append({"n": 1})
     assert len(closed) == 1

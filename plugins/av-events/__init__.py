@@ -348,10 +348,10 @@ def _hook_post_tool_call(collector: Collector, **kwargs: Any) -> None:
     discards its return, `model_tools.py` at `v2026.8.31`), so nothing here can
     delay, block or rewrite the tool call.
     """
-    state = _session(collector, kwargs)
+    _session(collector, kwargs)
     if classify_tool(kwargs.get("tool_name")) is None:
         return
-    _capture_intentions(collector, state, kwargs)
+    _capture_intentions(collector, kwargs)
 
 
 def _intention_payload(call: IntentionCall, capture: str, parent_session_id: Optional[str]) -> dict:
@@ -381,18 +381,32 @@ def _intention_payload(call: IntentionCall, capture: str, parent_session_id: Opt
     return payload
 
 
-def _is_cron_session(state: Any, session_id: Optional[str]) -> bool:
-    """A cron run: `platform="cron"`, or Hermes's `cron_<job>_<stamp>` session id.
+#: How far up a chain of delegated subagents to look for a cron ancestor.
+MAX_LINEAGE_DEPTH = 8
 
-    Both come from `cron/scheduler.py` at `v2026.8.31`. The id prefix covers a
-    run whose `on_session_start` this process never saw.
+
+def _is_cron_session(collector: Collector, session_id: Optional[str]) -> bool:
+    """A cron run, or a subagent a cron run delegated to (at any depth).
+
+    A session is a cron run when its `on_session_start` said `platform="cron"`
+    or its id has Hermes's `cron_<job>_<stamp>` form (`cron/scheduler.py` at
+    `v2026.8.31`); the id prefix covers a run whose start this process never
+    saw. Parents come from `subagent_start`.
     """
-    if state is not None and getattr(state, "source", None) == "cron":
-        return True
-    return bool(session_id) and str(session_id).startswith("cron_")
+    current = session_id
+    for _ in range(MAX_LINEAGE_DEPTH):
+        if not current:
+            return False
+        state = collector.peek_session(current)
+        if state is not None and state.source == "cron":
+            return True
+        if str(current).startswith("cron_"):
+            return True
+        current = collector.parent_of(current)
+    return False
 
 
-def _capture_intentions(collector: Collector, state: Any, kwargs: dict) -> None:
+def _capture_intentions(collector: Collector, kwargs: dict) -> None:
     """Emit one `intention.*` per intention the tool call recorded.
 
     No dedupe on `tool_call_id`: Hermes fires `post_tool_call` once per
@@ -405,16 +419,17 @@ def _capture_intentions(collector: Collector, state: Any, kwargs: dict) -> None:
         kwargs.get("args"),
         kwargs.get("result"),
         kwargs.get("status"),
-        cron=_is_cron_session(state, refs["session_id"]),
+        cron=_is_cron_session(collector, refs["session_id"]),
     )
     if not calls:
         return
 
+    # Hermes supplies `tool_call_id`, not the agent: one that fails the id
+    # pattern is nulled and the event kept.
     raw_call_id = kwargs.get("tool_call_id")
     tool_call_id = str(raw_call_id) if raw_call_id not in (None, "") else None
     if tool_call_id is not None and not valid_id(tool_call_id):
-        collector.count_intention_drop("tool_call_id", len(calls))
-        return
+        tool_call_id = None
 
     # The call's own window: Hermes reports `duration_ms` and we fire at its end.
     ended = time.time()

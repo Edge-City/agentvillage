@@ -154,19 +154,23 @@ of the same name on any other MCP server is ignored.
 |---|---|---|
 | Index `create_intent` | `intention.captured` | Index's intent id, read from the result; no id, no event |
 | Index `update_intent` with a `description` | `intention.updated` | the `id` / `intentId` argument |
-| Index `update_intent` whose status (argument, else result) is `archived`\|`deleted`\|`withdrawn` | `intention.withdrawn` | the argument |
+| Index `update_intent` whose argument status or result status is `archived`\|`deleted`\|`withdrawn` | `intention.withdrawn` | the argument |
 | Index `update_intent` changing only the status | nothing | — |
 | Index `delete_intent` | `intention.withdrawn` | the argument |
 | `record_intention` | see the contract below | the argument, else (on a capture) the result's `intention_id`, else a uuid v7 minted here |
 
-A call Hermes reports as `error` or `blocked` records nothing, and neither does an Index refusal.
-Index reports "too vague" as `{"success": false, …}` inside the tool's text while Hermes reports
-`ok`, so the plugin unwraps the result and checks it. An update or withdrawal that does not name
+Only a call Hermes reports with status `ok` (or no status) records anything: `error`, `blocked`,
+`timeout`, `cancelled` and any other status record nothing. An Index refusal records nothing
+either. Index reports "too vague" as `{"success": false, …}` inside the tool's text while Hermes
+reports `ok`, so the plugin unwraps the result and checks it: a `success` key, when present, must be
+the boolean `true`, and any other value (`"false"`, `null`, `1`) rejects the call. An update or withdrawal that does not name
 its intention is dropped.
 
 **Reading an Index create.** The result is unwrapped from Hermes's `{"result": <text>}`, preferring
-`structuredContent`. Hermes joins an MCP result's text blocks with `"\n"`, so only the first JSON
-object in the text is parsed. The payload must be an object whose `success` is not `false`, and the
+`structuredContent`. Hermes joins an MCP result's text blocks with `"\n"`, so the text is read line
+by line: only a line that starts with `{` (after indentation) is tried, from there on, and the first
+one that decodes is the payload. A `{` inside a sentence — "A good signal looks like {…}" — is never
+read as a result. The payload must be an object whose `success`, if present, is `true`, and the
 intent must be at `data.intent`, `data.intents` holding exactly one item, or `intent` at the top
 (a `structuredContent` copy). Anything else — no readable id, several intents, an id on `data`
 itself or at the top level — emits nothing. Plugin-minted ids are for `record_intention` only;
@@ -175,8 +179,9 @@ A result over 256 KiB is not parsed at all.
 
 **Source.** In a cron session every intention is `ambient` — the nightly memory-signal sync calls
 `create_intent` with no participant in the loop. A cron session is one whose `on_session_start` said
-`platform="cron"`, or whose id has Hermes's `cron_<job>_<stamp>` form (`cron/scheduler.py`). Outside
-cron, Index calls are `message`. `record_intention` passes `message`, `onboarding` or `ambient`;
+`platform="cron"`, or whose id has Hermes's `cron_<job>_<stamp>` form (`cron/scheduler.py`), or a
+subagent that a cron session delegated to, at any depth up to eight (from `subagent_start`).
+Outside cron, Index calls are `message`. `record_intention` passes `message`, `onboarding` or `ambient`;
 a missing or unknown value is `ambient`, the most restrictive. Hermes gives no session kind for
 onboarding, so `onboarding` comes only from `record_intention`'s argument; an Index create during
 the bootstrap ritual is `message`.
@@ -196,9 +201,10 @@ measurement catalogue says "text in the archive only". The training export reads
 archive (§8), not from events. For intentions, `full` sends exactly what `sanitized` sends.
 
 **Ids.** Every id that goes into the envelope or the payload — `intention_id`, `index_intent_id`,
-`tool_call_id` — must match `^[A-Za-z0-9._:-]{1,128}$`. An event with an id that does not is not
-emitted; the drop is counted in memory by field (`Collector.intention_drops`) and the value is
-never kept.
+`tool_call_id` — must match `^[A-Za-z0-9._:-]{1,128}$`. An event whose `intention_id` or
+`index_intent_id` does not is not emitted; the drop is counted in memory by field
+(`Collector.intention_drops`) and the value is never kept. A `tool_call_id` that does not match is
+set to null and the event kept, since Hermes supplies it, not the agent.
 
 **Envelope.** `intention_id` is the funnel id (§4.2). `tool_call_id` is Hermes's. `run_id` is
 `task_id` when it differs from the session id, as for `llm.call`. `parent_run_id` is null; the

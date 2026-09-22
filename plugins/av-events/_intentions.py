@@ -77,8 +77,10 @@ _RECORD_ACTIONS = {
 #: hook's 50 ms budget on the agent's time.
 MAX_RESULT_CHARS = 256 * 1024
 
-#: Hermes statuses on `post_tool_call` that mean the tool did not do its work.
-_FAILED_STATUSES = frozenset({"error", "blocked"})
+#: The only Hermes `post_tool_call` statuses that mean the tool did its work.
+#: Everything else — `error`, `blocked`, `timeout`, `cancelled`, and whatever
+#: Hermes adds next — records nothing.
+_OK_STATUSES = frozenset({"ok", ""})
 
 _ID_KEYS = ("id", "intentId", "intent_id")
 
@@ -169,24 +171,31 @@ def classify_tool(name: Any) -> Optional[str]:
 
 
 def _first_json(value: Any) -> Any:
-    """The first JSON value in a string, or the value itself if it is not one.
+    """The first JSON object in a string, or the value itself if there is none.
 
     Hermes joins an MCP result's text blocks with a newline, so a result can be
-    one JSON object followed by more text. Only the first object is read.
-    A string over `MAX_RESULT_CHARS` is not read at all and yields None.
+    prose, then a JSON object, then more text. Only a line that *starts* with
+    `{` (after indentation) is tried, from that line on, and the first one that
+    decodes wins. A `{` inside a sentence ("A good signal looks like {...}") is
+    never read as a result. A string over `MAX_RESULT_CHARS` is not read at all
+    and yields None.
     """
     if not isinstance(value, str):
         return value
     if len(value) > MAX_RESULT_CHARS:
         return None
-    start = value.find("{")
-    if start < 0:
-        return value
-    try:
-        parsed, _ = _DECODER.raw_decode(value, start)
-    except (ValueError, RecursionError):
-        return value
-    return parsed
+    offset = 0
+    for line in value.split("\n"):
+        indent = len(line) - len(line.lstrip())
+        if line[indent:indent + 1] == "{":
+            try:
+                parsed, _ = _DECODER.raw_decode(value, offset + indent)
+            except (ValueError, RecursionError):
+                pass
+            else:
+                return parsed
+        offset += len(line) + 1
+    return value
 
 
 def unwrap_result(result: Any) -> Any:
@@ -210,15 +219,15 @@ def unwrap_result(result: Any) -> Any:
 def result_succeeded(status: Any, payload: Any) -> bool:
     """Whether the tool reports that it did what it was asked.
 
-    Hermes's own `status` catches exceptions, plugin blocks and top-level
-    `{"error": ...}` results. It cannot see inside Index's text content, which
-    reports a refusal ("too vague") as `{"success": false, ...}` with a Hermes
-    status of `ok` — so that is checked here too.
+    Hermes's `status` must be `ok` (or empty). Hermes cannot see inside Index's
+    text content, which reports a refusal ("too vague") as `{"success": false}`
+    with a status of `ok`, so a `success` key, when present, must be the
+    boolean `true` — the string `"false"`, `null`, `1` all reject.
     """
-    if str(status or "ok").strip().lower() in _FAILED_STATUSES:
+    if status is not None and str(status).strip().lower() not in _OK_STATUSES:
         return False
     if isinstance(payload, dict):
-        if payload.get("success") is False:
+        if "success" in payload and payload["success"] is not True:
             return False
         if payload.get("error") and not payload.get("data"):
             return False
@@ -325,8 +334,16 @@ def plan_index(tool: str, args: dict, payload: Any, *, cron: bool = False) -> li
     if intent_id is None:
         # An update or a delete of an intention we cannot name joins nothing.
         return []
-    result_status = intent.get("status") if intent and _first_id(intent) in (None, intent_id) else None
-    status = normalise_status(args.get("status")) or normalise_status(result_status)
+    same_intent = intent is not None and _first_id(intent) in (None, intent_id)
+    arg_status = normalise_status(args.get("status"))
+    result_status = normalise_status(intent.get("status")) if intent is not None and same_intent else None
+    # Either side saying the intent is gone is a withdrawal.
+    if arg_status in WITHDRAWN_STATUSES:
+        status: Optional[str] = arg_status
+    elif result_status in WITHDRAWN_STATUSES:
+        status = result_status
+    else:
+        status = arg_status or result_status
 
     if tool == "delete_intent" or status in WITHDRAWN_STATUSES:
         return [
@@ -342,7 +359,7 @@ def plan_index(tool: str, args: dict, payload: Any, *, cron: bool = False) -> li
     if text is None:
         # A status-only update changes no text: nothing new to version.
         return []
-    summary = _text(intent.get("summary")) if intent and _first_id(intent) in (None, intent_id) else None
+    summary = _text(intent.get("summary")) if intent is not None and same_intent else None
     return [
         IntentionCall(
             "intention.updated",
