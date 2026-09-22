@@ -30,21 +30,34 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Split and push
+      # Auth is a write deploy key on Edge-City/agentvillage-skills (not a
+      # personal token): the key is tied to the mirror repo, not to a person,
+      # and it can push to nothing else. Rotate by generating a new keypair,
+      # replacing the deploy key on the mirror and the secret here.
+      - name: Load the mirror deploy key
         env:
-          GH_PAT: ${{ secrets.SKILLS_SYNC_PAT }}
+          DEPLOY_KEY: ${{ secrets.SKILLS_SYNC_DEPLOY_KEY }}
         run: |
           set -euo pipefail
-          if [ -z "${GH_PAT:-}" ]; then
-            echo "❌ SKILLS_SYNC_PAT secret is not set."
+          if [ -z "${DEPLOY_KEY:-}" ]; then
+            echo "❌ SKILLS_SYNC_DEPLOY_KEY secret is not set."
             exit 1
           fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/skills_sync
+          chmod 600 ~/.ssh/skills_sync
+          ssh-keyscan -t ed25519,rsa github.com >> ~/.ssh/known_hosts 2>/dev/null
+          echo "GIT_SSH_COMMAND=ssh -i ~/.ssh/skills_sync -o IdentitiesOnly=yes" >> "$GITHUB_ENV"
+
+      - name: Split and push
+        run: |
+          set -euo pipefail
           BRANCH="${GITHUB_REF_NAME}"
           echo "Splitting skills/ on $BRANCH..."
           SPLIT_SHA=$(git subtree split --prefix=skills "$BRANCH")
           echo "Split SHA: $SPLIT_SHA"
 
           git push --force \
-            "https://x-access-token:${GH_PAT}@github.com/Edge-City/agentvillage-skills.git" \
+            "git@github.com:Edge-City/agentvillage-skills.git" \
             "${SPLIT_SHA}:refs/heads/${BRANCH}"
           echo "✓ pushed to Edge-City/agentvillage-skills ($BRANCH)"
