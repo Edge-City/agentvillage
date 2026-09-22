@@ -144,3 +144,20 @@ def test_a_failing_subscriber_does_not_raise(plugin, ctx, monkeypatch):
 
     monkeypatch.setattr(plugin._COLLECTOR, "emit", boom)
     recalled(ctx)  # FakeCtx does not swallow; the guard must
+
+
+def test_metadata_capture_keeps_counts_and_surface_only(plugin, ctx, monkeypatch, av):
+    monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
+    monkeypatch.setenv("AV_CAPTURE", "metadata")
+    plugin.register(ctx)
+    recalled(ctx)
+    payload = recalled_events(plugin, av)[0]["payload"]
+    assert payload == {"query_hash": None, "hit_count": 3, "top_score": None, "surface": "telegram"}
+
+
+def test_metadata_capture_still_drops_a_malformed_publish(plugin, ctx, monkeypatch, av):
+    monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
+    monkeypatch.setenv("AV_CAPTURE", "metadata")
+    plugin.register(ctx)
+    recalled(ctx, query_hash=QUERY_TEXT)
+    assert recalled_events(plugin, av) == []

@@ -519,7 +519,8 @@ HOOK_BODIES = {
 # `<plugin>:<name>` (the namespace is forced to the emitter), and
 # `ctx.subscribe("<plugin>:<name>", cb)` delivers it as `cb(**payload)` on a
 # host-owned worker thread, off the request path (`hermes_cli/plugins.py`
-# `emit`/`subscribe`, `hermes_cli/plugins_dispatch.py` `_dispatch_event`). That
+# `emit`/`subscribe`/`_dispatch_event` at 82e6c46; the dispatcher moved to
+# `hermes_cli/plugins_dispatch.py` by 0.21.3). That
 # is how an opt-in skill plugin reaches the envelope and the buffer without
 # importing this module. Each subscription rebuilds its payload from an
 # explicit allowlist: whatever else the publisher sends is dropped.
@@ -564,6 +565,11 @@ def _on_memory_recalled(collector: Collector, **kwargs: Any) -> None:
     payload = memory_recalled_payload(kwargs)
     if payload is None:
         return
+    if collector.config.capture == "metadata":
+        # Counts and surface only: the hash and the score both describe the
+        # query's content, which `metadata` keeps in the sandbox.
+        payload["query_hash"] = None
+        payload["top_score"] = None
     session_id = kwargs.get("session_id")
     collector.emit("memory.recalled", payload, session_id=str(session_id) if session_id else None)
 
