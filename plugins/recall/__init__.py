@@ -7,7 +7,7 @@ through a SQLite FTS5 index kept at ``$HERMES_HOME/.recall/index.sqlite``.
 The index and the search live in ``skills/recall/scripts/recall.ts`` (Bun,
 ``bun:sqlite``). This module is the Hermes-aware shell around it:
 
-- the **group-session guard**, which needs the gateway's per-task session
+- the **main-session guard**, which needs the gateway's per-task session
   context and so can only be decided in-process;
 - the **tool registration** (``ctx.register_tool``) and the schema the model
   sees;
@@ -16,6 +16,9 @@ The index and the search live in ``skills/recall/scripts/recall.ts`` (Bun,
   as ``recall:memory.recalled`` for the ``av-events`` plugin to pick up. The
   payload is a keyed hash of the query, the hit count, the top score and the
   surface — never the query text or any snippet.
+
+Every tool result starts with the line ``[recall]`` (``RESULT_MARKER``): the
+research archive's redaction step keys on it to drop recall results.
 
 No LLM, no embeddings, no network. Nothing is ever written under ``memory/``.
 Python 3.11, standard library only. See ``skills/recall/README.md``.
@@ -26,7 +29,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -37,18 +42,25 @@ from typing import Any, Callable, Optional
 
 __version__ = "0.1.0"
 
+logger = logging.getLogger(__name__)
+
 TOOL_NAME = "recall"
 TOOLSET = "recall"
 #: Published as ``recall:memory.recalled`` — Hermes forces the plugin's own
 #: namespace onto every ``ctx.emit`` (``hermes_cli/plugins.py`` ``emit``).
 EVENT_NAME = "memory.recalled"
 
+#: First line of every tool result. The research archive drops tool messages
+#: that start with it (and any from the `recall` tool) — see the README.
+RESULT_MARKER = "[recall]"
+
 REFUSAL_REASON = "unavailable in group sessions"
-#: Chat types that are the owner's private surface. Anything else is refused;
-#: an unrecognised chat type is treated as shared (default-deny). Mirrors
-#: ``PRIVATE_CHAT_TYPES`` in ``recall.ts``, which enforces the same rule for a
-#: terminal invocation of the CLI.
-PRIVATE_CHAT_TYPES = frozenset({"", "dm", "private", "direct", "c2c"})
+#: One-to-one chat types: the main session, unless the run is a cron job.
+DIRECT_CHAT_TYPES = frozenset({"dm", "private", "direct", "c2c"})
+#: Surfaces that are the owner's own machine. An empty chat type is the main
+#: session only on one of these. Mirrors ``LOCAL_SURFACES`` in ``recall.ts``,
+#: which enforces the same rule for a terminal invocation of the CLI.
+LOCAL_SURFACES = frozenset({"cli", "tui", "desktop", "acp", "local"})
 
 #: Bounded vocabulary for the event's ``surface``: arbitrary platform strings
 #: never leave the sandbox.
@@ -63,13 +75,25 @@ SURFACE_BY_PLATFORM = {
 SURFACES = frozenset({"telegram", "desktop", "cron", "other", "unknown"})
 
 MAX_QUERY_CHARS = 500
+MAX_QUERY_TERMS = 16
+MAX_TERM_CHARS = 64
 QUERY_TIMEOUT_S = 15.0
 REBUILD_TIMEOUT_S = 120.0
 REBUILD_MIN_INTERVAL_S = 30.0
 #: Only these variables reach the Bun child: it needs no credentials, so it
 #: gets none of the gateway's API keys or tokens.
 CHILD_ENV_PASSTHROUGH = ("PATH", "HOME", "TZ", "LANG", "LC_ALL", "AV_RECALL_INDEX", "AV_RECALL_STATE_DB")
-FALSEY = frozenset({"0", "false", "no", "off"})
+#: The only values that turn a flag on. Anything else — `disabled`, `n`,
+#: `none`, a typo — is off.
+TRUTHY = frozenset({"1", "true", "yes", "on"})
+_SINCE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:T[0-9:.+\-Z]*)?$")
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+#: Unicode letters and digits: the same terms `queryTerms` in recall.ts extracts.
+_TERM_RE = re.compile(r"[^\W_]+", re.UNICODE)
+
+#: Times the query-hash key was (re)generated in this process. Logged as a
+#: count only; the key never is.
+KEY_REGENERATIONS = 0
 
 TOOL_SCHEMA: dict[str, Any] = {
     "name": TOOL_NAME,
@@ -81,7 +105,8 @@ TOOL_SCHEMA: dict[str, Any] = {
         "the user, when they refer to something from earlier, or when a note from weeks ago "
         "might matter; a term you use about them must appear verbatim in a result. Read the "
         "referenced lines for more context. Never copy results into memory/ or any other "
-        "file. Unavailable in group chats: it returns status `unavailable` there, with no data."
+        "file. Only in your private conversation with your human: anywhere else (group chats, "
+        "scheduled jobs) it returns status `unavailable`, with no data."
     ),
     "parameters": {
         "type": "object",
@@ -120,9 +145,18 @@ def hermes_home() -> Path:
         return Path.home() / ".hermes"
 
 
+def truthy(value: Optional[str]) -> bool:
+    return (value or "").strip().lower() in TRUTHY
+
+
 def enabled() -> bool:
-    """Kill switch. Re-read on every call so a `.env` flip needs no restart."""
-    return (os.environ.get("AV_RECALL_ENABLED") or "1").strip().lower() not in FALSEY
+    """Runtime kill switch, re-read on every call so a `.env` flip needs no restart.
+
+    Unset means on: the plugin only loads when it is listed in
+    `plugins.enabled`, which is the opt-in. Set, only `1|true|yes|on` is on.
+    """
+    raw = os.environ.get("AV_RECALL_ENABLED")
+    return True if raw is None else truthy(raw)
 
 
 def script_path(home: Path) -> Path:
@@ -143,18 +177,38 @@ def bun_path() -> Optional[str]:
     return None
 
 
-def child_env(home: Path, chat_type: str) -> dict[str, str]:
+def child_env(home: Path, session: "SessionView") -> dict[str, str]:
     env = {name: os.environ[name] for name in CHILD_ENV_PASSTHROUGH if name in os.environ}
     env["HERMES_HOME"] = str(home)
-    # The CLI enforces the same guard; hand it the verdict we resolved here so a
-    # stale process-wide mirror cannot disagree with the task-local context.
-    env["HERMES_SESSION_CHAT_TYPE"] = chat_type
+    # The CLI enforces the same guard; hand it the verdict inputs resolved here
+    # so a stale process-wide mirror cannot disagree with the task-local context.
+    env["HERMES_SESSION_CHAT_TYPE"] = session.chat_type or ""
+    if session.surface_ident:
+        env["HERMES_SESSION_PLATFORM"] = session.surface_ident
     return env
 
 
 # --------------------------------------------------------------------------
 # Session context
 # --------------------------------------------------------------------------
+
+
+def _session_module():
+    try:
+        from gateway import session_context as sc  # noqa: PLC0415 - absent outside Hermes
+    except Exception:  # noqa: BLE001
+        return None
+    return sc
+
+
+def _engaged() -> bool:
+    sc = _session_module()
+    if sc is None:
+        return False
+    try:
+        return bool(sc.session_context_engaged())
+    except Exception:  # noqa: BLE001 - unknowable: assume a gateway
+        return True
 
 
 def _session_value(name: str) -> Optional[str]:
@@ -166,9 +220,8 @@ def _session_value(name: str) -> Optional[str]:
     the environment mirror is last-writer-wins across concurrent sessions and
     may belong to someone else's turn, so the value is unknowable.
     """
-    try:
-        from gateway import session_context as sc  # noqa: PLC0415 - absent outside Hermes
-    except Exception:  # noqa: BLE001
+    sc = _session_module()
+    if sc is None:
         return os.environ.get(name, "")
     try:
         var = sc._VAR_MAP.get(name)  # noqa: SLF001 - same bridge tools/environments/local.py uses
@@ -186,14 +239,68 @@ def _session_value(name: str) -> Optional[str]:
             return None
 
 
-def chat_type() -> Optional[str]:
-    value = _session_value("HERMES_SESSION_CHAT_TYPE")
+class SessionView:
+    """The session facts the guard needs, read once per call."""
+
+    def __init__(self, session_id: Any = None) -> None:
+        self.chat_type = _norm(_session_value("HERMES_SESSION_CHAT_TYPE"))
+        self.cron_flag = _norm(_session_value("HERMES_CRON_SESSION"))
+        raw_idents = [
+            os.environ.get("HERMES_PLATFORM", ""),
+            _session_value("HERMES_SESSION_PLATFORM"),
+            _session_value("HERMES_SESSION_SOURCE"),
+        ]
+        self.unknown = self.chat_type is None or any(v is None for v in raw_idents)
+        self.idents = [v for v in (_norm(i) for i in raw_idents) if v]
+        bound_id = _session_value("HERMES_SESSION_ID") or ""
+        self.session_ids = [str(session_id or ""), bound_id]
+        self.engaged = _engaged()
+
+    @property
+    def is_cron(self) -> bool:
+        return (
+            self.cron_flag == "1"
+            or any(sid.startswith("cron_") for sid in self.session_ids)
+            or "cron" in self.idents
+        )
+
+    @property
+    def surface_ident(self) -> str:
+        return self.idents[0] if self.idents else ""
+
+    def is_main(self) -> bool:
+        """The owner's main session, and nothing else.
+
+        - A cron run never is: Hermes cron binds an empty chat type and delivers
+          to the chat the job was created in, which may be a group.
+        - A one-to-one chat type (``dm``, …) is.
+        - An empty chat type is only on a local surface (cli, tui, desktop,
+          acp). With no surface bound at all it is the plain CLI — unless this
+          process is a gateway, where an unbound turn is refused.
+        - Everything else (group, forum, channel, api_server, webhook, a value
+          never seen before) is not.
+        """
+        if self.unknown or self.is_cron:
+            return False
+        if self.chat_type in DIRECT_CHAT_TYPES:
+            return True
+        if self.chat_type != "":
+            return False
+        if not self.idents:
+            return not self.engaged
+        return all(ident in LOCAL_SURFACES for ident in self.idents)
+
+
+def _norm(value: Optional[str]) -> Optional[str]:
     return None if value is None else value.strip().lower()
 
 
-def is_private_session() -> bool:
-    value = chat_type()
-    return value is not None and value in PRIVATE_CHAT_TYPES
+def chat_type() -> Optional[str]:
+    return _norm(_session_value("HERMES_SESSION_CHAT_TYPE"))
+
+
+def is_private_session(session_id: Any = None) -> bool:
+    return SessionView(session_id).is_main()
 
 
 def surface() -> str:
@@ -212,28 +319,72 @@ def surface() -> str:
 # --------------------------------------------------------------------------
 
 
+def query_terms(text: str) -> list[str]:
+    """Lowercased, de-duplicated word terms: `queryTerms` in recall.ts."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for match in _TERM_RE.findall(text.lower()):
+        term = match[:MAX_TERM_CHARS]
+        if term in seen:
+            continue
+        seen.add(term)
+        out.append(term)
+        if len(out) >= MAX_QUERY_TERMS:
+            break
+    return out
+
+
 def _normalise_query(text: str) -> str:
-    return " ".join(text.lower().split())
+    """What the index actually searched for, so `Priya's battery?` and
+    `priya s battery` count as the same query."""
+    return " ".join(query_terms(text))
 
 
 def _hash_key(home: Path) -> bytes:
-    """Per-tenant random key, created on first use, mode 0600, outside memory/.
+    """Per-tenant random key at `.recall/query-hash.key`, mode 0600, outside memory/.
 
     A plain SHA-256 of a short query is reversible by dictionary ("maya",
     "cofounder"). Keying it keeps repeat-query counting within a tenant while
     making the hash useless to anyone without the sandbox.
+
+    Created atomically: written to a temp file, then linked into place, so
+    concurrent first uses agree on one key and no reader ever sees a partial
+    file. A key that is not exactly 64 hex characters is replaced.
     """
+    global KEY_REGENERATIONS
     directory = home / ".recall"
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     path = directory / "query-hash.key"
     try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
-        key = path.read_text(encoding="ascii").strip()
-        return bytes.fromhex(key)
-    key = secrets.token_hex(32)
-    with os.fdopen(fd, "w", encoding="ascii") as handle:
-        handle.write(key)
+        existing = path.read_text(encoding="ascii").strip()
+    except (OSError, UnicodeDecodeError):
+        existing = ""
+    if _HEX64.match(existing):
+        return bytes.fromhex(existing)
+
+    replacing = path.exists()
+    temp = directory / f".query-hash.key.{os.getpid()}.{secrets.token_hex(4)}"
+    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="ascii") as handle:
+            handle.write(secrets.token_hex(32))
+        if replacing:
+            os.replace(temp, path)
+        else:
+            try:
+                os.link(temp, path)  # fails if another process won the race
+            except FileExistsError:
+                pass
+    finally:
+        try:
+            os.unlink(temp)
+        except FileNotFoundError:
+            pass
+    KEY_REGENERATIONS += 1
+    logger.info("recall: query-hash key %s (count=%d)", "regenerated" if replacing else "created", KEY_REGENERATIONS)
+    key = path.read_text(encoding="ascii").strip()
+    if not _HEX64.match(key):
+        raise ValueError("query-hash key unreadable")
     return bytes.fromhex(key)
 
 
@@ -269,6 +420,11 @@ def _result(status: str, reason: str, **extra: Any) -> dict:
     return {"status": status, "reason": reason, "hit_count": 0, "hits": [], **extra}
 
 
+def render(result: dict) -> str:
+    """The tool result text: the marker line, then the JSON."""
+    return f"{RESULT_MARKER}\n{json.dumps(result, ensure_ascii=False)}"
+
+
 def _compact(raw: dict) -> dict:
     """What the model sees: the hits and just enough framing to use them."""
     hits = []
@@ -292,6 +448,8 @@ def _compact(raw: dict) -> dict:
         "since": raw.get("since"),
         "hit_count": raw.get("hit_count", len(hits)),
         "top_score": raw.get("top_score"),
+        # The index was not fully caught up when this answered (rebuild budget).
+        "partial": raw.get("partial") is True,
         "hits": hits,
     }
 
@@ -314,19 +472,19 @@ class Recall:
     def handle(self, args: Any, **kwargs: Any) -> str:
         """Hermes tool handler: ``handler(args, task_id=..., session_id=..., ...)``.
 
-        Always returns a JSON string. Any failure is a whole-result status with
-        no hits — never partial data.
+        Always returns ``[recall]`` then a JSON object. Any failure is a
+        whole-result status with no hits — never partial data.
         """
         try:
-            return json.dumps(self._handle(args, kwargs), ensure_ascii=False)
+            return render(self._handle(args, kwargs))
         except Exception:  # noqa: BLE001 - a tool must answer, not raise
-            return json.dumps(_result("error", "internal_error"))
+            return render(_result("error", "internal_error"))
 
     def _handle(self, args: Any, kwargs: dict) -> dict:
         if not enabled():
             return _result("unavailable", "recall is disabled on this agent")
-        chat = chat_type()
-        if chat is None or chat not in PRIVATE_CHAT_TYPES:
+        session = SessionView(kwargs.get("session_id"))
+        if not session.is_main():
             return _result("unavailable", REFUSAL_REASON)
 
         args = args if isinstance(args, dict) else {}
@@ -336,8 +494,15 @@ class Recall:
         if len(text) > MAX_QUERY_CHARS:
             return _result("error", "query_too_long")
         since = args.get("since")
-        if since is not None and not isinstance(since, str):
-            return _result("error", "invalid_since")
+        since_date = None
+        if since is not None:
+            if not isinstance(since, str):
+                return _result("error", "invalid_since")
+            if since.strip():
+                match = _SINCE_RE.match(since.strip())
+                if not match:
+                    return _result("error", "invalid_since")
+                since_date = match.group(1)
 
         home = hermes_home()
         script = script_path(home)
@@ -348,10 +513,10 @@ class Recall:
             return _result("unavailable", "bun runtime not found")
 
         argv = [bun, str(script), "query", "--query-stdin"]
-        if since and since.strip():
-            argv += ["--since", since.strip()]
+        if since_date:
+            argv += ["--since", since_date]
         try:
-            proc = self._runner()(argv, child_env(home, chat), text, QUERY_TIMEOUT_S, str(home))
+            proc = self._runner()(argv, child_env(home, session), text, QUERY_TIMEOUT_S, str(home))
         except subprocess.TimeoutExpired:
             return _result("error", "timeout")
         except OSError:
@@ -378,7 +543,8 @@ class Recall:
         """Publish ``memory.recalled`` on the plugin bus. Never raises.
 
         The payload is built from an explicit field list: nothing from the
-        query or the hits except counts and a keyed hash can reach it.
+        query or the hits except counts and a keyed hash can reach it, and
+        `partial` stays out of it.
         """
         emit = getattr(self.ctx, "emit", None)
         if not callable(emit):
@@ -402,8 +568,8 @@ class Recall:
     def request_rebuild(self) -> bool:
         """Start an incremental rebuild off-thread. Single-flight, debounced.
 
-        A skipped request costs nothing: every query rebuilds incrementally
-        before it searches, so the index is never stale when read.
+        A skipped request costs little: every query rebuilds incrementally
+        (within a budget) before it searches.
         """
         if not enabled():
             return False
@@ -423,9 +589,10 @@ class Recall:
             bun = bun_path()
             if bun is None or not script.is_file():
                 return
-            # `rebuild` returns counts only, so it may run whatever session
-            # just ended; the chat type handed down is the empty, private one.
-            self._runner()([bun, str(script), "rebuild"], child_env(home, ""), None, REBUILD_TIMEOUT_S, str(home))
+            # `rebuild` returns counts only and needs no session verdict.
+            env = {name: os.environ[name] for name in CHILD_ENV_PASSTHROUGH if name in os.environ}
+            env["HERMES_HOME"] = str(home)
+            self._runner()([bun, str(script), "rebuild"], env, None, REBUILD_TIMEOUT_S, str(home))
         except Exception:  # noqa: BLE001 - off-thread, fail open
             pass
         finally:
@@ -469,13 +636,18 @@ def register(ctx) -> None:
 
 __all__ = [
     "register",
+    "render",
     "Recall",
+    "SessionView",
     "TOOL_NAME",
     "TOOL_SCHEMA",
     "EVENT_NAME",
-    "PRIVATE_CHAT_TYPES",
+    "RESULT_MARKER",
+    "DIRECT_CHAT_TYPES",
+    "LOCAL_SURFACES",
     "SURFACES",
     "query_hash",
+    "query_terms",
     "is_private_session",
     "surface",
     "__version__",

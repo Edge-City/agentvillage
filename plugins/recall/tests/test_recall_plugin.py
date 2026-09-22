@@ -25,8 +25,15 @@ def snapshot(directory: Path) -> dict[str, str]:
     return out
 
 
+def parse(text: str) -> dict:
+    """Every result is the `[recall]` marker line, then one JSON object."""
+    marker, _, body = text.partition("\n")
+    assert marker == "[recall]", text[:40]
+    return json.loads(body)
+
+
 def call(ctx, args, **kwargs) -> dict:
-    return json.loads(ctx.call(args, task_id="t", session_id="sess-1", user_task="u", **kwargs))
+    return parse(ctx.call(args, task_id="t", session_id="sess-1", user_task="u", **kwargs))
 
 
 class NeverRun:
@@ -255,15 +262,25 @@ def _fake_gateway(monkeypatch, *, engaged: bool, bound: dict):
     monkeypatch.setitem(sys.modules, "gateway.session_context", sc)
 
 
+def bind(*, chat_type="", platform="", source="", cron=""):
+    """Every session variable at once, the way `set_session_vars` binds them."""
+    return {
+        "HERMES_SESSION_CHAT_TYPE": chat_type,
+        "HERMES_SESSION_PLATFORM": platform,
+        "HERMES_SESSION_SOURCE": source,
+        "HERMES_CRON_SESSION": cron,
+    }
+
+
 def test_task_local_group_context_wins_over_a_dm_env_mirror(recall, monkeypatch):
     monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "dm")  # someone else's turn
-    _fake_gateway(monkeypatch, engaged=True, bound={"HERMES_SESSION_CHAT_TYPE": "group"})
+    _fake_gateway(monkeypatch, engaged=True, bound=bind(chat_type="group", platform="telegram"))
     assert recall.is_private_session() is False
 
 
 def test_task_local_dm_context_wins_over_a_group_env_mirror(recall, monkeypatch):
     monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "group")
-    _fake_gateway(monkeypatch, engaged=True, bound={"HERMES_SESSION_CHAT_TYPE": "dm"})
+    _fake_gateway(monkeypatch, engaged=True, bound=bind(chat_type="dm", platform="telegram"))
     assert recall.is_private_session() is True
 
 
@@ -342,7 +359,7 @@ def test_bad_arguments_are_errors(recall, ctx, home, args):
     runner = NeverRun()
     recall.register(ctx)
     recall._RECALL.runner = runner
-    result = json.loads(ctx.call(args))
+    result = parse(ctx.call(args))
     assert result["status"] == "error"
     assert result["hits"] == []
 
