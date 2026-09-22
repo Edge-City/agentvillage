@@ -1,8 +1,12 @@
 name: post-merge
 
+# Manual only. The push trigger was removed on 2026-09-21: every push to
+# main (including the reference-sync bot's several-a-day commits) called
+# /hooks/sync, which re-syncs the overlay and restarts every live gateway.
+# Rollout is now an explicit per-tenant update from the control plane; run
+# this workflow by hand if a fleet-wide refresh is really wanted.
+# Rollback: restore `push: branches: [main]` under `on:`.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 jobs:
