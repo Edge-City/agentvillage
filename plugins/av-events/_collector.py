@@ -155,6 +155,7 @@ class SessionState:
         "input_tokens",
         "output_tokens",
         "pending_llm",
+        "intention_calls",
         "ended",
         "failure_count",
         "failures_by_hook",
@@ -179,6 +180,10 @@ class SessionState:
         self.output_tokens = 0
         #: Hashes and request stamps left by pre_api_request for post to use.
         self.pending_llm: dict[str, dict] = {}
+        #: `tool_call_id`s that already produced an intention event, so a
+        #: post-tool hook that fires twice for one call cannot record the
+        #: intention twice. Bounded; see `MAX_INTENTION_CALLS`.
+        self.intention_calls: "OrderedDict[str, bool]" = OrderedDict()
         self.ended = False
         self.failure_count = 0
         self.failures_by_hook: dict[str, int] = {}
@@ -231,6 +236,10 @@ class Collector:
         #: `plugin.degraded` events owed but not yet buffered, because the hook
         #: that tripped the breaker was one we must not do I/O in.
         self._pending_degraded: list[tuple[str, dict]] = []
+        #: Delegated subagent session id -> the session that spawned it, from
+        #: `subagent_start`. Memory only, bounded like the session table; it is
+        #: where `parent_run_id` comes from (README "Intention capture").
+        self._parents: "OrderedDict[str, str]" = OrderedDict()
         #: Test seam. When set, used in place of `post_events`.
         self.sender: Optional[Callable[[str, str, list], SendResult]] = None
 
@@ -363,6 +372,25 @@ class Collector:
             return
         with self._lock:
             self.reload_config()
+
+    def note_parent(self, child_session_id: Any, parent_session_id: Any) -> None:
+        """Remember which session delegated to a subagent. Pure memory."""
+        if not child_session_id or not parent_session_id:
+            return
+        child, parent = str(child_session_id), str(parent_session_id)
+        if child == parent:
+            return
+        with self._lock:
+            self._parents[child] = parent
+            self._parents.move_to_end(child)
+            while len(self._parents) > MAX_TRACKED_SESSIONS:
+                self._parents.popitem(last=False)
+
+    def parent_of(self, session_id: Optional[str]) -> Optional[str]:
+        """The session that delegated to `session_id`, or None if it was not a subagent."""
+        if not session_id:
+            return None
+        return self._parents.get(session_id)
 
     def peek_session(self, session_id: Optional[str]) -> Optional[SessionState]:
         """The in-memory state for a session, or None. Never creates, never I/O."""
