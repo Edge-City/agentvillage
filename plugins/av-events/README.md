@@ -115,6 +115,7 @@ backlog can differ from `emitted_at` by minutes. Every `marts` time series is bu
 | `intention.captured` | `post_tool_call` on Index `create_intent`, or `record_intention(action="capture")` | `text_hash`, `summary_hash`, `index_intent_id`, `source`, `conditional`, `capture_path`, `index_status`, `parent_session_id`, plus `text_length` / `summary_length` above `metadata` |
 | `intention.updated` | `post_tool_call` on Index `update_intent` with a new `description`, or `record_intention` naming an id | as above |
 | `intention.withdrawn` | `post_tool_call` on Index `update_intent` to `archived`/`deleted`/`withdrawn`, or `delete_intent`, or `record_intention(action="archive"\|"withdraw"\|"delete")` | as above; both hashes null |
+| `memory.recalled` | `recall:memory.recalled` on the plugin event bus (published by `plugins/recall`) | `query_hash`, `hit_count`, `top_score`, `surface`; the hash and score are null in `metadata` — see below |
 
 `prompt.registered` is content-addressed against a seen-set at `$HERMES_HOME/av-events/seen.json`,
 so the same tool schemas register once and never again, across sessions and process restarts. The
@@ -135,6 +136,27 @@ pair out with `"unknown"`, so a `session.started`/`session.ended` pair is always
 **`evidence_class` is `agent_report` for everything.** Note that spec §4.1 caps several of these
 types at `platform_record` while scenario 4 requires ingest to downgrade any class a plugin token
 claims. The two disagree; this code follows scenario 4, which is the enforceable one.
+
+### Events from other plugins
+
+An opt-in skill plugin reports through this plugin rather than growing its own buffer and token.
+Hermes has a plugin event bus: `ctx.emit(name, payload)` publishes `<plugin>:<name>` (the namespace
+is forced to the emitter, so one plugin cannot publish as another), and `ctx.subscribe(event, cb)`
+delivers it as `cb(**payload)` on a host-owned worker thread, off the request path
+(`hermes_cli/plugins.py` `emit`/`subscribe`/`_dispatch_event`/`_deliver_event` at `82e6c46`, the
+last commit before 2026-09-01; by `0.21.3` / 2026.9.14 the last two moved to
+`hermes_cli/plugins_dispatch.py`). `register()` subscribes only when `ctx.subscribe` exists.
+
+Each subscription is wrapped in the same `guarded` decorator as the hooks, so the kill switches, the
+failure breaker and the hook stats apply to it (`AV_HOOKS_DISABLED=memory_recalled` turns it off).
+Its payload is **rebuilt from an allowlist**, never passed through:
+
+| Bus event | Emits | Payload rule |
+|---|---|---|
+| `recall:memory.recalled` | `memory.recalled` | `query_hash` must be 64 lowercase hex characters (a publisher that sends the query itself is dropped, not hashed here); `hit_count` a non-negative int; `top_score` a finite number or null, rounded to 4 places; `surface` one of `telegram`, `desktop`, `cron`, `other`, `unknown` (anything else becomes `other`). `session_id` becomes the envelope ref. Every other field the publisher sends is discarded. In `metadata` capture `query_hash` and `top_score` are null; `hit_count` and `surface` stay. |
+
+`memory.recalled` is not yet in the spec §4.1 catalogue; ingest quarantines an unknown type rather
+than dropping it (§2.1), so the catalogue row and payload schema are owed before its data is usable.
 
 ---
 

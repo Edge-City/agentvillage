@@ -14,6 +14,8 @@ Python 3.11, standard library only. See README.md.
 
 from __future__ import annotations
 
+import math
+import re
 import time
 from typing import Any, Optional
 
@@ -510,6 +512,88 @@ HOOK_BODIES = {
 }
 
 
+# --------------------------------------------------------------------------
+# Events published by other Agent Village plugins
+#
+# Hermes has a plugin event bus: `ctx.emit(name, payload)` publishes
+# `<plugin>:<name>` (the namespace is forced to the emitter), and
+# `ctx.subscribe("<plugin>:<name>", cb)` delivers it as `cb(**payload)` on a
+# host-owned worker thread, off the request path (`hermes_cli/plugins.py`
+# `emit`/`subscribe`/`_dispatch_event` at 82e6c46; the dispatcher moved to
+# `hermes_cli/plugins_dispatch.py` by 0.21.3). That
+# is how an opt-in skill plugin reaches the envelope and the buffer without
+# importing this module. Each subscription rebuilds its payload from an
+# explicit allowlist: whatever else the publisher sends is dropped.
+# --------------------------------------------------------------------------
+
+#: Published by `plugins/recall` after a successful `recall` tool call.
+MEMORY_RECALLED_BUS_EVENT = "recall:memory.recalled"
+MEMORY_RECALLED_SURFACES = frozenset({"telegram", "desktop", "cron", "other", "unknown"})
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def memory_recalled_payload(kwargs: dict) -> Optional[dict]:
+    """The only four fields `memory.recalled` may carry, or None if malformed.
+
+    `query_hash` must be a 64-char lowercase hex digest, so a publisher that
+    passes the query itself (or anything else) is refused outright rather than
+    hashed or truncated here.
+    """
+    query_hash = kwargs.get("query_hash")
+    if not isinstance(query_hash, str) or not _HEX64.match(query_hash):
+        return None
+    hit_count = kwargs.get("hit_count")
+    if isinstance(hit_count, bool) or not isinstance(hit_count, int) or hit_count < 0:
+        return None
+    top_score = kwargs.get("top_score")
+    if top_score is not None:
+        if isinstance(top_score, bool) or not isinstance(top_score, (int, float)) or not math.isfinite(top_score):
+            return None
+        top_score = round(float(top_score), 4)
+    surface = kwargs.get("surface")
+    if surface not in MEMORY_RECALLED_SURFACES:
+        surface = "other"
+    return {
+        "query_hash": query_hash,
+        "hit_count": hit_count,
+        "top_score": top_score,
+        "surface": surface,
+    }
+
+
+def _on_memory_recalled(collector: Collector, **kwargs: Any) -> None:
+    payload = memory_recalled_payload(kwargs)
+    if payload is None:
+        return
+    if collector.config.capture == "metadata":
+        # Counts and surface only: the hash and the score both describe the
+        # query's content, which `metadata` keeps in the sandbox.
+        payload["query_hash"] = None
+        payload["top_score"] = None
+    session_id = kwargs.get("session_id")
+    collector.emit("memory.recalled", payload, session_id=str(session_id) if session_id else None)
+
+
+#: Bus event -> (stats/kill-switch name for `guarded`, body).
+#: `AV_HOOKS_DISABLED=memory_recalled` turns this one off like any hook.
+SUBSCRIPTION_BODIES = {
+    MEMORY_RECALLED_BUS_EVENT: ("memory_recalled", _on_memory_recalled),
+}
+
+
+def build_subscriptions(collector_ref=_collector) -> dict:
+    """Wrap every bus subscriber in the same fail-open guard as the hooks."""
+    subscriptions = {}
+    for event, (name, body) in SUBSCRIPTION_BODIES.items():
+        wrapped = guarded(name, collector_ref)(body)
+        try:
+            del wrapped.__wrapped__
+        except AttributeError:
+            pass
+        subscriptions[event] = wrapped
+    return subscriptions
+
+
 def build_hooks(collector_ref=_collector) -> dict:
     """Wrap every hook body in the fail-open guard. One decorator, no exceptions."""
     hooks = {}
@@ -551,12 +635,25 @@ def register(ctx) -> None:
             ctx.register_hook(name, callback)
         except Exception:  # noqa: BLE001 - one bad hook name must not lose the rest
             continue
+    # The plugin event bus is optional: a Hermes without it simply never
+    # delivers events from other plugins.
+    subscribe = getattr(ctx, "subscribe", None)
+    if callable(subscribe):
+        for event, callback in build_subscriptions().items():
+            try:
+                subscribe(event, callback)
+            except Exception:  # noqa: BLE001
+                continue
     _REGISTERED = True
 
 
 __all__ = [
     "register",
     "build_hooks",
+    "build_subscriptions",
+    "memory_recalled_payload",
+    "MEMORY_RECALLED_BUS_EVENT",
+    "SUBSCRIPTION_BODIES",
     "Collector",
     "SPEC_HOOKS",
     "EXTRA_HOOKS",

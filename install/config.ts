@@ -164,3 +164,102 @@ export function configureAvEvents(): void {
   writeConfig(doc);
   console.log(`→ enabled plugin ${AV_EVENTS_PLUGIN}`);
 }
+
+export const RECALL_PLUGIN = "recall";
+
+/** The only values that turn a flag on. Anything else — `disabled`, `n`, `none`, a typo — is off. */
+const TRUTHY = new Set(["1", "true", "yes", "on"]);
+
+/**
+ * `AV_RECALL_ENABLED` from the process environment or, when it is absent
+ * there, from `$HERMES_HOME/.env` — the sidecar `/update` path runs the
+ * installer without sourcing that file. A variable present in the environment
+ * (even blank) is authoritative, as in `av-events`.
+ */
+function recallFlag(): string | undefined {
+  const fromEnv = process.env.AV_RECALL_ENABLED;
+  if (fromEnv !== undefined) return fromEnv;
+  const dotenv = join(hermesHome(), ".env");
+  if (!existsSync(dotenv)) return undefined;
+  let found: string | undefined;
+  for (const line of readFileSync(dotenv, "utf8").split(/\r?\n/)) {
+    const m = /^\s*(?:export\s+)?AV_RECALL_ENABLED\s*=(.*)$/.exec(line);
+    if (!m) continue;
+    found = dotenvValue(m[1] ?? ""); // last assignment wins, as python-dotenv does
+  }
+  return found;
+}
+
+/**
+ * One `.env` value, read the way python-dotenv (which Hermes uses) reads it:
+ * a single-quoted value is literal up to the closing quote; a double-quoted
+ * one honours backslash escapes up to the closing unescaped quote; anything
+ * after the closing quote (such as `# comment`) is ignored. An unquoted value
+ * ends at the first `#` that follows whitespace, and is trimmed.
+ * (`AV_RECALL_ENABLED` values are simple words; this covers what an operator
+ * writes, not every python-dotenv corner such as multi-line values.)
+ */
+export function dotenvValue(raw: string): string {
+  const text = raw.trim();
+  const quote = text[0];
+  if (quote === "'" || quote === '"') {
+    let out = "";
+    for (let i = 1; i < text.length; i++) {
+      const ch = text[i]!;
+      if (ch === quote) return out;
+      if (quote === '"' && ch === "\\" && i + 1 < text.length) {
+        const next = text[++i]!;
+        out += next === "n" ? "\n" : next === "t" ? "\t" : next;
+        continue;
+      }
+      out += ch;
+    }
+    return text; // unterminated: python-dotenv keeps the raw text
+  }
+  // python-dotenv: `re.sub(r"\s+#.*", "", value).rstrip()`.
+  return text.replace(/\s+#.*$/, "").trim();
+}
+
+/**
+ * The tenant's recall opt-in: `true` for `1|true|yes|on` (any case), `null`
+ * when unset or blank (not opted in, and nothing to undo), `false` for any
+ * other value.
+ */
+export function recallChoice(): boolean | null {
+  const raw = recallFlag()?.trim().toLowerCase();
+  if (!raw) return null;
+  return TRUTHY.has(raw);
+}
+
+/** Add or remove `recall` in `plugins.enabled`, leaving every other entry alone. */
+export function setRecallPluginEnabled(on: boolean): void {
+  const doc = readConfig();
+  const plugins = { ...((doc.plugins as Record<string, unknown>) ?? {}) };
+  const enabled = Array.isArray(plugins.enabled)
+    ? (plugins.enabled as unknown[]).filter((n) => typeof n === "string") as string[]
+    : [];
+  const next = on
+    ? (enabled.includes(RECALL_PLUGIN) ? enabled : [...enabled, RECALL_PLUGIN])
+    : enabled.filter((name) => name !== RECALL_PLUGIN);
+  if (!on && next.length === enabled.length && !Array.isArray(plugins.enabled)) return;
+  plugins.enabled = next;
+  doc.plugins = plugins;
+  writeConfig(doc);
+}
+
+/**
+ * Enable the opt-in `recall` plugin (DATA-83) for a tenant that asked for it,
+ * and disable it for one that explicitly opted out. A tenant that never set
+ * `AV_RECALL_ENABLED` is left alone, so recall never lands on the core loop
+ * by default. Idempotent. Skill staging and index removal live in
+ * `install_recall.ts`.
+ */
+export function configureRecall(): void {
+  const choice = recallChoice();
+  if (choice === null) {
+    console.log(`→ skipped plugin ${RECALL_PLUGIN} (opt-in: AV_RECALL_ENABLED=1)`);
+    return;
+  }
+  setRecallPluginEnabled(choice);
+  console.log(choice ? `→ enabled plugin ${RECALL_PLUGIN}` : `→ disabled plugin ${RECALL_PLUGIN} (AV_RECALL_ENABLED off)`);
+}
