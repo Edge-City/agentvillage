@@ -13,6 +13,7 @@ plugins/av-events/
   __init__.py      register(ctx) and the hook adapters — the only Hermes-aware module
   _collector.py    config, session bookkeeping, buffer flusher, fail-open decorator
   _core.py         env, uuid v7, canonical hashing, secret sanitiser, buffer, HTTP
+  _intentions.py   which tool calls record an intention, and which one (pure)
   tests/           pytest suite; drives a fake ctx, never imports Hermes
 ```
 
@@ -60,19 +61,25 @@ The ladder is about what leaves the sandbox, not about how much detail is record
 | Envelope, counters, token counts, latency | yes | yes | yes |
 | `tools_hash`, `system_prompt_hash` | yes | yes | yes |
 | Lengths (`system_prompt_length`, `assistant_content_chars`, …) | no | yes | yes |
-| Message text, tool arguments, tool results | never | never | never |
+| Intention `text_hash`, `summary_hash` | yes | yes | yes |
+| Intention `text_length`, `summary_length` | no | yes | yes |
+| Message text, intention text, tool arguments, tool results | never | never | never |
 | `prompt.registered` with the tool schemas and system prompt text | no | no | yes |
 
 `tools_hash` and `system_prompt_hash` are present in every mode because they describe the *agent's
 configuration*, not the participant. Message text, tool arguments and tool results never leave in
-any mode — this milestone does not emit `tool.call` at all.
+any mode — this milestone does not emit `tool.call` at all. The intention hashes are the one
+participant-derived value present in every mode: they are §4.1's required join keys for
+`core.intention_versions`. The intention text itself never leaves (see "Intention capture").
 
 Per spec §7.1 the mode is set per tenant from consent scope (`full` iff `scope.training`), by the
 control plane writing the sandbox environment. Nothing in this plugin decides it.
 
 **Hashing.** SHA-256 over canonical JSON:
 `json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)`. Key order in the input
-is irrelevant; any change to a tool's schema changes the hash.
+is irrelevant; any change to a tool's schema changes the hash. Text is encoded as UTF-8 with
+`errors="surrogatepass"`, so a lone surrogate hashes instead of raising; well-formed text hashes
+exactly as plain UTF-8.
 
 **Sanitiser.** Every string that leaves passes a secret-shape filter: Anthropic, OpenRouter and
 OpenAI key shapes, `Bearer …`, the Telegram bot-token shape, and the literal value of our own
@@ -105,6 +112,9 @@ backlog can differ from `emitted_at` by minutes. Every `marts` time series is bu
 | `prompt.registered` | `pre_api_request` | `hash`, `kind` ∈ `tools`\|`system_prompt`, `body`. `full` only, once per hash ever |
 | `plugin.degraded` | the guard | `hook`, `scope` ∈ `session`\|`process`, `error_count`, `errors_by_hook`, `hermes_version`, `last_error` |
 | `plugin.buffer_dropped` | the flusher | `reason`, `count`, `files`, `rejected_files`, `rejected_events`, `oldest_event_at`, `newest_event_at` |
+| `intention.captured` | `post_tool_call` on Index `create_intent`, or `record_intention(action="capture")` | `text_hash`, `summary_hash`, `index_intent_id`, `source`, `conditional`, `capture_path`, `index_status`, `parent_session_id`, plus `text_length` / `summary_length` above `metadata` |
+| `intention.updated` | `post_tool_call` on Index `update_intent` with a new `description`, or `record_intention` naming an id | as above |
+| `intention.withdrawn` | `post_tool_call` on Index `update_intent` to `archived`/`deleted`/`withdrawn`, or `delete_intent`, or `record_intention(action="archive"\|"withdraw"\|"delete")` | as above; both hashes null |
 
 `prompt.registered` is content-addressed against a seen-set at `$HERMES_HOME/av-events/seen.json`,
 so the same tool schemas register once and never again, across sessions and process restarts. The
@@ -125,6 +135,105 @@ pair out with `"unknown"`, so a `session.started`/`session.ended` pair is always
 **`evidence_class` is `agent_report` for everything.** Note that spec §4.1 caps several of these
 types at `platform_record` while scenario 4 requires ingest to downgrade any class a plugin token
 claims. The two disagree; this code follows scenario 4, which is the enforceable one.
+
+---
+
+## Intention capture
+
+Spec §4.1 (`intention.captured/updated/withdrawn`) and §7.1 ("Intention capture"). An intention
+exists only when a tool records it and the tool says it succeeded. The plugin does no
+natural-language detection and runs no classifier (categories come from `intention.classified`,
+server-side). Capture happens in `post_tool_call`; `pre_tool_call` is untouched (divergence 15).
+
+**Which calls.** Hermes names an MCP tool `mcp__<server>__<tool>` (`tools/mcp_tool.py`,
+`MCP_TOOL_NAME_PREFIX`, at `v2026.8.31`), and the installer names the Index server `index`, so the
+Index tools arrive as `mcp__index__create_intent` and so on. The bare name is also accepted. A tool
+of the same name on any other MCP server is ignored.
+
+| Tool | Event | `intention_id` |
+|---|---|---|
+| Index `create_intent` | `intention.captured` | Index's intent id, read from the result; no id, no event |
+| Index `update_intent` with a `description` | `intention.updated` | the `id` / `intentId` argument |
+| Index `update_intent` whose argument status or result status is `archived`\|`deleted`\|`withdrawn` | `intention.withdrawn` | the argument |
+| Index `update_intent` changing only the status | nothing | — |
+| Index `delete_intent` | `intention.withdrawn` | the argument |
+| `record_intention` | see the contract below | the argument, else (on a capture) the result's `intention_id`, else a uuid v7 minted here |
+
+Only a call Hermes reports with status `ok` (or no status) records anything: `error`, `blocked`,
+`timeout`, `cancelled` and any other status record nothing. An Index refusal records nothing
+either. Index reports "too vague" as `{"success": false, …}` inside the tool's text while Hermes
+reports `ok`, so the plugin unwraps the result and checks it: a `success` key, when present, must be
+the boolean `true`, and any other value (`"false"`, `null`, `1`) rejects the call. An update or withdrawal that does not name
+its intention is dropped.
+
+**Reading an Index create.** The result is unwrapped from Hermes's `{"result": <text>}`, preferring
+`structuredContent`. Hermes joins an MCP result's text blocks with `"\n"`, so the text is read line
+by line: only a line that starts with `{` (after indentation) is tried, from there on, and the first
+one that decodes is the payload. A `{` inside a sentence — "A good signal looks like {…}" — is never
+read as a result. The payload must be an object whose `success`, if present, is `true`, and the
+intent must be at `data.intent`, `data.intents` holding exactly one item, or `intent` at the top
+(a `structuredContent` copy). Anything else — no readable id, several intents, an id on `data`
+itself or at the top level — emits nothing. Plugin-minted ids are for `record_intention` only;
+an Index create is joined downstream by its `index_intent_id`, so one without it is not captured.
+A result over 256 KiB is not parsed at all.
+
+**Source.** In a cron session every intention is `ambient` — the nightly memory-signal sync calls
+`create_intent` with no participant in the loop. A cron session is one whose `on_session_start` said
+`platform="cron"`, or whose id has Hermes's `cron_<job>_<stamp>` form (`cron/scheduler.py`), or a
+subagent that a cron session delegated to, at any depth up to eight (from `subagent_start`).
+Outside cron, Index calls are `message`. `record_intention` passes `message`, `onboarding` or `ambient`;
+a missing or unknown value is `ambient`, the most restrictive. Hermes gives no session kind for
+onboarding, so `onboarding` comes only from `record_intention`'s argument; an Index create during
+the bootstrap ritual is `message`.
+
+**Payload.** `text_hash` is SHA-256 over the exact text the agent recorded (Index `description`,
+`record_intention` `text`); `summary_hash` the same over Index's `summary` from the result, or over
+`record_intention`'s `summary`. Nothing is normalised, so the poller gets the same value when it
+hashes the same Index field. `conditional` is null unless `record_intention` sets it. Not in §4.1:
+`capture_path` (`index_tool` \| `record_intention`); `index_status`, stripped and case-folded and
+limited to `active|archived|deleted|withdrawn|completed|unknown`, with anything else reported as
+`other`; and `parent_session_id`, the session that delegated to this one when it is a subagent
+(learned from `subagent_start`), else null. `text_length` and `summary_length` count characters
+(Python `len`, code points), not bytes. Every key is always present, and null when unknown.
+
+**No intention text in any mode, `full` included.** §7.1 says "with hashes only" and the
+measurement catalogue says "text in the archive only". The training export reads text from the
+archive (§8), not from events. For intentions, `full` sends exactly what `sanitized` sends.
+
+**Ids.** Every id that goes into the envelope or the payload — `intention_id`, `index_intent_id`,
+`tool_call_id` — must match `^[A-Za-z0-9._:-]{1,128}$`. An event whose `intention_id` or
+`index_intent_id` does not is not emitted; the drop is counted in memory by field
+(`Collector.intention_drops`) and the value is never kept. A `tool_call_id` that does not match is
+set to null and the event kept, since Hermes supplies it, not the agent.
+
+**Envelope.** `intention_id` is the funnel id (§4.2). `tool_call_id` is Hermes's. `run_id` is
+`task_id` when it differs from the session id, as for `llm.call`. `parent_run_id` is null; the
+delegating session is `payload.parent_session_id`. `occurred_at` is when the call returned, and
+`occurred_at_earliest` is that time minus the call's `duration_ms`.
+
+**No dedupe on `tool_call_id`.** Hermes fires `post_tool_call` once per execution, and some
+providers (llama.cpp) return the same `tool_call_id` for every call, so every successful call
+emits. Ingest dedupes on `event_id` (scenario 1): a uuid v7 fixed when the event is buffered, which
+a retried flush resends unchanged. A plugin-minted `intention_id` is fixed at the same moment.
+
+**`record_intention` contract.** The tool itself is not in this repository; the plugin only
+observes calls to it, whatever the server prefix.
+
+| `action` | `intention_id` argument | Event |
+|---|---|---|
+| `capture` | absent | `intention.captured`, id from the result's `intention_id`, else minted |
+| `capture` | present | `intention.updated` |
+| `update`, or absent | present | `intention.updated`, if `text` or `summary` is given; otherwise nothing |
+| `archive`, `withdraw`, `delete` | present | `intention.withdrawn` |
+| absent, `update`, `archive`, `withdraw`, `delete` | absent | nothing |
+| anything else | either | nothing |
+
+Other arguments: `text` (or `description`), `summary`, `source` ∈ `message|onboarding|ambient`,
+`conditional`, and `index_intent_id` when the Index copy's id is known. **The tool must return
+`intention_id` to the agent** — as `intention_id` at the top of its result or under `data` — because
+the agent needs it for every later update or withdrawal, and the plugin cannot hand it back: a
+`post_tool_call` observer's return is discarded. An id the plugin mints is recorded in the event and
+nowhere else.
 
 ---
 
@@ -163,6 +272,9 @@ Append-only JSONL under `$HERMES_HOME/av-events/buffer/`. Each process appends t
 `current-<pid>.jsonl`, rotated to a `<epoch_ms>-<pid>-<seq>.jsonl` batch after 50 events or 10
 seconds. The name carries the timestamp of the batch's *first* event, so a batch left behind by a
 crashed process is self-describing and still recoverable.
+
+A line is encoded before the file is opened, so one that cannot be encoded raises with nothing
+written, and the file descriptor is closed exactly once.
 
 Directories are created `0o700` and files `0o600` — this is per-tenant telemetry sitting in the
 agent's home directory.
@@ -262,8 +374,8 @@ names; all eight the spec names exist, plus `on_session_start`, `on_session_fina
 | `post_api_request` | `agent/conversation_loop.py:6993` | `api_request_id`, `usage`, `api_duration`, `finish_reason`, `response_model`, `assistant_content_chars`, `assistant_tool_call_count`, `provider`, `api_mode`, `started_at`, `ended_at` |
 | `api_request_error` | `run_agent.py:3130` | `api_request_id`, `error` (`{"type","message"}`), `status_code`, `retryable`, `retry_count`, `api_duration`, `started_at`, `ended_at`. Fired **instead of** `post_api_request` on a terminal failure |
 | `pre_tool_call` | `hermes_cli/plugins.py:6636` | `tool_name`, `args`, `session_id`, `task_id`, `turn_id`, `tool_call_id`, `api_request_id` |
-| `post_tool_call` | `model_tools.py:1220` | as above plus `result`, `duration_ms`, `status`, `error_type`, `error_message` |
-| `subagent_start` | `tools/delegate_tool.py:2197` | `parent_session_id`, `parent_turn_id`, `child_session_id`, `child_role`, `child_goal` |
+| `post_tool_call` | `model_tools.py:1220` | as above plus `result`, `duration_ms`, `status`, `error_type`, `error_message`. `tool_name` is the registry name (`mcp__index__create_intent`). `args` reflects any `modify` directive. `result` is a string, and for an MCP tool it is JSON `{"result": <text>, "structuredContent"?: …}` (`tools/mcp_tool.py`). `status` ∈ `ok`\|`error`\|`blocked` |
+| `subagent_start` | `tools/delegate_tool.py:2197` | `parent_session_id`, `parent_turn_id`, `child_session_id`, `child_role`, `child_goal`. The `child_session_id` → `parent_session_id` pair is kept for intention events' `payload.parent_session_id` |
 | `subagent_stop` | `tools/delegate_tool.py:3667` | adds `child_summary`, `child_status`, `tool_call_history`, `duration_ms` |
 
 `usage` on `post_api_request` is `normalize_usage(...)` as a dict (`run_agent.py:2890`) and carries
@@ -352,6 +464,14 @@ These are the divergences this milestone had to resolve. Each one is a decision 
     Hermes builds and sanitises that payload on every API call *only because we registered*. If
     latency becomes a concern, `AV_HOOKS_DISABLED=pre_api_request` turns it off at the cost of
     `tools_hash` / `system_prompt_hash`.
+15. **Intention capture is on `post_tool_call`, not `pre_tool_call`.** Spec §7.1 and DATA-27 say
+    `pre_tool_call`. That hook fails closed and has no result, so it has no Index intent id and no
+    sign of whether Index accepted the intent. See "Intention capture".
+16. **MCP tool names are prefixed.** Hermes registers Index's tools as `mcp__index__<tool>`, and the
+    intention path matches that form. `TOOL_CATEGORIES` in `_core.py` still lists bare names, so it
+    will need the same change when `tool.call` ships.
+17. **`delete_intent` is captured too.** §7.1 names only `create_intent` / `update_intent`. The Index
+    tool family also has `delete_intent`, and a deleted intent is the clearest withdrawal there is.
 
 ---
 
@@ -363,10 +483,12 @@ Out of scope, deliberately:
   store. Note there is **no cron hook** in `VALID_HOOKS` at all; a tail is the only route.
 - **Budget** — `run.budget_exceeded`, `AV_RUN_BUDGET_*`, `AV_BUDGET_MODE`. There is no budget hook
   either, and see divergence 9 for why the enforce path cannot be `pre_llm_call`.
-- **Intention capture** — `intention.captured/updated/withdrawn` from Index `create_intent` /
-  `update_intent` and the `record_intention` skill.
-- **`tool.call` events** — `pre_tool_call` / `post_tool_call` are registered and counted, but emit
-  nothing. Requires the frozen tool-category allowlist first.
+- **The `record_intention` tool itself** — the overlay skill or tool the agent calls. The plugin
+  observes it (see "Intention capture"). Registering it changes the agent's tool list and
+  behaviour, which makes it a product change: per `launch-guardrails-draft.md` it starts on the
+  dogfood tenants, rate-capped and behind a per-tenant kill switch.
+- **`tool.call` events** — `pre_tool_call` is registered and counted. `post_tool_call` emits only
+  the `intention.*` events above. `tool.call` needs the frozen tool-category allowlist first.
 - **`message.in/out`, `profile.updated`, `skill.enabled/disabled`**.
 - Anything server-side: ingest, dbt, pollers, classifiers.
 

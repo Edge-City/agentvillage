@@ -231,6 +231,13 @@ class Collector:
         #: `plugin.degraded` events owed but not yet buffered, because the hook
         #: that tripped the breaker was one we must not do I/O in.
         self._pending_degraded: list[tuple[str, dict]] = []
+        #: Delegated subagent session id -> the session that spawned it, from
+        #: `subagent_start`. Memory only, bounded like the session table; it is
+        #: where `parent_run_id` comes from (README "Intention capture").
+        self._parents: "OrderedDict[str, str]" = OrderedDict()
+        #: Intention events not emitted because an id failed the id pattern,
+        #: by field. A count only: the offending value is never kept.
+        self.intention_drops: dict[str, int] = {}
         #: Test seam. When set, used in place of `post_events`.
         self.sender: Optional[Callable[[str, str, list], SendResult]] = None
 
@@ -363,6 +370,30 @@ class Collector:
             return
         with self._lock:
             self.reload_config()
+
+    def note_parent(self, child_session_id: Any, parent_session_id: Any) -> None:
+        """Remember which session delegated to a subagent. Pure memory."""
+        if not child_session_id or not parent_session_id:
+            return
+        child, parent = str(child_session_id), str(parent_session_id)
+        if child == parent:
+            return
+        with self._lock:
+            self._parents[child] = parent
+            self._parents.move_to_end(child)
+            while len(self._parents) > MAX_TRACKED_SESSIONS:
+                self._parents.popitem(last=False)
+
+    def count_intention_drop(self, field: str, count: int = 1) -> None:
+        """Count intention events dropped for a malformed id. Pure memory."""
+        with self._lock:
+            self.intention_drops[field] = self.intention_drops.get(field, 0) + count
+
+    def parent_of(self, session_id: Optional[str]) -> Optional[str]:
+        """The session that delegated to `session_id`, or None if it was not a subagent."""
+        if not session_id:
+            return None
+        return self._parents.get(session_id)
 
     def peek_session(self, session_id: Optional[str]) -> Optional[SessionState]:
         """The in-memory state for a session, or None. Never creates, never I/O."""
