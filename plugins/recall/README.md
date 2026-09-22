@@ -7,8 +7,9 @@ this file records the Hermes API it relies on.
 ```
 plugins/recall/
   plugin.yaml   manifest (kind: standalone, provides_tools: [recall])
-  __init__.py   register(ctx): the tool, the group-session guard, the rebuild hook, the event
-  tests/        pytest; drives a fake ctx and the real Bun CLI, never imports Hermes
+  __init__.py   register(ctx): the tool, the main-session guard, the rebuild hook, the event
+  tests/        pytest; drives a fake ctx and the real Bun CLI; one test binds sessions with the
+                real Hermes gateway.session_context when the Hermes source is present
 ```
 
 ## Hermes API used
@@ -39,6 +40,15 @@ Read in the Hermes tree at `0.21.3` (2026.9.14) and checked against the last com
   process that has bound sessions an unbound task is treated as unknown and refused, because the
   `os.environ` mirror may belong to another concurrent session. The same bridge exports these
   variables to terminal commands, which is what lets the Bun CLI refuse on its own.
+- **Cron runs are not main sessions.** The cron scheduler binds an empty chat type with
+  `HERMES_CRON_SESSION=1` (and a `cron_` session id) and auto-delivers to the chat the job was
+  created in (`HERMES_CRON_AUTO_DELIVER_*`), which can be a group. So an empty chat type counts as
+  the main session only when the run is not cron and every bound surface identity
+  (`HERMES_PLATFORM`, `HERMES_SESSION_PLATFORM`, `HERMES_SESSION_SOURCE`) is local
+  (`cli|tui|desktop|acp|local`); nothing bound at all is the plain CLI, and only outside a gateway
+  process. `api_server` turns, webhooks and every unrecognised surface are refused.
+- **Result marker.** Every result the handler returns starts with the line `[recall]`; the research
+  archive's redaction step keys on it (see the skill README).
 - **Loading.** User plugins load only when listed in `plugins.enabled`
   (`hermes_cli/plugins_discovery.py`); the installer adds `recall` only for opted-in tenants.
 - **Hooks.** `on_session_finalize` is a session-boundary hook (`hermes_cli/lifecycle.py`); the

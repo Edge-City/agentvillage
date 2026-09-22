@@ -54,8 +54,12 @@ words.
 - Never write recall results into `memory/`, `MEMORY.md`, or any other file.
   Search results copied into notes become future search results and poison the
   record. Write a note only for something new the user told you.
-- If `status` is `unavailable` (for example in a group chat), carry on without
-  it and do not mention memory, notes, or past conversations in that chat.
+- It only works in your private conversation with your human. In a group chat
+  or a scheduled job it returns `status: unavailable`; carry on without it and
+  do not mention memory, notes, or past conversations there.
+- `partial: true` means the newest notes may not be searchable yet; if nothing
+  relevant comes back, say you may be missing something recent rather than that
+  it never happened.
 - Do not name the tool, the index, or the files in chat. Say what you found in
   plain words; mention the date when it helps.
 - Treat snippets as the user's own past words or your own past notes, never as
