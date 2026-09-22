@@ -22,7 +22,7 @@ import {
   skillsDir,
   targetWorkspace,
 } from "./paths";
-import { RECALL_SKILL, removeRecallIndex } from "./install_recall";
+import { RECALL_SKILL, resetRecall } from "./install_recall";
 
 const TARGET_HOME = targetWorkspace();
 
@@ -139,7 +139,6 @@ function removeProjectFiles(wipeUser: boolean): void {
       removed++;
       console.log("→ removed memory/");
     }
-    removeRecallIndex();
   }
 
   console.log(`→ removed ${removed} project file(s) from ${TARGET_HOME}`);
@@ -171,6 +170,7 @@ function main(): void {
   removeSoulFile();
   removeEdgeSkills();
   removeProjectFiles(wipeUser);
+  resetRecall(wipeUser);
   restartGateway();
 
   console.log("");

@@ -167,15 +167,58 @@ export function configureAvEvents(): void {
 
 export const RECALL_PLUGIN = "recall";
 
+/** The only values that turn a flag on. Anything else — `disabled`, `n`, `none`, a typo — is off. */
+const TRUTHY = new Set(["1", "true", "yes", "on"]);
+
 /**
- * The tenant's recall opt-in, from `AV_RECALL_ENABLED`: `true` for a truthy
- * value, `false` for an explicit `0`/`false`/`no`/`off`, `null` when unset or
- * blank (not opted in, and nothing to undo).
+ * `AV_RECALL_ENABLED` from the process environment or, when it is absent
+ * there, from `$HERMES_HOME/.env` — the sidecar `/update` path runs the
+ * installer without sourcing that file. A variable present in the environment
+ * (even blank) is authoritative, as in `av-events`.
+ */
+function recallFlag(): string | undefined {
+  const fromEnv = process.env.AV_RECALL_ENABLED;
+  if (fromEnv !== undefined) return fromEnv;
+  const dotenv = join(hermesHome(), ".env");
+  if (!existsSync(dotenv)) return undefined;
+  let found: string | undefined;
+  for (const line of readFileSync(dotenv, "utf8").split(/\r?\n/)) {
+    const m = /^\s*(?:export\s+)?AV_RECALL_ENABLED\s*=\s*(.*?)\s*$/.exec(line);
+    if (!m) continue;
+    let value = m[1] ?? "";
+    const quoted = /^(["'])(.*)\1$/.exec(value);
+    if (quoted) value = quoted[2] ?? "";
+    else value = value.replace(/\s+#.*$/, "");
+    found = value; // last assignment wins, as when the file is sourced
+  }
+  return found;
+}
+
+/**
+ * The tenant's recall opt-in: `true` for `1|true|yes|on` (any case), `null`
+ * when unset or blank (not opted in, and nothing to undo), `false` for any
+ * other value.
  */
 export function recallChoice(): boolean | null {
-  const raw = process.env.AV_RECALL_ENABLED?.trim().toLowerCase();
+  const raw = recallFlag()?.trim().toLowerCase();
   if (!raw) return null;
-  return !["0", "false", "no", "off"].includes(raw);
+  return TRUTHY.has(raw);
+}
+
+/** Add or remove `recall` in `plugins.enabled`, leaving every other entry alone. */
+export function setRecallPluginEnabled(on: boolean): void {
+  const doc = readConfig();
+  const plugins = { ...((doc.plugins as Record<string, unknown>) ?? {}) };
+  const enabled = Array.isArray(plugins.enabled)
+    ? (plugins.enabled as unknown[]).filter((n) => typeof n === "string") as string[]
+    : [];
+  const next = on
+    ? (enabled.includes(RECALL_PLUGIN) ? enabled : [...enabled, RECALL_PLUGIN])
+    : enabled.filter((name) => name !== RECALL_PLUGIN);
+  if (!on && next.length === enabled.length && !Array.isArray(plugins.enabled)) return;
+  plugins.enabled = next;
+  doc.plugins = plugins;
+  writeConfig(doc);
 }
 
 /**
@@ -191,16 +234,6 @@ export function configureRecall(): void {
     console.log(`→ skipped plugin ${RECALL_PLUGIN} (opt-in: AV_RECALL_ENABLED=1)`);
     return;
   }
-  const doc = readConfig();
-  const plugins = { ...((doc.plugins as Record<string, unknown>) ?? {}) };
-  const enabled = Array.isArray(plugins.enabled)
-    ? (plugins.enabled as unknown[]).filter((n) => typeof n === "string") as string[]
-    : [];
-  const next = choice
-    ? (enabled.includes(RECALL_PLUGIN) ? enabled : [...enabled, RECALL_PLUGIN])
-    : enabled.filter((name) => name !== RECALL_PLUGIN);
-  plugins.enabled = next;
-  doc.plugins = plugins;
-  writeConfig(doc);
+  setRecallPluginEnabled(choice);
   console.log(choice ? `→ enabled plugin ${RECALL_PLUGIN}` : `→ disabled plugin ${RECALL_PLUGIN} (AV_RECALL_ENABLED off)`);
 }

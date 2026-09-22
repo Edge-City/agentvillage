@@ -35,7 +35,7 @@ import { execSync } from "node:child_process";
 import { installIndex } from "./install_index";
 import { installEdgeos } from "./install_edgeos";
 import { installGeo } from "./install_geo";
-import { installRecall, removeRecallIndex } from "./install_recall";
+import { safeInstallRecall, wipeRecallIndex } from "./install_recall";
 import { capModelMaxTokens, configureAvEvents, configureDashboardAuth, configureHostedGateway, configureStt, setTerminalCwd } from "./config";
 import { copyPluginTree } from "./plugin_copy";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
@@ -135,8 +135,9 @@ function copyWorkspaceFiles(wipeUser: boolean): void {
         console.log(`→ removed ${path.replace(TARGET_HOME + "/", "")} (--wipe-user)`);
       }
     }
-    // The recall index holds copies of MEMORY.md and notes; it goes with them.
-    removeRecallIndex();
+    // The recall index holds copies of MEMORY.md and notes; it goes with them,
+    // and the epoch keeps earlier conversations out of any future index.
+    wipeRecallIndex();
   }
 }
 
@@ -222,7 +223,8 @@ function main(): void {
   configureHostedGateway();
   configureDashboardAuth();
   configureAvEvents();
-  installRecall(SOURCE_SKILLS);
+  // Opt-in and off the core path: a failure here is counted, never fatal.
+  safeInstallRecall(SOURCE_SKILLS);
 
   installIndex();
   installEdgeos();
