@@ -34,7 +34,8 @@ import { execSync } from "node:child_process";
 import { installIndex } from "./install_index";
 import { installEdgeos } from "./install_edgeos";
 import { installGeo } from "./install_geo";
-import { capModelMaxTokens, configureDashboardAuth, configureHostedGateway, configureStt, setTerminalCwd } from "./config";
+import { capModelMaxTokens, configureAvEvents, configureDashboardAuth, configureHostedGateway, configureStt, setTerminalCwd } from "./config";
+import { copyPluginTree } from "./plugin_copy";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
 import {
   EDGE_SKILL_NAMES,
@@ -161,7 +162,7 @@ function copyPluginFiles(): void {
   for (const name of readdirSync(SOURCE_PLUGINS)) {
     const sourcePath = join(SOURCE_PLUGINS, name);
     if (!statSync(sourcePath).isDirectory()) continue;
-    copied += copyTree(sourcePath, join(target, name));
+    copied += copyPluginTree(sourcePath, join(target, name));
   }
   if (copied > 0) console.log(`→ staged ${copied} plugin files into ${target}`);
 }
@@ -216,6 +217,7 @@ function main(): void {
   configureStt();
   configureHostedGateway();
   configureDashboardAuth();
+  configureAvEvents();
 
   installIndex();
   installEdgeos();

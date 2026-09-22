@@ -132,3 +132,35 @@ export function configureDashboardAuth(): void {
   writeConfig(doc);
   console.log(`→ enabled plugin ${DASHBOARD_PLUGIN}`);
 }
+
+const AV_EVENTS_PLUGIN = "av-events";
+
+/**
+ * Enable the Agent Village telemetry plugin, but only for a tenant that has
+ * been issued an ingest token.
+ *
+ * A tenant without `AV_EVENTS_TOKEN` is left alone entirely: the plugin would
+ * idle harmlessly if enabled, but not listing it keeps the sandbox's plugin set
+ * honest about what is actually collecting. The token itself is never written
+ * to `config.yaml` — the plugin reads it from the environment (or from
+ * `$HERMES_HOME/.env`) at session start, which is also what makes the kill
+ * switches work without a redeploy. Idempotent.
+ */
+export function configureAvEvents(): void {
+  if (!process.env.AV_EVENTS_TOKEN?.trim()) {
+    console.log(`→ skipped plugin ${AV_EVENTS_PLUGIN} (no AV_EVENTS_TOKEN)`);
+    return;
+  }
+
+  const doc = readConfig();
+  const plugins = { ...((doc.plugins as Record<string, unknown>) ?? {}) };
+  const enabled = Array.isArray(plugins.enabled)
+    ? (plugins.enabled as unknown[]).filter((n) => typeof n === "string") as string[]
+    : [];
+  if (!enabled.includes(AV_EVENTS_PLUGIN)) enabled.push(AV_EVENTS_PLUGIN);
+  plugins.enabled = enabled;
+  doc.plugins = plugins;
+
+  writeConfig(doc);
+  console.log(`→ enabled plugin ${AV_EVENTS_PLUGIN}`);
+}

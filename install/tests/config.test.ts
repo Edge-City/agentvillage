@@ -5,12 +5,13 @@ import { join } from "node:path";
 import { afterEach, expect, test } from "bun:test";
 import YAML from "yaml";
 
-import { capModelMaxTokens, configureHostedGateway, configureStt } from "../config";
+import { capModelMaxTokens, configureAvEvents, configureHostedGateway, configureStt } from "../config";
 
 const ORIGINAL_ENV = {
   HERMES_HOME: process.env.HERMES_HOME,
   HERMES_MAX_TOKENS: process.env.HERMES_MAX_TOKENS,
   STT_PROVIDER: process.env.STT_PROVIDER,
+  AV_EVENTS_TOKEN: process.env.AV_EVENTS_TOKEN,
 };
 
 afterEach(() => {
@@ -131,4 +132,45 @@ test("configureHostedGateway is idempotent and preserves other platform keys", (
   const telegram = (readConfig(configPath).platforms as Record<string, Record<string, unknown>>).telegram;
   expect(telegram.gateway_restart_notification).toBe(false);
   expect((telegram.extra as Record<string, unknown>).disable_link_previews).toBe(false);
+});
+
+test("configureAvEvents enables the plugin when a token is present", () => {
+  process.env.AV_EVENTS_TOKEN = "tenant-scoped-token";
+  const configPath = withConfig({ plugins: { enabled: ["dashboard-auth-edgecity"] } });
+
+  configureAvEvents();
+
+  const plugins = readConfig(configPath).plugins as Record<string, unknown>;
+  expect(plugins.enabled).toEqual(["dashboard-auth-edgecity", "av-events"]);
+});
+
+test("configureAvEvents is a no-op for a tenant without a token", () => {
+  delete process.env.AV_EVENTS_TOKEN;
+  const configPath = withConfig({ plugins: { enabled: ["dashboard-auth-edgecity"] } });
+
+  configureAvEvents();
+
+  const plugins = readConfig(configPath).plugins as Record<string, unknown>;
+  expect(plugins.enabled).toEqual(["dashboard-auth-edgecity"]);
+});
+
+test("configureAvEvents treats a blank token as absent", () => {
+  process.env.AV_EVENTS_TOKEN = "   ";
+  const configPath = withConfig({});
+
+  configureAvEvents();
+
+  expect(readConfig(configPath).plugins).toBeUndefined();
+});
+
+test("configureAvEvents is idempotent and never writes the token into config.yaml", () => {
+  process.env.AV_EVENTS_TOKEN = "tenant-scoped-token";
+  const configPath = withConfig({});
+
+  configureAvEvents();
+  configureAvEvents();
+
+  const plugins = readConfig(configPath).plugins as Record<string, unknown>;
+  expect(plugins.enabled).toEqual(["av-events"]);
+  expect(readFileSync(configPath, "utf8")).not.toContain("tenant-scoped-token");
 });
