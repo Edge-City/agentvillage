@@ -12,8 +12,14 @@ plugins/av-events/
   plugin.yaml      manifest (kind: backend)
   __init__.py      register(ctx) and the hook adapters — the only Hermes-aware module
   _collector.py    config, session bookkeeping, buffer flusher, fail-open decorator
-  _core.py         env, uuid v7, canonical hashing, secret sanitiser, buffer, HTTP
+  _core.py         env, uuid v7/v5, canonical hashing, secret sanitiser, buffer, HTTP, read-only SQLite
   _intentions.py   which tool calls record an intention, and which one (pure)
+  _tools.py        tool.call payload and the tool-name allowlist (pure)
+  _messages.py     message.in/out payloads and the punctuation flags (pure)
+  _edgeos.py       EdgeOS operations inside a terminal curl, and the action ledger
+  _cron.py         cron.run from the executions ledger and usage audit (flusher thread only)
+  tool_categories.json        frozen seed: tool name -> category (tool_categories_v1)
+  edgeos_tool_allowlist.json  frozen seed: EdgeOS operations (edgeos_tool_allowlist_v1)
   tests/           pytest suite; drives a fake ctx, never imports Hermes
 ```
 
@@ -26,8 +32,9 @@ plugins/av-events/
 | `AV_EVENTS_TOKEN` | *(unset)* | Per-tenant ingest token. **Unset or blank means the plugin idles**: hooks are registered, nothing is emitted, nothing is buffered, no thread is started. |
 | `AV_EVENTS_URL` | *(unset)* | Ingest base URL. Events are POSTed to `{AV_EVENTS_URL}/v1/events`. Empty with a token set is **null-sink mode** (see below). |
 | `AV_EVENTS_ENABLED` | `1` | Any of `0`, `false`, `no`, `off` (case-insensitive, whitespace ignored) disables everything. Re-read at every session boundary. |
-| `AV_HOOKS_DISABLED` | *(empty)* | Comma-separated hook names to disable individually, e.g. `pre_tool_call,post_tool_call`. Matched case-insensitively, whitespace stripped. |
+| `AV_HOOKS_DISABLED` | *(empty)* | Comma-separated hook names to disable individually, e.g. `pre_tool_call,post_tool_call`. Matched case-insensitively, whitespace stripped. Two names are not hooks: `memory_recalled` (the bus subscription) and `cron_run` (the cron tail). |
 | `AV_CAPTURE` | `sanitized` | `metadata` \| `sanitized` \| `full`. An unrecognised value falls back to `sanitized`. |
+| `TENANT_ID`, `AV_TENANT_ID` | *(unset)* | The tenant id, used for one thing only: `cron.run`'s derived event id (spec §4.3). `TENANT_ID` is what the control plane already sets for `dashboard-auth-edgecity`; `AV_TENANT_ID` overrides it. Unset means `cron.run` gets a uuid v7 (see "Cron capture"). |
 | `HERMES_VERSION`, `OVERLAY_REF` | *(unset)* | Optional; populate the envelope fields of the same name. See "What the API does not provide". |
 
 Every variable is read from the process environment first and then from `$HERMES_HOME/.env`, the
@@ -58,22 +65,30 @@ The ladder is about what leaves the sandbox, not about how much detail is record
 
 | | `metadata` | `sanitized` (default) | `full` |
 |---|---|---|---|
-| Envelope, counters, token counts, latency | yes | yes | yes |
+| Envelope, counters, token counts, latency, statuses | yes | yes | yes |
 | `tools_hash`, `system_prompt_hash` | yes | yes | yes |
+| Listed tool names and categories, EdgeOS operation names, `action.*`, `cron.run` | yes | yes | yes |
 | Lengths (`system_prompt_length`, `assistant_content_chars`, …) | no | yes | yes |
-| Intention `text_hash`, `summary_hash` | yes | yes | yes |
-| Intention `text_length`, `summary_length` | no | yes | yes |
-| Message text, intention text, tool arguments, tool results | never | never | never |
+| Intention `text_hash`, `summary_hash`; profile `user_md_hash` | yes | yes | yes |
+| Intention `text_length` / `summary_length`; profile `length` | no | yes | yes |
+| `tool.call` `args_hash` / `result_hash` and `args_length` / `result_length` | no | yes | yes |
+| `message.*` `length`, `content_hash`, `flags` | no | yes | yes |
+| Message text, intention text, USER.md text, tool arguments, tool results | never | never | never |
 | `prompt.registered` with the tool schemas and system prompt text | no | no | yes |
 
 `tools_hash` and `system_prompt_hash` are present in every mode because they describe the *agent's
 configuration*, not the participant. Message text, tool arguments and tool results never leave in
-any mode — this milestone does not emit `tool.call` at all. The intention hashes are the one
-participant-derived value present in every mode: they are §4.1's required join keys for
-`core.intention_versions`. The intention text itself never leaves (see "Intention capture").
+any mode, `full` included: text lives in the archive only (§7.5), and the training export reads it
+from there (§8). The intention hashes and the USER.md hash are the participant-derived values
+present in every mode: they are join keys (`core.intention_versions`, `core.tasks`), and they are
+hashes of long, free-form text. A message or tool-argument hash is not a join key and is often a
+hash of a few words — a dictionary lookup away from the words — so `metadata` drops it.
+
+`full` differs from `sanitized` in exactly one way: `prompt.registered`.
 
 Per spec §7.1 the mode is set per tenant from consent scope (`full` iff `scope.training`), by the
-control plane writing the sandbox environment. Nothing in this plugin decides it.
+control plane writing the sandbox environment (`AV_CAPTURE`). Nothing in this plugin decides it,
+and `prompt.registered` is emitted in `full` and in no other mode.
 
 **Hashing.** SHA-256 over canonical JSON:
 `json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)`. Key order in the input
@@ -85,19 +100,25 @@ exactly as plain UTF-8.
 OpenAI key shapes, `Bearer …`, the Telegram bot-token shape, and the literal value of our own
 `AV_EVENTS_TOKEN`. This is a last line of defence behind the capture modes, not the privacy control.
 
-**Tool-name allowlist.** `TOOL_CATEGORIES` in `_core.py` maps known tool names to categories, with
-`other` for anything unlisted, so a third-party MCP server's tool names cannot leak through
-`sanitized`. It carries a `TODO` to align with the frozen catalogue (spec §4.1 `tool.call`) — it is
-a placeholder, not an agreed list.
+**Tool-name allowlist.** `tool_categories.json` (`tool_categories_v1`) is the frozen seed; `_tools.py`
+reads it once at import. `builtin` lists Hermes's own tools by registry name (the `v2026.8.31`
+`_HERMES_CORE_TOOLS` set, plus `send_message`, `recall` and `record_intention`); `mcp.<server>` lists
+an MCP server's tools, which Hermes registers as `mcp__<server>__<tool>` — so the allowlist is keyed
+that way, and a bare `create_intent` from anywhere else is not Index. A listed tool leaves by name and
+category; anything else leaves as `tool_name: null`, `tool_category: "other"`, so a third-party MCP
+server's tool names never reach ingest. A missing or malformed seed lists nothing (everything
+`other`). It moves together with the `agentvillage-data` seed of the same purpose.
 
 ---
 
 ## Events emitted
 
 All carry `evidence_class: agent_report` — this plugin observes the agent, not the world, and ingest
-downgrades anything stronger in any case (spec scenario 4). `event_id` is a uuid v7 (RFC 9562 §5.7,
-implemented here because the 3.11 stdlib has none) with a monotonic counter in `rand_a`, so ids sort
-in emission order.
+downgrades anything stronger in any case (spec scenario 4) — **except `action.receipted`**, which
+claims `provider_receipt` because it carries a checkable receipt (see "EdgeOS actions").
+`event_id` is a uuid v7 (RFC 9562 §5.7, implemented here because the 3.11 stdlib has none) with a
+monotonic counter in `rand_a`, so ids sort in emission order — **except `cron.run`**, whose id is
+§4.3's derived uuid v5 (see "Cron capture"). Ingest refuses any other v5 from a plugin token.
 
 `occurred_at` is when the thing happened, not when we buffered it: `llm.call` takes the API
 request's `started_at` (with `occurred_at_earliest`/`latest` spanning the request), which under a
@@ -105,8 +126,15 @@ backlog can differ from `emitted_at` by minutes. Every `marts` time series is bu
 
 | Event | Source hook | Payload |
 |---|---|---|
-| `session.started` | `on_session_start` | `source`, `cron_job_id?` |
-| `session.ended` | `on_session_finalize` | `source`, `message_count`, `tool_call_count`, `input_tokens`, `output_tokens`, `duration_ms`, plus the hook stats below |
+| `session.started` | `on_session_start` | `source`, `cron_job_id` (from a `cron_<job>_<stamp>` session id, else null) |
+| `session.ended` | `on_session_finalize` | `source`, `message_count`, `tool_call_count`, `input_tokens`, `output_tokens`, `duration_ms`, `cron_job_id`, `actual_cost_usd`, `cost_source`, `estimated_cost_usd`, `cost_status`, plus the hook stats below |
+| `message.in` | `pre_llm_call` (`user_message`) | `channel`, `length`, `content_hash`, `flags` {`is_ask`, `is_recommendation`, `sentiment`}, `flags_rule`, `cron_job_id` — see "Messages" |
+| `message.out` | `post_llm_call` (`assistant_response`) | as above |
+| `tool.call` | `post_tool_call` | `tool_name`, `tool_category`, `args_hash`, `result_hash`, `ok`, `status`, `latency_ms`, `receipt`, `error_type`, `operation`, `target_system`, `category_version`, plus `args_length` / `result_length` above `metadata` — see "Tool calls" |
+| `action.attempted` / `action.failed` | `post_tool_call` on an EdgeOS RSVP or cancellation | `action_class`, `target_system`, `receipt`, `execution_token_id`, `error`, `reverses_action_id`, `reversal`, `operation`, `edgeos_event_id`, `allowlist_version` — see "EdgeOS actions" |
+| `action.receipted` | `post_tool_call` on the EdgeOS read that confirms it | as above, with `receipt` {`kind: edgeos_confirming_read`, `id`} |
+| `cron.run` | the cron tail, on the flusher thread | `job_id`, `job_name`, `execution_id`, `status`, `input_tokens`, `output_tokens`, `claimed_at`, `started_at`, `finished_at` — see "Cron capture" |
+| `profile.updated` | `on_session_finalize`, when USER.md changed | `user_md_hash`, plus `length` above `metadata` |
 | `llm.call` | `pre_api_request` + `post_api_request` | `model`, `provider`, the five token buckets, `latency_ms`, `finish_reason`, `tools_hash`, `system_prompt_hash`, plus lengths above `metadata` |
 | `llm.call` (failed) | `pre_api_request` + `api_request_error` | as above with `finish_reason: "error"`, `error_type`, `status_code`, `retryable`, and zeroed token counts |
 | `prompt.registered` | `pre_api_request` | `hash`, `kind` ∈ `tools`\|`system_prompt`, `body`. `full` only, once per hash ever |
@@ -133,9 +161,13 @@ a `platform`) supplies one. Writing `"unknown"` at first sight would latch a val
 `on_session_start` could no longer correct. If the source never arrives, `session_ended` forces the
 pair out with `"unknown"`, so a `session.started`/`session.ended` pair is always well formed.
 
-**`evidence_class` is `agent_report` for everything.** Note that spec §4.1 caps several of these
-types at `platform_record` while scenario 4 requires ingest to downgrade any class a plugin token
-claims. The two disagree; this code follows scenario 4, which is the enforceable one.
+**`evidence_class` is `agent_report` for everything but `action.receipted`.** Note that spec §4.1
+caps several of these types at `platform_record` while scenario 4 requires ingest to downgrade any
+class a plugin token claims. The two disagree; this code follows scenario 4, which is the
+enforceable one. `action.receipted` claims `provider_receipt` because §4.1's row says "provider_receipt
+with receipt" and §2.1 honours it only for a checkable receipt (`action.*` type,
+`receipt.kind = edgeos_confirming_read`, a non-empty string `receipt.id`) — which is exactly what the
+event carries. `core.actions` still does not treat a plugin's own receipt as corroboration.
 
 ### Events from other plugins
 
@@ -259,6 +291,150 @@ nowhere else.
 
 ---
 
+## Tool calls
+
+Spec §4.1 `tool.call` and §7.1 "Sanitization". One `tool.call` per `post_tool_call`, for every
+tool, before any `action.*` or `intention.*` the same call implies.
+
+- **Name.** Only an allowlisted name leaves (see "Tool-name allowlist"); otherwise `tool_name` is
+  null and `tool_category` is `other`.
+- **Arguments and results.** `args_hash` is SHA-256 over the canonical JSON of `args` (the same
+  canonicalisation as `tools_hash`); `result_hash` over the result string as Hermes handed it.
+  `args_length` / `result_length` count characters of those same strings. In `metadata` all four
+  are null or absent. An argument that cannot be serialised hashes to null rather than failing.
+- **Status.** Hermes's `status`, case-folded, one of `ok|error|blocked|timeout|cancelled`, `other`
+  for anything else, null when absent. `ok` is true for `ok` or no status. `error_type` leaves only
+  when it looks like a class name; `error_message` never does.
+- **Refs.** `tool_call_id` is Hermes's, nulled if it fails the id pattern; `run_id` as for
+  `llm.call`; `occurred_at` is when the call returned and `occurred_at_earliest` that minus
+  `duration_ms`.
+- **Isolation.** The `tool.call`, the EdgeOS path and intention capture are isolated from one
+  another inside the hook: an exception in one is counted against the breaker like any hook
+  failure and does not cost the others their events.
+
+## Messages
+
+Spec §4.1 `message.in/out`. `pre_llm_call`'s `user_message` is `message.in`, `post_llm_call`'s
+`assistant_response` is `message.out`, once per turn each. Never the text, in any mode.
+
+| Session | `message.in` actor | `channel` |
+|---|---|---|
+| a conversation | `participant` | the session's `source` (`telegram`, `desktop`, …) |
+| cron (`platform="cron"`, a `cron_<job>_<stamp>` id, or a subagent of one) | `system` — the "user message" is the job's prompt | `cron`, with `cron_job_id` |
+| a delegated subagent | `agent` — the "user message" is the delegator's goal | `subagent` |
+
+`message.out` is always `actor: agent`. A channel that does not look like a platform name is
+reported as `other`. `sender_id` is never read.
+
+`length` (characters) and `content_hash` (SHA-256 of the exact text) are present above `metadata`.
+**`flags` are structural, not semantic** (`flags_rule: message_flags_v1`): `is_ask` is true when the
+message, with URLs removed, contains a `?` that ends a sentence. `is_recommendation` and `sentiment`
+are always null — detecting them is natural-language classification, which the plugin does not do
+(the same stance as intentions: categories come from server-side jobs over archived text). A later
+rule is a new `flags_rule`. In `metadata` every flag is null. A non-string message (a multimodal
+list) has no length, hash or flags.
+
+## EdgeOS actions
+
+Spec §4.1 `action.attempted/receipted/failed`, §2.1's receipt allowance, measurement catalogue
+"Act on intentions (RSVP)".
+
+**How the plugin sees an RSVP.** There is no EdgeOS tool. The `edgeos` skill tells the agent to run
+`curl` through Hermes's `terminal` tool (`skills/edgeos/SKILL.md` §6). `edgeos_tool_allowlist.json`
+(`edgeos_tool_allowlist_v1`) names the carrier tools (`terminal`), the host (`api.edgeos.world`),
+and each operation by method and path. A call is recognised only when it is unambiguous: a carrier
+tool, exactly one `curl`, exactly one distinct EdgeOS path, at most one `-X` method (none means GET,
+or POST when there is a `-d`/`--data`/`--json`/`-F`), and path parameters that are UUIDs. Anything
+else is just a `tool.call`. Every recognised call labels its `tool.call` with `operation`
+(`edgeos.rsvp`, `edgeos.event_read`, `edgeos.profile_read`, …) and `target_system: "edgeos"`;
+the command, its headers (the API key) and the response body never leave.
+
+| Operation | Role | Emits |
+|---|---|---|
+| `POST …/event-participants/portal/register/{event_id}` | action, `rsvp` | `action.attempted` (fresh uuid v7 `action_id`); plus `action.failed` on the same id when the call failed |
+| `POST …/event-participants/portal/cancel-registration/{event_id}` | action, `cancel_rsvp` | as above, with `reversal: true` and `reverses_action_id` = the last RSVP action for that event, if known |
+| `GET …/events/portal/events/{event_id}` and `GET …/events/portal/events` | confirming read | `action.receipted` for each waiting action the read confirms |
+| directory, profile, venues, participants, event writes | read / write | nothing beyond the `tool.call` label |
+
+**Failure.** Hermes status not `ok` → `error: "tool_<status>"`; a non-zero `curl` exit code →
+`exit_nonzero`; a JSON body with `detail`/`error` and no `id` (FastAPI's error shape) →
+`edgeos_error`. Fixed labels only: EdgeOS's own error text can echo the request. A failed action is
+never waiting for a receipt and is never what a later cancellation reverses.
+
+**Confirmation.** A successful action waits in the ledger (`$HERMES_HOME/av-events/edgeos_actions.json`,
+0600, written only when an EdgeOS action or receipt changes it, so a gateway restart between the RSVP
+and the read does not lose the link; at most 256 events; a wait expires after 7 days). A later
+successful read whose event object carries `my_rsvp_status` confirms it: `registered` or
+`checked_in` confirms an RSVP; `cancelled` or null confirms a cancellation; anything else, or an
+object without the key, confirms nothing and the action keeps waiting. The `action.receipted` event
+reuses the action's id, carries `receipt: {kind: "edgeos_confirming_read", id: <EdgeOS event id>}`
+(the id a checker re-reads) and claims `provider_receipt`; the read's own `tool.call` carries the
+same `receipt` when it confirmed exactly one action.
+
+**Reversal.** Every event on a cancellation — attempted, failed and receipted — carries
+`reversal: true` and `reverses_action_id`; every RSVP event carries `reversal: false` and null.
+`core.action_action` links a compensation only on `reversal = true` or differing classes, so both
+are always set explicitly. A cancellation of an RSVP the plugin never saw (made in the portal, or
+before this plugin was installed) is still `reversal: true`, with `reverses_action_id: null`.
+
+Actions are emitted in every capture mode: they carry ids and fixed labels, nothing a participant
+wrote.
+
+## Cron capture
+
+Spec §4.1 `cron.run`, §4.3, §7.1 "Cron capture". Hermes has no cron hook, so the flusher thread —
+never a hook — reads what the scheduler writes, once a minute, read-only:
+
+- `$HERMES_HOME/cron/executions.db` (`cron/executions.py`): every execution in a terminal state
+  (`completed`, `failed`, `unknown` — immutable once written) that has not been reported. Its
+  `error` text is never read. An execution that finished more than 72 hours ago is skipped: ingest
+  would clamp it, and on a first run it is history.
+- `$HERMES_HOME/cron/usage_audit.jsonl` (`cron/scheduler.py` `_write_usage_audit`): `prompt_tokens`
+  / `completion_tokens` become `input_tokens` / `output_tokens`. An audit line has no execution id,
+  so it is joined only when it is the **one** line for that job whose `ts` falls inside the
+  execution's window (±2 s); otherwise both are null. The last 512 KiB is read, and only when there
+  is something to report.
+- `$HERMES_HOME/cron/jobs.json`: `job_name`, **only for a job the overlay installed** (name starting
+  `Edge —`, `install/paths.ts`). A participant can ask the agent to schedule anything, and the job's
+  name is then their words; `cron.run` is on the ops allowlist and kept without research consent
+  (spec §2.2), so it carries nothing a participant wrote. Other jobs have `job_name: null`.
+
+Timestamps are Hermes's local-offset ISO strings, normalised to UTC. `occurred_at` is `finished_at`,
+`occurred_at_earliest` the start (or claim). `run_id` is `cron:<job_id>:<execution_id>` — Hermes's own
+task id for the run, so `cron.run` joins the run's `llm.call` and `tool.call` rows. `actor: system`.
+
+**Event id.** `uuid5(NS_AV, "{tenant_id}|cron|{execution_id}")`, exactly what ingest's
+`pluginEventIdProblem` recomputes from the token's tenant (`agentvillage-data/src/ingest/events.ts`);
+any other v5 is quarantined. The tenant id comes from `TENANT_ID` / `AV_TENANT_ID`. With it, a
+re-read, a second process tailing the same ledger or a lost cursor all produce the same id and ingest
+keeps one row. Without it the id is a uuid v7 and the cursor is the only dedupe.
+
+**Cursor.** `$HERMES_HOME/av-events/cron_cursor.json` holds the execution ids already reported (the
+last 4096; Hermes keeps 1000 terminal rows). An id is added only after its event is buffered, so an
+inert emit is retried on the next pass. The tail is off with the plugin, and individually with
+`AV_HOOKS_DISABLED=cron_run`; a pass that raises is counted in `Collector.cron_errors` and never
+stops the flusher.
+
+## Session close: cost and profile
+
+`on_session_finalize` emits `session.ended` and then, if USER.md changed, `profile.updated` — in that
+order, so nothing the profile check does can cost the session its end event.
+
+**Cost.** Hermes keeps per-session cost in `$HERMES_HOME/state.db`, table `sessions`:
+`actual_cost_usd`, `estimated_cost_usd`, `cost_status`, `cost_source` (`hermes_state.py`). The plugin
+reads that one row read-only with a 50 ms lock timeout and puts the four values on `session.ended`
+under the same names. `actual_cost_usd` is §4.1's field and is what `core.cost_facts` sums; Hermes
+fills it only when a provider reports a real charge, and **an estimate is never promoted to
+actual**. `cost_source` / `cost_status` are Hermes's labels, passed only when they look like labels.
+A busy, missing or corrupt database leaves all four null.
+
+**Profile.** `profile.updated` carries `user_md_hash` (SHA-256 of `$HERMES_HOME/memories/USER.md`'s
+bytes) in every mode — `core.tasks` keys on it — and `length` (characters) above `metadata`. It is
+emitted on first sight and whenever the hash changes, and the last hash sent is kept in
+`$HERMES_HOME/av-events/profile.json` only after the event is buffered. A file over 1 MiB is not read.
+
+---
+
 ## Fail-open contract
 
 Implements `launch-guardrails-draft.md` §2 and spec scenario 25.
@@ -282,7 +458,10 @@ Implements `launch-guardrails-draft.md` §2 and spec scenario 25.
 - **50 ms budget per hook**, measured with `time.perf_counter`. Overruns are *counted, never
   enforced*: aborting a hook halfway is worse for the agent than a slow one. Counts live in
   `collector.overruns`.
-- **No network in a hook, ever.** Hooks hash and append a line; a daemon thread does all I/O.
+- **No network in a hook, ever.** Hooks hash and append a line; a daemon thread does all network
+  I/O and the cron tail. The only other file I/O a hook does is bounded and local: at session close,
+  one read-only row from `state.db` (50 ms lock timeout) and one read of USER.md (≤ 1 MiB); on an
+  EdgeOS RSVP or its confirming read, one small ledger write.
   `on_session_end` and `session.ended` only *wake* the flusher. `ingest` being down changes nothing
   the agent can observe (spec scenario 24).
 - **Hooks never return a value.** The decorator discards whatever the body returns, so this plugin
@@ -396,13 +575,29 @@ names; all eight the spec names exist, plus `on_session_start`, `on_session_fina
 | `post_api_request` | `agent/conversation_loop.py:6993` | `api_request_id`, `usage`, `api_duration`, `finish_reason`, `response_model`, `assistant_content_chars`, `assistant_tool_call_count`, `provider`, `api_mode`, `started_at`, `ended_at` |
 | `api_request_error` | `run_agent.py:3130` | `api_request_id`, `error` (`{"type","message"}`), `status_code`, `retryable`, `retry_count`, `api_duration`, `started_at`, `ended_at`. Fired **instead of** `post_api_request` on a terminal failure |
 | `pre_tool_call` | `hermes_cli/plugins.py:6636` | `tool_name`, `args`, `session_id`, `task_id`, `turn_id`, `tool_call_id`, `api_request_id` |
-| `post_tool_call` | `model_tools.py:1220` | as above plus `result`, `duration_ms`, `status`, `error_type`, `error_message`. `tool_name` is the registry name (`mcp__index__create_intent`). `args` reflects any `modify` directive. `result` is a string, and for an MCP tool it is JSON `{"result": <text>, "structuredContent"?: …}` (`tools/mcp_tool.py`). `status` ∈ `ok`\|`error`\|`blocked` |
+| `post_tool_call` | `model_tools.py:1220` | as above plus `result`, `duration_ms`, `status`, `error_type`, `error_message`. `tool_name` is the registry name (`mcp__index__create_intent`). `args` reflects any `modify` directive. `result` is a string, and for an MCP tool it is JSON `{"result": <text>, "structuredContent"?: …}` (`tools/mcp_tool.py`). `status` ∈ `ok`\|`error`\|`blocked`, plus `timeout`\|`cancelled` on an interrupted call. `terminal`'s result is JSON `{"output", "exit_code", "error"}` (`tools/terminal_tool.py`) |
 | `subagent_start` | `tools/delegate_tool.py:2197` | `parent_session_id`, `parent_turn_id`, `child_session_id`, `child_role`, `child_goal`. The `child_session_id` → `parent_session_id` pair is kept for intention events' `payload.parent_session_id` |
 | `subagent_stop` | `tools/delegate_tool.py:3667` | adds `child_summary`, `child_status`, `tool_call_history`, `duration_ms` |
 
 `usage` on `post_api_request` is `normalize_usage(...)` as a dict (`run_agent.py:2890`) and carries
 exactly `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`,
-`reasoning_tokens` — the five buckets spec §4.1 asks for, name for name.
+`reasoning_tokens` — the five buckets spec §4.1 asks for, name for name. It carries **no cost**:
+Hermes prices a call after the hook, into `state.db` (`agent/conversation_loop.py:4489`).
+
+### Host stores we read
+
+Read-only (`sqlite3` with `mode=ro`), bounded, and "no data" on any failure. Same tag.
+
+| Store | Written by | What we read | When |
+|---|---|---|---|
+| `$HERMES_HOME/state.db`, `sessions` | `hermes_state.py` `update_token_counts` | `actual_cost_usd`, `estimated_cost_usd`, `cost_status`, `cost_source` for one id | `on_session_finalize` |
+| `$HERMES_HOME/memories/USER.md` | `tools/memory_tool.py` | the bytes, for a hash and a length | `on_session_finalize` |
+| `$HERMES_HOME/cron/executions.db`, `executions` | `cron/executions.py` | `id`, `job_id`, `status`, `claimed_at`, `started_at`, `finished_at` of terminal rows | flusher thread, every 60 s |
+| `$HERMES_HOME/cron/usage_audit.jsonl` | `cron/scheduler.py` `_write_usage_audit` | `ts`, `job_id`, `prompt_tokens`, `completion_tokens` | same |
+| `$HERMES_HOME/cron/jobs.json` | `cron/jobs.py` | `id`, `name` | same |
+
+Cron ids at this tag: a session is `cron_<job_id>_<YYYYmmdd>_<HHMMSS>` and its task is
+`cron:<job_id>:<execution_id>` (`cron/scheduler.py`); execution ids are `uuid4().hex`.
 
 Every payload also gets `telemetry_schema_version="hermes.observer.v1"` injected (`plugins.py:5627`).
 
@@ -490,10 +685,46 @@ These are the divergences this milestone had to resolve. Each one is a decision 
     `pre_tool_call`. That hook fails closed and has no result, so it has no Index intent id and no
     sign of whether Index accepted the intent. See "Intention capture".
 16. **MCP tool names are prefixed.** Hermes registers Index's tools as `mcp__index__<tool>`, and the
-    intention path matches that form. `TOOL_CATEGORIES` in `_core.py` still lists bare names, so it
-    will need the same change when `tool.call` ships.
+    intention path matches that form. The tool-category allowlist (`tool_categories.json`) is keyed
+    the same way, so a bare `create_intent` is `other`.
 17. **`delete_intent` is captured too.** §7.1 names only `create_intent` / `update_intent`. The Index
     tool family also has `delete_intent`, and a deleted intent is the clearest withdrawal there is.
+18. **There is no EdgeOS tool.** The plan says "the EdgeOS register call and its confirming read";
+    the `edgeos` skill makes both as `curl` through `terminal`. **Resolution:** EdgeOS operations are
+    matched on method and path inside a carrier tool's command (see "EdgeOS actions"), and
+    `tool.call.payload.operation` carries the EdgeOS operation, since `tool_name` is only ever
+    `terminal`. The `agentvillage-data` seed `edgeos_tool_allowlist` (`tool_name, skill, category`)
+    and the "navigate the event" measure will have to key on `operation`, not `tool_name`. An agent
+    that reaches EdgeOS by `execute_code` or `web_extract` is not seen.
+19. **`action.receipted` claims `provider_receipt`.** Every other event is `agent_report`. §4.1's
+    action row asks for it and §2.1 honours it only for a checkable receipt, which this is.
+20. **The receipt id is the EdgeOS event id.** `receipt.id` must be something a checker can re-read
+    with the receipt's kind; for `edgeos_confirming_read` that is `GET /events/portal/events/{id}`.
+    EdgeOS's live OpenAPI (`api.edgeos.world/openapi.json`, read 2026-09-22) now documents
+    `POST …/register/{event_id}` as returning an `EventParticipantPublic` with its own `id`, which
+    contradicts the Sept 18 finding "no documented response body". Not acted on: the brief fixes the
+    receipt at the confirming read. If the response body is dependable, the register call itself
+    could be the receipt.
+21. **Cost is per session, not per `llm.call`.** `post_api_request` carries no cost (Hermes prices
+    after the hook). Cost goes on `session.ended` from `state.db`, as §4.1 lists it there. In practice
+    Hermes fills `estimated_cost_usd` (a pricing-table estimate) and rarely `actual_cost_usd`; the
+    estimate travels under its own name and is never promoted, so `core.cost_facts` will mostly see
+    null and fall back to the OpenRouter key snapshots.
+22. **`usage_audit.jsonl` has no execution id.** It is joined to an execution by job id and time
+    window, and only when exactly one line matches; `input_tokens` is otherwise null. The same totals
+    are recoverable downstream from `llm.call` rows by `run_id = cron:<job>:<execution>`.
+23. **`cron.run`'s §4.3 id needs the tenant id**, which a sandbox only knows from `TENANT_ID` (set for
+    `dashboard-auth-edgecity`). This assumes `TENANT_ID` is the same string ingest keys the plugin
+    token to; if it is not, every `cron.run` quarantines as `event_id_mismatch`. Without it, the
+    event gets a uuid v7, which ingest accepts.
+24. **`cron.run.job_name` is null for jobs the overlay did not install.** §4.1 requires the key; a
+    participant-authored name must not ride the ops allowlist.
+25. **`profile.updated` is at `on_session_finalize`**, not `on_session_end` as the task words it:
+    `on_session_end` fires per turn (divergence 4).
+26. **`message.in` is not always the participant.** In a cron session it is the job's prompt
+    (`actor: system`), in a subagent the delegator's goal (`actor: agent`).
+27. **`message.*.flags` are punctuation, not meaning.** `is_ask` follows `message_flags_v1`;
+    `is_recommendation` and `sentiment` are always null (see "Messages").
 
 ---
 
@@ -501,17 +732,16 @@ These are the divergences this milestone had to resolve. Each one is a decision 
 
 Out of scope, deliberately:
 
-- **Cron capture** — `cron.run` by tailing `$HERMES_HOME/cron/usage_audit.jsonl` and the executions
-  store. Note there is **no cron hook** in `VALID_HOOKS` at all; a tail is the only route.
-- **Budget** — `run.budget_exceeded`, `AV_RUN_BUDGET_*`, `AV_BUDGET_MODE`. There is no budget hook
-  either, and see divergence 9 for why the enforce path cannot be `pre_llm_call`.
+- **Budget** — `run.budget_exceeded`, `AV_RUN_BUDGET_*`, `AV_BUDGET_MODE`. There is no budget hook,
+  and see divergence 9 for why the enforce path cannot be `pre_llm_call`.
 - **The `record_intention` tool itself** — the overlay skill or tool the agent calls. The plugin
   observes it (see "Intention capture"). Registering it changes the agent's tool list and
   behaviour, which makes it a product change: per `launch-guardrails-draft.md` it starts on the
   dogfood tenants, rate-capped and behind a per-tenant kill switch.
-- **`tool.call` events** — `pre_tool_call` is registered and counted. `post_tool_call` emits only
-  the `intention.*` events above. `tool.call` needs the frozen tool-category allowlist first.
-- **`message.in/out`, `profile.updated`, `skill.enabled/disabled`**.
+- **`skill.enabled/disabled`**.
+- **Ingest registration.** `agentvillage-data` does not yet register payload schemas for
+  `tool.call`, `message.in`, `message.out`, `cron.run` or `profile.updated`; until it does, ingest
+  quarantines them (lossless, §2.1). The payload keys above are the contract to register.
 - Anything server-side: ingest, dbt, pollers, classifiers.
 
 ---
