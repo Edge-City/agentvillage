@@ -28,7 +28,7 @@ from ._core import (
     tool_category,
     uuid7,
 )
-from ._intentions import IntentionCall, classify_tool
+from ._intentions import IntentionCall, classify_tool, valid_id
 from ._intentions import plan as plan_intentions
 
 __version__ = "0.1.0"
@@ -50,9 +50,6 @@ SOURCE_BY_PLATFORM = {
 #: response never arrives (timeout, failover) would otherwise leak a dict entry
 #: for the life of the session.
 MAX_PENDING_LLM = 32
-
-#: Cap on remembered intention-bearing `tool_call_id`s per session (dedupe).
-MAX_INTENTION_CALLS = 64
 
 #: Hooks this plugin registers. Spec §7.1 names the first eight; the last three
 #: are additions this milestone needs and are argued in README.md:
@@ -357,14 +354,15 @@ def _hook_post_tool_call(collector: Collector, **kwargs: Any) -> None:
     _capture_intentions(collector, state, kwargs)
 
 
-def _intention_payload(call: IntentionCall, capture: str) -> dict:
+def _intention_payload(call: IntentionCall, capture: str, parent_session_id: Optional[str]) -> dict:
     """§4.1 payload. Hashes and lengths only: intention text never leaves.
 
     `text_hash` / `summary_hash` are present in every mode — they are the
     required keys `core.intention_versions` is built on. Lengths follow the
-    capture ladder and are omitted in `metadata`. No mode, `full` included,
-    carries the text itself: it lives in the archive only (measurement
-    catalogue §A, "text in the archive only"; §7.1 "with hashes only").
+    capture ladder and are omitted in `metadata`; they count characters (code
+    points), not bytes. No mode, `full` included, carries the text itself: it
+    lives in the archive only (measurement catalogue §A; §7.1 "with hashes
+    only").
     """
     payload: dict[str, Any] = {
         "text_hash": hash_text(call.text) if call.text else None,
@@ -372,10 +370,10 @@ def _intention_payload(call: IntentionCall, capture: str) -> dict:
         "index_intent_id": call.index_intent_id,
         "source": call.source,
         "conditional": call.conditional,
-        # Not in §4.1. Which producer path inside the plugin saw it, and the
-        # Index status an update set (`archived` is what makes a withdrawal).
+        # Not in §4.1.
         "capture_path": call.capture_path,
         "index_status": call.index_status,
+        "parent_session_id": parent_session_id,
     }
     if capture != "metadata":
         payload["text_length"] = len(call.text) if call.text else None
@@ -383,13 +381,39 @@ def _intention_payload(call: IntentionCall, capture: str) -> dict:
     return payload
 
 
+def _is_cron_session(state: Any, session_id: Optional[str]) -> bool:
+    """A cron run: `platform="cron"`, or Hermes's `cron_<job>_<stamp>` session id.
+
+    Both come from `cron/scheduler.py` at `v2026.8.31`. The id prefix covers a
+    run whose `on_session_start` this process never saw.
+    """
+    if state is not None and getattr(state, "source", None) == "cron":
+        return True
+    return bool(session_id) and str(session_id).startswith("cron_")
+
+
 def _capture_intentions(collector: Collector, state: Any, kwargs: dict) -> None:
-    """Emit one `intention.*` per intention the tool call recorded."""
-    tool_call_id = str(kwargs.get("tool_call_id") or "") or None
-    if state is not None and tool_call_id and tool_call_id in state.intention_calls:
-        return
-    calls = plan_intentions(kwargs.get("tool_name"), kwargs.get("args"), kwargs.get("result"), kwargs.get("status"))
+    """Emit one `intention.*` per intention the tool call recorded.
+
+    No dedupe on `tool_call_id`: Hermes fires `post_tool_call` once per
+    execution, and some providers reuse one `tool_call_id` for every call, so
+    a filter on it would drop real intentions. Ingest dedupes on `event_id`.
+    """
+    refs = _refs(kwargs)
+    calls = plan_intentions(
+        kwargs.get("tool_name"),
+        kwargs.get("args"),
+        kwargs.get("result"),
+        kwargs.get("status"),
+        cron=_is_cron_session(state, refs["session_id"]),
+    )
     if not calls:
+        return
+
+    raw_call_id = kwargs.get("tool_call_id")
+    tool_call_id = str(raw_call_id) if raw_call_id not in (None, "") else None
+    if tool_call_id is not None and not valid_id(tool_call_id):
+        collector.count_intention_drop("tool_call_id", len(calls))
         return
 
     # The call's own window: Hermes reports `duration_ms` and we fire at its end.
@@ -398,29 +422,28 @@ def _capture_intentions(collector: Collector, state: Any, kwargs: dict) -> None:
     started = ended - float(duration) / 1000.0 if isinstance(duration, (int, float)) and duration > 0 else ended
     occurred_at = iso_from_epoch(ended)
 
-    refs = _refs(kwargs)
     capture = collector.config.capture
-    emitted = False
+    parent_session_id = collector.parent_of(refs["session_id"])
     for call in calls:
         if call.intention_id is None:
-            # Plugin-minted id for an intention nobody else named (§4.2).
+            # Plugin-minted id for a `record_intention` capture nobody named (§4.2).
             call.intention_id = uuid7()
-        event = collector.emit(
+        if not valid_id(call.intention_id):
+            collector.count_intention_drop("intention_id")
+            continue
+        if call.index_intent_id is not None and not valid_id(call.index_intent_id):
+            collector.count_intention_drop("index_intent_id")
+            continue
+        collector.emit(
             call.event_type,
-            _intention_payload(call, capture),
+            _intention_payload(call, capture, parent_session_id),
             occurred_at=occurred_at,
             occurred_at_earliest=iso_from_epoch(started),
             occurred_at_latest=occurred_at,
             tool_call_id=tool_call_id,
             intention_id=call.intention_id,
-            parent_run_id=collector.parent_of(refs["session_id"]),
             **refs,
         )
-        emitted = emitted or event is not None
-    if emitted and state is not None and tool_call_id:
-        state.intention_calls[tool_call_id] = True
-        while len(state.intention_calls) > MAX_INTENTION_CALLS:
-            state.intention_calls.popitem(last=False)
 
 
 def _hook_on_session_end(collector: Collector, **kwargs: Any) -> None:
@@ -443,8 +466,7 @@ def _hook_on_session_finalize(collector: Collector, **kwargs: Any) -> None:
 
 def _hook_subagent_start(collector: Collector, **kwargs: Any) -> None:
     _session(collector, kwargs)
-    # Lineage for `parent_run_id`. Hermes names no parent *run*; the parent
-    # session id is the only handle on the delegating run it gives us.
+    # Lineage for intention events' `payload.parent_session_id`.
     collector.note_parent(kwargs.get("child_session_id"), kwargs.get("parent_session_id"))
 
 

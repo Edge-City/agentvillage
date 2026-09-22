@@ -155,7 +155,6 @@ class SessionState:
         "input_tokens",
         "output_tokens",
         "pending_llm",
-        "intention_calls",
         "ended",
         "failure_count",
         "failures_by_hook",
@@ -180,10 +179,6 @@ class SessionState:
         self.output_tokens = 0
         #: Hashes and request stamps left by pre_api_request for post to use.
         self.pending_llm: dict[str, dict] = {}
-        #: `tool_call_id`s that already produced an intention event, so a
-        #: post-tool hook that fires twice for one call cannot record the
-        #: intention twice. Bounded; see `MAX_INTENTION_CALLS`.
-        self.intention_calls: "OrderedDict[str, bool]" = OrderedDict()
         self.ended = False
         self.failure_count = 0
         self.failures_by_hook: dict[str, int] = {}
@@ -240,6 +235,9 @@ class Collector:
         #: `subagent_start`. Memory only, bounded like the session table; it is
         #: where `parent_run_id` comes from (README "Intention capture").
         self._parents: "OrderedDict[str, str]" = OrderedDict()
+        #: Intention events not emitted because an id failed the id pattern,
+        #: by field. A count only: the offending value is never kept.
+        self.intention_drops: dict[str, int] = {}
         #: Test seam. When set, used in place of `post_events`.
         self.sender: Optional[Callable[[str, str, list], SendResult]] = None
 
@@ -385,6 +383,11 @@ class Collector:
             self._parents.move_to_end(child)
             while len(self._parents) > MAX_TRACKED_SESSIONS:
                 self._parents.popitem(last=False)
+
+    def count_intention_drop(self, field: str, count: int = 1) -> None:
+        """Count intention events dropped for a malformed id. Pure memory."""
+        with self._lock:
+            self.intention_drops[field] = self.intention_drops.get(field, 0) + count
 
     def parent_of(self, session_id: Optional[str]) -> Optional[str]:
         """The session that delegated to `session_id`, or None if it was not a subagent."""
