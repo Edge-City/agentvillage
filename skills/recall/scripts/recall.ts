@@ -69,9 +69,15 @@ export const DIRECT_CHAT_TYPES = new Set(["dm", "private", "direct", "c2c"]);
 /**
  * Surfaces that are the owner's own machine. A session with no chat type is
  * the main session only on one of these; a cron run, an API-server turn, a
- * webhook, or anything unrecognised with no chat type is refused.
+ * webhook, an ACP (editor) turn, or anything unrecognised is refused.
  */
-export const LOCAL_SURFACES = new Set(["cli", "tui", "desktop", "acp", "local"]);
+export const LOCAL_SURFACES = new Set(["cli", "tui", "desktop", "local"]);
+
+/** `sessionVerdict` results other than `main`, used as refusal reasons. */
+export const REFUSED = "unavailable in group sessions";
+export const NO_SESSION = "no_session";
+
+export type SessionVerdict = "main" | typeof REFUSED | typeof NO_SESSION;
 
 export type Kind = "daily_note" | "long_term" | "session";
 export type DateSource = "filename" | "inline" | "mtime" | "message";
@@ -197,11 +203,11 @@ function norm(value: string | undefined): string {
 }
 
 /**
- * True when the calling session is the owner's main session.
+ * Whether the calling session is the owner's main session.
  *
- * Mirrors `is_private_session` in `plugins/recall/__init__.py`, and is what a
+ * Mirrors `SessionView.is_main` in `plugins/recall/__init__.py`, and is what a
  * terminal invocation of this CLI is held to (Hermes exports the gateway's
- * session variables to terminal commands):
+ * session variables to terminal commands). It needs positive evidence:
  *
  *   - a cron run is never the main session, whatever it binds: Hermes cron
  *     binds an empty chat type and delivers to the chat the job was created
@@ -209,21 +215,36 @@ function norm(value: string | undefined): string {
  *     or a `cron` platform/source);
  *   - a one-to-one chat type (`dm`, …) is the main session;
  *   - an empty chat type is the main session only when every surface identity
- *     that is set is local (cli, tui, desktop, acp); none set is the plain CLI;
- *   - anything else (group, forum, channel, api_server, webhook, unknown) is not.
+ *     that is set is local (cli, tui, desktop, local);
+ *   - with nothing set at all, only an interactive terminal (a TTY on stdin)
+ *     counts; an empty environment is `no_session`, because a gateway that
+ *     strips an unbound task's variables produces exactly that;
+ *   - anything else (group, forum, channel, api_server, webhook, acp, unknown)
+ *     is refused.
  */
-export function sessionIsPrivate(env: Record<string, string | undefined> = process.env): boolean {
+export function sessionVerdict(
+  env: Record<string, string | undefined> = process.env,
+  tty: boolean = Boolean(process.stdin.isTTY),
+): SessionVerdict {
   const chatType = norm(env.HERMES_SESSION_CHAT_TYPE);
   const idents = [env.HERMES_PLATFORM, env.HERMES_SESSION_PLATFORM, env.HERMES_SESSION_SOURCE]
     .map(norm)
     .filter((v) => v !== "");
   const sessionId = (env.HERMES_SESSION_ID ?? "").trim();
   if (norm(env.HERMES_CRON_SESSION) === "1" || sessionId.startsWith("cron_") || idents.includes("cron")) {
-    return false;
+    return REFUSED;
   }
-  if (DIRECT_CHAT_TYPES.has(chatType)) return true;
-  if (chatType !== "") return false;
-  return idents.every((ident) => LOCAL_SURFACES.has(ident));
+  if (DIRECT_CHAT_TYPES.has(chatType)) return "main";
+  if (chatType !== "") return REFUSED;
+  if (idents.length > 0) return idents.every((ident) => LOCAL_SURFACES.has(ident)) ? "main" : REFUSED;
+  return tty ? "main" : NO_SESSION;
+}
+
+export function sessionIsPrivate(
+  env: Record<string, string | undefined> = process.env,
+  tty: boolean = Boolean(process.stdin.isTTY),
+): boolean {
+  return sessionVerdict(env, tty) === "main";
 }
 
 // ── Dates ────────────────────────────────────────────────────────────────────
@@ -603,12 +624,9 @@ function syncFiles(db: Database, home: string, pass: Pass): void {
 
 // ── Hermes session store (read-only) ─────────────────────────────────────────
 
+/** Column names of `table`. Read errors propagate: an unreadable store is not an unsupported one. */
 function columns(db: Database, table: string): Set<string> {
-  try {
-    return new Set((db.query(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((r) => r.name));
-  } catch {
-    return new Set();
-  }
+  return new Set((db.query(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((r) => r.name));
 }
 
 interface SessionPrint {
@@ -639,8 +657,15 @@ function printOf(p: SessionPrint): string {
  * A session that only grew gets its new messages appended; one whose earlier
  * messages changed (rewind, compaction) is re-indexed whole.
  *
+ * Compacted messages (`active = 0, compacted = 1`: summarised away, which
+ * Hermes keeps searchable) stay indexed; rewound ones (`active = 0,
+ * compacted = 0`) do not.
+ *
  * If the store is absent or its schema lacks a column this depends on, the
  * session side is skipped with a status and the markdown index still works.
+ * If it cannot be opened or read (for one, a WAL database with no process
+ * holding it, whose `-shm` a read-only connection cannot create), nothing is
+ * purged: the pass is marked partial and answers from the existing index.
  */
 function syncSessions(db: Database, stateDbPath: string, epoch: number, pass: Pass): void {
   const { stats } = pass;
@@ -654,8 +679,8 @@ function syncSessions(db: Database, stateDbPath: string, epoch: number, pass: Pa
     store = new Database(stateDbPath, { readonly: true });
     store.run("PRAGMA busy_timeout = 2000");
   } catch {
-    stats.sessions.status = "session_store_unreadable";
-    return; // keep what we have; do not purge on a transient open failure
+    unreadable(pass);
+    return;
   }
   try {
     const sCols = columns(store, "sessions");
@@ -669,7 +694,9 @@ function syncSessions(db: Database, stateDbPath: string, epoch: number, pass: Pa
       return;
     }
     const filters = ["m.role IN ('user', 'assistant')", "m.content IS NOT NULL", "m.content != ''"];
-    if (mCols.has("active")) filters.push("m.active = 1");
+    if (mCols.has("active")) {
+      filters.push(mCols.has("compacted") ? "(m.active = 1 OR m.compacted = 1)" : "m.active = 1");
+    }
     if (mCols.has("_compressed_summary")) filters.push("m._compressed_summary = 0");
     if (epoch > 0) filters.push(`m.timestamp >= ${Number(epoch)}`);
     const localSources = [...LOCAL_SURFACES].map((s) => `'${s}'`).join(", ");
@@ -756,9 +783,19 @@ function syncSessions(db: Database, stateDbPath: string, epoch: number, pass: Pa
       else stats.sessions.indexed++;
     }
     stats.sessions.status = "ok";
+  } catch (err) {
+    // A refusal of our own (index path checks) is not a store failure.
+    if (err instanceof Error && /^index_/.test(err.message)) throw err;
+    unreadable(pass);
   } finally {
     store.close();
   }
+}
+
+/** Keep what we have: a failure to open or read the store never purges. */
+function unreadable(pass: Pass): void {
+  pass.stats.sessions.status = "session_store_unreadable";
+  pass.stats.partial = true;
 }
 
 function purgeSessions(db: Database, present: Set<string>, pass: Pass): void {
@@ -796,10 +833,11 @@ export function rebuild(paths: Paths, opts: RebuildOptions = {}): RebuildStats {
         db.run("INSERT INTO chunks_fts(chunks_fts) VALUES('optimize')");
       }
       if (owed) {
-        // Pages freed earlier by a non-secure pass still hold text: rewrite.
-        db.run("DELETE FROM meta WHERE key = 'scrub_owed'");
+        // Pages freed earlier by a non-secure pass still hold text: rewrite,
+        // and clear the debt only once the rewrite has reached the main file.
         db.run("VACUUM");
         db.run("PRAGMA wal_checkpoint(TRUNCATE)");
+        db.run("DELETE FROM meta WHERE key = 'scrub_owed'");
       }
     } else if (pass.deleted > 0 && !owed) {
       db.run("INSERT OR REPLACE INTO meta(key, value) VALUES('scrub_owed', '1')");
@@ -818,7 +856,8 @@ export function queryTerms(query: string): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const match of query.toLowerCase().matchAll(/[\p{L}\p{N}]+/gu)) {
-    const term = match[0].slice(0, MAX_TERM_CHARS);
+    // Code points, not UTF-16 units: the Python side cuts at the same place.
+    const term = Array.from(match[0]).slice(0, MAX_TERM_CHARS).join("");
     if (seen.has(term)) continue;
     seen.add(term);
     out.push(term);
@@ -850,10 +889,13 @@ export function query(
     rebuildFirst?: boolean;
     budgetMs?: number;
     env?: Record<string, string | undefined>;
+    /** Whether stdin is an interactive terminal; defaults to the process's. */
+    tty?: boolean;
   },
 ): QueryResult {
-  if (!sessionIsPrivate(opts.env ?? process.env)) {
-    return { status: "unavailable", reason: "unavailable in group sessions", hit_count: 0, hits: [] };
+  const verdict = sessionVerdict(opts.env ?? process.env, opts.tty ?? Boolean(process.stdin.isTTY));
+  if (verdict !== "main") {
+    return { status: "unavailable", reason: verdict, hit_count: 0, hits: [] };
   }
   const text = typeof opts.query === "string" ? opts.query : "";
   if (text.trim() === "") return { status: "error", reason: "empty_query", hit_count: 0, hits: [] };

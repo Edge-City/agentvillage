@@ -92,6 +92,7 @@ def bound(chat_type="", platform="", source="", cron="", session_id=""):
         ("cron_ session id", bound(session_id="cron_job_1")),
         ("cron platform", bound(platform="cron")),
         ("api_server turn", bound(platform="api_server")),
+        ("ACP editor turn", bound(source="acp")),
         ("webhook", bound(chat_type="webhook", platform="webhook")),
         ("messaging platform without a chat type", bound(platform="telegram")),
         ("gateway turn with nothing bound", bound()),
@@ -196,6 +197,22 @@ def test_real_hermes_cron_binding_delivering_to_a_group_is_refused(recall, ctx, 
         return recall.is_private_session()
 
     assert copy_context().run(dm_turn) is True
+
+
+def test_a_plain_cli_verdict_is_passed_to_the_child_as_platform_cli(recall, ctx, home, monkeypatch):
+    fake_gateway(monkeypatch, engaged=False, bound={})
+    monkeypatch.setenv("AV_RECALL_BUN", sys.executable)
+    seen: dict = {}
+    recall.register(ctx)
+    recall._RECALL.runner = ok_runner({"status": "ok", "hits": [], "hit_count": 0}, seen)
+    call(ctx, {"query": QUERY})
+    assert seen["env"]["HERMES_SESSION_CHAT_TYPE"] == ""
+    assert seen["env"]["HERMES_SESSION_PLATFORM"] == "cli"
+
+
+def test_query_terms_are_cut_at_64_code_points(recall):
+    term = recall.query_terms("\U0001D49C" * 70)[0]
+    assert len(term) == 64
 
 
 def test_the_child_gets_the_resolved_surface(recall, ctx, home, monkeypatch):

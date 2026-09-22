@@ -58,9 +58,10 @@ REFUSAL_REASON = "unavailable in group sessions"
 #: One-to-one chat types: the main session, unless the run is a cron job.
 DIRECT_CHAT_TYPES = frozenset({"dm", "private", "direct", "c2c"})
 #: Surfaces that are the owner's own machine. An empty chat type is the main
-#: session only on one of these. Mirrors ``LOCAL_SURFACES`` in ``recall.ts``,
-#: which enforces the same rule for a terminal invocation of the CLI.
-LOCAL_SURFACES = frozenset({"cli", "tui", "desktop", "acp", "local"})
+#: session only on one of these; ACP (editor) turns are not among them and are
+#: refused. Mirrors ``LOCAL_SURFACES`` in ``recall.ts``, which enforces the
+#: same rule for a terminal invocation of the CLI.
+LOCAL_SURFACES = frozenset({"cli", "tui", "desktop", "local"})
 
 #: Bounded vocabulary for the event's ``surface``: arbitrary platform strings
 #: never leave the sandbox.
@@ -180,11 +181,13 @@ def bun_path() -> Optional[str]:
 def child_env(home: Path, session: "SessionView") -> dict[str, str]:
     env = {name: os.environ[name] for name in CHILD_ENV_PASSTHROUGH if name in os.environ}
     env["HERMES_HOME"] = str(home)
-    # The CLI enforces the same guard; hand it the verdict inputs resolved here
-    # so a stale process-wide mirror cannot disagree with the task-local context.
+    # The CLI enforces the same guard and needs positive evidence; hand it the
+    # inputs resolved here so a stale process-wide mirror cannot disagree with
+    # the task-local context. A plain-CLI verdict (nothing bound, not a
+    # gateway) is passed on as platform `cli`: the child's stdin is a pipe, so
+    # it cannot see the terminal for itself.
     env["HERMES_SESSION_CHAT_TYPE"] = session.chat_type or ""
-    if session.surface_ident:
-        env["HERMES_SESSION_PLATFORM"] = session.surface_ident
+    env["HERMES_SESSION_PLATFORM"] = session.surface_ident or "cli"
     return env
 
 
@@ -275,10 +278,10 @@ class SessionView:
           to the chat the job was created in, which may be a group.
         - A one-to-one chat type (``dm``, …) is.
         - An empty chat type is only on a local surface (cli, tui, desktop,
-          acp). With no surface bound at all it is the plain CLI — unless this
-          process is a gateway, where an unbound turn is refused.
-        - Everything else (group, forum, channel, api_server, webhook, a value
-          never seen before) is not.
+          local). With no surface bound at all it is the plain CLI — unless
+          this process is a gateway, where an unbound turn is refused.
+        - Everything else (group, forum, channel, api_server, webhook, acp, a
+          value never seen before) is not.
         """
         if self.unknown or self.is_cron:
             return False

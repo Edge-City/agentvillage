@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, expect, test } from "bun:test";
 import YAML from "yaml";
 
-import { recallChoice } from "../config";
+import { dotenvValue, recallChoice } from "../config";
 import { installRecall, recallInstallFailures, resetRecall, safeInstallRecall, wipeRecallIndex } from "../install_recall";
 
 const SOURCE_SKILLS = join(import.meta.dir, "..", "..", "skills");
@@ -64,6 +64,29 @@ test("recallChoice falls back to $HERMES_HOME/.env when the variable is absent f
   expect(recallChoice()).toBeNull();
 });
 
+test(".env values parse the way python-dotenv parses them", () => {
+  // Expected values produced by python-dotenv's dotenv_values in the Hermes venv.
+  const cases: Record<string, string> = {
+    "1": "1",
+    '"1" # yes': "1",
+    "'on' # quoted": "on",
+    "off # changed my mind": "off",
+    "on#x": "on#x",
+    " yes ": "yes",
+    '"true"': "true",
+    '"a\\"b"': 'a"b',
+    "": "",
+  };
+  for (const [raw, expected] of Object.entries(cases)) expect(dotenvValue(raw)).toBe(expected);
+});
+
+test("a quoted .env value with an inline comment opts in", () => {
+  const home = tenant();
+  delete process.env.AV_RECALL_ENABLED;
+  writeFileSync(join(home, ".env"), 'AV_RECALL_ENABLED="1" # recall pilot\n');
+  expect(recallChoice()).toBe(true);
+});
+
 test("the sidecar /update path honours an opt-in written only to .env", () => {
   const home = tenant();
   delete process.env.AV_RECALL_ENABLED;
@@ -110,7 +133,6 @@ test("opting out disables the plugin, removes the skill, and deletes the derived
   // The attendee's own notes are untouched.
   expect(readFileSync(join(home, "memory", "2026-09-22.md"), "utf8")).toBe("- a note");
 });
-
 
 test("opting out keeps the --wipe-user epoch, so a later opt-in still excludes old conversations", () => {
   const home = tenant();

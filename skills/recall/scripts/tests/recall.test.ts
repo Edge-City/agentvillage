@@ -27,6 +27,7 @@ import {
   rebuild,
   resolvePaths,
   sessionIsPrivate,
+  sessionVerdict,
   validSince,
   type Paths,
 } from "../recall";
@@ -84,7 +85,7 @@ function makeStateDb(path: string): Database {
   db.run(`CREATE TABLE messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, role TEXT NOT NULL,
             content TEXT, timestamp REAL NOT NULL, active INTEGER NOT NULL DEFAULT 1,
-            _compressed_summary INTEGER NOT NULL DEFAULT 0)`);
+            compacted INTEGER NOT NULL DEFAULT 0, _compressed_summary INTEGER NOT NULL DEFAULT 0)`);
   const s = db.prepare("INSERT INTO sessions(id, source, chat_type, started_at) VALUES (?, ?, ?, 0)");
   s.run("tg-dm", "telegram", "dm");
   s.run("tg-group", "telegram", "group");
@@ -315,7 +316,7 @@ describe("group-session refusal", () => {
   test("DM and local sessions are the main session", () => {
     expect(sessionIsPrivate({ HERMES_SESSION_CHAT_TYPE: "dm", HERMES_SESSION_PLATFORM: "telegram" })).toBe(true);
     expect(sessionIsPrivate({ HERMES_SESSION_CHAT_TYPE: " DM " })).toBe(true);
-    expect(sessionIsPrivate({})).toBe(true); // plain CLI: nothing bound
+    expect(sessionIsPrivate({}, true)).toBe(true); // an interactive terminal
     expect(sessionIsPrivate({ HERMES_SESSION_CHAT_TYPE: "", HERMES_SESSION_SOURCE: "cli" })).toBe(true);
     expect(sessionIsPrivate({ HERMES_SESSION_CHAT_TYPE: "", HERMES_SESSION_SOURCE: "desktop" })).toBe(true);
   });
@@ -332,6 +333,7 @@ describe("group-session refusal", () => {
     "an api_server turn": { HERMES_SESSION_CHAT_TYPE: "", HERMES_SESSION_PLATFORM: "api_server" },
     "a webhook": { HERMES_SESSION_CHAT_TYPE: "webhook", HERMES_SESSION_PLATFORM: "webhook" },
     "a messaging platform with no chat type": { HERMES_SESSION_CHAT_TYPE: "", HERMES_SESSION_PLATFORM: "telegram" },
+    "an ACP (editor) turn": { HERMES_SESSION_CHAT_TYPE: "", HERMES_SESSION_SOURCE: "acp" },
     "a local source on a remote platform": {
       HERMES_SESSION_CHAT_TYPE: "",
       HERMES_SESSION_SOURCE: "cli",
@@ -340,9 +342,9 @@ describe("group-session refusal", () => {
   };
   for (const [label, env] of Object.entries(notMain)) {
     test(`refuses ${label}`, () => {
-      expect(sessionIsPrivate(env)).toBe(false);
+      expect(sessionIsPrivate(env, true)).toBe(false);
       const paths = workspace();
-      expect(query(paths, { query: "Priya", env }).status).toBe("unavailable");
+      expect(query(paths, { query: "Priya", env, tty: true }).status).toBe("unavailable");
       expect(existsSync(paths.index)).toBe(false);
     });
   }
@@ -653,5 +655,122 @@ describe("query-path budget and scrubbing", () => {
     expect(res.index.sessions.indexed).toBe(0);
     expect(res.hits[0]!.ref).toMatch(/^session:big-7#\d+:1$/);
     expect(elapsed).toBeLessThan(3000);
+  });
+});
+
+describe("positive evidence of a main session", () => {
+  test("an empty environment without a terminal is no_session", () => {
+    expect(sessionVerdict({}, false)).toBe("no_session");
+    const paths = workspace();
+    expect(query(paths, { query: "Priya", env: {}, tty: false })).toEqual({
+      status: "unavailable",
+      reason: "no_session",
+      hit_count: 0,
+      hits: [],
+    });
+    expect(existsSync(paths.index)).toBe(false);
+  });
+
+  /** The environment minus every session variable this process may have inherited. */
+  function bareEnv(extra: Record<string, string>): Record<string, string> {
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      if (value === undefined || /^HERMES_(SESSION_|CRON_|PLATFORM)/.test(key)) continue;
+      env[key] = value;
+    }
+    return { ...env, ...extra };
+  }
+
+  test("the CLI with piped stdin and no session variables refuses", async () => {
+    const paths = workspace();
+    const proc = Bun.spawn(["bun", SCRIPT, "query", "--query-stdin"], {
+      env: bareEnv({ HERMES_HOME: paths.home }),
+      stdin: new TextEncoder().encode("Priya"),
+      stdout: "pipe",
+    });
+    const json = JSON.parse((await new Response(proc.stdout).text()).trim());
+    expect(json).toEqual({ status: "unavailable", reason: "no_session", hit_count: 0, hits: [] });
+  });
+
+  test("the CLI as the plugin drives it (platform cli, piped stdin) answers", async () => {
+    const paths = workspace();
+    const proc = Bun.spawn(["bun", SCRIPT, "query", "--query-stdin"], {
+      env: bareEnv({ HERMES_HOME: paths.home, HERMES_SESSION_CHAT_TYPE: "", HERMES_SESSION_PLATFORM: "cli" }),
+      stdin: new TextEncoder().encode("Priya"),
+      stdout: "pipe",
+    });
+    const json = JSON.parse((await new Response(proc.stdout).text()).trim());
+    expect(json.status).toBe("ok");
+    expect(json.hit_count).toBe(2);
+  });
+
+  test("the CLI in a real terminal answers", async () => {
+    const script = Bun.which("script");
+    if (!script) return; // no pty helper on this host
+    const paths = workspace();
+    const argv =
+      process.platform === "darwin"
+        ? [script, "-q", "/dev/null", "bun", SCRIPT, "query", "--query", "Priya"]
+        : [script, "-q", "-e", "-c", `bun ${JSON.stringify(SCRIPT)} query --query Priya`, "/dev/null"];
+    const proc = Bun.spawn(argv, { env: bareEnv({ HERMES_HOME: paths.home }), stdin: "ignore", stdout: "pipe" });
+    const out = (await new Response(proc.stdout).text()).replace(/\r/g, "");
+    await proc.exited;
+    // The pty echoes control characters (e.g. `^D`) ahead of the output on the same line.
+    const line = out.split("\n").filter((l) => l.includes("{")).pop() ?? "{}";
+    const json = JSON.parse(line.slice(line.indexOf("{")));
+    expect(json.status).toBe("ok");
+    expect(json.hit_count).toBe(2);
+  });
+});
+
+describe("session store resilience", () => {
+  test("compacted messages stay searchable; rewound ones do not", () => {
+    const paths = workspace();
+    const store = makeStateDb(paths.stateDb);
+    store.run("UPDATE messages SET active = 0, compacted = 1 WHERE id = 1"); // summarised away
+    store.run("UPDATE messages SET active = 0, compacted = 0 WHERE id = 2"); // rewound
+    store.close();
+    rebuild(paths);
+    expect(query(paths, { query: "Ashwem", env: DM }).hit_count).toBe(1);
+    expect(query(paths, { query: "riders", env: DM }).hit_count).toBe(0);
+  });
+
+  test("compaction after indexing appends instead of dropping the summarised messages", () => {
+    const paths = workspace();
+    const store = makeStateDb(paths.stateDb);
+    rebuild(paths);
+    store.run("UPDATE messages SET active = 0, compacted = 1 WHERE session_id = 'tg-dm' AND active = 1");
+    store.run("INSERT INTO messages(session_id, role, content, timestamp) VALUES ('tg-dm', 'user', 'after compaction: dolphins', ?)", [
+      NOON_UTC("2026-09-22"),
+    ]);
+    store.close();
+    const stats = rebuild(paths);
+    expect(stats.sessions.appended).toBe(1);
+    expect(query(paths, { query: "Ashwem", env: DM }).hit_count).toBe(1);
+    expect(query(paths, { query: "dolphins", env: DM }).hit_count).toBe(1);
+  });
+
+  test("a WAL store with no holder and no -shm is unreadable, never purged, and answers partial", () => {
+    const paths = workspace();
+    const store = makeStateDb(paths.stateDb);
+    rebuild(paths);
+    store.run("PRAGMA wal_checkpoint(TRUNCATE)");
+    store.close();
+    rmSync(`${paths.stateDb}-wal`, { force: true });
+    rmSync(`${paths.stateDb}-shm`, { force: true });
+
+    const stats = rebuild(paths);
+    expect(stats.sessions.status).toBe("session_store_unreadable");
+    expect(stats.sessions.removed).toBe(0);
+    expect(stats.partial).toBe(true);
+    const res = query(paths, { query: "kiteboarding", env: DM });
+    if (res.status !== "ok") throw new Error(res.reason);
+    expect(res.partial).toBe(true);
+    expect(res.hit_count).toBe(3);
+  });
+
+  test("query terms are cut at 64 code points, not UTF-16 units", () => {
+    const term = queryTerms("\u{1D49C}".repeat(70))[0]!;
+    expect(Array.from(term).length).toBe(64);
   });
 });

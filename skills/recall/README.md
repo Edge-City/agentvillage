@@ -43,10 +43,12 @@ yet; the requirement is recorded there.
   one-to-one chat (`dm`), or a session with no chat type on the owner's own
   machine (CLI, TUI, desktop). Everywhere else — group chats, scheduled cron
   runs (Hermes cron binds no chat type and delivers to the chat the job was
-  created in, which may be a group), API-server turns, webhooks, anything
-  unrecognised — the tool returns
+  created in, which may be a group), API-server turns, ACP (editor) turns,
+  webhooks, anything unrecognised — the tool returns
   `{"status": "unavailable", "reason": "unavailable in group sessions"}` with no
-  data, before the index is touched.
+  data, before the index is touched. The CLI needs positive evidence too: run
+  with no session variables and no terminal on stdin, it answers
+  `{"status": "unavailable", "reason": "no_session"}`.
 - Never writes under `memory/`. The index lives at `$HERMES_HOME/.recall/`, and
   the tool's result text must not be copied into notes (the skill tells the
   agent so): search results written into memory would come back as future
@@ -207,6 +209,21 @@ rule).
   what it had, and markdown search keeps working.
 - Cron runs are refused even when the job was created in the owner's DM: the
   session carries no reliable record of where it will deliver.
+- A cron brief that Hermes delivers into the owner's DM lands in that DM
+  session's transcript and is indexed with it like any other message there.
+  Accepted: it is text the owner was sent, in their own conversation.
+- `dm` counts as the main session on any platform. Only Telegram is configured
+  today, so this is latent; a platform whose `dm` is not one-to-one with the
+  owner would need a closer look before it is enabled.
+- ACP (editor) turns are refused. Hermes marks them only by source, and the
+  rule fails closed rather than guess whether an editor session is the owner's.
+- Compacted messages (summarised away by Hermes, which keeps them searchable)
+  stay indexed; rewound messages do not.
+- If `state.db` cannot be opened or read — for one, a WAL database with no
+  process holding it, whose `-shm` a read-only connection cannot create —
+  nothing is purged; the query answers from the existing index with
+  `partial: true`. Before the gateway first opens the store after a boot, a
+  rebuild may therefore see sessions as unreadable.
 - A DM from someone other than the owner (a paired second user) is still a DM.
 - The refusal is a guarantee of this tool, not isolation: in a group chat the
   agent can still read `MEMORY.md` through its file tools, as it can today.

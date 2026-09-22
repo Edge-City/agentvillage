@@ -183,15 +183,41 @@ function recallFlag(): string | undefined {
   if (!existsSync(dotenv)) return undefined;
   let found: string | undefined;
   for (const line of readFileSync(dotenv, "utf8").split(/\r?\n/)) {
-    const m = /^\s*(?:export\s+)?AV_RECALL_ENABLED\s*=\s*(.*?)\s*$/.exec(line);
+    const m = /^\s*(?:export\s+)?AV_RECALL_ENABLED\s*=(.*)$/.exec(line);
     if (!m) continue;
-    let value = m[1] ?? "";
-    const quoted = /^(["'])(.*)\1$/.exec(value);
-    if (quoted) value = quoted[2] ?? "";
-    else value = value.replace(/\s+#.*$/, "");
-    found = value; // last assignment wins, as when the file is sourced
+    found = dotenvValue(m[1] ?? ""); // last assignment wins, as python-dotenv does
   }
   return found;
+}
+
+/**
+ * One `.env` value, read the way python-dotenv (which Hermes uses) reads it:
+ * a single-quoted value is literal up to the closing quote; a double-quoted
+ * one honours backslash escapes up to the closing unescaped quote; anything
+ * after the closing quote (such as `# comment`) is ignored. An unquoted value
+ * ends at the first `#` that follows whitespace, and is trimmed.
+ * (`AV_RECALL_ENABLED` values are simple words; this covers what an operator
+ * writes, not every python-dotenv corner such as multi-line values.)
+ */
+export function dotenvValue(raw: string): string {
+  const text = raw.trim();
+  const quote = text[0];
+  if (quote === "'" || quote === '"') {
+    let out = "";
+    for (let i = 1; i < text.length; i++) {
+      const ch = text[i]!;
+      if (ch === quote) return out;
+      if (quote === '"' && ch === "\\" && i + 1 < text.length) {
+        const next = text[++i]!;
+        out += next === "n" ? "\n" : next === "t" ? "\t" : next;
+        continue;
+      }
+      out += ch;
+    }
+    return text; // unterminated: python-dotenv keeps the raw text
+  }
+  // python-dotenv: `re.sub(r"\s+#.*", "", value).rstrip()`.
+  return text.replace(/\s+#.*$/, "").trim();
 }
 
 /**

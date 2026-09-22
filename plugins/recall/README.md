@@ -45,8 +45,10 @@ Read in the Hermes tree at `0.21.3` (2026.9.14) and checked against the last com
   created in (`HERMES_CRON_AUTO_DELIVER_*`), which can be a group. So an empty chat type counts as
   the main session only when the run is not cron and every bound surface identity
   (`HERMES_PLATFORM`, `HERMES_SESSION_PLATFORM`, `HERMES_SESSION_SOURCE`) is local
-  (`cli|tui|desktop|acp|local`); nothing bound at all is the plain CLI, and only outside a gateway
-  process. `api_server` turns, webhooks and every unrecognised surface are refused.
+  (`cli|tui|desktop|local`); nothing bound at all is the plain CLI, and only outside a gateway
+  process, in which case the plugin tells the CLI `HERMES_SESSION_PLATFORM=cli` (the CLI itself
+  needs positive evidence and its stdin is a pipe). `api_server` turns, ACP turns, webhooks and
+  every unrecognised surface are refused.
 - **Result marker.** Every result the handler returns starts with the line `[recall]`; the research
   archive's redaction step keys on it (see the skill README).
 - **Loading.** User plugins load only when listed in `plugins.enabled`
