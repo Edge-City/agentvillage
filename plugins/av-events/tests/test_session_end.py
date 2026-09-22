@@ -151,14 +151,21 @@ def test_no_profile_means_no_event(live, ctx, av):
     assert of_type(av, live, "profile.updated") == []
 
 
-def test_an_inert_emit_does_not_record_the_hash(plugin, ctx, monkeypatch, av, home):
+def test_an_inert_emit_does_not_record_the_hash(live, ctx, monkeypatch, av, home):
+    """The plugin is active and reaches the emit; only the emit itself is inert."""
     write_profile(home)
-    plugin.register(ctx)
-    close(ctx, "s1")  # no token: inert
+    collector = live._COLLECTOR
+    real_emit = collector.emit
+    inert = {"on": True}
+    monkeypatch.setattr(collector, "emit", lambda event_type, *a, **k: (
+        None if inert["on"] and event_type == "profile.updated" else real_emit(event_type, *a, **k)))
+    close(ctx, "s1")
+    assert of_type(av, live, "session.ended")  # the session did close
     assert not (home / "av-events" / "profile.json").exists()
-    monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
+    inert["on"] = False
     close(ctx, "s2")
-    assert len(of_type(av, plugin, "profile.updated")) == 1
+    assert len(of_type(av, live, "profile.updated")) == 1
+    assert (home / "av-events" / "profile.json").exists()
 
 
 def test_an_oversized_profile_is_not_read(live, ctx, av, home):

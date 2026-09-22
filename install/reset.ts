@@ -147,6 +147,21 @@ function removeProjectFiles(wipeUser: boolean): void {
   }
 }
 
+/**
+ * `--wipe-user` only: the av-events plugin's local state under
+ * `$HERMES_HOME/av-events/` — the unsent event buffer, the tenant hash key,
+ * the EdgeOS action ledger, the cron cursor, the profile and prompt seen-sets.
+ * All of it describes the user whose data is being wiped. A plain reset keeps
+ * it: the tenant is the same person and the buffer may hold unsent events.
+ */
+export function removeAvEventsState(home: string = hermesHome()): boolean {
+  const target = join(home, "av-events");
+  if (!existsSync(target)) return false;
+  rmSync(target, { recursive: true, force: true });
+  console.log(`→ removed ${target}`);
+  return true;
+}
+
 function restartGateway(): void {
   try {
     execFileSync("hermes", ["gateway", "restart"], { stdio: ["ignore", "ignore", "inherit"] });
@@ -171,6 +186,7 @@ function main(): void {
   removeEdgeSkills();
   removeProjectFiles(wipeUser);
   resetRecall(wipeUser);
+  if (wipeUser) removeAvEventsState();
   restartGateway();
 
   console.log("");
@@ -180,4 +196,5 @@ function main(): void {
   console.log("  re-install: bun install/install.ts --index-api-key <KEY>");
 }
 
-main();
+// Run only as a script, so the tests can import `removeAvEventsState`.
+if (import.meta.main) main();

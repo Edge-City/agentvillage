@@ -10,12 +10,16 @@ from __future__ import annotations
 import atexit
 import functools
 import hashlib
+import hmac
 import json
+import logging
 import math
 import os
 import re
+import secrets
 import threading
 import time
+import uuid
 from collections import OrderedDict
 from typing import Any, Callable, Optional
 
@@ -62,6 +66,24 @@ MAX_PROFILE_BYTES = 1024 * 1024
 
 #: Hermes `sessions.cost_status` / `cost_source` values leave only in this shape.
 _COST_LABEL = re.compile(r"^[a-z0-9_.:-]{1,64}$")
+
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+logger = logging.getLogger("av-events")
+
+#: Counters already logged by this process. Each is logged once, as a name and
+#: a count — never the value that tripped it.
+_LOGGED_COUNTERS: set[str] = set()
+
+#: The two USER.md files `profile.updated` reports, by `kind`. Hermes's memory
+#: tool writes the first (`tools/memory_tool.py`); the landing's enrichment
+#: writes the second, through the control-plane sidecar (`USER_FILE =
+#: $HERMES_DATA/USER.md`, the Hermes home) and the installer's
+#: `targetWorkspace()` (= `$HERMES_HOME`, which is `~/.hermes` by default).
+PROFILE_FILES = (
+    ("memory_profile", ("memories", "USER.md")),
+    ("landing_profile", ("USER.md",)),
+)
 
 # --------------------------------------------------------------------------
 # Runtime facts
@@ -270,6 +292,11 @@ class Collector:
         #: Cron-tail passes that raised. The tail runs on the flusher thread,
         #: outside `guarded`, so it keeps its own count.
         self.cron_errors = 0
+        #: The tenant's HMAC key (`hash_key`), loaded on first use.
+        self._hash_key: Optional[bytes] = None
+        #: Diagnostic counters, names only (`tenant_id_not_uuid`, …).
+        self.counters: dict[str, int] = {}
+        self._check_tenant_id()
         #: Test seam. When set, used in place of `post_events`.
         self.sender: Optional[Callable[[str, str, list], SendResult]] = None
 
@@ -279,6 +306,27 @@ class Collector:
         """Re-read the kill switches."""
         self.config = Config()
         self._config_at = time.monotonic()
+        self._check_tenant_id()
+
+    def _check_tenant_id(self) -> None:
+        """Count, and log once per process, a `TENANT_ID` that is not a UUID.
+
+        Ingest recomputes `cron.run`'s id from the tenant id its token belongs
+        to; a sandbox whose `TENANT_ID` is some other spelling of it has every
+        `cron.run` quarantined as `event_id_mismatch`. The value is never logged.
+        """
+        tenant = self.config.tenant_id
+        if not tenant:
+            return
+        try:
+            uuid.UUID(tenant)
+            return
+        except ValueError:
+            pass
+        self.counters["tenant_id_not_uuid"] = self.counters.get("tenant_id_not_uuid", 0) + 1
+        if "tenant_id_not_uuid" not in _LOGGED_COUNTERS:
+            _LOGGED_COUNTERS.add("tenant_id_not_uuid")
+            logger.warning("av-events: tenant_id_not_uuid=%d", self.counters["tenant_id_not_uuid"])
 
     def _ensure_buffer(self) -> Optional[Buffer]:
         if self.buffer is not None:
@@ -583,40 +631,118 @@ class Collector:
             "cost_source": label(row.get("cost_source")),
         }
 
-    def check_profile(self, session_id: Optional[str]) -> Optional[dict]:
-        """Emit `profile.updated` when `$HERMES_HOME/memories/USER.md` has changed.
+    def check_profile(self, session_id: Optional[str]) -> list[dict]:
+        """Emit `profile.updated` for each USER.md that has changed.
 
-        §4.1 `user_md_hash`, `length`. The hash is SHA-256 of the file's bytes
-        and rides in every mode — `core.tasks` keys on it, like the intention
-        hashes. `length` counts characters and is omitted in `metadata`. The
-        last hash sent is kept in `$HERMES_HOME/av-events/profile.json` and
-        recorded only after the event is buffered, so an inert emit is retried
-        at the next session end rather than lost.
+        Two files, told apart by `kind` (`PROFILE_FILES`): `memory_profile` is
+        `$HERMES_HOME/memories/USER.md`, what the agent's memory tool keeps;
+        `landing_profile` is `$HERMES_HOME/USER.md`, what the landing's
+        enrichment wrote. §4.1 `user_md_hash`, `length`. The hash is SHA-256 of
+        the file's bytes and rides in every mode — `core.tasks` keys on it, like
+        the intention hashes. `length` counts characters and is omitted in
+        `metadata`. The last hash sent per kind is kept in
+        `$HERMES_HOME/av-events/profile.json` and recorded only after the event
+        is buffered, so an inert emit is retried at the next session end.
         """
         if self.plugin_disabled or not self.config.active:
-            return None
-        path = os.path.join(self.config.home, "memories", "USER.md")
-        try:
-            if os.path.getsize(path) > MAX_PROFILE_BYTES:
-                return None
-            with open(path, "rb") as handle:
-                raw = handle.read(MAX_PROFILE_BYTES + 1)
-        except OSError:
-            return None
-        digest = hashlib.sha256(raw).hexdigest()
+            return []
         state_path = os.path.join(self.config.state_dir, "profile.json")
+        kinds = {kind for kind, _ in PROFILE_FILES}
+        emitted: list[dict] = []
         # Two sessions can finalize at once; one of them reports the change.
         with self._lock:
             previous = self._read_json(state_path)
-            if isinstance(previous, dict) and previous.get("user_md_hash") == digest:
-                return None
-            payload: dict[str, Any] = {"user_md_hash": digest}
-            if self.config.capture != "metadata":
-                payload["length"] = len(raw.decode("utf-8", errors="replace"))
-            event = self.emit("profile.updated", payload, session_id=session_id)
-            if event is not None:
-                self._write_json(state_path, {"user_md_hash": digest})
-            return event
+            seen = {k: v for k, v in previous.items() if isinstance(v, str)} if isinstance(previous, dict) else {}
+            if "user_md_hash" in seen and "memory_profile" not in seen:  # the first layout
+                seen["memory_profile"] = seen["user_md_hash"]
+            changed = False
+            for kind, parts in PROFILE_FILES:
+                path = os.path.join(self.config.home, *parts)
+                try:
+                    if os.path.getsize(path) > MAX_PROFILE_BYTES:
+                        continue
+                    with open(path, "rb") as handle:
+                        raw = handle.read(MAX_PROFILE_BYTES + 1)
+                except OSError:
+                    continue
+                digest = hashlib.sha256(raw).hexdigest()
+                if seen.get(kind) == digest:
+                    continue
+                payload: dict[str, Any] = {"kind": kind, "user_md_hash": digest}
+                if self.config.capture != "metadata":
+                    payload["length"] = len(raw.decode("utf-8", errors="replace"))
+                event = self.emit("profile.updated", payload, session_id=session_id)
+                if event is not None:
+                    seen[kind] = digest
+                    changed = True
+                    emitted.append(event)
+            if changed:
+                self._write_json(state_path, {k: v for k, v in seen.items() if k in kinds})
+        return emitted
+
+    def hash_key(self) -> Optional[bytes]:
+        """Per-tenant random key at `$HERMES_HOME/av-events/hash.key`, or None.
+
+        64 hex characters, mode 0600, created once and atomically — written to a
+        temp file and linked into place, so concurrent first uses agree on one
+        key — the same pattern as `plugins/recall`'s query-hash key. A key that
+        is not exactly 64 hex characters is replaced. None when the key cannot
+        be read or written, and then nothing keyed is emitted (null, never a
+        plain hash in its place).
+        """
+        if self._hash_key is not None:
+            return self._hash_key
+        directory = self.config.state_dir
+        path = os.path.join(directory, "hash.key")
+        try:
+            try:
+                with open(path, encoding="ascii") as handle:
+                    existing = handle.read().strip()
+            except (OSError, UnicodeDecodeError):
+                existing = ""
+            if not _HEX64.match(existing):
+                os.makedirs(directory, mode=DIR_MODE, exist_ok=True)
+                replacing = os.path.exists(path)
+                temp = os.path.join(directory, f".hash.key.{os.getpid()}.{secrets.token_hex(4)}")
+                fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, FILE_MODE)
+                try:
+                    with os.fdopen(fd, "w", encoding="ascii") as handle:
+                        handle.write(secrets.token_hex(32))
+                    if replacing:
+                        os.replace(temp, path)
+                    else:
+                        try:
+                            os.link(temp, path)  # another process may have won the race
+                        except FileExistsError:
+                            pass
+                finally:
+                    try:
+                        os.unlink(temp)
+                    except FileNotFoundError:
+                        pass
+                self.counters["hash_key_generated"] = self.counters.get("hash_key_generated", 0) + 1
+                with open(path, encoding="ascii") as handle:
+                    existing = handle.read().strip()
+                if not _HEX64.match(existing):
+                    return None
+            self._hash_key = bytes.fromhex(existing)
+            return self._hash_key
+        except OSError:
+            return None
+
+    def keyed_hash(self, text: str) -> Optional[str]:
+        """HMAC-SHA256 of `text` under the tenant's key, or None without a key.
+
+        For values that are not join keys across producers — message text, tool
+        arguments and results, a `metadata`-mode EdgeOS event id — a plain
+        SHA-256 of a few words is a dictionary lookup away from the words. The
+        key never leaves the sandbox, so the digest is useful only for counting
+        and joining within this tenant.
+        """
+        key = self.hash_key()
+        if key is None:
+            return None
+        return hmac.new(key, text.encode("utf-8", errors="surrogatepass"), hashlib.sha256).hexdigest()
 
     def edgeos_ledger(self) -> Ledger:
         self.edgeos.load(os.path.join(self.config.state_dir, "edgeos_actions.json"))

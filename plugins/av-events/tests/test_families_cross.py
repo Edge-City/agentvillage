@@ -12,6 +12,7 @@ import pytest
 SESSION = "sess-all"
 ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 EVENT = "5f0c7a3e-1b2d-4c3e-8f9a-0b1c2d3e4f5a"
+PARTICIPANT = "0d6e2f1a-3b4c-4d5e-8f60-718293a4b5c6"
 USER_TEXT = "please RSVP me, my password is hunter2"
 TOOLS = [{"type": "function", "function": {"name": "terminal", "description": "run", "parameters": {}}}]
 SYSTEM_PROMPT = "You are the resident agent."
@@ -33,7 +34,11 @@ def drive(ctx, home):
              usage={"input_tokens": 10, "output_tokens": 2}, api_duration=0.5, finish_reason="stop")
     command = f"curl -s -X POST https://api.edgeos.world/api/v1/event-participants/portal/register/{EVENT} -d '{{}}'"
     ctx.fire("post_tool_call", session_id=SESSION, task_id="task-1", turn_id="t0", tool_name="terminal",
-             args={"command": command}, result=json.dumps({"output": "{}", "exit_code": 0}),
+             # EdgeOS answers an RSVP with the participant record; `{}` is not
+             # evidence the RSVP landed and would (rightly) wait for nothing.
+             args={"command": command},
+             result=json.dumps({"output": json.dumps({"id": PARTICIPANT, "event_id": EVENT, "status": "registered"}),
+                                "exit_code": 0}),
              tool_call_id="call-1", status="ok", duration_ms=10)
     command = f"curl -s https://api.edgeos.world/api/v1/events/portal/events/{EVENT}"
     body = json.dumps({"id": EVENT, "my_rsvp_status": "registered"})

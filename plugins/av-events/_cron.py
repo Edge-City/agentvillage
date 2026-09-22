@@ -33,13 +33,32 @@ from ._core import MAX_BUFFER_AGE_S, epoch_from_iso, iso_from_text, sqlite_read
 #: Statuses a finished execution can hold. Anything else is still running.
 TERMINAL_STATUSES = ("completed", "failed", "unknown")
 
-#: Overlay-installed jobs are named with this prefix (`install/paths.ts`
-#: `CRON_NAME_PREFIX`). Only those names leave: a participant can ask the
-#: agent to create a job, and its name is then their words. `cron.run` is on
-#: the ops allowlist and is kept without research consent (spec §2.2), so it
-#: must carry nothing a participant wrote.
-OVERLAY_JOB_PREFIX = "Edge —"
-MAX_JOB_NAME_CHARS = 128
+#: The exact names the installer gives its cron jobs, from the frozen seed
+#: `cron_job_names.json` (a bun test fails if it drifts from
+#: `install/install_index.ts`). Only these names leave: a participant can ask
+#: the agent to create a job — even one whose name starts `Edge —` — and its
+#: name is then their words. `cron.run` is on the ops allowlist and is kept
+#: without research consent (spec §2.2), so it carries nothing a participant
+#: wrote.
+NAMES_SEED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cron_job_names.json")
+
+
+def load_job_name_allowlist(path: str = NAMES_SEED_FILE) -> frozenset:
+    try:
+        with open(path, encoding="utf-8") as handle:
+            seed = json.load(handle)
+    except (OSError, ValueError):
+        return frozenset()
+    names = seed.get("names") if isinstance(seed, dict) else None
+    return frozenset(n for n in names if isinstance(n, str)) if isinstance(names, list) else frozenset()
+
+
+OVERLAY_JOB_NAMES = load_job_name_allowlist()
+
+#: Hermes's `delivery_outcome` vocabulary (`agent/monitoring/cron_health.py`
+#: `_KNOWN_DELIVERY_OUTCOMES`, plus `queued` from later tags). The ledger
+#: column exists only on Hermes versions after `v2026.8.31`; there it is null.
+DELIVERY_OUTCOMES = frozenset({"queued", "delivered", "failed", "suppressed", "suppressed_acked", "not_configured"})
 
 #: Tail of `usage_audit.jsonl` read per pass. A line is ~300 bytes; this is
 #: well over a thousand fires.
@@ -74,8 +93,9 @@ def cron_job_id_from(session_id: Any, task_id: Any = None) -> Optional[str]:
 def read_terminal_executions(db_path: str) -> list[dict]:
     rows = sqlite_read(
         db_path,
-        "SELECT id, job_id, status, claimed_at, started_at, finished_at FROM executions "
-        "WHERE status IN ('completed','failed','unknown')",
+        # `SELECT *`: `delivery_outcome` is a later column, and naming it would
+        # fail the whole read on the pinned tag. `error` is never looked at.
+        "SELECT * FROM executions WHERE status IN ('completed','failed','unknown')",
     )
     return rows or []
 
@@ -118,14 +138,16 @@ def load_job_names(path: str) -> dict[str, str]:
     return out
 
 
-def reportable_job_name(name: Any) -> Optional[str]:
-    """The job's name if the overlay installed it, else None."""
-    if not isinstance(name, str):
+def reportable_job_name(name: Any, allowlist: frozenset = OVERLAY_JOB_NAMES) -> Optional[str]:
+    """The job's name if it is exactly one the installer creates, else None."""
+    return name if isinstance(name, str) and name in allowlist else None
+
+
+def delivery_outcome(value: Any) -> Optional[str]:
+    if not isinstance(value, str) or not value.strip():
         return None
-    name = name.strip()
-    if not name.startswith(OVERLAY_JOB_PREFIX) or len(name) > MAX_JOB_NAME_CHARS:
-        return None
-    return name
+    value = value.strip().lower()
+    return value if value in DELIVERY_OUTCOMES else "other"
 
 
 def _count(value: Any) -> Optional[int]:
@@ -152,8 +174,10 @@ def cron_payload(row: dict, job_names: dict[str, str], audits: list[dict]) -> Op
     """§4.1 `cron.run`: `job_id`, `job_name`, `execution_id`, `status`,
     `input_tokens?`, `started_at`, `finished_at`. Every key always present.
 
-    Not in §4.1: `output_tokens` (from the same audit line as `input_tokens`)
-    and `claimed_at`. The execution's `error` text is never read.
+    Not in §4.1: `output_tokens` (from the same audit line as `input_tokens`),
+    `claimed_at`, and `delivery_outcome` (Hermes's enum; `suppressed` is a
+    run whose reply was the silence marker). The execution's `error` text is
+    never read.
     """
     execution_id, job_id, status = row.get("id"), row.get("job_id"), row.get("status")
     if not (isinstance(execution_id, str) and _ID.match(execution_id)):
@@ -174,6 +198,7 @@ def cron_payload(row: dict, job_names: dict[str, str], audits: list[dict]) -> Op
         "claimed_at": claimed,
         "started_at": started,
         "finished_at": finished,
+        "delivery_outcome": delivery_outcome(row.get("delivery_outcome")),
     }
 
 
@@ -231,7 +256,10 @@ def pending_runs(home: str, cursor: CronCursor, now: float) -> list[dict]:
 
 __all__ = [
     "CronCursor",
-    "OVERLAY_JOB_PREFIX",
+    "DELIVERY_OUTCOMES",
+    "OVERLAY_JOB_NAMES",
+    "delivery_outcome",
+    "load_job_name_allowlist",
     "TERMINAL_STATUSES",
     "cron_job_id_from",
     "cron_payload",

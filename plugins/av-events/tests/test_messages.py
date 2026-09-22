@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import os
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -15,6 +18,12 @@ AGENT_TEXT = "Done, you are on the list for the hardware dinner."
 
 def sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", errors="surrogatepass")).hexdigest()
+
+
+def keyed(text: str) -> str:
+    """What the plugin emits for a non-join hash: HMAC-SHA256 under the tenant key."""
+    key = (Path(os.environ["HERMES_HOME"]) / "av-events" / "hash.key").read_text(encoding="ascii").strip()
+    return hmac.new(bytes.fromhex(key), text.encode("utf-8", errors="surrogatepass"), hashlib.sha256).hexdigest()
 
 
 def converse(ctx, session=SESSION, platform="telegram", user=USER_TEXT, agent=AGENT_TEXT, task_id=None):
@@ -49,7 +58,7 @@ def test_a_turn_emits_one_in_and_one_out(live, ctx, av):
         payload = event["payload"]
         assert payload["channel"] == "telegram"
         assert payload["length"] == len(text)
-        assert payload["content_hash"] == sha(text)
+        assert payload["content_hash"] == keyed(text) != sha(text)
         assert payload["cron_job_id"] is None
         assert set(payload["flags"]) == {"is_ask", "is_recommendation", "sentiment"}
         assert uuid.UUID(event["event_id"]).version == 7
@@ -97,10 +106,11 @@ def test_sanitized_and_full_are_identical(plugin, ctx, monkeypatch, av, mode):
     assert payload == {
         "channel": "telegram",
         "length": len(USER_TEXT),
-        "content_hash": sha(USER_TEXT),
+        "content_hash": keyed(USER_TEXT),
         "flags": {"is_ask": True, "is_recommendation": None, "sentiment": None},
         "flags_rule": "message_flags_v1",
         "cron_job_id": None,
+        "silent": None,
     }
 
 

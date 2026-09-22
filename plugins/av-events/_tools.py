@@ -20,9 +20,9 @@ import json
 import math
 import os
 import re
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
-from ._core import canonical_json, sha256_text
+from ._core import canonical_json
 
 SEED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tool_categories.json")
 
@@ -135,15 +135,19 @@ def tool_call_payload(
     duration_ms: Any,
     error_type: Any,
     capture: str,
+    hasher: Callable[[str], Optional[str]],
 ) -> dict:
     """§4.1 `tool.call`: `tool_name`, `args_hash`, `result_hash`, `ok`,
     `latency_ms`, `receipt?` — every key always present, null when unknown.
 
     Not in §4.1: `tool_category`, `status`, `error_type`, `operation` /
     `target_system` (filled by the EdgeOS matcher), `category_version`, and
-    `args_length` / `result_length` above `metadata`. In `metadata` the two
-    hashes are null as well: a hash of a short argument is a dictionary lookup
-    away from the argument, and nothing downstream joins on it.
+    `args_length` / `result_length` above `metadata`.
+
+    The two hashes are `hasher`'s: HMAC-SHA256 under the tenant's own key
+    (`Collector.keyed_hash`), not a plain SHA-256 — a plain hash of a short
+    argument is a dictionary lookup away from the argument, and nothing
+    outside the tenant joins on it. In `metadata` they are null.
     """
     normalised = normalise_status(status)
     raw_error = error_type if isinstance(error_type, str) else None
@@ -164,8 +168,8 @@ def tool_call_payload(
     if capture != "metadata":
         args_text = _as_text(args)
         result_text = _as_text(result)
-        payload["args_hash"] = sha256_text(args_text) if args_text is not None else None
-        payload["result_hash"] = sha256_text(result_text) if result_text is not None else None
+        payload["args_hash"] = hasher(args_text) if args_text is not None else None
+        payload["result_hash"] = hasher(result_text) if result_text is not None else None
         payload["args_length"] = len(args_text) if args_text is not None else None
         payload["result_length"] = len(result_text) if result_text is not None else None
     return payload

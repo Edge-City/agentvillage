@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import os
 import re
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -17,6 +20,12 @@ ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 def sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", errors="surrogatepass")).hexdigest()
+
+
+def keyed(text: str) -> str:
+    """What the plugin emits for a non-join hash: HMAC-SHA256 under the tenant key."""
+    key = (Path(os.environ["HERMES_HOME"]) / "av-events" / "hash.key").read_text(encoding="ascii").strip()
+    return hmac.new(bytes.fromhex(key), text.encode("utf-8", errors="surrogatepass"), hashlib.sha256).hexdigest()
 
 
 @pytest.fixture()
@@ -64,8 +73,8 @@ def test_every_tool_call_emits_one_event_with_the_catalogue_keys(live, ctx, av):
     assert payload["status"] == "ok"
     assert payload["latency_ms"] == 250
     assert payload["receipt"] is None
-    assert payload["args_hash"] == sha(json.dumps({"command": SECRET_ARG}, sort_keys=True, separators=(",", ":")))
-    assert payload["result_hash"] == sha(SECRET_RESULT)
+    assert payload["args_hash"] == keyed(json.dumps({"command": SECRET_ARG}, sort_keys=True, separators=(",", ":")))
+    assert payload["result_hash"] == keyed(SECRET_RESULT) != sha(SECRET_RESULT)
     assert payload["category_version"] == "tool_categories_v1"
     assert event["tool_call_id"] == "call-1"
     assert event["session_id"] == SESSION
@@ -157,7 +166,7 @@ def test_sanitized_and_full_add_hashes_and_character_lengths(plugin, ctx, monkey
     result = "café ☕ done"
     fire(ctx, result=result)
     payload = tool_calls(av, plugin)[0]["payload"]
-    assert payload["result_hash"] == sha(result)
+    assert payload["result_hash"] == keyed(result)
     assert payload["result_length"] == len(result) < len(result.encode("utf-8"))
     assert payload["args_length"] == len(json.dumps({"command": SECRET_ARG}, separators=(",", ":")))
 
@@ -177,7 +186,7 @@ def test_full_is_no_different_from_sanitized_for_tool_calls(plugin, ctx, monkeyp
 
 def test_a_lone_surrogate_in_a_result_hashes(live, ctx, av):
     fire(ctx, result="broken \ud800 text")
-    assert tool_calls(av, live)[0]["payload"]["result_hash"] == sha("broken \ud800 text")
+    assert tool_calls(av, live)[0]["payload"]["result_hash"] == keyed("broken \ud800 text")
 
 
 def test_unserialisable_args_hash_to_null_rather_than_failing(live, ctx, av):

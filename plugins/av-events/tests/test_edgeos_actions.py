@@ -46,20 +46,30 @@ def fire(ctx, command, result, *, status="ok", tool_name="terminal", call_id="ca
     )
 
 
-def rsvp(ctx, event=EVENT, body=None, **kw):
-    body = body if body is not None else {"id": str(uuid.uuid4()), "event_id": event, "status": "registered"}
+def participant(event=EVENT, status="registered", occurrence=None):
+    """The EventParticipantPublic record EdgeOS answers an RSVP or cancellation with."""
+    return {"id": str(uuid.uuid4()), "event_id": event, "profile_id": str(uuid.uuid4()), "status": status,
+            "occurrence_start": occurrence, "first_name": "Alice"}
+
+
+def rsvp(ctx, event=EVENT, body=None, occurrence=None, **kw):
+    """Fire an RSVP; returns the participant id EdgeOS answered with."""
+    body = body if body is not None else participant(event, occurrence=occurrence)
     fire(ctx, curl("POST", f"/event-participants/portal/register/{event}", data="{}"), terminal_result(body), **kw)
+    return body.get("id") if isinstance(body, dict) else None
 
 
-def cancel(ctx, event=EVENT, **kw):
-    body = {"id": str(uuid.uuid4()), "event_id": event, "status": "cancelled"}
+def cancel(ctx, event=EVENT, occurrence=None, **kw):
+    body = participant(event, "cancelled", occurrence)
     fire(ctx, curl("POST", f"/event-participants/portal/cancel-registration/{event}", data="{}"),
          terminal_result(body), **kw)
+    return body["id"]
 
 
-def read_event(ctx, event=EVENT, status="registered", **kw):
+def read_event(ctx, event=EVENT, status="registered", occurrence=None, **kw):
     body = {"id": event, "title": "Hardware dinner with Alice", "my_rsvp_status": status}
-    fire(ctx, curl("GET", f"/events/portal/events/{event}"), terminal_result(body), **kw)
+    path = f"/events/portal/events/{event}" + (f"?occurrence_start={occurrence}" if occurrence else "")
+    fire(ctx, curl("GET", path), terminal_result(body), **kw)
 
 
 def of_type(av, plugin, *types):
@@ -75,7 +85,7 @@ def live(plugin, ctx, monkeypatch):
 
 
 def test_an_rsvp_is_attempted_and_a_confirming_read_receipts_it(live, ctx, av):
-    rsvp(ctx, call_id="c1")
+    participant_id = rsvp(ctx, call_id="c1")
     attempted = of_type(av, live, "action.attempted")
     assert len(attempted) == 1
     action_id = attempted[0]["action_id"]
@@ -97,14 +107,17 @@ def test_an_rsvp_is_attempted_and_a_confirming_read_receipts_it(live, ctx, av):
     assert event["action_id"] == action_id
     assert event["tool_call_id"] == "c2"
     assert event["evidence_class"] == "provider_receipt"
-    assert event["payload"]["receipt"] == {"kind": "edgeos_confirming_read", "id": EVENT}
+    # The receipt names the participant record the RSVP created: the thing a
+    # checker re-reads (`GET /event-participants/{id}`).
+    assert event["payload"]["receipt"] == {"kind": "edgeos_confirming_read", "id": participant_id}
+    assert event["payload"]["edgeos_event_id"] == EVENT
     assert event["payload"]["action_class"] == "rsvp"
     assert event["payload"]["operation"] == "edgeos.event_read"
     assert uuid.UUID(event["event_id"]).version == 7
 
     # The read's own tool.call carries the receipt reference too.
     calls = of_type(av, live, "tool.call")
-    assert calls[-1]["payload"]["receipt"] == {"kind": "edgeos_confirming_read", "id": EVENT}
+    assert calls[-1]["payload"]["receipt"] == {"kind": "edgeos_confirming_read", "id": participant_id}
     assert calls[-1]["payload"]["operation"] == "edgeos.event_read"
 
     # Resolved: a second read receipts nothing more.
@@ -255,7 +268,8 @@ def test_only_carrier_tools_count(live, ctx, av):
 
 
 def test_a_data_flag_implies_post(live, ctx, av):
-    fire(ctx, f"curl -s {API}/event-participants/portal/register/{EVENT} --data '{{}}'", terminal_result({}))
+    fire(ctx, f"curl -s {API}/event-participants/portal/register/{EVENT} --data '{{}}'",
+         terminal_result(participant()))
     assert len(of_type(av, live, "action.attempted")) == 1
 
 
@@ -299,8 +313,11 @@ def test_an_unwritable_ledger_fails_open(live, ctx, av, monkeypatch):
     monkeypatch.setattr(live._COLLECTOR.edgeos, "save", lambda path: (_ for _ in ()).throw(OSError("ro")))
     assert ctx.fire("post_tool_call", session_id=SESSION, tool_name="terminal",
                     args={"command": curl("POST", f"/event-participants/portal/register/{EVENT}")},
-                    result=terminal_result({}), status="ok") == []
+                    result=terminal_result(participant()), status="ok") == []
     assert live._COLLECTOR.total_failures == 1
+    # The events were buffered before the save was attempted.
+    assert len(of_type(av, live, "tool.call")) == 1
+    assert len(of_type(av, live, "action.attempted")) == 1
 
 
 def test_the_seed_loads_and_compiles(plugin):

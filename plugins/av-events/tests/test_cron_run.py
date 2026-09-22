@@ -82,7 +82,7 @@ def runs(av, plugin):
 def test_a_finished_execution_is_one_cron_run_with_the_derived_id(live, cron, av):
     execution = uuid.uuid4().hex
     cron.execution(execution)
-    cron.jobs(**{JOB: "Edge — morning digest"})
+    cron.jobs(**{JOB: "Edge — daily digest"})
     cron.audit()
     assert live._COLLECTOR.cron_tick() == 1
     events = runs(av, live)
@@ -94,7 +94,7 @@ def test_a_finished_execution_is_one_cron_run_with_the_derived_id(live, cron, av
     for key in ("job_id", "job_name", "execution_id", "status", "input_tokens", "started_at", "finished_at"):
         assert key in payload, key
     assert payload["job_id"] == JOB
-    assert payload["job_name"] == "Edge — morning digest"
+    assert payload["job_name"] == "Edge — daily digest"
     assert payload["execution_id"] == execution
     assert payload["status"] == "completed"
     assert payload["input_tokens"] == 1200

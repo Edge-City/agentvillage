@@ -31,7 +31,7 @@ from ._core import (
 from ._cron import cron_job_id_from
 from ._intentions import IntentionCall, classify_tool, valid_id
 from ._intentions import plan as plan_intentions
-from ._messages import message_payload
+from ._messages import is_silent, message_payload
 from ._tools import (
     TOOL_CATEGORIES,
     UNLISTED_TOOL_CATEGORY,
@@ -208,9 +208,11 @@ def _emit_message(collector: Collector, event_type: str, text: Any, kwargs: dict
         channel = (state.source if state is not None else None) or _source_for(kwargs.get("platform")) or "unknown"
         sender = "participant"
     cron_job_id = cron_job_id_from(session_id, kwargs.get("task_id")) if cron else None
+    # A cron run's reply is suppressed when it is Hermes's silence marker.
+    silent = is_silent(text) if cron and event_type == "message.out" else None
     collector.emit(
         event_type,
-        message_payload(text, channel, collector.config.capture, cron_job_id),
+        message_payload(text, channel, collector.config.capture, cron_job_id, collector.keyed_hash, silent),
         actor=sender if event_type == "message.in" else "agent",
         model_id=kwargs.get("model") if event_type == "message.out" else None,
         **refs,
@@ -428,28 +430,44 @@ def _emit_tool_call(collector: Collector, kwargs: dict) -> None:
         kwargs.get("duration_ms"),
         kwargs.get("error_type"),
         collector.config.capture,
+        collector.keyed_hash,
     )
-    actions: list = []
-    try:
-        actions = _edgeos_actions(collector, kwargs, payload)
-    except SystemExit:
-        raise
-    except BaseException as exc:  # noqa: BLE001 - the tool.call itself still goes out
-        session_id = refs["session_id"]
-        collector.record_failure("post_tool_call", exc, session_id)
-        payload["receipt"] = None
     window = dict(occurred_at=occurred_at, occurred_at_earliest=earliest, occurred_at_latest=occurred_at)
-    collector.emit("tool.call", payload, tool_call_id=tool_call_id, **window, **refs)
-    for event_type, action_payload, action_id, evidence_class in actions:
-        collector.emit(
-            event_type,
-            action_payload,
-            action_id=action_id,
-            tool_call_id=tool_call_id,
-            evidence_class=evidence_class,
-            **window,
-            **refs,
-        )
+    matched = _edgeos_match(kwargs, payload)
+    if matched is None or matched[0].role not in ("action", "confirming_read"):
+        collector.emit("tool.call", payload, tool_call_id=tool_call_id, **window, **refs)
+        return
+    # Hermes can run tool calls concurrently, and the EdgeOS ledger is shared
+    # state: plan, emit and record under one lock.
+    with collector._lock:
+        planned: list = []
+        try:
+            planned = _edgeos_plan(collector, kwargs, payload, matched)
+        except SystemExit:
+            raise
+        except BaseException as exc:  # noqa: BLE001 - the tool.call itself still goes out
+            collector.record_failure("post_tool_call", exc, refs["session_id"])
+            payload["receipt"] = None
+        collector.emit("tool.call", payload, tool_call_id=tool_call_id, **window, **refs)
+        changed = False
+        for item in planned:
+            event = collector.emit(
+                item.event_type,
+                item.payload,
+                action_id=item.action_id,
+                tool_call_id=tool_call_id,
+                evidence_class=item.evidence_class,
+                **window,
+                **refs,
+            )
+            # The ledger records an action only once its event is buffered, so
+            # an inert emit can never leave a receipt waiting on an action no
+            # event describes.
+            if event is not None and item.apply is not None:
+                item.apply()
+                changed = True
+        if changed:
+            collector.save_edgeos_ledger()
 
 
 def _tool_call_id(kwargs: dict) -> Optional[str]:
@@ -473,101 +491,45 @@ def _call_window(kwargs: dict) -> tuple[Optional[str], Optional[str]]:
     return iso_from_epoch(ended), iso_from_epoch(started)
 
 
-def _edgeos_actions(collector: Collector, kwargs: dict, tool_payload: dict) -> list:
-    """The `action.*` events one EdgeOS call implies, and its `tool.call` labels.
-
-    An RSVP or a cancellation (`role: action`) is `action.attempted` with a
-    fresh action id, plus `action.failed` when the call failed; a successful
-    one waits in the ledger for a confirming read. A read (`role:
-    confirming_read`) whose `my_rsvp_status` agrees with a waiting action is
-    `action.receipted` on that action's id, with receipt
-    `{kind: edgeos_confirming_read, id: <EdgeOS event id>}` — the one event this
-    plugin claims `provider_receipt` for, which ingest honours only because the
-    receipt is checkable (§2.1). A cancellation carries `reversal: true` and,
-    when the RSVP it undoes is known, `reverses_action_id`.
-
-    Returns [(event_type, payload, action_id, evidence_class or None)].
-    """
+def _edgeos_match(kwargs: dict, tool_payload: dict) -> Optional[tuple]:
+    """(operation, path params, call) for a recognised EdgeOS call, labelling its
+    `tool.call`; None for anything else."""
     call = _edgeos.http_call(kwargs.get("tool_name"), kwargs.get("args"))
-    matched = _edgeos.match_operation(*call) if call is not None else None
+    matched = _edgeos.match_operation(call) if call is not None else None
     if matched is None:
-        return []
+        return None
     op, params = matched
     tool_payload["operation"] = op.operation
     tool_payload["target_system"] = _edgeos.TARGET_SYSTEM
-    if op.role not in ("action", "confirming_read"):
-        return []
+    return op, params, call
 
+
+def _edgeos_plan(collector: Collector, kwargs: dict, tool_payload: dict, matched: tuple) -> list:
+    """The `action.*` events one EdgeOS call implies (`_edgeos.plan`).
+
+    An RSVP or a cancellation is `action.attempted` with a fresh action id,
+    plus `action.failed` when the call failed; it waits for a confirming read
+    only when EdgeOS answered with the participant record. A read whose
+    `my_rsvp_status` agrees with a waiting action is `action.receipted` on that
+    action's id, with receipt `{kind: edgeos_confirming_read, id: <participant
+    id>}` — the one event this plugin claims `provider_receipt` for, which
+    ingest honours only because the receipt is checkable (§2.1). In
+    `metadata` the EdgeOS event id is replaced by its HMAC under the tenant key.
+    """
+    op, params, call = matched
     status = normalise_status(kwargs.get("status"))
-    ok = status_ok(status)
     exit_code, body = _edgeos.terminal_outcome(kwargs.get("result"))
-    # Hermes can run tool calls concurrently; the ledger is shared state.
-    with collector._lock:
-        return _edgeos_ledger_step(collector, op, params, status, ok, exit_code, body, tool_payload)
-
-
-def _edgeos_ledger_step(collector, op, params, status, ok, exit_code, body, tool_payload) -> list:
-    ledger = collector.edgeos_ledger()
-    version = _edgeos.ALLOWLIST.version
-    out: list = []
-
-    if op.role == "action":
-        event_id = params.get("event_id")
-        if not event_id:
-            return []
-        action_id = uuid7()
-        reversal = bool(op.reverses)
-        reverses = ledger.last_action(event_id, op.reverses) if reversal else None
-        if reverses is not None and not valid_id(reverses):
-            reverses = None
-        error = _edgeos.action_error(ok, status, exit_code, body)
-        common = dict(receipt=None, reversal=reversal, reverses_action_id=reverses, version=version)
-        out.append(("action.attempted", _edgeos.action_payload(op, event_id, error=None, **common), action_id, None))
-        if error is not None:
-            out.append(("action.failed", _edgeos.action_payload(op, event_id, error=error, **common), action_id, None))
-        else:
-            ledger.attempt(event_id, action_id, op.action_class, reversal, reverses)
-            collector.save_edgeos_ledger()
-        return out
-
-    if not ok or exit_code not in (None, 0):
-        return []
-    receipts = []
-    for event_id, rsvp in _edgeos.rsvp_statuses(body).items():
-        waiting = ledger.pending.get(event_id)
-        if not isinstance(waiting, dict):
-            continue
-        action_class = waiting.get("action_class")
-        action_id = waiting.get("action_id")
-        if action_class not in _edgeos.CONFIRMS or rsvp not in _edgeos.CONFIRMS[action_class]:
-            continue
-        if not valid_id(action_id):
-            ledger.resolve(event_id)
-            continue
-        reverses = waiting.get("reverses_action_id")
-        receipt = {"kind": _edgeos.RECEIPT_KIND, "id": event_id}
-        receipts.append(receipt)
-        out.append((
-            "action.receipted",
-            _edgeos.action_payload(
-                op,
-                event_id,
-                error=None,
-                receipt=receipt,
-                reversal=bool(waiting.get("reversal")),
-                reverses_action_id=reverses if valid_id(reverses) else None,
-                action_class=action_class,
-                version=version,
-            ),
-            action_id,
-            "provider_receipt",
-        ))
-        ledger.resolve(event_id)
-    if out:
-        collector.save_edgeos_ledger()
+    planned = _edgeos.plan(
+        op, params, call, ok=status_ok(status), status=status, exit_code=exit_code, body=body,
+        ledger=collector.edgeos_ledger(), mint=uuid7,
+    )
+    receipts = [item.payload["receipt"] for item in planned if item.event_type == "action.receipted"]
     if len(receipts) == 1:
         tool_payload["receipt"] = dict(receipts[0])
-    return out
+    if collector.config.capture == "metadata":
+        for item in planned:
+            item.payload["edgeos_event_id"] = collector.keyed_hash(item.payload["edgeos_event_id"])
+    return planned
 
 
 def _intention_payload(call: IntentionCall, capture: str, parent_session_id: Optional[str]) -> dict:

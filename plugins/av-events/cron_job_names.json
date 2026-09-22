@@ -1,0 +1,14 @@
+{
+  "version": "cron_job_names_v1",
+  "about": "The only cron job names cron.run may carry (spec 4.1 job_name). Exactly the names the installer creates (install/install_index.ts DIGEST_CRON_SPECS); install/tests/cron_job_names_seed.test.ts fails if the two drift. Any other job's name is null: a participant can have the agent schedule anything, and cron.run is kept without research consent (spec 2.2).",
+  "names": [
+    "Edge — memory signal sync",
+    "Edge — digest prepare",
+    "Edge — daily digest",
+    "Edge — negotiation summary",
+    "Edge — evening questions",
+    "Edge — opportunity drop (midday)",
+    "Edge — opportunity drop (evening)",
+    "Edge — token usage audit"
+  ]
+}

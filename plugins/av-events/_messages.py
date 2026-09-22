@@ -11,9 +11,7 @@ Python 3.11, standard library only.
 from __future__ import annotations
 
 import re
-from typing import Any, Optional
-
-from ._core import sha256_text
+from typing import Any, Callable, Optional
 
 #: The rule the `flags` were derived by. A better rule is a new version, so a
 #: consumer can tell the two apart rather than mixing them.
@@ -47,13 +45,49 @@ def channel_of(value: Any) -> str:
     return text if _CHANNEL.match(text) else "other"
 
 
-def message_payload(text: Any, channel: str, capture: str, cron_job_id: Optional[str]) -> dict:
+#: Hermes's silence markers (`gateway/response_filters.py`
+#: `LIVE_GATEWAY_SILENT_MARKERS` at `v2026.8.31`).
+SILENT_MARKERS = frozenset({"[SILENT]", "SILENT", "NO_REPLY", "NO REPLY"})
+
+
+def _silence_token(line: str) -> bool:
+    return " ".join(line.strip().upper().split()) in SILENT_MARKERS
+
+
+def is_silent(text: Any) -> bool:
+    """Hermes's `is_autonomous_silence_response`: the reply a cron run
+    suppresses — a marker as the whole reply, on its own first or last line,
+    or `[SILENT]` opening it. A marker buried mid-sentence is a real reply."""
+    if not isinstance(text, str) or not text.strip():
+        return False
+    stripped = text.strip()
+    if _silence_token(stripped):
+        return True
+    lines = [line for line in stripped.splitlines() if line.strip()]
+    if lines and (_silence_token(lines[0]) or _silence_token(lines[-1])):
+        return True
+    return stripped.upper().startswith("[SILENT]")
+
+
+def message_payload(
+    text: Any,
+    channel: str,
+    capture: str,
+    cron_job_id: Optional[str],
+    hasher: Callable[[str], Optional[str]],
+    silent: Optional[bool] = None,
+) -> dict:
     """§4.1: `channel`, `length`, `content_hash`, `flags` {is_ask,
     is_recommendation, sentiment?}, `cron_job_id?`. Every key always present.
 
     `metadata` keeps only the channel and the fact that a message happened:
     length, hash and flags are all derived from the content. A message that is
     not a string (a multimodal list) has no length or hash either.
+
+    `content_hash` is `hasher`'s — HMAC-SHA256 under the tenant's key, since a
+    plain hash of "yes" is "yes". `silent` is set only on a cron run's
+    `message.out`: true when the reply is Hermes's silence marker, i.e. nothing
+    was delivered. It is a delivery fact, not content, and rides in every mode.
     """
     payload: dict[str, Any] = {
         "channel": channel_of(channel),
@@ -62,13 +96,14 @@ def message_payload(text: Any, channel: str, capture: str, cron_job_id: Optional
         "flags": {"is_ask": None, "is_recommendation": None, "sentiment": None},
         "flags_rule": None,
         "cron_job_id": cron_job_id,
+        "silent": silent,
     }
     if capture != "metadata" and isinstance(text, str):
         payload["length"] = len(text)
-        payload["content_hash"] = sha256_text(text)
+        payload["content_hash"] = hasher(text)
         payload["flags"]["is_ask"] = is_ask(text)
         payload["flags_rule"] = FLAGS_RULE
     return payload
 
 
-__all__ = ["FLAGS_RULE", "channel_of", "is_ask", "message_payload"]
+__all__ = ["FLAGS_RULE", "SILENT_MARKERS", "channel_of", "is_ask", "is_silent", "message_payload"]
