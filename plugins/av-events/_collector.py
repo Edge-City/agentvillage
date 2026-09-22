@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import atexit
 import functools
+import hashlib
 import json
+import math
 import os
+import re
 import threading
 import time
 from collections import OrderedDict
@@ -37,6 +40,7 @@ from ._core import (
     TICK_INTERVAL_S,
     Buffer,
     SendResult,
+    cron_run_event_id,
     env,
     env_flag_disabled,
     hermes_home,
@@ -44,8 +48,20 @@ from ._core import (
     post_events,
     register_literal_secret,
     sanitize,
+    sqlite_read,
     uuid7,
 )
+from ._cron import CronCursor, cron_job_id_from, pending_runs
+from ._edgeos import Ledger
+
+#: How often the flusher thread looks for finished cron executions.
+CRON_POLL_INTERVAL_S = 60.0
+
+#: `USER.md` larger than this is not read: Hermes caps it at a few KiB.
+MAX_PROFILE_BYTES = 1024 * 1024
+
+#: Hermes `sessions.cost_status` / `cost_source` values leave only in this shape.
+_COST_LABEL = re.compile(r"^[a-z0-9_.:-]{1,64}$")
 
 # --------------------------------------------------------------------------
 # Runtime facts
@@ -97,7 +113,9 @@ class Config:
     `$HERMES_HOME/.env`, and the next session picks it up.
     """
 
-    __slots__ = ("enabled", "url", "token", "capture", "disabled_hooks", "home", "buffer_dir", "state_dir")
+    __slots__ = (
+        "enabled", "url", "token", "capture", "disabled_hooks", "home", "buffer_dir", "state_dir", "tenant_id",
+    )
 
     def __init__(self) -> None:
         self.enabled = not env_flag_disabled("AV_EVENTS_ENABLED")
@@ -113,6 +131,11 @@ class Config:
         self.home = hermes_home()
         self.state_dir = os.path.join(self.home, "av-events")
         self.buffer_dir = os.path.join(self.state_dir, "buffer")
+        # Only for `cron.run`'s derived id (spec §4.3), which ingest recomputes
+        # from the token's tenant. `TENANT_ID` is what the control plane already
+        # sets for `plugins/dashboard-auth-edgecity`; `AV_TENANT_ID` overrides.
+        tenant = env("AV_TENANT_ID") or env("TENANT_ID")
+        self.tenant_id = tenant if 0 < len(tenant) <= 128 else ""
         register_literal_secret(self.token)
 
     @property
@@ -238,6 +261,15 @@ class Collector:
         #: Intention events not emitted because an id failed the id pattern,
         #: by field. A count only: the offending value is never kept.
         self.intention_drops: dict[str, int] = {}
+        #: EdgeOS actions awaiting a confirming read (`_edgeos.Ledger`),
+        #: loaded from disk on first use.
+        self.edgeos = Ledger()
+        #: Cron executions already reported as `cron.run`.
+        self._cron_cursor: Optional[CronCursor] = None
+        self._cron_at = 0.0
+        #: Cron-tail passes that raised. The tail runs on the flusher thread,
+        #: outside `guarded`, so it keeps its own count.
+        self.cron_errors = 0
         #: Test seam. When set, used in place of `post_events`.
         self.sender: Optional[Callable[[str, str, list], SendResult]] = None
 
@@ -298,7 +330,8 @@ class Collector:
         """
         stamp = now_iso()
         event = {
-            "event_id": uuid7(),
+            # uuid v7 unless the caller derived one (`cron.run`, §4.3).
+            "event_id": refs.pop("event_id", None) or uuid7(),
             "event_type": event_type,
             "schema_version": SCHEMA_VERSION,
             "occurred_at": refs.pop("occurred_at", None) or stamp,
@@ -317,7 +350,9 @@ class Collector:
             "action_id": refs.pop("action_id", None),
             "outcome_id": refs.pop("outcome_id", None),
             "in_reply_to_event_id": refs.pop("in_reply_to_event_id", None),
-            "evidence_class": EVIDENCE_CLASS,
+            # `agent_report`, except the one claim a checkable receipt earns
+            # (`action.receipted`, §2.1's receipt allowance).
+            "evidence_class": refs.pop("evidence_class", None) or EVIDENCE_CLASS,
             "model_id": refs.pop("model_id", None),
             "prompt_version": refs.pop("prompt_version", None),
             "skill_version": refs.pop("skill_version", None),
@@ -429,7 +464,11 @@ class Collector:
             if state.started_emitted:
                 return
             state.started_emitted = True
-        self.emit("session.started", {"source": state.source or "unknown"}, session_id=state.session_id)
+        self.emit(
+            "session.started",
+            {"source": state.source or "unknown", "cron_job_id": cron_job_id_from(state.session_id)},
+            session_id=state.session_id,
+        )
 
     def session_ended(self, session_id: str, **extra: Any) -> None:
         with self._lock:
@@ -456,9 +495,15 @@ class Collector:
             "hook_max_ms": round(state.hook_max_ms, 3),
             "slowest_hook": state.slowest_hook,
             "degraded": state.degraded,
+            "cron_job_id": extra.get("cron_job_id") or cron_job_id_from(session_id),
+            # §4.1 `actual_cost_usd?`, `cost_source?`, from Hermes's own
+            # `state.db` row for the session (`read_session_cost`). Hermes's
+            # estimate rides beside it and is never promoted to "actual".
+            "actual_cost_usd": extra.get("actual_cost_usd"),
+            "cost_source": extra.get("cost_source"),
+            "estimated_cost_usd": extra.get("estimated_cost_usd"),
+            "cost_status": extra.get("cost_status"),
         }
-        if extra.get("cron_job_id"):
-            payload["cron_job_id"] = extra["cron_job_id"]
         self.emit("session.ended", payload, session_id=session_id)
         with self._lock:
             self.sessions.pop(session_id, None)
@@ -476,6 +521,153 @@ class Collector:
         if buffer is not None:
             buffer.rotate_if_due()
         self._wake.set()
+
+    # -- host stores: cost, profile, EdgeOS ledger, cron tail -------------
+    #
+    # Every read here is of a store Hermes owns, opened read-only, bounded, and
+    # "no data" on any failure. None of it is reachable from `pre_tool_call`.
+
+    def _read_json(self, path: str) -> Any:
+        try:
+            with open(path, encoding="utf-8") as handle:
+                return json.load(handle)
+        except (OSError, ValueError):
+            return None
+
+    def _write_json(self, path: str, data: Any) -> None:
+        tmp = f"{path}.{os.getpid()}.tmp"
+        try:
+            os.makedirs(os.path.dirname(path), mode=DIR_MODE, exist_ok=True)
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, FILE_MODE)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(data, handle, separators=(",", ":"))
+            os.replace(tmp, path)
+        except OSError:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+    def read_session_cost(self, session_id: str) -> dict:
+        """Hermes's cost columns for one session from `$HERMES_HOME/state.db`.
+
+        `sessions.actual_cost_usd`, `estimated_cost_usd`, `cost_status`,
+        `cost_source` (`hermes_state.py` at `v2026.8.31`). Read-only, with a
+        short lock timeout: a busy database costs this session its cost figure,
+        never the hook its budget. Nothing is read while the plugin is inert.
+        """
+        if self.plugin_disabled or not self.config.active:
+            return {}
+        rows = sqlite_read(
+            os.path.join(self.config.home, "state.db"),
+            "SELECT actual_cost_usd, estimated_cost_usd, cost_status, cost_source FROM sessions WHERE id = ?",
+            (session_id,),
+            timeout=0.05,
+        )
+        if not rows:
+            return {}
+        row = rows[0]
+
+        def usd(value: Any) -> Optional[float]:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return None
+            return float(value) if math.isfinite(value) and value >= 0 else None
+
+        def label(value: Any) -> Optional[str]:
+            return value if isinstance(value, str) and _COST_LABEL.match(value) else None
+
+        return {
+            "actual_cost_usd": usd(row.get("actual_cost_usd")),
+            "estimated_cost_usd": usd(row.get("estimated_cost_usd")),
+            "cost_status": label(row.get("cost_status")),
+            "cost_source": label(row.get("cost_source")),
+        }
+
+    def check_profile(self, session_id: Optional[str]) -> Optional[dict]:
+        """Emit `profile.updated` when `$HERMES_HOME/memories/USER.md` has changed.
+
+        §4.1 `user_md_hash`, `length`. The hash is SHA-256 of the file's bytes
+        and rides in every mode — `core.tasks` keys on it, like the intention
+        hashes. `length` counts characters and is omitted in `metadata`. The
+        last hash sent is kept in `$HERMES_HOME/av-events/profile.json` and
+        recorded only after the event is buffered, so an inert emit is retried
+        at the next session end rather than lost.
+        """
+        if self.plugin_disabled or not self.config.active:
+            return None
+        path = os.path.join(self.config.home, "memories", "USER.md")
+        try:
+            if os.path.getsize(path) > MAX_PROFILE_BYTES:
+                return None
+            with open(path, "rb") as handle:
+                raw = handle.read(MAX_PROFILE_BYTES + 1)
+        except OSError:
+            return None
+        digest = hashlib.sha256(raw).hexdigest()
+        state_path = os.path.join(self.config.state_dir, "profile.json")
+        # Two sessions can finalize at once; one of them reports the change.
+        with self._lock:
+            previous = self._read_json(state_path)
+            if isinstance(previous, dict) and previous.get("user_md_hash") == digest:
+                return None
+            payload: dict[str, Any] = {"user_md_hash": digest}
+            if self.config.capture != "metadata":
+                payload["length"] = len(raw.decode("utf-8", errors="replace"))
+            event = self.emit("profile.updated", payload, session_id=session_id)
+            if event is not None:
+                self._write_json(state_path, {"user_md_hash": digest})
+            return event
+
+    def edgeos_ledger(self) -> Ledger:
+        self.edgeos.load(os.path.join(self.config.state_dir, "edgeos_actions.json"))
+        return self.edgeos
+
+    def save_edgeos_ledger(self) -> None:
+        self.edgeos.save(os.path.join(self.config.state_dir, "edgeos_actions.json"))
+
+    def cron_tick(self, now: Optional[float] = None) -> int:
+        """Emit `cron.run` for every newly finished cron execution. Flusher thread only.
+
+        The event id is §4.3's `uuid5(NS_AV, "{tenant}|cron|{execution_id}")`
+        when the tenant id is known, so a re-read, a second process tailing the
+        same ledger or a lost cursor all produce the same id and ingest keeps
+        one row. Without a tenant id it falls back to a uuid v7 and the cursor
+        file is the only dedupe.
+        """
+        if self.plugin_disabled or not self.config.active or "cron_run" in self.config.disabled_hooks:
+            return 0
+        try:
+            now = time.time() if now is None else now
+            cursor = self._cron_cursor
+            if cursor is None or cursor.path != os.path.join(self.config.state_dir, "cron_cursor.json"):
+                cursor = self._cron_cursor = CronCursor(os.path.join(self.config.state_dir, "cron_cursor.json"))
+            cursor.load(self._read_json)
+            emitted = 0
+            for payload in pending_runs(self.config.home, cursor, now):
+                execution_id = payload["execution_id"]
+                finished = payload["finished_at"]
+                event = self.emit(
+                    "cron.run",
+                    payload,
+                    event_id=cron_run_event_id(self.config.tenant_id, execution_id) if self.config.tenant_id else None,
+                    occurred_at=finished,
+                    occurred_at_earliest=payload["started_at"] or payload["claimed_at"],
+                    occurred_at_latest=finished,
+                    actor="system",
+                    # Hermes's task id for the run, so `cron.run` joins the
+                    # run's own `llm.call` / `tool.call` rows on `run_id`.
+                    run_id=f"cron:{payload['job_id']}:{execution_id}",
+                )
+                if event is None:
+                    break
+                cursor.add(execution_id)
+                emitted += 1
+            if emitted:
+                self._write_json(cursor.path, cursor.snapshot())
+            return emitted
+        except Exception:  # noqa: BLE001 - the tail must never take the flusher down
+            self.cron_errors += 1
+            return 0
 
     # -- failures ---------------------------------------------------------
 
@@ -666,6 +858,9 @@ class Collector:
                 self.tick()
             except Exception:  # noqa: BLE001 - the flusher never dies
                 pass
+            if time.monotonic() - self._cron_at >= CRON_POLL_INTERVAL_S:
+                self._cron_at = time.monotonic()
+                self.cron_tick()
 
     def tick(self) -> None:
         """One flush pass. Runs on the flusher thread; tests call it directly."""

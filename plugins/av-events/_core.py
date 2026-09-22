@@ -101,9 +101,9 @@ FILE_MODE = 0o600
 #: never be accepted, so retrying it forever only delays the batches behind it.
 RETRYABLE_STATUSES = frozenset({408, 425, 429})
 
-#: uuid5 namespace for Agent Village derived ids (spec §4.3). Unused by this
-#: milestone — producer events get uuid v7 — but pinned here so the constant
-#: has one home.
+#: uuid5 namespace for Agent Village derived ids (spec §4.3). Producer events
+#: get uuid v7; the one derived id this plugin mints is `cron.run`'s
+#: (`cron_run_event_id`). `agentvillage-data/src/ids.ts` pins the same value.
 NS_AV = uuid.UUID("6d1f2d4e-6a6b-5c29-9b3a-0f0f9b1d4a11")
 
 
@@ -308,44 +308,73 @@ def sanitize(text: Any) -> Any:
 
 
 # --------------------------------------------------------------------------
-# Tool-name allowlist
+# Derived ids, host timestamps, read-only host stores
 # --------------------------------------------------------------------------
 
-# TODO(av-events): align these categories with the frozen event catalogue
-# (spec §4.1 `tool.call`) once research fixes the action classes. Until then a
-# tool whose name is not listed is reported as its category only, never by name,
-# so a third-party MCP server's tool names cannot leak through `sanitized`.
-TOOL_CATEGORIES: dict[str, str] = {
-    # Index Network
-    "create_intent": "intention",
-    "update_intent": "intention",
-    "read_intents": "intention",
-    "list_opportunities": "opportunity",
-    "list_conversations": "opportunity",
-    "list_negotiations": "opportunity",
-    "opportunity_outcome": "outcome",
-    "read_pending_questions": "question",
-    "read_premises": "question",
-    "read_network_memberships": "membership",
-    # EdgeOS
-    "edgeos_directory": "directory",
-    "edgeos_schedule": "schedule",
-    # Hermes built-ins
-    "send_message": "message",
-    "web_search": "research",
-    "fetch": "research",
-    "shell": "system",
-    "read_file": "system",
-    "write_file": "system",
-}
 
-UNLISTED_TOOL_CATEGORY = "other"
+def cron_run_event_id(tenant_id: str, execution_id: str) -> str:
+    """§4.3 tail-derived id: `uuid5(NS_AV, "{tenant_id}|cron|{execution_id}")`.
+
+    The one uuid v5 a plugin token may send. Ingest recomputes exactly this
+    from the token's tenant and `payload.execution_id` and quarantines any
+    other v5 (`pluginEventIdProblem` in `agentvillage-data/src/ingest/events.ts`).
+    """
+    return str(uuid.uuid5(NS_AV, f"{tenant_id}|cron|{execution_id}"))
 
 
-def tool_category(name: Optional[str]) -> str:
-    if not name:
-        return UNLISTED_TOOL_CATEGORY
-    return TOOL_CATEGORIES.get(name, UNLISTED_TOOL_CATEGORY)
+def iso_from_text(value: Any) -> Optional[str]:
+    """An ISO-8601 timestamp from a host store, as UTC `...Z` at ms, or None.
+
+    Hermes writes cron timestamps with `hermes_time.now().isoformat()`, which
+    carries the host's local offset; ordering and storage need one zone. A
+    naive stamp is not guessed at and yields None.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        stamp = datetime.fromisoformat(value.strip())
+    except ValueError:
+        return None
+    if stamp.tzinfo is None:
+        return None
+    return stamp.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def epoch_from_iso(value: Optional[str]) -> Optional[float]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def sqlite_read(path: str, sql: str, params: tuple = (), *, timeout: float = 0.2) -> Optional[list[dict]]:
+    """Rows from a Hermes SQLite store, opened read-only, or None on any failure.
+
+    `mode=ro` means this plugin cannot write to a Hermes database even by
+    mistake. A missing file, a missing table, a lock held past `timeout` —
+    every one of them is "no data", never an exception.
+    """
+    if not os.path.isfile(path):
+        return None
+    import sqlite3  # stdlib; imported here so a plugin that never reads a store never loads it
+    import urllib.parse
+
+    uri = "file:" + urllib.parse.quote(os.path.abspath(path)) + "?mode=ro"
+    conn = None
+    try:
+        conn = sqlite3.connect(uri, uri=True, timeout=timeout)
+        conn.row_factory = sqlite3.Row
+        return [dict(row) for row in conn.execute(sql, params).fetchall()]
+    except sqlite3.Error:
+        return None
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 # --------------------------------------------------------------------------

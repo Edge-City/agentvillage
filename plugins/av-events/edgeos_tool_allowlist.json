@@ -1,0 +1,19 @@
+{
+  "version": "edgeos_tool_allowlist_v1",
+  "about": "EdgeOS operations the plugin recognises (spec 4.1 action.*, measurement catalogue 'Navigate the event' and 'Act on intentions'). The edgeos skill reaches EdgeOS by running curl through a carrier tool, so an operation is matched on the HTTP method and path of the one EdgeOS URL in the call, never on the tool name. role 'action' emits action.attempted (and action.failed); role 'confirming_read' turns a pending action into action.receipted with receipt {kind: edgeos_confirming_read, id: <EdgeOS event id>}; 'read' and 'write' only label tool.call. Path parameters in braces match a UUID. Frozen with the event catalogue; moves together with the agentvillage-data seed of the same name.",
+  "hosts": ["api.edgeos.world"],
+  "carrier_tools": ["terminal"],
+  "operations": [
+    {"operation": "edgeos.rsvp", "method": "POST", "path": "/api/v1/event-participants/portal/register/{event_id}", "role": "action", "action_class": "rsvp"},
+    {"operation": "edgeos.cancel_rsvp", "method": "POST", "path": "/api/v1/event-participants/portal/cancel-registration/{event_id}", "role": "action", "action_class": "cancel_rsvp", "reverses": "rsvp"},
+    {"operation": "edgeos.event_read", "method": "GET", "path": "/api/v1/events/portal/events/{event_id}", "role": "confirming_read"},
+    {"operation": "edgeos.events_list", "method": "GET", "path": "/api/v1/events/portal/events", "role": "confirming_read"},
+    {"operation": "edgeos.participants_list", "method": "GET", "path": "/api/v1/event-participants/portal/participants", "role": "read"},
+    {"operation": "edgeos.venues_list", "method": "GET", "path": "/api/v1/event-venues/portal/venues", "role": "read"},
+    {"operation": "edgeos.profile_read", "method": "GET", "path": "/api/v1/humans/me", "role": "read"},
+    {"operation": "edgeos.directory_search", "method": "GET", "path": "/api/v1/applications/my/directory/{popup_id}", "role": "read"},
+    {"operation": "edgeos.event_update", "method": "PATCH", "path": "/api/v1/events/portal/events/{event_id}", "role": "write"},
+    {"operation": "edgeos.event_cancel", "method": "POST", "path": "/api/v1/events/portal/events/{event_id}/cancel", "role": "write"},
+    {"operation": "edgeos.profile_update", "method": "PATCH", "path": "/api/v1/humans/me", "role": "write"}
+  ]
+}

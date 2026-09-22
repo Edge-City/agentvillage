@@ -19,19 +19,27 @@ import re
 import time
 from typing import Any, Optional
 
+from . import _edgeos
 from ._collector import Collector, guarded, hermes_version, overlay_ref
 from ._core import (
-    TOOL_CATEGORIES,
-    UNLISTED_TOOL_CATEGORY,
     hash_obj,
     hash_text,
     iso_from_epoch,
     sanitize,
-    tool_category,
     uuid7,
 )
+from ._cron import cron_job_id_from
 from ._intentions import IntentionCall, classify_tool, valid_id
 from ._intentions import plan as plan_intentions
+from ._messages import message_payload
+from ._tools import (
+    TOOL_CATEGORIES,
+    UNLISTED_TOOL_CATEGORY,
+    normalise_status,
+    status_ok,
+    tool_call_payload,
+    tool_category,
+)
 
 __version__ = "0.1.0"
 
@@ -160,16 +168,53 @@ def _hook_pre_llm_call(collector: Collector, **kwargs: Any) -> None:
     state = _session(collector, kwargs)
     if state is None:
         return
-    if kwargs.get("user_message"):
+    text = kwargs.get("user_message")
+    if text:
         state.message_count += 1
+        _emit_message(collector, "message.in", text, kwargs)
 
 
 def _hook_post_llm_call(collector: Collector, **kwargs: Any) -> None:
     state = _session(collector, kwargs)
     if state is None:
         return
-    if kwargs.get("assistant_response"):
+    text = kwargs.get("assistant_response")
+    if text:
         state.message_count += 1
+        _emit_message(collector, "message.out", text, kwargs)
+
+
+def _emit_message(collector: Collector, event_type: str, text: Any, kwargs: dict) -> None:
+    """`message.in` from `pre_llm_call`, `message.out` from `post_llm_call`.
+
+    Hashes, lengths and punctuation flags only (`_messages`). Who sent a
+    `message.in` depends on the session: a participant in a conversation, the
+    scheduler in a cron run (the "user message" is the job's prompt — a cron
+    session is never participant-sourced), and the delegating agent in a
+    subagent (its goal). `sender_id` is never read.
+    """
+    if not collector.config.active:
+        return
+    refs = _refs(kwargs)
+    session_id = refs["session_id"]
+    cron = _is_cron_session(collector, session_id)
+    subagent = collector.parent_of(session_id) is not None
+    if cron:
+        channel, sender = "cron", "system"
+    elif subagent:
+        channel, sender = "subagent", "agent"
+    else:
+        state = collector.peek_session(session_id)
+        channel = (state.source if state is not None else None) or _source_for(kwargs.get("platform")) or "unknown"
+        sender = "participant"
+    cron_job_id = cron_job_id_from(session_id, kwargs.get("task_id")) if cron else None
+    collector.emit(
+        event_type,
+        message_payload(text, channel, collector.config.capture, cron_job_id),
+        actor=sender if event_type == "message.in" else "agent",
+        model_id=kwargs.get("model") if event_type == "message.out" else None,
+        **refs,
+    )
 
 
 def _hook_pre_api_request(collector: Collector, **kwargs: Any) -> None:
@@ -341,19 +386,188 @@ def _hook_pre_tool_call(collector: Collector, **kwargs: Any) -> None:
 
 
 def _hook_post_tool_call(collector: Collector, **kwargs: Any) -> None:
-    """Intention capture (spec §7.1). `tool.call` itself is not emitted yet.
+    """`tool.call`, the EdgeOS `action.*` path, and intention capture (spec §4.1, §7.1).
 
-    Intentions are captured here and not in `pre_tool_call`, although §7.1
-    names the latter: `pre_tool_call` fails closed and must stay I/O-free, and
-    only this hook has the result — the Index intent id, and whether Index
-    accepted the intent at all. `post_tool_call` is a pure observer (Hermes
+    Everything tool-shaped is emitted here and not in `pre_tool_call`: that
+    hook fails closed and must stay I/O-free, and only this one has the result,
+    the status and the duration. `post_tool_call` is a pure observer (Hermes
     discards its return, `model_tools.py` at `v2026.8.31`), so nothing here can
     delay, block or rewrite the tool call.
+
+    Order: `tool.call`, then any `action.*` it implies, then any `intention.*`.
+    The three are isolated from each other: a failure in one is counted against
+    the breaker like any hook failure and does not cost the others their events.
     """
     _session(collector, kwargs)
-    if classify_tool(kwargs.get("tool_name")) is None:
+    if not collector.config.active:
         return
-    _capture_intentions(collector, kwargs)
+    _isolated(collector, kwargs, _emit_tool_call, collector, kwargs)
+    if classify_tool(kwargs.get("tool_name")) is not None:
+        _isolated(collector, kwargs, _capture_intentions, collector, kwargs)
+
+
+def _isolated(collector: Collector, kwargs: dict, fn, *args: Any) -> None:
+    try:
+        fn(*args)
+    except SystemExit:
+        raise
+    except BaseException as exc:  # noqa: BLE001 - same contract as `guarded`
+        session_id = kwargs.get("session_id") or kwargs.get("parent_session_id")
+        collector.record_failure("post_tool_call", exc, str(session_id) if session_id else None)
+
+
+def _emit_tool_call(collector: Collector, kwargs: dict) -> None:
+    refs = _refs(kwargs)
+    tool_call_id = _tool_call_id(kwargs)
+    occurred_at, earliest = _call_window(kwargs)
+    payload = tool_call_payload(
+        kwargs.get("tool_name"),
+        kwargs.get("args"),
+        kwargs.get("result"),
+        kwargs.get("status"),
+        kwargs.get("duration_ms"),
+        kwargs.get("error_type"),
+        collector.config.capture,
+    )
+    actions: list = []
+    try:
+        actions = _edgeos_actions(collector, kwargs, payload)
+    except SystemExit:
+        raise
+    except BaseException as exc:  # noqa: BLE001 - the tool.call itself still goes out
+        session_id = refs["session_id"]
+        collector.record_failure("post_tool_call", exc, session_id)
+        payload["receipt"] = None
+    window = dict(occurred_at=occurred_at, occurred_at_earliest=earliest, occurred_at_latest=occurred_at)
+    collector.emit("tool.call", payload, tool_call_id=tool_call_id, **window, **refs)
+    for event_type, action_payload, action_id, evidence_class in actions:
+        collector.emit(
+            event_type,
+            action_payload,
+            action_id=action_id,
+            tool_call_id=tool_call_id,
+            evidence_class=evidence_class,
+            **window,
+            **refs,
+        )
+
+
+def _tool_call_id(kwargs: dict) -> Optional[str]:
+    """Hermes supplies `tool_call_id`, not the agent: one that fails the id
+    pattern is nulled and the event kept."""
+    raw = kwargs.get("tool_call_id")
+    value = str(raw) if raw not in (None, "") else None
+    return value if value is not None and valid_id(value) else None
+
+
+def _call_window(kwargs: dict) -> tuple[Optional[str], Optional[str]]:
+    """(`occurred_at`, `occurred_at_earliest`): the call's end, and its end
+    minus Hermes's `duration_ms`. The hook fires as the call returns."""
+    ended = time.time()
+    duration = kwargs.get("duration_ms")
+    started = (
+        ended - float(duration) / 1000.0
+        if isinstance(duration, (int, float)) and not isinstance(duration, bool) and duration > 0
+        else ended
+    )
+    return iso_from_epoch(ended), iso_from_epoch(started)
+
+
+def _edgeos_actions(collector: Collector, kwargs: dict, tool_payload: dict) -> list:
+    """The `action.*` events one EdgeOS call implies, and its `tool.call` labels.
+
+    An RSVP or a cancellation (`role: action`) is `action.attempted` with a
+    fresh action id, plus `action.failed` when the call failed; a successful
+    one waits in the ledger for a confirming read. A read (`role:
+    confirming_read`) whose `my_rsvp_status` agrees with a waiting action is
+    `action.receipted` on that action's id, with receipt
+    `{kind: edgeos_confirming_read, id: <EdgeOS event id>}` — the one event this
+    plugin claims `provider_receipt` for, which ingest honours only because the
+    receipt is checkable (§2.1). A cancellation carries `reversal: true` and,
+    when the RSVP it undoes is known, `reverses_action_id`.
+
+    Returns [(event_type, payload, action_id, evidence_class or None)].
+    """
+    call = _edgeos.http_call(kwargs.get("tool_name"), kwargs.get("args"))
+    matched = _edgeos.match_operation(*call) if call is not None else None
+    if matched is None:
+        return []
+    op, params = matched
+    tool_payload["operation"] = op.operation
+    tool_payload["target_system"] = _edgeos.TARGET_SYSTEM
+    if op.role not in ("action", "confirming_read"):
+        return []
+
+    status = normalise_status(kwargs.get("status"))
+    ok = status_ok(status)
+    exit_code, body = _edgeos.terminal_outcome(kwargs.get("result"))
+    # Hermes can run tool calls concurrently; the ledger is shared state.
+    with collector._lock:
+        return _edgeos_ledger_step(collector, op, params, status, ok, exit_code, body, tool_payload)
+
+
+def _edgeos_ledger_step(collector, op, params, status, ok, exit_code, body, tool_payload) -> list:
+    ledger = collector.edgeos_ledger()
+    version = _edgeos.ALLOWLIST.version
+    out: list = []
+
+    if op.role == "action":
+        event_id = params.get("event_id")
+        if not event_id:
+            return []
+        action_id = uuid7()
+        reversal = bool(op.reverses)
+        reverses = ledger.last_action(event_id, op.reverses) if reversal else None
+        if reverses is not None and not valid_id(reverses):
+            reverses = None
+        error = _edgeos.action_error(ok, status, exit_code, body)
+        common = dict(receipt=None, reversal=reversal, reverses_action_id=reverses, version=version)
+        out.append(("action.attempted", _edgeos.action_payload(op, event_id, error=None, **common), action_id, None))
+        if error is not None:
+            out.append(("action.failed", _edgeos.action_payload(op, event_id, error=error, **common), action_id, None))
+        else:
+            ledger.attempt(event_id, action_id, op.action_class, reversal, reverses)
+            collector.save_edgeos_ledger()
+        return out
+
+    if not ok or exit_code not in (None, 0):
+        return []
+    receipts = []
+    for event_id, rsvp in _edgeos.rsvp_statuses(body).items():
+        waiting = ledger.pending.get(event_id)
+        if not isinstance(waiting, dict):
+            continue
+        action_class = waiting.get("action_class")
+        action_id = waiting.get("action_id")
+        if action_class not in _edgeos.CONFIRMS or rsvp not in _edgeos.CONFIRMS[action_class]:
+            continue
+        if not valid_id(action_id):
+            ledger.resolve(event_id)
+            continue
+        reverses = waiting.get("reverses_action_id")
+        receipt = {"kind": _edgeos.RECEIPT_KIND, "id": event_id}
+        receipts.append(receipt)
+        out.append((
+            "action.receipted",
+            _edgeos.action_payload(
+                op,
+                event_id,
+                error=None,
+                receipt=receipt,
+                reversal=bool(waiting.get("reversal")),
+                reverses_action_id=reverses if valid_id(reverses) else None,
+                action_class=action_class,
+                version=version,
+            ),
+            action_id,
+            "provider_receipt",
+        ))
+        ledger.resolve(event_id)
+    if out:
+        collector.save_edgeos_ledger()
+    if len(receipts) == 1:
+        tool_payload["receipt"] = dict(receipts[0])
+    return out
 
 
 def _intention_payload(call: IntentionCall, capture: str, parent_session_id: Optional[str]) -> dict:
@@ -426,18 +640,9 @@ def _capture_intentions(collector: Collector, kwargs: dict) -> None:
     if not calls:
         return
 
-    # Hermes supplies `tool_call_id`, not the agent: one that fails the id
-    # pattern is nulled and the event kept.
-    raw_call_id = kwargs.get("tool_call_id")
-    tool_call_id = str(raw_call_id) if raw_call_id not in (None, "") else None
-    if tool_call_id is not None and not valid_id(tool_call_id):
-        tool_call_id = None
-
+    tool_call_id = _tool_call_id(kwargs)
     # The call's own window: Hermes reports `duration_ms` and we fire at its end.
-    ended = time.time()
-    duration = kwargs.get("duration_ms")
-    started = ended - float(duration) / 1000.0 if isinstance(duration, (int, float)) and duration > 0 else ended
-    occurred_at = iso_from_epoch(ended)
+    occurred_at, earliest = _call_window(kwargs)
 
     capture = collector.config.capture
     parent_session_id = collector.parent_of(refs["session_id"])
@@ -455,7 +660,7 @@ def _capture_intentions(collector: Collector, kwargs: dict) -> None:
             call.event_type,
             _intention_payload(call, capture, parent_session_id),
             occurred_at=occurred_at,
-            occurred_at_earliest=iso_from_epoch(started),
+            occurred_at_earliest=earliest,
             occurred_at_latest=occurred_at,
             tool_call_id=tool_call_id,
             intention_id=call.intention_id,
@@ -475,10 +680,17 @@ def _hook_on_session_end(collector: Collector, **kwargs: Any) -> None:
 
 
 def _hook_on_session_finalize(collector: Collector, **kwargs: Any) -> None:
+    """The real session close: `session.ended` with Hermes's cost figures for
+    the session, then `profile.updated` if USER.md changed. In that order, so
+    nothing the profile check does can cost the session its end event."""
     session_id = kwargs.get("session_id")
     if not session_id:
         return
-    collector.session_ended(str(session_id))
+    session_id = str(session_id)
+    state = collector.peek_session(session_id)
+    cost = collector.read_session_cost(session_id) if state is not None and not state.ended else {}
+    collector.session_ended(session_id, **cost)
+    collector.check_profile(session_id)
 
 
 def _hook_subagent_start(collector: Collector, **kwargs: Any) -> None:
