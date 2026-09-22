@@ -1,0 +1,16 @@
+name: recall
+version: 0.1.0
+description: "Tenant-local memory recall (opt-in). Registers the `recall` tool: SQLite FTS5 search over the agent's daily notes, MEMORY.md and the owner's private sessions. No LLM, no network; refuses in group sessions."
+author: Edge City
+kind: standalone
+optional_env:
+  - AV_RECALL_ENABLED
+  - AV_RECALL_SCRIPT
+  - AV_RECALL_BUN
+  - AV_RECALL_INDEX
+  - AV_RECALL_STATE_DB
+provides_tools:
+  - recall
+# Documentation only — Hermes reads hooks from ctx.register_hook().
+provides_hooks:
+  - on_session_finalize

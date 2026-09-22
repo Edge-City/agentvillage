@@ -87,16 +87,29 @@ def types_of(events) -> list[str]:
 class FakeCtx:
     """Stands in for `hermes_cli.plugins.PluginContext`.
 
-    Only `register_hook` is used by this plugin; anything else would be an error
-    we want to see rather than silently absorb.
+    Only `register_hook` and `subscribe` are used by this plugin; anything else
+    would be an error we want to see rather than silently absorb.
     """
 
     def __init__(self) -> None:
         self.hooks: dict[str, list[Callable]] = {}
+        self.subscriptions: dict[str, list[Callable]] = {}
 
     def register_hook(self, hook_name: str, callback: Callable):
         self.hooks.setdefault(hook_name, []).append(callback)
         return object()
+
+    def subscribe(self, event: str, callback: Callable) -> None:
+        self.subscriptions.setdefault(event, []).append(callback)
+
+    def publish(self, event: str, **payload: Any) -> None:
+        """Deliver like `PluginManager._deliver_event`: `callback(**payload)`.
+
+        Synchronous here; Hermes delivers on its own worker thread. Exceptions
+        are not swallowed, for the same reason as `fire`.
+        """
+        for callback in self.subscriptions.get(event, []):
+            callback(**payload)
 
     def fire(self, hook_name: str, **kwargs: Any) -> list:
         """Dispatch like `PluginManager.invoke_hook`: collect non-None returns.
