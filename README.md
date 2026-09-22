@@ -282,7 +282,7 @@ Then re-install:
 bun install/install.ts --index-api-key <YOUR_API_KEY>
 ```
 
-Pass `--wipe-user` to also remove `USER.md`, `MEMORY.md`, and the entire `memory/` directory — including `agentvillage-state.json`, `welcome-state.json`, daily notes, and any other local memory files — and the `av-events` plugin's local state under `$HERMES_HOME/av-events/` (unsent event buffer, tenant hash key, EdgeOS action ledger, cron cursor, seen-sets) — so the next message can run the first-install gates again:
+Pass `--wipe-user` to also remove `USER.md`, `MEMORY.md`, and the entire `memory/` directory — including `agentvillage-state.json`, `welcome-state.json`, daily notes, and any other local memory files — and, after stopping the gateway so it cannot write them back, the memory tool's `memories/USER.md` and the `av-events` plugin's local state under `$HERMES_HOME/av-events/` (unsent event buffer, tenant hash key, EdgeOS action ledger, cron cursor, seen-sets); the gateway is then restarted — so the next message can run the first-install gates again:
 
 ```bash
 bun install/reset.ts --wipe-user

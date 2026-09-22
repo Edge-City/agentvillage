@@ -85,6 +85,77 @@ PROFILE_FILES = (
     ("landing_profile", ("USER.md",)),
 )
 
+def _bump(counters: Optional[dict], name: str) -> None:
+    if counters is not None:
+        counters[name] = counters.get(name, 0) + 1
+
+
+def _write_new_key(directory: str) -> str:
+    """A fresh key written to a private temp file in `directory`; returns its path."""
+    temp = os.path.join(directory, f".hash.key.{os.getpid()}.{secrets.token_hex(4)}")
+    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, FILE_MODE)
+    with os.fdopen(fd, "w", encoding="ascii") as handle:
+        handle.write(secrets.token_hex(32))
+    return temp
+
+
+def load_or_create_key(directory: str, counters: Optional[dict] = None) -> Optional[bytes]:
+    """Per-tenant random key at `<directory>/hash.key`: 64 hex characters, mode 0600.
+
+    A key, once written, is never rotated by a race or a hiccup:
+
+    - read succeeds, content valid: that is the key;
+    - read succeeds, content not 64 hex: the file is corrupt and is replaced
+      (`os.replace` from a complete temp file), then read back;
+    - file absent: a complete temp file is *linked* into place, which fails
+      if another process got there first — and then the winner's key is read.
+      No reader ever sees a partial file, and every first use agrees;
+    - any other `OSError` (permissions, I/O, a missing directory that cannot
+      be made): None. The caller keys nothing for now and retries later.
+    """
+    path = os.path.join(directory, "hash.key")
+    for _ in range(3):
+        try:
+            with open(path, "rb") as handle:
+                raw = handle.read(256)
+        except FileNotFoundError:
+            try:
+                os.makedirs(directory, mode=DIR_MODE, exist_ok=True)
+                temp = _write_new_key(directory)
+                try:
+                    os.link(temp, path)
+                    _bump(counters, "hash_key_generated")
+                except FileExistsError:
+                    pass  # another process won; read its key on the next pass
+                finally:
+                    try:
+                        os.unlink(temp)
+                    except FileNotFoundError:
+                        pass
+            except OSError:
+                return None
+            continue
+        except OSError:
+            return None
+        text = raw.decode("ascii", errors="replace").strip()
+        if _HEX64.match(text):
+            return bytes.fromhex(text)
+        # Read fine, content invalid: the file is corrupt. Replace it.
+        try:
+            temp = _write_new_key(directory)
+            try:
+                os.replace(temp, path)
+                _bump(counters, "hash_key_replaced")
+            finally:
+                try:
+                    os.unlink(temp)
+                except FileNotFoundError:
+                    pass
+        except OSError:
+            return None
+    return None
+
+
 # --------------------------------------------------------------------------
 # Runtime facts
 # --------------------------------------------------------------------------
@@ -681,54 +752,20 @@ class Collector:
         return emitted
 
     def hash_key(self) -> Optional[bytes]:
-        """Per-tenant random key at `$HERMES_HOME/av-events/hash.key`, or None.
+        """The tenant's HMAC key (`load_or_create_key`), cached for the process.
 
-        64 hex characters, mode 0600, created once and atomically — written to a
-        temp file and linked into place, so concurrent first uses agree on one
-        key — the same pattern as `plugins/recall`'s query-hash key. A key that
-        is not exactly 64 hex characters is replaced. None when the key cannot
-        be read or written, and then nothing keyed is emitted (null, never a
-        plain hash in its place).
+        None when it cannot be read or created; then nothing keyed is emitted
+        (null, never a plain hash in its place) and `hash_key_unavailable` is
+        counted. A failure is not cached, so a later hook can still succeed.
         """
         if self._hash_key is not None:
             return self._hash_key
-        directory = self.config.state_dir
-        path = os.path.join(directory, "hash.key")
-        try:
-            try:
-                with open(path, encoding="ascii") as handle:
-                    existing = handle.read().strip()
-            except (OSError, UnicodeDecodeError):
-                existing = ""
-            if not _HEX64.match(existing):
-                os.makedirs(directory, mode=DIR_MODE, exist_ok=True)
-                replacing = os.path.exists(path)
-                temp = os.path.join(directory, f".hash.key.{os.getpid()}.{secrets.token_hex(4)}")
-                fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, FILE_MODE)
-                try:
-                    with os.fdopen(fd, "w", encoding="ascii") as handle:
-                        handle.write(secrets.token_hex(32))
-                    if replacing:
-                        os.replace(temp, path)
-                    else:
-                        try:
-                            os.link(temp, path)  # another process may have won the race
-                        except FileExistsError:
-                            pass
-                finally:
-                    try:
-                        os.unlink(temp)
-                    except FileNotFoundError:
-                        pass
-                self.counters["hash_key_generated"] = self.counters.get("hash_key_generated", 0) + 1
-                with open(path, encoding="ascii") as handle:
-                    existing = handle.read().strip()
-                if not _HEX64.match(existing):
-                    return None
-            self._hash_key = bytes.fromhex(existing)
-            return self._hash_key
-        except OSError:
+        key = load_or_create_key(self.config.state_dir, self.counters)
+        if key is None:
+            self.counters["hash_key_unavailable"] = self.counters.get("hash_key_unavailable", 0) + 1
             return None
+        self._hash_key = key
+        return key
 
     def keyed_hash(self, text: str) -> Optional[str]:
         """HMAC-SHA256 of `text` under the tenant's key, or None without a key.

@@ -100,14 +100,19 @@ is irrelevant; any change to a tool's schema changes the hash. Text is encoded a
 exactly as plain UTF-8.
 
 **Keyed hashes.** `message.*` `content_hash`, `tool.call` `args_hash` / `result_hash`, and in
-`metadata` the EdgeOS event id on `action.*`, are HMAC-SHA256 under a per-tenant random key at
-`$HERMES_HOME/av-events/hash.key` (64 hex characters, mode 0600, created once and atomically — the
-same pattern as `plugins/recall`'s query-hash key; a malformed key is replaced and counted in
-`Collector.counters["hash_key_generated"]`). The key never leaves the sandbox, so these digests
-count and join within a tenant and are useless to anyone else. If the key cannot be read or written
-the digests are null — never a plain hash in their place. The intention hashes and `user_md_hash`
+`metadata` the EdgeOS event and participant ids on `action.*`, are HMAC-SHA256 under a per-tenant
+random key at `$HERMES_HOME/av-events/hash.key` (64 hex characters, mode 0600). The key never leaves
+the sandbox, so these digests count and join within a tenant and are useless to anyone else.
+**A key, once written, never rotates** (`load_or_create_key`): a missing file is created by linking a
+complete temp file into place, and the process that loses that race reads the winner's key, so
+concurrent first uses agree; only a file that reads successfully but is not 64 hex characters is
+replaced (`hash_key_replaced`); any other read error — permissions, I/O — disables keying for now
+(`hash_key_unavailable`, retried on the next hook) and never rewrites the file. Without a key the
+digests are null — never a plain hash in their place. The intention hashes and `user_md_hash`
 stay plain SHA-256: they are join keys with producers outside the sandbox (the Index poller hashes
-the same Index fields). `reset.ts --wipe-user` deletes the key with the rest of `av-events/`.
+the same Index fields). `reset.ts --wipe-user` stops the gateway, deletes the key with the rest of
+`av-events/` (and the memory tool's `memories/USER.md`), then restarts it. `Buffer.append`
+recreates its directory if it disappears under a running process.
 
 **Sanitiser.** Every string that leaves passes a secret-shape filter: Anthropic, OpenRouter and
 OpenAI key shapes, `Bearer …`, the Telegram bot-token shape, and the literal value of our own
@@ -366,8 +371,13 @@ control operators split out) and read only when it is unambiguous:
 - **every** http(s) URL anywhere in the command — headers, `echo`s, a second command — is on the
   EdgeOS host, with no userinfo and no port other than `:443`;
 - exactly one `curl` word, and it starts a command (`echo curl …` and a `for` body are not requests);
-- curl's own arguments give exactly one URL (`--url` or positional), and every EdgeOS URL in the
-  command names that same path;
+- nothing follows it: no `;`, `&&`, `||`, `|`, redirect or new line after the curl, and no command
+  substitution (`$(…)`, backticks) anywhere — each could run a second request or rewrite what the
+  agent saw as the response;
+- no option that moves the request or drops the host check: `--resolve`, `--connect-to`,
+  `-x`/`--proxy` (and the SOCKS/pre-proxy/DoH forms), `-K`/`--config`, `-k`/`--insecure`;
+- curl's own arguments give exactly one URL (`--url` or positional; the same URL twice is two), and
+  every EdgeOS URL in the command names that same path;
 - the method is curl's: `-X`/`--request` wins; else `-G`/`--get` is GET; else `-T` is PUT; else
   `-d`/`--data*`/`--json`/`-F` is POST; else GET. Combined short flags are read the way curl reads
   them (`-sX POST`, `-sXPOST`, `-sSfL`), and an option that takes a value consumes it;
@@ -397,10 +407,12 @@ labels only: EdgeOS's own error text can echo the request. A failed action never
 receipt and is never what a later cancellation reverses.
 
 **Occurrences.** Waiting actions are keyed by EdgeOS event id and occurrence start: the record's
-`occurrence_start` (null for a one-off event), normalised to UTC. A single-event read confirms the
-occurrence named by its `occurrence_start` query parameter (URL-encoded, as EdgeOS itself requires),
-or the one-off event without it; an item of a list read that belongs to a recurring series is keyed
-by its `start_time`. A re-RSVP to an occurrence with an RSVP already waiting **supersedes** it: the new
+`occurrence_start` (null for a one-off event), normalised to UTC; a record whose `occurrence_start`
+is not a timestamp with a zone is reported but waits on nothing. A single-event read confirms the
+occurrence named by its `occurrence_start` query parameter (a literal `+` is an offset, not a space);
+without one it confirms the one-off action if one is waiting, else the event's only waiting
+occurrence, and nothing when two or more are waiting. An item of a list read that belongs to a
+recurring series is keyed by its `start_time`. A re-RSVP to an occurrence with an RSVP already waiting **supersedes** it: the new
 `action.attempted` carries `supersedes_action_id`, and the earlier attempt is never receipted.
 
 **Confirmation.** A later successful read whose event object carries `my_rsvp_status` confirms a
@@ -427,8 +439,12 @@ are always set explicitly. A cancellation of an RSVP the plugin never saw is sti
 with `reverses_action_id: null`.
 
 Actions are emitted in every capture mode: they carry ids and fixed labels, nothing a participant
-wrote. In `metadata`, `edgeos_event_id` is replaced by its keyed hash (joins within a tenant still
-work); the receipt's participant id is kept, since a receipt nobody can check is not a receipt.
+wrote. In `metadata`, `edgeos_event_id` and the receipt's participant id (on `action.receipted` and
+on the read's `tool.call`) are replaced by their keyed hashes: joins within a tenant still work, but
+**the receipt is not checkable in `metadata`** — nobody outside the sandbox can re-read a hashed id.
+`sanitized` and `full` keep both ids in clear. The event still claims `provider_receipt`, but ingest
+stores a receipt whose id is a keyed hash at `agent_report`, not `provider_receipt`: a `metadata`
+tenant's RSVPs are recorded as receipted actions without receipt-grade evidence (divergence 31).
 
 ## Cron capture
 
@@ -494,7 +510,9 @@ landing's enrichment wrote (the control-plane sidecar's `USER_FILE`, and the ins
 carries `kind`, `user_md_hash` (SHA-256 of the file's bytes) in every mode — `core.tasks` keys on it —
 and `length` (characters) above `metadata`. Each is emitted on first sight and whenever its hash
 changes; the last hash sent per kind is kept in `$HERMES_HOME/av-events/profile.json` only after the
-event is buffered. A file over 1 MiB is not read. **Catalogue:** §4.1 has one `profile.updated` row
+event is buffered. A file over 1 MiB is not read. **Timing (accepted for v1):** `profile.updated`
+fires at session finalize, so a long session collapses many edits into one event, and a gateway
+that is killed rather than finalized reports none for that session. **Catalogue:** §4.1 has one `profile.updated` row
 with `user_md_hash`, `length`; it needs `kind` added, and `core.tasks.profile_hash` must say which
 kind it means (presumably `memory_profile`, the one that evolves during the experiment).
 
@@ -799,6 +817,10 @@ These are the divergences this milestone had to resolve. Each one is a decision 
     `kind`.
 30. **`cron.run.delivery_outcome` is null at the pinned tag**: the ledger column arrives in a later
     Hermes.
+31. **`metadata` receipts cannot be checked.** The participant id is hashed there. The plugin's
+    claim is unchanged (`provider_receipt`); ingest stores a receipt with a hashed id at
+    `agent_report`, not `provider_receipt`, so in `metadata` an RSVP is a receipted action without
+    receipt-grade evidence.
 
 ---
 

@@ -205,6 +205,100 @@ def test_a_malformed_key_is_replaced(live, ctx, av, home):
     assert of_type(av, live, "message.in")[0]["payload"]["content_hash"]
 
 
+def _race_worker(module_name, directory, barrier, out):
+    import sys as _sys
+
+    collector_module = _sys.modules[f"{module_name}._collector"]
+    barrier.wait()
+    key = collector_module.load_or_create_key(directory)
+    out.put(key.hex() if key else None)
+
+
+def test_the_first_use_race_agrees_on_one_key(plugin, tmp_path):
+    """Eight processes, all first users of the key, at once — a hundred times."""
+    import multiprocessing
+
+    collector_module = __import__(f"{plugin.__name__}._collector", fromlist=["_collector"])
+    context = multiprocessing.get_context("fork")
+    for trial in range(100):
+        directory = str(tmp_path / f"t{trial}" / "av-events")
+        barrier = context.Barrier(8)
+        out = context.Queue()
+        workers = [context.Process(target=_race_worker, args=(plugin.__name__, directory, barrier, out))
+                   for _ in range(8)]
+        for worker in workers:
+            worker.start()
+        keys = {out.get(timeout=10) for _ in workers}
+        for worker in workers:
+            worker.join(timeout=10)
+        on_disk = (tmp_path / f"t{trial}" / "av-events" / "hash.key").read_text().strip()
+        assert keys == {on_disk}, (trial, keys)
+        assert collector_module.load_or_create_key(directory).hex() == on_disk
+        leftovers = [p.name for p in (tmp_path / f"t{trial}" / "av-events").iterdir() if p.name != "hash.key"]
+        assert leftovers == [], leftovers
+
+
+def test_a_transient_read_error_does_not_rotate_the_key(live, ctx, av, home, monkeypatch):
+    import builtins
+
+    ctx.fire("pre_llm_call", session_id="s", turn_id="t0", user_message="hi")
+    path = home / "av-events" / "hash.key"
+    key = path.read_text()
+    first = of_type(av, live, "message.in")[0]["payload"]["content_hash"]
+
+    real_open = builtins.open
+    failures = {"left": 1}
+
+    def flaky_open(file, *args, **kwargs):
+        if str(file) == str(path) and failures["left"]:
+            failures["left"] -= 1
+            raise PermissionError("transient")
+        return real_open(file, *args, **kwargs)
+
+    live._COLLECTOR._hash_key = None  # as in a fresh process
+    monkeypatch.setattr(builtins, "open", flaky_open)
+    ctx.fire("pre_llm_call", session_id="s", turn_id="t1", user_message="hi")
+    assert path.read_text() == key  # not rotated
+    assert of_type(av, live, "message.in")[1]["payload"]["content_hash"] is None
+    assert live._COLLECTOR.counters["hash_key_unavailable"] == 1
+    ctx.fire("pre_llm_call", session_id="s", turn_id="t2", user_message="hi")
+    assert of_type(av, live, "message.in")[2]["payload"]["content_hash"] == first
+    assert path.read_text() == key
+
+
+def test_an_unmakeable_key_directory_disables_keying(plugin, tmp_path):
+    collector_module = __import__(f"{plugin.__name__}._collector", fromlist=["_collector"])
+    blocker = tmp_path / "file"
+    blocker.write_text("not a directory")
+    counters: dict = {}
+    assert collector_module.load_or_create_key(str(blocker / "av-events"), counters) is None
+    assert counters == {}
+
+
+def test_a_valid_key_is_never_rewritten(plugin, tmp_path):
+    collector_module = __import__(f"{plugin.__name__}._collector", fromlist=["_collector"])
+    directory = tmp_path / "av-events"
+    directory.mkdir()
+    (directory / "hash.key").write_text("ab" * 32 + "\n")
+    before = os.stat(directory / "hash.key").st_ino
+    counters: dict = {}
+    for _ in range(5):
+        assert collector_module.load_or_create_key(str(directory), counters) == bytes.fromhex("ab" * 32)
+    assert os.stat(directory / "hash.key").st_ino == before
+    assert counters == {}
+
+
+def test_the_buffer_recreates_a_deleted_directory(live, ctx, av, home):
+    import shutil
+
+    ctx.fire("pre_llm_call", session_id="s", turn_id="t0", user_message="hi")
+    shutil.rmtree(home / "av-events")
+    ctx.fire("pre_llm_call", session_id="s", turn_id="t1", user_message="again")
+    assert live._COLLECTOR.total_failures == 0
+    assert of_type(av, live, "message.in")
+    assert stat.S_IMODE(os.stat(home / "av-events" / "buffer").st_mode) == 0o700
+
+
 def test_without_a_key_nothing_keyed_is_emitted(live, ctx, av, monkeypatch):
     monkeypatch.setattr(live._COLLECTOR, "hash_key", lambda: None)
     ctx.fire("pre_llm_call", session_id="s", turn_id="t0", user_message="hi")

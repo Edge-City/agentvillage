@@ -142,8 +142,20 @@ ALLOWLIST = load_allowlist()
 #: Any http(s) URL's authority, anywhere in the command, quoted or not.
 _ANY_URL = re.compile(r"https?://([^/\s'\"`?#<>|;&()\\]*)", re.IGNORECASE)
 
-#: Shell control operators: a `curl` counts only at the start of a command.
-_OPERATORS = frozenset({"|", "||", "&", "&&", ";", ";;", "(", ")", "|&", "!"})
+#: Characters the tokeniser splits out as shell control operators (newline
+#: included). A run of them is one token, e.g. `&&` or `;\n`.
+_PUNCTUATION = "();<>|&\n"
+
+
+def _is_operator(token: str) -> bool:
+    return bool(token) and all(c in _PUNCTUATION for c in token)
+
+
+#: curl options that change where the request actually goes, or whether the
+#: host is who it claims to be. A command using any of them is not read.
+_REFUSED_SHORT = frozenset("xKk")
+_REFUSED_LONG = frozenset({"--resolve", "--connect-to", "--proxy", "--config", "--insecure", "--socks5",
+                           "--socks5-hostname", "--preproxy", "--doh-url"})
 
 #: curl short options that take an argument (`curl --help all`). Everything
 #: else in a cluster like `-sSfL` is a flag; `-sXPOST` and `-sX POST` both
@@ -183,7 +195,8 @@ def _host_allowed(authority: str, hosts: frozenset) -> bool:
 
 def _tokens(command: str) -> Optional[list[str]]:
     try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=_PUNCTUATION)
+        lexer.whitespace = " \t\r"  # a newline separates commands: an operator, not a space
         lexer.whitespace_split = True
         return list(lexer)
     except ValueError:
@@ -194,19 +207,19 @@ def _curl_segment(tokens: list[str]) -> Optional[list[str]]:
     """The arguments of the one `curl` command, or None unless there is exactly one.
 
     A `curl` word anywhere else — `echo curl …`, a `for` body, a second
-    command — makes the call ambiguous and it is not read.
+    command — makes the call ambiguous and it is not read. So does anything
+    after it: a pipe, `;`, `&&`, `||`, a redirect or a new line could run a
+    second request, or rewrite what the agent saw as the response.
     """
     starts = [i for i, t in enumerate(tokens) if t == "curl" or t.endswith("/curl")]
     if len(starts) != 1:
         return None
     start = starts[0]
-    if start > 0 and tokens[start - 1] not in _OPERATORS:
+    if start > 0 and not _is_operator(tokens[start - 1]):
         return None
-    segment = []
-    for token in tokens[start + 1:]:
-        if token in _OPERATORS:
-            break
-        segment.append(token)
+    segment = tokens[start + 1:]
+    if any(_is_operator(token) for token in segment):
+        return None
     return segment
 
 
@@ -224,6 +237,8 @@ def _parse_curl(args: list[str]) -> Optional[tuple[str, list[str]]]:
             break
         if token.startswith("--"):
             name, eq, value = token.partition("=")
+            if name in _REFUSED_LONG:
+                return None
             if name in _LONG_WITH_ARG and not eq:
                 if i >= len(args):
                     return None
@@ -242,6 +257,8 @@ def _parse_curl(args: list[str]) -> Optional[tuple[str, list[str]]]:
         elif token.startswith("-") and len(token) > 1:
             for j in range(1, len(token)):
                 flag = token[j]
+                if flag in _REFUSED_SHORT:
+                    return None
                 if flag in _SHORT_WITH_ARG:
                     value = token[j + 1:]
                     if not value:
@@ -288,6 +305,8 @@ def http_call(tool_name: Any, args: Any, allowlist: Allowlist = ALLOWLIST) -> Op
     command = args.get("command")
     if not isinstance(command, str) or not command or len(command) > MAX_COMMAND_CHARS:
         return None
+    if "`" in command or "$(" in command:  # command substitution: the shell decides, not us
+        return None
     authorities = [m.group(1) for m in _ANY_URL.finditer(command)]
     if not authorities or not all(_host_allowed(a, allowlist.hosts) for a in authorities):
         return None
@@ -312,8 +331,16 @@ def http_call(tool_name: Any, args: Any, allowlist: Allowlist = ALLOWLIST) -> Op
     for match in re.finditer(r"https?://[^/\s'\"`<>|;&()\\]*(/[^\s'\"`?#<>|;&()\\]*)", command, re.IGNORECASE):
         if (match.group(1).rstrip("/") or "/") != path:
             return None
-    query = {k: v[0] for k, v in urllib.parse.parse_qs(split.query).items() if v}
-    return HttpCall(method, path, query)
+    return HttpCall(method, path, parse_query(split.query))
+
+
+def parse_query(query: str) -> dict:
+    """The query string as {name: first value}. A literal `+` stays a `+`:
+    `occurrence_start=2026-10-20T15:30:00+05:30` is an offset, not a space."""
+    out: dict = {}
+    for name, value in urllib.parse.parse_qsl(query.replace("+", "%2B"), keep_blank_values=True):
+        out.setdefault(name, value)
+    return out
 
 
 def match_operation(call: HttpCall, allowlist: Allowlist = ALLOWLIST) -> Optional[tuple[Operation, dict]]:
@@ -374,21 +401,25 @@ def participant_record(body: Any, event_id: str) -> Optional[dict]:
     return body
 
 
-def occurrence_of(value: Any) -> str:
-    """An occurrence start as UTC ISO, or "" for the event as a whole."""
-    if not isinstance(value, str) or not value.strip():
+def occurrence_of(value: Any) -> Optional[str]:
+    """An occurrence start as UTC ISO; "" for the event as a whole (absent or
+    null); None when there is a value but it is not a timestamp with a zone —
+    an occurrence we cannot name is not keyed at all."""
+    if value is None or (isinstance(value, str) and not value.strip()):
         return ""
-    return iso_from_text(value) or ""
+    if not isinstance(value, str):
+        return None
+    return iso_from_text(value)
 
 
-def rsvp_statuses(body: Any, query: dict) -> list[tuple[str, str, Optional[str]]]:
+def rsvp_statuses(body: Any, query: dict) -> list[tuple[str, Optional[str], Optional[str]]]:
     """[(EdgeOS event id, occurrence, `my_rsvp_status`)] for every event object in a read.
 
     A single event (`GET /events/portal/events/{id}`, whose occurrence is the
-    `occurrence_start` query parameter) or a list (`{"results": [...]}`, where
-    an item of a recurring series is keyed by its `start_time`). An object
-    without the `my_rsvp_status` key says nothing about the caller and is
-    skipped.
+    `occurrence_start` query parameter, or None when the read names none) or a
+    list (`{"results": [...]}`, where an item of a recurring series is keyed by
+    its `start_time`). An object without the `my_rsvp_status` key says nothing
+    about the caller and is skipped, as is one whose occurrence cannot be named.
     """
     single = isinstance(body, dict) and not isinstance(body.get("results"), list)
     items = [body] if single else (body.get("results") if isinstance(body, dict) else body)
@@ -400,10 +431,16 @@ def rsvp_statuses(body: Any, query: dict) -> list[tuple[str, str, Optional[str]]
         status = item.get("my_rsvp_status")
         if not (isinstance(event_id, str) and UUID_RE.match(event_id)) or not (status is None or isinstance(status, str)):
             continue
+        occurrence: Optional[str]
         if single:
-            occurrence = occurrence_of(query.get("occurrence_start"))
+            named = query.get("occurrence_start")
+            occurrence = None if named is None else occurrence_of(named)
+            if named is not None and not occurrence:
+                continue
         elif item.get("recurrence_master_id") or item.get("occurrence_id") or item.get("rrule"):
             occurrence = occurrence_of(item.get("start_time"))
+            if not occurrence:
+                continue
         else:
             occurrence = ""
         out.append((event_id.lower(), occurrence, status.strip().lower() if isinstance(status, str) else None))
@@ -579,6 +616,10 @@ def plan(op: Operation, params: dict, call: HttpCall, *, ok: bool, status: Optio
             return []
         record = participant_record(body, event_id) if ok and exit_code in (None, 0) else None
         occurrence = occurrence_of(record.get("occurrence_start")) if record else ""
+        if occurrence is None:
+            # A record for an occurrence we cannot name: report the attempt,
+            # wait on nothing.
+            record, occurrence = None, ""
         key = ledger_key(event_id, occurrence)
         action_id = mint()
         reversal = bool(op.reverses)
@@ -612,7 +653,19 @@ def plan(op: Operation, params: dict, call: HttpCall, *, ok: bool, status: Optio
         return []
     out: list[Planned] = []
     for event_id, occurrence, rsvp in rsvp_statuses(body, call.query):
-        key = ledger_key(event_id, occurrence)
+        if occurrence is None:
+            # A single-event read naming no occurrence: the one-off action if
+            # there is one, else the event's only waiting action, whichever
+            # occurrence it is for. Two or more waiting occurrences: ambiguous.
+            key = ledger_key(event_id, "")
+            if key not in ledger.pending:
+                candidates = [k for k in ledger.pending if k.startswith(f"{event_id}|")]
+                if len(candidates) != 1:
+                    continue
+                key = candidates[0]
+            occurrence = key.partition("|")[2]
+        else:
+            key = ledger_key(event_id, occurrence)
         waiting = ledger.pending.get(key)
         if not waiting:
             continue
@@ -648,6 +701,7 @@ __all__ = [
     "load_allowlist",
     "match_operation",
     "occurrence_of",
+    "parse_query",
     "participant_record",
     "plan",
     "rsvp_statuses",

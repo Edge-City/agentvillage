@@ -1,6 +1,6 @@
 {
   "version": "edgeos_tool_allowlist_v1",
-  "about": "EdgeOS operations the plugin recognises (spec 4.1 action.*, measurement catalogue 'Navigate the event' and 'Act on intentions'). The edgeos skill reaches EdgeOS by running curl through a carrier tool, so an operation is matched on the HTTP method and path of the one EdgeOS URL in the call, never on the tool name. role 'action' emits action.attempted (and action.failed); role 'confirming_read' turns a pending action into action.receipted with receipt {kind: edgeos_confirming_read, id: <EdgeOS event id>}; 'read' and 'write' only label tool.call. Path parameters in braces match a UUID. Frozen with the event catalogue; moves together with the agentvillage-data seed of the same name.",
+  "about": "EdgeOS operations the plugin recognises (spec 4.1 action.*, measurement catalogue 'Navigate the event' and 'Act on intentions'). The edgeos skill reaches EdgeOS by running curl through a carrier tool, so an operation is matched on the HTTP method and path of the one EdgeOS URL in the call, never on the tool name. role 'action' emits action.attempted (and action.failed); role 'confirming_read' turns a pending action into action.receipted with receipt {kind: edgeos_confirming_read, id: <participant id from the RSVP or cancellation response>}; 'read' and 'write' only label tool.call. Path parameters in braces match a UUID. Frozen with the event catalogue; moves together with the agentvillage-data seed of the same name.",
   "hosts": ["api.edgeos.world"],
   "carrier_tools": ["terminal"],
   "operations": [

@@ -426,7 +426,15 @@ class Buffer:
             # existing world-readable for the width of a chmod. Exactly one
             # close, in `finally`: closing twice could close an fd another
             # thread has since been handed.
-            fd = os.open(self._current, os.O_WRONLY | os.O_CREAT | os.O_APPEND, FILE_MODE)
+            flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+            try:
+                fd = os.open(self._current, flags, FILE_MODE)
+            except FileNotFoundError:
+                # The directory went away under a running process (a
+                # `reset.ts --wipe-user`, an operator's `rm`): make it again.
+                os.makedirs(os.path.dirname(self.root), mode=DIR_MODE, exist_ok=True)
+                os.makedirs(self.root, mode=DIR_MODE, exist_ok=True)
+                fd = os.open(self._current, flags, FILE_MODE)
             try:
                 view = memoryview(data)
                 while view:

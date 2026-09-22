@@ -126,7 +126,8 @@ def test_unconfirmed_outcomes_are_reported_but_never_wait(live, ctx, av, label, 
     f"curl -G -X POST {REGISTER_URL}",  # -X wins, as in curl
     f"curl -s -X POST https://api.edgeos.world:443/api/v1/event-participants/portal/register/{EVENT}",
     f"curl -s -X POST --url {REGISTER_URL} -H 'Authorization: Bearer x'",
-    f"cd /tmp && curl -s -X POST '{REGISTER_URL}' -d '{{}}' | jq .",
+    f"cd /tmp && curl -s -X POST '{REGISTER_URL}' -d '{{}}'",
+    f"cd /tmp; curl -s -X POST '{REGISTER_URL}'",
     f"/usr/bin/curl -s -X POST {REGISTER_URL}",
 ])
 def test_combined_flags_and_an_explicit_port_are_read(live, ctx, av, command):
@@ -147,6 +148,30 @@ def test_combined_flags_and_an_explicit_port_are_read(live, ctx, av, command):
     f"echo curl -X POST {REGISTER_URL}",
     f"curl -s -G -d x=1 {REGISTER_URL}",
     f'curl -s -X POST {REGISTER_URL} -H "Origin: https://evil.example/api/v1/event-participants/portal/register/{EVENT}"',
+    # The same URL twice is still two URL arguments.
+    f"curl -s -X POST {REGISTER_URL} {REGISTER_URL}",
+    # Anything after the curl: a second command, a pipe, a redirect, a new line.
+    f"curl -s -X POST {REGISTER_URL}; echo done",
+    f"curl -s -X POST {REGISTER_URL} && echo done",
+    f"curl -s -X POST {REGISTER_URL} || echo failed",
+    f"curl -s -X POST {REGISTER_URL} | jq .",
+    f"curl -s -X POST {REGISTER_URL} > out.json",
+    f"curl -s -X POST {REGISTER_URL}\necho done",
+    # An operator where curl expects an option's value: the shell ends the
+    # command there, so the value is not what the argv reader would take.
+    f"curl -s -X POST {REGISTER_URL} -d ;",
+    f"curl -s -X POST {REGISTER_URL} -d\nls",
+    f"curl -s -X POST {REGISTER_URL} -d \"$(cat body.json)\"",
+    f"curl -s -X POST {REGISTER_URL} -d `cat body.json`",
+    # Options that redirect the request or drop the host check.
+    f"curl -s -X POST --resolve api.edgeos.world:443:10.0.0.1 {REGISTER_URL}",
+    f"curl -s -X POST --connect-to api.edgeos.world:443:evil.example:443 {REGISTER_URL}",
+    f"curl -s -X POST -x http://proxy.example:8080 {REGISTER_URL}",
+    f"curl -s -X POST --proxy=http://proxy.example:8080 {REGISTER_URL}",
+    f"curl -s -X POST -K config.txt {REGISTER_URL}",
+    f"curl -s -X POST --config config.txt {REGISTER_URL}",
+    f"curl -sk -X POST {REGISTER_URL}",
+    f"curl -s --insecure -X POST {REGISTER_URL}",
 ])
 def test_ambiguous_commands_are_not_read(live, ctx, av, command):
     fire(ctx, command, terminal_result(participant()))
@@ -271,11 +296,15 @@ def test_malformed_ledger_entries_are_dropped_on_load(live, ctx, av, home):
     data = json.loads(path.read_text())
     good_key = next(iter(data["pending"]))
     good = data["pending"][good_key]
-    data["pending"][f"{OTHER_EVENT}|"] = {"action_id": "x y", "action_class": "rsvp", "at": "yesterday"}
+    # Otherwise valid, so only the `at` check can reject it.
+    data["pending"][f"{OTHER_EVENT}|"] = {**good, "at": "yesterday"}
     data["pending"]["not-a-key"] = good
     data["pending"][f"{OTHER_EVENT}|tomorrow"] = good
     data["pending"][f"{OTHER_EVENT}|x"] = {**good, "participant_id": "not-a-uuid"}
     data["last"]["junk"] = {"rsvp": 5}
+    path.write_text(json.dumps(data))
+    restart_ledger(live)
+    data["pending"][f"{OTHER_EVENT}|2026-10-20T10:00:00.000Z"] = {**good, "action_id": "x y"}
     path.write_text(json.dumps(data))
     restart_ledger(live)
     for _ in range(3):
@@ -331,8 +360,24 @@ def test_metadata_replaces_the_event_id_with_its_keyed_hash(plugin, ctx, monkeyp
     expected = hmac.new(key, EVENT.encode(), hashlib.sha256).hexdigest()
     events = of_type(av, plugin, "action.attempted", "action.receipted")
     assert [e["payload"]["edgeos_event_id"] for e in events] == [expected, expected]
-    assert events[1]["payload"]["receipt"]["id"] == participant_id  # still checkable
-    assert EVENT not in json.dumps(av.read_buffer(plugin._COLLECTOR))
+    # The participant id is hashed too: in `metadata` the receipt is not checkable.
+    hashed_participant = hmac.new(key, participant_id.encode(), hashlib.sha256).hexdigest()
+    assert events[1]["payload"]["receipt"]["id"] == hashed_participant
+    assert of_type(av, plugin, "tool.call")[-1]["payload"]["receipt"]["id"] == hashed_participant
+    blob = json.dumps(av.read_buffer(plugin._COLLECTOR))
+    assert EVENT not in blob and participant_id not in blob
+
+
+@pytest.mark.parametrize("mode", ["sanitized", "full"])
+def test_sanitized_and_full_keep_the_receipt_checkable(plugin, ctx, monkeypatch, av, mode):
+    monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
+    monkeypatch.setenv("AV_CAPTURE", mode)
+    plugin.register(ctx)
+    participant_id = rsvp(ctx)
+    read_event(ctx)
+    receipted = of_type(av, plugin, "action.receipted")[0]
+    assert receipted["payload"]["receipt"]["id"] == participant_id
+    assert receipted["payload"]["edgeos_event_id"] == EVENT
 
 
 # --------------------------------------------------------------------------
@@ -356,3 +401,60 @@ def test_an_adversarial_read_result_stays_inside_the_hook_budget(live, ctx, av):
     started = time.perf_counter()
     fire(ctx, f"curl -s '{API}/events/portal/events?limit=100'", terminal_result('{"a":\n' * 25000))
     assert time.perf_counter() - started < 1.0
+
+
+# --------------------------------------------------------------------------
+# N3 — occurrences named and unnamed
+# --------------------------------------------------------------------------
+
+
+def test_a_read_without_an_occurrence_confirms_the_only_waiting_occurrence(live, ctx, av):
+    only = rsvp(ctx, occurrence="2026-10-20T10:00:00Z")
+    read_event(ctx)
+    receipted = of_type(av, live, "action.receipted")
+    assert [e["payload"]["receipt"]["id"] for e in receipted] == [only]
+    assert receipted[0]["payload"]["occurrence_start"] == "2026-10-20T10:00:00.000Z"
+
+
+def test_a_read_without_an_occurrence_is_ambiguous_with_two_waiting(live, ctx, av):
+    rsvp(ctx, occurrence="2026-10-20T10:00:00Z", call_id="c1")
+    rsvp(ctx, occurrence="2026-10-27T10:00:00Z", call_id="c2")
+    read_event(ctx)
+    assert of_type(av, live, "action.receipted") == []
+
+
+def test_a_read_without_an_occurrence_prefers_the_one_off(live, ctx, av):
+    one_off = rsvp(ctx, call_id="c1")
+    rsvp(ctx, occurrence="2026-10-20T10:00:00Z", call_id="c2")
+    read_event(ctx)
+    assert [e["payload"]["receipt"]["id"] for e in of_type(av, live, "action.receipted")] == [one_off]
+
+
+def test_a_literal_plus_in_the_query_is_an_offset(live, ctx, av):
+    second = rsvp(ctx, occurrence="2026-10-20T10:00:00Z", call_id="c1")
+    rsvp(ctx, occurrence="2026-10-27T10:00:00Z", call_id="c2")
+    read_event(ctx, occurrence="2026-10-20T15:30:00+05:30", call_id="c3")
+    assert [e["payload"]["receipt"]["id"] for e in of_type(av, live, "action.receipted")] == [second]
+
+
+def test_a_read_naming_an_unparseable_occurrence_confirms_nothing(live, ctx, av):
+    rsvp(ctx)
+    read_event(ctx, occurrence="next-tuesday")
+    assert of_type(av, live, "action.receipted") == []
+
+
+def test_a_record_with_a_naive_occurrence_waits_on_nothing(live, ctx, av):
+    body = participant(occurrence="2026-10-20T10:00:00")
+    fire(ctx, f"curl -s -X POST {REGISTER_URL}", terminal_result(body))
+    assert actions(av, live) == [("action.attempted", "agent_report")]
+    assert live._COLLECTOR.edgeos.pending == {}
+    read_event(ctx)
+    assert of_type(av, live, "action.receipted") == []
+
+
+def test_parse_query_keeps_plus_and_blank_values(plugin):
+    edgeos = __import__(f"{plugin.__name__}._edgeos", fromlist=["_edgeos"])
+    assert edgeos.parse_query("occurrence_start=2026-10-20T15:30:00+05:30&x=&x=2") == {
+        "occurrence_start": "2026-10-20T15:30:00+05:30", "x": ""}
+    assert edgeos.parse_query("occurrence_start=2026-10-20T15%3A30%3A00%2B05%3A30") == {
+        "occurrence_start": "2026-10-20T15:30:00+05:30"}
