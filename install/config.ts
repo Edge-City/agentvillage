@@ -164,3 +164,43 @@ export function configureAvEvents(): void {
   writeConfig(doc);
   console.log(`→ enabled plugin ${AV_EVENTS_PLUGIN}`);
 }
+
+export const RECALL_PLUGIN = "recall";
+
+/**
+ * The tenant's recall opt-in, from `AV_RECALL_ENABLED`: `true` for a truthy
+ * value, `false` for an explicit `0`/`false`/`no`/`off`, `null` when unset or
+ * blank (not opted in, and nothing to undo).
+ */
+export function recallChoice(): boolean | null {
+  const raw = process.env.AV_RECALL_ENABLED?.trim().toLowerCase();
+  if (!raw) return null;
+  return !["0", "false", "no", "off"].includes(raw);
+}
+
+/**
+ * Enable the opt-in `recall` plugin (DATA-83) for a tenant that asked for it,
+ * and disable it for one that explicitly opted out. A tenant that never set
+ * `AV_RECALL_ENABLED` is left alone, so recall never lands on the core loop
+ * by default. Idempotent. Skill staging and index removal live in
+ * `install_recall.ts`.
+ */
+export function configureRecall(): void {
+  const choice = recallChoice();
+  if (choice === null) {
+    console.log(`→ skipped plugin ${RECALL_PLUGIN} (opt-in: AV_RECALL_ENABLED=1)`);
+    return;
+  }
+  const doc = readConfig();
+  const plugins = { ...((doc.plugins as Record<string, unknown>) ?? {}) };
+  const enabled = Array.isArray(plugins.enabled)
+    ? (plugins.enabled as unknown[]).filter((n) => typeof n === "string") as string[]
+    : [];
+  const next = choice
+    ? (enabled.includes(RECALL_PLUGIN) ? enabled : [...enabled, RECALL_PLUGIN])
+    : enabled.filter((name) => name !== RECALL_PLUGIN);
+  plugins.enabled = next;
+  doc.plugins = plugins;
+  writeConfig(doc);
+  console.log(choice ? `→ enabled plugin ${RECALL_PLUGIN}` : `→ disabled plugin ${RECALL_PLUGIN} (AV_RECALL_ENABLED off)`);
+}

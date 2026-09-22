@@ -15,6 +15,10 @@ Eight skill bundles give your agent Edge Esmeralda knowledge, live API access, a
 - **simocracy** — Simocracy proposal, deliberation, comment, and decision retrieval: lets the agent privately retrieve source-attributed civic records when Agent Plaza needs a proposal-centered wrong-interpretation lens.
 - **token-usage-audit** — deterministic local token usage audit script and Hermes script-cron contract. It wakes the agent only when meaningful usage has an actionable driver and emits no raw transcripts, prompts, session ids, env values, private hosts, or secrets.
 
+One more bundle is **opt-in and Hermes-only**, and is not part of the set above:
+
+- **recall** — tenant-local search over the agent's own daily notes, `MEMORY.md` and private conversations (SQLite FTS5, no LLM, no network), exposed as the `recall` tool by `plugins/recall` in the [agentvillage](../README.md) repo. It refuses in group chats and never writes into `memory/`. Without that plugin the skill does nothing. See `recall/README.md`.
+
 The skills cross-reference each other. `edge-esmeralda` supplies the popup id that `edgeos` recipes need. `geo-esmeralda` handles Geo knowledge graph-backed knowledge and attendee-authored writes, `index-network` handles discovery and intent-based matching, `agent-plaza` provides the Plaza image nudge and optional Turing Falls steering contract, `simocracy` provides proposal and deliberation retrieval, `agent-commons` provides public Agent Commons forum retrieval, and `token-usage-audit` provides the local script-cron guardrail. Install all eight together.
 
 ## Host-specific silence

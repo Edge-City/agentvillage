@@ -22,6 +22,7 @@ import {
   skillsDir,
   targetWorkspace,
 } from "./paths";
+import { RECALL_SKILL, removeRecallIndex } from "./install_recall";
 
 const TARGET_HOME = targetWorkspace();
 
@@ -108,7 +109,7 @@ function removeSoulFile(): void {
 function removeEdgeSkills(): void {
   const root = skillsDir();
   let removed = 0;
-  for (const name of EDGE_SKILL_NAMES) {
+  for (const name of [...EDGE_SKILL_NAMES, RECALL_SKILL]) {
     const target = join(root, name);
     if (!existsSync(target)) continue;
     rmSync(target, { recursive: true, force: true });
@@ -138,6 +139,7 @@ function removeProjectFiles(wipeUser: boolean): void {
       removed++;
       console.log("→ removed memory/");
     }
+    removeRecallIndex();
   }
 
   console.log(`→ removed ${removed} project file(s) from ${TARGET_HOME}`);
