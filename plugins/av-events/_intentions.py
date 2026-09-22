@@ -88,7 +88,6 @@ class IntentionCall:
         "conditional",
         "capture_path",
         "index_status",
-        "minted",
     )
 
     def __init__(
@@ -103,7 +102,6 @@ class IntentionCall:
         conditional: Optional[bool] = None,
         capture_path: str,
         index_status: Optional[str] = None,
-        minted: bool = False,
     ) -> None:
         self.event_type = event_type
         self.intention_id = intention_id
@@ -114,7 +112,6 @@ class IntentionCall:
         self.conditional = conditional
         self.capture_path = capture_path
         self.index_status = index_status
-        self.minted = minted
 
 
 # --------------------------------------------------------------------------
@@ -281,7 +278,6 @@ def plan_index(tool: str, args: dict, payload: Any) -> list[IntentionCall]:
                 text=text,
                 summary=summary,
                 capture_path="index_tool",
-                minted=intent_id is None,
             )
             for intent_id, summary in found
         ]
@@ -309,7 +305,14 @@ def plan_index(tool: str, args: dict, payload: Any) -> list[IntentionCall]:
     ]
 
 
-def plan_record(args: dict, payload: Any) -> list[IntentionCall]:
+def _result_intention_id(obj: Any) -> Optional[str]:
+    if not isinstance(obj, dict):
+        return None
+    data = obj.get("data")
+    return _args_id(obj, "intention_id") or (_args_id(data, "intention_id") if isinstance(data, dict) else None)
+
+
+def plan_record(args: dict, payload: Any, outer: Any = None) -> list[IntentionCall]:
     """Events for a `record_intention` call.
 
     Contract (the tool surface itself is not in this repo yet — README
@@ -318,14 +321,10 @@ def plan_record(args: dict, payload: Any) -> list[IntentionCall]:
     update or withdraw an earlier one, `action` ∈ `capture|update|withdraw`,
     and `index_intent_id` when the agent also knows the Index copy's id. A
     result carrying `intention_id` names the intention; otherwise the caller
-    mints one for a capture.
+    mints one for a capture. `outer` is the result before unwrapping, for a
+    native tool that returns `{"result": ..., "intention_id": ...}`.
     """
-    result_id = None
-    if isinstance(payload, dict):
-        data = payload.get("data")
-        result_id = _args_id(payload, "intention_id") or (
-            _args_id(data, "intention_id") if isinstance(data, dict) else None
-        )
+    result_id = _result_intention_id(payload) or _result_intention_id(outer)
     arg_id = _args_id(args, "intention_id")
     intention_id = arg_id or result_id
 
@@ -352,7 +351,6 @@ def plan_record(args: dict, payload: Any) -> list[IntentionCall]:
             source=source,
             conditional=_conditional(args.get("conditional")),
             capture_path="record_intention",
-            minted=intention_id is None,
         )
     ]
 
@@ -372,7 +370,7 @@ def plan(tool_name: Any, args: Any, result: Any, status: Any) -> list[IntentionC
     if not result_succeeded(status, payload):
         return []
     if kind == "record":
-        return plan_record(safe_args, payload)
+        return plan_record(safe_args, payload, _maybe_json(result))
     _, tool = split_tool_name(tool_name)
     return plan_index(tool, safe_args, payload)
 

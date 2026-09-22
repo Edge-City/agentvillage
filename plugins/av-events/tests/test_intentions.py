@@ -174,6 +174,20 @@ def test_record_intention_uses_an_id_the_tool_returned(live, ctx, av):
     assert intention_events(av, live)[0]["intention_id"] == "local-7"
 
 
+@pytest.mark.parametrize(
+    "result",
+    [
+        # A native tool that returns its id beside a `result` message.
+        json.dumps({"result": "Saved.", "intention_id": "local-8"}),
+        # The same tool served over MCP: the id is inside the wrapped text.
+        json.dumps({"result": json.dumps({"success": True, "data": {"intention_id": "local-8"}})}),
+    ],
+)
+def test_record_intention_finds_its_id_inside_or_beside_the_wrapping(live, ctx, av, result):
+    fire_tool(ctx, "mcp__overlay__record_intention", {"text": DESCRIPTION}, result)
+    assert intention_events(av, live)[0]["intention_id"] == "local-8"
+
+
 def test_record_intention_update_and_withdraw_name_the_same_intention(live, ctx, av):
     fire_tool(ctx, "record_intention", {"text": DESCRIPTION, "source": "onboarding"}, "{}", tool_call_id="c1")
     first = intention_events(av, live)[0]
@@ -244,14 +258,14 @@ def test_structured_content_is_preferred(live, ctx, av):
 
 
 @pytest.mark.parametrize("status", ["error", "blocked"])
-def test_a_failed_or_blocked_call_records_nothing(live, ctx, av, status):
-    fire_tool(
-        ctx,
-        "mcp__index__create_intent",
-        {"description": DESCRIPTION},
-        json.dumps({"error": "boom"}),
-        status=status,
-    )
+@pytest.mark.parametrize(
+    "result",
+    [json.dumps({"error": "boom"}), index_result({"intent": {"id": "int-abc"}})],
+    ids=["error-body", "success-looking-body"],
+)
+def test_a_failed_or_blocked_call_records_nothing(live, ctx, av, status, result):
+    """Hermes's status alone is enough, whatever the body looks like."""
+    fire_tool(ctx, "mcp__index__create_intent", {"description": DESCRIPTION}, result, status=status)
     assert intention_events(av, live) == []
 
 
