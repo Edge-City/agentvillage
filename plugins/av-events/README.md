@@ -16,10 +16,11 @@ plugins/av-events/
   _intentions.py   which tool calls record an intention, and which one (pure)
   _tools.py        tool.call payload and the tool-name allowlist (pure)
   _messages.py     message.in/out payloads and the punctuation flags (pure)
-  _edgeos.py       EdgeOS operations inside a terminal curl, and the action ledger
+  _edgeos.py       the curl parser, EdgeOS operations, the action ledger and planner
   _cron.py         cron.run from the executions ledger and usage audit (flusher thread only)
   tool_categories.json        frozen seed: tool name -> category (tool_categories_v1)
   edgeos_tool_allowlist.json  frozen seed: EdgeOS operations (edgeos_tool_allowlist_v1)
+  cron_job_names.json         frozen seed: the cron names cron.run may carry (cron_job_names_v1)
   tests/           pytest suite; drives a fake ctx, never imports Hermes
 ```
 
@@ -67,12 +68,13 @@ The ladder is about what leaves the sandbox, not about how much detail is record
 |---|---|---|---|
 | Envelope, counters, token counts, latency, statuses | yes | yes | yes |
 | `tools_hash`, `system_prompt_hash` | yes | yes | yes |
-| Listed tool names and categories, EdgeOS operation names, `action.*`, `cron.run` | yes | yes | yes |
+| Listed tool names and categories, EdgeOS operation names, `action.*`, `cron.run`, `message.out.silent` | yes | yes | yes |
+| `action.*` `edgeos_event_id` | keyed hash | the id | the id |
 | Lengths (`system_prompt_length`, `assistant_content_chars`, …) | no | yes | yes |
-| Intention `text_hash`, `summary_hash`; profile `user_md_hash` | yes | yes | yes |
+| Intention `text_hash`, `summary_hash`; profile `user_md_hash` (plain SHA-256) | yes | yes | yes |
 | Intention `text_length` / `summary_length`; profile `length` | no | yes | yes |
-| `tool.call` `args_hash` / `result_hash` and `args_length` / `result_length` | no | yes | yes |
-| `message.*` `length`, `content_hash`, `flags` | no | yes | yes |
+| `tool.call` `args_hash` / `result_hash` (keyed) and `args_length` / `result_length` | no | yes | yes |
+| `message.*` `length`, `content_hash` (keyed), `flags` | no | yes | yes |
 | Message text, intention text, USER.md text, tool arguments, tool results | never | never | never |
 | `prompt.registered` with the tool schemas and system prompt text | no | no | yes |
 
@@ -82,7 +84,8 @@ any mode, `full` included: text lives in the archive only (§7.5), and the train
 from there (§8). The intention hashes and the USER.md hash are the participant-derived values
 present in every mode: they are join keys (`core.intention_versions`, `core.tasks`), and they are
 hashes of long, free-form text. A message or tool-argument hash is not a join key and is often a
-hash of a few words — a dictionary lookup away from the words — so `metadata` drops it.
+hash of a few words — a dictionary lookup away from the words — so it is **keyed** (below) and
+`metadata` drops it.
 
 `full` differs from `sanitized` in exactly one way: `prompt.registered`.
 
@@ -95,6 +98,16 @@ and `prompt.registered` is emitted in `full` and in no other mode.
 is irrelevant; any change to a tool's schema changes the hash. Text is encoded as UTF-8 with
 `errors="surrogatepass"`, so a lone surrogate hashes instead of raising; well-formed text hashes
 exactly as plain UTF-8.
+
+**Keyed hashes.** `message.*` `content_hash`, `tool.call` `args_hash` / `result_hash`, and in
+`metadata` the EdgeOS event id on `action.*`, are HMAC-SHA256 under a per-tenant random key at
+`$HERMES_HOME/av-events/hash.key` (64 hex characters, mode 0600, created once and atomically — the
+same pattern as `plugins/recall`'s query-hash key; a malformed key is replaced and counted in
+`Collector.counters["hash_key_generated"]`). The key never leaves the sandbox, so these digests
+count and join within a tenant and are useless to anyone else. If the key cannot be read or written
+the digests are null — never a plain hash in their place. The intention hashes and `user_md_hash`
+stay plain SHA-256: they are join keys with producers outside the sandbox (the Index poller hashes
+the same Index fields). `reset.ts --wipe-user` deletes the key with the rest of `av-events/`.
 
 **Sanitiser.** Every string that leaves passes a secret-shape filter: Anthropic, OpenRouter and
 OpenAI key shapes, `Bearer …`, the Telegram bot-token shape, and the literal value of our own
@@ -128,13 +141,13 @@ backlog can differ from `emitted_at` by minutes. Every `marts` time series is bu
 |---|---|---|
 | `session.started` | `on_session_start` | `source`, `cron_job_id` (from a `cron_<job>_<stamp>` session id, else null) |
 | `session.ended` | `on_session_finalize` | `source`, `message_count`, `tool_call_count`, `input_tokens`, `output_tokens`, `duration_ms`, `cron_job_id`, `actual_cost_usd`, `cost_source`, `estimated_cost_usd`, `cost_status`, plus the hook stats below |
-| `message.in` | `pre_llm_call` (`user_message`) | `channel`, `length`, `content_hash`, `flags` {`is_ask`, `is_recommendation`, `sentiment`}, `flags_rule`, `cron_job_id` — see "Messages" |
-| `message.out` | `post_llm_call` (`assistant_response`) | as above |
+| `message.in` | `pre_llm_call` (`user_message`) | `channel`, `length`, `content_hash`, `flags` {`is_ask`, `is_recommendation`, `sentiment`}, `flags_rule`, `cron_job_id`, `silent` — see "Messages" |
+| `message.out` | `post_llm_call` (`assistant_response`) | as above; `silent` is set on a cron run's reply |
 | `tool.call` | `post_tool_call` | `tool_name`, `tool_category`, `args_hash`, `result_hash`, `ok`, `status`, `latency_ms`, `receipt`, `error_type`, `operation`, `target_system`, `category_version`, plus `args_length` / `result_length` above `metadata` — see "Tool calls" |
-| `action.attempted` / `action.failed` | `post_tool_call` on an EdgeOS RSVP or cancellation | `action_class`, `target_system`, `receipt`, `execution_token_id`, `error`, `reverses_action_id`, `reversal`, `operation`, `edgeos_event_id`, `allowlist_version` — see "EdgeOS actions" |
-| `action.receipted` | `post_tool_call` on the EdgeOS read that confirms it | as above, with `receipt` {`kind: edgeos_confirming_read`, `id`} |
-| `cron.run` | the cron tail, on the flusher thread | `job_id`, `job_name`, `execution_id`, `status`, `input_tokens`, `output_tokens`, `claimed_at`, `started_at`, `finished_at` — see "Cron capture" |
-| `profile.updated` | `on_session_finalize`, when USER.md changed | `user_md_hash`, plus `length` above `metadata` |
+| `action.attempted` / `action.failed` | `post_tool_call` on an EdgeOS RSVP or cancellation | `action_class`, `target_system`, `receipt`, `execution_token_id`, `error`, `reverses_action_id`, `reversal`, `supersedes_action_id`, `operation`, `edgeos_event_id`, `occurrence_start`, `allowlist_version` — see "EdgeOS actions" |
+| `action.receipted` | `post_tool_call` on the EdgeOS read that confirms it | as above, with `receipt` {`kind: edgeos_confirming_read`, `id`: participant id} |
+| `cron.run` | the cron tail, on the flusher thread | `job_id`, `job_name`, `execution_id`, `status`, `input_tokens`, `output_tokens`, `claimed_at`, `started_at`, `finished_at`, `delivery_outcome` — see "Cron capture" |
+| `profile.updated` | `on_session_finalize`, when a USER.md changed | `kind` ∈ `memory_profile`\|`landing_profile`, `user_md_hash`, plus `length` above `metadata` |
 | `llm.call` | `pre_api_request` + `post_api_request` | `model`, `provider`, the five token buckets, `latency_ms`, `finish_reason`, `tools_hash`, `system_prompt_hash`, plus lengths above `metadata` |
 | `llm.call` (failed) | `pre_api_request` + `api_request_error` | as above with `finish_reason: "error"`, `error_type`, `status_code`, `retryable`, and zeroed token counts |
 | `prompt.registered` | `pre_api_request` | `hash`, `kind` ∈ `tools`\|`system_prompt`, `body`. `full` only, once per hash ever |
@@ -298,8 +311,9 @@ tool, before any `action.*` or `intention.*` the same call implies.
 
 - **Name.** Only an allowlisted name leaves (see "Tool-name allowlist"); otherwise `tool_name` is
   null and `tool_category` is `other`.
-- **Arguments and results.** `args_hash` is SHA-256 over the canonical JSON of `args` (the same
-  canonicalisation as `tools_hash`); `result_hash` over the result string as Hermes handed it.
+- **Arguments and results.** `args_hash` is the keyed hash (HMAC-SHA256, see "Keyed hashes") of the
+  canonical JSON of `args` (the same canonicalisation as `tools_hash`); `result_hash` of the result
+  string as Hermes handed it.
   `args_length` / `result_length` count characters of those same strings. In `metadata` all four
   are null or absent. An argument that cannot be serialised hashes to null rather than failing.
 - **Status.** Hermes's `status`, case-folded, one of `ok|error|blocked|timeout|cancelled`, `other`
@@ -326,7 +340,11 @@ Spec §4.1 `message.in/out`. `pre_llm_call`'s `user_message` is `message.in`, `p
 `message.out` is always `actor: agent`. A channel that does not look like a platform name is
 reported as `other`. `sender_id` is never read.
 
-`length` (characters) and `content_hash` (SHA-256 of the exact text) are present above `metadata`.
+`length` (characters) and `content_hash` (the keyed hash of the exact text) are present above
+`metadata`. **`silent`** is set only on a cron run's `message.out`: true when the reply is Hermes's
+silence marker (`[SILENT]`, `SILENT`, `NO_REPLY`, `NO REPLY` as the whole reply, alone on its first or
+last line, or `[SILENT]` opening it — `is_autonomous_silence_response` at `v2026.8.31`), i.e. nothing
+was delivered. It is a delivery fact, not content, and rides in every mode; elsewhere it is null.
 **`flags` are structural, not semantic** (`flags_rule: message_flags_v1`): `is_ask` is true when the
 message, with URLs removed, contains a `?` that ends a sentence. `is_recommendation` and `sentiment`
 are always null — detecting them is natural-language classification, which the plugin does not do
@@ -342,43 +360,75 @@ Spec §4.1 `action.attempted/receipted/failed`, §2.1's receipt allowance, measu
 **How the plugin sees an RSVP.** There is no EdgeOS tool. The `edgeos` skill tells the agent to run
 `curl` through Hermes's `terminal` tool (`skills/edgeos/SKILL.md` §6). `edgeos_tool_allowlist.json`
 (`edgeos_tool_allowlist_v1`) names the carrier tools (`terminal`), the host (`api.edgeos.world`),
-and each operation by method and path. A call is recognised only when it is unambiguous: a carrier
-tool, exactly one `curl`, exactly one distinct EdgeOS path, at most one `-X` method (none means GET,
-or POST when there is a `-d`/`--data`/`--json`/`-F`), and path parameters that are UUIDs. Anything
-else is just a `tool.call`. Every recognised call labels its `tool.call` with `operation`
-(`edgeos.rsvp`, `edgeos.event_read`, `edgeos.profile_read`, …) and `target_system: "edgeos"`;
-the command, its headers (the API key) and the response body never leave.
+and each operation by method and path. The command is tokenised as a shell would (`shlex`, with
+control operators split out) and read only when it is unambiguous:
+
+- **every** http(s) URL anywhere in the command — headers, `echo`s, a second command — is on the
+  EdgeOS host, with no userinfo and no port other than `:443`;
+- exactly one `curl` word, and it starts a command (`echo curl …` and a `for` body are not requests);
+- curl's own arguments give exactly one URL (`--url` or positional), and every EdgeOS URL in the
+  command names that same path;
+- the method is curl's: `-X`/`--request` wins; else `-G`/`--get` is GET; else `-T` is PUT; else
+  `-d`/`--data*`/`--json`/`-F` is POST; else GET. Combined short flags are read the way curl reads
+  them (`-sX POST`, `-sXPOST`, `-sSfL`), and an option that takes a value consumes it;
+- path parameters are UUIDs.
+
+Anything else is just a `tool.call`. A recognised call labels its `tool.call` with `operation`
+(`edgeos.rsvp`, `edgeos.event_read`, `edgeos.profile_read`, …) and `target_system: "edgeos"`; the
+command, its headers (the API key) and the response body never leave.
 
 | Operation | Role | Emits |
 |---|---|---|
 | `POST …/event-participants/portal/register/{event_id}` | action, `rsvp` | `action.attempted` (fresh uuid v7 `action_id`); plus `action.failed` on the same id when the call failed |
-| `POST …/event-participants/portal/cancel-registration/{event_id}` | action, `cancel_rsvp` | as above, with `reversal: true` and `reverses_action_id` = the last RSVP action for that event, if known |
+| `POST …/event-participants/portal/cancel-registration/{event_id}` | action, `cancel_rsvp` | as above, with `reversal: true` and `reverses_action_id` = the last RSVP that landed for that occurrence, if known |
 | `GET …/events/portal/events/{event_id}` and `GET …/events/portal/events` | confirming read | `action.receipted` for each waiting action the read confirms |
 | directory, profile, venues, participants, event writes | read / write | nothing beyond the `tool.call` label |
 
-**Failure.** Hermes status not `ok` → `error: "tool_<status>"`; a non-zero `curl` exit code →
-`exit_nonzero`; a JSON body with `detail`/`error` and no `id` (FastAPI's error shape) →
-`edgeos_error`. Fixed labels only: EdgeOS's own error text can echo the request. A failed action is
-never waiting for a receipt and is never what a later cancellation reverses.
+**Positive evidence only.** An action waits for a confirming read only when EdgeOS answered with the
+participant record — a JSON object with a UUID `id`, no `detail`/`error`, and (when it names one)
+this event's `event_id`. A gateway error page, an empty body, `{}` or `{"message": …}` is not
+evidence the action landed: the attempt is reported and nothing waits on it, so a read that finds
+the participant registered some other way (the portal, an earlier RSVP) can never be claimed as this
+action's receipt.
 
-**Confirmation.** A successful action waits in the ledger (`$HERMES_HOME/av-events/edgeos_actions.json`,
-0600, written only when an EdgeOS action or receipt changes it, so a gateway restart between the RSVP
-and the read does not lose the link; at most 256 events; a wait expires after 7 days). A later
-successful read whose event object carries `my_rsvp_status` confirms it: `registered` or
-`checked_in` confirms an RSVP; `cancelled` or null confirms a cancellation; anything else, or an
-object without the key, confirms nothing and the action keeps waiting. The `action.receipted` event
-reuses the action's id, carries `receipt: {kind: "edgeos_confirming_read", id: <EdgeOS event id>}`
-(the id a checker re-reads) and claims `provider_receipt`; the read's own `tool.call` carries the
-same `receipt` when it confirmed exactly one action.
+**Failure.** Hermes status not `ok` → `error: "tool_<status>"`; a non-zero `curl` exit code →
+`exit_nonzero`; a JSON body with `detail`, `error` or `message` and no `id` → `edgeos_error`. Fixed
+labels only: EdgeOS's own error text can echo the request. A failed action never waits for a
+receipt and is never what a later cancellation reverses.
+
+**Occurrences.** Waiting actions are keyed by EdgeOS event id and occurrence start: the record's
+`occurrence_start` (null for a one-off event), normalised to UTC. A single-event read confirms the
+occurrence named by its `occurrence_start` query parameter (URL-encoded, as EdgeOS itself requires),
+or the one-off event without it; an item of a list read that belongs to a recurring series is keyed
+by its `start_time`. A re-RSVP to an occurrence with an RSVP already waiting **supersedes** it: the new
+`action.attempted` carries `supersedes_action_id`, and the earlier attempt is never receipted.
+
+**Confirmation.** A later successful read whose event object carries `my_rsvp_status` confirms a
+waiting action: `registered` or `checked_in` confirms an RSVP; `cancelled` confirms a cancellation,
+and a null status confirms one only when the plugin saw the RSVP it reverses (otherwise "not
+registered" may simply mean "never was"). Anything else, or an object without the key, confirms
+nothing and the action keeps waiting. The `action.receipted` event reuses the action's id, carries
+`receipt: {kind: "edgeos_confirming_read", id: <participant id>}` — the record the RSVP or
+cancellation created, which a checker re-reads with `GET /event-participants/{id}` — and claims
+`provider_receipt`. The read's own `tool.call` carries the same `receipt` when it confirmed exactly
+one action.
+
+**Ledger.** `$HERMES_HOME/av-events/edgeos_actions.json`, 0600: the waiting actions and, per
+occurrence, the last action of each class that landed. It is changed and written only **after** the
+events that change it are buffered, so an inert emit never leaves a receipt waiting on an action no
+event describes. Every entry is validated on load and a malformed one is dropped (never raised); at
+most 256 occurrences; a wait expires after 7 days. The whole ledger runs under the collector lock,
+since Hermes can run tool calls concurrently.
 
 **Reversal.** Every event on a cancellation — attempted, failed and receipted — carries
 `reversal: true` and `reverses_action_id`; every RSVP event carries `reversal: false` and null.
 `core.action_action` links a compensation only on `reversal = true` or differing classes, so both
-are always set explicitly. A cancellation of an RSVP the plugin never saw (made in the portal, or
-before this plugin was installed) is still `reversal: true`, with `reverses_action_id: null`.
+are always set explicitly. A cancellation of an RSVP the plugin never saw is still `reversal: true`,
+with `reverses_action_id: null`.
 
 Actions are emitted in every capture mode: they carry ids and fixed labels, nothing a participant
-wrote.
+wrote. In `metadata`, `edgeos_event_id` is replaced by its keyed hash (joins within a tenant still
+work); the receipt's participant id is kept, since a receipt nobody can check is not a receipt.
 
 ## Cron capture
 
@@ -394,10 +444,17 @@ never a hook — reads what the scheduler writes, once a minute, read-only:
   so it is joined only when it is the **one** line for that job whose `ts` falls inside the
   execution's window (±2 s); otherwise both are null. The last 512 KiB is read, and only when there
   is something to report.
-- `$HERMES_HOME/cron/jobs.json`: `job_name`, **only for a job the overlay installed** (name starting
-  `Edge —`, `install/paths.ts`). A participant can ask the agent to schedule anything, and the job's
-  name is then their words; `cron.run` is on the ops allowlist and kept without research consent
-  (spec §2.2), so it carries nothing a participant wrote. Other jobs have `job_name: null`.
+- `$HERMES_HOME/cron/jobs.json`: `job_name`, **only when it is exactly one of the names the
+  installer creates**, from the frozen seed `cron_job_names.json` (`cron_job_names_v1`;
+  `install/tests/av_events_state.test.ts` fails if it drifts from `DIGEST_CRON_SPECS`). A prefix check
+  is not enough: a participant can have the agent schedule a job named `Edge — …` too, and its name
+  is then their words. `cron.run` is on the ops allowlist and kept without research consent (spec
+  §2.2), so it carries nothing a participant wrote. Every other job has `job_name: null`.
+- `delivery_outcome`: Hermes's own `delivery_outcome` column when the ledger has one (`queued`,
+  `delivered`, `failed`, `suppressed` — the reply was the silence marker —, `suppressed_acked`,
+  `not_configured`; anything else is `other`). **The column does not exist at `v2026.8.31`** (Hermes
+  computes the outcome but only hands it to its monitoring), so on the pinned tag it is null; the
+  ledger is read with `SELECT *` so a later tag fills it without a plugin change.
 
 Timestamps are Hermes's local-offset ISO strings, normalised to UTC. `occurred_at` is `finished_at`,
 `occurred_at_earliest` the start (or claim). `run_id` is `cron:<job_id>:<execution_id>` — Hermes's own
@@ -407,7 +464,9 @@ task id for the run, so `cron.run` joins the run's `llm.call` and `tool.call` ro
 `pluginEventIdProblem` recomputes from the token's tenant (`agentvillage-data/src/ingest/events.ts`);
 any other v5 is quarantined. The tenant id comes from `TENANT_ID` / `AV_TENANT_ID`. With it, a
 re-read, a second process tailing the same ledger or a lost cursor all produce the same id and ingest
-keeps one row. Without it the id is a uuid v7 and the cursor is the only dedupe.
+keeps one row. Without it the id is a uuid v7 and the cursor is the only dedupe. A `TENANT_ID`
+that is not a UUID is counted in `Collector.counters["tenant_id_not_uuid"]` and logged once per
+process as that counter (never the value): ingest would quarantine every `cron.run` built from it.
 
 **Cursor.** `$HERMES_HOME/av-events/cron_cursor.json` holds the execution ids already reported (the
 last 4096; Hermes keeps 1000 terminal rows). An id is added only after its event is buffered, so an
@@ -428,10 +487,16 @@ fills it only when a provider reports a real charge, and **an estimate is never 
 actual**. `cost_source` / `cost_status` are Hermes's labels, passed only when they look like labels.
 A busy, missing or corrupt database leaves all four null.
 
-**Profile.** `profile.updated` carries `user_md_hash` (SHA-256 of `$HERMES_HOME/memories/USER.md`'s
-bytes) in every mode — `core.tasks` keys on it — and `length` (characters) above `metadata`. It is
-emitted on first sight and whenever the hash changes, and the last hash sent is kept in
-`$HERMES_HOME/av-events/profile.json` only after the event is buffered. A file over 1 MiB is not read.
+**Profile.** Two files, told apart by `kind`: `memory_profile` is `$HERMES_HOME/memories/USER.md`,
+what Hermes's memory tool keeps about the user; `landing_profile` is `$HERMES_HOME/USER.md`, what the
+landing's enrichment wrote (the control-plane sidecar's `USER_FILE`, and the installer's
+`targetWorkspace()`; `~/.hermes/USER.md` when `HERMES_HOME` is the default). Each `profile.updated`
+carries `kind`, `user_md_hash` (SHA-256 of the file's bytes) in every mode — `core.tasks` keys on it —
+and `length` (characters) above `metadata`. Each is emitted on first sight and whenever its hash
+changes; the last hash sent per kind is kept in `$HERMES_HOME/av-events/profile.json` only after the
+event is buffered. A file over 1 MiB is not read. **Catalogue:** §4.1 has one `profile.updated` row
+with `user_md_hash`, `length`; it needs `kind` added, and `core.tasks.profile_hash` must say which
+kind it means (presumably `memory_profile`, the one that evolves during the experiment).
 
 ---
 
@@ -460,8 +525,9 @@ Implements `launch-guardrails-draft.md` §2 and spec scenario 25.
   `collector.overruns`.
 - **No network in a hook, ever.** Hooks hash and append a line; a daemon thread does all network
   I/O and the cron tail. The only other file I/O a hook does is bounded and local: at session close,
-  one read-only row from `state.db` (50 ms lock timeout) and one read of USER.md (≤ 1 MiB); on an
-  EdgeOS RSVP or its confirming read, one small ledger write.
+  one read-only row from `state.db` (50 ms lock timeout) and a read of each USER.md (≤ 1 MiB); on an
+  EdgeOS RSVP or its confirming read, one small ledger write; and once per tenant, ever, the creation
+  of `hash.key` (then cached in memory).
   `on_session_end` and `session.ended` only *wake* the flusher. `ingest` being down changes nothing
   the agent can observe (spec scenario 24).
 - **Hooks never return a value.** The decorator discards whatever the body returns, so this plugin
@@ -592,6 +658,7 @@ Read-only (`sqlite3` with `mode=ro`), bounded, and "no data" on any failure. Sam
 |---|---|---|---|
 | `$HERMES_HOME/state.db`, `sessions` | `hermes_state.py` `update_token_counts` | `actual_cost_usd`, `estimated_cost_usd`, `cost_status`, `cost_source` for one id | `on_session_finalize` |
 | `$HERMES_HOME/memories/USER.md` | `tools/memory_tool.py` | the bytes, for a hash and a length | `on_session_finalize` |
+| `$HERMES_HOME/USER.md` | the landing enrichment (control-plane sidecar), the installer | the bytes, for a hash and a length | `on_session_finalize` |
 | `$HERMES_HOME/cron/executions.db`, `executions` | `cron/executions.py` | `id`, `job_id`, `status`, `claimed_at`, `started_at`, `finished_at` of terminal rows | flusher thread, every 60 s |
 | `$HERMES_HOME/cron/usage_audit.jsonl` | `cron/scheduler.py` `_write_usage_audit` | `ts`, `job_id`, `prompt_tokens`, `completion_tokens` | same |
 | `$HERMES_HOME/cron/jobs.json` | `cron/jobs.py` | `id`, `name` | same |
@@ -698,13 +765,12 @@ These are the divergences this milestone had to resolve. Each one is a decision 
     that reaches EdgeOS by `execute_code` or `web_extract` is not seen.
 19. **`action.receipted` claims `provider_receipt`.** Every other event is `agent_report`. §4.1's
     action row asks for it and §2.1 honours it only for a checkable receipt, which this is.
-20. **The receipt id is the EdgeOS event id.** `receipt.id` must be something a checker can re-read
-    with the receipt's kind; for `edgeos_confirming_read` that is `GET /events/portal/events/{id}`.
-    EdgeOS's live OpenAPI (`api.edgeos.world/openapi.json`, read 2026-09-22) now documents
-    `POST …/register/{event_id}` as returning an `EventParticipantPublic` with its own `id`, which
-    contradicts the Sept 18 finding "no documented response body". Not acted on: the brief fixes the
-    receipt at the confirming read. If the response body is dependable, the register call itself
-    could be the receipt.
+20. **The receipt id is the participant id.** EdgeOS's live OpenAPI (`api.edgeos.world/openapi.json`,
+    read 2026-09-22) documents `POST …/register/{event_id}` and `…/cancel-registration/{event_id}` as
+    returning an `EventParticipantPublic` with its own `id`, which contradicts the Sept 18 finding
+    "no documented response body". That record is the positive evidence an action landed, and its
+    `id` is the receipt id (`GET /event-participants/{id}` re-reads it). The receipt is still
+    attached at the confirming read, as the plan says.
 21. **Cost is per session, not per `llm.call`.** `post_api_request` carries no cost (Hermes prices
     after the hook). Cost goes on `session.ended` from `state.db`, as §4.1 lists it there. In practice
     Hermes fills `estimated_cost_usd` (a pricing-table estimate) and rarely `actual_cost_usd`; the
@@ -715,16 +781,24 @@ These are the divergences this milestone had to resolve. Each one is a decision 
     are recoverable downstream from `llm.call` rows by `run_id = cron:<job>:<execution>`.
 23. **`cron.run`'s §4.3 id needs the tenant id**, which a sandbox only knows from `TENANT_ID` (set for
     `dashboard-auth-edgecity`). This assumes `TENANT_ID` is the same string ingest keys the plugin
-    token to; if it is not, every `cron.run` quarantines as `event_id_mismatch`. Without it, the
-    event gets a uuid v7, which ingest accepts.
-24. **`cron.run.job_name` is null for jobs the overlay did not install.** §4.1 requires the key; a
-    participant-authored name must not ride the ops allowlist.
+    token to; if it is not, every `cron.run` quarantines as `event_id_mismatch`. A non-UUID value is
+    counted as `tenant_id_not_uuid`. Without it, the event gets a uuid v7, which ingest accepts.
+24. **`cron.run.job_name` is null for any job whose name is not exactly an installer name.** §4.1
+    requires the key; a participant-authored name must not ride the ops allowlist.
 25. **`profile.updated` is at `on_session_finalize`**, not `on_session_end` as the task words it:
     `on_session_end` fires per turn (divergence 4).
 26. **`message.in` is not always the participant.** In a cron session it is the job's prompt
     (`actor: system`), in a subagent the delegator's goal (`actor: agent`).
 27. **`message.*.flags` are punctuation, not meaning.** `is_ask` follows `message_flags_v1`;
     `is_recommendation` and `sentiment` are always null (see "Messages").
+28. **Non-join hashes are keyed.** §7.1 says "hashes"; `message.*` and `tool.call` hashes are
+    HMAC-SHA256 under a per-tenant key, so they cannot be reversed by dictionary outside the sandbox
+    and cannot be compared across tenants. Intention and profile hashes stay plain SHA-256.
+29. **Two USER.md files.** §4.1's `profile.updated` assumes one; the landing writes
+    `$HERMES_HOME/USER.md` and the memory tool `$HERMES_HOME/memories/USER.md`. Both are reported, with
+    `kind`.
+30. **`cron.run.delivery_outcome` is null at the pinned tag**: the ledger column arrives in a later
+    Hermes.
 
 ---
 
