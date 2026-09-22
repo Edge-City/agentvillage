@@ -1,9 +1,11 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
+  linkSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -29,8 +31,15 @@ import {
   type Paths,
 } from "../recall";
 
-// Message dates are local calendar dates; pin the zone so fixtures are stable.
-process.env.TZ = "UTC";
+// Message dates are local calendar dates; pin the zone for this file only.
+const ORIGINAL_TZ = process.env.TZ;
+beforeAll(() => {
+  process.env.TZ = "UTC";
+});
+afterAll(() => {
+  if (ORIGINAL_TZ === undefined) delete process.env.TZ;
+  else process.env.TZ = ORIGINAL_TZ;
+});
 
 const FIXTURE = join(import.meta.dir, "fixtures", "workspace");
 const SCRIPT = join(import.meta.dir, "..", "recall.ts");
@@ -303,12 +312,40 @@ describe("group-session refusal", () => {
     });
   }
 
-  test("DM, unset, and local sessions are private", () => {
-    expect(sessionIsPrivate({ HERMES_SESSION_CHAT_TYPE: "dm" })).toBe(true);
-    expect(sessionIsPrivate({ HERMES_SESSION_CHAT_TYPE: "" })).toBe(true);
-    expect(sessionIsPrivate({})).toBe(true);
+  test("DM and local sessions are the main session", () => {
+    expect(sessionIsPrivate({ HERMES_SESSION_CHAT_TYPE: "dm", HERMES_SESSION_PLATFORM: "telegram" })).toBe(true);
     expect(sessionIsPrivate({ HERMES_SESSION_CHAT_TYPE: " DM " })).toBe(true);
+    expect(sessionIsPrivate({})).toBe(true); // plain CLI: nothing bound
+    expect(sessionIsPrivate({ HERMES_SESSION_CHAT_TYPE: "", HERMES_SESSION_SOURCE: "cli" })).toBe(true);
+    expect(sessionIsPrivate({ HERMES_SESSION_CHAT_TYPE: "", HERMES_SESSION_SOURCE: "desktop" })).toBe(true);
   });
+
+  const notMain: Record<string, Record<string, string>> = {
+    "a cron run delivering to a group": {
+      HERMES_SESSION_CHAT_TYPE: "",
+      HERMES_SESSION_PLATFORM: "",
+      HERMES_CRON_SESSION: "1",
+    },
+    "a cron run bound as a DM": { HERMES_SESSION_CHAT_TYPE: "dm", HERMES_CRON_SESSION: "1" },
+    "a cron_ session id": { HERMES_SESSION_CHAT_TYPE: "", HERMES_SESSION_ID: "cron_abc123" },
+    "a cron platform": { HERMES_SESSION_CHAT_TYPE: "", HERMES_SESSION_PLATFORM: "cron" },
+    "an api_server turn": { HERMES_SESSION_CHAT_TYPE: "", HERMES_SESSION_PLATFORM: "api_server" },
+    "a webhook": { HERMES_SESSION_CHAT_TYPE: "webhook", HERMES_SESSION_PLATFORM: "webhook" },
+    "a messaging platform with no chat type": { HERMES_SESSION_CHAT_TYPE: "", HERMES_SESSION_PLATFORM: "telegram" },
+    "a local source on a remote platform": {
+      HERMES_SESSION_CHAT_TYPE: "",
+      HERMES_SESSION_SOURCE: "cli",
+      HERMES_PLATFORM: "api_server",
+    },
+  };
+  for (const [label, env] of Object.entries(notMain)) {
+    test(`refuses ${label}`, () => {
+      expect(sessionIsPrivate(env)).toBe(false);
+      const paths = workspace();
+      expect(query(paths, { query: "Priya", env }).status).toBe("unavailable");
+      expect(existsSync(paths.index)).toBe(false);
+    });
+  }
 });
 
 describe("never writes into memory/", () => {
@@ -389,7 +426,8 @@ describe("session store", () => {
     store.close();
 
     const stats = rebuild(paths);
-    expect(stats.sessions.indexed).toBe(1);
+    expect(stats.sessions.appended).toBe(1); // only the new message is indexed
+    expect(stats.sessions.indexed).toBe(0);
     expect(stats.sessions.removed).toBe(1);
     expect(query(paths, { query: "paddleboarding", env: DM }).hit_count).toBe(1);
     expect(query(paths, { query: "gear", env: DM }).hit_count).toBe(0);
@@ -468,5 +506,152 @@ describe("CLI", () => {
     const { code, json } = await run(["rebuild"], { HERMES_HOME: paths.home, AV_RECALL_INDEX: "memory/x.sqlite" });
     expect(code).toBe(0);
     expect(json).toEqual({ status: "error", reason: "index_path_inside_memory", hit_count: 0, hits: [] });
+  });
+});
+
+describe("hardening", () => {
+  test("a hard-linked note is not indexed (it may point outside the workspace)", () => {
+    const paths = workspace();
+    const outsideDir = mkdtempSync(join(tmpdir(), "recall-outside-"));
+    homes.push(outsideDir);
+    const outside = join(outsideDir, "outside.md");
+    writeFileSync(outside, "- hardlinksecret from outside the workspace\n");
+    linkSync(outside, join(paths.home, "memory", "2026-09-23.md"));
+    const stats = rebuild(paths);
+    expect(stats.files.skipped).toBe(1);
+    expect(query(paths, { query: "hardlinksecret", env: DM }).hit_count).toBe(0);
+  });
+
+  test("session messages older than the wipe epoch are never indexed", () => {
+    const paths = workspace();
+    makeStateDb(paths.stateDb).close();
+    mkdirSync(join(paths.home, ".recall"), { recursive: true });
+    writeFileSync(paths.epoch, `${NOON_UTC("2026-09-20")}\n`);
+    rebuild(paths);
+    const res = query(paths, { query: "kiteboarding", env: DM });
+    if (res.status !== "ok") throw new Error(res.reason);
+    // The 2026-09-19 DM belonged to the previous occupant; the 2026-09-21 CLI note is after the wipe.
+    expect(res.hits.map((h) => h.ref)).toEqual(["session:cli-1#8:1"]);
+  });
+
+  test("an unreadable epoch marker fails closed to its modification time", () => {
+    const paths = workspace();
+    makeStateDb(paths.stateDb).close();
+    mkdirSync(join(paths.home, ".recall"), { recursive: true });
+    writeFileSync(paths.epoch, "not a number");
+    expect(query(paths, { query: "kiteboarding", env: DM }).hit_count).toBe(0);
+  });
+
+  test("a rewound session is re-indexed whole, not appended", () => {
+    const paths = workspace();
+    const store = makeStateDb(paths.stateDb);
+    rebuild(paths);
+    store.run("UPDATE messages SET active = 0 WHERE id = 1");
+    store.run("INSERT INTO messages(session_id, role, content, timestamp) VALUES ('tg-dm', 'user', 'surfing instead', ?)", [
+      NOON_UTC("2026-09-22"),
+    ]);
+    store.close();
+    const stats = rebuild(paths);
+    expect(stats.sessions.indexed).toBe(1);
+    expect(stats.sessions.appended).toBe(0);
+    expect(query(paths, { query: "Ashwem", env: DM }).hit_count).toBe(0);
+  });
+
+  test("--since followed by a flag is an invalid date, not a way to skip the rebuild", async () => {
+    const paths = workspace();
+    const proc = Bun.spawn(["bun", SCRIPT, "query", "--query-stdin", "--since", "--no-rebuild"], {
+      env: { ...process.env, HERMES_HOME: paths.home, HERMES_SESSION_CHAT_TYPE: "dm" },
+      stdin: new TextEncoder().encode("Priya"),
+      stdout: "pipe",
+    });
+    const json = JSON.parse((await new Response(proc.stdout).text()).trim());
+    expect(await proc.exited).toBe(0);
+    expect(json.reason).toBe("invalid_since");
+  });
+
+  test("the CLI refuses a cron run even with an empty chat type", async () => {
+    const paths = workspace();
+    const proc = Bun.spawn(["bun", SCRIPT, "query", "--query-stdin"], {
+      env: { ...process.env, HERMES_HOME: paths.home, HERMES_SESSION_CHAT_TYPE: "", HERMES_CRON_SESSION: "1" },
+      stdin: new TextEncoder().encode("Priya"),
+      stdout: "pipe",
+    });
+    const json = JSON.parse((await new Response(proc.stdout).text()).trim());
+    expect(json.status).toBe("unavailable");
+    expect(existsSync(paths.index)).toBe(false);
+  });
+});
+
+describe("query-path budget and scrubbing", () => {
+  test("past its budget the query answers from the existing index and says so", () => {
+    const paths = workspace();
+    rebuild(paths);
+    writeFileSync(join(paths.home, "memory", "2026-09-21.md"), "# 2026-09-21\n\n- Switched to a hydrogen cell.\n");
+    const res = query(paths, { query: "microgrid demo", budgetMs: -1, env: DM });
+    if (res.status !== "ok") throw new Error(res.reason);
+    expect(res.partial).toBe(true);
+    // Old text still answers until the next rebuild finishes the work.
+    expect(res.hits.map((h) => h.ref)).toContain("memory/2026-09-21.md:3");
+    expect(query(paths, { query: "hydrogen", budgetMs: -1, env: DM }).hit_count).toBe(0);
+    const done = query(paths, { query: "hydrogen", env: DM });
+    expect(done.status === "ok" && done.partial).toBe(false);
+    expect(done.hit_count).toBe(1);
+  });
+
+  test("a removal on the query path is scrubbed from the file by the next background rebuild", () => {
+    const paths = workspace();
+    writeFileSync(join(paths.home, "memory", "2026-09-22.md"), "- quokkasecret plans\n");
+    rebuild(paths);
+    rmSync(join(paths.home, "memory", "2026-09-22.md"));
+    expect(query(paths, { query: "quokkasecret", env: DM }).hit_count).toBe(0);
+    const meta = new Database(paths.index, { readonly: true });
+    expect((meta.query("SELECT value FROM meta WHERE key = 'scrub_owed'").get() as { value: string }).value).toBe("1");
+    meta.close();
+
+    rebuild(paths, { secure: true });
+    const bytes = [paths.index, `${paths.index}-wal`]
+      .filter((p) => existsSync(p))
+      .map((p) => readFileSync(p).toString("latin1"))
+      .join("");
+    expect(bytes).not.toContain("quokkasecret");
+    const after = new Database(paths.index, { readonly: true });
+    expect(after.query("SELECT value FROM meta WHERE key = 'scrub_owed'").get()).toBeNull();
+    after.close();
+  });
+
+  test("a large session store: growth is appended and an unchanged query stays within budget", () => {
+    const paths = workspace();
+    const store = makeStateDb(paths.stateDb);
+    const addSession = store.prepare("INSERT INTO sessions(id, source, chat_type, started_at) VALUES (?, 'telegram', 'dm', 0)");
+    const addMessage = store.prepare("INSERT INTO messages(session_id, role, content, timestamp) VALUES (?, ?, ?, ?)");
+    store.transaction(() => {
+      for (let s = 0; s < 200; s++) {
+        addSession.run(`big-${s}`);
+        for (let m = 0; m < 100; m++) {
+          addMessage.run(
+            `big-${s}`,
+            m % 2 ? "assistant" : "user",
+            `session ${s} message ${m} about topic${m % 17} and more words`,
+            NOON_UTC("2026-09-15"),
+          );
+        }
+      }
+    })();
+
+    const first = rebuild(paths);
+    expect(first.sessions.indexed).toBe(202);
+
+    addMessage.run("big-7", "user", "a brand new wombat detail", NOON_UTC("2026-09-22"));
+    store.close();
+
+    const started = Date.now();
+    const res = query(paths, { query: "wombat", env: DM });
+    const elapsed = Date.now() - started;
+    if (res.status !== "ok" || !res.index) throw new Error("not ok");
+    expect(res.partial).toBe(false);
+    expect(res.index.sessions.appended).toBe(1);
+    expect(res.index.sessions.indexed).toBe(0);
+    expect(res.hits[0]!.ref).toMatch(/^session:big-7#\d+:1$/);
+    expect(elapsed).toBeLessThan(3000);
   });
 });

@@ -20,7 +20,7 @@
  * Invariants (tests in `tests/recall.test.ts`):
  *   - never writes under `memory/`; the index lives at `.recall/index.sqlite`
  *   - opens the Hermes session store read-only
- *   - `query` refuses in a group/shared session and returns no data at all
+ *   - `query` refuses outside the owner's main session and returns no data
  *   - ordering is deterministic: score, then date (newest first), then ref
  */
 
@@ -35,6 +35,8 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
+  type Stats,
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -51,23 +53,25 @@ const SINCE_RE = /^\d{4}-\d{2}-\d{2}$/;
 export const DEFAULT_LIMIT = 8;
 export const MAX_LIMIT = 20;
 export const MAX_QUERY_CHARS = 500;
+/** Wall-clock budget for the incremental rebuild a query does first. */
+export const QUERY_REBUILD_BUDGET_MS = 3000;
 const MAX_QUERY_TERMS = 16;
 const MAX_TERM_CHARS = 64;
 const CHUNK_MAX_LINES = 12;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_MESSAGE_CHARS = 64 * 1024;
 const SNIPPET_TOKENS = 32;
+const OPEN_RETRIES = 6;
+
+/** Chat types that are a one-to-one conversation with the owner. */
+export const DIRECT_CHAT_TYPES = new Set(["dm", "private", "direct", "c2c"]);
 
 /**
- * Chat types that are the owner's private surface. Anything else (group,
- * forum, channel, thread, guild, or a value we have never seen) is refused:
- * default-deny, so a platform that invents a new shared chat type cannot leak
- * long-term memory into it.
+ * Surfaces that are the owner's own machine. A session with no chat type is
+ * the main session only on one of these; a cron run, an API-server turn, a
+ * webhook, or anything unrecognised with no chat type is refused.
  */
-export const PRIVATE_CHAT_TYPES = new Set(["", "dm", "private", "direct", "c2c"]);
-
-/** Session sources with no chat type that are still the owner's own surface. */
-const PRIVATE_SESSION_SOURCES = new Set(["cli", "tui", "desktop", "acp", "local"]);
+export const LOCAL_SURFACES = new Set(["cli", "tui", "desktop", "acp", "local"]);
 
 export type Kind = "daily_note" | "long_term" | "session";
 export type DateSource = "filename" | "inline" | "mtime" | "message";
@@ -76,6 +80,8 @@ export interface Paths {
   home: string;
   index: string;
   stateDb: string;
+  /** Written by `--wipe-user`: session messages older than it are never indexed. */
+  epoch: string;
 }
 
 export interface Chunk {
@@ -99,8 +105,28 @@ export interface Hit {
 
 export interface RebuildStats {
   files: { scanned: number; indexed: number; unchanged: number; removed: number; skipped: number };
-  sessions: { scanned: number; indexed: number; unchanged: number; removed: number; status: string };
+  sessions: {
+    scanned: number;
+    indexed: number;
+    appended: number;
+    unchanged: number;
+    removed: number;
+    status: string;
+  };
   chunks: number;
+  /** True when the rebuild stopped at its deadline; the index is consistent but not current. */
+  partial: boolean;
+}
+
+export interface RebuildOptions {
+  /** Epoch ms after which no further source is processed. */
+  deadline?: number;
+  /**
+   * Scrub removed text from the file: `secure_delete`, FTS `optimize`, and a
+   * `VACUUM` when a non-secure pass left deletions behind. Background rebuilds
+   * only; the query path skips it to stay fast and records that a scrub is owed.
+   */
+  secure?: boolean;
 }
 
 export type QueryResult =
@@ -112,6 +138,7 @@ export type QueryResult =
       hit_count: number;
       top_score: number | null;
       hits: Hit[];
+      partial: boolean;
       index: RebuildStats | null;
     }
   | { status: "unavailable"; reason: string; hit_count: 0; hits: [] }
@@ -125,7 +152,7 @@ export function resolvePaths(opts: { home?: string; index?: string; stateDb?: st
   );
   const index = resolve(home, opts.index || process.env.AV_RECALL_INDEX?.trim() || join(".recall", "index.sqlite"));
   const stateDb = resolve(home, opts.stateDb || process.env.AV_RECALL_STATE_DB?.trim() || "state.db");
-  return { home, index, stateDb };
+  return { home, index, stateDb, epoch: join(home, ".recall", "epoch") };
 }
 
 function isInside(child: string, parent: string): boolean {
@@ -165,10 +192,38 @@ export function assertIndexOutsideMemory(paths: Paths): void {
   }
 }
 
-/** True when the calling session is the owner's private surface. */
+function norm(value: string | undefined): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+/**
+ * True when the calling session is the owner's main session.
+ *
+ * Mirrors `is_private_session` in `plugins/recall/__init__.py`, and is what a
+ * terminal invocation of this CLI is held to (Hermes exports the gateway's
+ * session variables to terminal commands):
+ *
+ *   - a cron run is never the main session, whatever it binds: Hermes cron
+ *     binds an empty chat type and delivers to the chat the job was created
+ *     in, which may be a group (`HERMES_CRON_SESSION=1`, a `cron_` session id,
+ *     or a `cron` platform/source);
+ *   - a one-to-one chat type (`dm`, …) is the main session;
+ *   - an empty chat type is the main session only when every surface identity
+ *     that is set is local (cli, tui, desktop, acp); none set is the plain CLI;
+ *   - anything else (group, forum, channel, api_server, webhook, unknown) is not.
+ */
 export function sessionIsPrivate(env: Record<string, string | undefined> = process.env): boolean {
-  const chatType = (env.HERMES_SESSION_CHAT_TYPE ?? "").trim().toLowerCase();
-  return PRIVATE_CHAT_TYPES.has(chatType);
+  const chatType = norm(env.HERMES_SESSION_CHAT_TYPE);
+  const idents = [env.HERMES_PLATFORM, env.HERMES_SESSION_PLATFORM, env.HERMES_SESSION_SOURCE]
+    .map(norm)
+    .filter((v) => v !== "");
+  const sessionId = (env.HERMES_SESSION_ID ?? "").trim();
+  if (norm(env.HERMES_CRON_SESSION) === "1" || sessionId.startsWith("cron_") || idents.includes("cron")) {
+    return false;
+  }
+  if (DIRECT_CHAT_TYPES.has(chatType)) return true;
+  if (chatType !== "") return false;
+  return idents.every((ident) => LOCAL_SURFACES.has(ident));
 }
 
 // ── Dates ────────────────────────────────────────────────────────────────────
@@ -190,6 +245,28 @@ export function validSince(value: string | undefined | null): string | null | "i
   const parsed = new Date(`${datePart}T00:00:00Z`);
   if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== datePart) return "invalid";
   return datePart;
+}
+
+/**
+ * Seconds since the Unix epoch before which session messages are excluded, or
+ * 0. `--wipe-user` writes this file so a previous occupant's conversations,
+ * which Hermes keeps in `state.db`, never enter a new index. An unreadable
+ * marker fails closed to its own modification time.
+ */
+export function readEpoch(paths: Paths): number {
+  let st: Stats;
+  try {
+    st = statSync(paths.epoch);
+  } catch {
+    return 0;
+  }
+  try {
+    const value = Number.parseFloat(readFileSync(paths.epoch, "utf8").trim());
+    if (Number.isFinite(value) && value > 0) return value;
+  } catch {
+    /* fall through */
+  }
+  return st.mtimeMs / 1000;
 }
 
 // ── Chunking ─────────────────────────────────────────────────────────────────
@@ -281,62 +358,78 @@ export function fts5Available(): boolean {
   }
 }
 
+function isLockError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /database is locked|SQLITE_BUSY|database table is locked/i.test(message);
+}
+
 /**
  * Open (creating if needed) the index. The index is derived data: if the file
  * is not a usable SQLite database it is discarded and rebuilt from sources.
+ * First creation races (two processes switching a new file to WAL) are retried
+ * with backoff.
  */
-export function openIndex(paths: Paths): Database {
-  try {
-    return openIndexOnce(paths);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (!/not a database|malformed|corrupt/i.test(message)) throw err;
-    for (const suffix of ["", "-wal", "-shm"]) rmSync(`${paths.index}${suffix}`, { force: true });
-    return openIndexOnce(paths);
+export function openIndex(paths: Paths, opts: { secure?: boolean } = {}): Database {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      try {
+        return openIndexOnce(paths, opts);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (!/not a database|malformed|corrupt/i.test(message)) throw err;
+        for (const suffix of ["", "-wal", "-shm"]) rmSync(`${paths.index}${suffix}`, { force: true });
+        return openIndexOnce(paths, opts);
+      }
+    } catch (err) {
+      if (!isLockError(err) || attempt >= OPEN_RETRIES - 1) throw err;
+      Bun.sleepSync(25 * 2 ** attempt);
+    }
   }
 }
 
-function openIndexOnce(paths: Paths): Database {
+function openIndexOnce(paths: Paths, opts: { secure?: boolean }): Database {
   assertIndexOutsideMemory(paths);
   const dir = dirname(paths.index);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const fresh = !existsSync(paths.index);
   const db = new Database(paths.index, { create: true });
-  if (fresh) {
-    try {
-      chmodSync(paths.index, 0o600);
-    } catch {
-      /* best effort */
-    }
-  }
-  db.run("PRAGMA busy_timeout = 5000");
-  db.run("PRAGMA journal_mode = WAL");
-  // Deleted notes and sessions must not linger in free pages.
-  db.run("PRAGMA secure_delete = ON");
-
-  const version = (() => {
-    try {
-      return (db.query("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string } | null)
-        ?.value;
-    } catch {
-      return undefined;
-    }
-  })();
-  if (version !== undefined && version !== SCHEMA_VERSION) {
-    db.run("DROP TABLE IF EXISTS chunks_fts");
-    db.run("DROP TABLE IF EXISTS chunks");
-    db.run("DROP TABLE IF EXISTS sources");
-    db.run("DROP TABLE IF EXISTS meta");
-  }
-  for (const stmt of DDL) db.run(stmt);
   try {
-    // FTS5 keeps deleted tokens in its segments until a merge unless told not to.
-    db.run("INSERT INTO chunks_fts(chunks_fts, rank) VALUES('secure-delete', 1)");
-  } catch {
-    /* SQLite < 3.42: deletions are merged away on `optimize` below */
+    if (fresh) {
+      try {
+        chmodSync(paths.index, 0o600);
+      } catch {
+        /* best effort */
+      }
+    }
+    db.run("PRAGMA busy_timeout = 5000");
+    // Switching to WAL takes an exclusive lock; only the first opener needs to.
+    const mode = (db.query("PRAGMA journal_mode").get() as { journal_mode: string } | null)?.journal_mode;
+    if (String(mode).toLowerCase() !== "wal") db.run("PRAGMA journal_mode = WAL");
+    if (opts.secure) db.run("PRAGMA secure_delete = ON");
+
+    const version = (() => {
+      try {
+        return (db.query("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string } | null)
+          ?.value;
+      } catch {
+        return undefined;
+      }
+    })();
+    if (version !== SCHEMA_VERSION) {
+      if (version !== undefined) {
+        db.run("DROP TABLE IF EXISTS chunks_fts");
+        db.run("DROP TABLE IF EXISTS chunks");
+        db.run("DROP TABLE IF EXISTS sources");
+        db.run("DROP TABLE IF EXISTS meta");
+      }
+      for (const stmt of DDL) db.run(stmt);
+      db.run("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)", [SCHEMA_VERSION]);
+    }
+    return db;
+  } catch (err) {
+    db.close();
+    throw err;
   }
-  db.run("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)", [SCHEMA_VERSION]);
-  return db;
 }
 
 function deleteSource(db: Database, sourceId: string): number {
@@ -371,6 +464,21 @@ function insertChunks(db: Database, sourceId: string, chunks: PendingChunk[]): v
     const res = ins.run(sourceId, c.kind, c.path, c.lineStart, c.lineEnd, c.date, c.dateSource, c.body);
     fts.run(Number(res.lastInsertRowid), c.body);
   }
+}
+
+/** Counts chunk rows deleted in this pass (re-chunking or purging). */
+interface Pass {
+  stats: RebuildStats;
+  deadline: number | null;
+  deleted: number;
+}
+
+function pastDeadline(pass: Pass): boolean {
+  if (pass.deadline !== null && Date.now() > pass.deadline) {
+    pass.stats.partial = true;
+    return true;
+  }
+  return false;
 }
 
 // ── Markdown sources ─────────────────────────────────────────────────────────
@@ -415,26 +523,38 @@ function chunkDate(
   return { date: localDate(mtimeMs), dateSource: "mtime" };
 }
 
-function syncFiles(db: Database, home: string, stats: RebuildStats): void {
-  const sources = listMarkdownSources(home);
-  const present = new Set<string>();
-
-  for (const source of sources) {
-    let st;
+function syncFiles(db: Database, home: string, pass: Pass): void {
+  const { stats } = pass;
+  // Presence first, over the full listing, so removals are applied even when
+  // the pass later stops at its deadline.
+  const eligible: { source: FileSource; st: Stats }[] = [];
+  for (const source of listMarkdownSources(home)) {
+    let st: Stats;
     try {
       st = lstatSync(source.abs);
     } catch {
       continue; // absent: purged below
     }
-    // Never follow a symlink out of the workspace, never read a huge file.
-    if (!st.isFile() || st.isSymbolicLink() || st.size > MAX_FILE_BYTES) {
+    // Never follow a symlink or a hard link out of the workspace, never read a huge file.
+    if (!st.isFile() || st.isSymbolicLink() || st.nlink > 1 || st.size > MAX_FILE_BYTES) {
       stats.files.skipped++;
       continue;
     }
-    present.add(source.sourceId);
+    eligible.push({ source, st });
+  }
+  const present = new Set(eligible.map((e) => e.source.sourceId));
+  const known = db.query("SELECT source_id FROM sources WHERE kind != 'session'").all() as { source_id: string }[];
+  for (const { source_id } of known) {
+    if (present.has(source_id)) continue;
+    db.transaction(() => {
+      pass.deleted += deleteSource(db, source_id);
+    }).immediate();
+    stats.files.removed++;
+  }
+
+  for (const { source, st } of eligible) {
     stats.files.scanned++;
     const mtimeMs = Math.trunc(st.mtimeMs);
-
     const stored = db
       .query("SELECT mtime_ms, size, fingerprint FROM sources WHERE source_id = ?")
       .get(source.sourceId) as { mtime_ms: number; size: number; fingerprint: string } | null;
@@ -442,6 +562,7 @@ function syncFiles(db: Database, home: string, stats: RebuildStats): void {
       stats.files.unchanged++;
       continue; // cheap path: stat only
     }
+    if (pastDeadline(pass)) break;
 
     const bytes = readFileSync(source.abs);
     const digest = sha256(bytes);
@@ -450,12 +571,11 @@ function syncFiles(db: Database, home: string, stats: RebuildStats): void {
         .query("SELECT fingerprint FROM sources WHERE source_id = ?")
         .get(source.sourceId) as { fingerprint: string } | null;
       if (current && current.fingerprint === digest) {
-        // Touched but identical (and no inline-vs-mtime date drift worth a
-        // re-chunk): record the new mtime so the next pass is stat-only.
+        // Touched but identical: record the new mtime so the next pass is stat-only.
         db.run("UPDATE sources SET mtime_ms = ?, size = ? WHERE source_id = ?", [mtimeMs, st.size, source.sourceId]);
         return false;
       }
-      deleteSource(db, source.sourceId);
+      pass.deleted += deleteSource(db, source.sourceId);
       const text = bytes.toString("utf8");
       const pending = chunkText(text).map((chunk) => {
         const { date, dateSource } = chunkDate(chunk, source, mtimeMs);
@@ -479,13 +599,6 @@ function syncFiles(db: Database, home: string, stats: RebuildStats): void {
     if (tx.immediate()) stats.files.indexed++;
     else stats.files.unchanged++;
   }
-
-  const known = db.query("SELECT source_id FROM sources WHERE kind != 'session'").all() as { source_id: string }[];
-  for (const { source_id } of known) {
-    if (present.has(source_id)) continue;
-    db.transaction(() => deleteSource(db, source_id)).immediate();
-    stats.files.removed++;
-  }
 }
 
 // ── Hermes session store (read-only) ─────────────────────────────────────────
@@ -498,6 +611,21 @@ function columns(db: Database, table: string): Set<string> {
   }
 }
 
+interface SessionPrint {
+  n: number;
+  maxId: number;
+  chars: number;
+}
+
+function parsePrint(value: string | undefined): SessionPrint | null {
+  const m = /^(\d+):(\d+):(\d+)$/.exec(value ?? "");
+  return m ? { n: Number(m[1]), maxId: Number(m[2]), chars: Number(m[3]) } : null;
+}
+
+function printOf(p: SessionPrint): string {
+  return `${p.n}:${p.maxId}:${p.chars}`;
+}
+
 /**
  * Read the owner's private conversations from `state.db`.
  *
@@ -506,15 +634,19 @@ function columns(db: Database, table: string): Set<string> {
  * Everything else — group chats, cron runs (whose transcripts hold the brief
  * drafts that must not become source context), subagents, webhooks, unknown
  * sources — is excluded. Only `user` and `assistant` text is indexed; tool
- * results are not.
+ * results are not. Messages older than the `--wipe-user` epoch are excluded.
+ *
+ * A session that only grew gets its new messages appended; one whose earlier
+ * messages changed (rewind, compaction) is re-indexed whole.
  *
  * If the store is absent or its schema lacks a column this depends on, the
  * session side is skipped with a status and the markdown index still works.
  */
-function syncSessions(db: Database, stateDbPath: string, stats: RebuildStats): void {
+function syncSessions(db: Database, stateDbPath: string, epoch: number, pass: Pass): void {
+  const { stats } = pass;
   if (!existsSync(stateDbPath)) {
     stats.sessions.status = "no_session_store";
-    purgeSessions(db, new Set(), stats);
+    purgeSessions(db, new Set(), pass);
     return;
   }
   let store: Database;
@@ -533,14 +665,15 @@ function syncSessions(db: Database, stateDbPath: string, stats: RebuildStats): v
     if (!required) {
       // Eligibility can no longer be verified, so nothing session-derived stays.
       stats.sessions.status = "session_schema_unsupported";
-      purgeSessions(db, new Set(), stats);
+      purgeSessions(db, new Set(), pass);
       return;
     }
     const filters = ["m.role IN ('user', 'assistant')", "m.content IS NOT NULL", "m.content != ''"];
     if (mCols.has("active")) filters.push("m.active = 1");
     if (mCols.has("_compressed_summary")) filters.push("m._compressed_summary = 0");
-    const privateSources = [...PRIVATE_SESSION_SOURCES].map((s) => `'${s}'`).join(", ");
-    const eligible = `(s.chat_type = 'dm' OR ((s.chat_type IS NULL OR s.chat_type = '') AND s.source IN (${privateSources})))`;
+    if (epoch > 0) filters.push(`m.timestamp >= ${Number(epoch)}`);
+    const localSources = [...LOCAL_SURFACES].map((s) => `'${s}'`).join(", ");
+    const eligible = `(s.chat_type = 'dm' OR ((s.chat_type IS NULL OR s.chat_type = '') AND s.source IN (${localSources})))`;
     const where = `${eligible} AND ${filters.join(" AND ")}`;
 
     const sessions = store
@@ -553,27 +686,43 @@ function syncSessions(db: Database, stateDbPath: string, stats: RebuildStats): v
       )
       .all() as { id: string; n: number; max_id: number; chars: number }[];
 
-    const present = new Set<string>();
+    // Removals first, over the full list, so they land even on a partial pass.
+    purgeSessions(db, new Set(sessions.map((s) => `session:${s.id}`)), pass);
+
+    const prefixQuery = store.query(
+      `SELECT COUNT(m.id) AS n, COALESCE(SUM(LENGTH(m.content)), 0) AS chars
+         FROM sessions s JOIN messages m ON m.session_id = s.id
+        WHERE s.id = ? AND m.id <= ? AND ${where}`,
+    );
     const messageQuery = store.query(
       `SELECT m.id AS id, m.content AS content, m.timestamp AS ts
          FROM sessions s JOIN messages m ON m.session_id = s.id
-        WHERE s.id = ? AND ${where}
+        WHERE s.id = ? AND m.id > ? AND ${where}
         ORDER BY m.id`,
     );
 
     for (const session of sessions) {
       const sourceId = `session:${session.id}`;
-      present.add(sourceId);
       stats.sessions.scanned++;
-      const fingerprint = `${session.n}:${session.max_id}:${session.chars}`;
-      const stored = db.query("SELECT fingerprint FROM sources WHERE source_id = ?").get(sourceId) as
+      const current: SessionPrint = { n: session.n, maxId: session.max_id, chars: session.chars };
+      const storedRow = db.query("SELECT fingerprint FROM sources WHERE source_id = ?").get(sourceId) as
         | { fingerprint: string }
         | null;
-      if (stored && stored.fingerprint === fingerprint) {
+      const stored = parsePrint(storedRow?.fingerprint);
+      if (stored && printOf(stored) === printOf(current)) {
         stats.sessions.unchanged++;
         continue;
       }
-      const messages = messageQuery.all(session.id) as { id: number; content: string; ts: number }[];
+      if (pastDeadline(pass)) break;
+
+      // Append-only when every message we indexed is still there unchanged.
+      let append = false;
+      if (stored && current.maxId > stored.maxId) {
+        const prefix = prefixQuery.get(session.id, stored.maxId) as { n: number; chars: number };
+        append = prefix.n === stored.n && prefix.chars === stored.chars;
+      }
+      const afterId = append && stored ? stored.maxId : 0;
+      const messages = messageQuery.all(session.id, afterId) as { id: number; content: string; ts: number }[];
       const pending: PendingChunk[] = [];
       for (const message of messages) {
         const text = String(message.content).slice(0, MAX_MESSAGE_CHARS);
@@ -591,46 +740,69 @@ function syncSessions(db: Database, stateDbPath: string, stats: RebuildStats): v
         }
       }
       db.transaction(() => {
-        deleteSource(db, sourceId);
-        insertChunks(db, sourceId, pending);
-        db.run(
-          "INSERT INTO sources(source_id, kind, mtime_ms, size, fingerprint) VALUES (?, 'session', NULL, NULL, ?)",
-          [sourceId, fingerprint],
-        );
+        if (append) {
+          insertChunks(db, sourceId, pending);
+          db.run("UPDATE sources SET fingerprint = ? WHERE source_id = ?", [printOf(current), sourceId]);
+        } else {
+          pass.deleted += deleteSource(db, sourceId);
+          insertChunks(db, sourceId, pending);
+          db.run(
+            "INSERT INTO sources(source_id, kind, mtime_ms, size, fingerprint) VALUES (?, 'session', NULL, NULL, ?)",
+            [sourceId, printOf(current)],
+          );
+        }
       }).immediate();
-      stats.sessions.indexed++;
+      if (append) stats.sessions.appended++;
+      else stats.sessions.indexed++;
     }
-    purgeSessions(db, present, stats);
     stats.sessions.status = "ok";
   } finally {
     store.close();
   }
 }
 
-function purgeSessions(db: Database, present: Set<string>, stats: RebuildStats): void {
+function purgeSessions(db: Database, present: Set<string>, pass: Pass): void {
   const known = db.query("SELECT source_id FROM sources WHERE kind = 'session'").all() as { source_id: string }[];
   for (const { source_id } of known) {
     if (present.has(source_id)) continue;
-    db.transaction(() => deleteSource(db, source_id)).immediate();
-    stats.sessions.removed++;
+    db.transaction(() => {
+      pass.deleted += deleteSource(db, source_id);
+    }).immediate();
+    pass.stats.sessions.removed++;
   }
 }
 
 // ── Public operations ────────────────────────────────────────────────────────
 
-export function rebuild(paths: Paths): RebuildStats {
+export function rebuild(paths: Paths, opts: RebuildOptions = {}): RebuildStats {
   const stats: RebuildStats = {
     files: { scanned: 0, indexed: 0, unchanged: 0, removed: 0, skipped: 0 },
-    sessions: { scanned: 0, indexed: 0, unchanged: 0, removed: 0, status: "not_run" },
+    sessions: { scanned: 0, indexed: 0, appended: 0, unchanged: 0, removed: 0, status: "not_run" },
     chunks: 0,
+    partial: false,
   };
-  const db = openIndex(paths);
+  const secure = opts.secure ?? true;
+  const pass: Pass = { stats, deadline: opts.deadline ?? null, deleted: 0 };
+  const db = openIndex(paths, { secure });
   try {
-    syncFiles(db, paths.home, stats);
-    syncSessions(db, paths.stateDb, stats);
-    if (stats.files.removed + stats.sessions.removed > 0) {
-      // Merge FTS segments so removed text is gone from the index b-trees too.
-      db.run("INSERT INTO chunks_fts(chunks_fts) VALUES('optimize')");
+    syncFiles(db, paths.home, pass);
+    syncSessions(db, paths.stateDb, readEpoch(paths), pass);
+    const owed = (db.query("SELECT value FROM meta WHERE key = 'scrub_owed'").get() as { value: string } | null)
+      ?.value === "1";
+    if (secure) {
+      if (pass.deleted > 0 || owed) {
+        // Merge FTS segments so removed text leaves the index b-trees; with
+        // secure_delete on, the pages freed here are zeroed.
+        db.run("INSERT INTO chunks_fts(chunks_fts) VALUES('optimize')");
+      }
+      if (owed) {
+        // Pages freed earlier by a non-secure pass still hold text: rewrite.
+        db.run("DELETE FROM meta WHERE key = 'scrub_owed'");
+        db.run("VACUUM");
+        db.run("PRAGMA wal_checkpoint(TRUNCATE)");
+      }
+    } else if (pass.deleted > 0 && !owed) {
+      db.run("INSERT OR REPLACE INTO meta(key, value) VALUES('scrub_owed', '1')");
     }
     stats.chunks = (db.query("SELECT COUNT(*) AS n FROM chunks").get() as { n: number }).n;
   } finally {
@@ -640,7 +812,8 @@ export function rebuild(paths: Paths): RebuildStats {
 }
 
 /** Word terms from free text, lowercased and de-duplicated in order. Each is
- * quoted, so FTS5 operators in user text (`OR`, `NEAR`, `*`, `:`) are inert. */
+ * quoted, so FTS5 operators in user text (`OR`, `NEAR`, `*`, `:`) are inert.
+ * `plugins/recall` hashes the query with the same extraction. */
 export function queryTerms(query: string): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -670,7 +843,14 @@ function refFor(row: { kind: Kind; path: string; line_start: number; line_end: n
 
 export function query(
   paths: Paths,
-  opts: { query: string; since?: string | null; limit?: number; rebuildFirst?: boolean; env?: Record<string, string | undefined> },
+  opts: {
+    query: string;
+    since?: string | null;
+    limit?: number;
+    rebuildFirst?: boolean;
+    budgetMs?: number;
+    env?: Record<string, string | undefined>;
+  },
 ): QueryResult {
   if (!sessionIsPrivate(opts.env ?? process.env)) {
     return { status: "unavailable", reason: "unavailable in group sessions", hit_count: 0, hits: [] };
@@ -685,7 +865,19 @@ export function query(
   if (terms.length === 0) return { status: "error", reason: "empty_query", hit_count: 0, hits: [] };
   if (!fts5Available()) return { status: "unavailable", reason: "fts5_unavailable", hit_count: 0, hits: [] };
 
-  const stats = opts.rebuildFirst === false ? null : rebuild(paths);
+  let stats: RebuildStats | null = null;
+  let partial = false;
+  if (opts.rebuildFirst !== false) {
+    try {
+      // Bounded and non-secure: the query must stay fast; the next background
+      // rebuild finishes the work and scrubs what this pass deleted.
+      stats = rebuild(paths, { deadline: Date.now() + (opts.budgetMs ?? QUERY_REBUILD_BUDGET_MS), secure: false });
+      partial = stats.partial;
+    } catch (err) {
+      if (!isLockError(err)) throw err;
+      partial = true; // another rebuild holds the index: answer from what it has
+    }
+  }
   const db = openIndex(paths);
   try {
     const sinceClause = since ? "AND c.date >= $since" : "";
@@ -735,10 +927,21 @@ export function query(
         hit_count: total,
         top_score: hits[0]?.score ?? null,
         hits,
+        partial,
         index: stats,
       };
     }
-    return { status: "ok", match: "none", terms: terms.length, since, hit_count: 0, top_score: null, hits: [], index: stats };
+    return {
+      status: "ok",
+      match: "none",
+      terms: terms.length,
+      since,
+      hit_count: 0,
+      top_score: null,
+      hits: [],
+      partial,
+      index: stats,
+    };
   } finally {
     db.close();
   }
@@ -746,9 +949,12 @@ export function query(
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
 
+/** The value after `name`, unless it is missing or is itself a flag. */
 function argValue(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
-  return i >= 0 ? args[i + 1] : undefined;
+  if (i < 0) return undefined;
+  const value = args[i + 1];
+  return value === undefined || value.startsWith("--") ? undefined : value;
 }
 
 export async function main(argv: string[]): Promise<number> {
@@ -765,17 +971,22 @@ export async function main(argv: string[]): Promise<number> {
         print({ status: "unavailable", reason: "fts5_unavailable" });
         return 0;
       }
-      print({ status: "ok", ...rebuild(paths) });
+      print({ status: "ok", ...rebuild(paths, { secure: true }) });
       return 0;
     }
     if (command === "query") {
       const text = args.includes("--query-stdin") ? await Bun.stdin.text() : (argValue(args, "--query") ?? "");
       const limitArg = argValue(args, "--limit");
+      const budgetArg = argValue(args, "--budget-ms");
+      const sinceGiven = args.includes("--since");
+      const since = argValue(args, "--since");
       print(
         query(paths, {
           query: text,
-          since: argValue(args, "--since") ?? null,
+          // `--since` followed by a flag is an invalid date, not an absent one.
+          since: sinceGiven && since === undefined ? "invalid" : (since ?? null),
           limit: limitArg ? Number(limitArg) : undefined,
+          budgetMs: budgetArg !== undefined && Number.isFinite(Number(budgetArg)) ? Number(budgetArg) : undefined,
           rebuildFirst: !args.includes("--no-rebuild"),
         }),
       );
