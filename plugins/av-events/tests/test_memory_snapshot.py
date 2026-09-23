@@ -575,12 +575,12 @@ def test_plugin_version_is_one_string(plugin, av):
 
 
 # --------------------------------------------------------------------------
-# End to end over HTTP, against a stub of the DATA-92 route
+# End to end over HTTP, against a stub of the DATA-93 route
 # --------------------------------------------------------------------------
 
 
 class StubBackupRoute:
-    """The PUT half of the DATA-92 contract: bearer, name shapes, body hash,
+    """The PUT half of the DATA-93 contract: bearer, name shapes, body hash,
     idempotent (201 new, 200 already held), manifest refused before its archive."""
 
     NAME = re.compile(r"^(memory\.([0-9a-f]{64})\.tar\.gz|manifest\.([0-9a-f]{64})\.json)$")
