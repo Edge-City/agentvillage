@@ -683,7 +683,11 @@ event without uploading again.
 as done. Consecutive failures back off exponentially: 5 min, doubling, capped at 6 h
 (`BACKOFF_BASE_S`, `BACKOFF_MAX_S`), reset by a success. A 401 holds off at least an hour
 (`backup_upload_401`: a wrong or rotated token an operator may fix). A 403 holds off at least
-24 hours (`backup_forbidden`): the route refuses a withdrawn tenant (DATA-93). An archive over `AV_BACKUP_MAX_BYTES` is
+24 hours (`backup_forbidden`): the route refuses a withdrawn tenant (DATA-93). A 403 also clears
+`backup.json` (the last upload and the accepted archive hashes), because withdrawal deletes the
+tenant's prefix and none of it holds any more. After a re-consent the first pass past the cooldown
+uploads whatever is there, archive and manifest, even if the files never changed. A 401 or a 5xx
+says nothing about what the route holds and clears nothing. An archive over `AV_BACKUP_MAX_BYTES` is
 `backup_too_large`. Any exception is `backup_error`. Each counter is logged once per process as a name and a count, never a path or a
 value. The hook breaker never counts a backup failure. **Switches**: unset `AV_BACKUP_URL` (or
 the token, or the tenant), `AV_EVENTS_ENABLED=0`, or `AV_HOOKS_DISABLED=memory_snapshot`.

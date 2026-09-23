@@ -1278,3 +1278,67 @@ def test_a_state_file_without_a_date_remembers_nothing(collector, backup_env):
     write_tree(backup_env, {"av-events/backup.json": json.dumps(legacy).encode()})
     assert collector.snapshot_once(now=NOW) == "uploaded"
     assert [c["name"].split(".")[0] for c in collector.backup_uploader.calls] == ["memory", "manifest"]
+
+
+# --------------------------------------------------------------------------
+# A 403 forgets what the route holds (withdrawal deletes the prefix)
+# --------------------------------------------------------------------------
+
+
+def _kinds(uploads) -> list[str]:
+    return [c["name"].split(".")[0] for c in uploads.calls]
+
+
+@pytest.mark.parametrize("refused", ["archive", "manifest"])
+def test_after_a_403_and_its_cooldown_unchanged_files_are_uploaded_in_full(collector, backup_env, refused):
+    """Withdrawal: the route answers 403 and the tenant's bucket prefix is
+    deleted. On re-consent the files may be exactly as they were, and the next
+    pass must still upload archive and manifest; `latest` would otherwise stay
+    404 until the memory happened to change."""
+    write_tree(backup_env, {"MEMORY.md": b"A\n"})
+    assert collector.snapshot_once(now=NOW) == "uploaded"
+    write_tree(backup_env, {"MEMORY.md": b"B\n"})
+    # The route now refuses the tenant: the archive PUT (or, if the archive
+    # went through first, the manifest PUT) gets 403.
+    collector.backup_uploader = Uploads(results=[403] if refused == "archive" else [201, 403])
+    assert collector.snapshot_once(now=NOW + 60) == "failed"
+    assert collector.counters.get("backup_forbidden") == 1
+    left = collector.backup_blocked_until - time.monotonic()
+    assert 86400 - 5 < left <= 86400  # the 24 h cooldown is kept
+    assert json.loads((backup_env / "av-events" / "backup.json").read_text()) == {}
+    assert collector.snapshot_once(now=NOW + 120) == "blocked"
+
+    # Re-consent after the cooldown; the files are unchanged since the 403.
+    collector.backup_blocked_until = 0.0
+    collector.backup_uploader = Uploads()
+    assert collector.snapshot_once(now=NOW + DAY // 2) == "uploaded"
+    assert _kinds(collector.backup_uploader) == ["memory", "manifest"]  # in full, archive included
+
+
+def test_after_a_403_a_revert_to_the_last_uploaded_content_is_uploaded_too(collector, backup_env):
+    """The content the route held before the withdrawal is gone with the
+    prefix: returning to it is not "unchanged" and its archive is not "accepted"."""
+    write_tree(backup_env, {"MEMORY.md": b"A\n"})
+    assert collector.snapshot_once(now=NOW) == "uploaded"
+    write_tree(backup_env, {"MEMORY.md": b"B\n"})
+    collector.backup_uploader = Uploads(results=[403])
+    assert collector.snapshot_once(now=NOW + 60) == "failed"
+    write_tree(backup_env, {"MEMORY.md": b"A\n"})
+    collector.backup_blocked_until = 0.0
+    collector.backup_uploader = Uploads()
+    assert collector.snapshot_once(now=NOW + 120) == "uploaded"
+    assert _kinds(collector.backup_uploader) == ["memory", "manifest"]
+
+
+def test_a_401_or_other_failure_keeps_the_upload_memory(collector, backup_env):
+    """Only a 403 means the route's copy is gone. A 401 (a token an operator
+    will fix) or a 5xx says nothing about what the route holds."""
+    write_tree(backup_env, {"MEMORY.md": b"A\n"})
+    assert collector.snapshot_once(now=NOW) == "uploaded"
+    before = json.loads((backup_env / "av-events" / "backup.json").read_text())
+    write_tree(backup_env, {"MEMORY.md": b"B\n"})
+    for status in (401, 500):
+        collector.backup_blocked_until = 0.0
+        collector.backup_uploader = Uploads(results=[status])
+        assert collector.snapshot_once(now=NOW + 60) == "failed"
+        assert json.loads((backup_env / "av-events" / "backup.json").read_text()) == before
