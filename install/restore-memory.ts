@@ -4,15 +4,18 @@
  *
  * The control plane runs this on a recreated sandbox **before the gateway
  * starts**, then emits `memory.restored` from the JSON line it prints. This
- * script emits no event itself.
+ * script emits no event itself. **On `status: "error"` the control plane must
+ * not start the gateway**: the sandbox does not hold the tenant's memory, and
+ * the marker below keeps the plugin from uploading over the real backup.
  *
  *   bun install/restore-memory.ts --tenant <id> [--home <dir>] [--manifest <YYYY-MM-DD>/manifest.<sha256>.json]
  *                                 [--force] [--dry-run]
  *
  * Environment: `AV_BACKUP_URL` (the ingest service's base URL; a value ending
- * in `/v1/backup` is accepted too), `AV_BACKUP_TOKEN` (the tenant's
- * `backup_write` token), `HERMES_HOME` (default `~/.hermes`). The tenant is
- * `--tenant`, else `AV_TENANT_ID`, else `TENANT_ID`, used exactly as given.
+ * in `/v1/backup` is accepted too; https, or http only to `*.railway.internal`
+ * or the local machine), `AV_BACKUP_TOKEN` (the tenant's `backup_write`
+ * token), `HERMES_HOME` (default `~/.hermes`). The tenant is `--tenant`, else
+ * `AV_TENANT_ID`, else `TENANT_ID`, used exactly as given.
  *
  * Contract (DATA-93, the route side):
  *
@@ -30,24 +33,37 @@
  *   3. the archive's SHA-256 and length equal the manifest's;
  *   4. the tar holds regular files only, exactly the manifest's paths, each
  *      path on the allowlist (`MEMORY.md`, `USER.md`, `memories/MEMORY.md`,
- *      `memories/USER.md`, `memory/YYYY-MM-DD.md`), each file's SHA-256 and
- *      size equal to the manifest's.
+ *      `memories/USER.md`, `memory/YYYY-MM-DD.md` — the plugin's rule exactly,
+ *      shared test vectors in `plugins/av-events/tests/vectors/`), each file's
+ *      SHA-256 and size equal to the manifest's.
  *
  * Any mismatch refuses the restore and writes nothing. Then, per file: the
  * same bytes already there → left alone; a local file **newer** than the
  * snapshot's copy (its mtime is later than the manifest's `mtime_ms`) → kept,
- * unless `--force`; otherwise written (temp file + rename, mode 0600, mtime set
- * to the manifest's). A target that is a symlink, directory or other
- * non-regular file, or a `memory/` / `memories/` that is not a real directory,
- * refuses the restore before anything is written.
+ * unless `--force`; otherwise written. A target that is a symlink, directory or
+ * other non-regular file, or a `memory/` / `memories/` that is not a real
+ * directory, refuses the restore before anything is written.
+ *
+ * Writing is two-phase: every file is first staged to a temp name in its own
+ * directory (mode 0600, mtime set to the manifest's), and only when all are
+ * staged is each renamed into place. A staging failure removes every temp and
+ * writes nothing; a rename failure stops there. Either is `status: "error"`,
+ * `reason: "write_failed"`, with the counts of what was renamed.
+ *
+ * Marker: `$HERMES_HOME/av-events/restore.json` records `{status, manifest_key,
+ * reason?, at}` with status `restored`, `none` or `error` (a refusal is an
+ * error). The av-events plugin uploads nothing while it says `error`.
+ * `--dry-run` writes neither files nor marker.
  *
  * Output: one JSON line on stdout, `{status, snapshot_ref, bytes, file_count,
- * written, unchanged, kept_newer, reason?}`. `bytes` / `file_count` are the
- * files written — what `memory.restored` reports. `snapshot_ref` is
+ * written, unchanged, kept_newer, partial, reason?}`. `bytes` / `file_count`
+ * are the files written — what `memory.restored` reports. `snapshot_ref` is
  * `backup/<manifest sha256>`, the same value the plugin's `memory.snapshot`
- * carries as `manifest_ref`. Never a token, a URL or any file content.
+ * carries as `manifest_ref`. `partial` is the manifest's: the snapshot itself
+ * left files out (over the byte budget, unreadable, …). Never a token, a URL
+ * or any file content.
  *
- * Exit: 0 `restored` or `none` (no backup), 1 `refused` or `error`, 2 usage.
+ * Exit: 0 `restored`, `none` (no backup) or `dry_run`; 1 `refused` or `error`; 2 usage.
  */
 
 import { createHash, randomBytes } from "node:crypto";
@@ -58,10 +74,14 @@ import { gunzipSync } from "node:zlib";
 import { hermesHome } from "./paths";
 
 export const MANIFEST_SCHEMA = "memory_manifest.v1";
-export const RESTORE_PATH = /^(MEMORY\.md|USER\.md|memories\/MEMORY\.md|memories\/USER\.md|memory\/\d{4}-\d{2}-\d{2}\.md)$/;
-const MANIFEST_KEY = /^(\d{4}-\d{2}-\d{2})\/manifest\.([0-9a-f]{64})\.json$/;
+/** The daily-note rule, identical to the plugin's `DAILY_NOTE.fullmatch`:
+ * ASCII digits, the whole name (JS `$` without the `m` flag is end of input). */
+export const DAILY_NOTE_NAME = /^[0-9]{4}-[0-9]{2}-[0-9]{2}\.md$/;
+export const RESTORE_PATH = /^(MEMORY\.md|USER\.md|memories\/MEMORY\.md|memories\/USER\.md|memory\/[0-9]{4}-[0-9]{2}-[0-9]{2}\.md)$/;
+const MANIFEST_KEY = /^([0-9]{4}-[0-9]{2}-[0-9]{2})\/manifest\.([0-9a-f]{64})\.json$/;
 const ARCHIVE_NAME = /^memory\.([0-9a-f]{64})\.tar\.gz$/;
 const HEX64 = /^[0-9a-f]{64}$/;
+const REASON_CODE = /^[a-z_]{1,32}$/;
 const TENANT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 /** Refuse a manifest or an archive larger than this before parsing it. */
 export const MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024;
@@ -69,6 +89,11 @@ export const MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024;
 export const MAX_TAR_BYTES = 256 * 1024 * 1024;
 
 export class RestoreRefused extends Error {}
+class WriteFailed extends Error {
+  constructor(readonly written: Action[]) {
+    super("write_failed");
+  }
+}
 
 export type ManifestFile = { path: string; sha256: string; bytes: number; mtime_ms: number };
 export type Manifest = {
@@ -80,17 +105,20 @@ export type Manifest = {
   archive: { name: string; sha256: string; bytes: number };
   file_count: number;
   total_bytes: number;
+  partial?: boolean;
+  skipped?: { count: number; reasons: Record<string, number> };
   files: ManifestFile[];
 };
 
 export type RestoreResult = {
-  status: "restored" | "none" | "refused" | "error";
+  status: "restored" | "none" | "refused" | "error" | "dry_run";
   snapshot_ref: string | null;
   bytes: number;
   file_count: number;
   written: number;
   unchanged: number;
   kept_newer: number;
+  partial: boolean;
   reason?: string;
 };
 
@@ -103,6 +131,24 @@ function refuse(reason: string): never {
 }
 
 const isInt = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
+
+/** https anywhere; http only to `*.railway.internal` or the local machine; no
+ * userinfo, query or fragment. The plugin's `backup_url_allowed`, in TS. */
+export function backupUrlAllowed(url: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(url.trim());
+  } catch {
+    return false;
+  }
+  const host = u.hostname.toLowerCase();
+  if (!host || u.username || u.password || u.search || u.hash) return false;
+  if (u.protocol === "https:") return true;
+  if (u.protocol === "http:") return LOCAL_HOSTS.has(host) || host.endsWith(".railway.internal");
+  return false;
+}
 
 /** Parse and check a manifest against its key and the tenant. */
 export function parseManifest(bytes: Uint8Array, key: string, tenant: string): { manifest: Manifest; ref: string } {
@@ -136,6 +182,20 @@ export function parseManifest(bytes: Uint8Array, key: string, tenant: string): {
     total += f.bytes;
   }
   if (doc.file_count !== doc.files.length || doc.total_bytes !== total) refuse("manifest_counts_mismatch");
+  if (doc.partial !== undefined && typeof doc.partial !== "boolean") refuse("manifest_skipped_invalid");
+  if (doc.skipped !== undefined) {
+    const s = doc.skipped;
+    const reasons = s && typeof s === "object" ? s.reasons : null;
+    if (!s || !isInt(s.count) || !reasons || typeof reasons !== "object" || Array.isArray(reasons)) {
+      refuse("manifest_skipped_invalid");
+    }
+    let sum = 0;
+    for (const [code, n] of Object.entries(reasons)) {
+      if (!REASON_CODE.test(code) || !isInt(n)) refuse("manifest_skipped_invalid");
+      sum += n;
+    }
+    if (sum !== s.count || (doc.partial !== undefined && doc.partial !== s.count > 0)) refuse("manifest_skipped_invalid");
+  }
   return { manifest: doc, ref: `backup/${keyHash}` };
 }
 
@@ -228,19 +288,46 @@ export function planRestore(home: string, manifest: Manifest, entries: Map<strin
   });
 }
 
-function writeOne(home: string, file: ManifestFile, data: Uint8Array): void {
-  const parts = file.path.split("/");
-  const target = join(home, ...parts);
-  if (parts.length > 1) mkdirSync(join(home, ...parts.slice(0, -1)), { recursive: true, mode: 0o700 });
-  const tmp = join(home, ...parts.slice(0, -1), `.${parts.at(-1)}.restore-${process.pid}-${randomBytes(4).toString("hex")}`);
+/** Stage every write, then rename them all. Throws `WriteFailed` carrying what was renamed. */
+function applyWrites(home: string, writes: Action[]): void {
+  const staged: { tmp: string; target: string; item: Action }[] = [];
   try {
-    writeFileSync(tmp, data, { mode: 0o600, flag: "wx" });
-    const when = new Date(file.mtime_ms);
-    utimesSync(tmp, when, when);
-    renameSync(tmp, target);
-  } catch (err) {
-    rmSync(tmp, { force: true });
-    throw err;
+    for (const item of writes) {
+      const parts = item.file.path.split("/");
+      const dir = join(home, ...parts.slice(0, -1));
+      if (parts.length > 1) mkdirSync(dir, { recursive: true, mode: 0o700 });
+      const tmp = join(dir, `.${parts.at(-1)}.restore-${process.pid}-${randomBytes(4).toString("hex")}`);
+      staged.push({ tmp, target: join(home, ...parts), item });
+      writeFileSync(tmp, item.data, { mode: 0o600, flag: "wx" });
+      const when = new Date(item.file.mtime_ms);
+      utimesSync(tmp, when, when);
+    }
+  } catch {
+    for (const s of staged) rmSync(s.tmp, { force: true });
+    throw new WriteFailed([]);
+  }
+  const done: Action[] = [];
+  for (let i = 0; i < staged.length; i++) {
+    try {
+      renameSync(staged[i].tmp, staged[i].target);
+      done.push(staged[i].item);
+    } catch {
+      for (const s of staged.slice(i)) rmSync(s.tmp, { force: true });
+      throw new WriteFailed(done);
+    }
+  }
+}
+
+/** `$HERMES_HOME/av-events/restore.json`, written by temp file and rename. Best effort. */
+export function writeMarker(home: string, marker: Record<string, unknown>): void {
+  try {
+    const dir = join(home, "av-events");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const tmp = join(dir, `.restore.json.${process.pid}-${randomBytes(4).toString("hex")}`);
+    writeFileSync(tmp, JSON.stringify(marker), { mode: 0o600, flag: "wx" });
+    renameSync(tmp, join(dir, "restore.json"));
+  } catch {
+    // The JSON line still reports the outcome; the control plane acts on that.
   }
 }
 
@@ -286,12 +373,32 @@ const empty = (status: RestoreResult["status"], extra: Partial<RestoreResult> = 
   written: 0,
   unchanged: 0,
   kept_newer: 0,
+  partial: false,
   ...extra,
 });
 
 export async function restoreMemory(opts: RestoreOptions): Promise<RestoreResult> {
+  let key: string | null = null;
+  const result = await restoreInner(opts, (k) => {
+    key = k;
+  });
+  if (!opts.dryRun) {
+    const status = result.status === "restored" || result.status === "none" ? result.status : "error";
+    writeMarker(opts.home, {
+      status,
+      manifest_key: key,
+      ...(result.reason ? { reason: result.reason } : {}),
+      at: new Date().toISOString(),
+    });
+  }
+  return result;
+}
+
+async function restoreInner(opts: RestoreOptions, noteKey: (key: string) => void): Promise<RestoreResult> {
+  if (!backupUrlAllowed(opts.url)) return empty("error", { reason: "url_not_allowed" });
   const fetcher: Fetcher = opts.fetcher ?? ((url, init) => fetch(url, { ...init, redirect: "error" }));
   const base = `${backupBase(opts.url)}/v1/backup/${opts.tenant}`;
+  let result = empty("restored");
   try {
     let key: string;
     let manifestBytes: Uint8Array;
@@ -308,24 +415,36 @@ export async function restoreMemory(opts: RestoreOptions): Promise<RestoreResult
       manifestBytes = await body(res);
     }
     const { manifest, ref } = parseManifest(manifestBytes, key, opts.tenant);
+    noteKey(key);
     const archiveRes = await download(fetcher, `${base}/${manifest.date}/${manifest.archive.name}`, opts.token);
     if (!archiveRes) refuse("archive_missing");
     const entries = verifyArchive(await body(archiveRes), manifest);
     const plan = planRestore(opts.home, manifest, entries, Boolean(opts.force));
-    const result = empty("restored", { snapshot_ref: ref });
-    for (const item of plan) {
-      if (item.act === "unchanged") result.unchanged += 1;
-      else if (item.act === "kept_newer") result.kept_newer += 1;
-      else {
-        if (!opts.dryRun) writeOne(opts.home, item.file, item.data);
-        result.written += 1;
-        result.file_count += 1;
-        result.bytes += item.file.bytes;
-      }
+    result = empty(opts.dryRun ? "dry_run" : "restored", { snapshot_ref: ref, partial: manifest.partial === true });
+    const writes = plan.filter((item) => item.act === "write");
+    result.unchanged = plan.filter((item) => item.act === "unchanged").length;
+    result.kept_newer = plan.filter((item) => item.act === "kept_newer").length;
+    const count = (done: Action[]) => {
+      result.written = done.length;
+      result.file_count = done.length;
+      result.bytes = done.reduce((n, item) => n + item.file.bytes, 0);
+    };
+    if (opts.dryRun) {
+      count(writes);
+      return result;
     }
+    applyWrites(opts.home, writes);
+    count(writes);
     return result;
   } catch (err) {
     if (err instanceof RestoreRefused) return empty("refused", { reason: err.message });
+    if (err instanceof WriteFailed) {
+      const out = { ...result, status: "error" as const, reason: "write_failed" };
+      out.written = err.written.length;
+      out.file_count = err.written.length;
+      out.bytes = err.written.reduce((n, item) => n + item.file.bytes, 0);
+      return out;
+    }
     // Never the message of a network error: it can carry the URL.
     const reason = err instanceof Error && /^http_\d{3}$/.test(err.message) ? err.message : "fetch_failed";
     return empty("error", { reason });
@@ -370,5 +489,5 @@ if (import.meta.main) {
   const opts = parseArgs(process.argv.slice(2));
   const result = await restoreMemory(opts);
   console.log(JSON.stringify(result));
-  process.exit(result.status === "restored" || result.status === "none" ? 0 : 1);
+  process.exit(result.status === "restored" || result.status === "none" || result.status === "dry_run" ? 0 : 1);
 }

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -17,7 +18,15 @@ import { gzipSync } from "node:zlib";
 
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 
-import { parseArgs, parseTar, restoreMemory, type RestoreResult } from "../restore-memory";
+import {
+  backupUrlAllowed,
+  DAILY_NOTE_NAME,
+  parseArgs,
+  parseTar,
+  RESTORE_PATH,
+  restoreMemory,
+  type RestoreResult,
+} from "../restore-memory";
 
 const REPO = join(import.meta.dir, "..", "..");
 const TENANT = "t_Dogfood-1";
@@ -140,10 +149,12 @@ const base = () => `http://127.0.0.1:${server.port}`;
 const restore = (home: string, extra: Partial<Parameters<typeof restoreMemory>[0]> = {}) =>
   restoreMemory({ url: base(), token: TOKEN, tenant: TENANT, home, ...extra });
 
+/** Every file under `home` except the restore marker's `av-events/`. */
 function listTree(home: string): string[] {
   const out: string[] = [];
   const walk = (dir: string, prefix: string) => {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (!prefix && e.name === "av-events") continue;
       if (e.isDirectory()) walk(join(dir, e.name), `${prefix}${e.name}/`);
       else out.push(`${prefix}${e.name}`);
     }
@@ -167,6 +178,7 @@ test("restores every file byte-identical, with the snapshot's mtimes, and report
     written: 6,
     unchanged: 0,
     kept_newer: 0,
+    partial: false,
   });
   expect(listTree(home)).toEqual(Object.keys(FILES).sort());
   for (const [rel, text] of Object.entries(FILES)) {
@@ -331,11 +343,11 @@ test("a symlink or directory where a memory file goes refuses the restore before
   expect(listTree(outside)).toEqual(["victim"]);
 });
 
-test("--dry-run verifies and counts but writes nothing", async () => {
+test("--dry-run verifies and counts but writes nothing, not even the marker", async () => {
   publish(pythonSnapshot(FILES));
   const home = tempDir("home");
-  expect(await restore(home, { dryRun: true })).toMatchObject({ status: "restored", written: 6 });
-  expect(listTree(home)).toEqual([]);
+  expect(await restore(home, { dryRun: true })).toMatchObject({ status: "dry_run", written: 6 });
+  expect(readdirSync(home)).toEqual([]);
 });
 
 test("--manifest restores a named, older snapshot instead of the latest", async () => {
@@ -401,4 +413,148 @@ test("CLI: one JSON line, exit 0 on restore, 1 on refusal, 2 on usage; never the
     stderr: "pipe",
   });
   expect(await noToken.exited).toBe(2);
+});
+
+// ---------------------------------------------------------------------------
+// Refutation fixes (DATA-82 review)
+
+const VECTORS = JSON.parse(
+  readFileSync(join(REPO, "plugins", "av-events", "tests", "vectors", "daily_note_names.json"), "utf8"),
+) as { accept: string[]; reject: string[] };
+
+test("daily-note names: the same vectors as the plugin's DAILY_NOTE", () => {
+  expect(VECTORS.reject).toContain("2026-09-22.md\n");
+  expect(VECTORS.reject).toContain("２０２６-09-24.md");
+  for (const name of VECTORS.accept) {
+    expect(DAILY_NOTE_NAME.test(name)).toBe(true);
+    expect(RESTORE_PATH.test(`memory/${name}`)).toBe(true);
+  }
+  for (const name of VECTORS.reject) {
+    expect(DAILY_NOTE_NAME.test(name)).toBe(false);
+    expect(RESTORE_PATH.test(`memory/${name}`)).toBe(false);
+  }
+});
+
+test("a snapshot taken beside oddly named notes still restores", async () => {
+  const odd: Record<string, string> = { ...FILES };
+  for (const name of VECTORS.reject) if (name && !name.includes("/")) odd[`memory/${name}`] = "odd\n";
+  publish(pythonSnapshot(odd));
+  const home = tempDir("home");
+  expect(await restore(home)).toMatchObject({ status: "restored", written: 6 });
+  expect(listTree(home)).toEqual(Object.keys(FILES).sort());
+});
+
+function tarEntry(name: string, data: Uint8Array): Uint8Array {
+  const header = new Uint8Array(512);
+  const put = (at: number, text: string) => header.set(new TextEncoder().encode(text), at);
+  put(0, name);
+  put(100, "0000600\0");
+  put(124, data.length.toString(8).padStart(11, "0") + "\0");
+  put(136, "00000000000\0");
+  header[156] = 0x30;
+  put(257, "ustar\0");
+  put(263, "00");
+  const padded = new Uint8Array(Math.ceil(data.length / 512) * 512);
+  padded.set(data);
+  return new Uint8Array([...header, ...padded]);
+}
+
+test("a tar holding the same path twice is refused", () => {
+  const a = tarEntry("MEMORY.md", new TextEncoder().encode("one\n"));
+  const b = tarEntry("MEMORY.md", new TextEncoder().encode("two\n"));
+  expect(() => parseTar(new Uint8Array([...a, ...b, ...new Uint8Array(1024)]))).toThrow("tar_duplicate_entry");
+  expect(parseTar(new Uint8Array([...a, ...new Uint8Array(1024)])).get("MEMORY.md")).toEqual(new TextEncoder().encode("one\n"));
+});
+
+test("a manifest whose date is not its key's date is refused", async () => {
+  const snap = pythonSnapshot(FILES);
+  publishEdited(snap, (doc) => {
+    doc.date = "2026-01-01";
+  });
+  expect(await restore(tempDir("home"))).toMatchObject({ status: "refused", reason: "manifest_date_mismatch" });
+});
+
+test("partial: the manifest's flag is reported; inconsistent skip counts are refused", async () => {
+  const snap = pythonSnapshot(FILES);
+  publishEdited(snap, (doc) => {
+    doc.partial = true;
+    doc.skipped = { count: 2, reasons: { over_budget: 2 } };
+  });
+  expect(await restore(tempDir("home"))).toMatchObject({ status: "restored", partial: true, written: 6 });
+  for (const skipped of [
+    { count: 3, reasons: { over_budget: 2 } },
+    { count: 1, reasons: { "memory/2026-09-23.md": 1 } },
+    { count: -1, reasons: {} },
+  ]) {
+    publishEdited(snap, (doc) => {
+      doc.partial = true;
+      doc.skipped = skipped;
+    });
+    expect(await restore(tempDir("home"))).toMatchObject({ status: "refused", reason: "manifest_skipped_invalid" });
+  }
+  publish(snap);
+  expect(await restore(tempDir("home"))).toMatchObject({ status: "restored", partial: false });
+});
+
+function marker(home: string) {
+  return JSON.parse(readFileSync(join(home, "av-events", "restore.json"), "utf8"));
+}
+
+test("the marker records restored, none and error, with the manifest key", async () => {
+  const snap = pythonSnapshot(FILES);
+  publish(snap);
+  const ok = tempDir("ok");
+  await restore(ok);
+  expect(marker(ok)).toMatchObject({ status: "restored", manifest_key: `${snap.date}/${snap.manifestName}` });
+  expect(statSync(join(ok, "av-events", "restore.json")).mode & 0o777).toBe(0o600);
+
+  route.latest = null;
+  const none = tempDir("none");
+  await restore(none);
+  expect(marker(none)).toMatchObject({ status: "none", manifest_key: null });
+
+  publishEdited(snap, (doc) => {
+    doc.files[0].sha256 = "0".repeat(64);
+  });
+  const bad = tempDir("bad");
+  await restore(bad);
+  expect(marker(bad)).toMatchObject({ status: "error", reason: "file_hash_mismatch" });
+
+  route.status = 503;
+  const down = tempDir("down");
+  await restore(down);
+  expect(marker(down)).toMatchObject({ status: "error", reason: "http_503" });
+});
+
+test("a read-only memory/ is write_failed, and nothing is written anywhere", async () => {
+  publish(pythonSnapshot(FILES));
+  const home = tempDir("home");
+  mkdirSync(join(home, "memory"));
+  chmodSync(join(home, "memory"), 0o500);
+  try {
+    const result = await restore(home);
+    expect(result).toMatchObject({ status: "error", reason: "write_failed", written: 0, file_count: 0, bytes: 0 });
+    expect(existsSync(join(home, "MEMORY.md"))).toBe(false);
+    expect(existsSync(join(home, "memories", "MEMORY.md"))).toBe(false);
+    expect(readdirSync(home).filter((n) => n.startsWith("."))).toEqual([]);
+    expect(readdirSync(join(home, "memory"))).toEqual([]);
+    expect(marker(home)).toMatchObject({ status: "error", reason: "write_failed" });
+  } finally {
+    chmodSync(join(home, "memory"), 0o700);
+  }
+});
+
+test("the backup URL must be https, or http to railway.internal or the local machine", async () => {
+  expect(backupUrlAllowed("https://ingest.example.com")).toBe(true);
+  expect(backupUrlAllowed("http://ingest.railway.internal:8080")).toBe(true);
+  expect(backupUrlAllowed("http://127.0.0.1:9")).toBe(true);
+  expect(backupUrlAllowed("http://[::1]:9")).toBe(true);
+  expect(backupUrlAllowed("http://ingest.example.com")).toBe(false);
+  expect(backupUrlAllowed("http://railway.internal.evil.com")).toBe(false);
+  expect(backupUrlAllowed("https://u:p@ingest.example.com")).toBe(false);
+  expect(backupUrlAllowed("https://ingest.example.com/?x=1")).toBe(false);
+  const home = tempDir("home");
+  const result = await restoreMemory({ url: "http://ingest.example.com", token: TOKEN, tenant: TENANT, home });
+  expect(result).toMatchObject({ status: "error", reason: "url_not_allowed" });
+  expect(route.requests).toEqual([]);
 });
