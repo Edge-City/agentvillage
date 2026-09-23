@@ -55,6 +55,7 @@ from ._core import (
     sqlite_read,
     uuid7,
 )
+from . import _backup
 from ._cron import CronCursor, cron_job_id_from, pending_runs
 from ._edgeos import Ledger
 
@@ -251,6 +252,7 @@ class Config:
 
     __slots__ = (
         "enabled", "url", "token", "capture", "disabled_hooks", "home", "buffer_dir", "state_dir", "tenant_id",
+        "backup_url", "backup_token", "backup_tenant", "backup_max_bytes",
     )
 
     def __init__(self) -> None:
@@ -275,6 +277,20 @@ class Config:
         # upper-case UUID in the env must not change every `cron.run` id.
         self.tenant_id = tenant.lower() if 0 < len(tenant) <= 128 else ""
         register_literal_secret(self.token)
+        # Memory snapshot (DATA-82, `_backup`). Its own URL and token: the
+        # backup route is not the events route, and the token is a different
+        # class (`backup_write`). The tenant is used exactly as given — it is a
+        # bucket key segment and the input the route derives the token from,
+        # so lower-casing it (as `cron.run` does) could only break the match.
+        self.backup_url = env("AV_BACKUP_URL")
+        self.backup_token = env("AV_BACKUP_TOKEN")
+        register_literal_secret(self.backup_token)
+        self.backup_tenant = tenant if _backup.TENANT_SEGMENT.match(tenant) else ""
+        try:
+            limit = int(env("AV_BACKUP_MAX_BYTES") or 0)
+        except ValueError:
+            limit = 0
+        self.backup_max_bytes = limit if limit > 0 else _backup.DEFAULT_MAX_BYTES
 
     @property
     def idle(self) -> bool:
@@ -289,6 +305,20 @@ class Config:
     @property
     def active(self) -> bool:
         return self.enabled and not self.idle
+
+    @property
+    def backup_configured(self) -> bool:
+        """Snapshots run only with a URL, a token and a usable tenant id, and
+        never with the plugin switched off. They do not need `AV_EVENTS_TOKEN`:
+        the backup is operational, and `memory.snapshot` is simply owed until
+        events can be emitted (`_backup.run_once`)."""
+        return (
+            self.enabled
+            and bool(self.backup_url)
+            and bool(self.backup_token)
+            and bool(self.backup_tenant)
+            and "memory_snapshot" not in self.disabled_hooks
+        )
 
 
 # --------------------------------------------------------------------------
@@ -415,6 +445,15 @@ class Collector:
         self._check_tenant_id()
         #: Test seam. When set, used in place of `post_events`.
         self.sender: Optional[Callable[[str, str, list], SendResult]] = None
+        #: Memory snapshot (`_backup`): a single-flight daemon thread, started
+        #: by `request_snapshot` and gone when nothing is pending.
+        self._backup_lock = threading.Lock()
+        self._backup_pending = False
+        self._backup_thread: Optional[threading.Thread] = None
+        #: monotonic time before which no upload is tried (after a 401/403).
+        self.backup_blocked_until = 0.0
+        #: Test seam. When set, used in place of `_backup.put_object`.
+        self.backup_uploader: Optional[_backup.Uploader] = None
 
     # -- lifecycle --------------------------------------------------------
 
@@ -460,15 +499,25 @@ class Collector:
         thread = threading.Thread(target=self._loop, name="av-events-flush", daemon=True)
         self._thread = thread
         thread.start()
+        self._register_atexit()
+
+    def _register_atexit(self) -> None:
         if not self._atexit_registered:
             atexit.register(self.shutdown)
             self._atexit_registered = True
 
     def shutdown(self) -> None:
-        """Best-effort final flush. Bounded; the buffer survives on disk anyway."""
+        """Best-effort final snapshot and flush. Bounded; the buffer survives on disk anyway.
+
+        The snapshot goes first, so its `memory.snapshot` is in the buffer when
+        the flush runs. Gateway shutdown finalizes open sessions
+        (`gateway/run_shutdown.py`), which requests a snapshot on a daemon
+        thread that would otherwise die with the process.
+        """
         try:
             self._stop.set()
             self._wake.set()
+            self._drain_backup()
             buffer = self.buffer
             if buffer is None:
                 return
@@ -677,6 +726,78 @@ class Collector:
         if buffer is not None:
             buffer.rotate_if_due(force=True)
         self._wake.set()
+
+    # -- memory snapshot (DATA-82) -----------------------------------------
+
+    def count(self, name: str, n: int = 1) -> None:
+        """Bump a diagnostic counter, and log it once per process as a name and
+        a count. Never the value or the path that tripped it."""
+        with self._lock:
+            self.counters[name] = self.counters.get(name, 0) + n
+            value = self.counters[name]
+            first = name not in _LOGGED_COUNTERS
+            _LOGGED_COUNTERS.add(name)
+        if first and name != "backup_uploaded":
+            logger.warning("av-events: %s=%d", name, value)
+
+    def request_snapshot(self) -> bool:
+        """Ask for a memory snapshot. Returns at once; never I/O, never raises.
+
+        Called from `on_session_finalize`. Collecting, compressing and uploading
+        all happen on a single-flight daemon thread: a request while a pass is
+        running sets a flag, and that thread runs one more pass, so the last
+        session to finalize is always captured and there is never more than one
+        snapshot thread.
+        """
+        try:
+            if self.plugin_disabled or not self.config.backup_configured:
+                return False
+            with self._backup_lock:
+                self._backup_pending = True
+                if self._backup_thread is not None and self._backup_thread.is_alive():
+                    return True
+                thread = threading.Thread(target=self._backup_loop, name="av-events-backup", daemon=True)
+                self._backup_thread = thread
+                thread.start()
+            self._register_atexit()
+            return True
+        except Exception:  # noqa: BLE001 - a snapshot never costs the hook anything
+            self.count("backup_error")
+            return False
+
+    def _backup_loop(self) -> None:
+        while True:
+            with self._backup_lock:
+                if not self._backup_pending or self._stop.is_set():
+                    if self._backup_thread is threading.current_thread():
+                        self._backup_thread = None
+                    return
+                self._backup_pending = False
+            self.snapshot_once()
+
+    def snapshot_once(self, now: Optional[float] = None, timeout: float = _backup.UPLOAD_TIMEOUT_S) -> str:
+        """One snapshot pass (`_backup.run_once`). Tests call it directly."""
+        if self.plugin_disabled:
+            return "disabled"
+        return _backup.run_once(self, now, timeout)
+
+    def _drain_backup(self, budget: float = _backup.EXIT_BUDGET_S) -> None:
+        """At exit: let a running snapshot finish, or run a pending one, within `budget`."""
+        try:
+            deadline = time.monotonic() + budget
+            thread = self._backup_thread
+            if thread is not None and thread.is_alive():
+                thread.join(max(0.0, deadline - time.monotonic()))
+                if thread.is_alive():
+                    return
+            with self._backup_lock:
+                pending, self._backup_pending = self._backup_pending, False
+            remaining = deadline - time.monotonic()
+            if pending and remaining > 1.0:
+                # Two PUTs share what is left.
+                self.snapshot_once(timeout=remaining / 2)
+        except Exception:  # noqa: BLE001 - never raise out of atexit
+            pass
 
     def nudge_flush(self) -> None:
         """Ask the flusher to run now. Returns immediately; never sends inline."""

@@ -37,6 +37,9 @@ AV_ENV_VARS = (
     "AV_OVERLAY_REF",
     "TENANT_ID",
     "AV_TENANT_ID",
+    "AV_BACKUP_URL",
+    "AV_BACKUP_TOKEN",
+    "AV_BACKUP_MAX_BYTES",
 )
 
 

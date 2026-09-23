@@ -22,6 +22,7 @@ from typing import Any, Optional
 from . import _edgeos
 from ._collector import Collector, guarded, hermes_version, overlay_ref
 from ._core import (
+    PLUGIN_VERSION,
     hash_obj,
     hash_text,
     iso_from_epoch,
@@ -41,7 +42,7 @@ from ._tools import (
     tool_category,
 )
 
-__version__ = "0.1.0"
+__version__ = PLUGIN_VERSION
 
 #: Hermes reports a `platform`; the catalogue (spec §4.1 `session.*`) wants a
 #: `source`. Anything unrecognised passes through as-is rather than being
@@ -652,8 +653,15 @@ def _hook_on_session_end(collector: Collector, **kwargs: Any) -> None:
 
 def _hook_on_session_finalize(collector: Collector, **kwargs: Any) -> None:
     """The real session close: `session.ended` with Hermes's cost figures for
-    the session, then `profile.updated` if USER.md changed. In that order, so
-    nothing the profile check does can cost the session its end event."""
+    the session, then `profile.updated` if USER.md changed, then a request for
+    a memory snapshot. In that order, so nothing the profile check or the
+    snapshot does can cost the session its end event.
+
+    The snapshot request only sets a flag and starts (or reuses) a daemon
+    thread: the files are read, packed and uploaded there, never here. Hermes
+    has no shutdown hook at `0.21.3`; gateway shutdown finalizes open sessions,
+    which lands here, and the plugin's atexit drain gives that snapshot a
+    bounded chance to finish (`Collector.shutdown`)."""
     session_id = kwargs.get("session_id")
     if not session_id:
         return
@@ -662,6 +670,7 @@ def _hook_on_session_finalize(collector: Collector, **kwargs: Any) -> None:
     cost = collector.read_session_cost(session_id) if state is not None and not state.ended else {}
     collector.session_ended(session_id, **cost)
     collector.check_profile(session_id)
+    collector.request_snapshot()
 
 
 def _hook_subagent_start(collector: Collector, **kwargs: Any) -> None:
