@@ -44,6 +44,7 @@ plugins/av-events/
 | `AV_BACKUP_TOKEN` | *(unset)* | The tenant's `backup_write` token (DATA-93). Required with the URL. Redacted like `AV_EVENTS_TOKEN`. |
 | `AV_BACKUP_MAX_BYTES` | `33554432` | Most file bytes a snapshot reads (the rest are skipped and the snapshot marked partial) and largest compressed archive it uploads. |
 | `AV_BACKUP_MIN_INTERVAL_S` | `300` | Least time between two turn-triggered snapshot passes. A session finalize is not held to it. |
+| `AV_BACKUP_GRACE_S` | `90` | Least time between a snapshot request and the pass that covers it, so the background memory review's writes after a turn are included. |
 
 Every variable is read from the process environment first and then from `$HERMES_HOME/.env`, the
 same fallback `plugins/dashboard-auth-edgecity` uses. The dotfile is parsed once and memoised on its
@@ -560,23 +561,31 @@ one daemon thread (`av-events-backup`):
 
 - **Every turn**: `on_session_end`, which Hermes fires once per user message (divergence 4). This is
   the trigger that keeps the backup current. A gateway's conversations are usually never finalized:
-  a Telegram chat just goes quiet. These requests are rate-limited: the thread waits until
-  `AV_BACKUP_MIN_INTERVAL_S` (default 300 s) has passed since the last pass began, and the turns in
-  between fold into that one pass. So the last turn is always captured, at most one interval late.
+  a Telegram chat just goes quiet.
 - **Every session finalize**: `on_session_finalize`, after `session.ended` and `profile.updated`.
-  It is not held to the interval: a waiting thread is woken and runs at once.
+  Its pass runs at once: a waiting thread is woken.
 
-The thread runs passes until no request is pending, and there is never a second thread. An
-unchanged workspace uploads nothing, so a pass is a read and a hash.
+**Scheduling.** Every request is covered by a pass that starts at least `AV_BACKUP_GRACE_S`
+(default 90 s) after it. Hermes's background memory review writes `memories/MEMORY.md` and
+`USER.md` a few seconds after `on_session_end`, and a pass that ran at once would miss those writes
+whenever the chat then went quiet. The next pass is due at `max(last pass + AV_BACKUP_MIN_INTERVAL_S
+(default 300 s), earliest uncovered request + AV_BACKUP_GRACE_S)`. The *earliest* request fixes the
+due time, so a busy chat cannot push the pass back indefinitely. A pass covers every request at
+least a grace old. A younger one is owed a trailing pass, so there is always one after the last
+turn, including after a finalize's immediate pass. The thread runs until nothing is owed, and there
+is never a second thread. An unchanged workspace uploads nothing, so a pass is a read and a hash.
 
-**Exit.** Hermes has no shutdown hook at `0.21.3` (`VALID_HOOKS`), but gateway shutdown finalizes open
-sessions (`gateway/run_shutdown.py`). The plugin's exit handler (`Collector.shutdown`) then joins the
-snapshot thread for at most 10 s (`EXIT_BUDGET_S`) before the final event flush. The pass always
-runs on that thread, never the exiting one, so a hung upload costs the exit 10 s and no more. If a
-request is pending and no thread is alive, one is started if the interpreter still allows it. Python
-3.12+ refuses new threads at shutdown; the snapshot is then skipped and counted as
-`backup_exit_skipped`. **This is the last chance, not the mechanism**: the per-turn passes are what
-the backup relies on.
+**Exit.** Hermes has no shutdown hook at `0.21.3` (`VALID_HOOKS`). **The gateway exits through
+`os._exit`** (`gateway/run.py` `_exit_after_graceful_shutdown`), which runs no `atexit` handler at
+all. Gateway shutdown finalizes open sessions (`gateway/run_shutdown.py`), so a pass is requested,
+but the daemon thread dies with the process wherever it has got to. In a gateway, then, **the backup
+is exactly as current as the last completed turn-triggered pass**, and the grace and interval above
+are what bound its lag. The exit drain (`Collector.shutdown`) matters only in a CLI or desktop
+process that exits normally. There it joins the snapshot thread for at most 10 s (`EXIT_BUDGET_S`)
+before the final event flush. The pass runs on that thread, never the exiting one, so a hung upload
+costs the exit 10 s and no more. If a request is pending and no thread is alive, one is started if
+the interpreter allows it. Python 3.12+ refuses new threads at shutdown; the snapshot is then
+skipped and counted as `backup_exit_skipped`.
 
 **What.** A fixed allowlist relative to `$HERMES_HOME`, never a directory walk:
 
@@ -632,15 +641,29 @@ segment disables snapshots.
 
 **Unchanged means nothing.** `$HERMES_HOME/av-events/backup.json` records the last snapshot's
 `content_hash`, manifest hash and destination (a hash of URL and tenant, never the URL). A pass whose
-archive hashes the same, to the same destination, uploads nothing and emits nothing. The manifest
-itself carries `created_at` and so is never byte-stable. The comparison is therefore on
-`content_hash`, which covers every path and byte. A workspace with no memory files at all uploads
-nothing either: an empty snapshot would become "latest" and a recreate would restore nothing over a
-real backup. For the same reason nothing is uploaded while `av-events/restore.json` (written by
-`install/restore-memory.ts`) says `error`: the sandbox does not hold the tenant's memory. That skip
-is counted as `backup_blocked_by_restore`. A later successful restore, or an operator removing the
-marker, lifts it. A `created_at` read back from `backup.json` must be an ISO-8601 UTC timestamp
-before it can become an owed event's `occurred_at`; a record that fails any check is ignored.
+archive hashes the same, with the same skips, to the same destination, uploads nothing and emits
+nothing. "The same" is the pair `(content_hash, skipped {count, reasons})`. The manifest itself
+carries `created_at` and so is never byte-stable. A new file that is skipped (too large, say)
+leaves the archive unchanged but makes the snapshot partial, and the latest manifest must say so.
+The route keeps what it has accepted. `backup.json` remembers the archive hashes the current
+destination has accepted (the last 64), and an archive already accepted is never PUT again. The
+same archive with new skips therefore costs one manifest PUT.
+
+A workspace with no memory files at all uploads nothing: an empty snapshot would become "latest"
+and a recreate would restore nothing over a real backup.
+
+**After a failed restore.** `install/restore-memory.ts` writes `av-events/restore.json` with
+`workspace_empty`: whether none of the memory files existed before it ran. Uploads are blocked
+(`backup_blocked_by_restore`) only after an `error` on an **empty** workspace. There the sandbox
+does not hold the tenant's memory, and a snapshot of what is there would become "latest" over the
+real backup. A refusal on a populated workspace blocks nothing: what is there is the memory. The
+block lifts 24 hours after the marker's `at` (`backup_block_expired`), or at once when a later
+restore succeeds or an operator removes the marker. A marker without a readable `at`, or dated in
+the future, counts as expired. **The agent can write this file too**; that only ever affects its
+own tenant's backups, and never for more than 24 hours per write.
+
+A `created_at` read back from `backup.json` must be an ISO-8601 UTC timestamp before it can become
+an owed event's `occurred_at`; a record that fails any check is ignored.
 
 **The event.** `memory.snapshot` is emitted once both PUTs return 2xx. Its payload is
 `{bytes: total of the files' sizes, file_count, content_hash, manifest_ref: "backup/<manifest
@@ -650,10 +673,11 @@ the snapshot's `created_at`. `bytes` is file bytes, not archive bytes, so it is 
 (no token, the plugin off), `backup.json` records `emitted: false`, and a later pass emits the owed
 event without uploading again.
 
-**Failure.** Any non-2xx or network error is `backup_upload_failed`, nothing is recorded, and the
-next request tries again. After a 401 nothing is tried for an hour (`backup_upload_401`: a wrong or
-rotated token an operator may fix). After a 403 nothing is tried for 24 hours (`backup_forbidden`):
-the route refuses a withdrawn tenant (DATA-93). An archive over `AV_BACKUP_MAX_BYTES` is
+**Failure.** Any non-2xx or network error is `backup_upload_failed`, and no snapshot is recorded
+as done. Consecutive failures back off exponentially: 5 min, doubling, capped at 6 h
+(`BACKOFF_BASE_S`, `BACKOFF_MAX_S`), reset by a success. A 401 holds off at least an hour
+(`backup_upload_401`: a wrong or rotated token an operator may fix). A 403 holds off at least
+24 hours (`backup_forbidden`): the route refuses a withdrawn tenant (DATA-93). An archive over `AV_BACKUP_MAX_BYTES` is
 `backup_too_large`. Any exception is `backup_error`. Each counter is logged once per process as a name and a count, never a path or a
 value. The hook breaker never counts a backup failure. **Switches**: unset `AV_BACKUP_URL` (or
 the token, or the tenant), `AV_EVENTS_ENABLED=0`, or `AV_HOOKS_DISABLED=memory_snapshot`.
@@ -674,9 +698,10 @@ writes `$HERMES_HOME/av-events/restore.json` (`status` ∈ `restored|none|error`
 
 **For the control plane:**
 
-- **Do not start the gateway on a restore `error`.** The sandbox then lacks the tenant's memory. The
-  marker stops the plugin from uploading over the real backup, but a running agent would start
-  writing new memory on an empty slate.
+- **Do not start the gateway on a restore `error`.** The sandbox then lacks the tenant's memory. On
+  an empty workspace the marker stops the plugin from uploading over the real backup for 24 hours,
+  but a running agent would start writing new memory on an empty slate. After the 24 hours it would
+  upload that slate as "latest"; older snapshots stay in the bucket and `--manifest` restores one.
 - Run the restore before anything writes a fresh `USER.md`: a template written after the snapshot
   is "newer" and would be kept.
 - `reset.ts --wipe-user` removes `av-events/` (with `backup.json` and `restore.json`) and both
@@ -755,6 +780,15 @@ Either way one `plugin.buffer_dropped` is emitted on the next successful flush, 
 
 Shutdown is a daemon thread plus an `atexit` hook that force-rotates and makes one bounded
 (5 second) attempt at each pending batch. Anything it cannot send survives on disk.
+
+**Known issue: the gateway never runs that hook.** Hermes's gateway exits through `os._exit`
+(`gateway/run.py` `_exit_after_graceful_shutdown`, #53107), which bypasses `atexit`. In a gateway,
+the last up-to-10-second batch (`current-<pid>.jsonl`, not yet rotated) and any rotated batch not
+yet sent are left on disk, to be sent by the next process on the same disk. On a sandbox recreate
+there is no next process on that disk, and they are lost: typically the `session.ended` of the
+sessions the shutdown finalized. The flusher's own 1-second tick narrows the window but does not
+close it. This predates DATA-82 and is ticketed separately; the memory snapshot does not rely on
+`atexit` (see "Memory snapshot").
 
 **Null-sink mode** (`AV_EVENTS_TOKEN` set, `AV_EVENTS_URL` empty): events are written to the buffer
 and never sent, so the plugin can run on a dogfood tenant before ingest exists. In this mode batches

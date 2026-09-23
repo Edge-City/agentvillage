@@ -253,7 +253,7 @@ class Config:
     __slots__ = (
         "enabled", "url", "token", "capture", "disabled_hooks", "home", "buffer_dir", "state_dir", "tenant_id",
         "backup_url", "backup_url_refused", "backup_token", "backup_tenant", "backup_max_bytes",
-        "backup_min_interval_s",
+        "backup_min_interval_s", "backup_grace_s",
     )
 
     def __init__(self) -> None:
@@ -305,6 +305,11 @@ class Config:
         except ValueError:
             interval = _backup.DEFAULT_MIN_INTERVAL_S
         self.backup_min_interval_s = interval if math.isfinite(interval) and interval >= 0 else _backup.DEFAULT_MIN_INTERVAL_S
+        try:
+            grace = float(env("AV_BACKUP_GRACE_S") or _backup.DEFAULT_GRACE_S)
+        except ValueError:
+            grace = _backup.DEFAULT_GRACE_S
+        self.backup_grace_s = grace if math.isfinite(grace) and grace >= 0 else _backup.DEFAULT_GRACE_S
 
     @property
     def idle(self) -> bool:
@@ -471,9 +476,18 @@ class Collector:
         self._backup_wake = threading.Event()
         #: monotonic start of the last pass, for `AV_BACKUP_MIN_INTERVAL_S`.
         self._backup_last: Optional[float] = None
+        #: monotonic times of the earliest and latest request no pass has yet
+        #: covered. A pass starting at `s` covers a request made at `r` when
+        #: `r + AV_BACKUP_GRACE_S <= s`: the background memory review writes
+        #: `memories/*.md` a few seconds after the turn that triggered it.
+        self._backup_first_req: Optional[float] = None
+        self._backup_last_req: Optional[float] = None
         self._backup_thread: Optional[threading.Thread] = None
-        #: monotonic time before which no upload is tried (after a 401/403).
+        #: monotonic time before which no upload is tried (after a 401/403, or
+        #: during the exponential backoff after consecutive failures).
         self.backup_blocked_until = 0.0
+        #: Consecutive failed passes, for the backoff. Reset on success.
+        self.backup_failures = 0
         #: Test seam. When set, used in place of `_backup.put_object`.
         self.backup_uploader: Optional[_backup.Uploader] = None
 
@@ -767,11 +781,16 @@ class Collector:
 
         Called from `on_session_end` (every turn) and `on_session_finalize`
         (`urgent`). Collecting, compressing and uploading all happen on a
-        single-flight daemon thread: a request while a pass is running or
-        waiting sets a flag, and that thread runs one more pass, so the last
-        turn is always captured and there is never more than one snapshot
-        thread. A turn's request waits out `AV_BACKUP_MIN_INTERVAL_S` since the
-        last pass began; a finalize's does not.
+        single-flight daemon thread, and there is never more than one.
+
+        Scheduling: every request is covered by a pass that starts at least
+        `AV_BACKUP_GRACE_S` after it, so the background memory review's writes
+        (a few seconds after `on_session_end`) are in the snapshot even when
+        the chat then goes quiet. The next pass is due at
+        `max(last pass + AV_BACKUP_MIN_INTERVAL_S, earliest uncovered request
+        + AV_BACKUP_GRACE_S)`. The earliest request fixes the due time, so a
+        busy chat cannot push it back indefinitely. A finalize's pass runs at
+        once, and the grace still schedules a trailing pass after it.
         """
         try:
             if self.plugin_disabled:
@@ -782,7 +801,11 @@ class Collector:
             if not self.config.backup_configured:
                 return False
             with self._backup_lock:
+                now = time.monotonic()
                 self._backup_pending = True
+                if self._backup_first_req is None:
+                    self._backup_first_req = now
+                self._backup_last_req = now
                 if urgent:
                     self._backup_urgent = True
                 self._backup_wake.set()
@@ -810,14 +833,25 @@ class Collector:
                     if self._backup_thread is threading.current_thread():
                         self._backup_thread = None
                     return
+                now = time.monotonic()
                 wait = 0.0
-                if not (self._backup_urgent or self._backup_final) and self._backup_last is not None:
-                    wait = self._backup_last + self.config.backup_min_interval_s - time.monotonic()
+                if not (self._backup_urgent or self._backup_final):
+                    due = (self._backup_first_req or now) + self.config.backup_grace_s
+                    if self._backup_last is not None:
+                        due = max(due, self._backup_last + self.config.backup_min_interval_s)
+                    wait = due - now
                 self._backup_wake.clear()
                 if wait <= 0:
-                    self._backup_pending = False
+                    # This pass covers every request at least a grace old. A
+                    # younger one (the latest) is still owed a trailing pass.
+                    latest = self._backup_last_req
+                    if latest is not None and latest + self.config.backup_grace_s > now and not self._backup_final:
+                        self._backup_first_req = latest
+                    else:
+                        self._backup_pending = False
+                        self._backup_first_req = self._backup_last_req = None
                     self._backup_urgent = False
-                    self._backup_last = time.monotonic()
+                    self._backup_last = now
             if wait > 0:
                 # Woken early by an urgent request or by exit; either way the
                 # loop re-reads the flags.

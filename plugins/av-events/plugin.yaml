@@ -15,6 +15,7 @@ optional_env:
   - AV_BACKUP_TOKEN
   - AV_BACKUP_MAX_BYTES
   - AV_BACKUP_MIN_INTERVAL_S
+  - AV_BACKUP_GRACE_S
 # Documentation only — Hermes reads hooks from ctx.register_hook(), never from
 # this list (hermes_cli/plugins.py:4831).
 provides_hooks:

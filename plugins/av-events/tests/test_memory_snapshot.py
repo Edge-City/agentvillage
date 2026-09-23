@@ -147,6 +147,9 @@ def backup_env(home, monkeypatch):
     monkeypatch.setenv("AV_BACKUP_TOKEN", TOKEN)
     monkeypatch.setenv("AV_TENANT_ID", TENANT)
     monkeypatch.setenv("AV_EVENTS_TOKEN", "events-token-for-tests")
+    # No trailing-pass grace unless a test is about it: otherwise every
+    # threaded test would wait out the 90 s default.
+    monkeypatch.setenv("AV_BACKUP_GRACE_S", "0")
     return home
 
 
@@ -413,15 +416,24 @@ def test_the_backup_token_never_lands_on_disk(collector, backup_env):
 
 
 @pytest.mark.parametrize("statuses", [[500], [201, 503], [413]])
-def test_a_failed_upload_is_counted_and_retried_next_time(collector, backup_env, av, statuses):
+def test_a_failed_upload_is_counted_backed_off_and_retried(collector, backup_env, av, statuses):
     write_tree(backup_env, ALLOWED)
     collector.backup_uploader = Uploads(results=statuses)
     assert collector.snapshot_once(now=NOW) == "failed"
     assert collector.counters.get("backup_upload_failed") == 1
     assert snapshots_in(av, collector) == []
-    assert not (backup_env / "av-events" / "backup.json").exists()
-    assert collector.snapshot_once(now=NOW + 60) == "uploaded"
+    state = json.loads((backup_env / "av-events" / "backup.json").read_text()) if (
+        backup_env / "av-events" / "backup.json"
+    ).exists() else {}
+    assert "content_hash" not in state  # no snapshot recorded as done
+    assert collector.snapshot_once(now=NOW + 60) == "blocked"  # backing off
+    collector.backup_blocked_until = 0.0  # the backoff has run out
+    assert collector.snapshot_once(now=NOW + 400) == "uploaded"
+    assert collector.backup_failures == 0
     assert len(snapshots_in(av, collector)) == 1
+    archive_puts = collector.backup_uploader.by_prefix("memory.")
+    # [201, 503]: the route accepted the archive, so the retry PUTs only the manifest.
+    assert len(archive_puts) == (1 if statuses == [201, 503] else 2)
 
 
 def test_an_uploader_that_raises_never_escapes(collector, backup_env, av):
@@ -820,9 +832,29 @@ def test_skip_reasons_reach_the_manifest_as_codes(collector, backup_env):
     assert "2026-09-23" not in json.dumps(manifest["skipped"])
 
 
-@pytest.mark.parametrize(("status", "blocked"), [("error", True), ("restored", False), ("none", False)])
-def test_a_failed_restore_blocks_uploads(collector, backup_env, status, blocked):
-    write_tree(backup_env, {**ALLOWED, "av-events/restore.json": json.dumps({"status": status}).encode()})
+def _iso(epoch: float) -> str:
+    """UTC ISO-8601 at ms, as the restore marker's `at` (evaluated at collection time)."""
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+@pytest.mark.parametrize(
+    ("marker", "blocked", "expired"),
+    [
+        ({"status": "error", "workspace_empty": True, "at": _iso(NOW - 3600)}, True, False),
+        ({"status": "error", "workspace_empty": False, "at": _iso(NOW - 3600)}, False, False),
+        ({"status": "error", "at": _iso(NOW - 3600)}, False, False),
+        ({"status": "error", "workspace_empty": True, "at": _iso(NOW - 25 * 3600)}, False, True),
+        ({"status": "error", "workspace_empty": True, "at": _iso(NOW + 86400)}, False, True),
+        ({"status": "error", "workspace_empty": True, "at": "not a time"}, False, True),
+        ({"status": "error", "workspace_empty": True}, False, True),
+        ({"status": "restored", "workspace_empty": True, "at": _iso(NOW - 60)}, False, False),
+        ({"status": "none", "workspace_empty": True, "at": _iso(NOW - 60)}, False, False),
+    ],
+)
+def test_only_a_recent_failed_restore_on_an_empty_workspace_blocks_uploads(collector, backup_env, marker, blocked, expired):
+    write_tree(backup_env, {**ALLOWED, "av-events/restore.json": json.dumps(marker).encode()})
     result = collector.snapshot_once(now=NOW)
     if blocked:
         assert result == "blocked_by_restore"
@@ -830,6 +862,7 @@ def test_a_failed_restore_blocks_uploads(collector, backup_env, status, blocked)
         assert collector.counters.get("backup_blocked_by_restore") == 1
     else:
         assert result == "uploaded"
+    assert collector.counters.get("backup_block_expired", 0) == (1 if expired else 0)
 
 
 def test_a_bad_created_at_in_the_state_file_never_reaches_the_envelope(collector, backup_env, av):
@@ -999,3 +1032,138 @@ def test_the_exit_drain_skips_when_no_thread_can_start(collector, backup_env, mo
     assert time.monotonic() - start < 0.5
     assert collector.backup_uploader.calls == []
     assert collector.counters.get("backup_exit_skipped") == 1
+
+
+# --------------------------------------------------------------------------
+# Recheck fixes: trailing pass, skips as change, upload backoff
+# --------------------------------------------------------------------------
+
+
+def test_the_memory_review_write_after_the_last_turn_is_captured(plugin, ctx, backup_env, monkeypatch):
+    """Hermes's background memory review writes `memories/MEMORY.md` a few
+    seconds after `on_session_end`. With no further turn and no finalize, the
+    trailing pass (due `AV_BACKUP_GRACE_S` after the request) must include it."""
+    monkeypatch.setenv("AV_BACKUP_GRACE_S", "6")
+    monkeypatch.setenv("AV_BACKUP_MIN_INTERVAL_S", "0.1")
+    plugin.register(ctx)
+    col = plugin._COLLECTOR
+    col.backup_uploader = Uploads()
+    write_tree(backup_env, ALLOWED)
+    ctx.fire("on_session_start", session_id="tg-quiet", model="m", platform="telegram")
+    turn_at = time.monotonic()
+    ctx.fire("on_session_end", session_id="tg-quiet", completed=True)
+    time.sleep(5)
+    assert col.backup_uploader.calls == []  # nothing yet: the grace has not run out
+    write_tree(backup_env, {"memories/MEMORY.md": b"distilled by the background review\n"})
+    deadline = time.monotonic() + 5
+    while not col.backup_uploader.calls and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert col.backup_uploader.calls, "no trailing pass"
+    first_put_at = time.monotonic()
+    assert first_put_at - turn_at >= 6 - 0.1
+    archive = col.backup_uploader.by_prefix("memory.")[-1]["body"]
+    assert tar_members(archive)["memories/MEMORY.md"] == b"distilled by the background review\n"
+    thread = col._backup_thread
+    if thread is not None:
+        thread.join(3)
+    assert col._backup_thread is None
+
+
+def test_a_finalize_runs_at_once_and_still_gets_a_trailing_pass(plugin, ctx, backup_env, monkeypatch):
+    monkeypatch.setenv("AV_BACKUP_GRACE_S", "0.8")
+    monkeypatch.setenv("AV_BACKUP_MIN_INTERVAL_S", "0.1")
+    plugin.register(ctx)
+    col = plugin._COLLECTOR
+    col.backup_uploader = Uploads()
+    write_tree(backup_env, ALLOWED)
+    ctx.fire("on_session_start", session_id="s1", model="m", platform="telegram")
+    ctx.fire("on_session_finalize", session_id="s1")
+    time.sleep(0.4)
+    assert len(col.backup_uploader.calls) == 2  # at once, not after the grace
+    write_tree(backup_env, {"memories/USER.md": b"late review write\n"})
+    time.sleep(1.2)
+    assert len(col.backup_uploader.calls) == 4
+    assert tar_members(col.backup_uploader.by_prefix("memory.")[-1]["body"])["memories/USER.md"] == b"late review write\n"
+
+
+def test_a_busy_chat_cannot_push_the_pass_back_forever(plugin, ctx, backup_env, monkeypatch):
+    monkeypatch.setenv("AV_BACKUP_GRACE_S", "0.5")
+    monkeypatch.setenv("AV_BACKUP_MIN_INTERVAL_S", "0.1")
+    plugin.register(ctx)
+    col = plugin._COLLECTOR
+    col.backup_uploader = Uploads()
+    write_tree(backup_env, ALLOWED)
+    ctx.fire("on_session_start", session_id="busy", model="m", platform="telegram")
+    start = time.monotonic()
+    while time.monotonic() - start < 1.5:  # a turn every 0.1 s, well inside the grace
+        ctx.fire("on_session_end", session_id="busy")
+        time.sleep(0.1)
+    assert col.backup_uploader.calls, "the first request's due time must not move"
+
+
+def test_a_newly_skipped_file_is_a_change_probe6(collector, backup_env, av, monkeypatch):
+    """Refutation probe6: a new daily note too large to take leaves the archive
+    unchanged, but the snapshot is now partial and the latest manifest must say so."""
+    monkeypatch.setattr(backup_mod(), "MAX_FILE_BYTES", 1024)
+    write_tree(backup_env, {"MEMORY.md": b"m\n"})
+    assert collector.snapshot_once(now=NOW) == "uploaded"
+    write_tree(backup_env, {"memory/2026-09-22.md": b"x" * 2048})
+    assert collector.snapshot_once(now=NOW + 400) == "uploaded"
+    manifests = collector.backup_uploader.by_prefix("manifest.")
+    assert len(manifests) == 2
+    latest = json.loads(manifests[-1]["body"])
+    assert latest["partial"] is True
+    assert latest["skipped"] == {"count": 1, "reasons": {"too_large": 1}}
+    # Same archive bytes: the route already holds it, so only the manifest is PUT.
+    assert len(collector.backup_uploader.by_prefix("memory.")) == 1
+    state = json.loads((backup_env / "av-events" / "backup.json").read_text())
+    assert state["partial"] is True
+    assert state["skipped"] == {"count": 1, "reasons": {"too_large": 1}}
+    events = snapshots_in(av, collector)
+    assert len(events) == 2 and events[0]["payload"]["content_hash"] == events[1]["payload"]["content_hash"]
+    assert collector.snapshot_once(now=NOW + 800) == "unchanged"
+    # And back: the file shrinks under the cap, the skip goes, a new snapshot.
+    write_tree(backup_env, {"memory/2026-09-22.md": b"x" * 10})
+    assert collector.snapshot_once(now=NOW + 1200) == "uploaded"
+    assert json.loads(collector.backup_uploader.by_prefix("manifest.")[-1]["body"])["partial"] is False
+
+
+def test_consecutive_failures_back_off_exponentially_and_reset_on_success(collector, backup_env):
+    b = backup_mod()
+    write_tree(backup_env, ALLOWED)
+    collector.backup_uploader = Uploads(results=[500] * 9)
+    cooldowns = []
+    for _ in range(9):
+        collector.backup_blocked_until = 0.0
+        assert collector.snapshot_once(now=NOW) == "failed"
+        cooldowns.append(round(collector.backup_blocked_until - time.monotonic()))
+    assert cooldowns == [300, 600, 1200, 2400, 4800, 9600, 19200, 21600, 21600]
+    assert collector.backup_failures == 9
+    assert collector.snapshot_once(now=NOW) == "blocked"
+    collector.backup_blocked_until = 0.0
+    assert collector.snapshot_once(now=NOW) == "uploaded"  # the script has run out: 201
+    assert collector.backup_failures == 0
+    collector.backup_uploader = Uploads(results=[500])
+    write_tree(backup_env, {"MEMORY.md": b"changed\n"})
+    assert collector.snapshot_once(now=NOW + 60) == "failed"
+    assert round(collector.backup_blocked_until - time.monotonic()) == b.BACKOFF_BASE_S  # started over
+
+
+def test_an_accepted_archive_is_never_put_again(plugin, backup_env, monkeypatch):
+    write_tree(backup_env, ALLOWED)
+    first = plugin.Collector()
+    first.backup_uploader = Uploads(results=[201, 500])  # archive accepted, manifest failed
+    assert first.snapshot_once(now=NOW) == "failed"
+    # A new process (a gateway restart): only backup.json remembers the archive.
+    second = plugin.Collector()
+    second.backup_uploader = Uploads()
+    assert second.snapshot_once(now=NOW + 60) == "uploaded"
+    assert [c["name"].split(".")[0] for c in second.backup_uploader.calls] == ["manifest"]
+    state = json.loads((backup_env / "av-events" / "backup.json").read_text())
+    assert state["accepted"] == [state["content_hash"]]
+    # A different destination has accepted nothing.
+    monkeypatch.setenv("AV_BACKUP_URL", "https://other-backup.invalid")
+    third = plugin.Collector()
+    third.backup_uploader = Uploads()
+    assert third.snapshot_once(now=NOW + 120) == "uploaded"
+    assert [c["name"].split(".")[0] for c in third.backup_uploader.calls] == ["memory", "manifest"]

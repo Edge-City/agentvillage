@@ -79,6 +79,24 @@ DEFAULT_MAX_BYTES = 32 * 1024 * 1024
 #: turn), overridable by `AV_BACKUP_MIN_INTERVAL_S`. A finalize is not held to it.
 DEFAULT_MIN_INTERVAL_S = 300.0
 
+#: How long after a request its pass may start at the earliest, overridable by
+#: `AV_BACKUP_GRACE_S`. Hermes's background memory review writes
+#: `memories/MEMORY.md` / `USER.md` a few seconds after `on_session_end`; a pass
+#: that ran at once would miss them whenever the chat then went quiet.
+DEFAULT_GRACE_S = 90.0
+
+#: Backoff after consecutive failed passes: 5 min, doubling, capped at 6 h,
+#: reset by a success. A 401/403 cooldown applies when it is longer.
+BACKOFF_BASE_S = 300.0
+BACKOFF_MAX_S = 6 * 3600.0
+
+#: A failed restore on an empty workspace blocks uploads for at most this long.
+RESTORE_BLOCK_S = 24 * 3600.0
+
+#: How many archive hashes the route has accepted are remembered, so an
+#: archive it already holds is never PUT again.
+MAX_ACCEPTED = 64
+
 #: One PUT's wall-clock budget, enforced by a watchdog (`put_object`): a socket
 #: timeout alone bounds each read, not the request, and a server that trickles
 #: one byte a second would hold the thread indefinitely.
@@ -488,6 +506,7 @@ def target_id(url: str, tenant: str) -> str:
 
 
 def _valid_state(raw: Any) -> Optional[dict]:
+    """The last snapshot recorded in `backup.json`, or None if any field is off."""
     if not isinstance(raw, dict):
         return None
 
@@ -505,17 +524,77 @@ def _valid_state(raw: Any) -> Optional[dict]:
         # It becomes `occurred_at` on an owed event: only a real timestamp.
         and valid_iso(raw.get("created_at"))
         and isinstance(raw.get("emitted"), bool)
+        and isinstance(raw.get("skipped"), dict)
     )
     return raw if ok else None
 
 
-def restore_failed(collector: Any) -> bool:
-    """`install/restore-memory.ts` left `av-events/restore.json` saying `error`:
-    this sandbox's memory was not restored, and a snapshot of what is here now
-    would become "latest" over the real backup. Upload nothing until a restore
-    succeeds or an operator removes the marker."""
+def skipped_signature(skipped: Any) -> dict:
+    """`{count, reasons}` as the manifest writes it; the second half of "unchanged"."""
+    if isinstance(skipped, dict):
+        reasons = {str(k): int(v) for k, v in sorted(skipped.items()) if isinstance(v, int)}
+    else:
+        reasons = {}
+    return {"count": sum(reasons.values()), "reasons": reasons}
+
+
+def accepted_hashes(raw: Any, target: str) -> list[str]:
+    """Archive hashes the route at `target` has already accepted (`backup.json`)."""
+    if not isinstance(raw, dict) or raw.get("accepted_target") != target:
+        return []
+    hashes = raw.get("accepted")
+    if not isinstance(hashes, list):
+        return []
+    return [h for h in hashes if isinstance(h, str) and _HEX64.fullmatch(h)][-MAX_ACCEPTED:]
+
+
+def _parse_iso_epoch(value: Any) -> Optional[float]:
+    if not isinstance(value, str):
+        return None
+    try:
+        stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return stamp.timestamp() if stamp.tzinfo is not None else None
+
+
+def restore_blocks(collector: Any, now: float) -> bool:
+    """Whether `av-events/restore.json` blocks uploads.
+
+    It blocks only when a restore **failed on an empty workspace**
+    (`status: error`, `workspace_empty: true`). Then the sandbox does not hold
+    the tenant's memory, and a snapshot of what is here now would become
+    "latest" over the real backup. A refusal on a populated workspace (a
+    re-run on a live sandbox, say) blocks nothing: what is here is the
+    memory. The block expires 24 h after the marker's `at`
+    (`backup_block_expired`), so a forgotten marker cannot stop backups for
+    good. A marker with no readable `at`, or one from the future, counts as
+    expired. The agent can write this file too; that only ever affects its
+    own tenant's backups.
+    """
     marker = collector._read_json(os.path.join(collector.config.state_dir, "restore.json"))
-    return isinstance(marker, dict) and marker.get("status") == "error"
+    if not isinstance(marker, dict) or marker.get("status") != "error" or marker.get("workspace_empty") is not True:
+        return False
+    at = _parse_iso_epoch(marker.get("at"))
+    if at is None or at > now + 300 or now - at >= RESTORE_BLOCK_S:
+        collector.count("backup_block_expired")
+        return False
+    return True
+
+
+def _record_failure(collector: Any, status: Optional[int]) -> None:
+    """Exponential backoff over consecutive failures; a 401/403 cooldown when longer."""
+    failures = getattr(collector, "backup_failures", 0) + 1
+    collector.backup_failures = failures
+    cooldown = min(BACKOFF_BASE_S * (2 ** (failures - 1)), BACKOFF_MAX_S)
+    collector.count("backup_upload_failed")
+    if status == 401:
+        collector.count("backup_upload_401")
+        cooldown = max(cooldown, AUTH_COOLDOWN_S)
+    elif status == 403:
+        collector.count("backup_forbidden")
+        cooldown = max(cooldown, FORBIDDEN_COOLDOWN_S)
+    collector.backup_blocked_until = time.monotonic() + cooldown
 
 
 def run_once(collector: Any, now: Optional[float] = None, timeout: float = UPLOAD_TIMEOUT_S) -> str:
@@ -542,7 +621,7 @@ def _run_once(collector: Any, now: float, timeout: float) -> str:
         return "unconfigured"
     if collector.backup_blocked_until > time.monotonic():
         return "blocked"
-    if restore_failed(collector):
+    if restore_blocks(collector, now):
         collector.count("backup_blocked_by_restore")
         return "blocked_by_restore"
     state_path = os.path.join(config.state_dir, "backup.json")
@@ -560,8 +639,20 @@ def _run_once(collector: Any, now: float, timeout: float) -> str:
         return "empty"
 
     snapshot = build_snapshot(collected.files, config.backup_tenant, now, collected.skipped)
-    previous = _valid_state(collector._read_json(state_path))
-    if previous is not None and previous["content_hash"] == snapshot.content_hash and previous["target"] == target:
+    skipped = skipped_signature(collected.skipped)
+    raw_state = collector._read_json(state_path)
+    previous = _valid_state(raw_state)
+    accepted = accepted_hashes(raw_state, target)
+    # "Unchanged" is the archive and what was left out of it: a new file that
+    # is skipped (too large, unreadable) changes nothing in the archive but
+    # makes the snapshot partial, and the latest manifest must say so.
+    same = (
+        previous is not None
+        and previous["content_hash"] == snapshot.content_hash
+        and previous["target"] == target
+        and skipped_signature(previous["skipped"].get("reasons")) == skipped
+    )
+    if same:
         if previous["emitted"]:
             return "unchanged"
         # Uploaded before, but the event was inert then (no events token, the
@@ -573,7 +664,7 @@ def _run_once(collector: Any, now: float, timeout: float) -> str:
         )
         if event is None:
             return "unchanged"
-        collector._write_json(state_path, {**previous, "emitted": True})
+        collector._write_json(state_path, {**raw_state, "emitted": True})
         return "emitted"
 
     if len(snapshot.archive) > config.backup_max_bytes:
@@ -583,24 +674,29 @@ def _run_once(collector: Any, now: float, timeout: float) -> str:
     uploader: Uploader = collector.backup_uploader or put_object
     manifest = snapshot.manifest_bytes()
     manifest_sha = sha256_hex(manifest)
+    base_state = dict(raw_state) if isinstance(raw_state, dict) else {}
     # Archive first, then the manifest that names it: a manifest is the commit
-    # point, and the route refuses one whose archive it does not hold.
-    for name, body, content_type in (
-        (snapshot.archive_name, snapshot.archive, "application/gzip"),
-        (MANIFEST_NAME.format(manifest_sha), manifest, "application/json"),
-    ):
+    # point, and the route refuses one whose archive it does not hold. An
+    # archive the route has already accepted is never PUT again.
+    if snapshot.content_hash not in accepted:
         result = uploader(
-            config.backup_url, config.backup_token, snapshot.tenant, snapshot.date, name, body, content_type, timeout
+            config.backup_url, config.backup_token, snapshot.tenant, snapshot.date,
+            snapshot.archive_name, snapshot.archive, "application/gzip", timeout,
         )
         if not result.ok:
-            collector.count("backup_upload_failed")
-            if result.status == 401:
-                collector.count("backup_upload_401")
-                collector.backup_blocked_until = time.monotonic() + AUTH_COOLDOWN_S
-            elif result.status == 403:
-                collector.count("backup_forbidden")
-                collector.backup_blocked_until = time.monotonic() + FORBIDDEN_COOLDOWN_S
+            _record_failure(collector, result.status)
             return "failed"
+        accepted = (accepted + [snapshot.content_hash])[-MAX_ACCEPTED:]
+        base_state.update({"accepted": accepted, "accepted_target": target})
+        collector._write_json(state_path, base_state)
+    result = uploader(
+        config.backup_url, config.backup_token, snapshot.tenant, snapshot.date,
+        MANIFEST_NAME.format(manifest_sha), manifest, "application/json", timeout,
+    )
+    if not result.ok:
+        _record_failure(collector, result.status)
+        return "failed"
+    collector.backup_failures = 0
 
     event = collector.emit(
         "memory.snapshot",
@@ -618,7 +714,10 @@ def _run_once(collector: Any, now: float, timeout: float) -> str:
             "bytes": snapshot.total_bytes,
             "file_count": snapshot.file_count,
             "partial": snapshot.partial,
+            "skipped": skipped,
             "emitted": event is not None,
+            "accepted": accepted,
+            "accepted_target": target,
         },
     )
     collector.count("backup_uploaded")

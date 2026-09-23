@@ -51,9 +51,11 @@
  * `reason: "write_failed"`, with the counts of what was renamed.
  *
  * Marker: `$HERMES_HOME/av-events/restore.json` records `{status, manifest_key,
- * reason?, at}` with status `restored`, `none` or `error` (a refusal is an
- * error). The av-events plugin uploads nothing while it says `error`.
- * `--dry-run` writes neither files nor marker.
+ * workspace_empty, reason?, at}` with status `restored`, `none` or `error` (a
+ * refusal is an error). `workspace_empty` says whether none of the memory
+ * files existed before this run. The av-events plugin uploads nothing for 24 h
+ * after an `error` on an empty workspace; an error on a populated one blocks
+ * nothing. `--dry-run` writes neither files nor marker.
  *
  * Output: one JSON line on stdout, `{status, snapshot_ref, bytes, file_count,
  * written, unchanged, kept_newer, partial, reason?}`. `bytes` / `file_count`
@@ -67,7 +69,7 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 
@@ -377,7 +379,28 @@ const empty = (status: RestoreResult["status"], extra: Partial<RestoreResult> = 
   ...extra,
 });
 
+/** Whether none of the allowlisted memory files exists yet: a recreated sandbox. */
+export function workspaceEmpty(home: string): boolean {
+  for (const rel of ["MEMORY.md", "USER.md", "memories/MEMORY.md", "memories/USER.md"]) {
+    try {
+      lstatSync(join(home, ...rel.split("/")));
+      return false;
+    } catch {
+      // absent (or unreadable): keep looking
+    }
+  }
+  try {
+    return !readdirSync(join(home, "memory")).some((name) => DAILY_NOTE_NAME.test(name));
+  } catch {
+    return true;
+  }
+}
+
 export async function restoreMemory(opts: RestoreOptions): Promise<RestoreResult> {
+  // Judged before anything is written. The plugin blocks its uploads only
+  // after a failed restore on an empty workspace: there, what the sandbox holds
+  // is not the tenant's memory. A refusal on a populated one blocks nothing.
+  const wasEmpty = workspaceEmpty(opts.home);
   let key: string | null = null;
   const result = await restoreInner(opts, (k) => {
     key = k;
@@ -387,6 +410,7 @@ export async function restoreMemory(opts: RestoreOptions): Promise<RestoreResult
     writeMarker(opts.home, {
       status,
       manifest_key: key,
+      workspace_empty: wasEmpty,
       ...(result.reason ? { reason: result.reason } : {}),
       at: new Date().toISOString(),
     });

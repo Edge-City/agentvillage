@@ -665,11 +665,15 @@ def _hook_on_session_finalize(collector: Collector, **kwargs: Any) -> None:
 
     The snapshot request only sets a flag and starts (or wakes) a daemon
     thread: the files are read, packed and uploaded there, never here. A
-    finalize's request skips the turn-end rate limit. Hermes has no shutdown
-    hook at `0.21.3`; gateway shutdown finalizes open sessions, which lands
-    here, and the exit drain joins that thread for a bounded time
-    (`Collector.shutdown`). The turn-end requests are what keep the backup
-    current; this is the last chance, not the mechanism."""
+    finalize's pass runs at once, with a trailing pass after the grace.
+
+    Shutdown: Hermes has no shutdown hook at `0.21.3`, and the **gateway exits
+    through `os._exit`** (`gateway/run.py` `_exit_after_graceful_shutdown`),
+    which runs no `atexit` handler. Gateway shutdown does finalize open
+    sessions, which lands here, but the daemon thread then dies with the
+    process wherever it has got to. The exit drain (`Collector.shutdown`)
+    only runs in a CLI or desktop process that exits normally. The turn-end
+    passes (`on_session_end`) are what keep the backup current in a gateway."""
     session_id = kwargs.get("session_id")
     if not session_id:
         return

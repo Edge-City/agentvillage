@@ -518,7 +518,23 @@ test("the marker records restored, none and error, with the manifest key", async
   });
   const bad = tempDir("bad");
   await restore(bad);
-  expect(marker(bad)).toMatchObject({ status: "error", reason: "file_hash_mismatch" });
+  expect(marker(bad)).toMatchObject({ status: "error", reason: "file_hash_mismatch", workspace_empty: true });
+  expect(Number.isNaN(Date.parse(marker(bad).at))).toBe(false);
+
+  // The same refusal on a populated workspace: recorded, and it blocks nothing.
+  const live = tempDir("live");
+  writeTree(live, { "memory/2026-09-22.md": "today\n" });
+  await restore(live);
+  expect(marker(live)).toMatchObject({ status: "error", workspace_empty: false });
+  const live2 = tempDir("live2");
+  writeTree(live2, { "memories/USER.md": "u\n" });
+  await restore(live2);
+  expect(marker(live2)).toMatchObject({ status: "error", workspace_empty: false });
+  // A memory/ holding only non-note files is still empty.
+  const ledgerOnly = tempDir("ledger");
+  writeTree(ledgerOnly, { "memory/heartbeat-state.json": "{}", "memory/2026-09-22.md.bak": "x" });
+  await restore(ledgerOnly);
+  expect(marker(ledgerOnly)).toMatchObject({ status: "error", workspace_empty: true });
 
   route.status = 503;
   const down = tempDir("down");
