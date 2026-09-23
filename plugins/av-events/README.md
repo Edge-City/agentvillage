@@ -646,8 +646,14 @@ nothing. "The same" is the pair `(content_hash, skipped {count, reasons})`. The 
 carries `created_at` and so is never byte-stable. A new file that is skipped (too large, say)
 leaves the archive unchanged but makes the snapshot partial, and the latest manifest must say so.
 The route keeps what it has accepted. `backup.json` remembers the archive hashes the current
-destination has accepted (the last 64), and an archive already accepted is never PUT again. The
-same archive with new skips therefore costs one manifest PUT.
+destination has accepted **under the current UTC date's prefix** (the last 64), and such an
+archive is never PUT again that day. The same archive with new skips therefore costs one manifest
+PUT. The memory is per date because a manifest names an archive in its own date's prefix: restore
+fetches from there, and the route answers 409 `archive_missing` otherwise. After UTC midnight, or on
+a revert to an earlier day's content, the archive is PUT again under the new date. If the route
+still answers the manifest with 409 (a purged prefix, a record the plugin should not have
+trusted), the hash is forgotten and the archive and manifest are re-sent at once
+(`backup_archive_missing`). A second failure takes the normal backoff.
 
 A workspace with no memory files at all uploads nothing: an empty snapshot would become "latest"
 and a recreate would restore nothing over a real backup.
