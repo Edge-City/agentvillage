@@ -538,9 +538,21 @@ def skipped_signature(skipped: Any) -> dict:
     return {"count": sum(reasons.values()), "reasons": reasons}
 
 
-def accepted_hashes(raw: Any, target: str) -> list[str]:
-    """Archive hashes the route at `target` has already accepted (`backup.json`)."""
-    if not isinstance(raw, dict) or raw.get("accepted_target") != target:
+def accepted_hashes(raw: Any, target: str, date: str) -> list[str]:
+    """Archive hashes the route at `target` has already accepted **under `date`'s
+    prefix** (`backup.json`).
+
+    Per date because the route stores `backup/<tenant>/<date>/<name>` and a
+    manifest names an archive in its own date's prefix (restore fetches from
+    there, and the route answers 409 `archive_missing` otherwise). An archive
+    accepted yesterday is not one today's manifest can name: after UTC
+    midnight, or on a revert to an earlier day's content, it is PUT again.
+    """
+    if (
+        not isinstance(raw, dict)
+        or raw.get("accepted_target") != target
+        or raw.get("accepted_date") != date
+    ):
         return []
     hashes = raw.get("accepted")
     if not isinstance(hashes, list):
@@ -642,7 +654,7 @@ def _run_once(collector: Any, now: float, timeout: float) -> str:
     skipped = skipped_signature(collected.skipped)
     raw_state = collector._read_json(state_path)
     previous = _valid_state(raw_state)
-    accepted = accepted_hashes(raw_state, target)
+    accepted = accepted_hashes(raw_state, target, snapshot.date)
     # "Unchanged" is the archive and what was left out of it: a new file that
     # is skipped (too large, unreadable) changes nothing in the archive but
     # makes the snapshot partial, and the latest manifest must say so.
@@ -675,24 +687,49 @@ def _run_once(collector: Any, now: float, timeout: float) -> str:
     manifest = snapshot.manifest_bytes()
     manifest_sha = sha256_hex(manifest)
     base_state = dict(raw_state) if isinstance(raw_state, dict) else {}
-    # Archive first, then the manifest that names it: a manifest is the commit
-    # point, and the route refuses one whose archive it does not hold. An
-    # archive the route has already accepted is never PUT again.
-    if snapshot.content_hash not in accepted:
-        result = uploader(
+
+    def remember(hashes: list[str]) -> None:
+        base_state.update({"accepted": hashes, "accepted_target": target, "accepted_date": snapshot.date})
+        collector._write_json(state_path, base_state)
+
+    def put_archive() -> SendResult:
+        nonlocal accepted
+        sent = uploader(
             config.backup_url, config.backup_token, snapshot.tenant, snapshot.date,
             snapshot.archive_name, snapshot.archive, "application/gzip", timeout,
         )
+        if sent.ok:
+            accepted = (accepted + [snapshot.content_hash])[-MAX_ACCEPTED:]
+            remember(accepted)
+        return sent
+
+    def put_manifest() -> SendResult:
+        return uploader(
+            config.backup_url, config.backup_token, snapshot.tenant, snapshot.date,
+            MANIFEST_NAME.format(manifest_sha), manifest, "application/json", timeout,
+        )
+
+    # Archive first, then the manifest that names it: a manifest is the commit
+    # point, and the route refuses one whose archive it does not hold under the
+    # same date. An archive the route has already accepted under this date is
+    # never PUT again.
+    if snapshot.content_hash not in accepted:
+        result = put_archive()
         if not result.ok:
             _record_failure(collector, result.status)
             return "failed"
-        accepted = (accepted + [snapshot.content_hash])[-MAX_ACCEPTED:]
-        base_state.update({"accepted": accepted, "accepted_target": target})
-        collector._write_json(state_path, base_state)
-    result = uploader(
-        config.backup_url, config.backup_token, snapshot.tenant, snapshot.date,
-        MANIFEST_NAME.format(manifest_sha), manifest, "application/json", timeout,
-    )
+    result = put_manifest()
+    if result.status == 409:
+        # `archive_missing`: our memory of what the route holds was wrong (a
+        # purged prefix, a record from before per-date keys). Forget the hash,
+        # re-send the archive and the manifest once, now; a second failure
+        # takes the normal backoff.
+        collector.count("backup_archive_missing")
+        accepted = [h for h in accepted if h != snapshot.content_hash]
+        remember(accepted)
+        result = put_archive()
+        if result.ok:
+            result = put_manifest()
     if not result.ok:
         _record_failure(collector, result.status)
         return "failed"
@@ -718,6 +755,7 @@ def _run_once(collector: Any, now: float, timeout: float) -> str:
             "emitted": event is not None,
             "accepted": accepted,
             "accepted_target": target,
+            "accepted_date": snapshot.date,
         },
     )
     collector.count("backup_uploaded")

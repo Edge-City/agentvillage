@@ -1167,3 +1167,114 @@ def test_an_accepted_archive_is_never_put_again(plugin, backup_env, monkeypatch)
     third.backup_uploader = Uploads()
     assert third.snapshot_once(now=NOW + 120) == "uploaded"
     assert [c["name"].split(".")[0] for c in third.backup_uploader.calls] == ["memory", "manifest"]
+
+
+# --------------------------------------------------------------------------
+# Accepted archives are remembered per date (route follow-up to #141)
+# --------------------------------------------------------------------------
+
+DAY = 86_400
+
+
+def _route_collector(plugin, monkeypatch, route):
+    monkeypatch.setenv("AV_BACKUP_URL", route.url)
+    col = plugin.Collector()
+    col.backup_uploader = None  # the real client, over HTTP
+    return col
+
+
+def _archive_named_by(route, manifest_key: str) -> str:
+    manifest = json.loads(route.objects[manifest_key])
+    return f"backup/{TENANT}/{manifest['date']}/{manifest['archive']['name']}"
+
+
+def test_after_midnight_the_same_archive_is_put_under_the_new_date(plugin, backup_env, monkeypatch):
+    """Day 1 uploads archive A. On day 2 the archive bytes are the same but the
+    snapshot changed (a newly skipped file), so a day-2 manifest names A. It
+    must be PUT again under day 2's prefix; remembering it from day 1 would get
+    409 `archive_missing` and hours of backoff."""
+    with StubBackupRoute(TOKEN) as route:
+        col = _route_collector(plugin, monkeypatch, route)
+        monkeypatch.setattr(backup_mod(), "MAX_FILE_BYTES", 1024)
+        write_tree(backup_env, {"MEMORY.md": b"m\n"})
+        assert col.snapshot_once(now=NOW) == "uploaded"  # 2026-09-21
+        write_tree(backup_env, {"memory/2026-09-22.md": b"x" * 2048})  # too large: skipped
+        assert col.snapshot_once(now=NOW + DAY) == "uploaded"  # 2026-09-22
+        assert 409 not in route.statuses
+        assert col.counters.get("backup_upload_failed") is None
+        day2 = sorted(k for k in route.objects if "/2026-09-22/manifest." in k)
+        assert len(day2) == 1
+        assert _archive_named_by(route, day2[0]) in route.objects
+        state = json.loads((backup_env / "av-events" / "backup.json").read_text())
+        assert state["accepted_date"] == "2026-09-22"
+
+
+def test_a_revert_to_an_earlier_days_content_puts_that_archive_again(plugin, backup_env, monkeypatch):
+    """Content A (day 1), B (day 1), then back to A on day 2: A's archive is only
+    under day 1's prefix, so the day-2 manifest needs it PUT under day 2."""
+    with StubBackupRoute(TOKEN) as route:
+        col = _route_collector(plugin, monkeypatch, route)
+        write_tree(backup_env, {"MEMORY.md": b"A\n"})
+        assert col.snapshot_once(now=NOW) == "uploaded"
+        write_tree(backup_env, {"MEMORY.md": b"B\n"})
+        assert col.snapshot_once(now=NOW + 60) == "uploaded"
+        write_tree(backup_env, {"MEMORY.md": b"A\n"})
+        assert col.snapshot_once(now=NOW + DAY) == "uploaded"
+        assert 409 not in route.statuses
+        day2 = [k for k in route.objects if "/2026-09-22/manifest." in k]
+        assert len(day2) == 1
+        assert _archive_named_by(route, day2[0]) in route.objects
+        # Within one day a revert costs only the manifest: B goes under day 2
+        # once, and A, already held under day 2, is not PUT again.
+        write_tree(backup_env, {"MEMORY.md": b"B\n"})
+        assert col.snapshot_once(now=NOW + DAY + 60) == "uploaded"
+        archives_before = [k for k in route.objects if "/memory." in k]
+        puts_before = len(route.statuses)
+        write_tree(backup_env, {"MEMORY.md": b"A\n"})
+        assert col.snapshot_once(now=NOW + DAY + 120) == "uploaded"
+        assert len(route.statuses) == puts_before + 1  # the manifest only: A is held under day 2
+        assert [k for k in route.objects if "/memory." in k] == archives_before
+
+
+def test_a_409_forgets_the_archive_and_resends_it_at_once(plugin, backup_env, monkeypatch):
+    """The route no longer holds an archive the plugin remembers (a purged
+    prefix, a record from before per-date keys): the manifest PUT gets 409, the
+    hash is forgotten, and the archive and the manifest go again in the same pass."""
+    with StubBackupRoute(TOKEN) as route:
+        col = _route_collector(plugin, monkeypatch, route)
+        monkeypatch.setattr(backup_mod(), "MAX_FILE_BYTES", 1024)
+        write_tree(backup_env, {"MEMORY.md": b"m\n"})
+        assert col.snapshot_once(now=NOW) == "uploaded"
+        archive_key = next(k for k in route.objects if "/memory." in k)
+        del route.objects[archive_key]  # the route lost it
+        write_tree(backup_env, {"memory/2026-09-21.md": b"x" * 2048})  # same archive, new skip
+        assert col.snapshot_once(now=NOW + 60) == "uploaded"
+        assert route.statuses[-3:] == [409, 201, 201]  # manifest refused, archive, manifest
+        assert archive_key in route.objects
+        assert col.counters.get("backup_archive_missing") == 1
+        assert col.counters.get("backup_upload_failed") is None
+        assert col.backup_failures == 0
+
+
+def test_a_second_409_takes_the_normal_backoff(collector, backup_env):
+    write_tree(backup_env, ALLOWED)
+    collector.backup_uploader = Uploads(results=[201, 409, 201, 409])
+    assert collector.snapshot_once(now=NOW) == "failed"
+    assert [c["name"].split(".")[0] for c in collector.backup_uploader.calls] == [
+        "memory", "manifest", "memory", "manifest"
+    ]
+    assert collector.counters.get("backup_archive_missing") == 1
+    assert collector.backup_failures == 1
+    assert round(collector.backup_blocked_until - time.monotonic()) == backup_mod().BACKOFF_BASE_S
+    assert collector.snapshot_once(now=NOW + 60) == "blocked"
+
+
+def test_a_state_file_without_a_date_remembers_nothing(collector, backup_env):
+    """A `backup.json` written before per-date keys: its hashes are not trusted."""
+    write_tree(backup_env, ALLOWED)
+    b = backup_mod()
+    snap = b.build_snapshot(b.collect(str(backup_env)).files, TENANT, NOW)
+    legacy = {"accepted": [snap.content_hash], "accepted_target": b.target_id(collector.config.backup_url, TENANT)}
+    write_tree(backup_env, {"av-events/backup.json": json.dumps(legacy).encode()})
+    assert collector.snapshot_once(now=NOW) == "uploaded"
+    assert [c["name"].split(".")[0] for c in collector.backup_uploader.calls] == ["memory", "manifest"]
