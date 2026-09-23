@@ -33,6 +33,11 @@ from typing import Any, Optional
 
 SCHEMA_VERSION = 1
 
+#: The plugin's own version: `__init__.__version__` and `plugin.yaml` carry the
+#: same string (a test holds them together). Lives here so `_backup` can write
+#: it into a snapshot manifest without importing the package `__init__`.
+PLUGIN_VERSION = "0.1.0"
+
 #: Everything this plugin observes is the agent describing its own behaviour.
 #: The ingest server downgrades anything higher anyway (spec scenario 4).
 EVIDENCE_CLASS = "agent_report"

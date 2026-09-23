@@ -154,15 +154,19 @@ function removeProjectFiles(wipeUser: boolean): void {
  *
  * - `$HERMES_HOME/av-events/`: the av-events plugin's unsent event buffer,
  *   tenant hash key, EdgeOS action ledger, cron cursor, profile and prompt
- *   seen-sets. A plain reset keeps it: the tenant is the same person and the
- *   buffer may hold unsent events.
- * - `$HERMES_HOME/memories/USER.md`: what Hermes's memory tool learned about
- *   the previous user (the `USER.md` next to `MEMORY.md` at the top level is
- *   the landing's, removed by `removeProjectFiles`).
+ *   seen-sets, and the memory-snapshot state (`backup.json`, the last snapshot
+ *   uploaded, and `restore.json`, the restore marker). A plain reset keeps it:
+ *   the tenant is the same person and the buffer may hold unsent events.
+ * - `$HERMES_HOME/memories/USER.md` and `memories/MEMORY.md`: what Hermes's
+ *   memory tool learned about and for the previous user (the `USER.md` next to
+ *   `MEMORY.md` at the top level is the landing's, removed by
+ *   `removeProjectFiles`). Both are in the memory snapshot (DATA-82), so
+ *   leaving either would carry the previous user into the next backup.
  */
 export function removeWipeUserState(home: string = hermesHome()): string[] {
   const removed: string[] = [];
-  for (const target of [join(home, "av-events"), join(home, "memories", "USER.md")]) {
+  const targets = [join(home, "av-events"), join(home, "memories", "USER.md"), join(home, "memories", "MEMORY.md")];
+  for (const target of targets) {
     if (!existsSync(target)) continue;
     rmSync(target, { recursive: true, force: true });
     console.log(`→ removed ${target}`);

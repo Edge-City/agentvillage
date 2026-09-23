@@ -22,6 +22,7 @@ from typing import Any, Optional
 from . import _edgeos
 from ._collector import Collector, guarded, hermes_version, overlay_ref
 from ._core import (
+    PLUGIN_VERSION,
     hash_obj,
     hash_text,
     iso_from_epoch,
@@ -41,7 +42,7 @@ from ._tools import (
     tool_category,
 )
 
-__version__ = "0.1.0"
+__version__ = PLUGIN_VERSION
 
 #: Hermes reports a `platform`; the catalogue (spec §4.1 `session.*`) wants a
 #: `source`. Anything unrecognised passes through as-is rather than being
@@ -644,16 +645,35 @@ def _hook_on_session_end(collector: Collector, **kwargs: Any) -> None:
 
     Despite the name this fires at the end of every `run_conversation` call —
     once per user message (`agent/turn_finalizer.py:828`). So it nudges the
-    flusher and nothing more; `session.ended` comes from `on_session_finalize`.
+    flusher and asks for a (rate-limited) memory snapshot, nothing more;
+    `session.ended` comes from `on_session_finalize`.
     """
     _session(collector, kwargs)
     collector.nudge_flush()
+    # Once per turn, so a gateway whose sessions are never finalized (the
+    # common case: a Telegram conversation just goes quiet) still backs up.
+    # Rate-limited to one pass per `AV_BACKUP_MIN_INTERVAL_S`; an unchanged
+    # workspace uploads nothing, so a pass is a read and a hash.
+    collector.request_snapshot()
 
 
 def _hook_on_session_finalize(collector: Collector, **kwargs: Any) -> None:
     """The real session close: `session.ended` with Hermes's cost figures for
-    the session, then `profile.updated` if USER.md changed. In that order, so
-    nothing the profile check does can cost the session its end event."""
+    the session, then `profile.updated` if USER.md changed, then a request for
+    a memory snapshot. In that order, so nothing the profile check or the
+    snapshot does can cost the session its end event.
+
+    The snapshot request only sets a flag and starts (or wakes) a daemon
+    thread: the files are read, packed and uploaded there, never here. A
+    finalize's pass runs at once, with a trailing pass after the grace.
+
+    Shutdown: Hermes has no shutdown hook at `0.21.3`, and the **gateway exits
+    through `os._exit`** (`gateway/run.py` `_exit_after_graceful_shutdown`),
+    which runs no `atexit` handler. Gateway shutdown does finalize open
+    sessions, which lands here, but the daemon thread then dies with the
+    process wherever it has got to. The exit drain (`Collector.shutdown`)
+    only runs in a CLI or desktop process that exits normally. The turn-end
+    passes (`on_session_end`) are what keep the backup current in a gateway."""
     session_id = kwargs.get("session_id")
     if not session_id:
         return
@@ -662,6 +682,7 @@ def _hook_on_session_finalize(collector: Collector, **kwargs: Any) -> None:
     cost = collector.read_session_cost(session_id) if state is not None and not state.ended else {}
     collector.session_ended(session_id, **cost)
     collector.check_profile(session_id)
+    collector.request_snapshot(urgent=True)
 
 
 def _hook_subagent_start(collector: Collector, **kwargs: Any) -> None:

@@ -16,21 +16,27 @@ test("the av-events cron job-name seed is exactly the installer's cron names", (
   expect([...seed.names].sort()).toEqual(DIGEST_CRON_SPECS.map((spec) => spec.name).sort());
 });
 
-test("reset --wipe-user removes av-events state and the memory tool's USER.md", () => {
+test("reset --wipe-user removes av-events state (snapshot state included) and the memory tool's files", () => {
   const home = mkdtempSync(join(tmpdir(), "agentvillage-avstate-"));
   const state = join(home, "av-events");
   mkdirSync(join(state, "buffer"), { recursive: true });
   mkdirSync(join(home, "memories"), { recursive: true });
   writeFileSync(join(state, "hash.key"), "0".repeat(64));
   writeFileSync(join(state, "edgeos_actions.json"), "{}");
+  writeFileSync(join(state, "backup.json"), "{}");
+  writeFileSync(join(state, "restore.json"), '{"status":"restored"}');
   writeFileSync(join(home, "memories", "USER.md"), "previous user");
   writeFileSync(join(home, "memories", "MEMORY.md"), "agent memory");
   writeFileSync(join(home, "config.yaml"), "keep: true\n");
 
-  expect(removeWipeUserState(home)).toEqual([state, join(home, "memories", "USER.md")]);
+  expect(removeWipeUserState(home)).toEqual([
+    state,
+    join(home, "memories", "USER.md"),
+    join(home, "memories", "MEMORY.md"),
+  ]);
   expect(existsSync(state)).toBe(false);
   expect(existsSync(join(home, "memories", "USER.md"))).toBe(false);
-  expect(existsSync(join(home, "memories", "MEMORY.md"))).toBe(true);
+  expect(existsSync(join(home, "memories", "MEMORY.md"))).toBe(false);
   expect(existsSync(join(home, "config.yaml"))).toBe(true);
   expect(removeWipeUserState(home)).toEqual([]);
 });
