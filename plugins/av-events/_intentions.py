@@ -77,6 +77,9 @@ _RECORD_ACTIONS = {
 #: hook's 50 ms budget on the agent's time.
 MAX_RESULT_CHARS = 256 * 1024
 
+#: Lines starting with `{` tried as JSON before a result is given up on.
+MAX_JSON_ATTEMPTS = 64
+
 #: The only Hermes `post_tool_call` statuses that mean the tool did its work.
 #: Everything else — `error`, `blocked`, `timeout`, `cancelled`, and whatever
 #: Hermes adds next — records nothing.
@@ -185,9 +188,16 @@ def _first_json(value: Any) -> Any:
     if len(value) > MAX_RESULT_CHARS:
         return None
     offset = 0
+    attempts = 0
     for line in value.split("\n"):
         indent = len(line) - len(line.lstrip())
         if line[indent:indent + 1] == "{":
+            # Each failed attempt can scan to the end of the text, so an
+            # adversarial result (thousands of lines opening an object that
+            # never closes) would be quadratic. Give up after a few.
+            attempts += 1
+            if attempts > MAX_JSON_ATTEMPTS:
+                break
             try:
                 parsed, _ = _DECODER.raw_decode(value, offset + indent)
             except (ValueError, RecursionError):

@@ -9,10 +9,17 @@ from __future__ import annotations
 
 import atexit
 import functools
+import hashlib
+import hmac
 import json
+import logging
+import math
 import os
+import re
+import secrets
 import threading
 import time
+import uuid
 from collections import OrderedDict
 from typing import Any, Callable, Optional
 
@@ -37,6 +44,7 @@ from ._core import (
     TICK_INTERVAL_S,
     Buffer,
     SendResult,
+    cron_run_event_id,
     env,
     env_flag_disabled,
     hermes_home,
@@ -44,8 +52,152 @@ from ._core import (
     post_events,
     register_literal_secret,
     sanitize,
+    sqlite_read,
     uuid7,
 )
+from ._cron import CronCursor, cron_job_id_from, pending_runs
+from ._edgeos import Ledger
+
+#: How often the flusher thread looks for finished cron executions.
+CRON_POLL_INTERVAL_S = 60.0
+
+#: `USER.md` larger than this is not read: Hermes caps it at a few KiB.
+MAX_PROFILE_BYTES = 1024 * 1024
+
+#: Hermes `sessions.cost_status` / `cost_source` values leave only in this shape.
+_COST_LABEL = re.compile(r"^[a-z0-9_.:-]{1,64}$")
+
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+logger = logging.getLogger("av-events")
+
+#: Counters already logged by this process. Each is logged once, as a name and
+#: a count — never the value that tripped it.
+_LOGGED_COUNTERS: set[str] = set()
+
+#: The two USER.md files `profile.updated` reports, by `kind`. Hermes's memory
+#: tool writes the first (`tools/memory_tool.py`); the landing's enrichment
+#: writes the second, through the control-plane sidecar (`USER_FILE =
+#: $HERMES_DATA/USER.md`, the Hermes home) and the installer's
+#: `targetWorkspace()` (= `$HERMES_HOME`, which is `~/.hermes` by default).
+PROFILE_FILES = (
+    ("memory_profile", ("memories", "USER.md")),
+    ("landing_profile", ("USER.md",)),
+)
+
+def _bump(counters: Optional[dict], name: str) -> None:
+    if counters is not None:
+        counters[name] = counters.get(name, 0) + 1
+
+
+#: How long a reader waits for a key another process is still writing (the
+#: `O_EXCL` fallback writes in place) before calling the file corrupt.
+KEY_WRITE_GRACE_S = 0.5
+_HEX_PREFIX = re.compile(r"^[0-9a-f]{0,63}$")
+
+
+def _write_new_key(directory: str) -> str:
+    """A fresh key written to a private temp file in `directory`; returns its path."""
+    temp = os.path.join(directory, f".hash.key.{os.getpid()}.{secrets.token_hex(4)}")
+    fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, FILE_MODE)
+    with os.fdopen(fd, "w", encoding="ascii") as handle:
+        handle.write(secrets.token_hex(32))
+    return temp
+
+
+def _create_key(directory: str, path: str, counters: Optional[dict]) -> None:
+    """Put a key at `path` unless one is already there. Raises `OSError` on failure.
+
+    A complete temp file is hard-linked into place: the link fails if another
+    process got there first, and no reader ever sees a partial file. On a
+    filesystem without hard links (`os.link` raising anything but
+    `FileExistsError`), the key is written in place with `O_CREAT | O_EXCL`
+    and fsynced — still exactly one winner, and a reader that catches the
+    write half-done waits for it (`KEY_WRITE_GRACE_S`) rather than replacing it.
+    """
+    os.makedirs(directory, mode=DIR_MODE, exist_ok=True)
+    temp = _write_new_key(directory)
+    try:
+        os.link(temp, path)
+        _bump(counters, "hash_key_generated")
+        return
+    except FileExistsError:
+        return  # another process won
+    except OSError:
+        pass  # no hard links here: fall back below
+    finally:
+        try:
+            os.unlink(temp)
+        except FileNotFoundError:
+            pass
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, FILE_MODE)
+    except FileExistsError:
+        return
+    try:
+        os.write(fd, secrets.token_hex(32).encode("ascii"))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    _bump(counters, "hash_key_generated")
+
+
+def load_or_create_key(directory: str, counters: Optional[dict] = None) -> Optional[bytes]:
+    """Per-tenant random key at `<directory>/hash.key`: 64 hex characters, mode 0600.
+
+    A key, once written, is never rotated by a race or a hiccup:
+
+    - read succeeds, content valid: that is the key;
+    - read succeeds, content empty or a hex prefix: another process is still
+      writing it (the no-hard-link fallback); re-read for up to
+      `KEY_WRITE_GRACE_S`;
+    - read succeeds, content otherwise not 64 hex: the file is corrupt and is
+      replaced (`os.replace` from a complete temp file), then read back;
+    - file absent: `_create_key`, then read whatever won;
+    - any other `OSError` (permissions, I/O, a missing directory that cannot
+      be made): None. The caller keys nothing for now and retries later.
+    """
+    path = os.path.join(directory, "hash.key")
+    deadline = time.monotonic() + KEY_WRITE_GRACE_S
+    replaced = created = False
+    while True:
+        try:
+            with open(path, "rb") as handle:
+                raw = handle.read(256)
+        except FileNotFoundError:
+            if created:
+                return None
+            created = True
+            try:
+                _create_key(directory, path, counters)
+            except OSError:
+                return None
+            continue
+        except OSError:
+            return None
+        text = raw.decode("ascii", errors="replace").strip()
+        if _HEX64.match(text):
+            return bytes.fromhex(text)
+        if _HEX_PREFIX.match(text) and not raw.endswith(b"\n") and time.monotonic() < deadline:
+            time.sleep(0.005)
+            continue
+        if replaced:
+            return None
+        replaced = True
+        # Read fine, content invalid: the file is corrupt. Replace it.
+        try:
+            temp = _write_new_key(directory)
+            try:
+                os.replace(temp, path)
+                _bump(counters, "hash_key_replaced")
+            finally:
+                try:
+                    os.unlink(temp)
+                except FileNotFoundError:
+                    pass
+        except OSError:
+            return None
+
 
 # --------------------------------------------------------------------------
 # Runtime facts
@@ -97,7 +249,9 @@ class Config:
     `$HERMES_HOME/.env`, and the next session picks it up.
     """
 
-    __slots__ = ("enabled", "url", "token", "capture", "disabled_hooks", "home", "buffer_dir", "state_dir")
+    __slots__ = (
+        "enabled", "url", "token", "capture", "disabled_hooks", "home", "buffer_dir", "state_dir", "tenant_id",
+    )
 
     def __init__(self) -> None:
         self.enabled = not env_flag_disabled("AV_EVENTS_ENABLED")
@@ -113,6 +267,13 @@ class Config:
         self.home = hermes_home()
         self.state_dir = os.path.join(self.home, "av-events")
         self.buffer_dir = os.path.join(self.state_dir, "buffer")
+        # Only for `cron.run`'s derived id (spec §4.3), which ingest recomputes
+        # from the token's tenant. `TENANT_ID` is what the control plane already
+        # sets for `plugins/dashboard-auth-edgecity`; `AV_TENANT_ID` overrides.
+        tenant = env("AV_TENANT_ID") or env("TENANT_ID")
+        # Lower-cased, as ingest lower-cases it before recomputing the id: an
+        # upper-case UUID in the env must not change every `cron.run` id.
+        self.tenant_id = tenant.lower() if 0 < len(tenant) <= 128 else ""
         register_literal_secret(self.token)
 
     @property
@@ -238,6 +399,20 @@ class Collector:
         #: Intention events not emitted because an id failed the id pattern,
         #: by field. A count only: the offending value is never kept.
         self.intention_drops: dict[str, int] = {}
+        #: EdgeOS actions awaiting a confirming read (`_edgeos.Ledger`),
+        #: loaded from disk on first use.
+        self.edgeos = Ledger()
+        #: Cron executions already reported as `cron.run`.
+        self._cron_cursor: Optional[CronCursor] = None
+        self._cron_at = 0.0
+        #: Cron-tail passes that raised. The tail runs on the flusher thread,
+        #: outside `guarded`, so it keeps its own count.
+        self.cron_errors = 0
+        #: The tenant's HMAC key (`hash_key`), loaded on first use.
+        self._hash_key: Optional[bytes] = None
+        #: Diagnostic counters, names only (`tenant_id_not_uuid`, …).
+        self.counters: dict[str, int] = {}
+        self._check_tenant_id()
         #: Test seam. When set, used in place of `post_events`.
         self.sender: Optional[Callable[[str, str, list], SendResult]] = None
 
@@ -247,6 +422,27 @@ class Collector:
         """Re-read the kill switches."""
         self.config = Config()
         self._config_at = time.monotonic()
+        self._check_tenant_id()
+
+    def _check_tenant_id(self) -> None:
+        """Count, and log once per process, a `TENANT_ID` that is not a UUID.
+
+        Ingest recomputes `cron.run`'s id from the tenant id its token belongs
+        to; a sandbox whose `TENANT_ID` is some other spelling of it has every
+        `cron.run` quarantined as `event_id_mismatch`. The value is never logged.
+        """
+        tenant = self.config.tenant_id
+        if not tenant:
+            return
+        try:
+            uuid.UUID(tenant)
+            return
+        except ValueError:
+            pass
+        self.counters["tenant_id_not_uuid"] = self.counters.get("tenant_id_not_uuid", 0) + 1
+        if "tenant_id_not_uuid" not in _LOGGED_COUNTERS:
+            _LOGGED_COUNTERS.add("tenant_id_not_uuid")
+            logger.warning("av-events: tenant_id_not_uuid=%d", self.counters["tenant_id_not_uuid"])
 
     def _ensure_buffer(self) -> Optional[Buffer]:
         if self.buffer is not None:
@@ -298,7 +494,8 @@ class Collector:
         """
         stamp = now_iso()
         event = {
-            "event_id": uuid7(),
+            # uuid v7 unless the caller derived one (`cron.run`, §4.3).
+            "event_id": refs.pop("event_id", None) or uuid7(),
             "event_type": event_type,
             "schema_version": SCHEMA_VERSION,
             "occurred_at": refs.pop("occurred_at", None) or stamp,
@@ -317,7 +514,9 @@ class Collector:
             "action_id": refs.pop("action_id", None),
             "outcome_id": refs.pop("outcome_id", None),
             "in_reply_to_event_id": refs.pop("in_reply_to_event_id", None),
-            "evidence_class": EVIDENCE_CLASS,
+            # `agent_report`, except the one claim a checkable receipt earns
+            # (`action.receipted`, §2.1's receipt allowance).
+            "evidence_class": refs.pop("evidence_class", None) or EVIDENCE_CLASS,
             "model_id": refs.pop("model_id", None),
             "prompt_version": refs.pop("prompt_version", None),
             "skill_version": refs.pop("skill_version", None),
@@ -429,7 +628,11 @@ class Collector:
             if state.started_emitted:
                 return
             state.started_emitted = True
-        self.emit("session.started", {"source": state.source or "unknown"}, session_id=state.session_id)
+        self.emit(
+            "session.started",
+            {"source": state.source or "unknown", "cron_job_id": cron_job_id_from(state.session_id)},
+            session_id=state.session_id,
+        )
 
     def session_ended(self, session_id: str, **extra: Any) -> None:
         with self._lock:
@@ -456,9 +659,15 @@ class Collector:
             "hook_max_ms": round(state.hook_max_ms, 3),
             "slowest_hook": state.slowest_hook,
             "degraded": state.degraded,
+            "cron_job_id": extra.get("cron_job_id") or cron_job_id_from(session_id),
+            # §4.1 `actual_cost_usd?`, `cost_source?`, from Hermes's own
+            # `state.db` row for the session (`read_session_cost`). Hermes's
+            # estimate rides beside it and is never promoted to "actual".
+            "actual_cost_usd": extra.get("actual_cost_usd"),
+            "cost_source": extra.get("cost_source"),
+            "estimated_cost_usd": extra.get("estimated_cost_usd"),
+            "cost_status": extra.get("cost_status"),
         }
-        if extra.get("cron_job_id"):
-            payload["cron_job_id"] = extra["cron_job_id"]
         self.emit("session.ended", payload, session_id=session_id)
         with self._lock:
             self.sessions.pop(session_id, None)
@@ -476,6 +685,204 @@ class Collector:
         if buffer is not None:
             buffer.rotate_if_due()
         self._wake.set()
+
+    # -- host stores: cost, profile, EdgeOS ledger, cron tail -------------
+    #
+    # Every read here is of a store Hermes owns, opened read-only, bounded, and
+    # "no data" on any failure. None of it is reachable from `pre_tool_call`.
+
+    def _read_json(self, path: str) -> Any:
+        try:
+            with open(path, encoding="utf-8") as handle:
+                return json.load(handle)
+        except (OSError, ValueError):
+            return None
+
+    def _write_json(self, path: str, data: Any) -> None:
+        tmp = f"{path}.{os.getpid()}.tmp"
+        try:
+            os.makedirs(os.path.dirname(path), mode=DIR_MODE, exist_ok=True)
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, FILE_MODE)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(data, handle, separators=(",", ":"))
+            os.replace(tmp, path)
+        except OSError:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+    def read_session_cost(self, session_id: str) -> dict:
+        """Hermes's cost columns for one session from `$HERMES_HOME/state.db`.
+
+        `sessions.actual_cost_usd`, `estimated_cost_usd`, `cost_status`,
+        `cost_source` (`hermes_state.py` at `v2026.8.31`). Read-only, with a
+        short lock timeout: a busy database costs this session its cost figure,
+        never the hook its budget. Nothing is read while the plugin is inert.
+        """
+        if self.plugin_disabled or not self.config.active:
+            return {}
+        rows = sqlite_read(
+            os.path.join(self.config.home, "state.db"),
+            "SELECT actual_cost_usd, estimated_cost_usd, cost_status, cost_source FROM sessions WHERE id = ?",
+            (session_id,),
+            timeout=0.05,
+        )
+        if not rows:
+            return {}
+        row = rows[0]
+
+        def usd(value: Any) -> Optional[float]:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return None
+            return float(value) if math.isfinite(value) and value >= 0 else None
+
+        def label(value: Any) -> Optional[str]:
+            return value if isinstance(value, str) and _COST_LABEL.match(value) else None
+
+        return {
+            "actual_cost_usd": usd(row.get("actual_cost_usd")),
+            "estimated_cost_usd": usd(row.get("estimated_cost_usd")),
+            "cost_status": label(row.get("cost_status")),
+            "cost_source": label(row.get("cost_source")),
+        }
+
+    def check_profile(self, session_id: Optional[str]) -> list[dict]:
+        """Emit `profile.updated` for each USER.md that has changed.
+
+        Two files, told apart by `kind` (`PROFILE_FILES`): `memory_profile` is
+        `$HERMES_HOME/memories/USER.md`, what the agent's memory tool keeps;
+        `landing_profile` is `$HERMES_HOME/USER.md`, what the landing's
+        enrichment wrote. §4.1 `user_md_hash`, `length`. The hash is the keyed
+        HMAC (`keyed_hash_bytes`) of the file's bytes — a short, templated
+        USER.md is guessable from a plain SHA-256 — and rides in every mode:
+        `core.tasks` keys on it, within the tenant. Without a key nothing is
+        emitted or recorded, and the next session end tries again. `length`
+        counts characters and is omitted in `metadata`. The last hash sent per kind is kept in
+        `$HERMES_HOME/av-events/profile.json` and recorded only after the event
+        is buffered, so an inert emit is retried at the next session end.
+        """
+        if self.plugin_disabled or not self.config.active:
+            return []
+        state_path = os.path.join(self.config.state_dir, "profile.json")
+        kinds = {kind for kind, _ in PROFILE_FILES}
+        emitted: list[dict] = []
+        # Two sessions can finalize at once; one of them reports the change.
+        with self._lock:
+            previous = self._read_json(state_path)
+            seen = {k: v for k, v in previous.items() if isinstance(v, str)} if isinstance(previous, dict) else {}
+            changed = False
+            for kind, parts in PROFILE_FILES:
+                path = os.path.join(self.config.home, *parts)
+                try:
+                    if os.path.getsize(path) > MAX_PROFILE_BYTES:
+                        continue
+                    with open(path, "rb") as handle:
+                        raw = handle.read(MAX_PROFILE_BYTES + 1)
+                except OSError:
+                    continue
+                digest = self.keyed_hash_bytes(raw)
+                if digest is None or seen.get(kind) == digest:
+                    continue
+                payload: dict[str, Any] = {"kind": kind, "user_md_hash": digest}
+                if self.config.capture != "metadata":
+                    payload["length"] = len(raw.decode("utf-8", errors="replace"))
+                event = self.emit("profile.updated", payload, session_id=session_id)
+                if event is not None:
+                    seen[kind] = digest
+                    changed = True
+                    emitted.append(event)
+            if changed:
+                self._write_json(state_path, {k: v for k, v in seen.items() if k in kinds})
+        return emitted
+
+    def hash_key(self) -> Optional[bytes]:
+        """The tenant's HMAC key (`load_or_create_key`), cached for the process.
+
+        None when it cannot be read or created; then nothing keyed is emitted
+        (null, never a plain hash in its place) and `hash_key_unavailable` is
+        counted. A failure is not cached, so a later hook can still succeed.
+        """
+        if self._hash_key is not None:
+            return self._hash_key
+        key = load_or_create_key(self.config.state_dir, self.counters)
+        if key is None:
+            self.counters["hash_key_unavailable"] = self.counters.get("hash_key_unavailable", 0) + 1
+            return None
+        self._hash_key = key
+        return key
+
+    def keyed_hash(self, text: str) -> Optional[str]:
+        """HMAC-SHA256 of `text` under the tenant's key, or None without a key.
+
+        For values that are not join keys across producers — message text, tool
+        arguments and results, a `metadata`-mode EdgeOS event id — a plain
+        SHA-256 of a few words is a dictionary lookup away from the words. The
+        key never leaves the sandbox, so the digest is useful only for counting
+        and joining within this tenant.
+        """
+        key = self.hash_key()
+        if key is None:
+            return None
+        return hmac.new(key, text.encode("utf-8", errors="surrogatepass"), hashlib.sha256).hexdigest()
+
+    def keyed_hash_bytes(self, raw: bytes) -> Optional[str]:
+        """`keyed_hash` over bytes as they are on disk."""
+        key = self.hash_key()
+        if key is None:
+            return None
+        return hmac.new(key, raw, hashlib.sha256).hexdigest()
+
+    def edgeos_ledger(self) -> Ledger:
+        self.edgeos.load(os.path.join(self.config.state_dir, "edgeos_actions.json"))
+        return self.edgeos
+
+    def save_edgeos_ledger(self) -> None:
+        self.edgeos.save(os.path.join(self.config.state_dir, "edgeos_actions.json"))
+
+    def cron_tick(self, now: Optional[float] = None) -> int:
+        """Emit `cron.run` for every newly finished cron execution. Flusher thread only.
+
+        The event id is §4.3's `uuid5(NS_AV, "{tenant}|cron|{execution_id}")`
+        when the tenant id is known, so a re-read, a second process tailing the
+        same ledger or a lost cursor all produce the same id and ingest keeps
+        one row. Without a tenant id it falls back to a uuid v7 and the cursor
+        file is the only dedupe.
+        """
+        if self.plugin_disabled or not self.config.active or "cron_run" in self.config.disabled_hooks:
+            return 0
+        try:
+            now = time.time() if now is None else now
+            cursor = self._cron_cursor
+            if cursor is None or cursor.path != os.path.join(self.config.state_dir, "cron_cursor.json"):
+                cursor = self._cron_cursor = CronCursor(os.path.join(self.config.state_dir, "cron_cursor.json"))
+            cursor.load(self._read_json)
+            emitted = 0
+            for payload in pending_runs(self.config.home, cursor, now):
+                execution_id = payload["execution_id"]
+                finished = payload["finished_at"]
+                event = self.emit(
+                    "cron.run",
+                    payload,
+                    event_id=cron_run_event_id(self.config.tenant_id, execution_id) if self.config.tenant_id else None,
+                    occurred_at=finished,
+                    occurred_at_earliest=payload["started_at"] or payload["claimed_at"],
+                    occurred_at_latest=finished,
+                    actor="system",
+                    # Hermes's task id for the run, so `cron.run` joins the
+                    # run's own `llm.call` / `tool.call` rows on `run_id`.
+                    run_id=f"cron:{payload['job_id']}:{execution_id}",
+                )
+                if event is None:
+                    break
+                cursor.add(execution_id)
+                emitted += 1
+            if emitted:
+                self._write_json(cursor.path, cursor.snapshot())
+            return emitted
+        except Exception:  # noqa: BLE001 - the tail must never take the flusher down
+            self.cron_errors += 1
+            return 0
 
     # -- failures ---------------------------------------------------------
 
@@ -666,6 +1073,9 @@ class Collector:
                 self.tick()
             except Exception:  # noqa: BLE001 - the flusher never dies
                 pass
+            if time.monotonic() - self._cron_at >= CRON_POLL_INTERVAL_S:
+                self._cron_at = time.monotonic()
+                self.cron_tick()
 
     def tick(self) -> None:
         """One flush pass. Runs on the flusher thread; tests call it directly."""

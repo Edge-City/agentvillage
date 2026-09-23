@@ -257,9 +257,10 @@ def test_session_started_waits_for_a_known_source(plugin, ctx, monkeypatch, av):
     monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
     plugin.register(ctx)
 
-    # A hook with no platform opens the session but must not emit yet.
+    # A hook with no platform opens the session but must not emit
+    # `session.started` yet (its own `tool.call` is not held back).
     ctx.fire("post_tool_call", session_id="s", tool_name="shell")
-    assert av.read_buffer(plugin._COLLECTOR) == []
+    assert av.types_of(av.read_buffer(plugin._COLLECTOR)) == ["tool.call"]
 
     ctx.fire("on_session_start", session_id="s", model="m", platform="telegram")
     starts = [e for e in av.read_buffer(plugin._COLLECTOR) if e["event_type"] == "session.started"]
@@ -272,7 +273,7 @@ def test_a_session_that_never_learns_its_source_still_reports(plugin, ctx, monke
     plugin.register(ctx)
     ctx.fire("post_tool_call", session_id="s", tool_name="shell")
     ctx.fire("on_session_finalize", session_id="s")
-    types = av.types_of(av.read_buffer(plugin._COLLECTOR))
+    types = [t for t in av.types_of(av.read_buffer(plugin._COLLECTOR)) if t.startswith("session.")]
     assert types == ["session.started", "session.ended"], types
 
 

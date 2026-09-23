@@ -35,6 +35,8 @@ AV_ENV_VARS = (
     "HERMES_VERSION",
     "OVERLAY_REF",
     "AV_OVERLAY_REF",
+    "TENANT_ID",
+    "AV_TENANT_ID",
 )
 
 

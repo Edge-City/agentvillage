@@ -344,6 +344,11 @@ def test_our_own_token_never_leaves(plugin, ctx, monkeypatch, av):
 
 
 def test_tool_categories_have_a_fallback(plugin):
-    assert plugin.tool_category("create_intent") == "intention"
+    # Hermes names an MCP tool `mcp__<server>__<tool>`; the allowlist is keyed
+    # that way, so a bare `create_intent` from some other source is not Index.
+    assert plugin.tool_category("mcp__index__create_intent") == "intention"
+    assert plugin.tool_category("create_intent") == plugin.UNLISTED_TOOL_CATEGORY
+    assert plugin.tool_category("mcp__other__create_intent") == plugin.UNLISTED_TOOL_CATEGORY
+    assert plugin.tool_category("terminal") == "system"
     assert plugin.tool_category("some_random_mcp_tool") == plugin.UNLISTED_TOOL_CATEGORY
     assert plugin.tool_category(None) == plugin.UNLISTED_TOOL_CATEGORY

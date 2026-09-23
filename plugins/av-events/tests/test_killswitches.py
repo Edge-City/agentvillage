@@ -64,7 +64,8 @@ def test_named_hooks_can_be_disabled_individually(plugin, ctx, monkeypatch, av):
     # `platform`, so `session.started` waits for a source (see test_review_findings).
     ctx.fire("pre_llm_call", session_id=SESSION, turn_id="t0", user_message="hi")
     assert SESSION in plugin._COLLECTOR.sessions
-    assert av.read_buffer(plugin._COLLECTOR) == []
+    # `message.in` is the hook's own event; `session.started` still waits.
+    assert av.types_of(av.read_buffer(plugin._COLLECTOR)) == ["message.in"]
 
     ctx.fire("pre_tool_call", session_id=SESSION, tool_name="shell")
     assert plugin._COLLECTOR.sessions[SESSION].tool_call_count == 0

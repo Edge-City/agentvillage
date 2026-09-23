@@ -147,6 +147,39 @@ function removeProjectFiles(wipeUser: boolean): void {
   }
 }
 
+/**
+ * `--wipe-user` only, and only once the gateway has stopped: state that
+ * describes the previous user and that a running gateway would otherwise
+ * write straight back.
+ *
+ * - `$HERMES_HOME/av-events/`: the av-events plugin's unsent event buffer,
+ *   tenant hash key, EdgeOS action ledger, cron cursor, profile and prompt
+ *   seen-sets. A plain reset keeps it: the tenant is the same person and the
+ *   buffer may hold unsent events.
+ * - `$HERMES_HOME/memories/USER.md`: what Hermes's memory tool learned about
+ *   the previous user (the `USER.md` next to `MEMORY.md` at the top level is
+ *   the landing's, removed by `removeProjectFiles`).
+ */
+export function removeWipeUserState(home: string = hermesHome()): string[] {
+  const removed: string[] = [];
+  for (const target of [join(home, "av-events"), join(home, "memories", "USER.md")]) {
+    if (!existsSync(target)) continue;
+    rmSync(target, { recursive: true, force: true });
+    console.log(`→ removed ${target}`);
+    removed.push(target);
+  }
+  return removed;
+}
+
+function stopGateway(): void {
+  try {
+    execFileSync("hermes", ["gateway", "stop"], { stdio: ["ignore", "ignore", "inherit"] });
+    console.log("→ gateway stopped");
+  } catch {
+    console.warn("  warning: could not stop gateway — user state is removed anyway and may be rewritten");
+  }
+}
+
 function restartGateway(): void {
   try {
     execFileSync("hermes", ["gateway", "restart"], { stdio: ["ignore", "ignore", "inherit"] });
@@ -156,6 +189,31 @@ function restartGateway(): void {
   }
 }
 
+export type ResetStep = [name: string, run: () => void];
+
+/**
+ * The reset, in order. With `--wipe-user` the gateway is stopped before the
+ * previous user's state is removed and started again after, so a live process
+ * cannot recreate the buffer or the key between the two.
+ */
+export function resetSteps(wipeUser: boolean): ResetStep[] {
+  const steps: ResetStep[] = [
+    ["ensureHermesAvailable", ensureHermesAvailable],
+    ["removeLegacyWorkspaceEdge", removeLegacyWorkspaceEdge],
+    ["removeCronJobs", removeCronJobs],
+    ["removeIndexMcpEntry", removeIndexMcpEntry],
+    ["removeSoulFile", removeSoulFile],
+    ["removeEdgeSkills", removeEdgeSkills],
+    ["removeProjectFiles", () => removeProjectFiles(wipeUser)],
+    ["resetRecall", () => resetRecall(wipeUser)],
+  ];
+  if (wipeUser) {
+    steps.push(["stopGateway", stopGateway], ["removeWipeUserState", () => removeWipeUserState()]);
+  }
+  steps.push(["restartGateway", restartGateway]);
+  return steps;
+}
+
 function main(): void {
   const wipeUser = process.argv.includes("--wipe-user");
 
@@ -163,15 +221,7 @@ function main(): void {
   console.log("=================");
   console.log("");
 
-  ensureHermesAvailable();
-  removeLegacyWorkspaceEdge();
-  removeCronJobs();
-  removeIndexMcpEntry();
-  removeSoulFile();
-  removeEdgeSkills();
-  removeProjectFiles(wipeUser);
-  resetRecall(wipeUser);
-  restartGateway();
+  for (const [, run] of resetSteps(wipeUser)) run();
 
   console.log("");
   console.log("✓ reset complete");
@@ -180,4 +230,5 @@ function main(): void {
   console.log("  re-install: bun install/install.ts --index-api-key <KEY>");
 }
 
-main();
+// Run only as a script, so the tests can import the steps.
+if (import.meta.main) main();

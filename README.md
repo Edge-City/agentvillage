@@ -282,11 +282,16 @@ Then re-install:
 bun install/install.ts --index-api-key <YOUR_API_KEY>
 ```
 
-Pass `--wipe-user` to also remove `USER.md`, `MEMORY.md`, and the entire `memory/` directory — including `agentvillage-state.json`, `welcome-state.json`, daily notes, and any other local memory files — so the next message can run the first-install gates again:
+Pass `--wipe-user` to also remove `USER.md`, `MEMORY.md`, and the entire `memory/` directory — including `agentvillage-state.json`, `welcome-state.json`, daily notes, and any other local memory files — and, after stopping the gateway so it cannot write them back, the memory tool's `memories/USER.md` and the `av-events` plugin's local state under `$HERMES_HOME/av-events/` (unsent event buffer, tenant hash key, EdgeOS action ledger, cron cursor, seen-sets); the gateway is then restarted — so the next message can run the first-install gates again:
 
 ```bash
 bun install/reset.ts --wipe-user
 ```
+
+The ordering (stop the gateway, remove the user state, restart) holds in a hosted sandbox because the
+sandbox's respawn loop restarts a stopped gateway after about 2 seconds (control-plane
+`sandbox.js`), well after the files are gone. Known, pre-existing: Hermes's `_cmd_restart` in
+foreground mode can hang, which can hang a control-plane reset command that runs this script.
 
 ## How it runs
 
