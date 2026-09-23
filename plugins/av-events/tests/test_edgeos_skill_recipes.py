@@ -85,10 +85,9 @@ def label(edgeos, command):
 
 @pytest.mark.parametrize("section,operations", [
     (3, ["edgeos.events_list"] * 5 + ["edgeos.event_read"]),
-    # The profile update's body carries `"picture_url":"https://..."`, a URL on
-    # another host, so the whole command is refused (the H1 host rule reads
-    # every URL in the command). A lost label on a write, never an action.
-    (8, ["edgeos.profile_read", None]),
+    # The profile update's body carries `"picture_url":"https://..."`: a URL
+    # inside a request body is content, not a target, so it is recognised.
+    (8, ["edgeos.profile_read", "edgeos.profile_update"]),
     (9, ["edgeos.directory_search"]),
 ])
 def test_the_other_recipes_carry_their_labels(edgeos, section, operations):
@@ -114,3 +113,10 @@ def test_a_verbatim_rsvp_recipe_waits_for_and_gets_its_receipt(plugin, ctx, monk
 def test_a_continuation_does_not_hide_a_second_command(edgeos):
     command = recipes(6)[0] + " \\\n; curl -s https://api.edgeos.world/api/v1/humans/me"
     assert edgeos.http_call("terminal", {"command": command}) is None
+
+
+def test_every_section_6_recipe_is_recognised_with_trailing_whitespace(edgeos):
+    for command in recipes(6):
+        for trailing in ("\n", "\n\n", "  \n"):
+            call, _, _ = recognise(edgeos, command + trailing)
+            assert call is not None

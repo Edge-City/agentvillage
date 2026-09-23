@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -159,8 +160,9 @@ def test_both_profiles_are_reported_by_kind(live, ctx, av, home):
     (home / "USER.md").write_text("landing profile\n")
     close(ctx, "s1")
     events = {e["payload"]["kind"]: e["payload"] for e in of_type(av, live, "profile.updated")}
-    assert events["memory_profile"]["user_md_hash"] == hashlib.sha256(b"memory profile\n").hexdigest()
-    assert events["landing_profile"]["user_md_hash"] == hashlib.sha256(b"landing profile\n").hexdigest()
+    key = bytes.fromhex((home / "av-events" / "hash.key").read_text().strip())
+    assert events["memory_profile"]["user_md_hash"] == hmac.new(key, b"memory profile\n", hashlib.sha256).hexdigest()
+    assert events["landing_profile"]["user_md_hash"] == hmac.new(key, b"landing profile\n", hashlib.sha256).hexdigest()
     close(ctx, "s2")
     assert len(of_type(av, live, "profile.updated")) == 2
     (home / "USER.md").write_text("landing profile, enriched\n")
@@ -169,14 +171,37 @@ def test_both_profiles_are_reported_by_kind(live, ctx, av, home):
     assert kinds[-1] == "landing_profile" and len(kinds) == 3
 
 
-def test_the_first_profile_state_layout_is_migrated(live, ctx, av, home):
+def test_the_profile_hash_is_keyed_not_a_plain_sha256(live, ctx, av, home):
+    """A short templated USER.md is guessable from a plain SHA-256."""
+    template = b"# About the user\n- Name: \n- Building: \n"
+    (home / "memories").mkdir()
+    (home / "memories" / "USER.md").write_bytes(template)
+    close(ctx, "s1")
+    digest = of_type(av, live, "profile.updated")[0]["payload"]["user_md_hash"]
+    assert digest != hashlib.sha256(template).hexdigest()
+    key = bytes.fromhex((home / "av-events" / "hash.key").read_text().strip())
+    assert digest == hmac.new(key, template, hashlib.sha256).hexdigest()
+
+
+def test_without_a_key_no_profile_event_and_nothing_recorded(live, ctx, av, home, monkeypatch):
     (home / "memories").mkdir()
     (home / "memories" / "USER.md").write_text("memory profile\n")
-    (home / "av-events").mkdir(exist_ok=True)
-    (home / "av-events" / "profile.json").write_text(
-        json.dumps({"user_md_hash": hashlib.sha256(b"memory profile\n").hexdigest()}))
+    collector = live._COLLECTOR
+    real_hash_key = collector.hash_key
+    unavailable = {"on": True}
+    monkeypatch.setattr(collector, "hash_key", lambda: None if unavailable["on"] else real_hash_key())
     close(ctx, "s1")
     assert of_type(av, live, "profile.updated") == []
+    assert not (home / "av-events" / "profile.json").exists()
+    # With a hash already on record, a missing key still emits nothing (no null hash).
+    (home / "av-events").mkdir(exist_ok=True)
+    (home / "av-events" / "profile.json").write_text(json.dumps({"memory_profile": "0" * 64}))
+    close(ctx, "s1b")
+    assert of_type(av, live, "profile.updated") == []
+    assert json.loads((home / "av-events" / "profile.json").read_text()) == {"memory_profile": "0" * 64}
+    unavailable["on"] = False
+    close(ctx, "s2")
+    assert len(of_type(av, live, "profile.updated")) == 1
 
 
 # --------------------------------------------------------------------------
@@ -412,6 +437,20 @@ def test_a_non_uuid_tenant_id_is_counted_and_logged_once(plugin, ctx, monkeypatc
     warnings = [r.getMessage() for r in caplog.records if "tenant_id_not_uuid" in r.getMessage()]
     assert len(warnings) == 1
     assert "tenant-secret-slug" not in caplog.text
+
+
+def test_an_upper_case_tenant_id_gives_the_lower_case_v5(plugin, ctx, monkeypatch, av, home):
+    """Ingest lower-cases the tenant id before recomputing `cron.run`'s id."""
+    monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
+    monkeypatch.setenv("TENANT_ID", TENANT.upper())
+    plugin.register(ctx)
+    ctx.fire("on_session_start", session_id="s", model="m", platform="telegram")
+    now = now_iso()
+    make_executions(home, [("e1", "job1", "completed", now, now, now, None, None)])
+    plugin._COLLECTOR.cron_tick()
+    ns = uuid.UUID("6d1f2d4e-6a6b-5c29-9b3a-0f0f9b1d4a11")
+    assert of_type(av, plugin, "cron.run")[0]["event_id"] == str(uuid.uuid5(ns, f"{TENANT}|cron|e1"))
+    assert "tenant_id_not_uuid" not in plugin._COLLECTOR.counters
 
 
 def test_a_uuid_tenant_id_is_not_counted(plugin, ctx, monkeypatch):

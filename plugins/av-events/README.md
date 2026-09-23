@@ -71,7 +71,8 @@ The ladder is about what leaves the sandbox, not about how much detail is record
 | Listed tool names and categories, EdgeOS operation names, `action.*`, `cron.run`, `message.out.silent` | yes | yes | yes |
 | `action.*` `edgeos_event_id` | keyed hash | the id | the id |
 | Lengths (`system_prompt_length`, `assistant_content_chars`, …) | no | yes | yes |
-| Intention `text_hash`, `summary_hash`; profile `user_md_hash` (plain SHA-256) | yes | yes | yes |
+| Intention `text_hash`, `summary_hash` (plain SHA-256) | yes | yes | yes |
+| Profile `user_md_hash` (keyed) | yes | yes | yes |
 | Intention `text_length` / `summary_length`; profile `length` | no | yes | yes |
 | `tool.call` `args_hash` / `result_hash` (keyed) and `args_length` / `result_length` | no | yes | yes |
 | `message.*` `length`, `content_hash` (keyed), `flags` | no | yes | yes |
@@ -82,10 +83,12 @@ The ladder is about what leaves the sandbox, not about how much detail is record
 configuration*, not the participant. Message text, tool arguments and tool results never leave in
 any mode, `full` included: text lives in the archive only (§7.5), and the training export reads it
 from there (§8). The intention hashes and the USER.md hash are the participant-derived values
-present in every mode: they are join keys (`core.intention_versions`, `core.tasks`), and they are
-hashes of long, free-form text. A message or tool-argument hash is not a join key and is often a
-hash of a few words — a dictionary lookup away from the words — so it is **keyed** (below) and
-`metadata` drops it.
+present in every mode, because they are join keys (`core.intention_versions`, `core.tasks`). The
+intention hashes stay plain SHA-256, since the Index poller outside the sandbox must compute the same
+value; the USER.md hash is **keyed** (below), since a short, templated USER.md is guessable from a
+plain SHA-256 and `core.tasks` joins on it only within the tenant. A message or tool-argument hash is
+not a join key and is often a hash of a few words — a dictionary lookup away from the words — so it
+is keyed too and `metadata` drops it.
 
 `full` differs from `sanitized` in exactly one way: `prompt.registered`.
 
@@ -99,7 +102,8 @@ is irrelevant; any change to a tool's schema changes the hash. Text is encoded a
 `errors="surrogatepass"`, so a lone surrogate hashes instead of raising; well-formed text hashes
 exactly as plain UTF-8.
 
-**Keyed hashes.** `message.*` `content_hash`, `tool.call` `args_hash` / `result_hash`, and in
+**Keyed hashes.** `message.*` `content_hash`, `tool.call` `args_hash` / `result_hash`,
+`profile.updated` `user_md_hash`, and in
 `metadata` the EdgeOS event and participant ids on `action.*`, are HMAC-SHA256 under a per-tenant
 random key at `$HERMES_HOME/av-events/hash.key` (64 hex characters, mode 0600). The key never leaves
 the sandbox, so these digests count and join within a tenant and are useless to anyone else.
@@ -111,9 +115,9 @@ catches it half-written (empty, or a hex prefix) waits up to 0.5 s for the rest 
 corrupt. Only a file that reads successfully and is otherwise not 64 hex characters is replaced
 (`hash_key_replaced`); any other read error — permissions, I/O — disables keying for now
 (`hash_key_unavailable`, retried on the next hook) and never rewrites the file. Without a key the
-digests are null — never a plain hash in their place. The intention hashes and `user_md_hash`
-stay plain SHA-256: they are join keys with producers outside the sandbox (the Index poller hashes
-the same Index fields). `reset.ts --wipe-user` stops the gateway, deletes the key with the rest of
+digests are null — never a plain hash in their place (and `profile.updated` is not emitted at all,
+nor recorded, until a key is available). The intention hashes stay plain SHA-256: they are join keys
+with a producer outside the sandbox (the Index poller hashes the same Index fields). `reset.ts --wipe-user` stops the gateway, deletes the key with the rest of
 `av-events/` (and the memory tool's `memories/USER.md`), then restarts it. `Buffer.append`
 recreates its directory if it disappears under a running process.
 
@@ -373,8 +377,12 @@ the skill's own recipes are multi-line, and `tests/test_edgeos_skill_recipes.py`
 recipe verbatim. The command is then tokenised as a shell would (`shlex`, with control operators
 and newlines split out) and read only when it is unambiguous:
 
-- **every** http(s) URL anywhere in the command — headers, `echo`s, a second command — is on the
-  EdgeOS host, with no userinfo and no port other than `:443`;
+- trailing whitespace is dropped first (a final newline runs nothing);
+- **every** http(s) URL in the command — the request target, headers, other options, anything before
+  the curl — is on the EdgeOS host, with no userinfo and no port other than `:443`. The one exception
+  is a request body: a URL inside the value of `-d`, `--data`, `--data-raw`, `--data-binary` or
+  `--json` is content (a `picture_url`), not a place the request goes, so it is not read. `-F` is
+  not a body in this sense (`-F x=@file` reads a file);
 - exactly one `curl` word, and it starts a command (`echo curl …` and a `for` body are not requests);
 - after a **write** (anything but GET) nothing follows it: no `;`, `&&`, `||`, `|`, redirect or new
   line — each could run a second request or rewrite what the agent saw as the response;
@@ -393,9 +401,9 @@ and newlines split out) and read only when it is unambiguous:
 - path parameters are UUIDs.
 
 **Known misses**, all conservative (the call is just a `tool.call`): a body built by command
-substitution (`-d "$(cat body.json)"`; the skill does not do this); any command whose body carries a
-URL on another host — the skill's own §8 profile-update recipe includes `"picture_url":"https://…"`,
-so it goes unlabelled; a curl through `execute_code` or another tool.
+substitution (`-d "$(cat body.json)"`; the skill does not do this); a curl through `execute_code` or
+another tool. Every recipe in the skill's §3, §6, §8 and §9 is recognised
+(`tests/test_edgeos_skill_recipes.py`).
 
 Anything else is just a `tool.call`. A recognised call labels its `tool.call` with `operation`
 (`edgeos.rsvp`, `edgeos.event_read`, `edgeos.profile_read`, …) and `target_system: "edgeos"`; the
@@ -492,7 +500,8 @@ task id for the run, so `cron.run` joins the run's `llm.call` and `tool.call` ro
 
 **Event id.** `uuid5(NS_AV, "{tenant_id}|cron|{execution_id}")`, exactly what ingest's
 `pluginEventIdProblem` recomputes from the token's tenant (`agentvillage-data/src/ingest/events.ts`);
-any other v5 is quarantined. The tenant id comes from `TENANT_ID` / `AV_TENANT_ID`. With it, a
+any other v5 is quarantined. The tenant id comes from `TENANT_ID` / `AV_TENANT_ID`, lower-cased as
+ingest lower-cases it (an upper-case UUID in the env gives the same id). With it, a
 re-read, a second process tailing the same ledger or a lost cursor all produce the same id and ingest
 keeps one row. Without it the id is a uuid v7 and the cursor is the only dedupe. A `TENANT_ID`
 that is not a UUID is counted in `Collector.counters["tenant_id_not_uuid"]` and logged once per
@@ -521,7 +530,8 @@ A busy, missing or corrupt database leaves all four null.
 what Hermes's memory tool keeps about the user; `landing_profile` is `$HERMES_HOME/USER.md`, what the
 landing's enrichment wrote (the control-plane sidecar's `USER_FILE`, and the installer's
 `targetWorkspace()`; `~/.hermes/USER.md` when `HERMES_HOME` is the default). Each `profile.updated`
-carries `kind`, `user_md_hash` (SHA-256 of the file's bytes) in every mode — `core.tasks` keys on it —
+carries `kind`, `user_md_hash` (the keyed hash of the file's bytes) in every mode — `core.tasks` keys
+on it within the tenant —
 and `length` (characters) above `metadata`. Each is emitted on first sight and whenever its hash
 changes; the last hash sent per kind is kept in `$HERMES_HOME/av-events/profile.json` only after the
 event is buffered. A file over 1 MiB is not read. **Timing (accepted for v1):** `profile.updated`
@@ -825,7 +835,8 @@ These are the divergences this milestone had to resolve. Each one is a decision 
     `is_recommendation` and `sentiment` are always null (see "Messages").
 28. **Non-join hashes are keyed.** §7.1 says "hashes"; `message.*` and `tool.call` hashes are
     HMAC-SHA256 under a per-tenant key, so they cannot be reversed by dictionary outside the sandbox
-    and cannot be compared across tenants. Intention and profile hashes stay plain SHA-256.
+    and cannot be compared across tenants. So is `profile.updated.user_md_hash` (a templated
+    USER.md is guessable from a plain SHA-256); only the intention hashes stay plain SHA-256.
 29. **Two USER.md files.** §4.1's `profile.updated` assumes one; the landing writes
     `$HERMES_HOME/USER.md` and the memory tool `$HERMES_HOME/memories/USER.md`. Both are reported, with
     `kind`.

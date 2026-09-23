@@ -512,7 +512,7 @@ def test_anything_else_after_a_read_is_not_read(live, ctx, av, command):
     assert of_type(av, live, "tool.call")[-1]["payload"]["operation"] is None
 
 
-@pytest.mark.parametrize("tail", ["\n", " 2>&1", " | jq .", " 2>&1 | jq ."])
+@pytest.mark.parametrize("tail", [" 2>&1", " | jq .", " 2>&1 | jq .", "\necho done", " ; true"])
 def test_a_write_accepts_no_tail_at_all(live, ctx, av, tail):
     fire(ctx, f"curl -s -X POST '{REGISTER_URL}' -d '{{}}'" + tail, terminal_result(participant()))
     assert actions(av, live) == []
@@ -522,3 +522,46 @@ def test_a_write_accepts_no_tail_at_all(live, ctx, av, tail):
 def test_a_body_from_command_substitution_is_a_known_miss(live, ctx, av):
     fire(ctx, f"curl -s -X POST '{REGISTER_URL}' -d \"$(cat body.json)\"", terminal_result(participant()))
     assert actions(av, live) == []
+
+
+@pytest.mark.parametrize("trailing", ["\n", "\n\n", "  \n", "\t", " \r\n"])
+def test_a_write_tolerates_trailing_whitespace(live, ctx, av, trailing):
+    body = participant()
+    fire(ctx, f"curl -s -X POST '{REGISTER_URL}' -d '{{}}'" + trailing, terminal_result(body))
+    assert actions(av, live) == [("action.attempted", "agent_report")]
+    read_event(ctx)
+    assert [e["payload"]["receipt"]["id"] for e in of_type(av, live, "action.receipted")] == [body["id"]]
+
+
+PROFILE_URL = f"{API}/humans/me"
+
+
+@pytest.mark.parametrize("command", [
+    f"curl -s -X PATCH '{PROFILE_URL}' -d '{{\"picture_url\":\"https://cdn.example/p.png\"}}'",
+    f"curl -s -X PATCH '{PROFILE_URL}' --data '{{\"u\":\"https://cdn.example/p.png\"}}'",
+    f"curl -s -X PATCH '{PROFILE_URL}' --data='{{\"u\":\"https://cdn.example/p.png\"}}'",
+    f"curl -s -X PATCH '{PROFILE_URL}' --data-raw '{{\"u\":\"https://cdn.example/p.png\"}}'",
+    f"curl -s -X PATCH '{PROFILE_URL}' --data-binary '{{\"u\":\"https://cdn.example/p.png\"}}'",
+    f"curl -s -X PATCH '{PROFILE_URL}' --json '{{\"u\":\"https://cdn.example/p.png\"}}'",
+    f"curl -s -X PATCH '{PROFILE_URL}' -d'{{\"u\":\"https://cdn.example/p.png\"}}'",
+    f"curl -s -X PATCH '{PROFILE_URL}' -sd '{{\"u\":\"https://cdn.example/p.png\"}}'",
+])
+def test_a_url_inside_a_request_body_is_content_not_a_target(live, ctx, av, command):
+    fire(ctx, command, terminal_result({"id": EVENT}))
+    assert of_type(av, live, "tool.call")[-1]["payload"]["operation"] == "edgeos.profile_update"
+    assert "cdn.example" not in json.dumps(av.read_buffer(live._COLLECTOR))
+
+
+@pytest.mark.parametrize("command", [
+    # A header, a form field, the target and a word outside curl all still count.
+    f"curl -s -X PATCH '{PROFILE_URL}' -H 'Referer: https://evil.example/' -d '{{}}'",
+    f"curl -s -X PATCH '{PROFILE_URL}' -F 'u=https://evil.example/p.png'",
+    f"curl -s -X PATCH https://evil.example/api/v1/humans/me -d '{{\"u\":\"{PROFILE_URL}\"}}'",
+    f"cd https://evil.example && curl -s -X PATCH '{PROFILE_URL}' -d '{{}}'",
+    # A body flag's value is only the next word: a URL after it is a target again.
+    f"curl -s -X PATCH '{PROFILE_URL}' -d '{{}}' https://evil.example/",
+    f"curl -s -X PATCH '{PROFILE_URL}' -d '{{}}' -H 'Referer: https://evil.example/'",
+])
+def test_urls_outside_request_bodies_still_count(live, ctx, av, command):
+    fire(ctx, command, terminal_result({}))
+    assert of_type(av, live, "tool.call")[-1]["payload"]["operation"] is None

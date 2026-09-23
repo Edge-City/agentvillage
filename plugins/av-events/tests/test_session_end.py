@@ -13,6 +13,14 @@ SESSION = "sess-end"
 PROFILE = "# About the user\n- Prefers mornings\n- Building a café ☕ robot\n"
 
 
+def keyed(home, raw: bytes) -> str:
+    """HMAC-SHA256 under the tenant key the plugin created at `hash.key`."""
+    import hmac as _hmac
+
+    key = bytes.fromhex((home / "av-events" / "hash.key").read_text(encoding="ascii").strip())
+    return _hmac.new(key, raw, hashlib.sha256).hexdigest()
+
+
 def write_state(home, session=SESSION, actual=None, estimated=0.0123, status="estimated", source="models_dev"):
     with sqlite3.connect(home / "state.db") as conn:
         conn.execute(
@@ -121,7 +129,8 @@ def test_profile_updated_on_first_sight_and_on_change_only(live, ctx, av, home):
     events = of_type(av, live, "profile.updated")
     assert len(events) == 1
     payload = events[0]["payload"]
-    assert payload["user_md_hash"] == hashlib.sha256(PROFILE.encode("utf-8")).hexdigest()
+    assert payload["user_md_hash"] == keyed(home, PROFILE.encode("utf-8"))
+    assert payload["user_md_hash"] != hashlib.sha256(PROFILE.encode("utf-8")).hexdigest()
     assert payload["length"] == len(PROFILE) < len(PROFILE.encode("utf-8"))
     assert events[0]["session_id"] == "s1"
     assert uuid.UUID(events[0]["event_id"]).version == 7
@@ -141,8 +150,8 @@ def test_profile_text_never_leaves(plugin, ctx, monkeypatch, av, home, mode):
     blob = json.dumps(av.read_buffer(plugin._COLLECTOR))
     assert "Prefers mornings" not in blob and "robot" not in blob
     payload = of_type(av, plugin, "profile.updated")[0]["payload"]
-    # The hash is the key `core.tasks` joins on and rides in every mode.
-    assert payload["user_md_hash"] == hashlib.sha256(PROFILE.encode("utf-8")).hexdigest()
+    # The hash is the key `core.tasks` joins on and rides in every mode — keyed.
+    assert payload["user_md_hash"] == keyed(home, PROFILE.encode("utf-8"))
     assert ("length" in payload) is (mode != "metadata")
 
 

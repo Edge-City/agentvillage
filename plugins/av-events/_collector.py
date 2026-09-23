@@ -271,7 +271,9 @@ class Config:
         # from the token's tenant. `TENANT_ID` is what the control plane already
         # sets for `plugins/dashboard-auth-edgecity`; `AV_TENANT_ID` overrides.
         tenant = env("AV_TENANT_ID") or env("TENANT_ID")
-        self.tenant_id = tenant if 0 < len(tenant) <= 128 else ""
+        # Lower-cased, as ingest lower-cases it before recomputing the id: an
+        # upper-case UUID in the env must not change every `cron.run` id.
+        self.tenant_id = tenant.lower() if 0 < len(tenant) <= 128 else ""
         register_literal_secret(self.token)
 
     @property
@@ -751,10 +753,12 @@ class Collector:
         Two files, told apart by `kind` (`PROFILE_FILES`): `memory_profile` is
         `$HERMES_HOME/memories/USER.md`, what the agent's memory tool keeps;
         `landing_profile` is `$HERMES_HOME/USER.md`, what the landing's
-        enrichment wrote. §4.1 `user_md_hash`, `length`. The hash is SHA-256 of
-        the file's bytes and rides in every mode — `core.tasks` keys on it, like
-        the intention hashes. `length` counts characters and is omitted in
-        `metadata`. The last hash sent per kind is kept in
+        enrichment wrote. §4.1 `user_md_hash`, `length`. The hash is the keyed
+        HMAC (`keyed_hash_bytes`) of the file's bytes — a short, templated
+        USER.md is guessable from a plain SHA-256 — and rides in every mode:
+        `core.tasks` keys on it, within the tenant. Without a key nothing is
+        emitted or recorded, and the next session end tries again. `length`
+        counts characters and is omitted in `metadata`. The last hash sent per kind is kept in
         `$HERMES_HOME/av-events/profile.json` and recorded only after the event
         is buffered, so an inert emit is retried at the next session end.
         """
@@ -767,8 +771,6 @@ class Collector:
         with self._lock:
             previous = self._read_json(state_path)
             seen = {k: v for k, v in previous.items() if isinstance(v, str)} if isinstance(previous, dict) else {}
-            if "user_md_hash" in seen and "memory_profile" not in seen:  # the first layout
-                seen["memory_profile"] = seen["user_md_hash"]
             changed = False
             for kind, parts in PROFILE_FILES:
                 path = os.path.join(self.config.home, *parts)
@@ -779,8 +781,8 @@ class Collector:
                         raw = handle.read(MAX_PROFILE_BYTES + 1)
                 except OSError:
                     continue
-                digest = hashlib.sha256(raw).hexdigest()
-                if seen.get(kind) == digest:
+                digest = self.keyed_hash_bytes(raw)
+                if digest is None or seen.get(kind) == digest:
                     continue
                 payload: dict[str, Any] = {"kind": kind, "user_md_hash": digest}
                 if self.config.capture != "metadata":
@@ -823,6 +825,13 @@ class Collector:
         if key is None:
             return None
         return hmac.new(key, text.encode("utf-8", errors="surrogatepass"), hashlib.sha256).hexdigest()
+
+    def keyed_hash_bytes(self, raw: bytes) -> Optional[str]:
+        """`keyed_hash` over bytes as they are on disk."""
+        key = self.hash_key()
+        if key is None:
+            return None
+        return hmac.new(key, raw, hashlib.sha256).hexdigest()
 
     def edgeos_ledger(self) -> Ledger:
         self.edgeos.load(os.path.join(self.config.state_dir, "edgeos_actions.json"))

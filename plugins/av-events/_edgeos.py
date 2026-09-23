@@ -162,6 +162,12 @@ _REFUSED_LONG = frozenset({"--resolve", "--connect-to", "--proxy", "--config", "
 #: end the cluster at `X` and take the rest, or the next word, as its value.
 _SHORT_WITH_ARG = frozenset("XdHFowuAebcrTmxEKzYyCPQtUD")
 _DATA_SHORT = frozenset("dF")
+#: Options whose value is a request body. A URL inside a body is content (a
+#: `picture_url`, a link in a message), not a place the request goes, so the
+#: other-host rule does not read it. `-F` is not among them: `-F x=@file`
+#: reads a file, and a form is not what the skill sends.
+_BODY_SHORT = frozenset("d")
+_BODY_LONG = frozenset({"--data", "--data-raw", "--data-binary", "--json"})
 _DATA_LONG = frozenset({
     "--data", "--data-raw", "--data-binary", "--data-urlencode", "--data-ascii", "--json",
     "--form", "--form-string",
@@ -209,8 +215,8 @@ def _tokens(command: str) -> Optional[list[str]]:
 _STDERR_TO_STDOUT = "2>&1"
 
 
-def _curl_segment(tokens: list[str]) -> Optional[tuple[list[str], list[str]]]:
-    """(the one `curl` command's arguments, whatever follows them), or None.
+def _curl_segment(tokens: list[str]) -> Optional[tuple[int, list[str], list[str]]]:
+    """(index of `curl`, its arguments, whatever follows them), or None.
 
     None unless there is exactly one `curl` word and it starts a command: one
     anywhere else — `echo curl …`, a `for` body, a second command — makes the
@@ -234,8 +240,8 @@ def _curl_segment(tokens: list[str]) -> Optional[tuple[list[str], list[str]]]:
         i += 1
     for index, token in enumerate(rest):
         if token == _STDERR_TO_STDOUT or _is_operator(token):
-            return rest[:index], rest[index:]
-    return rest, []
+            return start, rest[:index], rest[index:]
+    return start, rest, []
 
 
 def _is_newlines(token: str) -> bool:
@@ -263,11 +269,13 @@ def _read_tail_ok(tail: list[str]) -> tuple[bool, bool]:
     return i == len(tail), piped
 
 
-def _parse_curl(args: list[str]) -> Optional[tuple[str, list[str]]]:
-    """(METHOD, [url arguments]) from curl's argv, or None if it cannot be read."""
+def _parse_curl(args: list[str]) -> Optional[tuple[str, list[str], set]]:
+    """(METHOD, [url arguments], {positions in `args` holding a request body}),
+    or None if the argv cannot be read."""
     method_x: Optional[str] = None
     get = data = upload = False
     urls: list[str] = []
+    bodies: set = set()
     i = 0
     while i < len(args):
         token = args[i]
@@ -283,7 +291,11 @@ def _parse_curl(args: list[str]) -> Optional[tuple[str, list[str]]]:
                 if i >= len(args):
                     return None
                 value = args[i]
+                if name in _BODY_LONG:
+                    bodies.add(i)
                 i += 1
+            elif name in _BODY_LONG:
+                bodies.add(i - 1)  # `--data=…`: the value is in this token
             if name == "--request":
                 method_x = value
             elif name == "--get":
@@ -305,7 +317,11 @@ def _parse_curl(args: list[str]) -> Optional[tuple[str, list[str]]]:
                         if i >= len(args):
                             return None
                         value = args[i]
+                        if flag in _BODY_SHORT:
+                            bodies.add(i)
                         i += 1
+                    elif flag in _BODY_SHORT:
+                        bodies.add(i - 1)  # `-d{…}`: the value is in this token
                     if flag == "X":
                         method_x = value
                     elif flag in _DATA_SHORT:
@@ -327,7 +343,7 @@ def _parse_curl(args: list[str]) -> Optional[tuple[str, list[str]]]:
         method = "POST"
     else:
         method = "GET"
-    return method, urls
+    return method, urls, bodies
 
 
 def http_call(tool_name: Any, args: Any, allowlist: Allowlist = ALLOWLIST) -> Optional[HttpCall]:
@@ -347,11 +363,9 @@ def http_call(tool_name: Any, args: Any, allowlist: Allowlist = ALLOWLIST) -> Op
         return None
     # A backslash-newline is a line continuation, not a new command: the
     # skill's own recipes are written that way (`skills/edgeos/SKILL.md` §6).
-    command = command.replace("\\\r\n", " ").replace("\\\n", " ")
+    # Trailing whitespace (a final newline) runs nothing.
+    command = command.replace("\\\r\n", " ").replace("\\\n", " ").rstrip()
     if "`" in command or "$(" in command:  # command substitution: the shell decides, not us
-        return None
-    authorities = [m.group(1) for m in _ANY_URL.finditer(command)]
-    if not authorities or not all(_host_allowed(a, allowlist.hosts) for a in authorities):
         return None
     tokens = _tokens(command)
     if tokens is None:
@@ -359,11 +373,17 @@ def http_call(tool_name: Any, args: Any, allowlist: Allowlist = ALLOWLIST) -> Op
     found = _curl_segment(tokens)
     if found is None:
         return None
-    segment, tail = found
+    start, segment, tail = found
     parsed = _parse_curl(segment)
     if parsed is None:
         return None
-    method, urls = parsed
+    method, urls, bodies = parsed
+    # Every word of the command that is not a request body: request targets,
+    # headers, other options, anything before or after the curl.
+    words = [t for i, t in enumerate(tokens) if i - start - 1 not in bodies]
+    authorities = [m.group(1) for word in words for m in _ANY_URL.finditer(word)]
+    if not authorities or not all(_host_allowed(a, allowlist.hosts) for a in authorities):
+        return None
     if len(urls) != 1:
         return None
     piped = False
@@ -379,9 +399,10 @@ def http_call(tool_name: Any, args: Any, allowlist: Allowlist = ALLOWLIST) -> Op
     path = split.path.rstrip("/") or "/"
     # Every EdgeOS URL in the command must name this path: one in a header
     # (`-H "Referer: …"`) that names another is a second request in disguise.
-    for match in re.finditer(r"https?://[^/\s'\"`<>|;&()\\]*(/[^\s'\"`?#<>|;&()\\]*)", command, re.IGNORECASE):
-        if (match.group(1).rstrip("/") or "/") != path:
-            return None
+    for word in words:
+        for match in re.finditer(r"https?://[^/\s'\"`<>|;&()\\]*(/[^\s'\"`?#<>|;&()\\]*)", word, re.IGNORECASE):
+            if (match.group(1).rstrip("/") or "/") != path:
+                return None
     return HttpCall(method, path, parse_query(split.query), piped)
 
 
