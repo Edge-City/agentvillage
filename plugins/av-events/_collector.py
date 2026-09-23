@@ -252,7 +252,8 @@ class Config:
 
     __slots__ = (
         "enabled", "url", "token", "capture", "disabled_hooks", "home", "buffer_dir", "state_dir", "tenant_id",
-        "backup_url", "backup_token", "backup_tenant", "backup_max_bytes",
+        "backup_url", "backup_url_refused", "backup_token", "backup_tenant", "backup_max_bytes",
+        "backup_min_interval_s",
     )
 
     def __init__(self) -> None:
@@ -282,15 +283,28 @@ class Config:
         # class (`backup_write`). The tenant is used exactly as given — it is a
         # bucket key segment and the input the route derives the token from,
         # so lower-casing it (as `cron.run` does) could only break the match.
-        self.backup_url = env("AV_BACKUP_URL")
+        #
+        # The URL is read from the process environment only, never the
+        # `$HERMES_HOME/.env` fallback: the agent can write that file, and the
+        # backup token goes wherever this URL points. It must be https, or
+        # plain http to `*.railway.internal` or the local machine.
+        url = (os.environ.get("AV_BACKUP_URL") or "").strip()
+        allowed = not url or _backup.backup_url_allowed(url)
+        self.backup_url = url if allowed else ""
+        self.backup_url_refused = not allowed
         self.backup_token = env("AV_BACKUP_TOKEN")
         register_literal_secret(self.backup_token)
-        self.backup_tenant = tenant if _backup.TENANT_SEGMENT.match(tenant) else ""
+        self.backup_tenant = tenant if _backup.TENANT_SEGMENT.fullmatch(tenant) else ""
         try:
             limit = int(env("AV_BACKUP_MAX_BYTES") or 0)
         except ValueError:
             limit = 0
         self.backup_max_bytes = limit if limit > 0 else _backup.DEFAULT_MAX_BYTES
+        try:
+            interval = float(env("AV_BACKUP_MIN_INTERVAL_S") or _backup.DEFAULT_MIN_INTERVAL_S)
+        except ValueError:
+            interval = _backup.DEFAULT_MIN_INTERVAL_S
+        self.backup_min_interval_s = interval if math.isfinite(interval) and interval >= 0 else _backup.DEFAULT_MIN_INTERVAL_S
 
     @property
     def idle(self) -> bool:
@@ -449,6 +463,14 @@ class Collector:
         #: by `request_snapshot` and gone when nothing is pending.
         self._backup_lock = threading.Lock()
         self._backup_pending = False
+        #: The pending request may skip the rate limit (a finalize, or exit).
+        self._backup_urgent = False
+        #: Set by `_drain_backup`: run what is pending even though `_stop` is set.
+        self._backup_final = False
+        #: Wakes a thread waiting out the rate limit (a new urgent request, exit).
+        self._backup_wake = threading.Event()
+        #: monotonic start of the last pass, for `AV_BACKUP_MIN_INTERVAL_S`.
+        self._backup_last: Optional[float] = None
         self._backup_thread: Optional[threading.Thread] = None
         #: monotonic time before which no upload is tried (after a 401/403).
         self.backup_blocked_until = 0.0
@@ -740,39 +762,67 @@ class Collector:
         if first and name != "backup_uploaded":
             logger.warning("av-events: %s=%d", name, value)
 
-    def request_snapshot(self) -> bool:
+    def request_snapshot(self, urgent: bool = False) -> bool:
         """Ask for a memory snapshot. Returns at once; never I/O, never raises.
 
-        Called from `on_session_finalize`. Collecting, compressing and uploading
-        all happen on a single-flight daemon thread: a request while a pass is
-        running sets a flag, and that thread runs one more pass, so the last
-        session to finalize is always captured and there is never more than one
-        snapshot thread.
+        Called from `on_session_end` (every turn) and `on_session_finalize`
+        (`urgent`). Collecting, compressing and uploading all happen on a
+        single-flight daemon thread: a request while a pass is running or
+        waiting sets a flag, and that thread runs one more pass, so the last
+        turn is always captured and there is never more than one snapshot
+        thread. A turn's request waits out `AV_BACKUP_MIN_INTERVAL_S` since the
+        last pass began; a finalize's does not.
         """
         try:
-            if self.plugin_disabled or not self.config.backup_configured:
+            if self.plugin_disabled:
+                return False
+            if self.config.backup_url_refused:
+                self.count("backup_url_refused")
+                return False
+            if not self.config.backup_configured:
                 return False
             with self._backup_lock:
                 self._backup_pending = True
+                if urgent:
+                    self._backup_urgent = True
+                self._backup_wake.set()
                 if self._backup_thread is not None and self._backup_thread.is_alive():
                     return True
-                thread = threading.Thread(target=self._backup_loop, name="av-events-backup", daemon=True)
-                self._backup_thread = thread
-                thread.start()
+                self._start_backup_thread()
             self._register_atexit()
             return True
         except Exception:  # noqa: BLE001 - a snapshot never costs the hook anything
             self.count("backup_error")
             return False
 
+    def _start_backup_thread(self) -> threading.Thread:
+        """Under `_backup_lock`. May raise (no threads at interpreter shutdown, 3.12+)."""
+        thread = threading.Thread(target=self._backup_loop, name="av-events-backup", daemon=True)
+        self._backup_thread = thread
+        thread.start()
+        return thread
+
     def _backup_loop(self) -> None:
         while True:
             with self._backup_lock:
-                if not self._backup_pending or self._stop.is_set():
+                stopping = self._stop.is_set() and not self._backup_final
+                if not self._backup_pending or stopping:
                     if self._backup_thread is threading.current_thread():
                         self._backup_thread = None
                     return
-                self._backup_pending = False
+                wait = 0.0
+                if not (self._backup_urgent or self._backup_final) and self._backup_last is not None:
+                    wait = self._backup_last + self.config.backup_min_interval_s - time.monotonic()
+                self._backup_wake.clear()
+                if wait <= 0:
+                    self._backup_pending = False
+                    self._backup_urgent = False
+                    self._backup_last = time.monotonic()
+            if wait > 0:
+                # Woken early by an urgent request or by exit; either way the
+                # loop re-reads the flags.
+                self._backup_wake.wait(wait)
+                continue
             self.snapshot_once()
 
     def snapshot_once(self, now: Optional[float] = None, timeout: float = _backup.UPLOAD_TIMEOUT_S) -> str:
@@ -781,21 +831,32 @@ class Collector:
             return "disabled"
         return _backup.run_once(self, now, timeout)
 
-    def _drain_backup(self, budget: float = _backup.EXIT_BUDGET_S) -> None:
-        """At exit: let a running snapshot finish, or run a pending one, within `budget`."""
+    def _drain_backup(self, budget: Optional[float] = None) -> None:
+        """At exit: give a pending or running snapshot at most `budget` seconds.
+
+        The pass runs on the backup thread, never on the exiting one, and this
+        only joins it for what is left of the budget: an upload that hangs
+        costs the exit `budget`, not the upload's own timeout. A pending
+        request with no thread gets one if the interpreter still allows it
+        (3.12+ refuses new threads at shutdown; then the snapshot is skipped,
+        counted as `backup_exit_skipped`). Periodic turn-end passes are what
+        make the backup current; this is the last chance, not the mechanism.
+        """
         try:
-            deadline = time.monotonic() + budget
-            thread = self._backup_thread
-            if thread is not None and thread.is_alive():
-                thread.join(max(0.0, deadline - time.monotonic()))
-                if thread.is_alive():
-                    return
+            deadline = time.monotonic() + (_backup.EXIT_BUDGET_S if budget is None else budget)
             with self._backup_lock:
-                pending, self._backup_pending = self._backup_pending, False
-            remaining = deadline - time.monotonic()
-            if pending and remaining > 1.0:
-                # Two PUTs share what is left.
-                self.snapshot_once(timeout=remaining / 2)
+                self._backup_final = True
+                self._backup_wake.set()
+                thread = self._backup_thread
+                if thread is None or not thread.is_alive():
+                    if not self._backup_pending:
+                        return
+                    try:
+                        thread = self._start_backup_thread()
+                    except Exception:  # noqa: BLE001 - RuntimeError at shutdown
+                        self.count("backup_exit_skipped")
+                        return
+            thread.join(max(0.0, deadline - time.monotonic()))
         except Exception:  # noqa: BLE001 - never raise out of atexit
             pass
 

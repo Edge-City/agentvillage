@@ -1,12 +1,13 @@
 """Memory snapshot (DATA-82): the agent's memory files, backed up off the product path.
 
 A Railway sandbox has no volume, so a recreate loses `MEMORY.md`, both
-`USER.md` files and the daily notes. At session finalize the plugin asks for a
-snapshot; a daemon thread (never the hook) collects those files, packs them into
-a deterministic `tar.gz`, and PUTs it and a manifest to the ingest service's
-backup route, which stores them in the archive bucket under
-`backup/<tenant>/<YYYY-MM-DD>/`. `install/restore-memory.ts` puts them back on a
-recreated sandbox before the gateway starts.
+`USER.md` files and the daily notes. Every turn (`on_session_end`, rate-limited)
+and every session finalize the plugin asks for a snapshot; a daemon thread
+(never the hook) collects those files, packs them into a deterministic `tar.gz`,
+and PUTs it and a manifest to the ingest service's backup route, which stores
+them in the archive bucket under `backup/<tenant>/<YYYY-MM-DD>/`.
+`install/restore-memory.ts` puts them back on a recreated sandbox before the
+gateway starts.
 
 What is backed up is a fixed allowlist, never a directory walk:
 
@@ -14,9 +15,9 @@ What is backed up is a fixed allowlist, never a directory walk:
   curated memory, and the profile the landing's enrichment wrote);
 - `memories/MEMORY.md` and `memories/USER.md` (Hermes's memory tool,
   `tools/memory_tool.py` `get_memory_dir()`);
-- `memory/YYYY-MM-DD.md`, daily notes only — the same rule as
-  `skills/recall/scripts/recall.ts` `DAILY_NOTE_RE`, so drafts such as
-  `memory/digest-outgoing.md` and the JSON ledgers under `memory/` are not.
+- `memory/YYYY-MM-DD.md`, daily notes only, ASCII digits, the whole name —
+  `install/restore-memory.ts` applies the identical rule, and both suites read
+  one vector file (`tests/vectors/daily_note_names.json`).
 
 Nothing else can be included: not `.recall/` (derived, rebuilt from these
 files), not `av-events/` (this plugin's state, the HMAC key among it), not a
@@ -25,8 +26,8 @@ JSON ledger, not a symlink, a hard-linked file, a FIFO or a file over
 until someone adds it here.
 
 The archive is content-addressed: the same files give the same bytes and the
-same SHA-256 (sorted entries, zeroed tar metadata, gzip `mtime=0`), so an
-unchanged workspace uploads nothing and emits nothing.
+same SHA-256 (sorted entries, zeroed tar metadata, gzip `mtime=0` and OS byte
+255), so an unchanged workspace uploads nothing and emits nothing.
 
 Python 3.11, standard library only.
 """
@@ -35,15 +36,17 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import http.client
 import io
 import json
 import os
 import re
+import socket
 import stat
 import tarfile
+import threading
 import time
-import urllib.error
-import urllib.request
+import urllib.parse
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
@@ -54,32 +57,40 @@ from ._core import PLUGIN_VERSION, SendResult, canonical_json
 # Constants
 # --------------------------------------------------------------------------
 
-#: The fixed files, relative to `$HERMES_HOME`, in the order they are listed.
+#: The fixed files, relative to `$HERMES_HOME`, in the order they are collected.
 MEMORY_FILES = ("MEMORY.md", "USER.md", "memories/MEMORY.md", "memories/USER.md")
 
 #: The daily-notes directory, and the only names in it that are backed up.
+#: `fullmatch` and `[0-9]`: `$` would accept a trailing newline and `\d` any
+#: Unicode digit, and restore (which uses the same rule) would then refuse the
+#: whole snapshot over one oddly named file.
 DAILY_DIR = "memory"
-DAILY_NOTE = re.compile(r"^\d{4}-\d{2}-\d{2}\.md$")
+DAILY_NOTE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\.md")
 
 #: A file larger than this is skipped (counted, never truncated). Hermes caps
 #: MEMORY.md and USER.md at a few KiB; a daily note is a day of bullets.
 MAX_FILE_BYTES = 4 * 1024 * 1024
 
-#: Cap on the compressed archive, overridable by `AV_BACKUP_MAX_BYTES`. The
-#: upload route enforces its own cap; this keeps a runaway workspace from
-#: costing a PUT that will be refused anyway.
+#: Cap on the bytes collected (uncompressed) and on the compressed archive,
+#: overridable by `AV_BACKUP_MAX_BYTES`. Collection stops reading at the cap.
 DEFAULT_MAX_BYTES = 32 * 1024 * 1024
 
-#: One PUT's timeout. The snapshot runs on its own daemon thread, so this bounds
-#: that thread, not a hook.
+#: The least time between two passes requested from `on_session_end` (every
+#: turn), overridable by `AV_BACKUP_MIN_INTERVAL_S`. A finalize is not held to it.
+DEFAULT_MIN_INTERVAL_S = 300.0
+
+#: One PUT's wall-clock budget, enforced by a watchdog (`put_object`): a socket
+#: timeout alone bounds each read, not the request, and a server that trickles
+#: one byte a second would hold the thread indefinitely.
 UPLOAD_TIMEOUT_S = 30.0
 
-#: How long the atexit drain may spend on a pending snapshot.
+#: How long the exit drain waits for a pending or running snapshot.
 EXIT_BUDGET_S = 10.0
 
-#: After a 401 or 403 the route will not change its mind on its own (a wrong or
-#: rotated token, a withdrawn tenant): stop trying for this long.
+#: After a 401 the token may be fixed by an operator; retry after an hour.
 AUTH_COOLDOWN_S = 3600.0
+#: After a 403 the route has refused this tenant (a withdrawn tenant, DATA-93).
+FORBIDDEN_COOLDOWN_S = 24 * 3600.0
 
 MANIFEST_SCHEMA = "memory_manifest.v1"
 
@@ -89,18 +100,44 @@ MANIFEST_SCHEMA = "memory_manifest.v1"
 REF_PREFIX = "backup"
 
 #: Same shape as the archive bucket's key segment (`agentvillage-data`
-#: `src/archive/bucket.ts` `KEY_SEGMENT`), bounded.
-TENANT_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+#: `src/archive/bucket.ts` `KEY_SEGMENT`), bounded. Always `fullmatch`.
+TENANT_SEGMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
-_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+_HEX64 = re.compile(r"[0-9a-f]{64}")
+#: What `utc_iso` writes; anything else in `backup.json` is not trusted.
+_ISO_MS = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z")
 
 #: Names the plugin uploads. The route accepts exactly these two shapes.
 ARCHIVE_NAME = "memory.{}.tar.gz"
 MANIFEST_NAME = "manifest.{}.json"
 
+#: Plain-http hosts the backup token may be sent to: Railway private networking
+#: and the local machine. Everything else must be https.
+_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
 
 def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def backup_url_allowed(url: str) -> bool:
+    """https anywhere; http only to `*.railway.internal` or the local machine.
+
+    No userinfo, query or fragment. The token goes wherever this URL points.
+    """
+    try:
+        parts = urllib.parse.urlsplit(url.strip())
+        host = (parts.hostname or "").lower()
+        _ = parts.port  # raises on a malformed port
+    except ValueError:
+        return False
+    if not host or parts.username or parts.password or parts.query or parts.fragment:
+        return False
+    if parts.scheme == "https":
+        return True
+    if parts.scheme == "http":
+        return host in _LOCAL_HOSTS or host.endswith(".railway.internal")
+    return False
 
 
 # --------------------------------------------------------------------------
@@ -118,11 +155,19 @@ class MemoryFile:
 @dataclass
 class Collected:
     files: list[MemoryFile] = field(default_factory=list)
-    #: Candidate files that exist but were not taken, by reason. Counts only.
+    #: Candidate files that exist but were not taken, by reason code. Counts only.
     skipped: dict[str, int] = field(default_factory=dict)
 
-    def skip(self, reason: str) -> None:
-        self.skipped[reason] = self.skipped.get(reason, 0) + 1
+    def skip(self, reason: str, n: int = 1) -> None:
+        self.skipped[reason] = self.skipped.get(reason, 0) + n
+
+    @property
+    def skipped_count(self) -> int:
+        return sum(self.skipped.values())
+
+    @property
+    def total_bytes(self) -> int:
+        return sum(len(f.data) for f in self.files)
 
 
 def _is_plain_dir(path: str) -> bool:
@@ -133,7 +178,9 @@ def _is_plain_dir(path: str) -> bool:
         return False
 
 
-def _read_one(home: str, rel: str, out: Collected) -> None:
+def _read_one(home: str, rel: str, out: Collected, budget: int) -> bool:
+    """Read one candidate into `out`. False when it did not fit in `budget`
+    (the caller then stops reading)."""
     parts = rel.split("/")
     # Every parent below $HERMES_HOME must be a real directory: `memory -> /`
     # or `memories -> .recall` must not route the read anywhere else.
@@ -142,30 +189,32 @@ def _read_one(home: str, rel: str, out: Collected) -> None:
         if not _is_plain_dir(parent):
             if os.path.lexists(parent):
                 out.skip("parent_not_directory")
-            return
+            return True
     path = os.path.join(home, *parts)
     try:
         # O_NOFOLLOW: a symlink fails to open. O_NONBLOCK: a FIFO does not hang
         # the thread on open (it is then refused as not a regular file).
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
-        return
+        return True
     except OSError:
         out.skip("unreadable")  # a symlink (ELOOP), permissions, I/O
-        return
+        return True
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
             out.skip("not_regular")
-            return
+            return True
         if info.st_nlink > 1:
             # A hard link could be another file entirely (`av-events/hash.key`),
             # as recall also assumes; it is not taken.
             out.skip("hard_linked")
-            return
+            return True
         if info.st_size > MAX_FILE_BYTES:
             out.skip("too_large")
-            return
+            return True
+        if out.total_bytes + info.st_size > budget:
+            return False
         chunks: list[bytes] = []
         remaining = MAX_FILE_BYTES + 1
         while remaining > 0:
@@ -177,32 +226,43 @@ def _read_one(home: str, rel: str, out: Collected) -> None:
         data = b"".join(chunks)
         if len(data) > MAX_FILE_BYTES:
             out.skip("too_large")  # grew while we read it
-            return
+            return True
+        if out.total_bytes + len(data) > budget:
+            return False
         out.files.append(MemoryFile(rel, data, int(info.st_mtime_ns // 1_000_000)))
     except OSError:
         out.skip("unreadable")
     finally:
         os.close(fd)
+    return True
 
 
 def candidate_paths(home: str) -> list[str]:
-    """The allowlisted relative paths that could exist, daily notes sorted."""
+    """The allowlisted relative paths that could exist, in collection order:
+    the four fixed files, then daily notes newest first — so when the byte
+    budget runs out it is the oldest notes that are left behind."""
     paths = list(MEMORY_FILES)
     daily = os.path.join(home, DAILY_DIR)
     if _is_plain_dir(daily):
         try:
-            names = sorted(os.listdir(daily))
+            names = sorted(os.listdir(daily), reverse=True)
         except OSError:
             names = []
-        paths.extend(f"{DAILY_DIR}/{name}" for name in names if DAILY_NOTE.match(name))
+        paths.extend(f"{DAILY_DIR}/{name}" for name in names if DAILY_NOTE.fullmatch(name))
     return paths
 
 
-def collect(home: str) -> Collected:
-    """Read every allowlisted memory file that exists. Never raises for a file."""
+def collect(home: str, budget: int = DEFAULT_MAX_BYTES) -> Collected:
+    """Read every allowlisted memory file that exists, up to `budget` bytes in
+    total. Once a file does not fit, nothing more is read and every remaining
+    candidate counts as `over_budget`. Never raises for a file."""
     out = Collected()
-    for rel in candidate_paths(home):
-        _read_one(home, rel, out)
+    candidates = candidate_paths(home)
+    for index, rel in enumerate(candidates):
+        if not _read_one(home, rel, out, budget):
+            remaining = [r for r in candidates[index:] if os.path.lexists(os.path.join(home, *r.split("/")))]
+            out.skip("over_budget", len(remaining))
+            break
     out.files.sort(key=lambda f: f.path)
     return out
 
@@ -217,7 +277,8 @@ def build_archive(files: list[MemoryFile]) -> bytes:
 
     USTAR (no pax headers), entries sorted by path, every per-entry fact that
     is not the path and the bytes zeroed (mtime, uid/gid, owner names, a fixed
-    mode), and gzip written with `mtime=0` and no file name. The same files
+    mode), and gzip with `mtime=0` and the OS byte pinned to 255 ("unknown":
+    Python 3.12+ may take the platform's value from zlib). The same files
     therefore give the same archive bytes, which is what makes the upload
     content-addressed. File mtimes live in the manifest instead.
     """
@@ -232,7 +293,9 @@ def build_archive(files: list[MemoryFile]) -> bytes:
             info.uname = info.gname = ""
             info.type = tarfile.REGTYPE
             tar.addfile(info, io.BytesIO(item.data))
-    return gzip.compress(raw.getvalue(), compresslevel=9, mtime=0)
+    archive = bytearray(gzip.compress(raw.getvalue(), compresslevel=9, mtime=0))
+    archive[9] = 255  # OS byte; not covered by the gzip CRC
+    return bytes(archive)
 
 
 def utc_date(epoch: float) -> str:
@@ -244,6 +307,17 @@ def utc_iso(epoch: float) -> str:
     return stamp.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+def valid_iso(value: Any) -> bool:
+    """An ISO-8601 UTC timestamp as `utc_iso` writes it, and a real instant."""
+    if not isinstance(value, str) or not _ISO_MS.fullmatch(value):
+        return False
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
+
+
 @dataclass(frozen=True)
 class Snapshot:
     tenant: str
@@ -252,6 +326,7 @@ class Snapshot:
     archive: bytes
     content_hash: str
     files: tuple[MemoryFile, ...]
+    skipped: tuple[tuple[str, int], ...] = ()
 
     @property
     def archive_name(self) -> str:
@@ -265,6 +340,15 @@ class Snapshot:
     def file_count(self) -> int:
         return len(self.files)
 
+    @property
+    def skipped_count(self) -> int:
+        return sum(n for _, n in self.skipped)
+
+    @property
+    def partial(self) -> bool:
+        """Some allowlisted file exists and is not in this snapshot."""
+        return self.skipped_count > 0
+
     def manifest(self) -> dict:
         return {
             "schema": MANIFEST_SCHEMA,
@@ -275,6 +359,9 @@ class Snapshot:
             "archive": {"name": self.archive_name, "sha256": self.content_hash, "bytes": len(self.archive)},
             "file_count": self.file_count,
             "total_bytes": self.total_bytes,
+            "partial": self.partial,
+            # Reason codes and counts only: never a skipped file's name.
+            "skipped": {"count": self.skipped_count, "reasons": dict(sorted(self.skipped))},
             "files": [
                 {"path": f.path, "sha256": sha256_hex(f.data), "bytes": len(f.data), "mtime_ms": f.mtime_ms}
                 for f in self.files
@@ -285,7 +372,9 @@ class Snapshot:
         return canonical_json(self.manifest()).encode("utf-8")
 
 
-def build_snapshot(files: list[MemoryFile], tenant: str, now: float) -> Snapshot:
+def build_snapshot(
+    files: list[MemoryFile], tenant: str, now: float, skipped: Optional[dict[str, int]] = None
+) -> Snapshot:
     archive = build_archive(files)
     return Snapshot(
         tenant=tenant,
@@ -294,6 +383,7 @@ def build_snapshot(files: list[MemoryFile], tenant: str, now: float) -> Snapshot
         archive=archive,
         content_hash=sha256_hex(archive),
         files=tuple(sorted(files, key=lambda f: f.path)),
+        skipped=tuple(sorted((skipped or {}).items())),
     )
 
 
@@ -329,38 +419,60 @@ def backup_base(url: str) -> str:
 Uploader = Callable[[str, str, str, str, str, bytes, str, float], SendResult]
 
 
+def _abort(conn: http.client.HTTPConnection) -> None:
+    """Watchdog: wake a thread blocked on this connection's socket."""
+    sock = conn.sock
+    if sock is None:
+        return
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+
+
 def put_object(
     url: str, token: str, tenant: str, date: str, name: str, body: bytes, content_type: str, timeout: float
 ) -> SendResult:
     """`PUT {base}/v1/backup/<tenant>/<date>/<name>` with the tenant's backup token.
 
-    The name carries the body's SHA-256, which the route recomputes; the header
-    repeats it so a proxy that mangles the body is caught before it is stored.
+    `timeout` bounds the whole request, not each socket read: a watchdog shuts
+    the socket down when it expires. The name carries the body's SHA-256, which
+    the route recomputes; the header repeats it so a proxy that mangles the body
+    is caught before it is stored. Redirects are not followed.
     """
-    request = urllib.request.Request(
-        f"{backup_base(url)}/v1/backup/{tenant}/{date}/{name}",
-        data=body,
-        headers={
-            "Content-Type": content_type,
-            "Accept": "application/json",
-            "Authorization": f"Bearer {token}",
-            "X-Content-SHA256": sha256_hex(body),
-        },
-        method="PUT",
-    )
+    if not backup_url_allowed(url):
+        return SendResult(False, None, "url_not_allowed")
+    parts = urllib.parse.urlsplit(backup_base(url))
+    path = f"{parts.path}/v1/backup/{tenant}/{date}/{name}"
+    cls = http.client.HTTPSConnection if parts.scheme == "https" else http.client.HTTPConnection
+    conn = cls(parts.hostname, parts.port, timeout=timeout)
+    timer = threading.Timer(timeout, _abort, (conn,))
+    timer.daemon = True
+    timer.start()
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            status = int(getattr(response, "status", 0) or 0)
-            response.read()
-            return SendResult(200 <= status < 300, status)
-    except urllib.error.HTTPError as exc:
-        try:
-            exc.read()
-        except Exception:  # noqa: BLE001 - draining the body must never raise
-            pass
-        return SendResult(False, exc.code, "http_error")
-    except Exception as exc:  # noqa: BLE001 - URLError, timeouts, TLS, DNS
+        conn.request(
+            "PUT",
+            path,
+            body=body,
+            headers={
+                "Content-Type": content_type,
+                "Accept": "application/json",
+                "Authorization": f"Bearer {token}",
+                "X-Content-SHA256": sha256_hex(body),
+            },
+        )
+        response = conn.getresponse()
+        status = int(response.status)
+        response.read(64 * 1024)
+        return SendResult(200 <= status < 300, status, "" if 200 <= status < 300 else "http_error")
+    except Exception as exc:  # noqa: BLE001 - refused, reset, watchdog, TLS, DNS
         return SendResult(False, None, type(exc).__name__)
+    finally:
+        timer.cancel()
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # --------------------------------------------------------------------------
@@ -378,18 +490,32 @@ def target_id(url: str, tenant: str) -> str:
 def _valid_state(raw: Any) -> Optional[dict]:
     if not isinstance(raw, dict):
         return None
+
+    def count(value: Any) -> bool:
+        return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
     ok = (
         isinstance(raw.get("content_hash"), str)
-        and _HEX64.match(raw["content_hash"])
+        and _HEX64.fullmatch(raw["content_hash"])
         and isinstance(raw.get("manifest_sha256"), str)
-        and _HEX64.match(raw["manifest_sha256"])
+        and _HEX64.fullmatch(raw["manifest_sha256"])
         and isinstance(raw.get("target"), str)
-        and isinstance(raw.get("bytes"), int)
-        and isinstance(raw.get("file_count"), int)
-        and isinstance(raw.get("created_at"), str)
+        and count(raw.get("bytes"))
+        and count(raw.get("file_count"))
+        # It becomes `occurred_at` on an owed event: only a real timestamp.
+        and valid_iso(raw.get("created_at"))
         and isinstance(raw.get("emitted"), bool)
     )
     return raw if ok else None
+
+
+def restore_failed(collector: Any) -> bool:
+    """`install/restore-memory.ts` left `av-events/restore.json` saying `error`:
+    this sandbox's memory was not restored, and a snapshot of what is here now
+    would become "latest" over the real backup. Upload nothing until a restore
+    succeeds or an operator removes the marker."""
+    marker = collector._read_json(os.path.join(collector.config.state_dir, "restore.json"))
+    return isinstance(marker, dict) and marker.get("status") == "error"
 
 
 def run_once(collector: Any, now: Optional[float] = None, timeout: float = UPLOAD_TIMEOUT_S) -> str:
@@ -397,9 +523,9 @@ def run_once(collector: Any, now: Optional[float] = None, timeout: float = UPLOA
 
     `collector` supplies `config`, `emit`, `count`, `_read_json`,
     `_write_json` and the `backup_uploader` test seam. Statuses:
-    `unconfigured`, `blocked`, `empty`, `unchanged`, `emitted` (an earlier
-    upload's event, owed because the emit was inert then), `too_large`,
-    `failed`, `uploaded`, `error`.
+    `unconfigured`, `blocked`, `blocked_by_restore`, `empty`, `unchanged`,
+    `emitted` (an earlier upload's event, owed because the emit was inert
+    then), `too_large`, `failed`, `uploaded`, `error`.
     """
     try:
         return _run_once(collector, time.time() if now is None else now, timeout)
@@ -416,19 +542,24 @@ def _run_once(collector: Any, now: float, timeout: float) -> str:
         return "unconfigured"
     if collector.backup_blocked_until > time.monotonic():
         return "blocked"
+    if restore_failed(collector):
+        collector.count("backup_blocked_by_restore")
+        return "blocked_by_restore"
     state_path = os.path.join(config.state_dir, "backup.json")
     target = target_id(config.backup_url, config.backup_tenant)
 
-    collected = collect(config.home)
-    for reason, n in collected.skipped.items():
-        collector.count(f"backup_skipped_{reason}", n)
+    collected = collect(config.home, config.backup_max_bytes)
+    if collected.skipped:
+        collector.count("backup_skipped", collected.skipped_count)
+        for reason, n in collected.skipped.items():
+            collector.count(f"backup_skipped_{reason}", n)
     if not collected.files:
         # Nothing to back up. Never upload an empty snapshot: it would become
         # "latest" and a recreate would restore nothing over a real backup.
         collector.count("backup_empty")
         return "empty"
 
-    snapshot = build_snapshot(collected.files, config.backup_tenant, now)
+    snapshot = build_snapshot(collected.files, config.backup_tenant, now, collected.skipped)
     previous = _valid_state(collector._read_json(state_path))
     if previous is not None and previous["content_hash"] == snapshot.content_hash and previous["target"] == target:
         if previous["emitted"]:
@@ -463,9 +594,12 @@ def _run_once(collector: Any, now: float, timeout: float) -> str:
         )
         if not result.ok:
             collector.count("backup_upload_failed")
-            if result.status in (401, 403):
-                collector.count(f"backup_upload_{result.status}")
+            if result.status == 401:
+                collector.count("backup_upload_401")
                 collector.backup_blocked_until = time.monotonic() + AUTH_COOLDOWN_S
+            elif result.status == 403:
+                collector.count("backup_forbidden")
+                collector.backup_blocked_until = time.monotonic() + FORBIDDEN_COOLDOWN_S
             return "failed"
 
     event = collector.emit(
@@ -483,6 +617,7 @@ def _run_once(collector: Any, now: float, timeout: float) -> str:
             "created_at": snapshot.created_at,
             "bytes": snapshot.total_bytes,
             "file_count": snapshot.file_count,
+            "partial": snapshot.partial,
             "emitted": event is not None,
         },
     )

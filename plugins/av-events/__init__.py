@@ -645,10 +645,16 @@ def _hook_on_session_end(collector: Collector, **kwargs: Any) -> None:
 
     Despite the name this fires at the end of every `run_conversation` call —
     once per user message (`agent/turn_finalizer.py:828`). So it nudges the
-    flusher and nothing more; `session.ended` comes from `on_session_finalize`.
+    flusher and asks for a (rate-limited) memory snapshot, nothing more;
+    `session.ended` comes from `on_session_finalize`.
     """
     _session(collector, kwargs)
     collector.nudge_flush()
+    # Once per turn, so a gateway whose sessions are never finalized (the
+    # common case: a Telegram conversation just goes quiet) still backs up.
+    # Rate-limited to one pass per `AV_BACKUP_MIN_INTERVAL_S`; an unchanged
+    # workspace uploads nothing, so a pass is a read and a hash.
+    collector.request_snapshot()
 
 
 def _hook_on_session_finalize(collector: Collector, **kwargs: Any) -> None:
@@ -657,11 +663,13 @@ def _hook_on_session_finalize(collector: Collector, **kwargs: Any) -> None:
     a memory snapshot. In that order, so nothing the profile check or the
     snapshot does can cost the session its end event.
 
-    The snapshot request only sets a flag and starts (or reuses) a daemon
-    thread: the files are read, packed and uploaded there, never here. Hermes
-    has no shutdown hook at `0.21.3`; gateway shutdown finalizes open sessions,
-    which lands here, and the plugin's atexit drain gives that snapshot a
-    bounded chance to finish (`Collector.shutdown`)."""
+    The snapshot request only sets a flag and starts (or wakes) a daemon
+    thread: the files are read, packed and uploaded there, never here. A
+    finalize's request skips the turn-end rate limit. Hermes has no shutdown
+    hook at `0.21.3`; gateway shutdown finalizes open sessions, which lands
+    here, and the exit drain joins that thread for a bounded time
+    (`Collector.shutdown`). The turn-end requests are what keep the backup
+    current; this is the last chance, not the mechanism."""
     session_id = kwargs.get("session_id")
     if not session_id:
         return
@@ -670,7 +678,7 @@ def _hook_on_session_finalize(collector: Collector, **kwargs: Any) -> None:
     cost = collector.read_session_cost(session_id) if state is not None and not state.ended else {}
     collector.session_ended(session_id, **cost)
     collector.check_profile(session_id)
-    collector.request_snapshot()
+    collector.request_snapshot(urgent=True)
 
 
 def _hook_subagent_start(collector: Collector, **kwargs: Any) -> None:

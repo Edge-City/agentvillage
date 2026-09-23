@@ -6,7 +6,8 @@ hook, and can be switched off per tenant or fleet-wide by environment variable w
 
 Python 3.11, standard library only. No third-party dependencies, no secrets in the repo, and the
 only network destinations it will ever contact are `AV_EVENTS_URL` and, for the memory snapshot,
-`AV_BACKUP_URL`.
+`AV_BACKUP_URL`. That amends spec §7.1's "network calls to AV_EVENTS_URL only" to "network calls
+to AV_EVENTS_URL and AV_BACKUP_URL only"; the amendment is owed to spec draft 1.2.
 
 ```
 plugins/av-events/
@@ -39,9 +40,10 @@ plugins/av-events/
 | `AV_CAPTURE` | `sanitized` | `metadata` \| `sanitized` \| `full`. An unrecognised value falls back to `sanitized`. |
 | `TENANT_ID`, `AV_TENANT_ID` | *(unset)* | The tenant id, used for one thing only: `cron.run`'s derived event id (spec §4.3). `TENANT_ID` is what the control plane already sets for `dashboard-auth-edgecity`; `AV_TENANT_ID` overrides it. Unset means `cron.run` gets a uuid v7 (see "Cron capture"). |
 | `HERMES_VERSION`, `OVERLAY_REF` | *(unset)* | Optional; populate the envelope fields of the same name. See "What the API does not provide". |
-| `AV_BACKUP_URL` | *(unset)* | Base URL of the ingest service's backup route (`…/v1/backup` accepted too). **Unset or blank: no memory snapshot, nothing read, no thread.** See "Memory snapshot". |
+| `AV_BACKUP_URL` | *(unset)* | Base URL of the ingest service's backup route (`…/v1/backup` accepted too). **Process environment only, never `.env`**; https, or http only to `*.railway.internal` or the local machine. **Unset, blank or refused: no memory snapshot, nothing read, no thread.** See "Memory snapshot". |
 | `AV_BACKUP_TOKEN` | *(unset)* | The tenant's `backup_write` token (DATA-93). Required with the URL. Redacted like `AV_EVENTS_TOKEN`. |
-| `AV_BACKUP_MAX_BYTES` | `33554432` | Largest compressed snapshot the plugin will upload; a larger one is skipped and counted. |
+| `AV_BACKUP_MAX_BYTES` | `33554432` | Most file bytes a snapshot reads (the rest are skipped and the snapshot marked partial) and largest compressed archive it uploads. |
+| `AV_BACKUP_MIN_INTERVAL_S` | `300` | Least time between two turn-triggered snapshot passes. A session finalize is not held to it. |
 
 Every variable is read from the process environment first and then from `$HERMES_HOME/.env`, the
 same fallback `plugins/dashboard-auth-edgecity` uses. The dotfile is parsed once and memoised on its
@@ -123,7 +125,7 @@ corrupt. Only a file that reads successfully and is otherwise not 64 hex charact
 digests are null — never a plain hash in their place (and `profile.updated` is not emitted at all,
 nor recorded, until a key is available). The intention hashes stay plain SHA-256: they are join keys
 with a producer outside the sandbox (the Index poller hashes the same Index fields). `reset.ts --wipe-user` stops the gateway, deletes the key with the rest of
-`av-events/` (and the memory tool's `memories/USER.md`), then restarts it. `Buffer.append`
+`av-events/` (and the memory tool's `memories/USER.md` and `memories/MEMORY.md`), then restarts it. `Buffer.append`
 recreates its directory if it disappears under a running process.
 
 **Sanitiser.** Every string that leaves passes a secret-shape filter: Anthropic, OpenRouter and
@@ -174,7 +176,7 @@ backlog can differ from `emitted_at` by minutes. Every `marts` time series is bu
 | `intention.updated` | `post_tool_call` on Index `update_intent` with a new `description`, or `record_intention` naming an id | as above |
 | `intention.withdrawn` | `post_tool_call` on Index `update_intent` to `archived`/`deleted`/`withdrawn`, or `delete_intent`, or `record_intention(action="archive"\|"withdraw"\|"delete")` | as above; both hashes null |
 | `memory.recalled` | `recall:memory.recalled` on the plugin event bus (published by `plugins/recall`) | `query_hash`, `hit_count`, `top_score`, `surface`; the hash and score are null in `metadata` — see below |
-| `memory.snapshot` | the backup thread, after `on_session_finalize` asked for a snapshot and both uploads succeeded | `bytes`, `file_count`, `content_hash`, `manifest_ref` — exactly `memory.snapshot@1`'s closed key set, the same in every capture mode — see "Memory snapshot" |
+| `memory.snapshot` | the backup thread, after `on_session_end` (rate-limited) or `on_session_finalize` asked for a snapshot and both uploads succeeded | `bytes`, `file_count`, `content_hash`, `manifest_ref` — exactly `memory.snapshot@1`'s closed key set, the same in every capture mode — see "Memory snapshot" |
 
 `prompt.registered` is content-addressed against a seen-set at `$HERMES_HOME/av-events/seen.json`,
 so the same tool schemas register once and never again, across sessions and process restarts. The
@@ -553,13 +555,28 @@ not the distillation (`MEMORY.md`) or the daily notes. The plugin backs up those
 `install/restore-memory.ts` puts them back on a recreated sandbox before the gateway starts.
 Everything here is **off the product path**: a failure anywhere is a counter, never the session's.
 
-**When.** `on_session_finalize` (after `session.ended` and `profile.updated`) calls
-`request_snapshot()`. That sets a flag and, when none is running, starts one daemon thread,
-`av-events-backup`. The thread runs passes until no request is pending: a finalize during a pass
-costs one more pass, never a second thread. Hermes has no shutdown hook at `0.21.3` (`VALID_HOOKS`),
-but gateway shutdown finalizes open sessions (`gateway/run_shutdown.py`). The plugin's atexit handler
-(`Collector.shutdown`) first gives a running or pending snapshot up to 10 s, then flushes, so the
-`memory.snapshot` it emits is sent with the rest.
+**When.** Two triggers, both of which only set a flag and, if no snapshot thread is running, start
+one daemon thread (`av-events-backup`):
+
+- **Every turn**: `on_session_end`, which Hermes fires once per user message (divergence 4). This is
+  the trigger that keeps the backup current. A gateway's conversations are usually never finalized:
+  a Telegram chat just goes quiet. These requests are rate-limited: the thread waits until
+  `AV_BACKUP_MIN_INTERVAL_S` (default 300 s) has passed since the last pass began, and the turns in
+  between fold into that one pass. So the last turn is always captured, at most one interval late.
+- **Every session finalize**: `on_session_finalize`, after `session.ended` and `profile.updated`.
+  It is not held to the interval: a waiting thread is woken and runs at once.
+
+The thread runs passes until no request is pending, and there is never a second thread. An
+unchanged workspace uploads nothing, so a pass is a read and a hash.
+
+**Exit.** Hermes has no shutdown hook at `0.21.3` (`VALID_HOOKS`), but gateway shutdown finalizes open
+sessions (`gateway/run_shutdown.py`). The plugin's exit handler (`Collector.shutdown`) then joins the
+snapshot thread for at most 10 s (`EXIT_BUDGET_S`) before the final event flush. The pass always
+runs on that thread, never the exiting one, so a hung upload costs the exit 10 s and no more. If a
+request is pending and no thread is alive, one is started if the interpreter still allows it. Python
+3.12+ refuses new threads at shutdown; the snapshot is then skipped and counted as
+`backup_exit_skipped`. **This is the last chance, not the mechanism**: the per-turn passes are what
+the backup relies on.
 
 **What.** A fixed allowlist relative to `$HERMES_HOME`, never a directory walk:
 
@@ -567,7 +584,7 @@ but gateway shutdown finalizes open sessions (`gateway/run_shutdown.py`). The pl
 |---|---|
 | `MEMORY.md`, `USER.md` | the workspace: the agent's curated memory, and the profile the landing's enrichment wrote |
 | `memories/MEMORY.md`, `memories/USER.md` | Hermes's memory tool (`tools/memory_tool.py`, `get_memory_dir()`) |
-| `memory/YYYY-MM-DD.md` | daily notes, the same rule as recall's `DAILY_NOTE_RE` |
+| `memory/YYYY-MM-DD.md` | daily notes: `re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\.md", name)`. ASCII digits only, and the whole name, so no trailing newline. `install/restore-memory.ts` applies the identical rule, and both suites read `tests/vectors/daily_note_names.json`; a name only one side accepted would make every restore of that snapshot refuse |
 
 Never included: `.recall/` (derived data, rebuilt from these files), `av-events/` (this plugin's
 state, `hash.key` among it), JSON ledgers (`memory/heartbeat-state.json`, …), non-daily markdown under
@@ -576,8 +593,17 @@ counted (`backup_skipped_<reason>`): a symlinked file (`O_NOFOLLOW`), a file und
 `memory/` or `memories/`, a hard-linked file (`st_nlink > 1`, as recall does), a FIFO or directory
 wearing a memory file's name, and a file over 4 MiB.
 
+**Budget.** Collection reads at most `AV_BACKUP_MAX_BYTES` (default 32 MiB) of file bytes. The order is
+the four fixed files, then daily notes newest first. Once a file would not fit, nothing more is
+read, and every remaining candidate is skipped as `over_budget`, so the oldest notes are the ones
+left behind. Any skip makes the snapshot **partial**. The manifest says so (`partial: true`,
+`skipped: {count, reasons: {<code>: n}}`: reason codes and counts, never a file name), and so does
+restore's output. The event stays the registered closed key set; `backup_skipped` and
+`backup_skipped_<reason>` count it in the sandbox.
+
 **How.** The files go into one USTAR `tar.gz`, built deterministically: entries sorted, every tar
-field but the path and the bytes zeroed, gzip `mtime=0`. The same files give the same bytes whatever
+field but the path and the bytes zeroed, gzip `mtime=0` and the gzip OS byte pinned to 255. Python
+3.12+ may otherwise take the platform's value from zlib. The same files give the same bytes whatever
 their mtimes or the clock. The archive's SHA-256 is `content_hash`. It is PUT first, then the
 manifest that names it, to `{AV_BACKUP_URL}/v1/backup/<tenant>/<YYYY-MM-DD>/<name>` with
 `Authorization: Bearer $AV_BACKUP_TOKEN`:
@@ -585,7 +611,17 @@ manifest that names it, to `{AV_BACKUP_URL}/v1/backup/<tenant>/<YYYY-MM-DD>/<nam
 - `memory.<content_hash>.tar.gz`;
 - `manifest.<sha256 of the manifest>.json`: canonical JSON `{schema: "memory_manifest.v1",
   tenant_id, date, created_at, plugin_version, archive: {name, sha256, bytes}, file_count,
-  total_bytes, files: [{path, sha256, bytes, mtime_ms}]}`.
+  total_bytes, partial, skipped: {count, reasons}, files: [{path, sha256, bytes, mtime_ms}]}`.
+
+Each PUT has a 30 s wall-clock budget, enforced by a watchdog that shuts the socket down. A socket
+timeout alone bounds each read, not the request, and a server that trickles a byte a second would
+otherwise hold the thread indefinitely. Redirects are not followed.
+
+**The URL.** `AV_BACKUP_URL` is read from the **process environment only**, never the
+`$HERMES_HOME/.env` fallback every other variable has. The agent can write that file, and the backup
+token goes wherever the URL points. The URL must be https, or plain http only to
+`*.railway.internal` or the local machine, with no userinfo, query or fragment. Any other value
+disables snapshots and is counted as `backup_url_refused`.
 
 The route stores both under `backup/<tenant>/<date>/` in the archive bucket. That prefix is kept
 apart from the research archive's `<tenant>/<date>/`. The route contract (PUT and GET, the
@@ -600,7 +636,11 @@ archive hashes the same, to the same destination, uploads nothing and emits noth
 itself carries `created_at` and so is never byte-stable. The comparison is therefore on
 `content_hash`, which covers every path and byte. A workspace with no memory files at all uploads
 nothing either: an empty snapshot would become "latest" and a recreate would restore nothing over a
-real backup.
+real backup. For the same reason nothing is uploaded while `av-events/restore.json` (written by
+`install/restore-memory.ts`) says `error`: the sandbox does not hold the tenant's memory. That skip
+is counted as `backup_blocked_by_restore`. A later successful restore, or an operator removing the
+marker, lifts it. A `created_at` read back from `backup.json` must be an ISO-8601 UTC timestamp
+before it can become an owed event's `occurred_at`; a record that fails any check is ignored.
 
 **The event.** `memory.snapshot` is emitted once both PUTs return 2xx. Its payload is
 `{bytes: total of the files' sizes, file_count, content_hash, manifest_ref: "backup/<manifest
@@ -611,9 +651,10 @@ the snapshot's `created_at`. `bytes` is file bytes, not archive bytes, so it is 
 event without uploading again.
 
 **Failure.** Any non-2xx or network error is `backup_upload_failed`, nothing is recorded, and the
-next finalize tries again. After a 401 or 403 nothing is tried for an hour (`backup_upload_401` /
-`_403`). An archive over `AV_BACKUP_MAX_BYTES` is `backup_too_large`. Any exception is
-`backup_error`. Each counter is logged once per process as a name and a count, never a path or a
+next request tries again. After a 401 nothing is tried for an hour (`backup_upload_401`: a wrong or
+rotated token an operator may fix). After a 403 nothing is tried for 24 hours (`backup_forbidden`):
+the route refuses a withdrawn tenant (DATA-93). An archive over `AV_BACKUP_MAX_BYTES` is
+`backup_too_large`. Any exception is `backup_error`. Each counter is logged once per process as a name and a count, never a path or a
 value. The hook breaker never counts a backup failure. **Switches**: unset `AV_BACKUP_URL` (or
 the token, or the tenant), `AV_EVENTS_ENABLED=0`, or `AV_HOOKS_DISABLED=memory_snapshot`.
 
@@ -622,11 +663,24 @@ the token, or the tenant), `AV_EVENTS_ENABLED=0`, or `AV_HOOKS_DISABLED=memory_s
 It fetches `GET …/v1/backup/<tenant>/latest` (or `--manifest <date>/manifest.<sha>.json` for an older
 one). Before writing anything it verifies the manifest against its key, the archive against the
 manifest, and every file's SHA-256, size and path against the allowlist. Any mismatch refuses the
-whole restore. It writes each file with the snapshot's mtime and never overwrites a local file newer
-than the snapshot's copy unless `--force`. It prints one JSON line (`status`, `snapshot_ref`,
-`bytes`, `file_count`, …), from which the control plane emits `memory.restored`, and emits nothing
-itself. Run it before anything writes a fresh `USER.md`: a template written after the snapshot is
-"newer" and would be kept.
+whole restore. It never overwrites a local file newer than the snapshot's copy unless `--force`.
+Writing is two-phase. Every file is first staged to a temp name in its own directory, with the
+snapshot's mtime. Only when all are staged is each renamed into place. A write error is
+`status: "error"`, `reason: "write_failed"`, with the counts of what was renamed; a staging error
+renames nothing. The script prints one JSON line (`status`, `snapshot_ref`, `bytes`, `file_count`,
+`partial`, …), from which the control plane emits `memory.restored`, and emits nothing itself. It
+writes `$HERMES_HOME/av-events/restore.json` (`status` ∈ `restored|none|error`, the manifest key).
+`--dry-run` prints `status: "dry_run"` and writes nothing.
+
+**For the control plane:**
+
+- **Do not start the gateway on a restore `error`.** The sandbox then lacks the tenant's memory. The
+  marker stops the plugin from uploading over the real backup, but a running agent would start
+  writing new memory on an empty slate.
+- Run the restore before anything writes a fresh `USER.md`: a template written after the snapshot
+  is "newer" and would be kept.
+- `reset.ts --wipe-user` removes `av-events/` (with `backup.json` and `restore.json`) and both
+  `memories/` files, so a new user does not inherit the previous user's backup state.
 
 **Consent (draft for Timour, spec 1.2 §2.2-d).** The memory files are the attendee's own data,
 kept under operational scope, and withdrawal deletes the tenant's `backup/<tenant>/` prefix. Proposed

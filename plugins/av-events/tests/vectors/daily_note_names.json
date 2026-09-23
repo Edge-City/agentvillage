@@ -1,0 +1,33 @@
+{
+  "_comment": "Daily-note file names under memory/. Read by plugins/av-events/tests/test_memory_snapshot.py (the snapshot's DAILY_NOTE) and install/tests/restore_memory.test.ts (restore's allowlist). Both sides must agree on every entry, or a snapshot could hold a file that every restore then refuses.",
+  "accept": [
+    "2026-09-22.md",
+    "2026-10-01.md",
+    "0000-00-00.md",
+    "9999-99-99.md"
+  ],
+  "reject": [
+    "2026-09-22.md\n",
+    "2026-09-22.md\r",
+    "2026-09-22\n.md",
+    "\n2026-09-22.md",
+    "２０２６-09-24.md",
+    "٢٠٢٦-٠٩-٢٢.md",
+    "2026-9-22.md",
+    "2026-09-2.md",
+    "26-09-22.md",
+    "2026_09_22.md",
+    "2026-09-22.MD",
+    "2026-09-22.md.bak",
+    "2026-09-22.txt",
+    "2026-09-22",
+    ".2026-09-22.md",
+    "x2026-09-22.md",
+    " 2026-09-22.md",
+    "2026-09-22.md ",
+    "2026-09-22-draft.md",
+    "digest-outgoing.md",
+    "heartbeat-state.json",
+    ""
+  ]
+}
