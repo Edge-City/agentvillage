@@ -594,8 +594,16 @@ def restore_blocks(collector: Any, now: float) -> bool:
     return True
 
 
-def _record_failure(collector: Any, status: Optional[int]) -> None:
-    """Exponential backoff over consecutive failures; a 401/403 cooldown when longer."""
+def _record_failure(collector: Any, status: Optional[int], state_path: str) -> None:
+    """Exponential backoff over consecutive failures; a 401/403 cooldown when longer.
+
+    A 403 also forgets everything `backup.json` says the route holds (the last
+    upload and the accepted archive hashes). The route refuses a withdrawn
+    tenant, and withdrawal deletes the tenant's bucket prefix, so none of it
+    is true any more. Without this, a tenant who re-consents keeps an
+    "unchanged" workspace forever un-uploaded and `latest` stays 404. The first
+    pass after the cooldown then uploads whatever is there, in full.
+    """
     failures = getattr(collector, "backup_failures", 0) + 1
     collector.backup_failures = failures
     cooldown = min(BACKOFF_BASE_S * (2 ** (failures - 1)), BACKOFF_MAX_S)
@@ -606,6 +614,7 @@ def _record_failure(collector: Any, status: Optional[int]) -> None:
     elif status == 403:
         collector.count("backup_forbidden")
         cooldown = max(cooldown, FORBIDDEN_COOLDOWN_S)
+        collector._write_json(state_path, {})
     collector.backup_blocked_until = time.monotonic() + cooldown
 
 
@@ -716,7 +725,7 @@ def _run_once(collector: Any, now: float, timeout: float) -> str:
     if snapshot.content_hash not in accepted:
         result = put_archive()
         if not result.ok:
-            _record_failure(collector, result.status)
+            _record_failure(collector, result.status, state_path)
             return "failed"
     result = put_manifest()
     if result.status == 409:
@@ -731,7 +740,7 @@ def _run_once(collector: Any, now: float, timeout: float) -> str:
         if result.ok:
             result = put_manifest()
     if not result.ok:
-        _record_failure(collector, result.status)
+        _record_failure(collector, result.status, state_path)
         return "failed"
     collector.backup_failures = 0
 
