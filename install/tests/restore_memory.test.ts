@@ -214,6 +214,18 @@ test("an archive that does not match the manifest is refused, and nothing is wri
   expect(listTree(home)).toEqual([]);
 });
 
+test("an archive with the right length and files but different bytes is refused on its own hash", async () => {
+  const snap = pythonSnapshot(FILES);
+  publish(snap);
+  // The gzip header's OS byte: still valid gzip, same length, same tar inside.
+  const altered = new Uint8Array(snap.archive);
+  altered[9] = altered[9] === 3 ? 7 : 3;
+  route.objects.set(`backup/${TENANT}/${snap.date}/${snap.archiveName}`, altered);
+  const home = tempDir("home");
+  expect(await restore(home)).toMatchObject({ status: "refused", reason: "archive_hash_mismatch" });
+  expect(listTree(home)).toEqual([]);
+});
+
 test("a file whose hash does not match its manifest entry refuses the whole restore", async () => {
   const snap = pythonSnapshot(FILES);
   publishEdited(snap, (doc) => {
