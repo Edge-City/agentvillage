@@ -51,7 +51,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
-from ._core import PLUGIN_VERSION, SendResult, canonical_json
+from ._core import PLUGIN_VERSION, SendResult, canonical_json, is_redirect
 
 # --------------------------------------------------------------------------
 # Constants
@@ -456,7 +456,11 @@ def put_object(
     `timeout` bounds the whole request, not each socket read: a watchdog shuts
     the socket down when it expires. The name carries the body's SHA-256, which
     the route recomputes; the header repeats it so a proxy that mangles the body
-    is caught before it is stored. Redirects are not followed.
+    is caught before it is stored.
+
+    Redirects are not followed: `http.client` has no redirect handling at all,
+    so a 3xx is just this response's status and the bearer only ever goes to
+    `url`'s host. It comes back as `SendResult(False, <3xx>, "redirect")`.
     """
     if not backup_url_allowed(url):
         return SendResult(False, None, "url_not_allowed")
@@ -482,7 +486,9 @@ def put_object(
         response = conn.getresponse()
         status = int(response.status)
         response.read(64 * 1024)
-        return SendResult(200 <= status < 300, status, "" if 200 <= status < 300 else "http_error")
+        if 200 <= status < 300:
+            return SendResult(True, status)
+        return SendResult(False, status, "redirect" if is_redirect(status) else "http_error")
     except Exception as exc:  # noqa: BLE001 - refused, reset, watchdog, TLS, DNS
         return SendResult(False, None, type(exc).__name__)
     finally:
@@ -608,6 +614,8 @@ def _record_failure(collector: Any, status: Optional[int], state_path: str) -> N
     collector.backup_failures = failures
     cooldown = min(BACKOFF_BASE_S * (2 ** (failures - 1)), BACKOFF_MAX_S)
     collector.count("backup_upload_failed")
+    if is_redirect(status):
+        collector.count("backup_redirect_refused")
     if status == 401:
         collector.count("backup_upload_401")
         cooldown = max(cooldown, AUTH_COOLDOWN_S)

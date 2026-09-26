@@ -872,6 +872,32 @@ class Buffer:
 # --------------------------------------------------------------------------
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect.
+
+    urllib's default handler follows 301/302/303 (and 307/308 for a GET) and
+    re-sends every header but the content ones, `Authorization` included, to
+    whatever host `Location` names. Ingest never redirects, so a 3xx is a
+    misconfiguration or an attack, and following it would hand the bearer to
+    a host other than the configured URL's. With `redirect_request` returning
+    None, urllib raises `HTTPError` with the 3xx code instead, and no request
+    is made to the new location.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401, ANN001
+        return None
+
+
+#: The only urllib opener this plugin sends a bearer through: the events
+#: poster and the consent fetch. (The backup uploader speaks `http.client`
+#: directly, which never follows a redirect.)
+NO_REDIRECT_OPENER = urllib.request.build_opener(NoRedirect)
+
+
+def is_redirect(status: Optional[int]) -> bool:
+    return status is not None and 300 <= status < 400
+
+
 class SendResult:
     __slots__ = ("ok", "status", "reason")
 
@@ -895,12 +921,25 @@ class SendResult:
         it says this *process's* token is wrong, not the batch, so the batch
         stays queued for a process that has the right one. 403 is a verdict on
         the batch (wrong tenant, source or token class) and is not retryable.
+
+        A 3xx is refused, never followed (`NoRedirect`), and is retryable like
+        a 5xx: ingest never redirects, so a redirect is a fault in front of
+        it (a proxy, a moved domain), not a verdict on the batch. The batch
+        waits, backing off, until the fault is fixed or it is 72 hours old;
+        quarantining it would throw away good evidence.
         """
         if self.status is None:
             return True
         if self.status in RETRYABLE_STATUSES:
             return True
+        if is_redirect(self.status):
+            return True
         return self.status >= 500
+
+    @property
+    def redirect_refused(self) -> bool:
+        """The server answered 3xx and the redirect was not followed."""
+        return not self.ok and is_redirect(self.status)
 
     @property
     def auth_refused(self) -> bool:
@@ -909,7 +948,11 @@ class SendResult:
 
 
 def post_events(url: str, token: str, events: list[dict]) -> SendResult:
-    """POST one batch. The only network destination this plugin has."""
+    """POST one batch to `{url}/v1/events`, and nowhere else.
+
+    Sent through `NO_REDIRECT_OPENER`: a 3xx is `SendResult(False, <3xx>,
+    "redirect")` and the bearer never reaches the `Location` host.
+    """
     body = json.dumps({"events": events}, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         url.rstrip("/") + "/v1/events",
@@ -922,7 +965,7 @@ def post_events(url: str, token: str, events: list[dict]) -> SendResult:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_S) as response:
+        with NO_REDIRECT_OPENER.open(request, timeout=HTTP_TIMEOUT_S) as response:
             status = int(getattr(response, "status", 0) or 0)
             response.read()
             return SendResult(200 <= status < 300, status)
@@ -931,6 +974,7 @@ def post_events(url: str, token: str, events: list[dict]) -> SendResult:
             exc.read()
         except Exception:  # noqa: BLE001 - draining the body must never raise
             pass
-        return SendResult(False, exc.code, "http_error")
+        code = int(getattr(exc, "code", 0) or 0)
+        return SendResult(False, code, "redirect" if is_redirect(code) else "http_error")
     except Exception as exc:  # noqa: BLE001 - URLError, socket timeouts, TLS, DNS
         return SendResult(False, None, type(exc).__name__)

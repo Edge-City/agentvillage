@@ -1433,6 +1433,11 @@ class Collector:
         sender = self.sender or post_events
         result = sender(self.config.url, self.config.token, events)
         if not result.ok:
+            if result.redirect_refused:
+                # Refused, not followed (`_core.NoRedirect`), and retried like a
+                # 5xx. The counter's log line is a name and a count: never the
+                # URL or the `Location` it pointed at.
+                self.count("ingest_redirect_refused")
             return False, result.retryable, result.auth_refused
         try:
             os.unlink(path)

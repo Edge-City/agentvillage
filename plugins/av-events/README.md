@@ -7,7 +7,11 @@ hook, and can be switched off per tenant or fleet-wide by environment variable w
 Python 3.11, standard library only. No third-party dependencies, no secrets in the repo, and the
 only network destinations it will ever contact are `AV_EVENTS_URL` and, for the memory snapshot,
 `AV_BACKUP_URL`. That amends spec §7.1's "network calls to AV_EVENTS_URL only" to "network calls
-to AV_EVENTS_URL and AV_BACKUP_URL only"; the amendment is owed to spec draft 1.2.
+to AV_EVENTS_URL and AV_BACKUP_URL only"; the amendment is owed to spec draft 1.2. Redirects are
+refused everywhere: the bearer is never sent to a host other than the configured URL's (DATA-172).
+The events poster and the consent fetch use one urllib opener whose redirect handler follows
+nothing (`_core.NO_REDIRECT_OPENER`); the backup uploader speaks `http.client`, which has no
+redirect handling at all.
 
 ```
 plugins/av-events/
@@ -715,7 +719,9 @@ as done. Consecutive failures back off exponentially: 5 min, doubling, capped at
 `backup.json` (the last upload and the accepted archive hashes), because withdrawal deletes the
 tenant's prefix and none of it holds any more. After a re-consent the first pass past the cooldown
 uploads whatever is there, archive and manifest, even if the files never changed. A 401 or a 5xx
-says nothing about what the route holds and clears nothing. An archive over `AV_BACKUP_MAX_BYTES` is
+says nothing about what the route holds and clears nothing. A 3xx is never followed (the uploader
+speaks `http.client`, which does not redirect) and is a failure like any other, also counted as
+`backup_redirect_refused`. An archive over `AV_BACKUP_MAX_BYTES` is
 `backup_too_large`. Any exception is `backup_error`. Each counter is logged once per process as a name and a count, never a path or a
 value. The hook breaker never counts a backup failure. **Switches**: unset `AV_BACKUP_URL` (or
 the token, or the tenant), `AV_EVENTS_ENABLED=0`, or `AV_HOOKS_DISABLED=memory_snapshot`.
@@ -892,7 +898,11 @@ The flusher POSTs each batch to `{AV_EVENTS_URL}/v1/events` with `Authorization:
 $AV_EVENTS_TOKEN` and body `{"events": [...]}`, at most **5 files per pass** so a large backlog
 cannot turn one tick into a long blocking walk.
 
-A batch is retried only when retrying could ever work: network failures, 5xx, and 408/425/429. It
+A batch is retried only when retrying could ever work: network failures, 5xx, 408/425/429, and a
+3xx. A redirect is refused, never followed, so the bearer stays with `AV_EVENTS_URL`'s host; ingest
+never redirects, so a 3xx is a fault in front of it (a proxy, a moved domain), not a verdict on the
+batch, and quarantining the batch would lose good evidence. It logs `ingest_redirect_refused` once
+per process (a name and a count, never the URL or the `Location`). It
 backs off exponentially (2 s doubling, capped at 300 s between attempts) until it is **72 hours
 old**, at which point it is deleted. Any other 4xx except 401 (so 400, 403, 413, 422) is a
 statement about this batch that will not change on its own, so the file is moved to
