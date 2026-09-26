@@ -138,18 +138,23 @@ const AV_EVENTS_PLUGIN = "av-events";
 /**
  * Enable the Agent Village telemetry plugin on every tenant, token or not.
  *
- * The plugin is fail-open by construction: without `AV_EVENTS_TOKEN` it
- * registers its hooks and idles (nothing emitted, buffered or started), and
- * `AV_EVENTS_ENABLED=0` switches it off without a redeploy. So it is always
- * listed. Gating the listing on a token at install time left it off every
- * control-plane tenant (DATA-160): the control plane writes the token into
- * `$HERMES_HOME/.env` seconds after the installer has run, and nothing re-ran
- * the enable once it had.
+ * The plugin is fail-open by construction: without `AV_EVENTS_TOKEN` no event
+ * is emitted or buffered and no flusher thread starts; memory backups still
+ * run when AV_BACKUP_URL, AV_BACKUP_TOKEN and the tenant id are set (the
+ * control plane sets them only while village consent is in force and
+ * BACKUP_WRITE_MASTER is configured). `AV_EVENTS_ENABLED=0` switches it off
+ * without a redeploy. So it is always listed. Gating the listing on a token at
+ * install time left it off every control-plane tenant (DATA-160): the control
+ * plane writes the token into `$HERMES_HOME/.env` seconds after the installer
+ * has run, and nothing re-ran the enable once it had.
  *
  * The token's presence (process environment, else `$HERMES_HOME/.env`, read
- * as the recall flag is) only shapes the log line. The token is never written
- * to `config.yaml` or anywhere else: the plugin reads it at session start.
- * Idempotent; every other `plugins.enabled` entry keeps its place.
+ * as the recall flag is) only shapes the log line, and a failure to read it
+ * never stops the install (it falls back to the idle wording). The token is
+ * never written to `config.yaml` or anywhere else: the plugin reads it at
+ * session start. An `av-events` entry in `plugins.disabled` is left alone and
+ * logged as a warning: it is the one way to keep the plugin off across
+ * updates. Idempotent; every other `plugins.enabled` entry keeps its place.
  */
 export function configureAvEvents(): void {
   const doc = readConfig();
@@ -162,10 +167,19 @@ export function configureAvEvents(): void {
   doc.plugins = plugins;
 
   writeConfig(doc);
-  const idle = envOrDotenv("AV_EVENTS_TOKEN")?.trim()
+  let present = false;
+  try {
+    present = Boolean(envOrDotenv("AV_EVENTS_TOKEN")?.trim());
+  } catch {
+    // Only the log line depends on this; an unreadable .env must not stop the install.
+  }
+  const idle = present
     ? ""
     : " (no AV_EVENTS_TOKEN yet; the plugin idles until the control plane writes one)";
   console.log(`→ enabled plugin ${AV_EVENTS_PLUGIN}${idle}`);
+  if (Array.isArray(plugins.disabled) && (plugins.disabled as unknown[]).includes(AV_EVENTS_PLUGIN)) {
+    console.log(`→ warning: ${AV_EVENTS_PLUGIN} is in plugins.disabled; Hermes will not load it`);
+  }
 }
 
 export const RECALL_PLUGIN = "recall";

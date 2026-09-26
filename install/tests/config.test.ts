@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -266,4 +266,44 @@ test("configureAvEvents is idempotent and never writes the token into config.yam
   expect(plugins.enabled).toEqual(["av-events"]);
   expect(readFileSync(configPath, "utf8")).not.toContain("tenant-scoped-token");
   expect(existsSync(dotenv)).toBe(false);
+});
+
+test("configureAvEvents: an unreadable .env (a directory) never stops the install", () => {
+  delete process.env.AV_EVENTS_TOKEN;
+  const configPath = withConfig({ plugins: { enabled: ["dashboard-auth-edgecity"] } });
+  mkdirSync(join(configPath, "..", ".env"));
+
+  let logged: string[] = [];
+  expect(() => {
+    logged = configureAvEventsLogged();
+  }).not.toThrow();
+
+  const plugins = readConfig(configPath).plugins as Record<string, unknown>;
+  expect(plugins.enabled).toEqual(["dashboard-auth-edgecity", "av-events"]);
+  expect(logged).toEqual([`→ enabled plugin av-events ${IDLE_NOTE}`]);
+});
+
+test("configureAvEvents warns when av-events is in plugins.disabled, and still lists it (idempotent)", () => {
+  process.env.AV_EVENTS_TOKEN = "tenant-scoped-token";
+  const configPath = withConfig({ plugins: { enabled: ["dashboard-auth-edgecity"], disabled: ["av-events"] } });
+
+  const first = configureAvEventsLogged();
+  const second = configureAvEventsLogged();
+
+  const plugins = readConfig(configPath).plugins as Record<string, unknown>;
+  expect(plugins.enabled).toEqual(["dashboard-auth-edgecity", "av-events"]);
+  expect(plugins.disabled).toEqual(["av-events"]);
+  const expected = [
+    "→ enabled plugin av-events",
+    "→ warning: av-events is in plugins.disabled; Hermes will not load it",
+  ];
+  expect(first).toEqual(expected);
+  expect(second).toEqual(expected);
+});
+
+test("configureAvEvents does not warn when plugins.disabled lists only other plugins", () => {
+  process.env.AV_EVENTS_TOKEN = "tenant-scoped-token";
+  withConfig({ plugins: { disabled: ["recall"] } });
+
+  expect(configureAvEventsLogged()).toEqual(["→ enabled plugin av-events"]);
 });
