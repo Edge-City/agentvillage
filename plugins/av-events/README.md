@@ -764,10 +764,12 @@ nothing, buffers nothing and emits no event of its own. Consent is changed only 
 participation panel on the Agent Village landing page; the tool never offers to change it.
 
 **What the agent should do.** When the person asks whether they are in the research or the training
-data, or about their research consent, call `consent_status` and answer from what it returns.
+data, or about their research consent, call `consent_status` (no arguments) and answer from what
+it returns. If it is not in the model's tool list, it is reached through Hermes's tool-search bridge:
+`tool_search` finds it and `tool_call` with `name: consent_status` calls it (see **Hermes** below).
 For a change, point them at the Research participation panel on the Agent Village landing page.
-Never state a research status without the tool; if the tool is missing or says it could not check,
-say so and point at the panel.
+Never state a research status without the tool; if the tool itself answers that it could not
+check, say so and point at the panel.
 
 What it answers, by the row ingest returns (dates are UTC days):
 
@@ -775,18 +777,28 @@ What it answers, by the row ingest returns (dates are UTC days):
 |---|---|
 | `null` | No research choice is on record for this agent. To take part or decline, use the Research participation panel on the Agent Village landing page. |
 | `granted` | You are in the research: you opted in on *accepted_at* under research brief *brief_version*. You also agreed (or: did not agree) to your data being used for training. To change this, use the panel. |
-| `declined` | You are not in the research: you declined on *accepted_at*. (If a deletion is pending: your data is deleted on *date* unless you opt back in.) To take part, use the panel. |
-| `withdrawn`, `withdrawn_at` < `accepted_at` | Your opt-in at *accepted_at* came too close to your withdrawal at *withdrawn_at* to count, so you are not in the research. Your data is deleted on *withdrawal_pending_until* unless you opt back in: turn the Research participation panel off and on again. |
-| `withdrawn`, deletion pending | You are not in the research: you withdrew on *withdrawn_at*. Your data is deleted on *withdrawal_pending_until* unless you opt back in from the panel. |
-| `withdrawn`, nothing pending | You are not in the research: you withdrew on *withdrawn_at*. No deletion of your research data is pending: it has already been carried out, or none was scheduled. To opt back in, use the panel. |
+| `declined` | You are not in the research: you declined on *accepted_at*, and your data is not used for training. (If a deletion is pending: your data is deleted on *date* unless you opt back in.) To take part, use the panel. |
+| `withdrawn`, `withdrawn_at` < `accepted_at` | Your opt-in at *accepted_at* came too close to your withdrawal at *withdrawn_at* to count, so you are not in the research, and your data is not used for training. Your data is deleted on *withdrawal_pending_until* unless you opt back in: turn the Research participation panel off and on again. |
+| `withdrawn`, deletion pending | You are not in the research: you withdrew on *withdrawn_at*, and your data is not used for training. Your data is deleted on *withdrawal_pending_until* unless you opt back in from the panel. |
+| `withdrawn`, nothing pending | You are not in the research: you withdrew on *withdrawn_at*, and your data is not used for training. No deletion of your research data is pending: it has already been carried out, or none was scheduled. To opt back in, use the panel. |
 | anything else | I could not check your research status right now. The Research participation panel on the landing page shows it. |
 
 "Anything else" is no token, no URL, `AV_EVENTS_ENABLED` off or `consent_status` in
 `AV_HOOKS_DISABLED`, any status but 200 (401, 403, 429, 503, a redirect, which is refused so the
-bearer never follows it), a network error, the 5-second timeout, or a body that does not hold the
+bearer never follows it), a network error, the deadline, or a body that does not hold the
 contract's eight keys with their types and agree with itself (`research` exactly when `granted`,
-`training` only with `research`, nothing pending while `research`). It is **never** reported as "not
-in the research". "You are in the research" is said only when `research` is true.
+`training` only with `research`, nothing pending while `research`, a `withdrawn_at` in `withdrawn`),
+or whose `brief_version` is not ingest's own shape (`^[A-Za-z0-9._:-]{1,128}$`; the model reads that
+string, so nothing else may reach it). Dates must be zoned ISO 8601 that convert to UTC. It is
+**never** reported as "not in the research". "You are in the research" is said only when `research` is true.
+
+**Time.** One overall deadline of 8 seconds covers DNS, connect, headers and body together; each
+socket operation also has its own 5-second timeout. urllib's timeout is per operation only, so on its
+own a server dripping a byte every few seconds, or a slow DNS answer, could hold the turn for as long
+as it liked. The GET therefore runs on a daemon thread that the tool waits on for at most the
+deadline; past it the answer is "could not check" and the thread is abandoned. A socket stuck that
+way lingers until its own per-operation timeout fires or the process exits. That is the fail-open
+trade: the turn is never held longer than the deadline, at the cost of a stray thread.
 
 The URL and token are read as the collector reads them: process environment first, then
 `$HERMES_HOME/.env`, and a variable present but blank in the process environment is authoritative (a
@@ -805,7 +817,15 @@ and it records no intention.
 string (`tools/registry.py`, `dispatch` and `_normalize_handler_result`). A plugin toolset is
 offered to the model on every platform unless it is default-off or the operator saved a toolset list
 that leaves it out (`hermes_cli/tools_config.py`, `_enabled_plugin_toolsets`), so no `config.yaml`
-line is needed. A Hermes without `ctx.register_tool` gets one log line and no tool; every hook is
+line is needed. On a Hermes with `tools.tool_search.enabled` at its default `"auto"`, a plugin
+tool is deferrable (`tools/tool_search.py`, `is_deferrable_tool_name`) and the bridge activates
+whenever any deferrable tool exists (`should_activate`), so the tool is deferred: the model's list carries the bridge
+(`tool_search`, `tool_describe`, `tool_call`) instead of `consent_status`, and a direct call answers
+that the tool does not exist. The tool is then reached as `tool_search` → `tool_call` with `name:
+consent_status` and empty arguments (the bridge validates arguments against the schema, which has
+none, hence "Takes no arguments" in the description). Tenants already reach their curated deferred
+tools this way, so this is relied on rather than configured around. No test here covers the bridge;
+it is a dogfood check. A Hermes without `ctx.register_tool` gets one log line and no tool; every hook is
 registered either way, and a `register_tool` that raises costs the tool, never the hooks.
 
 ---
@@ -844,7 +864,8 @@ Implements `launch-guardrails-draft.md` §2 and spec scenario 25.
 - **Hooks never return a value.** The decorator discards whatever the body returns, so this plugin
   structurally cannot block a tool call, inject context into a user message, or rewrite a response.
 - **The one tool fails open too.** `consent_status` does network I/O, synchronously, because the model
-  asked for it and is waiting: at most one GET, bounded by a 5-second timeout. Any exception inside it
+  asked for it and is waiting: at most one GET, bounded by an 8-second overall deadline (see **Time**
+  above; a stuck socket is abandoned on a daemon thread, not waited for). Any exception inside it
   becomes the could-not-check answer and one log line naming the exception's class; only
   `SystemExit` passes.
 

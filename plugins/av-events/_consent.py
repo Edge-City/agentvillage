@@ -31,6 +31,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import threading
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -50,9 +52,20 @@ TOOLSET = "av-events"
 
 CONSENT_PATH = "/v1/consent"
 
-#: Seconds for the whole GET. The model is waiting on this inside a turn, and
-#: "I could not check" is a fine answer after a few seconds.
+#: Seconds for each blocking socket operation (connect, each read). urllib
+#: applies it per operation, so on its own it bounds nothing: a server that
+#: drips a byte every few seconds would hold the turn indefinitely, and DNS
+#: resolution ignores it altogether.
 CONSENT_TIMEOUT_S = 5.0
+
+#: Seconds for the whole fetch — DNS, connect, headers and body together. The
+#: model is waiting on this inside a turn, and "I could not check" is a fine
+#: answer after a few seconds.
+CONSENT_DEADLINE_S = 8.0
+
+#: `brief_version` as ingest's own payload schema allows it. Anything else is
+#: not a brief version, and it is text the model would read.
+BRIEF_VERSION = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 #: A consent body is a few hundred bytes. Anything past this is not one.
 MAX_BODY_BYTES = 64 * 1024
@@ -80,6 +93,9 @@ _DATE_KEYS = ("accepted_at", "withdrawn_at", "withdrawal_pending_until")
 
 PANEL = "the Research participation panel on the Agent Village landing page"
 
+#: Said with every "not in the research": training never outlives research.
+NO_TRAINING = "and your data is not used for training"
+
 SENTENCE_NONE = (
     "No research choice is on record for this agent. To take part or decline, use "
     f"{PANEL}."
@@ -93,9 +109,9 @@ TOOL_DESCRIPTION = (
     "Check whether the person you work for is in the Agent Village research, and whether "
     "their data may be used for training, from the research consent record. Call this "
     "whenever they ask whether they are in the research or the training data, or about "
-    "their research consent; answer only from what it returns and never guess. Read-only: "
-    "consent is changed only on the Research participation panel on the Agent Village "
-    "landing page, never in chat."
+    "their research consent; answer only from what it returns and never guess. Takes no "
+    "arguments: call it with an empty object. Read-only: consent is changed only on the "
+    "Research participation panel on the Agent Village landing page, never in chat."
 )
 
 TOOL_SCHEMA: dict = {
@@ -133,11 +149,13 @@ def _utc(value: str) -> Optional[datetime]:
     """An ISO 8601 instant with a zone, in UTC, or None."""
     try:
         stamp = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
-    except ValueError:
+        if stamp.tzinfo is None:
+            return None
+        # A zoned instant at the edge of the calendar (`0001-01-01T00:00+01:00`)
+        # parses, then overflows on the way to UTC.
+        return stamp.astimezone(timezone.utc)
+    except (ValueError, OverflowError):
         return None
-    if stamp.tzinfo is None:
-        return None
-    return stamp.astimezone(timezone.utc)
 
 
 def parse_consent_body(body: Any) -> ConsentResult:
@@ -146,7 +164,9 @@ def parse_consent_body(body: Any) -> ConsentResult:
     JSON `null` is `None`. A dict is accepted only when every contract key is
     present with its type, every date parses with a zone, and the row agrees
     with itself (`research` exactly when `granted`; `training` only with
-    `research`; `withdrawal_pending_until` null while `research`). It comes
+    `research`; `withdrawal_pending_until` null while `research`; a
+    `withdrawn_at` in `withdrawn`), and `brief_version` has ingest's own
+    shape. It comes
     back holding exactly the contract's keys. Anything else is
     `ConsentUnavailable("malformed")`: a body this client cannot read must
     never become an answer about the person's consent.
@@ -168,6 +188,11 @@ def parse_consent_body(body: Any) -> ConsentResult:
     for key in _DATE_KEYS:
         if body[key] is not None and _utc(body[key]) is None:
             return ConsentUnavailable("malformed")
+    if body["brief_version"] is not None and not BRIEF_VERSION.fullmatch(body["brief_version"]):
+        return ConsentUnavailable("malformed")
+    if state == "withdrawn" and body["withdrawn_at"] is None:
+        # The contract: `withdrawn` is the latest row's withdrawal, so it has a time.
+        return ConsentUnavailable("malformed")
     if research != (state == "granted") or (training and not research):
         return ConsentUnavailable("malformed")
     if research and (body["withdrawal_pending_until"] is not None or body["withdrawn_at"] is not None):
@@ -235,9 +260,9 @@ def consent_sentence(status: ConsentResult) -> str:
 
     if state == "declined":
         head = (
-            f"You are not in the research: you declined on {accepted}."
+            f"You are not in the research: you declined on {accepted}, {NO_TRAINING}."
             if accepted
-            else "You are not in the research: you declined."
+            else f"You are not in the research: you declined, {NO_TRAINING}."
         )
         parts = [head]
         if pending:
@@ -253,7 +278,7 @@ def consent_sentence(status: ConsentResult) -> str:
             # may show opted in, the withdrawal still executes.
             head = (
                 f"Your opt-in at {accepted} came too close to your withdrawal at {withdrawn} to count, "
-                "so you are not in the research."
+                f"so you are not in the research, {NO_TRAINING}."
             )
             if pending:
                 return (
@@ -262,9 +287,9 @@ def consent_sentence(status: ConsentResult) -> str:
                 )
             return f"{head} To opt back in, turn the Research participation panel off and on again."
         head = (
-            f"You are not in the research: you withdrew on {withdrawn}."
+            f"You are not in the research: you withdrew on {withdrawn}, {NO_TRAINING}."
             if withdrawn
-            else "You are not in the research: you withdrew."
+            else f"You are not in the research: you withdrew, {NO_TRAINING}."
         )
         if pending:
             return f"{head} {_deletion(pending)}"
@@ -292,7 +317,12 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _OPENER = urllib.request.build_opener(_NoRedirect)
 
 
-def fetch_consent_status(url: str, token: str, timeout: float = CONSENT_TIMEOUT_S) -> ConsentResult:
+def fetch_consent_status(
+    url: str,
+    token: str,
+    timeout: float = CONSENT_TIMEOUT_S,
+    deadline: float = CONSENT_DEADLINE_S,
+) -> ConsentResult:
     """`GET {url}/v1/consent` with the plugin token. Never raises.
 
     `url` is `AV_EVENTS_URL`; trailing slashes are stripped exactly as the
@@ -301,11 +331,38 @@ def fetch_consent_status(url: str, token: str, timeout: float = CONSENT_TIMEOUT_
     `ConsentUnavailable` with a code (`no_token`, `no_url`, `http_<status>`,
     `redirect`, `timeout`, a network exception's class name, `too_large`,
     `malformed`).
+
+    `timeout` bounds each socket operation; `deadline` bounds the whole fetch.
+    The fetch runs on a daemon thread that this call waits on for at most
+    `deadline` seconds. Past it the answer is `timeout` and the thread is
+    abandoned: a socket stuck in DNS or dripping bytes lingers until its own
+    per-operation timeout or the process ends, holding nothing but itself.
+    That is the fail-open trade: the turn is never held longer than the
+    deadline.
     """
     if not isinstance(token, str) or not token.strip():
         return ConsentUnavailable("no_token")
     if not isinstance(url, str) or not url.strip():
         return ConsentUnavailable("no_url")
+    box: list = []
+
+    def run() -> None:
+        try:
+            box.append(_fetch_once(url, token, timeout))
+        except BaseException as exc:  # noqa: BLE001 - reported below, never raised
+            box.append(ConsentUnavailable(type(exc).__name__))
+
+    worker = threading.Thread(target=run, name="av-events-consent", daemon=True)
+    worker.start()
+    worker.join(deadline)
+    if worker.is_alive() or not box:
+        return ConsentUnavailable("timeout")
+    return box[0]
+
+
+def _fetch_once(url: str, token: str, timeout: float) -> ConsentResult:
+    """The GET itself, on the worker thread. Every socket operation is bounded
+    by `timeout`; the whole of it only by the caller's deadline."""
     request = urllib.request.Request(
         url.strip().rstrip("/") + CONSENT_PATH,
         headers={"Accept": "application/json", "Authorization": f"Bearer {token.strip()}"},
@@ -361,7 +418,7 @@ def consent_status_answer() -> str:
     else:
         token = env("AV_EVENTS_TOKEN")
         register_literal_secret(token)
-        status = fetch_consent_status(env("AV_EVENTS_URL"), token)
+        status = fetch_consent_status(env("AV_EVENTS_URL"), token, CONSENT_TIMEOUT_S, CONSENT_DEADLINE_S)
     if isinstance(status, ConsentUnavailable):
         logger.warning("av-events: consent_status unavailable=%s", status.reason)
     return consent_sentence(status)
@@ -415,6 +472,7 @@ def register_consent_tool(ctx: Any) -> bool:
 
 __all__ = [
     "CONSENT_KEYS",
+    "CONSENT_DEADLINE_S",
     "CONSENT_PATH",
     "CONSENT_TIMEOUT_S",
     "ConsentUnavailable",
