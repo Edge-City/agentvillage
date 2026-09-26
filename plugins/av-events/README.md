@@ -904,9 +904,8 @@ A batch is retried only when retrying could ever work: network failures, 5xx, 40
 3xx. A redirect is refused, never followed, so the bearer stays with `AV_EVENTS_URL`'s host; ingest
 never redirects, so a 3xx is a fault in front of it (a proxy, a moved domain), not a verdict on the
 batch, and quarantining the batch would lose good evidence. It logs `ingest_redirect_refused` once
-per process (a name and a count, never the URL or the `Location`). Retrying a 3xx, and refusing
-redirects and proxies, amend spec §7.1's retry set (network failures, 5xx, 408/425/429); the
-amendment is owed to the spec alongside the destinations one. It
+per process (a name and a count, never the URL or the `Location`). Spec §7.1 (draft 1.2, clean)
+now names 3xx in the retry set and the no-proxy, no-redirect rule (DATA-172). It
 backs off exponentially (2 s doubling, capped at 300 s between attempts) until it is **72 hours
 old**, at which point it is deleted. Any other 4xx except 401 (so 400, 403, 413, 422) is a
 statement about this batch that will not change on its own, so the file is moved to
