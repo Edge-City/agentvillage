@@ -21,6 +21,7 @@ plugins/av-events/
   _edgeos.py       the curl parser, EdgeOS operations, the action ledger and planner
   _cron.py         cron.run from the executions ledger and usage audit (flusher thread only)
   _backup.py       memory.snapshot: collect, pack and upload the memory files (backup thread only)
+  _consent.py      the consent_status tool: GET /v1/consent and the answer in words (DATA-157)
   tool_categories.json        frozen seed: tool name -> category (tool_categories_v1)
   edgeos_tool_allowlist.json  frozen seed: EdgeOS operations (edgeos_tool_allowlist_v1)
   cron_job_names.json         frozen seed: the cron names cron.run may carry (cron_job_names_v1)
@@ -34,9 +35,9 @@ plugins/av-events/
 | Variable | Default | Meaning |
 |---|---|---|
 | `AV_EVENTS_TOKEN` | *(unset)* | Per-tenant ingest token. **Unset or blank means the plugin idles**: hooks are registered, but no event is emitted or buffered and no flusher thread starts; memory backups still run when `AV_BACKUP_URL`, `AV_BACKUP_TOKEN` and the tenant id are set (the control plane sets them only while village consent is in force and `BACKUP_WRITE_MASTER` is configured). |
-| `AV_EVENTS_URL` | *(unset)* | Ingest base URL. Events are POSTed to `{AV_EVENTS_URL}/v1/events`. Empty with a token set is **null-sink mode** (see below). |
+| `AV_EVENTS_URL` | *(unset)* | Ingest base URL. Events are POSTed to `{AV_EVENTS_URL}/v1/events`; the `consent_status` tool GETs `{AV_EVENTS_URL}/v1/consent`. Empty with a token set is **null-sink mode** (see below). |
 | `AV_EVENTS_ENABLED` | `1` | Any of `0`, `false`, `no`, `off` (case-insensitive, whitespace ignored) disables everything. Re-read at every session boundary. |
-| `AV_HOOKS_DISABLED` | *(empty)* | Comma-separated hook names to disable individually, e.g. `pre_tool_call,post_tool_call`. Matched case-insensitively, whitespace stripped. Two names are not hooks: `memory_recalled` (the bus subscription) and `cron_run` (the cron tail). |
+| `AV_HOOKS_DISABLED` | *(empty)* | Comma-separated hook names to disable individually, e.g. `pre_tool_call,post_tool_call`. Matched case-insensitively, whitespace stripped. Three names are not hooks: `memory_recalled` (the bus subscription), `cron_run` (the cron tail) and `consent_status` (the tool, which then answers "could not check"). |
 | `AV_CAPTURE` | `sanitized` | `metadata` \| `sanitized` \| `full`. An unrecognised value falls back to `sanitized`. |
 | `TENANT_ID`, `AV_TENANT_ID` | *(unset)* | The tenant id, used for one thing only: `cron.run`'s derived event id (spec §4.3). `TENANT_ID` is what the control plane already sets for `dashboard-auth-edgecity`; `AV_TENANT_ID` overrides it. Unset means `cron.run` gets a uuid v7 (see "Cron capture"). |
 | `HERMES_VERSION`, `OVERLAY_REF` | *(unset)* | Optional; populate the envelope fields of the same name. See "What the API does not provide". |
@@ -752,6 +753,63 @@ line for the consent brief:
 
 ---
 
+## Asking about consent (DATA-157)
+
+The plugin registers one tool, `consent_status` (toolset `av-events`, no parameters), so the agent
+can answer "am I in the research?" and "is my data used for training?" from the record instead of
+guessing. It is a **read**: one `GET {AV_EVENTS_URL}/v1/consent` with `Authorization: Bearer
+{AV_EVENTS_TOKEN}`, no query string and no body; ingest answers for the token's own tenant only
+(agentvillage-data `src/ingest/consent.ts`, whose module comment is the contract). The tool writes
+nothing, buffers nothing and emits no event of its own. Consent is changed only on the Research
+participation panel on the Agent Village landing page; the tool never offers to change it.
+
+**What the agent should do.** When the person asks whether they are in the research or the training
+data, or about their research consent, call `consent_status` and answer from what it returns.
+For a change, point them at the Research participation panel on the Agent Village landing page.
+Never state a research status without the tool; if the tool is missing or says it could not check,
+say so and point at the panel.
+
+What it answers, by the row ingest returns (dates are UTC days):
+
+| Row | Answer |
+|---|---|
+| `null` | No research choice is on record for this agent. To take part or decline, use the Research participation panel on the Agent Village landing page. |
+| `granted` | You are in the research: you opted in on *accepted_at* under research brief *brief_version*. You also agreed (or: did not agree) to your data being used for training. To change this, use the panel. |
+| `declined` | You are not in the research: you declined on *accepted_at*. (If a deletion is pending: your data is deleted on *date* unless you opt back in.) To take part, use the panel. |
+| `withdrawn`, `withdrawn_at` < `accepted_at` | Your opt-in at *accepted_at* came too close to your withdrawal at *withdrawn_at* to count, so you are not in the research. Your data is deleted on *withdrawal_pending_until* unless you opt back in: turn the Research participation panel off and on again. |
+| `withdrawn`, deletion pending | You are not in the research: you withdrew on *withdrawn_at*. Your data is deleted on *withdrawal_pending_until* unless you opt back in from the panel. |
+| `withdrawn`, nothing pending | You are not in the research: you withdrew on *withdrawn_at*. No deletion of your research data is pending: it has already been carried out, or none was scheduled. To opt back in, use the panel. |
+| anything else | I could not check your research status right now. The Research participation panel on the landing page shows it. |
+
+"Anything else" is no token, no URL, `AV_EVENTS_ENABLED` off or `consent_status` in
+`AV_HOOKS_DISABLED`, any status but 200 (401, 403, 429, 503, a redirect, which is refused so the
+bearer never follows it), a network error, the 5-second timeout, or a body that does not hold the
+contract's eight keys with their types and agree with itself (`research` exactly when `granted`,
+`training` only with `research`, nothing pending while `research`). It is **never** reported as "not
+in the research". "You are in the research" is said only when `research` is true.
+
+The URL and token are read as the collector reads them: process environment first, then
+`$HERMES_HOME/.env`, and a variable present but blank in the process environment is authoritative (a
+revoked token is "could not check", not a stale `.env` token). Log lines are codes only
+(`av-events: consent_status unavailable=http_503`, `... failed=RuntimeError`,
+`... skipped=no_register_tool`, `... register_failed=PermissionError`); never the URL, the token or
+anything from the row.
+
+A `consent_status` call still passes through the `post_tool_call` hook like any tool: it is not in
+`tool_categories.json` (no category there fits a read of the plugin's own record, and the seed is
+frozen with the data repo's mirror), so its `tool.call` carries category `other` and a null name,
+and it records no intention.
+
+**Hermes.** `ctx.register_tool(name, toolset, schema, handler, ..., description=...)`
+(`hermes_cli/plugins.py:460`); the handler is called as `handler(args, **kwargs)` and must return a
+string (`tools/registry.py`, `dispatch` and `_normalize_handler_result`). A plugin toolset is
+offered to the model on every platform unless it is default-off or the operator saved a toolset list
+that leaves it out (`hermes_cli/tools_config.py`, `_enabled_plugin_toolsets`), so no `config.yaml`
+line is needed. A Hermes without `ctx.register_tool` gets one log line and no tool; every hook is
+registered either way, and a `register_tool` that raises costs the tool, never the hooks.
+
+---
+
 ## Fail-open contract
 
 Implements `launch-guardrails-draft.md` §2 and spec scenario 25.
@@ -785,6 +843,10 @@ Implements `launch-guardrails-draft.md` §2 and spec scenario 25.
   the agent can observe (spec scenario 24).
 - **Hooks never return a value.** The decorator discards whatever the body returns, so this plugin
   structurally cannot block a tool call, inject context into a user message, or rewrite a response.
+- **The one tool fails open too.** `consent_status` does network I/O, synchronously, because the model
+  asked for it and is waiting: at most one GET, bounded by a 5-second timeout. Any exception inside it
+  becomes the could-not-check answer and one log line naming the exception's class; only
+  `SystemExit` passes.
 
 ### Buffer
 
