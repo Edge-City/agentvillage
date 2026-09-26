@@ -795,7 +795,9 @@ class Collector:
         with self._lock:
             self.sessions.pop(session_id, None)
         # Wake the flusher rather than sending inline: a hook never blocks on
-        # the network (guardrails §2). atexit does the synchronous last pass.
+        # the network (guardrails §2). atexit does the synchronous last pass
+        # where it runs; in a gateway (`os._exit`) the next process's
+        # `recover_on_load` does (DATA-94).
         buffer = self.buffer
         if buffer is not None:
             buffer.rotate_if_due(force=True)

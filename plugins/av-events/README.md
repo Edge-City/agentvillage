@@ -604,7 +604,8 @@ is never a second thread. An unchanged workspace uploads nothing, so a pass is a
 
 **Exit.** Hermes has no shutdown hook at `0.21.3` (`VALID_HOOKS`). **The gateway exits through
 `os._exit`** (`gateway/run.py` `_exit_after_graceful_shutdown`), which runs no `atexit` handler at
-all. Gateway shutdown finalizes open sessions (`gateway/run_shutdown.py`), so a pass is requested,
+all. Gateway shutdown finalizes the sessions that had a turn running (`gateway/run_shutdown.py`),
+so a pass is requested for those,
 but the daemon thread dies with the process wherever it has got to. In a gateway, then, **the backup
 is exactly as current as the last completed turn-triggered pass**, and the grace and interval above
 are what bound its lag. The exit drain (`Collector.shutdown`) matters only in a CLI or desktop
@@ -861,7 +862,10 @@ Implements `launch-guardrails-draft.md` §2 and spec scenario 25.
   EdgeOS RSVP or its confirming read, one small ledger write; and once per tenant, ever, the creation
   of `hash.key` (then cached in memory). A memory snapshot is only *requested* in a hook (a flag and,
   at most, a thread start); its reads, compression and uploads happen on the backup thread.
-  `on_session_end` and `session.ended` only *wake* the flusher. `ingest` being down changes nothing
+  `on_session_end`, `on_session_finalize` and `session.ended` only *wake* the flusher (the finalize
+  also renames the current batch into the queue). Plugin load is not a hook, but it is held to the
+  same rule: with a token, `register` opens the buffer, may rename a leftover file and may start the
+  flusher, and none of that raises or touches the network. `ingest` being down changes nothing
   the agent can observe (spec scenario 24).
 - **Hooks never return a value.** The decorator discards whatever the body returns, so this plugin
   structurally cannot block a tool call, inject context into a user message, or rewrite a response.
@@ -900,16 +904,62 @@ Either way one `plugin.buffer_dropped` is emitted on the next successful flush, 
 `rejected_events` for refusals.
 
 Shutdown is a daemon thread plus an `atexit` hook that force-rotates and makes one bounded
-(5 second) attempt at each pending batch. Anything it cannot send survives on disk.
+(5 second) attempt at each pending batch. Anything it cannot send survives on disk. That hook runs
+only in a process that exits normally (a CLI or desktop session); the gateway never runs it, which
+the next section covers.
 
-**Known issue: the gateway never runs that hook.** Hermes's gateway exits through `os._exit`
-(`gateway/run.py` `_exit_after_graceful_shutdown`, #53107), which bypasses `atexit`. In a gateway,
-the last up-to-10-second batch (`current-<pid>.jsonl`, not yet rotated) and any rotated batch not
-yet sent are left on disk, to be sent by the next process on the same disk. On a sandbox recreate
-there is no next process on that disk, and they are lost: typically the `session.ended` of the
-sessions the shutdown finalized. The flusher's own 1-second tick narrows the window but does not
-close it. This predates DATA-82 and is ticketed separately; the memory snapshot does not rely on
-`atexit` (see "Memory snapshot").
+A line that cannot be read back (a process killed halfway through writing it, even inside a
+multi-byte character) is dropped when its batch leaves the queue and counted as
+`buffer_unreadable_line`, logged once per process as the name and a count. The rest of the batch is
+sent.
+
+### What happens at a gateway stop
+
+Hermes stops the gateway in `gateway/run_shutdown.py` `_stop_impl`. It drains running work (chat
+turns for `restart_drain_timeout`, 0 s by default; cron runs on their own budget), interrupts what
+is left, fires `on_session_finalize` with reason `shutdown` for each session that had a turn running
+when the stop began, and disconnects the adapters. Then `gateway/run.py`
+`_exit_after_graceful_shutdown` leaves through `os._exit` (#53107), which runs no `atexit` handler.
+No other plugin hook fires on the way. `VALID_HOOKS` has no shutdown hook. `agent_loop_stopped` fires
+only for `/stop` and for a `/new` that interrupts a running turn (`gateway/run_agent_cache.py`
+`_interrupt_and_clear_session`), never for a stop. The `on_session_end` the teardown triggers is the
+memory provider's, not the plugin hook (checked against Hermes `main` of 2026-09-20). So:
+
+- **Everything the plugin buffered survives on disk**: rotated batches not yet sent, and
+  `current-<pid>.jsonl`, the last batch of up to 10 seconds or 50 events. The only thing lost is a
+  line the process was halfway through writing when it died (counted, as above).
+- **A finalize gives that session a head start.** The `on_session_finalize` hook ends by
+  force-rotating the buffer and waking the flusher, never sending itself. The rest of Hermes's
+  teardown is then a window in which the dying process may still send that session's close. This
+  is a head start, not a guarantee.
+- **The next process on the same `$HERMES_HOME` delivers the rest.** At plugin load (`register`),
+  with a token set and the plugin enabled, it opens its buffer and, if anything is waiting, starts
+  the flusher at once instead of at the first new event (on a quiet chat that can be hours after a
+  restart). The flusher's first tick adopts each dead process's `current-<pid>.jsonl`, renaming it
+  `<first-event-ms>-<pid>-orphan.jsonl` so it sorts in the order it was written, and sends it on its
+  normal pass. That is typically a second or two after the gateway comes back, under the usual
+  retry, 72-hour and `rejected/` rules. Cron runs are not special-cased: their events are in the
+  same files.
+- **Delivery is at least once.** A process can die after ingest accepted a batch and before it
+  deleted the file, and the next process then sends the same bytes again. Ingest keeps one row per
+  `event_id` (`ON CONFLICT (event_id) DO NOTHING`, `agentvillage-data` `src/ingest/events.ts`), so
+  the repeat is counted as a duplicate, not stored twice.
+- **A sandbox recreated on a fresh disk has no next process on that disk.** What the old one had
+  buffered is lost, except whatever the finalize head start got out.
+- **Without a token, or with `AV_EVENTS_ENABLED=0`**, leftover files wait on disk until the plugin
+  is active again.
+
+How a dead process's file is recognised: each process holds an `flock` on `current-<pid>.lock` for
+as long as its buffer exists. The kernel releases it however the process ends, `os._exit` and
+SIGKILL included, so a lock another process can take means its owner is gone, even when a restarted
+container has given that pid to something else. A container usually gives the gateway the same pid
+on every start, so a new process that finds a leftover file with its own pid moves that file aside
+before its first append. A new event then never lands behind a half-written line. With no lock to
+probe (a file written before DATA-94, or a filesystem without `flock`), a file is adopted once its
+pid no longer exists, or once it has gone 5 minutes without a write (`ORPHAN_STALE_S`; a live
+writer rotates within about 10 s). The flusher looks for such files on its first tick and every 60
+seconds after that. Everything at load and in the scan is a local rename; only the flusher thread
+touches the network.
 
 **Null-sink mode** (`AV_EVENTS_TOKEN` set, `AV_EVENTS_URL` empty): events are written to the buffer
 and never sent, so the plugin can run on a dogfood tenant before ingest exists. In this mode batches
