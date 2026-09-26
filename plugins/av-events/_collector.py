@@ -24,6 +24,7 @@ from collections import OrderedDict
 from typing import Any, Callable, Optional
 
 from ._core import (
+    AUTH_BACKOFF_S,
     BACKOFF_BASE_S,
     BACKOFF_MAX_S,
     CAPTURE_MODES,
@@ -439,6 +440,9 @@ class Collector:
         self._atexit_registered = False
         #: monotonic time of the last orphan scan; None until the first tick.
         self._orphans_at: Optional[float] = None
+        #: monotonic time before which this process sends nothing, after
+        #: ingest refused its token (401/403). 0.0 = not blocked.
+        self._auth_blocked_until = 0.0
         #: Session ids that have already triggered a config reload, and when the
         #: last reload happened. Together these keep the env sweep off the hot
         #: path: one read per new session, plus a TTL for long-lived ones.
@@ -598,11 +602,14 @@ class Collector:
             buffer.rotate_if_due(force=True)
             if self.config.null_sink or not self.config.active:
                 return
+            if self._auth_blocked_until and time.monotonic() < self._auth_blocked_until:
+                return  # ingest has refused this process's token; the files wait
             deadline = time.time() + EXIT_FLUSH_BUDGET_S
             for path in buffer.ready_files():
                 if time.time() >= deadline:
                     break
-                self._send_file(path)
+                if self._send_file(path)[2]:
+                    break  # the token was refused: every other file would be too
         except Exception:  # noqa: BLE001 - never raise out of atexit
             pass
 
@@ -1352,6 +1359,8 @@ class Collector:
             # never aged out either. There is no destination to retry against,
             # so dropping them would only destroy the dogfood evidence.
             return
+        if not self._auth_block_expired():
+            return
         now = time.time()
         attempted = 0
         for path in buffer.ready_files():
@@ -1368,9 +1377,16 @@ class Collector:
                 self._discard_file(path, "expired")
                 continue
             attempted += 1
-            ok, retryable = self._send_file(path)
+            ok, retryable, auth_refused = self._send_file(path)
             if ok:
                 self._backoff.pop(name, None)
+            elif auth_refused:
+                # This process's token, not the batch: leave every file where
+                # it is for a process whose token works, and stop sending from
+                # this one for a while (`_auth_block_expired` re-reads config).
+                self._auth_blocked_until = time.monotonic() + AUTH_BACKOFF_S
+                self.count("ingest_auth_rejected")
+                break
             elif not retryable:
                 # Ingest will never accept this batch. Quarantine it so the
                 # queue behind it drains, and keep it on disk to look at.
@@ -1379,8 +1395,23 @@ class Collector:
                 delay = min(BACKOFF_BASE_S * (2**attempts), BACKOFF_MAX_S)
                 self._backoff[name] = (time.time() + delay, attempts + 1)
 
-    def _send_file(self, path: str) -> tuple[bool, bool]:
-        """Returns (delivered, retryable).
+    def _auth_block_expired(self) -> bool:
+        """False while ingest's refusal of this process's token (401/403) is
+        being waited out. When the wait ends, re-read the config first, so a
+        token rewritten in `$HERMES_HOME/.env` is the one tried next. A token
+        in this process's own environment cannot change, and simply gets
+        another attempt every `AUTH_BACKOFF_S`."""
+        if not self._auth_blocked_until:
+            return True
+        if time.monotonic() < self._auth_blocked_until:
+            return False
+        self._auth_blocked_until = 0.0
+        with self._lock:
+            self.reload_config()
+        return bool(self.config.url and self.config.token) and not self.config.null_sink
+
+    def _send_file(self, path: str) -> tuple[bool, bool, bool]:
+        """Returns (delivered, retryable, auth_refused).
 
         A line that cannot be read (truncated by a process that died
         mid-write) is dropped and counted as `buffer_unreadable_line` once the
@@ -1394,11 +1425,11 @@ class Collector:
                 pass
             if unreadable:
                 self.count("buffer_unreadable_line", unreadable)
-            return True, True
+            return True, True, False
         sender = self.sender or post_events
         result = sender(self.config.url, self.config.token, events)
         if not result.ok:
-            return False, result.retryable
+            return False, result.retryable, result.auth_refused
         try:
             os.unlink(path)
         except OSError:
@@ -1406,7 +1437,7 @@ class Collector:
         if unreadable:
             self.count("buffer_unreadable_line", unreadable)
         self._emit_drop_report()
-        return True, True
+        return True, True, False
 
     def _discard_file(self, path: str, reason: str) -> None:
         """Take a batch out of the send queue for good.

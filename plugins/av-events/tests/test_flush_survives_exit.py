@@ -508,3 +508,182 @@ def test_an_unwritable_buffer_costs_no_hook_an_exception(plugin, ctx, monkeypatc
     finally:
         if root.is_dir():
             root.chmod(0o700)
+
+
+# --------------------------------------------------------------------------
+# Refutation round (DATA-94): a second process beside a live gateway
+# --------------------------------------------------------------------------
+
+#: A gateway that is up: it has buffered a turn (its current file exists and
+#: its lock is held) and stays alive until killed.
+CHILD_LIVE_GATEWAY = CHILD_PRELUDE + textwrap.dedent(
+    """
+    ctx.fire("on_session_start", session_id="sess-live", model="m", platform="telegram")
+    ctx.fire("on_session_end", session_id="sess-live")
+    print(json.dumps({"pid": os.getpid()}), flush=True)
+    time.sleep(30)
+    os._exit(0)
+    """
+)
+
+
+def test_a_second_process_beside_a_live_gateway_starts_no_flusher(plugin, ctx, monkeypatch, home, av, tmp_path):
+    """`hermes dashboard` outlives a gateway-only restart with the token it was
+    started with. Loading the plugin there must not start a flusher over the
+    gateway's live file (nor over an empty leftover): with a revoked token it
+    would only fight the gateway for its batches."""
+    root = home / "av-events" / "buffer"
+    root.mkdir(parents=True)
+    (root / f"current-{dead_pid()}.jsonl").write_bytes(b"")  # empty leftover: nothing to send
+    env = _child_env(home, "http://127.0.0.1:9")
+    gateway = _run_child(CHILD_LIVE_GATEWAY, tmp_path / "g.py", av, env, wait=False)
+    try:
+        gateway_pid = json.loads(gateway.stdout.readline())["pid"]
+        assert (root / f"current-{gateway_pid}.jsonl").stat().st_size > 0
+        monkeypatch.setenv("AV_EVENTS_TOKEN", "stale-token")
+        monkeypatch.setenv("AV_EVENTS_URL", "http://127.0.0.1:9")
+        plugin.register(ctx)
+        assert plugin._COLLECTOR._thread is None, "a flusher started over a live gateway's file"
+        assert not plugin._COLLECTOR.buffer.has_backlog()
+    finally:
+        gateway.kill()
+        gateway.communicate(timeout=10)
+
+
+def test_has_backlog_counts_only_what_this_process_may_send(plugin, monkeypatch, home):
+    collector = make_collector(plugin, monkeypatch)
+    buffer = collector.buffer
+    root = Path(collector.config.buffer_dir)
+    (root / "0000000000001-1-0001.jsonl").write_bytes(b"")
+    (root / f"current-{dead_pid()}.jsonl").write_bytes(b"")
+    assert not buffer.has_backlog(), "empty files are nothing to send"
+    write_leftover(root, dead_pid(), event_lines(collector, 1), lock=True)
+    assert buffer.has_backlog(), "a dead owner's non-empty file is"
+
+
+def _fifty(collector):
+    for index in range(50):
+        collector.emit("session.started", {"n": index}, session_id="s")
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_a_refused_token_leaves_the_batch_for_a_process_that_has_the_right_one(
+    plugin, monkeypatch, home, av, caplog, status
+):
+    caplog.set_level("WARNING", logger="av-events")
+    with av.StubIngest(statuses=[status]) as ingest:
+        stale = make_collector(plugin, monkeypatch, url=ingest.url, token="stale-token")
+        stale._stop.set()  # ticked by hand
+        _fifty(stale)
+        root = Path(stale.config.buffer_dir)
+        batch = jsonl_names(root)
+        assert len(batch) == 1 and not batch[0].startswith("current-")
+
+        stale.tick()
+        assert ingest.request_count == 1
+        assert jsonl_names(root) == batch, "the batch stays queued"
+        assert not (root / "rejected").exists(), "a refused token is not a bad batch"
+        assert stale.counters.get("ingest_auth_rejected") == 1
+        assert [r.getMessage() for r in caplog.records if "ingest_auth_rejected" in r.getMessage()] == [
+            "av-events: ingest_auth_rejected=1"
+        ]
+        assert not any("stale-token" in r.getMessage() for r in caplog.records)
+
+        stale.tick()
+        stale.shutdown()
+        assert ingest.request_count == 1, "this process backs off instead of retrying"
+
+        # The gateway, restarted with the new token, sends it.
+        right = make_collector(plugin, monkeypatch, url=ingest.url, token="right-token")
+        right.tick()
+        assert len(ingest.received) == 50
+        assert ingest.auth_headers[-1] == "Bearer right-token"
+        assert jsonl_names(root) == []
+
+
+def test_after_the_auth_backoff_the_token_is_read_again(plugin, monkeypatch, home, av):
+    with av.StubIngest(statuses=[401]) as ingest:
+        collector = make_collector(plugin, monkeypatch, url=ingest.url, token="stale-token")
+        collector._stop.set()
+        _fifty(collector)
+        collector.tick()
+        assert ingest.request_count == 1
+        monkeypatch.setenv("AV_EVENTS_TOKEN", "rewired-token")
+        collector.tick()
+        assert ingest.request_count == 1, "still backing off"
+        collector._auth_blocked_until = time.monotonic() - 1  # the backoff has run out
+        collector.tick()
+        assert len(ingest.received) == 50
+        assert ingest.auth_headers[-1] == "Bearer rewired-token"
+
+
+# --------------------------------------------------------------------------
+# Refutation round (DATA-94): lock races, stale rotation start, ENOLCK
+# --------------------------------------------------------------------------
+
+
+def test_a_lock_replaced_between_open_and_flock_is_not_taken_for_dead(plugin, monkeypatch, home):
+    """The adopter opens the dead owner's lock; before it locks, that file is
+    unlinked and a new owner with the reused pid creates and holds a fresh
+    one. The adopter's lock is then on a dead inode and proves nothing."""
+    import fcntl as real
+    import types
+
+    core, _ = _modules(plugin)
+    collector = make_collector(plugin, monkeypatch)
+    root = Path(collector.config.buffer_dir)
+    reused = os.getppid()  # alive: the new owner
+    live = write_leftover(root, reused, event_lines(collector, 1), lock=True)
+    lock_path = root / f"current-{reused}.lock"
+    new_owner = {}
+
+    def racing_flock(fd, op):
+        if "held" not in new_owner and lock_path.exists() and os.fstat(fd).st_ino == lock_path.stat().st_ino:
+            lock_path.unlink()
+            handle = open(lock_path, "wb")
+            real.flock(handle.fileno(), real.LOCK_EX | real.LOCK_NB)
+            new_owner["held"] = handle
+        return real.flock(fd, op)
+
+    racing = types.SimpleNamespace(LOCK_EX=real.LOCK_EX, LOCK_NB=real.LOCK_NB, flock=racing_flock)
+    monkeypatch.setattr(core, "fcntl", racing)
+    try:
+        assert collector.buffer.adopt_orphans() == 0
+        assert live.exists(), "the new owner's live file was taken"
+        assert "held" in new_owner, "the race was not exercised"
+    finally:
+        if "held" in new_owner:
+            new_owner["held"].close()
+
+
+def test_a_current_file_removed_under_the_writer_does_not_age_out_the_next_batch(plugin, monkeypatch, home, av):
+    with av.StubIngest() as ingest:
+        collector = make_collector(plugin, monkeypatch, url=ingest.url)
+        collector._stop.set()
+        collector.emit("session.started", {"source": "telegram"}, session_id="s-old")
+        buffer = collector.buffer
+        buffer._started_ms -= 73 * 3600 * 1000  # a start from before the 72-hour limit
+        os.remove(buffer._current)  # a wipe, an operator's rm
+        buffer.rotate_if_due()  # finds nothing to rotate
+        fresh = collector.emit("session.started", {"source": "telegram"}, session_id="s-new")
+        collector.nudge_flush(force=True)
+        collector.tick()
+        assert [e["event_id"] for e in ingest.received] == [fresh["event_id"]]
+        assert not collector._dropped, "the fresh batch was dropped as expired"
+
+
+def test_without_flock_support_no_lock_file_is_left_behind(plugin, monkeypatch, home):
+    import errno
+    import types
+
+    core, collector_mod = _modules(plugin)
+
+    def refuse(fd, op):
+        raise OSError(errno.ENOLCK, "no locks here")
+
+    monkeypatch.setattr(core, "fcntl", types.SimpleNamespace(LOCK_EX=2, LOCK_NB=4, flock=refuse))
+    monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
+    collector = collector_mod.Collector()
+    assert collector._ensure_buffer() is not None
+    root = Path(collector.config.buffer_dir)
+    assert [p.name for p in root.iterdir() if p.name.endswith(".lock")] == []

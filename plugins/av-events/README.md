@@ -894,10 +894,18 @@ cannot turn one tick into a long blocking walk.
 
 A batch is retried only when retrying could ever work: network failures, 5xx, and 408/425/429. It
 backs off exponentially (2 s doubling, capped at 300 s between attempts) until it is **72 hours
-old**, at which point it is deleted. Any other 4xx — 400, 401, 403, 413, 422 — is a statement about
-this batch or this token that will not change on its own, so the file is moved to
-`buffer/rejected/` and never offered again. It is *kept* rather than deleted: a 401 or a 413 is a
+old**, at which point it is deleted. Any other 4xx except 401 and 403 (so 400, 413, 422) is a
+statement about this batch that will not change on its own, so the file is moved to
+`buffer/rejected/` and never offered again. It is *kept* rather than deleted: a 413 is a
 misconfiguration a human needs to see, and deleting the evidence would hide it.
+
+**401 and 403 refuse this process's token, not the batch** (DATA-94). More than one process can load
+the plugin against the same buffer: `hermes dashboard` outlives a gateway-only restart and keeps the
+token it was started with, while the gateway beside it has the new one. So the file stays where it
+is for a process whose token works. This process logs `ingest_auth_rejected` once (a name and a
+count), stops sending for 10 minutes (`AUTH_BACKOFF_S`), then re-reads its config (a token rewritten
+in `$HERMES_HOME/.env` is picked up; one in its own process environment is not) and tries again.
+The 72-hour limit still bounds a batch whose token is really gone.
 
 Either way one `plugin.buffer_dropped` is emitted on the next successful flush, carrying `reason`
 (`expired`, `rejected`, or both), `files` / `count` for expiries and `rejected_files` /
@@ -935,7 +943,9 @@ memory provider's, not the plugin hook (checked against Hermes `main` of 2026-09
 - **The next process on the same `$HERMES_HOME` delivers the rest.** At plugin load (`register`),
   with a token set and the plugin enabled, it opens its buffer and, if anything is waiting, starts
   the flusher at once instead of at the first new event (on a quiet chat that can be hours after a
-  restart). The flusher's first tick adopts each dead process's `current-<pid>.jsonl`, renaming it
+  restart). "Waiting" means a non-empty rotated batch, or a non-empty current file whose owner is
+  gone. A live process's current file is not waiting: it is that process's to send, so a second
+  process loading the plugin beside a running gateway starts no flusher for it. The flusher's first tick adopts each dead process's `current-<pid>.jsonl`, renaming it
   `<first-event-ms>-<pid>-orphan.jsonl` so it sorts in the order it was written, and sends it on its
   normal pass. That is typically a second or two after the gateway comes back, under the usual
   retry, 72-hour and `rejected/` rules. Cron runs are not special-cased: their events are in the
@@ -948,6 +958,9 @@ memory provider's, not the plugin hook (checked against Hermes `main` of 2026-09
   buffered is lost, except whatever the finalize head start got out.
 - **Without a token, or with `AV_EVENTS_ENABLED=0`**, leftover files wait on disk until the plugin
   is active again.
+- **Any process that loads the plugin can do the sending.** A CLI process that loads the plugin
+  while batches are waiting sends them, and may spend up to about 15 s on its exit flush (the 5 s
+  budget, plus one request's 10 s timeout already in flight when it runs out).
 
 How a dead process's file is recognised: each process holds an `flock` on `current-<pid>.lock` for
 as long as its buffer exists. The kernel releases it however the process ends, `os._exit` and

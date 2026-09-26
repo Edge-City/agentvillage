@@ -120,6 +120,17 @@ FILE_MODE = 0o600
 #: never be accepted, so retrying it forever only delays the batches behind it.
 RETRYABLE_STATUSES = frozenset({408, 425, 429})
 
+#: HTTP statuses that refuse the *token*, not the batch. A process started
+#: before a token rotation (`hermes dashboard` outlives a gateway-only
+#: restart) holds a revoked token while the gateway beside it holds the new
+#: one; the batch is fine and must stay queued for the process that can send
+#: it. The 72-hour age limit still bounds a token that is really gone.
+AUTH_STATUSES = frozenset({401, 403})
+
+#: How long a process whose token ingest refused waits before re-reading its
+#: config and trying again.
+AUTH_BACKOFF_S = 600.0
+
 #: uuid5 namespace for Agent Village derived ids (spec §4.3). Producer events
 #: get uuid v7; the one derived id this plugin mints is `cron.run`'s
 #: (`cron_run_event_id`). `agentvillage-data/src/ids.ts` pins the same value.
@@ -531,7 +542,12 @@ class Buffer:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError as exc:
                 handle.close()
-                return ("held" if exc.errno in _LOCK_HELD else "unsupported"), None
+                if exc.errno in _LOCK_HELD:
+                    return "held", None
+                # No locks on this filesystem. A lock file here would guard
+                # nothing, and one per pid would pile up: take it away again.
+                _unlink_quietly(path)
+                return "unsupported", None
             if _same_inode(path, handle):
                 return "ours", handle
             handle.close()
@@ -571,34 +587,43 @@ class Buffer:
                 if f"current-{pid}.jsonl" not in present:
                     self._release_dead_lock(path)
                 continue
-            lock_path = self._lock_path(pid)
-            state, handle = _probe_lock(lock_path)
-            if state == "held":
-                continue  # the owner is alive
-            if state == "free":
-                try:
-                    if self._adopt(path, pid):
-                        adopted += 1
+            gone, handle = self._owner_gone(pid, path)
+            if not gone:
+                continue
+            try:
+                if self._adopt(path, pid):
+                    adopted += 1
+                if handle is not None:
                     # Unlinked while still held, so a process that reuses this
                     # pid and opens the path meanwhile finds its lock on a dead
                     # inode and takes a fresh one (`_take_owner_lock`).
-                    _unlink_quietly(lock_path)
-                finally:
+                    _unlink_quietly(self._lock_path(pid))
+            finally:
+                if handle is not None:
                     handle.close()
-                continue
-            # No lock to probe: a writer from before DATA-94, or a filesystem
-            # without `flock`. A gone pid is dead; a live one may be a reused
-            # pid, so the file's age decides.
-            if self._pid_alive(pid):
-                try:
-                    idle = time.time() - os.path.getmtime(path)
-                except OSError:
-                    continue
-                if idle < ORPHAN_STALE_S:
-                    continue
-            if self._adopt(path, pid):
-                adopted += 1
         return adopted
+
+    def _owner_gone(self, pid: int, path: str) -> tuple[bool, Any]:
+        """Whether the process that wrote `current-<pid>.jsonl` at `path` is gone.
+
+        When its lock was what said so, the lock comes back held; the caller
+        closes it. With no lock to probe (a writer from before DATA-94, or a
+        filesystem without `flock`), a gone pid is dead, and a live one may be
+        a reused pid, so the file's age decides.
+        """
+        state, handle = _probe_lock(self._lock_path(pid))
+        if state == "held":
+            return False, None
+        if state == "free":
+            return True, handle
+        if self._pid_alive(pid):
+            try:
+                idle = time.time() - os.path.getmtime(path)
+            except OSError:
+                return False, None
+            if idle < ORPHAN_STALE_S:
+                return False, None
+        return True, None
 
     @staticmethod
     def _release_dead_lock(lock_path: str) -> None:
@@ -640,14 +665,39 @@ class Buffer:
         return int(seconds * 1000) if seconds is not None else None
 
     def has_backlog(self) -> bool:
-        """Anything on disk this process did not write: a ready batch, or
-        another process's current file. One `listdir`."""
+        """Anything on disk that is this process's to send: a non-empty
+        rotated batch, or a non-empty current file whose owner is gone.
+
+        A live process's current file is not: it is that process's to rotate
+        and send. Counting it would start a flusher in every process that
+        loads the plugin next to a running gateway (`hermes dashboard`, a
+        CLI), each with whatever token it was started with.
+        """
         try:
             names = os.listdir(self.root)
         except OSError:
             return False
-        own = os.path.basename(self._current)
-        return any(name.endswith(".jsonl") and name != own for name in names)
+        for name in names:
+            if not name.endswith(".jsonl"):
+                continue
+            path = os.path.join(self.root, name)
+            try:
+                if os.path.getsize(path) == 0:
+                    continue
+            except OSError:
+                continue
+            match = _OWNER_FILE.match(name)
+            if match is None:
+                return True  # a rotated batch
+            pid = int(match.group(1))
+            if pid == self._pid:
+                continue
+            gone, handle = self._owner_gone(pid, path)
+            if handle is not None:
+                handle.close()
+            if gone:
+                return True
+        return False
 
     # -- writing ----------------------------------------------------------
 
@@ -670,6 +720,10 @@ class Buffer:
                 os.makedirs(os.path.dirname(self.root), mode=DIR_MODE, exist_ok=True)
                 os.makedirs(self.root, mode=DIR_MODE, exist_ok=True)
                 fd = os.open(self._current, flags, FILE_MODE)
+                # The old current file went with the directory: this is a new
+                # batch, and its start is now, not the lost one's.
+                self._started_ms = None
+                self._count = 0
             try:
                 view = memoryview(data)
                 while view:
@@ -707,6 +761,14 @@ class Buffer:
         target = os.path.join(self.root, f"{self._started_ms:013d}-{self._pid}-{self._seq:04d}.jsonl")
         try:
             os.replace(self._current, target)
+        except FileNotFoundError:
+            # The file went away under us (a wipe, an operator's `rm`), and its
+            # events with it. Start the next batch clean: keeping the old start
+            # would name it for a first event long gone, and the 72-hour rule
+            # could then drop it as expired the moment it is rotated.
+            self._started_ms = None
+            self._count = 0
+            return
         except OSError:
             return
         self._started_ms = None
@@ -809,12 +871,21 @@ class SendResult:
         this token: a malformed body, a wrong tenant, an oversized payload. That
         will not change on its own, and retrying it for 72 hours only delays
         every batch queued behind it.
+
+        401 and 403 are the exception the flusher handles before this
+        (`auth_refused`): they say this *process's* token is wrong, not the
+        batch, so the batch stays queued for a process that has the right one.
         """
         if self.status is None:
             return True
         if self.status in RETRYABLE_STATUSES:
             return True
         return self.status >= 500
+
+    @property
+    def auth_refused(self) -> bool:
+        """Ingest refused the token (401/403), not the batch."""
+        return self.status in AUTH_STATUSES
 
 
 def post_events(url: str, token: str, events: list[dict]) -> SendResult:
