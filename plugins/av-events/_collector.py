@@ -24,6 +24,7 @@ from collections import OrderedDict
 from typing import Any, Callable, Optional
 
 from ._core import (
+    AUTH_BACKOFF_S,
     BACKOFF_BASE_S,
     BACKOFF_MAX_S,
     CAPTURE_MODES,
@@ -61,6 +62,10 @@ from ._edgeos import Ledger
 
 #: How often the flusher thread looks for finished cron executions.
 CRON_POLL_INTERVAL_S = 60.0
+
+#: How often the flusher looks for a dead process's current file to adopt
+#: (DATA-94). Its first pass is its first tick.
+ORPHAN_SCAN_INTERVAL_S = 60.0
 
 #: `USER.md` larger than this is not read: Hermes caps it at a few KiB.
 MAX_PROFILE_BYTES = 1024 * 1024
@@ -433,6 +438,11 @@ class Collector:
         self._backoff: dict[str, tuple[float, int]] = {}
         self._dropped: dict[str, Any] = {}
         self._atexit_registered = False
+        #: monotonic time of the last orphan scan; None until the first tick.
+        self._orphans_at: Optional[float] = None
+        #: monotonic time before which this process sends nothing, after
+        #: ingest refused its token (401). 0.0 = not blocked.
+        self._auth_blocked_until = 0.0
         #: Session ids that have already triggered a config reload, and when the
         #: last reload happened. Together these keep the env sweep off the hot
         #: path: one read per new session, plus a TTL for long-lived ones.
@@ -537,6 +547,38 @@ class Collector:
         thread.start()
         self._register_atexit()
 
+    def recover_on_load(self) -> None:
+        """At plugin load: pick up what a previous process left on disk.
+
+        The gateway exits through `os._exit`, so its last batch is never sent
+        by the process that wrote it (DATA-94). This opens the buffer (which
+        moves aside a leftover current file carrying this process's own pid)
+        and, when anything is waiting, starts the flusher now rather than at
+        the first event, which on a quiet chat may be hours after a restart.
+        The flusher adopts other dead processes' files on its first tick and
+        sends them on its normal pass. Local file operations only; never
+        raises.
+        """
+        try:
+            if self.plugin_disabled or not self.config.active:
+                return
+            buffer = self._ensure_buffer()
+            if buffer is None or not buffer.has_backlog():
+                return
+            self._ensure_thread()
+            self._wake.set()
+        except Exception:  # noqa: BLE001 - loading the plugin must never fail on this
+            self.count("buffer_recover_error")
+
+    def _adopt_orphans_if_due(self, buffer: Buffer) -> None:
+        now = time.monotonic()
+        if self._orphans_at is not None and now - self._orphans_at < ORPHAN_SCAN_INTERVAL_S:
+            return
+        self._orphans_at = now
+        adopted = buffer.adopt_orphans()
+        if adopted:
+            self.count("buffer_orphans_adopted", adopted)
+
     def _register_atexit(self) -> None:
         if not self._atexit_registered:
             atexit.register(self.shutdown)
@@ -560,11 +602,14 @@ class Collector:
             buffer.rotate_if_due(force=True)
             if self.config.null_sink or not self.config.active:
                 return
+            if self._auth_blocked_until and time.monotonic() < self._auth_blocked_until:
+                return  # ingest has refused this process's token; the files wait
             deadline = time.time() + EXIT_FLUSH_BUDGET_S
             for path in buffer.ready_files():
                 if time.time() >= deadline:
                     break
-                self._send_file(path)
+                if self._send_file(path)[2]:
+                    break  # the token was refused: every other file would be too
         except Exception:  # noqa: BLE001 - never raise out of atexit
             pass
 
@@ -757,7 +802,9 @@ class Collector:
         with self._lock:
             self.sessions.pop(session_id, None)
         # Wake the flusher rather than sending inline: a hook never blocks on
-        # the network (guardrails §2). atexit does the synchronous last pass.
+        # the network (guardrails §2). atexit does the synchronous last pass
+        # where it runs; in a gateway (`os._exit`) the next process's
+        # `recover_on_load` does (DATA-94).
         buffer = self.buffer
         if buffer is not None:
             buffer.rotate_if_due(force=True)
@@ -894,12 +941,17 @@ class Collector:
         except Exception:  # noqa: BLE001 - never raise out of atexit
             pass
 
-    def nudge_flush(self) -> None:
-        """Ask the flusher to run now. Returns immediately; never sends inline."""
+    def nudge_flush(self, force: bool = False) -> None:
+        """Ask the flusher to run now. Returns immediately; never sends inline.
+
+        `force` rotates the current file even when it is younger than the
+        flush interval, so the flusher's next pass (about now) can send it: a
+        rename under the buffer lock, never the network.
+        """
         self._drain_pending_degraded()
         buffer = self.buffer
         if buffer is not None:
-            buffer.rotate_if_due()
+            buffer.rotate_if_due(force=force)
         self._wake.set()
 
     # -- host stores: cost, profile, EdgeOS ledger, cron tail -------------
@@ -1298,11 +1350,16 @@ class Collector:
         buffer = self.buffer
         if buffer is None:
             return
+        # Before anything else, so a dead process's last batch joins the queue
+        # in its place and a null sink still keeps it as an ordinary batch.
+        self._adopt_orphans_if_due(buffer)
         buffer.rotate_if_due()
         if self.config.null_sink or not self.config.url or not self.config.token:
             # Null sink: batches accumulate on disk and are never sent, and are
             # never aged out either. There is no destination to retry against,
             # so dropping them would only destroy the dogfood evidence.
+            return
+        if not self._auth_block_expired():
             return
         now = time.time()
         attempted = 0
@@ -1320,9 +1377,16 @@ class Collector:
                 self._discard_file(path, "expired")
                 continue
             attempted += 1
-            ok, retryable = self._send_file(path)
+            ok, retryable, auth_refused = self._send_file(path)
             if ok:
                 self._backoff.pop(name, None)
+            elif auth_refused:
+                # This process's token, not the batch: leave every file where
+                # it is for a process whose token works, and stop sending from
+                # this one for a while (`_auth_block_expired` re-reads config).
+                self._auth_blocked_until = time.monotonic() + AUTH_BACKOFF_S
+                self.count("ingest_auth_rejected")
+                break
             elif not retryable:
                 # Ingest will never accept this batch. Quarantine it so the
                 # queue behind it drains, and keep it on disk to look at.
@@ -1331,25 +1395,53 @@ class Collector:
                 delay = min(BACKOFF_BASE_S * (2**attempts), BACKOFF_MAX_S)
                 self._backoff[name] = (time.time() + delay, attempts + 1)
 
-    def _send_file(self, path: str) -> tuple[bool, bool]:
-        """Returns (delivered, retryable)."""
-        events = Buffer.read_events(path)
+    def _auth_block_expired(self) -> bool:
+        """False while ingest's refusal of this process's token (401) is being
+        waited out. When the wait ends, the config is re-read, but that only
+        helps a process whose token is *not* in its environment: `env()` reads
+        the process environment first, and every `hermes` process loads
+        `$HERMES_HOME/.env` into `os.environ` at import
+        (`load_hermes_dotenv(override=True)`). So in practice a stale process
+        (a `hermes dashboard` left over from before a rewire) stays stale until
+        it restarts; it just tries once every `AUTH_BACKOFF_S` and leaves the
+        batches to the gateway."""
+        if not self._auth_blocked_until:
+            return True
+        if time.monotonic() < self._auth_blocked_until:
+            return False
+        self._auth_blocked_until = 0.0
+        with self._lock:
+            self.reload_config()
+        return bool(self.config.url and self.config.token) and not self.config.null_sink
+
+    def _send_file(self, path: str) -> tuple[bool, bool, bool]:
+        """Returns (delivered, retryable, auth_refused).
+
+        A line that cannot be read (truncated by a process that died
+        mid-write) is dropped and counted as `buffer_unreadable_line` once the
+        file leaves the queue, not on every retry of it.
+        """
+        events, unreadable = Buffer.read_events_counted(path)
         if not events:
             try:
                 os.unlink(path)
             except OSError:
                 pass
-            return True, True
+            if unreadable:
+                self.count("buffer_unreadable_line", unreadable)
+            return True, True, False
         sender = self.sender or post_events
         result = sender(self.config.url, self.config.token, events)
         if not result.ok:
-            return False, result.retryable
+            return False, result.retryable, result.auth_refused
         try:
             os.unlink(path)
         except OSError:
             pass
+        if unreadable:
+            self.count("buffer_unreadable_line", unreadable)
         self._emit_drop_report()
-        return True, True
+        return True, True, False
 
     def _discard_file(self, path: str, reason: str) -> None:
         """Take a batch out of the send queue for good.

@@ -671,20 +671,30 @@ def _hook_on_session_finalize(collector: Collector, **kwargs: Any) -> None:
 
     Shutdown: Hermes has no shutdown hook at `0.21.3`, and the **gateway exits
     through `os._exit`** (`gateway/run.py` `_exit_after_graceful_shutdown`),
-    which runs no `atexit` handler. Gateway shutdown does finalize open
-    sessions, which lands here, but the daemon thread then dies with the
-    process wherever it has got to. The exit drain (`Collector.shutdown`)
-    only runs in a CLI or desktop process that exits normally. The turn-end
-    passes (`on_session_end`) are what keep the backup current in a gateway."""
+    which runs no `atexit` handler. Gateway shutdown finalizes the sessions
+    that had a turn running when it began (`gateway/run_shutdown.py`
+    `_finalize_shutdown_agents`, reason `shutdown`), which lands here, but the
+    daemon threads then die with the process wherever they have got to. The
+    exit drain (`Collector.shutdown`) only runs in a CLI or desktop process
+    that exits normally. The turn-end passes (`on_session_end`) are what keep
+    the backup current in a gateway.
+
+    Events: the last step force-rotates the buffer and wakes the flusher
+    (DATA-94), so the rest of Hermes's teardown is a window in which this
+    session's close can still leave. Whatever misses it stays on disk and is
+    sent by the next process (`Collector.recover_on_load`)."""
     session_id = kwargs.get("session_id")
-    if not session_id:
-        return
-    session_id = str(session_id)
-    state = collector.peek_session(session_id)
-    cost = collector.read_session_cost(session_id) if state is not None and not state.ended else {}
-    collector.session_ended(session_id, **cost)
-    collector.check_profile(session_id)
-    collector.request_snapshot(urgent=True)
+    if session_id:
+        session_id = str(session_id)
+        state = collector.peek_session(session_id)
+        cost = collector.read_session_cost(session_id) if state is not None and not state.ended else {}
+        collector.session_ended(session_id, **cost)
+        collector.check_profile(session_id)
+        collector.request_snapshot(urgent=True)
+    # Also for a session this process never saw (finalized after a restart)
+    # or one without an id: a finalize is the only sign Hermes gives before a
+    # stop, and a nudge costs a rename and an Event.set().
+    collector.nudge_flush(force=True)
 
 
 def _hook_subagent_start(collector: Collector, **kwargs: Any) -> None:
@@ -857,6 +867,10 @@ def register(ctx) -> None:
     # the hooks, and guarded inside, so a Hermes without `register_tool` (or
     # one that refuses it) still gets every hook.
     register_consent_tool(ctx)
+    # DATA-94: a gateway stop leaves its last batch on disk (`os._exit` runs
+    # no atexit flush). Start sending it now, not at the first new event.
+    # Local file operations only; the network is the flusher thread's.
+    _COLLECTOR.recover_on_load()
     _REGISTERED = True
 
 

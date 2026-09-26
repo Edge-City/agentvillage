@@ -333,7 +333,7 @@ def test_hook_names_are_matched_case_insensitively(plugin, ctx, monkeypatch, av)
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("status", [400, 401, 403, 413, 422])
+@pytest.mark.parametrize("status", [400, 403, 413, 422])
 def test_a_rejected_batch_is_quarantined_not_retried(plugin, monkeypatch, home, av, status):
     with av.StubIngest(statuses=[status]) as ingest:
         collector = make_collector(plugin, monkeypatch, url=ingest.url)
@@ -351,7 +351,7 @@ def test_a_rejected_batch_is_quarantined_not_retried(plugin, monkeypatch, home, 
 
 
 def test_a_rejection_is_reported_with_a_reason(plugin, monkeypatch, home, av):
-    with av.StubIngest(statuses=[401]) as ingest:
+    with av.StubIngest(statuses=[400]) as ingest:
         collector = make_collector(plugin, monkeypatch, url=ingest.url)
         for index in range(50):
             collector.emit("session.started", {"n": index}, session_id="s")

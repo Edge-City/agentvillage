@@ -14,6 +14,7 @@ Python 3.11, standard library only. See README.md for the contract.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -26,6 +27,11 @@ import urllib.request
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
+
+try:  # POSIX only; without it, orphan detection falls back to pid liveness and age.
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None  # type: ignore[assignment]
 
 # --------------------------------------------------------------------------
 # Constants
@@ -85,6 +91,20 @@ BACKOFF_MAX_S = 300.0
 
 HTTP_TIMEOUT_S = 10.0
 
+#: A dead process's `current-<pid>.jsonl` with no owner lock to probe (a writer
+#: from before DATA-94, or a platform without `fcntl`) is adopted once its pid
+#: is gone, or once it is this old whatever its pid says: a live writer rotates
+#: its current file within `FLUSH_INTERVAL_S` of the first event in it, so one
+#: untouched for five minutes has nobody behind it. Covers a pid reused by an
+#: unrelated process after a container restart.
+ORPHAN_STALE_S = 300.0
+
+#: A new buffer whose own lock is held (another process probing it, for
+#: microseconds) tries again this many times, this far apart, before it
+#: settles for running without one. At most ~30 ms, once per process.
+OWNER_LOCK_HELD_RETRIES = 3
+OWNER_LOCK_RETRY_S = 0.01
+
 #: Total seconds the atexit flush may spend before giving up. The process is on
 #: its way out; the buffer survives on disk either way.
 EXIT_FLUSH_BUDGET_S = 5.0
@@ -105,6 +125,20 @@ FILE_MODE = 0o600
 #: HTTP statuses worth trying again. Everything else 4xx means this batch will
 #: never be accepted, so retrying it forever only delays the batches behind it.
 RETRYABLE_STATUSES = frozenset({408, 425, 429})
+
+#: HTTP statuses that refuse the *token*, not the batch: 401 only. A process
+#: started before a token rotation (`hermes dashboard` outlives a
+#: gateway-only restart) holds a revoked token while the gateway beside it
+#: holds the new one; the batch is fine and must stay queued for the process
+#: that can send it. The 72-hour age limit still bounds a token that is
+#: really gone. 403 is not here: ingest answers 403 for `tenant_mismatch`,
+#: `source_mismatch` and `token_class_forbidden`, verdicts on the batch, and a
+#: batch like that left queued would sit at the head of the queue for 72 h.
+AUTH_STATUSES = frozenset({401})
+
+#: How long a process whose token ingest refused waits before re-reading its
+#: config and trying again.
+AUTH_BACKOFF_S = 600.0
 
 #: uuid5 namespace for Agent Village derived ids (spec §4.3). Producer events
 #: get uuid v7; the one derived id this plugin mints is `cron.run`'s
@@ -387,6 +421,58 @@ def sqlite_read(path: str, sql: str, params: tuple = (), *, timeout: float = 0.2
 # --------------------------------------------------------------------------
 
 
+#: A process's current batch and the lock that says its owner is alive.
+_OWNER_FILE = re.compile(r"^current-(\d+)\.(jsonl|lock)$")
+
+#: What a non-blocking `flock` fails with when another open file holds the
+#: lock. Any other failure (ENOLCK on a filesystem without locks, …) means
+#: locking is unavailable here, and ownership falls back to pid and age.
+_LOCK_HELD = frozenset({errno.EAGAIN, errno.EWOULDBLOCK, errno.EACCES})
+
+
+def _same_inode(path: str, handle: Any) -> bool:
+    """Whether `path` still names the file `handle` has open."""
+    try:
+        return os.path.samestat(os.stat(path), os.fstat(handle.fileno()))
+    except OSError:
+        return False
+
+
+def _unlink_quietly(path: str) -> None:
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def _probe_lock(path: str) -> tuple[str, Any]:
+    """Try a dead owner's lock without waiting.
+
+    Returns `("free", handle)` holding it (the owner is gone; close the handle
+    to let go), or `("held", None)`, `("missing", None)`, `("unsupported",
+    None)`.
+    """
+    if fcntl is None:
+        return "unsupported", None
+    try:
+        handle = open(path, "rb", buffering=0)
+    except FileNotFoundError:
+        return "missing", None
+    except OSError:
+        return "unsupported", None
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        handle.close()
+        return ("held" if exc.errno in _LOCK_HELD else "unsupported"), None
+    if not _same_inode(path, handle):
+        # Unlinked or replaced while we opened it: someone else is on it.
+        # The next scan looks again.
+        handle.close()
+        return "held", None
+    return "free", handle
+
+
 class Buffer:
     """Append-only JSONL under `$HERMES_HOME/av-events/buffer/`.
 
@@ -395,6 +481,15 @@ class Buffer:
     `FLUSH_INTERVAL_S` old. Rotated files are what the flusher sends. A file
     named with the epoch-ms of its *first* event is its own age clock, so a
     crashed process leaves recoverable, self-describing batches behind.
+
+    A process that dies without rotating (the gateway leaves through
+    `os._exit`, DATA-94) leaves its `current-<pid>.jsonl` behind. The owner
+    holds an `flock` on `current-<pid>.lock` for as long as its buffer lives,
+    and the kernel drops it however the process ends. `adopt_orphans` renames
+    a current file whose lock it can take into an ordinary batch. A new buffer
+    does the same at once for a leftover file carrying its own pid (a container
+    restart hands the gateway the same pid), before its first append could
+    land behind a half-written line.
     """
 
     def __init__(self, root: str) -> None:
@@ -418,6 +513,210 @@ class Buffer:
             except OSError:
                 pass
         os.makedirs(root, mode=DIR_MODE, exist_ok=True)
+        #: The open lock file whose `flock` says "this pid's current file is
+        #: live", or None: another buffer in this same process holds it (tests
+        #: do that), the directory refused the file, or locking is unavailable.
+        state, self._owner_lock = self._take_owner_lock()
+        if state in ("ours", "unsupported"):
+            # Nobody alive writes to a file with our pid in its name but us,
+            # and we have not written yet: whatever is there is a dead
+            # process's. Move it aside before the first append.
+            if os.path.exists(self._current):
+                self._adopt(self._current, self._pid)
+
+    # -- ownership --------------------------------------------------------
+
+    def _lock_path(self, pid: int) -> str:
+        return os.path.join(self.root, f"current-{pid}.lock")
+
+    def _take_owner_lock(self) -> tuple[str, Any]:
+        """`("ours", handle)`, or `("held" | "unsupported" | "error", None)`.
+
+        Never blocks on the lock; waits at most ~30 ms in all, and only when
+        it is held. "held" after that is another buffer in this process, or an
+        adopter still moving aside a dead namesake's file.
+        """
+        if fcntl is None:
+            return "unsupported", None
+        path = self._lock_path(self._pid)
+        held_retries = 0
+        # Retried because an adopter unlinks a dead owner's lock file while
+        # holding it: a lock taken on an inode no longer at `path` guards
+        # nothing, so check the path still names the inode we locked. And
+        # retried, briefly, when it is held: another process probing whether
+        # this pid is alive (`has_backlog`, `adopt_orphans`) holds a free lock
+        # for microseconds, and losing that race would leave this process
+        # without a lock for its whole life.
+        for _ in range(3 + OWNER_LOCK_HELD_RETRIES):
+            try:
+                fd = os.open(path, os.O_RDWR | os.O_CREAT, FILE_MODE)
+            except OSError:
+                return "error", None
+            handle = os.fdopen(fd, "r+b", buffering=0)
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                handle.close()
+                if exc.errno in _LOCK_HELD:
+                    if held_retries < OWNER_LOCK_HELD_RETRIES:
+                        held_retries += 1
+                        time.sleep(OWNER_LOCK_RETRY_S)
+                        continue
+                    return "held", None
+                # No locks on this filesystem. A lock file here would guard
+                # nothing, and one per pid would pile up: take it away again.
+                _unlink_quietly(path)
+                return "unsupported", None
+            if _same_inode(path, handle):
+                return "ours", handle
+            handle.close()
+        return "held", None
+
+    @staticmethod
+    def _pid_alive(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except OSError:
+            return True  # EPERM: it exists, it is just not ours to signal
+        return True
+
+    def adopt_orphans(self) -> int:
+        """Turn every dead process's current file into a ready batch.
+
+        Local renames only, never the network: the flusher calls it, and sends
+        the result on its normal pass. Returns how many files were adopted.
+        """
+        try:
+            names = sorted(os.listdir(self.root))
+        except OSError:
+            return 0
+        present = set(names)
+        adopted = 0
+        for name in names:
+            match = _OWNER_FILE.match(name)
+            if match is None:
+                continue
+            pid, kind = int(match.group(1)), match.group(2)
+            if pid == self._pid:
+                continue  # ours, or a sibling buffer's in this same process
+            path = os.path.join(self.root, name)
+            if kind == "lock":
+                if f"current-{pid}.jsonl" not in present:
+                    self._release_dead_lock(path)
+                continue
+            gone, handle = self._owner_gone(pid, path)
+            if not gone:
+                continue
+            try:
+                if self._adopt(path, pid):
+                    adopted += 1
+                if handle is not None:
+                    # Unlinked while still held, so a process that reuses this
+                    # pid and opens the path meanwhile finds its lock on a dead
+                    # inode and takes a fresh one (`_take_owner_lock`).
+                    _unlink_quietly(self._lock_path(pid))
+            finally:
+                if handle is not None:
+                    handle.close()
+        return adopted
+
+    def _owner_gone(self, pid: int, path: str) -> tuple[bool, Any]:
+        """Whether the process that wrote `current-<pid>.jsonl` at `path` is gone.
+
+        When its lock was what said so, the lock comes back held; the caller
+        closes it. With no lock to probe (a writer from before DATA-94, or a
+        filesystem without `flock`), a gone pid is dead, and a live one may be
+        a reused pid, so the file's age decides.
+        """
+        state, handle = _probe_lock(self._lock_path(pid))
+        if state == "held":
+            return False, None
+        if state == "free":
+            return True, handle
+        if self._pid_alive(pid):
+            try:
+                idle = time.time() - os.path.getmtime(path)
+            except OSError:
+                return False, None
+            if idle < ORPHAN_STALE_S:
+                return False, None
+        return True, None
+
+    @staticmethod
+    def _release_dead_lock(lock_path: str) -> None:
+        """Tidy a lock whose owner is gone and left no current file behind."""
+        state, handle = _probe_lock(lock_path)
+        if state == "free":
+            try:
+                _unlink_quietly(lock_path)
+            finally:
+                handle.close()
+
+    def _adopt(self, path: str, pid: int) -> bool:
+        """Rename a dead process's current file to an ordinary batch name.
+
+        Named for its first event, as a rotation would have, so it sorts after
+        every batch the dead process did rotate and before anything newer.
+        """
+        started_ms = self._first_event_ms(path)
+        try:
+            if started_ms is None:
+                if os.path.getsize(path) == 0:
+                    os.unlink(path)
+                    return False
+                started_ms = int(os.path.getmtime(path) * 1000)
+            target = os.path.join(self.root, f"{started_ms:013d}-{pid}-orphan.jsonl")
+            if os.path.exists(target):
+                target = os.path.join(self.root, f"{started_ms:013d}-{pid}-orphan-{secrets.token_hex(4)}.jsonl")
+            os.replace(path, target)
+        except OSError:
+            return False
+        return True
+
+    @staticmethod
+    def _first_event_ms(path: str) -> Optional[int]:
+        """`emitted_at` of the first readable line, in epoch ms, or None."""
+        events, _ = Buffer.read_events_counted(path, limit=1)
+        stamp = events[0].get("emitted_at") if events else None
+        seconds = epoch_from_iso(stamp) if isinstance(stamp, str) else None
+        return int(seconds * 1000) if seconds is not None else None
+
+    def has_backlog(self) -> bool:
+        """Anything on disk that is this process's to send: a non-empty
+        rotated batch, or a non-empty current file whose owner is gone.
+
+        A live process's current file is not: it is that process's to rotate
+        and send. Counting it would start a flusher in every process that
+        loads the plugin next to a running gateway (`hermes dashboard`, a
+        CLI), each with whatever token it was started with.
+        """
+        try:
+            names = os.listdir(self.root)
+        except OSError:
+            return False
+        for name in names:
+            if not name.endswith(".jsonl"):
+                continue
+            path = os.path.join(self.root, name)
+            try:
+                if os.path.getsize(path) == 0:
+                    continue
+            except OSError:
+                continue
+            match = _OWNER_FILE.match(name)
+            if match is None:
+                return True  # a rotated batch
+            pid = int(match.group(1))
+            if pid == self._pid:
+                continue
+            gone, handle = self._owner_gone(pid, path)
+            if handle is not None:
+                handle.close()
+            if gone:
+                return True
+        return False
 
     # -- writing ----------------------------------------------------------
 
@@ -440,6 +739,10 @@ class Buffer:
                 os.makedirs(os.path.dirname(self.root), mode=DIR_MODE, exist_ok=True)
                 os.makedirs(self.root, mode=DIR_MODE, exist_ok=True)
                 fd = os.open(self._current, flags, FILE_MODE)
+                # The old current file went with the directory: this is a new
+                # batch, and its start is now, not the lost one's.
+                self._started_ms = None
+                self._count = 0
             try:
                 view = memoryview(data)
                 while view:
@@ -477,6 +780,14 @@ class Buffer:
         target = os.path.join(self.root, f"{self._started_ms:013d}-{self._pid}-{self._seq:04d}.jsonl")
         try:
             os.replace(self._current, target)
+        except FileNotFoundError:
+            # The file went away under us (a wipe, an operator's `rm`), and its
+            # events with it. Start the next batch clean: keeping the old start
+            # would name it for a first event long gone, and the 72-hour rule
+            # could then drop it as expired the moment it is rotated.
+            self._started_ms = None
+            self._count = 0
+            return
         except OSError:
             return
         self._started_ms = None
@@ -520,22 +831,40 @@ class Buffer:
 
     @staticmethod
     def read_events(path: str) -> list[dict]:
+        return Buffer.read_events_counted(path)[0]
+
+    @staticmethod
+    def read_events_counted(path: str, limit: Optional[int] = None) -> tuple[list[dict], int]:
+        """The file's events, and how many of its lines could not be read.
+
+        Read as bytes and decoded line by line. A process killed mid-write
+        leaves a truncated last line, possibly cut inside a multi-byte UTF-8
+        character (lines are written with `ensure_ascii=False`); that line is
+        dropped and counted, and must cost neither the rest of the batch nor
+        an exception out of the flusher, which would wedge the queue on it.
+        """
         events: list[dict] = []
+        unreadable = 0
         try:
-            with open(path, encoding="utf-8") as handle:
-                for line in handle:
-                    line = line.strip()
-                    if not line:
+            with open(path, "rb") as handle:
+                for raw in handle:
+                    if limit is not None and len(events) >= limit:
+                        break
+                    raw = raw.strip()
+                    if not raw:
                         continue
                     try:
-                        parsed = json.loads(line)
-                    except json.JSONDecodeError:
+                        parsed = json.loads(raw.decode("utf-8"))
+                    except ValueError:  # JSONDecodeError and UnicodeDecodeError both
+                        unreadable += 1
                         continue
                     if isinstance(parsed, dict):
                         events.append(parsed)
+                    else:
+                        unreadable += 1
         except OSError:
-            return []
-        return events
+            return [], 0
+        return events, unreadable
 
 
 # --------------------------------------------------------------------------
@@ -561,12 +890,22 @@ class SendResult:
         this token: a malformed body, a wrong tenant, an oversized payload. That
         will not change on its own, and retrying it for 72 hours only delays
         every batch queued behind it.
+
+        401 is the exception the flusher handles before this (`auth_refused`):
+        it says this *process's* token is wrong, not the batch, so the batch
+        stays queued for a process that has the right one. 403 is a verdict on
+        the batch (wrong tenant, source or token class) and is not retryable.
         """
         if self.status is None:
             return True
         if self.status in RETRYABLE_STATUSES:
             return True
         return self.status >= 500
+
+    @property
+    def auth_refused(self) -> bool:
+        """Ingest refused the token (401), not the batch."""
+        return self.status in AUTH_STATUSES
 
 
 def post_events(url: str, token: str, events: list[dict]) -> SendResult:
