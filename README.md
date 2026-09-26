@@ -34,6 +34,21 @@ See the project hub for the full diagram and decisions.
   - `skills/token-usage-audit/` — deterministic tenant-local token usage audit script and cron contract. It reads local usage summaries and cron metadata, never calls an LLM, and emits only sanitized aggregate facts.
 - `install/` — bootstrap scripts for plugging AgentVillage into a runtime
 
+## Repos
+
+Where things live across the `Edge-City` org. Open PRs in the repo that owns the code; the mirror is generated.
+
+| Repo | Holds | Status |
+|---|---|---|
+| `agentvillage` (this repo) | Skills, workspace files, installers, Hermes plugins. The overlay every hosted resident clones (see `docs/deployment.md`). | Active |
+| `agentvillage-skills` | A read-only mirror of `skills/`, force-pushed by `.github/workflows/sync-skills.yml` on every push to `main` or `dev` that touches `skills/`. Exists so `claude plugin marketplace add` and `openclaw plugins install` have a repo whose root is the skills directory. | Generated — never edit or PR here; change `skills/` in this repo instead |
+| `agentvillage-controlplane` | Provisioning and management of hosted Hermes residents on Railway. | Active, private |
+| `agentvillage-landing` | Signup site, auth and provisioning routes, admin analytics. | Active, private |
+| `agentvillage-data` | Research event collection, consent processing, schemas, dbt, and `releases/manifest.yaml` (the record of what is live). | Active, private |
+| `agentvillage-onboarding` | Edge City India onboarding flow and info page. Built against mocks; permanent home still to be decided. | Active, private, temporary |
+| `p2p-lanes/edgeos-monorepo` | EdgeOS portal, auth, calendar, ticketing and backend. Owned by the EdgeOS team, not by this project. | External |
+| `agentvillage-telegram` | Esmeralda 2026 group-message capture to local JSONL. | Legacy, no commits since June 2026 |
+
 ## Getting an agent connected
 
 Two paths:
@@ -373,7 +388,7 @@ Index background work runs as fixed cron prompts — **memory signal sync `0 1 *
 | Extend an existing backend (Index, EdgeOS, Geo) | The matching `install/install_<name>.ts` and `skills/<name>/` bundle | Runtime config (env vars, MCP entries, cron jobs, CLI commands) lives in `install_<name>.ts`; agent-facing instructions live in the skill bundle's `SKILL.md` and siblings. |
 | Wire optional env vars an existing backend needs | `install/install_<name>.ts` + the Prerequisites section of this README | The installer writes `env.vars.<NAME>`; the gateway exposes those to the agent's shell tools on next start. `install_edgeos.ts` is the worked example. |
 | Change which skills the agent loads | `workspace/AGENTS.md` "Active skills" section | Mark a skill as eager (gates fire at session start) or reactive (only consulted when needed). |
-| Update the vendored `edgeos` reference data (events, attendee directory, wiki snapshots) | Don't — it's auto-refreshed from upstream | Upstream CI in `Edge-City/agentvillage-skills` regenerates `skills/edgeos/references/` every 15 minutes; the change propagates through the nested subtree chain. See the monorepo's `CLAUDE.md` for the sync flow. The recipes in `SKILL.md` are hand-edited — see the "Content" section above. |
+| Update the vendored `edgeos` reference data (events, attendee directory, wiki snapshots) | Don't — it's auto-refreshed | `.github/workflows/sync-edge-esmeralda-references.yml` in this repo pulls `aromeoes/edge-agent-skill` every 30 minutes and commits to `main` only when something changed. The recipes in `SKILL.md` are hand-edited — see the "Content" section above. |
 
 ## Auth
 
