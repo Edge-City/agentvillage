@@ -62,6 +62,10 @@ from ._edgeos import Ledger
 #: How often the flusher thread looks for finished cron executions.
 CRON_POLL_INTERVAL_S = 60.0
 
+#: How often the flusher looks for a dead process's current file to adopt
+#: (DATA-94). Its first pass is its first tick.
+ORPHAN_SCAN_INTERVAL_S = 60.0
+
 #: `USER.md` larger than this is not read: Hermes caps it at a few KiB.
 MAX_PROFILE_BYTES = 1024 * 1024
 
@@ -433,6 +437,8 @@ class Collector:
         self._backoff: dict[str, tuple[float, int]] = {}
         self._dropped: dict[str, Any] = {}
         self._atexit_registered = False
+        #: monotonic time of the last orphan scan; None until the first tick.
+        self._orphans_at: Optional[float] = None
         #: Session ids that have already triggered a config reload, and when the
         #: last reload happened. Together these keep the env sweep off the hot
         #: path: one read per new session, plus a TTL for long-lived ones.
@@ -536,6 +542,38 @@ class Collector:
         self._thread = thread
         thread.start()
         self._register_atexit()
+
+    def recover_on_load(self) -> None:
+        """At plugin load: pick up what a previous process left on disk.
+
+        The gateway exits through `os._exit`, so its last batch is never sent
+        by the process that wrote it (DATA-94). This opens the buffer (which
+        moves aside a leftover current file carrying this process's own pid)
+        and, when anything is waiting, starts the flusher now rather than at
+        the first event, which on a quiet chat may be hours after a restart.
+        The flusher adopts other dead processes' files on its first tick and
+        sends them on its normal pass. Local file operations only; never
+        raises.
+        """
+        try:
+            if self.plugin_disabled or not self.config.active:
+                return
+            buffer = self._ensure_buffer()
+            if buffer is None or not buffer.has_backlog():
+                return
+            self._ensure_thread()
+            self._wake.set()
+        except Exception:  # noqa: BLE001 - loading the plugin must never fail on this
+            self.count("buffer_recover_error")
+
+    def _adopt_orphans_if_due(self, buffer: Buffer) -> None:
+        now = time.monotonic()
+        if self._orphans_at is not None and now - self._orphans_at < ORPHAN_SCAN_INTERVAL_S:
+            return
+        self._orphans_at = now
+        adopted = buffer.adopt_orphans()
+        if adopted:
+            self.count("buffer_orphans_adopted", adopted)
 
     def _register_atexit(self) -> None:
         if not self._atexit_registered:
@@ -894,12 +932,17 @@ class Collector:
         except Exception:  # noqa: BLE001 - never raise out of atexit
             pass
 
-    def nudge_flush(self) -> None:
-        """Ask the flusher to run now. Returns immediately; never sends inline."""
+    def nudge_flush(self, force: bool = False) -> None:
+        """Ask the flusher to run now. Returns immediately; never sends inline.
+
+        `force` rotates the current file even when it is younger than the
+        flush interval, so the flusher's next pass (about now) can send it: a
+        rename under the buffer lock, never the network.
+        """
         self._drain_pending_degraded()
         buffer = self.buffer
         if buffer is not None:
-            buffer.rotate_if_due()
+            buffer.rotate_if_due(force=force)
         self._wake.set()
 
     # -- host stores: cost, profile, EdgeOS ledger, cron tail -------------
@@ -1298,6 +1341,9 @@ class Collector:
         buffer = self.buffer
         if buffer is None:
             return
+        # Before anything else, so a dead process's last batch joins the queue
+        # in its place and a null sink still keeps it as an ordinary batch.
+        self._adopt_orphans_if_due(buffer)
         buffer.rotate_if_due()
         if self.config.null_sink or not self.config.url or not self.config.token:
             # Null sink: batches accumulate on disk and are never sent, and are
@@ -1332,13 +1378,20 @@ class Collector:
                 self._backoff[name] = (time.time() + delay, attempts + 1)
 
     def _send_file(self, path: str) -> tuple[bool, bool]:
-        """Returns (delivered, retryable)."""
-        events = Buffer.read_events(path)
+        """Returns (delivered, retryable).
+
+        A line that cannot be read (truncated by a process that died
+        mid-write) is dropped and counted as `buffer_unreadable_line` once the
+        file leaves the queue, not on every retry of it.
+        """
+        events, unreadable = Buffer.read_events_counted(path)
         if not events:
             try:
                 os.unlink(path)
             except OSError:
                 pass
+            if unreadable:
+                self.count("buffer_unreadable_line", unreadable)
             return True, True
         sender = self.sender or post_events
         result = sender(self.config.url, self.config.token, events)
@@ -1348,6 +1401,8 @@ class Collector:
             os.unlink(path)
         except OSError:
             pass
+        if unreadable:
+            self.count("buffer_unreadable_line", unreadable)
         self._emit_drop_report()
         return True, True
 

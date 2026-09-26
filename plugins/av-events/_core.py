@@ -14,6 +14,7 @@ Python 3.11, standard library only. See README.md for the contract.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -26,6 +27,11 @@ import urllib.request
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
+
+try:  # POSIX only; without it, orphan detection falls back to pid liveness and age.
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None  # type: ignore[assignment]
 
 # --------------------------------------------------------------------------
 # Constants
@@ -84,6 +90,14 @@ BACKOFF_BASE_S = 2.0
 BACKOFF_MAX_S = 300.0
 
 HTTP_TIMEOUT_S = 10.0
+
+#: A dead process's `current-<pid>.jsonl` with no owner lock to probe (a writer
+#: from before DATA-94, or a platform without `fcntl`) is adopted once its pid
+#: is gone, or once it is this old whatever its pid says: a live writer rotates
+#: its current file within `FLUSH_INTERVAL_S` of the first event in it, so one
+#: untouched for five minutes has nobody behind it. Covers a pid reused by an
+#: unrelated process after a container restart.
+ORPHAN_STALE_S = 300.0
 
 #: Total seconds the atexit flush may spend before giving up. The process is on
 #: its way out; the buffer survives on disk either way.
@@ -387,6 +401,58 @@ def sqlite_read(path: str, sql: str, params: tuple = (), *, timeout: float = 0.2
 # --------------------------------------------------------------------------
 
 
+#: A process's current batch and the lock that says its owner is alive.
+_OWNER_FILE = re.compile(r"^current-(\d+)\.(jsonl|lock)$")
+
+#: What a non-blocking `flock` fails with when another open file holds the
+#: lock. Any other failure (ENOLCK on a filesystem without locks, …) means
+#: locking is unavailable here, and ownership falls back to pid and age.
+_LOCK_HELD = frozenset({errno.EAGAIN, errno.EWOULDBLOCK, errno.EACCES})
+
+
+def _same_inode(path: str, handle: Any) -> bool:
+    """Whether `path` still names the file `handle` has open."""
+    try:
+        return os.path.samestat(os.stat(path), os.fstat(handle.fileno()))
+    except OSError:
+        return False
+
+
+def _unlink_quietly(path: str) -> None:
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def _probe_lock(path: str) -> tuple[str, Any]:
+    """Try a dead owner's lock without waiting.
+
+    Returns `("free", handle)` holding it (the owner is gone; close the handle
+    to let go), or `("held", None)`, `("missing", None)`, `("unsupported",
+    None)`.
+    """
+    if fcntl is None:
+        return "unsupported", None
+    try:
+        handle = open(path, "rb", buffering=0)
+    except FileNotFoundError:
+        return "missing", None
+    except OSError:
+        return "unsupported", None
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        handle.close()
+        return ("held" if exc.errno in _LOCK_HELD else "unsupported"), None
+    if not _same_inode(path, handle):
+        # Unlinked or replaced while we opened it: someone else is on it.
+        # The next scan looks again.
+        handle.close()
+        return "held", None
+    return "free", handle
+
+
 class Buffer:
     """Append-only JSONL under `$HERMES_HOME/av-events/buffer/`.
 
@@ -395,6 +461,15 @@ class Buffer:
     `FLUSH_INTERVAL_S` old. Rotated files are what the flusher sends. A file
     named with the epoch-ms of its *first* event is its own age clock, so a
     crashed process leaves recoverable, self-describing batches behind.
+
+    A process that dies without rotating (the gateway leaves through
+    `os._exit`, DATA-94) leaves its `current-<pid>.jsonl` behind. The owner
+    holds an `flock` on `current-<pid>.lock` for as long as its buffer lives,
+    and the kernel drops it however the process ends. `adopt_orphans` renames
+    a current file whose lock it can take into an ordinary batch. A new buffer
+    does the same at once for a leftover file carrying its own pid (a container
+    restart hands the gateway the same pid), before its first append could
+    land behind a half-written line.
     """
 
     def __init__(self, root: str) -> None:
@@ -418,6 +493,161 @@ class Buffer:
             except OSError:
                 pass
         os.makedirs(root, mode=DIR_MODE, exist_ok=True)
+        #: The open lock file whose `flock` says "this pid's current file is
+        #: live", or None: another buffer in this same process holds it (tests
+        #: do that), the directory refused the file, or locking is unavailable.
+        state, self._owner_lock = self._take_owner_lock()
+        if state in ("ours", "unsupported"):
+            # Nobody alive writes to a file with our pid in its name but us,
+            # and we have not written yet: whatever is there is a dead
+            # process's. Move it aside before the first append.
+            if os.path.exists(self._current):
+                self._adopt(self._current, self._pid)
+
+    # -- ownership --------------------------------------------------------
+
+    def _lock_path(self, pid: int) -> str:
+        return os.path.join(self.root, f"current-{pid}.lock")
+
+    def _take_owner_lock(self) -> tuple[str, Any]:
+        """`("ours", handle)`, or `("held" | "unsupported" | "error", None)`.
+
+        Never waits. "held" is another buffer in this process, or an adopter
+        that is at this moment moving aside a dead namesake's file.
+        """
+        if fcntl is None:
+            return "unsupported", None
+        path = self._lock_path(self._pid)
+        # Retried because an adopter unlinks a dead owner's lock file while
+        # holding it: a lock taken on an inode no longer at `path` guards
+        # nothing, so check the path still names the inode we locked.
+        for _ in range(3):
+            try:
+                fd = os.open(path, os.O_RDWR | os.O_CREAT, FILE_MODE)
+            except OSError:
+                return "error", None
+            handle = os.fdopen(fd, "r+b", buffering=0)
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                handle.close()
+                return ("held" if exc.errno in _LOCK_HELD else "unsupported"), None
+            if _same_inode(path, handle):
+                return "ours", handle
+            handle.close()
+        return "held", None
+
+    @staticmethod
+    def _pid_alive(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except OSError:
+            return True  # EPERM: it exists, it is just not ours to signal
+        return True
+
+    def adopt_orphans(self) -> int:
+        """Turn every dead process's current file into a ready batch.
+
+        Local renames only, never the network: the flusher calls it, and sends
+        the result on its normal pass. Returns how many files were adopted.
+        """
+        try:
+            names = sorted(os.listdir(self.root))
+        except OSError:
+            return 0
+        present = set(names)
+        adopted = 0
+        for name in names:
+            match = _OWNER_FILE.match(name)
+            if match is None:
+                continue
+            pid, kind = int(match.group(1)), match.group(2)
+            if pid == self._pid:
+                continue  # ours, or a sibling buffer's in this same process
+            path = os.path.join(self.root, name)
+            if kind == "lock":
+                if f"current-{pid}.jsonl" not in present:
+                    self._release_dead_lock(path)
+                continue
+            lock_path = self._lock_path(pid)
+            state, handle = _probe_lock(lock_path)
+            if state == "held":
+                continue  # the owner is alive
+            if state == "free":
+                try:
+                    if self._adopt(path, pid):
+                        adopted += 1
+                    # Unlinked while still held, so a process that reuses this
+                    # pid and opens the path meanwhile finds its lock on a dead
+                    # inode and takes a fresh one (`_take_owner_lock`).
+                    _unlink_quietly(lock_path)
+                finally:
+                    handle.close()
+                continue
+            # No lock to probe: a writer from before DATA-94, or a filesystem
+            # without `flock`. A gone pid is dead; a live one may be a reused
+            # pid, so the file's age decides.
+            if self._pid_alive(pid):
+                try:
+                    idle = time.time() - os.path.getmtime(path)
+                except OSError:
+                    continue
+                if idle < ORPHAN_STALE_S:
+                    continue
+            if self._adopt(path, pid):
+                adopted += 1
+        return adopted
+
+    @staticmethod
+    def _release_dead_lock(lock_path: str) -> None:
+        """Tidy a lock whose owner is gone and left no current file behind."""
+        state, handle = _probe_lock(lock_path)
+        if state == "free":
+            try:
+                _unlink_quietly(lock_path)
+            finally:
+                handle.close()
+
+    def _adopt(self, path: str, pid: int) -> bool:
+        """Rename a dead process's current file to an ordinary batch name.
+
+        Named for its first event, as a rotation would have, so it sorts after
+        every batch the dead process did rotate and before anything newer.
+        """
+        started_ms = self._first_event_ms(path)
+        try:
+            if started_ms is None:
+                if os.path.getsize(path) == 0:
+                    os.unlink(path)
+                    return False
+                started_ms = int(os.path.getmtime(path) * 1000)
+            target = os.path.join(self.root, f"{started_ms:013d}-{pid}-orphan.jsonl")
+            if os.path.exists(target):
+                target = os.path.join(self.root, f"{started_ms:013d}-{pid}-orphan-{secrets.token_hex(4)}.jsonl")
+            os.replace(path, target)
+        except OSError:
+            return False
+        return True
+
+    @staticmethod
+    def _first_event_ms(path: str) -> Optional[int]:
+        """`emitted_at` of the first readable line, in epoch ms, or None."""
+        events, _ = Buffer.read_events_counted(path, limit=1)
+        stamp = events[0].get("emitted_at") if events else None
+        seconds = epoch_from_iso(stamp) if isinstance(stamp, str) else None
+        return int(seconds * 1000) if seconds is not None else None
+
+    def has_backlog(self) -> bool:
+        """Anything on disk this process did not write: a ready batch, or
+        another process's current file. One `listdir`."""
+        try:
+            names = os.listdir(self.root)
+        except OSError:
+            return False
+        own = os.path.basename(self._current)
+        return any(name.endswith(".jsonl") and name != own for name in names)
 
     # -- writing ----------------------------------------------------------
 
@@ -520,22 +750,40 @@ class Buffer:
 
     @staticmethod
     def read_events(path: str) -> list[dict]:
+        return Buffer.read_events_counted(path)[0]
+
+    @staticmethod
+    def read_events_counted(path: str, limit: Optional[int] = None) -> tuple[list[dict], int]:
+        """The file's events, and how many of its lines could not be read.
+
+        Read as bytes and decoded line by line. A process killed mid-write
+        leaves a truncated last line, possibly cut inside a multi-byte UTF-8
+        character (lines are written with `ensure_ascii=False`); that line is
+        dropped and counted, and must cost neither the rest of the batch nor
+        an exception out of the flusher, which would wedge the queue on it.
+        """
         events: list[dict] = []
+        unreadable = 0
         try:
-            with open(path, encoding="utf-8") as handle:
-                for line in handle:
-                    line = line.strip()
-                    if not line:
+            with open(path, "rb") as handle:
+                for raw in handle:
+                    if limit is not None and len(events) >= limit:
+                        break
+                    raw = raw.strip()
+                    if not raw:
                         continue
                     try:
-                        parsed = json.loads(line)
-                    except json.JSONDecodeError:
+                        parsed = json.loads(raw.decode("utf-8"))
+                    except ValueError:  # JSONDecodeError and UnicodeDecodeError both
+                        unreadable += 1
                         continue
                     if isinstance(parsed, dict):
                         events.append(parsed)
+                    else:
+                        unreadable += 1
         except OSError:
-            return []
-        return events
+            return [], 0
+        return events, unreadable
 
 
 # --------------------------------------------------------------------------
