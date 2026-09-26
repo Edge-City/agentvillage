@@ -335,8 +335,9 @@ def fetch_consent_status(
     `timeout` bounds each socket operation; `deadline` bounds the whole fetch.
     The fetch runs on a daemon thread that this call waits on for at most
     `deadline` seconds. Past it the answer is `timeout` and the thread is
-    abandoned: a socket stuck in DNS or dripping bytes lingers until its own
-    per-operation timeout or the process ends, holding nothing but itself.
+    abandoned: a socket stuck in DNS lingers until its per-operation timeout;
+    one fed a slow drip lingers until the server stops sending, the body cap
+    is reached, or the process ends. It holds nothing but itself.
     That is the fail-open trade: the turn is never held longer than the
     deadline.
     """

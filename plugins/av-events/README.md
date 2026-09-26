@@ -797,7 +797,9 @@ socket operation also has its own 5-second timeout. urllib's timeout is per oper
 own a server dripping a byte every few seconds, or a slow DNS answer, could hold the turn for as long
 as it liked. The GET therefore runs on a daemon thread that the tool waits on for at most the
 deadline; past it the answer is "could not check" and the thread is abandoned. A socket stuck that
-way lingers until its own per-operation timeout fires or the process exits. That is the fail-open
+way lingers until its per-operation timeout fires, or, for a slow drip that keeps each read under
+the timeout, until the server stops sending, the 64 KiB body cap is reached, or the process exits (a
+looped caller adds about seven such threads a minute, so this is not an exhaustion path). That is the fail-open
 trade: the turn is never held longer than the deadline, at the cost of a stray thread.
 
 The URL and token are read as the collector reads them: process environment first, then
