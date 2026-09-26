@@ -38,7 +38,7 @@ import urllib.request
 from datetime import datetime, timezone
 from typing import Any, Optional, Union
 
-from ._core import env, env_flag_disabled, register_literal_secret
+from ._core import NO_REDIRECT_OPENER, env, env_flag_disabled, is_redirect, register_literal_secret
 
 logger = logging.getLogger("av-events")
 
@@ -307,16 +307,6 @@ def consent_sentence(status: ConsentResult) -> str:
 # --------------------------------------------------------------------------
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """Refuse every redirect: urllib would carry the bearer to the new host."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401, ANN001
-        return None
-
-
-_OPENER = urllib.request.build_opener(_NoRedirect)
-
-
 def fetch_consent_status(
     url: str,
     token: str,
@@ -370,7 +360,8 @@ def _fetch_once(url: str, token: str, timeout: float) -> ConsentResult:
         method="GET",
     )
     try:
-        with _OPENER.open(request, timeout=timeout) as response:
+        # Redirects are refused (`_core.NoRedirect`): urllib would carry the bearer to the new host.
+        with NO_REDIRECT_OPENER.open(request, timeout=timeout) as response:
             status = int(getattr(response, "status", 0) or 0)
             raw = response.read(MAX_BODY_BYTES + 1)
     except urllib.error.HTTPError as exc:
@@ -379,7 +370,7 @@ def _fetch_once(url: str, token: str, timeout: float) -> ConsentResult:
         except Exception:  # noqa: BLE001 - draining the body must never raise
             pass
         code = int(getattr(exc, "code", 0) or 0)
-        return ConsentUnavailable("redirect" if 300 <= code < 400 else f"http_{code}")
+        return ConsentUnavailable("redirect" if is_redirect(code) else f"http_{code}")
     except TimeoutError:
         return ConsentUnavailable("timeout")
     except urllib.error.URLError as exc:
