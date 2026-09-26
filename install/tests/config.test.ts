@@ -1,8 +1,8 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import YAML from "yaml";
 
 import { capModelMaxTokens, configureAvEvents, configureHostedGateway, configureStt } from "../config";
@@ -134,43 +134,176 @@ test("configureHostedGateway is idempotent and preserves other platform keys", (
   expect((telegram.extra as Record<string, unknown>).disable_link_previews).toBe(false);
 });
 
+// DATA-160: av-events is enabled on every tenant, token or not. The old
+// behaviour (skip the enable without AV_EVENTS_TOKEN in the process env) left
+// the plugin off every control-plane tenant, because the control plane writes
+// the token into $HERMES_HOME/.env only after the installer has run. The old
+// "no-op without a token" and "blank token leaves plugins unset" tests are
+// replaced by the enabled-without-a-token tests below.
+
+const IDLE_NOTE = "(no AV_EVENTS_TOKEN yet; the plugin idles until the control plane writes one)";
+
+/** Run `configureAvEvents` and return what it logged. */
+function configureAvEventsLogged(): string[] {
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    configureAvEvents();
+    return log.mock.calls.map((args) => args.map(String).join(" "));
+  } finally {
+    log.mockRestore();
+  }
+}
+
+function writeDotenv(configPath: string, body: string): string {
+  const path = join(configPath, "..", ".env");
+  writeFileSync(path, body);
+  return path;
+}
+
 test("configureAvEvents enables the plugin when a token is present", () => {
   process.env.AV_EVENTS_TOKEN = "tenant-scoped-token";
   const configPath = withConfig({ plugins: { enabled: ["dashboard-auth-edgecity"] } });
 
-  configureAvEvents();
+  const logged = configureAvEventsLogged();
 
   const plugins = readConfig(configPath).plugins as Record<string, unknown>;
   expect(plugins.enabled).toEqual(["dashboard-auth-edgecity", "av-events"]);
+  expect(logged).toEqual(["→ enabled plugin av-events"]);
 });
 
-test("configureAvEvents is a no-op for a tenant without a token", () => {
+test("configureAvEvents enables the plugin for a tenant without a token, and says it idles", () => {
   delete process.env.AV_EVENTS_TOKEN;
   const configPath = withConfig({ plugins: { enabled: ["dashboard-auth-edgecity"] } });
 
-  configureAvEvents();
+  const logged = configureAvEventsLogged();
 
   const plugins = readConfig(configPath).plugins as Record<string, unknown>;
-  expect(plugins.enabled).toEqual(["dashboard-auth-edgecity"]);
+  expect(plugins.enabled).toEqual(["dashboard-auth-edgecity", "av-events"]);
+  expect(logged).toEqual([`→ enabled plugin av-events ${IDLE_NOTE}`]);
 });
 
-test("configureAvEvents treats a blank token as absent", () => {
+test("configureAvEvents enables the plugin on a config with no plugins block or no config at all", () => {
+  delete process.env.AV_EVENTS_TOKEN;
+  const configPath = withConfig({ model: { default: "google/gemini-3.5-flash" } });
+
+  configureAvEventsLogged();
+
+  const doc = readConfig(configPath);
+  expect((doc.plugins as Record<string, unknown>).enabled).toEqual(["av-events"]);
+  expect(doc.model).toEqual({ default: "google/gemini-3.5-flash" });
+
+  const bare = mkdtempSync(join(tmpdir(), "agentvillage-config-"));
+  process.env.HERMES_HOME = bare;
+  configureAvEventsLogged();
+  expect((readConfig(join(bare, "config.yaml")).plugins as Record<string, unknown>).enabled).toEqual(["av-events"]);
+});
+
+test("configureAvEvents treats a blank token as absent: enabled, with the idle note", () => {
   process.env.AV_EVENTS_TOKEN = "   ";
   const configPath = withConfig({});
 
-  configureAvEvents();
+  const logged = configureAvEventsLogged();
 
-  expect(readConfig(configPath).plugins).toBeUndefined();
+  expect((readConfig(configPath).plugins as Record<string, unknown>).enabled).toEqual(["av-events"]);
+  expect(logged).toEqual([`→ enabled plugin av-events ${IDLE_NOTE}`]);
 });
 
-test("configureAvEvents is idempotent and never writes the token into config.yaml", () => {
+test("configureAvEvents reads the token's presence from $HERMES_HOME/.env when the process env lacks it", () => {
+  delete process.env.AV_EVENTS_TOKEN;
+  const configPath = withConfig({});
+  const dotenv = writeDotenv(configPath, "OTHER=1\nexport AV_EVENTS_TOKEN='dotenv-token' # issued\n");
+
+  const logged = configureAvEventsLogged();
+
+  expect((readConfig(configPath).plugins as Record<string, unknown>).enabled).toEqual(["av-events"]);
+  expect(logged).toEqual(["→ enabled plugin av-events"]);
+  expect(readFileSync(configPath, "utf8")).not.toContain("dotenv-token");
+  expect(readFileSync(dotenv, "utf8")).toBe("OTHER=1\nexport AV_EVENTS_TOKEN='dotenv-token' # issued\n");
+});
+
+test("configureAvEvents: a blank token in the process env is authoritative over .env (revoked)", () => {
+  process.env.AV_EVENTS_TOKEN = "";
+  const configPath = withConfig({});
+  writeDotenv(configPath, "AV_EVENTS_TOKEN=stale-token\n");
+
+  const logged = configureAvEventsLogged();
+
+  expect((readConfig(configPath).plugins as Record<string, unknown>).enabled).toEqual(["av-events"]);
+  expect(logged).toEqual([`→ enabled plugin av-events ${IDLE_NOTE}`]);
+});
+
+test("configureAvEvents: a blank .env token gets the idle note", () => {
+  delete process.env.AV_EVENTS_TOKEN;
+  const configPath = withConfig({});
+  writeDotenv(configPath, "AV_EVENTS_TOKEN=\n");
+
+  expect(configureAvEventsLogged()).toEqual([`→ enabled plugin av-events ${IDLE_NOTE}`]);
+});
+
+test("configureAvEvents is idempotent on a config that already lists it, keeping every entry in order", () => {
+  delete process.env.AV_EVENTS_TOKEN;
+  const configPath = withConfig({
+    plugins: { enabled: ["dashboard-auth-edgecity", "av-events", "recall"], extra: { keep: true } },
+  });
+
+  configureAvEventsLogged();
+  configureAvEventsLogged();
+
+  const plugins = readConfig(configPath).plugins as Record<string, unknown>;
+  expect(plugins.enabled).toEqual(["dashboard-auth-edgecity", "av-events", "recall"]);
+  expect(plugins.extra).toEqual({ keep: true });
+});
+
+test("configureAvEvents is idempotent and never writes the token into config.yaml or .env", () => {
   process.env.AV_EVENTS_TOKEN = "tenant-scoped-token";
   const configPath = withConfig({});
+  const dotenv = join(configPath, "..", ".env");
 
-  configureAvEvents();
-  configureAvEvents();
+  configureAvEventsLogged();
+  configureAvEventsLogged();
 
   const plugins = readConfig(configPath).plugins as Record<string, unknown>;
   expect(plugins.enabled).toEqual(["av-events"]);
   expect(readFileSync(configPath, "utf8")).not.toContain("tenant-scoped-token");
+  expect(existsSync(dotenv)).toBe(false);
+});
+
+test("configureAvEvents: an unreadable .env (a directory) never stops the install", () => {
+  delete process.env.AV_EVENTS_TOKEN;
+  const configPath = withConfig({ plugins: { enabled: ["dashboard-auth-edgecity"] } });
+  mkdirSync(join(configPath, "..", ".env"));
+
+  let logged: string[] = [];
+  expect(() => {
+    logged = configureAvEventsLogged();
+  }).not.toThrow();
+
+  const plugins = readConfig(configPath).plugins as Record<string, unknown>;
+  expect(plugins.enabled).toEqual(["dashboard-auth-edgecity", "av-events"]);
+  expect(logged).toEqual([`→ enabled plugin av-events ${IDLE_NOTE}`]);
+});
+
+test("configureAvEvents warns when av-events is in plugins.disabled, and still lists it (idempotent)", () => {
+  process.env.AV_EVENTS_TOKEN = "tenant-scoped-token";
+  const configPath = withConfig({ plugins: { enabled: ["dashboard-auth-edgecity"], disabled: ["av-events"] } });
+
+  const first = configureAvEventsLogged();
+  const second = configureAvEventsLogged();
+
+  const plugins = readConfig(configPath).plugins as Record<string, unknown>;
+  expect(plugins.enabled).toEqual(["dashboard-auth-edgecity", "av-events"]);
+  expect(plugins.disabled).toEqual(["av-events"]);
+  const expected = [
+    "→ enabled plugin av-events",
+    "→ warning: av-events is in plugins.disabled; Hermes will not load it",
+  ];
+  expect(first).toEqual(expected);
+  expect(second).toEqual(expected);
+});
+
+test("configureAvEvents does not warn when plugins.disabled lists only other plugins", () => {
+  process.env.AV_EVENTS_TOKEN = "tenant-scoped-token";
+  withConfig({ plugins: { disabled: ["recall"] } });
+
+  expect(configureAvEventsLogged()).toEqual(["→ enabled plugin av-events"]);
 });

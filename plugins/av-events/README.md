@@ -33,7 +33,7 @@ plugins/av-events/
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `AV_EVENTS_TOKEN` | *(unset)* | Per-tenant ingest token. **Unset or blank means the plugin idles**: hooks are registered, nothing is emitted, nothing is buffered, no thread is started. |
+| `AV_EVENTS_TOKEN` | *(unset)* | Per-tenant ingest token. **Unset or blank means the plugin idles**: hooks are registered, but no event is emitted or buffered and no flusher thread starts; memory backups still run when `AV_BACKUP_URL`, `AV_BACKUP_TOKEN` and the tenant id are set (the control plane sets them only while village consent is in force and `BACKUP_WRITE_MASTER` is configured). |
 | `AV_EVENTS_URL` | *(unset)* | Ingest base URL. Events are POSTed to `{AV_EVENTS_URL}/v1/events`. Empty with a token set is **null-sink mode** (see below). |
 | `AV_EVENTS_ENABLED` | `1` | Any of `0`, `false`, `no`, `off` (case-insensitive, whitespace ignored) disables everything. Re-read at every session boundary. |
 | `AV_HOOKS_DISABLED` | *(empty)* | Comma-separated hook names to disable individually, e.g. `pre_tool_call,post_tool_call`. Matched case-insensitively, whitespace stripped. Two names are not hooks: `memory_recalled` (the bus subscription) and `cron_run` (the cron tail). |
@@ -56,11 +56,37 @@ must not be able to undo that. Only a variable that is *absent* falls back.
 
 `$HERMES_HOME` defaults to `~/.hermes` (and `%LOCALAPPDATA%\hermes` on Windows).
 
+### Enabling
+
+The installer (`install/config.ts`, `configureAvEvents`) adds `av-events` to `config.yaml`
+`plugins.enabled` on **every** install and update, whether or not a token exists yet. That is safe
+because the plugin idles without `AV_EVENTS_TOKEN`, and it is necessary because the control plane
+writes the token into `$HERMES_HOME/.env` only after the installer has first run (DATA-160: gating
+the enable on the token left the plugin off every hosted tenant). Without a token, no event is
+emitted or buffered and no flusher thread starts; memory backups still run when `AV_BACKUP_URL`,
+`AV_BACKUP_TOKEN` and the tenant id are set (the control plane sets them only while village consent
+is in force and `BACKUP_WRITE_MASTER` is configured). The first roll that lists the plugin turns on
+events on every tenant with a token, and backups only where the control plane has configured them.
+The installer writes no token or URL into `config.yaml`; it only logs `(no AV_EVENTS_TOKEN yet; the
+plugin idles until the control plane writes one)` when neither the process environment nor `.env`
+has one, and a `.env` it cannot read falls back to that wording rather than stopping the install.
+Hermes reads `plugins.enabled` at gateway start, so a newly listed plugin loads after the next
+restart. To keep it from collecting, use the kill switches below rather than unlisting it: the next
+install puts it back. The one way to keep it off across updates is to list `av-events` in
+`config.yaml` `plugins.disabled`; the installer leaves that entry alone and logs `→ warning:
+av-events is in plugins.disabled; Hermes will not load it`. Ops should treat that line as a flag to
+review, not an error.
+
 ### Kill switches
 
 `AV_EVENTS_ENABLED` and `AV_HOOKS_DISABLED` are **re-read at session boundaries**, not only at plugin
 load. That is what makes spec scenario 26 work in both directions: setting `AV_EVENTS_ENABLED=0`
 stops events from the next session, and unsetting it resumes them, with no gateway restart.
+
+The installer's `AV_EVENTS_TOKEN` log line reads `.env` the way python-dotenv does (`export`, quotes,
+comments); the plugin's own fallback reader is stricter, and Hermes loads `.env` into the process
+env at gateway start with override, so a stale `.env` token can outlive a blank process-env token
+until `.env` is rewritten (the control plane rewrites it on revoke).
 
 The reload fires once per session id the plugin has not seen, plus a 60-second TTL so a single
 long-lived session still notices a flip. It is deliberately **not** per hook: a reload is five env
