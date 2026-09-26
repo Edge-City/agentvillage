@@ -136,22 +136,22 @@ export function configureDashboardAuth(): void {
 const AV_EVENTS_PLUGIN = "av-events";
 
 /**
- * Enable the Agent Village telemetry plugin, but only for a tenant that has
- * been issued an ingest token.
+ * Enable the Agent Village telemetry plugin on every tenant, token or not.
  *
- * A tenant without `AV_EVENTS_TOKEN` is left alone entirely: the plugin would
- * idle harmlessly if enabled, but not listing it keeps the sandbox's plugin set
- * honest about what is actually collecting. The token itself is never written
- * to `config.yaml` — the plugin reads it from the environment (or from
- * `$HERMES_HOME/.env`) at session start, which is also what makes the kill
- * switches work without a redeploy. Idempotent.
+ * The plugin is fail-open by construction: without `AV_EVENTS_TOKEN` it
+ * registers its hooks and idles (nothing emitted, buffered or started), and
+ * `AV_EVENTS_ENABLED=0` switches it off without a redeploy. So it is always
+ * listed. Gating the listing on a token at install time left it off every
+ * control-plane tenant (DATA-160): the control plane writes the token into
+ * `$HERMES_HOME/.env` seconds after the installer has run, and nothing re-ran
+ * the enable once it had.
+ *
+ * The token's presence (process environment, else `$HERMES_HOME/.env`, read
+ * as the recall flag is) only shapes the log line. The token is never written
+ * to `config.yaml` or anywhere else: the plugin reads it at session start.
+ * Idempotent; every other `plugins.enabled` entry keeps its place.
  */
 export function configureAvEvents(): void {
-  if (!process.env.AV_EVENTS_TOKEN?.trim()) {
-    console.log(`→ skipped plugin ${AV_EVENTS_PLUGIN} (no AV_EVENTS_TOKEN)`);
-    return;
-  }
-
   const doc = readConfig();
   const plugins = { ...((doc.plugins as Record<string, unknown>) ?? {}) };
   const enabled = Array.isArray(plugins.enabled)
@@ -162,7 +162,10 @@ export function configureAvEvents(): void {
   doc.plugins = plugins;
 
   writeConfig(doc);
-  console.log(`→ enabled plugin ${AV_EVENTS_PLUGIN}`);
+  const idle = envOrDotenv("AV_EVENTS_TOKEN")?.trim()
+    ? ""
+    : " (no AV_EVENTS_TOKEN yet; the plugin idles until the control plane writes one)";
+  console.log(`→ enabled plugin ${AV_EVENTS_PLUGIN}${idle}`);
 }
 
 export const RECALL_PLUGIN = "recall";
@@ -171,23 +174,31 @@ export const RECALL_PLUGIN = "recall";
 const TRUTHY = new Set(["1", "true", "yes", "on"]);
 
 /**
- * `AV_RECALL_ENABLED` from the process environment or, when it is absent
- * there, from `$HERMES_HOME/.env` — the sidecar `/update` path runs the
- * installer without sourcing that file. A variable present in the environment
- * (even blank) is authoritative, as in `av-events`.
+ * A variable from the process environment or, when it is absent there, from
+ * `$HERMES_HOME/.env` — the sidecar `/update` path runs the installer without
+ * sourcing that file, and the control plane writes some variables (such as
+ * `AV_EVENTS_TOKEN`) there only after the first install. A variable present in
+ * the environment (even blank) is authoritative, as in `av-events`. `name`
+ * must be a plain identifier (it is spliced into a regular expression).
  */
-function recallFlag(): string | undefined {
-  const fromEnv = process.env.AV_RECALL_ENABLED;
+function envOrDotenv(name: string): string | undefined {
+  const fromEnv = process.env[name];
   if (fromEnv !== undefined) return fromEnv;
   const dotenv = join(hermesHome(), ".env");
   if (!existsSync(dotenv)) return undefined;
+  const assignment = new RegExp(`^\\s*(?:export\\s+)?${name}\\s*=(.*)$`);
   let found: string | undefined;
   for (const line of readFileSync(dotenv, "utf8").split(/\r?\n/)) {
-    const m = /^\s*(?:export\s+)?AV_RECALL_ENABLED\s*=(.*)$/.exec(line);
+    const m = assignment.exec(line);
     if (!m) continue;
     found = dotenvValue(m[1] ?? ""); // last assignment wins, as python-dotenv does
   }
   return found;
+}
+
+/** `AV_RECALL_ENABLED`, read by `envOrDotenv`. */
+function recallFlag(): string | undefined {
+  return envOrDotenv("AV_RECALL_ENABLED");
 }
 
 /**

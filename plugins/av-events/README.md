@@ -56,6 +56,18 @@ must not be able to undo that. Only a variable that is *absent* falls back.
 
 `$HERMES_HOME` defaults to `~/.hermes` (and `%LOCALAPPDATA%\hermes` on Windows).
 
+### Enabling
+
+The installer (`install/config.ts`, `configureAvEvents`) adds `av-events` to `config.yaml`
+`plugins.enabled` on **every** install and update, whether or not a token exists yet. That is safe
+because the plugin idles without `AV_EVENTS_TOKEN`, and it is necessary because the control plane
+writes the token into `$HERMES_HOME/.env` only after the installer has first run (DATA-160: gating
+the enable on the token left the plugin off every hosted tenant). The installer writes no token or
+URL into `config.yaml`; it only logs `(no AV_EVENTS_TOKEN yet; the plugin idles until the control
+plane writes one)` when neither the process environment nor `.env` has one. Hermes reads
+`plugins.enabled` at gateway start, so a newly listed plugin loads after the next restart. To keep it
+from collecting, use the kill switches below rather than unlisting it: the next install puts it back.
+
 ### Kill switches
 
 `AV_EVENTS_ENABLED` and `AV_HOOKS_DISABLED` are **re-read at session boundaries**, not only at plugin
