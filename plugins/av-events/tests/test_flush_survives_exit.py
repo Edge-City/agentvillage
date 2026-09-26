@@ -566,12 +566,9 @@ def _fifty(collector):
         collector.emit("session.started", {"n": index}, session_id="s")
 
 
-@pytest.mark.parametrize("status", [401, 403])
-def test_a_refused_token_leaves_the_batch_for_a_process_that_has_the_right_one(
-    plugin, monkeypatch, home, av, caplog, status
-):
+def test_a_refused_token_leaves_the_batch_for_a_process_that_has_the_right_one(plugin, monkeypatch, home, av, caplog):
     caplog.set_level("WARNING", logger="av-events")
-    with av.StubIngest(statuses=[status]) as ingest:
+    with av.StubIngest(statuses=[401]) as ingest:
         stale = make_collector(plugin, monkeypatch, url=ingest.url, token="stale-token")
         stale._stop.set()  # ticked by hand
         _fifty(stale)
@@ -599,6 +596,58 @@ def test_a_refused_token_leaves_the_batch_for_a_process_that_has_the_right_one(
         assert len(ingest.received) == 50
         assert ingest.auth_headers[-1] == "Bearer right-token"
         assert jsonl_names(root) == []
+
+
+def test_a_403_is_a_verdict_on_the_batch_and_quarantines_it(plugin, monkeypatch, home, av):
+    """Ingest's 403s (`tenant_mismatch`, `source_mismatch`,
+    `token_class_forbidden`) judge the batch. Left queued, the first such file
+    would hold up everything behind it for 72 hours."""
+    with av.StubIngest(statuses=[403]) as ingest:
+        collector = make_collector(plugin, monkeypatch, url=ingest.url)
+        collector._stop.set()
+        _fifty(collector)
+        _fifty(collector)
+        root = Path(collector.config.buffer_dir)
+        collector.tick()
+        assert ingest.request_count == 2, "the batch behind it was sent in the same pass"
+        assert len(ingest.received) == 50
+        assert len([p for p in (root / "rejected").iterdir() if p.name.endswith(".jsonl")]) == 1
+        # Only the drop report the successful send just buffered is left.
+        assert jsonl_names(root) == [f"current-{os.getpid()}.jsonl"]
+        assert collector._auth_blocked_until == 0.0
+        assert "ingest_auth_rejected" not in collector.counters
+
+
+def test_a_momentarily_probed_own_lock_is_still_taken(plugin, monkeypatch, home):
+    """Another process probing whether this pid is alive holds its lock for
+    an instant. A new buffer that meets the probe must not give up its lock
+    (and with it, moving aside a leftover file with its own pid)."""
+    import fcntl
+    import threading
+
+    root = home / "av-events" / "buffer"
+    root.mkdir(parents=True)
+    lock_path = root / f"current-{os.getpid()}.lock"
+    lock_path.write_bytes(b"")
+    write_leftover(root, os.getpid(), [b'{"event_id":"left-behind","emitted_at":"2026-09-26T10:00:00Z"}\n'])
+    holding, release = threading.Event(), threading.Event()
+
+    def prober():
+        with open(lock_path, "rb") as handle:  # its own open file: flock conflicts in-process too
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            holding.set()
+            release.wait(0.015)  # well under the ~30 ms the buffer allows
+
+    thread = threading.Thread(target=prober)
+    thread.start()
+    assert holding.wait(5)
+    try:
+        collector = make_collector(plugin, monkeypatch)
+    finally:
+        release.set()
+        thread.join(5)
+    assert collector.buffer._owner_lock is not None, "gave up its own lock to a passing probe"
+    assert [n for n in jsonl_names(root) if n.endswith("-orphan.jsonl")], "the leftover was not moved aside"
 
 
 def test_after_the_auth_backoff_the_token_is_read_again(plugin, monkeypatch, home, av):

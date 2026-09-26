@@ -441,7 +441,7 @@ class Collector:
         #: monotonic time of the last orphan scan; None until the first tick.
         self._orphans_at: Optional[float] = None
         #: monotonic time before which this process sends nothing, after
-        #: ingest refused its token (401/403). 0.0 = not blocked.
+        #: ingest refused its token (401). 0.0 = not blocked.
         self._auth_blocked_until = 0.0
         #: Session ids that have already triggered a config reload, and when the
         #: last reload happened. Together these keep the env sweep off the hot
@@ -1396,11 +1396,15 @@ class Collector:
                 self._backoff[name] = (time.time() + delay, attempts + 1)
 
     def _auth_block_expired(self) -> bool:
-        """False while ingest's refusal of this process's token (401/403) is
-        being waited out. When the wait ends, re-read the config first, so a
-        token rewritten in `$HERMES_HOME/.env` is the one tried next. A token
-        in this process's own environment cannot change, and simply gets
-        another attempt every `AUTH_BACKOFF_S`."""
+        """False while ingest's refusal of this process's token (401) is being
+        waited out. When the wait ends, the config is re-read, but that only
+        helps a process whose token is *not* in its environment: `env()` reads
+        the process environment first, and every `hermes` process loads
+        `$HERMES_HOME/.env` into `os.environ` at import
+        (`load_hermes_dotenv(override=True)`). So in practice a stale process
+        (a `hermes dashboard` left over from before a rewire) stays stale until
+        it restarts; it just tries once every `AUTH_BACKOFF_S` and leaves the
+        batches to the gateway."""
         if not self._auth_blocked_until:
             return True
         if time.monotonic() < self._auth_blocked_until:

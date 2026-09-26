@@ -333,7 +333,7 @@ def test_hook_names_are_matched_case_insensitively(plugin, ctx, monkeypatch, av)
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("status", [400, 413, 422])
+@pytest.mark.parametrize("status", [400, 403, 413, 422])
 def test_a_rejected_batch_is_quarantined_not_retried(plugin, monkeypatch, home, av, status):
     with av.StubIngest(statuses=[status]) as ingest:
         collector = make_collector(plugin, monkeypatch, url=ingest.url)

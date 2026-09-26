@@ -99,6 +99,12 @@ HTTP_TIMEOUT_S = 10.0
 #: unrelated process after a container restart.
 ORPHAN_STALE_S = 300.0
 
+#: A new buffer whose own lock is held (another process probing it, for
+#: microseconds) tries again this many times, this far apart, before it
+#: settles for running without one. At most ~30 ms, once per process.
+OWNER_LOCK_HELD_RETRIES = 3
+OWNER_LOCK_RETRY_S = 0.01
+
 #: Total seconds the atexit flush may spend before giving up. The process is on
 #: its way out; the buffer survives on disk either way.
 EXIT_FLUSH_BUDGET_S = 5.0
@@ -120,12 +126,15 @@ FILE_MODE = 0o600
 #: never be accepted, so retrying it forever only delays the batches behind it.
 RETRYABLE_STATUSES = frozenset({408, 425, 429})
 
-#: HTTP statuses that refuse the *token*, not the batch. A process started
-#: before a token rotation (`hermes dashboard` outlives a gateway-only
-#: restart) holds a revoked token while the gateway beside it holds the new
-#: one; the batch is fine and must stay queued for the process that can send
-#: it. The 72-hour age limit still bounds a token that is really gone.
-AUTH_STATUSES = frozenset({401, 403})
+#: HTTP statuses that refuse the *token*, not the batch: 401 only. A process
+#: started before a token rotation (`hermes dashboard` outlives a
+#: gateway-only restart) holds a revoked token while the gateway beside it
+#: holds the new one; the batch is fine and must stay queued for the process
+#: that can send it. The 72-hour age limit still bounds a token that is
+#: really gone. 403 is not here: ingest answers 403 for `tenant_mismatch`,
+#: `source_mismatch` and `token_class_forbidden`, verdicts on the batch, and a
+#: batch like that left queued would sit at the head of the queue for 72 h.
+AUTH_STATUSES = frozenset({401})
 
 #: How long a process whose token ingest refused waits before re-reading its
 #: config and trying again.
@@ -523,16 +532,22 @@ class Buffer:
     def _take_owner_lock(self) -> tuple[str, Any]:
         """`("ours", handle)`, or `("held" | "unsupported" | "error", None)`.
 
-        Never waits. "held" is another buffer in this process, or an adopter
-        that is at this moment moving aside a dead namesake's file.
+        Never blocks on the lock; waits at most ~30 ms in all, and only when
+        it is held. "held" after that is another buffer in this process, or an
+        adopter still moving aside a dead namesake's file.
         """
         if fcntl is None:
             return "unsupported", None
         path = self._lock_path(self._pid)
+        held_retries = 0
         # Retried because an adopter unlinks a dead owner's lock file while
         # holding it: a lock taken on an inode no longer at `path` guards
-        # nothing, so check the path still names the inode we locked.
-        for _ in range(3):
+        # nothing, so check the path still names the inode we locked. And
+        # retried, briefly, when it is held: another process probing whether
+        # this pid is alive (`has_backlog`, `adopt_orphans`) holds a free lock
+        # for microseconds, and losing that race would leave this process
+        # without a lock for its whole life.
+        for _ in range(3 + OWNER_LOCK_HELD_RETRIES):
             try:
                 fd = os.open(path, os.O_RDWR | os.O_CREAT, FILE_MODE)
             except OSError:
@@ -543,6 +558,10 @@ class Buffer:
             except OSError as exc:
                 handle.close()
                 if exc.errno in _LOCK_HELD:
+                    if held_retries < OWNER_LOCK_HELD_RETRIES:
+                        held_retries += 1
+                        time.sleep(OWNER_LOCK_RETRY_S)
+                        continue
                     return "held", None
                 # No locks on this filesystem. A lock file here would guard
                 # nothing, and one per pid would pile up: take it away again.
@@ -872,9 +891,10 @@ class SendResult:
         will not change on its own, and retrying it for 72 hours only delays
         every batch queued behind it.
 
-        401 and 403 are the exception the flusher handles before this
-        (`auth_refused`): they say this *process's* token is wrong, not the
-        batch, so the batch stays queued for a process that has the right one.
+        401 is the exception the flusher handles before this (`auth_refused`):
+        it says this *process's* token is wrong, not the batch, so the batch
+        stays queued for a process that has the right one. 403 is a verdict on
+        the batch (wrong tenant, source or token class) and is not retryable.
         """
         if self.status is None:
             return True
@@ -884,7 +904,7 @@ class SendResult:
 
     @property
     def auth_refused(self) -> bool:
-        """Ingest refused the token (401/403), not the batch."""
+        """Ingest refused the token (401), not the batch."""
         return self.status in AUTH_STATUSES
 
 

@@ -894,18 +894,23 @@ cannot turn one tick into a long blocking walk.
 
 A batch is retried only when retrying could ever work: network failures, 5xx, and 408/425/429. It
 backs off exponentially (2 s doubling, capped at 300 s between attempts) until it is **72 hours
-old**, at which point it is deleted. Any other 4xx except 401 and 403 (so 400, 413, 422) is a
+old**, at which point it is deleted. Any other 4xx except 401 (so 400, 403, 413, 422) is a
 statement about this batch that will not change on its own, so the file is moved to
-`buffer/rejected/` and never offered again. It is *kept* rather than deleted: a 413 is a
-misconfiguration a human needs to see, and deleting the evidence would hide it.
+`buffer/rejected/` and never offered again. It is *kept* rather than deleted: a 403 or a 413 is a
+misconfiguration a human needs to see, and deleting the evidence would hide it. Ingest answers 403
+for `tenant_mismatch`, `source_mismatch` and `token_class_forbidden`, all verdicts on the batch; left
+in the queue, a batch like that would hold up the batches behind it for 72 hours.
 
-**401 and 403 refuse this process's token, not the batch** (DATA-94). More than one process can load
-the plugin against the same buffer: `hermes dashboard` outlives a gateway-only restart and keeps the
+**401 refuses this process's token, not the batch** (DATA-94). More than one process can load the
+plugin against the same buffer: `hermes dashboard` outlives a gateway-only restart and keeps the
 token it was started with, while the gateway beside it has the new one. So the file stays where it
 is for a process whose token works. This process logs `ingest_auth_rejected` once (a name and a
-count), stops sending for 10 minutes (`AUTH_BACKOFF_S`), then re-reads its config (a token rewritten
-in `$HERMES_HOME/.env` is picked up; one in its own process environment is not) and tries again.
-The 72-hour limit still bounds a batch whose token is really gone.
+count), stops sending for 10 minutes (`AUTH_BACKOFF_S`), then re-reads its config and tries again.
+The re-read does not rescue a stale process: every `hermes` process loads `$HERMES_HOME/.env` into
+its environment at import (`load_hermes_dotenv(override=True)`), and the process environment wins
+over the file, so a stale dashboard stays stale until it restarts. It tries once every 10 minutes
+and leaves the batches to the gateway. The 72-hour limit still bounds a batch whose token is really
+gone.
 
 Either way one `plugin.buffer_dropped` is emitted on the next successful flush, carrying `reason`
 (`expired`, `rejected`, or both), `files` / `count` for expiries and `rejected_files` /
