@@ -14,8 +14,11 @@ no connection at all: not merely no `Authorization` header.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import re
+import subprocess
 import sys
 import threading
 import urllib.request
@@ -43,7 +46,8 @@ class Stub:
     method, path and whether a bearer came with it (never its value).
     """
 
-    def __init__(self, status: int = 200, location: Optional[str] = None) -> None:
+    def __init__(self, status: int = 200, location: Optional[str] = None, exact: bool = False) -> None:
+        """`Location` is `location` plus the request path, or `location` alone when `exact`."""
         self.connections = 0
         self.requests: list[dict] = []
         self._lock = threading.Lock()
@@ -67,7 +71,7 @@ class Stub:
                     })
                 self.send_response(status)
                 if location is not None:
-                    self.send_header("Location", location + self.path)
+                    self.send_header("Location", location if exact else location + self.path)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", "2")
                 self.end_headers()
@@ -143,6 +147,19 @@ def test_the_shared_opener_has_no_redirect_handler_but_the_refusing_one(core):
     handlers = [h for h in core.NO_REDIRECT_OPENER.handlers if isinstance(h, urllib.request.HTTPRedirectHandler)]
     assert len(handlers) == 1
     assert type(handlers[0]) is core.NoRedirect
+    # Refused before the stdlib parses `Location`.
+    for code in REDIRECTS:
+        assert handlers[0].__class__.__dict__.get(f"http_error_{code}") is not None, code
+        assert getattr(handlers[0], f"http_error_{code}")(None, None, code, "", {}) is None
+
+
+def test_the_shared_opener_ignores_proxy_variables(core):
+    # `ProxyHandler({})` defines no `<scheme>_open`, so `add_handler` keeps
+    # nothing of it; passing it only stops `build_opener` adding the default
+    # one, which reads the proxy variables. So: no proxy handler at all.
+    proxies = [h for h in core.NO_REDIRECT_OPENER.handlers if isinstance(h, urllib.request.ProxyHandler)]
+    assert proxies == []
+    assert not any(hasattr(h, "proxy_open") for h in core.NO_REDIRECT_OPENER.handlers)
 
 
 def test_the_consent_tool_uses_the_shared_opener(plugin, av, core):
@@ -323,7 +340,7 @@ def test_put_object_reports_a_redirect(plugin, av, pair, no_proxy, status):
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("status", [302, 307])
+@pytest.mark.parametrize("status", REDIRECTS)
 def test_the_consent_fetch_still_refuses_a_redirect(plugin, av, pair, no_proxy, status):
     consent = sys.modules[f"{av.MODULE_NAME}._consent"]
     redirector, target = pair(status)
@@ -332,3 +349,93 @@ def test_the_consent_fetch_still_refuses_a_redirect(plugin, av, pair, no_proxy, 
     assert result.reason == "redirect"
     assert [(r["method"], r["path"], r["bearer"]) for r in redirector.requests] == [("GET", "/v1/consent", True)]
     assert target.connections == 0
+
+
+# --------------------------------------------------------------------------
+# A malformed `Location` is never parsed
+# --------------------------------------------------------------------------
+
+#: An unclosed IPv6 literal: `urllib.parse.urlparse` raises `ValueError` on it.
+MALFORMED_LOCATION = "http://[::1"
+
+
+@pytest.mark.parametrize("status", REDIRECTS)
+def test_a_malformed_location_is_a_counted_redirect_not_a_parser_error(
+    plugin, av, core, monkeypatch, home, caplog, status
+):
+    consent = sys.modules[f"{av.MODULE_NAME}._consent"]
+    with Stub(status, location=MALFORMED_LOCATION, exact=True) as redirector:
+        sent = core.post_events(redirector.url, EVENTS_TOKEN, [event()])
+        checked = consent.fetch_consent_status(redirector.url, EVENTS_TOKEN)
+        collector = make_collector(plugin, monkeypatch, redirector.url)
+        for index in range(50):
+            collector.emit("session.started", {"n": index}, session_id="s-malformed")
+        queued = ready_files(collector)
+        with caplog.at_level(logging.WARNING, logger="av-events"):
+            collector.tick()
+
+    assert (sent.ok, sent.status, sent.reason, sent.retryable) == (False, status, "redirect", True)
+    assert isinstance(checked, consent.ConsentUnavailable)
+    assert checked.reason == "redirect"
+    assert ready_files(collector) == queued
+    assert collector.counters.get("ingest_redirect_refused") == 1
+    assert "[::1" not in caplog.text
+    assert "ValueError" not in caplog.text
+
+
+# --------------------------------------------------------------------------
+# No proxy, even one configured before the plugin is imported
+# --------------------------------------------------------------------------
+
+#: Runs in a child process whose environment names a proxy from the start, so
+#: the plugin (and urllib) are imported with the proxy variables already set.
+PROXY_SCRIPT = r"""
+import importlib, importlib.util, json, sys, types
+plugin_dir, url, token = sys.argv[1:4]
+parent = "hermes_plugins"
+namespace = types.ModuleType(parent)
+namespace.__path__ = []
+namespace.__package__ = parent
+sys.modules[parent] = namespace
+name = parent + ".av_events"
+spec = importlib.util.spec_from_file_location(
+    name, plugin_dir + "/__init__.py", submodule_search_locations=[plugin_dir]
+)
+module = importlib.util.module_from_spec(spec)
+module.__package__ = name
+module.__path__ = [plugin_dir]
+sys.modules[name] = module
+spec.loader.exec_module(module)
+core = importlib.import_module(name + "._core")
+consent = importlib.import_module(name + "._consent")
+sent = core.post_events(url, token, [{"event_type": "session.started", "payload": {}}])
+checked = consent.fetch_consent_status(url, token)
+print(json.dumps({"post": [sent.ok, sent.status, sent.reason], "consent": type(checked).__name__}))
+"""
+
+PROXY_VARS = ("http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")
+
+
+def test_proxy_variables_set_before_import_are_ignored(av, tmp_path):
+    with Stub(502) as proxy, Stub(200) as target:
+        env = {
+            k: v for k, v in os.environ.items()
+            if k.lower() not in {"http_proxy", "https_proxy", "all_proxy", "no_proxy"} and not k.startswith("AV_")
+        }
+        for name in PROXY_VARS:
+            env[name] = proxy.url
+        env["HERMES_HOME"] = str(tmp_path)
+        run = subprocess.run(
+            [sys.executable, "-c", PROXY_SCRIPT, str(av.PLUGIN_DIR), target.url, EVENTS_TOKEN],
+            env=env, capture_output=True, text=True, timeout=60,
+        )
+        assert run.returncode == 0, run.stderr[-2000:].replace(EVENTS_TOKEN, "<token>")
+        result = json.loads(run.stdout.strip().splitlines()[-1])
+
+        assert proxy.connections == 0
+        assert proxy.requests == []
+        assert [(r["method"], r["path"], r["bearer"]) for r in target.requests] == [
+            ("POST", "/v1/events", True),
+            ("GET", "/v1/consent", True),
+        ]
+    assert result["post"] == [True, 200, ""]

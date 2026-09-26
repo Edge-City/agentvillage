@@ -7,11 +7,13 @@ hook, and can be switched off per tenant or fleet-wide by environment variable w
 Python 3.11, standard library only. No third-party dependencies, no secrets in the repo, and the
 only network destinations it will ever contact are `AV_EVENTS_URL` and, for the memory snapshot,
 `AV_BACKUP_URL`. That amends spec §7.1's "network calls to AV_EVENTS_URL only" to "network calls
-to AV_EVENTS_URL and AV_BACKUP_URL only"; the amendment is owed to spec draft 1.2. Redirects are
-refused everywhere: the bearer is never sent to a host other than the configured URL's (DATA-172).
-The events poster and the consent fetch use one urllib opener whose redirect handler follows
-nothing (`_core.NO_REDIRECT_OPENER`); the backup uploader speaks `http.client`, which has no
-redirect handling at all.
+to AV_EVENTS_URL and AV_BACKUP_URL only"; the amendment is owed to spec draft 1.2. No proxies, no
+redirects: the bearer goes only to the configured host (DATA-172). The events poster and the
+consent fetch use one urllib opener (`_core.NO_REDIRECT_OPENER`) whose redirect handler follows
+nothing and whose proxy handler ignores `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY`: the agent can
+write `$HERMES_HOME/.env`, Hermes loads it into the environment, and `AV_EVENTS_URL` is plain http
+on the private network, so an honoured proxy variable would carry the bearer in clear. The backup
+uploader speaks `http.client`, which has no redirect or proxy handling at all.
 
 ```
 plugins/av-events/
@@ -902,7 +904,9 @@ A batch is retried only when retrying could ever work: network failures, 5xx, 40
 3xx. A redirect is refused, never followed, so the bearer stays with `AV_EVENTS_URL`'s host; ingest
 never redirects, so a 3xx is a fault in front of it (a proxy, a moved domain), not a verdict on the
 batch, and quarantining the batch would lose good evidence. It logs `ingest_redirect_refused` once
-per process (a name and a count, never the URL or the `Location`). It
+per process (a name and a count, never the URL or the `Location`). Retrying a 3xx, and refusing
+redirects and proxies, amend spec §7.1's retry set (network failures, 5xx, 408/425/429); the
+amendment is owed to the spec alongside the destinations one. It
 backs off exponentially (2 s doubling, capped at 300 s between attempts) until it is **72 hours
 old**, at which point it is deleted. Any other 4xx except 401 (so 400, 403, 413, 422) is a
 statement about this batch that will not change on its own, so the file is moved to

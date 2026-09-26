@@ -879,10 +879,21 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
     re-sends every header but the content ones, `Authorization` included, to
     whatever host `Location` names. Ingest never redirects, so a 3xx is a
     misconfiguration or an attack, and following it would hand the bearer to
-    a host other than the configured URL's. With `redirect_request` returning
-    None, urllib raises `HTTPError` with the 3xx code instead, and no request
-    is made to the new location.
+    a host other than the configured URL's.
+
+    Every `http_error_3xx` returns None before the stdlib reads `Location`,
+    so a malformed one (`http://[::1`) cannot raise `ValueError` out of the
+    parser; urllib falls through to its default handler and raises
+    `HTTPError` with the 3xx code, and no request is made anywhere else.
+    `redirect_request` returns None too, in case a later stdlib reaches it by
+    another route.
     """
+
+    def _refuse(self, req, fp, code, msg, headers):  # noqa: ANN001
+        return None
+
+    http_error_301 = http_error_302 = http_error_303 = http_error_307 = http_error_308 = _refuse
+
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401, ANN001
         return None
@@ -890,8 +901,15 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 #: The only urllib opener this plugin sends a bearer through: the events
 #: poster and the consent fetch. (The backup uploader speaks `http.client`
-#: directly, which never follows a redirect.)
-NO_REDIRECT_OPENER = urllib.request.build_opener(NoRedirect)
+#: directly, which neither follows a redirect nor uses a proxy.)
+#:
+#: `ProxyHandler({})` replaces the default one, which reads `HTTP_PROXY`,
+#: `HTTPS_PROXY` and `ALL_PROXY` from the environment. The agent can write
+#: `$HERMES_HOME/.env` and Hermes loads it into `os.environ`, and
+#: `AV_EVENTS_URL` is plain http on the private network, so an honoured proxy
+#: variable would hand the bearer and the batch to the proxy in clear. Every
+#: destination this plugin has is in-network: no proxy is ever legitimate.
+NO_REDIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect)
 
 
 def is_redirect(status: Optional[int]) -> bool:
