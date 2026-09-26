@@ -21,6 +21,8 @@ from typing import Any, Optional
 
 from . import _edgeos
 from ._collector import Collector, guarded, hermes_version, overlay_ref
+from ._consent import TOOL_NAME as CONSENT_TOOL_NAME
+from ._consent import register_consent_tool
 from ._core import (
     PLUGIN_VERSION,
     hash_obj,
@@ -823,6 +825,9 @@ def register(ctx) -> None:
     session without a restart, and a tenant that never gets a token runs a set
     of hooks that do nothing.
 
+    It also registers one read-only tool, `consent_status` (`_consent.py`),
+    when `ctx.register_tool` exists.
+
     Idempotent. Hermes loads a plugin once per process, but a profile switch or
     a `force=True` reload can call `register()` again on a module that is still
     in `sys.modules` — and registering twice appends a second callback to every
@@ -848,11 +853,16 @@ def register(ctx) -> None:
                 subscribe(event, callback)
             except Exception:  # noqa: BLE001
                 continue
+    # The one tool (DATA-157): a read of this tenant's research consent. After
+    # the hooks, and guarded inside, so a Hermes without `register_tool` (or
+    # one that refuses it) still gets every hook.
+    register_consent_tool(ctx)
     _REGISTERED = True
 
 
 __all__ = [
     "register",
+    "CONSENT_TOOL_NAME",
     "build_hooks",
     "build_subscriptions",
     "memory_recalled_payload",

@@ -1,6 +1,6 @@
 name: av-events
 version: 0.1.0
-description: "Agent Village V2 telemetry — session, LLM-call, prompt, tool-call, message, action, cron, profile, intention and memory.snapshot events to the Agent Village ingest API. Fails open; idles without AV_EVENTS_TOKEN. Backs up the memory files when AV_BACKUP_URL and AV_BACKUP_TOKEN are set."
+description: "Agent Village V2 telemetry — session, LLM-call, prompt, tool-call, message, action, cron, profile, intention and memory.snapshot events to the Agent Village ingest API. Fails open; idles without AV_EVENTS_TOKEN. Backs up the memory files when AV_BACKUP_URL and AV_BACKUP_TOKEN are set. One read-only tool, consent_status, answers whether the resident is in the research."
 author: Edge City
 kind: backend
 optional_env:
@@ -16,6 +16,10 @@ optional_env:
   - AV_BACKUP_MAX_BYTES
   - AV_BACKUP_MIN_INTERVAL_S
   - AV_BACKUP_GRACE_S
+# Documentation only — Hermes registers the tool from ctx.register_tool() (toolset
+# av-events, DATA-157); `hermes plugins` reads this list to name the toolset.
+provides_tools:
+  - consent_status
 # Documentation only — Hermes reads hooks from ctx.register_hook(), never from
 # this list (hermes_cli/plugins.py:4831).
 provides_hooks:
