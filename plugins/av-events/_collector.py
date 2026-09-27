@@ -602,6 +602,11 @@ class Collector:
         if self._atexit_registered:
             atexit.unregister(self.shutdown)
             self._atexit_registered = False
+        # The successor's buffer must own `current-<pid>.lock`, not find it
+        # held by this one and run unlocked (another process could then adopt
+        # the live current file).
+        if self.buffer is not None:
+            self.buffer.release_owner_lock()
 
     def shutdown(self) -> None:
         """Best-effort final snapshot and flush. Bounded; the buffer survives on disk anyway.

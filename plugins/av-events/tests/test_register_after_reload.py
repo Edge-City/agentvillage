@@ -133,3 +133,27 @@ def test_an_unload_stops_the_old_collectors_threads(plugin, monkeypatch, av):
     assert plugin._COLLECTOR is not None and plugin._COLLECTOR is not old
     plugin._COLLECTOR._stop.set()
     plugin._COLLECTOR._wake.set()
+
+
+def test_the_new_buffer_owns_the_lock_after_unload_and_register(plugin, monkeypatch):
+    """The old collector's buffer held `current-<pid>.lock`; left open, the
+    new buffer found it held and ran with no owner lock, so after gc another
+    process could take the gateway's lock and adopt its live current file."""
+    monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
+    ctx = UnloadingCtx()
+    plugin.register(ctx)
+    old = plugin._COLLECTOR
+    old_buffer = old._ensure_buffer()
+    old_handle = old_buffer._owner_lock
+    assert old_handle is not None
+
+    ctx.unload()
+    assert old_handle.closed and old_buffer._owner_lock is None
+
+    plugin.register(UnloadingCtx())
+    new = plugin._COLLECTOR
+    try:
+        assert new._ensure_buffer()._owner_lock is not None, "the new buffer holds the lock"
+    finally:
+        new._stop.set()
+        new._wake.set()
