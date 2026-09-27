@@ -42,7 +42,7 @@ plugins/av-events/
 |---|---|---|
 | `AV_EVENTS_TOKEN` | *(unset)* | Per-tenant ingest token. **Unset or blank means the plugin idles**: hooks are registered, but no event is emitted or buffered and no flusher thread starts; memory backups still run when `AV_BACKUP_URL`, `AV_BACKUP_TOKEN` and the tenant id are set (the control plane sets them only while village consent is in force and `BACKUP_WRITE_MASTER` is configured). |
 | `AV_EVENTS_URL` | *(unset)* | Ingest base URL. Events are POSTed to `{AV_EVENTS_URL}/v1/events`; the `consent_status` tool GETs `{AV_EVENTS_URL}/v1/consent`. Empty with a token set is **null-sink mode** (see below). |
-| `AV_EVENTS_ENABLED` | `1` | Any of `0`, `false`, `no`, `off` (case-insensitive, whitespace ignored) disables everything. Re-read at every session boundary. |
+| `AV_EVENTS_ENABLED` | `1` | Any of `0`, `false`, `no`, `off` (case-insensitive, whitespace ignored) disables everything. Re-read at every session boundary, and by the flusher before every pass. |
 | `AV_HOOKS_DISABLED` | *(empty)* | Comma-separated hook names to disable individually, e.g. `pre_tool_call,post_tool_call`. Matched case-insensitively, whitespace stripped. Three names are not hooks: `memory_recalled` (the bus subscription), `cron_run` (the cron tail) and `consent_status` (the tool, which then answers "could not check"). |
 | `AV_CAPTURE` | `sanitized` | `metadata` \| `sanitized` \| `full`. An unrecognised value falls back to `sanitized`. |
 | `TENANT_ID`, `AV_TENANT_ID` | *(unset)* | The tenant id, used for one thing only: `cron.run`'s derived event id (spec §4.3). `TENANT_ID` is what the control plane already sets for `dashboard-auth-edgecity`; `AV_TENANT_ID` overrides it. Unset means `cron.run` gets a uuid v7 (see "Cron capture"). |
@@ -88,7 +88,11 @@ review, not an error.
 
 `AV_EVENTS_ENABLED` and `AV_HOOKS_DISABLED` are **re-read at session boundaries**, not only at plugin
 load. That is what makes spec scenario 26 work in both directions: setting `AV_EVENTS_ENABLED=0`
-stops events from the next session, and unsetting it resumes them, with no gateway restart.
+stops events from the next session, and unsetting it resumes them, with no gateway restart. The
+flusher also re-reads `AV_EVENTS_ENABLED` at the start of every pass (DATA-180), so switching it off
+stops sending within one tick interval (1 s) even mid-session; when it has flipped, the flusher
+rebuilds the config, so emits and the cron tail stop with it. Batches already on disk stay there
+until it is switched back on.
 
 The installer's `AV_EVENTS_TOKEN` log line reads `.env` the way python-dotenv does (`export`, quotes,
 comments); the plugin's own fallback reader is stricter, and Hermes loads `.env` into the process

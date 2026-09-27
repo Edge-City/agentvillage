@@ -1350,6 +1350,15 @@ class Collector:
         buffer = self.buffer
         if buffer is None:
             return
+        # DATA-180: the kill switch holds for a flusher that is already running.
+        # Re-read it every pass (one env lookup; the `.env` fallback is
+        # memoised on its mtime) and, when it has flipped, rebuild the config,
+        # so emit and the cron tail stop too, not just the sends.
+        if env_flag_disabled("AV_EVENTS_ENABLED") == self.config.enabled:
+            with self._lock:
+                self.reload_config()
+        if not self.config.enabled:
+            return
         # Before anything else, so a dead process's last batch joins the queue
         # in its place and a null sink still keeps it as an ordinary batch.
         self._adopt_orphans_if_due(buffer)
