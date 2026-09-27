@@ -219,9 +219,15 @@ backlog can differ from `emitted_at` by minutes. Every `marts` time series is bu
 
 `prompt.registered` is content-addressed against a seen-set at `$HERMES_HOME/av-events/seen.json`,
 so the same tool schemas register once and never again, across sessions and process restarts. The
-hash is recorded **after** the event is buffered, never before: marking it seen first would lose the
-body permanently whenever the emit turned out to be inert (no token yet, plugin disabled, unwritable
-buffer) while every later `llm.call` still carried the orphaned hash.
+hash enters the seen-set only when the batch carrying its event got a **202** from ingest (DATA-112).
+From the emit until then it is pending in memory, so the process does not register it twice; a batch
+that expires or is refused (quarantined to `buffer/rejected/`) drops it from pending, and the next
+`pre_api_request` registers the body again. Marking it seen any earlier would lose the body
+permanently whenever it never landed, while every later `llm.call` still carried the orphaned hash. A
+new process re-registers what was still pending when the old one exited; ingest keeps the first body
+per hash, so the duplicate is harmless. `tools_hash`, `system_prompt_hash` and the
+`prompt.registered` hash are all computed over `sanitize(body)`, the bytes that leave, so a body with a
+credential shape redacted in it still verifies at the door.
 
 `session.ended` carries the per-session hook stats — `hook_calls`, `hook_failures`, `hook_overruns`,
 `hook_max_ms`, `slowest_hook`, `degraded`. That is the data source for the guardrails p95 latency

@@ -238,9 +238,14 @@ def _hook_pre_api_request(collector: Collector, **kwargs: Any) -> None:
     tools = body.get("tools") if isinstance(body, dict) else None
     system_prompt = kwargs.get("system_prompt")
 
-    tools_hash = hash_obj(tools) if tools else None
     prompt_text = system_prompt if isinstance(system_prompt, str) else None
-    system_prompt_hash = hash_text(prompt_text) if prompt_text else None
+    # DATA-112: hash the bytes that leave. `emit` sanitises the
+    # `prompt.registered` body, so a hash over the raw schemas or prompt would
+    # name a body ingest never receives and cannot verify.
+    sent_tools = sanitize(tools) if tools else None
+    sent_prompt = sanitize(prompt_text) if prompt_text else None
+    tools_hash = hash_obj(sent_tools) if sent_tools else None
+    system_prompt_hash = hash_text(sent_prompt) if sent_prompt else None
 
     request_id = str(kwargs.get("api_request_id") or "")
     if request_id:
@@ -261,9 +266,9 @@ def _hook_pre_api_request(collector: Collector, **kwargs: Any) -> None:
     # `full` capture only; content-addressed, so this is a no-op after the
     # first session that saw these bytes.
     if tools_hash:
-        collector.register_prompt("tools", tools_hash, tools, **refs)
+        collector.register_prompt("tools", tools_hash, sent_tools, **refs)
     if system_prompt_hash:
-        collector.register_prompt("system_prompt", system_prompt_hash, prompt_text, **refs)
+        collector.register_prompt("system_prompt", system_prompt_hash, sent_prompt, **refs)
 
 
 def _hook_post_api_request(collector: Collector, **kwargs: Any) -> None:

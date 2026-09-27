@@ -465,8 +465,13 @@ def test_the_seen_set_is_private(plugin, ctx, monkeypatch, home):
     monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
     monkeypatch.setenv("AV_CAPTURE", "full")
     plugin.register(ctx)
+    monkeypatch.setenv("AV_EVENTS_URL", "http://127.0.0.1:9")
     ctx.fire("pre_api_request", session_id="s", turn_id="t0", api_request_id="r0",
              system_prompt="SP", tool_count=0, request={"method": "POST", "body": {}})
+    core = sys.modules[f"{plugin.__name__}._core"]
+    plugin._COLLECTOR.sender = lambda url, token, events: core.SendResult(True, 202)
+    plugin._COLLECTOR.buffer.rotate_if_due(force=True)
+    plugin._COLLECTOR.tick()
     seen = home / "av-events" / "seen.json"
     assert seen.exists()
     assert oct(os.stat(seen).st_mode & 0o777) == "0o600"

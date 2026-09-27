@@ -431,6 +431,11 @@ class Collector:
         self._plugin_disabled_emitted = False
         self._seen: dict[str, str] = {}
         self._seen_loaded = False
+        #: prompt hash -> event id of the `prompt.registered` that carries it,
+        #: buffered but not yet accepted by ingest (DATA-112). Memory only: a
+        #: new process re-registers what it finds neither here nor in seen.json,
+        #: and ingest keeps the first body per hash.
+        self._prompt_pending: dict[str, str] = {}
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._wake = threading.Event()
@@ -1334,24 +1339,55 @@ class Collector:
 
         `full` capture only. The seen-set lives on disk, so a second session
         with the same tool schemas emits nothing.
+
+        A hash enters the seen-set only when the batch carrying its event got
+        a 202 (`_settle_prompts`, DATA-112). Until then it is pending, which
+        stops a second registration from this process; a batch that expires
+        or is refused drops it from pending, so the next `pre_api_request`
+        registers the body again. An orphaned hash is worse than a duplicate
+        `prompt.registered`: ingest keeps the first body per hash.
         """
         if self.config.capture != "full" or not digest:
             return None
         with self._lock:
-            if digest in self._load_seen():
+            if digest in self._load_seen() or digest in self._prompt_pending:
                 return None
-        # Emit *before* recording the hash. Marking it seen first means that an
-        # emit which turns out to be inert — no token yet, plugin disabled, an
-        # unwritable buffer — loses the body permanently, while every later
-        # `llm.call` still carries the hash. An orphaned hash is worse than a
-        # duplicate `prompt.registered`, which ingest deduplicates anyway.
+        # An inert emit (no token yet, plugin disabled, an unwritable buffer)
+        # records nothing, so the body is offered again later.
         event = self.emit("prompt.registered", {"hash": digest, "kind": kind, "body": body}, **refs)
         if event is None:
             return None
         with self._lock:
-            self._seen[digest] = kind
-            self._save_seen()
+            self._prompt_pending[digest] = event["event_id"]
         return event
+
+    def _settle_prompts(self, events: list, accepted: bool) -> None:
+        """A batch left the queue: move its prompt hashes to the seen-set on a
+        202 (`accepted`), or out of pending otherwise (expired, refused, any
+        other 2xx) so they are registered again.
+
+        A 202 settles a hash whoever buffered it: a batch adopted from a dead
+        process proves the body landed just as well.
+        """
+        changed = False
+        with self._lock:
+            for event in events:
+                if not isinstance(event, dict) or event.get("event_type") != "prompt.registered":
+                    continue
+                payload = event.get("payload")
+                digest = payload.get("hash") if isinstance(payload, dict) else None
+                if not isinstance(digest, str) or not digest:
+                    continue
+                if accepted:
+                    self._prompt_pending.pop(digest, None)
+                    seen = self._load_seen()
+                    if digest not in seen:
+                        seen[digest] = str(payload.get("kind") or "")
+                        changed = True
+                elif self._prompt_pending.get(digest) == event.get("event_id"):
+                    del self._prompt_pending[digest]
+            if changed:
+                self._save_seen()
 
     # -- flusher ----------------------------------------------------------
 
@@ -1484,6 +1520,8 @@ class Collector:
             pass
         if unreadable:
             self.count("buffer_unreadable_line", unreadable)
+        # Ingest answers 202; only that proves the batch was taken (DATA-112).
+        self._settle_prompts(events, result.status == 202)
         self._emit_drop_report()
         return True, True, False
 
@@ -1507,6 +1545,7 @@ class Collector:
             except OSError:
                 return
         self._backoff.pop(os.path.basename(path), None)
+        self._settle_prompts(events, accepted=False)
         record = self._dropped
         record["count"] = int(record.get("count", 0)) + len(events)
         if reason == "rejected":
