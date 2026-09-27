@@ -434,3 +434,76 @@ test("DIGEST_SEND_CRON override beats the staggered default on create", () => {
   const send = cronCalls().find((argv) => argv[1] === "create" && argv.includes(SEND.name))!;
   expect(send[2]).toBe("45 7 * * *");
 });
+
+/**
+ * A stub `hermes` that keeps `cron/jobs.json` the way Hermes does: `cron
+ * create` appends a job with a `uuid4().hex[:12]`-shaped id, `cron remove`
+ * drops one. For the installed-job record (DATA-92), which reads ids back.
+ */
+function writeStatefulStubHermes(dir: string): string {
+  const bin = join(dir, "hermes");
+  writeFileSync(
+    bin,
+    `#!${process.execPath}
+const { existsSync, readFileSync, writeFileSync } = require("node:fs");
+const { randomBytes } = require("node:crypto");
+const args = process.argv.slice(2);
+if (args[0] === "--version") { console.log("stub 0.0.0"); process.exit(0); }
+const path = ${JSON.stringify(join(dir, "cron", "jobs.json"))};
+const doc = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : { jobs: [] };
+if (args[0] === "cron" && args[1] === "create") {
+  doc.jobs.push({ id: randomBytes(6).toString("hex"), name: args[args.indexOf("--name") + 1] });
+} else if (args[0] === "cron" && args[1] === "remove") {
+  doc.jobs = doc.jobs.filter((job) => job.id !== args[2]);
+}
+writeFileSync(path, JSON.stringify(doc));
+`,
+  );
+  chmodSync(bin, 0o755);
+  return bin;
+}
+
+function installedIds(): string[] {
+  return (JSON.parse(readFileSync(join(home, "av-events", "installed_jobs.json"), "utf8")) as { ids: string[] }).ids;
+}
+
+function storedJobs(): { id: string; name: string }[] {
+  return (JSON.parse(readFileSync(join(home, "cron", "jobs.json"), "utf8")) as { jobs: { id: string; name: string }[] }).jobs;
+}
+
+test("a fresh install records the id of every cron it created (DATA-92)", () => {
+  process.env.HERMES_BIN = writeStatefulStubHermes(home);
+  writeJobs([]);
+
+  reconcileDigestCronJobs({ ...process.env });
+
+  expect(storedJobs()).toHaveLength(DIGEST_CRON_SPECS.length);
+  expect(installedIds()).toEqual(storedJobs().map((job) => job.id).sort());
+});
+
+test("a participant's job named like an installer cron is not recorded as ours (DATA-92)", () => {
+  process.env.HERMES_BIN = writeStatefulStubHermes(home);
+  const ours = DIGEST_CRON_SPECS.map((spec, n) => currentJob(spec, `00000000000${n}`));
+  const theirs = { id: "fedcba987654", name: SEND.name, prompt: "remind me about Alice", schedule: { expr: "0 9 * * *" } };
+  writeJobs([...ours, theirs]);
+
+  reconcileDigestCronJobs({ ...process.env });
+
+  expect(installedIds()).toEqual(ours.map((job) => job.id as string).sort());
+  expect(installedIds()).not.toContain(theirs.id);
+});
+
+test("a recreated cron records its new id, not the removed one (DATA-92)", () => {
+  process.env.HERMES_BIN = writeStatefulStubHermes(home);
+  const ours = DIGEST_CRON_SPECS.map((spec, n) => currentJob(spec, `00000000000${n}`));
+  const signals = ours[DIGEST_CRON_SPECS.indexOf(SIGNALS)];
+  signals.script = "stale.py";
+  writeJobs(ours);
+
+  reconcileDigestCronJobs({ ...process.env });
+
+  const ids = installedIds();
+  expect(ids).not.toContain(signals.id as string);
+  expect(ids).toHaveLength(DIGEST_CRON_SPECS.length);
+  expect(ids).toContain(storedJobs().find((job) => job.name === SIGNALS.name)!.id);
+});

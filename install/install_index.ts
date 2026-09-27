@@ -31,7 +31,7 @@
  *     state (user-customized schedules are never touched).
  */
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import YAML from "yaml";
@@ -451,6 +451,30 @@ function hermesAvailable(bin: string): boolean {
   }
 }
 
+/**
+ * `$HERMES_HOME/av-events/installed_jobs.json`: the ids of the cron jobs this
+ * installer created or manages (DATA-92). The av-events plugin reports a
+ * `cron.run` job name only for these ids: a participant can ask the agent for
+ * a job named exactly like one of ours, and its name is then their words.
+ */
+export function installedJobsPath(home: string): string {
+  return join(home, "av-events", "installed_jobs.json");
+}
+
+/** Replace the record, by temp file and rename. Best effort, like `restore.json`. */
+export function writeInstalledJobIds(home: string, ids: string[]): void {
+  try {
+    const dir = join(home, "av-events");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const path = installedJobsPath(home);
+    const tmp = `${path}.${process.pid}.tmp`;
+    writeFileSync(tmp, `${JSON.stringify({ ids: [...new Set(ids)].sort() })}\n`, { mode: 0o600 });
+    renameSync(tmp, path);
+  } catch {
+    console.warn("  warning: could not record the installed cron job ids; cron.run will carry no job names");
+  }
+}
+
 export function reconcileDigestCronJobs(
   env: NodeJS.ProcessEnv = hermesExecEnv(),
   argv: string[] = process.argv,
@@ -465,6 +489,12 @@ export function reconcileDigestCronJobs(
   }
 
   const existing = readCronJobs();
+  const idsBefore = new Set(existing.map((job) => job.id));
+  // The job ids this run leaves in place as ours (DATA-92), and the id a
+  // `cron create` just added under `name`, read back from jobs.json.
+  const installed: string[] = [];
+  const createdId = (name: string): string | undefined =>
+    readCronJobs().find((job) => job.name === name && !idsBefore.has(job.id))?.id;
   const activeSpecs = DIGEST_CRON_SPECS.filter(
     (spec) => spec.name !== "Edge — token usage audit" || !tokenUsageAuditCronDisabled(argv, env),
   );
@@ -515,8 +545,11 @@ export function reconcileDigestCronJobs(
         } catch {
           console.warn(`  warning: could not recreate cron "${spec.name}" — gateway may still run`);
         }
+        const recreated = createdId(spec.name);
+        if (recreated) installed.push(recreated);
         continue;
       }
+      installed.push(job.id);
       if (!promptStale && !scheduleStale) {
         console.log(`→ cron "${spec.name}" up to date`);
         continue;
@@ -560,7 +593,10 @@ export function reconcileDigestCronJobs(
     } catch {
       console.warn(`  warning: could not install cron "${spec.name}" — gateway may still run`);
     }
+    const created = createdId(spec.name);
+    if (created) installed.push(created);
   }
+  writeInstalledJobIds(home, installed);
 }
 
 export function installIndex(): void {

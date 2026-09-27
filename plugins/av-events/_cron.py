@@ -14,6 +14,8 @@ none), so the plugin reads what the scheduler already writes:
   an execution only when it is the *one* line for that job inside the
   execution's window.
 * `$HERMES_HOME/cron/jobs.json` — for the job's name.
+* `$HERMES_HOME/av-events/installed_jobs.json` — the job ids the installer
+  created (`install/install_index.ts`). A name leaves only for one of these.
 
 All of it runs on the flusher thread, never in a hook. The stores are opened
 read-only.
@@ -55,6 +57,11 @@ def load_job_name_allowlist(path: str = NAMES_SEED_FILE) -> frozenset:
 
 OVERLAY_JOB_NAMES = load_job_name_allowlist()
 
+#: Where the installer records the ids of the cron jobs it created (DATA-92).
+#: A name on the allowlist is not enough: a participant can ask the agent for
+#: a job named exactly "Edge — daily digest", and that job is theirs.
+INSTALLED_JOBS_FILE = os.path.join("av-events", "installed_jobs.json")
+
 #: Hermes's `delivery_outcome` vocabulary (`agent/monitoring/cron_health.py`
 #: `_KNOWN_DELIVERY_OUTCOMES`, plus `queued` from later tags). The ledger
 #: column exists only on Hermes versions after `v2026.8.31`; there it is null.
@@ -71,7 +78,12 @@ MAX_CURSOR_IDS = 4096
 #: Slack either side of an execution's window when matching an audit line.
 AUDIT_SLACK_S = 2.0
 
-_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+#: What ingest accepts (`agentvillage-data` `src/schemas/index.ts`): a job id
+#: is `uuid4().hex[:12]`, an execution id `uuid4().hex`. Any other shape (a
+#: hand-edited jobs.json) would have its `cron.run` and every `message.*` of
+#: its sessions quarantined, so it is nulled or skipped here (DATA-92).
+_JOB_ID = re.compile(r"^[0-9a-f]{12}$")
+_EXECUTION_ID = re.compile(r"^[0-9a-f]{32}$")
 _CRON_SESSION = re.compile(r"^cron_(.+)_\d{8}_\d{6}$")
 _CRON_TASK = re.compile(r"^cron:([^:]+):")
 
@@ -81,11 +93,13 @@ def cron_job_id_from(session_id: Any, task_id: Any = None) -> Optional[str]:
 
     Hermes names a cron session `cron_<job_id>_<YYYYmmdd>_<HHMMSS>` and its
     task `cron:<job_id>:<execution_id>` (`cron/scheduler.py` at `v2026.8.31`).
+    A job id that is not 12 lower-case hex is None: the session is still a
+    cron run, it just names no job.
     """
     for text, pattern in ((task_id, _CRON_TASK), (session_id, _CRON_SESSION)):
         if isinstance(text, str):
             found = pattern.match(text)
-            if found and _ID.match(found.group(1)):
+            if found and _JOB_ID.match(found.group(1)):
                 return found.group(1)
     return None
 
@@ -138,6 +152,17 @@ def load_job_names(path: str) -> dict[str, str]:
     return out
 
 
+def load_installed_job_ids(path: str) -> frozenset:
+    """The ids in `installed_jobs.json`; empty when it is missing or unreadable."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return frozenset()
+    ids = data.get("ids") if isinstance(data, dict) else None
+    return frozenset(i for i in ids if isinstance(i, str) and _JOB_ID.match(i)) if isinstance(ids, list) else frozenset()
+
+
 def reportable_job_name(name: Any, allowlist: frozenset = OVERLAY_JOB_NAMES) -> Optional[str]:
     """The job's name if it is exactly one the installer creates, else None."""
     return name if isinstance(name, str) and name in allowlist else None
@@ -170,7 +195,9 @@ def match_audit(job_id: str, earliest: Optional[float], latest: Optional[float],
     return hits[0] if len(hits) == 1 else None
 
 
-def cron_payload(row: dict, job_names: dict[str, str], audits: list[dict]) -> Optional[dict]:
+def cron_payload(
+    row: dict, job_names: dict[str, str], audits: list[dict], installed: frozenset = frozenset(),
+) -> Optional[dict]:
     """§4.1 `cron.run`: `job_id`, `job_name`, `execution_id`, `status`,
     `input_tokens?`, `started_at`, `finished_at`. Every key always present.
 
@@ -178,11 +205,15 @@ def cron_payload(row: dict, job_names: dict[str, str], audits: list[dict]) -> Op
     `claimed_at`, and `delivery_outcome` (Hermes's enum; `suppressed` is a
     run whose reply was the silence marker). The execution's `error` text is
     never read.
+
+    `job_name` is reported only for a job id in `installed` (the installer's
+    record) whose name is on the allowlist. An execution or job id of any
+    shape but Hermes's own yields no `cron.run`.
     """
     execution_id, job_id, status = row.get("id"), row.get("job_id"), row.get("status")
-    if not (isinstance(execution_id, str) and _ID.match(execution_id)):
+    if not (isinstance(execution_id, str) and _EXECUTION_ID.match(execution_id)):
         return None
-    if not (isinstance(job_id, str) and _ID.match(job_id)) or status not in TERMINAL_STATUSES:
+    if not (isinstance(job_id, str) and _JOB_ID.match(job_id)) or status not in TERMINAL_STATUSES:
         return None
     claimed = iso_from_text(row.get("claimed_at"))
     started = iso_from_text(row.get("started_at"))
@@ -190,7 +221,7 @@ def cron_payload(row: dict, job_names: dict[str, str], audits: list[dict]) -> Op
     audit = match_audit(job_id, epoch_from_iso(started or claimed), epoch_from_iso(finished), audits)
     return {
         "job_id": job_id,
-        "job_name": reportable_job_name(job_names.get(job_id)),
+        "job_name": reportable_job_name(job_names.get(job_id)) if job_id in installed else None,
         "execution_id": execution_id,
         "status": status,
         "input_tokens": _count(audit.get("prompt_tokens")) if audit else None,
@@ -249,7 +280,8 @@ def pending_runs(home: str, cursor: CronCursor, now: float) -> list[dict]:
         return []
     job_names = load_job_names(os.path.join(cron_dir, "jobs.json"))
     audits = read_usage_audit(os.path.join(cron_dir, "usage_audit.jsonl"))
-    payloads = [p for p in (cron_payload(row, job_names, audits) for row in fresh) if p is not None]
+    installed = load_installed_job_ids(os.path.join(home, INSTALLED_JOBS_FILE))
+    payloads = [p for p in (cron_payload(row, job_names, audits, installed) for row in fresh) if p is not None]
     payloads.sort(key=lambda p: (p["finished_at"] or "", p["execution_id"]))
     return payloads
 
@@ -259,6 +291,8 @@ __all__ = [
     "DELIVERY_OUTCOMES",
     "OVERLAY_JOB_NAMES",
     "delivery_outcome",
+    "INSTALLED_JOBS_FILE",
+    "load_installed_job_ids",
     "load_job_name_allowlist",
     "TERMINAL_STATUSES",
     "cron_job_id_from",

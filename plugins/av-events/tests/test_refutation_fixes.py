@@ -16,6 +16,9 @@ from datetime import datetime, timezone
 import pytest
 
 TENANT = "8c3d1f2e-4a5b-4c6d-9e7f-0a1b2c3d4e5f"
+#: Hermes's id shapes (`uuid4().hex`, `uuid4().hex[:12]`); DATA-92 skips any other.
+E1 = "e1" + "0" * 30
+JOB1 = "0000000000a1"
 
 
 @pytest.fixture()
@@ -61,8 +64,10 @@ def now_iso():
 ])
 def test_only_exact_installer_job_names_leave(live, av, home, name, expected):
     now = now_iso()
-    make_executions(home, [("e1", "job1", "completed", now, now, now, None, "delivered")])
-    (home / "cron" / "jobs.json").write_text(json.dumps({"jobs": [{"id": "job1", "name": name}]}))
+    make_executions(home, [(E1, JOB1, "completed", now, now, now, None, "delivered")])
+    (home / "cron" / "jobs.json").write_text(json.dumps({"jobs": [{"id": JOB1, "name": name}]}))
+    (home / "av-events").mkdir(exist_ok=True)
+    (home / "av-events" / "installed_jobs.json").write_text(json.dumps({"ids": [JOB1]}))
     live._COLLECTOR.cron_tick()
     assert of_type(av, live, "cron.run")[0]["payload"]["job_name"] == expected
 
@@ -86,7 +91,7 @@ def test_the_job_name_seed_loads(plugin):
 ])
 def test_cron_run_carries_hermes_delivery_outcome(live, av, home, outcome, expected):
     now = now_iso()
-    make_executions(home, [("e1", "job1", "completed", now, now, now, None, outcome)])
+    make_executions(home, [(E1, JOB1, "completed", now, now, now, None, outcome)])
     live._COLLECTOR.cron_tick()
     payload = of_type(av, live, "cron.run")[0]["payload"]
     assert payload["delivery_outcome"] == expected
@@ -96,14 +101,14 @@ def test_cron_run_carries_hermes_delivery_outcome(live, av, home, outcome, expec
 def test_a_ledger_without_the_delivery_column_still_reads(live, av, home):
     """`delivery_outcome` is not a column at `v2026.8.31`."""
     now = now_iso()
-    make_executions(home, [("e1", "job1", "completed", now, now, now, None)], with_delivery=False)
+    make_executions(home, [(E1, JOB1, "completed", now, now, now, None)], with_delivery=False)
     assert live._COLLECTOR.cron_tick() == 1
     assert of_type(av, live, "cron.run")[0]["payload"]["delivery_outcome"] is None
 
 
 def test_a_timestamp_without_a_timezone_is_dropped(live, av, home):
     naive = datetime.now().replace(tzinfo=None).isoformat()
-    make_executions(home, [("e1", "job1", "completed", naive, naive, naive, None, None)])
+    make_executions(home, [(E1, JOB1, "completed", naive, naive, naive, None, None)])
     live._COLLECTOR.cron_tick()
     payload = of_type(av, live, "cron.run")[0]["payload"]
     assert payload["claimed_at"] is None and payload["started_at"] is None and payload["finished_at"] is None
@@ -446,10 +451,10 @@ def test_an_upper_case_tenant_id_gives_the_lower_case_v5(plugin, ctx, monkeypatc
     plugin.register(ctx)
     ctx.fire("on_session_start", session_id="s", model="m", platform="telegram")
     now = now_iso()
-    make_executions(home, [("e1", "job1", "completed", now, now, now, None, None)])
+    make_executions(home, [(E1, JOB1, "completed", now, now, now, None, None)])
     plugin._COLLECTOR.cron_tick()
     ns = uuid.UUID("6d1f2d4e-6a6b-5c29-9b3a-0f0f9b1d4a11")
-    assert of_type(av, plugin, "cron.run")[0]["event_id"] == str(uuid.uuid5(ns, f"{TENANT}|cron|e1"))
+    assert of_type(av, plugin, "cron.run")[0]["event_id"] == str(uuid.uuid5(ns, f"{TENANT}|cron|{E1}"))
     assert "tenant_id_not_uuid" not in plugin._COLLECTOR.counters
 
 

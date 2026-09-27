@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import time
@@ -15,6 +16,12 @@ import pytest
 NS_AV = uuid.UUID("6d1f2d4e-6a6b-5c29-9b3a-0f0f9b1d4a11")
 TENANT = "tenant-0b7d"
 JOB = "ab12cd34ef56"
+JOB2 = "0123456789ab"
+
+
+def X(label: str) -> str:
+    """A readable label in Hermes's execution-id shape, `uuid4().hex` (DATA-92)."""
+    return hashlib.md5(label.encode()).hexdigest()
 IST = timezone(timedelta(hours=5, minutes=30))
 
 #: The `executions` table as `cron/executions.py` creates it at `v2026.8.31`.
@@ -51,6 +58,12 @@ class CronHome:
     def jobs(self, **names):
         (self.dir / "jobs.json").write_text(json.dumps({"jobs": [{"id": k, "name": v} for k, v in names.items()]}))
 
+    def installed(self, *ids):
+        """What `install/install_index.ts` records for the jobs it created."""
+        state = self.dir.parent / "av-events"
+        state.mkdir(exist_ok=True)
+        (state / "installed_jobs.json").write_text(json.dumps({"ids": list(ids)}))
+
     def audit(self, *, job=JOB, ago=61.0, prompt=1200, completion=80):
         ts = (datetime.now(timezone.utc) - timedelta(seconds=ago)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
         line = {"ts": ts, "job_id": job, "fire_id": uuid.uuid4().hex, "prompt_tokens": prompt,
@@ -83,6 +96,7 @@ def test_a_finished_execution_is_one_cron_run_with_the_derived_id(live, cron, av
     execution = uuid.uuid4().hex
     cron.execution(execution)
     cron.jobs(**{JOB: "Edge — daily digest"})
+    cron.installed(JOB)
     cron.audit()
     assert live._COLLECTOR.cron_tick() == 1
     events = runs(av, live)
@@ -138,10 +152,10 @@ def test_av_tenant_id_overrides_tenant_id(plugin, ctx, monkeypatch, cron, av):
 
 
 def test_an_execution_is_reported_once_across_ticks_and_restarts(live, cron, av, ctx):
-    cron.execution("exec-1")
+    cron.execution(X("exec-1"))
     assert live._COLLECTOR.cron_tick() == 1
     assert live._COLLECTOR.cron_tick() == 0
-    cron.execution("exec-2")
+    cron.execution(X("exec-2"))
     assert live._COLLECTOR.cron_tick() == 1
 
     module = av.load_plugin()
@@ -155,18 +169,18 @@ def test_an_execution_is_reported_once_across_ticks_and_restarts(live, cron, av,
     finally:
         module._COLLECTOR = None
         module._REGISTERED = False
-    assert sorted(e["payload"]["execution_id"] for e in runs(av, live)) == ["exec-1", "exec-2"]
+    assert sorted(e["payload"]["execution_id"] for e in runs(av, live)) == sorted([X("exec-1"), X("exec-2")])
 
 
 def test_running_and_claimed_executions_wait(live, cron, av):
-    cron.execution("exec-run", status="running")
-    cron.execution("exec-claim", status="claimed")
+    cron.execution(X("exec-run"), status="running")
+    cron.execution(X("exec-claim"), status="claimed")
     assert live._COLLECTOR.cron_tick() == 0
 
 
 @pytest.mark.parametrize("status", ["failed", "unknown"])
 def test_failed_and_unknown_are_reported_without_their_error_text(live, cron, av, status):
-    cron.execution("exec-f", status=status)
+    cron.execution(X("exec-f"), status=status)
     live._COLLECTOR.cron_tick()
     event = runs(av, live)[0]
     assert event["payload"]["status"] == status
@@ -174,23 +188,58 @@ def test_failed_and_unknown_are_reported_without_their_error_text(live, cron, av
 
 
 def test_history_older_than_72_hours_is_not_reported(live, cron, av):
-    cron.execution("exec-old", ago=73 * 3600)
-    cron.execution("exec-new", ago=60)
+    cron.execution(X("exec-old"), ago=73 * 3600)
+    cron.execution(X("exec-new"), ago=60)
     live._COLLECTOR.cron_tick()
-    assert [e["payload"]["execution_id"] for e in runs(av, live)] == ["exec-new"]
+    assert [e["payload"]["execution_id"] for e in runs(av, live)] == [X("exec-new")]
 
 
 def test_a_participant_named_job_does_not_leave_by_name(live, cron, av):
-    cron.execution("exec-1", job="job2")
-    cron.jobs(job2="remind me to call my sister about the divorce")
+    cron.execution(X("exec-1"), job=JOB2)
+    cron.jobs(**{JOB2: "remind me to call my sister about the divorce"})
+    cron.installed(JOB, JOB2)
     live._COLLECTOR.cron_tick()
     event = runs(av, live)[0]
     assert event["payload"]["job_name"] is None
     assert "sister" not in json.dumps(av.read_buffer(live._COLLECTOR))
 
 
+def test_a_participant_job_with_an_installer_name_reports_no_name(live, cron, av):
+    """DATA-92 AC #1: the name is on the allowlist, the job id is not the installer's."""
+    cron.execution(X("installer"), job=JOB)
+    cron.execution(X("participant"), job=JOB2)
+    cron.jobs(**{JOB: "Edge — daily digest", JOB2: "Edge — daily digest"})
+    cron.installed(JOB)
+    live._COLLECTOR.cron_tick()
+    names = {e["payload"]["job_id"]: e["payload"]["job_name"] for e in runs(av, live)}
+    assert names == {JOB: "Edge — daily digest", JOB2: None}
+
+
+def test_without_the_installer_record_no_name_leaves(live, cron, av):
+    cron.execution(X("exec-1"))
+    cron.jobs(**{JOB: "Edge — daily digest"})
+    live._COLLECTOR.cron_tick()
+    assert runs(av, live)[0]["payload"]["job_name"] is None
+
+
+@pytest.mark.parametrize("job,execution", [
+    ("job1", X("exec-1")),              # a hand-edited jobs.json id
+    ("AB12CD34EF56", X("exec-1")),      # upper case: not what ingest takes
+    ("ab12cd34ef5", X("exec-1")),       # 11 hex
+    (JOB, "exec-1"),                    # an execution id of the wrong shape
+    (JOB, X("exec-1")[:31]),
+])
+def test_a_non_hex_id_yields_no_cron_run(live, cron, av, job, execution):
+    """DATA-92 AC #2: ingest would quarantine it, so it is not sent."""
+    cron.execution(execution, job=job)
+    cron.jobs(**{job: "Edge — daily digest"})
+    cron.installed(JOB)
+    assert live._COLLECTOR.cron_tick() == 0
+    assert runs(av, live) == []
+
+
 def test_an_ambiguous_audit_match_reports_no_tokens(live, cron, av):
-    cron.execution("exec-1")
+    cron.execution(X("exec-1"))
     cron.audit(ago=61)
     cron.audit(ago=70)
     live._COLLECTOR.cron_tick()
@@ -199,7 +248,7 @@ def test_an_ambiguous_audit_match_reports_no_tokens(live, cron, av):
 
 
 def test_an_audit_line_for_another_job_or_time_is_not_joined(live, cron, av):
-    cron.execution("exec-1")
+    cron.execution(X("exec-1"))
     cron.audit(job="other-job", ago=61)
     cron.audit(ago=3600)
     live._COLLECTOR.cron_tick()
@@ -228,13 +277,13 @@ def test_a_tail_that_raises_is_counted_not_propagated(live, cron, av, monkeypatc
 def test_no_token_means_no_cron_runs_and_no_cursor(plugin, ctx, cron, av, home):
     plugin.register(ctx)
     ctx.fire("on_session_start", session_id="s", model="m", platform="telegram")
-    cron.execution("exec-1")
+    cron.execution(X("exec-1"))
     assert plugin._COLLECTOR.cron_tick() == 0
     assert not (home / "av-events" / "cron_cursor.json").exists()
 
 
 def test_an_inert_emit_does_not_advance_the_cursor(live, cron, av, monkeypatch):
-    cron.execution("exec-1")
+    cron.execution(X("exec-1"))
     collector = live._COLLECTOR
     real_emit = collector.emit
     inert = {"on": True}
@@ -249,7 +298,7 @@ def test_cron_run_can_be_switched_off(plugin, ctx, monkeypatch, cron, av):
     monkeypatch.setenv("AV_HOOKS_DISABLED", "cron_run")
     plugin.register(ctx)
     ctx.fire("on_session_start", session_id="s", model="m", platform="telegram")
-    cron.execution("exec-1")
+    cron.execution(X("exec-1"))
     assert plugin._COLLECTOR.cron_tick() == 0
 
 
@@ -257,19 +306,22 @@ def test_the_flusher_loop_runs_the_tail(live, cron, av, monkeypatch):
     collector_module = __import__(f"{live.__name__}._collector", fromlist=["_collector"])
     monkeypatch.setattr(collector_module, "CRON_POLL_INTERVAL_S", 0.0)
     monkeypatch.setattr(collector_module, "TICK_INTERVAL_S", 0.01)
-    cron.execution("exec-loop")
+    cron.execution(X("exec-loop"))
     collector = live._COLLECTOR
     collector._ensure_thread()
     deadline = time.time() + 5
     while time.time() < deadline and not runs(av, live):
         time.sleep(0.05)
-    assert [e["payload"]["execution_id"] for e in runs(av, live)] == ["exec-loop"]
+    assert [e["payload"]["execution_id"] for e in runs(av, live)] == [X("exec-loop")]
 
 
 @pytest.mark.parametrize("session,task,expected", [
     ("cron_ab12cd34ef56_20260922_140000", None, "ab12cd34ef56"),
-    ("cron_job_with_underscores_20260922_140000", None, "job_with_underscores"),
-    ("sess-1", "cron:job9:exec", "job9"),
+    ("sess-1", f"cron:ab12cd34ef56:{'0' * 32}", "ab12cd34ef56"),
+    # DATA-92: ingest takes 12 lower-case hex only; any other shape is no job.
+    ("cron_job_with_underscores_20260922_140000", None, None),
+    ("sess-1", "cron:job9:exec", None),
+    ("cron_AB12CD34EF56_20260922_140000", None, None),
     ("sess-1", "task-1", None),
     ("cron_", None, None),
 ])
