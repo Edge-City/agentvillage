@@ -256,22 +256,29 @@ def test_full_emits_prompt_registered_once_per_hash_across_sessions(plugin, ctx,
     def registered(collector):
         return [e for e in av.read_buffer(collector) if e["event_type"] == "prompt.registered"]
 
+    monkeypatch.setenv("AV_EVENTS_URL", "http://127.0.0.1:9")
+    core = __import__("sys").modules[f"{plugin.__name__}._core"]
     fire_api_call(ctx, request_id="r0", session="sess-a")
     fire_api_call(ctx, request_id="r1", session="sess-a")
     first = registered(plugin._COLLECTOR)
     assert sorted(e["payload"]["kind"] for e in first) == ["system_prompt", "tools"]
+    # DATA-112: seen only once ingest has accepted the batch.
+    assert not (home / "av-events" / "seen.json").exists()
+    plugin._COLLECTOR.sender = lambda url, token, events: core.SendResult(True, 202)
+    plugin._COLLECTOR.buffer.rotate_if_due(force=True)
+    plugin._COLLECTOR.tick()
     assert (home / "av-events" / "seen.json").exists()
 
     # A second session in a fresh load of the plugin: the seen-set is on disk,
-    # so the same bytes must not register again. The buffer is shared, so count
-    # across the whole of it rather than only the new events.
+    # so the same bytes must not register again. The first load's batch has
+    # left the buffer, so anything registered now is new.
     module = av.load_plugin()
     module._COLLECTOR = None
     ctx2 = type(ctx)()
     module.register(ctx2)
     try:
         fire_api_call(ctx2, request_id="r2", session="sess-b")
-        assert len(registered(module._COLLECTOR)) == len(first)
+        assert registered(module._COLLECTOR) == []
     finally:
         module._COLLECTOR = None
 
