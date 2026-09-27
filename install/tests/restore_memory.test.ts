@@ -752,3 +752,15 @@ test("the backup URL must be https, or http to railway.internal or the local mac
   expect(result).toMatchObject({ status: "error", reason: "url_not_allowed" });
   expect(route.requests).toEqual([]);
 });
+
+test("the overall fetch deadline scales with the byte cap at 256 KiB/s (DATA-191)", async () => {
+  const mod = await import("../restore-memory");
+  expect(mod.MIN_BYTES_PER_SEC).toBe(256 * 1024);
+  expect(mod.FETCH_TOTAL_DEADLINE_MS).toBe(
+    Math.max(mod.FETCH_TOTAL_TIMEOUT_MS, Math.ceil(mod.MAX_DOWNLOAD_BYTES / mod.MIN_BYTES_PER_SEC) * 1000),
+  );
+  // 64 MiB at 256 KiB/s: 256 s, well above the 60 s floor.
+  expect(mod.FETCH_TOTAL_DEADLINE_MS).toBe(256_000);
+  expect(mod.fetchTotalDeadlineMs(1024)).toBe(mod.FETCH_TOTAL_TIMEOUT_MS);
+  expect(mod.FETCH_IDLE_TIMEOUT_MS).toBe(30_000);
+});

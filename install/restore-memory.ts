@@ -342,8 +342,19 @@ const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
 /** Longest a request may sit with no bytes moving, connect included. */
 export const FETCH_IDLE_TIMEOUT_MS = 30_000;
-/** Longest one request may take from start to the last body byte. */
+/** The floor of the overall deadline for one request. */
 export const FETCH_TOTAL_TIMEOUT_MS = 60_000;
+/** The slowest transfer rate a full-size download is allowed. */
+export const MIN_BYTES_PER_SEC = 256 * 1024;
+
+/** The overall deadline for a download of up to `maxBytes`: the floor, or
+ * long enough to move `maxBytes` at `MIN_BYTES_PER_SEC`, whichever is longer. */
+export function fetchTotalDeadlineMs(maxBytes: number): number {
+  return Math.max(FETCH_TOTAL_TIMEOUT_MS, Math.ceil(maxBytes / MIN_BYTES_PER_SEC) * 1000);
+}
+
+/** Longest one request may take from start to the last body byte (64 MiB: 256 s). */
+export const FETCH_TOTAL_DEADLINE_MS = fetchTotalDeadlineMs(MAX_DOWNLOAD_BYTES);
 
 /** A request that ran out of time; `restoreMemory` reports it as `timeout`. */
 export class FetchTimeout extends Error {
@@ -372,7 +383,7 @@ export class FetchTimeout extends Error {
  */
 export function directFetcher({
   idleMs = FETCH_IDLE_TIMEOUT_MS,
-  totalMs = FETCH_TOTAL_TIMEOUT_MS,
+  totalMs = FETCH_TOTAL_DEADLINE_MS,
 }: { idleMs?: number; totalMs?: number } = {}): Fetcher {
   return (url, init) =>
     new Promise((resolve, reject) => {
