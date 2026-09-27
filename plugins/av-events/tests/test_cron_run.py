@@ -139,6 +139,50 @@ def test_without_a_tenant_id_the_event_id_is_a_v7(plugin, ctx, monkeypatch, cron
     assert uuid.UUID(runs(av, plugin)[0]["event_id"]).version == 7
 
 
+def _second_collector(plugin):
+    """Another plugin-loading process on the same `$HERMES_HOME` (the
+    dashboard beside the gateway): its own collector and cursor, one ledger."""
+    import sys
+
+    collector = sys.modules[f"{plugin.__name__}._collector"].Collector()
+    collector._stop.set()  # ticked by hand
+    return collector
+
+
+def test_without_a_tenant_id_two_processes_derive_the_same_id(plugin, ctx, monkeypatch, cron, av):
+    """DATA-185: every plugin-loading process ticks the cron tail, and each
+    reads the cursor once. The dashboard, started before the run finished,
+    reports it again after the gateway has; ingest must see one event_id."""
+    monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
+    monkeypatch.delenv("TENANT_ID", raising=False)
+    monkeypatch.delenv("AV_TENANT_ID", raising=False)
+    plugin.register(ctx)
+    ctx.fire("on_session_start", session_id="s", model="m", platform="telegram")
+    gateway, dashboard = plugin._COLLECTOR, _second_collector(plugin)
+    assert gateway.config.tenant_id == "" and dashboard.config.tenant_id == ""
+    assert dashboard.cron_tick() == 0  # its cursor is loaded now, and never re-read
+    execution = X("exec-dup")
+    cron.execution(execution)
+    assert gateway.cron_tick() == 1
+    assert dashboard.cron_tick() == 1  # the duplicate the cursor cannot stop
+    # One buffer directory, both processes' files: read it once.
+    ids = [e["event_id"] for e in av.read_buffer(gateway) if e["event_type"] == "cron.run"]
+    assert len(ids) == 2 and len(set(ids)) == 1, ids
+    assert uuid.UUID(ids[0]).version == 7  # the only kind ingest takes without the tenant
+
+
+def test_the_tenantless_id_is_a_v7_timed_by_the_finish_and_keyed_by_the_execution(plugin):
+    import sys
+
+    core = sys.modules[f"{plugin.__name__}._core"]
+    first = core.cron_run_event_id_without_tenant(X("a"), 1_790_000_000_123)
+    assert first == core.cron_run_event_id_without_tenant(X("a"), 1_790_000_000_123)
+    assert first != core.cron_run_event_id_without_tenant(X("b"), 1_790_000_000_123)
+    parsed = uuid.UUID(first)
+    assert parsed.version == 7 and parsed.variant == uuid.RFC_4122
+    assert int.from_bytes(parsed.bytes[:6], "big") == 1_790_000_000_123
+
+
 def test_av_tenant_id_overrides_tenant_id(plugin, ctx, monkeypatch, cron, av):
     monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
     monkeypatch.setenv("TENANT_ID", "wrong")

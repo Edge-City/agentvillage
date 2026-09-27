@@ -45,7 +45,7 @@ plugins/av-events/
 | `AV_EVENTS_ENABLED` | `1` | Any of `0`, `false`, `no`, `off` (case-insensitive, whitespace ignored) disables everything. Re-read at every session boundary, and by the flusher before every pass. |
 | `AV_HOOKS_DISABLED` | *(empty)* | Comma-separated hook names to disable individually, e.g. `pre_tool_call,post_tool_call`. Matched case-insensitively, whitespace stripped. Three names are not hooks: `memory_recalled` (the bus subscription), `cron_run` (the cron tail) and `consent_status` (the tool, which then answers "could not check"). |
 | `AV_CAPTURE` | `sanitized` | `metadata` \| `sanitized` \| `full`. An unrecognised value falls back to `sanitized`. |
-| `TENANT_ID`, `AV_TENANT_ID` | *(unset)* | The tenant id, used for one thing only: `cron.run`'s derived event id (spec §4.3). `TENANT_ID` is what the control plane already sets for `dashboard-auth-edgecity`; `AV_TENANT_ID` overrides it. Unset means `cron.run` gets a uuid v7 (see "Cron capture"). |
+| `TENANT_ID`, `AV_TENANT_ID` | *(unset)* | The tenant id, used for one thing only: `cron.run`'s derived event id (spec §4.3). `TENANT_ID` is what the control plane already sets for `dashboard-auth-edgecity`; `AV_TENANT_ID` overrides it. Unset means `cron.run` gets a uuid v7 derived from the execution (see "Cron capture"). |
 | `HERMES_VERSION`, `OVERLAY_REF` | *(unset)* | Optional; populate the envelope fields of the same name. See "What the API does not provide". |
 | `AV_BACKUP_URL` | *(unset)* | Base URL of the ingest service's backup route (`…/v1/backup` accepted too). **Process environment only, never `.env`**; https, or http only to `*.railway.internal` or the local machine. **Unset, blank or refused: no memory snapshot, nothing read, no thread.** See "Memory snapshot". |
 | `AV_BACKUP_TOKEN` | *(unset)* | The tenant's `backup_write` token (DATA-93). Required with the URL. Redacted like `AV_EVENTS_TOKEN`. |
@@ -190,7 +190,8 @@ downgrades anything stronger in any case (spec scenario 4) — **except `action.
 claims `provider_receipt` because it carries a checkable receipt (see "EdgeOS actions").
 `event_id` is a uuid v7 (RFC 9562 §5.7, implemented here because the 3.11 stdlib has none) with a
 monotonic counter in `rand_a`, so ids sort in emission order — **except `cron.run`**, whose id is
-§4.3's derived uuid v5 (see "Cron capture"). Ingest refuses any other v5 from a plugin token.
+§4.3's derived uuid v5, or without a tenant id a v7 derived from the execution (see "Cron capture").
+Ingest refuses any other v5 from a plugin token.
 
 `occurred_at` is when the thing happened, not when we buffered it: `llm.call` takes the API
 request's `started_at` (with `occurred_at_earliest`/`latest` spanning the request), which under a
@@ -580,7 +581,17 @@ task id for the run, so `cron.run` joins the run's `llm.call` and `tool.call` ro
 any other v5 is quarantined. The tenant id comes from `TENANT_ID` / `AV_TENANT_ID`, lower-cased as
 ingest lower-cases it (an upper-case UUID in the env gives the same id). With it, a
 re-read, a second process tailing the same ledger or a lost cursor all produce the same id and ingest
-keeps one row. Without it the id is a uuid v7 and the cursor is the only dedupe. A `TENANT_ID`
+keeps one row. **Without it the id is still derived (DATA-185)**: a uuid v7 whose timestamp is the
+execution's `finished_at` (else its start, else its claim) and whose 74 random bits are the first
+bits of SHA-256 over `av-events|cron|<execution_id>` (`_core.cron_run_event_id_without_tenant`).
+Ingest takes any v7 from a plugin token, so the same execution gets the same id from every process.
+That matters because the tail runs in every process that loads the plugin with a token — the
+gateway, `hermes dashboard`, a CLI — and each reads the cursor once: a dashboard started before a
+run finished reports it again after the gateway has, and a random v7 would store it twice. The
+control plane sets `TENANT_ID` in the sandbox's environment when it creates the sandbox, so every
+process in it inherits the same value. Two processes of which only one has it would still disagree
+(v5 against v7), so the derived v7 covers a tenant id that is missing everywhere, not one missing
+from a single process. A `TENANT_ID`
 that is not a UUID is counted in `Collector.counters["tenant_id_not_uuid"]` and logged once per
 process as that counter (never the value): ingest would quarantine every `cron.run` built from it.
 
@@ -1246,7 +1257,8 @@ These are the divergences this milestone had to resolve. Each one is a decision 
 23. **`cron.run`'s §4.3 id needs the tenant id**, which a sandbox only knows from `TENANT_ID` (set for
     `dashboard-auth-edgecity`). This assumes `TENANT_ID` is the same string ingest keys the plugin
     token to; if it is not, every `cron.run` quarantines as `event_id_mismatch`. A non-UUID value is
-    counted as `tenant_id_not_uuid`. Without it, the event gets a uuid v7, which ingest accepts.
+    counted as `tenant_id_not_uuid`. Without it, the event gets a uuid v7 derived from the execution
+(DATA-185), which ingest accepts and dedupes like the v5.
 24. **`cron.run.job_name` is null for any job whose name is not exactly an installer name, or whose
     id the installer did not record.** §4.1 requires the key; a participant-authored name must not
     ride the ops allowlist.
