@@ -69,6 +69,50 @@ def is_silent(text: Any) -> bool:
     return stripped.upper().startswith("[SILENT]")
 
 
+#: The persisted user-row kind Hermes gives a self-injected turn
+#: (`gateway/response_filters.py` `INTERNAL_NOTIFICATION_DISPLAY_KIND`,
+#: `display_kind_for_event`): every `MessageEvent(internal=True)` — process
+#: watch and completion notifications (`gateway/run_notifications.py`,
+#: `gateway/wake.py`), `/loop` wakeups (`gateway/run_goals.py`), plugin
+#: injections (`gateway/run_inbound.py`), the CLI-to-channel handoff and the
+#: restart auto-resume turn (`gateway/run_startup.py`) — and the heartbeat
+#: prompt. `agent/turn_context.py` stamps it on the turn's user dict, which is
+#: the last item of `pre_llm_call`'s `conversation_history`.
+INJECTED_DISPLAY_KINDS = frozenset({"internal_notification"})
+
+#: How Hermes's own synthetic prompts open, for a turn that carries no
+#: `display_kind`. The `/goal` continuation is the one injected turn that is
+#: not `internal=True` (`gateway/run_goals.py`), so it has no other mark; the
+#: rest cover a Hermes whose user dict does not carry the kind. Headers only,
+#: each as Hermes writes it at the start of the whole message.
+INJECTED_PREFIXES = (
+    "[Continuing toward your standing goal",  # hermes_cli/goals.py CONTINUATION_PROMPT_*
+    "[/loop wakeup #",  # hermes_cli/loops.py WAKEUP_PROMPT_*
+    "[IMPORTANT: Background process ",  # tools/process_registry_notifications.py
+    "[Session was just handed off from CLI",  # gateway/run_startup.py handoff
+    # gateway/run.py build_resume_recovery_note: the auto-resume turn's text.
+    # A real message sent while a resume was pending reaches the hook clean
+    # (`_prepare_resume_pending_message` persists the user's own words).
+    "[System note: The previous turn was interrupted by",
+)
+
+
+def is_injected_turn(text: Any, history: Any) -> bool:
+    """Whether `pre_llm_call`'s user message is one Hermes injected, not the principal's (DATA-109).
+
+    The turn's own user dict is the last item of `history`, so only that item
+    is read, and only its `display_kind`. An earlier injected row never marks a
+    later human turn. A resume note Hermes prepends to a real message does not
+    make it injected: that turn is not `internal`, and the hook is handed the
+    user's clean words, not the note.
+    """
+    if isinstance(history, (list, tuple)) and history:
+        last = history[-1]
+        if isinstance(last, dict) and last.get("role") == "user" and last.get("display_kind") in INJECTED_DISPLAY_KINDS:
+            return True
+    return isinstance(text, str) and text.lstrip().startswith(INJECTED_PREFIXES)
+
+
 def message_payload(
     text: Any,
     channel: str,
@@ -106,4 +150,14 @@ def message_payload(
     return payload
 
 
-__all__ = ["FLAGS_RULE", "SILENT_MARKERS", "channel_of", "is_ask", "is_silent", "message_payload"]
+__all__ = [
+    "FLAGS_RULE",
+    "INJECTED_DISPLAY_KINDS",
+    "INJECTED_PREFIXES",
+    "SILENT_MARKERS",
+    "channel_of",
+    "is_ask",
+    "is_injected_turn",
+    "is_silent",
+    "message_payload",
+]
