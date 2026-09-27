@@ -81,6 +81,12 @@ logger = logging.getLogger("av-events")
 #: a count — never the value that tripped it.
 _LOGGED_COUNTERS: set[str] = set()
 
+#: Largest `prompt.registered` envelope this plugin will buffer, as compact
+#: UTF-8 JSON. Ingest refuses a whole batch when one envelope passes 64 KiB
+#: (`MAX_ENVELOPE_BYTES`, `agentvillage-data/src/ingest/events.ts`); 4 KiB of
+#: margin covers any difference in how the two sides serialise it.
+MAX_PROMPT_ENVELOPE_BYTES = 60 * 1024
+
 #: The two USER.md files `profile.updated` reports, by `kind`. Hermes's memory
 #: tool writes the first (`tools/memory_tool.py`); the landing's enrichment
 #: writes the second, through the control-plane sidecar (`USER_FILE =
@@ -436,6 +442,10 @@ class Collector:
         #: new process re-registers what it finds neither here nor in seen.json,
         #: and ingest keeps the first body per hash.
         self._prompt_pending: dict[str, str] = {}
+        #: Prompt hashes this process will not offer again: the body was too
+        #: large to send, or a batch carrying it was refused with a 4xx. Memory
+        #: only, so the next process tries once more.
+        self._prompt_refused: set[str] = set()
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._wake = threading.Event()
@@ -1343,28 +1353,49 @@ class Collector:
         A hash enters the seen-set only when the batch carrying its event got
         a 202 (`_settle_prompts`, DATA-112). Until then it is pending, which
         stops a second registration from this process; a batch that expires
-        or is refused drops it from pending, so the next `pre_api_request`
-        registers the body again. An orphaned hash is worse than a duplicate
+        drops it from pending, so the next `pre_api_request` registers the
+        body again. An orphaned hash is worse than a duplicate
         `prompt.registered`: ingest keeps the first body per hash.
+
+        Two things stop this process offering a body again (`_prompt_refused`):
+        its envelope would pass `MAX_PROMPT_ENVELOPE_BYTES`, or a batch carrying
+        it was refused with a 4xx. Ingest refuses a whole batch when one
+        envelope passes 64 KiB, so re-offering such a body would sink every
+        later batch it rides in. The next process tries once more.
         """
         if self.config.capture != "full" or not digest:
             return None
         with self._lock:
-            if digest in self._load_seen() or digest in self._prompt_pending:
+            if digest in self._load_seen() or digest in self._prompt_pending or digest in self._prompt_refused:
                 return None
-        # An inert emit (no token yet, plugin disabled, an unwritable buffer)
-        # records nothing, so the body is offered again later.
-        event = self.emit("prompt.registered", {"hash": digest, "kind": kind, "body": body}, **refs)
-        if event is None:
+        # As `emit`, with a size check between building and buffering. An inert
+        # emit (no token yet, plugin disabled, an unwritable buffer) records
+        # nothing, so the body is offered again later.
+        if self.plugin_disabled or not self.config.active:
             return None
+        buffer = self._ensure_buffer()
+        if buffer is None:
+            return None
+        event = self.envelope("prompt.registered", sanitize({"hash": digest, "kind": kind, "body": body}), **refs)
+        size = len(json.dumps(event, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+        if size > MAX_PROMPT_ENVELOPE_BYTES:
+            with self._lock:
+                self._prompt_refused.add(digest)
+            self.count("prompt_oversize")
+            logger.warning("av-events: prompt.oversize bytes=%d", size)
+            return None
+        buffer.append(event)
+        self._ensure_thread()
         with self._lock:
             self._prompt_pending[digest] = event["event_id"]
         return event
 
-    def _settle_prompts(self, events: list, accepted: bool) -> None:
+    def _settle_prompts(self, events: list, accepted: bool, refused: bool = False) -> None:
         """A batch left the queue: move its prompt hashes to the seen-set on a
-        202 (`accepted`), or out of pending otherwise (expired, refused, any
-        other 2xx) so they are registered again.
+        202 (`accepted`); to `_prompt_refused` when ingest refused the batch
+        with a 4xx (`refused`), so this process does not offer them again; or
+        out of pending otherwise (expired, any other 2xx) so they are
+        registered again.
 
         A 202 settles a hash whoever buffered it: a batch adopted from a dead
         process proves the body landed just as well.
@@ -1384,6 +1415,9 @@ class Collector:
                     if digest not in seen:
                         seen[digest] = str(payload.get("kind") or "")
                         changed = True
+                elif refused:
+                    self._prompt_pending.pop(digest, None)
+                    self._prompt_refused.add(digest)
                 elif self._prompt_pending.get(digest) == event.get("event_id"):
                     del self._prompt_pending[digest]
             if changed:
@@ -1545,7 +1579,7 @@ class Collector:
             except OSError:
                 return
         self._backoff.pop(os.path.basename(path), None)
-        self._settle_prompts(events, accepted=False)
+        self._settle_prompts(events, accepted=False, refused=reason == "rejected")
         record = self._dropped
         record["count"] = int(record.get("count", 0)) + len(events)
         if reason == "rejected":

@@ -42,6 +42,9 @@ class Ingest:
     def __call__(self, url, token, events):
         self.offered.append(events)
         status = self.statuses.pop(0) if self.statuses else 202
+        # As ingest does (`prepareBatch`): one envelope over 64 KiB refuses the batch.
+        if any(len(json.dumps(e, separators=(",", ":"), ensure_ascii=False).encode()) > 64 * 1024 for e in events):
+            status = 400
         return self.core.SendResult(200 <= status < 300, status)
 
     def bodies(self, index):
@@ -91,8 +94,9 @@ def test_a_hash_is_seen_only_after_its_batch_got_a_202(plugin, ctx, monkeypatch,
     assert registered(av, collector) == []
 
 
-def test_a_refused_flush_then_an_accepted_one_resends_the_body(plugin, ctx, monkeypatch, home, av):
-    """AC #2 and #3: 422 (quarantined to buffer/rejected/), then a later 202."""
+def test_a_refused_batch_is_not_registered_again_by_this_process(plugin, ctx, monkeypatch, home, av):
+    """A 4xx is a verdict on the batch: offering the same body again would be
+    refused again, and would take every batch it rides in down with it."""
     collector, ingest = setup(plugin, ctx, monkeypatch, statuses=[422])
     fire(ctx, "r0")
     flush(collector)
@@ -100,11 +104,57 @@ def test_a_refused_flush_then_an_accepted_one_resends_the_body(plugin, ctx, monk
     assert os.listdir(os.path.join(collector.config.buffer_dir, "rejected"))
     assert seen_on_disk(home) == {}
 
-    fire(ctx, "r1")
-    assert len(registered(av, collector)) == 2, "registered again after the refusal"
+    for index in range(1, 5):
+        fire(ctx, f"r{index}")
+    assert registered(av, collector) == [], "refused for the rest of this process"
+    assert seen_on_disk(home) == {}
+
+
+def test_a_refused_body_is_sent_again_by_the_next_process(plugin, ctx, monkeypatch, home, av):
+    """AC #3: a refused flush, then a later accepted one re-sends the body.
+    The refusal is remembered in memory only, and nothing reached seen.json."""
+    collector, _ = setup(plugin, ctx, monkeypatch, statuses=[422])
+    fire(ctx, "r0")
     flush(collector)
-    assert ingest.bodies(1) == ["system_prompt", "tools"]
-    assert sorted(seen_on_disk(home).values()) == ["system_prompt", "tools"]
+
+    module = av.load_plugin()
+    module._COLLECTOR = None
+    module._REGISTERED = False
+    ctx2 = type(ctx)()
+    module.register(ctx2)
+    try:
+        ingest = Ingest(sys.modules[f"{module.__name__}._core"], [])
+        module._COLLECTOR.sender = ingest
+        fire(ctx2, "r1")
+        assert len(registered(av, module._COLLECTOR)) == 2
+        flush(module._COLLECTOR)
+        assert ingest.bodies(0) == ["system_prompt", "tools"]
+        assert sorted(seen_on_disk(home).values()) == ["system_prompt", "tools"]
+    finally:
+        module._COLLECTOR = None
+        module._REGISTERED = False
+
+
+def test_an_oversize_body_is_skipped_once_and_never_poisons_a_batch(plugin, ctx, monkeypatch, home, av, caplog):
+    """Ingest refuses the whole batch (400 envelope_too_large) when one
+    envelope passes 64 KiB. A body whose envelope would pass 60 KiB is never
+    emitted: one skip, logged as a code and a byte count, over five turns."""
+    collector, ingest = setup(plugin, ctx, monkeypatch)
+    huge = "x" * (61 * 1024)
+    caplog.set_level("WARNING")
+    for index in range(5):
+        fire(ctx, f"r{index}", system_prompt=huge)
+        ctx.fire("post_api_request", session_id="s", turn_id=f"t-r{index}", api_request_id=f"r{index}", model="m",
+                 usage={"input_tokens": 1, "output_tokens": 1})
+        flush(collector)
+    assert collector.counters.get("prompt_oversize") == 1
+    kinds = [e["payload"]["kind"] for batch in ingest.offered for e in batch if e["event_type"] == "prompt.registered"]
+    assert kinds == ["tools"], "the small body still registers"
+    root = os.path.join(collector.config.buffer_dir, "rejected")
+    assert not os.path.exists(root) or os.listdir(root) == []
+    assert sum(1 for batch in ingest.offered for e in batch if e["event_type"] == "llm.call") == 5
+    lines = [r.getMessage() for r in caplog.records if "prompt.oversize" in r.getMessage()]
+    assert len(lines) == 1 and "x" * 20 not in lines[0]
 
 
 def test_an_expired_batch_is_registered_again(plugin, ctx, monkeypatch, home, av):

@@ -221,11 +221,15 @@ backlog can differ from `emitted_at` by minutes. Every `marts` time series is bu
 so the same tool schemas register once and never again, across sessions and process restarts. The
 hash enters the seen-set only when the batch carrying its event got a **202** from ingest (DATA-112).
 From the emit until then it is pending in memory, so the process does not register it twice; a batch
-that expires or is refused (quarantined to `buffer/rejected/`) drops it from pending, and the next
-`pre_api_request` registers the body again. Marking it seen any earlier would lose the body
-permanently whenever it never landed, while every later `llm.call` still carried the orphaned hash. A
-new process re-registers what was still pending when the old one exited; ingest keeps the first body
-per hash, so the duplicate is harmless. `tools_hash`, `system_prompt_hash` and the
+that expires drops it from pending, and the next `pre_api_request` registers the body again. Marking
+it seen any earlier would lose the body permanently whenever it never landed, while every later
+`llm.call` still carried the orphaned hash. A new process re-registers what was still pending when
+the old one exited; ingest keeps the first body per hash, so the duplicate is harmless. Two cases are
+**not** retried by the same process (an in-memory refused set; the next process tries once more): a
+batch refused with a 4xx (quarantined to `buffer/rejected/`), since the same body would be refused
+again and take its batch with it; and a body whose envelope would pass 60 KiB, which is never
+buffered at all — ingest refuses the whole batch when one envelope passes 64 KiB — and is logged
+once as `prompt.oversize bytes=<n>` and counted as `prompt_oversize`. `tools_hash`, `system_prompt_hash` and the
 `prompt.registered` hash are all computed over `sanitize(body)`, the bytes that leave, so a body with a
 credential shape redacted in it still verifies at the door.
 
