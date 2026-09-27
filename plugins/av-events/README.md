@@ -89,8 +89,9 @@ review, not an error.
 `AV_EVENTS_ENABLED` and `AV_HOOKS_DISABLED` are **re-read at session boundaries**, not only at plugin
 load. That is what makes spec scenario 26 work in both directions: setting `AV_EVENTS_ENABLED=0`
 stops events from the next session, and unsetting it resumes them, with no gateway restart. The
-flusher also re-reads `AV_EVENTS_ENABLED` at the start of every pass (DATA-180), so switching it off
-stops sending within one tick interval (1 s) even mid-session; when it has flipped, the flusher
+flusher also re-reads `AV_EVENTS_ENABLED` at the start of every pass and before every file it sends
+(DATA-180), so switching it off stops sending after the batch in flight, even mid-session; when it
+has flipped, the flusher
 rebuilds the config, so emits and the cron tail stop with it. Batches already on disk stay there
 until it is switched back on.
 

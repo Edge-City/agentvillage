@@ -1385,6 +1385,12 @@ class Collector:
             if age > MAX_BUFFER_AGE_S:
                 self._discard_file(path, "expired")
                 continue
+            # DATA-180: and before every file, so a flip mid-pass stops the
+            # sends after the one in flight, not after the rest of the pass.
+            if env_flag_disabled("AV_EVENTS_ENABLED"):
+                with self._lock:
+                    self.reload_config()
+                break
             attempted += 1
             ok, retryable, auth_refused = self._send_file(path)
             if ok:

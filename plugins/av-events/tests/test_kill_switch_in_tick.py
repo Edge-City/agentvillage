@@ -75,3 +75,21 @@ def test_a_running_flusher_stops_within_one_tick_interval(plugin, monkeypatch):
     finally:
         collector._stop.set()
         collector._wake.set()
+
+
+def test_a_flip_mid_pass_stops_before_the_next_file(plugin, monkeypatch):
+    """The switch is read before every file of the backlog, not once a pass:
+    the file in flight when it flips finishes, and no other is sent."""
+    collector, sent = make(plugin, monkeypatch)
+    core = sys.modules[f"{plugin.__name__}._core"]
+    for _ in range(core.MAX_FILES_PER_TICK):
+        queue_batch(collector)
+
+    def sender(url, token, events):
+        sent.append(events)
+        monkeypatch.setenv("AV_EVENTS_ENABLED", "false")
+        return core.SendResult(True, 202)
+
+    collector.sender = sender
+    collector.tick()
+    assert len(sent) == 1, "only the file in flight when the switch flipped"
