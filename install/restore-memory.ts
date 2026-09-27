@@ -70,6 +70,8 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { Agent as HttpAgent, request as httpRequest } from "node:http";
+import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 
@@ -335,6 +337,75 @@ export function writeMarker(home: string, marker: Record<string, unknown>): void
 
 export type Fetcher = (url: string, init: { headers: Record<string, string> }) => Promise<Response>;
 
+/** Statuses a `Response` may not be given a body for. */
+const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
+
+/**
+ * The default fetcher: one GET, straight to the host in the URL (DATA-191).
+ *
+ * Not Bun's `fetch`, which routes through `HTTP_PROXY` / `HTTPS_PROXY` /
+ * `ALL_PROXY` when set (measured on bun 1.4.2; neither `proxy: ""` nor
+ * deleting the variables at runtime turns it off), so the `backup_write`
+ * bearer could reach a proxy, in clear for an http backup URL. `node:http` /
+ * `node:https` with an explicit agent never read the proxy variables: the
+ * DATA-172 rule for the events poster, here. They follow no redirect either: a
+ * 3xx comes back as itself and `download` fails it as `http_3xx`, so the
+ * bearer is never re-sent to wherever `Location` points.
+ *
+ * The body is read to `MAX_DOWNLOAD_BYTES + 1` at most, so `body()` still
+ * refuses an oversized download without holding all of it.
+ */
+export const directFetch: Fetcher = (url, init) =>
+  new Promise((resolve, reject) => {
+    const target = new URL(url);
+    const secure = target.protocol === "https:";
+    const send = secure ? httpsRequest : httpRequest;
+    let settled = false;
+    const req = send(
+      target,
+      { method: "GET", headers: init.headers, agent: secure ? new HttpsAgent() : new HttpAgent() },
+      (res) => {
+        const chunks: Buffer[] = [];
+        let size = 0;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          const headers = new Headers();
+          for (const [name, value] of Object.entries(res.headers)) {
+            if (value === undefined) continue;
+            for (const item of Array.isArray(value) ? value : [value]) headers.append(name, item);
+          }
+          const status = res.statusCode ?? 0;
+          const bytes = Buffer.concat(chunks);
+          resolve(new Response(NULL_BODY_STATUSES.has(status) ? null : bytes, { status, headers }));
+        };
+        res.on("data", (chunk: Buffer) => {
+          if (settled) return;
+          chunks.push(chunk);
+          size += chunk.length;
+          if (size > MAX_DOWNLOAD_BYTES) {
+            finish();
+            req.destroy();
+          }
+        });
+        res.on("end", finish);
+        res.on("error", (err) => {
+          if (!settled) {
+            settled = true;
+            reject(err);
+          }
+        });
+      },
+    );
+    req.on("error", (err) => {
+      if (!settled) {
+        settled = true;
+        reject(err);
+      }
+    });
+    req.end();
+  });
+
 export type RestoreOptions = {
   url: string;
   token: string;
@@ -420,7 +491,7 @@ export async function restoreMemory(opts: RestoreOptions): Promise<RestoreResult
 
 async function restoreInner(opts: RestoreOptions, noteKey: (key: string) => void): Promise<RestoreResult> {
   if (!backupUrlAllowed(opts.url)) return empty("error", { reason: "url_not_allowed" });
-  const fetcher: Fetcher = opts.fetcher ?? ((url, init) => fetch(url, { ...init, redirect: "error" }));
+  const fetcher: Fetcher = opts.fetcher ?? directFetch;
   const base = `${backupBase(opts.url)}/v1/backup/${opts.tenant}`;
   let result = empty("restored");
   try {
