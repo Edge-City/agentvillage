@@ -266,8 +266,15 @@ def test_a_leftover_file_with_this_process_pid_is_moved_aside_before_the_first_a
     with av.StubIngest() as ingest:
         monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
         monkeypatch.setenv("AV_EVENTS_URL", ingest.url)
-        _, collector_mod = _modules(plugin)
+        core, collector_mod = _modules(plugin)
         old = event_lines(collector_mod.Collector(), 1)
+        # DATA-199: the dead process wrote its line before this one started.
+        # Minted here, it would share a millisecond with the new batch about
+        # half the time; the two names then tie on their `<ms>` prefix and
+        # `-0001` sorts before `-orphan`, sending the new event first.
+        stale = json.loads(old[0])
+        stale["emitted_at"] = core.iso_from_epoch(time.time() - 60)
+        old = [(json.dumps(stale, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")]
         write_leftover(root, os.getpid(), old, tail=b'{"event_id":"half-writ')
 
         collector = collector_mod.Collector()
