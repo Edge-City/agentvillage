@@ -987,6 +987,23 @@ only for `/stop` and for a `/new` that interrupts a running turn (`gateway/run_a
 `_interrupt_and_clear_session`), never for a stop. The `on_session_end` the teardown triggers is the
 memory provider's, not the plugin hook (checked against Hermes `main` of 2026-09-20). So:
 
+**No hook fires on shutdown as such (DATA-182, re-checked against Hermes `main` at `118984d7a0`,
+2026-09-27).** What a plugin can hear, by path:
+
+| Path | `agent_loop_stopped` | `on_session_finalize` | Anything else |
+|---|---|---|---|
+| `/stop` on a running turn (gateway, or the TUI/desktop stop) | yes, `reason` = the stop reason | no | — |
+| `/new` or `/reset` on a running turn | yes, then the reset | yes, from the reset | `on_session_reset` for the new id |
+| gateway stop, session with a turn running when the stop began | **no**: the stop interrupts through `request_hard_interrupt`, not `_interrupt_and_clear_session` | yes, `reason="shutdown"`, `platform="gateway"` | — |
+| gateway stop, idle session (the usual Telegram chat) | no | no | — |
+| process exit | no | no | no `atexit` (`os._exit`), no `on_unload` (that runs only on a forced plugin reload) |
+
+There is no fire site on the shutdown path a plugin can register for, and firing `agent_loop_stopped`
+there is a Hermes change, not a plugin one. The plugin does not register `agent_loop_stopped` at
+all: the "nudge on stop" it needs is already on `on_session_finalize`, which force-rotates and wakes
+the flusher, and that covers the "turn running" stop row. The idle sessions and the exit itself are
+covered by recovery on the next load (below), not by any hook.
+
 - **Everything the plugin buffered survives on disk**: rotated batches not yet sent, and
   `current-<pid>.jsonl`, the last batch of up to 10 seconds or 50 events. The only thing lost is a
   line the process was halfway through writing when it died (counted, as above).
