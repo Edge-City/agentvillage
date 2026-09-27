@@ -21,6 +21,7 @@ import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import {
   backupUrlAllowed,
   DAILY_NOTE_NAME,
+  directFetcher,
   MAX_DOWNLOAD_BYTES,
   parseArgs,
   parseTar,
@@ -506,6 +507,89 @@ test("an oversized download is refused without being read whole (DATA-191)", asy
     expect(result).toMatchObject({ status: "refused", reason: "download_too_large" });
   } finally {
     huge.stop(true);
+  }
+});
+
+/** A raw TCP server: `onRequest` gets the socket once the request has arrived. */
+function rawServer(onRequest: (socket: any) => void) {
+  return Bun.listen({
+    hostname: "127.0.0.1",
+    port: 0,
+    socket: {
+      data(socket) {
+        onRequest(socket);
+      },
+    },
+  });
+}
+
+async function timed(url: string, idleMs: number, totalMs: number) {
+  const started = Date.now();
+  const result = await restoreMemory({
+    url,
+    token: TOKEN,
+    tenant: TENANT,
+    home: tempDir("h"),
+    fetcher: directFetcher({ idleMs, totalMs }),
+  });
+  return { result, elapsed: Date.now() - started };
+}
+
+test("a server that accepts and never answers is a timeout, not a hang (DATA-191)", async () => {
+  const silent = rawServer(() => {});
+  try {
+    const { result, elapsed } = await timed(`http://127.0.0.1:${silent.port}`, 200, 5_000);
+    expect(result).toMatchObject({ status: "error", reason: "timeout" });
+    expect(elapsed).toBeLessThan(2_000);
+  } finally {
+    silent.stop(true);
+  }
+});
+
+test("a body that stalls after the headers is a timeout (DATA-191)", async () => {
+  const stalling = rawServer((socket) => {
+    socket.write("HTTP/1.1 200 OK\r\nContent-Length: 1000\r\nX-Backup-Key: k\r\n\r\n0123456789");
+  });
+  try {
+    const { result, elapsed } = await timed(`http://127.0.0.1:${stalling.port}`, 200, 5_000);
+    expect(result).toMatchObject({ status: "error", reason: "timeout" });
+    expect(elapsed).toBeLessThan(2_000);
+  } finally {
+    stalling.stop(true);
+  }
+});
+
+test("a body that trickles in under the idle limit still meets the overall deadline (DATA-191)", async () => {
+  const timers: ReturnType<typeof setInterval>[] = [];
+  const trickling = rawServer((socket) => {
+    socket.write("HTTP/1.1 200 OK\r\nContent-Length: 100000\r\nX-Backup-Key: k\r\n\r\n");
+    timers.push(setInterval(() => socket.write("x"), 50));
+  });
+  try {
+    const { result, elapsed } = await timed(`http://127.0.0.1:${trickling.port}`, 300, 600);
+    expect(result).toMatchObject({ status: "error", reason: "timeout" });
+    expect(elapsed).toBeLessThan(2_000);
+  } finally {
+    for (const timer of timers) clearInterval(timer);
+    trickling.stop(true);
+  }
+});
+
+test("every download asks for identity encoding (DATA-191)", async () => {
+  const seen: (string | null)[] = [];
+  const probe = Bun.serve({
+    port: 0,
+    fetch(req) {
+      seen.push(req.headers.get("accept-encoding"));
+      return new Response("", { status: 404 });
+    },
+  });
+  try {
+    const result = await restoreMemory({ url: `http://127.0.0.1:${probe.port}`, token: TOKEN, tenant: TENANT, home: tempDir("h") });
+    expect(result.status).toBe("none");
+    expect(seen).toEqual(["identity"]);
+  } finally {
+    probe.stop(true);
   }
 });
 
