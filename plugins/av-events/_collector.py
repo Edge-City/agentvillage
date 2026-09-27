@@ -584,6 +584,30 @@ class Collector:
             atexit.register(self.shutdown)
             self._atexit_registered = True
 
+    def retire(self) -> None:
+        """Stop this collector's threads for good; the plugin was unloaded.
+
+        Signals only, never a join: it runs on Hermes's thread inside
+        `unload()`. The flusher and the backup thread see `_stop` when they
+        next wake (a pass or an upload already under way finishes), the cron
+        tail runs on the flusher and stops with it, and the exit flush is
+        unregistered so a process that exits normally does not send this
+        collector's files beside its successor's. What is on disk stays for
+        the next collector, which adopts it like any other batch.
+        """
+        self._stop.set()
+        self._wake.set()
+        self._backup_wake.set()
+        self._thread = None
+        if self._atexit_registered:
+            atexit.unregister(self.shutdown)
+            self._atexit_registered = False
+        # The successor's buffer must own `current-<pid>.lock`, not find it
+        # held by this one and run unlocked (another process could then adopt
+        # the live current file).
+        if self.buffer is not None:
+            self.buffer.release_owner_lock()
+
     def shutdown(self) -> None:
         """Best-effort final snapshot and flush. Bounded; the buffer survives on disk anyway.
 

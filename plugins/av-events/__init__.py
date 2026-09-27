@@ -102,6 +102,8 @@ QUIET_HOOKS = frozenset({"pre_tool_call"})
 _COLLECTOR: Optional[Collector] = None
 
 #: Guards against a double `register()` appending a second copy of every hook.
+#: Cleared by `_on_unload`: once Hermes has unloaded the plugin its hooks are
+#: gone, and the next `register()` must wire them again (DATA-183).
 _REGISTERED = False
 
 
@@ -826,6 +828,29 @@ def build_hooks(collector_ref=_collector) -> dict:
     return hooks
 
 
+def _on_unload() -> None:
+    """`ctx.on_unload` callback: Hermes has dropped every hook we registered.
+
+    `discover_and_load(force=True)` calls `unload()` (which runs this and
+    clears the hook lists) and then `register()` again. A loader that reuses
+    this module rather than re-importing it would otherwise find `_REGISTERED`
+    still set and leave the plugin loaded with no hooks.
+
+    The collector is retired (its threads told to stop, no join) and
+    forgotten: the Hermes in use re-imports the plugin on a force reload, and
+    an old collector left running flushed the same buffer beside the new one,
+    posting every event twice. A re-register on this module builds a fresh one.
+    """
+    global _COLLECTOR, _REGISTERED
+    _REGISTERED = False
+    collector, _COLLECTOR = _COLLECTOR, None
+    if collector is not None:
+        try:
+            collector.retire()
+        except Exception:  # noqa: BLE001 - an unload must never fail on us
+            pass
+
+
 def register(ctx) -> None:
     """Hermes plugin entrypoint. Synchronous; the loader never awaits it.
 
@@ -841,7 +866,8 @@ def register(ctx) -> None:
     Idempotent. Hermes loads a plugin once per process, but a profile switch or
     a `force=True` reload can call `register()` again on a module that is still
     in `sys.modules` — and registering twice appends a second callback to every
-    hook list, which doubles every event and every counter.
+    hook list, which doubles every event and every counter. An unload clears the
+    guard (`_on_unload`), so a register after it wires the hooks again.
     """
     global _COLLECTOR, _REGISTERED
     if _REGISTERED:
@@ -867,6 +893,14 @@ def register(ctx) -> None:
     # the hooks, and guarded inside, so a Hermes without `register_tool` (or
     # one that refuses it) still gets every hook.
     register_consent_tool(ctx)
+    # DATA-183: hear about the unload that clears the hooks. Optional in the
+    # API (probe, fail open): without it register() behaves as before.
+    on_unload = getattr(ctx, "on_unload", None)
+    if callable(on_unload):
+        try:
+            on_unload(_on_unload)
+        except Exception:  # noqa: BLE001
+            pass
     # DATA-94: a gateway stop leaves its last batch on disk (`os._exit` runs
     # no atexit flush). Start sending it now, not at the first new event.
     # Local file operations only; the network is the flusher thread's.

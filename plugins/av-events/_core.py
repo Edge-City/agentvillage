@@ -683,6 +683,16 @@ class Buffer:
         seconds = epoch_from_iso(stamp) if isinstance(stamp, str) else None
         return int(seconds * 1000) if seconds is not None else None
 
+    def release_owner_lock(self) -> None:
+        """Close the lock handle, so the next buffer of this process (after a
+        plugin reload) takes `current-<pid>.lock` as its own. The file stays."""
+        handle, self._owner_lock = self._owner_lock, None
+        if handle is not None:
+            try:
+                handle.close()
+            except OSError:
+                pass
+
     def has_backlog(self) -> bool:
         """Anything on disk that is this process's to send: a non-empty
         rotated batch, or a non-empty current file whose owner is gone.
