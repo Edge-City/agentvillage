@@ -46,7 +46,9 @@ from ._core import (
     Buffer,
     SendResult,
     cron_run_event_id,
+    cron_run_event_id_without_tenant,
     env,
+    epoch_from_iso,
     env_flag_disabled,
     hermes_home,
     now_iso,
@@ -1153,8 +1155,9 @@ class Collector:
         The event id is §4.3's `uuid5(NS_AV, "{tenant}|cron|{execution_id}")`
         when the tenant id is known, so a re-read, a second process tailing the
         same ledger or a lost cursor all produce the same id and ingest keeps
-        one row. Without a tenant id it falls back to a uuid v7 and the cursor
-        file is the only dedupe.
+        one row. Without a tenant id it is a uuid v7 derived from the execution
+        (DATA-185), which dedupes the same way: every plugin-loading process
+        (gateway, dashboard, CLI) ticks, and each loads the cursor once.
         """
         if self.plugin_disabled or not self.config.active or "cron_run" in self.config.disabled_hooks:
             return 0
@@ -1171,7 +1174,7 @@ class Collector:
                 event = self.emit(
                     "cron.run",
                     payload,
-                    event_id=cron_run_event_id(self.config.tenant_id, execution_id) if self.config.tenant_id else None,
+                    event_id=self._cron_event_id(payload),
                     occurred_at=finished,
                     occurred_at_earliest=payload["started_at"] or payload["claimed_at"],
                     occurred_at_latest=finished,
@@ -1190,6 +1193,14 @@ class Collector:
         except Exception:  # noqa: BLE001 - the tail must never take the flusher down
             self.cron_errors += 1
             return 0
+
+    def _cron_event_id(self, payload: dict) -> str:
+        execution_id = payload["execution_id"]
+        if self.config.tenant_id:
+            return cron_run_event_id(self.config.tenant_id, execution_id)
+        stamp = payload["finished_at"] or payload["started_at"] or payload["claimed_at"]
+        seconds = epoch_from_iso(stamp)
+        return cron_run_event_id_without_tenant(execution_id, int(seconds * 1000) if seconds is not None else 0)
 
     # -- failures ---------------------------------------------------------
 

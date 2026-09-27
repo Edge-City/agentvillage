@@ -361,6 +361,35 @@ def cron_run_event_id(tenant_id: str, execution_id: str) -> str:
     return str(uuid.uuid5(NS_AV, f"{tenant_id}|cron|{execution_id}"))
 
 
+def derived_uuid7(ms: int, name: str) -> str:
+    """A uuid v7 that is a function of its inputs, not of the clock or chance.
+
+    `ms` fills the 48-bit timestamp and SHA-256 of `name` fills `rand_a` and
+    `rand_b`, so every process that derives it from the same inputs gets the
+    same id. Ingest takes any v7 from a plugin token (`pluginEventIdProblem`
+    looks at the version only) and keeps one row per `event_id`.
+    """
+    digest = int.from_bytes(hashlib.sha256(name.encode("utf-8")).digest()[:10], "big")
+    rand_a = digest >> 68  # 12 bits
+    rand_b = digest & ((1 << 62) - 1)
+    raw = (max(0, int(ms)) & ((1 << 48) - 1)).to_bytes(6, "big")
+    raw += ((0x7 << 12) | rand_a).to_bytes(2, "big")
+    raw += ((0b10 << 62) | rand_b).to_bytes(8, "big")
+    return str(uuid.UUID(bytes=raw))
+
+
+def cron_run_event_id_without_tenant(execution_id: str, finished_ms: int) -> str:
+    """`cron.run`'s id when the tenant id is unknown (DATA-185).
+
+    §4.3's v5 needs the tenant, and ingest refuses any other v5, so this is a
+    v7 derived from the execution: the finish time as its timestamp and the
+    execution id as its randomness. A second process tailing the same ledger,
+    a cursor that lagged or was lost, all give the same id, and ingest keeps
+    one row. Hermes's execution ids are `uuid4().hex`, unique across tenants.
+    """
+    return derived_uuid7(finished_ms, f"av-events|cron|{execution_id}")
+
+
 def iso_from_text(value: Any) -> Optional[str]:
     """An ISO-8601 timestamp from a host store, as UTC `...Z` at ms, or None.
 
