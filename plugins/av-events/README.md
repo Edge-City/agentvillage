@@ -405,11 +405,57 @@ Spec §4.1 `message.in/out`. `pre_llm_call`'s `user_message` is `message.in`, `p
 | Session | `message.in` actor | `channel` |
 |---|---|---|
 | a conversation | `participant` | the session's `source` (`telegram`, `desktop`, …) |
+| a conversation, on a turn Hermes injected itself (below) | `system` | the session's `source` |
 | cron (`platform="cron"`, a `cron_<job>_<stamp>` id, or a subagent of one) | `system` — the "user message" is the job's prompt | `cron`, with `cron_job_id` |
 | a delegated subagent | `agent` — the "user message" is the delegator's goal | `subagent` |
 
 `message.out` is always `actor: agent`. A channel that does not look like a platform name is
 reported as `other`. `sender_id` is never read.
+
+**Injected turns (DATA-109).** The gateway runs its own synthetic turns through the normal agent turn
+in the participant's session, and `pre_llm_call` hands their text over as `user_message` with no
+flag: process watch and completion notifications and async-delegation results
+(`gateway/run_notifications.py`, `gateway/wake.py`), `/loop` wakeups and the heartbeat, `/goal`
+continuations (`gateway/run_goals.py`), plugin injections (`gateway/run_inbound.py`), the
+CLI-to-channel handoff and the restart auto-resume turn (`gateway/run_startup.py`, `gateway/run.py`).
+Their `message.in` is `actor: system`, on the session's own channel; the payload is unchanged
+(`message.in@1` is closed, and the envelope's `actor` already has `system`). Two signals, checked
+against Hermes `main` at `118984d7a0`:
+
+- Hermes stamps the turn's user dict with `display_kind = "internal_notification"` for every
+  `MessageEvent(internal=True)` and for the heartbeat (`display_kind_for_event`), and that dict is the
+  last item of `pre_llm_call`'s `conversation_history`. Only that last item is read, only when it is a
+  `user` row, and only its `display_kind`: an earlier injected row never marks a later human turn.
+- The `/goal` continuation is not internal, so it carries no mark and is known by the header Hermes
+  writes at the start of it, `[Continuing toward your standing goal`. That is the only header matched.
+  Every other kind is known by the mark alone, so a participant message that opens with a pasted
+  `[IMPORTANT: Background process …` or `[System note: …` stays `participant`.
+
+At `v2026.8.31` (`29112be`) the same mark exists: `agent/turn_context.py` stamps
+`persist_user_display_kind` on the user dict, and `gateway/run.py` sets it to `internal_notification`
+for every `internal` event (the heartbeat's mark came later). The Hermes tenants run is not pinned in
+this repository or the release manifest (the control plane sets the image), so a tenant on a Hermes older
+than the mark reports every injected turn but the `/goal` continuation as `participant`.
+
+A real message sent while a resume is pending stays `participant`: Hermes prepends the recovery note
+for the model but hands the hook the user's clean words. A cron run is unchanged (its prompt was
+always `system`, channel `cron`, with its job id; the scheduler binds `HERMES_CRON_SESSION=1` for the
+same runs whose ids are `cron_<job>_<stamp>`), and a subagent's goal stays `agent`.
+
+**Known misses** (documented, not fixed):
+
+- On a Hermes without the mark, every injected kind but the `/goal` continuation stays `participant`
+  (above).
+- In Hermes's `queue` busy mode (`/busy queue`), a participant message debounced into a pending
+  internal wake or a pending `/goal` continuation is merged into that turn, and the turn leaves as
+  `system`. Hermes itself shows that row as a notice, not a user bubble.
+- Replays of an at-least-once notification are still separate events; they are `system` now.
+
+**Attention.** `marts.attention_proxy` (rule `attention_messages_v1`) already counts only
+`actor = 'participant'`. From the deploy of this plugin change onward, injected turns therefore leave
+v1's participant count; before it they were in it. The data side bumps the rule to
+`attention_messages_v2`, dated at that deploy, and the mart's own doc lines that say injected turns
+count as the participant become stale with it.
 
 `length` (characters) and `content_hash` (the keyed hash of the exact text) are present above
 `metadata`. **`silent`** is set only on a cron run's `message.out`: true when the reply is Hermes's
@@ -1282,7 +1328,8 @@ These are the divergences this milestone had to resolve. Each one is a decision 
 25. **`profile.updated` is at `on_session_finalize`**, not `on_session_end` as the task words it:
     `on_session_end` fires per turn (divergence 4).
 26. **`message.in` is not always the participant.** In a cron session it is the job's prompt
-    (`actor: system`), in a subagent the delegator's goal (`actor: agent`).
+    (`actor: system`), in a subagent the delegator's goal (`actor: agent`), and on a turn Hermes
+    injected into a conversation it is Hermes (`actor: system`, DATA-109; see "Messages").
 27. **`message.*.flags` are punctuation, not meaning.** `is_ask` follows `message_flags_v1`;
     `is_recommendation` and `sentiment` are always null (see "Messages").
 28. **Non-join hashes are keyed.** §7.1 says "hashes"; `message.*` and `tool.call` hashes are

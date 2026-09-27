@@ -69,6 +69,43 @@ def is_silent(text: Any) -> bool:
     return stripped.upper().startswith("[SILENT]")
 
 
+#: The persisted user-row kind Hermes gives a self-injected turn
+#: (`gateway/response_filters.py` `INTERNAL_NOTIFICATION_DISPLAY_KIND`,
+#: `display_kind_for_event`): every `MessageEvent(internal=True)` — process
+#: watch and completion notifications (`gateway/run_notifications.py`,
+#: `gateway/wake.py`), `/loop` wakeups (`gateway/run_goals.py`), plugin
+#: injections (`gateway/run_inbound.py`), the CLI-to-channel handoff and the
+#: restart auto-resume turn (`gateway/run_startup.py`) — and the heartbeat
+#: prompt. `agent/turn_context.py` stamps it on the turn's user dict, which is
+#: the last item of `pre_llm_call`'s `conversation_history`.
+INJECTED_DISPLAY_KINDS = frozenset({"internal_notification"})
+
+#: The header of the one injected turn Hermes does not mark: the `/goal`
+#: continuation is not `internal=True` (`gateway/run_goals.py`), so it carries
+#: no `display_kind` (`hermes_cli/goals.py` `CONTINUATION_PROMPT_*`). Every
+#: other kind is known by the mark alone: a participant can paste any header
+#: ("[IMPORTANT: Background process …", "[System note: …") into a message of
+#: their own, and that message must stay theirs.
+INJECTED_PREFIXES = ("[Continuing toward your standing goal",)
+
+
+def is_injected_turn(text: Any, history: Any) -> bool:
+    """Whether `pre_llm_call`'s user message is one Hermes injected, not the principal's (DATA-109).
+
+    The turn's own user dict is the last item of `history`, so only that item
+    is read, and only its `display_kind`. An earlier injected row never marks a
+    later human turn. A resume note Hermes prepends to a real message does not
+    make it injected: that turn is not `internal`, and the hook is handed the
+    user's clean words, not the note. Without the mark, only the `/goal`
+    continuation's header counts.
+    """
+    if isinstance(history, (list, tuple)) and history:
+        last = history[-1]
+        if isinstance(last, dict) and last.get("role") == "user" and last.get("display_kind") in INJECTED_DISPLAY_KINDS:
+            return True
+    return isinstance(text, str) and text.lstrip().startswith(INJECTED_PREFIXES)
+
+
 def message_payload(
     text: Any,
     channel: str,
@@ -106,4 +143,14 @@ def message_payload(
     return payload
 
 
-__all__ = ["FLAGS_RULE", "SILENT_MARKERS", "channel_of", "is_ask", "is_silent", "message_payload"]
+__all__ = [
+    "FLAGS_RULE",
+    "INJECTED_DISPLAY_KINDS",
+    "INJECTED_PREFIXES",
+    "SILENT_MARKERS",
+    "channel_of",
+    "is_ask",
+    "is_injected_turn",
+    "is_silent",
+    "message_payload",
+]

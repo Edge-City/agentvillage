@@ -34,7 +34,7 @@ from ._core import (
 from ._cron import cron_job_id_from
 from ._intentions import IntentionCall, classify_tool, valid_id
 from ._intentions import plan as plan_intentions
-from ._messages import is_silent, message_payload
+from ._messages import is_injected_turn, is_silent, message_payload
 from ._tools import (
     TOOL_CATEGORIES,
     UNLISTED_TOOL_CATEGORY,
@@ -196,7 +196,10 @@ def _emit_message(collector: Collector, event_type: str, text: Any, kwargs: dict
     `message.in` depends on the session: a participant in a conversation, the
     scheduler in a cron run (the "user message" is the job's prompt — a cron
     session is never participant-sourced), and the delegating agent in a
-    subagent (its goal). `sender_id` is never read.
+    subagent (its goal). In a conversation, a turn Hermes injected itself — a
+    notification, a `/loop` or `/goal` wakeup, the restart resume turn, a
+    plugin's injection, the CLI handoff, the heartbeat — is `system` too, on
+    the session's own channel (DATA-109). `sender_id` is never read.
     """
     if not collector.config.active:
         return
@@ -211,7 +214,8 @@ def _emit_message(collector: Collector, event_type: str, text: Any, kwargs: dict
     else:
         state = collector.peek_session(session_id)
         channel = (state.source if state is not None else None) or _source_for(kwargs.get("platform")) or "unknown"
-        sender = "participant"
+        injected = event_type == "message.in" and is_injected_turn(text, kwargs.get("conversation_history"))
+        sender = "system" if injected else "participant"
     cron_job_id = cron_job_id_from(session_id, kwargs.get("task_id")) if cron else None
     # A cron run's reply is suppressed when it is Hermes's silence marker.
     silent = is_silent(text) if cron and event_type == "message.out" else None
