@@ -528,8 +528,18 @@ never a hook — reads what the scheduler writes, once a minute, read-only:
   installer creates**, from the frozen seed `cron_job_names.json` (`cron_job_names_v1`;
   `install/tests/av_events_state.test.ts` fails if it drifts from `DIGEST_CRON_SPECS`). A prefix check
   is not enough: a participant can have the agent schedule a job named `Edge — …` too, and its name
-  is then their words. `cron.run` is on the ops allowlist and kept without research consent (spec
-  §2.2), so it carries nothing a participant wrote. Every other job has `job_name: null`.
+  is then their words. Nor is an exact name (DATA-92): the participant can ask for a job named
+  exactly `Edge — daily digest`, so the name is reported only when the job id is also one the
+  installer recorded in `$HERMES_HOME/av-events/installed_jobs.json` (`{"ids": [...]}`, rewritten by
+  `install/install_index.ts` on every install and update with the ids of the crons it created or
+  manages). No record, no names: a tenant installed before the record existed reports `job_name:
+  null` until its next install. `cron.run` is on the ops allowlist and kept without research consent
+  (spec §2.2), so it carries nothing a participant wrote. Every other job has `job_name: null`.
+- **Id shapes.** Ingest takes a job id of 12 lower-case hex (`uuid4().hex[:12]`) and an execution id
+  of 32 (`uuid4().hex`). An execution whose ids are any other shape (a hand-edited `jobs.json`)
+  yields no `cron.run`, and a cron session whose job id is another shape still reports its
+  `message.*` and `session.*` as cron, with `cron_job_id: null`; otherwise ingest would quarantine
+  every one of them.
 - `delivery_outcome`: Hermes's own `delivery_outcome` column when the ledger has one (`queued`,
   `delivered`, `failed`, `suppressed` — the reply was the silence marker —, `suppressed_acked`,
   `not_configured`; anything else is `other`). **The column does not exist at `v2026.8.31`** (Hermes
@@ -1211,8 +1221,9 @@ These are the divergences this milestone had to resolve. Each one is a decision 
     `dashboard-auth-edgecity`). This assumes `TENANT_ID` is the same string ingest keys the plugin
     token to; if it is not, every `cron.run` quarantines as `event_id_mismatch`. A non-UUID value is
     counted as `tenant_id_not_uuid`. Without it, the event gets a uuid v7, which ingest accepts.
-24. **`cron.run.job_name` is null for any job whose name is not exactly an installer name.** §4.1
-    requires the key; a participant-authored name must not ride the ops allowlist.
+24. **`cron.run.job_name` is null for any job whose name is not exactly an installer name, or whose
+    id the installer did not record.** §4.1 requires the key; a participant-authored name must not
+    ride the ops allowlist.
 25. **`profile.updated` is at `on_session_finalize`**, not `on_session_end` as the task words it:
     `on_session_end` fires per turn (divergence 4).
 26. **`message.in` is not always the participant.** In a cron session it is the job's prompt

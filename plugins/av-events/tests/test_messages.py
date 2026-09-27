@@ -142,10 +142,21 @@ def test_a_cron_session_is_never_participant_sourced(live, ctx, av):
 
 
 def test_a_cron_session_is_recognised_by_its_id_alone(live, ctx, av):
-    converse(ctx, session="cron_job1_20260922_140000", platform=None)
+    converse(ctx, session="cron_ab12cd34ef56_20260922_140000", platform=None)
     inbound = messages(av, live, "message.in")[0]
     assert inbound["actor"] == "system"
-    assert inbound["payload"]["cron_job_id"] == "job1"
+    assert inbound["payload"]["cron_job_id"] == "ab12cd34ef56"
+
+
+def test_a_non_hex_job_id_is_still_a_cron_session_with_no_job(live, ctx, av):
+    """DATA-92 AC #2: ingest would quarantine a job id it cannot hold, so the
+    message flows with `cron_job_id` null, still as the scheduler speaking."""
+    converse(ctx, session="cron_job1_20260922_140000", platform=None)
+    for event_type in ("message.in", "message.out"):
+        event = messages(av, live, event_type)[0]
+        assert event["payload"]["channel"] == "cron"
+        assert event["payload"]["cron_job_id"] is None
+    assert messages(av, live, "message.in")[0]["actor"] == "system"
 
 
 def test_a_subagent_goal_is_the_agent_speaking(live, ctx, av):
