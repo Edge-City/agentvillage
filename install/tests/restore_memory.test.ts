@@ -21,6 +21,8 @@ import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import {
   backupUrlAllowed,
   DAILY_NOTE_NAME,
+  directFetcher,
+  MAX_DOWNLOAD_BYTES,
   parseArgs,
   parseTar,
   RESTORE_PATH,
@@ -415,6 +417,182 @@ test("CLI: one JSON line, exit 0 on restore, 1 on refusal, 2 on usage; never the
   expect(await noToken.exited).toBe(2);
 });
 
+/** A TCP listener that counts the connections it is offered and answers none. */
+function connectionCounter() {
+  const counter = { connections: 0, listener: null as unknown as ReturnType<typeof Bun.listen> };
+  counter.listener = Bun.listen({
+    hostname: "127.0.0.1",
+    port: 0,
+    socket: {
+      open(socket) {
+        counter.connections++;
+        socket.end();
+      },
+      data() {},
+    },
+  });
+  return counter;
+}
+
+test("with every proxy variable set, the restore reaches only the backup host (DATA-191)", async () => {
+  publish(pythonSnapshot(FILES));
+  const proxy = connectionCounter();
+  try {
+    const proxyUrl = `http://127.0.0.1:${proxy.listener.port}`;
+    const home = tempDir("home");
+    const env: Record<string, string | undefined> = {
+      ...process.env,
+      AV_BACKUP_URL: base(),
+      AV_BACKUP_TOKEN: TOKEN,
+      HERMES_HOME: home,
+      NO_PROXY: "",
+      no_proxy: "",
+    };
+    for (const name of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]) {
+      env[name] = proxyUrl;
+      env[name.toLowerCase()] = proxyUrl;
+    }
+    const script = join(REPO, "install", "restore-memory.ts");
+    const run = Bun.spawn(["bun", script, "--tenant", TENANT], { env, stdout: "pipe", stderr: "pipe" });
+    const out = await new Response(run.stdout).text();
+    expect(await run.exited).toBe(0);
+    expect(JSON.parse(out.trim())).toMatchObject({ status: "restored", written: 6 });
+    expect(proxy.connections).toBe(0);
+    expect(route.requests.length).toBe(2);
+  } finally {
+    proxy.listener.stop(true);
+  }
+});
+
+test("a redirect is not followed: the bearer never reaches the Location host (DATA-191)", async () => {
+  const elsewhere = connectionCounter();
+  const redirecting = Bun.serve({
+    port: 0,
+    fetch: () =>
+      new Response("", { status: 302, headers: { Location: `http://127.0.0.1:${elsewhere.listener.port}/v1/backup/x/latest` } }),
+  });
+  try {
+    const result = await restoreMemory({
+      url: `http://127.0.0.1:${redirecting.port}`,
+      token: TOKEN,
+      tenant: TENANT,
+      home: tempDir("h"),
+    });
+    expect(result).toMatchObject({ status: "error", reason: "http_302" });
+    expect(elsewhere.connections).toBe(0);
+  } finally {
+    redirecting.stop(true);
+    elsewhere.listener.stop(true);
+  }
+});
+
+test("an oversized download is refused without being read whole (DATA-191)", async () => {
+  const big = new Uint8Array(MAX_DOWNLOAD_BYTES + 1024);
+  const huge = Bun.serve({
+    port: 0,
+    // Chunked, so no Content-Length to refuse on up front.
+    fetch: () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(big);
+            controller.close();
+          },
+        }),
+        { headers: { "X-Backup-Key": "2026-09-27/manifest." + "a".repeat(64) + ".json" } },
+      ),
+  });
+  try {
+    const result = await restoreMemory({ url: `http://127.0.0.1:${huge.port}`, token: TOKEN, tenant: TENANT, home: tempDir("h") });
+    expect(result).toMatchObject({ status: "refused", reason: "download_too_large" });
+  } finally {
+    huge.stop(true);
+  }
+});
+
+/** A raw TCP server: `onRequest` gets the socket once the request has arrived. */
+function rawServer(onRequest: (socket: any) => void) {
+  return Bun.listen({
+    hostname: "127.0.0.1",
+    port: 0,
+    socket: {
+      data(socket) {
+        onRequest(socket);
+      },
+    },
+  });
+}
+
+async function timed(url: string, idleMs: number, totalMs: number) {
+  const started = Date.now();
+  const result = await restoreMemory({
+    url,
+    token: TOKEN,
+    tenant: TENANT,
+    home: tempDir("h"),
+    fetcher: directFetcher({ idleMs, totalMs }),
+  });
+  return { result, elapsed: Date.now() - started };
+}
+
+test("a server that accepts and never answers is a timeout, not a hang (DATA-191)", async () => {
+  const silent = rawServer(() => {});
+  try {
+    const { result, elapsed } = await timed(`http://127.0.0.1:${silent.port}`, 200, 5_000);
+    expect(result).toMatchObject({ status: "error", reason: "timeout" });
+    expect(elapsed).toBeLessThan(2_000);
+  } finally {
+    silent.stop(true);
+  }
+});
+
+test("a body that stalls after the headers is a timeout (DATA-191)", async () => {
+  const stalling = rawServer((socket) => {
+    socket.write("HTTP/1.1 200 OK\r\nContent-Length: 1000\r\nX-Backup-Key: k\r\n\r\n0123456789");
+  });
+  try {
+    const { result, elapsed } = await timed(`http://127.0.0.1:${stalling.port}`, 200, 5_000);
+    expect(result).toMatchObject({ status: "error", reason: "timeout" });
+    expect(elapsed).toBeLessThan(2_000);
+  } finally {
+    stalling.stop(true);
+  }
+});
+
+test("a body that trickles in under the idle limit still meets the overall deadline (DATA-191)", async () => {
+  const timers: ReturnType<typeof setInterval>[] = [];
+  const trickling = rawServer((socket) => {
+    socket.write("HTTP/1.1 200 OK\r\nContent-Length: 100000\r\nX-Backup-Key: k\r\n\r\n");
+    timers.push(setInterval(() => socket.write("x"), 50));
+  });
+  try {
+    const { result, elapsed } = await timed(`http://127.0.0.1:${trickling.port}`, 300, 600);
+    expect(result).toMatchObject({ status: "error", reason: "timeout" });
+    expect(elapsed).toBeLessThan(2_000);
+  } finally {
+    for (const timer of timers) clearInterval(timer);
+    trickling.stop(true);
+  }
+});
+
+test("every download asks for identity encoding (DATA-191)", async () => {
+  const seen: (string | null)[] = [];
+  const probe = Bun.serve({
+    port: 0,
+    fetch(req) {
+      seen.push(req.headers.get("accept-encoding"));
+      return new Response("", { status: 404 });
+    },
+  });
+  try {
+    const result = await restoreMemory({ url: `http://127.0.0.1:${probe.port}`, token: TOKEN, tenant: TENANT, home: tempDir("h") });
+    expect(result.status).toBe("none");
+    expect(seen).toEqual(["identity"]);
+  } finally {
+    probe.stop(true);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Refutation fixes (DATA-82 review)
 
@@ -573,4 +751,16 @@ test("the backup URL must be https, or http to railway.internal or the local mac
   const result = await restoreMemory({ url: "http://ingest.example.com", token: TOKEN, tenant: TENANT, home });
   expect(result).toMatchObject({ status: "error", reason: "url_not_allowed" });
   expect(route.requests).toEqual([]);
+});
+
+test("the overall fetch deadline scales with the byte cap at 256 KiB/s (DATA-191)", async () => {
+  const mod = await import("../restore-memory");
+  expect(mod.MIN_BYTES_PER_SEC).toBe(256 * 1024);
+  expect(mod.FETCH_TOTAL_DEADLINE_MS).toBe(
+    Math.max(mod.FETCH_TOTAL_TIMEOUT_MS, Math.ceil(mod.MAX_DOWNLOAD_BYTES / mod.MIN_BYTES_PER_SEC) * 1000),
+  );
+  // 64 MiB at 256 KiB/s: 256 s, well above the 60 s floor.
+  expect(mod.FETCH_TOTAL_DEADLINE_MS).toBe(256_000);
+  expect(mod.fetchTotalDeadlineMs(1024)).toBe(mod.FETCH_TOTAL_TIMEOUT_MS);
+  expect(mod.FETCH_IDLE_TIMEOUT_MS).toBe(30_000);
 });

@@ -70,6 +70,8 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { Agent as HttpAgent, request as httpRequest } from "node:http";
+import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 
@@ -335,6 +337,122 @@ export function writeMarker(home: string, marker: Record<string, unknown>): void
 
 export type Fetcher = (url: string, init: { headers: Record<string, string> }) => Promise<Response>;
 
+/** Statuses a `Response` may not be given a body for. */
+const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
+
+/** Longest a request may sit with no bytes moving, connect included. */
+export const FETCH_IDLE_TIMEOUT_MS = 30_000;
+/** The floor of the overall deadline for one request. */
+export const FETCH_TOTAL_TIMEOUT_MS = 60_000;
+/** The slowest transfer rate a full-size download is allowed. */
+export const MIN_BYTES_PER_SEC = 256 * 1024;
+
+/** The overall deadline for a download of up to `maxBytes`: the floor, or
+ * long enough to move `maxBytes` at `MIN_BYTES_PER_SEC`, whichever is longer. */
+export function fetchTotalDeadlineMs(maxBytes: number): number {
+  return Math.max(FETCH_TOTAL_TIMEOUT_MS, Math.ceil(maxBytes / MIN_BYTES_PER_SEC) * 1000);
+}
+
+/** Longest one request may take from start to the last body byte (64 MiB: 256 s). */
+export const FETCH_TOTAL_DEADLINE_MS = fetchTotalDeadlineMs(MAX_DOWNLOAD_BYTES);
+
+/** A request that ran out of time; `restoreMemory` reports it as `timeout`. */
+export class FetchTimeout extends Error {
+  constructor() {
+    super("timeout");
+  }
+}
+
+/**
+ * The default fetcher: one GET, straight to the host in the URL (DATA-191).
+ *
+ * Not Bun's `fetch`, which routes through `HTTP_PROXY` / `HTTPS_PROXY` /
+ * `ALL_PROXY` when set (measured on bun 1.4.2; neither `proxy: ""` nor
+ * deleting the variables at runtime turns it off), so the `backup_write`
+ * bearer could reach a proxy, in clear for an http backup URL. `node:http` /
+ * `node:https` with an explicit agent never read the proxy variables: the
+ * DATA-172 rule for the events poster, here. They follow no redirect either: a
+ * 3xx comes back as itself and `download` fails it as `http_3xx`, so the
+ * bearer is never re-sent to wherever `Location` points.
+ *
+ * Bounded in time, since this runs on a recreate before the gateway starts: a
+ * server that accepts and never answers, or stalls mid-body, fails after
+ * `idleMs` without progress, and any request after `totalMs` overall, with
+ * `FetchTimeout`. The body is read to `MAX_DOWNLOAD_BYTES + 1` at most, so
+ * `body()` still refuses an oversized download without holding all of it.
+ */
+export function directFetcher({
+  idleMs = FETCH_IDLE_TIMEOUT_MS,
+  totalMs = FETCH_TOTAL_DEADLINE_MS,
+}: { idleMs?: number; totalMs?: number } = {}): Fetcher {
+  return (url, init) =>
+    new Promise((resolve, reject) => {
+      const target = new URL(url);
+      const secure = target.protocol === "https:";
+      const send = secure ? httpsRequest : httpRequest;
+      let settled = false;
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      let idle: ReturnType<typeof setTimeout> | undefined;
+      const settle = () => {
+        settled = true;
+        clearTimeout(deadline);
+        clearTimeout(idle);
+      };
+      const fail = (err: unknown) => {
+        if (settled) return;
+        settle();
+        reject(err);
+        req.destroy();
+      };
+      // Our own idle timer rather than only `req.setTimeout`, so a stall
+      // after the headers counts as well as one before them.
+      const touch = () => {
+        clearTimeout(idle);
+        idle = setTimeout(() => fail(new FetchTimeout()), idleMs);
+      };
+      const req = send(
+        target,
+        { method: "GET", headers: init.headers, agent: secure ? new HttpsAgent() : new HttpAgent() },
+        (res) => {
+          touch();
+          const chunks: Buffer[] = [];
+          let size = 0;
+          const finish = () => {
+            if (settled) return;
+            settle();
+            const headers = new Headers();
+            for (const [name, value] of Object.entries(res.headers)) {
+              if (value === undefined) continue;
+              for (const item of Array.isArray(value) ? value : [value]) headers.append(name, item);
+            }
+            const status = res.statusCode ?? 0;
+            const bytes = Buffer.concat(chunks);
+            resolve(new Response(NULL_BODY_STATUSES.has(status) ? null : bytes, { status, headers }));
+          };
+          res.on("data", (chunk: Buffer) => {
+            if (settled) return;
+            touch();
+            chunks.push(chunk);
+            size += chunk.length;
+            if (size > MAX_DOWNLOAD_BYTES) {
+              finish();
+              req.destroy();
+            }
+          });
+          res.on("end", finish);
+          res.on("error", fail);
+        },
+      );
+      req.setTimeout(idleMs, () => fail(new FetchTimeout()));
+      req.on("error", fail);
+      deadline = setTimeout(() => fail(new FetchTimeout()), totalMs);
+      touch();
+      req.end();
+    });
+}
+
+export const directFetch: Fetcher = directFetcher();
+
 export type RestoreOptions = {
   url: string;
   token: string;
@@ -353,7 +471,11 @@ export function backupBase(url: string): string {
 }
 
 async function download(fetcher: Fetcher, url: string, token: string): Promise<Response | null> {
-  const res = await fetcher(url, { headers: { Authorization: `Bearer ${token}`, Accept: "*/*" } });
+  // `identity`: nothing in between may compress the manifest or archive,
+  // whose bytes are hashed as they arrive.
+  const res = await fetcher(url, {
+    headers: { Authorization: `Bearer ${token}`, Accept: "*/*", "Accept-Encoding": "identity" },
+  });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`http_${res.status}`);
   const length = Number(res.headers.get("content-length") ?? "0");
@@ -420,7 +542,7 @@ export async function restoreMemory(opts: RestoreOptions): Promise<RestoreResult
 
 async function restoreInner(opts: RestoreOptions, noteKey: (key: string) => void): Promise<RestoreResult> {
   if (!backupUrlAllowed(opts.url)) return empty("error", { reason: "url_not_allowed" });
-  const fetcher: Fetcher = opts.fetcher ?? ((url, init) => fetch(url, { ...init, redirect: "error" }));
+  const fetcher: Fetcher = opts.fetcher ?? directFetch;
   const base = `${backupBase(opts.url)}/v1/backup/${opts.tenant}`;
   let result = empty("restored");
   try {
@@ -469,6 +591,7 @@ async function restoreInner(opts: RestoreOptions, noteKey: (key: string) => void
       out.bytes = err.written.reduce((n, item) => n + item.file.bytes, 0);
       return out;
     }
+    if (err instanceof FetchTimeout) return empty("error", { reason: "timeout" });
     // Never the message of a network error: it can carry the URL.
     const reason = err instanceof Error && /^http_\d{3}$/.test(err.message) ? err.message : "fetch_failed";
     return empty("error", { reason });
