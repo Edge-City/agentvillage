@@ -426,23 +426,36 @@ against Hermes `main` at `118984d7a0`:
   `MessageEvent(internal=True)` and for the heartbeat (`display_kind_for_event`), and that dict is the
   last item of `pre_llm_call`'s `conversation_history`. Only that last item is read, only when it is a
   `user` row, and only its `display_kind`: an earlier injected row never marks a later human turn.
-- The `/goal` continuation is not internal, so it is known by the header Hermes writes at the start of
-  it, `[Continuing toward your standing goal`. The headers of the loop wakeup (`[/loop wakeup #`),
-  process notification (`[IMPORTANT: Background process `), handoff (`[Session was just handed off
-  from CLI`) and auto-resume note (`[System note: The previous turn was interrupted by`) are matched
-  the same way, for a Hermes whose user dict carries no kind. A header quoted mid-message does not
-  count.
+- The `/goal` continuation is not internal, so it carries no mark and is known by the header Hermes
+  writes at the start of it, `[Continuing toward your standing goal`. That is the only header matched.
+  Every other kind is known by the mark alone, so a participant message that opens with a pasted
+  `[IMPORTANT: Background process …` or `[System note: …` stays `participant`.
+
+At `v2026.8.31` (`29112be`) the same mark exists: `agent/turn_context.py` stamps
+`persist_user_display_kind` on the user dict, and `gateway/run.py` sets it to `internal_notification`
+for every `internal` event (the heartbeat's mark came later). The Hermes tenants run is not pinned in
+this repository or the release manifest (the control plane sets the image), so a tenant on a Hermes older
+than the mark reports every injected turn but the `/goal` continuation as `participant`.
 
 A real message sent while a resume is pending stays `participant`: Hermes prepends the recovery note
 for the model but hands the hook the user's clean words. A cron run is unchanged (its prompt was
 always `system`, channel `cron`, with its job id; the scheduler binds `HERMES_CRON_SESSION=1` for the
-same runs whose ids are `cron_<job>_<stamp>`), and a subagent's goal stays `agent`. **Known misses**,
-all left `participant` (the old reading): on a Hermes that does not stamp `display_kind`, a plugin
-injection, a delegation result, a heartbeat and a slash-command `/loop` (its text is the bare
-command), none of which has a fixed header. Replays of an
-at-least-once notification are still separate events; they are `system` now, so they no longer count
-as the participant. `marts.attention_proxy`'s rule `attention_messages_v1` counts every `message.in`
-of a conversation; excluding `actor = system` is the data side's `attention_messages_v2`.
+same runs whose ids are `cron_<job>_<stamp>`), and a subagent's goal stays `agent`.
+
+**Known misses** (documented, not fixed):
+
+- On a Hermes without the mark, every injected kind but the `/goal` continuation stays `participant`
+  (above).
+- In Hermes's `queue` busy mode (`/busy queue`), a participant message debounced into a pending
+  internal wake or a pending `/goal` continuation is merged into that turn, and the turn leaves as
+  `system`. Hermes itself shows that row as a notice, not a user bubble.
+- Replays of an at-least-once notification are still separate events; they are `system` now.
+
+**Attention.** `marts.attention_proxy` (rule `attention_messages_v1`) already counts only
+`actor = 'participant'`. From the deploy of this plugin change onward, injected turns therefore leave
+v1's participant count; before it they were in it. The data side bumps the rule to
+`attention_messages_v2`, dated at that deploy, and the mart's own doc lines that say injected turns
+count as the participant become stale with it.
 
 `length` (characters) and `content_hash` (the keyed hash of the exact text) are present above
 `metadata`. **`silent`** is set only on a cron run's `message.out`: true when the reply is Hermes's
