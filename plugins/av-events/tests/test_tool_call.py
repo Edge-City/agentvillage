@@ -75,7 +75,7 @@ def test_every_tool_call_emits_one_event_with_the_catalogue_keys(live, ctx, av):
     assert payload["receipt"] is None
     assert payload["args_hash"] == keyed(json.dumps({"command": SECRET_ARG}, sort_keys=True, separators=(",", ":")))
     assert payload["result_hash"] == keyed(SECRET_RESULT) != sha(SECRET_RESULT)
-    assert payload["category_version"] == "tool_categories_v1"
+    assert payload["category_version"] == "tool_categories_v2"
     assert event["tool_call_id"] == "call-1"
     assert event["session_id"] == SESSION
     assert event["run_id"] == "task-1"
@@ -245,7 +245,7 @@ def test_a_failing_payload_builder_fails_open(live, ctx, av, monkeypatch):
 def test_the_seed_is_well_formed_and_loaded(plugin):
     tools = __import__(f"{plugin.__name__}._tools", fromlist=["_tools"])
     version, categories = tools.load_categories()
-    assert version == "tool_categories_v1"
+    assert version == "tool_categories_v2"
     assert categories == tools.TOOL_CATEGORIES
     assert all(name.startswith("mcp__index__") for name in categories if name.startswith("mcp__"))
     assert "create_intent" not in categories  # bare Index names are not listed
