@@ -535,6 +535,15 @@ never a hook — reads what the scheduler writes, once a minute, read-only:
   manages). No record, no names: a tenant installed before the record existed reports `job_name:
   null` until its next install. `cron.run` is on the ops allowlist and kept without research consent
   (spec §2.2), so it carries nothing a participant wrote. Every other job has `job_name: null`.
+- **A missing or stale record drops installer runs, not only their names.** The worker keeps a
+  `cron.run` from a tenant without research consent only when it names an installer job; one with
+  `job_name: null` is dropped as `cron_participant_job` (`agentvillage-data`
+  `src/worker/consent.ts`). So while `installed_jobs.json` is missing or stale — a tenant not yet
+  re-installed since this change, an install run with `--skip-crons`, no `hermes` CLI when the
+  installer ran, or an exception before `writeInstalledJobIds` — the installer's own cron runs from a
+  non-consenting tenant are lost to the ops record, not merely unnamed. Production closes the window
+  because the tenant container's `start-tenant.sh` runs `install.ts` on every boot, which rewrites the
+  record; a tenant whose install never reaches the cron step keeps losing them until one does.
 - **Id shapes.** Ingest takes a job id of 12 lower-case hex (`uuid4().hex[:12]`) and an execution id
   of 32 (`uuid4().hex`). An execution whose ids are any other shape (a hand-edited `jobs.json`)
   yields no `cron.run`, and a cron session whose job id is another shape still reports its
