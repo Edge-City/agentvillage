@@ -83,3 +83,53 @@ def test_a_ctx_without_on_unload_still_registers(plugin, ctx):
     """An older Hermes without `on_unload`: register as before, fail open."""
     plugin.register(ctx)
     assert set(ctx.hooks) == set(plugin.HOOK_BODIES)
+
+
+def test_an_unload_stops_the_old_collectors_threads(plugin, monkeypatch, av):
+    """On the Hermes in use a force reload re-imports the plugin, so the old
+    module's collector must not keep flushing beside the new one (every event
+    posted twice). Its flusher and backup threads stop, its exit flush is
+    unregistered, and nothing it still holds is sent."""
+    import atexit
+    import sys
+    import time
+
+    monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
+    monkeypatch.setenv("AV_EVENTS_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("AV_BACKUP_GRACE_S", "3600")
+    core = sys.modules[f"{plugin.__name__}._core"]
+    ctx = UnloadingCtx()
+    plugin.register(ctx)
+    old = plugin._COLLECTOR
+    sent = []
+    old.sender = lambda url, token, events: (sent.append(events), core.SendResult(True, 202))[1]
+
+    ctx.fire("on_session_start", session_id="s", model="m", platform="telegram")
+    flusher = old._thread
+    assert flusher is not None and flusher.is_alive()
+    with old._backup_lock:
+        old._backup_pending = True
+        old._backup_first_req = time.monotonic()
+        backup = old._start_backup_thread()
+    assert backup.is_alive()
+
+    unregistered = []
+    monkeypatch.setattr(atexit, "unregister", lambda fn: unregistered.append(fn))
+    ctx.unload()
+
+    flusher.join(3)
+    backup.join(3)
+    assert not flusher.is_alive() and not backup.is_alive()
+    assert unregistered == [old.shutdown]
+    assert plugin._COLLECTOR is None, "a re-register builds a fresh collector"
+
+    before = len(sent)
+    old.buffer.rotate_if_due(force=True)
+    time.sleep(core.TICK_INTERVAL_S * 2 + 0.2)
+    assert len(sent) == before, "no thread of the old collector sends"
+
+    reloaded = UnloadingCtx()
+    plugin.register(reloaded)
+    assert plugin._COLLECTOR is not None and plugin._COLLECTOR is not old
+    plugin._COLLECTOR._stop.set()
+    plugin._COLLECTOR._wake.set()

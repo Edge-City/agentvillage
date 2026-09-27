@@ -834,11 +834,21 @@ def _on_unload() -> None:
     `discover_and_load(force=True)` calls `unload()` (which runs this and
     clears the hook lists) and then `register()` again. A loader that reuses
     this module rather than re-importing it would otherwise find `_REGISTERED`
-    still set and leave the plugin loaded with no hooks. The collector is kept:
-    a re-register on the same module picks it up where it was.
+    still set and leave the plugin loaded with no hooks.
+
+    The collector is retired (its threads told to stop, no join) and
+    forgotten: the Hermes in use re-imports the plugin on a force reload, and
+    an old collector left running flushed the same buffer beside the new one,
+    posting every event twice. A re-register on this module builds a fresh one.
     """
-    global _REGISTERED
+    global _COLLECTOR, _REGISTERED
     _REGISTERED = False
+    collector, _COLLECTOR = _COLLECTOR, None
+    if collector is not None:
+        try:
+            collector.retire()
+        except Exception:  # noqa: BLE001 - an unload must never fail on us
+            pass
 
 
 def register(ctx) -> None:
