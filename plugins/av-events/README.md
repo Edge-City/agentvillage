@@ -28,7 +28,7 @@ plugins/av-events/
   _cron.py         cron.run from the executions ledger and usage audit (flusher thread only)
   _backup.py       memory.snapshot: collect, pack and upload the memory files (backup thread only)
   _consent.py      the consent_status tool: GET /v1/consent and the answer in words (DATA-157)
-  tool_categories.json        frozen seed: tool name -> category (tool_categories_v1)
+  tool_categories.json        frozen seed: tool name -> category (tool_categories_v2)
   edgeos_tool_allowlist.json  frozen seed: EdgeOS operations (edgeos_tool_allowlist_v1)
   cron_job_names.json         frozen seed: the cron names cron.run may carry (cron_job_names_v1)
   tests/           pytest suite; drives a fake ctx, never imports Hermes
@@ -171,9 +171,10 @@ recreates its directory if it disappears under a running process.
 OpenAI key shapes, `Bearer …`, the Telegram bot-token shape, and the literal value of our own
 `AV_EVENTS_TOKEN`. This is a last line of defence behind the capture modes, not the privacy control.
 
-**Tool-name allowlist.** `tool_categories.json` (`tool_categories_v1`) is the frozen seed; `_tools.py`
+**Tool-name allowlist.** `tool_categories.json` (`tool_categories_v2`) is the frozen seed; `_tools.py`
 reads it once at import. `builtin` lists Hermes's own tools by registry name (the `v2026.8.31`
-`_HERMES_CORE_TOOLS` set, plus `send_message`, `recall` and `record_intention`); `mcp.<server>` lists
+`_HERMES_CORE_TOOLS` set, plus `send_message`, `recall`, `record_intention` and, under v2's `meta`
+category, the plugin's own `consent_status`); `mcp.<server>` lists
 an MCP server's tools, which Hermes registers as `mcp__<server>__<tool>` — so the allowlist is keyed
 that way, and a bare `create_intent` from anywhere else is not Index. A listed tool leaves by name and
 category; anything else leaves as `tool_name: null`, `tool_category: "other"`, so a third-party MCP
@@ -852,10 +853,11 @@ revoked token is "could not check", not a stale `.env` token). Log lines are cod
 `... skipped=no_register_tool`, `... register_failed=PermissionError`); never the URL, the token or
 anything from the row.
 
-A `consent_status` call still passes through the `post_tool_call` hook like any tool: it is not in
-`tool_categories.json` (no category there fits a read of the plugin's own record, and the seed is
-frozen with the data repo's mirror), so its `tool.call` carries category `other` and a null name,
-and it records no intention.
+A `consent_status` call still passes through the `post_tool_call` hook like any tool. Under
+`tool_categories_v2` it is listed in `tool_categories.json` with category `meta` (the plugin's own
+introspection tools; v1 left it unlisted, so it counted as `other` with a null name), so its
+`tool.call` carries `tool_name: "consent_status"` and `tool_category: "meta"`, and it records no
+intention.
 
 **Hermes.** `ctx.register_tool(name, toolset, schema, handler, ..., description=...)`
 (`hermes_cli/plugins.py:460`); the handler is called as `handler(args, **kwargs)` and must return a

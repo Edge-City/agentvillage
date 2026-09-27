@@ -1,6 +1,6 @@
 {
-  "version": "tool_categories_v1",
-  "about": "Tool-name allowlist for tool.call (spec 4.1, 7.1). A tool listed here leaves by name and category; any other tool leaves as category 'other' with a null name, so a third-party MCP server's tool names never reach ingest. 'builtin' is keyed by the Hermes registry name of a tool with no MCP prefix. 'mcp' is keyed by MCP server, then by the tool's own name: Hermes registers an MCP tool as mcp__<server>__<tool>. Frozen with the event catalogue; a change is a new version, moved together with the agentvillage-data seed edgeos_tool_allowlist.",
+  "version": "tool_categories_v2",
+  "about": "Tool-name allowlist for tool.call (spec 4.1, 7.1). A tool listed here leaves by name and category; any other tool leaves as category 'other' with a null name, so a third-party MCP server's tool names never reach ingest. 'builtin' is keyed by the Hermes registry name of a tool with no MCP prefix. 'mcp' is keyed by MCP server, then by the tool's own name: Hermes registers an MCP tool as mcp__<server>__<tool>. Frozen with the event catalogue; a change is a new version, moved together with the agentvillage-data seed edgeos_tool_allowlist. v2 adds category 'meta' for the plugin's own introspection tools (consent_status), which v1 left as 'other'.",
   "builtin": {
     "web_search": "research",
     "web_extract": "research",
@@ -40,7 +40,8 @@
     "delegate_task": "delegation",
     "cronjob": "schedule",
     "send_message": "message",
-    "record_intention": "intention"
+    "record_intention": "intention",
+    "consent_status": "meta"
   },
   "mcp": {
     "index": {

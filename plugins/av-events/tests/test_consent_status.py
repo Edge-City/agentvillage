@@ -681,12 +681,14 @@ def test_the_handler_takes_hermes_dispatch_arguments(plugin, consent, monkeypatc
     assert text == consent.SENTENCE_UNAVAILABLE  # no token in this home
 
 
-def test_a_consent_status_call_is_not_an_intention_and_is_not_named_in_tool_call(plugin):
-    """Unlisted: `tool.call` carries it as category `other` with a null name."""
+def test_a_consent_status_call_is_not_an_intention_and_is_named_meta_in_tool_call(plugin):
+    """Listed under `tool_categories_v2`: `tool.call` carries it by name with category `meta`."""
     intentions = sys.modules[f"{plugin.__name__}._intentions"]
     tools = sys.modules[f"{plugin.__name__}._tools"]
     assert intentions.classify_tool("consent_status") is None
-    assert "consent_status" not in tools.TOOL_CATEGORIES
+    assert tools.TOOL_CATEGORY_VERSION == "tool_categories_v2"
+    assert tools.TOOL_CATEGORIES["consent_status"] == "meta"
     payload = tools.tool_call_payload("consent_status", {}, "text", "ok", 12, None, "sanitized", lambda s: "h")
-    assert payload["tool_name"] is None
-    assert payload["tool_category"] == "other"
+    assert payload["tool_name"] == "consent_status"
+    assert payload["tool_category"] == "meta"
+    assert payload["category_version"] == "tool_categories_v2"
