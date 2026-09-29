@@ -476,7 +476,8 @@ def _capture(args: dict, cron: bool) -> dict:
             return _refuse("publish_invalid")
         publish = parsed
 
-    result: dict[str, Any] = {"success": True, "source": source}
+    # `action` tells the observer what was done when the call left it to the default.
+    result: dict[str, Any] = {"success": True, "action": "capture", "source": source}
     if source == RESTRICTIVE_SOURCE:
         intention_id = uuid7()
         result.update(intention_id=intention_id, index_intent_id=None, published=False, held=True)
@@ -525,6 +526,7 @@ def _update_or_withdraw(action: str, args: dict) -> dict:
     source = entry.get("source") if entry.get("source") in SOURCES else None
     result: dict[str, Any] = {
         "success": True,
+        "action": action,
         "intention_id": intention_id,
         "index_intent_id": intention_id if published else None,
         "published": published,

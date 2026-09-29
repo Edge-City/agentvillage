@@ -213,7 +213,7 @@ backlog can differ from `emitted_at` by minutes. Every `marts` time series is bu
 | `prompt.registered` | `pre_api_request` | `hash`, `kind` ∈ `tools`\|`system_prompt`, `body`. `full` only, once per hash ever |
 | `plugin.degraded` | the guard | `hook`, `scope` ∈ `session`\|`process`, `error_count`, `errors_by_hook`, `hermes_version`, `last_error` |
 | `plugin.buffer_dropped` | the flusher | `reason`, `count`, `files`, `rejected_files`, `rejected_events`, `oldest_event_at`, `newest_event_at` |
-| `intention.captured` | `post_tool_call` on Index `create_intent`, or `record_intention(action="capture")` | `text_hash`, `summary_hash`, `index_intent_id`, `source`, `conditional`, `capture_path`, `index_status`, `parent_session_id`, plus `text_length` / `summary_length` above `metadata` |
+| `intention.captured` | `post_tool_call` on Index `create_intent`, or `record_intention(action="capture")` | `text_hash`, `summary_hash`, `index_intent_id`, `source`, `conditional`, `capture_path`, `index_status`, `parent_session_id`, `publish_refused`, `local_reason`, plus `text_length` / `summary_length` above `metadata` |
 | `intention.updated` | `post_tool_call` on Index `update_intent` with a new `description`, or `record_intention` naming an id | as above |
 | `intention.withdrawn` | `post_tool_call` on Index `update_intent` to `archived`/`deleted`/`withdrawn`, or `delete_intent`, or `record_intention(action="archive"\|"withdraw"\|"delete")` | as above; both hashes null |
 | `memory.recalled` | `recall:memory.recalled` on the plugin event bus (published by `plugins/recall`) | `query_hash`, `hit_count`, `top_score`, `surface`; the hash and score are null in `metadata` — see below |
@@ -319,8 +319,10 @@ A result over 256 KiB is not parsed at all.
 `create_intent` with no participant in the loop. A cron session is one whose `on_session_start` said
 `platform="cron"`, or whose id has Hermes's `cron_<job>_<stamp>` form (`cron/scheduler.py`), or a
 subagent that a cron session delegated to, at any depth up to eight (from `subagent_start`).
-Outside cron, Index calls are `message`. `record_intention` passes `message`, `onboarding` or `ambient`;
-a missing or unknown value is `ambient`, the most restrictive. Hermes gives no session kind for
+Outside cron, Index calls are `message`. `record_intention` passes `message`, `onboarding`, `note` or
+`ambient`; a missing or unknown value is the `source` the tool's result names (an update or
+withdrawal: the one stored at capture), else `ambient`, the most restrictive. A result that says
+`ambient` always wins. Hermes gives no session kind for
 onboarding, so `onboarding` comes only from `record_intention`'s argument; an Index create during
 the bootstrap ritual is `message`.
 
@@ -328,7 +330,8 @@ the bootstrap ritual is `message`.
 `record_intention` `text`); `summary_hash` the same over Index's `summary` from the result, or over
 `record_intention`'s `summary`. Nothing is normalised, so the poller gets the same value when it
 hashes the same Index field. `conditional` is null unless `record_intention` sets it. Not in §4.1:
-`capture_path` (`index_tool` \| `record_intention`); `index_status`, stripped and case-folded and
+`capture_path` (`index_tool` \| `record_intention`); `publish_refused` and `local_reason` (below;
+null on the `index_tool` path); `index_status`, stripped and case-folded and
 limited to `active|archived|deleted|withdrawn|completed|unknown`, with anything else reported as
 `other`; and `parent_session_id`, the session that delegated to this one when it is a subagent
 (learned from `subagent_start`), else null. `text_length` and `summary_length` count characters
@@ -354,8 +357,8 @@ providers (llama.cpp) return the same `tool_call_id` for every call, so every su
 emits. Ingest dedupes on `event_id` (scenario 1): a uuid v7 fixed when the event is buffered, which
 a retried flush resends unchanged. A plugin-minted `intention_id` is fixed at the same moment.
 
-**`record_intention` contract.** The tool itself is not in this repository; the plugin only
-observes calls to it, whatever the server prefix.
+**`record_intention` contract.** The overlay's own tool is `_record_intention.py` (DATA-212, below);
+the plugin observes calls to any `record_intention`, whatever the server prefix.
 
 | `action` | `intention_id` argument | Event |
 |---|---|---|
@@ -366,12 +369,50 @@ observes calls to it, whatever the server prefix.
 | absent, `update`, `archive`, `withdraw`, `delete` | absent | nothing |
 | anything else | either | nothing |
 
-Other arguments: `text` (or `description`), `summary`, `source` ∈ `message|onboarding|ambient`,
+With no `action` argument the result's `action`, when it names one, is used (the overlay tool
+defaults to `capture` and says so). Other arguments: `text` (or `description`), `summary`,
+`source` ∈ `message|onboarding|note|ambient`,
 `conditional`, and `index_intent_id` when the Index copy's id is known. **The tool must return
 `intention_id` to the agent** — as `intention_id` at the top of its result or under `data` — because
 the agent needs it for every later update or withdrawal, and the plugin cannot hand it back: a
 `post_tool_call` observer's return is discarded. An id the plugin mints is recorded in the event and
-nowhere else.
+nowhere else. From the result the plugin also reads `index_intent_id` (the Index id the tool
+published under), `publish_refused` (a code, `^[a-z0-9_]{1,64}$`, else null) and `local_reason`
+(`participant_asked` \| `personal`, else null).
+
+### The `record_intention` tool (DATA-212)
+
+Registered only when `AV_RECORD_INTENTION` is `1|true|yes|on` (default off; re-read at every call,
+so turning it off refuses without a restart). One front door: the agent calls it instead of Index
+`create_intent`. Explicit intents (source message, onboarding or note) are published to Index by
+default. The two legitimate reasons an explicit intent stays local: the resident asked, or the
+content is personal. The skill `skills/record-intention/SKILL.md` says the same, and Hermes shows
+it only when the tool is registered (`requires_tools`).
+
+| Call | Index | Result / event |
+|---|---|---|
+| `capture`, source `message`/`onboarding`/`note` | `create_intent(description=text)` | `intention_id` = `index_intent_id` = Index's id |
+| same, Index refused or unreachable | tried | local uuid v7, `publish_refused` = code |
+| `capture`, `publish=false`, `reason` | none | local uuid v7, `local_reason` = reason |
+| `capture`, source `ambient`, or any capture in a cron session | none | local uuid v7, `source=ambient`, held |
+| `update` / `withdraw` of an id it published | `update_intent(id, description)` / `update_intent(id, status="archived")` | `index_intent_id` set; a failed mirror adds `publish_refused` |
+| `update` / `withdraw` of any other id | none | local only |
+| `confirm` | none | refused: `no_confirmation_channel` (`confirmation_not_wired` when `AV_APPROVAL_URL` is set, until DATA-213) |
+
+`publish_refused` codes: `no_key`, `url_refused`, `redirect`, `http_<status>`, `rpc_error`,
+`rejected` (Index's "too vague": `isError`, or `success` not true), `malformed`, `too_large`,
+`timeout`, `transport`. Refusals (`success: false`, no event): `disabled`, `action_invalid`,
+`text_required`, `source_required`, `source_invalid`, `publish_invalid`, `reason_required`,
+`reason_invalid`, `intention_id_unexpected`, `intention_id_required`, `intention_id_invalid`,
+`no_confirmation_channel`, `confirmation_not_wired`, `internal`.
+
+The Index call is the data repo poller's MCP sequence over urllib (`initialize`, `mcp-session-id`,
+`notifications/initialized`, `tools/call`; `x-api-key` only; no redirects, no proxies, https only),
+never a Hermes MCP tool call, so the `index_tool` observer never sees it and each call is one
+event. `INDEX_API_KEY` and `INDEX_MCP_URL` (default prod) are read at call time. The whole sequence
+has a 30 s deadline; a `timeout` is ambiguous (Index may still create the intent), and the data side
+reconciles it by (tenant, `text_hash`). `$HERMES_HOME/av-events/intentions.json` (0600, ids and
+labels only) records which ids were published. Logs carry codes only.
 
 ---
 
@@ -1354,10 +1395,8 @@ Out of scope, deliberately:
 
 - **Budget** — `run.budget_exceeded`, `AV_RUN_BUDGET_*`, `AV_BUDGET_MODE`. There is no budget hook,
   and see divergence 9 for why the enforce path cannot be `pre_llm_call`.
-- **The `record_intention` tool itself** — the overlay skill or tool the agent calls. The plugin
-  observes it (see "Intention capture"). Registering it changes the agent's tool list and
-  behaviour, which makes it a product change: per `launch-guardrails-draft.md` it starts on the
-  dogfood tenants, rate-capped and behind a per-tenant kill switch.
+- **`record_intention` confirmation** — `action=confirm` is refused until approval.md (DATA-213).
+  No rate cap on the tool; the per-tenant switch `AV_RECORD_INTENTION` is the guardrail.
 - **`skill.enabled/disabled`**.
 - **Ingest registration.** `agentvillage-data` does not yet register payload schemas for
   `tool.call`, `message.in`, `message.out`, `cron.run` or `profile.updated`; until it does, ingest

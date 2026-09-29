@@ -435,6 +435,10 @@ def plan_record(args: dict, payload: Any, outer: Any = None, *, cron: bool = Fal
     arg_id = _args_id(args, "intention_id")
     raw_action = args.get("action")
     action = raw_action.strip().lower() if isinstance(raw_action, str) else ""
+    if not action:
+        # DATA-212: the overlay tool defaults `action` to `capture` and says in
+        # its result which action it performed.
+        action = _result_code(payload, outer, "action") or ""
 
     if action:
         event_type = _RECORD_ACTIONS.get(action)
