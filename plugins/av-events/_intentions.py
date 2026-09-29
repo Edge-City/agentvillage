@@ -454,11 +454,16 @@ def plan_record(args: dict, payload: Any, outer: Any = None, *, cron: bool = Fal
         return []
 
     source = str(args.get("source") or "").strip().lower()
+    result_source = _result_code(payload, outer, "source")
+    # An update or withdrawal names no source; the overlay tool returns the one
+    # it stored at capture, and that is used when the call's own is missing.
+    if source not in RECORD_SOURCES and result_source in RECORD_SOURCES:
+        source = result_source
     if cron or source not in RECORD_SOURCES:
         source = RESTRICTIVE_SOURCE
     # The overlay tool says when it held an intention as ambient (a cron run it
     # detected itself): the more restrictive of the two wins, never the looser.
-    if _result_code(payload, outer, "source") == RESTRICTIVE_SOURCE:
+    if result_source == RESTRICTIVE_SOURCE:
         source = RESTRICTIVE_SOURCE
 
     # DATA-212: the Index id the tool published under, else the argument (a

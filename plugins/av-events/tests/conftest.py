@@ -42,6 +42,11 @@ AV_ENV_VARS = (
     "AV_BACKUP_MAX_BYTES",
     "AV_BACKUP_MIN_INTERVAL_S",
     "AV_BACKUP_GRACE_S",
+    # DATA-212 `record_intention`.
+    "AV_RECORD_INTENTION",
+    "INDEX_API_KEY",
+    "INDEX_MCP_URL",
+    "AV_APPROVAL_URL",
 )
 
 

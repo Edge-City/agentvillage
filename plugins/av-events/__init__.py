@@ -23,6 +23,7 @@ from . import _edgeos
 from ._collector import Collector, guarded, hermes_version, overlay_ref
 from ._consent import TOOL_NAME as CONSENT_TOOL_NAME
 from ._consent import register_consent_tool
+from ._record_intention import register_record_intention_tool
 from ._core import (
     PLUGIN_VERSION,
     hash_obj,
@@ -865,6 +866,14 @@ def _on_unload() -> None:
             pass
 
 
+def _tool_session_is_cron(session_id: Optional[str]) -> bool:
+    """`_is_cron_session` for a tool handler, which only has the session id."""
+    collector = _COLLECTOR
+    if collector is None:
+        return str(session_id or "").startswith("cron_")
+    return _is_cron_session(collector, session_id)
+
+
 def register(ctx) -> None:
     """Hermes plugin entrypoint. Synchronous; the loader never awaits it.
 
@@ -875,7 +884,8 @@ def register(ctx) -> None:
     of hooks that do nothing.
 
     It also registers one read-only tool, `consent_status` (`_consent.py`),
-    when `ctx.register_tool` exists.
+    when `ctx.register_tool` exists, and — only when `AV_RECORD_INTENTION` is
+    on — `record_intention` (`_record_intention.py`, DATA-212).
 
     Idempotent. Hermes loads a plugin once per process, but a profile switch or
     a `force=True` reload can call `register()` again on a module that is still
@@ -907,6 +917,10 @@ def register(ctx) -> None:
     # the hooks, and guarded inside, so a Hermes without `register_tool` (or
     # one that refuses it) still gets every hook.
     register_consent_tool(ctx)
+    # DATA-212: the intention front door, behind its per-tenant switch. The
+    # tool asks the collector whether a session is a cron run, so a cron
+    # capture is held as ambient exactly as the observer labels it.
+    register_record_intention_tool(ctx, _tool_session_is_cron)
     # DATA-183: hear about the unload that clears the hooks. Optional in the
     # API (probe, fail open): without it register() behaves as before.
     on_unload = getattr(ctx, "on_unload", None)
