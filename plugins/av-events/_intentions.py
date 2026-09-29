@@ -423,7 +423,33 @@ def _result_code(payload: Any, outer: Any, key: str) -> Optional[str]:
     return None
 
 
-def plan_record(args: dict, payload: Any, outer: Any = None, *, cron: bool = False) -> list[IntentionCall]:
+def _result_has(obj: Any, key: str) -> tuple[bool, Any]:
+    """Whether a tool result names `key` at the top or under `data`, and its value (null included)."""
+    if not isinstance(obj, dict):
+        return False, None
+    if key in obj:
+        return True, obj[key]
+    data = obj.get("data")
+    if isinstance(data, dict) and key in data:
+        return True, data[key]
+    return False, None
+
+
+def _result_index_intent_id(payload: Any, outer: Any, args: dict) -> Optional[str]:
+    """F6: a result that names `index_intent_id` decides it, null included; the
+    argument counts only when the result is silent on it."""
+    for obj in (payload, outer):
+        present, value = _result_has(obj, "index_intent_id")
+        if present:
+            if isinstance(value, (str, int)) and not isinstance(value, bool) and str(value):
+                return str(value)
+            return None
+    return _args_id(args, "index_intent_id")
+
+
+def plan_record(
+    args: dict, payload: Any, outer: Any = None, *, cron: bool = False, trust_result: bool = True
+) -> list[IntentionCall]:
     """Events for a `record_intention` call. Contract: README "Intention capture".
 
     `action` ∈ `capture|update|archive|withdraw|delete`; any other action
@@ -431,14 +457,24 @@ def plan_record(args: dict, payload: Any, outer: Any = None, *, cron: bool = Fal
     update and a call naming none records nothing. `capture` on an existing id
     is an update. `outer` is the result before unwrapping, for a native tool
     that returns `{"result": ..., "intention_id": ...}`.
+
+    `trust_result` (F13) is true only for the unprefixed overlay tool: then the
+    result's `action`, `source`, `index_intent_id` and codes are read. A
+    `record_intention` served by some MCP server is read as DATA-27 read it
+    (the result names only the captured `intention_id`).
     """
+    if not trust_result:
+        payload_r: Any = None
+        outer_r: Any = None
+    else:
+        payload_r, outer_r = payload, outer
     arg_id = _args_id(args, "intention_id")
     raw_action = args.get("action")
     action = raw_action.strip().lower() if isinstance(raw_action, str) else ""
     if not action:
         # DATA-212: the overlay tool defaults `action` to `capture` and says in
         # its result which action it performed.
-        action = _result_code(payload, outer, "action") or ""
+        action = _result_code(payload_r, outer_r, "action") or ""
 
     if action:
         event_type = _RECORD_ACTIONS.get(action)
@@ -458,7 +494,7 @@ def plan_record(args: dict, payload: Any, outer: Any = None, *, cron: bool = Fal
         return []
 
     source = str(args.get("source") or "").strip().lower()
-    result_source = _result_code(payload, outer, "source")
+    result_source = _result_code(payload_r, outer_r, "source")
     # An update or withdrawal names no source; the overlay tool returns the one
     # it stored at capture, and that is used when the call's own is missing.
     if source not in RECORD_SOURCES and result_source in RECORD_SOURCES:
@@ -473,13 +509,9 @@ def plan_record(args: dict, payload: Any, outer: Any = None, *, cron: bool = Fal
     # DATA-212: the Index id the tool published under, else the argument (a
     # caller that already knew it). Codes are read only from the result: the
     # tool decided them, the model did not.
-    index_intent_id = (
-        _result_field_id(payload, "index_intent_id")
-        or _result_field_id(outer, "index_intent_id")
-        or _args_id(args, "index_intent_id")
-    )
-    publish_refused = _result_code(payload, outer, "publish_refused")
-    local_reason = _result_code(payload, outer, "local_reason")
+    index_intent_id = _result_index_intent_id(payload_r, outer_r, args)
+    publish_refused = _result_code(payload_r, outer_r, "publish_refused")
+    local_reason = _result_code(payload_r, outer_r, "local_reason")
     if local_reason not in LOCAL_REASONS:
         local_reason = None
 
@@ -520,9 +552,9 @@ def plan(tool_name: Any, args: Any, result: Any, status: Any, *, cron: bool = Fa
     payload = unwrap_result(result)
     if not result_succeeded(status, payload):
         return []
+    server, tool = split_tool_name(tool_name)
     if kind == "record":
-        return plan_record(safe_args, payload, _first_json(result), cron=cron)
-    _, tool = split_tool_name(tool_name)
+        return plan_record(safe_args, payload, _first_json(result), cron=cron, trust_result=server is None)
     return plan_index(tool, safe_args, payload, cron=cron)
 
 

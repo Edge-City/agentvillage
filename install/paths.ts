@@ -25,9 +25,8 @@ export const EDGE_SKILL_NAMES = [
   "agent-plaza",
   "agent-commons",
   "simocracy",
-  // DATA-212: shown by Hermes only when the `record_intention` tool is
-  // registered (`metadata.hermes.requires_tools`), i.e. on tenants with
-  // `AV_RECORD_INTENTION` on.
+  // DATA-212: installed everywhere, inert unless the `record_intention` tool
+  // is available (tenants with `AV_RECORD_INTENTION` on); its text says so.
   "record-intention",
 ] as const;
 

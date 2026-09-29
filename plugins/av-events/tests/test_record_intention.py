@@ -8,6 +8,7 @@ it: the handler's own return value is handed to `post_tool_call`.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import logging
@@ -15,7 +16,6 @@ import os
 import stat
 import sys
 import threading
-import time
 import urllib.error
 import uuid
 from pathlib import Path
@@ -87,7 +87,8 @@ class FakeIndex:
     def __init__(self, tool: Any = None) -> None:
         self.tool = created() if tool is None else tool
         self.requests: list[dict] = []
-        self.delay = 0.0
+        #: When set, `tools/call` blocks until the event is set (no wall clock).
+        self.gate: Optional[threading.Event] = None
         self._lock = threading.Lock()
 
     def open(self, request, timeout=None):  # noqa: ANN001 - urllib's opener API
@@ -102,9 +103,9 @@ class FakeIndex:
                     "timeout": timeout,
                 }
             )
-        if self.delay:
-            time.sleep(self.delay)
         method = body.get("method")
+        if method == "tools/call" and self.gate is not None:
+            self.gate.wait()
         if method == "initialize":
             return Response(
                 200,
@@ -294,7 +295,10 @@ def test_rule_is_in_the_description_the_manifest_and_the_skill(ri):
     assert RULE in (REPO / "plugins" / "av-events" / "plugin.yaml").read_text(encoding="utf-8")
     skill = (REPO / "skills" / "record-intention" / "SKILL.md").read_text(encoding="utf-8")
     assert RULE in skill
-    assert "requires_tools" in skill and "record_intention" in skill
+    # F2: the tool sits behind Tool Search, so no `requires_tools` gate (it would hide
+    # the skill); the text itself is conditional on the tool being reachable.
+    assert "requires_tools" not in skill
+    assert "tool_search" in skill and "tool_call" in skill
 
 
 def test_description_is_searchable(ri):
@@ -401,8 +405,8 @@ def test_success_result_does_not_look_like_a_failure_to_hermes(tctx, index):
     handler = tctx.tools["record_intention"]["handler"]
     for args in (
         {"text": TEXT, "source": "message"},
-        {"text": TEXT, "source": "ambient"},
-        {"text": TEXT, "source": "message", "publish": False, "reason": "personal"},
+        {"text": TEXT + " (inferred)", "source": "ambient"},
+        {"text": TEXT + " (private)", "source": "message", "publish": False, "reason": "personal"},
     ):
         result = handler(args, session_id=SESSION)
         assert '"error"' not in result.lower() and '"failed"' not in result.lower()
@@ -470,12 +474,28 @@ def test_transport_failure_is_a_local_capture(tctx, index, av, plugin, exc, code
     assert intention_events(av, plugin)[0]["payload"]["publish_refused"] == code
 
 
-def test_one_deadline_bounds_the_whole_sequence(ri, index, on):
-    index.delay = 0.3
-    started = time.monotonic()
-    payload, code = ri.index_tool_call("create_intent", {"description": TEXT}, deadline=0.5)
+def test_one_deadline_bounds_the_whole_sequence(ri, index, on, monkeypatch):
+    """F12: the wait is injected; the worker is held by an event, not a sleep."""
+    index.gate = threading.Event()
+    waited: list[float] = []
+    monkeypatch.setattr(ri, "_join", lambda worker, deadline: waited.append(deadline))
+    try:
+        payload, code = ri.index_tool_call("create_intent", {"description": TEXT})
+    finally:
+        index.gate.set()
     assert (payload, code) == (None, "timeout")
-    assert time.monotonic() - started < 1.5
+    assert waited == [ri.INDEX_DEADLINE_S] == [30.0]
+
+
+def test_timeout_capture_tells_the_agent_not_to_retry(tctx, index, ri, monkeypatch):
+    index.gate = threading.Event()
+    monkeypatch.setattr(ri, "_join", lambda worker, deadline: None)
+    try:
+        out = call(tctx, {"text": TEXT, "source": "message"})
+    finally:
+        index.gate.set()
+    assert out["publish_refused"] == "timeout"
+    assert "Do not retry; it may still appear on Index." in out["message"]
 
 
 def test_default_deadline_is_thirty_seconds(ri):
@@ -557,11 +577,14 @@ def test_subagent_of_a_cron_run_is_forced_ambient(tctx, index, av, plugin):
     assert intention_events(av, plugin)[0]["payload"]["source"] == "ambient"
 
 
-def test_a_cron_check_that_raises_holds_as_ambient(ri, index, on):
+def test_a_lineage_check_that_raises_holds_as_ambient(ri, index, on, monkeypatch):
+    ri.note_platform(SESSION, "telegram")
+
     def broken(_sid):  # noqa: ANN001
         raise RuntimeError("x")
 
-    out = ri.record_intention_answer({"text": TEXT, "source": "message"}, SESSION, broken)
+    monkeypatch.setattr(ri, "held_reason", broken)
+    out = ri.record_intention_answer({"text": TEXT, "source": "message"}, SESSION)
     assert out["source"] == "ambient" and index.requests == []
 
 
@@ -740,7 +763,11 @@ def test_map_is_ids_only_and_private(tctx, index, ri, home):
     data = json.loads(raw)
     entries = data["intentions"]
     assert entries[INDEX_ID] == {"published": True, "source": "message"}
-    assert [v for v in entries.values() if v["source"] == "ambient"] == [{"published": False, "source": "ambient"}]
+    # R9: the text's hash, and only for the held ambient entry.
+    held = [v for v in entries.values() if v["source"] == "ambient"]
+    assert held == [{"published": False, "source": "ambient", "text_hash": hashlib.sha256(TEXT.encode()).hexdigest()}]
+    assert len(data["publishes"]) == 1  # one create_intent attempt, a timestamp only
+    assert stat.S_IMODE(os.stat(str(path) + ".lock").st_mode) == 0o600
 
 
 def test_map_is_bounded(ri, index, on, monkeypatch):
@@ -751,13 +778,16 @@ def test_map_is_bounded(ri, index, on, monkeypatch):
 
 
 def test_an_unwritable_map_costs_nothing_but_a_log_line(tctx, index, ri, monkeypatch, caplog):
-    def fail(_entries):  # noqa: ANN001
+    def fail(*_args):  # noqa: ANN002
         raise PermissionError("ro")
 
-    monkeypatch.setattr(ri, "_save_map", fail)
+    monkeypatch.setattr(ri, "_save_locked", fail)
     out = call(tctx, {"text": TEXT, "source": "message"})
     assert out["success"] is True
+    # The rate count cannot be kept either: publishing fails closed, visibly.
+    assert out["publish_refused"] == "rate_unavailable" and index.requests == []
     assert "map_write_failed=PermissionError" in caplog.text
+    assert "rate_count_failed=PermissionError" in caplog.text
 
 
 def test_logs_carry_codes_never_text_or_key(tctx, index, caplog):
@@ -767,8 +797,8 @@ def test_logs_carry_codes_never_text_or_key(tctx, index, caplog):
         call(tctx, {"text": TEXT, "source": "message"}, tool_call_id="c2")
         call(tctx, {"text": TEXT, "source": "message", "publish": False}, tool_call_id="c3")
     lines = [r.getMessage() for r in caplog.records if "record_intention" in r.getMessage()]
-    assert "av-events: record_intention action=capture source=message published=1 refused=- reason=-" in lines
-    assert "av-events: record_intention action=capture source=message published=0 refused=rejected reason=-" in lines
+    assert "av-events: record_intention action=capture source=message held=- published=1 refused=- reason=-" in lines
+    assert "av-events: record_intention action=capture source=message held=- published=0 refused=rejected reason=-" in lines
     assert "av-events: record_intention action=capture refused=reason_required" in lines
     assert TEXT not in caplog.text and KEY not in caplog.text
 
@@ -783,3 +813,355 @@ def test_the_key_never_reaches_the_result(tctx, index):
     index.tool = http_error(401)
     raw = tctx.tools["record_intention"]["handler"]({"text": TEXT, "source": "message"}, session_id=SESSION)
     assert KEY not in raw
+
+
+# --------------------------------------------------------------------------
+# Refutation round 1
+# --------------------------------------------------------------------------
+
+CRON = "cron_job1_20260928_010000"
+CHILD = "20260928_010001_abcd"
+
+
+def _delegate(ctx: ToolFireCtx, parent: str, child: str) -> None:
+    ctx.fire(
+        "subagent_start",
+        parent_session_id=parent,
+        parent_turn_id="t",
+        child_session_id=child,
+        child_role="leaf",
+        child_goal="g",
+    )
+
+
+def _run(ctx: ToolFireCtx, args: dict, session: str) -> dict:
+    return json.loads(ctx.tools["record_intention"]["handler"](args, session_id=session))
+
+
+# F3: the cron gate is the tool's own and fails closed.
+
+
+def test_f3_cron_subagent_with_telemetry_disabled(plugin, index, on, monkeypatch):
+    monkeypatch.setenv("AV_EVENTS_TOKEN", "t")
+    monkeypatch.setenv("AV_EVENTS_ENABLED", "0")
+    ctx = ToolFireCtx()
+    plugin.register(ctx)
+    ctx.fire("on_session_start", session_id="nightly", model="m", platform="cron")
+    _delegate(ctx, "nightly", CHILD)
+    out = _run(ctx, {"text": TEXT, "source": "message"}, CHILD)
+    assert index.tool_calls() == [] and out["source"] == "ambient"
+
+
+def test_f3_cron_subagent_with_the_telemetry_subagent_hook_disabled(plugin, index, on, monkeypatch):
+    monkeypatch.setenv("AV_EVENTS_TOKEN", "t")
+    monkeypatch.setenv("AV_HOOKS_DISABLED", "subagent_start")
+    ctx = ToolFireCtx()
+    plugin.register(ctx)
+    ctx.fire("on_session_start", session_id="nightly", model="m", platform="cron")
+    _delegate(ctx, "nightly", CHILD)
+    out = _run(ctx, {"text": TEXT, "source": "message"}, CHILD)
+    assert index.tool_calls() == [] and out["source"] == "ambient"
+
+
+def test_f3_cron_subagent_after_unload(plugin, index, on, monkeypatch):
+    monkeypatch.setenv("AV_EVENTS_TOKEN", "t")
+    ctx = ToolFireCtx()
+    plugin.register(ctx)
+    ctx.fire("on_session_start", session_id="nightly", model="m", platform="cron")
+    _delegate(ctx, "nightly", "child-1")
+    plugin._on_unload()
+    out = _run(ctx, {"text": TEXT, "source": "message"}, "child-1")
+    assert index.tool_calls() == [] and out["source"] == "ambient"
+
+
+def test_f3_cron_subagent_of_a_degraded_parent(tctx, index, plugin):
+    tctx.fire("on_session_start", session_id="nightly", model="m", platform="cron")
+    state = plugin._COLLECTOR.peek_session("nightly")
+    state.degraded = True
+    _delegate(tctx, "nightly", CHILD)
+    out = _run(tctx, {"text": TEXT, "source": "message"}, CHILD)
+    assert index.tool_calls() == [] and out["source"] == "ambient"
+
+
+def test_f3_a_session_never_seen_is_held(tctx, index):
+    out = _run(tctx, {"text": TEXT, "source": "message"}, "never-started")
+    assert index.tool_calls() == [] and out["source"] == "ambient" and out["held"] is True
+
+
+def test_f3_a_subagent_with_unknown_ancestry_is_held(tctx, index):
+    tctx.fire("pre_api_request", session_id=CHILD, platform="subagent", task_id="t", turn_id="u")
+    out = _run(tctx, {"text": TEXT, "source": "message"}, CHILD)
+    assert index.tool_calls() == [] and out["source"] == "ambient"
+
+
+def test_f3_a_subagent_of_a_chat_session_publishes(tctx, index):
+    tctx.fire("pre_api_request", session_id=CHILD, platform="subagent", task_id="t", turn_id="u")
+    _delegate(tctx, SESSION, CHILD)
+    out = _run(tctx, {"text": TEXT, "source": "message"}, CHILD)
+    assert out["published"] is True and [c["name"] for c in index.tool_calls()] == ["create_intent"]
+
+
+def test_f3_platform_from_pre_api_request_alone(plugin, index, on):
+    ctx = ToolFireCtx()
+    plugin.register(ctx)
+    ctx.fire("pre_api_request", session_id="s-api", platform="telegram", task_id="t", turn_id="u")
+    assert _run(ctx, {"text": TEXT, "source": "message"}, "s-api")["published"] is True
+
+
+def test_f3_cron_stays_cron(ri, plugin, on):
+    ri.note_platform("s", "cron")
+    ri.note_platform("s", "telegram")
+    assert ri.held_reason("s") == "cron"
+
+
+def test_f3_lineage_listeners_are_registered_with_the_tool(plugin, ri, index, on):
+    ctx = ToolFireCtx()
+    plugin.register(ctx)
+    for name, listener in ri.LINEAGE_HOOKS.items():
+        assert listener in ctx.hooks[name]
+
+
+# F4: a cron session never rewrites a live Index intent.
+
+
+def test_f4_cron_update_is_held_and_withdraw_mirrors(tctx, index, av, plugin):
+    pub = call(tctx, {"text": TEXT, "source": "message"})
+    tctx.fire("on_session_start", session_id="cron_memsync_20260929_030000", model="m", platform="cron")
+    out = call(
+        tctx,
+        {"action": "update", "intention_id": pub["intention_id"], "text": "Inferred: wants a fintech cofounder"},
+        session="cron_memsync_20260929_030000",
+        tool_call_id="c2",
+    )
+    assert [c["name"] for c in index.tool_calls()] == ["create_intent"]
+    assert out["publish_refused"] == "cron_held" and out["source"] == "ambient"
+    event = intention_events(av, plugin)[-1]
+    assert event["event_type"] == "intention.updated"
+    assert event["payload"]["publish_refused"] == "cron_held"
+    assert event["payload"]["source"] == out["source"]
+    call(tctx, {"action": "withdraw", "intention_id": pub["intention_id"]},
+         session="cron_memsync_20260929_030000", tool_call_id="c3")
+    assert index.tool_calls()[-1] == {"name": "update_intent", "arguments": {"id": INDEX_ID, "status": "archived"}}
+
+
+# F5: the map is locked across processes and survives corruption.
+
+
+RACE = """
+import importlib.util, sys, types
+P = sys.argv[1]
+ns = types.ModuleType("hermes_plugins"); ns.__path__ = []; sys.modules["hermes_plugins"] = ns
+spec = importlib.util.spec_from_file_location("hermes_plugins.av_events", P + "/__init__.py", submodule_search_locations=[P])
+m = importlib.util.module_from_spec(spec); sys.modules["hermes_plugins.av_events"] = m; spec.loader.exec_module(m)
+ri = sys.modules["hermes_plugins.av_events._record_intention"]
+for i in range(150):
+    ri.remember(f"{sys.argv[2]}-{i}", published=True, source="message")
+"""
+
+
+def test_f5_two_processes_keep_every_entry(ri, home, av):
+    import subprocess
+
+    env_vars = {**os.environ, "HERMES_HOME": str(home)}
+    procs = [
+        subprocess.Popen([sys.executable, "-c", RACE, str(av.PLUGIN_DIR), tag], env=env_vars)
+        for tag in ("a", "b")
+    ]
+    assert [p.wait(timeout=120) for p in procs] == [0, 0]
+    entries = ri._load_map()
+    assert {f"{t}-{i}" for t in "ab" for i in range(150)} <= set(entries)
+
+
+def test_f5_a_corrupt_map_is_set_aside(tctx, index, ri, caplog):
+    first = call(tctx, {"text": TEXT, "source": "message"})
+    path = Path(ri.map_path())
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write("garbage")
+    index.tool = created("int-second")
+    call(tctx, {"text": TEXT + " 2", "source": "message"}, tool_call_id="c2")
+    aside = Path(str(path) + ".corrupt-1")
+    assert aside.exists() and first["intention_id"] in aside.read_text(encoding="utf-8")
+    assert "av-events: record_intention map_corrupt=1" in caplog.text
+    assert set(json.loads(path.read_text(encoding="utf-8"))["intentions"]) == {"int-second"}
+    path.write_text("[]", encoding="utf-8")
+    ri.lookup("x")
+    assert Path(str(path) + ".corrupt-2").exists()
+
+
+@pytest.mark.parametrize("action", ["update", "withdraw"])
+def test_f5_unknown_id_mirrors_nothing_and_claims_nothing(tctx, index, av, plugin, action):
+    args: dict[str, Any] = {"action": action, "intention_id": "int-from-elsewhere"}
+    if action == "update":
+        args["text"] = TEXT
+    out = call(tctx, args)
+    assert index.requests == []
+    assert out["publish_refused"] == "unknown_id" and out["source"] == "ambient"
+    assert "may still be there" in out["message"]
+    payload = intention_events(av, plugin)[0]["payload"]
+    assert payload["publish_refused"] == "unknown_id" and payload["source"] == "ambient"
+    assert payload["index_intent_id"] is None
+
+
+# F6: the result's index_intent_id decides, null included.
+
+
+def test_f6_model_index_id_never_reaches_a_held_capture(tctx, index, av, plugin):
+    call(tctx, {"text": TEXT, "source": "ambient", "index_intent_id": "fake-idx-1"})
+    assert intention_events(av, plugin)[0]["payload"]["index_intent_id"] is None
+
+
+def test_f6_model_index_id_never_reaches_a_personal_capture(tctx, index, av, plugin):
+    call(tctx, {"text": TEXT, "source": "message", "publish": False, "reason": "personal", "index_intent_id": "fake-idx-2"})
+    assert intention_events(av, plugin)[0]["payload"]["index_intent_id"] is None
+
+
+def test_f6_argument_counts_when_the_result_is_silent(plugin, av):
+    it = sys.modules[f"{av.MODULE_NAME}._intentions"]
+    calls = it.plan("record_intention", {"action": "capture", "text": TEXT, "index_intent_id": "idx-9"},
+                    json.dumps({"intention_id": "local-1"}), "ok")
+    assert calls[0].index_intent_id == "idx-9"
+    calls = it.plan("record_intention", {"action": "capture", "text": TEXT, "index_intent_id": "idx-9"},
+                    json.dumps({"intention_id": "local-1", "index_intent_id": None}), "ok")
+    assert calls[0].index_intent_id is None
+
+
+# F7: an unknown id is ambient whatever source the call claims.
+
+
+def test_f7_unknown_id_update_with_source_message_is_ambient(tctx, index, av, plugin):
+    out = call(tctx, {"action": "update", "intention_id": "0190aaaa-bbbb-7ccc-8ddd-eeeeffff0000", "text": "x", "source": "message"})
+    assert out["source"] == "ambient"
+    assert intention_events(av, plugin)[0]["payload"]["source"] == "ambient"
+
+
+# F9 (R9): held ambient text is not published around the confirmation.
+
+
+@pytest.mark.parametrize("source", ["message", "onboarding", "note"])
+def test_f9_recapturing_held_text_is_refused(tctx, index, av, plugin, source):
+    call(tctx, {"text": TEXT, "source": "ambient"})
+    again = call(tctx, {"text": TEXT, "source": source}, tool_call_id="c2")
+    assert again["success"] is False and again["error"] == "held_ambient_exists"
+    assert "only through the resident's confirmation" in again["message"]
+    assert index.tool_calls() == []
+    assert [e["event_type"] for e in intention_events(av, plugin)] == ["intention.captured"]
+
+
+def test_f9_other_text_still_publishes(tctx, index):
+    call(tctx, {"text": TEXT, "source": "ambient"})
+    assert call(tctx, {"text": TEXT + " indoors", "source": "message"}, tool_call_id="c2")["published"] is True
+
+
+# F13: only the overlay's own result is read for action, source, ids and codes.
+
+
+def test_f13_an_mcp_record_intention_result_is_not_trusted(tctx, av, plugin):
+    result = json.dumps({
+        "intention_id": "srv-1", "action": "capture", "source": "message",
+        "index_intent_id": "idx-claimed", "publish_refused": "rejected", "local_reason": "personal",
+    })
+    tctx.fire(
+        "post_tool_call", tool_name="mcp__x__record_intention",
+        args={"action": "capture", "text": TEXT, "source": "ambient"}, result=result,
+        session_id=SESSION, task_id="t", turn_id="u", tool_call_id="c9", api_request_id="r",
+        duration_ms=5, status="ok", error_type=None, error_message=None,
+    )
+    event = intention_events(av, plugin)[0]
+    assert event["intention_id"] == "srv-1"
+    payload = event["payload"]
+    assert payload["index_intent_id"] is None
+    assert payload["publish_refused"] is None and payload["local_reason"] is None
+    assert payload["source"] == "ambient"
+
+
+def test_f13_no_action_on_an_mcp_tool_records_nothing(tctx, av, plugin):
+    tctx.fire(
+        "post_tool_call", tool_name="mcp__x__record_intention",
+        args={"text": TEXT, "source": "message"}, result=json.dumps({"intention_id": "srv-2", "action": "capture"}),
+        session_id=SESSION, task_id="t", turn_id="u", tool_call_id="c9", api_request_id="r",
+        duration_ms=5, status="ok", error_type=None, error_message=None,
+    )
+    assert intention_events(av, plugin) == []
+
+
+# Rate cap.
+
+
+def test_rate_cap_counts_attempts_per_rolling_hour(tctx, index, ri, monkeypatch, av, plugin):
+    now = [1_000_000.0]
+    monkeypatch.setattr(ri, "_clock", lambda: now[0])
+    monkeypatch.setenv("AV_RECORD_INTENTION_MAX_PUBLISH_PER_HOUR", "2")
+    assert call(tctx, {"text": "a one", "source": "message"})["published"] is True
+    index.tool = tool_text({"success": False})  # a refused attempt still counts
+    assert call(tctx, {"text": "a two", "source": "message"}, tool_call_id="c2")["publish_refused"] == "rejected"
+    index.tool = created("int-3")
+    third = call(tctx, {"text": "a three", "source": "message"}, tool_call_id="c3")
+    assert third["publish_refused"] == "rate_capped" and third["published"] is False
+    assert "hourly limit" in third["message"]
+    assert len(index.tool_calls()) == 2
+    assert intention_events(av, plugin)[-1]["payload"]["publish_refused"] == "rate_capped"
+    now[0] += 3601
+    assert call(tctx, {"text": "a four", "source": "message"}, tool_call_id="c4")["published"] is True
+
+
+def test_rate_cap_is_shared_through_the_map(ri, index, on, monkeypatch):
+    """Another process's attempts are in the file, so they count here."""
+    monkeypatch.setattr(ri, "_clock", lambda: 5_000.0)
+    monkeypatch.setenv("AV_RECORD_INTENTION_MAX_PUBLISH_PER_HOUR", "1")
+    Path(ri.map_path()).parent.mkdir(parents=True, exist_ok=True)
+    Path(ri.map_path()).write_text(json.dumps({"v": 1, "intentions": {}, "publishes": [4_000.0]}), encoding="utf-8")
+    assert ri.reserve_publish() == "rate_capped"
+
+
+@pytest.mark.parametrize("value,cap", [("", 20), ("x", 20), ("-3", 20), ("0", 0), ("5", 5)])
+def test_rate_cap_setting(ri, on, monkeypatch, value, cap):
+    monkeypatch.setenv("AV_RECORD_INTENTION_MAX_PUBLISH_PER_HOUR", value)
+    assert ri.rate_cap() == cap
+
+
+def test_no_key_does_not_spend_the_cap(tctx, index, ri, monkeypatch):
+    monkeypatch.setenv("INDEX_API_KEY", "")
+    call(tctx, {"text": TEXT, "source": "message"})
+    assert ri._load_map() and json.loads(Path(ri.map_path()).read_text())["publishes"] == []
+
+
+# B4: no success result looks like a failure to Hermes.
+
+
+@pytest.mark.parametrize("answer", ["ok", "rpc"])
+def test_success_results_never_trip_the_failure_heuristic(tctx, index, answer):
+    if answer == "rpc":
+        index.tool = Response(200, json.dumps({"jsonrpc": "2.0", "id": 2, "error": {"code": -1}}).encode(),
+                              {"content-type": "application/json"})
+    res = tctx.tools["record_intention"]["handler"]({"text": TEXT, "source": "message"}, session_id=SESSION)
+    low = res[:500].lower()
+    assert '"error"' not in low and '"failed"' not in low and not res.startswith("Error")
+
+
+# F8 / F2: one front door in every overlay-owned prompt.
+
+
+#: Files that mention `create_intent` without telling the agent to call it.
+NOT_AN_INSTRUCTION = {
+    "skills/index-network/heartbeat.md",  # "Do not call `create_intent` ... here."
+}
+
+
+def test_f8_no_overlay_prompt_calls_create_intent_unconditionally():
+    offenders = []
+    for root in ("skills", "workspace"):
+        for path in (REPO / root).rglob("*.md"):
+            rel = path.relative_to(REPO).as_posix()
+            if rel.startswith("skills/edge-esmeralda/references/") or rel in NOT_AN_INSTRUCTION:
+                continue  # bot-synced reference text, or a prohibition
+            text = path.read_text(encoding="utf-8")
+            if "create_intent" in text and "if `record_intention` is available" not in text.lower():
+                offenders.append(rel)
+    assert offenders == []
+
+
+def test_f2_agents_md_routes_intentions_through_the_tool():
+    agents = (REPO / "workspace" / "AGENTS.md").read_text(encoding="utf-8")
+    line = next(l for l in agents.splitlines() if "record_intention" in l)
+    assert "tool_search" in line and "tool_call" in line
+    assert "if" in line.lower()

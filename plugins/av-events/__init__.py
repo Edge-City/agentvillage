@@ -866,14 +866,6 @@ def _on_unload() -> None:
             pass
 
 
-def _tool_session_is_cron(session_id: Optional[str]) -> bool:
-    """`_is_cron_session` for a tool handler, which only has the session id."""
-    collector = _COLLECTOR
-    if collector is None:
-        return str(session_id or "").startswith("cron_")
-    return _is_cron_session(collector, session_id)
-
-
 def register(ctx) -> None:
     """Hermes plugin entrypoint. Synchronous; the loader never awaits it.
 
@@ -917,10 +909,10 @@ def register(ctx) -> None:
     # the hooks, and guarded inside, so a Hermes without `register_tool` (or
     # one that refuses it) still gets every hook.
     register_consent_tool(ctx)
-    # DATA-212: the intention front door, behind its per-tenant switch. The
-    # tool asks the collector whether a session is a cron run, so a cron
-    # capture is held as ambient exactly as the observer labels it.
-    register_record_intention_tool(ctx, _tool_session_is_cron)
+    # DATA-212: the intention front door, behind its per-tenant switch. It
+    # registers its own session-lineage listeners, outside the collector's
+    # guard, so the cron gate never depends on telemetry being on.
+    register_record_intention_tool(ctx)
     # DATA-183: hear about the unload that clears the hooks. Optional in the
     # API (probe, fail open): without it register() behaves as before.
     on_unload = getattr(ctx, "on_unload", None)

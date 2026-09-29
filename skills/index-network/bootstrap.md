@@ -97,6 +97,8 @@ Ask:
 
 > "Now tell me — what are you open to right now? Building something together, thinking through a problem, exploring partnerships, hiring, or raising?"
 
+If `record_intention` is available (in your tool list, or found with `tool_search` and called through `tool_call`), record their answer with `record_intention(text="[their response]", source="onboarding")` instead of `create_intent`, and read every `create_intent` below as that call: once, one clarifying follow-up if it comes back as too vague, no paraphrased retry. Otherwise:
+
 When they respond, call `create_intent(description="[their response]")` **once**. If the call returns an error or the signal is rejected as too vague, ask one clarifying follow-up — do **not** silently retry `create_intent` with a paraphrased version. Each call runs a multi-stage verification graph; silent retries make onboarding feel hung for tens of seconds.
 
 Once `create_intent` succeeds, briefly acknowledge:
