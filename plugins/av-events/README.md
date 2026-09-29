@@ -436,19 +436,24 @@ cannot be read: `rate_unavailable`; one that was read but cannot be saved procee
 `held_ambient_exists`, `unknown_id`. Refusals (`success: false`, no event): `disabled`,
 `action_invalid`, `text_required`, `source_required`, `source_invalid`, `publish_invalid`,
 `reason_required`, `reason_invalid`, `intention_id_unexpected`, `intention_id_required`,
-`intention_id_invalid`, `no_confirmation_channel`, `confirmation_not_wired`, `internal`.
+`intention_id_invalid`, `capture_again` (an update of a capture Index rejected),
+`no_confirmation_channel`, `confirmation_not_wired`, `internal`.
 
-**For the data side.** A `publish_refused='rejected'` capture followed by the clarified capture the
-agent is told to make is two rows for one intention: the refused local one and the published one.
-Analysts filter by `publish_refused`. A `timeout` is ambiguous (Index may still create the intent);
-reconcile it with the poller's capture by (tenant, `text_hash`).
+**For the data side.** Reconciliation is the data repo's provisional ruling R11
+(`eligibility_v3`). A `publish_refused='rejected'` capture is ineligible (`index_rejected`); the
+clarified capture the agent is told to make is its own row, and `action=update` on the rejected one
+is refused (`capture_again`), so it never publishes. A `timeout` capture is ineligible
+(`index_duplicate_timeout`) only when an Index-side capture from the same tenant with the same
+`text_hash` falls between the timed-out call's start and one hour after the capture; the poller is
+timed only by Index's `createdAt`. Every other `publish_refused` code stays eligible.
 
 The Index call is the data repo poller's MCP sequence over urllib (`initialize`, `mcp-session-id`,
 `notifications/initialized`, `tools/call`; `x-api-key` only; no redirects, no proxies, https only),
 never a Hermes MCP tool call, so the `index_tool` observer never sees it and each call is one
 event. `INDEX_API_KEY` and `INDEX_MCP_URL` (default prod) are read at call time. The whole sequence
 has a 30 s deadline. `$HERMES_HOME/av-events/intentions.json` (0600, under `flock` on
-`intentions.json.lock`) records each id's `{published, source}`, a `held_norm_hash` (sha256 of the
+`intentions.json.lock`) records each id's `{published, source}`, `refused: rejected` for a local
+capture Index rejected, a `held_norm_hash` (sha256 of the
 case-folded, whitespace-collapsed text, never emitted) for held ambient entries only, replaced on
 update and dropped on withdrawal, and the cap's attempt timestamps; a corrupt file is renamed to
 `intentions.json.corrupt-<n>` and the map starts empty. Logs carry codes only. The observer reads

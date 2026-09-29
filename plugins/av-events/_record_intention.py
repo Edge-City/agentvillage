@@ -36,9 +36,20 @@ check). JSON or SSE responses. Redirects refused, proxies ignored
 seconds). Past the deadline the capture is recorded locally with
 `publish_refused: timeout`, and Index may still finish the write, so one
 intention can then have two rows: this local one and the Index one the poller
-sees. The data side reconciles them by (tenant, `text_hash`): the poller
-hashes the same `description` text. Dogfood latency is measured before the
-switch goes on anywhere else.
+sees. The data side reconciles under provisional ruling R11
+(`eligibility_v3`): a `rejected` capture is ineligible (`index_rejected`); a
+`timeout` capture is ineligible (`index_duplicate_timeout`) only when an
+Index-side capture from the same tenant with the same `text_hash` falls
+between the timed-out call's start and one hour after the capture (the poller
+is timed only by Index's `createdAt`); every other code stays eligible.
+Dogfood latency is measured before the switch goes on anywhere else.
+
+**A rejected capture is not updated into a published one (M2).** The map
+labels a local capture that Index refused as too vague (`refused: rejected`).
+`action=update` on it is refused with `capture_again`: the agent captures the
+clarified text as a new intention, and the rejected one stays ineligible
+(`index_rejected`) and never publishes. A withdrawal of it is still allowed.
+[Reversal: allow the update as a local-only change.]
 
 **Switch.** Registered only when `AV_RECORD_INTENTION` is `1|true|yes|on`
 (default off). Hermes loads `$HERMES_HOME/.env` into the process environment
@@ -90,7 +101,8 @@ counts; never the intention's text, never the key.
 
 **Local map (F5, R9 revised).** `$HERMES_HOME/av-events/intentions.json`
 (0600), guarded by `fcntl.flock` on the sibling `intentions.json.lock` around
-every read-modify-write: id -> `{published, source}`, plus `held_norm_hash`
+every read-modify-write: id -> `{published, source}`, `refused: rejected` for a
+local capture Index rejected, plus `held_norm_hash`
 for a held ambient entry only: sha256 of its text case-folded with whitespace
 collapsed, used for this check alone and never emitted. It is replaced when the
 held intention is updated and dropped when it is withdrawn. A capture that
@@ -227,6 +239,10 @@ REFUSALS: dict[str, str] = {
     "intention_id_unexpected": "Nothing was recorded: a capture takes no intention_id; use action=update.",
     "intention_id_required": "Nothing was recorded: this action needs the intention_id a capture returned.",
     "intention_id_invalid": "Nothing was recorded: that intention_id is not one this tool returns.",
+    "capture_again": (
+        "Not updated: Index did not accept this intention, and it stays unpublished. Capture the "
+        "clarified text as a new intention (action=capture) instead; this one stays as it was."
+    ),
     "no_confirmation_channel": (
         "Cannot confirm yet: confirmation must come from the resident through approval.md, which "
         "this village does not have yet, and a reply you read in chat does not count. The "
@@ -733,7 +749,10 @@ def set_held_hash(intention_id: str, norm_hash: Optional[str]) -> None:
         logger.warning("av-events: record_intention map_write_failed=%s", type(exc).__name__)
 
 
-def remember(intention_id: str, *, published: bool, source: str, norm_hash: Optional[str] = None) -> None:
+def remember(
+    intention_id: str, *, published: bool, source: str, norm_hash: Optional[str] = None,
+    refused: Optional[str] = None,
+) -> None:
     """Best effort: a map that cannot be written costs a later Index mirror, not the capture."""
     try:
         with _Locked():
@@ -743,6 +762,9 @@ def remember(intention_id: str, *, published: bool, source: str, norm_hash: Opti
             # R9: the hash only for a held ambient entry.
             if norm_hash is not None and source == RESTRICTIVE_SOURCE and not published:
                 entry[HELD_HASH_KEY] = norm_hash
+            # M2: a label (a code), for a local capture Index rejected.
+            if refused == "rejected" and not published:
+                entry["refused"] = refused
             entries[intention_id] = entry
             while len(entries) > MAX_MAP_ENTRIES:
                 entries.pop(next(iter(entries)))
@@ -904,6 +926,7 @@ def _capture(args: dict, held: Optional[str]) -> dict:
         published=bool(result["published"]),
         source=source,
         norm_hash=norm if source == RESTRICTIVE_SOURCE else None,
+        refused=result.get("publish_refused"),
     )
     return result
 
@@ -938,6 +961,8 @@ def _update_or_withdraw(action: str, args: dict, held: Optional[str]) -> dict:
             ),
         }
 
+    if action == "update" and entry.get("refused") == "rejected":
+        return _refuse("capture_again")
     published = entry.get("published") is True
     source = entry.get("source") if entry.get("source") in SOURCES else RESTRICTIVE_SOURCE
     if held is not None:

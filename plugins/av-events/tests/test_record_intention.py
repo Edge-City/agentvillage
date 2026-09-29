@@ -1372,3 +1372,49 @@ def test_m1_two_processes_never_exceed_the_cap(ri, home, av):
     assert [p.returncode for p in procs] == [0, 0]
     assert sum(counts) == 50
     assert len(json.loads(Path(ri.map_path()).read_text())["publishes"]) == 50
+
+
+# Data-half follow-up.
+
+
+def test_capture_path_for_the_bare_and_a_prefixed_record_intention(tctx, index, av, plugin):
+    """The bare overlay tool is `record_intention`. A prefixed one keeps the
+    pre-DATA-212 value, which at b630d4c was also `record_intention`: before
+    this task `plan_record` stamped that path for any server prefix."""
+    call(tctx, {"text": TEXT, "source": "message"})
+    tctx.fire(
+        "post_tool_call", tool_name="mcp__x__record_intention",
+        args={"action": "capture", "text": TEXT, "source": "message"}, result=json.dumps({"intention_id": "srv-1"}),
+        session_id=SESSION, task_id="t", turn_id="u", tool_call_id="c9", api_request_id="r",
+        duration_ms=5, status="ok", error_type=None, error_message=None,
+    )
+    events = intention_events(av, plugin)
+    assert [e["payload"]["capture_path"] for e in events] == ["record_intention", "record_intention"]
+
+
+def test_update_of_a_rejected_capture_is_refused_capture_again(tctx, index, ri, av, plugin):
+    index.tool = tool_text({"success": False, "error": "too vague"})
+    rejected = call(tctx, {"text": "something", "source": "message"})
+    assert rejected["publish_refused"] == "rejected"
+    assert ri.lookup(rejected["intention_id"]) == {"published": False, "source": "message", "refused": "rejected"}
+    index.requests.clear()
+    index.tool = created()
+    out = call(tctx, {"action": "update", "intention_id": rejected["intention_id"], "text": TEXT}, tool_call_id="c2")
+    assert out["success"] is False and out["error"] == "capture_again"
+    assert "Capture the clarified text as a new intention" in out["message"]
+    assert index.requests == []
+    assert [e["event_type"] for e in intention_events(av, plugin)] == ["intention.captured"]
+    # The clarified text is captured anew and publishes; the rejected one can still be withdrawn.
+    assert call(tctx, {"text": TEXT, "source": "message"}, tool_call_id="c3")["published"] is True
+    gone = call(tctx, {"action": "withdraw", "intention_id": rejected["intention_id"]}, tool_call_id="c4")
+    assert gone["success"] is True and gone["published"] is False
+
+
+@pytest.mark.parametrize("code_answer", [http_error(503), tool_text({"success": True, "data": {}})])
+def test_only_rejected_is_labelled_in_the_map(tctx, index, ri, code_answer):
+    index.tool = code_answer
+    out = call(tctx, {"text": TEXT, "source": "message"})
+    assert out["publish_refused"] != "rejected"
+    assert "refused" not in ri.lookup(out["intention_id"])
+    upd = call(tctx, {"action": "update", "intention_id": out["intention_id"], "text": TEXT + "!"}, tool_call_id="c2")
+    assert upd["success"] is True
