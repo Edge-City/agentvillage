@@ -46,39 +46,60 @@ at startup, so a change there takes effect after a gateway restart, in both
 directions. The handler re-reads the switch from the process environment at
 every call, which honours only a change made to `os.environ` itself.
 
-**Who is speaking: the tool's own session lineage (refutation F3).** Whether a
-call may publish is decided from lineage this module records in its own hook
-listeners (`on_session_start` and `pre_api_request` give the platform,
+**Who is speaking: the tool's own session lineage (refutation F3, ruling R10).**
+Whether a call may publish is decided from lineage this module records in its
+own hook listeners (`on_session_start` and `pre_api_request` give the platform,
 `subagent_start` the parent). They are registered with the tool and do not go
 through the collector's `hook_allowed`, `AV_EVENTS_ENABLED`, the breaker or a
 degraded session, so turning telemetry off, disabling a telemetry hook or an
-unload never loosens the gate. It fails closed: a session whose platform was
-never seen, a `cron_` id, `platform=cron`, or a subagent whose ancestry is
-unknown or reaches a cron run, is held as ambient and never publishes.
-[Reversal: gate on `_is_cron_session` over the collector again.]
+unload never loosens the gate. R10 makes it an allowlist: an explicit source
+may publish only from a session (or the root of its delegation chain) seen on a
+human-facing platform (`HUMAN_PLATFORMS`: the gateway's chat platforms plus
+`cli`, `tui`, `desktop`). A `cron_` id or `platform=cron` anywhere in the chain
+is `cron`; everything else (`api_server`, `webhook`, `batch`, `acp`, `curator`,
+an empty platform, a plugin platform, a session never seen, a subagent of
+unknown ancestry) is `unknown`. Either way the capture is held as ambient.
+[Reversal F3: gate on `_is_cron_session` over the collector again. Reversal
+R10: the cron/subagent denylist, any other seen platform may publish.]
 
-**Cron updates (F4).** In a held session `action=update` never mirrors to
-Index; the local event carries `publish_refused="cron_held"` and `source`
-ambient. A withdrawal may still mirror (it removes, never asserts).
-[Reversal: mirror updates from any session.]
+**Held explicit captures leave a trace (M3).** When the lineage turns a
+requested `message`/`onboarding`/`note` into ambient, the event carries
+`publish_refused="held_cron"` or `"held_unknown"`. [Reversal: no code; the
+event says only `source=ambient`.]
 
-**Rate cap.** At most `AV_RECORD_INTENTION_MAX_PUBLISH_PER_HOUR` (default 20)
-Index `create_intent` attempts per rolling hour per tenant, counted across
-processes in the local map (timestamps only, under its lock). Over the cap the
-capture is local with `publish_refused="rate_capped"`; a count that cannot be
-read or written refuses too, as `rate_unavailable`. An attempt counts whether
-or not Index accepts it. [Reversal: set the cap very large.]
+**Held updates (F4, M3).** In a held session `action=update` of a published id
+never mirrors to Index; the local event carries `publish_refused` `held_cron` or
+`held_unknown` and `source` ambient. A withdrawal may still mirror (it removes,
+never asserts). [Reversal: mirror updates from any session.]
+
+**Rate cap (M1, L2).** At most `AV_RECORD_INTENTION_MAX_PUBLISH_PER_HOUR`
+(default 20) Index `create_intent` attempts per rolling hour per tenant, counted
+across processes in the local map (timestamps only). The clock is read inside
+the map lock, a stamp is dropped only once it is older than the window (a
+future stamp from a writer whose clock is ahead is kept), and no writer deletes
+another's live stamps, so concurrent writers never exceed the cap. Over the cap
+the capture is local with `publish_refused="rate_capped"`. A count that cannot
+be read refuses as `rate_unavailable` (fail closed); a count that was read but
+cannot be saved proceeds on the in-memory count, and `rate_count_failed` is
+logged once per process. An attempt counts whether or not Index accepts it.
+[Reversal M1: none needed; it is a correctness fix. Reversal L2: fail closed on
+a save failure too. Cap: set it very large.]
 
 **Fail open.** The handler never raises into Hermes. Logs carry codes, ids and
 counts; never the intention's text, never the key.
 
-**Local map (F5, R9).** `$HERMES_HOME/av-events/intentions.json` (0600), guarded
-by `fcntl.flock` on the sibling `intentions.json.lock` around every
-read-modify-write: id -> `{published, source}`, plus `text_hash` (the same
-sha256 the event carries) for a held ambient entry only, so the held text
-cannot be re-captured as `message`/`onboarding`/`note` and published around
-the confirmation (`held_ambient_exists`). [Reversal R9: drop the hash and rely
-on the prompt.] A corrupt file is renamed aside to
+**Local map (F5, R9 revised).** `$HERMES_HOME/av-events/intentions.json`
+(0600), guarded by `fcntl.flock` on the sibling `intentions.json.lock` around
+every read-modify-write: id -> `{published, source}`, plus `held_norm_hash`
+for a held ambient entry only: sha256 of its text case-folded with whitespace
+collapsed, used for this check alone and never emitted. It is replaced when the
+held intention is updated and dropped when it is withdrawn. A capture that
+would publish (explicit source, `publish` true, a session that may publish)
+whose normalised text matches a held entry is recorded locally, not refused:
+the event is emitted with `publish_refused="held_ambient_exists"` and the agent
+is told a held intention is published only through confirmation. A personal
+(`publish=false`) capture is never checked. [Reversal R9: drop the hash and
+rely on the prompt.] A corrupt file is renamed aside to
 `intentions.json.corrupt-<n>`, logged `map_corrupt`, and the map starts empty.
 An update or withdrawal of an id not in the map mirrors nothing: its event is
 ambient with `publish_refused="unknown_id"`.
@@ -88,6 +109,7 @@ Python 3.11, standard library only.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -110,7 +132,6 @@ from ._core import (
     FILE_MODE,
     NO_REDIRECT_OPENER,
     env,
-    hash_text,
     hermes_home,
     is_redirect,
     register_literal_secret,
@@ -206,10 +227,6 @@ REFUSALS: dict[str, str] = {
     "intention_id_unexpected": "Nothing was recorded: a capture takes no intention_id; use action=update.",
     "intention_id_required": "Nothing was recorded: this action needs the intention_id a capture returned.",
     "intention_id_invalid": "Nothing was recorded: that intention_id is not one this tool returns.",
-    "held_ambient_exists": (
-        "Nothing was recorded: this is already held as an ambient intention. A held intention is "
-        "published only through the resident's confirmation, never by capturing it again."
-    ),
     "no_confirmation_channel": (
         "Cannot confirm yet: confirmation must come from the resident through approval.md, which "
         "this village does not have yet, and a reply you read in chat does not count. The "
@@ -470,6 +487,20 @@ MAX_LINEAGE_DEPTH = 8
 SUBAGENT_PLATFORM = "subagent"
 CRON_PLATFORM = "cron"
 
+#: R10: platforms where a person is speaking to the agent. Hermes's gateway
+#: `Platform` enum (`gateway/config.py`) minus the machine-facing members
+#: (`local`, `homeassistant`, `api_server`, `webhook`, `msgraph_webhook`,
+#: `wecom_callback`, `relay`), plus the local interactive surfaces `cli`, `tui`
+#: and `desktop`. The enum is open-ended (plugin platforms are created on
+#: demand); a platform not listed here is held, fail closed.
+#: [Reversal R10: the cron/subagent denylist, i.e. any seen platform other than
+#: `cron` and `subagent` may publish.]
+HUMAN_PLATFORMS = frozenset({
+    "telegram", "discord", "whatsapp", "whatsapp_cloud", "slack", "signal", "mattermost",
+    "matrix", "email", "sms", "dingtalk", "feishu", "wecom", "weixin", "bluebubbles",
+    "qqbot", "yuanbao", "cli", "tui", "desktop",
+})
+
 _LINEAGE_LOCK = threading.Lock()
 _PLATFORMS: "OrderedDict[str, str]" = OrderedDict()
 _PARENTS: "OrderedDict[str, str]" = OrderedDict()
@@ -534,8 +565,9 @@ LINEAGE_HOOKS: dict[str, Callable[..., None]] = {
 def held_reason(session_id: Optional[str]) -> Optional[str]:
     """None when the session may publish; `cron` or `unknown` when it may not.
 
-    Fails closed: only a session (or the root of its delegation chain) whose
-    platform was seen, and is neither `cron` nor `subagent`, may publish.
+    Fails closed: only a session (or the root of its delegation chain) seen on a
+    platform in `HUMAN_PLATFORMS` may publish. A subagent inherits its root's
+    allowance; a cron run anywhere in the chain is `cron`.
     """
     current = str(session_id or "").strip()
     with _LINEAGE_LOCK:
@@ -551,9 +583,7 @@ def held_reason(session_id: Optional[str]) -> Optional[str]:
             if parent is not None:
                 current = parent
                 continue
-            if platform is None or platform == SUBAGENT_PLATFORM:
-                return "unknown"
-            return None
+            return None if platform in HUMAN_PLATFORMS else "unknown"
     return "unknown"
 
 
@@ -665,16 +695,45 @@ def lookup(intention_id: str) -> Optional[dict]:
         return None
 
 
-def held_hash_exists(text_hash: str) -> bool:
+#: The map key for a held ambient entry's normalised-text hash (R9 revised).
+HELD_HASH_KEY = "held_norm_hash"
+
+
+def held_norm_hash(text: str) -> str:
+    """sha256 of the text case-folded with whitespace collapsed. Used for the
+    held-text check only; never emitted (the event's `text_hash` is exact)."""
+    return hashlib.sha256(" ".join(text.split()).casefold().encode("utf-8", errors="surrogatepass")).hexdigest()
+
+
+def held_hash_exists(norm_hash: str) -> bool:
     try:
         entries = _load_map()
     except Exception as exc:  # noqa: BLE001
         logger.warning("av-events: record_intention map_read_failed=%s", type(exc).__name__)
         return False
-    return any(v.get("text_hash") == text_hash and v.get("published") is not True for v in entries.values())
+    return any(v.get(HELD_HASH_KEY) == norm_hash for v in entries.values())
 
 
-def remember(intention_id: str, *, published: bool, source: str, text_hash: Optional[str] = None) -> None:
+def set_held_hash(intention_id: str, norm_hash: Optional[str]) -> None:
+    """Replace (or, with None, drop) a known entry's held hash. Best effort."""
+    try:
+        with _Locked():
+            entries, publishes = _load_locked()
+            entry = entries.get(intention_id)
+            if entry is None:
+                return
+            if norm_hash is None:
+                if HELD_HASH_KEY not in entry:
+                    return
+                entry.pop(HELD_HASH_KEY, None)
+            else:
+                entry[HELD_HASH_KEY] = norm_hash
+            _save_locked(entries, publishes)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("av-events: record_intention map_write_failed=%s", type(exc).__name__)
+
+
+def remember(intention_id: str, *, published: bool, source: str, norm_hash: Optional[str] = None) -> None:
     """Best effort: a map that cannot be written costs a later Index mirror, not the capture."""
     try:
         with _Locked():
@@ -682,8 +741,8 @@ def remember(intention_id: str, *, published: bool, source: str, text_hash: Opti
             entries.pop(intention_id, None)
             entry: dict[str, Any] = {"published": published, "source": source}
             # R9: the hash only for a held ambient entry.
-            if text_hash is not None and source == RESTRICTIVE_SOURCE and not published:
-                entry["text_hash"] = text_hash
+            if norm_hash is not None and source == RESTRICTIVE_SOURCE and not published:
+                entry[HELD_HASH_KEY] = norm_hash
             entries[intention_id] = entry
             while len(entries) > MAX_MAP_ENTRIES:
                 entries.pop(next(iter(entries)))
@@ -701,23 +760,47 @@ def rate_cap() -> int:
     return value if value >= 0 else DEFAULT_RATE_CAP
 
 
+_RATE_WARNED = False
+
+
+def _warn_rate_once(exc: BaseException) -> None:
+    global _RATE_WARNED
+    if not _RATE_WARNED:
+        _RATE_WARNED = True
+        logger.warning("av-events: record_intention rate_count_failed=%s", type(exc).__name__)
+
+
 def reserve_publish() -> Optional[str]:
     """Count one `create_intent` attempt in the rolling hour. None when counted,
     `rate_capped` when the hour is full, `rate_unavailable` when the count
-    cannot be read or written (fails closed, visibly)."""
+    cannot be read (fails closed, visibly).
+
+    M1: the clock is read inside the lock, and a stamp is dropped only when it
+    is older than the window; a stamp in the future (another writer's clock
+    ahead of ours) is kept, so no writer ever deletes another's attempts.
+    L2: when the count was read but cannot be saved, the attempt proceeds on
+    the in-memory count, and the failure is logged once per process.
+    """
     cap = rate_cap()
-    now = float(_clock())
     try:
         with _Locked():
-            entries, publishes = _load_locked()
-            recent = [t for t in publishes if now - RATE_WINDOW_S < t <= now]
+            try:
+                entries, publishes = _load_locked()
+            except Exception as exc:  # noqa: BLE001
+                _warn_rate_once(exc)
+                return "rate_unavailable"
+            now = float(_clock())
+            recent = [t for t in publishes if t > now - RATE_WINDOW_S]
             if len(recent) >= cap:
                 return "rate_capped"
             recent.append(now)
-            _save_locked(entries, recent)
+            try:
+                _save_locked(entries, recent)
+            except Exception as exc:  # noqa: BLE001
+                _warn_rate_once(exc)
             return None
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("av-events: record_intention rate_count_failed=%s", type(exc).__name__)
+    except Exception as exc:  # noqa: BLE001 - the lock itself could not be taken
+        _warn_rate_once(exc)
         return "rate_unavailable"
 
 
@@ -744,23 +827,28 @@ def _capture(args: dict, held: Optional[str]) -> dict:
     source = str(args.get("source")).strip().lower()
     if source not in SOURCES:
         return _refuse("source_invalid")
+    held_code: Optional[str] = None
     if held is not None:
-        source = RESTRICTIVE_SOURCE  # no participant is known to be speaking
+        # No participant is known to be speaking. M3: an explicit source the
+        # lineage overrode leaves a trace on the event.
+        if source in EXPLICIT_SOURCES:
+            held_code = f"held_{held}"
+        source = RESTRICTIVE_SOURCE
     publish = True
     if args.get("publish") is not None:
         parsed = _bool(args.get("publish"))
         if parsed is None:
             return _refuse("publish_invalid")
         publish = parsed
-    digest = hash_text(text)
-    if source in EXPLICIT_SOURCES and digest is not None and held_hash_exists(digest):
-        return _refuse("held_ambient_exists")
+    norm = held_norm_hash(text)
 
     # `action` tells the observer what was done when the call left it to the default.
     result: dict[str, Any] = {"success": True, "action": "capture", "source": source}
     if source == RESTRICTIVE_SOURCE:
         intention_id = uuid7()
         result.update(intention_id=intention_id, index_intent_id=None, published=False, held=True)
+        if held_code is not None:
+            result["publish_refused"] = held_code
         result["message"] = (
             f"Held as an ambient intention (intention_id {intention_id}). It stays off Index until the "
             "resident confirms it, and confirmation is not available yet: do not publish it another way."
@@ -774,6 +862,18 @@ def _capture(args: dict, held: Optional[str]) -> dict:
         intention_id = uuid7()
         result.update(intention_id=intention_id, index_intent_id=None, published=False, local_reason=reason)
         result["message"] = f"Recorded locally, not published to Index (intention_id {intention_id}, reason {reason})."
+    elif held_hash_exists(norm):
+        # R9 revised: the same intention is held as ambient. Record this
+        # capture locally (the event is emitted) and never publish around the
+        # confirmation.
+        intention_id = uuid7()
+        result.update(intention_id=intention_id, index_intent_id=None, published=False,
+                      publish_refused="held_ambient_exists")
+        result["message"] = (
+            f"Recorded locally (intention_id {intention_id}), not published: the same intention is already "
+            "held as ambient, and a held intention is published only through the resident's confirmation. "
+            "Do not publish it another way."
+        )
     else:
         code = _publish_precheck()
         index_id: Optional[str] = None
@@ -803,7 +903,7 @@ def _capture(args: dict, held: Optional[str]) -> dict:
         result["intention_id"],
         published=bool(result["published"]),
         source=source,
-        text_hash=digest if source == RESTRICTIVE_SOURCE else None,
+        norm_hash=norm if source == RESTRICTIVE_SOURCE else None,
     )
     return result
 
@@ -850,10 +950,13 @@ def _update_or_withdraw(action: str, args: dict, held: Optional[str]) -> dict:
         "published": published,
         "source": source,
     }
+    if not published and entry.get("source") == RESTRICTIVE_SOURCE:
+        # R9 revised: a held entry's hash follows its text, and goes with it.
+        set_held_hash(intention_id, held_norm_hash(text) if action == "update" and text is not None else None)
     code: Optional[str] = None
     if published:
         if action == "update" and held is not None:
-            code = "cron_held"  # F4: inferred text never overwrites a live intent
+            code = f"held_{held}"  # F4/M3: a held session never overwrites a live intent
         elif action == "update":
             code = mirror_update(intention_id, description=text)
         else:
@@ -864,8 +967,8 @@ def _update_or_withdraw(action: str, args: dict, held: Optional[str]) -> dict:
         result["message"] = f"{verb} intention {intention_id} (kept locally; it is not on Index)."
     elif code is None:
         result["message"] = f"{verb} intention {intention_id} here and on Index."
-    elif code == "cron_held":
-        result["message"] = f"{verb} intention {intention_id} locally; a background run does not change it on Index."
+    elif code.startswith("held_"):
+        result["message"] = f"{verb} intention {intention_id} locally; this session cannot change it on Index."
     else:
         result["message"] = f"{verb} intention {intention_id} here; Index was not updated (code {code})."
     return result

@@ -404,31 +404,39 @@ Search, which such a gate would not see); its text, the `workspace/AGENTS.md` ro
 | `capture`, source `message`/`onboarding`/`note`, in a session that may publish | `create_intent(description=text)` | `intention_id` = `index_intent_id` = Index's id |
 | same, Index refused, unreachable, or the hourly cap reached | tried, or not when capped | local uuid v7, `publish_refused` = code |
 | `capture`, `publish=false`, `reason` | none | local uuid v7, `local_reason` = reason |
-| `capture`, source `ambient`, or any capture in a held session | none | local uuid v7, `source=ambient`, held |
-| `capture` of text already held as ambient, as `message`/`onboarding`/`note` | none | refused `held_ambient_exists` |
+| `capture`, source `ambient` | none | local uuid v7, `source=ambient`, held |
+| `capture`, explicit source, in a held session | none | local uuid v7, `source=ambient`, `publish_refused` `held_cron` or `held_unknown` |
+| `capture` that would publish, of text already held as ambient (case and whitespace ignored) | none | local uuid v7, `publish_refused="held_ambient_exists"` |
 | `update` / `withdraw` of an id it published | `update_intent(id, description)` / `update_intent(id, status="archived")` | `index_intent_id` set; a failed mirror adds `publish_refused` |
-| `update` of a published id in a held session | none | `publish_refused="cron_held"`, `source=ambient` (a withdrawal still mirrors) |
+| `update` of a published id in a held session | none | `publish_refused` `held_cron` or `held_unknown`, `source=ambient` (a withdrawal still mirrors) |
 | `update` / `withdraw` of an id it recorded locally | none | local only |
 | `update` / `withdraw` of an id it has no record of | none | `publish_refused="unknown_id"`, `source=ambient` |
 | `confirm` | none | refused: `no_confirmation_channel` (`confirmation_not_wired` when `AV_APPROVAL_URL` is set, until DATA-213) |
 
 **Held sessions.** The tool keeps its own session lineage from its own `on_session_start`,
 `pre_api_request` and `subagent_start` listeners, outside the collector's guard (so
-`AV_EVENTS_ENABLED=0`, `AV_HOOKS_DISABLED`, a degraded session or an unload never loosen it). A
-session may publish only when it, or the root of its delegation chain, was seen with a platform
-other than `cron`/`subagent`; a `cron_` id, `platform=cron`, an unseen session or a subagent of
-unknown or cron ancestry is held as ambient.
+`AV_EVENTS_ENABLED=0`, `AV_HOOKS_DISABLED`, a degraded session or an unload never loosen it). It
+is an allowlist: a session may publish only when it, or the root of its delegation chain, was seen
+on a human-facing platform (Hermes's gateway chat platforms: telegram, discord, whatsapp,
+whatsapp_cloud, slack, signal, mattermost, matrix, email, sms, dingtalk, feishu, wecom, weixin,
+bluebubbles, qqbot, yuanbao; and `cli`, `tui`, `desktop`). A `cron_` id or `platform=cron` in the
+chain is `held_cron`; anything else (`api_server`, `webhook`, `batch`, `acp`, `curator`, `local`,
+an empty platform, a plugin platform, an unseen session, a subagent of unknown ancestry) is
+`held_unknown`.
 
 **Rate cap.** `AV_RECORD_INTENTION_MAX_PUBLISH_PER_HOUR` (default 20) `create_intent` attempts per
-rolling hour per tenant, counted across processes in the map. Over it: `rate_capped`.
+rolling hour per tenant, counted across processes in the map under its lock, with the clock read
+inside the lock and no writer dropping another's live stamps. Over it: `rate_capped`. A count that
+cannot be read: `rate_unavailable`; one that was read but cannot be saved proceeds, and
+`rate_count_failed` is logged once per process.
 
 `publish_refused` codes: `no_key`, `url_refused`, `rate_capped`, `rate_unavailable`, `redirect`,
 `http_<status>`, `rpc_error`, `rejected` (Index's "too vague": `isError`, or `success` not true),
-`malformed`, `too_large`, `timeout`, `transport`, `cron_held`, `unknown_id`. Refusals
-(`success: false`, no event): `disabled`, `action_invalid`, `text_required`, `source_required`,
-`source_invalid`, `publish_invalid`, `reason_required`, `reason_invalid`,
-`intention_id_unexpected`, `intention_id_required`, `intention_id_invalid`, `held_ambient_exists`,
-`no_confirmation_channel`, `confirmation_not_wired`, `internal`.
+`malformed`, `too_large`, `timeout`, `transport`, `held_cron`, `held_unknown`,
+`held_ambient_exists`, `unknown_id`. Refusals (`success: false`, no event): `disabled`,
+`action_invalid`, `text_required`, `source_required`, `source_invalid`, `publish_invalid`,
+`reason_required`, `reason_invalid`, `intention_id_unexpected`, `intention_id_required`,
+`intention_id_invalid`, `no_confirmation_channel`, `confirmation_not_wired`, `internal`.
 
 **For the data side.** A `publish_refused='rejected'` capture followed by the clarified capture the
 agent is told to make is two rows for one intention: the refused local one and the published one.
@@ -440,8 +448,9 @@ The Index call is the data repo poller's MCP sequence over urllib (`initialize`,
 never a Hermes MCP tool call, so the `index_tool` observer never sees it and each call is one
 event. `INDEX_API_KEY` and `INDEX_MCP_URL` (default prod) are read at call time. The whole sequence
 has a 30 s deadline. `$HERMES_HOME/av-events/intentions.json` (0600, under `flock` on
-`intentions.json.lock`) records each id's `{published, source}`, a `text_hash` for held ambient
-entries only, and the cap's attempt timestamps; a corrupt file is renamed to
+`intentions.json.lock`) records each id's `{published, source}`, a `held_norm_hash` (sha256 of the
+case-folded, whitespace-collapsed text, never emitted) for held ambient entries only, replaced on
+update and dropped on withdrawal, and the cap's attempt timestamps; a corrupt file is renamed to
 `intentions.json.corrupt-<n>` and the map starts empty. Logs carry codes only. The observer reads
 the result's `action`, `source`, `index_intent_id` and codes only for the unprefixed overlay tool;
 a result that names `index_intent_id` decides it, null included.

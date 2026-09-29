@@ -405,8 +405,8 @@ def test_success_result_does_not_look_like_a_failure_to_hermes(tctx, index):
     handler = tctx.tools["record_intention"]["handler"]
     for args in (
         {"text": TEXT, "source": "message"},
-        {"text": TEXT + " (inferred)", "source": "ambient"},
-        {"text": TEXT + " (private)", "source": "message", "publish": False, "reason": "personal"},
+        {"text": TEXT, "source": "ambient"},
+        {"text": TEXT, "source": "message", "publish": False, "reason": "personal"},
     ):
         result = handler(args, session_id=SESSION)
         assert '"error"' not in result.lower() and '"failed"' not in result.lower()
@@ -763,9 +763,10 @@ def test_map_is_ids_only_and_private(tctx, index, ri, home):
     data = json.loads(raw)
     entries = data["intentions"]
     assert entries[INDEX_ID] == {"published": True, "source": "message"}
-    # R9: the text's hash, and only for the held ambient entry.
+    # R9 revised: the normalised text's hash, and only for the held ambient entry.
+    norm = hashlib.sha256(" ".join(TEXT.split()).casefold().encode()).hexdigest()
     held = [v for v in entries.values() if v["source"] == "ambient"]
-    assert held == [{"published": False, "source": "ambient", "text_hash": hashlib.sha256(TEXT.encode()).hexdigest()}]
+    assert held == [{"published": False, "source": "ambient", "held_norm_hash": norm}]
     assert len(data["publishes"]) == 1  # one create_intent attempt, a timestamp only
     assert stat.S_IMODE(os.stat(str(path) + ".lock").st_mode) == 0o600
 
@@ -777,17 +778,27 @@ def test_map_is_bounded(ri, index, on, monkeypatch):
     assert list(ri._load_map()) == ["id-2", "id-3", "id-4"]
 
 
-def test_an_unwritable_map_costs_nothing_but_a_log_line(tctx, index, ri, monkeypatch, caplog):
+def test_an_unsavable_map_still_publishes_and_logs_the_count_failure_once(tctx, index, ri, monkeypatch, caplog):
+    """L2: the count was read, only the save failed, so the attempt proceeds."""
     def fail(*_args):  # noqa: ANN002
         raise PermissionError("ro")
 
     monkeypatch.setattr(ri, "_save_locked", fail)
     out = call(tctx, {"text": TEXT, "source": "message"})
-    assert out["success"] is True
-    # The rate count cannot be kept either: publishing fails closed, visibly.
-    assert out["publish_refused"] == "rate_unavailable" and index.requests == []
+    index.tool = created("int-2")
+    out2 = call(tctx, {"text": TEXT + " 2", "source": "message"}, tool_call_id="c2")
+    assert out["published"] is True and out2["published"] is True
     assert "map_write_failed=PermissionError" in caplog.text
-    assert "rate_count_failed=PermissionError" in caplog.text
+    assert caplog.text.count("rate_count_failed=PermissionError") == 1
+
+
+def test_an_unreadable_count_fails_closed(tctx, index, ri, monkeypatch):
+    def unreadable():
+        raise ri.MapUnreadable()
+
+    monkeypatch.setattr(ri, "_load_locked", unreadable)
+    out = call(tctx, {"text": TEXT, "source": "message"})
+    assert out["publish_refused"] == "rate_unavailable" and index.requests == []
 
 
 def test_logs_carry_codes_never_text_or_key(tctx, index, caplog):
@@ -934,10 +945,10 @@ def test_f4_cron_update_is_held_and_withdraw_mirrors(tctx, index, av, plugin):
         tool_call_id="c2",
     )
     assert [c["name"] for c in index.tool_calls()] == ["create_intent"]
-    assert out["publish_refused"] == "cron_held" and out["source"] == "ambient"
+    assert out["publish_refused"] == "held_cron" and out["source"] == "ambient"
     event = intention_events(av, plugin)[-1]
     assert event["event_type"] == "intention.updated"
-    assert event["payload"]["publish_refused"] == "cron_held"
+    assert event["payload"]["publish_refused"] == "held_cron"
     assert event["payload"]["source"] == out["source"]
     call(tctx, {"action": "withdraw", "intention_id": pub["intention_id"]},
          session="cron_memsync_20260929_030000", tool_call_id="c3")
@@ -1034,22 +1045,137 @@ def test_f7_unknown_id_update_with_source_message_is_ambient(tctx, index, av, pl
     assert intention_events(av, plugin)[0]["payload"]["source"] == "ambient"
 
 
-# F9 (R9): held ambient text is not published around the confirmation.
+# M2 (R9 revised): held ambient text is not published around the confirmation.
 
 
-@pytest.mark.parametrize("source", ["message", "onboarding", "note"])
-def test_f9_recapturing_held_text_is_refused(tctx, index, av, plugin, source):
+def test_m2_verbatim_explicit_capture_is_recorded_locally_with_the_code(tctx, index, av, plugin):
     call(tctx, {"text": TEXT, "source": "ambient"})
-    again = call(tctx, {"text": TEXT, "source": source}, tool_call_id="c2")
-    assert again["success"] is False and again["error"] == "held_ambient_exists"
-    assert "only through the resident's confirmation" in again["message"]
+    out = call(tctx, {"text": TEXT, "source": "message"}, tool_call_id="c2")
+    assert out["success"] is True and out["published"] is False
+    assert out["publish_refused"] == "held_ambient_exists"
+    assert "published only through the resident's confirmation" in out["message"]
     assert index.tool_calls() == []
-    assert [e["event_type"] for e in intention_events(av, plugin)] == ["intention.captured"]
+    events = intention_events(av, plugin)
+    assert [e["event_type"] for e in events] == ["intention.captured", "intention.captured"]
+    assert events[1]["payload"]["publish_refused"] == "held_ambient_exists"
+    assert events[1]["payload"]["source"] == "message"
+    assert "held_norm_hash" not in json.dumps(events)
 
 
-def test_f9_other_text_still_publishes(tctx, index):
+@pytest.mark.parametrize("source", ["onboarding", "note"])
+def test_m2_every_explicit_source_is_checked(tctx, index, source):
+    call(tctx, {"text": TEXT, "source": "ambient"})
+    out = call(tctx, {"text": TEXT, "source": source}, tool_call_id="c2")
+    assert out["publish_refused"] == "held_ambient_exists" and index.tool_calls() == []
+
+
+def test_m2_a_personal_capture_of_the_same_text_is_unaffected(tctx, index):
+    call(tctx, {"text": TEXT, "source": "ambient"})
+    out = call(tctx, {"text": TEXT, "source": "message", "publish": False, "reason": "personal"}, tool_call_id="c2")
+    assert out["success"] is True and out["local_reason"] == "personal"
+    assert "publish_refused" not in out
+
+
+def test_m2_after_a_withdrawal_the_text_publishes(tctx, index):
+    held = call(tctx, {"text": TEXT, "source": "ambient"})
+    call(tctx, {"action": "withdraw", "intention_id": held["intention_id"]}, tool_call_id="c2")
+    out = call(tctx, {"text": TEXT, "source": "message"}, tool_call_id="c3")
+    assert out["published"] is True
+
+
+def test_m2_an_update_refreshes_the_hash(tctx, index):
+    held = call(tctx, {"text": "wants a cofounder", "source": "ambient"})
+    call(tctx, {"action": "update", "intention_id": held["intention_id"], "text": TEXT}, tool_call_id="c2")
+    blocked = call(tctx, {"text": TEXT, "source": "message"}, tool_call_id="c3")
+    assert blocked["publish_refused"] == "held_ambient_exists" and index.tool_calls() == []
+    freed = call(tctx, {"text": "wants a cofounder", "source": "message"}, tool_call_id="c4")
+    assert freed["published"] is True
+
+
+@pytest.mark.parametrize("variant", [TEXT + " ", TEXT.lower(), TEXT.replace(" ", "  ", 1), TEXT.upper(), "\t" + TEXT])
+def test_m2_whitespace_and_case_variants_are_caught(tctx, index, variant):
+    call(tctx, {"text": TEXT, "source": "ambient"})
+    out = call(tctx, {"text": variant, "source": "message"}, tool_call_id="c2")
+    assert out["publish_refused"] == "held_ambient_exists" and index.tool_calls() == []
+
+
+def test_m2_other_text_still_publishes(tctx, index):
     call(tctx, {"text": TEXT, "source": "ambient"})
     assert call(tctx, {"text": TEXT + " indoors", "source": "message"}, tool_call_id="c2")["published"] is True
+
+
+# M3: a held explicit capture leaves a trace.
+
+
+def test_m3_explicit_capture_in_a_cron_session_is_held_cron(tctx, index, av, plugin):
+    out = call(tctx, {"text": TEXT, "source": "message"}, session="cron_job_20261012")
+    assert out["source"] == "ambient" and out["publish_refused"] == "held_cron"
+    payload = intention_events(av, plugin)[0]["payload"]
+    assert payload["publish_refused"] == "held_cron" and payload["source"] == "ambient"
+
+
+def test_m3_explicit_capture_in_an_unknown_session_is_held_unknown(tctx, index, av, plugin):
+    out = call(tctx, {"text": TEXT, "source": "onboarding"}, session="never-seen")
+    assert out["publish_refused"] == "held_unknown"
+    assert intention_events(av, plugin)[0]["payload"]["publish_refused"] == "held_unknown"
+
+
+def test_m3_ambient_in_a_held_session_carries_no_code(tctx, index):
+    out = call(tctx, {"text": TEXT, "source": "ambient"}, session="cron_job_20261012")
+    assert "publish_refused" not in out
+
+
+@pytest.mark.parametrize("session,code", [("cron_job_20261012", "held_cron"), ("never-seen", "held_unknown")])
+def test_m3_held_update_of_a_published_id(tctx, index, av, plugin, session, code):
+    pub = call(tctx, {"text": TEXT, "source": "message"})
+    out = call(tctx, {"action": "update", "intention_id": pub["intention_id"], "text": TEXT + "!"},
+               session=session, tool_call_id="c2")
+    assert out["publish_refused"] == code
+    assert [c["name"] for c in index.tool_calls()] == ["create_intent"]
+    assert intention_events(av, plugin)[-1]["payload"]["publish_refused"] == code
+
+
+# R10: the gate is an allowlist of human-facing platforms.
+
+
+@pytest.mark.parametrize("platform", ["telegram", "discord", "slack", "whatsapp", "signal", "matrix", "cli", "tui", "desktop", "Telegram"])
+def test_r10_human_platforms_publish(plugin, index, on, platform):
+    ctx = ToolFireCtx()
+    plugin.register(ctx)
+    ctx.fire("on_session_start", session_id="s-h", model="m", platform=platform)
+    assert _run(ctx, {"text": TEXT, "source": "message"}, "s-h")["published"] is True
+
+
+@pytest.mark.parametrize("platform", ["api_server", "webhook", "msgraph_webhook", "batch", "acp", "curator", "local",
+                                      "homeassistant", "relay", "some_plugin_platform", ""])
+def test_r10_other_platforms_are_held_unknown(plugin, index, on, platform):
+    ctx = ToolFireCtx()
+    plugin.register(ctx)
+    ctx.fire("on_session_start", session_id="s-m", model="m", platform=platform)
+    out = _run(ctx, {"text": TEXT, "source": "message"}, "s-m")
+    assert index.tool_calls() == []
+    assert out["source"] == "ambient" and out["publish_refused"] == "held_unknown"
+
+
+def test_r10_cron_is_held_cron(plugin, index, on):
+    ctx = ToolFireCtx()
+    plugin.register(ctx)
+    ctx.fire("on_session_start", session_id="s-c", model="m", platform="cron")
+    assert _run(ctx, {"text": TEXT, "source": "message"}, "s-c")["publish_refused"] == "held_cron"
+
+
+@pytest.mark.parametrize("root,expected", [("telegram", None), ("cli", None), ("api_server", "held_unknown"), ("cron", "held_cron")])
+def test_r10_a_subagent_inherits_its_roots_allowance(plugin, index, on, root, expected):
+    ctx = ToolFireCtx()
+    plugin.register(ctx)
+    ctx.fire("on_session_start", session_id="root", model="m", platform=root)
+    ctx.fire("on_session_start", session_id="kid", model="m", platform="subagent")
+    _delegate(ctx, "root", "kid")
+    ctx.fire("on_session_start", session_id="grandkid", model="m", platform="subagent")
+    _delegate(ctx, "kid", "grandkid")
+    out = _run(ctx, {"text": TEXT, "source": "message"}, "grandkid")
+    assert out.get("publish_refused") == expected
+    assert out["published"] is (expected is None)
 
 
 # F13: only the overlay's own result is read for action, source, ids and codes.
@@ -1165,3 +1291,84 @@ def test_f2_agents_md_routes_intentions_through_the_tool():
     line = next(l for l in agents.splitlines() if "record_intention" in l)
     assert "tool_search" in line and "tool_call" in line
     assert "if" in line.lower()
+
+
+# M1: the cap holds under concurrency.
+
+
+class StepClock:
+    """A fake clock that advances one second on every read, thread-safe."""
+
+    def __init__(self, start: float = 1_000_000.0) -> None:
+        self.now = start
+        self._lock = threading.Lock()
+
+    def __call__(self) -> float:
+        with self._lock:
+            self.now += 1.0
+            return self.now
+
+
+def test_m1_threads_never_exceed_the_cap(tctx, index, ri, monkeypatch):
+    monkeypatch.setattr(ri, "_clock", StepClock())
+    monkeypatch.setenv("AV_RECORD_INTENTION_MAX_PUBLISH_PER_HOUR", "5")
+    handler = tctx.tools["record_intention"]["handler"]
+    outs: list[dict] = []
+    lock = threading.Lock()
+
+    def go(i: int) -> None:
+        out = json.loads(handler({"text": f"{TEXT} {i}", "source": "message"}, session_id=SESSION))
+        with lock:
+            outs.append(out)
+
+    threads = [threading.Thread(target=go, args=(i,)) for i in range(30)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    published = sum(1 for o in outs if o.get("published"))
+    capped = sum(1 for o in outs if o.get("publish_refused") == "rate_capped")
+    assert (published, capped) == (5, 25)
+    assert len(index.tool_calls()) == 5
+
+
+def test_m1_a_future_stamp_from_another_writer_is_kept(ri, index, on, monkeypatch):
+    monkeypatch.setattr(ri, "_clock", lambda: 10_000.0)
+    monkeypatch.setenv("AV_RECORD_INTENTION_MAX_PUBLISH_PER_HOUR", "2")
+    path = Path(ri.map_path())
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # One stale stamp (dropped), one ahead of this writer's clock (kept).
+    path.write_text(json.dumps({"v": 1, "intentions": {}, "publishes": [5_000.0, 10_050.0]}), encoding="utf-8")
+    assert ri.reserve_publish() is None
+    assert sorted(json.loads(path.read_text())["publishes"]) == [10_000.0, 10_050.0]
+    assert ri.reserve_publish() == "rate_capped"
+
+
+RATE_RACE = """
+import importlib.util, itertools, os, sys, types
+P = sys.argv[1]
+ns = types.ModuleType("hermes_plugins"); ns.__path__ = []; sys.modules["hermes_plugins"] = ns
+spec = importlib.util.spec_from_file_location("hermes_plugins.av_events", P + "/__init__.py", submodule_search_locations=[P])
+m = importlib.util.module_from_spec(spec); sys.modules["hermes_plugins.av_events"] = m; spec.loader.exec_module(m)
+ri = sys.modules["hermes_plugins.av_events._record_intention"]
+# A fake clock per process, the two slightly apart: no wall clock.
+tick = itertools.count()
+ri._clock = lambda: 1_000_000.0 + float(sys.argv[2]) + next(tick) * 0.001
+os.environ["AV_RECORD_INTENTION_MAX_PUBLISH_PER_HOUR"] = "50"
+print(sum(1 for _ in range(100) if ri.reserve_publish() is None))
+"""
+
+
+def test_m1_two_processes_never_exceed_the_cap(ri, home, av):
+    import subprocess
+
+    env_vars = {**os.environ, "HERMES_HOME": str(home)}
+    procs = [
+        subprocess.Popen([sys.executable, "-c", RATE_RACE, str(av.PLUGIN_DIR), offset],
+                         env=env_vars, stdout=subprocess.PIPE, text=True)
+        for offset in ("0", "0.5")
+    ]
+    counts = [int(p.communicate(timeout=120)[0].strip()) for p in procs]
+    assert [p.returncode for p in procs] == [0, 0]
+    assert sum(counts) == 50
+    assert len(json.loads(Path(ri.map_path()).read_text())["publishes"]) == 50

@@ -39,7 +39,7 @@ and stays off Index until the resident confirms it through their approval
 channel. A yes you read in chat is not a confirmation. `action=confirm` is not
 available yet and is refused; do not publish a held intention any other way,
 and do not call `create_intent` for it. Capturing the same text again as `message`, `onboarding` or
-`note` is refused too.
+`note` records it locally but does not publish it.
 
 ## When Index says no
 
