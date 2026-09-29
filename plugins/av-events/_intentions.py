@@ -13,9 +13,12 @@ capture"). Two producers inside the sandbox:
   `delete_intent` → `intention.withdrawn`. The intention id is Index's intent id:
   from the result for a create, from the arguments for an update or delete. A
   create whose result does not name the intent records nothing.
-* **`record_intention`**, for intentions the agent keeps locally. Its id comes
-  from the call, else from the tool's result, else it is a uuid v7 minted by
-  the plugin at capture.
+* **`record_intention`**, the overlay's front door (DATA-212, `_record_intention.py`).
+  Its id comes from the call, else from the tool's result, else it is a uuid v7
+  minted by the plugin at capture. The tool publishes to Index itself, over its
+  own HTTP client and not through a Hermes MCP tool call, so a published
+  capture is observed here once, as `record_intention`, with the Index id the
+  tool's result names.
 
 No natural-language detection anywhere: an intention exists only when one of
 these tools records it, and only when the tool says it succeeded.
@@ -55,7 +58,9 @@ OTHER_STATUS = "other"
 WITHDRAWN_STATUSES = frozenset({"archived", "deleted", "withdrawn"})
 
 #: §4.1 `source`. `index` belongs to the poller; the plugin writes the rest.
-RECORD_SOURCES = ("message", "onboarding", "ambient")
+#: `note` (DATA-212, ambient-intents spec §4): the resident's own words captured
+#: from their notes tool; it publishes by default like `message`.
+RECORD_SOURCES = ("message", "onboarding", "note", "ambient")
 #: Index calls outside a cron run.
 DEFAULT_SOURCE = "message"
 #: Cron runs, and any `record_intention` source that is missing or unknown:
@@ -87,6 +92,13 @@ _OK_STATUSES = frozenset({"ok", ""})
 
 _ID_KEYS = ("id", "intentId", "intent_id")
 
+#: `local_reason` on a `record_intention` capture kept off Index on purpose
+#: (ambient-intents spec §4: "the resident asked, or the content is personal").
+LOCAL_REASONS = frozenset({"participant_asked", "personal"})
+
+#: `publish_refused`: a code, never text. Anything else is dropped to null.
+_CODE_PATTERN = re.compile(r"^[a-z0-9_]{1,64}$")
+
 #: Every id that goes into an envelope or a payload must look like an id.
 ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
@@ -110,6 +122,8 @@ class IntentionCall:
         "conditional",
         "capture_path",
         "index_status",
+        "publish_refused",
+        "local_reason",
     )
 
     def __init__(
@@ -124,6 +138,8 @@ class IntentionCall:
         conditional: Optional[bool] = None,
         capture_path: str,
         index_status: Optional[str] = None,
+        publish_refused: Optional[str] = None,
+        local_reason: Optional[str] = None,
     ) -> None:
         self.event_type = event_type
         self.intention_id = intention_id
@@ -134,6 +150,8 @@ class IntentionCall:
         self.conditional = conditional
         self.capture_path = capture_path
         self.index_status = index_status
+        self.publish_refused = publish_refused
+        self.local_reason = local_reason
 
 
 # --------------------------------------------------------------------------
@@ -384,11 +402,25 @@ def plan_index(tool: str, args: dict, payload: Any, *, cron: bool = False) -> li
     ]
 
 
-def _result_intention_id(obj: Any) -> Optional[str]:
+def _result_field_id(obj: Any, key: str) -> Optional[str]:
+    """`key` as an id, at the top of a tool result or under its `data`."""
     if not isinstance(obj, dict):
         return None
     data = obj.get("data")
-    return _args_id(obj, "intention_id") or (_args_id(data, "intention_id") if isinstance(data, dict) else None)
+    return _args_id(obj, key) or (_args_id(data, key) if isinstance(data, dict) else None)
+
+
+def _result_intention_id(obj: Any) -> Optional[str]:
+    return _result_field_id(obj, "intention_id")
+
+
+def _result_code(payload: Any, outer: Any, key: str) -> Optional[str]:
+    """A short lowercase code the tool's result names under `key`, else None."""
+    for obj in (payload, outer):
+        value = _result_field_id(obj, key)
+        if value is not None:
+            return value if _CODE_PATTERN.fullmatch(value) else None
+    return None
 
 
 def plan_record(args: dict, payload: Any, outer: Any = None, *, cron: bool = False) -> list[IntentionCall]:
@@ -424,6 +456,23 @@ def plan_record(args: dict, payload: Any, outer: Any = None, *, cron: bool = Fal
     source = str(args.get("source") or "").strip().lower()
     if cron or source not in RECORD_SOURCES:
         source = RESTRICTIVE_SOURCE
+    # The overlay tool says when it held an intention as ambient (a cron run it
+    # detected itself): the more restrictive of the two wins, never the looser.
+    if _result_code(payload, outer, "source") == RESTRICTIVE_SOURCE:
+        source = RESTRICTIVE_SOURCE
+
+    # DATA-212: the Index id the tool published under, else the argument (a
+    # caller that already knew it). Codes are read only from the result: the
+    # tool decided them, the model did not.
+    index_intent_id = (
+        _result_field_id(payload, "index_intent_id")
+        or _result_field_id(outer, "index_intent_id")
+        or _args_id(args, "index_intent_id")
+    )
+    publish_refused = _result_code(payload, outer, "publish_refused")
+    local_reason = _result_code(payload, outer, "local_reason")
+    if local_reason not in LOCAL_REASONS:
+        local_reason = None
 
     text = _text(args.get("text")) or _text(args.get("description"))
     summary = _text(args.get("summary"))
@@ -435,12 +484,14 @@ def plan_record(args: dict, payload: Any, outer: Any = None, *, cron: bool = Fal
         IntentionCall(
             event_type,
             intention_id=intention_id,
-            index_intent_id=_args_id(args, "index_intent_id"),
+            index_intent_id=index_intent_id,
             text=text,
             summary=summary,
             source=source,
             conditional=_conditional(args.get("conditional")),
             capture_path="record_intention",
+            publish_refused=publish_refused,
+            local_reason=local_reason,
         )
     ]
 
@@ -470,6 +521,7 @@ __all__ = [
     "ID_PATTERN",
     "INDEX_INTENT_TOOLS",
     "INDEX_STATUSES",
+    "LOCAL_REASONS",
     "RECORD_INTENTION_TOOL",
     "RECORD_SOURCES",
     "WITHDRAWN_STATUSES",

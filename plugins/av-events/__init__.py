@@ -575,6 +575,11 @@ def _intention_payload(call: IntentionCall, capture: str, parent_session_id: Opt
         "capture_path": call.capture_path,
         "index_status": call.index_status,
         "parent_session_id": parent_session_id,
+        # DATA-212, `record_intention` only (null on every other path): why a
+        # capture the tool meant to publish stayed local (a code), and why one
+        # was kept local on purpose (`participant_asked` | `personal`).
+        "publish_refused": call.publish_refused,
+        "local_reason": call.local_reason,
     }
     if capture != "metadata":
         payload["text_length"] = len(call.text) if call.text else None
