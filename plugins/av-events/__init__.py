@@ -23,6 +23,7 @@ from . import _edgeos
 from ._collector import Collector, guarded, hermes_version, overlay_ref
 from ._consent import TOOL_NAME as CONSENT_TOOL_NAME
 from ._consent import register_consent_tool
+from ._record_intention import register_record_intention_tool
 from ._core import (
     PLUGIN_VERSION,
     hash_obj,
@@ -575,6 +576,11 @@ def _intention_payload(call: IntentionCall, capture: str, parent_session_id: Opt
         "capture_path": call.capture_path,
         "index_status": call.index_status,
         "parent_session_id": parent_session_id,
+        # DATA-212, `record_intention` only (null on every other path): why a
+        # capture the tool meant to publish stayed local (a code), and why one
+        # was kept local on purpose (`participant_asked` | `personal`).
+        "publish_refused": call.publish_refused,
+        "local_reason": call.local_reason,
     }
     if capture != "metadata":
         payload["text_length"] = len(call.text) if call.text else None
@@ -870,7 +876,8 @@ def register(ctx) -> None:
     of hooks that do nothing.
 
     It also registers one read-only tool, `consent_status` (`_consent.py`),
-    when `ctx.register_tool` exists.
+    when `ctx.register_tool` exists, and — only when `AV_RECORD_INTENTION` is
+    on — `record_intention` (`_record_intention.py`, DATA-212).
 
     Idempotent. Hermes loads a plugin once per process, but a profile switch or
     a `force=True` reload can call `register()` again on a module that is still
@@ -902,6 +909,10 @@ def register(ctx) -> None:
     # the hooks, and guarded inside, so a Hermes without `register_tool` (or
     # one that refuses it) still gets every hook.
     register_consent_tool(ctx)
+    # DATA-212: the intention front door, behind its per-tenant switch. It
+    # registers its own session-lineage listeners, outside the collector's
+    # guard, so the cron gate never depends on telemetry being on.
+    register_record_intention_tool(ctx)
     # DATA-183: hear about the unload that clears the hooks. Optional in the
     # API (probe, fail open): without it register() behaves as before.
     on_unload = getattr(ctx, "on_unload", None)

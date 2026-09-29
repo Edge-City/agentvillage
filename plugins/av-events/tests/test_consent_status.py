@@ -632,7 +632,11 @@ def test_skipped_with_hooks_intact_when_register_tool_is_absent(plugin, ctx, cap
         plugin.register(ctx)
     assert set(ctx.hooks) == set(plugin.HOOK_BODIES)
     lines = [r.getMessage() for r in caplog.records if r.name == "av-events"]
-    assert lines == ["av-events: consent_status skipped=no_register_tool"]
+    # DATA-212: `record_intention` logs its own one line (switch off by default).
+    assert lines == [
+        "av-events: consent_status skipped=no_register_tool",
+        "av-events: record_intention skipped=switch_off",
+    ]
 
 
 def test_a_refused_registration_keeps_the_hooks(plugin, caplog):
