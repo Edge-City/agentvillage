@@ -73,14 +73,6 @@ test("no config.yaml: writes the key", () => {
   expect(read(path)).toEqual({ platforms: { telegram: { extra: { drop_pending_on_cold_boot: false } } } });
 });
 
-test("empty config.yaml: writes the key", () => {
-  const path = withText("");
-
-  keepTelegramBacklogOnColdBoot();
-
-  expect(extraOf(path).drop_pending_on_cold_boot).toBe(false);
-});
-
 test("no platforms section: adds it and changes nothing else", () => {
   const before = [
     "model:",
@@ -189,19 +181,69 @@ for (const [name, doc] of HAND_SET) {
   });
 }
 
-for (const [name, doc] of [
-  ["platforms is a list", { platforms: ["telegram"] }],
-  ["telegram is a string", { platforms: { telegram: "on" } }],
-  ["extra is a list", { platforms: { telegram: { extra: ["x"] } } }],
-] as Array<[string, unknown]>) {
-  test(`non-mapping section (${name}) is left alone with a warning`, () => {
+for (const [name, doc, where] of [
+  ["top level is a list", ["platforms"], "the top level of config.yaml"],
+  ["top level is a scalar", "just a string", "the top level of config.yaml"],
+  ["platforms is a list", { platforms: ["telegram"] }, "platforms"],
+  ["telegram is a string", { platforms: { telegram: "on" } }, "platforms.telegram"],
+  ["extra is a list", { platforms: { telegram: { extra: ["x"] } } }, "platforms.telegram.extra"],
+] as Array<[string, unknown, string]>) {
+  test(`non-mapping section (${name}) is left alone with a warning naming ${where}`, () => {
     const before = YAML.stringify(doc);
     const path = withText(before);
 
     keepTelegramBacklogOnColdBoot();
 
     expect(readFileSync(path, "utf8")).toBe(before);
-    expect(logged()).toContain("warning: platforms.telegram.extra is not a mapping");
+    expect(logged()).toContain(`warning: ${where} is not a mapping`);
+    expect(logged()).not.toContain("already set");
+    expect(logged()).not.toContain("→ set platforms");
+  });
+}
+
+// The `yaml` package (YAML 1.2) reads `<<` as a literal key, but Hermes (PyYAML) applies it as a
+// shallow merge. Writing an explicit `extra` beside a merge would replace the merged-in `extra`
+// wholesale in Hermes: the operator's value flips and sibling keys vanish. So a merge key on the
+// path means hands off.
+const MERGE_CASES: Array<[string, string]> = [
+  [
+    "platforms.telegram",
+    [
+      "defaults: &tg",
+      "  extra:",
+      "    drop_pending_on_cold_boot: true",
+      "    disable_link_previews: true",
+      "platforms:",
+      "  telegram:",
+      "    <<: *tg",
+      "    enabled: true",
+      "",
+    ].join("\n"),
+  ],
+  ["platforms", ["base: &p", "  telegram:", "    enabled: true", "platforms:", "  <<: *p", ""].join("\n")],
+  [
+    "platforms.telegram.extra",
+    [
+      "tgextra: &e",
+      "  drop_pending_on_cold_boot: true",
+      "platforms:",
+      "  telegram:",
+      "    extra:",
+      "      <<: *e",
+      "      disable_link_previews: true",
+      "",
+    ].join("\n"),
+  ],
+];
+
+for (const [where, before] of MERGE_CASES) {
+  test(`YAML merge key under ${where}: file left byte-identical with a warning`, () => {
+    const path = withText(before);
+
+    keepTelegramBacklogOnColdBoot();
+
+    expect(readFileSync(path, "utf8")).toBe(before);
+    expect(logged()).toContain(`warning: YAML merge key "<<" under ${where}`);
   });
 }
 
@@ -265,3 +307,17 @@ test("full installer config pass keeps an operator's true", () => {
 
   expect(extraOf(path).drop_pending_on_cold_boot).toBe(true);
 });
+
+for (const [name, text] of [
+  ["empty", ""],
+  ["comment-only", "# nothing configured yet\n"],
+] as Array<[string, string]>) {
+  test(`full installer config pass succeeds on a config.yaml that is ${name}`, () => {
+    const path = withText(text);
+
+    installerConfigPass();
+
+    expect((read(path).terminal as Record<string, unknown>).cwd).toBe(process.env.HERMES_HOME);
+    expect(extraOf(path).drop_pending_on_cold_boot).toBe(false);
+  });
+}

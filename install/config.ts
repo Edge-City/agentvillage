@@ -9,7 +9,8 @@ const DEFAULT_MODEL_MAX_TOKENS = 4096;
 function readConfig(): Record<string, unknown> {
   const configPath = join(hermesHome(), "config.yaml");
   if (!existsSync(configPath)) return {};
-  return YAML.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+  // An empty or comment-only file parses to null; every helper expects a mapping.
+  return (YAML.parse(readFileSync(configPath, "utf8")) ?? {}) as Record<string, unknown>;
 }
 
 function writeConfig(doc: Record<string, unknown>): void {
@@ -126,21 +127,34 @@ function isMapping(value: unknown): value is Record<string, unknown> {
  *
  * Written only when the key is absent. A value an operator set by hand, under
  * `extra` or at the top of the `telegram` block (Hermes promotes top-level
- * platform keys into `extra`), is left as it is, whatever it is. A `platforms`,
- * `telegram` or `extra` that exists but is not a mapping is left alone with a
- * warning. Idempotent: when nothing changes the file is not rewritten.
+ * platform keys into `extra`), is left as it is, whatever it is. The file is
+ * also left alone, with a warning naming the path, when the top level,
+ * `platforms`, `telegram` or `extra` exists but is not a mapping, or holds a
+ * YAML merge key (`<<`): the `yaml` package reads `<<` as a literal key while
+ * Hermes (PyYAML) merges it, so the presence check cannot see a merged-in value
+ * and an explicit `extra` written beside a merge would replace the merged one in
+ * Hermes. Idempotent: when nothing changes the file is not rewritten.
  */
 export function keepTelegramBacklogOnColdBoot(): void {
-  const doc = readConfig() ?? {};
-  const rawPlatforms = doc.platforms ?? {};
-  const rawTelegram = isMapping(rawPlatforms) ? (rawPlatforms.telegram ?? {}) : undefined;
-  const rawExtra = isMapping(rawTelegram) ? (rawTelegram.extra ?? {}) : undefined;
-  if (!isMapping(rawPlatforms) || !isMapping(rawTelegram) || !isMapping(rawExtra)) {
-    console.log(
-      `→ warning: platforms.telegram.extra is not a mapping in config.yaml; left ${TELEGRAM_COLD_BOOT_KEY} unset`,
-    );
-    return;
-  }
+  const doc: unknown = readConfig();
+  const skip = (why: string): void =>
+    console.log(`→ warning: ${why}; left ${TELEGRAM_COLD_BOOT_KEY} unset`);
+  if (!isMapping(doc)) return skip("the top level of config.yaml is not a mapping");
+
+  // Each level may be absent or null (treated as empty); anything else must be a plain mapping.
+  const section = (parent: Record<string, unknown>, key: string, path: string): Record<string, unknown> | string => {
+    const value = parent[key] ?? {};
+    if (!isMapping(value)) return `${path} is not a mapping`;
+    if ("<<" in value) return `YAML merge key "<<" under ${path}; set it by hand if wanted`;
+    return value;
+  };
+  const rawPlatforms = section(doc, "platforms", "platforms");
+  if (typeof rawPlatforms === "string") return skip(rawPlatforms);
+  const rawTelegram = section(rawPlatforms, "telegram", "platforms.telegram");
+  if (typeof rawTelegram === "string") return skip(rawTelegram);
+  const rawExtra = section(rawTelegram, "extra", "platforms.telegram.extra");
+  if (typeof rawExtra === "string") return skip(rawExtra);
+
   if (TELEGRAM_COLD_BOOT_KEY in rawExtra || TELEGRAM_COLD_BOOT_KEY in rawTelegram) {
     console.log(`→ telegram ${TELEGRAM_COLD_BOOT_KEY} already set; left as is`);
     return;
