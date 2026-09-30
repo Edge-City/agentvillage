@@ -9,6 +9,7 @@
  *   - Edge skill bundles → `$HERMES_HOME/skills/{index-network,edgeos,edge-esmeralda,geo-esmeralda}/`
  *   - `terminal.cwd` in config.yaml → `$HERMES_HOME`
  *   - STT enabled with Groq Whisper so voice notes are auto-transcribed
+ *   - Telegram backlog kept across gateway restarts (`platforms.telegram.extra.drop_pending_on_cold_boot: false`, only when unset)
  *   - Index MCP + morning digest cron (`install_index.ts`)
  *   - Geo CLI runtime note (`install_geo.ts`)
  *   - opt-in recall skill + plugin when `AV_RECALL_ENABLED=1` (`install_recall.ts`)
@@ -36,7 +37,15 @@ import { installIndex } from "./install_index";
 import { installEdgeos } from "./install_edgeos";
 import { installGeo } from "./install_geo";
 import { safeInstallRecall, wipeRecallIndex } from "./install_recall";
-import { capModelMaxTokens, configureAvEvents, configureDashboardAuth, configureHostedGateway, configureStt, setTerminalCwd } from "./config";
+import {
+  capModelMaxTokens,
+  configureAvEvents,
+  configureDashboardAuth,
+  configureHostedGateway,
+  configureStt,
+  keepTelegramBacklogOnColdBoot,
+  setTerminalCwd,
+} from "./config";
 import { copyPluginTree } from "./plugin_copy";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
 import {
@@ -221,6 +230,7 @@ function main(): void {
   capModelMaxTokens();
   configureStt();
   configureHostedGateway();
+  keepTelegramBacklogOnColdBoot();
   configureDashboardAuth();
   configureAvEvents();
   // Opt-in and off the core path: a failure here is counted, never fatal.

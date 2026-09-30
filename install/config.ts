@@ -109,6 +109,49 @@ export function configureHostedGateway(): void {
   console.log("→ hosted gateway: pairing mode, approvals off, no telegram restart pings");
 }
 
+/** Hermes `platforms.telegram.extra` key that decides whether a cold start discards the backlog. */
+export const TELEGRAM_COLD_BOOT_KEY = "drop_pending_on_cold_boot";
+
+function isMapping(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Keep residents' Telegram messages across a gateway restart: set
+ * `platforms.telegram.extra.drop_pending_on_cold_boot: false`, so a cold start
+ * reads the messages Telegram queued while the gateway was down (an update, a
+ * roll, a crash restart) in order instead of discarding them. Hermes builds from
+ * 2026-09-20 read the key (default `true`); older builds ignore it, since
+ * `extra` is a free-form mapping the adapter reads with `.get`.
+ *
+ * Written only when the key is absent. A value an operator set by hand, under
+ * `extra` or at the top of the `telegram` block (Hermes promotes top-level
+ * platform keys into `extra`), is left as it is, whatever it is. A `platforms`,
+ * `telegram` or `extra` that exists but is not a mapping is left alone with a
+ * warning. Idempotent: when nothing changes the file is not rewritten.
+ */
+export function keepTelegramBacklogOnColdBoot(): void {
+  const doc = readConfig() ?? {};
+  const rawPlatforms = doc.platforms ?? {};
+  const rawTelegram = isMapping(rawPlatforms) ? (rawPlatforms.telegram ?? {}) : undefined;
+  const rawExtra = isMapping(rawTelegram) ? (rawTelegram.extra ?? {}) : undefined;
+  if (!isMapping(rawPlatforms) || !isMapping(rawTelegram) || !isMapping(rawExtra)) {
+    console.log(
+      `→ warning: platforms.telegram.extra is not a mapping in config.yaml; left ${TELEGRAM_COLD_BOOT_KEY} unset`,
+    );
+    return;
+  }
+  if (TELEGRAM_COLD_BOOT_KEY in rawExtra || TELEGRAM_COLD_BOOT_KEY in rawTelegram) {
+    console.log(`→ telegram ${TELEGRAM_COLD_BOOT_KEY} already set; left as is`);
+    return;
+  }
+
+  const extra = { ...rawExtra, [TELEGRAM_COLD_BOOT_KEY]: false };
+  doc.platforms = { ...rawPlatforms, telegram: { ...rawTelegram, extra } };
+  writeConfig(doc);
+  console.log(`→ set platforms.telegram.extra.${TELEGRAM_COLD_BOOT_KEY}: false (keep Telegram backlog across restarts)`);
+}
+
 const DASHBOARD_PLUGIN = "dashboard-auth-edgecity";
 
 /** Enable the Edge City dashboard-auth plugin and public URL for hosted dashboards. */
