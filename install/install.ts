@@ -86,6 +86,7 @@ function copySoulFile(): void {
   const sourceSoul = join(SOURCE_WORKSPACE, "SOUL.md");
   const targetSoul = join(hermesHome(), "SOUL.md");
   if (!existsSync(sourceSoul)) return;
+  if (process.argv.includes("--preserve-context") && existsSync(targetSoul)) return;
   copyFileSync(sourceSoul, targetSoul);
   console.log(`→ wrote SOUL.md to ${targetSoul}`);
 }
@@ -108,6 +109,8 @@ function copyWorkspaceFiles(wipeUser: boolean): void {
     if (stat.isDirectory()) continue;
 
     if (!entry.endsWith(".md")) continue;
+    if (process.argv.includes("--preserve-context") && existsSync(targetPath)) continue;
+
 
     if (entry === "USER.md" && !wipeUser && existsSync(targetPath)) {
       preservedUserNotes = true;
@@ -226,7 +229,11 @@ function main(): void {
   // Opt-in and off the core path: a failure here is counted, never fatal.
   safeInstallRecall(SOURCE_SKILLS);
 
-  installIndex();
+  if (process.argv.includes("--skip-index")) {
+    console.log("→ index network: unconfigured (--skip-index); bundled skills remain installed");
+  } else {
+    installIndex();
+  }
   installEdgeos();
   installGeo();
   restoreWelcomeState(welcomeState);

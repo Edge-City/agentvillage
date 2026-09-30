@@ -36,3 +36,31 @@ curl -X POST "$CP_URL/tenants/<tenant-id>/update" -H "Authorization: Bearer $CP_
 ## For non-hosted installs
 
 A bring-your-own-agent install has no control plane. After copying updated files, run `HERMES_HOME=<resident-home> bun install/reconcile_digest_crons.ts` so cron prompts match the files (see the README's "Change a cron prompt" row).
+
+## Edge City authentication and local verification
+
+`dashboard-auth-edgecity` is the existing owner-email OTP provider; do not install
+a second identity layer. Its control-plane send/verify/authorize endpoints require
+a live tenant and current owner. Configure the scoped EdgeOS third-party app key
+and tenant ID on CP, not as an agent automation key.
+
+Sessions now use private per-home SQLite storage and a durable tenant-specific
+signing key. Preserve that storage with the tenant's home during restart/restore.
+Do not distribute a shared `HERMES_DASHBOARD_SESSION_SECRET`: the provider does
+not use it. Tokens are tenant-bound, logout revokes the family, refresh rotates
+once with replay invalidation, and the original 30-day expiry cannot be extended.
+CP ownership/suspension is rechecked; independent EdgeOS account revocation is
+not promised to propagate immediately. Existing pre-cutover sessions require login.
+
+For the workspace's real local agent, the installer supports
+`--no-restart --skip-crons --skip-index`. This stages the normal skills/plugins
+without inventing an Index credential or provisioning an external account.
+The root launcher isolates `HERMES_HOME`, forces the existing authentication gate
+on loopback and keeps local tool approvals enabled. This is not an OS sandbox
+or proof of Railway deployment behavior.
+
+Verification exercised genuine local EdgeOS OTP, owner rejection, restart
+persistence, logout replay rejection, and six session-security regressions.
+Before rollout, repeat the owner/cross-owner/refresh/logout checks on one hosted
+staff tenant, then test the supported Desktop client and a real Telegram bot.
+

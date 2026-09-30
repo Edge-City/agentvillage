@@ -9,10 +9,12 @@ import json
 import os
 import re
 import secrets
+import sqlite3
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
 from typing import Optional
 
 from hermes_cli.dashboard_auth import (
@@ -73,8 +75,8 @@ def _post_json(url: str, body: dict) -> tuple[int, dict]:
         except json.JSONDecodeError:
             parsed = {}
         return exc.code, parsed if isinstance(parsed, dict) else {}
-    except urllib.error.URLError as exc:
-        raise ProviderError(f"control plane unreachable: {exc.reason}") from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise ProviderError("control plane unavailable") from exc
 
 
 def _sign(payload: dict, secret: bytes) -> str:
@@ -95,7 +97,7 @@ def _unsign(token: str, secret: bytes, kind: str) -> Optional[dict]:
         payload = json.loads(raw)
     except Exception:
         return None
-    if payload.get("kind") != kind or payload.get("exp", 0) <= int(time.time()):
+    if not isinstance(payload, dict) or payload.get("kind") != kind or not isinstance(payload.get("exp"), int) or payload["exp"] <= int(time.time()):
         return None
     return payload
 
@@ -140,6 +142,7 @@ _LOGIN_SCRIPT = """
     form.addEventListener('submit', function (ev) {
       ev.preventDefault();
       var err = form.querySelector('.form-error');
+      ev.stopImmediatePropagation();
       if (err) { err.hidden = true; err.textContent = ''; }
       if (btn) btn.disabled = true;
       var body = {
@@ -164,101 +167,43 @@ _LOGIN_SCRIPT = """
           if (btn) btn.disabled = false;
           return;
         }
-        var msg = resp.status === 429
-          ? 'Too many attempts. Please wait and try again.'
-          : (resp.status === 401 ? 'Invalid email or code.' : 'Sign-in failed. Please try again.');
-        if (err) { err.textContent = msg; err.hidden = false; }
-        if (btn) btn.disabled = false;
+        return resp.json().catch(function () { return {}; }).then(function (data) {
+          var msg = resp.status === 429
+            ? 'Too many attempts. Please wait and try again.'
+            : (resp.status === 401 ? 'Invalid email or code.' : 'Sign-in failed. Please try again.');
+          if (resp.status === 503 && typeof data.detail === 'string') {
+            msg = data.detail.replace(/^Provider unreachable: /, '');
+          }
+          if (err) { err.textContent = msg; err.hidden = false; }
+          if (btn) btn.disabled = false;
+        });
       }).catch(function () {
         if (err) { err.textContent = 'Network error. Please try again.'; err.hidden = false; }
         if (btn) btn.disabled = false;
       });
-    });
+    }, true);
   }
-  var forms = document.querySelectorAll('form.provider-form');
+  var forms = document.querySelectorAll('form.provider-form[data-provider="edgecity"]');
   for (var i = 0; i < forms.length; i++) { handle(forms[i]); }
 })();
 </script>
 """
 
 
-def _logo_svg() -> str:
-    path = os.path.join(os.path.dirname(__file__), "edge.svg")
-    try:
-        with open(path, encoding="utf-8") as handle:
-            raw = handle.read()
-    except OSError:
-        return ""
-    raw = re.sub(
-        r"<svg\b[^>]*>",
-        '<svg class="brand-mark" viewBox="0 0 243 281" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">',
-        raw,
-        count=1,
-    )
-    return raw.replace('fill="white"', 'fill="currentColor"')
 
 
 def _patch_hermes_login() -> None:
-    """Keep Hermes's login page; Edge City email first, then the one-time code."""
+    """Adapt only this provider's form; leave other providers and branding alone."""
     try:
         from hermes_cli.dashboard_auth import login_page
     except ImportError:
         return
-
     original = login_page._render_password_form
-    tpl = login_page._LOGIN_HTML_TEMPLATE
-    logo = _logo_svg()
-    if "Edge City account" not in tpl:
-        brand = f'{logo}Edge<span class="dot"></span>City' if logo else 'Edge<span class="dot"></span>City'
-        tpl = (
-            tpl.replace("Nous<span class=\"dot\"></span>Research", brand)
-            .replace(
-                "Choose a sign-in method to continue to the Hermes Agent dashboard.",
-                "Sign in with your Edge City account to continue to the Hermes Agent dashboard.",
-            )
-            .replace("Public bind &middot; Auth required", "Nous<span class=\"dot\"></span>Research")
-            .replace("Public bind · Auth required", "Nous<span class=\"dot\"></span>Research")
-        )
-    if ".brand-mark" not in tpl:
-        tpl = tpl.replace(
-            ".brand {{",
-            ".brand-mark {{\n"
-            "    display: block;\n"
-            "    width: 2.85rem;\n"
-            "    height: auto;\n"
-            "    margin: 0 auto 0.85rem;\n"
-            "    color: var(--midground);\n"
-            "  }}\n"
-            "  .brand {{",
-            1,
-        )
-    if ".field[hidden]" not in tpl:
-        tpl = tpl.replace(
-            ".field {{",
-            ".field[hidden] {{ display: none !important; }}\n"
-            "  .form-title {{ display: none; }}\n"
-            "  .back-email {{\n"
-            "    display: block;\n"
-            "    width: 100%;\n"
-            "    margin-top: 0.35rem;\n"
-            "    padding: 0.5rem 0;\n"
-            "    background: none;\n"
-            "    border: 0;\n"
-            "    color: color-mix(in srgb, var(--foreground) 55%, transparent);\n"
-            "    font-family: inherit;\n"
-            "    font-size: 0.75rem;\n"
-            "    letter-spacing: 0.1em;\n"
-            "    text-transform: uppercase;\n"
-            "    cursor: pointer;\n"
-            "  }}\n"
-            "  .back-email[hidden] {{ display: none !important; }}\n"
-            "  input[name=password] {{ text-align: center; letter-spacing: 0.35em; }}\n"
-            "  .field {{",
-            1,
-        )
-    login_page._LOGIN_HTML_TEMPLATE = tpl
-
+    if getattr(original, "_edgecity", False):
+        return
     def render(provider, next_path: str) -> str:
+        if provider.name != "edgecity":
+            return original(provider, next_path)
         html = (
             original(provider, next_path)
             .replace(">Username</span>", ">Edge City Email</span>")
@@ -269,7 +214,7 @@ def _patch_hermes_login() -> None:
             .replace(">Password</span>", ">Code</span>")
             .replace(
                 'type="password" name="password" autocomplete="current-password" required',
-                'type="text" name="password" autocomplete="one-time-code" inputmode="numeric" maxlength="10" placeholder="000000"',
+                'type="text" name="password" aria-label="Verification code" autocomplete="one-time-code" inputmode="numeric" maxlength="10" placeholder="000000"',
             )
             .replace(
                 '<button class="provider-btn" type="submit">Sign in</button>',
@@ -282,10 +227,10 @@ def _patch_hermes_login() -> None:
             r'\1 hidden style="display:none"\2',
             html,
             count=1,
-        )
+        ) + _LOGIN_SCRIPT
 
+    render._edgecity = True
     login_page._render_password_form = render
-    login_page._PASSWORD_FORM_SCRIPT = _LOGIN_SCRIPT
 
 
 class EdgeCityDashboardAuth(DashboardAuthProvider):
@@ -297,10 +242,61 @@ class EdgeCityDashboardAuth(DashboardAuthProvider):
         self._tenant_id = _env("TENANT_ID")
         self._cp = _env("CONTROL_PLANE_URL").rstrip("/")
         self._landing = _env("LANDING_URL").rstrip("/")
-        raw = _env("HERMES_DASHBOARD_SESSION_SECRET")
-        self._secret = raw.encode("utf-8") if raw else secrets.token_bytes(32)
         if not self._tenant_id or not self._cp:
             raise ValueError("TENANT_ID and CONTROL_PLANE_URL are required")
+        home = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
+        private = os.path.join(home, ".dashboard-auth-edgecity")
+        os.makedirs(private, mode=0o700, exist_ok=True)
+        os.chmod(private, 0o700)
+        self._db_path = os.path.join(private, "sessions.sqlite3")
+        fd = os.open(self._db_path, os.O_CREAT | os.O_RDWR, 0o600)
+        os.close(fd)
+        os.chmod(self._db_path, 0o600)
+        with self._db() as db:
+            db.execute("CREATE TABLE IF NOT EXISTS identity (tenant TEXT PRIMARY KEY, secret BLOB NOT NULL)")
+            db.execute("INSERT OR IGNORE INTO identity VALUES (?, ?)", (self._tenant_id, secrets.token_bytes(32)))
+            self._secret = bytes(db.execute("SELECT secret FROM identity WHERE tenant = ?", (self._tenant_id,)).fetchone()[0])
+            db.execute("""CREATE TABLE IF NOT EXISTS sessions (
+                sid TEXT PRIMARY KEY, tenant TEXT NOT NULL, subject TEXT NOT NULL,
+                email TEXT NOT NULL, role TEXT NOT NULL, absolute_exp INTEGER NOT NULL,
+                refresh_hash TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0)""")
+
+    @contextmanager
+    def _db(self):
+        db = sqlite3.connect(self._db_path, timeout=10)
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
+
+    def _authorize(self, payload: dict) -> bool:
+        status, body = _post_json(
+            f"{self._cp}/tenants/{self._tenant_id}/dashboard-auth/authorize",
+            {"user_id": payload["sub"], "email": payload["email"], "role": payload["role"]},
+        )
+        if status in (401, 403, 404):
+            return False
+        if status != 200 or body.get("ok") is not True:
+            raise ProviderError("session authorization unavailable")
+        return True
+
+    def _payload(self, token: str, kind: str):
+        payload = _unsign(token, self._secret, kind)
+        if payload is None or payload.get("tenant") != self._tenant_id:
+            return None
+        if not all(isinstance(payload.get(key), str) for key in ("sid", "sub", "email", "role")):
+            return None
+        return payload
+
+    def _active(self, db, payload):
+        row = db.execute(
+            "SELECT subject, email, role, absolute_exp, refresh_hash, revoked FROM sessions WHERE sid = ? AND tenant = ?",
+            (payload["sid"], self._tenant_id),
+        ).fetchone()
+        if not row or row[5] or row[3] <= int(time.time()) or tuple(row[:3]) != (payload["sub"], payload["email"], payload["role"]):
+            return None
+        return row
 
     def start_login(self, *, redirect_uri: str) -> LoginStart:
         if not self._landing:
@@ -331,66 +327,95 @@ class EdgeCityDashboardAuth(DashboardAuthProvider):
             raise InvalidCodeError("admin ticket rejected")
         if status != 200:
             raise ProviderError(f"admin exchange failed ({status})")
-        return self._mint(str(body.get("user_id") or "admin"), str(body.get("email") or ""), "admin")
+        if not body.get("user_id"):
+            raise ProviderError("admin exchange returned no identity")
+        return self._mint(str(body["user_id"]), str(body.get("email") or ""), "admin")
 
     def complete_password_login(self, *, username: str, password: str) -> Session:
         email = (username or "").strip().lower()
         if not email or "@" not in email:
             raise InvalidCredentialsError("invalid credentials")
-        if not _looks_like_code(password):
+        if not password.strip():
             status, _body = _post_json(
                 f"{self._cp}/tenants/{self._tenant_id}/dashboard-auth/send",
                 {"email": email},
             )
-            if status >= 500:
-                raise ProviderError("could not send login code")
+            if status != 200 or _body.get("ok") is not True:
+                raise ProviderError("Too many attempts. Please wait." if status == 429 else "Could not send login code.")
             raise InvalidCredentialsError("code sent")
+        if not _looks_like_code(password):
+            raise InvalidCredentialsError("invalid code")
         status, body = _post_json(
             f"{self._cp}/tenants/{self._tenant_id}/dashboard-auth/verify",
             {"email": email, "code": password.strip()},
         )
         if status != 200:
-            if status >= 500:
-                raise ProviderError("could not verify login code")
+            if status >= 500 or status == 429:
+                raise ProviderError("Too many attempts. Please wait." if status == 429 else "Could not verify login code.")
             raise InvalidCredentialsError("invalid credentials")
-        return self._mint(str(body.get("user_id") or email), email, "owner")
+        if not body.get("user_id") or str(body.get("email") or "").lower() != email:
+            raise ProviderError("identity response invalid")
+        return self._mint(str(body["user_id"]), email, "owner")
 
     def verify_session(self, *, access_token: str) -> Optional[Session]:
-        payload = _unsign(access_token, self._secret, "access")
+        payload = self._payload(access_token, "access")
         if payload is None:
             return None
-        return self._session(
-            str(payload.get("sub") or ""),
-            str(payload.get("email") or ""),
-            str(payload.get("role") or "owner"),
-            int(payload["exp"]),
-            access_token,
-            "",
-        )
+        with self._db() as db:
+            if not self._active(db, payload):
+                return None
+        if not self._authorize(payload):
+            self._revoke(payload["sid"])
+            return None
+        return self._session(payload["sub"], payload["email"], payload["role"], payload["exp"], access_token, "")
 
     def refresh_session(self, *, refresh_token: str) -> Session:
-        if not refresh_token:
-            raise RefreshExpiredError("no refresh token")
-        payload = _unsign(refresh_token, self._secret, "refresh")
+        payload = self._payload(refresh_token, "refresh")
         if payload is None:
             raise RefreshExpiredError("refresh token expired or invalid")
-        return self._mint(
-            str(payload.get("sub") or ""),
-            str(payload.get("email") or ""),
-            str(payload.get("role") or "owner"),
-        )
+        if not self._authorize(payload):
+            self._revoke(payload["sid"])
+            raise RefreshExpiredError("session no longer authorized")
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = self._active(db, payload)
+            if not row:
+                raise RefreshExpiredError("session revoked or expired")
+            digest = hashlib.sha256(refresh_token.encode()).hexdigest()
+            if not hmac.compare_digest(row[4], digest):
+                db.execute("UPDATE sessions SET revoked = 1 WHERE sid = ?", (payload["sid"],))
+                db.commit()
+                raise RefreshExpiredError("refresh token reused; session revoked")
+            session = self._tokens(payload["sub"], payload["email"], payload["role"], payload["sid"], row[3])
+            db.execute("UPDATE sessions SET refresh_hash = ? WHERE sid = ?",
+                       (hashlib.sha256(session.refresh_token.encode()).hexdigest(), payload["sid"]))
+            return session
+
+    def _revoke(self, sid: str) -> None:
+        with self._db() as db:
+            db.execute("UPDATE sessions SET revoked = 1 WHERE sid = ? AND tenant = ?", (sid, self._tenant_id))
 
     def revoke_session(self, *, refresh_token: str) -> None:
-        return None
+        payload = self._payload(refresh_token, "refresh")
+        if payload:
+            self._revoke(payload["sid"])
 
     def _mint(self, user_id: str, email: str, role: str) -> Session:
-        now = int(time.time())
-        exp = now + _ACCESS_TTL
-        access = _sign({"sub": user_id, "email": email, "role": role, "kind": "access", "exp": exp}, self._secret)
-        refresh = _sign(
-            {"sub": user_id, "email": email, "role": role, "kind": "refresh", "exp": now + _REFRESH_TTL},
-            self._secret,
-        )
+        absolute_exp = int(time.time()) + _REFRESH_TTL
+        sid = secrets.token_urlsafe(32)
+        session = self._tokens(user_id, email, role, sid, absolute_exp)
+        with self._db() as db:
+            db.execute("DELETE FROM sessions WHERE absolute_exp <= ?", (int(time.time()),))
+            db.execute("INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, 0)",
+                       (sid, self._tenant_id, user_id, email, role, absolute_exp,
+                        hashlib.sha256(session.refresh_token.encode()).hexdigest()))
+        return session
+
+    def _tokens(self, user_id: str, email: str, role: str, sid: str, absolute_exp: int) -> Session:
+        exp = min(int(time.time()) + _ACCESS_TTL, absolute_exp)
+        common = {"sub": user_id, "email": email, "role": role, "sid": sid, "tenant": self._tenant_id}
+        access = _sign({**common, "kind": "access", "exp": exp}, self._secret)
+        refresh = _sign({**common, "kind": "refresh", "exp": absolute_exp, "nonce": secrets.token_urlsafe(32)}, self._secret)
         return self._session(user_id, email, role, exp, access, refresh)
 
     def _session(self, user_id: str, email: str, role: str, exp: int, access: str, refresh: str) -> Session:
