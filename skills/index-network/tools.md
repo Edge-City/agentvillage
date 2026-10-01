@@ -25,7 +25,7 @@ Read the description on every tool you call — that is where the per-tool rules
 When the user wants to **find people to connect with, meet, or talk to** ("find AI agent builders", "who should I meet?", "looking for investors"):
 → Use `discover_opportunities` with a `searchQuery`. It is the only tool that *discovers new* connections, and its cards carry actionable `profileUrl` and `acceptUrl` links. Each opportunity gets its own `acceptUrl` — that is how the user acts on it. (`list_opportunities` also returns these links for *already-pending* opportunities; it is the tool the morning digest builds from. Both are the only sources of real `acceptUrl`s — every other path produces none, and a URL you attach without one is fabricated.)
 
-**Reason-first opportunity copy.** For the final Edge Esmeralda days, active people opportunities are the priority. Every surfaced opportunity should lead with the truthful reason this person is worth approaching, not with generic status or agent activity. Use exactly one CTA, normally `[say hi]({acceptUrl})` for direct connection or `[make intro]({acceptUrl})` for connector-flow, and include a low-friction correction path such as "If this read is off, reply with what I should correct." Do not send broad digests, busy-agent summaries, or lists of weak possibilities.
+**Reason-first opportunity copy.** Active people opportunities are the priority. Every surfaced opportunity should lead with the truthful reason this person is worth approaching, not with generic status or agent activity. Use exactly one CTA, normally `[say hi]({acceptUrl})` for direct connection or `[make intro]({acceptUrl})` for connector-flow, and include a low-friction correction path such as "If this read is off, reply with what I should correct." Do not send broad digests, busy-agent summaries, or lists of weak possibilities.
 
 **Async discovery rule.** In MCP, `discover_opportunities` may return `status="queued"` plus a `discoveryRunId` instead of opportunity cards. When that happens, call `get_discovery_run(discoveryRunId=...)` until the run is `succeeded`, `failed`, or `cancelled`, then present the `result` if it succeeded. Do not call `list_opportunities` as a substitute for the run result. `list_opportunities` cannot prove that a queued run finished and must not be described as "the new run".
 
@@ -85,7 +85,7 @@ The `telegram-handle-reconciliation` heartbeat task may ask the resident which T
 4. Update `memory/heartbeat-state.json`: remove `telegramHandleReconciliation.pending`, set `telegramHandleReconciliation.resolvedAt` to today's date/time, set `telegramHandleReconciliation.confirmedHandle` to the bare handle, and preserve the recorded source snapshot for audit.
 5. Reply briefly: "Got it — I'll use `<bare-handle>` for your Telegram handle." Do not mention internal system names unless the user asks.
 
-Do not infer the correct handle from display name, email, chat id, or a conflict between sources. The resident's explicit answer is the authority for this Edge Esmeralda reconciliation process.
+Do not infer the correct handle from display name, email, chat id, or a conflict between sources. The resident's explicit answer is the authority for this reconciliation process.
 
 ## `scrape_url` — when to use it
 

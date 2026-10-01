@@ -14,7 +14,7 @@ const originalHermesHome = process.env.HERMES_HOME;
 const baseContext: DailyBriefContext = {
   date: TODAY,
   displayDate: "Monday, June 15",
-  timezone: "America/Los_Angeles",
+  timezone: "Asia/Kolkata",
   announcements: [],
   rsvpEvents: [],
   highlightedEvents: [
@@ -22,9 +22,9 @@ const baseContext: DailyBriefContext = {
       id: "event-1",
       title: "Creative AI Crit",
       startTime: "2026-06-15T16:00:00Z",
-      timePacific: "9:00 AM",
+      timeLocal: "9:00 AM",
       venue: "Studio",
-      eventUrl: "https://edgecity.simplefi.tech/portal/edge-esmeralda-2026/events/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      eventUrl: "https://portal.example.test/portal/test-popup/events/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
       tags: ["Creative AI & Technologies"],
       highlighted: true,
       reasonHint: "Highlighted by the EdgeOS calendar.",
@@ -97,7 +97,7 @@ describe("stageDailyBrief prompt-led staging guardrails", () => {
     await writeJson(stateFile, {});
     await writeJson(contextOut, baseContext);
     const body = [
-      "Good morning from Edge Esmeralda.",
+      "Good morning from Edge City India.",
       "",
       "Creative AI Crit makes today less about tools in general and more about whether your memory work reads as product taste or infrastructure.",
       "",
@@ -131,7 +131,7 @@ describe("stageDailyBrief prompt-led staging guardrails", () => {
     await writeJson(stateFile, {});
     await writeJson(contextOut, baseContext);
     await Bun.write(bodyFile, [
-      "Good morning from Edge Esmeralda.",
+      "Good morning from Edge City India.",
       "",
       "Creative AI Crit looks like the main test of the day: whether your work is best understood as memory infrastructure or as curation with product taste.",
       "",
@@ -290,7 +290,7 @@ describe("stageDailyBrief prompt-led staging guardrails", () => {
     await writeJson(join(hermesHome, "memory", "heartbeat-state.json"), {});
     await writeJson(join(contextDir, "daily-brief-context.json"), baseContext);
     await Bun.write(join(hermesHome, "drafts", "brief.md"), [
-      "Good morning from Edge Esmeralda.",
+      "Good morning from Edge City India.",
       "",
       "<!-- digest-question:id=daily-identity-2026-06-15 -->**One for you:** Which part of this thread feels most like you?",
     ].join("\n"));

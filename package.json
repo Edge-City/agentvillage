@@ -1,7 +1,7 @@
 {
   "name": "@edge-city/agentvillage",
   "version": "0.3.33",
-  "description": "Agent Village workspace and installer for Edge Esmeralda.",
+  "description": "Agent Village workspace and installer for Edge City India (Mandrem, Goa, Oct 11 – Nov 1 2026).",
   "license": "MIT",
   "type": "module",
   "bin": {

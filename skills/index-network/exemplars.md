@@ -1,24 +1,23 @@
 # Index Network — Voice Exemplars
 
-Canonical user-facing renderings for Edge Esmeralda's people-finding flows. Mimic these exactly when composing the morning brief and greeting drafts. They are the bar for tone, structure, and information density. Edge Esmeralda is the literal community in every example — pull facts from `AGENTS.md` Community context, never invent dates, attendee counts, programming formats, announcements, events, or attendees.
+Canonical user-facing renderings for Edge City India's people-finding flows. Mimic these exactly when composing the morning brief and greeting drafts. They are the bar for tone, structure, and information density. Edge City India (Mandrem, Goa, October 11 – November 1, 2026) is the literal community in every example — pull facts from `AGENTS.md` Community context, never invent dates, attendee counts, programming formats, announcements, events, venues, or attendees. Calendar lines below are `{placeholders}`: fill them only from the live calendar context, never with example or Edge Esmeralda content.
 
 People opportunities come first when they have a truthful reason and a real action. Lead with the reason, offer one action, and leave a correction path. Do not describe backend activity, advertise virtual worlds, or turn the brief into a broad digest.
 
-## Good morning brief (fires once daily, 08:00 Pacific time)
+## Good morning brief (fires once daily, 08:00 village time, IST)
 
 Calendar bullets should put EdgeOS `highlighted: true` events first, then fill with one interest-relevant event from the remaining live calendar when useful.
 
-> 🌞 Good morning from Edge Esmeralda. It is Thursday, June 4
+> 🌞 Good morning from Edge City India. It is Thursday, October 15
 >
 > Here's what you need to know today:
 >
 > **Announcements**
-> - The organizer team moved tonight's community dinner to the plaza because of the weather window. Same time, different place.
+> - {Verbatim organizer announcement from the context.}
 >
 > **The calendar today:**
-> - 9:00 AM PDT — Morning workout at the Plaza. A useful reset before the day gets full.
-> - 11:30 AM PDT — Longevity Tools Show-and-Tell at Buck Institute. Good fit if you're tracking health, measurement, or translational science.
-> - 4:00 PM PDT — Governance Lab: Consent in Popup Communities. Relevant to anyone thinking about coordination, resident voice, or collective decisions.
+> - {timeLocal} IST — {Highlighted event title} at {venue}. {One line on why it fits this user.}
+> - {timeLocal} IST — {Interest-relevant event title} at {venue}. {One line on why it fits this user.}
 >
 > **People worth a real hello**
 > - [Maya]({profileUrl}) — Strong reason to meet: both of you are working on long-running agent memory, but from different angles. [Say hi]({acceptUrl}).
@@ -35,13 +34,12 @@ Calendar bullets should put EdgeOS `highlighted: true` events first, then fill w
 
 When there is no current organizer announcement you can verify, omit the section entirely:
 
-> 🌞 Good morning from Edge Esmeralda. It is Tuesday, June 9
+> 🌞 Good morning from Edge City India. It is Monday, October 19
 >
 > Here's what you need to know today:
 >
 > **The calendar today:**
-> - 10:00 AM PDT — AI Agents Breakfast Salon at Hotel Trio. A straightforward place to hear what people are building this week.
-> - 2:00 PM PDT — Neurotech Open Demos at Buck Institute. Relevant if you're following applied science and human performance.
+> - {timeLocal} IST — {Event title} at {venue}. {One line on why it fits this user.}
 >
 > **People worth a real hello**
 > - [Priya]({profileUrl}) — Strong reason to meet: both of you are circling community-owned data infrastructure, with complementary angles on ownership and discovery. [Say hi]({acceptUrl}).
@@ -52,9 +50,9 @@ When there is no current organizer announcement you can verify, omit the section
 
 ### Calendar fallback
 
-If the live calendar call fails, ship the people sections and include one plain pointer:
+If the live calendar is unavailable (call failed, or no Edge City India calendar is configured yet), ship the people sections and include one plain pointer:
 
-> 🌞 Good morning from Edge Esmeralda. It is Wednesday, June 10
+> 🌞 Good morning from Edge City India. It is Tuesday, October 20
 >
 > Here's what you need to know today:
 >
@@ -63,7 +61,7 @@ If the live calendar call fails, ship the people sections and include one plain 
 >
 > If this read is off, reply with what I should correct.
 >
-> I couldn't check the live calendar this morning — ask me what's on today and I'll look it up.
+> I don't have today's Edge City India schedule this morning — the Edge City portal or the organisers will have what's on.
 >
 > That's it for now. You can always ask me for more detail, or any other questions you have!
 
@@ -71,13 +69,12 @@ If the live calendar call fails, ship the people sections and include one plain 
 
 When `list_opportunities` returns multiple opportunities for the same person, render as a single bullet with multiple conversation entry points:
 
-> 🌞 Good morning from Edge Esmeralda. It is Tuesday, June 16
+> 🌞 Good morning from Edge City India. It is Monday, October 26
 >
 > Here's what you need to know today:
 >
 > **The calendar today:**
-> - 9:30 AM PDT — Creative AI Crit at the Studio. Good fit for builders thinking about tools, taste, and new creative workflows.
-> - 3:00 PM PDT — Spatial Computing Walkthrough at the Plaza. Useful if you want to see concrete demos rather than a panel.
+> - {timeLocal} IST — {Event title} at {venue}. {One line on why it fits this user.}
 >
 > **People worth a real hello**
 > - [Ashish]({profileUrl}) — Strong reason to meet: his work spans [generative software]({acceptUrl1}), [AI infrastructure]({acceptUrl2}), [creative AI design]({acceptUrl3}), and [deep learning research]({acceptUrl4}); pick the angle that is most real for you.

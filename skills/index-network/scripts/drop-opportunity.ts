@@ -27,7 +27,7 @@ import {
   confirmOpportunityDeliveriesViaMcp,
   fetchOpportunitiesFromMcp,
   filterDedupedOpportunities,
-  pacificDate,
+  villageDate,
   resolveIndexApiKey,
 } from "./build-daily-brief-context";
 
@@ -83,7 +83,7 @@ export async function dropOpportunity(options: {
   fetchOpportunities?: typeof fetchOpportunitiesFromMcp;
   confirmDeliveries?: (opportunityIds: string[]) => Promise<unknown>;
 } = {}): Promise<DropResult | SilentResult> {
-  const date = options.date ?? pacificDate();
+  const date = options.date ?? villageDate();
   const stateFile = resolveHermesPath(options.stateFile ?? "memory/heartbeat-state.json");
   const apiKey = options.apiKey ?? resolveIndexApiKey();
   if (!apiKey) return { silent: true, reason: "no-api-key" };

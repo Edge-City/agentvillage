@@ -13,7 +13,7 @@ import { existsSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 
-import { buildDailyBriefContext, type DailyBriefContext } from "./build-daily-brief-context";
+import { buildDailyBriefContext, villageDate, type DailyBriefContext } from "./build-daily-brief-context";
 import {
   extractDigestOpportunityIds,
   extractDigestQuestionIds,
@@ -79,17 +79,6 @@ function hermesHome(): string {
 
 function resolveHermesPath(path: string): string {
   return isAbsolute(path) ? path : join(hermesHome(), path);
-}
-
-function pacificDate(): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Los_Angeles",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
-  return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
 async function readJsonObject(path: string): Promise<Record<string, unknown>> {
@@ -247,7 +236,7 @@ export async function prepareDailyBriefContext(options: {
   contextOut?: string;
   hermes?: HermesRunner;
 } = {}): Promise<PrepareContextResult> {
-  const date = options.date ?? pacificDate();
+  const date = options.date ?? villageDate();
   const opportunitiesFile = resolveHermesPath(options.opportunitiesFile ?? "memory/digest-opportunities.txt");
   const stateFile = resolveHermesPath(options.stateFile ?? "memory/heartbeat-state.json");
   const contextOut = resolveHermesPath(options.contextOut ?? "memory/daily-brief-context.json");
@@ -278,7 +267,7 @@ export async function stageDailyBrief(options: {
   contextOut?: string;
   hermes?: HermesRunner;
 } = {}): Promise<StageResult> {
-  const date = options.date ?? pacificDate();
+  const date = options.date ?? villageDate();
   const opportunitiesFile = resolveHermesPath(options.opportunitiesFile ?? "memory/digest-opportunities.txt");
   const stateFile = resolveHermesPath(options.stateFile ?? "memory/heartbeat-state.json");
   const contextOut = resolveHermesPath(options.contextOut ?? "memory/daily-brief-context.json");

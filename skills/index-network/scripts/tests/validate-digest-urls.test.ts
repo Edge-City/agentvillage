@@ -58,13 +58,43 @@ describe("sanitizeDigestUrls", () => {
     expect(stripped).toEqual([]);
   });
 
-  test("preserves Edge Esmeralda event links", () => {
-    const md = "[GNOSIS Journey](https://edgecity.simplefi.tech/portal/edge-esmeralda-2026/events/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa)";
+  describe("village portal event links", () => {
+    const original = process.env.AV_PORTAL_URL;
+    const restore = () => {
+      if (original === undefined) delete process.env.AV_PORTAL_URL;
+      else process.env.AV_PORTAL_URL = original;
+    };
+    const eventLink = "https://portal.example.test/portal/test-popup/events/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 
-    const { output, stripped } = sanitizeDigestUrls(md);
+    test("preserves event links under the configured AV_PORTAL_URL", () => {
+      process.env.AV_PORTAL_URL = "https://portal.example.test/portal/test-popup/events/";
+      try {
+        const md = `[GNOSIS Journey](${eventLink})`;
+        expect(sanitizeDigestUrls(md)).toEqual({ output: md, stripped: [] });
+      } finally {
+        restore();
+      }
+    });
 
-    expect(output).toBe(md);
-    expect(stripped).toEqual([]);
+    test("strips event links from another popup slug or host", () => {
+      process.env.AV_PORTAL_URL = "https://portal.example.test/portal/test-popup/events";
+      try {
+        const other = "https://portal.example.test/portal/other-popup/events/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        const spoof = "https://evil.example.test/portal/test-popup/events/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        expect(sanitizeDigestUrls(`[a](${other}) [b](${spoof})`)).toEqual({ output: "a b", stripped: [other, spoof] });
+      } finally {
+        restore();
+      }
+    });
+
+    test("strips all event links when AV_PORTAL_URL is unset", () => {
+      delete process.env.AV_PORTAL_URL;
+      try {
+        expect(sanitizeDigestUrls(`[e](${eventLink})`)).toEqual({ output: "e", stripped: [eventLink] });
+      } finally {
+        restore();
+      }
+    });
   });
 
   test("strips fabricated path shapes other than /c/, /u/, and known event links", () => {

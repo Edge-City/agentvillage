@@ -13,7 +13,7 @@ import { existsSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 
-import { QUESTION_COOLDOWN_DAYS, confirmOpportunityDeliveriesViaMcp, resolveIndexApiKey } from "./build-daily-brief-context";
+import { QUESTION_COOLDOWN_DAYS, confirmOpportunityDeliveriesViaMcp, resolveIndexApiKey, villageDate } from "./build-daily-brief-context";
 import { sanitizeDigestUrls } from "./validate-digest-urls";
 
 interface SendResult {
@@ -74,17 +74,6 @@ function hermesHome(): string {
 
 function resolveHermesPath(path: string): string {
   return isAbsolute(path) ? path : join(hermesHome(), path);
-}
-
-function pacificDate(): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Los_Angeles",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
-  return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
 /**
@@ -185,7 +174,7 @@ export async function sendDailyBrief(options: {
   hermes?: HermesRunner;
   confirmDeliveries?: DeliveryConfirmer;
 } = {}): Promise<SendResult | SilentResult> {
-  const date = options.date ?? pacificDate();
+  const date = options.date ?? villageDate();
   const stateFile = resolveHermesPath(options.stateFile ?? "memory/heartbeat-state.json");
   const outgoingFile = resolveHermesPath(options.outgoingFile ?? "memory/digest-outgoing.md");
   const hermes = options.hermes ?? runHermes;

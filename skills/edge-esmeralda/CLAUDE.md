@@ -1,6 +1,6 @@
 # Edge Esmeralda 2026 Skill — Contributor Notes
 
-This directory is the **popup-specific knowledge layer** for Edge Esmeralda 2026 (May 30 – Jun 27, Healdsburg, CA). The agent-facing content is `SKILL.md`. The Bun project alongside it (`scripts/`, `references/`) regenerates the wiki / website / newsletter references that `SKILL.md` §5 points at.
+This directory is the **popup-specific knowledge layer** for Edge Esmeralda 2026 (May 30 – Jun 27, Healdsburg, CA) — the *previous* Edge City popup. The current event is Edge City India (Mandrem, Goa, Oct 11 – Nov 1 2026); `SKILL.md` frames everything here as past background, and agents must not present it as current. The agent-facing content is `SKILL.md`. The Bun project alongside it (`scripts/`, `references/`) regenerates the wiki / website / newsletter references that `SKILL.md` §5 points at.
 
 For backend-agnostic EdgeOS API recipes, see the sibling `../edgeos/SKILL.md`. For Index Network discovery, see `../index-network/SKILL.md`. Do not duplicate either backend's content here.
 

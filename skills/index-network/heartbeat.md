@@ -34,7 +34,7 @@ tasks:
   prompt: |
     Detect drift between the resident's independent Edge systems before Telegram handles route introductions to the wrong person. Do not choose a canonical source silently; when sources disagree, ask the resident which handle is correct and update only after they answer.
 
-    This runs in a fresh session with no memory of past runs — every decision below comes from files, environment, and tool/API reads. Resolve "today" as the calendar day in America/Los_Angeles for `memory/<today>.md`.
+    This runs in a fresh session with no memory of past runs — every decision below comes from files, environment, and tool/API reads. Resolve "today" as the calendar day in Asia/Kolkata for `memory/<today>.md`.
 
     1. Gate on pending/asked state. Read `memory/heartbeat-state.json` and `memory/<today>.md`. Reply silently and stop if either is true:
        - `telegramHandleReconciliation.pending` exists — the user has already been asked; wait for their answer in a normal conversation turn.
@@ -60,7 +60,7 @@ tasks:
   prompt: |
     Detect drift between the resident's independent Edge systems before Telegram handles route introductions to the wrong person. Do not choose a canonical source silently; when sources disagree, ask the resident which handle is correct and update only after they answer.
 
-    This runs in a fresh session with no memory of past runs — every decision below comes from files, environment, and tool/API reads. Resolve "today" as the calendar day in America/Los_Angeles for `memory/<today>.md`.
+    This runs in a fresh session with no memory of past runs — every decision below comes from files, environment, and tool/API reads. Resolve "today" as the calendar day in Asia/Kolkata for `memory/<today>.md`.
 
     1. Gate on pending/asked state. Read `memory/heartbeat-state.json` and `memory/<today>.md`. Reply silently and stop if either is true:
        - `telegramHandleReconciliation.pending` exists — the user has already been asked; wait for their answer in a normal conversation turn.
@@ -97,7 +97,7 @@ tasks:
   prompt: |
     A thin-signal user gets no opportunities until we draw more signal out of them. Once a day, while the user has nothing live, ask one contextual question to elicit a new signal. Track dedup state in `memory/heartbeat-state.json` under `signalElicitation`.
 
-    This runs in a fresh session with no memory of past runs — every decision below comes from tool calls and files, never from recall. Resolve "today" as the calendar day in the village's timezone (America/Los_Angeles, Pacific) — the same day used for the `memory/<today>.md` filename — so the once-per-day gate, the recorded date, and the note all agree.
+    This runs in a fresh session with no memory of past runs — every decision below comes from tool calls and files, never from recall. Resolve "today" as the calendar day in the village's timezone (Asia/Kolkata, IST) — the same day used for the `memory/<today>.md` filename — so the once-per-day gate, the recorded date, and the note all agree.
 
     1. Gate on opportunities. Call `list_opportunities()` and read what comes back (check the tool description for the exact status values). If the tool says setup/onboarding is required, read `memory/<today>.md` and `memory/heartbeat-state.json`; if neither suppression nor `signalElicitation.lastAskedDate === today` is present, ask exactly: "I need a quick setup before I can find relevant people for you. Want to do that now?" Then update `memory/heartbeat-state.json` as in step 4 and append `[gate] index-network: setup-nudge asked` to `memory/<today>.md`. Do not say "Index" or "onboarding" to the user. If suppressed or already asked today, reply silently and stop. If the user already has any live opportunity — internal status `pending` or `accepted` (as returned by the tool, not the user-facing labels) — discovery is already working: reply silently using this host's no-reply marker and stop. Ignore declined, archived, or expired ones; they do not count as live. Do not ask anything.
     2. Gate on suppression and once-per-day. Read `memory/<today>.md` and `memory/heartbeat-state.json`. Reply silently and stop if either holds:

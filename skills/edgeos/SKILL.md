@@ -1,6 +1,6 @@
 ---
 name: edgeos
-description: Talk to the EdgeOS popup-village platform — read the event schedule, manage RSVPs and venues, look up the calling user's own profile, and browse the attendee directory for a popup. Backend-generic; the popup id is supplied by whichever popup-specific skill is active (e.g. `edge-esmeralda` for Edge Esmeralda 2026).
+description: Talk to the EdgeOS popup-village platform — read the event schedule, manage RSVPs and venues, look up the calling user's own profile, and browse the attendee directory for a popup. Backend-generic; the popup id is supplied by whichever popup-specific skill is active. The current event is Edge City India (Oct 11 – Nov 1 2026, Mandrem, Goa); no India popup id is configured yet, so never pass the previous Edge Esmeralda id and present its results as India.
 version: 1.1.1
 author: Edge City
 tags: [edgeos, events, directory, popup-village]
@@ -21,7 +21,7 @@ metadata:
 
 You have access to the **EdgeOS** popup-village platform at `https://api.edgeos.world/api/v1`. EdgeOS hosts events, RSVPs, venues, the attendee directory, and per-attendee profile lookup for one or more popups.
 
-This skill is popup-agnostic. The `popup_id` (a UUID) is supplied by whichever popup-specific skill is currently active. For Edge Esmeralda 2026, see the sibling `edge-esmeralda` skill; it carries the constant.
+This skill is popup-agnostic. The `popup_id` (a UUID) is supplied by whichever popup-specific skill is currently active. The current event is **Edge City India** (Mandrem, Goa, October 11 to November 1, 2026), and no Edge City India `popup_id` is configured in this workspace yet. Do not run popup-scoped calls with the previous popup's id (the `edge-esmeralda` skill carries Edge Esmeralda 2026's constant) and present the results as India; if the user needs India schedule or directory detail you can't fetch, say you don't have it yet and point them to the Edge City portal or the organisers. Use the Edge Esmeralda id only when the user explicitly asks about that previous popup.
 
 ## 0. Safety rules for write operations
 
@@ -55,7 +55,7 @@ In every curl example below, `<EDGEOS_API_KEY>` and `<EDGEOS_BEARER_TOKEN>` are 
 ## 2. Conventions
 
 - List endpoints return a `results: T[]` array plus a paging object whose key name varies by endpoint (`paging` for events, `pagination` for the directory). Single-resource endpoints return the resource directly. When in doubt, consult the response shape documented in the relevant section, or the OpenAPI spec via §11.
-- Times from the API are ISO-8601, typically UTC (e.g. `2026-06-04T15:00:00Z`). **Before you show any event time to the user, convert it from UTC to America/Los_Angeles and label it (PDT/PST). Never read the UTC clock value out as the local time.** Example: `15:00:00Z` is **8:00 AM PDT**, not 3:00 PM. The user is on the ground in Healdsburg (Pacific), so every time you display, every reminder you set, and every "is it soon?" judgment must be in their local timezone. UUIDs are RFC-4122.
+- Times from the API are ISO-8601, typically UTC (e.g. `2026-06-04T15:00:00Z`). **Before you show any event time to the user, convert it from UTC to the popup's local timezone and label it. Never read the UTC clock value out as the local time.** Edge City India residents are in Goa, India (`Asia/Kolkata`, IST, UTC+5:30): `15:00:00Z` is **8:30 PM IST**, not 3:00 PM. For the previous popup, Edge Esmeralda (Healdsburg), use `America/Los_Angeles` (PDT). Every time you display, every reminder you set, and every "is it soon?" judgment must be in the resident's local timezone. UUIDs are RFC-4122.
 - Recurring events expand into virtual occurrences when `start_after` is set. When RSVPing to one instance of a recurring event, pass that occurrence's `start_time` as `occurrence_start`.
 - Error codes: `401` missing/expired token · `403` token lacks the required scope · `404` not visible to caller · `409` resource has dependents · `422` validation · `429` rate limit (see `Retry-After`).
 
@@ -242,7 +242,7 @@ curl -s -H "Authorization: Bearer <EDGEOS_BEARER_TOKEN>" \
   "https://api.edgeos.world/api/v1/applications/my/directory/{popup_id}?skip=0&limit=20&q=QUERY"
 ```
 
-`{popup_id}` is the popup UUID supplied by the active operator skill (e.g. `edge-esmeralda` carries Edge Esmeralda's constant). Replace `QUERY` with a name, organization, or role.
+`{popup_id}` is the popup UUID supplied by the active operator skill (e.g. `edge-esmeralda` carries the previous popup Edge Esmeralda's constant). Replace `QUERY` with a name, organization, or role.
 
 **Pagination:** `skip` + `limit` (default 20, check the OpenAPI spec via §11 for the per-popup max). Response shape: `{ results: Attendee[], pagination: { skip, limit, total } }`.
 

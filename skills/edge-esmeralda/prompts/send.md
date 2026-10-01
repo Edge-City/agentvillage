@@ -12,7 +12,7 @@ Deliver the staged morning brief verbatim from Kanban, then reconcile delivery b
    bun skills/index-network/scripts/send-daily-brief.ts
    ```
 
-   Do not write Python, shell pipelines, or replacement delivery logic. The script resolves today's America/Los_Angeles date, reads `memory/heartbeat-state.json`, checks the Kanban approval gate, writes `memory/digest-outgoing.md`, uses the opportunity/question ids captured by the prompted prepare step, updates delivery state (today's selected opportunity ids plus the per-question 3-day re-delivery cooldown under `questionDelivery`), marks the task complete, confirms digest delivery for every selected opportunity id directly on the Index ledger, strips unsafe URLs/internal metadata, and prints either `[SILENT]` or one JSON object.
+   Do not write Python, shell pipelines, or replacement delivery logic. The script resolves today's Asia/Kolkata date, reads `memory/heartbeat-state.json`, checks the Kanban approval gate, writes `memory/digest-outgoing.md`, uses the opportunity/question ids captured by the prompted prepare step, updates delivery state (today's selected opportunity ids plus the per-question 3-day re-delivery cooldown under `questionDelivery`), marks the task complete, confirms digest delivery for every selected opportunity id directly on the Index ledger, strips unsafe URLs/internal metadata, and prints either `[SILENT]` or one JSON object.
 
    If the script exits with a non-zero code, end your turn immediately with `[SILENT]`. Do not diagnose, retry, or attempt alternatives. One attempt only.
 
@@ -35,4 +35,4 @@ Deliver the staged morning brief verbatim from Kanban, then reconcile delivery b
 - Deliver only a staged brief whose Kanban status is `ready` or `todo`, depending on Hermes version. A legacy still-`blocked` task means no send — stay silent until an operator edits, unblocks, or archives it out-of-band.
 - Never call MCP tools in this pass — the script owns all ledger confirmation.
 - Never expose internal IDs, raw JSON, internal marker comments, or internal vocabulary in the reply.
-- Never construct URLs yourself. The URL guard strips anything except approved connect, profile, and Edge Esmeralda event links.
+- Never construct URLs yourself. The URL guard strips anything except approved connect, profile, and EdgeOS portal event links.
