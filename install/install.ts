@@ -13,6 +13,9 @@
  *   - Index MCP + morning digest cron (`install_index.ts`)
  *   - Geo CLI runtime note (`install_geo.ts`)
  *   - opt-in recall skill + plugin when `AV_RECALL_ENABLED=1` (`install_recall.ts`)
+ *   - opt-in approval.md gate when `AV_APPROVAL_ENABLED=1` (`install_approval.ts`):
+ *     a failure there exits non-zero, because an opted-in tenant left ungated
+ *     is the failure the gate exists to prevent
  *
  * Usage (from repo root):
  *   bun install/install.ts --index-api-key <KEY>
@@ -37,6 +40,7 @@ import { installIndex } from "./install_index";
 import { installEdgeos } from "./install_edgeos";
 import { installGeo } from "./install_geo";
 import { safeInstallRecall, wipeRecallIndex } from "./install_recall";
+import { runApprovalStep } from "./install_approval";
 import {
   capModelMaxTokens,
   configureAvEvents,
@@ -247,6 +251,14 @@ function main(): void {
   installEdgeos();
   installGeo();
   restoreWelcomeState(welcomeState);
+
+  // Opt-in (DATA-43), and the one step that is not fail-open: with
+  // AV_APPROVAL_ENABLED on, missing credentials or a failed self-check stop
+  // the install with a named reason before the gateway is restarted.
+  if (!runApprovalStep(SOURCE_SKILLS)) {
+    console.error("error: the approval gate was requested (AV_APPROVAL_ENABLED) but not installed; gateway not restarted");
+    process.exit(1);
+  }
 
   if (!process.argv.includes("--no-restart")) {
     restartGateway();

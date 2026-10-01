@@ -293,6 +293,95 @@ Send any message in your chat to bring AgentVillage online. AgentVillage has two
 
 An admin resetting `onboardingComplete` server-side re-triggers only the Index ritual. Wiping local state via `install/install.ts --wipe-user` resets local markers without touching Index's flag.
 
+## Approval (opt-in)
+
+For residents who opt in, the approval.md gate (DATA-43) makes the agent ask before actions with consequences outside the sandbox. The installer step is `install/install_approval.ts`; the skill is `skills/approval/` (see its README); the receipts plugin is `plugins/av-approval/`.
+
+### Consent copy (what a resident sees)
+
+- When their agent is about to do one of the listed things (send a message, spend money, delete files outside its workspace, post content, call or fetch from a network service), they get a Telegram message from their approval bot naming the action, with approve and reject buttons.
+- They have about four minutes. If they do nothing, the agent does not do it and tells them so.
+- Every ask and answer is recorded in a log they can export, and Agent Village's research reads the same log.
+- Their agent's Telegram conversation is unaffected.
+
+**Not covered:**
+
+- Subagent calls, MCP tools (Index included) and reads before the first gated call.
+- Tools that can reach the same effects without a check today: `process`/`process_manage` (writing to and submitting a running process), `web_extract`, the `browser_*` tools, `skill_manage` and `delegate_task` pass through the gate unjudged until approval.md's Hermes adapter learns them; `cronjob_manage` is not routed through the gate at all, so a scheduled job's script (`script`, `no_agent`) and an HTTP `monitor_script` run without a check.
+- A process on the sandbox can kill the hook (signal) or attach to the gateway (ptrace); both are closed by the checkpoint build (patch + ptrace_scope), not by this skill.
+
+### Environment
+
+Read from `$HERMES_HOME/.env` first and the process environment second, because Hermes loads `.env` with override:
+
+| Name | Meaning |
+|---|---|
+| `AV_APPROVAL_ENABLED` | Unset: nothing happens (one log line). `1/true/yes/on`: install the gate. Anything else: the kill switch. |
+| `AV_APPROVAL_URL` | The tenant's approval facade, `https://` only. |
+| `AV_APPROVAL_TOKEN` | The **agent** credential for that facade (never the tenant credential). Never printed or written to `config.yaml`. |
+| `AV_APPROVAL_ALLOW_UNPATCHED_HERMES=1` | **Dogfood only.** Accept a Hermes below the `fail_closed` floor or without the signal patch; logged loudly on every install. |
+
+With the gate on, the step writes the hook shim at `$HERMES_HOME/agent-hooks/hermes-hook-shim.sh` (0700, temp file then rename). It writes `hooks.pre_tool_call` entries with `fail_closed: true` and `timeout: 300` for `terminal`, `write_file`, `patch`, `read_file`, `search_files` and `execute_code`, and for `process(_manage)?`, `web_extract`, `browser_.*`, `skill_manage` and `delegate_task`. It also writes `hooks_auto_accept: true`, `plugins.hook_callback_timeout: 600`, `HERMES_ACCEPT_HOOKS=1` and the shim's settings in `.env`, and a marker at `agent-hooks/approval-surface.json`. Other keys and other hooks are left alone, and a re-run changes nothing. The resident's `APPROVAL.md` is held by the daemon, not the sandbox; `skills/approval/templates/APPROVAL.md` is the starting policy an operator puts there.
+
+`AV_APPROVAL_TOKEN` stays in the gateway's environment, because the shim reads it from there. This overlay does not configure Hermes's terminal scrub list, so the agent's own `terminal` children can read the variable (for example with `printenv`, which is not a gated credential read). What that buys is limited: the agent token reaches only the facade's hook route and five verbs that ask, wait and withdraw. It cannot read the log, grant, or export (docs/02 section 5). Scrubbing it is a follow-up below.
+
+### Failing loudly, and checking
+
+With `AV_APPROVAL_ENABLED` on, the install stops with a named reason and a non-zero exit, before the gateway restart, when any of these hold:
+
+- the URL or token is missing, or the URL is not https;
+- one of `agent-hooks/`, the shim, the marker, `config.yaml` or `.env` is a symlink or not a regular file;
+- `config.yaml` carries a YAML merge key or alias anywhere under `hooks` or `plugins` (PyYAML merges what the installer would read literally);
+- the self-check fails. It covers every hook entry, `fail_closed` on each, consent in both places, the shim, the env names it reads, and every program it needs in `/usr/bin`, `/bin` or `/usr/local/bin`. It also refuses `HERMES_SAFE_MODE`, `HERMES_MANAGED` or a managed scope (`/etc/hermes/config.yaml`), a `HERMES_HOME` not named `.hermes`, a Hermes below the `fail_closed` floor (main `118984d7`, tag `v2026.9.21`), and a Hermes without the signal-fail-closed patch. The patch is judged by behaviour: a `fail_closed` hook that SIGKILLs itself is fired through `run_once` and must block; the patch marker in `agent/shell_hooks.py` is only a hint in the message. Hermes's own parser is used to check every gated matcher: the first entry for each (matcher, shim) pair in config order is the one Hermes registers, so it must be `fail_closed`. Commands are compared after Python's `strip()`, so `<shim>\x1f` counts as the shim.
+
+The self-check ends with a **live fire**: Hermes's own interpreter fires one `terminal` call with no `workdir` through `agent.shell_hooks.run_once`, and it must come back blocked by the facade (`hook-unsupported-execution-context`; the facade appends nothing for it). If Hermes's `run_once` is not available, the result is `selfcheck-live-unavailable` and the install fails.
+
+On any self-check failure, `config.yaml` and `.env` are restored to their pre-install bytes. The control plane runs the installer through its sandbox exec, which turns a non-zero exit into a `502 sandbox exec failed (1)` carrying the first 2000 characters of output, so the named reason reaches whoever started the provisioning or update.
+
+`bun install/install_approval.ts --check` runs the same checks, live fire included. It exits 0 when the gate is in place and 1 with the named problems, printing one JSON line (`ok`, `problems`, `overrides`), so it can be used by hand and by the control plane. "Writes nothing" means none of this step's files. The check imports Hermes's own modules, which may create Hermes's own log or backup directories under `$HERMES_HOME`, and the live fire runs the shim, which appends to `agent-hooks/approval-hook.log`.
+
+A dogfood override in force shows on every success path: as `overrides` in the `--check` line, in the install's success line, and in the marker (`agent-hooks/approval-surface.json`).
+
+A failed first install also removes the shim, `agent-hooks/` and `skills/approval/` it staged. A failed re-install keeps the earlier install's shim and skill.
+
+### The kill switch is fail-open
+
+The first install records, in the marker, the prior state of every key it sets: `hooks_auto_accept`, `plugins.hook_callback_timeout`, `HERMES_ACCEPT_HOOKS` and the `APPROVAL_HOOK_*` lines, each as absent or as its value. A re-install keeps the first record.
+
+Setting `AV_APPROVAL_ENABLED` to anything but on, on the next install:
+
+- removes this step's hook entries;
+- puts those keys back exactly as the first install found them: a resident's own `hooks_auto_accept: true` stays, and consent the gate added goes;
+- removes the shim, the marker and the staged skill.
+
+Without a marker (no earlier install), it only removes entries whose command is the shim and touches nothing else. The log says `FAIL-OPEN`: from the next gateway start, that tenant's tool calls are no longer gated.
+
+The `av-approval` plugin stays listed. It logs `av-approval: disabled (fail-open)` at each gateway start only when the switch is explicitly off and `config.yaml` no longer runs the shim; an unset switch logs nothing. The gate itself fails closed: an unreachable facade, a timeout or a malformed answer blocks the call.
+
+### Hand steps of the enablement gate
+
+From approval-md-hosted docs/03 section 6, on the dogfood tenant, before any resident is offered the skill:
+
+1. The ingest follower (DATA-43b) reads the daemon log from genesis, verifies the chain, writes `decision.*` rows, and quarantines a deliberately corrupted copy.
+2. A gated call blocks end to end over Telegram.
+   - No tap: the call is blocked at the timeout, with `approval.expired` and `decision.deferred`.
+   - A tap: `approval.granted`, the action runs, and `execution.completed` carries the token id.
+3. A policy change on the daemon appears as `policy.updated` with its hash, and the next call resolves under it.
+4. Ungated-while-looking-gated is ruled out. Remove headless consent (delete `HERMES_ACCEPT_HOOKS=1` from `.env`, or set `hooks_auto_accept: false`), then run `bun install/install_approval.ts --check`: it must FAIL with `consent-missing:…`. `--check` never re-adds consent. Re-run the install (which restores consent) and confirm `--check` passes, including its live fire.
+5. `execute_code` is refused and `terminal` without an absolute `workdir` is refused, both visible in the daemon log.
+
+### Follow-ups
+
+**approval-md core (Carter owns it).** The Hermes adapter should handle these tools:
+
+- refuse or classify `process`/`process_manage` (write and submit), `web_extract`, `browser_*`, `skill_manage` and `delegate_task`, instead of passing an unknown tool through with `{}`. This overlay already routes them to the facade, so the change takes effect with no overlay release.
+- read Hermes's call id from `extra.tool_call_id` (and the result from `extra.result`), so the post half can join a receipt to its `execution.started` and `plugins/av-approval` can post receipts.
+- add a `script`/`no_agent`/`monitor_script` path for `cronjob_manage`, if the daily brief can live with it.
+
+**Sandbox.** The checkpoint build should apply Bountify's signal-fail-closed patch to `agent/shell_hooks.py` and set `kernel.yama.ptrace_scope` to 1 or higher, or run `terminal` in a sandboxed backend.
+
+**Hermes terminal scrub.** Registering `AV_APPROVAL_TOKEN` in Hermes's terminal scrub list (the plugin `terminal_env_registry` strip keys) would keep it out of the agent's tool children without affecting the hook.
+
 ## Reset
 
 To tear down AgentVillage and start fresh (leaves Telegram token, OpenRouter key, and gateway config untouched):
