@@ -1,0 +1,40 @@
+# Tests on every pull request and every push to main: the TypeScript suites
+# (installer, scripts, the two skills with tests) and the plugin pytest suites
+# (pytest.ini: plugins/av-events/tests, plugins/recall/tests). The same thing
+# `bun test` and `python3 -m pytest` run locally; nothing here deploys.
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  bun:
+    name: bun test (install, scripts, skills)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      # The four directories that hold *.test.ts; a bare `bun test` would also
+      # walk any stray checkout under the repo root.
+      - run: bun test install/tests scripts/tests skills/index-network/scripts/tests skills/recall/scripts/tests
+
+  pytest:
+    name: pytest (plugins)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --quiet pytest pyyaml
+      - run: python -m pytest -q
