@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { chmodSync } from "node:fs";
 import { createHash } from "node:crypto";
 import {
   cpSync,
@@ -16,7 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import {
   assertIndexOutsideMemory,
@@ -750,24 +751,38 @@ describe("session store resilience", () => {
     expect(query(paths, { query: "dolphins", env: DM }).hit_count).toBe(1);
   });
 
-  test("a WAL store with no holder and no -shm is unreadable, never purged, and answers partial", () => {
-    const paths = workspace();
-    const store = makeStateDb(paths.stateDb);
-    rebuild(paths);
-    store.run("PRAGMA wal_checkpoint(TRUNCATE)");
-    store.close();
-    rmSync(`${paths.stateDb}-wal`, { force: true });
-    rmSync(`${paths.stateDb}-shm`, { force: true });
-
-    const stats = rebuild(paths);
-    expect(stats.sessions.status).toBe("session_store_unreadable");
-    expect(stats.sessions.removed).toBe(0);
-    expect(stats.partial).toBe(true);
-    const res = query(paths, { query: "kiteboarding", env: DM });
-    if (res.status !== "ok") throw new Error(res.reason);
-    expect(res.partial).toBe(true);
-    expect(res.hit_count).toBe(3);
-  });
+  // A read-only connection to a WAL database needs the -shm file, and SQLite
+  // creates it when the directory is writable (3.22+; what Bun ships on Linux,
+  // so a resident's VM reads such a store fine). Apple's SQLite refuses the
+  // open instead. The case this test guards is the one where the store really
+  // cannot be read: no -shm and no way to create one. Root ignores directory
+  // modes, so the test is skipped there.
+  test.skipIf(typeof process.getuid === "function" && process.getuid() === 0)(
+    "a WAL store with no holder, no -shm and a read-only directory is unreadable, never purged, and answers partial",
+    () => {
+      const paths = workspace();
+      const store = makeStateDb(paths.stateDb);
+      rebuild(paths);
+      store.run("PRAGMA wal_checkpoint(TRUNCATE)");
+      store.close();
+      rmSync(`${paths.stateDb}-wal`, { force: true });
+      rmSync(`${paths.stateDb}-shm`, { force: true });
+      const dir = dirname(paths.stateDb);
+      chmodSync(dir, 0o500);
+      try {
+        const stats = rebuild(paths);
+        expect(stats.sessions.status).toBe("session_store_unreadable");
+        expect(stats.sessions.removed).toBe(0);
+        expect(stats.partial).toBe(true);
+        const res = query(paths, { query: "kiteboarding", env: DM });
+        if (res.status !== "ok") throw new Error(res.reason);
+        expect(res.partial).toBe(true);
+        expect(res.hit_count).toBe(3);
+      } finally {
+        chmodSync(dir, 0o700);
+      }
+    },
+  );
 
   test("query terms are cut at 64 code points, not UTF-16 units", () => {
     const term = queryTerms("\u{1D49C}".repeat(70))[0]!;
