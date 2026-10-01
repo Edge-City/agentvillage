@@ -13,8 +13,8 @@ import {
   filterCooldownQuestions,
   filterActionableOpportunities,
   filterDedupedOpportunities,
-  formatPacificTime,
-  pacificDayBounds,
+  formatVillageTime,
+  villageDayBounds,
   parseOpportunityTranscript,
   selectEvents,
 } from "../build-daily-brief-context";
@@ -234,19 +234,19 @@ describe("build-daily-brief-context helpers", () => {
     ).toEqual(["A", "E", "F", "G", "H"]);
   });
 
-  test("formatPacificTime renders Pacific time without a timezone suffix", () => {
-    expect(formatPacificTime("2026-06-04T16:30:00Z")).toBe("9:30 AM");
-    expect(formatPacificTime("2026-12-04T17:30:00Z")).toBe("9:30 AM");
+  test("formatVillageTime renders Goa (IST) time without a timezone suffix", () => {
+    expect(formatVillageTime("2026-10-15T16:30:00Z")).toBe("10:00 PM");
+    expect(formatVillageTime("2026-10-16T03:30:00Z")).toBe("9:00 AM");
   });
 
-  test("pacificDayBounds respects daylight saving offsets", () => {
-    expect(pacificDayBounds("2026-06-04")).toEqual({
-      startIso: "2026-06-04T07:00:00.000Z",
-      endIso: "2026-06-05T07:00:00.000Z",
+  test("villageDayBounds uses the IST (UTC+5:30) calendar day", () => {
+    expect(villageDayBounds("2026-10-15")).toEqual({
+      startIso: "2026-10-14T18:30:00.000Z",
+      endIso: "2026-10-15T18:30:00.000Z",
     });
-    expect(pacificDayBounds("2026-12-04")).toEqual({
-      startIso: "2026-12-04T08:00:00.000Z",
-      endIso: "2026-12-05T08:00:00.000Z",
+    expect(villageDayBounds("2026-11-01")).toEqual({
+      startIso: "2026-10-31T18:30:00.000Z",
+      endIso: "2026-11-01T18:30:00.000Z",
     });
   });
 
@@ -503,7 +503,54 @@ describe("build-daily-brief-context helpers", () => {
     }
   });
 
-  test("buildDailyBriefContext falls back to NWS when Open-Meteo rate limits", async () => {
+  test("buildDailyBriefContext requests the Mandrem forecast in Celsius and IST", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalEdgeosKey = process.env.EDGEOS_API_KEY;
+    const originalControlPlaneUrl = process.env.EDGE_AGENT_CONTROL_PLANE_URL;
+    const originalAdminToken = process.env.ADMIN_TOKEN;
+    const originalApiKey = process.env.INDEX_API_KEY;
+    delete process.env.EDGEOS_API_KEY;
+    delete process.env.EDGE_AGENT_CONTROL_PLANE_URL;
+    delete process.env.ADMIN_TOKEN;
+    delete process.env.INDEX_API_KEY;
+
+    let weatherParams: URLSearchParams | undefined;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.hostname === "api.open-meteo.com") {
+        weatherParams = url.searchParams;
+        return Response.json({ daily: { temperature_2m_max: [31.4], weather_code: [2] } });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    try {
+      const context = await buildDailyBriefContext({ date: "2026-10-15", userFiles: [] });
+      expect(weatherParams?.get("latitude")).toBe("15.66");
+      expect(weatherParams?.get("longitude")).toBe("73.71");
+      expect(weatherParams?.get("temperature_unit")).toBe("celsius");
+      expect(weatherParams?.get("timezone")).toBe("Asia/Kolkata");
+      expect(weatherParams?.get("start_date")).toBe("2026-10-15");
+      expect(context.weather).toEqual({
+        forecast: "Expect partly cloudy skies and a high of 31°C",
+        emoji: "⛅",
+        source: "open-meteo",
+      });
+      expect(context.timezone).toBe("Asia/Kolkata");
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalEdgeosKey === undefined) delete process.env.EDGEOS_API_KEY;
+      else process.env.EDGEOS_API_KEY = originalEdgeosKey;
+      if (originalControlPlaneUrl === undefined) delete process.env.EDGE_AGENT_CONTROL_PLANE_URL;
+      else process.env.EDGE_AGENT_CONTROL_PLANE_URL = originalControlPlaneUrl;
+      if (originalAdminToken === undefined) delete process.env.ADMIN_TOKEN;
+      else process.env.ADMIN_TOKEN = originalAdminToken;
+      if (originalApiKey === undefined) delete process.env.INDEX_API_KEY;
+      else process.env.INDEX_API_KEY = originalApiKey;
+    }
+  });
+
+  test("buildDailyBriefContext omits weather when Open-Meteo fails", async () => {
     const originalFetch = globalThis.fetch;
     const originalEdgeosKey = process.env.EDGEOS_API_KEY;
     const originalControlPlaneUrl = process.env.EDGE_AGENT_CONTROL_PLANE_URL;
@@ -519,34 +566,13 @@ describe("build-daily-brief-context helpers", () => {
       if (url.startsWith("https://api.open-meteo.com/")) {
         return new Response("rate limited", { status: 429, statusText: "Too Many Requests" });
       }
-      if (url.startsWith("https://api.weather.gov/points/")) {
-        return Response.json({ properties: { forecast: "https://api.weather.gov/gridpoints/MTR/84,106/forecast" } });
-      }
-      if (url === "https://api.weather.gov/gridpoints/MTR/84,106/forecast") {
-        return Response.json({
-          properties: {
-            periods: [
-              {
-                startTime: "2026-06-06T06:00:00-07:00",
-                isDaytime: true,
-                temperature: 82,
-                shortForecast: "Mostly Cloudy",
-              },
-            ],
-          },
-        });
-      }
       throw new Error(`unexpected fetch: ${url}`);
     }) as typeof fetch;
 
     try {
-      const context = await buildDailyBriefContext({ date: "2026-06-06", userFiles: [] });
-      expect(context.weather).toEqual({
-        forecast: "Expect mostly cloudy and a high of 82°F",
-        emoji: "⛅",
-        source: "nws",
-      });
-      expect(context.diagnostics.weatherSource).toBe("nws");
+      const context = await buildDailyBriefContext({ date: "2026-10-15", userFiles: [] });
+      expect(context.weather).toBeUndefined();
+      expect(context.diagnostics.weatherSource).toBe("unavailable");
       expect(context.diagnostics.warnings).toContain("open-meteo weather unavailable: 429 Too Many Requests");
     } finally {
       globalThis.fetch = originalFetch;

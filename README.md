@@ -1,8 +1,10 @@
 # AgentVillage
 
-The Agent Village experience for **Edge Esmeralda 2026** (May 30 – Jun 27, Healdsburg, CA).
+The Agent Village experience for **Edge City India 2026** (Oct 11 – Nov 1, Mandrem, Goa, India).
 
-AgentVillage is the public skills package and onboarding scripts that an agent (running Hermes, OpenClaw, or Claude) loads to participate in the Edge Esmeralda Agent Village. It's a multi-backend package: discovery and intent negotiation through Index Network, knowledge graph through Geo, calendar and directory through EdgeOS. AgentVillage defines what an agent knows, how it authenticates with each backend, and how it interacts with attendees.
+AgentVillage is the public skills package and onboarding scripts that an agent (running Hermes, OpenClaw, or Claude) loads to participate in the Edge City India Agent Village. It's a multi-backend package: discovery and intent negotiation through Index Network, knowledge graph through Geo, calendar and directory through EdgeOS. AgentVillage defines what an agent knows, how it authenticates with each backend, and how it interacts with attendees.
+
+The previous popup, Edge Esmeralda 2026 (Healdsburg, CA), still has skills here (`edge-esmeralda`, `geo-esmeralda`); agents treat them as past background only. The morning brief reads the current popup from env: `AV_POPUP_ID` (EdgeOS popup UUID; calendar/RSVP sections are skipped when unset) and `AV_PORTAL_URL` (portal events base, e.g. `https://<host>/portal/<popup-slug>/events`; event links are omitted and stripped when unset). Brief dates, times, and weather use Mandrem, Goa (`Asia/Kolkata`, °C).
 
 ## What you get
 
@@ -29,8 +31,8 @@ See the project hub for the full diagram and decisions.
 - `skills/` — per-backend skill bundles registered with OpenClaw via per-bundle `SKILL.md`. Mirrors `Edge-City/agentvillage-skills` as a subtree; today this hosts:
   - `skills/index-network/` — Index Network MCP procedural knowledge (onboarding ritual, voice exemplars, cron prompts, heartbeat tasks)
   - `skills/edgeos/` — backend-generic EdgeOS API recipes (events, RSVPs, venues, attendee directory, own profile). Reads `EDGEOS_BEARER_TOKEN` and `EDGEOS_API_KEY` from env; popup id is supplied by the active operator skill.
-  - `skills/edge-esmeralda/` — Edge Esmeralda 2026 popup knowledge: popup constants (popup id, week dates, themes), attendee field semantics, the curated wiki/website/newsletter references (vendored from `Edge-City/agentvillage-skills`; refreshed by upstream CI every 15 min), and the onboarding pointer for obtaining EdgeOS tokens.
-  - `skills/geo-esmeralda/` — Geo knowledge graph recipes and write guidance for attendee-authored content, relations, ontology, and media.
+  - `skills/edge-esmeralda/` — background on the *previous* popup, Edge Esmeralda 2026: popup constants (popup id, week dates, themes), attendee field semantics, the curated wiki/website/newsletter references (vendored from `Edge-City/agentvillage-skills`; refreshed by upstream CI every 15 min), and the onboarding pointer for obtaining EdgeOS tokens. Also hosts the daily-digest cron prompts (directory name kept for install paths).
+  - `skills/geo-esmeralda/` — Edge Esmeralda 2026 (previous popup) only: Geo knowledge graph recipes and write guidance for attendee-authored content, relations, ontology, and media. Not used for Edge City India questions.
   - `skills/token-usage-audit/` — deterministic tenant-local token usage audit script and cron contract. It reads local usage summaries and cron metadata, never calls an LLM, and emits only sanitized aggregate facts.
 - `install/` — bootstrap scripts for plugging AgentVillage into a runtime
 
@@ -98,7 +100,7 @@ x-api-key: <masterKey>
   "email": "alice@example.com",
   "name": "Alice Example",
   "bio": "Independent researcher on coordination problems.",
-  "location": "Healdsburg, CA",
+  "location": "Mandrem, Goa",
   "socials": [
     { "label": "telegram", "value": "@alice" },
     { "label": "twitter",  "value": "alice_eg" }
@@ -278,6 +280,12 @@ The installer:
 7. Installs the Index cron jobs: a script-gated memory signal sync (`0 1 * * *`), a prepare pass (`0 2 * * *`) that composes the morning brief and stages it as an editable, send-ready Kanban task, and a send pass (`0 8 * * *`) that delivers the staged brief when its Kanban status is `ready` or `todo`. The deterministic token usage audit script cron is available as an explicit opt-in and is removed by default from existing tenants on update. The Agent Plaza selfie sender is not installed as a recurring cron; operators can run `skills/agent-plaza/scripts/agent_plaza_selfie.py` explicitly for one-off closeout sends. (The 30-minute `Edge — heartbeat` cron and the former `Edge — Agent Plaza selfie` cron are retired and removed from existing tenants on update.) The prepare pass no longer blocks new briefs for manual approval; operators can still edit, archive, or otherwise change the Kanban task before the send pass if a brief should not ship. Memory sync wakes the agent only when its deterministic preflight finds meaningful work. The one-off Agent Plaza selfie script writes operational state/events/media only under `ops/agentvillage/...`, never `memory/`; when `TELEGRAM_BOT_TOKEN` and `TELEGRAM_HOME_CHANNEL` are present, it sends the image through Telegram Bot API `sendPhoto`, stores a small sanitized `lastFollowupContext` for later ordinary chat interpretation, and emits `wakeAgent:false` so OpenClaw does not duplicate the message. When enabled, the token audit wakes the agent only when local aggregate usage shows a meaningful actionable driver; quiet runs end with `{"wakeAgent":false}` and skip the agent entirely. The end user can't change schedules from chat, but the installer can override the cron times via the flags/env vars above.
 8. Restarts the gateway so all config changes take effect.
 
+Local launchers that refresh skills/plugins without replacing customized workspace
+instructions can pass `--preserve-context`. This keeps existing workspace markdown
+and `SOUL.md`, while copying missing context files and refreshing the installed
+skills/plugins. Normal content-update installs omit this flag so canonical
+instruction changes propagate. It is not a user-state reset option.
+
 Send any message in your chat to bring AgentVillage online. AgentVillage has two independent setup gates with different triggers:
 
 - **AgentVillage welcome** — runs on private-DM first message before any other reply/tool work, is owned by `workspace/AGENTS.md` "First-message gates", and is gated by the local durable marker `memory/welcome-state.json`. Hermes sessions can reset daily or after idle time, so the welcome must not key off session freshness. If the marker says `welcomeSent: true`, the agent skips the welcome and answers normally. Normal installer/update runs snapshot this marker, restore it if it is deleted, and repair clobbered content when the previous marker suppressed the welcome; only `--wipe-user` intentionally removes it.
@@ -322,14 +330,13 @@ Time-sensitive and background prompts run as **Hermes/OpenClaw cron jobs**. The 
 | --- | --- |
 | `AGENTS.md` | Canonical session-start instructions plus operating rules. Hosts the dual onboarding gates (skill-side + AgentVillage-side), the cron-schedule trigger, memory contract, opportunity-quality bar, red lines, and group-chat rules. Always injected by OpenClaw. |
 | `BOOTSTRAP.md` | OpenClaw convention for the first-run file. AgentVillage ships only a stub pointing to `AGENTS.md` here, because OpenClaw deletes BOOTSTRAP.md after first-run setup — anything stored in it is not durable. |
-| `COMMUNITY.md` | Edge Esmeralda context — dates, attendee count, programming format, design principles. The agent reads this when composing welcomes and digests. |
 | `SOUL.md` | Voice, banned vocabulary, "never name the plumbing", boundaries, continuity. |
 | `IDENTITY.md` | AgentVillage identity — role, context, tone. |
 | `USER.md` | Lived notebook — populated by the active skill's bootstrap ritual from the user's onboarding answers. |
 | `TOOLS.md` | Cross-backend rules: channel formatting (Discord/WhatsApp/Telegram), URL preservation, Local files index. Per-backend tool families live in the relevant skill. |
 | `HEARTBEAT.md` | Generic heartbeat tick rules + the cross-backend `memory-curation` task. Backend-specific tasks live in each active skill's `heartbeat.md`. |
 | `skills/index-network/SKILL.md` | Index Network skill bundle entry point. Registered with OpenClaw on install; gates on `mcp.servers.index`. Body points at the bundle's sibling reference files. |
-| `skills/edgeos/SKILL.md` | EdgeOS-API skill: events + attendee directory + curated wiki/website/newsletter references. Currently scoped to Edge Esmeralda 2026. Loaded by OpenClaw alongside index-network. Vendored from `Edge-City/agentvillage-skills`. |
+| `skills/edgeos/SKILL.md` | EdgeOS-API skill: events, RSVPs, venues, attendee directory, own profile. Popup-generic; no Edge City India popup id is configured yet. Loaded by OpenClaw alongside index-network. Vendored from `Edge-City/agentvillage-skills`. |
 | `skills/geo-esmeralda/SKILL.md` | Geo knowledge graph skill: community content, relations, ontology, and attendee-authored writes through the Geo CLI package. |
 
 ## Configuration guide
@@ -408,8 +415,9 @@ Maintained by the Edge City and YoursTruly teams. Direct push access is limited 
 
 ## Project links
 
-- Edge Esmeralda 2026: https://edgeesmeralda.com
-- Substack post: https://edgeesmeralda2026.substack.com/p/the-agent-village-experiment-at-edge
+- Edge City: https://edgecity.live
+- Previous popup, Edge Esmeralda 2026: https://edgeesmeralda.com
+- Substack post (Edge Esmeralda): https://edgeesmeralda2026.substack.com/p/the-agent-village-experiment-at-edge
 
 ## License
 

@@ -18,6 +18,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { portalEventsBaseUrl } from "./validate-digest-urls";
+
 /**
  * Resolve the Index API key.
  *
@@ -51,10 +53,9 @@ export function resolveIndexApiKey(): string | undefined {
   return undefined;
 }
 
-const POPUP_ID = "43746fd0-bce2-472b-93e4-a438177b2dff";
 const EDGEOS_BASE = "https://api.edgeos.world/api/v1";
-const EDGE_ESMERALDA_EVENT_BASE_URL = "https://edgecity.simplefi.tech/portal/edge-esmeralda-2026/events";
-const PACIFIC_TZ = "America/Los_Angeles";
+/** Edge City India 2026 — Mandrem, Goa. All brief/cron day boundaries and displayed times use this zone. */
+const VILLAGE_TZ = "Asia/Kolkata";
 
 const EDGE_TAGS = [
   "Consciousness",
@@ -101,7 +102,7 @@ const INTERNAL_VISIBLE_WORD_PATTERN = /\b(?:bias|intents?|signals?|index|opportu
 export interface DailyBriefWeather {
   forecast: string;
   emoji: string;
-  source: "open-meteo" | "nws" | "unavailable";
+  source: "open-meteo" | "unavailable";
 }
 
 export interface BriefAnnouncement {
@@ -115,7 +116,7 @@ export interface BriefEvent {
   title: string;
   startTime: string;
   endTime?: string | null;
-  timePacific: string;
+  timeLocal: string;
   venue?: string | null;
   eventUrl?: string | null;
   tags: string[];
@@ -153,7 +154,7 @@ export interface BriefUserModel {
 export interface DailyBriefContext {
   date: string;
   displayDate: string;
-  timezone: "America/Los_Angeles";
+  timezone: "Asia/Kolkata";
   announcements: BriefAnnouncement[];
   rsvpEvents: BriefEvent[];
   highlightedEvents: BriefEvent[];
@@ -200,9 +201,9 @@ type EdgeEvent = Record<string, unknown> & {
   host_display_name?: string | null;
 };
 
-export function pacificDate(now = new Date()): string {
+export function villageDate(now = new Date()): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: PACIFIC_TZ,
+    timeZone: VILLAGE_TZ,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -224,7 +225,7 @@ function addDays(date: string, days: number): string {
 
 function timeZoneOffsetMs(instant: Date): number {
   const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: PACIFIC_TZ,
+    timeZone: VILLAGE_TZ,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -245,7 +246,7 @@ function timeZoneOffsetMs(instant: Date): number {
   return zonedAsUtc - instant.getTime();
 }
 
-function pacificLocalTimeToUtc(date: string, hour = 0): Date {
+function villageLocalTimeToUtc(date: string, hour = 0): Date {
   const { year, month, day } = parseDateParts(date);
   const utcGuess = Date.UTC(year, month - 1, day, hour);
   const firstPass = new Date(utcGuess - timeZoneOffsetMs(new Date(utcGuess)));
@@ -253,25 +254,25 @@ function pacificLocalTimeToUtc(date: string, hour = 0): Date {
 }
 
 export function displayDate(date: string): string {
-  const d = pacificLocalTimeToUtc(date, 12);
+  const d = villageLocalTimeToUtc(date, 12);
   return new Intl.DateTimeFormat("en-US", {
-    timeZone: PACIFIC_TZ,
+    timeZone: VILLAGE_TZ,
     weekday: "long",
     month: "long",
     day: "numeric",
   }).format(d);
 }
 
-export function pacificDayBounds(date: string): { startIso: string; endIso: string } {
-  const start = pacificLocalTimeToUtc(date, 0);
-  const end = pacificLocalTimeToUtc(addDays(date, 1), 0);
+export function villageDayBounds(date: string): { startIso: string; endIso: string } {
+  const start = villageLocalTimeToUtc(date, 0);
+  const end = villageLocalTimeToUtc(addDays(date, 1), 0);
   return { startIso: start.toISOString(), endIso: end.toISOString() };
 }
 
-export function formatPacificTime(iso: string): string {
+export function formatVillageTime(iso: string): string {
   const d = new Date(iso);
   return new Intl.DateTimeFormat("en-US", {
-    timeZone: PACIFIC_TZ,
+    timeZone: VILLAGE_TZ,
     hour: "numeric",
     minute: "2-digit",
     hour12: true,
@@ -334,7 +335,8 @@ function eventVenue(event: EdgeEvent): string | null {
 }
 
 function eventUrl(event: EdgeEvent): string | null {
-  return event.id ? `${EDGE_ESMERALDA_EVENT_BASE_URL}/${event.id}` : null;
+  const base = portalEventsBaseUrl();
+  return base && event.id ? `${base}/${event.id}` : null;
 }
 
 function eventScore(event: EdgeEvent, interestTags: string[]): number {
@@ -357,7 +359,7 @@ function toBriefEvent(event: EdgeEvent, reasonHint: string): BriefEvent | null {
     title: event.title,
     startTime: event.start_time,
     endTime: event.end_time,
-    timePacific: formatPacificTime(event.start_time),
+    timeLocal: formatVillageTime(event.start_time),
     venue: eventVenue(event),
     eventUrl: eventUrl(event),
     tags: Array.isArray(event.tags) ? event.tags : [],
@@ -578,11 +580,11 @@ export function filterCooldownQuestions(
 
 async function fetchOpenMeteoWeather(date: string): Promise<DailyBriefWeather> {
   const params = new URLSearchParams({
-    latitude: String(HEALDSBURG_LAT),
-    longitude: String(HEALDSBURG_LON),
+    latitude: String(MANDREM_LAT),
+    longitude: String(MANDREM_LON),
     daily: "temperature_2m_max,weather_code",
-    temperature_unit: "fahrenheit",
-    timezone: PACIFIC_TZ,
+    temperature_unit: "celsius",
+    timezone: VILLAGE_TZ,
     start_date: date,
     end_date: date,
   });
@@ -596,46 +598,9 @@ async function fetchOpenMeteoWeather(date: string): Promise<DailyBriefWeather> {
   if (high == null || code == null) throw new Error("missing daily forecast data");
   const mapping = WEATHER_CODE_MAP[code] ?? { description: "mixed conditions", emoji: "🌤️" };
   return {
-    forecast: `Expect ${mapping.description} and a high of ${Math.round(high)}°F`,
+    forecast: `Expect ${mapping.description} and a high of ${Math.round(high)}°C`,
     emoji: mapping.emoji,
     source: "open-meteo",
-  };
-}
-
-function nwsEmoji(shortForecast: string): string {
-  const text = shortForecast.toLowerCase();
-  if (text.includes("thunder")) return "⛈️";
-  if (text.includes("rain") || text.includes("shower")) return "🌦️";
-  if (text.includes("snow")) return "❄️";
-  if (text.includes("fog")) return "🌫️";
-  if (text.includes("sunny") || text.includes("clear")) return "☀️";
-  if (text.includes("cloud")) return text.includes("partly") || text.includes("mostly") ? "⛅" : "☁️";
-  return "🌤️";
-}
-
-async function fetchNwsWeather(date: string): Promise<DailyBriefWeather> {
-  const headers = { "User-Agent": "AgentVillage daily digest (https://github.com/Edge-City/agentvillage)" };
-  const pointRes = await fetch(`https://api.weather.gov/points/${HEALDSBURG_LAT},${HEALDSBURG_LON}`, { headers });
-  if (!pointRes.ok) throw new Error(`${pointRes.status} ${pointRes.statusText}`);
-  const pointData = (await pointRes.json()) as { properties?: { forecast?: string } };
-  if (!pointData.properties?.forecast) throw new Error("missing NWS forecast URL");
-
-  const forecastRes = await fetch(pointData.properties.forecast, { headers });
-  if (!forecastRes.ok) throw new Error(`${forecastRes.status} ${forecastRes.statusText}`);
-  const forecastData = (await forecastRes.json()) as {
-    properties?: {
-      periods?: Array<{ startTime?: string; isDaytime?: boolean; temperature?: number; shortForecast?: string }>;
-    };
-  };
-  const periods = forecastData.properties?.periods ?? [];
-  const period = periods.find((p) => p.isDaytime === true && p.startTime && pacificDate(new Date(p.startTime)) === date)
-    ?? periods.find((p) => p.isDaytime === true);
-  if (!period?.shortForecast || period.temperature == null) throw new Error("missing NWS daytime forecast");
-  const description = period.shortForecast.trim().toLowerCase();
-  return {
-    forecast: `Expect ${description} and a high of ${Math.round(period.temperature)}°F`,
-    emoji: nwsEmoji(period.shortForecast),
-    source: "nws",
   };
 }
 
@@ -644,12 +609,6 @@ async function fetchWeather(date: string, warnings: string[]): Promise<DailyBrie
     return await fetchOpenMeteoWeather(date);
   } catch (err) {
     warnings.push(`open-meteo weather unavailable: ${err instanceof Error ? err.message : String(err)}`);
-  }
-
-  try {
-    return await fetchNwsWeather(date);
-  } catch (err) {
-    warnings.push(`nws weather unavailable: ${err instanceof Error ? err.message : String(err)}`);
     return { forecast: "", emoji: "", source: "unavailable" };
   }
 }
@@ -678,10 +637,11 @@ async function fetchAnnouncements(date: string, warnings: string[]): Promise<{ s
 
 async function fetchEvents(date: string, interestTags: string[], warnings: string[]): Promise<{ source: "edgeos" | "unavailable"; highlightedEvents: BriefEvent[]; interestEvents: BriefEvent[] }> {
   const token = process.env.EDGEOS_API_KEY;
-  if (!token) return { source: "unavailable", highlightedEvents: [], interestEvents: [] };
-  const { startIso, endIso } = pacificDayBounds(date);
+  const popupId = process.env.AV_POPUP_ID?.trim();
+  if (!token || !popupId) return { source: "unavailable", highlightedEvents: [], interestEvents: [] };
+  const { startIso, endIso } = villageDayBounds(date);
   const params = new URLSearchParams({
-    popup_id: POPUP_ID,
+    popup_id: popupId,
     event_status: "published",
     start_after: startIso,
     start_before: endIso,
@@ -703,10 +663,11 @@ async function fetchEvents(date: string, interestTags: string[], warnings: strin
 
 async function fetchRsvps(date: string, warnings: string[]): Promise<{ source: "edgeos" | "unavailable"; rsvpEvents: BriefEvent[] }> {
   const token = process.env.EDGEOS_API_KEY;
-  if (!token) return { source: "unavailable", rsvpEvents: [] };
-  const { startIso, endIso } = pacificDayBounds(date);
+  const popupId = process.env.AV_POPUP_ID?.trim();
+  if (!token || !popupId) return { source: "unavailable", rsvpEvents: [] };
+  const { startIso, endIso } = villageDayBounds(date);
   const params = new URLSearchParams({
-    popup_id: POPUP_ID,
+    popup_id: popupId,
     event_status: "published",
     rsvped_only: "true",
     start_after: startIso,
@@ -731,9 +692,9 @@ async function fetchRsvps(date: string, warnings: string[]): Promise<{ source: "
   }
 }
 
-/** Healdsburg, CA — Edge Esmeralda location. */
-const HEALDSBURG_LAT = 38.6105;
-const HEALDSBURG_LON = -122.8686;
+/** Mandrem, Goa, India — Edge City India 2026 location. */
+const MANDREM_LAT = 15.66;
+const MANDREM_LON = 73.71;
 
 /**
  * Map WMO weather codes to human-readable descriptions and emojis.
@@ -1053,7 +1014,7 @@ export async function buildDailyBriefContext(options: {
   opportunitiesFile?: string;
   userFiles?: string[];
 } = {}): Promise<DailyBriefContext> {
-  const date = options.date ?? pacificDate();
+  const date = options.date ?? villageDate();
   const warnings: string[] = [];
   const userFiles = options.userFiles ?? ["USER.md", "MEMORY.md", `memory/${date}.md`];
   const interestText = (await Promise.all(userFiles.map(readIfExists))).join("\n");
@@ -1122,7 +1083,7 @@ export async function buildDailyBriefContext(options: {
   return {
     date,
     displayDate: displayDate(date),
-    timezone: PACIFIC_TZ,
+    timezone: VILLAGE_TZ,
     announcements: announcementResult.announcements,
     rsvpEvents: rsvpResult.rsvpEvents,
     highlightedEvents: eventResult.highlightedEvents,

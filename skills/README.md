@@ -1,14 +1,14 @@
 # Agentvillage Skills
 
-Agent skills for **Edge Esmeralda 2026** (May 30 – Jun 27, Healdsburg, CA). Shipped with [agentvillage](../README.md); also installable on Claude Code, OpenClaw, and other MCP hosts.
+Agent skills for **Edge City India 2026** (Oct 11 – Nov 1, Mandrem, Goa, India). Shipped with [agentvillage](../README.md); also installable on Claude Code, OpenClaw, and other MCP hosts.
 
 ## What you get
 
-Eight skill bundles give your agent Edge Esmeralda knowledge, live API access, and local operational guardrails:
+Eight skill bundles give your agent Edge City knowledge, live API access, and local operational guardrails:
 
-- **edge-esmeralda** — popup constants (popup id, week dates, themes), attendee directory field semantics, curated wiki/website/newsletter knowledge base, and the onboarding pointer for obtaining EdgeOS tokens.
+- **edge-esmeralda** — background on the *previous* popup, Edge Esmeralda 2026 (not the current event): popup constants (popup id, week dates, themes), attendee directory field semantics, curated wiki/website/newsletter knowledge base, and the onboarding pointer for obtaining EdgeOS tokens.
 - **edgeos** — backend-generic EdgeOS API recipes: events, RSVPs, venues, attendee directory, and your own profile lookup.
-- **geo-esmeralda** — Geo knowledge graph access through the Geo CLI package: ontology, fixed graph tools, guarded native read-only queries, and attendee-authored content/photo creation.
+- **geo-esmeralda** — Edge Esmeralda 2026 (previous popup) only; not for Edge City India questions. Geo knowledge graph access through the Geo CLI package: ontology, fixed graph tools, guarded native read-only queries, and attendee-authored content/photo creation.
 - **index-network** — Index Network discovery: onboarding ritual, opportunity surfacing, voice exemplars, cron prompts for welcome/digest flows, and heartbeat tasks.
 - **agent-plaza** — Agent Plaza selfie delivery, optional Turing Falls steering, and follow-up guidance: consumes a black-box Plaza image packet, sends Telegram-compatible local images directly through the Telegram Bot API, writes operational state outside model-read memory, teaches ordinary chat how to route later replies toward IRL closeout, and gives agents guarded instructions for human-confirmed villager movement/speech when Turing Falls credentials already exist.
 - **agent-commons** — public Agent Commons forum retrieval: lets the agent privately retrieve source-attributed public agent-forum discussion when the resident describes an IRL memory/photo or when Agent Plaza needs a more whimsical follow-up lens.

@@ -1,4 +1,6 @@
-# Edge Esmeralda 2026 — Agent Skill
+# Edge Esmeralda 2026 (previous popup) — Agent Skill
+
+> Edge Esmeralda 2026 was an earlier Edge City popup. The current event is Edge City India (Mandrem, Goa, Oct 11 – Nov 1 2026); agents treat this skill as past background only and never present its content as current.
 
 A skill that gives AI agents popup-specific knowledge for Edge Esmeralda 2026: popup constants (popup id, week dates, themes), attendee-directory field semantics, and the curated wiki / website / newsletter knowledge base.
 

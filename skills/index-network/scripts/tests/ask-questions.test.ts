@@ -221,7 +221,7 @@ describe("askQuestions", () => {
     let fetchCalled = false;
 
     const result = await askQuestions({
-      date: "2026-06-27",
+      date: "2026-11-01",
       stateFile: "state.json",
       apiKey: "",
       fetchQuestions: async (_opts) => {
@@ -231,24 +231,24 @@ describe("askQuestions", () => {
     });
 
     expect(result).toEqual({
-      questionId: "edge-closeout-final-reflection-2026-06-27",
+      questionId: "edge-closeout-final-reflection-2026-11-01",
       prompt: "Quick closeout check: did AgentVillage help you meet, message, or better understand anyone this week? Reply with one sentence.",
     });
     expect(fetchCalled).toBe(false);
     const state = JSON.parse(await Bun.file("state.json").text());
     expect(state.questionDelivery).toEqual({
-      "edge-closeout-final-reflection-2026-06-27": "2026-06-27",
+      "edge-closeout-final-reflection-2026-11-01": "2026-11-01",
     });
   });
 
   test("does not repeat final closeout reflection after it is recorded", async () => {
     tempWorkspace();
     await Bun.write("state.json", JSON.stringify({
-      questionDelivery: { "edge-closeout-final-reflection-2026-06-27": "2026-06-27" },
+      questionDelivery: { "edge-closeout-final-reflection-2026-11-01": "2026-11-01" },
     }));
 
     const result = await askQuestions({
-      date: "2026-06-27",
+      date: "2026-11-01",
       stateFile: "state.json",
       apiKey: "test-key",
       fetchQuestions: mockFetch([QUESTION_A]),
@@ -260,11 +260,11 @@ describe("askQuestions", () => {
   test("does not repeat final closeout reflection after the morning brief recorded it", async () => {
     tempWorkspace();
     await Bun.write("state.json", JSON.stringify({
-      questionDelivery: { "daily-identity-2026-06-27": "2026-06-27" },
+      questionDelivery: { "daily-identity-2026-11-01": "2026-11-01" },
     }));
 
     const result = await askQuestions({
-      date: "2026-06-27",
+      date: "2026-11-01",
       stateFile: "state.json",
       apiKey: "test-key",
       fetchQuestions: mockFetch([QUESTION_A]),

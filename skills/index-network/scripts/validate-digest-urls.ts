@@ -31,8 +31,18 @@ const CONNECT_PATH = /^\/c\/[A-Za-z0-9_-]+\/?$/;
 const PROFILE_PATH = /^\/u\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/?$/;
 /** Negotiation-trace link: `/chat/<conversationId-uuid>`, optional trailing slash. */
 const CHAT_PATH = /^\/chat\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/?$/;
-/** Edge Esmeralda calendar event link. */
-const EDGE_ESMERALDA_EVENT_PATH = /^\/portal\/edge-esmeralda-2026\/events\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/?$/;
+/** Event id path segment appended to the village portal events base, optional trailing slash. */
+const EVENT_ID_SEGMENT = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/?$/;
+
+/**
+ * The village portal's events base URL (e.g. `https://<host>/portal/<popup-slug>/events`)
+ * from `AV_PORTAL_URL`, without a trailing slash. `null` when unset: no event links
+ * are built or allowed until the deployment configures the current popup's portal.
+ */
+export function portalEventsBaseUrl(): string | null {
+  const raw = process.env.AV_PORTAL_URL?.trim().replace(/\/+$/, "");
+  return raw ? raw : null;
+}
 
 /**
  * A markdown inline link: `[label](url)`. Label runs to the first `]`; url to the next `)`.
@@ -63,10 +73,10 @@ export interface SanitizeDigestOptions {
 }
 
 /**
- * Whether `url` is a legitimate digest action link (connect/profile) or
- * Edge Esmeralda calendar event link. Connect/profile links are host-agnostic
- * by path shape so dev/prod bases both pass. Event links are intentionally
- * pinned to the Edge City host + event path.
+ * Whether `url` is a legitimate digest action link (connect/profile) or a
+ * calendar event link under the configured village portal (`AV_PORTAL_URL`).
+ * Connect/profile links are host-agnostic by path shape so dev/prod bases both
+ * pass. Event links are pinned to the configured portal origin + events path.
  * A non-absolute or unparseable URL is never allowed.
  */
 export function isAllowedDigestUrl(url: string): boolean {
@@ -76,10 +86,21 @@ export function isAllowedDigestUrl(url: string): boolean {
   } catch {
     return false;
   }
-  return CONNECT_PATH.test(parsed.pathname)
-    || PROFILE_PATH.test(parsed.pathname)
-    || CHAT_PATH.test(parsed.pathname)
-    || (parsed.hostname === "edgecity.simplefi.tech" && EDGE_ESMERALDA_EVENT_PATH.test(parsed.pathname));
+  if (CONNECT_PATH.test(parsed.pathname) || PROFILE_PATH.test(parsed.pathname) || CHAT_PATH.test(parsed.pathname)) {
+    return true;
+  }
+  const base = portalEventsBaseUrl();
+  if (!base) return false;
+  let baseUrl: URL;
+  try {
+    baseUrl = new URL(base);
+  } catch {
+    return false;
+  }
+  const basePath = `${baseUrl.pathname.replace(/\/+$/, "")}/`;
+  return parsed.origin === baseUrl.origin
+    && parsed.pathname.startsWith(basePath)
+    && EVENT_ID_SEGMENT.test(parsed.pathname.slice(basePath.length));
 }
 
 /**

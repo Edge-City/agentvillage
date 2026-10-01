@@ -29,9 +29,10 @@ STATE_VERSION = 1
 NO_REPLY = {"wakeAgent": False}
 
 
-def pacific_today() -> str:
+def village_today() -> str:
+    """Today's date in the village timezone (Edge City India, Goa: Asia/Kolkata)."""
     if ZoneInfo is not None:
-        return datetime.now(ZoneInfo("America/Los_Angeles")).date().isoformat()
+        return datetime.now(ZoneInfo("Asia/Kolkata")).date().isoformat()
     return datetime.now(timezone.utc).date().isoformat()
 
 
@@ -111,7 +112,7 @@ def main(argv: list[str]) -> int:
 
     memory_path = Path(args.memory_file)
     state_path = Path(args.state_file)
-    today = pacific_today()
+    today = village_today()
     state = read_state(state_path)
     signals = memory_signals(state)
 

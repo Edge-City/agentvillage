@@ -24,24 +24,15 @@ import {
   fetchPendingQuestionsFromMcp,
   filterCooldownQuestions,
   resolveIndexApiKey,
+  villageDate,
 } from "./build-daily-brief-context";
 
-const FINAL_REFLECTION_DATE = "2026-06-27";
-const FINAL_REFLECTION_QUESTION_ID = "edge-closeout-final-reflection-2026-06-27";
+/** Last day of Edge City India 2026 (Oct 11 – Nov 1). */
+const FINAL_REFLECTION_DATE = "2026-11-01";
+const FINAL_REFLECTION_QUESTION_ID = `edge-closeout-final-reflection-${FINAL_REFLECTION_DATE}`;
 const FINAL_REFLECTION_MORNING_QUESTION_ID = `daily-identity-${FINAL_REFLECTION_DATE}`;
 const FINAL_REFLECTION_PROMPT =
   "Quick closeout check: did AgentVillage help you meet, message, or better understand anyone this week? Reply with one sentence.";
-
-function pacificDate(): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Los_Angeles",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
-  return `${get("year")}-${get("month")}-${get("day")}`;
-}
 
 /** Whole days elapsed from `earlier` to `later` (both YYYY-MM-DD). */
 function daysBetween(earlier: string, later: string): number {
@@ -135,7 +126,7 @@ export async function askQuestions(options: {
   /** Injectable for tests — defaults to resolveIndexApiKey(). */
   apiKey?: string;
 } = {}): Promise<AskQuestionsResult | SilentResult> {
-  const date = options.date ?? pacificDate();
+  const date = options.date ?? villageDate();
   const stateFile = options.stateFile ?? "memory/heartbeat-state.json";
   const fetchQuestions = options.fetchQuestions ?? fetchPendingQuestionsFromMcp;
   const questionDelivery = await readQuestionDelivery(stateFile);

@@ -1,14 +1,18 @@
 ---
 name: edge-esmeralda-2026
-description: Edge Esmeralda 2026 — a month-long popup village (May 30 – Jun 27, Healdsburg, CA). Carries popup constants (popup id, week dates, themes), attendee directory field semantics, and the curated wiki / website / newsletter knowledge base. Pair with the `edgeos` skill for live API access, the `index-network` skill for discovery, and the `geo-esmeralda` skill for community-authored content and main-chat history.
+description: Background on a PREVIOUS Edge City popup, Edge Esmeralda 2026 (May 30 – Jun 27 2026, Healdsburg, CA) — not the current event. The current event is Edge City India (Oct 11 – Nov 1 2026, Mandrem, Goa). Use this skill only when the user explicitly asks about Edge Esmeralda or Edge City's history/mission; never present its dates, weeks, themes, venues, wiki logistics, or popup id as current or as applying to Edge City India. For India logistics you don't have, say so and point the user to the Edge City portal or organisers.
 version: 3.1.0
 author: Edge City
 tags: [edge-city, edge-esmeralda, popup-village, community]
 ---
 
-# Edge Esmeralda 2026 — Agent Skill
+# Edge Esmeralda 2026 (previous popup) — Agent Skill
 
-You have access to data about **Edge Esmeralda 2026**, a month-long popup village hosted on the EdgeOS platform.
+> **Previous popup, not the current event.** You serve residents of **Edge City India** (Mandrem, Goa, India — October 11 to November 1, 2026). Everything below describes **Edge Esmeralda 2026**, an earlier Edge City popup. Use it only as background when the user explicitly asks about Edge Esmeralda or Edge City's history, and always frame it in the past tense. Never answer an India question (schedule, "what's happening", venues, accommodation, travel, tickets, health, kids, transport, local tips) from this skill. If you don't have the India detail, say you don't have it for Edge City India yet and point the user to the Edge City portal or the organisers.
+>
+> The Edge City website reference (mission, leadership, roadmap, ecosystem) is about the organisation and can be used as general background.
+
+This skill holds data about **Edge Esmeralda 2026**, a month-long popup village hosted on the EdgeOS platform.
 
 - **Dates**: May 30 – June 27, 2026
 - **Location**: Healdsburg, California (Sonoma County)
@@ -122,7 +126,7 @@ If the `references/` directory is missing (the upstream CI workflow that generat
 
 ## 5. Cross-skill orchestration
 
-When a user asks about Edge Esmeralda, route the work like this:
+Only when a user explicitly asks about Edge Esmeralda (the previous popup), route the work like this. Questions about Edge City India must not be routed here:
 
 - **Calendar / RSVP / venue / directory API call** → `edgeos` skill. Pass `popup_id` from §1.
 - **Discovery, intent-based matching, "who should I meet?"** → `index-network` skill.
@@ -134,7 +138,7 @@ When a user asks about Edge Esmeralda, route the work like this:
 
 ## 6. Tips for answering well
 
-- **Default date range** for broad calendar queries: 2026-05-30 to 2026-06-27.
+- **Default date range** for broad Edge Esmeralda calendar queries: 2026-05-30 to 2026-06-27.
 - **Convert relative dates** ("today", "tomorrow", "this Thursday") to ISO-8601 timestamps in `America/Los_Angeles`. Use the local date and UTC offset from your system timestamp — never derive the date from UTC alone.
 - **Combine sources** when needed. "What experiments are running this week?" pulls from both the wiki (experiment descriptions) and the `edgeos` calendar (live schedule).
 - **For venue questions**, first fetch the wiki for venue names / descriptions, then call the `edgeos` venues endpoint with `popup_id` from §1.
