@@ -22,6 +22,20 @@ of its config. Modelled on approval-md-hosted `hermes-image/selfcheck.py`
    `fail_closed` spec whose command is a script running `kill -9 $$` is fired
    through `run_once` and must come back as a block. The patch marker grep is
    reported only as a hint.
+4b. The exit-1 probe (DATA-234): a `fail_closed` spec whose command exits 1
+   with an empty stdout, fired the same way. Stock Hermes reads no directive
+   as an ALLOW (`_evaluate_result`); the checkpoint's widened patch (DATA-228)
+   blocks it. Reported as `exit1_blocks` (true, false, or null when the probe
+   could not run), never a problem: the shim itself prints a block directive
+   and exits 2 on every failure path it can see.
+4c. The consent allowlist and its lock (`shell_hooks.allowlist_path()` and the
+   `.lock` sibling Hermes opens "a+"): each absent, or a regular file owned by
+   this user that it can read (the lock: read and write); an absent lock needs
+   a home this user can write. A lock Hermes cannot open makes
+   `register_from_config` raise at gateway start, which the gateway swallows:
+   no hook registers (`allowlist-unusable:<file>:<why>`, a problem). Whether
+   the allowlist already holds the shim's entry is reported, not judged (the
+   first gateway start after an install records it). Nothing is written.
 5. With Hermes's own parser (`iter_configured_hooks`, config order), checks
    EVERY gated matcher: the FIRST spec for each (matcher, shim) pair is the one
    Hermes registers (later duplicates are dropped), so it must exist and be
@@ -47,6 +61,7 @@ import argparse
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -99,6 +114,71 @@ def signal_probe(shell_hooks, run_once) -> bool:
         return isinstance(parsed, dict) and parsed.get("action") == "block"
     except Exception:  # noqa: BLE001 - a probe that cannot run proves nothing
         return False
+
+
+def exit1_probe(shell_hooks, run_once):
+    """Fire a fail_closed hook that exits 1 with no output; True if Hermes blocks, False if it allows, None if unknown."""
+    try:
+        with tempfile.TemporaryDirectory() as scratch:
+            hook = os.path.join(scratch, "exit1.sh")
+            with open(hook, "w", encoding="utf-8") as fh:
+                fh.write("#!/bin/sh\ncat >/dev/null\nexit 1\n")
+            os.chmod(hook, 0o700)
+            spec = shell_hooks.ShellHookSpec(event="pre_tool_call", command=hook, matcher="terminal",
+                                             timeout=30, fail_closed=True)
+            r = run_once(spec, {"tool_name": "terminal", "args": {"command": "true"},
+                                "session_id": "av-approval-exit1-probe"})
+        if r.get("error") or r.get("timed_out") or r.get("returncode") != 1:
+            return None
+        parsed = r.get("parsed")
+        return isinstance(parsed, dict) and parsed.get("action") == "block"
+    except Exception:  # noqa: BLE001 - a probe that cannot run proves nothing
+        return None
+
+
+def allowlist_probe(shell_hooks, home: str, shim: str, problems: list) -> dict:
+    """Stat-only facts on the allowlist and its lock; appends `allowlist-unusable:*` problems. Writes nothing."""
+    try:
+        path = str(shell_hooks.allowlist_path())
+        basis = "hermes"
+    except Exception:  # noqa: BLE001 - an older build without the helper: Hermes's documented default
+        path = os.path.join(home, "shell-hooks-allowlist.json")
+        basis = "default"
+    out: dict = {"basis": basis}
+    uid = os.geteuid()
+    for key, p, mode in (("allowlist", path, os.R_OK), ("allowlist_lock", path + ".lock", os.R_OK | os.W_OK)):
+        name = os.path.basename(p)
+        try:
+            st = os.lstat(p)
+        except FileNotFoundError:
+            parent = os.path.dirname(p) or "."
+            if key == "allowlist_lock" and not os.access(parent, os.W_OK | os.X_OK):
+                out[key] = "uncreatable"
+                problems.append(f"allowlist-unusable:{name}:uncreatable")
+            else:
+                out[key] = "absent"
+            continue
+        except OSError:
+            out[key] = "unstatable"
+            problems.append(f"allowlist-unusable:{name}:unstatable")
+            continue
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+            why = "not-regular"
+        elif st.st_uid != uid:
+            why = "wrong-owner"
+        elif not os.access(p, mode):
+            why = "not-read-write" if mode & os.W_OK else "unreadable"
+        else:
+            why = ""
+        out[key] = why or "ok"
+        if why:
+            problems.append(f"allowlist-unusable:{name}:{why}")
+    try:
+        entry = shell_hooks.allowlist_entry_for("pre_tool_call", shim)
+        out["shim_recorded"] = entry is not None
+    except Exception:  # noqa: BLE001
+        out["shim_recorded"] = None
+    return out
 
 
 def main() -> int:
@@ -165,6 +245,8 @@ def main() -> int:
     except OSError:
         facts["signal_patch_marker"] = False
     facts["signal_patch"] = signal_probe(shell_hooks, run_once)
+    facts["exit1_blocks"] = exit1_probe(shell_hooks, run_once)
+    facts["consent_allowlist"] = allowlist_probe(shell_hooks, a.home, a.shim, problems)
 
     try:
         facts["consent_effective"] = bool(shell_hooks._resolve_effective_accept(cfg, False))

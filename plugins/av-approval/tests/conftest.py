@@ -8,6 +8,7 @@ av-events suite does. Hermes is never imported.
 from __future__ import annotations
 
 import importlib.util
+import json
 import logging
 import sys
 import threading
@@ -20,7 +21,14 @@ import pytest
 
 PLUGIN_DIR = Path(__file__).resolve().parents[1]
 MODULE_NAME = "hermes_plugins.av_approval"
-ENV_VARS = ("AV_APPROVAL_ENABLED", "AV_APPROVAL_URL", "AV_APPROVAL_TOKEN")
+ENV_VARS = (
+    "AV_APPROVAL_ENABLED",
+    "AV_APPROVAL_URL",
+    "AV_APPROVAL_TOKEN",
+    "AV_APPROVAL_TOKEN_FILE",
+    "HERMES_ACCEPT_HOOKS",
+    "HERMES_HOME",
+)
 
 
 def load_plugin():
@@ -110,6 +118,54 @@ def clean_env(monkeypatch):
     yield monkeypatch
     if hasattr(logger, "_av_approval_logged"):
         delattr(logger, "_av_approval_logged")
+
+
+#: The installer's gated matchers, as config.yaml carries them.
+SHIM_REL = "agent-hooks/hermes-hook-shim.sh"
+
+
+def write_gate(home: Path, matchers, *, entries=None, auto_accept=True, env_lines=None) -> Path:
+    """A HERMES_HOME as install/install_approval.ts leaves it: hooks block, consent, shim, marker."""
+    import hashlib
+
+    import yaml
+
+    shim = home / SHIM_REL
+    shim.parent.mkdir(parents=True, exist_ok=True)
+    shim.write_text("#!/bin/sh\n# stand-in shim\ncat >/dev/null\necho '{}'\n", encoding="utf-8")
+    shim.chmod(0o700)
+    marker = {"daemon_id": None, "tenant_id": None, "installed_at": "2026-10-02T00:00:00Z", "overrides": [],
+              "prior": {}, "shim_sha256": hashlib.sha256(shim.read_bytes()).hexdigest()}
+    (home / "agent-hooks" / "approval-surface.json").write_text(json.dumps(marker), encoding="utf-8")
+    if entries is None:
+        entries = [{"matcher": m, "command": str(shim), "timeout": 300, "fail_closed": True} for m in matchers]
+    cfg = {"model": {"default": "m"}, "hooks": {"pre_tool_call": entries}, "hooks_auto_accept": auto_accept,
+           "plugins": {"enabled": ["av-approval"], "hook_callback_timeout": 600}}
+    (home / "config.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    lines = env_lines if env_lines is not None else ["# control plane", "AV_EVENTS_TOKEN=keep", "HERMES_ACCEPT_HOOKS=1"]
+    (home / ".env").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return shim
+
+
+@pytest.fixture
+def gate(clean_env, tmp_path):
+    """A healthy enforced-on gate; returns (monkeypatch, home, loaded plugin)."""
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    plugin = load_plugin()
+    write_gate(home, plugin.GATED_MATCHERS)
+    clean_env.setenv("HERMES_HOME", str(home))
+    clean_env.setenv("AV_APPROVAL_ENABLED", "1")
+    clean_env.setenv("AV_APPROVAL_URL", "http://127.0.0.1:4682")
+    clean_env.setenv("HERMES_ACCEPT_HOOKS", "1")
+    yield clean_env, home, plugin
+    # Undo any permission a test took away, so tmp_path can be removed.
+    for path in (home, *home.rglob("*")):
+        try:
+            if not path.is_symlink():
+                path.chmod(0o700)
+        except OSError:
+            pass
 
 
 @pytest.fixture

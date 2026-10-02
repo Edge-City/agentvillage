@@ -47,6 +47,20 @@ src/core/command-class.ts at 6b74ca72):
     outside it (files.delete.out_of_scope) wait for the resident. The consent
     copy says "delete files outside its workspace" for that reason.
 
+Tools routed through the gate with NO classifier rule yet (DATA-234):
+cronjob_manage, process_manage, browser_* (browser_exec), skill_manage,
+delegate_task and send_message reach the facade, but approval-md core
+6b74ca72 emits no class for any of them: the Hermes adapter passes an unknown
+tool through (`{}`), so they are recorded under the core's default handling,
+not judged. The rows below (cron.manage, process.write, browser.exec,
+skill.manage, agent.delegate; message.send was already here) are written now
+so they take effect, manual, the day the core lane adds the rules
+(skills/approval/README.md, "Classifier follow-up", has the tool-to-class
+table). A cron job's script runs at the tick with no hook at all, so creating
+or changing the job (cron.manage) is the only point a tap can come. Carter may
+set any of these autonomous for day one ("the gate blocks nothing, records
+everything"); manual is the template's default.
+
 The read roots are the daemon host's, not the sandbox's. The hook envelope's
 paths are sandbox paths (/home/hermes/.hermes/…), which fall outside every read
 root on the daemon host, so a file read the classifier judges by path comes back
@@ -90,6 +104,12 @@ classes:
   content.post:              { autonomy: manual }
   network.call:              { autonomy: manual }   # every host at this version; see the note above
   read.web:                  { autonomy: manual }   # a GET can send (Telegram sendMessage); see the note above
+  # Routed through the gate, no classifier rule yet (inert until the core emits them; see the note above).
+  cron.manage:               { autonomy: manual }   # cronjob_manage create/update/run; its script runs unhooked at every tick
+  process.write:             { autonomy: manual }   # process_manage write/submit into a running process
+  browser.exec:              { autonomy: manual }   # browser_exec / browser_cdp code in the page
+  skill.manage:              { autonomy: manual }   # skill_manage: the agent's own instructions
+  agent.delegate:            { autonomy: manual }   # delegate_task: a subagent's calls
   # Housekeeping inside the sandbox runs and is recorded.
   files.delete.scratch:      { autonomy: autonomous }
   # The gate's own organs and the resident's credentials: never the agent.

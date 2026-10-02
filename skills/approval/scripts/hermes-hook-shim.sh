@@ -13,6 +13,23 @@
 #     APPROVAL_HOOK_URL_ENV / APPROVAL_HOOK_TOKEN_ENV, which
 #     install/install_approval.ts also writes into $HERMES_HOME/.env), and the
 #     log defaults to $HERMES_HOME/agent-hooks/approval-hook.log.
+#   - DATA-234 (2026-10-02), the co-located daemon and the shim's own fatal
+#     paths; the gate logic (what a facade answer means) is unchanged:
+#       * by hand, the agent credential is read from the file
+#         AV_APPROVAL_TOKEN_FILE names (default $HERMES_HOME/approval/agent-token
+#         when that file exists), owned by this user, mode 0600, before the
+#         environment variable; the value is never printed or logged;
+#       * the facade URL may be `unix:<absolute socket path>` (curl
+#         --unix-socket) or `http://127.0.0.1:<port>` (loopback, no
+#         APPROVAL_FACADE_ALLOW_HTTP needed); before every POST to a loopback
+#         URL the listener must belong to the approval daemon's uid
+#         (AV_APPROVAL_DAEMON_UID, default 10001), read from /proc/net/tcp{,6},
+#         and a unix socket and its directory must be that uid's; anything
+#         else blocks with `facade_listener_foreign`;
+#       * a variable name may not start with a digit (`${1ABC:-}` is a fatal
+#         "bad substitution" that would end the shell before any directive),
+#         and a clock that does not print digits reads as 0 (an arithmetic
+#         error is fatal too) and turns re-asking off.
 # The Agent Village sandbox has one unix user, so the shim runs "by hand"
 # there (no /opt/approval/hook-home, no setuid launcher; skills/approval/
 # README.md says why). install/install_approval.ts installs this file as
@@ -69,7 +86,14 @@
 #                            under an entry timeout above it, on a Hermes
 #                            that honours fail_closed)
 #   APPROVAL_FACADE_ALLOW_HTTP=1  accept an http:// facade URL (local fakes
-#                            only); otherwise only https:// is accepted
+#                            only); otherwise only https://, the loopback
+#                            http://127.0.0.1:<port> and unix:<path> are accepted
+#   AV_APPROVAL_TOKEN_FILE   by hand: a file holding the agent credential
+#                            (default $HERMES_HOME/approval/agent-token when it
+#                            exists); read before the environment variable
+#   AV_APPROVAL_DAEMON_UID   the uid that must own a loopback listener or a
+#                            unix socket facade (default 10001, the co-located
+#                            daemon's)
 #
 # WAITING FOR A HUMAN. A facade reached through a public proxy must answer
 # within the proxy's cut (about 30 s), far short of the time a human needs to
@@ -121,8 +145,17 @@ done
 
 HOOK_HOME=/opt/approval/hook-home
 FACADE_ENV=$HOOK_HOME/facade.env
+# Where the listener table is read. Fixed here, never taken from the
+# environment; the test suite substitutes this one line.
+AV_PROC_ROOT=/proc
 
-now_ms() { "$T_date" +%s%3N 2>/dev/null || echo 0; }
+# Digits only: BSD date prints `...3N` for %3N, and `$(( ))` over anything but
+# digits is a fatal error that ends the shell before it can print a directive.
+now_ms() {
+  v=$("$T_date" +%s%3N 2>/dev/null) || v=0
+  case $v in '' | *[!0-9]*) v=0 ;; esac
+  printf '%s\n' "$v"
+}
 ts() { "$T_date" -u +%Y-%m-%dT%H:%M:%S.%3NZ 2>/dev/null; }
 T0=$(now_ms)
 LOG=/dev/null
@@ -197,16 +230,40 @@ else
   MAX_TIME=${APPROVAL_HOOK_MAX_TIME:-25}
   URL_ENV=${APPROVAL_HOOK_URL_ENV:-AV_APPROVAL_URL}
   TOKEN_ENV=${APPROVAL_HOOK_TOKEN_ENV:-AV_APPROVAL_TOKEN}
-  valid_name() { case $1 in ''|*[!A-Za-z0-9_]*) return 1 ;; esac; return 0; }
+  # A leading digit is refused too: `eval "BASE=\${1ABC:-}"` is a fatal "bad
+  # substitution" that ends the shell with an empty stdout.
+  valid_name() { case $1 in '' | [!A-Za-z_]* | *[!A-Za-z0-9_]*) return 1 ;; esac; return 0; }
   valid_name "$URL_ENV" || block "APPROVAL_HOOK_URL_ENV is not a variable name"
   valid_name "$TOKEN_ENV" || block "APPROVAL_HOOK_TOKEN_ENV is not a variable name"
   eval "BASE=\${$URL_ENV:-}"
-  eval "TOKEN=\${$TOKEN_ENV:-}"
   [ -n "$BASE" ] || block "$URL_ENV is not set in the hook's environment"
-  [ -n "$TOKEN" ] || block "$TOKEN_ENV is not set in the hook's environment"
+  # The agent credential: from the file AV_APPROVAL_TOKEN_FILE names, or from
+  # $HERMES_HOME/approval/agent-token when that exists (the co-located daemon's
+  # control plane writes it there, hermes 0700/0600), else from $TOKEN_ENV (the
+  # hosted dogfood). A named file that is missing blocks; it never falls back.
+  TOKEN_FILE=${AV_APPROVAL_TOKEN_FILE:-}
+  if [ -z "$TOKEN_FILE" ] && [ -n "${HERMES_HOME:-}" ] &&
+    { [ -e "$HERMES_HOME/approval/agent-token" ] || [ -L "$HERMES_HOME/approval/agent-token" ]; }; then
+    TOKEN_FILE=$HERMES_HOME/approval/agent-token
+  fi
+  if [ -n "$TOKEN_FILE" ]; then
+    case $TOKEN_FILE in /*) ;; *) block "AV_APPROVAL_TOKEN_FILE is not an absolute path" ;; esac
+    [ -f "$TOKEN_FILE" ] && [ ! -L "$TOKEN_FILE" ] || block "the agent token file is missing or not a regular file"
+    me=$("$T_id" -u 2>/dev/null)
+    [ "$("$T_stat" -c '%u %a' "$TOKEN_FILE" 2>/dev/null)" = "$me 600" ] ||
+      block "the agent token file is not owned by this user with mode 0600"
+    TOKEN=""
+    IFS= read -r TOKEN <"$TOKEN_FILE" || [ -n "$TOKEN" ] || block "the agent token file cannot be read"
+    [ -n "$TOKEN" ] || block "the agent token file is empty"
+  else
+    eval "TOKEN=\${$TOKEN_ENV:-}"
+    [ -n "$TOKEN" ] || block "$TOKEN_ENV is not set in the hook's environment"
+  fi
 fi
 
 is_int "$WAIT_S" && [ "$WAIT_S" -le 285 ] || WAIT_S=0
+# No clock, no window: re-asking measures time against it.
+[ "$T0" -gt 0 ] || WAIT_S=0
 is_int "$MAX_TIME" && [ "$MAX_TIME" -ge 1 ] && [ "$MAX_TIME" -le 60 ] || MAX_TIME=25
 
 # The URL and the credential go into a curl config line: nothing that could
@@ -217,8 +274,23 @@ esac
 case $TOKEN in
   *[[:space:]\"\\]* | *[![:print:]]*) block "the facade credential contains a character a credential cannot" ;;
 esac
+# Where the facade listens. A unix socket (`unix:<absolute path>`, the
+# co-located daemon under APPROVALD_LISTEN=unix) is dialled with curl
+# --unix-socket and a fixed http://localhost request URL. A loopback URL
+# (host 127.0.0.1 or localhost) is checked before every POST: the listener
+# must be the daemon's uid, since any local process can bind the port while
+# the daemon is down and would receive the agent credential.
+SOCK=""
+LOOP_PORT=""
 case $BASE in
+  unix:/?*)
+    SOCK=${BASE#unix:}
+    SOCK=${SOCK%/}
+    PROTO='=http'
+    BASE=http://localhost
+    ;;
   https://?*) PROTO='=https' ;;
+  http://127.0.0.1:[0-9]*) PROTO='=http' ;;
   http://?*)
     [ "$ALLOW_HTTP" = "1" ] || block "the facade URL is not https (set APPROVAL_FACADE_ALLOW_HTTP=1 only for a local fake)"
     PROTO='=http,https'
@@ -226,6 +298,72 @@ case $BASE in
   *) block "the facade URL is not an https URL" ;;
 esac
 BASE=${BASE%/}
+if [ -z "$SOCK" ]; then
+  hostport=${BASE#*://}
+  hostport=${hostport%%/*}
+  case $hostport in
+    127.0.0.1 | localhost) LOOP_PORT=dflt ;;
+    127.0.0.1:* | localhost:*) LOOP_PORT=${hostport#*:} ;;
+  esac
+  if [ "$LOOP_PORT" = dflt ]; then
+    case $BASE in https://*) LOOP_PORT=443 ;; *) LOOP_PORT=80 ;; esac
+  fi
+  if [ -n "$LOOP_PORT" ]; then
+    is_int "$LOOP_PORT" && [ "$LOOP_PORT" -ge 1 ] && [ "$LOOP_PORT" -le 65535 ] ||
+      block "the facade URL's loopback port is not a port"
+  fi
+fi
+if [ -n "$SOCK$LOOP_PORT" ]; then
+  DAEMON_UID=${AV_APPROVAL_DAEMON_UID:-10001}
+  is_int "$DAEMON_UID" || block "AV_APPROVAL_DAEMON_UID is not a uid"
+fi
+
+# The listener on 127.0.0.1:$LOOP_PORT, from /proc/net/tcp and tcp6 (world
+# readable; the uid column is the kernel's). Every LISTEN socket on the port
+# at an address a dial of the loopback reaches (127/8, ::1, ::ffff:127/8, and
+# the wildcards) must be the daemon's, and there must be one.
+listener_check() {
+  want=$(printf '%04X' "$LOOP_PORT")
+  seen=0
+  readable=0
+  foreign=""
+  for f in "$AV_PROC_ROOT/net/tcp" "$AV_PROC_ROOT/net/tcp6"; do
+    [ -r "$f" ] || continue
+    readable=1
+    while read -r _sl la _ra st _q _tm _rt uid _rest; do
+      [ "$st" = 0A ] || continue
+      [ "${la##*:}" = "$want" ] || continue
+      case ${la%:*} in
+        00000000 | 7F000001 | ??????7F) ;;
+        00000000000000000000000000000000 | 00000000000000000000000001000000 | 0000000000000000FFFF0000??????7F) ;;
+        *) continue ;;
+      esac
+      seen=1
+      [ "$uid" = "$DAEMON_UID" ] || foreign=$uid
+    done <"$f"
+  done
+  [ "$readable" = 1 ] || block "facade_listener_foreign: the listener table ($AV_PROC_ROOT/net/tcp) cannot be read"
+  [ "$seen" = 1 ] || block "facade_listener_foreign: nothing listens on loopback port $LOOP_PORT"
+  [ -z "$foreign" ] || block "facade_listener_foreign: loopback port $LOOP_PORT is held by uid $foreign, not the approval daemon (uid $DAEMON_UID)"
+}
+
+# A unix socket facade: the socket and its directory must be the daemon's
+# (the directory not writable by anyone else), so no other user can have
+# replaced it.
+socket_check() {
+  [ -S "$SOCK" ] && [ ! -L "$SOCK" ] || block "facade_listener_foreign: the facade socket is missing or not a socket"
+  [ "$("$T_stat" -c %u "$SOCK" 2>/dev/null)" = "$DAEMON_UID" ] ||
+    block "facade_listener_foreign: the facade socket is not owned by the approval daemon (uid $DAEMON_UID)"
+  sdir=${SOCK%/*}
+  [ -n "$sdir" ] || sdir=/
+  [ -d "$sdir" ] && [ ! -L "$sdir" ] || block "facade_listener_foreign: the facade socket's directory is not a directory"
+  sd=$("$T_stat" -c '%u %a' "$sdir" 2>/dev/null)
+  case $sd in
+    "$DAEMON_UID "*[2367]? | "$DAEMON_UID "*[2367]) block "facade_listener_foreign: the facade socket's directory is writable by others" ;;
+    "$DAEMON_UID "[0-7]*) ;;
+    *) block "facade_listener_foreign: the facade socket's directory is not owned by the approval daemon (uid $DAEMON_UID)" ;;
+  esac
+}
 
 TMP=$("$T_mktemp" -d 2>/dev/null) || TMP=""
 [ -n "$TMP" ] || block "cannot create a temp directory"
@@ -296,9 +434,17 @@ while :; do
     [ "$mt" -ge 1 ] || mt=1
   fi
   "$T_rm" -f "$TMP/body" "$TMP/out" "$TMP/err" "$TMP/curl.err" || block "cannot clear the previous answer"
+  # Every POST, re-asks included: the daemon may have restarted in between.
+  if [ -n "$SOCK" ]; then
+    socket_check
+    set -- --unix-socket "$SOCK"
+  else
+    [ -z "$LOOP_PORT" ] || listener_check
+    set --
+  fi
   P0=$(now_ms)
   CODE=$(printf 'header = "X-Approval-Authorization: Bearer %s"\n' "$TOKEN" | "$T_curl" -q --config - \
-    --silent --show-error --max-time "$mt" --proto "$PROTO" --proto-redir "$PROTO" \
+    --silent --show-error --max-time "$mt" --proto "$PROTO" --proto-redir "$PROTO" "$@" \
     --request POST --header 'Content-Type: application/json' \
     --data-binary @"$TMP/envelope" \
     --output "$TMP/body" --write-out '%{http_code}' \

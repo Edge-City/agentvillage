@@ -13,10 +13,24 @@
  *
  *   AV_APPROVAL_ENABLED   unset or blank → a no-op (one log line);
  *                         `1|true|yes|on` → install; anything else → the kill
- *                         switch, a FAIL-OPEN event logged as one.
- *   AV_APPROVAL_URL       the tenant's facade base URL (https).
- *   AV_APPROVAL_TOKEN     the AGENT credential (docs/02 section 5). Never
- *                         printed, never written to config.yaml.
+ *                         switch, a FAIL-OPEN event logged as one. The
+ *                         control plane (DATA-233, `APPROVALD_ENFORCE`) writes
+ *                         `1` or the explicit off `0`.
+ *   AV_APPROVAL_URL       the tenant's facade: `https://…` (a hosted facade),
+ *                         or, co-located (DATA-233), `http://127.0.0.1:<port>`
+ *                         or `unix:<absolute socket path>`. Nothing else.
+ *   AV_APPROVAL_TOKEN_FILE
+ *                         a file holding the AGENT credential (the control
+ *                         plane writes `$HERMES_HOME/approval/agent-token`,
+ *                         0600; that default is used when it exists). Read
+ *                         before AV_APPROVAL_TOKEN, as the shim does.
+ *   AV_APPROVAL_TOKEN     the AGENT credential (docs/02 section 5), the hosted
+ *                         dogfood's form. Never printed, never written to
+ *                         config.yaml.
+ *   AV_APPROVAL_DAEMON_UID
+ *                         the uid that must own a loopback listener or the
+ *                         unix socket (default 10001); the shim checks it
+ *                         before every POST.
  *   AV_APPROVAL_ALLOW_UNPATCHED_HERMES=1
  *                         DOGFOOD ONLY: accept a Hermes below the fail_closed
  *                         floor or without the signal patch, logged loudly.
@@ -41,19 +55,29 @@
  *   5. No `APPROVAL.md` is written: the daemon holds the policy.
  *   6. The skill is staged and the `av-approval` plugin enabled.
  *   7. `$HERMES_HOME/agent-hooks/approval-surface.json` records
- *      `{daemon_id, tenant_id, installed_at, overrides, prior}` (see
- *      `writeSurfaceMarker`); `prior` is what the first install found for each
- *      key it sets, and the kill switch restores exactly that.
+ *      `{daemon_id, tenant_id, installed_at, overrides, prior, shim_sha256}`
+ *      (see `writeSurfaceMarker`); `prior` is what the first install found for
+ *      each key it sets, and the kill switch restores exactly that.
+ *      `shim_sha256` is the installed shim's digest, which the `av-approval`
+ *      plugin's start-time integrity check compares (DATA-234).
  *   8. `checkApproval`: the static checks, the states in which Hermes ignores
- *      the gate, and the LIVE fire (one `terminal` call with no `workdir`
+ *      the gate (including a consent allowlist or its lock Hermes could not
+ *      use), and the LIVE fire (one `terminal` call with no `workdir`
  *      through Hermes's own `run_once`, which must come back blocked by the
  *      facade). Any problem rolls `config.yaml` and `.env` back to their
- *      pre-install bytes and fails the step with the named reasons.
+ *      pre-install bytes and fails the step with the named reasons. With a
+ *      LOCAL facade (loopback or unix socket, started by the control plane
+ *      before the install) a facade that did not answer the fire is logged,
+ *      not fatal: the gate itself stays fail-closed. Scripts under
+ *      `$HERMES_HOME/scripts/` (cron runs them with no hook) are listed.
  *
  * `bun install/install_approval.ts --check` runs step 8 alone and writes none
  * of this step's files (Hermes's own imports may create Hermes's log or backup
  * directories, and the live fire appends to the shim's log); exit 0 when the
- * gate is in place, 1 otherwise, one JSON line out with `overrides`.
+ * gate is in place, 1 otherwise, one JSON line out with `overrides`,
+ * `hermes_exit1` (the exit-1 probe's answer) and `cron_scripts`. It is a hand
+ * step: nothing runs it at gateway start (the `av-approval` plugin's own
+ * integrity check does that, DATA-234).
  */
 
 import {
@@ -63,6 +87,7 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -71,6 +96,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import YAML, { isAlias, isMap, isScalar, isSeq } from "yaml";
@@ -94,9 +120,18 @@ export const APPROVAL_PLUGIN = "av-approval";
  * manual-class effects outside the classifier's view today; they are routed
  * through the gate now so the day the core adapter refuses or classifies them
  * nothing here changes. At core 6b74ca72 the adapter passes an unknown tool
- * through (`{}`), so for them the gate is transport only. `cronjob_manage` is
- * deliberately NOT routed (the daily brief needs it); its script bypass is
- * documented as not covered.
+ * through (`{}`), so for them the gate is transport only: the call is sent to
+ * the facade (and fails closed when it cannot be), not judged.
+ *
+ * DATA-234: `cronjob(_manage)?` is routed (a job's `script`, `monitor` and
+ * `no_agent` runs at the scheduler tick with no hook, so creating or changing
+ * one is the only point the gate sees; the daily brief uses `hermes cron`, not
+ * the agent tool), and `send_message` (not an agent-callable tool at Hermes
+ * v2026.9.24, `tools/send_message_tool.py`; routed for any build or plugin
+ * that registers it). `cronjob` and `process` are the legacy aliases Hermes
+ * maps before the hook (`model_tools._LEGACY_TOOL_ALIASES`); matched anyway.
+ * The `av-approval` plugin keeps a copy of this list (`GATED_MATCHERS`); a
+ * test holds the two equal.
  */
 export const APPROVAL_GATED_TOOLS = [
   "terminal",
@@ -110,6 +145,8 @@ export const APPROVAL_GATED_TOOLS = [
   "browser_.*",
   "skill_manage",
   "delegate_task",
+  "cronjob(_manage)?",
+  "send_message",
 ] as const;
 
 /** Hermes's per-entry maximum; it clamps anything above. */
@@ -127,7 +164,22 @@ export const SHIM_TOOL_DIRS = ["/usr/bin", "/bin", "/usr/local/bin"] as const;
 const TRUTHY = new Set(["1", "true", "yes", "on"]);
 const URL_VAR = "AV_APPROVAL_URL";
 const TOKEN_VAR = "AV_APPROVAL_TOKEN";
+const TOKEN_FILE_VAR = "AV_APPROVAL_TOKEN_FILE";
+const DAEMON_UID_VAR = "AV_APPROVAL_DAEMON_UID";
 const OVERRIDE_VAR = "AV_APPROVAL_ALLOW_UNPATCHED_HERMES";
+/** Hermes's consent allowlist and the flock sidecar it opens "a+" (agent/shell_hooks.py at v2026.9.24). */
+export const ALLOWLIST_FILE = "shell-hooks-allowlist.json";
+export const ALLOWLIST_LOCK_FILE = `${ALLOWLIST_FILE}.lock`;
+/**
+ * The only shape of variable name this step writes, as a key or as a name the
+ * shim dereferences. The shim `eval`s `${<name>:-}`: a name starting with a
+ * digit is a fatal "bad substitution" that ends the shell with no directive.
+ */
+export const ENV_NAME = /^[A-Z][A-Z0-9_]*$/;
+/** `.env` keys whose VALUE is itself a variable name the shim reads. */
+const NAME_VALUED_LINES = new Set(["APPROVAL_HOOK_URL_ENV", "APPROVAL_HOOK_TOKEN_ENV"]);
+/** Live-fire outcomes that only say the facade did not answer; logged, not fatal, for a local facade. */
+const DEFERRABLE_LIVE = new Set(["live-facade-unreachable", "live-hook-timed-out"]);
 /** The live fire spawns the shim, which may re-ask for up to 280 s inside a 300 s entry timeout. */
 const LIVE_TIMEOUT_MS = 330_000;
 
@@ -152,6 +204,24 @@ export function approvalEnvLines(): Record<string, string> {
     APPROVAL_HOOK_TOKEN_ENV: TOKEN_VAR,
     APPROVAL_HOOK_WAIT_S: String(APPROVAL_WAIT_S),
   };
+}
+
+/**
+ * Throws `approval-env-name-invalid` unless every key, and every value that
+ * names a variable, matches `ENV_NAME`. Run before anything is written.
+ */
+export function assertEnvNames(lines: Record<string, string>): void {
+  const bad: string[] = [];
+  for (const [name, value] of Object.entries(lines)) {
+    if (!ENV_NAME.test(name)) bad.push(`key ${JSON.stringify(name)}`);
+    else if (NAME_VALUED_LINES.has(name) && !ENV_NAME.test(value)) bad.push(`${name}'s value`);
+  }
+  if (bad.length > 0) {
+    throw new ApprovalInstallError(
+      "approval-env-name-invalid",
+      `${bad.join(", ")} is not a variable name of the form ${ENV_NAME.source}; nothing was written`,
+    );
+  }
 }
 
 /** A failure with a machine-readable reason; the installer prints both and exits non-zero. */
@@ -447,24 +517,136 @@ function withPluginListed(doc: Record<string, unknown>, on: boolean): Record<str
 // .env, shim, marker
 // ---------------------------------------------------------------------------
 
+/** The facade URL forms the shim accepts without a test-only flag. */
+export type FacadeUrlKind = "https" | "loopback" | "unix";
+
+/**
+ * `https://…` (a hosted facade); `http://127.0.0.1:<port>[/…]` (the co-located
+ * daemon in tcp mode: plain http on loopback, which the shim dials only after
+ * checking the listener is the daemon's uid); `unix:<absolute path>` (the
+ * co-located daemon's socket). Anything else, including any other `http://`,
+ * is `null`. No spaces, quotes or backslashes (the shim's curl config line).
+ */
+export function facadeUrlKind(url: string): FacadeUrlKind | null {
+  if (/[\s"\\]/.test(url) || /[^\x20-\x7e]/.test(url)) return null;
+  if (/^https:\/\/.+$/.test(url)) return "https";
+  const loop = /^http:\/\/127\.0\.0\.1:([0-9]{1,5})(?:\/.*)?$/.exec(url);
+  if (loop) {
+    const port = Number(loop[1]);
+    return port >= 1 && port <= 65535 ? "loopback" : null;
+  }
+  if (/^unix:\/.+$/.test(url)) return "unix";
+  return null;
+}
+
+/** A local facade (loopback or unix socket): the control plane runs it beside the gateway. */
+export function isLocalFacade(url: string | undefined): boolean {
+  const kind = url ? facadeUrlKind(url.trim()) : null;
+  return kind === "loopback" || kind === "unix";
+}
+
+/** The name the shim reads the facade URL from (its `.env` setting, else `AV_APPROVAL_URL`). */
+function urlVarName(): string {
+  return dotenvFileValue("APPROVAL_HOOK_URL_ENV")?.trim() || URL_VAR;
+}
+
+/** Where the shim reads the agent credential from (the shim's own order). */
+export type TokenSource = { kind: "file"; path: string; named: boolean } | { kind: "env"; name: string };
+
+/** `$HERMES_HOME/approval/agent-token`: where the control plane writes the agent token under co-location. */
+export function defaultTokenFile(): string {
+  return join(hermesHome(), "approval", "agent-token");
+}
+
+function lexists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The shim's order: the file `AV_APPROVAL_TOKEN_FILE` names; else
+ * `$HERMES_HOME/approval/agent-token` when it exists; else the variable
+ * `APPROVAL_HOOK_TOKEN_ENV` names (`AV_APPROVAL_TOKEN`).
+ */
+export function tokenSource(): TokenSource {
+  const named = gatewayValue(TOKEN_FILE_VAR);
+  if (named) return { kind: "file", path: named, named: true };
+  const dflt = defaultTokenFile();
+  if (lexists(dflt)) return { kind: "file", path: dflt, named: false };
+  return { kind: "env", name: dotenvFileValue("APPROVAL_HOOK_TOKEN_ENV")?.trim() || TOKEN_VAR };
+}
+
+function tokenMalformed(token: string): boolean {
+  return /[\s"\\]/.test(token) || /[^\x20-\x7e]/.test(token);
+}
+
+/**
+ * Why the shim would refuse this token file, as a short reason, or `null`
+ * when it would read it: absolute, a regular file (not a link), owned by this
+ * user, mode 0600, a first line that is a well-formed credential. The value is
+ * read to check its shape and never printed, logged or returned.
+ */
+export function tokenFileProblem(path: string): string | null {
+  if (!path.startsWith("/")) return "not-absolute";
+  let st;
+  try {
+    st = lstatSync(path);
+  } catch {
+    return "missing";
+  }
+  if (st.isSymbolicLink() || !st.isFile()) return "not-regular";
+  if (typeof process.getuid === "function" && st.uid !== process.getuid()) return "wrong-owner";
+  if ((st.mode & 0o777) !== 0o600) return "mode-not-0600";
+  let first: string;
+  try {
+    first = readFileSync(path, "utf8").split("\n", 1)[0] ?? "";
+  } catch {
+    return "unreadable";
+  }
+  if (!first) return "empty";
+  return tokenMalformed(first) ? "malformed" : null;
+}
+
 function requireCredentials(): void {
-  const missing = [URL_VAR, TOKEN_VAR].filter((name) => !gatewayValue(name)?.trim());
+  const source = tokenSource();
+  const missing = [URL_VAR, ...(source.kind === "env" ? [TOKEN_VAR] : [])].filter((name) => !gatewayValue(name)?.trim());
   if (missing.length > 0) {
     throw new ApprovalInstallError(
       "approval-credentials-missing",
       `AV_APPROVAL_ENABLED is on but ${missing.join(" and ")} ${missing.length > 1 ? "are" : "is"} not set ` +
-        "($HERMES_HOME/.env or environment); opting in without the facade URL and the agent token is a misconfiguration",
+        `($HERMES_HOME/.env or environment; the agent token may instead be the file ${TOKEN_FILE_VAR} names); ` +
+        "opting in without the facade URL and the agent token is a misconfiguration",
     );
   }
   const url = gatewayValue(URL_VAR)!.trim();
-  if (!/^https:\/\/[^\s"\\]+$/.test(url)) {
+  if (facadeUrlKind(url) === null) {
     throw new ApprovalInstallError(
       "approval-url-not-https",
-      `${URL_VAR} is not an https:// URL without spaces or quotes; the shim refuses anything else`,
+      `${URL_VAR} is not an https:// URL, http://127.0.0.1:<port> or unix:<absolute path> without spaces or quotes; ` +
+        "the shim refuses anything else",
     );
   }
+  const uid = gatewayValue(DAEMON_UID_VAR)?.trim();
+  if (uid !== undefined && uid !== "" && !/^[0-9]+$/.test(uid)) {
+    throw new ApprovalInstallError("approval-daemon-uid-invalid", `${DAEMON_UID_VAR} is not a numeric uid; the shim refuses it`);
+  }
+  if (source.kind === "file") {
+    const why = tokenFileProblem(source.path);
+    if (why) {
+      throw new ApprovalInstallError(
+        "approval-token-file-unusable",
+        `the agent token file (${source.named ? TOKEN_FILE_VAR : "$HERMES_HOME/approval/agent-token"}) is ${why}; ` +
+          "the shim refuses it (it must be a regular file owned by this user, mode 0600)",
+      );
+    }
+    return;
+  }
   const token = gatewayValue(TOKEN_VAR)!.trim();
-  if (/[\s"\\]/.test(token) || /[^\x20-\x7e]/.test(token)) {
+  if (tokenMalformed(token)) {
     throw new ApprovalInstallError(
       "approval-token-malformed",
       `${TOKEN_VAR} contains whitespace, a quote, a backslash or a non-printable character; the shim refuses it`,
@@ -474,7 +656,9 @@ function requireCredentials(): void {
 
 function writeEnvLines(): number {
   let changed = 0;
-  for (const [name, value] of Object.entries(approvalEnvLines())) {
+  const lines = approvalEnvLines();
+  assertEnvNames(lines);
+  for (const [name, value] of Object.entries(lines)) {
     if (dotenvFileValue(name) === value) continue;
     upsertEnvVar(name, value);
     changed++;
@@ -533,6 +717,17 @@ export interface SurfaceMarker {
   installed_at: string;
   overrides: string[];
   prior: PriorState;
+  /** sha256 of the installed shim; the av-approval plugin's integrity check compares it (DATA-234). */
+  shim_sha256: string | null;
+}
+
+/** sha256 (hex) of a file's bytes, or `null` when it cannot be read. */
+export function fileSha256(path: string): string | null {
+  try {
+    return createHash("sha256").update(readFileSync(path)).digest("hex");
+  } catch {
+    return null;
+  }
 }
 
 function readMarker(): SurfaceMarker | null {
@@ -588,6 +783,7 @@ function writeSurfaceMarker(now: Date, prior: PriorState, overrides: string[]): 
     installed_at: installedAt,
     overrides,
     prior: existing ? existing.prior : prior,
+    shim_sha256: fileSha256(approvalShimPath()),
   };
   writeFileAtomic(approvalSurfacePath(), `${JSON.stringify(marker, null, 2)}\n`, 0o600);
   return { tenant };
@@ -604,6 +800,82 @@ function isExecutable(path: string): boolean {
   } catch {
     return false;
   }
+}
+
+function accessible(path: string, mode: number): boolean {
+  try {
+    accessSync(path, mode);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Hermes's consent allowlist and its lock, as Hermes will meet them at the
+ * next gateway start. Absent is fine (Hermes creates both). A lock it cannot
+ * open "a+" (not ours, not read-write, not a regular file, or absent in a home
+ * we cannot write) makes `register_from_config` RAISE, which the gateway
+ * swallows: no hook registers and every tool runs ungated (DATA-234). An
+ * allowlist we cannot read reads as "no consent". Named, never repaired.
+ */
+export function allowlistProblems(): string[] {
+  const home = hermesHome();
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  const problems: string[] = [];
+  for (const [name, mode] of [
+    [ALLOWLIST_FILE, constants.R_OK],
+    [ALLOWLIST_LOCK_FILE, constants.R_OK | constants.W_OK],
+  ] as const) {
+    const path = join(home, name);
+    let st;
+    try {
+      st = lstatSync(path);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") problems.push(`allowlist-unusable:${name}:unstatable`);
+      else if (name === ALLOWLIST_LOCK_FILE && !accessible(home, constants.W_OK | constants.X_OK)) {
+        problems.push(`allowlist-unusable:${name}:uncreatable`);
+      }
+      continue;
+    }
+    if (st.isSymbolicLink() || !st.isFile()) problems.push(`allowlist-unusable:${name}:not-regular`);
+    else if (uid !== undefined && st.uid !== uid) problems.push(`allowlist-unusable:${name}:wrong-owner`);
+    else if (!accessible(path, mode)) problems.push(`allowlist-unusable:${name}:${mode & constants.W_OK ? "not-read-write" : "unreadable"}`);
+  }
+  return problems;
+}
+
+/**
+ * Scripts under `$HERMES_HOME/scripts/` (relative paths, sorted, at most 50).
+ * Hermes's scheduler runs a cron job's `script`, `monitor` and prerun script
+ * from there with NO `pre_tool_call` (cron/scheduler_script.py), so each one
+ * runs ungated at every tick. Listed for the operator; not a problem (the
+ * daily brief stages its own scripts there).
+ */
+export function cronScripts(limit = 50): string[] {
+  const root = join(hermesHome(), "scripts");
+  const found: string[] = [];
+  const walk = (dir: string, depth: number): void => {
+    let names: string[];
+    try {
+      names = readdirSync(dir).sort();
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      const path = join(dir, name);
+      let st;
+      try {
+        st = lstatSync(path);
+      } catch {
+        continue;
+      }
+      if (st.isDirectory() && depth < 4) walk(path, depth + 1);
+      else if (!st.isDirectory()) found.push(relative(root, path));
+    }
+  };
+  walk(root, 0);
+  return found.sort().slice(0, limit);
 }
 
 /** States in which Hermes registers no shell hook or replaces the hooks block, and a home the classifier cannot see. */
@@ -665,12 +937,28 @@ export function approvalProblems(options: ApprovalOptions = {}): string[] {
   if (!existsSync(command)) problems.push("shim-missing");
   else if (!isExecutable(command)) problems.push("shim-not-executable");
   else if ((statSync(command).mode & 0o777) !== 0o700) problems.push("shim-mode-not-0700");
-
-  const urlName = dotenvFileValue("APPROVAL_HOOK_URL_ENV")?.trim() || URL_VAR;
-  const tokenName = dotenvFileValue("APPROVAL_HOOK_TOKEN_ENV")?.trim() || TOKEN_VAR;
-  for (const name of [urlName, tokenName]) {
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || !gatewayValue(name)?.trim()) problems.push(`env-unresolvable:${name}`);
+  else {
+    // The digest the av-approval plugin checks at every gateway start.
+    const recorded = readMarker()?.shim_sha256;
+    if (typeof recorded !== "string") problems.push("manifest-missing");
+    else if (recorded !== fileSha256(command)) problems.push("shim-hash-mismatch");
   }
+
+  const urlName = urlVarName();
+  const source = tokenSource();
+  const names = source.kind === "env" ? [urlName, source.name] : [urlName];
+  for (const name of names) {
+    if (!ENV_NAME.test(name) || !gatewayValue(name)?.trim()) problems.push(`env-unresolvable:${name}`);
+  }
+  const url = ENV_NAME.test(urlName) ? gatewayValue(urlName)?.trim() : undefined;
+  if (url && facadeUrlKind(url) === null) problems.push("url-unsupported");
+  if (source.kind === "file") {
+    const why = tokenFileProblem(source.path);
+    if (why) problems.push(`token-file-unusable:${why}`);
+  }
+  const uid = gatewayValue(DAEMON_UID_VAR)?.trim();
+  if (uid !== undefined && uid !== "" && !/^[0-9]+$/.test(uid)) problems.push("daemon-uid-invalid");
+  problems.push(...allowlistProblems());
   const wait = Number(dotenvFileValue("APPROVAL_HOOK_WAIT_S")?.trim());
   if (!Number.isInteger(wait) || wait < 1 || wait > SHIM_MAX_WAIT_S || wait >= APPROVAL_ENTRY_TIMEOUT_S) {
     problems.push("wait-window-invalid");
@@ -715,13 +1003,25 @@ interface LiveFacts {
   release_date?: string;
   signal_patch?: boolean;
   signal_patch_marker?: boolean;
+  exit1_blocks?: boolean | null;
   consent_effective?: boolean | null;
 }
+
+/**
+ * How this Hermes treats a `fail_closed` hook that exits 1 with an empty
+ * stdout: `blocked` (the checkpoint's widened patch, DATA-228), `allowed`
+ * (stock Hermes: `_evaluate_result` reads no directive as an allow), or
+ * `unknown` (the live check did not run). Reported, not a problem: the shim
+ * never exits non-zero without a directive on any path it can see.
+ */
+export type Exit1Behaviour = "blocked" | "allowed" | "unknown";
 
 /** What a check found: named problems, and the dogfood overrides it accepted instead of failing. */
 export interface ApprovalReport {
   problems: string[];
   overrides: string[];
+  /** The exit-1 probe's answer (DATA-234 / DATA-228). */
+  exit1?: Exit1Behaviour;
 }
 
 /** The live fire through Hermes's `run_once`. Accepted dogfood overrides are returned and warned about on stderr. */
@@ -745,6 +1045,7 @@ export function liveReport(options: ApprovalOptions = {}): ApprovalReport {
     return fail(`selfcheck-live-unavailable:no-report(exit ${out.status ?? "signal"})`);
   }
   const problems = [...(facts.problems ?? [])];
+  const exit1: Exit1Behaviour = facts.exit1_blocks === true ? "blocked" : facts.exit1_blocks === false ? "allowed" : "unknown";
   if (facts.safe_mode) problems.push("hermes-safe-mode");
   if (facts.managed) problems.push("hermes-managed");
   if (facts.managed_dir) problems.push("hermes-managed-scope");
@@ -767,7 +1068,7 @@ export function liveReport(options: ApprovalOptions = {}): ApprovalReport {
       problems.push(...unpatched);
     }
   }
-  return { problems, overrides };
+  return { problems, overrides, exit1 };
 }
 
 /**
@@ -780,7 +1081,23 @@ export function checkApprovalReport(options: ApprovalOptions = {}): ApprovalRepo
   const problems = approvalProblems(options);
   if (problems.length > 0) return { problems: [...new Set(problems)], overrides: [] };
   const live = liveReport(options);
-  return { problems: [...new Set(live.problems)], overrides: live.overrides };
+  return { problems: [...new Set(live.problems)], overrides: live.overrides, exit1: live.exit1 ?? "unknown" };
+}
+
+/** One line for the exit-1 probe's answer. */
+function exit1Line(exit1: Exit1Behaviour | undefined): string {
+  switch (exit1) {
+    case "blocked":
+      return "→ approval gate: Hermes blocks a fail_closed hook that exits 1 with no output (patched checkpoint)";
+    case "allowed":
+      return (
+        "→ approval gate: Hermes ALLOWS a fail_closed hook that exits 1 with no output (unpatched; DATA-228 widens " +
+        "the checkpoint patch). The shim prints a block directive and exits 2 on every failure path it can see; " +
+        "this matters only if the shim dies outside them"
+      );
+    default:
+      return "→ approval gate: the exit-1 probe did not run";
+  }
 }
 
 /** `checkApprovalReport`'s problems alone. */
@@ -878,6 +1195,7 @@ export function installApproval(sourceSkills: string, options: ApprovalOptions =
   }
 
   requireCredentials();
+  assertEnvNames(approvalEnvLines());
   requireSafePaths();
   requireMergeableConfig();
 
@@ -904,17 +1222,38 @@ export function installApproval(sourceSkills: string, options: ApprovalOptions =
     writeSurfaceMarker(now, prior, []);
 
     const report = checkApprovalReport({ liveScript: join(sourceSkills, APPROVAL_SKILL, "scripts", "live_selfcheck.py"), ...options });
-    if (report.problems.length > 0) {
+    // A local facade (the control plane started it before this install) that
+    // did not answer the fire is logged, not fatal: the shim blocks while it
+    // is unreachable, so the gate stays fail-closed. A remote facade must answer.
+    const local = isLocalFacade(gatewayValue(urlVarName()));
+    const deferred = local ? report.problems.filter((p) => DEFERRABLE_LIVE.has(p)) : [];
+    const hard = report.problems.filter((p) => !deferred.includes(p));
+    if (hard.length > 0) {
       throw new ApprovalInstallError(
         "approval-selfcheck-failed",
         `self-check failed: ${report.problems.join(", ")}; config.yaml and .env were restored to their pre-install bytes`,
       );
     }
+    if (deferred.length > 0) {
+      console.error(
+        `! approval gate: live self-check deferred (local facade did not answer: ${deferred.join(", ")}); ` +
+          "the gate stays fail-closed (the shim blocks while the facade is unreachable). " +
+          "Run `bun install/install_approval.ts --check` by hand once the daemon answers.",
+      );
+    }
     const { tenant } = writeSurfaceMarker(now, prior, report.overrides);
+    const scripts = cronScripts();
+    if (scripts.length > 0) {
+      console.log(
+        `→ approval gate: ${scripts.length} script(s) under $HERMES_HOME/scripts/ run at cron ticks with NO hook ` +
+          `(DATA-234; only creating or changing a job is gated): ${scripts.join(", ")}`,
+      );
+    }
+    console.log(exit1Line(report.exit1));
     console.log(
       `→ approval gate installed: ${APPROVAL_GATED_TOOLS.length} pre_tool_call entries (fail_closed), ` +
         `config ${configChanged ? "updated" : "unchanged"}, ${envChanged} .env line(s) set, ` +
-        "self-check passed (live: blocked by the facade), " +
+        (deferred.length > 0 ? `self-check passed (live: deferred, ${deferred.join(", ")}), ` : "self-check passed (live: blocked by the facade), ") +
         `overrides: ${report.overrides.length > 0 ? report.overrides.join(", ") : "none"}` +
         (tenant ? "" : " (warning: no TENANT_ID; the surface marker records tenant_id null)"),
     );
@@ -964,7 +1303,22 @@ export function checkCli(argv: string[], options: ApprovalOptions = {}): number 
     report = { problems: [`check-error:${err instanceof Error ? err.name : typeof err}`], overrides: [] };
   }
   const { problems, overrides } = report;
-  console.log(JSON.stringify({ check: "av-approval", ok: problems.length === 0, problems, overrides }));
+  let scripts: string[] = [];
+  try {
+    scripts = cronScripts();
+  } catch {
+    // a listing that fails changes no verdict
+  }
+  console.log(
+    JSON.stringify({
+      check: "av-approval",
+      ok: problems.length === 0,
+      problems,
+      overrides,
+      hermes_exit1: report.exit1 ?? "unknown",
+      cron_scripts: scripts,
+    }),
+  );
   return problems.length === 0 ? 0 : 1;
 }
 
