@@ -44,6 +44,11 @@ a second identity layer. Its control-plane send/verify/authorize endpoints requi
 a live tenant and current owner. Configure the scoped EdgeOS third-party app key
 and tenant ID on CP, not as an agent automation key.
 
+The same plugin accepts the archive job's per-tenant `archive_read` bearer on
+`GET /api/sessions` and `GET /api/sessions/<id>/messages` only, verified against
+`AV_ARCHIVE_READ_HASH` in the sandbox's `.env` (DATA-88); see
+`plugins/dashboard-auth-edgecity/README.md` for scope and rotation.
+
 Sessions now use private per-home SQLite storage and a durable tenant-specific
 signing key. Preserve that storage with the tenant's home during restart/restore.
 Do not distribute a shared `HERMES_DASHBOARD_SESSION_SECRET`: the provider does

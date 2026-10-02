@@ -1,0 +1,42 @@
+{
+  "about": "DATA-88 per-tenant archive_read token. token = hex(HMAC-SHA256(key = ARCHIVE_READ_MASTER's characters as set, not hex-decoded and not case-folded; message = 'archive_read:' + tenant_id)), tenant_id being the exact tenant UUID string the dashboard_host event carries (no case folding). sha256 = hex(SHA-256(the token's 64 lowercase hex characters)) and is what the control plane writes to the sandbox as AV_ARCHIVE_READ_HASH; the sandbox never holds the token or the master. Read by agentvillage overlay plugins/dashboard-auth-edgecity/tests/test_archive_token.py; agentvillage-data tests and the control plane's control-plane/tests copy these values verbatim (same precedent as telegram_identity.v1.json).",
+  "_comment": "TEST keys only, never used anywhere else. master = hex(SHA-256(UTF-8 'agentvillage DATA-88 archive_read.v1 TEST master, never used anywhere else')); rotated master = hex(SHA-256(UTF-8 'agentvillage DATA-88 archive_read.v1 TEST master, never used anywhere else (rotated)')). Regenerate with python3: hashlib.sha256(seed.encode()).hexdigest(), then hmac.new(master.encode(), ('archive_read:' + tenant_id).encode(), hashlib.sha256).hexdigest(), then hashlib.sha256(token.encode()).hexdigest().",
+  "version": 1,
+  "cases": [
+    {
+      "note": "tenant A",
+      "master": "891b5539c138748419342974ec0eaaeea6ed38f49731b5a4fcc87ceba9a0f409",
+      "tenant_id": "00000000-0000-4000-8000-00000000000a",
+      "token": "647af78fdd8d66b45ffb1a4197972882b32524541a48104292e26050183f7854",
+      "sha256": "3bf1a9f41be188ea6a3afac6ab8ec2eaf0fbc215a57fe50c94056e87f44456ee"
+    },
+    {
+      "note": "tenant B, same master: a different token",
+      "master": "891b5539c138748419342974ec0eaaeea6ed38f49731b5a4fcc87ceba9a0f409",
+      "tenant_id": "00000000-0000-4000-8000-00000000000b",
+      "token": "0924135a973ce0373f31448b7b2a0c157f4e3aba25ade406831a4e2e149107b0",
+      "sha256": "43061eb30d8677cc97292b92c3e96908de2221dc535b0f434884c2ccbd085d8b"
+    },
+    {
+      "note": "tenant A after a master rotation: the old token no longer matches",
+      "master": "f6547bf980950cf572f5af266f1b00abd68d0863e0794a8162897760eb78a8ad",
+      "tenant_id": "00000000-0000-4000-8000-00000000000a",
+      "token": "afb1ebbebf993bade1ce4a02ff27abb2fa05fa5ddc63512601fc6576bf32924b",
+      "sha256": "c0ca28701a38db7c13c095b65fe3b3a252cf941beb57cd9721c07f33270fef80"
+    },
+    {
+      "note": "the master's characters as set: an upper-cased master is a different key",
+      "master": "891B5539C138748419342974EC0EAAEEA6ED38F49731B5A4FCC87CEBA9A0F409",
+      "tenant_id": "00000000-0000-4000-8000-00000000000a",
+      "token": "458b127132ace0236e2cb4164ff70de2055995243496c777e39fb649d21cb738",
+      "sha256": "62ef793629b79ab0b50f079f7f356275e6fa3aefc04aff47fc6a01bd402135d2"
+    },
+    {
+      "note": "the tenant id as carried: an upper-cased UUID is a different message",
+      "master": "891b5539c138748419342974ec0eaaeea6ed38f49731b5a4fcc87ceba9a0f409",
+      "tenant_id": "00000000-0000-4000-8000-00000000000A",
+      "token": "480e6f80e483073e56bd7cf98176e6258e5d5ef59b1dba799b353cb70230a38e",
+      "sha256": "e0c688787edf85d803bd736bdb05b8fff609f11e6983ff5034216434f2bfc749"
+    }
+  ]
+}

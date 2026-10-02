@@ -1,4 +1,7 @@
-"""Edge City dashboard auth: owner email OTP on Hermes's login form."""
+"""Edge City dashboard auth: owner email OTP on Hermes's login form, plus the archive_read bearer.
+
+See README.md. The archive_read token logic is in `_archive` (standard library only).
+"""
 
 from __future__ import annotations
 
@@ -6,6 +9,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import secrets
@@ -17,15 +21,38 @@ import urllib.request
 from contextlib import contextmanager
 from typing import Optional
 
-from hermes_cli.dashboard_auth import (
-    DashboardAuthProvider,
-    InvalidCodeError,
-    InvalidCredentialsError,
-    LoginStart,
-    ProviderError,
-    RefreshExpiredError,
-    Session,
-)
+try:
+    from hermes_cli.dashboard_auth import (
+        DashboardAuthProvider,
+        InvalidCodeError,
+        InvalidCredentialsError,
+        LoginStart,
+        ProviderError,
+        RefreshExpiredError,
+        Session,
+        TokenPrincipal,
+    )
+except ModuleNotFoundError as _missing:
+    # Only pytest imports this package without Hermes (to reach tests/, CI has no Hermes); the
+    # placeholders let the module body load and register() refuses. Any other missing module raises.
+    if (_missing.name or "").split(".")[0] != "hermes_cli":
+        raise
+    _HERMES_MISSING = _missing
+
+    class DashboardAuthProvider:  # type: ignore[no-redef]
+        pass
+
+    class _Placeholder(Exception):
+        pass
+
+    InvalidCodeError = InvalidCredentialsError = ProviderError = RefreshExpiredError = _Placeholder  # type: ignore[misc]
+    LoginStart = Session = TokenPrincipal = None  # type: ignore[assignment,misc]
+else:
+    _HERMES_MISSING = None
+
+from . import _archive
+
+_log = logging.getLogger("dashboard-auth-edgecity")
 
 _SIG_LEN = hashlib.sha256().digest_size
 _ACCESS_TTL = 12 * 60 * 60
@@ -431,9 +458,82 @@ class EdgeCityDashboardAuth(DashboardAuthProvider):
         )
 
 
+class EdgeCityArchiveReadAuth(DashboardAuthProvider):
+    """Token-only provider for the archive job's per-tenant archive_read bearer (DATA-88).
+
+    Never offered at login and never accepts a cookie or a session bearer
+    (`supports_session=False`, `verify_session` returns None). `verify_token` answers only
+    inside the route wrapper's decision on `GET /api/sessions` or
+    `GET /api/sessions/<id>/messages`, signalled through this instance's own `archive_scope`
+    (so a wrapper from any load of the plugin agrees with whichever instance is registered);
+    asked by Hermes's generic seam about any other token route it returns None, so the token
+    never authenticates anything else."""
+
+    name = _archive.PROVIDER_NAME
+    display_name = "Edge City archive (service credential)"
+    supports_token = True
+    supports_session = False
+    _edgecity_archive = True
+
+    def __init__(self) -> None:
+        self.archive_scope = _archive.new_scope()
+
+    def verify_token(self, *, token: str) -> Optional[TokenPrincipal]:
+        if not _archive.verify(self.archive_scope, token):
+            return None
+        return TokenPrincipal(principal=_archive.PRINCIPAL, provider=self.name, scopes=(_archive.SCOPE,))
+
+    def start_login(self, *, redirect_uri: str) -> LoginStart:
+        raise NotImplementedError("edgecity-archive is a service credential; there is no login flow")
+
+    def complete_login(self, *, code: str, state: str, code_verifier: str, redirect_uri: str) -> Session:
+        raise NotImplementedError("edgecity-archive is a service credential; there is no login flow")
+
+    def verify_session(self, *, access_token: str) -> Optional[Session]:
+        return None
+
+    def refresh_session(self, *, refresh_token: str) -> Session:
+        raise RefreshExpiredError("edgecity-archive never issues sessions")
+
+    def revoke_session(self, *, refresh_token: str) -> None:
+        return None
+
+
+def _registered_archive_provider():
+    """The archive provider as Hermes's registry holds it now, or None (fail closed)."""
+    from hermes_cli.dashboard_auth import get_provider
+
+    provider = get_provider(_archive.PROVIDER_NAME)
+    if getattr(provider, "_edgecity_archive", False) and getattr(provider, "supports_token", False):
+        return provider if hasattr(provider, "archive_scope") else None
+    return None
+
+
+def _register_archive_read(ctx) -> None:
+    """Register the token-only provider, then scope it with the route wrapper. Any failure
+    leaves the archive token accepted nowhere and the owner login untouched."""
+    try:
+        provider = EdgeCityArchiveReadAuth()
+        ctx.register_dashboard_auth_provider(provider)
+        from hermes_cli.dashboard_auth import get_provider, token_auth
+
+        if get_provider(_archive.PROVIDER_NAME) is not provider:
+            # Hermes ignored the registration (a non-launch profile scope loads the plugin again
+            # under another module name): leave the launch scope's provider and wrapper alone.
+            _log.info("dashboard-auth-edgecity: archive_read wrapper left as is (registration_ignored)")
+            return
+        if not _archive.install(token_auth, lookup_provider=_registered_archive_provider):
+            _log.warning("dashboard-auth-edgecity: archive_read not installed (seam_missing)")
+    except Exception as exc:  # noqa: BLE001 - never break the owner login over the archive token
+        _log.warning("dashboard-auth-edgecity: archive_read not installed (%s)", type(exc).__name__)
+
+
 def register(ctx) -> None:
+    if _HERMES_MISSING is not None:
+        raise ImportError("dashboard-auth-edgecity needs hermes_cli.dashboard_auth") from _HERMES_MISSING
     try:
         ctx.register_dashboard_auth_provider(EdgeCityDashboardAuth())
     except ValueError:
         return
+    _register_archive_read(ctx)
     _patch_hermes_login()

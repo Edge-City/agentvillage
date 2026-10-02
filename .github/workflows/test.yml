@@ -1,6 +1,7 @@
 # Tests on every pull request and every push to main: the TypeScript suites
 # (installer, scripts, the two skills with tests) and the plugin pytest suites
-# (pytest.ini: plugins/av-events/tests, plugins/recall/tests). The same thing
+# (pytest.ini: plugins/av-events/tests, plugins/recall/tests,
+# plugins/dashboard-auth-edgecity/tests; its Hermes-backed tests skip here). The same thing
 # `bun test` and `python3 -m pytest` run locally; nothing here deploys.
 name: test
 
