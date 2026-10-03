@@ -1,6 +1,6 @@
 {
-  "version": "tool_categories_v2",
-  "about": "Tool-name allowlist for tool.call (spec 4.1, 7.1). A tool listed here leaves by name and category; any other tool leaves as category 'other' with a null name, so a third-party MCP server's tool names never reach ingest. 'builtin' is keyed by the Hermes registry name of a tool with no MCP prefix. 'mcp' is keyed by MCP server, then by the tool's own name: Hermes registers an MCP tool as mcp__<server>__<tool>. Frozen with the event catalogue; a change is a new version, moved together with the agentvillage-data seed edgeos_tool_allowlist. v2 adds category 'meta' for the plugin's own introspection tools (consent_status), which v1 left as 'other'.",
+  "version": "tool_categories_v3",
+  "about": "Tool-name allowlist for tool.call (spec 4.1, 7.1). A tool listed here leaves by name and category; any other tool leaves as category 'other' with a null name, so a third-party MCP server's tool names never reach ingest. 'builtin' is keyed by the Hermes registry name of a tool with no MCP prefix. 'mcp' is keyed by MCP server, then by the tool's own name: Hermes registers an MCP tool as mcp__<server>__<tool>. Frozen with the event catalogue; a change is a new version, moved together with the agentvillage-data seed edgeos_tool_allowlist. v2 adds category 'meta' for the plugin's own introspection tools (consent_status), which v1 left as 'other'. v3 (DATA-261) adds Index main's tool names, read from indexnetwork/index main at 168310a: the MCP server's tools (services/api/src/lib/mcp/mcp.tools.ts) under mcp.index, and the Index Hermes plugin's own tools (packages/hermes-plugin, index_*), which Hermes registers by bare name and so are keyed under builtin; index_open_app, which opens an index.network link for the human with the operating system's handler, stays unlisted. Every older name stays listed with its category, because agents on an older Index surface still call them; a new name takes the category of the old tool it replaces.",
   "builtin": {
     "web_search": "research",
     "web_extract": "research",
@@ -41,7 +41,22 @@
     "cronjob": "schedule",
     "send_message": "message",
     "record_intention": "intention",
-    "consent_status": "meta"
+    "consent_status": "meta",
+    "index_read_intents": "intention",
+    "index_create_intent": "intention",
+    "index_update_intent": "intention",
+    "index_list_intent_networks": "intention",
+    "index_add_intent_to_network": "intention",
+    "index_read_networks": "membership",
+    "index_read_network_memberships": "membership",
+    "index_create_network": "membership",
+    "index_update_network": "membership",
+    "index_join_network": "membership",
+    "index_list_opportunities": "opportunity",
+    "index_update_opportunity": "opportunity",
+    "index_research_profile": "profile",
+    "index_read_docs": "research",
+    "index_agent_me": "agent_admin"
   },
   "mcp": {
     "index": {
@@ -98,7 +113,18 @@
       "grant_agent_permission": "agent_admin",
       "revoke_agent_permission": "agent_admin",
       "read_docs": "research",
-      "scrape_url": "research"
+      "scrape_url": "research",
+      "get_my_profile": "profile",
+      "update_my_profile": "profile",
+      "enrich_my_profile": "profile",
+      "list_intents": "intention",
+      "get_intent": "intention",
+      "pause_intent": "intention",
+      "resume_intent": "intention",
+      "archive_intent": "intention",
+      "get_opportunity": "opportunity",
+      "accept_opportunity": "opportunity",
+      "reject_opportunity": "opportunity"
     }
   }
 }
