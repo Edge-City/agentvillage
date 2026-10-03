@@ -130,7 +130,7 @@ cd "${HERMES_HOME:-/opt/data}"
 - One attempt at context collection and one attempt at staging. No retries.
 - Never invent announcements, events, people, venues, times, tracks, or action URLs.
 - Never fill gaps with Edge Esmeralda (the previous popup) content or describe Healdsburg; if the context has no India calendar items, say plainly that you don't have today's Edge City India schedule yet and point the user to the Edge City portal or the organisers.
-- Never call `list_opportunities`, `read_pending_questions`, or any other MCP tool here; the context script handles all MCP calls deterministically.
+- Never call `list_opportunities` or any other MCP tool here; the context script handles all MCP calls deterministically.
 - Never create, block, unblock, or otherwise mutate the Kanban card manually; `stage-daily-brief.ts --body-stdin` is the cron staging path.
 - Do not write the composed body into `memory/`; it is not memory and must not become future source context.
 - Stage the brief for automatic delivery by the send pass. Do not block it for review, assign it, or manually move it between statuses in this prepare pass.
