@@ -34,12 +34,28 @@ or `reason=personal`. Any other `publish=false` is refused.
 
 ## Ambient intentions are held
 
-An ambient intention is never published by this tool. It is recorded locally
-and stays off Index until the resident confirms it through their approval
-channel. A yes you read in chat is not a confirmation. `action=confirm` is not
-available yet and is refused; do not publish a held intention any other way,
-and do not call `create_intent` for it. Capturing the same text again as `message`, `onboarding` or
-`note` records it locally but does not publish it.
+An ambient intention is never published on your word. It is recorded locally
+and stays off Index until the resident approves it in their approval channel.
+Where that channel is set up, the tool sends them the request itself when you
+capture, with the words you recorded, and publishes once they approve; you do
+not need to ask them in chat as well. A yes you read in chat is not an
+approval.
+
+- `action=confirm` (with `intention_id`) checks whether the resident has
+  answered and publishes it if they approved. If they have not answered yet,
+  it says so; do not ask again and again. Where the approval channel is not
+  set up, confirm is refused.
+- To change the wording of a held intention whose request is still open,
+  withdraw it and capture the new wording; an update is refused, because the
+  resident was asked about the words as they were.
+- Do not publish a held intention any other way, and do not call
+  `create_intent` for it. Capturing the same text again as `message`,
+  `onboarding` or `note` records it locally but does not publish it.
+
+When approvals are set up, a stated intention (`message`, `onboarding`,
+`note`) is checked against the resident's approval policy too; normally it is
+published in the same call. If the result says the resident has been asked,
+leave it: it is published when they approve.
 
 ## When Index says no
 

@@ -443,7 +443,13 @@ Search, which such a gate would not see); its text, the `workspace/AGENTS.md` ro
 | `withdraw` of a published id already archived by this tool | none | `intention.withdrawn`, told it was already withdrawn on Index |
 | `update` / `withdraw` of an id it recorded locally | none | local only |
 | `update` / `withdraw` of an id it has no record of | none | `publish_refused="unknown_id"`, `source=ambient` |
-| `confirm` | none | refused: `no_confirmation_channel` (`confirmation_not_wired` when `AV_APPROVAL_URL` is set, until DATA-213) |
+| `confirm`, approval not configured | none | refused: `no_confirmation_channel` (`confirmation_not_wired` when `AV_APPROVAL_URL` is set but `AV_APPROVAL_ENABLED` is not on) |
+
+With `AV_APPROVAL_ENABLED` on and `AV_APPROVAL_URL` set, captures that would publish go through the
+resident's approval.md first: see "Through approval.md" below. That changes three rows: an ambient
+capture is proposed to the resident (and publishes on their grant), a stated capture is proposed
+and publishes in the same call when the policy answers autonomous (with a uuid v7 `intention_id`
+and Index's id as `index_intent_id`), and `confirm` works.
 
 **Held sessions.** The tool keeps its own session lineage from its own `on_session_start`,
 `pre_api_request` and `subagent_start` listeners, outside the collector's guard (so
@@ -502,7 +508,9 @@ local-capture path; only `rejected` labels the map entry. Before DATA-249, `rpc_
 `reason_required`, `reason_invalid`, `intention_id_unexpected`, `intention_id_required`,
 `intention_id_invalid`, `capture_again` (an update of a capture Index rejected),
 `no_confirmation_channel`, `confirmation_not_wired`, `internal`, `text_invalid` (an unpaired
-surrogate in the text), and `held_cron` / `held_unknown` for a held withdrawal of a published id.
+surrogate in the text), and `held_cron` / `held_unknown` for a held withdrawal of a published id;
+on the approval path also `approval_pending`, `approval_publishing`, `confirm_unknown`,
+`confirm_not_held`, `confirm_text_missing`, `resident_declined`, `approval_expired`.
 
 **For the data side.** Reconciliation is the data repo's provisional ruling R11
 (`eligibility_v3`). A `publish_refused='rejected'` capture is ineligible (`index_rejected`); the
@@ -543,6 +551,140 @@ update and dropped on withdrawal, and the cap's attempt timestamps; a corrupt fi
 `intentions.json.corrupt-<n>` and the map starts empty. Logs carry codes only. The observer reads
 the result's `action`, `source`, `index_intent_id` and codes only for the unprefixed overlay tool;
 a result that names `index_intent_id` decides it, null included.
+
+### Through approval.md (DATA-212 Lane B)
+
+Rulings R16..R24 and the Lane B contract, against the `propose`, `wait --timeout 0` and `start`
+verbs of approval.md PR #569. Code: `_approval.py` (the client and the poller thread, meant to be
+shared by `digest.share` and `village.vote` later through `register_pass`) and
+`_intent_approval.py` (what an answer means for an intention). Off unless both are set:
+
+| Variable | Meaning |
+|---|---|
+| `AV_APPROVAL_ENABLED` | `1\|true\|yes\|on` turns the approval path on (the control plane writes it, DATA-233). |
+| `AV_APPROVAL_URL` | The daemon: `http://127.0.0.1:<port>` (or `localhost`, `[::1]`), `unix:<absolute socket path>`, or an `https://` origin (the hosted dogfood). No path, no query, nothing else. |
+| `AV_APPROVAL_TOKEN_FILE` | The agent credential's file. Else `$HERMES_HOME/approval/agent-token` when it exists, else `AV_APPROVAL_TOKEN`: the shim's order. A token file must be absolute, a regular file owned by this uid, mode 0600; a named file that fails never falls back. |
+| `AV_APPROVAL_DAEMON_UID` | The uid that must own the loopback listener or the socket (default 10001). |
+| `AV_APPROVAL_POLL_S` | Seconds between poller passes (default 30, at least 5). |
+| `AV_APPROVAL_POLLER` | `1` starts the poller thread in any process; `0` never (session-start passes still run). |
+
+**The calls, exactly as the plugin makes them** (`POST /verb/<name>` with `Authorization: Bearer
+<agent token>`; an https facade also gets `X-Approval-Authorization`, which Maritime's proxy keeps):
+
+- `propose`: `{"flags": {"--class": "intent.publish.inferred.index", "--key":
+  "intent.publish.inferred.index:<intention_id>", "--summary": "Publish to Index an intention your
+  agent inferred (intention <intention_id>).", "--payload-json": "{\"text\":\"<the text>\"}",
+  "--json": true}}`. A stated capture: class and key `intent.publish.stated.index`, summary
+  "Publish to Index an intention you stated (intention <id>).". The summary names no part of the
+  text (it is in the daemon's log in cleartext, twice); the payload is compact JSON, UTF-8, at most
+  262144 bytes (a larger text is held without a proposal).
+- `wait`: `{"positionals": ["<task>"], "flags": {"--timeout": "0", "--json": true}}`; never
+  `--withdraw-on-timeout`.
+- `start`: `{"positionals": ["<task>"], "flags": {"--action": "<key>", "--payload-json": "<the
+  proposed string, byte for byte>", "--json": true}}`.
+- `withdraw` (the agent withdrew a pending intention): `{"positionals": ["<task>"], "flags":
+  {"--reason": "the agent withdrew the intention", "--json": true}}`.
+
+**Ids.** Every proposed capture gets a uuid v7 `intention_id`: the key's id (so the follower can
+parse it back, R21), the tool's returned id, and the `sourceId` Index stores (decision A, amending
+R20). A published entry keeps Index's id as `index_intent_id`; update and withdraw mirror to it.
+
+**Where the held text lives (R16).** In the map entry's `approval.payload`
+(`$HERMES_HOME/av-events/intentions.json`, 0600, under its flock), from capture until the proposal
+ends. It is deleted on publish, on Index's 422, on an ambiguous or failed publish, on the
+resident's rejection, on the agent's withdrawal, on a start whose confirmation was lost, and on the
+final expiry. A proposal core refuses (`class-not-agent-requestable` and kin) keeps it so a
+`confirm` after a policy change can file it again. The held string is its own RFC 8785 form, so its
+plain SHA-256 is core's `payload_hash`: the plugin records the hash core answers at `propose`,
+refuses the proposal when it differs, and before it starts or publishes checks that the held bytes
+still hash to it (if not, it proposes again, and core refuses other bytes for the key). What is
+published is `json.loads(payload)["text"]`, the very string `start` was given.
+
+**What authorizes a publish, and nothing else does.** The map is never authority; it says only
+what to ask the daemon next. A publish happens only in the same call that (1) read the authority
+for that key from the daemon: `wait --timeout 0` exit 0 with `status: granted` for a manual class,
+or, for a class the policy clears, the `propose` answer `decision: autonomous|supervised` with no
+execution yet (a rule approval writes no grant, so there is no `wait` to read); (2) claimed the
+entry with one compare-and-set (`requested|cleared → starting`, a claim id); (3) read the same
+authority from the daemon again after the claim; (4) got `start` back ok with `authorization` equal
+to the expected one (`grant` or `policy`); (5) moved the entry `starting → publishing` under the
+claim. Any other `wait` answer is not a grant: exit 0 with any other status (`nothing-to-wait-for`,
+`executed`), 1 (rejected, revoked, withdrawn, `not-registered`), 3 (expired), 6 (pending), 7
+(void), anything else.
+
+**States** (`approval.state`; each step a compare-and-set under the map's flock): `unfiled` →
+`propose` → `requested`, `cleared`, `rejected`, `refused`, or `start_unconfirmed` (core says the
+key already executed). `requested` → `wait 0` → on a grant, claim / re-read / start / publish;
+`rejected` and `withdrawn` (final); `unfiled` again on `expired` (the same bytes re-proposed at most
+twice, then `expired`, final), on `void`, and on `not-registered`; `start_unconfirmed` on
+`nothing-to-wait-for` (a spent grant: a start whose confirmation was lost, never published).
+`cleared` → claim / re-propose / start / publish. Publishing ends `published`, `index_rejected`
+(422, labels the entry `refused: rejected`), `ambiguous` (Index may have written), or
+`index_failed` (nothing reached Index twice in the same call; a later call would hold no `start`).
+A `starting` claim older than 120 s is released to where it came from and the daemon is asked
+again. A `publishing` entry older than twice Index's deadline (60 s) is a process that died inside
+the Index call: `ambiguous`, never sent again.
+
+**No duplicate publish, no publish of a withdrawn intention.** Only the holder of the claim starts
+and publishes; the claim is taken before the authority is re-read; the agent's withdraw is refused
+(`approval_publishing`) while an entry is `starting` or `publishing`; a crash inside the Index call
+ends in `ambiguous` (`publish_refused: timeout`, reconciled by `sourceId` and text hash), never a
+second create.
+
+**Stale grants.** A grant pinned to a policy that has since been re-attested reads `void` from
+`wait` (exit 7) or is refused `policy-drift` by `start`; both re-propose the same bytes, which core
+files as a new question under the new policy. Nothing publishes on the old grant.
+
+**The poller.** One daemon thread per process, started when the process is the gateway: at plugin
+load when the command line is `hermes gateway run` (or `start`), or at the first `on_session_start`
+on a gateway platform (any platform but `cli`, `tui`, `desktop`, `acp`, `subagent`, `local`; `cron`
+counts, the scheduler runs in the gateway). Every other `on_session_start` (a CLI chat, a dashboard)
+runs one pass in a short-lived thread: the resume. A pass advances every live proposal once (at most
+50), skipping one a capture call is still advancing itself (90 s grace). Passes are serialised in
+the process and across processes (`flock` on `approval-pass.lock`, non-blocking). The thread catches
+everything and never ends on its own; it dies with the gateway (`os._exit`), all state is on disk,
+and the next process resumes it. A dead thread is replaced at the next session start. Plugin unload
+stops it.
+
+**Events.** A publish (or Index's refusal) inside the capture call is in the tool result, and the
+observer emits the one `intention.captured` (with `index_intent_id`, `approved_by`,
+`approval_state`). A later one (the poller, or `confirm`) is emitted by the plugin as
+`intention.updated` with `index_intent_id`, `approved_by` (`individual` for a human's grant, `rule`
+for the policy, from `start`'s `authorization`), `approval_state`, and the `text_hash` of the exact
+string sent to Index. `approved_by` and `approval_state` are present only on this path. `confirm`'s
+own result records nothing.
+
+**`confirm`.** The same steps, nothing else: it asks the daemon for the resident's answer and
+publishes only on a grant read as above. A manual class with no grant is refused
+`awaiting_resident`. Other refusals: `confirm_unknown`, `confirm_not_held` (recorded locally on
+purpose, or withdrawn), `confirm_text_missing` (held before approvals were on: capture it again),
+`resident_declined`, `approval_expired`, `publish_failed` (`index_failed` or `start_unconfirmed`),
+`rule_needs_capture` (a policy-cleared proposal its capture call could not execute),
+`capture_again`. `update` of an intention whose proposal is open is refused `approval_pending`;
+`withdraw` ends the proposal (and withdraws a pending question on the daemon).
+
+**Who may execute what.** A start the policy clears (`cleared`) is executed only by the capture
+call itself, which has the class in memory; the poller and `confirm` publish only on a human grant,
+and a `cleared` entry they meet ends `not_published` (so a stated capture that could not reach the
+daemon in its own call is not published later; capture it again). Before every propose and start
+the map's class must be one of the two and its key exactly `<class>:<intention_id>`, else the entry
+ends `invalid`; the `sourceId` is the key's own id. `AV_APPROVAL_ENABLED`, `AV_APPROVAL_URL` and
+`AV_APPROVAL_DAEMON_UID` are read from the process environment only, never from the live-reloaded
+`.env`. Plugin registration outside `hermes gateway run` starts nothing, and the one-shot resume
+pass a non-gateway session start runs proposes and reads answers but stops before `start`.
+`wait` exit codes count only with their status (1 with `rejected`/`revoked`/`withdrawn`, 3 with
+`expired`, 7 with `void`); anything else is transient. `withdraw` ends any proposal not being started
+or published, a refused one included; `update` of a refused one ends it (`superseded`); neither can
+be reopened.
+
+**Codes this path adds.** `publish_refused` on a stated capture: `approval_pending`,
+`approval_unavailable`, `approval_refused`. `approval_state`: `requested`, `cleared`, `starting`,
+`publishing`, `published`, `rejected`, `withdrawn`, `refused`, `index_rejected`, `ambiguous`,
+`index_failed`, `start_unconfirmed`, `expired`, `not_published`, `invalid`, `superseded`, `unfiled` (the daemon could not be reached;
+retried), `unavailable` (nothing could be held). Map codes: `payload_hash_mismatch`,
+`authorization_mismatch`, `claim_abandoned`, `map_invalid`, `rule_needs_capture`. Client codes in the logs: `url_missing`, `url_refused`,
+`token_missing`, `token_malformed`, `token_file_*`, `facade_listener_foreign`, `unauthorized`,
+`http_<status>`, `transport`, `timeout`, `bad_answer`.
 
 ---
 
@@ -1527,8 +1669,9 @@ Out of scope, deliberately:
 
 - **Budget** — `run.budget_exceeded`, `AV_RUN_BUDGET_*`, `AV_BUDGET_MODE`. There is no budget hook,
   and see divergence 9 for why the enforce path cannot be `pre_llm_call`.
-- **`record_intention` confirmation** — `action=confirm` is refused until approval.md (DATA-213).
-  No rate cap on the tool; the per-tenant switch `AV_RECORD_INTENTION` is the guardrail.
+- **`record_intention` without approval.md** — `action=confirm` is refused unless
+  `AV_APPROVAL_ENABLED` and `AV_APPROVAL_URL` are set (DATA-212 Lane B). The post-cap sweep and
+  replay stay DATA-213.
 - **`skill.enabled/disabled`**.
 - **Ingest registration.** `agentvillage-data` does not yet register payload schemas for
   `tool.call`, `message.in`, `message.out`, `cron.run` or `profile.updated`; until it does, ingest

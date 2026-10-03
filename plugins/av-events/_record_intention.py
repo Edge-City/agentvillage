@@ -133,6 +133,25 @@ rely on the prompt.] A corrupt file is renamed aside to
 An update or withdrawal of an id not in the map mirrors nothing: its event is
 ambient with `publish_refused="unknown_id"`.
 
+**Through approval.md (DATA-212 Lane B, `_intent_approval`).** When
+`AV_APPROVAL_ENABLED` is on and `AV_APPROVAL_URL` is set, nothing this tool
+publishes reaches Index without a proposal on the resident's approval.md
+daemon first. An ambient capture is proposed as `intent.publish.inferred.index`
+(the resident is asked; it publishes once they approve, from the poller, or at
+once under a policy that makes the class autonomous); an explicit capture that
+would publish is proposed as `intent.publish.stated.index` and publishes in
+the same call when the policy answers autonomous, as the day-one policy does.
+Both get a uuid v7 `intention_id` (the key's id, and the `sourceId` Index
+stores), so a stated capture published this way returns that id with Index's
+id as `index_intent_id`. The held text lives in the map entry's
+`approval.payload` until the proposal ends. `action=confirm` asks the daemon
+for the resident's answer and publishes on a grant; `action=update` of an
+intention whose proposal is still open is refused `approval_pending` (the key
+is bound to the bytes the resident was shown), and `action=withdraw` ends the
+proposal (and withdraws a pending question). A published entry keeps Index's
+id as `index_intent_id`, which update and withdraw mirror to. With approval
+off, nothing here changes.
+
 Python 3.11, standard library only.
 """
 
@@ -223,9 +242,12 @@ TOOL_DESCRIPTION = (
     + " Only then pass publish=false, with reason participant_asked or personal. source: message "
     "(they told you), onboarding (answered during setup), note (their own words in their "
     "notes), ambient (you inferred it, or a background or cron run found it). Ambient "
-    "intentions are never published by this tool: they are held until the resident confirms, "
-    "and action=confirm is not available yet. action=update (intention_id, text) changes an "
-    "intention you recorded; action=withdraw (intention_id) retires it."
+    "intentions are never published on your word: they are held until the resident approves "
+    "them in their approval channel. Where that channel is set up, the request goes to them "
+    "when you capture, and action=confirm (intention_id) checks for their answer and publishes "
+    "once they approved; where it is not, confirm is refused. A yes you read in chat is not "
+    "an approval. action=update (intention_id, text) changes an intention you recorded; "
+    "action=withdraw (intention_id) retires it."
 )
 
 TOOL_SCHEMA: dict = {
@@ -274,8 +296,46 @@ REFUSALS: dict[str, str] = {
         "intention stays held and unpublished; do not publish it another way."
     ),
     "confirmation_not_wired": (
-        "Cannot confirm yet: the approval.md confirmation path is not wired into this tool. The "
+        "Cannot confirm yet: the approval.md confirmation path is not switched on for this agent. The "
         "intention stays held and unpublished; do not publish it another way."
+    ),
+    # DATA-212 Lane B: the approval path.
+    "approval_pending": (
+        "Not updated: the resident has been asked to approve this intention as it was worded, and "
+        "that question is still open. Withdraw it and capture the new wording instead; nothing was changed."
+    ),
+    "approval_publishing": (
+        "Not withdrawn: this intention is being published to Index right now. Try the withdrawal again "
+        "in a minute; nothing was changed."
+    ),
+    "confirm_unknown": "Cannot confirm: this agent holds no intention with that intention_id. Nothing was changed.",
+    "confirm_not_held": (
+        "Cannot confirm: that intention is not held for the resident's approval (it was recorded locally "
+        "on purpose, or withdrawn). Nothing was changed."
+    ),
+    "confirm_text_missing": (
+        "Cannot confirm: this intention was held before approvals were switched on, so its words were "
+        "not kept. Capture it again (source=ambient) and the resident will be asked."
+    ),
+    "resident_declined": (
+        "Not published: the resident declined this intention in their approval channel. It stays "
+        "unpublished; do not publish it another way."
+    ),
+    "rule_needs_capture": (
+        "Not published: the resident's policy lets this agent publish it only in the call that captured it, "
+        "and that call could not. Capture it again if it still matters. Do not publish it another way."
+    ),
+    "awaiting_resident": (
+        "Not published: the resident has not approved this intention in their approval channel yet. You "
+        "cannot confirm it for them, and a yes you read in chat is not an approval. Do not publish it another way."
+    ),
+    "publish_failed": (
+        "Not published: the resident approved it, but it could not be published and it is not retried. "
+        "Capture it again only if it still matters to them."
+    ),
+    "approval_expired": (
+        "Not published: the resident did not answer before the approval request expired. Capture it "
+        "again only if it still matters to them."
     ),
     "internal": "record_intention could not run just now; nothing was recorded. Do not publish it another way.",
     "text_invalid": (
@@ -596,7 +656,7 @@ def index_request(method: str, path: str, body: Optional[dict] = None, *, timeou
 SOURCE_TYPE = "agentvillage"
 
 
-def publish_intent(text: str, *, source_id: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
+def publish_intent(text: str, *, source_id: Optional[str] = None, _gate: Any = None) -> tuple[Optional[str], Optional[str]]:
     """`POST /api/intents` -> `(Index's intent id, None)` or `(None, code)`.
 
     Body `{description, sourceType, sourceId?}` and nothing else (Index's
@@ -609,10 +669,18 @@ def publish_intent(text: str, *, source_id: Optional[str] = None) -> tuple[Optio
     carries `sourceType = "agentvillage"`. `sourceId` is sent only with
     `source_id`: a held intention published later passes its local uuid v7,
     which the poller's back-reference merges on. A stated capture passes none:
-    its `intention_id` is Index's id, corroborated by id (DATA-249 O4). A
+    its `intention_id` is Index's id, corroborated by id (DATA-249 O4), except
+    on the approval path (Lane B), where every proposed capture, stated ones
+    included, publishes under its own uuid v7 as `sourceId`. A
     publish counts as done only with an `intentId` matching `INTENT_PATH_ID` in
     a 2xx body; a 2xx without one is `timeout` (the create may have landed).
     """
+    if _approval_on() is not False and not _is_gate(_gate):
+        # Lane B: with approval on (or unreadable), every create goes through
+        # `_intent_approval._execute` (propose, wait, claim, wait, start); no
+        # other caller reaches Index.
+        logger.warning("av-events: record_intention publish_refused=approval_required")
+        return None, "approval_required"
     body: dict[str, Any] = {"description": text, "sourceType": SOURCE_TYPE}
     if source_id is not None:
         body["sourceId"] = source_id
@@ -941,11 +1009,20 @@ def remember(
             if refused == "rejected" and not published:
                 entry["refused"] = refused
             entries[intention_id] = entry
-            while len(entries) > MAX_MAP_ENTRIES:
-                entries.pop(next(iter(entries)))
+            _evict(entries)
             _save_locked(entries, publishes)
     except Exception as exc:  # noqa: BLE001
         logger.warning("av-events: record_intention map_write_failed=%s", type(exc).__name__)
+
+
+def _evict(entries: dict[str, dict]) -> None:
+    """Bound the map, oldest first, keeping an entry whose approval proposal is
+    still open (Lane B) while any other can go."""
+    from ._intent_approval import is_live
+
+    while len(entries) > MAX_MAP_ENTRIES:
+        victim = next((k for k, v in entries.items() if not is_live(v)), None)
+        entries.pop(victim if victim is not None else next(iter(entries)))
 
 
 def rate_cap() -> int:
@@ -1041,11 +1118,14 @@ def _capture(args: dict, held: Optional[str]) -> dict:
 
     # `action` tells the observer what was done when the call left it to the default.
     result: dict[str, Any] = {"success": True, "action": "capture", "source": source}
+    approval_on = _approval_on()
     if source == RESTRICTIVE_SOURCE:
         intention_id = uuid7()
         result.update(intention_id=intention_id, index_intent_id=None, published=False, held=True)
         if held_code is not None:
             result["publish_refused"] = held_code
+        if approval_on is True:
+            return _held_through_approval(result, intention_id, text, norm)
         result["message"] = (
             f"Held as an ambient intention (intention_id {intention_id}). It stays off Index until the "
             "resident confirms it, and confirmation is not available yet: do not publish it another way."
@@ -1073,6 +1153,11 @@ def _capture(args: dict, held: Optional[str]) -> dict:
         )
     else:
         code = _publish_precheck()
+        if code is None and approval_on is None:
+            # L1: whether the gate is on could not be read: hold, never publish around it.
+            code = "approval_unavailable"
+        if code is None and approval_on is True:
+            return _stated_through_approval(result, text, source)
         index_id: Optional[str] = None
         if code is None:
             code = reserve_publish()
@@ -1110,6 +1195,228 @@ def _capture(args: dict, held: Optional[str]) -> dict:
     return result
 
 
+# ---- Through approval.md (DATA-212 Lane B) ----------------------------------
+
+
+def _ia():
+    from . import _intent_approval
+
+    return _intent_approval
+
+
+def _is_gate(token: Any) -> bool:
+    try:
+        return token is not None and token is _ia()._GATE
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _approval_on() -> Optional[bool]:
+    """`AV_APPROVAL_ENABLED` on and `AV_APPROVAL_URL` set (`_approval.configured`).
+    None when it cannot be read (L1): the caller holds, and never publishes
+    around the gate."""
+    try:
+        return bool(_ia().active())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+_NO_OTHER_WAY = "Do not publish it another way."
+
+
+def _advance_inline(intention_id: str, cls: str):
+    ia = _ia()
+    try:
+        # S1: only this call, with the class in memory, may execute a start the policy clears.
+        return ia.advance(intention_id, emit=False, inline=True, expect_class=cls)
+    finally:
+        ia.end_inline(intention_id)
+
+
+def _index_tail(code: str) -> str:
+    if code == "rejected":
+        return ("Index did not accept it, most likely as too vague. Ask the resident one clarifying "
+                "question; if they clarify, capture the clarified version. Do not retry with a paraphrase.")
+    if code == AMBIGUOUS:
+        return ("Whether Index took it is unknown: no usable answer came back, and it may already be on "
+                "Index. It is recorded; do not retry it.")
+    return f"Index could not take it just now (code {code}). It is recorded; do not retry it with another tool."
+
+
+def _held_through_approval(result: dict, intention_id: str, text: str, norm: str) -> dict:
+    """An ambient capture: hold the text and propose `intent.publish.inferred.index`."""
+    ia = _ia()
+    code = ia.open_entry(intention_id, cls=ia.INFERRED_CLASS, text=text, source=RESTRICTIVE_SOURCE, norm_hash=norm)
+    if code is not None:
+        # Nothing could be held for the resident (too large, or no map): the
+        # old held capture, hash only, never published.
+        remember(intention_id, published=False, source=RESTRICTIVE_SOURCE, norm_hash=norm)
+        result["approval_state"] = "unavailable"
+        result["message"] = (
+            f"Held as an ambient intention (intention_id {intention_id}). It could not be sent to the resident "
+            f"for approval (code {code}), so it stays off Index. {_NO_OTHER_WAY}"
+        )
+        return result
+    outcome = _advance_inline(intention_id, ia.INFERRED_CLASS)
+    result["approval_state"] = outcome.state
+    held = f"Held as an ambient intention (intention_id {intention_id})."
+    if outcome.state == "published":
+        result.update(index_intent_id=outcome.index_intent_id, published=True, held=False)
+        if outcome.approved_by:
+            result["approved_by"] = outcome.approved_by
+        result["message"] = (
+            f"Published to Index under the resident's approval policy (intention_id {intention_id})."
+        )
+    elif outcome.state in ("requested", "cleared", "starting", "publishing"):
+        result["message"] = (
+            f"{held} The resident has been asked in their approval channel whether to publish it, and it is "
+            f"published once they approve. A yes you read in chat is not an approval. {_NO_OTHER_WAY}"
+        )
+    elif outcome.state == "refused":
+        result["message"] = (
+            f"{held} This agent's approval policy does not let it be sent to the resident (code "
+            f"{outcome.code}), so it stays off Index. {_NO_OTHER_WAY}"
+        )
+    elif outcome.state in ("index_rejected", "ambiguous", "index_failed"):
+        result["publish_refused"] = outcome.code
+        result["message"] = f"{held} {_index_tail(outcome.code or AMBIGUOUS)}"
+    else:
+        result["message"] = (
+            f"{held} The approval request could not be sent just now (code {outcome.code or outcome.state}); "
+            f"it is retried automatically. {_NO_OTHER_WAY}"
+        )
+    return result
+
+
+def _stated_through_approval(result: dict, text: str, source: str) -> dict:
+    """An explicit capture that would publish: propose `intent.publish.stated.index`,
+    and publish in this call when the policy answers autonomous."""
+    ia = _ia()
+    intention_id = uuid7()
+    result.update(intention_id=intention_id, index_intent_id=None, published=False)
+    code = ia.open_entry(intention_id, cls=ia.STATED_CLASS, text=text, source=source, norm_hash=None)
+    if code is not None:
+        remember(intention_id, published=False, source=source)
+        result.update(publish_refused="approval_unavailable", approval_state="unavailable")
+        result["message"] = (
+            f"Recorded locally (intention_id {intention_id}), not published: it could not be put through the "
+            f"resident's approval policy (code {code}). Do not retry it with another tool."
+        )
+        return result
+    outcome = _advance_inline(intention_id, ia.STATED_CLASS)
+    if outcome.state == "unfiled":
+        # S1: no later call may execute a start the policy clears, so a stated
+        # capture that could not reach the daemon now is not published.
+        ia.abandon(intention_id, "approval_unavailable")
+        outcome = ia.Outcome("not_published", code=outcome.code)
+    result["approval_state"] = outcome.state
+    if outcome.state == "published":
+        result.update(index_intent_id=outcome.index_intent_id, published=True)
+        if outcome.approved_by:
+            result["approved_by"] = outcome.approved_by
+        result["message"] = f"Recorded and published to Index (intention_id {intention_id})."
+        return result
+    if outcome.state in ("requested", "starting"):
+        refused = "approval_pending"
+        message = (
+            "The resident's approval policy asks them before a stated intention is published, and they have "
+            "been asked in their approval channel; it is published once they approve. Do not retry it."
+        )
+    elif outcome.state == "refused":
+        refused = "approval_refused"
+        message = (f"The resident's approval policy does not let this agent publish it (code {outcome.code}). "
+                   "Do not retry it with another tool.")
+    elif outcome.state == "not_published":
+        refused = "approval_unavailable"
+        message = ("The resident's approval channel could not be reached just now, so it was not published. "
+                   "Capture it again later if it still matters; do not publish it with another tool.")
+    else:
+        refused = outcome.code or "approval_unavailable"
+        message = _index_tail(refused)
+    result["publish_refused"] = refused
+    result["message"] = f"Recorded locally (intention_id {intention_id}, code {refused}). {message}"
+    return result
+
+
+def _confirm(args: dict) -> dict:
+    """`action=confirm`: ask the daemon for the resident's answer on a held
+    intention and publish it on a grant. A reply read in chat confirms nothing."""
+    if _blank(args.get("intention_id")):
+        return _refuse("intention_id_required")
+    intention_id = str(args.get("intention_id")).strip()
+    if not valid_id(intention_id):
+        return _refuse("intention_id_invalid")
+    ia = _ia()
+    entry = lookup(intention_id)
+    if entry is None:
+        return _refuse("confirm_unknown")
+    base: dict[str, Any] = {"success": True, "action": "confirm", "intention_id": intention_id}
+    if entry.get("published") is True:
+        index_id = entry.get("index_intent_id") if valid_id(entry.get("index_intent_id")) else intention_id
+        return {**base, "published": True, "index_intent_id": index_id, "approval_state": "published",
+                "message": f"Intention {intention_id} is already published to Index."}
+    ap = ia.approval_of(entry)
+    if ap is None:
+        return _refuse("confirm_text_missing" if entry.get("source") == RESTRICTIVE_SOURCE else "confirm_not_held")
+    state = ap.get("state")
+    if state == "refused":
+        ia.reopen(intention_id)
+    elif state == "rejected":
+        return _refuse("resident_declined")
+    elif state in ("withdrawn", "superseded", "invalid"):
+        return _refuse("confirm_not_held")
+    elif state == "not_published":
+        return _refuse("rule_needs_capture")
+    elif state == "expired":
+        return _refuse("approval_expired")
+    elif state == "index_rejected":
+        return _refuse("capture_again")
+    elif state in ("index_failed", "start_unconfirmed"):
+        return _refuse("publish_failed")
+    elif state == "ambiguous":
+        return {**base, "published": False, "index_intent_id": None, "approval_state": state,
+                "message": (f"Intention {intention_id} was approved and sent to Index, but whether Index took it is "
+                            "unknown. It may already be there; do not retry it.")}
+    outcome = ia.advance(intention_id, emit=True)
+    result = {**base, "published": outcome.state == "published", "index_intent_id": outcome.index_intent_id,
+              "approval_state": outcome.state}
+    if outcome.state == "published":
+        if outcome.approved_by:
+            result["approved_by"] = outcome.approved_by
+        result["message"] = f"The resident approved it: intention {intention_id} is published to Index."
+    elif outcome.state in ("requested", "unknown"):
+        # A manual class with no grant on the daemon: refused, never published.
+        return _refuse("awaiting_resident")
+    elif outcome.state in ("index_failed", "start_unconfirmed"):
+        return _refuse("publish_failed")
+    elif outcome.state == "not_published":
+        return _refuse("rule_needs_capture")
+    elif outcome.state in ("invalid", "superseded"):
+        return _refuse("confirm_not_held")
+    elif outcome.state == "rejected":
+        return _refuse("resident_declined")
+    elif outcome.state == "withdrawn":
+        return _refuse("confirm_not_held")
+    elif outcome.state == "expired":
+        return _refuse("approval_expired")
+    elif outcome.state == "index_rejected":
+        result["publish_refused"] = outcome.code
+        result["message"] = (
+            "The resident approved it, but Index did not accept it, most likely as too vague. Ask the resident "
+            "one clarifying question; if they clarify, capture the clarified version."
+        )
+    elif outcome.state == "ambiguous":
+        result["publish_refused"] = outcome.code
+        result["message"] = f"The resident approved it. {_index_tail(AMBIGUOUS)}"
+    elif outcome.state == "refused":
+        result["message"] = (f"This agent's approval policy does not let it be sent to the resident (code "
+                             f"{outcome.code}). {_NO_OTHER_WAY}")
+    else:
+        result["message"] = (f"Intention {intention_id} is not published yet (code {outcome.code or outcome.state}); "
+                             f"it is retried automatically. {_NO_OTHER_WAY}")
+    return result
+
+
 def _update_or_withdraw(action: str, args: dict, held: Optional[str]) -> dict:
     if _blank(args.get("intention_id")):
         return _refuse("intention_id_required")
@@ -1144,7 +1451,22 @@ def _update_or_withdraw(action: str, args: dict, held: Optional[str]) -> dict:
 
     if action == "update" and entry.get("refused") == "rejected":
         return _refuse("capture_again")
+    if _ia().is_live(entry) and action == "update":
+        # Lane B: the open proposal is bound to the bytes the resident was shown.
+        return _refuse("approval_pending")
+    if action == "update" and _ia().holds_text(entry):
+        # B1: a refused proposal ends at an update; the new words are a new capture's.
+        _ia().supersede(intention_id)
+        entry = lookup(intention_id) or entry
+    if action == "withdraw" and _ia().holds_text(entry):
+        # B1: any proposal not being started or published ends here, refused included.
+        code = _ia().withdraw_local(intention_id)
+        if code is not None:
+            return _refuse(code)
+        entry = lookup(intention_id) or entry
     published = entry.get("published") is True
+    # A held intention published through approval keeps its own id; Index's is beside it.
+    index_id = entry.get("index_intent_id") if published and valid_id(entry.get("index_intent_id")) else intention_id
     if action == "withdraw" and published and held is not None:
         # B2 (provisional ruling): archiving on Index cannot be undone, and a
         # held session (cron, webhook, api_server, unknown) is the one exposed
@@ -1159,7 +1481,7 @@ def _update_or_withdraw(action: str, args: dict, held: Optional[str]) -> dict:
         "success": True,
         "action": action,
         "intention_id": intention_id,
-        "index_intent_id": intention_id if published else None,
+        "index_intent_id": index_id if published else None,
         "published": published,
         "source": source,
     }
@@ -1171,12 +1493,17 @@ def _update_or_withdraw(action: str, args: dict, held: Optional[str]) -> dict:
     if published:
         if action == "update" and held is not None:
             code = f"held_{held}"  # F4/M3: a held session never overwrites a live intent
+        elif action == "update" and _approval_on() is not False:
+            # Lane B: new words on a published intention would reach Index
+            # without the resident seeing them. Local only; capture the new
+            # wording to propose it.
+            code = "approval_required"
         elif action == "update":
-            code = mirror_update(intention_id, description=text)
+            code = mirror_update(index_id, description=text)
         elif already_archived:
             code = None  # B2: archived on Index already; the archive is not sent twice
         else:
-            code = mirror_update(intention_id, archive=True)
+            code = mirror_update(index_id, archive=True)
             if code is None:
                 mark_archived(intention_id)
         if code is not None:
@@ -1189,6 +1516,11 @@ def _update_or_withdraw(action: str, args: dict, held: Optional[str]) -> dict:
         result["message"] = f"{verb} intention {intention_id} here and on Index."
     elif code.startswith("held_"):
         result["message"] = f"{verb} intention {intention_id} locally; this session cannot change it on Index."
+    elif code == "approval_required":
+        result["message"] = (
+            f"{verb} intention {intention_id} locally only: the resident has not approved the new wording, so "
+            "Index still has the old one. Capture the new wording to have it proposed to them."
+        )
     elif code == AMBIGUOUS:
         # B1: the change may have landed on Index.
         result["message"] = (
@@ -1209,8 +1541,12 @@ def record_intention_answer(args: Any, session_id: Optional[str]) -> dict:
     if action not in ACTIONS:
         return _refuse("action_invalid")
     if action == "confirm":
-        # Spec §5.3: a parsed reply is not a confirmation. DATA-213 wires approval.md.
-        return _refuse("confirmation_not_wired" if env("AV_APPROVAL_URL") else "no_confirmation_channel")
+        # Spec §5.3: a parsed reply is not a confirmation. Only the resident's
+        # answer on their approval.md daemon is (Lane B, `_confirm`).
+        if not _approval_on():
+            return _refuse("confirmation_not_wired" if os.environ.get("AV_APPROVAL_URL", "").strip()
+                           else "no_confirmation_channel")
+        return _confirm(safe)
     try:
         held = held_reason(session_id)
     except Exception:  # noqa: BLE001 - unsure is held
@@ -1245,11 +1581,14 @@ def make_handler() -> Callable[..., str]:
         try:
             label = action if action in ACTIONS else "other"
             if result.get("success") is True:
-                logger.info(
-                    "av-events: record_intention action=%s source=%s held=%s published=%d refused=%s reason=%s",
-                    label, result.get("source") or "-", held, 1 if result.get("published") else 0,
-                    result.get("publish_refused") or "-", result.get("local_reason") or "-",
-                )
+                line = "av-events: record_intention action=%s source=%s held=%s published=%d refused=%s reason=%s"
+                fields = [label, result.get("source") or "-", held, 1 if result.get("published") else 0,
+                          result.get("publish_refused") or "-", result.get("local_reason") or "-"]
+                if result.get("approval_state"):
+                    # Lane B: a code, only on the approval path.
+                    line += " approval=%s"
+                    fields.append(result["approval_state"])
+                logger.info(line, *fields)
             else:
                 logger.info("av-events: record_intention action=%s refused=%s", label, result.get("error"))
         except Exception:  # noqa: BLE001
@@ -1259,8 +1598,14 @@ def make_handler() -> Callable[..., str]:
     return record_intention_tool
 
 
-def register_record_intention_tool(ctx: Any) -> bool:
-    """Register the tool and its lineage listeners when the switch is on. True when registered."""
+def register_record_intention_tool(ctx: Any, emit: Optional[Callable[..., None]] = None) -> bool:
+    """Register the tool and its lineage listeners when the switch is on. True when registered.
+
+    Lane B: `emit` is the plugin's `intention.updated` emitter for a publish
+    that happens outside a tool call (the poller, a confirm). With approval
+    configured, an `on_session_start` listener (outside the collector's guard,
+    like the lineage listeners) resumes pending proposals, and the poller
+    thread is started when this process is the gateway."""
     if not switch_on():
         logger.debug("av-events: record_intention skipped=switch_off")
         return False
@@ -1285,6 +1630,14 @@ def register_record_intention_tool(ctx: Any) -> bool:
                 register_hook(name, callback)
             except Exception:  # noqa: BLE001 - a missing listener only holds more as ambient
                 continue
+    try:
+        ia = _ia()
+        ia.set_emitter(emit)
+        if callable(register_hook):
+            register_hook("on_session_start", _listener(ia._on_session_start))
+        ia.maybe_start(None)
+    except Exception as exc:  # noqa: BLE001 - pending proposals wait for the next session start
+        logger.warning("av-events: record_intention approval_wiring_failed=%s", type(exc).__name__)
     logger.info("av-events: record_intention registered")
     return True
 
@@ -1309,6 +1662,7 @@ __all__ = [
     "TOOL_NAME",
     "TOOL_SCHEMA",
     "UPDATE_PATH",
+    "lookup",
     "api_origin",
     "held_reason",
     "index_request",
