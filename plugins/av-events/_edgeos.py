@@ -193,11 +193,32 @@ class HttpCall:
         self.piped = piped
 
 
-def _host_allowed(authority: str, hosts: frozenset) -> bool:
-    """`host` or `host:443`, no userinfo, on the allowlist."""
+DEFAULT_API_BASE = "https://api.edgeos.world/api/v1"
+
+#: How the skill names the base: `${EDGEOS_API_BASE:-https://…}`,
+#: `${EDGEOS_API_BASE}` or `$EDGEOS_API_BASE`.
+_BASE_REF = re.compile(r"\$\{EDGEOS_API_BASE(?::-[^}\s]*)?\}|\$EDGEOS_API_BASE\b")
+
+
+def _api_base() -> str:
+    """`EDGEOS_API_BASE` as the agent's shell would expand it."""
+    return (os.environ.get("EDGEOS_API_BASE") or "").strip() or DEFAULT_API_BASE
+
+
+def _base_authority() -> str:
+    """The authority of `EDGEOS_API_BASE` (e.g. a local tunnel), lowercased."""
+    split = urllib.parse.urlsplit(_api_base())
+    return split.netloc.lower() if split.scheme.lower() in ("http", "https") else ""
+
+
+def _host_allowed(authority: str, hosts: frozenset, base: str = "") -> bool:
+    """`host` or `host:443` on the allowlist, or exactly `EDGEOS_API_BASE`'s
+    authority; no userinfo."""
     authority = authority.lower()
     if "@" in authority or not authority:
         return False
+    if base and authority == base:
+        return True
     host, _, port = authority.partition(":")
     return host in hosts and port in ("", "443")
 
@@ -364,6 +385,10 @@ def http_call(tool_name: Any, args: Any, allowlist: Allowlist = ALLOWLIST) -> Op
     # A backslash-newline is a line continuation, not a new command: the
     # skill's own recipes are written that way (`skills/edgeos/SKILL.md` §6).
     # Trailing whitespace (a final newline) runs nothing.
+    # The skill's recipes name the base as `${EDGEOS_API_BASE:-…}`; the shell
+    # expands it from the same environment this plugin runs in.
+    command = _BASE_REF.sub(lambda _m: _api_base(), command)
+    base = _base_authority()
     command = command.replace("\\\r\n", " ").replace("\\\n", " ").rstrip()
     if "`" in command or "$(" in command:  # command substitution: the shell decides, not us
         return None
@@ -382,7 +407,7 @@ def http_call(tool_name: Any, args: Any, allowlist: Allowlist = ALLOWLIST) -> Op
     # headers, other options, anything before or after the curl.
     words = [t for i, t in enumerate(tokens) if i - start - 1 not in bodies]
     authorities = [m.group(1) for word in words for m in _ANY_URL.finditer(word)]
-    if not authorities or not all(_host_allowed(a, allowlist.hosts) for a in authorities):
+    if not authorities or not all(_host_allowed(a, allowlist.hosts, base) for a in authorities):
         return None
     if len(urls) != 1:
         return None
@@ -394,7 +419,7 @@ def http_call(tool_name: Any, args: Any, allowlist: Allowlist = ALLOWLIST) -> Op
         if not acceptable:
             return None
     split = urllib.parse.urlsplit(urls[0])
-    if split.scheme.lower() not in ("http", "https") or not _host_allowed(split.netloc, allowlist.hosts):
+    if split.scheme.lower() not in ("http", "https") or not _host_allowed(split.netloc, allowlist.hosts, base):
         return None
     path = split.path.rstrip("/") or "/"
     # Every EdgeOS URL in the command must name this path: one in a header

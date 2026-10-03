@@ -53,7 +53,11 @@ export function resolveIndexApiKey(): string | undefined {
   return undefined;
 }
 
-const EDGEOS_BASE = "https://api.edgeos.world/api/v1";
+const DEFAULT_EDGEOS_BASE = "https://api.edgeos.world/api/v1";
+/** EdgeOS base URL: `$EDGEOS_API_BASE` (local dev points it at a tunnel), else production. */
+export function edgeosBase(): string {
+  return (process.env.EDGEOS_API_BASE?.trim() || DEFAULT_EDGEOS_BASE).replace(/\/+$/, "");
+}
 /** Edge City India 2026 — Mandrem, Goa. All brief/cron day boundaries and displayed times use this zone. */
 const VILLAGE_TZ = "Asia/Kolkata";
 
@@ -773,7 +777,7 @@ async function fetchEvents(date: string, interestTags: string[], warnings: strin
     limit: "100",
   });
   try {
-    const res = await fetch(`${EDGEOS_BASE}/events/portal/events?${params.toString()}`, {
+    const res = await fetch(`${edgeosBase()}/events/portal/events?${params.toString()}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
@@ -800,7 +804,7 @@ async function fetchRsvps(date: string, warnings: string[]): Promise<{ source: "
     limit: "100",
   });
   try {
-    const res = await fetch(`${EDGEOS_BASE}/events/portal/events?${params.toString()}`, {
+    const res = await fetch(`${edgeosBase()}/events/portal/events?${params.toString()}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);

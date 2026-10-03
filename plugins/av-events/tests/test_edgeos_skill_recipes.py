@@ -120,3 +120,17 @@ def test_every_section_6_recipe_is_recognised_with_trailing_whitespace(edgeos):
         for trailing in ("\n", "\n\n", "  \n"):
             call, _, _ = recognise(edgeos, command + trailing)
             assert call is not None
+
+
+def test_recipes_follow_edgeos_api_base_and_keep_production(edgeos, monkeypatch):
+    register = recipes(6)[0]
+    monkeypatch.setenv("EDGEOS_API_BASE", "https://edgeos-dev.example.test/api/v1")
+    call, op, _ = recognise(edgeos, register)
+    assert (call.path, op.operation) == (f"/api/v1/event-participants/portal/register/{EVENT}", "edgeos.rsvp")
+    # A literal production URL is still EdgeOS; an unrelated host is not.
+    literal = register.replace("${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}", "https://api.edgeos.world/api/v1")
+    assert edgeos.http_call("terminal", {"command": literal}) is not None
+    foreign = register.replace("${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}", "https://evil.example/api/v1")
+    assert edgeos.http_call("terminal", {"command": foreign}) is None
+    monkeypatch.delenv("EDGEOS_API_BASE")
+    assert edgeos.http_call("terminal", {"command": literal.replace("api.edgeos.world", "edgeos-dev.example.test")}) is None
