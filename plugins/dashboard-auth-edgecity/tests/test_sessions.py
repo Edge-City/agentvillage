@@ -1,17 +1,10 @@
 """Session security boundaries; CP transport is isolated from identity integration smoke."""
-import importlib.util
-from pathlib import Path
-
 import pytest
 
 
 @pytest.fixture
-def provider(tmp_path, monkeypatch):
-    pytest.importorskip("hermes_cli.dashboard_auth")
-    path = Path(__file__).parents[1] / "__init__.py"
-    spec = importlib.util.spec_from_file_location("edgecity_test_provider", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+def provider(tmp_path, monkeypatch, load_plugin):
+    module = load_plugin()
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     monkeypatch.setenv("TENANT_ID", "tenant-a")
     monkeypatch.setenv("CONTROL_PLANE_URL", "http://127.0.0.1:8080")
