@@ -74,7 +74,7 @@ where this page is briefer.
 |---|---|
 | `tag` | An annotated tag on this repo's `main`, e.g. `v2.0.0-rc8`. Never a branch. |
 | `dry_run` | Default on: prints the plan and changes nothing. |
-| `scope` | `test-tenants` (default: the canary tenants listed in the `ROLL_TEST_TENANTS` repository variable, one per person who rolls) or `all`. |
+| `scope` | `test-tenants` (default: the canaries, i.e. every live tenant owned by a team member, plus any extra ids in the `ROLL_TEST_TENANTS` repository variable) or `all`. |
 | `pause_seconds` | Wait after each resident before checking it. Default 60, minimum 10. |
 | `allow_seed_change` | Default off. The data owner's confirmation that ingest already carries changed plugin seed files. |
 
@@ -87,10 +87,13 @@ where this page is briefer.
    button refuses such a tag until `allow_seed_change` is ticked.
 3. Make sure your own agent is a canary. Each agent answers only its owner's
    Telegram, so the human check in the procedure below only works on a tenant
-   you own. `ROLL_TEST_TENANTS` on the controlplane repo holds one tenant per
-   person who rolls; if yours is missing, ask a controlplane admin to add it
-   before you start. The dry-run summary lists the canaries, so confirm yours
-   is there.
+   you own. The control plane marks every tenant whose sign-up email is in its
+   `CONTROL_PLANE_TEAM_EMAILS` variable as a team tenant, and every live team
+   tenant is a canary automatically, including one you recreate. If your email
+   is not in that list, ask a Railway admin to add it. `ROLL_TEST_TENANTS` on
+   the controlplane repo is optional, for extra canaries that are not
+   team-owned. The dry-run summary lists the canaries with their source, so
+   confirm yours is there.
 4. Post one line in the group chat. Each resident's agent restarts once, and
    Telegram messages sent during that restart are dropped.
 
@@ -102,7 +105,7 @@ answers.
 2. Real run, same inputs. From this moment every new signup and every recreated
    VM gets the new tag, even if you stop here.
 3. Message your own canary agent on Telegram and get a reply. Only the owner
-   can do this, which is why every roller's tenant is a canary. Then confirm
+   can do this, which is why every team member's tenant is a canary. Then confirm
    its events still arrive in the research database and nothing was
    quarantined (the button cannot see ingest). No reply after a second try:
    roll back.
@@ -115,8 +118,10 @@ answers.
 **When it refuses.** A refusal changes nothing. The common ones: the tag is
 lightweight, missing or not on `main`; a branch has the tag's name; seed files
 changed without `allow_seed_change`; the control plane is unhealthy or has not
-restarted since the variable was set; no test tenant is live; another real roll
-is running or a newer roll record exists. Fix the cause and run again.
+restarted since the variable was set; no canary is live; another real roll
+is running or a newer roll record exists. It also stops before the first update
+if the canary source changed between the plan and the run. Fix the cause and
+run again.
 
 **When it stops.** The summary names each resident's result: rolled, rejected,
 unreachable, busy, outcome unknown, or failed. Check every failed, unknown or
