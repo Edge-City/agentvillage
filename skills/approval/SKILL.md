@@ -1,22 +1,26 @@
 ---
 name: approval
-description: Installed only for residents who opted in to approval.md. Some of your tool calls (terminal, write_file, patch, read_file, search_files, and a few more that are recorded) are checked by the resident's approval gate before they run, and a few kinds of action wait for the resident to approve them in their approval bot. Read this before your first tool call, and whenever a tool call comes back blocked by the approval gate.
+description: Installed only for residents who opted in to approval.md. Your tool calls (terminal, write_file, patch, read_file, search_files, and a few more) are checked and recorded by the resident's approval gate before they run. A few never run for you (edits to the gate itself, the approval log, the resident's credentials), and a kind of action the resident chose to approve waits for their tap. Read this before your first tool call, and whenever a tool call comes back blocked by the approval gate.
 ---
 
 # Approval gate
 
-The resident asked to approve certain actions before you take them. Before
-`terminal`, `write_file`, `patch`, `read_file` and `search_files` run, the
-call is checked against the resident's approval policy, which lives with their
-approval service, not in this sandbox. Most calls pass straight through. The
-ones with consequences outside the sandbox (sending a message, spending money,
-deleting files outside your workspace, posting content, calling or fetching
-from a network service) wait for the resident to tap approve or reject in
-their approval bot on Telegram. `process`, `web_extract`, the `browser_*`
-tools, `skill_manage`, `delegate_task`, `cronjob_manage` and `send_message`
-also pass through the gate; today the gate records them without judging
-them. If the gate cannot be reached, or cannot be verified
-(`av-approval: gate unverified (...)`), those calls are blocked too.
+The resident opted in to a record of what you do. Before `terminal`,
+`write_file`, `patch`, `read_file` and `search_files` run, and `process`,
+`web_extract`, the `browser_*` tools, `skill_manage`, `delegate_task`,
+`cronjob_manage` and `send_message` too, the call is checked against the
+resident's approval policy, which lives with their approval service, not where
+you can edit it. On the starting policy almost every call is recorded and
+passes straight through. Three kinds never run for you: changing the gate
+itself (the Hermes config, its hooks, the consent allowlist), touching the
+approval log, and reading or changing the resident's credentials. If the
+resident has made a kind of call wait for them, it waits for their tap in their
+approval bot on Telegram. If the gate cannot be reached, or cannot be verified
+(`av-approval: gate unverified (...)`), gated calls are blocked.
+
+Publishing an intention you inferred, sharing a digest, and casting the
+resident's answer to the village question are not yours to do directly: the
+overlay sends each to the resident as a proposal and acts only on their tap.
 
 ## Shape every gated call so it can be checked
 
@@ -34,8 +38,9 @@ When a refusal names its repair, make that repair and call again once.
 
 ## When a call is waiting for the resident
 
-A call that needs the resident's approval holds for about four minutes while
-the resident is asked. Then:
+On the starting policy no tool call waits. If the resident has made a kind of
+call need their approval, that call holds for about four minutes while the
+resident is asked. Then:
 
 - **Approved**: the call runs. Carry on.
 - **Rejected**: the call does not run. Tell the resident plainly that it was
@@ -68,13 +73,10 @@ the resident is asked. Then:
 The resident has been told what is not checked:
 
 - MCP tools (Index included) and reads before the first gated call.
-- Subagents: `delegate_task` goes through the gate, but it is recorded, not
-  judged, today.
-- Tools that can reach the same effects without a check today:
-  `process`/`process_manage` (writing to and submitting a running process),
-  `web_extract`, the `browser_*` tools, `skill_manage`, `delegate_task`,
-  `cronjob_manage` and `send_message` pass through the gate unjudged until
-  approval.md's Hermes adapter learns them.
+- Subagents: `delegate_task` goes through the gate and is recorded, but what
+  the subagent then calls may not be.
+- `web_extract` goes through the gate with no rule for it, so it is passed
+  through unjudged.
 - A scheduled job's own script (`script`, `monitor`, `no_agent`) runs at
   every tick with no check at all. Creating or changing the job goes through
   the gate; what the script then does does not.
