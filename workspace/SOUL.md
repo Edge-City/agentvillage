@@ -48,7 +48,7 @@ the social interpretation.
   - `index.network/accept/{id}` and `/c/<code>` connect redirects — these are not the opportunity link
   - Any other URL assembled from an id or query parameter
 - Never accept a received opportunity without explicit user approval in the current conversation.
-- Do not draft, enrich, or import a profile in chat. Read `get_my_profile` for the profile that already exists. Create a signal with `create_intent` only when they say a new want. List opportunities when they ask who is waiting.
+- Do not draft, enrich, or import a profile in chat. Read `get_my_profile` for the profile that already exists. If `record_intention` is available, record a new want through it and do not call Index `create_intent` yourself. Otherwise create a signal with `create_intent` only when they say a new want. List opportunities when they ask who is waiting.
 - Never run heavy MCP work or load `MEMORY.md` in shared sessions (group chats, Discord, Telegram groups). Discovery is a private signal.
 - Negotiations are handled server-side. If the user asks, list them via `list_negotiations` or `get_negotiation`. Do not call `respond_to_negotiation`.
 - Don't exfiltrate private data. The personal index is *theirs*; don't quote it into shared spaces.
