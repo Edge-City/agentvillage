@@ -44,7 +44,7 @@ RECEIPT_KIND = "edgeos_confirming_read"
 TARGET_SYSTEM = "edgeos"
 
 _UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-UUID_RE = re.compile(rf"^{_UUID}$")
+UUID_RE = re.compile(_UUID)  # always `fullmatch`: `$` would let a trailing newline through
 _PARAM = re.compile(r"\{([a-z_]+)\}")
 _ROLES = frozenset({"action", "confirming_read", "read", "write"})
 _METHODS = frozenset({"GET", "POST", "PATCH", "PUT", "DELETE"})
@@ -98,7 +98,7 @@ def _compile_path(path: str) -> Optional["re.Pattern[str]"]:
         out.append(f"(?P<{match.group(1)}>{_UUID})")
         last = match.end()
     out.append(re.escape(path[last:]))
-    return re.compile("^" + "".join(out) + "/?$")
+    return re.compile("".join(out) + "/?")  # matched with `fullmatch`
 
 
 def load_allowlist(path: str = SEED_FILE) -> Allowlist:
@@ -444,7 +444,7 @@ def match_operation(call: HttpCall, allowlist: Allowlist = ALLOWLIST) -> Optiona
     for op in allowlist.operations:
         if op.method != call.method:
             continue
-        found = op.pattern.match(call.path)
+        found = op.pattern.fullmatch(call.path)
         if found:
             return op, {k: v.lower() for k, v in found.groupdict().items()}
     return None
@@ -490,7 +490,7 @@ def participant_record(body: Any, event_id: str) -> Optional[dict]:
     if not isinstance(body, dict) or "detail" in body or "error" in body:
         return None
     participant = body.get("id")
-    if not (isinstance(participant, str) and UUID_RE.match(participant)):
+    if not (isinstance(participant, str) and UUID_RE.fullmatch(participant)):
         return None
     named = body.get("event_id")
     if named is not None and (not isinstance(named, str) or named.lower() != event_id):
@@ -526,7 +526,7 @@ def rsvp_statuses(body: Any, query: dict) -> list[tuple[str, Optional[str], Opti
             continue
         event_id = item.get("id")
         status = item.get("my_rsvp_status")
-        if not (isinstance(event_id, str) and UUID_RE.match(event_id)) or not (status is None or isinstance(status, str)):
+        if not (isinstance(event_id, str) and UUID_RE.fullmatch(event_id)) or not (status is None or isinstance(status, str)):
             continue
         occurrence: Optional[str]
         if single:
@@ -565,7 +565,7 @@ def _valid_pending(value: Any) -> bool:
         and isinstance(at, (int, float)) and not isinstance(at, bool)
         and isinstance(value.get("reversal"), bool)
         and (reverses is None or valid_id(reverses))
-        and isinstance(participant, str) and UUID_RE.match(participant) is not None
+        and isinstance(participant, str) and UUID_RE.fullmatch(participant) is not None
     )
 
 
@@ -577,7 +577,7 @@ def _valid_key(key: Any) -> bool:
     if not isinstance(key, str) or "|" not in key:
         return False
     event_id, _, occurrence = key.partition("|")
-    return UUID_RE.match(event_id) is not None and (occurrence == "" or iso_from_text(occurrence) == occurrence)
+    return UUID_RE.fullmatch(event_id) is not None and (occurrence == "" or iso_from_text(occurrence) == occurrence)
 
 
 class Ledger:
