@@ -8,11 +8,17 @@ decision "is this a recorded intention, and which one" is testable in isolation.
 Spec §4.1 (`intention.captured/updated/withdrawn`) and §7.1 ("Intention
 capture"). Two producers inside the sandbox:
 
-* **Index MCP tools.** `create_intent` → `intention.captured`, `update_intent`
-  → `intention.updated` (or `intention.withdrawn` when it archives), and
-  `delete_intent` → `intention.withdrawn`. The intention id is Index's intent id:
-  from the result for a create, from the arguments for an update or delete. A
-  create whose result does not name the intent records nothing.
+* **Index MCP tools** (DATA-249, Index `main` `mcp.tools.ts`; the overlay's
+  copy of their input schemas is `index_mcp_intent_tools.json`).
+  `create_intent` → `intention.captured`; `update_intent` with a new
+  `description` → `intention.updated`; `pause_intent` / `resume_intent` →
+  `intention.updated` with `index_status` `paused` / `active`; `archive_intent`
+  → `intention.withdrawn` with `index_status` `archived`. The intention id is
+  Index's intent id: from the result for a create (`intentId`), else from the
+  `intentId` argument, or from the result when Index resolved a short id prefix
+  to the full id. A create whose result does not name the intent records
+  nothing. `delete_intent` is kept only as a legacy alias (Index has no such
+  tool today; an older Index surface did): a successful one is a withdrawal.
 * **`record_intention`**, the overlay's front door (DATA-212, `_record_intention.py`).
   Its id comes from the call, else from the tool's result, else it is a uuid v7
   minted by the plugin at capture. The tool publishes to Index itself, over its
@@ -32,12 +38,32 @@ import json
 import re
 from typing import Any, Optional
 
-#: Index tool (bare name) -> the event it produces when it succeeds.
-#: `update_intent` is re-typed to `withdrawn` when it archives the intent.
+#: Index tool (bare name) -> the event it produces when it succeeds. Index's
+#: intent tools are `list_intents`, `get_intent`, `create_intent`,
+#: `update_intent`, `pause_intent`, `resume_intent` and `archive_intent`; the
+#: two reads record nothing. `update_intent` takes no status (archiving is
+#: `archive_intent`), but a legacy `status` argument or an archived result is
+#: still read as a withdrawal, so an older Index surface is not miscounted.
 INDEX_INTENT_TOOLS: dict[str, str] = {
     "create_intent": "intention.captured",
     "update_intent": "intention.updated",
+    "pause_intent": "intention.updated",
+    "resume_intent": "intention.updated",
+    "archive_intent": "intention.withdrawn",
+    # Legacy alias, not an Index tool today (DATA-249). Kept rather than
+    # removed: it costs nothing, and an Index server still on the older
+    # surface would otherwise lose its withdrawals. Handled exactly as
+    # `archive_intent`, with `index_status` `deleted`.
     "delete_intent": "intention.withdrawn",
+}
+
+#: The status a successful lifecycle tool leaves the intent in. Index's wire
+#: status is only `active | paused`; an archive is `archivedAt` set.
+LIFECYCLE_STATUS: dict[str, str] = {
+    "pause_intent": "paused",
+    "resume_intent": "active",
+    "archive_intent": "archived",
+    "delete_intent": "deleted",
 }
 
 #: The overlay tool for intentions the agent keeps locally (spec §7.1).
@@ -50,11 +76,13 @@ MCP_PREFIX = "mcp__"
 INDEX_SERVER = "index"
 
 #: The Index statuses `index_status` may carry. Anything else is `other`.
-INDEX_STATUSES = frozenset({"active", "archived", "deleted", "withdrawn", "completed", "unknown"})
+#: `paused` (DATA-249) is Index's own, and paused is not withdrawn.
+INDEX_STATUSES = frozenset({"active", "paused", "archived", "deleted", "withdrawn", "completed", "unknown"})
 OTHER_STATUS = "other"
 
-#: Statuses that take an intention out of the funnel. The Index skill archives
-#: stale signals with `status="archived"` (`skills/index-network/heartbeat.md`).
+#: Statuses that take an intention out of the funnel. Index archives with
+#: `archive_intent` (the Index skill prunes stale signals that way,
+#: `skills/index-network/heartbeat.md`); `paused` is not one of them.
 WITHDRAWN_STATUSES = frozenset({"archived", "deleted", "withdrawn"})
 
 #: §4.1 `source`. `index` belongs to the poller; the plugin writes the rest.
@@ -91,6 +119,10 @@ MAX_JSON_ATTEMPTS = 64
 _OK_STATUSES = frozenset({"ok", ""})
 
 _ID_KEYS = ("id", "intentId", "intent_id")
+#: An intent tool's id argument: Index names it `intentId`; the others are legacy.
+_ARG_ID_KEYS = ("intentId", "id", "intent_id")
+#: The key Index's create, pause, resume and archive results name the intent by.
+RESULT_INTENT_ID_KEY = "intentId"
 
 #: `local_reason` on a `record_intention` capture kept off Index on purpose
 #: (ambient-intents spec §4: "the resident asked, or the content is personal").
@@ -299,6 +331,39 @@ def result_intent(payload: Any) -> Optional[dict]:
     return None
 
 
+def result_intent_id(payload: Any) -> Optional[str]:
+    """The intent id a write result names, or None.
+
+    The intent object's own id (`result_intent`) first; else `intentId` at the
+    top of the payload or under `data`, which is where Index's `create_intent`,
+    `pause_intent`, `resume_intent` and `archive_intent` results put it
+    (`mcp.tools.ts`). A bare `id` on `data` or at the top names nothing.
+    """
+    intent_id = _first_id(result_intent(payload))
+    if intent_id is not None:
+        return intent_id
+    if not isinstance(payload, dict):
+        return None
+    data = payload.get("data")
+    return _args_id(payload, RESULT_INTENT_ID_KEY) or (
+        _args_id(data, RESULT_INTENT_ID_KEY) if isinstance(data, dict) else None
+    )
+
+
+def _resolved_id(arg_id: str, result_id: Optional[str]) -> tuple[str, bool]:
+    """(the id to record, whether the result describes the same intent).
+
+    Index accepts a short id prefix for `intentId` and answers with the full
+    id, so a result id that extends the argument is the same intent and is
+    the one recorded. A result naming a different intent is ignored.
+    """
+    if result_id is None:
+        return arg_id, True
+    if result_id == arg_id or result_id.startswith(arg_id):
+        return result_id, True
+    return arg_id, False
+
+
 def normalise_status(value: Any) -> Optional[str]:
     """Strip and case-fold a status, and fold anything unlisted into `other`."""
     if not isinstance(value, str):
@@ -329,7 +394,7 @@ def _args_id(args: Any, *keys: str) -> Optional[str]:
 
 
 def plan_index(tool: str, args: dict, payload: Any, *, cron: bool = False) -> list[IntentionCall]:
-    """Events for a successful Index `create_intent` / `update_intent` / `delete_intent`.
+    """Events for a successful Index intent write (`INDEX_INTENT_TOOLS`).
 
     `source` is `ambient` in a cron run (the nightly memory-signal sync calls
     `create_intent` with no participant in the loop) and `message` otherwise.
@@ -342,7 +407,7 @@ def plan_index(tool: str, args: dict, payload: Any, *, cron: bool = False) -> li
         # A create is only an intention we can join if Index names it.
         if not isinstance(payload, dict):
             return []
-        intent_id = _first_id(intent)
+        intent_id = result_intent_id(payload)
         if intent_id is None:
             return []
         return [
@@ -358,14 +423,33 @@ def plan_index(tool: str, args: dict, payload: Any, *, cron: bool = False) -> li
             )
         ]
 
-    intent_id = _args_id(args, *_ID_KEYS)
-    if intent_id is None:
-        # An update or a delete of an intention we cannot name joins nothing.
+    arg_id = _args_id(args, *_ARG_ID_KEYS)
+    if arg_id is None:
+        # A write to an intention we cannot name joins nothing.
         return []
-    same_intent = intent is not None and _first_id(intent) in (None, intent_id)
+    intent_id, same_intent = _resolved_id(arg_id, result_intent_id(payload))
+
+    if tool in LIFECYCLE_STATUS:
+        # Pause, resume, archive (and the legacy delete): the tool says what
+        # the status is now. No text changes, so both hashes are null.
+        return [
+            IntentionCall(
+                INDEX_INTENT_TOOLS[tool],
+                intention_id=intent_id,
+                index_intent_id=intent_id,
+                source=source,
+                capture_path="index_tool",
+                index_status=LIFECYCLE_STATUS[tool],
+            )
+        ]
+
+    # `update_intent`. Index's takes no status and refuses an archived intent;
+    # a `status` argument or an archived result is read only for an older
+    # Index surface, where either side saying the intent is gone is a withdrawal.
     arg_status = normalise_status(args.get("status"))
-    result_status = normalise_status(intent.get("status")) if intent is not None and same_intent else None
-    # Either side saying the intent is gone is a withdrawal.
+    result_status: Optional[str] = None
+    if intent is not None and same_intent:
+        result_status = "archived" if intent.get("archived") is True else normalise_status(intent.get("status"))
     if arg_status in WITHDRAWN_STATUSES:
         status: Optional[str] = arg_status
     elif result_status in WITHDRAWN_STATUSES:
@@ -373,7 +457,7 @@ def plan_index(tool: str, args: dict, payload: Any, *, cron: bool = False) -> li
     else:
         status = arg_status or result_status
 
-    if tool == "delete_intent" or status in WITHDRAWN_STATUSES:
+    if status in WITHDRAWN_STATUSES:
         return [
             IntentionCall(
                 "intention.withdrawn",
@@ -385,7 +469,8 @@ def plan_index(tool: str, args: dict, payload: Any, *, cron: bool = False) -> li
             )
         ]
     if text is None:
-        # A status-only update changes no text: nothing new to version.
+        # A status-only or source-fields-only update changes no text:
+        # nothing new to version.
         return []
     summary = _text(intent.get("summary")) if intent is not None and same_intent else None
     return [
@@ -562,6 +647,7 @@ __all__ = [
     "ID_PATTERN",
     "INDEX_INTENT_TOOLS",
     "INDEX_STATUSES",
+    "LIFECYCLE_STATUS",
     "LOCAL_REASONS",
     "RECORD_INTENTION_TOOL",
     "RECORD_SOURCES",
@@ -571,6 +657,7 @@ __all__ = [
     "normalise_status",
     "plan",
     "result_intent",
+    "result_intent_id",
     "split_tool_name",
     "unwrap_result",
     "valid_id",
