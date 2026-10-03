@@ -122,15 +122,26 @@ def test_every_section_6_recipe_is_recognised_with_trailing_whitespace(edgeos):
             assert call is not None
 
 
-def test_recipes_follow_edgeos_api_base_and_keep_production(edgeos, monkeypatch):
+def test_recipes_are_read_only_on_an_edgeos_base(edgeos, monkeypatch):
+    """DATA-269: the base is the plugin's own `EDGEOS_API_BASE`, and only an
+    allowlisted EdgeOS authority counts. Before, any value (a dev tunnel) was
+    accepted, and with it the literal host it named — so whatever set that
+    variable could make another host's answers read as EdgeOS receipts."""
     register = recipes(6)[0]
-    monkeypatch.setenv("EDGEOS_API_BASE", "https://edgeos-dev.example.test/api/v1")
+    monkeypatch.setenv("EDGEOS_API_BASE", "https://api.edgeos.world/api/v1")
     call, op, _ = recognise(edgeos, register)
     assert (call.path, op.operation) == (f"/api/v1/event-participants/portal/register/{EVENT}", "edgeos.rsvp")
-    # A literal production URL is still EdgeOS; an unrelated host is not.
+    monkeypatch.setenv("EDGEOS_API_BASE", "https://edgeos-dev.example.test/api/v1")
+    assert edgeos.http_call("terminal", {"command": register}) is None
+    # A literal production URL is still EdgeOS; an unrelated host, or the dev
+    # host written out, is not.
     literal = register.replace("${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}", "https://api.edgeos.world/api/v1")
     assert edgeos.http_call("terminal", {"command": literal}) is not None
     foreign = register.replace("${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}", "https://evil.example/api/v1")
     assert edgeos.http_call("terminal", {"command": foreign}) is None
+    dev = literal.replace("api.edgeos.world", "edgeos-dev.example.test")
+    assert edgeos.http_call("terminal", {"command": dev}) is None
     monkeypatch.delenv("EDGEOS_API_BASE")
-    assert edgeos.http_call("terminal", {"command": literal.replace("api.edgeos.world", "edgeos-dev.example.test")}) is None
+    assert edgeos.http_call("terminal", {"command": dev}) is None
+    assert recognise(edgeos, register)[1].operation == "edgeos.rsvp"
+
