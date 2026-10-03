@@ -10,7 +10,8 @@
  * signal rejects with an AbortError, a 3xx answer throws under
  * `redirect: "error"` and is otherwise "followed" to a host that answers
  * successfully (so a client that follows redirects is caught), and a
- * `{ hang: true }` reply never answers until the signal aborts.
+ * `{ hang: true }` reply never answers until the signal aborts (`hangBody`:
+ * the headers arrive, the body never finishes until the signal aborts).
  *
  * It never touches the network: a request to any URL other than its own
  * throws.
@@ -29,7 +30,8 @@ export type ToolReply =
   | string
   | { result: Record<string, unknown> }
   | { response: Response }
-  | { hang: true };
+  | { hang: true }
+  | { hangBody: true };
 /** `id` is the request's JSON-RPC id, for handlers that build their own response. */
 export type ToolHandler = (args: Record<string, unknown>, request: { id: unknown }) => ToolReply | Promise<ToolReply>;
 
@@ -49,6 +51,7 @@ export interface FakeCall {
 const SERVER_META = fixture.responses.listIntents.result._meta;
 
 const HANG = new Response(null, { status: 599 });
+const HANG_BODY = new Response(null, { status: 598 });
 
 function abortError(signal: AbortSignal): unknown {
   return signal.reason ?? new DOMException("The operation was aborted.", "AbortError");
@@ -150,6 +153,7 @@ export function indexMcpFake(options: { tools?: Record<string, ToolHandler>; url
       });
     }
     if ("hang" in reply) return HANG;
+    if ("hangBody" in reply) return HANG_BODY;
     if ("response" in reply) return reply.response;
     return Response.json({ jsonrpc: "2.0", id, result: reply.result });
   }
@@ -185,6 +189,16 @@ export function indexMcpFake(options: { tools?: Record<string, ToolHandler>; url
       return await new Promise<Response>((_resolve, reject) => {
         signal?.addEventListener("abort", () => reject(abortError(signal)), { once: true });
       });
+    }
+    if (response === HANG_BODY) {
+      call.status = 200;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"jsonrpc":"2.0",'));
+          signal?.addEventListener("abort", () => controller.error(abortError(signal)), { once: true });
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "application/json" } });
     }
     if (response.status >= 300 && response.status < 400) {
       if (init?.redirect === "error") throw new TypeError("fetch failed: unexpected redirect");

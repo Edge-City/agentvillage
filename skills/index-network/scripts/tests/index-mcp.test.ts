@@ -229,7 +229,11 @@ describe("indexMcpRequest / callIndexTool against the fake", () => {
 
   test("a stream whose only answer has another id is not this request's answer", async () => {
     const fake = indexMcpFake({
-      tools: { list_intents: () => ({ response: eventStream({ jsonrpc: "2.0", id: -1, result: { content: [], resultType: "complete" } }) }) },
+      tools: {
+        list_intents: () => ({
+          response: eventStream({ jsonrpc: "2.0", id: -1, result: { content: [{ type: "text", text: "not yours" }], resultType: "complete" } }),
+        }),
+      },
     });
     expect((await failure(callIndexTool({ apiKey: FAKE_API_KEY, mcpUrl: fake.url, fetch: fake.fetch }, "list_intents"))).code).toBe(
       "mcp-bad-response",
@@ -315,6 +319,12 @@ describe("failures are short codes", () => {
     expect(err.code).toBe("mcp-unreachable");
   }, 2_000);
 
+  test("a body that outlives the timeout is mcp-unreachable", async () => {
+    const fake = indexMcpFake({ tools: { list_intents: () => ({ hangBody: true }) } });
+    const err = await failure(callIndexTool({ apiKey: FAKE_API_KEY, mcpUrl: fake.url, fetch: fake.fetch, timeoutMs: 20 }, "list_intents"));
+    expect(err.code).toBe("mcp-unreachable");
+  }, 2_000);
+
   test("a redirect is mcp-unreachable and is never followed", async () => {
     for (const status of [301, 302, 307, 308]) {
       const fake = indexMcpFake({
@@ -385,7 +395,9 @@ describe("failures are short codes", () => {
     ).toBe("mcp-bad-response");
     // A well-formed answer to some other request.
     expect(
-      await codeFor((async () => Response.json({ jsonrpc: "2.0", id: -1, result: { content: [], resultType: "complete" } })) as typeof fetch),
+      await codeFor(
+        (async () => Response.json({ jsonrpc: "2.0", id: -1, result: { content: [{ type: "text", text: "not yours" }], resultType: "complete" } })) as typeof fetch,
+      ),
     ).toBe("mcp-bad-response");
   });
 });
