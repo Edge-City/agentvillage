@@ -436,6 +436,12 @@ def plan_index(tool: str, args: dict, payload: Any, *, cron: bool = False) -> li
     if tool in LIFECYCLE_STATUS:
         # Pause, resume, archive (and the legacy delete): the tool says what
         # the status is now. No text changes, so both hashes are null.
+        if INDEX_INTENT_TOOLS[tool] == "intention.updated":
+            # H1: Index answers `changed: false` to a pause of a paused intent
+            # (or a resume of an active one): nothing happened, nothing to emit.
+            present, changed = _result_has(payload, "changed")
+            if present and changed is False:
+                return []
         return [
             IntentionCall(
                 INDEX_INTENT_TOOLS[tool],

@@ -269,8 +269,28 @@ def test_status_only_is_absent_from_text_updates_and_captures(live, ctx, av):
 
 @pytest.mark.parametrize("tool", ["pause_intent", "resume_intent", "archive_intent"])
 def test_lifecycle_with_no_result_id_uses_the_argument(live, ctx, av, tool):
-    fire_tool(ctx, f"mcp__index__{tool}", {"intentId": "int-abc"}, index_result({"changed": False}))
+    fire_tool(ctx, f"mcp__index__{tool}", {"intentId": "int-abc"}, index_result({"url": "u"}))
     assert [e["intention_id"] for e in intention_events(av, live)] == ["int-abc"]
+
+
+@pytest.mark.parametrize("shape", SHAPES)
+@pytest.mark.parametrize("tool", ["pause_intent", "resume_intent"])
+def test_a_pause_or_resume_that_changed_nothing_emits_nothing(live, ctx, av, shape, tool):
+    """H1: Index answers `changed: false` to a pause of a paused intent or a resume of an active one."""
+    status = "paused" if tool == "pause_intent" else "active"
+    fire_tool(ctx, f"mcp__index__{tool}", {"intentId": UUID_ID},
+              index_mcp({"intentId": UUID_ID, "url": "u", "status": status, "changed": False}, shape))
+    assert intention_events(av, live) == []
+    # `changed: true`, or no `changed` at all, still emits.
+    fire_tool(ctx, f"mcp__index__{tool}", {"intentId": UUID_ID},
+              index_mcp({"intentId": UUID_ID, "url": "u", "status": status, "changed": True}, shape))
+    assert [e["payload"]["index_status"] for e in intention_events(av, live)] == [status]
+
+
+def test_an_archive_is_emitted_whatever_changed_says(live, ctx, av):
+    fire_tool(ctx, "mcp__index__archive_intent", {"intentId": UUID_ID, "confirm": True},
+              index_mcp({"intentId": UUID_ID, "archived": True, "changed": False}, "structured"))
+    assert types(intention_events(av, live)) == ["intention.withdrawn"]
 
 
 def test_a_short_id_prefix_is_recorded_as_the_full_id_index_resolved(live, ctx, av):
