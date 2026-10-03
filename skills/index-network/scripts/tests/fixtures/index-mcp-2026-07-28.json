@@ -1,0 +1,153 @@
+{
+  "about": "Index's MCP endpoint as the resident-facing scripts must speak to it. Facts 1-5 come from read-only probes of production on 2026-10-03 (DATA-260); every id, name and sentence below is synthetic. tests/index-mcp-fake.ts enforces this file; index-mcp.ts implements it.",
+  "verified": "2026-10-03",
+  "protocolVersion": "2026-07-28",
+  "request": {
+    "httpMethod": "POST",
+    "headers": {
+      "content-type": "application/json",
+      "accept": "application/json, text/event-stream",
+      "mcp-protocol-version": "2026-07-28"
+    },
+    "apiKeyHeader": "x-api-key",
+    "methodHeader": "mcp-method",
+    "toolNameHeader": "mcp-name",
+    "toolNameHeaderOn": [
+      "tools/call"
+    ],
+    "envelopeRequired": {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities": {}
+    },
+    "envelopeOptional": [
+      "io.modelcontextprotocol/clientInfo"
+    ],
+    "stateless": "No initialize request and no session id: an initialize is refused for every version, this one included."
+  },
+  "refusals": {
+    "initialize": {
+      "httpStatus": 400,
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {
+          "code": -32022,
+          "message": "Unsupported protocol version",
+          "data": {
+            "supported": [
+              "2026-07-28"
+            ]
+          }
+        }
+      }
+    },
+    "headerBodyDisagree": {
+      "httpStatus": 400,
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {
+          "code": -32020,
+          "message": "the request headers and body disagree"
+        }
+      }
+    },
+    "envelopeMissing": {
+      "httpStatus": 400,
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {
+          "code": -32602,
+          "message": "Invalid params",
+          "data": {
+            "envelope": {
+              "missing": [
+                "io.modelcontextprotocol/protocolVersion",
+                "io.modelcontextprotocol/clientCapabilities"
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  "tools": [
+    "get_my_profile",
+    "update_my_profile",
+    "enrich_my_profile",
+    "list_intents",
+    "get_intent",
+    "create_intent",
+    "update_intent",
+    "pause_intent",
+    "resume_intent",
+    "archive_intent",
+    "list_opportunities",
+    "get_opportunity",
+    "accept_opportunity",
+    "reject_opportunity"
+  ],
+  "responses": {
+    "contentType": "application/json",
+    "toolsList": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "tools": "<one entry per name in tools, each {name, description, inputSchema}>",
+        "resultType": "complete",
+        "_meta": {
+          "io.modelcontextprotocol/serverInfo": {
+            "name": "index",
+            "version": "0.0.0-fixture"
+          }
+        }
+      }
+    },
+    "listIntents": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Your signals:\n- [Looking for people building agent memory](https://index.network/i/aaaaaaaa-0000-4000-8000-000000000001) — active\n- [Open to co-hosting a village dinner](https://index.network/i/aaaaaaaa-0000-4000-8000-000000000002) — active\n\n{\n  \"success\": true,\n  \"intents\": [\n    {\n      \"id\": \"aaaaaaaa-0000-4000-8000-000000000001\",\n      \"summary\": \"Looking for people building agent memory\",\n      \"status\": \"active\",\n      \"url\": \"https://index.network/i/aaaaaaaa-0000-4000-8000-000000000001\"\n    },\n    {\n      \"id\": \"aaaaaaaa-0000-4000-8000-000000000002\",\n      \"summary\": \"Open to co-hosting a village dinner\",\n      \"status\": \"active\",\n      \"url\": \"https://index.network/i/aaaaaaaa-0000-4000-8000-000000000002\"\n    }\n  ]\n}"
+          }
+        ],
+        "resultType": "complete",
+        "_meta": {
+          "io.modelcontextprotocol/serverInfo": {
+            "name": "index",
+            "version": "0.0.0-fixture"
+          }
+        }
+      }
+    },
+    "listOpportunities": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Waiting on you:\n- [Maya](https://index.network/o/bbbbbbbb-0000-4000-8000-000000000001) — memory systems\n- [Jon](https://index.network/o/bbbbbbbb-0000-4000-8000-000000000002) — village tools\n\n{\n  \"success\": true,\n  \"opportunities\": [\n    {\n      \"id\": \"bbbbbbbb-0000-4000-8000-000000000001\",\n      \"url\": \"https://index.network/o/bbbbbbbb-0000-4000-8000-000000000001\",\n      \"status\": \"pending\",\n      \"viewerRole\": \"party\",\n      \"headline\": \"memory systems\",\n      \"summary\": \"Both of you are working on long-running agent memory.\",\n      \"peer\": {\n        \"name\": \"Maya\",\n        \"userId\": \"cccccccc-0000-4000-8000-000000000001\",\n        \"url\": \"https://index.network/u/cccccccc-0000-4000-8000-000000000001\"\n      }\n    },\n    {\n      \"id\": \"bbbbbbbb-0000-4000-8000-000000000002\",\n      \"url\": \"https://index.network/o/bbbbbbbb-0000-4000-8000-000000000002\",\n      \"status\": \"pending\",\n      \"viewerRole\": \"agent\",\n      \"headline\": \"village tools\",\n      \"summary\": \"Jon is looking for someone who knows the village tools.\",\n      \"peer\": {\n        \"name\": \"Jon\",\n        \"userId\": \"cccccccc-0000-4000-8000-000000000002\",\n        \"url\": \"https://index.network/u/cccccccc-0000-4000-8000-000000000002\"\n      }\n    }\n  ]\n}"
+          }
+        ],
+        "resultType": "complete",
+        "_meta": {
+          "io.modelcontextprotocol/serverInfo": {
+            "name": "index",
+            "version": "0.0.0-fixture"
+          }
+        }
+      }
+    }
+  },
+  "notVerified": [
+    "How a tool error is reported in this revision: the client treats a JSON-RPC error, a non-200 status, result.isError === true and a resultType other than complete each as a failure.",
+    "The exact messages of the three refusals (the codes and the data shapes are verified).",
+    "What a missing accept or content-type header, a missing API key, or a missing or different MCP-Protocol-Version header is answered with; the fake's choices are marked in index-mcp-fake.ts.",
+    "The names of the leading boolean field and the per-row fields in the JSON that follows the markdown; the probes saw a boolean first and rows with an id uuid.",
+    "Whether list_opportunities accepts the statuses and limit arguments the scripts send (probed with arguments: {})."
+  ]
+}
