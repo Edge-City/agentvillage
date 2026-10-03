@@ -214,7 +214,7 @@ export interface DigestCronSpec {
  * which exhausted the per-tenant OpenRouter keys fleet-wide (HTTP 402). It is no
  * longer in this list, so `reconcileDigestCronJobs` removes it from existing
  * tenants on the next install/update (Edge-prefixed crons not in this list are
- * retired). `index-network/heartbeat.md` is kept for reference/history only.
+ * retired). The old heartbeat prompt file has been removed.
  */
 export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
   {

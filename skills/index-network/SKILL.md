@@ -1,6 +1,6 @@
 ---
 name: index-network
-description: Edge City India's Index Network bundle. Surfaces opportunities, drafts introductions, and prunes stale signals. Read when surfacing opportunities, drafting introductions, onboarding a user who has expressed social intent, or handling anything backed by the Index Network MCP (server `index`).
+description: Edge City India's Index Network bundle. Surfaces opportunities, drafts introductions, and prunes stale signals. Read when surfacing opportunities, drafting introductions, when the user wants to meet people, or handling anything backed by the Index Network MCP (server `index`).
 metadata:
   openclaw:
     requires:
@@ -14,10 +14,10 @@ Edge's bundle for surfacing opportunities through Edge City India's Index Networ
 
 ## When to read each file
 
-- **Any non-trivial tool call** → [tools.md](tools.md). MCP tool families, entity model, capturing new signal from conversation, `scrape_url` usage, output translation rules.
-- **Composing user-facing opportunity renderings** → [exemplars.md](exemplars.md). Canonical morning-digest voice samples; greeting-draft format for `&msg=`.
-- **User expresses social intent** → [bootstrap.md](bootstrap.md). Five-step Index Network onboarding ritual; gated on `onboardingComplete` and triggered by user intent, not session start.
-- **Heartbeat tick** → [heartbeat.md](heartbeat.md). Accepted-opportunity notifications, signal-freshness pruning, and signal-elicitation re-engagement for thin-signal users.
+- **Any non-trivial tool call** → [tools.md](tools.md). MCP tool families, entity model, capturing new signal from conversation, output translation rules.
+- **Composing user-facing opportunity renderings** → [exemplars.md](exemplars.md). Canonical morning-digest voice samples.
+
+Read `get_my_profile` only to use the profile that already exists. Call `update_my_profile` only when they explicitly correct a field. A new want and a question about who is waiting both follow [tools.md](tools.md). The welcome in `AGENTS.md` is a separate first-message greeting. Do not send it again from here.
 
 ## Handoff
 

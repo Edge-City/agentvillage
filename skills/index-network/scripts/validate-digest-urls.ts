@@ -8,11 +8,12 @@
  * a path that does not exist and 404s. Every prompt-side guardrail against this
  * is natural language the model can ignore; this script is the enforcement layer.
  *
- * The only URLs an opportunity card legitimately carries are the connect link
- * (`<base>/c/<code>`, from `acceptUrl`) and the profile link (`<base>/u/<uuid>`,
- * from `profileUrl`). Any markdown link whose path is not one of those two shapes
- * is demoted to its plain-text label and reported. The check is host-agnostic so
- * dev / railway / prod bases all pass — the path shape is the gate.
+ * The only Index URLs an opportunity card legitimately carries open the Index app:
+ * a person (`<base>/u/<uuid>`), a signal (`<base>/i/<id>`), and an opportunity
+ * (`<base>/o/<id>`). Connect redirects (`/c/<code>`) are not opportunity links.
+ * Any other markdown link is demoted to its plain-text label and reported, except
+ * a negotiation trace (`/chat/<uuid>`) or a village portal event link. The Index
+ * check is host-agnostic so dev / railway / prod bases all pass.
  *
  * Usage (from the digest agent's workdir, i.e. $HERMES_HOME):
  *   bun skills/index-network/scripts/validate-digest-urls.ts /tmp/digest-draft.md
@@ -25,10 +26,12 @@
  * `--strip-digest-metadata` before final delivery.
  */
 
-/** Connect link: `/c/<code>`, optional trailing slash. Code is an opaque short token. */
-const CONNECT_PATH = /^\/c\/[A-Za-z0-9_-]+\/?$/;
-/** Profile link: `/u/<uuid>`, optional trailing slash. */
+/** Person link: `/u/<uuid>`, optional trailing slash. */
 const PROFILE_PATH = /^\/u\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/?$/;
+/** Opportunity link: `/o/<id>`, optional trailing slash. */
+const OPPORTUNITY_PATH = /^\/o\/[A-Za-z0-9_-]+\/?$/;
+/** Signal link: `/i/<id>`, optional trailing slash. */
+const INTENT_PATH = /^\/i\/[A-Za-z0-9_-]+\/?$/;
 /** Negotiation-trace link: `/chat/<conversationId-uuid>`, optional trailing slash. */
 const CHAT_PATH = /^\/chat\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/?$/;
 /** Event id path segment appended to the village portal events base, optional trailing slash. */
@@ -47,7 +50,7 @@ export function portalEventsBaseUrl(): string | null {
 /**
  * A markdown inline link: `[label](url)`. Label runs to the first `]`; url to the next `)`.
  *
- * Legitimate connect/profile URLs contain no `(`/`)`/`]`, so this never
+ * Legitimate Index URLs contain no `(`/`)`/`]`, so this never
  * truncates a real link.
  */
 const MARKDOWN_LINK = /\[([^\]]*)\]\(([^)]*)\)/g;
@@ -73,10 +76,10 @@ export interface SanitizeDigestOptions {
 }
 
 /**
- * Whether `url` is a legitimate digest action link (connect/profile) or a
+ * Whether `url` is a legitimate Index link (person, signal, opportunity) or a
  * calendar event link under the configured village portal (`AV_PORTAL_URL`).
- * Connect/profile links are host-agnostic by path shape so dev/prod bases both
- * pass. Event links are pinned to the configured portal origin + events path.
+ * Index links are host-agnostic by path shape so dev/prod bases both pass.
+ * Event links are pinned to the configured portal origin + events path.
  * A non-absolute or unparseable URL is never allowed.
  */
 export function isAllowedDigestUrl(url: string): boolean {
@@ -86,7 +89,12 @@ export function isAllowedDigestUrl(url: string): boolean {
   } catch {
     return false;
   }
-  if (CONNECT_PATH.test(parsed.pathname) || PROFILE_PATH.test(parsed.pathname) || CHAT_PATH.test(parsed.pathname)) {
+  if (
+    PROFILE_PATH.test(parsed.pathname)
+    || OPPORTUNITY_PATH.test(parsed.pathname)
+    || INTENT_PATH.test(parsed.pathname)
+    || CHAT_PATH.test(parsed.pathname)
+  ) {
     return true;
   }
   const base = portalEventsBaseUrl();

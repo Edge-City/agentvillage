@@ -81,8 +81,8 @@ INDEX_STATUSES = frozenset({"active", "paused", "archived", "deleted", "withdraw
 OTHER_STATUS = "other"
 
 #: Statuses that take an intention out of the funnel. Index archives with
-#: `archive_intent` (the Index skill prunes stale signals that way,
-#: `skills/index-network/heartbeat.md`); `paused` is not one of them.
+#: `archive_intent` (the Index skill calls it only after the user says yes,
+#: `skills/index-network/tools.md`); `paused` is not one of them.
 WITHDRAWN_STATUSES = frozenset({"archived", "deleted", "withdrawn"})
 
 #: §4.1 `source`. `index` belongs to the poller; the plugin writes the rest.

@@ -1,30 +1,21 @@
 #!/usr/bin/env bun
 /**
- * Deterministically fetch and select a pending question for the evening pass.
+ * Evening pass. Lists pending opportunities and returns one card the morning
+ * brief and the daytime drops have not already sent today. On the last village
+ * day, if that list is empty, returns the local closeout line.
  *
- * The ask-questions cron prompt calls this script to:
- * - Fetch pending questions from the Index MCP server via read_pending_questions.
- * - Apply the cross-day cooldown filter (same QUESTION_COOLDOWN_DAYS as the
- *   morning digest) so the same question is never asked within 3 days.
- * - Record the chosen question in heartbeat-state.json under `questionDelivery`
- *   BEFORE returning — this prevents double-delivery on parallel runs and
- *   ensures the cooldown is honoured even when the agent fails to deliver.
- * - Return one question for the agent to deliver, or [SILENT] if none are
- *   available.
- *
- * State is shared with the morning digest: both passes read and write
- * `questionDelivery` in heartbeat-state.json, so a question included in the
- * morning brief is already on cooldown by the time the evening cron fires.
+ * Usage (from $HERMES_HOME):
+ *   bun skills/index-network/scripts/ask-questions.ts [--state-file memory/heartbeat-state.json]
  */
 
 import { existsSync } from "node:fs";
 
 import {
-  QUESTION_COOLDOWN_DAYS,
-  fetchPendingQuestionsFromMcp,
-  filterCooldownQuestions,
+  attachIndexLinks,
+  fetchOpportunitiesFromMcp,
   resolveIndexApiKey,
   villageDate,
+  type BriefOpportunity,
 } from "./build-daily-brief-context";
 
 /** Last day of Edge City India 2026 (Oct 11 – Nov 1). */
@@ -34,16 +25,28 @@ const FINAL_REFLECTION_MORNING_QUESTION_ID = `daily-identity-${FINAL_REFLECTION_
 const FINAL_REFLECTION_PROMPT =
   "Quick closeout check: did AgentVillage help you meet, message, or better understand anyone this week? Reply with one sentence.";
 
-/** Whole days elapsed from `earlier` to `later` (both YYYY-MM-DD). */
-function daysBetween(earlier: string, later: string): number {
-  const toMs = (d: string) => {
-    const [y, m, day] = d.split("-").map(Number);
-    return Date.UTC(y, m - 1, day);
-  };
-  return Math.floor((toMs(later) - toMs(earlier)) / 86_400_000);
+export interface EveningCard {
+  name: string;
+  headline: string;
+  userUrl?: string;
+  opportunityUrl?: string;
 }
 
-async function readJsonObject(path: string): Promise<Record<string, unknown>> {
+interface Closeout {
+  prompt: string;
+}
+
+interface SilentResult {
+  silent: true;
+  reason: string;
+}
+
+function argValue(args: string[], name: string): string | undefined {
+  const idx = args.indexOf(name);
+  return idx >= 0 ? args[idx + 1] : undefined;
+}
+
+async function readState(path: string): Promise<Record<string, unknown>> {
   try {
     if (!existsSync(path)) return {};
     const parsed = JSON.parse(await Bun.file(path).text());
@@ -55,116 +58,73 @@ async function readJsonObject(path: string): Promise<Record<string, unknown>> {
   }
 }
 
-async function writeJson(path: string, value: unknown): Promise<void> {
-  await Bun.write(path, `${JSON.stringify(value, null, 2)}\n`);
+function deliveredIds(state: Record<string, unknown>, date: string): Set<string> {
+  const delivered = state.deliveredToday;
+  if (!delivered || typeof delivered !== "object" || Array.isArray(delivered)) return new Set();
+  const row = delivered as { date?: unknown; ids?: unknown };
+  if (row.date !== date || !Array.isArray(row.ids)) return new Set();
+  return new Set(row.ids.filter((id): id is string => typeof id === "string"));
 }
 
-function argValue(args: string[], name: string): string | undefined {
-  const idx = args.indexOf(name);
-  return idx >= 0 ? args[idx + 1] : undefined;
+function questionDelivery(state: Record<string, unknown>): Record<string, string> {
+  const raw = state.questionDelivery;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  return Object.fromEntries(
+    Object.entries(raw as Record<string, unknown>).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
+    ),
+  );
 }
 
-async function readQuestionDelivery(stateFile: string): Promise<Record<string, string>> {
-  try {
-    const raw = await Bun.file(stateFile).text();
-    const parsed = JSON.parse(raw) as { questionDelivery?: unknown };
-    if (
-      parsed.questionDelivery &&
-      typeof parsed.questionDelivery === "object" &&
-      !Array.isArray(parsed.questionDelivery)
-    ) {
-      return Object.fromEntries(
-        Object.entries(parsed.questionDelivery as Record<string, unknown>).filter(
-          (entry): entry is [string, string] =>
-            Boolean(entry[0]) &&
-            typeof entry[1] === "string" &&
-            /^\d{4}-\d{2}-\d{2}$/.test(entry[1]),
-        ),
-      );
-    }
-  } catch {
-    // missing/malformed state must not block delivery
-  }
-  return {};
-}
-
-export interface AskQuestionsResult {
-  questionId: string;
-  prompt: string;
-}
-
-interface SilentResult {
-  silent: true;
-  reason: string;
-}
-
-type FetchQuestionsFn = typeof fetchPendingQuestionsFromMcp;
-
-async function recordQuestionDelivery(
-  stateFile: string,
-  questionDelivery: Record<string, string>,
-  questionId: string,
-  date: string,
-): Promise<void> {
-  const state = await readJsonObject(stateFile);
-  const updatedDelivery: Record<string, string> = {};
-  for (const [id, deliveredOn] of Object.entries(questionDelivery)) {
-    if (daysBetween(deliveredOn, date) < QUESTION_COOLDOWN_DAYS) {
-      updatedDelivery[id] = deliveredOn;
-    }
-  }
-  updatedDelivery[questionId] = date;
-  state.questionDelivery = updatedDelivery;
-  await writeJson(stateFile, state);
+function cardFrom(opp: BriefOpportunity): EveningCard | null {
+  const linked = attachIndexLinks(opp);
+  if (!linked.name) return null;
+  return {
+    name: linked.name,
+    headline: linked.headline || linked.mainText || "New match",
+    userUrl: linked.userUrl,
+    opportunityUrl: linked.opportunityUrl,
+  };
 }
 
 export async function askQuestions(options: {
   date?: string;
   stateFile?: string;
-  /** Injectable for tests — defaults to fetchPendingQuestionsFromMcp. */
-  fetchQuestions?: FetchQuestionsFn;
-  /** Injectable for tests — defaults to resolveIndexApiKey(). */
   apiKey?: string;
-} = {}): Promise<AskQuestionsResult | SilentResult> {
+} = {}): Promise<EveningCard | Closeout | SilentResult> {
   const date = options.date ?? villageDate();
   const stateFile = options.stateFile ?? "memory/heartbeat-state.json";
-  const fetchQuestions = options.fetchQuestions ?? fetchPendingQuestionsFromMcp;
-  const questionDelivery = await readQuestionDelivery(stateFile);
-
-  if (date === FINAL_REFLECTION_DATE) {
-    if (
-      questionDelivery[FINAL_REFLECTION_QUESTION_ID] === date ||
-      questionDelivery[FINAL_REFLECTION_MORNING_QUESTION_ID] === date
-    ) {
-      return { silent: true, reason: "final-reflection-already-delivered" };
-    }
-    await recordQuestionDelivery(stateFile, questionDelivery, FINAL_REFLECTION_QUESTION_ID, date);
-    return { questionId: FINAL_REFLECTION_QUESTION_ID, prompt: FINAL_REFLECTION_PROMPT };
-  }
+  const state = await readState(stateFile);
+  const seen = deliveredIds(state, date);
 
   const apiKey = options.apiKey ?? resolveIndexApiKey();
-  if (!apiKey) return { silent: true, reason: "no-api-key" };
-
-  const mcpUrl =
-    process.env.INDEX_MCP_URL?.trim() || "https://protocol.index.network/mcp";
-
-  const questionResult = await fetchQuestions({ apiKey, mcpUrl });
-  if (questionResult.source === "unavailable" || questionResult.questions.length === 0) {
-    return { silent: true, reason: questionResult.reason ?? "no-pending-questions" };
+  if (apiKey) {
+    try {
+      const mcpUrl = process.env.INDEX_MCP_URL?.trim() || "https://protocol.index.network/mcp";
+      const fetched = await fetchOpportunitiesFromMcp({ apiKey, mcpUrl });
+      const chosen = fetched.find((opp) => opp.opportunityId && !seen.has(opp.opportunityId));
+      if (chosen?.opportunityId) {
+        state.deliveredToday = { date, ids: [...seen, chosen.opportunityId] };
+        await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
+        const card = cardFrom(chosen);
+        if (card) return card;
+      }
+    } catch {
+      // An empty list still allows the last-day closeout.
+    }
   }
 
-  const available = filterCooldownQuestions(questionResult.questions, questionDelivery, date);
-  if (available.length === 0) return { silent: true, reason: "all-questions-on-cooldown" };
-
-  const question = available[0];
-
-  // Record delivery BEFORE returning the question to the agent. This ensures
-  // the cooldown fires even when the agent fails to deliver, preventing a
-  // broken run from re-asking the same question on the very next cron tick.
-  // Prune expired entries at the same time to keep the state file bounded.
-  await recordQuestionDelivery(stateFile, questionDelivery, question.id, date);
-
-  return { questionId: question.id, prompt: question.prompt };
+  if (date !== FINAL_REFLECTION_DATE) return { silent: true, reason: "nothing-waiting" };
+  const delivered = questionDelivery(state);
+  if (
+    delivered[FINAL_REFLECTION_QUESTION_ID] === date ||
+    delivered[FINAL_REFLECTION_MORNING_QUESTION_ID] === date
+  ) {
+    return { silent: true, reason: "final-reflection-already-delivered" };
+  }
+  state.questionDelivery = { ...delivered, [FINAL_REFLECTION_QUESTION_ID]: date };
+  await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
+  return { prompt: FINAL_REFLECTION_PROMPT };
 }
 
 async function main(): Promise<void> {
@@ -173,12 +133,10 @@ async function main(): Promise<void> {
     date: argValue(args, "--date"),
     stateFile: argValue(args, "--state-file"),
   });
-
   if ("silent" in result) {
     process.stdout.write("[SILENT]\n");
     return;
   }
-
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 

@@ -16,7 +16,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { portalEventsBaseUrl } from "./validate-digest-urls";
 
@@ -141,6 +141,20 @@ export interface BriefOpportunity {
   negotiationUrl?: string;
   feedCategory?: string;
   opportunityId?: string;
+  /** Counterpart user id, when the tool returned one or a `/u/<uuid>` profile URL. */
+  userId?: string;
+  /** Signal id, when the tool returned one. */
+  intentId?: string;
+  /** `https://index.network/u/<userId>`. */
+  userUrl?: string;
+  /** `https://index.network/o/<opportunityId>`. */
+  opportunityUrl?: string;
+  /** `https://index.network/i/<intentId>`. */
+  intentUrl?: string;
+  /** Short label from `list_opportunities`. */
+  headline?: string;
+  /** App state word, such as "waiting on you". */
+  stateLabel?: string;
   confidence?: number;
   /** Cooldown re-show — the user has already seen this card in a previous digest. */
   redelivery?: boolean;
@@ -172,6 +186,8 @@ export interface DailyBriefContext {
     opportunitySource: "mcp" | "file" | "unavailable";
     questionSource?: "mcp" | "unavailable";
     weatherSource?: "open-meteo" | "nws" | "unavailable";
+    /** True only when today's discovery run finished. */
+    dreamingFresh?: boolean;
     warnings: string[];
     interestTags: string[];
   };
@@ -188,6 +204,18 @@ const QUESTION_PROMPT_MAX_LENGTH = 300;
 const QUESTION_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 /** Days a delivered question stays out of the digest before being re-offered. */
 export const QUESTION_COOLDOWN_DAYS = 3;
+/** Direct conversations included in the morning brief. */
+export const MORNING_CONNECTION_LIMIT = 3;
+const INDEX_WEB = "https://index.network";
+const USER_ID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const ENTITY_ID = /^[A-Za-z0-9_-]+$/;
+const OPPORTUNITY_STATE: Record<string, string> = {
+  pending: "waiting on you",
+  negotiating: "agents talking",
+  accepted: "connected",
+  rejected: "passed",
+  expired: "expired",
+};
 
 type EdgeEvent = Record<string, unknown> & {
   id?: string;
@@ -456,7 +484,7 @@ export function parseOpportunityTranscript(text: string): BriefOpportunity[] {
       continue;
     }
 
-    const field = line.trim().match(/^(status|profileUrl|acceptUrl|negotiationUrl|feedCategory|opportunityId|confidence|redelivery):\s*(.+)$/);
+    const field = line.trim().match(/^(status|profileUrl|acceptUrl|negotiationUrl|feedCategory|opportunityId|userId|intentId|confidence|redelivery):\s*(.+)$/);
     if (field) {
       const key = field[1] as keyof BriefOpportunity;
       if (key === "confidence") {
@@ -485,11 +513,10 @@ export function filterDedupedOpportunities(opportunities: BriefOpportunity[], de
 
 /**
  * Statuses a digest card may carry and still be actionable for the recipient.
- * Mirrors the Index server's `list_opportunities` fetch filter
- * (draft/pending/latent). Anything else — notably `stalled` (agents didn't
- * converge; "human should take a look" is not "human should act"), plus
- * `expired`/`rejected`/`accepted`/`negotiating` — must never be auto-included
- * in a daily brief, because its acceptUrl resolves to a dead link.
+ * Live `list_opportunities` cards that are waiting on the user are `pending`.
+ * `draft` and `latent` stay so older transcript files still render. Anything
+ * else — notably `negotiating` (agents still talking), `stalled`, `expired`,
+ * `rejected`, and `accepted` — stays out of the morning brief.
  */
 const ACTIONABLE_DIGEST_STATUSES = new Set(["draft", "pending", "latent"]);
 
@@ -506,6 +533,128 @@ export function filterActionableOpportunities(opportunities: BriefOpportunity[])
   return opportunities.filter(
     (opp) => !opp.status || ACTIONABLE_DIGEST_STATUSES.has(opp.status.trim().toLowerCase()),
   );
+}
+
+/** Fresh cards before cooldown re-shows, then highest confidence. Stable for ties. */
+export function selectMorningConnections(opportunities: BriefOpportunity[]): BriefOpportunity[] {
+  return opportunities
+    .filter((opp) => opp.feedCategory === "connection")
+    .sort((a, b) => {
+      if (Boolean(a.redelivery) !== Boolean(b.redelivery)) return a.redelivery ? 1 : -1;
+      return (b.confidence ?? 0) - (a.confidence ?? 0);
+    })
+    .slice(0, MORNING_CONNECTION_LIMIT);
+}
+
+function userIdFromProfile(url?: string): string | undefined {
+  if (!url) return undefined;
+  try {
+    const id = new URL(url).pathname.match(/^\/u\/([0-9a-fA-F-]{36})\/?$/)?.[1];
+    return id && USER_ID.test(id) ? id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Attach Index web links from ids the tool already returned. */
+export function attachIndexLinks(opp: BriefOpportunity): BriefOpportunity {
+  const next = { ...opp };
+  const userId = opp.userId && USER_ID.test(opp.userId) ? opp.userId : userIdFromProfile(opp.profileUrl);
+  if (userId) {
+    next.userId = userId;
+    if (!next.userUrl) next.userUrl = `${INDEX_WEB}/u/${userId}`;
+  }
+  if (opp.opportunityId && ENTITY_ID.test(opp.opportunityId) && !next.opportunityUrl) {
+    next.opportunityUrl = `${INDEX_WEB}/o/${opp.opportunityId}`;
+  }
+  if (opp.intentId && ENTITY_ID.test(opp.intentId)) {
+    next.intentUrl = `${INDEX_WEB}/i/${opp.intentId}`;
+  }
+  return next;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function jsonObject(text: string): Record<string, unknown> | null {
+  const start = text.search(/^\s*\{/m);
+  if (start < 0) return null;
+  try {
+    return asRecord(JSON.parse(text.slice(start)));
+  } catch {
+    return null;
+  }
+}
+
+function listedCard(row: Record<string, unknown>): BriefOpportunity | null {
+  const peer = asRecord(row.peer);
+  const name = typeof peer?.name === "string" ? peer.name.trim() : "";
+  if (!name) return null;
+  const headline = typeof row.headline === "string" ? row.headline.trim() : "";
+  const summary = typeof row.summary === "string" ? row.summary.trim() : "";
+  const status = typeof row.status === "string" ? row.status.trim() : "";
+  const viewerRole = typeof row.viewerRole === "string" ? row.viewerRole : "";
+  const userUrl = typeof peer?.url === "string" ? peer.url : undefined;
+  const opportunityUrl = typeof row.url === "string" ? row.url : undefined;
+  const userId = typeof peer?.userId === "string" ? peer.userId : undefined;
+  const opportunityId = typeof row.id === "string" ? row.id : undefined;
+  return {
+    name,
+    headline: headline || undefined,
+    mainText: summary || headline || "New match",
+    status: status || undefined,
+    stateLabel: OPPORTUNITY_STATE[status.toLowerCase()],
+    userUrl,
+    opportunityUrl,
+    userId,
+    opportunityId,
+    profileUrl: userUrl,
+    feedCategory: viewerRole === "agent" ? "connector-flow" : "connection",
+  };
+}
+
+/**
+ * Read a `list_opportunities` result. The tool leads with a markdown line,
+ * then JSON `{ opportunities: [...] }`. Returns null when that array is absent
+ * so older transcript files can still be parsed.
+ */
+export function parseListedOpportunities(text: string): BriefOpportunity[] | null {
+  const root = jsonObject(text);
+  const list = root?.opportunities;
+  if (!Array.isArray(list)) return null;
+  return list
+    .map((row) => asRecord(row))
+    .filter((row): row is Record<string, unknown> => Boolean(row))
+    .map(listedCard)
+    .filter((card): card is BriefOpportunity => Boolean(card));
+}
+
+export async function readDreamingDate(stateFile: string): Promise<string | undefined> {
+  try {
+    const parsed = JSON.parse(await Bun.file(stateFile).text()) as { dreaming?: { lastRunDate?: unknown } };
+    return typeof parsed.dreaming?.lastRunDate === "string" ? parsed.dreaming.lastRunDate : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function writeDreamingDate(stateFile: string, date: string): Promise<void> {
+  let parsed: Record<string, unknown> = {};
+  try {
+    const raw = JSON.parse(await Bun.file(stateFile).text()) as unknown;
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) parsed = raw as Record<string, unknown>;
+  } catch {
+    // missing state starts as an empty object
+  }
+  const dreaming = parsed.dreaming && typeof parsed.dreaming === "object" && !Array.isArray(parsed.dreaming)
+    ? { ...(parsed.dreaming as Record<string, unknown>) }
+    : {};
+  dreaming.lastRunDate = date;
+  parsed.dreaming = dreaming;
+  await Bun.write(stateFile, `${JSON.stringify(parsed, null, 2)}\n`);
 }
 
 async function readIfExists(path: string): Promise<string> {
@@ -535,30 +684,6 @@ function daysBetween(earlier: string, later: string): number {
   const b = parseDateParts(later);
   const ms = Date.UTC(b.year, b.month - 1, b.day) - Date.UTC(a.year, a.month - 1, a.day);
   return Math.floor(ms / 86_400_000);
-}
-
-/**
- * Read the cross-day question delivery log (`questionDelivery`:
- * `{ [questionId]: "YYYY-MM-DD" }`) from heartbeat state. Unlike
- * `deliveredToday`, entries persist across days — a question stays pending on
- * Index until answered, so dedup must outlive a single date. Defensive like
- * readDeliveredIds: missing/malformed state never blocks the brief.
- */
-async function readQuestionDelivery(stateFile: string): Promise<Record<string, string>> {
-  try {
-    const raw = await Bun.file(stateFile).text();
-    const parsed = JSON.parse(raw) as { questionDelivery?: unknown };
-    if (parsed.questionDelivery && typeof parsed.questionDelivery === "object" && !Array.isArray(parsed.questionDelivery)) {
-      return Object.fromEntries(
-        Object.entries(parsed.questionDelivery as Record<string, unknown>)
-          .filter((entry): entry is [string, string] =>
-            Boolean(entry[0]) && typeof entry[1] === "string" && /^\d{4}-\d{2}-\d{2}$/.test(entry[1])),
-      );
-    }
-  } catch {
-    // missing/malformed state should not block the brief
-  }
-  return {};
 }
 
 /**
@@ -791,10 +916,9 @@ async function postMcpMessage(mcpUrl: string, apiKey: string, body: unknown): Pr
 }
 
 /**
- * Fetch opportunities by calling the Index MCP server directly via JSON-RPC,
- * bypassing any LLM agent. Uses list_opportunities with includeDigestMarkers:true
- * to receive pre-built profileUrl, acceptUrl, and feedCategory in the text output,
- * then parses through parseOpportunityTranscript — no synthesis possible.
+ * Fetch opportunities by calling Index `list_opportunities` directly.
+ * Pending cards are the ones waiting on the user. The tool returns a markdown
+ * lead plus JSON cards (`url`, `peer.url`, `headline`, `summary`).
  */
 export async function fetchOpportunitiesFromMcp(opts: {
   apiKey: string;
@@ -817,7 +941,7 @@ export async function fetchOpportunitiesFromMcp(opts: {
     jsonrpc: "2.0",
     id: 2,
     method: "tools/call",
-    params: { name: "list_opportunities", arguments: { includeDigestMarkers: true } },
+    params: { name: "list_opportunities", arguments: { statuses: ["pending"], limit: 20 } },
   });
   if (toolResp.error) throw new Error(`MCP list_opportunities: ${toolResp.error.message}`);
 
@@ -836,7 +960,7 @@ export async function fetchOpportunitiesFromMcp(opts: {
     if (err instanceof Error && err.message === "setup required before people suggestions") throw err;
   }
 
-  return parseOpportunityTranscript(text);
+  return parseListedOpportunities(text) ?? parseOpportunityTranscript(text);
 }
 
 /**
@@ -1033,13 +1157,15 @@ export async function buildDailyBriefContext(options: {
 
   let opportunities: BriefOpportunity[] = [];
   let opportunitySource: "mcp" | "file" | "unavailable" = "unavailable";
+  let dreamingFresh = false;
 
   const apiKey = resolveIndexApiKey();
   const mcpUrl = process.env.INDEX_MCP_URL?.trim() || "https://protocol.index.network/mcp";
+  const stateFile = options.stateFile ?? "memory/heartbeat-state.json";
 
   if (apiKey) {
     try {
-      const deliveredIds = await readDeliveredIds(options.stateFile ?? "memory/heartbeat-state.json", date);
+      const deliveredIds = await readDeliveredIds(stateFile, date);
       const fetched = await fetchOpportunitiesFromMcp({ apiKey, mcpUrl });
       const deduped = filterDedupedOpportunities(fetched, deliveredIds);
       opportunities = filterActionableOpportunities(deduped);
@@ -1049,6 +1175,14 @@ export async function buildDailyBriefContext(options: {
         );
       }
       opportunitySource = "mcp";
+      dreamingFresh = true;
+      if ((await readDreamingDate(stateFile)) !== date && (existsSync(stateFile) || existsSync(dirname(stateFile)))) {
+        try {
+          await writeDreamingDate(stateFile, date);
+        } catch (err) {
+          warnings.push(`dreaming state not written: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
     } catch (err) {
       warnings.push(`opportunities MCP unavailable: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -1056,7 +1190,7 @@ export async function buildDailyBriefContext(options: {
     const transcript = await readIfExists(options.opportunitiesFile);
     if (transcript.trim()) {
       opportunitySource = "file";
-      const deliveredIds = await readDeliveredIds(options.stateFile ?? "memory/heartbeat-state.json", date);
+      const deliveredIds = await readDeliveredIds(stateFile, date);
       const deduped = filterDedupedOpportunities(parseOpportunityTranscript(transcript), deliveredIds);
       opportunities = filterActionableOpportunities(deduped);
       if (opportunities.length < deduped.length) {
@@ -1067,18 +1201,13 @@ export async function buildDailyBriefContext(options: {
     }
   }
 
-  let questions: BriefQuestion[] = [];
-  let questionSource: "mcp" | "unavailable" = "unavailable";
+  const questions: BriefQuestion[] = [];
+  const questionSource: "mcp" | "unavailable" = "unavailable";
 
-  if (apiKey) {
-    const questionResult = await fetchPendingQuestionsFromMcp({ apiKey, mcpUrl });
-    const questionDelivery = await readQuestionDelivery(options.stateFile ?? "memory/heartbeat-state.json");
-    questions = filterCooldownQuestions(questionResult.questions, questionDelivery, date);
-    questionSource = questionResult.source;
-    if (questionResult.source === "unavailable") {
-      warnings.push(`questions MCP unavailable: ${questionResult.reason ?? "unknown"}`);
-    }
-  }
+  const connectionOpportunities = selectMorningConnections(opportunities).map(attachIndexLinks);
+  const communityOpportunities = opportunities
+    .filter((opp) => opp.feedCategory === "connector-flow")
+    .map(attachIndexLinks);
 
   return {
     date,
@@ -1088,9 +1217,9 @@ export async function buildDailyBriefContext(options: {
     rsvpEvents: rsvpResult.rsvpEvents,
     highlightedEvents: eventResult.highlightedEvents,
     interestEvents: eventResult.interestEvents,
-    opportunities,
-    connectionOpportunities: opportunities.filter((opp) => opp.feedCategory === "connection"),
-    communityOpportunities: opportunities.filter((opp) => opp.feedCategory === "connector-flow"),
+    opportunities: [...connectionOpportunities, ...communityOpportunities],
+    connectionOpportunities,
+    communityOpportunities,
     userModel,
     weather: weather.source !== "unavailable" ? weather : undefined,
     questions,
@@ -1101,6 +1230,7 @@ export async function buildDailyBriefContext(options: {
       opportunitySource,
       questionSource,
       weatherSource: weather.source,
+      dreamingFresh,
       warnings,
       interestTags,
     },

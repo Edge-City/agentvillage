@@ -27,7 +27,7 @@
 
 import { existsSync } from "node:fs";
 
-import { resolveIndexApiKey } from "./build-daily-brief-context";
+import { attachIndexLinks, parseListedOpportunities, resolveIndexApiKey, type BriefOpportunity } from "./build-daily-brief-context";
 
 // ── MCP plumbing ──────────────────────────────────────────────────────────────
 
@@ -478,6 +478,69 @@ export async function summarizeNegotiations(opts: {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
+interface FollowUpCard {
+  name: string;
+  headline: string;
+  summary: string;
+  userUrl?: string;
+  opportunityUrl?: string;
+}
+
+function followUpCard(opp: BriefOpportunity): FollowUpCard | null {
+  const linked = attachIndexLinks(opp);
+  if (!linked.name) return null;
+  const headline = linked.headline || linked.mainText || "New match";
+  return {
+    name: linked.name,
+    headline,
+    summary: linked.mainText || headline,
+    userUrl: linked.userUrl,
+    opportunityUrl: linked.opportunityUrl,
+  };
+}
+
+async function callIndexTool(apiKey: string, mcpUrl: string, name: string, args: Record<string, unknown>, id: number): Promise<string> {
+  const initResp = await postMcpMessage(mcpUrl, apiKey, {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2024-11-05",
+      capabilities: {},
+      clientInfo: { name: "agentvillage-negotiation-summary", version: "1.0.0" },
+    },
+  });
+  if (initResp.error) throw new Error(`MCP initialize: ${initResp.error.message}`);
+  const toolResp = await postMcpMessage(mcpUrl, apiKey, {
+    jsonrpc: "2.0",
+    id,
+    method: "tools/call",
+    params: { name, arguments: args },
+  });
+  if (toolResp.error) throw new Error(`MCP ${name}: ${toolResp.error.message}`);
+  const result = toolResp.result as McpToolResult | undefined;
+  return result?.content?.find((c) => c.type === "text")?.text ?? "";
+}
+
+function intentsFrom(text: string): Array<{ summary: string; url?: string }> {
+  const start = text.search(/^\s*\{/m);
+  if (start < 0) return [];
+  try {
+    const parsed = JSON.parse(text.slice(start)) as { success?: boolean; intents?: unknown };
+    if (parsed.success === false || !Array.isArray(parsed.intents)) return [];
+    return parsed.intents.flatMap((row) => {
+      if (!row || typeof row !== "object") return [];
+      const intent = row as { summary?: unknown; description?: unknown; url?: unknown; status?: unknown };
+      if (intent.status === "archived") return [];
+      const summary = (typeof intent.summary === "string" ? intent.summary : typeof intent.description === "string" ? intent.description : "").trim();
+      if (!summary) return [];
+      return [{ summary, url: typeof intent.url === "string" ? intent.url : undefined }];
+    });
+  } catch {
+    return [];
+  }
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const stateFile = argValue(args, "--state-file") ?? "memory/heartbeat-state.json";
@@ -489,22 +552,47 @@ async function main(): Promise<void> {
   }
 
   const mcpUrl = process.env.INDEX_MCP_URL?.trim() || "https://protocol.index.network/mcp";
-  const fetchNegotiations = buildMcpFetcher(apiKey, mcpUrl);
-  const fetchSignals = buildMcpSignalFetcher(apiKey, mcpUrl);
-  const resolveProfile = buildMcpProfileResolver(apiKey, mcpUrl);
+  let cards: BriefOpportunity[] = [];
+  let signals: Array<{ summary: string; url?: string }> = [];
+  try {
+    const opportunityText = await callIndexTool(apiKey, mcpUrl, "list_opportunities", {
+      statuses: ["pending", "negotiating", "accepted"],
+      limit: 50,
+    }, 2);
+    cards = parseListedOpportunities(opportunityText) ?? [];
+    const intentText = await callIndexTool(apiKey, mcpUrl, "list_intents", { limit: 20 }, 3);
+    signals = intentsFrom(intentText);
+  } catch (err) {
+    process.stderr.write(
+      `negotiation-summary: MCP fetch failed — ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    process.stdout.write("[SILENT]");
+    return;
+  }
 
-  const result = await summarizeNegotiations({
-    fetchNegotiations,
-    stateFile,
-    fetchSignals,
-    resolveProfile,
+  const state = await readJsonObject(stateFile);
+  const summaryState = (state.negotiationSummary ?? {}) as NegotiationSummaryState;
+  const alreadyReported = new Set(summaryState.reportedCompletedIds ?? []);
+
+  const needsAttention = cards.filter((card) => card.status === "pending").map(followUpCard).filter((card): card is FollowUpCard => Boolean(card));
+  const waiting = cards.filter((card) => card.status === "negotiating").map(followUpCard).filter((card): card is FollowUpCard => Boolean(card));
+  const newAccepted = cards.filter((card) => card.status === "accepted" && card.opportunityId && !alreadyReported.has(card.opportunityId));
+  const newlyResolved = newAccepted.map(followUpCard).filter((card): card is FollowUpCard => Boolean(card));
+
+  if (needsAttention.length === 0 && newlyResolved.length === 0) {
+    process.stdout.write("[SILENT]");
+    return;
+  }
+
+  await writeJsonObject(stateFile, {
+    ...state,
+    negotiationSummary: {
+      ...summaryState,
+      reportedCompletedIds: [...alreadyReported, ...newAccepted.map((card) => card.opportunityId).filter((id): id is string => Boolean(id))],
+    },
   });
 
-  if ("silent" in result) {
-    process.stdout.write("[SILENT]");
-  } else {
-    process.stdout.write(JSON.stringify(result.context));
-  }
+  process.stdout.write(JSON.stringify({ signals, needsAttention, waiting, newlyResolved }));
 }
 
 if (import.meta.main) {
