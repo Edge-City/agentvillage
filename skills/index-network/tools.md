@@ -6,7 +6,7 @@ The Index Network MCP (server `index`) is your tool surface for everything netwo
 
 - **Profile** — `read_user_contexts`, `record_onboarding_privacy_consent`, `preview_user_context`, `get_enrichment_run`, `cancel_enrichment_run`, `confirm_user_context`, `create_user_context` (legacy/generic clients), `update_user_context`
 - **Networks (communities)** — `read_networks`, `create_network`, `update_network`, `delete_network`, `read_network_memberships`, `create_network_membership`, `delete_network_membership`
-- **Signals (intents)** — `create_intent`, `read_intents`, `update_intent`, `delete_intent`, `search_intents`, `create_intent_index`, `read_intent_indexes`, `delete_intent_index`
+- **Signals (intents)** — `create_intent`, `list_intents`, `get_intent`, `update_intent`, `pause_intent`, `resume_intent`, `archive_intent`. Every one after `create_intent` and `list_intents` names the signal as `intentId`. `update_intent(intentId, description)` rewrites a signal and takes no status; pausing is `pause_intent(intentId)`, resuming `resume_intent(intentId)`, and archiving `archive_intent(intentId, confirm=true)`, only after the user said yes (it cannot be undone). There is no delete.
 - **Premises (durable profile facts)** — `create_premise`, `read_premises`, `update_premise`, `retract_premise`
 - **Discovery** — `discover_opportunities`, `get_discovery_run`, `cancel_discovery_run`, `list_opportunities`, `update_opportunity`, `confirm_opportunity_delivery`
 - **Negotiations** — `list_negotiations`, `get_negotiation` (read-only — negotiations are handled server-side; do not call `respond_to_negotiation`)

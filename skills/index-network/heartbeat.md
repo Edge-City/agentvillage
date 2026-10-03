@@ -86,8 +86,8 @@ tasks:
   prompt: |
     Once a week, prune.
 
-    1. Call `read_intents()` for the user.
-    2. If any signal older than 60 days has no recent matches, ask about **one** stale signal only: whether it's still active. If they say no later, call `update_intent(id, status="archived")`. If they say yes, leave it. If they ignore, leave it — re-ask next cycle.
+    1. Call `list_intents()` for the user.
+    2. If any signal older than 60 days has no recent matches, ask about **one** stale signal only: whether it's still active. If they say no later, call `archive_intent(intentId="<its id>", confirm=true)`. If they say yes, leave it. If they ignore, leave it — re-ask next cycle.
     3. Record the asked signal id/date under `signalFreshness` and update `heartbeatTasks.signal-freshness.lastRunAt` before stopping.
 
     Skip silently if nothing is stale. Do not invent things to ask about. Never ask more than one freshness question in a tick.
@@ -103,7 +103,7 @@ tasks:
     2. Gate on suppression and once-per-day. Read `memory/<today>.md` and `memory/heartbeat-state.json`. Reply silently and stop if either holds:
        - `memory/<today>.md` contains `[gate] index-network: suppressed by user` (the user dismissed setup today).
        - `signalElicitation.lastAskedDate` already equals today's date (you have asked once today).
-    3. Build one contextual question. Call `read_intents()` and `read_premises()` to see what the user already has, then compose a single question grounded in it:
+    3. Build one contextual question. Call `list_intents()` and `read_premises()` to see what the user already has, then compose a single question grounded in it:
        - If a signal is thin or vague, ask something that sharpens it — e.g. a bare "looking for collaborators" becomes "What kind of collaborator are you after, and on what specifically?"
        - If the user has almost nothing, ask a broad opener — "What are you working on this week?" or "Open to anything new — collaborators, hiring, advice?"
        - Do not repeat a question close to one already in `signalElicitation.recentQuestions`. Vary it.

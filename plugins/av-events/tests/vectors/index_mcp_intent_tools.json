@@ -1,0 +1,83 @@
+{
+  "about": "The overlay's copy of Index's MCP intent tools: names, input schemas (zod .strict(), so no other argument is accepted) and the result keys the overlay reads. Copied by hand from indexnetwork/index main, services/api/src/lib/mcp/mcp.tools.ts, on 2026-10-02 (DATA-249). The overlay's MCP calls and the observer's tool names are tested against this file (tests/test_index_contract.py); when Index changes a tool, change this file first and let the tests show what else must move.",
+  "source": "indexnetwork/index@main services/api/src/lib/mcp/mcp.tools.ts",
+  "verified": "2026-10-02",
+  "intent_status_values": ["active", "paused"],
+  "tools": {
+    "list_intents": {
+      "input": {
+        "additionalProperties": false,
+        "required": [],
+        "properties": {
+          "archived": {"type": "boolean"},
+          "query": {"type": "string"},
+          "page": {"type": "integer", "minimum": 1},
+          "limit": {"type": "integer", "minimum": 1, "maximum": 100}
+        }
+      },
+      "result_keys": ["intents", "totalWaitingOpportunities", "pagination"]
+    },
+    "get_intent": {
+      "input": {
+        "additionalProperties": false,
+        "required": ["intentId"],
+        "properties": {"intentId": {"type": "string", "minLength": 1}}
+      },
+      "result_keys": ["intent"]
+    },
+    "create_intent": {
+      "input": {
+        "additionalProperties": false,
+        "required": ["description"],
+        "properties": {
+          "description": {"type": "string", "maxLength": 65536},
+          "networkIds": {"type": "array", "items": {"type": "string"}},
+          "sourceType": {"type": ["string", "null"], "maxLength": 1024},
+          "sourceId": {"type": ["string", "null"], "maxLength": 1024}
+        }
+      },
+      "result_keys": ["intentId", "url", "networkIds", "sourceType", "sourceId"]
+    },
+    "update_intent": {
+      "input": {
+        "additionalProperties": false,
+        "required": ["intentId"],
+        "anyOf_required": [["description"], ["sourceType"], ["sourceId"]],
+        "properties": {
+          "intentId": {"type": "string", "minLength": 1},
+          "description": {"type": "string", "minLength": 1, "maxLength": 65536},
+          "sourceType": {"type": ["string", "null"], "maxLength": 1024},
+          "sourceId": {"type": ["string", "null"], "maxLength": 1024}
+        }
+      },
+      "result_keys": ["intent"]
+    },
+    "pause_intent": {
+      "input": {
+        "additionalProperties": false,
+        "required": ["intentId"],
+        "properties": {"intentId": {"type": "string", "minLength": 1}}
+      },
+      "result_keys": ["intentId", "url", "status", "changed"]
+    },
+    "resume_intent": {
+      "input": {
+        "additionalProperties": false,
+        "required": ["intentId"],
+        "properties": {"intentId": {"type": "string", "minLength": 1}}
+      },
+      "result_keys": ["intentId", "url", "status", "changed"]
+    },
+    "archive_intent": {
+      "input": {
+        "additionalProperties": false,
+        "required": ["intentId", "confirm"],
+        "properties": {
+          "intentId": {"type": "string", "minLength": 1},
+          "confirm": {"const": true}
+        }
+      },
+      "result_keys": ["intentId", "url", "archived", "message"]
+    }
+  }
+}

@@ -18,7 +18,7 @@ When you do run, read `MEMORY.md`, compare it against what the Index already has
 
    The script may provide a `memoryHash`. Keep that value for the final state update; do not recompute it with generated code.
 
-2. **Read the current graph.** Call `read_premises()` and `read_intents()`. These — plus `memorySignals.captured` in `memory/heartbeat-state.json` — are your dedup baseline.
+2. **Read the current graph.** Call `read_premises()` and `list_intents()`. These — plus `memorySignals.captured` in `memory/heartbeat-state.json` — are your dedup baseline.
 
 3. **Diff memory against the graph.** Go through `MEMORY.md` and collect candidates:
    - **Durable profile facts** (role, skills, focus areas, location, affiliations) that no existing premise covers → candidates for `create_premise`.

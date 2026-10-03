@@ -72,7 +72,7 @@ Close with one short correction path, for example: "If any read is off, tell me 
 - Keep the whole message tight and scannable. Bullets over prose. No storytelling, no flourishes.
 - Do not send generic busy-agent summaries or "here's what I've been doing" reports.
 - Do not expose contact info, suggest public posting, or imply you can speak as the user without explicit consent.
-- Never call `list_negotiations`, `read_intents`, `read_user_contexts`, or any MCP tool — the script owns all data fetching.
+- Never call `list_negotiations`, `list_intents`, `read_user_contexts`, or any MCP tool — the script owns all data fetching.
 - Never reimplement the fetch or state logic.
 - One attempt at the script. Non-zero exit → `[SILENT]` immediately.
 - If the script returned `[SILENT]`, deliver nothing.
