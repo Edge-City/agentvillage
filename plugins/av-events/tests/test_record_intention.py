@@ -1,7 +1,7 @@
 """DATA-212: the `record_intention` tool, the one front door for intentions.
 
 Index is faked in-process: the module's `_OPENER` is replaced by `FakeIndex`,
-which answers the MCP streamable-HTTP sequence and records every request. No
+which answers Index's REST intent writes (DATA-249) and records every request. No
 test reaches the network. The observer half is driven the way Hermes drives
 it: the handler's own return value is handed to `post_tool_call`.
 """
@@ -9,14 +9,19 @@ it: the handler's own return value is handed to `post_tool_call`.
 from __future__ import annotations
 
 import hashlib
+import http.client
 import io
 import json
 import logging
 import os
 import stat
 import sys
+import re
+import socket
+import ssl
 import threading
 import urllib.error
+import urllib.parse
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -26,8 +31,10 @@ import pytest
 SESSION = "sess-ri"
 KEY = "index-key-for-record-intention-tests-0123456789"
 TEXT = "Looking for a climbing partner in Goa on weekends"
-INDEX_ID = "int-7f3a"
-PROD_URL = "https://protocol.index.network/mcp"
+INDEX_ID = "9b2f0c1e-0000-4000-8000-00000000abcd"
+SECOND_ID = "9b2f0c1e-0000-4000-8000-0000000000b2"
+ORIGIN = "https://protocol.index.network"
+PROD_URL = ORIGIN + "/api/intents"
 RULE = (
     "The two legitimate reasons an explicit intent stays local: the resident asked, or the "
     "content is personal."
@@ -51,7 +58,7 @@ class Headers:
 class Response:
     def __init__(self, status: int, body: bytes, headers: Optional[dict] = None) -> None:
         self.status = status
-        self.headers = Headers(headers or {})
+        self.headers = Headers(headers or {"content-type": "application/json"})
         self._body = io.BytesIO(body)
 
     def read(self, n: int = -1) -> bytes:
@@ -64,65 +71,73 @@ class Response:
         return None
 
 
-def rpc(result: Any, rpc_id: int = 1) -> bytes:
-    return json.dumps({"jsonrpc": "2.0", "id": rpc_id, "result": result}).encode()
-
-
-def tool_text(payload: Any, **extra: Any) -> dict:
-    """A `tools/call` result carrying Index's JSON document as text content."""
-    return {"content": [{"type": "text", "text": json.dumps(payload)}], **extra}
-
-
 def created(intent_id: str = INDEX_ID) -> dict:
-    return tool_text({"success": True, "data": {"intent": {"id": intent_id, "status": "active"}}})
+    """Index's `POST /api/intents` success body (`intent.controller.ts`)."""
+    return {"intentId": intent_id, "networkIds": [], "sourceType": "agentvillage", "sourceId": None}
+
+
+def http_error(code: int, body: Optional[dict] = None) -> urllib.error.HTTPError:
+    raw = json.dumps(body if body is not None else {"error": "x"}).encode()
+    return urllib.error.HTTPError(PROD_URL, code, "x", {}, io.BytesIO(raw))
+
+
+def refused() -> urllib.error.HTTPError:
+    """Index's 422 for a description it will not create (too vague)."""
+    return http_error(422, {"error": "intent_rejected", "code": "intent_rejected", "detail": "Signal too vague"})
+
+
+#: Which of Index's REST writes a request is, by method and path.
+_OPS = (
+    ("POST", re.compile(r"^/api/intents$"), "create_intent"),
+    ("PATCH", re.compile(r"^/api/intents/[^/]+/archive$"), "archive_intent"),
+    ("PATCH", re.compile(r"^/api/intents/[^/]+$"), "update_intent"),
+)
 
 
 class FakeIndex:
-    """Answers `initialize`, `notifications/initialized` and `tools/call`.
+    """Index's REST intent writes, in-process.
 
-    `tool` is what `tools/call` returns: a dict (a JSON-RPC result), a
-    `Response`, or an exception to raise. Every request is recorded.
+    `tool` is what every write returns: a dict (a 200 JSON body), a
+    `Response`, or an exception to raise (an `HTTPError` for a non-2xx). Every
+    request is recorded.
     """
 
     def __init__(self, tool: Any = None) -> None:
         self.tool = created() if tool is None else tool
         self.requests: list[dict] = []
-        #: When set, `tools/call` blocks until the event is set (no wall clock).
+        #: When set, a write blocks until the event is set (no wall clock).
         self.gate: Optional[threading.Event] = None
         self._lock = threading.Lock()
 
     def open(self, request, timeout=None):  # noqa: ANN001 - urllib's opener API
-        body = json.loads(request.data.decode())
+        parts = urllib.parse.urlsplit(request.full_url)
+        body = json.loads(request.data.decode()) if request.data is not None else None
+        name = next((op for method, path, op in _OPS if method == request.get_method() and path.match(parts.path)), None)
         with self._lock:
             self.requests.append(
                 {
                     "url": request.full_url,
+                    "path": parts.path,
                     "method": request.get_method(),
                     "headers": {k.lower(): v for k, v in request.header_items()},
                     "body": body,
+                    "raw": request.data,
+                    "name": name,
                     "timeout": timeout,
                 }
             )
-        method = body.get("method")
-        if method == "tools/call" and self.gate is not None:
+        if self.gate is not None:
             self.gate.wait()
-        if method == "initialize":
-            return Response(
-                200,
-                rpc({"protocolVersion": "2025-03-26", "capabilities": {}}, body["id"]),
-                {"content-type": "application/json", "mcp-session-id": "mcp-sess-1"},
-            )
-        if method == "notifications/initialized":
-            return Response(202, b"")
         answer = self.tool
         if isinstance(answer, BaseException):
             raise answer
         if isinstance(answer, Response):
             return answer
-        return Response(200, rpc(answer, body["id"]), {"content-type": "application/json"})
+        return Response(200, json.dumps(answer).encode())
 
     def tool_calls(self) -> list[dict]:
-        return [r["body"]["params"] for r in self.requests if r["body"].get("method") == "tools/call"]
+        """Each write as `{name, arguments}`: the Index operation and its JSON body."""
+        return [{"name": r["name"], "arguments": r["body"]} for r in self.requests]
 
 
 class ToolFireCtx:
@@ -317,26 +332,24 @@ def test_the_skill_is_installed_with_the_edge_bundles():
 # --------------------------------------------------------------------------
 
 
-def test_publish_speaks_the_poller_sequence(tctx, index):
+def test_publish_is_one_rest_create(tctx, index):
+    """DATA-249: Index's MCP endpoint rejects the protocol versions this module
+    could send, so a publish is one `POST /api/intents` with the same key."""
     out = call(tctx, {"text": TEXT, "source": "message"})
     assert out["success"] is True
-    methods = [r["body"]["method"] for r in index.requests]
-    assert methods == ["initialize", "notifications/initialized", "tools/call"]
-    for request in index.requests:
-        assert request["url"] == PROD_URL
-        assert request["method"] == "POST"
-        assert request["headers"]["x-api-key"] == KEY
-        assert request["headers"]["content-type"] == "application/json"
-        assert request["headers"]["accept"] == "application/json, text/event-stream"
-        assert request["body"]["jsonrpc"] == "2.0"
-        assert request["timeout"] is not None and request["timeout"] <= 30
-        # Only the headers the poller sends.
-        assert set(request["headers"]) <= {"x-api-key", "content-type", "accept", "mcp-session-id", "content-length", "host", "user-agent", "connection"}
-    assert "mcp-session-id" not in index.requests[0]["headers"]
-    assert index.requests[1]["headers"]["mcp-session-id"] == "mcp-sess-1"
-    assert index.requests[2]["headers"]["mcp-session-id"] == "mcp-sess-1"
-    assert "id" not in index.requests[1]["body"]  # a notification
-    assert index.tool_calls() == [{"name": "create_intent", "arguments": {"description": TEXT}}]
+    [request] = index.requests
+    assert request["url"] == PROD_URL
+    assert request["method"] == "POST"
+    assert request["headers"]["x-api-key"] == KEY
+    assert request["headers"]["content-type"] == "application/json"
+    assert request["headers"]["accept"] == "application/json"
+    assert request["timeout"] is not None and request["timeout"] <= 30
+    # Only these headers: no x-index-surface, no MCP session.
+    assert set(request["headers"]) <= {"x-api-key", "content-type", "accept", "content-length", "host", "user-agent", "connection"}
+    # DATA-249 O4: a stated capture marks the intent as ours, with no sourceId
+    # (its intention_id is Index's id, corroborated by id). Nothing else in the
+    # body: Index's schema is strict.
+    assert index.tool_calls() == [{"name": "create_intent", "arguments": {"description": TEXT, "sourceType": "agentvillage"}}]
 
 
 def test_publish_returns_index_id(tctx, index):
@@ -365,10 +378,10 @@ def test_exactly_one_intention_captured_per_published_call(tctx, index, av, plug
     tools = [e["payload"].get("tool_name") for e in buffered if e["event_type"] == "tool.call"]
     assert tools == ["record_intention"]
     # Two calls, two events: nothing is swallowed or doubled.
-    index.tool = created("int-second")
+    index.tool = created(SECOND_ID)
     call(tctx, {"text": TEXT + " too", "source": "onboarding"}, tool_call_id="call-2")
     events = intention_events(av, plugin)
-    assert [e["intention_id"] for e in events] == [INDEX_ID, "int-second"]
+    assert [e["intention_id"] for e in events] == [INDEX_ID, SECOND_ID]
     assert events[1]["payload"]["source"] == "onboarding"
 
 
@@ -378,25 +391,42 @@ def test_note_source_publishes(tctx, index, av, plugin):
     assert intention_events(av, plugin)[0]["payload"]["source"] == "note"
 
 
-def test_sse_response_is_read(tctx, index):
-    body = (
-        'event: message\ndata: {"jsonrpc":"2.0","method":"notifications/progress","params":{}}\n\n'
-        f"event: message\ndata: {json.dumps({'jsonrpc': '2.0', 'id': 3, 'result': created()})}\n\n"
-    ).encode()
-    index.tool = Response(200, body, {"content-type": "text/event-stream"})
-    out = call(tctx, {"text": TEXT, "source": "message"})
-    assert out["intention_id"] == INDEX_ID and out["published"] is True
+def test_publish_with_a_source_id_sends_it(ri, index, on):
+    """The held-then-published path (another lane) passes the held uuid v7."""
+    held = "01927f3e-1b2c-7d4e-8f00-1234567890ab"
+    assert ri.publish_intent(TEXT, source_id=held) == (INDEX_ID, None)
+    assert index.tool_calls() == [{"name": "create_intent", "arguments": {
+        "description": TEXT, "sourceType": "agentvillage", "sourceId": held}}]
 
 
-def test_structured_content_wins(tctx, index):
-    index.tool = {"content": [], "structuredContent": {"success": True, "data": {"intent": {"id": "int-sc"}}}}
-    assert call(tctx, {"text": TEXT, "source": "message"})["intention_id"] == "int-sc"
+@pytest.mark.parametrize(
+    "text",
+    [
+        TEXT,
+        "  Looking for a climbing partner  \n",
+        "Café founders, équipe, 中文 and \U0001f9d7 climbers\tin Goa",
+        "line one\r\nline two",
+    ],
+    ids=["plain", "edge-whitespace", "unicode-unnormalised", "crlf"],
+)
+def test_text_hash_is_the_sha256_of_the_bytes_sent_as_description(tctx, index, av, plugin, text):
+    """DATA-249 item 4: the poller merges a capture with its Index intent only when
+    the capture's `text_hash` equals the plain SHA-256 of the stored payload, so the
+    hash must be over exactly the bytes sent as `description`: no trim, no
+    Unicode or newline normalisation on either side."""
+    out = call(tctx, {"text": text, "source": "message"})
+    assert out["published"] is True
+    [request] = index.requests
+    # The bytes on the wire decode to exactly the text.
+    description = json.loads(request["raw"].decode("utf-8"))["description"]
+    assert description == text
+    [event] = intention_events(av, plugin)
+    assert event["payload"]["text_hash"] == hashlib.sha256(description.encode("utf-8")).hexdigest()
 
 
-def test_configured_https_url_is_used(tctx, index, monkeypatch):
-    monkeypatch.setenv("INDEX_MCP_URL", "https://protocol.dev.index.network/mcp")
-    call(tctx, {"text": TEXT, "source": "message"})
-    assert {r["url"] for r in index.requests} == {"https://protocol.dev.index.network/mcp"}
+def test_mirror_with_nothing_to_change_calls_nothing(ri, index, on):
+    assert ri.mirror_update(INDEX_ID) is None
+    assert index.requests == []
 
 
 def test_success_result_does_not_look_like_a_failure_to_hermes(tctx, index):
@@ -413,32 +443,116 @@ def test_success_result_does_not_look_like_a_failure_to_hermes(tctx, index):
 
 
 # --------------------------------------------------------------------------
-# Capture, Index refused or unreachable: local, with publish_refused
+# Where the writes go (DATA-249 api_origin)
 # --------------------------------------------------------------------------
 
 
-def http_error(code: int) -> urllib.error.HTTPError:
-    return urllib.error.HTTPError(PROD_URL, code, "x", {}, io.BytesIO(b"{}"))
+@pytest.mark.parametrize(
+    "api_url,mcp_url,expected",
+    [
+        (None, None, "https://protocol.index.network/api/intents"),
+        ("https://protocol.dev.index.network", None, "https://protocol.dev.index.network/api/intents"),
+        ("https://protocol.dev.index.network/", None, "https://protocol.dev.index.network/api/intents"),
+        ("http://127.0.0.1:3001", None, "http://127.0.0.1:3001/api/intents"),
+        ("http://localhost:3001", None, "http://localhost:3001/api/intents"),
+        ("https://protocol.dev.index.network", "https://protocol.index.network/mcp", "https://protocol.dev.index.network/api/intents"),
+        (None, "https://protocol.dev.index.network/mcp", "https://protocol.dev.index.network/api/intents"),
+        (None, "https://protocol.dev.index.network:8443/mcp/", "https://protocol.dev.index.network:8443/api/intents"),
+        # A2: Index's own Hermes plugin names the API as <origin>/api.
+        ("https://protocol.dev.index.network/api", None, "https://protocol.dev.index.network/api/intents"),
+        ("https://protocol.dev.index.network/api/", None, "https://protocol.dev.index.network/api/intents"),
+        ("HTTPS://Protocol.Dev.Index.Network", None, "https://Protocol.Dev.Index.Network/api/intents"),
+    ],
+)
+def test_the_rest_origin(tctx, index, monkeypatch, api_url, mcp_url, expected):
+    for name, value in (("INDEX_API_URL", api_url), ("INDEX_MCP_URL", mcp_url)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    out = call(tctx, {"text": TEXT, "source": "message"})
+    assert out["published"] is True
+    assert [r["url"] for r in index.requests] == [expected]
+
+
+@pytest.mark.parametrize(
+    "api_url,mcp_url",
+    [
+        ("http://protocol.index.network", None),
+        ("ftp://protocol.index.network", None),
+        ("https://", None),
+        ("https://user:pw@protocol.index.network", None),
+        ("https://protocol.index.network/api/v1", None),
+        ("https://protocol.index.network/?", None),
+        ("https://protocol.index.network#", None),
+        ("https://protocol.index.network/api?x", None),
+        ("https://protocol.index.network/api#frag", None),
+        (None, "https://protocol.index.network/mcp?x=1"),
+        (None, "https://protocol.index.network/mcp#"),
+        ("https://protocol.index.network?x=1", None),
+        (None, "http://protocol.index.network/mcp"),
+        (None, "http://127.0.0.1:9/mcp"),
+        (None, "https://protocol.index.network/other"),
+        (None, "ftp://x/mcp"),
+    ],
+)
+def test_a_refused_origin_carries_no_key_and_never_falls_back(tctx, index, monkeypatch, api_url, mcp_url):
+    """https only (plain http to loopback alone), an origin with no path; an
+    unusable legacy INDEX_MCP_URL refuses rather than writing to production."""
+    for name, value in (("INDEX_API_URL", api_url), ("INDEX_MCP_URL", mcp_url)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    out = call(tctx, {"text": TEXT, "source": "message"})
+    assert out["publish_refused"] == "url_refused" and out["published"] is False
+    assert index.requests == []
+
+
+# --------------------------------------------------------------------------
+# Capture, Index refused or unreachable: local, with publish_refused
+# --------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
     "answer,code",
     [
-        (tool_text({"success": False, "error": "Signal too vague"}), "rejected"),
-        (tool_text({"success": "false"}), "rejected"),
-        ({"isError": True, "content": [{"type": "text", "text": "too vague"}]}, "rejected"),
-        (tool_text({"success": True, "data": {}}), "malformed"),
-        (tool_text({"success": True, "data": {"intent": {"id": "bad id with spaces"}}}), "malformed"),
-        ({"content": [{"type": "text", "text": ""}]}, "malformed"),
-        (Response(200, b"not json", {"content-type": "application/json"}), "malformed"),
-        (Response(200, json.dumps({"jsonrpc": "2.0", "id": 3, "error": {"code": -32000}}).encode(),
-                  {"content-type": "application/json"}), "rpc_error"),
-        (Response(200, b"x" * (300 * 1024), {"content-type": "application/json"}), "too_large"),
-        (http_error(400), "http_400"),
+        # 422: Index will not create it from this text (too vague). The one
+        # refusal the map labels `rejected` and the data side reads as
+        # index_rejected.
+        (refused(), "rejected"),
+        (Response(422, b'{"error":"intent_rejected"}'), "rejected"),
+        # Our request, our key, our receipt: never the resident's words.
+        (http_error(400, {"error": "Validation failed"}), "http_400"),
         (http_error(401), "http_401"),
+        (http_error(403, {"error": "invalid_preparation"}), "http_403"),
+        (http_error(403, {"error": "forbidden", "code": "network_membership"}), "http_403"),
         (http_error(429), "http_429"),
-        (http_error(503), "http_503"),
+        # 503 preparation_failed: retryable, and nothing was written.
+        (http_error(503, {"error": "preparation_failed", "retryable": True}), "http_503"),
+        # B1: a 5xx other than 503 may come after the write landed: the ambiguous code.
+        (http_error(500, {"error": "Failed to create intent"}), "timeout"),
+        (http_error(502), "timeout"),
+        (http_error(504), "timeout"),
+        (Response(500, b"{}"), "timeout"),
         (http_error(302), "redirect"),
+        # A 2xx without a usable intentId is never a publish, and the create
+        # may have landed: the ambiguous code (B1, B3).
+        ({}, "timeout"),
+        ({"success": True}, "timeout"),
+        ({"intentId": None}, "timeout"),
+        ({"intentId": "bad id with spaces"}, "timeout"),
+        ({"intentId": 7}, "timeout"),
+        ({"intentId": [INDEX_ID]}, "timeout"),
+        ({"intentId": ".."}, "timeout"),
+        ({"intentId": "a"}, "timeout"),
+        ({"intentId": "x:y"}, "timeout"),
+        ({"intentId": "int-7f3a"}, "timeout"),
+        (Response(200, b"not json"), "timeout"),
+        (Response(200, b"[1, 2]"), "timeout"),
+        (Response(201, b""), "timeout"),
+        (Response(204, b""), "timeout"),
+        (Response(200, b"x" * (300 * 1024)), "timeout"),
     ],
 )
 def test_index_refusal_is_a_local_capture_with_the_code(tctx, index, av, plugin, answer, code):
@@ -460,10 +574,22 @@ def test_index_refusal_is_a_local_capture_with_the_code(tctx, index, av, plugin,
 @pytest.mark.parametrize(
     "exc,code",
     [
+        # Before anything was sent: urllib wraps connect, DNS, TLS and send failures in URLError.
         (urllib.error.URLError(ConnectionRefusedError(61, "refused")), "transport"),
-        (OSError("tls"), "transport"),
+        (urllib.error.URLError(socket.gaierror(8, "nodename nor servname")), "transport"),
+        (urllib.error.URLError(ssl.SSLError(1, "handshake")), "transport"),
+        # After the request was sent (getresponse / read): Index may have written (B1).
+        (http.client.RemoteDisconnected("closed"), "timeout"),
+        (ConnectionResetError(54, "reset"), "timeout"),
+        (http.client.IncompleteRead(b"{\"intentId\": \""), "timeout"),
+        (OSError("read failed"), "timeout"),
+        # A raw socket timeout comes from waiting for the answer: after the send.
         (TimeoutError(), "timeout"),
-        (urllib.error.URLError(TimeoutError()), "timeout"),
+        # urllib wraps a connect timeout in URLError: nothing was sent.
+        (urllib.error.URLError(TimeoutError()), "transport"),
+        # A config error found while opening, before the send.
+        (http.client.InvalidURL("nonnumeric port"), "url_refused"),
+        (ValueError("unknown url type"), "url_refused"),
     ],
 )
 def test_transport_failure_is_a_local_capture(tctx, index, av, plugin, exc, code):
@@ -474,13 +600,48 @@ def test_transport_failure_is_a_local_capture(tctx, index, av, plugin, exc, code
     assert intention_events(av, plugin)[0]["payload"]["publish_refused"] == code
 
 
-def test_one_deadline_bounds_the_whole_sequence(ri, index, on, monkeypatch):
+@pytest.mark.parametrize(
+    "answer",
+    [http_error(400), http_error(401), http_error(403), refused(), http_error(503), TimeoutError(), OSError("boom")],
+)
+def test_no_key_in_any_log_line_result_or_event(tctx, index, av, plugin, caplog, answer):
+    caplog.set_level(logging.DEBUG)
+    index.tool = answer
+    out = call(tctx, {"text": TEXT, "source": "message"})
+    index.tool = created()
+    published = call(tctx, {"text": TEXT + " too", "source": "message"}, tool_call_id="c2")
+    assert out["published"] is False
+    for text in (caplog.text, json.dumps(out), json.dumps(published), json.dumps(av.read_buffer(plugin._COLLECTOR))):
+        assert KEY not in text and TEXT not in caplog.text
+
+
+def test_index_failures_carry_only_a_code(ri, index, on, monkeypatch):
+    """No exception text on the failure path names the URL, the key or the body."""
+    index.tool = http_error(401)
+    seen: list[BaseException] = []
+    real = ri._send
+
+    def spy(*args, **kwargs):
+        try:
+            return real(*args, **kwargs)
+        except BaseException as exc:
+            seen.append(exc)
+            raise
+
+    monkeypatch.setattr(ri, "_send", spy)
+    assert ri.publish_intent(TEXT) == (None, "http_401")
+    [exc] = seen
+    assert str(exc) == "http_401" and exc.__cause__ is None and exc.__suppress_context__
+    assert KEY not in repr(exc) and TEXT not in repr(exc)
+
+
+def test_one_deadline_bounds_the_whole_request(ri, index, on, monkeypatch):
     """F12: the wait is injected; the worker is held by an event, not a sleep."""
     index.gate = threading.Event()
     waited: list[float] = []
     monkeypatch.setattr(ri, "_join", lambda worker, deadline: waited.append(deadline))
     try:
-        payload, code = ri.index_tool_call("create_intent", {"description": TEXT})
+        payload, code = ri.index_request("POST", ri.CREATE_PATH, {"description": TEXT, "sourceType": "agentvillage"})
     finally:
         index.gate.set()
     assert (payload, code) == (None, "timeout")
@@ -495,7 +656,8 @@ def test_timeout_capture_tells_the_agent_not_to_retry(tctx, index, ri, monkeypat
     finally:
         index.gate.set()
     assert out["publish_refused"] == "timeout"
-    assert "Do not retry; it may still appear on Index." in out["message"]
+    assert "Whether Index took it is unknown" in out["message"] and "do not retry it" in out["message"]
+    assert "could not take it" not in out["message"]
 
 
 def test_default_deadline_is_thirty_seconds(ri):
@@ -511,17 +673,15 @@ def test_no_key_is_a_local_capture_without_a_request(tctx, index, monkeypatch, a
     assert intention_events(av, plugin)[0]["payload"]["publish_refused"] == "no_key"
 
 
-@pytest.mark.parametrize("url", ["http://protocol.index.network/mcp", "http://127.0.0.1:9/mcp", "ftp://x/mcp", "https://"])
-def test_only_https_carries_the_key(tctx, index, monkeypatch, url):
-    monkeypatch.setenv("INDEX_MCP_URL", url)
-    out = call(tctx, {"text": TEXT, "source": "message"})
-    assert out["publish_refused"] == "url_refused"
-    assert index.requests == []
-
-
 def test_the_real_opener_refuses_redirects(ri, plugin, av):
     core = sys.modules[f"{av.MODULE_NAME}._core"]
     assert ri.NO_REDIRECT_OPENER is core.NO_REDIRECT_OPENER
+
+
+def test_the_mcp_client_is_gone(ri):
+    """DATA-249: nothing in the plugin speaks MCP to Index any more."""
+    for name in ("_Session", "_read_rpc", "_tool_payload", "_mcp_tool", "index_tool_call", "DEFAULT_MCP_URL"):
+        assert not hasattr(ri, name), name
 
 
 # --------------------------------------------------------------------------
@@ -622,7 +782,7 @@ def test_publish_false_needs_a_reason(tctx, index, av, plugin, reason, code):
 def test_no_explicit_intention_is_local_without_a_stated_reason(tctx, index, av, plugin, monkeypatch):
     """AC #5: every local message/onboarding/note capture carries a reason or a code."""
     call(tctx, {"text": TEXT, "source": "message"})
-    index.tool = tool_text({"success": False})
+    index.tool = refused()
     call(tctx, {"text": TEXT, "source": "onboarding"}, tool_call_id="c2")
     call(tctx, {"text": TEXT, "source": "note", "publish": False, "reason": "personal"}, tool_call_id="c3")
     monkeypatch.setenv("INDEX_API_KEY", "")
@@ -705,16 +865,20 @@ def test_handler_lets_system_exit_through(tctx, ri, monkeypatch):
 def test_update_and_withdraw_of_a_published_intention_mirror_to_index(tctx, index, av, plugin):
     call(tctx, {"text": TEXT, "source": "message"})
     index.requests.clear()
-    index.tool = tool_text({"success": True, "data": {"intent": {"id": INDEX_ID}}})
+    index.tool = {"intentId": INDEX_ID, "description": TEXT + " and bouldering", "sourceType": "agentvillage", "sourceId": None}
     up = call(tctx, {"action": "update", "intention_id": INDEX_ID, "text": TEXT + " and bouldering"}, tool_call_id="c2")
     assert up["success"] is True and up["published"] is True and "publish_refused" not in up
     assert index.tool_calls() == [
-        {"name": "update_intent", "arguments": {"id": INDEX_ID, "description": TEXT + " and bouldering"}}
+        {"name": "update_intent", "arguments": {"description": TEXT + " and bouldering"}}
     ]
+    assert [(r["method"], r["path"]) for r in index.requests] == [("PATCH", f"/api/intents/{INDEX_ID}")]
     index.requests.clear()
+    index.tool = {"success": True}
     out = call(tctx, {"action": "withdraw", "intention_id": INDEX_ID}, tool_call_id="c3")
-    assert out["success"] is True
-    assert index.tool_calls() == [{"name": "update_intent", "arguments": {"id": INDEX_ID, "status": "archived"}}]
+    assert out["success"] is True and "publish_refused" not in out
+    # DATA-249: archive is its own route, with no body; no `status` anywhere.
+    assert index.tool_calls() == [{"name": "archive_intent", "arguments": None}]
+    assert [(r["method"], r["path"], r["raw"]) for r in index.requests] == [("PATCH", f"/api/intents/{INDEX_ID}/archive", None)]
     events = intention_events(av, plugin)
     assert [e["event_type"] for e in events] == ["intention.captured", "intention.updated", "intention.withdrawn"]
     assert {e["intention_id"] for e in events} == {INDEX_ID}
@@ -725,10 +889,15 @@ def test_update_and_withdraw_of_a_published_intention_mirror_to_index(tctx, inde
 
 def test_update_mirror_failure_is_recorded_locally(tctx, index, av, plugin):
     call(tctx, {"text": TEXT, "source": "message"})
-    index.tool = http_error(500)
+    index.tool = http_error(409)
     out = call(tctx, {"action": "update", "intention_id": INDEX_ID, "text": TEXT + "!"}, tool_call_id="c2")
-    assert out["success"] is True and out["publish_refused"] == "http_500"
-    assert intention_events(av, plugin)[-1]["payload"]["publish_refused"] == "http_500"
+    assert out["success"] is True and out["publish_refused"] == "http_409"
+    assert "Index was not updated" in out["message"]
+    assert intention_events(av, plugin)[-1]["payload"]["publish_refused"] == "http_409"
+    # B1: a 500 on an edit may have landed: unknown, never "not updated".
+    index.tool = http_error(500)
+    out = call(tctx, {"action": "update", "intention_id": INDEX_ID, "text": TEXT + "!!"}, tool_call_id="c3")
+    assert out["publish_refused"] == "timeout" and "unknown" in out["message"] and "not updated" not in out["message"]
 
 
 def test_update_of_a_local_intention_never_calls_index(tctx, index, av, plugin):
@@ -785,7 +954,7 @@ def test_an_unsavable_map_still_publishes_and_logs_the_count_failure_once(tctx, 
 
     monkeypatch.setattr(ri, "_save_locked", fail)
     out = call(tctx, {"text": TEXT, "source": "message"})
-    index.tool = created("int-2")
+    index.tool = created(SECOND_ID)
     out2 = call(tctx, {"text": TEXT + " 2", "source": "message"}, tool_call_id="c2")
     assert out["published"] is True and out2["published"] is True
     assert "map_write_failed=PermissionError" in caplog.text
@@ -804,7 +973,7 @@ def test_an_unreadable_count_fails_closed(tctx, index, ri, monkeypatch):
 def test_logs_carry_codes_never_text_or_key(tctx, index, caplog):
     with caplog.at_level(logging.DEBUG, logger="av-events"):
         call(tctx, {"text": TEXT, "source": "message"})
-        index.tool = tool_text({"success": False, "error": TEXT})
+        index.tool = refused()
         call(tctx, {"text": TEXT, "source": "message"}, tool_call_id="c2")
         call(tctx, {"text": TEXT, "source": "message", "publish": False}, tool_call_id="c3")
     lines = [r.getMessage() for r in caplog.records if "record_intention" in r.getMessage()]
@@ -935,7 +1104,7 @@ def test_f3_lineage_listeners_are_registered_with_the_tool(plugin, ri, index, on
 # F4: a cron session never rewrites a live Index intent.
 
 
-def test_f4_cron_update_is_held_and_withdraw_mirrors(tctx, index, av, plugin):
+def test_f4_cron_update_and_withdraw_of_a_published_id_are_held(tctx, index, av, plugin):
     pub = call(tctx, {"text": TEXT, "source": "message"})
     tctx.fire("on_session_start", session_id="cron_memsync_20260929_030000", model="m", platform="cron")
     out = call(
@@ -950,9 +1119,14 @@ def test_f4_cron_update_is_held_and_withdraw_mirrors(tctx, index, av, plugin):
     assert event["event_type"] == "intention.updated"
     assert event["payload"]["publish_refused"] == "held_cron"
     assert event["payload"]["source"] == out["source"]
-    call(tctx, {"action": "withdraw", "intention_id": pub["intention_id"]},
-         session="cron_memsync_20260929_030000", tool_call_id="c3")
-    assert index.tool_calls()[-1] == {"name": "update_intent", "arguments": {"id": INDEX_ID, "status": "archived"}}
+    # B2: a withdrawal of a published intention from a held session is refused:
+    # no archive on Index, no event.
+    before = len(intention_events(av, plugin))
+    gone = call(tctx, {"action": "withdraw", "intention_id": pub["intention_id"]},
+                session="cron_memsync_20260929_030000", tool_call_id="c3")
+    assert gone["success"] is False and gone["error"] == "held_cron"
+    assert [c["name"] for c in index.tool_calls()] == ["create_intent"]
+    assert len(intention_events(av, plugin)) == before
 
 
 # F5: the map is locked across processes and survives corruption.
@@ -988,12 +1162,12 @@ def test_f5_a_corrupt_map_is_set_aside(tctx, index, ri, caplog):
     path = Path(ri.map_path())
     with open(path, "a", encoding="utf-8") as handle:
         handle.write("garbage")
-    index.tool = created("int-second")
+    index.tool = created(SECOND_ID)
     call(tctx, {"text": TEXT + " 2", "source": "message"}, tool_call_id="c2")
     aside = Path(str(path) + ".corrupt-1")
     assert aside.exists() and first["intention_id"] in aside.read_text(encoding="utf-8")
     assert "av-events: record_intention map_corrupt=1" in caplog.text
-    assert set(json.loads(path.read_text(encoding="utf-8"))["intentions"]) == {"int-second"}
+    assert set(json.loads(path.read_text(encoding="utf-8"))["intentions"]) == {SECOND_ID}
     path.write_text("[]", encoding="utf-8")
     ri.lookup("x")
     assert Path(str(path) + ".corrupt-2").exists()
@@ -1218,9 +1392,9 @@ def test_rate_cap_counts_attempts_per_rolling_hour(tctx, index, ri, monkeypatch,
     monkeypatch.setattr(ri, "_clock", lambda: now[0])
     monkeypatch.setenv("AV_RECORD_INTENTION_MAX_PUBLISH_PER_HOUR", "2")
     assert call(tctx, {"text": "a one", "source": "message"})["published"] is True
-    index.tool = tool_text({"success": False})  # a refused attempt still counts
+    index.tool = refused()  # a refused attempt still counts
     assert call(tctx, {"text": "a two", "source": "message"}, tool_call_id="c2")["publish_refused"] == "rejected"
-    index.tool = created("int-3")
+    index.tool = created(SECOND_ID)
     third = call(tctx, {"text": "a three", "source": "message"}, tool_call_id="c3")
     assert third["publish_refused"] == "rate_capped" and third["published"] is False
     assert "hourly limit" in third["message"]
@@ -1254,11 +1428,10 @@ def test_no_key_does_not_spend_the_cap(tctx, index, ri, monkeypatch):
 # B4: no success result looks like a failure to Hermes.
 
 
-@pytest.mark.parametrize("answer", ["ok", "rpc"])
+@pytest.mark.parametrize("answer", ["ok", "server_error"])
 def test_success_results_never_trip_the_failure_heuristic(tctx, index, answer):
-    if answer == "rpc":
-        index.tool = Response(200, json.dumps({"jsonrpc": "2.0", "id": 2, "error": {"code": -1}}).encode(),
-                              {"content-type": "application/json"})
+    if answer == "server_error":
+        index.tool = http_error(500, {"error": "Failed to create intent"})
     res = tctx.tools["record_intention"]["handler"]({"text": TEXT, "source": "message"}, session_id=SESSION)
     low = res[:500].lower()
     assert '"error"' not in low and '"failed"' not in low and not res.startswith("Error")
@@ -1391,7 +1564,7 @@ def test_capture_path_for_the_bare_and_a_prefixed_record_intention(tctx, index, 
 
 
 def test_update_of_a_rejected_capture_is_refused_capture_again(tctx, index, ri, av, plugin):
-    index.tool = tool_text({"success": False, "error": "too vague"})
+    index.tool = refused()
     rejected = call(tctx, {"text": "something", "source": "message"})
     assert rejected["publish_refused"] == "rejected"
     assert ri.lookup(rejected["intention_id"]) == {"published": False, "source": "message", "refused": "rejected"}
@@ -1408,7 +1581,7 @@ def test_update_of_a_rejected_capture_is_refused_capture_again(tctx, index, ri, 
     assert gone["success"] is True and gone["published"] is False
 
 
-@pytest.mark.parametrize("code_answer", [http_error(503), tool_text({"success": True, "data": {}})])
+@pytest.mark.parametrize("code_answer", [http_error(503), {"success": True}])
 def test_only_rejected_is_labelled_in_the_map(tctx, index, ri, code_answer):
     index.tool = code_answer
     out = call(tctx, {"text": TEXT, "source": "message"})
@@ -1416,3 +1589,286 @@ def test_only_rejected_is_labelled_in_the_map(tctx, index, ri, code_answer):
     assert "refused" not in ri.lookup(out["intention_id"])
     upd = call(tctx, {"action": "update", "intention_id": out["intention_id"], "text": TEXT + "!"}, tool_call_id="c2")
     assert upd["success"] is True
+
+
+
+# --------------------------------------------------------------------------
+# Refutation fix round (DATA-249)
+# --------------------------------------------------------------------------
+
+from http.server import BaseHTTPRequestHandler, HTTPServer  # noqa: E402
+
+
+class _IndexServer:
+    """A real HTTP server on loopback, for the failures only real sockets show."""
+
+    def __init__(self) -> None:
+        self.mode: Any = (200, {"intentId": INDEX_ID})
+        self.requests: list[tuple[str, str]] = []
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def _any(self) -> None:
+                length = int(self.headers.get("Content-Length") or 0)
+                if length:
+                    self.rfile.read(length)
+                outer.requests.append((self.command, self.path))
+                mode = outer.mode
+                if mode == "close":
+                    # The request arrived; the socket closes with no answer.
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                    self.close_connection = True
+                    return
+                if mode == "cut":
+                    # A 2xx whose body is cut short.
+                    self.send_response(200)
+                    self.send_header("Content-Length", "500")
+                    self.end_headers()
+                    self.wfile.write(b'{"intentId": "')
+                    self.wfile.flush()
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                    self.close_connection = True
+                    return
+                status, payload = mode
+                data = json.dumps(payload).encode()
+                self.send_response(status)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            do_POST = do_PATCH = _any
+
+            def log_message(self, *args: Any) -> None:
+                return None
+
+        self.server = HTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self.server.server_address[1]
+        self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
+        self.thread.start()
+
+    def close(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+
+
+@pytest.fixture()
+def real_index(plugin, on, monkeypatch):
+    """The plugin registered with the real opener, writing to a loopback Index."""
+    server = _IndexServer()
+    monkeypatch.setenv("INDEX_API_URL", f"http://127.0.0.1:{server.port}")
+    monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
+    ctx = ToolFireCtx()
+    plugin.register(ctx)
+    ctx.fire("on_session_start", session_id=SESSION, model="m", platform="telegram")
+    yield ctx, server
+    server.close()
+
+
+@pytest.mark.parametrize(
+    "mode",
+    ["close", "cut", (500, {"error": "Failed to create intent"}), (502, {}), (504, {}), (200, {"intentId": "x:y"})],
+    ids=["closed-after-request", "truncated-2xx", "500", "502", "504", "2xx-bad-id"],
+)
+def test_b1_an_ambiguous_failure_is_timeout_and_a_local_capture(real_index, av, plugin, mode):
+    """B1: Index may have written, so the code is `timeout` (the one the data side
+    reconciles against a later Index capture), never a definite non-publish."""
+    ctx, server = real_index
+    server.mode = mode
+    out = call(ctx, {"text": TEXT, "source": "message"})
+    assert server.requests == [("POST", "/api/intents")]
+    assert out["success"] is True and out["published"] is False
+    assert out["publish_refused"] == "timeout"
+    assert "unknown" in out["message"] and "could not take it" not in out["message"]
+    [event] = intention_events(av, plugin)
+    assert event["event_type"] == "intention.captured"
+    assert event["payload"]["publish_refused"] == "timeout" and event["payload"]["index_intent_id"] is None
+
+
+@pytest.mark.parametrize("status,code", [(400, "http_400"), (401, "http_401"), (403, "http_403"), (404, "http_404"),
+                                         (409, "http_409"), (429, "http_429"), (503, "http_503"), (422, "rejected")])
+def test_b1_a_definite_refusal_keeps_its_code(real_index, status, code):
+    ctx, server = real_index
+    server.mode = (status, {"error": "x"})
+    out = call(ctx, {"text": TEXT, "source": "message"})
+    assert out["publish_refused"] == code and out["published"] is False
+
+
+def test_b1_nothing_sent_is_transport(plugin, on, monkeypatch, real_index):
+    """A refused connection: nothing reached Index."""
+    ctx, server = real_index
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        closed_port = probe.getsockname()[1]
+    monkeypatch.setenv("INDEX_API_URL", f"http://127.0.0.1:{closed_port}")
+    out = call(ctx, {"text": TEXT, "source": "message"})
+    assert out["publish_refused"] == "transport"
+
+
+def test_b1_the_real_server_happy_path(real_index, av, plugin):
+    ctx, server = real_index
+    out = call(ctx, {"text": TEXT, "source": "message"})
+    assert out["published"] is True and out["intention_id"] == INDEX_ID
+
+
+def test_b1_status_code_table(ri):
+    assert [ri.status_code(s) for s in (400, 401, 403, 404, 409, 422, 429, 500, 501, 502, 503, 504, 302)] == [
+        "http_400", "http_401", "http_403", "http_404", "http_409", "rejected", "http_429",
+        "timeout", "timeout", "timeout", "http_503", "timeout", "redirect",
+    ]
+
+
+@pytest.mark.parametrize(
+    "session,platform,code",
+    [
+        ("cron_memsync_20261003_030000", "cron", "held_cron"),
+        ("sess-webhook", "webhook", "held_unknown"),
+        ("sess-api", "api_server", "held_unknown"),
+        ("sess-never-seen", None, "held_unknown"),
+    ],
+)
+def test_b2_a_held_session_cannot_withdraw_a_published_intention(tctx, index, av, plugin, session, platform, code):
+    pub = call(tctx, {"text": TEXT, "source": "message"})
+    assert pub["published"] is True
+    if platform is not None:
+        tctx.fire("on_session_start", session_id=session, model="m", platform=platform)
+    before = intention_events(av, plugin)
+    index.requests.clear()
+    out = call(tctx, {"action": "withdraw", "intention_id": pub["intention_id"]}, session=session, tool_call_id="c2")
+    assert out["success"] is False and out["error"] == code
+    assert "direct chat" in out["message"]
+    assert index.requests == []
+    assert intention_events(av, plugin) == before
+
+
+def test_b2_a_held_session_still_withdraws_a_local_intention(tctx, index, av, plugin):
+    local = call(tctx, {"text": TEXT, "source": "message", "publish": False, "reason": "personal"})
+    tctx.fire("on_session_start", session_id="cron_x_1", model="m", platform="cron")
+    out = call(tctx, {"action": "withdraw", "intention_id": local["intention_id"]}, session="cron_x_1", tool_call_id="c2")
+    assert out["success"] is True and out["published"] is False
+    assert index.requests == []
+    assert intention_events(av, plugin)[-1]["event_type"] == "intention.withdrawn"
+
+
+def test_b2_a_second_withdrawal_does_not_archive_again(tctx, index, av, plugin, ri):
+    pub = call(tctx, {"text": TEXT, "source": "message"})
+    index.tool = {"success": True}
+    first = call(tctx, {"action": "withdraw", "intention_id": pub["intention_id"]}, tool_call_id="c2")
+    second = call(tctx, {"action": "withdraw", "intention_id": pub["intention_id"]}, tool_call_id="c3")
+    assert [c["name"] for c in index.tool_calls()] == ["create_intent", "archive_intent"]
+    assert first["success"] is True and "publish_refused" not in first
+    assert second["success"] is True and "already withdrawn on Index" in second["message"]
+    assert ri.lookup(pub["intention_id"])["archived"] is True
+
+
+def test_b2_a_failed_archive_is_not_marked(tctx, index, ri):
+    pub = call(tctx, {"text": TEXT, "source": "message"})
+    index.tool = http_error(404)
+    out = call(tctx, {"action": "withdraw", "intention_id": pub["intention_id"]}, tool_call_id="c2")
+    assert out["publish_refused"] == "http_404"
+    assert "archived" not in ri.lookup(pub["intention_id"])
+    index.tool = {"success": True}
+    call(tctx, {"action": "withdraw", "intention_id": pub["intention_id"]}, tool_call_id="c3")
+    assert [c["name"] for c in index.tool_calls()] == ["create_intent", "archive_intent", "archive_intent"]
+
+
+@pytest.mark.parametrize("text", ["climbing \ud800 partner", "\udfff", "ok \ud83d"])
+def test_c1_a_lone_surrogate_is_refused_at_the_tool(tctx, index, av, plugin, text):
+    out = call(tctx, {"text": text, "source": "message"})
+    assert out["success"] is False and out["error"] == "text_invalid"
+    pub = call(tctx, {"text": TEXT, "source": "message"}, tool_call_id="c2")
+    index.requests.clear()
+    upd = call(tctx, {"action": "update", "intention_id": pub["intention_id"], "text": text}, tool_call_id="c3")
+    assert upd["success"] is False and upd["error"] == "text_invalid"
+    assert index.requests == []
+    assert [e["event_type"] for e in intention_events(av, plugin)] == ["intention.captured"]
+
+
+def test_c1_a_paired_surrogate_is_fine(tctx, index):
+    """An emoji outside the BMP is one code point in Python; it is not refused."""
+    out = call(tctx, {"text": "climbing partner \U0001f9d7", "source": "message"})
+    assert out["published"] is True
+
+
+
+# --------------------------------------------------------------------------
+# Recheck: a config error never hides behind `timeout`; the held-withdraw wording
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://exa\x01mple.invalid",
+        "https://exa mple.invalid",
+        "https://ex ample.invalid:443",
+        "https://exa\tmple.invalid",
+        "https://exa\nmple.invalid",
+        "https://exa\x7fmple.invalid",
+        "https://exa_mple.invalid",
+        "https://exa%41mple.invalid",
+        "https://[not-an-ip]",
+    ],
+)
+def test_a_hostname_outside_the_dns_alphabet_is_url_refused(tctx, index, monkeypatch, ri, url):
+    monkeypatch.setenv("INDEX_API_URL", url)
+    assert ri.url_allowed(url) is False
+    out = call(tctx, {"text": TEXT, "source": "message"})
+    assert out["publish_refused"] == "url_refused"
+    assert index.requests == []
+
+
+@pytest.mark.parametrize("url", ["https://[::1]", "http://[::1]:3001", "https://10.0.0.7:8443", "https://protocol.index.network"])
+def test_ipv6_ipv4_and_dns_hosts_are_accepted(ri, url):
+    assert ri.url_allowed(url) is True
+
+
+def test_a_blackholed_connect_is_transport_and_logged_as_unreachable(ri, on, monkeypatch, caplog):
+    """Nothing was sent: `transport`, with a log line an operator can act on.
+    10.255.255.1 is not routed; a network that answers at once with
+    unreachable gives the same code."""
+    monkeypatch.setenv("INDEX_API_URL", "https://10.255.255.1")
+    with caplog.at_level(logging.WARNING, logger="av-events"):
+        payload, code = ri.index_request("POST", ri.CREATE_PATH, {"description": TEXT, "sourceType": "agentvillage"},
+                                         timeout=0.3, deadline=10.0)
+    assert (payload, code) == (None, "transport")
+    assert "index_unreachable=" in caplog.text
+    assert KEY not in caplog.text and TEXT not in caplog.text
+
+
+def test_a_connect_timeout_is_logged_as_connect_timeout(tctx, index, caplog):
+    index.tool = urllib.error.URLError(TimeoutError())
+    with caplog.at_level(logging.WARNING, logger="av-events"):
+        out = call(tctx, {"text": TEXT, "source": "message"})
+    assert out["publish_refused"] == "transport"
+    assert "index_unreachable=connect_timeout" in caplog.text
+
+
+def test_the_deadline_logs_how_far_the_worker_got(ri, index, on, monkeypatch, caplog):
+    """When the deadline passes first, whether the request was sent is unknown: the
+    metric gets `timeout` (the safe direction), the log says the phase."""
+    index.gate = threading.Event()
+    monkeypatch.setattr(ri, "_join", lambda worker, deadline: None)
+    try:
+        with caplog.at_level(logging.WARNING, logger="av-events"):
+            got = ri.index_request("POST", ri.CREATE_PATH, {"description": TEXT, "sourceType": "agentvillage"})
+    finally:
+        index.gate.set()
+    assert got == (None, "timeout")
+    assert "index_deadline=opening" in caplog.text
+
+
+def test_the_socket_timeout_is_below_the_deadline(ri):
+    """So a connect that never completes fails inside the worker as `transport`."""
+    assert ri.INDEX_TIMEOUT_S < ri.INDEX_DEADLINE_S
+
+
+@pytest.mark.parametrize("session,platform", [("cron_memsync_20261003_030000", "cron"), ("sess-webhook", "webhook")])
+def test_the_held_withdraw_refusal_says_not_to_archive_another_way(tctx, index, session, platform):
+    pub = call(tctx, {"text": TEXT, "source": "message"})
+    tctx.fire("on_session_start", session_id=session, model="m", platform=platform)
+    out = call(tctx, {"action": "withdraw", "intention_id": pub["intention_id"]}, session=session, tool_call_id="c2")
+    assert out["success"] is False
+    assert "Do not archive or withdraw it another way" in out["message"]
+    assert "archive_intent" in out["message"]
