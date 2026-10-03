@@ -124,6 +124,9 @@ _ARG_ID_KEYS = ("intentId", "id", "intent_id")
 #: The key Index's create, pause, resume and archive results name the intent by.
 RESULT_INTENT_ID_KEY = "intentId"
 
+#: `approved_by` (DATA-212 Lane B): a human's grant, or the resident's policy.
+APPROVED_BY = frozenset({"individual", "rule"})
+
 #: `local_reason` on a `record_intention` capture kept off Index on purpose
 #: (ambient-intents spec §4: "the resident asked, or the content is personal").
 LOCAL_REASONS = frozenset({"participant_asked", "personal"})
@@ -157,6 +160,8 @@ class IntentionCall:
         "publish_refused",
         "local_reason",
         "status_only",
+        "approved_by",
+        "approval_state",
     )
 
     def __init__(
@@ -174,6 +179,8 @@ class IntentionCall:
         publish_refused: Optional[str] = None,
         local_reason: Optional[str] = None,
         status_only: bool = False,
+        approved_by: Optional[str] = None,
+        approval_state: Optional[str] = None,
     ) -> None:
         self.event_type = event_type
         self.intention_id = intention_id
@@ -188,6 +195,11 @@ class IntentionCall:
         self.local_reason = local_reason
         #: DATA-249: a pause or resume, which changes Index's status and no text.
         self.status_only = status_only
+        #: DATA-212 Lane B, `record_intention` through approval.md only: how a
+        #: publish was approved (`individual` | `rule`), and the proposal's
+        #: state. Codes the tool decided; null everywhere else.
+        self.approved_by = approved_by
+        self.approval_state = approval_state
 
 
 # --------------------------------------------------------------------------
@@ -611,6 +623,10 @@ def plan_record(
     local_reason = _result_code(payload_r, outer_r, "local_reason")
     if local_reason not in LOCAL_REASONS:
         local_reason = None
+    approved_by = _result_code(payload_r, outer_r, "approved_by")
+    if approved_by not in APPROVED_BY:
+        approved_by = None
+    approval_state = _result_code(payload_r, outer_r, "approval_state")
 
     text = _text(args.get("text")) or _text(args.get("description"))
     summary = _text(args.get("summary"))
@@ -630,6 +646,8 @@ def plan_record(
             capture_path="record_intention",
             publish_refused=publish_refused,
             local_reason=local_reason,
+            approved_by=approved_by,
+            approval_state=approval_state,
         )
     ]
 
@@ -656,6 +674,7 @@ def plan(tool_name: Any, args: Any, result: Any, status: Any, *, cron: bool = Fa
 
 
 __all__ = [
+    "APPROVED_BY",
     "ID_PATTERN",
     "INDEX_INTENT_TOOLS",
     "INDEX_STATUSES",

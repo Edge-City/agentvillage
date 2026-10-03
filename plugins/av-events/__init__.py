@@ -19,7 +19,7 @@ import re
 import time
 from typing import Any, Optional
 
-from . import _edgeos
+from . import _approval, _edgeos, _intent_approval
 from ._collector import Collector, guarded, hermes_version, overlay_ref
 from ._consent import TOOL_NAME as CONSENT_TOOL_NAME
 from ._consent import register_consent_tool
@@ -587,6 +587,13 @@ def _intention_payload(call: IntentionCall, capture: str, parent_session_id: Opt
         # status alone (both hashes null). Same key as the Index poller's
         # status-only updates; present only on those events.
         payload["status_only"] = True
+    # DATA-212 Lane B: present only on a `record_intention` event that went
+    # through approval.md. `approved_by` = `individual` (a human's grant) or
+    # `rule` (the resident's policy); `approval_state` = the proposal's state.
+    if call.approved_by is not None:
+        payload["approved_by"] = call.approved_by
+    if call.approval_state is not None:
+        payload["approval_state"] = call.approval_state
     if capture != "metadata":
         payload["text_length"] = len(call.text) if call.text else None
         payload["summary_length"] = len(call.summary) if call.summary else None
@@ -662,6 +669,50 @@ def _capture_intentions(collector: Collector, kwargs: dict) -> None:
             intention_id=call.intention_id,
             **refs,
         )
+
+
+def _emit_intention_update(
+    *,
+    intention_id: str,
+    text: Optional[str],
+    source: Optional[str],
+    index_intent_id: Optional[str],
+    publish_refused: Optional[str],
+    approved_by: Optional[str],
+    approval_state: Optional[str],
+) -> None:
+    """DATA-212 Lane B (R20): a held intention published through approval.md
+    after its capture call (by the poller or a `confirm`), or refused by Index
+    then. One `intention.updated` with `index_intent_id`: the alias the data
+    side registers, the poller's `sourceId` read corroborating it. Its
+    `text_hash` is the plain SHA-256 of the exact string sent to Index.
+    Telemetry only: inert when the collector is, and never the publish's
+    record (the daemon's log is)."""
+    collector = _COLLECTOR
+    if collector is None or not collector.config.active:
+        return
+    if not valid_id(intention_id) or (index_intent_id is not None and not valid_id(index_intent_id)):
+        return
+    call = IntentionCall(
+        "intention.updated",
+        intention_id=intention_id,
+        index_intent_id=index_intent_id,
+        text=text,
+        source=source if source in ("message", "onboarding", "note", "ambient") else "ambient",
+        capture_path="record_intention",
+        publish_refused=publish_refused,
+        approved_by=approved_by,
+        approval_state=approval_state,
+    )
+    now = iso_from_epoch(time.time())
+    collector.emit(
+        call.event_type,
+        _intention_payload(call, collector.config.capture, None),
+        occurred_at=now,
+        occurred_at_earliest=now,
+        occurred_at_latest=now,
+        intention_id=intention_id,
+    )
 
 
 def _hook_on_session_end(collector: Collector, **kwargs: Any) -> None:
@@ -863,6 +914,12 @@ def _on_unload() -> None:
     """
     global _COLLECTOR, _REGISTERED
     _REGISTERED = False
+    # Lane B: the approval poller stops with the plugin (its pending state is on disk).
+    try:
+        _approval.stop_poller()
+        _intent_approval.set_emitter(None)
+    except Exception:  # noqa: BLE001 - an unload must never fail on us
+        pass
     collector, _COLLECTOR = _COLLECTOR, None
     if collector is not None:
         try:
@@ -916,8 +973,9 @@ def register(ctx) -> None:
     register_consent_tool(ctx)
     # DATA-212: the intention front door, behind its per-tenant switch. It
     # registers its own session-lineage listeners, outside the collector's
-    # guard, so the cron gate never depends on telemetry being on.
-    register_record_intention_tool(ctx)
+    # guard, so the cron gate never depends on telemetry being on. Lane B: a
+    # publish the approval poller (or a confirm) makes later is emitted here.
+    register_record_intention_tool(ctx, emit=_emit_intention_update)
     # DATA-183: hear about the unload that clears the hooks. Optional in the
     # API (probe, fail open): without it register() behaves as before.
     on_unload = getattr(ctx, "on_unload", None)
