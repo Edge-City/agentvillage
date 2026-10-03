@@ -22,13 +22,31 @@ describe("sanitizeDigestUrls", () => {
     expect(stripped).toEqual(["https://index.network/accept/901"]);
   });
 
-  test("preserves a legitimate /c/<code> connect link including its query string", () => {
-    const md = "[say hi](https://protocol.index.network/c/Abc1234567?link_preview=false)";
+  test("preserves a legitimate /o/<id> opportunity link including its query string", () => {
+    const md = "[say hi](https://index.network/o/Abc1234567?link_preview=false)";
 
     const { output, stripped } = sanitizeDigestUrls(md);
 
     expect(output).toBe(md);
     expect(stripped).toEqual([]);
+  });
+
+  test("preserves a legitimate /i/<id> signal link", () => {
+    const md = "[your signal](https://index.network/i/intent-77?link_preview=false)";
+
+    const { output, stripped } = sanitizeDigestUrls(md);
+
+    expect(output).toBe(md);
+    expect(stripped).toEqual([]);
+  });
+
+  test("strips a /c/<code> connect redirect: it is not the opportunity link", () => {
+    const md = "[say hi](https://protocol.index.network/c/Abc1234567?link_preview=false)";
+
+    const { output, stripped } = sanitizeDigestUrls(md);
+
+    expect(output).toBe("say hi");
+    expect(stripped).toEqual(["https://protocol.index.network/c/Abc1234567?link_preview=false"]);
   });
 
   test("preserves a legitimate /u/<uuid> profile link", () => {
@@ -40,8 +58,8 @@ describe("sanitizeDigestUrls", () => {
     expect(stripped).toEqual([]);
   });
 
-  test("accepts /c/ and /u/ links regardless of host (dev/railway bases)", () => {
-    const md = "[a](https://index-protocol-dev.up.railway.app/c/Xy_9-aBcDe) and [b](http://localhost:3001/u/33333333-3333-3333-3333-333333333333)";
+  test("accepts /o/, /i/ and /u/ links regardless of host (dev/railway bases)", () => {
+    const md = "[a](https://index-protocol-dev.up.railway.app/o/Xy_9-aBcDe) and [b](http://localhost:3001/u/33333333-3333-3333-3333-333333333333) and [c](https://index-protocol-dev.up.railway.app/i/Xy_9-aBcDe)";
 
     const { output, stripped } = sanitizeDigestUrls(md);
 
@@ -97,7 +115,7 @@ describe("sanitizeDigestUrls", () => {
     });
   });
 
-  test("strips fabricated path shapes other than /c/, /u/, and known event links", () => {
+  test("strips fabricated path shapes other than /u/, /o/, /i/, /chat/, and known event links", () => {
     const md = "[x](https://index.network/profile/42) [y](https://index.network/opportunity/create?id=7) [z](https://index.network/connect/8)";
 
     const { output, stripped } = sanitizeDigestUrls(md);
@@ -128,14 +146,14 @@ describe("sanitizeDigestUrls", () => {
     expect(stripped).toEqual([]);
   });
 
-  test("on one bullet, keeps the legitimate /c/ link and strips the fabricated one beside it", () => {
-    // The grouped-card shape from prepare.md step 8: one real connect link and one
+  test("on one bullet, keeps the legitimate /o/ link and strips the fabricated one beside it", () => {
+    // The grouped-card shape from prepare.md: one real opportunity link and one
     // fabricated link on the same line. Only the fabricated one must be demoted.
-    const md = "- [Maya](https://protocol.index.network/c/Abc1234567?link_preview=false) on memory, and [more](https://index.network/accept/901)";
+    const md = "- [Maya](https://index.network/o/Abc1234567?link_preview=false) on memory, and [more](https://index.network/accept/901)";
 
     const { output, stripped } = sanitizeDigestUrls(md);
 
-    expect(output).toBe("- [Maya](https://protocol.index.network/c/Abc1234567?link_preview=false) on memory, and more");
+    expect(output).toBe("- [Maya](https://index.network/o/Abc1234567?link_preview=false) on memory, and more");
     expect(stripped).toEqual(["https://index.network/accept/901"]);
   });
 
@@ -160,8 +178,8 @@ describe("sanitizeDigestUrls", () => {
     expect(stripped).toEqual(["https://index.network/accept/901"]);
   });
 
-  test("does not treat a trailing-slash /c/ or /u/ path as fabricated", () => {
-    const md = "[a](https://index.network/c/Abc1234567/) [b](https://index.network/u/44444444-4444-4444-4444-444444444444/)";
+  test("does not treat a trailing-slash /o/, /i/ or /u/ path as fabricated", () => {
+    const md = "[a](https://index.network/o/Abc1234567/) [b](https://index.network/u/44444444-4444-4444-4444-444444444444/) [c](https://index.network/i/Abc1234567/)";
 
     const { output, stripped } = sanitizeDigestUrls(md);
 

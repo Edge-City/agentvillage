@@ -74,7 +74,7 @@ describe("sendDailyBrief", () => {
     const calls: string[][] = [];
     const body = [
       "🌞 Good morning",
-      "[Maya](https://index.network/u/11111111-1111-1111-1111-111111111111) — relevant overlap, [say hi](https://protocol.index.network/c/abc123)",
+      "[Maya](https://index.network/u/11111111-1111-1111-1111-111111111111) — relevant overlap, [say hi](https://index.network/o/opp-1)",
       "[fabricated](https://index.network/accept/123)",
     ].join("\n");
 
@@ -105,7 +105,7 @@ describe("sendDailyBrief", () => {
     expect(result.confirmedOpportunityIds).toEqual(["opp-1"]);
     expect(result.confirmFailed).toEqual([]);
     expect(result.finalBrief).toContain("[Maya](https://index.network/u/11111111-1111-1111-1111-111111111111)");
-    expect(result.finalBrief).toContain("[say hi](https://protocol.index.network/c/abc123)");
+    expect(result.finalBrief).toContain("[say hi](https://index.network/o/opp-1)");
     expect(result.finalBrief).toContain("fabricated");
     expect(result.finalBrief).not.toContain("digest-opportunity");
     expect(result.finalBrief).not.toContain("accept/123");
