@@ -23,7 +23,8 @@ export type ToolReply =
   | string
   | { result: Record<string, unknown> }
   | { response: Response };
-export type ToolHandler = (args: Record<string, unknown>) => ToolReply | Promise<ToolReply>;
+/** `id` is the request's JSON-RPC id, for handlers that build their own response. */
+export type ToolHandler = (args: Record<string, unknown>, request: { id: unknown }) => ToolReply | Promise<ToolReply>;
 
 export interface FakeCall {
   url: string;
@@ -125,7 +126,7 @@ export function indexMcpFake(options: { tools?: Record<string, ToolHandler>; url
     // Not probed: how an unknown tool is answered. A JSON-RPC error is the fake's choice.
     if (!INDEX_TOOLS.includes(name)) return rpcError(id, 200, -32602, "Unknown tool");
     const handler = tools[name] ?? (() => "");
-    const reply = await handler(asRecord(params.arguments) ?? {});
+    const reply = await handler(asRecord(params.arguments) ?? {}, { id });
     if (typeof reply === "string") {
       return Response.json({
         jsonrpc: "2.0",

@@ -199,43 +199,36 @@ describe("indexMcpRequest / callIndexTool against the fake", () => {
   test("reads a text/event-stream answer carrying one JSON-RPC message", async () => {
     const fake = indexMcpFake({
       tools: {
-        list_intents: () => ({
-          response: eventStream({ jsonrpc: "2.0", id: -1, result: {} }),
+        list_intents: (_args, { id }) => ({
+          response: eventStream(
+            { jsonrpc: "2.0", method: "notifications/progress", params: { progress: 1 } },
+            { jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "from the stream" }], resultType: "complete" } },
+          ),
         }),
       },
     });
-    // The id is unknown until the request is built, so echo it from the recorded call.
-    const echo = indexMcpFake({
-      tools: {
-        list_intents: () => {
-          const id = echo.calls.at(-1)?.body?.id;
-          return {
-            response: eventStream(
-              { jsonrpc: "2.0", method: "notifications/progress", params: { progress: 1 } },
-              { jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "from the stream" }], resultType: "complete" } },
-            ),
-          };
-        },
-      },
+    expect(await callIndexTool({ apiKey: FAKE_API_KEY, mcpUrl: fake.url, fetch: fake.fetch }, "list_intents")).toBe("from the stream");
+  });
+
+  test("a stream whose only answer has another id is not this request's answer", async () => {
+    const fake = indexMcpFake({
+      tools: { list_intents: () => ({ response: eventStream({ jsonrpc: "2.0", id: -1, result: { content: [], resultType: "complete" } }) }) },
     });
-    expect(await callIndexTool({ apiKey: FAKE_API_KEY, mcpUrl: echo.url, fetch: echo.fetch }, "list_intents")).toBe("from the stream");
-    // A stream whose only answer has the wrong id is not this request's answer.
     expect((await failure(callIndexTool({ apiKey: FAKE_API_KEY, mcpUrl: fake.url, fetch: fake.fetch }, "list_intents"))).code).toBe(
       "mcp-bad-response",
     );
   });
 
   test("reads data: lines without a space after the colon", async () => {
-    const echo = indexMcpFake({
+    const fake = indexMcpFake({
       tools: {
-        list_intents: () => {
-          const id = echo.calls.at(-1)?.body?.id;
+        list_intents: (_args, { id }) => {
           const message = { jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "tight" }], resultType: "complete" } };
           return { response: new Response(`data:${JSON.stringify(message)}\n`, { headers: { "content-type": "text/event-stream" } }) };
         },
       },
     });
-    expect(await callIndexTool({ apiKey: FAKE_API_KEY, mcpUrl: echo.url, fetch: echo.fetch }, "list_intents")).toBe("tight");
+    expect(await callIndexTool({ apiKey: FAKE_API_KEY, mcpUrl: fake.url, fetch: fake.fetch }, "list_intents")).toBe("tight");
   });
 
   test("an empty content list is an empty text, not a failure", async () => {

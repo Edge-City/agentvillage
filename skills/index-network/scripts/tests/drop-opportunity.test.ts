@@ -1,0 +1,82 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { dropOpportunity } from "../drop-opportunity";
+import { FAKE_MCP_URL, indexMcpFake } from "./index-mcp-fake";
+
+const MAYA_OPP = "bbbbbbbb-0000-4000-8000-000000000001";
+const JON_OPP = "bbbbbbbb-0000-4000-8000-000000000002";
+
+const originalFetch = globalThis.fetch;
+const dirs: string[] = [];
+
+function stateFile(): string {
+  const dir = mkdtempSync(join(tmpdir(), "drop-opportunity-"));
+  dirs.push(dir);
+  return join(dir, "state.json");
+}
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  while (dirs.length) rmSync(dirs.pop() as string, { recursive: true, force: true });
+});
+
+describe("dropOpportunity", () => {
+  test("drops the best card not delivered today, records it locally, and makes only the list call", async () => {
+    const file = stateFile();
+    await Bun.write(file, JSON.stringify({ deliveredToday: { date: "2026-10-12", ids: [MAYA_OPP] }, dreaming: { lastRunDate: "2026-10-12" } }));
+    const fake = indexMcpFake();
+    globalThis.fetch = fake.fetch;
+
+    const result = await dropOpportunity({ date: "2026-10-12", stateFile: file, apiKey: "test-key", mcpUrl: FAKE_MCP_URL });
+
+    if ("silent" in result) throw new Error(`unexpected silent result: ${result.reason}`);
+    expect(result.opportunity).toMatchObject({
+      name: "Jon",
+      opportunityId: JON_OPP,
+      opportunityUrl: `https://index.network/o/${JON_OPP}`,
+      userUrl: "https://index.network/u/cccccccc-0000-4000-8000-000000000002",
+    });
+    expect(fake.calls.map((call) => [call.method, call.name, call.status])).toEqual([["tools/call", "list_opportunities", 200]]);
+    const state = JSON.parse(await Bun.file(file).text());
+    expect(state.deliveredToday).toEqual({ date: "2026-10-12", ids: [MAYA_OPP, JON_OPP] });
+    expect(state.dreaming).toEqual({ lastRunDate: "2026-10-12" });
+  });
+
+  test("is silent when everything listed was already delivered today", async () => {
+    const file = stateFile();
+    await Bun.write(file, JSON.stringify({ deliveredToday: { date: "2026-10-12", ids: [MAYA_OPP, JON_OPP] } }));
+    globalThis.fetch = indexMcpFake().fetch;
+
+    const result = await dropOpportunity({ date: "2026-10-12", stateFile: file, apiKey: "test-key", mcpUrl: FAKE_MCP_URL });
+
+    expect(result).toEqual({ silent: true, reason: "nothing-new" });
+  });
+
+  test("is silent without a key and never calls out", async () => {
+    let called = false;
+    globalThis.fetch = (async () => {
+      called = true;
+      throw new Error("no call expected");
+    }) as unknown as typeof fetch;
+
+    const result = await dropOpportunity({ date: "2026-10-12", stateFile: stateFile(), apiKey: "" });
+
+    expect(result).toEqual({ silent: true, reason: "no-api-key" });
+    expect(called).toBe(false);
+  });
+
+  test("an Index failure rejects with a code and records nothing", async () => {
+    const file = stateFile();
+    globalThis.fetch = indexMcpFake({
+      tools: { list_opportunities: () => ({ result: { content: [{ type: "text", text: "private detail" }], isError: true } }) },
+    }).fetch;
+
+    await expect(
+      dropOpportunity({ date: "2026-10-12", stateFile: file, apiKey: "test-key", mcpUrl: FAKE_MCP_URL }),
+    ).rejects.toThrow("mcp-tool-error");
+    expect(existsSync(file)).toBe(false);
+  });
+});

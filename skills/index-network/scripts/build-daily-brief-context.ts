@@ -18,6 +18,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import { callIndexTool, indexMcpUrl } from "./index-mcp";
 import { portalEventsBaseUrl } from "./validate-digest-urls";
 
 /**
@@ -859,60 +860,6 @@ function argValue(args: string[], name: string): string | undefined {
   return idx >= 0 ? args[idx + 1] : undefined;
 }
 
-type McpJsonRpcResponse = {
-  jsonrpc: "2.0";
-  id: number;
-  result?: unknown;
-  error?: { code: number; message: string };
-};
-
-type McpToolResult = {
-  content?: Array<{ type: string; text?: string }>;
-};
-
-async function postMcpMessage(mcpUrl: string, apiKey: string, body: unknown): Promise<McpJsonRpcResponse> {
-  const res = await fetch(mcpUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Accept": "application/json, text/event-stream",
-      "x-api-key": apiKey,
-      // The digest is always delivered over Telegram (Hermes). Without this
-      // header the MCP server coerces the surface to "web", which stamps
-      // minted connect links with preferredSurface=web and breaks the
-      // click-time t.me deep-link redirect (links land on the web chat
-      // fallback instead of opening Telegram). Mirrors install_index.ts's
-      // buildIndexMcpHeaders.
-      "x-index-surface": "telegram",
-    },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`MCP HTTP ${res.status}: ${res.statusText}`);
-
-  const contentType = res.headers.get("content-type") ?? "";
-  if (contentType.includes("text/event-stream")) {
-    const text = await res.text();
-    let response: McpJsonRpcResponse | null = null;
-    for (const line of text.split("\n")) {
-      // SSE spec allows "data:value" with or without the space after the colon.
-      const dataLine = line.startsWith("data: ") ? line.slice(6)
-                     : line.startsWith("data:") ? line.slice(5)
-                     : null;
-      if (dataLine !== null) {
-        try {
-          const msg = JSON.parse(dataLine) as McpJsonRpcResponse;
-          // Keep only JSON-RPC responses (have result or error); skip notifications.
-          if ("result" in msg || "error" in msg) response = msg;
-        } catch { /* skip non-JSON or comment lines */ }
-      }
-    }
-    if (response) return response;
-    throw new Error("no JSON-RPC response in MCP SSE stream");
-  }
-
-  return (await res.json()) as McpJsonRpcResponse;
-}
-
 /**
  * Fetch opportunities by calling Index `list_opportunities` directly.
  * Pending cards are the ones waiting on the user. The tool returns a markdown
@@ -922,29 +869,7 @@ export async function fetchOpportunitiesFromMcp(opts: {
   apiKey: string;
   mcpUrl: string;
 }): Promise<BriefOpportunity[]> {
-  // Per MCP spec, send initialize before any tool calls.
-  const initResp = await postMcpMessage(opts.mcpUrl, opts.apiKey, {
-    jsonrpc: "2.0",
-    id: 1,
-    method: "initialize",
-    params: {
-      protocolVersion: "2024-11-05",
-      capabilities: {},
-      clientInfo: { name: "agentvillage-digest", version: "1.0.0" },
-    },
-  });
-  if (initResp.error) throw new Error(`MCP initialize: ${initResp.error.message}`);
-
-  const toolResp = await postMcpMessage(opts.mcpUrl, opts.apiKey, {
-    jsonrpc: "2.0",
-    id: 2,
-    method: "tools/call",
-    params: { name: "list_opportunities", arguments: { statuses: ["pending"], limit: 20 } },
-  });
-  if (toolResp.error) throw new Error(`MCP list_opportunities: ${toolResp.error.message}`);
-
-  const result = toolResp.result as McpToolResult | undefined;
-  const text = result?.content?.find((c) => c.type === "text")?.text ?? "";
+  const text = await callIndexTool(opts, "list_opportunities", { statuses: ["pending"], limit: 20 });
   if (!text.trim()) return [];
 
   try {
@@ -989,7 +914,7 @@ export async function buildDailyBriefContext(options: {
   let dreamingFresh = false;
 
   const apiKey = resolveIndexApiKey();
-  const mcpUrl = process.env.INDEX_MCP_URL?.trim() || "https://protocol.index.network/mcp";
+  const mcpUrl = indexMcpUrl();
   const stateFile = options.stateFile ?? "memory/heartbeat-state.json";
 
   if (apiKey) {

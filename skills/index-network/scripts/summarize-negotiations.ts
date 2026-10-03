@@ -27,62 +27,7 @@
 import { existsSync } from "node:fs";
 
 import { attachIndexLinks, parseListedOpportunities, resolveIndexApiKey, type BriefOpportunity } from "./build-daily-brief-context";
-
-// ── MCP plumbing ──────────────────────────────────────────────────────────────
-
-type McpJsonRpcResponse = {
-  jsonrpc: "2.0";
-  id: number;
-  result?: unknown;
-  error?: { code: number; message: string };
-};
-
-type McpToolResult = {
-  content?: Array<{ type: string; text?: string }>;
-};
-
-async function postMcpMessage(
-  mcpUrl: string,
-  apiKey: string,
-  body: unknown,
-): Promise<McpJsonRpcResponse> {
-  const res = await fetch(mcpUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json, text/event-stream",
-      "x-api-key": apiKey,
-      "x-index-surface": "telegram",
-    },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`MCP HTTP ${res.status}: ${res.statusText}`);
-
-  const contentType = res.headers.get("content-type") ?? "";
-  if (contentType.includes("text/event-stream")) {
-    const text = await res.text();
-    let response: McpJsonRpcResponse | null = null;
-    for (const line of text.split("\n")) {
-      const dataLine = line.startsWith("data: ")
-        ? line.slice(6)
-        : line.startsWith("data:")
-          ? line.slice(5)
-          : null;
-      if (dataLine !== null) {
-        try {
-          const msg = JSON.parse(dataLine) as McpJsonRpcResponse;
-          if ("result" in msg || "error" in msg) response = msg;
-        } catch {
-          // skip non-JSON or comment lines
-        }
-      }
-    }
-    if (response) return response;
-    throw new Error("no JSON-RPC response in MCP SSE stream");
-  }
-
-  return (await res.json()) as McpJsonRpcResponse;
-}
+import { callIndexTool, indexMcpUrl } from "./index-mcp";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -314,29 +259,6 @@ function followUpCard(opp: BriefOpportunity): FollowUpCard | null {
   };
 }
 
-async function callIndexTool(apiKey: string, mcpUrl: string, name: string, args: Record<string, unknown>, id: number): Promise<string> {
-  const initResp = await postMcpMessage(mcpUrl, apiKey, {
-    jsonrpc: "2.0",
-    id: 1,
-    method: "initialize",
-    params: {
-      protocolVersion: "2024-11-05",
-      capabilities: {},
-      clientInfo: { name: "agentvillage-negotiation-summary", version: "1.0.0" },
-    },
-  });
-  if (initResp.error) throw new Error(`MCP initialize: ${initResp.error.message}`);
-  const toolResp = await postMcpMessage(mcpUrl, apiKey, {
-    jsonrpc: "2.0",
-    id,
-    method: "tools/call",
-    params: { name, arguments: args },
-  });
-  if (toolResp.error) throw new Error(`MCP ${name}: ${toolResp.error.message}`);
-  const result = toolResp.result as McpToolResult | undefined;
-  return result?.content?.find((c) => c.type === "text")?.text ?? "";
-}
-
 function intentsFrom(text: string): Array<{ summary: string; url?: string }> {
   const start = text.search(/^\s*\{/m);
   if (start < 0) return [];
@@ -356,7 +278,7 @@ function intentsFrom(text: string): Array<{ summary: string; url?: string }> {
   }
 }
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const stateFile = argValue(args, "--state-file") ?? "memory/heartbeat-state.json";
 
@@ -366,16 +288,16 @@ async function main(): Promise<void> {
     return;
   }
 
-  const mcpUrl = process.env.INDEX_MCP_URL?.trim() || "https://protocol.index.network/mcp";
+  const target = { apiKey, mcpUrl: indexMcpUrl() };
   let cards: BriefOpportunity[] = [];
   let signals: Array<{ summary: string; url?: string }> = [];
   try {
-    const opportunityText = await callIndexTool(apiKey, mcpUrl, "list_opportunities", {
+    const opportunityText = await callIndexTool(target, "list_opportunities", {
       statuses: ["pending", "negotiating", "accepted"],
       limit: 50,
-    }, 2);
+    });
     cards = parseListedOpportunities(opportunityText) ?? [];
-    const intentText = await callIndexTool(apiKey, mcpUrl, "list_intents", { limit: 20 }, 3);
+    const intentText = await callIndexTool(target, "list_intents", { limit: 20 });
     signals = intentsFrom(intentText);
   } catch (err) {
     process.stderr.write(

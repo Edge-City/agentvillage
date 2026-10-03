@@ -5,9 +5,11 @@ import { join } from "node:path";
 
 import {
   type NegotiationItem,
+  main,
   summarizeNegotiations,
   updatedWithinDays,
 } from "../summarize-negotiations";
+import { FAKE_MCP_URL, type ToolHandler, indexMcpFake, listOpportunitiesText } from "./index-mcp-fake";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -491,5 +493,91 @@ describe("summarizeNegotiations", () => {
     expect(result.context.needsAttention.map((n) => n.id)).toEqual(["aaa-1"]);
     expect(result.context.waiting.map((n) => n.id)).toEqual(["aaa-2"]);
     expect(result.context.newlyResolved.map((n) => n.id)).toEqual(["aaa-3"]);
+  });
+});
+
+// ── main(): the live follow-up path ───────────────────────────────────────────
+
+describe("main", () => {
+  const saved = { key: process.env.INDEX_API_KEY, url: process.env.INDEX_MCP_URL, argv: process.argv, fetch: globalThis.fetch };
+
+  afterEach(() => {
+    if (saved.key === undefined) delete process.env.INDEX_API_KEY;
+    else process.env.INDEX_API_KEY = saved.key;
+    if (saved.url === undefined) delete process.env.INDEX_MCP_URL;
+    else process.env.INDEX_MCP_URL = saved.url;
+    process.argv = saved.argv;
+    globalThis.fetch = saved.fetch;
+  });
+
+  function opp(name: string, status: string, n: number) {
+    const id = `bbbbbbbb-0000-4000-8000-00000000000${n}`;
+    const userId = `cccccccc-0000-4000-8000-00000000000${n}`;
+    return {
+      id,
+      url: `https://index.network/o/${id}`,
+      status,
+      viewerRole: "party",
+      headline: `${name} headline`,
+      summary: `${name} summary`,
+      peer: { name, userId, url: `https://index.network/u/${userId}` },
+    };
+  }
+
+  async function run(tools: Record<string, ToolHandler>) {
+    tempWorkspace();
+    process.env.INDEX_API_KEY = "test-key";
+    process.env.INDEX_MCP_URL = FAKE_MCP_URL;
+    process.argv = [...saved.argv.slice(0, 2), "--state-file", "state.json"];
+    const fake = indexMcpFake({ tools });
+    globalThis.fetch = fake.fetch;
+    let out = "";
+    let err = "";
+    const write = { out: process.stdout.write, err: process.stderr.write };
+    process.stdout.write = ((chunk: string) => { out += chunk; return true; }) as typeof process.stdout.write;
+    process.stderr.write = ((chunk: string) => { err += chunk; return true; }) as typeof process.stderr.write;
+    try {
+      await main();
+    } finally {
+      process.stdout.write = write.out;
+      process.stderr.write = write.err;
+    }
+    return { out, err, fake };
+  }
+
+  test("lists opportunities and signals through the current revision and groups the cards", async () => {
+    const { out, fake } = await run({
+      list_opportunities: () => listOpportunitiesText([opp("Maya", "pending", 1), opp("Jon", "negotiating", 2), opp("Ana", "accepted", 3)]),
+    });
+    expect(fake.calls.map((call) => [call.method, call.name, call.arguments, call.status])).toEqual([
+      ["tools/call", "list_opportunities", { statuses: ["pending", "negotiating", "accepted"], limit: 50 }, 200],
+      ["tools/call", "list_intents", { limit: 20 }, 200],
+    ]);
+    const parsed = JSON.parse(out);
+    expect(parsed.signals).toEqual([
+      { summary: "Looking for people building agent memory", url: "https://index.network/i/aaaaaaaa-0000-4000-8000-000000000001" },
+      { summary: "Open to co-hosting a village dinner", url: "https://index.network/i/aaaaaaaa-0000-4000-8000-000000000002" },
+    ]);
+    expect(parsed.needsAttention.map((card: { name: string }) => card.name)).toEqual(["Maya"]);
+    expect(parsed.waiting.map((card: { name: string }) => card.name)).toEqual(["Jon"]);
+    expect(parsed.newlyResolved).toEqual([{
+      name: "Ana",
+      headline: "Ana headline",
+      summary: "Ana summary",
+      userUrl: "https://index.network/u/cccccccc-0000-4000-8000-000000000003",
+      opportunityUrl: "https://index.network/o/bbbbbbbb-0000-4000-8000-000000000003",
+    }]);
+    const state = JSON.parse(await Bun.file("state.json").text());
+    expect(state.negotiationSummary.reportedCompletedIds).toEqual(["bbbbbbbb-0000-4000-8000-000000000003"]);
+  });
+
+  test("a failed Index call is silent, with only a code on stderr", async () => {
+    const { out, err } = await run({
+      list_opportunities: () => ({ result: { content: [{ type: "text", text: "private detail" }], isError: true } }),
+    });
+    expect(out).toBe("[SILENT]");
+    expect(err).toContain("mcp-tool-error");
+    expect(err).not.toContain("private detail");
+    expect(err).not.toContain("test-key");
   });
 });

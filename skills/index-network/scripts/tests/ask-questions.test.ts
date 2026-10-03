@@ -4,11 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { askQuestions } from "../ask-questions";
+import { FAKE_MCP_URL, indexMcpFake, listOpportunitiesText } from "./index-mcp-fake";
 
 const originalCwd = process.cwd();
 const originalFetch = globalThis.fetch;
 const originalMcpUrl = process.env.INDEX_MCP_URL;
-const MCP_URL = "https://test.example.com/mcp";
+const MCP_URL = FAKE_MCP_URL;
 
 function tempWorkspace(): string {
   const dir = mkdtempSync(join(tmpdir(), "ask-questions-"));
@@ -40,21 +41,14 @@ function card(name: string, headline: string, id: string, userId: string) {
 }
 
 function listText(cards: ReturnType<typeof card>[]): string {
-  return JSON.stringify({ success: true, opportunities: cards });
+  return listOpportunitiesText(cards);
 }
 
 function mockList(text: string) {
   process.env.INDEX_MCP_URL = MCP_URL;
-  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-    const body = JSON.parse(init?.body as string ?? "{}") as { method: string };
-    if (body.method === "initialize") {
-      return Response.json({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", capabilities: {} } });
-    }
-    if (body.method === "tools/call") {
-      return Response.json({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text }] } });
-    }
-    throw new Error(`unexpected method: ${body.method}`);
-  }) as typeof fetch;
+  const fake = indexMcpFake({ tools: { list_opportunities: () => text } });
+  globalThis.fetch = fake.fetch;
+  return fake;
 }
 
 const MAYA_CARD = {
@@ -96,12 +90,25 @@ describe("askQuestions", () => {
 
   test("returns the first pending card", async () => {
     tempWorkspace();
-    mockList(listText([
+    const fake = mockList(listText([
       card("Maya", "memory systems", "opp-maya", MAYA_ID),
       card("Jon", "village tools", "opp-jon", JON_ID),
     ]));
     const result = await askQuestions({ date: "2026-06-17", stateFile: "state.json", apiKey: "test-key" });
     expect(result).toEqual(MAYA_CARD);
+    expect(fake.calls.map((call) => [call.method, call.name, call.status])).toEqual([["tools/call", "list_opportunities", 200]]);
+  });
+
+  test("returns silent, recording nothing, when the tool reports an error", async () => {
+    tempWorkspace();
+    process.env.INDEX_MCP_URL = MCP_URL;
+    const text = listText([card("Maya", "memory systems", "opp-maya", MAYA_ID)]);
+    globalThis.fetch = indexMcpFake({
+      tools: { list_opportunities: () => ({ result: { content: [{ type: "text", text }], isError: true } }) },
+    }).fetch;
+    const result = await askQuestions({ date: "2026-06-17", stateFile: "state.json", apiKey: "test-key" });
+    expect(result).toEqual({ silent: true, reason: "nothing-waiting" });
+    expect(await Bun.file("state.json").exists()).toBe(false);
   });
 
   test("skips a card already delivered today", async () => {
