@@ -149,11 +149,20 @@ class _Answer:
         return None
 
 
+def success_body(name: str, sent: dict | None) -> dict:
+    """A 2xx body for a contract write, with exactly its `success_keys`."""
+    values = {"intentId": INDEX_ID, "networkIds": [], "success": True, "description": "x",
+              "sourceType": (sent or {}).get("sourceType"), "sourceId": (sent or {}).get("sourceId")}
+    return {key: values[key] for key in REST[name]["success_keys"]}
+
+
 class Recorder:
-    """Records every request the module sends and answers as Index main does."""
+    """Records every request the module sends and answers as Index main does:
+    a 2xx body with the write's `success_keys`, or `fail_status` when set."""
 
     def __init__(self) -> None:
         self.requests: list[dict] = []
+        self.fail_status: int | None = None
 
     def open(self, request, timeout=None):  # noqa: ANN001
         parts = urllib.parse.urlsplit(request.full_url)
@@ -165,14 +174,12 @@ class Recorder:
             "raw": request.data,
             "headers": {k.lower(): v for k, v in request.header_items()},
         })
+        if self.fail_status is not None:
+            raise urllib.error.HTTPError(request.full_url, self.fail_status, "x", {}, io.BytesIO(b'{"error":"x"}'))
         name = rest_match(request.get_method(), parts.path)
-        if name == "create":
-            sent = json.loads(request.data.decode())
-            return _Answer({"intentId": INDEX_ID, "networkIds": [], "sourceType": sent.get("sourceType"),
-                            "sourceId": sent.get("sourceId")})
-        if name == "archive":
-            return _Answer({"success": True})
-        return _Answer({"intentId": INDEX_ID, "description": "x", "sourceType": None, "sourceId": None})
+        assert name is not None, (request.get_method(), parts.path)
+        sent = json.loads(request.data.decode()) if request.data is not None else None
+        return _Answer(success_body(name, sent))
 
 
 @pytest.fixture()
@@ -181,13 +188,45 @@ def ri(plugin, av):
 
 
 @pytest.fixture()
-def recorded(ri, monkeypatch, home):
+def recorder(ri, monkeypatch, home):
     recorder = Recorder()
     monkeypatch.setattr(ri, "_OPENER", recorder)
     monkeypatch.setenv("AV_RECORD_INTENTION", "1")
     monkeypatch.setenv("INDEX_API_KEY", "contract-test-key-0123456789")
     ri.note_platform(SESSION, "telegram")
+    return recorder
+
+
+@pytest.fixture()
+def recorded(recorder):
     return recorder.requests
+
+
+#: The overlay call that reaches each contract write.
+_CALLS = {
+    "create": lambda ri: ri.publish_intent(TEXT)[1],
+    "update": lambda ri: ri.mirror_update(INDEX_ID, description=TEXT),
+    "archive": lambda ri: ri.mirror_update(INDEX_ID, archive=True),
+}
+
+
+@pytest.mark.parametrize("name,status", [(n, s) for n, spec in REST.items() for s in spec["error_statuses"]])
+def test_every_documented_error_status_yields_its_code(ri, recorder, name, status):
+    """F: each status a route can answer maps to a code, never an exception: 422 is
+    `rejected`, a 5xx but 503 the ambiguous `timeout`, anything else `http_<n>`."""
+    recorder.fail_status = status
+    code = _CALLS[name](ri)
+    expected = "rejected" if status == 422 else ("timeout" if status >= 500 and status != 503 else f"http_{status}")
+    assert code == expected
+    assert [rest_match(r["method"], r["path"]) for r in recorder.requests] == [name]
+
+
+@pytest.mark.parametrize("name", list(REST))
+def test_a_success_body_with_exactly_the_documented_keys_is_success(ri, recorder, name):
+    """F: the Recorder answers with only the write's `success_keys`; that is enough."""
+    assert _CALLS[name](ri) is None
+    if name == "create":
+        assert ri.publish_intent(TEXT) == (INDEX_ID, None)
 
 
 def _drive_every_path(ri) -> None:
@@ -306,3 +345,9 @@ def test_agent_text_names_only_index_intent_tools(ri):
         for key in _KWARG.findall(args) if key not in CONTRACT[name]["input"]["properties"]
     })
     assert bad_args == []
+    # F: Index's schema requires the literal `confirm: true` on every archive.
+    archives = [(path.name, args) for path, text in texts for name, args in _CALL.findall(text) if name == "archive_intent"]
+    assert archives, "no documented archive_intent call to check"
+    unconfirmed = [f"{name}: archive_intent({args})" for name, args in archives
+                   if not re.search(r"\bconfirm\s*=\s*true\b", args, re.IGNORECASE)]
+    assert unconfirmed == []
