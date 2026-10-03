@@ -583,8 +583,13 @@ def test_index_refusal_is_a_local_capture_with_the_code(tctx, index, av, plugin,
         (ConnectionResetError(54, "reset"), "timeout"),
         (http.client.IncompleteRead(b"{\"intentId\": \""), "timeout"),
         (OSError("read failed"), "timeout"),
+        # A raw socket timeout comes from waiting for the answer: after the send.
         (TimeoutError(), "timeout"),
-        (urllib.error.URLError(TimeoutError()), "timeout"),
+        # urllib wraps a connect timeout in URLError: nothing was sent.
+        (urllib.error.URLError(TimeoutError()), "transport"),
+        # A config error found while opening, before the send.
+        (http.client.InvalidURL("nonnumeric port"), "url_refused"),
+        (ValueError("unknown url type"), "url_refused"),
     ],
 )
 def test_transport_failure_is_a_local_capture(tctx, index, av, plugin, exc, code):
@@ -1786,3 +1791,86 @@ def test_c1_a_paired_surrogate_is_fine(tctx, index):
     """An emoji outside the BMP is one code point in Python; it is not refused."""
     out = call(tctx, {"text": "climbing partner \U0001f9d7", "source": "message"})
     assert out["published"] is True
+
+
+
+# --------------------------------------------------------------------------
+# Recheck: a config error never hides behind `timeout`; the held-withdraw wording
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://exa\x01mple.invalid",
+        "https://exa mple.invalid",
+        "https://ex ample.invalid:443",
+        "https://exa\tmple.invalid",
+        "https://exa\nmple.invalid",
+        "https://exa\x7fmple.invalid",
+        "https://exa_mple.invalid",
+        "https://exa%41mple.invalid",
+        "https://[not-an-ip]",
+    ],
+)
+def test_a_hostname_outside_the_dns_alphabet_is_url_refused(tctx, index, monkeypatch, ri, url):
+    monkeypatch.setenv("INDEX_API_URL", url)
+    assert ri.url_allowed(url) is False
+    out = call(tctx, {"text": TEXT, "source": "message"})
+    assert out["publish_refused"] == "url_refused"
+    assert index.requests == []
+
+
+@pytest.mark.parametrize("url", ["https://[::1]", "http://[::1]:3001", "https://10.0.0.7:8443", "https://protocol.index.network"])
+def test_ipv6_ipv4_and_dns_hosts_are_accepted(ri, url):
+    assert ri.url_allowed(url) is True
+
+
+def test_a_blackholed_connect_is_transport_and_logged_as_unreachable(ri, on, monkeypatch, caplog):
+    """Nothing was sent: `transport`, with a log line an operator can act on.
+    10.255.255.1 is not routed; a network that answers at once with
+    unreachable gives the same code."""
+    monkeypatch.setenv("INDEX_API_URL", "https://10.255.255.1")
+    with caplog.at_level(logging.WARNING, logger="av-events"):
+        payload, code = ri.index_request("POST", ri.CREATE_PATH, {"description": TEXT, "sourceType": "agentvillage"},
+                                         timeout=0.3, deadline=10.0)
+    assert (payload, code) == (None, "transport")
+    assert "index_unreachable=" in caplog.text
+    assert KEY not in caplog.text and TEXT not in caplog.text
+
+
+def test_a_connect_timeout_is_logged_as_connect_timeout(tctx, index, caplog):
+    index.tool = urllib.error.URLError(TimeoutError())
+    with caplog.at_level(logging.WARNING, logger="av-events"):
+        out = call(tctx, {"text": TEXT, "source": "message"})
+    assert out["publish_refused"] == "transport"
+    assert "index_unreachable=connect_timeout" in caplog.text
+
+
+def test_the_deadline_logs_how_far_the_worker_got(ri, index, on, monkeypatch, caplog):
+    """When the deadline passes first, whether the request was sent is unknown: the
+    metric gets `timeout` (the safe direction), the log says the phase."""
+    index.gate = threading.Event()
+    monkeypatch.setattr(ri, "_join", lambda worker, deadline: None)
+    try:
+        with caplog.at_level(logging.WARNING, logger="av-events"):
+            got = ri.index_request("POST", ri.CREATE_PATH, {"description": TEXT, "sourceType": "agentvillage"})
+    finally:
+        index.gate.set()
+    assert got == (None, "timeout")
+    assert "index_deadline=opening" in caplog.text
+
+
+def test_the_socket_timeout_is_below_the_deadline(ri):
+    """So a connect that never completes fails inside the worker as `transport`."""
+    assert ri.INDEX_TIMEOUT_S < ri.INDEX_DEADLINE_S
+
+
+@pytest.mark.parametrize("session,platform", [("cron_memsync_20261003_030000", "cron"), ("sess-webhook", "webhook")])
+def test_the_held_withdraw_refusal_says_not_to_archive_another_way(tctx, index, session, platform):
+    pub = call(tctx, {"text": TEXT, "source": "message"})
+    tctx.fire("on_session_start", session_id=session, model="m", platform=platform)
+    out = call(tctx, {"action": "withdraw", "intention_id": pub["intention_id"]}, session=session, tool_call_id="c2")
+    assert out["success"] is False
+    assert "Do not archive or withdraw it another way" in out["message"]
+    assert "archive_intent" in out["message"]
