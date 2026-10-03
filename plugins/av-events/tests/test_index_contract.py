@@ -147,13 +147,25 @@ def test_every_index_call_site_is_exercised_and_in_the_contract(ri, recorded):
     assert sites == {name for name, _ in recorded}
 
 
-def test_publish_carries_the_source_fields_only_with_a_source_id(ri, recorded):
+def test_publish_always_marks_the_source_type_and_sends_a_source_id_only_when_given(ri, recorded):
+    """DATA-249 O4: every create carries sourceType; sourceId only for a held
+    intention published later (the other lane passes its uuid v7)."""
     ri.publish_intent(TEXT)
     ri.publish_intent(TEXT, source_id="01927f3e-1b2c-7d4e-8f00-1234567890ab")
-    assert recorded[0] == ("create_intent", {"description": TEXT})
+    assert recorded[0] == ("create_intent", {"description": TEXT, "sourceType": "agentvillage"})
     assert recorded[1] == ("create_intent", {
         "description": TEXT, "sourceType": "agentvillage", "sourceId": "01927f3e-1b2c-7d4e-8f00-1234567890ab",
     })
+    assert [violations(name, args) for name, args in recorded] == [[], []]
+
+
+def test_a_stated_capture_sends_source_type_and_no_source_id(ri, recorded):
+    out = ri.record_intention_answer({"text": TEXT, "source": "message"}, SESSION)
+    assert out["published"] is True and out["intention_id"] == "int-created"
+    [(name, args)] = recorded
+    assert name == "create_intent"
+    assert args == {"description": TEXT, "sourceType": "agentvillage"}
+    assert violations(name, args) == []
 
 
 # --------------------------------------------------------------------------

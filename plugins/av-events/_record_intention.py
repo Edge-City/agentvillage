@@ -468,9 +468,9 @@ def index_tool_call(tool: str, arguments: dict, *, timeout: Optional[float] = No
     return box[0]
 
 
-#: `sourceType` on every intent the overlay creates with a back-reference
-#: (DATA-149 decision A, DATA-249): Index stores it and the client-owned
-#: `sourceId` unchanged, and the poller (DATA-246) reads them.
+#: `sourceType` on every intent the overlay creates (DATA-149 decision A,
+#: DATA-249 O4): Index stores it and the client-owned `sourceId` unchanged,
+#: and the poller (DATA-246) reads them.
 SOURCE_TYPE = "agentvillage"
 
 
@@ -479,13 +479,16 @@ def publish_intent(text: str, *, source_id: Optional[str] = None) -> tuple[Optio
 
     `description` is `text` exactly as given: the event's `text_hash` is the
     plain SHA-256 of the same string, and the poller matches the two
-    (DATA-246). With `source_id` (a local uuid v7 intention id) the call also
-    carries `sourceType = "agentvillage"` and `sourceId = source_id`.
-    Index's result names the new intent as `intentId` (`mcp.tools.ts`).
+    (DATA-246). Every create carries `sourceType = "agentvillage"` (it marks
+    the intents this overlay created, and Index lists by it). `sourceId` is
+    sent only with `source_id`: a held intention published later passes its
+    local uuid v7, which the poller's back-reference merges on. A stated
+    capture passes none: its `intention_id` is Index's id, corroborated by id
+    (DATA-249 option O4). Index's result names the new intent as `intentId`
+    (`mcp.tools.ts`).
     """
-    arguments: dict[str, Any] = {"description": text}
+    arguments: dict[str, Any] = {"description": text, "sourceType": SOURCE_TYPE}
     if source_id is not None:
-        arguments["sourceType"] = SOURCE_TYPE
         arguments["sourceId"] = source_id
     payload, code = index_tool_call("create_intent", arguments)
     if code is not None:

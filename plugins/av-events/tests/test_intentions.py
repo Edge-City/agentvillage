@@ -252,6 +252,19 @@ def test_lifecycle_tools(live, ctx, av, shape, tool, event_type, status):
     assert payload["source"] == "message"
     # No text changes on a lifecycle call.
     assert payload["text_hash"] is None and payload["summary_hash"] is None
+    # Pause and resume say so with the poller's key; a withdrawal does not carry it.
+    if event_type == "intention.updated":
+        assert payload["status_only"] is True
+    else:
+        assert "status_only" not in payload
+
+
+def test_status_only_is_absent_from_text_updates_and_captures(live, ctx, av):
+    fire_tool(ctx, "mcp__index__create_intent", {"description": DESCRIPTION}, created())
+    fire_tool(ctx, "mcp__index__update_intent", {"intentId": "int-abc", "description": DESCRIPTION + "!"}, created())
+    fire_tool(ctx, "mcp__index__delete_intent", {"intentId": "int-abc"}, index_result({"deleted": True}))
+    record(ctx, {"action": "update", "intention_id": "int-abc", "text": DESCRIPTION})
+    assert all("status_only" not in e["payload"] for e in intention_events(av, live))
 
 
 @pytest.mark.parametrize("tool", ["pause_intent", "resume_intent", "archive_intent"])

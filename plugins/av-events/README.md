@@ -214,7 +214,7 @@ backlog can differ from `emitted_at` by minutes. Every `marts` time series is bu
 | `plugin.degraded` | the guard | `hook`, `scope` ∈ `session`\|`process`, `error_count`, `errors_by_hook`, `hermes_version`, `last_error` |
 | `plugin.buffer_dropped` | the flusher | `reason`, `count`, `files`, `rejected_files`, `rejected_events`, `oldest_event_at`, `newest_event_at` |
 | `intention.captured` | `post_tool_call` on Index `create_intent`, or `record_intention(action="capture")` | `text_hash`, `summary_hash`, `index_intent_id`, `source`, `conditional`, `capture_path`, `index_status`, `parent_session_id`, `publish_refused`, `local_reason`, plus `text_length` / `summary_length` above `metadata` |
-| `intention.updated` | `post_tool_call` on Index `update_intent` with a new `description`, Index `pause_intent` / `resume_intent` (`index_status` `paused` / `active`, both hashes null), or `record_intention` naming an id | as above |
+| `intention.updated` | `post_tool_call` on Index `update_intent` with a new `description`, Index `pause_intent` / `resume_intent` (`index_status` `paused` / `active`, both hashes null, `status_only: true`), or `record_intention` naming an id | as above |
 | `intention.withdrawn` | `post_tool_call` on Index `archive_intent` (or the legacy `delete_intent`, or a legacy `update_intent` to `archived`/`deleted`/`withdrawn`), or `record_intention(action="archive"\|"withdraw"\|"delete")` | as above; both hashes null |
 | `memory.recalled` | `recall:memory.recalled` on the plugin event bus (published by `plugins/recall`) | `query_hash`, `hit_count`, `top_score`, `surface`; the hash and score are null in `metadata` — see below |
 | `memory.snapshot` | the backup thread, after `on_session_end` (rate-limited) or `on_session_finalize` asked for a snapshot and both uploads succeeded | `bytes`, `file_count`, `content_hash`, `manifest_ref` — exactly `memory.snapshot@1`'s closed key set, the same in every capture mode — see "Memory snapshot" |
@@ -302,7 +302,7 @@ archive is `archivedAt` set. `intentId` accepts a short id prefix, and the resul
 | Index `create_intent` | `intention.captured` | Index's intent id, read from the result (`intentId`, or the intent object's `id`); no id, no event |
 | Index `update_intent` with a `description` | `intention.updated` | the `intentId` argument (legacy `id`), or the full id the result names for it |
 | Index `update_intent` changing only the source fields | nothing | — |
-| Index `pause_intent` / `resume_intent` | `intention.updated`, `index_status` `paused` / `active`, both hashes null | as for `update_intent` |
+| Index `pause_intent` / `resume_intent` | `intention.updated`, `index_status` `paused` / `active`, both hashes null, `status_only: true` | as for `update_intent` |
 | Index `archive_intent` | `intention.withdrawn`, `index_status` `archived` | as for `update_intent` |
 | Legacy: `delete_intent`, or `update_intent` whose argument status or result status (or `archived: true`) says `archived`\|`deleted`\|`withdrawn` | `intention.withdrawn` (`index_status` `deleted` for `delete_intent`) | as for `update_intent` |
 | `record_intention` | see the contract below | the argument, else (on a capture) the result's `intention_id`, else a uuid v7 minted here |
@@ -354,7 +354,11 @@ null on the `index_tool` path); `index_status`, stripped and case-folded and
 limited to `active|paused|archived|deleted|withdrawn|completed|unknown` (`paused` since DATA-249),
 with anything else reported as `other`; and `parent_session_id`, the session that delegated to this one when it is a subagent
 (learned from `subagent_start`), else null. `text_length` and `summary_length` count characters
-(Python `len`, code points), not bytes. Every key is always present, and null when unknown.
+(Python `len`, code points), not bytes. Every key is always present, and null when unknown, with
+one exception: `status_only: true` (DATA-249) appears only on the `intention.updated` of an Index
+`pause_intent` / `resume_intent`, an update of Index's status alone with both hashes null. It is
+the key the Index poller sets on its own status-only updates; the data side reads such an update as
+no text version. It is absent from every other intention event.
 
 **No intention text in any mode, `full` included.** §7.1 says "with hashes only" and the
 measurement catalogue says "text in the archive only". The training export reads text from the
@@ -420,7 +424,7 @@ Search, which such a gate would not see); its text, the `workspace/AGENTS.md` ro
 
 | Call | Index | Result / event |
 |---|---|---|
-| `capture`, source `message`/`onboarding`/`note`, in a session that may publish | `create_intent(description=text)` | `intention_id` = `index_intent_id` = Index's id |
+| `capture`, source `message`/`onboarding`/`note`, in a session that may publish | `create_intent(description=text, sourceType="agentvillage")`, no `sourceId` | `intention_id` = `index_intent_id` = Index's id (corroborated by id, no back-reference needed) |
 | same, Index refused, unreachable, or the hourly cap reached | tried, or not when capped | local uuid v7, `publish_refused` = code |
 | `capture`, `publish=false`, `reason` | none | local uuid v7, `local_reason` = reason |
 | `capture`, source `ambient` | none | local uuid v7, `source=ambient`, held |

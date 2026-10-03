@@ -336,7 +336,9 @@ def test_publish_speaks_the_poller_sequence(tctx, index):
     assert index.requests[1]["headers"]["mcp-session-id"] == "mcp-sess-1"
     assert index.requests[2]["headers"]["mcp-session-id"] == "mcp-sess-1"
     assert "id" not in index.requests[1]["body"]  # a notification
-    assert index.tool_calls() == [{"name": "create_intent", "arguments": {"description": TEXT}}]
+    # DATA-249 O4: a stated capture marks the intent as ours, with no sourceId
+    # (its intention_id is Index's id, corroborated by id).
+    assert index.tool_calls() == [{"name": "create_intent", "arguments": {"description": TEXT, "sourceType": "agentvillage"}}]
 
 
 def test_publish_returns_index_id(tctx, index):

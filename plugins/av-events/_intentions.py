@@ -156,6 +156,7 @@ class IntentionCall:
         "index_status",
         "publish_refused",
         "local_reason",
+        "status_only",
     )
 
     def __init__(
@@ -172,6 +173,7 @@ class IntentionCall:
         index_status: Optional[str] = None,
         publish_refused: Optional[str] = None,
         local_reason: Optional[str] = None,
+        status_only: bool = False,
     ) -> None:
         self.event_type = event_type
         self.intention_id = intention_id
@@ -184,6 +186,8 @@ class IntentionCall:
         self.index_status = index_status
         self.publish_refused = publish_refused
         self.local_reason = local_reason
+        #: DATA-249: a pause or resume, which changes Index's status and no text.
+        self.status_only = status_only
 
 
 # --------------------------------------------------------------------------
@@ -440,6 +444,8 @@ def plan_index(tool: str, args: dict, payload: Any, *, cron: bool = False) -> li
                 source=source,
                 capture_path="index_tool",
                 index_status=LIFECYCLE_STATUS[tool],
+                # The poller's key for an update that is Index's status alone.
+                status_only=INDEX_INTENT_TOOLS[tool] == "intention.updated",
             )
         ]
 
