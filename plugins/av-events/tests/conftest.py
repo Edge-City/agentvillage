@@ -246,6 +246,8 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     for name in AV_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
+    # The EdgeOS classifier reads the plugin's own base (`_edgeos._base_value`).
+    monkeypatch.delenv("EDGEOS_API_BASE", raising=False)
     return tmp_path
 
 
