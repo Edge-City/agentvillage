@@ -656,7 +656,7 @@ def index_request(method: str, path: str, body: Optional[dict] = None, *, timeou
 SOURCE_TYPE = "agentvillage"
 
 
-def publish_intent(text: str, *, source_id: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
+def publish_intent(text: str, *, source_id: Optional[str] = None, _gate: Any = None) -> tuple[Optional[str], Optional[str]]:
     """`POST /api/intents` -> `(Index's intent id, None)` or `(None, code)`.
 
     Body `{description, sourceType, sourceId?}` and nothing else (Index's
@@ -675,6 +675,12 @@ def publish_intent(text: str, *, source_id: Optional[str] = None) -> tuple[Optio
     publish counts as done only with an `intentId` matching `INTENT_PATH_ID` in
     a 2xx body; a 2xx without one is `timeout` (the create may have landed).
     """
+    if _approval_on() is not False and not _is_gate(_gate):
+        # Lane B: with approval on (or unreadable), every create goes through
+        # `_intent_approval._execute` (propose, wait, claim, wait, start); no
+        # other caller reaches Index.
+        logger.warning("av-events: record_intention publish_refused=approval_required")
+        return None, "approval_required"
     body: dict[str, Any] = {"description": text, "sourceType": SOURCE_TYPE}
     if source_id is not None:
         body["sourceId"] = source_id
@@ -1198,6 +1204,13 @@ def _ia():
     return _intent_approval
 
 
+def _is_gate(token: Any) -> bool:
+    try:
+        return token is not None and token is _ia()._GATE
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _approval_on() -> Optional[bool]:
     """`AV_APPROVAL_ENABLED` on and `AV_APPROVAL_URL` set (`_approval.configured`).
     None when it cannot be read (L1): the caller holds, and never publishes
@@ -1480,6 +1493,11 @@ def _update_or_withdraw(action: str, args: dict, held: Optional[str]) -> dict:
     if published:
         if action == "update" and held is not None:
             code = f"held_{held}"  # F4/M3: a held session never overwrites a live intent
+        elif action == "update" and _approval_on() is not False:
+            # Lane B: new words on a published intention would reach Index
+            # without the resident seeing them. Local only; capture the new
+            # wording to propose it.
+            code = "approval_required"
         elif action == "update":
             code = mirror_update(index_id, description=text)
         elif already_archived:
@@ -1498,6 +1516,11 @@ def _update_or_withdraw(action: str, args: dict, held: Optional[str]) -> dict:
         result["message"] = f"{verb} intention {intention_id} here and on Index."
     elif code.startswith("held_"):
         result["message"] = f"{verb} intention {intention_id} locally; this session cannot change it on Index."
+    elif code == "approval_required":
+        result["message"] = (
+            f"{verb} intention {intention_id} locally only: the resident has not approved the new wording, so "
+            "Index still has the old one. Capture the new wording to have it proposed to them."
+        )
     elif code == AMBIGUOUS:
         # B1: the change may have landed on Index.
         result["message"] = (
@@ -1521,7 +1544,8 @@ def record_intention_answer(args: Any, session_id: Optional[str]) -> dict:
         # Spec §5.3: a parsed reply is not a confirmation. Only the resident's
         # answer on their approval.md daemon is (Lane B, `_confirm`).
         if not _approval_on():
-            return _refuse("confirmation_not_wired" if env("AV_APPROVAL_URL") else "no_confirmation_channel")
+            return _refuse("confirmation_not_wired" if os.environ.get("AV_APPROVAL_URL", "").strip()
+                           else "no_confirmation_channel")
         return _confirm(safe)
     try:
         held = held_reason(session_id)

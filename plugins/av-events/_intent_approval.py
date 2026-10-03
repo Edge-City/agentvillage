@@ -111,7 +111,7 @@ import sys
 from typing import Any, Callable, Optional
 
 from . import _approval
-from ._core import env, uuid7
+from ._core import uuid7
 
 logger = logging.getLogger("av-events")
 
@@ -162,6 +162,11 @@ REFUSED_CODES = frozenset({
 })
 
 _emitter: Optional[Callable[..., None]] = None
+
+#: Item (1) of the second security review: with approval on, `publish_intent`
+#: creates nothing unless called from `_publish`, which only `_execute` reaches
+#: after the claim, the re-read and `start` ok. This object is the proof.
+_GATE = object()
 
 
 def set_emitter(fn: Optional[Callable[..., None]]) -> None:
@@ -599,7 +604,7 @@ def _publish(intention_id: str, payload: str, registered: Any, authorization: st
             if code is not None:
                 break
         # S1: the sourceId is the key's own id (valid_shape made it this entry's).
-        index_id, code = ri.publish_intent(text, source_id=key_id)
+        index_id, code = ri.publish_intent(text, source_id=key_id, _gate=_GATE)
         if index_id is not None:
             def change(entry: dict, apx: dict) -> None:
                 apx["state"] = "published"
@@ -847,7 +852,7 @@ def maybe_start(platform: Any = None, argv: Optional[list] = None) -> str:
     if not active():
         return "off"
     _approval.register_pass("intents", run_intent_pass)
-    mode = env(_approval.POLLER_ENV).strip().lower()
+    mode = _approval.process_env(_approval.POLLER_ENV).lower()
     name = str(platform or "").strip().lower()
     gateway = mode in _approval.TRUTHY or _gateway_argv(argv) or (platform is not None and name not in LOCAL_PLATFORMS)
     if mode in ("0", "false", "no", "off"):

@@ -81,7 +81,7 @@ try:  # POSIX
 except ImportError:  # pragma: no cover - Windows
     fcntl = None  # type: ignore[assignment]
 
-from ._core import DIR_MODE, FILE_MODE, env, hermes_home, register_literal_secret
+from ._core import DIR_MODE, FILE_MODE, hermes_home, register_literal_secret
 
 logger = logging.getLogger("av-events")
 
@@ -148,9 +148,11 @@ class Answer:
 
 
 def _process_env(name: str) -> str:
-    """S2: the gate's own settings come from the process environment the
-    gateway started with, never from the `.env` file the agent can rewrite
-    while it runs (`_core.env` re-reads that on every change)."""
+    """S2: every setting of this module (`AV_APPROVAL_ENABLED`, `_URL`,
+    `_DAEMON_UID`, `_TOKEN_FILE`, `_TOKEN`, `_POLL_S`, `_POLLER`) comes from
+    the process environment the gateway started with (Hermes loads `.env`
+    into it once, at startup), never from the `.env` file the agent can
+    rewrite while it runs (`_core.env` re-reads that on every change)."""
     return os.environ.get(name, "").strip()
 
 
@@ -250,7 +252,7 @@ def _read_token_file(path: str) -> tuple[Optional[str], Optional[str]]:
 
 def agent_token() -> tuple[Optional[str], Optional[str]]:
     """`(token, None)` or `(None, code)`, in the shim's order. Never logged."""
-    named = env(TOKEN_FILE_ENV).strip()
+    named = _process_env(TOKEN_FILE_ENV)
     path = named
     if not path:
         default = default_token_file()
@@ -259,7 +261,7 @@ def agent_token() -> tuple[Optional[str], Optional[str]]:
     if path:
         token, code = _read_token_file(path)
     else:
-        token = env(TOKEN_ENV).strip() or None
+        token = _process_env(TOKEN_ENV) or None
         code = None if token else "token_missing"
     if token is None:
         return None, code
@@ -270,6 +272,10 @@ def agent_token() -> tuple[Optional[str], Optional[str]]:
 
 
 # ---- The listener check ---------------------------------------------------
+
+
+def process_env(name: str) -> str:
+    return _process_env(name)
 
 
 def daemon_uid() -> Optional[int]:
@@ -506,7 +512,7 @@ def register_pass(name: str, fn: Callable[[bool], None]) -> None:
 
 
 def poll_interval() -> float:
-    raw = env(POLL_ENV).strip()
+    raw = _process_env(POLL_ENV)
     try:
         value = float(raw) if raw else DEFAULT_POLL_S
     except ValueError:

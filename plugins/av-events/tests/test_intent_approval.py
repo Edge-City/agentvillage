@@ -792,11 +792,12 @@ def test_update_and_withdraw_of_an_approved_intention_mirror_to_the_index_id(tct
     poll(mods)
     index.requests.clear()
     up = call(tctx, {"action": "update", "intention_id": iid, "text": TEXT + " and bouldering"}, tool_call_id="c2")
-    assert up["index_intent_id"] == INDEX_ID
+    # Security review 2, item 1: new words never reach Index unapproved.
+    assert up["index_intent_id"] == INDEX_ID and up["publish_refused"] == "approval_required"
+    assert index.requests == []
     index.default = {"success": True}
     call(tctx, {"action": "withdraw", "intention_id": iid}, tool_call_id="c3")
-    assert [(r["method"], r["path"]) for r in index.requests] == [
-        ("PATCH", f"/api/intents/{INDEX_ID}"), ("PATCH", f"/api/intents/{INDEX_ID}/archive")]
+    assert [(r["method"], r["path"]) for r in index.requests] == [("PATCH", f"/api/intents/{INDEX_ID}/archive")]
 
 
 # --------------------------------------------------------------------------
@@ -1381,3 +1382,77 @@ def test_l6_a_contended_pass_logs_one_line(mods, home, monkeypatch, caplog):
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
     assert caplog.text.count("pass_skipped=contended") == 1
+
+
+# --------------------------------------------------------------------------
+# Second security review: sibling paths, the resume pass, settings
+# --------------------------------------------------------------------------
+
+
+def test_sr2_1_no_index_create_without_the_gate_when_approval_is_on(tctx, serve, index, mods, monkeypatch):
+    assert mods.ri.publish_intent(TEXT) == (None, "approval_required")
+    assert mods.ri.publish_intent(TEXT, source_id="x", _gate=object()) == (None, "approval_required")
+    # Approval unreadable: the same refusal (L1).
+    monkeypatch.setattr(mods.ia, "active", lambda: (_ for _ in ()).throw(RuntimeError("x")))
+    assert mods.ri.publish_intent(TEXT) == (None, "approval_required")
+    assert index.requests == []
+
+
+def test_sr2_1_every_capture_path_reaches_index_only_through_start(tctx, serve, index, mods):
+    call(tctx, {"text": STATED, "source": "message"})
+    call(tctx, {"text": STATED + " 2", "source": "note"}, tool_call_id="c2")
+    call(tctx, {"text": TEXT, "source": "ambient"}, tool_call_id="c3")
+    call(tctx, {"text": TEXT + " 3", "source": "message", "publish": False, "reason": "personal"}, tool_call_id="c4")
+    creates = index.creates()
+    starts = [c for c in serve.calls if c["verb"] == "start"]
+    assert len(creates) == len(starts) == 2  # the two stated captures, each after its own start
+    assert {c["body"]["sourceId"] for c in creates} == {s_["flags"]["--action"].split(":", 1)[1] for s_ in starts}
+
+
+def test_sr2_1_an_update_of_a_published_intention_never_rewrites_it_on_index(tctx, serve, index, mods):
+    out = call(tctx, {"text": STATED, "source": "message"})
+    index.requests.clear()
+    up = call(tctx, {"action": "update", "intention_id": out["intention_id"], "text": "Something unapproved"},
+              tool_call_id="u")
+    assert up["publish_refused"] == "approval_required" and index.requests == []
+
+
+@pytest.mark.parametrize("setup", ["granted", "cleared", "stale_starting", "granted_after_void"])
+def test_sr2_2_the_resume_pass_never_starts_or_publishes(tctx, serve, index, mods, monkeypatch, setup):
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    key = f"{INFERRED}:{iid}"
+    serve.grant(key)
+    if setup == "cleared":
+        mods.ia._cas(iid, None, lambda _e, ap: ap.__setitem__("state", "cleared"))
+    elif setup == "stale_starting":
+        mods.ia._cas(iid, None, lambda _e, ap: ap.update(state="starting", claim="c", back="requested", claimed_at=0.0))
+    elif setup == "granted_after_void":
+        serve.reattest()
+        mods.ia.run_intent_pass(execute=False)  # re-proposes
+        serve.grant(key)
+    for _ in range(3):
+        mods.ia.run_intent_pass(execute=False)
+    assert "start" not in serve.verbs() and index.requests == []
+
+
+def test_sr2_2_the_poller_switch_is_not_read_from_the_dotfile(mods, on, kicks, home):
+    (home / ".env").write_text("AV_APPROVAL_POLLER=1\n", encoding="utf-8")
+    assert mods.ia.maybe_start("cli") == "pass"  # a one-shot pass, never the executing thread
+    assert "thread" not in kicks
+
+
+def test_sr2_3_no_approval_setting_is_read_from_the_dotfile(mods, home, monkeypatch):
+    token = home / "dotfile-token"
+    token.write_text("dotfile-token-value-01", encoding="utf-8")
+    os.chmod(token, 0o600)
+    (home / ".env").write_text(
+        "AV_APPROVAL_ENABLED=1\nAV_APPROVAL_URL=http://127.0.0.1:9\nAV_APPROVAL_DAEMON_UID=0\n"
+        f"AV_APPROVAL_TOKEN_FILE={token}\nAV_APPROVAL_TOKEN=dotfile-token-value-02\n"
+        "AV_APPROVAL_POLL_S=5\nAV_APPROVAL_POLLER=1\nAV_PROC_ROOT=/tmp\n", encoding="utf-8")
+    assert mods.ap.enabled() is False and mods.ap.configured() is False
+    assert mods.ap.daemon_uid() == 10001
+    assert mods.ap.agent_token() == (None, "token_missing")
+    assert mods.ap.poll_interval() == mods.ap.DEFAULT_POLL_S
+    assert mods.ap._proc_root() == "/proc"
+    monkeypatch.setenv("AV_APPROVAL_TOKEN_FILE", str(token))  # the process environment is honoured
+    assert mods.ap.agent_token() == ("dotfile-token-value-01", None)
