@@ -653,18 +653,30 @@ Spec §4.1 `action.attempted/receipted/failed`, §2.1's receipt allowance, measu
 **How the plugin sees an RSVP.** There is no EdgeOS tool. The `edgeos` skill tells the agent to run
 `curl` through Hermes's `terminal` tool (`skills/edgeos/SKILL.md` §6). `edgeos_tool_allowlist.json`
 (`edgeos_tool_allowlist_v1`) names the carrier tools (`terminal`), the host (`api.edgeos.world`),
-and each operation by method and path. Line continuations (backslash-newline) are joined first —
-the skill's own recipes are multi-line, and `tests/test_edgeos_skill_recipes.py` feeds every §6
-recipe verbatim. The command is then tokenised as a shell would (`shlex`, with control operators
-and newlines split out) and read only when it is unambiguous:
+and each operation by method and path. Line continuations (backslash-newline) are removed first,
+as the shell removes them (joined with nothing; not inside single quotes) — the skill's own recipes
+are multi-line, and `tests/test_edgeos_skill_recipes.py` feeds every recipe in the skill verbatim.
+The command is then tokenised as a shell would (`shlex`, with control operators and newlines split
+out) and read only when it is unambiguous (DATA-269: a receipt only for the command that actually
+ran; when in doubt the call is just a `tool.call`):
 
-- trailing whitespace is dropped first (a final newline runs nothing);
+- leading and trailing whitespace is dropped first (a final newline runs nothing);
+- **the curl is the whole command**: its first word is `curl` (not a path to one) and nothing comes
+  before it — no `cd`, assignment, `export`/`unset`, other command or here-document;
+- the base is named only as the recipes name it: `$EDGEOS_API_BASE`, `${EDGEOS_API_BASE}`, or
+  `${EDGEOS_API_BASE:-<default>}` with `<default>` exactly `https://api.edgeos.world/api/v1`. It is
+  expanded from the plugin's own `EDGEOS_API_BASE`, which must be an https URL on an allowlisted
+  host (a dev tunnel gets no labels); unset, only the `:-` form names a host. Any other `$`
+  outside single quotes — another variable, `:=`/`:+`/`:?`, `$'…'` — is refused, except
+  `$EDGEOS_API_KEY` / `$EDGEOS_BEARER_TOKEN` inside double quotes. So are unquoted braces and glob
+  characters, `#`, and a carriage return. A shell environment that differs from the plugin's (an
+  earlier `export`, a `~/.curlrc`, a proxy variable) is outside what the plugin can see;
 - **every** http(s) URL in the command — the request target, headers, other options, anything before
   the curl — is on the EdgeOS host, with no userinfo and no port other than `:443`. The one exception
   is a request body: a URL inside the value of `-d`, `--data`, `--data-raw`, `--data-binary` or
   `--json` is content (a `picture_url`), not a place the request goes, so it is not read. `-F` is
   not a body in this sense (`-F x=@file` reads a file);
-- exactly one `curl` word, and it starts a command (`echo curl …` and a `for` body are not requests);
+- exactly one `curl` word (`echo curl …` and a `for` body are not requests);
 - after a **write** (anything but GET) nothing follows it: no `;`, `&&`, `||`, `|`, redirect or new
   line — each could run a second request or rewrite what the agent saw as the response;
 - after a **read** (GET) only these may follow, in order: `2>&1`, a `| jq …` pipeline (arguments
@@ -673,18 +685,25 @@ and newlines split out) and read only when it is unambiguous:
   `jq '.my_rsvp_status = "registered"'` would otherwise forge a receipt;
 - no command substitution (`$(…)`, backticks) anywhere;
 - no option that moves the request or drops the host check: `--resolve`, `--connect-to`,
-  `-x`/`--proxy` (and the SOCKS/pre-proxy/DoH forms), `-K`/`--config`, `-k`/`--insecure`;
+  `-x`/`--proxy` (and the SOCKS/pre-proxy/DoH forms), `-K`/`--config`, `-k`/`--insecure`,
+  `--unix-socket`, `--dns-servers`, `--cacert`/`--capath`; none that changes what the request is or
+  builds its URL: `-I`/`--head`, `--variable`, `--expand-*`, `-G` with data; no `--name=value`
+  (curl has no such form and sends nothing);
+- options that divert the body or add to stdout (`-o`, `-O`, `-w`, `-D`, `-i`, `-v`, `--trace*`,
+  `--stderr`, `--libcurl`) keep the label, but the output is treated like a `jq` read's: it never
+  confirms, and an RSVP with them waits on nothing;
 - curl's own arguments give exactly one URL (`--url` or positional; the same URL twice is two), and
   every EdgeOS URL in the command names that same path;
-- the method is curl's: `-X`/`--request` wins; else `-G`/`--get` is GET; else `-T` is PUT; else
+- the method is curl's: `-X`/`--request` wins, and must be written as one of `GET`, `POST`,
+  `PATCH`, `PUT`, `DELETE` (curl sends `-X post` as written); else `-G`/`--get` is GET; else `-T` is PUT; else
   `-d`/`--data*`/`--json`/`-F` is POST; else GET. Combined short flags are read the way curl reads
   them (`-sX POST`, `-sXPOST`, `-sSfL`), and an option that takes a value consumes it;
-- path parameters are UUIDs.
+- the URL has no whitespace or control character; path parameters are UUIDs (full match).
 
 **Known misses**, all conservative (the call is just a `tool.call`): a body built by command
 substitution (`-d "$(cat body.json)"`; the skill does not do this); a curl through `execute_code` or
-another tool. Every recipe in the skill's §3, §6, §8 and §9 is recognised
-(`tests/test_edgeos_skill_recipes.py`).
+another tool; a `cd … &&` or other prefix before the curl. Every recipe in the skill is recognised
+(`tests/test_edgeos_skill_recipes.py`, which reads them from the skill by heading).
 
 Anything else is just a `tool.call`. A recognised call labels its `tool.call` with `operation`
 (`edgeos.rsvp`, `edgeos.event_read`, `edgeos.profile_read`, …) and `target_system: "edgeos"`; the
