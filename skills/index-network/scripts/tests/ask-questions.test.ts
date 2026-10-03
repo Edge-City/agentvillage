@@ -4,9 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { askQuestions } from "../ask-questions";
-import type { BriefQuestion } from "../build-daily-brief-context";
 
 const originalCwd = process.cwd();
+const originalFetch = globalThis.fetch;
+const originalMcpUrl = process.env.INDEX_MCP_URL;
+const MCP_URL = "https://test.example.com/mcp";
 
 function tempWorkspace(): string {
   const dir = mkdtempSync(join(tmpdir(), "ask-questions-"));
@@ -18,223 +20,142 @@ afterEach(() => {
   const cwd = process.cwd();
   process.chdir(originalCwd);
   if (cwd !== originalCwd && cwd.includes("ask-questions-")) rmSync(cwd, { recursive: true, force: true });
+  globalThis.fetch = originalFetch;
+  if (originalMcpUrl === undefined) delete process.env.INDEX_MCP_URL;
+  else process.env.INDEX_MCP_URL = originalMcpUrl;
 });
 
-const QUESTION_A: BriefQuestion = { id: "q-aaa", title: "Profile check", prompt: "What are you currently working on?", mode: "profile" };
-const QUESTION_B: BriefQuestion = { id: "q-bbb", title: "Intent check", prompt: "What kind of collaborators are you looking for?", mode: "intent" };
+const MAYA_ID = "11111111-1111-1111-1111-111111111111";
+const JON_ID = "22222222-2222-2222-2222-222222222222";
 
-function mockFetch(questions: BriefQuestion[], source: "mcp" | "unavailable" = "mcp") {
-  return async (_opts: { apiKey: string; mcpUrl: string }) =>
-    ({ questions, source, reason: source === "unavailable" ? "mock unavailable" : undefined });
+function card(name: string, headline: string, id: string, userId: string) {
+  return {
+    id,
+    url: `https://index.network/o/${id}`,
+    status: "pending",
+    headline,
+    summary: headline,
+    peer: { name, userId, url: `https://index.network/u/${userId}` },
+  };
 }
+
+function listText(cards: ReturnType<typeof card>[]): string {
+  return JSON.stringify({ success: true, opportunities: cards });
+}
+
+function mockList(text: string) {
+  process.env.INDEX_MCP_URL = MCP_URL;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(init?.body as string ?? "{}") as { method: string };
+    if (body.method === "initialize") {
+      return Response.json({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", capabilities: {} } });
+    }
+    if (body.method === "tools/call") {
+      return Response.json({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text }] } });
+    }
+    throw new Error(`unexpected method: ${body.method}`);
+  }) as typeof fetch;
+}
+
+const MAYA_CARD = {
+  name: "Maya",
+  headline: "memory systems",
+  userUrl: `https://index.network/u/${MAYA_ID}`,
+  opportunityUrl: "https://index.network/o/opp-maya",
+};
 
 describe("askQuestions", () => {
   test("returns silent when no API key is available", async () => {
     tempWorkspace();
-    const result = await askQuestions({
-      date: "2026-06-17",
-      stateFile: "state.json",
-      apiKey: "",
-      fetchQuestions: mockFetch([QUESTION_A]),
-    });
-    expect(result).toEqual({ silent: true, reason: "no-api-key" });
+    let called = false;
+    globalThis.fetch = (() => {
+      called = true;
+      throw new Error("fetch");
+    }) as typeof fetch;
+    const result = await askQuestions({ date: "2026-06-17", stateFile: "state.json", apiKey: "" });
+    expect(result).toEqual({ silent: true, reason: "nothing-waiting" });
+    expect(called).toBe(false);
   });
 
-  test("returns silent when MCP is unavailable", async () => {
+  test("returns silent when the opportunity fetch throws", async () => {
     tempWorkspace();
-    const result = await askQuestions({
-      date: "2026-06-17",
-      stateFile: "state.json",
-      apiKey: "test-key",
-      fetchQuestions: mockFetch([], "unavailable"),
-    });
-    expect(result).toEqual({ silent: true, reason: "mock unavailable" });
+    process.env.INDEX_MCP_URL = MCP_URL;
+    globalThis.fetch = (() => {
+      throw new Error("mcp down");
+    }) as typeof fetch;
+    const result = await askQuestions({ date: "2026-06-17", stateFile: "state.json", apiKey: "test-key" });
+    expect(result).toEqual({ silent: true, reason: "nothing-waiting" });
   });
 
-  test("returns silent when there are no pending questions", async () => {
+  test("returns silent when no pending card is waiting", async () => {
     tempWorkspace();
-    const result = await askQuestions({
-      date: "2026-06-17",
-      stateFile: "state.json",
-      apiKey: "test-key",
-      fetchQuestions: mockFetch([]),
-    });
-    expect(result).toEqual({ silent: true, reason: "no-pending-questions" });
+    mockList(listText([]));
+    const result = await askQuestions({ date: "2026-06-17", stateFile: "state.json", apiKey: "test-key" });
+    expect(result).toEqual({ silent: true, reason: "nothing-waiting" });
   });
 
-  test("returns silent when all questions are on cooldown", async () => {
+  test("returns the first pending card", async () => {
     tempWorkspace();
-    // Both questions delivered within the last 3 days
-    await Bun.write("state.json", JSON.stringify({
-      questionDelivery: { "q-aaa": "2026-06-16", "q-bbb": "2026-06-15" },
-    }));
-
-    const result = await askQuestions({
-      date: "2026-06-17",
-      stateFile: "state.json",
-      apiKey: "test-key",
-      fetchQuestions: mockFetch([QUESTION_A, QUESTION_B]),
-    });
-
-    expect(result).toEqual({ silent: true, reason: "all-questions-on-cooldown" });
+    mockList(listText([
+      card("Maya", "memory systems", "opp-maya", MAYA_ID),
+      card("Jon", "village tools", "opp-jon", JON_ID),
+    ]));
+    const result = await askQuestions({ date: "2026-06-17", stateFile: "state.json", apiKey: "test-key" });
+    expect(result).toEqual(MAYA_CARD);
   });
 
-  test("returns the first available question", async () => {
-    tempWorkspace();
-
-    const result = await askQuestions({
-      date: "2026-06-17",
-      stateFile: "state.json",
-      apiKey: "test-key",
-      fetchQuestions: mockFetch([QUESTION_A, QUESTION_B]),
-    });
-
-    expect(result).toEqual({ questionId: "q-aaa", prompt: "What are you currently working on?" });
-  });
-
-  test("skips questions on cooldown and picks the next available one", async () => {
+  test("skips a card already delivered today", async () => {
     tempWorkspace();
     await Bun.write("state.json", JSON.stringify({
-      questionDelivery: { "q-aaa": "2026-06-16" }, // 1 day ago — still on cooldown
+      deliveredToday: { date: "2026-06-17", ids: ["opp-maya"] },
     }));
-
-    const result = await askQuestions({
-      date: "2026-06-17",
-      stateFile: "state.json",
-      apiKey: "test-key",
-      fetchQuestions: mockFetch([QUESTION_A, QUESTION_B]),
+    mockList(listText([
+      card("Maya", "memory systems", "opp-maya", MAYA_ID),
+      card("Jon", "village tools", "opp-jon", JON_ID),
+    ]));
+    const result = await askQuestions({ date: "2026-06-17", stateFile: "state.json", apiKey: "test-key" });
+    expect(result).toEqual({
+      name: "Jon",
+      headline: "village tools",
+      userUrl: `https://index.network/u/${JON_ID}`,
+      opportunityUrl: "https://index.network/o/opp-jon",
     });
-
-    expect(result).toEqual({ questionId: "q-bbb", prompt: "What kind of collaborators are you looking for?" });
   });
 
-  test("records delivery in state before returning the question", async () => {
+  test("records the card id before returning it", async () => {
     tempWorkspace();
-
-    const result = await askQuestions({
-      date: "2026-06-17",
-      stateFile: "state.json",
-      apiKey: "test-key",
-      fetchQuestions: mockFetch([QUESTION_A]),
-    });
-
-    expect("silent" in result).toBe(false);
+    await Bun.write("state.json", JSON.stringify({
+      signalElicitation: { lastAskedDate: "2026-06-16" },
+    }));
+    mockList(listText([card("Maya", "memory systems", "opp-maya", MAYA_ID)]));
+    const result = await askQuestions({ date: "2026-06-17", stateFile: "state.json", apiKey: "test-key" });
+    expect(result).toEqual(MAYA_CARD);
     const state = JSON.parse(await Bun.file("state.json").text());
-    expect(state.questionDelivery).toEqual({ "q-aaa": "2026-06-17" });
-  });
-
-  test("prunes expired cooldown entries and keeps recent ones when recording", async () => {
-    tempWorkspace();
-    await Bun.write("state.json", JSON.stringify({
-      questionDelivery: {
-        "q-old": "2026-06-10",   // 7 days ago — expired
-        "q-recent": "2026-06-15", // 2 days ago — still within cooldown
-      },
-      signalElicitation: { lastAskedDate: "2026-06-16" }, // preserved
-    }));
-
-    const result = await askQuestions({
-      date: "2026-06-17",
-      stateFile: "state.json",
-      apiKey: "test-key",
-      fetchQuestions: mockFetch([QUESTION_A]),
-    });
-
-    expect("silent" in result).toBe(false);
-    const state = JSON.parse(await Bun.file("state.json").text());
-    // q-old pruned (> 3 days), q-recent kept, q-aaa added
-    expect(state.questionDelivery).toEqual({
-      "q-recent": "2026-06-15",
-      "q-aaa": "2026-06-17",
-    });
-    // Unrelated state keys must not be touched
+    expect(state.deliveredToday).toEqual({ date: "2026-06-17", ids: ["opp-maya"] });
     expect(state.signalElicitation).toEqual({ lastAskedDate: "2026-06-16" });
   });
 
-  test("treats a question delivered exactly on the cooldown boundary as available (>= 3 days)", async () => {
+  test("works without an existing state file", async () => {
     tempWorkspace();
-    // Delivered 3 days ago: daysBetween("2026-06-14", "2026-06-17") === 3 >= QUESTION_COOLDOWN_DAYS
-    await Bun.write("state.json", JSON.stringify({
-      questionDelivery: { "q-aaa": "2026-06-14" },
-    }));
-
-    const result = await askQuestions({
-      date: "2026-06-17",
-      stateFile: "state.json",
-      apiKey: "test-key",
-      fetchQuestions: mockFetch([QUESTION_A]),
-    });
-
-    expect(result).toEqual({ questionId: "q-aaa", prompt: "What are you currently working on?" });
-  });
-
-  test("treats a question delivered 2 days ago as still on cooldown", async () => {
-    tempWorkspace();
-    await Bun.write("state.json", JSON.stringify({
-      questionDelivery: { "q-aaa": "2026-06-15" }, // 2 days ago
-    }));
-
-    const result = await askQuestions({
-      date: "2026-06-17",
-      stateFile: "state.json",
-      apiKey: "test-key",
-      fetchQuestions: mockFetch([QUESTION_A]),
-    });
-
-    expect(result).toEqual({ silent: true, reason: "all-questions-on-cooldown" });
-  });
-
-  test("works without an existing state file (fresh install)", async () => {
-    tempWorkspace();
-    // No state.json exists
-
-    const result = await askQuestions({
-      date: "2026-06-17",
-      stateFile: "state.json",
-      apiKey: "test-key",
-      fetchQuestions: mockFetch([QUESTION_A]),
-    });
-
-    expect(result).toEqual({ questionId: "q-aaa", prompt: "What are you currently working on?" });
+    mockList(listText([card("Maya", "memory systems", "opp-maya", MAYA_ID)]));
+    const result = await askQuestions({ date: "2026-06-17", stateFile: "state.json", apiKey: "test-key" });
+    expect(result).toEqual(MAYA_CARD);
     const state = JSON.parse(await Bun.file("state.json").text());
-    expect(state.questionDelivery).toEqual({ "q-aaa": "2026-06-17" });
+    expect(state.deliveredToday).toEqual({ date: "2026-06-17", ids: ["opp-maya"] });
   });
 
-  test("never calls fetchQuestions when the API key is absent", async () => {
+  test("returns the final closeout line when nothing is waiting", async () => {
     tempWorkspace();
-    let fetchCalled = false;
-    const result = await askQuestions({
-      date: "2026-06-17",
-      stateFile: "state.json",
-      apiKey: "",
-      fetchQuestions: async (_opts) => {
-        fetchCalled = true;
-        return { questions: [QUESTION_A], source: "mcp" as const };
-      },
-    });
-    expect(result).toEqual({ silent: true, reason: "no-api-key" });
-    expect(fetchCalled).toBe(false);
-  });
-
-  test("returns final closeout reflection on the final Edge day without MCP", async () => {
-    tempWorkspace();
-    let fetchCalled = false;
-
-    const result = await askQuestions({
-      date: "2026-11-01",
-      stateFile: "state.json",
-      apiKey: "",
-      fetchQuestions: async (_opts) => {
-        fetchCalled = true;
-        return { questions: [QUESTION_A], source: "mcp" as const };
-      },
-    });
-
+    let called = false;
+    globalThis.fetch = (() => {
+      called = true;
+      throw new Error("fetch");
+    }) as typeof fetch;
+    const result = await askQuestions({ date: "2026-11-01", stateFile: "state.json", apiKey: "" });
     expect(result).toEqual({
-      questionId: "edge-closeout-final-reflection-2026-11-01",
       prompt: "Quick closeout check: did AgentVillage help you meet, message, or better understand anyone this week? Reply with one sentence.",
     });
-    expect(fetchCalled).toBe(false);
+    expect(called).toBe(false);
     const state = JSON.parse(await Bun.file("state.json").text());
     expect(state.questionDelivery).toEqual({
       "edge-closeout-final-reflection-2026-11-01": "2026-11-01",
@@ -246,14 +167,8 @@ describe("askQuestions", () => {
     await Bun.write("state.json", JSON.stringify({
       questionDelivery: { "edge-closeout-final-reflection-2026-11-01": "2026-11-01" },
     }));
-
-    const result = await askQuestions({
-      date: "2026-11-01",
-      stateFile: "state.json",
-      apiKey: "test-key",
-      fetchQuestions: mockFetch([QUESTION_A]),
-    });
-
+    mockList(listText([]));
+    const result = await askQuestions({ date: "2026-11-01", stateFile: "state.json", apiKey: "test-key" });
     expect(result).toEqual({ silent: true, reason: "final-reflection-already-delivered" });
   });
 
@@ -262,59 +177,8 @@ describe("askQuestions", () => {
     await Bun.write("state.json", JSON.stringify({
       questionDelivery: { "daily-identity-2026-11-01": "2026-11-01" },
     }));
-
-    const result = await askQuestions({
-      date: "2026-11-01",
-      stateFile: "state.json",
-      apiKey: "test-key",
-      fetchQuestions: mockFetch([QUESTION_A]),
-    });
-
+    mockList(listText([]));
+    const result = await askQuestions({ date: "2026-11-01", stateFile: "state.json", apiKey: "test-key" });
     expect(result).toEqual({ silent: true, reason: "final-reflection-already-delivered" });
-  });
-
-  test("future-dated delivery entry is kept in state and blocks re-delivery", async () => {
-    tempWorkspace();
-    // Clock skew: question recorded with a future date — should not be pruned
-    // and should still block re-delivery (daysBetween is negative < QUESTION_COOLDOWN_DAYS).
-    await Bun.write("state.json", JSON.stringify({
-      questionDelivery: { "q-aaa": "2026-06-18" }, // tomorrow
-    }));
-
-    const result = await askQuestions({
-      date: "2026-06-17",
-      stateFile: "state.json",
-      apiKey: "test-key",
-      fetchQuestions: mockFetch([QUESTION_A, QUESTION_B]),
-    });
-
-    // q-aaa is filtered out by filterCooldownQuestions (future-dated = within cooldown)
-    expect(result).toEqual({ questionId: "q-bbb", prompt: "What kind of collaborators are you looking for?" });
-
-    // q-aaa must be preserved in state (not pruned) — daysBetween("2026-06-18", "2026-06-17") = -1 < 3
-    const state = JSON.parse(await Bun.file("state.json").text());
-    expect(state.questionDelivery["q-aaa"]).toBe("2026-06-18");
-  });
-
-  test("malformed questionDelivery in state falls back to empty and does not crash", async () => {
-    tempWorkspace();
-    await Bun.write("state.json", JSON.stringify({
-      questionDelivery: "not-an-object", // malformed
-      signalElicitation: { lastAskedDate: "2026-06-16" },
-    }));
-
-    const result = await askQuestions({
-      date: "2026-06-17",
-      stateFile: "state.json",
-      apiKey: "test-key",
-      fetchQuestions: mockFetch([QUESTION_A]),
-    });
-
-    // Treats malformed delivery log as empty — question is available
-    expect(result).toEqual({ questionId: "q-aaa", prompt: "What are you currently working on?" });
-    const state = JSON.parse(await Bun.file("state.json").text());
-    expect(state.questionDelivery).toEqual({ "q-aaa": "2026-06-17" });
-    // Unrelated state keys must not be touched
-    expect(state.signalElicitation).toEqual({ lastAskedDate: "2026-06-16" });
   });
 });

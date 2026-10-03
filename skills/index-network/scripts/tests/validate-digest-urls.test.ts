@@ -22,13 +22,13 @@ describe("sanitizeDigestUrls", () => {
     expect(stripped).toEqual(["https://index.network/accept/901"]);
   });
 
-  test("preserves a legitimate /c/<code> connect link including its query string", () => {
+  test("strips a /c/<code> connect link to its label", () => {
     const md = "[say hi](https://protocol.index.network/c/Abc1234567?link_preview=false)";
 
     const { output, stripped } = sanitizeDigestUrls(md);
 
-    expect(output).toBe(md);
-    expect(stripped).toEqual([]);
+    expect(output).toBe("say hi");
+    expect(stripped).toEqual(["https://protocol.index.network/c/Abc1234567?link_preview=false"]);
   });
 
   test("preserves a legitimate /u/<uuid> profile link", () => {
@@ -40,8 +40,19 @@ describe("sanitizeDigestUrls", () => {
     expect(stripped).toEqual([]);
   });
 
-  test("accepts /c/ and /u/ links regardless of host (dev/railway bases)", () => {
-    const md = "[a](https://index-protocol-dev.up.railway.app/c/Xy_9-aBcDe) and [b](http://localhost:3001/u/33333333-3333-3333-3333-333333333333)";
+  test("strips /c/ and keeps /u/ regardless of host", () => {
+    const connect = "https://index-protocol-dev.up.railway.app/c/Xy_9-aBcDe";
+    const person = "http://localhost:3001/u/33333333-3333-3333-3333-333333333333";
+    const md = `[a](${connect}) and [b](${person})`;
+
+    const { output, stripped } = sanitizeDigestUrls(md);
+
+    expect(output).toBe(`a and [b](${person})`);
+    expect(stripped).toEqual([connect]);
+  });
+
+  test("preserves /o/ and /i/ links", () => {
+    const md = "[message Maya](https://index.network/o/opp-maya) about [the signal](https://index.network/i/intent-1)";
 
     const { output, stripped } = sanitizeDigestUrls(md);
 
@@ -97,7 +108,7 @@ describe("sanitizeDigestUrls", () => {
     });
   });
 
-  test("strips fabricated path shapes other than /c/, /u/, and known event links", () => {
+  test("strips fabricated path shapes other than /u/, /i/, /o/, and known event links", () => {
     const md = "[x](https://index.network/profile/42) [y](https://index.network/opportunity/create?id=7) [z](https://index.network/connect/8)";
 
     const { output, stripped } = sanitizeDigestUrls(md);
@@ -128,15 +139,14 @@ describe("sanitizeDigestUrls", () => {
     expect(stripped).toEqual([]);
   });
 
-  test("on one bullet, keeps the legitimate /c/ link and strips the fabricated one beside it", () => {
-    // The grouped-card shape from prepare.md step 8: one real connect link and one
-    // fabricated link on the same line. Only the fabricated one must be demoted.
-    const md = "- [Maya](https://protocol.index.network/c/Abc1234567?link_preview=false) on memory, and [more](https://index.network/accept/901)";
+  test("on one bullet, strips the /c/ link and the fabricated one beside it", () => {
+    const connect = "https://protocol.index.network/c/Abc1234567?link_preview=false";
+    const md = `- [Maya](${connect}) on memory, and [more](https://index.network/accept/901)`;
 
     const { output, stripped } = sanitizeDigestUrls(md);
 
-    expect(output).toBe("- [Maya](https://protocol.index.network/c/Abc1234567?link_preview=false) on memory, and more");
-    expect(stripped).toEqual(["https://index.network/accept/901"]);
+    expect(output).toBe("- Maya on memory, and more");
+    expect(stripped).toEqual([connect, "https://index.network/accept/901"]);
   });
 
   test("strips fabricated bare URLs and autolinks", () => {
@@ -160,13 +170,15 @@ describe("sanitizeDigestUrls", () => {
     expect(stripped).toEqual(["https://index.network/accept/901"]);
   });
 
-  test("does not treat a trailing-slash /c/ or /u/ path as fabricated", () => {
-    const md = "[a](https://index.network/c/Abc1234567/) [b](https://index.network/u/44444444-4444-4444-4444-444444444444/)";
+  test("strips a trailing-slash /c/ path and keeps a trailing-slash /u/ path", () => {
+    const connect = "https://index.network/c/Abc1234567/";
+    const person = "https://index.network/u/44444444-4444-4444-4444-444444444444/";
+    const md = `[a](${connect}) [b](${person})`;
 
     const { output, stripped } = sanitizeDigestUrls(md);
 
-    expect(stripped).toEqual([]);
-    expect(output).toBe(md);
+    expect(stripped).toEqual([connect]);
+    expect(output).toBe(`a [b](${person})`);
   });
 
   test("preserves digest metadata markers by default so Kanban drafts remain editable", () => {
