@@ -349,7 +349,11 @@ hashes the same Index field. `record_intention` sends its `text` to Index as `de
 unchanged, so a published capture's `text_hash` is the plain SHA-256 (hex) of the UTF-8 bytes
 Index received (DATA-249, tested). A REST create with no preparation receipt persists the
 description verbatim (`intent.service.ts` `create`), so the poller's hash of the stored payload
-should match; the poller counts a mismatch as `text_mismatch` (a dogfood check). `conditional` is null unless `record_intention` sets it. Not in §4.1:
+should match; the poller counts a mismatch as `text_mismatch` (a dogfood check). Text holding an
+unpaired surrogate cannot be encoded as UTF-8, so it could neither reach Index as sent nor hash as
+Index would: `record_intention` refuses it (`text_invalid`) on capture and update. Index trims a
+description on update (`PATCH /api/intents/{id}`, `.trim()`), so an update's `text_hash` is of the
+text as sent, which differs from Index's stored text when it has leading or trailing whitespace. `conditional` is null unless `record_intention` sets it. Not in §4.1:
 `capture_path` (`index_tool` \| `record_intention`); `publish_refused` and `local_reason` (below;
 null on the `index_tool` path); `index_status`, stripped and case-folded and
 limited to `active|paused|archived|deleted|withdrawn|completed|unknown` (`paused` since DATA-249),
@@ -358,8 +362,10 @@ with anything else reported as `other`; and `parent_session_id`, the session tha
 (Python `len`, code points), not bytes. Every key is always present, and null when unknown, with
 one exception: `status_only: true` (DATA-249) appears only on the `intention.updated` of an Index
 `pause_intent` / `resume_intent`, an update of Index's status alone with both hashes null. It is
-the key the Index poller sets on its own status-only updates; the data side reads such an update as
-no text version. It is absent from every other intention event.
+the key the Index poller sets on its own status-only updates. The data side will treat such an
+update as no text version from the data release that carries DATA-248 (in progress); until then
+it is stored as sent. It is absent from every other intention event. A pause or resume whose
+result says `changed: false` (already paused, already active) emits nothing.
 
 **No intention text in any mode, `full` included.** §7.1 says "with hashes only" and the
 measurement catalogue says "text in the archive only". The training export reads text from the
@@ -432,7 +438,9 @@ Search, which such a gate would not see); its text, the `workspace/AGENTS.md` ro
 | `capture`, explicit source, in a held session | none | local uuid v7, `source=ambient`, `publish_refused` `held_cron` or `held_unknown` |
 | `capture` that would publish, of text already held as ambient (case and whitespace ignored) | none | local uuid v7, `publish_refused="held_ambient_exists"` |
 | `update` / `withdraw` of an id it published | `PATCH /api/intents/{id} {description}` / `PATCH /api/intents/{id}/archive` (no body) | `index_intent_id` set; a failed mirror adds `publish_refused` |
-| `update` of a published id in a held session | none | `publish_refused` `held_cron` or `held_unknown`, `source=ambient` (a withdrawal still mirrors) |
+| `update` of a published id in a held session | none | `publish_refused` `held_cron` or `held_unknown`, `source=ambient` |
+| `withdraw` of a published id in a held session | none | refused (`success: false`, no event): `held_cron` or `held_unknown` |
+| `withdraw` of a published id already archived by this tool | none | `intention.withdrawn`, told it was already withdrawn on Index |
 | `update` / `withdraw` of an id it recorded locally | none | local only |
 | `update` / `withdraw` of an id it has no record of | none | `publish_refused="unknown_id"`, `source=ambient` |
 | `confirm` | none | refused: `no_confirmation_channel` (`confirmation_not_wired` when `AV_APPROVAL_URL` is set, until DATA-213) |
@@ -448,6 +456,15 @@ chain is `held_cron`; anything else (`api_server`, `webhook`, `batch`, `acp`, `c
 an empty platform, a plugin platform, an unseen session, a subagent of unknown ancestry) is
 `held_unknown`.
 
+**Held withdrawals (refutation B2, provisional ruling; Carter may overturn).** The same test holds
+a withdrawal of a *published* intention: archiving on Index cannot be undone, and held sessions
+are the ones exposed to injected instructions. In a held session `action=withdraw` of a published
+id sends nothing to Index and records nothing; the tool refuses with `held_cron` / `held_unknown`
+and tells the agent that withdrawing a published intention needs the resident in a direct chat. A
+withdrawal of a local-only intention is unchanged, and so is any withdrawal from a human-platform
+session. A successful archive marks the map entry `archived`, so a second withdrawal sends
+nothing. [Reversal: mirror withdrawals from any session, as before.]
+
 **Rate cap.** `AV_RECORD_INTENTION_MAX_PUBLISH_PER_HOUR` (default 20) Index create attempts per
 rolling hour per tenant, counted across processes in the map under its lock, with the clock read
 inside the lock and no writer dropping another's live stamps. Over it: `rate_capped`. A count that
@@ -456,19 +473,28 @@ cannot be read: `rate_unavailable`; one that was read but cannot be saved procee
 
 `publish_refused` codes: `no_key`, `url_refused`, `rate_capped`, `rate_unavailable`, `redirect`,
 `http_<status>`, `rejected` (Index's 422 `intent_rejected`: too vague, or an edit it would not
-accept), `malformed` (a 2xx without a usable `intentId`, or not a JSON object), `too_large`,
-`timeout`, `transport`, `id_invalid` (a mirror of an id that is not a UUID or hex short id; nothing
+accept), `timeout` (ambiguous: Index may have written; see below), `transport` (nothing was
+sent), `id_invalid` (a mirror of an id that is not a UUID or hex short id; nothing
 sent), `held_cron`, `held_unknown`, `held_ambient_exists`, `unknown_id`. Status mapping
 (`status_code`, from Index's `intent.controller.ts`): 422 is `rejected`; 400 (a body we built
 wrong), 401, 403 (`invalid_preparation`, or a network-membership refusal: never the resident's
-words), 404, 409 (archived), 429, 500 and 503 (`preparation_failed`, retryable, nothing written)
-are `http_<status>`; a 3xx is `redirect`. Every one of them on a capture is the local-capture path
-with that code; only `rejected` labels the map entry. Before DATA-249, `rpc_error` came from the
-MCP client, now removed. Refusals (`success: false`, no event): `disabled`,
+words), 404, 409 (archived), 429 and 503 (`preparation_failed`, retryable, nothing written) are
+`http_<status>`: nothing was written; a 3xx is `redirect`. **Ambiguous failures are `timeout`
+(refutation B1)**, because Index may already have done the write and `timeout` is the one code
+the data side reconciles against a later Index capture of the same text hash: the deadline
+passing; any failure after the request was sent (`RemoteDisconnected`, `IncompleteRead`,
+`ConnectionResetError` from `getresponse()` or the body read, a cut body); a 2xx whose body is not
+a JSON object, is too large, or (on a create) names no `intentId` matching the path-id pattern;
+and any 5xx but 503 (500, 502, 504). `transport` is only for a failure before anything was sent
+(connect, DNS, TLS; urllib wraps those in `URLError`). The tool then tells the agent the result
+is unknown and not to retry, never that Index could not take it. Every code on a capture is the
+local-capture path; only `rejected` labels the map entry. Before DATA-249, `rpc_error`,
+`malformed` and `too_large` came from the MCP client, now removed. Refusals (`success: false`, no event): `disabled`,
 `action_invalid`, `text_required`, `source_required`, `source_invalid`, `publish_invalid`,
 `reason_required`, `reason_invalid`, `intention_id_unexpected`, `intention_id_required`,
 `intention_id_invalid`, `capture_again` (an update of a capture Index rejected),
-`no_confirmation_channel`, `confirmation_not_wired`, `internal`.
+`no_confirmation_channel`, `confirmation_not_wired`, `internal`, `text_invalid` (an unpaired
+surrogate in the text), and `held_cron` / `held_unknown` for a held withdrawal of a published id.
 
 **For the data side.** Reconciliation is the data repo's provisional ruling R11
 (`eligibility_v3`). A `publish_refused='rejected'` capture is ineligible (`index_rejected`); the
@@ -483,18 +509,23 @@ urllib: `POST /api/intents {description, sourceType: "agentvillage", sourceId?}`
 schema is strict; we send neither `networkIds`, so the intent is shared in every network the
 resident belongs to, nor `preparationReceipt`, so Index prepares the text itself, persists it
 verbatim, and answers 422 when it is not ready), `PATCH /api/intents/{id} {description}`, and
-`PATCH /api/intents/{id}/archive` with no body. A publish counts only with a valid `intentId` in a
-2xx body. `sourceId` is sent only by `publish_intent(text, source_id=...)`, for a held intention
+`PATCH /api/intents/{id}/archive` with no body. A publish counts only with an `intentId` matching
+the path-id pattern (a UUID or a hex short id) in a 2xx body; anything else is `timeout`. `sourceId` is sent only by `publish_intent(text, source_id=...)`, for a held intention
 published later; a stated capture sends none (its id is Index's). Not MCP: Index's MCP endpoint
 answers 400 "Unsupported protocol version" to every version the plugin could send (`legacy:
 'reject'`), and the hand-rolled MCP client is gone. Never a Hermes MCP tool call either, so the
 `index_tool` observer never sees it and each call is one event. Headers: `x-api-key`
 (`INDEX_API_KEY`), `accept: application/json`, `content-type: application/json` with a body; no
-`x-index-surface`. The origin is read at call time: `INDEX_API_URL`; else, for tenants the installer
-configured, the origin of `INDEX_MCP_URL` when it is `https://<host>[:port]/mcp`; else
-`https://protocol.index.network`. It must be https (plain http only to `localhost`, `127.0.0.1`,
-`::1`) with no path, credentials, query or fragment; a configured URL that fails is `url_refused`,
-never a fallback to production. An id in a path must be a UUID or a hex short id and is URL-encoded.
+`x-index-surface`. The origin is read at call time: `INDEX_API_URL` (an origin, or `<origin>/api`,
+the convention of Index's own Hermes plugin, stripped to the origin); else the origin of
+`INDEX_MCP_URL` when it is `https://<host>[:port]/mcp`; else `https://protocol.index.network`. It
+must be https (plain http only to `localhost`, `127.0.0.1`, `::1`), with no credentials, no `?`
+or `#` anywhere in the string, and no other path; the origin is rebuilt from the parsed scheme
+and host alone. A configured URL that fails is `url_refused`, never a fallback to production. The
+installer reads `INDEX_MCP_URL` only to write `mcp_servers.index.url` into `config.yaml` and writes
+neither variable to `$HERMES_HOME/.env`, so a tenant installed against Index's dev server still
+writes to production unless `INDEX_API_URL` (or `INDEX_MCP_URL`) is set in the gateway's
+environment. An id in a path must be a UUID or a hex short id and is URL-encoded.
 No redirects, no proxies. The whole request has a 30 s deadline. `$HERMES_HOME/av-events/intentions.json` (0600, under `flock` on
 `intentions.json.lock`) records each id's `{published, source}`, `refused: rejected` for a local
 capture Index rejected, a `held_norm_hash` (sha256 of the

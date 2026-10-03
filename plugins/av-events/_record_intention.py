@@ -28,13 +28,15 @@ sourceId?}` (success `{intentId, networkIds, sourceType, sourceId}`), `PATCH
 /api/intents/{id} {description}`, and `PATCH /api/intents/{id}/archive` with
 no body. Headers `x-api-key`, `accept: application/json`, and
 `content-type: application/json` when there is a body; nothing else (the
-plugin never sent `x-index-surface`). The origin is `INDEX_API_URL`, else the
-origin of a legacy `INDEX_MCP_URL` of the form `https://<host>/mcp`, else
-`https://protocol.index.network` (`api_origin`); https only, plain http only
-to a loopback host. An id in a path must be a UUID or a hex short id, and is
-URL-encoded. Redirects refused, proxies ignored (`_core.NO_REDIRECT_OPENER`).
-Status codes map to `publish_refused` in `status_code`: 422 is `rejected`,
-anything else `http_<status>`. The `index_tool` observer still watches
+plugin never sent `x-index-surface`). The origin is `INDEX_API_URL` (or
+`<origin>/api`), else the origin of an `INDEX_MCP_URL` of the form
+`https://<host>/mcp`, else `https://protocol.index.network` (`api_origin`);
+https only, plain http only to a loopback host. An id in a path must be a UUID
+or a hex short id, and is URL-encoded. Redirects refused, proxies ignored
+(`_core.NO_REDIRECT_OPENER`). Status codes map to `publish_refused` in
+`status_code`: 422 is `rejected`, 5xx but 503 is `timeout`, anything else
+`http_<status>`. Every failure after which Index may have written is
+`timeout` (refutation B1, `_send`); `transport` only when nothing was sent. The `index_tool` observer still watches
 Index's MCP tool names, which an agent may reach through Hermes's own client.
 
 **Deadline and the ambiguous timeout.** Each socket operation is bounded by
