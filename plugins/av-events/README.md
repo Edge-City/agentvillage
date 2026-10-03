@@ -214,8 +214,8 @@ backlog can differ from `emitted_at` by minutes. Every `marts` time series is bu
 | `plugin.degraded` | the guard | `hook`, `scope` ∈ `session`\|`process`, `error_count`, `errors_by_hook`, `hermes_version`, `last_error` |
 | `plugin.buffer_dropped` | the flusher | `reason`, `count`, `files`, `rejected_files`, `rejected_events`, `oldest_event_at`, `newest_event_at` |
 | `intention.captured` | `post_tool_call` on Index `create_intent`, or `record_intention(action="capture")` | `text_hash`, `summary_hash`, `index_intent_id`, `source`, `conditional`, `capture_path`, `index_status`, `parent_session_id`, `publish_refused`, `local_reason`, plus `text_length` / `summary_length` above `metadata` |
-| `intention.updated` | `post_tool_call` on Index `update_intent` with a new `description`, or `record_intention` naming an id | as above |
-| `intention.withdrawn` | `post_tool_call` on Index `update_intent` to `archived`/`deleted`/`withdrawn`, or `delete_intent`, or `record_intention(action="archive"\|"withdraw"\|"delete")` | as above; both hashes null |
+| `intention.updated` | `post_tool_call` on Index `update_intent` with a new `description`, Index `pause_intent` / `resume_intent` (`index_status` `paused` / `active`, both hashes null), or `record_intention` naming an id | as above |
+| `intention.withdrawn` | `post_tool_call` on Index `archive_intent` (or the legacy `delete_intent`, or a legacy `update_intent` to `archived`/`deleted`/`withdrawn`), or `record_intention(action="archive"\|"withdraw"\|"delete")` | as above; both hashes null |
 | `memory.recalled` | `recall:memory.recalled` on the plugin event bus (published by `plugins/recall`) | `query_hash`, `hit_count`, `top_score`, `surface`; the hash and score are null in `metadata` — see below |
 | `memory.snapshot` | the backup thread, after `on_session_end` (rate-limited) or `on_session_finalize` asked for a snapshot and both uploads succeeded | `bytes`, `file_count`, `content_hash`, `manifest_ref` — exactly `memory.snapshot@1`'s closed key set, the same in every capture mode — see "Memory snapshot" |
 
@@ -288,14 +288,28 @@ server-side). Capture happens in `post_tool_call`; `pre_tool_call` is untouched 
 Index tools arrive as `mcp__index__create_intent` and so on. The bare name is also accepted. A tool
 of the same name on any other MCP server is ignored.
 
+Index's intent tools (DATA-249, verified against `indexnetwork/index` `main`
+`services/api/src/lib/mcp/mcp.tools.ts` on 2026-10-02; the overlay's copy of their input schemas is
+`tests/vectors/index_mcp_intent_tools.json`, and a test holds every call the overlay builds to it)
+are `list_intents`, `get_intent`, `create_intent {description, networkIds?, sourceType?, sourceId?}`,
+`update_intent {intentId, description?, sourceType?, sourceId?}`, `pause_intent {intentId}`,
+`resume_intent {intentId}` and `archive_intent {intentId, confirm: true}`. There is no
+`delete_intent`, and `update_intent` takes no status. Index's status is only `active | paused`; an
+archive is `archivedAt` set. `intentId` accepts a short id prefix, and the result names the full id.
+
 | Tool | Event | `intention_id` |
 |---|---|---|
-| Index `create_intent` | `intention.captured` | Index's intent id, read from the result; no id, no event |
-| Index `update_intent` with a `description` | `intention.updated` | the `id` / `intentId` argument |
-| Index `update_intent` whose argument status or result status is `archived`\|`deleted`\|`withdrawn` | `intention.withdrawn` | the argument |
-| Index `update_intent` changing only the status | nothing | — |
-| Index `delete_intent` | `intention.withdrawn` | the argument |
+| Index `create_intent` | `intention.captured` | Index's intent id, read from the result (`intentId`, or the intent object's `id`); no id, no event |
+| Index `update_intent` with a `description` | `intention.updated` | the `intentId` argument (legacy `id`), or the full id the result names for it |
+| Index `update_intent` changing only the source fields | nothing | — |
+| Index `pause_intent` / `resume_intent` | `intention.updated`, `index_status` `paused` / `active`, both hashes null | as for `update_intent` |
+| Index `archive_intent` | `intention.withdrawn`, `index_status` `archived` | as for `update_intent` |
+| Legacy: `delete_intent`, or `update_intent` whose argument status or result status (or `archived: true`) says `archived`\|`deleted`\|`withdrawn` | `intention.withdrawn` (`index_status` `deleted` for `delete_intent`) | as for `update_intent` |
 | `record_intention` | see the contract below | the argument, else (on a capture) the result's `intention_id`, else a uuid v7 minted here |
+
+The legacy rows are kept for an Index server still on the older surface: Index main rejects a
+`status` argument and has no `delete_intent`, so against it they never fire. A paused intention is
+not withdrawn.
 
 Only a call Hermes reports with status `ok` (or no status) records anything: `error`, `blocked`,
 `timeout`, `cancelled` and any other status record nothing. An Index refusal records nothing
@@ -310,8 +324,9 @@ by line: only a line that starts with `{` (after indentation) is tried, from the
 one that decodes is the payload. A `{` inside a sentence — "A good signal looks like {…}" — is never
 read as a result. The payload must be an object whose `success`, if present, is `true`, and the
 intent must be at `data.intent`, `data.intents` holding exactly one item, or `intent` at the top
-(a `structuredContent` copy). Anything else — no readable id, several intents, an id on `data`
-itself or at the top level — emits nothing. Plugin-minted ids are for `record_intention` only;
+(a `structuredContent` copy), or be named by `intentId` at the top or on `data` (Index main's
+create result: `{intentId, url, networkIds, sourceType, sourceId}`). Anything else — no readable
+id, several intents, a bare `id` on `data` itself or at the top level — emits nothing. Plugin-minted ids are for `record_intention` only;
 an Index create is joined downstream by its `index_intent_id`, so one without it is not captured.
 A result over 256 KiB is not parsed at all.
 
@@ -329,11 +344,15 @@ the bootstrap ritual is `message`.
 **Payload.** `text_hash` is SHA-256 over the exact text the agent recorded (Index `description`,
 `record_intention` `text`); `summary_hash` the same over Index's `summary` from the result, or over
 `record_intention`'s `summary`. Nothing is normalised, so the poller gets the same value when it
-hashes the same Index field. `conditional` is null unless `record_intention` sets it. Not in §4.1:
+hashes the same Index field. `record_intention` sends its `text` to Index as `description`
+unchanged, so a published capture's `text_hash` is the plain SHA-256 (hex) of the UTF-8 bytes
+Index received (DATA-249, tested). Index stores the payload its own preparation step returns; the
+poller's hash of it matches only when that step keeps the text as sent (a dogfood check: the
+poller counts a mismatch as `text_mismatch`). `conditional` is null unless `record_intention` sets it. Not in §4.1:
 `capture_path` (`index_tool` \| `record_intention`); `publish_refused` and `local_reason` (below;
 null on the `index_tool` path); `index_status`, stripped and case-folded and
-limited to `active|archived|deleted|withdrawn|completed|unknown`, with anything else reported as
-`other`; and `parent_session_id`, the session that delegated to this one when it is a subagent
+limited to `active|paused|archived|deleted|withdrawn|completed|unknown` (`paused` since DATA-249),
+with anything else reported as `other`; and `parent_session_id`, the session that delegated to this one when it is a subagent
 (learned from `subagent_start`), else null. `text_length` and `summary_length` count characters
 (Python `len`, code points), not bytes. Every key is always present, and null when unknown.
 
@@ -407,7 +426,7 @@ Search, which such a gate would not see); its text, the `workspace/AGENTS.md` ro
 | `capture`, source `ambient` | none | local uuid v7, `source=ambient`, held |
 | `capture`, explicit source, in a held session | none | local uuid v7, `source=ambient`, `publish_refused` `held_cron` or `held_unknown` |
 | `capture` that would publish, of text already held as ambient (case and whitespace ignored) | none | local uuid v7, `publish_refused="held_ambient_exists"` |
-| `update` / `withdraw` of an id it published | `update_intent(id, description)` / `update_intent(id, status="archived")` | `index_intent_id` set; a failed mirror adds `publish_refused` |
+| `update` / `withdraw` of an id it published | `update_intent(intentId, description)` / `archive_intent(intentId, confirm=true)` | `index_intent_id` set; a failed mirror adds `publish_refused` |
 | `update` of a published id in a held session | none | `publish_refused` `held_cron` or `held_unknown`, `source=ambient` (a withdrawal still mirrors) |
 | `update` / `withdraw` of an id it recorded locally | none | local only |
 | `update` / `withdraw` of an id it has no record of | none | `publish_refused="unknown_id"`, `source=ambient` |
@@ -1379,8 +1398,10 @@ These are the divergences this milestone had to resolve. Each one is a decision 
 16. **MCP tool names are prefixed.** Hermes registers Index's tools as `mcp__index__<tool>`, and the
     intention path matches that form. The tool-category allowlist (`tool_categories.json`) is keyed
     the same way, so a bare `create_intent` is `other`.
-17. **`delete_intent` is captured too.** §7.1 names only `create_intent` / `update_intent`. The Index
-    tool family also has `delete_intent`, and a deleted intent is the clearest withdrawal there is.
+17. **Pause, resume and archive are captured too.** §7.1 names only `create_intent` /
+    `update_intent`. Index main (DATA-249) also has `pause_intent`, `resume_intent` and
+    `archive_intent`, and an archive is the clearest withdrawal there is. `delete_intent`, from an
+    older Index surface, is kept as a legacy alias of `archive_intent`.
 18. **There is no EdgeOS tool.** The plan says "the EdgeOS register call and its confirming read";
     the `edgeos` skill makes both as `curl` through `terminal`. **Resolution:** EdgeOS operations are
     matched on method and path inside a carrier tool's command (see "EdgeOS actions"), and
