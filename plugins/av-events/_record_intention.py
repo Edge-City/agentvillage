@@ -20,18 +20,25 @@ the observer reads (only for this unprefixed tool, never an MCP server's
 observed Index `create_intent` would be, so the poller corroborates it by id.
 Only an intention that stays local gets a uuid v7 minted here.
 
-**The wire.** The poller's MCP streamable-HTTP sequence (`agentvillage-data`
-`src/jobs/index-poller.ts` `indexMcpClient`): POST `initialize`, keep the
-`mcp-session-id` response header, POST `notifications/initialized`, POST
-`tools/call`, each with `x-api-key`, `content-type: application/json` and
-`accept: application/json, text/event-stream`, and no other header (the
-poller sends none; Hermes's own Index connection also sends `x-index-surface`
-and `x-index-telegram-username`, whether a create needs them is a dogfood
-check). JSON or SSE responses. Redirects refused, proxies ignored
-(`_core.NO_REDIRECT_OPENER`), https only.
+**The wire: Index's REST API (DATA-249).** Index's MCP endpoint rejects every
+MCP protocol version this module could send (`legacy: 'reject'`), so the
+overlay's own writes go to REST (`intent.controller.ts`, under `/api`), with
+the same `x-api-key`: `POST /api/intents {description, sourceType,
+sourceId?}` (success `{intentId, networkIds, sourceType, sourceId}`), `PATCH
+/api/intents/{id} {description}`, and `PATCH /api/intents/{id}/archive` with
+no body. Headers `x-api-key`, `accept: application/json`, and
+`content-type: application/json` when there is a body; nothing else (the
+plugin never sent `x-index-surface`). The origin is `INDEX_API_URL`, else the
+origin of a legacy `INDEX_MCP_URL` of the form `https://<host>/mcp`, else
+`https://protocol.index.network` (`api_origin`); https only, plain http only
+to a loopback host. An id in a path must be a UUID or a hex short id, and is
+URL-encoded. Redirects refused, proxies ignored (`_core.NO_REDIRECT_OPENER`).
+Status codes map to `publish_refused` in `status_code`: 422 is `rejected`,
+anything else `http_<status>`. The `index_tool` observer still watches
+Index's MCP tool names, which an agent may reach through Hermes's own client.
 
 **Deadline and the ambiguous timeout.** Each socket operation is bounded by
-`INDEX_TIMEOUT_S` and the whole sequence by `INDEX_DEADLINE_S` (30 s: Index's
+`INDEX_TIMEOUT_S` and the whole request by `INDEX_DEADLINE_S` (30 s: Index's
 `create_intent` runs a multi-stage verification graph that can take tens of
 seconds). Past the deadline the capture is recorded locally with
 `publish_refused: timeout`, and Index may still finish the write, so one
@@ -125,6 +132,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import tempfile
 import threading
 import time
@@ -153,8 +161,6 @@ from ._intentions import (
     LOCAL_REASONS,
     RECORD_INTENTION_TOOL,
     RESTRICTIVE_SOURCE,
-    _first_json,
-    result_intent_id,
     valid_id,
 )
 
@@ -164,8 +170,15 @@ TOOL_NAME = RECORD_INTENTION_TOOL
 TOOLSET = "av-events"
 SWITCH = "AV_RECORD_INTENTION"
 TRUTHY = frozenset({"1", "true", "yes", "on"})
-DEFAULT_MCP_URL = "https://protocol.index.network/mcp"
-#: Per socket operation, and for the whole MCP sequence (see the header).
+#: Index's REST origin (DATA-249). `INDEX_API_URL` overrides it; see `api_origin`.
+DEFAULT_API_URL = "https://protocol.index.network"
+API_URL_ENV = "INDEX_API_URL"
+#: Read only when `INDEX_API_URL` is unset: the installer's MCP URL, whose
+#: origin is the REST origin (`https://<host>/mcp` -> `https://<host>`).
+LEGACY_MCP_URL_ENV = "INDEX_MCP_URL"
+#: Plain http is allowed only to these hosts (a local Index in development).
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+#: Per socket operation, and for the whole request (see the header).
 INDEX_TIMEOUT_S = 30.0
 INDEX_DEADLINE_S = 30.0
 MAX_BODY_BYTES = 256 * 1024
@@ -284,21 +297,73 @@ def _refuse(code: str) -> dict:
 
 
 def url_allowed(url: str) -> bool:
+    """An Index REST origin we may send the key to: https with a host, or plain
+    http to a loopback host only; no credentials, query, fragment or path."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+        hostname = parts.hostname
+        parts.port  # noqa: B018 - raises on a malformed port
+    except ValueError:
+        return False
+    if not hostname or parts.username is not None or parts.password is not None:
+        return False
+    if parts.query or parts.fragment or parts.path not in ("", "/"):
+        return False
+    if parts.scheme == "https":
+        return True
+    return parts.scheme == "http" and hostname.lower() in LOOPBACK_HOSTS
+
+
+def _origin_from_mcp_url(url: str) -> Optional[str]:
+    """`https://<host>[:port]/mcp` -> `https://<host>[:port]`; anything else None."""
     try:
         parts = urllib.parse.urlsplit(url)
     except ValueError:
-        return False
-    return parts.scheme == "https" and bool(parts.hostname)
+        return None
+    if parts.scheme != "https" or parts.path.rstrip("/") != "/mcp" or parts.query or parts.fragment:
+        return None
+    origin = f"https://{parts.netloc}"
+    return origin if url_allowed(origin) else None
+
+
+def api_origin() -> tuple[Optional[str], Optional[str]]:
+    """`(origin, None)`, or `(None, "url_refused")`.
+
+    `INDEX_API_URL` when set (it must pass `url_allowed`). Otherwise the
+    origin of a legacy `INDEX_MCP_URL` when it is `https://<host>/mcp`, so a
+    tenant the installer pointed at Index's dev server keeps writing there; an
+    `INDEX_MCP_URL` of any other shape refuses rather than falling back to
+    production. Neither set: `DEFAULT_API_URL`.
+    """
+    configured = env(API_URL_ENV).strip()
+    if configured:
+        return (configured.rstrip("/"), None) if url_allowed(configured) else (None, "url_refused")
+    legacy = env(LEGACY_MCP_URL_ENV).strip()
+    if legacy:
+        origin = _origin_from_mcp_url(legacy)
+        return (origin, None) if origin is not None else (None, "url_refused")
+    return DEFAULT_API_URL, None
 
 
 #: Tests replace this: seconds since the epoch, for the rate cap.
 _clock: Callable[[], float] = time.time
 
 
-# ---- Index over MCP streamable HTTP ---------------------------------------
+# ---- Index over REST (DATA-249) -------------------------------------------
 
 #: Tests replace this. Anything with `.open(request, timeout=...)`.
 _OPENER: Any = NO_REDIRECT_OPENER
+
+#: Index's three intent writes this module makes (`intent.controller.ts`,
+#: mounted under `/api`). `{id}` is an intent id, validated and URL-encoded.
+CREATE_PATH = "/api/intents"
+UPDATE_PATH = "/api/intents/{id}"
+ARCHIVE_PATH = "/api/intents/{id}/archive"
+
+#: An id that may go into a path: a UUID, or the hex short id Index accepts.
+INTENT_PATH_ID = re.compile(
+    r"^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{4,32})$"
+)
 
 
 class IndexFailure(Exception):
@@ -307,129 +372,63 @@ class IndexFailure(Exception):
         self.code = code
 
 
-def _read_rpc(content_type: str, raw: bytes) -> dict:
+def status_code(status: int) -> str:
+    """The `publish_refused` code for a non-2xx answer.
+
+    422 is Index refusing the text (`intent_rejected`: too vague, or an edit it
+    would not accept): `rejected`, which the map labels and the data side reads
+    as `index_rejected`. Every other status is `http_<status>`: 400 a body we
+    built wrong, 401/403 the key or a preparation receipt (never the resident's
+    words), 404 an unknown intent, 409 an archived one, 503 Index's retryable
+    `preparation_failed` (nothing was written), 500 anything else.
+    """
+    if is_redirect(status):
+        return "redirect"
+    if status == 422:
+        return "rejected"
+    return f"http_{status}"
+
+
+def _send(url: str, key: str, method: str, body: Optional[dict], timeout: float) -> Any:
+    """One request; the parsed JSON body of a 2xx answer, else `IndexFailure`.
+    No exception text carries the URL, the key or the body."""
+    headers = {"accept": "application/json", "x-api-key": key}
+    data: Optional[bytes] = None
+    if body is not None:
+        headers["content-type"] = "application/json"
+        data = json.dumps(body).encode("utf-8")
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        raise IndexFailure("malformed") from None
-    if "text/event-stream" in content_type:
-        found: Optional[dict] = None
-        for line in text.split("\n"):
-            if not line.startswith("data:"):
-                continue
-            try:
-                message = json.loads(line[5:].lstrip())
-            except ValueError:
-                continue
-            if isinstance(message, dict) and ("result" in message or "error" in message):
-                found = message
-        if found is None:
-            raise IndexFailure("malformed")
-        return found
-    try:
-        message = json.loads(text)
-    except ValueError:
-        raise IndexFailure("malformed") from None
-    if not isinstance(message, dict):
-        raise IndexFailure("malformed")
-    return message
-
-
-class _Session:
-    def __init__(self, url: str, key: str, timeout: float) -> None:
-        self.url, self.key, self.timeout = url, key, timeout
-        self.session_id: Optional[str] = None
-        self.rpc_id = 0
-
-    def post(self, body: dict) -> tuple[str, bytes, Optional[str]]:
-        headers = {
-            "content-type": "application/json",
-            "accept": "application/json, text/event-stream",
-            "x-api-key": self.key,
-        }
-        if self.session_id is not None:
-            headers["mcp-session-id"] = self.session_id
-        request = urllib.request.Request(
-            self.url, data=json.dumps({"jsonrpc": "2.0", **body}).encode("utf-8"), headers=headers, method="POST"
-        )
+        with _OPENER.open(request, timeout=timeout) as response:
+            status = int(getattr(response, "status", 0) or 0)
+            raw = response.read(MAX_BODY_BYTES + 1)
+    except urllib.error.HTTPError as exc:
         try:
-            with _OPENER.open(request, timeout=self.timeout) as response:
-                status = int(getattr(response, "status", 0) or 0)
-                content_type = str(response.headers.get("content-type") or "")
-                session = response.headers.get("mcp-session-id")
-                raw = response.read(MAX_BODY_BYTES + 1)
-        except urllib.error.HTTPError as exc:
-            try:
-                exc.read()
-            except Exception:  # noqa: BLE001
-                pass
-            code = int(getattr(exc, "code", 0) or 0)
-            raise IndexFailure("redirect" if is_redirect(code) else f"http_{code}") from None
-        except TimeoutError:
+            exc.read()
+        except Exception:  # noqa: BLE001
+            pass
+        raise IndexFailure(status_code(int(getattr(exc, "code", 0) or 0))) from None
+    except TimeoutError:
+        raise IndexFailure("timeout") from None
+    except urllib.error.URLError as exc:
+        if isinstance(getattr(exc, "reason", None), TimeoutError):
             raise IndexFailure("timeout") from None
-        except urllib.error.URLError as exc:
-            if isinstance(getattr(exc, "reason", None), TimeoutError):
-                raise IndexFailure("timeout") from None
-            raise IndexFailure("transport") from None
-        except IndexFailure:
-            raise
-        except Exception:  # noqa: BLE001 - sockets, TLS, DNS
-            raise IndexFailure("transport") from None
-        if is_redirect(status):
-            raise IndexFailure("redirect")
-        if not 200 <= status < 300:
-            raise IndexFailure(f"http_{status}")
-        if len(raw) > MAX_BODY_BYTES:
-            raise IndexFailure("too_large")
-        return content_type, raw, session
-
-    def call(self, method: str, params: dict) -> Any:
-        self.rpc_id += 1
-        content_type, raw, session = self.post({"id": self.rpc_id, "method": method, "params": params})
-        if method == "initialize":
-            self.session_id = session if isinstance(session, str) and session else None
-        message = _read_rpc(content_type, raw)
-        if message.get("error") is not None:
-            raise IndexFailure("rpc_error")
-        return message.get("result")
-
-    def notify(self, method: str) -> None:
-        self.post({"method": method})
-
-
-def _tool_payload(result: Any) -> Any:
-    if not isinstance(result, dict):
+        raise IndexFailure("transport") from None
+    except IndexFailure:
+        raise
+    except Exception:  # noqa: BLE001 - sockets, TLS, DNS
+        raise IndexFailure("transport") from None
+    if not 200 <= status < 300:
+        raise IndexFailure(status_code(status))
+    if len(raw) > MAX_BODY_BYTES:
+        raise IndexFailure("too_large")
+    try:
+        parsed = json.loads(raw.decode("utf-8")) if raw.strip() else {}
+    except (UnicodeDecodeError, ValueError):
+        raise IndexFailure("malformed") from None
+    if not isinstance(parsed, dict):
         raise IndexFailure("malformed")
-    if result.get("isError") is True:
-        raise IndexFailure("rejected")
-    structured = result.get("structuredContent")
-    if isinstance(structured, dict):
-        payload: Any = structured
-    else:
-        text = None
-        content = result.get("content")
-        if isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str):
-                    text = block["text"]
-                    break
-        if text is None or not text.strip():
-            raise IndexFailure("malformed")
-        payload = _first_json(text)
-    if isinstance(payload, dict) and "success" in payload and payload["success"] is not True:
-        raise IndexFailure("rejected")  # "too vague"
-    return payload
-
-
-def _mcp_tool(url: str, key: str, tool: str, arguments: dict, timeout: float) -> Any:
-    session = _Session(url, key, timeout)
-    session.call("initialize", {
-        "protocolVersion": "2025-03-26",
-        "capabilities": {},
-        "clientInfo": {"name": "agentvillage-av-events-record-intention", "version": "1"},
-    })
-    session.notify("notifications/initialized")
-    return _tool_payload(session.call("tools/call", {"name": tool, "arguments": arguments}))
+    return parsed
 
 
 def _join(worker: threading.Thread, deadline: float) -> None:
@@ -437,24 +436,26 @@ def _join(worker: threading.Thread, deadline: float) -> None:
     worker.join(deadline)
 
 
-def index_tool_call(tool: str, arguments: dict, *, timeout: Optional[float] = None,
-                    deadline: Optional[float] = None) -> tuple[Any, Optional[str]]:
-    """`(payload, None)` or `(None, code)`. Never raises. A `timeout` is ambiguous:
-    Index may still finish the write after the thread is abandoned."""
+def index_request(method: str, path: str, body: Optional[dict] = None, *, timeout: Optional[float] = None,
+                  deadline: Optional[float] = None) -> tuple[Any, Optional[str]]:
+    """`(json body, None)` or `(None, code)` for one Index REST write. Never
+    raises. A `timeout` is ambiguous: Index may still finish the write after
+    the thread is abandoned."""
     timeout = INDEX_TIMEOUT_S if timeout is None else timeout
     deadline = INDEX_DEADLINE_S if deadline is None else deadline
     key = env("INDEX_API_KEY")
     if not key:
         return None, "no_key"
     register_literal_secret(key)
-    url = env("INDEX_MCP_URL") or DEFAULT_MCP_URL
-    if not url_allowed(url):
-        return None, "url_refused"
+    origin, code = api_origin()
+    if origin is None:
+        return None, code
+    url = origin + path
     box: list = []
 
     def run() -> None:
         try:
-            box.append((_mcp_tool(url, key, tool, arguments, timeout), None))
+            box.append((_send(url, key, method, body, timeout), None))
         except IndexFailure as exc:
             box.append((None, exc.code))
         except BaseException:  # noqa: BLE001
@@ -475,26 +476,29 @@ SOURCE_TYPE = "agentvillage"
 
 
 def publish_intent(text: str, *, source_id: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
-    """`create_intent {description}` -> `(Index's intent id, None)` or `(None, code)`.
+    """`POST /api/intents` -> `(Index's intent id, None)` or `(None, code)`.
 
+    Body `{description, sourceType, sourceId?}` and nothing else (Index's
+    schema is strict; we send neither `networkIds`, so the intent is shared in
+    every network the resident belongs to, nor `preparationReceipt`, so Index
+    prepares the text itself and refuses it with 422 when it is not ready).
     `description` is `text` exactly as given: the event's `text_hash` is the
-    plain SHA-256 of the same string, and the poller matches the two
-    (DATA-246). Every create carries `sourceType = "agentvillage"` (it marks
-    the intents this overlay created, and Index lists by it). `sourceId` is
-    sent only with `source_id`: a held intention published later passes its
-    local uuid v7, which the poller's back-reference merges on. A stated
-    capture passes none: its `intention_id` is Index's id, corroborated by id
-    (DATA-249 option O4). Index's result names the new intent as `intentId`
-    (`mcp.tools.ts`).
+    plain SHA-256 of the same string, and Index persists it verbatim, so the
+    poller's hash of the stored payload matches (DATA-246). Every create
+    carries `sourceType = "agentvillage"`. `sourceId` is sent only with
+    `source_id`: a held intention published later passes its local uuid v7,
+    which the poller's back-reference merges on. A stated capture passes none:
+    its `intention_id` is Index's id, corroborated by id (DATA-249 O4). A
+    publish counts as done only with a valid `intentId` in a 2xx body.
     """
-    arguments: dict[str, Any] = {"description": text, "sourceType": SOURCE_TYPE}
+    body: dict[str, Any] = {"description": text, "sourceType": SOURCE_TYPE}
     if source_id is not None:
-        arguments["sourceId"] = source_id
-    payload, code = index_tool_call("create_intent", arguments)
+        body["sourceId"] = source_id
+    payload, code = index_request("POST", CREATE_PATH, body)
     if code is not None:
         return None, code
-    intent_id = result_intent_id(payload)
-    if intent_id is None or not valid_id(intent_id):
+    intent_id = payload.get("intentId") if isinstance(payload, dict) else None
+    if not isinstance(intent_id, str) or not valid_id(intent_id):
         return None, "malformed"
     return intent_id, None
 
@@ -502,20 +506,22 @@ def publish_intent(text: str, *, source_id: Optional[str] = None) -> tuple[Optio
 def mirror_update(intent_id: str, *, description: Optional[str] = None, archive: bool = False) -> Optional[str]:
     """Mirror an edit or a withdrawal of a published intention to Index.
 
-    An archive is `archive_intent {intentId, confirm: true}` (Index's schema
-    requires the literal `confirm: true`; archiving cannot be undone there).
-    An edit is `update_intent {intentId, description}`. Neither takes a status.
-    None on success, else a code. With neither, nothing is sent.
+    An archive is `PATCH /api/intents/{id}/archive` with no body (archiving
+    cannot be undone on Index). An edit is `PATCH /api/intents/{id}` with
+    `{description}`. Neither takes a status. None on success, else a code;
+    `id_invalid` when the id is not one Index could have issued (nothing is
+    sent). With neither change, nothing is sent.
     """
-    if archive:
-        _, code = index_tool_call("archive_intent", {"intentId": intent_id, "confirm": True})
-        return code
-    if description is None:
+    if not archive and description is None:
         return None
-    _, code = index_tool_call("update_intent", {"intentId": intent_id, "description": description})
+    if not isinstance(intent_id, str) or INTENT_PATH_ID.fullmatch(intent_id) is None:
+        return "id_invalid"
+    quoted = urllib.parse.quote(intent_id, safe="")
+    if archive:
+        _, code = index_request("PATCH", ARCHIVE_PATH.format(id=quoted))
+    else:
+        _, code = index_request("PATCH", UPDATE_PATH.format(id=quoted), {"description": description})
     return code
-
-
 
 
 # ---- Session lineage (F3) --------------------------------------------------
@@ -858,9 +864,7 @@ def _publish_precheck() -> Optional[str]:
     """`no_key` / `url_refused` before an attempt is counted against the cap."""
     if not env("INDEX_API_KEY"):
         return "no_key"
-    if not url_allowed(env("INDEX_MCP_URL") or DEFAULT_MCP_URL):
-        return "url_refused"
-    return None
+    return api_origin()[1]
 
 
 def _capture(args: dict, held: Optional[str]) -> dict:
@@ -1115,7 +1119,9 @@ def register_record_intention_tool(ctx: Any) -> bool:
 
 __all__ = [
     "ACTIONS",
-    "DEFAULT_MCP_URL",
+    "ARCHIVE_PATH",
+    "CREATE_PATH",
+    "DEFAULT_API_URL",
     "DEFAULT_RATE_CAP",
     "INDEX_DEADLINE_S",
     "INDEX_TIMEOUT_S",
@@ -1130,8 +1136,10 @@ __all__ = [
     "TOOL_DESCRIPTION",
     "TOOL_NAME",
     "TOOL_SCHEMA",
+    "UPDATE_PATH",
+    "api_origin",
     "held_reason",
-    "index_tool_call",
+    "index_request",
     "make_handler",
     "map_path",
     "mirror_update",
@@ -1139,6 +1147,7 @@ __all__ = [
     "record_intention_answer",
     "register_record_intention_tool",
     "reserve_publish",
+    "status_code",
     "switch_on",
     "url_allowed",
 ]
