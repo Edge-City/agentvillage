@@ -20,18 +20,27 @@ the observer reads (only for this unprefixed tool, never an MCP server's
 observed Index `create_intent` would be, so the poller corroborates it by id.
 Only an intention that stays local gets a uuid v7 minted here.
 
-**The wire.** The poller's MCP streamable-HTTP sequence (`agentvillage-data`
-`src/jobs/index-poller.ts` `indexMcpClient`): POST `initialize`, keep the
-`mcp-session-id` response header, POST `notifications/initialized`, POST
-`tools/call`, each with `x-api-key`, `content-type: application/json` and
-`accept: application/json, text/event-stream`, and no other header (the
-poller sends none; Hermes's own Index connection also sends `x-index-surface`
-and `x-index-telegram-username`, whether a create needs them is a dogfood
-check). JSON or SSE responses. Redirects refused, proxies ignored
-(`_core.NO_REDIRECT_OPENER`), https only.
+**The wire: Index's REST API (DATA-249).** Index's MCP endpoint rejects every
+MCP protocol version this module could send (`legacy: 'reject'`), so the
+overlay's own writes go to REST (`intent.controller.ts`, under `/api`), with
+the same `x-api-key`: `POST /api/intents {description, sourceType,
+sourceId?}` (success `{intentId, networkIds, sourceType, sourceId}`), `PATCH
+/api/intents/{id} {description}`, and `PATCH /api/intents/{id}/archive` with
+no body. Headers `x-api-key`, `accept: application/json`, and
+`content-type: application/json` when there is a body; nothing else (the
+plugin never sent `x-index-surface`). The origin is `INDEX_API_URL` (or
+`<origin>/api`), else the origin of an `INDEX_MCP_URL` of the form
+`https://<host>/mcp`, else `https://protocol.index.network` (`api_origin`);
+https only, plain http only to a loopback host. An id in a path must be a UUID
+or a hex short id, and is URL-encoded. Redirects refused, proxies ignored
+(`_core.NO_REDIRECT_OPENER`). Status codes map to `publish_refused` in
+`status_code`: 422 is `rejected`, 5xx but 503 is `timeout`, anything else
+`http_<status>`. Every failure after which Index may have written is
+`timeout` (refutation B1, `_send`); `transport` only when nothing was sent. The `index_tool` observer still watches
+Index's MCP tool names, which an agent may reach through Hermes's own client.
 
 **Deadline and the ambiguous timeout.** Each socket operation is bounded by
-`INDEX_TIMEOUT_S` and the whole sequence by `INDEX_DEADLINE_S` (30 s: Index's
+`INDEX_TIMEOUT_S` and the whole request by `INDEX_DEADLINE_S` (30 s: Index's
 `create_intent` runs a multi-stage verification graph that can take tens of
 seconds). Past the deadline the capture is recorded locally with
 `publish_refused: timeout`, and Index may still finish the write, so one
@@ -80,8 +89,16 @@ event says only `source=ambient`.]
 
 **Held updates (F4, M3).** In a held session `action=update` of a published id
 never mirrors to Index; the local event carries `publish_refused` `held_cron` or
-`held_unknown` and `source` ambient. A withdrawal may still mirror (it removes,
-never asserts). [Reversal: mirror updates from any session.]
+`held_unknown` and `source` ambient. [Reversal: mirror updates from any session.]
+
+**Held withdrawals of published intentions (B2, provisional ruling).** Archiving
+on Index cannot be undone, and a held session is the one exposed to injected
+instructions, so in a held session `action=withdraw` of a published id is
+refused with `held_cron` / `held_unknown` (`success: false`): no archive call,
+no event. A withdrawal of a local-only intention is unchanged, and so is any
+withdrawal from a human-platform session. After an archive mirror succeeds the
+map entry is marked `archived`, so a second withdrawal does not send it again.
+[Reversal: mirror withdrawals from any session, as F4 did.]
 
 **Rate cap (M1, L2).** At most `AV_RECORD_INTENTION_MAX_PUBLISH_PER_HOUR`
 (default 20) Index `create_intent` attempts per rolling hour per tenant, counted
@@ -122,9 +139,12 @@ Python 3.11, standard library only.
 from __future__ import annotations
 
 import hashlib
+import http.client
+import ipaddress
 import json
 import logging
 import os
+import re
 import tempfile
 import threading
 import time
@@ -153,9 +173,6 @@ from ._intentions import (
     LOCAL_REASONS,
     RECORD_INTENTION_TOOL,
     RESTRICTIVE_SOURCE,
-    _first_id,
-    _first_json,
-    result_intent,
     valid_id,
 )
 
@@ -165,9 +182,17 @@ TOOL_NAME = RECORD_INTENTION_TOOL
 TOOLSET = "av-events"
 SWITCH = "AV_RECORD_INTENTION"
 TRUTHY = frozenset({"1", "true", "yes", "on"})
-DEFAULT_MCP_URL = "https://protocol.index.network/mcp"
-#: Per socket operation, and for the whole MCP sequence (see the header).
-INDEX_TIMEOUT_S = 30.0
+#: Index's REST origin (DATA-249). `INDEX_API_URL` overrides it; see `api_origin`.
+DEFAULT_API_URL = "https://protocol.index.network"
+API_URL_ENV = "INDEX_API_URL"
+#: Read only when `INDEX_API_URL` is unset: the installer's MCP URL, whose
+#: origin is the REST origin (`https://<host>/mcp` -> `https://<host>`).
+LEGACY_MCP_URL_ENV = "INDEX_MCP_URL"
+#: Plain http is allowed only to these hosts (a local Index in development).
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+#: Per socket operation (below the deadline, so a connect that never completes
+#: fails as `transport` inside the worker), and for the whole request.
+INDEX_TIMEOUT_S = 25.0
 INDEX_DEADLINE_S = 30.0
 MAX_BODY_BYTES = 256 * 1024
 MAX_MAP_ENTRIES = 10_000
@@ -253,6 +278,21 @@ REFUSALS: dict[str, str] = {
         "intention stays held and unpublished; do not publish it another way."
     ),
     "internal": "record_intention could not run just now; nothing was recorded. Do not publish it another way.",
+    "text_invalid": (
+        "Nothing was recorded: the text holds a character that cannot be sent (an unpaired surrogate). "
+        "Record it again in the resident's words as plain text."
+    ),
+    # B2: withdrawing a published intention archives it on Index for good.
+    "held_cron": (
+        "Not withdrawn: this intention is published on Index, and withdrawing it there cannot be undone, "
+        "so it needs the resident in a direct chat. A scheduled run cannot do it. Nothing was changed. "
+        "Do not archive or withdraw it another way, including with Index's own archive_intent."
+    ),
+    "held_unknown": (
+        "Not withdrawn: this intention is published on Index, and withdrawing it there cannot be undone, "
+        "so it needs the resident in a direct chat, and this session is not one. Nothing was changed. "
+        "Do not archive or withdraw it another way, including with Index's own archive_intent."
+    ),
 }
 
 
@@ -280,26 +320,124 @@ def _blank(value: Any) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
+def _has_lone_surrogate(text: str) -> bool:
+    """C1: an unpaired UTF-16 surrogate cannot be encoded as UTF-8, so it cannot
+    reach Index as sent, and the plugin's hash (`surrogatepass`) would not be
+    Index's. Such text is refused at the tool boundary."""
+    return any("\ud800" <= ch <= "\udfff" for ch in text)
+
+
 def _refuse(code: str) -> dict:
     return {"success": False, "error": code, "message": REFUSALS[code]}
 
 
-def url_allowed(url: str) -> bool:
+#: A DNS name or an IPv4 literal: letters, digits, dots and hyphens only.
+_HOSTNAME = re.compile(r"^[A-Za-z0-9.-]+$")
+
+
+def _host_ok(netloc: str, hostname: str) -> bool:
+    """A hostname of `[A-Za-z0-9.-]` only, or a bracketed IPv6 literal."""
+    host = netloc.rsplit("@", 1)[-1]
+    if host.startswith("["):
+        try:
+            ipaddress.IPv6Address(hostname)
+        except ValueError:
+            return False
+        return True
+    return _HOSTNAME.fullmatch(hostname) is not None
+
+
+def _origin(url: str, paths: tuple[str, ...]) -> Optional[str]:
+    """`scheme://netloc` of `url` when it is an Index origin we may send the key
+    to, else None: https with a host, or plain http to a loopback host only; no
+    credentials, no `?` or `#` anywhere in the raw string (refutation A1), and a
+    path in `paths`. The origin is rebuilt from the parsed scheme and netloc
+    alone, so nothing else in the string reaches a request."""
+    if "?" in url or "#" in url:
+        return None
+    if any(ord(ch) <= 0x20 or ord(ch) == 0x7F for ch in url):
+        # urlsplit silently drops tab and newline; control characters and
+        # spaces are a config error, never a host.
+        return None
     try:
         parts = urllib.parse.urlsplit(url)
+        hostname = parts.hostname
+        parts.port  # noqa: B018 - raises on a malformed port
     except ValueError:
-        return False
-    return parts.scheme == "https" and bool(parts.hostname)
+        return None
+    if not hostname or parts.username is not None or parts.password is not None:
+        return None
+    if not _host_ok(parts.netloc, hostname):
+        return None
+    if parts.path not in paths:
+        return None
+    if parts.scheme == "https" or (parts.scheme == "http" and hostname.lower() in LOOPBACK_HOSTS):
+        return f"{parts.scheme}://{parts.netloc}"
+    return None
+
+
+#: `INDEX_API_URL` may name the origin, or `<origin>/api` (the convention of
+#: Index's own Hermes plugin, refutation A2); no other path.
+_API_URL_PATHS = ("", "/", "/api", "/api/")
+
+
+def url_allowed(url: str) -> bool:
+    """Whether `url` is a usable `INDEX_API_URL` (see `_origin`)."""
+    return _origin(url, _API_URL_PATHS) is not None
+
+
+def _origin_from_mcp_url(url: str) -> Optional[str]:
+    """`https://<host>[:port]/mcp` -> `https://<host>[:port]`; anything else None."""
+    if not url.lower().startswith("https://"):
+        return None
+    return _origin(url, ("/mcp", "/mcp/"))
+
+
+def api_origin() -> tuple[Optional[str], Optional[str]]:
+    """`(origin, None)`, or `(None, "url_refused")`.
+
+    `INDEX_API_URL` when set: an origin, or `<origin>/api`, which is stripped
+    to the origin. Otherwise the origin of `INDEX_MCP_URL` when it is
+    `https://<host>[:port]/mcp`; any other shape refuses rather than falling
+    back to production. Neither set: `DEFAULT_API_URL`.
+
+    What the sandbox actually has: the installer (`install/install_index.ts`)
+    reads `INDEX_MCP_URL` only to write `mcp_servers.index.url` into
+    `config.yaml`; it writes neither variable to `$HERMES_HOME/.env`. So a
+    tenant installed against Index's dev server (or with a custom MCP URL)
+    still writes to production here unless `INDEX_API_URL` (or `INDEX_MCP_URL`)
+    is set in the gateway's own environment. Production tenants need nothing.
+    """
+    configured = env(API_URL_ENV).strip()
+    if configured:
+        origin = _origin(configured, _API_URL_PATHS)
+        return (origin, None) if origin is not None else (None, "url_refused")
+    legacy = env(LEGACY_MCP_URL_ENV).strip()
+    if legacy:
+        origin = _origin_from_mcp_url(legacy)
+        return (origin, None) if origin is not None else (None, "url_refused")
+    return DEFAULT_API_URL, None
 
 
 #: Tests replace this: seconds since the epoch, for the rate cap.
 _clock: Callable[[], float] = time.time
 
 
-# ---- Index over MCP streamable HTTP ---------------------------------------
+# ---- Index over REST (DATA-249) -------------------------------------------
 
 #: Tests replace this. Anything with `.open(request, timeout=...)`.
 _OPENER: Any = NO_REDIRECT_OPENER
+
+#: Index's three intent writes this module makes (`intent.controller.ts`,
+#: mounted under `/api`). `{id}` is an intent id, validated and URL-encoded.
+CREATE_PATH = "/api/intents"
+UPDATE_PATH = "/api/intents/{id}"
+ARCHIVE_PATH = "/api/intents/{id}/archive"
+
+#: An id that may go into a path: a UUID, or the hex short id Index accepts.
+INTENT_PATH_ID = re.compile(
+    r"^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{4,32})$"
+)
 
 
 class IndexFailure(Exception):
@@ -308,129 +446,100 @@ class IndexFailure(Exception):
         self.code = code
 
 
-def _read_rpc(content_type: str, raw: bytes) -> dict:
+#: The code for every failure after which Index may already have done the
+#: write (refutation B1): the request was sent and no usable answer came back.
+#: It is the one code the data side reconciles against a later Index capture
+#: with the same text hash (R11 `index_duplicate_timeout`), so an ambiguous
+#: failure must never be reported as a definite non-publish.
+AMBIGUOUS = "timeout"
+
+
+def status_code(status: int) -> str:
+    """The `publish_refused` code for a non-2xx answer.
+
+    422 is Index refusing the text (`intent_rejected`: too vague, or an edit it
+    would not accept): `rejected`, which the map labels and the data side reads
+    as `index_rejected`. 503 is Index's retryable `preparation_failed`, raised
+    before anything is written: `http_503`. Any other 5xx (500, 502, 504, ...)
+    may come after the write landed (a gateway timeout, a crash after the
+    insert): `timeout`, the ambiguous code. Every other status (400 a body we
+    built wrong, 401/403 the key or a receipt, 404, 409, 429) is
+    `http_<status>`: nothing was written. A 3xx is `redirect`.
+    """
+    if is_redirect(status):
+        return "redirect"
+    if status == 422:
+        return "rejected"
+    if status >= 500 and status != 503:
+        return AMBIGUOUS
+    return f"http_{status}"
+
+
+def _send(url: str, key: str, method: str, body: Optional[dict], timeout: float,
+          phase: Optional[list] = None) -> Any:
+    """One request; the parsed JSON body of a 2xx answer, else `IndexFailure`.
+    No exception text carries the URL, the key or the body.
+
+    Which failures are which (refutation B1 and its recheck):
+    - Building the request, or `http.client.InvalidURL` / `ValueError` from
+      `open()`: a config error found before anything is sent, `url_refused`.
+    - `URLError` from `open()`: urllib wraps a failure to resolve, connect,
+      handshake or send in it, so nothing reached Index: `transport`, a connect
+      timeout included. Logged as `index_unreachable` so a wrong or blackholed
+      host is visible.
+    - Anything else from `open()` (`RemoteDisconnected`, `ConnectionResetError`,
+      a socket timeout while waiting for the answer) or from the body read, and
+      a 2xx whose body is not a JSON object, too large or cut short: `timeout`,
+      the ambiguous code, because Index may have written.
+    `phase`, when given, is set to `reading` once `open()` has returned.
+    """
+    headers = {"accept": "application/json", "x-api-key": key}
+    data: Optional[bytes] = None
+    if body is not None:
+        headers["content-type"] = "application/json"
+        data = json.dumps(body).encode("utf-8")
     try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        raise IndexFailure("malformed") from None
-    if "text/event-stream" in content_type:
-        found: Optional[dict] = None
-        for line in text.split("\n"):
-            if not line.startswith("data:"):
-                continue
-            try:
-                message = json.loads(line[5:].lstrip())
-            except ValueError:
-                continue
-            if isinstance(message, dict) and ("result" in message or "error" in message):
-                found = message
-        if found is None:
-            raise IndexFailure("malformed")
-        return found
-    try:
-        message = json.loads(text)
+        request = urllib.request.Request(url, data=data, headers=headers, method=method)
     except ValueError:
-        raise IndexFailure("malformed") from None
-    if not isinstance(message, dict):
-        raise IndexFailure("malformed")
-    return message
-
-
-class _Session:
-    def __init__(self, url: str, key: str, timeout: float) -> None:
-        self.url, self.key, self.timeout = url, key, timeout
-        self.session_id: Optional[str] = None
-        self.rpc_id = 0
-
-    def post(self, body: dict) -> tuple[str, bytes, Optional[str]]:
-        headers = {
-            "content-type": "application/json",
-            "accept": "application/json, text/event-stream",
-            "x-api-key": self.key,
-        }
-        if self.session_id is not None:
-            headers["mcp-session-id"] = self.session_id
-        request = urllib.request.Request(
-            self.url, data=json.dumps({"jsonrpc": "2.0", **body}).encode("utf-8"), headers=headers, method="POST"
-        )
+        raise IndexFailure("url_refused") from None
+    try:
+        response = _OPENER.open(request, timeout=timeout)
+    except urllib.error.HTTPError as exc:
         try:
-            with _OPENER.open(request, timeout=self.timeout) as response:
-                status = int(getattr(response, "status", 0) or 0)
-                content_type = str(response.headers.get("content-type") or "")
-                session = response.headers.get("mcp-session-id")
-                raw = response.read(MAX_BODY_BYTES + 1)
-        except urllib.error.HTTPError as exc:
-            try:
-                exc.read()
-            except Exception:  # noqa: BLE001
-                pass
-            code = int(getattr(exc, "code", 0) or 0)
-            raise IndexFailure("redirect" if is_redirect(code) else f"http_{code}") from None
-        except TimeoutError:
-            raise IndexFailure("timeout") from None
-        except urllib.error.URLError as exc:
-            if isinstance(getattr(exc, "reason", None), TimeoutError):
-                raise IndexFailure("timeout") from None
-            raise IndexFailure("transport") from None
-        except IndexFailure:
-            raise
-        except Exception:  # noqa: BLE001 - sockets, TLS, DNS
-            raise IndexFailure("transport") from None
-        if is_redirect(status):
-            raise IndexFailure("redirect")
-        if not 200 <= status < 300:
-            raise IndexFailure(f"http_{status}")
-        if len(raw) > MAX_BODY_BYTES:
-            raise IndexFailure("too_large")
-        return content_type, raw, session
-
-    def call(self, method: str, params: dict) -> Any:
-        self.rpc_id += 1
-        content_type, raw, session = self.post({"id": self.rpc_id, "method": method, "params": params})
-        if method == "initialize":
-            self.session_id = session if isinstance(session, str) and session else None
-        message = _read_rpc(content_type, raw)
-        if message.get("error") is not None:
-            raise IndexFailure("rpc_error")
-        return message.get("result")
-
-    def notify(self, method: str) -> None:
-        self.post({"method": method})
-
-
-def _tool_payload(result: Any) -> Any:
-    if not isinstance(result, dict):
-        raise IndexFailure("malformed")
-    if result.get("isError") is True:
-        raise IndexFailure("rejected")
-    structured = result.get("structuredContent")
-    if isinstance(structured, dict):
-        payload: Any = structured
-    else:
-        text = None
-        content = result.get("content")
-        if isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str):
-                    text = block["text"]
-                    break
-        if text is None or not text.strip():
-            raise IndexFailure("malformed")
-        payload = _first_json(text)
-    if isinstance(payload, dict) and "success" in payload and payload["success"] is not True:
-        raise IndexFailure("rejected")  # "too vague"
-    return payload
-
-
-def _mcp_tool(url: str, key: str, tool: str, arguments: dict, timeout: float) -> Any:
-    session = _Session(url, key, timeout)
-    session.call("initialize", {
-        "protocolVersion": "2025-03-26",
-        "capabilities": {},
-        "clientInfo": {"name": "agentvillage-av-events-record-intention", "version": "1"},
-    })
-    session.notify("notifications/initialized")
-    return _tool_payload(session.call("tools/call", {"name": tool, "arguments": arguments}))
+            exc.read()
+        except Exception:  # noqa: BLE001
+            pass
+        raise IndexFailure(status_code(int(getattr(exc, "code", 0) or 0))) from None
+    except urllib.error.URLError as exc:
+        reason = getattr(exc, "reason", None)
+        logger.warning("av-events: record_intention index_unreachable=%s",
+                       "connect_timeout" if isinstance(reason, TimeoutError) else type(reason).__name__)
+        raise IndexFailure("transport") from None
+    except (ValueError, http.client.InvalidURL):  # raised by putrequest, before the send
+        raise IndexFailure("url_refused") from None
+    except Exception:  # noqa: BLE001 - after the send: the write may have landed
+        raise IndexFailure(AMBIGUOUS) from None
+    if phase is not None:
+        phase[0] = "reading"
+    try:
+        with response:
+            status = int(getattr(response, "status", 0) or 0)
+            if not 200 <= status < 300:
+                raise IndexFailure(status_code(status))
+            raw = response.read(MAX_BODY_BYTES + 1)
+    except IndexFailure:
+        raise
+    except Exception:  # noqa: BLE001 - a cut or failed read: the write may have landed
+        raise IndexFailure(AMBIGUOUS) from None
+    if len(raw) > MAX_BODY_BYTES:
+        raise IndexFailure(AMBIGUOUS)
+    try:
+        parsed = json.loads(raw.decode("utf-8")) if raw.strip() else {}
+    except (UnicodeDecodeError, ValueError):
+        raise IndexFailure(AMBIGUOUS) from None
+    if not isinstance(parsed, dict):
+        raise IndexFailure(AMBIGUOUS)
+    return parsed
 
 
 def _join(worker: threading.Thread, deadline: float) -> None:
@@ -438,24 +547,35 @@ def _join(worker: threading.Thread, deadline: float) -> None:
     worker.join(deadline)
 
 
-def index_tool_call(tool: str, arguments: dict, *, timeout: Optional[float] = None,
-                    deadline: Optional[float] = None) -> tuple[Any, Optional[str]]:
-    """`(payload, None)` or `(None, code)`. Never raises. A `timeout` is ambiguous:
-    Index may still finish the write after the thread is abandoned."""
+def index_request(method: str, path: str, body: Optional[dict] = None, *, timeout: Optional[float] = None,
+                  deadline: Optional[float] = None) -> tuple[Any, Optional[str]]:
+    """`(json body, None)` or `(None, code)` for one Index REST write. Never
+    raises.
+
+    Each socket operation is bounded by `timeout` (`INDEX_TIMEOUT_S`, below the
+    deadline), so a connect that never completes fails inside the worker as
+    `transport` before the deadline. When the overall `deadline` passes first,
+    whether the request was sent cannot be known (a slow DNS lookup, or a
+    connect then a slow answer): the code is `timeout`, the safe direction for
+    the metric, and the log line says how far the worker got
+    (`index_deadline=opening`: no answer had begun, possibly never connected;
+    `index_deadline=reading`: the answer had begun)."""
     timeout = INDEX_TIMEOUT_S if timeout is None else timeout
     deadline = INDEX_DEADLINE_S if deadline is None else deadline
     key = env("INDEX_API_KEY")
     if not key:
         return None, "no_key"
     register_literal_secret(key)
-    url = env("INDEX_MCP_URL") or DEFAULT_MCP_URL
-    if not url_allowed(url):
-        return None, "url_refused"
+    origin, code = api_origin()
+    if origin is None:
+        return None, code
+    url = origin + path
     box: list = []
+    phase = ["opening"]
 
     def run() -> None:
         try:
-            box.append((_mcp_tool(url, key, tool, arguments, timeout), None))
+            box.append((_send(url, key, method, body, timeout, phase), None))
         except IndexFailure as exc:
             box.append((None, exc.code))
         except BaseException:  # noqa: BLE001
@@ -465,32 +585,67 @@ def index_tool_call(tool: str, arguments: dict, *, timeout: Optional[float] = No
     worker.start()
     _join(worker, deadline)
     if worker.is_alive() or not box:
-        return None, "timeout"
+        logger.warning("av-events: record_intention index_deadline=%s", phase[0])
+        return None, AMBIGUOUS
     return box[0]
 
 
-def publish_intent(text: str) -> tuple[Optional[str], Optional[str]]:
-    payload, code = index_tool_call("create_intent", {"description": text})
+#: `sourceType` on every intent the overlay creates (DATA-149 decision A,
+#: DATA-249 O4): Index stores it and the client-owned `sourceId` unchanged,
+#: and the poller (DATA-246) reads them.
+SOURCE_TYPE = "agentvillage"
+
+
+def publish_intent(text: str, *, source_id: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
+    """`POST /api/intents` -> `(Index's intent id, None)` or `(None, code)`.
+
+    Body `{description, sourceType, sourceId?}` and nothing else (Index's
+    schema is strict; we send neither `networkIds`, so the intent is shared in
+    every network the resident belongs to, nor `preparationReceipt`, so Index
+    prepares the text itself and refuses it with 422 when it is not ready).
+    `description` is `text` exactly as given: the event's `text_hash` is the
+    plain SHA-256 of the same string, and Index persists it verbatim, so the
+    poller's hash of the stored payload matches (DATA-246). Every create
+    carries `sourceType = "agentvillage"`. `sourceId` is sent only with
+    `source_id`: a held intention published later passes its local uuid v7,
+    which the poller's back-reference merges on. A stated capture passes none:
+    its `intention_id` is Index's id, corroborated by id (DATA-249 O4). A
+    publish counts as done only with an `intentId` matching `INTENT_PATH_ID` in
+    a 2xx body; a 2xx without one is `timeout` (the create may have landed).
+    """
+    body: dict[str, Any] = {"description": text, "sourceType": SOURCE_TYPE}
+    if source_id is not None:
+        body["sourceId"] = source_id
+    payload, code = index_request("POST", CREATE_PATH, body)
     if code is not None:
         return None, code
-    intent_id = _first_id(result_intent(payload))
-    if intent_id is None or not valid_id(intent_id):
-        return None, "malformed"
+    intent_id = payload.get("intentId") if isinstance(payload, dict) else None
+    if not isinstance(intent_id, str) or INTENT_PATH_ID.fullmatch(intent_id) is None:
+        # B3: a 2xx naming no id Index could have issued. The create may have
+        # landed, so it is the ambiguous case, never a definite non-publish.
+        return None, AMBIGUOUS
     return intent_id, None
 
 
 def mirror_update(intent_id: str, *, description: Optional[str] = None, archive: bool = False) -> Optional[str]:
-    # `id` as the Index skill's heartbeat names it (`update_intent(id, status=...)`);
-    # unconfirmed against Index's tool schema, a dogfood check.
-    arguments: dict[str, Any] = {"id": intent_id}
+    """Mirror an edit or a withdrawal of a published intention to Index.
+
+    An archive is `PATCH /api/intents/{id}/archive` with no body (archiving
+    cannot be undone on Index). An edit is `PATCH /api/intents/{id}` with
+    `{description}`. Neither takes a status. None on success, else a code;
+    `id_invalid` when the id is not one Index could have issued (nothing is
+    sent). With neither change, nothing is sent.
+    """
+    if not archive and description is None:
+        return None
+    if not isinstance(intent_id, str) or INTENT_PATH_ID.fullmatch(intent_id) is None:
+        return "id_invalid"
+    quoted = urllib.parse.quote(intent_id, safe="")
     if archive:
-        arguments["status"] = "archived"
-    if description is not None:
-        arguments["description"] = description
-    _, code = index_tool_call("update_intent", arguments)
+        _, code = index_request("PATCH", ARCHIVE_PATH.format(id=quoted))
+    else:
+        _, code = index_request("PATCH", UPDATE_PATH.format(id=quoted), {"description": description})
     return code
-
-
 
 
 # ---- Session lineage (F3) --------------------------------------------------
@@ -730,6 +885,26 @@ def held_hash_exists(norm_hash: str) -> bool:
     return any(v.get(HELD_HASH_KEY) == norm_hash for v in entries.values())
 
 
+#: B2: set on a published entry once its archive mirror succeeded, so a second
+#: withdrawal does not send the archive again.
+ARCHIVED_KEY = "archived"
+
+
+def mark_archived(intention_id: str) -> None:
+    """Mark a known entry archived on Index. Best effort: a map that cannot be
+    written costs one repeated archive call (Index answers it), never a lost one."""
+    try:
+        with _Locked():
+            entries, publishes = _load_locked()
+            entry = entries.get(intention_id)
+            if entry is None or entry.get(ARCHIVED_KEY) is True:
+                return
+            entry[ARCHIVED_KEY] = True
+            _save_locked(entries, publishes)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("av-events: record_intention map_write_failed=%s", type(exc).__name__)
+
+
 def set_held_hash(intention_id: str, norm_hash: Optional[str]) -> None:
     """Replace (or, with None, drop) a known entry's held hash. Best effort."""
     try:
@@ -833,9 +1008,7 @@ def _publish_precheck() -> Optional[str]:
     """`no_key` / `url_refused` before an attempt is counted against the cap."""
     if not env("INDEX_API_KEY"):
         return "no_key"
-    if not url_allowed(env("INDEX_MCP_URL") or DEFAULT_MCP_URL):
-        return "url_refused"
-    return None
+    return api_origin()[1]
 
 
 def _capture(args: dict, held: Optional[str]) -> dict:
@@ -844,6 +1017,8 @@ def _capture(args: dict, held: Optional[str]) -> dict:
     text = _text(args.get("text"))
     if text is None:
         return _refuse("text_required")
+    if _has_lone_surrogate(text):
+        return _refuse("text_invalid")
     if _blank(args.get("source")):
         return _refuse("source_required")
     source = str(args.get("source")).strip().lower()
@@ -914,8 +1089,12 @@ def _capture(args: dict, held: Optional[str]) -> dict:
                     "Index did not accept it, most likely as too vague. Ask the resident one clarifying "
                     "question; if they clarify, capture the clarified version. Do not retry with a paraphrase."
                 )
-            elif code == "timeout":
-                tail = "Index did not answer in time. Do not retry; it may still appear on Index."
+            elif code == AMBIGUOUS:
+                # B1: the request may have landed. Never say Index could not take it.
+                tail = (
+                    "Whether Index took it is unknown: no usable answer came back, and it may already be on "
+                    "Index. It is recorded; do not retry it."
+                )
             elif code == "rate_capped":
                 tail = "This agent has reached its hourly limit for publishing to Index. It is recorded; do not retry it."
             else:
@@ -940,6 +1119,8 @@ def _update_or_withdraw(action: str, args: dict, held: Optional[str]) -> dict:
     text = _text(args.get("text"))
     if action == "update" and text is None:
         return _refuse("text_required")
+    if action == "update" and _has_lone_surrogate(text):
+        return _refuse("text_invalid")
     verb = "Updated" if action == "update" else "Withdrew"
 
     entry = lookup(intention_id)
@@ -964,6 +1145,13 @@ def _update_or_withdraw(action: str, args: dict, held: Optional[str]) -> dict:
     if action == "update" and entry.get("refused") == "rejected":
         return _refuse("capture_again")
     published = entry.get("published") is True
+    if action == "withdraw" and published and held is not None:
+        # B2 (provisional ruling): archiving on Index cannot be undone, and a
+        # held session (cron, webhook, api_server, unknown) is the one exposed
+        # to injected instructions. Nothing is sent and nothing is recorded:
+        # the refusal carries no event. [Reversal: mirror withdrawals from any
+        # session again, as F4 did.]
+        return _refuse(f"held_{held}")
     source = entry.get("source") if entry.get("source") in SOURCES else RESTRICTIVE_SOURCE
     if held is not None:
         source = RESTRICTIVE_SOURCE
@@ -979,21 +1167,34 @@ def _update_or_withdraw(action: str, args: dict, held: Optional[str]) -> dict:
         # R9 revised: a held entry's hash follows its text, and goes with it.
         set_held_hash(intention_id, held_norm_hash(text) if action == "update" and text is not None else None)
     code: Optional[str] = None
+    already_archived = published and entry.get(ARCHIVED_KEY) is True
     if published:
         if action == "update" and held is not None:
             code = f"held_{held}"  # F4/M3: a held session never overwrites a live intent
         elif action == "update":
             code = mirror_update(intention_id, description=text)
+        elif already_archived:
+            code = None  # B2: archived on Index already; the archive is not sent twice
         else:
             code = mirror_update(intention_id, archive=True)
+            if code is None:
+                mark_archived(intention_id)
         if code is not None:
             result["publish_refused"] = code
     if not published:
         result["message"] = f"{verb} intention {intention_id} (kept locally; it is not on Index)."
+    elif already_archived and action == "withdraw":
+        result["message"] = f"{verb} intention {intention_id}; it was already withdrawn on Index."
     elif code is None:
         result["message"] = f"{verb} intention {intention_id} here and on Index."
     elif code.startswith("held_"):
         result["message"] = f"{verb} intention {intention_id} locally; this session cannot change it on Index."
+    elif code == AMBIGUOUS:
+        # B1: the change may have landed on Index.
+        result["message"] = (
+            f"{verb} intention {intention_id} here; whether Index applied it is unknown (code {code}). "
+            "Do not retry it."
+        )
     else:
         result["message"] = f"{verb} intention {intention_id} here; Index was not updated (code {code})."
     return result
@@ -1090,7 +1291,9 @@ def register_record_intention_tool(ctx: Any) -> bool:
 
 __all__ = [
     "ACTIONS",
-    "DEFAULT_MCP_URL",
+    "ARCHIVE_PATH",
+    "CREATE_PATH",
+    "DEFAULT_API_URL",
     "DEFAULT_RATE_CAP",
     "INDEX_DEADLINE_S",
     "INDEX_TIMEOUT_S",
@@ -1099,13 +1302,16 @@ __all__ = [
     "RATE_CAP_ENV",
     "REFUSALS",
     "SOURCES",
+    "SOURCE_TYPE",
     "SWITCH",
     "TOOLSET",
     "TOOL_DESCRIPTION",
     "TOOL_NAME",
     "TOOL_SCHEMA",
+    "UPDATE_PATH",
+    "api_origin",
     "held_reason",
-    "index_tool_call",
+    "index_request",
     "make_handler",
     "map_path",
     "mirror_update",
@@ -1113,6 +1319,7 @@ __all__ = [
     "record_intention_answer",
     "register_record_intention_tool",
     "reserve_publish",
+    "status_code",
     "switch_on",
     "url_allowed",
 ]

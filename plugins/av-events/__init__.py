@@ -582,6 +582,11 @@ def _intention_payload(call: IntentionCall, capture: str, parent_session_id: Opt
         "publish_refused": call.publish_refused,
         "local_reason": call.local_reason,
     }
+    if call.status_only:
+        # DATA-249: Index `pause_intent` / `resume_intent`, an update of the
+        # status alone (both hashes null). Same key as the Index poller's
+        # status-only updates; present only on those events.
+        payload["status_only"] = True
     if capture != "metadata":
         payload["text_length"] = len(call.text) if call.text else None
         payload["summary_length"] = len(call.summary) if call.summary else None

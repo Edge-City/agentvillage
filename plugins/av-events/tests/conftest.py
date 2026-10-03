@@ -45,6 +45,7 @@ AV_ENV_VARS = (
     # DATA-212 `record_intention`.
     "AV_RECORD_INTENTION",
     "INDEX_API_KEY",
+    "INDEX_API_URL",
     "INDEX_MCP_URL",
     "AV_APPROVAL_URL",
 )
