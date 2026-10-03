@@ -1,24 +1,23 @@
 #!/usr/bin/env bun
 /**
- * Fetch and filter the authenticated user's negotiations for the afternoon
- * check-in cron, then output structured context for the LLM to narrate.
+ * Build the afternoon follow-up for the check-in cron, then output structured
+ * context for the LLM to narrate.
  *
- * Calls list_negotiations with detail:"narrative" to receive indexContext,
- * recentTurns, and outcome in one round-trip. Separates negotiations into
- * three groups: needs-attention (active, user's turn), waiting (active, other
- * side's turn), and newly-resolved (completed, recently updated, not yet
- * reported). Tracks reported completed IDs in heartbeat-state.json so the user
- * is never spammed about the same concluded negotiation twice.
+ * main() lists the user's opportunities (list_opportunities: pending,
+ * negotiating and accepted) and signals (list_intents), and splits the cards
+ * into three groups: needs-attention (pending, waiting on the user), waiting
+ * (negotiating, agents still talking), and newly-resolved (accepted, not yet
+ * reported). Tracks reported ids in heartbeat-state.json under
+ * negotiationSummary.reportedCompletedIds so the user is never told about the
+ * same connection twice.
  *
  * Outputs either exactly `[SILENT]` (nothing to report) or a JSON object that
  * the cron prompt feeds to the LLM for the structured report:
  *
  *   { signals: [...], needsAttention: [...], waiting: [...], newlyResolved: [...] }
  *
- * When there is something to report, it additionally fetches the user's own
- * active signals (read_intents) and resolves each negotiation's counterparty to
- * a display name (read_user_contexts). Both enrichments are best-effort: a
- * failure degrades to empty signals / null names rather than aborting.
+ * summarizeNegotiations() is the earlier per-negotiation categoriser. It takes
+ * injected fetchers, and main() does not call it.
  *
  * Usage (from $HERMES_HOME):
  *   bun skills/index-network/scripts/summarize-negotiations.ts \
@@ -99,7 +98,7 @@ export interface NegotiationItem {
   id: string;
   counterpartyId: string;
   /**
-   * Human-readable counterparty name, resolved post-fetch via read_user_contexts.
+   * Human-readable counterparty name, resolved post-fetch by the injected ProfileResolver.
    * Undefined until resolution runs; null when the counterparty has no profile
    * (or resolution failed). The prompt falls back to indexContext when absent.
    */
@@ -126,45 +125,10 @@ export interface NegotiationItem {
   } | null;
 }
 
-interface NegotiationListResponse {
-  success?: boolean;
-  error?: unknown;
-  data?: {
-    count?: number;
-    totalCount?: number;
-    negotiations?: NegotiationItem[];
-  };
-}
-
 /** A single signal (intent) the user has registered, condensed for the report. */
 export interface SignalItem {
   id: string;
   summary: string;
-}
-
-interface IntentListResponse {
-  success?: boolean;
-  error?: unknown;
-  data?: {
-    intents?: Array<{
-      id?: string;
-      summary?: string;
-      description?: string;
-      status?: string;
-    }>;
-  };
-}
-
-interface ProfileResponse {
-  success?: boolean;
-  error?: unknown;
-  data?: {
-    hasProfile?: boolean;
-    /** Flat identity shape (WS11+ protocol): name lives at data.name. */
-    name?: string;
-    /** Legacy nested shape (pre-WS11 protocol): name lived at data.profile.name. */
-    profile?: { name?: string };
-  };
 }
 
 export interface NegotiationSummaryState {
@@ -226,155 +190,6 @@ export async function readJsonObject(path: string): Promise<Record<string, unkno
 
 export async function writeJsonObject(path: string, data: Record<string, unknown>): Promise<void> {
   await Bun.write(path, `${JSON.stringify(data, null, 2)}\n`);
-}
-
-// ── Default MCP fetcher ───────────────────────────────────────────────────────
-
-export function buildMcpFetcher(apiKey: string, mcpUrl: string): NegotiationFetcher {
-  return async () => {
-    const initResp = await postMcpMessage(mcpUrl, apiKey, {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: "2024-11-05",
-        capabilities: {},
-        clientInfo: { name: "agentvillage-negotiation-summary", version: "1.0.0" },
-      },
-    });
-    if (initResp.error) throw new Error(`MCP initialize: ${initResp.error.message}`);
-
-    const toolResp = await postMcpMessage(mcpUrl, apiKey, {
-      jsonrpc: "2.0",
-      id: 2,
-      method: "tools/call",
-      params: {
-        name: "list_negotiations",
-        arguments: { status: "all", limit: 50, detail: "narrative" },
-      },
-    });
-    if (toolResp.error) throw new Error(`MCP list_negotiations: ${toolResp.error.message}`);
-
-    const result = toolResp.result as McpToolResult | undefined;
-    const text = result?.content?.find((c) => c.type === "text")?.text ?? "";
-    if (!text.trim()) return [];
-
-    const parsed = JSON.parse(text) as NegotiationListResponse;
-    if (parsed.success === false) {
-      const detail = typeof parsed.error === "string" ? parsed.error : "tool reported failure";
-      throw new Error(`list_negotiations: ${detail}`);
-    }
-
-    const negotiations = parsed.data?.negotiations;
-    if (!Array.isArray(negotiations)) return [];
-    return negotiations as NegotiationItem[];
-  };
-}
-
-/**
- * Build a fetcher for the user's own active signals via read_intents (no args →
- * caller-owned active intents). Best-effort: the caller treats a throw as "no
- * signals" rather than aborting the whole report.
- */
-export function buildMcpSignalFetcher(apiKey: string, mcpUrl: string): SignalFetcher {
-  return async () => {
-    const initResp = await postMcpMessage(mcpUrl, apiKey, {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: "2024-11-05",
-        capabilities: {},
-        clientInfo: { name: "agentvillage-negotiation-summary", version: "1.0.0" },
-      },
-    });
-    if (initResp.error) throw new Error(`MCP initialize: ${initResp.error.message}`);
-
-    const toolResp = await postMcpMessage(mcpUrl, apiKey, {
-      jsonrpc: "2.0",
-      id: 2,
-      method: "tools/call",
-      params: { name: "read_intents", arguments: { limit: 20 } },
-    });
-    if (toolResp.error) throw new Error(`MCP read_intents: ${toolResp.error.message}`);
-
-    const result = toolResp.result as McpToolResult | undefined;
-    const text = result?.content?.find((c) => c.type === "text")?.text ?? "";
-    if (!text.trim()) return [];
-
-    const parsed = JSON.parse(text) as IntentListResponse;
-    if (parsed.success === false) return [];
-
-    const intents = parsed.data?.intents;
-    if (!Array.isArray(intents)) return [];
-
-    return intents
-      .map((i) => ({ id: i.id ?? "", summary: (i.summary || i.description || "").trim() }))
-      .filter((s) => s.summary.length > 0);
-  };
-}
-
-/**
- * Build a memoised resolver mapping a counterparty userId → display name via
- * read_user_contexts. Initialises the MCP session lazily on first use and caches
- * per-userId results (including null) so repeated counterparties cost one call.
- * Any per-user failure resolves to null rather than throwing.
- */
-export function buildMcpProfileResolver(apiKey: string, mcpUrl: string): ProfileResolver {
-  const cache = new Map<string, string | null>();
-  let initialized = false;
-  let nextId = 100;
-
-  return async (userId: string) => {
-    if (!userId) return null;
-    if (cache.has(userId)) return cache.get(userId) ?? null;
-
-    try {
-      if (!initialized) {
-        const initResp = await postMcpMessage(mcpUrl, apiKey, {
-          jsonrpc: "2.0",
-          id: nextId++,
-          method: "initialize",
-          params: {
-            protocolVersion: "2024-11-05",
-            capabilities: {},
-            clientInfo: { name: "agentvillage-negotiation-summary", version: "1.0.0" },
-          },
-        });
-        if (initResp.error) throw new Error(`MCP initialize: ${initResp.error.message}`);
-        initialized = true;
-      }
-
-      const toolResp = await postMcpMessage(mcpUrl, apiKey, {
-        jsonrpc: "2.0",
-        id: nextId++,
-        method: "tools/call",
-        params: { name: "read_user_contexts", arguments: { userId } },
-      });
-      if (toolResp.error) throw new Error(toolResp.error.message);
-
-      const result = toolResp.result as McpToolResult | undefined;
-      const text = result?.content?.find((c) => c.type === "text")?.text ?? "";
-      if (!text.trim()) {
-        cache.set(userId, null);
-        return null;
-      }
-
-      const parsed = JSON.parse(text) as ProfileResponse;
-      // Read the flat identity shape (WS11+) first, falling back to the legacy
-      // nested shape so this works across the protocol rename transition.
-      const rawName =
-        parsed.success !== false && parsed.data?.hasProfile
-          ? parsed.data.name ?? parsed.data.profile?.name
-          : undefined;
-      const name = rawName?.trim() || null;
-      cache.set(userId, name);
-      return name;
-    } catch {
-      cache.set(userId, null);
-      return null;
-    }
-  };
 }
 
 // ── Core logic (injectable) ───────────────────────────────────────────────────
