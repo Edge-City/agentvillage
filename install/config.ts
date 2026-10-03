@@ -6,14 +6,16 @@ import { hermesHome } from "./paths";
 
 const DEFAULT_MODEL_MAX_TOKENS = 4096;
 
-function readConfig(): Record<string, unknown> {
+/** `$HERMES_HOME/config.yaml` as a mapping (`{}` when absent or empty). Shared by the installer steps. */
+export function readConfig(): Record<string, unknown> {
   const configPath = join(hermesHome(), "config.yaml");
   if (!existsSync(configPath)) return {};
   // An empty or comment-only file parses to null; every helper expects a mapping.
   return (YAML.parse(readFileSync(configPath, "utf8")) ?? {}) as Record<string, unknown>;
 }
 
-function writeConfig(doc: Record<string, unknown>): void {
+/** Write `$HERMES_HOME/config.yaml` from `doc` (the `yaml` package's stringify, as every step here does). */
+export function writeConfig(doc: Record<string, unknown>): void {
   writeFileSync(join(hermesHome(), "config.yaml"), YAML.stringify(doc));
 }
 
@@ -252,9 +254,20 @@ const TRUTHY = new Set(["1", "true", "yes", "on"]);
  * the environment (even blank) is authoritative, as in `av-events`. `name`
  * must be a plain identifier (it is spliced into a regular expression).
  */
-function envOrDotenv(name: string): string | undefined {
+export function envOrDotenv(name: string): string | undefined {
   const fromEnv = process.env[name];
   if (fromEnv !== undefined) return fromEnv;
+  return dotenvFileValue(name);
+}
+
+/**
+ * A variable as `$HERMES_HOME/.env` alone assigns it (last assignment wins),
+ * or `undefined` when the file or the assignment is absent. This is what a
+ * Hermes process sees once `load_hermes_dotenv(override=True)` has run, which
+ * is why a check about the gateway's environment reads the file and not this
+ * process's environment. `name` must be a plain identifier.
+ */
+export function dotenvFileValue(name: string): string | undefined {
   const dotenv = join(hermesHome(), ".env");
   if (!existsSync(dotenv)) return undefined;
   const assignment = new RegExp(`^\\s*(?:export\\s+)?${name}\\s*=(.*)$`);
