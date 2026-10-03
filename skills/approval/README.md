@@ -1,21 +1,55 @@
 # approval (opt-in skill)
 
-The installer half of approval.md for Agent Village (DATA-43): it makes one
-resident's Hermes sandbox ask the resident's hosted approval.md daemon before
-gated tool calls run. Specified by approval-md-hosted `docs/03` sections 3.1 to
-3.3, 5 and 6 and `docs/02` sections 5 to 7. MIT, like the rest of this
-overlay; it writes config and carries no Bountify logic.
+The installer half of approval.md for Agent Village (DATA-43): it routes one
+resident's Hermes tool calls through the resident's approval.md daemon
+(co-located in the sandbox under its own uid, DATA-233) before they run. On day
+one the daemon records every routed call and blocks none (the recorder, DATA-250);
+the few things that wait for the resident's tap are proposals, below.
+Specified by approval-md-hosted `docs/03` sections 3.1 to 3.3, 5 and 6 and
+`docs/02` sections 5 to 7. MIT, like the rest of this overlay; it writes config
+and carries no Bountify logic.
 
 | File | What it is |
 |---|---|
 | `SKILL.md` | What the agent is told: absolute `workdir` and paths, no `execute_code`, what a block means, never route around one. |
 | `scripts/hermes-hook-shim.sh` | The gate: vendored from approval-md-hosted `hermes-image/hermes-hook-shim.sh` (header names the origin commit). Installed as `$HERMES_HOME/agent-hooks/hermes-hook-shim.sh`, 0700. |
 | `scripts/live_selfcheck.py` | The live half of the self-check, run with Hermes's own interpreter. It checks every gated matcher's first parsed entry is `fail_closed`, tests the signal patch by behaviour (a SIGKILLed `fail_closed` hook must block), reports how Hermes treats a `fail_closed` hook that exits 1 with no output (the exit-1 probe), checks the consent allowlist and its lock are usable, and fires one `terminal` call with no `workdir` through `agent.shell_hooks.run_once`, requiring a facade block. It also reports safe mode, managed scope and the `fail_closed` floor. Modelled on approval-md-hosted `hermes-image/selfcheck.py` item 8 and `patches/shell_hooks-signal-fail-closed.py`. |
-| `templates/APPROVAL.md` | The resident's starting policy. Documentation only: the daemon holds the policy, so the installer does not write it into the sandbox. |
+| `templates/APPROVAL.md` | The resident's day-one policy (the recorder). The installer does not write it: the control plane renders it with the paired ids into the daemon's store and attests it as the operator at provisioning (DATA-250); the resident re-attests in onboarding (DATA-259). |
 
 The installer step is `install/install_approval.ts`. The `plugins/av-approval`
 plugin is the gate's fail-closed backstop at every gateway start (below) and
 the receipts stub (see its README).
+
+## Day-one policy and consent copy
+
+The policy is `templates/APPROVAL.md` (its header carries the reasons row by
+row). In plain words, for the consent screen:
+
+- **What is recorded.** Every tool call Hermes routes through the hook (the
+  list below) is recorded in the resident's own approval log before it runs,
+  and runs: shell commands, file writes and reads, network calls and fetches,
+  scheduled-job changes, process writes, browser actions, skill edits,
+  subagent hand-offs, sends. Nothing on this path waits for the resident on day
+  one. Agent Village's research reads the same log; the resident can export it.
+- **What waits for a tap.** Three kinds of act the agent proposes rather than
+  performs: publishing an intention it inferred to Index, sharing a digest it
+  drafted (if digests ship), and casting the resident's answer to the weekly
+  village question. Each arrives as a Telegram message from the "Agent Village
+  Approvals" bot with approve and reject buttons, and stays open for up to 72
+  hours; if the resident does nothing it expires and nothing is published, shared
+  or cast. An intention the resident stated in their own words is published
+  without a second ask.
+- **What the agent can never do.** Edit its own gate (the Hermes config, the
+  hooks, the consent allowlist, the daemon's policy), touch the approval log, or
+  read or change the resident's credentials (`.env`, `auth.json`). These three
+  classes (`policy.core`, `log.mutate`, `account.credential`) are human-only:
+  no tap can grant them to the agent.
+- **Who set it.** The village operator set this starting policy at
+  provisioning; the resident reviews it in onboarding, and any change after that
+  needs the resident's acceptance in the app or their tap on Telegram. A
+  resident may later make a kind of tool call wait for their tap; such a call
+  then holds for about four minutes inside the tool call.
+- **What is not covered**: the uncovered surfaces below.
 
 ## How the gate works
 
@@ -23,8 +57,8 @@ Hermes runs the shim as a `pre_tool_call` shell hook for `terminal`,
 `write_file`, `patch`, `read_file`, `search_files` and `execute_code`, and for
 `process(_manage)?`, `web_extract`, `browser_.*`, `skill_manage`,
 `delegate_task`, `cronjob(_manage)?` and `send_message` (which the core adapter
-passes through unjudged today; they are routed now so a core change covers
-them with no overlay release). The shim POSTs Hermes's envelope to
+classifies from approval.md 0.4.0, PR #569; an older core passes them through
+unjudged). The shim POSTs Hermes's envelope to
 `$AV_APPROVAL_URL/hook/hermes` with the agent token in
 `X-Approval-Authorization` (Maritime's proxy strips `Authorization`), passed
 to curl through a config on stdin, never argv. The facade runs the core
@@ -199,15 +233,18 @@ What the gate does not see, or does not judge, today:
 - **Subagents.** `delegate_task` is routed (recorded, not judged); the
   2026-10-01 harness saw a child's `terminal` reach the hook, but nothing here
   proves every subagent runtime fires it.
-- **Routed but not judged.** `process(_manage)?` writes, `web_extract`,
-  `browser_.*` (including `browser_exec`), `skill_manage`, `delegate_task`,
-  `cronjob(_manage)?` and `send_message` reach the facade, but approval-md core
-  6b74ca72 has no classifier rule for any of them: the adapter passes an
-  unknown tool through (`{}`), so they are recorded under the core's default
-  handling and fail closed only when the facade cannot be reached. The policy
-  template's rows for them take effect once the core has rules (below).
-  `send_message` is not an agent-callable tool at Hermes v2026.9.24; its
-  entry covers any build or plugin that registers it.
+- **Recorded, not gated.** `process(_manage)?` writes, `browser_.*`
+  (including `browser_exec`), `skill_manage`, `delegate_task`,
+  `cronjob(_manage)?` and `send_message` reach the facade and, from approval.md
+  0.4.0 (PR #569), classify as `process.write`, `browser.exec`,
+  `skill.manage`, `agent.delegate`, `cron.manage` and `message.send`. The
+  day-one policy sets every one of them autonomous, with `network.call` and
+  `read.web`: each call is recorded and runs, and fails closed only when the
+  facade cannot be reached. On an older core the adapter passes them through
+  unjudged (`{}`). `web_extract` reaches the facade but has no classifier rule
+  even in PR #569, so it passes through unjudged. `send_message` is not an
+  agent-callable tool at Hermes v2026.9.24; its entry covers any build or
+  plugin that registers it.
 - **The tcp listener window** (above) and ptrace against the gateway.
 
 ## Environment
@@ -255,24 +292,26 @@ step reads only `AV_APPROVAL_ENABLED`:
 3. `APPROVALD_ENFORCE=0`: every `.env` write sets `AV_APPROVAL_ENABLED=0`,
    which this step reads as the kill switch.
 
-## Classifier follow-up (approval-md core, Carter's repo)
+## Classifier rules (approval-md core, PR #569)
 
-The policy template carries rows for the routed tools, but they are inert
-until the core's Hermes adapter emits these classes. The table the core lane
-needs:
+The core's Hermes adapter emits these classes from approval.md 0.4.0 (PR #569);
+the day-one template sets each autonomous, so the call is recorded and runs. A
+resident who wants one to wait makes it manual by amendment (a hook-opened
+request then holds for 240 s inside the tool call). The table as the core lane
+built it:
 
 | Hermes tool (args) | Class | Template autonomy |
 |---|---|---|
-| `cronjob_manage` `create`/`update` with `script`, `monitor` or `no_agent`; `run` | `cron.manage` | manual |
-| `cronjob_manage` other `create`/`update`, `pause`, `resume`, `remove` | `cron.manage` | manual |
+| `cronjob_manage` `create`/`update` with `script`, `monitor` or `no_agent`; `run` | `cron.manage` | autonomous |
+| `cronjob_manage` other `create`/`update`, `pause`, `resume`, `remove` | `cron.manage` | autonomous |
 | `cronjob_manage` `list` | a read class | autonomous |
-| `process_manage` `write`, `submit` (stdin into a running process) | `process.write` | manual |
-| `process_manage` `kill`, `close`, `handoff` | `process.write` | manual |
+| `process_manage` `write`, `submit` (stdin into a running process) | `process.write` | autonomous |
+| `process_manage` `kill`, `close`, `handoff` | `process.write` | autonomous |
 | `process_manage` `list`, `poll`, `log`, `wait` | a read class | autonomous |
-| `browser_exec`, `browser_cdp` (code in the page) | `browser.exec` | manual |
-| other `browser_*` (navigate, click, fill, vault) | `browser.exec` until split | manual |
-| `skill_manage` | `skill.manage` | manual |
-| `delegate_task` | `agent.delegate` | manual |
-| `send_message` | `message.send` | manual |
-| a `terminal`/`write_file`/`patch` write under `.hermes/scripts/` | `cron.manage` (or `policy.core`) | manual |
+| `browser_exec`, `browser_cdp` (code in the page) | `browser.exec` | autonomous |
+| other `browser_*` (navigate, click, fill, vault) | `browser.exec` until split | autonomous |
+| `skill_manage` | `skill.manage` | autonomous |
+| `delegate_task` | `agent.delegate` | autonomous |
+| `send_message` | `message.send` | autonomous |
+| a `terminal`/`write_file`/`patch` write under `.hermes/scripts/` | `cron.manage` (or `policy.core`) | autonomous (`policy.core`: human-only) |
 | a write to `.hermes/.env`, `.hermes/approval/`, `.hermes/shell-hooks-allowlist.json.lock` | `policy.core` / `account.credential` | human-only |

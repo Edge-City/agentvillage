@@ -295,19 +295,21 @@ Wiping local state via `install/install.ts --wipe-user` resets local markers. It
 
 ## Approval (opt-in)
 
-For residents who opt in, the approval.md gate (DATA-43) makes the agent ask before actions with consequences outside the sandbox. The installer step is `install/install_approval.ts`; the skill is `skills/approval/` (see its README); the receipts plugin is `plugins/av-approval/`.
+For residents who opt in, the approval.md gate (DATA-43) records every tool call the agent makes through Hermes's hooks in the resident's own log, and asks the resident before the agent publishes an intention it inferred, shares a digest, or casts the resident's vote. The installer step is `install/install_approval.ts`; the skill is `skills/approval/` (see its README, "Day-one policy and consent copy"); the receipts plugin is `plugins/av-approval/`.
 
 ### Consent copy (what a resident sees)
 
-- When their agent is about to do one of the listed things (send a message, spend money, delete files outside its workspace, post content, call or fetch from a network service), they get a Telegram message from their approval bot naming the action, with approve and reject buttons.
-- They have about four minutes. If they do nothing, the agent does not do it and tells them so.
-- Every ask and answer is recorded in a log they can export, and Agent Village's research reads the same log.
+- Every tool call their agent makes through the hook (shell commands, file writes and reads, network calls, scheduled jobs, browser actions, sends) is recorded in a log they can export before it runs, and runs. Nothing on that path waits for them on day one. Agent Village's research reads the same log.
+- Three things wait for their tap: publishing an intention the agent inferred, sharing a digest the agent drafted (if digests ship), and casting their answer to the weekly village question. Each arrives as a Telegram message from the "Agent Village Approvals" bot with approve and reject buttons and stays open up to 72 hours; if they do nothing, nothing is published, shared or cast.
+- The agent can never edit its own gate, touch the approval log, or read or change their credentials; no tap can grant those.
+- The village operator set this starting policy; they review it in onboarding, and any change after that needs their acceptance or their tap.
 - Their agent's Telegram conversation is unaffected.
 
 **Not covered:**
 
 - Subagent calls, MCP tools (Index included) and reads before the first gated call.
-- Tools that can reach the same effects without a check today: `process`/`process_manage` (writing to and submitting a running process), `web_extract`, the `browser_*` tools, `skill_manage` and `delegate_task` pass through the gate unjudged until approval.md's Hermes adapter learns them; `cronjob_manage` is not routed through the gate at all, so a scheduled job's script (`script`, `no_agent`) and an HTTP `monitor_script` run without a check.
+- `web_extract` reaches the gate with no classifier rule and passes through unjudged; on an approval.md core older than 0.4.0 so do `process`/`process_manage`, the `browser_*` tools, `skill_manage`, `delegate_task`, `cronjob_manage` and `send_message`.
+- A scheduled job's own script (`script`, `monitor`, `no_agent`) runs at every tick with no check; creating or changing the job is recorded.
 - A process on the sandbox can kill the hook (signal) or attach to the gateway (ptrace); both are closed by the checkpoint build (patch + ptrace_scope), not by this skill.
 
 ### Environment
@@ -321,7 +323,7 @@ Read from `$HERMES_HOME/.env` first and the process environment second, because 
 | `AV_APPROVAL_TOKEN` | The **agent** credential for that facade (never the tenant credential). Never printed or written to `config.yaml`. |
 | `AV_APPROVAL_ALLOW_UNPATCHED_HERMES=1` | **Dogfood only.** Accept a Hermes below the `fail_closed` floor or without the signal patch; logged loudly on every install. |
 
-With the gate on, the step writes the hook shim at `$HERMES_HOME/agent-hooks/hermes-hook-shim.sh` (0700, temp file then rename). It writes `hooks.pre_tool_call` entries with `fail_closed: true` and `timeout: 300` for `terminal`, `write_file`, `patch`, `read_file`, `search_files` and `execute_code`, and for `process(_manage)?`, `web_extract`, `browser_.*`, `skill_manage` and `delegate_task`. It also writes `hooks_auto_accept: true`, `plugins.hook_callback_timeout: 600`, `HERMES_ACCEPT_HOOKS=1` and the shim's settings in `.env`, and a marker at `agent-hooks/approval-surface.json`. Other keys and other hooks are left alone, and a re-run changes nothing. The resident's `APPROVAL.md` is held by the daemon, not the sandbox; `skills/approval/templates/APPROVAL.md` is the starting policy an operator puts there.
+With the gate on, the step writes the hook shim at `$HERMES_HOME/agent-hooks/hermes-hook-shim.sh` (0700, temp file then rename). It writes `hooks.pre_tool_call` entries with `fail_closed: true` and `timeout: 300` for `terminal`, `write_file`, `patch`, `read_file`, `search_files` and `execute_code`, and for `process(_manage)?`, `web_extract`, `browser_.*`, `skill_manage` and `delegate_task`. It also writes `hooks_auto_accept: true`, `plugins.hook_callback_timeout: 600`, `HERMES_ACCEPT_HOOKS=1` and the shim's settings in `.env`, and a marker at `agent-hooks/approval-surface.json`. Other keys and other hooks are left alone, and a re-run changes nothing. The resident's `APPROVAL.md` is held by the daemon's store, not the Hermes home; `skills/approval/templates/APPROVAL.md` is the day-one policy the control plane renders there and attests as the operator at provisioning (DATA-250).
 
 `AV_APPROVAL_TOKEN` stays in the gateway's environment, because the shim reads it from there. This overlay does not configure Hermes's terminal scrub list, so the agent's own `terminal` children can read the variable (for example with `printenv`, which is not a gated credential read). What that buys is limited: the agent token reaches only the facade's hook route and five verbs that ask, wait and withdraw. It cannot read the log, grant, or export (docs/02 section 5). Scrubbing it is a follow-up below.
 
