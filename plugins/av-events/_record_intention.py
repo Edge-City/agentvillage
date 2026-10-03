@@ -321,6 +321,14 @@ REFUSALS: dict[str, str] = {
         "Not published: the resident declined this intention in their approval channel. It stays "
         "unpublished; do not publish it another way."
     ),
+    "awaiting_resident": (
+        "Not published: the resident has not approved this intention in their approval channel yet. You "
+        "cannot confirm it for them, and a yes you read in chat is not an approval. Do not publish it another way."
+    ),
+    "publish_failed": (
+        "Not published: the resident approved it, but it could not be published and it is not retried. "
+        "Capture it again only if it still matters to them."
+    ),
     "approval_expired": (
         "Not published: the resident did not answer before the approval request expired. Capture it "
         "again only if it still matters to them."
@@ -1209,7 +1217,7 @@ def _index_tail(code: str) -> str:
     if code == AMBIGUOUS:
         return ("Whether Index took it is unknown: no usable answer came back, and it may already be on "
                 "Index. It is recorded; do not retry it.")
-    return f"Publishing to Index is retried automatically (code {code}). It is recorded; do not retry it."
+    return f"Index could not take it just now (code {code}). It is recorded; do not retry it with another tool."
 
 
 def _held_through_approval(result: dict, intention_id: str, text: str, norm: str) -> dict:
@@ -1236,7 +1244,7 @@ def _held_through_approval(result: dict, intention_id: str, text: str, norm: str
         result["message"] = (
             f"Published to Index under the resident's approval policy (intention_id {intention_id})."
         )
-    elif outcome.state in ("requested", "granted", "cleared", "started", "publishing"):
+    elif outcome.state in ("requested", "cleared", "starting", "publishing"):
         result["message"] = (
             f"{held} The resident has been asked in their approval channel whether to publish it, and it is "
             f"published once they approve. A yes you read in chat is not an approval. {_NO_OTHER_WAY}"
@@ -1246,7 +1254,7 @@ def _held_through_approval(result: dict, intention_id: str, text: str, norm: str
             f"{held} This agent's approval policy does not let it be sent to the resident (code "
             f"{outcome.code}), so it stays off Index. {_NO_OTHER_WAY}"
         )
-    elif outcome.state in ("index_rejected", "ambiguous"):
+    elif outcome.state in ("index_rejected", "ambiguous", "index_failed"):
         result["publish_refused"] = outcome.code
         result["message"] = f"{held} {_index_tail(outcome.code or AMBIGUOUS)}"
     else:
@@ -1280,7 +1288,7 @@ def _stated_through_approval(result: dict, text: str, source: str) -> dict:
             result["approved_by"] = outcome.approved_by
         result["message"] = f"Recorded and published to Index (intention_id {intention_id})."
         return result
-    if outcome.state in ("requested", "granted"):
+    if outcome.state in ("requested", "starting"):
         refused = "approval_pending"
         message = (
             "The resident's approval policy asks them before a stated intention is published, and they have "
@@ -1333,6 +1341,8 @@ def _confirm(args: dict) -> dict:
         return _refuse("approval_expired")
     elif state == "index_rejected":
         return _refuse("capture_again")
+    elif state in ("index_failed", "start_unconfirmed"):
+        return _refuse("publish_failed")
     elif state == "ambiguous":
         return {**base, "published": False, "index_intent_id": None, "approval_state": state,
                 "message": (f"Intention {intention_id} was approved and sent to Index, but whether Index took it is "
@@ -1345,10 +1355,10 @@ def _confirm(args: dict) -> dict:
             result["approved_by"] = outcome.approved_by
         result["message"] = f"The resident approved it: intention {intention_id} is published to Index."
     elif outcome.state in ("requested", "unknown"):
-        result["message"] = (
-            f"Intention {intention_id} is waiting for the resident's answer in their approval channel. You "
-            f"cannot confirm it for them, and a yes in chat is not an approval. {_NO_OTHER_WAY}"
-        )
+        # A manual class with no grant on the daemon: refused, never published.
+        return _refuse("awaiting_resident")
+    elif outcome.state in ("index_failed", "start_unconfirmed"):
+        return _refuse("publish_failed")
     elif outcome.state == "rejected":
         return _refuse("resident_declined")
     elif outcome.state == "withdrawn":

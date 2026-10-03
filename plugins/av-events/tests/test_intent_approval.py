@@ -107,6 +107,13 @@ class FakeServe:
         self.down = False
         self.headers: list[dict] = []
         self.policy = 1
+        #: Test hooks: `on_wait(n)` runs before the n-th wait is answered (1-based)
+        #: and may return an answer tuple to send instead; `start_answer` replaces
+        #: start's answer; `hash_lie` makes propose name another payload hash.
+        self.on_wait: Optional[Callable[[int], Optional[tuple]]] = None
+        self.start_answer: Optional[tuple] = None
+        self.hash_lie = False
+        self.waits = 0
 
     # -- the human's side --------------------------------------------------
     def _by_key(self, key: str) -> dict:
@@ -169,7 +176,8 @@ class FakeServe:
         t = self.tasks.get(task)
         if t is not None and t["hash"] != phash:
             return self._error("payload-mismatch")
-        base = {"ok": True, "task": task, "action_key": key, "class": cls, "payload_hash": phash}
+        base = {"ok": True, "task": task, "action_key": key, "class": cls,
+                "payload_hash": ("0" * 64) if self.hash_lie else phash}
         if t is None:
             t = {"key": key, "class": cls, "hash": phash, "payload": payload, "executed": False,
                  "state": "requested" if manual else "none", "asks": 0}
@@ -196,6 +204,11 @@ class FakeServe:
 
     def _wait(self, pos, flags):
         assert flags == {"--timeout": "0", "--json": True}
+        self.waits += 1
+        if self.on_wait is not None:
+            forced = self.on_wait(self.waits)
+            if forced is not None:
+                return forced
         task = pos[0]
         t = self.tasks.get(task)
         if t is None:
@@ -217,6 +230,8 @@ class FakeServe:
         raise AssertionError(state)
 
     def _start(self, pos, flags):
+        if self.start_answer is not None:
+            return self.start_answer
         task = pos[0]
         t = self.tasks.get(task)
         if t is None:
@@ -470,13 +485,19 @@ def test_policy_drift_at_start_re_proposes_instead_of_publishing(tctx, serve, in
     iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
     key = f"{INFERRED}:{iid}"
     serve.grant(key)
-    # The map already moved to granted when the re-attest lands: start refuses.
-    mods.ia._set_state(iid, {"requested"}, "granted")
-    serve.reattest()
+    granted = (0, {"ok": True, "status": "granted", "task": "t", "actions": []}, None)
+
+    def drift(n: int):
+        if n == 2:  # the re-read reads granted, then the re-attest lands before start
+            serve.reattest()
+            return granted
+        return None
+
+    serve.on_wait = drift
     poll(mods)
     assert "start" in serve.verbs() and index.requests == []
-    assert entry(mods, iid)["approval"]["state"] == "requested"
-    assert serve.tasks[task_id(INFERRED, key)]["asks"] == 2
+    assert entry(mods, iid)["approval"]["state"] == "requested"  # re-proposed, a new question
+    assert [p["flags"]["--payload-json"] for p in serve.proposals()][1] == serve.proposals()[0]["flags"]["--payload-json"]
 
 
 def test_under_an_autonomous_inferred_policy_the_capture_publishes_at_once(tctx, serve, index, mods, av, plugin):
@@ -506,7 +527,8 @@ def test_a_stated_capture_is_proposed_and_published_in_the_same_call(tctx, serve
     iid = out["intention_id"]
     assert out["published"] is True and out["index_intent_id"] == INDEX_ID and iid != INDEX_ID
     assert out["approved_by"] == "rule" and out["approval_state"] == "published"
-    assert serve.verbs() == ["propose", "start"]
+    # propose, the same propose again after the claim (the authority re-read), start.
+    assert serve.verbs() == ["propose", "propose", "start"]
     assert serve.proposals()[0]["flags"]["--class"] == STATED_CLASS
     assert serve.proposals()[0]["flags"]["--key"] == f"{STATED_CLASS}:{iid}"
     assert index.creates()[0]["body"] == {"description": STATED, "sourceType": "agentvillage", "sourceId": iid}
@@ -564,7 +586,8 @@ def test_a_class_the_policy_does_not_open_is_held_and_confirm_files_it_after_the
     assert len(serve.proposals()) == 1  # refused is not retried by the poller
     serve.requestable.add(INFERRED)
     out = call(tctx, {"action": "confirm", "intention_id": iid}, tool_call_id="c2")
-    assert out["success"] is True and out["approval_state"] == "requested" and len(serve.proposals()) == 2
+    assert out["error"] == "awaiting_resident" and len(serve.proposals()) == 2
+    assert entry(mods, iid)["approval"]["state"] == "requested" and index.requests == []
 
 
 def test_an_oversized_text_is_held_without_a_proposal(tctx, serve, index, mods):
@@ -578,17 +601,19 @@ def test_an_oversized_text_is_held_without_a_proposal(tctx, serve, index, mods):
 # --------------------------------------------------------------------------
 
 
-def test_a_start_whose_map_write_was_lost_publishes_once_without_a_second_start(tctx, serve, index, mods):
+def test_a_start_whose_confirmation_was_lost_is_never_published(tctx, serve, index, mods):
+    """(1)/(5): only a fresh `start` ok publishes. A spent grant reads
+    nothing-to-wait-for (exit 0, not granted): never a reason to publish."""
     iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
     key = f"{INFERRED}:{iid}"
     serve.grant(key)
-    # The previous process spent the grant and died before writing `started`.
-    t = serve.tasks[task_id(INFERRED, key)]
-    t["executed"] = True
+    serve.tasks[task_id(INFERRED, key)]["executed"] = True  # a previous process started, then died
     poll(mods)
-    assert serve.verbs().count("start") == 0  # wait said nothing-to-wait-for; propose said executed
-    assert [p["flags"]["--key"] for p in serve.proposals()] == [key, key]
-    assert len(index.creates()) == 1 and entry(mods, iid)["published"] is True
+    poll(mods)
+    assert serve.verbs().count("start") == 0 and index.requests == []
+    ap = entry(mods, iid)["approval"]
+    assert ap["state"] == "start_unconfirmed" and "payload" not in ap
+    assert call(tctx, {"action": "confirm", "intention_id": iid}, tool_call_id="c2")["error"] == "publish_failed"
 
 
 def test_a_crash_while_publishing_is_never_sent_again(tctx, serve, index, mods, av, plugin, monkeypatch):
@@ -649,15 +674,25 @@ def test_two_passes_racing_take_each_step_once(tctx, serve, index, mods):
 # --------------------------------------------------------------------------
 
 
-def test_nothing_reached_index_so_the_publish_is_retried(tctx, serve, index, mods):
+def test_nothing_reached_index_so_the_publish_is_retried_once_in_the_same_call(tctx, serve, index, mods):
     iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
     serve.grant(f"{INFERRED}:{iid}")
     index.answers = [urllib.error.URLError(ConnectionRefusedError())]
     poll(mods)
-    assert entry(mods, iid)["approval"]["state"] == "started" and entry(mods, iid)["approval"]["code"] == "transport"
-    poll(mods)
     assert len(index.creates()) == 2 and entry(mods, iid)["published"] is True
     assert serve.verbs().count("start") == 1  # one execution, two attempts
+
+
+def test_index_failing_twice_ends_it_without_a_later_retry(tctx, serve, index, mods, av, plugin):
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    serve.grant(f"{INFERRED}:{iid}")
+    index.answers = [urllib.error.URLError(ConnectionRefusedError()), http_error(503)]
+    poll(mods)
+    poll(mods)
+    ap = entry(mods, iid)["approval"]
+    assert ap["state"] == "index_failed" and ap["code"] == "http_503" and "payload" not in ap
+    assert len(index.creates()) == 2 and serve.verbs().count("start") == 1
+    assert events(av, plugin)[-1]["payload"]["publish_refused"] == "http_503"
 
 
 def test_index_refusing_the_text_is_final(tctx, serve, index, mods, av, plugin):
@@ -702,8 +737,10 @@ def test_the_rate_cap_holds_the_start_back(tctx, serve, index, mods, monkeypatch
 def test_confirm_checks_the_resident_answer_and_publishes_once(tctx, serve, index, mods, av, plugin):
     iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
     out = call(tctx, {"action": "confirm", "intention_id": iid}, tool_call_id="c2")
-    assert out["success"] is True and out["published"] is False and out["approval_state"] == "requested"
+    # (4) a manual class with no grant: confirm refuses, starts nothing.
+    assert out["success"] is False and out["error"] == "awaiting_resident"
     assert "cannot confirm it for them" in out["message"] and index.requests == []
+    assert "start" not in serve.verbs()
     serve.grant(f"{INFERRED}:{iid}")
     out = call(tctx, {"action": "confirm", "intention_id": iid}, tool_call_id="c3")
     assert out["published"] is True and out["index_intent_id"] == INDEX_ID and out["approved_by"] == "individual"
@@ -1021,3 +1058,160 @@ def test_with_approval_off_nothing_is_proposed(plugin, index, serve, kicks, on, 
     assert serve.calls == [] and "approval_state" not in held
     assert stated["intention_id"] == INDEX_ID  # the DATA-249 shape: Index's id
     assert call(ctx, {"action": "confirm", "intention_id": held["intention_id"]})["error"] == "confirmation_not_wired"
+
+
+# --------------------------------------------------------------------------
+# The security review's five shapes
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("forged", ["cleared", "granted", "started", "published"])
+def test_1_map_state_alone_never_publishes(tctx, serve, index, mods, forged):
+    """A manual proposal whose map entry claims more than the daemon says."""
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+
+    def forge(_entry: dict, ap: dict) -> None:
+        ap["state"] = forged
+
+    mods.ia._cas(iid, None, forge)
+    poll(mods)
+    out = call(tctx, {"action": "confirm", "intention_id": iid}, tool_call_id="c2")
+    assert index.requests == [] and "start" not in serve.verbs()
+    assert out["success"] is False or out["published"] is False
+
+
+def test_1_a_start_without_the_expected_authorization_never_publishes(tctx, serve, index, mods):
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    serve.grant(f"{INFERRED}:{iid}")
+    serve.start_answer = (0, {"ok": True, "task": "x", "action_key": "y", "class": INFERRED, "seq": 6}, None)
+    poll(mods)
+    assert index.requests == [] and entry(mods, iid)["approval"]["code"] == "authorization_mismatch"
+    serve.start_answer = (0, {"ok": True, "authorization": "policy", "seq": 6}, None)  # a rule, not the grant read
+    iid2 = call(tctx, {"text": TEXT + " 2", "source": "ambient"}, tool_call_id="c2")["intention_id"]
+    serve.grant(f"{INFERRED}:{iid2}")
+    poll(mods)
+    assert index.requests == []
+
+
+def test_1_start_only_after_a_fresh_granted_read_twice(tctx, serve, index, mods):
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    serve.grant(f"{INFERRED}:{iid}")
+    poll(mods)
+    verbs = serve.verbs()
+    # A wait that read granted, the claim, a second wait that read granted, then start.
+    assert verbs[verbs.index("start") - 2:verbs.index("start")] == ["wait", "wait"]
+    assert len(index.creates()) == 1
+
+
+def test_2_held_bytes_that_no_longer_hash_to_the_proposal_are_never_published(tctx, serve, index, mods):
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    serve.grant(f"{INFERRED}:{iid}")
+
+    def tamper(_entry: dict, ap: dict) -> None:
+        ap["payload"] = json.dumps({"text": "Something else entirely"}, separators=(",", ":"))
+
+    mods.ia._cas(iid, None, tamper)
+    poll(mods)
+    # Re-proposed with the bytes now held; core binds the key to the first bytes and refuses.
+    assert serve.proposals()[-1]["flags"]["--payload-json"] != serve.proposals()[0]["flags"]["--payload-json"]
+    ap = entry(mods, iid)["approval"]
+    assert ap["state"] == "refused" and ap["code"] == "payload-mismatch"
+    assert index.requests == [] and "start" not in serve.verbs()
+
+
+def test_2_a_hash_core_registered_for_other_bytes_is_refused_at_propose(tctx, serve, index, mods):
+    serve.hash_lie = True
+    out = call(tctx, {"text": TEXT, "source": "ambient"})
+    ap = entry(mods, out["intention_id"])["approval"]
+    assert ap["state"] == "refused" and ap["code"] == "payload_hash_mismatch"
+    stated = call(tctx, {"text": STATED, "source": "message"}, tool_call_id="c2")
+    assert stated["published"] is False and index.requests == []
+
+
+def test_2_the_local_hash_is_cores_payload_hash():
+    """The held string is its own JCS form; the value core answered on a real
+    `approval serve` (PR #569 build) for this payload."""
+    payload = json.dumps({"text": "Looking for a climbing partner"}, ensure_ascii=False, separators=(",", ":"))
+    assert hashlib.sha256(payload.encode()).hexdigest() == "1015051333d1581f989bfd9b7735e931a3a54959e571060c72ce7bf9d443d24a"
+
+
+def test_3_the_authority_is_read_again_after_the_claim(tctx, serve, index, mods):
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    key = f"{INFERRED}:{iid}"
+    serve.grant(key)
+
+    def flip(n: int):
+        if n == 2:  # the re-read after the claim: rejected meanwhile
+            serve.tasks[task_id(INFERRED, key)]["state"] = "rejected"
+        return None
+
+    serve.on_wait = flip
+    poll(mods)
+    assert "start" not in serve.verbs() and index.requests == []
+    assert entry(mods, iid)["approval"]["state"] == "requested"  # released; the next read finds the rejection
+    poll(mods)
+    assert entry(mods, iid)["approval"]["state"] == "rejected"
+
+
+def test_3_a_withdraw_while_claimed_is_refused_and_nothing_publishes_after_a_withdraw(tctx, serve, index, mods):
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    key = f"{INFERRED}:{iid}"
+    serve.grant(key)
+    seen: list[dict] = []
+
+    def withdraw_midway(n: int):
+        if n == 2:
+            seen.append(call(tctx, {"action": "withdraw", "intention_id": iid}, tool_call_id="w"))
+        return None
+
+    serve.on_wait = withdraw_midway
+    poll(mods)
+    assert seen[0]["error"] == "approval_publishing" and len(index.creates()) == 1  # the claim held
+    iid2 = call(tctx, {"text": TEXT + " 2", "source": "ambient"}, tool_call_id="c2")["intention_id"]
+    serve.grant(f"{INFERRED}:{iid2}")
+    call(tctx, {"action": "withdraw", "intention_id": iid2}, tool_call_id="c3")
+    serve.on_wait = None
+    poll(mods)
+    assert len(index.creates()) == 1
+
+
+def test_3_an_abandoned_claim_is_released_and_asked_again(tctx, serve, index, mods, monkeypatch):
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    serve.grant(f"{INFERRED}:{iid}")
+    now = time.time()
+    monkeypatch.setattr(mods.ri, "_clock", lambda: now)
+
+    def claimed(_entry: dict, ap: dict) -> None:
+        ap.update(state="starting", claim="dead-claim", back="requested", claimed_at=now - 10)
+
+    mods.ia._cas(iid, None, claimed)
+    poll(mods)
+    assert index.requests == [] and entry(mods, iid)["approval"]["state"] == "starting"  # maybe still alive
+    monkeypatch.setattr(mods.ri, "_clock", lambda: now + 600)
+    poll(mods)
+    assert len(index.creates()) == 1 and serve.verbs().count("start") == 1
+
+
+@pytest.mark.parametrize("answer", [
+    (0, {"ok": True, "status": "nothing-to-wait-for", "task": "t", "actions": []}, None),
+    (0, {"ok": True, "status": "executed", "task": "t", "actions": []}, None),
+    (0, {"ok": True, "status": "something-new", "task": "t", "actions": []}, None),
+    (2, None, {"ok": False, "error": {"code": "usage", "message": "x"}}),
+    (9, {"ok": True, "status": "granted", "task": "t", "actions": []}, None),
+    (6, None, {"ok": False, "status": "timeout"}),
+])
+def test_5_only_exit_0_granted_is_a_grant(tctx, serve, index, mods, answer):
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    serve.grant(f"{INFERRED}:{iid}")  # the daemon has a grant, but the answer the plugin reads says otherwise
+    serve.on_wait = lambda n: answer
+    poll(mods)
+    out = call(tctx, {"action": "confirm", "intention_id": iid}, tool_call_id="c2")
+    assert "start" not in serve.verbs() and index.requests == []
+    assert out["success"] is False
+
+
+def test_4_confirm_on_a_forged_cleared_manual_proposal_publishes_nothing(tctx, serve, index, mods):
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    mods.ia._cas(iid, None, lambda _e, ap: ap.__setitem__("state", "cleared"))
+    out = call(tctx, {"action": "confirm", "intention_id": iid}, tool_call_id="c2")
+    assert out["error"] == "awaiting_resident" and index.requests == [] and "start" not in serve.verbs()

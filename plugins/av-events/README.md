@@ -591,34 +591,45 @@ R20). A published entry keeps Index's id as `index_intent_id`; update and withdr
 
 **Where the held text lives (R16).** In the map entry's `approval.payload`
 (`$HERMES_HOME/av-events/intentions.json`, 0600, under its flock), from capture until the proposal
-ends. It is deleted on publish, on Index's 422, on an ambiguous publish, on the resident's
-rejection, on the agent's withdrawal, and on the final expiry. A proposal core refuses
-(`class-not-agent-requestable` and kin) keeps it so a `confirm` after a policy change can file it
-again. What is published is `json.loads(payload)["text"]`, the very string `start` was given, so the
-Index intent and the granted bytes cannot differ. The map is not a boundary against the agent (it
-runs as the same uid); the daemon's record is: `start` refuses bytes that hash to anything but what
-was proposed.
+ends. It is deleted on publish, on Index's 422, on an ambiguous or failed publish, on the
+resident's rejection, on the agent's withdrawal, on a start whose confirmation was lost, and on the
+final expiry. A proposal core refuses (`class-not-agent-requestable` and kin) keeps it so a
+`confirm` after a policy change can file it again. The held string is its own RFC 8785 form, so its
+plain SHA-256 is core's `payload_hash`: the plugin records the hash core answers at `propose`,
+refuses the proposal when it differs, and before it starts or publishes checks that the held bytes
+still hash to it (if not, it proposes again, and core refuses other bytes for the key). What is
+published is `json.loads(payload)["text"]`, the very string `start` was given.
 
-**States** (`approval.state`; each step is a compare-and-set under the map's flock):
-`unfiled` → `propose` → `requested` (asked), `cleared` (the policy said autonomous or supervised),
-`granted`, `started` (core says the key already executed), `rejected`, or `refused` (core refused
-the proposal). `requested` → `wait 0` → `granted`; `rejected` / `withdrawn` (final); `unfiled` again
-on `expired` (the same bytes re-proposed at most twice, then `expired`, final), on `void` (a
-re-attested policy voided it), on `not-registered`, and on `nothing-to-wait-for` (our own earlier
-start spent the grant; the re-proposal answers `state: executed`). `granted` / `cleared` → the
-publish precheck and the rate cap, then `start` → `started` (`not-granted`, `expired` and
-`policy-drift` go back to `unfiled`). `started` → `publishing` written to the map → `POST
-/api/intents` with `sourceId` → `published`, `index_rejected` (422, labels the entry
-`refused: rejected`), `ambiguous` (Index may have written), or back to `started` when nothing was
-written (retried next pass, each attempt under the cap). A `publishing` entry older than twice
-Index's deadline (60 s) is a process that died inside the Index call: `ambiguous`, never sent again.
+**What authorizes a publish, and nothing else does.** The map is never authority; it says only
+what to ask the daemon next. A publish happens only in the same call that (1) read the authority
+for that key from the daemon: `wait --timeout 0` exit 0 with `status: granted` for a manual class,
+or, for a class the policy clears, the `propose` answer `decision: autonomous|supervised` with no
+execution yet (a rule approval writes no grant, so there is no `wait` to read); (2) claimed the
+entry with one compare-and-set (`requested|cleared → starting`, a claim id); (3) read the same
+authority from the daemon again after the claim; (4) got `start` back ok with `authorization` equal
+to the expected one (`grant` or `policy`); (5) moved the entry `starting → publishing` under the
+claim. Any other `wait` answer is not a grant: exit 0 with any other status (`nothing-to-wait-for`,
+`executed`), 1 (rejected, revoked, withdrawn, `not-registered`), 3 (expired), 6 (pending), 7
+(void), anything else.
 
-**No duplicate publish.** `publishing` is written before the Index request and only from `started`,
-so only one process ever sends it, and a crash inside the call ends in `ambiguous`
-(`publish_refused: timeout`, reconciled by `sourceId` and text hash), never a second create. A crash
-between `start` and the map write is recovered without a second `start` and without guessing:
-`wait` answers `nothing-to-wait-for`, the same `propose` answers `state: executed`, and because
-`publishing` was never written, Index was never called.
+**States** (`approval.state`; each step a compare-and-set under the map's flock): `unfiled` →
+`propose` → `requested`, `cleared`, `rejected`, `refused`, or `start_unconfirmed` (core says the
+key already executed). `requested` → `wait 0` → on a grant, claim / re-read / start / publish;
+`rejected` and `withdrawn` (final); `unfiled` again on `expired` (the same bytes re-proposed at most
+twice, then `expired`, final), on `void`, and on `not-registered`; `start_unconfirmed` on
+`nothing-to-wait-for` (a spent grant: a start whose confirmation was lost, never published).
+`cleared` → claim / re-propose / start / publish. Publishing ends `published`, `index_rejected`
+(422, labels the entry `refused: rejected`), `ambiguous` (Index may have written), or
+`index_failed` (nothing reached Index twice in the same call; a later call would hold no `start`).
+A `starting` claim older than 120 s is released to where it came from and the daemon is asked
+again. A `publishing` entry older than twice Index's deadline (60 s) is a process that died inside
+the Index call: `ambiguous`, never sent again.
+
+**No duplicate publish, no publish of a withdrawn intention.** Only the holder of the claim starts
+and publishes; the claim is taken before the authority is re-read; the agent's withdraw is refused
+(`approval_publishing`) while an entry is `starting` or `publishing`; a crash inside the Index call
+ends in `ambiguous` (`publish_refused: timeout`, reconciled by `sourceId` and text hash), never a
+second create.
 
 **Stale grants.** A grant pinned to a policy that has since been re-attested reads `void` from
 `wait` (exit 7) or is refused `policy-drift` by `start`; both re-propose the same bytes, which core
@@ -643,21 +654,22 @@ for the policy, from `start`'s `authorization`), `approval_state`, and the `text
 string sent to Index. `approved_by` and `approval_state` are present only on this path. `confirm`'s
 own result records nothing.
 
-**`confirm`.** Asks the daemon for the resident's answer on a held intention and publishes on a
-grant, through the same steps. Refusals: `confirm_unknown`, `confirm_not_held` (recorded locally on
+**`confirm`.** The same steps, nothing else: it asks the daemon for the resident's answer and
+publishes only on a grant read as above. A manual class with no grant is refused
+`awaiting_resident`. Other refusals: `confirm_unknown`, `confirm_not_held` (recorded locally on
 purpose, or withdrawn), `confirm_text_missing` (held before approvals were on: capture it again),
-`resident_declined`, `approval_expired`, `capture_again`. A pending one answers that the resident
-has not answered, and that a yes in chat is not an approval. `update` of an intention whose
-proposal is open is refused `approval_pending`; `withdraw` ends the proposal (and withdraws a pending
-question on the daemon), or is refused `approval_publishing` while the Index call is in flight.
+`resident_declined`, `approval_expired`, `publish_failed` (`index_failed` or `start_unconfirmed`),
+`capture_again`. `update` of an intention whose proposal is open is refused `approval_pending`;
+`withdraw` ends the proposal (and withdraws a pending question on the daemon).
 
 **Codes this path adds.** `publish_refused` on a stated capture: `approval_pending`,
-`approval_unavailable`, `approval_refused`. `approval_state`: `requested`, `granted`, `cleared`,
-`started`, `publishing`, `published`, `rejected`, `withdrawn`, `refused`, `index_rejected`,
-`ambiguous`, `expired`, `unfiled` (the daemon could not be reached; retried), `unavailable` (nothing
-could be held). Client codes in the logs: `url_missing`, `url_refused`, `token_missing`,
-`token_malformed`, `token_file_*`, `facade_listener_foreign`, `unauthorized`, `http_<status>`,
-`transport`, `timeout`, `bad_answer`.
+`approval_unavailable`, `approval_refused`. `approval_state`: `requested`, `cleared`, `starting`,
+`publishing`, `published`, `rejected`, `withdrawn`, `refused`, `index_rejected`, `ambiguous`,
+`index_failed`, `start_unconfirmed`, `expired`, `unfiled` (the daemon could not be reached;
+retried), `unavailable` (nothing could be held). Map codes: `payload_hash_mismatch`,
+`authorization_mismatch`, `claim_abandoned`. Client codes in the logs: `url_missing`, `url_refused`,
+`token_missing`, `token_malformed`, `token_file_*`, `facade_listener_foreign`, `unauthorized`,
+`http_<status>`, `transport`, `timeout`, `bad_answer`.
 
 ---
 

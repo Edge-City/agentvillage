@@ -20,57 +20,80 @@ back out of the key (R21), and the `sourceId` Index stores on the intent
 (DATA-249 O4, decision A amending R20). Summary `SUMMARIES[class]` plus the
 id: it names no part of the text, because the summary is stored in the log in
 cleartext twice. Payload `{"text": <the text>}` as compact JSON (UTF-8, at
-most 262144 bytes): the bytes the resident is shown and grants.
+most 262144 bytes): the bytes the resident is shown and grants. That string
+is already its own RFC 8785 canonical form (one string key; Python's escaping
+of a string without lone surrogates, which the tool refuses, is JCS's), so its
+plain SHA-256 is the `payload_hash` core registers, and the plugin checks it
+against the hash core answers before it ever starts or publishes.
 
 **Where the text is held (R16).** The payload string is kept in the plugin's
 own map (`$HERMES_HOME/av-events/intentions.json`, 0600, under the map's
 flock) as `approval.payload` on the intention's entry, from capture until the
 proposal ends: it is deleted when the intention is published, when Index
-refuses it (422) or the publish is ambiguous, when the resident rejects it,
-when the agent withdraws it, and when it expires for the last time. A
-proposal core refuses (`class-not-agent-requestable` and kin) keeps it, so a
-`confirm` after the policy changes can file it again. It never appears in a
-log line, an event, or the summary; the published text is
-`json.loads(payload)["text"]`, the very string `start` was given, so the
-Index intent and the granted bytes cannot differ.
+refuses it (422), when the publish is ambiguous or fails, when the resident
+rejects it, when the agent withdraws it, and when it expires for the last
+time. A proposal core refuses (`class-not-agent-requestable` and kin) keeps
+it, so a `confirm` after the policy changes can file it again. It never
+appears in a log line, an event, or the summary.
 
-**The state machine** (`approval.state` in the entry; every transition is a
-compare-and-set under the map's flock, so two processes, or the poller and a
-tool call, never both take the same step):
+**What authorizes a publish (and nothing else does).** The map is never
+authority: it says only what to ask the daemon next. A publish happens only
+in the same call that
 
-    unfiled --propose--> requested | granted | cleared (policy said
-                         autonomous or supervised) | started (core says the
-                         key already executed) | refused (core refused it)
-    requested --wait 0--> granted | started (nothing-to-wait-for: our start
-                         spent the grant) | rejected | withdrawn |
-                         unfiled (expired: re-proposed with the same bytes at
-                         most twice; void after a policy re-attest; a task
-                         the log no longer knows)
-    granted | cleared --precheck, rate cap, start--> started |
-                         unfiled (not-granted, expired, policy-drift: the
-                         re-proposal tells an earlier start from a new
-                         question) | refused
-    started --mark publishing, POST /api/intents--> published |
-                         index_rejected (422) | ambiguous (Index may have
-                         written) | started (nothing was written: retried)
-    publishing, older than twice Index's deadline --> ambiguous
+1. read the authority from the daemon for THAT key: `wait --timeout 0` exit 0
+   with `status: granted` for a manual class; for a class the policy clears,
+   the `propose` answer `decision: autonomous|supervised` with no execution
+   yet (a rule approval writes no grant, so there is no `wait` to read);
+2. claimed the entry atomically (`requested|cleared -> starting`, a
+   compare-and-set under the map's flock, with a claim id);
+3. read the same authority from the daemon again, after the claim;
+4. got `start` back ok with `authorization` `grant` (manual) or `policy`
+   (cleared), exactly the one expected;
+5. checked that the held bytes still hash to the registered `payload_hash`,
+   then moved the entry `starting -> publishing` under the claim, and sent
+   `json.loads(payload)["text"]`, the very string `start` was given.
 
-**No duplicate publish across restarts.** `publishing` is written to the map
-before the Index request and only from `started`; a process that finds
-`publishing` it did not just write cannot know whether Index took it, so after
-`STALE_PUBLISHING_S` it records `ambiguous` (`publish_refused: timeout`, the
-code the data side reconciles by `sourceId` and text hash) and never sends it
-again. A crash between `start` and the map write is recovered without a second
-`start`: the re-proposal answers `state: executed` (or `wait` answers
-`nothing-to-wait-for`), the map moves to `started`, and because `publishing`
-was never written, Index was never called.
+Every other `wait` answer is not a grant: exit 0 with any other status
+(`nothing-to-wait-for`, `executed`), exit 1 (rejected, revoked, withdrawn,
+`not-registered`), 3 (expired), 6 (pending), 7 (void), and anything else.
+
+**States** (`approval.state`; every transition is a compare-and-set):
+
+    unfiled    --propose--> requested | cleared | rejected | refused |
+                            start_unconfirmed (core says it already executed)
+    requested  --wait 0--> (granted) claim, re-read, start, publish |
+                            rejected | withdrawn | unfiled (expired: the same
+                            bytes re-proposed at most twice; void after a
+                            policy re-attest; a task the log no longer knows)
+                            | start_unconfirmed (nothing-to-wait-for)
+    cleared    --claim, re-propose, start, publish
+    starting   older than STALE_STARTING_S: released to where it came from;
+               the daemon is asked again (a start that landed reads
+               nothing-to-wait-for / executed: start_unconfirmed)
+    publishing older than STALE_PUBLISHING_S: ambiguous, never sent again
+    published | index_rejected | ambiguous | index_failed | start_unconfirmed
+               | rejected | withdrawn | expired: final
+
+**No duplicate publish, no publish of a withdrawn intention.** Only the
+holder of the `starting` claim can start and publish, the claim is taken
+before the authority is re-read, and the agent's withdraw is refused while an
+entry is `starting` or `publishing`. `publishing` is written before the Index
+request; a process that died inside it leaves an entry that becomes
+`ambiguous` (`publish_refused: timeout`, reconciled by `sourceId` and text
+hash) and is never sent again. A start whose confirmation was lost is never
+published on the strength of the map or of an answer other than a fresh
+`start` ok: it ends `start_unconfirmed`, and the intention is not published
+(capture it again). A definite non-write from Index (nothing reached it) is
+tried once more in the same call, under the cap, and otherwise ends
+`index_failed`: a retry in a later call would publish on a `start` it no
+longer holds.
 
 **A stale grant after a policy re-attest.** `wait` answers `void` (exit 7)
 and `start` refuses `policy-drift`; both re-propose the same bytes, which
 core files as a new question under the new policy.
 
-**Events.** A publish (or a definite refusal) that happens inside the capture
-call is reported in the tool's result, and the observer emits the one
+**Events.** A publish (or a refusal) that happens inside the capture call is
+reported in the tool's result, and the observer emits the one
 `intention.captured`. One that happens later (the poller, or `confirm`) is
 emitted here as `intention.updated` with `index_intent_id`, `approved_by`
 (`individual` for a human's grant, `rule` for the policy) and
@@ -81,14 +104,14 @@ Python 3.11, standard library only.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import sys
-import time
 from typing import Any, Callable, Optional
 
 from . import _approval
-from ._core import env
+from ._core import env, uuid7
 
 logger = logging.getLogger("av-events")
 
@@ -103,10 +126,13 @@ SUMMARIES = {
 }
 
 APPROVAL_KEY = "approval"
-#: States in which the poller still has work to do.
-LIVE = frozenset({"unfiled", "requested", "granted", "cleared", "started", "publishing"})
-#: Terminal states that end the proposal and drop the held text.
-TERMINAL_DROP = frozenset({"published", "rejected", "withdrawn", "index_rejected", "ambiguous", "expired"})
+#: States in which there is still something to ask the daemon or to finish.
+LIVE = frozenset({"unfiled", "requested", "cleared", "starting", "publishing"})
+#: Final states that drop the held text.
+TERMINAL_DROP = frozenset({
+    "published", "rejected", "withdrawn", "index_rejected", "ambiguous", "index_failed",
+    "start_unconfirmed", "expired",
+})
 
 MAX_PAYLOAD_BYTES = 262144
 MAX_EXPIRED_REPROPOSALS = 2
@@ -116,6 +142,12 @@ MAX_STEPS = 10
 MAX_PER_PASS = 50
 #: A tool call that is advancing an entry itself keeps the poller off it.
 INLINE_GRACE_S = 90.0
+#: A claim covers two daemon calls (the re-read and `start`) of at most
+#: `_approval.REQUEST_TIMEOUT_S` each; one older than this was abandoned.
+STALE_STARTING_S = 120.0
+#: Codes for which nothing reached Index (see `_record_intention.status_code`):
+#: worth one more attempt inside the same call.
+RETRY_ONCE = frozenset({"transport", "http_503", "http_429"})
 
 #: Codes core answers that end a proposal until something changes (a policy
 #: edit, a new capture): the held text is kept so `confirm` can file it again.
@@ -153,9 +185,20 @@ def summary_for(cls: str, intention_id: str) -> str:
 
 
 def payload_for(text: str) -> Optional[str]:
-    """`{"text": ...}` as compact JSON, or None when it is over core's limit."""
+    """`{"text": ...}` as compact JSON (its own JCS form), or None when it is
+    over core's limit."""
     payload = json.dumps({"text": text}, ensure_ascii=False, separators=(",", ":"))
     return payload if len(payload.encode("utf-8")) <= MAX_PAYLOAD_BYTES else None
+
+
+def payload_hash(payload: Any) -> Optional[str]:
+    """SHA-256 of the held string as sent: core's `payload_hash` for it."""
+    if not isinstance(payload, str):
+        return None
+    try:
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    except UnicodeEncodeError:
+        return None
 
 
 def text_of(payload: Any) -> Optional[str]:
@@ -199,10 +242,10 @@ def is_live(entry: Optional[dict]) -> bool:
 
 
 def _cas(intention_id: str, expect: Optional[frozenset[str] | set[str] | tuple[str, ...]],
-         change: Callable[[dict, dict], None]) -> Optional[dict]:
+         change: Callable[[dict, dict], None], *, claim: Optional[str] = None) -> Optional[dict]:
     """Under the map lock: when the entry's approval state is in `expect` (any
-    state when None), apply `change(entry, approval)` and save. The entry after
-    the change, else None."""
+    state when None) and, with `claim`, the entry still carries that claim id,
+    apply `change(entry, approval)` and save. The entry after, else None."""
     ri = _ri()
     try:
         with ri._Locked():
@@ -211,8 +254,14 @@ def _cas(intention_id: str, expect: Optional[frozenset[str] | set[str] | tuple[s
             ap = approval_of(entry)
             if ap is None or (expect is not None and ap.get("state") not in expect):
                 return None
+            if claim is not None and ap.get("claim") != claim:
+                return None
             change(entry, ap)
             ap["updated_at"] = float(ri._clock())
+            if ap.get("state") not in ("starting", "publishing"):
+                ap.pop("claim", None)
+                ap.pop("claimed_at", None)
+                ap.pop("back", None)
             if ap.get("state") in TERMINAL_DROP:
                 ap.pop("payload", None)
                 ap.pop("inline_until", None)
@@ -223,7 +272,7 @@ def _cas(intention_id: str, expect: Optional[frozenset[str] | set[str] | tuple[s
         return None
 
 
-def _set_state(intention_id: str, expect, state: str, **fields: Any) -> Optional[dict]:
+def _set_state(intention_id: str, expect, state: str, *, claim: Optional[str] = None, **fields: Any) -> Optional[dict]:
     def change(_entry: dict, ap: dict) -> None:
         ap["state"] = state
         for name, value in fields.items():
@@ -232,7 +281,7 @@ def _set_state(intention_id: str, expect, state: str, **fields: Any) -> Optional
             else:
                 ap[name] = value
 
-    return _cas(intention_id, frozenset(expect), change)
+    return _cas(intention_id, None if expect is None else frozenset(expect), change, claim=claim)
 
 
 def _note_code(intention_id: str, code: str) -> None:
@@ -285,13 +334,45 @@ def end_inline(intention_id: str) -> None:
     _cas(intention_id, None, change)
 
 
+# ---- Reading the daemon ---------------------------------------------------
+
+
+def _granted(task: str) -> tuple[bool, Optional["_approval.Answer"], Optional[str]]:
+    """`wait --timeout 0` for one task: (granted, the answer, a code). Granted
+    means exit 0 AND `status: granted`, nothing else."""
+    try:
+        answer = _approval.wait(task)
+    except _approval.ApprovalUnavailable as exc:
+        return False, None, exc.code
+    return answer.exit_code == 0 and answer.status == "granted", answer, None
+
+
+def _cleared(ap: dict) -> tuple[bool, Optional[str]]:
+    """The same `propose` again (idempotent): the policy still clears this key,
+    nothing has executed it, and core's hash is the held bytes' hash."""
+    try:
+        answer = _approval.propose(ap["class"], ap["key"], summary_for(ap["class"], ap["key"].split(":", 1)[1]),
+                                   ap["payload"])
+    except _approval.ApprovalUnavailable as exc:
+        return False, exc.code
+    if not answer.ok:
+        return False, answer.error_code or f"exit_{answer.exit_code}"
+    doc = answer.doc
+    if doc.get("payload_hash") != ap.get("payload_hash") or payload_hash(ap.get("payload")) != ap.get("payload_hash"):
+        return False, "payload_hash_mismatch"
+    if doc.get("decision") not in ("autonomous", "supervised") or doc.get("state") is not None:
+        return False, f"decision_{doc.get('decision')}_{doc.get('state')}"
+    return True, None
+
+
 # ---- Advancing one proposal -----------------------------------------------
 
 
 def _propose(intention_id: str, ap: dict) -> Optional[Outcome]:
     """unfiled -> the state core's answer names. None to continue the loop."""
+    payload = ap.get("payload")
     try:
-        answer = _approval.propose(ap["class"], ap["key"], summary_for(ap["class"], intention_id), ap["payload"])
+        answer = _approval.propose(ap["class"], ap["key"], summary_for(ap["class"], intention_id), payload)
     except _approval.ApprovalUnavailable as exc:
         _note_code(intention_id, exc.code)
         return Outcome("unfiled", code=exc.code)
@@ -305,32 +386,34 @@ def _propose(intention_id: str, ap: dict) -> Optional[Outcome]:
         return Outcome("unfiled", code=code)
     doc = answer.doc
     task = doc.get("task") if isinstance(doc.get("task"), str) else None
-    decision = doc.get("decision")
-    state = doc.get("state")
     if task is None or not task.startswith("propose:"):
         _note_code(intention_id, "bad_answer")
         return Outcome("unfiled", code="bad_answer")
+    registered = doc.get("payload_hash")
+    if not isinstance(registered, str) or registered != payload_hash(payload):
+        # The bytes held here are not the bytes core registered for this key.
+        _set_state(intention_id, {"unfiled"}, "refused", code="payload_hash_mismatch", task=task)
+        logger.warning("av-events: approval payload_hash_mismatch")
+        return Outcome("refused", code="payload_hash_mismatch", task=task)
+    decision, state = doc.get("decision"), doc.get("state")
     if state == "executed":
-        new = "started"
+        new, stop = "start_unconfirmed", True
     elif decision == "requested":
-        new = {"requested": "requested", "granted": "granted"}.get(state, "")
-        if not new:
-            # rejected or revoked: the resident has answered this key before.
-            new = "rejected"
-    elif decision in ("autonomous", "supervised"):
-        new = "cleared"
+        if state in ("requested", "granted"):
+            # A grant is read from `wait`, never from this answer.
+            new, stop = "requested", state == "requested"
+        else:
+            new, stop = "rejected", True
+    elif decision in ("autonomous", "supervised") and state is None:
+        new, stop = "cleared", False
     else:
         _note_code(intention_id, "bad_answer")
         return Outcome("unfiled", code="bad_answer")
-    _set_state(intention_id, {"unfiled"}, new, task=task, code=None)
-    if new in ("requested", "rejected"):
-        # The resident has just been asked (or had answered before): nothing
-        # more to learn in this call.
-        return Outcome(new, task=task)
-    return None
+    _set_state(intention_id, {"unfiled"}, new, task=task, payload_hash=registered, code=None)
+    return Outcome(new, task=task) if stop else None
 
 
-def _repropose(intention_id: str, kind: str, cap: int, expect: set[str]) -> Optional[Outcome]:
+def _repropose(intention_id: str, kind: str, cap: int, expect: set[str], claim: Optional[str] = None) -> Optional[Outcome]:
     """Back to `unfiled` so the same bytes are proposed again, or `expired` past the cap."""
     counter = f"reproposals_{kind}"
 
@@ -344,161 +427,226 @@ def _repropose(intention_id: str, kind: str, cap: int, expect: set[str]) -> Opti
         ap["state"] = "unfiled"
         ap["code"] = kind
 
-    after = _cas(intention_id, frozenset(expect), change)
+    after = _cas(intention_id, frozenset(expect), change, claim=claim)
     ap = approval_of(after)
     if ap is not None and ap.get("state") == "expired":
         return Outcome("expired", code=kind)
     return None
 
 
-def _wait(intention_id: str, ap: dict) -> Optional[Outcome]:
+def _poll(intention_id: str, ap: dict) -> Optional[Outcome]:
+    """requested: the daemon's answer for this key, and on a grant, execute."""
     task = ap.get("task")
     if not isinstance(task, str):
         _set_state(intention_id, {"requested"}, "unfiled")
         return None
-    try:
-        answer = _approval.wait(task)
-    except _approval.ApprovalUnavailable as exc:
-        _note_code(intention_id, exc.code)
-        return Outcome("requested", code=exc.code, task=task)
-    code, status = answer.exit_code, answer.status
-    if code == 6:
+    granted, answer, code = _granted(task)
+    if answer is None:
+        _note_code(intention_id, code or "transport")
+        return Outcome("requested", code=code, task=task)
+    if granted:
+        return _execute(intention_id, ap, "grant")
+    exit_code, status = answer.exit_code, answer.status
+    if exit_code == 6:
         return Outcome("requested", task=task)
-    if code == 0 and status == "granted":
-        _set_state(intention_id, {"requested"}, "granted", code=None)
-        return None
-    if code == 0 and status in ("executed", "nothing-to-wait-for"):
-        # Every grant of this key is spent, and only this actor can spend it
-        # (`start` is requester-only): an earlier start of ours whose map write
-        # was lost. The re-proposal confirms it (`state: executed`).
-        _set_state(intention_id, {"requested"}, "unfiled", code=status)
-        return None
-    if code == 1:
+    if exit_code == 0:
+        if status in ("executed", "nothing-to-wait-for"):
+            # The grant is spent, and only this actor can spend it: a start of
+            # ours whose confirmation was lost. Not a grant; never published.
+            _set_state(intention_id, {"requested"}, "start_unconfirmed", code=status)
+            return Outcome("start_unconfirmed", code=status, task=task)
+        _note_code(intention_id, f"wait_status_{status}")
+        return Outcome("requested", code="not_granted", task=task)
+    if exit_code == 1:
         if answer.error_code == "not-registered":
             _set_state(intention_id, {"requested"}, "unfiled", code="not-registered")
             return None
         terminal = "withdrawn" if status == "withdrawn" else "rejected"
         _set_state(intention_id, {"requested"}, terminal, code=status or "rejected")
         return Outcome(terminal, task=task)
-    if code == 3:
+    if exit_code == 3:
         return _repropose(intention_id, "expired", MAX_EXPIRED_REPROPOSALS, {"requested"})
-    if code == 7:
+    if exit_code == 7:
         return _repropose(intention_id, "void", MAX_VOID_REPROPOSALS, {"requested"})
-    _note_code(intention_id, f"wait_exit_{code}")
-    return Outcome("requested", code=f"wait_exit_{code}", task=task)
+    _note_code(intention_id, f"wait_exit_{exit_code}")
+    return Outcome("requested", code="not_granted", task=task)
 
 
-def _start(intention_id: str, ap: dict, state: str, ctx: dict) -> Optional[Outcome]:
-    """granted | cleared -> started. The publish precheck and the rate cap come
-    first (R18), so an execution is recorded only when the publish can follow;
-    the attempt reserved here is the one `_publish` then makes."""
+def _release(intention_id: str, claim: str, back: str, code: str) -> Outcome:
+    _set_state(intention_id, {"starting"}, back, claim=claim, code=code)
+    return Outcome(back, code=code)
+
+
+def _execute(intention_id: str, ap: dict, kind: str) -> Optional[Outcome]:
+    """Claim, re-read the authority, start, publish. `kind` is `grant` (a
+    manual class, just read granted) or `policy` (a class the policy clears)."""
     ri = _ri()
+    back = "requested" if kind == "grant" else "cleared"
+    expected = "grant" if kind == "grant" else "policy"
+    payload = ap.get("payload")
+    if payload_hash(payload) is None or payload_hash(payload) != ap.get("payload_hash"):
+        # The held bytes changed since core registered them: never publish
+        # them; propose again (core refuses other bytes for the key).
+        _set_state(intention_id, {back}, "unfiled", code="payload_hash_mismatch")
+        return None
     code = ri._publish_precheck()
     if code is None:
         code = ri.reserve_publish()
     if code is not None:
         _note_code(intention_id, code)
-        return Outcome(state, code=code)
-    ctx["reserved"] = True
-    try:
-        answer = _approval.start(ap["task"], ap["key"], ap["payload"])
-    except _approval.ApprovalUnavailable as exc:
-        _note_code(intention_id, exc.code)
-        return Outcome(state, code=exc.code)
-    if answer.ok:
-        authorization = answer.doc.get("authorization")
-        authorization = authorization if authorization in ("grant", "policy") else None
-        _set_state(intention_id, {state}, "started", authorization=authorization, code=None)
-        return None
-    error = answer.error_code or f"exit_{answer.exit_code}"
-    if error == "already-executed":
-        _set_state(intention_id, {state}, "started", code=None)
-        return None
-    if error in ("not-granted", "expired", "policy-drift", "not-registered"):
-        kind = "void" if error == "policy-drift" else "expired"
-        cap = MAX_VOID_REPROPOSALS if kind == "void" else MAX_EXPIRED_REPROPOSALS
-        if error == "not-granted":
-            # Our own spent grant reads not-granted on a second start; the
-            # re-proposal answers `executed` then, and files nothing new.
-            _set_state(intention_id, {state}, "unfiled", code=error)
-            return None
-        return _repropose(intention_id, kind, cap, {state})
-    if error in REFUSED_CODES:
-        _set_state(intention_id, {state}, "refused", code=error)
-        return Outcome("refused", code=error)
-    _note_code(intention_id, error)
-    return Outcome(state, code=error)
-
-
-def _publish(intention_id: str, ap: dict, reserved: bool) -> Outcome:
-    ri = _ri()
-    if not reserved:
-        # A retry, or a resumed start: each attempt counts against the cap.
-        code = ri._publish_precheck()
-        if code is None:
-            code = ri.reserve_publish()
-        if code is not None:
-            _note_code(intention_id, code)
-            return Outcome("started", code=code)
-    text = text_of(ap.get("payload"))
-    if text is None:
-        # The held bytes are gone or not ours: nothing to publish that matches the grant.
-        _set_state(intention_id, {"started"}, "refused", code="payload_missing")
-        return Outcome("refused", code="payload_missing")
+        return Outcome(back, code=code)
+    claim = uuid7()
     now = float(ri._clock())
-    if _set_state(intention_id, {"started"}, "publishing", publishing_at=now) is None:
+    def take(_entry: dict, apx: dict) -> None:
+        apx["state"] = "starting"
+        apx["claim"] = claim
+        apx["back"] = back
+        apx["claimed_at"] = now
+        apx.pop("code", None)
+
+    # One compare-and-set: only one caller moves `back -> starting`, and every
+    # later step checks this claim id. Then the authority is read again.
+    if _cas(intention_id, {back}, take) is None:
+        return Outcome("starting")
+    task = ap.get("task")
+    if kind == "grant":
+        ok, answer, why = _granted(task)
+        if not ok:
+            if answer is not None and answer.exit_code == 7:
+                return _repropose(intention_id, "void", MAX_VOID_REPROPOSALS, {"starting"}, claim=claim)
+            return _release(intention_id, claim, back, why or f"wait_exit_{answer.exit_code if answer else 'none'}")
+    else:
+        ok, why = _cleared(ap)
+        if not ok:
+            # Ask from the start: the class may be manual now, or executed.
+            _set_state(intention_id, {"starting"}, "unfiled", claim=claim, code=why)
+            return None
+    try:
+        answer = _approval.start(task, ap["key"], payload)
+    except _approval.ApprovalUnavailable as exc:
+        # Whether it landed is unknown: the next read of the daemon tells
+        # (a spent grant reads nothing-to-wait-for, and is never published).
+        return _release(intention_id, claim, back, exc.code)
+    if not answer.ok:
+        error = answer.error_code or f"exit_{answer.exit_code}"
+        if error == "already-executed":
+            _set_state(intention_id, {"starting"}, "start_unconfirmed", claim=claim, code=error)
+            return Outcome("start_unconfirmed", code=error)
+        if error == "policy-drift":
+            return _repropose(intention_id, "void", MAX_VOID_REPROPOSALS, {"starting"}, claim=claim)
+        if error == "expired":
+            return _repropose(intention_id, "expired", MAX_EXPIRED_REPROPOSALS, {"starting"}, claim=claim)
+        if error in REFUSED_CODES:
+            _set_state(intention_id, {"starting"}, "refused", claim=claim, code=error)
+            return Outcome("refused", code=error)
+        return _release(intention_id, claim, back, error)
+    authorization = answer.doc.get("authorization")
+    if authorization != expected:
+        # An execution is recorded, but not on the authority this call read.
+        _set_state(intention_id, {"starting"}, "refused", claim=claim, code="authorization_mismatch")
+        logger.warning("av-events: approval authorization_mismatch")
+        return Outcome("refused", code="authorization_mismatch")
+    if _set_state(intention_id, {"starting"}, "publishing", claim=claim, authorization=authorization,
+                  publishing_at=float(ri._clock())) is None:
+        return Outcome("starting")
+    return _publish(intention_id, payload, ap.get("payload_hash"), authorization, claim)
+
+
+def _publish(intention_id: str, payload: str, registered: Any, authorization: str, claim: str) -> Outcome:
+    ri = _ri()
+    text = text_of(payload)
+    if text is None or payload_hash(payload) != registered:
+        _set_state(intention_id, {"publishing"}, "refused", claim=claim, code="payload_hash_mismatch", publishing_at=None)
+        return Outcome("refused", code="payload_hash_mismatch", authorization=authorization)
+    code: Optional[str] = None
+    for attempt in range(2):
+        if attempt:
+            code = ri._publish_precheck() or ri.reserve_publish()
+            if code is not None:
+                break
+        index_id, code = ri.publish_intent(text, source_id=intention_id)
+        if index_id is not None:
+            def change(entry: dict, apx: dict) -> None:
+                apx["state"] = "published"
+                apx.pop("code", None)
+                apx.pop("publishing_at", None)
+                entry["published"] = True
+                entry["index_intent_id"] = index_id
+                entry.pop(ri.HELD_HASH_KEY, None)
+
+            _cas(intention_id, {"publishing"}, change, claim=claim)
+            return Outcome("published", index_intent_id=index_id, authorization=authorization)
+        if code == "rejected":
+            def change_rejected(entry: dict, apx: dict) -> None:
+                apx["state"] = "index_rejected"
+                apx["code"] = "rejected"
+                apx.pop("publishing_at", None)
+                entry["refused"] = "rejected"
+                entry.pop(ri.HELD_HASH_KEY, None)
+
+            _cas(intention_id, {"publishing"}, change_rejected, claim=claim)
+            return Outcome("index_rejected", code="rejected", authorization=authorization)
+        if code == ri.AMBIGUOUS:
+            _set_state(intention_id, {"publishing"}, "ambiguous", claim=claim, code=code, publishing_at=None)
+            return Outcome("ambiguous", code=code, authorization=authorization)
+        if code not in RETRY_ONCE:
+            break
+    # Nothing reached Index, and the start this call holds is spent on it.
+    _set_state(intention_id, {"publishing"}, "index_failed", claim=claim, code=code, publishing_at=None)
+    return Outcome("index_failed", code=code, authorization=authorization)
+
+
+def _stale(intention_id: str, ap: dict, emit: bool, entry: Optional[dict]) -> Optional[Outcome]:
+    ri = _ri()
+    state = ap.get("state")
+    now = float(ri._clock())
+    if state == "starting":
+        at = ap.get("claimed_at")
+        if isinstance(at, (int, float)) and now - float(at) <= STALE_STARTING_S:
+            return Outcome("starting")
+        back = ap.get("back") if ap.get("back") in ("requested", "cleared") else "requested"
+        # Abandoned before Index was called: ask the daemon again from there.
+        _set_state(intention_id, {"starting"}, back, claim=ap.get("claim"), code="claim_abandoned")
+        return None
+    at = ap.get("publishing_at")
+    if isinstance(at, (int, float)) and now - float(at) <= STALE_PUBLISHING_S():
         return Outcome("publishing")
-    index_id, code = ri.publish_intent(text, source_id=intention_id)
-    authorization = ap.get("authorization") if ap.get("authorization") in ("grant", "policy") else None
-    if index_id is not None:
-        def change(entry: dict, apx: dict) -> None:
-            apx["state"] = "published"
-            apx.pop("code", None)
-            apx.pop("publishing_at", None)
-            entry["published"] = True
-            entry["index_intent_id"] = index_id
-            entry.pop(ri.HELD_HASH_KEY, None)
+    # B1 discipline: Index may have written. Never sent again.
+    if _set_state(intention_id, {"publishing"}, "ambiguous", claim=ap.get("claim"), code=ri.AMBIGUOUS,
+                  publishing_at=None):
+        result = Outcome("ambiguous", code=ri.AMBIGUOUS, authorization=ap.get("authorization"))
+        if emit:
+            _emit(intention_id, entry, ap, result)
+        return result
+    return None
 
-        _cas(intention_id, {"publishing"}, change)
-        return Outcome("published", index_intent_id=index_id, authorization=authorization)
-    if code == "rejected":
-        def change_rejected(entry: dict, apx: dict) -> None:
-            apx["state"] = "index_rejected"
-            apx["code"] = "rejected"
-            apx.pop("publishing_at", None)
-            entry["refused"] = "rejected"
-            entry.pop(ri.HELD_HASH_KEY, None)
 
-        _cas(intention_id, {"publishing"}, change_rejected)
-        return Outcome("index_rejected", code="rejected", authorization=authorization)
-    if code == ri.AMBIGUOUS:
-        _set_state(intention_id, {"publishing"}, "ambiguous", code=code, publishing_at=None)
-        return Outcome("ambiguous", code=code, authorization=authorization)
-    # Nothing reached Index (a refused connection, a 4xx other than 422, a 503):
-    # back to `started`, and the next pass tries again under the rate cap.
-    _set_state(intention_id, {"publishing"}, "started", code=code, publishing_at=None)
-    return Outcome("started", code=code, authorization=authorization)
+#: Outcomes worth an `intention.updated` when no tool result carries them.
+EMITTED = frozenset({"published", "index_rejected", "ambiguous", "index_failed"})
 
 
 def advance(intention_id: str, *, emit: bool, inline: bool = False) -> Outcome:
-    """Take the proposal as far as it can go now. Never raises.
+    """Take the proposal as far as the daemon's answers allow now. Never raises.
 
-    `emit`: report a publish (or a definite Index refusal) as
-    `intention.updated` here, because no tool result will carry it. `inline`:
-    the capture call itself is advancing; the poller is kept off meanwhile.
+    `emit`: report a publish (or Index's refusal) as `intention.updated` here,
+    because no tool result will carry it. `inline`: the capture call itself is
+    advancing; the poller is kept off meanwhile.
     """
     ri = _ri()
-    outcome = Outcome("unknown")
-    ctx: dict[str, Any] = {"reserved": False}
     try:
         for _ in range(MAX_STEPS):
             entry = ri.lookup(intention_id)
             ap = approval_of(entry)
             if ap is None:
                 return Outcome("none")
+            ap = dict(ap)
             state = ap.get("state")
-            if not inline and isinstance(ap.get("inline_until"), (int, float)) and ap["inline_until"] > float(ri._clock()):
+            until = ap.get("inline_until")
+            if not inline and isinstance(until, (int, float)) and until > float(ri._clock()):
                 return Outcome(state or "unknown")
+            if state == "published" and not (isinstance(entry, dict) and entry.get("published") is True):
+                # A map that says published without the publish this module records.
+                return Outcome("inconsistent", code="map_inconsistent")
             if state not in LIVE:
                 return Outcome(state or "unknown", code=ap.get("code"), task=ap.get("task"),
                                index_intent_id=entry.get("index_intent_id") if isinstance(entry, dict) else None,
@@ -506,30 +654,19 @@ def advance(intention_id: str, *, emit: bool, inline: bool = False) -> Outcome:
             if state == "unfiled":
                 result = _propose(intention_id, ap)
             elif state == "requested":
-                result = _wait(intention_id, ap)
-            elif state in ("granted", "cleared"):
-                result = _start(intention_id, ap, state, ctx)
-            elif state == "started":
-                result = _publish(intention_id, ap, ctx["reserved"])
-                if result.state in ("published", "index_rejected", "ambiguous") and emit:
-                    _emit(intention_id, entry, ap, result)
-                return result
-            else:  # publishing
-                published_at = ap.get("publishing_at")
-                stale = not isinstance(published_at, (int, float)) or (
-                    float(ri._clock()) - float(published_at) > STALE_PUBLISHING_S())
-                if not stale:
-                    return Outcome("publishing")
-                # B1 discipline: Index may have written. Never sent again.
-                if _set_state(intention_id, {"publishing"}, "ambiguous", code=ri.AMBIGUOUS, publishing_at=None):
-                    result = Outcome("ambiguous", code=ri.AMBIGUOUS, authorization=ap.get("authorization"))
-                    if emit:
-                        _emit(intention_id, entry, ap, result)
+                result = _poll(intention_id, ap)
+            elif state == "cleared":
+                result = _execute(intention_id, ap, "policy")
+            else:
+                result = _stale(intention_id, ap, emit, entry)
+                if result is not None:
                     return result
                 continue
             if result is not None:
+                if emit and result.state in EMITTED:
+                    _emit(intention_id, entry, ap, result)
                 return result
-        return outcome
+        return Outcome("unknown")
     except Exception as exc:  # noqa: BLE001 - never into Hermes, never kills the poller
         logger.warning("av-events: approval advance_failed=%s", type(exc).__name__)
         return Outcome("error", code="internal")
@@ -563,17 +700,18 @@ def _emit(intention_id: str, entry: Optional[dict], ap: dict, outcome: Outcome) 
 
 def withdraw_local(intention_id: str) -> Optional[str]:
     """End a live proposal because the agent withdrew the intention. None when
-    done (or there was none), `approval_publishing` while Index is being
-    written. A pending question is withdrawn on the daemon, best effort."""
+    done (or there was none), `approval_publishing` while a claimed start or
+    the Index call is in flight. A pending question is withdrawn on the
+    daemon, best effort."""
     entry = _ri().lookup(intention_id)
     ap = approval_of(entry)
     if ap is None or ap.get("state") not in LIVE:
         return None
-    if ap.get("state") == "publishing":
+    if ap.get("state") in ("starting", "publishing"):
         return "approval_publishing"
     previous = ap.get("state")
     task = ap.get("task")
-    after = _set_state(intention_id, LIVE - {"publishing"}, "withdrawn", code="agent_withdrew")
+    after = _set_state(intention_id, {"unfiled", "requested", "cleared"}, "withdrawn", code="agent_withdrew")
     if after is None:
         return "approval_publishing"
     if previous == "requested" and isinstance(task, str):
@@ -682,6 +820,7 @@ __all__ = [
     "maybe_start",
     "open_entry",
     "payload_for",
+    "payload_hash",
     "run_intent_pass",
     "set_emitter",
     "summary_for",
