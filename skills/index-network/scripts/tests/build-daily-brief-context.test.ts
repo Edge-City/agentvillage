@@ -297,128 +297,7 @@ describe("build-daily-brief-context helpers", () => {
       expect(context.opportunities[0].name).toBe("Nathan Price");
       expect(context.opportunities[0].opportunityId).toBe("opp-mcp-1");
       expect(context.questions).toEqual([]);
-      expect(context.diagnostics.questionSource).toBe("mcp");
-    } finally {
-      globalThis.fetch = originalFetch;
-      if (originalApiKey === undefined) delete process.env.INDEX_API_KEY;
-      else process.env.INDEX_API_KEY = originalApiKey;
-      if (originalMcpUrl === undefined) delete process.env.INDEX_MCP_URL;
-      else process.env.INDEX_MCP_URL = originalMcpUrl;
-      if (originalEdgeosKey === undefined) delete process.env.EDGEOS_API_KEY;
-      else process.env.EDGEOS_API_KEY = originalEdgeosKey;
-      if (originalControlPlaneUrl === undefined) delete process.env.EDGE_AGENT_CONTROL_PLANE_URL;
-      else process.env.EDGE_AGENT_CONTROL_PLANE_URL = originalControlPlaneUrl;
-      if (originalAdminToken === undefined) delete process.env.ADMIN_TOKEN;
-      else process.env.ADMIN_TOKEN = originalAdminToken;
-    }
-  });
-
-  test("buildDailyBriefContext populates questions and questionSource from MCP", async () => {
-    const originalFetch = globalThis.fetch;
-    const originalApiKey = process.env.INDEX_API_KEY;
-    const originalMcpUrl = process.env.INDEX_MCP_URL;
-    const originalEdgeosKey = process.env.EDGEOS_API_KEY;
-    const originalControlPlaneUrl = process.env.EDGE_AGENT_CONTROL_PLANE_URL;
-    const originalAdminToken = process.env.ADMIN_TOKEN;
-    delete process.env.EDGEOS_API_KEY;
-    delete process.env.EDGE_AGENT_CONTROL_PLANE_URL;
-    delete process.env.ADMIN_TOKEN;
-    process.env.INDEX_API_KEY = "test-key";
-    process.env.INDEX_MCP_URL = "https://test.example.com/mcp";
-
-    const mockQuestion = {
-      id: "q-0001",
-      title: "Collaboration focus",
-      prompt: "What kind of collaboration are you most open to right now?",
-      mode: "profile",
-    };
-
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes("open-meteo") || url.includes("weather.gov")) {
-        return new Response("unavailable", { status: 503, statusText: "Service Unavailable" });
-      }
-      if (url === "https://test.example.com/mcp") {
-        const body = JSON.parse(init?.body as string ?? "{}") as { method: string; params?: { name?: string } };
-        if (body.method === "initialize") {
-          return Response.json({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", capabilities: {} } });
-        }
-        if (body.method === "tools/call") {
-          if (body.params?.name === "read_pending_questions") {
-            return Response.json({
-              jsonrpc: "2.0",
-              id: 2,
-              result: { content: [{ type: "text", text: JSON.stringify({ success: true, data: { questions: [mockQuestion] } }) }] },
-            });
-          }
-          return Response.json({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: "" }] } });
-        }
-      }
-      throw new Error(`unexpected fetch: ${url}`);
-    }) as typeof fetch;
-
-    try {
-      const context = await buildDailyBriefContext({ date: "2026-06-10", userFiles: [] });
-      expect(context.questions).toEqual([mockQuestion]);
-      expect(context.diagnostics.questionSource).toBe("mcp");
-      expect(context.diagnostics.warnings.some((w) => w.startsWith("questions MCP unavailable"))).toBe(false);
-    } finally {
-      globalThis.fetch = originalFetch;
-      if (originalApiKey === undefined) delete process.env.INDEX_API_KEY;
-      else process.env.INDEX_API_KEY = originalApiKey;
-      if (originalMcpUrl === undefined) delete process.env.INDEX_MCP_URL;
-      else process.env.INDEX_MCP_URL = originalMcpUrl;
-      if (originalEdgeosKey === undefined) delete process.env.EDGEOS_API_KEY;
-      else process.env.EDGEOS_API_KEY = originalEdgeosKey;
-      if (originalControlPlaneUrl === undefined) delete process.env.EDGE_AGENT_CONTROL_PLANE_URL;
-      else process.env.EDGE_AGENT_CONTROL_PLANE_URL = originalControlPlaneUrl;
-      if (originalAdminToken === undefined) delete process.env.ADMIN_TOKEN;
-      else process.env.ADMIN_TOKEN = originalAdminToken;
-    }
-  });
-
-  test("buildDailyBriefContext marks questionSource unavailable with a detailed warning on success:false", async () => {
-    const originalFetch = globalThis.fetch;
-    const originalApiKey = process.env.INDEX_API_KEY;
-    const originalMcpUrl = process.env.INDEX_MCP_URL;
-    const originalEdgeosKey = process.env.EDGEOS_API_KEY;
-    const originalControlPlaneUrl = process.env.EDGE_AGENT_CONTROL_PLANE_URL;
-    const originalAdminToken = process.env.ADMIN_TOKEN;
-    delete process.env.EDGEOS_API_KEY;
-    delete process.env.EDGE_AGENT_CONTROL_PLANE_URL;
-    delete process.env.ADMIN_TOKEN;
-    process.env.INDEX_API_KEY = "test-key";
-    process.env.INDEX_MCP_URL = "https://test.example.com/mcp";
-
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes("open-meteo") || url.includes("weather.gov")) {
-        return new Response("unavailable", { status: 503, statusText: "Service Unavailable" });
-      }
-      if (url === "https://test.example.com/mcp") {
-        const body = JSON.parse(init?.body as string ?? "{}") as { method: string; params?: { name?: string } };
-        if (body.method === "initialize") {
-          return Response.json({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", capabilities: {} } });
-        }
-        if (body.method === "tools/call") {
-          if (body.params?.name === "read_pending_questions") {
-            return Response.json({
-              jsonrpc: "2.0",
-              id: 2,
-              result: { content: [{ type: "text", text: JSON.stringify({ success: false, error: "boom" }) }] },
-            });
-          }
-          return Response.json({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: "" }] } });
-        }
-      }
-      throw new Error(`unexpected fetch: ${url}`);
-    }) as typeof fetch;
-
-    try {
-      const context = await buildDailyBriefContext({ date: "2026-06-10", userFiles: [] });
-      expect(context.questions).toEqual([]);
       expect(context.diagnostics.questionSource).toBe("unavailable");
-      expect(context.diagnostics.warnings).toContain("questions MCP unavailable: read_pending_questions: boom");
     } finally {
       globalThis.fetch = originalFetch;
       if (originalApiKey === undefined) delete process.env.INDEX_API_KEY;
@@ -434,7 +313,11 @@ describe("build-daily-brief-context helpers", () => {
     }
   });
 
-  test("buildDailyBriefContext filters questions in cooldown and falls through to the next pending one", async () => {
+  test("buildDailyBriefContext no longer asks Index for pending questions (retired in 1a040b9)", async () => {
+    // The morning brief used to call read_pending_questions and filter the result
+    // through the 3-day cooldown. 1a040b9 retired that call: questions[] is always
+    // empty and questionSource is "unavailable"; prepare.md writes its own closing
+    // question. The cooldown helper keeps its own unit test below.
     const originalFetch = globalThis.fetch;
     const originalApiKey = process.env.INDEX_API_KEY;
     const originalMcpUrl = process.env.INDEX_MCP_URL;
@@ -449,15 +332,14 @@ describe("build-daily-brief-context helpers", () => {
 
     const dir = mkdtempSync(join(tmpdir(), "brief-questions-"));
     const stateFile = join(dir, "state.json");
-    await Bun.write(stateFile, JSON.stringify({
+    const state = {
       prepared: { date: "2026-06-09", taskId: "t_x" },
       questionDelivery: { "q-recent": "2026-06-09", "q-stale": "2026-06-01" },
-    }));
+    };
+    await Bun.write(stateFile, JSON.stringify(state));
 
-    const questions = [
-      { id: "q-recent", title: "A", prompt: "Recently asked?", mode: "profile" },
-      { id: "q-stale", title: "B", prompt: "Asked long ago?", mode: "intent" },
-    ];
+    const pending = [{ id: "q-0001", title: "Collaboration focus", prompt: "What kind of collaboration?", mode: "profile" }];
+    const toolCalls: string[] = [];
 
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -470,11 +352,12 @@ describe("build-daily-brief-context helpers", () => {
           return Response.json({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", capabilities: {} } });
         }
         if (body.method === "tools/call") {
+          toolCalls.push(body.params?.name ?? "");
           if (body.params?.name === "read_pending_questions") {
             return Response.json({
               jsonrpc: "2.0",
               id: 2,
-              result: { content: [{ type: "text", text: JSON.stringify({ success: true, data: { questions } }) }] },
+              result: { content: [{ type: "text", text: JSON.stringify({ success: true, data: { questions: pending } }) }] },
             });
           }
           return Response.json({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: "" }] } });
@@ -485,8 +368,12 @@ describe("build-daily-brief-context helpers", () => {
 
     try {
       const context = await buildDailyBriefContext({ date: "2026-06-10", userFiles: [], stateFile });
-      expect(context.questions.map((q) => q.id)).toEqual(["q-stale"]);
-      expect(context.diagnostics.questionSource).toBe("mcp");
+      expect(toolCalls).not.toContain("read_pending_questions");
+      expect(context.questions).toEqual([]);
+      expect(context.diagnostics.questionSource).toBe("unavailable");
+      expect(context.diagnostics.warnings.some((w) => w.startsWith("questions MCP unavailable"))).toBe(false);
+      // The question-delivery ledger is left alone.
+      expect(JSON.parse(await Bun.file(stateFile).text()).questionDelivery).toEqual(state.questionDelivery);
     } finally {
       globalThis.fetch = originalFetch;
       rmSync(dir, { recursive: true, force: true });
