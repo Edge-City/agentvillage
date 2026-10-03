@@ -129,7 +129,9 @@ def test_update_intent_emits_intention_updated_with_the_argument_id(live, ctx, a
 
 @pytest.mark.parametrize("status", ["archived", "  Archived ", "DELETED", "withdrawn"])
 def test_update_intent_archiving_is_a_withdrawal(live, ctx, av, status):
-    """The heartbeat prunes stale signals with `update_intent(id, status="archived")`."""
+    """Legacy: Index's `update_intent` takes no status (DATA-249; the heartbeat now
+    archives with `archive_intent`). A server that still accepted one is read as
+    withdrawing."""
     fire_tool(ctx, "mcp__index__update_intent", {"id": "int-abc", "status": status}, created(status="archived"))
     events = intention_events(av, live)
     assert types(events) == ["intention.withdrawn"]
@@ -170,11 +172,18 @@ def test_a_status_only_update_emits_nothing(live, ctx, av):
     assert intention_events(av, live) == []
 
 
-def test_delete_intent_is_a_withdrawal(live, ctx, av):
+def test_delete_intent_is_kept_as_a_legacy_alias_of_archive(live, ctx, av):
+    """DATA-249: Index has no `delete_intent` today. The alias stays so a server
+    still on the older surface keeps its withdrawals; it behaves as
+    `archive_intent`, with `index_status` `deleted`."""
     fire_tool(ctx, "mcp__index__delete_intent", {"intentId": "int-abc"}, index_result({"deleted": True}))
     events = intention_events(av, live)
     assert types(events) == ["intention.withdrawn"]
     assert events[0]["intention_id"] == "int-abc"
+    payload = events[0]["payload"]
+    assert payload["index_status"] == "deleted"
+    assert payload["index_intent_id"] == "int-abc" and payload["capture_path"] == "index_tool"
+    assert payload["text_hash"] is None and payload["summary_hash"] is None
 
 
 def test_update_without_an_id_is_not_emitted(live, ctx, av):
@@ -182,7 +191,157 @@ def test_update_without_an_id_is_not_emitted(live, ctx, av):
     assert intention_events(av, live) == []
 
 
-@pytest.mark.parametrize("status", ["paused", "needs review please", LONE_SURROGATE])
+# --------------------------------------------------------------------------
+# Index main's intent tools (DATA-249, `mcp.tools.ts`): results as Index sends them
+# --------------------------------------------------------------------------
+
+UUID_ID = "0192f0aa-1b2c-4d3e-8f40-123456789abc"
+
+
+def index_mcp(data, shape):
+    """An Index MCP success result as `post_tool_call` sees it, in each shape the
+    observer accepts: Index's markdown lead line then the JSON (as data, or as a
+    `{success, data}` document), or `structuredContent`."""
+    lead = "[Climbing partner](https://index.network/i/x) — done"
+    if shape == "text-data":
+        return json.dumps({"result": lead + "\n" + json.dumps(data)})
+    if shape == "text-envelope":
+        return json.dumps({"result": lead + "\n" + json.dumps({"success": True, "data": data})})
+    return json.dumps({"result": lead, "structuredContent": data})
+
+
+SHAPES = ["text-data", "text-envelope", "structured"]
+
+
+@pytest.mark.parametrize("shape", SHAPES)
+def test_index_create_result_names_the_intent_as_intent_id(live, ctx, av, shape):
+    data = {"intentId": UUID_ID, "url": "https://index.network/i/x", "networkIds": [], "sourceType": None, "sourceId": None}
+    fire_tool(ctx, "mcp__index__create_intent", {"description": DESCRIPTION}, index_mcp(data, shape))
+    events = intention_events(av, live)
+    assert types(events) == ["intention.captured"]
+    assert events[0]["intention_id"] == UUID_ID
+    assert events[0]["payload"]["index_intent_id"] == UUID_ID
+    assert events[0]["payload"]["text_hash"] == sha(DESCRIPTION)
+
+
+@pytest.mark.parametrize("shape", SHAPES)
+@pytest.mark.parametrize(
+    "tool, event_type, status",
+    [
+        ("pause_intent", "intention.updated", "paused"),
+        ("resume_intent", "intention.updated", "active"),
+        ("archive_intent", "intention.withdrawn", "archived"),
+    ],
+)
+def test_lifecycle_tools(live, ctx, av, shape, tool, event_type, status):
+    """AC #1: archive is a withdrawal; pause and resume are updates naming the status."""
+    args = {"intentId": UUID_ID, **({"confirm": True} if tool == "archive_intent" else {})}
+    if tool == "archive_intent":
+        data = {"intentId": UUID_ID, "url": "u", "archived": True, "message": "Archiving cannot currently be reversed."}
+    else:
+        data = {"intentId": UUID_ID, "url": "u", "status": status, "changed": True}
+    fire_tool(ctx, f"mcp__index__{tool}", args, index_mcp(data, shape))
+    events = intention_events(av, live)
+    assert types(events) == [event_type]
+    event = events[0]
+    assert event["intention_id"] == UUID_ID
+    payload = event["payload"]
+    assert payload["index_status"] == status
+    assert payload["index_intent_id"] == UUID_ID
+    assert payload["capture_path"] == "index_tool"
+    assert payload["source"] == "message"
+    # No text changes on a lifecycle call.
+    assert payload["text_hash"] is None and payload["summary_hash"] is None
+
+
+@pytest.mark.parametrize("tool", ["pause_intent", "resume_intent", "archive_intent"])
+def test_lifecycle_with_no_result_id_uses_the_argument(live, ctx, av, tool):
+    fire_tool(ctx, f"mcp__index__{tool}", {"intentId": "int-abc"}, index_result({"changed": False}))
+    assert [e["intention_id"] for e in intention_events(av, live)] == ["int-abc"]
+
+
+def test_a_short_id_prefix_is_recorded_as_the_full_id_index_resolved(live, ctx, av):
+    """Index accepts an 8-character short id for `intentId` and answers with the full id."""
+    fire_tool(
+        ctx, "mcp__index__archive_intent", {"intentId": UUID_ID[:8], "confirm": True},
+        index_mcp({"intentId": UUID_ID, "url": "u", "archived": True}, "structured"),
+    )
+    assert [e["intention_id"] for e in intention_events(av, live)] == [UUID_ID]
+
+
+def test_a_result_naming_another_intent_is_not_trusted(live, ctx, av):
+    fire_tool(ctx, "mcp__index__pause_intent", {"intentId": "int-abc"}, index_mcp({"intentId": "int-zzz"}, "structured"))
+    assert [e["intention_id"] for e in intention_events(av, live)] == ["int-abc"]
+
+
+def test_pause_in_a_cron_session_is_ambient(live, ctx, av):
+    fire_tool(ctx, "mcp__index__pause_intent", {"intentId": "int-abc"}, index_mcp({"intentId": "int-abc"}, "structured"),
+              session="cron_job1_20260101")
+    assert intention_events(av, live)[0]["payload"]["source"] == "ambient"
+
+
+@pytest.mark.parametrize("tool", ["pause_intent", "resume_intent", "archive_intent"])
+def test_a_refused_lifecycle_call_records_nothing(live, ctx, av, tool):
+    fire_tool(ctx, f"mcp__index__{tool}", {"intentId": "int-abc"}, json.dumps({"error": "intent_archived"}), status="error")
+    fire_tool(ctx, f"mcp__index__{tool}", {"intentId": "int-abc"}, index_result({"code": "intent_not_found"}, success=False))
+    assert intention_events(av, live) == []
+
+
+@pytest.mark.parametrize("tool", ["pause_intent", "resume_intent", "archive_intent"])
+def test_a_lifecycle_call_without_an_id_records_nothing(live, ctx, av, tool):
+    fire_tool(ctx, f"mcp__index__{tool}", {}, index_mcp({"intentId": "int-abc"}, "structured"))
+    assert intention_events(av, live) == []
+
+
+def test_index_update_intent_takes_intent_id_and_reads_the_result_status(live, ctx, av):
+    result = index_mcp(
+        {"intent": {"id": UUID_ID, "summary": SUMMARY, "status": "paused", "archived": False, "sourceType": None}},
+        "text-envelope",
+    )
+    fire_tool(ctx, "mcp__index__update_intent", {"intentId": UUID_ID, "description": DESCRIPTION}, result)
+    events = intention_events(av, live)
+    assert types(events) == ["intention.updated"]
+    assert events[0]["intention_id"] == UUID_ID
+    assert events[0]["payload"]["index_status"] == "paused"
+    assert events[0]["payload"]["text_hash"] == sha(DESCRIPTION)
+    assert events[0]["payload"]["summary_hash"] == sha(SUMMARY)
+
+
+def test_an_archived_update_result_is_a_withdrawal(live, ctx, av):
+    """Index refuses to update an archived intent; an older surface that did not
+    is still read as withdrawn."""
+    fire_tool(ctx, "mcp__index__update_intent", {"intentId": "int-abc", "description": DESCRIPTION},
+              index_result({"intent": {"id": "int-abc", "status": "active", "archived": True}}))
+    events = intention_events(av, live)
+    assert types(events) == ["intention.withdrawn"]
+    assert events[0]["payload"]["index_status"] == "archived"
+
+
+def test_a_source_fields_only_update_emits_nothing(live, ctx, av):
+    fire_tool(ctx, "mcp__index__update_intent", {"intentId": "int-abc", "sourceType": "agentvillage", "sourceId": None},
+              index_result({"intent": {"id": "int-abc", "status": "active"}}))
+    assert intention_events(av, live) == []
+
+
+@pytest.mark.parametrize("tool", ["list_intents", "get_intent"])
+def test_index_intent_reads_record_nothing(live, ctx, av, tool):
+    fire_tool(ctx, f"mcp__index__{tool}", {"intentId": "int-abc"}, index_result({"intent": {"id": "int-abc"}}))
+    assert intention_events(av, live) == []
+
+
+@pytest.mark.parametrize("tool", ["pause_intent", "resume_intent", "archive_intent"])
+def test_lifecycle_tools_on_another_mcp_server_are_ignored(live, ctx, av, tool):
+    fire_tool(ctx, f"mcp__other__{tool}", {"intentId": "int-abc"}, index_mcp({"intentId": "int-abc"}, "structured"))
+    assert intention_events(av, live) == []
+
+
+def test_paused_is_a_listed_status(plugin, av):
+    intentions = sys.modules[f"{av.MODULE_NAME}._intentions"]
+    assert intentions.normalise_status(" Paused ") == "paused"
+    assert "paused" not in intentions.WITHDRAWN_STATUSES
+
+
+@pytest.mark.parametrize("status", ["draft", "needs review please", LONE_SURROGATE])
 def test_an_unlisted_status_is_reported_as_other(live, ctx, av, status):
     fire_tool(ctx, "mcp__index__update_intent", {"id": "int-abc", "description": DESCRIPTION, "status": status}, "{}")
     events = intention_events(av, live)

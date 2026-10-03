@@ -153,9 +153,8 @@ from ._intentions import (
     LOCAL_REASONS,
     RECORD_INTENTION_TOOL,
     RESTRICTIVE_SOURCE,
-    _first_id,
     _first_json,
-    result_intent,
+    result_intent_id,
     valid_id,
 )
 
@@ -469,25 +468,48 @@ def index_tool_call(tool: str, arguments: dict, *, timeout: Optional[float] = No
     return box[0]
 
 
-def publish_intent(text: str) -> tuple[Optional[str], Optional[str]]:
-    payload, code = index_tool_call("create_intent", {"description": text})
+#: `sourceType` on every intent the overlay creates with a back-reference
+#: (DATA-149 decision A, DATA-249): Index stores it and the client-owned
+#: `sourceId` unchanged, and the poller (DATA-246) reads them.
+SOURCE_TYPE = "agentvillage"
+
+
+def publish_intent(text: str, *, source_id: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
+    """`create_intent {description}` -> `(Index's intent id, None)` or `(None, code)`.
+
+    `description` is `text` exactly as given: the event's `text_hash` is the
+    plain SHA-256 of the same string, and the poller matches the two
+    (DATA-246). With `source_id` (a local uuid v7 intention id) the call also
+    carries `sourceType = "agentvillage"` and `sourceId = source_id`.
+    Index's result names the new intent as `intentId` (`mcp.tools.ts`).
+    """
+    arguments: dict[str, Any] = {"description": text}
+    if source_id is not None:
+        arguments["sourceType"] = SOURCE_TYPE
+        arguments["sourceId"] = source_id
+    payload, code = index_tool_call("create_intent", arguments)
     if code is not None:
         return None, code
-    intent_id = _first_id(result_intent(payload))
+    intent_id = result_intent_id(payload)
     if intent_id is None or not valid_id(intent_id):
         return None, "malformed"
     return intent_id, None
 
 
 def mirror_update(intent_id: str, *, description: Optional[str] = None, archive: bool = False) -> Optional[str]:
-    # `id` as the Index skill's heartbeat names it (`update_intent(id, status=...)`);
-    # unconfirmed against Index's tool schema, a dogfood check.
-    arguments: dict[str, Any] = {"id": intent_id}
+    """Mirror an edit or a withdrawal of a published intention to Index.
+
+    An archive is `archive_intent {intentId, confirm: true}` (Index's schema
+    requires the literal `confirm: true`; archiving cannot be undone there).
+    An edit is `update_intent {intentId, description}`. Neither takes a status.
+    None on success, else a code. With neither, nothing is sent.
+    """
     if archive:
-        arguments["status"] = "archived"
-    if description is not None:
-        arguments["description"] = description
-    _, code = index_tool_call("update_intent", arguments)
+        _, code = index_tool_call("archive_intent", {"intentId": intent_id, "confirm": True})
+        return code
+    if description is None:
+        return None
+    _, code = index_tool_call("update_intent", {"intentId": intent_id, "description": description})
     return code
 
 
@@ -1099,6 +1121,7 @@ __all__ = [
     "RATE_CAP_ENV",
     "REFUSALS",
     "SOURCES",
+    "SOURCE_TYPE",
     "SWITCH",
     "TOOLSET",
     "TOOL_DESCRIPTION",

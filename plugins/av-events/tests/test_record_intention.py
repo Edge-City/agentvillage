@@ -393,6 +393,52 @@ def test_structured_content_wins(tctx, index):
     assert call(tctx, {"text": TEXT, "source": "message"})["intention_id"] == "int-sc"
 
 
+@pytest.mark.parametrize("shape", ["text-lead-then-json", "text-envelope", "structured"])
+def test_publish_reads_index_mains_create_result(tctx, index, av, plugin, shape):
+    """DATA-249: Index main's `create_intent` returns `{intentId, url, networkIds,
+    sourceType, sourceId}` after a markdown lead line, not `data.intent`."""
+    data = {"intentId": "0192f0aa-1b2c-4d3e-8f40-123456789abc", "url": "u", "networkIds": [],
+            "sourceType": None, "sourceId": None}
+    if shape == "text-lead-then-json":
+        index.tool = {"content": [{"type": "text", "text": "[Climbing](u) — created\n" + json.dumps(data)}]}
+    elif shape == "text-envelope":
+        index.tool = tool_text({"success": True, "data": data})
+    else:
+        index.tool = {"content": [{"type": "text", "text": "[Climbing](u) — created"}], "structuredContent": data}
+    out = call(tctx, {"text": TEXT, "source": "message"})
+    assert out["published"] is True and out["intention_id"] == data["intentId"]
+    assert intention_events(av, plugin)[0]["payload"]["index_intent_id"] == data["intentId"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        TEXT,
+        "  Looking for a climbing partner  \n",
+        "Café founders, équipe, 中文 and \U0001f9d7 climbers\tin Goa",
+        "line one\r\nline two",
+    ],
+    ids=["plain", "edge-whitespace", "unicode-unnormalised", "crlf"],
+)
+def test_text_hash_is_the_sha256_of_the_bytes_sent_as_description(tctx, index, av, plugin, text):
+    """DATA-249 item 4: the poller merges a capture with its Index intent only when
+    the capture's `text_hash` equals the plain SHA-256 of the stored payload, so the
+    hash must be over exactly the bytes sent as `description`: no trim, no
+    Unicode or newline normalisation on either side."""
+    out = call(tctx, {"text": text, "source": "message"})
+    assert out["published"] is True
+    [sent] = index.tool_calls()
+    description = sent["arguments"]["description"]
+    assert description == text
+    [event] = intention_events(av, plugin)
+    assert event["payload"]["text_hash"] == hashlib.sha256(description.encode("utf-8")).hexdigest()
+
+
+def test_mirror_with_nothing_to_change_calls_nothing(ri, index, on):
+    assert ri.mirror_update(INDEX_ID) is None
+    assert index.requests == []
+
+
 def test_configured_https_url_is_used(tctx, index, monkeypatch):
     monkeypatch.setenv("INDEX_MCP_URL", "https://protocol.dev.index.network/mcp")
     call(tctx, {"text": TEXT, "source": "message"})
@@ -709,12 +755,14 @@ def test_update_and_withdraw_of_a_published_intention_mirror_to_index(tctx, inde
     up = call(tctx, {"action": "update", "intention_id": INDEX_ID, "text": TEXT + " and bouldering"}, tool_call_id="c2")
     assert up["success"] is True and up["published"] is True and "publish_refused" not in up
     assert index.tool_calls() == [
-        {"name": "update_intent", "arguments": {"id": INDEX_ID, "description": TEXT + " and bouldering"}}
+        {"name": "update_intent", "arguments": {"intentId": INDEX_ID, "description": TEXT + " and bouldering"}}
     ]
     index.requests.clear()
+    index.tool = tool_text({"intentId": INDEX_ID, "url": "u", "archived": True, "message": "m"})
     out = call(tctx, {"action": "withdraw", "intention_id": INDEX_ID}, tool_call_id="c3")
-    assert out["success"] is True
-    assert index.tool_calls() == [{"name": "update_intent", "arguments": {"id": INDEX_ID, "status": "archived"}}]
+    assert out["success"] is True and "publish_refused" not in out
+    # DATA-249: archive is its own tool, which requires `confirm: true`; no `status` anywhere.
+    assert index.tool_calls() == [{"name": "archive_intent", "arguments": {"intentId": INDEX_ID, "confirm": True}}]
     events = intention_events(av, plugin)
     assert [e["event_type"] for e in events] == ["intention.captured", "intention.updated", "intention.withdrawn"]
     assert {e["intention_id"] for e in events} == {INDEX_ID}
@@ -952,7 +1000,7 @@ def test_f4_cron_update_is_held_and_withdraw_mirrors(tctx, index, av, plugin):
     assert event["payload"]["source"] == out["source"]
     call(tctx, {"action": "withdraw", "intention_id": pub["intention_id"]},
          session="cron_memsync_20260929_030000", tool_call_id="c3")
-    assert index.tool_calls()[-1] == {"name": "update_intent", "arguments": {"id": INDEX_ID, "status": "archived"}}
+    assert index.tool_calls()[-1] == {"name": "archive_intent", "arguments": {"intentId": INDEX_ID, "confirm": True}}
 
 
 # F5: the map is locked across processes and survives corruption.
