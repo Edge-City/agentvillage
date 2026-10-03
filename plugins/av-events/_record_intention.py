@@ -139,6 +139,8 @@ Python 3.11, standard library only.
 from __future__ import annotations
 
 import hashlib
+import http.client
+import ipaddress
 import json
 import logging
 import os
@@ -188,8 +190,9 @@ API_URL_ENV = "INDEX_API_URL"
 LEGACY_MCP_URL_ENV = "INDEX_MCP_URL"
 #: Plain http is allowed only to these hosts (a local Index in development).
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
-#: Per socket operation, and for the whole request (see the header).
-INDEX_TIMEOUT_S = 30.0
+#: Per socket operation (below the deadline, so a connect that never completes
+#: fails as `transport` inside the worker), and for the whole request.
+INDEX_TIMEOUT_S = 25.0
 INDEX_DEADLINE_S = 30.0
 MAX_BODY_BYTES = 256 * 1024
 MAX_MAP_ENTRIES = 10_000
@@ -282,11 +285,13 @@ REFUSALS: dict[str, str] = {
     # B2: withdrawing a published intention archives it on Index for good.
     "held_cron": (
         "Not withdrawn: this intention is published on Index, and withdrawing it there cannot be undone, "
-        "so it needs the resident in a direct chat. A scheduled run cannot do it. Nothing was changed."
+        "so it needs the resident in a direct chat. A scheduled run cannot do it. Nothing was changed. "
+        "Do not archive or withdraw it another way, including with Index's own archive_intent."
     ),
     "held_unknown": (
         "Not withdrawn: this intention is published on Index, and withdrawing it there cannot be undone, "
-        "so it needs the resident in a direct chat, and this session is not one. Nothing was changed."
+        "so it needs the resident in a direct chat, and this session is not one. Nothing was changed. "
+        "Do not archive or withdraw it another way, including with Index's own archive_intent."
     ),
 }
 
@@ -326,6 +331,22 @@ def _refuse(code: str) -> dict:
     return {"success": False, "error": code, "message": REFUSALS[code]}
 
 
+#: A DNS name or an IPv4 literal: letters, digits, dots and hyphens only.
+_HOSTNAME = re.compile(r"^[A-Za-z0-9.-]+$")
+
+
+def _host_ok(netloc: str, hostname: str) -> bool:
+    """A hostname of `[A-Za-z0-9.-]` only, or a bracketed IPv6 literal."""
+    host = netloc.rsplit("@", 1)[-1]
+    if host.startswith("["):
+        try:
+            ipaddress.IPv6Address(hostname)
+        except ValueError:
+            return False
+        return True
+    return _HOSTNAME.fullmatch(hostname) is not None
+
+
 def _origin(url: str, paths: tuple[str, ...]) -> Optional[str]:
     """`scheme://netloc` of `url` when it is an Index origin we may send the key
     to, else None: https with a host, or plain http to a loopback host only; no
@@ -334,6 +355,10 @@ def _origin(url: str, paths: tuple[str, ...]) -> Optional[str]:
     alone, so nothing else in the string reaches a request."""
     if "?" in url or "#" in url:
         return None
+    if any(ord(ch) <= 0x20 or ord(ch) == 0x7F for ch in url):
+        # urlsplit silently drops tab and newline; control characters and
+        # spaces are a config error, never a host.
+        return None
     try:
         parts = urllib.parse.urlsplit(url)
         hostname = parts.hostname
@@ -341,6 +366,8 @@ def _origin(url: str, paths: tuple[str, ...]) -> Optional[str]:
     except ValueError:
         return None
     if not hostname or parts.username is not None or parts.password is not None:
+        return None
+    if not _host_ok(parts.netloc, hostname):
         return None
     if parts.path not in paths:
         return None
@@ -448,32 +475,35 @@ def status_code(status: int) -> str:
     return f"http_{status}"
 
 
-def _send(url: str, key: str, method: str, body: Optional[dict], timeout: float) -> Any:
+def _send(url: str, key: str, method: str, body: Optional[dict], timeout: float,
+          phase: Optional[list] = None) -> Any:
     """One request; the parsed JSON body of a 2xx answer, else `IndexFailure`.
     No exception text carries the URL, the key or the body.
 
-    Before anything is sent (refutation B1): urllib wraps a failure to
-    connect, resolve, handshake or send in `URLError`, which is `transport`
-    (`timeout` when its reason is a timeout). Anything raised after that,
-    from `getresponse()` or the body read (`RemoteDisconnected`,
-    `IncompleteRead`, `ConnectionResetError`, a socket timeout), and a 2xx
-    whose body is not a JSON object, too large or cut short, is `timeout`:
-    Index may have written.
+    Which failures are which (refutation B1 and its recheck):
+    - Building the request, or `http.client.InvalidURL` / `ValueError` from
+      `open()`: a config error found before anything is sent, `url_refused`.
+    - `URLError` from `open()`: urllib wraps a failure to resolve, connect,
+      handshake or send in it, so nothing reached Index: `transport`, a connect
+      timeout included. Logged as `index_unreachable` so a wrong or blackholed
+      host is visible.
+    - Anything else from `open()` (`RemoteDisconnected`, `ConnectionResetError`,
+      a socket timeout while waiting for the answer) or from the body read, and
+      a 2xx whose body is not a JSON object, too large or cut short: `timeout`,
+      the ambiguous code, because Index may have written.
+    `phase`, when given, is set to `reading` once `open()` has returned.
     """
     headers = {"accept": "application/json", "x-api-key": key}
     data: Optional[bytes] = None
     if body is not None:
         headers["content-type"] = "application/json"
         data = json.dumps(body).encode("utf-8")
-    request = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with _OPENER.open(request, timeout=timeout) as response:
-            status = int(getattr(response, "status", 0) or 0)
-            if not 200 <= status < 300:
-                raise IndexFailure(status_code(status))
-            raw = response.read(MAX_BODY_BYTES + 1)
-    except IndexFailure:
-        raise
+        request = urllib.request.Request(url, data=data, headers=headers, method=method)
+    except ValueError:
+        raise IndexFailure("url_refused") from None
+    try:
+        response = _OPENER.open(request, timeout=timeout)
     except urllib.error.HTTPError as exc:
         try:
             exc.read()
@@ -481,10 +511,25 @@ def _send(url: str, key: str, method: str, body: Optional[dict], timeout: float)
             pass
         raise IndexFailure(status_code(int(getattr(exc, "code", 0) or 0))) from None
     except urllib.error.URLError as exc:
-        if isinstance(getattr(exc, "reason", None), TimeoutError):
-            raise IndexFailure(AMBIGUOUS) from None
+        reason = getattr(exc, "reason", None)
+        logger.warning("av-events: record_intention index_unreachable=%s",
+                       "connect_timeout" if isinstance(reason, TimeoutError) else type(reason).__name__)
         raise IndexFailure("transport") from None
+    except (ValueError, http.client.InvalidURL):  # raised by putrequest, before the send
+        raise IndexFailure("url_refused") from None
     except Exception:  # noqa: BLE001 - after the send: the write may have landed
+        raise IndexFailure(AMBIGUOUS) from None
+    if phase is not None:
+        phase[0] = "reading"
+    try:
+        with response:
+            status = int(getattr(response, "status", 0) or 0)
+            if not 200 <= status < 300:
+                raise IndexFailure(status_code(status))
+            raw = response.read(MAX_BODY_BYTES + 1)
+    except IndexFailure:
+        raise
+    except Exception:  # noqa: BLE001 - a cut or failed read: the write may have landed
         raise IndexFailure(AMBIGUOUS) from None
     if len(raw) > MAX_BODY_BYTES:
         raise IndexFailure(AMBIGUOUS)
@@ -505,8 +550,16 @@ def _join(worker: threading.Thread, deadline: float) -> None:
 def index_request(method: str, path: str, body: Optional[dict] = None, *, timeout: Optional[float] = None,
                   deadline: Optional[float] = None) -> tuple[Any, Optional[str]]:
     """`(json body, None)` or `(None, code)` for one Index REST write. Never
-    raises. A `timeout` is ambiguous: Index may still finish the write after
-    the thread is abandoned."""
+    raises.
+
+    Each socket operation is bounded by `timeout` (`INDEX_TIMEOUT_S`, below the
+    deadline), so a connect that never completes fails inside the worker as
+    `transport` before the deadline. When the overall `deadline` passes first,
+    whether the request was sent cannot be known (a slow DNS lookup, or a
+    connect then a slow answer): the code is `timeout`, the safe direction for
+    the metric, and the log line says how far the worker got
+    (`index_deadline=opening`: no answer had begun, possibly never connected;
+    `index_deadline=reading`: the answer had begun)."""
     timeout = INDEX_TIMEOUT_S if timeout is None else timeout
     deadline = INDEX_DEADLINE_S if deadline is None else deadline
     key = env("INDEX_API_KEY")
@@ -518,10 +571,11 @@ def index_request(method: str, path: str, body: Optional[dict] = None, *, timeou
         return None, code
     url = origin + path
     box: list = []
+    phase = ["opening"]
 
     def run() -> None:
         try:
-            box.append((_send(url, key, method, body, timeout), None))
+            box.append((_send(url, key, method, body, timeout, phase), None))
         except IndexFailure as exc:
             box.append((None, exc.code))
         except BaseException:  # noqa: BLE001
@@ -531,7 +585,8 @@ def index_request(method: str, path: str, body: Optional[dict] = None, *, timeou
     worker.start()
     _join(worker, deadline)
     if worker.is_alive() or not box:
-        return None, "timeout"
+        logger.warning("av-events: record_intention index_deadline=%s", phase[0])
+        return None, AMBIGUOUS
     return box[0]
 
 
