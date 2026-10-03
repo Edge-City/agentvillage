@@ -1,12 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
+  attachIndexLinks,
   buildDailyBriefContext,
-  confirmOpportunityDeliveriesViaMcp,
   extractInterestTags,
   extractUserModelPhrases,
   fetchOpportunitiesFromMcp,
-  fetchPendingQuestionsFromMcp,
   filterCooldownQuestions,
   filterActionableOpportunities,
   filterDedupedOpportunities,
@@ -15,6 +17,8 @@ import {
   parseOpportunityTranscript,
   selectEvents,
 } from "../build-daily-brief-context";
+import { FAKE_MCP_URL, FIXTURE, indexMcpFake, listOpportunitiesText, type ToolHandler } from "./index-mcp-fake";
+import { failureInputs } from "./index-failure-inputs";
 
 describe("build-daily-brief-context helpers", () => {
   test("extractInterestTags maps user text to EdgeOS tags", () => {
@@ -258,33 +262,25 @@ describe("build-daily-brief-context helpers", () => {
     delete process.env.EDGE_AGENT_CONTROL_PLANE_URL;
     delete process.env.ADMIN_TOKEN;
     process.env.INDEX_API_KEY = "test-key";
-    process.env.INDEX_MCP_URL = "https://test.example.com/mcp";
+    process.env.INDEX_MCP_URL = FAKE_MCP_URL;
 
-    const opportunityText = "1. Nathan Price\n   <!-- digest-opportunity:id=opp-mcp-1 -->\n   builds AI agents\n   status: pending\n   profileUrl: https://index.network/u/abc\n   acceptUrl: https://index.network/c/xyz\n   feedCategory: connection";
+    const opportunityText = listOpportunitiesText([{
+      id: "opp-mcp-1",
+      url: "https://index.network/o/opp-mcp-1",
+      status: "pending",
+      viewerRole: "party",
+      headline: "builds AI agents",
+      summary: "builds AI agents",
+      peer: { name: "Nathan Price", userId: "dddddddd-0000-4000-8000-000000000001", url: "https://index.network/u/dddddddd-0000-4000-8000-000000000001" },
+    }]);
+    const fake = indexMcpFake({ tools: { list_opportunities: () => opportunityText } });
 
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.includes("open-meteo") || url.includes("weather.gov")) {
         return new Response("unavailable", { status: 503, statusText: "Service Unavailable" });
       }
-      if (url === "https://test.example.com/mcp") {
-        const body = JSON.parse(init?.body as string ?? "{}") as { method: string };
-        if (body.method === "initialize") {
-          return Response.json({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", capabilities: {} } });
-        }
-        if (body.method === "tools/call") {
-          const params = (body as { params?: { name?: string } }).params;
-          if (params?.name === "read_pending_questions") {
-            return Response.json({
-              jsonrpc: "2.0",
-              id: 2,
-              result: { content: [{ type: "text", text: JSON.stringify({ success: true, data: { questions: [] } }) }] },
-            });
-          }
-          return Response.json({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: opportunityText }] } });
-        }
-      }
-      throw new Error(`unexpected fetch: ${url}`);
+      return fake.fetch(input, init);
     }) as typeof fetch;
 
     try {
@@ -295,6 +291,7 @@ describe("build-daily-brief-context helpers", () => {
       expect(context.opportunities[0].opportunityId).toBe("opp-mcp-1");
       expect(context.questions).toEqual([]);
       expect(context.diagnostics.questionSource).toBe("unavailable");
+      expect(fake.calls.map((call) => [call.method, call.name, call.status])).toEqual([["tools/call", "list_opportunities", 200]]);
     } finally {
       globalThis.fetch = originalFetch;
       if (originalApiKey === undefined) delete process.env.INDEX_API_KEY;
@@ -307,6 +304,40 @@ describe("build-daily-brief-context helpers", () => {
       else process.env.EDGE_AGENT_CONTROL_PLANE_URL = originalControlPlaneUrl;
       if (originalAdminToken === undefined) delete process.env.ADMIN_TOKEN;
       else process.env.ADMIN_TOKEN = originalAdminToken;
+    }
+  });
+
+  test("buildDailyBriefContext reports a refused Index call as a coded warning, never an empty mcp list", async () => {
+    const originalFetch = globalThis.fetch;
+    const saved = Object.fromEntries(
+      ["INDEX_API_KEY", "INDEX_MCP_URL", "EDGEOS_API_KEY", "EDGE_AGENT_CONTROL_PLANE_URL", "ADMIN_TOKEN"].map((key) => [key, process.env[key]]),
+    );
+    delete process.env.EDGEOS_API_KEY;
+    delete process.env.EDGE_AGENT_CONTROL_PLANE_URL;
+    delete process.env.ADMIN_TOKEN;
+    process.env.INDEX_API_KEY = "test-key";
+    process.env.INDEX_MCP_URL = FAKE_MCP_URL;
+    const fake = indexMcpFake({
+      tools: { list_opportunities: () => ({ result: { content: [{ type: "text", text: "private detail" }], isError: true } }) },
+    });
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("open-meteo") || url.includes("weather.gov")) return new Response("unavailable", { status: 503 });
+      return fake.fetch(input, init);
+    }) as typeof fetch;
+    try {
+      const context = await buildDailyBriefContext({ date: "2026-06-10", userFiles: [] });
+      expect(context.diagnostics.opportunitySource).toBe("unavailable");
+      expect(context.opportunities).toEqual([]);
+      expect(context.diagnostics.warnings).toContain("opportunities MCP unavailable: mcp-tool-error");
+      expect(context.diagnostics.warnings.join("\n")).not.toContain("private detail");
+      expect(context.diagnostics.warnings.join("\n")).not.toContain("test-key");
+    } finally {
+      globalThis.fetch = originalFetch;
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
   });
 
@@ -396,34 +427,33 @@ describe("build-daily-brief-context helpers", () => {
 });
 
 describe("fetchOpportunitiesFromMcp", () => {
-  function makeMcpFetch(toolsCallFn: (init: RequestInit | undefined) => Response) {
-    return (async (input: RequestInfo | URL, init?: RequestInit) => {
-      const body = JSON.parse(init?.body as string ?? "{}") as { method: string };
-      if (body.method === "initialize") {
-        return Response.json({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", capabilities: {} } });
-      }
-      if (body.method === "tools/call") return toolsCallFn(init);
-      throw new Error(`unexpected method: ${body.method}`);
-    }) as typeof fetch;
+  function makeMcpFetch(listOpportunities: ToolHandler) {
+    return indexMcpFake({ tools: { list_opportunities: listOpportunities } }).fetch;
   }
 
-  const MCP_URL = "https://example.com/mcp";
-  const OPPORTUNITY_TEXT =
-    "1. Alice\n   <!-- digest-opportunity:id=opp-alice -->\n   builds open protocols\n   status: pending\n   profileUrl: https://index.network/u/alice\n   acceptUrl: https://index.network/c/alice-code\n   feedCategory: connection";
+  const MCP_URL = FAKE_MCP_URL;
+  const ALICE_USER = "eeeeeeee-0000-4000-8000-000000000001";
+  const OPPORTUNITY_TEXT = listOpportunitiesText([{
+    id: "opp-alice",
+    url: "https://index.network/o/opp-alice",
+    status: "pending",
+    viewerRole: "party",
+    headline: "builds open protocols",
+    summary: "builds open protocols",
+    peer: { name: "Alice", userId: ALICE_USER, url: `https://index.network/u/${ALICE_USER}` },
+  }]);
 
   test("returns parsed opportunities from a JSON response", async () => {
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = makeMcpFetch(() =>
-      Response.json({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: OPPORTUNITY_TEXT }] } }),
-    );
+    globalThis.fetch = makeMcpFetch(() => OPPORTUNITY_TEXT);
     try {
       const results = await fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL });
       expect(results).toHaveLength(1);
       expect(results[0]).toMatchObject({
         name: "Alice",
         opportunityId: "opp-alice",
-        profileUrl: "https://index.network/u/alice",
-        acceptUrl: "https://index.network/c/alice-code",
+        profileUrl: `https://index.network/u/${ALICE_USER}`,
+        opportunityUrl: "https://index.network/o/opp-alice",
         feedCategory: "connection",
       });
     } finally {
@@ -431,15 +461,42 @@ describe("fetchOpportunitiesFromMcp", () => {
     }
   });
 
+  test("reads the live list_opportunities text: markdown lead, blank line, JSON", async () => {
+    const originalFetch = globalThis.fetch;
+    const fake = indexMcpFake();
+    globalThis.fetch = fake.fetch;
+    try {
+      const results = await fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL });
+      expect(results.map((opp) => [opp.name, opp.status, opp.feedCategory])).toEqual([
+        ["Maya", "pending", "connection"],
+        ["Jon", "pending", "connector-flow"],
+      ]);
+      expect(results[0]).toMatchObject({
+        opportunityId: "bbbbbbbb-0000-4000-8000-000000000001",
+        opportunityUrl: "https://index.network/o/bbbbbbbb-0000-4000-8000-000000000001",
+        userUrl: "https://index.network/u/cccccccc-0000-4000-8000-000000000001",
+        headline: "memory systems",
+      });
+      expect(fake.calls.map((call) => [call.method, call.name, call.arguments])).toEqual([
+        ["tools/call", "list_opportunities", { statuses: ["pending"], limit: 20 }],
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("returns parsed opportunities from SSE response, skipping progress notifications", async () => {
     const originalFetch = globalThis.fetch;
-    const finalResult = { jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: OPPORTUNITY_TEXT }] } };
-    const sseBody = [
-      `data: {"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":50}}`,
-      `data: ${JSON.stringify(finalResult)}`,
-      "",
-    ].join("\n");
-    globalThis.fetch = makeMcpFetch(() => new Response(sseBody, { headers: { "Content-Type": "text/event-stream" } }));
+    globalThis.fetch = makeMcpFetch((_args, { id }) => {
+      const finalResult = { jsonrpc: "2.0", id, result: { content: [{ type: "text", text: OPPORTUNITY_TEXT }] } };
+      const sseBody = [
+        `data: {"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":50}}`,
+        "",
+        `data: ${JSON.stringify(finalResult)}`,
+        "",
+      ].join("\n");
+      return { response: new Response(sseBody, { headers: { "Content-Type": "text/event-stream" } }) };
+    });
     try {
       const results = await fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL });
       expect(results).toHaveLength(1);
@@ -451,9 +508,10 @@ describe("fetchOpportunitiesFromMcp", () => {
 
   test("handles SSE data: lines without a space after the colon", async () => {
     const originalFetch = globalThis.fetch;
-    const finalResult = { jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: OPPORTUNITY_TEXT }] } };
-    const sseBody = `data:${JSON.stringify(finalResult)}\n`;
-    globalThis.fetch = makeMcpFetch(() => new Response(sseBody, { headers: { "Content-Type": "text/event-stream" } }));
+    globalThis.fetch = makeMcpFetch((_args, { id }) => {
+      const finalResult = { jsonrpc: "2.0", id, result: { content: [{ type: "text", text: OPPORTUNITY_TEXT }] } };
+      return { response: new Response(`data:${JSON.stringify(finalResult)}\n`, { headers: { "Content-Type": "text/event-stream" } }) };
+    });
     try {
       const results = await fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL });
       expect(results).toHaveLength(1);
@@ -463,14 +521,35 @@ describe("fetchOpportunitiesFromMcp", () => {
     }
   });
 
-  test("returns empty array when tool response text is empty", async () => {
+  test("the empty-list object is [], and an empty text is mcp-unparsed", async () => {
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = makeMcpFetch(() => FIXTURE.responses.listOpportunitiesEmpty.result.content[0].text);
+      expect(await fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL })).toEqual([]);
+      globalThis.fetch = makeMcpFetch(() => "");
+      await expect(fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL })).rejects.toThrow("mcp-unparsed");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("an onboarding-gated success:false after a markdown lead is the setup-required diagnostic", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = makeMcpFetch(() =>
-      Response.json({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: "" }] } }),
+      `Could not list opportunities:\n\n${JSON.stringify({ success: false, error: "Onboarding required", message: "This user has not completed onboarding." }, null, 2)}`,
     );
     try {
-      const results = await fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL });
-      expect(results).toEqual([]);
+      await expect(fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL })).rejects.toThrow("setup required before people suggestions");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("any other success:false is mcp-tool-error", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = makeMcpFetch(() => `Could not list:\n\n${JSON.stringify({ success: false, error: "internal", message: "try later" })}`);
+    try {
+      await expect(fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL })).rejects.toThrow("mcp-tool-error");
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -479,11 +558,7 @@ describe("fetchOpportunitiesFromMcp", () => {
   test("throws setup-required diagnostic when opportunity tool is onboarding-gated", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = makeMcpFetch(() =>
-      Response.json({
-        jsonrpc: "2.0",
-        id: 2,
-        result: { content: [{ type: "text", text: JSON.stringify({ success: false, error: "Onboarding required", message: "This user has not completed onboarding." }) }] },
-      }),
+      JSON.stringify({ success: false, error: "Onboarding required", message: "This user has not completed onboarding." }),
     );
     try {
       await expect(fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL })).rejects.toThrow("setup required before people suggestions");
@@ -494,11 +569,23 @@ describe("fetchOpportunitiesFromMcp", () => {
 
   test("throws when the MCP server returns an error", async () => {
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = makeMcpFetch(() =>
-      Response.json({ jsonrpc: "2.0", id: 2, error: { code: -32601, message: "Method not found" } }),
-    );
+    globalThis.fetch = makeMcpFetch((_args, { id }) => ({
+      response: Response.json({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } }),
+    }));
     try {
-      await expect(fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL })).rejects.toThrow("Method not found");
+      await expect(fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL })).rejects.toThrow("mcp-rpc-error:-32601");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("throws when the tool reports an error, rather than returning an empty list", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = makeMcpFetch(() => ({
+      result: { content: [{ type: "text", text: "something went wrong" }], isError: true, resultType: "complete" },
+    }));
+    try {
+      await expect(fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL })).rejects.toThrow("mcp-tool-error");
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -506,21 +593,15 @@ describe("fetchOpportunitiesFromMcp", () => {
 
   test("sends x-index-surface: telegram on every MCP request so minted links deep-link to t.me", async () => {
     const originalFetch = globalThis.fetch;
-    const seenHeaders: Array<Record<string, string>> = [];
-    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      seenHeaders.push({ ...(init?.headers as Record<string, string>) });
-      const body = JSON.parse(init?.body as string ?? "{}") as { method: string };
-      if (body.method === "initialize") {
-        return Response.json({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", capabilities: {} } });
-      }
-      return Response.json({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: "" }] } });
-    }) as typeof fetch;
+    const fake = indexMcpFake({ tools: { list_opportunities: () => FIXTURE.responses.listOpportunitiesEmpty.result.content[0].text } });
+    globalThis.fetch = fake.fetch;
     try {
       await fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL });
-      expect(seenHeaders.length).toBeGreaterThanOrEqual(2);
-      for (const headers of seenHeaders) {
-        expect(headers["x-index-surface"]).toBe("telegram");
-        expect(headers["x-api-key"]).toBe("test-key");
+      // One request: the revision has no handshake.
+      expect(fake.calls).toHaveLength(1);
+      for (const call of fake.calls) {
+        expect(call.headers["x-index-surface"]).toBe("telegram");
+        expect(call.headers["x-api-key"]).toBe("test-key");
       }
     } finally {
       globalThis.fetch = originalFetch;
@@ -546,264 +627,167 @@ describe("filterCooldownQuestions", () => {
   });
 });
 
-describe("fetchPendingQuestionsFromMcp", () => {
-  const MCP_URL = "https://test.mcp.com/mcp";
+describe("buildDailyBriefContext against Index's answers", () => {
+  const MAYA_OPP = "bbbbbbbb-0000-4000-8000-000000000001";
+  const ENV_KEYS = ["INDEX_API_KEY", "INDEX_MCP_URL", "EDGEOS_API_KEY", "EDGE_AGENT_CONTROL_PLANE_URL", "ADMIN_TOKEN"];
 
-  test("returns questions and source mcp on success", async () => {
+  async function runBrief(listOpportunities: ToolHandler | undefined, state: Record<string, unknown> | null, date = "2026-10-12") {
+    const dir = mkdtempSync(join(tmpdir(), "brief-index-"));
+    const stateFile = join(dir, "state.json");
+    if (state) writeFileSync(stateFile, JSON.stringify(state));
+    const before = state ? readFileSync(stateFile, "utf8") : null;
+    const saved = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
     const originalFetch = globalThis.fetch;
-    const mockQuestion = {
-      id: "q-0001",
-      title: "Collaboration focus",
-      prompt: "What kind of collaboration are you most open to right now?",
-      mode: "profile",
-    };
-
+    delete process.env.EDGEOS_API_KEY;
+    delete process.env.EDGE_AGENT_CONTROL_PLANE_URL;
+    delete process.env.ADMIN_TOKEN;
+    process.env.INDEX_API_KEY = "test-key";
+    process.env.INDEX_MCP_URL = FAKE_MCP_URL;
+    const fake = indexMcpFake(listOpportunities ? { tools: { list_opportunities: listOpportunities } } : {});
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === MCP_URL) {
-        const body = JSON.parse(init?.body as string ?? "{}") as { method: string };
-        if (body.method === "initialize") {
-          return Response.json({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", capabilities: {} } });
-        }
-        if (body.method === "tools/call") {
-          return Response.json({
-            jsonrpc: "2.0",
-            id: 2,
-            result: { content: [{ type: "text", text: JSON.stringify({ success: true, data: { questions: [mockQuestion] } }) }] },
-          });
-        }
-      }
-      throw new Error(`unexpected fetch: ${url}`);
+      if (url.includes("open-meteo") || url.includes("weather.gov")) return new Response("unavailable", { status: 503 });
+      return fake.fetch(input, init);
     }) as typeof fetch;
-
     try {
-      const result = await fetchPendingQuestionsFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL });
-      expect(result.source).toBe("mcp");
-      expect(result.questions).toHaveLength(1);
-      expect(result.questions[0].id).toBe("q-0001");
-      expect(result.questions[0].prompt).toBe("What kind of collaboration are you most open to right now?");
-      expect(result.questions[0].mode).toBe("profile");
+      const context = await buildDailyBriefContext({ date, stateFile, userFiles: [] });
+      const after = existsSync(stateFile) ? readFileSync(stateFile, "utf8") : null;
+      return { context, before, after };
     } finally {
       globalThis.fetch = originalFetch;
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      rmSync(dir, { recursive: true, force: true });
     }
+  }
+
+  for (const input of failureInputs("opportunities")) {
+    test(`${input.label}: unavailable, not fresh, no state write`, async () => {
+      const state = { deliveredToday: { date: "2026-10-12", ids: [] }, dreaming: { lastRunDate: "2026-10-11" } };
+      const { context, before, after } = await runBrief(input.handler, state);
+      expect(context.diagnostics.opportunitySource).toBe("unavailable");
+      expect(context.diagnostics.dreamingFresh).toBe(false);
+      expect(context.opportunities).toEqual([]);
+      expect(context.diagnostics.warnings).toContain(`opportunities MCP unavailable: ${input.code}`);
+      expect(after).toBe(before);
+    });
+  }
+
+  test("the empty-list object is a fresh, empty mcp list and records the dreaming date", async () => {
+    const { context, after } = await runBrief(() => FIXTURE.responses.listOpportunitiesEmpty.result.content[0].text, { dreaming: { lastRunDate: "2026-10-11" } });
+    expect(context.diagnostics.opportunitySource).toBe("mcp");
+    expect(context.diagnostics.dreamingFresh).toBe(true);
+    expect(context.opportunities).toEqual([]);
+    expect(JSON.parse(after ?? "{}").dreaming).toEqual({ lastRunDate: "2026-10-12" });
   });
 
-  test("returns source unavailable when response body is malformed", async () => {
-    const originalFetch = globalThis.fetch;
-
-    globalThis.fetch = (async () => {
-      return Response.json({
-        jsonrpc: "2.0",
-        id: 1,
-        result: { content: [{ type: "text", text: "not json {{{{" }] },
-      });
-    }) as typeof fetch;
-
-    try {
-      const result = await fetchPendingQuestionsFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL });
-      // Malformed JSON triggers the catch block—source is unavailable
-      expect(result.source).toBe("unavailable");
-      expect(result.questions).toEqual([]);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+  test("a markdown lead line starting with { does not hide the cards", async () => {
+    const fixtureText = FIXTURE.responses.listOpportunities.result.content[0].text;
+    const { context } = await runBrief(() => `{Heads up} two people are waiting:\n${fixtureText}`, null);
+    expect(context.diagnostics.opportunitySource).toBe("mcp");
+    expect(context.connectionOpportunities.map((opp) => opp.name)).toEqual(["Maya"]);
+    expect(context.communityOpportunities.map((opp) => opp.name)).toEqual(["Jon"]);
   });
 
-  test("treats success:false payloads as unavailable with the server detail", async () => {
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      const body = JSON.parse(init?.body as string ?? "{}") as { method: string };
-      if (body.method === "initialize") {
-        return Response.json({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", capabilities: {} } });
-      }
-      return Response.json({
-        jsonrpc: "2.0",
-        id: 2,
-        result: { content: [{ type: "text", text: JSON.stringify({ success: false, error: "Question lookup is not available." }) }] },
-      });
-    }) as typeof fetch;
-
-    try {
-      const result = await fetchPendingQuestionsFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL });
-      expect(result.source).toBe("unavailable");
-      expect(result.questions).toEqual([]);
-      expect(result.reason).toBe("read_pending_questions: Question lookup is not available.");
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+  test("deliveredToday dated yesterday leaves its card eligible; dated today it does not", async () => {
+    const yesterday = await runBrief(undefined, { deliveredToday: { date: "2026-10-11", ids: [MAYA_OPP] } });
+    expect(yesterday.context.connectionOpportunities.map((opp) => opp.opportunityId)).toEqual([MAYA_OPP]);
+    const today = await runBrief(undefined, { deliveredToday: { date: "2026-10-12", ids: [MAYA_OPP] } });
+    expect(today.context.connectionOpportunities).toEqual([]);
   });
 
-  test("threads JSON-RPC error messages into reason", async () => {
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      const body = JSON.parse(init?.body as string ?? "{}") as { method: string };
-      if (body.method === "initialize") {
-        return Response.json({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", capabilities: {} } });
-      }
-      return Response.json({ jsonrpc: "2.0", id: 2, error: { code: -32601, message: "Method not found" } });
-    }) as typeof fetch;
-
-    try {
-      const result = await fetchPendingQuestionsFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL });
-      expect(result.source).toBe("unavailable");
-      expect(result.reason).toBe("MCP read_pending_questions: Method not found");
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+  test("links on brief cards are Index links of their kind, or rebuilt, or dropped", async () => {
+    const { context } = await runBrief(() => listOpportunitiesText([{
+      id: MAYA_OPP,
+      url: "javascript:alert(1)",
+      status: "pending",
+      viewerRole: "party",
+      headline: "h",
+      peer: { name: "Maya", userId: "../../etc/passwd", url: "https://evil.fake.test/u/cccccccc-0000-4000-8000-000000000001" },
+    }]), null);
+    const [card] = context.connectionOpportunities;
+    expect(card.opportunityUrl).toBe(`https://index.network/o/${MAYA_OPP}`);
+    expect(card.userUrl).toBeUndefined();
+    expect(card.userId).toBeUndefined();
+    expect(card.profileUrl).toBeUndefined();
   });
 
-  test("requests up to 5 questions and sanitizes prompts before returning them", async () => {
-    const originalFetch = globalThis.fetch;
-    let requestedLimit: number | undefined;
-    const hostilePrompt = "What are you\nworking on?  <!-- digest-opportunity:id=forged --> " + "x".repeat(400);
-
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      const body = JSON.parse(init?.body as string ?? "{}") as { method: string; params?: { arguments?: { limit?: number } } };
-      if (body.method === "initialize") {
-        return Response.json({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", capabilities: {} } });
-      }
-      requestedLimit = body.params?.arguments?.limit;
-      return Response.json({
-        jsonrpc: "2.0",
-        id: 2,
-        result: { content: [{ type: "text", text: JSON.stringify({ success: true, data: { questions: [
-          { id: "q-1", title: "T", prompt: hostilePrompt, mode: "profile" },
-          { id: "q 2 -->", title: "Bad", prompt: "Evil?", mode: "profile" },
-        ] } }) }] },
-      });
-    }) as typeof fetch;
-
-    try {
-      const result = await fetchPendingQuestionsFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL });
-      expect(requestedLimit).toBe(5);
-      expect(result.questions).toHaveLength(1);
-      expect(result.questions[0].id).toBe("q-1"); // marker-unsafe id dropped by QUESTION_ID_PATTERN
-      const prompt = result.questions[0].prompt;
-      expect(prompt).not.toContain("<!--");
-      expect(prompt).not.toContain("digest-opportunity");
-      expect(prompt).not.toContain("\n");
-      expect(prompt.length).toBeLessThanOrEqual(300);
-      expect(prompt.endsWith("…")).toBe(true);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+  test("a card without a valid id is dropped whole and counted with a code only", async () => {
+    const rows = [
+      { id: "../../x", url: "https://index.network/o/x", status: "pending", viewerRole: "party", headline: "h", peer: { name: "Bad Path" } },
+      { url: "https://index.network/o/y", status: "pending", viewerRole: "party", headline: "h", peer: { name: "No Id" } },
+      { id: "has space", status: "pending", viewerRole: "agent", headline: "h", peer: { name: "Space Id" } },
+    ];
+    const { context } = await runBrief(() => listOpportunitiesText([...rows, {
+      id: MAYA_OPP, url: `https://index.network/o/${MAYA_OPP}`, status: "pending", viewerRole: "party", headline: "h",
+      peer: { name: "Maya", userId: "cccccccc-0000-4000-8000-000000000001", url: "https://index.network/u/cccccccc-0000-4000-8000-000000000001" },
+    }]), null);
+    expect(context.diagnostics.opportunitySource).toBe("mcp");
+    expect(context.opportunities.map((opp) => opp.opportunityId)).toEqual([MAYA_OPP]);
+    expect(context.diagnostics.warnings).toContain("dropped 3 opportunity card(s): mcp-card-unidentified");
+    const joined = context.diagnostics.warnings.join("\n");
+    for (const leak of ["../../x", "has space", "Bad Path", "No Id", "Space Id"]) expect(joined).not.toContain(leak);
   });
 });
 
-describe("confirmOpportunityDeliveriesViaMcp", () => {
-  const MCP_URL = "https://example.com/mcp";
+describe("attachIndexLinks", () => {
+  const OPP = "bbbbbbbb-0000-4000-8000-000000000001";
+  const USER = "cccccccc-0000-4000-8000-000000000001";
 
-  type ConfirmCall = { opportunityId?: string; trigger?: string };
+  test("keeps Index links of the right kind", () => {
+    const card = attachIndexLinks({
+      name: "A",
+      opportunityId: OPP,
+      opportunityUrl: `https://index.network/o/${OPP}`,
+      userId: USER,
+      userUrl: `https://index.network/u/${USER}`,
+      intentId: "int-1",
+      intentUrl: "https://index.network/i/int-1",
+    });
+    expect(card).toMatchObject({
+      opportunityUrl: `https://index.network/o/${OPP}`,
+      userUrl: `https://index.network/u/${USER}`,
+      intentUrl: "https://index.network/i/int-1",
+    });
+  });
 
-  function makeConfirmFetch(
-    toolsCallFn: (args: ConfirmCall, callIndex: number) => Response,
-  ): { fetch: typeof fetch; calls: ConfirmCall[] } {
-    const calls: ConfirmCall[] = [];
-    const fetchFn = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = JSON.parse(init?.body as string ?? "{}") as {
-        method: string;
-        params?: { name?: string; arguments?: ConfirmCall };
-      };
-      if (body.method === "initialize") {
-        return Response.json({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", capabilities: {} } });
-      }
-      if (body.method === "tools/call") {
-        expect(body.params?.name).toBe("confirm_opportunity_delivery");
-        const args = body.params?.arguments ?? {};
-        calls.push(args);
-        return toolsCallFn(args, calls.length - 1);
-      }
-      throw new Error(`unexpected method: ${body.method}`);
-    }) as typeof fetch;
-    return { fetch: fetchFn, calls };
-  }
-
-  test("confirms each id with trigger=digest and reports them confirmed", async () => {
-    const originalFetch = globalThis.fetch;
-    const { fetch: mockFetch, calls } = makeConfirmFetch(() =>
-      Response.json({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: JSON.stringify({ success: true, data: { status: "confirmed" } }) }] } }),
-    );
-    globalThis.fetch = mockFetch;
-    try {
-      const result = await confirmOpportunityDeliveriesViaMcp({
-        apiKey: "test-key",
-        mcpUrl: MCP_URL,
-        opportunityIds: ["opp-1", "opp-2"],
-      });
-      expect(result.confirmed).toEqual(["opp-1", "opp-2"]);
-      expect(result.failed).toEqual([]);
-      expect(calls).toEqual([
-        { opportunityId: "opp-1", trigger: "digest" },
-        { opportunityId: "opp-2", trigger: "digest" },
-      ]);
-    } finally {
-      globalThis.fetch = originalFetch;
+  test("rebuilds a hostile or foreign link from a valid id", () => {
+    for (const bad of [
+      "javascript:alert(1)",
+      `https://evil.fake.test/o/${OPP}`,
+      `http://index.network/o/${OPP}`,
+      `https://index.network.evil.fake.test/o/${OPP}`,
+      `https://index.network/u/${OPP}`,
+      `https://index.network/o/${OPP}/../../admin`,
+      `https://index.network/o/${OPP}?next=https://evil.fake.test`,
+    ]) {
+      const card = attachIndexLinks({ name: "A", opportunityId: OPP, opportunityUrl: bad });
+      expect(card.opportunityUrl).toBe(`https://index.network/o/${OPP}`);
+    }
+    for (const bad of ["javascript:alert(1)", `https://evil.fake.test/u/${USER}`, `https://index.network/o/${USER}`, "https://index.network/u/../x"]) {
+      const card = attachIndexLinks({ name: "A", userId: USER, userUrl: bad, profileUrl: bad, intentId: "int-1", intentUrl: bad });
+      expect(card.userUrl).toBe(`https://index.network/u/${USER}`);
+      expect(card.intentUrl).toBe("https://index.network/i/int-1");
+      expect(card.profileUrl).toBeUndefined();
     }
   });
 
-  test("returns immediately for an empty id list without network calls", async () => {
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async () => {
-      throw new Error("should not be called");
-    }) as typeof fetch;
-    try {
-      const result = await confirmOpportunityDeliveriesViaMcp({ apiKey: "k", mcpUrl: MCP_URL, opportunityIds: [] });
-      expect(result).toEqual({ confirmed: [], failed: [] });
-    } finally {
-      globalThis.fetch = originalFetch;
+  test("drops a link and an id when neither is valid", () => {
+    const card = attachIndexLinks({
+      name: "A",
+      opportunityId: "../../admin",
+      opportunityUrl: "https://index.network/o/../../admin",
+      userId: "not-a-uuid",
+      userUrl: "javascript:alert(1)",
+      profileUrl: "https://evil.fake.test/u/x",
+      intentId: "a/b",
+      intentUrl: "https://index.network/i/a/b",
+    });
+    for (const key of ["opportunityId", "opportunityUrl", "userId", "userUrl", "profileUrl", "intentId", "intentUrl"] as const) {
+      expect(key in card).toBe(false);
     }
-  });
-
-  test("retries once and succeeds on the second attempt", async () => {
-    const originalFetch = globalThis.fetch;
-    const { fetch: mockFetch, calls } = makeConfirmFetch((_args, callIndex) =>
-      callIndex === 0
-        ? Response.json({ jsonrpc: "2.0", id: 2, error: { code: -32000, message: "transient" } })
-        : Response.json({ jsonrpc: "2.0", id: 3, result: { content: [{ type: "text", text: JSON.stringify({ success: true }) }] } }),
-    );
-    globalThis.fetch = mockFetch;
-    try {
-      const result = await confirmOpportunityDeliveriesViaMcp({ apiKey: "k", mcpUrl: MCP_URL, opportunityIds: ["opp-1"] });
-      expect(result.confirmed).toEqual(["opp-1"]);
-      expect(calls).toHaveLength(2);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-  });
-
-  test("reports per-id failure when the tool keeps failing, without throwing", async () => {
-    const originalFetch = globalThis.fetch;
-    const { fetch: mockFetch } = makeConfirmFetch((args) =>
-      args.opportunityId === "opp-bad"
-        ? Response.json({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: JSON.stringify({ success: false, error: "not yours" }) }] } })
-        : Response.json({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: JSON.stringify({ success: true }) }] } }),
-    );
-    globalThis.fetch = mockFetch;
-    try {
-      const result = await confirmOpportunityDeliveriesViaMcp({
-        apiKey: "k",
-        mcpUrl: MCP_URL,
-        opportunityIds: ["opp-good", "opp-bad"],
-      });
-      expect(result.confirmed).toEqual(["opp-good"]);
-      expect(result.failed).toEqual([{ opportunityId: "opp-bad", reason: "not yours" }]);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-  });
-
-  test("fails every id when initialize fails, without throwing", async () => {
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async () => {
-      throw new Error("network down");
-    }) as typeof fetch;
-    try {
-      const result = await confirmOpportunityDeliveriesViaMcp({ apiKey: "k", mcpUrl: MCP_URL, opportunityIds: ["opp-1", "opp-2"] });
-      expect(result.confirmed).toEqual([]);
-      expect(result.failed).toHaveLength(2);
-      expect(result.failed[0].reason).toContain("network down");
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
+    expect(card.name).toBe("A");
   });
 });

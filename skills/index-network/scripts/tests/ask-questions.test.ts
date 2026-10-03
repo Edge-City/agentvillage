@@ -4,11 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { askQuestions } from "../ask-questions";
+import { FAKE_MCP_URL, indexMcpFake, listOpportunitiesText } from "./index-mcp-fake";
+import { failureInputs } from "./index-failure-inputs";
 
 const originalCwd = process.cwd();
 const originalFetch = globalThis.fetch;
 const originalMcpUrl = process.env.INDEX_MCP_URL;
-const MCP_URL = "https://test.example.com/mcp";
+const MCP_URL = FAKE_MCP_URL;
 
 function tempWorkspace(): string {
   const dir = mkdtempSync(join(tmpdir(), "ask-questions-"));
@@ -40,21 +42,14 @@ function card(name: string, headline: string, id: string, userId: string) {
 }
 
 function listText(cards: ReturnType<typeof card>[]): string {
-  return JSON.stringify({ success: true, opportunities: cards });
+  return listOpportunitiesText(cards);
 }
 
 function mockList(text: string) {
   process.env.INDEX_MCP_URL = MCP_URL;
-  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-    const body = JSON.parse(init?.body as string ?? "{}") as { method: string };
-    if (body.method === "initialize") {
-      return Response.json({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2024-11-05", capabilities: {} } });
-    }
-    if (body.method === "tools/call") {
-      return Response.json({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text }] } });
-    }
-    throw new Error(`unexpected method: ${body.method}`);
-  }) as typeof fetch;
+  const fake = indexMcpFake({ tools: { list_opportunities: () => text } });
+  globalThis.fetch = fake.fetch;
+  return fake;
 }
 
 const MAYA_CARD = {
@@ -96,12 +91,25 @@ describe("askQuestions", () => {
 
   test("returns the first pending card", async () => {
     tempWorkspace();
-    mockList(listText([
+    const fake = mockList(listText([
       card("Maya", "memory systems", "opp-maya", MAYA_ID),
       card("Jon", "village tools", "opp-jon", JON_ID),
     ]));
     const result = await askQuestions({ date: "2026-06-17", stateFile: "state.json", apiKey: "test-key" });
     expect(result).toEqual(MAYA_CARD);
+    expect(fake.calls.map((call) => [call.method, call.name, call.status])).toEqual([["tools/call", "list_opportunities", 200]]);
+  });
+
+  test("returns silent, recording nothing, when the tool reports an error", async () => {
+    tempWorkspace();
+    process.env.INDEX_MCP_URL = MCP_URL;
+    const text = listText([card("Maya", "memory systems", "opp-maya", MAYA_ID)]);
+    globalThis.fetch = indexMcpFake({
+      tools: { list_opportunities: () => ({ result: { content: [{ type: "text", text }], isError: true } }) },
+    }).fetch;
+    const result = await askQuestions({ date: "2026-06-17", stateFile: "state.json", apiKey: "test-key" });
+    expect(result).toEqual({ silent: true, reason: "nothing-waiting" });
+    expect(await Bun.file("state.json").exists()).toBe(false);
   });
 
   test("skips a card already delivered today", async () => {
@@ -180,5 +188,73 @@ describe("askQuestions", () => {
     mockList(listText([]));
     const result = await askQuestions({ date: "2026-11-01", stateFile: "state.json", apiKey: "test-key" });
     expect(result).toEqual({ silent: true, reason: "final-reflection-already-delivered" });
+  });
+});
+
+describe("askQuestions against Index's answers", () => {
+  for (const input of failureInputs("opportunities")) {
+    test(`${input.label}: silent and records nothing`, async () => {
+      tempWorkspace();
+      const before = JSON.stringify({ deliveredToday: { date: "2026-06-17", ids: [] } });
+      await Bun.write("state.json", before);
+      process.env.INDEX_MCP_URL = MCP_URL;
+      globalThis.fetch = indexMcpFake({ tools: { list_opportunities: input.handler } }).fetch;
+      const result = await askQuestions({ date: "2026-06-17", stateFile: "state.json", apiKey: "test-key" });
+      expect(result).toEqual({ silent: true, reason: "nothing-waiting" });
+      expect(await Bun.file("state.json").text()).toBe(before);
+    });
+
+    test(`${input.label}: on the last day, the closeout behaves as for an unreachable Index`, async () => {
+      tempWorkspace();
+      process.env.INDEX_MCP_URL = MCP_URL;
+      globalThis.fetch = (() => {
+        throw new Error("down");
+      }) as unknown as typeof fetch;
+      const unreachable = await askQuestions({ date: "2026-11-01", stateFile: "a.json", apiKey: "test-key" });
+      globalThis.fetch = indexMcpFake({ tools: { list_opportunities: input.handler } }).fetch;
+      const failed = await askQuestions({ date: "2026-11-01", stateFile: "b.json", apiKey: "test-key" });
+      expect(failed).toEqual(unreachable);
+      expect("prompt" in failed).toBe(true);
+      expect(await Bun.file("b.json").text()).toBe(await Bun.file("a.json").text());
+      expect(JSON.parse(await Bun.file("b.json").text()).deliveredToday).toBeUndefined();
+    });
+  }
+
+  test("deliveredToday dated yesterday leaves its card eligible today", async () => {
+    tempWorkspace();
+    await Bun.write("state.json", JSON.stringify({ deliveredToday: { date: "2026-06-16", ids: ["opp-maya"] } }));
+    mockList(listText([
+      card("Maya", "memory systems", "opp-maya", MAYA_ID),
+      card("Jon", "village tools", "opp-jon", JON_ID),
+    ]));
+    const result = await askQuestions({ date: "2026-06-17", stateFile: "state.json", apiKey: "test-key" });
+    expect(result).toEqual(MAYA_CARD);
+    expect(JSON.parse(await Bun.file("state.json").text()).deliveredToday).toEqual({ date: "2026-06-17", ids: ["opp-maya"] });
+  });
+
+  test("the evening card carries only Index links of their kind", async () => {
+    tempWorkspace();
+    mockList(listText([{
+      id: "opp-maya",
+      url: "https://evil.fake.test/o/opp-maya",
+      status: "pending",
+      headline: "memory systems",
+      summary: "memory systems",
+      peer: { name: "Maya", userId: "../../x", url: "javascript:alert(1)" },
+    }] as unknown as ReturnType<typeof card>[]));
+    const result = await askQuestions({ date: "2026-06-17", stateFile: "state.json", apiKey: "test-key" });
+    expect(result).toEqual({ name: "Maya", headline: "memory systems", opportunityUrl: "https://index.network/o/opp-maya" });
+  });
+
+  test("a card without a valid id is never the evening card", async () => {
+    tempWorkspace();
+    mockList(listText([
+      { id: "../../x", url: "https://index.network/o/x", status: "pending", viewerRole: "party", headline: "h", peer: { name: "Bad Path" } },
+      { url: "https://index.network/o/y", status: "pending", viewerRole: "party", headline: "h", peer: { name: "No Id" } },
+      { id: "has space", status: "pending", viewerRole: "agent", headline: "h", peer: { name: "Space Id" } },
+    ] as unknown as ReturnType<typeof card>[]));
+    const result = await askQuestions({ date: "2026-06-17", stateFile: "state.json", apiKey: "test-key" });
+    expect(result).toEqual({ silent: true, reason: "nothing-waiting" });
+    expect(await Bun.file("state.json").exists()).toBe(false);
   });
 });
