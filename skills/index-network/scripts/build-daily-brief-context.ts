@@ -18,6 +18,17 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import {
+  type DeliveryLog,
+  type PendingListing,
+  OPPORTUNITY_DELIVERY_KEY,
+  applyCooldown,
+  compareForDelivery,
+  deliveryLogChanged,
+  pendingListing,
+  pruneDeliveryLog,
+  readDeliveryLog,
+} from "./delivery-state";
 import { callIndexTool, indexMcpUrl, toolJsonArray, toolJsonObject } from "./index-mcp";
 import { portalEventsBaseUrl } from "./validate-digest-urls";
 
@@ -163,6 +174,12 @@ export interface BriefOpportunity {
   confidence?: number;
   /** Cooldown re-show — the user has already seen this card in a previous digest. */
   redelivery?: boolean;
+  /**
+   * Index's `negotiating: true` on a pending card. Its meaning is an open
+   * question with Index; until it is answered the card is treated as not
+   * waiting on the resident (see awaitsResident in delivery-state.ts).
+   */
+  negotiating?: boolean;
 }
 
 export interface BriefUserModel {
@@ -181,6 +198,11 @@ export interface DailyBriefContext {
   opportunities: BriefOpportunity[];
   connectionOpportunities: BriefOpportunity[];
   communityOpportunities: BriefOpportunity[];
+  /**
+   * Direct conversations still waiting on the user that are not offered today
+   * because they were already shown recently or as often as they will be.
+   */
+  connectionsStillWaiting: number;
   userModel: BriefUserModel;
   weather?: DailyBriefWeather;
   questions?: BriefQuestion[];
@@ -534,11 +556,19 @@ export function filterActionableOpportunities(opportunities: BriefOpportunity[])
   );
 }
 
-/** Fresh cards before cooldown re-shows, then highest confidence. Stable for ties. */
-export function selectMorningConnections(opportunities: BriefOpportunity[]): BriefOpportunity[] {
+/**
+ * Cards never shown before cards shown on an earlier day (oldest showing
+ * first; see compareForDelivery), then fresh cards before cooldown re-shows,
+ * then highest confidence. Stable for ties, so live Index cards keep Index's
+ * order.
+ */
+export function selectMorningConnections(opportunities: BriefOpportunity[], log: DeliveryLog = {}): BriefOpportunity[] {
+  const byDelivery = compareForDelivery(log);
   return opportunities
     .filter((opp) => opp.feedCategory === "connection")
     .sort((a, b) => {
+      const delivery = byDelivery(a, b);
+      if (delivery !== 0) return delivery;
       if (Boolean(a.redelivery) !== Boolean(b.redelivery)) return a.redelivery ? 1 : -1;
       return (b.confidence ?? 0) - (a.confidence ?? 0);
     })
@@ -610,18 +640,20 @@ function listedCard(row: Record<string, unknown>): BriefOpportunity | null {
   const opportunityUrl = typeof row.url === "string" ? row.url : undefined;
   const userId = typeof peer?.userId === "string" ? peer.userId : undefined;
   const opportunityId = typeof row.id === "string" ? row.id : undefined;
+  const negotiating = row.negotiating === true;
   return {
     name,
     headline: headline || undefined,
     mainText: summary || headline || "New match",
     status: status || undefined,
-    stateLabel: OPPORTUNITY_STATE[status.toLowerCase()],
+    stateLabel: OPPORTUNITY_STATE[negotiating ? "negotiating" : status.toLowerCase()],
     userUrl,
     opportunityUrl,
     userId,
     opportunityId,
     profileUrl: userUrl,
     feedCategory: viewerRole === "agent" ? "connector-flow" : "connection",
+    ...(negotiating ? { negotiating: true } : {}),
   };
 }
 
@@ -641,16 +673,29 @@ export const UNIDENTIFIED_CARD_CODE = "mcp-card-unidentified";
 /**
  * parseListedOpportunities, plus how many cards were dropped whole because
  * their opportunity id is missing or not a valid id: such a card could not be
- * deduped or marked, so it never reaches selection on any path.
+ * deduped or marked, so it never reaches selection on any path. Also returns
+ * how many rows the list held and the valid id of every row that is pending
+ * (or carries no status), for the delivery log's pruning.
  */
-export function parseListedOpportunitiesCounted(text: string): { cards: BriefOpportunity[]; unidentified: number } {
-  const cards = toolJsonArray(text, "opportunities")
+export function parseListedOpportunitiesCounted(text: string): {
+  cards: BriefOpportunity[];
+  unidentified: number;
+  rowCount: number;
+  pendingIds: string[];
+} {
+  const rows = toolJsonArray(text, "opportunities");
+  const records = rows
     .map((row) => asRecord(row))
-    .filter((row): row is Record<string, unknown> => Boolean(row))
+    .filter((row): row is Record<string, unknown> => Boolean(row));
+  const cards = records
     .map(listedCard)
     .filter((card): card is BriefOpportunity => Boolean(card));
   const identified = cards.filter((card) => card.opportunityId !== undefined && ENTITY_ID.test(card.opportunityId));
-  return { cards: identified, unidentified: cards.length - identified.length };
+  const pendingIds = records.flatMap((row) => {
+    const status = typeof row.status === "string" ? row.status.trim().toLowerCase() : "";
+    return typeof row.id === "string" && ENTITY_ID.test(row.id) && (status === "" || status === "pending") ? [row.id] : [];
+  });
+  return { cards: identified, unidentified: cards.length - identified.length, rowCount: rows.length, pendingIds };
 }
 
 export async function readDreamingDate(stateFile: string): Promise<string | undefined> {
@@ -697,6 +742,36 @@ async function readDeliveredIds(stateFile: string, date: string): Promise<Set<st
     // missing/malformed state should not block the brief
   }
   return new Set();
+}
+
+/** The delivery log in the state file; a missing or malformed file reads as an empty log. */
+async function readDeliveryLogFile(stateFile: string): Promise<DeliveryLog> {
+  try {
+    const parsed = asRecord(JSON.parse(await Bun.file(stateFile).text()));
+    return parsed ? readDeliveryLog(parsed) : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * After a successful read of the pending list, drop log entries the read
+ * shows are finished. Writes only when the file already holds a log and the
+ * prune changes it; a missing or malformed file is left alone, and nothing
+ * else in the file changes.
+ */
+export async function pruneDeliveryLogFile(stateFile: string, date: string, listing: PendingListing): Promise<void> {
+  let state: Record<string, unknown> | null;
+  try {
+    state = asRecord(JSON.parse(await Bun.file(stateFile).text()));
+  } catch {
+    return;
+  }
+  if (!state || state[OPPORTUNITY_DELIVERY_KEY] === undefined) return;
+  const pruned = pruneDeliveryLog(readDeliveryLog(state), date, listing);
+  if (!deliveryLogChanged(state, pruned)) return;
+  state[OPPORTUNITY_DELIVERY_KEY] = pruned;
+  await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
 }
 
 /** Whole days from `earlier` to `later` (both YYYY-MM-DD); negative when `earlier` is after `later`. */
@@ -895,12 +970,19 @@ export async function fetchOpportunitiesFromMcp(opts: {
   return (await listOpportunitiesFromMcp(opts)).cards;
 }
 
-/** fetchOpportunitiesFromMcp, plus the count of cards dropped for a missing or invalid id. */
+/** The page size the delivery paths ask Index for. */
+export const PENDING_LIST_LIMIT = 20;
+
+/**
+ * fetchOpportunitiesFromMcp, plus the count of cards dropped for a missing or
+ * invalid id, and what the read says about the pending list (for pruning the
+ * delivery log; see pendingListing).
+ */
 export async function listOpportunitiesFromMcp(opts: {
   apiKey: string;
   mcpUrl: string;
-}): Promise<{ cards: BriefOpportunity[]; unidentified: number }> {
-  const text = await callIndexTool(opts, "list_opportunities", { statuses: ["pending"], limit: 20 });
+}): Promise<{ cards: BriefOpportunity[]; unidentified: number; listing: PendingListing }> {
+  const text = await callIndexTool(opts, "list_opportunities", { statuses: ["pending"], limit: PENDING_LIST_LIMIT });
   const root = toolJsonObject(text)?.root;
   if (root?.success === false) {
     const errorText = typeof root.error === "string" ? root.error : "";
@@ -909,7 +991,12 @@ export async function listOpportunitiesFromMcp(opts: {
       throw new Error("setup required before people suggestions");
     }
   }
-  return parseListedOpportunitiesCounted(text);
+  const { cards, unidentified, rowCount, pendingIds } = parseListedOpportunitiesCounted(text);
+  return {
+    cards,
+    unidentified,
+    listing: pendingListing({ pendingIds, rowCount, requestedLimit: PENDING_LIST_LIMIT, pagination: root?.pagination }),
+  };
 }
 
 export async function buildDailyBriefContext(options: {
@@ -938,6 +1025,7 @@ export async function buildDailyBriefContext(options: {
   let opportunities: BriefOpportunity[] = [];
   let opportunitySource: "mcp" | "file" | "unavailable" = "unavailable";
   let dreamingFresh = false;
+  let deliveryLog: DeliveryLog = {};
 
   const apiKey = resolveIndexApiKey();
   const mcpUrl = indexMcpUrl();
@@ -946,7 +1034,9 @@ export async function buildDailyBriefContext(options: {
   if (apiKey) {
     try {
       const deliveredIds = await readDeliveredIds(stateFile, date);
-      const { cards: fetched, unidentified } = await listOpportunitiesFromMcp({ apiKey, mcpUrl });
+      const storedLog = await readDeliveryLogFile(stateFile);
+      const { cards: fetched, unidentified, listing } = await listOpportunitiesFromMcp({ apiKey, mcpUrl });
+      deliveryLog = pruneDeliveryLog(storedLog, date, listing);
       if (unidentified > 0) warnings.push(`dropped ${unidentified} opportunity card(s): ${UNIDENTIFIED_CARD_CODE}`);
       const deduped = filterDedupedOpportunities(fetched, deliveredIds);
       opportunities = filterActionableOpportunities(deduped);
@@ -964,6 +1054,11 @@ export async function buildDailyBriefContext(options: {
           warnings.push(`dreaming state not written: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
+      try {
+        await pruneDeliveryLogFile(stateFile, date, listing);
+      } catch (err) {
+        warnings.push(`delivery state not pruned: ${err instanceof Error ? err.message : String(err)}`);
+      }
     } catch (err) {
       warnings.push(`opportunities MCP unavailable: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -972,6 +1067,7 @@ export async function buildDailyBriefContext(options: {
     if (transcript.trim()) {
       opportunitySource = "file";
       const deliveredIds = await readDeliveredIds(stateFile, date);
+      deliveryLog = pruneDeliveryLog(await readDeliveryLogFile(stateFile), date, null);
       const deduped = filterDedupedOpportunities(parseOpportunityTranscript(transcript), deliveredIds);
       opportunities = filterActionableOpportunities(deduped);
       if (opportunities.length < deduped.length) {
@@ -985,10 +1081,14 @@ export async function buildDailyBriefContext(options: {
   const questions: BriefQuestion[] = [];
   const questionSource: "mcp" | "unavailable" = "unavailable";
 
-  const connectionOpportunities = selectMorningConnections(opportunities).map(attachIndexLinks);
-  const communityOpportunities = opportunities
+  // Cards shown on an earlier day wait out the cooldown; see delivery-state.ts.
+  // Recorded as shown only by the send, from the cards the staged body names.
+  const { eligible, held } = applyCooldown(opportunities, deliveryLog, date);
+  const connectionOpportunities = selectMorningConnections(eligible, deliveryLog).map(attachIndexLinks);
+  const communityOpportunities = eligible
     .filter((opp) => opp.feedCategory === "connector-flow")
     .map(attachIndexLinks);
+  const connectionsStillWaiting = held.filter((opp) => opp.feedCategory === "connection").length;
 
   return {
     date,
@@ -1001,6 +1101,7 @@ export async function buildDailyBriefContext(options: {
     opportunities: [...connectionOpportunities, ...communityOpportunities],
     connectionOpportunities,
     communityOpportunities,
+    connectionsStillWaiting,
     userModel,
     weather: weather.source !== "unavailable" ? weather : undefined,
     questions,

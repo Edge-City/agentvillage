@@ -15,6 +15,13 @@ import { access } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 
 import { QUESTION_COOLDOWN_DAYS, villageDate } from "./build-daily-brief-context";
+import {
+  OPPORTUNITY_DELIVERY_KEY,
+  deliveryLogChanged,
+  pruneDeliveryLog,
+  readDeliveryLog,
+  recordShowings,
+} from "./delivery-state";
 import { sanitizeDigestUrls } from "./validate-digest-urls";
 
 interface SendResult {
@@ -159,6 +166,7 @@ export async function sendDailyBrief(options: {
   const opportunityIds = stringArray(prepared.opportunityIds);
   const questionIds = stringArray(prepared.questionIds);
 
+  const storedDeliveryLog = readDeliveryLog(state);
   const deliveredToday = state.deliveredToday && typeof state.deliveredToday === "object" && !Array.isArray(state.deliveredToday)
     ? state.deliveredToday as Record<string, unknown>
     : {};
@@ -167,6 +175,13 @@ export async function sendDailyBrief(options: {
     date,
     ids: Array.from(new Set([...currentIds, ...opportunityIds])),
   };
+
+  // One showing for each card the sent brief names, for the cross-day card
+  // cooldown (delivery-state.ts). The log was read from the state as loaded,
+  // before deliveredToday was replaced, so a state file from before the log
+  // existed still counts the cards its set holds.
+  const deliveryLog = pruneDeliveryLog(recordShowings(storedDeliveryLog, opportunityIds, date), date, null);
+  if (deliveryLogChanged(state, deliveryLog)) state[OPPORTUNITY_DELIVERY_KEY] = deliveryLog;
 
   // Cross-day question delivery log: record today's delivered question ids and
   // prune entries past the cooldown (they no longer affect filtering, so the

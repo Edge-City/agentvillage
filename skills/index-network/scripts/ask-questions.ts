@@ -1,8 +1,10 @@
 #!/usr/bin/env bun
 /**
  * Evening pass. Lists pending opportunities and returns one card the morning
- * brief and the daytime drops have not already sent today. On the last village
- * day, if that list is empty, returns the local closeout line.
+ * brief and the daytime drops have not already sent today and that is not in
+ * its cooldown or out of showings (delivery-state.ts): never-shown cards in
+ * Index's order first, then the card shown longest ago. On the last village
+ * day, if there is no such card, returns the local closeout line.
  *
  * Usage (from $HERMES_HOME):
  *   bun skills/index-network/scripts/ask-questions.ts [--state-file memory/heartbeat-state.json]
@@ -12,11 +14,19 @@ import { existsSync } from "node:fs";
 
 import {
   attachIndexLinks,
-  fetchOpportunitiesFromMcp,
+  listOpportunitiesFromMcp,
   resolveIndexApiKey,
   villageDate,
   type BriefOpportunity,
 } from "./build-daily-brief-context";
+import {
+  OPPORTUNITY_DELIVERY_KEY,
+  applyCooldown,
+  deliveryLogChanged,
+  pruneDeliveryLog,
+  readDeliveryLog,
+  recordShowings,
+} from "./delivery-state";
 import { indexMcpUrl } from "./index-mcp";
 
 /** Last day of Edge City India 2026 (Oct 11 – Nov 1). */
@@ -101,13 +111,20 @@ export async function askQuestions(options: {
   const apiKey = options.apiKey ?? resolveIndexApiKey();
   if (apiKey) {
     try {
-      const fetched = await fetchOpportunitiesFromMcp({ apiKey, mcpUrl: indexMcpUrl() });
-      const chosen = fetched.find((opp) => opp.opportunityId && !seen.has(opp.opportunityId));
+      const { cards: fetched, listing } = await listOpportunitiesFromMcp({ apiKey, mcpUrl: indexMcpUrl() });
+      // The read succeeded, so entries for cards no longer pending can go.
+      const log = pruneDeliveryLog(readDeliveryLog(state), date, listing);
+      const unseen = fetched.filter((opp) => opp.opportunityId && !seen.has(opp.opportunityId));
+      const [chosen] = applyCooldown(unseen, log, date).eligible;
       if (chosen?.opportunityId) {
         state.deliveredToday = { date, ids: [...seen, chosen.opportunityId] };
+        state[OPPORTUNITY_DELIVERY_KEY] = pruneDeliveryLog(recordShowings(log, [chosen.opportunityId], date), date, listing);
         await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
         const card = cardFrom(chosen);
         if (card) return card;
+      } else if (deliveryLogChanged(state, log)) {
+        state[OPPORTUNITY_DELIVERY_KEY] = log;
+        await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
       }
     } catch {
       // An empty list still allows the last-day closeout.

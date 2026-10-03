@@ -220,9 +220,9 @@ describe("askQuestions against Index's answers", () => {
     });
   }
 
-  test("deliveredToday dated yesterday leaves its card eligible today", async () => {
+  test("deliveredToday dated yesterday is no same-day dedupe: with an empty delivery log its card is eligible today", async () => {
     tempWorkspace();
-    await Bun.write("state.json", JSON.stringify({ deliveredToday: { date: "2026-06-16", ids: ["opp-maya"] } }));
+    await Bun.write("state.json", JSON.stringify({ deliveredToday: { date: "2026-06-16", ids: ["opp-maya"] }, opportunityDelivery: {} }));
     mockList(listText([
       card("Maya", "memory systems", "opp-maya", MAYA_ID),
       card("Jon", "village tools", "opp-jon", JON_ID),

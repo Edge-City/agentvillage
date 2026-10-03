@@ -11,6 +11,13 @@
  * negotiationSummary.reportedCompletedIds so the user is never told about the
  * same connection twice.
  *
+ * The needs-attention list puts pending cards in front of the user like any
+ * other delivery, so it follows the card cooldown (delivery-state.ts): it
+ * lists only pending cards not already sent today and not in their cooldown
+ * or out of showings, and counts one showing for each card it lists. A
+ * pending card Index marks `negotiating: true` is listed with the agents
+ * talking, never as waiting on the user.
+ *
  * Outputs either exactly `[SILENT]` (nothing to report) or a JSON object that
  * the cron prompt feeds to the LLM for the structured report:
  *
@@ -26,8 +33,26 @@
 
 import { existsSync } from "node:fs";
 
-import { attachIndexLinks, indexLink, parseListedOpportunities, resolveIndexApiKey, type BriefOpportunity } from "./build-daily-brief-context";
-import { callIndexTool, indexMcpUrl, toolJsonArray } from "./index-mcp";
+import {
+  attachIndexLinks,
+  indexLink,
+  parseListedOpportunitiesCounted,
+  resolveIndexApiKey,
+  villageDate,
+  type BriefOpportunity,
+} from "./build-daily-brief-context";
+import {
+  OPPORTUNITY_DELIVERY_KEY,
+  applyCooldown,
+  awaitsResident,
+  deliveryLogChanged,
+  pendingListing,
+  pruneDeliveryLog,
+  readDeliveryLog,
+  recordShowings,
+  type PendingListing,
+} from "./delivery-state";
+import { callIndexTool, indexMcpUrl, toolJsonArray, toolJsonObject } from "./index-mcp";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -272,9 +297,21 @@ function intentsFrom(text: string): Array<{ summary: string; url?: string }> {
   });
 }
 
+/** The page size the follow-up asks Index for. */
+const FOLLOW_UP_LIST_LIMIT = 50;
+
+function deliveredTodayIds(state: Record<string, unknown>, date: string): Set<string> {
+  const delivered = state.deliveredToday;
+  if (!delivered || typeof delivered !== "object" || Array.isArray(delivered)) return new Set();
+  const row = delivered as { date?: unknown; ids?: unknown };
+  if (row.date !== date || !Array.isArray(row.ids)) return new Set();
+  return new Set(row.ids.filter((id): id is string => typeof id === "string"));
+}
+
 export async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const stateFile = argValue(args, "--state-file") ?? "memory/heartbeat-state.json";
+  const date = argValue(args, "--date") ?? villageDate();
 
   const apiKey = resolveIndexApiKey();
   if (!apiKey) {
@@ -284,13 +321,21 @@ export async function main(): Promise<void> {
 
   const target = { apiKey, mcpUrl: indexMcpUrl() };
   let cards: BriefOpportunity[] = [];
+  let listing: PendingListing;
   let signals: Array<{ summary: string; url?: string }> = [];
   try {
     const opportunityText = await callIndexTool(target, "list_opportunities", {
       statuses: ["pending", "negotiating", "accepted"],
-      limit: 50,
+      limit: FOLLOW_UP_LIST_LIMIT,
     });
-    cards = parseListedOpportunities(opportunityText);
+    const listed = parseListedOpportunitiesCounted(opportunityText);
+    cards = listed.cards;
+    listing = pendingListing({
+      pendingIds: listed.pendingIds,
+      rowCount: listed.rowCount,
+      requestedLimit: FOLLOW_UP_LIST_LIMIT,
+      pagination: toolJsonObject(opportunityText)?.root.pagination,
+    });
     const intentText = await callIndexTool(target, "list_intents", { limit: 20 });
     signals = intentsFrom(intentText);
   } catch (err) {
@@ -305,22 +350,38 @@ export async function main(): Promise<void> {
   const summaryState = (state.negotiationSummary ?? {}) as NegotiationSummaryState;
   const alreadyReported = new Set(summaryState.reportedCompletedIds ?? []);
 
-  const needsAttention = cards.filter((card) => card.status === "pending").map(followUpCard).filter((card): card is FollowUpCard => Boolean(card));
-  const waiting = cards.filter((card) => card.status === "negotiating").map(followUpCard).filter((card): card is FollowUpCard => Boolean(card));
+  // Both reads succeeded, so entries for cards no longer pending can go.
+  const log = pruneDeliveryLog(readDeliveryLog(state), date, listing);
+  const sentToday = deliveredTodayIds(state, date);
+  const pending = cards.filter((card) => card.status === "pending");
+  const due = applyCooldown(
+    pending.filter((card) => !card.opportunityId || !sentToday.has(card.opportunityId)),
+    log,
+    date,
+  ).eligible.filter((card) => followUpCard(card));
+  const needsAttention = due.map(followUpCard).filter((card): card is FollowUpCard => Boolean(card));
+  const waiting = cards
+    .filter((card) => card.status === "negotiating" || (card.status === "pending" && !awaitsResident(card)))
+    .map(followUpCard)
+    .filter((card): card is FollowUpCard => Boolean(card));
   const newAccepted = cards.filter((card) => card.status === "accepted" && card.opportunityId && !alreadyReported.has(card.opportunityId));
   const newlyResolved = newAccepted.map(followUpCard).filter((card): card is FollowUpCard => Boolean(card));
 
   if (needsAttention.length === 0 && newlyResolved.length === 0) {
+    if (deliveryLogChanged(state, log)) await writeJsonObject(stateFile, { ...state, [OPPORTUNITY_DELIVERY_KEY]: log });
     process.stdout.write("[SILENT]");
     return;
   }
 
+  const shownIds = due.map((card) => card.opportunityId).filter((id): id is string => Boolean(id));
+  const nextLog = pruneDeliveryLog(recordShowings(log, shownIds, date), date, listing);
   await writeJsonObject(stateFile, {
     ...state,
     negotiationSummary: {
       ...summaryState,
       reportedCompletedIds: [...alreadyReported, ...newAccepted.map((card) => card.opportunityId).filter((id): id is string => Boolean(id))],
     },
+    ...(deliveryLogChanged(state, nextLog) ? { [OPPORTUNITY_DELIVERY_KEY]: nextLog } : {}),
   });
 
   process.stdout.write(JSON.stringify({ signals, needsAttention, waiting, newlyResolved }));

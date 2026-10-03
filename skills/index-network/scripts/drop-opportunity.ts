@@ -10,10 +10,14 @@
  *   - Reads today's `deliveredToday` set from `memory/heartbeat-state.json` and
  *     filters it out of `list_opportunities`, so a drop never repeats anything the
  *     morning brief (or an earlier drop) already sent that day, and vice versa.
- *   - Picks the single best undelivered opportunity (fresh over re-show, then
- *     highest confidence).
+ *   - Leaves out cards still in their cooldown or shown as often as they will
+ *     be, and cards Index marks `negotiating` (delivery-state.ts).
+ *   - Picks the single best of the rest (never shown before shown on an
+ *     earlier day, oldest showing first, then fresh over re-show, then highest
+ *     confidence).
  *   - Records its id in the same `deliveredToday` set, exactly like the daily
- *     send. That local set is the record of what was delivered.
+ *     send, and counts one showing in the delivery log. That local state is
+ *     the record of what was delivered.
  *
  * Prints `[SILENT]` when there is nothing new to send, otherwise one JSON object
  * describing the chosen opportunity for the prompt to render.
@@ -25,11 +29,21 @@ import { isAbsolute, join } from "node:path";
 import {
   type BriefOpportunity,
   attachIndexLinks,
-  fetchOpportunitiesFromMcp,
   filterDedupedOpportunities,
+  listOpportunitiesFromMcp,
   villageDate,
   resolveIndexApiKey,
 } from "./build-daily-brief-context";
+import {
+  type DeliveryLog,
+  OPPORTUNITY_DELIVERY_KEY,
+  applyCooldown,
+  compareForDelivery,
+  deliveryLogChanged,
+  pruneDeliveryLog,
+  readDeliveryLog,
+  recordShowings,
+} from "./delivery-state";
 import { indexMcpUrl } from "./index-mcp";
 
 interface DropResult {
@@ -68,9 +82,15 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
 }
 
-/** Fresh opportunities before cooldown re-shows, then most confident first. */
-function pickBest(opportunities: BriefOpportunity[]): BriefOpportunity | undefined {
+/**
+ * Never shown before shown on an earlier day (oldest showing first), then
+ * fresh opportunities before cooldown re-shows, then most confident first.
+ */
+function pickBest(opportunities: BriefOpportunity[], log: DeliveryLog): BriefOpportunity | undefined {
+  const byDelivery = compareForDelivery(log);
   return [...opportunities].sort((a, b) => {
+    const delivery = byDelivery(a, b);
+    if (delivery !== 0) return delivery;
     if (Boolean(a.redelivery) !== Boolean(b.redelivery)) return a.redelivery ? 1 : -1;
     return (b.confidence ?? 0) - (a.confidence ?? 0);
   })[0];
@@ -81,7 +101,7 @@ export async function dropOpportunity(options: {
   stateFile?: string;
   apiKey?: string;
   mcpUrl?: string;
-  fetchOpportunities?: typeof fetchOpportunitiesFromMcp;
+  listOpportunities?: typeof listOpportunitiesFromMcp;
 } = {}): Promise<DropResult | SilentResult> {
   const date = options.date ?? villageDate();
   const stateFile = resolveHermesPath(options.stateFile ?? "memory/heartbeat-state.json");
@@ -89,9 +109,7 @@ export async function dropOpportunity(options: {
   if (!apiKey) return { silent: true, reason: "no-api-key" };
   const mcpUrl = options.mcpUrl ?? indexMcpUrl();
 
-  const fetched = options.fetchOpportunities
-    ? await options.fetchOpportunities({ apiKey, mcpUrl })
-    : await fetchOpportunitiesFromMcp({ apiKey, mcpUrl });
+  const { cards: fetched, listing } = await (options.listOpportunities ?? listOpportunitiesFromMcp)({ apiKey, mcpUrl });
 
   const state = await readJsonObject(stateFile);
   const deliveredToday =
@@ -100,9 +118,17 @@ export async function dropOpportunity(options: {
       : {};
   const deliveredIds = new Set(deliveredToday.date === date ? stringArray(deliveredToday.ids) : []);
 
+  // The read succeeded, so entries for cards no longer pending can go.
+  const log = pruneDeliveryLog(readDeliveryLog(state), date, listing);
   const candidates = filterDedupedOpportunities(fetched, deliveredIds).filter((opp) => opp.opportunityId);
-  const chosen = pickBest(candidates);
-  if (!chosen?.opportunityId) return { silent: true, reason: "nothing-new" };
+  const chosen = pickBest(applyCooldown(candidates, log, date).eligible, log);
+  if (!chosen?.opportunityId) {
+    if (deliveryLogChanged(state, log)) {
+      state[OPPORTUNITY_DELIVERY_KEY] = log;
+      await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
+    }
+    return { silent: true, reason: "nothing-new" };
+  }
 
   // Reserve the id in the shared per-day set BEFORE delivery so a retry or the
   // morning brief never double-sends it. This mirrors the daily send's bookkeeping.
@@ -110,6 +136,7 @@ export async function dropOpportunity(options: {
     date,
     ids: Array.from(new Set([...deliveredIds, chosen.opportunityId])),
   };
+  state[OPPORTUNITY_DELIVERY_KEY] = pruneDeliveryLog(recordShowings(log, [chosen.opportunityId], date), date, listing);
   await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
 
   return { opportunity: attachIndexLinks(chosen) };

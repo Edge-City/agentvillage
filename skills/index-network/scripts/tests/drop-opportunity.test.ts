@@ -96,9 +96,9 @@ describe("dropOpportunity against Index's answers", () => {
     });
   }
 
-  test("deliveredToday dated yesterday leaves its card eligible today", async () => {
+  test("deliveredToday dated yesterday is no same-day dedupe: with an empty delivery log its card is eligible today", async () => {
     const file = stateFile();
-    await Bun.write(file, JSON.stringify({ deliveredToday: { date: "2026-10-11", ids: [MAYA_OPP] } }));
+    await Bun.write(file, JSON.stringify({ deliveredToday: { date: "2026-10-11", ids: [MAYA_OPP] }, opportunityDelivery: {} }));
     globalThis.fetch = indexMcpFake().fetch;
     const result = await dropOpportunity({ date: "2026-10-12", stateFile: file, apiKey: "test-key", mcpUrl: FAKE_MCP_URL });
     if ("silent" in result) throw new Error(`unexpected silent result: ${result.reason}`);

@@ -691,8 +691,8 @@ describe("buildDailyBriefContext against Index's answers", () => {
     expect(context.communityOpportunities.map((opp) => opp.name)).toEqual(["Jon"]);
   });
 
-  test("deliveredToday dated yesterday leaves its card eligible; dated today it does not", async () => {
-    const yesterday = await runBrief(undefined, { deliveredToday: { date: "2026-10-11", ids: [MAYA_OPP] } });
+  test("deliveredToday dated yesterday is no same-day dedupe (with an empty delivery log its card is eligible); dated today it is", async () => {
+    const yesterday = await runBrief(undefined, { deliveredToday: { date: "2026-10-11", ids: [MAYA_OPP] }, opportunityDelivery: {} });
     expect(yesterday.context.connectionOpportunities.map((opp) => opp.opportunityId)).toEqual([MAYA_OPP]);
     const today = await runBrief(undefined, { deliveredToday: { date: "2026-10-12", ids: [MAYA_OPP] } });
     expect(today.context.connectionOpportunities).toEqual([]);
