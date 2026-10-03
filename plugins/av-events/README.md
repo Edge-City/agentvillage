@@ -290,7 +290,8 @@ of the same name on any other MCP server is ignored.
 
 Index's intent tools (DATA-249, verified against `indexnetwork/index` `main`
 `services/api/src/lib/mcp/mcp.tools.ts` on 2026-10-02; the overlay's copy of their input schemas is
-`tests/vectors/index_mcp_intent_tools.json`, and a test holds every call the overlay builds to it)
+under `tools` in `tests/vectors/index_intent_contract.json`, and a test holds the observer's names
+and the agent-facing text to it)
 are `list_intents`, `get_intent`, `create_intent {description, networkIds?, sourceType?, sourceId?}`,
 `update_intent {intentId, description?, sourceType?, sourceId?}`, `pause_intent {intentId}`,
 `resume_intent {intentId}` and `archive_intent {intentId, confirm: true}`. There is no
@@ -346,9 +347,9 @@ the bootstrap ritual is `message`.
 `record_intention`'s `summary`. Nothing is normalised, so the poller gets the same value when it
 hashes the same Index field. `record_intention` sends its `text` to Index as `description`
 unchanged, so a published capture's `text_hash` is the plain SHA-256 (hex) of the UTF-8 bytes
-Index received (DATA-249, tested). Index stores the payload its own preparation step returns; the
-poller's hash of it matches only when that step keeps the text as sent (a dogfood check: the
-poller counts a mismatch as `text_mismatch`). `conditional` is null unless `record_intention` sets it. Not in §4.1:
+Index received (DATA-249, tested). A REST create with no preparation receipt persists the
+description verbatim (`intent.service.ts` `create`), so the poller's hash of the stored payload
+should match; the poller counts a mismatch as `text_mismatch` (a dogfood check). `conditional` is null unless `record_intention` sets it. Not in §4.1:
 `capture_path` (`index_tool` \| `record_intention`); `publish_refused` and `local_reason` (below;
 null on the `index_tool` path); `index_status`, stripped and case-folded and
 limited to `active|paused|archived|deleted|withdrawn|completed|unknown` (`paused` since DATA-249),
@@ -424,13 +425,13 @@ Search, which such a gate would not see); its text, the `workspace/AGENTS.md` ro
 
 | Call | Index | Result / event |
 |---|---|---|
-| `capture`, source `message`/`onboarding`/`note`, in a session that may publish | `create_intent(description=text, sourceType="agentvillage")`, no `sourceId` | `intention_id` = `index_intent_id` = Index's id (corroborated by id, no back-reference needed) |
+| `capture`, source `message`/`onboarding`/`note`, in a session that may publish | `POST /api/intents {description: text, sourceType: "agentvillage"}`, no `sourceId` | `intention_id` = `index_intent_id` = Index's id (corroborated by id, no back-reference needed) |
 | same, Index refused, unreachable, or the hourly cap reached | tried, or not when capped | local uuid v7, `publish_refused` = code |
 | `capture`, `publish=false`, `reason` | none | local uuid v7, `local_reason` = reason |
 | `capture`, source `ambient` | none | local uuid v7, `source=ambient`, held |
 | `capture`, explicit source, in a held session | none | local uuid v7, `source=ambient`, `publish_refused` `held_cron` or `held_unknown` |
 | `capture` that would publish, of text already held as ambient (case and whitespace ignored) | none | local uuid v7, `publish_refused="held_ambient_exists"` |
-| `update` / `withdraw` of an id it published | `update_intent(intentId, description)` / `archive_intent(intentId, confirm=true)` | `index_intent_id` set; a failed mirror adds `publish_refused` |
+| `update` / `withdraw` of an id it published | `PATCH /api/intents/{id} {description}` / `PATCH /api/intents/{id}/archive` (no body) | `index_intent_id` set; a failed mirror adds `publish_refused` |
 | `update` of a published id in a held session | none | `publish_refused` `held_cron` or `held_unknown`, `source=ambient` (a withdrawal still mirrors) |
 | `update` / `withdraw` of an id it recorded locally | none | local only |
 | `update` / `withdraw` of an id it has no record of | none | `publish_refused="unknown_id"`, `source=ambient` |
@@ -447,16 +448,23 @@ chain is `held_cron`; anything else (`api_server`, `webhook`, `batch`, `acp`, `c
 an empty platform, a plugin platform, an unseen session, a subagent of unknown ancestry) is
 `held_unknown`.
 
-**Rate cap.** `AV_RECORD_INTENTION_MAX_PUBLISH_PER_HOUR` (default 20) `create_intent` attempts per
+**Rate cap.** `AV_RECORD_INTENTION_MAX_PUBLISH_PER_HOUR` (default 20) Index create attempts per
 rolling hour per tenant, counted across processes in the map under its lock, with the clock read
 inside the lock and no writer dropping another's live stamps. Over it: `rate_capped`. A count that
 cannot be read: `rate_unavailable`; one that was read but cannot be saved proceeds, and
 `rate_count_failed` is logged once per process.
 
 `publish_refused` codes: `no_key`, `url_refused`, `rate_capped`, `rate_unavailable`, `redirect`,
-`http_<status>`, `rpc_error`, `rejected` (Index's "too vague": `isError`, or `success` not true),
-`malformed`, `too_large`, `timeout`, `transport`, `held_cron`, `held_unknown`,
-`held_ambient_exists`, `unknown_id`. Refusals (`success: false`, no event): `disabled`,
+`http_<status>`, `rejected` (Index's 422 `intent_rejected`: too vague, or an edit it would not
+accept), `malformed` (a 2xx without a usable `intentId`, or not a JSON object), `too_large`,
+`timeout`, `transport`, `id_invalid` (a mirror of an id that is not a UUID or hex short id; nothing
+sent), `held_cron`, `held_unknown`, `held_ambient_exists`, `unknown_id`. Status mapping
+(`status_code`, from Index's `intent.controller.ts`): 422 is `rejected`; 400 (a body we built
+wrong), 401, 403 (`invalid_preparation`, or a network-membership refusal: never the resident's
+words), 404, 409 (archived), 429, 500 and 503 (`preparation_failed`, retryable, nothing written)
+are `http_<status>`; a 3xx is `redirect`. Every one of them on a capture is the local-capture path
+with that code; only `rejected` labels the map entry. Before DATA-249, `rpc_error` came from the
+MCP client, now removed. Refusals (`success: false`, no event): `disabled`,
 `action_invalid`, `text_required`, `source_required`, `source_invalid`, `publish_invalid`,
 `reason_required`, `reason_invalid`, `intention_id_unexpected`, `intention_id_required`,
 `intention_id_invalid`, `capture_again` (an update of a capture Index rejected),
@@ -470,11 +478,24 @@ is refused (`capture_again`), so it never publishes. A `timeout` capture is inel
 `text_hash` falls between the timed-out call's start and one hour after the capture; the poller is
 timed only by Index's `createdAt`. Every other `publish_refused` code stays eligible.
 
-The Index call is the data repo poller's MCP sequence over urllib (`initialize`, `mcp-session-id`,
-`notifications/initialized`, `tools/call`; `x-api-key` only; no redirects, no proxies, https only),
-never a Hermes MCP tool call, so the `index_tool` observer never sees it and each call is one
-event. `INDEX_API_KEY` and `INDEX_MCP_URL` (default prod) are read at call time. The whole sequence
-has a 30 s deadline. `$HERMES_HOME/av-events/intentions.json` (0600, under `flock` on
+**How the tool reaches Index (DATA-249).** Over Index's REST API, one request per write, with
+urllib: `POST /api/intents {description, sourceType: "agentvillage", sourceId?}` (Index's body
+schema is strict; we send neither `networkIds`, so the intent is shared in every network the
+resident belongs to, nor `preparationReceipt`, so Index prepares the text itself, persists it
+verbatim, and answers 422 when it is not ready), `PATCH /api/intents/{id} {description}`, and
+`PATCH /api/intents/{id}/archive` with no body. A publish counts only with a valid `intentId` in a
+2xx body. `sourceId` is sent only by `publish_intent(text, source_id=...)`, for a held intention
+published later; a stated capture sends none (its id is Index's). Not MCP: Index's MCP endpoint
+answers 400 "Unsupported protocol version" to every version the plugin could send (`legacy:
+'reject'`), and the hand-rolled MCP client is gone. Never a Hermes MCP tool call either, so the
+`index_tool` observer never sees it and each call is one event. Headers: `x-api-key`
+(`INDEX_API_KEY`), `accept: application/json`, `content-type: application/json` with a body; no
+`x-index-surface`. The origin is read at call time: `INDEX_API_URL`; else, for tenants the installer
+configured, the origin of `INDEX_MCP_URL` when it is `https://<host>[:port]/mcp`; else
+`https://protocol.index.network`. It must be https (plain http only to `localhost`, `127.0.0.1`,
+`::1`) with no path, credentials, query or fragment; a configured URL that fails is `url_refused`,
+never a fallback to production. An id in a path must be a UUID or a hex short id and is URL-encoded.
+No redirects, no proxies. The whole request has a 30 s deadline. `$HERMES_HOME/av-events/intentions.json` (0600, under `flock` on
 `intentions.json.lock`) records each id's `{published, source}`, `refused: rejected` for a local
 capture Index rejected, a `held_norm_hash` (sha256 of the
 case-folded, whitespace-collapsed text, never emitted) for held ambient entries only, replaced on
