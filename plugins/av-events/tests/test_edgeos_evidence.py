@@ -122,13 +122,9 @@ def test_unconfirmed_outcomes_are_reported_but_never_wait(live, ctx, av, label, 
     f"curl -sXPOST {REGISTER_URL}",
     f"curl -sSfL -X POST {REGISTER_URL}",
     f"curl --request POST {REGISTER_URL}",
-    f"curl --request=POST {REGISTER_URL}",
     f"curl -G -X POST {REGISTER_URL}",  # -X wins, as in curl
     f"curl -s -X POST https://api.edgeos.world:443/api/v1/event-participants/portal/register/{EVENT}",
     f"curl -s -X POST --url {REGISTER_URL} -H 'Authorization: Bearer x'",
-    f"cd /tmp && curl -s -X POST '{REGISTER_URL}' -d '{{}}'",
-    f"cd /tmp; curl -s -X POST '{REGISTER_URL}'",
-    f"/usr/bin/curl -s -X POST {REGISTER_URL}",
 ])
 def test_combined_flags_and_an_explicit_port_are_read(live, ctx, av, command):
     body = participant()
@@ -172,6 +168,14 @@ def test_combined_flags_and_an_explicit_port_are_read(live, ctx, av, command):
     f"curl -s -X POST --config config.txt {REGISTER_URL}",
     f"curl -sk -X POST {REGISTER_URL}",
     f"curl -s --insecure -X POST {REGISTER_URL}",
+    # DATA-269: these were read before. curl has no `--name=value` form (it
+    # rejects `--request=POST` and sends nothing); anything before the curl
+    # decides whether, and with what environment, it runs; and a path to
+    # `curl` can be any program.
+    f"curl --request=POST {REGISTER_URL}",
+    f"cd /tmp && curl -s -X POST '{REGISTER_URL}' -d '{{}}'",
+    f"cd /tmp; curl -s -X POST '{REGISTER_URL}'",
+    f"/usr/bin/curl -s -X POST {REGISTER_URL}",
 ])
 def test_ambiguous_commands_are_not_read(live, ctx, av, command):
     fire(ctx, command, terminal_result(participant()))
@@ -524,7 +528,9 @@ def test_a_body_from_command_substitution_is_a_known_miss(live, ctx, av):
     assert actions(av, live) == []
 
 
-@pytest.mark.parametrize("trailing", ["\n", "\n\n", "  \n", "\t", " \r\n"])
+# Not `\r\n` (DATA-269): to the shell a carriage return is a character of
+# the last word, not whitespace.
+@pytest.mark.parametrize("trailing", ["\n", "\n\n", "  \n", "\t", " \t \n"])
 def test_a_write_tolerates_trailing_whitespace(live, ctx, av, trailing):
     body = participant()
     fire(ctx, f"curl -s -X POST '{REGISTER_URL}' -d '{{}}'" + trailing, terminal_result(body))
@@ -539,7 +545,6 @@ PROFILE_URL = f"{API}/humans/me"
 @pytest.mark.parametrize("command", [
     f"curl -s -X PATCH '{PROFILE_URL}' -d '{{\"picture_url\":\"https://cdn.example/p.png\"}}'",
     f"curl -s -X PATCH '{PROFILE_URL}' --data '{{\"u\":\"https://cdn.example/p.png\"}}'",
-    f"curl -s -X PATCH '{PROFILE_URL}' --data='{{\"u\":\"https://cdn.example/p.png\"}}'",
     f"curl -s -X PATCH '{PROFILE_URL}' --data-raw '{{\"u\":\"https://cdn.example/p.png\"}}'",
     f"curl -s -X PATCH '{PROFILE_URL}' --data-binary '{{\"u\":\"https://cdn.example/p.png\"}}'",
     f"curl -s -X PATCH '{PROFILE_URL}' --json '{{\"u\":\"https://cdn.example/p.png\"}}'",

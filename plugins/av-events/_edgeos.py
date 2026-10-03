@@ -13,6 +13,50 @@ response body leaves the sandbox: the only values that do are the operation
 name, the EdgeOS event id and participant id (UUIDs, validated as such), an
 occurrence timestamp, and the ids minted here.
 
+**The command that ran is the command that was read.** A metric counts these
+receipts as verified outcomes, so a command is classified only when the shell
+would run exactly the curl this module reads, and when in doubt it is not
+classified (the `tool.call` is still recorded, without an operation):
+
+- the curl is the whole command: its first word is `curl` and nothing comes
+  before it — no `cd`, assignment, `export`/`unset`, other command or
+  here-document, any of which can decide whether it runs or where it goes;
+  after a read only `2>&1`, `| jq …` and newlines may follow, after a write
+  nothing;
+- the shell's words are the tokeniser's: backslash-newline is removed as the
+  shell removes it, and anything else the shell would expand or reinterpret
+  (a `$` other than the base reference below, `$'…'`, unquoted braces or glob
+  characters, `#`, backticks, a carriage return) is refused;
+- the base is named only as the skill's recipes name it — `$EDGEOS_API_BASE`,
+  `${EDGEOS_API_BASE}`, or `${EDGEOS_API_BASE:-<default>}` with `<default>`
+  exactly the plugin's default — and is expanded from *this process's*
+  `EDGEOS_API_BASE`, which must itself be an https URL on an allowlisted
+  EdgeOS authority (else nothing naming the base is read: a dev tunnel gets
+  no labels). Without a default and with the variable unset, the shell
+  sends a host-less URL: not read;
+- every curl option is one this module can follow: none that moves the
+  request, changes the method (`-I`, a lower-case `-X post`, which curl sends
+  as written), builds the URL (`--variable`, `--expand-*`), or does not exist
+  (`--name=value`); options that divert the body or add to stdout (`-o`,
+  `-w`, `-v`, `-i`, `--trace`, …) keep the label but make the output
+  untrusted, like `| jq`.
+
+**What an observer cannot see.** The plugin reads its own environment; the
+shell reads the one the terminal tool gives it. Hermes's local terminal
+spawns each command from the Hermes process's environment (the one this
+plugin is loaded in), but it also carries a session snapshot of exported
+variables from one call to the next. So anything that makes the two diverge
+without appearing in the command being read — an `export` in an earlier
+call, a `~/.curlrc` written earlier (curl reads it unless `-q` comes first,
+and the skill's recipes do not pass `-q`), an `HTTPS_PROXY` in the sandbox, a
+`curl` earlier on `PATH` — is outside what a `post_tool_call` observer can
+detect. Requiring the plugin's own base to be an allowlisted authority closes
+the part it can: an `EDGEOS_API_BASE` the agent writes into `$HERMES_HOME/.env`
+(Hermes loads it with override at the next start) reaches the plugin too, and
+is then not EdgeOS. Within that limit the receipt is bound to one authority:
+an action and the read that confirms it are each classified under the same
+rule, so both name the allowlisted EdgeOS authority as this process resolves it.
+
 **Positive evidence only.** An RSVP or cancellation waits for a confirming read
 only when EdgeOS answered with the participant record (a JSON object carrying
 its `id`). A gateway error page, an empty body, a `{"message": ...}` — none of
@@ -44,7 +88,7 @@ RECEIPT_KIND = "edgeos_confirming_read"
 TARGET_SYSTEM = "edgeos"
 
 _UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-UUID_RE = re.compile(rf"^{_UUID}$")
+UUID_RE = re.compile(_UUID)  # always `fullmatch`: `$` would let a trailing newline through
 _PARAM = re.compile(r"\{([a-z_]+)\}")
 _ROLES = frozenset({"action", "confirming_read", "read", "write"})
 _METHODS = frozenset({"GET", "POST", "PATCH", "PUT", "DELETE"})
@@ -98,7 +142,7 @@ def _compile_path(path: str) -> Optional["re.Pattern[str]"]:
         out.append(f"(?P<{match.group(1)}>{_UUID})")
         last = match.end()
     out.append(re.escape(path[last:]))
-    return re.compile("^" + "".join(out) + "/?$")
+    return re.compile("".join(out) + "/?")  # matched with `fullmatch`
 
 
 def load_allowlist(path: str = SEED_FILE) -> Allowlist:
@@ -151,11 +195,28 @@ def _is_operator(token: str) -> bool:
     return bool(token) and all(c in _PUNCTUATION for c in token)
 
 
-#: curl options that change where the request actually goes, or whether the
-#: host is who it claims to be. A command using any of them is not read.
-_REFUSED_SHORT = frozenset("xKk")
-_REFUSED_LONG = frozenset({"--resolve", "--connect-to", "--proxy", "--config", "--insecure", "--socks5",
-                           "--socks5-hostname", "--preproxy", "--doh-url"})
+#: curl options that change where the request actually goes, whether the host
+#: is who it claims to be, or what the request is (`-I` is a HEAD, `--variable`
+#: with `--expand-url` builds a URL this parser never sees, `-V` sends nothing).
+#: A command using any of them is not read.
+_REFUSED_SHORT = frozenset("xKkIhMV")
+_REFUSED_LONG = frozenset({
+    "--resolve", "--connect-to", "--proxy", "--config", "--insecure", "--socks5", "--socks5-hostname",
+    "--preproxy", "--doh-url", "--socks4", "--socks4a", "--proxy1.0", "--proxy-insecure", "--doh-insecure",
+    "--unix-socket", "--abstract-unix-socket", "--dns-servers", "--cacert", "--capath",
+    "--head", "--variable", "--help", "--manual", "--version",
+})
+#: `--expand-url`, `--expand-header`, …: a value curl rewrites from `--variable`s.
+_REFUSED_LONG_PREFIX = "--expand-"
+
+#: curl options that put something other than the response body on stdout, or
+#: the body somewhere else (`-o /dev/null -w '{"id":…}'` prints a record EdgeOS
+#: never sent). The call keeps its label; its output is not evidence (`piped`).
+_REWRITE_SHORT = frozenset("oOwDiv")
+_REWRITE_LONG = frozenset({
+    "--output", "--remote-name", "--remote-name-all", "--output-dir", "--write-out", "--dump-header",
+    "--include", "--show-headers", "--verbose", "--trace", "--trace-ascii", "--stderr", "--libcurl",
+})
 
 #: curl short options that take an argument (`curl --help all`). Everything
 #: else in a cluster like `-sSfL` is a flag; `-sXPOST` and `-sX POST` both
@@ -175,9 +236,13 @@ _DATA_LONG = frozenset({
 _LONG_WITH_ARG = _DATA_LONG | frozenset({
     "--request", "--url", "--header", "--output", "--write-out", "--user", "--user-agent", "--referer",
     "--cookie", "--cookie-jar", "--range", "--max-time", "--connect-timeout", "--retry", "--retry-delay",
-    "--retry-max-time", "--proxy", "--cert", "--key", "--cacert", "--config", "--upload-file",
-    "--limit-rate", "--max-filesize", "--resolve", "--connect-to", "--interface", "--oauth2-bearer",
-    "--variable", "--expand-url", "--expand-header", "--expand-data",
+    "--retry-max-time", "--cert", "--key", "--upload-file", "--limit-rate", "--max-filesize", "--interface",
+    "--oauth2-bearer", "--output-dir", "--dump-header", "--trace", "--trace-ascii", "--stderr", "--libcurl",
+    # Refused (`_REFUSED_LONG`), but listed so the argv is read as curl reads
+    # it: the refusal, not a miscounted URL, is what keeps them out.
+    "--proxy", "--config", "--resolve", "--connect-to", "--cacert", "--capath", "--unix-socket",
+    "--abstract-unix-socket", "--dns-servers", "--socks4", "--socks4a", "--socks5", "--socks5-hostname",
+    "--proxy1.0", "--preproxy", "--doh-url", "--variable", "--expand-url", "--expand-header", "--expand-data",
 })
 
 
@@ -188,46 +253,151 @@ class HttpCall:
         self.method = method
         self.path = path
         self.query = query
-        #: The output went through `| jq …` before the agent (and this plugin)
-        #: saw it. Recognised for the label, never trusted as a confirming read.
+        #: The output is not the bare response: it went through `| jq …`, or
+        #: a curl option diverted the body or added to stdout. Recognised for
+        #: the label, never trusted as a participant record or a confirming read.
         self.piped = piped
 
 
 DEFAULT_API_BASE = "https://api.edgeos.world/api/v1"
 
-#: How the skill names the base: `${EDGEOS_API_BASE:-https://…}`,
-#: `${EDGEOS_API_BASE}` or `$EDGEOS_API_BASE`.
-_BASE_REF = re.compile(r"\$\{EDGEOS_API_BASE(?::-[^}\s]*)?\}|\$EDGEOS_API_BASE\b")
+#: The skill's three ways of naming the base (`skills/edgeos/SKILL.md`):
+#: `${EDGEOS_API_BASE:-<default>}`, `${EDGEOS_API_BASE}`, `$EDGEOS_API_BASE`.
+#: Any other parameter expansion (`:=`, `:+`, `:?`, `-`, `#`, `%`, `!`,
+#: nesting) is not one of them, and is refused as any other `$` is.
+_BASE_REF = re.compile(r"\$\{EDGEOS_API_BASE(?::-(?P<default>[^}]*))?\}|\$EDGEOS_API_BASE(?![A-Za-z0-9_])")
+#: Credentials the agent may name instead of pasting, inside double quotes
+#: only (no word splitting there): a header value, never a place.
+_CREDENTIAL_REF = re.compile(
+    r"\$(?:\{(?:EDGEOS_API_KEY|EDGEOS_BEARER_TOKEN)\}|(?:EDGEOS_API_KEY|EDGEOS_BEARER_TOKEN)(?![A-Za-z0-9_]))")
+#: What a base URL may be made of: nothing the shell would expand or split.
+_CLEAN_BASE = re.compile(r"[A-Za-z0-9._~:/%-]+")
+#: Unquoted, these are brace or pathname expansion: one word can become many.
+_EXPANDING = frozenset("{}*?[")
+#: Never read: a comment (`#` starts one only at the start of a word, a
+#: difference the tokeniser does not model), command substitution, a carriage
+#: return (`\<CR><LF>` is an escaped CR and a new line, not a continuation), NUL.
+_NEVER = frozenset("#`\r\0")
 
 
-def _api_base() -> str:
-    """`EDGEOS_API_BASE` as the agent's shell would expand it."""
-    return (os.environ.get("EDGEOS_API_BASE") or "").strip() or DEFAULT_API_BASE
+def _normalised_url(url: str) -> tuple:
+    """The URL as this module compares URLs: scheme and host lowercased, the
+    path without a trailing `/`."""
+    split = urllib.parse.urlsplit(url)
+    return split.scheme.lower(), split.netloc.lower(), split.path.rstrip("/") or "/", split.query, split.fragment
 
 
-def _base_authority() -> str:
-    """The authority of `EDGEOS_API_BASE` (e.g. a local tunnel), lowercased."""
-    split = urllib.parse.urlsplit(_api_base())
-    return split.netloc.lower() if split.scheme.lower() in ("http", "https") else ""
-
-
-def _host_allowed(authority: str, hosts: frozenset, base: str = "") -> bool:
-    """`host` or `host:443` on the allowlist, or exactly `EDGEOS_API_BASE`'s
-    authority; no userinfo."""
+def _host_allowed(authority: str, hosts: frozenset) -> bool:
+    """`host` or `host:443` on the allowlist; no userinfo."""
     authority = authority.lower()
     if "@" in authority or not authority:
         return False
-    if base and authority == base:
-        return True
     host, _, port = authority.partition(":")
     return host in hosts and port in ("", "443")
+
+
+def _allowed_base(value: str, hosts: frozenset) -> bool:
+    """An https URL on an allowlisted EdgeOS authority, with nothing a shell
+    would expand or split and no query or fragment."""
+    if not _CLEAN_BASE.fullmatch(value):
+        return False
+    split = urllib.parse.urlsplit(value)
+    return (split.scheme.lower() == "https" and _host_allowed(split.netloc, hosts)
+            and not split.query and not split.fragment)
+
+
+def _base_value(default: Optional[str], hosts: frozenset) -> Optional[str]:
+    """What the base reference expands to, as far as this process can know.
+
+    The plugin reads `EDGEOS_API_BASE` from its own environment; the shell
+    reads the terminal's, which starts from the same one. A divergence
+    between them is outside what an observer can see (module docstring).
+    Given that, the reference is read only when the value it yields is an allowed
+    EdgeOS base: the plugin's own value when set and non-empty, else (for the
+    `:-` form only) the default as written, which must be the plugin's default.
+    `$EDGEOS_API_BASE` with the variable unset yields an empty string, which
+    names no host: not read.
+    """
+    if default is not None and not (_CLEAN_BASE.fullmatch(default)
+                                    and _normalised_url(default) == _normalised_url(DEFAULT_API_BASE)):
+        return None
+    value = os.environ.get("EDGEOS_API_BASE")
+    if not value:  # `:-` substitutes the default for unset and for empty alike
+        if default is None:
+            return None
+        value = default  # as written: the shell sends these exact characters
+    return value if _allowed_base(value, hosts) else None
+
+
+def _shell_words(command: str, hosts: frozenset) -> Optional[str]:
+    """The command as the shell would hand it to word splitting, or None.
+
+    Performs the two things the shell does here that `shlex` does not: a
+    backslash-newline outside single quotes is removed outright (joined with
+    nothing), and the skill's base reference is expanded (`_base_value`).
+    Refuses everything else that would make the shell's words differ from the
+    tokeniser's: any other `$` outside single quotes (variables, `$'…'`,
+    `$"…"`, other parameter expansions), unquoted brace or glob characters,
+    the `_NEVER` characters, an unclosed quote or a trailing backslash.
+    """
+    if any(c in _NEVER for c in command) or "$(" in command:
+        return None
+    out: list[str] = []
+    quote = ""
+    i, n = 0, len(command)
+    while i < n:
+        c = command[i]
+        if quote == "'":
+            out.append(c)
+            quote = "" if c == "'" else quote
+            i += 1
+            continue
+        if c == "\\":
+            if i + 1 >= n:
+                return None
+            following = command[i + 1]
+            if following == "\n":
+                pass  # a line continuation: removed
+            elif quote == '"' and following == "$":
+                out.append("$")  # `\$` inside double quotes is a literal `$`
+            else:
+                out.append(command[i:i + 2])  # the tokeniser applies the same escape
+            i += 2
+            continue
+        if c == "$":
+            base = _BASE_REF.match(command, i)
+            if base is not None:
+                value = _base_value(base.group("default"), hosts)
+                if value is None:
+                    return None
+                out.append(value)
+                i = base.end()
+                continue
+            credential = _CREDENTIAL_REF.match(command, i)
+            if credential is not None and quote == '"':
+                out.append(credential.group(0))
+                i = credential.end()
+                continue
+            return None
+        if quote == '"':
+            quote = "" if c == '"' else quote
+        elif c in "'\"":
+            quote = c
+        elif c in _EXPANDING:
+            return None
+        out.append(c)
+        i += 1
+    if quote:
+        return None
+    return "".join(out)
 
 
 def _tokens(command: str) -> Optional[list[str]]:
     try:
         lexer = shlex.shlex(command, posix=True, punctuation_chars=_PUNCTUATION)
-        lexer.whitespace = " \t\r"  # a newline separates commands: an operator, not a space
+        lexer.whitespace = " \t"  # a newline separates commands: an operator, not a space
         lexer.whitespace_split = True
+        lexer.commenters = ""  # `#` never reaches here (`_NEVER`)
         return list(lexer)
     except ValueError:
         return None
@@ -236,22 +406,22 @@ def _tokens(command: str) -> Optional[list[str]]:
 _STDERR_TO_STDOUT = "2>&1"
 
 
-def _curl_segment(tokens: list[str]) -> Optional[tuple[int, list[str], list[str]]]:
-    """(index of `curl`, its arguments, whatever follows them), or None.
+def _curl_segment(tokens: list[str]) -> Optional[tuple[list[str], list[str]]]:
+    """(curl's arguments, whatever follows them), or None.
 
-    None unless there is exactly one `curl` word and it starts a command: one
-    anywhere else — `echo curl …`, a `for` body, a second command — makes the
-    call ambiguous. The arguments end at the first control operator or `2>&1`;
-    the rest is the tail, which `_read_tail_ok` judges.
+    None unless the command *is* the curl: its first word is `curl` — not a
+    path to some other program called curl, and nothing before it (no `cd`,
+    no assignment, no `export`, no other command, no here-document): anything
+    earlier can decide whether the curl runs at all, or where it goes — and
+    there is no other `curl` word. The arguments end at the first control
+    operator or `2>&1`; the rest is the tail, which `_read_tail_ok` judges.
     """
-    starts = [i for i, t in enumerate(tokens) if t == "curl" or t.endswith("/curl")]
-    if len(starts) != 1:
+    if not tokens or tokens[0] != "curl":
         return None
-    start = starts[0]
-    if start > 0 and not _is_operator(tokens[start - 1]):
+    if any(t == "curl" or t.endswith("/curl") for t in tokens[1:]):
         return None
     rest: list[str] = []
-    i = start + 1
+    i = 1
     while i < len(tokens):
         if tokens[i:i + 3] == ["2", ">&", "1"]:
             rest.append(_STDERR_TO_STDOUT)
@@ -261,8 +431,8 @@ def _curl_segment(tokens: list[str]) -> Optional[tuple[int, list[str], list[str]
         i += 1
     for index, token in enumerate(rest):
         if token == _STDERR_TO_STDOUT or _is_operator(token):
-            return start, rest[:index], rest[index:]
-    return start, rest, []
+            return rest[:index], rest[index:]
+    return rest, []
 
 
 def _is_newlines(token: str) -> bool:
@@ -290,11 +460,11 @@ def _read_tail_ok(tail: list[str]) -> tuple[bool, bool]:
     return i == len(tail), piped
 
 
-def _parse_curl(args: list[str]) -> Optional[tuple[str, list[str], set]]:
-    """(METHOD, [url arguments], {positions in `args` holding a request body}),
-    or None if the argv cannot be read."""
+def _parse_curl(args: list[str]) -> Optional[tuple[str, list[str], set, bool]]:
+    """(METHOD, [url arguments], {positions in `args` holding a request body},
+    output rewritten), or None if the argv cannot be read as curl reads it."""
     method_x: Optional[str] = None
-    get = data = upload = False
+    get = data = upload = rewritten = False
     urls: list[str] = []
     bodies: set = set()
     i = 0
@@ -305,18 +475,20 @@ def _parse_curl(args: list[str]) -> Optional[tuple[str, list[str], set]]:
             urls.extend(args[i:])
             break
         if token.startswith("--"):
-            name, eq, value = token.partition("=")
-            if name in _REFUSED_LONG:
+            # curl has no `--name=value` form: `--request=POST` is an unknown
+            # option, and curl sends nothing.
+            if "=" in token or token in _REFUSED_LONG or token.startswith(_REFUSED_LONG_PREFIX):
                 return None
-            if name in _LONG_WITH_ARG and not eq:
+            name, value = token, ""
+            if name in _LONG_WITH_ARG:
                 if i >= len(args):
                     return None
                 value = args[i]
                 if name in _BODY_LONG:
                     bodies.add(i)
                 i += 1
-            elif name in _BODY_LONG:
-                bodies.add(i - 1)  # `--data=…`: the value is in this token
+            if name in _REWRITE_LONG:
+                rewritten = True
             if name == "--request":
                 method_x = value
             elif name == "--get":
@@ -332,6 +504,8 @@ def _parse_curl(args: list[str]) -> Optional[tuple[str, list[str], set]]:
                 flag = token[j]
                 if flag in _REFUSED_SHORT:
                     return None
+                if flag in _REWRITE_SHORT:
+                    rewritten = True
                 if flag in _SHORT_WITH_ARG:
                     value = token[j + 1:]
                     if not value:
@@ -354,8 +528,15 @@ def _parse_curl(args: list[str]) -> Optional[tuple[str, list[str], set]]:
                     get = True
         else:
             urls.append(token)
+    if get and data:
+        # `-G` moves the data into the query string: the URL curl requests is
+        # not the URL argument, and its query may name another occurrence.
+        return None
     if method_x is not None:  # -X wins over everything, as it does in curl
-        method = method_x.strip().upper()
+        # curl sends the method exactly as written (`-X post` is `post`).
+        if method_x not in _METHODS:
+            return None
+        method = method_x
     elif get:
         method = "GET"
     elif upload:
@@ -364,52 +545,56 @@ def _parse_curl(args: list[str]) -> Optional[tuple[str, list[str], set]]:
         method = "POST"
     else:
         method = "GET"
-    return method, urls, bodies
+    return method, urls, bodies, rewritten
+
+
+def _printable(text: str) -> bool:
+    return all(0x20 < ord(c) < 0x7F or ord(c) > 0x9F for c in text)
 
 
 def http_call(tool_name: Any, args: Any, allowlist: Allowlist = ALLOWLIST) -> Optional[HttpCall]:
     """The one EdgeOS request a carrier tool call makes, or None.
 
-    None whenever it is ambiguous or foreign: not a carrier tool; any http(s)
-    URL in the command on a host other than EdgeOS (or on a port other than
-    443); not exactly one `curl`, at the start of a command; not exactly one
-    URL argument; two different EdgeOS paths anywhere in the command, headers
-    included. An unrecognised call only loses a label; a misread one would
-    invent an RSVP.
+    None whenever it is ambiguous or foreign: not a carrier tool; the command
+    is not one `curl` and nothing else (anything before it, or any other
+    `curl` word); a shell form the tokeniser does not reproduce
+    (`_shell_words`); any http(s) URL in the command on a host other than
+    EdgeOS (or on a port other than 443); not exactly one URL argument, or
+    one with whitespace or a control character; two different EdgeOS paths
+    anywhere in the command, headers included; a curl option that moves the
+    request or changes what it is. An unrecognised call only loses a label;
+    a misread one would invent an RSVP.
     """
     if not isinstance(tool_name, str) or tool_name not in allowlist.carriers or not isinstance(args, dict):
         return None
     command = args.get("command")
     if not isinstance(command, str) or not command or len(command) > MAX_COMMAND_CHARS:
         return None
-    # A backslash-newline is a line continuation, not a new command: the
-    # skill's own recipes are written that way (`skills/edgeos/SKILL.md` §6).
-    # Trailing whitespace (a final newline) runs nothing.
-    # The skill's recipes name the base as `${EDGEOS_API_BASE:-…}`; the shell
-    # expands it from the same environment this plugin runs in.
-    command = _BASE_REF.sub(lambda _m: _api_base(), command)
-    base = _base_authority()
-    command = command.replace("\\\r\n", " ").replace("\\\n", " ").rstrip()
-    if "`" in command or "$(" in command:  # command substitution: the shell decides, not us
+    # Line continuations are joined and the skill's base reference expanded,
+    # as the shell would (the skill's recipes are written that way,
+    # `skills/edgeos/SKILL.md` §6). Leading and trailing whitespace (a final
+    # newline) runs nothing.
+    words = _shell_words(command, allowlist.hosts)
+    if words is None:
         return None
-    tokens = _tokens(command)
+    tokens = _tokens(words.strip(" \t\n"))
     if tokens is None:
         return None
     found = _curl_segment(tokens)
     if found is None:
         return None
-    start, segment, tail = found
+    segment, tail = found
     parsed = _parse_curl(segment)
     if parsed is None:
         return None
-    method, urls, bodies = parsed
+    method, urls, bodies, rewritten = parsed
     # Every word of the command that is not a request body: request targets,
-    # headers, other options, anything before or after the curl.
-    words = [t for i, t in enumerate(tokens) if i - start - 1 not in bodies]
-    authorities = [m.group(1) for word in words for m in _ANY_URL.finditer(word)]
-    if not authorities or not all(_host_allowed(a, allowlist.hosts, base) for a in authorities):
+    # headers, other options, anything after the curl.
+    others = [t for i, t in enumerate(tokens) if i - 1 not in bodies]
+    authorities = [m.group(1) for word in others for m in _ANY_URL.finditer(word)]
+    if not authorities or not all(_host_allowed(a, allowlist.hosts) for a in authorities):
         return None
-    if len(urls) != 1:
+    if len(urls) != 1 or not _printable(urls[0]):
         return None
     piped = False
     if tail:
@@ -419,16 +604,16 @@ def http_call(tool_name: Any, args: Any, allowlist: Allowlist = ALLOWLIST) -> Op
         if not acceptable:
             return None
     split = urllib.parse.urlsplit(urls[0])
-    if split.scheme.lower() not in ("http", "https") or not _host_allowed(split.netloc, allowlist.hosts, base):
+    if split.scheme.lower() not in ("http", "https") or not _host_allowed(split.netloc, allowlist.hosts):
         return None
     path = split.path.rstrip("/") or "/"
     # Every EdgeOS URL in the command must name this path: one in a header
     # (`-H "Referer: …"`) that names another is a second request in disguise.
-    for word in words:
+    for word in others:
         for match in re.finditer(r"https?://[^/\s'\"`<>|;&()\\]*(/[^\s'\"`?#<>|;&()\\]*)", word, re.IGNORECASE):
             if (match.group(1).rstrip("/") or "/") != path:
                 return None
-    return HttpCall(method, path, parse_query(split.query), piped)
+    return HttpCall(method, path, parse_query(split.query), piped or rewritten)
 
 
 def parse_query(query: str) -> dict:
@@ -444,7 +629,7 @@ def match_operation(call: HttpCall, allowlist: Allowlist = ALLOWLIST) -> Optiona
     for op in allowlist.operations:
         if op.method != call.method:
             continue
-        found = op.pattern.match(call.path)
+        found = op.pattern.fullmatch(call.path)
         if found:
             return op, {k: v.lower() for k, v in found.groupdict().items()}
     return None
@@ -490,7 +675,7 @@ def participant_record(body: Any, event_id: str) -> Optional[dict]:
     if not isinstance(body, dict) or "detail" in body or "error" in body:
         return None
     participant = body.get("id")
-    if not (isinstance(participant, str) and UUID_RE.match(participant)):
+    if not (isinstance(participant, str) and UUID_RE.fullmatch(participant)):
         return None
     named = body.get("event_id")
     if named is not None and (not isinstance(named, str) or named.lower() != event_id):
@@ -526,7 +711,7 @@ def rsvp_statuses(body: Any, query: dict) -> list[tuple[str, Optional[str], Opti
             continue
         event_id = item.get("id")
         status = item.get("my_rsvp_status")
-        if not (isinstance(event_id, str) and UUID_RE.match(event_id)) or not (status is None or isinstance(status, str)):
+        if not (isinstance(event_id, str) and UUID_RE.fullmatch(event_id)) or not (status is None or isinstance(status, str)):
             continue
         occurrence: Optional[str]
         if single:
@@ -565,7 +750,7 @@ def _valid_pending(value: Any) -> bool:
         and isinstance(at, (int, float)) and not isinstance(at, bool)
         and isinstance(value.get("reversal"), bool)
         and (reverses is None or valid_id(reverses))
-        and isinstance(participant, str) and UUID_RE.match(participant) is not None
+        and isinstance(participant, str) and UUID_RE.fullmatch(participant) is not None
     )
 
 
@@ -577,7 +762,7 @@ def _valid_key(key: Any) -> bool:
     if not isinstance(key, str) or "|" not in key:
         return False
     event_id, _, occurrence = key.partition("|")
-    return UUID_RE.match(event_id) is not None and (occurrence == "" or iso_from_text(occurrence) == occurrence)
+    return UUID_RE.fullmatch(event_id) is not None and (occurrence == "" or iso_from_text(occurrence) == occurrence)
 
 
 class Ledger:
@@ -711,7 +896,10 @@ def plan(op: Operation, params: dict, call: HttpCall, *, ok: bool, status: Optio
         event_id = params.get("event_id")
         if not event_id:
             return []
-        record = participant_record(body, event_id) if ok and exit_code in (None, 0) else None
+        # Output that is not the bare response (`HttpCall.piped`) is not
+        # EdgeOS's answer, so it carries no participant record.
+        trusted = ok and exit_code in (None, 0) and not call.piped
+        record = participant_record(body, event_id) if trusted else None
         occurrence = occurrence_of(record.get("occurrence_start")) if record else ""
         if occurrence is None:
             # A record for an occurrence we cannot name: report the attempt,
