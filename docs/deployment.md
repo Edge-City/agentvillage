@@ -74,7 +74,7 @@ where this page is briefer.
 |---|---|
 | `tag` | An annotated tag on this repo's `main`, e.g. `v2.0.0-rc8`. Never a branch. |
 | `dry_run` | Default on: prints the plan and changes nothing. |
-| `scope` | `test-tenants` (default, the team's own canary tenants) or `all`. |
+| `scope` | `test-tenants` (default: the canary tenants listed in the `ROLL_TEST_TENANTS` repository variable, one per person who rolls) or `all`. |
 | `pause_seconds` | Wait after each resident before checking it. Default 60, minimum 10. |
 | `allow_seed_change` | Default off. The data owner's confirmation that ingest already carries changed plugin seed files. |
 
@@ -85,7 +85,13 @@ where this page is briefer.
    `edgeos_tool_allowlist.json` or `cron_job_names.json`, release the data
    pipeline with those seeds first, or the new events are quarantined. The
    button refuses such a tag until `allow_seed_change` is ticked.
-3. Post one line in the group chat. Each resident's agent restarts once, and
+3. Make sure your own agent is a canary. Each agent answers only its owner's
+   Telegram, so the human check in the procedure below only works on a tenant
+   you own. `ROLL_TEST_TENANTS` on the controlplane repo holds one tenant per
+   person who rolls; if yours is missing, ask a controlplane admin to add it
+   before you start. The dry-run summary lists the canaries, so confirm yours
+   is there.
+4. Post one line in the group chat. Each resident's agent restarts once, and
    Telegram messages sent during that restart are dropped.
 
 **The staged procedure.** Every roll is two runs with a human in between,
@@ -95,9 +101,11 @@ answers.
    `EDGE_HERMES_REF`, whether seeds changed, the residents in order.
 2. Real run, same inputs. From this moment every new signup and every recreated
    VM gets the new tag, even if you stop here.
-3. Message a test tenant's agent on Telegram and get a reply. Then confirm its
-   events still arrive in the research database and nothing was quarantined
-   (the button cannot see ingest). No reply after a second try: roll back.
+3. Message your own canary agent on Telegram and get a reply. Only the owner
+   can do this, which is why every roller's tenant is a canary. Then confirm
+   its events still arrive in the research database and nothing was
+   quarantined (the button cannot see ingest). No reply after a second try:
+   roll back.
 4. Leave the test tenants on the tag for 48 hours of real use. The readiness
    gates in `agentvillage-data/docs/readiness-checklist.md` are measured over
    them during that time.
