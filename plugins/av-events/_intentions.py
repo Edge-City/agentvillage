@@ -54,7 +54,7 @@ INDEX_STATUSES = frozenset({"active", "archived", "deleted", "withdrawn", "compl
 OTHER_STATUS = "other"
 
 #: Statuses that take an intention out of the funnel. The Index skill archives
-#: stale signals with `status="archived"` (`skills/index-network/heartbeat.md`).
+#: stale signals with `status="archived"`.
 WITHDRAWN_STATUSES = frozenset({"archived", "deleted", "withdrawn"})
 
 #: §4.1 `source`. `index` belongs to the poller; the plugin writes the rest.

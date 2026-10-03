@@ -25,6 +25,7 @@ import { isAbsolute, join } from "node:path";
 import {
   type BriefOpportunity,
   confirmOpportunityDeliveriesViaMcp,
+  attachIndexLinks,
   fetchOpportunitiesFromMcp,
   filterDedupedOpportunities,
   villageDate,
@@ -122,7 +123,7 @@ export async function dropOpportunity(options: {
     // recorded in deliveredToday so it will not resurface today.
   }
 
-  return { opportunity: chosen };
+  return { opportunity: attachIndexLinks(chosen) };
 }
 
 async function main(): Promise<void> {

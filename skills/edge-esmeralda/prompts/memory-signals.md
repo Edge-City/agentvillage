@@ -13,12 +13,11 @@ When you do run, read `MEMORY.md`, compare it against what the Index already has
 1. **Gate.** Reply silently and stop if any of these hold:
    - The preflight script output says `wakeAgent:false`.
    - `MEMORY.md` does not exist or has no substantive content about the user.
-   - The user has not completed onboarding (you will normally know this from session context; if genuinely unsure, check via `read_user_contexts` and stop silently if onboarding is incomplete).
    - There is no preflight `memoryHash`, and `memorySignals.lastRunDate` in `memory/heartbeat-state.json` already equals today's date in Asia/Kolkata (you have already run today). If the preflight woke you with a `memoryHash`, process the changed memory even when `lastRunDate` is today.
 
    The script may provide a `memoryHash`. Keep that value for the final state update; do not recompute it with generated code.
 
-2. **Read the current graph.** Call `read_premises()` and `read_intents()`. These — plus `memorySignals.captured` in `memory/heartbeat-state.json` — are your dedup baseline.
+2. **Read the current graph.** Call `read_premises()` and `list_intents()`. These — plus `memorySignals.captured` in `memory/heartbeat-state.json` — are your dedup baseline.
 
 3. **Diff memory against the graph.** Go through `MEMORY.md` and collect candidates:
    - **Durable profile facts** (role, skills, focus areas, location, affiliations) that no existing premise covers → candidates for `create_premise`.
@@ -29,9 +28,9 @@ When you do run, read `MEMORY.md`, compare it against what the Index already has
 
 4. **Create, capped.** From the candidates, create at most **2 premises** (`create_premise`) and at most **1 signal** (`create_intent(description=...)`) per run — favor the most specific, most clearly current items. Phrase intent descriptions close to the user's own words from memory. If `create_intent` is rejected as too vague, do **not** retry with a paraphrase — record the candidate under `memorySignals.captured` with a `rejected` note and move on.
 
-5. **Re-check discovery.** If you created at least one record, call `discover_opportunities` once so the freshly-thickened graph is matched before the morning brief is prepared. If it returns `status="queued"`, that is fine — the run completes server-side; do not poll, do not wait, do not call `list_opportunities`.
+5. **Stop after create.** `create_intent` starts matching. Do not call `list_opportunities` or any discovery tool from this pass. Do not write `dreaming.lastRunDate` — the morning brief records that when its opportunity list succeeds. If `create_intent` returns `intent_needs_revision`, nothing was created.
 
-6. **Record and stop.** Update `memory/heartbeat-state.json`: set `memorySignals.lastRunDate` to today's village (Asia/Kolkata) date; if the preflight script provided `memoryHash`, set `memorySignals.lastMemoryHash` to exactly that value; append a short normalized fingerprint of each item you created (or that was rejected) to `memorySignals.captured`, keeping only the last 20. Preserve every other key in the file (e.g. `prepared`, `deliveredToday`, `signalElicitation`, `questionDelivery`) — read the whole object, add to it, write it back. End your turn with the host-specific no-reply marker.
+6. **Record and stop.** Update `memory/heartbeat-state.json`: set `memorySignals.lastRunDate` to today's village (Asia/Kolkata) date; if the preflight script provided `memoryHash`, set `memorySignals.lastMemoryHash` to exactly that value; append a short normalized fingerprint of each item you created (or that was rejected) to `memorySignals.captured`, keeping only the last 20. Preserve every other key in the file (e.g. `prepared`, `deliveredToday`, `signalElicitation`, `questionDelivery`, `dreaming`) — read the whole object, add to it, write it back. End your turn with the host-specific no-reply marker.
 
 # Hard rules
 - Never message the user from this pass. No questions, no summaries, no "I noticed…". The only output is the no-reply marker.

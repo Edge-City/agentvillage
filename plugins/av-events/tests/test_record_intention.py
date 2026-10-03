@@ -1268,9 +1268,7 @@ def test_success_results_never_trip_the_failure_heuristic(tctx, index, answer):
 
 
 #: Files that mention `create_intent` without telling the agent to call it.
-NOT_AN_INSTRUCTION = {
-    "skills/index-network/heartbeat.md",  # "Do not call `create_intent` ... here."
-}
+NOT_AN_INSTRUCTION: set[str] = set()
 
 
 def test_f8_no_overlay_prompt_calls_create_intent_unconditionally():

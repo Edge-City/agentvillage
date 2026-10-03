@@ -21,25 +21,24 @@ Deliver exactly one opportunity card. The script owns selection, dedup, and ledg
 3. **If stdout is JSON, parse it.** It has this shape:
 
    ```json
-   { "opportunity": { "name": "...", "mainText": "...", "profileUrl": "...", "acceptUrl": "...", "feedCategory": "...", "redelivery": false } }
+   { "opportunity": { "name": "...", "mainText": "...", "userUrl": "...", "opportunityUrl": "...", "feedCategory": "...", "redelivery": false } }
    ```
 
 4. **Render one short card and deliver it.** Your final assistant reply is the whole message — one or two lines, no header, no calendar, no extra sections. Follow the morning-brief card voice:
 
-   - Link the person's name to `profileUrl`.
-   - State the overlap in one specific phrase, drawn from `mainText`.
-   - End with an action: for a `connection`, `[say hi]({acceptUrl})`; for a `connector-flow` (help-your-community) card, `[make intro]({acceptUrl})`.
-   - Use `acceptUrl` and `profileUrl` exactly as given. If either is missing, render that action or name as plain text — never invent a URL.
+   - For a `connection`: `[Name](userUrl) — one specific overlap from mainText, [message Name](opportunityUrl).`
+   - For a `connector-flow` card: `[Name](userUrl) — mainText. Know anyone, make intro` with `make intro` as plain text.
+   - `userUrl` is `https://index.network/u/<userId>` and `opportunityUrl` is `https://index.network/o/<opportunityId>`, using only ids in the script output. If an id is missing, render that name or action as plain text. Do not use `acceptUrl`.
 
    Example shape (not a code block — your reply is plain chat text):
 
-   > Quick one for you — [Maya]({profileUrl}) is working on agent memory layers for long-running workflows. Direct overlap with how you think about persistent context, [say hi]({acceptUrl}).
+   > Quick one for you — [Maya]({userUrl}) is working on agent memory layers for long-running workflows. Direct overlap with how you think about persistent context, [message Maya]({opportunityUrl}).
 
 # Hard rules
 - Always call `bun skills/index-network/scripts/drop-opportunity.ts` exactly once. Never reimplement selection, dedup, or confirmation in generated code.
 - One attempt at the script. Non-zero exit → `[SILENT]` immediately.
 - Never call MCP tools in this pass — the script owns listing and ledger confirmation.
 - Deliver at most one opportunity. Never pad with a second card, calendar, or announcements.
-- Never construct URLs yourself; use only `profileUrl` / `acceptUrl` from the script output.
+- Never construct URLs except `https://index.network/u/<userId>` and `https://index.network/o/<opportunityId>` from ids in the script output.
 - Never expose internal IDs, raw JSON, internal markers, or internal vocabulary in the reply.
 - Output ONLY the final message. No preamble, no "let me…", no restating the card before the answer.

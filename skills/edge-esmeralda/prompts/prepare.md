@@ -10,7 +10,7 @@ The brief should feel like a morning interpretation, not a deterministic report.
 
 If there is a grounded selfie/closeout context in the deterministic input, use it only as a bridge to the real village: photos, goodbyes, and follow-ups with people the user met. Do not advertise virtual surfaces as the point. The closing question can invite reflection on whether AgentVillage helped the user meet, message, or better understand anyone, but it should still be grounded in the day and the user's context.
 
-Use the calendar as the substrate: RSVPs, highlighted sessions, venues, timing, announcements, weather, and what the day makes possible. Use the user model as the lens: local user notes, memory notes, recent daily notes, profile phrases, prior corrections, and recent interests. People and community asks are not filler; include the high-quality ones first when they can create real follow-through.
+Use the calendar as the substrate: RSVPs, highlighted sessions, venues, timing, announcements, weather, and what the day makes possible. Use the user model as the lens: local user notes, memory notes, recent daily notes, profile phrases, prior corrections, and recent interests. People and community asks are not filler. Every brief includes the `connectionOpportunities` section — at most three, already chosen. Use only those cards. If fewer than three exist, include every real one and do not invent fillers.
 
 The brief should primarily answer:
 
@@ -33,9 +33,15 @@ Also avoid emotional interpretations, status/ambition assumptions, personal-life
 - Use **Asia/Kolkata** (IST, Goa) for all date boundaries and displayed event times.
 - Render event times from each event's `timeLocal` value (IST) exactly; do not derive times yourself.
 - Deterministic context comes only from `skills/index-network/scripts/stage-daily-brief.ts --prepare-context`. It builds admin announcements, RSVPs, today's EdgeOS calendar selection, weather, Index people/community cards, pending questions, and compact user-model context. Do not manually re-fetch announcements, RSVPs, calendar, people/community cards, pending questions, or profile context.
-- Use `profileUrl`, `acceptUrl`, and `negotiationUrl` exactly as provided in the context. Never construct, shorten, or modify URLs.
-- Treat `negotiationUrl` as private context for understanding why the person/community item surfaced. Do not include it as a visible link in people/community items; it creates a second action path and weakens click attribution.
-- For each person/community item you include, lead with the reason: why this person, why now, and what makes the read truthful. Then offer exactly one CTA using the provided action URL, usually `acceptUrl`. If you include more than one item, add one compact correction path for the whole section: "If any of these reads are off, reply with what I should correct."
+- Link people, signals, and opportunities with the context URLs `userUrl`, `intentUrl`, and `opportunityUrl`. Those open Index (`/u/`, `/i/`, `/o/`). Do not use `acceptUrl` or any `/c/` connect redirect. Do not construct, shorten, or modify a URL that is not one of those three fields.
+- Treat `negotiationUrl` as private context. Do not include it as a visible link.
+- Direct cards, and only the cards in `connectionOpportunities`:
+  - Heading **3 conversations await you** when there are three. Otherwise **N conversation awaits you** or **N conversations await you** with the real count. Omit the section only when that list is empty.
+  - One bullet per card: `[Name](userUrl) — one specific overlap from mainText, [message Name](opportunityUrl).`
+  - If `userUrl` or `opportunityUrl` is missing, render that name or action as plain text.
+- Community cards from `communityOpportunities`, under **Help your community**: `[Name](userUrl) — mainText. Know anyone, make intro`. `make intro` stays plain text.
+- Do not add a correction-path sentence. Do not write "say hi".
+- If `diagnostics.dreamingFresh` is false, today's opportunity list did not succeed. Do not say new conversations just arrived.
 - Organizer announcements come only from `announcements[]`.
 - Frame the user model as provisional and correctable. Do not infer emotions, personal life, ambitions, needs, or desire for social exposure.
 
@@ -65,7 +71,7 @@ A good note often has:
 - a brief morning opening, optionally including weather if present;
 - one interpreted throughline for the day;
 - a few concrete calendar anchors;
-- a small number of reason-first people/community items, only when they support real follow-through;
+- the conversations section from `connectionOpportunities` (at most three), then **Help your community** when `communityOpportunities` is non-empty;
 - one closing question that helps the user correct or sharpen the read.
 
 The question should sound like:
