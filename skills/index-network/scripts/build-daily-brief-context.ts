@@ -632,11 +632,25 @@ function listedCard(row: Record<string, unknown>): BriefOpportunity | null {
  * when the object or the array is missing, so a failure is never "no cards".
  */
 export function parseListedOpportunities(text: string): BriefOpportunity[] {
-  return toolJsonArray(text, "opportunities")
+  return parseListedOpportunitiesCounted(text).cards;
+}
+
+/** Warning code for Index cards dropped because their id is missing or not a valid id. */
+export const UNIDENTIFIED_CARD_CODE = "mcp-card-unidentified";
+
+/**
+ * parseListedOpportunities, plus how many cards were dropped whole because
+ * their opportunity id is missing or not a valid id: such a card could not be
+ * deduped or marked, so it never reaches selection on any path.
+ */
+export function parseListedOpportunitiesCounted(text: string): { cards: BriefOpportunity[]; unidentified: number } {
+  const cards = toolJsonArray(text, "opportunities")
     .map((row) => asRecord(row))
     .filter((row): row is Record<string, unknown> => Boolean(row))
     .map(listedCard)
     .filter((card): card is BriefOpportunity => Boolean(card));
+  const identified = cards.filter((card) => card.opportunityId !== undefined && ENTITY_ID.test(card.opportunityId));
+  return { cards: identified, unidentified: cards.length - identified.length };
 }
 
 export async function readDreamingDate(stateFile: string): Promise<string | undefined> {
@@ -878,8 +892,16 @@ export async function fetchOpportunitiesFromMcp(opts: {
   apiKey: string;
   mcpUrl: string;
 }): Promise<BriefOpportunity[]> {
+  return (await listOpportunitiesFromMcp(opts)).cards;
+}
+
+/** fetchOpportunitiesFromMcp, plus the count of cards dropped for a missing or invalid id. */
+export async function listOpportunitiesFromMcp(opts: {
+  apiKey: string;
+  mcpUrl: string;
+}): Promise<{ cards: BriefOpportunity[]; unidentified: number }> {
   const text = await callIndexTool(opts, "list_opportunities", { statuses: ["pending"], limit: 20 });
-  const root = toolJsonObject(text);
+  const root = toolJsonObject(text)?.root;
   if (root?.success === false) {
     const errorText = typeof root.error === "string" ? root.error : "";
     const messageText = typeof root.message === "string" ? root.message : "";
@@ -887,7 +909,7 @@ export async function fetchOpportunitiesFromMcp(opts: {
       throw new Error("setup required before people suggestions");
     }
   }
-  return parseListedOpportunities(text);
+  return parseListedOpportunitiesCounted(text);
 }
 
 export async function buildDailyBriefContext(options: {
@@ -924,7 +946,8 @@ export async function buildDailyBriefContext(options: {
   if (apiKey) {
     try {
       const deliveredIds = await readDeliveredIds(stateFile, date);
-      const fetched = await fetchOpportunitiesFromMcp({ apiKey, mcpUrl });
+      const { cards: fetched, unidentified } = await listOpportunitiesFromMcp({ apiKey, mcpUrl });
+      if (unidentified > 0) warnings.push(`dropped ${unidentified} opportunity card(s): ${UNIDENTIFIED_CARD_CODE}`);
       const deduped = filterDedupedOpportunities(fetched, deliveredIds);
       opportunities = filterActionableOpportunities(deduped);
       if (opportunities.length < deduped.length) {

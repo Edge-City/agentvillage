@@ -635,4 +635,17 @@ describe("main", () => {
       { summary: "dropped" },
     ]);
   });
+
+  test("a card without a valid id is left out of the follow-up", async () => {
+    const rows = [
+      { id: "../../x", url: "https://index.network/o/x", status: "pending", viewerRole: "party", headline: "h", peer: { name: "Bad Path" } },
+      { url: "https://index.network/o/y", status: "pending", viewerRole: "party", headline: "h", peer: { name: "No Id" } },
+      { id: "has space", status: "pending", viewerRole: "agent", headline: "h", peer: { name: "Space Id" } },
+    ];
+    const only = await run({ list_opportunities: () => listOpportunitiesText(rows) }, STATE);
+    expect(only.out).toBe("[SILENT]");
+    expect(await Bun.file("state.json").text()).toBe(STATE);
+    const mixed = await run({ list_opportunities: () => listOpportunitiesText([...rows, opp("Maya", "pending", 1)]) });
+    expect(JSON.parse(mixed.out).needsAttention.map((c: { name: string }) => c.name)).toEqual(["Maya"]);
+  });
 });

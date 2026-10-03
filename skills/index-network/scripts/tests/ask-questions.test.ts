@@ -245,4 +245,16 @@ describe("askQuestions against Index's answers", () => {
     const result = await askQuestions({ date: "2026-06-17", stateFile: "state.json", apiKey: "test-key" });
     expect(result).toEqual({ name: "Maya", headline: "memory systems", opportunityUrl: "https://index.network/o/opp-maya" });
   });
+
+  test("a card without a valid id is never the evening card", async () => {
+    tempWorkspace();
+    mockList(listText([
+      { id: "../../x", url: "https://index.network/o/x", status: "pending", viewerRole: "party", headline: "h", peer: { name: "Bad Path" } },
+      { url: "https://index.network/o/y", status: "pending", viewerRole: "party", headline: "h", peer: { name: "No Id" } },
+      { id: "has space", status: "pending", viewerRole: "agent", headline: "h", peer: { name: "Space Id" } },
+    ] as unknown as ReturnType<typeof card>[]));
+    const result = await askQuestions({ date: "2026-06-17", stateFile: "state.json", apiKey: "test-key" });
+    expect(result).toEqual({ silent: true, reason: "nothing-waiting" });
+    expect(await Bun.file("state.json").exists()).toBe(false);
+  });
 });

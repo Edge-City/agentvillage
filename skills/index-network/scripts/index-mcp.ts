@@ -216,18 +216,54 @@ export async function callIndexTool(
   throw new IndexMcpError("mcp-bad-response");
 }
 
+/** Index of the `}` that closes the JSON object opening at `start`, or -1. */
+function objectEnd(text: string, start: number): number {
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (ch === "\\") i++;
+      else if (ch === '"') inString = false;
+    } else if (ch === '"') {
+      inString = true;
+    } else if (ch === "{" || ch === "[") {
+      depth++;
+    } else if (ch === "}" || ch === "]") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
 /**
- * The JSON object a list tool puts after its markdown lead: the first
- * line-start `{` from which the rest of the text parses as one object.
- * Null when there is none.
+ * Where a list tool's JSON object may start: at the start of the text, or
+ * directly after a blank line (CRLF and trailing spaces allowed), with only
+ * whitespace before the `{`. Of those, a `{` that cannot open a JSON object
+ * (a lead line such as "{Heads up} ...") is passed over; the first one that
+ * can is the only one read.
  */
-export function toolJsonObject(text: string): Record<string, unknown> | null {
-  for (const match of text.matchAll(/^[ \t]*\{/gm)) {
+const OBJECT_START = /(?:^\s*|\n[ \t]*\r?\n[ \t]*)\{/g;
+const OPENS_OBJECT = /^\{\s*(?:"|\}|$)/;
+
+/**
+ * The JSON object a list tool puts after its markdown lead, and whether
+ * anything other than whitespace follows it. Null when there is no
+ * candidate, or when the one candidate does not parse as an object; a later
+ * object is never read in its place.
+ */
+export function toolJsonObject(text: string): { root: Record<string, unknown>; trailing: boolean } | null {
+  for (const match of text.matchAll(OBJECT_START)) {
+    const start = (match.index ?? 0) + match[0].length - 1;
+    if (!OPENS_OBJECT.test(text.slice(start, start + 200))) continue;
+    const end = objectEnd(text, start);
+    if (end < 0) return null;
     try {
-      const parsed = asRecord(JSON.parse(text.slice(match.index)));
-      if (parsed) return parsed;
+      const root = asRecord(JSON.parse(text.slice(start, end + 1)));
+      return root ? { root, trailing: text.slice(end + 1).trim() !== "" } : null;
     } catch {
-      // a markdown line that happens to start with "{"; try the next one
+      return null;
     }
   }
   return null;
@@ -236,15 +272,16 @@ export function toolJsonObject(text: string): Record<string, unknown> | null {
 /**
  * The array under `key` in a list tool's JSON object. Index always sends the
  * object, with an empty array when there is nothing, so an object with
- * `success: false` throws `mcp-tool-error`, and a text with no object, or an
- * object without that array, throws `mcp-unparsed`. Never an empty list on
- * failure.
+ * `success: false` throws `mcp-tool-error`, and a text with no object, text
+ * after the object, or an object without that array, throws `mcp-unparsed`.
+ * Never an empty list on failure.
  */
 export function toolJsonArray(text: string, key: string): unknown[] {
-  const root = toolJsonObject(text);
-  if (!root) throw new IndexMcpError("mcp-unparsed");
-  if (root.success === false) throw new IndexMcpError("mcp-tool-error");
-  const list = root[key];
+  const found = toolJsonObject(text);
+  if (!found) throw new IndexMcpError("mcp-unparsed");
+  if (found.root.success === false) throw new IndexMcpError("mcp-tool-error");
+  if (found.trailing) throw new IndexMcpError("mcp-unparsed");
+  const list = found.root[key];
   if (!Array.isArray(list)) throw new IndexMcpError("mcp-unparsed");
   return list;
 }

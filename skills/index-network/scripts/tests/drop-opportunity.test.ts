@@ -123,4 +123,26 @@ describe("dropOpportunity against Index's answers", () => {
     expect(result.opportunity.opportunityUrl).toBe(`https://index.network/o/${MAYA_OPP}`);
     for (const key of ["userUrl", "userId", "profileUrl"] as const) expect(key in result.opportunity).toBe(false);
   });
+
+  test("a card without a valid id is never dropped, and is not selected over a valid one", async () => {
+    const rows = [
+      { id: "../../x", url: "https://index.network/o/x", status: "pending", viewerRole: "party", headline: "h", peer: { name: "Bad Path" } },
+      { url: "https://index.network/o/y", status: "pending", viewerRole: "party", headline: "h", peer: { name: "No Id" } },
+      { id: "has space", status: "pending", viewerRole: "agent", headline: "h", peer: { name: "Space Id" } },
+    ];
+    const file = stateFile();
+    globalThis.fetch = indexMcpFake({ tools: { list_opportunities: () => listOpportunitiesText(rows) } }).fetch;
+    expect(await dropOpportunity({ date: "2026-10-12", stateFile: file, apiKey: "test-key", mcpUrl: FAKE_MCP_URL })).toEqual({
+      silent: true,
+      reason: "nothing-new",
+    });
+    expect(existsSync(file)).toBe(false);
+    globalThis.fetch = indexMcpFake({
+      tools: { list_opportunities: () => listOpportunitiesText([...rows, { id: JON_OPP, url: `https://index.network/o/${JON_OPP}`, status: "pending", headline: "h", peer: { name: "Jon" } }]) },
+    }).fetch;
+    const result = await dropOpportunity({ date: "2026-10-12", stateFile: file, apiKey: "test-key", mcpUrl: FAKE_MCP_URL });
+    if ("silent" in result) throw new Error(`unexpected silent result: ${result.reason}`);
+    expect(result.opportunity.opportunityId).toBe(JON_OPP);
+    expect(JSON.parse(await Bun.file(file).text()).deliveredToday).toEqual({ date: "2026-10-12", ids: [JON_OPP] });
+  });
 });

@@ -713,6 +713,23 @@ describe("buildDailyBriefContext against Index's answers", () => {
     expect(card.userId).toBeUndefined();
     expect(card.profileUrl).toBeUndefined();
   });
+
+  test("a card without a valid id is dropped whole and counted with a code only", async () => {
+    const rows = [
+      { id: "../../x", url: "https://index.network/o/x", status: "pending", viewerRole: "party", headline: "h", peer: { name: "Bad Path" } },
+      { url: "https://index.network/o/y", status: "pending", viewerRole: "party", headline: "h", peer: { name: "No Id" } },
+      { id: "has space", status: "pending", viewerRole: "agent", headline: "h", peer: { name: "Space Id" } },
+    ];
+    const { context } = await runBrief(() => listOpportunitiesText([...rows, {
+      id: MAYA_OPP, url: `https://index.network/o/${MAYA_OPP}`, status: "pending", viewerRole: "party", headline: "h",
+      peer: { name: "Maya", userId: "cccccccc-0000-4000-8000-000000000001", url: "https://index.network/u/cccccccc-0000-4000-8000-000000000001" },
+    }]), null);
+    expect(context.diagnostics.opportunitySource).toBe("mcp");
+    expect(context.opportunities.map((opp) => opp.opportunityId)).toEqual([MAYA_OPP]);
+    expect(context.diagnostics.warnings).toContain("dropped 3 opportunity card(s): mcp-card-unidentified");
+    const joined = context.diagnostics.warnings.join("\n");
+    for (const leak of ["../../x", "has space", "Bad Path", "No Id", "Space Id"]) expect(joined).not.toContain(leak);
+  });
 });
 
 describe("attachIndexLinks", () => {

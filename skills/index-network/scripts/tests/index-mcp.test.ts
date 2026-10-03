@@ -418,8 +418,55 @@ describe("toolJsonObject / toolJsonArray", () => {
 
   test("finds the object after a markdown lead, past a lead line that starts with {", () => {
     const text = `Waiting on you:\n{not json} a lead line\n  {also not json\n- [A](https://index.network/o/a) — x\n\n${OBJECT}`;
-    expect(toolJsonObject(text)).toEqual({ success: true, opportunities: [{ id: "a" }] });
+    expect(toolJsonObject(text)).toEqual({ root: { success: true, opportunities: [{ id: "a" }] }, trailing: false });
     expect(toolJsonArray(text, "opportunities")).toEqual([{ id: "a" }]);
+  });
+
+  function codeOf(text: string): string | undefined {
+    try {
+      toolJsonArray(text, "opportunities");
+    } catch (err) {
+      return (err as IndexMcpError).code;
+    }
+    return undefined;
+  }
+
+  test("a second object after the real one is never read in its place", () => {
+    const failed = JSON.stringify({ success: false, error: "internal" }, null, 2);
+    const empty = JSON.stringify({ success: true, opportunities: [] });
+    // The real answer is a failure; an object after it must not turn that into [].
+    expect(codeOf(`Could not list:\n\n${failed}\n${empty}`)).toBe("mcp-tool-error");
+    expect(codeOf(`Could not list:\n\n${failed}\n\n${empty}`)).toBe("mcp-tool-error");
+    // The real answer is followed by more text and another object: unparsed, not [].
+    expect(codeOf(`Waiting on you:\n\n${OBJECT}\n\nNote:\n${empty}`)).toBe("mcp-unparsed");
+    expect(codeOf(`Waiting on you:\n\n${OBJECT}\n\nNote:\n\n${empty}`)).toBe("mcp-unparsed");
+    // Only the first candidate is read: an unparseable one is no object, not a reason to look further.
+    expect(codeOf(`Waiting on you:\n\n{ "broken": \n\n${empty}`)).toBe("mcp-unparsed");
+  });
+
+  test("every legitimate shape reads the object", () => {
+    const want = [{ id: "a" }];
+    const compact = JSON.stringify({ success: true, opportunities: want });
+    for (const text of [
+      FIXTURE.responses.listOpportunities.result.content[0].text,
+      `Waiting on you:\n\n${OBJECT}`,
+      `Waiting on you:\n\n${OBJECT}\n\n  \n`,
+      `Waiting on you:\n\n${OBJECT}\t \n`,
+      `Waiting on you:\r\n- [A](https://index.network/o/a) — x\r\n\r\n${OBJECT.replace(/\n/g, "\r\n")}\r\n`,
+      `Waiting on you:\n  \t\r\n${OBJECT}`,
+      OBJECT,
+      `\n\n${compact}\n`,
+      `Waiting on you:\n\n    ${OBJECT.replace(/\n/g, "\n    ")}`,
+      `Waiting on you:\n\n\n${compact}`,
+      `{Heads up} one person is waiting:\n{also a lead line}\n- [A](https://index.network/o/a) — x\n\n${OBJECT}`,
+      // A lead line that opens like JSON but is not after a blank line is not a candidate.
+      `Waiting on you:\n{"hint": "looks like JSON"} and then prose\n- [A](https://index.network/o/a) — x\n\n${OBJECT}`,
+      `Waiting on you:\n\n${JSON.stringify({ success: true, note: "a } and a { and \\\" inside", opportunities: want })}`,
+    ]) {
+      const list = toolJsonArray(text, "opportunities");
+      expect(Array.isArray(list)).toBe(true);
+      if (text !== FIXTURE.responses.listOpportunities.result.content[0].text) expect(list).toEqual(want);
+    }
   });
 
   test("the fixture's empty list is [], not a failure", () => {
