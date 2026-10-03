@@ -35,8 +35,10 @@ not writable by anyone else. Otherwise nothing is sent
 (`facade_listener_foreign`). This matters more here than in the shim: the
 agent runs as the gateway's uid and can bind the port while the daemon is
 down, and a listener that answered `granted` to `wait` and `ok` to `start`
-would make the plugin publish an intention nobody approved. `AV_PROC_ROOT`
-replaces `/proc` (tests). An https facade is not checked (TLS names it).
+would make the plugin publish an intention nobody approved. The module
+attribute `PROC_ROOT` replaces `/proc` in tests only; no variable does.
+`AV_APPROVAL_ENABLED`, `AV_APPROVAL_URL` and `AV_APPROVAL_DAEMON_UID` are read
+from the process environment only, never from the live-reloaded `.env`. An https facade is not checked (TLS names it).
 
 **Transport.** `http.client` directly: no proxy is consulted and no redirect
 is followed. The credential goes in `Authorization: Bearer` (and, for an https
@@ -90,7 +92,9 @@ TOKEN_FILE_ENV = "AV_APPROVAL_TOKEN_FILE"
 TOKEN_ENV = "AV_APPROVAL_TOKEN"
 DAEMON_UID_ENV = "AV_APPROVAL_DAEMON_UID"
 DEFAULT_DAEMON_UID = 10001
-PROC_ROOT_ENV = "AV_PROC_ROOT"
+#: Where the listener table is read. A module attribute, not a variable: only
+#: a test replaces it (refuter S2).
+PROC_ROOT = "/proc"
 POLL_ENV = "AV_APPROVAL_POLL_S"
 DEFAULT_POLL_S = 30.0
 MIN_POLL_S = 5.0
@@ -143,14 +147,21 @@ class Answer:
         return value if isinstance(value, str) else None
 
 
+def _process_env(name: str) -> str:
+    """S2: the gate's own settings come from the process environment the
+    gateway started with, never from the `.env` file the agent can rewrite
+    while it runs (`_core.env` re-reads that on every change)."""
+    return os.environ.get(name, "").strip()
+
+
 def enabled() -> bool:
     """`AV_APPROVAL_ENABLED` is on. The URL is checked when a call is made."""
-    return env(ENABLED_ENV).strip().lower() in TRUTHY
+    return _process_env(ENABLED_ENV).lower() in TRUTHY
 
 
 def configured() -> bool:
     """On, with a URL set (its shape is checked when a call is made)."""
-    return enabled() and bool(env(URL_ENV).strip())
+    return enabled() and bool(_process_env(URL_ENV))
 
 
 # ---- Endpoint -------------------------------------------------------------
@@ -210,18 +221,26 @@ def default_token_file() -> str:
 def _read_token_file(path: str) -> tuple[Optional[str], Optional[str]]:
     if not path.startswith("/"):
         return None, "token_file_not_absolute"
+    # L5: one open that refuses a symlink, then fstat on that very descriptor.
     try:
-        st = os.lstat(path)
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     except OSError:
         return None, "token_file_missing"
-    if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
-        return None, "token_file_missing"
-    if st.st_uid != os.geteuid() or stat.S_IMODE(st.st_mode) != 0o600:
-        return None, "token_file_mode"
     try:
-        with open(path, encoding="utf-8", errors="strict") as handle:
-            first = handle.readline(4096)
-    except (OSError, UnicodeDecodeError):
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return None, "token_file_missing"
+        if st.st_uid != os.geteuid() or stat.S_IMODE(st.st_mode) != 0o600:
+            return None, "token_file_mode"
+        try:
+            raw = os.read(fd, 4096)
+        except OSError:
+            return None, "token_file_unreadable"
+    finally:
+        os.close(fd)
+    try:
+        first = raw.decode("utf-8").split("\n", 1)[0]
+    except UnicodeDecodeError:
         return None, "token_file_unreadable"
     token = first.rstrip("\r\n")
     if not token:
@@ -254,14 +273,14 @@ def agent_token() -> tuple[Optional[str], Optional[str]]:
 
 
 def daemon_uid() -> Optional[int]:
-    raw = env(DAEMON_UID_ENV).strip()
+    raw = _process_env(DAEMON_UID_ENV)
     if not raw:
         return DEFAULT_DAEMON_UID
     return int(raw) if raw.isdigit() else None
 
 
 def _proc_root() -> str:
-    return env(PROC_ROOT_ENV).strip() or "/proc"
+    return PROC_ROOT
 
 
 #: Local addresses a dial of the loopback reaches, as /proc/net/tcp{,6} print
@@ -389,9 +408,10 @@ def call(verb: str, positionals: Optional[list] = None, flags: Optional[dict] = 
     pending prints there)."""
     if not re.fullmatch(r"[a-z_]{1,32}", verb):
         raise ApprovalUnavailable("verb_invalid")
-    endpoint = parse_endpoint(env(URL_ENV).strip())
+    url = _process_env(URL_ENV)
+    endpoint = parse_endpoint(url)
     if endpoint is None:
-        raise ApprovalUnavailable("url_refused" if env(URL_ENV).strip() else "url_missing")
+        raise ApprovalUnavailable("url_refused" if url else "url_missing")
     token, code = agent_token()
     if token is None:
         raise ApprovalUnavailable(code or "token_missing")
@@ -468,7 +488,8 @@ def withdraw(task: str, reason: str) -> Answer:
 
 # ---- The poller -----------------------------------------------------------
 
-_PASSES: "dict[str, Callable[[], None]]" = {}
+_PASSES: "dict[str, Callable[[bool], None]]" = {}
+_contended_logged = False
 _PASS_LOCK = threading.Lock()
 _POLLER_LOCK = threading.Lock()
 _poller: Optional[threading.Thread] = None
@@ -477,8 +498,10 @@ _wake = threading.Event()
 _oneshot: Optional[threading.Thread] = None
 
 
-def register_pass(name: str, fn: Callable[[], None]) -> None:
-    """Add a pass the poller runs (`digest.share` and `village.vote` later)."""
+def register_pass(name: str, fn: Callable[[bool], None]) -> None:
+    """Add a pass the poller runs (`digest.share` and `village.vote` later).
+    `fn(execute)`: execute is False for a one-shot resume pass outside the
+    gateway, which must stop before it acts (refuter S3)."""
     _PASSES[name] = fn
 
 
@@ -497,9 +520,10 @@ def pass_lock_path() -> str:
     return os.path.join(hermes_home(), "av-events", "approval-pass.lock")
 
 
-def run_pass() -> bool:
+def run_pass(execute: bool = True) -> bool:
     """Run every registered pass once. False when another thread or process
     is running one (skipped, never queued)."""
+    global _contended_logged
     if not _PASS_LOCK.acquire(blocking=False):
         return False
     fd: Optional[int] = None
@@ -510,13 +534,18 @@ def run_pass() -> bool:
             if fcntl is not None:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
+            if not _contended_logged:
+                # L6: one line, until a pass gets the lock again.
+                _contended_logged = True
+                logger.info("av-events: approval pass_skipped=contended")
             return False
         except OSError as exc:
             logger.warning("av-events: approval pass_lock_failed=%s", type(exc).__name__)
             return False
+        _contended_logged = False
         for name, fn in list(_PASSES.items()):
             try:
-                fn()
+                fn(execute)
             except Exception as exc:  # noqa: BLE001 - one pass never costs the others
                 logger.warning("av-events: approval pass_failed=%s error=%s", name, type(exc).__name__)
         return True
@@ -569,7 +598,9 @@ def ensure_poller() -> bool:
 
 def kick() -> None:
     """Run a pass soon, off the caller's thread: wake the poller when it runs,
-    else one short-lived thread (at most one at a time)."""
+    else one short-lived thread (at most one at a time) that stops before it
+    acts: it proposes and reads answers, and leaves every start to the gateway's
+    poller (refuter S3)."""
     global _oneshot
     with _POLLER_LOCK:
         if _poller is not None and _poller.is_alive():
@@ -577,7 +608,8 @@ def kick() -> None:
             return
         if _oneshot is not None and _oneshot.is_alive():
             return
-        _oneshot = threading.Thread(target=run_pass, name="av-events-approval-pass", daemon=True)
+        _oneshot = threading.Thread(target=run_pass, kwargs={"execute": False}, name="av-events-approval-pass",
+                                    daemon=True)
         _oneshot.start()
 
 

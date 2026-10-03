@@ -321,6 +321,10 @@ REFUSALS: dict[str, str] = {
         "Not published: the resident declined this intention in their approval channel. It stays "
         "unpublished; do not publish it another way."
     ),
+    "rule_needs_capture": (
+        "Not published: the resident's policy lets this agent publish it only in the call that captured it, "
+        "and that call could not. Capture it again if it still matters. Do not publish it another way."
+    ),
     "awaiting_resident": (
         "Not published: the resident has not approved this intention in their approval channel yet. You "
         "cannot confirm it for them, and a yes you read in chat is not an approval. Do not publish it another way."
@@ -1114,7 +1118,7 @@ def _capture(args: dict, held: Optional[str]) -> dict:
         result.update(intention_id=intention_id, index_intent_id=None, published=False, held=True)
         if held_code is not None:
             result["publish_refused"] = held_code
-        if approval_on:
+        if approval_on is True:
             return _held_through_approval(result, intention_id, text, norm)
         result["message"] = (
             f"Held as an ambient intention (intention_id {intention_id}). It stays off Index until the "
@@ -1143,7 +1147,10 @@ def _capture(args: dict, held: Optional[str]) -> dict:
         )
     else:
         code = _publish_precheck()
-        if code is None and approval_on:
+        if code is None and approval_on is None:
+            # L1: whether the gate is on could not be read: hold, never publish around it.
+            code = "approval_unavailable"
+        if code is None and approval_on is True:
             return _stated_through_approval(result, text, source)
         index_id: Optional[str] = None
         if code is None:
@@ -1191,21 +1198,24 @@ def _ia():
     return _intent_approval
 
 
-def _approval_on() -> bool:
-    """`AV_APPROVAL_ENABLED` on and `AV_APPROVAL_URL` set (`_approval.configured`)."""
+def _approval_on() -> Optional[bool]:
+    """`AV_APPROVAL_ENABLED` on and `AV_APPROVAL_URL` set (`_approval.configured`).
+    None when it cannot be read (L1): the caller holds, and never publishes
+    around the gate."""
     try:
-        return _ia().active()
-    except Exception:  # noqa: BLE001 - unsure is the old path: hold, never publish around it
-        return False
+        return bool(_ia().active())
+    except Exception:  # noqa: BLE001
+        return None
 
 
 _NO_OTHER_WAY = "Do not publish it another way."
 
 
-def _advance_inline(intention_id: str):
+def _advance_inline(intention_id: str, cls: str):
     ia = _ia()
     try:
-        return ia.advance(intention_id, emit=False, inline=True)
+        # S1: only this call, with the class in memory, may execute a start the policy clears.
+        return ia.advance(intention_id, emit=False, inline=True, expect_class=cls)
     finally:
         ia.end_inline(intention_id)
 
@@ -1234,7 +1244,7 @@ def _held_through_approval(result: dict, intention_id: str, text: str, norm: str
             f"for approval (code {code}), so it stays off Index. {_NO_OTHER_WAY}"
         )
         return result
-    outcome = _advance_inline(intention_id)
+    outcome = _advance_inline(intention_id, ia.INFERRED_CLASS)
     result["approval_state"] = outcome.state
     held = f"Held as an ambient intention (intention_id {intention_id})."
     if outcome.state == "published":
@@ -1280,7 +1290,12 @@ def _stated_through_approval(result: dict, text: str, source: str) -> dict:
             f"resident's approval policy (code {code}). Do not retry it with another tool."
         )
         return result
-    outcome = _advance_inline(intention_id)
+    outcome = _advance_inline(intention_id, ia.STATED_CLASS)
+    if outcome.state == "unfiled":
+        # S1: no later call may execute a start the policy clears, so a stated
+        # capture that could not reach the daemon now is not published.
+        ia.abandon(intention_id, "approval_unavailable")
+        outcome = ia.Outcome("not_published", code=outcome.code)
     result["approval_state"] = outcome.state
     if outcome.state == "published":
         result.update(index_intent_id=outcome.index_intent_id, published=True)
@@ -1298,10 +1313,10 @@ def _stated_through_approval(result: dict, text: str, source: str) -> dict:
         refused = "approval_refused"
         message = (f"The resident's approval policy does not let this agent publish it (code {outcome.code}). "
                    "Do not retry it with another tool.")
-    elif outcome.state == "unfiled":
+    elif outcome.state == "not_published":
         refused = "approval_unavailable"
-        message = ("The resident's approval channel could not be reached just now; publishing is retried "
-                   "automatically. Do not retry it with another tool.")
+        message = ("The resident's approval channel could not be reached just now, so it was not published. "
+                   "Capture it again later if it still matters; do not publish it with another tool.")
     else:
         refused = outcome.code or "approval_unavailable"
         message = _index_tail(refused)
@@ -1335,8 +1350,10 @@ def _confirm(args: dict) -> dict:
         ia.reopen(intention_id)
     elif state == "rejected":
         return _refuse("resident_declined")
-    elif state == "withdrawn":
+    elif state in ("withdrawn", "superseded", "invalid"):
         return _refuse("confirm_not_held")
+    elif state == "not_published":
+        return _refuse("rule_needs_capture")
     elif state == "expired":
         return _refuse("approval_expired")
     elif state == "index_rejected":
@@ -1359,6 +1376,10 @@ def _confirm(args: dict) -> dict:
         return _refuse("awaiting_resident")
     elif outcome.state in ("index_failed", "start_unconfirmed"):
         return _refuse("publish_failed")
+    elif outcome.state == "not_published":
+        return _refuse("rule_needs_capture")
+    elif outcome.state in ("invalid", "superseded"):
+        return _refuse("confirm_not_held")
     elif outcome.state == "rejected":
         return _refuse("resident_declined")
     elif outcome.state == "withdrawn":
@@ -1417,10 +1438,15 @@ def _update_or_withdraw(action: str, args: dict, held: Optional[str]) -> dict:
 
     if action == "update" and entry.get("refused") == "rejected":
         return _refuse("capture_again")
-    if _ia().is_live(entry):
+    if _ia().is_live(entry) and action == "update":
         # Lane B: the open proposal is bound to the bytes the resident was shown.
-        if action == "update":
-            return _refuse("approval_pending")
+        return _refuse("approval_pending")
+    if action == "update" and _ia().holds_text(entry):
+        # B1: a refused proposal ends at an update; the new words are a new capture's.
+        _ia().supersede(intention_id)
+        entry = lookup(intention_id) or entry
+    if action == "withdraw" and _ia().holds_text(entry):
+        # B1: any proposal not being started or published ends here, refused included.
         code = _ia().withdraw_local(intention_id)
         if code is not None:
             return _refuse(code)

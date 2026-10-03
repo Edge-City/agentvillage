@@ -568,12 +568,13 @@ def test_an_unreachable_daemon_holds_and_the_poller_files_it_later(tctx, serve, 
     stated = call(tctx, {"text": STATED, "source": "message"}, tool_call_id="c2")
     assert held["approval_state"] == "unfiled" and "retried automatically" in held["message"]
     assert stated["published"] is False and stated["publish_refused"] == "approval_unavailable"
+    # S1: no later call may execute a policy-cleared start: the stated capture ends here.
+    assert entry(mods, stated["intention_id"])["approval"]["state"] == "not_published"
     assert index.requests == []
     serve.down = False
     poll(mods)
-    assert {p["flags"]["--class"] for p in serve.proposals()} == {INFERRED, STATED_CLASS}
-    # The stated one was autonomous: published by the poller, with its own id as sourceId.
-    assert [c["body"]["sourceId"] for c in index.creates()] == [stated["intention_id"]]
+    assert [p["flags"]["--class"] for p in serve.proposals()] == [INFERRED]
+    assert index.requests == []
 
 
 def test_a_class_the_policy_does_not_open_is_held_and_confirm_files_it_after_the_policy_changes(
@@ -908,7 +909,7 @@ def test_loopback_transport_and_the_listener_check(mods, home, monkeypatch, tmp_
         port = server.server_address[1]
         monkeypatch.setenv("AV_APPROVAL_URL", f"http://127.0.0.1:{port}")
         monkeypatch.setenv("AV_APPROVAL_TOKEN", TOKEN)
-        monkeypatch.setenv("AV_PROC_ROOT", str(tmp_path / "proc"))
+        monkeypatch.setattr(mods.ap, "PROC_ROOT", str(tmp_path / "proc"))
         monkeypatch.setenv("AV_APPROVAL_DAEMON_UID", str(os.geteuid()))
         _fake_proc(tmp_path / "proc", port, os.geteuid())
         answer = mods.ap.wait("propose:" + "a" * 32)
@@ -985,8 +986,9 @@ def test_the_poller_starts_only_in_the_gateway(mods, on, kicks, monkeypatch):
     assert mods.ia.maybe_start("cron") == "thread"
     assert mods.ia.maybe_start("cli") == "pass"
     assert mods.ia.maybe_start(None, argv=["hermes", "gateway", "run"]) == "thread"
-    assert mods.ia.maybe_start(None, argv=["hermes", "chat", "-q", "x"]) == "pass"
-    assert mods.ia.maybe_start(None, argv=["hermes", "dashboard"]) == "pass"
+    # S3: registration outside `hermes gateway run` kicks nothing.
+    assert mods.ia.maybe_start(None, argv=["hermes", "chat", "-q", "x"]) == "idle"
+    assert mods.ia.maybe_start(None, argv=["hermes", "dashboard"]) == "idle"
     monkeypatch.setenv("AV_APPROVAL_POLLER", "0")
     assert mods.ia.maybe_start("telegram") == "pass"
     monkeypatch.setenv("AV_APPROVAL_POLLER", "1")
@@ -1008,7 +1010,7 @@ def test_the_poller_thread_survives_a_failing_pass_and_stops_on_unload(mods, on,
     runs: list[int] = []
     done = threading.Event()
 
-    def flaky() -> None:
+    def flaky(_execute: bool) -> None:
         runs.append(1)
         if len(runs) == 1:
             raise RuntimeError("boom")
@@ -1035,7 +1037,7 @@ def test_a_pass_running_elsewhere_is_skipped(mods, home, monkeypatch):
     import fcntl
 
     ran: list[int] = []
-    monkeypatch.setattr(mods.ap, "_PASSES", {"p": lambda: ran.append(1)})
+    monkeypatch.setattr(mods.ap, "_PASSES", {"p": lambda _execute: ran.append(1)})
     os.makedirs(os.path.dirname(mods.ap.pass_lock_path()), exist_ok=True)
     fd = os.open(mods.ap.pass_lock_path(), os.O_RDWR | os.O_CREAT, 0o600)
     try:
@@ -1214,4 +1216,168 @@ def test_4_confirm_on_a_forged_cleared_manual_proposal_publishes_nothing(tctx, s
     iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
     mods.ia._cas(iid, None, lambda _e, ap: ap.__setitem__("state", "cleared"))
     out = call(tctx, {"action": "confirm", "intention_id": iid}, tool_call_id="c2")
-    assert out["error"] == "awaiting_resident" and index.requests == [] and "start" not in serve.verbs()
+    # S1: confirm never executes a policy-cleared start; the forged entry ends.
+    assert out["error"] == "rule_needs_capture" and index.requests == [] and "start" not in serve.verbs()
+
+
+# --------------------------------------------------------------------------
+# Refuter round on #174: B1, S1..S4, L1, L5
+# --------------------------------------------------------------------------
+
+
+def _refused_entry(tctx, serve, mods) -> str:
+    serve.requestable.discard(STATED_CLASS)
+    out = call(tctx, {"text": STATED, "source": "message"}, tool_call_id="r1")
+    assert entry(mods, out["intention_id"])["approval"]["state"] == "refused"
+    serve.requestable.add(STATED_CLASS)
+    return out["intention_id"]
+
+
+def test_b1_withdraw_ends_a_refused_proposal_and_confirm_cannot_reopen_it(tctx, serve, index, mods):
+    iid = _refused_entry(tctx, serve, mods)
+    out = call(tctx, {"action": "withdraw", "intention_id": iid}, tool_call_id="w")
+    assert out["success"] is True
+    ap = entry(mods, iid)["approval"]
+    assert ap["state"] == "withdrawn" and "payload" not in ap
+    assert call(tctx, {"action": "confirm", "intention_id": iid}, tool_call_id="c")["error"] == "confirm_not_held"
+    assert mods.ia.reopen(iid) is False
+    assert index.requests == [] and "start" not in serve.verbs()
+
+
+def test_b1_update_ends_a_refused_proposal(tctx, serve, index, mods):
+    iid = _refused_entry(tctx, serve, mods)
+    out = call(tctx, {"action": "update", "intention_id": iid, "text": STATED + " now"}, tool_call_id="u")
+    assert out["success"] is True and out["published"] is False
+    ap = entry(mods, iid)["approval"]
+    assert ap["state"] == "superseded" and "payload" not in ap
+    assert call(tctx, {"action": "confirm", "intention_id": iid}, tool_call_id="c")["error"] == "confirm_not_held"
+    assert index.requests == []
+
+
+def test_b1_confirm_never_publishes_a_refused_stated_proposal_on_a_rule(tctx, serve, index, mods):
+    """The old shape: refused, then reopened by confirm, then cleared by the policy."""
+    iid = _refused_entry(tctx, serve, mods)
+    out = call(tctx, {"action": "confirm", "intention_id": iid}, tool_call_id="c")
+    assert out["error"] == "rule_needs_capture"
+    assert index.requests == [] and "start" not in serve.verbs()
+
+
+@pytest.mark.parametrize("field,value", [
+    ("class", "intent.publish.anything.else"),
+    ("key", f"{INFERRED}:someone-elses-id"),
+    ("key", f"{STATED_CLASS}:x"),
+])
+def test_s1_a_forged_class_or_key_is_never_proposed_or_started(tctx, serve, index, mods, field, value):
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    serve.grant(f"{INFERRED}:{iid}")
+    mods.ia._cas(iid, None, lambda _e, ap: ap.__setitem__(field, value))
+    poll(mods)
+    ap = entry(mods, iid)["approval"]
+    assert ap["state"] == "invalid" and "payload" not in ap
+    assert "start" not in serve.verbs() and index.requests == []
+
+
+def test_s1_the_poller_and_confirm_never_execute_a_policy_cleared_start(tctx, serve, index, mods):
+    serve.autonomy[INFERRED] = "autonomous"
+    serve.down = True
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    serve.down = False
+    poll(mods)  # proposes; the policy clears it; no capture call is there to execute it
+    ap = entry(mods, iid)["approval"]
+    assert ap["state"] == "not_published" and "payload" not in ap
+    assert "start" not in serve.verbs() and index.requests == []
+    assert call(tctx, {"action": "confirm", "intention_id": iid}, tool_call_id="c")["error"] == "rule_needs_capture"
+
+
+def test_s1_the_source_id_is_the_keys_id(tctx, serve, index, mods):
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    serve.grant(f"{INFERRED}:{iid}")
+    poll(mods)
+    assert index.creates()[0]["body"]["sourceId"] == iid == entry(mods, iid)["approval"]["key"].split(":", 1)[1]
+
+
+def test_s2_the_gate_settings_come_from_the_process_environment_only(mods, home, monkeypatch):
+    (home / ".env").write_text(
+        "AV_APPROVAL_ENABLED=1\nAV_APPROVAL_URL=http://127.0.0.1:9\nAV_APPROVAL_DAEMON_UID=0\n", encoding="utf-8")
+    assert mods.ap.enabled() is False and mods.ap.configured() is False
+    assert mods.ap.daemon_uid() == 10001
+    monkeypatch.setenv("AV_APPROVAL_TOKEN", TOKEN)
+    with pytest.raises(mods.ap.ApprovalUnavailable) as caught:
+        mods.ap.wait("propose:" + "c" * 32)
+    assert caught.value.code == "url_missing"
+    monkeypatch.setenv("AV_PROC_ROOT", "/nonexistent")
+    assert mods.ap._proc_root() == "/proc"
+
+
+def test_s3_a_one_shot_resume_pass_stops_before_start(tctx, serve, index, mods):
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    serve.grant(f"{INFERRED}:{iid}")
+    mods.ap.register_pass("intents", mods.ia.run_intent_pass)
+    assert mods.ap.run_pass(execute=False) is True
+    assert "start" not in serve.verbs() and index.requests == []
+    assert entry(mods, iid)["approval"]["state"] == "requested"
+    assert mods.ap.run_pass(execute=True) is True  # the gateway's poller
+    assert len(index.creates()) == 1
+
+
+def test_s3_registration_outside_the_gateway_kicks_no_pass(plugin, index, serve, kicks, on, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["hermes", "chat", "-q", "hi"])
+    plugin.register(ToolFireCtx())
+    assert kicks == []
+    plugin._on_unload()
+    plugin._REGISTERED = False
+    monkeypatch.setattr(sys, "argv", ["hermes", "gateway", "run"])
+    plugin.register(ToolFireCtx())
+    assert kicks == ["thread", "kick"]
+
+
+@pytest.mark.parametrize("answer", [
+    (1, None, {"ok": False, "status": "timeout", "task": "t"}),
+    (1, None, {"ok": False, "error": {"code": "integrity", "message": "x"}}),
+    (3, None, {"ok": False, "error": {"code": "torn-tail", "message": "x"}}),
+    (7, None, {"ok": False, "status": "granted", "task": "t"}),
+])
+def test_s4_exit_codes_count_only_with_their_status(tctx, serve, index, mods, answer):
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    serve.on_wait = lambda n: answer
+    poll(mods)
+    ap = entry(mods, iid)["approval"]
+    assert ap["state"] == "requested" and "payload" in ap  # transient: asked again next pass
+    assert len(serve.proposals()) == 1 and index.requests == []
+
+
+def test_l1_an_unreadable_gate_switch_holds_a_stated_capture(tctx, serve, index, mods, monkeypatch):
+    def boom() -> bool:
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(mods.ia, "active", boom)
+    out = call(tctx, {"text": STATED, "source": "message"})
+    assert out["published"] is False and out["publish_refused"] == "approval_unavailable"
+    assert index.requests == [] and serve.calls == []
+
+
+def test_l5_a_symlinked_token_file_is_refused(mods, home, monkeypatch):
+    real = home / "real-token"
+    real.write_text("real-token-value-0001", encoding="utf-8")
+    os.chmod(real, 0o600)
+    link = home / "link-token"
+    link.symlink_to(real)
+    monkeypatch.setenv("AV_APPROVAL_TOKEN_FILE", str(link))
+    assert mods.ap.agent_token() == (None, "token_file_missing")
+
+
+def test_l6_a_contended_pass_logs_one_line(mods, home, monkeypatch, caplog):
+    import fcntl
+
+    monkeypatch.setattr(mods.ap, "_PASSES", {"p": lambda _execute: None})
+    os.makedirs(os.path.dirname(mods.ap.pass_lock_path()), exist_ok=True)
+    fd = os.open(mods.ap.pass_lock_path(), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        with caplog.at_level(logging.INFO, logger="av-events"):
+            mods.ap.run_pass()
+            mods.ap.run_pass()
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+    assert caplog.text.count("pass_skipped=contended") == 1

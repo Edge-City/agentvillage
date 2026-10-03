@@ -132,6 +132,10 @@ LIVE = frozenset({"unfiled", "requested", "cleared", "starting", "publishing"})
 TERMINAL_DROP = frozenset({
     "published", "rejected", "withdrawn", "index_rejected", "ambiguous", "index_failed",
     "start_unconfirmed", "expired",
+    # Refuter round (B1, S1): the agent re-worded a refused proposal; a map
+    # entry whose class or key is not one this module writes; a proposal the
+    # policy clears that no capture call is there to execute.
+    "superseded", "invalid", "not_published",
 })
 
 MAX_PAYLOAD_BYTES = 262144
@@ -236,6 +240,25 @@ def approval_of(entry: Optional[dict]) -> Optional[dict]:
 def is_live(entry: Optional[dict]) -> bool:
     ap = approval_of(entry)
     return ap is not None and ap.get("state") in LIVE
+
+
+def holds_text(entry: Optional[dict]) -> bool:
+    """A live proposal, or a refused one (which keeps its text for `confirm`)."""
+    ap = approval_of(entry)
+    return ap is not None and (ap.get("state") in LIVE or ap.get("state") == "refused")
+
+
+def valid_shape(intention_id: str, ap: dict) -> bool:
+    """S1: the class is one of ours and the key is exactly `<class>:<intention_id>`.
+    The map is the agent's to write (same uid); nothing it names is trusted."""
+    cls = ap.get("class")
+    return cls in CLASSES and ap.get("key") == key_for(cls, intention_id)
+
+
+def _invalid(intention_id: str, expect) -> Outcome:
+    _set_state(intention_id, expect, "invalid", code="map_invalid")
+    logger.warning("av-events: approval map_invalid")
+    return Outcome("invalid", code="map_invalid")
 
 
 # ---- Map transitions ------------------------------------------------------
@@ -370,6 +393,8 @@ def _cleared(ap: dict) -> tuple[bool, Optional[str]]:
 
 def _propose(intention_id: str, ap: dict) -> Optional[Outcome]:
     """unfiled -> the state core's answer names. None to continue the loop."""
+    if not valid_shape(intention_id, ap):
+        return _invalid(intention_id, {"unfiled"})
     payload = ap.get("payload")
     try:
         answer = _approval.propose(ap["class"], ap["key"], summary_for(ap["class"], intention_id), payload)
@@ -434,7 +459,7 @@ def _repropose(intention_id: str, kind: str, cap: int, expect: set[str], claim: 
     return None
 
 
-def _poll(intention_id: str, ap: dict) -> Optional[Outcome]:
+def _poll(intention_id: str, ap: dict, execute: bool = True) -> Optional[Outcome]:
     """requested: the daemon's answer for this key, and on a grant, execute."""
     task = ap.get("task")
     if not isinstance(task, str):
@@ -445,6 +470,9 @@ def _poll(intention_id: str, ap: dict) -> Optional[Outcome]:
         _note_code(intention_id, code or "transport")
         return Outcome("requested", code=code, task=task)
     if granted:
+        if not execute:
+            # S3: a one-shot resume pass outside the gateway stops before start.
+            return Outcome("requested", code="deferred", task=task)
         return _execute(intention_id, ap, "grant")
     exit_code, status = answer.exit_code, answer.status
     if exit_code == 6:
@@ -457,16 +485,18 @@ def _poll(intention_id: str, ap: dict) -> Optional[Outcome]:
             return Outcome("start_unconfirmed", code=status, task=task)
         _note_code(intention_id, f"wait_status_{status}")
         return Outcome("requested", code="not_granted", task=task)
-    if exit_code == 1:
-        if answer.error_code == "not-registered":
-            _set_state(intention_id, {"requested"}, "unfiled", code="not-registered")
-            return None
+    # S4: an exit code counts only together with the status that names it;
+    # anything else is transient (asked again next pass).
+    if exit_code == 1 and answer.error_code == "not-registered":
+        _set_state(intention_id, {"requested"}, "unfiled", code="not-registered")
+        return None
+    if exit_code == 1 and status in ("rejected", "revoked", "withdrawn"):
         terminal = "withdrawn" if status == "withdrawn" else "rejected"
-        _set_state(intention_id, {"requested"}, terminal, code=status or "rejected")
+        _set_state(intention_id, {"requested"}, terminal, code=status)
         return Outcome(terminal, task=task)
-    if exit_code == 3:
+    if exit_code == 3 and status == "expired":
         return _repropose(intention_id, "expired", MAX_EXPIRED_REPROPOSALS, {"requested"})
-    if exit_code == 7:
+    if exit_code == 7 and status == "void":
         return _repropose(intention_id, "void", MAX_VOID_REPROPOSALS, {"requested"})
     _note_code(intention_id, f"wait_exit_{exit_code}")
     return Outcome("requested", code="not_granted", task=task)
@@ -482,6 +512,8 @@ def _execute(intention_id: str, ap: dict, kind: str) -> Optional[Outcome]:
     manual class, just read granted) or `policy` (a class the policy clears)."""
     ri = _ri()
     back = "requested" if kind == "grant" else "cleared"
+    if not valid_shape(intention_id, ap):
+        return _invalid(intention_id, {back})
     expected = "grant" if kind == "grant" else "policy"
     payload = ap.get("payload")
     if payload_hash(payload) is None or payload_hash(payload) != ap.get("payload_hash"):
@@ -512,7 +544,7 @@ def _execute(intention_id: str, ap: dict, kind: str) -> Optional[Outcome]:
     if kind == "grant":
         ok, answer, why = _granted(task)
         if not ok:
-            if answer is not None and answer.exit_code == 7:
+            if answer is not None and answer.exit_code == 7 and answer.status == "void":
                 return _repropose(intention_id, "void", MAX_VOID_REPROPOSALS, {"starting"}, claim=claim)
             return _release(intention_id, claim, back, why or f"wait_exit_{answer.exit_code if answer else 'none'}")
     else:
@@ -549,11 +581,13 @@ def _execute(intention_id: str, ap: dict, kind: str) -> Optional[Outcome]:
     if _set_state(intention_id, {"starting"}, "publishing", claim=claim, authorization=authorization,
                   publishing_at=float(ri._clock())) is None:
         return Outcome("starting")
-    return _publish(intention_id, payload, ap.get("payload_hash"), authorization, claim)
+    return _publish(intention_id, payload, ap.get("payload_hash"), authorization, claim, ap["key"])
 
 
-def _publish(intention_id: str, payload: str, registered: Any, authorization: str, claim: str) -> Outcome:
+def _publish(intention_id: str, payload: str, registered: Any, authorization: str, claim: str,
+             key: str) -> Outcome:
     ri = _ri()
+    key_id = key.split(":", 1)[1]
     text = text_of(payload)
     if text is None or payload_hash(payload) != registered:
         _set_state(intention_id, {"publishing"}, "refused", claim=claim, code="payload_hash_mismatch", publishing_at=None)
@@ -564,7 +598,8 @@ def _publish(intention_id: str, payload: str, registered: Any, authorization: st
             code = ri._publish_precheck() or ri.reserve_publish()
             if code is not None:
                 break
-        index_id, code = ri.publish_intent(text, source_id=intention_id)
+        # S1: the sourceId is the key's own id (valid_shape made it this entry's).
+        index_id, code = ri.publish_intent(text, source_id=key_id)
         if index_id is not None:
             def change(entry: dict, apx: dict) -> None:
                 apx["state"] = "published"
@@ -625,12 +660,16 @@ def _stale(intention_id: str, ap: dict, emit: bool, entry: Optional[dict]) -> Op
 EMITTED = frozenset({"published", "index_rejected", "ambiguous", "index_failed"})
 
 
-def advance(intention_id: str, *, emit: bool, inline: bool = False) -> Outcome:
+def advance(intention_id: str, *, emit: bool, inline: bool = False, expect_class: Optional[str] = None,
+            execute: bool = True) -> Outcome:
     """Take the proposal as far as the daemon's answers allow now. Never raises.
 
     `emit`: report a publish (or Index's refusal) as `intention.updated` here,
     because no tool result will carry it. `inline`: the capture call itself is
-    advancing; the poller is kept off meanwhile.
+    advancing; the poller is kept off meanwhile. `expect_class`: the class
+    the capture call has in memory; only such a call executes a start the
+    policy clears (S1), and only for that class. `execute`: False for a
+    one-shot resume pass outside the gateway, which stops before `start` (S3).
     """
     ri = _ri()
     try:
@@ -654,9 +693,14 @@ def advance(intention_id: str, *, emit: bool, inline: bool = False) -> Outcome:
             if state == "unfiled":
                 result = _propose(intention_id, ap)
             elif state == "requested":
-                result = _poll(intention_id, ap)
+                result = _poll(intention_id, ap, execute)
             elif state == "cleared":
-                result = _execute(intention_id, ap, "policy")
+                if inline and execute and expect_class is not None and ap.get("class") == expect_class:
+                    result = _execute(intention_id, ap, "policy")
+                else:
+                    # S1: the poller and `confirm` publish only on a human grant.
+                    _set_state(intention_id, {"cleared"}, "not_published", code="rule_needs_capture")
+                    result = Outcome("not_published", code="rule_needs_capture")
             else:
                 result = _stale(intention_id, ap, emit, entry)
                 if result is not None:
@@ -705,13 +749,16 @@ def withdraw_local(intention_id: str) -> Optional[str]:
     daemon, best effort."""
     entry = _ri().lookup(intention_id)
     ap = approval_of(entry)
-    if ap is None or ap.get("state") not in LIVE:
+    if ap is None or not holds_text(entry):
         return None
     if ap.get("state") in ("starting", "publishing"):
         return "approval_publishing"
     previous = ap.get("state")
     task = ap.get("task")
-    after = _set_state(intention_id, {"unfiled", "requested", "cleared"}, "withdrawn", code="agent_withdrew")
+    # B1: a refused proposal ends too (its held text goes), so no later
+    # `confirm` can reopen it.
+    after = _set_state(intention_id, {"unfiled", "requested", "cleared", "refused"}, "withdrawn",
+                       code="agent_withdrew")
     if after is None:
         return "approval_publishing"
     if previous == "requested" and isinstance(task, str):
@@ -722,6 +769,17 @@ def withdraw_local(intention_id: str) -> Optional[str]:
         except Exception as exc:  # noqa: BLE001
             logger.info("av-events: approval withdraw_unsent=%s", type(exc).__name__)
     return None
+
+
+def abandon(intention_id: str, code: str) -> None:
+    """S1: a stated capture that could not be proposed now is not published later."""
+    _set_state(intention_id, {"unfiled", "cleared"}, "not_published", code=code)
+
+
+def supersede(intention_id: str) -> bool:
+    """B1: an update of a refused proposal ends it (the held text goes); the
+    new words are a new capture's to propose."""
+    return _set_state(intention_id, {"refused"}, "superseded", code="agent_updated") is not None
 
 
 def reopen(intention_id: str) -> bool:
@@ -738,8 +796,9 @@ def reopen(intention_id: str) -> bool:
 # ---- The pass and the poller ----------------------------------------------
 
 
-def run_intent_pass() -> None:
-    """Advance every live proposal once (at most `MAX_PER_PASS`)."""
+def run_intent_pass(execute: bool = True) -> None:
+    """Advance every live proposal once (at most `MAX_PER_PASS`). `execute`
+    False (a one-shot resume pass outside the gateway): stop before `start`."""
     if not active():
         return
     ri = _ri()
@@ -760,7 +819,7 @@ def run_intent_pass() -> None:
         todo.append(intention_id)
     counts: dict[str, int] = {}
     for intention_id in todo[:MAX_PER_PASS]:
-        outcome = advance(intention_id, emit=True)
+        outcome = advance(intention_id, emit=True, execute=execute)
         counts[outcome.state] = counts.get(outcome.state, 0) + 1
     if counts:
         logger.info("av-events: approval pass %s", " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
@@ -797,7 +856,10 @@ def maybe_start(platform: Any = None, argv: Optional[list] = None) -> str:
         _approval.ensure_poller()
         _approval.kick()
         return "thread"
-    _approval.kick()
+    if platform is None:
+        # S3: plugin registration outside `hermes gateway run` kicks nothing.
+        return "idle"
+    _approval.kick()  # a one-shot pass that stops before `start`
     return "pass"
 
 

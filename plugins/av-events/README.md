@@ -659,15 +659,30 @@ publishes only on a grant read as above. A manual class with no grant is refused
 `awaiting_resident`. Other refusals: `confirm_unknown`, `confirm_not_held` (recorded locally on
 purpose, or withdrawn), `confirm_text_missing` (held before approvals were on: capture it again),
 `resident_declined`, `approval_expired`, `publish_failed` (`index_failed` or `start_unconfirmed`),
+`rule_needs_capture` (a policy-cleared proposal its capture call could not execute),
 `capture_again`. `update` of an intention whose proposal is open is refused `approval_pending`;
 `withdraw` ends the proposal (and withdraws a pending question on the daemon).
+
+**Who may execute what.** A start the policy clears (`cleared`) is executed only by the capture
+call itself, which has the class in memory; the poller and `confirm` publish only on a human grant,
+and a `cleared` entry they meet ends `not_published` (so a stated capture that could not reach the
+daemon in its own call is not published later; capture it again). Before every propose and start
+the map's class must be one of the two and its key exactly `<class>:<intention_id>`, else the entry
+ends `invalid`; the `sourceId` is the key's own id. `AV_APPROVAL_ENABLED`, `AV_APPROVAL_URL` and
+`AV_APPROVAL_DAEMON_UID` are read from the process environment only, never from the live-reloaded
+`.env`. Plugin registration outside `hermes gateway run` starts nothing, and the one-shot resume
+pass a non-gateway session start runs proposes and reads answers but stops before `start`.
+`wait` exit codes count only with their status (1 with `rejected`/`revoked`/`withdrawn`, 3 with
+`expired`, 7 with `void`); anything else is transient. `withdraw` ends any proposal not being started
+or published, a refused one included; `update` of a refused one ends it (`superseded`); neither can
+be reopened.
 
 **Codes this path adds.** `publish_refused` on a stated capture: `approval_pending`,
 `approval_unavailable`, `approval_refused`. `approval_state`: `requested`, `cleared`, `starting`,
 `publishing`, `published`, `rejected`, `withdrawn`, `refused`, `index_rejected`, `ambiguous`,
-`index_failed`, `start_unconfirmed`, `expired`, `unfiled` (the daemon could not be reached;
+`index_failed`, `start_unconfirmed`, `expired`, `not_published`, `invalid`, `superseded`, `unfiled` (the daemon could not be reached;
 retried), `unavailable` (nothing could be held). Map codes: `payload_hash_mismatch`,
-`authorization_mismatch`, `claim_abandoned`. Client codes in the logs: `url_missing`, `url_refused`,
+`authorization_mismatch`, `claim_abandoned`, `map_invalid`, `rule_needs_capture`. Client codes in the logs: `url_missing`, `url_refused`,
 `token_missing`, `token_malformed`, `token_file_*`, `facade_listener_foreign`, `unauthorized`,
 `http_<status>`, `transport`, `timeout`, `bad_answer`.
 
