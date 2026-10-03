@@ -75,7 +75,7 @@ def test_every_tool_call_emits_one_event_with_the_catalogue_keys(live, ctx, av):
     assert payload["receipt"] is None
     assert payload["args_hash"] == keyed(json.dumps({"command": SECRET_ARG}, sort_keys=True, separators=(",", ":")))
     assert payload["result_hash"] == keyed(SECRET_RESULT) != sha(SECRET_RESULT)
-    assert payload["category_version"] == "tool_categories_v2"
+    assert payload["category_version"] == "tool_categories_v3"
     assert event["tool_call_id"] == "call-1"
     assert event["session_id"] == SESSION
     assert event["run_id"] == "task-1"
@@ -245,10 +245,63 @@ def test_a_failing_payload_builder_fails_open(live, ctx, av, monkeypatch):
 def test_the_seed_is_well_formed_and_loaded(plugin):
     tools = __import__(f"{plugin.__name__}._tools", fromlist=["_tools"])
     version, categories = tools.load_categories()
-    assert version == "tool_categories_v2"
+    assert version == "tool_categories_v3"
     assert categories == tools.TOOL_CATEGORIES
     assert all(name.startswith("mcp__index__") for name in categories if name.startswith("mcp__"))
     assert "create_intent" not in categories  # bare Index names are not listed
+
+
+#: DATA-261: Index main's MCP tools (indexnetwork/index main 168310a,
+#: `services/api/src/lib/mcp/mcp.tools.ts`), as Hermes names them, and the
+#: Index Hermes plugin's own tools (`packages/hermes-plugin`), which Hermes
+#: registers by bare name. Each takes the category of the old tool it replaces.
+INDEX_MAIN_TOOLS = {
+    "mcp__index__get_my_profile": "profile",
+    "mcp__index__update_my_profile": "profile",
+    "mcp__index__enrich_my_profile": "profile",
+    "mcp__index__list_intents": "intention",
+    "mcp__index__get_intent": "intention",
+    "mcp__index__create_intent": "intention",
+    "mcp__index__update_intent": "intention",
+    "mcp__index__pause_intent": "intention",
+    "mcp__index__resume_intent": "intention",
+    "mcp__index__archive_intent": "intention",
+    "mcp__index__list_opportunities": "opportunity",
+    "mcp__index__get_opportunity": "opportunity",
+    "mcp__index__accept_opportunity": "opportunity",
+    "mcp__index__reject_opportunity": "opportunity",
+    "index_read_intents": "intention",
+    "index_create_intent": "intention",
+    "index_update_intent": "intention",
+    "index_list_intent_networks": "intention",
+    "index_add_intent_to_network": "intention",
+    "index_read_networks": "membership",
+    "index_read_network_memberships": "membership",
+    "index_create_network": "membership",
+    "index_update_network": "membership",
+    "index_join_network": "membership",
+    "index_list_opportunities": "opportunity",
+    "index_update_opportunity": "opportunity",
+    "index_research_profile": "profile",
+    "index_read_docs": "research",
+    "index_agent_me": "agent_admin",
+    "index_open_app": "browser",
+}
+
+
+def test_index_main_tools_leave_by_name_under_v3(plugin):
+    tools = __import__(f"{plugin.__name__}._tools", fromlist=["_tools"])
+    for name, category in INDEX_MAIN_TOOLS.items():
+        payload = tools.tool_call_payload(name, {"intentId": "x"}, "{}", "ok", 5, None, "sanitized", lambda s: "h")
+        assert (name, payload["tool_name"], payload["tool_category"]) == (name, name, category)
+        assert payload["category_version"] == "tool_categories_v3"
+    # The old Index names stay listed: agents on an older Index surface still call them.
+    for old in ("mcp__index__read_intents", "mcp__index__delete_intent", "mcp__index__update_opportunity"):
+        assert tools.tool_category(old) in ("intention", "opportunity")
+    # Bare MCP names are still not Index.
+    for bare in ("archive_intent", "list_intents", "pause_intent", "accept_opportunity"):
+        assert tools.listed_tool_name(bare) is None
+        assert tools.tool_category(bare) == tools.UNLISTED_TOOL_CATEGORY
 
 
 def test_a_missing_seed_lists_nothing(plugin, tmp_path):
