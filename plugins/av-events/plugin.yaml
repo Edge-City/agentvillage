@@ -18,6 +18,10 @@ optional_env:
   - AV_BACKUP_GRACE_S
   - AV_RECORD_INTENTION
   - INDEX_API_KEY
+  # DATA-249: record_intention writes over Index's REST API at INDEX_API_URL
+  # (default https://protocol.index.network); INDEX_MCP_URL is read only for its
+  # origin when INDEX_API_URL is unset.
+  - INDEX_API_URL
   - INDEX_MCP_URL
   - AV_APPROVAL_URL
 # Documentation only — Hermes registers the tool from ctx.register_tool() (toolset
