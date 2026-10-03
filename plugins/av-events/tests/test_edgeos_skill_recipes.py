@@ -145,3 +145,66 @@ def test_recipes_are_read_only_on_an_edgeos_base(edgeos, monkeypatch):
     assert edgeos.http_call("terminal", {"command": dev}) is None
     assert recognise(edgeos, register)[1].operation == "edgeos.rsvp"
 
+
+# --------------------------------------------------------------------------
+# DATA-269: every recipe in the skill, by its heading, against one table
+# --------------------------------------------------------------------------
+
+#: Each recipe's bold heading in `skills/edgeos/SKILL.md` (parenthetical and
+#: trailing colon dropped) → the operation it must be classified as. A recipe
+#: added, renamed or removed in the skill fails
+#: `test_the_recipe_table_names_every_recipe_in_the_skill` until this table
+#: follows; a recipe the classifier stops reading fails the table test.
+RECIPE_OPERATIONS = {
+    "List upcoming events": "edgeos.events_list",
+    "List events in a date range": "edgeos.events_list",
+    "Search events by title": "edgeos.events_list",
+    "Filter by tag, kind, venue, or track": "edgeos.events_list",
+    "Only events you've RSVPed to": "edgeos.events_list",
+    "Fetch a single event": "edgeos.event_read",
+    "RSVP to a one-off event": "edgeos.rsvp",
+    "RSVP to one occurrence of a recurring event": "edgeos.rsvp",
+    "Cancel a previous RSVP": "edgeos.cancel_rsvp",
+    "List your own RSVPs across events": "edgeos.participants_list",
+    "List active venues for a popup": "edgeos.venues_list",
+    "Read the calling user's profile": "edgeos.profile_read",
+    "Update basic profile fields": "edgeos.profile_update",
+    "Search attendees in a popup": "edgeos.directory_search",
+}
+
+
+def every_recipe() -> list[tuple[str, str]]:
+    """(heading, command) for every ```bash block in the skill that runs curl,
+    the heading being the last bold text before it."""
+    text = SKILL.read_text(encoding="utf-8")
+    out = []
+    for block in re.finditer(r"```bash\n(.*?)```", text, re.S):
+        command = block.group(1)
+        if "curl" not in command:
+            continue
+        headings = re.findall(r"\*\*(.+?)\*\*", text[:block.start()])
+        heading = re.sub(r"\s*\(.*\)", "", headings[-1]).rstrip(":").strip()
+        for placeholder, value in SUBSTITUTIONS.items():
+            command = command.replace(placeholder, value)
+        out.append((heading, command.rstrip("\n")))
+    return out
+
+
+def test_the_recipe_table_names_every_recipe_in_the_skill():
+    headings = [heading for heading, _ in every_recipe()]
+    assert len(headings) == len(set(headings)), headings
+    assert sorted(headings) == sorted(RECIPE_OPERATIONS)
+
+
+@pytest.mark.parametrize("base", [None, "", "https://api.edgeos.world/api/v1"])
+@pytest.mark.parametrize("heading,command", every_recipe())
+def test_every_recipe_in_the_skill_is_classified(edgeos, monkeypatch, base, heading, command):
+    if base is None:
+        monkeypatch.delenv("EDGEOS_API_BASE", raising=False)
+    else:
+        monkeypatch.setenv("EDGEOS_API_BASE", base)
+    call, op, params = recognise(edgeos, command)
+    assert op.operation == RECIPE_OPERATIONS[heading], heading
+    assert not call.piped, heading
+    if op.role == "action":
+        assert params["event_id"] == EVENT
