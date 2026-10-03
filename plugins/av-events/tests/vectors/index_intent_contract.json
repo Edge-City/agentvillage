@@ -2,6 +2,7 @@
   "about": "The overlay's copy of Index's intent contract, copied by hand from indexnetwork/index main (DATA-249). 'rest_writes': the three REST writes record_intention makes (services/api/src/controllers/intent.controller.ts, mounted under /api; body schemas are zod .strict(), so no other key is accepted). 'tools': Index's MCP intent tools (services/api/src/lib/mcp/mcp.tools.ts), which the av-events observer watches when an agent reaches Index's MCP through Hermes's own client. tests/test_index_contract.py holds every HTTP call the overlay builds, the observer's tool names and the agent-facing text to this file; when Index changes, change this file first and let the tests show what else must move.",
   "source": "indexnetwork/index@main services/api/src/controllers/intent.controller.ts, services/api/src/lib/mcp/mcp.tools.ts",
   "verified": "2026-10-03",
+  "error_statuses_note": "Statuses each route can answer besides 2xx: the controller's own, plus 401 from AuthGuard and the 404/409 of resolveId (unknown or ambiguous short id) on the two routes that take an id. Any route can also 5xx through a gateway.",
   "intent_status_values": ["active", "paused"],
   "rest_writes": {
     "create": {
@@ -19,7 +20,7 @@
         }
       },
       "success_keys": ["intentId", "networkIds", "sourceType", "sourceId"],
-      "error_statuses": [400, 403, 422, 500, 503]
+      "error_statuses": [400, 401, 403, 422, 500, 503]
     },
     "update": {
       "method": "PATCH",
@@ -35,14 +36,14 @@
         }
       },
       "success_keys": ["intentId", "description", "sourceType", "sourceId"],
-      "error_statuses": [400, 404, 409, 422]
+      "error_statuses": [400, 401, 404, 409, 422]
     },
     "archive": {
       "method": "PATCH",
       "path": "/api/intents/{id}/archive",
       "body": null,
       "success_keys": ["success"],
-      "error_statuses": [404]
+      "error_statuses": [401, 404, 409]
     }
   },
   "tools": {
