@@ -285,7 +285,6 @@ INDEX_MAIN_TOOLS = {
     "index_research_profile": "profile",
     "index_read_docs": "research",
     "index_agent_me": "agent_admin",
-    "index_open_app": "browser",
 }
 
 
@@ -298,6 +297,9 @@ def test_index_main_tools_leave_by_name_under_v3(plugin):
     # The old Index names stay listed: agents on an older Index surface still call them.
     for old in ("mcp__index__read_intents", "mcp__index__delete_intent", "mcp__index__update_opportunity"):
         assert tools.tool_category(old) in ("intention", "opportunity")
+    # `index_open_app` opens a link for the human, not the agent's browser: unlisted.
+    payload = tools.tool_call_payload("index_open_app", {}, "{}", "ok", 5, None, "sanitized", lambda s: "h")
+    assert (payload["tool_name"], payload["tool_category"]) == (None, tools.UNLISTED_TOOL_CATEGORY)
     # Bare MCP names are still not Index.
     for bare in ("archive_intent", "list_intents", "pause_intent", "accept_opportunity"):
         assert tools.listed_tool_name(bare) is None

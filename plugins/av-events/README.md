@@ -175,7 +175,8 @@ OpenAI key shapes, `Bearer …`, the Telegram bot-token shape, and the literal v
 reads it once at import. `builtin` lists Hermes's own tools by registry name (the `v2026.8.31`
 `_HERMES_CORE_TOOLS` set, plus `send_message`, `recall`, `record_intention` and, under v2's `meta`
 category, the plugin's own `consent_status`), and since v3 the Index Hermes plugin's tools
-(`index_create_intent` and the rest of `index_*`), which Hermes registers by bare name; `mcp.<server>`
+(`index_create_intent` and the rest of `index_*` but `index_open_app`, which opens a link for the human and
+stays unlisted), which Hermes registers by bare name; `mcp.<server>`
 lists an MCP server's tools, which Hermes registers as `mcp__<server>__<tool>` — so the allowlist is
 keyed that way, and a bare `create_intent` from anywhere else is not Index. v3 (DATA-261) adds Index
 main's MCP tool names (`list_intents`, `get_intent`, `pause_intent`, `resume_intent`,
