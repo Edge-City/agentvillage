@@ -15,6 +15,9 @@
  * tests/fixtures/index-mcp-2026-07-28.json, and tests/index-mcp-fake.ts
  * refuses anything else the way Index does.
  *
+ * Every request has a 20 s timeout and refuses redirects; both, like any
+ * transport failure, are `mcp-unreachable`.
+ *
  * Every failure throws an IndexMcpError whose message is a short code (for
  * example `mcp-http-400:-32022`). Codes never carry the API key, a response
  * body, or a resident's text, so callers can put them straight into their
@@ -26,6 +29,9 @@ export const INDEX_MCP_PROTOCOL_VERSION = "2026-07-28";
 export const DEFAULT_INDEX_MCP_URL = "https://protocol.index.network/mcp";
 
 const CLIENT_INFO = { name: "agentvillage-index-scripts", version: "1.0.0" };
+
+/** How long one request (headers and body) may take. */
+export const INDEX_MCP_TIMEOUT_MS = 20_000;
 
 /** `$INDEX_MCP_URL` when set and non-empty, else production. */
 export function indexMcpUrl(): string {
@@ -47,6 +53,8 @@ export interface IndexMcpTarget {
   mcpUrl: string;
   /** Injected transport for tests; defaults to the global fetch. */
   fetch?: typeof fetch;
+  /** Tests only; defaults to INDEX_MCP_TIMEOUT_MS. */
+  timeoutMs?: number;
 }
 
 type JsonRpcMessage = {
@@ -62,6 +70,11 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function isAbort(err: unknown): boolean {
+  const name = (err as { name?: unknown } | null)?.name;
+  return name === "AbortError" || name === "TimeoutError";
 }
 
 function rpcCodeSuffix(error: unknown): string {
@@ -138,7 +151,14 @@ export async function indexMcpRequest(
   const send = target.fetch ?? globalThis.fetch;
   let res: Response;
   try {
-    res = await send(target.mcpUrl, { method: "POST", headers, body: JSON.stringify(body) });
+    res = await send(target.mcpUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      // A redirect would carry the key to wherever Location points.
+      redirect: "error",
+      signal: AbortSignal.timeout(target.timeoutMs ?? INDEX_MCP_TIMEOUT_MS),
+    });
   } catch {
     throw new IndexMcpError("mcp-unreachable");
   }
@@ -159,8 +179,8 @@ export async function indexMcpRequest(
     message = contentType.includes("text/event-stream")
       ? responseFromEventStream(await res.text(), id)
       : (asRecord(await res.json()) as JsonRpcMessage | null);
-  } catch {
-    throw new IndexMcpError("mcp-bad-response");
+  } catch (err) {
+    throw new IndexMcpError(isAbort(err) ? "mcp-unreachable" : "mcp-bad-response");
   }
   if (!message) throw new IndexMcpError("mcp-bad-response");
   if (message.error !== undefined && message.error !== null) throw new IndexMcpError(`mcp-rpc-error${rpcCodeSuffix(message.error)}`);
@@ -177,9 +197,9 @@ export async function indexMcpRequest(
 }
 
 /**
- * Call one Index tool and return the text of its first text content item
- * ("" when the tool returned none). A result flagged `isError` throws
- * `mcp-tool-error`.
+ * Call one Index tool and return the text of its first `type: "text"` content
+ * item. A result flagged `isError` throws `mcp-tool-error`; a result without
+ * a text item throws `mcp-bad-response`.
  */
 export async function callIndexTool(
   target: IndexMcpTarget,
@@ -188,10 +208,43 @@ export async function callIndexTool(
 ): Promise<string> {
   const result = await indexMcpRequest(target, "tools/call", { name, arguments: args });
   if (result.isError === true) throw new IndexMcpError("mcp-tool-error");
-  const content = Array.isArray(result.content) ? result.content : [];
-  for (const item of content) {
+  if (!Array.isArray(result.content)) throw new IndexMcpError("mcp-bad-response");
+  for (const item of result.content) {
     const row = asRecord(item);
     if (row?.type === "text" && typeof row.text === "string") return row.text;
   }
-  return "";
+  throw new IndexMcpError("mcp-bad-response");
+}
+
+/**
+ * The JSON object a list tool puts after its markdown lead: the first
+ * line-start `{` from which the rest of the text parses as one object.
+ * Null when there is none.
+ */
+export function toolJsonObject(text: string): Record<string, unknown> | null {
+  for (const match of text.matchAll(/^[ \t]*\{/gm)) {
+    try {
+      const parsed = asRecord(JSON.parse(text.slice(match.index)));
+      if (parsed) return parsed;
+    } catch {
+      // a markdown line that happens to start with "{"; try the next one
+    }
+  }
+  return null;
+}
+
+/**
+ * The array under `key` in a list tool's JSON object. Index always sends the
+ * object, with an empty array when there is nothing, so an object with
+ * `success: false` throws `mcp-tool-error`, and a text with no object, or an
+ * object without that array, throws `mcp-unparsed`. Never an empty list on
+ * failure.
+ */
+export function toolJsonArray(text: string, key: string): unknown[] {
+  const root = toolJsonObject(text);
+  if (!root) throw new IndexMcpError("mcp-unparsed");
+  if (root.success === false) throw new IndexMcpError("mcp-tool-error");
+  const list = root[key];
+  if (!Array.isArray(list)) throw new IndexMcpError("mcp-unparsed");
+  return list;
 }

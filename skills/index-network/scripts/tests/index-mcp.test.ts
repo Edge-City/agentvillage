@@ -3,10 +3,13 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   DEFAULT_INDEX_MCP_URL,
   INDEX_MCP_PROTOCOL_VERSION,
+  INDEX_MCP_TIMEOUT_MS,
   IndexMcpError,
   callIndexTool,
   indexMcpRequest,
   indexMcpUrl,
+  toolJsonArray,
+  toolJsonObject,
 } from "../index-mcp";
 import { FAKE_API_KEY, FIXTURE, INDEX_TOOLS, PROTOCOL, eventStream, indexMcpFake } from "./index-mcp-fake";
 
@@ -179,6 +182,20 @@ describe("indexMcpRequest / callIndexTool against the fake", () => {
     expect(meta["io.modelcontextprotocol/clientInfo"]).toEqual({ name: "agentvillage-index-scripts", version: "1.0.0" });
   });
 
+  test("every request has a 20 s timeout signal and refuses redirects", async () => {
+    let init: RequestInit | undefined;
+    const fake = indexMcpFake();
+    const spy = (async (input: RequestInfo | URL, given?: RequestInit) => {
+      init = given;
+      return fake.fetch(input, given);
+    }) as typeof fetch;
+    await callIndexTool({ apiKey: FAKE_API_KEY, mcpUrl: fake.url, fetch: spy }, "list_intents");
+    expect(INDEX_MCP_TIMEOUT_MS).toBe(20_000);
+    expect(init?.redirect).toBe("error");
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+    expect(init?.signal?.aborted).toBe(false);
+  });
+
   test("tools/list carries no Mcp-Name", async () => {
     const fake = indexMcpFake();
     await indexMcpRequest({ apiKey: FAKE_API_KEY, mcpUrl: fake.url, fetch: fake.fetch }, "tools/list");
@@ -231,9 +248,46 @@ describe("indexMcpRequest / callIndexTool against the fake", () => {
     expect(await callIndexTool({ apiKey: FAKE_API_KEY, mcpUrl: fake.url, fetch: fake.fetch }, "list_intents")).toBe("tight");
   });
 
-  test("an empty content list is an empty text, not a failure", async () => {
-    const fake = indexMcpFake({ tools: { list_intents: () => ({ result: { content: [], resultType: "complete" } }) } });
-    expect(await callIndexTool({ apiKey: FAKE_API_KEY, mcpUrl: fake.url, fetch: fake.fetch }, "list_intents")).toBe("");
+  test("an SSE event whose JSON spans several data: lines is one message", async () => {
+    const fake = indexMcpFake({
+      tools: {
+        list_intents: (_args, { id }) => {
+          const pretty = JSON.stringify(
+            { jsonrpc: "2.0", id, result: { content: [{ type: "text", text: "multi-line" }], resultType: "complete" } },
+            null,
+            2,
+          );
+          const event = pretty.split("\n").map((line) => `data: ${line}`).join("\n");
+          const note = `data: ${JSON.stringify({ jsonrpc: "2.0", method: "notifications/progress", params: { progress: 1 } })}`;
+          return { response: new Response(`${note}\n\nevent: message\n${event}\n\n`, { headers: { "content-type": "text/event-stream" } }) };
+        },
+      },
+    });
+    expect(await callIndexTool({ apiKey: FAKE_API_KEY, mcpUrl: fake.url, fetch: fake.fetch }, "list_intents")).toBe("multi-line");
+  });
+
+  test("a result without a text item is mcp-bad-response, never an empty text", async () => {
+    for (const result of [
+      { content: [], resultType: "complete" },
+      { resultType: "complete" },
+      { content: "text", resultType: "complete" },
+      { content: { type: "text", text: "not in an array" }, resultType: "complete" },
+      // Has a text field but is not a text item.
+      { content: [{ type: "resource", text: "looks like text" }], resultType: "complete" },
+      { content: [{ text: "no type" }], resultType: "complete" },
+      { content: [{ type: "text", text: 42 }], resultType: "complete" },
+    ]) {
+      const fake = indexMcpFake({ tools: { list_intents: () => ({ result }) } });
+      const err = await failure(callIndexTool({ apiKey: FAKE_API_KEY, mcpUrl: fake.url, fetch: fake.fetch }, "list_intents"));
+      expect(err.code).toBe("mcp-bad-response");
+    }
+  });
+
+  test("the first text item wins over a non-text item before it", async () => {
+    const fake = indexMcpFake({
+      tools: { list_intents: () => ({ result: { content: [{ type: "image", data: "x", text: "no" }, { type: "text", text: "yes" }], resultType: "complete" } }) },
+    });
+    expect(await callIndexTool({ apiKey: FAKE_API_KEY, mcpUrl: fake.url, fetch: fake.fetch }, "list_intents")).toBe("yes");
   });
 
   test("a result without resultType is accepted", async () => {
@@ -254,6 +308,27 @@ describe("failures are short codes", () => {
     expect(err.message).not.toContain(SECRET);
     return err.code;
   }
+
+  test("a request that outlives the timeout is mcp-unreachable", async () => {
+    const fake = indexMcpFake({ tools: { list_intents: () => ({ hang: true }) } });
+    const err = await failure(callIndexTool({ apiKey: FAKE_API_KEY, mcpUrl: fake.url, fetch: fake.fetch, timeoutMs: 20 }, "list_intents"));
+    expect(err.code).toBe("mcp-unreachable");
+  }, 2_000);
+
+  test("a redirect is mcp-unreachable and is never followed", async () => {
+    for (const status of [301, 302, 307, 308]) {
+      const fake = indexMcpFake({
+        tools: {
+          list_opportunities: () => ({
+            response: new Response(null, { status, headers: { location: "https://elsewhere.fake.test/mcp" } }),
+          }),
+        },
+      });
+      const err = await failure(callIndexTool({ apiKey: FAKE_API_KEY, mcpUrl: fake.url, fetch: fake.fetch }, "list_opportunities"));
+      expect(err.code).toBe("mcp-unreachable");
+      expect(fake.calls[0].followedRedirect).toBeUndefined();
+    }
+  });
 
   test("a transport failure is mcp-unreachable", async () => {
     expect(await codeFor((async () => { throw new Error(`connect failed ${SECRET}`); }) as typeof fetch)).toBe("mcp-unreachable");
@@ -323,5 +398,57 @@ describe("indexMcpUrl", () => {
     expect(indexMcpUrl()).toBe(DEFAULT_INDEX_MCP_URL);
     process.env.INDEX_MCP_URL = " https://index-mcp.fake.test/mcp ";
     expect(indexMcpUrl()).toBe("https://index-mcp.fake.test/mcp");
+  });
+});
+
+describe("toolJsonObject / toolJsonArray", () => {
+  const OBJECT = JSON.stringify({ success: true, opportunities: [{ id: "a" }] }, null, 2);
+
+  test("finds the object after a markdown lead, past a lead line that starts with {", () => {
+    const text = `Waiting on you:\n{not json} a lead line\n  {also not json\n- [A](https://index.network/o/a) — x\n\n${OBJECT}`;
+    expect(toolJsonObject(text)).toEqual({ success: true, opportunities: [{ id: "a" }] });
+    expect(toolJsonArray(text, "opportunities")).toEqual([{ id: "a" }]);
+  });
+
+  test("the fixture's empty list is [], not a failure", () => {
+    expect(toolJsonArray(FIXTURE.responses.listOpportunitiesEmpty.result.content[0].text, "opportunities")).toEqual([]);
+  });
+
+  test("success:false is mcp-tool-error", () => {
+    const code = (() => {
+      try {
+        toolJsonArray(`Could not list:\n\n${JSON.stringify({ success: false, error: "x", opportunities: [] })}`, "opportunities");
+      } catch (err) {
+        return (err as IndexMcpError).code;
+      }
+    })();
+    expect(code).toBe("mcp-tool-error");
+  });
+
+  test("no object, text after the object, or no array under the key is mcp-unparsed", () => {
+    for (const text of [
+      "",
+      FIXTURE.responses.toolError.result.content[0].text,
+      `Waiting on you:\n\n${OBJECT}\n\nUse get_opportunity for more.`,
+      `Waiting on you: ${OBJECT}`,
+      `Waiting:\n\n${JSON.stringify({ success: true })}`,
+      `Waiting:\n\n${JSON.stringify({ success: true, opportunities: { id: "a" } })}`,
+      `Waiting:\n\n${JSON.stringify({ success: true, opportunities: null })}`,
+      `Waiting:\n\n[${OBJECT}]`,
+    ]) {
+      let code: string | undefined;
+      try {
+        toolJsonArray(text, "opportunities");
+      } catch (err) {
+        code = (err as IndexMcpError).code;
+      }
+      expect(code).toBe("mcp-unparsed");
+    }
+  });
+
+  test("the fixture's tool error reaches the caller as mcp-tool-error through the fake", async () => {
+    const fake = indexMcpFake({ tools: { list_opportunities: () => ({ result: FIXTURE.responses.toolError.result }) } });
+    const err = await failure(callIndexTool({ apiKey: FAKE_API_KEY, mcpUrl: fake.url, fetch: fake.fetch }, "list_opportunities"));
+    expect(err.code).toBe("mcp-tool-error");
   });
 });

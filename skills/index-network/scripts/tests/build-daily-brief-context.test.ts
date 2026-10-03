@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
+  attachIndexLinks,
   buildDailyBriefContext,
   extractInterestTags,
   extractUserModelPhrases,
@@ -13,7 +17,8 @@ import {
   parseOpportunityTranscript,
   selectEvents,
 } from "../build-daily-brief-context";
-import { FAKE_MCP_URL, indexMcpFake, type ToolHandler } from "./index-mcp-fake";
+import { FAKE_MCP_URL, FIXTURE, indexMcpFake, listOpportunitiesText, type ToolHandler } from "./index-mcp-fake";
+import { failureInputs } from "./index-failure-inputs";
 
 describe("build-daily-brief-context helpers", () => {
   test("extractInterestTags maps user text to EdgeOS tags", () => {
@@ -259,7 +264,15 @@ describe("build-daily-brief-context helpers", () => {
     process.env.INDEX_API_KEY = "test-key";
     process.env.INDEX_MCP_URL = FAKE_MCP_URL;
 
-    const opportunityText = "1. Nathan Price\n   <!-- digest-opportunity:id=opp-mcp-1 -->\n   builds AI agents\n   status: pending\n   profileUrl: https://index.network/u/abc\n   acceptUrl: https://index.network/c/xyz\n   feedCategory: connection";
+    const opportunityText = listOpportunitiesText([{
+      id: "opp-mcp-1",
+      url: "https://index.network/o/opp-mcp-1",
+      status: "pending",
+      viewerRole: "party",
+      headline: "builds AI agents",
+      summary: "builds AI agents",
+      peer: { name: "Nathan Price", userId: "dddddddd-0000-4000-8000-000000000001", url: "https://index.network/u/dddddddd-0000-4000-8000-000000000001" },
+    }]);
     const fake = indexMcpFake({ tools: { list_opportunities: () => opportunityText } });
 
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -419,8 +432,16 @@ describe("fetchOpportunitiesFromMcp", () => {
   }
 
   const MCP_URL = FAKE_MCP_URL;
-  const OPPORTUNITY_TEXT =
-    "1. Alice\n   <!-- digest-opportunity:id=opp-alice -->\n   builds open protocols\n   status: pending\n   profileUrl: https://index.network/u/alice\n   acceptUrl: https://index.network/c/alice-code\n   feedCategory: connection";
+  const ALICE_USER = "eeeeeeee-0000-4000-8000-000000000001";
+  const OPPORTUNITY_TEXT = listOpportunitiesText([{
+    id: "opp-alice",
+    url: "https://index.network/o/opp-alice",
+    status: "pending",
+    viewerRole: "party",
+    headline: "builds open protocols",
+    summary: "builds open protocols",
+    peer: { name: "Alice", userId: ALICE_USER, url: `https://index.network/u/${ALICE_USER}` },
+  }]);
 
   test("returns parsed opportunities from a JSON response", async () => {
     const originalFetch = globalThis.fetch;
@@ -431,8 +452,8 @@ describe("fetchOpportunitiesFromMcp", () => {
       expect(results[0]).toMatchObject({
         name: "Alice",
         opportunityId: "opp-alice",
-        profileUrl: "https://index.network/u/alice",
-        acceptUrl: "https://index.network/c/alice-code",
+        profileUrl: `https://index.network/u/${ALICE_USER}`,
+        opportunityUrl: "https://index.network/o/opp-alice",
         feedCategory: "connection",
       });
     } finally {
@@ -500,12 +521,35 @@ describe("fetchOpportunitiesFromMcp", () => {
     }
   });
 
-  test("returns empty array when tool response text is empty", async () => {
+  test("the empty-list object is [], and an empty text is mcp-unparsed", async () => {
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = makeMcpFetch(() => "");
     try {
-      const results = await fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL });
-      expect(results).toEqual([]);
+      globalThis.fetch = makeMcpFetch(() => FIXTURE.responses.listOpportunitiesEmpty.result.content[0].text);
+      expect(await fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL })).toEqual([]);
+      globalThis.fetch = makeMcpFetch(() => "");
+      await expect(fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL })).rejects.toThrow("mcp-unparsed");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("an onboarding-gated success:false after a markdown lead is the setup-required diagnostic", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = makeMcpFetch(() =>
+      `Could not list opportunities:\n\n${JSON.stringify({ success: false, error: "Onboarding required", message: "This user has not completed onboarding." }, null, 2)}`,
+    );
+    try {
+      await expect(fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL })).rejects.toThrow("setup required before people suggestions");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("any other success:false is mcp-tool-error", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = makeMcpFetch(() => `Could not list:\n\n${JSON.stringify({ success: false, error: "internal", message: "try later" })}`);
+    try {
+      await expect(fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL })).rejects.toThrow("mcp-tool-error");
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -549,7 +593,7 @@ describe("fetchOpportunitiesFromMcp", () => {
 
   test("sends x-index-surface: telegram on every MCP request so minted links deep-link to t.me", async () => {
     const originalFetch = globalThis.fetch;
-    const fake = indexMcpFake({ tools: { list_opportunities: () => "" } });
+    const fake = indexMcpFake({ tools: { list_opportunities: () => FIXTURE.responses.listOpportunitiesEmpty.result.content[0].text } });
     globalThis.fetch = fake.fetch;
     try {
       await fetchOpportunitiesFromMcp({ apiKey: "test-key", mcpUrl: MCP_URL });
@@ -580,5 +624,153 @@ describe("filterCooldownQuestions", () => {
       "2026-06-10",
     );
     expect(out.map((x) => x.id)).toEqual(["q-new", "q-boundary"]);
+  });
+});
+
+describe("buildDailyBriefContext against Index's answers", () => {
+  const MAYA_OPP = "bbbbbbbb-0000-4000-8000-000000000001";
+  const ENV_KEYS = ["INDEX_API_KEY", "INDEX_MCP_URL", "EDGEOS_API_KEY", "EDGE_AGENT_CONTROL_PLANE_URL", "ADMIN_TOKEN"];
+
+  async function runBrief(listOpportunities: ToolHandler | undefined, state: Record<string, unknown> | null, date = "2026-10-12") {
+    const dir = mkdtempSync(join(tmpdir(), "brief-index-"));
+    const stateFile = join(dir, "state.json");
+    if (state) writeFileSync(stateFile, JSON.stringify(state));
+    const before = state ? readFileSync(stateFile, "utf8") : null;
+    const saved = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
+    const originalFetch = globalThis.fetch;
+    delete process.env.EDGEOS_API_KEY;
+    delete process.env.EDGE_AGENT_CONTROL_PLANE_URL;
+    delete process.env.ADMIN_TOKEN;
+    process.env.INDEX_API_KEY = "test-key";
+    process.env.INDEX_MCP_URL = FAKE_MCP_URL;
+    const fake = indexMcpFake(listOpportunities ? { tools: { list_opportunities: listOpportunities } } : {});
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("open-meteo") || url.includes("weather.gov")) return new Response("unavailable", { status: 503 });
+      return fake.fetch(input, init);
+    }) as typeof fetch;
+    try {
+      const context = await buildDailyBriefContext({ date, stateFile, userFiles: [] });
+      const after = existsSync(stateFile) ? readFileSync(stateFile, "utf8") : null;
+      return { context, before, after };
+    } finally {
+      globalThis.fetch = originalFetch;
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  for (const input of failureInputs("opportunities")) {
+    test(`${input.label}: unavailable, not fresh, no state write`, async () => {
+      const state = { deliveredToday: { date: "2026-10-12", ids: [] }, dreaming: { lastRunDate: "2026-10-11" } };
+      const { context, before, after } = await runBrief(input.handler, state);
+      expect(context.diagnostics.opportunitySource).toBe("unavailable");
+      expect(context.diagnostics.dreamingFresh).toBe(false);
+      expect(context.opportunities).toEqual([]);
+      expect(context.diagnostics.warnings).toContain(`opportunities MCP unavailable: ${input.code}`);
+      expect(after).toBe(before);
+    });
+  }
+
+  test("the empty-list object is a fresh, empty mcp list and records the dreaming date", async () => {
+    const { context, after } = await runBrief(() => FIXTURE.responses.listOpportunitiesEmpty.result.content[0].text, { dreaming: { lastRunDate: "2026-10-11" } });
+    expect(context.diagnostics.opportunitySource).toBe("mcp");
+    expect(context.diagnostics.dreamingFresh).toBe(true);
+    expect(context.opportunities).toEqual([]);
+    expect(JSON.parse(after ?? "{}").dreaming).toEqual({ lastRunDate: "2026-10-12" });
+  });
+
+  test("a markdown lead line starting with { does not hide the cards", async () => {
+    const fixtureText = FIXTURE.responses.listOpportunities.result.content[0].text;
+    const { context } = await runBrief(() => `{Heads up} two people are waiting:\n${fixtureText}`, null);
+    expect(context.diagnostics.opportunitySource).toBe("mcp");
+    expect(context.connectionOpportunities.map((opp) => opp.name)).toEqual(["Maya"]);
+    expect(context.communityOpportunities.map((opp) => opp.name)).toEqual(["Jon"]);
+  });
+
+  test("deliveredToday dated yesterday leaves its card eligible; dated today it does not", async () => {
+    const yesterday = await runBrief(undefined, { deliveredToday: { date: "2026-10-11", ids: [MAYA_OPP] } });
+    expect(yesterday.context.connectionOpportunities.map((opp) => opp.opportunityId)).toEqual([MAYA_OPP]);
+    const today = await runBrief(undefined, { deliveredToday: { date: "2026-10-12", ids: [MAYA_OPP] } });
+    expect(today.context.connectionOpportunities).toEqual([]);
+  });
+
+  test("links on brief cards are Index links of their kind, or rebuilt, or dropped", async () => {
+    const { context } = await runBrief(() => listOpportunitiesText([{
+      id: MAYA_OPP,
+      url: "javascript:alert(1)",
+      status: "pending",
+      viewerRole: "party",
+      headline: "h",
+      peer: { name: "Maya", userId: "../../etc/passwd", url: "https://evil.fake.test/u/cccccccc-0000-4000-8000-000000000001" },
+    }]), null);
+    const [card] = context.connectionOpportunities;
+    expect(card.opportunityUrl).toBe(`https://index.network/o/${MAYA_OPP}`);
+    expect(card.userUrl).toBeUndefined();
+    expect(card.userId).toBeUndefined();
+    expect(card.profileUrl).toBeUndefined();
+  });
+});
+
+describe("attachIndexLinks", () => {
+  const OPP = "bbbbbbbb-0000-4000-8000-000000000001";
+  const USER = "cccccccc-0000-4000-8000-000000000001";
+
+  test("keeps Index links of the right kind", () => {
+    const card = attachIndexLinks({
+      name: "A",
+      opportunityId: OPP,
+      opportunityUrl: `https://index.network/o/${OPP}`,
+      userId: USER,
+      userUrl: `https://index.network/u/${USER}`,
+      intentId: "int-1",
+      intentUrl: "https://index.network/i/int-1",
+    });
+    expect(card).toMatchObject({
+      opportunityUrl: `https://index.network/o/${OPP}`,
+      userUrl: `https://index.network/u/${USER}`,
+      intentUrl: "https://index.network/i/int-1",
+    });
+  });
+
+  test("rebuilds a hostile or foreign link from a valid id", () => {
+    for (const bad of [
+      "javascript:alert(1)",
+      `https://evil.fake.test/o/${OPP}`,
+      `http://index.network/o/${OPP}`,
+      `https://index.network.evil.fake.test/o/${OPP}`,
+      `https://index.network/u/${OPP}`,
+      `https://index.network/o/${OPP}/../../admin`,
+      `https://index.network/o/${OPP}?next=https://evil.fake.test`,
+    ]) {
+      const card = attachIndexLinks({ name: "A", opportunityId: OPP, opportunityUrl: bad });
+      expect(card.opportunityUrl).toBe(`https://index.network/o/${OPP}`);
+    }
+    for (const bad of ["javascript:alert(1)", `https://evil.fake.test/u/${USER}`, `https://index.network/o/${USER}`, "https://index.network/u/../x"]) {
+      const card = attachIndexLinks({ name: "A", userId: USER, userUrl: bad, profileUrl: bad, intentId: "int-1", intentUrl: bad });
+      expect(card.userUrl).toBe(`https://index.network/u/${USER}`);
+      expect(card.intentUrl).toBe("https://index.network/i/int-1");
+      expect(card.profileUrl).toBeUndefined();
+    }
+  });
+
+  test("drops a link and an id when neither is valid", () => {
+    const card = attachIndexLinks({
+      name: "A",
+      opportunityId: "../../admin",
+      opportunityUrl: "https://index.network/o/../../admin",
+      userId: "not-a-uuid",
+      userUrl: "javascript:alert(1)",
+      profileUrl: "https://evil.fake.test/u/x",
+      intentId: "a/b",
+      intentUrl: "https://index.network/i/a/b",
+    });
+    for (const key of ["opportunityId", "opportunityUrl", "userId", "userUrl", "profileUrl", "intentId", "intentUrl"] as const) {
+      expect(key in card).toBe(false);
+    }
+    expect(card.name).toBe("A");
   });
 });

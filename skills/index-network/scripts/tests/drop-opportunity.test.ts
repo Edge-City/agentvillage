@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { dropOpportunity } from "../drop-opportunity";
-import { FAKE_MCP_URL, indexMcpFake } from "./index-mcp-fake";
+import { FAKE_MCP_URL, indexMcpFake, listOpportunitiesText } from "./index-mcp-fake";
+import { failureInputs } from "./index-failure-inputs";
 
 const MAYA_OPP = "bbbbbbbb-0000-4000-8000-000000000001";
 const JON_OPP = "bbbbbbbb-0000-4000-8000-000000000002";
@@ -78,5 +79,48 @@ describe("dropOpportunity", () => {
       dropOpportunity({ date: "2026-10-12", stateFile: file, apiKey: "test-key", mcpUrl: FAKE_MCP_URL }),
     ).rejects.toThrow("mcp-tool-error");
     expect(existsSync(file)).toBe(false);
+  });
+});
+
+describe("dropOpportunity against Index's answers", () => {
+  for (const input of failureInputs("opportunities")) {
+    test(`${input.label}: rejects with ${input.code} and records nothing`, async () => {
+      const file = stateFile();
+      const before = JSON.stringify({ deliveredToday: { date: "2026-10-12", ids: [] } });
+      await Bun.write(file, before);
+      globalThis.fetch = indexMcpFake({ tools: { list_opportunities: input.handler } }).fetch;
+      await expect(
+        dropOpportunity({ date: "2026-10-12", stateFile: file, apiKey: "test-key", mcpUrl: FAKE_MCP_URL }),
+      ).rejects.toThrow(input.code);
+      expect(await Bun.file(file).text()).toBe(before);
+    });
+  }
+
+  test("deliveredToday dated yesterday leaves its card eligible today", async () => {
+    const file = stateFile();
+    await Bun.write(file, JSON.stringify({ deliveredToday: { date: "2026-10-11", ids: [MAYA_OPP] } }));
+    globalThis.fetch = indexMcpFake().fetch;
+    const result = await dropOpportunity({ date: "2026-10-12", stateFile: file, apiKey: "test-key", mcpUrl: FAKE_MCP_URL });
+    if ("silent" in result) throw new Error(`unexpected silent result: ${result.reason}`);
+    expect(result.opportunity.opportunityId).toBe(MAYA_OPP);
+    expect(JSON.parse(await Bun.file(file).text()).deliveredToday).toEqual({ date: "2026-10-12", ids: [MAYA_OPP] });
+  });
+
+  test("the dropped card carries only Index links of their kind", async () => {
+    globalThis.fetch = indexMcpFake({
+      tools: {
+        list_opportunities: () => listOpportunitiesText([{
+          id: MAYA_OPP,
+          url: "javascript:alert(1)",
+          status: "pending",
+          headline: "h",
+          peer: { name: "Maya", userId: "../../x", url: "https://evil.fake.test/u/cccccccc-0000-4000-8000-000000000001" },
+        }]),
+      },
+    }).fetch;
+    const result = await dropOpportunity({ date: "2026-10-12", stateFile: stateFile(), apiKey: "test-key", mcpUrl: FAKE_MCP_URL });
+    if ("silent" in result) throw new Error(`unexpected silent result: ${result.reason}`);
+    expect(result.opportunity.opportunityUrl).toBe(`https://index.network/o/${MAYA_OPP}`);
+    for (const key of ["userUrl", "userId", "profileUrl"] as const) expect(key in result.opportunity).toBe(false);
   });
 });

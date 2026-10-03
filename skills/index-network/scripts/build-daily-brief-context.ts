@@ -18,7 +18,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { callIndexTool, indexMcpUrl } from "./index-mcp";
+import { callIndexTool, indexMcpUrl, toolJsonArray, toolJsonObject } from "./index-mcp";
 import { portalEventsBaseUrl } from "./validate-digest-urls";
 
 /**
@@ -555,20 +555,40 @@ function userIdFromProfile(url?: string): string | undefined {
   }
 }
 
-/** Attach Index web links from ids the tool already returned. */
+/** An Index page link of one kind: `/o/` opportunity, `/u/` person, `/i/` signal. */
+const INDEX_LINK = /^https:\/\/index\.network\/([oui])\/[A-Za-z0-9_-]+$/;
+
+/** A supplied link kept only when it is an Index link of this kind; else rebuilt from a valid id; else none. */
+export function indexLink(kind: "o" | "u" | "i", supplied: string | undefined, id: string | undefined): string | undefined {
+  if (typeof supplied === "string" && supplied.match(INDEX_LINK)?.[1] === kind) return supplied;
+  return id && ENTITY_ID.test(id) ? `${INDEX_WEB}/${kind}/${id}` : undefined;
+}
+
+function setOrDrop<K extends keyof BriefOpportunity>(card: BriefOpportunity, key: K, value: BriefOpportunity[K] | undefined): void {
+  if (value === undefined) delete card[key];
+  else card[key] = value;
+}
+
+/**
+ * Attach Index web links from ids the tool already returned. Every path that
+ * emits a card (brief, drop, evening card, follow-up) goes through here, so
+ * this is the one place a link or id from Index is checked: a link that is
+ * not an Index page of its kind is rebuilt from a valid id or dropped, and an
+ * id that is not a valid id is dropped.
+ */
 export function attachIndexLinks(opp: BriefOpportunity): BriefOpportunity {
   const next = { ...opp };
-  const userId = opp.userId && USER_ID.test(opp.userId) ? opp.userId : userIdFromProfile(opp.profileUrl);
-  if (userId) {
-    next.userId = userId;
-    if (!next.userUrl) next.userUrl = `${INDEX_WEB}/u/${userId}`;
-  }
-  if (opp.opportunityId && ENTITY_ID.test(opp.opportunityId) && !next.opportunityUrl) {
-    next.opportunityUrl = `${INDEX_WEB}/o/${opp.opportunityId}`;
-  }
-  if (opp.intentId && ENTITY_ID.test(opp.intentId)) {
-    next.intentUrl = `${INDEX_WEB}/i/${opp.intentId}`;
-  }
+  const profileUrl = indexLink("u", opp.profileUrl, undefined);
+  const userId = opp.userId && USER_ID.test(opp.userId) ? opp.userId : userIdFromProfile(profileUrl);
+  const opportunityId = opp.opportunityId && ENTITY_ID.test(opp.opportunityId) ? opp.opportunityId : undefined;
+  const intentId = opp.intentId && ENTITY_ID.test(opp.intentId) ? opp.intentId : undefined;
+  setOrDrop(next, "profileUrl", profileUrl);
+  setOrDrop(next, "userId", userId);
+  setOrDrop(next, "opportunityId", opportunityId);
+  setOrDrop(next, "intentId", intentId);
+  setOrDrop(next, "userUrl", indexLink("u", opp.userUrl, userId));
+  setOrDrop(next, "opportunityUrl", indexLink("o", opp.opportunityUrl, opportunityId));
+  setOrDrop(next, "intentUrl", indexLink("i", opp.intentUrl, intentId));
   return next;
 }
 
@@ -576,16 +596,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
-}
-
-function jsonObject(text: string): Record<string, unknown> | null {
-  const start = text.search(/^\s*\{/m);
-  if (start < 0) return null;
-  try {
-    return asRecord(JSON.parse(text.slice(start)));
-  } catch {
-    return null;
-  }
 }
 
 function listedCard(row: Record<string, unknown>): BriefOpportunity | null {
@@ -616,15 +626,13 @@ function listedCard(row: Record<string, unknown>): BriefOpportunity | null {
 }
 
 /**
- * Read a `list_opportunities` result. The tool leads with a markdown line,
- * then JSON `{ opportunities: [...] }`. Returns null when that array is absent
- * so older transcript files can still be parsed.
+ * Read a `list_opportunities` result: a markdown lead, then JSON
+ * `{ success, opportunities: [...], pagination }` (an empty array when nothing
+ * is waiting). Throws `mcp-tool-error` on `success: false` and `mcp-unparsed`
+ * when the object or the array is missing, so a failure is never "no cards".
  */
-export function parseListedOpportunities(text: string): BriefOpportunity[] | null {
-  const root = jsonObject(text);
-  const list = root?.opportunities;
-  if (!Array.isArray(list)) return null;
-  return list
+export function parseListedOpportunities(text: string): BriefOpportunity[] {
+  return toolJsonArray(text, "opportunities")
     .map((row) => asRecord(row))
     .filter((row): row is Record<string, unknown> => Boolean(row))
     .map(listedCard)
@@ -863,27 +871,23 @@ function argValue(args: string[], name: string): string | undefined {
 /**
  * Fetch opportunities by calling Index `list_opportunities` directly.
  * Pending cards are the ones waiting on the user. The tool returns a markdown
- * lead plus JSON cards (`url`, `peer.url`, `headline`, `summary`).
+ * lead plus JSON cards (`url`, `peer.url`, `headline`, `summary`). Any failure
+ * throws (see parseListedOpportunities); an empty array is the only "none".
  */
 export async function fetchOpportunitiesFromMcp(opts: {
   apiKey: string;
   mcpUrl: string;
 }): Promise<BriefOpportunity[]> {
   const text = await callIndexTool(opts, "list_opportunities", { statuses: ["pending"], limit: 20 });
-  if (!text.trim()) return [];
-
-  try {
-    const parsed = JSON.parse(text) as { success?: boolean; error?: unknown; message?: unknown };
-    const errorText = typeof parsed.error === "string" ? parsed.error : "";
-    const messageText = typeof parsed.message === "string" ? parsed.message : "";
-    if (parsed.success === false && /onboarding required|not completed onboarding/i.test(`${errorText}\n${messageText}`)) {
+  const root = toolJsonObject(text);
+  if (root?.success === false) {
+    const errorText = typeof root.error === "string" ? root.error : "";
+    const messageText = typeof root.message === "string" ? root.message : "";
+    if (/onboarding required|not completed onboarding/i.test(`${errorText}\n${messageText}`)) {
       throw new Error("setup required before people suggestions");
     }
-  } catch (err) {
-    if (err instanceof Error && err.message === "setup required before people suggestions") throw err;
   }
-
-  return parseListedOpportunities(text) ?? parseOpportunityTranscript(text);
+  return parseListedOpportunities(text);
 }
 
 export async function buildDailyBriefContext(options: {

@@ -6,6 +6,12 @@
  * and a missing envelope key with -32602. A regression to the old protocol
  * therefore fails loudly instead of reading an empty list.
  *
+ * It also behaves like fetch where the client relies on it: an aborted
+ * signal rejects with an AbortError, a 3xx answer throws under
+ * `redirect: "error"` and is otherwise "followed" to a host that answers
+ * successfully (so a client that follows redirects is caught), and a
+ * `{ hang: true }` reply never answers until the signal aborts.
+ *
  * It never touches the network: a request to any URL other than its own
  * throws.
  */
@@ -22,7 +28,8 @@ export const FAKE_API_KEY = "fake-index-key-not-real";
 export type ToolReply =
   | string
   | { result: Record<string, unknown> }
-  | { response: Response };
+  | { response: Response }
+  | { hang: true };
 /** `id` is the request's JSON-RPC id, for handlers that build their own response. */
 export type ToolHandler = (args: Record<string, unknown>, request: { id: unknown }) => ToolReply | Promise<ToolReply>;
 
@@ -33,11 +40,19 @@ export interface FakeCall {
   method?: string;
   name?: string;
   arguments?: Record<string, unknown>;
-  /** HTTP status the fake answered with. */
+  /** HTTP status the fake answered with (0 when it threw or hung). */
   status: number;
+  /** Set when the client let a 3xx answer be followed. */
+  followedRedirect?: boolean;
 }
 
 const SERVER_META = fixture.responses.listIntents.result._meta;
+
+const HANG = new Response(null, { status: 599 });
+
+function abortError(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException("The operation was aborted.", "AbortError");
+}
 
 function rpcError(id: unknown, status: number, code: number, message: string, data?: unknown): Response {
   return Response.json(
@@ -134,6 +149,7 @@ export function indexMcpFake(options: { tools?: Record<string, ToolHandler>; url
         result: { content: [{ type: "text", text: reply }], resultType: "complete", _meta: SERVER_META },
       });
     }
+    if ("hang" in reply) return HANG;
     if ("response" in reply) return reply.response;
     return Response.json({ jsonrpc: "2.0", id, result: reply.result });
   }
@@ -162,7 +178,23 @@ export function indexMcpFake(options: { tools?: Record<string, ToolHandler>; url
       status: 0,
     };
     calls.push(call);
+    const signal = init?.signal ?? undefined;
+    if (signal?.aborted) throw abortError(signal);
     const response = await answer(call, init);
+    if (response === HANG) {
+      return await new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(abortError(signal)), { once: true });
+      });
+    }
+    if (response.status >= 300 && response.status < 400) {
+      if (init?.redirect === "error") throw new TypeError("fetch failed: unexpected redirect");
+      if (init?.redirect !== "manual") {
+        // What the host behind Location would say: a well-formed success.
+        call.followedRedirect = true;
+        call.status = 200;
+        return Response.json({ jsonrpc: "2.0", id: body?.id, result: fixture.responses.listOpportunities.result });
+      }
+    }
     call.status = response.status;
     return response;
   }) as typeof fetch;

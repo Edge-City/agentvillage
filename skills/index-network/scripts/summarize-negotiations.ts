@@ -26,8 +26,8 @@
 
 import { existsSync } from "node:fs";
 
-import { attachIndexLinks, parseListedOpportunities, resolveIndexApiKey, type BriefOpportunity } from "./build-daily-brief-context";
-import { callIndexTool, indexMcpUrl } from "./index-mcp";
+import { attachIndexLinks, indexLink, parseListedOpportunities, resolveIndexApiKey, type BriefOpportunity } from "./build-daily-brief-context";
+import { callIndexTool, indexMcpUrl, toolJsonArray } from "./index-mcp";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -259,23 +259,17 @@ function followUpCard(opp: BriefOpportunity): FollowUpCard | null {
   };
 }
 
+/** The user's live signals from a `list_intents` result; throws like parseListedOpportunities. */
 function intentsFrom(text: string): Array<{ summary: string; url?: string }> {
-  const start = text.search(/^\s*\{/m);
-  if (start < 0) return [];
-  try {
-    const parsed = JSON.parse(text.slice(start)) as { success?: boolean; intents?: unknown };
-    if (parsed.success === false || !Array.isArray(parsed.intents)) return [];
-    return parsed.intents.flatMap((row) => {
-      if (!row || typeof row !== "object") return [];
-      const intent = row as { summary?: unknown; description?: unknown; url?: unknown; status?: unknown };
-      if (intent.status === "archived") return [];
-      const summary = (typeof intent.summary === "string" ? intent.summary : typeof intent.description === "string" ? intent.description : "").trim();
-      if (!summary) return [];
-      return [{ summary, url: typeof intent.url === "string" ? intent.url : undefined }];
-    });
-  } catch {
-    return [];
-  }
+  return toolJsonArray(text, "intents").flatMap((row) => {
+    if (!row || typeof row !== "object") return [];
+    const intent = row as { id?: unknown; summary?: unknown; description?: unknown; url?: unknown; status?: unknown };
+    if (intent.status === "archived") return [];
+    const summary = (typeof intent.summary === "string" ? intent.summary : typeof intent.description === "string" ? intent.description : "").trim();
+    if (!summary) return [];
+    const url = indexLink("i", typeof intent.url === "string" ? intent.url : undefined, typeof intent.id === "string" ? intent.id : undefined);
+    return [{ summary, url }];
+  });
 }
 
 export async function main(): Promise<void> {
@@ -296,7 +290,7 @@ export async function main(): Promise<void> {
       statuses: ["pending", "negotiating", "accepted"],
       limit: 50,
     });
-    cards = parseListedOpportunities(opportunityText) ?? [];
+    cards = parseListedOpportunities(opportunityText);
     const intentText = await callIndexTool(target, "list_intents", { limit: 20 });
     signals = intentsFrom(intentText);
   } catch (err) {
