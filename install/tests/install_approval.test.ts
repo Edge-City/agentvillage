@@ -11,6 +11,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,18 +22,25 @@ import {
   APPROVAL_GATED_TOOLS,
   APPROVAL_PLUGIN,
   ApprovalInstallError,
+  ENV_NAME,
   SHIM_TOOLS,
+  allowlistProblems,
   approvalChoice,
+  approvalEnvLines,
   approvalProblems,
   approvalShimPath,
   approvalSurfacePath,
+  assertEnvNames,
   checkApproval,
   checkCli,
+  cronScripts,
+  facadeUrlKind,
   installApproval,
   mergeApprovalHooks,
   mergeOrAliasPaths,
   pyStrip,
   runApprovalStep,
+  tokenSource,
   type ApprovalOptions,
 } from "../install_approval";
 
@@ -44,6 +52,8 @@ const ENV_NAMES = [
   "AV_APPROVAL_ENABLED",
   "AV_APPROVAL_URL",
   "AV_APPROVAL_TOKEN",
+  "AV_APPROVAL_TOKEN_FILE",
+  "AV_APPROVAL_DAEMON_UID",
   "AV_APPROVAL_ALLOW_UNPATCHED_HERMES",
   "AV_APPROVAL_HERMES_PYTHON",
   "TENANT_ID",
@@ -125,6 +135,8 @@ interface FakeHermesState {
   release_date?: string;
   /** Behaviour: does a SIGKILLed fail_closed hook block? */
   signal_patch?: boolean;
+  /** Behaviour: does a fail_closed hook that exits 1 with no output block? (stock Hermes: no) */
+  exit1_patch?: boolean;
   /** Text: does shell_hooks.py carry the marker? Defaults to `signal_patch`. */
   signal_marker?: boolean;
   /** Specs Hermes's parser returns for the shim, in config order: [matcher, fail_closed]. Default: every gated matcher, fail_closed. */
@@ -141,6 +153,7 @@ function fakeHermes(state: FakeHermesState = {}): { kwargs: () => Record<string,
   const full = {
     release_date: "2026.9.21",
     signal_patch: true,
+    exit1_patch: false,
     managed_dir: null,
     run_once: FACADE_BLOCK,
     no_run_once: false,
@@ -182,11 +195,24 @@ def iter_configured_hooks(cfg):
     return [ShellHookSpec("pre_tool_call", shim, m, 300, fc and _S["fail_closed"]) for m, fc in _S["specs"]]
 def _resolve_effective_accept(cfg, arg):
     return _S["consent"]
+def allowlist_path():
+    import pathlib
+    return pathlib.Path(os.environ["HERMES_HOME"]) / "shell-hooks-allowlist.json"
+def allowlist_entry_for(event, command):
+    try:
+        data = json.load(open(allowlist_path()))
+    except Exception:
+        return None
+    return next((e for e in data.get("approvals", []) if e.get("event") == event and e.get("command") == command), None)
 ${full.no_run_once ? "" : `def run_once(spec, kwargs):
     if spec.command.endswith("killed.sh"):
         assert spec.fail_closed is True and open(spec.command).read().strip().endswith("kill -9 $$")
         blocked = {"action": "block", "message": "hook killed by signal 9"} if _S["signal_patch"] else None
         return {"returncode": -9, "stdout": "", "parsed": blocked, "error": None, "timed_out": False}
+    if spec.command.endswith("exit1.sh"):
+        assert spec.fail_closed is True and open(spec.command).read().strip().endswith("exit 1")
+        blocked = {"action": "block", "message": "hook exited 1 without a directive"} if _S["exit1_patch"] else None
+        return {"returncode": 1, "stdout": "", "parsed": blocked, "error": None, "timed_out": False}
     with open(os.environ["FAKE_HERMES_STATE"] + ".kwargs", "w") as fh:
         json.dump(kwargs, fh)
     return dict(_S["run_once"])
@@ -408,27 +434,42 @@ describe("installing the gate", () => {
           APPROVAL_HOOK_WAIT_S: { present: false },
         },
       },
+      shim_sha256: createHash("sha256").update(readFileSync(SHIM_SOURCE)).digest("hex"),
     });
     expect(statSync(approvalSurfacePath()).mode & 0o777).toBe(0o600);
     expect(readdirSync(join(home, "agent-hooks")).sort()).toEqual(["approval-surface.json", "hermes-hook-shim.sh"]);
 
     // The live fire: one terminal call, deliberately without a workdir.
     expect(hermes.kwargs()).toEqual({ tool_name: "terminal", args: { command: "ls /tmp" }, session_id: "av-approval-selfcheck" });
-    expect(logs.at(-1)).toContain("approval gate installed: 11 pre_tool_call entries (fail_closed)");
+    expect(logs.at(-1)).toContain("approval gate installed: 13 pre_tool_call entries (fail_closed)");
     expect(logs.at(-1)).toContain("live: blocked by the facade), overrides: none");
     expect([...logs, ...errors].join("\n")).not.toContain(TOKEN);
     expect(readFileSync(join(home, "config.yaml"), "utf8")).not.toContain(TOKEN);
   });
 
-  test("H1: the extra tools are routed through the gate; cronjob_manage is not", () => {
+  test("H1 + DATA-234 G3: the extra tools are routed through the gate, cronjob_manage and send_message included", () => {
     const home = tenant();
     installApproval(SOURCE_SKILLS, opts());
     const matchers = ourEntries(home).map((e) => String(e.matcher));
     const covers = (tool: string) => matchers.some((m) => new RegExp(`^(?:${m})$`).test(tool));
-    for (const tool of ["process", "process_manage", "web_extract", "browser_navigate", "browser_click", "skill_manage", "delegate_task"]) {
+    for (const tool of [
+      "process",
+      "process_manage",
+      "web_extract",
+      "browser_navigate",
+      "browser_click",
+      "browser_exec",
+      "browser_cdp",
+      "skill_manage",
+      "delegate_task",
+      "cronjob_manage",
+      "cronjob",
+      "send_message",
+    ]) {
       expect(covers(tool)).toBe(true);
     }
-    expect(covers("cronjob_manage")).toBe(false);
+    // Full-match: a prefix is not the tool.
+    for (const tool of ["cronjob_manager", "send_message_x", "mcp_index_search", "memory"]) expect(covers(tool)).toBe(false);
   });
 
   test("idempotent: a second run changes no byte of config.yaml or .env and keeps installed_at", () => {
@@ -637,7 +678,14 @@ describe("M3: the live self-check and --check", () => {
     const before = bytes(home);
     logs = [];
     expect(checkCli(["--check"], o)).toBe(0);
-    expect(JSON.parse(logs.at(-1)!)).toEqual({ check: "av-approval", ok: true, problems: [], overrides: [] });
+    expect(JSON.parse(logs.at(-1)!)).toEqual({
+      check: "av-approval",
+      ok: true,
+      problems: [],
+      overrides: [],
+      hermes_exit1: "allowed",
+      cron_scripts: [],
+    });
     expect(bytes(home)).toEqual(before);
     expect(checkCli([], o)).toBe(2);
   });
@@ -730,7 +778,14 @@ describe("M4: states in which Hermes ignores the gate", () => {
     expect(JSON.parse(readFileSync(approvalSurfacePath(), "utf8")).overrides).toEqual(expected);
     logs = [];
     expect(checkCli(["--check"], o)).toBe(0);
-    expect(JSON.parse(logs.at(-1)!)).toEqual({ check: "av-approval", ok: true, problems: [], overrides: expected });
+    expect(JSON.parse(logs.at(-1)!)).toEqual({
+      check: "av-approval",
+      ok: true,
+      problems: [],
+      overrides: expected,
+      hermes_exit1: "allowed",
+      cron_scripts: [],
+    });
   });
 
   test("Hermes reporting no effective consent, or a terminal entry it parses as not fail_closed, fails", () => {
@@ -842,7 +897,7 @@ describe("kill switch (L3): AV_APPROVAL_ENABLED off is fail-open, says so, and t
     expect(existsSync(approvalShimPath())).toBe(false);
     expect(existsSync(approvalSurfacePath())).toBe(false);
     expect(existsSync(join(home, "skills", "approval"))).toBe(false);
-    expect(logs.join("\n")).toContain("removed 11 pre_tool_call entries");
+    expect(logs.join("\n")).toContain("removed 13 pre_tool_call entries");
     expect(logs.join("\n")).toContain("FAIL-OPEN");
   });
 
@@ -981,7 +1036,10 @@ describe("R2-5", () => {
 // ---------------------------------------------------------------------------
 
 const DIR_LINE = "  for d in /usr/bin /bin /usr/local/bin; do";
+/** The shim's one fixed listener-table root; the fixture points its copy at a fake /proc. */
+const PROC_LINE = "\nAV_PROC_ROOT=/proc\n";
 const NODE = Bun.which("node");
+const MY_UID = process.getuid?.() ?? 0;
 
 interface ShimRun {
   code: number;
@@ -1002,8 +1060,20 @@ function shimFixture(mode: string) {
 
   const source = readFileSync(SHIM_SOURCE, "utf8");
   expect(source.split(DIR_LINE).length - 1).toBe(1);
+  expect(source.split(PROC_LINE).length - 1).toBe(1);
+  const proc = join(root, "proc");
+  mkdirSync(join(proc, "net"), { recursive: true });
   const shim = join(root, "hermes-hook-shim.sh");
-  writeFileSync(shim, source.replace(DIR_LINE, `  for d in ${fake} /usr/bin /bin /usr/local/bin; do`), { mode: 0o700 });
+  // AV_SHIM_SHELL=/bin/dash (or /bin/bash) runs the copy under that shell instead of /bin/sh.
+  const shell = process.env.AV_SHIM_SHELL;
+  writeFileSync(
+    shim,
+    source
+      .replace(DIR_LINE, `  for d in ${fake} /usr/bin /bin /usr/local/bin; do`)
+      .replace(PROC_LINE, `\nAV_PROC_ROOT=${proc}\n`)
+      .replace(/^#!\/bin\/sh\n/, shell ? `#!${shell}\n` : "#!/bin/sh\n"),
+    { mode: 0o700 },
+  );
 
   const allow = JSON.stringify({ exit_code: 0, stdout: "{}", stderr: "" });
   const block = JSON.stringify({
@@ -1034,6 +1104,8 @@ n=$(( $(cat "$st/count" 2>/dev/null || echo 0) + 1 ))
 echo "$n" > "$st/count"
 printf '%s\\n' "$@" > "$st/argv.$n"
 cat > "$st/stdin.$n"
+# A test may change the world after call n (the daemon restarted, a squatter bound the port).
+[ -f "$st/after.$n" ] && /bin/sh "$st/after.$n"
 out=""
 while [ $# -gt 0 ]; do
   case $1 in --output) out=$2; shift ;; esac
@@ -1070,6 +1142,15 @@ exec /bin/date "$@"
   );
   // The re-ask cadence is 5 s; the test keeps the loop and shortens the pause.
   writeFileSync(join(fake, "sleep"), "#!/bin/sh\nexec /bin/sleep 0.05\n", { mode: 0o755 });
+  // GNU stat's -c '%u %a' and -c %u (lstat, as GNU stat without -L), which BSD stat lacks.
+  writeFileSync(
+    join(fake, "stat"),
+    `#!/bin/sh
+[ "$1" = -c ] || exec /usr/bin/stat "$@"
+exec /usr/bin/perl -e '@s = lstat($ARGV[1]) or exit 1; $f = $ARGV[0]; $f =~ s/%u/$s[4]/; $u = sprintf("%o", $s[2] & 07777); $f =~ s/%a/$u/; print "$f\\n"' "$2" "$3"
+`,
+    { mode: 0o755 },
+  );
   if (!NODE) throw new Error("node is required to run the shim tests");
   symlinkSync(NODE, join(fake, "node"));
 
@@ -1087,22 +1168,26 @@ exec /bin/date "$@"
   );
 
   return {
-    run(env: Record<string, string> = {}): ShimRun {
-      const proc = Bun.spawnSync(["bash", "-c", `exec "$0" < "$1"`, shim, envelope], {
-        env: {
-          HOME: root,
-          HERMES_HOME: root,
-          PATH: `${fake}:/usr/bin:/bin`,
-          AV_APPROVAL_URL: URL,
-          AV_APPROVAL_TOKEN: TOKEN,
-          APPROVAL_HOOK_URL_ENV: "AV_APPROVAL_URL",
-          APPROVAL_HOOK_TOKEN_ENV: "AV_APPROVAL_TOKEN",
-          APPROVAL_HOOK_WAIT_S: "0",
-          APPROVAL_HOOK_MAX_TIME: "1",
-          APPROVAL_HOOK_LOG: join(root, "hook.log"),
-          ...env,
-        },
-      });
+    root,
+    state,
+    proc,
+    fake,
+    run(env: Record<string, string> = {}, o: { bare?: boolean } = {}): ShimRun {
+      const base = o.bare
+        ? { PATH: `${fake}:/usr/bin:/bin` }
+        : {
+            HOME: root,
+            HERMES_HOME: root,
+            PATH: `${fake}:/usr/bin:/bin`,
+            AV_APPROVAL_URL: URL,
+            AV_APPROVAL_TOKEN: TOKEN,
+            APPROVAL_HOOK_URL_ENV: "AV_APPROVAL_URL",
+            APPROVAL_HOOK_TOKEN_ENV: "AV_APPROVAL_TOKEN",
+            APPROVAL_HOOK_WAIT_S: "0",
+            APPROVAL_HOOK_MAX_TIME: "1",
+            APPROVAL_HOOK_LOG: join(root, "hook.log"),
+          };
+      const proc = Bun.spawnSync(["bash", "-c", `exec "$0" < "$1"`, shim, envelope], { env: { ...base, ...env } });
       const calls = existsSync(join(state, "count")) ? Number(readFileSync(join(state, "count"), "utf8")) : 0;
       const read = (name: string) => Array.from({ length: calls }, (_, i) => readFileSync(join(state, `${name}.${i + 1}`), "utf8"));
       return {
@@ -1213,5 +1298,490 @@ describe("the vendored shim (bash -c, fake curl)", () => {
     expect(r.calls).toBe(2);
     expect(r.code).toBe(0);
     expect(r.stdout).toBe("{}");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DATA-234: the gate's fail-open holes
+// ---------------------------------------------------------------------------
+
+/** A /proc/net/tcp line (the kernel's layout; uid is the 8th field). */
+function tcpLine(addr: string, port: number, state: string, uid: number): string {
+  const p = port.toString(16).toUpperCase().padStart(4, "0");
+  return `   0: ${addr}:${p} 00000000:0000 ${state} 00000000:00000000 00:00000000 00000000 ${String(uid).padStart(5)}        0 12345 1 0000000000000000 100 0 0 10 0`;
+}
+const TCP_HEADER = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode";
+const TCP6_HEADER =
+  "  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode";
+
+function writeProc(fx: ReturnType<typeof shimFixture>, v4: string[], v6: string[] | null = []): void {
+  writeFileSync(join(fx.proc, "net", "tcp"), [TCP_HEADER, ...v4, ""].join("\n"));
+  const six = join(fx.proc, "net", "tcp6");
+  if (v6 === null) rmSync(six, { force: true });
+  else writeFileSync(six, [TCP6_HEADER, ...v6, ""].join("\n"));
+}
+
+const LOOP_URL = "http://127.0.0.1:4682";
+const DAEMON = 10001;
+
+describe("DATA-234 G1: the shim's own fatal paths", () => {
+  test("a variable name with a leading digit blocks with a directive (it was a fatal bad substitution)", () => {
+    for (const env of [{ APPROVAL_HOOK_URL_ENV: "1ABC" }, { APPROVAL_HOOK_TOKEN_ENV: "9TOKEN" }, { APPROVAL_HOOK_URL_ENV: "A-B" }]) {
+      const r = shimFixture("allow").run(env);
+      expect(r.code).toBe(2);
+      expect(JSON.parse(r.stdout).action).toBe("block");
+      expect(JSON.parse(r.stdout).message).toContain("is not a variable name");
+      expect(r.calls).toBe(0);
+    }
+  });
+
+  test("every setting unset (no HOME, HERMES_HOME, URL, token or shim settings): a block directive at exit 2", () => {
+    const r = shimFixture("allow").run({}, { bare: true });
+    expect(r.code).toBe(2);
+    expect(JSON.parse(r.stdout)).toEqual({
+      action: "block",
+      message: "approval facade unreachable: AV_APPROVAL_URL is not set in the hook's environment",
+    });
+    expect(r.calls).toBe(0);
+  });
+
+  test("a clock that prints no digits (BSD date's %3N) is 0: no fatal arithmetic, verdicts intact, no re-asking", () => {
+    for (const [mode, code, calls] of [
+      ["allow", 0, 1],
+      ["block", 2, 1],
+      ["unreachable", 2, 1],
+      ["waiting", 2, 1],
+    ] as const) {
+      const fx = shimFixture(mode);
+      writeFileSync(join(fx.fake, "date"), "#!/bin/sh\ncase \"$1\" in +%s%3N) echo 17000000003N ;; *) exec /bin/date \"$@\" ;; esac\n", {
+        mode: 0o755,
+      });
+      const r = fx.run({ APPROVAL_HOOK_WAIT_S: "280" });
+      expect(r.code).toBe(code);
+      expect(r.calls).toBe(calls);
+      expect(r.stdout.trim().length).toBeGreaterThan(0);
+      if (code !== 0) expect(JSON.parse(r.stdout).action).toBe("block");
+      expect(fx.log()).toContain("elapsed_ms=");
+    }
+  });
+
+  test("the installer only writes variable names of the form ^[A-Z][A-Z0-9_]*$", () => {
+    expect(() => assertEnvNames(approvalEnvLines())).not.toThrow();
+    for (const [name] of Object.entries(approvalEnvLines())) expect(ENV_NAME.test(name)).toBe(true);
+    for (const bad of [{ "1ABC": "1" }, { lower_case: "1" }, { APPROVAL_HOOK_URL_ENV: "1ABC" }, { APPROVAL_HOOK_TOKEN_ENV: "A-B" }]) {
+      expect(() => assertEnvNames(bad)).toThrow(ApprovalInstallError);
+    }
+  });
+
+  test("the static check names a shim setting that is not such a name", () => {
+    const home = tenant();
+    const o = opts();
+    installApproval(SOURCE_SKILLS, o);
+    const envPath = join(home, ".env");
+    writeFileSync(envPath, readFileSync(envPath, "utf8").replace("APPROVAL_HOOK_URL_ENV=AV_APPROVAL_URL", "APPROVAL_HOOK_URL_ENV=1ABC"));
+    expect(approvalProblems(o)).toEqual(["env-unresolvable:1ABC"]);
+  });
+
+  test("the interpreter line stays #!/bin/sh (absolute; the consented command is the shim's path, unchanged)", () => {
+    const source = readFileSync(SHIM_SOURCE, "utf8");
+    expect(source.split("\n", 1)[0]).toBe("#!/bin/sh");
+    expect(source).not.toMatch(/^set -[a-z]*u/m);
+  });
+});
+
+describe("DATA-234 G2: the shim digest the backstop compares", () => {
+  test("the static check names a shim that differs from the recorded digest, or a marker without one", () => {
+    const home = tenant();
+    const o = opts();
+    installApproval(SOURCE_SKILLS, o);
+    expect(approvalProblems(o)).toEqual([]);
+    writeFileSync(approvalShimPath(), `${readFileSync(approvalShimPath(), "utf8")}\n# planted\n`);
+    expect(approvalProblems(o)).toEqual(["shim-hash-mismatch"]);
+    const marker = JSON.parse(readFileSync(approvalSurfacePath(), "utf8"));
+    delete marker.shim_sha256;
+    writeFileSync(approvalSurfacePath(), JSON.stringify(marker));
+    expect(approvalProblems(o)).toEqual(["manifest-missing"]);
+    expect(home).toContain(".hermes");
+  });
+
+  test("the plugin's matcher list is the installer's", () => {
+    const plugin = readFileSync(join(REPO, "plugins", "av-approval", "__init__.py"), "utf8");
+    const block = /GATED_MATCHERS: tuple\[str, \.\.\.\] = \(([\s\S]*?)\n\)/.exec(plugin);
+    expect(block).not.toBeNull();
+    const listed = [...block![1]!.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    expect(listed).toEqual([...APPROVAL_GATED_TOOLS]);
+  });
+});
+
+describe("DATA-234 G4/G5: cron scripts, the consent allowlist and the exit-1 probe", () => {
+  test("scripts under $HERMES_HOME/scripts/ are listed by name in the install log and --check", () => {
+    const home = tenant();
+    mkdirSync(join(home, "scripts", "brief"), { recursive: true });
+    writeFileSync(join(home, "scripts", "brief", "prepare.py"), "print(1)\n");
+    writeFileSync(join(home, "scripts", "ping.sh"), "echo hi\n");
+    const o = opts();
+    expect(installApproval(SOURCE_SKILLS, o)).toBe("installed");
+    expect(cronScripts()).toEqual(["brief/prepare.py", "ping.sh"]);
+    expect(logs.join("\n")).toContain("2 script(s) under $HERMES_HOME/scripts/ run at cron ticks with NO hook");
+    expect(logs.join("\n")).toContain("brief/prepare.py, ping.sh");
+    logs = [];
+    expect(checkCli(["--check"], o)).toBe(0);
+    expect(JSON.parse(logs.at(-1)!).cron_scripts).toEqual(["brief/prepare.py", "ping.sh"]);
+  });
+
+  test("a lock Hermes cannot open (mode 000, a directory, a symlink) fails the install; absent is fine", () => {
+    const lock = (home: string) => join(home, "shell-hooks-allowlist.json.lock");
+    let home = tenant();
+    writeFileSync(lock(home), "", { mode: 0o000 });
+    failsWith("allowlist-unusable:shell-hooks-allowlist.json.lock:not-read-write");
+    home = tenant();
+    mkdirSync(lock(home));
+    failsWith("allowlist-unusable:shell-hooks-allowlist.json.lock:not-regular");
+    home = tenant();
+    writeFileSync(join(home, "elsewhere"), "");
+    symlinkSync(join(home, "elsewhere"), lock(home));
+    failsWith("allowlist-unusable:shell-hooks-allowlist.json.lock:not-regular");
+    home = tenant();
+    writeFileSync(join(home, "shell-hooks-allowlist.json"), '{"approvals": []}', { mode: 0o200 });
+    failsWith("allowlist-unusable:shell-hooks-allowlist.json:unreadable");
+    tenant();
+    expect(allowlistProblems()).toEqual([]);
+  });
+
+  test("an absent lock in a home this user cannot write is named (Hermes's open would raise)", () => {
+    const home = tenant();
+    chmodSync(home, 0o500);
+    try {
+      expect(allowlistProblems()).toEqual(["allowlist-unusable:shell-hooks-allowlist.json.lock:uncreatable"]);
+    } finally {
+      chmodSync(home, 0o700);
+    }
+  });
+
+  test("live_selfcheck.py reports the exit-1 probe and the allowlist facts; an unusable lock is a problem", () => {
+    const home = tenant();
+    const o = opts();
+    installApproval(SOURCE_SKILLS, o);
+    const live = (state: FakeHermesState = {}) => {
+      fakeHermes(state);
+      const out = Bun.spawnSync(
+        [PYTHON!, join(SOURCE_SKILLS, "approval", "scripts", "live_selfcheck.py"), "--home", home, "--shim", approvalShimPath(), "--matchers", JSON.stringify(APPROVAL_GATED_TOOLS)],
+        { env: { ...process.env, HERMES_HOME: home } },
+      );
+      expect(out.exitCode).toBe(0);
+      return JSON.parse(out.stdout.toString().trim().split("\n").at(-1)!);
+    };
+    let facts = live();
+    expect(facts.exit1_blocks).toBe(false);
+    expect(facts.consent_allowlist).toEqual({ basis: "hermes", allowlist: "absent", allowlist_lock: "absent", shim_recorded: false });
+    expect(facts.problems).toEqual([]);
+    writeFileSync(
+      join(home, "shell-hooks-allowlist.json"),
+      JSON.stringify({ approvals: [{ event: "pre_tool_call", command: approvalShimPath() }] }),
+      { mode: 0o600 },
+    );
+    writeFileSync(join(home, "shell-hooks-allowlist.json.lock"), "", { mode: 0o000 });
+    facts = live({ exit1_patch: true });
+    expect(facts.exit1_blocks).toBe(true);
+    expect(facts.consent_allowlist).toEqual({ basis: "hermes", allowlist: "ok", allowlist_lock: "not-read-write", shim_recorded: true });
+    expect(facts.problems).toEqual(["allowlist-unusable:shell-hooks-allowlist.json.lock:not-read-write"]);
+  });
+
+  test("the exit-1 answer is printed at install and in --check: allowed on stock Hermes, blocked on the patched build", () => {
+    tenant();
+    const o = opts();
+    installApproval(SOURCE_SKILLS, o);
+    expect(logs.join("\n")).toContain("Hermes ALLOWS a fail_closed hook that exits 1 with no output (unpatched; DATA-228");
+    tenant();
+    fakeHermes({ exit1_patch: true });
+    installApproval(SOURCE_SKILLS, o);
+    expect(logs.join("\n")).toContain("Hermes blocks a fail_closed hook that exits 1 with no output (patched checkpoint)");
+    logs = [];
+    expect(checkCli(["--check"], o)).toBe(0);
+    expect(JSON.parse(logs.at(-1)!).hermes_exit1).toBe("blocked");
+  });
+});
+
+describe("DATA-234 amendments: the co-located installer contract", () => {
+  function tokenFile(home: string, value = TOKEN, mode = 0o600): string {
+    const dir = join(home, "approval");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const path = join(dir, "agent-token");
+    writeFileSync(path, `${value}\n`, { mode });
+    chmodSync(path, mode);
+    return path;
+  }
+
+  test("AV_APPROVAL_TOKEN_FILE in place of AV_APPROVAL_TOKEN: installs; the value is never printed", () => {
+    const home = tenant({ env: { AV_APPROVAL_ENABLED: "1", AV_APPROVAL_URL: URL, TENANT_ID: TENANT } });
+    const path = tokenFile(home);
+    appendEnv(home, `AV_APPROVAL_TOKEN_FILE=${path}`);
+    expect(tokenSource()).toEqual({ kind: "file", path, named: true });
+    const o = opts();
+    expect(installApproval(SOURCE_SKILLS, o)).toBe("installed");
+    expect(approvalProblems(o)).toEqual([]);
+    expect([...logs, ...errors].join("\n")).not.toContain(TOKEN);
+    expect(readFileSync(join(home, ".env"), "utf8")).not.toContain(TOKEN);
+  });
+
+  test("the default $HERMES_HOME/approval/agent-token is used when it exists and no variable names a file", () => {
+    const home = tenant({ env: { AV_APPROVAL_ENABLED: "1", AV_APPROVAL_URL: URL, TENANT_ID: TENANT } });
+    const path = tokenFile(home);
+    expect(tokenSource()).toEqual({ kind: "file", path, named: false });
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+  });
+
+  test("a token file the shim would refuse is refused before anything is written, naming why, never the value", () => {
+    for (const [setup, why] of [
+      [(home: string) => tokenFile(home, TOKEN, 0o644), "mode-not-0600"],
+      [(home: string) => join(home, "approval", "missing"), "missing"],
+      [(home: string) => tokenFile(home, "has space"), "malformed"],
+      [(home: string) => tokenFile(home, ""), "empty"],
+      [() => "relative/agent-token", "not-absolute"],
+    ] as const) {
+      const home = tenant({ env: { AV_APPROVAL_ENABLED: "1", AV_APPROVAL_URL: URL, AV_APPROVAL_TOKEN: TOKEN } });
+      mkdirSync(join(home, "approval"), { recursive: true });
+      appendEnv(home, `AV_APPROVAL_TOKEN_FILE=${setup(home)}`);
+      const before = bytes(home);
+      const err = expectInstallError(() => installApproval(SOURCE_SKILLS, opts()), "approval-token-file-unusable");
+      expect(err.message).toContain(` is ${why};`);
+      expect(err.message).not.toContain(TOKEN);
+      expect(bytes(home)).toEqual(before);
+    }
+  });
+
+  test("URL forms: https, http://127.0.0.1:<port> and unix:<absolute path> install; any other http:// is refused", () => {
+    expect(facadeUrlKind("https://facade.example.test")).toBe("https");
+    expect(facadeUrlKind(LOOP_URL)).toBe("loopback");
+    expect(facadeUrlKind("unix:/var/lib/approvald/t/run/hook.sock")).toBe("unix");
+    for (const bad of [
+      "http://facade.example.test",
+      "http://localhost:4682",
+      "http://127.0.0.1",
+      "http://127.0.0.1:99999",
+      "http://127.0.0.1:80@evil.example",
+      "http://127.0.0.2:4682",
+      "unix:relative.sock",
+      "unix:/a b.sock",
+    ]) {
+      expect(facadeUrlKind(bad)).toBeNull();
+    }
+    for (const url of [LOOP_URL, "unix:/var/lib/approvald/t/run/hook.sock"]) {
+      tenant({ env: { AV_APPROVAL_ENABLED: "1", AV_APPROVAL_URL: url, AV_APPROVAL_TOKEN: TOKEN, TENANT_ID: TENANT } });
+      expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+    }
+    tenant({ env: { AV_APPROVAL_ENABLED: "1", AV_APPROVAL_URL: "http://127.0.0.1:4682@evil.example", AV_APPROVAL_TOKEN: TOKEN } });
+    expectInstallError(() => installApproval(SOURCE_SKILLS, opts()), "approval-url-not-https");
+  });
+
+  test("a non-numeric AV_APPROVAL_DAEMON_UID is refused", () => {
+    const home = tenant({ env: { AV_APPROVAL_ENABLED: "1", AV_APPROVAL_URL: LOOP_URL, AV_APPROVAL_TOKEN: TOKEN } });
+    appendEnv(home, "AV_APPROVAL_DAEMON_UID=approvald");
+    expectInstallError(() => installApproval(SOURCE_SKILLS, opts()), "approval-daemon-uid-invalid");
+  });
+
+  const UNREACHABLE = {
+    returncode: 2,
+    stdout: JSON.stringify({ action: "block", message: "approval facade unreachable: transport failure (curl exit 7)" }),
+    parsed: { action: "block", message: "x" },
+    error: null,
+    timed_out: false,
+  };
+
+  test("live fire best-effort for a LOCAL facade: unreachable or timed out is logged and the install stands", () => {
+    for (const url of [LOOP_URL, "unix:/var/lib/approvald/t/run/hook.sock"]) {
+      for (const run_once of [UNREACHABLE, { returncode: null, stdout: "", parsed: null, error: null, timed_out: true }]) {
+        tenant({ env: { AV_APPROVAL_ENABLED: "1", AV_APPROVAL_URL: url, AV_APPROVAL_TOKEN: TOKEN, TENANT_ID: TENANT } });
+        fakeHermes({ run_once });
+        errors = [];
+        expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+        expect(errors.join("\n")).toContain("! approval gate: live self-check deferred (local facade did not answer");
+        expect(logs.at(-1)).toContain("self-check passed (live: deferred, live-");
+      }
+    }
+  });
+
+  test("live fire stays MANDATORY for a remote https facade, and for any non-transient answer from a local one", () => {
+    tenant();
+    fakeHermes({ run_once: UNREACHABLE });
+    failsWith("live-facade-unreachable");
+    tenant({ env: { AV_APPROVAL_ENABLED: "1", AV_APPROVAL_URL: LOOP_URL, AV_APPROVAL_TOKEN: TOKEN } });
+    fakeHermes({ run_once: { returncode: 0, stdout: "{}", parsed: null, error: null, timed_out: false } });
+    failsWith("live-call-allowed");
+    tenant({ env: { AV_APPROVAL_ENABLED: "1", AV_APPROVAL_URL: LOOP_URL, AV_APPROVAL_TOKEN: TOKEN } });
+    fakeHermes({ signal_patch: false, run_once: UNREACHABLE });
+    failsWith("hermes-signal-patch-missing");
+  });
+
+  test("the kill switch literal the control plane writes, 0, is the explicit off; unset is a skip", () => {
+    tenant({ env: { AV_APPROVAL_ENABLED: "0" } });
+    expect(approvalChoice()).toBe("off");
+    tenant({ env: {} });
+    expect(approvalChoice()).toBe("unset");
+  });
+});
+
+describe("DATA-234 shim: the co-located facade (token file, loopback listener, unix socket)", () => {
+  test("the token file is read before the variable; the value travels on stdin only and is never logged", () => {
+    const fx = shimFixture("allow");
+    const dir = join(fx.root, "approval");
+    mkdirSync(dir, { mode: 0o700 });
+    writeFileSync(join(dir, "agent-token"), "file-token-SENTINEL\n", { mode: 0o600 });
+    // The default path, found under HERMES_HOME:
+    let r = fx.run({ AV_APPROVAL_TOKEN: "" });
+    expect(r.code).toBe(0);
+    expect(r.stdin[0]).toBe('header = "X-Approval-Authorization: Bearer file-token-SENTINEL"\n');
+    // Named, it wins over the variable:
+    r = fx.run({ AV_APPROVAL_TOKEN_FILE: join(dir, "agent-token") });
+    expect(r.stdin.at(-1)).toBe('header = "X-Approval-Authorization: Bearer file-token-SENTINEL"\n');
+    expect(r.argv.join("")).not.toContain("SENTINEL");
+    expect(`${r.stdout}${r.stderr}${fx.log()}`).not.toContain("SENTINEL");
+  });
+
+  test("a token file that is missing, loose, a link or not ours blocks without calling the facade (no fallback)", () => {
+    const fx = shimFixture("allow");
+    const dir = join(fx.root, "approval");
+    mkdirSync(dir, { mode: 0o700 });
+    const path = join(dir, "agent-token");
+    writeFileSync(path, "file-token\n", { mode: 0o644 });
+    chmodSync(path, 0o644);
+    let r = fx.run({ AV_APPROVAL_TOKEN_FILE: path });
+    expect(r.code).toBe(2);
+    expect(JSON.parse(r.stdout).message).toContain("not owned by this user with mode 0600");
+    r = fx.run({ AV_APPROVAL_TOKEN_FILE: join(dir, "absent") });
+    expect(r.code).toBe(2);
+    expect(JSON.parse(r.stdout).message).toContain("missing or not a regular file");
+    chmodSync(path, 0o600);
+    symlinkSync(path, join(dir, "link"));
+    r = fx.run({ AV_APPROVAL_TOKEN_FILE: join(dir, "link") });
+    expect(r.code).toBe(2);
+    r = fx.run({ AV_APPROVAL_TOKEN_FILE: "relative" });
+    expect(r.code).toBe(2);
+    expect(r.calls).toBe(0);
+  });
+
+  test("loopback: the daemon's uid on 127.0.0.1:<port> passes; plain http needs no allow flag", () => {
+    const fx = shimFixture("allow");
+    writeProc(fx, [tcpLine("0100007F", 4682, "0A", DAEMON), tcpLine("0100007F", 9999, "0A", MY_UID)]);
+    const r = fx.run({ AV_APPROVAL_URL: LOOP_URL, AV_APPROVAL_DAEMON_UID: String(DAEMON) });
+    expect(r.code).toBe(0);
+    expect(r.argv[0].trim().split("\n").at(-1)).toBe(`${LOOP_URL}/hook/hermes`);
+    expect(r.argv[0]).toContain("=http\n");
+  });
+
+  test("loopback: a squatter of another uid, a wildcard or mapped listener of it, or no listener blocks with facade_listener_foreign", () => {
+    for (const [v4, v6, needle] of [
+      [[tcpLine("0100007F", 4682, "0A", 1000)], [], "held by uid 1000"],
+      [[tcpLine("0100007F", 4682, "0A", DAEMON), tcpLine("00000000", 4682, "0A", 1000)], [], "held by uid 1000"],
+      [[tcpLine("0100007F", 4682, "0A", DAEMON)], [tcpLine("0000000000000000FFFF00000100007F", 4682, "0A", 1000)], "held by uid 1000"],
+      [[tcpLine("0100007F", 4682, "0A", DAEMON)], [tcpLine("00000000000000000000000000000000", 4682, "0A", 1000)], "held by uid 1000"],
+      [[tcpLine("0200007F", 4682, "0A", 1000), tcpLine("0100007F", 4682, "0A", DAEMON)], [], "held by uid 1000"],
+      [[tcpLine("0100007F", 4682, "01", DAEMON)], [], "nothing listens"],
+      [[tcpLine("0A00000A", 4682, "0A", DAEMON)], [], "nothing listens"],
+      [[], null, "nothing listens"],
+    ] as const) {
+      const fx = shimFixture("allow");
+      writeProc(fx, [...v4], v6 === null ? null : [...v6]);
+      const r = fx.run({ AV_APPROVAL_URL: LOOP_URL, AV_APPROVAL_DAEMON_UID: String(DAEMON) });
+      expect(r.code).toBe(2);
+      const message = JSON.parse(r.stdout).message as string;
+      expect(message).toStartWith("approval facade unreachable: facade_listener_foreign: ");
+      expect(message).toContain(needle);
+      expect(r.calls).toBe(0);
+      expect(r.stdin).toEqual([]);
+    }
+  });
+
+  test("loopback: an unreadable listener table blocks; the default daemon uid is 10001", () => {
+    const fx = shimFixture("allow");
+    rmSync(join(fx.proc, "net"), { recursive: true });
+    let r = fx.run({ AV_APPROVAL_URL: LOOP_URL });
+    expect(r.code).toBe(2);
+    expect(JSON.parse(r.stdout).message).toContain("facade_listener_foreign: the listener table");
+    mkdirSync(join(fx.proc, "net"));
+    writeProc(fx, [tcpLine("0100007F", 4682, "0A", 10001)]);
+    r = fx.run({ AV_APPROVAL_URL: LOOP_URL });
+    expect(r.code).toBe(0);
+    r = fx.run({ AV_APPROVAL_URL: LOOP_URL, AV_APPROVAL_DAEMON_UID: "approvald" });
+    expect(r.code).toBe(2);
+    expect(JSON.parse(r.stdout).message).toContain("AV_APPROVAL_DAEMON_UID is not a uid");
+  });
+
+  test("loopback: the listener is checked before EVERY post, so a squatter that binds during a re-ask is refused", () => {
+    const fx = shimFixture("waiting");
+    writeProc(fx, [tcpLine("0100007F", 4682, "0A", DAEMON)]);
+    // After the first post the daemon is gone and a uid-1000 process holds the port.
+    writeFileSync(join(fx.state, "after.1"), `printf '%s\\n%s\\n' '${TCP_HEADER}' '${tcpLine("0100007F", 4682, "0A", 1000)}' > '${join(fx.proc, "net", "tcp")}'\n`);
+    const r = fx.run({ AV_APPROVAL_URL: LOOP_URL, AV_APPROVAL_DAEMON_UID: String(DAEMON), APPROVAL_HOOK_WAIT_S: "20" });
+    expect(r.calls).toBe(1);
+    expect(r.code).toBe(2);
+    expect(JSON.parse(r.stdout).message).toContain("facade_listener_foreign: loopback port 4682 is held by uid 1000");
+  });
+
+  test("a remote https facade never reads the listener table", () => {
+    const fx = shimFixture("allow");
+    rmSync(join(fx.proc, "net"), { recursive: true });
+    expect(fx.run().code).toBe(0);
+  });
+
+  function unixSocket(dir: string): string {
+    const sock = join(dir, "hook.sock");
+    const made = Bun.spawnSync([PYTHON!, "-c", "import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])", sock]);
+    expect(made.exitCode).toBe(0);
+    return sock;
+  }
+
+  test("unix socket: the daemon's socket in its own directory is dialled with --unix-socket and an http://localhost URL", () => {
+    const fx = shimFixture("allow");
+    const run = join(fx.root, "r");
+    mkdirSync(run);
+    chmodSync(run, 0o711);
+    const sock = unixSocket(run);
+    const r = fx.run({ AV_APPROVAL_URL: `unix:${sock}`, AV_APPROVAL_DAEMON_UID: String(MY_UID) });
+    expect(r.code).toBe(0);
+    const argv = r.argv[0].trim().split("\n");
+    expect(argv.at(-1)).toBe("http://localhost/hook/hermes");
+    expect(argv[argv.indexOf("--unix-socket") + 1]).toBe(sock);
+    expect(r.stdin[0]).toBe(`header = "X-Approval-Authorization: Bearer ${TOKEN}"\n`);
+  });
+
+  test("unix socket: another owner, a directory others can write, a link or a plain file blocks with facade_listener_foreign", () => {
+    const cases: [string, (fx: ReturnType<typeof shimFixture>) => [string, string], string][] = [
+      ["owner", (fx) => {
+        const d = join(fx.root, "r");
+        mkdirSync(d);
+        chmodSync(d, 0o711);
+        return [unixSocket(d), String(MY_UID + 1)];
+      }, "not owned by the approval daemon"],
+      ["dir writable", (fx) => {
+        const d = join(fx.root, "r");
+        mkdirSync(d);
+        chmodSync(d, 0o773);
+        return [unixSocket(d), String(MY_UID)];
+      }, "writable by others"],
+      ["link", (fx) => {
+        const d = join(fx.root, "r");
+        mkdirSync(d);
+        chmodSync(d, 0o711);
+        const s = unixSocket(d);
+        symlinkSync(s, join(d, "l.sock"));
+        return [join(d, "l.sock"), String(MY_UID)];
+      }, "missing or not a socket"],
+      ["file", (fx) => {
+        const d = join(fx.root, "r");
+        mkdirSync(d);
+        writeFileSync(join(d, "f.sock"), "");
+        return [join(d, "f.sock"), String(MY_UID)];
+      }, "missing or not a socket"],
+    ];
+    for (const [, setup, needle] of cases) {
+      const fx = shimFixture("allow");
+      const [sock, uid] = setup(fx);
+      const r = fx.run({ AV_APPROVAL_URL: `unix:${sock}`, AV_APPROVAL_DAEMON_UID: uid });
+      expect(r.code).toBe(2);
+      expect(JSON.parse(r.stdout).message).toContain(`facade_listener_foreign: ${needle.startsWith("missing") ? "the facade socket is " : ""}`);
+      expect(JSON.parse(r.stdout).message).toContain(needle);
+      expect(r.calls).toBe(0);
+    }
   });
 });

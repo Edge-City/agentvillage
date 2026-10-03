@@ -1,6 +1,6 @@
 ---
 name: approval
-description: Installed only for residents who opted in to approval.md. Some of your tool calls (terminal, write_file, patch, read_file, search_files) are checked by the resident's approval gate before they run, and a few kinds of action wait for the resident to approve them in their approval bot. Read this before your first tool call, and whenever a tool call comes back blocked by the approval gate.
+description: Installed only for residents who opted in to approval.md. Some of your tool calls (terminal, write_file, patch, read_file, search_files, and a few more that are recorded) are checked by the resident's approval gate before they run, and a few kinds of action wait for the resident to approve them in their approval bot. Read this before your first tool call, and whenever a tool call comes back blocked by the approval gate.
 ---
 
 # Approval gate
@@ -13,8 +13,10 @@ ones with consequences outside the sandbox (sending a message, spending money,
 deleting files outside your workspace, posting content, calling or fetching
 from a network service) wait for the resident to tap approve or reject in
 their approval bot on Telegram. `process`, `web_extract`, the `browser_*`
-tools, `skill_manage` and `delegate_task` also pass through the gate; today
-the gate lets them through unjudged.
+tools, `skill_manage`, `delegate_task`, `cronjob_manage` and `send_message`
+also pass through the gate; today the gate records them without judging
+them. If the gate cannot be reached, or cannot be verified
+(`av-approval: gate unverified (...)`), those calls are blocked too.
 
 ## Shape every gated call so it can be checked
 
@@ -42,8 +44,10 @@ the resident is asked. Then:
   `hook-timeout` or that the request expired). Tell the resident what you were
   about to do and that it needs their approval in the approval bot; do it only
   if they ask again and approve.
-- **Gate unreachable** (`approval facade unreachable`): nothing that needs the
-  gate can run right now. Tell the resident; do not look for a way around it.
+- **Gate unreachable** (`approval facade unreachable`) or **unverified**
+  (`av-approval: gate unverified (<code>)`): nothing that needs the gate can
+  run right now. Tell the resident, with the code; do not look for a way
+  around it.
 
 ## Never
 
@@ -51,9 +55,11 @@ the resident is asked. Then:
   path, a script, a subagent or a different command that has the same effect.
   A block is the resident's answer, not an obstacle.
 - Never edit, move or delete `config.yaml`, anything under `agent-hooks/`,
-  `.env` or `shell-hooks-allowlist.json` in the Hermes home, and never try to
-  change the approval policy. Those are the resident's controls; the gate
-  refuses such calls.
+  `approval/`, `.env`, `shell-hooks-allowlist.json` or its `.lock` in the
+  Hermes home, or anything under `scripts/` that a scheduled job runs, and
+  never try to change the approval policy. Those are the resident's controls;
+  the gate refuses such calls.
+- Never bind or listen on the approval service's port or socket.
 - Never send the resident a link to approve something. Approvals arrive in
   their approval bot by themselves.
 
@@ -61,15 +67,17 @@ the resident is asked. Then:
 
 The resident has been told what is not checked:
 
-- Subagent calls, MCP tools (Index included) and reads before the first gated
-  call.
+- MCP tools (Index included) and reads before the first gated call.
+- Subagents: `delegate_task` goes through the gate, but it is recorded, not
+  judged, today.
 - Tools that can reach the same effects without a check today:
   `process`/`process_manage` (writing to and submitting a running process),
-  `web_extract`, the `browser_*` tools, `skill_manage` and `delegate_task` pass
-  through the gate unjudged until approval.md's Hermes adapter learns them;
-  `cronjob_manage` is not routed through the gate at all, so a scheduled job's
-  script (`script`, `no_agent`) and an HTTP `monitor_script` run without a
-  check.
+  `web_extract`, the `browser_*` tools, `skill_manage`, `delegate_task`,
+  `cronjob_manage` and `send_message` pass through the gate unjudged until
+  approval.md's Hermes adapter learns them.
+- A scheduled job's own script (`script`, `monitor`, `no_agent`) runs at
+  every tick with no check at all. Creating or changing the job goes through
+  the gate; what the script then does does not.
 - A process on the sandbox can kill the hook (signal) or attach to the gateway
   (ptrace); both are closed by the checkpoint build (patch + ptrace_scope), not
   by this skill.
