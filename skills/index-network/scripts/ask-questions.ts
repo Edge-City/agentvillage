@@ -17,6 +17,7 @@ import {
   villageDate,
   type BriefOpportunity,
 } from "./build-daily-brief-context";
+import { indexMcpUrl } from "./index-mcp";
 
 /** Last day of Edge City India 2026 (Oct 11 – Nov 1). */
 const FINAL_REFLECTION_DATE = "2026-11-01";
@@ -100,8 +101,7 @@ export async function askQuestions(options: {
   const apiKey = options.apiKey ?? resolveIndexApiKey();
   if (apiKey) {
     try {
-      const mcpUrl = process.env.INDEX_MCP_URL?.trim() || "https://protocol.index.network/mcp";
-      const fetched = await fetchOpportunitiesFromMcp({ apiKey, mcpUrl });
+      const fetched = await fetchOpportunitiesFromMcp({ apiKey, mcpUrl: indexMcpUrl() });
       const chosen = fetched.find((opp) => opp.opportunityId && !seen.has(opp.opportunityId));
       if (chosen?.opportunityId) {
         state.deliveredToday = { date, ids: [...seen, chosen.opportunityId] };

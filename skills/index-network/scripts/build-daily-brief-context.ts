@@ -18,6 +18,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import { callIndexTool, indexMcpUrl, toolJsonArray, toolJsonObject } from "./index-mcp";
 import { portalEventsBaseUrl } from "./validate-digest-urls";
 
 /**
@@ -53,7 +54,11 @@ export function resolveIndexApiKey(): string | undefined {
   return undefined;
 }
 
-const EDGEOS_BASE = "https://api.edgeos.world/api/v1";
+const DEFAULT_EDGEOS_BASE = "https://api.edgeos.world/api/v1";
+/** EdgeOS base URL: `$EDGEOS_API_BASE` (local dev points it at a tunnel), else production. */
+export function edgeosBase(): string {
+  return (process.env.EDGEOS_API_BASE?.trim() || DEFAULT_EDGEOS_BASE).replace(/\/+$/, "");
+}
 /** Edge City India 2026 — Mandrem, Goa. All brief/cron day boundaries and displayed times use this zone. */
 const VILLAGE_TZ = "Asia/Kolkata";
 
@@ -196,12 +201,6 @@ export interface DailyBriefContext {
 const HIGHLIGHTED_EVENT_LIMIT = 6;
 const DISCOVERY_EVENT_TARGET = 6;
 const RSVP_EVENT_LIMIT = 6;
-/** How many pending questions to fetch per digest run (tool caps at 10). */
-const QUESTION_FETCH_LIMIT = 5;
-/** Hard cap on a question prompt interpolated into the digest body. */
-const QUESTION_PROMPT_MAX_LENGTH = 300;
-/** Marker-safe question id shape — ids are interpolated into <!-- digest-question:id=… --> markers. */
-const QUESTION_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 /** Days a delivered question stays out of the digest before being re-offered. */
 export const QUESTION_COOLDOWN_DAYS = 3;
 /** Direct conversations included in the morning brief. */
@@ -556,20 +555,40 @@ function userIdFromProfile(url?: string): string | undefined {
   }
 }
 
-/** Attach Index web links from ids the tool already returned. */
+/** An Index page link of one kind: `/o/` opportunity, `/u/` person, `/i/` signal. */
+const INDEX_LINK = /^https:\/\/index\.network\/([oui])\/[A-Za-z0-9_-]+$/;
+
+/** A supplied link kept only when it is an Index link of this kind; else rebuilt from a valid id; else none. */
+export function indexLink(kind: "o" | "u" | "i", supplied: string | undefined, id: string | undefined): string | undefined {
+  if (typeof supplied === "string" && supplied.match(INDEX_LINK)?.[1] === kind) return supplied;
+  return id && ENTITY_ID.test(id) ? `${INDEX_WEB}/${kind}/${id}` : undefined;
+}
+
+function setOrDrop<K extends keyof BriefOpportunity>(card: BriefOpportunity, key: K, value: BriefOpportunity[K] | undefined): void {
+  if (value === undefined) delete card[key];
+  else card[key] = value;
+}
+
+/**
+ * Attach Index web links from ids the tool already returned. Every path that
+ * emits a card (brief, drop, evening card, follow-up) goes through here, so
+ * this is the one place a link or id from Index is checked: a link that is
+ * not an Index page of its kind is rebuilt from a valid id or dropped, and an
+ * id that is not a valid id is dropped.
+ */
 export function attachIndexLinks(opp: BriefOpportunity): BriefOpportunity {
   const next = { ...opp };
-  const userId = opp.userId && USER_ID.test(opp.userId) ? opp.userId : userIdFromProfile(opp.profileUrl);
-  if (userId) {
-    next.userId = userId;
-    if (!next.userUrl) next.userUrl = `${INDEX_WEB}/u/${userId}`;
-  }
-  if (opp.opportunityId && ENTITY_ID.test(opp.opportunityId) && !next.opportunityUrl) {
-    next.opportunityUrl = `${INDEX_WEB}/o/${opp.opportunityId}`;
-  }
-  if (opp.intentId && ENTITY_ID.test(opp.intentId)) {
-    next.intentUrl = `${INDEX_WEB}/i/${opp.intentId}`;
-  }
+  const profileUrl = indexLink("u", opp.profileUrl, undefined);
+  const userId = opp.userId && USER_ID.test(opp.userId) ? opp.userId : userIdFromProfile(profileUrl);
+  const opportunityId = opp.opportunityId && ENTITY_ID.test(opp.opportunityId) ? opp.opportunityId : undefined;
+  const intentId = opp.intentId && ENTITY_ID.test(opp.intentId) ? opp.intentId : undefined;
+  setOrDrop(next, "profileUrl", profileUrl);
+  setOrDrop(next, "userId", userId);
+  setOrDrop(next, "opportunityId", opportunityId);
+  setOrDrop(next, "intentId", intentId);
+  setOrDrop(next, "userUrl", indexLink("u", opp.userUrl, userId));
+  setOrDrop(next, "opportunityUrl", indexLink("o", opp.opportunityUrl, opportunityId));
+  setOrDrop(next, "intentUrl", indexLink("i", opp.intentUrl, intentId));
   return next;
 }
 
@@ -577,16 +596,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
-}
-
-function jsonObject(text: string): Record<string, unknown> | null {
-  const start = text.search(/^\s*\{/m);
-  if (start < 0) return null;
-  try {
-    return asRecord(JSON.parse(text.slice(start)));
-  } catch {
-    return null;
-  }
 }
 
 function listedCard(row: Record<string, unknown>): BriefOpportunity | null {
@@ -617,19 +626,31 @@ function listedCard(row: Record<string, unknown>): BriefOpportunity | null {
 }
 
 /**
- * Read a `list_opportunities` result. The tool leads with a markdown line,
- * then JSON `{ opportunities: [...] }`. Returns null when that array is absent
- * so older transcript files can still be parsed.
+ * Read a `list_opportunities` result: a markdown lead, then JSON
+ * `{ success, opportunities: [...], pagination }` (an empty array when nothing
+ * is waiting). Throws `mcp-tool-error` on `success: false` and `mcp-unparsed`
+ * when the object or the array is missing, so a failure is never "no cards".
  */
-export function parseListedOpportunities(text: string): BriefOpportunity[] | null {
-  const root = jsonObject(text);
-  const list = root?.opportunities;
-  if (!Array.isArray(list)) return null;
-  return list
+export function parseListedOpportunities(text: string): BriefOpportunity[] {
+  return parseListedOpportunitiesCounted(text).cards;
+}
+
+/** Warning code for Index cards dropped because their id is missing or not a valid id. */
+export const UNIDENTIFIED_CARD_CODE = "mcp-card-unidentified";
+
+/**
+ * parseListedOpportunities, plus how many cards were dropped whole because
+ * their opportunity id is missing or not a valid id: such a card could not be
+ * deduped or marked, so it never reaches selection on any path.
+ */
+export function parseListedOpportunitiesCounted(text: string): { cards: BriefOpportunity[]; unidentified: number } {
+  const cards = toolJsonArray(text, "opportunities")
     .map((row) => asRecord(row))
     .filter((row): row is Record<string, unknown> => Boolean(row))
     .map(listedCard)
     .filter((card): card is BriefOpportunity => Boolean(card));
+  const identified = cards.filter((card) => card.opportunityId !== undefined && ENTITY_ID.test(card.opportunityId));
+  return { cards: identified, unidentified: cards.length - identified.length };
 }
 
 export async function readDreamingDate(stateFile: string): Promise<string | undefined> {
@@ -773,7 +794,7 @@ async function fetchEvents(date: string, interestTags: string[], warnings: strin
     limit: "100",
   });
   try {
-    const res = await fetch(`${EDGEOS_BASE}/events/portal/events?${params.toString()}`, {
+    const res = await fetch(`${edgeosBase()}/events/portal/events?${params.toString()}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
@@ -800,7 +821,7 @@ async function fetchRsvps(date: string, warnings: string[]): Promise<{ source: "
     limit: "100",
   });
   try {
-    const res = await fetch(`${EDGEOS_BASE}/events/portal/events?${params.toString()}`, {
+    const res = await fetch(`${edgeosBase()}/events/portal/events?${params.toString()}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
@@ -861,275 +882,34 @@ function argValue(args: string[], name: string): string | undefined {
   return idx >= 0 ? args[idx + 1] : undefined;
 }
 
-type McpJsonRpcResponse = {
-  jsonrpc: "2.0";
-  id: number;
-  result?: unknown;
-  error?: { code: number; message: string };
-};
-
-type McpToolResult = {
-  content?: Array<{ type: string; text?: string }>;
-};
-
-async function postMcpMessage(mcpUrl: string, apiKey: string, body: unknown): Promise<McpJsonRpcResponse> {
-  const res = await fetch(mcpUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Accept": "application/json, text/event-stream",
-      "x-api-key": apiKey,
-      // The digest is always delivered over Telegram (Hermes). Without this
-      // header the MCP server coerces the surface to "web", which stamps
-      // minted connect links with preferredSurface=web and breaks the
-      // click-time t.me deep-link redirect (links land on the web chat
-      // fallback instead of opening Telegram). Mirrors install_index.ts's
-      // buildIndexMcpHeaders.
-      "x-index-surface": "telegram",
-    },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`MCP HTTP ${res.status}: ${res.statusText}`);
-
-  const contentType = res.headers.get("content-type") ?? "";
-  if (contentType.includes("text/event-stream")) {
-    const text = await res.text();
-    let response: McpJsonRpcResponse | null = null;
-    for (const line of text.split("\n")) {
-      // SSE spec allows "data:value" with or without the space after the colon.
-      const dataLine = line.startsWith("data: ") ? line.slice(6)
-                     : line.startsWith("data:") ? line.slice(5)
-                     : null;
-      if (dataLine !== null) {
-        try {
-          const msg = JSON.parse(dataLine) as McpJsonRpcResponse;
-          // Keep only JSON-RPC responses (have result or error); skip notifications.
-          if ("result" in msg || "error" in msg) response = msg;
-        } catch { /* skip non-JSON or comment lines */ }
-      }
-    }
-    if (response) return response;
-    throw new Error("no JSON-RPC response in MCP SSE stream");
-  }
-
-  return (await res.json()) as McpJsonRpcResponse;
-}
-
 /**
  * Fetch opportunities by calling Index `list_opportunities` directly.
  * Pending cards are the ones waiting on the user. The tool returns a markdown
- * lead plus JSON cards (`url`, `peer.url`, `headline`, `summary`).
+ * lead plus JSON cards (`url`, `peer.url`, `headline`, `summary`). Any failure
+ * throws (see parseListedOpportunities); an empty array is the only "none".
  */
 export async function fetchOpportunitiesFromMcp(opts: {
   apiKey: string;
   mcpUrl: string;
 }): Promise<BriefOpportunity[]> {
-  // Per MCP spec, send initialize before any tool calls.
-  const initResp = await postMcpMessage(opts.mcpUrl, opts.apiKey, {
-    jsonrpc: "2.0",
-    id: 1,
-    method: "initialize",
-    params: {
-      protocolVersion: "2024-11-05",
-      capabilities: {},
-      clientInfo: { name: "agentvillage-digest", version: "1.0.0" },
-    },
-  });
-  if (initResp.error) throw new Error(`MCP initialize: ${initResp.error.message}`);
+  return (await listOpportunitiesFromMcp(opts)).cards;
+}
 
-  const toolResp = await postMcpMessage(opts.mcpUrl, opts.apiKey, {
-    jsonrpc: "2.0",
-    id: 2,
-    method: "tools/call",
-    params: { name: "list_opportunities", arguments: { statuses: ["pending"], limit: 20 } },
-  });
-  if (toolResp.error) throw new Error(`MCP list_opportunities: ${toolResp.error.message}`);
-
-  const result = toolResp.result as McpToolResult | undefined;
-  const text = result?.content?.find((c) => c.type === "text")?.text ?? "";
-  if (!text.trim()) return [];
-
-  try {
-    const parsed = JSON.parse(text) as { success?: boolean; error?: unknown; message?: unknown };
-    const errorText = typeof parsed.error === "string" ? parsed.error : "";
-    const messageText = typeof parsed.message === "string" ? parsed.message : "";
-    if (parsed.success === false && /onboarding required|not completed onboarding/i.test(`${errorText}\n${messageText}`)) {
+/** fetchOpportunitiesFromMcp, plus the count of cards dropped for a missing or invalid id. */
+export async function listOpportunitiesFromMcp(opts: {
+  apiKey: string;
+  mcpUrl: string;
+}): Promise<{ cards: BriefOpportunity[]; unidentified: number }> {
+  const text = await callIndexTool(opts, "list_opportunities", { statuses: ["pending"], limit: 20 });
+  const root = toolJsonObject(text)?.root;
+  if (root?.success === false) {
+    const errorText = typeof root.error === "string" ? root.error : "";
+    const messageText = typeof root.message === "string" ? root.message : "";
+    if (/onboarding required|not completed onboarding/i.test(`${errorText}\n${messageText}`)) {
       throw new Error("setup required before people suggestions");
     }
-  } catch (err) {
-    if (err instanceof Error && err.message === "setup required before people suggestions") throw err;
   }
-
-  return parseListedOpportunities(text) ?? parseOpportunityTranscript(text);
-}
-
-/**
- * Confirm digest delivery for a set of opportunity ids by calling the Index
- * MCP server's `confirm_opportunity_delivery` tool directly via JSON-RPC.
- *
- * Owned by the deterministic send script (not the LLM prompt) so the delivery
- * ledger is written reliably — a skipped confirm means the same opportunity
- * reappears in later digests. Each id is confirmed independently with one
- * retry; failures never throw, they are reported back for diagnostics.
- *
- * @returns per-id outcome: `confirmed` (includes already_delivered) or `failed` with reason.
- */
-export async function confirmOpportunityDeliveriesViaMcp(opts: {
-  apiKey: string;
-  mcpUrl: string;
-  opportunityIds: string[];
-}): Promise<{ confirmed: string[]; failed: Array<{ opportunityId: string; reason: string }> }> {
-  const confirmed: string[] = [];
-  const failed: Array<{ opportunityId: string; reason: string }> = [];
-  if (opts.opportunityIds.length === 0) return { confirmed, failed };
-
-  try {
-    const initResp = await postMcpMessage(opts.mcpUrl, opts.apiKey, {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: "2024-11-05",
-        capabilities: {},
-        clientInfo: { name: "agentvillage-digest", version: "1.0.0" },
-      },
-    });
-    if (initResp.error) throw new Error(`MCP initialize: ${initResp.error.message}`);
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
-    return { confirmed, failed: opts.opportunityIds.map((opportunityId) => ({ opportunityId, reason })) };
-  }
-
-  let rpcId = 2;
-  for (const opportunityId of opts.opportunityIds) {
-    let lastReason = "unknown";
-    let ok = false;
-    // `confirm_opportunity_delivery` is idempotent, so transient failures are
-    // safe to retry. Permanent failures (opportunity deleted, caller not an
-    // actor) carry `retryable: false` — retrying them never succeeds and only
-    // hammers the MCP transport, so we stop early and report the reason.
-    for (let attempt = 0; attempt < 2 && !ok; attempt++) {
-      try {
-        const resp = await postMcpMessage(opts.mcpUrl, opts.apiKey, {
-          jsonrpc: "2.0",
-          id: rpcId++,
-          method: "tools/call",
-          params: {
-            name: "confirm_opportunity_delivery",
-            arguments: { opportunityId, trigger: "digest" },
-          },
-        });
-        if (resp.error) {
-          lastReason = resp.error.message;
-          continue;
-        }
-        const result = resp.result as McpToolResult | undefined;
-        const text = result?.content?.find((c) => c.type === "text")?.text ?? "";
-        // The tool returns a success/error envelope; treat an explicit
-        // success:false as failure so we don't silently drop ledger writes.
-        try {
-          const parsed = JSON.parse(text) as { success?: boolean; error?: unknown; code?: unknown; retryable?: unknown };
-          if (parsed.success === false) {
-            const code = typeof parsed.code === "string" ? parsed.code : "";
-            lastReason = code
-              ? `${code}: ${typeof parsed.error === "string" ? parsed.error : "tool reported failure"}`
-              : (typeof parsed.error === "string" ? parsed.error : "tool reported failure");
-            // Permanent failure — do not burn the second attempt on it.
-            if (parsed.retryable === false) break;
-            continue;
-          }
-        } catch {
-          // Non-JSON tool text — the call itself succeeded; accept it.
-        }
-        ok = true;
-      } catch (err) {
-        lastReason = err instanceof Error ? err.message : String(err);
-      }
-    }
-    if (ok) confirmed.push(opportunityId);
-    else failed.push({ opportunityId, reason: lastReason });
-  }
-
-  return { confirmed, failed };
-}
-
-/**
- * Sanitize an MCP-sourced question prompt before it is interpolated into the
- * digest body: drop HTML-comment sequences (so a hostile prompt cannot forge
- * digest-opportunity/digest-question markers), collapse all whitespace to a
- * single line (so it cannot inject section headers), and cap the length.
- */
-function sanitizeQuestionPrompt(raw: string): string {
-  const collapsed = raw
-    .replace(/<!--[\s\S]*?-->/g, " ")
-    .replace(/<!--|-->/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (collapsed.length <= QUESTION_PROMPT_MAX_LENGTH) return collapsed;
-  return `${collapsed.slice(0, QUESTION_PROMPT_MAX_LENGTH - 1).trimEnd()}…`;
-}
-
-/**
- * Fetch pending questions by calling the Index MCP server directly via
- * JSON-RPC with read_pending_questions. Mirrors fetchOpportunitiesFromMcp.
- *
- * NEVER throws — all errors are caught internally.
- * Returns `{ questions, source, reason? }`: `source: "mcp"` is reserved for
- * genuinely successful fetches (possibly empty); every failure path returns
- * `source: "unavailable"` with a `reason` for the diagnostics warning.
- */
-export async function fetchPendingQuestionsFromMcp(opts: {
-  apiKey: string;
-  mcpUrl: string;
-}): Promise<{ questions: BriefQuestion[]; source: "mcp" | "unavailable"; reason?: string }> {
-  try {
-    const initResp = await postMcpMessage(opts.mcpUrl, opts.apiKey, {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: "2024-11-05",
-        capabilities: {},
-        clientInfo: { name: "agentvillage-digest", version: "1.0.0" },
-      },
-    });
-    if (initResp.error) {
-      return { questions: [], source: "unavailable", reason: `MCP initialize: ${initResp.error.message}` };
-    }
-
-    const toolResp = await postMcpMessage(opts.mcpUrl, opts.apiKey, {
-      jsonrpc: "2.0",
-      id: 2,
-      method: "tools/call",
-      params: { name: "read_pending_questions", arguments: { limit: QUESTION_FETCH_LIMIT } },
-    });
-    if (toolResp.error) {
-      return { questions: [], source: "unavailable", reason: `MCP read_pending_questions: ${toolResp.error.message}` };
-    }
-
-    const result = toolResp.result as McpToolResult | undefined;
-    const text = result?.content?.find((c) => c.type === "text")?.text ?? "";
-    if (!text.trim()) return { questions: [], source: "mcp" };
-
-    const parsed = JSON.parse(text) as { success?: boolean; error?: unknown; data?: { questions?: unknown[] } };
-    if (parsed.success === false) {
-      const detail = typeof parsed.error === "string" && parsed.error.trim() ? parsed.error : "tool reported failure";
-      return { questions: [], source: "unavailable", reason: `read_pending_questions: ${detail}` };
-    }
-    if (!parsed.data?.questions || !Array.isArray(parsed.data.questions)) return { questions: [], source: "mcp" };
-    const questions = parsed.data.questions
-      .filter((q): q is Record<string, unknown> => q !== null && typeof q === "object")
-      .map((q) => ({
-        id: String(q.id ?? ""),
-        title: String(q.title ?? ""),
-        prompt: sanitizeQuestionPrompt(String(q.prompt ?? "")),
-        mode: String(q.mode ?? ""),
-      }))
-      .filter((q) => QUESTION_ID_PATTERN.test(q.id) && q.prompt);
-    return { questions, source: "mcp" };
-  } catch (err) {
-    return { questions: [], source: "unavailable", reason: err instanceof Error ? err.message : String(err) };
-  }
+  return parseListedOpportunitiesCounted(text);
 }
 
 export async function buildDailyBriefContext(options: {
@@ -1160,13 +940,14 @@ export async function buildDailyBriefContext(options: {
   let dreamingFresh = false;
 
   const apiKey = resolveIndexApiKey();
-  const mcpUrl = process.env.INDEX_MCP_URL?.trim() || "https://protocol.index.network/mcp";
+  const mcpUrl = indexMcpUrl();
   const stateFile = options.stateFile ?? "memory/heartbeat-state.json";
 
   if (apiKey) {
     try {
       const deliveredIds = await readDeliveredIds(stateFile, date);
-      const fetched = await fetchOpportunitiesFromMcp({ apiKey, mcpUrl });
+      const { cards: fetched, unidentified } = await listOpportunitiesFromMcp({ apiKey, mcpUrl });
+      if (unidentified > 0) warnings.push(`dropped ${unidentified} opportunity card(s): ${UNIDENTIFIED_CARD_CODE}`);
       const deduped = filterDedupedOpportunities(fetched, deliveredIds);
       opportunities = filterActionableOpportunities(deduped);
       if (opportunities.length < deduped.length) {

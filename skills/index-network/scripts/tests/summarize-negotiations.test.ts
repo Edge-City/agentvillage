@@ -5,9 +5,12 @@ import { join } from "node:path";
 
 import {
   type NegotiationItem,
+  main,
   summarizeNegotiations,
   updatedWithinDays,
 } from "../summarize-negotiations";
+import { FAKE_MCP_URL, type ToolHandler, indexMcpFake, listOpportunitiesText } from "./index-mcp-fake";
+import { failureInputs } from "./index-failure-inputs";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -491,5 +494,158 @@ describe("summarizeNegotiations", () => {
     expect(result.context.needsAttention.map((n) => n.id)).toEqual(["aaa-1"]);
     expect(result.context.waiting.map((n) => n.id)).toEqual(["aaa-2"]);
     expect(result.context.newlyResolved.map((n) => n.id)).toEqual(["aaa-3"]);
+  });
+});
+
+// ── main(): the live follow-up path ───────────────────────────────────────────
+
+describe("main", () => {
+  const saved = { key: process.env.INDEX_API_KEY, url: process.env.INDEX_MCP_URL, argv: process.argv, fetch: globalThis.fetch };
+
+  afterEach(() => {
+    if (saved.key === undefined) delete process.env.INDEX_API_KEY;
+    else process.env.INDEX_API_KEY = saved.key;
+    if (saved.url === undefined) delete process.env.INDEX_MCP_URL;
+    else process.env.INDEX_MCP_URL = saved.url;
+    process.argv = saved.argv;
+    globalThis.fetch = saved.fetch;
+  });
+
+  function opp(name: string, status: string, n: number) {
+    const id = `bbbbbbbb-0000-4000-8000-00000000000${n}`;
+    const userId = `cccccccc-0000-4000-8000-00000000000${n}`;
+    return {
+      id,
+      url: `https://index.network/o/${id}`,
+      status,
+      viewerRole: "party",
+      headline: `${name} headline`,
+      summary: `${name} summary`,
+      peer: { name, userId, url: `https://index.network/u/${userId}` },
+    };
+  }
+
+  async function run(tools: Record<string, ToolHandler>, state?: string) {
+    tempWorkspace();
+    if (state !== undefined) await Bun.write("state.json", state);
+    process.env.INDEX_API_KEY = "test-key";
+    process.env.INDEX_MCP_URL = FAKE_MCP_URL;
+    process.argv = [...saved.argv.slice(0, 2), "--state-file", "state.json"];
+    const fake = indexMcpFake({ tools });
+    globalThis.fetch = fake.fetch;
+    let out = "";
+    let err = "";
+    const write = { out: process.stdout.write, err: process.stderr.write };
+    process.stdout.write = ((chunk: string) => { out += chunk; return true; }) as typeof process.stdout.write;
+    process.stderr.write = ((chunk: string) => { err += chunk; return true; }) as typeof process.stderr.write;
+    try {
+      await main();
+    } finally {
+      process.stdout.write = write.out;
+      process.stderr.write = write.err;
+    }
+    return { out, err, fake };
+  }
+
+  test("lists opportunities and signals through the current revision and groups the cards", async () => {
+    const { out, fake } = await run({
+      list_opportunities: () => listOpportunitiesText([opp("Maya", "pending", 1), opp("Jon", "negotiating", 2), opp("Ana", "accepted", 3)]),
+    });
+    expect(fake.calls.map((call) => [call.method, call.name, call.arguments, call.status])).toEqual([
+      ["tools/call", "list_opportunities", { statuses: ["pending", "negotiating", "accepted"], limit: 50 }, 200],
+      ["tools/call", "list_intents", { limit: 20 }, 200],
+    ]);
+    const parsed = JSON.parse(out);
+    expect(parsed.signals).toEqual([
+      { summary: "Looking for people building agent memory", url: "https://index.network/i/aaaaaaaa-0000-4000-8000-000000000001" },
+      { summary: "Open to co-hosting a village dinner", url: "https://index.network/i/aaaaaaaa-0000-4000-8000-000000000002" },
+    ]);
+    expect(parsed.needsAttention.map((card: { name: string }) => card.name)).toEqual(["Maya"]);
+    expect(parsed.waiting.map((card: { name: string }) => card.name)).toEqual(["Jon"]);
+    expect(parsed.newlyResolved).toEqual([{
+      name: "Ana",
+      headline: "Ana headline",
+      summary: "Ana summary",
+      userUrl: "https://index.network/u/cccccccc-0000-4000-8000-000000000003",
+      opportunityUrl: "https://index.network/o/bbbbbbbb-0000-4000-8000-000000000003",
+    }]);
+    const state = JSON.parse(await Bun.file("state.json").text());
+    expect(state.negotiationSummary.reportedCompletedIds).toEqual(["bbbbbbbb-0000-4000-8000-000000000003"]);
+  });
+
+  test("a failed Index call is silent, with only a code on stderr", async () => {
+    const { out, err } = await run({
+      list_opportunities: () => ({ result: { content: [{ type: "text", text: "private detail" }], isError: true } }),
+    });
+    expect(out).toBe("[SILENT]");
+    expect(err).toContain("mcp-tool-error");
+    expect(err).not.toContain("private detail");
+    expect(err).not.toContain("test-key");
+  });
+
+  const STATE = JSON.stringify({ negotiationSummary: { reportedCompletedIds: ["older"] } });
+  const goodOpportunities = () => listOpportunitiesText([opp("Maya", "pending", 1), opp("Ana", "accepted", 3)]);
+
+  for (const input of failureInputs("opportunities")) {
+    test(`list_opportunities, ${input.label}: silent, ${input.code} on stderr, nothing recorded`, async () => {
+      const { out, err } = await run({ list_opportunities: input.handler }, STATE);
+      expect(out).toBe("[SILENT]");
+      expect(err).toContain(input.code);
+      expect(await Bun.file("state.json").text()).toBe(STATE);
+    });
+  }
+
+  for (const input of failureInputs("intents")) {
+    test(`list_intents, ${input.label}: silent, ${input.code} on stderr, nothing recorded`, async () => {
+      const { out, err } = await run({ list_opportunities: goodOpportunities, list_intents: input.handler }, STATE);
+      expect(out).toBe("[SILENT]");
+      expect(err).toContain(input.code);
+      expect(await Bun.file("state.json").text()).toBe(STATE);
+    });
+  }
+
+  test("follow-up cards and signals carry only Index links of their kind", async () => {
+    const { out } = await run({
+      list_opportunities: () => listOpportunitiesText([{
+        id: "bbbbbbbb-0000-4000-8000-000000000001",
+        url: "https://evil.fake.test/o/x",
+        status: "pending",
+        headline: "h",
+        peer: { name: "Maya", userId: "../x", url: "javascript:alert(1)" },
+      }]),
+      list_intents: () => `Your signals:\n\n${JSON.stringify({
+        success: true,
+        intents: [
+          { id: "aaaaaaaa-0000-4000-8000-000000000001", summary: "rebuilt", url: "javascript:alert(1)" },
+          { id: "../../x", summary: "dropped", url: "https://evil.fake.test/i/x" },
+        ],
+        totalWaitingOpportunities: 1,
+        pagination: { page: 1 },
+      })}`,
+    });
+    const parsed = JSON.parse(out);
+    expect(parsed.needsAttention).toEqual([{
+      name: "Maya",
+      headline: "h",
+      summary: "h",
+      opportunityUrl: "https://index.network/o/bbbbbbbb-0000-4000-8000-000000000001",
+    }]);
+    expect(parsed.signals).toEqual([
+      { summary: "rebuilt", url: "https://index.network/i/aaaaaaaa-0000-4000-8000-000000000001" },
+      { summary: "dropped" },
+    ]);
+  });
+
+  test("a card without a valid id is left out of the follow-up", async () => {
+    const rows = [
+      { id: "../../x", url: "https://index.network/o/x", status: "pending", viewerRole: "party", headline: "h", peer: { name: "Bad Path" } },
+      { url: "https://index.network/o/y", status: "pending", viewerRole: "party", headline: "h", peer: { name: "No Id" } },
+      { id: "has space", status: "pending", viewerRole: "agent", headline: "h", peer: { name: "Space Id" } },
+    ];
+    const only = await run({ list_opportunities: () => listOpportunitiesText(rows) }, STATE);
+    expect(only.out).toBe("[SILENT]");
+    expect(await Bun.file("state.json").text()).toBe(STATE);
+    const mixed = await run({ list_opportunities: () => listOpportunitiesText([...rows, opp("Maya", "pending", 1)]) });
+    expect(JSON.parse(mixed.out).needsAttention.map((c: { name: string }) => c.name)).toEqual(["Maya"]);
   });
 });

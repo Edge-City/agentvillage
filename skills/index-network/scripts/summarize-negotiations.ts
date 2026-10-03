@@ -1,24 +1,23 @@
 #!/usr/bin/env bun
 /**
- * Fetch and filter the authenticated user's negotiations for the afternoon
- * check-in cron, then output structured context for the LLM to narrate.
+ * Build the afternoon follow-up for the check-in cron, then output structured
+ * context for the LLM to narrate.
  *
- * Calls list_negotiations with detail:"narrative" to receive indexContext,
- * recentTurns, and outcome in one round-trip. Separates negotiations into
- * three groups: needs-attention (active, user's turn), waiting (active, other
- * side's turn), and newly-resolved (completed, recently updated, not yet
- * reported). Tracks reported completed IDs in heartbeat-state.json so the user
- * is never spammed about the same concluded negotiation twice.
+ * main() lists the user's opportunities (list_opportunities: pending,
+ * negotiating and accepted) and signals (list_intents), and splits the cards
+ * into three groups: needs-attention (pending, waiting on the user), waiting
+ * (negotiating, agents still talking), and newly-resolved (accepted, not yet
+ * reported). Tracks reported ids in heartbeat-state.json under
+ * negotiationSummary.reportedCompletedIds so the user is never told about the
+ * same connection twice.
  *
  * Outputs either exactly `[SILENT]` (nothing to report) or a JSON object that
  * the cron prompt feeds to the LLM for the structured report:
  *
  *   { signals: [...], needsAttention: [...], waiting: [...], newlyResolved: [...] }
  *
- * When there is something to report, it additionally fetches the user's own
- * active signals (read_intents) and resolves each negotiation's counterparty to
- * a display name (read_user_contexts). Both enrichments are best-effort: a
- * failure degrades to empty signals / null names rather than aborting.
+ * summarizeNegotiations() is the earlier per-negotiation categoriser. It takes
+ * injected fetchers, and main() does not call it.
  *
  * Usage (from $HERMES_HOME):
  *   bun skills/index-network/scripts/summarize-negotiations.ts \
@@ -27,63 +26,8 @@
 
 import { existsSync } from "node:fs";
 
-import { attachIndexLinks, parseListedOpportunities, resolveIndexApiKey, type BriefOpportunity } from "./build-daily-brief-context";
-
-// ── MCP plumbing ──────────────────────────────────────────────────────────────
-
-type McpJsonRpcResponse = {
-  jsonrpc: "2.0";
-  id: number;
-  result?: unknown;
-  error?: { code: number; message: string };
-};
-
-type McpToolResult = {
-  content?: Array<{ type: string; text?: string }>;
-};
-
-async function postMcpMessage(
-  mcpUrl: string,
-  apiKey: string,
-  body: unknown,
-): Promise<McpJsonRpcResponse> {
-  const res = await fetch(mcpUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json, text/event-stream",
-      "x-api-key": apiKey,
-      "x-index-surface": "telegram",
-    },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`MCP HTTP ${res.status}: ${res.statusText}`);
-
-  const contentType = res.headers.get("content-type") ?? "";
-  if (contentType.includes("text/event-stream")) {
-    const text = await res.text();
-    let response: McpJsonRpcResponse | null = null;
-    for (const line of text.split("\n")) {
-      const dataLine = line.startsWith("data: ")
-        ? line.slice(6)
-        : line.startsWith("data:")
-          ? line.slice(5)
-          : null;
-      if (dataLine !== null) {
-        try {
-          const msg = JSON.parse(dataLine) as McpJsonRpcResponse;
-          if ("result" in msg || "error" in msg) response = msg;
-        } catch {
-          // skip non-JSON or comment lines
-        }
-      }
-    }
-    if (response) return response;
-    throw new Error("no JSON-RPC response in MCP SSE stream");
-  }
-
-  return (await res.json()) as McpJsonRpcResponse;
-}
+import { attachIndexLinks, indexLink, parseListedOpportunities, resolveIndexApiKey, type BriefOpportunity } from "./build-daily-brief-context";
+import { callIndexTool, indexMcpUrl, toolJsonArray } from "./index-mcp";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -99,7 +43,7 @@ export interface NegotiationItem {
   id: string;
   counterpartyId: string;
   /**
-   * Human-readable counterparty name, resolved post-fetch via read_user_contexts.
+   * Human-readable counterparty name, resolved post-fetch by the injected ProfileResolver.
    * Undefined until resolution runs; null when the counterparty has no profile
    * (or resolution failed). The prompt falls back to indexContext when absent.
    */
@@ -126,45 +70,10 @@ export interface NegotiationItem {
   } | null;
 }
 
-interface NegotiationListResponse {
-  success?: boolean;
-  error?: unknown;
-  data?: {
-    count?: number;
-    totalCount?: number;
-    negotiations?: NegotiationItem[];
-  };
-}
-
 /** A single signal (intent) the user has registered, condensed for the report. */
 export interface SignalItem {
   id: string;
   summary: string;
-}
-
-interface IntentListResponse {
-  success?: boolean;
-  error?: unknown;
-  data?: {
-    intents?: Array<{
-      id?: string;
-      summary?: string;
-      description?: string;
-      status?: string;
-    }>;
-  };
-}
-
-interface ProfileResponse {
-  success?: boolean;
-  error?: unknown;
-  data?: {
-    hasProfile?: boolean;
-    /** Flat identity shape (WS11+ protocol): name lives at data.name. */
-    name?: string;
-    /** Legacy nested shape (pre-WS11 protocol): name lived at data.profile.name. */
-    profile?: { name?: string };
-  };
 }
 
 export interface NegotiationSummaryState {
@@ -226,155 +135,6 @@ export async function readJsonObject(path: string): Promise<Record<string, unkno
 
 export async function writeJsonObject(path: string, data: Record<string, unknown>): Promise<void> {
   await Bun.write(path, `${JSON.stringify(data, null, 2)}\n`);
-}
-
-// ── Default MCP fetcher ───────────────────────────────────────────────────────
-
-export function buildMcpFetcher(apiKey: string, mcpUrl: string): NegotiationFetcher {
-  return async () => {
-    const initResp = await postMcpMessage(mcpUrl, apiKey, {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: "2024-11-05",
-        capabilities: {},
-        clientInfo: { name: "agentvillage-negotiation-summary", version: "1.0.0" },
-      },
-    });
-    if (initResp.error) throw new Error(`MCP initialize: ${initResp.error.message}`);
-
-    const toolResp = await postMcpMessage(mcpUrl, apiKey, {
-      jsonrpc: "2.0",
-      id: 2,
-      method: "tools/call",
-      params: {
-        name: "list_negotiations",
-        arguments: { status: "all", limit: 50, detail: "narrative" },
-      },
-    });
-    if (toolResp.error) throw new Error(`MCP list_negotiations: ${toolResp.error.message}`);
-
-    const result = toolResp.result as McpToolResult | undefined;
-    const text = result?.content?.find((c) => c.type === "text")?.text ?? "";
-    if (!text.trim()) return [];
-
-    const parsed = JSON.parse(text) as NegotiationListResponse;
-    if (parsed.success === false) {
-      const detail = typeof parsed.error === "string" ? parsed.error : "tool reported failure";
-      throw new Error(`list_negotiations: ${detail}`);
-    }
-
-    const negotiations = parsed.data?.negotiations;
-    if (!Array.isArray(negotiations)) return [];
-    return negotiations as NegotiationItem[];
-  };
-}
-
-/**
- * Build a fetcher for the user's own active signals via read_intents (no args →
- * caller-owned active intents). Best-effort: the caller treats a throw as "no
- * signals" rather than aborting the whole report.
- */
-export function buildMcpSignalFetcher(apiKey: string, mcpUrl: string): SignalFetcher {
-  return async () => {
-    const initResp = await postMcpMessage(mcpUrl, apiKey, {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: "2024-11-05",
-        capabilities: {},
-        clientInfo: { name: "agentvillage-negotiation-summary", version: "1.0.0" },
-      },
-    });
-    if (initResp.error) throw new Error(`MCP initialize: ${initResp.error.message}`);
-
-    const toolResp = await postMcpMessage(mcpUrl, apiKey, {
-      jsonrpc: "2.0",
-      id: 2,
-      method: "tools/call",
-      params: { name: "read_intents", arguments: { limit: 20 } },
-    });
-    if (toolResp.error) throw new Error(`MCP read_intents: ${toolResp.error.message}`);
-
-    const result = toolResp.result as McpToolResult | undefined;
-    const text = result?.content?.find((c) => c.type === "text")?.text ?? "";
-    if (!text.trim()) return [];
-
-    const parsed = JSON.parse(text) as IntentListResponse;
-    if (parsed.success === false) return [];
-
-    const intents = parsed.data?.intents;
-    if (!Array.isArray(intents)) return [];
-
-    return intents
-      .map((i) => ({ id: i.id ?? "", summary: (i.summary || i.description || "").trim() }))
-      .filter((s) => s.summary.length > 0);
-  };
-}
-
-/**
- * Build a memoised resolver mapping a counterparty userId → display name via
- * read_user_contexts. Initialises the MCP session lazily on first use and caches
- * per-userId results (including null) so repeated counterparties cost one call.
- * Any per-user failure resolves to null rather than throwing.
- */
-export function buildMcpProfileResolver(apiKey: string, mcpUrl: string): ProfileResolver {
-  const cache = new Map<string, string | null>();
-  let initialized = false;
-  let nextId = 100;
-
-  return async (userId: string) => {
-    if (!userId) return null;
-    if (cache.has(userId)) return cache.get(userId) ?? null;
-
-    try {
-      if (!initialized) {
-        const initResp = await postMcpMessage(mcpUrl, apiKey, {
-          jsonrpc: "2.0",
-          id: nextId++,
-          method: "initialize",
-          params: {
-            protocolVersion: "2024-11-05",
-            capabilities: {},
-            clientInfo: { name: "agentvillage-negotiation-summary", version: "1.0.0" },
-          },
-        });
-        if (initResp.error) throw new Error(`MCP initialize: ${initResp.error.message}`);
-        initialized = true;
-      }
-
-      const toolResp = await postMcpMessage(mcpUrl, apiKey, {
-        jsonrpc: "2.0",
-        id: nextId++,
-        method: "tools/call",
-        params: { name: "read_user_contexts", arguments: { userId } },
-      });
-      if (toolResp.error) throw new Error(toolResp.error.message);
-
-      const result = toolResp.result as McpToolResult | undefined;
-      const text = result?.content?.find((c) => c.type === "text")?.text ?? "";
-      if (!text.trim()) {
-        cache.set(userId, null);
-        return null;
-      }
-
-      const parsed = JSON.parse(text) as ProfileResponse;
-      // Read the flat identity shape (WS11+) first, falling back to the legacy
-      // nested shape so this works across the protocol rename transition.
-      const rawName =
-        parsed.success !== false && parsed.data?.hasProfile
-          ? parsed.data.name ?? parsed.data.profile?.name
-          : undefined;
-      const name = rawName?.trim() || null;
-      cache.set(userId, name);
-      return name;
-    } catch {
-      cache.set(userId, null);
-      return null;
-    }
-  };
 }
 
 // ── Core logic (injectable) ───────────────────────────────────────────────────
@@ -499,49 +259,20 @@ function followUpCard(opp: BriefOpportunity): FollowUpCard | null {
   };
 }
 
-async function callIndexTool(apiKey: string, mcpUrl: string, name: string, args: Record<string, unknown>, id: number): Promise<string> {
-  const initResp = await postMcpMessage(mcpUrl, apiKey, {
-    jsonrpc: "2.0",
-    id: 1,
-    method: "initialize",
-    params: {
-      protocolVersion: "2024-11-05",
-      capabilities: {},
-      clientInfo: { name: "agentvillage-negotiation-summary", version: "1.0.0" },
-    },
-  });
-  if (initResp.error) throw new Error(`MCP initialize: ${initResp.error.message}`);
-  const toolResp = await postMcpMessage(mcpUrl, apiKey, {
-    jsonrpc: "2.0",
-    id,
-    method: "tools/call",
-    params: { name, arguments: args },
-  });
-  if (toolResp.error) throw new Error(`MCP ${name}: ${toolResp.error.message}`);
-  const result = toolResp.result as McpToolResult | undefined;
-  return result?.content?.find((c) => c.type === "text")?.text ?? "";
-}
-
+/** The user's live signals from a `list_intents` result; throws like parseListedOpportunities. */
 function intentsFrom(text: string): Array<{ summary: string; url?: string }> {
-  const start = text.search(/^\s*\{/m);
-  if (start < 0) return [];
-  try {
-    const parsed = JSON.parse(text.slice(start)) as { success?: boolean; intents?: unknown };
-    if (parsed.success === false || !Array.isArray(parsed.intents)) return [];
-    return parsed.intents.flatMap((row) => {
-      if (!row || typeof row !== "object") return [];
-      const intent = row as { summary?: unknown; description?: unknown; url?: unknown; status?: unknown };
-      if (intent.status === "archived") return [];
-      const summary = (typeof intent.summary === "string" ? intent.summary : typeof intent.description === "string" ? intent.description : "").trim();
-      if (!summary) return [];
-      return [{ summary, url: typeof intent.url === "string" ? intent.url : undefined }];
-    });
-  } catch {
-    return [];
-  }
+  return toolJsonArray(text, "intents").flatMap((row) => {
+    if (!row || typeof row !== "object") return [];
+    const intent = row as { id?: unknown; summary?: unknown; description?: unknown; url?: unknown; status?: unknown };
+    if (intent.status === "archived") return [];
+    const summary = (typeof intent.summary === "string" ? intent.summary : typeof intent.description === "string" ? intent.description : "").trim();
+    if (!summary) return [];
+    const url = indexLink("i", typeof intent.url === "string" ? intent.url : undefined, typeof intent.id === "string" ? intent.id : undefined);
+    return [{ summary, url }];
+  });
 }
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const stateFile = argValue(args, "--state-file") ?? "memory/heartbeat-state.json";
 
@@ -551,16 +282,16 @@ async function main(): Promise<void> {
     return;
   }
 
-  const mcpUrl = process.env.INDEX_MCP_URL?.trim() || "https://protocol.index.network/mcp";
+  const target = { apiKey, mcpUrl: indexMcpUrl() };
   let cards: BriefOpportunity[] = [];
   let signals: Array<{ summary: string; url?: string }> = [];
   try {
-    const opportunityText = await callIndexTool(apiKey, mcpUrl, "list_opportunities", {
+    const opportunityText = await callIndexTool(target, "list_opportunities", {
       statuses: ["pending", "negotiating", "accepted"],
       limit: 50,
-    }, 2);
-    cards = parseListedOpportunities(opportunityText) ?? [];
-    const intentText = await callIndexTool(apiKey, mcpUrl, "list_intents", { limit: 20 }, 3);
+    });
+    cards = parseListedOpportunities(opportunityText);
+    const intentText = await callIndexTool(target, "list_intents", { limit: 20 });
     signals = intentsFrom(intentText);
   } catch (err) {
     process.stderr.write(
