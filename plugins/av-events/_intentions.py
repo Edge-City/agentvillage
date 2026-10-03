@@ -9,7 +9,7 @@ Spec §4.1 (`intention.captured/updated/withdrawn`) and §7.1 ("Intention
 capture"). Two producers inside the sandbox:
 
 * **Index MCP tools** (DATA-249, Index `main` `mcp.tools.ts`; the overlay's
-  copy of their input schemas is `index_mcp_intent_tools.json`).
+  copy of their input schemas is `tests/vectors/index_intent_contract.json`).
   `create_intent` → `intention.captured`; `update_intent` with a new
   `description` → `intention.updated`; `pause_intent` / `resume_intent` →
   `intention.updated` with `index_status` `paused` / `active`; `archive_intent`

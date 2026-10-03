@@ -1,8 +1,50 @@
 {
-  "about": "The overlay's copy of Index's MCP intent tools: names, input schemas (zod .strict(), so no other argument is accepted) and the result keys the overlay reads. Copied by hand from indexnetwork/index main, services/api/src/lib/mcp/mcp.tools.ts, on 2026-10-02 (DATA-249). The overlay's MCP calls and the observer's tool names are tested against this file (tests/test_index_contract.py); when Index changes a tool, change this file first and let the tests show what else must move.",
-  "source": "indexnetwork/index@main services/api/src/lib/mcp/mcp.tools.ts",
-  "verified": "2026-10-02",
+  "about": "The overlay's copy of Index's intent contract, copied by hand from indexnetwork/index main (DATA-249). 'rest_writes': the three REST writes record_intention makes (services/api/src/controllers/intent.controller.ts, mounted under /api; body schemas are zod .strict(), so no other key is accepted). 'tools': Index's MCP intent tools (services/api/src/lib/mcp/mcp.tools.ts), which the av-events observer watches when an agent reaches Index's MCP through Hermes's own client. tests/test_index_contract.py holds every HTTP call the overlay builds, the observer's tool names and the agent-facing text to this file; when Index changes, change this file first and let the tests show what else must move.",
+  "source": "indexnetwork/index@main services/api/src/controllers/intent.controller.ts, services/api/src/lib/mcp/mcp.tools.ts",
+  "verified": "2026-10-03",
   "intent_status_values": ["active", "paused"],
+  "rest_writes": {
+    "create": {
+      "method": "POST",
+      "path": "/api/intents",
+      "body": {
+        "additionalProperties": false,
+        "required": ["description"],
+        "properties": {
+          "description": {"type": "string", "maxLength": 65536},
+          "preparationReceipt": {"type": "string", "minLength": 1, "maxLength": 65536},
+          "networkIds": {"type": "array", "items": {"type": "string"}},
+          "sourceType": {"type": ["string", "null"], "maxLength": 1024},
+          "sourceId": {"type": ["string", "null"], "maxLength": 1024}
+        }
+      },
+      "success_keys": ["intentId", "networkIds", "sourceType", "sourceId"],
+      "error_statuses": [400, 403, 422, 500, 503]
+    },
+    "update": {
+      "method": "PATCH",
+      "path": "/api/intents/{id}",
+      "body": {
+        "additionalProperties": false,
+        "required": [],
+        "anyOf_required": [["description"], ["sourceType"], ["sourceId"]],
+        "properties": {
+          "description": {"type": "string", "minLength": 1, "maxLength": 65536},
+          "sourceType": {"type": ["string", "null"], "maxLength": 1024},
+          "sourceId": {"type": ["string", "null"], "maxLength": 1024}
+        }
+      },
+      "success_keys": ["intentId", "description", "sourceType", "sourceId"],
+      "error_statuses": [400, 404, 409, 422]
+    },
+    "archive": {
+      "method": "PATCH",
+      "path": "/api/intents/{id}/archive",
+      "body": null,
+      "success_keys": ["success"],
+      "error_statuses": [404]
+    }
+  },
   "tools": {
     "list_intents": {
       "input": {
