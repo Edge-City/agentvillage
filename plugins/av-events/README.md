@@ -481,12 +481,20 @@ wrong), 401, 403 (`invalid_preparation`, or a network-membership refusal: never 
 words), 404, 409 (archived), 429 and 503 (`preparation_failed`, retryable, nothing written) are
 `http_<status>`: nothing was written; a 3xx is `redirect`. **Ambiguous failures are `timeout`
 (refutation B1)**, because Index may already have done the write and `timeout` is the one code
-the data side reconciles against a later Index capture of the same text hash: the deadline
-passing; any failure after the request was sent (`RemoteDisconnected`, `IncompleteRead`,
-`ConnectionResetError` from `getresponse()` or the body read, a cut body); a 2xx whose body is not
-a JSON object, is too large, or (on a create) names no `intentId` matching the path-id pattern;
-and any 5xx but 503 (500, 502, 504). `transport` is only for a failure before anything was sent
-(connect, DNS, TLS; urllib wraps those in `URLError`). The tool then tells the agent the result
+the data side reconciles against a later Index capture of the same text hash: any failure after
+the request was sent (`RemoteDisconnected`, `IncompleteRead`, `ConnectionResetError`, a socket
+timeout from `getresponse()` or the body read, a cut body); a 2xx whose body is not a JSON object,
+is too large, or (on a create) names no `intentId` matching the path-id pattern; any 5xx but 503
+(500, 502, 504); and the overall 30 s deadline passing first. Each socket operation is bounded at
+25 s, below the deadline, so a connect that never completes fails as `transport` first; when the
+deadline does pass, whether the request went out cannot be known (a slow DNS lookup, or a connect
+then a slow answer), so the metric gets `timeout`, the safe direction, and the log line
+`index_deadline=opening` (no answer had begun, possibly never connected) or `=reading` tells the
+operator how far it got. `transport` is only for a failure before anything was sent (connect,
+DNS, TLS, a connect timeout; urllib wraps those in `URLError`), logged as
+`index_unreachable=<reason>` (`connect_timeout` for a timeout) so a wrong or blackholed host is
+visible. A config error found while building or opening the request (`ValueError`,
+`http.client.InvalidURL`) is `url_refused`. The tool then tells the agent the result
 is unknown and not to retry, never that Index could not take it. Every code on a capture is the
 local-capture path; only `rejected` labels the map entry. Before DATA-249, `rpc_error`,
 `malformed` and `too_large` came from the MCP client, now removed. Refusals (`success: false`, no event): `disabled`,
@@ -520,7 +528,8 @@ answers 400 "Unsupported protocol version" to every version the plugin could sen
 the convention of Index's own Hermes plugin, stripped to the origin); else the origin of
 `INDEX_MCP_URL` when it is `https://<host>[:port]/mcp`; else `https://protocol.index.network`. It
 must be https (plain http only to `localhost`, `127.0.0.1`, `::1`), with no credentials, no `?`
-or `#` anywhere in the string, and no other path; the origin is rebuilt from the parsed scheme
+or `#` and no space or control character anywhere in the string, a host of `[A-Za-z0-9.-]` only
+(or a bracketed IPv6 literal), and no other path; the origin is rebuilt from the parsed scheme
 and host alone. A configured URL that fails is `url_refused`, never a fallback to production. The
 installer reads `INDEX_MCP_URL` only to write `mcp_servers.index.url` into `config.yaml` and writes
 neither variable to `$HERMES_HOME/.env`, so a tenant installed against Index's dev server still
