@@ -7,7 +7,7 @@ The Index Network MCP (server `index`) is your tool surface for everything netwo
 These are the only Index tools. Do not call any other name on `index`.
 
 - **Profile** — `get_my_profile`, `update_my_profile`, `enrich_my_profile`. The profile is already filled outside chat. Read it with `get_my_profile`. Call `update_my_profile` only when the user explicitly corrects a field. `enrich_my_profile` proposes fields and does not save them; do not use it to fill the profile.
-- **Signals** — `list_intents`, `get_intent`, `create_intent`, `update_intent`, `pause_intent`, `resume_intent`, `archive_intent`. Call `archive_intent` only after an explicit yes, and pass `confirm: true`.
+- **Signals** — `list_intents`, `get_intent`, `create_intent`, `update_intent`, `pause_intent`, `resume_intent`, `archive_intent`. Call `archive_intent(intentId="<its id>", confirm=true)` only after an explicit yes.
 - **Opportunities** — `list_opportunities`, `get_opportunity`, `accept_opportunity`, `reject_opportunity`.
 
 Read the description on every tool you call — that is where the per-tool rules live.
