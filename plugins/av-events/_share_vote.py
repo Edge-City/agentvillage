@@ -100,6 +100,13 @@ label is available beside the option key. The agent's rationale follows,
 cleaned again and labelled as the agent's note; it is dropped when it fails
 cleaning or quotes a share this agent still holds, and refused at the tool
 for the same reasons. A share's prompt names scope, expiry and id only.
+approval.md renders the summary as Telegram HTML with `& < >` escaped, under
+its "claimed" heading; against what that still allows (line breaks, links,
+mentions and commands Telegram detects itself, look-alike letters) the
+rationale is held to a conservative character set (`rationale_charset`),
+and one function (`display_line`) defines a prompt line for trusted text and
+the rationale alike. The summary string built once is the one checked,
+measured against 4096 bytes and passed to `propose`.
 
 **Accepted limits (in writing).**
 
@@ -478,7 +485,8 @@ def summary_for(entry: dict, question: Optional["vq.Question"] = None) -> str:
     prompt goes out without it."""
     if entry.get("class") == SHARE_CLASS:
         scope = entry.get("scope")
-        where = "the village" if scope == "village" else f"the village service {str(scope).split(':', 1)[-1]}"
+        # The only agent-chosen part: an ASCII service name ([a-z0-9_-]), quoted as a value.
+        where = "the village" if scope == "village" else f"the village service \u201c{str(scope).split(':', 1)[-1]}\u201d"
         return fit_bytes(f"Share a digest your agent drafted with {where} until {entry.get('expires_at')} "
                          f"(digest {entry.get('digest_id')}).", SUMMARY_MAX_BYTES)
     answer = entry.get("answer")
@@ -523,10 +531,14 @@ _PROMPT_WORDS = tuple(_w for _w in (" ".join("".join(c if c.isalnum() else " " f
 def clean_rationale(value: Any) -> tuple[Optional[str], Optional[str]]:
     """(the rationale as one bounded line, None) or (None, a code).
 
-    Refused: a format character of any kind (zero-width, bidi, joiners:
-    `rationale_invisible`), and a rationale that repeats any of the prompt's
-    own fixed phrases (`rationale_imitates_prompt`). Blank-rendering fillers
-    are dropped and every kind of whitespace becomes one plain space."""
+    One cleaning (`display_line`), then every check on that same string,
+    which is the one the summary carries. Refused: a format character of any
+    kind (zero-width, bidi, joiners: `rationale_invisible`), a hidden
+    character (`rationale_invalid`), a rationale that repeats any of the
+    prompt's own fixed phrases (`rationale_imitates_prompt`), mixes Latin
+    with a look-alike script (`rationale_mixed_script`), or leaves its
+    character set (`rationale_charset`). Blank-rendering fillers are dropped
+    and every kind of whitespace becomes one plain space."""
     if value is None or (isinstance(value, str) and not value.strip()):
         return None, None
     if not isinstance(value, str):
@@ -542,12 +554,66 @@ def clean_rationale(value: Any) -> tuple[Optional[str], Optional[str]]:
         return None, None
     if len(line) > MAX_RATIONALE or digest_text_problem(line) is not None or sanitize(line) != line:
         return None, "rationale_invalid"
-    if mixed_confusable_scripts(line):
-        return None, "rationale_mixed_script"
     words = _words(line)
     if any(phrase in words for phrase in _PROMPT_WORDS):
         return None, "rationale_imitates_prompt"
+    if mixed_confusable_scripts(line):
+        return None, "rationale_mixed_script"
+    if rationale_charset_problem(line):
+        return None, "rationale_charset"
     return line, None
+
+
+#: The rationale's character set (conservative, by rule rather than by a
+#: confusables table). Scripts whose letters it may use: Latin (only letters
+#: whose decomposition starts with an ASCII letter: accented letters yes,
+#: small capitals and other look-alike Latin no), and left-to-right Indic and
+#: East Asian scripts. Cyrillic, Greek and other scripts that draw like Latin
+#: are not on it, and neither are right-to-left scripts (no reordering of the
+#: prompt around the note).
+RATIONALE_SCRIPTS = frozenset({
+    "LATIN", "DEVANAGARI", "BENGALI", "GURMUKHI", "GUJARATI", "ORIYA", "TAMIL", "TELUGU", "KANNADA",
+    "MALAYALAM", "SINHALA", "CJK", "HIRAGANA", "KATAKANA", "HANGUL",
+})
+#: Punctuation it may use: no colon (no "Field: value" that reads as a new
+#: row), and none of the characters that are markup or that Telegram turns
+#: into a link, a mention, a tag, a command or a code span (`<>&@#/\*_[]{}|~`
+#: and backtick, `$`, `%`, `+`, `=`, `^`).
+RATIONALE_PUNCTUATION = frozenset(".,;!?'\"()-\u2018\u2019\u201c\u201d\u2013\u2014")
+MAX_MARKS_IN_A_ROW = 3
+MAX_DIGITS_IN_A_ROW = 6
+
+
+def rationale_charset_problem(line: str) -> bool:
+    """True when the (display-cleaned) rationale holds a character outside
+    its set, a period inside a word (`evil.com` would become a link), more than
+    `MAX_DIGITS_IN_A_ROW` digits together (a phone number), or more than
+    `MAX_MARKS_IN_A_ROW` marks on one letter."""
+    marks = digits = 0
+    for i, ch in enumerate(line):
+        cat = unicodedata.category(ch)
+        marks = marks + 1 if cat in ("Mn", "Mc") else 0
+        digits = digits + 1 if cat == "Nd" else 0
+        if marks > MAX_MARKS_IN_A_ROW or digits > MAX_DIGITS_IN_A_ROW:
+            return True
+        if ch == " ":
+            continue
+        if ch in RATIONALE_PUNCTUATION:
+            if ch == "." and i + 1 < len(line) and line[i + 1] != " ":
+                return True
+            continue
+        if cat[0] not in ("L", "M", "N") or cat in ("Nl", "No"):
+            return True
+        if unicodedata.normalize("NFKC", ch) != ch:
+            return True  # a compatibility form (full-width, mathematical, ligature)
+        script = _script(ch)
+        if cat == "Nd" and "0" <= ch <= "9":
+            continue
+        if script not in RATIONALE_SCRIPTS:
+            return True  # COMBINING marks, look-alike and right-to-left scripts
+        if script == "LATIN" and not ("a" <= unicodedata.normalize("NFKD", ch)[0].lower() <= "z"):
+            return True
+    return False
 
 
 #: Scripts with letters drawn like Latin ones: mixed with Latin in one
@@ -1459,6 +1525,10 @@ REFUSALS: dict[str, str] = {
     "rationale_mixed_script": (
         "Nothing was proposed: the rationale mixes Latin letters with look-alike letters from another script. "
         "Write it in one script."
+    ),
+    "rationale_charset": (
+        "Nothing was proposed: write the rationale as plain words: letters, digits, spaces and . , ; ! ? ' \" ( ) -, "
+        "with no colon, link, address, mention, tag or symbol."
     ),
     "rationale_imitates_prompt": (
         "Nothing was proposed: the rationale repeats the wording of the approval prompt itself. Say why in "

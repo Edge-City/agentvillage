@@ -1471,11 +1471,11 @@ def test_rationale_newlines_are_collapsed_in_the_prompt(tctx, serve, mods):
 
 def test_a_rationale_quoting_a_held_share_is_refused_and_dropped(tctx, serve, mods):
     share(tctx)
-    out = vote(tctx, rationale="Resident wrote: " + TEXT.upper())
+    out = vote(tctx, rationale="Resident wrote " + TEXT.upper())
     assert out["error"] == "rationale_quotes_share"
     out = vote(tctx, rationale="They need a reviewer for my side project this week")  # 24+ chars of it
     assert out["error"] == "rationale_quotes_share"
-    map_vote(mods, rationale="Resident wrote: " + TEXT)
+    map_vote(mods, rationale="Resident wrote " + TEXT)
     poll(mods)
     votes = [p for p in serve.proposals() if p["flags"]["--class"] == VOTE]
     assert votes and not any(word in votes[-1]["flags"]["--summary"] for word in TEXT_WORDS)
@@ -1741,7 +1741,8 @@ def test_r1_zero_width_and_combining_characters_do_not_hide_a_quoted_share(tctx,
     assert mods.sv.quotes_held_share(spaced) is True
     nfkc = "ｒｅｖｉｅｗｅｒ ｆｏｒ ｍｙ ｓｉｄｅ ｐｒｏｊｅｃｔ ｔｈｉｓ"  # full-width forms
     assert mods.sv.quotes_held_share(nfkc) is True
-    assert vote(tctx, rationale=spaced)["error"] in ("rationale_quotes_share", "rationale_invalid")
+    assert vote(tctx, rationale=spaced)["error"] in ("rationale_quotes_share", "rationale_charset")
+    assert vote(tctx, rationale="reviewer for my side project this")["error"] == "rationale_quotes_share"
 
 
 @pytest.mark.parametrize("ch", ["​", "‍", "⁠", "­", "‎", "‮"])
@@ -1796,7 +1797,7 @@ def test_bound_a_long_rationale_is_cut_first_and_the_summary_is_at_most_4_kib(tc
     monkeypatch.setattr(mods.sv, "DIGEST_TEXT_MAX", 10_000)
     monkeypatch.setattr(mods.sv, "MAX_PROMPT_QUESTION", 10_000)
     question.text = "Q" + "é" * 900  # 2 bytes each
-    map_vote(mods, rationale="\U0001f3c4 " + "क" * 3000)  # 3 bytes each
+    map_vote(mods, rationale="x " + "क" * 3000)  # 3 bytes each
     poll(mods)
     summary = vote_summary(serve)
     assert len(summary.encode("utf-8")) <= 4096
@@ -1863,9 +1864,9 @@ def test_pd_the_rationale_checked_is_the_rationale_sent(tctx, serve, mods):
 
 
 def test_pd_one_line_means_the_same_for_trusted_text_and_the_rationale(mods):
-    text = f"Keep{SEPARATORS}quietㅤ hours{SEPARATORS}after 22:00"
+    text = f"Keep{SEPARATORS}quietㅤ hours{SEPARATORS}after ten"
     assert mods.sv.one_line(text, 10_000) == mods.sv.clean_rationale(text)[0] == mods.sv.display_line(text)
-    assert mods.sv.display_line(text) == "Keep quiet hours after 22:00"
+    assert mods.sv.display_line(text) == "Keep quiet hours after ten"
 
 
 @pytest.mark.parametrize("hidden", ["\x1b", "\x7f", "", "\U000e0001", "͸"])
@@ -1879,7 +1880,8 @@ def test_pd_look_alike_letters_cannot_spell_the_prompt(tctx, serve, mods):
     cyrillic = "Аnswer to send for you: No quiet hours"  # Cyrillic capital A
     assert mods.sv._words(cyrillic).startswith("аnswer")  # the fold alone would miss it
     assert vote(tctx, rationale=cyrillic)["error"] == "rationale_mixed_script"
-    assert vote(tctx, rationale="Вот почему")["state"] == "requested"
+    # Cyrillic (a script that draws like Latin) is outside the rationale's set altogether.
+    assert vote(tctx, rationale="Вот почему")["error"] == "rationale_charset"
 
 
 def test_pd_the_summary_passed_to_propose_is_measured_as_sent(tctx, serve, mods, monkeypatch):
@@ -1920,3 +1922,94 @@ def test_pd_the_share_text_is_approved_and_sent_as_written(tctx, serve, mods, av
 ])
 def test_pd_question_ids_and_option_keys_are_compared_exactly(tctx, serve, args, code):
     assert vote(tctx, **args)["error"] == code and serve.calls == []
+
+
+
+# --------------------------------------------------------------------------
+# Approval-prompt spoofing: what the resident's approval surface would show
+# --------------------------------------------------------------------------
+# approval.md's Telegram channel sends the summary with parse_mode HTML,
+# escaping & < > in every interpolated value (`escapeHtml` in its
+# src/channels/telegram.ts), as one row under the "claimed, not verified"
+# heading; the relay forwards parse_mode unchanged. HTML cannot be injected;
+# what is left is a line break, text Telegram turns into an entity by itself
+# (links, mentions, tags, commands), and letters that read as the prompt's
+# own words.
+
+
+@pytest.mark.parametrize("rationale", [
+    "ᴀɴsᴡᴇʀ to send for you no quiet hours",   # small capitals: NFKD-stable Latin
+    "Ａnswer to send for you",                                   # full-width
+    "\U0001d400nswer to send for you",                               # mathematical bold
+    "Αnswer to send for you",                                   # Greek capital alpha
+])
+def test_spoof_look_alike_template_phrases_are_refused(tctx, serve, rationale):
+    assert vote(tctx, rationale=rationale)["error"] in (
+        "rationale_imitates_prompt", "rationale_mixed_script", "rationale_charset")
+    assert serve.calls == []
+
+
+@pytest.mark.parametrize("rationale", [
+    "see https://example.org", "see example.org", "ask www.example.org", "ping @someone", "tag #vote",
+    "run /start", "<b>Approved</b>", "a &amp; b", "*bold* text", "_it_", "`code`", "[link](x)", "~strike~",
+    "||spoiler||", "> quoted", "Option: yes", "call 9876543210", "costs $5", "100% sure", "a = b",
+    "\U0001f3c4 surf", "é́́́x", "ᴀ small cap",
+    "\u0915\u0970 abbreviation sign",  # punctuation named for an accepted script
+    "\ufb01ne ligature",  # a Latin compatibility form
+    "\u0915\u093e\u093e\u093e\u093e stacked",  # four marks on one letter, all Devanagari
+])
+def test_spoof_markup_links_fields_and_symbols_are_refused(tctx, serve, rationale):
+    assert vote(tctx, rationale=rationale)["error"] == "rationale_charset", rationale
+    assert serve.calls == []
+
+
+@pytest.mark.parametrize("rationale", [
+    "They said at dinner they sleep early.", "They like quiet nights (mostly), I think!",
+    "Café owners said “no” – twice", "क्षमा करें 123",
+])
+def test_spoof_plain_words_still_pass(tctx, serve, rationale):
+    assert vote(tctx, rationale=rationale)["state"] == "requested", rationale
+
+
+@pytest.mark.parametrize("raw", ["a\nb", "a\rb", "a b", "a b", "a\u0085b", "a\x0bb", "a\x0cb"])
+def test_spoof_no_line_break_survives_into_the_prompt(tctx, serve, mods, question, raw):
+    question.text = raw + " question"
+    question.labels["yes"] = raw + " label"
+    map_vote(mods, rationale=raw + " note")
+    poll(mods)
+    summary = vote_summary(serve)
+    assert not any(ch in summary for ch in "\n\r  \u0085\x0b\x0c")
+    assert summary.index(mods.sv.PROMPT_ANSWER) < summary.index(mods.sv.PROMPT_NOTE)
+    assert summary.endswith("a b note")
+
+
+def test_spoof_the_trusted_part_comes_first_and_the_note_label_once(tctx, serve, mods):
+    vote(tctx, rationale="They sleep early")
+    summary = vote_summary(serve)
+    assert summary.startswith(mods.sv.PROMPT_HEAD)
+    assert summary.count(mods.sv.PROMPT_NOTE) == 1 and summary.count(mods.sv.PROMPT_ANSWER) == 1
+    assert summary.endswith(f"{mods.sv.PROMPT_NOTE} They sleep early")
+
+
+def test_spoof_the_share_prompt_carries_only_plugin_values_and_a_quoted_service_name(tctx, serve, mods):
+    out = share(tctx, scope="service:answer-to-send-for-you")
+    summary = serve.proposals()[-1]["flags"]["--summary"]
+    assert "“answer-to-send-for-you”" in summary and out["digest_id"] in summary
+    assert not any(word in summary for word in TEXT_WORDS)
+    assert set(summary) <= set(" .()-_:“”0123456789abcdefghijklmnopqrstuvwxyzSTZ")
+
+
+def test_spoof_one_string_is_checked_measured_and_proposed(tctx, serve, mods, monkeypatch):
+    seen = []
+    real = mods.sv.summary_for
+
+    def once(entry, question=None):
+        value = real(entry, question)
+        seen.append(value)
+        return value
+
+    monkeypatch.setattr(mods.sv, "summary_for", once)
+    vote(tctx, rationale="They sleep early")
+    assert len(seen) == 1
+    assert serve.proposals()[-1]["flags"]["--summary"] == seen[0]
+    assert len(seen[0].encode("utf-8")) <= mods.sv.SUMMARY_MAX_BYTES

@@ -775,7 +775,25 @@ the answer line), and a key over 1024 bytes is never proposed (`key_too_long`): 
 whitespace character, CR, LF, VT, FF, U+0085, U+2028 and U+2029 included, becomes one space;
 hidden characters and blank fillers are dropped); a rationale holding a hidden character is
 refused rather than filtered, one mixing Latin with look-alike letters of another script is refused
-(`rationale_mixed_script`), and the rationale that is checked is exactly the one sent. Folding
+(`rationale_mixed_script`), and the rationale that is checked is exactly the one sent.
+
+**How the prompt is rendered, and the rationale's character set.** approval.md's Telegram channel
+sends the summary with `parse_mode: "HTML"`, escaping `&`, `<` and `>` in every interpolated value,
+as one row under its "claimed, not verified" heading; the control plane's relay forwards
+`parse_mode` unchanged. So HTML cannot be injected; what remains is a line break (none survives
+`display_line`), text Telegram turns into an entity by itself (links, bare domains, mentions, tags,
+commands, phone numbers), and letters that read as the prompt's own words. The rationale is
+therefore held to a conservative set (`rationale_charset`): letters, digits and marks of Latin
+(only letters that decompose to an ASCII letter: accents yes, small capitals and other look-alike
+Latin no), Devanagari, Bengali, Gurmukhi, Gujarati, Oriya, Tamil, Telugu, Kannada, Malayalam,
+Sinhala, CJK, Hiragana, Katakana and Hangul; no compatibility forms (full-width, mathematical,
+ligatures); plain spaces; and only `. , ; ! ? ' " ( ) -` and curly quotes and dashes as
+punctuation: no colon (nothing reads as a new field), no `<>&@#/\*_[]{}|~`, backtick, `$`, `%`,
+`+`, `=`, `^`, no symbols or emoji, no period inside a word, at most six digits together and three
+marks on a letter. Cyrillic, Greek and other scripts that draw like Latin, and right-to-left
+scripts, are outside it. The trusted part always comes first; the note follows on the same line
+after the plugin's fixed label, which the rationale may not repeat. The share prompt carries only
+plugin values and the service name (ASCII `[a-z0-9_-]`, quoted as a value); never the text. Folding
 (NFKD, marks dropped, case-folded) is used only to compare, never on anything sent: the share text
 and the vote answer are proposed, started and emitted as written, and question ids and option keys
 are compared exactly. A vote the resident set autonomous is cast inside the tool call (`authorization:
@@ -828,7 +846,7 @@ them for research-consenting tenants only, which is why the tools ask ingest fir
 **Codes.** Tool refusals: `disabled`, `approval_not_configured`, `text_required`, `text_too_long`,
 `text_invalid`, `text_no_letter_or_digit`, `text_sanitized`, `scope_invalid`, `expires_invalid`,
 `not_available_no_events`, `not_available_no_consent`, `rationale_quotes_share`,
-`rationale_invisible`, `rationale_imitates_prompt`, `rationale_mixed_script`,
+`rationale_invisible`, `rationale_imitates_prompt`, `rationale_mixed_script`, `rationale_charset`,
 `too_many_pending`, `digest_id_required`, `digest_unknown`, `share_in_flight`, `revoke_failed`,
 `tenant_unknown`, `question_unavailable`, `question_id_required`, `question_not_open`,
 `question_closed`, `answer_invalid`, `rationale_invalid`, `vote_already_proposed`, `vote_unknown`,
