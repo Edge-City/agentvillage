@@ -31,8 +31,8 @@
  * after `RECEIPT_KEEP_DAYS`, past the reader's window, so the prune is lossless.
  *
  * **The receipt preference** ("publish, then tell me" against "publish") is a
- * setting on the tenant in the control plane (`approval_reviews.receipt`:
- * `none` | `morning_brief`). Nothing carries it into the sandbox yet, and the
+ * setting the control plane keeps on the tenant (DATA-259; values `none` |
+ * `morning_brief`). Nothing carries it into the sandbox yet, and the
  * two choices render the same approval policy, so this module uses
  * `RECEIPT_PREFERENCE_DEFAULT` (`morning_brief`: tell the resident what was
  * shared in their name). `none` suppresses the receipt, never the reminder.
