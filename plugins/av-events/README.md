@@ -734,27 +734,39 @@ retried), `unavailable` (nothing could be held). Map codes: `payload_hash_mismat
 
 ### The morning brief's reader (DATA-222)
 
-The morning brief carries a reminder of inferred intentions still waiting for the resident's
-answer and a receipt of those published on their behalf. The brief script never parses the map: it
-runs `_brief_items.py` (read-only) with Hermes's Python, `python -I -B
-$HERMES_HOME/plugins/av-events/_brief_items.py`, and reads the one JSON object it prints:
-`{"v": 1, "status": "ok"|"off"|"error", "reason", "held": [{"id", "text", "heldSince"}],
-"heldCount", "published": [{"id", "indexIntentId", "publishedAt", "approvedBy"}]}`.
+The morning brief carries a count of inferred intentions still waiting for the resident's answer
+and a receipt of those published on their behalf. The brief script never parses the map: it runs
+`_brief_items.py` (read-only) with Hermes's Python, `python -I -B
+$HERMES_HOME/plugins/av-events/_brief_items.py --exclude-stdin`, writes the ids a delivered brief
+already receipted to its stdin (a JSON array), and reads the one JSON object it prints:
+`{"v": 2, "status": "ok"|"off"|"error", "reason", "heldCount", "published": [{"id",
+"indexIntentId", "publishedAt", "approvedBy"}], "publishedCount", "skipped"}`.
 
-| List | What is in it |
+| Part | What is in it |
 |---|---|
-| `held` | Class `intent.publish.inferred.index`, `approval.state` `requested` (the resident has been asked, no answer recorded), oldest first, at most 20 (`heldCount` is the total). `text` is the held payload text, whitespace collapsed, at most 160 characters. It leaves the list when the poller records the grant, the rejection or the final expiry, or the agent withdraws it. |
-| `published` | The same class, `approval.state` `published`, `published` true, not archived since, last changed within 7 days, oldest first. `approvedBy` is `individual` (`authorization: grant`) or `rule` (`policy`). No text: R16 deletes it at publish; the brief looks the words up on Index by `indexIntentId`. |
+| `heldCount` | Class `intent.publish.inferred.index`, source ambient, `approval.state` `requested` (the resident has been asked, no answer recorded). **A count only**: the held text stays in `approval.payload` (R16) and reaches no brief, card, file, transcript or chat. It drops when the poller records the grant, the rejection or the final expiry, or the agent withdraws it. |
+| `published` | The same class, `approval.state` `published` and `published` true, not archived since, last changed within 14 days, not among the excluded ids; oldest first, at most 20 (`publishedCount` is the total). `approvedBy` is `individual` (`authorization: grant`), `rule` (`policy`), or null when the entry does not say (the brief then adds no qualifier). No text: R16 deletes it at publish; the brief asks Index (`get_intent`) for the words of the three it lists. |
 
-Never returned: stated captures, personal or other local-only captures (they have no proposal),
-entries held before approvals were on, proposals not filed, refused, in flight or ended. `off`
-(`record_intention_off`, `approval_off`) when `AV_RECORD_INTENTION` or the approval path is off;
-these switches are read like `_core.env` (process environment, else `.env`), because the reader runs
-under the cron's terminal; it decides only what the brief mentions, never a publish. `error`
-(`map_unreadable`) for a map that cannot be read; the reader never takes the lock, creates,
-renames or writes anything (writers replace the map atomically). Which items a brief already
-receipted is the brief's own state (`intentionReceipts` in `memory/heartbeat-state.json`,
-`skills/index-network/scripts/intention-brief.ts`).
+Never counted or returned: stated captures, personal or other local-only captures (they have no
+proposal), entries held before approvals were on, proposals not filed, refused, cleared, being
+started or published, or ended. Each entry is read inside its own guard: one that cannot be read (a
+NaN or out-of-range timestamp, a wrong type) is skipped and counted in `skipped`, never the whole
+answer. `off` (`record_intention_off`, `approval_off`) when `AV_RECORD_INTENTION` or the approval
+path is off; these switches are read like `_core.env` (process environment, else `.env`), because
+the reader runs under the cron's terminal; it decides only what the brief mentions, never a publish.
+`error` (`map_unreadable`) for a map that cannot be read; the reader never takes the lock, creates,
+renames or writes anything (writers replace the map atomically).
+
+Which items a brief already receipted is the brief's own state (`intentionReceipts` in
+`memory/heartbeat-state.json`, kept 21 days; `skills/index-network/scripts/intention-brief.ts`).
+An item is offered by every brief until one that carried it was delivered, for 14 days from the
+publish. What is still lost: an item no delivered brief carried within those 14 days (no brief
+delivered for two weeks, or more than three a day waiting for that long).
+
+**The receipt preference does not reach the sandbox yet.** The resident's choice between "publish,
+then tell me" and "publish" (S1, DATA-259) is kept by the control plane and renders the same policy
+either way; nothing carries it to the agent. Until a follow-up wires it, the brief shows receipts
+for both, so the two choices behave the same.
 
 ### Sharing a digest and the weekly vote (lane O3)
 

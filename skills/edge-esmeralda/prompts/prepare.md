@@ -51,10 +51,10 @@ Also avoid emotional interpretations, status/ambition assumptions, personal-life
 
 Two small optional parts. When `heldForApprovalCount` is 0 and `sharedOnYourBehalf` is empty, add nothing for them: no heading, no line, no mention.
 
-- `heldForApproval[]`: things you noticed the user may want and proposed to share with the community, still waiting for their yes or no in their approvals. When `heldForApprovalCount` is above zero, add one plain line near the end, before the closing question, for example: "Still waiting on your yes or no in your approvals: a climbing partner for weekends." Name each item in a few words from its `text`; when `heldForApprovalCount` is larger than the list, end with "and N more". It is a reminder only.
-- `sharedOnYourBehalf[]`: what you shared with the community for the user since the last brief. Under **Shared on your behalf**, one bullet per item: its `text` in a few words, then "(under your setting)" when `approvedBy` is `rule`, or "(after your yes)" when it is `individual`. An item with no `text` is "one thing you'd mentioned"; never guess its words. When `sharedOnYourBehalfMore` is above zero, add: "N more in tomorrow's brief." Close the section with one plain sentence: "Tell me if any of these should come down."
+- `heldForApprovalCount`: how many things you proposed to share with the community are still waiting for the user's yes or no in their approvals. When it is above zero, add one plain line near the end, before the closing question: "N things are waiting for your yes or no in your approvals." When it is 1: "One thing is waiting for your yes or no in your approvals." Write only the count; never describe or guess what they are.
+- `sharedOnYourBehalf[]`: what you shared with the community for the user since a brief last listed it. Under **Shared on your behalf**, one bullet per item: its `text` in a few words, then "(under your setting)" when `approvedBy` is `rule`, "(after your yes)" when `approvedBy` is `individual`, and nothing after it when there is no `approvedBy`. An item with no `text` is "one thing you'd mentioned"; never guess its words. When `sharedOnYourBehalfMore` is above zero, add: "N more in tomorrow's brief."
 - Put each shared item's marker immediately before its bullet: `<!-- digest-receipt:id=ID -->`, with that item's `id`. Use only ids from `sharedOnYourBehalf[]`; an item without its marker is listed again tomorrow.
-- No link, no internal id, no explanation of how approval works. Do not ask the user to approve, answer or reply about any of these in this brief; approvals happen only in their approvals. The closing question stays about the user and the day.
+- No link, no internal id, no explanation of how approval works. Do not ask the user to approve, answer or reply about any of these in this brief; the user answers only in their approvals. The closing question stays about the user and the day.
 
 # Markers And Bookkeeping
 
@@ -83,7 +83,7 @@ A good note often has:
 - one interpreted throughline for the day;
 - a few concrete calendar anchors;
 - the conversations section from `connectionOpportunities` (at most three), then **Help your community** when `communityOpportunities` is non-empty;
-- the waiting line and **Shared on your behalf**, only when their lists are non-empty;
+- the waiting line and **Shared on your behalf**, only when the count is above zero or the list is non-empty;
 - one closing question that helps the user correct or sharpen the read.
 
 The question should sound like:
@@ -148,5 +148,5 @@ cd "${HERMES_HOME:-/opt/data}"
 - Stage the brief for automatic delivery by the send pass. Do not block it for review, assign it, or manually move it between statuses in this prepare pass.
 - Calendar failures must not block launch: compose from whatever verified context exists. If no verified calendar context exists, include one plain pointer saying you don't have today's Edge City India schedule and the Edge City portal or the organisers will have what's on.
 - Never confirm delivery here. Never write `deliveredToday` here.
-- The composed body is plain brief markdown: prose and bullets only, with no internal marker comments. Never wrap it in a triple-backtick code fence or any code block, and never include reasoning or "let me…" drafting text in the body.
+- The composed body is plain brief markdown: prose and bullets only. Its only HTML comments are the `digest-*` markers this document requires, each placed as described above; no other comment. Never wrap it in a triple-backtick code fence or any code block, and never include reasoning or "let me…" drafting text in the body.
 - Never expose internal IDs, raw JSON, internal marker comments, or internal vocabulary in visible prose.
