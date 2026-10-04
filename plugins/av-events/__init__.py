@@ -19,7 +19,7 @@ import re
 import time
 from typing import Any, Optional
 
-from . import _approval, _edgeos, _intent_approval
+from . import _approval, _edgeos, _intent_approval, _share_vote
 from ._collector import Collector, guarded, hermes_version, overlay_ref
 from ._consent import TOOL_NAME as CONSENT_TOOL_NAME
 from ._consent import register_consent_tool
@@ -715,6 +715,24 @@ def _emit_intention_update(
     )
 
 
+def _emit_share_vote(event_type: str, payload: dict, *, event_id: str, occurred_at: Optional[str]) -> bool:
+    """Lane O3: `digest.shared`, `vote.cast` or `digest.revoked`, after the
+    resident's grant and `approval start` (or the resident's revocation). The
+    event id is fixed by the caller before this runs, so a resend after a
+    crash is the same row at ingest. True when the event was buffered."""
+    collector = _COLLECTOR
+    if collector is None or collector.plugin_disabled or not collector.config.active:
+        return False
+    event = collector.emit(event_type, payload, event_id=event_id, occurred_at=occurred_at,
+                           occurred_at_earliest=occurred_at, occurred_at_latest=occurred_at)
+    return event is not None
+
+
+def _share_vote_emitter_ready() -> bool:
+    collector = _COLLECTOR
+    return collector is not None and not collector.plugin_disabled and bool(collector.config.active)
+
+
 def _hook_on_session_end(collector: Collector, **kwargs: Any) -> None:
     """Turn boundary, not session end.
 
@@ -918,6 +936,7 @@ def _on_unload() -> None:
     try:
         _approval.stop_poller()
         _intent_approval.set_emitter(None)
+        _share_vote.set_emitter(None, None)
     except Exception:  # noqa: BLE001 - an unload must never fail on us
         pass
     collector, _COLLECTOR = _COLLECTOR, None
@@ -976,6 +995,12 @@ def register(ctx) -> None:
     # guard, so the cron gate never depends on telemetry being on. Lane B: a
     # publish the approval poller (or a confirm) makes later is emitted here.
     register_record_intention_tool(ctx, emit=_emit_intention_update)
+    # Lane O3: `share_digest` and `village_vote`, each behind its own switch
+    # (`AV_DIGEST_SHARE`, `AV_VILLAGE_VOTE`) and inert without approval.md.
+    try:
+        _share_vote.register_share_vote_tools(ctx, emit=_emit_share_vote, ready=_share_vote_emitter_ready)
+    except Exception:  # noqa: BLE001 - the tools are optional; the hooks are not
+        pass
     # DATA-183: hear about the unload that clears the hooks. Optional in the
     # API (probe, fail open): without it register() behaves as before.
     on_unload = getattr(ctx, "on_unload", None)

@@ -1,6 +1,6 @@
 name: av-events
 version: 0.1.0
-description: "Agent Village V2 telemetry — session, LLM-call, prompt, tool-call, message, action, cron, profile, intention and memory.snapshot events to the Agent Village ingest API. Fails open; idles without AV_EVENTS_TOKEN. Backs up the memory files when AV_BACKUP_URL and AV_BACKUP_TOKEN are set. One read-only tool, consent_status, answers whether the resident is in the research. With AV_RECORD_INTENTION on, record_intention is the one front door for intentions: explicit intents (source message, onboarding or note) are published to Index by default. The two legitimate reasons an explicit intent stays local: the resident asked, or the content is personal. Ambient intents are held off Index until the resident approves them; with AV_APPROVAL_ENABLED and AV_APPROVAL_URL set, every publish goes through the resident's approval.md first (propose, poll, start)."
+description: "Agent Village V2 telemetry — session, LLM-call, prompt, tool-call, message, action, cron, profile, intention and memory.snapshot events to the Agent Village ingest API. Fails open; idles without AV_EVENTS_TOKEN. Backs up the memory files when AV_BACKUP_URL and AV_BACKUP_TOKEN are set. One read-only tool, consent_status, answers whether the resident is in the research. With AV_RECORD_INTENTION on, record_intention is the one front door for intentions: explicit intents (source message, onboarding or note) are published to Index by default. The two legitimate reasons an explicit intent stays local: the resident asked, or the content is personal. Ambient intents are held off Index until the resident approves them; with AV_APPROVAL_ENABLED and AV_APPROVAL_URL set, every publish goes through the resident's approval.md first (propose, poll, start). With AV_DIGEST_SHARE or AV_VILLAGE_VOTE on as well, share_digest and village_vote share a digest or cast the weekly vote only on the resident's approval."
 author: Edge City
 kind: backend
 optional_env:
@@ -32,12 +32,19 @@ optional_env:
   - AV_APPROVAL_DAEMON_UID
   - AV_APPROVAL_POLL_S
   - AV_APPROVAL_POLLER
+  # Lane O3: share_digest and village_vote through the same approval.md path,
+  # each off unless its switch is on (process environment only).
+  - AV_DIGEST_SHARE
+  - AV_VILLAGE_VOTE
 # Documentation only — Hermes registers the tool from ctx.register_tool() (toolset
 # av-events, DATA-157); `hermes plugins` reads this list to name the toolset.
 provides_tools:
   - consent_status
   # DATA-212, registered only when AV_RECORD_INTENTION is 1|true|yes|on.
   - record_intention
+  # Lane O3, registered only when AV_DIGEST_SHARE / AV_VILLAGE_VOTE is 1|true|yes|on.
+  - share_digest
+  - village_vote
 # Documentation only — Hermes reads hooks from ctx.register_hook(), never from
 # this list (hermes_cli/plugins.py:4831).
 provides_hooks:
