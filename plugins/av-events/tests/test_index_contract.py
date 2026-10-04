@@ -337,22 +337,43 @@ def test_the_seed_lists_the_plugins_tools(plugin, av):
     assert all(seed["builtin"][name] == "intention" for name in PLUGIN_WRITES)
 
 
-def _writes_an_intent(method: str, path: str) -> bool:
-    """A REST call that creates an intent or changes one (its text or status).
+#: Non-GET calls of the plugin reviewed as NOT writing an intent's text or
+#: status. Anything else that is not a GET must be decided here or watched.
+REVIEWED_NON_WRITES = {
+    ("POST", "/intents/list"): "a read of the caller's intents, sent as POST",
+    ("POST", "/intents/{id}/networks"): "shares an intent into a community; text and status unchanged",
+    ("POST", "/networks"): "creates a community",
+    ("POST", "/network-requests"): "asks for early access to create a community",
+    ("PUT", "/networks/{id}"): "renames or redescribes a community",
+    ("POST", "/networks/{id}/join"): "joins a community",
+    ("PATCH", "/opportunities/{id}/status"): "accepts or rejects an opportunity",
+    ("POST", "/enrichment/enrich"): "researches the owner's profile, persists nothing",
+}
 
-    `/intents/list` is a read sent as POST; `/intents/{id}/networks` shares an
-    intent into a community and changes neither its text nor its status.
+
+def _writes_an_intent(method: str, path: str) -> bool:
+    """Whether a plugin REST call creates an intent or changes its text or status.
+
+    A GET never does. A reviewed non-write (`REVIEWED_NON_WRITES`) does not.
+    Any other call with a path segment `intents` does. Any other non-GET call
+    is undecided, and fails the test until someone decides it.
     """
-    parts = path.strip("/").split("/")
-    if method == "GET" or parts[0] != "intents":
+    if method == "GET":
         return False
-    if parts == ["intents", "list"] or parts[2:] == ["networks"]:
+    if (method, path) in REVIEWED_NON_WRITES:
         return False
-    return True
+    if "intents" in path.strip("/").split("/"):
+        return True
+    pytest.fail(
+        f"Index plugin call {method} {path} is not reviewed: decide whether it writes an intent, then add "
+        "it to REVIEWED_NON_WRITES (with the reason) or watch the tool that makes it (INDEX_PLUGIN_TOOLS)"
+    )
 
 
 def test_the_plugins_intent_writers_are_exactly_the_watched_set(plugin, av):
-    """A writer added upstream (an archive, a pause) fails here once the vector is refreshed."""
+    """A writer added upstream (an archive, a pause, an intent write under another
+    resource) fails here once the vector is refreshed, and so does any new
+    non-GET call nobody has reviewed."""
     intentions = sys.modules[f"{av.MODULE_NAME}._intentions"]
     assert set(PLUGIN_REQUESTS) == set(PLUGIN_TOOLS)
     writers = {tool for tool, calls in PLUGIN_REQUESTS.items()
@@ -361,6 +382,9 @@ def test_the_plugins_intent_writers_are_exactly_the_watched_set(plugin, av):
     # Of the plugin's 16 tools, exactly the writers are watched.
     watched = {name for name in PLUGIN_TOOLS if intentions.classify_tool(name) is not None}
     assert watched == writers
+    # Every reviewed non-write is still one the plugin makes (no stale reviews).
+    made = {(method, path) for calls in PLUGIN_REQUESTS.values() for method, path in calls}
+    assert set(REVIEWED_NON_WRITES) <= made
 
 
 def test_each_plugin_writer_is_observed_as_its_mcp_twin_and_reads_only_its_own_arguments(plugin, av):
@@ -422,11 +446,23 @@ def test_agent_text_names_only_index_intent_tools(ri):
 
 
 #: DATA-272 ruling: for a new want, `record_intention` only; an intention it
-#: did not record may be changed with Index's own update tools.
+#: did not record may be changed with Index's own update tools, and only to
+#: reword the same want (a different want is a new one).
 PROHIBIT = "never call Index create_intent or index_create_intent for a new want"
-PERMIT = "may be changed with Index's own update_intent or index_update_intent"
+PERMIT = "may be changed with Index's own update_intent or index_update_intent, only to reword the same want"
+DIFFERENT = "a different want is a new want and goes through"
 _DENY = re.compile(r"\b(never|do not|don't|must not|not allowed)\b", re.IGNORECASE)
 _ALLOW = re.compile(r"\b(may|can|you are free|allowed to)\b", re.IGNORECASE)
+#: Clauses about the path when `record_intention` is NOT available, where
+#: calling Index's own tools is the instruction.
+_UNAVAILABLE = re.compile(r"\b(otherwise|not available|does not find it|ignore this file)\b", re.IGNORECASE)
+#: Index's intent create and update tools, MCP and bare names.
+CREATES = ("create_intent", "index_create_intent")
+UPDATES = ("update_intent", "index_update_intent")
+
+
+def _names(name: str) -> re.Pattern:
+    return re.compile(rf"(?<![a-z_]){name}(?![a-z_])")
 
 
 def _front_door_texts(ri) -> dict[str, str]:
@@ -445,37 +481,51 @@ def _clauses(text: str) -> list[str]:
 
 
 def test_the_front_door_text_forbids_a_direct_create_and_permits_an_update_it_cannot_make(ri):
-    """DATA-272 AC #2, narrowed by Carter's ruling: a new want goes through
+    """DATA-272 AC #2, narrowed by Carter's rulings: a new want goes through
     `record_intention`, never Index's `create_intent` / `index_create_intent`;
     an intention `record_intention` did not record may be changed with
-    `update_intent` / `index_update_intent`. Both said in each text, and no
-    clause says the opposite about either pair."""
+    `update_intent` / `index_update_intent`, only to reword the same want, and a
+    different want is a new want. Each said in each text, and no clause says
+    the opposite about any of the four names."""
     problems = []
     for label, text in _front_door_texts(ri).items():
+        own = "this tool" if label == "TOOL_DESCRIPTION" else "record_intention"
         if PROHIBIT not in text:
             problems.append(f"{label}: no prohibition of a direct create")
         if PERMIT not in text:
-            problems.append(f"{label}: no permission for an update record_intention cannot make")
-        if label != "TOOL_DESCRIPTION" and not re.search(r"(?<![a-z_])record_intention(?![a-z_])", text):
+            problems.append(f"{label}: no same-want permission for an update record_intention cannot make")
+        if f"{DIFFERENT} {own}" not in text.lower():
+            problems.append(f"{label}: does not send a different want through {own}")
+        if label != "TOOL_DESCRIPTION" and not _names("record_intention").search(text):
             problems.append(f"{label}: does not name record_intention")
         for clause in _clauses(text):
-            if re.search(r"(?<![a-z_])index_create_intent(?![a-z_])", clause):
+            if _UNAVAILABLE.search(clause):
+                continue
+            if any(_names(n).search(clause) for n in CREATES):
                 if not _DENY.search(clause) or _ALLOW.search(clause):
-                    problems.append(f"{label}: index_create_intent outside a prohibition: {clause!r}")
-            if re.search(r"(?<![a-z_])index_update_intent(?![a-z_])", clause):
+                    problems.append(f"{label}: a create tool outside a prohibition: {clause!r}")
+            if any(_names(n).search(clause) for n in UPDATES):
                 if _DENY.search(clause) or not _ALLOW.search(clause):
-                    problems.append(f"{label}: index_update_intent outside a permission: {clause!r}")
+                    problems.append(f"{label}: an update tool outside a permission: {clause!r}")
+                if "same want" not in clause or re.search(r"\bdifferent\b|\bnew want\b|\bany want\b", clause, re.IGNORECASE):
+                    problems.append(f"{label}: an update permission not limited to the same want: {clause!r}")
+            if re.search(r"\bdifferent want\b", clause, re.IGNORECASE):
+                if "is a new want" not in clause or own not in clause or any(_names(n).search(clause) for n in UPDATES):
+                    problems.append(f"{label}: a different want not sent through {own}: {clause!r}")
     assert problems == []
 
 
 def test_the_front_door_text_stays_conditional_on_record_intention(ri):
-    """SOUL.md and AGENTS.md speak of these tools only inside the passage that
-    starts "if record_intention is available"; the skill and the tool
-    description exist only when it is."""
-    texts = _front_door_texts(ri)
+    """In SOUL.md and AGENTS.md, Index's create and update tools (MCP and bare
+    names) are spoken of only on the line that opens "if record_intention is
+    available", after that opening; the skill and the tool description exist
+    only when it is."""
+    gate = re.compile(r"if record_intention is available", re.IGNORECASE)
     for label in ("SOUL.md", "AGENTS.md"):
-        text = texts[label]
-        gate = re.search(r"if record_intention is available", text, re.IGNORECASE)
-        assert gate, label
-        for name in ("index_create_intent", "index_update_intent"):
-            assert text.index(name) > gate.start(), (label, name)
+        lines = (REPO / "workspace" / label).read_text(encoding="utf-8").replace("`", "").splitlines()
+        assert sum(bool(gate.search(line)) for line in lines) == 1, label
+        for number, line in enumerate(lines, 1):
+            for name in (*CREATES, *UPDATES):
+                for hit in _names(name).finditer(line):
+                    opened = gate.search(line)
+                    assert opened and hit.start() > opened.start(), f"{label}:{number}: {name} outside the gate"

@@ -21,8 +21,10 @@ and the new `text`) changes the intention, `action=withdraw` (with
 
 Change an intention through `record_intention` when it was recorded through
 `record_intention`. An intention it did not record (made in the Index app, or
-before the tool was switched on) is not changed on Index by `action=update`,
-and may be changed with Index's own `update_intent` or `index_update_intent`.
+before the tool was switched on) is not changed on Index by `action=update`;
+it may be changed with Index's own `update_intent` or `index_update_intent`,
+only to reword the same want. A different want is a new want and goes through
+`record_intention`.
 
 ## Publish by default
 

@@ -312,11 +312,14 @@ not the way the MCP tools are:
   every other key (its schema does not forbid them), so `status`, `networkIds`, and the legacy `id` /
   `intent_id` are never read: a call without `intentId` or `description` records nothing, and a
   bare update can only ever be `intention.updated`, never a withdrawal, whatever it carries or its
-  result says.
+  result says. An `intentId` that is not a full id (a prefix Index resolves) is recorded only as the
+  full id the result names for it; a result that names none, or another intent, records nothing,
+  so a prefix never becomes a join key.
 - **Result.** The plugin's own JSON object (Hermes's MCP `{"result": …}` envelope is never unwrapped
   for these names). The plugin answers a non-2xx as an object, with Hermes's status `ok`, so an
-  integer `status` of 400 or more, `ok: false`, `success: false` or any `error` key records nothing;
-  so does a result that is not an object.
+  integer `status` of 400 or more, `ok: false`, `success: false` or a truthy `error` (the plugin's
+  own reading; an `"error": null` on a success body is not a failure) records nothing; so does a
+  result that is not an object.
 
 Hermes registers a plugin tool by bare name only, so `mcp__<any server>__index_create_intent` is not
 the plugin and records nothing. The plugin has no pause, resume, archive or delete tool;
@@ -324,7 +327,8 @@ the plugin and records nothing. The plugin has no pause, resume, archive or dele
 no intention (a test derives the writers from the vendored REST calls, so a writer added upstream
 fails it once the vector is refreshed). With `record_intention` on, the agent is told never to call
 `create_intent` or `index_create_intent` for a new want, and that an intention `record_intention`
-did not record may be changed with `update_intent` or `index_update_intent`. A direct call is still
+did not record may be changed with `update_intent` or `index_update_intent` only to reword the same
+want (a different want is a new want, and goes through `record_intention`). A direct call is still
 observed, as above, and is neither refused nor rerouted here.
 
 Index's intent tools (DATA-249, verified against `indexnetwork/index` `main`
@@ -460,7 +464,8 @@ Registered only when `AV_RECORD_INTENTION` is `1|true|yes|on` (default off). Her
 effect after a gateway restart, in both directions; the handler's call-time re-read honours only a
 change made to `os.environ` itself. One front door: for a new want the agent calls it instead of
 Index `create_intent` or the Index plugin's `index_create_intent`; an intention it did not record
-may still be changed with `update_intent` / `index_update_intent`. Explicit intents (source message, onboarding or note) are published to Index by
+may still be changed with `update_intent` / `index_update_intent`, only to reword the same want.
+Explicit intents (source message, onboarding or note) are published to Index by
 default. The two legitimate reasons an explicit intent stays local: the resident asked, or the
 content is personal. The skill `skills/record-intention/SKILL.md` says the same. It is installed on
 every tenant with the edge bundles and has no `requires_tools` gate (the tool sits behind Tool

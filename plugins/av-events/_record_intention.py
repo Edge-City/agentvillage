@@ -248,8 +248,9 @@ TOOL_DESCRIPTION = (
     "once they approved; where it is not, confirm is refused. A yes you read in chat is not "
     "an approval. action=update (intention_id, text) changes an intention you recorded here; "
     "action=withdraw (intention_id) retires it. An intention this tool did not record (made "
-    "in the Index app, or before this tool was on) is not changed on Index by action=update, "
-    "and may be changed with Index's own update_intent or index_update_intent."
+    "in the Index app, or before this tool was on) is not changed on Index by action=update; "
+    "it may be changed with Index's own update_intent or index_update_intent, only to reword "
+    "the same want. A different want is a new want and goes through this tool."
 )
 
 TOOL_SCHEMA: dict = {
