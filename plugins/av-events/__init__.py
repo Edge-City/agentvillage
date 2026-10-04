@@ -721,7 +721,7 @@ def _emit_share_vote(event_type: str, payload: dict, *, event_id: str, occurred_
     event id is fixed by the caller before this runs, so a resend after a
     crash is the same row at ingest. True when the event was buffered."""
     collector = _COLLECTOR
-    if collector is None or collector.plugin_disabled or not collector.config.active:
+    if collector is None or collector.plugin_disabled or not collector.config.active or collector.config.null_sink:
         return False
     event = collector.emit(event_type, payload, event_id=event_id, occurred_at=occurred_at,
                            occurred_at_earliest=occurred_at, occurred_at_latest=occurred_at)
@@ -729,8 +729,11 @@ def _emit_share_vote(event_type: str, payload: dict, *, event_id: str, occurred_
 
 
 def _share_vote_emitter_ready() -> bool:
+    """An event emitted now would be sent: the collector is on with a token
+    and a URL (a null sink buffers and never sends)."""
     collector = _COLLECTOR
-    return collector is not None and not collector.plugin_disabled and bool(collector.config.active)
+    return (collector is not None and not collector.plugin_disabled and bool(collector.config.active)
+            and not collector.config.null_sink)
 
 
 def _hook_on_session_end(collector: Collector, **kwargs: Any) -> None:

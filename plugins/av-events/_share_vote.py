@@ -22,9 +22,10 @@ configured (`AV_APPROVAL_ENABLED` on, `AV_APPROVAL_URL` set):
 The contract is the data repo's `docs/spec-addenda.md` "digest.* and
 vote.cast" and the three closed schemas. What it fixes here:
 
-- **Keys.** `digest.share:<digest_id>` (`digest_id` a uuid4) and
-  `village.vote:<question_id>:<tenant_id>` (the tenant the ingest token
-  belongs to: `AV_TENANT_ID`, else `TENANT_ID`, process environment only).
+- **Keys.** `digest.share:<digest_id>` (`digest_id` a uuid4 the plugin
+  mints) and `village.vote:<question_id>:<tenant_id>` (the tenant the ingest
+  token belongs to: `AV_TENANT_ID`, else `TENANT_ID`, process environment
+  only, lower-cased and required to be a UUID as the collector requires).
 - **The proposed bytes.** Exactly `{digest_id, scope, text, expires_at}` or
   `{question_id, answer}`, as RFC 8785 canonical JSON (sorted keys, no
   whitespace, UTF-8, the escapes JCS and Python share), so the plain SHA-256
@@ -82,6 +83,47 @@ and `start_seq`. A spent grant whose `start` answer was lost ends
 **A revocation** is emitted in the tool call the resident's instruction
 causes, needs no approval, and is sent once per share (claimed in the map
 first, put back when nothing carried it).
+
+**The vote is bound to the provider's question, not the map's.** Before a
+vote is proposed and again before it is started (ahead of the claim), the
+provider is asked: the entry's `question_id` must be the open question's,
+its answer one of that question's option keys, and the question not closed
+by the provider's own `closes_at`. Otherwise the entry ends (`closed` with
+`question_unavailable` or `question_closed`, or `invalid` with
+`answer_not_an_option`), a pending question is withdrawn, and nothing is
+sent. Under the shipped provider no vote is ever proposed.
+
+**What the resident reads.** A vote's prompt is built from the provider: the
+question's text and the chosen option's label (one line, bounded, controls,
+format and bidi characters dropped), or a plain statement that no text or
+label is available beside the option key. The agent's rationale follows,
+cleaned again and labelled as the agent's note; it is dropped when it fails
+cleaning or quotes a share this agent still holds, and refused at the tool
+for the same reasons. A share's prompt names scope, expiry and id only.
+
+**Accepted limits (in writing).**
+
+- A revocation needs no approval because it only reduces exposure. The
+  agent can therefore revoke, or (by writing the map) pre-revoke, any digest
+  id of its own tenant. The data side keys a revocation on the token's
+  tenant, so no other resident is reachable. A revocation is sent at most
+  once per digest id per process, and only for an entry this module marked
+  sent (`emitted` with its event id, start seq and `grant`); the map can
+  still be forged to look like that.
+- The agent runs as the plugin's uid. It can write the event spool directly,
+  and an agent that can start a Hermes process controls that process's
+  environment (Hermes loads `.env` with override at startup), so the
+  switches and `AV_APPROVAL_URL` too, and could point the plugin at a
+  listener of its own (the loopback listener check binds only the uid the
+  environment names). The defence for both is the data side's: the ODS
+  writer resolves every share and vote against the approval follower's own
+  rows, which this sandbox does not write.
+- What reaches the village: the tools refuse up front, proposing nothing,
+  when no event could be sent (no token, the plugin off, a null sink) or
+  when ingest says the tenant is not in the research (the worker drops these
+  events). When consent cannot be read, the tool proceeds, and its answers
+  say only that the event was handed to the event queue, never that it was
+  delivered.
 
 **The weekly question** comes from `_village_question.current_question()`,
 whose shipped implementation refuses (`question_source_not_built`): the
@@ -150,6 +192,13 @@ CLOSE_MARGIN_S = 60.0
 MAX_PENDING_SHARES = 5
 #: A vote's rationale, in the summary only: one line, bounded.
 MAX_RATIONALE = 280
+#: A rationale holding this many consecutive characters of a held share's
+#: text (or all of a shorter one of at least `MIN_QUOTE`) is refused.
+QUOTE_WINDOW = 24
+MIN_QUOTE = 12
+#: The question's text and an option's label, as the resident's prompt shows them.
+MAX_PROMPT_QUESTION = 300
+MAX_PROMPT_LABEL = 120
 
 MAX_STEPS = 10
 MAX_PER_PASS = 50
@@ -160,7 +209,7 @@ STALE_STARTING_S = 120.0
 DIGEST_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 RESERVED_IDS = frozenset({"00000000-0000-0000-0000-000000000000", "ffffffff-ffff-ffff-ffff-ffffffffffff"})
 SCOPE = re.compile(r"^(village|service:[a-z][a-z0-9_-]{0,63})$")
-TENANT = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+LOWER_UUID = DIGEST_ID
 _ENTRY_ID = re.compile(r"^(digest\.share:[0-9a-f-]{36}|village\.vote:[A-Za-z0-9._-]{1,128}:[A-Za-z0-9._-]{1,128})$")
 
 SHARE_KEYS = ("digest_id", "expires_at", "scope", "text")
@@ -217,9 +266,11 @@ def active() -> bool:
 
 
 def tenant_id() -> Optional[str]:
-    """The tenant the ingest token belongs to, exactly as the control plane wrote it."""
-    raw = _approval.process_env("AV_TENANT_ID") or _approval.process_env("TENANT_ID")
-    return raw if TENANT.fullmatch(raw) else None
+    """The tenant the ingest token belongs to, normalised as the collector
+    normalises it (`_collector`: lower-case, and a UUID): a lower-case UUID,
+    else None (the vote is refused)."""
+    raw = (_approval.process_env("AV_TENANT_ID") or _approval.process_env("TENANT_ID")).lower()
+    return raw if LOWER_UUID.fullmatch(raw) else None
 
 
 # ---- The contract's pure parts ---------------------------------------------
@@ -346,20 +397,49 @@ def _parse(payload: Any, keys: tuple[str, ...]) -> Optional[dict]:
     return obj
 
 
-def summary_for(entry: dict) -> str:
-    """The line the resident reads and the daemon logs in cleartext: never a
-    share's text. A vote's carries the agent's rationale, as the contract puts
-    it there."""
+def one_line(text: Any, limit: int) -> Optional[str]:
+    """Trusted text (a question, a label) as one bounded display line: every
+    control, format (bidi included), surrogate, private-use and line or
+    paragraph separator character dropped, whitespace collapsed, cut at
+    `limit` with an ellipsis. None when nothing is left."""
+    if not isinstance(text, str):
+        return None
+    kept = "".join(" " if ch.isspace() else ch for ch in text
+                   if ch.isspace() or unicodedata.category(ch) not in ("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"))
+    line = " ".join(kept.split())
+    if not line:
+        return None
+    return line if len(line) <= limit else line[: limit - 1].rstrip() + "\u2026"
+
+
+def summary_for(entry: dict, question: Optional["vq.Question"] = None) -> str:
+    """The line the resident reads and the daemon logs in cleartext.
+
+    A share's names its scope, expiry and id: never its text. A vote's is
+    built from the trusted provider's question (its text and the chosen
+    option's label), never from anything the agent wrote; where the provider
+    gives no text or label the prompt says so and shows the option key. The
+    agent's rationale follows, cleaned again here and labelled as the agent's
+    note; one that fails cleaning, or quotes a held share, is dropped and the
+    prompt goes out without it."""
     if entry.get("class") == SHARE_CLASS:
         scope = entry.get("scope")
         where = "the village" if scope == "village" else f"the village service {str(scope).split(':', 1)[-1]}"
         return (f"Share a digest your agent drafted with {where} until {entry.get('expires_at')} "
                 f"(digest {entry.get('digest_id')}).")
-    line = (f"Answer the weekly village question {entry.get('question_id')} with option "
-            f"{entry.get('answer')} on your behalf.")
-    rationale = entry.get("rationale")
-    if isinstance(rationale, str) and rationale:
-        line += f" Your agent's reason: {rationale}"
+    answer = entry.get("answer")
+    text = one_line(question.text, MAX_PROMPT_QUESTION) if question is not None else None
+    option = question.option(answer) if question is not None and isinstance(answer, str) else None
+    label = one_line(option.label, MAX_PROMPT_LABEL) if option is not None else None
+    line = f"Weekly village question {entry.get('question_id')}: "
+    line += f"\u201c{text}\u201d" if text else "(no text for this question is available)."
+    if label:
+        line += f" Answer to send for you: {label} (option {answer})."
+    else:
+        line += f" Answer to send for you: option {answer} (no description of this option is available)."
+    rationale, problem = clean_rationale(entry.get("rationale"))
+    if rationale and problem is None and not quotes_held_share(rationale):
+        line += f" -- Note written by your agent (not part of the question): {rationale}"
     return line
 
 
@@ -373,6 +453,36 @@ def clean_rationale(value: Any) -> tuple[Optional[str], Optional[str]]:
     if len(line) > MAX_RATIONALE or digest_text_problem(line) is not None or sanitize(line) != line:
         return None, "rationale_invalid"
     return line, None
+
+
+def _fold(text: str) -> str:
+    return " ".join(text.casefold().split())
+
+
+def quotes_held_share(rationale: str) -> bool:
+    """The rationale holds `QUOTE_WINDOW` consecutive characters of the text of
+    a share this agent still holds (or all of a shorter one of at least
+    `MIN_QUOTE`), case and spacing folded. A share already sent or ended no
+    longer has its text here, so it cannot be checked."""
+    needle_space = _fold(rationale)
+    try:
+        entries = _load_map()
+    except Exception:  # noqa: BLE001 - unreadable: treated as quoting (fail closed)
+        return True
+    for entry in entries.values():
+        if entry.get("class") != SHARE_CLASS:
+            continue
+        obj = _parse(entry.get("payload"), SHARE_KEYS)
+        if obj is None:
+            continue
+        text = _fold(obj["text"])
+        if len(text) < QUOTE_WINDOW:
+            if len(text) >= MIN_QUOTE and text in needle_space:
+                return True
+            continue
+        if any(text[i:i + QUOTE_WINDOW] in needle_space for i in range(len(text) - QUOTE_WINDOW + 1)):
+            return True
+    return False
 
 
 # ---- The map -----------------------------------------------------------------
@@ -584,23 +694,36 @@ def valid_shape(entry_id: str, entry: dict, *, payload: bool = True) -> bool:
     return False
 
 
+def _vote_question(entry: dict, now: float) -> tuple[Optional["vq.Question"], Optional[tuple[str, str]]]:
+    """(the provider's open question, None) when this vote may still be
+    proposed or started, else (None, (final state, code)). The provider is the
+    only authority on the question: its id, its options and its close; the
+    map's copy of any of them is never read."""
+    try:
+        question = vq.current_question()
+    except vq.QuestionUnavailable:
+        return None, ("closed", "question_unavailable")
+    if question.question_id != entry.get("question_id"):
+        return None, ("closed", "question_unavailable")
+    if entry.get("answer") not in question.keys:
+        return None, ("invalid", "answer_not_an_option")
+    if now >= float(question.closes_at) - CLOSE_MARGIN_S:
+        return None, ("closed", "question_closed")
+    return question, None
+
+
 def _bounds(entry: dict, now: float) -> Optional[tuple[str, str]]:
     """(final state, code) when this proposal can no longer be acted on now."""
-    if entry.get("class") == SHARE_CLASS:
-        held = _parse(entry.get("payload"), SHARE_KEYS)
-        expires = epoch_from_iso(held["expires_at"] if held is not None else entry.get("expires_at"))
-        if expires is None:
-            return "invalid", "expires_invalid"
-        if expires - now < MIN_REMAINING_S:
-            return "lapsed", "share_expired"
-        if expires - now > DIGEST_MAX_TTL_S:
-            return "refused", "expires_too_far"
-        return None
-    closes = entry.get("closes_at")
-    if isinstance(closes, bool) or not isinstance(closes, (int, float)):
-        return "invalid", "closes_invalid"
-    if now >= float(closes) - CLOSE_MARGIN_S:
-        return "closed", "question_closed"
+    if entry.get("class") != SHARE_CLASS:
+        return _vote_question(entry, now)[1]
+    held = _parse(entry.get("payload"), SHARE_KEYS)
+    expires = epoch_from_iso(held["expires_at"] if held is not None else entry.get("expires_at"))
+    if expires is None:
+        return "invalid", "expires_invalid"
+    if expires - now < MIN_REMAINING_S:
+        return "lapsed", "share_expired"
+    if expires - now > DIGEST_MAX_TTL_S:
+        return "refused", "expires_too_far"
     return None
 
 
@@ -672,13 +795,15 @@ def _granted(task: Any) -> tuple[bool, Optional["_approval.Answer"], Optional[st
     return answer.exit_code == 0 and answer.status == "granted", answer, None
 
 
-def _cleared(entry: dict) -> tuple[bool, Optional[str]]:
+def _cleared(entry: dict, question: Optional["vq.Question"]) -> tuple[bool, Optional[str]]:
     """The same `propose` again (idempotent): the policy still clears this
     vote, nothing executed it, and core's hash is the held bytes'."""
     try:
-        answer = _approval.propose(entry["class"], entry["key"], summary_for(entry), entry["payload"])
+        answer = _approval.propose(entry["class"], entry["key"], summary_for(entry, question), entry["payload"])
     except _approval.ApprovalUnavailable as exc:
         return False, exc.code
+    except (UnicodeError, ValueError, TypeError):
+        return False, "payload_unencodable"
     if not answer.ok:
         return False, answer.error_code or f"exit_{answer.exit_code}"
     doc = answer.doc
@@ -694,15 +819,29 @@ def _cleared(entry: dict) -> tuple[bool, Optional[str]]:
 def _propose(entry_id: str, entry: dict) -> Optional[Outcome]:
     if not valid_shape(entry_id, entry):
         return _invalid(entry_id, {"unfiled"})
-    out = _bounds(entry, float(_clock()))
+    problem = _content_problem(entry)
+    if problem is not None:
+        # Bytes the door would refuse never reach the resident's prompt.
+        _set(entry_id, {"unfiled"}, "invalid", code=problem)
+        return Outcome("invalid", code=problem)
+    now = float(_clock())
+    question = None
+    if entry.get("class") == VOTE_CLASS:
+        question, out = _vote_question(entry, now)
+    else:
+        out = _bounds(entry, now)
     if out is not None:
         return _end_out_of_bounds(entry_id, entry, out[0], out[1], {"unfiled"})
     payload = entry["payload"]
     try:
-        answer = _approval.propose(entry["class"], entry["key"], summary_for(entry), payload)
+        answer = _approval.propose(entry["class"], entry["key"], summary_for(entry, question), payload)
     except _approval.ApprovalUnavailable as exc:
         _note(entry_id, exc.code)
         return Outcome("unfiled", code=exc.code)
+    except (UnicodeError, ValueError, TypeError):
+        # Nothing was sent, and the same bytes never could be.
+        _set(entry_id, {"unfiled"}, "invalid", code="payload_unencodable")
+        return Outcome("invalid", code="payload_unencodable")
     if not answer.ok:
         code = answer.error_code or f"exit_{answer.exit_code}"
         if code in REFUSED_CODES:
@@ -835,7 +974,13 @@ def _execute(entry_id: str, entry: dict, kind: str) -> Optional[Outcome]:
         _set(entry_id, {back}, "unfiled", code="payload_hash_mismatch")
         return None
     now = float(_clock())
-    out = _bounds(entry, now)
+    question = None
+    if entry.get("class") == VOTE_CLASS:
+        # Before the claim: the provider, never the map, says which question
+        # is open, which answers it takes and when it closes.
+        question, out = _vote_question(entry, now)
+    else:
+        out = _bounds(entry, now)
     if out is not None:
         return _end_out_of_bounds(entry_id, entry, out[0], out[1], {back})
     problem = _content_problem(entry)
@@ -866,7 +1011,7 @@ def _execute(entry_id: str, entry: dict, kind: str) -> Optional[Outcome]:
                 return _repropose_void(entry_id, {"starting"}, claim=claim)
             return _release(entry_id, claim, back, why or f"wait_exit_{answer.exit_code if answer else 'none'}")
     else:
-        ok, why = _cleared(entry)
+        ok, why = _cleared(entry, question)
         if not ok:
             # Ask from the start: the class may be manual now, or executed.
             _set(entry_id, {"starting"}, "unfiled", claim=claim, code=why or "not_cleared")
@@ -877,6 +1022,10 @@ def _execute(entry_id: str, entry: dict, kind: str) -> Optional[Outcome]:
         # Whether it landed is unknown: the next read of the daemon tells (a
         # spent grant reads nothing-to-wait-for and is never emitted).
         return _release(entry_id, claim, back, exc.code)
+    except (UnicodeError, ValueError, TypeError):
+        # Nothing was sent, and the same bytes never could be.
+        _set(entry_id, {"starting"}, "invalid", claim=claim, code="payload_unencodable")
+        return Outcome("invalid", code="payload_unencodable")
     if not answer.ok:
         error = answer.error_code or f"exit_{answer.exit_code}"
         if error == "already-executed":
@@ -1152,7 +1301,6 @@ REFUSALS: dict[str, str] = {
         "Nothing was proposed: the text contains something shaped like a credential or token. Leave it out."
     ),
     "scope_invalid": "Nothing was proposed: scope is village, or service:<name> in lower case.",
-    "expires_invalid": "Nothing was proposed: expires_in_hours is a whole number from 1 to 167.",
     "too_many_pending": (
         "Nothing was proposed: five digests are already waiting for the resident. Wait for their answers, "
         "or revoke one, before proposing another."
@@ -1161,6 +1309,20 @@ REFUSALS: dict[str, str] = {
     "digest_unknown": "Nothing was changed: this agent holds no digest with that digest_id.",
     "share_in_flight": "Not revoked yet: this digest is being shared right now. Try again in a minute.",
     "revoke_failed": "Not revoked yet: the revocation could not be recorded just now. Try again in a minute.",
+    "not_available_no_events": (
+        "Nothing was proposed: this agent's village event connection is not set up, so an approved share or "
+        "vote would go nowhere. Tell the resident it is not available yet."
+    ),
+    "not_available_no_consent": (
+        "Nothing was proposed: the resident is not in the Agent Village research, and shares and votes reach "
+        "the village only for residents who are. They can change that on the Research participation panel "
+        "on the Agent Village landing page."
+    ),
+    "rationale_quotes_share": (
+        "Nothing was proposed: the rationale repeats a digest the resident has not approved sharing. "
+        "Leave it out."
+    ),
+    "expires_invalid": "Nothing was proposed: expires_in_hours is a whole number from 1 to 167, in digits 0-9.",
     "tenant_unknown": (
         "Nothing was proposed: this agent does not know its own tenant id, which the vote is keyed on. "
         "Tell the resident the vote could not be filed."
@@ -1193,9 +1355,15 @@ STATE_MESSAGES: dict[str, str] = {
     "requested": "The resident has been asked in their approval channel. " + _NOT_APPROVAL,
     "cleared": "The resident's policy clears this; it is being done.",
     "starting": "It is being done now.",
-    "emitting": "The resident approved it; it is being sent now.",
-    "emitted": "Done: the resident approved it, and it has been sent.",
-    "revoked": "Revoked: village services no longer get this digest.",
+    "emitting": "The resident approved it; it is being handed over now.",
+    "emitted": (
+        "The resident approved it, and it was handed to this agent's event queue for the village. "
+        "Delivery is not confirmed from here."
+    ),
+    "revoked": (
+        "Revoked: the revocation was handed to this agent's event queue for the village. Delivery is not "
+        "confirmed from here."
+    ),
     "rejected": "The resident declined it. It was not done; do not try another way.",
     "withdrawn": "Withdrawn; nothing was shared or cast.",
     "expired": "The resident did not answer in time. Nothing was done.",
@@ -1292,16 +1460,54 @@ def _action(args: dict, default: str) -> str:
     return value.strip().lower() if isinstance(value, str) and value.strip() else default
 
 
+_ASCII_HOURS = re.compile(r"[0-9]{1,3}")
+
+
 def _ttl_hours(value: Any) -> Optional[float]:
+    """An ASCII integer from 1 to 167 (an int, or a string of ASCII digits);
+    anything else, other scripts' digits included, is refused."""
     if value is None:
         return DEFAULT_TTL_S
     if isinstance(value, bool):
         return None
-    if isinstance(value, str) and value.strip().isdigit():
+    if isinstance(value, str):
+        if not _ASCII_HOURS.fullmatch(value.strip()):
+            return None
         value = int(value.strip())
     if not isinstance(value, int) or not 1 <= value <= 167:
         return None
     return min(float(value) * 3600.0, float(MAX_TTL_S))
+
+
+def _research_consent() -> Optional[bool]:
+    """Whether events from this tenant reach the research database: True,
+    False (no research consent, or no choice on record: the worker drops
+    them), or None when it cannot be told (`consent_status`'s own read)."""
+    try:
+        from . import _consent
+        from ._core import env
+
+        status = _consent.fetch_consent_status(env("AV_EVENTS_URL"), env("AV_EVENTS_TOKEN"))
+    except Exception:  # noqa: BLE001
+        return None
+    if isinstance(status, _consent.ConsentUnavailable):
+        return None
+    if status is None:
+        return False
+    return status.get("research") is True
+
+
+def _delivery_problem() -> Optional[str]:
+    """Why an approved share or vote would go nowhere, so the resident is not
+    asked: nothing can carry the event (no token, the plugin off, or a null
+    sink that never sends), or ingest says this tenant is not in the research
+    (the worker drops these events then). None when it would be delivered or
+    that cannot be told."""
+    if not _ready():
+        return "not_available_no_events"
+    if _research_consent() is False:
+        return "not_available_no_consent"
+    return None
 
 
 def _share(args: dict) -> dict:
@@ -1319,6 +1525,9 @@ def _share(args: dict) -> dict:
     ttl = _ttl_hours(args.get("expires_in_hours"))
     if ttl is None:
         return _refuse("expires_invalid")
+    problem = _delivery_problem()
+    if problem is not None:
+        return _refuse(problem)
     digest_id = str(uuid.uuid4())
     expires_at = iso_from_epoch(float(_clock()) + max(float(MIN_TTL_S), ttl))
     entry = {"class": SHARE_CLASS, "key": share_key(digest_id), "digest_id": digest_id, "scope": scope,
@@ -1346,6 +1555,11 @@ def _digest_entry(args: dict) -> tuple[Optional[str], Optional[dict], Optional[d
     return digest_id, entry, None
 
 
+#: Digest ids this process has sent a revocation for: at most one each.
+_REVOKED_IDS: set[str] = set()
+_REVOKE_LOCK = threading.Lock()
+
+
 def _revoke(args: dict) -> dict:
     digest_id, entry, refusal = _digest_entry(args)
     if refusal is not None:
@@ -1365,13 +1579,24 @@ def _revoke(args: dict) -> dict:
         expires = epoch_from_iso(entry.get("expires_at"))
         if expires is not None and expires <= now:
             return _state_answer(Outcome("revoke_lapsed", code="share_lapsed"), digest_id=digest_id)
-        # Claimed first (one revocation per share), then sent; put back when
-        # nothing carried it, so the resident's next request tries again.
-        if _set(entry_id, {"emitted"}, "revoked", revoked_at=now) is None:
-            return _refuse("revoke_failed", digest_id=digest_id)
+        seq = entry.get("start_seq")
+        if (not isinstance(entry.get("event_id"), str) or isinstance(seq, bool) or not isinstance(seq, int)
+                or entry.get("authorization") != "grant"):
+            # Not a share this module sent (it writes these with the event).
+            return _refuse("digest_unknown")
+        with _REVOKE_LOCK:
+            if digest_id in _REVOKED_IDS:
+                return _state_answer(Outcome("revoked"), digest_id=digest_id, shared=False)
+            # Claimed first (one revocation per share), then sent; put back
+            # when nothing carried it, so the resident's next request tries again.
+            if _set(entry_id, {"emitted"}, "revoked", revoked_at=now) is None:
+                return _refuse("revoke_failed", digest_id=digest_id)
+            _REVOKED_IDS.add(digest_id)
         event_id = derived_uuid7(int(now * 1000), f"av-events|{REVOKED_EVENT}|{digest_id}")
         if not _send(REVOKED_EVENT, revoked_event_payload(digest_id), event_id, now):
             _set(entry_id, {"revoked"}, "emitted", revoked_at=None, code="revoke_failed")
+            with _REVOKE_LOCK:
+                _REVOKED_IDS.discard(digest_id)
             return _refuse("revoke_failed", digest_id=digest_id)
         return _state_answer(Outcome("revoked"), digest_id=digest_id, shared=False)
     # Final without a share (declined, expired, withdrawn...) or already revoked.
@@ -1393,11 +1618,10 @@ def share_digest_answer(args: Any) -> dict:
     args = args if isinstance(args, dict) else {}
     if not share_on():
         return _refuse("disabled")
+    if not _approval.configured():
+        return _refuse("approval_not_configured")
     action = _action(args, "share")
     if action == "share":
-        # Revoking and reading a share need no approval; sharing does.
-        if not _approval.configured():
-            return _refuse("approval_not_configured")
         return _share(args)
     if action == "revoke":
         return _revoke(args)
@@ -1411,8 +1635,8 @@ def _question_answer() -> dict:
         q = vq.current_question()
     except vq.QuestionUnavailable as exc:
         return _refuse("question_unavailable", reason=exc.code)
-    return {"success": True, "question_id": q.question_id, "text": q.text, "options": list(q.options),
-            "closes_at": iso_from_epoch(q.closes_at)}
+    return {"success": True, "question_id": q.question_id, "text": q.text,
+            "options": [{"key": o.key, "label": o.label} for o in q.options], "closes_at": iso_from_epoch(q.closes_at)}
 
 
 def _vote(args: dict) -> dict:
@@ -1432,12 +1656,17 @@ def _vote(args: dict) -> dict:
     if float(_clock()) >= float(q.closes_at) - CLOSE_MARGIN_S:
         return _refuse("question_closed")
     answer = args.get("answer")
-    if not isinstance(answer, str) or answer.strip() not in q.options:
+    if not isinstance(answer, str) or answer.strip() not in q.keys:
         return _refuse("answer_invalid")
     answer = answer.strip()
     rationale, code = clean_rationale(args.get("rationale"))
     if code is not None:
         return _refuse(code)
+    if rationale and quotes_held_share(rationale):
+        return _refuse("rationale_quotes_share")
+    problem = _delivery_problem()
+    if problem is not None:
+        return _refuse(problem)
     key = vote_key(question_id, tenant)
     existing = lookup(key)
     if existing is not None:
@@ -1462,7 +1691,7 @@ def _vote(args: dict) -> dict:
                                  question_id=question_id, answer=answer)
     else:
         entry = {"class": VOTE_CLASS, "key": key, "question_id": question_id, "answer": answer,
-                 "closes_at": float(q.closes_at), "payload": vote_payload(question_id, answer)}
+                 "payload": vote_payload(question_id, answer)}
         if rationale:
             entry["rationale"] = rationale
         code = _open(key, entry)
@@ -1521,12 +1750,12 @@ def village_vote_answer(args: Any) -> dict:
     args = args if isinstance(args, dict) else {}
     if not vote_on():
         return _refuse("disabled")
+    if not _approval.configured():
+        return _refuse("approval_not_configured")
     action = _action(args, "question")
     if action == "question":
         return _question_answer()
     if action == "vote":
-        if not _approval.configured():
-            return _refuse("approval_not_configured")
         return _vote(args)
     if action == "withdraw":
         return _vote_withdraw(args)
@@ -1570,6 +1799,10 @@ def register_share_vote_tools(ctx: Any, emit: Optional[Callable[..., bool]] = No
     wanted = [(SHARE_TOOL, SHARE_SCHEMA, share_digest_answer, SHARE_DESCRIPTION, share_on()),
               (VOTE_TOOL, VOTE_SCHEMA, village_vote_answer, VOTE_DESCRIPTION, vote_on())]
     if not any(on for *_rest, on in wanted):
+        return []
+    if not _approval.configured():
+        # Neither tool exists without the resident's approval channel.
+        logger.info("av-events: share_vote skipped=approval_not_configured")
         return []
     register_tool = getattr(ctx, "register_tool", None)
     if not callable(register_tool):
