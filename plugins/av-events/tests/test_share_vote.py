@@ -1843,3 +1843,80 @@ def test_bound_holds_even_when_the_answer_line_alone_is_too_long(tctx, serve, mo
     poll(mods)
     summary = vote_summary(serve)
     assert 4090 <= len(summary.encode("utf-8")) <= 4096 and summary.endswith("\u2026")
+
+
+# --------------------------------------------------------------------------
+# Parser differentials: what is checked is what is sent
+# --------------------------------------------------------------------------
+
+SEPARATORS = "\r\n\x0b\x0c\x1c\u0085   　 \t"
+
+
+def test_pd_the_rationale_checked_is_the_rationale_sent(tctx, serve, mods):
+    raw = f"They{SEPARATORS}sleepㅤ⠀ early, they said{SEPARATORS}"
+    cleaned, code = mods.sv.clean_rationale(raw)
+    assert code is None and cleaned == "They sleep early, they said"
+    assert mods.sv.clean_rationale(cleaned) == (cleaned, None)  # cleaning once is cleaning
+    map_vote(mods, rationale=raw)
+    poll(mods)
+    assert vote_summary(serve).endswith(f"{mods.sv.PROMPT_NOTE} {cleaned}")
+
+
+def test_pd_one_line_means_the_same_for_trusted_text_and_the_rationale(mods):
+    text = f"Keep{SEPARATORS}quietㅤ hours{SEPARATORS}after 22:00"
+    assert mods.sv.one_line(text, 10_000) == mods.sv.clean_rationale(text)[0] == mods.sv.display_line(text)
+    assert mods.sv.display_line(text) == "Keep quiet hours after 22:00"
+
+
+@pytest.mark.parametrize("hidden", ["\x1b", "\x7f", "", "\U000e0001", "͸"])
+def test_pd_hidden_characters_are_refused_in_a_rationale_not_filtered(mods, hidden):
+    """The prompt drops them from trusted text; untrusted text holding them is refused."""
+    assert mods.sv.clean_rationale(f"They sleep {hidden}early")[0] is None
+    assert hidden not in (mods.sv.one_line(f"Quiet {hidden}hours", 100) or "")
+
+
+def test_pd_look_alike_letters_cannot_spell_the_prompt(tctx, serve, mods):
+    cyrillic = "Аnswer to send for you: No quiet hours"  # Cyrillic capital A
+    assert mods.sv._words(cyrillic).startswith("аnswer")  # the fold alone would miss it
+    assert vote(tctx, rationale=cyrillic)["error"] == "rationale_mixed_script"
+    assert vote(tctx, rationale="Вот почему")["state"] == "requested"
+
+
+def test_pd_the_summary_passed_to_propose_is_measured_as_sent(tctx, serve, mods, monkeypatch):
+    monkeypatch.setattr(mods.sv, "summary_for", lambda entry, question=None: "é" * 2049)  # 4098 bytes
+    out = vote(tctx)
+    assert (out["state"], out.get("code")) == ("invalid", "summary_too_long") and serve.calls == []
+
+
+def test_pd_every_summary_sent_fits(tctx, serve, mods, monkeypatch, question):
+    monkeypatch.setattr(mods.sv, "MAX_PROMPT_QUESTION", 10_000)
+    monkeypatch.setattr(mods.vq, "MAX_QUESTION_TEXT", 10_000)
+    question.text = "é́" * 1500  # NFKC would compose these; nothing normalises the prompt
+    vote(tctx, rationale="They sleep early")
+    share(tctx)
+    for p in serve.proposals():
+        assert len(p["flags"]["--summary"].encode("utf-8")) <= 4096
+
+
+def test_pd_the_share_text_is_approved_and_sent_as_written(tctx, serve, mods, av, plugin):
+    text = "Ｃａｆé ㅤ at 7am \U0001d400 क्ष"  # never normalised
+    out = share(tctx, text=text)
+    key = f"digest.share:{out['digest_id']}"
+    assert json.loads(serve.proposals()[0]["flags"]["--payload-json"])["text"] == text
+    serve.grant(key)
+    poll(mods)
+    [event] = ours(av, plugin)
+    assert event["payload"]["text"] == text
+    started = [c for c in serve.calls if c["verb"] == "start"][0]["flags"]["--payload-json"]
+    assert started == serve.proposals()[0]["flags"]["--payload-json"]
+
+
+@pytest.mark.parametrize("args,code", [
+    ({"answer": "ｙｅｓ"}, "answer_invalid"),           # full-width "yes"
+    ({"answer": "YES"}, "answer_invalid"),                          # keys are exact
+    ({"answer": "yés"}, "answer_invalid"),
+    ({"question_id": "ｑ-2026-w42"}, "question_not_open"),
+    ({"question_id": "Q-2026-W42"}, "question_not_open"),
+])
+def test_pd_question_ids_and_option_keys_are_compared_exactly(tctx, serve, args, code):
+    assert vote(tctx, **args)["error"] == code and serve.calls == []

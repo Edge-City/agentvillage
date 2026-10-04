@@ -415,16 +415,30 @@ def _parse(payload: Any, keys: tuple[str, ...]) -> Optional[dict]:
     return obj
 
 
+#: Never shown on the resident's prompt: controls, format characters (bidi,
+#: zero-width, joiners), surrogates, private-use and unassigned code points.
+HIDDEN_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co", "Cn"})
+
+
+def display_line(text: str) -> str:
+    """The one definition of a prompt line, for trusted text and the
+    rationale alike: every whitespace character (CR, LF, VT, FF, U+0085,
+    U+2028, U+2029 and the Unicode spaces) becomes one plain space, hidden
+    characters (`HIDDEN_CATEGORIES`) and blank-rendering fillers are dropped,
+    and runs of spaces collapse. Applied once; what it returns is what is
+    checked and what is sent."""
+    kept = "".join(" " if ch.isspace() else ch for ch in text
+                   if ch.isspace() or (ch not in BLANK_FILLERS and unicodedata.category(ch) not in HIDDEN_CATEGORIES))
+    return " ".join(kept.split())
+
+
 def one_line(text: Any, limit: int) -> Optional[str]:
-    """Trusted text (a question, a label) as one bounded display line: every
-    control, format (bidi included), surrogate, private-use and line or
-    paragraph separator character dropped, whitespace collapsed, cut at
-    `limit` with an ellipsis. None when nothing is left."""
+    """Trusted text (a question, a label) as one bounded display line
+    (`display_line`), cut at `limit` with an ellipsis. None when nothing is
+    left."""
     if not isinstance(text, str):
         return None
-    kept = "".join(" " if ch.isspace() else ch for ch in text
-                   if ch.isspace() or unicodedata.category(ch) not in ("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"))
-    line = " ".join(kept.split())
+    line = display_line(text)
     if not line:
         return None
     return line if len(line) <= limit else line[: limit - 1].rstrip() + ELLIPSIS
@@ -519,16 +533,41 @@ def clean_rationale(value: Any) -> tuple[Optional[str], Optional[str]]:
         return None, "rationale_invalid"
     if any(unicodedata.category(ch) == "Cf" for ch in value):
         return None, "rationale_invisible"
-    kept = "".join(" " if ch.isspace() else ch for ch in value if ch not in BLANK_FILLERS)
-    line = " ".join(kept.split())
+    if any(not ch.isspace() and unicodedata.category(ch) in HIDDEN_CATEGORIES for ch in value):
+        # Untrusted text is refused, never silently filtered, for anything
+        # the prompt would not show.
+        return None, "rationale_invalid"
+    line = display_line(value)
     if not line:
         return None, None
     if len(line) > MAX_RATIONALE or digest_text_problem(line) is not None or sanitize(line) != line:
         return None, "rationale_invalid"
+    if mixed_confusable_scripts(line):
+        return None, "rationale_mixed_script"
     words = _words(line)
     if any(phrase in words for phrase in _PROMPT_WORDS):
         return None, "rationale_imitates_prompt"
     return line, None
+
+
+#: Scripts with letters drawn like Latin ones: mixed with Latin in one
+#: rationale they can spell the prompt's own words with other code points.
+CONFUSABLE_SCRIPTS = frozenset({"CYRILLIC", "GREEK", "ARMENIAN", "CHEROKEE", "COPTIC", "LISU", "OSAGE", "DESERET"})
+
+
+def _script(ch: str) -> Optional[str]:
+    try:
+        return unicodedata.name(ch).split(" ", 1)[0]
+    except ValueError:
+        return None
+
+
+def mixed_confusable_scripts(text: str) -> bool:
+    """Latin letters together with letters of a script that draws like Latin
+    (after compatibility folding, so full-width and mathematical forms count
+    as Latin)."""
+    scripts = {_script(ch) for ch in unicodedata.normalize("NFKD", text) if ch.isalpha()}
+    return "LATIN" in scripts and bool(scripts & CONFUSABLE_SCRIPTS)
 
 
 def _fold(text: str) -> str:
@@ -883,8 +922,11 @@ def _granted(task: Any) -> tuple[bool, Optional["_approval.Answer"], Optional[st
 def _cleared(entry: dict, question: Optional["vq.Question"]) -> tuple[bool, Optional[str]]:
     """The same `propose` again (idempotent): the policy still clears this
     vote, nothing executed it, and core's hash is the held bytes'."""
+    summary = summary_for(entry, question)
+    if utf8_len(summary) > SUMMARY_MAX_BYTES or utf8_len(entry["key"]) > MAX_KEY_BYTES:
+        return False, "summary_too_long"
     try:
-        answer = _approval.propose(entry["class"], entry["key"], summary_for(entry, question), entry["payload"])
+        answer = _approval.propose(entry["class"], entry["key"], summary, entry["payload"])
     except _approval.ApprovalUnavailable as exc:
         return False, exc.code
     except (UnicodeError, ValueError, TypeError):
@@ -921,8 +963,12 @@ def _propose(entry_id: str, entry: dict) -> Optional[Outcome]:
     if out is not None:
         return _end_out_of_bounds(entry_id, entry, out[0], out[1], {"unfiled"})
     payload = entry["payload"]
+    summary = summary_for(entry, question)
+    if utf8_len(summary) > SUMMARY_MAX_BYTES:  # the exact string sent, encoded
+        _set(entry_id, {"unfiled"}, "invalid", code="summary_too_long")
+        return Outcome("invalid", code="summary_too_long")
     try:
-        answer = _approval.propose(entry["class"], entry["key"], summary_for(entry, question), payload)
+        answer = _approval.propose(entry["class"], entry["key"], summary, payload)
     except _approval.ApprovalUnavailable as exc:
         _note(entry_id, exc.code)
         return Outcome("unfiled", code=exc.code)
@@ -1409,6 +1455,10 @@ REFUSALS: dict[str, str] = {
     "rationale_invisible": (
         "Nothing was proposed: the rationale holds an invisible or direction-changing character. Write it as "
         "plain text."
+    ),
+    "rationale_mixed_script": (
+        "Nothing was proposed: the rationale mixes Latin letters with look-alike letters from another script. "
+        "Write it in one script."
     ),
     "rationale_imitates_prompt": (
         "Nothing was proposed: the rationale repeats the wording of the approval prompt itself. Say why in "

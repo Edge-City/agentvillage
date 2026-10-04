@@ -770,7 +770,15 @@ one space, and one that repeats any of the prompt's own fixed phrases (taken fro
 constants, punctuation ignored) is refused (`rationale_imitates_prompt`). The summary is at most
 4096 UTF-8 bytes by construction (the agent's note is cut first, then the question's text, never
 the answer line), and a key over 1024 bytes is never proposed (`key_too_long`): approval.md's
-`propose` limits. A question whose close is not a finite number is not a question. A vote the resident set autonomous is cast inside the tool call (`authorization:
+`propose` limits. A question whose close is not a finite number is not a question. One function
+(`display_line`) defines a prompt line for the provider's text and the rationale alike (every
+whitespace character, CR, LF, VT, FF, U+0085, U+2028 and U+2029 included, becomes one space;
+hidden characters and blank fillers are dropped); a rationale holding a hidden character is
+refused rather than filtered, one mixing Latin with look-alike letters of another script is refused
+(`rationale_mixed_script`), and the rationale that is checked is exactly the one sent. Folding
+(NFKD, marks dropped, case-folded) is used only to compare, never on anything sent: the share text
+and the vote answer are proposed, started and emitted as written, and question ids and option keys
+are compared exactly. A vote the resident set autonomous is cast inside the tool call (`authorization:
 policy`); the poller casts only on a human grant. `action=withdraw` withdraws an unanswered vote;
 a cast vote cannot be withdrawn.
 
@@ -820,7 +828,7 @@ them for research-consenting tenants only, which is why the tools ask ingest fir
 **Codes.** Tool refusals: `disabled`, `approval_not_configured`, `text_required`, `text_too_long`,
 `text_invalid`, `text_no_letter_or_digit`, `text_sanitized`, `scope_invalid`, `expires_invalid`,
 `not_available_no_events`, `not_available_no_consent`, `rationale_quotes_share`,
-`rationale_invisible`, `rationale_imitates_prompt`,
+`rationale_invisible`, `rationale_imitates_prompt`, `rationale_mixed_script`,
 `too_many_pending`, `digest_id_required`, `digest_unknown`, `share_in_flight`, `revoke_failed`,
 `tenant_unknown`, `question_unavailable`, `question_id_required`, `question_not_open`,
 `question_closed`, `answer_invalid`, `rationale_invalid`, `vote_already_proposed`, `vote_unknown`,
