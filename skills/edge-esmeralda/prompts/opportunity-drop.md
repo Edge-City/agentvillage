@@ -12,7 +12,7 @@ Deliver exactly one opportunity card. The script owns selection and dedup — yo
    bun skills/index-network/scripts/drop-opportunity.ts
    ```
 
-   Do not write Python, shell pipelines, or replacement logic. The script resolves today's Asia/Kolkata date, reads `memory/heartbeat-state.json`, lists opportunities, filters out everything already delivered today (so this never repeats the morning brief or an earlier drop), picks the single best undelivered one, records its id in the shared `deliveredToday` set, and prints either `[SILENT]` or one JSON object.
+   Do not write Python, shell pipelines, or replacement logic. The script resolves today's Asia/Kolkata date, reads `memory/heartbeat-state.json`, lists opportunities, filters out everything already delivered today (so this never repeats the morning brief or an earlier drop) and every card shown in the last 3 days or already shown 3 times, picks the single best of the rest, records its id in the shared `deliveredToday` set and counts the showing, and prints either `[SILENT]` or one JSON object.
 
    If the script exits with a non-zero code, end your turn immediately with `[SILENT]`. One attempt only — no retries, no diagnosis.
 

@@ -37,6 +37,8 @@ Also avoid emotional interpretations, status/ambition assumptions, personal-life
 - Treat `negotiationUrl` as private context. Do not include it as a visible link.
 - Direct cards, and only the cards in `connectionOpportunities`:
   - Heading **3 conversations await you** when there are three. Otherwise **N conversation awaits you** or **N conversations await you** with the real count. Omit the section only when that list is empty.
+  - When `connectionOpportunities` is empty and `connectionsStillWaiting` is above zero, those conversations were already shown on earlier days and are not repeated today. In place of the section write one plain line with that count, for example: Nothing new today; 2 conversations from earlier are still waiting on you. Do not name or link them.
+  - When `connectionOpportunities` is empty and `moreWaitingThanListed` is true, write one plain line instead: More conversations are waiting than can be listed today. Give no count, and never say nothing new is waiting.
   - One bullet per card: `[Name](userUrl) — one specific overlap from mainText, [message Name](opportunityUrl).`
   - If `userUrl` or `opportunityUrl` is missing, render that name or action as plain text.
 - Community cards from `communityOpportunities`, under **Help your community**: `[Name](userUrl) — mainText. Know anyone, make intro`. `make intro` stays plain text.

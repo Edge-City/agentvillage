@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { askQuestions } from "../ask-questions";
 import { FAKE_MCP_URL, indexMcpFake, listOpportunitiesText } from "./index-mcp-fake";
 import { failureInputs } from "./index-failure-inputs";
+import { pinDeliveryClock } from "./pin-clock";
+
+pinDeliveryClock();
 
 const originalCwd = process.cwd();
 const originalFetch = globalThis.fetch;
@@ -114,8 +117,10 @@ describe("askQuestions", () => {
 
   test("skips a card already delivered today", async () => {
     tempWorkspace();
+    // An empty delivery log, so only the same-day dedupe keeps Maya out.
     await Bun.write("state.json", JSON.stringify({
       deliveredToday: { date: "2026-06-17", ids: ["opp-maya"] },
+      opportunityDelivery: {},
     }));
     mockList(listText([
       card("Maya", "memory systems", "opp-maya", MAYA_ID),
@@ -220,9 +225,9 @@ describe("askQuestions against Index's answers", () => {
     });
   }
 
-  test("deliveredToday dated yesterday leaves its card eligible today", async () => {
+  test("deliveredToday dated yesterday is no same-day dedupe: with an empty delivery log its card is eligible today", async () => {
     tempWorkspace();
-    await Bun.write("state.json", JSON.stringify({ deliveredToday: { date: "2026-06-16", ids: ["opp-maya"] } }));
+    await Bun.write("state.json", JSON.stringify({ deliveredToday: { date: "2026-06-16", ids: ["opp-maya"] }, opportunityDelivery: {} }));
     mockList(listText([
       card("Maya", "memory systems", "opp-maya", MAYA_ID),
       card("Jon", "village tools", "opp-jon", JON_ID),

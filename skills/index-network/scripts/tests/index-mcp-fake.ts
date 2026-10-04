@@ -244,3 +244,21 @@ export function listOpportunitiesText(rows: unknown[]): string {
   }
   return `${lead.join("\n")}\n\n${JSON.stringify({ success: true, opportunities: rows }, null, 2)}`;
 }
+
+/**
+ * A `list_opportunities` handler over `rows` that honours the request the way
+ * Index does: only rows whose status is in `statuses` (default pending), at
+ * most `limit` of them (default 20) in the given order, with the pagination
+ * object `{limit, offset, count}` (count: every matching row).
+ */
+export function pagedOpportunities(rows: Array<Record<string, unknown>>): ToolHandler {
+  return (args) => {
+    const statuses = Array.isArray(args.statuses) ? (args.statuses as unknown[]) : ["pending"];
+    const limit = typeof args.limit === "number" ? args.limit : 20;
+    const matching = rows.filter((row) => statuses.includes(row.status));
+    const page = matching.slice(0, limit);
+    const lead = ["Waiting on you:"];
+    for (const row of page) lead.push(`- [${String(asRecord(row.peer)?.name ?? "someone")}](${String(row.url ?? "")})`);
+    return `${lead.join("\n")}\n\n${JSON.stringify({ success: true, opportunities: page, pagination: { limit, offset: 0, count: matching.length } }, null, 2)}`;
+  };
+}

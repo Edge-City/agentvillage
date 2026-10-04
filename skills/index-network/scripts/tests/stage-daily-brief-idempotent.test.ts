@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { prepareDailyBriefContext, stageDailyBrief } from "../stage-daily-brief";
+import { pinDeliveryClock } from "./pin-clock";
+
+pinDeliveryClock();
 
 const TODAY = "2026-06-15";
 

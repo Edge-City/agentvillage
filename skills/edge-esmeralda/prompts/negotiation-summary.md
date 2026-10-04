@@ -26,6 +26,7 @@ A few live threads are worth closing while everyone is still here.
 
 💬 *Waiting on you*
 - One pending card: `[Name](userUrl) — headline, [message Name](opportunityUrl)`. If a url is missing, leave that part as plain text.
+- These are a few earlier conversations due a reminder, not everything waiting. Never call them the full list or count what is waiting.
 
 💬 *Agents talking*
 - One negotiating card: `[Name](userUrl) — headline — agents talking`. No message link.

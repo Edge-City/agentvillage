@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { dropOpportunity } from "../drop-opportunity";
 import { FAKE_MCP_URL, indexMcpFake, listOpportunitiesText } from "./index-mcp-fake";
 import { failureInputs } from "./index-failure-inputs";
+import { pinDeliveryClock } from "./pin-clock";
+
+pinDeliveryClock();
 
 const MAYA_OPP = "bbbbbbbb-0000-4000-8000-000000000001";
 const JON_OPP = "bbbbbbbb-0000-4000-8000-000000000002";
@@ -27,7 +30,8 @@ afterEach(() => {
 describe("dropOpportunity", () => {
   test("drops the best card not delivered today, records it locally, and makes only the list call", async () => {
     const file = stateFile();
-    await Bun.write(file, JSON.stringify({ deliveredToday: { date: "2026-10-12", ids: [MAYA_OPP] }, dreaming: { lastRunDate: "2026-10-12" } }));
+    // An empty delivery log, so only the same-day dedupe keeps Maya out.
+    await Bun.write(file, JSON.stringify({ deliveredToday: { date: "2026-10-12", ids: [MAYA_OPP] }, dreaming: { lastRunDate: "2026-10-12" }, opportunityDelivery: {} }));
     const fake = indexMcpFake();
     globalThis.fetch = fake.fetch;
 
@@ -48,7 +52,7 @@ describe("dropOpportunity", () => {
 
   test("is silent when everything listed was already delivered today", async () => {
     const file = stateFile();
-    await Bun.write(file, JSON.stringify({ deliveredToday: { date: "2026-10-12", ids: [MAYA_OPP, JON_OPP] } }));
+    await Bun.write(file, JSON.stringify({ deliveredToday: { date: "2026-10-12", ids: [MAYA_OPP, JON_OPP] }, opportunityDelivery: {} }));
     globalThis.fetch = indexMcpFake().fetch;
 
     const result = await dropOpportunity({ date: "2026-10-12", stateFile: file, apiKey: "test-key", mcpUrl: FAKE_MCP_URL });
@@ -96,9 +100,9 @@ describe("dropOpportunity against Index's answers", () => {
     });
   }
 
-  test("deliveredToday dated yesterday leaves its card eligible today", async () => {
+  test("deliveredToday dated yesterday is no same-day dedupe: with an empty delivery log its card is eligible today", async () => {
     const file = stateFile();
-    await Bun.write(file, JSON.stringify({ deliveredToday: { date: "2026-10-11", ids: [MAYA_OPP] } }));
+    await Bun.write(file, JSON.stringify({ deliveredToday: { date: "2026-10-11", ids: [MAYA_OPP] }, opportunityDelivery: {} }));
     globalThis.fetch = indexMcpFake().fetch;
     const result = await dropOpportunity({ date: "2026-10-12", stateFile: file, apiKey: "test-key", mcpUrl: FAKE_MCP_URL });
     if ("silent" in result) throw new Error(`unexpected silent result: ${result.reason}`);

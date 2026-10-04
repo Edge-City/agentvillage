@@ -11,6 +11,9 @@ import {
 } from "../summarize-negotiations";
 import { FAKE_MCP_URL, type ToolHandler, indexMcpFake, listOpportunitiesText } from "./index-mcp-fake";
 import { failureInputs } from "./index-failure-inputs";
+import { pinDeliveryClock } from "./pin-clock";
+
+pinDeliveryClock();
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -525,12 +528,18 @@ describe("main", () => {
     };
   }
 
+  // The follow-up lists only re-showings: cards already shown, now past their cooldown.
+  const DATE = "2026-10-12";
+  const MAYA_SHOWN = JSON.stringify({
+    opportunityDelivery: { "bbbbbbbb-0000-4000-8000-000000000001": { firstShown: "2026-10-09", lastShown: "2026-10-09", count: 1 } },
+  });
+
   async function run(tools: Record<string, ToolHandler>, state?: string) {
     tempWorkspace();
     if (state !== undefined) await Bun.write("state.json", state);
     process.env.INDEX_API_KEY = "test-key";
     process.env.INDEX_MCP_URL = FAKE_MCP_URL;
-    process.argv = [...saved.argv.slice(0, 2), "--state-file", "state.json"];
+    process.argv = [...saved.argv.slice(0, 2), "--state-file", "state.json", "--date", DATE];
     const fake = indexMcpFake({ tools });
     globalThis.fetch = fake.fetch;
     let out = "";
@@ -550,7 +559,7 @@ describe("main", () => {
   test("lists opportunities and signals through the current revision and groups the cards", async () => {
     const { out, fake } = await run({
       list_opportunities: () => listOpportunitiesText([opp("Maya", "pending", 1), opp("Jon", "negotiating", 2), opp("Ana", "accepted", 3)]),
-    });
+    }, MAYA_SHOWN);
     expect(fake.calls.map((call) => [call.method, call.name, call.arguments, call.status])).toEqual([
       ["tools/call", "list_opportunities", { statuses: ["pending", "negotiating", "accepted"], limit: 50 }, 200],
       ["tools/call", "list_intents", { limit: 20 }, 200],
@@ -620,9 +629,9 @@ describe("main", () => {
           { id: "../../x", summary: "dropped", url: "https://evil.fake.test/i/x" },
         ],
         totalWaitingOpportunities: 1,
-        pagination: { page: 1 },
+        pagination: { limit: 20, offset: 0, count: 2 },
       })}`,
-    });
+    }, MAYA_SHOWN);
     const parsed = JSON.parse(out);
     expect(parsed.needsAttention).toEqual([{
       name: "Maya",
@@ -645,7 +654,7 @@ describe("main", () => {
     const only = await run({ list_opportunities: () => listOpportunitiesText(rows) }, STATE);
     expect(only.out).toBe("[SILENT]");
     expect(await Bun.file("state.json").text()).toBe(STATE);
-    const mixed = await run({ list_opportunities: () => listOpportunitiesText([...rows, opp("Maya", "pending", 1)]) });
+    const mixed = await run({ list_opportunities: () => listOpportunitiesText([...rows, opp("Maya", "pending", 1)]) }, MAYA_SHOWN);
     expect(JSON.parse(mixed.out).needsAttention.map((c: { name: string }) => c.name)).toEqual(["Maya"]);
   });
 });

@@ -111,7 +111,7 @@
         "content": [
           {
             "type": "text",
-            "text": "Your signals:\n- [Looking for people building agent memory](https://index.network/i/aaaaaaaa-0000-4000-8000-000000000001) — active\n- [Open to co-hosting a village dinner](https://index.network/i/aaaaaaaa-0000-4000-8000-000000000002) — active\n\n{\n  \"success\": true,\n  \"intents\": [\n    {\n      \"id\": \"aaaaaaaa-0000-4000-8000-000000000001\",\n      \"summary\": \"Looking for people building agent memory\",\n      \"status\": \"active\",\n      \"url\": \"https://index.network/i/aaaaaaaa-0000-4000-8000-000000000001\"\n    },\n    {\n      \"id\": \"aaaaaaaa-0000-4000-8000-000000000002\",\n      \"summary\": \"Open to co-hosting a village dinner\",\n      \"status\": \"active\",\n      \"url\": \"https://index.network/i/aaaaaaaa-0000-4000-8000-000000000002\"\n    }\n  ],\n  \"totalWaitingOpportunities\": 2,\n  \"pagination\": {\n    \"page\": 1,\n    \"limit\": 20,\n    \"total\": 2\n  }\n}"
+            "text": "Your signals:\n- [Looking for people building agent memory](https://index.network/i/aaaaaaaa-0000-4000-8000-000000000001) — active\n- [Open to co-hosting a village dinner](https://index.network/i/aaaaaaaa-0000-4000-8000-000000000002) — active\n\n{\n  \"success\": true,\n  \"intents\": [\n    {\n      \"id\": \"aaaaaaaa-0000-4000-8000-000000000001\",\n      \"summary\": \"Looking for people building agent memory\",\n      \"status\": \"active\",\n      \"url\": \"https://index.network/i/aaaaaaaa-0000-4000-8000-000000000001\"\n    },\n    {\n      \"id\": \"aaaaaaaa-0000-4000-8000-000000000002\",\n      \"summary\": \"Open to co-hosting a village dinner\",\n      \"status\": \"active\",\n      \"url\": \"https://index.network/i/aaaaaaaa-0000-4000-8000-000000000002\"\n    }\n  ],\n  \"totalWaitingOpportunities\": 2,\n  \"pagination\": {\n    \"limit\": 20,\n    \"offset\": 0,\n    \"count\": 2\n  }\n}"
           }
         ],
         "resultType": "complete",
@@ -130,7 +130,7 @@
         "content": [
           {
             "type": "text",
-            "text": "Waiting on you:\n- [Maya](https://index.network/o/bbbbbbbb-0000-4000-8000-000000000001) — memory systems\n- [Jon](https://index.network/o/bbbbbbbb-0000-4000-8000-000000000002) — village tools\n\n{\n  \"success\": true,\n  \"opportunities\": [\n    {\n      \"id\": \"bbbbbbbb-0000-4000-8000-000000000001\",\n      \"url\": \"https://index.network/o/bbbbbbbb-0000-4000-8000-000000000001\",\n      \"status\": \"pending\",\n      \"viewerRole\": \"party\",\n      \"headline\": \"memory systems\",\n      \"summary\": \"Both of you are working on long-running agent memory.\",\n      \"peer\": {\n        \"name\": \"Maya\",\n        \"userId\": \"cccccccc-0000-4000-8000-000000000001\",\n        \"url\": \"https://index.network/u/cccccccc-0000-4000-8000-000000000001\"\n      }\n    },\n    {\n      \"id\": \"bbbbbbbb-0000-4000-8000-000000000002\",\n      \"url\": \"https://index.network/o/bbbbbbbb-0000-4000-8000-000000000002\",\n      \"status\": \"pending\",\n      \"viewerRole\": \"agent\",\n      \"headline\": \"village tools\",\n      \"summary\": \"Jon is looking for someone who knows the village tools.\",\n      \"peer\": {\n        \"name\": \"Jon\",\n        \"userId\": \"cccccccc-0000-4000-8000-000000000002\",\n        \"url\": \"https://index.network/u/cccccccc-0000-4000-8000-000000000002\"\n      }\n    }\n  ],\n  \"pagination\": {\n    \"page\": 1,\n    \"limit\": 20,\n    \"total\": 2\n  }\n}"
+            "text": "Waiting on you:\n- [Maya](https://index.network/o/bbbbbbbb-0000-4000-8000-000000000001) — memory systems\n- [Jon](https://index.network/o/bbbbbbbb-0000-4000-8000-000000000002) — village tools\n\n{\n  \"success\": true,\n  \"opportunities\": [\n    {\n      \"id\": \"bbbbbbbb-0000-4000-8000-000000000001\",\n      \"url\": \"https://index.network/o/bbbbbbbb-0000-4000-8000-000000000001\",\n      \"status\": \"pending\",\n      \"viewerRole\": \"party\",\n      \"headline\": \"memory systems\",\n      \"summary\": \"Both of you are working on long-running agent memory.\",\n      \"peer\": {\n        \"name\": \"Maya\",\n        \"userId\": \"cccccccc-0000-4000-8000-000000000001\",\n        \"url\": \"https://index.network/u/cccccccc-0000-4000-8000-000000000001\"\n      }\n    },\n    {\n      \"id\": \"bbbbbbbb-0000-4000-8000-000000000002\",\n      \"url\": \"https://index.network/o/bbbbbbbb-0000-4000-8000-000000000002\",\n      \"status\": \"pending\",\n      \"viewerRole\": \"agent\",\n      \"headline\": \"village tools\",\n      \"summary\": \"Jon is looking for someone who knows the village tools.\",\n      \"peer\": {\n        \"name\": \"Jon\",\n        \"userId\": \"cccccccc-0000-4000-8000-000000000002\",\n        \"url\": \"https://index.network/u/cccccccc-0000-4000-8000-000000000002\"\n      }\n    }\n  ],\n  \"pagination\": {\n    \"limit\": 20,\n    \"offset\": 0,\n    \"count\": 2\n  }\n}"
           }
         ],
         "resultType": "complete",
@@ -149,7 +149,7 @@
         "content": [
           {
             "type": "text",
-            "text": "Nothing is waiting on you right now.\n\n{\n  \"success\": true,\n  \"opportunities\": [],\n  \"pagination\": {\n    \"page\": 1,\n    \"limit\": 20,\n    \"total\": 0\n  }\n}"
+            "text": "Nothing is waiting on you right now.\n\n{\n  \"success\": true,\n  \"opportunities\": [],\n  \"pagination\": {\n    \"limit\": 20,\n    \"offset\": 0,\n    \"count\": 0\n  }\n}"
           }
         ],
         "resultType": "complete",
@@ -186,7 +186,8 @@
     "How a JSON-RPC error or a non-200 status from tools/call looks in practice (only the refusals above and the isError tool error were seen); the client treats each as a failure.",
     "The exact messages of the three refusals (the codes and the data shapes are verified).",
     "What a missing accept or content-type header, a missing API key, or a missing (as opposed to different) MCP-Protocol-Version header is answered with; the fake's choices are marked in index-mcp-fake.ts.",
-    "The per-row fields of list_opportunities rows and the inner fields of pagination; the rows here follow the maintainer's parser (id, url, status, viewerRole, headline, summary, peer {name, userId, url})."
+    "The per-row fields of list_opportunities rows; the rows here follow the maintainer's parser (id, url, status, viewerRole, headline, summary, peer {name, userId, url}).",
+    "What the pagination keys mean, in particular what count counts (rows matching the request, or rows across every status). The values in the responses here assume rows matching the request; nothing in the scripts depends on count."
   ],
   "verifiedAt": {
     "requestContract": "2026-10-03T21:30Z (about)",
@@ -211,6 +212,12 @@
           "accepted"
         ],
         "limit": 50
+      },
+      {
+        "statuses": [
+          "expired"
+        ],
+        "limit": 20
       }
     ],
     "list_intents": [
@@ -218,7 +225,15 @@
         "limit": 20
       }
     ],
-    "note": "The arguments the scripts send, each accepted by production. An invalid statuses value or limit 500 is answered with toolError."
+    "note": "Exactly the arguments sent to production, each accepted. An invalid statuses value or limit 500 is answered with toolError. Since DATA-270 every script lists opportunities with limit 50; the pending-only read with limit 50 is inferred from the accepted three-status limit-50 read, not probed. The responses in this file are from limit-20 reads."
+  },
+  "paginationKeys": {
+    "keys": [
+      "limit",
+      "offset",
+      "count"
+    ],
+    "note": "The key names are verified; what each one means is not (see notVerified). The scripts read only limit: a read is complete when it returned fewer rows than asked for and limit, when present, is not below the one asked for."
   },
   "listJsonKeys": {
     "list_opportunities": [

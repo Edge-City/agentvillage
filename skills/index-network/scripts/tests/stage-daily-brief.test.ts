@@ -5,6 +5,9 @@ import { join } from "node:path";
 
 import { stageDailyBrief } from "../stage-daily-brief";
 import type { DailyBriefContext } from "../build-daily-brief-context";
+import { pinDeliveryClock } from "./pin-clock";
+
+pinDeliveryClock();
 
 const TODAY = "2026-06-15";
 const tmpDirs: string[] = [];

@@ -19,6 +19,9 @@ import {
 } from "../build-daily-brief-context";
 import { FAKE_MCP_URL, FIXTURE, indexMcpFake, listOpportunitiesText, type ToolHandler } from "./index-mcp-fake";
 import { failureInputs } from "./index-failure-inputs";
+import { pinDeliveryClock } from "./pin-clock";
+
+pinDeliveryClock();
 
 describe("build-daily-brief-context helpers", () => {
   test("extractInterestTags maps user text to EdgeOS tags", () => {
@@ -478,7 +481,7 @@ describe("fetchOpportunitiesFromMcp", () => {
         headline: "memory systems",
       });
       expect(fake.calls.map((call) => [call.method, call.name, call.arguments])).toEqual([
-        ["tools/call", "list_opportunities", { statuses: ["pending"], limit: 20 }],
+        ["tools/call", "list_opportunities", { statuses: ["pending"], limit: 50 }],
       ]);
     } finally {
       globalThis.fetch = originalFetch;
@@ -691,10 +694,10 @@ describe("buildDailyBriefContext against Index's answers", () => {
     expect(context.communityOpportunities.map((opp) => opp.name)).toEqual(["Jon"]);
   });
 
-  test("deliveredToday dated yesterday leaves its card eligible; dated today it does not", async () => {
-    const yesterday = await runBrief(undefined, { deliveredToday: { date: "2026-10-11", ids: [MAYA_OPP] } });
+  test("deliveredToday dated yesterday is no same-day dedupe (with an empty delivery log its card is eligible); dated today it is", async () => {
+    const yesterday = await runBrief(undefined, { deliveredToday: { date: "2026-10-11", ids: [MAYA_OPP] }, opportunityDelivery: {} });
     expect(yesterday.context.connectionOpportunities.map((opp) => opp.opportunityId)).toEqual([MAYA_OPP]);
-    const today = await runBrief(undefined, { deliveredToday: { date: "2026-10-12", ids: [MAYA_OPP] } });
+    const today = await runBrief(undefined, { deliveredToday: { date: "2026-10-12", ids: [MAYA_OPP] }, opportunityDelivery: {} });
     expect(today.context.connectionOpportunities).toEqual([]);
   });
 
