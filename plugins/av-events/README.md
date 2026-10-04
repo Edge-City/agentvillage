@@ -762,6 +762,11 @@ Which items a brief already receipted is the brief's own state (`intentionReceip
 An item is offered by every brief until one that carried it was delivered, for 14 days from the
 publish. What is still lost: an item no delivered brief carried within those 14 days (no brief
 delivered for two weeks, or more than three a day waiting for that long).
+A failed or archived text lookup still lists the item, as "one thing you'd mentioned", and it
+counts as receipted once a delivered brief carried it. The three `get_intent` lookups run one after
+another (each bounded by the Index client's 20 s timeout), so they can add up to a minute to the
+prepare pass. The held count can lag the resident's answer until the plugin's approval poller
+records it in the map.
 
 **The receipt preference does not reach the sandbox yet.** The resident's choice between "publish,
 then tell me" and "publish" (S1, DATA-259) is kept by the control plane and renders the same policy

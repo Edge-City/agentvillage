@@ -31,7 +31,7 @@ import {
   stripDigestReceiptMarkers,
   type ReaderRunner,
 } from "../intention-brief";
-import { sendDailyBrief, stripRemainingHtmlComments } from "../send-daily-brief";
+import { sendDailyBrief, stripStrayDigestMarkers } from "../send-daily-brief";
 import { stageDailyBrief } from "../stage-daily-brief";
 import { sanitizeDigestUrls } from "../validate-digest-urls";
 import { FAKE_MCP_URL, indexMcpFake, listOpportunitiesText, type ToolHandler } from "./index-mcp-fake";
@@ -522,16 +522,37 @@ describe("marker mistakes never cost the brief", () => {
     const { stage, send } = await stageAndSend(file, context, `Hello <!-- a private note --> there.\n<!-- digest-receipt:id=${P1} -->- invented`);
     expect(stage.warnings).toEqual(["digest-receipt-unknown:1"]);
     if ("silent" in send) throw new Error("expected a delivery");
-    expect(send.finalBrief).toBe("Hello there.\n- invented");
+    expect(send.finalBrief).toBe("Hello <!-- a private note --> there.\n- invented");
     expect(RECEIPT_STATE_KEY in readState(file)).toBe(false);
   });
 
-  test("the marker grammar: any case, blanks around : and =, optional quotes and id=", () => {
+  test("feature off and no digest markers: staged and sent byte for byte as origin/main does", async () => {
+    const file = stateFileWith({});
+    const { context } = await prepare(file, fakeReader(answer()));
+    const body = [
+      "Good morning. Yoga at 7 --> breakfast --> talks at 10.",
+      "",
+      "I wrote <!-- by mistake. Then sessions --> lunch.",
+      "Morning: beach -> cafe --> co-working. <!-- an open one",
+      "- [Maya](https://index.network/u/aaaaaaaa-0000-4000-8000-000000000001) — climate --> soil, [message Maya](https://index.network/o/abc)",
+      "Note &lt;!-- this --&gt; and a <!-- note --> too.",
+    ].join("\n");
+    const { stage, send, staged } = await stageAndSend(file, context, body);
+    // origin/main: staged = sanitizeDigestUrls(body.trim()); sent = sanitizeDigestUrls(staged, strip).
+    expect(staged).toBe(sanitizeDigestUrls(body.trim()).output);
+    if ("silent" in send) throw new Error("expected a delivery");
+    expect(send.finalBrief).toBe(sanitizeDigestUrls(staged, { stripDigestMetadata: true }).output);
+    expect(send.finalBrief).toContain("Yoga at 7 --> breakfast --> talks at 10.");
+    expect(send.finalBrief).toContain("I wrote <!-- by mistake. Then sessions --> lunch.");
+    expect(stage.warnings).toBeUndefined();
+  });
+
+  test("the marker grammar: any case, blanks around : and =, optional quotes and id=, one line", () => {
     for (const marker of [
       `<!-- digest-receipt:id=${P1} -->`,
       `<!--digest-receipt:id=${P1}-->`,
       `<!-- digest-receipt: id=${P1} -->`,
-      `<!-- digest-receipt :\nid = ${P1} -->`,
+      `<!-- digest-receipt : id = ${P1} -->`,
       `<!-- DIGEST-RECEIPT:id=${P1} -->`,
       `<!-- digest-receipt:id="${P1}" -->`,
       `<!-- digest-receipt:id='${P1}' -->`,
@@ -541,27 +562,54 @@ describe("marker mistakes never cost the brief", () => {
       expect(settleReceiptMarkers(`${marker}- a`, new Set([P1]))).toEqual({ body: `<!-- digest-receipt:id=${P1} -->- a`, receiptIds: [P1], warnings: [] });
       expect(stripDigestReceiptMarkers(`text${marker}more`)).toBe("text more");
     }
-    for (const marker of [`<!-- digest-receipt:id="${P1}' -->`, `<!-- digest-receipt:id=${P1}, ${P2} -->`, `<!-- digest-receipt:id=a/b -->`]) {
+    for (const marker of [
+      `<!-- digest-receipt:id="${P1}' -->`,
+      `<!-- digest-receipt:id=${P1}, ${P2} -->`,
+      `<!-- digest-receipt:id=a/b -->`,
+      `<!-- digest-receipt :\nid = ${P1} -->`, // never across a line
+    ]) {
       expect(extractDigestReceiptIds(marker)).toEqual([]);
       expect(settleReceiptMarkers(marker, new Set([P1])).warnings).toEqual(["digest-receipt-malformed:1"]);
     }
   });
 
-  test("an unclosed receipt marker never swallows the text up to a later comment", () => {
-    const body = `<!-- digest-receipt:id=${P1}\n- kept line\n<!-- digest-opportunity:id=o1 -->- card`;
-    expect(stripDigestReceiptMarkers(body)).toBe(body);
-    expect(settleReceiptMarkers(body, new Set([P1])).body).toBe(body);
+  test("a broken receipt marker never swallows the lines after it (refuter's two cases)", () => {
+    const send = (b: string) => stripStrayDigestMarkers(sanitizeDigestUrls(stripDigestReceiptMarkers(b), { stripDigestMetadata: true }).output);
+    const broken = `<!-- digest-receipt:id=${P1} ->- climbing partner\n\nToday: talks --> lunch.\nClosing question?`;
+    expect(send(broken)).toBe("- climbing partner\n\nToday: talks --> lunch.\nClosing question?");
+    const settled = settleReceiptMarkers(broken, new Set([P1]));
+    expect(settled.body).toBe("- climbing partner\n\nToday: talks --> lunch.\nClosing question?");
+    expect(settled.warnings).toEqual(["digest-receipt-malformed:1"]);
+    const stray = `I wrote <!-- by mistake.\nThen sessions --> lunch. And [Ravi](https://index.network/u/aaaaaaaa-0000-4000-8000-000000000002).`;
+    expect(send(stray)).toBe(sanitizeDigestUrls(stray, { stripDigestMetadata: true }).output);
+    expect(send(stray)).toContain("I wrote <!-- by mistake.\nThen sessions --> lunch.");
   });
 
-  test("the send strips every remaining HTML comment and lone delimiter", () => {
-    const after = sanitizeDigestUrls(stripDigestReceiptMarkers(
-      `a<!-- note -->b\n<!-- digest-opportunity:id=o1 -->- card\n<!-- digest-receipt:id=${P1}\n- tail -->`,
-    ), { stripDigestMetadata: true }).output;
-    expect(stripRemainingHtmlComments(after)).not.toMatch(/<!--|-->/);
-    expect(stripRemainingHtmlComments("a<!-- x -->b")).toBe("a b");
-    expect(stripRemainingHtmlComments("line <!-- x -->\nnext")).toBe("line\nnext");
-    expect(stripRemainingHtmlComments("lone <!-- start")).toBe("lone  start");
-    expect(stripRemainingHtmlComments(`&lt;!-- digest-receipt:id=${P1} --&gt;- a`)).toBe("- a");
+  test("an unclosed receipt marker is removed to its first > or the end of its line, nothing further", () => {
+    const body = `<!-- digest-receipt:id=${P1}\n- kept line\n<!-- digest-opportunity:id=o1 -->- card`;
+    expect(stripDigestReceiptMarkers(body)).toBe(`\n- kept line\n<!-- digest-opportunity:id=o1 -->- card`);
+    expect(settleReceiptMarkers(body, new Set([P1])).body).toBe(`\n- kept line\n<!-- digest-opportunity:id=o1 -->- card`);
+    for (const [input, out] of [
+      [`<!-- digest-receipt:id=${P1} - - >- A climbing partner`, "- A climbing partner"],
+      [`<!-- digest-receipt:id=${P1} >- A climbing partner`, "- A climbing partner"],
+      [`**Shared on your behalf**\n<!-- digest-receipt:id=${P1} ->- A (under your setting)\n\nWhat feels most like you today?`, "**Shared on your behalf**\n- A (under your setting)\n\nWhat feels most like you today?"],
+    ]) {
+      expect(stripDigestReceiptMarkers(input)).toBe(out);
+      expect(settleReceiptMarkers(input, new Set([P1])).body).toBe(out);
+    }
+  });
+
+  test("the send's last strip: only digest-* markers on one line, plain or escaped; everything else as written", () => {
+    expect(stripStrayDigestMarkers("a<!-- x -->b")).toBe("a<!-- x -->b");
+    expect(stripStrayDigestMarkers("Yoga at 7 --> breakfast")).toBe("Yoga at 7 --> breakfast");
+    expect(stripStrayDigestMarkers("lone <!-- start\nlater --> end")).toBe("lone <!-- start\nlater --> end");
+    expect(stripStrayDigestMarkers("a<!-- digest-anything:id=z -->b")).toBe("a b");
+    expect(stripStrayDigestMarkers("line <!-- DIGEST-question: q1 -->\nnext")).toBe("line\nnext");
+    expect(stripStrayDigestMarkers("<!-- digest-opportunity:id=o1 ->- Maya")).toBe("- Maya");
+    expect(stripStrayDigestMarkers("<!-- digest-opportunity:id=o1\nnext --> line")).toBe("\nnext --> line");
+    expect(stripStrayDigestMarkers(`&lt;!-- digest-receipt:id=${P1} --&gt;- a`)).toBe("- a");
+    expect(stripStrayDigestMarkers(`&lt;!-- digest-receipt:id=${P1}\n- b`)).toBe("\n- b");
+    expect(stripStrayDigestMarkers("Note &lt;!-- this --&gt; and more")).toBe("Note &lt;!-- this --&gt; and more");
   });
 });
 
@@ -608,6 +656,9 @@ describe("the prepare prompt's addition", () => {
     expect(section).toContain("add nothing for them");
     expect(section).toContain("Do not ask the user to approve");
     expect(section).not.toContain("come down");
+    expect(section).toContain('"N more to follow in the next briefs."');
+    expect(section).toContain('"One more to follow in the next brief."');
+    expect(section).not.toContain("tomorrow's brief");
   });
 
   test("the reminder is a count, never a description", () => {

@@ -26,7 +26,7 @@ import {
   readDeliveryLog,
   recordShowings,
 } from "./delivery-state";
-import { RECEIPT_STATE_KEY, extractDigestReceiptIds, recordReceipts, stripDigestReceiptMarkers } from "./intention-brief";
+import { RECEIPT_STATE_KEY, extractDigestReceiptIds, recordReceipts, removeMarker, stripDigestReceiptMarkers } from "./intention-brief";
 import { sanitizeDigestUrls } from "./validate-digest-urls";
 
 interface SendResult {
@@ -131,20 +131,18 @@ function parseTask(raw: string): HermesTask | null {
 }
 
 /**
- * DATA-222: after the specific strippers, any HTML comment still in the body
- * (a malformed marker, a stray note), an HTML-escaped one
- * (`&lt;!-- ... --&gt;`), and any lone `<!--` or `-->`, so nothing internal
- * reaches the resident.
+ * DATA-222: after the specific strippers, any `digest-*` marker still in the
+ * body, plain or HTML-escaped, so an internal id is never shown: one that
+ * opens and closes on the same line, or an unclosed one up to its first `>`
+ * on that line (else to the end of the line). Nothing else is touched: an
+ * arrow (`-->`) in prose, a stray `<!--`, or any other comment stays exactly
+ * as written, so a body without digest markers is sent byte for byte as before.
  */
-export function stripRemainingHtmlComments(text: string): string {
-  return text
-    .replace(/[ \t]*<!--[\s\S]*?-->[ \t]*/g, (match, offset: number, whole: string) => {
-      const before = offset > 0 ? whole[offset - 1] : "\n";
-      const after = whole[offset + match.length] ?? "\n";
-      return /\s/.test(before) || /\s/.test(after) ? "" : " ";
-    })
-    .replace(/&lt;!--[\s\S]*?--&gt;/gi, "")
-    .replace(/<!--|-->/g, "");
+const STRAY_DIGEST_MARKER = /[ \t]*<!--[ \t]*digest-(?:(?!<!--)[^\n])*?(?:-->|>|$)[ \t]*/gim;
+const STRAY_ESCAPED_DIGEST_MARKER = /[ \t]*&lt;!--[ \t]*digest-(?:(?!&lt;!--)[^\n])*?(?:--&gt;|&gt;|$)[ \t]*/gim;
+
+export function stripStrayDigestMarkers(text: string): string {
+  return text.replace(STRAY_DIGEST_MARKER, removeMarker).replace(STRAY_ESCAPED_DIGEST_MARKER, removeMarker);
 }
 
 function stringArray(value: unknown): string[] {
@@ -227,7 +225,7 @@ export async function sendDailyBrief(options: {
   await hermes(["kanban", "complete", taskId, "--summary", "delivered"]);
 
   const { output: sanitized } = sanitizeDigestUrls(stripDigestReceiptMarkers(body), { stripDigestMetadata: true });
-  const finalBrief = stripRemainingHtmlComments(sanitized);
+  const finalBrief = stripStrayDigestMarkers(sanitized);
 
   // DATA-222: the inferred intentions this brief receipted, so later briefs do
   // not list them again: the ids staging kept that are also in the body sent.

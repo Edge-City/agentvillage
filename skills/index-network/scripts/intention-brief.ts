@@ -72,13 +72,18 @@ const VILLAGE_TZ = "Asia/Kolkata";
 const TRUTHY = new Set(["1", "true", "yes", "on"]);
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
 /**
- * A well-formed receipt marker: `digest-receipt` in any case, optional
- * whitespace around `:` and `=`, an optional `id=`, an optionally quoted id.
+ * A well-formed receipt marker, on one line: `digest-receipt` in any case,
+ * optional blanks around `:` and `=`, an optional `id=`, an optionally quoted id.
  */
-const RECEIPT_MARKER = /<!--\s*digest-receipt\s*:\s*(?:id\s*=\s*)?(["']?)([A-Za-z0-9_-]+)\1\s*-->/gi;
+const RECEIPT_MARKER = /<!--[ \t]*digest-receipt[ \t]*:[ \t]*(?:id[ \t]*=[ \t]*)?(["']?)([A-Za-z0-9_-]+)\1[ \t]*-->/gi;
 const RECEIPT_MARKER_WHOLE = new RegExp(`^${RECEIPT_MARKER.source}$`, "i");
-/** Anything that starts like a receipt marker, well-formed or not, with the blanks around it. */
-const ANY_RECEIPT_MARKER = /[ \t]*<!--\s*digest-receipt\b(?:(?!<!--)[\s\S])*?-->[ \t]*/gi;
+/**
+ * Anything that starts like a receipt marker, with the blanks around it,
+ * never past its own line: up to its `-->`, else its first `>`, else the end
+ * of the line, so a broken close cannot swallow the lines after it and an id
+ * in it is never shown.
+ */
+const ANY_RECEIPT_MARKER = /[ \t]*<!--[ \t]*digest-receipt\b(?:(?!<!--)[^\n])*?(?:-->|>|$)[ \t]*/gim;
 const TEXT_CHARS = 160;
 
 export interface SharedOnYourBehalf {
@@ -376,7 +381,7 @@ export function extractDigestReceiptIds(body: string): string[] {
   return ids;
 }
 
-function removeMarker(match: string, offset: number, whole: string): string {
+export function removeMarker(match: string, offset: number, whole: string): string {
   // Keep one space between words the marker sat between.
   const before = offset > 0 ? whole[offset - 1] : "\n";
   const after = whole[offset + match.length] ?? "\n";
