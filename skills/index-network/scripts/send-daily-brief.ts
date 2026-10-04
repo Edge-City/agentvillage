@@ -26,7 +26,6 @@ import {
   readDeliveryLog,
   recordShowings,
 } from "./delivery-state";
-import { RECEIPT_STATE_KEY, recordReceipts, stripDigestReceiptMarkers } from "./intention-brief";
 import { sanitizeDigestUrls } from "./validate-digest-urls";
 
 interface SendResult {
@@ -205,17 +204,11 @@ export async function sendDailyBrief(options: {
   for (const id of questionIds) questionDelivery[id] = date;
   state.questionDelivery = questionDelivery;
 
-  // DATA-222: the inferred intentions this brief receipted, so the next brief
-  // does not list them again. Recorded here, at delivery, never at staging: a
-  // brief that is not sent leaves them to be offered again.
-  const receipts = recordReceipts(state[RECEIPT_STATE_KEY], stringArray(prepared.receiptIds), date);
-  if (!readOnly && receipts !== null) state[RECEIPT_STATE_KEY] = receipts;
-
   await writeJson(stateFile, state);
 
   await hermes(["kanban", "complete", taskId, "--summary", "delivered"]);
 
-  const { output: finalBrief } = sanitizeDigestUrls(stripDigestReceiptMarkers(body), { stripDigestMetadata: true });
+  const { output: finalBrief } = sanitizeDigestUrls(body, { stripDigestMetadata: true });
   return { taskId, opportunityIds, questionIds, finalBrief };
 }
 
