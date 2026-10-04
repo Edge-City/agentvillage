@@ -63,6 +63,23 @@ the resident is asked. Then:
 - Never send the resident a link to approve something. Approvals arrive in
   their approval bot by themselves.
 
+## Sharing a digest, and the weekly village question
+
+If `share_digest` or `village_vote` is available (in your tool list, or found
+with `tool_search` and called through `tool_call`), these go through the same
+approval bot; otherwise ignore this section.
+
+- `share_digest`: a short text the resident chooses to make available to
+  village services. Show them the exact words first. The tool asks them in
+  their approval bot; it is shared only when they approve it there. When they
+  ask you to stop sharing it, call it with `action=revoke`.
+- `village_vote`: read the open question with `action=question`, then propose
+  the answer you believe the resident would give with `action=vote`. It is
+  cast only when they approve it there. A question takes one answer.
+
+A yes you read in chat is not an approval. Never share a digest or cast a
+vote any other way.
+
 ## What the gate does not cover
 
 The resident has been told what is not checked:

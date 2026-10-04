@@ -958,7 +958,9 @@ def register(ctx) -> None:
 
     It also registers one read-only tool, `consent_status` (`_consent.py`),
     when `ctx.register_tool` exists, and — only when `AV_RECORD_INTENTION` is
-    on — `record_intention` (`_record_intention.py`, DATA-212).
+    on — `record_intention` (`_record_intention.py`, DATA-212); and, behind
+    `AV_DIGEST_SHARE` / `AV_VILLAGE_VOTE`, `share_digest` and `village_vote`
+    (`_share_vote.py`, lane O3).
 
     Idempotent. Hermes loads a plugin once per process, but a profile switch or
     a `force=True` reload can call `register()` again on a module that is still

@@ -221,6 +221,9 @@ backlog can differ from `emitted_at` by minutes. Every `marts` time series is bu
 | `intention.captured` | `post_tool_call` on Index `create_intent`, or `record_intention(action="capture")` | `text_hash`, `summary_hash`, `index_intent_id`, `source`, `conditional`, `capture_path`, `index_status`, `parent_session_id`, `publish_refused`, `local_reason`, plus `text_length` / `summary_length` above `metadata` |
 | `intention.updated` | `post_tool_call` on Index `update_intent` with a new `description`, Index `pause_intent` / `resume_intent` (`index_status` `paused` / `active`, both hashes null, `status_only: true`), or `record_intention` naming an id | as above |
 | `intention.withdrawn` | `post_tool_call` on Index `archive_intent` (or the legacy `delete_intent`, or a legacy `update_intent` to `archived`/`deleted`/`withdrawn`), or `record_intention(action="archive"\|"withdraw"\|"delete")` | as above; both hashes null |
+| `digest.shared` | the approval poller (or the tool call) after the resident's grant and `approval start` (lane O3) | `digest_id`, `scope`, `text`, `expires_at`, `idempotency_key`, `payload_hash`, `start_seq`, `authorization` — see "Sharing a digest and the weekly vote" |
+| `digest.revoked` | `share_digest(action="revoke")` on a shared digest | `digest_id` |
+| `vote.cast` | the approval poller after the grant, or `village_vote(action="vote")` under an autonomous policy | `question_id`, `answer`, `idempotency_key`, `payload_hash`, `start_seq`, `authorization` |
 | `memory.recalled` | `recall:memory.recalled` on the plugin event bus (published by `plugins/recall`) | `query_hash`, `hit_count`, `top_score`, `surface`; the hash and score are null in `metadata` — see below |
 | `memory.snapshot` | the backup thread, after `on_session_end` (rate-limited) or `on_session_finalize` asked for a snapshot and both uploads succeeded | `bytes`, `file_count`, `content_hash`, `manifest_ref` — exactly `memory.snapshot@1`'s closed key set, the same in every capture mode — see "Memory snapshot" |
 
@@ -690,6 +693,101 @@ retried), `unavailable` (nothing could be held). Map codes: `payload_hash_mismat
 `authorization_mismatch`, `claim_abandoned`, `map_invalid`, `rule_needs_capture`. Client codes in the logs: `url_missing`, `url_refused`,
 `token_missing`, `token_malformed`, `token_file_*`, `facade_listener_foreign`, `unauthorized`,
 `http_<status>`, `transport`, `timeout`, `bad_answer`.
+
+### Sharing a digest and the weekly vote (lane O3)
+
+Two more resident-approved actions on the same approval client and poller. Code:
+`_share_vote.py` (registered on Lane B's poller through `_approval.register_pass("share_vote", ...)`)
+and `_village_question.py` (where the weekly question is read). The contract is the data repo's
+`docs/spec-addenda.md` "digest.* and vote.cast" and the closed schemas `digest.shared@1`,
+`digest.revoked@1` and `vote.cast@1`; `tests/vectors/share_vote_contract.json` is a copy of their
+field lists, the approval link's known-answer vectors and the text rule's cases.
+
+| Variable | Meaning |
+|---|---|
+| `AV_DIGEST_SHARE` | `1\|true\|yes\|on` registers `share_digest`. Process environment only. |
+| `AV_VILLAGE_VOTE` | `1\|true\|yes\|on` registers `village_vote`. Process environment only. |
+| `AV_TENANT_ID`, `TENANT_ID` | The tenant the ingest token belongs to, exactly as written (process environment only): the vote's key names it. |
+
+Both are off by default, and nothing is proposed or sent without approval configured
+(`AV_APPROVAL_ENABLED` and `AV_APPROVAL_URL`); off, no tool is registered and the pass does
+nothing. Switching one off later stops its pass too (pending proposals wait on disk).
+
+**Deploy order.** Ingest must be released with the three schemas (data repo #188) before any
+agent emits these events; an ingest without them quarantines every one. The resident's policy
+must also name the classes (`digest.share` and `village.vote`, manual, `agent_may_request: true`,
+as the control plane's resident template does); a policy without them refuses the proposal
+(`class-not-agent-requestable`) and nothing is sent.
+
+**`share_digest`.** `action=share` (`text`, `scope` `village` or `service:<name>`, optional
+`expires_in_hours` 1..167) mints `digest_id = str(uuid4())` and proposes, in class `digest.share`
+with key `digest.share:<digest_id>`, exactly `{digest_id, scope, text, expires_at}` as RFC 8785 JSON
+(the bytes the resident is shown). `expires_at` is at most 7 days less an hour after the plugin's
+clock (the door refuses one more than 7 days after it receives the event). The summary names the
+scope, the expiry and the id, never the text. Text the door would refuse (more than 500 code
+points, no letter or digit, a control, a bidi override, an invisible, private-use, noncharacter or
+tag character) or that the sanitiser would change (a credential shape) is refused at the tool. At
+most five shares wait for the resident at once. A share the policy clears without asking the
+resident is never started (`not_shared`: a share admits only `grant`). `action=revoke`
+(`digest_id`), on the resident's instruction, emits `digest.revoked@1` (`{digest_id}`, no approval:
+the policy rows name no revoke class) once per share, or, before the resident answered, withdraws
+the question and sends nothing. Nothing else revokes: an expiry needs no event, and an executed
+share has no withdrawal on the daemon. `action=status` reads where it stands.
+
+**`village_vote`.** `action=question` reads the open question (id, text, option keys, close).
+`action=vote` (`question_id`, `answer` one option key, optional one-line `rationale`) proposes, in
+class `village.vote` with key `village.vote:<question_id>:<tenant_id>`, exactly
+`{question_id, answer}`; the rationale goes in the summary, never the payload. A question takes one
+answer (approval.md binds a key to its first bytes). A pending vote past the question's close is
+withdrawn. A vote the resident set autonomous is cast inside the tool call (`authorization:
+policy`); the poller casts only on a human grant. `action=withdraw` withdraws an unanswered vote;
+a cast vote cannot be withdrawn.
+
+**The weekly question is not available yet.** The contract's source is `ods.questions`, which is
+not built, and no other source exists (no control-plane route, variable, installer file or event).
+`_village_question.current_question()` is the one seam; its shipped implementation raises
+`question_source_not_built`, so `village_vote` refuses every question and vote with
+`question_unavailable` (`reason: question_source_not_built`) until a provider replaces it.
+
+**What authorizes an event.** The map (`$HERMES_HOME/av-events/share-vote.json`, 0600, under its
+flock) is never authority: the agent can write it. An event is emitted only by the one call that
+read the grant from the daemon for that key (`wait --timeout 0`, exit 0, `granted`; for a policy
+vote, `propose`'s own answer inside the tool call), claimed the entry, read the authority again,
+and got `start` ok for exactly those bytes, naming this key, class and task, with the expected
+`authorization` and a `seq`. The event is built from the very string that call sent to `start`,
+and its `payload_hash` is that string's SHA-256 (also checked against `propose`'s answer); the map
+is re-read twice before the send, and if the held bytes, the recorded hash, the key or the claim
+changed, nothing is sent (`payload_tampered`). An `emitting` entry the pass meets is never sent
+from there (`emit_unconfirmed` once stale). No grant, a rejection, a revocation, a withdrawal, an
+expiry (not re-asked), a daemon that is down or unverified, or a refused start: no event. A `void`
+re-proposes the same bytes (at most ten times), as for intentions. The held text is dropped when
+the proposal ends; a shared digest keeps its id, scope and expiry for a revocation.
+
+**The events.** After `start`, on the tenant's plugin token, actor `agent`, no session, envelope
+`decision_id` null, `agent_report`; `event_id` a uuid v7 derived from the start time, the key and
+`start_seq`:
+
+- `digest.shared`: `digest_id`, `scope`, `text`, `expires_at`, `idempotency_key` (SHA-256 of the
+  key), `payload_hash`, `start_seq`, `authorization` (`grant`);
+- `vote.cast`: `question_id`, `answer`, `idempotency_key`, `payload_hash`, `start_seq`,
+  `authorization` (`grant` or `policy`);
+- `digest.revoked`: `digest_id`.
+
+No `decision_id` and no `policy_version` in any payload: the plugin cannot know either (the ODS
+writer resolves the decision from the follower's rows). The text travels in `digest.shared` in
+every capture mode: the share is the resident's approved act, not telemetry. Events reach ingest
+for research-consenting tenants only (the worker drops the rest).
+
+**Codes.** Tool refusals: `disabled`, `approval_not_configured`, `text_required`, `text_too_long`,
+`text_invalid`, `text_no_letter_or_digit`, `text_sanitized`, `scope_invalid`, `expires_invalid`,
+`too_many_pending`, `digest_id_required`, `digest_unknown`, `share_in_flight`, `revoke_failed`,
+`tenant_unknown`, `question_unavailable`, `question_id_required`, `question_not_open`,
+`question_closed`, `answer_invalid`, `rationale_invalid`, `vote_already_proposed`, `vote_unknown`,
+`vote_in_flight`, `vote_already_cast`. States: `unfiled`, `requested`, `cleared`, `starting`,
+`emitting`, `emitted`, `revoked`, `rejected`, `withdrawn`, `expired`, `refused`,
+`start_unconfirmed`, `lapsed`, `closed`, `not_shared`, `not_cast`, `invalid`, `emit_refused`,
+`emit_failed`, `emit_unconfirmed`, `revoke_lapsed`. Log lines carry these codes only, never the
+text, the rationale or an answer.
 
 ---
 
