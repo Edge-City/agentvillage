@@ -166,7 +166,7 @@ export async function sendDailyBrief(options: {
   const opportunityIds = stringArray(prepared.opportunityIds);
   const questionIds = stringArray(prepared.questionIds);
 
-  const storedDeliveryLog = readDeliveryLog(state);
+  const storedDeliveryLog = readDeliveryLog(state, date);
   const deliveredToday = state.deliveredToday && typeof state.deliveredToday === "object" && !Array.isArray(state.deliveredToday)
     ? state.deliveredToday as Record<string, unknown>
     : {};

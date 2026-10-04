@@ -114,8 +114,10 @@ describe("askQuestions", () => {
 
   test("skips a card already delivered today", async () => {
     tempWorkspace();
+    // An empty delivery log, so only the same-day dedupe keeps Maya out.
     await Bun.write("state.json", JSON.stringify({
       deliveredToday: { date: "2026-06-17", ids: ["opp-maya"] },
+      opportunityDelivery: {},
     }));
     mockList(listText([
       card("Maya", "memory systems", "opp-maya", MAYA_ID),

@@ -105,15 +105,25 @@ export async function askQuestions(options: {
 } = {}): Promise<EveningCard | Closeout | SilentResult> {
   const date = options.date ?? villageDate();
   const stateFile = options.stateFile ?? "memory/heartbeat-state.json";
-  const state = await readState(stateFile);
-  const seen = deliveredIds(state, date);
-
   const apiKey = options.apiKey ?? resolveIndexApiKey();
+  let listed: Awaited<ReturnType<typeof listOpportunitiesFromMcp>> | null = null;
   if (apiKey) {
     try {
-      const { cards: fetched, listing } = await listOpportunitiesFromMcp({ apiKey, mcpUrl: indexMcpUrl() });
+      listed = await listOpportunitiesFromMcp({ apiKey, mcpUrl: indexMcpUrl() });
+    } catch {
+      // An empty list still allows the last-day closeout.
+    }
+  }
+
+  // Read the state only after the Index call, so a slow call never writes a
+  // stale copy over another script's write.
+  const state = await readState(stateFile);
+  if (listed) {
+    try {
+      const { cards: fetched, listing } = listed;
+      const seen = deliveredIds(state, date);
       // The read succeeded, so entries for cards no longer pending can go.
-      const log = pruneDeliveryLog(readDeliveryLog(state), date, listing);
+      const log = pruneDeliveryLog(readDeliveryLog(state, date), date, listing);
       const unseen = fetched.filter((opp) => opp.opportunityId && !seen.has(opp.opportunityId));
       const [chosen] = applyCooldown(unseen, log, date).eligible;
       if (chosen?.opportunityId) {
@@ -127,7 +137,7 @@ export async function askQuestions(options: {
         await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
       }
     } catch {
-      // An empty list still allows the last-day closeout.
+      // An unwritable state file still allows the last-day closeout.
     }
   }
 

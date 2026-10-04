@@ -110,23 +110,31 @@ describe("readDeliveryLog", () => {
       questionDelivery: { q: DAY0 },
       pendingDeliveryConfirms: ["a"],
     };
-    expect(readDeliveryLog(state)).toEqual({
+    expect(readDeliveryLog(state, DAY0)).toEqual({
       a: { firstShown: DAY0, lastShown: DAY0, count: 1 },
       b: { firstShown: DAY0, lastShown: DAY0, count: 1 },
     });
   });
 
   test("no deliveredToday, or a malformed one, reads as empty", () => {
-    expect(readDeliveryLog({})).toEqual({});
-    expect(readDeliveryLog({ deliveredToday: "x" })).toEqual({});
-    expect(readDeliveryLog({ deliveredToday: { date: "yesterday", ids: ["a"] } })).toEqual({});
-    expect(readDeliveryLog({ deliveredToday: { date: DAY0 } })).toEqual({});
+    expect(readDeliveryLog({}, DAY0)).toEqual({});
+    expect(readDeliveryLog({ deliveredToday: "x" }, DAY0)).toEqual({});
+    expect(readDeliveryLog({ deliveredToday: { date: "yesterday", ids: ["a"] } }, DAY0)).toEqual({});
+    expect(readDeliveryLog({ deliveredToday: { date: DAY0 } }, DAY0)).toEqual({});
   });
 
   test("a malformed map reads as empty, and deliveredToday is then not used", () => {
     for (const bad of [null, "x", 3, [], [{ a: 1 }], true]) {
-      expect(readDeliveryLog({ [OPPORTUNITY_DELIVERY_KEY]: bad, deliveredToday: { date: DAY0, ids: ["a"] } })).toEqual({});
+      expect(readDeliveryLog({ [OPPORTUNITY_DELIVERY_KEY]: bad, deliveredToday: { date: DAY0, ids: ["a"] } }, DAY0)).toEqual({});
     }
+  });
+
+  test("an entry last shown more than one day after today is malformed and dropped; one day ahead is kept", () => {
+    const at = (lastShown: string) => ({ firstShown: lastShown, lastShown, count: 1 });
+    const state = { [OPPORTUNITY_DELIVERY_KEY]: { skew: at(addDays(DAY0, 1)), far: at(addDays(DAY0, 2)), past: at(addDays(DAY0, -2)) } };
+    expect(Object.keys(readDeliveryLog(state, DAY0))).toEqual(["skew", "past"]);
+    expect(readDeliveryLog({ deliveredToday: { date: addDays(DAY0, 2), ids: ["a"] } }, DAY0)).toEqual({});
+    expect(Object.keys(readDeliveryLog({ deliveredToday: { date: addDays(DAY0, 1), ids: ["a"] } }, DAY0))).toEqual(["a"]);
   });
 
   test("a malformed entry is dropped alone", () => {
@@ -144,7 +152,7 @@ describe("readDeliveryLog", () => {
         "bad id": good,
       },
     };
-    expect(readDeliveryLog(state)).toEqual({ good });
+    expect(readDeliveryLog(state, DAY0)).toEqual({ good });
   });
 });
 
@@ -223,11 +231,18 @@ describe("pruneDeliveryLog", () => {
 });
 
 describe("pendingListing", () => {
-  test("complete only when fewer rows came back than asked for and pagination reports no more", () => {
-    expect(pendingListing({ pendingIds: ["a"], rowCount: 1, requestedLimit: 20 }).complete).toBe(true);
-    expect(pendingListing({ pendingIds: [], rowCount: 0, requestedLimit: 20, pagination: { page: 1, limit: 20, total: 0 } }).complete).toBe(true);
-    expect(pendingListing({ pendingIds: ["a"], rowCount: 20, requestedLimit: 20 }).complete).toBe(false);
-    expect(pendingListing({ pendingIds: ["a"], rowCount: 5, requestedLimit: 20, pagination: { total: 30 } }).complete).toBe(false);
+  test("complete only when fewer rows came back than asked for and pagination {limit, offset, count} does not contradict it", () => {
+    const listing = (rowCount: number, pagination?: unknown) => pendingListing({ pendingIds: [], rowCount, requestedLimit: 50, pagination }).complete;
+    expect(listing(1)).toBe(true);
+    expect(listing(49)).toBe(true);
+    expect(listing(50)).toBe(false);
+    expect(listing(51)).toBe(false);
+    expect(listing(0, { limit: 50, offset: 0, count: 0 })).toBe(true);
+    expect(listing(5, { limit: 50, offset: 0, count: 5 })).toBe(true);
+    expect(listing(5, { limit: 50, offset: 0, count: 6 })).toBe(false);
+    expect(listing(5, { limit: 20, offset: 0, count: 5 })).toBe(false);
+    expect(listing(5, { limit: 50, offset: 0 })).toBe(true);
+    expect(listing(5, "not an object")).toBe(true);
   });
 });
 

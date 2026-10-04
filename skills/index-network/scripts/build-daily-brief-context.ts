@@ -203,6 +203,12 @@ export interface DailyBriefContext {
    * because they were already shown recently or as often as they will be.
    */
   connectionsStillWaiting: number;
+  /**
+   * True when today's pending list was read but may have been cut short (a
+   * full page), so cards beyond it were not considered. connectionsStillWaiting
+   * is then 0: no count, and no claim that nothing new is waiting.
+   */
+  moreWaitingThanListed: boolean;
   userModel: BriefUserModel;
   weather?: DailyBriefWeather;
   questions?: BriefQuestion[];
@@ -745,10 +751,10 @@ async function readDeliveredIds(stateFile: string, date: string): Promise<Set<st
 }
 
 /** The delivery log in the state file; a missing or malformed file reads as an empty log. */
-async function readDeliveryLogFile(stateFile: string): Promise<DeliveryLog> {
+async function readDeliveryLogFile(stateFile: string, date: string): Promise<DeliveryLog> {
   try {
     const parsed = asRecord(JSON.parse(await Bun.file(stateFile).text()));
-    return parsed ? readDeliveryLog(parsed) : {};
+    return parsed ? readDeliveryLog(parsed, date) : {};
   } catch {
     return {};
   }
@@ -768,7 +774,7 @@ export async function pruneDeliveryLogFile(stateFile: string, date: string, list
     return;
   }
   if (!state || state[OPPORTUNITY_DELIVERY_KEY] === undefined) return;
-  const pruned = pruneDeliveryLog(readDeliveryLog(state), date, listing);
+  const pruned = pruneDeliveryLog(readDeliveryLog(state, date), date, listing);
   if (!deliveryLogChanged(state, pruned)) return;
   state[OPPORTUNITY_DELIVERY_KEY] = pruned;
   await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
@@ -970,8 +976,11 @@ export async function fetchOpportunitiesFromMcp(opts: {
   return (await listOpportunitiesFromMcp(opts)).cards;
 }
 
-/** The page size the delivery paths ask Index for. */
-export const PENDING_LIST_LIMIT = 20;
+/**
+ * The page size every path asks Index for when it lists opportunities (the
+ * brief, the drops, the evening card and the follow-up). Index accepts 50.
+ */
+export const PENDING_LIST_LIMIT = 50;
 
 /**
  * fetchOpportunitiesFromMcp, plus the count of cards dropped for a missing or
@@ -1026,6 +1035,7 @@ export async function buildDailyBriefContext(options: {
   let opportunitySource: "mcp" | "file" | "unavailable" = "unavailable";
   let dreamingFresh = false;
   let deliveryLog: DeliveryLog = {};
+  let listingComplete = true;
 
   const apiKey = resolveIndexApiKey();
   const mcpUrl = indexMcpUrl();
@@ -1034,9 +1044,10 @@ export async function buildDailyBriefContext(options: {
   if (apiKey) {
     try {
       const deliveredIds = await readDeliveredIds(stateFile, date);
-      const storedLog = await readDeliveryLogFile(stateFile);
+      const storedLog = await readDeliveryLogFile(stateFile, date);
       const { cards: fetched, unidentified, listing } = await listOpportunitiesFromMcp({ apiKey, mcpUrl });
       deliveryLog = pruneDeliveryLog(storedLog, date, listing);
+      listingComplete = listing.complete;
       if (unidentified > 0) warnings.push(`dropped ${unidentified} opportunity card(s): ${UNIDENTIFIED_CARD_CODE}`);
       const deduped = filterDedupedOpportunities(fetched, deliveredIds);
       opportunities = filterActionableOpportunities(deduped);
@@ -1067,7 +1078,7 @@ export async function buildDailyBriefContext(options: {
     if (transcript.trim()) {
       opportunitySource = "file";
       const deliveredIds = await readDeliveredIds(stateFile, date);
-      deliveryLog = pruneDeliveryLog(await readDeliveryLogFile(stateFile), date, null);
+      deliveryLog = pruneDeliveryLog(await readDeliveryLogFile(stateFile, date), date, null);
       const deduped = filterDedupedOpportunities(parseOpportunityTranscript(transcript), deliveredIds);
       opportunities = filterActionableOpportunities(deduped);
       if (opportunities.length < deduped.length) {
@@ -1088,7 +1099,9 @@ export async function buildDailyBriefContext(options: {
   const communityOpportunities = eligible
     .filter((opp) => opp.feedCategory === "connector-flow")
     .map(attachIndexLinks);
-  const connectionsStillWaiting = held.filter((opp) => opp.feedCategory === "connection").length;
+  // Only a complete read can say how many are still waiting, or that nothing is new.
+  const connectionsStillWaiting = listingComplete ? held.filter((opp) => opp.feedCategory === "connection").length : 0;
+  const moreWaitingThanListed = !listingComplete;
 
   return {
     date,
@@ -1102,6 +1115,7 @@ export async function buildDailyBriefContext(options: {
     connectionOpportunities,
     communityOpportunities,
     connectionsStillWaiting,
+    moreWaitingThanListed,
     userModel,
     weather: weather.source !== "unavailable" ? weather : undefined,
     questions,

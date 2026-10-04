@@ -11,12 +11,15 @@
  * negotiationSummary.reportedCompletedIds so the user is never told about the
  * same connection twice.
  *
- * The needs-attention list puts pending cards in front of the user like any
- * other delivery, so it follows the card cooldown (delivery-state.ts): it
- * lists only pending cards not already sent today and not in their cooldown
- * or out of showings, and counts one showing for each card it lists. A
- * pending card Index marks `negotiating: true` is listed with the agents
- * talking, never as waiting on the user.
+ * The needs-attention list is a delivery of re-showings only (delivery-state.ts):
+ * at most FOLLOW_UP_RESHOW_LIMIT pending cards that were already shown at
+ * least once, are eligible again after their cooldown and were not sent
+ * today, the one shown longest ago first. A card never shown is left to the
+ * brief, the drops and the evening card. Each card listed counts one showing
+ * and joins today's `deliveredToday` set; eligible re-showings it does not
+ * list stay eligible for later paths and days. A pending card Index marks
+ * `negotiating: true` is listed with the agents talking, never as waiting on
+ * the user.
  *
  * Outputs either exactly `[SILENT]` (nothing to report) or a JSON object that
  * the cron prompt feeds to the LLM for the structured report:
@@ -34,6 +37,7 @@
 import { existsSync } from "node:fs";
 
 import {
+  PENDING_LIST_LIMIT,
   attachIndexLinks,
   indexLink,
   parseListedOpportunitiesCounted,
@@ -50,6 +54,7 @@ import {
   pruneDeliveryLog,
   readDeliveryLog,
   recordShowings,
+  showingsFor,
   type PendingListing,
 } from "./delivery-state";
 import { callIndexTool, indexMcpUrl, toolJsonArray, toolJsonObject } from "./index-mcp";
@@ -297,8 +302,8 @@ function intentsFrom(text: string): Array<{ summary: string; url?: string }> {
   });
 }
 
-/** The page size the follow-up asks Index for. */
-const FOLLOW_UP_LIST_LIMIT = 50;
+/** Re-showings the follow-up lists at most. */
+export const FOLLOW_UP_RESHOW_LIMIT = 3;
 
 function deliveredTodayIds(state: Record<string, unknown>, date: string): Set<string> {
   const delivered = state.deliveredToday;
@@ -326,14 +331,14 @@ export async function main(): Promise<void> {
   try {
     const opportunityText = await callIndexTool(target, "list_opportunities", {
       statuses: ["pending", "negotiating", "accepted"],
-      limit: FOLLOW_UP_LIST_LIMIT,
+      limit: PENDING_LIST_LIMIT,
     });
     const listed = parseListedOpportunitiesCounted(opportunityText);
     cards = listed.cards;
     listing = pendingListing({
       pendingIds: listed.pendingIds,
       rowCount: listed.rowCount,
-      requestedLimit: FOLLOW_UP_LIST_LIMIT,
+      requestedLimit: PENDING_LIST_LIMIT,
       pagination: toolJsonObject(opportunityText)?.root.pagination,
     });
     const intentText = await callIndexTool(target, "list_intents", { limit: 20 });
@@ -351,14 +356,17 @@ export async function main(): Promise<void> {
   const alreadyReported = new Set(summaryState.reportedCompletedIds ?? []);
 
   // Both reads succeeded, so entries for cards no longer pending can go.
-  const log = pruneDeliveryLog(readDeliveryLog(state), date, listing);
+  const log = pruneDeliveryLog(readDeliveryLog(state, date), date, listing);
   const sentToday = deliveredTodayIds(state, date);
   const pending = cards.filter((card) => card.status === "pending");
+  // Re-showings only: shown before, not sent today, eligible again; oldest showing first.
   const due = applyCooldown(
-    pending.filter((card) => !card.opportunityId || !sentToday.has(card.opportunityId)),
+    pending.filter((card) => card.opportunityId && !sentToday.has(card.opportunityId) && showingsFor(log, card.opportunityId)),
     log,
     date,
-  ).eligible.filter((card) => followUpCard(card));
+  )
+    .eligible.filter((card) => followUpCard(card))
+    .slice(0, FOLLOW_UP_RESHOW_LIMIT);
   const needsAttention = due.map(followUpCard).filter((card): card is FollowUpCard => Boolean(card));
   const waiting = cards
     .filter((card) => card.status === "negotiating" || (card.status === "pending" && !awaitsResident(card)))
@@ -377,6 +385,7 @@ export async function main(): Promise<void> {
   const nextLog = pruneDeliveryLog(recordShowings(log, shownIds, date), date, listing);
   await writeJsonObject(stateFile, {
     ...state,
+    ...(shownIds.length > 0 ? { deliveredToday: { date, ids: Array.from(new Set([...sentToday, ...shownIds])) } } : {}),
     negotiationSummary: {
       ...summaryState,
       reportedCompletedIds: [...alreadyReported, ...newAccepted.map((card) => card.opportunityId).filter((id): id is string => Boolean(id))],

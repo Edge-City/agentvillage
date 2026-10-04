@@ -478,7 +478,7 @@ describe("fetchOpportunitiesFromMcp", () => {
         headline: "memory systems",
       });
       expect(fake.calls.map((call) => [call.method, call.name, call.arguments])).toEqual([
-        ["tools/call", "list_opportunities", { statuses: ["pending"], limit: 20 }],
+        ["tools/call", "list_opportunities", { statuses: ["pending"], limit: 50 }],
       ]);
     } finally {
       globalThis.fetch = originalFetch;
@@ -694,7 +694,7 @@ describe("buildDailyBriefContext against Index's answers", () => {
   test("deliveredToday dated yesterday is no same-day dedupe (with an empty delivery log its card is eligible); dated today it is", async () => {
     const yesterday = await runBrief(undefined, { deliveredToday: { date: "2026-10-11", ids: [MAYA_OPP] }, opportunityDelivery: {} });
     expect(yesterday.context.connectionOpportunities.map((opp) => opp.opportunityId)).toEqual([MAYA_OPP]);
-    const today = await runBrief(undefined, { deliveredToday: { date: "2026-10-12", ids: [MAYA_OPP] } });
+    const today = await runBrief(undefined, { deliveredToday: { date: "2026-10-12", ids: [MAYA_OPP] }, opportunityDelivery: {} });
     expect(today.context.connectionOpportunities).toEqual([]);
   });
 

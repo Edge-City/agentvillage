@@ -119,7 +119,7 @@ export async function dropOpportunity(options: {
   const deliveredIds = new Set(deliveredToday.date === date ? stringArray(deliveredToday.ids) : []);
 
   // The read succeeded, so entries for cards no longer pending can go.
-  const log = pruneDeliveryLog(readDeliveryLog(state), date, listing);
+  const log = pruneDeliveryLog(readDeliveryLog(state, date), date, listing);
   const candidates = filterDedupedOpportunities(fetched, deliveredIds).filter((opp) => opp.opportunityId);
   const chosen = pickBest(applyCooldown(candidates, log, date).eligible, log);
   if (!chosen?.opportunityId) {

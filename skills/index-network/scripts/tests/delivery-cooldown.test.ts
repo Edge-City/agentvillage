@@ -1,198 +1,55 @@
 /**
  * The card cooldown on every delivery path, end to end against the Index fake:
  * the morning brief (prepare, then send), the opportunity drop, the evening
- * card and the afternoon follow-up's "waiting on you" list.
+ * card and the afternoon follow-up's "waiting on you" list (re-showings only).
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { askQuestions } from "../ask-questions";
-import { buildDailyBriefContext, type DailyBriefContext } from "../build-daily-brief-context";
-import { OPPORTUNITY_DELIVERY_KEY, type DeliveryLog } from "../delivery-state";
+import { OPPORTUNITY_DELIVERY_KEY } from "../delivery-state";
 import { dropOpportunity } from "../drop-opportunity";
 import { sendDailyBrief } from "../send-daily-brief";
-import { main as followUpMain } from "../summarize-negotiations";
-import { FAKE_MCP_URL, type ToolHandler, indexMcpFake, listOpportunitiesText } from "./index-mcp-fake";
+import { FAKE_MCP_URL, type ToolHandler, pagedOpportunities } from "./index-mcp-fake";
+import {
+  DAY0,
+  JON,
+  MAYA,
+  type Path,
+  addDays,
+  briefAndSend,
+  briefIds,
+  cleanUp,
+  drop,
+  evening,
+  failing,
+  fileText,
+  followUp,
+  followUpRaw,
+  list,
+  newStateFile,
+  oppId,
+  prepare,
+  prepareIds,
+  readLog,
+  readState,
+  row,
+  withIndex,
+} from "./delivery-paths";
 
-const DAY0 = "2026-10-12";
-const ENV_KEYS = ["INDEX_API_KEY", "INDEX_MCP_URL", "EDGEOS_API_KEY", "EDGE_AGENT_CONTROL_PLANE_URL", "ADMIN_TOKEN"];
+afterEach(cleanUp);
 
-function addDays(date: string, days: number): string {
-  const [y, m, d] = date.split("-").map(Number);
-  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
-}
+const shown = (date: string, count = 1) => ({ firstShown: date, lastShown: date, count });
 
-function oppId(n: number): string {
-  return `bbbbbbbb-0000-4000-8000-${String(n).padStart(12, "0")}`;
-}
-
-const MAYA = oppId(1);
-const JON = oppId(2);
-
-function row(name: string, n: number, extra: Record<string, unknown> = {}) {
-  const userId = `cccccccc-0000-4000-8000-${String(n).padStart(12, "0")}`;
-  return {
-    id: oppId(n),
-    url: `https://index.network/o/${oppId(n)}`,
-    status: "pending",
-    viewerRole: "party",
-    headline: `${name} headline`,
-    summary: `${name} summary`,
-    peer: { name, userId, url: `https://index.network/u/${userId}` },
-    ...extra,
-  };
-}
-
-const list = (...rows: unknown[]): ToolHandler => () => listOpportunitiesText(rows);
-const failing: ToolHandler = () => ({ result: { content: [{ type: "text", text: "private detail" }], isError: true } });
-
-const dirs: string[] = [];
-const originalFetch = globalThis.fetch;
-const originalArgv = process.argv;
-
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-  process.argv = originalArgv;
-  while (dirs.length) rmSync(dirs.pop() as string, { recursive: true, force: true });
-});
-
-function newStateFile(state?: Record<string, unknown>): string {
-  const dir = mkdtempSync(join(tmpdir(), "delivery-cooldown-"));
-  dirs.push(dir);
-  const file = join(dir, "state.json");
-  if (state) writeFileSync(file, JSON.stringify(state, null, 2));
-  return file;
-}
-
-function readState(file: string): Record<string, unknown> {
-  try {
-    return JSON.parse(readFileSync(file, "utf8"));
-  } catch {
-    return {};
-  }
-}
-
-function readLog(file: string): DeliveryLog | undefined {
-  return readState(file)[OPPORTUNITY_DELIVERY_KEY] as DeliveryLog | undefined;
-}
-
-function fileText(file: string): string | null {
-  try {
-    return readFileSync(file, "utf8");
-  } catch {
-    return null;
-  }
-}
-
-/** Point the scripts at the fake Index (and nothing else) while `run` runs. */
-async function withIndex<T>(listOpportunities: ToolHandler, run: () => Promise<T>): Promise<T> {
-  const saved = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
-  delete process.env.EDGEOS_API_KEY;
-  delete process.env.EDGE_AGENT_CONTROL_PLANE_URL;
-  delete process.env.ADMIN_TOKEN;
-  process.env.INDEX_API_KEY = "test-key";
-  process.env.INDEX_MCP_URL = FAKE_MCP_URL;
-  const fake = indexMcpFake({ tools: { list_opportunities: listOpportunities } });
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    if (url.includes("open-meteo")) return new Response("unavailable", { status: 503 });
-    return fake.fetch(input, init);
-  }) as typeof fetch;
-  try {
-    return await run();
-  } finally {
-    globalThis.fetch = originalFetch;
-    for (const [key, value] of Object.entries(saved)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  }
-}
-
-function idFromUrl(url: unknown): string {
-  return typeof url === "string" ? url.split("/o/")[1] ?? "" : "";
-}
-
-function briefIds(context: DailyBriefContext): string[] {
-  return context.opportunities.map((opp) => opp.opportunityId ?? "");
-}
-
-async function prepare(date: string, file: string, handler: ToolHandler): Promise<DailyBriefContext> {
-  return withIndex(handler, () => buildDailyBriefContext({ date, stateFile: file, userFiles: [] }));
-}
-
-/** Prepare the brief, stage every card it offers (as the prompt's markers would), and send it. */
-async function briefAndSend(date: string, file: string, handler: ToolHandler): Promise<string[]> {
-  const context = await prepare(date, file, handler);
-  const ids = briefIds(context);
-  const state = readState(file);
-  state.prepared = { date, taskId: "t_digest", opportunityIds: ids };
-  writeFileSync(file, JSON.stringify(state, null, 2));
-  const result = await sendDailyBrief({
-    date,
-    stateFile: file,
-    outgoingFile: join(file, "..", "outgoing.md"),
-    hermes: (args) => {
-      if (args[1] === "show") return JSON.stringify({ task: { id: "t_digest", status: "ready", body: "brief" } });
-      if (args[1] === "complete") return "completed";
-      throw new Error(`unexpected hermes call: ${args.join(" ")}`);
-    },
-  });
-  if ("silent" in result) throw new Error(`send was silent: ${result.reason}`);
-  return ids;
-}
-
-async function drop(date: string, file: string, handler: ToolHandler): Promise<string[]> {
-  const result = await withIndex(handler, () => dropOpportunity({ date, stateFile: file, apiKey: "test-key", mcpUrl: FAKE_MCP_URL }));
-  return "silent" in result ? [] : [result.opportunity.opportunityId ?? ""];
-}
-
-async function evening(date: string, file: string, handler: ToolHandler): Promise<string[]> {
-  const result = await withIndex(handler, () => askQuestions({ date, stateFile: file, apiKey: "test-key" }));
-  return "name" in result ? [idFromUrl(result.opportunityUrl)] : [];
-}
-
-async function followUpRaw(date: string, file: string, handler: ToolHandler): Promise<string> {
-  process.argv = [...originalArgv.slice(0, 2), "--state-file", file, "--date", date];
-  let out = "";
-  const write = { out: process.stdout.write, err: process.stderr.write };
-  process.stdout.write = ((chunk: string) => {
-    out += chunk;
-    return true;
-  }) as typeof process.stdout.write;
-  process.stderr.write = (() => true) as typeof process.stderr.write;
-  try {
-    await withIndex(handler, () => followUpMain());
-  } finally {
-    process.stdout.write = write.out;
-    process.stderr.write = write.err;
-  }
-  return out;
-}
-
-async function followUp(date: string, file: string, handler: ToolHandler): Promise<string[]> {
-  const out = await followUpRaw(date, file, handler);
-  if (out === "[SILENT]") return [];
-  return JSON.parse(out).needsAttention.map((card: { opportunityUrl?: string }) => idFromUrl(card.opportunityUrl));
-}
-
-type Path = (date: string, file: string, handler: ToolHandler) => Promise<string[]>;
-const PATHS: Array<[string, Path]> = [
+/** The paths that may give a card its first showing. */
+const FIRST_SHOWING_PATHS: Array<[string, Path]> = [
   ["morning brief (prepare + send)", briefAndSend],
   ["opportunity drop", drop],
   ["evening card", evening],
-  ["follow-up waiting-on-you list", followUp],
 ];
 
-/** The brief reads Index at prepare; its send makes no Index call. */
-async function prepareIds(date: string, file: string, handler: ToolHandler): Promise<string[]> {
-  return briefIds(await prepare(date, file, handler));
-}
-
-describe.each(PATHS)("%s", (_label, deliver) => {
+describe.each(FIRST_SHOWING_PATHS)("%s", (_label, deliver) => {
   const read = deliver === briefAndSend ? prepareIds : deliver;
 
   test("shown day 0; not days 1 and 2; again day 3; third time day 6; never a fourth", async () => {
@@ -212,12 +69,11 @@ describe.each(PATHS)("%s", (_label, deliver) => {
     expect(await deliver(addDays(DAY0, 1), file, list(row("Jon", 2)))).toEqual([JON]);
     expect(Object.keys(readLog(file) ?? {})).toEqual([JON]);
     expect(await deliver(addDays(DAY0, 2), file, list(row("Maya", 1), row("Jon", 2)))).toEqual([MAYA]);
-    expect(readLog(file)?.[MAYA]).toEqual({ firstShown: addDays(DAY0, 2), lastShown: addDays(DAY0, 2), count: 1 });
+    expect(readLog(file)?.[MAYA]).toEqual(shown(addDays(DAY0, 2)));
   });
 
   test("a failed Index read changes nothing and does not reset or advance the cooldown", async () => {
-    const shown = { firstShown: DAY0, lastShown: DAY0, count: 1 };
-    const file = newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: { [MAYA]: shown, [JON]: shown }, dreaming: { lastRunDate: DAY0 } });
+    const file = newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: { [MAYA]: shown(DAY0), [JON]: shown(DAY0) }, dreaming: { lastRunDate: DAY0 } });
     const before = fileText(file);
     for (const day of [1, 3]) {
       expect(await read(addDays(DAY0, day), file, failing).catch(() => [])).toEqual([]);
@@ -234,6 +90,113 @@ describe.each(PATHS)("%s", (_label, deliver) => {
     for (const day of [1, 3, 6, 9]) expect(await deliver(addDays(DAY0, day), file, rows)).not.toContain(MAYA);
     expect(Object.keys(readLog(file) ?? {})).toEqual([JON]);
   });
+
+  test("the same-day dedupe applies on its own: a card delivered today stays out even with an empty log", async () => {
+    const file = newStateFile({ deliveredToday: { date: DAY0, ids: [MAYA] }, [OPPORTUNITY_DELIVERY_KEY]: {} });
+    expect(await deliver(DAY0, file, list(row("Maya", 1), row("Jon", 2)))).toEqual([JON]);
+    expect(readLog(file)?.[MAYA]).toBeUndefined();
+  });
+});
+
+describe("the follow-up's waiting-on-you list: re-showings only", () => {
+  test("never a card's first showing; re-shown day 3 and day 6 after a day-0 drop; never a fourth", async () => {
+    const file = newStateFile();
+    const maya = list(row("Maya", 1));
+    expect(await followUp(DAY0, file, maya)).toEqual([]);
+    expect(readLog(file)).toBeUndefined();
+    expect(await drop(DAY0, file, maya)).toEqual([MAYA]);
+    const shownOn: number[] = [];
+    for (const day of [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 20]) {
+      if ((await followUp(addDays(DAY0, day), file, maya)).includes(MAYA)) shownOn.push(day);
+    }
+    expect(shownOn).toEqual([3, 6]);
+    expect(readLog(file)?.[MAYA]).toEqual({ firstShown: DAY0, lastShown: addDays(DAY0, 6), count: 3 });
+  });
+
+  test("a card it lists joins today's deliveredToday, so the drop and the evening card skip it", async () => {
+    const file = newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: { [MAYA]: shown(addDays(DAY0, -3)) }, deliveredToday: { date: DAY0, ids: [JON] } });
+    const both = list(row("Maya", 1), row("Jon", 2));
+    expect(await followUp(DAY0, file, both)).toEqual([MAYA]);
+    expect(readState(file).deliveredToday).toEqual({ date: DAY0, ids: [JON, MAYA] });
+    expect(await drop(DAY0, file, both)).toEqual([]);
+    expect(await evening(DAY0, file, both)).toEqual([]);
+  });
+
+  test("the same-day dedupe applies on its own: an eligible re-showing delivered today is not listed", async () => {
+    const file = newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: { [MAYA]: shown(addDays(DAY0, -3)) }, deliveredToday: { date: DAY0, ids: [MAYA] } });
+    expect(await followUpRaw(DAY0, file, list(row("Maya", 1)))).toBe("[SILENT]");
+    expect(readLog(file)?.[MAYA]).toEqual(shown(addDays(DAY0, -3)));
+  });
+
+  test("at most three, oldest last showing first; the rest stay eligible for the evening card", async () => {
+    const log = Object.fromEntries([1, 2, 3, 4, 5].map((n) => [oppId(n), shown(addDays(DAY0, -3 - n))]));
+    const file = newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: log });
+    const rows = list(...[1, 2, 3, 4, 5, 6].map((n) => row(`P${n}`, n)));
+    expect(await followUp(DAY0, file, rows)).toEqual([oppId(5), oppId(4), oppId(3)]);
+    expect(readLog(file)?.[oppId(2)]).toEqual(log[oppId(2)]);
+    // The evening card takes the never-shown card first, the next day's drop the next re-showing.
+    expect(await evening(DAY0, file, rows)).toEqual([oppId(6)]);
+    expect(await drop(addDays(DAY0, 1), file, rows)).toEqual([oppId(2)]);
+  });
+
+  test("a card that leaves the pending list is forgotten and comes back as new, for the other paths", async () => {
+    const file = newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: { [MAYA]: shown(DAY0), [JON]: shown(DAY0) } });
+    expect(await followUp(addDays(DAY0, 3), file, list(row("Jon", 2)))).toEqual([JON]);
+    expect(Object.keys(readLog(file) ?? {})).toEqual([JON]);
+    expect(await followUp(addDays(DAY0, 4), file, list(row("Maya", 1), row("Jon", 2)))).toEqual([]);
+    expect(await drop(addDays(DAY0, 4), file, list(row("Maya", 1), row("Jon", 2)))).toEqual([MAYA]);
+  });
+
+  test("a failed Index read changes nothing", async () => {
+    const file = newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: { [MAYA]: shown(DAY0) } });
+    const before = fileText(file);
+    expect(await followUpRaw(addDays(DAY0, 3), file, failing)).toBe("[SILENT]");
+    expect(fileText(file)).toBe(before);
+    expect(await followUp(addDays(DAY0, 3), file, list(row("Maya", 1)))).toEqual([MAYA]);
+  });
+
+  test("a pending card marked negotiating is listed with the agents talking, never as waiting on you", async () => {
+    const file = newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: { [MAYA]: shown(addDays(DAY0, -3)), [JON]: shown(addDays(DAY0, -3)) } });
+    const out = await followUpRaw(DAY0, file, list(row("Maya", 1, { negotiating: true }), row("Jon", 2), row("Ana", 3, { status: "negotiating" })));
+    const parsed = JSON.parse(out);
+    expect(parsed.needsAttention.map((c: { name: string }) => c.name)).toEqual(["Jon"]);
+    expect(parsed.waiting.map((c: { name: string }) => c.name)).toEqual(["Maya", "Ana"]);
+    expect(Object.keys(parsed.waiting[0]).sort()).toEqual(["headline", "name", "opportunityUrl", "summary", "userUrl"]);
+    expect(readLog(file)?.[MAYA]).toEqual(shown(addDays(DAY0, -3)));
+  });
+
+  test("only negotiating cards pending: silent, as when only agents are talking", async () => {
+    const file = newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: { [MAYA]: shown(addDays(DAY0, -3)) } });
+    expect(await followUpRaw(DAY0, file, list(row("Maya", 1, { negotiating: true })))).toBe("[SILENT]");
+  });
+
+  test("an accepted card is still reported while every pending card cools down", async () => {
+    const file = newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: { [MAYA]: shown(DAY0) } });
+    const parsed = JSON.parse(await followUpRaw(addDays(DAY0, 1), file, list(row("Maya", 1), row("Ana", 3, { status: "accepted" }))));
+    expect(parsed.needsAttention).toEqual([]);
+    expect(parsed.newlyResolved.map((c: { name: string }) => c.name)).toEqual(["Ana"]);
+    expect(readLog(file)?.[MAYA]?.count).toBe(1);
+    expect(readState(file).deliveredToday).toBeUndefined();
+  });
+
+  test("an accepted or negotiating-status row is not pending: its entry goes on a complete read", async () => {
+    const file = newStateFile({
+      [OPPORTUNITY_DELIVERY_KEY]: { [MAYA]: shown(DAY0), [JON]: shown(DAY0), [oppId(3)]: shown(DAY0) },
+    });
+    await followUpRaw(
+      addDays(DAY0, 1),
+      file,
+      list(row("Maya", 1), row("Jon", 2, { status: "negotiating" }), row("Ana", 3, { status: "accepted" })),
+    );
+    expect(Object.keys(readLog(file) ?? {})).toEqual([MAYA]);
+  });
+
+  test("a full page (50 rows, no pagination object) may be cut short, so absent cards are kept", async () => {
+    const rows = Array.from({ length: 50 }, (_, i) => row(`P${i}`, 100 + i));
+    const file = newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: { [MAYA]: shown(DAY0, 3), [oppId(100)]: shown(DAY0) } });
+    expect(await followUp(addDays(DAY0, 3), file, list(...rows))).toEqual([oppId(100)]);
+    expect(readLog(file)?.[MAYA]).toEqual(shown(DAY0, 3));
+  });
 });
 
 describe("cross-path", () => {
@@ -246,16 +209,20 @@ describe("cross-path", () => {
     expect(await drop(addDays(DAY0, 1), file, maya)).toEqual([]);
     expect(await evening(addDays(DAY0, 2), file, maya)).toEqual([]);
     expect(await drop(addDays(DAY0, 3), file, maya)).toEqual([MAYA]);
+    expect(await followUp(addDays(DAY0, 3), file, maya)).toEqual([]);
     expect(await evening(addDays(DAY0, 3), file, maya)).toEqual([]);
     expect(readLog(file)?.[MAYA]).toEqual({ firstShown: DAY0, lastShown: addDays(DAY0, 3), count: 2 });
   });
 
-  test("the follow-up's listing counts as a showing for the drops and the evening card", async () => {
+  test("the follow-up's re-showing counts for the drops and the evening card", async () => {
     const file = newStateFile();
     const maya = list(row("Maya", 1));
-    expect(await followUp(DAY0, file, maya)).toEqual([MAYA]);
-    expect(await evening(DAY0, file, maya)).toEqual([]);
-    expect(await drop(addDays(DAY0, 2), file, maya)).toEqual([]);
+    expect(await drop(DAY0, file, maya)).toEqual([MAYA]);
+    expect(await followUp(addDays(DAY0, 3), file, maya)).toEqual([MAYA]);
+    expect(await evening(addDays(DAY0, 3), file, maya)).toEqual([]);
+    expect(await drop(addDays(DAY0, 5), file, maya)).toEqual([]);
+    expect(await drop(addDays(DAY0, 6), file, maya)).toEqual([MAYA]);
+    expect(await evening(addDays(DAY0, 9), file, maya)).toEqual([]);
   });
 
   test("only the send records the brief's cards: a prepare alone shows nothing", async () => {
@@ -276,11 +243,44 @@ describe("cross-path", () => {
   });
 });
 
+describe("a card that goes pending, then negotiating, then pending again", () => {
+  test("status negotiating: absent from a complete pending read, so forgotten; pending again it is new", async () => {
+    const file = newStateFile();
+    const pending = pagedOpportunities([row("Maya", 1)]);
+    const negotiating = pagedOpportunities([row("Maya", 1, { status: "negotiating" })]);
+    expect(await drop(DAY0, file, pending)).toEqual([MAYA]);
+    expect(await drop(addDays(DAY0, 1), file, negotiating)).toEqual([]);
+    expect(readLog(file)?.[MAYA]).toBeUndefined();
+    expect(await drop(addDays(DAY0, 2), file, pending)).toEqual([MAYA]);
+    expect(readLog(file)?.[MAYA]).toEqual(shown(addDays(DAY0, 2)));
+  });
+
+  test("status negotiating seen by the follow-up's read is forgotten the same way", async () => {
+    const file = newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: { [MAYA]: shown(DAY0) } });
+    expect(await followUp(addDays(DAY0, 1), file, pagedOpportunities([row("Maya", 1, { status: "negotiating" })]))).toEqual([]);
+    expect(readLog(file)?.[MAYA]).toBeUndefined();
+  });
+
+  test("the negotiating flag: still pending, so the entry and its clock are kept; never offered while flagged", async () => {
+    const file = newStateFile();
+    const plain = pagedOpportunities([row("Maya", 1)]);
+    const flagged = pagedOpportunities([row("Maya", 1, { negotiating: true })]);
+    expect(await drop(DAY0, file, plain)).toEqual([MAYA]);
+    for (const day of [1, 2, 3, 4]) {
+      expect(await drop(addDays(DAY0, day), file, flagged)).toEqual([]);
+      expect(await followUp(addDays(DAY0, day), file, flagged)).toEqual([]);
+    }
+    expect(readLog(file)?.[MAYA]).toEqual(shown(DAY0));
+    expect(await drop(addDays(DAY0, 5), file, plain)).toEqual([MAYA]);
+    expect(readLog(file)?.[MAYA]).toEqual({ firstShown: DAY0, lastShown: addDays(DAY0, 5), count: 2 });
+  });
+});
+
 describe("ordering", () => {
   const log = {
-    [oppId(1)]: { firstShown: addDays(DAY0, -6), lastShown: addDays(DAY0, -6), count: 1 },
+    [oppId(1)]: shown(addDays(DAY0, -6)),
     [oppId(3)]: { firstShown: addDays(DAY0, -9), lastShown: addDays(DAY0, -4), count: 2 },
-    [oppId(5)]: { firstShown: addDays(DAY0, -1), lastShown: addDays(DAY0, -1), count: 1 },
+    [oppId(5)]: shown(addDays(DAY0, -1)),
   };
   // Index's order: C(3), A(1), B(2), E(5, cooling), D(4)
   const rows = list(row("C", 3), row("A", 1), row("B", 2), row("E", 5), row("D", 4));
@@ -289,24 +289,23 @@ describe("ordering", () => {
     const context = await prepare(DAY0, newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: log }), rows);
     expect(context.connectionOpportunities.map((opp) => opp.name)).toEqual(["B", "D", "A"]);
     expect(context.connectionsStillWaiting).toBe(1);
+    expect(context.moreWaitingThanListed).toBe(false);
   });
 
-  test("drop and evening card pick the first never-shown card", async () => {
+  test("drop and evening card pick the first never-shown card; the follow-up only the re-showings", async () => {
     expect(await drop(DAY0, newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: log }), rows)).toEqual([oppId(2)]);
     expect(await evening(DAY0, newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: log }), rows)).toEqual([oppId(2)]);
+    expect(await followUp(DAY0, newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: log }), rows)).toEqual([oppId(1), oppId(3)]);
   });
 
   test("with nothing new, the re-showing whose last showing is oldest goes first", async () => {
     const onlyShown = list(row("C", 3), row("A", 1));
     expect(await drop(DAY0, newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: log }), onlyShown)).toEqual([oppId(1)]);
     expect(await evening(DAY0, newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: log }), onlyShown)).toEqual([oppId(1)]);
-    expect(await followUp(DAY0, newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: log }), onlyShown)).toEqual([oppId(1), oppId(3)]);
   });
 });
 
 describe("pruning on reads", () => {
-  const shown = (date: string, count = 1) => ({ firstShown: date, lastShown: date, count });
-
   test("the brief's prepare drops entries for cards no longer pending, and touches nothing else", async () => {
     const file = newStateFile({
       [OPPORTUNITY_DELIVERY_KEY]: { [MAYA]: shown(DAY0), [JON]: shown(DAY0) },
@@ -329,20 +328,34 @@ describe("pruning on reads", () => {
     }
   });
 
-  test("a full page (20 rows) may be cut short, so absent cards are kept", async () => {
-    const rows = Array.from({ length: 20 }, (_, i) => row(`P${i}`, 100 + i));
-    for (const path of [drop, evening]) {
+  test("a full page (50 rows, no pagination object) may be cut short, so absent cards are kept", async () => {
+    const rows = Array.from({ length: 50 }, (_, i) => row(`P${i}`, 100 + i));
+    for (const path of [drop, evening, prepareIds]) {
       const file = newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: { [MAYA]: shown(DAY0, 3) } });
-      expect(await path(addDays(DAY0, 1), file, list(...rows))).toEqual([oppId(100)]);
+      expect((await path(addDays(DAY0, 1), file, list(...rows)))[0]).toBe(oppId(100));
       expect(readLog(file)?.[MAYA]).toEqual(shown(DAY0, 3));
     }
   });
 
-  test("pagination reporting more rows than came back keeps absent cards", async () => {
+  test("49 rows is a complete read: absent cards go", async () => {
+    const rows = Array.from({ length: 49 }, (_, i) => row(`P${i}`, 100 + i));
     const file = newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: { [MAYA]: shown(DAY0, 3) } });
-    const text = `Waiting on you:\n\n${JSON.stringify({ success: true, opportunities: [row("Jon", 2)], pagination: { page: 1, limit: 20, total: 25 } })}`;
-    expect(await drop(addDays(DAY0, 1), file, () => text)).toEqual([JON]);
-    expect(readLog(file)?.[MAYA]).toEqual(shown(DAY0, 3));
+    expect(await drop(addDays(DAY0, 1), file, list(...rows))).toEqual([oppId(100)]);
+    expect(readLog(file)?.[MAYA]).toBeUndefined();
+  });
+
+  test("pagination contradicting the row count keeps absent cards; agreeing with it does not", async () => {
+    const page = (pagination: unknown): ToolHandler => () =>
+      `Waiting on you:\n\n${JSON.stringify({ success: true, opportunities: [row("Jon", 2)], pagination })}`;
+    for (const [pagination, kept] of [
+      [{ limit: 50, offset: 0, count: 25 }, true],
+      [{ limit: 20, offset: 0, count: 1 }, true],
+      [{ limit: 50, offset: 0, count: 1 }, false],
+    ] as const) {
+      const file = newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: { [MAYA]: shown(DAY0, 3) } });
+      expect(await drop(addDays(DAY0, 1), file, page(pagination))).toEqual([JON]);
+      expect(readLog(file)?.[MAYA] !== undefined).toBe(kept);
+    }
   });
 
   test("an entry 60 days old is forgotten, so its card is new again", async () => {
@@ -350,6 +363,59 @@ describe("pruning on reads", () => {
     expect(await drop(addDays(DAY0, 59), file, list(row("Maya", 1)))).toEqual([]);
     expect(await drop(addDays(DAY0, 60), file, list(row("Maya", 1)))).toEqual([MAYA]);
     expect(readLog(file)?.[MAYA]?.count).toBe(1);
+  });
+
+  test("an entry dated more than a day ahead is dropped on read, so it cannot block a card forever", async () => {
+    const file = newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: { [MAYA]: shown(addDays(DAY0, 30), 3), [JON]: shown(addDays(DAY0, 1)) } });
+    expect(await drop(DAY0, file, list(row("Maya", 1), row("Jon", 2)))).toEqual([MAYA]);
+    expect(readLog(file)).toEqual({ [MAYA]: shown(DAY0), [JON]: shown(addDays(DAY0, 1)) });
+  });
+});
+
+describe("every path lists 50, and the brief tells a cut-short list apart (60 old cards and one new)", () => {
+  const OLD = Array.from({ length: 60 }, (_, i) => row(`Old${i}`, 100 + i));
+  const NEW = row("New", 1);
+  const oldLog = Object.fromEntries(OLD.map((r) => [r.id as string, shown(addDays(DAY0, -1))]));
+
+  test("the new card beyond the page: no cards, no count, and the brief says more are waiting", async () => {
+    const file = newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: oldLog });
+    const context = await prepare(DAY0, file, pagedOpportunities([...OLD, NEW]));
+    expect(context.connectionOpportunities).toEqual([]);
+    expect(context.connectionsStillWaiting).toBe(0);
+    expect(context.moreWaitingThanListed).toBe(true);
+    expect(Object.keys(readLog(file) ?? {})).toHaveLength(60);
+  });
+
+  test("the new card inside the page reaches every first-showing path; the brief still says the list was cut short", async () => {
+    const context = await prepare(DAY0, newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: oldLog }), pagedOpportunities([NEW, ...OLD]));
+    expect(briefIds(context)).toEqual([MAYA]);
+    expect(context.moreWaitingThanListed).toBe(true);
+    expect(context.connectionsStillWaiting).toBe(0);
+    expect(await drop(DAY0, newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: oldLog }), pagedOpportunities([NEW, ...OLD]))).toEqual([MAYA]);
+    expect(await evening(DAY0, newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: oldLog }), pagedOpportunities([NEW, ...OLD]))).toEqual([MAYA]);
+  });
+
+  test("every path asks Index for 50", async () => {
+    const limits: unknown[] = [];
+    const handler = pagedOpportunities([NEW]);
+    const spy: ToolHandler = (args, request) => {
+      limits.push(args.limit);
+      return handler(args, request);
+    };
+    await prepare(DAY0, newStateFile(), spy);
+    await drop(DAY0, newStateFile(), spy);
+    await evening(DAY0, newStateFile(), spy);
+    await followUp(DAY0, newStateFile(), spy);
+    expect(limits).toEqual([50, 50, 50, 50]);
+  });
+
+  test("a complete list: the count, and no cut-short flag", async () => {
+    const ten = OLD.slice(0, 10);
+    const file = newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: Object.fromEntries(ten.map((r) => [r.id as string, shown(addDays(DAY0, -1))])) });
+    const context = await prepare(DAY0, file, pagedOpportunities(ten));
+    expect(context.connectionOpportunities).toEqual([]);
+    expect(context.connectionsStillWaiting).toBe(10);
+    expect(context.moreWaitingThanListed).toBe(false);
   });
 });
 
@@ -365,24 +431,31 @@ describe("state files", () => {
   };
   const both = list(row("Maya", 1), row("Jon", 2));
 
+  function expectSiblings(file: string): void {
+    const state = readState(file);
+    for (const [key, value] of Object.entries(OLD)) {
+      if (key !== "deliveredToday") expect(state[key]).toEqual(value);
+    }
+  }
+
   test("a file from before the log: today's card is not sent again on any path, and siblings survive", async () => {
-    for (const path of [drop, evening, followUp]) {
+    for (const path of [drop, evening]) {
       const file = newStateFile(OLD);
       expect(await path(DAY0, file, both)).toEqual([JON]);
-      const state = readState(file);
-      for (const [key, value] of Object.entries(OLD)) {
-        if (key !== "deliveredToday") expect(state[key]).toEqual(value);
-      }
-      expect(readLog(file)?.[MAYA]).toEqual({ firstShown: DAY0, lastShown: DAY0, count: 1 });
+      expectSiblings(file);
+      expect(readLog(file)?.[MAYA]).toEqual(shown(DAY0));
     }
-    const context = await prepare(DAY0, newStateFile(OLD), both);
-    expect(briefIds(context)).toEqual([JON]);
+    const file = newStateFile(OLD);
+    expect(await followUp(DAY0, file, both)).toEqual([]);
+    expectSiblings(file);
+    expect(readState(file).deliveredToday).toEqual(OLD.deliveredToday);
+    expect(briefIds(await prepare(DAY0, newStateFile(OLD), both))).toEqual([JON]);
   });
 
-  test("a file from before the log: the card the old version sent waits out its cooldown", async () => {
+  test("a file from before the log: the card the old version sent waits out its cooldown, then the follow-up may re-show it", async () => {
     const file = newStateFile(OLD);
     expect(await drop(addDays(DAY0, 1), file, list(row("Maya", 1)))).toEqual([]);
-    expect(await drop(addDays(DAY0, 3), file, list(row("Maya", 1)))).toEqual([MAYA]);
+    expect(await followUp(addDays(DAY0, 3), file, list(row("Maya", 1)))).toEqual([MAYA]);
     expect(readState(file).pendingDeliveryConfirms).toEqual([MAYA]);
   });
 
@@ -401,30 +474,28 @@ describe("state files", () => {
     expect(state.memorySignals).toEqual(OLD.memorySignals);
     expect(state.negotiationSummary).toEqual(OLD.negotiationSummary);
     expect(state.dreaming).toEqual(OLD.dreaming);
-    expect(readLog(file)).toEqual({
-      [MAYA]: { firstShown: DAY0, lastShown: DAY0, count: 1 },
-      [JON]: { firstShown: DAY0, lastShown: DAY0, count: 1 },
-    });
+    expect(readLog(file)).toEqual({ [MAYA]: shown(DAY0), [JON]: shown(DAY0) });
   });
 
   test("a malformed map resets to empty without touching sibling keys", async () => {
+    const siblings = { questionDelivery: { "q-1": DAY0 }, memorySignals: { cursor: 1 }, deliveredToday: { date: addDays(DAY0, -1), ids: [MAYA] } };
     for (const bad of ["garbage", [MAYA], null, { [MAYA]: { count: "x" } }]) {
-      for (const path of [drop, evening, followUp, briefAndSend]) {
-        const siblings = { questionDelivery: { "q-1": DAY0 }, memorySignals: { cursor: 1 }, deliveredToday: { date: addDays(DAY0, -1), ids: [MAYA] } };
+      for (const path of [drop, evening, briefAndSend]) {
         const file = newStateFile({ ...siblings, [OPPORTUNITY_DELIVERY_KEY]: bad });
         expect(await path(DAY0, file, list(row("Maya", 1)))).toEqual([MAYA]);
         const state = readState(file);
         expect(state.questionDelivery).toEqual(siblings.questionDelivery);
         expect(state.memorySignals).toEqual(siblings.memorySignals);
-        expect(readLog(file)).toEqual({ [MAYA]: { firstShown: DAY0, lastShown: DAY0, count: 1 } });
+        expect(readLog(file)).toEqual({ [MAYA]: shown(DAY0) });
       }
+      const file = newStateFile({ ...siblings, [OPPORTUNITY_DELIVERY_KEY]: bad });
+      expect(await followUp(DAY0, file, list(row("Maya", 1)))).toEqual([]);
+      expect(readState(file)).toEqual({ ...siblings, [OPPORTUNITY_DELIVERY_KEY]: {} });
     }
   });
 });
 
 describe("the brief when everything pending was already shown", () => {
-  const shown = (date: string, count = 1) => ({ firstShown: date, lastShown: date, count });
-
   test("no cards, a fresh list, and the count of conversations still waiting", async () => {
     const file = newStateFile({
       [OPPORTUNITY_DELIVERY_KEY]: { [MAYA]: shown(addDays(DAY0, -1)), [oppId(3)]: shown(addDays(DAY0, -5), 3) },
@@ -438,6 +509,7 @@ describe("the brief when everything pending was already shown", () => {
     expect(context.diagnostics.dreamingFresh).toBe(true);
     expect(context.connectionOpportunities).toEqual([]);
     expect(context.connectionsStillWaiting).toBe(2);
+    expect(context.moreWaitingThanListed).toBe(false);
     expect(context.communityOpportunities.map((opp) => opp.name)).toEqual(["Jon"]);
   });
 
@@ -445,6 +517,7 @@ describe("the brief when everything pending was already shown", () => {
     const context = await prepare(DAY0, newStateFile(), list());
     expect(context.connectionOpportunities).toEqual([]);
     expect(context.connectionsStillWaiting).toBe(0);
+    expect(context.moreWaitingThanListed).toBe(false);
   });
 
   test("a failed read: zero still waiting, and the brief knows the list did not succeed", async () => {
@@ -452,21 +525,23 @@ describe("the brief when everything pending was already shown", () => {
     const context = await prepare(DAY0, file, failing);
     expect(context.diagnostics.dreamingFresh).toBe(false);
     expect(context.connectionsStillWaiting).toBe(0);
+    expect(context.moreWaitingThanListed).toBe(false);
   });
 
   test("the drop and the evening card stay silent; the Nov 1 closeout still comes", async () => {
     const lastDay = "2026-11-01";
     const cooling = { [OPPORTUNITY_DELIVERY_KEY]: { [MAYA]: shown(addDays(lastDay, -1)) } };
-    expect(await withIndex(list(row("Maya", 1)), () => dropOpportunity({ date: DAY0, stateFile: newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: { [MAYA]: shown(DAY0) } }), apiKey: "k", mcpUrl: FAKE_MCP_URL }))).toEqual({
-      silent: true,
-      reason: "nothing-new",
-    });
-    expect(await withIndex(list(row("Maya", 1)), () => askQuestions({ date: DAY0, stateFile: newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: { [MAYA]: shown(DAY0) } }), apiKey: "k" }))).toEqual({
-      silent: true,
-      reason: "nothing-waiting",
-    });
+    const maya = list(row("Maya", 1));
+    expect(
+      await withIndex(maya, () =>
+        dropOpportunity({ date: DAY0, stateFile: newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: { [MAYA]: shown(DAY0) } }), apiKey: "k", mcpUrl: FAKE_MCP_URL }),
+      ),
+    ).toEqual({ silent: true, reason: "nothing-new" });
+    expect(
+      await withIndex(maya, () => askQuestions({ date: DAY0, stateFile: newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: { [MAYA]: shown(DAY0) } }), apiKey: "k" })),
+    ).toEqual({ silent: true, reason: "nothing-waiting" });
     const file = newStateFile(cooling);
-    const closeout = await withIndex(list(row("Maya", 1)), () => askQuestions({ date: lastDay, stateFile: file, apiKey: "k" }));
+    const closeout = await withIndex(maya, () => askQuestions({ date: lastDay, stateFile: file, apiKey: "k" }));
     expect(closeout).toEqual({
       prompt: "Quick closeout check: did AgentVillage help you meet, message, or better understand anyone this week? Reply with one sentence.",
     });
@@ -474,25 +549,20 @@ describe("the brief when everything pending was already shown", () => {
   });
 });
 
-describe("the follow-up", () => {
-  test("a pending card marked negotiating is listed with the agents talking, never as waiting on you", async () => {
-    const file = newStateFile();
-    const out = await followUpRaw(DAY0, file, list(row("Maya", 1, { negotiating: true }), row("Jon", 2), row("Ana", 3, { status: "negotiating" })));
-    const parsed = JSON.parse(out);
-    expect(parsed.needsAttention.map((c: { name: string }) => c.name)).toEqual(["Jon"]);
-    expect(parsed.waiting.map((c: { name: string }) => c.name)).toEqual(["Maya", "Ana"]);
-    expect(Object.keys(parsed.waiting[0]).sort()).toEqual(["headline", "name", "opportunityUrl", "summary", "userUrl"]);
-  });
-
-  test("only negotiating cards pending: silent, as when only agents are talking", async () => {
-    expect(await followUpRaw(DAY0, newStateFile(), list(row("Maya", 1, { negotiating: true })))).toBe("[SILENT]");
-  });
-
-  test("an accepted card is still reported while every pending card cools down", async () => {
-    const file = newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: { [MAYA]: { firstShown: DAY0, lastShown: DAY0, count: 1 } } });
-    const parsed = JSON.parse(await followUpRaw(addDays(DAY0, 1), file, list(row("Maya", 1), row("Ana", 3, { status: "accepted" }))));
-    expect(parsed.needsAttention).toEqual([]);
-    expect(parsed.newlyResolved.map((c: { name: string }) => c.name)).toEqual(["Ana"]);
-    expect(readLog(file)?.[MAYA]?.count).toBe(1);
-  });
+describe("a slow Index call never writes back a stale state copy", () => {
+  for (const [label, path] of [["evening card", evening], ["drop", drop], ["follow-up", followUp]] as const) {
+    test(label, async () => {
+      const log = { [OPPORTUNITY_DELIVERY_KEY]: { [MAYA]: shown(addDays(DAY0, -3)) } };
+      const file = newStateFile({ memorySignals: { cursor: 1 }, ...log });
+      const slow: ToolHandler = async (args, request) => {
+        // Another script writes while the list call is in flight.
+        await Bun.write(file, JSON.stringify({ memorySignals: { cursor: 2 }, questionDelivery: { "q-9": DAY0 }, ...log }));
+        return list(row("Maya", 1))(args, request);
+      };
+      expect(await path(DAY0, file, slow)).toEqual([MAYA]);
+      const state = readState(file);
+      expect(state.memorySignals).toEqual({ cursor: 2 });
+      expect(state.questionDelivery).toEqual({ "q-9": DAY0 });
+    });
+  }
 });

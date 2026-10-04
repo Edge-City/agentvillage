@@ -27,7 +27,8 @@ afterEach(() => {
 describe("dropOpportunity", () => {
   test("drops the best card not delivered today, records it locally, and makes only the list call", async () => {
     const file = stateFile();
-    await Bun.write(file, JSON.stringify({ deliveredToday: { date: "2026-10-12", ids: [MAYA_OPP] }, dreaming: { lastRunDate: "2026-10-12" } }));
+    // An empty delivery log, so only the same-day dedupe keeps Maya out.
+    await Bun.write(file, JSON.stringify({ deliveredToday: { date: "2026-10-12", ids: [MAYA_OPP] }, dreaming: { lastRunDate: "2026-10-12" }, opportunityDelivery: {} }));
     const fake = indexMcpFake();
     globalThis.fetch = fake.fetch;
 
@@ -48,7 +49,7 @@ describe("dropOpportunity", () => {
 
   test("is silent when everything listed was already delivered today", async () => {
     const file = stateFile();
-    await Bun.write(file, JSON.stringify({ deliveredToday: { date: "2026-10-12", ids: [MAYA_OPP, JON_OPP] } }));
+    await Bun.write(file, JSON.stringify({ deliveredToday: { date: "2026-10-12", ids: [MAYA_OPP, JON_OPP] }, opportunityDelivery: {} }));
     globalThis.fetch = indexMcpFake().fetch;
 
     const result = await dropOpportunity({ date: "2026-10-12", stateFile: file, apiKey: "test-key", mcpUrl: FAKE_MCP_URL });
