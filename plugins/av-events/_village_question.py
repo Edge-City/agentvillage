@@ -27,6 +27,7 @@ Python 3.11, standard library only.
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Callable, Optional
 
@@ -99,7 +100,8 @@ def valid(question: object) -> bool:
         return False
     if not all(o.label is None or (isinstance(o.label, str) and len(o.label) <= MAX_LABEL) for o in options):
         return False
-    if isinstance(question.closes_at, bool) or not isinstance(question.closes_at, (int, float)):
+    if (isinstance(question.closes_at, bool) or not isinstance(question.closes_at, (int, float))
+            or not math.isfinite(question.closes_at)):
         return False
     return question.opens_at is None or (isinstance(question.opens_at, (int, float))
                                          and not isinstance(question.opens_at, bool))

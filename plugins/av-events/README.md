@@ -762,8 +762,15 @@ bidi characters dropped), or a plain statement that no text or label is availabl
 option key; the rationale follows, cleaned again and labelled as the agent's note, and is dropped
 (the prompt still goes) when it fails cleaning or quotes a share this agent still holds. The tool
 refuses such a rationale (`rationale_invalid`, `rationale_quotes_share`: 24 consecutive
-characters of a held share's text, or all of a shorter one of at least 12, case and spacing
-folded; a share already sent no longer has its text here). A vote the resident set autonomous is cast inside the tool call (`authorization:
+characters of a held share's text, or all of a shorter one of at least 12, compared after NFKD
+with format and combining marks dropped, case and spacing folded; a share already sent no longer
+has its text here). A rationale holding any format character (zero-width, joiner, bidi) is refused
+(`rationale_invisible`), blank-rendering fillers are dropped and every kind of whitespace becomes
+one space, and one that repeats any of the prompt's own fixed phrases (taken from the builder's
+constants, punctuation ignored) is refused (`rationale_imitates_prompt`). The summary is at most
+4096 UTF-8 bytes by construction (the agent's note is cut first, then the question's text, never
+the answer line), and a key over 1024 bytes is never proposed (`key_too_long`): approval.md's
+`propose` limits. A question whose close is not a finite number is not a question. A vote the resident set autonomous is cast inside the tool call (`authorization:
 policy`); the poller casts only on a human grant. `action=withdraw` withdraws an unanswered vote;
 a cast vote cannot be withdrawn.
 
@@ -813,6 +820,7 @@ them for research-consenting tenants only, which is why the tools ask ingest fir
 **Codes.** Tool refusals: `disabled`, `approval_not_configured`, `text_required`, `text_too_long`,
 `text_invalid`, `text_no_letter_or_digit`, `text_sanitized`, `scope_invalid`, `expires_invalid`,
 `not_available_no_events`, `not_available_no_consent`, `rationale_quotes_share`,
+`rationale_invisible`, `rationale_imitates_prompt`,
 `too_many_pending`, `digest_id_required`, `digest_unknown`, `share_in_flight`, `revoke_failed`,
 `tenant_unknown`, `question_unavailable`, `question_id_required`, `question_not_open`,
 `question_closed`, `answer_invalid`, `rationale_invalid`, `vote_already_proposed`, `vote_unknown`,

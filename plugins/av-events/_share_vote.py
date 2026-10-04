@@ -199,6 +199,24 @@ MIN_QUOTE = 12
 #: The question's text and an option's label, as the resident's prompt shows them.
 MAX_PROMPT_QUESTION = 300
 MAX_PROMPT_LABEL = 120
+#: approval.md's `propose` limits (the contract Lane B was built against):
+#: the summary at most 4 KiB and the key at most 1 KiB, UTF-8.
+SUMMARY_MAX_BYTES = 4096
+MAX_KEY_BYTES = 1024
+ELLIPSIS = "\u2026"
+
+#: The fixed words the vote prompt is built from. A rationale that contains
+#: any of them (folded, punctuation ignored) is refused: it could pass for the
+#: trusted part of the prompt.
+PROMPT_HEAD = "Weekly village question"
+PROMPT_NO_TEXT = "(no text for this question is available)."
+PROMPT_ANSWER = "Answer to send for you:"
+PROMPT_NO_LABEL = "(no description of this option is available)."
+PROMPT_NOTE = "-- Note written by your agent (not part of the question):"
+PROMPT_PHRASES = (PROMPT_HEAD, PROMPT_NO_TEXT, PROMPT_ANSWER, PROMPT_NO_LABEL, PROMPT_NOTE)
+#: Characters that render blank without being whitespace (Hangul and
+#: halfwidth fillers, the blank Braille pattern): dropped from a rationale.
+BLANK_FILLERS = frozenset("\u115f\u1160\u3164\uffa0\u2800")
 
 MAX_STEPS = 10
 MAX_PER_PASS = 50
@@ -409,7 +427,29 @@ def one_line(text: Any, limit: int) -> Optional[str]:
     line = " ".join(kept.split())
     if not line:
         return None
-    return line if len(line) <= limit else line[: limit - 1].rstrip() + "\u2026"
+    return line if len(line) <= limit else line[: limit - 1].rstrip() + ELLIPSIS
+
+
+def utf8_len(text: str) -> int:
+    return len(text.encode("utf-8"))
+
+
+def fit_bytes(text: str, budget: int) -> str:
+    """`text`, or its longest prefix plus an ellipsis, in at most `budget`
+    UTF-8 bytes (never splitting a character). "" when not even that fits."""
+    if utf8_len(text) <= budget:
+        return text
+    room = budget - utf8_len(ELLIPSIS)
+    if room <= 0:
+        return ""
+    out, used = [], 0
+    for ch in text:
+        n = utf8_len(ch)
+        if used + n > room:
+            break
+        out.append(ch)
+        used += n
+    return "".join(out).rstrip() + ELLIPSIS
 
 
 def summary_for(entry: dict, question: Optional["vq.Question"] = None) -> str:
@@ -425,38 +465,83 @@ def summary_for(entry: dict, question: Optional["vq.Question"] = None) -> str:
     if entry.get("class") == SHARE_CLASS:
         scope = entry.get("scope")
         where = "the village" if scope == "village" else f"the village service {str(scope).split(':', 1)[-1]}"
-        return (f"Share a digest your agent drafted with {where} until {entry.get('expires_at')} "
-                f"(digest {entry.get('digest_id')}).")
+        return fit_bytes(f"Share a digest your agent drafted with {where} until {entry.get('expires_at')} "
+                         f"(digest {entry.get('digest_id')}).", SUMMARY_MAX_BYTES)
     answer = entry.get("answer")
     text = one_line(question.text, MAX_PROMPT_QUESTION) if question is not None else None
     option = question.option(answer) if question is not None and isinstance(answer, str) else None
     label = one_line(option.label, MAX_PROMPT_LABEL) if option is not None else None
-    line = f"Weekly village question {entry.get('question_id')}: "
-    line += f"\u201c{text}\u201d" if text else "(no text for this question is available)."
+    head = f"{PROMPT_HEAD} {entry.get('question_id')}: "
     if label:
-        line += f" Answer to send for you: {label} (option {answer})."
+        answer_line = f" {PROMPT_ANSWER} {label} (option {answer})."
     else:
-        line += f" Answer to send for you: option {answer} (no description of this option is available)."
+        answer_line = f" {PROMPT_ANSWER} option {answer} {PROMPT_NO_LABEL}"
+    # At most 4 KiB by construction: the answer line is kept whole, the
+    # question's text is shortened first if the trusted part alone is too
+    # long, and the agent's note gets only what is left.
+    if text:
+        quoted = "\u201c\u201d"
+        text = fit_bytes(text, SUMMARY_MAX_BYTES - utf8_len(head) - utf8_len(answer_line) - utf8_len(quoted))
+        middle = f"\u201c{text}\u201d" if text else PROMPT_NO_TEXT
+    else:
+        middle = PROMPT_NO_TEXT
+    line = head + middle + answer_line
     rationale, problem = clean_rationale(entry.get("rationale"))
     if rationale and problem is None and not quotes_held_share(rationale):
-        line += f" -- Note written by your agent (not part of the question): {rationale}"
-    return line
+        note = f" {PROMPT_NOTE} "
+        room = SUMMARY_MAX_BYTES - utf8_len(line) - utf8_len(note)
+        kept = fit_bytes(rationale, room) if room > 0 else ""
+        if kept:
+            line += note + kept
+    return fit_bytes(line, SUMMARY_MAX_BYTES)
+
+
+def _words(text: str) -> str:
+    """Folded, with punctuation as spaces: how a rationale is compared with
+    the prompt's own phrases."""
+    return " ".join("".join(ch if ch.isalnum() else " " for ch in _fold(text)).split())
+
+
+_PROMPT_WORDS = tuple(_w for _w in (" ".join("".join(c if c.isalnum() else " " for c in p.casefold()).split())
+                                    for p in PROMPT_PHRASES) if _w)
 
 
 def clean_rationale(value: Any) -> tuple[Optional[str], Optional[str]]:
-    """(the rationale as one bounded line, None) or (None, a code)."""
+    """(the rationale as one bounded line, None) or (None, a code).
+
+    Refused: a format character of any kind (zero-width, bidi, joiners:
+    `rationale_invisible`), and a rationale that repeats any of the prompt's
+    own fixed phrases (`rationale_imitates_prompt`). Blank-rendering fillers
+    are dropped and every kind of whitespace becomes one plain space."""
     if value is None or (isinstance(value, str) and not value.strip()):
         return None, None
     if not isinstance(value, str):
         return None, "rationale_invalid"
-    line = " ".join(value.split())
+    if any(unicodedata.category(ch) == "Cf" for ch in value):
+        return None, "rationale_invisible"
+    kept = "".join(" " if ch.isspace() else ch for ch in value if ch not in BLANK_FILLERS)
+    line = " ".join(kept.split())
+    if not line:
+        return None, None
     if len(line) > MAX_RATIONALE or digest_text_problem(line) is not None or sanitize(line) != line:
         return None, "rationale_invalid"
+    words = _words(line)
+    if any(phrase in words for phrase in _PROMPT_WORDS):
+        return None, "rationale_imitates_prompt"
     return line, None
 
 
 def _fold(text: str) -> str:
-    return " ".join(text.casefold().split())
+    """Compatibility-normalised, format and combining marks dropped, case-folded, spacing
+    collapsed: zero-width or combining characters between the letters do not
+    hide a quotation."""
+    # NFKD: the compatibility mapping NFKC applies (full-width and other
+    # compatibility forms), decomposed, so a combining mark is a separate
+    # character to drop rather than composed into its letter. Both sides of
+    # every comparison are folded the same way.
+    decomposed = unicodedata.normalize("NFKD", text)
+    kept = "".join(ch for ch in decomposed if unicodedata.category(ch) not in ("Cf", "Mn", "Me"))
+    return " ".join(kept.casefold().split())
 
 
 def quotes_held_share(rationale: str) -> bool:
@@ -819,6 +904,9 @@ def _cleared(entry: dict, question: Optional["vq.Question"]) -> tuple[bool, Opti
 def _propose(entry_id: str, entry: dict) -> Optional[Outcome]:
     if not valid_shape(entry_id, entry):
         return _invalid(entry_id, {"unfiled"})
+    if utf8_len(entry["key"]) > MAX_KEY_BYTES:
+        _set(entry_id, {"unfiled"}, "invalid", code="key_too_long")
+        return Outcome("invalid", code="key_too_long")
     problem = _content_problem(entry)
     if problem is not None:
         # Bytes the door would refuse never reach the resident's prompt.
@@ -1317,6 +1405,14 @@ REFUSALS: dict[str, str] = {
         "Nothing was proposed: the resident is not in the Agent Village research, and shares and votes reach "
         "the village only for residents who are. They can change that on the Research participation panel "
         "on the Agent Village landing page."
+    ),
+    "rationale_invisible": (
+        "Nothing was proposed: the rationale holds an invisible or direction-changing character. Write it as "
+        "plain text."
+    ),
+    "rationale_imitates_prompt": (
+        "Nothing was proposed: the rationale repeats the wording of the approval prompt itself. Say why in "
+        "your own words."
     ),
     "rationale_quotes_share": (
         "Nothing was proposed: the rationale repeats a digest the resident has not approved sharing. "
