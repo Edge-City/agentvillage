@@ -25,6 +25,11 @@
  * already uses for `deliveredToday`. The per-day `deliveredToday` dedupe is
  * unchanged and is applied by each caller before this rule.
  *
+ * A run dated before the real village day (a manual rerun with `--date`) is
+ * read-only for delivery state: it never writes this log or `deliveredToday`
+ * (isBackDated), and it measures "future" entries against the real day, so it
+ * cannot delete live entries.
+ *
  * Known limit: a showing is recorded when the card is handed to the agent for
  * delivery (the drop, the evening card and the follow-up before they print
  * it, the brief's send before the agent replies), not when the message is
@@ -47,6 +52,18 @@ export const MAX_SHOWINGS = 3;
 export const MAX_ENTRY_AGE_DAYS = 60;
 /** An entry last shown more than this many days after today is malformed. */
 export const MAX_FUTURE_DAYS = 1;
+
+/** The clock behind the real village day; tests pin it. */
+export const deliveryClock = { now: (): Date => new Date() };
+
+/**
+ * Whether a run dated `date` is back-dated against the real village day
+ * `realToday` (both YYYY-MM-DD). A back-dated run must not write delivery
+ * state.
+ */
+export function isBackDated(date: string, realToday: string): boolean {
+  return date < realToday;
+}
 /** The log never holds more entries than this. */
 export const MAX_ENTRIES = 200;
 /** The state-file key that holds the log. */
@@ -117,15 +134,18 @@ export function showingsFor(log: DeliveryLog, id: string): CardShowings | undefi
 /**
  * The log in a parsed state file, as read on `today`. A map that is not an
  * object reads as empty, and an entry that is not a valid record is dropped
- * alone; so is an entry last shown more than MAX_FUTURE_DAYS after today,
- * which would otherwise never age out. A state file from before this log
+ * alone; so is an entry last shown more than MAX_FUTURE_DAYS after the later
+ * of `today` and the real village day `realToday` (a back-dated run must not
+ * take live entries for future ones), which would otherwise never age out. A state file from before this log
  * existed (no key at all) is read from its `deliveredToday` set: each id
  * there counts as shown once, on that set's date, so a card the previous
  * version sent is not offered as new.
  */
-export function readDeliveryLog(state: Record<string, unknown>, today: string): DeliveryLog {
-  const now = dayNumber(today);
-  if (now === null) throw new Error(`expected YYYY-MM-DD date, got ${today}`);
+export function readDeliveryLog(state: Record<string, unknown>, today: string, realToday: string = today): DeliveryLog {
+  const given = dayNumber(today);
+  const real = dayNumber(realToday);
+  if (given === null || real === null) throw new Error(`expected YYYY-MM-DD dates, got ${today} and ${realToday}`);
+  const now = Math.max(given, real);
   const tooFar = (date: string) => (dayNumber(date) as number) - now > MAX_FUTURE_DAYS;
   const raw = state[OPPORTUNITY_DELIVERY_KEY];
   if (raw === undefined) {
@@ -259,13 +279,19 @@ export function deliveryLogChanged(state: Record<string, unknown>, log: Delivery
   return JSON.stringify(raw) !== JSON.stringify(log);
 }
 
+/** A finite, non-negative integer, from a number or a string of digits; else undefined. */
+function strictCount(value: unknown): number | undefined {
+  if (typeof value === "number") return Number.isInteger(value) && value >= 0 ? value : undefined;
+  if (typeof value === "string" && /^\d{1,9}$/.test(value.trim())) return Number(value.trim());
+  return undefined;
+}
+
 /**
  * The listing one successful `list_opportunities` read describes. It is
  * complete only when fewer rows came back than were asked for and the
- * pagination object `{limit, offset, count}`, when present, does not
- * contradict that: a `count` above the rows returned, or a `limit` below the
- * one asked for, means more may exist. Without a pagination object the row
- * count alone decides.
+ * pagination object's `limit`, when present, is not below the one asked for.
+ * What `count` counts is not verified, so it decides nothing. A pagination
+ * number that does not parse strictly counts as absent.
  */
 export function pendingListing(options: {
   pendingIds: Iterable<string>;
@@ -273,13 +299,10 @@ export function pendingListing(options: {
   requestedLimit: number;
   pagination?: unknown;
 }): PendingListing {
-  const pagination = asRecord(options.pagination);
-  const count = pagination?.count;
-  const limit = pagination?.limit;
-  const contradicted =
-    (typeof count === "number" && count > options.rowCount) || (typeof limit === "number" && limit < options.requestedLimit);
+  const limit = strictCount(asRecord(options.pagination)?.limit);
+  const clamped = limit !== undefined && limit < options.requestedLimit;
   return {
-    complete: options.rowCount < options.requestedLimit && !contradicted,
+    complete: options.rowCount < options.requestedLimit && !clamped,
     pendingIds: new Set(options.pendingIds),
   };
 }

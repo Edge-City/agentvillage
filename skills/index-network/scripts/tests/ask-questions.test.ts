@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { askQuestions } from "../ask-questions";
 import { FAKE_MCP_URL, indexMcpFake, listOpportunitiesText } from "./index-mcp-fake";
 import { failureInputs } from "./index-failure-inputs";
+import { pinDeliveryClock } from "./pin-clock";
+
+pinDeliveryClock();
 
 const originalCwd = process.cwd();
 const originalFetch = globalThis.fetch;

@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { sendDailyBrief } from "../send-daily-brief";
+import { pinDeliveryClock } from "./pin-clock";
+
+pinDeliveryClock();
 
 const originalCwd = process.cwd();
 const originalHermesHome = process.env.HERMES_HOME;

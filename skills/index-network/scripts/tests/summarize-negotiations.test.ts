@@ -11,6 +11,9 @@ import {
 } from "../summarize-negotiations";
 import { FAKE_MCP_URL, type ToolHandler, indexMcpFake, listOpportunitiesText } from "./index-mcp-fake";
 import { failureInputs } from "./index-failure-inputs";
+import { pinDeliveryClock } from "./pin-clock";
+
+pinDeliveryClock();
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 

@@ -8,7 +8,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 
 import { askQuestions } from "../ask-questions";
-import { OPPORTUNITY_DELIVERY_KEY } from "../delivery-state";
+import { MORNING_COMMUNITY_LIMIT } from "../build-daily-brief-context";
+import { OPPORTUNITY_DELIVERY_KEY, deliveryClock, readDeliveryLog } from "../delivery-state";
 import { dropOpportunity } from "../drop-opportunity";
 import { sendDailyBrief } from "../send-daily-brief";
 import { FAKE_MCP_URL, type ToolHandler, pagedOpportunities } from "./index-mcp-fake";
@@ -37,6 +38,9 @@ import {
   row,
   withIndex,
 } from "./delivery-paths";
+import { pinDeliveryClock } from "./pin-clock";
+
+pinDeliveryClock();
 
 afterEach(cleanUp);
 
@@ -344,12 +348,14 @@ describe("pruning on reads", () => {
     expect(readLog(file)?.[MAYA]).toBeUndefined();
   });
 
-  test("pagination contradicting the row count keeps absent cards; agreeing with it does not", async () => {
+  test("a pagination limit below the request (number or digit string) keeps absent cards; count is ignored", async () => {
     const page = (pagination: unknown): ToolHandler => () =>
       `Waiting on you:\n\n${JSON.stringify({ success: true, opportunities: [row("Jon", 2)], pagination })}`;
     for (const [pagination, kept] of [
-      [{ limit: 50, offset: 0, count: 25 }, true],
       [{ limit: 20, offset: 0, count: 1 }, true],
+      [{ limit: "20", offset: "0", count: "1" }, true],
+      [{ limit: 50, offset: 0, count: 25 }, false],
+      [{ limit: "fifty", offset: 0, count: 1 }, false],
       [{ limit: 50, offset: 0, count: 1 }, false],
     ] as const) {
       const file = newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: { [MAYA]: shown(DAY0, 3) } });
@@ -565,4 +571,100 @@ describe("a slow Index call never writes back a stale state copy", () => {
       expect(state.questionDelivery).toEqual({ "q-9": DAY0 });
     });
   }
+});
+
+describe("community asks in the brief", () => {
+  test("at most three, never shown first then the oldest showing; only those get a showing at send", async () => {
+    expect(MORNING_COMMUNITY_LIMIT).toBe(3);
+    const ask = (n: number) => row(`K${n}`, n, { viewerRole: "agent" });
+    const log = {
+      [oppId(11)]: shown(addDays(DAY0, -5)),
+      [oppId(12)]: shown(addDays(DAY0, -8)),
+      [oppId(15)]: shown(addDays(DAY0, -1)),
+    };
+    const file = newStateFile({ [OPPORTUNITY_DELIVERY_KEY]: log });
+    const rows = list(row("Maya", 1), ask(11), ask(12), ask(13), ask(14), ask(15), ask(16));
+    const context = await prepare(DAY0, file, rows);
+    expect(context.communityOpportunities.map((opp) => opp.opportunityId)).toEqual([oppId(13), oppId(14), oppId(16)]);
+    expect(await briefAndSend(DAY0, file, rows)).toEqual([MAYA, oppId(13), oppId(14), oppId(16)]);
+    const after = readLog(file) ?? {};
+    for (const n of [13, 14, 16]) expect(after[oppId(n)]).toEqual(shown(DAY0));
+    for (const n of [11, 12, 15]) expect(after[oppId(n)]).toEqual(log[oppId(n)]);
+    // Three days on, the re-showings come oldest first, still three at most.
+    const later = await prepare(addDays(DAY0, 3), file, rows);
+    expect(later.communityOpportunities.map((opp) => opp.opportunityId)).toEqual([oppId(12), oppId(11), oppId(15)]);
+  });
+});
+
+describe("a back-dated run (--date before the real village day) is read-only for delivery state", () => {
+  const REAL = addDays(DAY0, 5);
+  const setReal = () => {
+    // 11:30 in Goa on REAL.
+    deliveryClock.now = () => new Date(`${REAL}T06:00:00Z`);
+  };
+  const state = () => ({
+    // Maya was shown today (live, two days "ahead" of the given date); card 4 is a
+    // re-showing the follow-up would list on the given date; card 5 is gone from the list.
+    [OPPORTUNITY_DELIVERY_KEY]: {
+      [MAYA]: shown(REAL),
+      [oppId(3)]: shown(addDays(REAL, -4)),
+      [oppId(4)]: shown(addDays(REAL, -6)),
+      [oppId(5)]: shown(addDays(REAL, -3)),
+    },
+    deliveredToday: { date: REAL, ids: [MAYA] },
+    prepared: { date: addDays(REAL, -2), taskId: "t_digest", opportunityIds: [JON] },
+  });
+  const rows = list(row("Maya", 1), row("Jon", 2), row("Ana", 3), row("Bo", 4));
+
+  test("the drop, the evening card and the follow-up write nothing, and keep today's entries", async () => {
+    setReal();
+    for (const [path, wouldDeliver] of [[drop, JON], [evening, JON], [followUp, oppId(4)]] as const) {
+      const file = newStateFile(state());
+      const before = fileText(file);
+      expect(await path(addDays(REAL, -2), file, rows)).toEqual([wouldDeliver]);
+      // Delivery state is untouched (the follow-up still records its non-delivery negotiationSummary).
+      if (path !== followUp) expect(fileText(file)).toBe(before);
+      expect(readLog(file)).toEqual(state()[OPPORTUNITY_DELIVERY_KEY]);
+      expect(readState(file).deliveredToday).toEqual(state().deliveredToday);
+    }
+  });
+
+  test("a back-dated silent run does not prune either", async () => {
+    setReal();
+    for (const path of [drop, evening, followUp]) {
+      const file = newStateFile(state());
+      const before = fileText(file);
+      expect(await path(addDays(REAL, -2), file, list(row("Maya", 1)))).toEqual([]);
+      expect(fileText(file)).toBe(before);
+    }
+  });
+
+  test("the brief's prepare prunes nothing and the send records nothing", async () => {
+    setReal();
+    const file = newStateFile(state());
+    await prepare(addDays(REAL, -2), file, list(row("Jon", 2)));
+    expect(readLog(file)).toEqual(state()[OPPORTUNITY_DELIVERY_KEY]);
+    const result = await sendDailyBrief({
+      date: addDays(REAL, -2),
+      stateFile: file,
+      outgoingFile: join(file, "..", "outgoing.md"),
+      hermes: (args) => (args[1] === "show" ? JSON.stringify({ task: { status: "ready", body: "b" } }) : "ok"),
+    });
+    expect("silent" in result).toBe(false);
+    expect(readLog(file)).toEqual(state()[OPPORTUNITY_DELIVERY_KEY]);
+    expect(readState(file).deliveredToday).toEqual(state().deliveredToday);
+  });
+
+  test("a run on the real day still writes", async () => {
+    setReal();
+    const file = newStateFile(state());
+    expect(await drop(REAL, file, rows)).toEqual([JON]);
+    expect(readLog(file)?.[JON]).toEqual(shown(REAL));
+  });
+
+  test("'future' is measured against the later of the given and the real day", () => {
+    const log = { live: shown(REAL), skew: shown(addDays(REAL, 1)), far: shown(addDays(REAL, 2)) };
+    expect(Object.keys(readDeliveryLog({ [OPPORTUNITY_DELIVERY_KEY]: log }, addDays(REAL, -2), REAL))).toEqual(["live", "skew"]);
+    expect(Object.keys(readDeliveryLog({ [OPPORTUNITY_DELIVERY_KEY]: log }, addDays(REAL, -2)))).toEqual([]);
+  });
 });

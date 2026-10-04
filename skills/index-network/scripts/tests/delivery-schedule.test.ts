@@ -18,6 +18,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import { pagedOpportunities } from "./index-mcp-fake";
 import { DAY0, addDays, briefAndSend, cleanUp, drop, evening, followUp, newStateFile, oppId, row } from "./delivery-paths";
+import { pinDeliveryClock } from "./pin-clock";
+
+pinDeliveryClock();
 
 afterEach(cleanUp);
 

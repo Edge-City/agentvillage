@@ -8,16 +8,20 @@
  * body sanitization. The local state file is the record of what was delivered;
  * nothing is reported back to Index. The
  * prompt only needs to call this script and return the returned brief verbatim.
+ *
+ * A `--date` earlier than today's village date is a read-only rerun for
+ * delivery state: it writes neither `deliveredToday` nor the delivery log.
  */
 
 import { existsSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 
-import { QUESTION_COOLDOWN_DAYS, villageDate } from "./build-daily-brief-context";
+import { QUESTION_COOLDOWN_DAYS, realVillageDate, villageDate } from "./build-daily-brief-context";
 import {
   OPPORTUNITY_DELIVERY_KEY,
   deliveryLogChanged,
+  isBackDated,
   pruneDeliveryLog,
   readDeliveryLog,
   recordShowings,
@@ -166,22 +170,25 @@ export async function sendDailyBrief(options: {
   const opportunityIds = stringArray(prepared.opportunityIds);
   const questionIds = stringArray(prepared.questionIds);
 
-  const storedDeliveryLog = readDeliveryLog(state, date);
+  const readOnly = isBackDated(date, realVillageDate());
+  const storedDeliveryLog = readDeliveryLog(state, date, realVillageDate());
   const deliveredToday = state.deliveredToday && typeof state.deliveredToday === "object" && !Array.isArray(state.deliveredToday)
     ? state.deliveredToday as Record<string, unknown>
     : {};
   const currentIds = deliveredToday.date === date ? stringArray(deliveredToday.ids) : [];
-  state.deliveredToday = {
-    date,
-    ids: Array.from(new Set([...currentIds, ...opportunityIds])),
-  };
+  if (!readOnly) {
+    state.deliveredToday = {
+      date,
+      ids: Array.from(new Set([...currentIds, ...opportunityIds])),
+    };
+  }
 
   // One showing for each card the sent brief names, for the cross-day card
   // cooldown (delivery-state.ts). The log was read from the state as loaded,
   // before deliveredToday was replaced, so a state file from before the log
   // existed still counts the cards its set holds.
   const deliveryLog = pruneDeliveryLog(recordShowings(storedDeliveryLog, opportunityIds, date), date, null);
-  if (deliveryLogChanged(state, deliveryLog)) state[OPPORTUNITY_DELIVERY_KEY] = deliveryLog;
+  if (!readOnly && deliveryLogChanged(state, deliveryLog)) state[OPPORTUNITY_DELIVERY_KEY] = deliveryLog;
 
   // Cross-day question delivery log: record today's delivered question ids and
   // prune entries past the cooldown (they no longer affect filtering, so the

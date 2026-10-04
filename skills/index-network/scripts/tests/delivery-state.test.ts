@@ -231,18 +231,32 @@ describe("pruneDeliveryLog", () => {
 });
 
 describe("pendingListing", () => {
-  test("complete only when fewer rows came back than asked for and pagination {limit, offset, count} does not contradict it", () => {
+  test("complete only when fewer rows came back than asked for and pagination.limit is not below the request", () => {
     const listing = (rowCount: number, pagination?: unknown) => pendingListing({ pendingIds: [], rowCount, requestedLimit: 50, pagination }).complete;
     expect(listing(1)).toBe(true);
     expect(listing(49)).toBe(true);
     expect(listing(50)).toBe(false);
     expect(listing(51)).toBe(false);
-    expect(listing(0, { limit: 50, offset: 0, count: 0 })).toBe(true);
-    expect(listing(5, { limit: 50, offset: 0, count: 5 })).toBe(true);
-    expect(listing(5, { limit: 50, offset: 0, count: 6 })).toBe(false);
-    expect(listing(5, { limit: 20, offset: 0, count: 5 })).toBe(false);
     expect(listing(5, { limit: 50, offset: 0 })).toBe(true);
+    expect(listing(5, { limit: 100, offset: 0 })).toBe(true);
+    expect(listing(5, { limit: 20, offset: 0 })).toBe(false);
     expect(listing(5, "not an object")).toBe(true);
+  });
+
+  test("pagination.count decides nothing: what it counts is not verified", () => {
+    const listing = (rowCount: number, pagination?: unknown) => pendingListing({ pendingIds: [], rowCount, requestedLimit: 50, pagination }).complete;
+    for (const count of [0, 5, 6, 500, "500"]) expect(listing(5, { limit: 50, offset: 0, count })).toBe(true);
+    expect(listing(50, { limit: 50, offset: 0, count: 0 })).toBe(false);
+  });
+
+  test("pagination numbers sent as strings are parsed strictly; anything else counts as absent", () => {
+    const listing = (limit: unknown) => pendingListing({ pendingIds: [], rowCount: 5, requestedLimit: 50, pagination: { limit } }).complete;
+    expect(listing("20")).toBe(false);
+    expect(listing(" 20 ")).toBe(false);
+    expect(listing("50")).toBe(true);
+    for (const absent of ["20.0", "2e1", "-20", "", "twenty", 20.5, -20, Number.NaN, Number.POSITIVE_INFINITY, null, true, [20], { n: 20 }]) {
+      expect(listing(absent)).toBe(true);
+    }
   });
 });
 

@@ -186,7 +186,8 @@
     "How a JSON-RPC error or a non-200 status from tools/call looks in practice (only the refusals above and the isError tool error were seen); the client treats each as a failure.",
     "The exact messages of the three refusals (the codes and the data shapes are verified).",
     "What a missing accept or content-type header, a missing API key, or a missing (as opposed to different) MCP-Protocol-Version header is answered with; the fake's choices are marked in index-mcp-fake.ts.",
-    "The per-row fields of list_opportunities rows; the rows here follow the maintainer's parser (id, url, status, viewerRole, headline, summary, peer {name, userId, url})."
+    "The per-row fields of list_opportunities rows; the rows here follow the maintainer's parser (id, url, status, viewerRole, headline, summary, peer {name, userId, url}).",
+    "What the pagination keys mean, in particular what count counts (rows matching the request, or rows across every status). The values in the responses here assume rows matching the request; nothing in the scripts depends on count."
   ],
   "verifiedAt": {
     "requestContract": "2026-10-03T21:30Z (about)",
@@ -202,7 +203,7 @@
         "statuses": [
           "pending"
         ],
-        "limit": 50
+        "limit": 20
       },
       {
         "statuses": [
@@ -211,6 +212,12 @@
           "accepted"
         ],
         "limit": 50
+      },
+      {
+        "statuses": [
+          "expired"
+        ],
+        "limit": 20
       }
     ],
     "list_intents": [
@@ -218,7 +225,7 @@
         "limit": 20
       }
     ],
-    "note": "The arguments the scripts send, each accepted by production. An invalid statuses value or limit 500 is answered with toolError. Every script now lists opportunities with limit 50 (DATA-270); the responses in this file are from limit-20 reads."
+    "note": "Exactly the arguments sent to production, each accepted. An invalid statuses value or limit 500 is answered with toolError. Since DATA-270 every script lists opportunities with limit 50; the pending-only read with limit 50 is inferred from the accepted three-status limit-50 read, not probed. The responses in this file are from limit-20 reads."
   },
   "paginationKeys": {
     "keys": [
@@ -226,7 +233,7 @@
       "offset",
       "count"
     ],
-    "note": "count is the number of rows matching the request. The scripts count a read as complete only when it returned fewer rows than asked for and neither count (above the rows returned) nor limit (below the one asked for) says more may exist."
+    "note": "The key names are verified; what each one means is not (see notVerified). The scripts read only limit: a read is complete when it returned fewer rows than asked for and limit, when present, is not below the one asked for."
   },
   "listJsonKeys": {
     "list_opportunities": [

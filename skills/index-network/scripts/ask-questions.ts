@@ -7,7 +7,10 @@
  * day, if there is no such card, returns the local closeout line.
  *
  * Usage (from $HERMES_HOME):
- *   bun skills/index-network/scripts/ask-questions.ts [--state-file memory/heartbeat-state.json]
+ *   bun skills/index-network/scripts/ask-questions.ts [--state-file memory/heartbeat-state.json] [--date YYYY-MM-DD]
+ *
+ * A `--date` earlier than today's village date is a read-only rerun for
+ * delivery state: it writes neither the delivery log nor `deliveredToday`.
  */
 
 import { existsSync } from "node:fs";
@@ -15,6 +18,7 @@ import { existsSync } from "node:fs";
 import {
   attachIndexLinks,
   listOpportunitiesFromMcp,
+  realVillageDate,
   resolveIndexApiKey,
   villageDate,
   type BriefOpportunity,
@@ -23,6 +27,7 @@ import {
   OPPORTUNITY_DELIVERY_KEY,
   applyCooldown,
   deliveryLogChanged,
+  isBackDated,
   pruneDeliveryLog,
   readDeliveryLog,
   recordShowings,
@@ -123,16 +128,19 @@ export async function askQuestions(options: {
       const { cards: fetched, listing } = listed;
       const seen = deliveredIds(state, date);
       // The read succeeded, so entries for cards no longer pending can go.
-      const log = pruneDeliveryLog(readDeliveryLog(state, date), date, listing);
+      const readOnly = isBackDated(date, realVillageDate());
+      const log = pruneDeliveryLog(readDeliveryLog(state, date, realVillageDate()), date, listing);
       const unseen = fetched.filter((opp) => opp.opportunityId && !seen.has(opp.opportunityId));
       const [chosen] = applyCooldown(unseen, log, date).eligible;
       if (chosen?.opportunityId) {
-        state.deliveredToday = { date, ids: [...seen, chosen.opportunityId] };
-        state[OPPORTUNITY_DELIVERY_KEY] = pruneDeliveryLog(recordShowings(log, [chosen.opportunityId], date), date, listing);
-        await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
+        if (!readOnly) {
+          state.deliveredToday = { date, ids: [...seen, chosen.opportunityId] };
+          state[OPPORTUNITY_DELIVERY_KEY] = pruneDeliveryLog(recordShowings(log, [chosen.opportunityId], date), date, listing);
+          await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
+        }
         const card = cardFrom(chosen);
         if (card) return card;
-      } else if (deliveryLogChanged(state, log)) {
+      } else if (!readOnly && deliveryLogChanged(state, log)) {
         state[OPPORTUNITY_DELIVERY_KEY] = log;
         await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
       }

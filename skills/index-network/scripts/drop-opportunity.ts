@@ -21,6 +21,9 @@
  *
  * Prints `[SILENT]` when there is nothing new to send, otherwise one JSON object
  * describing the chosen opportunity for the prompt to render.
+ *
+ * A `--date` earlier than today's village date is a read-only rerun: it picks
+ * as it would have, but writes no delivery state.
  */
 
 import { existsSync } from "node:fs";
@@ -31,6 +34,7 @@ import {
   attachIndexLinks,
   filterDedupedOpportunities,
   listOpportunitiesFromMcp,
+  realVillageDate,
   villageDate,
   resolveIndexApiKey,
 } from "./build-daily-brief-context";
@@ -40,6 +44,7 @@ import {
   applyCooldown,
   compareForDelivery,
   deliveryLogChanged,
+  isBackDated,
   pruneDeliveryLog,
   readDeliveryLog,
   recordShowings,
@@ -119,11 +124,12 @@ export async function dropOpportunity(options: {
   const deliveredIds = new Set(deliveredToday.date === date ? stringArray(deliveredToday.ids) : []);
 
   // The read succeeded, so entries for cards no longer pending can go.
-  const log = pruneDeliveryLog(readDeliveryLog(state, date), date, listing);
+  const readOnly = isBackDated(date, realVillageDate());
+  const log = pruneDeliveryLog(readDeliveryLog(state, date, realVillageDate()), date, listing);
   const candidates = filterDedupedOpportunities(fetched, deliveredIds).filter((opp) => opp.opportunityId);
   const chosen = pickBest(applyCooldown(candidates, log, date).eligible, log);
   if (!chosen?.opportunityId) {
-    if (deliveryLogChanged(state, log)) {
+    if (!readOnly && deliveryLogChanged(state, log)) {
       state[OPPORTUNITY_DELIVERY_KEY] = log;
       await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
     }
@@ -137,7 +143,7 @@ export async function dropOpportunity(options: {
     ids: Array.from(new Set([...deliveredIds, chosen.opportunityId])),
   };
   state[OPPORTUNITY_DELIVERY_KEY] = pruneDeliveryLog(recordShowings(log, [chosen.opportunityId], date), date, listing);
-  await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
+  if (!readOnly) await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
 
   return { opportunity: attachIndexLinks(chosen) };
 }

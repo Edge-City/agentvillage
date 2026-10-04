@@ -13,6 +13,9 @@
  *     --opportunities-file memory/digest-opportunities.txt \
  *     --state-file memory/heartbeat-state.json \
  *     --out memory/daily-brief-context.json
+ *
+ * A `--date` earlier than today's village date is a read-only rerun for
+ * delivery state: the delivery log is not pruned.
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -24,7 +27,9 @@ import {
   OPPORTUNITY_DELIVERY_KEY,
   applyCooldown,
   compareForDelivery,
+  deliveryClock,
   deliveryLogChanged,
+  isBackDated,
   pendingListing,
   pruneDeliveryLog,
   readDeliveryLog,
@@ -233,6 +238,8 @@ const RSVP_EVENT_LIMIT = 6;
 export const QUESTION_COOLDOWN_DAYS = 3;
 /** Direct conversations included in the morning brief. */
 export const MORNING_CONNECTION_LIMIT = 3;
+/** Community asks included in the morning brief. */
+export const MORNING_COMMUNITY_LIMIT = 3;
 const INDEX_WEB = "https://index.network";
 const USER_ID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 const ENTITY_ID = /^[A-Za-z0-9_-]+$/;
@@ -255,6 +262,11 @@ type EdgeEvent = Record<string, unknown> & {
   custom_location_name?: string | null;
   host_display_name?: string | null;
 };
+
+/** The real village day now (deliveryClock), whatever date a run was given. */
+export function realVillageDate(): string {
+  return villageDate(deliveryClock.now());
+}
 
 export function villageDate(now = new Date()): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -754,7 +766,7 @@ async function readDeliveredIds(stateFile: string, date: string): Promise<Set<st
 async function readDeliveryLogFile(stateFile: string, date: string): Promise<DeliveryLog> {
   try {
     const parsed = asRecord(JSON.parse(await Bun.file(stateFile).text()));
-    return parsed ? readDeliveryLog(parsed, date) : {};
+    return parsed ? readDeliveryLog(parsed, date, realVillageDate()) : {};
   } catch {
     return {};
   }
@@ -764,9 +776,11 @@ async function readDeliveryLogFile(stateFile: string, date: string): Promise<Del
  * After a successful read of the pending list, drop log entries the read
  * shows are finished. Writes only when the file already holds a log and the
  * prune changes it; a missing or malformed file is left alone, and nothing
- * else in the file changes.
+ * else in the file changes. A back-dated run writes nothing.
  */
 export async function pruneDeliveryLogFile(stateFile: string, date: string, listing: PendingListing): Promise<void> {
+  const realToday = realVillageDate();
+  if (isBackDated(date, realToday)) return;
   let state: Record<string, unknown> | null;
   try {
     state = asRecord(JSON.parse(await Bun.file(stateFile).text()));
@@ -774,7 +788,7 @@ export async function pruneDeliveryLogFile(stateFile: string, date: string, list
     return;
   }
   if (!state || state[OPPORTUNITY_DELIVERY_KEY] === undefined) return;
-  const pruned = pruneDeliveryLog(readDeliveryLog(state, date), date, listing);
+  const pruned = pruneDeliveryLog(readDeliveryLog(state, date, realToday), date, listing);
   if (!deliveryLogChanged(state, pruned)) return;
   state[OPPORTUNITY_DELIVERY_KEY] = pruned;
   await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
@@ -1096,8 +1110,10 @@ export async function buildDailyBriefContext(options: {
   // Recorded as shown only by the send, from the cards the staged body names.
   const { eligible, held } = applyCooldown(opportunities, deliveryLog, date);
   const connectionOpportunities = selectMorningConnections(eligible, deliveryLog).map(attachIndexLinks);
+  // `eligible` is already in delivery order: never shown first, then the oldest showing.
   const communityOpportunities = eligible
     .filter((opp) => opp.feedCategory === "connector-flow")
+    .slice(0, MORNING_COMMUNITY_LIMIT)
     .map(attachIndexLinks);
   // Only a complete read can say how many are still waiting, or that nothing is new.
   const connectionsStillWaiting = listingComplete ? held.filter((opp) => opp.feedCategory === "connection").length : 0;

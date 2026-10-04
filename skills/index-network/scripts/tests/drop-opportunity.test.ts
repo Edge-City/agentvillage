@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { dropOpportunity } from "../drop-opportunity";
 import { FAKE_MCP_URL, indexMcpFake, listOpportunitiesText } from "./index-mcp-fake";
 import { failureInputs } from "./index-failure-inputs";
+import { pinDeliveryClock } from "./pin-clock";
+
+pinDeliveryClock();
 
 const MAYA_OPP = "bbbbbbbb-0000-4000-8000-000000000001";
 const JON_OPP = "bbbbbbbb-0000-4000-8000-000000000002";

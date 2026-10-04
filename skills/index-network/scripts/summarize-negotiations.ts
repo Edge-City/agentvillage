@@ -31,7 +31,10 @@
  *
  * Usage (from $HERMES_HOME):
  *   bun skills/index-network/scripts/summarize-negotiations.ts \
- *     [--state-file memory/heartbeat-state.json]
+ *     [--state-file memory/heartbeat-state.json] [--date YYYY-MM-DD]
+ *
+ * A `--date` earlier than today's village date is a read-only rerun for
+ * delivery state: it writes neither the delivery log nor `deliveredToday`.
  */
 
 import { existsSync } from "node:fs";
@@ -41,6 +44,7 @@ import {
   attachIndexLinks,
   indexLink,
   parseListedOpportunitiesCounted,
+  realVillageDate,
   resolveIndexApiKey,
   villageDate,
   type BriefOpportunity,
@@ -50,6 +54,7 @@ import {
   applyCooldown,
   awaitsResident,
   deliveryLogChanged,
+  isBackDated,
   pendingListing,
   pruneDeliveryLog,
   readDeliveryLog,
@@ -356,7 +361,8 @@ export async function main(): Promise<void> {
   const alreadyReported = new Set(summaryState.reportedCompletedIds ?? []);
 
   // Both reads succeeded, so entries for cards no longer pending can go.
-  const log = pruneDeliveryLog(readDeliveryLog(state, date), date, listing);
+  const readOnly = isBackDated(date, realVillageDate());
+  const log = pruneDeliveryLog(readDeliveryLog(state, date, realVillageDate()), date, listing);
   const sentToday = deliveredTodayIds(state, date);
   const pending = cards.filter((card) => card.status === "pending");
   // Re-showings only: shown before, not sent today, eligible again; oldest showing first.
@@ -376,7 +382,7 @@ export async function main(): Promise<void> {
   const newlyResolved = newAccepted.map(followUpCard).filter((card): card is FollowUpCard => Boolean(card));
 
   if (needsAttention.length === 0 && newlyResolved.length === 0) {
-    if (deliveryLogChanged(state, log)) await writeJsonObject(stateFile, { ...state, [OPPORTUNITY_DELIVERY_KEY]: log });
+    if (!readOnly && deliveryLogChanged(state, log)) await writeJsonObject(stateFile, { ...state, [OPPORTUNITY_DELIVERY_KEY]: log });
     process.stdout.write("[SILENT]");
     return;
   }
@@ -385,12 +391,12 @@ export async function main(): Promise<void> {
   const nextLog = pruneDeliveryLog(recordShowings(log, shownIds, date), date, listing);
   await writeJsonObject(stateFile, {
     ...state,
-    ...(shownIds.length > 0 ? { deliveredToday: { date, ids: Array.from(new Set([...sentToday, ...shownIds])) } } : {}),
+    ...(!readOnly && shownIds.length > 0 ? { deliveredToday: { date, ids: Array.from(new Set([...sentToday, ...shownIds])) } } : {}),
     negotiationSummary: {
       ...summaryState,
       reportedCompletedIds: [...alreadyReported, ...newAccepted.map((card) => card.opportunityId).filter((id): id is string => Boolean(id))],
     },
-    ...(deliveryLogChanged(state, nextLog) ? { [OPPORTUNITY_DELIVERY_KEY]: nextLog } : {}),
+    ...(!readOnly && deliveryLogChanged(state, nextLog) ? { [OPPORTUNITY_DELIVERY_KEY]: nextLog } : {}),
   });
 
   process.stdout.write(JSON.stringify({ signals, needsAttention, waiting, newlyResolved }));
