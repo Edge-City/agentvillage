@@ -787,10 +787,24 @@ therefore held to a conservative set (`rationale_charset`): letters, digits and 
 (only letters that decompose to an ASCII letter: accents yes, small capitals and other look-alike
 Latin no), Devanagari, Bengali, Gurmukhi, Gujarati, Oriya, Tamil, Telugu, Kannada, Malayalam,
 Sinhala, CJK, Hiragana, Katakana and Hangul; no compatibility forms (full-width, mathematical,
-ligatures); plain spaces; and only `. , ; ! ? ' " ( ) -` and curly quotes and dashes as
-punctuation: no colon (nothing reads as a new field), no `<>&@#/\*_[]{}|~`, backtick, `$`, `%`,
-`+`, `=`, `^`, no symbols or emoji, no period inside a word, at most six digits together and three
-marks on a letter. Cyrillic, Greek and other scripts that draw like Latin, and right-to-left
+ligatures); plain spaces; and only `. , ; ! ? ' " ( ) -`, curly quotes and dashes, the
+ideographic comma and full stop and the danda as punctuation: no colon (nothing reads as a new
+field), no `<>&@#/\*_[]{}|~`, backtick, `$`, `%`, `+`, `=`, `^`, no symbols or emoji, no period
+inside a word. Digits are ASCII 0-9 only (another script's zero draws like an o), at most eight in
+the whole rationale, and digit groups joined only by spaces, hyphens or brackets may hold at most
+six (a grouped phone number Telegram may link). One script per word: every letter and mark in a
+word (a run between spaces and allowed punctuation) is of one script, ASCII digits beside any;
+Japanese kanji and kana, the long vowel mark and Korean hangul count as one family, Latin mixes
+with nothing, and at most three marks sit on a letter. Compared folds drop spacing marks too.
+
+These rules refuse some ordinary text (accepted): a sentence that happens to contain one of the
+prompt's fixed phrases, `e.g.`, a decimal such as `3.5`, other CJK and Indic punctuation, any
+right-to-left, Cyrillic or Greek note. A refused rationale never blocks the vote: the tool tells
+the agent which rule to rephrase for, and a stored rationale that fails is dropped and the
+proposal goes out without it. The rules make an honest agent's note safe to show; a hostile agent
+holding the approval token can call the daemon directly with any summary, so the resident's
+protection is that the trusted question and answer always come first and the payload they approve
+is exactly what is sent. Cyrillic, Greek and other scripts that draw like Latin, and right-to-left
 scripts, are outside it. The trusted part always comes first; the note follows on the same line
 after the plugin's fixed label, which the rationale may not repeat. The share prompt carries only
 plugin values and the service name (ASCII `[a-z0-9_-]`, quoted as a value); never the text. Folding
