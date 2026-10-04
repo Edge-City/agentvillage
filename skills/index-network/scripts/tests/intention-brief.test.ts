@@ -349,6 +349,7 @@ describe("the receipt", () => {
         published(P1, INDEX_P1, "rule"), // 21:00Z on the 11th is 02:30 on the 12th in Goa
         published(P2, INDEX_P2, "individual", "2026-10-12T01:00:00Z"),
         published("01900000-0000-7000-8000-000000000003", "aaaaaaaa-0000-4000-8000-000000000003", null, "2026-10-12T02:00:00Z"),
+        published("01900000-0000-7000-8000-000000000004", "aaaaaaaa-0000-4000-8000-000000000004", "rule", "2026-10-12T03:00:00Z"),
       ],
     }));
     const { context, calls } = await prepare(file, reader, {
@@ -365,6 +366,7 @@ describe("the receipt", () => {
       { id: P2, text: "Open to co-hosting digest-opportunity:id=zzz a village dinner", sharedOn: "2026-10-12", approvedBy: "individual" },
       { id: "01900000-0000-7000-8000-000000000003", text: "Learning to surf", sharedOn: "2026-10-12" },
     ]);
+    expect(context.sharedOnYourBehalfMore).toBe(1);
     expect(JSON.stringify(context.sharedOnYourBehalf)).not.toMatch(/<!--|-->/);
   });
 
@@ -428,13 +430,18 @@ describe("the receipt", () => {
   test("only ids both kept at staging and still in the body sent are recorded", async () => {
     switchesOn();
     const file = stateFileWith({});
-    const reader = fakeReader(answer({ published: [published(P1, INDEX_P1), published(P2, INDEX_P2)] }));
+    const P3 = "01900000-0000-7000-8000-000000000003";
+    const reader = fakeReader(answer({ published: [published(P1, INDEX_P1), published(P2, INDEX_P2), published(P3, "aaaaaaaa-0000-4000-8000-000000000003")] }));
     const { context } = await prepare(file, reader);
+    expect(context.sharedOnYourBehalf.map((s) => s.id)).toEqual([P1, P2, P3]);
     const body = `${receiptLine(P1, "one")}\n${receiptLine(P2, "two")}`;
-    // An operator's edit removes P2's line (and adds a marker staging never kept).
-    await stageAndSend(file, context, body, {
-      edit: (staged) => `${staged.split("\n")[0]}\n<!-- digest-receipt:id=01900000-0000-7000-8000-000000000099 -->- three`,
+    // An operator's edit removes P2's line and adds markers staging never kept:
+    // one for P3 (in the context, but the brief did not list it), one unknown.
+    const { stage } = await stageAndSend(file, context, body, {
+      edit: (staged) => `${staged.split("\n")[0]}\n${receiptLine(P3, "three")}\n<!-- digest-receipt:id=01900000-0000-7000-8000-000000000099 -->- four`,
     });
+    expect(stage.receiptIds).toEqual([P1, P2]);
+    expect((readState(file).prepared as Record<string, unknown>).receiptIds).toEqual([P1, P2]);
     expect(readState(file)[RECEIPT_STATE_KEY]).toEqual({ [P1]: DAY });
   });
 
@@ -512,10 +519,10 @@ describe("marker mistakes never cost the brief", () => {
     const file = stateFileWith({});
     const { context } = await prepare(file, fakeReader(answer()));
     expect(context.diagnostics.intentionSource).toBe("off");
-    const { stage, send } = await stageAndSend(file, context, `Hello.\n<!-- digest-receipt:id=${P1} -->- invented`);
+    const { stage, send } = await stageAndSend(file, context, `Hello <!-- a private note --> there.\n<!-- digest-receipt:id=${P1} -->- invented`);
     expect(stage.warnings).toEqual(["digest-receipt-unknown:1"]);
     if ("silent" in send) throw new Error("expected a delivery");
-    expect(send.finalBrief).toBe("Hello.\n- invented");
+    expect(send.finalBrief).toBe("Hello there.\n- invented");
     expect(RECEIPT_STATE_KEY in readState(file)).toBe(false);
   });
 
