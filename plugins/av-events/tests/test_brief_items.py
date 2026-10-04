@@ -292,8 +292,10 @@ def test_one_bad_entry_never_blanks_the_answer(on, bi, home):
     bad_nan["approval"]["updated_at"] = float("nan")
     huge = published_entry(uid(3), T0)
     huge["approval"]["updated_at"] = 1e300
+    future = published_entry(uid(6), T0)
+    future["approval"]["updated_at"] = T0 + 1e10  # a representable time, centuries ahead
     text = json.dumps({"v": 1, "publishes": [], "intentions": {
-        uid(1): good, uid(2): bad_nan, uid(3): huge, uid(4): held_entry(uid(4), TEXT, T0),
+        uid(1): good, uid(2): bad_nan, uid(3): huge, uid(4): held_entry(uid(4), TEXT, T0), uid(6): future,
         uid(5): {"published": True, "source": "ambient", "approval": ["not", "a", "dict"]},
     }})
     assert "NaN" in text
@@ -301,6 +303,8 @@ def test_one_bad_entry_never_blanks_the_answer(on, bi, home):
     out = items(bi, now=T0 + 60)
     assert out["status"] == "ok" and out["heldCount"] == 1
     assert [p["id"] for p in out["published"]] == [uid(1)]
+    # Rejected as times, not by the guard: nothing was skipped.
+    assert out["skipped"] == 0
 
 
 def test_an_entry_that_raises_is_skipped_alone(on, bi, home, monkeypatch):

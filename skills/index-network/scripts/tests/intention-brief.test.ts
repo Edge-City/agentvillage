@@ -683,4 +683,16 @@ describe("the real reader", () => {
       expect(Date.now() - started).toBeLessThan(5_000);
     }
   });
+
+  test("an answer larger than 1 MB is refused (maxBuffer), not read", async () => {
+    realHome({});
+    const big = join(home, "big.json");
+    writeFileSync(big, answer({ heldCount: 1 }).replace(/}$/, `,"pad":"${"x".repeat(2 * 1024 * 1024)}"}`));
+    const stub = join(home, "python-stub");
+    writeFileSync(stub, `#!/bin/sh\ncat '${big}'\n`, { mode: 0o755 });
+    process.env.HERMES_PYTHON = stub;
+    const brief = await readIntentionBrief({ state: {}, hermesHome: home });
+    expect(brief.source).toBe("unavailable");
+    expect(brief.warning).toBe("intentions: reader-ENOBUFS");
+  });
 });
