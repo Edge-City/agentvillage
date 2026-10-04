@@ -36,13 +36,12 @@ import {
 } from "./delivery-state";
 import { callIndexTool, indexMcpUrl, toolJsonArray, toolJsonObject } from "./index-mcp";
 import {
-  type HeldForApproval,
   type IntentTextLookup,
   type IntentionBrief,
   type ReaderRunner,
   type ReceiptPreference,
   type SharedOnYourBehalf,
-  intentTextsFrom,
+  intentTextFrom,
   readIntentionBrief,
 } from "./intention-brief";
 import { portalEventsBaseUrl } from "./validate-digest-urls";
@@ -228,11 +227,10 @@ export interface DailyBriefContext {
   weather?: DailyBriefWeather;
   questions?: BriefQuestion[];
   /**
-   * DATA-222 reminder: inferred intentions still waiting for the resident's
-   * answer in their approvals (at most three, oldest first; the count is the
-   * total). Empty unless AV_RECORD_INTENTION and the approval path are on.
+   * DATA-222 reminder: how many inferred intentions are still waiting for the
+   * resident's answer in their approvals. A count only (the held text stays
+   * in the plugin's map). 0 unless AV_RECORD_INTENTION and the approval path are on.
    */
-  heldForApproval: HeldForApproval[];
   heldForApprovalCount: number;
   /**
    * DATA-222 receipt: inferred intentions published since the last delivered
@@ -1048,11 +1046,22 @@ export async function listOpportunitiesFromMcp(opts: {
   };
 }
 
-/** `list_intents` on Index, for the words of intentions about to be receipted. */
+/** `get_intent` on Index, once per intention about to be receipted, for its words. */
 function indexIntentTexts(apiKey: string, mcpUrl: string): IntentTextLookup {
   return async (ids) => {
-    const text = await callIndexTool({ apiKey, mcpUrl }, "list_intents", { limit: 20 });
-    return intentTextsFrom(toolJsonArray(text, "intents"), ids);
+    const texts = new Map<string, string>();
+    let failed = 0;
+    for (const intentId of ids) {
+      try {
+        const found = toolJsonObject(await callIndexTool({ apiKey, mcpUrl }, "get_intent", { intentId }));
+        if (!found || found.trailing) throw new Error("mcp-unparsed");
+        const text = intentTextFrom(found.root);
+        if (text) texts.set(intentId, text);
+      } catch {
+        failed++;
+      }
+    }
+    return { texts, failed };
   };
 }
 
@@ -1191,7 +1200,6 @@ export async function buildDailyBriefContext(options: {
     userModel,
     weather: weather.source !== "unavailable" ? weather : undefined,
     questions,
-    heldForApproval: intentions.heldForApproval,
     heldForApprovalCount: intentions.heldForApprovalCount,
     sharedOnYourBehalf: intentions.sharedOnYourBehalf,
     sharedOnYourBehalfMore: intentions.sharedOnYourBehalfMore,

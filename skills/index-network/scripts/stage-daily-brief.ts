@@ -14,6 +14,7 @@ import { access } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 
 import { buildDailyBriefContext, villageDate, type DailyBriefContext } from "./build-daily-brief-context";
+import { settleReceiptMarkers } from "./intention-brief";
 import {
   extractDigestOpportunityIds,
   extractDigestQuestionIds,
@@ -56,6 +57,10 @@ interface StageResult {
   body: string;
   opportunityIds: string[];
   questionIds: string[];
+  /** DATA-222: the receipt markers kept (their ids are in today's context). */
+  receiptIds?: string[];
+  /** Codes for markers removed instead of failing the brief (`digest-receipt-unknown:N`, `-malformed:N`). */
+  warnings?: string[];
   skipped?: boolean;
   reason?: string;
 }
@@ -302,7 +307,14 @@ export async function stageDailyBrief(options: {
   const rawBody = options.body ?? await Bun.file(bodyFile!).text();
   if (!rawBody.trim()) throw new Error("digest body is empty");
 
-  const { output: sanitizedBody } = sanitizeDigestUrls(rawBody.trim());
+  const { output: urlSafeBody } = sanitizeDigestUrls(rawBody.trim());
+  // DATA-222: receipt markers are kept only for today's sharedOnYourBehalf ids
+  // (none when the feature is off); any other is removed with a warning code.
+  // A marker mistake never costs the brief.
+  const settled = settleReceiptMarkers(urlSafeBody, new Set((context.sharedOnYourBehalf ?? []).map((item) => item.id)));
+  const sanitizedBody = settled.body;
+  const receiptIds = settled.receiptIds;
+  for (const warning of settled.warnings) process.stderr.write(`warning: ${warning}\n`);
   const { opportunityIds, questionIds } = validateMarkers(sanitizedBody, context);
 
   const createOutput = await hermes([
@@ -331,10 +343,19 @@ export async function stageDailyBrief(options: {
     taskTitle: `Morning digest — ${date}`,
     opportunityIds,
     questionIds,
+    // DATA-222: recorded as receipted by the send, only when it delivers.
+    ...(receiptIds.length > 0 ? { receiptIds } : {}),
   };
   await writeJson(stateFile, state);
 
-  return { taskId, body: sanitizedBody, opportunityIds, questionIds };
+  return {
+    taskId,
+    body: sanitizedBody,
+    opportunityIds,
+    questionIds,
+    ...(receiptIds.length > 0 ? { receiptIds } : {}),
+    ...(settled.warnings.length > 0 ? { warnings: settled.warnings } : {}),
+  };
 }
 
 async function main(): Promise<void> {
@@ -361,7 +382,7 @@ async function main(): Promise<void> {
     body,
     bodyFile: argValue(args, "--body-file"),
   });
-  process.stdout.write(`${JSON.stringify({ taskId: result.taskId, opportunityIds: result.opportunityIds, questionIds: result.questionIds, skipped: result.skipped, reason: result.reason })}\n`);
+  process.stdout.write(`${JSON.stringify({ taskId: result.taskId, opportunityIds: result.opportunityIds, questionIds: result.questionIds, warnings: result.warnings, skipped: result.skipped, reason: result.reason })}\n`);
 }
 
 if (import.meta.main) {

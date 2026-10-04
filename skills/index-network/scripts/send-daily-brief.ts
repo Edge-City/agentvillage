@@ -26,6 +26,7 @@ import {
   readDeliveryLog,
   recordShowings,
 } from "./delivery-state";
+import { RECEIPT_STATE_KEY, extractDigestReceiptIds, recordReceipts, stripDigestReceiptMarkers } from "./intention-brief";
 import { sanitizeDigestUrls } from "./validate-digest-urls";
 
 interface SendResult {
@@ -129,6 +130,21 @@ function parseTask(raw: string): HermesTask | null {
   }
 }
 
+/**
+ * DATA-222: after the specific strippers, any HTML comment still in the body
+ * (a malformed marker, a stray note), and any lone `<!--` or `-->`, so nothing
+ * internal reaches the resident.
+ */
+export function stripRemainingHtmlComments(text: string): string {
+  return text
+    .replace(/[ \t]*<!--[\s\S]*?-->[ \t]*/g, (match, offset: number, whole: string) => {
+      const before = offset > 0 ? whole[offset - 1] : "\n";
+      const after = whole[offset + match.length] ?? "\n";
+      return /\s/.test(before) || /\s/.test(after) ? "" : " ";
+    })
+    .replace(/<!--|-->/g, "");
+}
+
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
 }
@@ -208,7 +224,33 @@ export async function sendDailyBrief(options: {
 
   await hermes(["kanban", "complete", taskId, "--summary", "delivered"]);
 
-  const { output: finalBrief } = sanitizeDigestUrls(body, { stripDigestMetadata: true });
+  const { output: sanitized } = sanitizeDigestUrls(stripDigestReceiptMarkers(body), { stripDigestMetadata: true });
+  const finalBrief = stripRemainingHtmlComments(sanitized);
+
+  // DATA-222: the inferred intentions this brief receipted, so later briefs do
+  // not list them again: the ids staging kept that are also in the body sent.
+  // Recorded after the card was completed, the last step here that can fail;
+  // the reply itself is delivered by Hermes after this script, which nothing
+  // here can wait for. A failed write is a receipt shown again, never one lost.
+  if (!readOnly) {
+    const sent = new Set(extractDigestReceiptIds(body));
+    const receiptIds = stringArray(prepared.receiptIds).filter((id) => sent.has(id));
+    try {
+      // Read back what this run just wrote; a file that no longer parses as an
+      // object is left alone rather than replaced by the receipts alone.
+      const parsed = JSON.parse(await Bun.file(stateFile).text()) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new TypeError("state-unreadable");
+      const latest = parsed as Record<string, unknown>;
+      const receipts = recordReceipts(latest[RECEIPT_STATE_KEY], receiptIds, date);
+      if (receipts !== null) {
+        latest[RECEIPT_STATE_KEY] = receipts;
+        await writeJson(stateFile, latest);
+      }
+    } catch (err) {
+      process.stderr.write(`warning: intention receipts not recorded (${err instanceof Error ? err.name : "error"})\n`);
+    }
+  }
+
   return { taskId, opportunityIds, questionIds, finalBrief };
 }
 

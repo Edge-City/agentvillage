@@ -1,9 +1,10 @@
 /**
- * DATA-222: the morning brief's reminder of inferred intentions awaiting
- * approval and its receipt of those published on the resident's behalf.
+ * DATA-222: the morning brief's reminder (a count) of inferred intentions
+ * awaiting approval and its receipt of those published on the resident's
+ * behalf.
  *
  * The plugin's reader is faked (a function returning its JSON) except in the
- * last test, which runs the real reader from plugins/av-events with Python.
+ * last tests, which run the real reader from plugins/av-events with Python.
  * Index is the in-process fake; nothing reaches the network.
  */
 
@@ -14,21 +15,25 @@ import { join, resolve } from "node:path";
 
 import { buildDailyBriefContext, type DailyBriefContext } from "../build-daily-brief-context";
 import {
-  HELD_LIST_LIMIT,
+  READER_VERSION,
   RECEIPT_KEEP_DAYS,
   RECEIPT_LIST_LIMIT,
   RECEIPT_STATE_KEY,
+  RECEIPT_WINDOW_DAYS,
+  contextText,
   extractDigestReceiptIds,
-  intentTextsFrom,
+  intentTextFrom,
   parseReaderAnswer,
   readIntentionBrief,
   recordReceipts,
   runPluginReader,
+  settleReceiptMarkers,
   stripDigestReceiptMarkers,
   type ReaderRunner,
 } from "../intention-brief";
-import { sendDailyBrief } from "../send-daily-brief";
+import { sendDailyBrief, stripRemainingHtmlComments } from "../send-daily-brief";
 import { stageDailyBrief } from "../stage-daily-brief";
+import { sanitizeDigestUrls } from "../validate-digest-urls";
 import { FAKE_MCP_URL, indexMcpFake, listOpportunitiesText, type ToolHandler } from "./index-mcp-fake";
 import { pinDeliveryClock } from "./pin-clock";
 
@@ -41,10 +46,10 @@ const ENV_KEYS = [...SWITCH_KEYS, "HERMES_HOME", "INDEX_API_KEY", "INDEX_MCP_URL
 const saved = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
 const originalFetch = globalThis.fetch;
 const dirs: string[] = [];
+const PLUGIN_DIR = resolve(import.meta.dir, "../../../../plugins/av-events");
 
 const P1 = "01900000-0000-7000-8000-000000000001";
 const P2 = "01900000-0000-7000-8000-000000000002";
-const H1 = "01900000-0000-7000-8000-000000000011";
 const INDEX_P1 = "aaaaaaaa-0000-4000-8000-000000000001";
 const INDEX_P2 = "aaaaaaaa-0000-4000-8000-000000000002";
 
@@ -79,42 +84,49 @@ afterEach(() => {
 interface FakeAnswer {
   status?: string;
   reason?: string | null;
-  held?: unknown[];
   heldCount?: number;
   published?: unknown[];
+  publishedCount?: number;
 }
 
 function answer(a: FakeAnswer = {}): string {
-  const held = a.held ?? [];
+  const published = a.published ?? [];
   return JSON.stringify({
-    v: 1,
+    v: READER_VERSION,
     status: a.status ?? "ok",
     reason: a.reason ?? null,
-    held,
-    heldCount: a.heldCount ?? held.length,
-    published: a.published ?? [],
+    heldCount: a.heldCount ?? 0,
+    published,
+    publishedCount: a.publishedCount ?? published.length,
+    skipped: 0,
   });
 }
 
-function heldItem(id: string, text: string, heldSince = "2026-10-11T20:00:00Z") {
-  return { id, text, heldSince };
-}
-
-function published(id: string, indexIntentId: string, approvedBy: "individual" | "rule" = "rule", publishedAt = "2026-10-11T21:00:00Z") {
+function published(id: string, indexIntentId: string, approvedBy: "individual" | "rule" | null = "rule", publishedAt = "2026-10-11T21:00:00Z") {
   return { id, indexIntentId, publishedAt, approvedBy };
 }
 
-/** A reader that records each call. */
-function fakeReader(raw: string | (() => string)): ReaderRunner & { calls: number } {
-  const run = ((_home: string) => {
+/** A reader that records each call and the receipted ids it was handed. */
+function fakeReader(raw: string | ((receipted: string[]) => string)): ReaderRunner & { calls: number; handed: string[][] } {
+  const run = ((_home: string, receipted: string[]) => {
     run.calls++;
-    return typeof raw === "string" ? raw : raw();
-  }) as ReaderRunner & { calls: number };
+    run.handed.push(receipted);
+    return typeof raw === "string" ? raw : raw(receipted);
+  }) as ReaderRunner & { calls: number; handed: string[][] };
   run.calls = 0;
+  run.handed = [];
   return run;
 }
 
-const listIntents = (rows: unknown[]): ToolHandler => () => `Your signals:\n\n${JSON.stringify({ success: true, intents: rows })}`;
+/** `get_intent` answering from a table of Index id -> intent row. */
+function getIntent(rows: Record<string, Record<string, unknown>>, seen: unknown[] = []): ToolHandler {
+  return (args) => {
+    seen.push(args);
+    const row = rows[String(args.intentId)];
+    if (!row) return { result: { content: [{ type: "text", text: "not found" }], isError: true } };
+    return `Intent:\n\n${JSON.stringify({ success: true, intent: { id: args.intentId, status: "active", ...row } })}`;
+  };
+}
 
 /** buildDailyBriefContext against the fake Index (and nothing else), the way the prepare pass runs it. */
 async function prepare(stateFile: string, reader: ReaderRunner, tools: Record<string, ToolHandler> = {}, date = DAY) {
@@ -144,12 +156,21 @@ function readState(file: string): Record<string, unknown> {
   return JSON.parse(readFileSync(file, "utf8"));
 }
 
-/** Stage `body` against `context`, then run the send with the card `status`. */
-async function stageAndSend(file: string, context: DailyBriefContext, body: string, status = "ready", date = DAY) {
+interface SendOptions {
+  status?: string;
+  date?: string;
+  /** Replace the Kanban body before the send (an operator's edit). */
+  edit?: (staged: string) => string;
+  complete?: () => string;
+}
+
+/** Stage `body` against `context`, then run the send. */
+async function stageAndSend(file: string, context: DailyBriefContext, body: string, options: SendOptions = {}) {
+  const date = options.date ?? DAY;
   const contextOut = join(home, "context.json");
   writeFileSync(contextOut, JSON.stringify(context));
   let staged = "";
-  await stageDailyBrief({
+  const stage = await stageDailyBrief({
     date,
     stateFile: file,
     contextOut,
@@ -164,33 +185,35 @@ async function stageAndSend(file: string, context: DailyBriefContext, body: stri
       throw new Error(`unexpected hermes call: ${args.join(" ")}`);
     },
   });
-  return sendDailyBrief({
+  const sendBody = options.edit ? options.edit(staged) : staged;
+  const send = await sendDailyBrief({
     date,
     stateFile: file,
     outgoingFile: join(home, "outgoing.md"),
     hermes: (args) => {
-      if (args[1] === "show") return JSON.stringify({ task: { id: "t_digest", status, body: staged } });
-      if (args[1] === "complete") return "completed";
+      if (args[1] === "show") return JSON.stringify({ task: { id: "t_digest", status: options.status ?? "ready", body: sendBody } });
+      if (args[1] === "complete") return options.complete ? options.complete() : "completed";
       throw new Error(`unexpected hermes call: ${args.join(" ")}`);
     },
   });
+  return { stage, send, staged };
 }
 
 function receiptLine(id: string, text: string): string {
-  return `<!-- digest-receipt:id=${id} -->- ${text} (shared under your setting)`;
+  return `<!-- digest-receipt:id=${id} -->- ${text} (under your setting)`;
 }
 
 describe("inert when off or empty", () => {
-  test("AV_RECORD_INTENTION off: the reader never runs and both lists are empty", async () => {
-    const reader = fakeReader(answer({ held: [heldItem(H1, "a climbing partner")], published: [published(P1, INDEX_P1)] }));
+  test("AV_RECORD_INTENTION off: the reader never runs and both parts are empty", async () => {
+    const reader = fakeReader(answer({ heldCount: 2, published: [published(P1, INDEX_P1)] }));
     writeFileSync(join(home, ".env"), "AV_RECORD_INTENTION=0\nAV_APPROVAL_ENABLED=1\nAV_APPROVAL_URL=http://127.0.0.1:4680\n");
     const brief = await readIntentionBrief({ state: {}, hermesHome: home, reader });
-    expect(brief).toEqual({ heldForApproval: [], heldForApprovalCount: 0, sharedOnYourBehalf: [], sharedOnYourBehalfMore: 0, source: "off" });
+    expect(brief).toEqual({ heldForApprovalCount: 0, sharedOnYourBehalf: [], sharedOnYourBehalfMore: 0, source: "off" });
     expect(reader.calls).toBe(0);
   });
 
   test("the approval path off: the reader never runs", async () => {
-    const reader = fakeReader(answer({ held: [heldItem(H1, "a climbing partner")] }));
+    const reader = fakeReader(answer({ heldCount: 2 }));
     writeFileSync(join(home, ".env"), "AV_RECORD_INTENTION=1\nAV_APPROVAL_ENABLED=1\n");
     expect((await readIntentionBrief({ state: {}, hermesHome: home, reader })).source).toBe("off");
     process.env.AV_APPROVAL_URL = "http://127.0.0.1:4680";
@@ -199,11 +222,18 @@ describe("inert when off or empty", () => {
     expect(reader.calls).toBe(0);
   });
 
-  test("off, the brief context is the context without these features, and Index is not asked for intentions", async () => {
+  test("the reader answering `off` gives empty parts, whatever else its answer holds", async () => {
+    switchesOn();
+    const reader = fakeReader(answer({ status: "off", reason: "approval_off", heldCount: 4, published: [published(P1, INDEX_P1)] }));
+    const brief = await readIntentionBrief({ state: {}, hermesHome: home, reader });
+    expect(brief).toEqual({ heldForApprovalCount: 0, sharedOnYourBehalf: [], sharedOnYourBehalfMore: 0, source: "off" });
+    expect(reader.calls).toBe(1);
+  });
+
+  test("off, the brief context has the empty parts and Index is not asked about intentions", async () => {
     const file = stateFileWith({ deliveredToday: { date: DAY, ids: [] } });
     const reader = fakeReader(answer({ published: [published(P1, INDEX_P1)] }));
-    const { context, calls } = await prepare(file, reader, { list_intents: listIntents([]) });
-    expect(context.heldForApproval).toEqual([]);
+    const { context, calls } = await prepare(file, reader, { get_intent: getIntent({}) });
     expect(context.heldForApprovalCount).toBe(0);
     expect(context.sharedOnYourBehalf).toEqual([]);
     expect(context.sharedOnYourBehalfMore).toBe(0);
@@ -217,7 +247,7 @@ describe("inert when off or empty", () => {
     const off = await prepare(file, fakeReader(answer()));
     switchesOn();
     const reader = fakeReader(answer());
-    const on = await prepare(file, reader, { list_intents: listIntents([]) });
+    const on = await prepare(file, reader, { get_intent: getIntent({}) });
     expect(reader.calls).toBe(1);
     expect(on.calls).toEqual(["list_opportunities"]);
     const strip = (c: DailyBriefContext) => ({ ...c, diagnostics: { ...c.diagnostics, intentionSource: undefined } });
@@ -225,7 +255,7 @@ describe("inert when off or empty", () => {
     expect(on.context.diagnostics.intentionSource).toBe("plugin");
   });
 
-  test("a reader that fails or answers garbage leaves both lists empty with a code, and the brief still builds", async () => {
+  test("a reader that fails or answers garbage leaves both parts empty with a code, and the brief still builds", async () => {
     switchesOn();
     const file = stateFileWith({});
     for (const reader of [
@@ -233,16 +263,27 @@ describe("inert when off or empty", () => {
         throw new Error("reader-exit-1");
       }),
       fakeReader("not json"),
-      fakeReader(JSON.stringify({ v: 2, status: "ok", held: [], heldCount: 0, published: [] })),
-      fakeReader(answer({ held: [{ id: "../x", text: "t", heldSince: "2026-10-11T20:00:00Z" }] })),
+      fakeReader(JSON.stringify({ v: 1, status: "ok", heldCount: 0, published: [] })),
+      fakeReader(JSON.stringify({ v: READER_VERSION, status: "ok", heldCount: -1, published: [] })),
       fakeReader(answer({ status: "error", reason: "map_unreadable" })),
     ]) {
       const { context } = await prepare(file, reader);
-      expect(context.heldForApproval).toEqual([]);
+      expect(context.heldForApprovalCount).toBe(0);
       expect(context.sharedOnYourBehalf).toEqual([]);
       expect(context.diagnostics.intentionSource).toBe("unavailable");
       expect(context.diagnostics.warnings.some((w) => w.startsWith("intentions: "))).toBe(true);
     }
+  });
+
+  test("a bad row in the reader's answer is dropped alone", async () => {
+    switchesOn();
+    const reader = fakeReader(answer({
+      published: [{ ...published(P1, INDEX_P1), id: "../x" }, published(P2, INDEX_P2), { ...published(P1, INDEX_P1), approvedBy: "someone" }],
+      publishedCount: 3,
+    }));
+    const brief = await readIntentionBrief({ state: {}, hermesHome: home, reader });
+    expect(brief.sharedOnYourBehalf.map((s) => s.id)).toEqual([P2]);
+    expect(brief.warning).toContain("reader-rows-dropped:2");
   });
 
   test("the send of a brief without receipts adds no state key and leaves every other key as it was", async () => {
@@ -255,10 +296,10 @@ describe("inert when off or empty", () => {
       somethingElse: { kept: true },
     };
     const file = stateFileWith(before);
-    const { context } = await prepare(file, fakeReader(answer({ held: [heldItem(H1, "a climbing partner")] })));
+    const { context } = await prepare(file, fakeReader(answer({ heldCount: 1 })));
     const after0 = readState(file);
-    const result = await stageAndSend(file, context, "Good morning.\n\nStill waiting on your yes or no: a climbing partner.");
-    expect("silent" in result).toBe(false);
+    const { send } = await stageAndSend(file, context, "Good morning.\n\nOne thing is waiting for your yes or no in your approvals.");
+    expect("silent" in send).toBe(false);
     const after = readState(file);
     expect(RECEIPT_STATE_KEY in after).toBe(false);
     expect(after.somethingElse).toEqual(before.somethingElse);
@@ -268,38 +309,18 @@ describe("inert when off or empty", () => {
   });
 });
 
-describe("the reminder", () => {
-  test("held items are listed oldest first, at most three, with the total count and village dates", async () => {
-    switchesOn();
-    const held = [
-      heldItem(H1, "a climbing partner on weekends", "2026-10-10T19:00:00Z"), // 00:30 on the 11th in Goa
-      heldItem("01900000-0000-7000-8000-000000000012", "someone to practise Konkani with"),
-      heldItem("01900000-0000-7000-8000-000000000013", "a cofounder for a solar project"),
-      heldItem("01900000-0000-7000-8000-000000000014", "a fourth thing"),
-    ];
-    const brief = await readIntentionBrief({ state: {}, hermesHome: home, reader: fakeReader(answer({ held, heldCount: 6 })) });
-    expect(brief.heldForApproval).toHaveLength(HELD_LIST_LIMIT);
-    expect(brief.heldForApproval[0]).toEqual({ text: "a climbing partner on weekends", heldSince: "2026-10-11" });
-    expect(brief.heldForApprovalCount).toBe(6);
-    // No id reaches the context for a held item: nothing in the brief refers to it.
-    expect(JSON.stringify(brief.heldForApproval)).not.toContain(H1);
-  });
-
-  test("a held item stays in the reminder every day until the reader stops returning it (answered, withdrawn or expired)", async () => {
+describe("the reminder is a count", () => {
+  test("the count passes through; no held id or text reaches the context", async () => {
     switchesOn();
     const file = stateFileWith({});
-    const still = fakeReader(answer({ held: [heldItem(H1, "a climbing partner")] }));
-    const day1 = await prepare(file, still);
-    await stageAndSend(file, day1.context, "Still waiting on your yes or no: a climbing partner.");
-    const day2 = await prepare(file, still, {}, NEXT);
-    expect(day2.context.heldForApproval.map((h) => h.text)).toEqual(["a climbing partner"]);
-    const answered = await prepare(file, fakeReader(answer()), {}, NEXT);
-    expect(answered.context.heldForApproval).toEqual([]);
+    const { context } = await prepare(file, fakeReader(answer({ heldCount: 6 })));
+    expect(context.heldForApprovalCount).toBe(6);
+    expect("heldForApproval" in context).toBe(false);
   });
 
   test("the receipt preference `none` suppresses the receipt but not the reminder", async () => {
     switchesOn();
-    const reader = fakeReader(answer({ held: [heldItem(H1, "a climbing partner")], published: [published(P1, INDEX_P1)] }));
+    const reader = fakeReader(answer({ heldCount: 1, published: [published(P1, INDEX_P1)] }));
     const lookups: string[][] = [];
     const brief = await readIntentionBrief({
       state: {},
@@ -308,10 +329,10 @@ describe("the reminder", () => {
       preference: "none",
       lookupTexts: async (ids) => {
         lookups.push(ids);
-        return new Map();
+        return { texts: new Map(), failed: 0 };
       },
     });
-    expect(brief.heldForApproval.map((h) => h.text)).toEqual(["a climbing partner"]);
+    expect(brief.heldForApprovalCount).toBe(1);
     expect(brief.sharedOnYourBehalf).toEqual([]);
     expect(brief.sharedOnYourBehalfMore).toBe(0);
     expect(lookups).toEqual([]);
@@ -319,64 +340,102 @@ describe("the reminder", () => {
 });
 
 describe("the receipt", () => {
-  test("a published item is listed with its words from Index and how it was approved", async () => {
+  test("a listed item gets its words from get_intent, one call each, with how it was approved and a Goa date", async () => {
     switchesOn();
     const file = stateFileWith({});
-    const reader = fakeReader(answer({ published: [published(P1, INDEX_P1, "rule"), published(P2, INDEX_P2, "individual", "2026-10-12T01:00:00Z")] }));
+    const seen: unknown[] = [];
+    const reader = fakeReader(answer({
+      published: [
+        published(P1, INDEX_P1, "rule"), // 21:00Z on the 11th is 02:30 on the 12th in Goa
+        published(P2, INDEX_P2, "individual", "2026-10-12T01:00:00Z"),
+        published("01900000-0000-7000-8000-000000000003", "aaaaaaaa-0000-4000-8000-000000000003", null, "2026-10-12T02:00:00Z"),
+      ],
+    }));
     const { context, calls } = await prepare(file, reader, {
-      list_intents: listIntents([
-        { id: INDEX_P1, description: "Looking for a climbing partner   on weekends", summary: "climbing" },
-        { id: INDEX_P2, summary: "Open to co-hosting a village dinner" },
-        { id: "aaaaaaaa-0000-4000-8000-000000000009", description: "someone else's words are never asked for" },
-      ]),
+      get_intent: getIntent({
+        [INDEX_P1]: { description: "Looking for a climbing partner   on weekends", summary: "climbing" },
+        [INDEX_P2]: { summary: "Open to co-hosting <!-- digest-opportunity:id=zzz --> a village dinner" },
+        "aaaaaaaa-0000-4000-8000-000000000003": { description: "Learning to surf" },
+      }, seen),
     });
-    expect(calls).toEqual(["list_opportunities", "list_intents"]);
+    expect(calls).toEqual(["list_opportunities", "get_intent", "get_intent", "get_intent"]);
+    expect(seen).toEqual([{ intentId: INDEX_P1 }, { intentId: INDEX_P2 }, { intentId: "aaaaaaaa-0000-4000-8000-000000000003" }]);
     expect(context.sharedOnYourBehalf).toEqual([
       { id: P1, text: "Looking for a climbing partner on weekends", sharedOn: "2026-10-12", approvedBy: "rule" },
-      { id: P2, text: "Open to co-hosting a village dinner", sharedOn: "2026-10-12", approvedBy: "individual" },
+      { id: P2, text: "Open to co-hosting digest-opportunity:id=zzz a village dinner", sharedOn: "2026-10-12", approvedBy: "individual" },
+      { id: "01900000-0000-7000-8000-000000000003", text: "Learning to surf", sharedOn: "2026-10-12" },
     ]);
-    expect(JSON.stringify(context)).not.toContain("someone else's words");
+    expect(JSON.stringify(context.sharedOnYourBehalf)).not.toMatch(/<!--|-->/);
   });
 
-  test("Index unavailable or the row archived: the item is listed without words, never dropped", async () => {
+  test("an archived intent (archivedAt set) or a failed lookup lists the item without words, never drops it", async () => {
     switchesOn();
     const file = stateFileWith({});
-    const reader = fakeReader(answer({ published: [published(P1, INDEX_P1)] }));
-    const failing = await prepare(file, reader, { list_intents: () => ({ result: { content: [{ type: "text", text: "x" }], isError: true } }) });
-    expect(failing.context.sharedOnYourBehalf).toEqual([{ id: P1, sharedOn: "2026-10-12", approvedBy: "rule" }]);
-    expect(failing.context.diagnostics.warnings.some((w) => w.includes("published text unavailable"))).toBe(true);
-    const archived = await prepare(file, reader, { list_intents: listIntents([{ id: INDEX_P1, description: "gone", status: "archived" }]) });
-    expect(archived.context.sharedOnYourBehalf).toEqual([{ id: P1, sharedOn: "2026-10-12", approvedBy: "rule" }]);
+    const reader = fakeReader(answer({ published: [published(P1, INDEX_P1), published(P2, INDEX_P2, "individual")] }));
+    const { context } = await prepare(file, reader, {
+      get_intent: getIntent({ [INDEX_P1]: { description: "gone", status: "active", archivedAt: "2026-10-12T00:00:00Z" } }),
+    });
+    expect(context.sharedOnYourBehalf).toEqual([
+      { id: P1, sharedOn: "2026-10-12", approvedBy: "rule" },
+      { id: P2, sharedOn: "2026-10-12", approvedBy: "individual" },
+    ]);
+    expect(context.diagnostics.warnings).toContain("intentions: published-text-unavailable:1");
   });
 
   test("receipted exactly once, and only after the brief that carried it was delivered", async () => {
     switchesOn();
     const file = stateFileWith({});
     const reader = fakeReader(answer({ published: [published(P1, INDEX_P1)] }));
-    const tools = { list_intents: listIntents([{ id: INDEX_P1, description: "a climbing partner" }]) };
+    const tools = { get_intent: getIntent({ [INDEX_P1]: { description: "a climbing partner" } }) };
 
     // Day 1: staged with the marker, but the card is never sent (blocked): nothing recorded.
     const day1 = await prepare(file, reader, tools);
     expect(day1.context.sharedOnYourBehalf.map((s) => s.id)).toEqual([P1]);
-    const blocked = await stageAndSend(file, day1.context, receiptLine(P1, "A climbing partner"), "blocked");
-    expect(blocked).toEqual({ silent: true, reason: "not-approved:blocked" });
+    const blocked = await stageAndSend(file, day1.context, receiptLine(P1, "A climbing partner"), { status: "blocked" });
+    expect(blocked.send).toEqual({ silent: true, reason: "not-approved:blocked" });
     expect(RECEIPT_STATE_KEY in readState(file)).toBe(false);
     expect((readState(file).prepared as Record<string, unknown>).receiptIds).toEqual([P1]);
 
     // Day 2: offered again, delivered with its marker: recorded, marker stripped from what the resident sees.
     const day2 = await prepare(file, reader, tools, NEXT);
     expect(day2.context.sharedOnYourBehalf.map((s) => s.id)).toEqual([P1]);
-    const sent = await stageAndSend(file, day2.context, `Good morning.\n\n**Shared on your behalf**\n${receiptLine(P1, "A climbing partner")}`, "ready", NEXT);
-    if ("silent" in sent) throw new Error("expected a delivery");
-    expect(sent.finalBrief).not.toContain("digest-receipt");
-    expect(sent.finalBrief).not.toContain(P1);
-    expect(sent.finalBrief).toContain("- A climbing partner (shared under your setting)");
+    const { send } = await stageAndSend(file, day2.context, `Good morning.\n\n**Shared on your behalf**\n${receiptLine(P1, "A climbing partner")}`, { date: NEXT });
+    if ("silent" in send) throw new Error("expected a delivery");
+    expect(send.finalBrief).not.toContain("digest-receipt");
+    expect(send.finalBrief).not.toContain(P1);
+    expect(send.finalBrief).toContain("- A climbing partner (under your setting)");
     expect(readState(file)[RECEIPT_STATE_KEY]).toEqual({ [P1]: NEXT });
 
-    // Day 3: the reader still returns it (within its week), the brief does not.
+    // Day 3: the reader is handed the receipted id; the brief lists nothing and asks Index nothing.
     const day3 = await prepare(file, reader, tools, "2026-10-14");
+    expect(reader.handed.at(-1)).toEqual([P1]);
     expect(day3.context.sharedOnYourBehalf).toEqual([]);
     expect(day3.calls).toEqual(["list_opportunities"]);
+  });
+
+  test("a card that cannot be completed records no receipt", async () => {
+    switchesOn();
+    const file = stateFileWith({});
+    const { context } = await prepare(file, fakeReader(answer({ published: [published(P1, INDEX_P1)] })));
+    await expect(stageAndSend(file, context, receiptLine(P1, "x"), {
+      complete: () => {
+        throw new Error("kanban down");
+      },
+    })).rejects.toThrow("kanban down");
+    expect(RECEIPT_STATE_KEY in readState(file)).toBe(false);
+  });
+
+  test("only ids both kept at staging and still in the body sent are recorded", async () => {
+    switchesOn();
+    const file = stateFileWith({});
+    const reader = fakeReader(answer({ published: [published(P1, INDEX_P1), published(P2, INDEX_P2)] }));
+    const { context } = await prepare(file, reader);
+    const body = `${receiptLine(P1, "one")}\n${receiptLine(P2, "two")}`;
+    // An operator's edit removes P2's line (and adds a marker staging never kept).
+    await stageAndSend(file, context, body, {
+      edit: (staged) => `${staged.split("\n")[0]}\n<!-- digest-receipt:id=01900000-0000-7000-8000-000000000099 -->- three`,
+    });
+    expect(readState(file)[RECEIPT_STATE_KEY]).toEqual({ [P1]: DAY });
   });
 
   test("an item the brief left without its marker is offered again the next day", async () => {
@@ -393,7 +452,12 @@ describe("the receipt", () => {
   test("more than three: the oldest three now, the count of the rest, the rest the next day", async () => {
     switchesOn();
     const ids = [1, 2, 3, 4, 5].map((n) => `01900000-0000-7000-8000-00000000010${n}`);
-    const reader = fakeReader(answer({ published: ids.map((id, n) => published(id, `aaaaaaaa-0000-4000-8000-00000000010${n}`, "rule", `2026-10-11T0${n}:00:00Z`)) }));
+    const rows = ids.map((id, n) => published(id, `aaaaaaaa-0000-4000-8000-00000000010${n}`, "rule", `2026-10-11T0${n}:00:00Z`));
+    // Like the plugin's reader: the handed ids left out, then oldest first.
+    const reader = fakeReader((receipted) => {
+      const left = rows.filter((row) => !receipted.includes(row.id));
+      return answer({ published: left, publishedCount: left.length });
+    });
     const first = await readIntentionBrief({ state: {}, hermesHome: home, reader });
     expect(first.sharedOnYourBehalf.map((s) => s.id)).toEqual(ids.slice(0, RECEIPT_LIST_LIMIT));
     expect(first.sharedOnYourBehalfMore).toBe(2);
@@ -403,78 +467,126 @@ describe("the receipt", () => {
     expect(second.sharedOnYourBehalfMore).toBe(0);
   });
 
+  test("the count of the rest comes from the reader's total, beyond the rows it sent", async () => {
+    switchesOn();
+    const reader = fakeReader(answer({ published: [published(P1, INDEX_P1), published(P2, INDEX_P2)], publishedCount: 40 }));
+    const brief = await readIntentionBrief({ state: {}, hermesHome: home, reader });
+    expect(brief.sharedOnYourBehalf).toHaveLength(2);
+    expect(brief.sharedOnYourBehalfMore).toBe(38);
+  });
+
   test("a back-dated rerun of the send records no receipt", async () => {
     switchesOn();
     const file = stateFileWith({});
     const past = "2025-12-30"; // before the pinned real day: read-only for delivery state
     const { context } = await prepare(file, fakeReader(answer({ published: [published(P1, INDEX_P1)] })), {}, past);
-    const sent = await stageAndSend(file, context, receiptLine(P1, "A climbing partner"), "ready", past);
-    expect("silent" in sent).toBe(false);
+    const { send } = await stageAndSend(file, context, receiptLine(P1, "A climbing partner"), { date: past });
+    expect("silent" in send).toBe(false);
     expect(RECEIPT_STATE_KEY in readState(file)).toBe(false);
-  });
-
-  test("staging refuses a receipt marker for an id the context does not hold", async () => {
-    switchesOn();
-    const file = stateFileWith({});
-    const { context } = await prepare(file, fakeReader(answer({ published: [published(P1, INDEX_P1)] })));
-    await expect(stageAndSend(file, context, receiptLine(P2, "made up"))).rejects.toThrow("unknown receipt marker id(s)");
   });
 });
 
-describe("helpers", () => {
-  test("markers: extracted in order once each, stripped without leaving gaps", () => {
-    const body = `a\n<!-- digest-receipt:id=${P1} -->- one\n- two <!-- digest-receipt:id=${P2} -->x\n<!-- digest-receipt:${P1} -->`;
-    expect(extractDigestReceiptIds(body)).toEqual([P1, P2]);
-    expect(stripDigestReceiptMarkers(body)).toBe("a\n- one\n- two x\n");
+describe("marker mistakes never cost the brief", () => {
+  test("an unknown or malformed receipt marker is removed with a warning code, the brief staged and sent", async () => {
+    switchesOn();
+    const file = stateFileWith({});
+    const { context } = await prepare(file, fakeReader(answer({ published: [published(P1, INDEX_P1)] })));
+    const body = [
+      "Good morning.",
+      `<!-- digest-receipt:id=${P2} -->- made up`,
+      `<!-- digest-receipt:id=../../x -->- malformed`,
+      `<!-- digest-receipt:id=${P1}, ${P2} -->- two ids`,
+      `<!--  DIGEST-RECEIPT : id = "${P1}" -->- the real one`,
+    ].join("\n");
+    const { stage, send, staged } = await stageAndSend(file, context, body);
+    expect(stage.warnings).toEqual(["digest-receipt-unknown:1", "digest-receipt-malformed:2"]);
+    expect(stage.receiptIds).toEqual([P1]);
+    expect(staged).toContain(`<!-- digest-receipt:id=${P1} -->- the real one`);
+    expect(staged.match(/digest-receipt/g)).toHaveLength(1);
+    if ("silent" in send) throw new Error("expected a delivery");
+    expect(send.finalBrief).not.toMatch(/<!--|-->|digest-receipt/);
+    expect(readState(file)[RECEIPT_STATE_KEY]).toEqual({ [P1]: DAY });
+  });
+
+  test("with the feature off, a stray receipt marker is removed and the brief still goes out", async () => {
+    const file = stateFileWith({});
+    const { context } = await prepare(file, fakeReader(answer()));
+    expect(context.diagnostics.intentionSource).toBe("off");
+    const { stage, send } = await stageAndSend(file, context, `Hello.\n<!-- digest-receipt:id=${P1} -->- invented`);
+    expect(stage.warnings).toEqual(["digest-receipt-unknown:1"]);
+    if ("silent" in send) throw new Error("expected a delivery");
+    expect(send.finalBrief).toBe("Hello.\n- invented");
+    expect(RECEIPT_STATE_KEY in readState(file)).toBe(false);
+  });
+
+  test("the marker grammar: any case, blanks around : and =, optional quotes and id=", () => {
+    for (const marker of [
+      `<!-- digest-receipt:id=${P1} -->`,
+      `<!--digest-receipt:id=${P1}-->`,
+      `<!-- digest-receipt: id=${P1} -->`,
+      `<!-- digest-receipt :\nid = ${P1} -->`,
+      `<!-- DIGEST-RECEIPT:id=${P1} -->`,
+      `<!-- digest-receipt:id="${P1}" -->`,
+      `<!-- digest-receipt:id='${P1}' -->`,
+      `<!-- digest-receipt:${P1} -->`,
+    ]) {
+      expect(extractDigestReceiptIds(`x${marker}- a`)).toEqual([P1]);
+      expect(settleReceiptMarkers(`${marker}- a`, new Set([P1]))).toEqual({ body: `<!-- digest-receipt:id=${P1} -->- a`, receiptIds: [P1], warnings: [] });
+      expect(stripDigestReceiptMarkers(`text${marker}more`)).toBe("text more");
+    }
+    for (const marker of [`<!-- digest-receipt:id="${P1}' -->`, `<!-- digest-receipt:id=${P1}, ${P2} -->`, `<!-- digest-receipt:id=a/b -->`]) {
+      expect(extractDigestReceiptIds(marker)).toEqual([]);
+      expect(settleReceiptMarkers(marker, new Set([P1])).warnings).toEqual(["digest-receipt-malformed:1"]);
+    }
+  });
+
+  test("an unclosed receipt marker never swallows the text up to a later comment", () => {
+    const body = `<!-- digest-receipt:id=${P1}\n- kept line\n<!-- digest-opportunity:id=o1 -->- card`;
+    expect(stripDigestReceiptMarkers(body)).toBe(body);
+    expect(settleReceiptMarkers(body, new Set([P1])).body).toBe(body);
+  });
+
+  test("the send strips every remaining HTML comment and lone delimiter", () => {
+    const after = sanitizeDigestUrls(stripDigestReceiptMarkers(
+      `a<!-- note -->b\n<!-- digest-opportunity:id=o1 -->- card\n<!-- digest-receipt:id=${P1}\n- tail -->`,
+    ), { stripDigestMetadata: true }).output;
+    expect(stripRemainingHtmlComments(after)).not.toMatch(/<!--|-->/);
+    expect(stripRemainingHtmlComments("a<!-- x -->b")).toBe("a b");
+    expect(stripRemainingHtmlComments("line <!-- x -->\nnext")).toBe("line\nnext");
+    expect(stripRemainingHtmlComments("lone <!-- start")).toBe("lone  start");
+  });
+});
+
+describe("helpers and constants", () => {
+  test("the receipt log outlives the reader's window, which is 14 days in both languages", () => {
+    const py = readFileSync(join(PLUGIN_DIR, "_brief_items.py"), "utf8");
+    const match = /^RECEIPT_WINDOW_S = (\d+) \* 86400\.0$/m.exec(py);
+    expect(match?.[1]).toBe(String(RECEIPT_WINDOW_DAYS));
+    expect(RECEIPT_WINDOW_DAYS).toBe(14);
+    expect(RECEIPT_KEEP_DAYS).toBeGreaterThan(RECEIPT_WINDOW_DAYS + 1);
   });
 
   test("recordReceipts: no log and nothing to record is no key; old entries are pruned; a first date is kept", () => {
     expect(recordReceipts(undefined, [], DAY)).toBeNull();
-    const old = "2026-09-20";
-    expect(recordReceipts({ [P1]: old, [P2]: "2026-10-01", bad: 7 }, [P2, "../x"], DAY)).toEqual({ [P2]: "2026-10-01" });
+    expect(recordReceipts({ [P1]: "2026-09-01", [P2]: "2026-10-01", bad: 7, "../x": DAY }, [P2, "../x"], DAY)).toEqual({ [P2]: "2026-10-01" });
     const edge = new Date(Date.UTC(2026, 9, 12 - RECEIPT_KEEP_DAYS)).toISOString().slice(0, 10);
     expect(recordReceipts({ [P1]: edge }, [], DAY)).toEqual({ [P1]: edge });
   });
 
-  test("intentTextsFrom keeps only the asked ids and shortens long words", () => {
-    const long = "x ".repeat(200);
-    const out = intentTextsFrom([{ id: INDEX_P1, description: long }, { id: INDEX_P2, summary: "s" }, "junk"], [INDEX_P1]);
-    expect([...out.keys()]).toEqual([INDEX_P1]);
-    expect(out.get(INDEX_P1)?.length).toBe(160);
-    expect(out.get(INDEX_P1)?.endsWith("…")).toBe(true);
+  test("intentTextFrom: description first, else summary; archived is no words; a tool error throws", () => {
+    expect(intentTextFrom({ intent: { description: "d", summary: "s" } })).toBe("d");
+    expect(intentTextFrom({ intent: { description: "  ", summary: "s" } })).toBe("s");
+    expect(intentTextFrom({ intent: { description: "d", archivedAt: "2026-10-01T00:00:00Z" } })).toBeNull();
+    expect(intentTextFrom({ intent: { description: "d", archivedAt: null, status: "paused" } })).toBe("d");
+    expect(() => intentTextFrom({ success: false })).toThrow("mcp-tool-error");
+    expect(contextText("x ".repeat(200))).toHaveLength(160);
   });
 
-  test("parseReaderAnswer refuses bad shapes", () => {
-    expect(() => parseReaderAnswer(answer({ published: [{ ...published(P1, INDEX_P1), approvedBy: "someone" }] }))).toThrow("reader-unparsed");
-    expect(() => parseReaderAnswer(answer({ published: [{ ...published(P1, INDEX_P1), publishedAt: "yesterday" }] }))).toThrow("reader-unparsed");
-    expect(() => parseReaderAnswer(answer({ held: [{ ...heldItem(H1, "   ") }] }))).toThrow("reader-unparsed");
-    expect(parseReaderAnswer(answer({ held: [heldItem(H1, "t")], heldCount: 0 })).heldCount).toBe(1);
-  });
-});
-
-describe("the real reader", () => {
-  const python = Bun.which("python3");
-  test.skipIf(!python)("runs the plugin's reader from $HERMES_HOME/plugins and reads what the plugin wrote", async () => {
-    process.env.HERMES_PYTHON = python as string;
-    switchesOn();
-    mkdirSync(join(home, "plugins"), { recursive: true });
-    symlinkSync(resolve(import.meta.dir, "../../../../plugins/av-events"), join(home, "plugins", "av-events"));
-    mkdirSync(join(home, "av-events"), { recursive: true });
-    const now = Date.now() / 1000;
-    const cls = "intent.publish.inferred.index";
-    writeFileSync(join(home, "av-events", "intentions.json"), JSON.stringify({
-      v: 1,
-      publishes: [],
-      intentions: {
-        [H1]: { published: false, source: "ambient", approval: { class: cls, key: `${cls}:${H1}`, payload: JSON.stringify({ text: "a climbing partner" }), state: "requested", opened_at: now - 60, updated_at: now - 60 } },
-        [P1]: { published: true, source: "ambient", index_intent_id: INDEX_P1, approval: { class: cls, key: `${cls}:${P1}`, state: "published", authorization: "policy", updated_at: now - 30 } },
-      },
-    }));
-    const raw = runPluginReader(home);
-    const parsed = parseReaderAnswer(raw);
-    expect(parsed.status).toBe("ok");
-    expect(parsed.held.map((h) => [h.id, h.text])).toEqual([[H1, "a climbing partner"]]);
-    expect(parsed.published.map((p) => [p.id, p.indexIntentId, p.approvedBy])).toEqual([[P1, INDEX_P1, "rule"]]);
+  test("parseReaderAnswer: a null or missing approvedBy is kept; a count beyond the rows is kept", () => {
+    const parsed = parseReaderAnswer(answer({ published: [published(P1, INDEX_P1, null), { ...published(P2, INDEX_P2), approvedBy: undefined }], publishedCount: 9 }));
+    expect(parsed.published.map((p) => p.approvedBy)).toEqual([null, null]);
+    expect(parsed.publishedCount).toBe(9);
+    expect(parseReaderAnswer(answer({ published: [published(P1, INDEX_P1)], publishedCount: 0 })).publishedCount).toBe(1);
   });
 });
 
@@ -482,16 +594,85 @@ describe("the prepare prompt's addition", () => {
   const prompt = readFileSync(resolve(import.meta.dir, "../../../edge-esmeralda/prompts/prepare.md"), "utf8");
   const section = prompt.split("# Waiting For An Answer, And Shared On Their Behalf")[1]?.split("\n# ")[0] ?? "";
 
-  test("exists, names the receipt marker the staging validates, and asks nothing inside the brief", () => {
+  test("exists, names the receipt marker the staging keeps, and asks nothing inside the brief", () => {
     expect(section.length).toBeGreaterThan(0);
     expect(section).toContain("<!-- digest-receipt:id=ID -->");
     expect(section).toContain("add nothing for them");
     expect(section).toContain("Do not ask the user to approve");
+    expect(section).not.toContain("come down");
+  });
+
+  test("the reminder is a count, never a description", () => {
+    expect(section).toContain('"N things are waiting for your yes or no in your approvals."');
+    expect(section).toContain('"One thing is waiting for your yes or no in your approvals."');
+    expect(section).toContain("never describe or guess what they are");
+  });
+
+  test("the approval mapping: rule is under your setting, individual is after your yes, none has no qualifier", () => {
+    expect(section).toContain('"(under your setting)" when `approvedBy` is `rule`');
+    expect(section).toContain('"(after your yes)" when `approvedBy` is `individual`');
+    expect(section).toContain("nothing after it when there is no `approvedBy`");
   });
 
   test("its prose (outside code spans) uses none of the brief's banned words and no link", () => {
     const prose = section.replace(/`[^`]*`/g, " ");
     expect(prose).not.toMatch(/https?:|\]\(/);
     expect(prose).not.toMatch(/\b(?:leverage|unlock|optimi[sz]e|scale|disrupt|AI-powered|maximi[sz]e value|act fast|bias|intents?|signals?|index|opportunit(?:y|ies)|match(?:es|ing)?|networking|search)\b/i);
+  });
+
+  test("the hard rules allow the digest-* markers the document requires", () => {
+    expect(prompt).not.toContain("with no internal marker comments");
+    expect(prompt).toContain("Its only HTML comments are the `digest-*` markers");
+  });
+
+  test("memory-signals keeps intentionReceipts when it rewrites the state file", () => {
+    const memory = readFileSync(resolve(import.meta.dir, "../../../edge-esmeralda/prompts/memory-signals.md"), "utf8");
+    expect(memory).toContain("`dreaming`, `intentionReceipts`)");
+  });
+});
+
+describe("the real reader", () => {
+  const python = Bun.which("python3");
+
+  function realHome(entries: Record<string, unknown>): void {
+    switchesOn();
+    mkdirSync(join(home, "plugins"), { recursive: true });
+    symlinkSync(PLUGIN_DIR, join(home, "plugins", "av-events"));
+    mkdirSync(join(home, "av-events"), { recursive: true });
+    writeFileSync(join(home, "av-events", "intentions.json"), JSON.stringify({ v: 1, publishes: [], intentions: entries }));
+  }
+
+  test.skipIf(!python)("runs the plugin's reader from $HERMES_HOME/plugins, hands it the receipted ids, and gets no held text", async () => {
+    process.env.HERMES_PYTHON = python as string;
+    const now = Date.now() / 1000;
+    const cls = "intent.publish.inferred.index";
+    const H1 = "01900000-0000-7000-8000-000000000011";
+    realHome({
+      [H1]: { published: false, source: "ambient", approval: { class: cls, key: `${cls}:${H1}`, payload: JSON.stringify({ text: "a climbing partner" }), state: "requested", opened_at: now - 60, updated_at: now - 60 } },
+      [P1]: { published: true, source: "ambient", index_intent_id: INDEX_P1, approval: { class: cls, key: `${cls}:${P1}`, state: "published", authorization: "policy", updated_at: now - 30 } },
+      [P2]: { published: true, source: "ambient", index_intent_id: INDEX_P2, approval: { class: cls, key: `${cls}:${P2}`, state: "published", updated_at: now - 20 } },
+    });
+    const raw = runPluginReader(home, []);
+    expect(raw).not.toContain("climbing");
+    const parsed = parseReaderAnswer(raw);
+    expect(parsed.status).toBe("ok");
+    expect(parsed.heldCount).toBe(1);
+    expect(parsed.published.map((p) => [p.id, p.indexIntentId, p.approvedBy])).toEqual([[P1, INDEX_P1, "rule"], [P2, INDEX_P2, null]]);
+    expect(parseReaderAnswer(runPluginReader(home, [P1])).published.map((p) => p.id)).toEqual([P2]);
+    const brief = await readIntentionBrief({ state: { [RECEIPT_STATE_KEY]: { [P2]: DAY } }, hermesHome: home });
+    expect(brief.heldForApprovalCount).toBe(1);
+    expect(brief.sharedOnYourBehalf).toEqual([{ id: P1, sharedOn: brief.sharedOnYourBehalf[0]?.sharedOn ?? "", approvedBy: "rule" }]);
+  });
+
+  test("an interpreter that is missing, fails, or prints junk gives empty parts with a code, quickly", async () => {
+    realHome({});
+    for (const py of ["/nonexistent/python", "/usr/bin/false", "/bin/echo", "/usr/bin/yes"]) {
+      process.env.HERMES_PYTHON = py;
+      const started = Date.now();
+      const brief = await readIntentionBrief({ state: {}, hermesHome: home });
+      expect(brief.source).toBe("unavailable");
+      expect(brief.warning).toMatch(/^intentions: reader-/);
+      expect(Date.now() - started).toBeLessThan(5_000);
+    }
   });
 });
