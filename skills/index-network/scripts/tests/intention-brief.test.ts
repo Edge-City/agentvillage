@@ -554,6 +554,7 @@ describe("marker mistakes never cost the brief", () => {
     expect(stripRemainingHtmlComments("a<!-- x -->b")).toBe("a b");
     expect(stripRemainingHtmlComments("line <!-- x -->\nnext")).toBe("line\nnext");
     expect(stripRemainingHtmlComments("lone <!-- start")).toBe("lone  start");
+    expect(stripRemainingHtmlComments(`&lt;!-- digest-receipt:id=${P1} --&gt;- a`)).toBe("- a");
   });
 });
 

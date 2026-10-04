@@ -132,8 +132,9 @@ function parseTask(raw: string): HermesTask | null {
 
 /**
  * DATA-222: after the specific strippers, any HTML comment still in the body
- * (a malformed marker, a stray note), and any lone `<!--` or `-->`, so nothing
- * internal reaches the resident.
+ * (a malformed marker, a stray note), an HTML-escaped one
+ * (`&lt;!-- ... --&gt;`), and any lone `<!--` or `-->`, so nothing internal
+ * reaches the resident.
  */
 export function stripRemainingHtmlComments(text: string): string {
   return text
@@ -142,6 +143,7 @@ export function stripRemainingHtmlComments(text: string): string {
       const after = whole[offset + match.length] ?? "\n";
       return /\s/.test(before) || /\s/.test(after) ? "" : " ";
     })
+    .replace(/&lt;!--[\s\S]*?--&gt;/gi, "")
     .replace(/<!--|-->/g, "");
 }
 
