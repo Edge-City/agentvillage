@@ -9,8 +9,11 @@ configured (`AV_APPROVAL_ENABLED` on, `AV_APPROVAL_URL` set):
   `digest.share`; on the resident's grant the plugin records `start` and
   emits `digest.shared@1`. The resident can later revoke it: the agent, on
   the resident's instruction, calls the tool again, and the plugin emits
-  `digest.revoked@1` (DATA-96 §5 step 5; no approval: the policy rows name no
-  revoke class, and narrowing a share is the safe direction).
+  `digest.revoked@1` (DATA-96 §5 step 5: "a resident can revoke"; no
+  approval: the policy rows name no revoke class, and narrowing a share is
+  the safe direction). Nothing else revokes: an expiry needs no event (the
+  ODS writer drops a lapsed share itself), and the daemon has no withdrawal
+  of an executed share.
 - `village_vote` (`AV_VILLAGE_VOTE`): the agent proposes the resident's
   answer to the open weekly question in class `village.vote`; on the
   resident's grant (or, where the resident set the class autonomous, inside
@@ -41,17 +44,28 @@ vote.cast" and the three closed schemas. What it fixes here:
   it receives the event, with no skew allowance), and a share with less than
   10 minutes left is neither started nor sent.
 
-**What authorizes an event, and nothing else does** (Lane B's rule, the
-same code path shape): the map is never authority. An event is emitted only
-by the call that (1) read the grant from the daemon for that key (`wait
---timeout 0` exit 0 `status: granted`), or, for a vote the policy clears,
-the `propose` answer itself inside the tool call; (2) claimed the entry with
-one compare-and-set (a claim id); (3) read the same authority again after the
-claim; (4) got `start` ok with the expected `authorization` and a `seq`;
-(5) moved the entry `starting -> emitting` under the claim with the event id
-fixed. A pending, rejected, revoked, withdrawn, expired or void answer, a
-daemon that cannot be reached or verified, or a start that is refused is no
-event.
+**What authorizes an event, and nothing else does.** The map is never
+authority: the agent runs as the plugin's uid and can write it. It says only
+what to ask the daemon next. An event is emitted only by the one call that
+(1) read the grant from the daemon for that key in that call (`wait
+--timeout 0` exit 0 `status: granted`), or, for a vote the policy clears, the
+`propose` answer itself inside the vote's own tool call; (2) claimed the
+entry with one compare-and-set (a claim id); (3) read the same authority
+again after the claim; (4) got `start` ok for exactly those bytes, naming
+this key and class, with the expected `authorization` and a `seq`; (5) built
+the event from the very string it sent to `start` (never from the map), and
+found the map still holding those bytes, the hash core answered at `propose`
+and its claim. A pending, rejected, revoked, withdrawn, expired or void
+answer, a daemon that cannot be reached or verified, a refused start, or a
+map that changed under the call is no event. An `emitting` entry the pass
+meets is never sent from there: it is the call in flight, or one that died
+(`emit_unconfirmed`).
+
+**What the resident approves is what is sent.** One function (`canonical`)
+makes the proposed bytes; `start` is given that same string; `start` ok means
+core found it hashing to the binding the resident was asked about; the event
+is one parse of it, and its `payload_hash` is that string's SHA-256, which
+must also equal the hash core answered at `propose`.
 
 **Where the held text lives.** The proposed string (with a share's text) is
 kept in `$HERMES_HOME/av-events/share-vote.json` (0600, under its flock)
@@ -59,12 +73,15 @@ from the tool call until the proposal ends, and dropped then; a shared
 digest keeps its id, scope and expiry (for a revocation), never its text.
 The text is never in a summary, a log line or an error.
 
-**No duplicate event.** The event id is a uuid v7 derived from the start time
-and the key and `start_seq`, fixed in the map before the event is buffered;
-an entry left `emitting` (the collector was off, or the process died between
-the buffer append and the map write) is emitted again with that same id, and
-ingest keeps one row per `event_id`. A spent grant whose `start` answer was
-lost ends `start_unconfirmed` and is never emitted.
+**No duplicate event.** Only the holder of the claim emits, once; nothing
+re-emits. The event id is a uuid v7 derived from the start time, the key
+and `start_seq`. A spent grant whose `start` answer was lost ends
+`start_unconfirmed`, and an event nothing could carry after its start ends
+`emit_failed`: neither is ever sent later.
+
+**A revocation** is emitted in the tool call the resident's instruction
+causes, needs no approval, and is sent once per share (claimed in the map
+first, put back when nothing carried it).
 
 **The weekly question** comes from `_village_question.current_question()`,
 whose shipped implementation refuses (`question_source_not_built`): the
@@ -157,12 +174,15 @@ REFUSED_CODES = frozenset({
 })
 
 #: States in which there is still something to ask the daemon or to send.
-LIVE = frozenset({"unfiled", "requested", "cleared", "starting", "emitting", "revoking"})
+LIVE = frozenset({"unfiled", "requested", "cleared", "starting", "emitting"})
 #: Final states; the held payload (and a vote's rationale) goes.
 FINAL = frozenset({
     "emitted", "revoked", "rejected", "withdrawn", "expired", "refused", "start_unconfirmed", "lapsed",
-    "closed", "not_shared", "not_cast", "invalid", "emit_refused", "revoke_unsent",
+    "closed", "not_shared", "not_cast", "invalid", "emit_refused", "emit_failed", "emit_unconfirmed",
 })
+#: An `emitting` entry older than this belongs to a call that died between the
+#: buffer append and the map write: it is never sent again.
+STALE_EMITTING_S = 60.0
 
 _clock: Callable[[], float] = time.time
 
@@ -466,7 +486,7 @@ def _cas(entry_id: str, expect: Optional[frozenset[str]], change: Callable[[dict
                 return None
             change(entry)
             entry["updated_at"] = float(_clock())
-            if entry.get("state") != "starting":
+            if entry.get("state") not in ("starting", "emitting"):
                 entry.pop("claim", None)
                 entry.pop("claimed_at", None)
                 entry.pop("back", None)
@@ -508,8 +528,7 @@ def _open(entry_id: str, entry: dict, *, inline: bool = True, cap_pending: bool 
             if entry_id in entries:
                 return "entry_exists"
             if cap_pending:
-                pending = sum(1 for v in entries.values() if v.get("class") == SHARE_CLASS and v.get("state") in LIVE
-                              and v.get("state") != "revoking")
+                pending = sum(1 for v in entries.values() if v.get("class") == SHARE_CLASS and v.get("state") in LIVE)
                 if pending >= MAX_PENDING_SHARES:
                     return "too_many_pending"
             now = float(_clock())
@@ -568,7 +587,8 @@ def valid_shape(entry_id: str, entry: dict, *, payload: bool = True) -> bool:
 def _bounds(entry: dict, now: float) -> Optional[tuple[str, str]]:
     """(final state, code) when this proposal can no longer be acted on now."""
     if entry.get("class") == SHARE_CLASS:
-        expires = epoch_from_iso(entry.get("expires_at"))
+        held = _parse(entry.get("payload"), SHARE_KEYS)
+        expires = epoch_from_iso(held["expires_at"] if held is not None else entry.get("expires_at"))
         if expires is None:
             return "invalid", "expires_invalid"
         if expires - now < MIN_REMAINING_S:
@@ -662,6 +682,8 @@ def _cleared(entry: dict) -> tuple[bool, Optional[str]]:
     if not answer.ok:
         return False, answer.error_code or f"exit_{answer.exit_code}"
     doc = answer.doc
+    if doc.get("action_key") != entry["key"] or doc.get("class") != entry["class"]:
+        return False, "bad_answer"
     if doc.get("payload_hash") != entry.get("payload_hash") or sha256_hex(entry.get("payload")) != entry.get("payload_hash"):
         return False, "payload_hash_mismatch"
     if doc.get("decision") not in ("autonomous", "supervised") or doc.get("state") is not None:
@@ -692,6 +714,9 @@ def _propose(entry_id: str, entry: dict) -> Optional[Outcome]:
     doc = answer.doc
     task = doc.get("task") if isinstance(doc.get("task"), str) else None
     if task is None or not task.startswith("propose:"):
+        _note(entry_id, "bad_answer")
+        return Outcome("unfiled", code="bad_answer")
+    if doc.get("action_key") != entry["key"] or doc.get("class") != entry["class"]:
         _note(entry_id, "bad_answer")
         return Outcome("unfiled", code="bad_answer")
     registered = doc.get("payload_hash")
@@ -866,52 +891,92 @@ def _execute(entry_id: str, entry: dict, kind: str) -> Optional[Outcome]:
             _set(entry_id, {"starting"}, "refused", claim=claim, code=error)
             return Outcome("refused", code=error)
         return _release(entry_id, claim, back, error)
-    authorization = answer.doc.get("authorization")
-    seq = answer.doc.get("seq")
+    doc = answer.doc
+    authorization = doc.get("authorization")
+    seq = doc.get("seq")
     if authorization != expected:
         _set(entry_id, {"starting"}, "refused", claim=claim, code="authorization_mismatch")
         logger.warning("av-events: share_vote authorization_mismatch")
         return Outcome("refused", code="authorization_mismatch")
+    if doc.get("action_key") != entry["key"] or doc.get("class") != entry["class"] or doc.get("task", task) != task:
+        # A start recorded for some other action than the one this call read.
+        _set(entry_id, {"starting"}, "refused", claim=claim, code="start_answer_mismatch")
+        logger.warning("av-events: share_vote start_answer_mismatch")
+        return Outcome("refused", code="start_answer_mismatch")
     if isinstance(seq, bool) or not isinstance(seq, int) or seq < 1:
         # Recorded, but the event could not name its start: never sent.
         _set(entry_id, {"starting"}, "start_unconfirmed", claim=claim, code="start_seq_missing")
         return Outcome("start_unconfirmed", code="start_seq_missing")
-    started = float(_clock())
-    event_id = derived_uuid7(int(started * 1000), f"av-events|{_event_type(entry)}|{entry['key']}|{seq}")
-    if _set(entry_id, {"starting"}, "emitting", claim=claim, authorization=authorization, start_seq=seq,
-            event_id=event_id, started_at=started) is None:
-        return Outcome("starting")
-    return _emit_entry(entry_id)
+    return _emit_granted(entry_id, entry, claim, payload, authorization, seq)
 
 
-def _emit_entry(entry_id: str) -> Outcome:
-    """`emitting`: buffer the event with its fixed id, then `emitted`."""
-    entry = lookup(entry_id)
-    if entry is None or entry.get("state") != "emitting":
-        return Outcome(entry.get("state", "none") if entry else "none")
-    seq, authorization, event_id = entry.get("start_seq"), entry.get("authorization"), entry.get("event_id")
-    started = entry.get("started_at")
-    payload = entry.get("payload")
-    if entry.get("class") == SHARE_CLASS:
-        expires = epoch_from_iso(entry.get("expires_at"))
-        if expires is None or expires - float(_clock()) < MIN_REMAINING_S:
-            # The door would refuse it now; the start is spent on it.
-            _set(entry_id, {"emitting"}, "lapsed", code="emit_lapsed")
-            return Outcome("lapsed", code="emit_lapsed")
-        body = shared_event_payload(payload, entry.get("payload_hash"), seq, authorization) if authorization == "grant" else None
-    else:
-        tenant = tenant_id()
-        body = (vote_event_payload(payload, tenant, entry.get("payload_hash"), seq, authorization)
-                if tenant is not None and authorization in ("grant", "policy") else None)
-    if (body is None or not isinstance(event_id, str) or isinstance(seq, bool) or not isinstance(seq, int)
-            or not isinstance(started, (int, float)) or sanitize(body) != body):
-        _set(entry_id, {"emitting"}, "emit_refused", code="event_invalid")
+def _event_body(cls: str, granted: str, granted_hash: str, seq: int, authorization: str) -> Optional[dict]:
+    """The event payload from the granted bytes themselves (never from the
+    entry's other fields), with the hash of those same bytes."""
+    if cls == SHARE_CLASS:
+        return shared_event_payload(granted, granted_hash, seq, authorization) if authorization == "grant" else None
+    tenant = tenant_id()
+    if tenant is None or authorization not in ("grant", "policy"):
+        return None
+    return vote_event_payload(granted, tenant, granted_hash, seq, authorization)
+
+
+def _emit_granted(entry_id: str, entry: dict, claim: str, granted: str, authorization: str, seq: int) -> Outcome:
+    """Emit the event for the start this call holds, and nothing else.
+
+    `granted` is the string this call sent to `start`, which answered ok, so
+    core checked that those bytes hash to the binding the resident was asked
+    about. The event is built from that string (one parse of it, its own
+    SHA-256 as `payload_hash`), never from the map. The map is read twice
+    more, only to refuse: when the held bytes, the hash core answered at
+    `propose`, the key or the claim are not still exactly this call's, the
+    event is not sent (`payload_tampered`)."""
+    cls, key = entry["class"], entry["key"]
+    granted_hash = sha256_hex(granted)
+    body = _event_body(cls, granted, granted_hash, seq, authorization) if granted_hash is not None else None
+    if (body is None or granted_hash != entry.get("payload_hash") or body.get("idempotency_key") != sha256_hex(key)
+            or sanitize(body) != body):
+        _set(entry_id, {"starting"}, "emit_refused", claim=claim, code="event_invalid")
         logger.warning("av-events: share_vote emit_refused=event_invalid")
         return Outcome("emit_refused", code="event_invalid")
-    if not _send(_event_type(entry), body, event_id, float(started)):
-        _note(entry_id, "emit_deferred")
-        return Outcome("emitting", code="emit_deferred", authorization=authorization, start_seq=seq)
-    _set(entry_id, {"emitting"}, "emitted", code=None, event_id=event_id)
+    now = float(_clock())
+    if cls == SHARE_CLASS:
+        expires = epoch_from_iso(body["expires_at"])
+        if expires is None or expires - now < MIN_REMAINING_S or expires - now > DIGEST_MAX_TTL_S:
+            # The door would refuse it; the start is spent on it.
+            _set(entry_id, {"starting"}, "lapsed", claim=claim, code="emit_lapsed")
+            return Outcome("lapsed", code="emit_lapsed")
+    event_id = derived_uuid7(int(now * 1000), f"av-events|{_event_type(entry)}|{key}|{seq}")
+
+    def still_granted(e: dict) -> bool:
+        return (e.get("key") == key and e.get("class") == cls and sha256_hex(e.get("payload")) == granted_hash
+                and e.get("payload_hash") == granted_hash)
+
+    def to_emitting(e: dict) -> None:
+        if not still_granted(e):
+            e["state"] = "emit_refused"
+            e["code"] = "payload_tampered"
+            return
+        e["state"] = "emitting"
+        e.update(authorization=authorization, start_seq=seq, event_id=event_id, emitting_at=now)
+
+    after = _cas(entry_id, frozenset({"starting"}), to_emitting, claim=claim)
+    if after is None:
+        return Outcome("starting")  # the claim is not ours any more: nothing sent
+    if after.get("state") != "emitting":
+        logger.warning("av-events: share_vote emit_refused=payload_tampered")
+        return Outcome("emit_refused", code="payload_tampered")
+    held = lookup(entry_id)
+    if held is None or held.get("state") != "emitting" or held.get("claim") != claim or not still_granted(held):
+        _set(entry_id, {"emitting"}, "emit_refused", claim=claim, code="payload_tampered")
+        logger.warning("av-events: share_vote emit_refused=payload_tampered")
+        return Outcome("emit_refused", code="payload_tampered")
+    if not _send(_event_type(entry), body, event_id, now):
+        # The start is spent and nothing carried the event: never sent later
+        # on the strength of the map.
+        _set(entry_id, {"emitting"}, "emit_failed", claim=claim, code="emit_failed")
+        return Outcome("emit_failed", code="emit_failed", authorization=authorization, start_seq=seq)
+    _set(entry_id, {"emitting"}, "emitted", claim=claim, code=None)
     return Outcome("emitted", authorization=authorization, start_seq=seq)
 
 
@@ -921,31 +986,9 @@ def _send(event_type: str, body: dict, event_id: str, at: float) -> bool:
         return False
     try:
         return bool(fn(event_type, body, event_id=event_id, occurred_at=iso_from_epoch(at)))
-    except Exception as exc:  # noqa: BLE001 - retried on the next pass with the same id
+    except Exception as exc:  # noqa: BLE001 - not buffered: the caller ends the entry
         logger.warning("av-events: share_vote emit_failed=%s", type(exc).__name__)
         return False
-
-
-def _emit_revoke(entry_id: str) -> Outcome:
-    """`revoking`: buffer `digest.revoked` with its fixed id, then `revoked`."""
-    entry = lookup(entry_id)
-    if entry is None or entry.get("state") != "revoking":
-        return Outcome(entry.get("state", "none") if entry else "none")
-    digest_id, event_id, at = entry.get("digest_id"), entry.get("revoke_event_id"), entry.get("revoked_at")
-    expires = epoch_from_iso(entry.get("expires_at"))
-    if expires is not None and expires <= float(_clock()):
-        # The share has lapsed by itself: there is no row left to delete.
-        _set(entry_id, {"revoking"}, "revoke_unsent", code="share_lapsed")
-        return Outcome("revoke_unsent", code="share_lapsed")
-    if (not isinstance(digest_id, str) or not DIGEST_ID.fullmatch(digest_id) or not isinstance(event_id, str)
-            or not isinstance(at, (int, float))):
-        _set(entry_id, {"revoking"}, "invalid", code="map_invalid")
-        return Outcome("invalid", code="map_invalid")
-    if not _send(REVOKED_EVENT, revoked_event_payload(digest_id), event_id, float(at)):
-        _note(entry_id, "emit_deferred")
-        return Outcome("revoking", code="emit_deferred")
-    _set(entry_id, {"revoking"}, "revoked", code=None)
-    return Outcome("revoked")
 
 
 def _stale(entry_id: str, entry: dict) -> Optional[Outcome]:
@@ -959,14 +1002,26 @@ def _stale(entry_id: str, entry: dict) -> Optional[Outcome]:
     return None
 
 
+def _stale_emitting(entry_id: str, entry: dict) -> Outcome:
+    """`emitting` is only ever advanced by the call that holds its start. One
+    the pass meets is that call in flight (left alone) or a call that died:
+    never sent from here, whatever the map says."""
+    at = entry.get("emitting_at")
+    if isinstance(at, (int, float)) and not isinstance(at, bool) and float(_clock()) - float(at) <= STALE_EMITTING_S:
+        return Outcome("emitting")
+    _set(entry_id, {"emitting"}, "emit_unconfirmed", claim=entry.get("claim"), code="emit_unconfirmed")
+    return Outcome("emit_unconfirmed", code="emit_unconfirmed")
+
+
 def advance(entry_id: str, *, execute: bool = True, inline: bool = False, expect_class: Optional[str] = None) -> Outcome:
     """Take the proposal as far as the daemon's answers allow now. Never raises.
 
     `inline`: the tool call itself is advancing (the poller is kept off it
     meanwhile). `expect_class`: only a vote's own tool call, with the class in
     memory, executes a start the policy clears. `execute`: False for a
-    one-shot resume pass outside the gateway, which stops before `start` and
-    sends nothing."""
+    one-shot resume pass outside the gateway, which stops before `start`. An
+    event is emitted only inside `_execute`, by the call whose `start` the
+    daemon just answered ok."""
     try:
         for _ in range(MAX_STEPS):
             entry = lookup(entry_id)
@@ -994,12 +1049,8 @@ def advance(entry_id: str, *, execute: bool = True, inline: bool = False, expect
                     result = Outcome("not_cast", code="rule_needs_call")
             elif state == "starting":
                 result = _stale(entry_id, entry)
-            elif not execute:
-                return Outcome(state, code="deferred")
-            elif state == "emitting":
-                result = _emit_entry(entry_id)
             else:
-                result = _emit_revoke(entry_id)
+                return _stale_emitting(entry_id, entry)
             if result is not None:
                 return result
         return Outcome("unknown")
@@ -1109,6 +1160,7 @@ REFUSALS: dict[str, str] = {
     "digest_id_required": "Nothing was changed: this action needs the digest_id a share returned.",
     "digest_unknown": "Nothing was changed: this agent holds no digest with that digest_id.",
     "share_in_flight": "Not revoked yet: this digest is being shared right now. Try again in a minute.",
+    "revoke_failed": "Not revoked yet: the revocation could not be recorded just now. Try again in a minute.",
     "tenant_unknown": (
         "Nothing was proposed: this agent does not know its own tenant id, which the vote is keyed on. "
         "Tell the resident the vote could not be filed."
@@ -1141,9 +1193,8 @@ STATE_MESSAGES: dict[str, str] = {
     "requested": "The resident has been asked in their approval channel. " + _NOT_APPROVAL,
     "cleared": "The resident's policy clears this; it is being done.",
     "starting": "It is being done now.",
-    "emitting": "The resident approved it; it is recorded and will be sent.",
+    "emitting": "The resident approved it; it is being sent now.",
     "emitted": "Done: the resident approved it, and it has been sent.",
-    "revoking": "Revoked; the revocation will be sent.",
     "revoked": "Revoked: village services no longer get this digest.",
     "rejected": "The resident declined it. It was not done; do not try another way.",
     "withdrawn": "Withdrawn; nothing was shared or cast.",
@@ -1159,8 +1210,13 @@ STATE_MESSAGES: dict[str, str] = {
     ),
     "not_cast": "Not cast: the resident's policy could not be confirmed in this call. Nothing was cast.",
     "invalid": "This request could not be checked, so nothing was done.",
-    "emit_refused": "The approval was recorded but the result could not be sent. Nothing was shared or cast.",
-    "revoke_unsent": "The digest had already expired, so there was nothing left to revoke.",
+    "emit_refused": (
+        "The approval was recorded, but what would have been sent was not exactly what the resident approved, "
+        "so nothing was shared or cast."
+    ),
+    "emit_failed": "The approval was recorded but the result could not be sent. Nothing was shared or cast.",
+    "emit_unconfirmed": "It could not be confirmed that this was sent, so it is not sent again.",
+    "revoke_lapsed": "The digest had already expired, so there was nothing left to revoke.",
     "error": "This could not run just now. " + _NOT_APPROVAL,
 }
 
@@ -1298,8 +1354,8 @@ def _revoke(args: dict) -> dict:
     state = entry.get("state")
     if state in ("starting", "emitting"):
         return _refuse("share_in_flight", digest_id=digest_id)
-    if state in ("unfiled", "requested", "cleared"):
-        after = _set(entry_id, {"unfiled", "requested", "cleared"}, "withdrawn", code="resident_revoked")
+    if state in ("unfiled", "requested", "cleared", "refused"):
+        after = _set(entry_id, {"unfiled", "requested", "cleared", "refused"}, "withdrawn", code="resident_revoked")
         if after is None:
             return _refuse("share_in_flight", digest_id=digest_id)
         _withdraw_task(entry, "the resident revoked the digest")
@@ -1308,16 +1364,18 @@ def _revoke(args: dict) -> dict:
         now = float(_clock())
         expires = epoch_from_iso(entry.get("expires_at"))
         if expires is not None and expires <= now:
-            return _state_answer(Outcome("revoke_unsent", code="share_lapsed"), digest_id=digest_id)
+            return _state_answer(Outcome("revoke_lapsed", code="share_lapsed"), digest_id=digest_id)
+        # Claimed first (one revocation per share), then sent; put back when
+        # nothing carried it, so the resident's next request tries again.
+        if _set(entry_id, {"emitted"}, "revoked", revoked_at=now) is None:
+            return _refuse("revoke_failed", digest_id=digest_id)
         event_id = derived_uuid7(int(now * 1000), f"av-events|{REVOKED_EVENT}|{digest_id}")
-        if _set(entry_id, {"emitted"}, "revoking", revoked_at=now, revoke_event_id=event_id) is None:
-            return _refuse("internal")
-        state = "revoking"
-    if state == "revoking":
-        return _state_answer(_emit_revoke(entry_id), digest_id=digest_id)
+        if not _send(REVOKED_EVENT, revoked_event_payload(digest_id), event_id, now):
+            _set(entry_id, {"revoked"}, "emitted", revoked_at=None, code="revoke_failed")
+            return _refuse("revoke_failed", digest_id=digest_id)
+        return _state_answer(Outcome("revoked"), digest_id=digest_id, shared=False)
     # Final without a share (declined, expired, withdrawn...) or already revoked.
-    return _state_answer(Outcome(state or "unknown", code=entry.get("code")), digest_id=digest_id,
-                         shared=state == "revoked")
+    return _state_answer(Outcome(state or "unknown", code=entry.get("code")), digest_id=digest_id, shared=False)
 
 
 def _share_status(args: dict) -> dict:
