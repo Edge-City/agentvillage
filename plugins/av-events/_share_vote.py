@@ -525,13 +525,21 @@ def summary_for(entry: dict, question: Optional["vq.Question"] = None) -> str:
 
 
 def _words(text: str) -> str:
-    """Folded, with punctuation as spaces: how a rationale is compared with
-    the prompt's own phrases."""
+    """Folded, with punctuation as spaces: how a held share is compared."""
     return " ".join("".join(ch if ch.isalnum() else " " for ch in _fold(text)).split())
 
 
-_PROMPT_WORDS = tuple(_w for _w in (" ".join("".join(c if c.isalnum() else " " for c in p.casefold()).split())
-                                    for p in PROMPT_PHRASES) if _w)
+def _squash(text: str) -> str:
+    """Folded, then only letters and digits kept: punctuation and spaces are
+    removed, not turned into spaces, so a phrase split by an apostrophe, a
+    hyphen, a quote or a dropped filler (`Answ'er to send`) still reads as
+    the phrase it spells."""
+    return "".join(ch for ch in _fold(text) if ch.isalnum())
+
+
+def _prompt_words() -> tuple[str, ...]:
+    """The prompt's own phrases as `_squash` sees them (from the constants)."""
+    return tuple(w for w in (_squash(p) for p in PROMPT_PHRASES) if w)
 
 
 def clean_rationale(value: Any) -> tuple[Optional[str], Optional[str]]:
@@ -545,10 +553,12 @@ def clean_rationale(value: Any) -> tuple[Optional[str], Optional[str]]:
     with a look-alike script (`rationale_mixed_script`), or leaves its
     character set (`rationale_charset`). Blank-rendering fillers are dropped
     and every kind of whitespace becomes one plain space."""
-    if value is None or (isinstance(value, str) and not value.strip()):
+    if value is None:
         return None, None
-    if not isinstance(value, str):
+    if type(value) is not str:  # bytes, numbers, lists and str subclasses alike
         return None, "rationale_invalid"
+    if not value.strip():
+        return None, None
     if any(unicodedata.category(ch) == "Cf" for ch in value):
         return None, "rationale_invisible"
     if any(not ch.isspace() and unicodedata.category(ch) in HIDDEN_CATEGORIES for ch in value):
@@ -558,10 +568,15 @@ def clean_rationale(value: Any) -> tuple[Optional[str], Optional[str]]:
     line = display_line(value)
     if not line:
         return None, None
+    # Every check below reads `line`, the final string: it is what the
+    # summary carries (`summary_for` cleans the stored value again, and
+    # `display_line` changes nothing the second time).
+    if display_line(line) != line:
+        return None, "rationale_invalid"
     if len(line) > MAX_RATIONALE or digest_text_problem(line) is not None or sanitize(line) != line:
         return None, "rationale_invalid"
-    words = _words(line)
-    if any(phrase in words for phrase in _PROMPT_WORDS):
+    squashed = _squash(line)
+    if any(phrase in squashed for phrase in _prompt_words()):
         return None, "rationale_imitates_prompt"
     if mixed_confusable_scripts(line):
         return None, "rationale_mixed_script"
@@ -588,20 +603,23 @@ SCRIPT_FAMILY = {"CJK": "EAST_ASIAN", "HIRAGANA": "EAST_ASIAN", "KATAKANA": "EAS
                  "KATAKANA-HIRAGANA": "EAST_ASIAN", "HANGUL": "EAST_ASIAN"}
 #: At most this many digits in a whole rationale (a year and a small count).
 MAX_DIGITS = 8
-#: Digit groups joined only by spaces, hyphens or brackets read as one number
-#: (a phone number Telegram may link): at most this many digits together.
+#: Digit groups joined only by word boundaries (spaces and the allowed
+#: punctuation) read as one number (a phone number Telegram may link): at
+#: most this many digits in such a run.
 MAX_GROUPED_DIGITS = 6
-_DIGIT_GROUPS = re.compile(r"[0-9][0-9 ()\-]*")
+
+
 #: Punctuation it may use: no colon (no "Field: value" that reads as a new
 #: row), and none of the characters that are markup or that Telegram turns
-#: into a link, a mention, a tag, a command or a code span (`<>&@#/\*_[]{}|~`
+#: into a link, a mention, a tag, a command or a code span (`<>&@#/\\*_[]{}|~`
 #: and backtick, `$`, `%`, `+`, `=`, `^`).
 RATIONALE_PUNCTUATION = frozenset(".,;!?'\"()-\u2018\u2019\u201c\u201d\u2013\u2014"
                                   # sentence punctuation of accepted scripts: the
                                   # ideographic comma and full stop, the danda
                                   "\u3001\u3002\u0964")
+#: What ends a word, and nothing else does.
+WORD_BOUNDARIES = RATIONALE_PUNCTUATION | {" "}
 MAX_MARKS_IN_A_ROW = 3
-MAX_DIGITS_IN_A_ROW = 6
 
 
 def _family(ch: str) -> Optional[str]:
@@ -609,52 +627,66 @@ def _family(ch: str) -> Optional[str]:
     return SCRIPT_FAMILY.get(script or "", script)
 
 
+def _letter_ok(ch: str) -> bool:
+    """A letter positively identified as one of the accepted scripts: its
+    Unicode name starts with the script (a character without a name, or
+    whose name starts with a qualifier such as MODIFIER, SUPERSCRIPT, SMALL,
+    FULLWIDTH or COMBINING, is not), it is stable under NFKC (no full-width,
+    mathematical, enclosed, squared or ligature form), and a Latin one
+    decomposes to an ASCII letter (no small capitals or phonetic letters)."""
+    if unicodedata.category(ch) not in ("Lu", "Ll", "Lt", "Lo", "Lm"):
+        return False
+    if unicodedata.normalize("NFKC", ch) != ch or _script(ch) not in RATIONALE_SCRIPTS:
+        return False
+    if unicodedata.category(ch) == "Lm" and _script(ch) != "KATAKANA-HIRAGANA":
+        return False  # modifier letters render as superscripts or marks
+    return _script(ch) != "LATIN" or "a" <= unicodedata.normalize("NFKD", ch)[0].lower() <= "z"
+
+
 def rationale_charset_problem(line: str) -> bool:
-    """True when the (display-cleaned) rationale holds a character outside
-    its set, a digit other than ASCII 0-9, more than `MAX_DIGITS` digits in
-    all or digit groups that read as one number of more than
-    `MAX_GROUPED_DIGITS`, a word mixing scripts (a mark counts as its own
-    script, so a mark on a letter of another script is refused), a period
-    inside a word (`evil.com` would become a link), more than
-    `MAX_DIGITS_IN_A_ROW` digits together, or more than `MAX_MARKS_IN_A_ROW`
-    marks on one letter."""
+    """The rationale's grammar, checked on the final string in one pass. A
+    rationale is words separated by `WORD_BOUNDARIES` (a space or one of the
+    allowed punctuation marks; nothing else ends a word). A word is letters
+    of one script family (`_letter_ok`), each optionally followed by at most
+    `MAX_MARKS_IN_A_ROW` marks of that same family, with ASCII digits
+    anywhere. Refused: anything else, a mark that does not follow a letter
+    of its word (at a word's start, after a digit, after a boundary), a
+    period inside a word, any digit but ASCII 0-9 (CJK numeral ideographs are
+    letters, allowed, and are not digits), more than `MAX_DIGITS` digits in
+    all, and a run of digits and boundaries holding more than
+    `MAX_GROUPED_DIGITS` digits."""
     if sum(1 for ch in line if "0" <= ch <= "9") > MAX_DIGITS:
         return True
-    for group in _DIGIT_GROUPS.findall(line):
-        if sum(1 for ch in group if "0" <= ch <= "9") > MAX_GROUPED_DIGITS:
-            return True
-    word_families: set = set()
-    marks = digits = 0
+    family: Optional[str] = None
+    prev = ""  # "letter", "mark", "digit", "boundary"
+    marks = 0
+    run_digits = 0
     for i, ch in enumerate(line):
         cat = unicodedata.category(ch)
-        marks = marks + 1 if cat in ("Mn", "Mc") else 0
-        digits = digits + 1 if cat == "Nd" else 0
-        if marks > MAX_MARKS_IN_A_ROW or digits > MAX_DIGITS_IN_A_ROW:
-            return True
-        if ch == " ":
-            word_families = set()
-            continue
-        if ch in RATIONALE_PUNCTUATION:
+        if ch in WORD_BOUNDARIES:
             if ch == "." and i + 1 < len(line) and line[i + 1] != " ":
-                return True
-            word_families = set()
+                return True  # a period inside a word becomes a link
+            family, prev, marks = None, "boundary", 0
             continue
-        if cat[0] not in ("L", "M", "N") or cat in ("Nl", "No"):
-            return True
-        if unicodedata.normalize("NFKC", ch) != ch:
-            return True  # a compatibility form (full-width, mathematical, ligature)
-        if cat == "Nd":
-            if "0" <= ch <= "9":
-                continue  # ASCII digits sit beside any script
-            return True  # other scripts' digits (a zero that draws like o)
-        script = _script(ch)
-        word_families.add(_family(ch))
-        if len(word_families) > 1:
+        if "0" <= ch <= "9":
+            run_digits += 1
+            if run_digits > MAX_GROUPED_DIGITS:
+                return True
+            prev, marks = "digit", 0
+            continue
+        if cat[0] == "M":
+            marks += 1
+            # A mark's family is its name's script: a generic COMBINING
+            # diacritical matches no accepted letter's family.
+            if prev not in ("letter", "mark") or marks > MAX_MARKS_IN_A_ROW or _family(ch) != family:
+                return True
+            prev = "mark"
+            continue
+        if not _letter_ok(ch):
+            return True  # other digits (Nd, No, Nl), symbols, look-alike or unlisted letters
+        if family is not None and _family(ch) != family:
             return True  # one script per word
-        if script not in RATIONALE_SCRIPTS:
-            return True  # COMBINING marks, look-alike and right-to-left scripts
-        if script == "LATIN" and not ("a" <= unicodedata.normalize("NFKD", ch)[0].lower() <= "z"):
-            return True
+        family, prev, marks, run_digits = _family(ch), "letter", 0, 0
     return False
 
 

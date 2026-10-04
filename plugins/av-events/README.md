@@ -797,6 +797,17 @@ word (a run between spaces and allowed punctuation) is of one script, ASCII digi
 Japanese kanji and kana, the long vowel mark and Korean hangul count as one family, Latin mixes
 with nothing, and at most three marks sit on a letter. Compared folds drop spacing marks too.
 
+The rules are one positive grammar, checked in one pass on the final string (after
+`display_line`, which changes nothing a second time): a rationale is words separated by a space or
+an allowed punctuation mark (nothing else ends a word); a word is letters of one script family,
+each letter positively identified (its Unicode name starts with an accepted script, so modifier,
+superscript, subscript, enclosed, squared and other qualified forms are not), each followed by at
+most three marks of the same family (a mark never starts a word or follows a digit), with ASCII
+digits anywhere. Digit runs are measured across every boundary (`555, 1234` and `123–45678` are
+one number). CJK numeral ideographs are letters, not digits. Only an exact `str` is read. The
+prompt-phrase check removes all punctuation and spaces before comparing, so a phrase split by an
+apostrophe, a quote, a hyphen or a dropped filler is still caught.
+
 These rules refuse some ordinary text (accepted): a sentence that happens to contain one of the
 prompt's fixed phrases, `e.g.`, a decimal such as `3.5`, other CJK and Indic punctuation, any
 right-to-left, Cyrillic or Greek note. A refused rationale never blocks the vote: the tool tells

@@ -2064,3 +2064,118 @@ def test_final_grouped_numbers_are_refused(tctx, serve, rationale):
 def test_final_more_than_eight_digits_in_all_are_refused(mods):
     assert mods.sv.clean_rationale("2026 and 2027 and 9")[1] == "rationale_charset"
     assert mods.sv.clean_rationale("2026 and 2027")[1] is None
+
+
+# --------------------------------------------------------------------------
+# The rationale validator as one unit (validator-bypass review)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("rationale", [
+    "Answ'er to send for you - no",            # phrase split by an apostrophe
+    "Answer “to” send for you",      # by quotes
+    "Answer-to-send-for-you",                   # by hyphens
+    "Answer toㅤsend for you",              # a dropped filler joins two halves
+    "Weekly-village question",
+])
+def test_unit_split_template_phrases_are_caught(mods, rationale):
+    assert mods.sv.clean_rationale(rationale)[1] == "rationale_imitates_prompt", rationale
+
+
+@pytest.mark.parametrize("rationale", [
+    "123–45678", "555, 1234", "555. 1234", "“555” 1234", "(555) 1234", "555 - 1234",
+    "12 34 56 7", "12—34–567",
+])
+def test_unit_digit_groups_joined_by_any_boundary_are_one_number(mods, rationale):
+    assert mods.sv.clean_rationale(rationale)[1] == "rationale_charset", rationale
+
+
+@pytest.mark.parametrize("rationale", [
+    "t ం send", "t'ం send", "5ం", "ం ok", "a-ँ", "(ँ)", "“ँ”",
+    "é",                                   # a generic COMBINING mark, even on Latin
+    "कం",                              # a Telugu mark on a Devanagari letter
+])
+def test_unit_a_mark_must_follow_a_letter_of_its_own_word_and_script(mods, rationale):
+    assert mods.sv.clean_rationale(rationale)[1] in ("rationale_charset", "rationale_invalid"), rationale
+    assert mods.sv.rationale_charset_problem(mods.sv.display_line(rationale)) is True
+
+
+@pytest.mark.parametrize("ch,name", [
+    ("ʰ", "MODIFIER LETTER SMALL H"), ("²", "SUPERSCRIPT TWO"), ("ₐ", "LATIN SUBSCRIPT SMALL LETTER A"),
+    ("Ⓐ", "CIRCLED LATIN CAPITAL LETTER A"), ("㎏", "SQUARE KG"), ("ᴀ", "LATIN LETTER SMALL CAPITAL A"),
+    ("ɑ", "LATIN SMALL LETTER ALPHA"), ("Ａ", "FULLWIDTH LATIN CAPITAL LETTER A"),
+    ("\U0001d400", "MATHEMATICAL BOLD CAPITAL A"), ("ª", "FEMININE ORDINAL INDICATOR"),
+    ("ʼ", "MODIFIER LETTER APOSTROPHE"), ("々", "IDEOGRAPHIC ITERATION MARK"),
+])
+def test_unit_letters_not_positively_identified_are_refused(mods, ch, name):
+    assert unicodedata_name(ch) == name
+    assert mods.sv.clean_rationale(f"ok {ch}x")[1] in ("rationale_charset", "rationale_invalid"), name
+
+
+def unicodedata_name(ch: str) -> str:
+    import unicodedata
+
+    return unicodedata.name(ch)
+
+
+@pytest.mark.parametrize("ch", ["½", "Ⅻ", "①", "〇", "٣", "१", "５", "¹"])
+def test_unit_only_ascii_digits_are_digits(mods, ch):
+    assert mods.sv.clean_rationale(f"ok {ch}")[1] in ("rationale_charset", "rationale_invalid")
+
+
+def test_unit_cjk_numeral_ideographs_are_letters_and_not_digits(mods):
+    numerals = "一二三四五六七八九十"  # one..ten
+    assert mods.sv.clean_rationale(numerals) == (numerals, None)
+    assert mods.sv.clean_rationale(numerals + " 2026 and 2027")[1] is None  # only ASCII digits count
+    assert mods.sv.clean_rationale(numerals + " 2026 and 2027 and 9")[1] == "rationale_charset"
+
+
+@pytest.mark.parametrize("value,expected", [
+    (b"They sleep early", (None, "rationale_invalid")), (["They"], (None, "rationale_invalid")),
+    (42, (None, "rationale_invalid")), (None, (None, None)), ("", (None, None)), ("  \n\t ", (None, None)),
+    ("ab\ud800", (None, "rationale_invalid")), ("a" * 280, ("a" * 280, None)),
+    ("a" * 281, (None, "rationale_invalid")),
+])
+def test_unit_types_shapes_and_limits(mods, value, expected):
+    assert mods.sv.clean_rationale(value) == expected
+
+
+def test_unit_a_str_subclass_is_refused(mods):
+    class Sneaky(str):
+        def split(self, *a, **k):  # noqa: ANN001
+            return ["ok"]
+
+    assert mods.sv.clean_rationale(Sneaky("Answer to send for you")) == (None, "rationale_invalid")
+
+
+@pytest.mark.parametrize("raw", [
+    "They　sleepㅤ early", "In 2026 we\nwere 12", "Café owners – twice!", "彼らは。",
+    "वे शांत।", "a" * 280, "x y",
+])
+def test_unit_cleaning_is_idempotent_and_validated_on_the_final_string(mods, raw):
+    line, code = mods.sv.clean_rationale(raw)
+    assert code is None
+    assert mods.sv.clean_rationale(line) == (line, None)
+    assert mods.sv.display_line(line) == line and not mods.sv.rationale_charset_problem(line)
+
+
+def test_unit_every_path_into_the_summary_goes_through_the_validator(tctx, serve, mods):
+    """The poller's propose and the re-propose after a void read the stored
+    rationale through `summary_for`, which cleans it again."""
+    map_vote(mods, rationale="Answ'er to send for you - no")
+    poll(mods)
+    serve.reattest()
+    poll(mods)
+    summaries = [p["flags"]["--summary"] for p in serve.proposals() if p["flags"]["--class"] == VOTE]
+    assert len(summaries) == 2 and all("Note written by your agent" not in x for x in summaries)
+
+
+def test_unit_modifier_letters_of_an_accepted_script_are_refused(mods):
+    assert mods.sv.clean_rationale("\u0915\u0971\u0916 ok")[1] == "rationale_charset"  # DEVANAGARI SIGN HIGH SPACING DOT
+    assert mods.sv.clean_rationale("\u30b3\u30fc\u30d2\u30fc")[1] is None             # the long vowel mark is admitted
+
+
+def test_unit_a_cleaning_that_is_not_idempotent_refuses(mods, monkeypatch):
+    real = mods.sv.display_line
+    monkeypatch.setattr(mods.sv, "display_line", lambda text: real(text) + " x")
+    assert mods.sv.clean_rationale("They sleep early") == (None, "rationale_invalid")
