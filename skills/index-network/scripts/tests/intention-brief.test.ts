@@ -477,3 +477,21 @@ describe("the real reader", () => {
     expect(parsed.published.map((p) => [p.id, p.indexIntentId, p.approvedBy])).toEqual([[P1, INDEX_P1, "rule"]]);
   });
 });
+
+describe("the prepare prompt's addition", () => {
+  const prompt = readFileSync(resolve(import.meta.dir, "../../../edge-esmeralda/prompts/prepare.md"), "utf8");
+  const section = prompt.split("# Waiting For An Answer, And Shared On Their Behalf")[1]?.split("\n# ")[0] ?? "";
+
+  test("exists, names the receipt marker the staging validates, and asks nothing inside the brief", () => {
+    expect(section.length).toBeGreaterThan(0);
+    expect(section).toContain("<!-- digest-receipt:id=ID -->");
+    expect(section).toContain("add nothing for them");
+    expect(section).toContain("Do not ask the user to approve");
+  });
+
+  test("its prose (outside code spans) uses none of the brief's banned words and no link", () => {
+    const prose = section.replace(/`[^`]*`/g, " ");
+    expect(prose).not.toMatch(/https?:|\]\(/);
+    expect(prose).not.toMatch(/\b(?:leverage|unlock|optimi[sz]e|scale|disrupt|AI-powered|maximi[sz]e value|act fast|bias|intents?|signals?|index|opportunit(?:y|ies)|match(?:es|ing)?|networking|search)\b/i);
+  });
+});
