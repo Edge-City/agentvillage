@@ -32,8 +32,9 @@ capture"). Two producers inside the sandbox:
   result turns a description rewrite into a withdrawal. The plugin returns its
   own JSON object, never Hermes's MCP wrapper, and reports a non-2xx answer as
   an object rather than an error status, so a result carrying an integer
-  `status` of 400 or more, `ok: false`, `success: false` or an `error` key
-  records nothing. Events are the MCP tools' (`capture_path` `index_tool`).
+  `status` of 400 or more, `ok: false`, `success: false` or a truthy `error`
+  records nothing. An `intentId` that is not a full id (a prefix) is recorded
+  only as the full id the result names for it; otherwise nothing. Events are the MCP tools' (`capture_path` `index_tool`).
   The plugin has no pause, resume, archive or delete tool; its other intent
   tools read, or file an intent into a network, and record nothing. Either
   name served by an MCP server is not this plugin and records nothing.
@@ -177,6 +178,10 @@ _CODE_PATTERN = re.compile(r"^[a-z0-9_]{1,64}$")
 
 #: Every id that goes into an envelope or a payload must look like an id.
 ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+
+#: A full Index intent id (a UUID). Anything shorter given as `intentId` is a
+#: prefix Index resolves, and is never itself recorded from a plugin write.
+FULL_ID_PATTERN = re.compile(r"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$")
 
 _DECODER = json.JSONDecoder()
 
@@ -711,8 +716,10 @@ def plugin_result_failed(payload: Any) -> bool:
 
     The plugin returns every answer as a JSON object, its transport's non-2xx
     answers included, so a failure is in the object, not in Hermes's status:
-    an integer `status` of 400 or more, `ok: false`, `success: false`, or any
-    `error` key. Anything that is not an object is not the plugin's answer.
+    an integer `status` of 400 or more, `ok: false`, `success: false`, or a
+    truthy `error` (the plugin's own test, `selected_agent`: a stray
+    `"error": null` on a success body is not a failure). Anything that is not
+    an object is not the plugin's answer.
     """
     if not isinstance(payload, dict):
         return True
@@ -721,7 +728,7 @@ def plugin_result_failed(payload: Any) -> bool:
         return True
     if payload.get("ok") is False or payload.get("success") is False:
         return True
-    return "error" in payload
+    return bool(payload.get("error"))
 
 
 def plan_index_plugin(tool: str, args: dict, result: Any, *, cron: bool = False) -> list[IntentionCall]:
@@ -743,6 +750,13 @@ def plan_index_plugin(tool: str, args: dict, result: Any, *, cron: bool = False)
         if value is None:
             return []
         clean[key] = value
+    arg_id = clean.get("intentId")
+    if arg_id is not None and FULL_ID_PATTERN.fullmatch(arg_id) is None:
+        # A short prefix (Index resolves it) joins nothing by itself: only the
+        # full id the result names for it may become the join key.
+        result_id = result_intent_id(payload)
+        if result_id is None or not result_id.startswith(arg_id):
+            return []
     allowed = INDEX_INTENT_TOOLS[tool]
     calls = plan_index(INDEX_PLUGIN_TOOLS[tool], clean, payload, cron=cron)
     return [call for call in calls if call.event_type == allowed]

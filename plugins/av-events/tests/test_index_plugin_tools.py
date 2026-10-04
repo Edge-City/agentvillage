@@ -192,7 +192,6 @@ PARITY_CASES = [
     # Updates: the full id, a short prefix the result resolves, a result naming another intent.
     (BARE_UPDATE, {"intentId": FULL_ID, "description": DESCRIPTION}, plugin_answer({"intentId": FULL_ID, "description": DESCRIPTION}), "ok"),
     (BARE_UPDATE, {"intentId": FULL_ID[:8], "description": DESCRIPTION}, plugin_answer({"intentId": FULL_ID}), "ok"),
-    (BARE_UPDATE, {"intentId": FULL_ID[:8], "description": DESCRIPTION}, plugin_answer({"intentId": "ffffffff-other"}), "ok"),
     (BARE_UPDATE, {"intentId": "int-abc", "description": DESCRIPTION}, plain({"intent": {"id": "int-abc", "summary": SUMMARY}}), "ok"),
     (BARE_UPDATE, {"intentId": FULL_ID, "description": DESCRIPTION}, plugin_answer({"intentId": FULL_ID}), "timeout"),
 ]
@@ -332,7 +331,6 @@ FAILURE_SHAPES = [
     plugin_answer({"status": 503, "intentId": FULL_ID}),
     plugin_answer({"ok": False, "intentId": FULL_ID}),
     plugin_answer({"success": False, "intentId": FULL_ID}),
-    plugin_answer({"error": None, "intentId": FULL_ID}),
     plugin_answer({"error": "Index transport response could not be processed", "intentId": FULL_ID}),
     plain([{"intentId": FULL_ID}]),
     "Created your signal " + FULL_ID,
@@ -356,9 +354,15 @@ def test_a_failure_the_plugin_reports_in_its_result_records_nothing(intentions, 
     plugin_answer({"status": "500", "intentId": FULL_ID}),
     plugin_answer({"ok": True, "intentId": FULL_ID}),
     plugin_answer({"success": True, "intentId": FULL_ID}),
+    plugin_answer({"error": None, "intentId": FULL_ID}),
+    plugin_answer({"error": "", "intentId": FULL_ID}),
+    plugin_answer({"error": False, "intentId": FULL_ID}),
 ])
 def test_a_success_status_or_flag_still_records(intentions, result):
-    """Only an integer of 400 or more is an HTTP failure; a boolean or a string `status` is not one."""
+    """Only an integer of 400 or more is an HTTP failure; a boolean or a string
+    `status` is not one. An `error` counts only when truthy, as the plugin's
+    own check reads it: a stray `"error": null` on a success body must not
+    lose a real write."""
     [call] = intentions.plan(BARE_CREATE, {"description": DESCRIPTION}, result, "ok")
     assert call.intention_id == FULL_ID
 
@@ -517,9 +521,31 @@ def test_tool_call_names_and_categorises_the_bare_writes(plugin, live, av, name)
     assert event["payload"]["tool_category"] == "intention"
 
 
-def test_a_bare_update_result_naming_another_intent_is_not_trusted(intentions):
-    """Index resolves a short prefix to the full id; a result naming a different
-    intent is not that, and the argument's id is kept."""
-    [call] = intentions.plan(BARE_UPDATE, {"intentId": FULL_ID[:8], "description": DESCRIPTION},
-                             plugin_answer({"intentId": "ffffffff-other"}), "ok")
-    assert call.intention_id == call.index_intent_id == FULL_ID[:8]
+def test_a_bare_update_by_full_id_whose_result_names_another_intent_keeps_the_argument(intentions):
+    """A result naming a different intent is not trusted; the full id argued is kept."""
+    [call] = intentions.plan(BARE_UPDATE, {"intentId": FULL_ID, "description": DESCRIPTION},
+                             plugin_answer({"intentId": "ffffffff-0000-4000-8000-000000000000"}), "ok")
+    assert call.intention_id == call.index_intent_id == FULL_ID
+
+
+@pytest.mark.parametrize("result", [
+    plugin_answer({"description": DESCRIPTION}),
+    plain({"no_content": True}),
+    plain({"no_content": True, "status": 204}),
+    plain({}),
+    plugin_answer({"intentId": "ffffffff-0000-4000-8000-000000000000"}),
+    plugin_answer({"intentId": FULL_ID[:4]}),
+])
+@pytest.mark.parametrize("prefix", [FULL_ID[:8], FULL_ID[:13], FULL_ID.upper()[:8], "int-abc"])
+def test_a_prefix_never_becomes_the_join_key(intentions, prefix, result):
+    """An `intentId` that is not a full id is recorded only as the full id the
+    result names for it; a result that names none, or another intent, records
+    nothing."""
+    assert intentions.plan(BARE_UPDATE, {"intentId": prefix, "description": DESCRIPTION}, result, "ok") == []
+
+
+@pytest.mark.parametrize("result", [plugin_answer({"description": DESCRIPTION}), plain({"no_content": True})])
+@pytest.mark.parametrize("full", [FULL_ID, FULL_ID.upper()])
+def test_a_full_id_joins_even_when_the_result_names_none(intentions, full, result):
+    [call] = intentions.plan(BARE_UPDATE, {"intentId": full, "description": DESCRIPTION}, result, "ok")
+    assert call.event_type == "intention.updated" and call.intention_id == full
