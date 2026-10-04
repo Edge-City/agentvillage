@@ -33,7 +33,9 @@ TOKEN = "agent-token-for-the-lane-o3-tests-00001"
 FACADE = "https://approval.example"
 ACTOR = "agent:test"
 SESSION = "sess-o3"
-TENANT = VOTE_V["tenant_id"]
+#: A tenant id as the control plane writes it: a lower-case UUID (the vector's
+#: `t_vote_1` is used by the pure-function tests only).
+TENANT = "6f1c2a9e-0b7d-4e3a-9c5f-2d8e1b0a7c41"
 TEXT = "Looking for a Rust reviewer for my side project this week"
 TEXT_WORDS = ("Rust", "reviewer", "side project")
 QUESTION_ID = VOTE_V["question_id"]
@@ -145,6 +147,12 @@ class FakeServe:
             t["asks"] += 1
             return 0, {**base, "decision": "requested" if manual else "autonomous",
                        "state": "requested" if manual else None, "seq": self._next_seq(), "idempotent": False}, None
+        if t["state"] == "none" and manual:
+            # The class was raised to manual since: asked now.
+            t["state"] = "requested"
+            t["asks"] += 1
+            return 0, {**base, "decision": "requested", "state": "requested", "seq": self._next_seq(),
+                       "idempotent": False}, None
         if t["state"] == "none":
             return 0, {**base, "decision": "autonomous", "state": None, "seq": None, "idempotent": True}, None
         return 0, {**base, "decision": "requested", "state": t["state"], "seq": 4, "idempotent": True}, None
@@ -273,9 +281,14 @@ class Q:
         self.question_id = QUESTION_ID
         self.options = ("yes", "no", "abstain")
 
+        self.text: Optional[str] = "Should the village keep quiet hours after 22:00?"
+        self.labels: dict[str, Optional[str]] = {"yes": "Yes, quiet hours from 22:00", "no": "No quiet hours",
+                                                 "abstain": None}
+
     def __call__(self):
-        return self.mods.vq.Question(self.question_id, "Should the village keep quiet hours after 22:00?",
-                                     self.options, self.closes_at, opens_at=NOW - DAY)
+        vq = self.mods.vq
+        options = tuple(vq.Option(k, self.labels.get(k)) for k in self.options)
+        return vq.Question(self.question_id, self.text, options, self.closes_at, opens_at=NOW - DAY)
 
 
 @pytest.fixture()
@@ -300,11 +313,40 @@ def env(monkeypatch, home):
 
 
 @pytest.fixture()
-def tctx(plugin, env, serve, kicks, clock, question):
+def consent(mods, monkeypatch):
+    """What ingest says about research consent: None (could not tell) unless a test sets it."""
+    box = {"research": None}
+    monkeypatch.setattr(mods.sv, "_research_consent", lambda: box["research"])
+    return box
+
+
+@pytest.fixture()
+def tctx(plugin, env, serve, kicks, clock, question, consent, mods):
     ctx = Ctx()
     plugin.register(ctx)
     ctx.fire("on_session_start", session_id=SESSION, model="m", platform="telegram")
+    # The tests run the collector as a null sink (a token, no URL: nothing is
+    # ever sent anywhere) and read its buffer; the shipped readiness refuses a
+    # null sink (`test_a_null_sink_is_not_ready`), so readiness here is the
+    # collector's own on/off only.
+    collector = plugin._COLLECTOR
+    mods.sv.set_emitter(mods.sv._emit_fn, lambda: not collector.plugin_disabled and collector.config.active)
+    monkeypatch_null_sink(plugin)
+    mods.sv._REVOKED_IDS.clear()
     return ctx
+
+
+def monkeypatch_null_sink(plugin) -> None:
+    """Let the test emitter buffer in null-sink mode (what it refuses in production)."""
+    collector = plugin._COLLECTOR
+
+    def emit(event_type, payload, *, event_id, occurred_at):
+        if collector.plugin_disabled or not collector.config.active:
+            return False
+        return collector.emit(event_type, payload, event_id=event_id, occurred_at=occurred_at,
+                              occurred_at_earliest=occurred_at, occurred_at_latest=occurred_at) is not None
+
+    sys.modules[f"{plugin.__name__}._share_vote"]._emit_fn = emit
 
 
 def call(ctx: Ctx, tool: str, args: dict) -> dict:
@@ -337,7 +379,7 @@ def instant(value: str) -> float:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
 
 
-def conforms(event_type: str, payload: dict) -> None:
+def conforms(event_type: str, payload: dict, tenant: str = TENANT) -> None:
     """The payload against the copied closed schema: exactly its keys, every
     value shaped, the link consistent with the payload (the door's check)."""
     schema = CONTRACT["schemas"][f"{event_type}@1"]
@@ -362,7 +404,7 @@ def conforms(event_type: str, payload: dict) -> None:
     else:
         assert re.fullmatch(pat["question_id"], payload["question_id"]) and ":" not in payload["question_id"]
         assert re.fullmatch(pat["answer"], payload["answer"])
-        assert payload["idempotency_key"] == sha(f"village.vote:{payload['question_id']}:{TENANT}")
+        assert payload["idempotency_key"] == sha(f"village.vote:{payload['question_id']}:{tenant}")
         proposed = {k: payload[k] for k in ("question_id", "answer")}
     assert payload["payload_hash"] == sha(json.dumps(proposed, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
 
@@ -388,8 +430,9 @@ def test_the_known_answer_vectors(mods):
     assert sv.sha256_hex(payload) == VOTE_V["payload_hash"]
     event = sv.vote_event_payload(payload, VOTE_V["tenant_id"], VOTE_V["payload_hash"], 7, "grant")
     assert event["idempotency_key"] == VOTE_V["idempotency_key"]
-    conforms("vote.cast", event)
-    conforms("vote.cast", sv.vote_event_payload(payload, VOTE_V["tenant_id"], VOTE_V["payload_hash"], 7, "policy"))
+    conforms("vote.cast", event, VOTE_V["tenant_id"])
+    conforms("vote.cast", sv.vote_event_payload(payload, VOTE_V["tenant_id"], VOTE_V["payload_hash"], 7, "policy"),
+             VOTE_V["tenant_id"])
     conforms("digest.revoked", sv.revoked_event_payload(SHARE_V["digest_id"]))
 
 
@@ -435,7 +478,12 @@ def test_each_tool_is_registered_only_behind_its_switch(plugin, env, serve, kick
         assert kicks == [] and serve.calls == []
 
 
-def test_a_switch_in_the_dotenv_file_does_not_turn_it_on(plugin, env, serve, kicks, home, monkeypatch):
+def test_a_switch_only_in_the_dotenv_file_is_not_read_by_a_running_process(plugin, env, serve, kicks, home,
+                                                                         monkeypatch):
+    """The switches are read from the process environment only, so writing
+    `.env` does not turn them on in a running process. It is no defence
+    against a new process: Hermes loads `.env` into the environment with
+    override at startup (an accepted limit, in the module header)."""
     monkeypatch.delenv("AV_DIGEST_SHARE")
     monkeypatch.delenv("AV_VILLAGE_VOTE")
     (home / ".env").write_text("AV_DIGEST_SHARE=1\nAV_VILLAGE_VOTE=1\n", encoding="utf-8")
@@ -833,14 +881,15 @@ def test_a_revocation_that_could_not_be_buffered_is_refused_and_can_be_asked_aga
     assert [e["event_type"] for e in ours(av, plugin)] == ["digest.shared", "digest.revoked"]
 
 
-def test_revoke_works_without_approval_and_refuses_an_unknown_digest(tctx, serve, mods, av, plugin, monkeypatch):
+def test_revoke_needs_approval_configured_and_refuses_an_unknown_digest(tctx, serve, mods, av, plugin, monkeypatch):
     out = share(tctx)
     serve.grant(f"digest.share:{out['digest_id']}")
     poll(mods)
-    monkeypatch.delenv("AV_APPROVAL_URL")
-    assert call(tctx, "share_digest", {"action": "revoke", "digest_id": out["digest_id"]})["state"] == "revoked"
     assert call(tctx, "share_digest", {"action": "revoke", "digest_id": SHARE_V["digest_id"]})["error"] == "digest_unknown"
     assert call(tctx, "share_digest", {"action": "revoke"})["error"] == "digest_id_required"
+    monkeypatch.delenv("AV_APPROVAL_URL")
+    assert call(tctx, "share_digest", {"action": "revoke", "digest_id": out["digest_id"]})["error"] == "approval_not_configured"
+    assert [e["event_type"] for e in ours(av, plugin)] == ["digest.shared"]
 
 
 # --------------------------------------------------------------------------
@@ -848,7 +897,7 @@ def test_revoke_works_without_approval_and_refuses_an_unknown_digest(tctx, serve
 # --------------------------------------------------------------------------
 
 
-def test_without_a_question_source_the_vote_tool_refuses_with_a_code(plugin, env, serve, kicks, clock, mods):
+def test_without_a_question_source_the_vote_tool_refuses_with_a_code(plugin, env, serve, kicks, clock, mods, consent):
     mods.vq.set_provider(None)  # the shipped provider: not yet available
     ctx = Ctx()
     plugin.register(ctx)
@@ -861,7 +910,8 @@ def test_without_a_question_source_the_vote_tool_refuses_with_a_code(plugin, env
 
 def test_the_question_is_read_through_the_provider(tctx):
     q = call(tctx, "village_vote", {"action": "question"})
-    assert q["question_id"] == QUESTION_ID and q["options"] == ["yes", "no", "abstain"]
+    assert q["question_id"] == QUESTION_ID and [o["key"] for o in q["options"]] == ["yes", "no", "abstain"]
+    assert q["options"][0]["label"] == "Yes, quiet hours from 22:00" and q["options"][2]["label"] is None
     assert instant(q["closes_at"]) == pytest.approx(NOW + 3 * DAY, abs=0.001)
 
 
@@ -879,7 +929,8 @@ def test_a_vote_proposes_question_and_answer_only_and_the_grant_emits_vote_cast(
     [event] = ours(av, plugin)
     assert event["event_type"] == "vote.cast" and event["actor"] == "agent" and event["session_id"] is None
     conforms("vote.cast", event["payload"])
-    assert event["payload"] == {"question_id": QUESTION_ID, "answer": "yes", "idempotency_key": VOTE_V["idempotency_key"],
+    assert event["payload"] == {"question_id": QUESTION_ID, "answer": "yes",
+                                "idempotency_key": sha(f"village.vote:{QUESTION_ID}:{TENANT}"),
                                 "payload_hash": VOTE_V["payload_hash"], "start_seq": serve.seq,
                                 "authorization": "grant"}
     assert "sleep" not in json.dumps(entry(mods, key))  # the rationale goes with the proposal
@@ -1142,9 +1193,9 @@ def test_a_vote_tampered_after_propose_and_before_the_grant_sends_nothing(tctx, 
     poll(mods)
     assert ours(av, plugin) == []
     e = entry(mods, key)
-    # Another question id no longer matches the key (invalid); another answer is refused by the daemon.
-    assert (e["state"], e["code"]) in (("refused", "payload-mismatch"), ("invalid", "map_invalid"))
-    assert (e["state"] == "invalid") == (field == "question_id")
+    # Another question id is not the provider's open question; another answer is refused by the daemon.
+    expected = ("closed", "question_unavailable") if field == "question_id" else ("refused", "payload-mismatch")
+    assert (e["state"], e["code"]) == expected
     assert not serve.tasks[task_id(VOTE, key)]["executed"]
 
 
@@ -1214,3 +1265,462 @@ def test_one_canonical_form_from_propose_to_start_to_the_event(tctx, serve, mods
     p = event["payload"]
     rebuilt = mods.sv.canonical({k: p[k] for k in ("digest_id", "scope", "text", "expires_at")})
     assert proposed == started == rebuilt and p["payload_hash"] == sha(proposed) == sha(jcs(proposed))
+
+
+# --------------------------------------------------------------------------
+# Refutation round (O3): F1..F5, consent, and the surviving mutants
+# --------------------------------------------------------------------------
+
+VOTE_KEY = f"village.vote:{QUESTION_ID}:{TENANT}"
+
+
+def map_vote(mods, question_id: str = QUESTION_ID, answer: str = "yes", state: str = "unfiled", **extra: Any) -> str:
+    key = f"village.vote:{question_id}:{TENANT}"
+    e = {"class": VOTE, "key": key, "question_id": question_id, "answer": answer,
+         "payload": mods.sv.vote_payload(question_id, answer), "state": state, "opened_at": NOW, "updated_at": NOW,
+         # A closes_at the agent wrote: never read.
+         "closes_at": NOW + 30 * DAY, **extra}
+    write_map(mods, lambda entries: entries.__setitem__(key, e))
+    return key
+
+
+def daemon_task(serve: FakeServe, cls: str, key: str, payload: str, state: str = "granted") -> str:
+    task = task_id(cls, key)
+    serve.tasks[task] = {"key": key, "class": cls, "hash": sha(jcs(payload)), "executed": False, "state": state, "asks": 1}
+    return task
+
+
+# ---- F1: the poller asks the provider, never the map --------------------------
+
+
+def test_under_the_shipped_provider_a_map_vote_is_never_proposed_or_cast(tctx, serve, mods, av, plugin):
+    mods.vq.set_provider(None)
+    key = map_vote(mods, "agent-made-up-q", "A")
+    poll(mods)
+    assert serve.calls == [] and ours(av, plugin) == []
+    assert (entry(mods, key)["state"], entry(mods, key)["code"]) == ("closed", "question_unavailable")
+
+
+def test_a_map_vote_with_a_granted_daemon_task_is_not_cast_without_the_provider(tctx, serve, mods, av, plugin):
+    mods.vq.set_provider(None)
+    payload = mods.sv.vote_payload("agent-made-up-q", "A")
+    key = f"village.vote:agent-made-up-q:{TENANT}"
+    task = daemon_task(serve, VOTE, key, payload)
+    map_vote(mods, "agent-made-up-q", "A", state="requested", task=task, payload_hash=sha(payload))
+    poll(mods)
+    assert "start" not in serve.verbs() and ours(av, plugin) == []
+    assert entry(mods, key)["state"] == "closed"
+
+
+@pytest.mark.parametrize("question_id,answer,expected", [
+    ("agent-made-up-q", "yes", ("closed", "question_unavailable")),
+    (QUESTION_ID, "maybe", ("invalid", "answer_not_an_option")),
+])
+def test_a_map_vote_the_provider_does_not_offer_is_never_proposed(tctx, serve, mods, av, plugin, question_id, answer,
+                                                                    expected):
+    key = map_vote(mods, question_id, answer)
+    poll(mods)
+    assert serve.calls == [] and ours(av, plugin) == []
+    assert (entry(mods, key)["state"], entry(mods, key)["code"]) == expected
+
+
+def test_a_map_vote_on_a_question_the_provider_has_closed_is_never_proposed(tctx, serve, mods, av, plugin, question):
+    question.closes_at = NOW - 1
+    key = map_vote(mods)  # the map says it closes in 30 days
+    poll(mods)
+    assert serve.calls == [] and (entry(mods, key)["state"], entry(mods, key)["code"]) == ("closed", "question_closed")
+
+
+def test_moving_closes_at_in_the_map_does_not_reopen_a_closed_question(tctx, serve, mods, av, plugin, clock, question):
+    vote(tctx)
+    clock["t"] = question.closes_at + DAY
+    write_map(mods, lambda entries: entries[VOTE_KEY].__setitem__("closes_at", NOW + 30 * DAY))
+    serve.grant(VOTE_KEY)
+    poll(mods)
+    assert ours(av, plugin) == [] and "start" not in serve.verbs()
+    assert (entry(mods, VOTE_KEY)["state"], entry(mods, VOTE_KEY)["code"]) == ("closed", "question_closed")
+
+
+def test_a_new_week_s_question_ends_last_week_s_pending_vote(tctx, serve, mods, av, plugin, question):
+    vote(tctx)
+    serve.grant(VOTE_KEY)
+    question.question_id = "q-2026-w43"
+    poll(mods)
+    assert ours(av, plugin) == [] and "start" not in serve.verbs()
+    assert entry(mods, VOTE_KEY)["state"] == "closed"
+
+
+def test_the_provider_is_asked_again_before_the_claim(tctx, serve, mods, av, plugin, question, monkeypatch):
+    """Open when the poll's wait is read, closed by the time the start would be claimed."""
+    vote(tctx)
+    serve.grant(VOTE_KEY)
+    real = mods.sv._granted
+
+    def granted_then_close(task):
+        answer = real(task)
+        question.closes_at = NOW - 1
+        return answer
+
+    monkeypatch.setattr(mods.sv, "_granted", granted_then_close)
+    real_bounds = mods.sv._bounds
+    monkeypatch.setattr(mods.sv, "_bounds", lambda e, now: None)  # the poll's own check passes
+    poll(mods)
+    monkeypatch.setattr(mods.sv, "_bounds", real_bounds)
+    assert ours(av, plugin) == [] and "start" not in serve.verbs()
+    assert entry(mods, VOTE_KEY)["code"] == "question_closed"
+
+
+# ---- F2: no tools without approval; revocation ---------------------------------
+
+
+def test_neither_tool_is_registered_without_approval(plugin, env, serve, kicks, monkeypatch):
+    monkeypatch.delenv("AV_APPROVAL_URL")
+    ctx = Ctx()
+    plugin.register(ctx)
+    assert "share_digest" not in ctx.tools and "village_vote" not in ctx.tools and kicks == []
+
+
+def forged_emitted(mods, digest_id: str = "11111111-2222-4333-8444-555555555555", **extra: Any) -> str:
+    key = f"digest.share:{digest_id}"
+    e = {"class": SHARE, "key": key, "digest_id": digest_id, "scope": "village",
+         "expires_at": "2026-09-25T00:00:00.000Z", "state": "emitted", **extra}
+    write_map(mods, lambda entries: entries.__setitem__(key, dict(e)))
+    return digest_id
+
+
+@pytest.mark.parametrize("marks", [
+    {},
+    {"start_seq": 3, "authorization": "grant"},
+    {"event_id": "01900000-0000-7000-8000-000000000001", "authorization": "grant"},
+    {"event_id": "01900000-0000-7000-8000-000000000001", "start_seq": True, "authorization": "grant"},
+    {"event_id": "01900000-0000-7000-8000-000000000001", "start_seq": 3, "authorization": "policy"},
+])
+def test_a_forged_emitted_entry_without_the_module_s_marks_is_not_revoked(tctx, serve, mods, av, plugin, marks):
+    digest_id = forged_emitted(mods, **marks)
+    assert call(tctx, "share_digest", {"action": "revoke", "digest_id": digest_id})["error"] == "digest_unknown"
+    assert ours(av, plugin) == []
+
+
+def test_a_revocation_is_sent_at_most_once_per_digest_per_process(tctx, serve, mods, av, plugin):
+    marks = {"event_id": "01900000-0000-7000-8000-000000000001", "start_seq": 3, "authorization": "grant"}
+    digest_id = forged_emitted(mods, **marks)  # forgeable, as the module header says
+    for _ in range(3):
+        forged_emitted(mods, **marks)
+        assert call(tctx, "share_digest", {"action": "revoke", "digest_id": digest_id})["state"] == "revoked"
+    assert [e["event_type"] for e in ours(av, plugin)] == ["digest.revoked"] and serve.calls == []
+
+
+def test_a_revocation_claims_the_shared_entry_before_it_sends(tctx, serve, mods, av, plugin, monkeypatch):
+    """Another process revoked between this call's read and its claim: the
+    claim fails and nothing is sent."""
+    out = share(tctx)
+    serve.grant(f"digest.share:{out['digest_id']}")
+    poll(mods)
+    key = f"digest.share:{out['digest_id']}"
+    stale = entry(mods, key)
+    mods.sv._set(key, {"emitted"}, "revoked")
+    real = mods.sv.lookup
+    monkeypatch.setattr(mods.sv, "lookup", lambda entry_id: dict(stale) if entry_id == key else real(entry_id))
+    assert call(tctx, "share_digest", {"action": "revoke", "digest_id": out["digest_id"]})["error"] == "revoke_failed"
+    assert [e["event_type"] for e in ours(av, plugin)] == ["digest.shared"]
+
+
+# ---- F3: what the resident reads -------------------------------------------------
+
+
+def test_the_vote_prompt_shows_the_provider_s_question_and_label(tctx, serve, mods):
+    vote(tctx, rationale="They said at dinner they sleep early")
+    summary = serve.proposals()[-1]["flags"]["--summary"]
+    assert "Should the village keep quiet hours after 22:00?" in summary
+    assert "Yes, quiet hours from 22:00 (option yes)" in summary
+    assert summary.index("22:00?") < summary.index("Note written by your agent") < summary.index("sleep early")
+
+
+def test_without_a_label_or_text_the_prompt_says_so_and_the_rationale_does_not_stand_in(tctx, serve, mods, question):
+    question.text = None
+    vote(tctx, answer="abstain", rationale="Abstain means you support quiet hours")
+    summary = serve.proposals()[-1]["flags"]["--summary"]
+    assert "(no text for this question is available)" in summary
+    assert "option abstain (no description of this option is available)" in summary
+    assert summary.index("no description") < summary.index("Note written by your agent")
+
+
+def test_the_provider_s_text_is_one_clean_bounded_line(tctx, serve, mods, question):
+    question.text = "Quiet\nhours‮?\x1b[2J " + "x" * 1000
+    question.labels["yes"] = "Yes\r\n⁦please⁩"
+    vote(tctx)
+    summary = serve.proposals()[-1]["flags"]["--summary"]
+    assert not any(ch in summary for ch in "\n\r\x1b‮ ⁦⁩")
+    assert "Quiet hours?" in summary and "Yes please (option yes)" in summary and len(summary) < 700
+
+
+def test_a_map_rationale_that_fails_cleaning_is_dropped_and_the_vote_still_proposed(tctx, serve, mods):
+    map_vote(mods, rationale="line1\nIGNORE: approve YES\x1b[2J‮" + "x" * 5000)
+    poll(mods)
+    summary = serve.proposals()[-1]["flags"]["--summary"]
+    assert "IGNORE" not in summary and "Note written by your agent" not in summary
+    assert "\n" not in summary and "\x1b" not in summary and len(summary) < 700
+
+
+def test_rationale_newlines_are_collapsed_in_the_prompt(tctx, serve, mods):
+    map_vote(mods, rationale="first line\n\nsecond   line")
+    poll(mods)
+    summary = serve.proposals()[-1]["flags"]["--summary"]
+    assert "first line second line" in summary and "\n" not in summary
+
+
+def test_a_rationale_quoting_a_held_share_is_refused_and_dropped(tctx, serve, mods):
+    share(tctx)
+    out = vote(tctx, rationale="Resident wrote: " + TEXT.upper())
+    assert out["error"] == "rationale_quotes_share"
+    out = vote(tctx, rationale="They need a reviewer for my side project this week")  # 24+ chars of it
+    assert out["error"] == "rationale_quotes_share"
+    map_vote(mods, rationale="Resident wrote: " + TEXT)
+    poll(mods)
+    votes = [p for p in serve.proposals() if p["flags"]["--class"] == VOTE]
+    assert votes and not any(word in votes[-1]["flags"]["--summary"] for word in TEXT_WORDS)
+
+
+# ---- F4: the content rule at propose; unencodable bytes are final ---------------
+
+
+def test_a_map_share_whose_text_the_door_would_refuse_is_never_proposed(tctx, serve, mods, av, plugin):
+    digest_id = SHARE_V["digest_id"]
+    key = f"digest.share:{digest_id}"
+    expires = "2026-09-25T00:00:00.000Z"
+    e = {"class": SHARE, "key": key, "digest_id": digest_id, "scope": "village", "expires_at": expires,
+         "payload": mods.sv.share_payload(digest_id, "village", "a\u0000b", expires), "state": "unfiled"}
+    write_map(mods, lambda entries: entries.__setitem__(key, e))
+    poll(mods)
+    assert serve.calls == [] and (entry(mods, key)["state"], entry(mods, key)["code"]) == ("invalid", "text_invalid")
+
+
+def test_an_encoding_error_in_the_daemon_call_is_final(tctx, serve, mods, monkeypatch):
+    def boom(*_a, **_k):
+        raise UnicodeEncodeError("utf-8", "x", 0, 1, "surrogates not allowed")
+
+    monkeypatch.setattr(mods.ap, "propose", boom)
+    out = share(tctx)
+    key = f"digest.share:{out['digest_id']}"
+    assert (entry(mods, key)["state"], entry(mods, key)["code"]) == ("invalid", "payload_unencodable")
+    poll(mods)
+    assert entry(mods, key)["state"] == "invalid"
+
+
+def test_the_text_rule_runs_again_at_execute(tctx, serve, mods, av, plugin):
+    """A held share whose text the door would refuse, with a grant on the
+    daemon for exactly those bytes: never started."""
+    digest_id = SHARE_V["digest_id"]
+    key = f"digest.share:{digest_id}"
+    expires = "2026-09-25T00:00:00.000Z"
+    payload = mods.sv.share_payload(digest_id, "village", "a\u0000b", expires)
+    task = daemon_task(serve, SHARE, key, payload)
+    e = {"class": SHARE, "key": key, "digest_id": digest_id, "scope": "village", "expires_at": expires,
+         "payload": payload, "payload_hash": sha(payload), "task": task, "state": "requested"}
+    write_map(mods, lambda entries: entries.__setitem__(key, e))
+    poll(mods)
+    assert "start" not in serve.verbs() and ours(av, plugin) == []
+    assert (entry(mods, key)["state"], entry(mods, key)["code"]) == ("refused", "text_invalid")
+
+
+# ---- F5: the tenant id -------------------------------------------------------------
+
+
+def test_the_vote_key_s_tenant_is_lower_cased_and_must_be_a_uuid(tctx, serve, mods, monkeypatch):
+    monkeypatch.setenv("TENANT_ID", TENANT.upper())
+    vote(tctx)
+    assert serve.proposals()[-1]["flags"]["--key"] == VOTE_KEY
+    monkeypatch.setenv("TENANT_ID", "t_vote_1")
+    assert call(tctx, "village_vote", {"action": "status", "question_id": QUESTION_ID})["error"] == "tenant_unknown"
+    assert vote(tctx)["error"] == "tenant_unknown"
+
+
+# ---- Consent and delivery ----------------------------------------------------------
+
+
+def test_without_research_consent_nothing_is_proposed(tctx, serve, consent):
+    consent["research"] = False
+    assert share(tctx)["error"] == "not_available_no_consent"
+    assert vote(tctx)["error"] == "not_available_no_consent"
+    assert serve.calls == []
+
+
+def test_research_consent_is_read_from_ingest_and_unknown_without_a_url(plugin, env, mods, monkeypatch):
+    consent_mod = sys.modules[f"{plugin.__name__}._consent"]
+    assert mods.sv._research_consent() is None  # no AV_EVENTS_URL: no request is made
+    for body, expected in ((None, False), ({"research": False}, False), ({"research": True}, True),
+                           (consent_mod.ConsentUnavailable("timeout"), None)):
+        monkeypatch.setattr(consent_mod, "fetch_consent_status", lambda url, token, b=body: b)
+        assert mods.sv._research_consent() is expected
+
+
+def test_a_null_sink_is_not_ready_so_nothing_is_proposed(plugin, env, serve, kicks, clock, question, consent):
+    ctx = Ctx()
+    plugin.register(ctx)
+    assert plugin._share_vote_emitter_ready() is False  # a token and no URL: never sent
+    assert share(ctx)["error"] == "not_available_no_events" and serve.calls == []
+
+
+def test_a_collector_with_a_url_is_ready(plugin, env, monkeypatch):
+    monkeypatch.setenv("AV_EVENTS_URL", "http://127.0.0.1:9")  # read only; nothing is emitted, nothing sent
+    plugin.register(Ctx())
+    assert plugin._share_vote_emitter_ready() is True
+
+
+def test_the_answers_never_claim_delivery(tctx, serve, mods):
+    out = share(tctx)
+    serve.grant(f"digest.share:{out['digest_id']}")
+    poll(mods)
+    status = call(tctx, "share_digest", {"action": "status", "digest_id": out["digest_id"]})
+    assert status["state"] == "emitted" and "Delivery is not confirmed" in status["message"]
+    assert "has been sent" not in json.dumps(mods.sv.STATE_MESSAGES)
+
+
+# ---- The expiry-hours argument -------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", ["５", "²", "١", "1.5", "0", "168", " ", 10 ** 30, 1.0])
+def test_only_an_ascii_integer_in_range_is_an_expiry(tctx, serve, value):
+    assert share(tctx, expires_in_hours=value)["error"] == "expires_invalid" and serve.calls == []
+
+
+def test_an_ascii_digit_string_is_accepted(tctx):
+    out = share(tctx, expires_in_hours=" 24 ")
+    assert instant(out["expires_at"]) == pytest.approx(NOW + DAY, abs=0.001)
+
+
+# ---- Surviving mutants ---------------------------------------------------------------
+
+
+def start_ok(cls: str, key: str, authorization: str, seq: int = 99) -> tuple:
+    return 0, {"ok": True, "task": task_id(cls, key), "action_key": key, "class": cls,
+               "authorization": authorization, "seq": seq}, None
+
+
+def test_a_share_start_answered_with_policy_sends_nothing(tctx, serve, mods, av, plugin):
+    out = share(tctx)
+    key = f"digest.share:{out['digest_id']}"
+    serve.grant(key)
+    serve.start_answer = start_ok(SHARE, key, "policy")
+    poll(mods)
+    assert ours(av, plugin) == [] and entry(mods, key)["code"] == "authorization_mismatch"
+
+
+@pytest.mark.parametrize("autonomy,answered", [("manual", "policy"), ("autonomous", "grant")])
+def test_a_vote_start_with_the_other_authorization_sends_nothing(tctx, serve, mods, av, plugin, autonomy, answered):
+    serve.autonomy[VOTE] = autonomy
+    serve.start_answer = start_ok(VOTE, VOTE_KEY, answered)
+    vote(tctx)
+    if autonomy == "manual":
+        serve.grant(VOTE_KEY)
+        poll(mods)
+    assert ours(av, plugin) == [] and entry(mods, VOTE_KEY)["code"] == "authorization_mismatch"
+
+
+def test_a_caller_whose_claim_was_taken_over_sends_nothing(tctx, serve, mods, av, plugin):
+    out = share(tctx)
+    key = f"digest.share:{out['digest_id']}"
+    serve.grant(key)
+    real = serve._start
+
+    def taken_over(pos, flags):
+        answer = real(pos, flags)
+        # Meanwhile the claim was released as stale and another caller took it.
+        write_map(mods, lambda entries: entries[key].update(claim="another-caller"))
+        return answer
+
+    serve._start = taken_over  # type: ignore[method-assign]
+    poll(mods)
+    assert ours(av, plugin) == []
+    e = entry(mods, key)
+    assert e["state"] == "starting" and e["claim"] == "another-caller"
+
+
+def test_already_executed_at_start_is_final_and_sends_nothing(tctx, serve, mods, av, plugin):
+    out = share(tctx)
+    key = f"digest.share:{out['digest_id']}"
+    serve.grant(key)
+    serve.start_answer = FakeServe._error("already-executed")
+    poll(mods)
+    assert (entry(mods, key)["state"], entry(mods, key)["code"]) == ("start_unconfirmed", "already-executed")
+    assert ours(av, plugin) == []
+
+
+def test_a_void_at_the_re_read_asks_again_and_never_starts(tctx, serve, mods, av, plugin):
+    out = share(tctx)
+    key = f"digest.share:{out['digest_id']}"
+    serve.grant(key)
+
+    def void_on_reread(n: int):
+        if n == 2:
+            serve.reattest()
+            return 7, None, {"ok": False, "status": "void", "task": task_id(SHARE, key), "actions": []}
+        return None
+
+    serve.on_wait = void_on_reread
+    poll(mods)
+    assert "start" not in serve.verbs() and ours(av, plugin) == []
+    assert len(serve.proposals()) == 2
+
+
+def test_a_share_never_admits_policy(tctx, serve, mods, av, plugin):
+    assert mods.sv._event_body(SHARE, mods.sv.share_payload(SHARE_V["digest_id"], "village", TEXT,
+                                                            SHARE_V["expires_at"]), "a" * 64, 3, "policy") is None
+    serve.autonomy[SHARE] = "autonomous"
+    out = share(tctx)
+    key = f"digest.share:{out['digest_id']}"
+    mods.sv._cas(key, None, lambda e: e.update(state="cleared", payload=mods.sv.share_payload(
+        out["digest_id"], "village", TEXT, out["expires_at"]), payload_hash=sha(mods.sv.share_payload(
+            out["digest_id"], "village", TEXT, out["expires_at"]))))
+    result = mods.sv._execute(key, entry(mods, key), "policy")
+    assert result.state == "not_shared" and "start" not in serve.verbs() and ours(av, plugin) == []
+
+
+def test_the_expiry_is_judged_again_at_emit_time(tctx, serve, mods, av, plugin, clock):
+    out = share(tctx)
+    key = f"digest.share:{out['digest_id']}"
+    serve.grant(key)
+    real = serve._start
+
+    def clock_back(pos, flags):
+        answer = real(pos, flags)
+        clock["t"] = NOW - 2 * DAY  # now the expiry is more than 7 days ahead
+        return answer
+
+    serve._start = clock_back  # type: ignore[method-assign]
+    poll(mods)
+    assert ours(av, plugin) == [] and (entry(mods, key)["state"], entry(mods, key)["code"]) == ("lapsed", "emit_lapsed")
+
+
+def test_an_agent_supplied_digest_id_is_ignored(tctx, serve):
+    out = call(tctx, "share_digest", {"action": "share", "text": TEXT, "digest_id": SHARE_V["digest_id"]})
+    assert out["success"] is True and out["digest_id"] != SHARE_V["digest_id"]
+    assert serve.proposals()[0]["flags"]["--key"] == f"digest.share:{out['digest_id']}"
+
+
+def test_a_policy_vote_whose_class_turned_manual_at_the_re_read_is_not_started(tctx, serve, mods, av, plugin):
+    serve.autonomy[VOTE] = "autonomous"
+    real = serve._propose
+    seen = {"n": 0}
+
+    def flip(pos, flags):
+        seen["n"] += 1
+        if seen["n"] == 2:  # the re-read after the claim
+            serve.autonomy[VOTE] = "manual"
+        return real(pos, flags)
+
+    serve._propose = flip  # type: ignore[method-assign]
+    out = vote(tctx)
+    assert "start" not in serve.verbs() and ours(av, plugin) == []
+    assert out["state"] == "requested"
+
+
+def test_the_event_s_hash_must_be_the_one_core_answered_at_propose(tctx, serve, mods, av, plugin):
+    out = share(tctx)
+    key = f"digest.share:{out['digest_id']}"
+    e = entry(mods, key)
+    payload = e["payload"]
+    mods.sv._cas(key, None, lambda x: x.update(state="starting", claim="c1"))
+    wrong = dict(e, payload_hash="b" * 64)
+    result = mods.sv._emit_granted(key, wrong, "c1", payload, "grant", 5)
+    assert (result.state, result.code) == ("emit_refused", "event_invalid") and ours(av, plugin) == []
