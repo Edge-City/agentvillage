@@ -235,7 +235,8 @@ PUBLISH_RULE = (
 TOOL_DESCRIPTION = (
     "Record an intention: something the person you work for wants, is looking for, or is open "
     "to, that meeting people they do not already know could serve. This is the one front door "
-    "for intentions: use it instead of calling Index create_intent yourself; it publishes to "
+    "for intentions: use it instead of calling Index create_intent, index_create_intent or "
+    "index_update_intent yourself; it publishes to "
     "Index in the same call and returns the intention_id to keep for later update or withdraw "
     "calls. "
     + PUBLISH_RULE

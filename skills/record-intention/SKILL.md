@@ -10,7 +10,8 @@ If `record_intention` is available (in your tool list, or found with
 switched on per agent. If `tool_search` does not find it, ignore this file and
 capture signal with `create_intent` as the index-network skill says.
 
-When it is available, it replaces calling Index `create_intent` yourself for
+When it is available, it replaces calling Index `create_intent` yourself, and
+the Index plugin's `index_create_intent` and `index_update_intent`, for
 every new signal: in conversation (`source=message`), during onboarding
 (`source=onboarding`), and in a background memory pass (`source=ambient`). Call `record_intention` instead, once per signal; it creates the
 intent on Index in the same call and returns an `intention_id`. Keep that id:

@@ -19,6 +19,17 @@ capture"). Two producers inside the sandbox:
   to the full id. A create whose result does not name the intent records
   nothing. `delete_intent` is kept only as a legacy alias (Index has no such
   tool today; an older Index surface did): a successful one is a withdrawal.
+* **Index's Hermes plugin tools** (DATA-272; Index `packages/hermes-plugin`,
+  the bare `index_*` names `tool_categories_v3` lists). Hermes registers a
+  plugin's tools by bare name, so they never carry the `mcp__index__` prefix.
+  Two of them write an intent: `index_create_intent` is planned exactly as
+  `create_intent` and `index_update_intent` exactly as `update_intent`
+  (`INDEX_PLUGIN_TOOLS`): the same arguments read (`description`, the
+  `intentId` family), the same result keys, the same events with
+  `capture_path` `index_tool`. The plugin has no pause, resume, archive or
+  delete tool; its other intent tools read, or file an intent into a network,
+  and record nothing. Either name served by an MCP server is not this plugin
+  and records nothing.
 * **`record_intention`**, the overlay's front door (DATA-212, `_record_intention.py`).
   Its id comes from the call, else from the tool's result, else it is a uuid v7
   minted by the plugin at capture. The tool publishes to Index itself, over its
@@ -55,6 +66,19 @@ INDEX_INTENT_TOOLS: dict[str, str] = {
     # surface would otherwise lose its withdrawals. Handled exactly as
     # `archive_intent`, with `index_status` `deleted`.
     "delete_intent": "intention.withdrawn",
+    # DATA-272: Index's Hermes plugin, bare names only (`INDEX_PLUGIN_TOOLS`).
+    "index_create_intent": "intention.captured",
+    "index_update_intent": "intention.updated",
+}
+
+#: Index's Hermes plugin tool (bare name) -> the Index MCP tool it is planned
+#: as. The plugin's intent writes are these two; its `index_read_intents`,
+#: `index_list_intent_networks` and `index_add_intent_to_network` change no
+#: intention text or status and record nothing. Hermes registers a plugin tool
+#: by its bare name, so only the bare name is this plugin's.
+INDEX_PLUGIN_TOOLS: dict[str, str] = {
+    "index_create_intent": "create_intent",
+    "index_update_intent": "update_intent",
 }
 
 #: The status a successful lifecycle tool leaves the intent in. Index's wire
@@ -221,12 +245,16 @@ def classify_tool(name: Any) -> Optional[str]:
     """`"index"`, `"record"`, or None when the tool records no intention.
 
     Cheap by design: this runs on every `post_tool_call`, and for every tool
-    that is not one of these four it is the only work the intention path does.
+    that is not one of these it is the only work the intention path does.
     """
     server, tool = split_tool_name(name)
     if tool == RECORD_INTENTION_TOOL:
         # Whoever ends up registering it — the overlay, this plugin, an MCP.
         return "record"
+    if tool in INDEX_PLUGIN_TOOLS:
+        # DATA-272: Index's Hermes plugin registers these by bare name. The
+        # same name behind any MCP server (`index` included) is not the plugin.
+        return "index" if server is None else None
     if tool in INDEX_INTENT_TOOLS and (server is None or server == INDEX_SERVER):
         # Another MCP server that happens to call a tool `create_intent` is not
         # Index, and its "intentions" are not ours to count.
@@ -670,13 +698,15 @@ def plan(tool_name: Any, args: Any, result: Any, status: Any, *, cron: bool = Fa
     server, tool = split_tool_name(tool_name)
     if kind == "record":
         return plan_record(safe_args, payload, _first_json(result), cron=cron, trust_result=server is None)
-    return plan_index(tool, safe_args, payload, cron=cron)
+    # DATA-272: a bare Index plugin write is planned as the MCP tool it mirrors.
+    return plan_index(INDEX_PLUGIN_TOOLS.get(tool, tool), safe_args, payload, cron=cron)
 
 
 __all__ = [
     "APPROVED_BY",
     "ID_PATTERN",
     "INDEX_INTENT_TOOLS",
+    "INDEX_PLUGIN_TOOLS",
     "INDEX_STATUSES",
     "LIFECYCLE_STATUS",
     "LOCAL_REASONS",

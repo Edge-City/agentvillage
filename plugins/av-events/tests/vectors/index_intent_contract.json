@@ -46,6 +46,17 @@
       "error_statuses": [401, 404, 409]
     }
   },
+  "hermes_plugin": {
+    "about": "DATA-272: Index's own Hermes plugin (indexnetwork/index packages/hermes-plugin, 0.48.2 at 168310a). Hermes registers a plugin's tools by bare name, so these never carry the mcp__index__ prefix. 'tools' is the plugin's full tool list as tool_categories_v3 (DATA-261) recorded it: every name the seed lists under builtin with the index_ prefix, plus index_open_app, which the seed leaves unlisted on purpose. 'intent_writes' maps the plugin's two intent writes to the MCP tool each is observed as. Input schemas are not copied (not read for DATA-272), so the agent-facing text may name these tools but never show a call to one.",
+    "source": "indexnetwork/index@168310a packages/hermes-plugin, via plugins/av-events/tool_categories.json (tool_categories_v3)",
+    "tools": [
+      "index_read_intents", "index_create_intent", "index_update_intent", "index_list_intent_networks",
+      "index_add_intent_to_network", "index_read_networks", "index_read_network_memberships",
+      "index_create_network", "index_update_network", "index_join_network", "index_list_opportunities",
+      "index_update_opportunity", "index_research_profile", "index_read_docs", "index_agent_me", "index_open_app"
+    ],
+    "intent_writes": {"index_create_intent": "create_intent", "index_update_intent": "update_intent"}
+  },
   "tools": {
     "list_intents": {
       "input": {

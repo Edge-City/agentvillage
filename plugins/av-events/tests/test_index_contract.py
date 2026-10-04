@@ -30,6 +30,9 @@ READS = {"list_intents", "get_intent"}
 WRITES = set(CONTRACT) - READS
 #: The observer's one legacy alias (not an Index tool; see `_intentions.py`).
 LEGACY = {"delete_intent"}
+#: DATA-272: Index's Hermes plugin, whose tools Hermes registers by bare name.
+PLUGIN_TOOLS: list[str] = VECTOR["hermes_plugin"]["tools"]
+PLUGIN_WRITES: dict[str, str] = VECTOR["hermes_plugin"]["intent_writes"]
 SESSION = "sess-contract"
 TEXT = "  Looking for a climbing partner in Goa\non weekends  "
 INDEX_ID = "9b2f0c1e-0000-4000-8000-00000000abcd"
@@ -305,7 +308,7 @@ def test_a_short_hex_id_is_sent_in_the_path(ri, recorded):
 def test_the_observer_watches_every_index_write_and_nothing_else(plugin, av):
     intentions = sys.modules[f"{av.MODULE_NAME}._intentions"]
     watched = set(intentions.INDEX_INTENT_TOOLS)
-    assert watched - LEGACY == WRITES
+    assert watched - LEGACY - set(PLUGIN_WRITES) == WRITES
     assert set(intentions.LIFECYCLE_STATUS) - LEGACY == {"pause_intent", "resume_intent", "archive_intent"}
     # The id argument the observer reads first is the one Index requires.
     assert intentions._ARG_ID_KEYS[0] == "intentId"
@@ -319,12 +322,40 @@ def test_the_observer_watches_every_index_write_and_nothing_else(plugin, av):
 
 
 # --------------------------------------------------------------------------
+# The observer's tool names (Index's Hermes plugin, DATA-272)
+# --------------------------------------------------------------------------
+
+
+def test_the_plugin_tool_list_is_the_one_the_seed_records(plugin, av):
+    """The fixture is the seed's v3 copy of the plugin's tools, plus the one it leaves out."""
+    seed = json.loads((PLUGIN / "tool_categories.json").read_text(encoding="utf-8"))
+    assert seed["version"] == "tool_categories_v3"
+    seeded = {name for name in seed["builtin"] if name.startswith("index_")}
+    assert len(PLUGIN_TOOLS) == len(set(PLUGIN_TOOLS)) == 16
+    assert set(PLUGIN_TOOLS) == seeded | {"index_open_app"}
+    assert all(seed["builtin"][name] == "intention" for name in PLUGIN_WRITES)
+
+
+def test_the_observer_watches_the_plugins_intent_writes_and_nothing_else(plugin, av):
+    intentions = sys.modules[f"{av.MODULE_NAME}._intentions"]
+    assert intentions.INDEX_PLUGIN_TOOLS == PLUGIN_WRITES
+    # Every bare name is one of the plugin's tools, and stands for an Index MCP write.
+    assert set(PLUGIN_WRITES) <= set(PLUGIN_TOOLS)
+    assert set(PLUGIN_WRITES.values()) <= WRITES
+    for bare, mcp in PLUGIN_WRITES.items():
+        assert intentions.INDEX_INTENT_TOOLS[bare] == intentions.INDEX_INTENT_TOOLS[mcp]
+    # Of the plugin's 16 tools, exactly the two intent writes are watched.
+    watched = {name for name in PLUGIN_TOOLS if intentions.classify_tool(name) is not None}
+    assert watched == set(PLUGIN_WRITES)
+
+
+# --------------------------------------------------------------------------
 # What the overlay tells the agent
 # --------------------------------------------------------------------------
 
 #: Agent-facing text: skills, prompts, the workspace AGENTS.md, the tool description.
 AGENT_TEXT = sorted(
-    [p for p in (REPO / "skills").rglob("*.md")] + [REPO / "workspace" / "AGENTS.md"]
+    [p for p in (REPO / "skills").rglob("*.md")] + [REPO / "workspace" / "AGENTS.md", REPO / "workspace" / "SOUL.md"]
 )
 _INTENT_TOOL = re.compile(r"\b((?:[a-z]+_)+intents?)\b")
 _CALL = re.compile(r"\b((?:[a-z]+_)+intents?)\(([^)]*)\)")
@@ -336,13 +367,19 @@ def test_agent_text_names_only_index_intent_tools(ri):
     texts.append((PLUGIN / "_record_intention.py:TOOL_DESCRIPTION", ri.TOOL_DESCRIPTION))
     unknown = sorted({
         f"{path.relative_to(REPO) if path.is_absolute() and REPO in path.parents else path}: {name}"
-        for path, text in texts for name in _INTENT_TOOL.findall(text) if name not in CONTRACT
+        for path, text in texts for name in _INTENT_TOOL.findall(text)
+        if name not in CONTRACT and name not in PLUGIN_TOOLS
     })
     assert unknown == []
+    # The plugin's input schemas are not in the vector, so no text shows a call to one.
+    plugin_calls = sorted({f"{path.name}: {name}({args})" for path, text in texts
+                           for name, args in _CALL.findall(text) if name in PLUGIN_TOOLS})
+    assert plugin_calls == []
     bad_args = sorted({
         f"{path.name}: {name}({args}) passes {key!r}"
         for path, text in texts for name, args in _CALL.findall(text)
-        for key in _KWARG.findall(args) if key not in CONTRACT[name]["input"]["properties"]
+        for key in _KWARG.findall(args)
+        if name in CONTRACT and key not in CONTRACT[name]["input"]["properties"]
     })
     assert bad_args == []
     # F: Index's schema requires the literal `confirm: true` on every archive.
@@ -351,3 +388,19 @@ def test_agent_text_names_only_index_intent_tools(ri):
     unconfirmed = [f"{name}: archive_intent({args})" for name, args in archives
                    if not re.search(r"\bconfirm\s*=\s*true\b", args, re.IGNORECASE)]
     assert unconfirmed == []
+
+
+def test_the_front_door_text_names_the_plugins_intent_writes(ri):
+    """DATA-272 AC #2: where the agent reads that `record_intention` replaces Index's
+    `create_intent`, it reads the same of the plugin's bare intent writes."""
+    texts = {
+        "TOOL_DESCRIPTION": ri.TOOL_DESCRIPTION,
+        "SKILL.md": (REPO / "skills" / "record-intention" / "SKILL.md").read_text(encoding="utf-8"),
+        "SOUL.md": (REPO / "workspace" / "SOUL.md").read_text(encoding="utf-8"),
+        "AGENTS.md": (REPO / "workspace" / "AGENTS.md").read_text(encoding="utf-8"),
+    }
+    missing = [f"{label}: {name}" for label, text in texts.items()
+               # The tool's own description is `record_intention`'s, so it need not name it.
+               for name in ("create_intent", *PLUGIN_WRITES, *(() if label == "TOOL_DESCRIPTION" else ("record_intention",)))
+               if not re.search(rf"(?<![a-z_]){name}(?![a-z_])", text)]
+    assert missing == []
