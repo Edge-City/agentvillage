@@ -32,7 +32,8 @@ WRITES = set(CONTRACT) - READS
 LEGACY = {"delete_intent"}
 #: DATA-272: Index's Hermes plugin, whose tools Hermes registers by bare name.
 PLUGIN_TOOLS: list[str] = VECTOR["hermes_plugin"]["tools"]
-PLUGIN_WRITES: dict[str, str] = VECTOR["hermes_plugin"]["intent_writes"]
+PLUGIN_REQUESTS: dict[str, list] = VECTOR["hermes_plugin"]["requests"]
+PLUGIN_WRITES: dict[str, dict] = VECTOR["hermes_plugin"]["intent_writes"]
 SESSION = "sess-contract"
 TEXT = "  Looking for a climbing partner in Goa\non weekends  "
 INDEX_ID = "9b2f0c1e-0000-4000-8000-00000000abcd"
@@ -326,8 +327,8 @@ def test_the_observer_watches_every_index_write_and_nothing_else(plugin, av):
 # --------------------------------------------------------------------------
 
 
-def test_the_plugin_tool_list_is_the_one_the_seed_records(plugin, av):
-    """The fixture is the seed's v3 copy of the plugin's tools, plus the one it leaves out."""
+def test_the_seed_lists_the_plugins_tools(plugin, av):
+    """tool_categories_v3's `index_*` names are the plugin's tools, but the one it leaves out."""
     seed = json.loads((PLUGIN / "tool_categories.json").read_text(encoding="utf-8"))
     assert seed["version"] == "tool_categories_v3"
     seeded = {name for name in seed["builtin"] if name.startswith("index_")}
@@ -336,17 +337,47 @@ def test_the_plugin_tool_list_is_the_one_the_seed_records(plugin, av):
     assert all(seed["builtin"][name] == "intention" for name in PLUGIN_WRITES)
 
 
-def test_the_observer_watches_the_plugins_intent_writes_and_nothing_else(plugin, av):
+def _writes_an_intent(method: str, path: str) -> bool:
+    """A REST call that creates an intent or changes one (its text or status).
+
+    `/intents/list` is a read sent as POST; `/intents/{id}/networks` shares an
+    intent into a community and changes neither its text nor its status.
+    """
+    parts = path.strip("/").split("/")
+    if method == "GET" or parts[0] != "intents":
+        return False
+    if parts == ["intents", "list"] or parts[2:] == ["networks"]:
+        return False
+    return True
+
+
+def test_the_plugins_intent_writers_are_exactly_the_watched_set(plugin, av):
+    """A writer added upstream (an archive, a pause) fails here once the vector is refreshed."""
     intentions = sys.modules[f"{av.MODULE_NAME}._intentions"]
-    assert intentions.INDEX_PLUGIN_TOOLS == PLUGIN_WRITES
-    # Every bare name is one of the plugin's tools, and stands for an Index MCP write.
-    assert set(PLUGIN_WRITES) <= set(PLUGIN_TOOLS)
-    assert set(PLUGIN_WRITES.values()) <= WRITES
-    for bare, mcp in PLUGIN_WRITES.items():
-        assert intentions.INDEX_INTENT_TOOLS[bare] == intentions.INDEX_INTENT_TOOLS[mcp]
-    # Of the plugin's 16 tools, exactly the two intent writes are watched.
+    assert set(PLUGIN_REQUESTS) == set(PLUGIN_TOOLS)
+    writers = {tool for tool, calls in PLUGIN_REQUESTS.items()
+               if any(_writes_an_intent(method, path) for method, path in calls)}
+    assert writers == set(PLUGIN_WRITES) == set(intentions.INDEX_PLUGIN_TOOLS)
+    # Of the plugin's 16 tools, exactly the writers are watched.
     watched = {name for name in PLUGIN_TOOLS if intentions.classify_tool(name) is not None}
-    assert watched == set(PLUGIN_WRITES)
+    assert watched == writers
+
+
+def test_each_plugin_writer_is_observed_as_its_mcp_twin_and_reads_only_its_own_arguments(plugin, av):
+    intentions = sys.modules[f"{av.MODULE_NAME}._intentions"]
+    for bare, spec in PLUGIN_WRITES.items():
+        assert intentions.INDEX_PLUGIN_TOOLS[bare] == spec["observed_as"]
+        assert spec["observed_as"] in WRITES
+        assert intentions.INDEX_INTENT_TOOLS[bare] == intentions.INDEX_INTENT_TOOLS[spec["observed_as"]]
+        read = intentions.INDEX_PLUGIN_ARGS[bare]
+        schema = spec["input"]
+        # Every key read is a required string of the plugin's schema, and every
+        # required key is read (the plugin refuses a call missing one).
+        assert set(read) == set(schema["required"]), bare
+        assert all(schema["properties"][key]["type"] == "string" for key in read), bare
+        # The observed MCP tool takes the same keys, so its events mean the same.
+        mcp_props = CONTRACT[spec["observed_as"]]["input"]["properties"]
+        assert set(read) <= set(mcp_props), bare
 
 
 # --------------------------------------------------------------------------
@@ -390,17 +421,61 @@ def test_agent_text_names_only_index_intent_tools(ri):
     assert unconfirmed == []
 
 
-def test_the_front_door_text_names_the_plugins_intent_writes(ri):
-    """DATA-272 AC #2: where the agent reads that `record_intention` replaces Index's
-    `create_intent`, it reads the same of the plugin's bare intent writes."""
+#: DATA-272 ruling: for a new want, `record_intention` only; an intention it
+#: did not record may be changed with Index's own update tools.
+PROHIBIT = "never call Index create_intent or index_create_intent for a new want"
+PERMIT = "may be changed with Index's own update_intent or index_update_intent"
+_DENY = re.compile(r"\b(never|do not|don't|must not|not allowed)\b", re.IGNORECASE)
+_ALLOW = re.compile(r"\b(may|can|you are free|allowed to)\b", re.IGNORECASE)
+
+
+def _front_door_texts(ri) -> dict[str, str]:
     texts = {
         "TOOL_DESCRIPTION": ri.TOOL_DESCRIPTION,
         "SKILL.md": (REPO / "skills" / "record-intention" / "SKILL.md").read_text(encoding="utf-8"),
         "SOUL.md": (REPO / "workspace" / "SOUL.md").read_text(encoding="utf-8"),
         "AGENTS.md": (REPO / "workspace" / "AGENTS.md").read_text(encoding="utf-8"),
     }
-    missing = [f"{label}: {name}" for label, text in texts.items()
-               # The tool's own description is `record_intention`'s, so it need not name it.
-               for name in ("create_intent", *PLUGIN_WRITES, *(() if label == "TOOL_DESCRIPTION" else ("record_intention",)))
-               if not re.search(rf"(?<![a-z_]){name}(?![a-z_])", text)]
-    assert missing == []
+    # Backticks off and whitespace folded, so a wrapped Markdown line reads as one.
+    return {label: re.sub(r"\s+", " ", text.replace("`", "")) for label, text in texts.items()}
+
+
+def _clauses(text: str) -> list[str]:
+    return [c for c in re.split(r"(?<=[.;])\s+", text) if c]
+
+
+def test_the_front_door_text_forbids_a_direct_create_and_permits_an_update_it_cannot_make(ri):
+    """DATA-272 AC #2, narrowed by Carter's ruling: a new want goes through
+    `record_intention`, never Index's `create_intent` / `index_create_intent`;
+    an intention `record_intention` did not record may be changed with
+    `update_intent` / `index_update_intent`. Both said in each text, and no
+    clause says the opposite about either pair."""
+    problems = []
+    for label, text in _front_door_texts(ri).items():
+        if PROHIBIT not in text:
+            problems.append(f"{label}: no prohibition of a direct create")
+        if PERMIT not in text:
+            problems.append(f"{label}: no permission for an update record_intention cannot make")
+        if label != "TOOL_DESCRIPTION" and not re.search(r"(?<![a-z_])record_intention(?![a-z_])", text):
+            problems.append(f"{label}: does not name record_intention")
+        for clause in _clauses(text):
+            if re.search(r"(?<![a-z_])index_create_intent(?![a-z_])", clause):
+                if not _DENY.search(clause) or _ALLOW.search(clause):
+                    problems.append(f"{label}: index_create_intent outside a prohibition: {clause!r}")
+            if re.search(r"(?<![a-z_])index_update_intent(?![a-z_])", clause):
+                if _DENY.search(clause) or not _ALLOW.search(clause):
+                    problems.append(f"{label}: index_update_intent outside a permission: {clause!r}")
+    assert problems == []
+
+
+def test_the_front_door_text_stays_conditional_on_record_intention(ri):
+    """SOUL.md and AGENTS.md speak of these tools only inside the passage that
+    starts "if record_intention is available"; the skill and the tool
+    description exist only when it is."""
+    texts = _front_door_texts(ri)
+    for label in ("SOUL.md", "AGENTS.md"):
+        text = texts[label]
+        gate = re.search(r"if record_intention is available", text, re.IGNORECASE)
+        assert gate, label
+        for name in ("index_create_intent", "index_update_intent"):
+            assert text.index(name) > gate.start(), (label, name)
