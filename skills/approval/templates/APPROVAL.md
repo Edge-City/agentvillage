@@ -46,6 +46,9 @@ What waits for a tap. Only classes an agent opens with `approval propose`
   - village.vote: the agent's draft answer to the weekly village question,
     before it is cast (DATA-99).
 
+A resident may change these in the onboarding review (DATA-259); the rows below
+are the defaults.
+
 intent.publish.stated.index is autonomous: an intention the resident stated in
 their own words is published without a second ask, and still recorded.
 `agent_may_request: true` is what opens `propose` to a class; it exists in the
@@ -127,7 +130,7 @@ channels:
     chat_id_env: APPROVAL_RESIDENT_CHAT  # the paired id; the control plane writes this variable
 
 classes:
-  # The live gate, propose path only: the resident taps before these happen.
+  # The live gate, propose path only: the resident taps before these happen, unless they changed the setting in the onboarding review (DATA-259).
   intent.publish.*:              { autonomy: manual, agent_may_request: true }
   intent.publish.inferred.index: { autonomy: manual, agent_may_request: true }
   intent.publish.stated.index:   { autonomy: autonomous, agent_may_request: true }
