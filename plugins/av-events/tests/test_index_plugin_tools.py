@@ -1,12 +1,15 @@
 """DATA-272: Index's Hermes plugin intent writes, observed like the MCP tools.
 
 Index ships a Hermes plugin whose tools Hermes registers by bare name
-(`index_create_intent`, `index_update_intent`, and fourteen more; the list is
-`hermes_plugin` in `vectors/index_intent_contract.json`). The two intent writes
-are planned exactly as Index's MCP `create_intent` / `update_intent`: the same
-argument keys, the same result keys, the same events. Nothing here routes or
-refuses a call (that half of DATA-272 is a later change): `pre_tool_call` is
-still a counter.
+(`index_create_intent`, `index_update_intent`, and fourteen more; the list,
+their REST calls and the two writers' schemas are `hermes_plugin` in
+`vectors/index_intent_contract.json`, copied from the plugin's source). The two
+intent writes produce the events of Index's MCP `create_intent` /
+`update_intent`, but are read the way the plugin reads them: only
+`description` (and `intentId` for the update), stripped as the plugin strips
+them, and the plugin's own result object, where a failure is a field, not a
+status. Nothing here routes or refuses a call (that half of DATA-272 is a later
+change): `pre_tool_call` is still a counter.
 """
 
 from __future__ import annotations
@@ -29,7 +32,9 @@ SECRET = "Alice Example of 12 Example Road, call her on her own number"
 
 VECTOR = json.loads((Path(__file__).parent / "vectors" / "index_intent_contract.json").read_text(encoding="utf-8"))
 PLUGIN_TOOLS: list[str] = VECTOR["hermes_plugin"]["tools"]
-PLUGIN_WRITES: dict[str, str] = VECTOR["hermes_plugin"]["intent_writes"]
+PLUGIN_WRITES: dict[str, str] = {
+    bare: spec["observed_as"] for bare, spec in VECTOR["hermes_plugin"]["intent_writes"].items()
+}
 BARE_CREATE, BARE_UPDATE = "index_create_intent", "index_update_intent"
 
 
@@ -45,6 +50,20 @@ def wrapped(data: Any, *, success: bool = True) -> str:
 def plain(data: Any) -> str:
     """A plugin tool's own return string: no Hermes MCP wrapper."""
     return json.dumps(data)
+
+
+def plugin_answer(body: dict) -> str:
+    """What Index's plugin returns for a 2xx: the REST body, compact, with an
+    `appUrl` deep link added next to an `intentId` (`_api_result`)."""
+    body = dict(body)
+    if isinstance(body.get("intentId"), str):
+        body.setdefault("appUrl", f"https://index.network/i/{body['intentId']}")
+    return json.dumps(body, separators=(",", ":"))
+
+
+def plugin_error(message: str, **extra: Any) -> str:
+    """Index's plugin `_error`: a refusal or transport failure, as an object."""
+    return json.dumps({"success": False, "error": message, **extra}, separators=(",", ":"))
 
 
 class ToolFireCtx:
@@ -154,39 +173,28 @@ def test_unknown_index_names_are_unaffected(intentions, name):
 
 
 # --------------------------------------------------------------------------
-# Parity: a bare call plans exactly what its MCP twin plans
+# Parity: a clean bare call plans exactly what its MCP twin plans
 # --------------------------------------------------------------------------
 
-#: (bare tool, args, result, status) — every result shape the MCP path reads.
+#: (bare tool, args, result, status) for calls the plugin would make as given:
+#: only its own arguments, already clean, answered with its own result object.
 PARITY_CASES = [
-    # Creates: the intent object, a one-item list, Index main's `intentId` on data.
-    (BARE_CREATE, {"description": DESCRIPTION}, wrapped({"intent": {"id": "int-abc", "summary": SUMMARY, "status": "active"}}), "ok"),
-    (BARE_CREATE, {"description": DESCRIPTION}, wrapped({"intents": [{"id": "int-abc"}]}), "ok"),
-    (BARE_CREATE, {"description": DESCRIPTION, "networkIds": ["n1"]}, wrapped({"intentId": FULL_ID, "networkIds": ["n1"]}), "ok"),
-    # A plugin tool returns its own string, unwrapped: the REST create's success shape.
-    (BARE_CREATE, {"description": DESCRIPTION}, plain({"intentId": FULL_ID, "networkIds": [], "sourceType": None, "sourceId": None}), "ok"),
-    (BARE_CREATE, {"description": DESCRIPTION}, "Created your signal.\n" + plain({"intentId": FULL_ID}), "ok"),
-    # Creates that name no intent, fail, or are refused: nothing.
+    # Creates: Index main's create body (with the plugin's deep link), an intent object.
+    (BARE_CREATE, {"description": DESCRIPTION}, plugin_answer({"intentId": FULL_ID, "networkIds": [], "sourceType": None, "sourceId": None}), "ok"),
+    (BARE_CREATE, {"description": DESCRIPTION}, plugin_answer({"status": 201, "intentId": FULL_ID, "networkIds": []}), "ok"),
+    (BARE_CREATE, {"description": DESCRIPTION}, plain({"success": True, "data": {"intentId": FULL_ID}}), "ok"),
+    (BARE_CREATE, {"description": DESCRIPTION}, plain({"intent": {"id": "int-abc", "summary": SUMMARY, "status": "active"}}), "ok"),
+    # Creates that name no intent, or that Hermes reports failed: nothing.
     (BARE_CREATE, {"description": DESCRIPTION}, plain({"networkIds": []}), "ok"),
     (BARE_CREATE, {"description": DESCRIPTION}, plain({"id": FULL_ID}), "ok"),
-    (BARE_CREATE, {"description": DESCRIPTION}, wrapped({"intentId": FULL_ID}, success=False), "ok"),
-    (BARE_CREATE, {"description": DESCRIPTION}, plain({"error": "intent_needs_revision"}), "ok"),
-    (BARE_CREATE, {"description": DESCRIPTION}, plain({"intentId": FULL_ID}), "error"),
-    (BARE_CREATE, {"description": DESCRIPTION}, plain({"intentId": FULL_ID}), "blocked"),
-    (BARE_CREATE, {}, plain({"intentId": FULL_ID}), "ok"),
-    # Updates: the id from `intentId` (or legacy `id` / `intent_id`), a short prefix resolved by the result.
-    (BARE_UPDATE, {"intentId": FULL_ID, "description": DESCRIPTION}, plain({"intentId": FULL_ID, "description": DESCRIPTION}), "ok"),
-    (BARE_UPDATE, {"intentId": FULL_ID[:8], "description": DESCRIPTION}, plain({"intentId": FULL_ID}), "ok"),
-    (BARE_UPDATE, {"intentId": FULL_ID[:8], "description": DESCRIPTION}, plain({"intentId": "ffffffff-other"}), "ok"),
-    (BARE_UPDATE, {"id": "int-abc", "description": DESCRIPTION}, wrapped({"intent": {"id": "int-abc", "summary": SUMMARY}}), "ok"),
-    (BARE_UPDATE, {"intent_id": "int-abc", "description": DESCRIPTION}, plain({}), "ok"),
-    # Updates that change no text, name no intent, or fail: nothing.
-    (BARE_UPDATE, {"intentId": FULL_ID, "sourceType": "agentvillage"}, plain({"intentId": FULL_ID}), "ok"),
-    (BARE_UPDATE, {"description": DESCRIPTION}, plain({"intentId": FULL_ID}), "ok"),
-    (BARE_UPDATE, {"intentId": FULL_ID, "description": DESCRIPTION}, plain({"intentId": FULL_ID}), "timeout"),
-    # Legacy withdrawal shapes, read as the MCP update reads them.
-    (BARE_UPDATE, {"intentId": "int-abc", "status": "archived"}, plain({}), "ok"),
-    (BARE_UPDATE, {"intentId": "int-abc"}, wrapped({"intent": {"id": "int-abc", "archived": True}}), "ok"),
+    (BARE_CREATE, {"description": DESCRIPTION}, plugin_answer({"intentId": FULL_ID}), "error"),
+    (BARE_CREATE, {"description": DESCRIPTION}, plugin_answer({"intentId": FULL_ID}), "blocked"),
+    # Updates: the full id, a short prefix the result resolves, a result naming another intent.
+    (BARE_UPDATE, {"intentId": FULL_ID, "description": DESCRIPTION}, plugin_answer({"intentId": FULL_ID, "description": DESCRIPTION}), "ok"),
+    (BARE_UPDATE, {"intentId": FULL_ID[:8], "description": DESCRIPTION}, plugin_answer({"intentId": FULL_ID}), "ok"),
+    (BARE_UPDATE, {"intentId": FULL_ID[:8], "description": DESCRIPTION}, plugin_answer({"intentId": "ffffffff-other"}), "ok"),
+    (BARE_UPDATE, {"intentId": "int-abc", "description": DESCRIPTION}, plain({"intent": {"id": "int-abc", "summary": SUMMARY}}), "ok"),
+    (BARE_UPDATE, {"intentId": FULL_ID, "description": DESCRIPTION}, plugin_answer({"intentId": FULL_ID}), "timeout"),
 ]
 
 
@@ -196,7 +204,7 @@ def _plan_view(calls) -> list[dict]:
 
 @pytest.mark.parametrize("cron", [False, True])
 @pytest.mark.parametrize("bare,args,result,status", PARITY_CASES)
-def test_a_bare_write_plans_what_its_mcp_twin_plans(intentions, bare, args, result, status, cron):
+def test_a_clean_bare_write_plans_what_its_mcp_twin_plans(intentions, bare, args, result, status, cron):
     twin = f"mcp__index__{PLUGIN_WRITES[bare]}"
     got = _plan_view(intentions.plan(bare, args, result, status, cron=cron))
     want = _plan_view(intentions.plan(twin, args, result, status, cron=cron))
@@ -213,9 +221,154 @@ def test_the_parity_cases_cover_every_outcome(intentions):
         (BARE_CREATE, ("intention.captured",)),
         (BARE_CREATE, ()),
         (BARE_UPDATE, ("intention.updated",)),
-        (BARE_UPDATE, ("intention.withdrawn",)),
         (BARE_UPDATE, ()),
     }
+
+
+# --------------------------------------------------------------------------
+# Where the plugin differs from the MCP tool, the observer follows the plugin
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("extra", [
+    {"status": "archived"}, {"status": "deleted"}, {"status": "withdrawn"}, {"status": "paused"},
+    {"archived": True}, {"confirm": True},
+])
+def test_a_bare_update_never_withdraws_whatever_else_the_call_carries(intentions, extra):
+    """The plugin PATCHes only the description and drops every other key: a
+    `status` argument changes nothing on Index, so it changes nothing here."""
+    args = {"intentId": FULL_ID, "description": DESCRIPTION, **extra}
+    calls = intentions.plan(BARE_UPDATE, args, plugin_answer({"intentId": FULL_ID, "description": DESCRIPTION}), "ok")
+    assert [(c.event_type, c.intention_id, c.text, c.index_status) for c in calls] == [
+        ("intention.updated", FULL_ID, DESCRIPTION, None)]
+
+
+@pytest.mark.parametrize("result", [
+    plain({"intent": {"id": FULL_ID, "archived": True}}),
+    plain({"intent": {"id": FULL_ID, "status": "archived"}}),
+    plain({"data": {"intent": {"id": FULL_ID, "status": "deleted"}}}),
+])
+def test_a_bare_update_result_saying_archived_is_not_a_withdrawal(intentions, result):
+    """Only a rewrite is possible through the plugin; a result that reads as an
+    archive is not one this tool can produce, and yields no withdrawal."""
+    calls = intentions.plan(BARE_UPDATE, {"intentId": FULL_ID, "description": DESCRIPTION}, result, "ok")
+    assert "intention.withdrawn" not in [c.event_type for c in calls]
+
+
+@pytest.mark.parametrize("args", [
+    {"id": FULL_ID, "description": DESCRIPTION},
+    {"intent_id": FULL_ID, "description": DESCRIPTION},
+    {"intentId": FULL_ID},
+    {"intentId": FULL_ID, "text": DESCRIPTION},
+    {"intentId": 12345, "description": DESCRIPTION},
+    {"intentId": FULL_ID, "description": 7},
+])
+def test_a_bare_update_the_plugin_would_refuse_records_nothing(intentions, args):
+    """The plugin requires `intentId` and `description` (legacy `id` /
+    `intent_id` are not read) and answers anything else with an error."""
+    assert intentions.plan(BARE_UPDATE, args, plugin_answer({"intentId": FULL_ID}), "ok") == []
+
+
+@pytest.mark.parametrize("args", [{}, {"description": ""}, {"description": "   \n"}, {"description": 12},
+                                  {"text": DESCRIPTION}, {"intent": DESCRIPTION}])
+def test_a_bare_create_the_plugin_would_refuse_records_nothing(intentions, args):
+    assert intentions.plan(BARE_CREATE, args, plugin_answer({"intentId": FULL_ID}), "ok") == []
+
+
+def test_a_bare_create_ignores_network_ids(intentions):
+    with_ids = intentions.plan(BARE_CREATE, {"description": DESCRIPTION, "networkIds": ["n1", "n2"]},
+                               plugin_answer({"intentId": FULL_ID, "networkIds": ["n1", "n2"]}), "ok")
+    without = intentions.plan(BARE_CREATE, {"description": DESCRIPTION}, plugin_answer({"intentId": FULL_ID}), "ok")
+    assert _plan_view(with_ids) == _plan_view(without)
+
+
+# Whitespace: the plugin strips both strings (`_clean_string`) before Index sees them.
+
+
+@pytest.mark.parametrize("padded", [" " + FULL_ID, FULL_ID + " ", "\t" + FULL_ID + "\n"])
+def test_a_padded_intent_id_is_read_as_the_plugin_sends_it(intentions, padded):
+    calls = intentions.plan(BARE_UPDATE, {"intentId": padded, "description": DESCRIPTION},
+                            plugin_answer({"intentId": FULL_ID, "description": DESCRIPTION}), "ok")
+    assert [(c.event_type, c.intention_id, c.index_intent_id) for c in calls] == [
+        ("intention.updated", FULL_ID, FULL_ID)]
+
+
+def test_a_padded_short_id_still_resolves_to_the_full_id(intentions):
+    calls = intentions.plan(BARE_UPDATE, {"intentId": "  " + FULL_ID[:8] + " ", "description": DESCRIPTION},
+                            plugin_answer({"intentId": FULL_ID}), "ok")
+    assert [c.intention_id for c in calls] == [FULL_ID]
+
+
+@pytest.mark.parametrize("bare,args", [
+    (BARE_CREATE, {"description": "  " + DESCRIPTION + "\n"}),
+    (BARE_UPDATE, {"intentId": FULL_ID, "description": "\t" + DESCRIPTION + "  "}),
+])
+def test_a_padded_description_hashes_as_index_stores_it(plugin, live, av, bare, args):
+    fire_tool(live, bare, args, plugin_answer({"intentId": FULL_ID, "description": DESCRIPTION}))
+    [event] = intention_events(av, plugin)
+    assert event["payload"]["text_hash"] == sha(DESCRIPTION)
+
+
+def test_inner_whitespace_is_kept(intentions):
+    """`_clean_string` strips the ends only."""
+    text = "Looking for  a cofounder\nwho has shipped hardware"
+    [call] = intentions.plan(BARE_CREATE, {"description": " " + text + " "}, plugin_answer({"intentId": FULL_ID}), "ok")
+    assert call.text == text
+
+
+# Failures: the plugin answers non-2xx as an object, with Hermes's status `ok`.
+
+FAILURE_SHAPES = [
+    plugin_error("description is required."),
+    plugin_error("Index request failed", status=422),
+    plugin_error("intentId is required."),
+    plugin_answer({"status": 422, "message": "Intent is too vague", "needsRevision": True}),
+    plugin_answer({"status": 422, "message": "too vague", "intentId": FULL_ID}),
+    plugin_answer({"status": 404, "message": "Intent not found", "intentId": FULL_ID}),
+    plugin_answer({"status": 409, "message": "ambiguous id", "intentId": FULL_ID}),
+    plugin_answer({"status": 401, "intentId": FULL_ID}),
+    plugin_answer({"status": 500, "intentId": FULL_ID}),
+    plugin_answer({"status": 503, "intentId": FULL_ID}),
+    plugin_answer({"ok": False, "intentId": FULL_ID}),
+    plugin_answer({"success": False, "intentId": FULL_ID}),
+    plugin_answer({"error": None, "intentId": FULL_ID}),
+    plugin_answer({"error": "Index transport response could not be processed", "intentId": FULL_ID}),
+    plain([{"intentId": FULL_ID}]),
+    "Created your signal " + FULL_ID,
+    "",
+    None,
+]
+
+
+@pytest.mark.parametrize("bare", [BARE_CREATE, BARE_UPDATE])
+@pytest.mark.parametrize("result", FAILURE_SHAPES)
+def test_a_failure_the_plugin_reports_in_its_result_records_nothing(intentions, bare, result):
+    args = {"description": DESCRIPTION, "intentId": FULL_ID}
+    assert intentions.plan(bare, args, result, "ok") == []
+
+
+@pytest.mark.parametrize("result", [
+    plugin_answer({"status": 200, "intentId": FULL_ID}),
+    plugin_answer({"status": 201, "intentId": FULL_ID}),
+    plugin_answer({"status": 399, "intentId": FULL_ID}),
+    plugin_answer({"status": True, "intentId": FULL_ID}),
+    plugin_answer({"status": "500", "intentId": FULL_ID}),
+    plugin_answer({"ok": True, "intentId": FULL_ID}),
+    plugin_answer({"success": True, "intentId": FULL_ID}),
+])
+def test_a_success_status_or_flag_still_records(intentions, result):
+    """Only an integer of 400 or more is an HTTP failure; a boolean or a string `status` is not one."""
+    [call] = intentions.plan(BARE_CREATE, {"description": DESCRIPTION}, result, "ok")
+    assert call.intention_id == FULL_ID
+
+
+def test_the_bare_path_never_unwraps_the_mcp_envelope(intentions):
+    """Hermes wraps MCP results only; a plugin answer is its own object, so a
+    `result` envelope is not read for an id."""
+    assert intentions.plan(BARE_CREATE, {"description": DESCRIPTION}, wrapped({"intentId": FULL_ID}), "ok") == []
+    # The MCP name does read it.
+    assert len(intentions.plan("mcp__index__create_intent", {"description": DESCRIPTION},
+                               wrapped({"intentId": FULL_ID}), "ok")) == 1
 
 
 # --------------------------------------------------------------------------
@@ -268,9 +421,10 @@ def test_bare_and_mcp_calls_emit_identical_intention_events(plugin, monkeypatch,
     plugin.register(ctx)
     ctx.fire("on_session_start", session_id=SESSION, model="m", platform="telegram")
     steps = [
-        ("create_intent", {"description": DESCRIPTION}, wrapped({"intent": {"id": "int-abc", "summary": SUMMARY}})),
-        ("update_intent", {"intentId": "int-abc", "description": DESCRIPTION + "!"}, plain({"intentId": "int-abc"})),
-        ("update_intent", {"intentId": "int-abc", "status": "archived"}, plain({})),
+        ("create_intent", {"description": DESCRIPTION}, plain({"intent": {"id": "int-abc", "summary": SUMMARY}})),
+        ("update_intent", {"intentId": "int-abc", "description": DESCRIPTION + "!"}, plugin_answer({"intentId": "int-abc"})),
+        ("update_intent", {"intentId": "int-abc", "description": DESCRIPTION + "!!"},
+         plugin_answer({"intentId": "int-abc", "description": DESCRIPTION + "!!"})),
     ]
     for i, (tool, args, result) in enumerate(steps):
         fire_tool(ctx, f"mcp__index__{tool}", args, result, tool_call_id=f"m{i}")
@@ -278,7 +432,7 @@ def test_bare_and_mcp_calls_emit_identical_intention_events(plugin, monkeypatch,
     for i, (tool, args, result) in enumerate(steps):
         fire_tool(ctx, f"index_{tool}", args, result, tool_call_id=f"b{i}")
     both = [_strip(e) for e in intention_events(av, plugin)]
-    assert [e["event_type"] for e in mcp] == ["intention.captured", "intention.updated", "intention.withdrawn"]
+    assert [e["event_type"] for e in mcp] == ["intention.captured", "intention.updated", "intention.updated"]
     assert both[len(mcp):] == mcp
 
 
@@ -300,12 +454,16 @@ def test_no_argument_but_description_is_read_and_no_text_leaves(plugin, monkeypa
     ctx = ToolFireCtx()
     plugin.register(ctx)
     ctx.fire("on_session_start", session_id=SESSION, model="m", platform="telegram")
-    extra = {"text": SECRET, "intent": SECRET, "content": SECRET, "summary": SECRET, "prompt": SECRET}
+    extra = {"text": SECRET, "intent": SECRET, "content": SECRET, "summary": SECRET, "prompt": SECRET,
+             "status": "archived", "id": "int-legacy", "intent_id": "int-legacy2"}
     fire_tool(ctx, BARE_CREATE, {"description": DESCRIPTION, **extra}, plain({"intentId": FULL_ID}), tool_call_id="c1")
+    # No `description` (the plugin refuses), so nothing; a `status` never withdraws.
     fire_tool(ctx, BARE_UPDATE, {"intentId": FULL_ID, **extra}, plain({"intentId": FULL_ID}), tool_call_id="c2")
+    # Legacy id keys are not read: without `intentId` the plugin refuses.
+    fire_tool(ctx, BARE_UPDATE, {"description": DESCRIPTION, **extra}, plain({"intentId": FULL_ID}), tool_call_id="c3")
     events = intention_events(av, plugin)
-    # The update named no `description`: no new text to version, so no event.
     assert [e["event_type"] for e in events] == ["intention.captured"]
+    assert "int-legacy" not in json.dumps(events)
     payload = events[0]["payload"]
     assert payload["text_hash"] == sha(DESCRIPTION)
     assert payload["summary_hash"] is None

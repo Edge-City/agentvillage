@@ -20,16 +20,23 @@ capture"). Two producers inside the sandbox:
   nothing. `delete_intent` is kept only as a legacy alias (Index has no such
   tool today; an older Index surface did): a successful one is a withdrawal.
 * **Index's Hermes plugin tools** (DATA-272; Index `packages/hermes-plugin`,
-  the bare `index_*` names `tool_categories_v3` lists). Hermes registers a
-  plugin's tools by bare name, so they never carry the `mcp__index__` prefix.
-  Two of them write an intent: `index_create_intent` is planned exactly as
-  `create_intent` and `index_update_intent` exactly as `update_intent`
-  (`INDEX_PLUGIN_TOOLS`): the same arguments read (`description`, the
-  `intentId` family), the same result keys, the same events with
-  `capture_path` `index_tool`. The plugin has no pause, resume, archive or
-  delete tool; its other intent tools read, or file an intent into a network,
-  and record nothing. Either name served by an MCP server is not this plugin
-  and records nothing.
+  whose tool list and the two writers' input schemas are `hermes_plugin` in
+  `tests/vectors/index_intent_contract.json`). Hermes registers a plugin's
+  tools by bare name, so they never carry the `mcp__index__` prefix. Two of
+  them write an intent (`INDEX_PLUGIN_TOOLS`), and each is read the way the
+  plugin itself reads its arguments (`plan_index_plugin`): only `description`,
+  plus `intentId` for `index_update_intent`, each stripped and an empty or
+  non-string value absent (Index's `_clean_string`); every other key is dropped
+  by the plugin and is never read here. So `index_create_intent` can only
+  capture and `index_update_intent` can only update: no `status` argument or
+  result turns a description rewrite into a withdrawal. The plugin returns its
+  own JSON object, never Hermes's MCP wrapper, and reports a non-2xx answer as
+  an object rather than an error status, so a result carrying an integer
+  `status` of 400 or more, `ok: false`, `success: false` or an `error` key
+  records nothing. Events are the MCP tools' (`capture_path` `index_tool`).
+  The plugin has no pause, resume, archive or delete tool; its other intent
+  tools read, or file an intent into a network, and record nothing. Either
+  name served by an MCP server is not this plugin and records nothing.
 * **`record_intention`**, the overlay's front door (DATA-212, `_record_intention.py`).
   Its id comes from the call, else from the tool's result, else it is a uuid v7
   minted by the plugin at capture. The tool publishes to Index itself, over its
@@ -71,14 +78,24 @@ INDEX_INTENT_TOOLS: dict[str, str] = {
     "index_update_intent": "intention.updated",
 }
 
-#: Index's Hermes plugin tool (bare name) -> the Index MCP tool it is planned
-#: as. The plugin's intent writes are these two; its `index_read_intents`,
-#: `index_list_intent_networks` and `index_add_intent_to_network` change no
-#: intention text or status and record nothing. Hermes registers a plugin tool
-#: by its bare name, so only the bare name is this plugin's.
+#: Index's Hermes plugin tool (bare name) -> the Index MCP tool whose events
+#: it produces. The plugin's intent writes are these two; its
+#: `index_read_intents`, `index_list_intent_networks` and
+#: `index_add_intent_to_network` change no intention text or status and record
+#: nothing. Hermes registers a plugin tool by its bare name, so only the bare
+#: name is this plugin's.
 INDEX_PLUGIN_TOOLS: dict[str, str] = {
     "index_create_intent": "create_intent",
     "index_update_intent": "update_intent",
+}
+
+#: The only arguments each plugin write reads (Index `tools.py`, as fetched
+#: 2026-10-04): all required, all strings, each passed through `_clean_string`.
+#: The plugin drops every other key (its schema does not forbid them, and
+#: Hermes passes them through), so neither does this observer read one.
+INDEX_PLUGIN_ARGS: dict[str, tuple[str, ...]] = {
+    "index_create_intent": ("description",),
+    "index_update_intent": ("intentId", "description"),
 }
 
 #: The status a successful lifecycle tool leaves the intent in. Index's wire
@@ -680,6 +697,57 @@ def plan_record(
     ]
 
 
+def clean_string(value: Any) -> Optional[str]:
+    """Index's plugin `_clean_string`: a stripped string, or None for a
+    non-string or an empty one."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
+
+
+def plugin_result_failed(payload: Any) -> bool:
+    """Whether an Index plugin tool's result reports a failure.
+
+    The plugin returns every answer as a JSON object, its transport's non-2xx
+    answers included, so a failure is in the object, not in Hermes's status:
+    an integer `status` of 400 or more, `ok: false`, `success: false`, or any
+    `error` key. Anything that is not an object is not the plugin's answer.
+    """
+    if not isinstance(payload, dict):
+        return True
+    code = payload.get("status")
+    if isinstance(code, int) and not isinstance(code, bool) and code >= 400:
+        return True
+    if payload.get("ok") is False or payload.get("success") is False:
+        return True
+    return "error" in payload
+
+
+def plan_index_plugin(tool: str, args: dict, result: Any, *, cron: bool = False) -> list[IntentionCall]:
+    """Events for a successful Index plugin intent write (`INDEX_PLUGIN_TOOLS`).
+
+    Reads only what the plugin reads (`INDEX_PLUGIN_ARGS`, cleaned as the
+    plugin cleans them) and plans it as the MCP tool, so the events are the
+    MCP path's. A call the plugin would refuse for a missing argument records
+    nothing. `index_create_intent` yields at most a capture and
+    `index_update_intent` at most an update: the plugin only ever rewrites a
+    description.
+    """
+    payload = _first_json(result)
+    if plugin_result_failed(payload):
+        return []
+    clean: dict[str, str] = {}
+    for key in INDEX_PLUGIN_ARGS[tool]:
+        value = clean_string(args.get(key))
+        if value is None:
+            return []
+        clean[key] = value
+    allowed = INDEX_INTENT_TOOLS[tool]
+    calls = plan_index(INDEX_PLUGIN_TOOLS[tool], clean, payload, cron=cron)
+    return [call for call in calls if call.event_type == allowed]
+
+
 def plan(tool_name: Any, args: Any, result: Any, status: Any, *, cron: bool = False) -> list[IntentionCall]:
     """Every intention event one `post_tool_call` implies. Empty when none.
 
@@ -692,20 +760,26 @@ def plan(tool_name: Any, args: Any, result: Any, status: Any, *, cron: bool = Fa
     if kind is None:
         return []
     safe_args = args if isinstance(args, dict) else {}
+    server, tool = split_tool_name(tool_name)
+    if server is None and tool in INDEX_PLUGIN_TOOLS:
+        # DATA-272: Index's Hermes plugin. Its own result object, never the
+        # MCP wrapper, and only the arguments the plugin reads.
+        if not result_succeeded(status, None):
+            return []
+        return plan_index_plugin(tool, safe_args, result, cron=cron)
     payload = unwrap_result(result)
     if not result_succeeded(status, payload):
         return []
-    server, tool = split_tool_name(tool_name)
     if kind == "record":
         return plan_record(safe_args, payload, _first_json(result), cron=cron, trust_result=server is None)
-    # DATA-272: a bare Index plugin write is planned as the MCP tool it mirrors.
-    return plan_index(INDEX_PLUGIN_TOOLS.get(tool, tool), safe_args, payload, cron=cron)
+    return plan_index(tool, safe_args, payload, cron=cron)
 
 
 __all__ = [
     "APPROVED_BY",
     "ID_PATTERN",
     "INDEX_INTENT_TOOLS",
+    "INDEX_PLUGIN_ARGS",
     "INDEX_PLUGIN_TOOLS",
     "INDEX_STATUSES",
     "LIFECYCLE_STATUS",
@@ -715,6 +789,7 @@ __all__ = [
     "WITHDRAWN_STATUSES",
     "IntentionCall",
     "classify_tool",
+    "clean_string",
     "normalise_status",
     "plan",
     "result_intent",
