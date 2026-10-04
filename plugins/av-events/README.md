@@ -707,11 +707,18 @@ field lists, the approval link's known-answer vectors and the text rule's cases.
 |---|---|
 | `AV_DIGEST_SHARE` | `1\|true\|yes\|on` registers `share_digest`. Process environment only. |
 | `AV_VILLAGE_VOTE` | `1\|true\|yes\|on` registers `village_vote`. Process environment only. |
-| `AV_TENANT_ID`, `TENANT_ID` | The tenant the ingest token belongs to, exactly as written (process environment only): the vote's key names it. |
+| `AV_TENANT_ID`, `TENANT_ID` | The tenant the ingest token belongs to (process environment only), lower-cased and required to be a UUID as the collector requires: the vote's key names it. Anything else refuses the vote (`tenant_unknown`). |
 
-Both are off by default, and nothing is proposed or sent without approval configured
+Both are off by default, and neither tool is registered without approval configured
 (`AV_APPROVAL_ENABLED` and `AV_APPROVAL_URL`); off, no tool is registered and the pass does
 nothing. Switching one off later stops its pass too (pending proposals wait on disk).
+
+**Nothing is proposed that would go nowhere.** Before it asks the resident, each tool refuses
+when no event could be sent (no token, the plugin switched off, or a null sink, which buffers and
+never sends: `not_available_no_events`) or when ingest's `GET /v1/consent` (the read
+`consent_status` makes) says the tenant is not in the research, whose events the worker drops
+(`not_available_no_consent`). When consent cannot be read, the tool proceeds, and every answer
+says only that the event was handed to the event queue: delivery is never claimed.
 
 **Deploy order.** Ingest must be released with the three schemas (data repo #188) before any
 agent emits these events; an ingest without them quarantines every one. The resident's policy
@@ -720,7 +727,7 @@ as the control plane's resident template does); a policy without them refuses th
 (`class-not-agent-requestable`) and nothing is sent.
 
 **`share_digest`.** `action=share` (`text`, `scope` `village` or `service:<name>`, optional
-`expires_in_hours` 1..167) mints `digest_id = str(uuid4())` and proposes, in class `digest.share`
+`expires_in_hours` 1..167, ASCII digits only) mints `digest_id = str(uuid4())` and proposes, in class `digest.share`
 with key `digest.share:<digest_id>`, exactly `{digest_id, scope, text, expires_at}` as RFC 8785 JSON
 (the bytes the resident is shown). `expires_at` is at most 7 days less an hour after the plugin's
 clock (the door refuses one more than 7 days after it receives the event). The summary names the
@@ -732,14 +739,31 @@ resident is never started (`not_shared`: a share admits only `grant`). `action=r
 (`digest_id`), on the resident's instruction, emits `digest.revoked@1` (`{digest_id}`, no approval:
 the policy rows name no revoke class) once per share, or, before the resident answered, withdraws
 the question and sends nothing. Nothing else revokes: an expiry needs no event, and an executed
-share has no withdrawal on the daemon. `action=status` reads where it stands.
+share has no withdrawal on the daemon. A revocation needs no approval because it only reduces
+exposure (accepted in writing): the agent can therefore revoke, or by writing the map pre-revoke,
+any digest id of its own tenant; the data side keys a revocation on the token's tenant, so no
+other resident is reachable. It is sent at most once per digest id per process, and only for an
+entry this module marked sent (`emitted` with its event id, start seq and `grant`), which the map
+can still forge. `action=status` reads where it stands.
 
-**`village_vote`.** `action=question` reads the open question (id, text, option keys, close).
+**`village_vote`.** `action=question` reads the open question (id, text, options as keys with
+their labels, close).
 `action=vote` (`question_id`, `answer` one option key, optional one-line `rationale`) proposes, in
 class `village.vote` with key `village.vote:<question_id>:<tenant_id>`, exactly
 `{question_id, answer}`; the rationale goes in the summary, never the payload. A question takes one
-answer (approval.md binds a key to its first bytes). A pending vote past the question's close is
-withdrawn. A vote the resident set autonomous is cast inside the tool call (`authorization:
+answer (approval.md binds a key to its first bytes). Before a vote is proposed and again before
+it is started, the provider is asked, never the map: the vote's question must be the open one, its
+answer one of that question's option keys, and the question not closed by the provider's own
+close time. Otherwise the entry ends (`closed` with `question_unavailable` or `question_closed`,
+`invalid` with `answer_not_an_option`), a pending question is withdrawn, and nothing is sent; under
+the shipped provider no vote is ever proposed. The resident's prompt is built from the provider:
+the question's text and the chosen option's label as one clean bounded line (controls, format and
+bidi characters dropped), or a plain statement that no text or label is available beside the
+option key; the rationale follows, cleaned again and labelled as the agent's note, and is dropped
+(the prompt still goes) when it fails cleaning or quotes a share this agent still holds. The tool
+refuses such a rationale (`rationale_invalid`, `rationale_quotes_share`: 24 consecutive
+characters of a held share's text, or all of a shorter one of at least 12, case and spacing
+folded; a share already sent no longer has its text here). A vote the resident set autonomous is cast inside the tool call (`authorization:
 policy`); the poller casts only on a human grant. `action=withdraw` withdraws an unanswered vote;
 a cast vote cannot be withdrawn.
 
@@ -763,6 +787,14 @@ expiry (not re-asked), a daemon that is down or unverified, or a refused start: 
 re-proposes the same bytes (at most ten times), as for intentions. The held text is dropped when
 the proposal ends; a shared digest keeps its id, scope and expiry for a revocation.
 
+**Accepted limits.** The agent runs as the plugin's uid: it can write the event spool directly,
+and an agent that can start a Hermes process controls that process's environment (Hermes loads
+`.env` with override at startup), so the switches and `AV_APPROVAL_URL` too, and could point the
+plugin at a listener of its own. The defence for both is the data side's: the ODS writer resolves
+every share and vote against the approval follower's own rows, which this sandbox does not write.
+The plugin reads its switches from the process environment only, so writing `.env` does not turn
+them on in a process already running; that is all it shows.
+
 **The events.** After `start`, on the tenant's plugin token, actor `agent`, no session, envelope
 `decision_id` null, `agent_report`; `event_id` a uuid v7 derived from the start time, the key and
 `start_seq`:
@@ -775,18 +807,21 @@ the proposal ends; a shared digest keeps its id, scope and expiry for a revocati
 
 No `decision_id` and no `policy_version` in any payload: the plugin cannot know either (the ODS
 writer resolves the decision from the follower's rows). The text travels in `digest.shared` in
-every capture mode: the share is the resident's approved act, not telemetry. Events reach ingest
-for research-consenting tenants only (the worker drops the rest).
+every capture mode: the share is the resident's approved act, not telemetry. The worker keeps
+them for research-consenting tenants only, which is why the tools ask ingest first.
 
 **Codes.** Tool refusals: `disabled`, `approval_not_configured`, `text_required`, `text_too_long`,
 `text_invalid`, `text_no_letter_or_digit`, `text_sanitized`, `scope_invalid`, `expires_invalid`,
+`not_available_no_events`, `not_available_no_consent`, `rationale_quotes_share`,
 `too_many_pending`, `digest_id_required`, `digest_unknown`, `share_in_flight`, `revoke_failed`,
 `tenant_unknown`, `question_unavailable`, `question_id_required`, `question_not_open`,
 `question_closed`, `answer_invalid`, `rationale_invalid`, `vote_already_proposed`, `vote_unknown`,
 `vote_in_flight`, `vote_already_cast`. States: `unfiled`, `requested`, `cleared`, `starting`,
 `emitting`, `emitted`, `revoked`, `rejected`, `withdrawn`, `expired`, `refused`,
 `start_unconfirmed`, `lapsed`, `closed`, `not_shared`, `not_cast`, `invalid`, `emit_refused`,
-`emit_failed`, `emit_unconfirmed`, `revoke_lapsed`. Log lines carry these codes only, never the
+`emit_failed`, `emit_unconfirmed`, `revoke_lapsed`. Entry codes include `question_unavailable`,
+`question_closed`, `answer_not_an_option`, `payload_unencodable`, `payload_tampered`,
+`start_answer_mismatch` and `authorization_mismatch`. Log lines carry these codes only, never the
 text, the rationale or an answer.
 
 ---
