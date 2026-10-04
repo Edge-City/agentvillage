@@ -327,6 +327,7 @@ FAILURE_SHAPES = [
     plugin_answer({"status": 404, "message": "Intent not found", "intentId": FULL_ID}),
     plugin_answer({"status": 409, "message": "ambiguous id", "intentId": FULL_ID}),
     plugin_answer({"status": 401, "intentId": FULL_ID}),
+    plugin_answer({"status": 400, "intentId": FULL_ID}),
     plugin_answer({"status": 500, "intentId": FULL_ID}),
     plugin_answer({"status": 503, "intentId": FULL_ID}),
     plugin_answer({"ok": False, "intentId": FULL_ID}),
