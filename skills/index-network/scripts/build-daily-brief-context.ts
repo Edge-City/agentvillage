@@ -35,6 +35,16 @@ import {
   readDeliveryLog,
 } from "./delivery-state";
 import { callIndexTool, indexMcpUrl, toolJsonArray, toolJsonObject } from "./index-mcp";
+import {
+  type HeldForApproval,
+  type IntentTextLookup,
+  type IntentionBrief,
+  type ReaderRunner,
+  type ReceiptPreference,
+  type SharedOnYourBehalf,
+  intentTextsFrom,
+  readIntentionBrief,
+} from "./intention-brief";
 import { portalEventsBaseUrl } from "./validate-digest-urls";
 
 /**
@@ -217,6 +227,20 @@ export interface DailyBriefContext {
   userModel: BriefUserModel;
   weather?: DailyBriefWeather;
   questions?: BriefQuestion[];
+  /**
+   * DATA-222 reminder: inferred intentions still waiting for the resident's
+   * answer in their approvals (at most three, oldest first; the count is the
+   * total). Empty unless AV_RECORD_INTENTION and the approval path are on.
+   */
+  heldForApproval: HeldForApproval[];
+  heldForApprovalCount: number;
+  /**
+   * DATA-222 receipt: inferred intentions published since the last delivered
+   * brief, not yet carried by one (at most three; the rest are counted and
+   * offered next time). See intention-brief.ts.
+   */
+  sharedOnYourBehalf: SharedOnYourBehalf[];
+  sharedOnYourBehalfMore: number;
   diagnostics: {
     announcementsSource: "control-plane" | "unavailable";
     calendarSource: "edgeos" | "unavailable";
@@ -226,6 +250,8 @@ export interface DailyBriefContext {
     weatherSource?: "open-meteo" | "nws" | "unavailable";
     /** True only when today's discovery run finished. */
     dreamingFresh?: boolean;
+    /** Where the DATA-222 lists came from: `off` when the switches are off. */
+    intentionSource?: IntentionBrief["source"];
     warnings: string[];
     interestTags: string[];
   };
@@ -1022,11 +1048,30 @@ export async function listOpportunitiesFromMcp(opts: {
   };
 }
 
+/** `list_intents` on Index, for the words of intentions about to be receipted. */
+function indexIntentTexts(apiKey: string, mcpUrl: string): IntentTextLookup {
+  return async (ids) => {
+    const text = await callIndexTool({ apiKey, mcpUrl }, "list_intents", { limit: 20 });
+    return intentTextsFrom(toolJsonArray(text, "intents"), ids);
+  };
+}
+
+async function readStateObject(stateFile: string): Promise<Record<string, unknown>> {
+  try {
+    if (!existsSync(stateFile)) return {};
+    return asRecord(JSON.parse(await Bun.file(stateFile).text())) ?? {};
+  } catch {
+    return {};
+  }
+}
+
 export async function buildDailyBriefContext(options: {
   date?: string;
   stateFile?: string;
   opportunitiesFile?: string;
   userFiles?: string[];
+  /** Test seams for the DATA-222 lists; production runs the plugin's reader. */
+  intentions?: { reader?: ReaderRunner; lookupTexts?: IntentTextLookup; preference?: ReceiptPreference; hermesHome?: string };
 } = {}): Promise<DailyBriefContext> {
   const date = options.date ?? villageDate();
   const warnings: string[] = [];
@@ -1106,6 +1151,17 @@ export async function buildDailyBriefContext(options: {
   const questions: BriefQuestion[] = [];
   const questionSource: "mcp" | "unavailable" = "unavailable";
 
+  // DATA-222: the reminder and the receipt. Inert (no process, no Index call)
+  // when the switches are off; Index is asked only when something is receipted.
+  const intentions = await readIntentionBrief({
+    state: await readStateObject(stateFile),
+    hermesHome: options.intentions?.hermesHome,
+    preference: options.intentions?.preference,
+    reader: options.intentions?.reader,
+    lookupTexts: options.intentions?.lookupTexts ?? (apiKey ? indexIntentTexts(apiKey, mcpUrl) : undefined),
+  });
+  if (intentions.warning) warnings.push(intentions.warning);
+
   // Cards shown on an earlier day wait out the cooldown; see delivery-state.ts.
   // Recorded as shown only by the send, from the cards the staged body names.
   const { eligible, held } = applyCooldown(opportunities, deliveryLog, date);
@@ -1135,6 +1191,10 @@ export async function buildDailyBriefContext(options: {
     userModel,
     weather: weather.source !== "unavailable" ? weather : undefined,
     questions,
+    heldForApproval: intentions.heldForApproval,
+    heldForApprovalCount: intentions.heldForApprovalCount,
+    sharedOnYourBehalf: intentions.sharedOnYourBehalf,
+    sharedOnYourBehalfMore: intentions.sharedOnYourBehalfMore,
     diagnostics: {
       announcementsSource: announcementResult.source,
       calendarSource: eventResult.source,
@@ -1143,6 +1203,7 @@ export async function buildDailyBriefContext(options: {
       questionSource,
       weatherSource: weather.source,
       dreamingFresh,
+      intentionSource: intentions.source,
       warnings,
       interestTags,
     },

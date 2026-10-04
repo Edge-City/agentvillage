@@ -14,6 +14,7 @@ import { access } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 
 import { buildDailyBriefContext, villageDate, type DailyBriefContext } from "./build-daily-brief-context";
+import { extractDigestReceiptIds } from "./intention-brief";
 import {
   extractDigestOpportunityIds,
   extractDigestQuestionIds,
@@ -211,13 +212,20 @@ function contextQuestionIds(context: DailyBriefContext): Set<string> {
   ]);
 }
 
-function validateMarkers(body: string, context: DailyBriefContext): { opportunityIds: string[]; questionIds: string[] } {
+function validateMarkers(
+  body: string,
+  context: DailyBriefContext,
+): { opportunityIds: string[]; questionIds: string[]; receiptIds: string[] } {
   const opportunityIds = extractDigestOpportunityIds(body);
   const questionIds = extractDigestQuestionIds(body);
+  const receiptIds = extractDigestReceiptIds(body);
   const knownOpportunityIds = contextOpportunityIds(context);
   const knownQuestionIds = contextQuestionIds(context);
+  // DATA-222: a receipt marker names an item of today's sharedOnYourBehalf (a context from before it has none).
+  const knownReceiptIds = new Set((context.sharedOnYourBehalf ?? []).map((item) => item.id));
   const unknownOpportunityIds = opportunityIds.filter((id) => !knownOpportunityIds.has(id));
   const unknownQuestionIds = questionIds.filter((id) => !knownQuestionIds.has(id));
+  const unknownReceiptIds = receiptIds.filter((id) => !knownReceiptIds.has(id));
 
   if (unknownOpportunityIds.length > 0) {
     throw new Error(`digest body contains unknown opportunity marker id(s): ${unknownOpportunityIds.join(", ")}`);
@@ -225,8 +233,11 @@ function validateMarkers(body: string, context: DailyBriefContext): { opportunit
   if (unknownQuestionIds.length > 0) {
     throw new Error(`digest body contains unknown question marker id(s): ${unknownQuestionIds.join(", ")}`);
   }
+  if (unknownReceiptIds.length > 0) {
+    throw new Error(`digest body contains unknown receipt marker id(s): ${unknownReceiptIds.join(", ")}`);
+  }
 
-  return { opportunityIds, questionIds };
+  return { opportunityIds, questionIds, receiptIds };
 }
 
 export async function prepareDailyBriefContext(options: {
@@ -303,7 +314,7 @@ export async function stageDailyBrief(options: {
   if (!rawBody.trim()) throw new Error("digest body is empty");
 
   const { output: sanitizedBody } = sanitizeDigestUrls(rawBody.trim());
-  const { opportunityIds, questionIds } = validateMarkers(sanitizedBody, context);
+  const { opportunityIds, questionIds, receiptIds } = validateMarkers(sanitizedBody, context);
 
   const createOutput = await hermes([
     "kanban",
@@ -331,6 +342,8 @@ export async function stageDailyBrief(options: {
     taskTitle: `Morning digest — ${date}`,
     opportunityIds,
     questionIds,
+    // DATA-222: recorded as receipted by the send, only when it delivers.
+    ...(receiptIds.length > 0 ? { receiptIds } : {}),
   };
   await writeJson(stateFile, state);
 
