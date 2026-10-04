@@ -515,3 +515,11 @@ def test_tool_call_names_and_categorises_the_bare_writes(plugin, live, av, name)
     [event] = [e for e in av.read_buffer(plugin._COLLECTOR) if e["event_type"] == "tool.call"]
     assert event["payload"]["tool_name"] == name
     assert event["payload"]["tool_category"] == "intention"
+
+
+def test_a_bare_update_result_naming_another_intent_is_not_trusted(intentions):
+    """Index resolves a short prefix to the full id; a result naming a different
+    intent is not that, and the argument's id is kept."""
+    [call] = intentions.plan(BARE_UPDATE, {"intentId": FULL_ID[:8], "description": DESCRIPTION},
+                             plugin_answer({"intentId": "ffffffff-other"}), "ok")
+    assert call.intention_id == call.index_intent_id == FULL_ID[:8]
