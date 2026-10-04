@@ -220,6 +220,7 @@ def test_malformed_entries_and_other_states_are_skipped(on, bi, home):
         uid(5): held_entry(uid(5), TEXT, 1_000, state="unfiled"),  # not yet asked
         uid(6): held_entry(uid(6), TEXT, 1_000, state="refused"),
         uid(7): {"published": False, "source": "ambient", "held_norm_hash": "0" * 64},  # held before approvals
+        uid(9): held_entry(uid(9), TEXT, 1_000, cls=_tia.STATED_CLASS),  # a stated proposal, whatever its source
         "not an id": held_entry(uid(8), TEXT, 1_000),
     })
     out = items(bi, now=2_000)
