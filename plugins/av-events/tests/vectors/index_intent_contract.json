@@ -46,6 +46,58 @@
       "error_statuses": [401, 404, 409]
     }
   },
+  "hermes_plugin": {
+    "about": "DATA-272: Index's own Hermes plugin (indexnetwork/index packages/hermes-plugin), copied by hand from its schemas.py and tools.py as fetched 2026-10-04 (tool_categories_v3 cites commit 168310a for the same tool list; this copy does not claim a commit). Hermes registers a plugin's tools by bare name, so these never carry the mcp__index__ prefix. 'tools': every tool the plugin registers. 'requests': each tool's REST calls in tools.py, as [method, path] with an id path segment written {id}; a tool that makes none has []. 'intent_writes': the input schema of each tool whose request writes an intent (verbatim from schemas.py; neither sets additionalProperties, so a model may send more keys, and the handler reads only the ones it names), with the MCP tool it is observed as. Every handler strips each string it reads and treats an empty or non-string value as absent (_clean_string), and returns its result as one JSON object, a non-2xx answer included. Names, paths and schemas only.",
+    "source": "indexnetwork/index packages/hermes-plugin schemas.py, tools.py (as fetched 2026-10-04)",
+    "tools": [
+      "index_read_intents", "index_create_intent", "index_update_intent", "index_list_intent_networks",
+      "index_add_intent_to_network", "index_read_networks", "index_read_network_memberships",
+      "index_create_network", "index_update_network", "index_join_network", "index_list_opportunities",
+      "index_update_opportunity", "index_research_profile", "index_read_docs", "index_agent_me", "index_open_app"
+    ],
+    "requests": {
+      "index_read_intents": [["GET", "/networks/{id}/intents"], ["POST", "/intents/list"]],
+      "index_create_intent": [["POST", "/intents"]],
+      "index_update_intent": [["PATCH", "/intents/{id}"]],
+      "index_list_intent_networks": [["GET", "/intents/{id}/networks"]],
+      "index_add_intent_to_network": [["POST", "/intents/{id}/networks"]],
+      "index_read_networks": [["GET", "/networks"]],
+      "index_read_network_memberships": [["GET", "/networks/{id}/members"]],
+      "index_create_network": [["POST", "/networks"], ["POST", "/network-requests"]],
+      "index_update_network": [["PUT", "/networks/{id}"]],
+      "index_join_network": [["POST", "/networks/{id}/join"]],
+      "index_list_opportunities": [["GET", "/opportunities"]],
+      "index_update_opportunity": [["PATCH", "/opportunities/{id}/status"]],
+      "index_research_profile": [["POST", "/enrichment/enrich"]],
+      "index_read_docs": [["GET", "/docs"]],
+      "index_agent_me": [["GET", "/agents/me"]],
+      "index_open_app": []
+    },
+    "intent_writes": {
+      "index_create_intent": {
+        "observed_as": "create_intent",
+        "input": {
+          "type": "object",
+          "properties": {
+            "description": {"type": "string", "description": "What the user is looking for, in their own words."},
+            "networkIds": {"type": "array", "items": {"type": "string"}, "description": "Optional network UUIDs to share the signal in."}
+          },
+          "required": ["description"]
+        }
+      },
+      "index_update_intent": {
+        "observed_as": "update_intent",
+        "input": {
+          "type": "object",
+          "properties": {
+            "intentId": {"type": "string", "description": "The signal's UUID."},
+            "description": {"type": "string", "description": "The rewritten signal text."}
+          },
+          "required": ["intentId", "description"]
+        }
+      }
+    }
+  },
   "tools": {
     "list_intents": {
       "input": {

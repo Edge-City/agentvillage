@@ -235,9 +235,9 @@ PUBLISH_RULE = (
 TOOL_DESCRIPTION = (
     "Record an intention: something the person you work for wants, is looking for, or is open "
     "to, that meeting people they do not already know could serve. This is the one front door "
-    "for intentions: use it instead of calling Index create_intent yourself; it publishes to "
-    "Index in the same call and returns the intention_id to keep for later update or withdraw "
-    "calls. "
+    "for intentions: never call Index create_intent or index_create_intent for a new want. "
+    "This tool publishes to Index in the same call and returns the intention_id to keep for "
+    "later update or withdraw calls. "
     + PUBLISH_RULE
     + " Only then pass publish=false, with reason participant_asked or personal. source: message "
     "(they told you), onboarding (answered during setup), note (their own words in their "
@@ -246,8 +246,11 @@ TOOL_DESCRIPTION = (
     "them in their approval channel. Where that channel is set up, the request goes to them "
     "when you capture, and action=confirm (intention_id) checks for their answer and publishes "
     "once they approved; where it is not, confirm is refused. A yes you read in chat is not "
-    "an approval. action=update (intention_id, text) changes an intention you recorded; "
-    "action=withdraw (intention_id) retires it."
+    "an approval. action=update (intention_id, text) changes an intention you recorded here; "
+    "action=withdraw (intention_id) retires it. An intention this tool did not record (made "
+    "in the Index app, or before this tool was on) is not changed on Index by action=update; "
+    "it may be changed with Index's own update_intent or index_update_intent, only to reword "
+    "the same want. A different want is a new want and goes through this tool."
 )
 
 TOOL_SCHEMA: dict = {

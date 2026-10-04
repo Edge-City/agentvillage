@@ -178,7 +178,9 @@ category, the plugin's own `consent_status`), and since v3 the Index Hermes plug
 (`index_create_intent` and the rest of `index_*` but `index_open_app`, which opens a link for the human and
 stays unlisted), which Hermes registers by bare name; `mcp.<server>`
 lists an MCP server's tools, which Hermes registers as `mcp__<server>__<tool>` — so the allowlist is
-keyed that way, and a bare `create_intent` from anywhere else is not Index. v3 (DATA-261) adds Index
+keyed that way, and a bare `create_intent` is not listed and leaves as `other`. (Intention capture,
+below, is a separate rule: it does read a bare `create_intent`, and the plugin's `index_create_intent`
+/ `index_update_intent`, as Index writes.) v3 (DATA-261) adds Index
 main's MCP tool names (`list_intents`, `get_intent`, `pause_intent`, `resume_intent`,
 `archive_intent`, `get_opportunity`, `accept_opportunity`, `reject_opportunity` and the
 `*_my_profile` tools) under the category of the old tool each replaces, and keeps every older name. A listed tool leaves by name and
@@ -218,8 +220,8 @@ backlog can differ from `emitted_at` by minutes. Every `marts` time series is bu
 | `prompt.registered` | `pre_api_request` | `hash`, `kind` ∈ `tools`\|`system_prompt`, `body`. `full` only, once per hash ever |
 | `plugin.degraded` | the guard | `hook`, `scope` ∈ `session`\|`process`, `error_count`, `errors_by_hook`, `hermes_version`, `last_error` |
 | `plugin.buffer_dropped` | the flusher | `reason`, `count`, `files`, `rejected_files`, `rejected_events`, `oldest_event_at`, `newest_event_at` |
-| `intention.captured` | `post_tool_call` on Index `create_intent`, or `record_intention(action="capture")` | `text_hash`, `summary_hash`, `index_intent_id`, `source`, `conditional`, `capture_path`, `index_status`, `parent_session_id`, `publish_refused`, `local_reason`, plus `text_length` / `summary_length` above `metadata` |
-| `intention.updated` | `post_tool_call` on Index `update_intent` with a new `description`, Index `pause_intent` / `resume_intent` (`index_status` `paused` / `active`, both hashes null, `status_only: true`), or `record_intention` naming an id | as above |
+| `intention.captured` | `post_tool_call` on Index `create_intent` (or the Index plugin's `index_create_intent`), or `record_intention(action="capture")` | `text_hash`, `summary_hash`, `index_intent_id`, `source`, `conditional`, `capture_path`, `index_status`, `parent_session_id`, `publish_refused`, `local_reason`, plus `text_length` / `summary_length` above `metadata` |
+| `intention.updated` | `post_tool_call` on Index `update_intent` (or `index_update_intent`) with a new `description`, Index `pause_intent` / `resume_intent` (`index_status` `paused` / `active`, both hashes null, `status_only: true`), or `record_intention` naming an id | as above |
 | `intention.withdrawn` | `post_tool_call` on Index `archive_intent` (or the legacy `delete_intent`, or a legacy `update_intent` to `archived`/`deleted`/`withdrawn`), or `record_intention(action="archive"\|"withdraw"\|"delete")` | as above; both hashes null |
 | `digest.shared` | the approval poller (or the tool call) after the resident's grant and `approval start` (lane O3) | `digest_id`, `scope`, `text`, `expires_at`, `idempotency_key`, `payload_hash`, `start_seq`, `authorization` — see "Sharing a digest and the weekly vote" |
 | `digest.revoked` | `share_digest(action="revoke")` on a shared digest | `digest_id` |
@@ -296,6 +298,39 @@ server-side). Capture happens in `post_tool_call`; `pre_tool_call` is untouched 
 Index tools arrive as `mcp__index__create_intent` and so on. The bare name is also accepted. A tool
 of the same name on any other MCP server is ignored.
 
+Index's own Hermes plugin (`packages/hermes-plugin`; its 16 tools, their REST calls and the two
+writers' input schemas are `hermes_plugin` in `tests/vectors/index_intent_contract.json`, copied from
+the plugin's `schemas.py` and `tools.py` as fetched 2026-10-04) registers bare `index_*` tools. Two of
+them write an intent and are watched (DATA-272, `INDEX_PLUGIN_TOOLS` / `plan_index_plugin` in
+`_intentions.py`): `index_create_intent` produces `create_intent`'s events and `index_update_intent`
+`update_intent`'s, with `capture_path` `index_tool`. They are read the way the plugin reads them,
+not the way the MCP tools are:
+
+- **Arguments.** Only `description`, plus `intentId` for `index_update_intent` — the keys the plugin
+  reads. Each is stripped, and a non-string or empty one is absent (the plugin's `_clean_string`),
+  so a padded id still joins and a padded description hashes as Index stores it. The plugin drops
+  every other key (its schema does not forbid them), so `status`, `networkIds`, and the legacy `id` /
+  `intent_id` are never read: a call without `intentId` or `description` records nothing, and a
+  bare update can only ever be `intention.updated`, never a withdrawal, whatever it carries or its
+  result says. An `intentId` that is not a full id (a prefix Index resolves) is recorded only as the
+  full id the result names for it; a result that names none, or another intent, records nothing,
+  so a prefix never becomes a join key.
+- **Result.** The plugin's own JSON object (Hermes's MCP `{"result": …}` envelope is never unwrapped
+  for these names). The plugin answers a non-2xx as an object, with Hermes's status `ok`, so an
+  integer `status` of 400 or more, `ok: false`, `success: false` or a truthy `error` (the plugin's
+  own reading; an `"error": null` on a success body is not a failure) records nothing; so does a
+  result that is not an object.
+
+Hermes registers a plugin tool by bare name only, so `mcp__<any server>__index_create_intent` is not
+the plugin and records nothing. The plugin has no pause, resume, archive or delete tool;
+`index_read_intents`, `index_list_intent_networks`, `index_add_intent_to_network` and the rest record
+no intention (a test derives the writers from the vendored REST calls, so a writer added upstream
+fails it once the vector is refreshed). With `record_intention` on, the agent is told never to call
+`create_intent` or `index_create_intent` for a new want, and that an intention `record_intention`
+did not record may be changed with `update_intent` or `index_update_intent` only to reword the same
+want (a different want is a new want, and goes through `record_intention`). A direct call is still
+observed, as above, and is neither refused nor rerouted here.
+
 Index's intent tools (DATA-249, verified against `indexnetwork/index` `main`
 `services/api/src/lib/mcp/mcp.tools.ts` on 2026-10-02; the overlay's copy of their input schemas is
 under `tools` in `tests/vectors/index_intent_contract.json`, and a test holds the observer's names
@@ -308,12 +343,12 @@ archive is `archivedAt` set. `intentId` accepts a short id prefix, and the resul
 
 | Tool | Event | `intention_id` |
 |---|---|---|
-| Index `create_intent` | `intention.captured` | Index's intent id, read from the result (`intentId`, or the intent object's `id`); no id, no event |
-| Index `update_intent` with a `description` | `intention.updated` | the `intentId` argument (legacy `id`), or the full id the result names for it |
+| Index `create_intent` (or the plugin's `index_create_intent`) | `intention.captured` | Index's intent id, read from the result (`intentId`, or the intent object's `id`); no id, no event |
+| Index `update_intent` (or the plugin's `index_update_intent`) with a `description` | `intention.updated` | the `intentId` argument (legacy `id`, MCP name only; stripped for the plugin), or the full id the result names for it |
 | Index `update_intent` changing only the source fields | nothing | — |
 | Index `pause_intent` / `resume_intent` | `intention.updated`, `index_status` `paused` / `active`, both hashes null, `status_only: true` | as for `update_intent` |
 | Index `archive_intent` | `intention.withdrawn`, `index_status` `archived` | as for `update_intent` |
-| Legacy: `delete_intent`, or `update_intent` whose argument status or result status (or `archived: true`) says `archived`\|`deleted`\|`withdrawn` | `intention.withdrawn` (`index_status` `deleted` for `delete_intent`) | as for `update_intent` |
+| Legacy, MCP names only (never `index_update_intent`): `delete_intent`, or `update_intent` whose argument status or result status (or `archived: true`) says `archived`\|`deleted`\|`withdrawn` | `intention.withdrawn` (`index_status` `deleted` for `delete_intent`) | as for `update_intent` |
 | `record_intention` | see the contract below | the argument, else (on a capture) the result's `intention_id`, else a uuid v7 minted here |
 
 The legacy rows are kept for an Index server still on the older surface: Index main rejects a
@@ -427,8 +462,10 @@ quarantines at ingest.
 Registered only when `AV_RECORD_INTENTION` is `1|true|yes|on` (default off). Hermes loads
 `$HERMES_HOME/.env` into the process environment at startup, so a change to the switch there takes
 effect after a gateway restart, in both directions; the handler's call-time re-read honours only a
-change made to `os.environ` itself. One front door: the agent calls it instead of Index
-`create_intent`. Explicit intents (source message, onboarding or note) are published to Index by
+change made to `os.environ` itself. One front door: for a new want the agent calls it instead of
+Index `create_intent` or the Index plugin's `index_create_intent`; an intention it did not record
+may still be changed with `update_intent` / `index_update_intent`, only to reword the same want.
+Explicit intents (source message, onboarding or note) are published to Index by
 default. The two legitimate reasons an explicit intent stays local: the resident asked, or the
 content is personal. The skill `skills/record-intention/SKILL.md` says the same. It is installed on
 every tenant with the edge bundles and has no `requires_tools` gate (the tool sits behind Tool
@@ -1819,8 +1856,11 @@ These are the divergences this milestone had to resolve. Each one is a decision 
     `pre_tool_call`. That hook fails closed and has no result, so it has no Index intent id and no
     sign of whether Index accepted the intent. See "Intention capture".
 16. **MCP tool names are prefixed.** Hermes registers Index's tools as `mcp__index__<tool>`, and the
-    intention path matches that form. The tool-category allowlist (`tool_categories.json`) is keyed
-    the same way, so a bare `create_intent` is `other`.
+    intention path matches that form (and the bare name). The tool-category allowlist
+    (`tool_categories.json`) is keyed the same way, so a bare `create_intent` is `other`. Index's
+    own Hermes plugin registers its tools by bare name (`index_create_intent`, …): the allowlist
+    lists them under `builtin` (v3), and the intention path reads the two intent writes only by
+    bare name (DATA-272).
 17. **Pause, resume and archive are captured too.** §7.1 names only `create_intent` /
     `update_intent`. Index main (DATA-249) also has `pause_intent`, `resume_intent` and
     `archive_intent`, and an archive is the clearest withdrawal there is. `delete_intent`, from an
