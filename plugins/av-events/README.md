@@ -28,6 +28,7 @@ plugins/av-events/
   _cron.py         cron.run from the executions ledger and usage audit (flusher thread only)
   _backup.py       memory.snapshot: collect, pack and upload the memory files (backup thread only)
   _consent.py      the consent_status tool: GET /v1/consent and the answer in words (DATA-157)
+  _brief_items.py  read-only reader of held and published inferred intentions for the morning brief (DATA-222)
   tool_categories.json        frozen seed: tool name -> category (tool_categories_v3)
   edgeos_tool_allowlist.json  frozen seed: EdgeOS operations (edgeos_tool_allowlist_v1)
   cron_job_names.json         frozen seed: the cron names cron.run may carry (cron_job_names_v1)
@@ -730,6 +731,30 @@ retried), `unavailable` (nothing could be held). Map codes: `payload_hash_mismat
 `authorization_mismatch`, `claim_abandoned`, `map_invalid`, `rule_needs_capture`. Client codes in the logs: `url_missing`, `url_refused`,
 `token_missing`, `token_malformed`, `token_file_*`, `facade_listener_foreign`, `unauthorized`,
 `http_<status>`, `transport`, `timeout`, `bad_answer`.
+
+### The morning brief's reader (DATA-222)
+
+The morning brief carries a reminder of inferred intentions still waiting for the resident's
+answer and a receipt of those published on their behalf. The brief script never parses the map: it
+runs `_brief_items.py` (read-only) with Hermes's Python, `python -I -B
+$HERMES_HOME/plugins/av-events/_brief_items.py`, and reads the one JSON object it prints:
+`{"v": 1, "status": "ok"|"off"|"error", "reason", "held": [{"id", "text", "heldSince"}],
+"heldCount", "published": [{"id", "indexIntentId", "publishedAt", "approvedBy"}]}`.
+
+| List | What is in it |
+|---|---|
+| `held` | Class `intent.publish.inferred.index`, `approval.state` `requested` (the resident has been asked, no answer recorded), oldest first, at most 20 (`heldCount` is the total). `text` is the held payload text, whitespace collapsed, at most 160 characters. It leaves the list when the poller records the grant, the rejection or the final expiry, or the agent withdraws it. |
+| `published` | The same class, `approval.state` `published`, `published` true, not archived since, last changed within 7 days, oldest first. `approvedBy` is `individual` (`authorization: grant`) or `rule` (`policy`). No text: R16 deletes it at publish; the brief looks the words up on Index by `indexIntentId`. |
+
+Never returned: stated captures, personal or other local-only captures (they have no proposal),
+entries held before approvals were on, proposals not filed, refused, in flight or ended. `off`
+(`record_intention_off`, `approval_off`) when `AV_RECORD_INTENTION` or the approval path is off;
+these switches are read like `_core.env` (process environment, else `.env`), because the reader runs
+under the cron's terminal; it decides only what the brief mentions, never a publish. `error`
+(`map_unreadable`) for a map that cannot be read; the reader never takes the lock, creates,
+renames or writes anything (writers replace the map atomically). Which items a brief already
+receipted is the brief's own state (`intentionReceipts` in `memory/heartbeat-state.json`,
+`skills/index-network/scripts/intention-brief.ts`).
 
 ### Sharing a digest and the weekly vote (lane O3)
 
