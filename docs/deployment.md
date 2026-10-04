@@ -14,7 +14,7 @@ live. Three different things ship, each by its own path, and each leaves a recor
 |---|---|---|---|
 | Service code: the control plane and the landing page | `Edge-City/agentvillage-controlplane`, `Edge-City/agentvillage-landing` | The **Deploy** workflow moves that repo's `release` branch, which Railway builds | Annotated tag `release-YYYY-MM-DD[.N]` naming who ran it and the commits that went live |
 | Agent content: skills, prompts, installer, the `av-events` plugin | this repo, `Edge-City/agentvillage` | An annotated tag on `main`, then the **Roll** workflow updates every resident's VM to it | The tag; a GitHub Deployment per roll (environment `residents`); a `tenant.updated` event per resident carrying the tag |
-| The data pipeline: ingest and dbt | `Edge-City/agentvillage-data` | A hand fast-forward push of its `release` branch; migrations run by hand | The `release` branch tip; `releases/manifest.yaml`, written by PR after the fact |
+| The data pipeline: ingest and dbt | `Edge-City/agentvillage-data` | The **Deploy** workflow in that repo moves its `release` branch and checks or applies migrations; a hand fast-forward push is the fallback | The `release` branch tip; `releases/manifest.yaml`, written by PR after the fact |
 
 No shared version number, no release calendar. During the event (Oct 11 to
 Nov 1) fixes ship one component at a time, each reversible by moving its
@@ -140,13 +140,25 @@ undo.
 
 ## The data pipeline
 
-Ingest and dbt have no button. `release` in `agentvillage-data` is moved by a
-hand fast-forward push to a commit on `main`, never a reset or a force.
-Migrations run by hand from inside the ingest container after the deploy and
-before any roll that depends on them, with a lock timeout on the connection
-URL. dbt builds hourly from the same `release`. The detail, the compatibility
-check and the manifest are in that repo's `docs/release-process.md` and
-`docs/runbook.md`.
+Ingest and dbt have a **Deploy** button in `agentvillage-data` (Actions >
+Deploy, run from `main`; `ref` defaults to `main`, `rollback` goes back to an
+ancestor of `release` or a `release-YYYY-MM-DD` tag). It runs that repo's full
+suite at the target commit, then moves `release` in one push leased on the
+commit it planned from, and tags it. Whenever `release` ends at the target, a
+read-only check (`bun run migrate:check`, no approval) reads the database.
+The apply (`bun run migrate`, in the `production` environment, where a
+reviewer may be required) runs only when a migration is pending. Without the
+`RAILWAY_TOKEN` secret the run prints the hand commands instead. A rollback
+never runs a down migration. dbt builds hourly from the same `release`, so its
+next run is the first on the new code.
+
+Until the button's pre-flight is done (two GitHub environments limited to
+`main`, the Railway token on both, a deploy key for the first run), the hand
+procedure applies: a fast-forward push of `release` to a commit on `main`,
+never a reset or a blind force, then migrations run from inside the ingest
+container. The detail, the compatibility check and the manifest are in that
+repo's `docs/release-process.md` and `docs/runbook.md` ("Deploy ingest and
+dbt").
 
 Order when a change spans components: data pipeline first, then the overlay
 tag and roll, then the manifest PR recording what is live.
