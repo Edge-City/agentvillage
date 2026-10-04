@@ -221,6 +221,9 @@ backlog can differ from `emitted_at` by minutes. Every `marts` time series is bu
 | `intention.captured` | `post_tool_call` on Index `create_intent`, or `record_intention(action="capture")` | `text_hash`, `summary_hash`, `index_intent_id`, `source`, `conditional`, `capture_path`, `index_status`, `parent_session_id`, `publish_refused`, `local_reason`, plus `text_length` / `summary_length` above `metadata` |
 | `intention.updated` | `post_tool_call` on Index `update_intent` with a new `description`, Index `pause_intent` / `resume_intent` (`index_status` `paused` / `active`, both hashes null, `status_only: true`), or `record_intention` naming an id | as above |
 | `intention.withdrawn` | `post_tool_call` on Index `archive_intent` (or the legacy `delete_intent`, or a legacy `update_intent` to `archived`/`deleted`/`withdrawn`), or `record_intention(action="archive"\|"withdraw"\|"delete")` | as above; both hashes null |
+| `digest.shared` | the approval poller (or the tool call) after the resident's grant and `approval start` (lane O3) | `digest_id`, `scope`, `text`, `expires_at`, `idempotency_key`, `payload_hash`, `start_seq`, `authorization` — see "Sharing a digest and the weekly vote" |
+| `digest.revoked` | `share_digest(action="revoke")` on a shared digest | `digest_id` |
+| `vote.cast` | the approval poller after the grant, or `village_vote(action="vote")` under an autonomous policy | `question_id`, `answer`, `idempotency_key`, `payload_hash`, `start_seq`, `authorization` |
 | `memory.recalled` | `recall:memory.recalled` on the plugin event bus (published by `plugins/recall`) | `query_hash`, `hit_count`, `top_score`, `surface`; the hash and score are null in `metadata` — see below |
 | `memory.snapshot` | the backup thread, after `on_session_end` (rate-limited) or `on_session_finalize` asked for a snapshot and both uploads succeeded | `bytes`, `file_count`, `content_hash`, `manifest_ref` — exactly `memory.snapshot@1`'s closed key set, the same in every capture mode — see "Memory snapshot" |
 
@@ -690,6 +693,195 @@ retried), `unavailable` (nothing could be held). Map codes: `payload_hash_mismat
 `authorization_mismatch`, `claim_abandoned`, `map_invalid`, `rule_needs_capture`. Client codes in the logs: `url_missing`, `url_refused`,
 `token_missing`, `token_malformed`, `token_file_*`, `facade_listener_foreign`, `unauthorized`,
 `http_<status>`, `transport`, `timeout`, `bad_answer`.
+
+### Sharing a digest and the weekly vote (lane O3)
+
+Two more resident-approved actions on the same approval client and poller. Code:
+`_share_vote.py` (registered on Lane B's poller through `_approval.register_pass("share_vote", ...)`)
+and `_village_question.py` (where the weekly question is read). The contract is the data repo's
+`docs/spec-addenda.md` "digest.* and vote.cast" and the closed schemas `digest.shared@1`,
+`digest.revoked@1` and `vote.cast@1`; `tests/vectors/share_vote_contract.json` is a copy of their
+field lists, the approval link's known-answer vectors and the text rule's cases.
+
+| Variable | Meaning |
+|---|---|
+| `AV_DIGEST_SHARE` | `1\|true\|yes\|on` registers `share_digest`. Process environment only. |
+| `AV_VILLAGE_VOTE` | `1\|true\|yes\|on` registers `village_vote`. Process environment only. |
+| `AV_TENANT_ID`, `TENANT_ID` | The tenant the ingest token belongs to (process environment only), lower-cased and required to be a UUID as the collector requires: the vote's key names it. Anything else refuses the vote (`tenant_unknown`). |
+
+Both are off by default, and neither tool is registered without approval configured
+(`AV_APPROVAL_ENABLED` and `AV_APPROVAL_URL`); off, no tool is registered and the pass does
+nothing. Switching one off later stops its pass too (pending proposals wait on disk).
+
+**Nothing is proposed that would go nowhere.** Before it asks the resident, each tool refuses
+when no event could be sent (no token, the plugin switched off, or a null sink, which buffers and
+never sends: `not_available_no_events`) or when ingest's `GET /v1/consent` (the read
+`consent_status` makes) says the tenant is not in the research, whose events the worker drops
+(`not_available_no_consent`). When consent cannot be read, the tool proceeds, and every answer
+says only that the event was handed to the event queue: delivery is never claimed.
+
+**Deploy order.** Ingest must be released with the three schemas (data repo #188) before any
+agent emits these events; an ingest without them quarantines every one. The resident's policy
+must also name the classes (`digest.share` and `village.vote`, manual, `agent_may_request: true`,
+as the control plane's resident template does); a policy without them refuses the proposal
+(`class-not-agent-requestable`) and nothing is sent.
+
+**`share_digest`.** `action=share` (`text`, `scope` `village` or `service:<name>`, optional
+`expires_in_hours` 1..167, ASCII digits only) mints `digest_id = str(uuid4())` and proposes, in class `digest.share`
+with key `digest.share:<digest_id>`, exactly `{digest_id, scope, text, expires_at}` as RFC 8785 JSON
+(the bytes the resident is shown). `expires_at` is at most 7 days less an hour after the plugin's
+clock (the door refuses one more than 7 days after it receives the event). The summary names the
+scope, the expiry and the id, never the text. Text the door would refuse (more than 500 code
+points, no letter or digit, a control, a bidi override, an invisible, private-use, noncharacter or
+tag character) or that the sanitiser would change (a credential shape) is refused at the tool. At
+most five shares wait for the resident at once. A share the policy clears without asking the
+resident is never started (`not_shared`: a share admits only `grant`). `action=revoke`
+(`digest_id`), on the resident's instruction, emits `digest.revoked@1` (`{digest_id}`, no approval:
+the policy rows name no revoke class) once per share, or, before the resident answered, withdraws
+the question and sends nothing. Nothing else revokes: an expiry needs no event, and an executed
+share has no withdrawal on the daemon. A revocation needs no approval because it only reduces
+exposure (accepted in writing): the agent can therefore revoke, or by writing the map pre-revoke,
+any digest id of its own tenant; the data side keys a revocation on the token's tenant, so no
+other resident is reachable. It is sent at most once per digest id per process, and only for an
+entry this module marked sent (`emitted` with its event id, start seq and `grant`), which the map
+can still forge. `action=status` reads where it stands.
+
+**`village_vote`.** `action=question` reads the open question (id, text, options as keys with
+their labels, close).
+`action=vote` (`question_id`, `answer` one option key, optional one-line `rationale`) proposes, in
+class `village.vote` with key `village.vote:<question_id>:<tenant_id>`, exactly
+`{question_id, answer}`; the rationale goes in the summary, never the payload. A question takes one
+answer (approval.md binds a key to its first bytes). Before a vote is proposed and again before
+it is started, the provider is asked, never the map: the vote's question must be the open one, its
+answer one of that question's option keys, and the question not closed by the provider's own
+close time. Otherwise the entry ends (`closed` with `question_unavailable` or `question_closed`,
+`invalid` with `answer_not_an_option`), a pending question is withdrawn, and nothing is sent; under
+the shipped provider no vote is ever proposed. The resident's prompt is built from the provider:
+the question's text and the chosen option's label as one clean bounded line (controls, format and
+bidi characters dropped), or a plain statement that no text or label is available beside the
+option key; the rationale follows, cleaned again and labelled as the agent's note, and is dropped
+(the prompt still goes) when it fails cleaning or quotes a share this agent still holds. The tool
+refuses such a rationale (`rationale_invalid`, `rationale_quotes_share`: 24 consecutive
+characters of a held share's text, or all of a shorter one of at least 12, compared after NFKD
+with format and combining marks dropped, case and spacing folded; a share already sent no longer
+has its text here). A rationale holding any format character (zero-width, joiner, bidi) is refused
+(`rationale_invisible`), blank-rendering fillers are dropped and every kind of whitespace becomes
+one space, and one that repeats any of the prompt's own fixed phrases (taken from the builder's
+constants, punctuation ignored) is refused (`rationale_imitates_prompt`). The summary is at most
+4096 UTF-8 bytes by construction (the agent's note is cut first, then the question's text, never
+the answer line), and a key over 1024 bytes is never proposed (`key_too_long`): approval.md's
+`propose` limits. A question whose close is not a finite number is not a question. One function
+(`display_line`) defines a prompt line for the provider's text and the rationale alike (every
+whitespace character, CR, LF, VT, FF, U+0085, U+2028 and U+2029 included, becomes one space;
+hidden characters and blank fillers are dropped); a rationale holding a hidden character is
+refused rather than filtered, one mixing Latin with look-alike letters of another script is refused
+(`rationale_mixed_script`), and the rationale that is checked is exactly the one sent.
+
+**How the prompt is rendered, and the rationale's character set.** approval.md's Telegram channel
+sends the summary with `parse_mode: "HTML"`, escaping `&`, `<` and `>` in every interpolated value,
+as one row under its "claimed, not verified" heading; the control plane's relay forwards
+`parse_mode` unchanged. So HTML cannot be injected; what remains is a line break (none survives
+`display_line`), text Telegram turns into an entity by itself (links, bare domains, mentions, tags,
+commands, phone numbers), and letters that read as the prompt's own words. The rationale is
+therefore held to a conservative set (`rationale_charset`): letters, digits and marks of Latin
+(only letters that decompose to an ASCII letter: accents yes, small capitals and other look-alike
+Latin no), Devanagari, Bengali, Gurmukhi, Gujarati, Oriya, Tamil, Telugu, Kannada, Malayalam,
+Sinhala, CJK, Hiragana, Katakana and Hangul; no compatibility forms (full-width, mathematical,
+ligatures); plain spaces; and only `. , ; ! ? ' " ( ) -`, curly quotes and dashes, the
+ideographic comma and full stop and the danda as punctuation: no colon (nothing reads as a new
+field), no `<>&@#/\*_[]{}|~`, backtick, `$`, `%`, `+`, `=`, `^`, no symbols or emoji, no period
+inside a word. Digits are ASCII 0-9 only (another script's zero draws like an o), at most eight in
+the whole rationale, and digit groups joined only by spaces, hyphens or brackets may hold at most
+six (a grouped phone number Telegram may link). One script per word: every letter and mark in a
+word (a run between spaces and allowed punctuation) is of one script, ASCII digits beside any;
+Japanese kanji and kana, the long vowel mark and Korean hangul count as one family, Latin mixes
+with nothing, and at most three marks sit on a letter. Compared folds drop spacing marks too.
+
+The rules are one positive grammar, checked in one pass on the final string (after
+`display_line`, which changes nothing a second time): a rationale is words separated by a space or
+an allowed punctuation mark (nothing else ends a word); a word is letters of one script family,
+each letter positively identified (its Unicode name starts with an accepted script, so modifier,
+superscript, subscript, enclosed, squared and other qualified forms are not), each followed by at
+most three marks of the same family (a mark never starts a word or follows a digit), with ASCII
+digits anywhere. Digit runs are measured across every boundary (`555, 1234` and `123–45678` are
+one number). CJK numeral ideographs are letters, not digits. Only an exact `str` is read. The
+prompt-phrase check removes all punctuation and spaces before comparing, so a phrase split by an
+apostrophe, a quote, a hyphen or a dropped filler is still caught.
+
+These rules refuse some ordinary text (accepted): a sentence that happens to contain one of the
+prompt's fixed phrases, `e.g.`, a decimal such as `3.5`, other CJK and Indic punctuation, any
+right-to-left, Cyrillic or Greek note. A refused rationale never blocks the vote: the tool tells
+the agent which rule to rephrase for, and a stored rationale that fails is dropped and the
+proposal goes out without it. The rules make an honest agent's note safe to show; a hostile agent
+holding the approval token can call the daemon directly with any summary, so the resident's
+protection is that the trusted question and answer always come first and the payload they approve
+is exactly what is sent. Cyrillic, Greek and other scripts that draw like Latin, and right-to-left
+scripts, are outside it. The trusted part always comes first; the note follows on the same line
+after the plugin's fixed label, which the rationale may not repeat. The share prompt carries only
+plugin values and the service name (ASCII `[a-z0-9_-]`, quoted as a value); never the text. Folding
+(NFKD, marks dropped, case-folded) is used only to compare, never on anything sent: the share text
+and the vote answer are proposed, started and emitted as written, and question ids and option keys
+are compared exactly. A vote the resident set autonomous is cast inside the tool call (`authorization:
+policy`); the poller casts only on a human grant. `action=withdraw` withdraws an unanswered vote;
+a cast vote cannot be withdrawn.
+
+**The weekly question is not available yet.** The contract's source is `ods.questions`, which is
+not built, and no other source exists (no control-plane route, variable, installer file or event).
+`_village_question.current_question()` is the one seam; its shipped implementation raises
+`question_source_not_built`, so `village_vote` refuses every question and vote with
+`question_unavailable` (`reason: question_source_not_built`) until a provider replaces it.
+
+**What authorizes an event.** The map (`$HERMES_HOME/av-events/share-vote.json`, 0600, under its
+flock) is never authority: the agent can write it. An event is emitted only by the one call that
+read the grant from the daemon for that key (`wait --timeout 0`, exit 0, `granted`; for a policy
+vote, `propose`'s own answer inside the tool call), claimed the entry, read the authority again,
+and got `start` ok for exactly those bytes, naming this key, class and task, with the expected
+`authorization` and a `seq`. The event is built from the very string that call sent to `start`,
+and its `payload_hash` is that string's SHA-256 (also checked against `propose`'s answer); the map
+is re-read twice before the send, and if the held bytes, the recorded hash, the key or the claim
+changed, nothing is sent (`payload_tampered`). An `emitting` entry the pass meets is never sent
+from there (`emit_unconfirmed` once stale). No grant, a rejection, a revocation, a withdrawal, an
+expiry (not re-asked), a daemon that is down or unverified, or a refused start: no event. A `void`
+re-proposes the same bytes (at most ten times), as for intentions. The held text is dropped when
+the proposal ends; a shared digest keeps its id, scope and expiry for a revocation.
+
+**Accepted limits.** The agent runs as the plugin's uid: it can write the event spool directly,
+and an agent that can start a Hermes process controls that process's environment (Hermes loads
+`.env` with override at startup), so the switches and `AV_APPROVAL_URL` too, and could point the
+plugin at a listener of its own. The defence for both is the data side's: the ODS writer resolves
+every share and vote against the approval follower's own rows, which this sandbox does not write.
+The plugin reads its switches from the process environment only, so writing `.env` does not turn
+them on in a process already running; that is all it shows.
+
+**The events.** After `start`, on the tenant's plugin token, actor `agent`, no session, envelope
+`decision_id` null, `agent_report`; `event_id` a uuid v7 derived from the start time, the key and
+`start_seq`:
+
+- `digest.shared`: `digest_id`, `scope`, `text`, `expires_at`, `idempotency_key` (SHA-256 of the
+  key), `payload_hash`, `start_seq`, `authorization` (`grant`);
+- `vote.cast`: `question_id`, `answer`, `idempotency_key`, `payload_hash`, `start_seq`,
+  `authorization` (`grant` or `policy`);
+- `digest.revoked`: `digest_id`.
+
+No `decision_id` and no `policy_version` in any payload: the plugin cannot know either (the ODS
+writer resolves the decision from the follower's rows). The text travels in `digest.shared` in
+every capture mode: the share is the resident's approved act, not telemetry. The worker keeps
+them for research-consenting tenants only, which is why the tools ask ingest first.
+
+**Codes.** Tool refusals: `disabled`, `approval_not_configured`, `text_required`, `text_too_long`,
+`text_invalid`, `text_no_letter_or_digit`, `text_sanitized`, `scope_invalid`, `expires_invalid`,
+`not_available_no_events`, `not_available_no_consent`, `rationale_quotes_share`,
+`rationale_invisible`, `rationale_imitates_prompt`, `rationale_mixed_script`, `rationale_charset`,
+`too_many_pending`, `digest_id_required`, `digest_unknown`, `share_in_flight`, `revoke_failed`,
+`tenant_unknown`, `question_unavailable`, `question_id_required`, `question_not_open`,
+`question_closed`, `answer_invalid`, `rationale_invalid`, `vote_already_proposed`, `vote_unknown`,
+`vote_in_flight`, `vote_already_cast`. States: `unfiled`, `requested`, `cleared`, `starting`,
+`emitting`, `emitted`, `revoked`, `rejected`, `withdrawn`, `expired`, `refused`,
+`start_unconfirmed`, `lapsed`, `closed`, `not_shared`, `not_cast`, `invalid`, `emit_refused`,
+`emit_failed`, `emit_unconfirmed`, `revoke_lapsed`. Entry codes include `question_unavailable`,
+`question_closed`, `answer_not_an_option`, `payload_unencodable`, `payload_tampered`,
+`start_answer_mismatch` and `authorization_mismatch`. Log lines carry these codes only, never the
+text, the rationale or an answer.
 
 ---
 

@@ -1,0 +1,151 @@
+{
+  "_comment": [
+    "Lane O3 contract fixture: digest.shared@1, digest.revoked@1 and vote.cast@1 as the data repo registers them",
+    "(src/schemas/index.ts, closed, schema 1), the approval link's known-answer vectors",
+    "(tests/ods-share-vote.test.ts, 'known-answer vectors for the overlay's emitter') and the text rule's",
+    "character classes. Copied, not imported: a change on either side shows up as a failing test here.",
+    "Patterns are written for Python's re; the text rule is checked by its cases, not by a pattern."
+  ],
+  "vectors": {
+    "share": {
+      "digest_id": "0b6f4c2e-5d1a-4f3b-9c8e-7a2d1e0f3b4c",
+      "scope": "village",
+      "text": "Looking for people to surf with mornings this week \ud83c\udfc4",
+      "expires_at": "2026-10-20T08:00:00.000Z",
+      "action_key": "digest.share:0b6f4c2e-5d1a-4f3b-9c8e-7a2d1e0f3b4c",
+      "idempotency_key": "7428e46b81add3d912bb8cdb664a5af093f6a51e60c5212c8d552f39789fb15d",
+      "payload_hash": "fefe29b5c693236b8805004863250f5791336ecf09a5a431c86a5eaff43ab0f0"
+    },
+    "vote": {
+      "tenant_id": "t_vote_1",
+      "question_id": "q-2026-w42",
+      "answer": "yes",
+      "action_key": "village.vote:q-2026-w42:t_vote_1",
+      "canonical_payload": "{\"answer\":\"yes\",\"question_id\":\"q-2026-w42\"}",
+      "idempotency_key": "aa4c99db03837f945fba4d8682db24d15f4eb7f9945653d5f25b92e9d3306a7e",
+      "payload_hash": "6be97b9fc772b285bfe2dc784547e13b5ea216ab9ef885b7a485753e57a52aa0"
+    }
+  },
+  "classes": {
+    "digest.shared": "digest.share",
+    "vote.cast": "village.vote"
+  },
+  "digest_max_ttl_ms": 604800000,
+  "schemas": {
+    "digest.shared@1": {
+      "additional_properties": false,
+      "required": [
+        "digest_id",
+        "scope",
+        "text",
+        "expires_at",
+        "idempotency_key",
+        "payload_hash",
+        "start_seq",
+        "authorization"
+      ],
+      "optional": [
+        "decision_id",
+        "policy_version"
+      ],
+      "authorization": [
+        "grant"
+      ]
+    },
+    "digest.revoked@1": {
+      "additional_properties": false,
+      "required": [
+        "digest_id"
+      ],
+      "optional": [
+        "decision_id"
+      ]
+    },
+    "vote.cast@1": {
+      "additional_properties": false,
+      "required": [
+        "question_id",
+        "answer",
+        "idempotency_key",
+        "payload_hash",
+        "start_seq",
+        "authorization"
+      ],
+      "optional": [
+        "decision_id",
+        "policy_version"
+      ],
+      "authorization": [
+        "grant",
+        "policy"
+      ]
+    }
+  },
+  "patterns": {
+    "digest_id": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    "reserved_ids": [
+      "00000000-0000-0000-0000-000000000000",
+      "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    ],
+    "scope": "^(village|service:[a-z][a-z0-9_-]{0,63})$",
+    "question_id": "^[A-Za-z0-9._-]{1,128}$",
+    "answer": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$",
+    "link_digest": "^[0-9a-f]{64}$",
+    "reserved_digests": [
+      "0000000000000000000000000000000000000000000000000000000000000000"
+    ],
+    "start_seq_max": 9007199254740991,
+    "text_max_code_points": 500
+  },
+  "text_rule": {
+    "admitted": [
+      "Looking for people to surf \ud83c\udfc4",
+      "Free Thursday.\r\nRust reviewer wanted\t\ud83d\udc69\u200d\ud83d\udcbb",
+      "\u0915\u094d\u200d\u0937 and \u0915\u094d\u200c\u0937",
+      "\u0645\u0631\u062d\u0628\u0627 123\u200f",
+      "abc\u200e",
+      "\u061c\u0645\u0631\u062d\u0628\u0627",
+      "7",
+      "\ud83c\udfc4 7am"
+    ],
+    "refused": {
+      "empty": "",
+      "no letter or digit: blanks": " \n\t ",
+      "no letter or digit: NBSP": "\u00a0",
+      "no letter or digit: zero-width only": "\u200b\u200d\u200c",
+      "no letter or digit: punctuation": "?!",
+      "no letter or digit: emoji only": "\ud83c\udfc4",
+      "C0 NUL": "a\u0000b",
+      "C0 BEL": "a\u0007b",
+      "C0 VT": "a\u000bb",
+      "DEL": "a\u007fb",
+      "C1 NEL": "a\u0085b",
+      "line separator": "a\u2028b",
+      "paragraph separator": "a\u2029b",
+      "bidi embedding LRE": "a\u202ab",
+      "bidi override RLO": "a\u202eb",
+      "bidi isolate FSI": "a\u2068b",
+      "bidi isolate PDI": "a\u2069b",
+      "deprecated format U+206A": "a\u206ab",
+      "deprecated format U+206F": "a\u206fb",
+      "word joiner": "a\u2060b",
+      "BOM / ZWNBSP": "\ufeffab",
+      "interlinear annotation": "a\ufff9b",
+      "private use, BMP": "a\ue000b",
+      "private use, plane 15": "a\udb80\udc00b",
+      "private use, plane 16": "a\udbff\udffdb",
+      "noncharacter U+FDD0": "a\ufdd0b",
+      "noncharacter U+FFFE": "a\ufffeb",
+      "noncharacter U+1FFFF": "a\ud83f\udfffb",
+      "noncharacter U+10FFFF": "a\udbff\udfffb",
+      "tag character": "a\udb40\udc41b",
+      "cancel tag": "a\udb40\udc7fb",
+      "subdivision flag (tags)": "\ud83c\udff4\udb40\udc67\udb40\udc62\udb40\udc65\udb40\udc6e\udb40\udc67\udb40\udc7f rain"
+    },
+    "refused_lone_surrogates": {
+      "lone high surrogate": "ab\ud800",
+      "lone low surrogate": "\udc00ab",
+      "reversed surrogate pair": "a\udc00\ud800b"
+    }
+  }
+}
