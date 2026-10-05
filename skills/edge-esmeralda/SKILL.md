@@ -1,7 +1,7 @@
 ---
 name: edge-esmeralda-2026
 description: Background on a PREVIOUS Edge City popup, Edge Esmeralda 2026 (May 30 – Jun 27 2026, Healdsburg, CA) — not the current event. The current event is Edge City India (Oct 11 – Nov 1 2026, Mandrem, Goa). Use this skill only when the user explicitly asks about Edge Esmeralda or Edge City's history/mission; never present its dates, weeks, themes, venues, wiki logistics, or popup id as current or as applying to Edge City India. For India logistics you don't have, say so and point the user to the Edge City portal or organisers.
-version: 3.1.0
+version: 3.1.1
 author: Edge City
 tags: [edge-city, edge-esmeralda, popup-village, community]
 ---
@@ -54,7 +54,7 @@ When the user says "week 2", convert to `start_after=2026-06-08T07:00:00Z&start_
 
 ## 2. Attendee directory field guide
 
-The `edgeos` skill exposes `GET /applications/my/directory/{popup_id}`. Pass the `popup_id` from §1. Each attendee record in `results[]` contains:
+The `edgeos` skill exposes `GET /applications/my/directory/{popup_id}`. Pass the `popup_id` from §1. It works only with a human session token carrying `portal:directory:read` (`$EDGEOS_BEARER_TOKEN`), never with the `eos_live_` API key; see the `edgeos` skill §9. Each attendee record in `results[]` contains:
 
 - `first_name`, `last_name`, `email`, `telegram`
 - `role`, `organization`
@@ -66,7 +66,7 @@ The `edgeos` skill exposes `GET /applications/my/directory/{popup_id}`. Pass the
 - `associated_attendees` — spouse, kids, plus-ones
 - `picture_url`
 
-Response wrapper: `{ results: Attendee[], pagination: { skip, limit, total } }`.
+Response wrapper: `{ results: Attendee[], paging: { offset, limit, total } }`.
 
 ### Privacy
 
@@ -75,7 +75,7 @@ Some attendees hide certain fields; hidden values appear as the literal string `
 ### Useful query patterns (via the `edgeos` skill's directory recipe)
 
 - Search by name / organization / role: `?search=QUERY`
-- Pagination: `?skip=0&limit=20` (loop until `results.length < limit`)
+- Pagination: `?skip=0&limit=20` (default 100, at most 1000; page again only while `skip + results.length < paging.total`)
 - Filter by participation week, families with kids, etc.: parameter names vary; consult the OpenAPI spec via the `edgeos` skill's §11 if you need a filter beyond `search`.
 
 ---

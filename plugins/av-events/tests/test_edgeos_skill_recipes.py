@@ -165,7 +165,7 @@ RECIPE_OPERATIONS = {
     "RSVP to a one-off event": "edgeos.rsvp",
     "RSVP to one occurrence of a recurring event": "edgeos.rsvp",
     "Cancel a previous RSVP": "edgeos.cancel_rsvp",
-    "List your own RSVPs across events": "edgeos.participants_list",
+    "List who is going to one event": "edgeos.participants_list",
     "List active venues for a popup": "edgeos.venues_list",
     "Read the calling user's profile": "edgeos.profile_read",
     "Update basic profile fields": "edgeos.profile_update",
@@ -208,3 +208,80 @@ def test_every_recipe_in_the_skill_is_classified(edgeos, monkeypatch, base, head
     assert not call.piped, heading
     if op.role == "action":
         assert params["event_id"] == EVENT
+
+
+# --------------------------------------------------------------------------
+# DATA-326: the skill text agrees with the EdgeOS source (sweep of 2026-10-05,
+# p2p-lanes/edgeos-monorepo). File and line references are in the PR body.
+# --------------------------------------------------------------------------
+
+SEED = Path(__file__).resolve().parents[1] / "edgeos_tool_allowlist.json"
+ESMERALDA = SKILL.parents[1] / "edge-esmeralda" / "SKILL.md"
+
+
+def recipe(heading: str) -> str:
+    return dict(every_recipe())[heading]
+
+
+@pytest.mark.parametrize("doc", [SKILL, ESMERALDA], ids=["edgeos", "edge-esmeralda"])
+def test_scope_strings_are_the_ones_edgeos_checks(doc):
+    """`needs("portal:directory:read")` guards the directory; `/humans/me`
+    needs `portal:profile:read` / `portal:profile:write`. The old underscore
+    spellings match no scope EdgeOS defines."""
+    text = doc.read_text(encoding="utf-8")
+    assert "portal:directory_read" not in text
+    assert "portal:self_read" not in text
+    assert "portal:directory:read" in text
+
+
+def test_the_skill_says_the_api_key_cannot_reach_the_directory_or_profile():
+    text = SKILL.read_text(encoding="utf-8")
+    section0 = re.search(r"^## 0\..*?(?=^## )", text, re.S | re.M).group(0)
+    assert "cannot** reach the attendee directory" in section0
+    assert "never retry those calls with the API key" in section0
+    for number in (8, 9):
+        body = re.search(rf"^## {number}\..*?(?=^## )", text, re.S | re.M).group(0)
+        assert "human session token only" in body.splitlines()[0], number
+    # The directory and profile recipes carry the human bearer, never the key.
+    for heading in ("Search attendees in a popup", "Read the calling user's profile", "Update basic profile fields"):
+        assert "<EDGEOS_BEARER_TOKEN>" in recipe(heading) and "<EDGEOS_API_KEY>" not in recipe(heading), heading
+
+
+def test_the_participants_recipe_names_one_event():
+    """`GET /event-participants/portal/participants` takes a required
+    `event_id`: it lists one event's participants, not the caller's RSVPs."""
+    command = recipe("List who is going to one event")
+    assert f"/event-participants/portal/participants?event_id={EVENT}" in command
+    text = SKILL.read_text(encoding="utf-8")
+    assert "own RSVPs across events" not in text
+    assert "no route that lists one person's RSVPs across events" in text
+    assert "rsvped_only=true" in recipe("Only events you've RSVPed to")
+
+
+def test_the_events_list_is_not_paged():
+    """`GET /events/portal/events` has no `skip` or `limit`: it returns every
+    match, and its `paging` is informational."""
+    for heading, command in every_recipe():
+        if "/events/portal/events?" in command:
+            assert "limit=" not in command and "skip=" not in command, heading
+    text = SKILL.read_text(encoding="utf-8")
+    assert "**No pagination:** the events list returns every matching event in one response" in text
+    assert "results.length < limit" not in text
+
+
+@pytest.mark.parametrize("doc", [SKILL, ESMERALDA], ids=["edgeos", "edge-esmeralda"])
+def test_list_responses_are_results_and_paging(doc):
+    text = doc.read_text(encoding="utf-8")
+    assert "pagination: {" not in text
+    assert "paging: { offset, limit, total }" in text
+
+
+def test_the_cancel_seed_path_is_the_portal_route():
+    """EdgeOS has both `POST /events/{id}/cancel` (backoffice: an admin or an
+    admin-owned key with `events:write`) and `POST /events/portal/events/{id}/cancel`
+    (a resident who owns or hosts the event). A resident's agent can only aim
+    at the portal one, so that is the path the seed labels."""
+    ops = {op["operation"]: op for op in json.loads(SEED.read_text(encoding="utf-8"))["operations"]}
+    assert (ops["edgeos.event_cancel"]["method"], ops["edgeos.event_cancel"]["path"]) == (
+        "POST", "/api/v1/events/portal/events/{event_id}/cancel")
+    assert ops["edgeos.participants_list"]["path"] == "/api/v1/event-participants/portal/participants"
