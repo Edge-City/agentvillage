@@ -31,14 +31,24 @@ const OPP2 = "1b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
 const THIRD_PARTY = "THIRD PARTY WORDS";
 
 let home: string;
+const PLUGIN_ENV = ["AV_EVENTS_TOKEN", "AV_HOOKS_DISABLED"] as const;
+let savedEnv: Record<string, string | undefined>;
 
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "av-outcome-ask-"));
   mkdirSync(join(home, "memory"), { recursive: true });
+  // The av-events plugin is on (F6): it has a token and the ask is not disabled.
+  savedEnv = Object.fromEntries(PLUGIN_ENV.map((name) => [name, process.env[name]]));
+  process.env.AV_EVENTS_TOKEN = "test-token";
+  delete process.env.AV_HOOKS_DISABLED;
 });
 
 afterEach(() => {
   rmSync(home, { recursive: true, force: true });
+  for (const name of PLUGIN_ENV) {
+    if (savedEnv[name] === undefined) delete process.env[name];
+    else process.env[name] = savedEnv[name];
+  }
 });
 
 function stateFile(): string {
@@ -168,6 +178,50 @@ describe("the evening asks about one accepted connection announced two or more d
     const result = await runProactive("evening", options());
     expect(output(result.lines).person).toBeDefined();
     expect(stage()).toBeNull();
+  });
+
+  describe("F6: when the av-events plugin idles, nothing would record the ask, so none is made", () => {
+    const off: Record<string, () => void> = {
+      "AV_EVENTS_TOKEN blank in the environment (how consent is revoked), even with one in .env": () => {
+        process.env.AV_EVENTS_TOKEN = "  ";
+        writeFileSync(join(home, ".env"), "AV_EVENTS_TOKEN=stale\n");
+      },
+      "AV_EVENTS_TOKEN set nowhere": () => {
+        delete process.env.AV_EVENTS_TOKEN;
+      },
+      "AV_EVENTS_TOKEN blank in .env": () => {
+        delete process.env.AV_EVENTS_TOKEN;
+        writeFileSync(join(home, ".env"), 'AV_EVENTS_TOKEN=""\n');
+      },
+      "outcome_ask in AV_HOOKS_DISABLED, as the plugin matches it": () => {
+        process.env.AV_HOOKS_DISABLED = "cron_run, Outcome_Ask ";
+      },
+      "outcome_ask in AV_HOOKS_DISABLED in .env": () => {
+        writeFileSync(join(home, ".env"), "AV_HOOKS_DISABLED=outcome_ask\n");
+      },
+    };
+    for (const [label, setUp] of Object.entries(off)) {
+      test(label, async () => {
+        announced({ [OPP]: "2026-10-10" });
+        setUp();
+        let indexRead = false;
+        const result = await runProactive("evening", options({ accepted: async () => { indexRead = true; return [accepted("Arjun")]; } }));
+        expect(output(result.lines).person.name).toBe("Pending Person");
+        expect(indexRead).toBe(false);
+        expect(stage()).toBeNull();
+        expect(state().outcomeAsk).toBeUndefined();
+        expect(runLog().at(-1)).toMatchObject({ decision: "woke", detail: "outcome-ask-plugin-off" });
+      });
+    }
+
+    test("a token only in .env, and another hook disabled: the ask is made", async () => {
+      delete process.env.AV_EVENTS_TOKEN;
+      writeFileSync(join(home, ".env"), "AV_EVENTS_TOKEN=from-dotenv\nAV_HOOKS_DISABLED=cron_run,outcome_asks\n");
+      announced({ [OPP]: "2026-10-10" });
+      const result = await runProactive("evening", options());
+      expect(output(result.lines).outcomeQuestion).toBe(outcomeQuestion("Arjun Mehta"));
+      expect(runLog().at(-1)).toMatchObject({ detail: "outcome-ask" });
+    });
   });
 
   describe("F9: an asked ledger the plugin would refuse means no ask tonight", () => {

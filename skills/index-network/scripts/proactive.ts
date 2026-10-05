@@ -578,12 +578,27 @@ async function dropAction(run: Run): Promise<Decision> {
 }
 
 /**
+ * The av-events plugin idles, so nothing would record an ask: `AV_EVENTS_TOKEN`
+ * blank (also how consent is revoked), or `outcome_ask` in `AV_HOOKS_DISABLED`
+ * (matched as the plugin does: comma-separated, trimmed, case-insensitive).
+ * Both read like every other variable here, the environment else `.env`.
+ */
+export function outcomePluginOff(home: string): boolean {
+  if (!envOrDotenv("AV_EVENTS_TOKEN", home)) return true;
+  return envOrDotenv("AV_HOOKS_DISABLED", home)
+    .split(",")
+    .some((part) => part.trim().toLowerCase() === "outcome_ask");
+}
+
+/**
  * The evening outcome ask (DATA-42 R2), or why there is none tonight: a code,
  * and the run falls back to the reminder. The subject is only ever recorded
  * as staged (`outcomeAsk.attempts`); the plugin's asked ledger, written once
  * the message was delivered, is what makes it asked.
  */
 async function outcomeAskDecision(run: Run): Promise<Decision | { fallback: string; withheld?: number }> {
+  // Nothing would record the ask: the same question every evening, for every connection.
+  if (outcomePluginOff(run.home)) return { fallback: "outcome-ask-plugin-off" };
   const path = stateFilePath(run.home);
   let state: Record<string, unknown>;
   try {
