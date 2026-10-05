@@ -82,6 +82,13 @@ unknown ancestry) is `unknown`. Either way the capture is held as ambient.
 [Reversal F3: gate on `_is_cron_session` over the collector again. Reversal
 R10: the cron/subagent denylist, any other seen platform may publish.]
 
+**`publish=false` always wins (DATA-311).** An explicit `publish=false` with
+its reason is honoured for every source and in every lineage, before the
+ambient hold: the capture is local, never proposed, held or published. The
+lineage still sets `source` to ambient; the local capture carries no `held_*`
+code. `confirm` refuses it (`confirm_not_held`) and an update never gives it a
+held hash. [Reversal: none; it is a privacy fix.]
+
 **Held explicit captures leave a trace (M3).** When the lineage turns a
 requested `message`/`onboarding`/`note` into ambient, the event carries
 `publish_refused="held_cron"` or `"held_unknown"`. [Reversal: no code; the
@@ -119,7 +126,8 @@ counts; never the intention's text, never the key.
 **Local map (F5, R9 revised).** `$HERMES_HOME/av-events/intentions.json`
 (0600), guarded by `fcntl.flock` on the sibling `intentions.json.lock` around
 every read-modify-write: id -> `{published, source}`, `refused: rejected` for a
-local capture Index rejected, plus `held_norm_hash`
+local capture Index rejected, `local_reason` for a capture kept local on purpose
+(DATA-311), plus `held_norm_hash`
 for a held ambient entry only: sha256 of its text case-folded with whitespace
 collapsed, used for this check alone and never emitted. It is replaced when the
 held intention is updated and dropped when it is withdrawn. A capture that
@@ -265,7 +273,7 @@ TOOL_SCHEMA: dict = {
             "summary": {"type": "string", "description": "Optional one-line summary."},
             "source": {"type": "string", "enum": list(SOURCES), "description": "Where it came from. Required for capture."},
             "publish": {"type": "boolean",
-                        "description": "Default true. false only when the resident asked or the content is personal; then reason is required. Ignored for ambient."},
+                        "description": "Default true. false only when the resident asked or the content is personal; then reason is required. Honoured for every source, ambient included: it stays local and is never proposed or published."},
             "reason": {"type": "string", "enum": sorted(LOCAL_REASONS),
                        "description": "Why an explicit intention stays local. Required when publish is false."},
             "intention_id": {"type": "string", "description": "The id a capture returned. Required for update, withdraw and confirm."},
@@ -995,9 +1003,14 @@ def set_held_hash(intention_id: str, norm_hash: Optional[str]) -> None:
         logger.warning("av-events: record_intention map_write_failed=%s", type(exc).__name__)
 
 
+#: A capture kept local on purpose (`participant_asked` | `personal`): never
+#: held, proposed or published, and `confirm` refuses it as not held.
+LOCAL_REASON_KEY = "local_reason"
+
+
 def remember(
     intention_id: str, *, published: bool, source: str, norm_hash: Optional[str] = None,
-    refused: Optional[str] = None,
+    refused: Optional[str] = None, local_reason: Optional[str] = None,
 ) -> None:
     """Best effort: a map that cannot be written costs a later Index mirror, not the capture."""
     try:
@@ -1011,6 +1024,10 @@ def remember(
             # M2: a label (a code), for a local capture Index rejected.
             if refused == "rejected" and not published:
                 entry["refused"] = refused
+            # Kept local on purpose (a code): tells a personal or resident-asked
+            # entry from a held ambient one, whatever its source.
+            if local_reason in LOCAL_REASONS and not published:
+                entry[LOCAL_REASON_KEY] = local_reason
             entries[intention_id] = entry
             _evict(entries)
             _save_locked(entries, publishes)
@@ -1122,7 +1139,22 @@ def _capture(args: dict, held: Optional[str]) -> dict:
     # `action` tells the observer what was done when the call left it to the default.
     result: dict[str, Any] = {"success": True, "action": "capture", "source": source}
     approval_on = _approval_on()
-    if source == RESTRICTIVE_SOURCE:
+    if not publish:
+        # DATA-311: an explicit `publish=false` is honoured for every source and
+        # in every lineage, before the ambient hold: nothing the caller marked
+        # do-not-publish is proposed, held for approval or published. The
+        # lineage still decides `source` (ambient above); it only never turns
+        # a local capture into a held one. No `held_*` code: nothing was asked
+        # to publish, so nothing was held back.
+        if _blank(args.get("reason")):
+            return _refuse("reason_required")
+        reason = str(args.get("reason")).strip().lower()
+        if reason not in LOCAL_REASONS:
+            return _refuse("reason_invalid")
+        intention_id = uuid7()
+        result.update(intention_id=intention_id, index_intent_id=None, published=False, local_reason=reason)
+        result["message"] = f"Recorded locally, not published to Index (intention_id {intention_id}, reason {reason})."
+    elif source == RESTRICTIVE_SOURCE:
         intention_id = uuid7()
         result.update(intention_id=intention_id, index_intent_id=None, published=False, held=True)
         if held_code is not None:
@@ -1133,15 +1165,6 @@ def _capture(args: dict, held: Optional[str]) -> dict:
             f"Held as an ambient intention (intention_id {intention_id}). It stays off Index until the "
             "resident confirms it, and confirmation is not available yet: do not publish it another way."
         )
-    elif not publish:
-        if _blank(args.get("reason")):
-            return _refuse("reason_required")
-        reason = str(args.get("reason")).strip().lower()
-        if reason not in LOCAL_REASONS:
-            return _refuse("reason_invalid")
-        intention_id = uuid7()
-        result.update(intention_id=intention_id, index_intent_id=None, published=False, local_reason=reason)
-        result["message"] = f"Recorded locally, not published to Index (intention_id {intention_id}, reason {reason})."
     elif held_hash_exists(norm):
         # R9 revised: the same intention is held as ambient. Record this
         # capture locally (the event is emitted) and never publish around the
@@ -1188,12 +1211,15 @@ def _capture(args: dict, held: Optional[str]) -> dict:
             else:
                 tail = "Index could not take it just now. It is recorded; do not retry it with another tool."
             result["message"] = f"Recorded locally (intention_id {intention_id}, code {code}). {tail}"
+    local_reason = result.get("local_reason")
     remember(
         result["intention_id"],
         published=bool(result["published"]),
         source=source,
-        norm_hash=norm if source == RESTRICTIVE_SOURCE else None,
+        # A local capture is not held: no held hash, whatever its source.
+        norm_hash=norm if source == RESTRICTIVE_SOURCE and local_reason is None else None,
         refused=result.get("publish_refused"),
+        local_reason=local_reason,
     )
     return result
 
@@ -1358,6 +1384,9 @@ def _confirm(args: dict) -> dict:
         index_id = entry.get("index_intent_id") if valid_id(entry.get("index_intent_id")) else intention_id
         return {**base, "published": True, "index_intent_id": index_id, "approval_state": "published",
                 "message": f"Intention {intention_id} is already published to Index."}
+    if entry.get(LOCAL_REASON_KEY) in LOCAL_REASONS:
+        # Kept local on purpose: never held, so there is nothing to confirm.
+        return _refuse("confirm_not_held")
     ap = ia.approval_of(entry)
     if ap is None:
         return _refuse("confirm_text_missing" if entry.get("source") == RESTRICTIVE_SOURCE else "confirm_not_held")
@@ -1488,8 +1517,9 @@ def _update_or_withdraw(action: str, args: dict, held: Optional[str]) -> dict:
         "published": published,
         "source": source,
     }
-    if not published and entry.get("source") == RESTRICTIVE_SOURCE:
+    if not published and entry.get("source") == RESTRICTIVE_SOURCE and entry.get(LOCAL_REASON_KEY) not in LOCAL_REASONS:
         # R9 revised: a held entry's hash follows its text, and goes with it.
+        # A local-on-purpose entry is not held and never gets one.
         set_held_hash(intention_id, held_norm_hash(text) if action == "update" and text is not None else None)
     code: Optional[str] = None
     already_archived = published and entry.get(ARCHIVED_KEY) is True
