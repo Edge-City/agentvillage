@@ -528,9 +528,9 @@ def _edgeos_plan(collector: Collector, kwargs: dict, tool_payload: dict, matched
     `my_rsvp_status` agrees with a waiting action is `action.receipted` on that
     action's id, with receipt `{kind: edgeos_confirming_read, id: <participant
     id>}` — the one event this plugin claims `provider_receipt` for, which
-    ingest honours only because the receipt is checkable (§2.1). In
-    `metadata` the EdgeOS event id and the receipt's participant id are
-    replaced by their HMACs under the tenant key.
+    ingest would honour if the receipt were checkable (§2.1). The receipt's
+    participant id is replaced by its HMAC under the tenant key in every
+    capture mode (DATA-308), and in `metadata` the EdgeOS event id is too.
     """
     op, params, call = matched
     status = normalise_status(kwargs.get("status"))
@@ -539,16 +539,22 @@ def _edgeos_plan(collector: Collector, kwargs: dict, tool_payload: dict, matched
         op, params, call, ok=status_ok(status), status=status, exit_code=exit_code, body=body,
         ledger=collector.edgeos_ledger(), mint=uuid7,
     )
-    if collector.config.capture == "metadata":
-        # EdgeOS ids are the attendee's footprint across the popup; `metadata`
-        # keeps them in the sandbox. The receipt then cannot be checked, which
-        # is the price of the mode.
-        for item in planned:
+    for item in planned:
+        # DATA-308, every mode: a participant record is one person's RSVP, and
+        # EdgeOS resolves its id to that person (`GET /event-participants/{id}`).
+        # Whoever reads the event downstream does not hold that mapping, so the
+        # id leaves only as its keyed hash, the same value `metadata` always
+        # sent (null without a key). The receipt then cannot be checked
+        # outside the sandbox in any mode (README divergence 31).
+        receipt = item.payload.get("receipt")
+        if isinstance(receipt, dict) and isinstance(receipt.get("id"), str):
+            receipt["id"] = collector.keyed_hash(receipt["id"])
+        if collector.config.capture == "metadata":
+            # An EdgeOS event id names an event, not who went; but the set of
+            # them is the attendee's footprint across the popup, and
+            # `metadata` keeps that in the sandbox.
             item.payload["edgeos_event_id"] = collector.keyed_hash(item.payload["edgeos_event_id"])
-            receipt = item.payload.get("receipt")
-            if isinstance(receipt, dict) and isinstance(receipt.get("id"), str):
-                receipt["id"] = collector.keyed_hash(receipt["id"])
-    # After the metadata step, so the tool.call never carries a clear id the
+    # After the keying step, so the tool.call never carries a clear id the
     # action event does not.
     receipts = [item.payload["receipt"] for item in planned if item.event_type == "action.receipted"]
     if len(receipts) == 1:
