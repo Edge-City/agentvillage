@@ -479,8 +479,8 @@ Search, which such a gate would not see); its text, the `workspace/AGENTS.md` ro
 | `capture`, source `message`/`onboarding`/`note`, in a session that may publish | `POST /api/intents {description: text, sourceType: "agentvillage"}`, no `sourceId` | `intention_id` = `index_intent_id` = Index's id (corroborated by id, no back-reference needed) |
 | same, Index refused, unreachable, or the hourly cap reached | tried, or not when capped | local uuid v7, `publish_refused` = code |
 | `capture`, `publish=false`, `reason`, any source, in any session | none | local uuid v7, `local_reason` = reason, never proposed (in a held session `source=ambient`, no `held_*` code) |
-| `capture`, source `ambient` | none | local uuid v7, `source=ambient`, held |
-| `capture`, explicit source, in a held session | none | local uuid v7, `source=ambient`, `publish_refused` `held_cron` or `held_unknown` |
+| `capture`, source `ambient` | none | local uuid v7, `source=ambient`, held, unless `publish=false` (kept local) |
+| `capture`, explicit source, in a held session | none | local uuid v7, `source=ambient`, `publish_refused` `held_cron` or `held_unknown`, unless `publish=false` (kept local) |
 | `capture` that would publish, of text already held as ambient (case and whitespace ignored) | none | local uuid v7, `publish_refused="held_ambient_exists"` |
 | `update` / `withdraw` of an id it published | `PATCH /api/intents/{id} {description}` / `PATCH /api/intents/{id}/archive` (no body) | `index_intent_id` set; a failed mirror adds `publish_refused` |
 | `update` of a published id in a held session | none | `publish_refused` `held_cron` or `held_unknown`, `source=ambient` |
