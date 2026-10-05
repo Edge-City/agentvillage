@@ -1,7 +1,7 @@
 ---
 name: edge-esmeralda-2026
 description: Background on a PREVIOUS Edge City popup, Edge Esmeralda 2026 (May 30 – Jun 27 2026, Healdsburg, CA) — not the current event. The current event is Edge City India (Oct 11 – Nov 1 2026, Mandrem, Goa). Use this skill only when the user explicitly asks about Edge Esmeralda or Edge City's history/mission; never present its dates, weeks, themes, venues, wiki logistics, or popup id as current or as applying to Edge City India. For India logistics you don't have, say so and point the user to the Edge City portal or organisers.
-version: 3.1.1
+version: 3.1.2
 author: Edge City
 tags: [edge-city, edge-esmeralda, popup-village, community]
 ---
@@ -23,14 +23,14 @@ This skill holds data about **Edge Esmeralda 2026**, a month-long popup village 
 - **Contact**: info@edgeesmeralda.com
 - **Website**: https://edgecity.live | https://www.edgeesmeralda.com
 
-This skill is a **knowledge layer** about the popup itself. For live calendar, RSVP, venue, and directory API calls, use the sibling `edgeos` skill (it picks up the popup id from this skill's constants). For discovery and intent-based matching, use the `index-network` skill.
+This skill is a **knowledge layer** about the popup itself. For live calendar, RSVP, venue, and directory API calls, use the sibling `edgeos` skill, passing it the popup id from §1 (by default `edgeos` uses the current village's popup). For discovery and intent-based matching, use the `index-network` skill.
 
 ---
 
 ## 1. Popup constants (use these with the `edgeos` skill)
 
 - **`popup_id`**: `43746fd0-bce2-472b-93e4-a438177b2dff`
-  Pass this as the `popup_id` parameter to `edgeos` skill calls that need it — `GET /events/portal/events?popup_id=...` (required for correct date filtering), `GET /applications/my/directory/{popup_id}`, `GET /event-venues/portal/venues?popup_id=...`, and `POST /event-venues/portal/venues` (body field).
+  Pass this as the `popup_id` parameter to the `edgeos` skill's read calls that need it: `GET /events/portal/events?popup_id=...` (always pass it; see the `edgeos` skill §3), `GET /applications/my/directory/{popup_id}` and `GET /event-venues/portal/venues?popup_id=...`. Agents cannot create or change events or venues for any popup. The `edgeos` API key is bound to the current village's popup, so the events and venues calls with this id answer `403` ("This API key does not have access to this popup"); when they do, tell the person the previous popup's live schedule isn't reachable from their agent.
 - **`popup_slug`**: `edge-esmeralda-2026` (informational; not used by EdgeOS API calls).
 - **`event_base_url`**: `https://edgecity.simplefi.tech/portal/edge-esmeralda-2026/events/`
   Use this as the prefix for event links by appending the `event_id` returned by the EdgeOS API.
@@ -54,29 +54,28 @@ When the user says "week 2", convert to `start_after=2026-06-08T07:00:00Z&start_
 
 ## 2. Attendee directory field guide
 
-The `edgeos` skill exposes `GET /applications/my/directory/{popup_id}`. Pass the `popup_id` from §1. It works only with a human session token carrying `portal:directory:read` (`$EDGEOS_BEARER_TOKEN`), never with the `eos_live_` API key; see the `edgeos` skill §9. Each attendee record in `results[]` contains:
+The `edgeos` skill exposes `GET /applications/my/directory/{popup_id}`. Pass the `popup_id` from §1. It works only with a human session token carrying `portal:directory:read` (`$EDGEOS_BEARER_TOKEN`), never with the `eos_live_` API key; see the `edgeos` skill §9. The directory lists the main applicants and spouses of accepted applications who hold a ticket (children are not listed). Each attendee record in `results[]` contains:
 
+- `id` — the attendee id
 - `first_name`, `last_name`, `email`, `telegram`
-- `role`, `organization`
-- `personal_goals` — free-form prose
+- `role`, `organization` — from the main applicant's application form; empty on a spouse's row
 - `residence`, `age`, `gender`
-- `social_media` — handles per platform
-- `builder_boolean`, `builder_description` — self-identified "builder" flag and prose
-- `participation` — array of `{ name, start_date, end_date }` for each week the attendee is registered for
-- `associated_attendees` — spouse, kids, plus-ones
 - `picture_url`
+- `category` — `main` or `spouse`
+- `participation` — the attendee's tickets, each `{ id, name, slug, category, duration_type }`; these are ticket products, not dated weeks
+- `associated_attendees` — always an empty list: a spouse is a record of their own
 
 Response wrapper: `{ results: Attendee[], paging: { offset, limit, total } }`.
 
 ### Privacy
 
-Some attendees hide certain fields; hidden values appear as the literal string `"*"`. **Respect this** — do not try to infer or work around hidden data. If a field is `"*"`, tell the user that information is private.
+An attendee can hide any of `first_name`, `last_name`, `email`, `telegram`, `role`, `organization`, `residence`, `age` and `gender`; a hidden value appears as the literal string `"*"`. `picture_url`, `category` and `participation` are never masked, and only a main applicant's record carries masks. **Respect this** — do not try to infer or work around hidden data. If a field is `"*"`, tell the user that information is private.
 
 ### Useful query patterns (via the `edgeos` skill's directory recipe)
 
-- Search by name / organization / role: `?search=QUERY`
+- Search by name, email or Telegram handle: `?q=QUERY` (it matches only shared values and does not search role or organization)
 - Pagination: `?skip=0&limit=20` (default 100, at most 1000; page again only while `skip + results.length < paging.total`)
-- Filter by participation week, families with kids, etc.: parameter names vary; consult the OpenAPI spec via the `edgeos` skill's §11 if you need a filter beyond `search`.
+- `?hide_empty_rows=true` drops records with no shared name, email, Telegram, role or organization. There is no filter by week, family or anything else.
 
 ---
 
