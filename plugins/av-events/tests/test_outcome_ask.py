@@ -683,6 +683,41 @@ def test_a_message_sent_before_the_ask_was_delivered_is_not_its_answer(live, ctx
     assert events(av, live, "outcome.reported") == []
 
 
+def test_an_answer_survives_a_tick_whose_ledger_read_failed(live, ctx, tenant, av, monkeypatch):
+    """F10: a failed read (a lock past its timeout) is not "no ask"."""
+    ask_delivered(live, ctx, tenant)
+    resident_says(ctx, "met")
+    mod = module(live)
+    real = mod.read_ledger
+    monkeypatch.setattr(mod, "read_ledger", lambda home: None)
+    codes = live._COLLECTOR.outcome_tick()
+    assert codes.get("ledger_unreadable") == 1 and "answer_no_ask" not in codes
+    assert len(notes(live)) == 1
+    monkeypatch.setattr(mod, "read_ledger", real)
+    assert live._COLLECTOR.outcome_tick().get("answered") == 1
+    [reported] = events(av, live, "outcome.reported")
+    assert reported["outcome_id"] == OUTCOME and reported["payload"]["value"] == "met"
+
+
+def test_an_answer_kept_through_failed_reads_expires_after_the_window(live, ctx, tenant, av, monkeypatch):
+    ask_delivered(live, ctx, tenant)
+    resident_says(ctx, "met")
+    mod = module(live)
+    monkeypatch.setattr(mod, "read_ledger", lambda home: None)
+    assert live._COLLECTOR.outcome_tick(now=time.time() + 23 * 3600).get("answer_expired") is None
+    assert live._COLLECTOR.outcome_tick(now=time.time() + 25 * 3600).get("answer_expired") == 1
+    assert notes(live) == []
+
+
+def test_a_ledger_read_that_succeeds_empty_is_not_a_failure(live, ctx, tenant, av, monkeypatch):
+    ask_delivered(live, ctx, tenant)
+    resident_says(ctx, "met")
+    monkeypatch.setattr(module(live), "read_ledger", lambda home: [])
+    codes = live._COLLECTOR.outcome_tick()
+    assert "ledger_unreadable" not in codes and codes.get("answer_no_ask") == 1
+    assert notes(live) == []
+
+
 def test_an_answer_to_an_ask_that_was_never_delivered_emits_nothing(live, ctx, tenant, av):
     execution = uuid.uuid4().hex
     tenant.stage()

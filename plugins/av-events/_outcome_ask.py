@@ -75,7 +75,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
 from ._core import DIR_MODE, FILE_MODE, MAX_BUFFER_AGE_S, derived_uuid7, epoch_from_iso, iso_from_epoch, iso_from_text, sqlite_read, uuid7
-from ._cron import INSTALLED_JOBS_FILE, load_installed_job_ids, load_job_names, read_terminal_executions
+from ._cron import INSTALLED_JOBS_FILE, TERMINAL_EXECUTIONS_SQL, load_installed_job_ids, load_job_names
 from ._messages import is_silent
 
 try:  # POSIX only; on a platform without it the tick runs unlocked.
@@ -448,6 +448,12 @@ def run_row(home: str, execution_id: str) -> Optional[dict]:
     return rows[0] if rows else None
 
 
+def read_ledger(home: str) -> Optional[list[dict]]:
+    """Hermes's terminal executions, or None when the read failed (no file, a
+    lock held past the timeout, a bad table): a failure, never "no runs"."""
+    return sqlite_read(os.path.join(home, "cron", "executions.db"), TERMINAL_EXECUTIONS_SQL)
+
+
 def _run_start(row: dict) -> Optional[float]:
     return epoch_from_iso(iso_from_text(row.get("claimed_at"))) or epoch_from_iso(iso_from_text(row.get("started_at")))
 
@@ -730,8 +736,13 @@ def tick(state_dir: str, home: str, emit: Callable[..., Optional[dict]], now: fl
         answers = pending_answers()
         armed_names = _listing(armed_dir(state_dir))
         rows: dict = {}
+        ledger_failed = False
         if armed_names or asks:
-            rows = {r.get("id"): r for r in read_terminal_executions(os.path.join(home, "cron", "executions.db"))}
+            ledger = read_ledger(home)
+            ledger_failed = ledger is None
+            if ledger_failed:
+                _count(codes, "ledger_unreadable")
+            rows = {r.get("id"): r for r in ledger or []}
 
         pending: list[float] = []
         for name in armed_names:
@@ -823,6 +834,13 @@ def tick(state_dir: str, home: str, emit: Callable[..., Optional[dict]], now: fl
             answered = set(_ANSWERED)
         for note in sorted(answers, key=lambda n: (n["at_epoch"], n["seq"])):
             at = note["at_epoch"]
+            if ledger_failed:
+                # No ask can be confirmed this tick: keep the answer for the
+                # next one, for as long as it could still count.
+                if now - at > ANSWER_WINDOW_S:
+                    done.add(note["id"])
+                    _count(codes, "answer_expired")
+                continue
             # The open ask is the latest DELIVERED before the message (the
             # ledger's finish), never the latest started: a run in progress
             # has not asked anything yet.
