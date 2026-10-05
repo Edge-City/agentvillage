@@ -12,6 +12,8 @@ Deliver the staged morning brief verbatim from Kanban, then reconcile delivery b
    bun skills/index-network/scripts/send-daily-brief.ts
    ```
 
+   Call `terminal` with `command` only (plus `workdir`, the Hermes home, if you set one). Never pass `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty`: the script finishes in seconds and its output comes straight back. If the call returns an error about background commands, the script did not run; call it once more without those arguments, and if that fails too, end your turn with `[SILENT]`.
+
    Do not write Python, shell pipelines, or replacement delivery logic. The script resolves today's Asia/Kolkata date, reads `memory/heartbeat-state.json`, checks the Kanban approval gate, writes `memory/digest-outgoing.md`, uses the opportunity/question ids captured by the prompted prepare step, updates delivery state (today's selected opportunity ids, a showing for each of those cards for the 3-day card cooldown, plus the per-question 3-day re-delivery cooldown under `questionDelivery`), marks the task complete, strips unsafe URLs/internal metadata, and prints either `[SILENT]` or one JSON object.
 
    If the script exits with a non-zero code, end your turn immediately with `[SILENT]`. Do not diagnose, retry, or attempt alternatives. One attempt only.

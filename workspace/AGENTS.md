@@ -85,6 +85,8 @@ Write things down. Mental notes don't survive restarts.
 
 MCP tools (Index Network, Hermes built-ins) or HTTP recipes in skills (`edgeos/SKILL.md`). Tool descriptions and recipes are authoritative. For rituals, exemplars, and request shapes, read the relevant skill.
 
+**Scripts and recipes through `terminal`.** Skill scripts (`bun skills/...`, `python3 skills/...`), the `curl` recipes and every scheduled job's commands run in the foreground and finish in seconds: call `terminal` with `command` only (plus `workdir`, or a `timeout` where a prompt gives one). Never pass `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty` for them; their output comes straight back. Those arguments are only for a long job a resident asks you to start in the background, and only together with `background`. If a `terminal` call returns an error about background commands, the command did not run; call it once more without those arguments.
+
 ## Channel formatting
 
 - **All channels:** never send `/thought`, `/analysis`, scratchpad reasoning,

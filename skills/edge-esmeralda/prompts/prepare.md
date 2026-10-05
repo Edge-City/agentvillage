@@ -105,6 +105,8 @@ cd "${HERMES_HOME:-/opt/data}"
    bun skills/index-network/scripts/stage-daily-brief.ts --prepare-context --state-file memory/heartbeat-state.json --context-out /tmp/daily-brief-context.json
    ```
 
+   Call `terminal` with `command` only (plus `workdir`, the Hermes home, if you set one). Never pass `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty`: the script finishes in seconds and its output comes straight back. If the call returns an error about background commands, the script did not run; call it once more without those arguments, and if that fails too, end your turn with the host-specific no-reply marker.
+
    If the command exits non-zero, end your turn immediately with the host-specific no-reply marker. Do not diagnose, retry, or attempt alternative staging paths.
 
    If stdout says `"skipped":true`, today's digest is already staged or delivered. End your turn with the host-specific no-reply marker.
@@ -120,6 +122,8 @@ cd "${HERMES_HOME:-/opt/data}"
    ...composed brief markdown...
    DIGEST_BODY
    ```
+
+   Call `terminal` with `command` only (plus `workdir`, the Hermes home, if you set one). Never pass `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty`: the script finishes in seconds and its output comes straight back. If the call returns an error about background commands, the script did not run; call it once more without those arguments, and if that fails too, end your turn with the host-specific no-reply marker.
 
    The quoted heredoc keeps markdown intact without creating a persistent draft file. The script reads stdin, validates markers against the context, strips unsafe URLs, creates the Kanban task with argv-safe `--body`, leaves it eligible for the scheduled send pass, and records `prepared.taskId`, delivered opportunity ids, and delivered question ids in `memory/heartbeat-state.json`.
 

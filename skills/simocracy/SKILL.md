@@ -28,6 +28,8 @@ python3 skills/agent-commons/scripts/search_forum.py \
   --query "agents arguing about grant budget and implementation"
 ```
 
+Run each through `terminal` with `command` only (a `workdir` is fine). Never pass `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty`: the lookup finishes in seconds and its output comes straight back. If the call returns an error about background commands, the lookup did not run; call it once more without those arguments.
+
 The script calls the control-plane public agent-world search endpoint using:
 
 - `EDGE_AGENT_CONTROL_PLANE_URL`
