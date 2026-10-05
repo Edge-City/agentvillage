@@ -3,7 +3,7 @@
  * trigger's use of them is in proactive-settings.test.ts.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -11,7 +11,13 @@ import {
   DEFAULT_TZ,
   DEFAULT_WINDOWS,
   MAX_SETTINGS_BYTES,
+  PREVIEW_MAX_AGE_MS,
+  type ParsedCron,
   SETTINGS_JOB_KEYS,
+  adminScheduleKeys,
+  cronFrequent,
+  cronLeapDayOnly,
+  cronNeverFires,
   deliveryFor,
   formatWindow,
   inWindow,
@@ -19,13 +25,17 @@ import {
   isValidTimeZone,
   jobSettingsPath,
   minuteOfDay,
+  nextFiring,
   parseStrictCron,
   parseWindow,
+  prunePreviewFiles,
   readJobSettings,
-  scheduleMeetsWindow,
+  scheduleWindowFit,
+  settingsFileText,
   writeJobSettings,
 } from "../job-settings";
 import { BRIEF_WINDOW } from "../proactive";
+import fixture from "./fixtures/croniter-6.0.0.json";
 
 let home: string;
 const savedTeam = process.env.AV_TEAM_TENANT;
@@ -77,14 +87,14 @@ describe("the window grammar: HH:MM-HH:MM, start inclusive, end exclusive", () =
   });
 });
 
-describe("the zone grammar: an IANA name the runtime knows, spelt as it spells it", () => {
-  test("accepted", () => {
-    for (const zone of ["Asia/Kolkata", "Asia/Calcutta", "UTC", "America/New_York", "Europe/Kyiv", "America/Argentina/Buenos_Aires", "Pacific/Auckland"]) {
+describe("the zone grammar for a job's window: an IANA name in a geographic area, spelt as the runtime spells it", () => {
+  test("accepted, backward links inside the ten areas included", () => {
+    for (const zone of ["Asia/Kolkata", "Asia/Calcutta", "UTC", "America/New_York", "Europe/Kyiv", "Europe/Kiev", "America/Argentina/Buenos_Aires", "America/Buenos_Aires", "Pacific/Auckland"]) {
       expect({ zone, ok: isValidTimeZone(zone) }).toEqual({ zone, ok: true });
     }
   });
 
-  test("refused: offsets, POSIX and backward-link names, case variants, unknown zones, non-strings", () => {
+  test("refused: offsets, POSIX names, Etc/ and US/ names, case variants, unknown zones, non-strings", () => {
     for (const zone of ["asia/kolkata", "ASIA/KOLKATA", "Etc/UTC", "Etc/GMT+5", "US/Eastern", "EST5EDT", "GMT", "utc", "+05:30", "+0530", "Z", "Mars/Olympus",
       "Asia/Nowhere", "", " Asia/Kolkata", "Asia/Kolkata ", "Asia/../Kolkata", `Asia/${"x".repeat(70)}`, null, 5, {}]) {
       expect({ zone, ok: isValidTimeZone(zone) }).toEqual({ zone, ok: false });
@@ -92,42 +102,172 @@ describe("the zone grammar: an IANA name the runtime knows, spelt as it spells i
   });
 });
 
-describe("the schedule grammar: a strict five-field cron", () => {
-  test("accepted, and passed on with single spaces", () => {
-    expect(parseStrictCron("0 8 * * *")).toEqual({ expr: "0 8 * * *", minutes: [0], hours: [8] });
-    expect(parseStrictCron(" 5,35  7 * * 1-5 ")).toEqual({ expr: "5,35 7 * * 1-5", minutes: [5, 35], hours: [7] });
-    expect(parseStrictCron("*/20 6-8 * * *")!.minutes).toEqual([0, 20, 40]);
-    expect(parseStrictCron("10-50/20 9 1 10 0")!.minutes).toEqual([10, 30, 50]);
-    expect(parseStrictCron("15/30 9 * * *")!.minutes).toEqual([15, 45]);
+describe("the schedule grammar: a strict five-field cron, sent to Hermes in canonical form", () => {
+  test("accepted: each field becomes its explicit values, `*` only when it holds every value", () => {
+    expect(parseStrictCron("0 8 * * *")).toEqual({ expr: "0 8 * * *", minutes: [0], hours: [8], days: expect.any(Array), months: expect.any(Array), weekdays: [0, 1, 2, 3, 4, 5, 6] });
+    expect(parseStrictCron("5,35 7 * * 1-5")!.expr).toBe("5,35 7 * * 1,2,3,4,5");
+    expect(parseStrictCron("*/20 6-8 * * *")!.expr).toBe("0,20,40 6,7,8 * * *");
+    expect(parseStrictCron("10-50/20 9 1 10 0")!.expr).toBe("10,30,50 9 1 10 0");
+    expect(parseStrictCron("15/30 9 * * *")!.expr).toBe("15,45 9 * * *");
+    expect(parseStrictCron("08 08 * * *")!.expr).toBe("8 8 * * *");
+    // A field that lists every value is `*`.
+    expect(parseStrictCron("0-59 0-23 1-31 1-12 0-6")!.expr).toBe("* * * * *");
+    expect(parseStrictCron("0 8 1-31 * 1")!.expr).toBe("0 8 * * 1");
   });
 
-  test("refused: wrong field count, names, degenerate or reversed ranges, out of range, steps, shell text", () => {
-    for (const bad of ["0 8 * *", "0 8 * * * *", "0 8 * * MON", "0 8 * JAN *", "@daily", "0 8-8 * * *", "0 9-8 * * *", "60 8 * * *", "0 24 * * *",
-      "0 8 0 * *", "0 8 32 * *", "0 8 * 13 *", "0 8 * * 7", "*/0 8 * * *", "*/61 8 * * *", "0 8 ? * *", "0 8 L * *", "0 8 * * 1#2",
-      "0 8 * * *; rm -rf /", "0 8 * * *\n0 9 * * *", "0\t8 * * *", "0 8 * * $(id)", "-1 8 * * *", "0 8 * * ,", "0 ,8 * * *", "0 8 * * 1-",
-      "1,,2 8 * * *", "100 8 * * *", "0 8 * * *".padEnd(120, " ") + "x", "", null, 8]) {
+  test("a field's maximum with a step is that one value, never croniter's `*/s`", () => {
+    expect(parseStrictCron("0 23/2 * * *")!.expr).toBe("0 23 * * *");
+    expect(parseStrictCron("59/5 8 * * *")!.expr).toBe("59 8 * * *");
+    expect(parseStrictCron("0 8 31/2 * *")!.expr).toBe("0 8 31 * *");
+    expect(parseStrictCron("0 8 * 12/5 *")!.expr).toBe("0 8 * 12 *");
+    expect(parseStrictCron("0 8 * * 6/7")!.expr).toBe("0 8 * * 6");
+  });
+
+  test("refused: wrong field count, names, degenerate or reversed ranges, out of range, steps, spacing, shell text", () => {
+    for (const bad of ["0 8 * *", "0 8 * * * *", "0 8 * * MON", "0 8 * JAN *", "@daily", "0 8-8 * * *", "0 8-8/2 * * *", "59-59 * * * *", "0 8 * * 1-1/1",
+      "0 9-8 * * *", "60 8 * * *", "0 24 * * *", "0 8 0 * *", "0 8 32 * *", "0 8 * 13 *", "0 8 * * 7", "*/0 8 * * *", "*/61 8 * * *", "0 8 ? * *",
+      "0 8 L * *", "0 8 * * 1#2", "0 8 * * *; rm -rf /", "0 8 * * *\n0 9 * * *", "0\t8 * * *", "0 8 * * $(id)", "-1 8 * * *", "0 8 * * ,", "0 ,8 * * *",
+      "0 8 * * 1-", "1,,2 8 * * *", "100 8 * * *", "0  8 * * *", " 0 8 * * *", "0 8 * * * ", "0 8 * * *".padEnd(120, " ") + "x", "", null, 8]) {
       expect({ bad, cron: parseStrictCron(bad) }).toEqual({ bad, cron: null });
     }
   });
-});
 
-describe("whether a schedule ever lands in its window", () => {
-  const FROM = new Date("2026-10-05T00:00:00Z");
-
-  test("the village default: 08:xx IST lands in 05:00-11:00 IST; 15:00 never does", () => {
-    expect(scheduleMeetsWindow(parseStrictCron("7 8 * * *")!, DEFAULT_WINDOWS.brief!, "Asia/Kolkata", "Asia/Kolkata", FROM)).toBe(true);
-    expect(scheduleMeetsWindow(parseStrictCron("0 15 * * *")!, DEFAULT_WINDOWS.brief!, "Asia/Kolkata", "Asia/Kolkata", FROM)).toBe(false);
+  test("never fires: croniter's impossible dates, whatever the day of week; and 29 February alone", () => {
+    for (const expr of ["0 8 31 2 *", "0 8 30 2 *", "0 8 31 4,6,9,11 *", "0 8 31 2 1", "0 8 30,31 2 *"]) {
+      expect({ expr, never: cronNeverFires(parseStrictCron(expr)!) }).toEqual({ expr, never: true });
+    }
+    for (const expr of ["0 8 29 2 *", "0 8 31 * *", "0 8 30 2,4 *", "0 8 * 2 *", "0 8 31 2,3 *"]) {
+      expect({ expr, never: cronNeverFires(parseStrictCron(expr)!) }).toEqual({ expr, never: false });
+    }
+    expect(cronLeapDayOnly(parseStrictCron("0 8 29 2 *")!)).toBe(true);
+    expect(cronLeapDayOnly(parseStrictCron("0 8 29,30 2 *")!)).toBe(true);
+    for (const expr of ["0 8 29 2 1", "0 8 29 2,3 *", "0 8 28,29 2 *", "0 8 * 2 *"]) {
+      expect({ expr, leap: cronLeapDayOnly(parseStrictCron(expr)!) }).toEqual({ expr, leap: false });
+    }
   });
 
-  test("a resident in New York: the schedule is in village time, the window in theirs, across their DST change", () => {
-    const window = parseWindow("07:00-09:00")!;
-    // 17:30 IST is 08:00 EDT and 07:00 EST: in the window all year.
-    expect(scheduleMeetsWindow(parseStrictCron("30 17 * * *")!, window, "America/New_York", "Asia/Kolkata", FROM)).toBe(true);
+  test("frequent: more than one firing in some hour", () => {
+    for (const expr of ["* * * * *", "0,30 8 * * *", "*/20 6-8 * * *", "1-59/58 8 * * *"]) expect({ expr, f: cronFrequent(parseStrictCron(expr)!) }).toEqual({ expr, f: true });
+    for (const expr of ["0 8 * * *", "0 * * * *", "30 16,17 * * *", "0 8,20 * * *"]) expect({ expr, f: cronFrequent(parseStrictCron(expr)!) }).toEqual({ expr, f: false });
+  });
+});
+
+/** Field values as croniter writes them: `*` or the values joined by commas. */
+function fields(cron: ParsedCron): string[] {
+  const full = [60, 24, 31, 12, 7];
+  return [cron.minutes, cron.hours, cron.days, cron.months, cron.weekdays].map((values, i) => (values.length === full[i] ? "*" : values.join(",")));
+}
+
+describe("croniter 6.0.0 reads the canonical form exactly as the tool does (tests/fixtures/croniter-6.0.0.json)", () => {
+  type Reading = { x: string[] | null; err: string | null; nextErr: string | null; next?: string[] } | null;
+  const report = fixture.report as Array<{ e: string; c: string | null; input: Reading; canonical: Reading }>;
+
+  test("the fixture is croniter 6.0.0's, and its canonical forms are still the tool's", () => {
+    expect(fixture.croniter).toBe("6.0.0");
+    for (const row of report) expect({ e: row.e, c: parseStrictCron(row.e)?.expr ?? null }).toEqual({ e: row.e, c: row.c });
+  });
+
+  test("report and probe expressions: the tool's value lists equal croniter's expansion of the canonical string", () => {
+    let accepted = 0;
+    for (const row of report) {
+      const cron = parseStrictCron(row.e);
+      if (!cron) continue;
+      accepted++;
+      expect({ e: row.e, err: row.canonical!.err }).toEqual({ e: row.e, err: null });
+      expect({ e: row.e, fields: fields(cron) }).toEqual({ e: row.e, fields: row.canonical!.x! });
+      // No next run (CroniterBadDateError) exactly when the tool says it never fires.
+      expect({ e: row.e, never: cronNeverFires(cron) }).toEqual({ e: row.e, never: row.canonical!.nextErr === "CroniterBadDateError" });
+    }
+    expect(accepted).toBeGreaterThan(60);
+  });
+
+  test("the tool's firings are croniter's next five runs (naive wall time, which is UTC here)", () => {
+    for (const row of report) {
+      const cron = parseStrictCron(row.e);
+      if (!cron || !row.canonical?.next) continue;
+      if (cronLeapDayOnly(cron)) {
+        // Up to four years away: beyond the tool's one-year horizon, and refused by the commands.
+        expect(nextFiring(cron, "UTC", new Date(`${fixture.base}Z`))).toBeNull();
+        continue;
+      }
+      // The tool looks a year ahead from each run; a yearly schedule's later runs lie past that.
+      const runs: string[] = [];
+      let at: number | null = new Date(`${fixture.base}Z`).getTime();
+      while (runs.length < 5) {
+        at = nextFiring(cron, "UTC", new Date(at));
+        if (at === null) break;
+        runs.push(new Date(at).toISOString().slice(0, 16).replace("T", " "));
+      }
+      const yearAhead = row.canonical.next.filter((run) => run < "2027-10-06").length;
+      expect({ e: row.e, runs }).toEqual({ e: row.e, runs: row.canonical.next.slice(0, runs.length) });
+      expect({ e: row.e, enough: runs.length >= Math.min(1, yearAhead) && runs.length >= Math.min(5, yearAhead) }).toEqual({ e: row.e, enough: true });
+    }
+  });
+
+  test("croniter misreads the shapes the tool refuses or rewrites: a-a ranges and max/step", () => {
+    expect(report.find((row) => row.e === "0 8-8 * * *")!.input!.x![1]).toBe("*");
+    expect(report.find((row) => row.e === "0 23/2 * * *")!.input!.x![1]).toBe("0,2,4,6,8,10,12,14,16,18,20,22");
+    expect(report.find((row) => row.e === "0 8 * * 6/7")!.input!.x![4]).toBe("0");
+    for (const e of ["0 8-8 * * *", "0 8-8/2 * * *", "59-59 * * * *", "0 8 * 2-2 *", "0 8 * * 1-1/1", "0 8 15-15/3 * *"]) {
+      expect({ e, c: report.find((row) => row.e === e)!.c }).toEqual({ e, c: null });
+    }
+  });
+
+  test("the sweep: every start and step in every field, the max-value forms included", () => {
+    const sweep = fixture.sweep as Array<[string, string | null, string | null, string?]>;
+    expect(sweep.length).toBe(5330);
+    let misread = 0;
+    for (const [e, c, canonical, given] of sweep) {
+      const cron = parseStrictCron(e);
+      expect({ e, c: cron?.expr ?? null }).toEqual({ e, c });
+      if (cron) expect({ e, fields: fields(cron).join("|") }).toEqual({ e, fields: canonical! });
+      if (given !== undefined) misread++;
+    }
+    // croniter reads every `max/s` input differently from its canonical form; the tool never sends one.
+    expect(misread).toBe(134);
+  });
+});
+
+describe("whether a schedule lands in its window, over a full year", () => {
+  const FROM = new Date("2026-10-05T00:00:00Z");
+  const fit = (expr: string, window: string, jobTz: string, from = FROM, hermesTz = "Asia/Kolkata") =>
+    scheduleWindowFit(parseStrictCron(expr)!, parseWindow(window)!, jobTz, hermesTz, from);
+
+  test("the village default: 08:xx IST lands in 05:00-11:00 IST every day; 15:00 never does", () => {
+    expect(fit("7 8 * * *", "05:00-11:00", "Asia/Kolkata")).toEqual({ fit: "always" });
+    expect(fit("0 15 * * *", "05:00-11:00", "Asia/Kolkata")).toEqual({ fit: "never" });
+  });
+
+  test("a resident in New York: always, never, and the DST season (the reviewer's 18:00 IST into 08:00-09:00)", () => {
+    // 17:30 IST is 08:00 EDT and 07:00 EST: in 07:00-09:00 all year.
+    expect(fit("30 17 * * *", "07:00-09:00", "America/New_York")).toEqual({ fit: "always" });
     // 19:30 IST is 10:00 EDT, 09:00 EST (end exclusive): never.
-    expect(scheduleMeetsWindow(parseStrictCron("30 19 * * *")!, window, "America/New_York", "Asia/Kolkata", FROM)).toBe(false);
-    // 16:30 IST is 07:00 EDT but 06:00 EST: lands until 1 November only.
-    expect(scheduleMeetsWindow(parseStrictCron("30 16 * * *")!, window, "America/New_York", "Asia/Kolkata", new Date("2026-11-02T00:00:00Z"))).toBe(false);
-    expect(scheduleMeetsWindow(parseStrictCron("30 16 * * *")!, window, "America/New_York", "Asia/Kolkata", FROM)).toBe(true);
+    expect(fit("30 19 * * *", "07:00-09:00", "America/New_York")).toEqual({ fit: "never" });
+    // 18:00 IST is 08:30 EDT but 07:30 EST: in the window until DST ends on 1 November, then not until March.
+    expect(fit("0 18 * * *", "08:00-09:00", "America/New_York")).toEqual({ fit: "seasonal", outsideFrom: "2026-11-01" });
+    // Asked in winter, the miss is now and the window comes back in March: still seasonal, never silently refused or accepted.
+    expect(fit("0 18 * * *", "08:00-09:00", "America/New_York", new Date("2026-11-03T00:00:00Z"))).toEqual({ fit: "seasonal", outsideFrom: "2026-11-03" });
+    // Two firings, one each side of the change: every day lands.
+    expect(fit("30 16,17 * * *", "07:00-08:00", "America/New_York")).toEqual({ fit: "always" });
+  });
+
+  test("only the days it runs count; a schedule that never runs in the year is no-firing", () => {
+    // Saturdays only, at a time that is in the window: always.
+    expect(fit("30 17 * * 6", "07:00-09:00", "America/New_York")).toEqual({ fit: "always" });
+    expect(fit("0 8 29 2 *", "05:00-11:00", "Asia/Kolkata")).toEqual({ fit: "no-firing" });
+  });
+
+  test("a Hermes zone with DST: the firing follows its wall clock", () => {
+    // 08:30 in Hermes's New York is 08:30 in the resident's New York all year, DST included.
+    expect(fit("30 8 * * *", "08:00-09:00", "America/New_York", FROM, "America/New_York")).toEqual({ fit: "always" });
+    // Read in London, it moves an hour twice a year (the two zones change on different dates).
+    expect(fit("30 8 * * *", "13:00-14:00", "Europe/London", FROM, "America/New_York").fit).toBe("seasonal");
+  });
+
+  test("every minute (allowed only with --allow-frequent) is checked in good time", () => {
+    const started = Date.now();
+    expect(fit("* * * * *", "08:00-08:05", "America/New_York")).toEqual({ fit: "always" });
+    expect(Date.now() - started).toBeLessThan(4000);
   });
 
   test("minuteOfDay follows the wall clock of the zone, DST included", () => {
@@ -174,7 +314,7 @@ describe("reading the settings file", () => {
     }
   });
 
-  test("a file that is not a v1 settings object is refused whole, with a code", () => {
+  test("a file that is not a v1 settings object is refused whole, with a code (any other `v` silences jobs without a default)", () => {
     const cases: Array<[unknown, string]> = [
       ["{not json", "file-not-json"],
       ["[]", "file-not-object"],
@@ -203,28 +343,101 @@ describe("reading the settings file", () => {
     expect(deliveryFor("brief", readJobSettings(home))).toEqual({ window: DEFAULT_WINDOWS.brief, tz: DEFAULT_TZ, settings: "default" });
   });
 
-  test("the writer: sorted, 0600, read back as written", () => {
-    writeJobSettings(home, { "tpl-brief": { window: "14:00-16:00" }, brief: { tz: "UTC" } });
+  test("adminSchedules: default job keys only; anything else is flagged, and the trigger never reads it", () => {
+    writeSettings({ v: 1, jobs: {}, adminSchedules: ["negotiation", "brief"] });
+    expect(adminScheduleKeys(readJobSettings(home))).toEqual({ keys: ["brief", "negotiation"], invalid: false });
+    writeSettings({ v: 1, jobs: {}, adminSchedules: ["brief", "tpl-brief", "x"] });
+    expect(adminScheduleKeys(readJobSettings(home))).toEqual({ keys: ["brief"], invalid: true });
+    writeSettings({ v: 1, jobs: {}, adminSchedules: "brief" });
+    expect(adminScheduleKeys(readJobSettings(home))).toEqual({ keys: [], invalid: true });
+    // A malformed list never holds a job silent: the trigger reads only `jobs`.
+    expect(deliveryFor("negotiation", readJobSettings(home))).toEqual({ window: null, tz: DEFAULT_TZ, settings: "default" });
+    expect(adminScheduleKeys({ status: "absent" })).toEqual({ keys: [], invalid: false });
+    expect(adminScheduleKeys({ status: "invalid", code: "file-not-json" })).toEqual({ keys: [], invalid: true });
+  });
+
+  test("the writer: sorted, 0600, read back as written; nothing to hold removes the file", () => {
+    writeJobSettings(home, { "tpl-brief": { window: "14:00-16:00" }, brief: { tz: "UTC" } }, ["negotiation", "brief"]);
     const read = readJobSettings(home);
-    expect(read).toEqual({ status: "ok", jobs: { brief: { tz: "UTC" }, "tpl-brief": { window: "14:00-16:00" } } });
+    expect(read).toEqual({ status: "ok", jobs: { brief: { tz: "UTC" }, "tpl-brief": { window: "14:00-16:00" } }, adminSchedules: ["brief", "negotiation"] });
     expect(Object.keys((read as { jobs: object }).jobs)).toEqual(["brief", "tpl-brief"]);
+    expect(statSync(jobSettingsPath(home)).mode & 0o777).toBe(0o600);
+    expect(settingsFileText({}, [])).toBeNull();
+    expect(settingsFileText({ brief: { tz: "UTC" } })).toBe('{"v":1,"jobs":{"brief":{"tz":"UTC"}}}\n');
+    writeJobSettings(home, {});
+    expect(existsSync(jobSettingsPath(home))).toBe(false);
+    expect(readJobSettings(home)).toEqual({ status: "absent" });
   });
 });
 
 describe("the team gate", () => {
-  test("only AV_TEAM_TENANT=1, from the environment or .env, marks a team tenant", () => {
+  test("only AV_TEAM_TENANT=1 (surrounding whitespace trimmed), from the environment or .env, marks a team tenant", () => {
     expect(isTeamTenant(home)).toBe(false);
-    for (const value of ["true", "yes", "on", "0", "", "11", "1 1"]) {
+    for (const value of ["true", "yes", "on", "0", "", "11", "1 1", '"1"', "'1'", "01", "1 # team"]) {
       process.env.AV_TEAM_TENANT = value;
       expect({ value, team: isTeamTenant(home) }).toEqual({ value, team: false });
     }
-    process.env.AV_TEAM_TENANT = "1";
-    expect(isTeamTenant(home)).toBe(true);
+    for (const value of ["1", " 1 ", "1\n", "\t1\r"]) {
+      process.env.AV_TEAM_TENANT = value;
+      expect({ value, team: isTeamTenant(home) }).toEqual({ value, team: true });
+    }
     delete process.env.AV_TEAM_TENANT;
     writeFileSync(join(home, ".env"), "AV_TEAM_TENANT=1\n");
     expect(isTeamTenant(home)).toBe(true);
-    // The environment wins over .env, as for every other variable here.
+    // The environment wins over .env whenever it is set, empty included.
     process.env.AV_TEAM_TENANT = "0";
     expect(isTeamTenant(home)).toBe(false);
+    process.env.AV_TEAM_TENANT = "";
+    expect(isTeamTenant(home)).toBe(false);
+  });
+
+  test(".env: no quote stripping, CRLF trimmed, the last assignment wins (as python-dotenv)", () => {
+    const cases: Array<[string, boolean]> = [
+      ['AV_TEAM_TENANT="1"\n', false],
+      ["AV_TEAM_TENANT='1'\n", false],
+      ["AV_TEAM_TENANT=1 # team\n", false],
+      ["AV_TEAM_TENANT=1\r\n", true],
+      ["export AV_TEAM_TENANT = 1\n", true],
+      ["AV_TEAM_TENANT=0\nAV_TEAM_TENANT=1\n", true],
+      ["AV_TEAM_TENANT=1\nAV_TEAM_TENANT=0\n", false],
+      ["XAV_TEAM_TENANT=1\n", false],
+    ];
+    for (const [file, team] of cases) {
+      writeFileSync(join(home, ".env"), file);
+      expect({ file, team: isTeamTenant(home) }).toEqual({ file, team });
+    }
+  });
+});
+
+describe("pruning preview leftovers older than an hour", () => {
+  test("old state copies and preview shims go; young ones, other names and symlinks stay", () => {
+    const now = Date.now();
+    const old = (path: string) => utimesSync(path, new Date(now - PREVIEW_MAX_AGE_MS - 60_000), new Date(now - PREVIEW_MAX_AGE_MS - 60_000));
+    const copies = join(home, "av-events", "proactive");
+    const scripts = join(home, "scripts");
+    mkdirSync(copies, { recursive: true });
+    mkdirSync(scripts, { recursive: true });
+    for (const name of ["preview-AbC123", "preview-young1", "preview-toolong7", "keep-AbC123"]) {
+      mkdirSync(join(copies, name));
+      writeFileSync(join(copies, name, "heartbeat-state.json"), "{}");
+    }
+    for (const name of ["preview-AbC123", "preview-toolong7", "keep-AbC123"]) old(join(copies, name));
+    for (const name of ["agentvillage_proactive_preview-brief.sh", "agentvillage_proactive_preview-tpl-evening-ask.sh", "agentvillage_proactive_preview-other.sh", "agentvillage_proactive_brief.sh"]) {
+      writeFileSync(join(scripts, name), "#!/bin/sh\n");
+      old(join(scripts, name));
+    }
+    writeFileSync(join(scripts, "agentvillage_proactive_preview-negotiation.sh"), "#!/bin/sh\n");
+    symlinkSync("/etc", join(copies, "preview-link01"));
+    expect(prunePreviewFiles(home, now)).toEqual({ copies: 1, shims: 2 });
+    expect(existsSync(join(copies, "preview-AbC123"))).toBe(false);
+    for (const name of ["preview-young1", "preview-toolong7", "keep-AbC123", "preview-link01"]) expect({ name, kept: existsSync(join(copies, name)) }).toEqual({ name, kept: true });
+    expect(existsSync(join(scripts, "agentvillage_proactive_preview-brief.sh"))).toBe(false);
+    expect(existsSync(join(scripts, "agentvillage_proactive_preview-tpl-evening-ask.sh"))).toBe(false);
+    for (const name of ["agentvillage_proactive_preview-other.sh", "agentvillage_proactive_brief.sh", "agentvillage_proactive_preview-negotiation.sh"]) {
+      expect({ name, kept: existsSync(join(scripts, name)) }).toEqual({ name, kept: true });
+    }
+    expect(readFileSync(join(copies, "preview-young1", "heartbeat-state.json"), "utf8")).toBe("{}");
+    // No directories at all: nothing to do, no throw.
+    expect(prunePreviewFiles(join(home, "nowhere"), now)).toEqual({ copies: 0, shims: 0 });
   });
 });

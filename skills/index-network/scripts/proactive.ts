@@ -78,7 +78,7 @@ import { type LockOptions, LockStuck, LockTimeout, releaseHeldLocks, withStateLo
 import { writeStateFile } from "./state-file";
 import { followUp } from "./summarize-negotiations";
 import { backfillAnnounced, clearStage, dueSubjects, listAcceptedConnections, outcomeQuestion, readAskedIds, recordAttempt, stageFor, writeStage } from "./outcome-ask";
-import { type Delivery, deliveryFor, inWindow, isTeamTenant, minuteOfDay, readJobSettings } from "./job-settings";
+import { type Delivery, deliveryFor, inWindow, isTeamTenant, minuteOfDay, prunePreviewFiles, readJobSettings } from "./job-settings";
 
 /** The default jobs' actions, one per installer job (install_index.ts DIGEST_CRON_SPECS). */
 export const ACTIONS = ["prefetch", "brief", "drop-midday", "drop-evening", "negotiation", "evening"] as const;
@@ -806,19 +806,42 @@ async function runAgentAction(action: AgentAction, options: ProactiveOptions): P
   return { ...(healed ? { ...result, note: STATE_HEALED } : result), ...settings };
 }
 
+/** Private state copies a preview in this process is using, so the hard stop can remove them. */
+const previewCopies = new Set<string>();
+
+/**
+ * What the hard deadline does before it exits: release every state lock this
+ * process holds and remove every preview state copy it made (the normal
+ * path's `finally` never runs on that exit). Exported for the tests.
+ */
+export function hardStopCleanup(): void {
+  releaseHeldLocks();
+  for (const dir of [...previewCopies]) {
+    previewCopies.delete(dir);
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // pruned by the next preview or roll after an hour
+    }
+  }
+}
+
 /**
  * A team tenant's preview of an agent job's content path, now. Refused unless
  * AV_TEAM_TENANT=1 (checked here, whatever started the run). No window and no
  * day mark are read; nothing the real run reads is written: the state lock is
  * never taken, the content path runs against a private copy of the state file
- * (deleted afterwards), no record or day mark is applied and no outcome ask
- * is staged. The Script Output is the real run's.
+ * (deleted afterwards, by the hard stop too), no record or day mark is
+ * applied, no outcome ask is staged and no real stage is cleared. The Script
+ * Output is the real run's.
  */
 async function runPreview(action: ProactiveAction, options: ProactiveOptions): Promise<TriggerResult> {
   const home = homeDir(options);
   if (action === "prefetch") return silent("preview-not-agent-job");
   if (!isTeamTenant(home)) return silent("preview-refused");
   const now = (options.now ?? (() => new Date()))();
+  // Copies an earlier preview left when it was killed (by modification time, so the real clock).
+  prunePreviewFiles(home, Date.now(), { shims: false });
   let state: Record<string, unknown>;
   try {
     // A plain read: every write of the file is a rename, so no lock is needed to see a whole one.
@@ -830,6 +853,7 @@ async function runPreview(action: ProactiveAction, options: ProactiveOptions): P
   try {
     mkdirSync(proactiveDir(home), { recursive: true, mode: 0o700 });
     dir = mkdtempSync(join(proactiveDir(home), "preview-"));
+    previewCopies.add(dir);
     const stateFile = join(dir, "heartbeat-state.json");
     writePrivateJson(stateFile, state);
     const run: Run = { home, action, date: villageDate(now), now, options, stateFile, preview: true };
@@ -842,7 +866,10 @@ async function runPreview(action: ProactiveAction, options: ProactiveOptions): P
   } catch (err) {
     return silent(faultReason(err));
   } finally {
-    if (dir) rmSync(dir, { recursive: true, force: true });
+    if (dir) {
+      previewCopies.delete(dir);
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
 }
 
@@ -912,7 +939,7 @@ async function main(): Promise<void> {
   const preview = extra.includes("--preview");
   const exitCode = action === "prefetch" && !preview ? 1 : 0;
   const hardStop = setTimeout(() => {
-    releaseHeldLocks();
+    hardStopCleanup();
     appendRunLog(homeDir(), { action, decision: "silent", reason: "trigger-timeout", ...(preview ? { preview: true } : {}) });
     process.stderr.write(`proactive: ${action} trigger-timeout\n`);
     process.stdout.write(`${wakeLine(false, "trigger-timeout")}\n`, () => process.exit(exitCode));

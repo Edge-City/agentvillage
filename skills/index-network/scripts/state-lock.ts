@@ -164,6 +164,55 @@ export async function acquireStateLock(stateFile: string, options: LockOptions =
   }
 }
 
+/**
+ * Take the lock file at `path` now, without waiting: the lock, or null when a
+ * live holder has it. The same file, token and stale rule as acquireStateLock
+ * (a lock older than `staleMs`, or dated more than `staleMs` in the future, is
+ * taken over; one that cannot be removed throws LockStuck). For callers that
+ * must answer at once rather than wait (install/jobs.ts: a second command
+ * gets `busy`). The lock is released by `release()`, and by releaseHeldLocks.
+ */
+export function tryAcquireLock(path: string, options: { staleMs?: number; now?: () => number } = {}): HeldLock | null {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const staleMs = options.staleMs ?? LOCK_STALE_MS;
+  const now = options.now ?? Date.now;
+  const token = randomBytes(12).toString("hex");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (tryCreate(path, token, now())) {
+      const lock: HeldLock = {
+        path,
+        token,
+        release() {
+          held.delete(lock);
+          if (heldToken(path) === token) {
+            try {
+              unlinkSync(path);
+            } catch {
+              // already gone
+            }
+          }
+        },
+      };
+      held.add(lock);
+      return lock;
+    }
+    const observed = heldToken(path);
+    const age = ageMs(path, now());
+    // Gone between the two looks: try once more.
+    if (age === null) continue;
+    if (age <= staleMs && age >= -staleMs) return null;
+    // Stale: remove only the file judged stale, then try once more.
+    if (heldToken(path) === observed) {
+      try {
+        unlinkSync(path);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw new LockStuck();
+      }
+    }
+  }
+  return null;
+}
+
 /** One macrotask turn: unlike a resolved promise, it lets due timers run. */
 function yieldToEventLoop(): Promise<void> {
   return new Promise<void>((resolve) => setImmediate(resolve));

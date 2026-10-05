@@ -4,14 +4,14 @@
  * template actions, the team-only preview, and the shim's new names.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { BriefOpportunity, DailyBriefContext } from "../build-daily-brief-context";
-import { deliveryFor, jobSettingsPath, readJobSettings } from "../job-settings";
+import { PREVIEW_MAX_AGE_MS, deliveryFor, jobSettingsPath, minuteOfDay, readJobSettings } from "../job-settings";
 import { stagePath } from "../outcome-ask";
-import { type ProactiveOptions, RUNS_KEY, deliveryGate, inBriefWindow, runProactive } from "../proactive";
+import { type ProactiveOptions, RUNS_KEY, deliveryGate, hardStopCleanup, inBriefWindow, runProactive, villageMinuteOfDay } from "../proactive";
 import { lockPathFor } from "../state-lock";
 
 const DATE = "2026-10-12";
@@ -97,6 +97,23 @@ describe("no settings file: rc13, unchanged", () => {
         if (deliveryGate(deliveryFor(key, absent), at) !== null) throw new Error(`${key} gated at minute ${minute}`);
       }
     }
+  });
+
+  test("every 30 seconds over 48 hours, every job decides exactly as on origin/main (only the brief gated, on inBriefWindow)", () => {
+    const absent = readJobSettings(home);
+    const start = Date.UTC(2026, 9, 4, 0, 0, 0);
+    let checked = 0;
+    for (let t = start; t < start + 2 * 86_400_000; t += 30_000) {
+      const now = new Date(t);
+      for (const key of ["brief", "drop-midday", "drop-evening", "negotiation", "evening"] as const) {
+        const gate = deliveryGate(deliveryFor(key, absent), now);
+        const before = key === "brief" && !inBriefWindow(now) ? "outside-window" : null;
+        if ((gate?.reason ?? null) !== before || (gate && "settings" in gate)) throw new Error(`${key} differs at ${now.toISOString()}`);
+        checked++;
+      }
+      if (villageMinuteOfDay(now) !== minuteOfDay(now, "Asia/Kolkata")) throw new Error(`village clock differs at ${now.toISOString()}`);
+    }
+    expect(checked).toBe(5 * 2 * 2880);
   });
 
   test("the same wake lines, state and log line as rc13: no settings field anywhere", async () => {
@@ -292,6 +309,19 @@ describe("the preview: team tenants only, nothing written that the real run read
     expect(last((await runProactive("negotiation", options({ lock: { waitMs: 1, pollMs: 1 } }))).lines)).toEqual({ wakeAgent: false, reason: "state-locked" });
   });
 
+  test("an evening preview leaves a real run's outcome-ask stage byte for byte (only the real evening job clears it)", async () => {
+    process.env.AV_TEAM_TENANT = "1";
+    process.env.AV_EVENTS_TOKEN = "test-token";
+    mkdirSync(join(home, "av-events", "proactive"), { recursive: true });
+    const stage = '{"v":1,"opportunityId":"0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d","from":"the real evening job, its model still writing"}\n';
+    writeFileSync(stagePath(home), stage);
+    for (const accepted of [async () => [], async () => [{ ...card("Arjun Mehta", "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d"), status: "accepted" }]]) {
+      const result = await runProactive("evening", options({ now: () => AFTERNOON, preview: true, accepted: accepted as ProactiveOptions["accepted"] }));
+      expect(result.preview).toBe(true);
+      expect(readFileSync(stagePath(home), "utf8")).toBe(stage);
+    }
+  });
+
   test("the evening preview with an outcome ask due stages nothing and records no attempt", async () => {
     process.env.AV_TEAM_TENANT = "1";
     process.env.AV_EVENTS_TOKEN = "test-token";
@@ -303,6 +333,38 @@ describe("the preview: team tenants only, nothing written that the real run read
     expect(JSON.parse(result.lines.slice(0, -1).join("\n")).outcomeQuestion).toBe("Did you and Arjun Mehta meet? Reply met, not useful, or missed.");
     expect(existsSync(stagePath(home))).toBe(false);
     expect(readFileSync(stateFile(), "utf8")).toBe(before);
+  });
+
+  test("the hard deadline removes the preview's state copy (its finally never runs on that exit)", async () => {
+    process.env.AV_TEAM_TENANT = "1";
+    let release: () => void = () => {};
+    let entered: () => void = () => {};
+    const inside = new Promise<void>((resolve) => { entered = resolve; });
+    const drop = async () => {
+      entered();
+      await new Promise<void>((resolve) => { release = resolve; });
+      return { opportunity: card("Arjun", "op2") };
+    };
+    const running = runProactive("drop-midday", options({ preview: true, drop: drop as ProactiveOptions["drop"] }));
+    await inside;
+    const copies = () => readdirSync(join(home, "av-events", "proactive")).filter((name) => name.startsWith("preview-"));
+    expect(copies()).toHaveLength(1);
+    hardStopCleanup();
+    expect(copies()).toEqual([]);
+    release();
+    await running;
+    expect(copies()).toEqual([]);
+  });
+
+  test("a preview first prunes state copies a killed preview left more than an hour ago", async () => {
+    process.env.AV_TEAM_TENANT = "1";
+    const dir = join(home, "av-events", "proactive");
+    mkdirSync(join(dir, "preview-Killed"), { recursive: true });
+    mkdirSync(join(dir, "preview-Recent"), { recursive: true });
+    const old = new Date(Date.now() - PREVIEW_MAX_AGE_MS - 60_000);
+    utimesSync(join(dir, "preview-Killed"), old, old);
+    expect((await runProactive("negotiation", options({ preview: true }))).woke).toBe(true);
+    expect(readdirSync(dir).filter((name) => name.startsWith("preview-")).sort()).toEqual(["preview-Recent"]);
   });
 
   test("the prefetch has no preview", async () => {

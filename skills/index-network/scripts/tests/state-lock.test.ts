@@ -6,11 +6,11 @@
  * be stopped from inside its own process (that was the bug).
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { acquireStateLock, lockPathFor } from "../state-lock";
+import { LockStuck, acquireStateLock, lockPathFor, tryAcquireLock } from "../state-lock";
 
 const CHILD = join(import.meta.dir, "fixtures", "lock-wait-child.ts");
 const KILL_AFTER_MS = 6_000;
@@ -93,5 +93,37 @@ describe("the wait always yields and always has a deadline", () => {
     lock.release();
     const again = await acquireStateLock(stateFile, { waitMs: 50, pollMs: 5 });
     again.release();
+  });
+});
+
+describe("tryAcquireLock: the same lock file and stale rule, answered at once (install/jobs.ts)", () => {
+  test("free: taken; held: null at once, the holder's file untouched; released: free again", () => {
+    const path = join(home, "av-events", "jobs.lock");
+    const first = tryAcquireLock(path);
+    expect(first).not.toBeNull();
+    const started = Date.now();
+    expect(tryAcquireLock(path)).toBeNull();
+    expect(Date.now() - started).toBeLessThan(100);
+    expect(JSON.parse(readFileSync(path, "utf8")).token).toBe(first!.token);
+    first!.release();
+    expect(existsSync(path)).toBe(false);
+    const second = tryAcquireLock(path);
+    expect(second).not.toBeNull();
+    second!.release();
+  });
+
+  test("a stale lock (old, or dated in the future) is taken over; one that cannot be removed throws LockStuck", () => {
+    const path = join(home, "av-events", "jobs.lock");
+    mkdirSync(join(home, "av-events"), { recursive: true });
+    for (const when of [old, new Date(Date.now() + 3_600_000)]) {
+      writeFileSync(path, JSON.stringify({ token: "dead", pid: 1 }));
+      utimesSync(path, when, when);
+      const lock = tryAcquireLock(path);
+      expect(lock).not.toBeNull();
+      lock!.release();
+    }
+    mkdirSync(path);
+    utimesSync(path, old, old);
+    expect(() => tryAcquireLock(path)).toThrow(LockStuck);
   });
 });

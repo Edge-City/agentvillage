@@ -50,9 +50,13 @@
  * (`install/jobs.ts add`, named `Edge — template: <name>`) is kept by
  * reconcile while its template is in TEMPLATE_NAMES: its shape is edited like
  * a default job's, its schedule and pause state are never touched, and it is
- * never created here. A job of a retired template is removed with the other
- * retired names. A default job with an entry in `av-events/job-settings.json`
- * is admin-managed: the legacy schedule migration below skips it.
+ * never created here. Any job named exactly `Edge — template: <name>` is
+ * adopted, a resident's own included (its prompt and script are rewritten); a
+ * near name (`Edge — template: Brief`) is removed like any retired `Edge —`
+ * name. A job of a retired template is removed with the other retired names.
+ * A default job with an entry in `av-events/job-settings.json`, or named in
+ * its `adminSchedules`, is admin-managed: the legacy schedule migration below
+ * skips it. Preview leftovers older than an hour are pruned on every run.
  */
 
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -64,7 +68,7 @@ import { readFlag } from "./args";
 import { upsertEnvVar } from "./env";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
 import { CRON_NAME_PREFIX, hermesHome } from "./paths";
-import { TEMPLATE_NAMES, type TemplateName, readJobSettings } from "../skills/index-network/scripts/job-settings";
+import { TEMPLATE_NAMES, type TemplateName, adminScheduleKeys, prunePreviewFiles, readJobSettings } from "../skills/index-network/scripts/job-settings";
 
 const PROD_MCP_URL = "https://protocol.index.network/mcp";
 const DEV_MCP_URL = "https://protocol.dev.index.network/mcp";
@@ -666,14 +670,22 @@ export function reconcileDigestCronJobs(
   const specNames = new Set(activeSpecs.map((s) => s.name));
   // J2: a job added from a current template is kept; a retired template's job is removed below.
   const templateNames = new Map(TEMPLATE_NAMES.map((template) => [templateJobName(template), template] as const));
-  // J2: a default job with a settings entry is admin-managed (the legacy
-  // schedule migration skips it); an unreadable file counts every job as managed.
+  // J2: a default job with a settings entry, or named in the file's
+  // `adminSchedules` (an admin set its schedule), is admin-managed: the legacy
+  // schedule migration skips it. An unreadable file, or an `adminSchedules`
+  // that is not a list of default job keys, counts every job as managed.
   const settings = readJobSettings(home);
+  const admin = adminScheduleKeys(settings);
   const adminManaged = (spec: DigestCronSpec): boolean => {
     const key = settingsKeyOf(spec);
     if (!key || settings.status === "absent") return false;
-    return settings.status === "invalid" || Object.prototype.hasOwnProperty.call(settings.jobs, key);
+    if (settings.status === "invalid" || admin.invalid) return true;
+    return Object.prototype.hasOwnProperty.call(settings.jobs, key) || (admin.keys as string[]).includes(key);
   };
+  // J2: preview leftovers older than an hour (state copies a killed preview
+  // left, preview shims); every `Edge — preview` job goes with the retired names below.
+  prunePreviewFiles(home, Date.now());
+
   // Stable per-tenant seed for schedule staggering. The tenant's own Index
   // API key never changes across reinstalls, so the derived minute is stable.
   const staggerSeed = process.env.INDEX_API_KEY?.trim() || readPersistedEnvVar("INDEX_API_KEY");
