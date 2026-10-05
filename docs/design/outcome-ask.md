@@ -1,267 +1,270 @@
-# The outcome ask: `outcome.asked` and the resident's answer (DATA-42, overlay half)
+# The evening outcome ask: `outcome.asked` and the resident's answer (DATA-42, overlay half)
 
-Status: design note, 2026-10-05, for a ruling before any code. Stacked on PR #196
-(brief-lite). Data-repo references are to `agentvillage-data` origin/main; Hermes
-references are to `~/.hermes/hermes-agent` at tag `v2026.9.24`.
+Status: **as built**, 2026-10-05, after the orchestrator's rulings on the design note (R2 and
+rulings 1 to 7). Data-repo references are to `agentvillage-data` origin/main. Hermes references are
+to `~/.hermes/hermes-agent` at tag `v2026.9.24`.
 
-## 0. Read this first: the evening job asks no outcome question today
+## What changed from the design note
 
-The premise was that the 19:00 evening-questions job asks "did you meet, was it
-useful?". On the base branch it does not. `askQuestions` picks a **pending**
-opportunity that has not been acted on (`skills/index-network/scripts/ask-questions.ts:127-143`),
-`eveningView` hands the model a name and two links (`proactive.ts:360-368`), and the
-prompt asks for "one warm line saying this person is still waiting to hear from the
-user" (`skills/edge-esmeralda/prompts/ask-questions.md:9`). That is a reminder about a
-match. Nothing has happened yet that could have an outcome. An `outcome.asked` on it
-would be false.
+On the base branch the 19:00 evening job asked no outcome question. It reminded the resident about
+a *pending* match. The only outcome question was the 14:00 follow-up's line under each new
+connection, "After you follow up, reply met, not useful, or missed", and one message could name up
+to six people. Ruling R2 made the evening job the outcome ask and removed that line, so at most one
+question is ever open.
 
-The only outcome question the agent asks today is at 14:00. The people follow-up lists
-newly **accepted** connections (`summarize-negotiations.ts:395-396`, each listed once,
-`:410`). The prompt then adds, after each one, "After you follow up, reply met, not
-useful, or missed" (`prompts/negotiation-summary.md:26`). One message can name up to six
-people (`LIST_MAX`, `proactive.ts:70`). This is the catalogue's `connection_followup`
-ask (`research/catalogue.md:100`, `B.connections_met`). Also: the DATA-42 task itself
-is marked "CUT 2026-09-28 to the fallback: manual outcome.reported endpoint + operator
-broadcast" (its notes, line 36).
+## 1. The ask (the trigger's half)
 
-So the first ruling needed is **which message is the ask** (section 6). The mechanism
-below works the same whichever job it is.
+**Announcement date.** The 14:00 follow-up already records each newly accepted connection it
+announces, once (`negotiationSummary.reportedCompletedIds`). It now also records the village date
+it announced each one: `negotiationSummary.announcedOn`, in
+`skills/index-network/scripts/summarize-negotiations.ts` at the write near line 429. Connections
+reported before this change have no date. The evening run dates them "today", so they become due
+two days later (`backfillAnnounced`, `outcome-ask.ts:105`).
 
-## 1. What `outcome.asked@1` requires, and where each value comes from
+**The pick.** The evening action (`proactive.ts:626`, `eveningAction`) first tries the outcome ask
+(`outcomeAskDecision`, `proactive.ts:586`). A subject is due (`dueSubjects`, `outcome-ask.ts:138`)
+when all of these hold:
 
-The registration is `src/schemas/index.ts:1716-1727`:
+- the follow-up announced it `DUE_AFTER_DAYS` = 2 or more village days ago;
+- it is not in the plugin's asked ledger `av-events/proactive/outcome-asked.json`;
+- the trigger has not already staged it today;
+- the trigger has staged it on fewer than `MAX_ATTEMPTS` = 3 evenings;
+- its id can be an envelope id.
 
-- `message_hash` (required key, nullable string). Value: the plugin's keyed hash
-  (`Collector.keyed_hash`, `_collector.py:1124`) of the model's final reply in the
-  cron session. That is exactly the `content_hash` the same session's `message.out`
-  already carries (`__init__.py:186-232`), so the two join. It is **not** a hash of the
-  bytes Telegram showed. Unless `cron.wrap_response: false` is set, Hermes wraps the
-  delivered text in a "Cronjob Response: <name>" header and footer
-  (`cron/scheduler_delivery.py:1944-1963`). It can also prepend a fallback-model notice
-  (`cron/scheduler.py:2531-2535`). The overlay sets neither, and I could not check the
-  fleet's `config.yaml`. In `metadata` capture it is null, as `message.out`'s is.
-- `window_days` (required, int32, cast `::integer` in staging). Value: the number of
-  days the ask stays answerable under the answer rule in section 2. I propose `1`. The
-  task text says `outcome.unknown` after 7 days, but that is the server's timeout job,
-  which the plugin may not send (`src/evidence.ts:225-237`).
-- `asked_by` (required, open string; §4.1 vocabulary `outcome_cron | connection_followup`).
-  Value: `outcome_cron` for an evening ask, `connection_followup` for the 14:00 one.
-- Envelope `outcome_id` (required ref, `REQUIRED_REFS`, `index.ts:2419`; an id of
-  `^[A-Za-z0-9._:-]{1,128}$`). Value: deterministic per subject,
-  `opp-outcome:<opportunity_id>`. A re-ask, the 14:00 and 19:00 asks about one person,
-  and the answer all land on one outcome object. `core.outcomes` takes the earliest
-  ask (`dbt/models/core/outcomes.sql`, `asked` CTE).
-- Envelope `opportunity_id`: the Index opportunity id the trigger picked. It is the
-  same raw object id the Index poller stamps (`src/jobs/index-poller.ts:3191`), so
-  `opportunity_outcome` (`dbt/models/core/opportunity_outcome.sql`) links the outcome.
-  The funnel then reaches the intention through the opportunity (`marts/intention_funnel.sql:498-500`).
-  No `intention_id` is sent: the trigger does not know it, and guessing one would take
-  ownership away from that path (pref 1 beats pref 3).
-- `evidence_class`: the plugin's default `agent_report`. Asks never classify, so the
-  class does not matter (`outcomes.sql`, header).
-- `session_id`, `run_id`: from the cron session. Hermes's `task_id` is
-  `cron:<job_id>:<execution_id>` (`cron/scheduler.py:2302`), which also gives the
-  execution id.
+The oldest announcement goes first, then the lowest id. Only when something is due does the
+evening read Index (`list_opportunities`, status `accepted`). It then takes the first due subject
+that Index still lists as accepted.
 
-**The hand-off.** The trigger knows the subject. The plugin sees the reply. A pre-run
-script gets no job or execution id in its environment (`cron/scheduler_script.py`,
-`build_subprocess_env`), so the link is by action name and time:
+**The question.** The name goes through `cleanName`, the same path as every other name. The
+Script Output is `{job: "evening-note", date, outcomeQuestion}`, and `outcomeQuestion` is exactly
+`Did you and <name> meet? Reply met, not useful, or missed.` (`outcomeQuestion`,
+`outcome-ask.ts:49`). The evening prompt (`skills/edge-esmeralda/prompts/ask-questions.md`) says to
+deliver it word for word and nothing else. It keeps the Script Error line every prompt now carries.
+The text is scanned with the rest of the Script Output as before. The trigger's cleaning and
+scanning are unchanged.
 
-1. Trigger (`proactive.ts`, the asking action only). When it wakes the model, inside
-   the existing lock and next to `markDone` (`proactive.ts:479-480`), it writes
-   `$HERMES_HOME/av-events/proactive/outcome-ask-<action>.json`. The file is 0600,
-   written by temp file and rename (the existing `writePrivateJson`). Contents:
-   `{v, action, date, staged_at, asked_by, window_days, subjects: [{outcome_id, opportunity_id}]}`.
-   Ids only, no names. The pick function returns its `opportunityId` (one added field,
-   `ask-questions.ts:96-105` drops it today). Cleaning and scanning are not touched.
-2. Plugin, `post_llm_call` of a cron session. It acts only when the job id is in
-   `installed_jobs.json`, `jobs.json` gives it the installer's name for that action
-   (`_cron.py` helpers, as for `cron.run`), and a stage file for the action exists
-   with `staged_at` under 15 minutes old. Then it **renames** the stage file to
-   `outcome-ask-armed/<execution_id>.json` and adds the message hash. The rename is
-   atomic, so the gateway and an external cron worker cannot both take it.
-3. Plugin, the flusher's cron tail (`_collector.py:1162-1171`). When that execution's
-   terminal ledger row appears, it emits one `outcome.asked` per subject and deletes
-   the armed file. This happens only when `delivery_outcome` is `delivered` or `queued`,
-   or is null with `status = completed` on a Hermes without the column. The scheduler
-   writes the outcome at `cron/scheduler.py:3076-3091`.
+**Falling back.** The evening writes today's reminder, exactly as before, in each of these cases.
+None of them records anything about the subject, which stays due:
 
-Edge cases:
+- nothing is due;
+- Index cannot be read;
+- the due connection is no longer listed;
+- the name does not clean.
 
-- **`[SILENT]`** (`_messages.is_silent`, the same test Hermes applies at
-  `scheduler.py:2985-2993`): the stage file is deleted at step 2 and nothing is armed.
-  Log code `outcome_ask_silent`.
-- **Delivery failed, suppressed or `not_configured`**: the armed file is deleted at
-  step 3 with no event. The code goes to the log.
-- **The run dies before `post_llm_call`**: the stale stage file is ignored after 15
-  minutes and overwritten by the next stage.
-- **A process exits between steps**: armed files are on disk, and the next process's
-  tail finishes them. Armed files older than 72 hours are dropped, the same horizon
-  the tail uses (`_cron.py`, `pending_runs`).
-- **Two triggers race**: same action, same day, the second is `done-today`
-  (`proactive.ts:472`) and stages nothing. Catch-up runs of different jobs back to
-  back (`cron.catch_up_missed`) use separate files per action, bound by job name. A
-  crash between buffering the event and deleting the file can send a second
-  `outcome.asked` with a new uuid7. It has the same `outcome_id`, and `core.outcomes`
-  keeps the earliest, so it does no harm.
+The reason is a code in `triggers.jsonl` (`detail`: `outcome-ask`, `outcome-ask-none-due`,
+`outcome-ask-index-unavailable`, `outcome-ask-not-listed`, `outcome-ask-name-withheld`).
 
-One subject-loss caveat: the trigger marks the subject as used when it wakes the
-model, as every job does today (`proactive.ts:21`). A silent or failed run then loses
-that ask. I propose accepting this for v1.
+**The stage file.** When the trigger wakes the model with the question, it writes
+`av-events/proactive/outcome-ask-evening.json` (`writeStage`, `outcome-ask.ts:179`). The file is
+0600 in a 0700 directory, written by temp file and rename. It holds ids only:
+`{v, action, date, staged_at, asked_by: "outcome_cron", window_days: 1, subjects: [{outcome_id, opportunity_id}]}`,
+with `outcome_id` = `opp-outcome:<opportunity id>`.
 
-## 2. The answer
+The write happens inside the state lock, just before the day mark (`proactive.ts:701`). A stage
+that cannot be written leaves the run silent with the day unmarked. The run records the attempt
+(`outcomeAsk.attempts`), not an ask.
 
-**What carries it.** `outcome.reported@1` (`index.ts:1729-1741`): `value` (open string;
-§4.1 `met | useful | not_useful | missed | did_not_happen`), `matcher_version`, and the
-envelope's `outcome_id` and `in_reply_to_event_id`. `outcome_id` is deliberately not
-required (`index.ts:2420-2423`): an answer that cannot say which ask it answers is
-still stored, and skipped by `core.outcomes`. There is no `outcome.answered`.
+Every evening run first removes any stage left by an earlier run (`clearStage`, `proactive.ts:629`).
+Without that, a reminder written later could be armed as an ask. Two triggers racing leave one
+stage: the second is `done-today` under the lock. The once-per-day mark now counts a mark of today
+or tomorrow (`doneToday`, `proactive.ts:244`), so a clock that moved back is silent and stages
+nothing. A corrupt state file is renamed aside (`readStateHealing`, `proactive.ts:197`). The run
+then starts from empty, which drops the announcement dates and attempts with it, and nothing is
+due until the follow-up announces again.
 
-**Can the overlay emit it honestly?** Yes, as the resident's own word. The plugin
-claims `evidence_class: self_report` with `actor: participant`, which is below the
-plugin cap, so the class is stored as sent (`evidence.ts`, `capFor`). The schema
-already keeps it from touching the verified measure:
+## 2. Arm, confirm, emit (the plugin's half)
 
-- `reported` maps only to `reported_useful` or `not_useful` (`outcomes.sql:125`).
-- `verified_useful` requires an `outcome.verified` at `platform_record` or stronger,
-  from a corroborating token (`outcomes.sql:145-146`).
-- A plugin token may not send `outcome.verified`, `outcome.not_useful` or
-  `outcome.unknown` at all (`evidence.ts:225-237`).
+This is `plugins/av-events/_outcome_ask.py`, wired in `__init__.py:185-290` and
+`_collector.py:1199` (`outcome_tick`, run on the cron tail's one-minute cadence).
 
-No new field is needed to mark it.
+**Arm** (`arm`, `_outcome_ask.py:230`, from `post_llm_call`). Cron sessions are handled
+explicitly: arming runs only in a cron session (`_is_cron_session`), and only for a Hermes task id
+of the form `cron:<12 hex>:<32 hex>` (`cron/scheduler.py:2302`). The job must be the installer's
+"Edge — evening questions": its id has to be in `installed_jobs.json` and its name has to match
+exactly in `jobs.json`, the same test as for `cron.run`. A participant's job with the same name
+never arms.
 
-**How the agent knows a message is an answer.** The options:
+These cases remove the stage and arm nothing (codes `stale_stage`, `silent`):
 
-- (a) **Telegram reply-to.** Hooks get no reply id (`pre_llm_call` kwargs,
-  `agent/turn_context.py:757-769`). The only trace is the
-  `[Replying to your previous message: "…"]` prefix the gateway puts on the user text
-  (`gateway/run_inbound.py:1581-1590`). Matching the quote against the delivered text
-  needs the wrapper reproduced, and the hook may be handed the clean words. Unverified.
-  Few residents use reply. Wrong when the quote is truncated. It is a later precision
-  boost, not a mechanism.
-- (b) **The next resident message, matched strictly, in the plugin.** On a
-  participant `message.in` (not cron, not a subagent, not an injected turn; the
-  existing classification at `__init__.py:214-222`), normalise the whole message: lower case,
-  punctuation and emoji stripped, whitespace collapsed. Match it against a short fixed
-  table: `met`, `we met` → `met`; `useful` → `useful`; `not useful` → `not_useful`;
-  `missed` → `missed`; `did not happen`, `didn't happen` → `did_not_happen`. Only a
-  whole-message match counts. Cost: one small module and tests, no prompt change, no
-  tool, nothing new for the model. It is wrong when a bare "met" is about something
-  else (rare as a whole message). It misses sentences ("yes, great chat"): low recall,
-  high precision.
-- (c) **A tool the model calls** (`record_outcome(value)`). Better recall on
-  sentences. But it is the model's reading, not the resident's word (so
-  `agent_report`), and it can fire unprompted or credit the wrong person. It also needs
-  a new tool and edits on every prompt path, and its behaviour drifts with the model.
-- (d) **Buttons.** Hermes cron delivery sends plain text. Inline keyboards and callback
-  handling are gateway changes we do not own at the pinned tag. Not before Oct 11.
-- (e) **A server-side matcher over the archived text** (the data half). It would store
-  as `derived`, which is what DATA-42 AC #1's wording expects. But it works only for
-  consenting tenants in `full` capture, runs at the text loader's daily latency, and is
-  the other orchestrator's work. Its precision is the same as (b).
+- the stage is over 15 minutes old, or dated more than two minutes in the future;
+- the reply is Hermes's silence marker (`is_silent`, the same test as `scheduler.py:2985-2993`).
 
-**Recommendation: (b), one open ask at a time.** A reply counts only for the most
-recent delivered ask message. That message must have named exactly one subject, and
-the reply must come before the next ask message goes out and within 24 hours (hence
-`window_days: 1`). The plugin keeps that one open ask in
-`av-events/outcome-open.json`. On a match it emits `outcome.reported` with `value`,
-`matcher_version: outcome_reply_v1`, `self_report`, `actor: participant`, the ask's
-`outcome_id` and `opportunity_id`, and `in_reply_to_event_id` = the ask's event id, then
-closes the ask. A matching reply while the last ask named several people is emitted
-with `outcome_id` and `in_reply_to_event_id` null, which is AC #1's case. Nothing is
-emitted in `metadata` capture, because the value is derived from content. No text and
-no hash of the reply goes into the event: the reply's own `message.in` already carries
-its hash.
+Otherwise the stage is renamed to `av-events/outcome-ask/armed/<execution>.claim`. The rename is
+the claim, so two processes cannot both take it. The claim is then written as `<execution>.json`
+with the reply's keyed hash. The flusher's stale-stage sweep also removes a stage no run reached.
 
-## 3. Schema and data-repo changes
+**Confirm and emit** (`tick`, `_outcome_ask.py:380`). The tick holds an exclusive non-blocking
+`flock`, because every plugin-loading process ticks. It reads Hermes's executions ledger.
 
-No new registration and no payload change: both payloads above fit `@1` as registered.
-One data-repo change is needed, and it is not a schema change. The producer allowlist's
-`plugin` row (`src/evidence.ts:409-451`) lacks `outcome.asked` and `outcome.reported`.
-The comment at `:383-384` says §4.1 names the plugin for `outcome.asked` but the plugin
-"emits none". Until both are added, ingest stores every one of these events in
-quarantine as `producer_not_allowed` (`evidence.ts:223`). Quarantine drops nothing, and
-`bun run quarantine:replay` re-checks the allowlist with the original token's
-provenance (`src/ingest/replay.ts:155`), so events from Oct 11 can be re-admitted once
-the row lands. The proposal for `agentvillage-d4`:
+When the run is terminal, `completed` and `delivery_outcome` is `delivered` or `queued`, the tick
+does three things:
 
-- Add `"outcome.asked"` and `"outcome.reported"` to `PRODUCER_ALLOWLIST.plugin`.
-- Update `tests/token-class.test.ts`'s list of the plugin's emitted types, including
-  any new plugin module it reads.
-- Reword DATA-42 AC #1 from `derived` to `self_report`: a plugin token cannot store
-  `derived` for a non-structural type.
-- Confirm that quarantine rows are kept until replay.
+- emits one `outcome.asked` per subject;
+- records the subject in `av-events/proactive/outcome-asked.json`, the only thing that makes the
+  trigger treat a subject as asked;
+- removes the armed file.
 
-## 4. Before Oct 11, with no schema change
+On a Hermes without the column, any completed run counts. Every other end drops the armed file
+with no event (`not_delivered`), and the subject stays due the next evening: `failed`,
+`suppressed`, `not_configured`, a null outcome, or a `failed`/`unknown` status. An armed run the
+ledger never finishes is dropped after 72 hours.
 
-Can ship:
+The `outcome.asked@1` fields (`src/schemas/index.ts:1716-1727`):
 
-- The stage, arm and emit path for whichever message is ruled the ask.
-- The strict reply matcher.
-- Tests for both.
+- `message_hash`: the keyed hash of the model's reply, equal to that turn's `message.out`
+  `content_hash`. Null in `metadata` capture.
+- `window_days`: 1.
+- `asked_by`: `outcome_cron`.
+- Envelope `outcome_id` (required, `REQUIRED_REFS`) and `opportunity_id`, so
+  `opportunity_outcome` links it and the funnel reaches the intention through the opportunity.
+- `session_id` and `run_id`: the cron run's.
+- `occurred_at`: the ledger's `finished_at`.
+- `evidence_class`: `agent_report`. An ask never classifies.
+- `event_id`: a uuid7 derived from the execution and the outcome (`derived_uuid7`), so a second
+  process derives the same row.
 
-Events quarantine until the allowlist row lands, then replay.
+**The hash is of the reply, not of the Telegram text.** Unless `cron.wrap_response: false` is set,
+Hermes wraps a cron delivery in a "Cronjob Response: <name>" header and a footer
+(`cron/scheduler_delivery.py:1944-1963`). It may also prepend a fallback-model notice
+(`cron/scheduler.py:2531-2535`). The overlay sets neither, and the fleet's setting is unknown.
 
-Cannot ship:
+## 3. The answer
 
-- Ingest accepting the events on day one without d4's allowlist change.
-- `verified_useful` from anything the plugin does (by design).
-- `outcome.unknown` (the server's timeout job).
-- Reply-to precision, buttons, or recall on sentences.
+**Noting** (`_outcome_note_answer`, `__init__.py:262`, then `note_answer`). Only these turns are
+considered: the resident's own message (`pre_llm_call`) in a Telegram session whose Hermes chat
+type is `dm` (`HERMES_SESSION_CHAT_TYPE` from `gateway/session_context.py`, else the environment).
+Never these:
 
-## 5. Tests and the canary
+- a cron run;
+- a subagent's goal;
+- a turn Hermes injected;
+- another platform;
+- a group, channel or thread;
+- a chat whose type is unknown;
+- anything in `metadata` capture.
 
-**Bun** (`skills/index-network/scripts/tests/proactive.test.ts`, `ask-questions.test.ts`):
+The whole message is normalised: trimmed, case-folded, apostrophes dropped, other punctuation and
+emoji turned into spaces, whitespace collapsed. A leading `[Replying to …]` pointer, which Hermes
+adds to a Telegram reply (`gateway/run_inbound.py:1581-1590`), is removed first.
 
-- The asking action stages one 0600 file with the ids when it wakes.
-- It stages nothing when silent, `done-today`, `scan-blocked` or `name-withheld`.
-- The Script Output still carries no id.
-- The pick returns `opportunityId`.
+The normalised message must be one of these:
 
-**Pytest** (new `plugins/av-events/tests/test_outcome_ask.py`):
+| Normalised message | Value |
+|---|---|
+| `met`, `we met` | `met` |
+| `useful` | `useful` |
+| `not useful` | `not_useful` |
+| `missed` | `missed` |
+| `did not happen`, `didnt happen` | `did_not_happen` |
 
-- Arming: an installed evening job arms, and its hash equals the session's
-  `message.out` `content_hash`. A silent reply removes the stage. A stale stage, a job
-  id outside `installed_jobs.json`, or a participant job carrying the installer's name
-  arms nothing. Two collectors racing the rename arm once.
-- The tail: `delivered`/`queued` emits one `outcome.asked` per subject with every key.
-  `failed`/`suppressed`/`not_configured` emits none. An armed file survives a restart.
-  Files older than 72 hours are dropped. In `metadata` capture `message_hash` is null.
-- The matcher: the table, case and punctuation; sentences, injected, cron and subagent
-  turns ignored. A multi-subject ask gives null refs. A reply after the next ask or
-  after 24 hours gives nothing. `outcome.reported` carries `self_report`, `participant`
-  and `in_reply_to_event_id`. Nothing in `metadata` capture. No payload value equals
-  the reply text.
-- Kill switches and fail-open, as the existing suites do.
+A match is noted as a file holding the value, the time and the session and turn ids, and only
+while an ask might be open. Anything else is not an answer and writes nothing; "met, and it was
+great" is not an answer.
 
-**Live canary** (Carter's dogfood tenant, after the ruling's build is rolled):
+**Counting** (in `tick`). An answer note counts for the latest ask armed before it, and only when
+that ask meets all of these:
 
-1. Run the asking job with one known subject. `triggers.jsonl` shows `woke`, and the
-   stage file appears and then is gone.
-2. The buffer holds an `outcome.asked` whose `message_hash` equals that session's
-   `message.out` `content_hash`, with the right `outcome_id`, `opportunity_id` and
-   `asked_by`. The same execution's `cron.run` shows `delivery_outcome: delivered`.
-3. Reply `met` in Telegram. One `outcome.reported` (`self_report`) follows, whose
-   `in_reply_to_event_id` is the ask's event id.
-4. Make a run reply `[SILENT]`. It produces no `outcome.asked`.
-5. On the data side: `producer_not_allowed` quarantine rows until the allowlist lands.
-   After replay, one `core.outcomes` row with `reported_useful`, linked through
-   `opportunity_outcome`.
-6. Incidentally: whether `pre_llm_call` sees the reply-to prefix, for option (a) later.
+- it was delivered;
+- it named exactly one subject;
+- it is not yet answered;
+- the message came within 24 hours of it.
 
-## 6. Rulings needed
+It then emits `outcome.reported@1` (`src/schemas/index.ts:1729-1741`):
 
-1. **Which message is the ask.** Three choices:
-   - (R1) Instrument only the 14:00 follow-up as it is. No product change, but most
-     replies cannot be attributed when it names several people.
-   - (R2) Make the evening job the outcome ask, as DATA-42 described: one accepted
-     connection the follow-up announced at least two days earlier and not yet asked,
-     the prompt "Did you and <name> meet? Reply met, not useful, or missed."
-     Otherwise it falls back to today's reminder. Drop the "reply met, not useful, or
-     missed" clause from the 14:00 line, so that only one question is ever open.
-   - (R3) Both, accepting more unattributed replies.
+- `value` and `matcher_version: outcome_reply_v1`;
+- `evidence_class: self_report`, `actor: participant`;
+- the ask's `outcome_id` and `opportunity_id`;
+- `in_reply_to_event_id` = the ask's event id.
 
-   I recommend R2. It is a product change to the evening pick and two prompts. The
-   trigger's cleaning and scanning are untouched.
-2. The answer rule (b), with `window_days: 1`.
-3. Carry the allowlist proposal in section 3 to `agentvillage-d4`.
+There is no text and no hash of the reply. These cases emit nothing:
+
+- a note older than 24 hours;
+- a second answer to the same ask;
+- a note with no ask before it;
+- a note whose ask was never delivered.
+
+"Before the next ask" follows from "the latest ask armed before it". An answer sent after a newer
+ask went out belongs to the newer ask, never the older. An answer sent before the newer ask still
+belongs to its own ask, even when the tick sees it later. A note whose ask is armed but not yet
+confirmed waits for the confirmation.
+
+**Self-report never raises a verified measure.** `core.outcomes` maps `reported` only to
+`reported_useful` or `not_useful` (`dbt/models/core/outcomes.sql:125`). `verified_useful` needs an
+`outcome.verified` at `platform_record` or stronger from a corroborating token (`outcomes.sql:145-146`),
+and a plugin token may not send `outcome.verified` at all (`src/evidence.ts:225-237`).
+
+## 4. The data half
+
+No schema change and no new registration: both payloads fit `@1` as registered. The plugin's
+producer-allowlist row (`src/evidence.ts:409-451`) lacks `outcome.asked` and `outcome.reported`;
+`agentvillage-d4` has taken that change. **Until it is released, ingest quarantines both types as
+`producer_not_allowed`.** `quarantine:replay` re-checks the allowlist with the original token's
+provenance (`src/ingest/replay.ts:155`), so they are replayed after it.
+
+## 5. Switches, logs, files
+
+- `outcome_ask` in `AV_HOOKS_DISABLED` turns off arming, answers and the tick. A failure in any of
+  them never costs the turn's `message.*` event.
+- Logs carry codes and counts only: `outcome_ask armed`, `outcome_ask_tick asked=1 answered=1`,
+  and the trigger's `detail` codes.
+- Files, all under `$HERMES_HOME/av-events/`, ids, times and codes only:
+  - `proactive/outcome-ask-evening.json`: the stage, written by the trigger.
+  - `proactive/outcome-asked.json`: the asked ledger, written by the plugin and read by the trigger.
+  - `outcome-ask/armed/`, `outcome-ask/answers/`, `outcome-ask/asks.json` (delivered asks kept for
+    48 hours) and `outcome-ask/.lock`: the plugin's own.
+
+## 6. Tests and the canary
+
+**Bun:**
+
+- `skills/index-network/scripts/tests/outcome-ask.test.ts`:
+  - the question exactly, with the cleaned name, and the 0600 ids-only stage;
+  - each fallback, with the subject staying due;
+  - an unconfirmed ask due again, up to three evenings;
+  - an asked subject never asked again;
+  - an old stage removed;
+  - `done-today` leaving the earlier stage, and two racing triggers leaving one stage;
+  - the backfill.
+- `install/tests/proactive_jobs.test.ts`: the 14:00 prompt no longer asks; the evening prompt
+  carries the fixed sentence; no prompt of the six needs a tool call.
+- `delivery-cooldown.test.ts`: the follow-up records `announcedOn`.
+
+**Pytest** (`plugins/av-events/tests/test_outcome_ask.py`):
+
+- The ask:
+  - emitted only when the run is delivered or queued, with the hash equal to `message.out`'s;
+  - nothing on `[SILENT]`;
+  - nothing on any failed delivery, and the subject stays due;
+  - no delivery column means a completed run counts;
+  - a stale or future stage is removed;
+  - two runs arm one stage once;
+  - only the installer's evening job arms;
+  - cron sessions are handled explicitly;
+  - `metadata` capture sends a null hash;
+  - an armed run survives a restart;
+  - the kill switch; fail-open.
+- The answer:
+  - every value in the table, with the right ids and `self_report`;
+  - the note's keys;
+  - the reply pointer;
+  - "met, and it was great" and other sentences emit nothing;
+  - nothing after 24 hours;
+  - after a newer ask, it goes to the newer ask, never the older;
+  - an earlier answer keeps its own ask;
+  - no ask open; a second answer; an answer before confirmation; an undelivered ask;
+  - group, channel, thread or unknown chat; CLI, subagent and injected turns;
+  - nothing in `metadata` capture.
+
+**Live canary** (Carter's dogfood tenant, after the roll):
+
+1. Have an accepted connection announced at 14:00 two days earlier. At 19:00, `triggers.jsonl`
+   shows `detail: outcome-ask`, and the stage file appears and is gone within the run.
+2. The buffer holds one `outcome.asked` whose `message_hash` equals that session's `message.out`
+   `content_hash`. The same execution's `cron.run` shows `delivered`, and the subject is in
+   `outcome-asked.json`.
+3. Reply `met` in the DM. One `outcome.reported` follows with `in_reply_to_event_id` = the ask.
+4. Reply `met` again. Nothing more is emitted.
+5. On the data side, `producer_not_allowed` quarantine rows until d4's release. After the replay,
+   one `core.outcomes` row with `reported_useful`, linked through `opportunity_outcome`.
+6. Check one thing only a live gateway can show: that `HERMES_SESSION_CHAT_TYPE` reads `dm` inside
+   `pre_llm_call`. If it does not, no answer is ever noted.
