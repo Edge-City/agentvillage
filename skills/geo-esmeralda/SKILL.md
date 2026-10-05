@@ -1,7 +1,7 @@
 ---
 name: geo-esmeralda
 description: Applies ONLY to the previous Edge City popup, Edge Esmeralda 2026 (Healdsburg, CA) — Geo knowledge graph content, relations/ontology, attendee-authored writes, and raw history of the Edge Esmeralda 2026 main Telegram group. Must NOT be used for Edge City India (Mandrem, Goa, Oct 11 – Nov 1 2026) questions about chat, venues, geography, or what's happening; use it only when the user explicitly asks about Edge Esmeralda.
-version: 1.0.0
+version: 1.0.1
 author: Edge City
 tags: [edge-city, edge-esmeralda, geo, graph, community]
 required_environment_variables:
@@ -21,8 +21,10 @@ metadata:
 > Healdsburg, CA. You serve residents of **Edge City India** (Mandrem, Goa,
 > October 11 to November 1, 2026). Never use this skill to answer India
 > questions ("what's the village discussing", venues, "what's near X",
-> what's happening). For those, say you don't have that detail for Edge City
-> India yet and point the user to the Edge City portal or the organisers. Use
+> what's happening). India venues and logistics come from the `edge-india`
+> skill and India's live schedule from `edgeos`; there is no India chat history
+> here, so for "what's the village discussing" say you don't have it and point
+> the user to the Edge City portal or the organisers. Use
 > this skill only when the user explicitly asks about Edge Esmeralda, and frame
 > results as past.
 

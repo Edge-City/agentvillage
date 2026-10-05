@@ -19,6 +19,9 @@ export function skillsDir(): string {
 export const EDGE_SKILL_NAMES = [
   "index-network",
   "edgeos",
+  // Edge City India public village knowledge (the current event).
+  "edge-india",
+  // The previous popup, background only.
   "edge-esmeralda",
   "geo-esmeralda",
   "token-usage-audit",
@@ -29,5 +32,11 @@ export const EDGE_SKILL_NAMES = [
   // is available (tenants with `AV_RECORD_INTENTION` on); its text says so.
   "record-intention",
 ] as const;
+
+/**
+ * Generated skill directories the installer replaces instead of merging, so a
+ * document removed from the snapshot is removed from existing Hermes homes too.
+ */
+export const REPLACED_SKILL_DIRS = ["edge-india/references"] as const;
 
 export const CRON_NAME_PREFIX = "Edge —";

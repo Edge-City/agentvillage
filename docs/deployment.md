@@ -222,6 +222,19 @@ on it:
 12. Roll's dry run takes the tag (annotated, on `main`); then continue with
     the staged procedure.
 
+## India reference content (skills/edge-india)
+
+The village knowledge skill ships a snapshot of the public India wiki, Substack
+and website in `skills/edge-india/references/`. The sync workflow
+(`.github/workflows/sync-edge-india-references.yml`) keeps that snapshot on
+`main` current with the upstream indexer (`aromeoes/edge-agent-skill`), every
+15 minutes, refusing incomplete trees. Like every other file here, a resident
+gets it only at a tag and roll: merging, or a bot commit to the references, does
+not reach running agents. The optional `AV_INDIA_REFS_LIVE=1` (unset by
+default) lets the agent refresh the snapshot from `main` between rolls;
+`skills/edge-india/README.md` has the full freshness path and that decision.
+Rolling a tag that adds or changes this skill touches no seed files.
+
 ## The proactive jobs (DATA-314)
 
 Six scheduled jobs reach a resident or prepare for one. Each is triggered by a
