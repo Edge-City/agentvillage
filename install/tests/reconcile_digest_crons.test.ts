@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 
 import {
   DIGEST_CRON_SPECS,
+  PREFETCH_PROMPT,
   reconcileDigestCronJobs,
   staggeredSchedule,
 } from "../install_index";
@@ -106,7 +107,14 @@ function currentJob(spec: typeof DIGEST_CRON_SPECS[number], id: string): Record<
     schedule: { expr: staggeredSchedule(spec, SEED) },
   };
   if (spec.scriptFile) job.script = spec.scriptInstallName;
+  if (spec.noAgent) job.no_agent = true;
+  if (spec.failureDeliver) job.failure_deliver = spec.failureDeliver;
   return job;
+}
+
+/** A job as main left it before DATA-314: no proactive script, agent mode, no failure target. */
+function oldShapeJob(spec: typeof DIGEST_CRON_SPECS[number], id: string, prompt: string): Record<string, unknown> {
+  return { id, name: spec.name, prompt, schedule: { expr: staggeredSchedule(spec, SEED) } };
 }
 
 beforeEach(() => {
@@ -159,7 +167,15 @@ test("fresh install creates digest crons (no heartbeat or Plaza selfie) on their
   expect(signals).toContain("--script");
   expect(signals).toContain("agentvillage_memory_signal_gate.py");
   expect(prepare[2]).toBe(staggeredSchedule(PREPARE, SEED));
-  expect(prepare[3]).toBe("PREPARE_BODY");
+  expect(prepare[3]).toBe(PREFETCH_PROMPT);
+  expect(prepare).toContain("--no-agent");
+  expect(prepare).toContain("agentvillage_proactive_prefetch.sh");
+  expect(send).toContain("agentvillage_proactive_brief.sh");
+  expect(send).not.toContain("--no-agent");
+  for (const argv of [prepare, send, negotiation, evening, audit]) {
+    expect(argv[argv.indexOf("--failure-deliver") + 1]).toBe("local");
+  }
+  expect(readFileSync(join(home, "scripts", "agentvillage_proactive_evening.sh"), "utf8")).toContain("wakeAgent");
   expect(send[2]).toBe(staggeredSchedule(SEND, SEED));
   expect(send[3]).toBe("SEND_BODY");
   expect(negotiation[2]).toBe(staggeredSchedule(NEGOTIATION, SEED));
@@ -221,8 +237,8 @@ test("an existing Edge — Agent Plaza selfie cron is retired on reconcile", () 
 test("jobs still on old synchronized defaults get schedule-only migrations", () => {
   writeJobs([
     { id: "g1", name: SIGNALS.name, prompt: "SIGNALS_BODY", script: SIGNALS.scriptInstallName, schedule: { expr: SIGNALS.schedule } },
-    { id: "p1", name: PREPARE.name, prompt: "PREPARE_BODY", schedule: { expr: PREPARE.schedule } },
-    { id: "s1", name: SEND.name, prompt: "SEND_BODY", schedule: { expr: SEND.schedule } },
+    { ...currentJob(PREPARE, "p1"), schedule: { expr: PREPARE.schedule } },
+    { ...currentJob(SEND, "s1"), schedule: { expr: SEND.schedule } },
     currentJob(NEGOTIATION, "n1"),
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
@@ -243,8 +259,8 @@ test("jobs still on old synchronized defaults get schedule-only migrations", () 
 test("custom schedule is preserved; stale prompt gets a prompt-only edit", () => {
   writeJobs([
     currentJob(SIGNALS, "g1"),
-    { id: "p1", name: PREPARE.name, prompt: "OLD_BODY", schedule: { expr: "30 4 * * *" } },
-    { id: "s1", name: SEND.name, prompt: "SEND_BODY", schedule: { expr: "15 9 * * *" } },
+    { ...currentJob(PREPARE, "p1"), prompt: "OLD_BODY", schedule: { expr: "30 4 * * *" } },
+    { ...currentJob(SEND, "s1"), schedule: { expr: "15 9 * * *" } },
     currentJob(NEGOTIATION, "n1"),
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
@@ -255,11 +271,11 @@ test("custom schedule is preserved; stale prompt gets a prompt-only edit", () =>
   reconcileDigestCronJobs({ ...process.env });
 
   expect(cronCalls()).toEqual([
-    ["cron", "edit", "p1", "--prompt", "PREPARE_BODY"],
+    ["cron", "edit", "p1", "--prompt", PREFETCH_PROMPT],
   ]);
 });
 
-test("memory signal sync cron is recreated when its script path is stale", () => {
+test("memory signal sync cron gets its script back in place when its script path is stale", () => {
   writeJobs([
     { ...currentJob(SIGNALS, "g1"), script: undefined },
     currentJob(PREPARE, "p1"),
@@ -273,21 +289,14 @@ test("memory signal sync cron is recreated when its script path is stale", () =>
 
   reconcileDigestCronJobs({ ...process.env });
 
-  const calls = cronCalls();
-  expect(calls[0]).toEqual(["cron", "remove", "g1"]);
-  const create = calls[1];
-  expect(create[0]).toBe("cron");
-  expect(create[1]).toBe("create");
-  expect(create).toContain(SIGNALS.name);
-  expect(create).toContain("--script");
-  expect(create).toContain(SIGNALS.scriptInstallName);
+  expect(cronCalls()).toEqual([["cron", "edit", "g1", "--script", SIGNALS.scriptInstallName!]]);
 });
 
 test("stale prompt + old default schedule produce two independent edit calls", () => {
   writeJobs([
     currentJob(SIGNALS, "g1"),
     currentJob(PREPARE, "p1"),
-    { id: "s1", name: SEND.name, prompt: "OLD_BODY", schedule: { expr: SEND.schedule } },
+    { ...currentJob(SEND, "s1"), prompt: "OLD_BODY", schedule: { expr: SEND.schedule } },
     currentJob(NEGOTIATION, "n1"),
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
@@ -378,7 +387,7 @@ test("token usage audit cron is removed when no explicit schedule opts in", () =
   expect(cronCalls()).toEqual([["cron", "remove", "a1"]]);
 });
 
-test("token usage audit cron is recreated when its script path is stale", () => {
+test("token usage audit cron gets its script back in place when its script path is stale", () => {
   writeJobs([
     currentJob(SIGNALS, "g1"),
     currentJob(PREPARE, "p1"),
@@ -395,14 +404,7 @@ test("token usage audit cron is recreated when its script path is stale", () => 
 
   reconcileDigestCronJobs({ ...process.env });
 
-  const calls = cronCalls();
-  expect(calls[0]).toEqual(["cron", "remove", "a1"]);
-  const create = calls[1];
-  expect(create[0]).toBe("cron");
-  expect(create[1]).toBe("create");
-  expect(create).toContain(TOKEN_AUDIT.name);
-  expect(create).toContain("--script");
-  expect(create).toContain(TOKEN_AUDIT.scriptInstallName);
+  expect(cronCalls()).toEqual([["cron", "edit", "a1", "--script", TOKEN_AUDIT.scriptInstallName!]]);
 });
 
 test("a Hermes that rejects --schedule still gets the prompt update (degraded migration)", () => {
@@ -410,7 +412,7 @@ test("a Hermes that rejects --schedule still gets the prompt update (degraded mi
   writeJobs([
     currentJob(SIGNALS, "g1"),
     currentJob(PREPARE, "p1"),
-    { id: "s1", name: SEND.name, prompt: "OLD_BODY", schedule: { expr: SEND.schedule } },
+    { ...currentJob(SEND, "s1"), prompt: "OLD_BODY", schedule: { expr: SEND.schedule } },
     currentJob(NEGOTIATION, "n1"),
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
@@ -493,7 +495,7 @@ test("a participant's job named like an installer cron is not recorded as ours (
   expect(installedIds()).not.toContain(theirs.id);
 });
 
-test("a recreated cron records its new id, not the removed one (DATA-92)", () => {
+test("a job edited in place keeps its id in the record (DATA-92, DATA-314)", () => {
   process.env.HERMES_BIN = writeStatefulStubHermes(home);
   const ours = DIGEST_CRON_SPECS.map((spec, n) => currentJob(spec, `00000000000${n}`));
   const signals = ours[DIGEST_CRON_SPECS.indexOf(SIGNALS)];
@@ -502,8 +504,46 @@ test("a recreated cron records its new id, not the removed one (DATA-92)", () =>
 
   reconcileDigestCronJobs({ ...process.env });
 
-  const ids = installedIds();
-  expect(ids).not.toContain(signals.id as string);
-  expect(ids).toHaveLength(DIGEST_CRON_SPECS.length);
-  expect(ids).toContain(storedJobs().find((job) => job.name === SIGNALS.name)!.id);
+  expect(installedIds()).toEqual(ours.map((job) => job.id as string).sort());
+});
+
+test("an upgrade roll from the pre-DATA-314 jobs is one in-place edit per job: nothing removed, created or paused", () => {
+  writeJobs([
+    currentJob(SIGNALS, "g1"),
+    oldShapeJob(PREPARE, "p1", "OLD_PREPARE"),
+    oldShapeJob(SEND, "s1", "OLD_SEND"),
+    oldShapeJob(NEGOTIATION, "n1", "NEGOTIATION_OLD"),
+    oldShapeJob(EVENING, "e1", "EVENING_OLD"),
+    oldShapeJob(DROP_MIDDAY, "dm1", "DROP_OLD"),
+    oldShapeJob(DROP_EVENING, "de1", "DROP_OLD"),
+    { ...currentJob(TOKEN_AUDIT, "a1"), failure_deliver: undefined },
+  ]);
+
+  reconcileDigestCronJobs({ ...process.env });
+
+  const shape = (id: string, prompt: string, action: string) => [
+    "cron", "edit", id, "--prompt", prompt, "--script", `agentvillage_proactive_${action}.sh`, "--failure-deliver", "local",
+  ];
+  expect(cronCalls()).toEqual([
+    [...shape("p1", PREFETCH_PROMPT, "prefetch").slice(0, 7), "--no-agent", "--failure-deliver", "local"],
+    shape("s1", "SEND_BODY", "brief"),
+    shape("n1", "NEGOTIATION_BODY", "negotiation"),
+    shape("e1", "EVENING_BODY", "evening"),
+    shape("dm1", "DROP_BODY", "drop-midday"),
+    shape("de1", "DROP_BODY", "drop-evening"),
+    ["cron", "edit", "a1", "--failure-deliver", "local"],
+  ]);
+  // A second roll finds everything in shape.
+  writeJobs(DIGEST_CRON_SPECS.map((spec, n) => currentJob(spec, `job${n}`)));
+  writeFileSync(stubLog, "");
+  reconcileDigestCronJobs({ ...process.env });
+  expect(cronCalls()).toEqual([]);
+});
+
+test("a job switched to no_agent by hand goes back to agent mode", () => {
+  writeJobs(DIGEST_CRON_SPECS.map((spec) => ({ ...currentJob(spec, spec === SEND ? "s1" : `x${spec.schedule}`), ...(spec === SEND ? { no_agent: true } : {}) })));
+
+  reconcileDigestCronJobs({ ...process.env });
+
+  expect(cronCalls()).toEqual([["cron", "edit", "s1", "--agent"]]);
 });
