@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { DIGEST_CRON_SPECS, PREFETCH_PROMPT, PROACTIVE_SHIM, type DigestCronSpec } from "../install_index";
 import { SCAN_INVISIBLE_CHARS, cronScanHit } from "../../skills/index-network/scripts/proactive-text";
 import { ACTIONS } from "../../skills/index-network/scripts/proactive";
+import { outcomeQuestion } from "../../skills/index-network/scripts/outcome-ask";
 
 const SKILLS = join(import.meta.dir, "..", "..", "skills");
 
@@ -146,5 +147,15 @@ describe("the six proactive jobs (DATA-314)", () => {
     expect(brief).toContain("Always, as the last line of this part: `Connections: ` followed by `connections.link` exactly as given.");
     expect(brief).toContain("things are waiting for your yes or no in your approvals.");
     expect(brief).toContain("how they like their morning brief");
+  });
+
+  test("DATA-42: the 14:00 follow-up no longer asks how a connection went; the evening asks the one fixed question", () => {
+    const followUpPrompt = prompt(proactive.find((spec) => PROACTIVE[spec.name] === "negotiation")!);
+    expect(followUpPrompt).not.toMatch(/reply met|not useful|missed/i);
+    expect(followUpPrompt).toContain("Ask nothing about how it went");
+    const evening = prompt(proactive.find((spec) => PROACTIVE[spec.name] === "evening")!);
+    expect(evening).toContain("With `outcomeQuestion`: deliver it as the whole reply, word for word, and nothing else.");
+    expect(evening).toContain("`Did you and <name> meet? Reply met, not useful, or missed.`");
+    expect(outcomeQuestion("Maya")).toBe("Did you and Maya meet? Reply met, not useful, or missed.");
   });
 });

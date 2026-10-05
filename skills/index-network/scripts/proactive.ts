@@ -12,7 +12,9 @@
  *   drop-midday    12:00 / 17:00: one person waiting to hear from the resident.
  *   drop-evening
  *   negotiation    14:00: the people follow-up.
- *   evening        19:00: one pending conversation, or the last-day closeout.
+ *   evening        19:00: the outcome ask about one accepted connection the
+ *                  follow-up announced two or more days ago (outcome-ask.ts),
+ *                  else one pending conversation, or the last-day closeout.
  *
  * The script does every deterministic step, so the model only writes language
  * from the Script Output and never needs a tool:
@@ -54,6 +56,7 @@ import { cleanName, cleanText, cleanTitle, connectionsUrl, cronScanHit, envOrDot
 import { type LockOptions, LockStuck, LockTimeout, releaseHeldLocks, withStateLock } from "./state-lock";
 import { writeStateFile } from "./state-file";
 import { followUp } from "./summarize-negotiations";
+import { backfillAnnounced, clearStage, dueSubjects, listAcceptedConnections, outcomeQuestion, readAskedIds, recordAttempt, stageFor, writeStage } from "./outcome-ask";
 
 export const ACTIONS = ["prefetch", "brief", "drop-midday", "drop-evening", "negotiation", "evening"] as const;
 export type ProactiveAction = (typeof ACTIONS)[number];
@@ -85,6 +88,8 @@ export interface ProactiveOptions {
   evening?: typeof askQuestions;
   followUp?: typeof followUp;
   approvals?: (home: string) => number;
+  /** The evening outcome ask's read of accepted connections. */
+  accepted?: () => Promise<BriefOpportunity[]>;
 }
 
 export interface TriggerResult {
@@ -97,6 +102,8 @@ export interface TriggerResult {
   withheld?: number;
   /** A code for something the run repaired on its way (STATE_HEALED). */
   note?: string;
+  /** A code for which path an action took (the evening's outcome ask, or why it fell back). */
+  detail?: string;
 }
 
 /** The run renamed an unreadable state file aside and continued from an empty state. */
@@ -531,7 +538,16 @@ interface Run {
 }
 
 /** What an action decided: the view to wake on (and what to record with the day mark), or why to stay silent. */
-type Decision = { view: Record<string, unknown>; withheld: number; record?: (state: Record<string, unknown>) => Record<string, unknown> } | { silent: string; withheld?: number };
+type Decision =
+  | {
+      view: Record<string, unknown>;
+      withheld: number;
+      record?: (state: Record<string, unknown>) => Record<string, unknown>;
+      /** Runs holding the lock just before the day mark is written (the outcome ask's stage file); a throw keeps the run silent. */
+      beforeWake?: () => void;
+      detail?: string;
+    }
+  | { silent: string; withheld?: number; detail?: string };
 
 function contextOptions(home: string, date: string) {
   return {
@@ -561,11 +577,63 @@ async function dropAction(run: Run): Promise<Decision> {
   return view ? { view, withheld } : { silent: "name-withheld", withheld };
 }
 
+/**
+ * The evening outcome ask (DATA-42 R2), or why there is none tonight: a code,
+ * and the run falls back to the reminder. The subject is only ever recorded
+ * as staged (`outcomeAsk.attempts`); the plugin's asked ledger, written once
+ * the message was delivered, is what makes it asked.
+ */
+async function outcomeAskDecision(run: Run): Promise<Decision | { fallback: string; withheld?: number }> {
+  const path = stateFilePath(run.home);
+  let state: Record<string, unknown>;
+  try {
+    state = readState(path);
+  } catch {
+    return { fallback: "outcome-ask-state" };
+  }
+  const backfilled = backfillAnnounced(state, run.date);
+  if (backfilled.changed) {
+    writeStateFile(path, backfilled.state);
+    state = backfilled.state;
+  }
+  const asked = readAskedIds(run.home);
+  const due = dueSubjects(state, asked, run.date);
+  if (due.length === 0) return { fallback: "outcome-ask-none-due" };
+  let accepted: BriefOpportunity[];
+  try {
+    accepted = await (run.options.accepted ?? listAcceptedConnections)();
+  } catch {
+    return { fallback: "outcome-ask-index-unavailable" };
+  }
+  const listed = new Map(accepted.flatMap((card) => (card.opportunityId && card.status === "accepted" ? [[card.opportunityId, card] as const] : [])));
+  const id = due.find((candidate) => listed.has(candidate));
+  if (!id) return { fallback: "outcome-ask-not-listed" };
+  const w = new Withheld();
+  const name = w.name(listed.get(id)!.name);
+  // A name that does not clean: no ask tonight, and the subject stays due.
+  if (!name) return { fallback: "outcome-ask-name-withheld", withheld: w.count };
+  const stage = stageFor(id, run.date, run.now);
+  if (!stage) return { fallback: "outcome-ask-bad-id" };
+  return {
+    view: { job: "evening-note", date: run.date, outcomeQuestion: outcomeQuestion(name) },
+    withheld: w.count,
+    record: (latest) => recordAttempt(latest, id, run.date, asked),
+    beforeWake: () => writeStage(run.home, stage),
+    detail: "outcome-ask",
+  };
+}
+
 async function eveningAction(run: Run): Promise<Decision> {
+  // A stage left by an earlier run is never this run's: without this, a
+  // reminder written now could be armed as the ask.
+  clearStage(run.home);
+  const ask = await outcomeAskDecision(run);
+  if (!("fallback" in ask)) return ask;
+  const detail = ask.fallback;
   const result = await (run.options.evening ?? askQuestions)({ date: run.date, stateFile: stateFilePath(run.home) });
-  if ("silent" in result) return { silent: result.reason };
+  if ("silent" in result) return { silent: result.reason, detail };
   const { view, withheld } = eveningView(run.date, result);
-  return view ? { view, withheld } : { silent: "name-withheld", withheld };
+  return view ? { view, withheld, detail } : { silent: "name-withheld", withheld, detail };
 }
 
 async function negotiationAction(run: Run): Promise<Decision> {
@@ -623,14 +691,17 @@ async function runAgentAction(action: AgentAction, options: ProactiveOptions): P
       // An unreadable state file is renamed aside before anything is picked or written.
       if (doneToday(read(), action, run.date)) return silent("done-today");
       const decision = await AGENT_ACTIONS[action](run);
-      if ("silent" in decision) return silent(decision.silent, 0, decision.withheld);
+      const detail = decision.detail ? { detail: decision.detail } : {};
+      if ("silent" in decision) return { ...silent(decision.silent, 0, decision.withheld), ...detail };
       const text = scriptOutputText(decision.view);
       // Every field was scanned; this catches a hit spanning two of them.
-      if (cronScanHit(text)) return silent("scan-blocked", 0, decision.withheld);
+      if (cronScanHit(text)) return { ...silent("scan-blocked", 0, decision.withheld), ...detail };
       // The day is done from the moment the model is woken.
+      // A stage that cannot be written stops the wake before the day is marked.
+      decision.beforeWake?.();
       const latest = read();
       writeStateFile(stateFile, markDone(decision.record ? decision.record(latest) : latest, action, run.date));
-      return { lines: [text, wakeLine(true)], exitCode: 0, woke: true, reason: "woke", ...(decision.withheld ? { withheld: decision.withheld } : {}) };
+      return { lines: [text, wakeLine(true)], exitCode: 0, woke: true, reason: "woke", ...(decision.withheld ? { withheld: decision.withheld } : {}), ...detail };
     }, options.lock);
   } catch (err) {
     result = silent(faultReason(err));
@@ -682,6 +753,7 @@ export async function runProactive(action: ProactiveAction, options: ProactiveOp
     reason: reasonCode(result.reason),
     ...(result.withheld ? { withheld: result.withheld } : {}),
     ...(result.note ? { note: reasonCode(result.note) } : {}),
+    ...(result.detail ? { detail: reasonCode(result.detail) } : {}),
   });
   return result;
 }
