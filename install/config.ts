@@ -168,6 +168,113 @@ export function keepTelegramBacklogOnColdBoot(): void {
   console.log(`→ set platforms.telegram.extra.${TELEGRAM_COLD_BOOT_KEY}: false (keep Telegram backlog across restarts)`);
 }
 
+/** The village's zone: every schedule this overlay installs is written in it (DATA-314). */
+export const VILLAGE_TIMEZONE = "Asia/Kolkata";
+/** Names Hermes's zoneinfo resolves to the village's zone (the IANA link included). */
+const VILLAGE_ZONE_NAMES = new Set([VILLAGE_TIMEZONE, "Asia/Calcutta"]);
+
+/**
+ * Make Hermes run its cron schedules in village time (DATA-314, B1-fix F1).
+ *
+ * Hermes reads a schedule's hours in one zone (`hermes_time.py`, v2026.9.24):
+ * `HERMES_TIMEZONE`, then `timezone:` in `config.yaml`, else the host's local
+ * time; under the multiplexed gateway only `config.yaml` counts, and the
+ * gateway copies a configured `timezone` over `HERMES_TIMEZONE` at startup.
+ * Every schedule this overlay installs is written in village time, and the
+ * morning brief's trigger delivers only between 05:00 and 11:00 IST, so on a
+ * host whose Hermes zone is not IST the jobs fire at the wrong village hour
+ * and the brief is silent every day.
+ *
+ * - No zone configured (no `timezone` key, or an empty one, which is what
+ *   Hermes writes by default) and `HERMES_TIMEZONE` unset or the village
+ *   zone: writes `timezone: Asia/Kolkata`, logged in one line.
+ * - A zone configured that is not the village zone, in `config.yaml` or in
+ *   `HERMES_TIMEZONE` (process environment or `$HERMES_HOME/.env`, which
+ *   Hermes loads over it): changes nothing and prints one loud warning naming
+ *   the zone.
+ * A value set by hand is never overwritten. The file is also left alone, with
+ * a warning, when its top level is not a mapping or holds a YAML merge key, for
+ * the reason `keepTelegramBacklogOnColdBoot` gives. Idempotent: when nothing
+ * changes the file is not rewritten. Hermes reads the key at gateway start, so
+ * it takes effect at the restart that ends every install.
+ */
+export function configureVillageTimezone(): void {
+  let envZone: string | undefined;
+  try {
+    envZone = (dotenvFileValue("HERMES_TIMEZONE") ?? process.env.HERMES_TIMEZONE)?.trim() || undefined;
+  } catch {
+    envZone = process.env.HERMES_TIMEZONE?.trim() || undefined;
+  }
+  const doc: unknown = readConfig();
+  if (!isMapping(doc)) {
+    console.log("→ warning: the top level of config.yaml is not a mapping; left timezone unset");
+    return;
+  }
+  if ("<<" in doc) {
+    console.log('→ warning: YAML merge key "<<" at the top of config.yaml; left timezone unset (set it by hand if wanted)');
+    return;
+  }
+  const raw = doc.timezone;
+  const unset = raw === undefined || raw === null || (typeof raw === "string" && !raw.trim());
+  const wrong: string[] = [];
+  if (!unset && !(typeof raw === "string" && VILLAGE_ZONE_NAMES.has(raw.trim()))) {
+    wrong.push(`timezone in config.yaml is ${JSON.stringify(typeof raw === "string" ? raw.trim() : raw)}`);
+  }
+  if (envZone !== undefined && !VILLAGE_ZONE_NAMES.has(envZone)) wrong.push(`HERMES_TIMEZONE is ${JSON.stringify(envZone)}`);
+  if (wrong.length > 0) {
+    console.warn(
+      `!! WARNING: ${wrong.join(" and ")}, not ${VILLAGE_TIMEZONE}. The six proactive jobs will run at the wrong `
+      + `village time and the morning brief will be silent every day. Left as set; set ${VILLAGE_TIMEZONE} by hand to fix.`,
+    );
+    return;
+  }
+  if (!unset) {
+    console.log(`→ timezone already ${VILLAGE_TIMEZONE}; left as is`);
+    return;
+  }
+  doc.timezone = VILLAGE_TIMEZONE;
+  writeConfig(doc);
+  console.log(`→ set timezone: ${VILLAGE_TIMEZONE} (the proactive jobs' schedules are in village time)`);
+}
+
+/** Seconds a cron pre-run script may run before Hermes kills it. */
+export const CRON_SCRIPT_TIMEOUT_SECONDS = 120;
+/** Hermes's default (cron/scheduler.py _DEFAULT_SCRIPT_TIMEOUT). */
+export const HERMES_DEFAULT_SCRIPT_TIMEOUT = 3600;
+
+/**
+ * Set `cron.script_timeout_seconds` to 120 when it is unset, holds Hermes's
+ * own default of 3600 (a config save can write the default out), or is a
+ * number below 120 (DATA-314). The proactive triggers wait up to 60 s for the
+ * state lock and stop themselves at 100 s, so they need the script timeout at
+ * about 110 s or more; Hermes's default of an hour would let a hung call hold a
+ * job (and the state lock) far past its slot. Any other value an operator set
+ * is left as it is. Idempotent: when nothing changes the file is not
+ * rewritten.
+ */
+export function configureCronScriptTimeout(): void {
+  const doc = readConfig();
+  const raw = doc.cron;
+  if (raw !== undefined && raw !== null && (typeof raw !== "object" || Array.isArray(raw))) {
+    console.log("→ warning: cron in config.yaml is not a mapping; left cron.script_timeout_seconds unset");
+    return;
+  }
+  const cron = { ...((raw as Record<string, unknown>) ?? {}) };
+  const current = cron.script_timeout_seconds;
+  const seconds = typeof current === "number" ? current : typeof current === "string" && current.trim() ? Number(current) : Number.NaN;
+  const unset = current === undefined || current === null;
+  const lower = Number.isFinite(seconds) && seconds > 0 && seconds < CRON_SCRIPT_TIMEOUT_SECONDS;
+  // Hermes's own default (3600) written out by a config save counts as unset.
+  if (!unset && !lower && seconds !== HERMES_DEFAULT_SCRIPT_TIMEOUT) {
+    console.log(`→ cron.script_timeout_seconds already set (${String(current)}); left as is`);
+    return;
+  }
+  cron.script_timeout_seconds = CRON_SCRIPT_TIMEOUT_SECONDS;
+  doc.cron = cron;
+  writeConfig(doc);
+  console.log(`→ set cron.script_timeout_seconds: ${CRON_SCRIPT_TIMEOUT_SECONDS}`);
+}
+
 const DASHBOARD_PLUGIN = "dashboard-auth-edgecity";
 
 /** Enable the Edge City dashboard-auth plugin and public URL for hosted dashboards. */

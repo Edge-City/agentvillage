@@ -15,6 +15,7 @@ import {
   formatVillageTime,
   villageDayBounds,
   parseOpportunityTranscript,
+  portalEventsBase,
   selectEvents,
 } from "../build-daily-brief-context";
 import { FAKE_MCP_URL, FIXTURE, indexMcpFake, listOpportunitiesText, type ToolHandler } from "./index-mcp-fake";
@@ -95,6 +96,32 @@ describe("build-daily-brief-context helpers", () => {
 
     expect(selected.highlightedEvents).toEqual([]);
     expect(selected.interestEvents.map((event) => event.id)).toEqual(["e1", "e2", "e3"]);
+  });
+
+  test("R8: event links come from AV_PORTAL_URL in the environment, else $HERMES_HOME/.env, as the trigger reads it", () => {
+    const saved = { AV_PORTAL_URL: process.env.AV_PORTAL_URL, HERMES_HOME: process.env.HERMES_HOME };
+    const home = mkdtempSync(join(tmpdir(), "av-portal-"));
+    const events = [{ id: "e1", title: "Breakfast", start_time: "2026-06-04T16:00:00Z", highlighted: true, tags: [] }];
+    try {
+      delete process.env.AV_PORTAL_URL;
+      process.env.HERMES_HOME = home;
+      expect(portalEventsBase()).toBeNull();
+      expect(selectEvents(events, []).highlightedEvents[0].eventUrl).toBeNull();
+
+      writeFileSync(join(home, ".env"), "INDEX_API_KEY=x\nAV_PORTAL_URL=\"https://portal.example/events/\"\n");
+      expect(portalEventsBase()).toBe("https://portal.example/events");
+      expect(selectEvents(events, []).highlightedEvents[0].eventUrl).toBe("https://portal.example/events/e1");
+
+      // The environment wins over .env.
+      process.env.AV_PORTAL_URL = "https://env.example/events";
+      expect(selectEvents(events, []).highlightedEvents[0].eventUrl).toBe("https://env.example/events/e1");
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   test("parseOpportunityTranscript reads MCP prose cards", () => {

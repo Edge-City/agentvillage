@@ -35,7 +35,8 @@ import {
   readDeliveryLog,
 } from "./delivery-state";
 import { callIndexTool, indexMcpUrl, toolJsonArray, toolJsonObject } from "./index-mcp";
-import { portalEventsBaseUrl } from "./validate-digest-urls";
+import { envOrDotenv } from "./proactive-text";
+import { writeStateFile } from "./state-file";
 
 /**
  * Resolve the Index API key.
@@ -214,6 +215,13 @@ export interface DailyBriefContext {
    * is then 0: no count, and no claim that nothing new is waiting.
    */
   moreWaitingThanListed: boolean;
+  /**
+   * How many direct conversations waiting on the user are eligible to be
+   * offered today (not already sent today, not in their cooldown, not out of
+   * showings): a count only, for the morning brief (DATA-314). A lower bound
+   * when moreWaitingThanListed is true; null when today's list could not be read.
+   */
+  eligibleMatchCount: number | null;
   userModel: BriefUserModel;
   weather?: DailyBriefWeather;
   questions?: BriefQuestion[];
@@ -401,8 +409,18 @@ function eventVenue(event: EdgeEvent): string | null {
   return event.venue_title ?? event.custom_location_name ?? null;
 }
 
+/**
+ * The portal events base: `AV_PORTAL_URL` from the process environment, else
+ * `$HERMES_HOME/.env` (cron scripts may not inherit it), the same read as the
+ * trigger's portalBase (B1-fix2 R8). Without a trailing slash; null when unset.
+ */
+export function portalEventsBase(): string | null {
+  const home = process.env.HERMES_HOME?.trim() || process.cwd();
+  return envOrDotenv("AV_PORTAL_URL", home).replace(/\/+$/, "") || null;
+}
+
 function eventUrl(event: EdgeEvent): string | null {
-  const base = portalEventsBaseUrl();
+  const base = portalEventsBase();
   return base && event.id ? `${base}/${event.id}` : null;
 }
 
@@ -738,7 +756,7 @@ export async function writeDreamingDate(stateFile: string, date: string): Promis
     : {};
   dreaming.lastRunDate = date;
   parsed.dreaming = dreaming;
-  await Bun.write(stateFile, `${JSON.stringify(parsed, null, 2)}\n`);
+  writeStateFile(stateFile, parsed);
 }
 
 async function readIfExists(path: string): Promise<string> {
@@ -791,7 +809,7 @@ export async function pruneDeliveryLogFile(stateFile: string, date: string, list
   const pruned = pruneDeliveryLog(readDeliveryLog(state, date, realToday), date, listing);
   if (!deliveryLogChanged(state, pruned)) return;
   state[OPPORTUNITY_DELIVERY_KEY] = pruned;
-  await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
+  writeStateFile(stateFile, state);
 }
 
 /** Whole days from `earlier` to `later` (both YYYY-MM-DD); negative when `earlier` is after `later`. */
@@ -829,7 +847,7 @@ async function fetchOpenMeteoWeather(date: string): Promise<DailyBriefWeather> {
     start_date: date,
     end_date: date,
   });
-  const res = await fetch(`https://api.open-meteo.com/v1/forecast?${params.toString()}`);
+  const res = await fetch(`https://api.open-meteo.com/v1/forecast?${params.toString()}`, { signal: AbortSignal.timeout(sourceLimits.optionalMs) });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   const data = (await res.json()) as {
     daily?: { temperature_2m_max?: number[]; weather_code?: number[] };
@@ -861,6 +879,7 @@ async function fetchAnnouncements(date: string, warnings: string[]): Promise<{ s
   try {
     const res = await fetch(`${base}/brief/announcements?date=${encodeURIComponent(date)}`, {
       headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(sourceLimits.optionalMs),
     });
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
     const data = (await res.json()) as { announcements?: Array<{ id?: string; body?: string; priority?: number }> };
@@ -891,6 +910,7 @@ async function fetchEvents(date: string, interestTags: string[], warnings: strin
   try {
     const res = await fetch(`${edgeosBase()}/events/portal/events?${params.toString()}`, {
       headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(sourceLimits.optionalMs),
     });
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
     const data = (await res.json()) as { results?: EdgeEvent[] };
@@ -918,6 +938,7 @@ async function fetchRsvps(date: string, warnings: string[]): Promise<{ source: "
   try {
     const res = await fetch(`${edgeosBase()}/events/portal/events?${params.toString()}`, {
       headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(sourceLimits.optionalMs),
     });
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
     const data = (await res.json()) as { results?: EdgeEvent[] };
@@ -932,6 +953,13 @@ async function fetchRsvps(date: string, warnings: string[]): Promise<{ source: "
     return { source: "unavailable", rsvpEvents: [] };
   }
 }
+
+/**
+ * Each optional source (weather, announcements, the calendar, RSVPs) gets
+ * this long; a slow one degrades to "unavailable" and the brief goes out
+ * without it (DATA-314).
+ */
+export const sourceLimits = { optionalMs: 8_000 };
 
 /** Mandrem, Goa, India — Edge City India 2026 location. */
 const MANDREM_LAT = 15.66;
@@ -1038,7 +1066,10 @@ export async function buildDailyBriefContext(options: {
     interestTags,
   };
 
-  const [announcementResult, eventResult, rsvpResult, weather] = await Promise.all([
+  // The optional sources run in parallel with the Index read below, each
+  // time-boxed (sourceLimits.optionalMs; Index calls 20 s), so the slowest
+  // one bounds the build rather than their sum (DATA-314).
+  const optionalSources = Promise.all([
     fetchAnnouncements(date, warnings),
     fetchEvents(date, interestTags, warnings),
     fetchRsvps(date, warnings),
@@ -1103,6 +1134,8 @@ export async function buildDailyBriefContext(options: {
     }
   }
 
+  const [announcementResult, eventResult, rsvpResult, weather] = await optionalSources;
+
   const questions: BriefQuestion[] = [];
   const questionSource: "mcp" | "unavailable" = "unavailable";
 
@@ -1132,6 +1165,7 @@ export async function buildDailyBriefContext(options: {
     communityOpportunities,
     connectionsStillWaiting,
     moreWaitingThanListed,
+    eligibleMatchCount: opportunitySource === "unavailable" ? null : eligible.filter((opp) => opp.feedCategory === "connection").length,
     userModel,
     weather: weather.source !== "unavailable" ? weather : undefined,
     questions,

@@ -62,7 +62,9 @@ import {
   showingsFor,
   type PendingListing,
 } from "./delivery-state";
-import { callIndexTool, indexMcpUrl, toolJsonArray, toolJsonObject } from "./index-mcp";
+import { IndexMcpError, callIndexTool, indexMcpUrl, toolJsonArray, toolJsonObject } from "./index-mcp";
+import { cleanName } from "./proactive-text";
+import { writeStateFile } from "./state-file";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -169,7 +171,7 @@ export async function readJsonObject(path: string): Promise<Record<string, unkno
 }
 
 export async function writeJsonObject(path: string, data: Record<string, unknown>): Promise<void> {
-  await Bun.write(path, `${JSON.stringify(data, null, 2)}\n`);
+  writeStateFile(path, data);
 }
 
 // ── Core logic (injectable) ───────────────────────────────────────────────────
@@ -198,7 +200,7 @@ export async function summarizeNegotiations(opts: {
     allNegotiations = await fetchNegotiations();
   } catch (err) {
     process.stderr.write(
-      `negotiation-summary: MCP fetch failed — ${err instanceof Error ? err.message : String(err)}\n`,
+      `negotiation-summary: MCP fetch failed — ${failureCode(err)}\n`,
     );
     return { silent: true, reason: "mcp-fetch-failed" };
   }
@@ -251,7 +253,7 @@ export async function summarizeNegotiations(opts: {
       signals = await fetchSignals();
     } catch (err) {
       process.stderr.write(
-        `negotiation-summary: signal fetch failed — ${err instanceof Error ? err.message : String(err)}\n`,
+        `negotiation-summary: signal fetch failed — ${failureCode(err)}\n`,
       );
     }
   }
@@ -273,7 +275,18 @@ export async function summarizeNegotiations(opts: {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
-interface FollowUpCard {
+/**
+ * What a failure is logged as: an IndexMcpError's message, which is a code
+ * (`mcp-tool-error`, `mcp-http-503`), else the error's class name; never any
+ * other message, which can carry server text (DATA-314 B1-fix F14).
+ */
+export function failureCode(err: unknown): string {
+  if (err instanceof IndexMcpError && /^[a-z0-9][a-z0-9:_-]{0,63}$/.test(err.message)) return err.message;
+  const name = err instanceof Error ? err.name : typeof err;
+  return String(name).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40) || "unknown";
+}
+
+export interface FollowUpCard {
   name: string;
   headline: string;
   summary: string;
@@ -283,7 +296,9 @@ interface FollowUpCard {
 
 function followUpCard(opp: BriefOpportunity): FollowUpCard | null {
   const linked = attachIndexLinks(opp);
-  if (!linked.name) return null;
+  // A name that does not clean is never shown: such a card is neither listed,
+  // counted as a showing nor recorded as reported (DATA-314 B1-fix F5).
+  if (!linked.name || !cleanName(linked.name)) return null;
   const headline = linked.headline || linked.mainText || "New match";
   return {
     name: linked.name,
@@ -318,18 +333,32 @@ function deliveredTodayIds(state: Record<string, unknown>, date: string): Set<st
   return new Set(row.ids.filter((id): id is string => typeof id === "string"));
 }
 
-export async function main(): Promise<void> {
-  const args = process.argv.slice(2);
-  const stateFile = argValue(args, "--state-file") ?? "memory/heartbeat-state.json";
-  const date = argValue(args, "--date") ?? villageDate();
+export interface FollowUpResult {
+  signals: Array<{ summary: string; url?: string }>;
+  needsAttention: FollowUpCard[];
+  waiting: FollowUpCard[];
+  newlyResolved: FollowUpCard[];
+}
 
-  const apiKey = resolveIndexApiKey();
-  if (!apiKey) {
-    process.stdout.write("[SILENT]");
-    return;
-  }
+/**
+ * The afternoon follow-up: list, decide, record, and return what to report
+ * (or why to stay silent). Records the re-showings and the reported accepted
+ * ids in the state file before returning, exactly as `main()` always has;
+ * `main()` prints the result and the proactive trigger stages it.
+ */
+export async function followUp(options: {
+  stateFile?: string;
+  date?: string;
+  apiKey?: string;
+  mcpUrl?: string;
+} = {}): Promise<FollowUpResult | SilentResult> {
+  const stateFile = options.stateFile ?? "memory/heartbeat-state.json";
+  const date = options.date ?? villageDate();
 
-  const target = { apiKey, mcpUrl: indexMcpUrl() };
+  const apiKey = options.apiKey ?? resolveIndexApiKey();
+  if (!apiKey) return { silent: true, reason: "no-api-key" };
+
+  const target = { apiKey, mcpUrl: options.mcpUrl ?? indexMcpUrl() };
   let cards: BriefOpportunity[] = [];
   let listing: PendingListing;
   let signals: Array<{ summary: string; url?: string }> = [];
@@ -350,10 +379,9 @@ export async function main(): Promise<void> {
     signals = intentsFrom(intentText);
   } catch (err) {
     process.stderr.write(
-      `negotiation-summary: MCP fetch failed — ${err instanceof Error ? err.message : String(err)}\n`,
+      `negotiation-summary: MCP fetch failed — ${failureCode(err)}\n`,
     );
-    process.stdout.write("[SILENT]");
-    return;
+    return { silent: true, reason: "mcp-fetch-failed" };
   }
 
   const state = await readJsonObject(stateFile);
@@ -378,13 +406,12 @@ export async function main(): Promise<void> {
     .filter((card) => card.status === "negotiating" || (card.status === "pending" && !awaitsResident(card)))
     .map(followUpCard)
     .filter((card): card is FollowUpCard => Boolean(card));
-  const newAccepted = cards.filter((card) => card.status === "accepted" && card.opportunityId && !alreadyReported.has(card.opportunityId));
+  const newAccepted = cards.filter((card) => card.status === "accepted" && card.opportunityId && !alreadyReported.has(card.opportunityId) && followUpCard(card));
   const newlyResolved = newAccepted.map(followUpCard).filter((card): card is FollowUpCard => Boolean(card));
 
   if (needsAttention.length === 0 && newlyResolved.length === 0) {
     if (!readOnly && deliveryLogChanged(state, log)) await writeJsonObject(stateFile, { ...state, [OPPORTUNITY_DELIVERY_KEY]: log });
-    process.stdout.write("[SILENT]");
-    return;
+    return { silent: true, reason: "nothing-to-report" };
   }
 
   const shownIds = due.map((card) => card.opportunityId).filter((id): id is string => Boolean(id));
@@ -399,13 +426,26 @@ export async function main(): Promise<void> {
     ...(!readOnly && deliveryLogChanged(state, nextLog) ? { [OPPORTUNITY_DELIVERY_KEY]: nextLog } : {}),
   });
 
-  process.stdout.write(JSON.stringify({ signals, needsAttention, waiting, newlyResolved }));
+  return { signals, needsAttention, waiting, newlyResolved };
+}
+
+export async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+  const result = await followUp({
+    stateFile: argValue(args, "--state-file") ?? "memory/heartbeat-state.json",
+    date: argValue(args, "--date") ?? villageDate(),
+  });
+  if ("silent" in result) {
+    process.stdout.write("[SILENT]");
+    return;
+  }
+  process.stdout.write(JSON.stringify(result));
 }
 
 if (import.meta.main) {
   main().catch((err) => {
     process.stderr.write(
-      `negotiation-summary: fatal — ${err instanceof Error ? err.message : String(err)}\n`,
+      `negotiation-summary: fatal — ${failureCode(err)}\n`,
     );
     process.stdout.write("[SILENT]");
     process.exit(0);

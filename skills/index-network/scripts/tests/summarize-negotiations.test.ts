@@ -3,8 +3,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { IndexMcpError } from "../index-mcp";
 import {
   type NegotiationItem,
+  failureCode,
   main,
   summarizeNegotiations,
   updatedWithinDays,
@@ -80,6 +82,32 @@ describe("updatedWithinDays", () => {
 });
 
 // ── summarizeNegotiations ─────────────────────────────────────────────────────
+
+describe("F14: failures are logged as codes, never messages", () => {
+  test("failureCode: an Index error's code, else the error's class", () => {
+    expect(failureCode(new IndexMcpError("mcp-tool-error"))).toBe("mcp-tool-error");
+    expect(failureCode(new IndexMcpError("mcp-http-503"))).toBe("mcp-http-503");
+    expect(failureCode(new TypeError("secret detail https://evil.example"))).toBe("TypeError");
+    expect(failureCode("a string")).toBe("string");
+  });
+
+  test("a fetch that throws with a message writes only its class to stderr", async () => {
+    tempWorkspace();
+    await Bun.write("state.json", "{}");
+    let err = "";
+    const write = process.stderr.write;
+    process.stderr.write = ((chunk: string) => { err += chunk; return true; }) as typeof process.stderr.write;
+    try {
+      await summarizeNegotiations({
+        fetchNegotiations: async () => { throw new Error("secret detail from the server"); },
+        stateFile: "state.json",
+      });
+    } finally {
+      process.stderr.write = write;
+    }
+    expect(err).toBe("negotiation-summary: MCP fetch failed — Error\n");
+  });
+});
 
 describe("summarizeNegotiations", () => {
   test("returns silent when the fetcher throws (non-fatal MCP failure)", async () => {
@@ -580,6 +608,25 @@ describe("main", () => {
     }]);
     const state = JSON.parse(await Bun.file("state.json").text());
     expect(state.negotiationSummary.reportedCompletedIds).toEqual(["bbbbbbbb-0000-4000-8000-000000000003"]);
+  });
+
+  test("F5: a card whose name does not clean is neither listed, counted as a showing, nor recorded as reported", async () => {
+    const shown = JSON.stringify({
+      opportunityDelivery: {
+        "bbbbbbbb-0000-4000-8000-000000000001": { firstShown: "2026-10-09", lastShown: "2026-10-09", count: 1 },
+        "bbbbbbbb-0000-4000-8000-000000000002": { firstShown: "2026-10-09", lastShown: "2026-10-09", count: 1 },
+      },
+    });
+    const { out } = await run({
+      list_opportunities: () => listOpportunitiesText([opp("rm -rf", "pending", 1), opp("S.Ravi", "pending", 2), opp("***", "accepted", 3), opp("Ana", "accepted", 4)]),
+    }, shown);
+    const parsed = JSON.parse(out);
+    expect(parsed.needsAttention.map((card: { name: string }) => card.name)).toEqual(["S.Ravi"]);
+    expect(parsed.newlyResolved.map((card: { name: string }) => card.name)).toEqual(["Ana"]);
+    const state = JSON.parse(await Bun.file("state.json").text());
+    expect(state.deliveredToday).toEqual({ date: DATE, ids: ["bbbbbbbb-0000-4000-8000-000000000002"] });
+    expect(state.opportunityDelivery["bbbbbbbb-0000-4000-8000-000000000001"].count).toBe(1);
+    expect(state.negotiationSummary.reportedCompletedIds).toEqual(["bbbbbbbb-0000-4000-8000-000000000004"]);
   });
 
   test("a failed Index call is silent, with only a code on stderr", async () => {

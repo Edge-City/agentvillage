@@ -240,9 +240,10 @@ describe("terminal: exactly the command (DATA-312)", () => {
     const cronPromptsWithScripts = docs.filter(
       (doc) => doc.cron && !doc.plain && fences(doc.text).some((f) => SCRIPT_RUN.test(f.body)),
     );
-    // The digest prepare/send, negotiation summary, evening questions and the
-    // opportunity drop all run a Bun script from their prompt.
-    expect(cronPromptsWithScripts.length).toBeGreaterThanOrEqual(5);
+    // DATA-314: no scheduled job's prompt runs a script any more; each runs
+    // its script as the job's pre-run script (install/tests/proactive_jobs.test.ts).
+    expect(cronPromptsWithScripts.map((doc) => doc.name)).toEqual([]);
+    expect(docs.filter((doc) => doc.cron).length).toBeGreaterThanOrEqual(6);
     for (const doc of cronPromptsWithScripts) expect(files.has(doc.name)).toBe(true);
     // The inline cron prompts and the references are scanned too.
     expect(docs.some((doc) => doc.plain)).toBe(true);

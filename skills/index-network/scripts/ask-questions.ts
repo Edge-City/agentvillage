@@ -33,6 +33,8 @@ import {
   recordShowings,
 } from "./delivery-state";
 import { indexMcpUrl } from "./index-mcp";
+import { cleanName } from "./proactive-text";
+import { writeStateFile } from "./state-file";
 
 /** Last day of Edge City India 2026 (Oct 11 – Nov 1). */
 const FINAL_REFLECTION_DATE = "2026-11-01";
@@ -130,19 +132,20 @@ export async function askQuestions(options: {
       // The read succeeded, so entries for cards no longer pending can go.
       const readOnly = isBackDated(date, realVillageDate());
       const log = pruneDeliveryLog(readDeliveryLog(state, date, realVillageDate()), date, listing);
-      const unseen = fetched.filter((opp) => opp.opportunityId && !seen.has(opp.opportunityId));
+      // A card whose name does not clean is never shown, so it must not take the slot (DATA-314 B1-fix F5).
+      const unseen = fetched.filter((opp) => opp.opportunityId && !seen.has(opp.opportunityId) && cleanName(opp.name));
       const [chosen] = applyCooldown(unseen, log, date).eligible;
       if (chosen?.opportunityId) {
         if (!readOnly) {
           state.deliveredToday = { date, ids: [...seen, chosen.opportunityId] };
           state[OPPORTUNITY_DELIVERY_KEY] = pruneDeliveryLog(recordShowings(log, [chosen.opportunityId], date), date, listing);
-          await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
+          writeStateFile(stateFile, state);
         }
         const card = cardFrom(chosen);
         if (card) return card;
       } else if (!readOnly && deliveryLogChanged(state, log)) {
         state[OPPORTUNITY_DELIVERY_KEY] = log;
-        await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
+        writeStateFile(stateFile, state);
       }
     } catch {
       // An unwritable state file still allows the last-day closeout.
@@ -158,7 +161,7 @@ export async function askQuestions(options: {
     return { silent: true, reason: "final-reflection-already-delivered" };
   }
   state.questionDelivery = { ...delivered, [FINAL_REFLECTION_QUESTION_ID]: date };
-  await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
+  writeStateFile(stateFile, state);
   return { prompt: FINAL_REFLECTION_PROMPT };
 }
 

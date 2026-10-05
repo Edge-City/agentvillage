@@ -11,12 +11,18 @@
  *   - Telegram display: no reasoning, one quiet progress message per reply (`display_defaults.ts`; `AV_DISPLAY_DEFAULTS=0` skips)
  *   - STT enabled with Groq Whisper so voice notes are auto-transcribed
  *   - Telegram backlog kept across gateway restarts (`platforms.telegram.extra.drop_pending_on_cold_boot: false`, only when unset)
+ *   - Cron in village time (`timezone: Asia/Kolkata`, only when no zone is configured; a loud warning when another is)
+ *   - `cron.script_timeout_seconds: 120` when unset, Hermes's default 3600, or lower (the proactive triggers' budgets)
  *   - Index MCP + morning digest cron (`install_index.ts`)
  *   - Geo CLI runtime note (`install_geo.ts`)
  *   - opt-in recall skill + plugin when `AV_RECALL_ENABLED=1` (`install_recall.ts`)
  *   - opt-in approval.md gate when `AV_APPROVAL_ENABLED=1` (`install_approval.ts`):
  *     a failure there exits non-zero, because an opted-in tenant left ungated
  *     is the failure the gate exists to prevent
+ *   - an Index cron job that fails to update does not fail the install (exit
+ *     0): every run writes `$HERMES_HOME/av-events/install-status.json`
+ *     (`install_status.ts`, `cron_failed` empty when none failed), and a run
+ *     with failures prints one line, `agentvillage-install: cron_failed=<n>`
  *
  * Usage (from repo root):
  *   bun install/install.ts --index-api-key <KEY>
@@ -45,9 +51,11 @@ import { runApprovalStep } from "./install_approval";
 import {
   capModelMaxTokens,
   configureAvEvents,
+  configureCronScriptTimeout,
   configureDashboardAuth,
   configureHostedGateway,
   configureStt,
+  configureVillageTimezone,
   keepTelegramBacklogOnColdBoot,
   setTerminalCwd,
 } from "./config";
@@ -61,6 +69,7 @@ import {
   targetWorkspace,
 } from "./paths";
 import { captureWelcomeState, restoreWelcomeState } from "./welcome_state";
+import { cronFailedLine, writeInstallStatus } from "./install_status";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const SOURCE_WORKSPACE = join(SCRIPT_DIR, "../workspace");
@@ -240,16 +249,28 @@ function main(): void {
   configureStt();
   configureHostedGateway();
   keepTelegramBacklogOnColdBoot();
+  configureVillageTimezone();
+  configureCronScriptTimeout();
   configureTelegramDisplay();
   configureDashboardAuth();
   configureAvEvents();
   // Opt-in and off the core path: a failure here is counted, never fatal.
   safeInstallRecall(SOURCE_SKILLS);
 
+  // Index cron jobs that failed to reconcile. They do not fail the install:
+  // the control plane stops a roll on any non-zero exit, before its later
+  // steps (B1-fix2 R1). They are recorded in the status file, written on
+  // every run, and reported in one line at the end.
+  let cronFailures: string[] = [];
   if (process.argv.includes("--skip-index")) {
     console.log("→ index network: unconfigured (--skip-index); bundled skills remain installed");
   } else {
-    installIndex();
+    cronFailures = installIndex();
+  }
+  try {
+    writeInstallStatus(hermesHome(), cronFailures);
+  } catch {
+    console.warn("  warning: could not write av-events/install-status.json");
   }
   installEdgeos();
   installGeo();
@@ -265,6 +286,14 @@ function main(): void {
 
   if (!process.argv.includes("--no-restart")) {
     restartGateway();
+  }
+
+  if (cronFailures.length > 0) {
+    console.log(cronFailedLine(cronFailures.length));
+    console.warn(
+      `warning: ${cronFailures.length} Index cron job(s) failed to update (${cronFailures.join(", ")}); `
+      + "this install's other steps ran. Rerun the install on this resident to retry them.",
+    );
   }
 
   console.log("");

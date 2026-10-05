@@ -2,6 +2,8 @@ import { test, expect } from "bun:test";
 
 import {
   DIGEST_CRON_SPECS,
+  PREFETCH_PROMPT,
+  PROACTIVE_SHIM,
   buildIndexMcpHeaders,
   cronCreateArgs,
   cronEditArgs,
@@ -29,11 +31,16 @@ test("eight Index cron specs: digest jobs, opportunity drops, plus token audit (
   expect(signals.deliver).toBe(false);
   expect(prepare.schedule).toBe("0 2 * * *");
   expect(prepare.name).toBe("Edge — digest prepare");
-  expect(prepare.promptFile).toBe("edge-esmeralda/prompts/prepare.md");
+  expect(prepare.promptFile).toBeUndefined();
+  expect(prepare.promptBody).toBe(PREFETCH_PROMPT);
+  expect(prepare.scriptFile).toBe(PROACTIVE_SHIM);
+  expect(prepare.scriptInstallName).toBe("agentvillage_proactive_prefetch.sh");
+  expect(prepare.noAgent).toBe(true);
   expect(prepare.deliver).toBe(false);
   expect(send.schedule).toBe("0 8 * * *");
   expect(send.name).toBe("Edge — daily digest");
-  expect(send.promptFile).toBe("edge-esmeralda/prompts/send.md");
+  expect(send.promptFile).toBe("edge-esmeralda/prompts/brief.md");
+  expect(send.scriptInstallName).toBe("agentvillage_proactive_brief.sh");
   expect(send.deliver).toBe(true);
   expect(negotiation.schedule).toBe("0 14 * * *");
   expect(negotiation.name).toBe("Edge — negotiation summary");
@@ -70,12 +77,14 @@ test("cron create args handle delivered and scripted specs", () => {
 
   expect(cronCreateArgs(prepare, "PREP_BODY", home)).toEqual([
     "cron", "create", "0 2 * * *", "PREP_BODY",
-    "--name", "Edge — digest prepare", "--workdir", home,
+    "--name", "Edge — digest prepare", "--failure-deliver", "local",
+    "--script", "agentvillage_proactive_prefetch.sh", "--no-agent", "--workdir", home,
   ]);
 
   expect(cronCreateArgs(send, "SEND_BODY", home)).toEqual([
     "cron", "create", "0 8 * * *", "SEND_BODY",
-    "--name", "Edge — daily digest", "--deliver", "telegram", "--workdir", home,
+    "--name", "Edge — daily digest", "--deliver", "telegram", "--failure-deliver", "local",
+    "--script", "agentvillage_proactive_brief.sh", "--workdir", home,
   ]);
 
   const tokenAuditArgs = cronCreateArgs(tokenAudit, "AUDIT_PROMPT", home);
@@ -99,6 +108,10 @@ test("cronEditArgs includes only the provided fields", () => {
   expect(cronEditArgs("abc123", { script: "gate.py" })).toEqual([
     "cron", "edit", "abc123", "--script", "gate.py",
   ]);
+  expect(cronEditArgs("abc123", { prompt: "P", script: "s.sh", noAgent: false, failureDeliver: "local" })).toEqual([
+    "cron", "edit", "abc123", "--prompt", "P", "--script", "s.sh", "--agent", "--failure-deliver", "local",
+  ]);
+  expect(cronEditArgs("abc123", { noAgent: true })).toEqual(["cron", "edit", "abc123", "--no-agent"]);
 });
 
 test("staggeredSchedule derives a deterministic minute inside the spec's window", () => {

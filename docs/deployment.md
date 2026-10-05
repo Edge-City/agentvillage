@@ -181,7 +181,9 @@ busy resident by hand. To resume, start a new run with the same tag: healthy
 residents are skipped and the stopped one is updated again at its normal turn.
 
 **Roll back.** Run the workflow with the previous tag, test tenants first. A
-rollback is an ordinary roll and restarts every resident in scope again.
+rollback is an ordinary roll and restarts every resident in scope again. Going
+back to a release from before DATA-314 needs one more step per resident first;
+see "The proactive jobs" below.
 
 **What Roll does not guarantee.** That the agent answers. That Telegram
 messages sent during a restart arrive (Hermes drops them on a cold start; the
@@ -219,6 +221,188 @@ on it:
     `allow_seed_change`.
 12. Roll's dry run takes the tag (annotated, on `main`); then continue with
     the staged procedure.
+
+## The proactive jobs (DATA-314)
+
+Six scheduled jobs reach a resident or prepare for one. Each is triggered by a
+deterministic pre-run script: Hermes runs
+`$HERMES_HOME/scripts/agentvillage_proactive_<action>.sh` (one shim,
+`skills/index-network/scripts/shims/agentvillage_proactive.sh`, installed
+under six names), which runs `skills/index-network/scripts/proactive.ts
+<action>`. The script does every deterministic step and prints the facts as
+JSON, then the wake line; the model only writes language from that Script
+Output. No prompt of the six asks for a tool call, so a model that mangles tool
+arguments cannot break a job.
+
+| Job | Time (Hermes's zone, which must be IST; staggered) | Action | What the model is given |
+|---|---|---|---|
+| Edge — digest prepare | 02:00 | `prefetch` | Nothing: the one `no_agent` job. It writes the brief's context to `av-events/proactive/brief-context.json` and is always silent. |
+| Edge — daily digest | 08:00 | `brief` | Dates, weather, organiser announcements, today's schedule facts, the resident's interests and notes, the count of eligible new matches, up to three cleaned names, the Connections link, the count of things waiting in their approvals. |
+| Edge — opportunity drop (midday), (evening) | 12:00, 17:00 | `drop-midday`, `drop-evening` | One person: cleaned name, profile and message links. |
+| Edge — negotiation summary | 14:00 | `negotiation` | The resident's own signals; cleaned names with their links. |
+| Edge — evening questions | 19:00 | `evening` | One person (cleaned name, links), or the last-day closeout question. |
+
+The rules the trigger holds:
+- **No third-party free text reaches the model.** Only dates, the resident's
+  own data, sanitised schedule facts, organiser announcements, Index counts and
+  cleaned names; no headline, summary or description written by or about
+  another person. Every string is cleaned (`proactive-text.ts`: control,
+  format and default-ignorable characters, markup, backticks and links
+  removed, length capped) and scanned with a mirror of Hermes's cron prompt
+  scanner, and withheld on a hit; the whole output is scanned once more before
+  the model is woken. Cleaning repairs rather than refuses: a dot between
+  letters gets a space after it (`R.Krishnan` is `R. Krishnan`, and no domain
+  stays a link), and in names and titles the full stops that act as a domain
+  dot (U+3002, U+FF0E, U+FF61) are read as dots first. Third-party text a
+  non-organiser can write (event titles and venues) also loses `@`, a `$`
+  before a letter (no cashtag; `$20` stays) and phone-shaped digit runs (10 to
+  15 digits with spaces, dashes, dots or parentheses between, or `+` and 7 or
+  more; `2026-2027` and `1000000` stay), and a `/` gets a space on both sides
+  (`AI / ML`) unless it is between digits (`10/12`, `24/7`), one at the very
+  start or end dropped, so no `/command` Telegram makes tappable reaches the
+  message. The resident's notes (read from the agent's memory files) and
+  signals (read back from Index) get the same strict cleaning, since either can
+  hold text that did not come from the resident. Names lose phone runs too and are refused only
+  when nothing is left, when command-shaped, or on a scanner hit. A pick (the
+  drops, the evening note, the follow-up) skips a card whose name does not
+  clean, so it never spends the day's slot.
+- **The brief only between 05:00 and 11:00 IST.** Outside it the trigger is
+  silent; the other jobs have no window.
+- **Once per day per job.** The day is marked done in
+  `memory/heartbeat-state.json` (`proactiveRuns.<action>`) at the moment the
+  trigger wakes the model. A run that then fails loses that day; there is no
+  delivery tracking. A mark counts as done only when it is a real calendar
+  date equal to today's village date or the day after it, so a clock that
+  moved back by a day cannot deliver twice; any other mark (further ahead, or
+  malformed) is ignored and overwritten at the next wake.
+- **The state file is locked** (`memory/heartbeat-state.json.lock`) while a
+  trigger reads and writes it, and written by temp file and rename. A state
+  file that was read but is not a JSON object (bad JSON, `[]`, `null`) or is
+  over 5 MB is renamed aside under the lock as
+  `heartbeat-state.json.corrupt-<UTC stamp>` (the three newest are kept), the
+  run log line carries `note: state-renamed-aside`, and the run continues from
+  an empty state. A state file that cannot be read at all (a permission or
+  I/O error) is left alone and the run is silent with `state-unreadable`. A
+  stale lock that cannot be removed ends the wait at once
+  (`state-lock-stuck`).
+- **Every delivered message is recorded.** No `no_agent` job delivers text (a
+  `no_agent` job's stdout would reach the resident with no model turn, so no
+  message event or archive entry), and every job that delivers sends a failure
+  notice to `local`, never to the resident's chat.
+- Agent-job triggers always exit 0 with the wake line last; a fault is a silent
+  run with a code. Each run appends one line of codes and counts to
+  `av-events/proactive/triggers.jsonl` (never a name, a URL or any text).
+- **A failed pre-run script never reaches the resident.** When the script
+  does not finish (Hermes's script timeout, a missing shim, a cancelled run)
+  Hermes skips the wake gate, heads the block `Script Error` and asks the
+  model to report it, and the reply would go to the resident's chat. Every
+  resident-facing prompt says to reply exactly `[SILENT]` when the block above
+  is headed Script Error or there is no Script Output.
+
+**Village time.** Hermes reads every cron schedule in one zone:
+`HERMES_TIMEZONE`, then `timezone:` in `config.yaml`, else the host's local
+time (`hermes_time.py`); under the multiplexed gateway only `config.yaml`
+counts, and the gateway copies a configured `timezone` over
+`HERMES_TIMEZONE` when it starts. The six schedules are written in village
+time and the brief delivers only between 05:00 and 11:00 IST, so on a host
+whose Hermes zone is not IST every job fires at the wrong village hour and the
+brief is silent every day. The installer therefore:
+- writes `timezone: Asia/Kolkata` into `config.yaml` when no zone is
+  configured (no `timezone` key or an empty one, and `HERMES_TIMEZONE` unset or
+  already `Asia/Kolkata`), with one log line. It never overwrites a value set
+  by hand;
+- changes nothing when another zone is configured, in `config.yaml` or in
+  `HERMES_TIMEZONE` (environment or `$HERMES_HOME/.env`), and prints one line
+  starting `!! WARNING:` that names the zone and says the six jobs will run at
+  the wrong village time and the brief will be silent. Fix it by hand.
+
+Hermes reads the key when the gateway starts, so it takes effect at the
+restart that ends the install. Each existing job's stored `next_run_at` is an
+absolute time; Hermes fires it once more at that time (its
+`timezone_migration` catch-up; on a host ahead of IST it moves it to the
+village hour instead) and from then on at the village hour. On a
+host that was not on IST that one run of the brief falls outside its window
+and is silent, and the once-per-day mark stops any other job from delivering
+twice on one village date. The same key also moves, on such a host, every
+other Hermes clock to IST: the date line of the agent's system prompt,
+message timestamps, the cron tool's times, and any job a resident created
+(its hours are re-read in IST). Release note: on a host that was not on IST,
+a resident's own pre-existing cron jobs have their hours read as IST after
+the first roll.
+
+**The script timeout.** A trigger waits up to 60 s for the state lock and
+stops itself at 100 s, so Hermes's `cron.script_timeout_seconds` must be
+about 110 s or more. The installer sets it to 120 when it is unset, holds
+Hermes's own default of 3600, or is lower than 120; another value set by hand
+is kept.
+
+**The Connections link.** The brief always ends its Index part with
+`Connections: <link>`. The link is `https://agents.edgecity.live/insights`
+unless `AV_CONNECTIONS_URL` (process environment, else `$HERMES_HOME/.env`)
+parses as an `https` URL with no user name or password; anything else is
+ignored and the default is used.
+
+**What a roll does to the jobs.** The installer edits each existing job in
+place, one `hermes cron edit <id>` for its shape (prompt, script, agent mode,
+failure target), so ids, schedules, pause state and next run are kept and
+nothing is paused or recreated. The edit takes effect on the job's next run;
+the gateway restart is not needed for it. Prompts are compared and sent with
+trailing whitespace trimmed (`cron create` strips them), so a second roll
+changes nothing. The resident-facing jobs are edited before the 02:00
+prefetch (the prefetch edited and the brief not would leave the old brief
+prompt with nothing to send), and every job is attempted even after one
+fails. The installer then prints one line, `Index crons: N failed (<job
+names>)`, runs its other steps, and still exits 0: the control plane stops a
+roll at any non-zero exit, before it restarts the gateway or records the
+overlay commit, and never reaches the residents after it. Instead:
+- every install run writes `$HERMES_HOME/av-events/install-status.json`
+  (temp file and rename, mode 0600):
+  `{"version": 1, "at": "<UTC ISO time>", "cron_failed": ["<job name>", ...]}`,
+  with an empty list when nothing failed, so a clean run clears an earlier
+  failure;
+- a run with failures prints exactly one fixed line to stdout,
+  `agentvillage-install: cron_failed=<count>`, followed by a warning naming
+  the jobs.
+
+The control plane does not read the status file or the line yet; look for the
+line in the roll's install output. Rerun the install on that resident.
+`reconcile_digest_crons.ts`, the operator's tool, exits non-zero when a job
+fails.
+
+**After a roll, on a canary.** Force the brief within the window with
+`hermes cron run <id>` (the daily digest's id from `hermes cron list`): one
+Telegram message, `cron.run` completed and delivered, `message.out` with
+channel cron, no `tool.call` in that session, and a `woke` line in
+`triggers.jsonl`. A second forced run the same day prints `done-today` and
+sends nothing; a run after 11:00 IST prints `outside-window`.
+
+**Rolling back to a release from before DATA-314.** The older installer only
+rewrites prompts: it never clears a job's script or turns `no_agent` off, and
+the six jobs would keep running the new triggers under the old prompts (the
+02:00 job would stay a silent prefetch, so no brief would be staged). Before
+the rollback roll, on each resident, for each of the six jobs (ids from
+`hermes cron list`):
+
+    hermes cron edit <id> --agent --script ""
+
+What that does: `--script ""` clears the job's pre-run script and `--agent`
+turns `no_agent` off, so each of the six is a plain agent job. Until the
+rollback roll lands, every run of one is a model turn (it costs tokens) on
+the job's current prompt with no Script Output block above it. The five
+resident-facing prompts then reply exactly `[SILENT]`, so Hermes delivers
+nothing: no brief, drop, follow-up or evening note goes out in that time.
+The 02:00 job has no delivery target, which Hermes treats as `local`: its
+reply is kept in the job's local output and never reaches the resident's
+chat. Its prompt (`PREFETCH_PROMPT` in `install/install_index.ts`) ends by
+telling a model that reads it to reply exactly `[SILENT]`, so that reply is
+`[SILENT]` too; on a tenant still on a build before B1-fix the prompt lacks
+that line and the model writes a sentence into that local output instead.
+Then roll the previous tag as usual; its installer rewrites only prompts,
+which restores its own (`prepare.md` and `send.md` come back with its files).
+The `--failure-deliver local` setting, the shims in `$HERMES_HOME/scripts/`,
+`av-events/proactive/`, the `timezone` and `cron.script_timeout_seconds` keys,
+and the `proactiveRuns` key in the state file are left behind; they are
+harmless to the older release.
 
 ## The data pipeline
 

@@ -4,16 +4,18 @@
  * a temp HERMES_HOME, covering the create / prompt-edit / schedule-migrate /
  * preserve paths end-to-end.
  */
-import { afterEach, beforeEach, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import {
   DIGEST_CRON_SPECS,
+  PREFETCH_PROMPT,
   reconcileDigestCronJobs,
   staggeredSchedule,
 } from "../install_index";
+import { cronFailedLine, installStatusPath, writeInstallStatus } from "../install_status";
 
 const SEED = "ix_integration_seed";
 const [SIGNALS, PREPARE, SEND, NEGOTIATION, EVENING, DROP_MIDDAY, DROP_EVENING, TOKEN_AUDIT] = DIGEST_CRON_SPECS;
@@ -34,17 +36,19 @@ let home: string;
 let stubLog: string;
 let savedEnv: Record<string, string | undefined>;
 
-function writeStubHermes(dir: string, { rejectScheduleFlag = false } = {}): string {
+function writeStubHermes(dir: string, { rejectScheduleFlag = false, failEditIds = [] as string[] } = {}): string {
   const bin = join(dir, "hermes");
   const rejectBlock = rejectScheduleFlag
     ? `for arg in "$@"; do if [ "$arg" = "--schedule" ]; then exit 2; fi; done\n`
     : "";
+  // Logged first, so a failed edit still shows as attempted.
+  const failBlock = failEditIds.map((id) => `if [ "$1" = "cron" ] && [ "$2" = "edit" ] && [ "$3" = "${id}" ]; then exit 1; fi\n`).join("");
   writeFileSync(
     bin,
     `#!/usr/bin/env bash
 if [ "$1" = "--version" ]; then echo "stub 0.0.0"; exit 0; fi
 ${rejectBlock}printf '%s\n' "$(printf '%s\x1f' "$@")" >> "${join(dir, "calls.log")}"
-exit 0
+${failBlock}exit 0
 `,
   );
   chmodSync(bin, 0o755);
@@ -106,7 +110,14 @@ function currentJob(spec: typeof DIGEST_CRON_SPECS[number], id: string): Record<
     schedule: { expr: staggeredSchedule(spec, SEED) },
   };
   if (spec.scriptFile) job.script = spec.scriptInstallName;
+  if (spec.noAgent) job.no_agent = true;
+  if (spec.failureDeliver) job.failure_deliver = spec.failureDeliver;
   return job;
+}
+
+/** A job as main left it before DATA-314: no proactive script, agent mode, no failure target. */
+function oldShapeJob(spec: typeof DIGEST_CRON_SPECS[number], id: string, prompt: string): Record<string, unknown> {
+  return { id, name: spec.name, prompt, schedule: { expr: staggeredSchedule(spec, SEED) } };
 }
 
 beforeEach(() => {
@@ -159,7 +170,15 @@ test("fresh install creates digest crons (no heartbeat or Plaza selfie) on their
   expect(signals).toContain("--script");
   expect(signals).toContain("agentvillage_memory_signal_gate.py");
   expect(prepare[2]).toBe(staggeredSchedule(PREPARE, SEED));
-  expect(prepare[3]).toBe("PREPARE_BODY");
+  expect(prepare[3]).toBe(PREFETCH_PROMPT);
+  expect(prepare).toContain("--no-agent");
+  expect(prepare).toContain("agentvillage_proactive_prefetch.sh");
+  expect(send).toContain("agentvillage_proactive_brief.sh");
+  expect(send).not.toContain("--no-agent");
+  for (const argv of [prepare, send, negotiation, evening, audit]) {
+    expect(argv[argv.indexOf("--failure-deliver") + 1]).toBe("local");
+  }
+  expect(readFileSync(join(home, "scripts", "agentvillage_proactive_evening.sh"), "utf8")).toContain("wakeAgent");
   expect(send[2]).toBe(staggeredSchedule(SEND, SEED));
   expect(send[3]).toBe("SEND_BODY");
   expect(negotiation[2]).toBe(staggeredSchedule(NEGOTIATION, SEED));
@@ -221,8 +240,8 @@ test("an existing Edge — Agent Plaza selfie cron is retired on reconcile", () 
 test("jobs still on old synchronized defaults get schedule-only migrations", () => {
   writeJobs([
     { id: "g1", name: SIGNALS.name, prompt: "SIGNALS_BODY", script: SIGNALS.scriptInstallName, schedule: { expr: SIGNALS.schedule } },
-    { id: "p1", name: PREPARE.name, prompt: "PREPARE_BODY", schedule: { expr: PREPARE.schedule } },
-    { id: "s1", name: SEND.name, prompt: "SEND_BODY", schedule: { expr: SEND.schedule } },
+    { ...currentJob(PREPARE, "p1"), schedule: { expr: PREPARE.schedule } },
+    { ...currentJob(SEND, "s1"), schedule: { expr: SEND.schedule } },
     currentJob(NEGOTIATION, "n1"),
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
@@ -235,16 +254,17 @@ test("jobs still on old synchronized defaults get schedule-only migrations", () 
   const calls = cronCalls();
   expect(calls).toEqual([
     ["cron", "edit", "g1", "--schedule", staggeredSchedule(SIGNALS, SEED)],
-    ["cron", "edit", "p1", "--schedule", staggeredSchedule(PREPARE, SEED)],
     ["cron", "edit", "s1", "--schedule", staggeredSchedule(SEND, SEED)],
+    // The prefetch is reconciled last (B1-fix F9).
+    ["cron", "edit", "p1", "--schedule", staggeredSchedule(PREPARE, SEED)],
   ]);
 });
 
 test("custom schedule is preserved; stale prompt gets a prompt-only edit", () => {
   writeJobs([
     currentJob(SIGNALS, "g1"),
-    { id: "p1", name: PREPARE.name, prompt: "OLD_BODY", schedule: { expr: "30 4 * * *" } },
-    { id: "s1", name: SEND.name, prompt: "SEND_BODY", schedule: { expr: "15 9 * * *" } },
+    { ...currentJob(PREPARE, "p1"), prompt: "OLD_BODY", schedule: { expr: "30 4 * * *" } },
+    { ...currentJob(SEND, "s1"), schedule: { expr: "15 9 * * *" } },
     currentJob(NEGOTIATION, "n1"),
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
@@ -255,11 +275,11 @@ test("custom schedule is preserved; stale prompt gets a prompt-only edit", () =>
   reconcileDigestCronJobs({ ...process.env });
 
   expect(cronCalls()).toEqual([
-    ["cron", "edit", "p1", "--prompt", "PREPARE_BODY"],
+    ["cron", "edit", "p1", "--prompt", PREFETCH_PROMPT],
   ]);
 });
 
-test("memory signal sync cron is recreated when its script path is stale", () => {
+test("memory signal sync cron gets its script back in place when its script path is stale", () => {
   writeJobs([
     { ...currentJob(SIGNALS, "g1"), script: undefined },
     currentJob(PREPARE, "p1"),
@@ -273,21 +293,14 @@ test("memory signal sync cron is recreated when its script path is stale", () =>
 
   reconcileDigestCronJobs({ ...process.env });
 
-  const calls = cronCalls();
-  expect(calls[0]).toEqual(["cron", "remove", "g1"]);
-  const create = calls[1];
-  expect(create[0]).toBe("cron");
-  expect(create[1]).toBe("create");
-  expect(create).toContain(SIGNALS.name);
-  expect(create).toContain("--script");
-  expect(create).toContain(SIGNALS.scriptInstallName);
+  expect(cronCalls()).toEqual([["cron", "edit", "g1", "--script", SIGNALS.scriptInstallName!]]);
 });
 
 test("stale prompt + old default schedule produce two independent edit calls", () => {
   writeJobs([
     currentJob(SIGNALS, "g1"),
     currentJob(PREPARE, "p1"),
-    { id: "s1", name: SEND.name, prompt: "OLD_BODY", schedule: { expr: SEND.schedule } },
+    { ...currentJob(SEND, "s1"), prompt: "OLD_BODY", schedule: { expr: SEND.schedule } },
     currentJob(NEGOTIATION, "n1"),
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
@@ -378,7 +391,7 @@ test("token usage audit cron is removed when no explicit schedule opts in", () =
   expect(cronCalls()).toEqual([["cron", "remove", "a1"]]);
 });
 
-test("token usage audit cron is recreated when its script path is stale", () => {
+test("token usage audit cron gets its script back in place when its script path is stale", () => {
   writeJobs([
     currentJob(SIGNALS, "g1"),
     currentJob(PREPARE, "p1"),
@@ -395,14 +408,7 @@ test("token usage audit cron is recreated when its script path is stale", () => 
 
   reconcileDigestCronJobs({ ...process.env });
 
-  const calls = cronCalls();
-  expect(calls[0]).toEqual(["cron", "remove", "a1"]);
-  const create = calls[1];
-  expect(create[0]).toBe("cron");
-  expect(create[1]).toBe("create");
-  expect(create).toContain(TOKEN_AUDIT.name);
-  expect(create).toContain("--script");
-  expect(create).toContain(TOKEN_AUDIT.scriptInstallName);
+  expect(cronCalls()).toEqual([["cron", "edit", "a1", "--script", TOKEN_AUDIT.scriptInstallName!]]);
 });
 
 test("a Hermes that rejects --schedule still gets the prompt update (degraded migration)", () => {
@@ -410,7 +416,7 @@ test("a Hermes that rejects --schedule still gets the prompt update (degraded mi
   writeJobs([
     currentJob(SIGNALS, "g1"),
     currentJob(PREPARE, "p1"),
-    { id: "s1", name: SEND.name, prompt: "OLD_BODY", schedule: { expr: SEND.schedule } },
+    { ...currentJob(SEND, "s1"), prompt: "OLD_BODY", schedule: { expr: SEND.schedule } },
     currentJob(NEGOTIATION, "n1"),
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
@@ -493,7 +499,7 @@ test("a participant's job named like an installer cron is not recorded as ours (
   expect(installedIds()).not.toContain(theirs.id);
 });
 
-test("a recreated cron records its new id, not the removed one (DATA-92)", () => {
+test("a job edited in place keeps its id in the record (DATA-92, DATA-314)", () => {
   process.env.HERMES_BIN = writeStatefulStubHermes(home);
   const ours = DIGEST_CRON_SPECS.map((spec, n) => currentJob(spec, `00000000000${n}`));
   const signals = ours[DIGEST_CRON_SPECS.indexOf(SIGNALS)];
@@ -502,8 +508,205 @@ test("a recreated cron records its new id, not the removed one (DATA-92)", () =>
 
   reconcileDigestCronJobs({ ...process.env });
 
-  const ids = installedIds();
-  expect(ids).not.toContain(signals.id as string);
-  expect(ids).toHaveLength(DIGEST_CRON_SPECS.length);
-  expect(ids).toContain(storedJobs().find((job) => job.name === SIGNALS.name)!.id);
+  expect(installedIds()).toEqual(ours.map((job) => job.id as string).sort());
+});
+
+test("an upgrade roll from the pre-DATA-314 jobs is one in-place edit per job: nothing removed, created or paused", () => {
+  writeJobs([
+    currentJob(SIGNALS, "g1"),
+    oldShapeJob(PREPARE, "p1", "OLD_PREPARE"),
+    oldShapeJob(SEND, "s1", "OLD_SEND"),
+    oldShapeJob(NEGOTIATION, "n1", "NEGOTIATION_OLD"),
+    oldShapeJob(EVENING, "e1", "EVENING_OLD"),
+    oldShapeJob(DROP_MIDDAY, "dm1", "DROP_OLD"),
+    oldShapeJob(DROP_EVENING, "de1", "DROP_OLD"),
+    { ...currentJob(TOKEN_AUDIT, "a1"), failure_deliver: undefined },
+  ]);
+
+  reconcileDigestCronJobs({ ...process.env });
+
+  const shape = (id: string, prompt: string, action: string) => [
+    "cron", "edit", id, "--prompt", prompt, "--script", `agentvillage_proactive_${action}.sh`, "--failure-deliver", "local",
+  ];
+  expect(cronCalls()).toEqual([
+    shape("s1", "SEND_BODY", "brief"),
+    shape("n1", "NEGOTIATION_BODY", "negotiation"),
+    shape("e1", "EVENING_BODY", "evening"),
+    shape("dm1", "DROP_BODY", "drop-midday"),
+    shape("de1", "DROP_BODY", "drop-evening"),
+    ["cron", "edit", "a1", "--failure-deliver", "local"],
+    // The prefetch last: edited before the brief, a cut-short roll would leave no brief (B1-fix F9).
+    [...shape("p1", PREFETCH_PROMPT, "prefetch").slice(0, 7), "--no-agent", "--failure-deliver", "local"],
+  ]);
+  // A second roll finds everything in shape.
+  writeJobs(DIGEST_CRON_SPECS.map((spec, n) => currentJob(spec, `job${n}`)));
+  writeFileSync(stubLog, "");
+  reconcileDigestCronJobs({ ...process.env });
+  expect(cronCalls()).toEqual([]);
+});
+
+test("a job switched to no_agent by hand goes back to agent mode", () => {
+  writeJobs(DIGEST_CRON_SPECS.map((spec) => ({ ...currentJob(spec, spec === SEND ? "s1" : `x${spec.schedule}`), ...(spec === SEND ? { no_agent: true } : {}) })));
+
+  reconcileDigestCronJobs({ ...process.env });
+
+  expect(cronCalls()).toEqual([["cron", "edit", "s1", "--agent"]]);
+});
+
+test("F9: one failed edit: every other job is still attempted, the prefetch after the brief, and the failure is named and returned", () => {
+  process.env.HERMES_BIN = writeStubHermes(home, { failEditIds: ["s1"] });
+  writeJobs([
+    currentJob(SIGNALS, "g1"),
+    oldShapeJob(PREPARE, "p1", "OLD_PREPARE"),
+    oldShapeJob(SEND, "s1", "OLD_SEND"),
+    oldShapeJob(NEGOTIATION, "n1", "NEGOTIATION_OLD"),
+    oldShapeJob(EVENING, "e1", "EVENING_OLD"),
+    oldShapeJob(DROP_MIDDAY, "dm1", "DROP_OLD"),
+    oldShapeJob(DROP_EVENING, "de1", "DROP_OLD"),
+    currentJob(TOKEN_AUDIT, "a1"),
+  ]);
+  const lines: string[] = [];
+  const log = spyOn(console, "log").mockImplementation((line: string) => void lines.push(String(line)));
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+
+  let failed: string[];
+  try {
+    failed = reconcileDigestCronJobs({ ...process.env });
+  } finally {
+    log.mockRestore();
+    warn.mockRestore();
+  }
+
+  expect(failed).toEqual([SEND.name]);
+  expect(cronCalls().map((argv) => argv[2])).toEqual(["s1", "n1", "e1", "dm1", "de1", "p1"]);
+  const summary = lines.filter((line) => line.includes("Index crons:"));
+  expect(summary).toEqual([`→ warning: Index crons: 1 failed (${SEND.name}); the tenant may run a mix of old and new jobs`]);
+});
+
+test("F9: nothing failed: an empty list and a one-line all-clear", () => {
+  writeJobs(DIGEST_CRON_SPECS.map((spec, n) => currentJob(spec, `job${n}`)));
+  const lines: string[] = [];
+  const log = spyOn(console, "log").mockImplementation((line: string) => void lines.push(String(line)));
+  let failed: string[];
+  try {
+    failed = reconcileDigestCronJobs({ ...process.env });
+  } finally {
+    log.mockRestore();
+  }
+  expect(failed).toEqual([]);
+  expect(lines.filter((line) => line.includes("Index crons:"))).toEqual(["→ Index crons: every job in shape"]);
+});
+
+test("F9: the standalone reconcile exits non-zero after attempting every job when one fails", () => {
+  process.env.HERMES_BIN = writeStubHermes(home, { failEditIds: ["n1"] });
+  writeJobs([
+    currentJob(SIGNALS, "g1"),
+    currentJob(PREPARE, "p1"),
+    currentJob(SEND, "s1"),
+    oldShapeJob(NEGOTIATION, "n1", "NEGOTIATION_OLD"),
+    oldShapeJob(EVENING, "e1", "EVENING_OLD"),
+    currentJob(DROP_MIDDAY, "dm1"),
+    currentJob(DROP_EVENING, "de1"),
+    currentJob(TOKEN_AUDIT, "a1"),
+  ]);
+  const done = Bun.spawnSync(["bun", join(import.meta.dir, "..", "reconcile_digest_crons.ts")], {
+    env: { ...process.env },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  expect(done.exitCode).toBe(1);
+  expect(done.stderr.toString()).toContain(`1 Index cron job(s) failed to update (${NEGOTIATION.name})`);
+  expect(cronCalls().map((argv) => argv[2])).toEqual(["n1", "e1"]);
+});
+
+test("F13: prompts are compared and sent with trailing whitespace trimmed, so a created job is not re-edited", () => {
+  // `hermes cron create` stores the prompt stripped; a prompt file ends with a newline.
+  writeFileSync(join(home, "skills", SEND.promptFile!), "SEND_BODY\n\n");
+  writeJobs(DIGEST_CRON_SPECS.map((spec, n) => currentJob(spec, spec === SEND ? "s1" : `job${n}`)));
+
+  reconcileDigestCronJobs({ ...process.env });
+  expect(cronCalls()).toEqual([]);
+
+  // A job an older roll edited stores the raw text: also in shape.
+  writeJobs(DIGEST_CRON_SPECS.map((spec, n) => ({ ...currentJob(spec, spec === SEND ? "s1" : `job${n}`), ...(spec === SEND ? { prompt: "SEND_BODY\n\n" } : {}) })));
+  reconcileDigestCronJobs({ ...process.env });
+  expect(cronCalls()).toEqual([]);
+
+  // A stale one gets the trimmed text; a fresh create sends it trimmed too.
+  writeJobs(DIGEST_CRON_SPECS.map((spec, n) => ({ ...currentJob(spec, spec === SEND ? "s1" : `job${n}`), ...(spec === SEND ? { prompt: "OLD" } : {}) })));
+  reconcileDigestCronJobs({ ...process.env });
+  expect(cronCalls()).toEqual([["cron", "edit", "s1", "--prompt", "SEND_BODY"]]);
+  writeFileSync(stubLog, "");
+  writeJobs([]);
+  reconcileDigestCronJobs({ ...process.env });
+  expect(cronCalls().find((argv) => argv[1] === "create" && argv.includes(SEND.name))![3]).toBe("SEND_BODY");
+});
+
+test("F9: install.ts records the cron failures before the approval gate and the restart, and never exits on them", () => {
+  // install.ts runs main() on import, so its order is pinned on the source.
+  const source = readFileSync(join(import.meta.dir, "..", "install.ts"), "utf8");
+  const main = source.slice(source.indexOf("function main(): void {"));
+  const recorded = main.indexOf("cronFailures = installIndex();");
+  const status = main.indexOf("writeInstallStatus(hermesHome(), cronFailures);");
+  const approval = main.indexOf("runApprovalStep(SOURCE_SKILLS)");
+  const restart = main.indexOf("restartGateway();");
+  const report = main.indexOf("if (cronFailures.length > 0) {");
+  expect(recorded).toBeGreaterThan(0);
+  expect(status).toBeGreaterThan(recorded);
+  expect(approval).toBeGreaterThan(status);
+  expect(restart).toBeGreaterThan(approval);
+  expect(report).toBeGreaterThan(restart);
+  expect(main.slice(report, report + 400)).not.toContain("process.exit");
+});
+
+/** Run install.ts itself against the temp HERMES_HOME and the stub hermes, as the control plane does (--no-restart). */
+function runInstall(): { code: number; stdout: string; stderr: string } {
+  const env: Record<string, string | undefined> = { ...process.env, HOME: home };
+  for (const key of ["AV_APPROVAL_ENABLED", "AV_RECALL_ENABLED", "HERMES_TIMEZONE"]) delete env[key];
+  const done = Bun.spawnSync(["bun", join(import.meta.dir, "..", "install.ts"), "--index-api-key", SEED, "--no-restart"], {
+    cwd: join(import.meta.dir, "..", ".."),
+    env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return { code: done.exitCode ?? -1, stdout: done.stdout.toString(), stderr: done.stderr.toString() };
+}
+
+function installStatus(): { version: number; at: string; cron_failed: string[] } {
+  return JSON.parse(readFileSync(installStatusPath(home), "utf8"));
+}
+
+test("R1: a failed cron edit exits 0, writes the status file with the job's name, and prints the one count line; a clean run empties it", () => {
+  process.env.HERMES_BIN = writeStubHermes(home, { failEditIds: ["n1"] });
+  writeJobs([oldShapeJob(NEGOTIATION, "n1", "NEGOTIATION_OLD")]);
+
+  const failed = runInstall();
+  expect({ code: failed.code, stderr: failed.code === 0 ? "" : failed.stderr }).toEqual({ code: 0, stderr: "" });
+  const status = installStatus();
+  expect(status.version).toBe(1);
+  expect(status.cron_failed).toEqual([NEGOTIATION.name]);
+  expect(new Date(status.at).toISOString()).toBe(status.at);
+  expect(statSync(installStatusPath(home)).mode & 0o777).toBe(0o600);
+  expect(failed.stdout.split("\n").filter((line) => line.startsWith("agentvillage-install:"))).toEqual([cronFailedLine(1)]);
+  expect(cronFailedLine(1)).toBe("agentvillage-install: cron_failed=1");
+  // Nothing claims a gateway restart this process did not do.
+  expect(`${failed.stdout}${failed.stderr}`).not.toContain("gateway restart included");
+  expect(failed.stderr).toContain(`1 Index cron job(s) failed to update (${NEGOTIATION.name})`);
+
+  process.env.HERMES_BIN = writeStubHermes(home);
+  const clean = runInstall();
+  expect(clean.code).toBe(0);
+  expect(installStatus().cron_failed).toEqual([]);
+  expect(clean.stdout).not.toContain("agentvillage-install:");
+  expect(readdirSync(join(home, "av-events")).filter((name) => name.includes(".tmp"))).toEqual([]);
+}, 60_000);
+
+test("R1: the status file is written by temp file and rename, 0600, with an empty list when nothing failed", () => {
+  const at = new Date("2026-10-12T02:30:00.000Z");
+  expect(writeInstallStatus(home, [SEND.name], at)).toEqual({ version: 1, at: "2026-10-12T02:30:00.000Z", cron_failed: [SEND.name] });
+  expect(installStatus()).toEqual({ version: 1, at: "2026-10-12T02:30:00.000Z", cron_failed: [SEND.name] });
+  writeInstallStatus(home, [], at);
+  expect(installStatus().cron_failed).toEqual([]);
+  expect(statSync(installStatusPath(home)).mode & 0o777).toBe(0o600);
+  expect(readdirSync(join(home, "av-events"))).toEqual(["install-status.json"]);
 });

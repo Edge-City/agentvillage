@@ -9,7 +9,7 @@
  *     negotiation summary (`Edge — negotiation summary`, ~14:00), evening
  *     questions (`Edge — evening questions`, ~19:00), and two
  *     single-opportunity drops (`Edge — opportunity drop (midday)`, ~12:00 and
- *     `Edge — opportunity drop (evening)`, ~17:00) — all host-local; times
+ *     `Edge — opportunity drop (evening)`, ~17:00) — all in Hermes's zone (village time: configureVillageTimezone); times
  *     overridable via --digest-signals-cron /
  *     --digest-prepare-cron / --digest-send-cron / --negotiation-summary-cron /
  *     --evening-questions-cron / --opportunity-drop-midday-cron /
@@ -25,13 +25,29 @@
  *     negotiation summary over 14:00–14:24, and evening questions over
  *     19:00–19:24. Opportunity drops spread over 12:00–12:24 and
  *     17:00–17:24.
- *     New installs create enabled crons; reconcile updates prompt bodies,
+ *     New installs create enabled crons. Reconcile edits each existing job in
+ *     place with one `hermes cron edit <id>` for its shape (prompt, script,
+ *     agent mode, failure target), which keeps its id, schedule, pause state
+ *     and next run, so an upgrade roll leaves every job running; it also
  *     migrates jobs still on the old synchronized defaults (0 2 / 0 8) to their
- *     staggered slot, and otherwise preserves each job's schedule and pause
- *     state (user-customized schedules are never touched).
+ *     staggered slot in a separate edit (user-customized schedules are never
+ *     touched).
+ *
+ * DATA-314 (brief-lite): the six proactive jobs (digest prepare, daily digest,
+ * negotiation summary, evening questions, the two opportunity drops) are
+ * triggered by a pre-run script, the one shim
+ * `skills/index-network/scripts/shims/agentvillage_proactive.sh` copied to
+ * `$HERMES_HOME/scripts/agentvillage_proactive_<action>.sh`, which runs
+ * `skills/index-network/scripts/proactive.ts <action>`. The script does the
+ * deterministic work and the model only writes from its Script Output: no
+ * prompt asks for a tool call. The 02:00 digest prepare is now a silent
+ * no_agent context prefetch, and the only no_agent job: a no_agent job's
+ * stdout would reach the resident without a model turn, so no message event
+ * or archive entry would record it. Every job that delivers sets
+ * `--failure-deliver local`: a failed run never messages the resident.
  */
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import YAML from "yaml";
@@ -143,13 +159,15 @@ function removeEdgeCronJobs(env: NodeJS.ProcessEnv): void {
   }
 }
 
-interface StoredCronJob {
+export interface StoredCronJob {
   id: string;
   name: string;
   prompt?: string;
   script?: string;
   schedule?: { expr?: string } | string;
   schedule_display?: string;
+  no_agent?: boolean;
+  failure_deliver?: string | null;
 }
 
 /** Extract the cron expression a stored Hermes job currently runs on. */
@@ -188,6 +206,13 @@ export interface DigestCronSpec {
   name: string;
   /** Whether to attach --deliver telegram. */
   deliver: boolean;
+  /**
+   * `--no-agent`: Hermes runs the script and delivers its stdout with no
+   * model and no session. Only the silent prefetch may set it (DATA-314).
+   */
+  noAgent?: boolean;
+  /** `--failure-deliver local`: a failure notice stays out of the resident's chat. */
+  failureDeliver?: "local";
   /** CLI flag that overrides `schedule` at install time. */
   overrideFlag: string;
   /** Env var that overrides `schedule` at install time (flag wins). */
@@ -196,7 +221,9 @@ export interface DigestCronSpec {
 
 /**
  * Memory signal sync (01:00, no deliver, script-gated so unchanged MEMORY.md
- * does not wake the LLM), prepare (02:00, no deliver), send (08:00, deliver telegram), then
+ * does not wake the LLM), prepare (02:00, no deliver; since DATA-314 the
+ * silent no_agent prefetch of the brief's context), send (08:00, deliver
+ * telegram; the morning brief), then
  * evening questions (19:00, deliver telegram). Signal sync runs an hour before
  * prepare so freshly-captured signals have time to produce opportunities before
  * the brief is composed. The evening questions pass asks the user one pending
@@ -216,6 +243,22 @@ export interface DigestCronSpec {
  * tenants on the next install/update (Edge-prefixed crons not in this list are
  * retired). The old heartbeat prompt file has been removed.
  */
+/** The one proactive trigger shim (DATA-314), installed once per action under its own name. */
+export const PROACTIVE_SHIM = "index-network/scripts/shims/agentvillage_proactive.sh";
+
+function proactiveScript(action: string): Pick<DigestCronSpec, "scriptFile" | "scriptInstallName" | "failureDeliver"> {
+  return { scriptFile: PROACTIVE_SHIM, scriptInstallName: `agentvillage_proactive_${action}.sh`, failureDeliver: "local" };
+}
+
+/**
+ * The prefetch's stored prompt. No model reads it while the job is no_agent
+ * (Hermes runs only its script); after the documented rollback command turns
+ * the job into an agent job, a model does, so the last sentence tells it to
+ * reply exactly `[SILENT]` (B1-fix F12).
+ */
+export const PREFETCH_PROMPT =
+  "Overnight prefetch of the morning brief's context. No model takes part in this job: the script Hermes starts before it is the whole job, and it delivers nothing. If you are a model reading this, reply exactly `[SILENT]`.";
+
 export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
   {
     schedule: "0 1 * * *",
@@ -231,7 +274,9 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
   {
     schedule: "0 2 * * *",
     staggerWindowMinutes: 50,
-    promptFile: "edge-esmeralda/prompts/prepare.md",
+    promptBody: PREFETCH_PROMPT,
+    ...proactiveScript("prefetch"),
+    noAgent: true,
     name: "Edge — digest prepare",
     deliver: false,
     overrideFlag: "--digest-prepare-cron",
@@ -240,7 +285,8 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
   {
     schedule: "0 8 * * *",
     staggerWindowMinutes: 25,
-    promptFile: "edge-esmeralda/prompts/send.md",
+    promptFile: "edge-esmeralda/prompts/brief.md",
+    ...proactiveScript("brief"),
     name: "Edge — daily digest",
     deliver: true,
     overrideFlag: "--digest-send-cron",
@@ -250,6 +296,7 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
     schedule: "0 14 * * *",
     staggerWindowMinutes: 25,
     promptFile: "edge-esmeralda/prompts/negotiation-summary.md",
+    ...proactiveScript("negotiation"),
     name: "Edge — negotiation summary",
     deliver: true,
     overrideFlag: "--negotiation-summary-cron",
@@ -259,6 +306,7 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
     schedule: "0 19 * * *",
     staggerWindowMinutes: 25,
     promptFile: "edge-esmeralda/prompts/ask-questions.md",
+    ...proactiveScript("evening"),
     name: "Edge — evening questions",
     deliver: true,
     overrideFlag: "--evening-questions-cron",
@@ -268,6 +316,7 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
     schedule: "0 12 * * *",
     staggerWindowMinutes: 25,
     promptFile: "edge-esmeralda/prompts/opportunity-drop.md",
+    ...proactiveScript("drop-midday"),
     name: "Edge — opportunity drop (midday)",
     deliver: true,
     overrideFlag: "--opportunity-drop-midday-cron",
@@ -277,6 +326,7 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
     schedule: "0 17 * * *",
     staggerWindowMinutes: 25,
     promptFile: "edge-esmeralda/prompts/opportunity-drop.md",
+    ...proactiveScript("drop-evening"),
     name: "Edge — opportunity drop (evening)",
     deliver: true,
     overrideFlag: "--opportunity-drop-evening-cron",
@@ -296,6 +346,7 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
     ].join(" "),
     name: "Edge — token usage audit",
     deliver: true,
+    failureDeliver: "local",
     overrideFlag: "--token-usage-audit-cron",
     overrideEnv: "TOKEN_USAGE_AUDIT_CRON",
   },
@@ -330,22 +381,56 @@ export function staggeredSchedule(spec: DigestCronSpec, seed: string): string {
 export function cronCreateArgs(spec: DigestCronSpec, promptBody: string, home: string): string[] {
   const args = ["cron", "create", spec.schedule, promptBody, "--name", spec.name];
   if (spec.deliver) args.push("--deliver", "telegram");
+  if (spec.failureDeliver) args.push("--failure-deliver", spec.failureDeliver);
   if (spec.skill) args.push("--skill", spec.skill);
   if (spec.scriptFile) args.push("--script", expectedCronScriptArg(spec)!);
+  if (spec.noAgent) args.push("--no-agent");
   args.push("--workdir", home);
   return args;
 }
 
-/** Build the argv for `hermes cron edit` — only the provided fields; pause state unchanged. */
-export function cronEditArgs(
-  jobId: string,
-  { prompt, schedule, script }: { prompt?: string; schedule?: string; script?: string },
-): string[] {
+export interface CronEditFields {
+  prompt?: string;
+  schedule?: string;
+  script?: string;
+  /** true → `--no-agent`, false → `--agent`. */
+  noAgent?: boolean;
+  failureDeliver?: string;
+}
+
+/**
+ * Build the argv for `hermes cron edit` — only the provided fields. Hermes
+ * applies them in one update; id, pause state and (unless the schedule
+ * changes) next run are kept.
+ */
+export function cronEditArgs(jobId: string, { prompt, schedule, script, noAgent, failureDeliver }: CronEditFields): string[] {
   const args = ["cron", "edit", jobId];
   if (schedule !== undefined) args.push("--schedule", schedule);
   if (prompt !== undefined) args.push("--prompt", prompt);
   if (script !== undefined) args.push("--script", script);
+  if (noAgent !== undefined) args.push(noAgent ? "--no-agent" : "--agent");
+  if (failureDeliver !== undefined) args.push("--failure-deliver", failureDeliver);
   return args;
+}
+
+/**
+ * The fields of a stored job's shape that differ from its spec, as one `cron
+ * edit`: prompt, script, agent mode and failure target. A job without a
+ * failure target gets the spec's; agent mode is authoritative both ways. The
+ * schedule is not compared here (a customised schedule is never touched).
+ */
+export function staleShapeFields(job: StoredCronJob, spec: DigestCronSpec, promptBody: string): CronEditFields {
+  const fields: CronEditFields = {};
+  // `cron create` strips the prompt and `cron edit` stores it raw, so both are
+  // compared and sent with trailing whitespace trimmed: a second roll is a
+  // no-op for a created job too (B1-fix F13).
+  const prompt = promptBody.trimEnd();
+  if (typeof job.prompt !== "string" || job.prompt.trimEnd() !== prompt) fields.prompt = prompt;
+  const script = expectedCronScriptArg(spec);
+  if (script !== undefined && job.script !== script) fields.script = script;
+  if (Boolean(job.no_agent) !== Boolean(spec.noAgent)) fields.noAgent = Boolean(spec.noAgent);
+  if (spec.failureDeliver && job.failure_deliver !== spec.failureDeliver) fields.failureDeliver = spec.failureDeliver;
+  return fields;
 }
 
 /** True for a standard 5-field cron expression (minute hour day-of-month month day-of-week). */
@@ -433,6 +518,8 @@ function ensureCronScriptInstalled(spec: DigestCronSpec, home: string, promptsDi
   }
   mkdirSync(join(home, "scripts"), { recursive: true });
   copyFileSync(sourceScript, expectedScript);
+  // Hermes runs a .sh through bash, so the bit is not needed; it lets an operator run it by hand.
+  if (expectedScript.endsWith(".sh")) chmodSync(expectedScript, 0o755);
   return expectedScript;
 }
 
@@ -475,18 +562,35 @@ export function writeInstalledJobIds(home: string, ids: string[]): void {
   }
 }
 
+/**
+ * The order jobs are reconciled in: every job before the no_agent prefetch.
+ * The bad mix is the prefetch edited and the morning brief not (the old brief
+ * prompt then finds nothing staged and no brief goes out), so the prefetch
+ * goes last: a run cut short leaves the old prefetch, which is harmless.
+ */
+export function reconcileOrder(specs: DigestCronSpec[]): DigestCronSpec[] {
+  return [...specs.filter((spec) => !spec.noAgent), ...specs.filter((spec) => spec.noAgent)];
+}
+
+/**
+ * Reconcile the Index cron jobs. Every job is attempted even after one fails;
+ * the names of those whose remove, create or shape edit failed are returned
+ * and named in one summary line at the end (B1-fix F9). A failed schedule
+ * migration only warns: the job keeps working on its old default slot.
+ */
 export function reconcileDigestCronJobs(
   env: NodeJS.ProcessEnv = hermesExecEnv(),
   argv: string[] = process.argv,
-): void {
+): string[] {
   const home = hermesHome();
   const promptsDir = join(home, "skills");
 
   const bin = hermesBin();
   if (!hermesAvailable(bin)) {
     console.warn("  warning: hermes CLI not found — skipping Index crons");
-    return;
+    return [];
   }
+  const failed: string[] = [];
 
   const existing = readCronJobs();
   const idsBefore = new Set(existing.map((job) => job.id));
@@ -510,64 +614,52 @@ export function reconcileDigestCronJobs(
       console.log(`→ removed retired cron ${job.name}`);
     } catch {
       console.warn(`  warning: could not remove cron ${job.name}`);
+      failed.push(job.name);
     }
   }
 
-  // Ensure the Kanban store exists (idempotent; prepare/send stage tasks on it).
+  // Ensure the Kanban store exists (idempotent). The proactive jobs no longer
+  // stage on it (DATA-314); the old stage/send scripts still can, by hand.
   try {
     execFileSync(bin, ["kanban", "init"], { stdio: "ignore", env });
   } catch {
     console.warn("  warning: could not run `hermes kanban init` — board may auto-init on first use");
   }
 
-  for (const spec of activeSpecs) {
-    const expectedScript = ensureCronScriptInstalled(spec, home, promptsDir);
-    const promptBody = readCronPromptBody(spec, promptsDir);
+  for (const spec of reconcileOrder(activeSpecs)) {
+    // Scripts are copied before any edit: Hermes checks a script path when a job is edited.
+    ensureCronScriptInstalled(spec, home, promptsDir);
+    // Trimmed as `cron create` stores it (B1-fix F13).
+    const promptBody = readCronPromptBody(spec, promptsDir).trimEnd();
     const job = existing.find((entry) => entry.name === spec.name);
     const schedule = resolveCronSchedule(spec, argv, env, staggerSeed);
 
     if (job) {
-      const promptStale = job.prompt !== promptBody;
-      const expectedScriptArg = expectedCronScriptArg(spec);
-      const scriptStale = expectedScriptArg !== undefined && job.script !== expectedScriptArg;
+      installed.push(job.id);
       // Migrate only jobs still sitting on the old synchronized default
       // (e.g. "0 8 * * *") to their staggered slot. Anything else is a
       // deliberate per-tenant schedule and is preserved.
       const scheduleStale = storedSchedule(job) === spec.schedule && schedule !== spec.schedule;
-      if (scriptStale) {
-        console.log(`→ recreating cron "${spec.name}" with current script`);
-        try {
-          execFileSync(bin, ["cron", "remove", job.id], { stdio: "ignore", env });
-          execFileSync(bin, cronCreateArgs({ ...spec, schedule }, promptBody, home), {
-            stdio: ["ignore", "ignore", "inherit"],
-            env,
-          });
-        } catch {
-          console.warn(`  warning: could not recreate cron "${spec.name}" — gateway may still run`);
-        }
-        const recreated = createdId(spec.name);
-        if (recreated) installed.push(recreated);
-        continue;
-      }
-      installed.push(job.id);
-      if (!promptStale && !scheduleStale) {
+      const stale = staleShapeFields(job, spec, promptBody);
+      const staleNames = Object.keys(stale);
+      if (staleNames.length === 0 && !scheduleStale) {
         console.log(`→ cron "${spec.name}" up to date`);
         continue;
       }
-      // Prompt and schedule are updated in separate `cron edit` calls so a
-      // failure of one (e.g. an older Hermes without --schedule) cannot take
-      // down the other. Prompt first — it's the critical update.
-      if (promptStale) {
-        console.log(`→ updating cron "${spec.name}" prompt`);
+      // One in-place edit for the job's shape: it keeps the id, the schedule,
+      // the pause state and next_run_at, so an upgrade never pauses a job or
+      // runs it twice in a day. A failed edit leaves the job as it was.
+      if (staleNames.length > 0) {
+        console.log(`→ updating cron "${spec.name}" in place (${staleNames.join(", ")})`);
         try {
-          execFileSync(bin, cronEditArgs(job.id, { prompt: promptBody }), {
-            stdio: ["ignore", "ignore", "inherit"],
-            env,
-          });
+          execFileSync(bin, cronEditArgs(job.id, stale), { stdio: ["ignore", "ignore", "inherit"], env });
         } catch {
-          console.warn(`  warning: could not update cron "${spec.name}" prompt — gateway may still run`);
+          console.warn(`  warning: could not update cron "${spec.name}" — it keeps its previous shape`);
+          failed.push(spec.name);
         }
       }
+      // The schedule goes in its own edit, as before, so an older Hermes
+      // without --schedule cannot take down the shape edit above.
       if (scheduleStale) {
         console.log(`→ migrating cron "${spec.name}" schedule → ${schedule}`);
         try {
@@ -592,14 +684,22 @@ export function reconcileDigestCronJobs(
       });
     } catch {
       console.warn(`  warning: could not install cron "${spec.name}" — gateway may still run`);
+      failed.push(spec.name);
     }
     const created = createdId(spec.name);
     if (created) installed.push(created);
   }
   writeInstalledJobIds(home, installed);
+  console.log(
+    failed.length === 0
+      ? "→ Index crons: every job in shape"
+      : `→ warning: Index crons: ${failed.length} failed (${failed.join(", ")}); the tenant may run a mix of old and new jobs`,
+  );
+  return failed;
 }
 
-export function installIndex(): void {
+/** Returns the names of the Index cron jobs that failed to reconcile (empty when none, or crons skipped). */
+export function installIndex(): string[] {
   const apiKey = readApiKey();
   // Persist the canonical (bare, lowercase) handle so the runtime source
   // (INDEX_TELEGRAM_HANDLE / MCP headers) never drifts from other systems by
@@ -612,7 +712,6 @@ export function installIndex(): void {
   if (telegramHandle) upsertEnvVar("INDEX_TELEGRAM_HANDLE", telegramHandle);
   writeMcpServerEntry(apiKey, telegramHandle);
 
-  if (!process.argv.includes("--skip-crons")) {
-    reconcileDigestCronJobs(hermesExecEnv());
-  }
+  if (process.argv.includes("--skip-crons")) return [];
+  return reconcileDigestCronJobs(hermesExecEnv());
 }

@@ -50,6 +50,8 @@ import {
   recordShowings,
 } from "./delivery-state";
 import { indexMcpUrl } from "./index-mcp";
+import { cleanName } from "./proactive-text";
+import { writeStateFile } from "./state-file";
 
 interface DropResult {
   opportunity: BriefOpportunity;
@@ -126,12 +128,13 @@ export async function dropOpportunity(options: {
   // The read succeeded, so entries for cards no longer pending can go.
   const readOnly = isBackDated(date, realVillageDate());
   const log = pruneDeliveryLog(readDeliveryLog(state, date, realVillageDate()), date, listing);
-  const candidates = filterDedupedOpportunities(fetched, deliveredIds).filter((opp) => opp.opportunityId);
+  // A card whose name does not clean is never shown, so it must not take the slot (DATA-314 B1-fix F5).
+  const candidates = filterDedupedOpportunities(fetched, deliveredIds).filter((opp) => opp.opportunityId && cleanName(opp.name));
   const chosen = pickBest(applyCooldown(candidates, log, date).eligible, log);
   if (!chosen?.opportunityId) {
     if (!readOnly && deliveryLogChanged(state, log)) {
       state[OPPORTUNITY_DELIVERY_KEY] = log;
-      await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
+      writeStateFile(stateFile, state);
     }
     return { silent: true, reason: "nothing-new" };
   }
@@ -143,7 +146,7 @@ export async function dropOpportunity(options: {
     ids: Array.from(new Set([...deliveredIds, chosen.opportunityId])),
   };
   state[OPPORTUNITY_DELIVERY_KEY] = pruneDeliveryLog(recordShowings(log, [chosen.opportunityId], date), date, listing);
-  if (!readOnly) await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
+  if (!readOnly) writeStateFile(stateFile, state);
 
   return { opportunity: attachIndexLinks(chosen) };
 }
