@@ -44,6 +44,12 @@ a plugin token's events are capped at agent-asserted (`agent_report` asks)
 and self-reported (`self_report` answers from `actor: participant`), and
 never count as verified. See `docs/design/outcome-ask.md` §4.
 
+**The intention (M2b).** Both events name the intention the asked-about
+connection belongs to (envelope `intention_id`), or null with a code
+(`intention_reason`): decided by the trigger, carried here unchanged from the
+stage to the answer. Today always null with `not_linked`. See the design
+note §8.
+
 Logs: codes and counts only. Python 3.11, standard library only.
 """
 
@@ -245,10 +251,39 @@ ANSWERS = {
 #: A message starting with one of these is a quote, not an answer.
 _QUOTE_MARKS = frozenset("\"'“”‘’«»„‚‹›")
 
+#: M2b: the intention an ask is about. Each subject names the id of the
+#: intention the asked-about connection belongs to (`intention_id`, in
+#: `intention.captured`'s id space), or null with a reason code
+#: (`intention_reason`), never both and never a guess. The trigger decides it
+#: (`outcome-ask.ts` `intentionLink`); this module only carries it, from the
+#: stage through the armed file and the asks on file, so `outcome.reported`
+#: always names what its `outcome.asked` named.
+#: - `not_linked`: the trigger knows no intention for the connection. Today
+#:   every ask: Index's `list_opportunities` row names no intent, and the
+#:   overlay records none when a connection is first surfaced.
+#: - `ambiguous`: the connection names more than one of the resident's
+#:   intentions and not the one it was matched on.
+#: - `predates_link`: staged, armed or delivered by a plugin or trigger from
+#:   before asks carried an intention (a v1 stage or armed file, an ask on file
+#:   without the two keys). Set here only, never accepted from a stage.
+NOT_LINKED = "not_linked"
+AMBIGUOUS = "ambiguous"
+PREDATES_LINK = "predates_link"
+STAGED_REASONS = frozenset({NOT_LINKED, AMBIGUOUS})
+INTENTION_REASONS = STAGED_REASONS | {PREDATES_LINK}
+
+#: The stage and armed-file versions this module writes or accepts: 2 carries
+#: the intention; 1 (from before) does not, and reads as `predates_link`.
+STAGE_VERSION = 2
+ARMED_VERSION = 2
+LEGACY_VERSION = 1
+
 STAGE_KEYS = frozenset({"v", "action", "date", "staged_at", "asked_by", "window_days", "question_sha256", "subjects"})
-SUBJECT_KEYS = frozenset({"outcome_id", "opportunity_id"})
+SUBJECT_KEYS = frozenset({"outcome_id", "opportunity_id", "intention_id", "intention_reason"})
+LEGACY_SUBJECT_KEYS = frozenset({"outcome_id", "opportunity_id"})
 ARMED_KEYS = frozenset({"v", "execution_id", "job_id", "session_id", "staged_epoch", "armed_epoch", "message_hash", "question_hash", "subject"})
-ASK_KEYS = frozenset({"execution_id", "outcome_id", "opportunity_id", "question_hash"})
+ASK_KEYS = frozenset({"execution_id", "outcome_id", "opportunity_id", "intention_id", "intention_reason", "question_hash"})
+LEGACY_ASK_KEYS = frozenset({"execution_id", "outcome_id", "opportunity_id", "question_hash"})
 
 _TASK = re.compile(r"^cron:([0-9a-f]{12}):([0-9a-f]{32})$")
 _EXECUTION = re.compile(r"^[0-9a-f]{32}$")
@@ -417,16 +452,29 @@ def _number(value: Any) -> Optional[float]:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
-def _subject(data: Any) -> Optional[dict]:
-    """`{outcome_id, opportunity_id}`, exactly, with the outcome id the opportunity's own."""
-    if not isinstance(data, dict) or set(data) != SUBJECT_KEYS:
+def _subject(data: Any, *, legacy: bool = False, reasons: frozenset = INTENTION_REASONS) -> Optional[dict]:
+    """`{outcome_id, opportunity_id, intention_id, intention_reason}`, exactly,
+    with the outcome id the opportunity's own, and either an id-shaped
+    `intention_id` with a null reason or a null id with one of `reasons`.
+    `legacy`: the two-key subject from before asks named an intention, read as
+    a null id with `predates_link`."""
+    if not isinstance(data, dict) or set(data) != (LEGACY_SUBJECT_KEYS if legacy else SUBJECT_KEYS):
         return None
     opportunity_id, outcome_id = data.get("opportunity_id"), data.get("outcome_id")
     if not (isinstance(opportunity_id, str) and _OPPORTUNITY.match(opportunity_id)):
         return None
     if outcome_id != f"{OUTCOME_PREFIX}{opportunity_id}":
         return None
-    return {"outcome_id": outcome_id, "opportunity_id": opportunity_id}
+    if legacy:
+        intention_id, reason = None, PREDATES_LINK
+    else:
+        intention_id, reason = data.get("intention_id"), data.get("intention_reason")
+        if intention_id is None:
+            if not (isinstance(reason, str) and reason in reasons):
+                return None
+        elif not (isinstance(intention_id, str) and _ID.match(intention_id)) or reason is not None:
+            return None
+    return {"outcome_id": outcome_id, "opportunity_id": opportunity_id, "intention_id": intention_id, "intention_reason": reason}
 
 
 # -- the answer table ---------------------------------------------------------
@@ -494,10 +542,14 @@ def answer_value(text: Any) -> Optional[str]:
 def valid_stage(data: Any) -> Optional[dict]:
     """The trigger's stage, exactly (`outcome-ask.ts` `stageFor`), or None:
     the expected keys and no others, the fixed values, a date that is the
-    village date of `staged_at`, and exactly one subject."""
+    village date of `staged_at`, and exactly one subject. A version 1 stage
+    (a trigger from before M2b) names no intention: `predates_link`."""
     if not isinstance(data, dict) or set(data) != STAGE_KEYS:
         return None
-    if data.get("v") != 1 or data.get("action") != ACTION or data.get("asked_by") != ASKED_BY:
+    version = data.get("v")
+    if isinstance(version, bool) or version not in (STAGE_VERSION, LEGACY_VERSION):
+        return None
+    if data.get("action") != ACTION or data.get("asked_by") != ASKED_BY:
         return None
     window = data.get("window_days")
     if isinstance(window, bool) or window != WINDOW_DAYS:
@@ -514,7 +566,7 @@ def valid_stage(data: Any) -> Optional[dict]:
     subjects = data.get("subjects")
     if not isinstance(subjects, list) or len(subjects) != 1:
         return None
-    subject = _subject(subjects[0])
+    subject = _subject(subjects[0], legacy=version == LEGACY_VERSION, reasons=STAGED_REASONS)
     return {"staged": staged, "subject": subject, "question_sha256": question} if subject else None
 
 
@@ -610,7 +662,7 @@ def arm(
     # a reply to another evening's question. Never the text.
     question_hash = hasher(question_key(normalise_reply(reply)))
     armed = {
-        "v": 1,
+        "v": ARMED_VERSION,
         "execution_id": execution_id,
         "job_id": job_id,
         "session_id": session,
@@ -736,8 +788,12 @@ class _FileLock:
 
 
 def valid_armed(data: Any, name: str, now: float) -> Optional[dict]:
-    """An armed file exactly as `arm` writes it, named for its own execution."""
-    if not isinstance(data, dict) or set(data) != ARMED_KEYS or data.get("v") != 1:
+    """An armed file exactly as `arm` writes it, named for its own execution.
+    A version 1 file (armed before M2b) has the two-key subject: `predates_link`."""
+    if not isinstance(data, dict) or set(data) != ARMED_KEYS:
+        return None
+    version = data.get("v")
+    if isinstance(version, bool) or version not in (ARMED_VERSION, LEGACY_VERSION):
         return None
     execution_id, job_id, session_id = data.get("execution_id"), data.get("job_id"), data.get("session_id")
     if not (isinstance(execution_id, str) and _EXECUTION.match(execution_id) and name == f"{execution_id}.json"):
@@ -753,14 +809,17 @@ def valid_armed(data: Any, name: str, now: float) -> Optional[dict]:
         value = data.get(name)
         if value is not None and not (isinstance(value, str) and _HASH.match(value)):
             return None
-    subject = _subject(data.get("subject"))
+    subject = _subject(data.get("subject"), legacy=version == LEGACY_VERSION)
     if subject is None:
         return None
     return {**data, "subject": subject, "staged_epoch": staged, "armed_epoch": armed_at}
 
 
 def _load_asks(state_dir: str, codes: dict) -> list[dict]:
-    """The delivered asks on file: exactly their keys, one per execution."""
+    """The delivered asks on file: exactly their keys, one per execution. An
+    entry from before M2b (without `intention_id` and `intention_reason`) is
+    read as a null intention with `predates_link`, so its answer still
+    carries the same null its ask was emitted with."""
     data, why = private_file(asks_path(state_dir), ASKS_MAX_BYTES)
     if why == "missing":
         return []
@@ -771,11 +830,12 @@ def _load_asks(state_dir: str, codes: dict) -> list[dict]:
         return []
     asks, seen = [], set()
     for entry in entries[:40]:
-        if not isinstance(entry, dict) or set(entry) != ASK_KEYS:
+        legacy = isinstance(entry, dict) and set(entry) == LEGACY_ASK_KEYS
+        if not isinstance(entry, dict) or (set(entry) != ASK_KEYS and not legacy):
             _count(codes, "ask_refused")
             continue
         execution_id = entry.get("execution_id")
-        subject = _subject({"outcome_id": entry.get("outcome_id"), "opportunity_id": entry.get("opportunity_id")})
+        subject = _subject({key: entry.get(key) for key in (LEGACY_SUBJECT_KEYS if legacy else SUBJECT_KEYS)}, legacy=legacy)
         question_hash = entry.get("question_hash")
         if question_hash is not None and not (isinstance(question_hash, str) and _HASH.match(question_hash)):
             subject = None
@@ -911,7 +971,13 @@ def tick(state_dir: str, home: str, emit: Callable[..., Optional[dict]], now: fl
             asked_at = iso_from_epoch(finished)
             event = emit(
                 "outcome.asked",
-                {"message_hash": armed["message_hash"], "window_days": WINDOW_DAYS, "asked_by": ASKED_BY},
+                {
+                    "message_hash": armed["message_hash"],
+                    "window_days": WINDOW_DAYS,
+                    "asked_by": ASKED_BY,
+                    # A code, or null when the envelope names the intention.
+                    "intention_reason": subject["intention_reason"],
+                },
                 event_id=_ask_event_id(execution_id, subject["outcome_id"], finished),
                 occurred_at=asked_at,
                 occurred_at_earliest=iso_from_epoch(start),
@@ -921,6 +987,7 @@ def tick(state_dir: str, home: str, emit: Callable[..., Optional[dict]], now: fl
                 run_id=f"cron:{row.get('job_id')}:{execution_id}",
                 outcome_id=subject["outcome_id"],
                 opportunity_id=subject["opportunity_id"],
+                intention_id=subject["intention_id"],
             )
             if event is None:
                 pending.append(armed["armed_epoch"])
@@ -944,7 +1011,7 @@ def tick(state_dir: str, home: str, emit: Callable[..., Optional[dict]], now: fl
             row = rows.get(ask["execution_id"])
             with _MEMORY_LOCK:
                 mine = _EMITTED.get(ask["execution_id"])
-            if mine is not None and mine != {"outcome_id": ask["outcome_id"], "opportunity_id": ask["opportunity_id"]}:
+            if mine is not None and mine != {key: ask[key] for key in SUBJECT_KEYS}:
                 _count(codes, "ask_tampered")
                 continue
             if not _evening_delivered(home, row):
@@ -1008,7 +1075,8 @@ def tick(state_dir: str, home: str, emit: Callable[..., Optional[dict]], now: fl
                 continue
             event = emit(
                 "outcome.reported",
-                {"value": note["value"], "matcher_version": MATCHER_VERSION},
+                # The intention exactly as the ask carried it, never recomputed.
+                {"value": note["value"], "matcher_version": MATCHER_VERSION, "intention_reason": latest["intention_reason"]},
                 event_id=_answer_event_id(latest["execution_id"], latest["outcome_id"], latest["finished"]),
                 occurred_at=iso_from_epoch(at),
                 occurred_at_earliest=iso_from_epoch(at),
@@ -1019,6 +1087,7 @@ def tick(state_dir: str, home: str, emit: Callable[..., Optional[dict]], now: fl
                 turn_id=note["turn_id"],
                 outcome_id=latest["outcome_id"],
                 opportunity_id=latest["opportunity_id"],
+                intention_id=latest["intention_id"],
                 in_reply_to_event_id=_ask_event_id(latest["execution_id"], latest["outcome_id"], latest["finished"]),
             )
             if event is None:
@@ -1044,6 +1113,10 @@ def tick(state_dir: str, home: str, emit: Callable[..., Optional[dict]], now: fl
 
 
 __all__ = [
+    "AMBIGUOUS",
+    "INTENTION_REASONS",
+    "NOT_LINKED",
+    "PREDATES_LINK",
     "ANSWERS",
     "ANSWER_WINDOW_S",
     "ASKED_BY",

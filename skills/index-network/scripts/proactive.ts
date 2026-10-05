@@ -77,7 +77,7 @@ import { cleanName, cleanText, cleanTitle, connectionsUrl, cronScanHit, envOrDot
 import { type LockOptions, LockStuck, LockTimeout, releaseHeldLocks, withStateLock } from "./state-lock";
 import { writeStateFile } from "./state-file";
 import { followUp } from "./summarize-negotiations";
-import { backfillAnnounced, clearStage, dueSubjects, listAcceptedConnections, outcomeQuestion, readAskedIds, recordAttempt, stageFor, writeStage } from "./outcome-ask";
+import { backfillAnnounced, clearStage, dueSubjects, intentionLink, listAcceptedConnections, outcomeQuestion, readAskedIds, recordAttempt, stageFor, writeStage } from "./outcome-ask";
 import { type Delivery, deliveryFor, inWindow, isTeamTenant, minuteOfDay, prunePreviewFiles, readJobSettings } from "./job-settings";
 
 /** The default jobs' actions, one per installer job (install_index.ts DIGEST_CRON_SPECS). */
@@ -682,7 +682,9 @@ async function outcomeAskDecision(run: Run): Promise<Decision | { fallback: stri
   if (!id || !name) return { fallback: "outcome-ask-name-withheld", withheld: w.count };
   const subject = id;
   const question = outcomeQuestion(name);
-  const stage = stageFor(id, run.date, run.now, question);
+  // M2b: the intention this connection belongs to, only when Index named it
+  // (today never: `not_linked`); the plugin carries it onto both events.
+  const stage = stageFor(id, run.date, run.now, question, intentionLink(listed.get(id)!.matchedIntentIds));
   if (!stage) return { fallback: "outcome-ask-bad-id" };
   return {
     view: { job: "evening-note", date: run.date, outcomeQuestion: question },

@@ -28,6 +28,8 @@ OTHER_JOB = "0123456789ab"
 OPP = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d"
 OUTCOME = f"opp-outcome:{OPP}"
 QUESTION = "Did you and Arjun meet? Reply met, not useful, or missed."
+#: M2b: what the trigger stages for every connection today (Index names no intent for it).
+NOT_LINKED = {"intention_id": None, "intention_reason": "not_linked"}
 
 
 def shown(name: str = "Arjun") -> str:
@@ -72,12 +74,18 @@ class Tenant:
     def stage_file(self):
         return self.state / "proactive" / "outcome-ask-evening.json"
 
-    def stage_body(self, *, at: float | None = None, subjects=None, name: str = "Arjun", **over) -> dict:
+    def stage_body(self, *, at: float | None = None, subjects=None, name: str = "Arjun", legacy: bool = False, **over) -> dict:
+        """The trigger's stage. Version 2 (M2b): a subject given without the
+        intention keys gets the trigger's default, `not_linked`. `legacy`: the
+        version 1 stage a trigger from before M2b writes, two-key subjects."""
         staged = time.time() - 5 if at is None else at
+        subjects = subjects or [{"outcome_id": OUTCOME, "opportunity_id": OPP}]
+        if not legacy:
+            subjects = [{**NOT_LINKED, **s} if isinstance(s, dict) and "intention_id" not in s else s for s in subjects]
         body = {
-            "v": 1, "action": "evening", "date": datetime.fromtimestamp(staged, IST).date().isoformat(),
+            "v": 1 if legacy else 2, "action": "evening", "date": datetime.fromtimestamp(staged, IST).date().isoformat(),
             "staged_at": utc(staged), "asked_by": "outcome_cron", "window_days": 1, "question_sha256": shown(name),
-            "subjects": subjects or [{"outcome_id": OUTCOME, "opportunity_id": OPP}],
+            "subjects": subjects,
         }
         body.update(over)
         return body
@@ -187,7 +195,8 @@ def test_the_ask_is_emitted_only_once_delivered_or_queued(live, ctx, tenant, av,
     assert live._COLLECTOR.outcome_tick().get("asked") == 1
     [asked] = events(av, live, "outcome.asked")
     [out] = [e for e in events(av, live, "message.out") if e["session_id"].startswith("cron_")]
-    assert asked["payload"] == {"message_hash": out["payload"]["content_hash"], "window_days": 1, "asked_by": "outcome_cron"}
+    assert asked["payload"] == {"message_hash": out["payload"]["content_hash"], "window_days": 1, "asked_by": "outcome_cron", "intention_reason": "not_linked"}
+    assert asked["intention_id"] is None
     assert asked["payload"]["message_hash"] and len(asked["payload"]["message_hash"]) == 64
     assert asked["outcome_id"] == OUTCOME and asked["opportunity_id"] == OPP
     assert asked["run_id"] == f"cron:{JOB}:{execution}"
@@ -541,7 +550,8 @@ def test_an_answer_from_the_list_emits_outcome_reported_with_the_right_ids(live,
     resident_says(ctx, text)
     assert live._COLLECTOR.outcome_tick().get("answered") == 1
     [reported] = events(av, live, "outcome.reported")
-    assert reported["payload"] == {"value": value, "matcher_version": "outcome_reply_v2"}
+    assert reported["payload"] == {"value": value, "matcher_version": "outcome_reply_v2", "intention_reason": "not_linked"}
+    assert reported["intention_id"] is None
     assert reported["evidence_class"] == "self_report"
     assert reported["actor"] == "participant"
     assert reported["outcome_id"] == OUTCOME and reported["opportunity_id"] == OPP
@@ -1081,7 +1091,17 @@ FORGED_STAGES = {
     "another asker": dict(asked_by="operator"),
     "another window": dict(window_days=7),
     "a boolean window": dict(window_days=True),
-    "another version": dict(v=2),
+    "another version": dict(v=3),
+    "a version 1 stage with the intention keys": dict(v=1),
+    # M2b: an intention id and a reason together, a reason only this module sets,
+    # an unknown reason, and an intention "id" that is text.
+    "an intention id with a reason": dict(subjects=[{"outcome_id": OUTCOME, "opportunity_id": OPP, "intention_id": "i1", "intention_reason": "not_linked"}]),
+    "a reason only the plugin sets": dict(subjects=[{"outcome_id": OUTCOME, "opportunity_id": OPP, "intention_id": None, "intention_reason": "predates_link"}]),
+    "an unknown reason": dict(subjects=[{"outcome_id": OUTCOME, "opportunity_id": OPP, "intention_id": None, "intention_reason": "guessed"}]),
+    "no reason with no id": dict(subjects=[{"outcome_id": OUTCOME, "opportunity_id": OPP, "intention_id": None, "intention_reason": None}]),
+    "an intention id that is text": dict(subjects=[{"outcome_id": OUTCOME, "opportunity_id": OPP, "intention_id": "meet people building agent memory", "intention_reason": None}]),
+    "an intention id that is not a string": dict(subjects=[{"outcome_id": OUTCOME, "opportunity_id": OPP, "intention_id": 7, "intention_reason": None}]),
+    "a list for a reason": dict(subjects=[{"outcome_id": OUTCOME, "opportunity_id": OPP, "intention_id": None, "intention_reason": ["not_linked"]}]),
     "another action": dict(action="brief"),
     "a date that is not the stamp's": dict(date="2020-01-01"),
     "a stamp that is not a time": dict(staged_at="soon"),
@@ -1174,10 +1194,13 @@ def forged_armed(tenant, execution: str, *, job: str = JOB, staged: float | None
                  subject=None, name: str | None = None, **extra) -> None:
     now = time.time()
     body = {
-        "v": 1, "execution_id": execution, "job_id": job, "session_id": None,
+        "v": 2, "execution_id": execution, "job_id": job, "session_id": None,
         "staged_epoch": now - 20 if staged is None else staged, "armed_epoch": now - 10 if armed is None else armed,
-        "message_hash": "0" * 64, "question_hash": None, "subject": subject or {"outcome_id": "opp-outcome:forged", "opportunity_id": "forged"},
+        "message_hash": "0" * 64, "question_hash": None,
+        "subject": subject or {"outcome_id": "opp-outcome:forged", "opportunity_id": "forged", **NOT_LINKED},
     }
+    if body["v"] == 2 and "intention_id" not in body["subject"]:
+        body["v"] = 1  # a two-key subject is a pre-M2b armed file
     body.update(extra)
     tenant.armed_dir.mkdir(parents=True, exist_ok=True)
     tenant.write_private(tenant.armed_dir / (name or f"{execution}.json"), body)
@@ -1215,7 +1238,7 @@ def test_an_armed_file_altered_after_arming_emits_nothing(live, ctx, tenant, av)
     evening_reply(ctx, tenant, execution)
     path = tenant.armed_dir / f"{execution}.json"
     body = json.loads(path.read_text())
-    body["subject"] = {"outcome_id": "opp-outcome:forged", "opportunity_id": "forged"}
+    body["subject"] = {"outcome_id": "opp-outcome:forged", "opportunity_id": "forged", **NOT_LINKED}
     tenant.write_private(path, body)
     tenant.finish(execution)
     assert live._COLLECTOR.outcome_tick().get("armed_tampered") == 1
@@ -1362,3 +1385,154 @@ def test_a_forged_asks_file_that_is_a_symlink_is_refused(live, ctx, tenant, av, 
     live._COLLECTOR.outcome_tick()
     assert events(av, live, "outcome.reported") == []
     assert target.exists()
+
+
+# -- M2b: the ask names the intention it is about ---------------------------------
+
+#: An Index intent id, the id `intention.captured` carries for an Index capture (synthetic).
+INTENT = "aaaaaaaa-0000-4000-8000-000000000001"
+LINKED = {"intention_id": INTENT, "intention_reason": None}
+AMBIGUOUS = {"intention_id": None, "intention_reason": "ambiguous"}
+#: Every key the plugin puts on an envelope (spec §3), unchanged by M2b: `intention_id` was always there.
+ENVELOPE_KEYS = {
+    "event_id", "event_type", "schema_version", "occurred_at", "occurred_at_earliest", "occurred_at_latest", "emitted_at",
+    "actor", "session_id", "turn_id", "run_id", "parent_run_id", "tool_call_id", "intention_id", "opportunity_id",
+    "decision_id", "action_id", "outcome_id", "in_reply_to_event_id", "evidence_class", "model_id", "prompt_version",
+    "skill_version", "overlay_ref", "hermes_version", "policy_version", "supersedes_event_id", "payload",
+}
+ASKED_PAYLOAD_KEYS = {"message_hash", "window_days", "asked_by", "intention_reason"}
+REPORTED_PAYLOAD_KEYS = {"value", "matcher_version", "intention_reason"}
+
+
+def subject(link: dict, opportunity: str = OPP) -> list[dict]:
+    return [{"outcome_id": f"opp-outcome:{opportunity}", "opportunity_id": opportunity, **link}]
+
+
+def asked_and_reported(av, live) -> tuple[dict, dict]:
+    [asked] = events(av, live, "outcome.asked")
+    [reported] = events(av, live, "outcome.reported")
+    return asked, reported
+
+
+def test_an_ask_about_a_connection_with_one_known_intention_names_it_and_so_does_the_answer(live, ctx, tenant, av):
+    ask_delivered(live, ctx, tenant, subjects=subject(LINKED))
+    resident_says(ctx, "met")
+    assert live._COLLECTOR.outcome_tick().get("answered") == 1
+    asked, reported = asked_and_reported(av, live)
+    assert asked["intention_id"] == INTENT and asked["payload"]["intention_reason"] is None
+    assert reported["intention_id"] == INTENT and reported["payload"]["intention_reason"] is None
+    assert reported["in_reply_to_event_id"] == asked["event_id"]
+    # Carried on file with the ask, as an id only.
+    [entry] = json.loads((tenant.state / "outcome-ask" / "asks.json").read_text())["asks"]
+    assert set(entry) == {"execution_id", "outcome_id", "opportunity_id", "intention_id", "intention_reason", "question_hash"}
+    assert (entry["intention_id"], entry["intention_reason"]) == (INTENT, None)
+
+
+def test_an_ask_about_a_connection_with_several_intentions_names_none_and_says_ambiguous(live, ctx, tenant, av):
+    ask_delivered(live, ctx, tenant, subjects=subject(AMBIGUOUS))
+    resident_says(ctx, "not useful")
+    live._COLLECTOR.outcome_tick()
+    asked, reported = asked_and_reported(av, live)
+    for event in (asked, reported):
+        assert event["intention_id"] is None and event["payload"]["intention_reason"] == "ambiguous"
+
+
+def test_an_ask_about_a_connection_with_no_known_intention_names_none_and_says_not_linked(live, ctx, tenant, av):
+    ask_delivered(live, ctx, tenant, subjects=subject(NOT_LINKED))
+    resident_says(ctx, "missed")
+    live._COLLECTOR.outcome_tick()
+    asked, reported = asked_and_reported(av, live)
+    for event in (asked, reported):
+        assert event["intention_id"] is None and event["payload"]["intention_reason"] == "not_linked"
+
+
+def test_an_answer_after_a_restart_carries_the_asks_intention_from_file_not_recomputed(live, ctx, tenant, av):
+    ask_delivered(live, ctx, tenant, subjects=subject(LINKED))
+    module(live).reset_memory()
+    # After a restart only a reply to the ask's own question can count (§3).
+    resident_says(ctx, pointer(QUESTION, "useful"))
+    assert live._COLLECTOR.outcome_tick().get("answered") == 1
+    asked, reported = asked_and_reported(av, live)
+    assert asked["intention_id"] == reported["intention_id"] == INTENT
+
+
+def test_an_ask_staged_before_m2b_and_answered_after_it_names_no_intention_and_says_why(live, ctx, tenant, av):
+    """A version 1 stage (the trigger from before), armed and answered by this plugin."""
+    ask_delivered(live, ctx, tenant, legacy=True)
+    resident_says(ctx, "met")
+    assert live._COLLECTOR.outcome_tick().get("answered") == 1
+    asked, reported = asked_and_reported(av, live)
+    for event in (asked, reported):
+        assert event["intention_id"] is None and event["payload"]["intention_reason"] == "predates_link"
+
+
+def test_an_ask_armed_before_m2b_is_still_confirmed_and_names_no_intention(live, tenant, av):
+    execution = uuid.uuid4().hex
+    end = time.time() - 10
+    tenant.finish(execution, at=end)
+    forged_armed(tenant, execution, staged=end - 20, armed=end - 5, subject={"outcome_id": OUTCOME, "opportunity_id": OPP})
+    assert live._COLLECTOR.outcome_tick().get("asked") == 1
+    [asked] = events(av, live, "outcome.asked")
+    assert asked["intention_id"] is None and asked["payload"]["intention_reason"] == "predates_link"
+
+
+def test_an_ask_delivered_before_m2b_answered_after_it_does_not_crash_and_names_no_intention(live, ctx, tenant, av):
+    """Asks on file as the plugin before M2b wrote them: four keys, no intention."""
+    execution = uuid.uuid4().hex
+    tenant.finish(execution, at=time.time() - 60)
+    question_hash = live._COLLECTOR.keyed_hash(module(live).question_key(QUESTION))
+    write_asks(tenant, {"execution_id": execution, "outcome_id": OUTCOME, "opportunity_id": OPP, "question_hash": question_hash})
+    resident_says(ctx, pointer(QUESTION, "met"))
+    codes = live._COLLECTOR.outcome_tick()
+    assert codes.get("answered") == 1, codes
+    [reported] = events(av, live, "outcome.reported")
+    assert reported["intention_id"] is None and reported["payload"]["intention_reason"] == "predates_link"
+    assert reported["outcome_id"] == OUTCOME
+    # The next ask rewrites the file in the new shape, this entry with `predates_link`.
+    ask_delivered(live, ctx, tenant, subjects=subject(LINKED, "second"))
+    entries = {e["opportunity_id"]: e for e in json.loads((tenant.state / "outcome-ask" / "asks.json").read_text())["asks"]}
+    assert (entries[OPP]["intention_id"], entries[OPP]["intention_reason"]) == (None, "predates_link")
+    assert (entries["second"]["intention_id"], entries["second"]["intention_reason"]) == (INTENT, None)
+
+
+def test_an_intention_switched_on_file_after_the_ask_takes_no_answer(live, ctx, tenant, av):
+    """The pair can never disagree: an ask whose intention changed on file is tampered."""
+    execution = ask_delivered(live, ctx, tenant, subjects=subject(LINKED))
+    question_hash = json.loads((tenant.state / "outcome-ask" / "asks.json").read_text())["asks"][0]["question_hash"]
+    write_asks(tenant, {"execution_id": execution, "outcome_id": OUTCOME, "opportunity_id": OPP,
+                        "intention_id": "bbbbbbbb-0000-4000-8000-000000000009", "intention_reason": None, "question_hash": question_hash})
+    resident_says(ctx, "met")
+    assert live._COLLECTOR.outcome_tick().get("ask_tampered") == 1
+    assert events(av, live, "outcome.reported") == []
+
+
+def test_an_intention_switched_in_the_armed_file_emits_nothing(live, ctx, tenant, av):
+    execution = uuid.uuid4().hex
+    tenant.stage(subjects=subject(NOT_LINKED))
+    evening_reply(ctx, tenant, execution)
+    path = tenant.armed_dir / f"{execution}.json"
+    body = json.loads(path.read_text())
+    assert body["v"] == 2 and body["subject"]["intention_reason"] == "not_linked"
+    body["subject"] = {**body["subject"], **LINKED}
+    tenant.write_private(path, body)
+    tenant.finish(execution)
+    assert live._COLLECTOR.outcome_tick().get("armed_tampered") == 1
+    assert events(av, live, "outcome.asked") == []
+
+
+@pytest.mark.parametrize("link", [LINKED, AMBIGUOUS, NOT_LINKED], ids=["one", "several", "none"])
+def test_both_events_keep_schema_version_1_and_exactly_these_keys(live, ctx, tenant, av, link):
+    """No new event version and no switch: the envelope's `intention_id` is a
+    registered field of every type, and `outcome.asked@1` / `outcome.reported@1`
+    are open payloads (agentvillage-data `src/schemas/index.ts`). No text: the
+    exact key sets, and no value outside ids, hashes, codes and constants."""
+    ask_delivered(live, ctx, tenant, subjects=subject(link))
+    resident_says(ctx, "met")
+    live._COLLECTOR.outcome_tick()
+    asked, reported = asked_and_reported(av, live)
+    for event, payload_keys in ((asked, ASKED_PAYLOAD_KEYS), (reported, REPORTED_PAYLOAD_KEYS)):
+        assert event["schema_version"] == 1
+        assert set(event) == ENVELOPE_KEYS
+        assert set(event["payload"]) == payload_keys
+        assert "Arjun" not in json.dumps(event)
+    assert reported["payload"]["value"] == "met"

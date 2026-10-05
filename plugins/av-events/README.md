@@ -218,8 +218,8 @@ backlog can differ from `emitted_at` by minutes. Every `marts` time series is bu
 | `action.attempted` / `action.failed` | `post_tool_call` on an EdgeOS RSVP or cancellation | `action_class`, `target_system`, `receipt`, `execution_token_id`, `error`, `reverses_action_id`, `reversal`, `supersedes_action_id`, `operation`, `edgeos_event_id`, `occurrence_start`, `allowlist_version` — see "EdgeOS actions" |
 | `action.receipted` | `post_tool_call` on the EdgeOS read that confirms it | as above, with `receipt` {`kind: edgeos_confirming_read`, `id`: participant id} |
 | `cron.run` | the cron tail, on the flusher thread | `job_id`, `job_name`, `execution_id`, `status`, `input_tokens`, `output_tokens`, `claimed_at`, `started_at`, `finished_at`, `delivery_outcome` — see "Cron capture" |
-| `outcome.asked` | the flusher, once Hermes's ledger shows the evening job's question delivered or queued | `message_hash` (the reply's keyed hash, = that turn's `message.out` `content_hash`; null in `metadata`), `window_days` (1), `asked_by` (`outcome_cron`); envelope `outcome_id`, `opportunity_id` — see "The evening outcome ask" |
-| `outcome.reported` | the flusher, for a resident's Telegram DM whose whole text is an answer to the one open ask, sent as their next message after it or as a reply to it | `value`, `matcher_version` (`outcome_reply_v2`); `self_report`, actor `participant`, envelope `outcome_id`, `opportunity_id`, `in_reply_to_event_id` = the ask — see "The evening outcome ask" |
+| `outcome.asked` | the flusher, once Hermes's ledger shows the evening job's question delivered or queued | `message_hash` (the reply's keyed hash, = that turn's `message.out` `content_hash`; null in `metadata`), `window_days` (1), `asked_by` (`outcome_cron`), `intention_reason` (null, or `not_linked` \| `ambiguous` \| `predates_link`); envelope `outcome_id`, `opportunity_id`, `intention_id` (null today) — see "The evening outcome ask" |
+| `outcome.reported` | the flusher, for a resident's Telegram DM whose whole text is an answer to the one open ask, sent as their next message after it or as a reply to it | `value`, `matcher_version` (`outcome_reply_v2`), `intention_reason` (the ask's); `self_report`, actor `participant`, envelope `outcome_id`, `opportunity_id`, `intention_id` (the ask's), `in_reply_to_event_id` = the ask — see "The evening outcome ask" |
 | `profile.updated` | `on_session_finalize`, when a USER.md changed | `kind` ∈ `memory_profile`\|`landing_profile`, `user_md_hash`, plus `length` above `metadata` |
 | `llm.call` | `pre_api_request` + `post_api_request` | `model`, `provider`, the five token buckets, `latency_ms`, `finish_reason`, `tools_hash`, `system_prompt_hash`, plus lengths above `metadata` |
 | `llm.call` (failed) | `pre_api_request` + `api_request_error` | as above with `finish_reason: "error"`, `error_type`, `status_code`, `retryable`, and zeroed token counts |
@@ -1368,6 +1368,13 @@ The whole design, as built, is `docs/design/outcome-ask.md`. In short:
   After a restart, a plain match for an ask delivered before it does not count.
   A failed ledger read keeps the answer for the next pass. The event id is derived from the ask,
   so ingest keeps one answer per ask. Nothing in `metadata` capture.
+- **Intention (M2b).** Both events name the intention the asked-about connection belongs to in
+  the envelope's `intention_id` (the id space of `intention.captured`), or leave it null with a
+  code in `intention_reason`: `not_linked` (no intention known; today every ask, because Index's
+  `list_opportunities` row names no intent and the overlay stores none), `ambiguous` (several),
+  `predates_link` (a stage, armed file or ask on file from before M2b). The trigger decides it and
+  stages it; this plugin carries it unchanged through the armed file and the asks on file, so an
+  answer always names what its ask named. An id, never text. Design note §8.
 - **Hash.** The hash is of the model's reply. Hermes may wrap a cron delivery
   (`cron.wrap_response`) or prepend a fallback notice, so it is not of the Telegram text.
 - **Trust boundary.** Everything in the agent's home is writable by the agent: these files,

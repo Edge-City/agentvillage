@@ -14,11 +14,14 @@ import { join } from "node:path";
 import type { BriefOpportunity } from "../build-daily-brief-context";
 import {
   MAX_ATTEMPTS,
+  NOT_LINKED,
   askedLedgerPath,
   backfillAnnounced,
   dueSubjects,
+  intentionLink,
   outcomeId,
   outcomeQuestion,
+  stageFor,
   stagePath,
 } from "../outcome-ask";
 import { type ProactiveOptions, runProactive } from "../proactive";
@@ -123,10 +126,11 @@ describe("the evening asks about one accepted connection announced two or more d
     expect(result.lines.join("\n")).not.toContain(THIRD_PARTY);
     const staged = stage()!;
     expect(staged).toEqual({
-      v: 1, action: "evening", date: DATE, staged_at: EVENING.toISOString(), asked_by: "outcome_cron", window_days: 1,
+      v: 2, action: "evening", date: DATE, staged_at: EVENING.toISOString(), asked_by: "outcome_cron", window_days: 1,
       // Round 3: the plain SHA-256 of the key of the exact question shown, a hash and never the text.
       question_sha256: createHash("sha256").update("did you and arjun mehta meet? reply met, not useful, or missed", "utf8").digest("hex"),
-      subjects: [{ outcome_id: `opp-outcome:${OPP}`, opportunity_id: OPP }],
+      // M2b: Index names no intent for the connection, so the ask names none and says why.
+      subjects: [{ outcome_id: `opp-outcome:${OPP}`, opportunity_id: OPP, intention_id: null, intention_reason: "not_linked" }],
     });
     expect(readFileSync(stagePath(home), "utf8")).not.toContain("Arjun");
     expect(statSync(stagePath(home)).mode & 0o777).toBe(0o600);
@@ -171,7 +175,7 @@ describe("the evening asks about one accepted connection announced two or more d
     announced({ [OPP]: "2026-10-09", [OPP2]: "2026-10-11" });
     const result = await runProactive("evening", options({ accepted: async () => [accepted("www evil", OPP), accepted("Second Person", OPP2)] }));
     expect(output(result.lines).outcomeQuestion).toBe(outcomeQuestion("Second Person"));
-    expect(stage()!.subjects).toEqual([{ outcome_id: `opp-outcome:${OPP2}`, opportunity_id: OPP2 }]);
+    expect(stage()!.subjects).toEqual([{ outcome_id: `opp-outcome:${OPP2}`, opportunity_id: OPP2, intention_id: null, intention_reason: "not_linked" }]);
     // No attempt for the skipped one; the skip is a count in the run log, never a name.
     expect(state().outcomeAsk).toEqual({ attempts: { [OPP2]: [DATE] } });
     expect(runLog().at(-1)).toMatchObject({ decision: "woke", detail: "outcome-ask", withheld: 1 });
@@ -321,7 +325,7 @@ describe("the evening asks about one accepted connection announced two or more d
     announced({ [OPP2]: "2026-10-11", [OPP]: "2026-10-09" });
     const result = await runProactive("evening", options({ accepted: async () => [accepted("Second", OPP2), accepted("First", OPP)] }));
     expect(output(result.lines).outcomeQuestion).toBe(outcomeQuestion("First"));
-    expect(stage()!.subjects).toEqual([{ outcome_id: `opp-outcome:${OPP}`, opportunity_id: OPP }]);
+    expect(stage()!.subjects).toEqual([{ outcome_id: `opp-outcome:${OPP}`, opportunity_id: OPP, intention_id: null, intention_reason: "not_linked" }]);
   });
 
   test("nothing due and nothing pending: silent, no stage", async () => {
@@ -395,5 +399,71 @@ describe("the helpers", () => {
     expect(outcomeId("x".repeat(101))).toBeNull();
     expect(outcomeId(OPP)).toBe(`opp-outcome:${OPP}`);
     expect(dueSubjects({ negotiationSummary: { announcedOn: { "has space": "2026-10-01" } } }, new Set(), DATE)).toEqual([]);
+  });
+});
+
+describe("M2b: the stage names the intention the connection belongs to", () => {
+  /** An Index intent id (synthetic): the id `intention.captured` carries for an Index capture. */
+  const INTENT = "aaaaaaaa-0000-4000-8000-000000000001";
+  const INTENT2 = "aaaaaaaa-0000-4000-8000-000000000002";
+  const SUBJECT_KEYS = ["intention_id", "intention_reason", "opportunity_id", "outcome_id"];
+
+  function withIntents(matchedIntentIds: string[] | undefined): BriefOpportunity {
+    return { ...accepted("Arjun Mehta"), ...(matchedIntentIds ? { matchedIntentIds } : {}) };
+  }
+
+  test("a connection with exactly one known intention: the stage names it, with no reason", async () => {
+    announced({ [OPP]: "2026-10-12" });
+    await runProactive("evening", options({ accepted: async () => [withIntents([INTENT])] }));
+    const [subject] = stage()!.subjects;
+    expect(subject).toEqual({ outcome_id: `opp-outcome:${OPP}`, opportunity_id: OPP, intention_id: INTENT, intention_reason: null });
+  });
+
+  test("a connection with several intentions: no id, `ambiguous`", async () => {
+    announced({ [OPP]: "2026-10-12" });
+    await runProactive("evening", options({ accepted: async () => [withIntents([INTENT, INTENT2])] }));
+    expect(stage()!.subjects[0]).toMatchObject({ intention_id: null, intention_reason: "ambiguous" });
+  });
+
+  test("a connection with no intention reference (every live Index row today): no id, `not_linked`", async () => {
+    announced({ [OPP]: "2026-10-12" });
+    await runProactive("evening", options({ accepted: async () => [withIntents(undefined)] }));
+    expect(stage()!.subjects[0]).toMatchObject({ intention_id: null, intention_reason: "not_linked" });
+    await runProactive("evening", options({ now: () => new Date("2026-10-15T13:30:00Z"), accepted: async () => [withIntents([])] }));
+    expect(stage()!.subjects[0]).toMatchObject({ intention_id: null, intention_reason: "not_linked" });
+  });
+
+  test("the stage holds ids, codes and a hash only: the exact subject keys, no name, no intention text", async () => {
+    announced({ [OPP]: "2026-10-12" });
+    await runProactive("evening", options({ accepted: async () => [withIntents([INTENT])] }));
+    const raw = readFileSync(stagePath(home), "utf8");
+    expect(Object.keys(stage()!).sort()).toEqual(["action", "asked_by", "date", "question_sha256", "staged_at", "subjects", "v", "window_days"]);
+    expect(Object.keys(stage()!.subjects[0]).sort()).toEqual(SUBJECT_KEYS);
+    expect(raw).not.toContain("Arjun");
+    expect(raw).not.toContain(THIRD_PARTY);
+  });
+
+  test("intentionLink: one id, several, none, and anything that is not an id", () => {
+    expect(intentionLink([INTENT])).toEqual({ intention_id: INTENT, intention_reason: null });
+    // The same id twice is one intention.
+    expect(intentionLink([INTENT, INTENT])).toEqual({ intention_id: INTENT, intention_reason: null });
+    expect(intentionLink([INTENT, INTENT2])).toEqual({ intention_id: null, intention_reason: "ambiguous" });
+    expect(intentionLink([INTENT, "not an id"])).toEqual({ intention_id: null, intention_reason: "ambiguous" });
+    expect(intentionLink([])).toEqual(NOT_LINKED);
+    expect(intentionLink(undefined)).toEqual(NOT_LINKED);
+    // Text is never an id: a wording with spaces, a non-string, an over-long id.
+    expect(intentionLink(["meet people building agent memory"])).toEqual(NOT_LINKED);
+    expect(intentionLink([7])).toEqual(NOT_LINKED);
+    expect(intentionLink(["x".repeat(129)])).toEqual(NOT_LINKED);
+  });
+
+  test("stageFor never writes a link that is not intentionLink's shape", () => {
+    const now = EVENING;
+    const q = outcomeQuestion("Arjun");
+    expect(stageFor(OPP, DATE, now, q)!.subjects[0]).toMatchObject(NOT_LINKED);
+    expect(stageFor(OPP, DATE, now, q, { intention_id: "has space", intention_reason: null })!.subjects[0]).toMatchObject(NOT_LINKED);
+    expect(stageFor(OPP, DATE, now, q, { intention_id: INTENT, intention_reason: "ambiguous" })!.subjects[0]).toMatchObject(NOT_LINKED);
+    expect(stageFor(OPP, DATE, now, q, { intention_id: null, intention_reason: "ambiguous" })!.subjects[0]).toMatchObject({ intention_id: null, intention_reason: "ambiguous" });
+    expect(stageFor(OPP, DATE, now, q, { intention_id: INTENT, intention_reason: null })!.v).toBe(2);
   });
 });

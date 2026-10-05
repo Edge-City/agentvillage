@@ -24,6 +24,12 @@
  * AV_EVENTS_ENABLED off, outcome_ask or post_llm_call disabled) or its asked ledger is unreadable,
  * nothing could record an ask, and the evening asks nobody
  * (proactive.ts outcomePluginOff, readAskedIds).
+ *
+ * M2b: the stage's subject also names the intention the connection belongs
+ * to (`intention_id`), or null with a reason (`intention_reason`), and the
+ * plugin carries it onto `outcome.asked` and `outcome.reported` unchanged
+ * (`intentionLink`; docs/design/outcome-ask.md §8). Today it is always null
+ * with `not_linked`: Index's `list_opportunities` row names no intent.
  */
 
 import { createHash } from "node:crypto";
@@ -205,8 +211,67 @@ export function questionSha256(sentence: string): string {
   return createHash("sha256").update(questionKey(sentence), "utf8").digest("hex");
 }
 
+/**
+ * Why an ask names no intention: `not_linked` (no intention known for the
+ * connection) or `ambiguous` (several, and not the one it was matched on).
+ * The plugin adds a third, `predates_link`, for files from before M2b; the
+ * trigger never writes it.
+ */
+export type IntentionReason = "not_linked" | "ambiguous";
+
+/** The stage subject's intention: an id with a null reason, or a null id with a reason. Never both, never a guess. */
+export interface IntentionLink {
+  intention_id: string | null;
+  intention_reason: IntentionReason | null;
+}
+
+export const NOT_LINKED: IntentionLink = Object.freeze({ intention_id: null, intention_reason: "not_linked" });
+const AMBIGUOUS: IntentionLink = Object.freeze({ intention_id: null, intention_reason: "ambiguous" });
+
+/**
+ * An envelope id (agentvillage-data `src/envelope.ts` ID_PATTERN; the plugin's
+ * `_ID`): an Index intent id is a uuid. Nothing with a space fits, so no
+ * intention's wording can ride in this field.
+ */
+const INTENTION_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+
+/**
+ * The intention an ask is about, from the resident's own intent ids Index
+ * says the connection was matched on (`BriefOpportunity.matchedIntentIds`):
+ *
+ * - none (or no list): `not_linked`;
+ * - exactly one distinct id, and a valid one: that id;
+ * - more than one distinct entry: `ambiguous`. One outcome belongs to one
+ *   intention on the data side, and an envelope carries one `intention_id`,
+ *   so several cannot all be named, and picking one would be a guess. When
+ *   Index says which one the match was made on, the parser lists that one
+ *   alone;
+ * - a single entry that is not an id: `not_linked`.
+ *
+ * No heuristic (the most recent intention, text similarity) ever fills it: a
+ * wrong credit is worse than none.
+ */
+export function intentionLink(matched: readonly unknown[] | undefined): IntentionLink {
+  if (!Array.isArray(matched) || matched.length === 0) return NOT_LINKED;
+  const distinct = new Set(matched);
+  if (distinct.size > 1) return AMBIGUOUS;
+  const [only] = distinct;
+  return typeof only === "string" && INTENTION_ID.test(only) ? { intention_id: only, intention_reason: null } : NOT_LINKED;
+}
+
+/** A link exactly as `intentionLink` makes it, else NOT_LINKED. */
+function checkedLink(link: IntentionLink): IntentionLink {
+  if (link.intention_id === null) return link.intention_reason === "ambiguous" ? AMBIGUOUS : NOT_LINKED;
+  return typeof link.intention_id === "string" && INTENTION_ID.test(link.intention_id) && link.intention_reason === null
+    ? { intention_id: link.intention_id, intention_reason: null }
+    : NOT_LINKED;
+}
+
+/** The stage version: 2 since M2b (the subject names its intention). The plugin still reads 1 as `predates_link`. */
+export const STAGE_VERSION = 2;
+
 export interface OutcomeStage {
-  v: 1;
+  v: typeof STAGE_VERSION;
   action: typeof OUTCOME_ASK_ACTION;
   date: string;
   staged_at: string;
@@ -214,21 +279,21 @@ export interface OutcomeStage {
   window_days: number;
   /** The SHA-256 of the key of the exact question shown to the model: the plugin arms only on a reply with this key. */
   question_sha256: string;
-  subjects: Array<{ outcome_id: string; opportunity_id: string }>;
+  subjects: Array<{ outcome_id: string; opportunity_id: string } & IntentionLink>;
 }
 
-export function stageFor(opportunityId: string, date: string, now: Date, question: string): OutcomeStage | null {
+export function stageFor(opportunityId: string, date: string, now: Date, question: string, link: IntentionLink = NOT_LINKED): OutcomeStage | null {
   const id = outcomeId(opportunityId);
   if (!id) return null;
   return {
-    v: 1,
+    v: STAGE_VERSION,
     action: OUTCOME_ASK_ACTION,
     date,
     staged_at: now.toISOString(),
     asked_by: ASKED_BY,
     window_days: WINDOW_DAYS,
     question_sha256: questionSha256(question),
-    subjects: [{ outcome_id: id, opportunity_id: opportunityId }],
+    subjects: [{ outcome_id: id, opportunity_id: opportunityId, ...checkedLink(link) }],
   };
 }
 
