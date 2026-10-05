@@ -24,7 +24,11 @@ references are to `~/.hermes/hermes-agent` at tag `v2026.9.24`; croniter referen
 **Review residuals (M2b)**, each in its section below:
 
 - A resume that loses the lock before its re-anchor says `resumeMayFire: true` on `lock-lost` (§2).
+- A resume that Hermes saved and then failed or timed out says `resumeMayFire: true` too: every
+  failure after a resume over a missed slot says it (§2, fix round 1).
 - A write that repairs a non-list `adminSchedules` says `adminSchedulesRepaired: true` (§1, §2).
+- `remove` reports `dropped` beside `adminSchedulesRepaired`, as `set` and `add` do (§2, fix
+  round 1).
 - `outsideFrom` can be today's or yesterday's date in the job's zone, meaning outside now (§2, §3).
 - Zone links: only the listed names resolve, and any other pair of names for one zone is refused.
   A zone set only in the container environment can mistime one first run (§3).
@@ -234,7 +238,7 @@ worth retrying from one that is not. That is why exit 1 means "read back first",
 | `job-unreadable` | 2 | `job` | a job by that name has an id that is not Hermes's (`^[0-9a-f]{12}$`). Nothing is acted on, and the id is never passed to Hermes or printed. For `preview` the job is `"preview"`. | no; a person looks (a roll removes a retired or preview name) |
 | `not-team-tenant` | 3 | | `preview` on a tenant without `AV_TEAM_TENANT=1` (§5) | no |
 | `busy` | 4 | | the jobs lock is held | **yes** |
-| `hermes-failed` | 1 | `step`, `applied`; `removed` (remove), `resumeMayFire` (reanchor) | a Hermes command exited non-zero. `step` is one of `schedule`, `enabled`, `reanchor`, `create`, `edit`, `remove`, `remove-previous`. | read back, then once |
+| `hermes-failed` | 1 | `step`, `applied`; `removed` (remove), `resumeMayFire` (reanchor, or `enabled` when Hermes saved a resume over a missed slot) | a Hermes command exited non-zero. `step` is one of `schedule`, `enabled`, `reanchor`, `create`, `edit`, `remove`, `remove-previous`. | read back, then once |
 | `hermes-timeout` | 1 | as `hermes-failed` | a Hermes command ran past 60 s and was killed; `applied` is read back from `jobs.json` | read back, then once; again, alert (the CLI hangs) |
 | `lock-lost` | 1 | `applied` | the jobs lock was taken over (this command ran past its stale time), or the next Hermes command could not end before it would be; nothing more was written | read back, then once |
 | `jobs-store-unreadable` | 1 | `applied` (`[]` when refused at the start) | `cron/jobs.json` is present and unreadable (§2, "Hermes's job store"); `list` says `store: "unreadable"` | no; a person looks |
@@ -365,6 +369,12 @@ Hermes's clock) before resuming.
 - If the lock is lost after the resume and before the re-apply starts: exit 1, `lock-lost`,
   `applied: ["enabled"]`, `resumeMayFire: true`, for the same reason. A lock lost before the
   resume ran says nothing about a catch-up: the job is still paused.
+- If the resume itself fails or is killed after Hermes saved it (`hermes-failed` or
+  `hermes-timeout`, `step: "enabled"`, and the read-back shows the job enabled, so
+  `applied: ["enabled"]`): the re-apply never ran, and the reply says `resumeMayFire: true`.
+- The rule behind all of these: whenever a missed slot existed and the read-back shows the resume
+  applied, every failure reply carries `resumeMayFire: true`. A resume that failed before Hermes
+  saved it (`applied` without `enabled`) and a failed pause say nothing about a catch-up.
 - `--schedule` given in the same command as `--enabled true` on a paused job: the schedule is
   edited while paused, which leaves the next run stale. The resume then re-anchors to the new
   schedule (no window), or reports `resumeMayFire: true` (window).
@@ -380,7 +390,7 @@ bun install/jobs.ts add --template <brief|digest-preview|evening-ask> --schedule
 ```
 
 `add` creates the template's job, or brings an existing one to this schedule and shape
-(`addCommand`, jobs.ts:871). It never creates two jobs. It refuses `default` for the window and
+(`addCommand`, jobs.ts:874). It never creates two jobs. It refuses `default` for the window and
 the zone.
 
 1. **The settings first**, so the job never runs, not even once, without its window. They are
@@ -415,15 +425,16 @@ Success line:
 bun install/jobs.ts remove --template <name>
 ```
 
-`removeCommand`, jobs.ts:995, removes every job of that name, its ids in `installed_jobs.json`,
+`removeCommand`, jobs.ts:998, removes every job of that name, its ids in `installed_jobs.json`,
 and its settings entry. An emptied file is removed. If the file is unreadable it is left alone.
 
 ```json
-{"ok":true,"job":"tpl-<name>","result":"removed"|"absent","removed":<n>,"changed":["job"?,"settings"?],"adminSchedulesRepaired":true?}
+{"ok":true,"job":"tpl-<name>","result":"removed"|"absent","removed":<n>,"changed":["job"?,"settings"?],"dropped":["adminSchedules"]?,"adminSchedulesRepaired":true?}
 ```
 
-`adminSchedulesRepaired` means what it means for `set`, and only when the settings file was
-rewritten.
+`dropped` and `adminSchedulesRepaired` mean what they mean for `set` and `add`, and appear only
+when the settings file was rewritten. `remove` merges no entry, so the only name it can drop is
+`"adminSchedules"`.
 
 A failure part-way reports `removed`, the count already removed.
 
@@ -654,7 +665,7 @@ bound, so it is always checked.
 
 ### Reading at run time
 
-`readJobSettings` / `deliveryFor`, job-settings.ts:451 and :541. The read never throws, and it
+`readJobSettings` / `deliveryFor`, job-settings.ts:451 and :547. The read never throws, and it
 never widens a window.
 
 - **The file is refused whole** when it is not a regular file, is over 64 KiB, cannot be read, is
@@ -737,7 +748,7 @@ Write exactly `AV_TEAM_TENANT=1`, with no quotes.
 **Two gates.**
 
 1. `jobs.ts preview` refuses (exit 3) before taking the lock or creating anything.
-2. The trigger refuses too (`runPreview`, proactive.ts:832). A preview job that reaches a non-team
+2. The trigger refuses too (`runPreview`, proactive.ts:838). A preview job that reaches a non-team
    tenant by any route stays silent (`preview-refused`): the model is never woken, so nothing is
    delivered.
 
@@ -763,11 +774,11 @@ a manual run to the gateway when delivery is relay-fronted (`_forward_relay_fron
 - reads the state file once, without the lock (every write of it is a rename), into a private
   copy under `av-events/proactive/preview-*/`;
 - runs the content path against that copy. The copy is deleted afterwards, on the normal path and
-  on the 100 s hard-deadline exit (`hardStopCleanup`, proactive.ts:811, called by `main`'s
+  on the 100 s hard-deadline exit (`hardStopCleanup`, proactive.ts:817, called by `main`'s
   deadline timer; tested end to end in a child process that runs the real `main` with a 300 ms
   deadline and a content path that never returns, `fixtures/proactive-deadline-child.ts`);
 - applies no record, writes no day mark, stages no outcome ask, and clears no real stage
-  (proactive.ts:701; tested: a seeded stage file is left byte for byte).
+  (proactive.ts:707; tested: a seeded stage file is left byte for byte).
 
 A preview before the real run, or after it, changes nothing the real run reads. The Script Output
 is the real run's, and no message wording changed.
@@ -808,7 +819,7 @@ job (§2).
 - The evening template skips the outcome ask. The av-events plugin arms the ask for the
   installer's `Edge — evening questions` job only (`plugins/av-events/_outcome_ask.py`
   `staged_action`). From any other job the ask would go out unrecorded and be asked again
-  (proactive.ts:701-708).
+  (proactive.ts:707-714).
 - Template job names are not in `cron_job_names.json`, so `cron.run` reports their `job_name` as
   null. No seed change, so no data release is needed.
 
@@ -818,7 +829,7 @@ job (§2).
 
 - The brief's gate opens on exactly rc13's minutes. Every job decides as on origin/main at every
   30 s over 48 hours (tested for all five). The test compares the trigger's live decision path
-  (`windowDecision`, proactive.ts:759, which `runAgentAction` calls) against rc13's decision
+  (`windowDecision`, proactive.ts:765, which `runAgentAction` calls) against rc13's decision
   frozen as a fixture, copied verbatim from origin/main at `9ff10b9`
   (`skills/index-network/scripts/tests/fixtures/rc13-decision.ts`, never edited), so it cannot
   drift with the source. The trigger no longer carries rc13's `inBriefWindow`.
