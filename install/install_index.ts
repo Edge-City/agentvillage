@@ -250,9 +250,14 @@ function proactiveScript(action: string): Pick<DigestCronSpec, "scriptFile" | "s
   return { scriptFile: PROACTIVE_SHIM, scriptInstallName: `agentvillage_proactive_${action}.sh`, failureDeliver: "local" };
 }
 
-/** The prefetch's stored prompt. Never shown to a model: a no_agent job runs only its script. */
+/**
+ * The prefetch's stored prompt. No model reads it while the job is no_agent
+ * (Hermes runs only its script); after the documented rollback command turns
+ * the job into an agent job, a model does, so the last sentence tells it to
+ * reply exactly `[SILENT]` (B1-fix F12).
+ */
 export const PREFETCH_PROMPT =
-  "Overnight prefetch of the morning brief's context. No model takes part in this job: the script Hermes starts before it is the whole job, and it delivers nothing.";
+  "Overnight prefetch of the morning brief's context. No model takes part in this job: the script Hermes starts before it is the whole job, and it delivers nothing. If you are a model reading this, reply exactly `[SILENT]`.";
 
 export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
   {

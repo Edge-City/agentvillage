@@ -360,12 +360,24 @@ the rollback roll, on each resident, for each of the six jobs (ids from
 
     hermes cron edit <id> --agent --script ""
 
-Until the rollback roll lands, those jobs run their current prompts with no
-Script Output, and each prompt then replies `[SILENT]`, so nothing reaches the
-resident (the 02:00 job delivers nowhere in any case). Then roll the previous tag as usual; its installer restores its own
-prompts (`prepare.md` and `send.md` come back with its files). The
-`--failure-deliver local` setting can stay. `av-events/proactive/` and the
-`proactiveRuns` key in the state file are left behind and are harmless.
+What that does: `--script ""` clears the job's pre-run script and `--agent`
+turns `no_agent` off, so each of the six is a plain agent job. Until the
+rollback roll lands, every run of one is a model turn (it costs tokens) on
+the job's current prompt with no Script Output block above it. The five
+resident-facing prompts then reply exactly `[SILENT]`, so Hermes delivers
+nothing: no brief, drop, follow-up or evening note goes out in that time.
+The 02:00 job has no delivery target, which Hermes treats as `local`: its
+reply is kept in the job's local output and never reaches the resident's
+chat. Its prompt (`PREFETCH_PROMPT` in `install/install_index.ts`) ends by
+telling a model that reads it to reply exactly `[SILENT]`, so that reply is
+`[SILENT]` too; on a tenant still on a build before B1-fix the prompt lacks
+that line and the model writes a sentence into that local output instead.
+Then roll the previous tag as usual; its installer rewrites only prompts,
+which restores its own (`prepare.md` and `send.md` come back with its files).
+The `--failure-deliver local` setting, the shims in `$HERMES_HOME/scripts/`,
+`av-events/proactive/`, the `timezone` and `cron.script_timeout_seconds` keys,
+and the `proactiveRuns` key in the state file are left behind; they are
+harmless to the older release.
 
 ## The data pipeline
 

@@ -13,7 +13,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { DIGEST_CRON_SPECS, PROACTIVE_SHIM, type DigestCronSpec } from "../install_index";
+import { DIGEST_CRON_SPECS, PREFETCH_PROMPT, PROACTIVE_SHIM, type DigestCronSpec } from "../install_index";
 import { SCAN_INVISIBLE_CHARS, cronScanHit } from "../../skills/index-network/scripts/proactive-text";
 import { ACTIONS } from "../../skills/index-network/scripts/proactive";
 
@@ -109,6 +109,12 @@ describe("the six proactive jobs (DATA-314)", () => {
     expect(line).not.toMatch(/or a cron fires\.(\s|$)/);
     expect(line).toContain("whose prompt says to write only from the Script Output is not one of those");
     expect(line).toContain("call no tool");
+  });
+
+  test("F12: the prefetch's prompt ends by telling a model that reads it (after the rollback command) to reply [SILENT]", () => {
+    const prefetch = proactive.find((spec) => spec.noAgent)!;
+    expect(prompt(prefetch)).toBe(PREFETCH_PROMPT);
+    expect(PREFETCH_PROMPT.endsWith(" If you are a model reading this, reply exactly `[SILENT]`.")).toBe(true);
   });
 
   test("no no_agent job delivers text: the only no_agent job is the prefetch, which delivers nothing", () => {
