@@ -4,13 +4,13 @@
  * approval read goes through the trigger's seams; nothing is mocked globally.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { approvalsWaiting, parseHeldCount } from "../approvals-waiting";
 import type { BriefOpportunity, DailyBriefContext } from "../build-daily-brief-context";
-import { type ProactiveOptions, RUNS_KEY, inBriefWindow, runProactive, scriptOutputText } from "../proactive";
+import { MAX_STATE_BYTES, type ProactiveOptions, RUNS_KEY, STATE_HEALED, corruptStatePath, inBriefWindow, runProactive, scriptOutputText } from "../proactive";
 import { DEFAULT_CONNECTIONS_URL } from "../proactive-text";
 import { lockPathFor } from "../state-lock";
 
@@ -217,8 +217,36 @@ describe("faults are silent, exit 0 for agent jobs, and never write over the sta
     expect(last(result.lines)).toEqual({ wakeAgent: false, reason: "state-locked" });
   });
 
-  test("an unreadable state file: state-unreadable, left as it is", async () => {
+  test("F4: an unreadable state file is renamed aside and the run continues from an empty state", async () => {
+    const drop = async () => ({ opportunity: card("Maya Rao", "op1") });
+    for (const [n, body] of ["{not json", "[]", "null", `{}${" ".repeat(MAX_STATE_BYTES)}`].entries()) {
+      rmSync(join(home, "memory"), { recursive: true, force: true });
+      mkdirSync(join(home, "memory"));
+      writeFileSync(stateFile(), body);
+      const at = new Date(MORNING.getTime() + n * 1000);
+      const result = await runProactive("drop-midday", options({ now: () => at, drop }));
+      expect({ n, woke: result.woke, note: result.note }).toEqual({ n, woke: true, note: STATE_HEALED });
+      expect(readFileSync(corruptStatePath(stateFile(), at), "utf8")).toBe(body);
+      expect(state()[RUNS_KEY]).toEqual({ "drop-midday": DATE });
+    }
+    const log = readFileSync(join(home, "av-events", "proactive", "triggers.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(log.at(-1)).toMatchObject({ action: "drop-midday", decision: "woke", reason: "woke", note: "state-renamed-aside" });
+  });
+
+  test("F4: at most the three newest renamed-aside files are kept; the prefetch heals too and exits 0", async () => {
+    const stamps = [0, 1, 2, 3, 4].map((n) => new Date(Date.UTC(2026, 9, 11, 20, 45, n)));
+    for (const at of stamps) {
+      writeFileSync(stateFile(), "{bad");
+      const result = await runProactive("prefetch", options({ now: () => at }));
+      expect({ reason: result.reason, exit: result.exitCode, note: result.note }).toEqual({ reason: "prefetched", exit: 0, note: STATE_HEALED });
+    }
+    const kept = readdirSync(join(home, "memory")).filter((name) => name.includes(".corrupt-")).sort();
+    expect(kept).toEqual(stamps.slice(2).map((at) => corruptStatePath("heartbeat-state.json", at)));
+  });
+
+  test("F4: a state file that cannot be renamed aside stays silent (state-unreadable) and is left as it is", async () => {
     writeFileSync(stateFile(), "{not json");
+    mkdirSync(join(corruptStatePath(stateFile(), MORNING), "occupied"), { recursive: true });
     const result = await runProactive("drop-midday", options({ drop: async () => { throw new Error("must not run"); } }));
     expect(last(result.lines)).toEqual({ wakeAgent: false, reason: "state-unreadable" });
     expect(readFileSync(stateFile(), "utf8")).toBe("{not json");

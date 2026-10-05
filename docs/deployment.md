@@ -258,7 +258,13 @@ The rules the trigger holds:
   trigger wakes the model. A run that then fails loses that day; there is no
   delivery tracking.
 - **The state file is locked** (`memory/heartbeat-state.json.lock`) while a
-  trigger reads and writes it, and written by temp file and rename.
+  trigger reads and writes it, and written by temp file and rename. A state
+  file that cannot be read as an object (bad JSON, `[]`, `null`, over 5 MB) is
+  renamed aside under the lock as `heartbeat-state.json.corrupt-<UTC stamp>`
+  (the three newest are kept), the run log line carries
+  `note: state-renamed-aside`, and the run continues from an empty state. A
+  stale lock that cannot be removed ends the wait at once
+  (`state-lock-stuck`).
 - **Every delivered message is recorded.** No `no_agent` job delivers text (a
   `no_agent` job's stdout would reach the resident with no model turn, so no
   message event or archive entry), and every job that delivers sends a failure

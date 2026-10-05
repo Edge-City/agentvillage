@@ -19,7 +19,8 @@
  *   - the brief's delivery window, 05:00 to 11:00 IST (outside it: silent);
  *   - once per day per job: the day is marked done when the trigger wakes the
  *     model (a run that then fails loses that day; no delivery tracking);
- *   - an exclusive lock around memory/heartbeat-state.json (state-lock.ts);
+ *   - an exclusive lock around memory/heartbeat-state.json (state-lock.ts); an
+ *     unreadable state file is renamed aside and the run starts from empty;
  *   - the picks and their reservations (the existing pick scripts);
  *   - what the model is given: dates, the resident's own data, sanitised
  *     schedule facts, organiser announcements, Index counts and cleaned names
@@ -37,8 +38,8 @@
  * run in av-events/proactive/triggers.jsonl.
  */
 
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 
 import { approvalsWaiting } from "./approvals-waiting";
 import { askQuestions } from "./ask-questions";
@@ -90,7 +91,12 @@ export interface TriggerResult {
   reason: string;
   /** Strings withheld because they did not clean or would trip Hermes's scanner. */
   withheld?: number;
+  /** A code for something the run repaired on its way (STATE_HEALED). */
+  note?: string;
 }
+
+/** The run renamed an unreadable state file aside and continued from an empty state. */
+export const STATE_HEALED = "state-renamed-aside";
 
 // ── Paths, state and logs ───────────────────────────────────────────────────
 
@@ -106,7 +112,7 @@ export function stateFilePath(home: string): string {
   return join(home, "memory", "heartbeat-state.json");
 }
 
-/** A larger state file is a fault: never read as empty and written over. */
+/** A larger state file is unreadable: it is renamed aside (readStateHealing), never read as empty and written over. */
 export const MAX_STATE_BYTES = 5 * 1024 * 1024;
 
 export class StateUnreadable extends Error {
@@ -137,6 +143,50 @@ export function readState(path: string): Record<string, unknown> {
     if (attempt === 0) Bun.sleepSync(150);
   }
   throw new StateUnreadable();
+}
+
+/** Unreadable state files kept beside the state file after being renamed aside; older ones are deleted. */
+export const CORRUPT_KEEP = 3;
+
+/** `heartbeat-state.json.corrupt-<UTC stamp>`, the stamp sortable (`20261012T023000123Z`). */
+export function corruptStatePath(path: string, at: Date): string {
+  return `${path}.corrupt-${at.toISOString().replace(/[-:]/g, "").replace(".", "")}`;
+}
+
+/**
+ * readState that heals: a state file that cannot be read as an object (bad
+ * JSON, `[]`, `null`, over MAX_STATE_BYTES) is renamed aside as
+ * corruptStatePath (the newest CORRUPT_KEEP such files are kept), and the run
+ * continues from an empty state, as the pick scripts on main did. Call it
+ * holding the lock. A file that cannot be renamed stays StateUnreadable.
+ */
+export function readStateHealing(path: string, at: Date): { state: Record<string, unknown>; healed: boolean } {
+  try {
+    return { state: readState(path), healed: false };
+  } catch (err) {
+    if (!(err instanceof StateUnreadable)) throw err;
+  }
+  try {
+    renameSync(path, corruptStatePath(path, at));
+  } catch {
+    throw new StateUnreadable();
+  }
+  pruneCorruptStates(path);
+  return { state: {}, healed: true };
+}
+
+function pruneCorruptStates(path: string): void {
+  try {
+    const prefix = `${basename(path)}.corrupt-`;
+    const old = readdirSync(dirname(path))
+      .filter((name) => name.startsWith(prefix))
+      .sort()
+      .reverse()
+      .slice(CORRUPT_KEEP);
+    for (const name of old) rmSync(join(dirname(path), name), { recursive: true, force: true });
+  } catch {
+    // best effort: a leftover copy is harmless
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -474,23 +524,31 @@ async function runAgentAction(action: AgentAction, options: ProactiveOptions): P
   if (action === "brief" && !inBriefWindow(now)) return silent("outside-window");
   const run: Run = { home, action, date: villageDate(now), now, options };
   const stateFile = stateFilePath(home);
+  let healed = false;
+  const read = (): Record<string, unknown> => {
+    const got = readStateHealing(stateFile, now);
+    healed ||= got.healed;
+    return got.state;
+  };
+  let result: TriggerResult;
   try {
-    return await withStateLock(stateFile, async () => {
-      // A state file that cannot be read stops the run before anything is picked or written.
-      if (doneToday(readState(stateFile), action, run.date)) return silent("done-today");
+    result = await withStateLock(stateFile, async () => {
+      // An unreadable state file is renamed aside before anything is picked or written.
+      if (doneToday(read(), action, run.date)) return silent("done-today");
       const decision = await AGENT_ACTIONS[action](run);
       if ("silent" in decision) return silent(decision.silent, 0, decision.withheld);
       const text = scriptOutputText(decision.view);
       // Every field was scanned; this catches a hit spanning two of them.
       if (cronScanHit(text)) return silent("scan-blocked", 0, decision.withheld);
       // The day is done from the moment the model is woken.
-      const latest = readState(stateFile);
+      const latest = read();
       writeStateFile(stateFile, markDone(decision.record ? decision.record(latest) : latest, action, run.date));
       return { lines: [text, wakeLine(true)], exitCode: 0, woke: true, reason: "woke", ...(decision.withheld ? { withheld: decision.withheld } : {}) };
     }, options.lock);
   } catch (err) {
-    return silent(faultReason(err));
+    result = silent(faultReason(err));
   }
+  return healed ? { ...result, note: STATE_HEALED } : result;
 }
 
 /** Write JSON by temp file and rename (0600, its directory 0700). */
@@ -508,17 +566,19 @@ async function runPrefetch(options: ProactiveOptions): Promise<TriggerResult> {
   const now = (options.now ?? (() => new Date()))();
   const date = villageDate(now);
   const stateFile = stateFilePath(home);
+  let healed = false;
+  let result: TriggerResult;
   try {
-    return await withStateLock(stateFile, async () => {
-      readState(stateFile);
+    result = await withStateLock(stateFile, async () => {
+      healed = readStateHealing(stateFile, now).healed;
       const context = await (options.buildContext ?? buildDailyBriefContext)(contextOptions(home, date));
       writePrivateJson(join(proactiveDir(home), PREFETCH_FILE), { date, builtAt: now.toISOString(), context });
       return silent("prefetched");
     }, options.lock);
   } catch (err) {
-    if (err instanceof LockTimeout) return silent("state-locked");
-    return silent(faultReason(err), 1);
+    result = err instanceof LockTimeout ? silent("state-locked") : silent(faultReason(err), 1);
   }
+  return healed ? { ...result, note: STATE_HEALED } : result;
 }
 
 /** Run one action and return what to print. Never throws. */
@@ -534,6 +594,7 @@ export async function runProactive(action: ProactiveAction, options: ProactiveOp
     decision: result.woke ? "woke" : "silent",
     reason: reasonCode(result.reason),
     ...(result.withheld ? { withheld: result.withheld } : {}),
+    ...(result.note ? { note: reasonCode(result.note) } : {}),
   });
   return result;
 }
@@ -555,7 +616,7 @@ async function main(): Promise<void> {
   }, HARD_DEADLINE_MS);
   const result = await runProactive(action);
   clearTimeout(hardStop);
-  process.stderr.write(`proactive: ${action} ${reasonCode(result.reason)}\n`);
+  process.stderr.write(`proactive: ${action} ${reasonCode(result.reason)}${result.note ? ` ${reasonCode(result.note)}` : ""}\n`);
   // Exit once the last line is written: a lingering child must not keep the trigger alive.
   process.stdout.write(`${result.lines.join("\n")}\n`, () => process.exit(result.exitCode));
 }
