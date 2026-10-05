@@ -689,7 +689,7 @@ def test_the_mcp_client_is_gone(ri):
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("publish", [None, True, False])
+@pytest.mark.parametrize("publish", [None, True])
 def test_ambient_never_calls_index(tctx, index, av, plugin, publish):
     args: dict[str, Any] = {"text": TEXT, "source": "ambient"}
     if publish is not None:
@@ -1872,3 +1872,61 @@ def test_the_held_withdraw_refusal_says_not_to_archive_another_way(tctx, index, 
     assert out["success"] is False
     assert "Do not archive or withdraw it another way" in out["message"]
     assert "archive_intent" in out["message"]
+
+
+# --------------------------------------------------------------------------
+# DATA-311: an explicit publish=false is honoured in every lineage and for
+# every source (approval off here; the approval path is in
+# test_intent_approval.py).
+# --------------------------------------------------------------------------
+
+PERSONAL = "my health worry"
+
+
+@pytest.mark.parametrize("source", ["message", "note", "onboarding", "ambient"])
+@pytest.mark.parametrize("session", ["cron_job_1", "never-seen"])
+def test_data311_a_personal_capture_in_a_held_session_is_local_not_held(tctx, index, av, plugin, ri, session, source):
+    out = call(tctx, {"text": PERSONAL, "source": source, "publish": False, "reason": "personal"}, session=session)
+    assert out["success"] is True and out["published"] is False and out["local_reason"] == "personal"
+    assert out["source"] == "ambient" and "held" not in out and "publish_refused" not in out
+    assert index.requests == []
+    assert ri.lookup(out["intention_id"]) == {"published": False, "source": "ambient", "local_reason": "personal"}
+    [event] = intention_events(av, plugin)
+    payload = event["payload"]
+    assert event["event_type"] == "intention.captured"
+    assert payload["local_reason"] == "personal" and payload["publish_refused"] is None
+    assert payload["source"] == "ambient" and payload["index_intent_id"] is None
+    # Not held: the same words stated later in a human session publish.
+    pub = call(tctx, {"text": PERSONAL, "source": "message"}, tool_call_id="c2")
+    assert pub["published"] is True and "publish_refused" not in pub
+
+
+def test_data311_the_map_keeps_the_local_reason_in_every_session(tctx, index, ri):
+    normal = call(tctx, {"text": TEXT, "source": "message", "publish": False, "reason": "participant_asked"})
+    assert ri.lookup(normal["intention_id"]) == {"published": False, "source": "message",
+                                                 "local_reason": "participant_asked"}
+    ambient = call(tctx, {"text": TEXT, "source": "ambient"}, tool_call_id="c2")
+    assert "local_reason" not in ri.lookup(ambient["intention_id"])
+
+
+@pytest.mark.parametrize("session", ["cron_job_1", "never-seen", SESSION])
+def test_data311_an_update_of_a_local_intention_never_makes_it_held(tctx, index, ri, session):
+    iid = call(tctx, {"text": PERSONAL, "source": "note", "publish": False, "reason": "personal"},
+               session="cron_job_1")["intention_id"]
+    out = call(tctx, {"action": "update", "intention_id": iid, "text": PERSONAL + "!"}, session=session,
+               tool_call_id="c2")
+    assert out["success"] is True and out["published"] is False and index.requests == []
+    assert ri.lookup(iid) == {"published": False, "source": "ambient", "local_reason": "personal"}
+    pub = call(tctx, {"text": PERSONAL + "!", "source": "message"}, tool_call_id="c3")
+    assert pub["published"] is True
+
+
+def test_data311_ambient_publish_false_needs_a_reason(tctx, index, av, plugin):
+    out = call(tctx, {"text": TEXT, "source": "ambient", "publish": False})
+    assert out["success"] is False and out["error"] == "reason_required"
+    assert index.requests == [] and intention_events(av, plugin) == []
+
+
+def test_data311_the_schema_says_publish_false_holds_for_every_source(ri):
+    text = ri.TOOL_SCHEMA["parameters"]["properties"]["publish"]["description"]
+    assert "Ignored for ambient" not in text and "every source" in text
