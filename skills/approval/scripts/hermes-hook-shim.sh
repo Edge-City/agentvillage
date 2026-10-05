@@ -30,6 +30,13 @@
 #         "bad substitution" that would end the shell before any directive),
 #         and a clock that does not print digits reads as 0 (an arithmetic
 #         error is fatal too) and turns re-asking off.
+#   - 2026-10-04, the credential's header for a LOCAL facade (unix socket or
+#     loopback): `Authorization`, because there the shim talks to `approval
+#     serve` itself, which reads only `Authorization` (approval-md core 0.4.0,
+#     src/serve/server.ts) and answered every co-located call 401
+#     serve-unauthorized; no hosted supervisor stands in between to move
+#     X-Approval-Authorization across. Every other facade keeps
+#     X-Approval-Authorization, as before.
 # The Agent Village sandbox has one unix user, so the shim runs "by hand"
 # there (no /opt/approval/hook-home, no setuid launcher; skills/approval/
 # README.md says why). install/install_approval.ts installs this file as
@@ -119,7 +126,10 @@
 # The credential goes to curl through a config on stdin, never argv, so it
 # does not appear in /proc/<pid>/cmdline. It travels as
 # X-Approval-Authorization because Maritime's public proxy strips
-# Authorization (image/README.md).
+# Authorization (image/README.md); the hosted supervisor moves it back to
+# Authorization on its loopback hop. A local facade (unix socket or loopback)
+# is `approval serve` with no supervisor in front, which reads Authorization
+# only, so there it travels as Authorization.
 #
 # The log carries a timestamp, the tool name, HTTP status, exit code, the
 # curl exit code of a timed-out first post, elapsed ms, the attempt, the
@@ -308,14 +318,24 @@ if [ -z "$SOCK" ]; then
   if [ "$LOOP_PORT" = dflt ]; then
     case $BASE in https://*) LOOP_PORT=443 ;; *) LOOP_PORT=80 ;; esac
   fi
+  # A decimal port with no leading zero: printf '%04X' would read `010` as
+  # octal 8 while curl dials 10, and the listener check would look at the
+  # wrong port. Refuse rather than normalise.
+  case $LOOP_PORT in
+    '' ) ;;
+    0* | *[!0-9]* ) block "the facade URL's port is not a plain decimal port" ;;
+  esac
   if [ -n "$LOOP_PORT" ]; then
     is_int "$LOOP_PORT" && [ "$LOOP_PORT" -ge 1 ] && [ "$LOOP_PORT" -le 65535 ] ||
       block "the facade URL's loopback port is not a port"
   fi
 fi
+AUTH_HEADER=X-Approval-Authorization
 if [ -n "$SOCK$LOOP_PORT" ]; then
   DAEMON_UID=${AV_APPROVAL_DAEMON_UID:-10001}
   is_int "$DAEMON_UID" || block "AV_APPROVAL_DAEMON_UID is not a uid"
+  # A local facade is `approval serve` itself, which reads Authorization only.
+  AUTH_HEADER=Authorization
 fi
 
 # The listener on 127.0.0.1:$LOOP_PORT, from /proc/net/tcp and tcp6 (world
@@ -443,7 +463,7 @@ while :; do
     set --
   fi
   P0=$(now_ms)
-  CODE=$(printf 'header = "X-Approval-Authorization: Bearer %s"\n' "$TOKEN" | "$T_curl" -q --config - \
+  CODE=$(printf 'header = "%s: Bearer %s"\n' "$AUTH_HEADER" "$TOKEN" | "$T_curl" -q --config - \
     --silent --show-error --max-time "$mt" --proto "$PROTO" --proto-redir "$PROTO" "$@" \
     --request POST --header 'Content-Type: application/json' \
     --data-binary @"$TMP/envelope" \
