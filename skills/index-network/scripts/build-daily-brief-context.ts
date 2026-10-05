@@ -170,8 +170,8 @@ export interface BriefOpportunity {
   /**
    * M2b: the resident's OWN intent ids Index says this opportunity was matched
    * on, for the evening outcome ask (outcome-ask.ts `intentionLink`). No
-   * parser sets it today: the `list_opportunities` row (verified 2026-10-03,
-   * tests/fixtures/index-mcp-2026-07-28.json) carries no intent reference,
+   * parser sets it today: the `list_opportunities` row (verified 2026-10-03 against
+   * the recorded Index reply fixture in tests/fixtures) carries no intent reference,
    * and `intentId` above is not used for this because nothing says whose
    * signal it names (a peer's would credit the wrong intention). Set it only
    * from a field Index documents as the viewer's matched intent(s), and not
