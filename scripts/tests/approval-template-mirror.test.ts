@@ -12,7 +12,8 @@ import { join } from "node:path";
 //    same digest (control-plane/tests/approval-template-mirror.test.js); move both pins together.
 // 2. With AV_CONTROLPLANE_DIR set to an agentvillage-controlplane checkout: byte-for-byte compare.
 //    Run: AV_CONTROLPLANE_DIR=/path/to/controlplane bun test scripts/tests/approval-template-mirror.test.ts
-const POLICY_BLOCK_SHA256 = "46611e86e78b85da43b48f4084a11e872d3199bdce8295fedde4d7d8af997bcf";
+// R2 moved the pin (marketplace.app.install/action/read, review.delegate.model; five added lines).
+const POLICY_BLOCK_SHA256 = "821f8d77f20bf7050b1d13abcc646ed720a02d1c0ae8eafcd0370fb8b902501b";
 
 const OPEN = "```yaml approval-policy\n";
 function policyBlock(text: string): string {

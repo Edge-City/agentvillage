@@ -34,18 +34,24 @@ row). In plain words, for the consent screen:
 - **What waits for a tap.** Kinds of act the agent proposes rather than
   performs: publishing an intention it inferred to Index, sharing a digest it
   drafted (if digests ship), and casting the resident's answer to the weekly
-  village question or their vote on the daily treasury ballot. Four more are
+  village question or their vote on the daily treasury ballot. Six more are
   reserved now and built later, so week two needs no policy amendment: filing
   a treasury proposal the agent drafted (`treasury.propose`, from Oct 18),
   withdrawing the resident's own treasury proposal on the agent's suggestion
-  (`treasury.withdraw`), and creating or changing an EdgeOS event or venue
-  (`edgeos.event.write`, `edgeos.venue.write`); no tool proposes these yet.
+  (`treasury.withdraw`), creating or changing an EdgeOS event or venue
+  (`edgeos.event.write`, `edgeos.venue.write`), and installing an app from the
+  village marketplace or having an installed app act, the request naming the
+  app and the verb (`marketplace.app.install`, `marketplace.app.action`); no
+  tool proposes these yet.
   Each arrives as a Telegram message from the "Agent Village
   Approvals" bot with approve and reject buttons, each on its own
   (`delivery: burst`: one left unanswered does not hold back the next), and
   stays open for up to 72 hours; if the resident does nothing it expires and
   nothing is published, shared or cast. An intention the resident stated in their own words is published
-  without a second ask.
+  without a second ask. Two more reserved rows wait for no tap: an installed
+  app reading for the agent (`marketplace.app.read`) runs and is recorded, and
+  `review.delegate.model` is kept for the resident to choose later to let a
+  model reviewer act first: nothing acts on it, and no agent can propose it.
 - **What the agent can never do.** Edit its own gate (the Hermes config, the
   hooks, the consent allowlist, the daemon's policy), touch the approval log, or
   read or change the resident's credentials (`.env`, `auth.json`). These three
