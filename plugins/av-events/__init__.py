@@ -16,11 +16,12 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import re
 import time
 from typing import Any, Callable, Optional
 
-from . import _approval, _edgeos, _intent_approval, _share_vote, _terminal_args
+from . import _approval, _edgeos, _intent_approval, _outcome_ask, _share_vote, _terminal_args
 from ._collector import Collector, guarded, hermes_version, overlay_ref
 from ._consent import TOOL_NAME as CONSENT_TOOL_NAME
 from ._consent import register_consent_tool
@@ -181,6 +182,7 @@ def _hook_pre_llm_call(collector: Collector, **kwargs: Any) -> None:
     if text:
         state.message_count += 1
         _emit_message(collector, "message.in", text, kwargs)
+        _outcome_guarded(collector, kwargs, "pre_llm_call", _outcome_note_answer, collector, kwargs, text)
 
 
 def _hook_post_llm_call(collector: Collector, **kwargs: Any) -> None:
@@ -191,6 +193,99 @@ def _hook_post_llm_call(collector: Collector, **kwargs: Any) -> None:
     if text:
         state.message_count += 1
         _emit_message(collector, "message.out", text, kwargs)
+        _outcome_guarded(collector, kwargs, "post_llm_call", _outcome_arm, collector, kwargs, text)
+
+
+# --------------------------------------------------------------------------
+# The evening outcome ask (DATA-42, `_outcome_ask`). Its own name in
+# `AV_HOOKS_DISABLED` (`outcome_ask`) turns all of it off; a failure here
+# never costs the turn's `message.*` event, which is already buffered.
+# --------------------------------------------------------------------------
+
+#: The name `AV_HOOKS_DISABLED` takes to turn off the outcome ask (arming, answers and its tick).
+OUTCOME_ASK_SWITCH = "outcome_ask"
+
+
+def _outcome_guarded(collector: Collector, kwargs: dict, hook: str, fn, *args: Any) -> None:
+    if not collector.config.active or OUTCOME_ASK_SWITCH in collector.config.disabled_hooks:
+        return
+    try:
+        fn(*args)
+    except SystemExit:
+        raise
+    except BaseException as exc:  # noqa: BLE001 - same contract as `guarded`
+        session_id = kwargs.get("session_id") or kwargs.get("parent_session_id")
+        collector.record_failure(hook, exc, str(session_id) if session_id else None)
+
+
+def _outcome_arm(collector: Collector, kwargs: dict, text: Any) -> None:
+    """A cron session's reply: arm the evening job's staged ask. Cron sessions
+    only, handled explicitly: any other session never arms."""
+    session_id = str(kwargs.get("session_id") or "") or None
+    if not _is_cron_session(collector, session_id):
+        return
+    code = _outcome_ask.arm(
+        collector.config.state_dir,
+        collector.config.home,
+        session_id=session_id,
+        task_id=kwargs.get("task_id"),
+        reply=text,
+        hasher=collector.keyed_hash,
+        capture=collector.config.capture,
+        now=time.time(),
+    )
+    if code:
+        logger.info("av-events: outcome_ask %s", code)
+
+
+_CHAT_TYPE_READER: Any = None
+
+
+def _session_chat_type() -> str:
+    """The turn's chat type (`dm`, `group`, `channel`, `thread`), from Hermes's
+    session context (`gateway/session_context.py` `HERMES_SESSION_CHAT_TYPE`),
+    else the process environment; empty when neither says."""
+    global _CHAT_TYPE_READER
+    if _CHAT_TYPE_READER is None:
+        try:
+            from gateway.session_context import get_session_env  # type: ignore[import-not-found]
+
+            _CHAT_TYPE_READER = get_session_env
+        except Exception:  # noqa: BLE001 - not running inside a Hermes gateway
+            _CHAT_TYPE_READER = lambda name, default="": os.environ.get(name, default)  # noqa: E731
+    try:
+        return str(_CHAT_TYPE_READER("HERMES_SESSION_CHAT_TYPE", "") or "").strip().lower()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _outcome_note_answer(collector: Collector, kwargs: dict, text: Any) -> None:
+    """The resident's own message in their Telegram DM may answer the open
+    ask. Never a cron run (its "user message" is the job's prompt), a
+    subagent's goal, a turn Hermes injected, another platform, a group, or
+    a chat whose type Hermes does not say. Nothing in `metadata` capture: the
+    value is derived from the content."""
+    if collector.config.capture == "metadata":
+        return
+    session_id = str(kwargs.get("session_id") or "") or None
+    if not session_id or _is_cron_session(collector, session_id) or collector.parent_of(session_id) is not None:
+        return
+    if is_injected_turn(text, kwargs.get("conversation_history")):
+        return
+    state = collector.peek_session(session_id)
+    source = (state.source if state is not None else None) or _source_for(kwargs.get("platform"))
+    if source != "telegram" or _session_chat_type() != "dm":
+        return
+    code = _outcome_ask.note_answer(
+        collector.config.state_dir,
+        text=text,
+        session_id=session_id,
+        turn_id=kwargs.get("turn_id"),
+        now=time.time(),
+        hasher=collector.keyed_hash,
+    )
+    if code:
+        logger.info("av-events: outcome_ask %s", code)
 
 
 def _emit_message(collector: Collector, event_type: str, text: Any, kwargs: dict) -> None:

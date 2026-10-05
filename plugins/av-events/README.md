@@ -26,12 +26,14 @@ plugins/av-events/
   _messages.py     message.in/out payloads and the punctuation flags (pure)
   _edgeos.py       the curl parser, EdgeOS operations, the action ledger and planner
   _cron.py         cron.run from the executions ledger and usage audit (flusher thread only)
+  _outcome_ask.py  the evening outcome ask: outcome.asked and the resident's answer (DATA-42)
   _backup.py       memory.snapshot: collect, pack and upload the memory files (backup thread only)
   _consent.py      the consent_status tool: GET /v1/consent and the answer in words (DATA-157)
   _brief_items.py  read-only count of inferred intentions awaiting an answer, for the morning brief (DATA-222, DATA-314); never imported by the plugin
   tool_categories.json        frozen seed: tool name -> category (tool_categories_v3)
   edgeos_tool_allowlist.json  frozen seed: EdgeOS operations (edgeos_tool_allowlist_v1)
   cron_job_names.json         frozen seed: the cron names cron.run may carry (cron_job_names_v1)
+  outcome_question.json       the evening outcome ask's fixed question: sentence, normalise steps, question key rule, shared cases with keys and hashes (outcome_question_v3)
   tests/           pytest suite; drives a fake ctx, never imports Hermes
 ```
 
@@ -44,7 +46,7 @@ plugins/av-events/
 | `AV_EVENTS_TOKEN` | *(unset)* | Per-tenant ingest token. **Unset or blank means the plugin idles**: hooks are registered, but no event is emitted or buffered and no flusher thread starts; memory backups still run when `AV_BACKUP_URL`, `AV_BACKUP_TOKEN` and the tenant id are set (the control plane sets them only while village consent is in force and `BACKUP_WRITE_MASTER` is configured). |
 | `AV_EVENTS_URL` | *(unset)* | Ingest base URL. Events are POSTed to `{AV_EVENTS_URL}/v1/events`; the `consent_status` tool GETs `{AV_EVENTS_URL}/v1/consent`. Empty with a token set is **null-sink mode** (see below). |
 | `AV_EVENTS_ENABLED` | `1` | Any of `0`, `false`, `no`, `off` (case-insensitive, whitespace ignored) disables everything. Re-read at every session boundary, and by the flusher before every pass. |
-| `AV_HOOKS_DISABLED` | *(empty)* | Comma-separated hook names to disable individually, e.g. `pre_tool_call,post_tool_call`. Matched case-insensitively, whitespace stripped. Three names are not hooks: `memory_recalled` (the bus subscription), `cron_run` (the cron tail) and `consent_status` (the tool, which then answers "could not check"). |
+| `AV_HOOKS_DISABLED` | *(empty)* | Comma-separated hook names to disable individually, e.g. `pre_tool_call,post_tool_call`. Matched case-insensitively, whitespace stripped. Four names are not hooks: `memory_recalled` (the bus subscription), `cron_run` (the cron tail), `consent_status` (the tool, which then answers "could not check") and `outcome_ask` (the evening outcome ask: arming, answers and its pass). |
 | `AV_TERMINAL_ARGS_FIX` | `1` | Any of `0`, `false`, `no`, `off` turns off the foreground `terminal` argument fix (see "Foreground `terminal` calls (DATA-312)"). **Process environment only**, read on every `pre_tool_call`; a `.env` line reaches it through Hermes's own load at gateway start. Independent of every telemetry switch. |
 | `AV_CAPTURE` | `sanitized` | `metadata` \| `sanitized` \| `full`. An unrecognised value falls back to `sanitized`. |
 | `TENANT_ID`, `AV_TENANT_ID` | *(unset)* | The tenant id, used for one thing only: `cron.run`'s derived event id (spec §4.3). `TENANT_ID` is what the control plane already sets for `dashboard-auth-edgecity`; `AV_TENANT_ID` overrides it. Unset means `cron.run` gets a uuid v7 derived from the execution (see "Cron capture"). |
@@ -216,6 +218,8 @@ backlog can differ from `emitted_at` by minutes. Every `marts` time series is bu
 | `action.attempted` / `action.failed` | `post_tool_call` on an EdgeOS RSVP or cancellation | `action_class`, `target_system`, `receipt`, `execution_token_id`, `error`, `reverses_action_id`, `reversal`, `supersedes_action_id`, `operation`, `edgeos_event_id`, `occurrence_start`, `allowlist_version` — see "EdgeOS actions" |
 | `action.receipted` | `post_tool_call` on the EdgeOS read that confirms it | as above, with `receipt` {`kind: edgeos_confirming_read`, `id`: participant id} |
 | `cron.run` | the cron tail, on the flusher thread | `job_id`, `job_name`, `execution_id`, `status`, `input_tokens`, `output_tokens`, `claimed_at`, `started_at`, `finished_at`, `delivery_outcome` — see "Cron capture" |
+| `outcome.asked` | the flusher, once Hermes's ledger shows the evening job's question delivered or queued | `message_hash` (the reply's keyed hash, = that turn's `message.out` `content_hash`; null in `metadata`), `window_days` (1), `asked_by` (`outcome_cron`); envelope `outcome_id`, `opportunity_id` — see "The evening outcome ask" |
+| `outcome.reported` | the flusher, for a resident's Telegram DM whose whole text is an answer to the one open ask, sent as their next message after it or as a reply to it | `value`, `matcher_version` (`outcome_reply_v2`); `self_report`, actor `participant`, envelope `outcome_id`, `opportunity_id`, `in_reply_to_event_id` = the ask — see "The evening outcome ask" |
 | `profile.updated` | `on_session_finalize`, when a USER.md changed | `kind` ∈ `memory_profile`\|`landing_profile`, `user_md_hash`, plus `length` above `metadata` |
 | `llm.call` | `pre_api_request` + `post_api_request` | `model`, `provider`, the five token buckets, `latency_ms`, `finish_reason`, `tools_hash`, `system_prompt_hash`, plus lengths above `metadata` |
 | `llm.call` (failed) | `pre_api_request` + `api_request_error` | as above with `finish_reason: "error"`, `error_type`, `status_code`, `retryable`, and zeroed token counts |
@@ -1322,6 +1326,60 @@ last 4096; Hermes keeps 1000 terminal rows). An id is added only after its event
 inert emit is retried on the next pass. The tail is off with the plugin, and individually with
 `AV_HOOKS_DISABLED=cron_run`; a pass that raises is counted in `Collector.cron_errors` and never
 stops the flusher.
+
+## The evening outcome ask (DATA-42)
+
+The whole design, as built, is `docs/design/outcome-ask.md`. In short:
+
+- **Arm.** The 19:00 trigger writes `av-events/proactive/outcome-ask-evening.json` (0600, ids
+  and the SHA-256 of the shown question's key) when it wakes the model with "Did you and <name> meet? Reply met, not useful, or missed."
+  It asks nobody when this plugin would not record the ask (blank `AV_EVENTS_TOKEN`,
+  `AV_EVENTS_ENABLED` off, or `outcome_ask` or `post_llm_call` in `AV_HOOKS_DISABLED`) or when the
+  asked ledger is one this plugin would refuse, and stages a subject on two evenings at most.
+  On that run's `post_llm_call` (a cron session whose task id is `cron:<job>:<execution>`, the job
+  the installer's "Edge — evening questions" by recorded id and exact name) the stage is renamed
+  into `av-events/outcome-ask/armed/<execution>.json` with the reply's keyed hash and the keyed
+  hash of the question's key. These remove
+  the stage and arm nothing: a silent reply; a reply that, normalised for matching (special
+  spaces, surrounding bold or quotes, trailing emoji), is not exactly the fixed question (the
+  rules and a shared case table in `outcome_question.json`); a reply whose question key does not
+  hash to the stage's `question_sha256` (not the question the trigger showed); a stage older than the run's claim in
+  Hermes's ledger, newer than the reply, or over 15 minutes old; a ledger row that is missing or
+  names another job.
+- **Confirm.** The flusher, on the cron tail's minute, reads the ledger: a completed run whose
+  `delivery_outcome` is `delivered` or `queued` (or any completed run on a Hermes without the
+  column) gets one `outcome.asked` per subject, with an id derived from the execution and the
+  outcome, and the subject goes into `av-events/proactive/outcome-asked.json`, the only thing that
+  makes the trigger treat it as asked. That ledger is never overwritten when it is refused on read
+  (`asked_ledger_refused`). Any other end drops the armed file; the subject stays due.
+- **Answer.** In the resident's Telegram DM (`HERMES_SESSION_CHAT_TYPE` `dm`; never a cron run, a
+  subagent, an injected turn, another platform or a group), while an ask may be open, every
+  message is noted in memory as a time only. A message whose whole text, trimmed, case-folded and
+  stripped of trailing `.`, `!`, whitespace and emoji, is one of the `outcome_reply_v2` answers
+  (`met`, `yes`, `useful`, `not useful`, `missed`, `no`, `didn't happen` and the other spellings
+  in the design note) is noted with its value; one containing `?` or starting with `>` or a quote
+  mark is not. A Telegram reply's `[Replying to ...]` pointer, which Hermes adds, is removed
+  before matching, and the question in its quote, if any, says which ask it replies to. The flusher
+  emits `outcome.reported` for the latest ask **delivered** before the message (the ledger's
+  finish), when it was the evening job, is unanswered, and the message came within 24 hours of it,
+  and either the pointer quotes that ask's own question (by keyed hash) or the message was the
+  resident's next one after the delivery. A reply to another evening's question never counts, nor
+  one to a question two asks share (the same cleaned name on two evenings).
+  After a restart, a plain match for an ask delivered before it does not count.
+  A failed ledger read keeps the answer for the next pass. The event id is derived from the ask,
+  so ingest keeps one answer per ask. Nothing in `metadata` capture.
+- **Hash.** The hash is of the model's reply. Hermes may wrap a cron delivery
+  (`cron.wrap_response`) or prepend a fallback notice, so it is not of the Telegram text.
+- **Trust boundary.** Everything in the agent's home is writable by the agent: these files,
+  Hermes's ledger, the event buffer and this plugin's source. The file checks (a regular,
+  user-owned 0600 file under a size cap in a private directory, exact keys and shapes, re-checks
+  against the ledger and this process's memory) catch accidents, not forgers. The only boundary is
+  the data side: a plugin token's events are capped at agent-asserted (`agent_report` ask) and
+  self-reported (`self_report` answer), and never count as verified. See the design note §4.
+- Logs carry codes and counts only (`outcome_ask armed`, `outcome_ask_tick asked=1 ...`).
+  `outcome_ask` in `AV_HOOKS_DISABLED` turns all of it off.
+- Ingest refuses both types from a plugin token until the data side's allowlist release: they are
+  quarantined `producer_not_allowed` and replayed after it.
 
 ## Session close: cost and profile
 

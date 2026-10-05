@@ -181,6 +181,8 @@ describe("the follow-up's waiting-on-you list: re-showings only", () => {
     expect(parsed.newlyResolved.map((c: { name: string }) => c.name)).toEqual(["Ana"]);
     expect(readLog(file)?.[MAYA]?.count).toBe(1);
     expect(readState(file).deliveredToday).toBeUndefined();
+    // DATA-42: the announcement date the evening outcome ask counts from.
+    expect((readState(file).negotiationSummary as { announcedOn?: unknown }).announcedOn).toEqual({ [oppId(3)]: addDays(DAY0, 1) });
   });
 
   test("an accepted or negotiating-status row is not pending: its entry goes on a complete read", async () => {

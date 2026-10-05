@@ -104,13 +104,13 @@ def cron_job_id_from(session_id: Any, task_id: Any = None) -> Optional[str]:
     return None
 
 
+#: `SELECT *`: `delivery_outcome` is a later column, and naming it would fail
+#: the whole read on the pinned tag. `error` is never looked at.
+TERMINAL_EXECUTIONS_SQL = "SELECT * FROM executions WHERE status IN ('completed','failed','unknown')"
+
+
 def read_terminal_executions(db_path: str) -> list[dict]:
-    rows = sqlite_read(
-        db_path,
-        # `SELECT *`: `delivery_outcome` is a later column, and naming it would
-        # fail the whole read on the pinned tag. `error` is never looked at.
-        "SELECT * FROM executions WHERE status IN ('completed','failed','unknown')",
-    )
+    rows = sqlite_read(db_path, TERMINAL_EXECUTIONS_SQL)
     return rows or []
 
 
@@ -295,6 +295,7 @@ __all__ = [
     "load_installed_job_ids",
     "load_job_name_allowlist",
     "TERMINAL_STATUSES",
+    "TERMINAL_EXECUTIONS_SQL",
     "cron_job_id_from",
     "cron_payload",
     "load_job_names",

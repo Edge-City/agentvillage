@@ -115,6 +115,8 @@ export interface SignalItem {
 
 export interface NegotiationSummaryState {
   reportedCompletedIds?: string[];
+  /** DATA-42: opportunity id -> the village date the follow-up announced it as a new connection. */
+  announcedOn?: Record<string, string>;
 }
 
 export type NegotiationFetcher = () => Promise<NegotiationItem[]>;
@@ -422,6 +424,12 @@ export async function followUp(options: {
     negotiationSummary: {
       ...summaryState,
       reportedCompletedIds: [...alreadyReported, ...newAccepted.map((card) => card.opportunityId).filter((id): id is string => Boolean(id))],
+      // DATA-42: the date each connection was announced, from which the
+      // evening outcome ask (outcome-ask.ts) counts DUE_AFTER_DAYS.
+      announcedOn: {
+        ...(summaryState.announcedOn ?? {}),
+        ...Object.fromEntries(newAccepted.flatMap((card) => (card.opportunityId ? [[card.opportunityId, date]] : []))),
+      },
     },
     ...(!readOnly && deliveryLogChanged(state, nextLog) ? { [OPPORTUNITY_DELIVERY_KEY]: nextLog } : {}),
   });

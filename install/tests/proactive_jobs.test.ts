@@ -16,6 +16,8 @@ import { join } from "node:path";
 import { DIGEST_CRON_SPECS, PREFETCH_PROMPT, PROACTIVE_SHIM, type DigestCronSpec } from "../install_index";
 import { SCAN_INVISIBLE_CHARS, cronScanHit } from "../../skills/index-network/scripts/proactive-text";
 import { ACTIONS } from "../../skills/index-network/scripts/proactive";
+import { createHash } from "node:crypto";
+import { KEY_REMOVE, QUESTION_SPACES, outcomeQuestion, questionKey, questionSha256 } from "../../skills/index-network/scripts/outcome-ask";
 
 const SKILLS = join(import.meta.dir, "..", "..", "skills");
 
@@ -146,5 +148,88 @@ describe("the six proactive jobs (DATA-314)", () => {
     expect(brief).toContain("Always, as the last line of this part: `Connections: ` followed by `connections.link` exactly as given.");
     expect(brief).toContain("things are waiting for your yes or no in your approvals.");
     expect(brief).toContain("how they like their morning brief");
+  });
+
+  test("DATA-42: the 14:00 follow-up no longer asks how a connection went; the evening asks the one fixed question", () => {
+    const followUpPrompt = prompt(proactive.find((spec) => PROACTIVE[spec.name] === "negotiation")!);
+    expect(followUpPrompt).not.toMatch(/reply met|not useful|missed/i);
+    expect(followUpPrompt).toContain("Ask nothing about how it went");
+    const evening = prompt(proactive.find((spec) => PROACTIVE[spec.name] === "evening")!);
+    expect(evening).toContain("With `outcomeQuestion`: deliver it as the whole reply, word for word, and nothing else.");
+    expect(evening).toContain("`Did you and <name> meet? Reply met, not useful, or missed.`");
+    expect(outcomeQuestion("Maya")).toBe("Did you and Maya meet? Reply met, not useful, or missed.");
+  });
+
+  test("DATA-42 F2: the plugin arms only on a normalised reply that fully matches the one shared sentence, and the prompt's sentence matches it", () => {
+    // plugins/av-events/outcome_question.json: every rule the plugin's `is_the_question` uses, and the cases both suites check.
+    const seed = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "plugins", "av-events", "outcome_question.json"), "utf8"));
+    expect(seed.sentence).toBe("Did you and [^?\\n]{1,64} meet\\? [Rr][Ee][Pp][Ll][Yy] met, not useful, or missed\\.?");
+    const pattern = new RegExp(`^(?:${seed.sentence})$`, "u");
+    // The plugin's `normalise_reply`, step for step from the file's `normalise`.
+    const emoji = (ch: string) => /[\u200d\ufe0e\ufe0f\u20e3]/u.test(ch) || /\p{So}/u.test(ch) || /[\u{1F3FB}-\u{1F3FF}\u{E0020}-\u{E007F}]/u.test(ch);
+    const stripTrailingEmoji = (text: string) => {
+      const chars = Array.from(text);
+      while (chars.length && (/\s/u.test(chars[chars.length - 1]) || emoji(chars[chars.length - 1]))) chars.pop();
+      return chars.join("");
+    };
+    const normalise = (reply: string) => {
+      let text = reply;
+      for (const space of seed.normalise.spaces as string[]) text = text.split(space).join(" ");
+      text = stripTrailingEmoji(text.trim());
+      for (const [opening, closing] of seed.normalise.wrappers as Array<[string, string]>) {
+        if (text.length > opening.length + closing.length && text.startsWith(opening) && text.endsWith(closing)) {
+          text = text.slice(opening.length, text.length - closing.length);
+          break;
+        }
+      }
+      return stripTrailingEmoji(text.trim());
+    };
+    const arms = (reply: string) => pattern.test(normalise(reply));
+    for (const { reply } of seed.cases.arm as Array<{ reply: string }>) expect([reply, arms(reply)]).toEqual([reply, true]);
+    for (const reply of seed.cases.unarmed as string[]) expect([reply, arms(reply)]).toEqual([reply, false]);
+    // The sentence the evening prompt pins, with a name in it, and the trigger's own question: exactly, with no normalising.
+    const evening = prompt(proactive.find((spec) => PROACTIVE[spec.name] === "evening")!);
+    const sentence = evening.match(/`(Did you and <name> meet\? [^`]+)`/)![1];
+    expect(pattern.test(sentence.replace("<name>", "Maya"))).toBe(true);
+    expect(pattern.test(outcomeQuestion("Maya"))).toBe(true);
+    expect(pattern.test(outcomeQuestion("M".repeat(40)))).toBe(true);
+    expect(arms(`Hi! ${outcomeQuestion("Maya")}`)).toBe(false);
+  });
+
+  test("DATA-42 round 3: the trigger's question key and hash are the plugin's, case for case", () => {
+    // The stage's `question_sha256` is the trigger's `questionSha256` of the question it shows; the plugin
+    // arms only when its own `question_sha256` of the normalised reply is equal. Both are checked against
+    // the same keys and hashes in plugins/av-events/outcome_question.json.
+    const seed = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "plugins", "av-events", "outcome_question.json"), "utf8"));
+    expect(KEY_REMOVE).toBe(seed.key.remove);
+    expect(QUESTION_SPACES).toEqual(seed.normalise.spaces);
+    const emoji = (ch: string) => /[\u200d\ufe0e\ufe0f\u20e3]/u.test(ch) || /\p{So}/u.test(ch) || /[\u{1F3FB}-\u{1F3FF}\u{E0020}-\u{E007F}]/u.test(ch);
+    const stripTrailingEmoji = (text: string) => {
+      const chars = Array.from(text);
+      while (chars.length && (/\s/u.test(chars[chars.length - 1]) || emoji(chars[chars.length - 1]))) chars.pop();
+      return chars.join("");
+    };
+    const normalise = (reply: string) => {
+      let text = reply;
+      for (const space of seed.normalise.spaces as string[]) text = text.split(space).join(" ");
+      text = stripTrailingEmoji(text.trim());
+      for (const [opening, closing] of seed.normalise.wrappers as Array<[string, string]>) {
+        if (text.length > opening.length + closing.length && text.startsWith(opening) && text.endsWith(closing)) {
+          text = text.slice(opening.length, text.length - closing.length);
+          break;
+        }
+      }
+      return stripTrailingEmoji(text.trim());
+    };
+    for (const { reply, key, sha256 } of seed.cases.arm as Array<{ reply: string; key: string; sha256: string }>) {
+      expect([reply, questionKey(normalise(reply))]).toEqual([reply, key]);
+      expect([reply, questionSha256(normalise(reply))]).toEqual([reply, sha256]);
+      expect(createHash("sha256").update(key, "utf8").digest("hex")).toBe(sha256);
+    }
+    // The trigger's own question for a name has the key the plugin expects of a reply with that name.
+    expect(questionKey(outcomeQuestion("Maya"))).toBe("did you and maya meet? reply met, not useful, or missed");
+    const shownHash = questionSha256(outcomeQuestion(seed.cases.mismatch.shown_name));
+    expect(shownHash).toBe((seed.cases.arm as Array<{ reply: string; sha256: string }>)[0].sha256);
+    for (const reply of seed.cases.mismatch.replies as string[]) expect([reply, questionSha256(normalise(reply)) === shownHash]).toEqual([reply, false]);
   });
 });

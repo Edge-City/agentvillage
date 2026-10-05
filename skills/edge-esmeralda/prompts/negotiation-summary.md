@@ -23,7 +23,7 @@ A few live threads are worth closing while everyone is still here.
 - One line per person in `agentsTalking`: `[name](profileUrl) — agents talking`. No message link.
 
 👤 *New connections*
-- One line per person in `newConnections`: `[name](profileUrl), [say hello](messageUrl). After you follow up, reply met, not useful, or missed.`
+- One line per person in `newConnections`: `[name](profileUrl), [say hello](messageUrl)`. Ask nothing about how it went: a later evening note asks.
 
 # Rules
 
