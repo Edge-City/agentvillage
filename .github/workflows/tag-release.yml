@@ -9,10 +9,11 @@
 #     note      optional: one line (at most 200 characters) for the tag message's Note: line
 #
 # Jobs: plan (read-only: resolve and check the ref, work out the version, list
-# the commits since the previous release tag, compare the plugin seed files) >
+# the commits since the previous release tag, compare the plugin seed files,
+# refuse when a directory test.yml's bun test line names is missing there) >
 # test (test.yml, the suites every pull request runs, at that commit) > tag (real
 # runs only, after green suites; serialised; fetches again, plans again and fails
-# if the commit or version changed, creates the annotated tag and pushes only
+# if the commit, the version or the seed check changed, creates the annotated tag and pushes only
 # refs/tags/<version>: never a branch, never forced).
 # Logic and its tests: scripts/tag-release.ts, scripts/tests/tag-release.test.ts.
 # The hand fallback: git tag -a vX.Y.Z-rcN <commit> -m "..." && git push origin vX.Y.Z-rcN
@@ -70,6 +71,7 @@ jobs:
     outputs:
       commit: ${{ steps.plan.outputs.commit }}
       version: ${{ steps.plan.outputs.version }}
+      seeds: ${{ steps.plan.outputs.seeds }}
     steps:
       - name: Require the workflow from main
         run: |
@@ -81,9 +83,12 @@ jobs:
         with:
           fetch-depth: 0 # every branch and tag: the version, the commit list and the seed check need them
           persist-credentials: false
+      # no-cache: never restore bun from the Actions cache, which other runs of
+      # this repository can write; the plan's output decides what the tag job tags.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.2
+          no-cache: true
       - name: Plan
         id: plan
         run: bun scripts/tag-release.ts plan --ref "$TAG_REF" --version "$TAG_VERSION" --note "$TAG_NOTE" --dry-run "$TAG_DRY_RUN"
@@ -118,17 +123,22 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+      # no-cache: this job holds contents: write; it must not run a bun restored
+      # from a cache that other jobs can write. (The script is TypeScript run by
+      # bun; the runner's own node cannot run it as it stands.)
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.2
+          no-cache: true
       - name: Create and push the tag
         env:
           EXPECT_COMMIT: ${{ needs.plan.outputs.commit }}
           EXPECT_VERSION: ${{ needs.plan.outputs.version }}
+          EXPECT_SEEDS: ${{ needs.plan.outputs.seeds }}
           GIT_COMMITTER_NAME: github-actions[bot]
           GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
         run: >-
           bun scripts/tag-release.ts tag --fetch
-          --expect-commit "$EXPECT_COMMIT" --expect-version "$EXPECT_VERSION" --version "$TAG_VERSION" --note "$TAG_NOTE"
+          --expect-commit "$EXPECT_COMMIT" --expect-version "$EXPECT_VERSION" --expect-seeds "$EXPECT_SEEDS" --version "$TAG_VERSION" --note "$TAG_NOTE"
           --actor "$GITHUB_ACTOR" --triggering-actor "$GITHUB_TRIGGERING_ACTOR"
           --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
