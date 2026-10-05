@@ -10,9 +10,10 @@ outcome-ask-evening.json`, 0600, ids only. Three steps here:
    and its name in `jobs.json`, as for `cron.run`), whose Hermes task id is
    `cron:<job>:<execution>`, whose row in Hermes's executions ledger names
    that job, and whose stage was written after the run was claimed, before
-   its reply, and under STAGE_MAX_AGE_S ago. A silent reply, or one that,
+   its reply, and under STAGE_MAX_AGE_S ago. A silent reply, one that,
    normalised, is not exactly the fixed question (`outcome_question.json`),
-   removes the stage and arms nothing. Otherwise the stage is renamed into
+   or one whose question key does not hash to the stage's `question_sha256`
+   (the question the trigger showed) removes the stage and arms nothing. Otherwise the stage is renamed into
    `av-events/outcome-ask/armed/<execution>.json` (the rename is the claim)
    with the keyed hash of the reply (`message.out`'s `content_hash`) and of
    the question's key (`question_hash`).
@@ -25,12 +26,13 @@ outcome-ask-evening.json`, 0600, ids only. Three steps here:
 3. **The answer** (`pre_llm_call` of the resident's Telegram DM;
    `note_answer`, then `tick`). While an ask may be open, every resident
    message is noted in memory as a time; a message whose whole text,
-   normalised, is in ANSWERS (and whose reply pointer, if any, quotes the
-   question) is noted with its value. `tick` emits `outcome.reported` for it
-   when the latest ask DELIVERED before it was the evening job's, is
+   normalised, is in ANSWERS is noted with its value (and the keyed hash of
+   any question its reply pointer quotes). `tick` emits `outcome.reported`
+   for it when the latest ask DELIVERED before it was the evening job's, is
    unanswered and under ANSWER_WINDOW_S old, and the pointer quotes that
-   ask's own question (by keyed hash) or the message was the resident's next
-   one after that delivery (known only since this process started). No text
+   ask's own question and no other ask's, or quotes no known question and the
+   message was the resident's next one after that delivery (known only since
+   this process started). No text
    and no hash of the reply goes into the event or onto disk.
 
 **Trust boundary.** Everything in the agent's home is writable by the agent:

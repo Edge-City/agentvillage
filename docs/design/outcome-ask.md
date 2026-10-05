@@ -1,7 +1,7 @@
 # The evening outcome ask: `outcome.asked` and the resident's answer (DATA-42, overlay half)
 
 Status: **as built**, 2026-10-05, after the orchestrator's rulings on the design note (R2 and
-rulings 1 to 7) and fix rounds 1 (F1 to F11) and 2 on PR #198. Data-repo references are to
+rulings 1 to 7) and fix rounds 1 (F1 to F11), 2 and 3 on PR #198. Data-repo references are to
 `agentvillage-data` origin/main. Hermes references are to `~/.hermes/hermes-agent` at tag
 `v2026.9.24`.
 
@@ -83,8 +83,10 @@ The reason is a code in `triggers.jsonl` (`detail`: `outcome-ask`, `outcome-ask-
 
 **The stage file.** When the trigger wakes the model with the question, it writes
 `av-events/proactive/outcome-ask-evening.json` (`writeStage`). The file is 0600 in a 0700
-directory, written by temp file and rename. It holds ids only:
-`{v, action, date, staged_at, asked_by: "outcome_cron", window_days: 1, subjects: [{outcome_id, opportunity_id}]}`,
+directory, written by temp file and rename. It holds ids and a hash only:
+`{v, action, date, staged_at, asked_by: "outcome_cron", window_days: 1, question_sha256, subjects: [{outcome_id, opportunity_id}]}`,
+where `question_sha256` is the plain SHA-256 of the question key (§2) of the exact question the
+trigger hands the model (`questionSha256` in `outcome-ask.ts`), and
 with `outcome_id` = `opp-outcome:<opportunity id>`.
 
 The write happens inside the state lock, just before the day mark (`beforeWake` in
@@ -118,7 +120,12 @@ These cases remove the stage and arm nothing:
 - the reply is Hermes's silence marker (`is_silent`, the same test as `scheduler.py:2985-2993`);
 - the reply, normalised, is not exactly the fixed question (`is_the_question`). A second person
   added, a second question in the name slot, a reminder about someone else, or Hermes's "Sorry, I
-  hit an error" text is treated as silent: no event, and the subject stays due.
+  hit an error" text is treated as silent: no event, and the subject stays due;
+- the SHA-256 of the normalised reply's question key is not the stage's `question_sha256`
+  (`question_mismatch`). The reply has the question's shape, but it is not the question the
+  trigger showed. Examples are other text in the name slot with no question mark ("Maya (and
+  Ravi)", a reminder, a markdown link as the name) or another name. A stage without
+  `question_sha256` is refused.
 
 **The question's rules** are all in `plugins/av-events/outcome_question.json`, which the plugin
 reads and the bun test that pins the evening prompt's sentence reads too. The file also holds a
@@ -132,10 +139,14 @@ table of replies that arm and replies that do not, and both suites check every e
   around the whole reply comes off; then it is stripped and trailing emoji come off again. The
   reply then has to match `^sentence$` in full. The message hash stays the hash of the reply
   exactly as it is, equal to `message.out`'s.
-- `marker`: `[Rr][Ee][Pp][Ll][Yy] met, not useful, or missed`, what a reply pointer's quote must
-  contain (§3).
-- `key`: the question key. This is the normalised reply with every `*`, `_`, `` ` `` and `~`
-  removed, whitespace runs as one space, no final full stop, case-folded (`question_key`).
+- `key`: the question key (`question_key` in the plugin, `questionKey` in the trigger). The
+  special spaces become spaces; every character of `key.remove` (`*`, `_`, `` ` ``, `~`) is
+  deleted; runs of ASCII whitespace become one space; the result is stripped, one final full stop
+  comes off, and it is lower-cased by Unicode default lower case (Python `str.lower`, TypeScript
+  `toLowerCase`). Bold around the name therefore gives the same key as the plain name. Each arming
+  case in the file carries its expected key and SHA-256. pytest checks the plugin against them, and
+  bun checks the trigger against them, including `ß`, a final sigma and a dotted capital I. The
+  `mismatch` list holds replies that fit the sentence but are not the question shown.
 
 Otherwise the stage is renamed to `av-events/outcome-ask/armed/<execution>.claim`. The rename is
 the claim, so two processes cannot both take it. The claim is then written as `<execution>.json`
@@ -207,9 +218,7 @@ the tick tell whether an answer was the resident's next message.
 
 **The reply pointer.** A message sent as a Telegram reply carries Hermes's
 `[Replying to (your previous message): "…"]` pointer (`gateway/run_inbound.py:1581-1590` at the
-tag). When it is present, the message can be an answer only if the quote contains the `marker`. A
-reply to the 14:00 follow-up, the brief or anything else is not an answer. The pointer is then
-removed and the rest is matched.
+tag). The pointer is removed and the rest is matched.
 
 The question sentence is then looked for in the quote with the unanchored `sentence`, and its key
 is hashed the same way as at arm time (`quoted_question_key`). The note keeps that hash, in memory
@@ -264,10 +273,14 @@ and compared by the ledger's finish, and only when that ask meets all of these:
     after the ask was delivered.
 
 A pointer whose quoted question's hash equals another delivered ask's is never counted for the open
-ask, even as the next message (`answer_other_ask`). A pointer whose quote holds no question
-sentence, or one that matches no ask, gives no bypass. Examples are a native partial quote, or the
-resident's own message that happens to contain the marker. That message is judged by the
-next-message rule alone.
+ask, even as the next message (`answer_other_ask`). A quoted question whose hash matches more than
+one delivered ask on file emits nothing (`answer_ambiguous`). The asks counted are those delivered
+before the message and within the 48 hours asks are kept. This happens when two people with the
+same cleaned name were asked on consecutive evenings: their questions are identical.
+
+A pointer whose quote holds no question sentence, or one that matches no ask, gives no bypass, and
+the message is judged by the next-message rule alone. Examples are a native partial quote, a reply
+to the follow-up or the brief, or the resident's own message.
 
 **After a restart.** The message log starts empty and its floor is the process start time. "Next
 message" cannot be shown for an ask delivered before the restart, so a plain match for it does not
@@ -297,7 +310,8 @@ There is no text and no hash of the reply. These cases emit nothing:
 - a match that is not the resident's next message and does not reply to this ask's question
   (`answer_not_next`). This includes a plain match for an ask delivered before this process
   started, or before message times were dropped from memory (more than 500 kept);
-- a reply to another ask's question (`answer_other_ask`).
+- a reply to another ask's question (`answer_other_ask`), or to a question two asks share
+  (`answer_ambiguous`).
 
 An answer to yesterday's question sent while tonight's run is in progress stays with yesterday's
 subject: tonight's run has asked nothing until Hermes delivers it. An answer sent after a newer
@@ -367,7 +381,7 @@ provenance (`src/ingest/replay.ts:155`), so they are replayed after it.
   then asks nobody. A blank `AV_EVENTS_TOKEN` idles the plugin, and the trigger asks nobody either.
   A failure in any of them never costs the turn's `message.*` event.
 - Logs carry codes and counts only: `outcome_ask armed`, `outcome_ask not_the_question`,
-  `outcome_ask_tick asked=1 answered=1`, `answer_not_next`, `answer_other_ask`, `ledger_unreadable`,
+  `outcome_ask_tick asked=1 answered=1`, `answer_not_next`, `answer_other_ask`, `answer_ambiguous`, `question_mismatch`, `ledger_unreadable`,
   `asked_ledger_refused`, and the trigger's `detail` codes.
 - Files, all under `$HERMES_HOME/av-events/`, ids, times and codes only:
   - `proactive/outcome-ask-evening.json`: the stage, written by the trigger.
@@ -375,8 +389,8 @@ provenance (`src/ingest/replay.ts:155`), so they are replayed after it.
   - `outcome-ask/armed/`, `outcome-ask/asks.json` (delivered asks: execution, subject and the
     question's keyed hash, kept for 48 hours) and `outcome-ask/.lock`: the plugin's own.
   - Answers and the resident's message times are never written to disk.
-- `plugins/av-events/outcome_question.json`: the fixed question's pattern and its marker sentence,
-  shipped with the plugin.
+- `plugins/av-events/outcome_question.json`: the fixed question's sentence, normalise steps, key
+  rule and shared cases, shipped with the plugin.
 
 ## 7. Tests and the canary
 
