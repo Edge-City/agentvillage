@@ -9,6 +9,14 @@ on:
   pull_request:
   push:
     branches: [main]
+  # tag-release.yml runs these suites at the commit it is about to tag.
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit to test (empty for the triggering event's own commit)
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -20,6 +28,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
@@ -34,6 +44,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
