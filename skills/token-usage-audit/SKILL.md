@@ -62,6 +62,6 @@ From the Hermes root:
 python3 skills/token-usage-audit/scripts/audit_token_usage.py --json-only
 ```
 
-Run it through `terminal` with `command` only (a `workdir` is fine). Never pass `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty`: the script finishes in seconds and its output comes straight back. If the call returns an error about background commands, the script did not run; call it once more without those arguments.
+If you are asked to run it yourself, call `terminal` with exactly `command` (a `workdir` is fine) and nothing else. Do not add `notify`, `heartbeat` or `background`: the script finishes in seconds and its output comes straight back. If the call returns an error about background commands, the script did not run; call it once more without those arguments.
 
 The output must be sanitized aggregate JSON. On quiet runs, normal cron output should end with `{"wakeAgent":false}`.

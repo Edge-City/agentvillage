@@ -12,9 +12,9 @@ Deliver one pending conversation, or the last-day closeout when the script retur
    bun skills/index-network/scripts/ask-questions.ts
    ```
 
-   Call `terminal` with `command` only (plus `workdir`, the Hermes home, if you set one). Never pass `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty`: the script finishes in seconds and its output comes straight back. If the call returns an error about background commands, the script did not run; call it once more without those arguments, and if that fails too, end your turn with `[SILENT]`.
+   Call `terminal` with exactly `command` (plus `workdir`, the Hermes home, if you set one) and nothing else. Do not add `notify`, `heartbeat` or `background`: the script finishes in seconds and its output comes straight back. If the call returns an error about background commands, the script did not run; call it once more without those arguments, and if that fails too, end your turn with `[SILENT]`.
 
-   Do not write replacement logic. If it exits non-zero, end immediately with `[SILENT]`.
+   Do not write replacement logic. If it exits non-zero, end immediately with `[SILENT]`. Apart from the background-commands retry above, do not retry or diagnose.
 
 2. **If stdout is exactly `[SILENT]`, end your turn with exactly `[SILENT]`.**
 
@@ -28,6 +28,6 @@ Deliver one pending conversation, or the last-day closeout when the script retur
 
 # Hard rules
 - Output only the card or the closeout line. No preamble, no code fence.
-- One attempt at the script. Failure or `[SILENT]` ends the turn with `[SILENT]`.
+- One attempt at the script: call `terminal` with exactly `command` (plus `workdir`, if you set one) and nothing else. Do not add `notify`, `heartbeat` or `background`. If the call returns an error about background commands, the script did not run; call it once more without those arguments, and if that fails too, end your turn with `[SILENT]`. Otherwise no retries and no diagnosis: a failed run ends the turn with `[SILENT]`. Script output `[SILENT]` also ends the turn with `[SILENT]`.
 - Never call MCP tools. The script lists pending opportunities.
 - Never expose an id or raw JSON.

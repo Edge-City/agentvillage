@@ -12,11 +12,11 @@ Deliver exactly one opportunity card. The script owns selection and dedup — yo
    bun skills/index-network/scripts/drop-opportunity.ts
    ```
 
-   Call `terminal` with `command` only (plus `workdir`, the Hermes home, if you set one). Never pass `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty`: the script finishes in seconds and its output comes straight back. If the call returns an error about background commands, the script did not run; call it once more without those arguments, and if that fails too, end your turn with `[SILENT]`.
+   Call `terminal` with exactly `command` (plus `workdir`, the Hermes home, if you set one) and nothing else. Do not add `notify`, `heartbeat` or `background`: the script finishes in seconds and its output comes straight back. If the call returns an error about background commands, the script did not run; call it once more without those arguments, and if that fails too, end your turn with `[SILENT]`.
 
    Do not write Python, shell pipelines, or replacement logic. The script resolves today's Asia/Kolkata date, reads `memory/heartbeat-state.json`, lists opportunities, filters out everything already delivered today (so this never repeats the morning brief or an earlier drop) and every card shown in the last 3 days or already shown 3 times, picks the single best of the rest, records its id in the shared `deliveredToday` set and counts the showing, and prints either `[SILENT]` or one JSON object.
 
-   If the script exits with a non-zero code, end your turn immediately with `[SILENT]`. One attempt only — no retries, no diagnosis.
+   If the script exits with a non-zero code, end your turn immediately with `[SILENT]`. Apart from the background-commands retry above, one attempt only — no retries, no diagnosis.
 
 2. **If stdout is exactly `[SILENT]`, end your turn with exactly `[SILENT]`.** No commentary, no fallback. A silent drop is the normal case when there is nothing new to send.
 
@@ -38,7 +38,7 @@ Deliver exactly one opportunity card. The script owns selection and dedup — yo
 
 # Hard rules
 - Always call `bun skills/index-network/scripts/drop-opportunity.ts` exactly once. Never reimplement selection or dedup in generated code.
-- One attempt at the script. Non-zero exit → `[SILENT]` immediately.
+- One attempt at the script: call `terminal` with exactly `command` (plus `workdir`, if you set one) and nothing else. Do not add `notify`, `heartbeat` or `background`. If the call returns an error about background commands, the script did not run; call it once more without those arguments, and if that fails too, end your turn with `[SILENT]`. Otherwise no retries and no diagnosis: a failed run ends the turn with `[SILENT]`.
 - Never call MCP tools in this pass — the script owns listing and dedup.
 - Deliver at most one opportunity. Never pad with a second card, calendar, or announcements.
 - Never construct URLs except `https://index.network/u/<userId>` and `https://index.network/o/<opportunityId>` from ids in the script output.

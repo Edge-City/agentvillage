@@ -20,11 +20,11 @@ Assistant messages that contain tool calls must have no visible scratch text:
 no code comments, pseudocode, TODO notes, or "let's inspect..." narration before
 the tool call.
 
-Call `terminal` with `command` only (a `workdir` is fine) for skill scripts,
-recipes and scheduled jobs. Never pass `notify`, `heartbeat`, `background`,
-`watch_patterns`, `notify_on_complete` or `pty` unless the resident asked for a
-long job in the background: these commands finish in seconds and their output
-comes straight back. If the call returns an error about background commands,
+For skill scripts, recipes and scheduled jobs, call `terminal` with exactly
+`command` (plus `workdir`, or a `timeout` where a prompt gives one) and nothing
+else. Do not add `notify`, `heartbeat` or `background` unless the resident asked
+for a long job in the background: these commands finish in seconds and their
+output comes straight back. If the call returns an error about background commands,
 the command did not run; call it once more without those arguments.
 
 Keep the agent-world sources separate. A real user photo is the user's present

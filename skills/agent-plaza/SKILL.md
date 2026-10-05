@@ -27,7 +27,7 @@ python3 skills/agent-plaza/scripts/agent_plaza_selfie.py \
   --cooldown-hours 0
 ```
 
-If you are asked to run it yourself, call `terminal` with `command` only (a `workdir` is fine). Never pass `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty`: the script finishes in seconds and its output comes straight back. If the call returns an error about background commands, the script did not run; call it once more without those arguments.
+If you are asked to run it yourself, call `terminal` with exactly `command` (a `workdir` is fine) and nothing else. Do not add `notify`, `heartbeat` or `background`: the script finishes in seconds and its output comes straight back. If the call returns an error about background commands, the script did not run; call it once more without those arguments.
 
 The script sends directly through Telegram `sendPhoto` when a local
 Telegram-compatible image is available. If no local packet is available, it may

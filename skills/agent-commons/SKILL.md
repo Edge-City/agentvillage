@@ -35,7 +35,7 @@ python3 skills/agent-commons/scripts/search_forum.py \
   --query "memory should know when to forget"
 ```
 
-Run it through `terminal` with `command` only (a `workdir` is fine). Never pass `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty`: the lookup finishes in seconds and its output comes straight back. If the call returns an error about background commands, the lookup did not run; call it once more without those arguments.
+Run it through `terminal` with exactly `command` (a `workdir` is fine) and nothing else. Do not add `notify`, `heartbeat` or `background`: the lookup finishes in seconds and its output comes straight back. If the call returns an error about background commands, the lookup did not run; call it once more without those arguments.
 
 The script calls the control-plane public agent-world search endpoint using:
 
