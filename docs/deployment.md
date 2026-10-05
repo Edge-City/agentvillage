@@ -13,7 +13,7 @@ live. Three different things ship, each by its own path, and each leaves a recor
 | What ships | Repo | How it goes live | Record |
 |---|---|---|---|
 | Service code: the control plane and the landing page | `Edge-City/agentvillage-controlplane`, `Edge-City/agentvillage-landing` | The **Deploy** workflow moves that repo's `release` branch, which Railway builds | Annotated tag `release-YYYY-MM-DD[.N]` naming who ran it and the commits that went live |
-| Agent content: skills, prompts, installer, the `av-events` plugin | this repo, `Edge-City/agentvillage` | An annotated tag on `main`, then the **Roll** workflow updates every resident's VM to it | The tag; a GitHub Deployment per roll (environment `residents`); a `tenant.updated` event per resident carrying the tag |
+| Agent content: skills, prompts, installer, the `av-events` plugin | this repo, `Edge-City/agentvillage` | An annotated tag on `main` (the **Tag release** workflow here creates it), then the **Roll** workflow updates every resident's VM to it | The tag; a GitHub Deployment per roll (environment `residents`); a `tenant.updated` event per resident carrying the tag |
 | The data pipeline: ingest and dbt | `Edge-City/agentvillage-data` | The **Deploy** workflow in that repo moves its `release` branch and checks or applies migrations; a hand fast-forward push is the fallback | The `release` branch tip; `releases/manifest.yaml`, written by PR after the fact |
 
 No shared version number, no release calendar. During the event (Oct 11 to
@@ -78,13 +78,58 @@ where this page is briefer.
 | `pause_seconds` | Wait after each resident before checking it. Default 60, minimum 10. |
 | `allow_seed_change` | Default off. The data owner's confirmation that ingest already carries changed plugin seed files. |
 
-**Before a roll, by hand.**
-1. Tag the merged commit on `main`: `git tag -a v2.0.0-rcN -m "..."` and push
-   the tag. Anyone with write access to this repo can.
+**Before a roll.**
+1. Tag the merged commit with the **Tag release** button. Actions tab, workflow
+   "Tag release", "Run workflow", branch `main`:
+   https://github.com/Edge-City/agentvillage/actions/workflows/tag-release.yml.
+   Inputs: `ref` (default `main`; a commit, branch or tag that `main`
+   contains), `dry_run` (default on: plans and runs the suites, creates
+   nothing), `version` (leave empty for the highest `vX.Y.Z-rcN` plus one;
+   give one only to start a new line or after a final version) and `note`
+   (optional, one line of at most 200 characters, e.g. what the tag
+   deliberately leaves out; it goes on its own `Note:` line in the tag
+   message). Run a dry run
+   first and read its summary: the version, the commit, the commits since the
+   previous release tag and the seed check. Then run again with `dry_run`
+   unticked and `ref` set to the commit the dry run showed (`main` gets bot
+   commits several times a day). The real run tags only after this repo's
+   suites pass at that commit, pushes only the annotated tag (its message
+   names who ran it, the run, the commits and the seed check), and its summary
+   gives the Roll inputs. It refuses, creating nothing, when the ref is not on
+   `main`, the commit already carries a release tag (roll that one), the commit
+   does not contain the latest release tag, a branch has the new tag's name, the
+   `version` given exists or is not higher than every release tag, a tag that
+   looks like a release has a number longer than 6 digits, a directory that
+   `test.yml` runs `bun test` on does not exist at the commit
+   (`suite_dir_missing`: the suites would otherwise pass without running it),
+   or the tags or the seed check changed while it ran. Text from the
+   repository (commit subjects, seed `version` strings, tag names) is cleaned
+   of control characters and shown as code in the summary; a seed `version`
+   that is not one plain string is shown as `(unreadable version)` and counts
+   as changed. Anyone with write access to this repo can run it
+   (`scripts/tag-release.ts` holds the logic). Its actions are pinned by
+   commit SHA, unlike this repo's other workflows, because its tag job holds a
+   token that can write; the suites it calls run in their own read-only jobs.
+   Fallback, by hand: `git tag -a v2.0.0-rcN <commit> -m "..."` and
+   `git push origin v2.0.0-rcN`.
+
+   | Tag release problem | What to do |
+   |---|---|
+   | The suites fail at the commit | Nothing was created. Fix on `main` and tag the new commit, or give an earlier `ref` whose suites pass. |
+   | "The tags changed since this run planned" or the push was rejected | Someone tagged meanwhile; nothing of this run was pushed. Run again (a dry run first). |
+   | `suite_dir_missing` | The commit predates a suite directory that `test.yml` on `main` runs. Release a newer commit, or tag by hand after running the suites that exist at that commit. |
+   | GitHub refuses the tag push from the workflow's token (a permission or rule error in the tag job) | Tag by hand with the fallback above. If it keeps happening, a repository admin can add a write deploy key as a secret and the workflow can push with it, as the control plane's and data repo's Deploy buttons do; not set up today. |
 2. If the tag changes `plugins/av-events/tool_categories.json`,
    `edgeos_tool_allowlist.json` or `cron_job_names.json`, release the data
    pipeline with those seeds first, or the new events are quarantined. The
-   button refuses such a tag until `allow_seed_change` is ticked.
+   button refuses such a tag until `allow_seed_change` is ticked. The Tag
+   release summary names the changed files and their `version` strings
+   against the previous release tag and says whether to tick
+   `allow_seed_change`; it cannot see the data pipeline's release, so check
+   that with the data owner (see "The data pipeline" below). Roll compares
+   with what the residents run now (`EDGE_HERMES_REF`, a tag or a branch tip),
+   so if they are behind the previous tag it can name more files, and it
+   refuses with `seed_uncomparable` when it cannot read that ref.
 3. Make sure your own agent is a canary. Each agent answers only its owner's
    Telegram, so the human check in the procedure below only works on a tenant
    you own. The control plane marks every tenant whose sign-up email is in its
@@ -138,6 +183,36 @@ installer's `drop_pending_on_cold_boot` fix needs a Hermes build from
 memory: no memory backups run in production yet, so a bad roll has no memory
 undo.
 
+**First use of the Tag release button.** Once, by the owner, before relying
+on it:
+1. The pull request that added it merged with its `test` checks green (that
+   run also shows `test.yml` still checks out the pull request's own commit).
+2. Settings > Actions > General lets a workflow ask for write access through
+   its `permissions:` (the repository default is read; an organisation policy
+   can cap it).
+3. No ruleset or tag rule stops `github-actions[bot]` from creating `v*` tags.
+4. A dry run with `ref` `main`. If `main` still sits on the latest release tag
+   it refuses with "already tagged"; that is the expected first result.
+5. Once `main` has moved past it, a dry run again: the version is the next
+   rc, the previous tag is the latest one, the commit list and the seed check
+   match what you expect.
+6. In that run, the `test` jobs checked out the planned commit (their checkout
+   step names it) and passed.
+7. The plan step's log has no stray annotations and the summary renders as a
+   table with code spans.
+8. A real run with `dry_run` unticked, `ref` the full commit id from the dry
+   run, the same `version` and `note` if you gave them.
+9. `git fetch --tags` and `git cat-file -p <tag>`: annotated, tagger
+   `github-actions[bot]`, a message naming you, the run, the commit, the seed
+   check and the commits; `git ls-remote --heads origin` unchanged.
+10. If the push was refused: tag by hand with the fallback and see the
+    troubleshooting table above.
+11. If the seed check named files, confirm with the data owner that the data
+    pipeline's release carries those versions before ticking
+    `allow_seed_change`.
+12. Roll's dry run takes the tag (annotated, on `main`); then continue with
+    the staged procedure.
+
 ## The data pipeline
 
 Ingest and dbt have a **Deploy** button in `agentvillage-data` (Actions >
@@ -185,7 +260,7 @@ tag and roll, then the manifest PR recording what is live.
 |---|---|
 | Merge to `main` after review | whoever the repo's merge rule names |
 | Deploy the control plane or landing | anyone with write access to that repo, with a group-chat line |
-| Tag this repo | anyone with write access here |
+| Tag this repo (the Tag release button, or by hand) | anyone with write access here |
 | Roll residents | anyone with write access to the controlplane repo, through the staged procedure |
 | Release ingest, run migrations | the data owner |
 | Change a Railway variable or setting | a Railway admin, stating the exact change first |

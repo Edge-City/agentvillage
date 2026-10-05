@@ -1,0 +1,144 @@
+# The Tag release button (DATA-316): create the annotated vX.Y.Z-rcN tag on
+# main that the control plane's Roll workflow takes. docs/deployment.md, "Roll",
+# is the procedure this is one step of.
+#
+#   Actions > Tag release > Run workflow (Use workflow from: main)
+#     ref       commit, branch or tag to release (default main; main must contain it)
+#     dry_run   default on: plan and run the suites, create nothing
+#     version   optional: the version to create (default: the highest vX.Y.Z-rcN + 1)
+#     note      optional: one line (at most 200 characters) for the tag message's Note: line
+#
+# Jobs: plan (read-only: resolve and check the ref, work out the version, list
+# the commits since the previous release tag, compare the plugin seed files,
+# refuse when a directory test.yml's bun test line names is missing there) >
+# test (test.yml, the suites every pull request runs, at that commit) > tag (real
+# runs only, after green suites; serialised; fetches again, plans again and fails
+# if the commit, the version or the seed check changed, creates the annotated tag and pushes only
+# refs/tags/<version>: never a branch, never forced).
+# Logic and its tests: scripts/tag-release.ts, scripts/tests/tag-release.test.ts.
+# The hand fallback: git tag -a vX.Y.Z-rcN <commit> -m "..." && git push origin vX.Y.Z-rcN
+#
+# No secrets. The tag job pushes with this run's GITHUB_TOKEN (contents: write);
+# the tagger is github-actions[bot] and the message names who ran it. A tag
+# pushed with GITHUB_TOKEN starts no other workflow (none here listens for tags).
+# Actions are pinned by full commit SHA (version in the comment), unlike test.yml
+# and the sync workflows here, which use major version tags: this workflow has a
+# job with contents: write, and a moved upstream tag must not be able to run new
+# code next to that token. The actions test.yml uses run only in the test job's
+# own jobs, on their own runners with a read-only token; they never run in the
+# tag job and never see its token. They do decide whether the suites pass.
+name: Tag release
+run-name: ${{ inputs.dry_run && format('Dry run tag release of {0}', inputs.ref) || format('Tag release of {0}', inputs.ref) }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit, branch or tag to release (must be on main)
+        type: string
+        required: true
+        default: main
+      dry_run:
+        description: 'Dry run: plan and test, create nothing (untick to tag)'
+        type: boolean
+        default: true
+      version:
+        description: 'Version to create, e.g. v2.0.0-rc12 (empty: the next release candidate)'
+        type: string
+        required: false
+        default: ''
+      note:
+        description: "Optional one-line note for the tag message (max 200; letters, digits, spaces and . , : ; ( ) / _ + = ? ! ' @ # % & -)"
+        type: string
+        required: false
+        default: ''
+
+permissions: {}
+
+# Inputs reach shell lines through the environment only; the script validates them.
+env:
+  TAG_REF: ${{ inputs.ref }}
+  TAG_DRY_RUN: ${{ inputs.dry_run }}
+  TAG_VERSION: ${{ inputs.version }}
+  TAG_NOTE: ${{ inputs.note }}
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      commit: ${{ steps.plan.outputs.commit }}
+      version: ${{ steps.plan.outputs.version }}
+      seeds: ${{ steps.plan.outputs.seeds }}
+    steps:
+      - name: Require the workflow from main
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Run Tag release with 'Use workflow from: main'. The commit to release goes in the 'ref' box. Nothing was created."
+            exit 1
+          fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0 # every branch and tag: the version, the commit list and the seed check need them
+          persist-credentials: false
+      # no-cache: never restore bun from the Actions cache, which other runs of
+      # this repository can write; the plan's output decides what the tag job tags.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+          no-cache: true
+      - name: Plan
+        id: plan
+        run: bun scripts/tag-release.ts plan --ref "$TAG_REF" --version "$TAG_VERSION" --note "$TAG_NOTE" --dry-run "$TAG_DRY_RUN"
+
+  # The same suites as every pull request, at the commit to be tagged. A dry run
+  # runs them too, so it tells you whether the real run would tag.
+  test:
+    needs: plan
+    permissions:
+      contents: read
+    uses: ./.github/workflows/test.yml
+    with:
+      ref: ${{ needs.plan.outputs.commit }}
+
+  tag:
+    needs: [plan, test]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    # Only this seconds-long job is serialised, and a running one is never
+    # cancelled. If two wait at once, GitHub cancels the older waiting one (it
+    # shows as cancelled; nothing was created). The real guards are the fresh
+    # plan inside the job and a push that cannot overwrite an existing tag.
+    concurrency:
+      group: tag-release
+      cancel-in-progress: false
+    steps:
+      # main as dispatched, so the script that tags is main's; the token stays in
+      # .git for the fetch and the one tag push.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      # no-cache: this job holds contents: write; it must not run a bun restored
+      # from a cache that other jobs can write. (The script is TypeScript run by
+      # bun; the runner's own node cannot run it as it stands.)
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+          no-cache: true
+      - name: Create and push the tag
+        env:
+          EXPECT_COMMIT: ${{ needs.plan.outputs.commit }}
+          EXPECT_VERSION: ${{ needs.plan.outputs.version }}
+          EXPECT_SEEDS: ${{ needs.plan.outputs.seeds }}
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: >-
+          bun scripts/tag-release.ts tag --fetch
+          --expect-commit "$EXPECT_COMMIT" --expect-version "$EXPECT_VERSION" --expect-seeds "$EXPECT_SEEDS" --version "$TAG_VERSION" --note "$TAG_NOTE"
+          --actor "$GITHUB_ACTOR" --triggering-actor "$GITHUB_TRIGGERING_ACTOR"
+          --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
