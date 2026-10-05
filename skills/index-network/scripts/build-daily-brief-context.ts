@@ -35,7 +35,7 @@ import {
   readDeliveryLog,
 } from "./delivery-state";
 import { callIndexTool, indexMcpUrl, toolJsonArray, toolJsonObject } from "./index-mcp";
-import { portalEventsBaseUrl } from "./validate-digest-urls";
+import { envOrDotenv } from "./proactive-text";
 import { writeStateFile } from "./state-file";
 
 /**
@@ -409,8 +409,18 @@ function eventVenue(event: EdgeEvent): string | null {
   return event.venue_title ?? event.custom_location_name ?? null;
 }
 
+/**
+ * The portal events base: `AV_PORTAL_URL` from the process environment, else
+ * `$HERMES_HOME/.env` (cron scripts may not inherit it), the same read as the
+ * trigger's portalBase (B1-fix2 R8). Without a trailing slash; null when unset.
+ */
+export function portalEventsBase(): string | null {
+  const home = process.env.HERMES_HOME?.trim() || process.cwd();
+  return envOrDotenv("AV_PORTAL_URL", home).replace(/\/+$/, "") || null;
+}
+
 function eventUrl(event: EdgeEvent): string | null {
-  const base = portalEventsBaseUrl();
+  const base = portalEventsBase();
   return base && event.id ? `${base}/${event.id}` : null;
 }
 
