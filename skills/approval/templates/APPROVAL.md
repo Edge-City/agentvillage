@@ -43,8 +43,21 @@ What waits for a tap. Only classes an agent opens with `approval propose`
     intent.publish.<other> class proposable without a policy edit.
   - digest.share: a digest the agent drafted, before it is shared (DATA-96
     section 5), if digests ship.
-  - village.vote: the agent's draft answer to the weekly village question,
-    before it is cast (DATA-99).
+  - village.vote: the agent's draft answer to the weekly village question, or
+    its draft vote on the village's daily treasury ballot, before it is cast
+    (DATA-99, DATA-292).
+  - treasury.propose: a treasury proposal the agent drafted for the resident,
+    before it is filed (DATA-292; reserved, live from Oct 18).
+  - treasury.withdraw: withdrawing a treasury proposal the resident made, on
+    the agent's suggestion, before it is withdrawn (DATA-292).
+  - edgeos.event.write, edgeos.venue.write: creating or changing an event or a
+    venue in EdgeOS through the agent, beyond an RSVP (DATA-322). No tool uses
+    either before Oct 18.
+
+The treasury and EdgeOS rows are reserved now and built later: no tool
+proposes them yet, and writing them before Oct 11 means week two's
+experiments need no policy amendment (a change to every tenant's policy
+bytes, and so a re-attestation, after enforcement starts).
 
 A resident may change these in the onboarding review (DATA-259); the rows below
 are the defaults.
@@ -128,14 +141,21 @@ channels:
   telegram:
     token_env: APPROVAL_RELAY_TOKEN      # the relay credential, approvald-only env
     chat_id_env: APPROVAL_RESIDENT_CHAT  # the paired id; the control plane writes this variable
+    prompt:
+      always: [ttl_remaining_ms]         # show the time left; the relay holds a prompt overnight only when it outlasts the night
 
 classes:
-  # The live gate, propose path only: the resident taps before these happen, unless they changed the setting in the onboarding review (DATA-259).
+  # The live gate, propose path only: the resident taps before these happen.
   intent.publish.*:              { autonomy: manual, agent_may_request: true }
   intent.publish.inferred.index: { autonomy: manual, agent_may_request: true }
   intent.publish.stated.index:   { autonomy: autonomous, agent_may_request: true }
   digest.share:                  { autonomy: manual, agent_may_request: true }   # DATA-96 section 5, if digests ship
-  village.vote:                  { autonomy: manual, agent_may_request: true }   # the weekly question, DATA-99
+  village.vote:                  { autonomy: manual, agent_may_request: true }   # the weekly question and the daily treasury ballot, DATA-99, DATA-292
+  # Reserved now, built later: no tool proposes these yet, so nothing after Oct 11 is a policy amendment.
+  treasury.propose:              { autonomy: manual, agent_may_request: true }   # DATA-292, reserved, live from Oct 18
+  treasury.withdraw:             { autonomy: manual, agent_may_request: true }   # DATA-292, a resident's own proposal withdrawn by their agent's suggestion
+  edgeos.event.write:            { autonomy: manual, agent_may_request: true }   # reserved; no tool uses this class before Oct 18; DATA-322
+  edgeos.venue.write:            { autonomy: manual, agent_may_request: true }   # reserved; no tool uses this class before Oct 18; DATA-322
   # The gate's own organs and the resident's credentials: never the agent.
   policy.core:                   { autonomy: human-only }
   log.mutate:                    { autonomy: human-only }

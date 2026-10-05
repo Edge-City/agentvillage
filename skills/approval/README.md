@@ -31,10 +31,16 @@ row). In plain words, for the consent screen:
   scheduled-job changes, process writes, browser actions, skill edits,
   subagent hand-offs, sends. Nothing on this path waits for the resident on day
   one. Agent Village's research reads the same log; the resident can export it.
-- **What waits for a tap.** Three kinds of act the agent proposes rather than
+- **What waits for a tap.** Kinds of act the agent proposes rather than
   performs: publishing an intention it inferred to Index, sharing a digest it
   drafted (if digests ship), and casting the resident's answer to the weekly
-  village question. Each arrives as a Telegram message from the "Agent Village
+  village question or their vote on the daily treasury ballot. Four more are
+  reserved now and built later, so week two needs no policy amendment: filing
+  a treasury proposal the agent drafted (`treasury.propose`, from Oct 18),
+  withdrawing the resident's own treasury proposal on the agent's suggestion
+  (`treasury.withdraw`), and creating or changing an EdgeOS event or venue
+  (`edgeos.event.write`, `edgeos.venue.write`); no tool proposes these yet.
+  Each arrives as a Telegram message from the "Agent Village
   Approvals" bot with approve and reject buttons, and stays open for up to 72
   hours; if the resident does nothing it expires and nothing is published, shared
   or cast. An intention the resident stated in their own words is published
