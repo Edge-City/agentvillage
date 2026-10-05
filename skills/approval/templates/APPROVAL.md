@@ -43,8 +43,21 @@ What waits for a tap. Only classes an agent opens with `approval propose`
     intent.publish.<other> class proposable without a policy edit.
   - digest.share: a digest the agent drafted, before it is shared (DATA-96
     section 5), if digests ship.
-  - village.vote: the agent's draft answer to the weekly village question,
-    before it is cast (DATA-99).
+  - village.vote: the agent's draft answer to the weekly village question, or
+    its draft vote on the village's daily treasury ballot, before it is cast
+    (DATA-99, DATA-292).
+  - treasury.propose: a treasury proposal the agent drafted for the resident,
+    before it is filed (DATA-292; reserved, live from Oct 18).
+  - treasury.withdraw: withdrawing a treasury proposal the resident made, on
+    the agent's suggestion, before it is withdrawn (DATA-292).
+  - edgeos.event.write, edgeos.venue.write: creating or changing an event or a
+    venue in EdgeOS through the agent, beyond an RSVP (DATA-322). No tool uses
+    either before Oct 18.
+
+The treasury and EdgeOS rows are reserved now and built later: no tool
+proposes them yet, and writing them before Oct 11 means week two's
+experiments need no policy amendment (a change to every tenant's policy
+bytes, and so a re-attestation, after enforcement starts).
 
 A resident may change these in the onboarding review (DATA-259); the rows below
 are the defaults.
@@ -102,6 +115,16 @@ differs from the configured one (`foreign-chat`), so the daemon must know it.
 `token_delivery: sealed` is inert for proposals (they mint no token) and matters
 only if a later manual class is executed through `approval run`.
 
+`delivery: burst` (core 0.4.0, `channels.telegram.delivery` in
+schema/policy.schema.json, APRV-216). Without it delivery is `paced`: the
+listener sends the oldest pending request and the next one only once that one
+is decided, skipped or passed over, and `/skip` and `/next` are bot commands.
+The relay forwards no text command but `/start` (and ForceReply answers), so a
+resident cannot skip, and one proposal left unanswered for its 72 h window
+would hold back every later card. `burst` sends each request the listener has
+not yet sent, once; nothing about what is pending, or what a tap decides,
+changes. A review walkthrough (supervised-retro) stays paced in both modes.
+
 Dogfood tenants may add `supervised-retro` with a `retro_rate` on network.call
 or message.send to exercise the review card. Residents get no review cards on
 day one. No `budgets` block: proposals carry no cost.
@@ -128,14 +151,22 @@ channels:
   telegram:
     token_env: APPROVAL_RELAY_TOKEN      # the relay credential, approvald-only env
     chat_id_env: APPROVAL_RESIDENT_CHAT  # the paired id; the control plane writes this variable
+    delivery: burst                      # every unsent proposal goes out at once; paced (the default) sends the next only after the current one is answered, and the relay passes no /skip, so one ignored 72 h card would hold back every later one
+    prompt:
+      always: [ttl_remaining_ms]         # show the time left; the relay holds a prompt overnight only when it outlasts the night
 
 classes:
-  # The live gate, propose path only: the resident taps before these happen, unless they changed the setting in the onboarding review (DATA-259).
+  # The live gate, propose path only: the resident taps before these happen.
   intent.publish.*:              { autonomy: manual, agent_may_request: true }
   intent.publish.inferred.index: { autonomy: manual, agent_may_request: true }
   intent.publish.stated.index:   { autonomy: autonomous, agent_may_request: true }
   digest.share:                  { autonomy: manual, agent_may_request: true }   # DATA-96 section 5, if digests ship
-  village.vote:                  { autonomy: manual, agent_may_request: true }   # the weekly question, DATA-99
+  village.vote:                  { autonomy: manual, agent_may_request: true }   # the weekly question and the daily treasury ballot, DATA-99, DATA-292
+  # Reserved now, built later: no tool proposes these yet, so nothing after Oct 11 is a policy amendment.
+  treasury.propose:              { autonomy: manual, agent_may_request: true }   # DATA-292, reserved, live from Oct 18
+  treasury.withdraw:             { autonomy: manual, agent_may_request: true }   # DATA-292, a resident's own proposal withdrawn by their agent's suggestion
+  edgeos.event.write:            { autonomy: manual, agent_may_request: true }   # reserved; no tool uses this class before Oct 18; DATA-322
+  edgeos.venue.write:            { autonomy: manual, agent_may_request: true }   # reserved; no tool uses this class before Oct 18; DATA-322
   # The gate's own organs and the resident's credentials: never the agent.
   policy.core:                   { autonomy: human-only }
   log.mutate:                    { autonomy: human-only }
