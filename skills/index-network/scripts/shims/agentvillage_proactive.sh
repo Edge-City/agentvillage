@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Agent Village proactive job trigger (DATA-314 brief-lite).
-# install/install_index.ts copies this one file into $HERMES_HOME/scripts/ under six names,
+# install/install_index.ts copies this one file into $HERMES_HOME/scripts/ under six names (and
+# install/jobs.ts under a template or preview job's name),
 # agentvillage_proactive_<action>.sh, because Hermes runs a cron pre-run script from there only,
 # through bash, with no arguments. The action is read from the file name; this runs
 # skills/index-network/scripts/proactive.ts <action> from $HERMES_HOME (this file's parent's parent).
@@ -17,8 +18,15 @@ silent() {
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ACTION" "$1" >> "$HOME_DIR/av-events/proactive/triggers.jsonl" 2>/dev/null
   fi
 }
+# J2: tpl-<template> is a job added from a template (install/jobs.ts add); preview-<action> is a
+# team tenant's one-off preview (install/jobs.ts preview), run as `proactive.ts <action> --preview`.
+PREVIEW=""
 case "$ACTION" in
   prefetch|brief|drop-midday|drop-evening|negotiation|evening) ;;
+  tpl-brief|tpl-digest-preview|tpl-evening-ask) ;;
+  preview-brief|preview-drop-midday|preview-drop-evening|preview-negotiation|preview-evening|\
+preview-tpl-brief|preview-tpl-digest-preview|preview-tpl-evening-ask)
+    ACTION="${ACTION#preview-}"; PREVIEW="--preview" ;;
   *) ACTION="unknown"; silent unknown-action; exit 0 ;;
 esac
 if [ -z "$HOME_DIR" ] || ! cd "$HOME_DIR"; then silent no-home; exit 0; fi
@@ -33,7 +41,7 @@ done
 if [ -z "$BUN" ]; then silent no-bun; exit 0; fi
 TRIGGER="skills/index-network/scripts/proactive.ts"
 if [ ! -f "$TRIGGER" ]; then silent no-trigger; exit 0; fi
-"$BUN" "$TRIGGER" "$ACTION"
+if [ -n "$PREVIEW" ]; then "$BUN" "$TRIGGER" "$ACTION" "$PREVIEW"; else "$BUN" "$TRIGGER" "$ACTION"; fi
 STATUS=$?
 if [ "$ACTION" = "prefetch" ]; then exit "$STATUS"; fi
 if [ "$STATUS" -ne 0 ]; then silent "trigger-exit-$STATUS"; fi

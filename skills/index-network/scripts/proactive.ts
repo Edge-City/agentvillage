@@ -15,6 +15,27 @@
  *   evening        19:00: the outcome ask about one accepted connection the
  *                  follow-up announced two or more days ago (outcome-ask.ts),
  *                  else one pending conversation, or the last-day closeout.
+ *   tpl-brief      J2: a job added from a template for one tenant
+ *   tpl-digest-preview  (`install/jobs.ts add`): the brief's, the drop's and
+ *   tpl-evening-ask     the evening's content path, each with its own day
+ *                  mark. The evening template never stages the outcome ask
+ *                  (the av-events plugin arms it for the installer's evening
+ *                  job only), so it goes straight to the evening's reminder.
+ *
+ * J2 per-job settings (job-settings.ts, docs/design/job-settings.md): each
+ * agent job's delivery window and zone come from `av-events/job-settings.json`
+ * when it has an entry, else from the defaults (the brief: 05:00 to 11:00
+ * Asia/Kolkata; every other job: no window), which is rc13's behaviour. A
+ * run outside its window is silent (`outside-window`); a job whose entry is
+ * invalid falls back to its default window, or, with none, is silent
+ * (`settings-invalid`). The once-a-day mark stays on the village date, so a
+ * settings change during the day never brings a second send.
+ *
+ * `<action> --preview` (the shim's `preview-<action>` name): a team tenant's
+ * test run of the content path, now. Refused (`preview-refused`) unless
+ * `AV_TEAM_TENANT=1`. It ignores the window and the day mark and writes
+ * neither: it never takes the state lock, it runs against a private copy of
+ * the state file that is deleted afterwards, and it stages no outcome ask.
  *
  * The script does every deterministic step, so the model only writes language
  * from the Script Output and never needs a tool:
@@ -44,7 +65,7 @@
  * run in av-events/proactive/triggers.jsonl.
  */
 
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { approvalsWaiting } from "./approvals-waiting";
@@ -57,13 +78,17 @@ import { type LockOptions, LockStuck, LockTimeout, releaseHeldLocks, withStateLo
 import { writeStateFile } from "./state-file";
 import { followUp } from "./summarize-negotiations";
 import { backfillAnnounced, clearStage, dueSubjects, listAcceptedConnections, outcomeQuestion, readAskedIds, recordAttempt, stageFor, writeStage } from "./outcome-ask";
+import { type Delivery, deliveryFor, inWindow, isTeamTenant, minuteOfDay, readJobSettings } from "./job-settings";
 
+/** The default jobs' actions, one per installer job (install_index.ts DIGEST_CRON_SPECS). */
 export const ACTIONS = ["prefetch", "brief", "drop-midday", "drop-evening", "negotiation", "evening"] as const;
-export type ProactiveAction = (typeof ACTIONS)[number];
+/** The template jobs' actions (J2), `tpl-<template>`: a job only a template add creates. */
+export const TEMPLATE_ACTIONS = ["tpl-brief", "tpl-digest-preview", "tpl-evening-ask"] as const;
+export type ProactiveAction = (typeof ACTIONS)[number] | (typeof TEMPLATE_ACTIONS)[number];
 export type AgentAction = Exclude<ProactiveAction, "prefetch">;
 
 export function isProactiveAction(value: unknown): value is ProactiveAction {
-  return typeof value === "string" && (ACTIONS as readonly string[]).includes(value);
+  return typeof value === "string" && ((ACTIONS as readonly string[]).includes(value) || (TEMPLATE_ACTIONS as readonly string[]).includes(value));
 }
 
 /** The state key this trigger adds: `proactiveRuns.<action>` = the village date it last woke the model. */
@@ -90,6 +115,8 @@ export interface ProactiveOptions {
   approvals?: (home: string) => number;
   /** The evening outcome ask's read of accepted connections. */
   accepted?: () => Promise<BriefOpportunity[]>;
+  /** A team tenant's test run (`--preview`): no window, no day mark, no state written. */
+  preview?: boolean;
 }
 
 export interface TriggerResult {
@@ -104,6 +131,10 @@ export interface TriggerResult {
   note?: string;
   /** A code for which path an action took (the evening's outcome ask, or why it fell back). */
   detail?: string;
+  /** Which settings the run used (Delivery.settings); absent when there is no settings file. */
+  settings?: string;
+  /** The run was a preview. */
+  preview?: boolean;
 }
 
 /** The run renamed an unreadable state file aside and continued from an empty state. */
@@ -535,6 +566,9 @@ interface Run {
   date: string;
   now: Date;
   options: ProactiveOptions;
+  /** The state file the content path reads and writes: the real one, or a preview's private copy. */
+  stateFile: string;
+  preview: boolean;
 }
 
 /** What an action decided: the view to wake on (and what to record with the day mark), or why to stay silent. */
@@ -549,17 +583,17 @@ type Decision =
     }
   | { silent: string; withheld?: number; detail?: string };
 
-function contextOptions(home: string, date: string) {
+function contextOptions(home: string, date: string, stateFile = stateFilePath(home)) {
   return {
     date,
-    stateFile: stateFilePath(home),
+    stateFile,
     userFiles: [join(home, "USER.md"), join(home, "MEMORY.md"), join(home, "memory", `${date}.md`)],
   };
 }
 
 async function briefAction(run: Run): Promise<Decision> {
   const build = run.options.buildContext ?? buildDailyBriefContext;
-  const context = withPrefetchedIndex(await build(contextOptions(run.home, run.date)), readPrefetch(run.home, run.date));
+  const context = withPrefetchedIndex(await build(contextOptions(run.home, run.date, run.stateFile)), readPrefetch(run.home, run.date));
   const approvals = (run.options.approvals ?? approvalsWaiting)(run.home);
   const { view, withheld, shownIds } = briefView(context, { link: connectionsUrl(run.home), approvals, portal: portalBase(run.home) });
   return { view, withheld, record: (state) => recordBriefShowings(state, shownIds, run.date, villageDate()) };
@@ -568,7 +602,7 @@ async function briefAction(run: Run): Promise<Decision> {
 async function dropAction(run: Run): Promise<Decision> {
   let result: Awaited<ReturnType<typeof dropOpportunity>>;
   try {
-    result = await (run.options.drop ?? dropOpportunity)({ date: run.date, stateFile: stateFilePath(run.home) });
+    result = await (run.options.drop ?? dropOpportunity)({ date: run.date, stateFile: run.stateFile });
   } catch {
     return { silent: "index-unavailable" };
   }
@@ -607,7 +641,7 @@ export function outcomePluginOff(home: string): boolean {
 async function outcomeAskDecision(run: Run): Promise<Decision | { fallback: string; withheld?: number }> {
   // Nothing would record the ask: the same question every evening, for every connection.
   if (outcomePluginOff(run.home)) return { fallback: "outcome-ask-plugin-off" };
-  const path = stateFilePath(run.home);
+  const path = run.stateFile;
   let state: Record<string, unknown>;
   try {
     state = readState(path);
@@ -663,14 +697,19 @@ async function outcomeAskDecision(run: Run): Promise<Decision | { fallback: stri
 
 async function eveningAction(run: Run): Promise<Decision> {
   // A stage left by an earlier run is never this run's: without this, a
-  // reminder written now could be armed as the ask.
-  clearStage(run.home);
-  const ask = await outcomeAskDecision(run);
+  // reminder written now could be armed as the ask. Only the installer's
+  // evening job stages, so only it clears: a preview or the evening template
+  // leaves a real run's stage alone (its model may still be writing).
+  const stages = run.action === "evening" && !run.preview;
+  if (stages) clearStage(run.home);
+  // The plugin arms the ask for the installer's evening job only: a template
+  // job's ask would go out unrecorded and be asked again.
+  const ask = run.action === "evening" ? await outcomeAskDecision(run) : { fallback: "outcome-ask-template-job" };
   if (!("fallback" in ask)) return ask;
   const detail = ask.fallback;
   // Due names the ask passed over still count in the run log's `withheld`.
-  const askWithheld = ask.withheld ?? 0;
-  const result = await (run.options.evening ?? askQuestions)({ date: run.date, stateFile: stateFilePath(run.home) });
+  const askWithheld = ("withheld" in ask ? ask.withheld : 0) ?? 0;
+  const result = await (run.options.evening ?? askQuestions)({ date: run.date, stateFile: run.stateFile });
   if ("silent" in result) return { silent: result.reason, detail, ...(askWithheld ? { withheld: askWithheld } : {}) };
   const { view, withheld } = eveningView(run.date, result);
   const total = withheld + askWithheld;
@@ -678,7 +717,7 @@ async function eveningAction(run: Run): Promise<Decision> {
 }
 
 async function negotiationAction(run: Run): Promise<Decision> {
-  const result = await (run.options.followUp ?? followUp)({ date: run.date, stateFile: stateFilePath(run.home) });
+  const result = await (run.options.followUp ?? followUp)({ date: run.date, stateFile: run.stateFile });
   if ("silent" in result) return { silent: result.reason };
   const { view, withheld } = followUpView(run.date, result);
   return view ? { view, withheld } : { silent: "name-withheld", withheld };
@@ -690,6 +729,9 @@ const AGENT_ACTIONS: Record<AgentAction, (run: Run) => Promise<Decision>> = {
   "drop-evening": dropAction,
   negotiation: negotiationAction,
   evening: eveningAction,
+  "tpl-brief": briefAction,
+  "tpl-digest-preview": dropAction,
+  "tpl-evening-ask": eveningAction,
 };
 
 /** Minutes since village (IST) midnight. */
@@ -713,13 +755,27 @@ function faultReason(err: unknown): string {
   return errorCode(err);
 }
 
+/**
+ * Whether this run may deliver under its job's settings: null when it may, else
+ * the silent result. Read before the lock, as rc13 read the brief's window.
+ */
+export function deliveryGate(delivery: Delivery, now: Date): TriggerResult | null {
+  const settings = delivery.settings ? { settings: delivery.settings } : {};
+  if (delivery.hold) return { ...silent("settings-invalid"), ...settings };
+  if (delivery.window && !inWindow(minuteOfDay(now, delivery.tz), delivery.window)) return { ...silent("outside-window"), ...settings };
+  return null;
+}
+
 /** One agent-job trigger, start to wake line. Never throws; always exit code 0. */
 async function runAgentAction(action: AgentAction, options: ProactiveOptions): Promise<TriggerResult> {
   const home = homeDir(options);
   const now = (options.now ?? (() => new Date()))();
-  if (action === "brief" && !inBriefWindow(now)) return silent("outside-window");
-  const run: Run = { home, action, date: villageDate(now), now, options };
+  const delivery = deliveryFor(action, readJobSettings(home));
+  const gated = deliveryGate(delivery, now);
+  if (gated) return gated;
+  const settings = delivery.settings ? { settings: delivery.settings } : {};
   const stateFile = stateFilePath(home);
+  const run: Run = { home, action, date: villageDate(now), now, options, stateFile, preview: false };
   let healed = false;
   const read = (): Record<string, unknown> => {
     const got = readStateHealing(stateFile, now);
@@ -747,7 +803,47 @@ async function runAgentAction(action: AgentAction, options: ProactiveOptions): P
   } catch (err) {
     result = silent(faultReason(err));
   }
-  return healed ? { ...result, note: STATE_HEALED } : result;
+  return { ...(healed ? { ...result, note: STATE_HEALED } : result), ...settings };
+}
+
+/**
+ * A team tenant's preview of an agent job's content path, now. Refused unless
+ * AV_TEAM_TENANT=1 (checked here, whatever started the run). No window and no
+ * day mark are read; nothing the real run reads is written: the state lock is
+ * never taken, the content path runs against a private copy of the state file
+ * (deleted afterwards), no record or day mark is applied and no outcome ask
+ * is staged. The Script Output is the real run's.
+ */
+async function runPreview(action: ProactiveAction, options: ProactiveOptions): Promise<TriggerResult> {
+  const home = homeDir(options);
+  if (action === "prefetch") return silent("preview-not-agent-job");
+  if (!isTeamTenant(home)) return silent("preview-refused");
+  const now = (options.now ?? (() => new Date()))();
+  let state: Record<string, unknown>;
+  try {
+    // A plain read: every write of the file is a rename, so no lock is needed to see a whole one.
+    state = readState(stateFilePath(home));
+  } catch (err) {
+    return silent(faultReason(err));
+  }
+  let dir: string | undefined;
+  try {
+    mkdirSync(proactiveDir(home), { recursive: true, mode: 0o700 });
+    dir = mkdtempSync(join(proactiveDir(home), "preview-"));
+    const stateFile = join(dir, "heartbeat-state.json");
+    writePrivateJson(stateFile, state);
+    const run: Run = { home, action, date: villageDate(now), now, options, stateFile, preview: true };
+    const decision = await AGENT_ACTIONS[action](run);
+    const detail = decision.detail ? { detail: decision.detail } : {};
+    if ("silent" in decision) return { ...silent(decision.silent, 0, decision.withheld), ...detail };
+    const text = scriptOutputText(decision.view);
+    if (cronScanHit(text)) return { ...silent("scan-blocked", 0, decision.withheld), ...detail };
+    return { lines: [text, wakeLine(true)], exitCode: 0, woke: true, reason: "woke", ...(decision.withheld ? { withheld: decision.withheld } : {}), ...detail };
+  } catch (err) {
+    return silent(faultReason(err));
+  } finally {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /** Write JSON by temp file and rename (0600, its directory 0700). */
@@ -783,10 +879,12 @@ async function runPrefetch(options: ProactiveOptions): Promise<TriggerResult> {
 /** Run one action and return what to print. Never throws. */
 export async function runProactive(action: ProactiveAction, options: ProactiveOptions = {}): Promise<TriggerResult> {
   let result: TriggerResult;
+  const preview = options.preview === true;
   try {
-    result = action === "prefetch" ? await runPrefetch(options) : await runAgentAction(action, options);
+    if (preview) result = { ...(await runPreview(action, options)), preview: true };
+    else result = action === "prefetch" ? await runPrefetch(options) : await runAgentAction(action, options);
   } catch (err) {
-    result = silent(errorCode(err), action === "prefetch" ? 1 : 0);
+    result = silent(errorCode(err), action === "prefetch" && !preview ? 1 : 0);
   }
   appendRunLog(homeDir(options), {
     action,
@@ -795,6 +893,8 @@ export async function runProactive(action: ProactiveAction, options: ProactiveOp
     ...(result.withheld ? { withheld: result.withheld } : {}),
     ...(result.note ? { note: reasonCode(result.note) } : {}),
     ...(result.detail ? { detail: reasonCode(result.detail) } : {}),
+    ...(result.settings ? { settings: reasonCode(result.settings) } : {}),
+    ...(preview ? { preview: true } : {}),
   });
   return result;
 }
@@ -803,18 +903,21 @@ async function main(): Promise<void> {
   // stdout is the Script Output: anything a library prints goes to stderr.
   console.log = console.error;
   const action = process.argv[2];
-  if (!isProactiveAction(action)) {
+  const extra = process.argv.slice(3);
+  // The one flag: `--preview` (the shim passes it for a `preview-<action>` name). Anything else is refused.
+  if (!isProactiveAction(action) || extra.some((arg) => arg !== "--preview")) {
     process.stdout.write(`${wakeLine(false, "unknown-action")}\n`);
     return;
   }
-  const exitCode = action === "prefetch" ? 1 : 0;
+  const preview = extra.includes("--preview");
+  const exitCode = action === "prefetch" && !preview ? 1 : 0;
   const hardStop = setTimeout(() => {
     releaseHeldLocks();
-    appendRunLog(homeDir(), { action, decision: "silent", reason: "trigger-timeout" });
+    appendRunLog(homeDir(), { action, decision: "silent", reason: "trigger-timeout", ...(preview ? { preview: true } : {}) });
     process.stderr.write(`proactive: ${action} trigger-timeout\n`);
     process.stdout.write(`${wakeLine(false, "trigger-timeout")}\n`, () => process.exit(exitCode));
   }, HARD_DEADLINE_MS);
-  const result = await runProactive(action);
+  const result = await runProactive(action, { preview });
   clearTimeout(hardStop);
   process.stderr.write(`proactive: ${action} ${reasonCode(result.reason)}${result.note ? ` ${reasonCode(result.note)}` : ""}\n`);
   // Exit once the last line is written: a lingering child must not keep the trigger alive.
