@@ -6,6 +6,7 @@
 #     ref       commit, branch or tag to release (default main; main must contain it)
 #     dry_run   default on: plan and run the suites, create nothing
 #     version   optional: the version to create (default: the highest vX.Y.Z-rcN + 1)
+#     note      optional: one line (at most 200 characters) for the tag message's Note: line
 #
 # Jobs: plan (read-only: resolve and check the ref, work out the version, list
 # the commits since the previous release tag, compare the plugin seed files) >
@@ -19,7 +20,12 @@
 # No secrets. The tag job pushes with this run's GITHUB_TOKEN (contents: write);
 # the tagger is github-actions[bot] and the message names who ran it. A tag
 # pushed with GITHUB_TOKEN starts no other workflow (none here listens for tags).
-# Actions are referenced by major version tag, as in this repository's other workflows.
+# Actions are pinned by full commit SHA (version in the comment), unlike test.yml
+# and the sync workflows here, which use major version tags: this workflow has a
+# job with contents: write, and a moved upstream tag must not be able to run new
+# code next to that token. The actions test.yml uses run only in the test job's
+# own jobs, on their own runners with a read-only token; they never run in the
+# tag job and never see its token. They do decide whether the suites pass.
 name: Tag release
 run-name: ${{ inputs.dry_run && format('Dry run tag release of {0}', inputs.ref) || format('Tag release of {0}', inputs.ref) }}
 
@@ -40,6 +46,11 @@ on:
         type: string
         required: false
         default: ''
+      note:
+        description: "Optional one-line note for the tag message (max 200; letters, digits, spaces and . , : ; ( ) / _ + = ? ! ' @ # % & -)"
+        type: string
+        required: false
+        default: ''
 
 permissions: {}
 
@@ -48,6 +59,7 @@ env:
   TAG_REF: ${{ inputs.ref }}
   TAG_DRY_RUN: ${{ inputs.dry_run }}
   TAG_VERSION: ${{ inputs.version }}
+  TAG_NOTE: ${{ inputs.note }}
 
 jobs:
   plan:
@@ -65,16 +77,16 @@ jobs:
             echo "::error::Run Tag release with 'Use workflow from: main'. The commit to release goes in the 'ref' box. Nothing was created."
             exit 1
           fi
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0 # every branch and tag: the version, the commit list and the seed check need them
           persist-credentials: false
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.2
       - name: Plan
         id: plan
-        run: bun scripts/tag-release.ts plan --ref "$TAG_REF" --version "$TAG_VERSION" --dry-run "$TAG_DRY_RUN"
+        run: bun scripts/tag-release.ts plan --ref "$TAG_REF" --version "$TAG_VERSION" --note "$TAG_NOTE" --dry-run "$TAG_DRY_RUN"
 
   # The same suites as every pull request, at the commit to be tagged. A dry run
   # runs them too, so it tells you whether the real run would tag.
@@ -103,10 +115,10 @@ jobs:
     steps:
       # main as dispatched, so the script that tags is main's; the token stays in
       # .git for the fetch and the one tag push.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.2
       - name: Create and push the tag
@@ -117,6 +129,6 @@ jobs:
           GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
         run: >-
           bun scripts/tag-release.ts tag --fetch
-          --expect-commit "$EXPECT_COMMIT" --expect-version "$EXPECT_VERSION" --version "$TAG_VERSION"
+          --expect-commit "$EXPECT_COMMIT" --expect-version "$EXPECT_VERSION" --version "$TAG_VERSION" --note "$TAG_NOTE"
           --actor "$GITHUB_ACTOR" --triggering-actor "$GITHUB_TRIGGERING_ACTOR"
           --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
