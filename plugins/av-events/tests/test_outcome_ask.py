@@ -694,21 +694,42 @@ def test_an_armed_file_altered_after_arming_emits_nothing(live, ctx, tenant, av)
     assert events(av, live, "outcome.asked") == []
 
 
-@pytest.mark.parametrize("label,kwargs", [
-    ("staged before the run", dict(staged=time.time() - 3600)),
-    ("armed after the run ended", dict(armed=time.time() + 1)),
-    ("an unknown key", dict(evidence_class="operator_verified")),
-    ("a hash that is not a hash", dict(message_hash="Did you and Arjun meet?")),
-    ("a session of another job", dict(session_id=f"cron_{OTHER_JOB}_20261014_190000")),
-    ("a file named for another execution", dict(name=f"{'f' * 32}.json")),
-])
-def test_after_a_restart_a_forged_armed_file_outside_what_hermes_recorded_emits_nothing(live, tenant, av, label, kwargs):
+#: Each forged armed file, built from the finish the test writes (`end`). No
+#: value here is computed when pytest collects the file: a time taken then is
+#: stale by the time the test runs, and the case would pass or fail by when it ran.
+FORGED_ARMED = {
+    # The run was claimed at end - 40 (`Tenant.finish`).
+    "staged before the run": lambda end: dict(staged=end - 3600, armed=end - 5),
+    # After the finish by more than the clock slack, and still not in the future.
+    "armed after the run ended": lambda end: dict(staged=end - 20, armed=end + 5),
+    "an unknown key": lambda end: dict(staged=end - 20, armed=end - 5, evidence_class="operator_verified"),
+    "a hash that is not a hash": lambda end: dict(staged=end - 20, armed=end - 5, message_hash="Did you and Arjun meet?"),
+    "a session of another job": lambda end: dict(staged=end - 20, armed=end - 5, session_id=f"cron_{OTHER_JOB}_20261014_190000"),
+    "a file named for another execution": lambda end: dict(staged=end - 20, armed=end - 5, name=f"{'f' * 32}.json"),
+}
+
+
+@pytest.mark.parametrize("label", sorted(FORGED_ARMED))
+def test_after_a_restart_a_forged_armed_file_outside_what_hermes_recorded_emits_nothing(live, tenant, av, label):
     execution = uuid.uuid4().hex
-    tenant.finish(execution, at=time.time() - 2)
-    forged_armed(tenant, execution, **kwargs)
-    live._COLLECTOR.outcome_tick()
+    end = time.time() - 10
+    tenant.finish(execution, at=end)
+    forged_armed(tenant, execution, **FORGED_ARMED[label](end))
+    codes = live._COLLECTOR.outcome_tick()
     assert events(av, live, "outcome.asked") == [], label
+    assert codes.get("armed_refused") == 1, (label, codes)
     assert tenant.armed() == []
+
+
+def test_the_forged_armed_cases_are_well_formed_but_for_the_one_fault(live, tenant, av):
+    """The control for the cases above: the same file without its fault is
+    accepted, so each case is refused for its own fault and not for a time
+    that went stale."""
+    execution = uuid.uuid4().hex
+    end = time.time() - 10
+    tenant.finish(execution, at=end)
+    forged_armed(tenant, execution, staged=end - 20, armed=end - 5)
+    assert live._COLLECTOR.outcome_tick().get("asked") == 1
 
 
 def test_a_forged_armed_file_as_a_symlink_or_shared_emits_nothing(live, tenant, av, home):
