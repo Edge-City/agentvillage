@@ -14,12 +14,17 @@ import { join } from "node:path";
 import type { BriefOpportunity } from "../build-daily-brief-context";
 import {
   MAX_ATTEMPTS,
+  NOT_LINKED,
+  STAGE_FORMAT_V2,
   askedLedgerPath,
   backfillAnnounced,
   dueSubjects,
+  intentionLink,
   outcomeId,
   outcomeQuestion,
+  stageFor,
   stagePath,
+  writeStage,
 } from "../outcome-ask";
 import { type ProactiveOptions, runProactive } from "../proactive";
 import { cleanName } from "../proactive-text";
@@ -123,6 +128,7 @@ describe("the evening asks about one accepted connection announced two or more d
     expect(result.lines.join("\n")).not.toContain(THIRD_PARTY);
     const staged = stage()!;
     expect(staged).toEqual({
+      // M2b fix round 1: still version 1 (STAGE_FORMAT_V2 off), exactly as before M2b.
       v: 1, action: "evening", date: DATE, staged_at: EVENING.toISOString(), asked_by: "outcome_cron", window_days: 1,
       // Round 3: the plain SHA-256 of the key of the exact question shown, a hash and never the text.
       question_sha256: createHash("sha256").update("did you and arjun mehta meet? reply met, not useful, or missed", "utf8").digest("hex"),
@@ -395,5 +401,131 @@ describe("the helpers", () => {
     expect(outcomeId("x".repeat(101))).toBeNull();
     expect(outcomeId(OPP)).toBe(`opp-outcome:${OPP}`);
     expect(dueSubjects({ negotiationSummary: { announcedOn: { "has space": "2026-10-01" } } }, new Set(), DATE)).toEqual([]);
+  });
+});
+
+/**
+ * M2b fix round 1 (S1): the trigger keeps writing version 1, byte for byte as
+ * the trigger from before M2b. The reference is a frozen fixture produced by
+ * that trigger's own `stageFor` + `writeStage` (its header names the commit).
+ */
+interface FrozenStage {
+  name: string;
+  opportunity_id: string;
+  date: string;
+  now: string;
+  person: string;
+  question: string;
+  bytes: string;
+}
+const FROZEN = JSON.parse(readFileSync(join(import.meta.dir, "fixtures", "outcome-stage-v1-origin-main.json"), "utf8")) as {
+  header: Record<string, string>;
+  cases: FrozenStage[];
+};
+
+describe("M2b fix round 1: with STAGE_FORMAT_V2 off the trigger writes exactly the stage from before M2b", () => {
+  const INTENT = "aaaaaaaa-0000-4000-8000-000000000001";
+
+  test("the constant is off, and the fixture is the frozen output of the commit before M2b", () => {
+    expect(STAGE_FORMAT_V2).toBe(false);
+    expect(FROZEN.header.source_commit).toBe("dbabadad4bb10e8e4969a0234126b14283d20434");
+    expect(FROZEN.header.do_not_edit).toContain("FROZEN");
+    expect(FROZEN.cases.length).toBeGreaterThanOrEqual(4);
+  });
+
+  for (const frozen of FROZEN.cases) {
+    test(`same bytes as the frozen stage: ${frozen.name}`, () => {
+      expect(outcomeQuestion(frozen.person)).toBe(frozen.question);
+      // With and without a link: while the writer is off the link is never written.
+      for (const link of [undefined, NOT_LINKED, intentionLink([INTENT]), intentionLink([INTENT, "x"])]) {
+        const stage = stageFor(frozen.opportunity_id, frozen.date, new Date(frozen.now), frozen.question, link)!;
+        writeStage(home, stage);
+        expect(readFileSync(stagePath(home), "utf8")).toBe(frozen.bytes);
+      }
+    });
+  }
+
+  test("end to end: the evening run's stage file is byte for byte the frozen one, even for a connection Index linked", async () => {
+    const [frozen] = FROZEN.cases.filter((c) => c.opportunity_id === OPP && c.now === EVENING.toISOString() && c.person === "Arjun Mehta");
+    expect(frozen).toBeDefined();
+    announced({ [OPP]: "2026-10-12" });
+    await runProactive("evening", options({ accepted: async () => [{ ...accepted("Arjun Mehta"), matchedIntentIds: [INTENT] }] }));
+    expect(readFileSync(stagePath(home), "utf8")).toBe(frozen!.bytes);
+  });
+});
+
+describe("M2b: with the writer turned on (tests only), the stage names the intention the connection belongs to", () => {
+  /** An Index intent id (synthetic): the id `intention.captured` carries for an Index capture. */
+  const INTENT = "aaaaaaaa-0000-4000-8000-000000000001";
+  const INTENT2 = "aaaaaaaa-0000-4000-8000-000000000002";
+  const SUBJECT_KEYS = ["intention_id", "intention_reason", "opportunity_id", "outcome_id"];
+  /** STAGE_FORMAT_V2 flipped on through the seam, never by editing the constant. */
+  const on = (over: Partial<ProactiveOptions> = {}) => options({ stageFormatV2: true, ...over });
+
+  function withIntents(matchedIntentIds: string[] | undefined): BriefOpportunity {
+    return { ...accepted("Arjun Mehta"), ...(matchedIntentIds ? { matchedIntentIds } : {}) };
+  }
+
+  test("a connection with exactly one known intention: the stage names it, with no reason", async () => {
+    announced({ [OPP]: "2026-10-12" });
+    await runProactive("evening", on({ accepted: async () => [withIntents([INTENT])] }));
+    expect(stage()!.v).toBe(2);
+    const [subject] = stage()!.subjects;
+    expect(subject).toEqual({ outcome_id: `opp-outcome:${OPP}`, opportunity_id: OPP, intention_id: INTENT, intention_reason: null });
+  });
+
+  test("a connection with several intentions: no id, `ambiguous`", async () => {
+    announced({ [OPP]: "2026-10-12" });
+    await runProactive("evening", on({ accepted: async () => [withIntents([INTENT, INTENT2])] }));
+    expect(stage()!.subjects[0]).toMatchObject({ intention_id: null, intention_reason: "ambiguous" });
+  });
+
+  test("a connection with no intention reference (every live Index row today): no id, `not_linked`", async () => {
+    announced({ [OPP]: "2026-10-12" });
+    await runProactive("evening", on({ accepted: async () => [withIntents(undefined)] }));
+    expect(stage()!.subjects[0]).toMatchObject({ intention_id: null, intention_reason: "not_linked" });
+    await runProactive("evening", on({ now: () => new Date("2026-10-15T13:30:00Z"), accepted: async () => [withIntents([])] }));
+    expect(stage()!.subjects[0]).toMatchObject({ intention_id: null, intention_reason: "not_linked" });
+  });
+
+  test("the stage holds ids, codes and a hash only: the exact subject keys, no name, no intention text", async () => {
+    announced({ [OPP]: "2026-10-12" });
+    await runProactive("evening", on({ accepted: async () => [withIntents([INTENT])] }));
+    const raw = readFileSync(stagePath(home), "utf8");
+    expect(Object.keys(stage()!).sort()).toEqual(["action", "asked_by", "date", "question_sha256", "staged_at", "subjects", "v", "window_days"]);
+    expect(Object.keys(stage()!.subjects[0]).sort()).toEqual(SUBJECT_KEYS);
+    expect(raw).not.toContain("Arjun");
+    expect(raw).not.toContain(THIRD_PARTY);
+  });
+
+  test("intentionLink: one id, several, none, and anything that is not an id", () => {
+    expect(intentionLink([INTENT])).toEqual({ intention_id: INTENT, intention_reason: null });
+    // The same id twice is one intention.
+    expect(intentionLink([INTENT, INTENT])).toEqual({ intention_id: INTENT, intention_reason: null });
+    expect(intentionLink([INTENT, INTENT2])).toEqual({ intention_id: null, intention_reason: "ambiguous" });
+    expect(intentionLink([INTENT, "not an id"])).toEqual({ intention_id: null, intention_reason: "ambiguous" });
+    expect(intentionLink([])).toEqual(NOT_LINKED);
+    expect(intentionLink(undefined)).toEqual(NOT_LINKED);
+    // Text is never an id: a wording with spaces, a non-string, an over-long id.
+    expect(intentionLink(["meet people building agent memory"])).toEqual(NOT_LINKED);
+    expect(intentionLink([7])).toEqual(NOT_LINKED);
+    expect(intentionLink(["x".repeat(129)])).toEqual(NOT_LINKED);
+  });
+
+  test("stageFor never writes a link that is not intentionLink's shape, and never the plugin's own `not_recorded`", () => {
+    const now = EVENING;
+    const q = outcomeQuestion("Arjun");
+    const v2 = { formatV2: true };
+    expect(stageFor(OPP, DATE, now, q, undefined, v2)!.subjects[0]).toMatchObject(NOT_LINKED);
+    expect(stageFor(OPP, DATE, now, q, { intention_id: "has space", intention_reason: null }, v2)!.subjects[0]).toMatchObject(NOT_LINKED);
+    expect(stageFor(OPP, DATE, now, q, { intention_id: INTENT, intention_reason: "ambiguous" }, v2)!.subjects[0]).toMatchObject(NOT_LINKED);
+    expect(stageFor(OPP, DATE, now, q, { intention_id: null, intention_reason: "not_recorded" }, v2)!.subjects[0]).toMatchObject(NOT_LINKED);
+    expect(stageFor(OPP, DATE, now, q, { intention_id: null, intention_reason: "ambiguous" }, v2)!.subjects[0]).toMatchObject({ intention_id: null, intention_reason: "ambiguous" });
+    expect(stageFor(OPP, DATE, now, q, { intention_id: INTENT, intention_reason: null }, v2)!.v).toBe(2);
+    // The default (the constant, off): version 1, two keys, whatever the link.
+    const v1 = stageFor(OPP, DATE, now, q, { intention_id: INTENT, intention_reason: null })!;
+    expect(v1.v).toBe(1);
+    expect(v1.subjects[0]).toEqual({ outcome_id: `opp-outcome:${OPP}`, opportunity_id: OPP });
+    expect(stageFor(OPP, DATE, now, q, { intention_id: INTENT, intention_reason: null }, { formatV2: false })!.v).toBe(1);
   });
 });

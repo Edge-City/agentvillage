@@ -1,9 +1,11 @@
 # The evening outcome ask: `outcome.asked` and the resident's answer (DATA-42, overlay half)
 
 Status: **as built**, 2026-10-05, after the orchestrator's rulings on the design note (R2 and
-rulings 1 to 7) and fix rounds 1 (F1 to F11), 2 and 3 on PR #198. Data-repo references are to
-`agentvillage-data` origin/main. Hermes references are to `~/.hermes/hermes-agent` at tag
-`v2026.9.24`.
+rulings 1 to 7) and fix rounds 1 (F1 to F11), 2 and 3 on PR #198, plus M2b and its fix round 1
+(§8: the plugin can read the intention an ask is about; the trigger's writer is off until a link
+exists). Data-repo references are to `agentvillage-data` origin/main (`10ef97b` and `86ece39` for
+§8). Hermes
+references are to `~/.hermes/hermes-agent` at tag `v2026.9.24`.
 
 ## What changed from the design note
 
@@ -84,10 +86,13 @@ The reason is a code in `triggers.jsonl` (`detail`: `outcome-ask`, `outcome-ask-
 **The stage file.** When the trigger wakes the model with the question, it writes
 `av-events/proactive/outcome-ask-evening.json` (`writeStage`). The file is 0600 in a 0700
 directory, written by temp file and rename. It holds ids and a hash only:
-`{v, action, date, staged_at, asked_by: "outcome_cron", window_days: 1, question_sha256, subjects: [{outcome_id, opportunity_id}]}`,
+`{v: 1, action, date, staged_at, asked_by: "outcome_cron", window_days: 1, question_sha256, subjects: [{outcome_id, opportunity_id}]}`,
 where `question_sha256` is the plain SHA-256 of the question key (§2) of the exact question the
 trigger hands the model (`questionSha256` in `outcome-ask.ts`), and
-with `outcome_id` = `opp-outcome:<opportunity id>`.
+with `outcome_id` = `opp-outcome:<opportunity id>`. That is version 1, byte for byte as before M2b.
+Version 2 adds `intention_id` and `intention_reason` to the subject, the intention the connection
+belongs to or null and why. The plugin reads it, but the trigger does not write it while
+`STAGE_FORMAT_V2` is off (§8).
 
 The write happens inside the state lock, just before the day mark (`beforeWake` in
 `runAgentAction`). A stage that cannot be written leaves the run silent with the day unmarked. The
@@ -187,6 +192,9 @@ The `outcome.asked@1` fields (`src/schemas/index.ts:1716-1727`):
   `opportunity_outcome` links it and the funnel reaches the intention through the opportunity.
 - `session_id`: the cron run's, accepted only in Hermes's `cron_<that job>_<stamp>` form.
 - `run_id`: built from the ledger row.
+- Envelope `intention_id` and payload `intention_reason` (M2b, §8): the intention the stage named,
+  carried through the armed file, or null with a code. Null with `not_recorded` on every ask while
+  the trigger writes version 1.
 - `occurred_at`: the ledger's `finished_at`; `occurred_at_earliest` is the ledger's claim time.
 - `evidence_class`: `agent_report`. An ask never classifies.
 - `event_id`: a uuid7 derived from the execution and the outcome (`derived_uuid7`), so a second
@@ -298,6 +306,8 @@ It then emits `outcome.reported@1`:
 - `value` and `matcher_version: outcome_reply_v2`;
 - `evidence_class: self_report`, `actor: participant`;
 - the ask's `outcome_id` and `opportunity_id`;
+- the ask's envelope `intention_id` and payload `intention_reason`, read from the ask on file
+  (never recomputed), so an answer always names what its ask named (§8);
 - `in_reply_to_event_id` = the ask's event id;
 - an event id derived from the ask, so ingest keeps at most one answer per ask.
 
@@ -351,7 +361,8 @@ processes racing for one stage. These checks remain (whether to cut any is the o
   group or other bits, under a size cap (2 KB for a stage or armed file, 16 KB for the asks,
   256 KB for the asked ledger), in a directory owned by this user that others cannot write;
 - exactly the expected keys, each of the expected shape: ids by pattern, one subject whose
-  `outcome_id` is `opp-outcome:` plus its own `opportunity_id`, constants where the value is fixed,
+  `outcome_id` is `opp-outcome:` plus its own `opportunity_id` and whose intention is an id with a
+  null reason or a null id with a known reason (§8), constants where the value is fixed,
   a stage `date` that is the village date of its `staged_at`, a 64-hex hash, an armed file named
   for its own execution with a session id of its own job's form;
 - the event type, `actor`, `evidence_class`, `asked_by`, `window_days`, `run_id` and every
@@ -369,10 +380,11 @@ evenings. One the plugin refuses stops every ask until it is fixed (§1, §2).
 
 ## 5. The data half
 
-No schema change and no new registration: both payloads fit `@1` as registered. The plugin's
+No schema change and no new registration: both payloads fit `@1` as registered, M2b's
+`intention_reason` included (§8). The plugin's
 producer-allowlist row (`src/evidence.ts:409-451`) lacks `outcome.asked` and `outcome.reported`;
-`agentvillage-d4` has taken that change. **Until it is released, ingest quarantines both types as
-`producer_not_allowed`.** `quarantine:replay` re-checks the allowlist with the original token's
+`agentvillage-d4` has taken that change, and data PR #254 (DATA-327) carries it, merged at
+`86ece39`. **Until it is released, ingest quarantines both types as `producer_not_allowed`.** `quarantine:replay` re-checks the allowlist with the original token's
 provenance (`src/ingest/replay.ts:155`), so they are replayed after it.
 
 ## 6. Switches, logs, files
@@ -407,7 +419,13 @@ provenance (`src/ingest/replay.ts:155`), so they are replayed after it.
   - an asked subject never asked again;
   - an old stage removed;
   - `done-today` leaving the earlier stage, and two racing triggers leaving one stage;
-  - the backfill.
+  - the backfill;
+  - M2b fix round 1: with `STAGE_FORMAT_V2` off, the stage file is byte for byte the frozen
+    stage from `dbabadad` for four asks, with or without a link, and end to end;
+  - M2b, with the writer turned on through the option: the stage names one known intention, says
+    `ambiguous` for several and `not_linked` for none, holds exactly its keys and no text;
+    `intentionLink` and `stageFor` refuse anything that is not an id, and never write
+    `not_recorded`.
 - `install/tests/proactive_jobs.test.ts`: the 14:00 prompt no longer asks; the evening prompt
   carries the fixed sentence, and it and `outcomeQuestion` match the shared pattern in
   `outcome_question.json`; no prompt of the six needs a tool call.
@@ -449,6 +467,17 @@ provenance (`src/ingest/replay.ts:155`), so they are replayed after it.
   - group, channel, thread or unknown chat; CLI, subagent and injected turns;
   - nothing in `metadata` capture;
   - after a restart, a second answer reuses the first one's event id.
+- The intention (M2b, §8): one known intention, several and none, on both events; an answer after
+  a restart still carries the ask's intention from file; a version 1 stage (what the trigger
+  writes), a version 1 armed file and a four-key ask on file each give `not_recorded` without a
+  crash, and are written back in their own shape; an intention switched in the armed file or on
+  file after the ask takes nothing; both events stay schema version 1 with exactly their envelope
+  and payload keys; a stage with a bad intention field, an id with a trailing, leading or embedded
+  newline or space, or a version that is not an integer is refused.
+- The roll (§8): the plugin module from `dbabadad` (a frozen test vector) arms, confirms, records
+  and answers the stage the new trigger writes; after a roll-back it confirms an ask this plugin
+  armed and answers one this plugin asked; this plugin confirms and answers one the old plugin
+  armed; the old plugin refuses a version 2 stage, the reason the writer is off.
 - The file checks (§4): forged or altered stage files, armed files and asks on file are refused.
   Each forged armed-file case builds its times from the finish it writes, and a control case shows
   the same file without its fault is accepted.
@@ -467,3 +496,233 @@ provenance (`src/ingest/replay.ts:155`), so they are replayed after it.
    one `core.outcomes` row with `reported_useful`, linked through `opportunity_outcome`.
 6. Check one thing only a live gateway can show: that `HERMES_SESSION_CHAT_TYPE` reads `dm` inside
    `pre_llm_call`. If it does not, no answer is ever noted.
+
+## 8. The intention an ask is about (M2b): the reader ships, the writer is off
+
+**Why.** The headline metric is verified useful outcomes per eligible intention, and
+`marts.intention_funnel` assigns each outcome to exactly one intention: the one the outcome's own
+bridge names (`intention_outcome`), else the action's, else the opportunity's
+(`dbt/models/marts/intention_funnel.sql`, the header). As built in §2 and §3, both events named
+only the outcome and the opportunity. `opportunity_outcome` then needs `intention_opportunity`,
+which has no rows ("Catalogue Q7 (does Index record the matched intents?) is open",
+`dbt/models/core/_bridges.yml`). So these asks credit no intention, and no change in this
+section alters that today.
+
+**What ships now: the reader, not the writer.**
+
+- The plugin reads both versions of every file: a version 1 or version 2 stage, a version 1 or
+  version 2 armed file, and an ask on file with the four keys from before or the six keys with the
+  intention. When a file carries an intention id or a reason, both events carry it unchanged. A
+  file with no intention keys reads as a null id with `not_recorded`.
+- The plugin writes the armed file and the ask on file in the shape of the stage they came from: a
+  version 1 stage gives a version 1 armed file (the two-key subject) and a four-key ask, a version
+  2 stage gives version 2 and six keys. A version 1 stage therefore never leaves a file that the
+  plugin from before M2b cannot read.
+- The trigger writes version 1, byte for byte what it wrote before M2b. The version 2 writer and
+  the `matchedIntentIds` seam that feeds it stay in the code behind one constant that is off,
+  `STAGE_FORMAT_V2 = false` in `outcome-ask.ts`. The link `intentionLink` computes is not written
+  anywhere while it is off.
+- The proof that the bytes are unchanged is in `outcome-ask.test.ts`. It compares the trigger's
+  stage, through `stageFor` and `writeStage` and end to end through the evening run, with
+  `skills/index-network/scripts/tests/fixtures/outcome-stage-v1-origin-main.json`. That frozen
+  fixture was produced by the trigger at overlay commit `dbabadad` (main before M2b) for four asks:
+  milliseconds in the stamp, the longest id, punctuation in the id, a non-ASCII name, and both
+  edges of a village day. It holds the key set, the key order and the trailing newline, and it
+  holds them with and without a link.
+
+**What the events carry.** Each `outcome.asked` and `outcome.reported` carries the envelope's
+`intention_id` and the payload's `intention_reason`. One of the two is always null, and neither is
+ever a guess:
+
+| `intention_id` | `intention_reason` | When |
+|---|---|---|
+| the id | null | a version 2 stage named exactly one of the resident's intentions |
+| null | `not_linked` | a version 2 stage said no intention is known for the connection |
+| null | `ambiguous` | a version 2 stage said the connection names more than one, and not the one it was matched on |
+| null | `not_recorded` | the stage carried no intention information (a version 1 stage, armed file or four-key ask): **every ask while the writer is off** |
+
+That is the closed vocabulary: `not_linked`, `ambiguous`, `not_recorded` (the plugin's
+`INTENTION_REASONS`, the trigger's `IntentionReason`). A version 2 stage may carry only the first
+two. Only the plugin sets `not_recorded`, and a file that has the intention keys and says
+`not_recorded` is refused.
+
+`not_recorded` says only that the stage carried no intention information. It does not say that no
+link exists. The first version of this section had a fourth code, `predates_link`, for files from
+before M2b. It is removed: a stage without intention keys is now written by this release's trigger
+as well as by the one before, so the plugin cannot tell from the file whether the ask predates the
+link, and no remaining case needs that code.
+
+**In production after this ships**, until the writer is turned on, every `outcome.asked` and every
+`outcome.reported` carries `intention_id: null` and `intention_reason: "not_recorded"`. This path
+credits no intention to anything.
+
+**Why the writer is off.** During a roll the installer copies skills and plugins first and
+restarts the gateway last (`install/install.ts`, `main`: `copySkillFiles` and `copyPluginFiles`
+come before `restartGateway`). For a while a new trigger therefore runs beside the plugin from
+before, which is still in memory. A version 2 stage met by that plugin is refused
+(`stage_refused`), and by then the question has already gone out: no `outcome.asked` is emitted,
+nothing is recorded as asked, and the resident gets the same question the next evening (up to
+`MAX_ATTEMPTS`, two evenings). A roll-back does the same. And nothing can set a link yet, so a
+version 2 stage would carry only `not_linked` and buy nothing measurable.
+
+The roll section of `plugins/av-events/tests/test_outcome_ask.py` checks both directions. It runs
+the plugin module from `dbabadad`, kept byte for byte as a frozen test vector
+(`plugins/av-events/tests/vectors/outcome_ask_dbabadad.py`), against the frozen stage bytes:
+
+- a skewed roll, where the plugin from before arms, confirms, records and takes the answer for the
+  stage the new trigger writes;
+- a roll-back after this plugin armed, where the plugin from before confirms the ask;
+- a roll-back after this plugin asked, where the plugin from before takes the answer for the same
+  ask;
+- a roll forward, where an ask armed by the plugin from before is confirmed and answered here with
+  `not_recorded`;
+- the cost the constant avoids: the plugin from before refuses a version 2 stage, while this one
+  arms it.
+
+None of these cases gives `stage_refused` or a question asked twice.
+
+**When to turn the writer on.** Both of these must hold:
+
+1. One full release has passed since every tenant first ran a plugin that reads version 2 (this
+   release's `_outcome_ask.py`). Neither a skewed roll nor a roll-back can then put a plugin that
+   refuses version 2 beside a version 2 stage.
+2. Something can actually set a link. A parser sets `BriefOpportunity.matchedIntentIds` from a
+   field Index documents as the viewer's matched intent or intents, **and** the data side has
+   settled how it reads a plugin-observed intention link (below).
+
+Turning it on means flipping the constant and replacing the byte-identity test against the
+fixture with the same test pinned to the version 1 option. The fixture itself is never edited.
+The version 2 tests already run with the writer on, through the injectable option
+(`stageFor`'s `formatV2`, `ProactiveOptions.stageFormatV2`), never by editing the constant.
+
+**Where a link would come from, and why there is none today.** Read on overlay main at `dbabada`:
+
+- The evening job picks an accepted connection from Index's `list_opportunities`
+  (`listAcceptedConnections` in `outcome-ask.ts`, rows parsed by `listedCard` in
+  `build-daily-brief-context.ts`). The row shape verified against production on 2026-10-03
+  (`skills/index-network/scripts/tests/fixtures/index-mcp-2026-07-28.json`) is `id`, `url`,
+  `status`, `viewerRole`, `headline`, `summary`, `peer {name, userId, url}`. It has no intent
+  reference.
+- `BriefOpportunity.intentId` is set only by the legacy transcript parser
+  (`parseOpportunityTranscript`, the `--opportunities-file` replay path), never by the live list.
+  Nothing says whose signal it names, and a peer's intent would credit the wrong intention. It is
+  not used here.
+- The overlay records no intent per opportunity anywhere: not in the delivery log
+  (`delivery-state.ts`), not in `negotiationSummary`, not in the plugin. No re-file path for voided
+  inferred intents exists on overlay main at `dbabada`, so it gives no link either.
+- The plugin knows intentions only as captures (`_intentions.py`, `_record_intention.py`). Picking
+  one of them (the most recent, the closest text) would be a heuristic, and a wrong credit is worse
+  than none.
+
+**The seam (kept, unused).** `BriefOpportunity.matchedIntentIds` holds the resident's own intent
+ids that Index says the opportunity was matched on. No parser sets it today, and **no parser may
+set it until the data side has settled how it reads a plugin-observed link** (below).
+`intentionLink` in `outcome-ask.ts` decides the link from it:
+
+- none: `not_linked`;
+- one distinct, valid id: that id;
+- more than one distinct entry: `ambiguous`;
+- a single entry that is not an id: `not_linked`.
+
+The envelope carries one `intention_id` (agentvillage-data `src/envelope.ts`), and a payload list
+would form no bridge row (`chain_ref_observations` reads envelope ids only). So several intentions
+cannot all be named. When Index says which one the match was made on, the parser lists that one
+alone. A version 2 `stageFor` writes only a link of `intentionLink`'s shape, never `not_recorded`.
+
+**The id space.** `intention.captured`'s envelope `intention_id` is Index's intent id (a uuid) for
+a capture through Index's `create_intent` or Index's Hermes plugin's `index_create_intent`
+(`_intentions.py`, "the intention id is Index's intent id"). For `record_intention` it is the call's
+id, else the plugin's own uuid v7, with Index's id only as the payload's `index_intent_id`
+(`_record_intention.py`). An Index intent id on the ask therefore matches the capture for the
+first path. For a `record_intention` capture it would land on the Index id, which the data side
+does not merge with the plugin's id (plugin `same_as` claims never merge, DATA-117 and DATA-149).
+When a link arrives, the overlay must translate an Index id to the id its own `intention.captured`
+used: the `record_intention` entry whose `index_intent_id` it is. Otherwise the data side must
+corroborate that merge. Both events validate the id as a whole value against the envelope's id
+pattern (`[A-Za-z0-9._:-]{1,128}`, with `fullmatch`, so a trailing newline is refused too), so no
+wording can ride in the field.
+
+**Carried, not recomputed.** With the writer on, the trigger writes the link into a version 2
+stage. `arm` copies the subject into a version 2 armed file, and the tick emits `outcome.asked`
+from it and stores it with the ask in `asks.json`. `outcome.reported` takes `intention_id` and
+`intention_reason` from that ask. With the writer off, all of this happens in the version 1 shapes,
+with `not_recorded` read back at each step.
+
+**Files without intention keys** are accepted, and each reads as a null id with `not_recorded`:
+
+- a version 1 stage, which is what this trigger writes and what the trigger from before wrote;
+- a version 1 armed file;
+- an ask on file with the four keys.
+
+Each is written back in its own shape, so the ask on file of a version 1 ask keeps its four keys
+even when a version 2 ask is stored beside it. The version of every file must be an integer: `2.0`,
+`1.0` and `true` are refused.
+
+**What the tamper checks do and do not prevent.** Within one process, an armed file this process
+wrote cannot be changed (`armed_tampered`), and an ask it emitted cannot have its subject or its
+intention switched on file (`ask_tampered`). These checks hold only within one process, because
+the memory they compare with is empty after a restart. After a plugin restart, an intention
+switched in `asks.json` (or in an armed file) by the resident's own agent, which can write every
+file in its home (§4), is accepted and carried onto `outcome.reported`. Both events are therefore
+plugin-asserted (`agent_report` asks, `self_report` answers, §4). The data side must treat the
+intention on them as the plugin's claim, never as an observed link.
+
+**The data side today.** Checked read-only at agentvillage-data origin/main `10ef97b`, and again
+at `86ece39`, where data PR #254 (DATA-327) merged on 2026-10-05. That merge is not yet released.
+
+- **Quarantined until the data release.** At `10ef97b` the plugin's row in the producer allowlist
+  (`PRODUCER_ALLOWLIST`, `src/evidence.ts`) does not list `outcome.asked` or `outcome.reported`.
+  Its header says the plugin "emits none of them", so ingest quarantines both as
+  `producer_not_allowed` (`src/ingest/events.ts`). PR #254 adds both to that row (`86ece39`), so
+  production quarantines them until that data release is live. `quarantine:replay` re-checks the
+  allowlist with the original token's provenance (`src/ingest/replay.ts`), so events held until
+  then are replayed after it.
+- **Schema.** `intention_id` is an envelope field of every event type, nullable and validated as
+  an id (`src/envelope.ts`). `outcome.asked@1` and `outcome.reported@1` are open payloads
+  (`additionalProperties: true`, `src/schemas/index.ts`), so `intention_reason` is stored and not
+  quarantined once the type is allowed. Optionally, the data side can name `intention_reason` in
+  both schemas as a nullable string whose vocabulary (`not_linked`, `ambiguous`, `not_recorded`) is
+  watched by a warn-level test.
+- **Three bridge rows from one event.** An `outcome.*` event that names both `outcome_id` and a
+  non-null `intention_id` would form three bridge rows (`dbt/macros/av_bridge.sql`,
+  `chain_ref_observations` with `run_key = coalesce(run_id, session_id)`):
+  - `intention_outcome`, method `outcome_ask_ref`, confidence 1.0;
+  - `intention_opportunity` (the event also names `opportunity_id`), method
+    `tool_result_carries_both`, confidence 1.0;
+  - `run_intention`, method `same_run`. The model overrides the method for every row, so this one
+    is confidence 0.5, not 1.0.
+
+  Today none of the three forms, because every intention id is null.
+- **How DATA-327 reads a plugin-observed link.** It keeps the link out of the strict columns. The
+  strict rule (`funnel_path_v2`) follows only corroborated hops, and an outcome reached through a
+  plugin hop is listed as unverified. It is never `verified_useful` and never brings a
+  corroborating judgement onto the row. Beside that rule, `funnel_first_declared_v1` counts the
+  link only as a first-declared claim for an outcome verified independently. Such a link is labelled
+  `agent_declared` and may make an intention the owner of an outcome only when all of these hold:
+  - the outcome was verified by a corroborating token at `platform_record` or stronger;
+  - the plugin event was ingested before that verification;
+  - it names an eligible intention of the tenant that was captured before it;
+  - no corroborated path reaches the outcome;
+  - it is the earliest declaration.
+
+  That rule is merged on data main and not yet released. A link is not settled until it is live and
+  the data side has confirmed how this overlay's links will be read under it. Until then, no
+  parser may set `matchedIntentIds`, and the writer stays off.
+
+**What would have to change to know the intention.** Any one of these, and then both conditions
+above:
+
+- **Index** exposes, on the viewer's side of an opportunity, the viewer's own intent id or ids it
+  was matched on, in the `list_opportunities` row or in `get_opportunity` (catalogue Q7). Then
+  `listedCard` sets `matchedIntentIds` from that documented field (and the fixture records it),
+  and `intentionLink` does the rest.
+- **The data side's Index poller** already reads Index's per-intent opportunity list,
+  `GET /api/intents/:id/opportunities`, for each live intent of the tenant
+  (`src/jobs/index-poller.ts`, `intent_opportunities`), but uses it only to find card ids. Emitting
+  the pair it sees as an `intention_opportunity` link (`index_match_record`) would let the existing
+  `opportunity_outcome` credit through the funnel with no overlay change, and as a corroborated hop.
+  Before anyone relies on it, someone has to confirm that the endpoint lists an opportunity only
+  under the intents it was matched on.
+- **The overlay** could read that same endpoint with the resident's key when the evening picks a
+  connection. That needs a read-only probe of the endpoint's shape and meaning first: it is not in
+  the overlay's verified Index contract, and this change makes no production reads.

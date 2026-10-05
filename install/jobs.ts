@@ -159,7 +159,12 @@ export class HermesTimeout extends Error {
 }
 
 /** The jobs lock is no longer this command's, or would go stale before the next step could finish. */
-class LockLost extends Error {}
+class LockLost extends Error {
+  /** Fields the `lock-lost` reply adds (`resumeMayFire` after a resume whose re-anchor never ran). */
+  constructor(readonly extra: Record<string, unknown> = {}) {
+    super("lock-lost");
+  }
+}
 
 /** `cron/jobs.json` is present and cannot be read as Hermes's job list. */
 class StoreUnreadable extends Error {}
@@ -429,6 +434,12 @@ interface CurrentSettings {
    * default keys, the jobs reconcile was already treating as admin-managed).
    */
   adminDropped?: true;
+  /**
+   * `adminSchedules` was not a list: a rewrite writes all five default keys,
+   * so every default job is now admin-managed on file. The reply says so as
+   * `adminSchedulesRepaired: true`, beside `dropped: ["adminSchedules"]`.
+   */
+  adminRepaired?: true;
 }
 
 function currentSettings(home: string): CurrentSettings {
@@ -442,6 +453,7 @@ function currentSettings(home: string): CurrentSettings {
     jobs: { ...read.jobs },
     adminSchedules: admin.invalid ? [...DEFAULT_JOB_KEYS] : admin.keys,
     ...(admin.invalid || admin.ignored ? { adminDropped: true as const } : {}),
+    ...(admin.invalid ? { adminRepaired: true as const } : {}),
   };
 }
 
@@ -513,6 +525,11 @@ export function isHermesZoneName(name: unknown): name is string {
  * (`Asia/Calcutta` stays `Asia/Calcutta`); a runtime on ICU may resolve the
  * other way (`Asia/Kolkata` to `Asia/Calcutta`, `Etc/UTC` to `UTC`), so the
  * table applies after the runtime's own resolution and both ends meet.
+ * Only these names resolve: any other pair of names for one zone
+ * (`US/Eastern` and `America/New_York`, `Europe/Kiev` and `Europe/Kyiv`) is
+ * two zones to hermesZone, refused as `hermes-zone-unknown`, which is the
+ * conservative direction. Bun 1.4.2 (the CI pin) was checked to resolve no
+ * link; a test pins it.
  */
 const ZONE_LINKS: Record<string, string> = {
   "Asia/Calcutta": "Asia/Kolkata",
@@ -787,8 +804,11 @@ function setCommand(ctx: GuardedContext, req: SetRequest, applied: string[]): Co
     } catch (err) {
       passUp(err);
       const now = rereadJob(ctx.home, key, job.id);
-      if (now && storedJobEnabled(now) === req.enabled) applied.push("enabled");
-      return hermesFailure(err, { step: "enabled", applied: [...applied] });
+      const saved = now !== undefined && storedJobEnabled(now) === req.enabled;
+      if (saved) applied.push("enabled");
+      // Hermes saved the resume and then failed or was killed: the re-anchor
+      // never ran, so a missed occurrence may fire at the next tick.
+      return hermesFailure(err, { step: "enabled", applied: [...applied], ...(missed && saved ? { resumeMayFire: true } : {}) });
     }
     applied.push("enabled");
     enabled = req.enabled;
@@ -803,6 +823,9 @@ function setCommand(ctx: GuardedContext, req: SetRequest, applied: string[]): Co
         try {
           ctx.hermes(cronEditArgs(job.id, { schedule: schedule.expr }));
         } catch (err) {
+          // The resume is applied and the re-anchor did not run: the missed
+          // occurrence may fire at the next tick, on lock-lost too.
+          if (err instanceof LockLost) throw new LockLost({ resumeMayFire: true });
           passUp(err);
           return hermesFailure(err, { step: "reanchor", applied: [...applied], resumeMayFire: true });
         }
@@ -824,6 +847,7 @@ function setCommand(ctx: GuardedContext, req: SetRequest, applied: string[]): Co
     ...(cron && cronFrequent(cron) ? { frequent: true } : {}),
     ...resume,
     ...(settingsDropped.length && applied.includes("settings") ? { dropped: settingsDropped } : {}),
+    ...(current.adminRepaired && applied.includes("settings") ? { adminSchedulesRepaired: true } : {}),
     ...(replaced ? { replaced } : {}),
   });
 }
@@ -961,6 +985,7 @@ function addCommand(ctx: GuardedContext, req: AddRequest, applied: string[]): Co
     ...(check ?? {}),
     ...(cronFrequent(cron) ? { frequent: true } : {}),
     ...(settingsDropped.length && applied.includes("settings") ? { dropped: settingsDropped } : {}),
+    ...(current.adminRepaired && applied.includes("settings") ? { adminSchedulesRepaired: true } : {}),
     ...(current.replaced && applied.includes("settings") ? { replaced: current.replaced } : {}),
   });
 }
@@ -1013,7 +1038,15 @@ function removeCommand(ctx: GuardedContext, template: TemplateName, applied: str
       applied.push("settings");
     }
   }
-  return ok({ job: key, result: found.jobs.length > 0 ? "removed" : "absent", removed: found.jobs.length, changed: [...applied] });
+  return ok({
+    job: key,
+    result: found.jobs.length > 0 ? "removed" : "absent",
+    removed: found.jobs.length,
+    changed: [...applied],
+    // As set and add report them: what the rewrite dropped, and the repair beside it.
+    ...(current.adminDropped && applied.includes("settings") ? { dropped: ["adminSchedules"] } : {}),
+    ...(current.adminRepaired && applied.includes("settings") ? { adminSchedulesRepaired: true } : {}),
+  });
 }
 
 function validatePreview(ctx: JobsContext, flags: Map<string, string>): JobKey | CommandResult {
@@ -1118,7 +1151,7 @@ export function runJobsCommand(argv: string[], ctx: JobsContext): CommandResult 
     if (command === "remove") return removeCommand(run, request as TemplateName, applied);
     return previewCommand(run, request as JobKey, applied);
   } catch (err) {
-    if (err instanceof LockLost) return failed("lock-lost", { applied: [...applied] });
+    if (err instanceof LockLost) return failed("lock-lost", { applied: [...applied], ...err.extra });
     if (err instanceof StoreUnreadable) return failed("jobs-store-unreadable", { applied: [...applied] });
     return failed("fault", { applied: [...applied] });
   } finally {

@@ -77,7 +77,7 @@ import { cleanName, cleanText, cleanTitle, connectionsUrl, cronScanHit, envOrDot
 import { type LockOptions, LockStuck, LockTimeout, releaseHeldLocks, withStateLock } from "./state-lock";
 import { writeStateFile } from "./state-file";
 import { followUp } from "./summarize-negotiations";
-import { backfillAnnounced, clearStage, dueSubjects, listAcceptedConnections, outcomeQuestion, readAskedIds, recordAttempt, stageFor, writeStage } from "./outcome-ask";
+import { backfillAnnounced, clearStage, dueSubjects, intentionLink, listAcceptedConnections, outcomeQuestion, readAskedIds, recordAttempt, stageFor, writeStage } from "./outcome-ask";
 import { type Delivery, deliveryFor, inWindow, isTeamTenant, minuteOfDay, prunePreviewFiles, readJobSettings } from "./job-settings";
 
 /** The default jobs' actions, one per installer job (install_index.ts DIGEST_CRON_SPECS). */
@@ -115,6 +115,8 @@ export interface ProactiveOptions {
   accepted?: () => Promise<BriefOpportunity[]>;
   /** A team tenant's test run (`--preview`): no window, no day mark, no state written. */
   preview?: boolean;
+  /** Tests only: write the version 2 outcome-ask stage (outcome-ask.ts STAGE_FORMAT_V2, off in production). */
+  stageFormatV2?: boolean;
 }
 
 export interface TriggerResult {
@@ -682,7 +684,11 @@ async function outcomeAskDecision(run: Run): Promise<Decision | { fallback: stri
   if (!id || !name) return { fallback: "outcome-ask-name-withheld", withheld: w.count };
   const subject = id;
   const question = outcomeQuestion(name);
-  const stage = stageFor(id, run.date, run.now, question);
+  // M2b: the intention this connection belongs to, only when Index named it
+  // (today never: `not_linked`). Written only in a version 2 stage, which is
+  // off (STAGE_FORMAT_V2): the stage is version 1, as before M2b.
+  const link = intentionLink(listed.get(id)!.matchedIntentIds);
+  const stage = stageFor(id, run.date, run.now, question, link, { formatV2: run.options.stageFormatV2 });
   if (!stage) return { fallback: "outcome-ask-bad-id" };
   return {
     view: { job: "evening-note", date: run.date, outcomeQuestion: question },

@@ -309,6 +309,15 @@ describe("whether a schedule lands in its window, over a full year", () => {
     expect(fit("30 16,17 * * *", "07:00-08:00", "America/New_York")).toEqual({ fit: "always" });
   });
 
+  test("outsideFrom can be today or yesterday in the job's zone: the first whole Hermes-zone day is already outside (outside now)", () => {
+    // 00:30 IST is 12:00 PDT (end exclusive: outside) and 11:00 PST (inside) of the PREVIOUS day in Los Angeles.
+    // Asked at 05:00 PDT on 12 October: the first whole Hermes-zone day is 12 October IST, whose 00:30
+    // firing was 12:00 PDT on 11 October, so outsideFrom is yesterday in the job's zone.
+    expect(fit("30 0 * * *", "11:00-12:00", "America/Los_Angeles", new Date("2026-10-12T12:00:00Z"))).toEqual({ fit: "seasonal", outsideFrom: "2026-10-11" });
+    // Asked at 13:00 PDT on 11 October (01:30 IST on the 12th): the same day, today in the job's zone.
+    expect(fit("30 0 * * *", "11:00-12:00", "America/Los_Angeles", new Date("2026-10-11T20:00:00Z"))).toEqual({ fit: "seasonal", outsideFrom: "2026-10-11" });
+  });
+
   test("only the days it runs count; a schedule that never runs in the year is no-firing", () => {
     // Saturdays only, at a time that is in the window: always.
     expect(fit("30 17 * * 6", "07:00-09:00", "America/New_York")).toEqual({ fit: "always" });

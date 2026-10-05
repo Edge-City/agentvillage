@@ -44,16 +44,6 @@ a plugin token's events are capped at agent-asserted (`agent_report` asks)
 and self-reported (`self_report` answers from `actor: participant`), and
 never count as verified. See `docs/design/outcome-ask.md` §4.
 
-**The intention (M2b: the reader).** Both events name the intention the
-asked-about connection belongs to (envelope `intention_id`), or null with a
-code (`intention_reason`): decided by the trigger, carried here unchanged from
-the stage to the answer. This module reads version 1 and version 2 stage and
-armed files and both shapes of ask on file; it writes the armed file and the
-ask in the shape of the stage they came from, so a version 1 stage leaves only
-files the plugin from before M2b reads too. The trigger still writes version 1
-(`outcome-ask.ts` STAGE_FORMAT_V2 off), so today every event carries a null id
-with `not_recorded`. See the design note §8.
-
 Logs: codes and counts only. Python 3.11, standard library only.
 """
 
@@ -255,54 +245,18 @@ ANSWERS = {
 #: A message starting with one of these is a quote, not an answer.
 _QUOTE_MARKS = frozenset("\"'“”‘’«»„‚‹›")
 
-#: M2b: the intention an ask is about. Each subject names the id of the
-#: intention the asked-about connection belongs to (`intention_id`, in
-#: `intention.captured`'s id space), or null with a reason code
-#: (`intention_reason`), never both and never a guess. The trigger decides it
-#: (`outcome-ask.ts` `intentionLink`); this module only carries it, from the
-#: stage through the armed file and the asks on file, so `outcome.reported`
-#: always names what its `outcome.asked` named. The closed vocabulary:
-#: - `not_linked`: a version 2 stage said the trigger knows no intention for
-#:   the connection.
-#: - `ambiguous`: a version 2 stage said the connection names more than one of
-#:   the resident's intentions and not the one it was matched on.
-#: - `not_recorded`: the stage carried no intention information at all (a
-#:   version 1 stage or armed file, an ask on file without the two keys). It
-#:   says nothing about whether a link exists. Every ask today: the trigger
-#:   writes version 1 (STAGE_FORMAT_V2 off). Set here only, never accepted
-#:   from a file that has the intention keys.
-NOT_LINKED = "not_linked"
-AMBIGUOUS = "ambiguous"
-NOT_RECORDED = "not_recorded"
-STAGED_REASONS = frozenset({NOT_LINKED, AMBIGUOUS})
-INTENTION_REASONS = STAGED_REASONS | {NOT_RECORDED}
-
-#: The stage and armed-file versions this module accepts: 2 carries the
-#: intention; 1 does not, and reads as `not_recorded`. The armed file and the
-#: ask on file are written in the shape of the stage they came from: version
-#: 1 (and the four-key ask) for a stage with no intention keys, so the plugin
-#: from before M2b, still in memory during a roll or back after a roll-back,
-#: reads every file this one leaves.
-STAGE_VERSION = 2
-ARMED_VERSION = 2
-LEGACY_VERSION = 1
-
 STAGE_KEYS = frozenset({"v", "action", "date", "staged_at", "asked_by", "window_days", "question_sha256", "subjects"})
-SUBJECT_KEYS = frozenset({"outcome_id", "opportunity_id", "intention_id", "intention_reason"})
-LEGACY_SUBJECT_KEYS = frozenset({"outcome_id", "opportunity_id"})
+SUBJECT_KEYS = frozenset({"outcome_id", "opportunity_id"})
 ARMED_KEYS = frozenset({"v", "execution_id", "job_id", "session_id", "staged_epoch", "armed_epoch", "message_hash", "question_hash", "subject"})
-ASK_KEYS = frozenset({"execution_id", "outcome_id", "opportunity_id", "intention_id", "intention_reason", "question_hash"})
-LEGACY_ASK_KEYS = frozenset({"execution_id", "outcome_id", "opportunity_id", "question_hash"})
+ASK_KEYS = frozenset({"execution_id", "outcome_id", "opportunity_id", "question_hash"})
 
-#: Whole-value shapes, always tested with `fullmatch` (as `_intentions.valid_id`
-#: is): `re.match` with `$` also accepts a trailing newline (`"abc\n"`).
-_TASK = re.compile(r"cron:([0-9a-f]{12}):([0-9a-f]{32})")
-_EXECUTION = re.compile(r"[0-9a-f]{32}")
-_JOB = re.compile(r"[0-9a-f]{12}")
-_OPPORTUNITY = re.compile(r"[A-Za-z0-9._:-]{1,100}")
-_ID = re.compile(r"[A-Za-z0-9._:-]{1,128}")
-_HASH = re.compile(r"[0-9a-f]{64}")
-_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_TASK = re.compile(r"^cron:([0-9a-f]{12}):([0-9a-f]{32})$")
+_EXECUTION = re.compile(r"^[0-9a-f]{32}$")
+_JOB = re.compile(r"^[0-9a-f]{12}$")
+_OPPORTUNITY = re.compile(r"^[A-Za-z0-9._:-]{1,100}$")
+_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_HASH = re.compile(r"^[0-9a-f]{64}$")
+_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 #: The pointer Hermes puts in front of a message sent as a Telegram reply
 #: (`gateway/run_inbound.py` `_prepend_inbound_reply_context` at v2026.9.24);
 #: group 1 is the quoted message.
@@ -463,49 +417,16 @@ def _number(value: Any) -> Optional[float]:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
-def _version(value: Any, accepted: tuple[int, ...]) -> Optional[int]:
-    """A file's `v`: an integer (not a bool, not `2.0`) among `accepted`, else None."""
-    return value if type(value) is int and value in accepted else None
-
-
-def _subject(data: Any, *, legacy: bool = False) -> Optional[dict]:
-    """`{outcome_id, opportunity_id, intention_id, intention_reason}`, exactly,
-    with the outcome id the opportunity's own, and either an id-shaped
-    `intention_id` with a null reason or a null id with `not_linked` or
-    `ambiguous`. `legacy`: the two-key subject with no intention information
-    (a version 1 file), read as a null id with `not_recorded`."""
-    if not isinstance(data, dict) or set(data) != (LEGACY_SUBJECT_KEYS if legacy else SUBJECT_KEYS):
+def _subject(data: Any) -> Optional[dict]:
+    """`{outcome_id, opportunity_id}`, exactly, with the outcome id the opportunity's own."""
+    if not isinstance(data, dict) or set(data) != SUBJECT_KEYS:
         return None
     opportunity_id, outcome_id = data.get("opportunity_id"), data.get("outcome_id")
-    if not (isinstance(opportunity_id, str) and _OPPORTUNITY.fullmatch(opportunity_id)):
+    if not (isinstance(opportunity_id, str) and _OPPORTUNITY.match(opportunity_id)):
         return None
     if outcome_id != f"{OUTCOME_PREFIX}{opportunity_id}":
         return None
-    if legacy:
-        intention_id, reason = None, NOT_RECORDED
-    else:
-        intention_id, reason = data.get("intention_id"), data.get("intention_reason")
-        if intention_id is None:
-            if not (isinstance(reason, str) and reason in STAGED_REASONS):
-                return None
-        elif not (isinstance(intention_id, str) and _ID.fullmatch(intention_id)) or reason is not None:
-            return None
-    return {"outcome_id": outcome_id, "opportunity_id": opportunity_id, "intention_id": intention_id, "intention_reason": reason}
-
-
-def _recorded(subject: dict) -> bool:
-    """The subject came from a file with the intention keys (version 2). One
-    from a file without them reads as `not_recorded`, a code no keyed file may
-    carry, so the two cannot be confused."""
-    return subject["intention_reason"] != NOT_RECORDED
-
-
-def _subject_on_file(subject: dict) -> dict:
-    """The subject as written to the armed file: the two keys for one that
-    came without intention information (the version 1 shape), all four
-    otherwise."""
-    keys = ("outcome_id", "opportunity_id", "intention_id", "intention_reason") if _recorded(subject) else ("outcome_id", "opportunity_id")
-    return {key: subject[key] for key in keys}
+    return {"outcome_id": outcome_id, "opportunity_id": opportunity_id}
 
 
 # -- the answer table ---------------------------------------------------------
@@ -573,32 +494,27 @@ def answer_value(text: Any) -> Optional[str]:
 def valid_stage(data: Any) -> Optional[dict]:
     """The trigger's stage, exactly (`outcome-ask.ts` `stageFor`), or None:
     the expected keys and no others, the fixed values, a date that is the
-    village date of `staged_at`, and exactly one subject. A version 1 stage
-    (what the trigger writes while STAGE_FORMAT_V2 is off) carries no
-    intention information: `not_recorded`."""
+    village date of `staged_at`, and exactly one subject."""
     if not isinstance(data, dict) or set(data) != STAGE_KEYS:
         return None
-    version = _version(data.get("v"), (STAGE_VERSION, LEGACY_VERSION))
-    if version is None:
-        return None
-    if data.get("action") != ACTION or data.get("asked_by") != ASKED_BY:
+    if data.get("v") != 1 or data.get("action") != ACTION or data.get("asked_by") != ASKED_BY:
         return None
     window = data.get("window_days")
     if isinstance(window, bool) or window != WINDOW_DAYS:
         return None
     staged_at, date = data.get("staged_at"), data.get("date")
-    if not isinstance(staged_at, str) or len(staged_at) > 40 or not isinstance(date, str) or not _DATE.fullmatch(date):
+    if not isinstance(staged_at, str) or len(staged_at) > 40 or not isinstance(date, str) or not _DATE.match(date):
         return None
     staged = epoch_from_iso(iso_from_text(staged_at))
     if staged is None or datetime.fromtimestamp(staged, IST).date().isoformat() != date:
         return None
     question = data.get("question_sha256")
-    if not (isinstance(question, str) and _HASH.fullmatch(question)):
+    if not (isinstance(question, str) and _HASH.match(question)):
         return None
     subjects = data.get("subjects")
     if not isinstance(subjects, list) or len(subjects) != 1:
         return None
-    subject = _subject(subjects[0], legacy=version == LEGACY_VERSION)
+    subject = _subject(subjects[0])
     return {"staged": staged, "subject": subject, "question_sha256": question} if subject else None
 
 
@@ -638,7 +554,7 @@ def arm(
 ) -> Optional[str]:
     """Step 1, from a cron session's `post_llm_call`. Returns a code, or None
     when the run is not one that stages an ask."""
-    found = _TASK.fullmatch(task_id) if isinstance(task_id, str) else None
+    found = _TASK.match(task_id) if isinstance(task_id, str) else None
     if not found:
         return None
     job_id, execution_id = found.group(1), found.group(2)
@@ -688,32 +604,27 @@ def arm(
         os.rename(path, claim)
     except FileNotFoundError:
         return "lost_race"
-    session = session_id if isinstance(session_id, str) and re.fullmatch(rf"cron_{job_id}_\d{{8}}_\d{{6}}", session_id) else None
+    session = session_id if isinstance(session_id, str) and re.match(rf"^cron_{job_id}_\d{{8}}_\d{{6}}$", session_id) else None
     message_hash = hasher(reply) if capture != "metadata" else None
     # The question's key, hashed, so a Telegram reply to it can be told from
     # a reply to another evening's question. Never the text.
     question_hash = hasher(question_key(normalise_reply(reply)))
-    subject = stage["subject"]
-    # In the stage's own shape: a version 1 stage gives a version 1 armed
-    # file, which the plugin from before M2b (a roll-back, or a gateway not yet
-    # restarted) confirms exactly as it always did.
-    on_file = {
-        "v": ARMED_VERSION if _recorded(subject) else LEGACY_VERSION,
+    armed = {
+        "v": 1,
         "execution_id": execution_id,
         "job_id": job_id,
         "session_id": session,
         "staged_epoch": stage["staged"],
         "armed_epoch": now,
-        "message_hash": message_hash if isinstance(message_hash, str) and _HASH.fullmatch(message_hash) else None,
-        "question_hash": question_hash if isinstance(question_hash, str) and _HASH.fullmatch(question_hash) else None,
-        "subject": _subject_on_file(subject),
+        "message_hash": message_hash if isinstance(message_hash, str) and _HASH.match(message_hash) else None,
+        "question_hash": question_hash if isinstance(question_hash, str) and _HASH.match(question_hash) else None,
+        "subject": stage["subject"],
     }
     try:
-        _write(os.path.join(armed_dir(state_dir), f"{execution_id}.json"), on_file)
+        _write(os.path.join(armed_dir(state_dir), f"{execution_id}.json"), armed)
     finally:
         _unlink(claim)
-    # Remembered as `valid_armed` reads it back, so the tick's comparison holds.
-    _remember(_SEEN, execution_id, {**on_file, "subject": subject})
+    _remember(_SEEN, execution_id, armed)
     return "armed"
 
 
@@ -747,8 +658,8 @@ def note_answer(
         "id": uuid7(),
         "value": parsed[0],
         "at_epoch": now,
-        "session_id": session_id if isinstance(session_id, str) and _ID.fullmatch(session_id) else None,
-        "turn_id": turn_id if isinstance(turn_id, str) and _ID.fullmatch(turn_id) else None,
+        "session_id": session_id if isinstance(session_id, str) and _ID.match(session_id) else None,
+        "turn_id": turn_id if isinstance(turn_id, str) and _ID.match(turn_id) else None,
         # Its place among the resident's messages, whether it replied to a
         # question, and the keyed hash of the question it quoted (`tick`
         # compares it with each ask's `question_hash`).
@@ -767,7 +678,7 @@ def _hash_or_none(hasher: Callable[[str], Optional[str]], key: Optional[str]) ->
     if key is None:
         return None
     digest = hasher(key)
-    return digest if isinstance(digest, str) and _HASH.fullmatch(digest) else None
+    return digest if isinstance(digest, str) and _HASH.match(digest) else None
 
 
 def _prune_messages(now: float) -> None:
@@ -825,61 +736,50 @@ class _FileLock:
 
 
 def valid_armed(data: Any, name: str, now: float) -> Optional[dict]:
-    """An armed file exactly as `arm` writes it, named for its own execution.
-    A version 1 file (from a version 1 stage, or armed before M2b) has the
-    two-key subject: `not_recorded`."""
-    if not isinstance(data, dict) or set(data) != ARMED_KEYS:
-        return None
-    version = _version(data.get("v"), (ARMED_VERSION, LEGACY_VERSION))
-    if version is None:
+    """An armed file exactly as `arm` writes it, named for its own execution."""
+    if not isinstance(data, dict) or set(data) != ARMED_KEYS or data.get("v") != 1:
         return None
     execution_id, job_id, session_id = data.get("execution_id"), data.get("job_id"), data.get("session_id")
-    if not (isinstance(execution_id, str) and _EXECUTION.fullmatch(execution_id) and name == f"{execution_id}.json"):
+    if not (isinstance(execution_id, str) and _EXECUTION.match(execution_id) and name == f"{execution_id}.json"):
         return None
-    if not (isinstance(job_id, str) and _JOB.fullmatch(job_id)):
+    if not (isinstance(job_id, str) and _JOB.match(job_id)):
         return None
-    if session_id is not None and not (isinstance(session_id, str) and re.fullmatch(rf"cron_{job_id}_\d{{8}}_\d{{6}}", session_id)):
+    if session_id is not None and not (isinstance(session_id, str) and re.match(rf"^cron_{job_id}_\d{{8}}_\d{{6}}$", session_id)):
         return None
     staged, armed_at = _number(data.get("staged_epoch")), _number(data.get("armed_epoch"))
     if staged is None or armed_at is None or not staged <= armed_at + CLOCK_SLACK_S or armed_at > now + CLOCK_SLACK_S:
         return None
     for name in ("message_hash", "question_hash"):
         value = data.get(name)
-        if value is not None and not (isinstance(value, str) and _HASH.fullmatch(value)):
+        if value is not None and not (isinstance(value, str) and _HASH.match(value)):
             return None
-    subject = _subject(data.get("subject"), legacy=version == LEGACY_VERSION)
+    subject = _subject(data.get("subject"))
     if subject is None:
         return None
     return {**data, "subject": subject, "staged_epoch": staged, "armed_epoch": armed_at}
 
 
 def _load_asks(state_dir: str, codes: dict) -> list[dict]:
-    """The delivered asks on file: exactly their keys, one per execution. An
-    entry without `intention_id` and `intention_reason` (from a version 1
-    stage, or written before M2b) is read as a null intention with
-    `not_recorded`, so its answer carries the same null its ask was emitted
-    with."""
+    """The delivered asks on file: exactly their keys, one per execution."""
     data, why = private_file(asks_path(state_dir), ASKS_MAX_BYTES)
     if why == "missing":
         return []
-    shaped = why is None and isinstance(data, dict) and set(data) == {"v", "asks"} and _version(data.get("v"), (1,)) is not None
-    entries = data.get("asks") if shaped else None
+    entries = data.get("asks") if why is None and isinstance(data, dict) and set(data) == {"v", "asks"} and data.get("v") == 1 else None
     if not isinstance(entries, list):
         _unlink(asks_path(state_dir))
         _count(codes, "asks_refused")
         return []
     asks, seen = [], set()
     for entry in entries[:40]:
-        legacy = isinstance(entry, dict) and set(entry) == LEGACY_ASK_KEYS
-        if not isinstance(entry, dict) or (set(entry) != ASK_KEYS and not legacy):
+        if not isinstance(entry, dict) or set(entry) != ASK_KEYS:
             _count(codes, "ask_refused")
             continue
         execution_id = entry.get("execution_id")
-        subject = _subject({key: entry.get(key) for key in (LEGACY_SUBJECT_KEYS if legacy else SUBJECT_KEYS)}, legacy=legacy)
+        subject = _subject({"outcome_id": entry.get("outcome_id"), "opportunity_id": entry.get("opportunity_id")})
         question_hash = entry.get("question_hash")
-        if question_hash is not None and not (isinstance(question_hash, str) and _HASH.fullmatch(question_hash)):
+        if question_hash is not None and not (isinstance(question_hash, str) and _HASH.match(question_hash)):
             subject = None
-        if not (isinstance(execution_id, str) and _EXECUTION.fullmatch(execution_id)) or subject is None or execution_id in seen:
+        if not (isinstance(execution_id, str) and _EXECUTION.match(execution_id)) or subject is None or execution_id in seen:
             _count(codes, "ask_refused")
             continue
         seen.add(execution_id)
@@ -901,7 +801,7 @@ def _record_asked(state_dir: str, opportunity_id: str, when: str) -> Optional[st
         asked = data.get("asked") if why is None and isinstance(data, dict) else None
         if not isinstance(asked, dict):
             return "asked_ledger_refused"
-    asked = {k: v for k, v in asked.items() if isinstance(k, str) and _OPPORTUNITY.fullmatch(k) and isinstance(v, str) and len(v) <= 40}
+    asked = {k: v for k, v in asked.items() if isinstance(k, str) and _OPPORTUNITY.match(k) and isinstance(v, str) and len(v) <= 40}
     asked.pop(opportunity_id, None)
     asked[opportunity_id] = when
     while len(asked) > MAX_ASKED:
@@ -1011,13 +911,7 @@ def tick(state_dir: str, home: str, emit: Callable[..., Optional[dict]], now: fl
             asked_at = iso_from_epoch(finished)
             event = emit(
                 "outcome.asked",
-                {
-                    "message_hash": armed["message_hash"],
-                    "window_days": WINDOW_DAYS,
-                    "asked_by": ASKED_BY,
-                    # A code, or null when the envelope names the intention.
-                    "intention_reason": subject["intention_reason"],
-                },
+                {"message_hash": armed["message_hash"], "window_days": WINDOW_DAYS, "asked_by": ASKED_BY},
                 event_id=_ask_event_id(execution_id, subject["outcome_id"], finished),
                 occurred_at=asked_at,
                 occurred_at_earliest=iso_from_epoch(start),
@@ -1027,7 +921,6 @@ def tick(state_dir: str, home: str, emit: Callable[..., Optional[dict]], now: fl
                 run_id=f"cron:{row.get('job_id')}:{execution_id}",
                 outcome_id=subject["outcome_id"],
                 opportunity_id=subject["opportunity_id"],
-                intention_id=subject["intention_id"],
             )
             if event is None:
                 pending.append(armed["armed_epoch"])
@@ -1051,7 +944,7 @@ def tick(state_dir: str, home: str, emit: Callable[..., Optional[dict]], now: fl
             row = rows.get(ask["execution_id"])
             with _MEMORY_LOCK:
                 mine = _EMITTED.get(ask["execution_id"])
-            if mine is not None and mine != {key: ask[key] for key in SUBJECT_KEYS}:
+            if mine is not None and mine != {"outcome_id": ask["outcome_id"], "opportunity_id": ask["opportunity_id"]}:
                 _count(codes, "ask_tampered")
                 continue
             if not _evening_delivered(home, row):
@@ -1115,8 +1008,7 @@ def tick(state_dir: str, home: str, emit: Callable[..., Optional[dict]], now: fl
                 continue
             event = emit(
                 "outcome.reported",
-                # The intention exactly as the ask carried it, never recomputed.
-                {"value": note["value"], "matcher_version": MATCHER_VERSION, "intention_reason": latest["intention_reason"]},
+                {"value": note["value"], "matcher_version": MATCHER_VERSION},
                 event_id=_answer_event_id(latest["execution_id"], latest["outcome_id"], latest["finished"]),
                 occurred_at=iso_from_epoch(at),
                 occurred_at_earliest=iso_from_epoch(at),
@@ -1127,7 +1019,6 @@ def tick(state_dir: str, home: str, emit: Callable[..., Optional[dict]], now: fl
                 turn_id=note["turn_id"],
                 outcome_id=latest["outcome_id"],
                 opportunity_id=latest["opportunity_id"],
-                intention_id=latest["intention_id"],
                 in_reply_to_event_id=_ask_event_id(latest["execution_id"], latest["outcome_id"], latest["finished"]),
             )
             if event is None:
@@ -1143,13 +1034,7 @@ def tick(state_dir: str, home: str, emit: Callable[..., Optional[dict]], now: fl
 
         kept_ids = {a["execution_id"] for a in confirmed if now - a["finished"] <= ASKS_KEEP_S}
         kept_ids |= {a["execution_id"] for a in asks if a["execution_id"] not in rows}  # not yet re-readable: keep
-        # Each ask in its stage's shape: the four keys from before M2b for one
-        # with no intention information, so the plugin from before M2b reads
-        # every entry this one writes from a version 1 stage.
-        kept = [
-            {key: a[key] for key in sorted(ASK_KEYS if _recorded(a) else LEGACY_ASK_KEYS)}
-            for a in asks if a["execution_id"] in kept_ids
-        ][-20:]
+        kept = [{key: a[key] for key in sorted(ASK_KEYS)} for a in asks if a["execution_id"] in kept_ids][-20:]
         if changed or len(kept) != len(asks):
             if kept:
                 _write(asks_path(state_dir), {"v": 1, "asks": kept})
@@ -1159,10 +1044,6 @@ def tick(state_dir: str, home: str, emit: Callable[..., Optional[dict]], now: fl
 
 
 __all__ = [
-    "AMBIGUOUS",
-    "INTENTION_REASONS",
-    "NOT_LINKED",
-    "NOT_RECORDED",
     "ANSWERS",
     "ANSWER_WINDOW_S",
     "ASKED_BY",

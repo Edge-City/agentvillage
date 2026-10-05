@@ -384,7 +384,13 @@ export type WindowFit =
   | { fit: "always" }
   /** No firing lands in the window. */
   | { fit: "never" }
-  /** Some days do and some do not (a DST change in either zone): the first date one does not, in the job's zone. */
+  /**
+   * Some days do and some do not (a DST change in either zone). `outsideFrom`
+   * is the job-zone date of the first firing of the first whole Hermes-zone
+   * day on which no firing lands. The days start at the Hermes-zone midnight
+   * of `from`, so it may be the current or the previous calendar day in the
+   * job's zone: outside now.
+   */
   | { fit: "seasonal"; outsideFrom: string }
   /** It does not fire at all in the horizon. */
   | { fit: "no-firing" };
