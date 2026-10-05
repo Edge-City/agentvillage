@@ -8,11 +8,11 @@
  * cleaned and scanned:
  *
  *   - cleanName(): a person's name as a plain display name, or null.
- *   - cleanText(): an organiser announcement, a fact the overlay computed (a
- *     time, the weather) or the resident's own words about themself (their
- *     notes and signals) as one plain line, or null.
- *   - cleanTitle(): third-party text a non-organiser can write (event titles
- *     and venues) as one plain line, stricter, or null.
+ *   - cleanText(): an organiser announcement or a fact the overlay computed
+ *     (a time, the weather) as one plain line, or null.
+ *   - cleanTitle(): text a non-organiser can write or that is read back from
+ *     a store (event titles and venues, the resident's notes from memory
+ *     files, signals from Index) as one plain line, stricter, or null.
  *   - cronScanHit(): the patterns Hermes's cron prompt scanner blocks a run on.
  *   - connectionsUrl(): the Connections link the brief always carries.
  */

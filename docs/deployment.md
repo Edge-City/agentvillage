@@ -260,8 +260,9 @@ The rules the trigger holds:
   more; `2026-2027` and `1000000` stay), and a `/` gets a space on both sides
   (`AI / ML`) unless it is between digits (`10/12`, `24/7`), one at the very
   start or end dropped, so no `/command` Telegram makes tappable reaches the
-  message. The resident's own notes and signals are their own words and get
-  the ordinary cleaning. Names lose phone runs too and are refused only
+  message. The resident's notes (read from the agent's memory files) and
+  signals (read back from Index) get the same strict cleaning, since either can
+  hold text that did not come from the resident. Names lose phone runs too and are refused only
   when nothing is left, when command-shaped, or on a scanner hit. A pick (the
   drops, the evening note, the follow-up) skips a card whose name does not
   clean, so it never spends the day's slot.
