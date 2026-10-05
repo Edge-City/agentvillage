@@ -115,6 +115,16 @@ differs from the configured one (`foreign-chat`), so the daemon must know it.
 `token_delivery: sealed` is inert for proposals (they mint no token) and matters
 only if a later manual class is executed through `approval run`.
 
+`delivery: burst` (core 0.4.0, `channels.telegram.delivery` in
+schema/policy.schema.json, APRV-216). Without it delivery is `paced`: the
+listener sends the oldest pending request and the next one only once that one
+is decided, skipped or passed over, and `/skip` and `/next` are bot commands.
+The relay forwards no text command but `/start` (and ForceReply answers), so a
+resident cannot skip, and one proposal left unanswered for its 72 h window
+would hold back every later card. `burst` sends each request the listener has
+not yet sent, once; nothing about what is pending, or what a tap decides,
+changes. A review walkthrough (supervised-retro) stays paced in both modes.
+
 Dogfood tenants may add `supervised-retro` with a `retro_rate` on network.call
 or message.send to exercise the review card. Residents get no review cards on
 day one. No `budgets` block: proposals carry no cost.
@@ -141,6 +151,7 @@ channels:
   telegram:
     token_env: APPROVAL_RELAY_TOKEN      # the relay credential, approvald-only env
     chat_id_env: APPROVAL_RESIDENT_CHAT  # the paired id; the control plane writes this variable
+    delivery: burst                      # every unsent proposal goes out at once; paced (the default) sends the next only after the current one is answered, and the relay passes no /skip, so one ignored 72 h card would hold back every later one
     prompt:
       always: [ttl_remaining_ms]         # show the time left; the relay holds a prompt overnight only when it outlasts the night
 
