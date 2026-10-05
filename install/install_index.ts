@@ -252,7 +252,7 @@ function proactiveScript(action: string): Pick<DigestCronSpec, "scriptFile" | "s
 
 /** The prefetch's stored prompt. Never shown to a model: a no_agent job runs only its script. */
 export const PREFETCH_PROMPT =
-  "Overnight prefetch of the morning brief's context. No model takes part in this job: its pre-run script is the whole job, and it delivers nothing.";
+  "Overnight prefetch of the morning brief's context. No model takes part in this job: the script Hermes starts before it is the whole job, and it delivers nothing.";
 
 export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
   {
