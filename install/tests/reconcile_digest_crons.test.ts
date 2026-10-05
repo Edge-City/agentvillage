@@ -640,3 +640,18 @@ test("F13: prompts are compared and sent with trailing whitespace trimmed, so a 
   reconcileDigestCronJobs({ ...process.env });
   expect(cronCalls().find((argv) => argv[1] === "create" && argv.includes(SEND.name))![3]).toBe("SEND_BODY");
 });
+
+test("F9: install.ts records the cron failures, runs every later step, and exits non-zero only after the restart", () => {
+  // install.ts runs main() on import, so its order is pinned on the source.
+  const source = readFileSync(join(import.meta.dir, "..", "install.ts"), "utf8");
+  const main = source.slice(source.indexOf("function main(): void {"));
+  const recorded = main.indexOf("cronFailures = installIndex();");
+  const approval = main.indexOf("runApprovalStep(SOURCE_SKILLS)");
+  const restart = main.indexOf("restartGateway();");
+  const exit = main.indexOf("if (cronFailures.length > 0) {");
+  expect(recorded).toBeGreaterThan(0);
+  expect(approval).toBeGreaterThan(recorded);
+  expect(restart).toBeGreaterThan(approval);
+  expect(exit).toBeGreaterThan(restart);
+  expect(main.slice(exit, exit + 400)).toContain("process.exit(1)");
+});
