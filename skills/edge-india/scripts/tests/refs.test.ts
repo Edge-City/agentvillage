@@ -27,7 +27,7 @@ function installedSnapshot(): { synced_at: string; files: { path: string; sha256
   return JSON.parse(readFileSync(join(INSTALLED, "SNAPSHOT.json"), "utf8"));
 }
 
-function context(overrides: Partial<Context> = {}, env: Record<string, string> = {}): Context {
+function context(overrides: Partial<Context> = {}, env: Record<string, string> = { AV_INDIA_REFS_LIVE: "0" }): Context {
   return {
     installedDir: INSTALLED,
     cacheDir: join(temp("india-cache-"), "cache", "edge-india"),
@@ -141,11 +141,32 @@ test("long documents are truncated with the section list", async () => {
   expect(result.out).toContain("Sections:");
 });
 
-test("live refresh is off by default: no network, and the output says the copy changes only on update", async () => {
+test("live refresh is on by default and AV_INDIA_REFS_LIVE=0 switches it off", async () => {
+  const onByDefault = fakeMirror();
+  const on = await run(["status"], context({ fetch: onByDefault.fetchImpl }, {}));
+  expect(onByDefault.requests.length).toBeGreaterThan(0);
+  expect(on.out).toContain("live_refresh: on");
+  expect(on.out).toContain("live mirror");
+
+  const offMirror = fakeMirror();
+  const off = await run(["status"], context({ fetch: offMirror.fetchImpl }, { AV_INDIA_REFS_LIVE: "0" }));
+  expect(offMirror.requests).toEqual([]);
+  expect(off.out).toContain("live_refresh: off");
+  expect(off.out).toContain("switched off");
+});
+
+test("the default refresh interval matches the 15-minute sync", async () => {
   const mirror = fakeMirror();
-  const result = await run(["status"], context({ fetch: mirror.fetchImpl }));
-  expect(mirror.requests).toEqual([]);
-  expect(result.out).toContain("live_refresh: off");
+  let now = Date.parse(installedSnapshot().synced_at) + 3_600_000;
+  const ctx = context({ fetch: mirror.fetchImpl, now: () => new Date(now) }, {});
+  await run(["status"], ctx);
+  const first = mirror.requests.length;
+  now += 14 * 60_000;
+  await run(["status"], ctx);
+  expect(mirror.requests.length).toBe(first);
+  now += 2 * 60_000;
+  await run(["status"], ctx);
+  expect(mirror.requests.length).toBe(first + 1); // only SNAPSHOT.json: nothing changed since
 });
 
 test("live refresh pulls a newer verified mirror, fetches only changed files, and respects the TTL", async () => {

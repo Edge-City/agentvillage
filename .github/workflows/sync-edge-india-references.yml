@@ -7,10 +7,9 @@
 # Esmeralda-era files and has failed since the upstream moved to India
 # (2026-10-01); skills/edge-esmeralda/references/ is now a frozen snapshot.
 #
-# Residents do not read this commit directly: they get the snapshot at the next
-# tag and roll (docs/deployment.md), or sooner when AV_INDIA_REFS_LIVE=1 lets
-# skills/edge-india/scripts/refs.ts refresh from this repo's main
-# (skills/edge-india/README.md).
+# Agents read this commit: skills/edge-india/scripts/refs.ts checks the copy on
+# main when asked a village question (at most every 15 minutes) and falls back
+# to the snapshot installed at their last roll (skills/edge-india/README.md).
 name: Sync Edge City India References
 
 on:

@@ -85,7 +85,7 @@ If the script can't run, read `skills/edge-india/references/index.md` and then t
 
 ## 5. Freshness and primary sources
 
-Path: the official sources → the upstream indexer (`aromeoes/edge-agent-skill`, every 15 minutes, best effort) → this repo's sync (complete snapshots only, recorded in `references/SNAPSHOT.json`) → the copy installed in the agent at its last update → optionally a live refresh of that same mirror when `AV_INDIA_REFS_LIVE=1` (at most every 30 minutes, verified, last good copy kept on failure). A recent copy can still hold an old article; the header dates tell you which.
+Path: the official sources → the upstream indexer (`aromeoes/edge-agent-skill`, every 15 minutes, best effort) → this repo's sync (complete snapshots only, recorded in `references/SNAPSHOT.json`, every 15 minutes) → `refs.ts`, which checks that published copy before answering when its last check is over 15 minutes old, downloads only changed files, verifies them, and keeps the last good copy if the check fails. The copy installed with the agent is the offline fallback. A recent copy can still hold an old article; the header dates tell you which.
 
 - Wiki: https://edgecity.notion.site/Edge-City-India-2026-Wiki-038d45cdfc5983c7a1fe013fdc77135b
 - Guides and updates: https://edgecityindia2026.substack.com/archive

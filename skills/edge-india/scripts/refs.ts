@@ -14,8 +14,9 @@
  * read (installed snapshot or live mirror), and how old that copy is. Output is
  * bounded (`--max-chars`, default 12000); `search` names the sections to read.
  *
- * Live refresh is off unless `AV_INDIA_REFS_LIVE=1`. When on, at most once per
- * `AV_INDIA_REFS_TTL_MINUTES` (default 30) it fetches the mirror's
+ * Live refresh is on by default (`AV_INDIA_REFS_LIVE=0`, `false` or `off` turns
+ * it off). At most once per `AV_INDIA_REFS_TTL_MINUTES` (default 15, the sync
+ * workflow's cadence) it fetches the mirror's
  * `SNAPSHOT.json` (default
  * https://raw.githubusercontent.com/Edge-City/agentvillage/main/skills/edge-india/references,
  * override `AV_INDIA_REFS_BASE_URL`, https on raw.githubusercontent.com only),
@@ -41,7 +42,7 @@ const DOCUMENT_PATH = /^(?:[a-z0-9][a-z0-9_-]*\/)*[a-z0-9][a-z0-9._-]*\.md$/;
 const MAX_FILE_BYTES = 1_000_000;
 const MAX_SET_BYTES = 8_000_000;
 const DEFAULT_STALE_HOURS = 24;
-const DEFAULT_TTL_MINUTES = 30;
+const DEFAULT_TTL_MINUTES = 15;
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_MAX_CHARS = 12000;
 
@@ -138,8 +139,9 @@ function numberEnv(env: Env, name: string, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+/** On unless `AV_INDIA_REFS_LIVE` is `0`, `false`, `no` or `off`. */
 export function liveEnabled(env: Env): boolean {
-  return env.AV_INDIA_REFS_LIVE === "1";
+  return !["0", "false", "no", "off"].includes((env.AV_INDIA_REFS_LIVE ?? "").trim().toLowerCase());
 }
 
 /** The mirror base URL; anything other than https on raw.githubusercontent.com falls back to the default. */
@@ -268,7 +270,7 @@ export async function chooseCopy(ctx: Context): Promise<CopyChoice> {
     );
   }
   if (failure && liveEnabled(ctx.env)) choice.note = `live refresh failed (${failure}); this is the last copy on disk`;
-  else if (!liveEnabled(ctx.env)) choice.note = "live refresh is off; this copy changes only when the agent is updated";
+  else if (!liveEnabled(ctx.env)) choice.note = "live refresh is switched off on this agent (AV_INDIA_REFS_LIVE); this copy changes only when the agent is updated";
   return choice;
 }
 
