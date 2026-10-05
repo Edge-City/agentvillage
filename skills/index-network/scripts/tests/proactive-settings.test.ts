@@ -11,8 +11,11 @@ import { join } from "node:path";
 import type { BriefOpportunity, DailyBriefContext } from "../build-daily-brief-context";
 import { PREVIEW_MAX_AGE_MS, deliveryFor, jobSettingsPath, minuteOfDay, readJobSettings } from "../job-settings";
 import { stagePath } from "../outcome-ask";
-import { type ProactiveOptions, RUNS_KEY, deliveryGate, hardStopCleanup, inBriefWindow, runProactive, villageMinuteOfDay } from "../proactive";
+import { type ProactiveOptions, RUNS_KEY, deliveryGate, hardStopCleanup, runProactive, windowDecision } from "../proactive";
 import { lockPathFor } from "../state-lock";
+import { inBriefWindow, rc13WindowDecision, villageMinuteOfDay } from "./fixtures/rc13-decision";
+
+const DEADLINE_CHILD = join(import.meta.dir, "fixtures", "proactive-deadline-child.ts");
 
 const DATE = "2026-10-12";
 /** 08:00 IST. */
@@ -99,21 +102,27 @@ describe("no settings file: rc13, unchanged", () => {
     }
   });
 
-  test("every 30 seconds over 48 hours, every job decides exactly as on origin/main (only the brief gated, on inBriefWindow)", () => {
-    const absent = readJobSettings(home);
+  test("every 30 seconds over 48 hours, every job's live decision path decides exactly as rc13's, frozen from 9ff10b9 (fixtures/rc13-decision.ts)", () => {
     const start = Date.UTC(2026, 9, 4, 0, 0, 0);
     let checked = 0;
+    let gated = 0;
     for (let t = start; t < start + 2 * 86_400_000; t += 30_000) {
       const now = new Date(t);
       for (const key of ["brief", "drop-midday", "drop-evening", "negotiation", "evening"] as const) {
-        const gate = deliveryGate(deliveryFor(key, absent), now);
-        const before = key === "brief" && !inBriefWindow(now) ? "outside-window" : null;
-        if ((gate?.reason ?? null) !== before || (gate && "settings" in gate)) throw new Error(`${key} differs at ${now.toISOString()}`);
+        // The trigger's own first decision (runAgentAction calls windowDecision), reading the (absent) settings file itself.
+        const live = windowDecision(key, home, now).gated;
+        const rc13 = rc13WindowDecision(key, now);
+        if ((live?.reason ?? null) !== rc13 || (live && "settings" in live)) throw new Error(`${key} differs at ${now.toISOString()}`);
+        if (rc13) gated++;
         checked++;
       }
+      // rc13's village clock and the live one read the same minute.
       if (villageMinuteOfDay(now) !== minuteOfDay(now, "Asia/Kolkata")) throw new Error(`village clock differs at ${now.toISOString()}`);
     }
     expect(checked).toBe(5 * 2 * 2880);
+    // The brief is gated 18 hours a day, over two days.
+    expect(gated).toBe(2 * 18 * 120);
+    expect(existsSync(jobSettingsPath(home))).toBe(false);
   });
 
   test("the same wake lines, state and log line as rc13: no settings field anywhere", async () => {
@@ -354,6 +363,21 @@ describe("the preview: team tenants only, nothing written that the real run read
     release();
     await running;
     expect(copies()).toEqual([]);
+  });
+
+  test("main's hard deadline, run in a child process: the trigger-timeout line, and the preview's state copy is gone", async () => {
+    const proc = Bun.spawn([process.execPath, DEADLINE_CHILD, "drop-midday", home], {
+      env: { ...process.env, AV_TEAM_TENANT: "1", HERMES_HOME: home },
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    const code = await proc.exited;
+    const out = (await new Response(proc.stdout).text()).trim();
+    // The content path was entered with a copy in place, and only the deadline ended the run.
+    expect(JSON.parse(readFileSync(join(home, "entered.json"), "utf8"))).toHaveLength(1);
+    expect({ code, out }).toEqual({ code: 0, out: JSON.stringify({ wakeAgent: false, reason: "trigger-timeout" }) });
+    expect(readdirSync(join(home, "av-events", "proactive")).filter((name) => name.startsWith("preview-"))).toEqual([]);
+    expect(runLog().at(-1)).toMatchObject({ action: "drop-midday", reason: "trigger-timeout", preview: true });
   });
 
   test("a preview first prunes state copies a killed preview left more than an hour ago", async () => {

@@ -4,7 +4,8 @@
  * overlay runs (cron create/edit/pause/resume/remove, kanban init,
  * --version), so a test can run add, then a roll, then another roll, and read
  * what a real tenant would hold. Every call is appended to
- * `$HERMES_HOME/hermes-calls.jsonl` as its argv. Not a test file itself.
+ * `$HERMES_HOME/hermes-calls.jsonl` as its argv (and the HERMES_TIMEZONE it was
+ * started with to `hermes-env.jsonl`). Not a test file itself.
  *
  * Mirrors Hermes v2026.9.24 where it matters here (file:line in cron/jobs.py
  * unless named):
@@ -22,6 +23,10 @@
  *   `next_run_at`; `resume` keeps a `next_run_at` already due (so the next
  *   tick fires it, :2080-2105) and recomputes a future one;
  * - a script must exist under `$HERMES_HOME/scripts/`.
+ * Test switches: FAKE_HERMES_FAIL=<sub> exits 1 before acting;
+ * FAKE_HERMES_HANG=<sub> hangs before acting, and FAKE_HERMES_HANG_AFTER=<sub>
+ * hangs after saving (each writes its pid to `$HERMES_HOME/hermes-hang.pid`),
+ * as a hung CLI would, until it is killed.
  * What it does not do: fire anything (there is no ticker), or apply the
  * late / catch-up policy. Tests read `next_run_at` to see what a tick would do.
  */
@@ -29,11 +34,13 @@ import { randomBytes } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { cronNeverFires, nextFiring, parseStrictCron } from "../../skills/index-network/scripts/job-settings";
+import { cronNeverFires, nextFiring, parseStoredCron, parseStrictCron } from "../../skills/index-network/scripts/job-settings";
 
 const home = process.env.HERMES_HOME!;
 const argv = process.argv.slice(2);
 appendFileSync(join(home, "hermes-calls.jsonl"), `${JSON.stringify(argv)}\n`);
+// The zone Hermes's CLI would read from its environment (install/jobs.ts must not pass the caller's on).
+appendFileSync(join(home, "hermes-env.jsonl"), `${JSON.stringify({ HERMES_TIMEZONE: process.env.HERMES_TIMEZONE ?? null })}\n`);
 
 const ZONE = "Asia/Kolkata";
 
@@ -42,6 +49,11 @@ const jobsPath = join(home, "cron", "jobs.json");
 
 function load(): Job[] {
   return existsSync(jobsPath) ? (JSON.parse(readFileSync(jobsPath, "utf8")).jobs as Job[]) : [];
+}
+
+function hang(): Promise<never> {
+  writeFileSync(join(home, "hermes-hang.pid"), String(process.pid));
+  return new Promise<never>(() => setInterval(() => {}, 1_000));
 }
 
 function save(jobs: Job[]): void {
@@ -70,7 +82,8 @@ function parseSchedule(text: string): { schedule: Record<string, unknown>; next:
     const runAt = new Date(Date.now() + Number(once[1]) * 60_000).toISOString();
     return { schedule: { kind: "once", run_at: runAt, display: `once ${text}` }, next: runAt };
   }
-  const cron = parseStrictCron(text);
+  // A canonical form longer than an input may be (job-settings.ts MAX_CANONICAL_SCHEDULE_CHARS) is read too.
+  const cron = parseStrictCron(text) ?? parseStoredCron(text);
   if (cron && cronNeverFires(cron)) fail(`Invalid cron expression '${text}': CroniterBadDateError: failed to find next date`);
   const next = cron ? nextFiring(cron, ZONE, new Date()) : null;
   return { schedule: { kind: "cron", expr: text, display: text }, next: next === null ? null : new Date(next).toISOString() };
@@ -83,6 +96,8 @@ if (argv[0] !== "cron") fail("unknown command");
 const [, sub, ...rest] = argv;
 const jobs = load();
 if (process.env.FAKE_HERMES_FAIL && process.env.FAKE_HERMES_FAIL === sub) fail(`forced failure of ${sub}`);
+if (process.env.FAKE_HERMES_HANG && process.env.FAKE_HERMES_HANG === sub) await hang();
+const hangAfter = process.env.FAKE_HERMES_HANG_AFTER === sub;
 
 if (sub === "create") {
   const [scheduleText, prompt, ...flags] = rest;
@@ -106,6 +121,7 @@ if (sub === "create") {
   };
   jobs.push(job);
   save(jobs);
+  if (hangAfter) await hang();
   process.stdout.write(`Created job: ${job.id}\n`);
   process.exit(0);
 }
@@ -141,4 +157,5 @@ if (sub === "edit") {
   fail(`unknown cron command ${sub}`);
 }
 save(jobs);
+if (hangAfter) await hang();
 process.exit(0);

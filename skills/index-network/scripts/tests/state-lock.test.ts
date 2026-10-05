@@ -10,7 +10,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, ut
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { LockStuck, acquireStateLock, lockPathFor, tryAcquireLock } from "../state-lock";
+import { LockStuck, acquireStateLock, holdsLock, lockPathFor, tryAcquireLock } from "../state-lock";
 
 const CHILD = join(import.meta.dir, "fixtures", "lock-wait-child.ts");
 const KILL_AFTER_MS = 6_000;
@@ -125,5 +125,17 @@ describe("tryAcquireLock: the same lock file and stale rule, answered at once (i
     mkdirSync(path);
     utimesSync(path, old, old);
     expect(() => tryAcquireLock(path)).toThrow(LockStuck);
+  });
+
+  test("holdsLock: true while the file holds this lock's token; false once another holder took it over, whose file release then leaves", () => {
+    const path = join(home, "av-events", "jobs.lock");
+    const lock = tryAcquireLock(path)!;
+    expect(holdsLock(lock)).toBe(true);
+    writeFileSync(path, JSON.stringify({ token: "the-next-holder", pid: 1 }));
+    expect(holdsLock(lock)).toBe(false);
+    lock.release();
+    expect(JSON.parse(readFileSync(path, "utf8")).token).toBe("the-next-holder");
+    rmSync(path);
+    expect(holdsLock(lock)).toBe(false);
   });
 });

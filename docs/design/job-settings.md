@@ -1,9 +1,25 @@
 # Per-job delivery settings, add-from-template and the team-only preview (J2, overlay half)
 
-Status: **as built**, 2026-10-05, for rc14, after review fix round 1. This is the contract the
+Status: **as built**, 2026-10-05, for rc14, after review fix round 2. This is the contract the
 control-plane half is built against: a control-plane lane should need nothing else. Hermes
 references are to `~/.hermes/hermes-agent` at tag `v2026.9.24`; croniter references are to croniter
 6.0.0, the version that Hermes tag pins. Overlay line numbers are at this PR's tip.
+
+**Fix round 2, in short** (each is in its section below):
+
+- A schedule the tool sets always reads back: an input is at most 100 characters, a stored
+  canonical form at most 346, the longest any accepted input produces (§3).
+- The window check judges whole days, so its answer does not depend on the time of the call (§3).
+- Hermes's zone: two names of one zone agree; only the tenant's files are read (§2, §3).
+- `adminSchedules` is read entry by entry; a value that is not a list is reported
+  (`adminSchedulesInvalid`); `list` and reconcile share one admin-managed rule; and
+  `set --schedule default` clears an admin mark (§1, §2, §4).
+- Each Hermes command is killed after 60 s (`hermes-timeout`); a holder checks the lock is still
+  its own before each write (`lock-lost`) (§2).
+- An unreadable `jobs.json` is never "no jobs": `list` says `store: "unreadable"`, and every
+  mutating command refuses `jobs-store-unreadable` (§2).
+- The rc13 parity test compares against rc13's decision frozen from origin/main (§7), and the
+  trigger's hard-deadline path is tested in a child process (§5).
 
 ## What changed
 
@@ -43,7 +59,7 @@ the other two tests. The control plane changes it with one non-interactive comma
 | `jobs` | an object keyed by job key | `{}` |
 | `jobs.<key>.window` | `HH:MM-HH:MM`, 24-hour, two digits each; start inclusive, end exclusive; start after end runs across midnight; start equal to end is invalid | the job's default window |
 | `jobs.<key>.tz` | an IANA zone (rules in §3) | `Asia/Kolkata` |
-| `adminSchedules` | a list of default job keys whose schedule an admin set with `set --schedule` | `[]` |
+| `adminSchedules` | a list of default job keys whose schedule an admin set with `set --schedule`; read entry by entry (below) | `[]` |
 
 **Job keys.** The five default agent jobs are `brief`, `drop-midday`, `drop-evening`,
 `negotiation` and `evening`. The three template jobs are `tpl-brief`, `tpl-digest-preview` and
@@ -64,17 +80,35 @@ the other two tests. The control plane changes it with one non-interactive comma
 - A command that would leave the file's bytes unchanged writes nothing (`changed` has no
   `"settings"`).
 
-**Admin-managed.** A default job is admin-managed when it has an entry in `jobs`, or its key is in
-`adminSchedules`. Reconcile's legacy schedule migration (§4) never moves an admin-managed job.
+**Admin-managed.** Reconcile's legacy schedule migration (§4) never moves an admin-managed job. One
+function decides it, `scheduleAdminManaged` (job-settings.ts:505), used by reconcile and reported
+by `list` as `jobs[].adminSchedule`, so the two always agree:
 
-- `set --schedule` on a default job adds its key to `adminSchedules`.
-- That mark is kept when its window and zone are cleared. So a job whose only customisation is its
-  schedule stays exempt from the migration.
-- Nothing removes the mark except removing the file. It matters only for a job whose schedule is
-  the old synchronized default, which is the one schedule the migration moves.
-- The trigger never reads `adminSchedules`. A malformed value (not a list of default job keys)
-  counts every default job as admin-managed. The command that next writes the file keeps only the
-  valid keys, and reports `"dropped": [..., "adminSchedules"]`.
+| The settings file | Admin-managed |
+| --- | --- |
+| absent | no job |
+| invalid (refused whole, §3) | every default job |
+| `adminSchedules` present and not a list | every default job; `list` says `adminSchedulesInvalid: true`, and reconcile logs a warning |
+| otherwise | a default job with an entry in `jobs` (its window or zone was checked against its schedule), or whose key is in `adminSchedules` |
+
+Template jobs are never admin-managed: reconcile never migrates their schedule.
+
+- **Read entry by entry** (`adminScheduleKeys`, :487). An entry that is not a default job key (a
+  key a later release retired, a template key, a non-string) is ignored on its own, and never voids
+  the other entries. The command that next writes the file drops it, and reports
+  `"dropped": [..., "adminSchedules"]`.
+- **A value that is not a list** counts every default job as admin-managed, so nothing an admin set
+  is moved. The command that next writes the file writes all five default keys in its place (the
+  same jobs reconcile was already treating as managed), and reports `"adminSchedules"` in
+  `dropped`.
+- `set --schedule <cron>` on a default job adds its key. The mark is kept when the job's window
+  and zone are cleared, so a job whose only customisation is its schedule stays exempt.
+- **`set --schedule default` clears it** (§2): it restores the job to the fleet's default schedule
+  for this tenant and removes the key. A job that still has a window or zone entry stays
+  admin-managed by that entry, which is harmless: its schedule is now the fleet default, which the
+  migration never moves. The control plane never needs to delete the file to clear a mark.
+- The mark matters only for a job whose schedule is the old synchronized default, the one schedule
+  the migration moves. The trigger never reads `adminSchedules`.
 
 **Not in the file.**
 
@@ -83,7 +117,7 @@ the other two tests. The control plane changes it with one non-interactive comma
   reconcile already keeps. There is one source of truth, and nothing was added for it.
 
 **Written only by `install/jobs.ts`**, holding the jobs lock (§2). The write goes to a temp file
-then a rename, mode 0600, in a 0700 directory (`replaceSettingsFile`, job-settings.ts:525). **The
+then a rename, mode 0600, in a 0700 directory (`replaceSettingsFile`, job-settings.ts:583). **The
 control plane never writes this file directly**, not even to repair it. It changes it only through
 the commands, which validate every value and keep the other jobs' entries.
 
@@ -91,6 +125,15 @@ the commands, which validate every value and keep the other jobs' entries.
 
 Run each command from the overlay checkout, with the same `HERMES_HOME` and user as the installer.
 Pass every value as its own argv element, never through `sh -c`.
+
+**Environment.** `HERMES_HOME` must point at the tenant's home; it is the only environment the
+tool reads about the tenant. Everything else about the tenant comes from files under it:
+`cron/jobs.json`, `av-events/job-settings.json`, `.env` (`HERMES_TIMEZONE`, and `INDEX_API_KEY`,
+the stagger seed) and `config.yaml` (`timezone`). The caller's own `HERMES_TIMEZONE` is never read,
+and is removed from the environment the tool starts Hermes with, so Hermes's CLI reads the same two
+files (`defaultContext`, jobs.ts). Two things outside the tenant still come from the environment:
+the Hermes binary is found as the installer finds it (`HERMES_BIN`, then fixed paths, then `PATH`),
+and the preview gate reads `AV_TEAM_TENANT` as §5 says (process environment first, then `.env`).
 
 **Output.** Every command prints **exactly one line of JSON on stdout**:
 `{"ok":true,...}` or `{"ok":false,"error":"<code>",...}`. Nothing in that line is free text from
@@ -100,9 +143,24 @@ Treat stderr as untrusted diagnostics from the tenant. Never parse it, and never
 model.
 
 **Bounds.** Each flag may appear once, and only the command's own flags are accepted. Every value
-is at most 200 characters (`MAX_ARG_CHARS`, jobs.ts:105); a longer one is refused as
-`missing-value`. A schedule is also at most 100 characters (§3). `--allow-frequent` is a switch
-with no value, and is accepted only alongside `--schedule`.
+is at most 200 characters (`MAX_ARG_CHARS`, jobs.ts:117); a longer one is refused as
+`missing-value`. A schedule a caller passes is also at most 100 characters (the input bound, §3);
+the canonical form the tool stores and reads back may be up to 346 (the canonical bound, §3).
+`--allow-frequent` is a switch with no value, and is accepted only alongside `--schedule`.
+
+**Hermes's job store.** Every command reads `$HERMES_HOME/cron/jobs.json` (`readJobsStore`,
+jobs.ts:293). No file means no jobs, as Hermes reads it, and so does an object without `jobs`. A
+file that is present but is not a regular file, is over 16 MiB (`MAX_JOBS_STORE_BYTES`), cannot be
+read, is not JSON, or is not `{"jobs": [...]}` is **unreadable**, never "no jobs":
+
+- `list` answers `{"ok":true,"store":"unreadable",...,"jobs":[],"missing":[],"unreadable":[]}`, so
+  a caller never reads it as "every job missing, run a roll";
+- `set`, `add`, `remove` and `preview` refuse `jobs-store-unreadable`, exit 1, `applied: []`,
+  after the lock and before anything changes. Found part-way (the store became unreadable after a
+  step), the same code comes with `applied` saying what was done.
+
+Hermes repairs some shapes on its own next write (a bare list, an id-keyed map, control characters
+in strings); this tool treats them as unreadable until then. Reconcile's own reader is unchanged.
 
 **The lock.** `set`, `add`, `remove` and `preview` each run holding one exclusive lock per tenant,
 `$HERMES_HOME/av-events/jobs.lock`.
@@ -115,6 +173,16 @@ with no value, and is accepted only alongside `--schedule`.
   retry after a short delay.
 - A command killed mid-way (a control-plane timeout) leaves the lock. Others then get `busy` for at
   most 150 s.
+- **Every Hermes command is killed (SIGKILL) after 60 s** (`HERMES_TIMEOUT_MS`, jobs.ts:124; also
+  `hermes --version`, which then reads as `hermes-unavailable`). That step fails with
+  `hermes-timeout`, exit 1; `applied` is read back from `jobs.json`, so it names the step if Hermes
+  saved before it was killed.
+- **A holder that runs past the stale time cannot write over the next one.** Before each write
+  (each Hermes command, each settings or `installed_jobs.json` write, each shim copy) the holder
+  checks that the lock file still holds its own token, and that the step can end before its lock
+  goes stale (a Hermes command needs its full 60 s: none starts after 90 s of holding). If not, it
+  stops with `lock-lost`, exit 1, writes nothing more (not even `add`'s rollback), and leaves the
+  lock file to whoever holds it now. `applied` says what it did before.
 - Grammar refusals are answered before the lock is taken, so a malformed request is never told
   `busy`. `list` takes no lock.
 - Reconcile does not take this lock. The control plane's own per-tenant lease must keep job
@@ -142,18 +210,21 @@ worth retrying from one that is not. That is why exit 1 means "read back first",
 | `missing-flag` | 2 | `flag` | a required flag absent, or `--allow-frequent` without `--schedule` | no |
 | `nothing-to-set` | 2 | | `set` with no change flag | no |
 | `invalid-job`, `invalid-template` | 2 | | not a job key / template name | no |
-| `invalid-schedule` | 2 | | outside the schedule grammar (§3) | no |
+| `invalid-schedule` | 2 | | outside the schedule grammar (§3); or `--schedule default` on a template job, which has no fleet default | no |
 | `invalid-window`, `invalid-tz`, `invalid-enabled` | 2 | | outside its grammar; `add` also refuses `default` | no |
 | `schedule-never-fires` | 2 | | no run at all: croniter's impossible dates, or 29 February alone (§3) | no |
 | `schedule-frequent` | 2 | | fires more than once in some hour, without `--allow-frequent` | only with `--allow-frequent`, if meant |
 | `schedule-outside-window` | 2 | `schedule`, `window`, `tz` | no run lands in the window on any day of the coming year (§3) | no |
-| `hermes-zone-unknown` | 2 | | a window check is needed, and Hermes's zone is unset, not a zone Hermes accepts, or set to two different zones (§3) | after the tenant's zone is fixed (a roll sets it) |
+| `hermes-zone-unknown` | 2 | | a window check is needed, and Hermes's zone is unset in both `$HERMES_HOME/.env` and config.yaml, a set name is not one Hermes accepts, or the two name different zones (§3) | only after the zone is fixed. A roll fixes only the unset case: it writes config.yaml `timezone: Asia/Kolkata` when neither is set (`configureVillageTimezone`). It leaves a wrong or disagreeing value as it is (it only warns), so a person corrects `HERMES_TIMEZONE` in `.env` or `timezone` in config.yaml, then restarts the gateway |
 | `job-not-installed` | 2 | `job` | no Hermes job by that name: a default job needs a roll; a template job needs `add` | no |
 | `job-ambiguous` | 2 | `job`, `count` | two or more Hermes jobs carry the name | no; a person removes the extra one |
 | `job-unreadable` | 2 | `job` | a job by that name has an id that is not Hermes's (`^[0-9a-f]{12}$`). Nothing is acted on, and the id is never passed to Hermes or printed. For `preview` the job is `"preview"`. | no; a person looks (a roll removes a retired or preview name) |
 | `not-team-tenant` | 3 | | `preview` on a tenant without `AV_TEAM_TENANT=1` (§5) | no |
 | `busy` | 4 | | the jobs lock is held | **yes** |
 | `hermes-failed` | 1 | `step`, `applied`; `removed` (remove), `resumeMayFire` (reanchor) | a Hermes command exited non-zero. `step` is one of `schedule`, `enabled`, `reanchor`, `create`, `edit`, `remove`, `remove-previous`. | read back, then once |
+| `hermes-timeout` | 1 | as `hermes-failed` | a Hermes command ran past 60 s and was killed; `applied` is read back from `jobs.json` | read back, then once; again, alert (the CLI hangs) |
+| `lock-lost` | 1 | `applied` | the jobs lock was taken over (this command ran past its stale time), or the next Hermes command could not end before it would be; nothing more was written | read back, then once |
+| `jobs-store-unreadable` | 1 | `applied` (`[]` when refused at the start) | `cron/jobs.json` is present and unreadable (§2, "Hermes's job store"); `list` says `store: "unreadable"` | no; a person looks |
 | `hermes-unavailable` | 1 | `applied: []` | the Hermes CLI does not run. Nothing changed. | yes, later (a restart may be in progress) |
 | `settings-write-failed` | 1 | `applied` | the settings file could not be written | read back, then once |
 | `prompt-missing`, `shim-missing` | 1 | `applied: []` | the overlay's prompt or shim is not installed. Nothing changed. | after a roll |
@@ -161,31 +232,33 @@ worth retrying from one that is not. That is why exit 1 means "read back first",
 | `schedule-readback-mismatch` | 1 | `applied` | after the edit or create, Hermes holds a schedule other than the canonical form sent | no; alert |
 | `fault` | 1 | `applied` | an unexpected error (a bug) | no; alert |
 
-`applied` is accurate on every failure, `fault` included. If Hermes exits non-zero after it saved
-the change, the tool reads `jobs.json` back, and `applied` names that step too.
+`applied` is accurate on every failure, `fault` included. If Hermes exits non-zero (or is killed)
+after it saved the change, the tool reads `jobs.json` back, and `applied` names that step too.
 
 ### `list`
 
 `bun install/jobs.ts list` is read-only and takes no lock.
 
 ```json
-{"ok":true,"settings":"absent"|"ok"|"invalid:<code>","jobs":[{...}],"missing":["<default key>"],"unreadable":["<key>"]}
+{"ok":true,"store":"ok"|"unreadable","settings":"absent"|"ok"|"invalid:<code>","adminSchedulesInvalid":true?,"jobs":[{...}],"missing":["<default key>"],"unreadable":["<key>"]}
 ```
 
 | Field | Meaning |
 | --- | --- |
+| `store` | `ok`, or `unreadable`: `cron/jobs.json` is present and cannot be read (§2). Then `jobs`, `missing` and `unreadable` are empty; it never means "run a roll". |
 | `settings` | the file's state: absent, valid, or refused whole with a file code (§3) |
+| `adminSchedulesInvalid` | `true` when the file's `adminSchedules` is present and not a list (every default job is then admin-managed, §1); absent otherwise |
 | `jobs[].key` | the job key |
 | `jobs[].id` | the Hermes id (always 12 hex characters) |
 | `jobs[].name` | the job's fixed Hermes name, from the overlay |
-| `jobs[].schedule` | the stored schedule in canonical form, or `null` when it is not canonical (set by hand, or not a cron expression) |
+| `jobs[].schedule` | the stored schedule in canonical form (up to 346 characters), or `null` when it is not canonical (set by hand, or not a cron expression). Every schedule these commands set reads back here. |
 | `jobs[].scheduleUnreadable` | `true` when `schedule` is `null` (absent otherwise) |
 | `jobs[].enabled` | Hermes's pause state: `false` when paused |
 | `jobs[].window` | the effective window `HH:MM-HH:MM`, or `null` for none |
 | `jobs[].tz` | the effective window zone |
 | `jobs[].settings` | `absent` (no file), `default` (no entry), `custom` (the entry is used) or `invalid:<code>` (`entry`, `window` or `tz`, or a file code) |
-| `jobs[].adminSchedule` | `true` when the key is in `adminSchedules` |
-| `missing` | default jobs with no Hermes job (a roll recreates them) |
+| `jobs[].adminSchedule` | `true` when the job is admin-managed, by the same rule reconcile uses (§1): its key is in `adminSchedules`, it has an entry, or the file (or its `adminSchedules`) is unreadable. Always `false` for a template job. |
+| `missing` | default jobs with no Hermes job (a roll recreates them); only with `store: "ok"` |
 | `unreadable` | keys whose Hermes job has an id outside Hermes's shape. These jobs are left out of `jobs`. |
 
 Template jobs appear only when added. A key whose name has two jobs appears twice.
@@ -193,11 +266,12 @@ Template jobs appear only when added. A key whose name has two jobs appears twic
 ### `set`
 
 ```
-bun install/jobs.ts set --job <key> [--schedule "<cron>" [--allow-frequent]] [--window HH:MM-HH:MM|default] [--tz <zone>|default] [--enabled true|false]
+bun install/jobs.ts set --job <key> [--schedule "<cron>"|default [--allow-frequent]] [--window HH:MM-HH:MM|default] [--tz <zone>|default] [--enabled true|false]
 ```
 
-It refuses in this order: grammar, lock, job lookup, Hermes availability, the window check. Then
-it runs three steps in order and stops at the first failure (`setCommand`, jobs.ts:527):
+It refuses in this order: grammar, lock, the job store, job lookup, Hermes availability, the window
+check. Then it runs three steps in order and stops at the first failure (`setCommand`,
+jobs.ts:731):
 
 1. **The schedule**, if given and different from the stored one. It runs
    `hermes cron edit <id> --schedule <canonical>`, then reads the schedule back and compares it
@@ -206,10 +280,20 @@ it runs three steps in order and stops at the first failure (`setCommand`, jobs.
    (line 2002), so the next run stays stale until resume (below).
 2. **The settings**, whenever `--schedule`, `--window` or `--tz` is given. The entry is merged:
    named fields are set or removed, other valid fields are kept, and invalid ones are dropped. An
-   empty entry is deleted. `--schedule` on a default job adds its key to `adminSchedules`. Written
-   only if the bytes change.
+   empty entry is deleted. `--schedule <cron>` on a default job adds its key to `adminSchedules`;
+   `--schedule default` removes it. Written only if the bytes change.
 3. **Enabled**: `hermes cron pause|resume <id>`, only when the job's state differs. A pause or
    resume alone is never refused and needs no window check.
+
+**`--schedule default`** (default jobs only; a template job is refused `invalid-schedule`) gives the
+job back to the fleet. The schedule becomes the fleet's default for this tenant as reconcile
+computes it (`defaultScheduleFor`, install_index.ts:529; `fleetDefaultCron`, jobs.ts:725): the
+job's staggered minute for the tenant's seed, `INDEX_API_KEY` as the installer persisted it in
+`$HERMES_HOME/.env`, or the spec's own schedule when there is none. It is checked against the
+window like any schedule, and the job's admin mark is cleared, so the next roll owns the schedule
+again (tested over two consecutive rolls, and a later legacy schedule is migrated again). An
+install-time override (`--digest-send-cron`, `DIGEST_SEND_CRON` and the like) lives only in a
+roll's own arguments and environment and is not seen here. Run again, it changes nothing.
 
 Success line:
 
@@ -221,6 +305,7 @@ Success line:
 | --- | --- |
 | `changed` | the steps that changed something, in order: `"schedule"`, `"settings"` (whenever the settings file's bytes changed: written, replaced or removed), `"enabled"` |
 | `schedule` | the canonical schedule now in force, or `null` with `scheduleUnreadable: true` |
+| `adminSchedule` | present when `--schedule` was given: whether the job is admin-managed now (§1). `false` after `--schedule default`, unless a window or zone entry keeps it managed. |
 | `enabled`, `window`, `tz` | the state after the command |
 | `check: "skipped"` | the job has a window, but its stored schedule is not canonical, so it could not be checked |
 | `warning: "window-seasonal"`, `outsideFrom` | the schedule lands in the window on only some days of the year (§3). `outsideFrom` is the first such date, `YYYY-MM-DD` in the job's zone. |
@@ -252,8 +337,9 @@ Hermes's clock) before resuming.
     (`tools/cronjob_tools.py:837-842`; `cron/jobs.py:1994-2004`; `compute_next_run` with no last
     run, :1163-1172). It also drops any pending slot (:2054-2057).
   - So the missed run does not fire. The reply says `missedSlot: "dropped"`.
-  - **Residual race:** the two Hermes commands are separate processes, about a second or two
-    apart. A tick that falls between them can still fire the catch-up. Hermes v2026.9.24 has no
+  - **Residual race:** the two Hermes commands are separate processes. The gap between them is
+    one Hermes CLI start, which can be several seconds on a loaded container (and at most the
+    60 s timeout). A tick that falls in it can still fire the catch-up. Hermes v2026.9.24 has no
     atomic "resume without catch-up".
 - If the job **has a window**, the catch-up is left alone, and the window gates it: it delivers
   at resume time only if that time is inside the window and the job has not delivered that
@@ -277,7 +363,7 @@ bun install/jobs.ts add --template <brief|digest-preview|evening-ask> --schedule
 ```
 
 `add` creates the template's job, or brings an existing one to this schedule and shape
-(`addCommand`, jobs.ts:640). It never creates two jobs. It refuses `default` for the window and
+(`addCommand`, jobs.ts:850). It never creates two jobs. It refuses `default` for the window and
 the zone.
 
 1. **The settings first**, so the job never runs, not even once, without its window. They are
@@ -311,7 +397,7 @@ Success line:
 bun install/jobs.ts remove --template <name>
 ```
 
-`removeCommand`, jobs.ts:756, removes every job of that name, its ids in `installed_jobs.json`,
+`removeCommand`, jobs.ts:973, removes every job of that name, its ids in `installed_jobs.json`,
 and its settings entry. An emptied file is removed. If the file is unreadable it is left alone.
 
 ```json
@@ -345,11 +431,11 @@ created. See §5.
 
 ### Schedule
 
-`parseStrictCron`, job-settings.ts:213:
+`parseStrictCron`, job-settings.ts:231; `parseStoredCron`, :242:
 
 - Exactly five fields: minute, hour, day of month, month, day of week.
 - Only `0-9 * , - /`, with **one space between fields** and none before or after. At most 100
-  characters.
+  characters (the input bound, `MAX_SCHEDULE_INPUT_CHARS`).
 - Every number inside its field's range. Day of week is 0 (Sunday) to 6.
 - `a-b` needs `b` above `a`. **A degenerate range `a-a` is refused, with or without a step**,
   because croniter reads it as the whole field (croniter.py:991). A reversed range is refused.
@@ -372,6 +458,24 @@ is the field's maximum, that becomes a degenerate range, read as `*/s`:
 Explicit lists have no such reading. After every edit and create, the stored schedule is read
 back and compared with the canonical form (`schedule-readback-mismatch` otherwise).
 
+**Two bounds.** What a caller may pass and what the tool may store are separate:
+
+- **The input bound: 100 characters** (`MAX_SCHEDULE_INPUT_CHARS`, job-settings.ts:184), for what
+  `--schedule` accepts.
+- **The canonical bound: 346 characters** (`MAX_CANONICAL_SCHEDULE_CHARS`, :194), for what the tool
+  stores and reads back (`parseStoredCron`: canonical exactly, up to 346). It is the longest
+  canonical form any accepted input produces, computed from the field ranges: a field's longest
+  canonical form lists every value but one shortest one (all of them is `*`), which is 167, 59,
+  81, 24 and 11 characters for the five fields, plus four spaces. A 23-character input reaches it
+  (`1-59 1-23 2-31 2-12 1-6`), and a 15-character one already passes 100
+  (`0 6-20 1-28 * *`, 121). So every schedule the tool sets reads back: `list` shows it, a later
+  `--window` checks it, and a resume can re-anchor it. A stored schedule that is not canonical is
+  still not guessed at (`null`, `check: "skipped"`), whatever its length.
+
+Both are tested: the figure by brute force over every subset size of every field, and as a
+property over 6,000 generated expressions (every accepted one reads back), and end to end
+(`set` then `list` round-trips to the same canonical string, the 346-character form included).
+
 **Days.** A field that lists every value is `*`. So `1-31` is every day, and `0 8 1-31 * 1`
 means Mondays only, which is also what croniter does with the canonical `0 8 * * 1`. When day of
 month and day of week are both restricted, a day matches either. That is croniter's default
@@ -390,7 +494,7 @@ expression the test checks three things:
 Its generator sits beside it: `croniter-fixture-input.ts` and `croniter_fixture.py`, run once
 with the Hermes venv's Python. The suite needs no Python.
 
-**Never fires** (`cronNeverFires`, job-settings.ts:240; `cronLeapDayOnly`, :252). These are
+**Never fires** (`cronNeverFires`, job-settings.ts:274; `cronLeapDayOnly`, :286). These are
 refused as `schedule-never-fires`:
 
 - A restricted day of month that none of the listed months has: `0 8 31 2 *`, `0 8 30 2 *`,
@@ -401,7 +505,7 @@ refused as `schedule-never-fires`:
 - 29 February alone (`0 8 29 2 *`). croniter accepts it, but it runs once in four years; the tool
   refuses it so that every accepted schedule fires within any year.
 
-**Frequency floor** (`cronFrequent`, :261). A schedule with two or more minute values fires more
+**Frequency floor** (`cronFrequent`, :295). A schedule with two or more minute values fires more
 than once in some hour. `set` and `add` refuse it as `schedule-frequent` unless `--allow-frequent`
 is passed; the reply then says `"frequent": true`. One minute value with several hours
 (`30 16,17 * * *`) is not frequent.
@@ -428,7 +532,7 @@ well.
 
 ### Hermes's zone
 
-`hermesZone`, jobs.ts:402. Hermes reads every schedule in one zone per tenant, and it reads that
+`hermesZone`, jobs.ts:576. Hermes reads every schedule in one zone per tenant, and it reads that
 zone in two places.
 
 - **Hermes's CLI** computes the next run on `cron create`, `edit` and `resume`
@@ -438,29 +542,49 @@ zone in two places.
 - **The gateway**, whose ticker fires the jobs, copies config.yaml's `timezone` over
   `HERMES_TIMEZONE` at startup (`gateway/run.py:2087-2089`). So there config.yaml wins.
 
-The tool therefore reads both: `HERMES_TIMEZONE` (the `.env` value, else the process
-environment) and config.yaml's `timezone`. If they are set to different zones, the CLI and the
-ticker would disagree, and the zone is unknown. Because a disagreement is refused, the order
-between the two cannot change a result. The zone is also unknown when neither is set (Hermes
-would use the host's local time), or when the name is not one Hermes accepts (it would log a
-warning and fall back to local time).
+The tool therefore reads both, **from the tenant's files only**: `HERMES_TIMEZONE` in
+`$HERMES_HOME/.env` (as python-dotenv reads it) and `timezone` in `$HERMES_HOME/config.yaml`. The
+caller's process environment is never read for the zone, and the caller's `HERMES_TIMEZONE` is not
+passed on to Hermes, so the CLI the tool starts reads the same two (§2, "Environment").
+
+**Two names of one zone agree.** Each set name is resolved to its canonical IANA zone first
+(`canonicalZone`, jobs.ts:529): the runtime's own resolution, then a small table of the links the
+runtime does not resolve (`ZONE_LINKS`, :517): `Asia/Calcutta` to `Asia/Kolkata` (the installer's
+two names for the village zone, `install/config.ts` `VILLAGE_ZONE_NAMES`), and `UTC`, `UCT`,
+`Universal`, `Zulu`, `Etc/UCT`, `Etc/Universal`, `Etc/Zulu` to `Etc/UTC`. (Bun resolves no link; a
+runtime on ICU resolves the other way, `Asia/Kolkata` to `Asia/Calcutta`; the table applies after
+either, so both ends meet.) So `.env` `Asia/Calcutta` with config.yaml `Asia/Kolkata` is one zone.
+Any other pair of different names is two zones.
+
+If they are set to different zones, the CLI and the ticker would disagree, and the zone is
+unknown. Because a disagreement is refused, the order between the two cannot change a result. The
+zone is also unknown when neither is set (Hermes would use the host's local time), or when either
+set name is not one Hermes accepts (it would log a warning and fall back to local time).
 
 An unknown zone is refused as `hermes-zone-unknown`, and only when a window check needs it. It is
-never assumed to be Asia/Kolkata.
+never assumed to be Asia/Kolkata. A roll fixes only an unset zone (it writes config.yaml
+`timezone: Asia/Kolkata` when neither source is set); a wrong or disagreeing value it leaves, with
+a warning, for a person to correct (§2, the code's retry note).
 
 Accepted names are those Hermes's zoneinfo takes: `Asia/Kolkata`, `Asia/Calcutta`, `Etc/UTC`,
 `Etc/GMT+5`, `US/Eastern`, `UTC`, `EST5EDT`. The name must use IANA capitalisation and be known to
-this runtime's zone database (`isHermesZoneName`, jobs.ts:378). The installer sets config.yaml's
+this runtime's zone database (`isHermesZoneName`, jobs.ts:498). The installer sets config.yaml's
 `timezone` to Asia/Kolkata (`install/config.ts` `configureVillageTimezone`).
 
 ### Schedule against window
 
-`scheduleWindowFit`, job-settings.ts:364; `windowCheck`, jobs.ts:427. Whenever `set` or `add`
+`scheduleWindowFit`, job-settings.ts:403; `windowCheck`, jobs.ts:596. Whenever `set` or `add`
 changes a job's schedule, window or zone and the job has a window, the schedule is checked
-against the window. It is read in Hermes's zone, firing by firing, for **a full year** from now
-(`WINDOW_CHECK_DAYS = 366`), so both DST changes of any zone fall inside the check. Only days on
-which the schedule runs count (month, day of month, day of week). A day lands when at least one of
-its firings is in the window, read in the job's zone.
+against the window. It is read in Hermes's zone, firing by firing, for **a full year of whole
+days** starting with today in Hermes's zone (`WINDOW_CHECK_DAYS = 366`), so both DST changes of any
+zone fall inside the check. Only days on which the schedule runs count (month, day of month, day of
+week). A day lands when at least one of its firings is in the window, read in the job's zone.
+
+**Whole days only.** Today counts all its firings, those already past included, so the answer
+does not depend on the time of the call: `0 6,12 * * *` with window `05:00-11:00` is accepted
+with no warning whether it is checked at 00:00, 07:00 or 13:00 (before fix round 2, a call at
+07:00 dropped the 06:00 firing and called the day a miss). Tested from all 24 hours of a day, with
+a real DST case still warning with the same `outsideFrom`.
 
 | Result | The command |
 | --- | --- |
@@ -473,11 +597,12 @@ For example, `0 18 * * *` village time with window `08:00-09:00` America/New_Yor
 `outsideFrom: "2026-11-01"`.
 
 A stored schedule that is not canonical cannot be checked; the reply then says
-`"check":"skipped"`.
+`"check":"skipped"`. Every schedule the tool itself set is canonical and within the canonical
+bound, so it is always checked.
 
 ### Reading at run time
 
-`readJobSettings` / `deliveryFor`, job-settings.ts:406 and :483. The read never throws, and it
+`readJobSettings` / `deliveryFor`, job-settings.ts:445 and :541. The read never throws, and it
 never widens a window.
 
 - **The file is refused whole** when it is not a regular file, is over 64 KiB, cannot be read, is
@@ -495,24 +620,26 @@ that writes the file drops them.
 ## 4. What survives a roll
 
 A roll runs `reconcileDigestCronJobs` (`install/install_index.ts`). It edits an existing job's
-**shape** in place: prompt, script, agent mode and failure target (`staleShapeFields`, :487;
-`cronEditArgs`, :471). Hermes keeps the id, the schedule, the pause state and the next run on an
+**shape** in place: prompt, script, agent mode and failure target (`staleShapeFields`, :496;
+`cronEditArgs`, :480). Hermes keeps the id, the schedule, the pause state and the next run on an
 edit (header, :28-34). Reconcile never writes `job-settings.json`. It reads it only to see which
-jobs are admin-managed.
+jobs are admin-managed, by the rule `list` reports (`scheduleAdminManaged`, §1).
 
 | What | Survives a roll? | Where |
 | --- | --- | --- |
-| A default job's custom schedule | yes, never compared | `scheduleStale`, install_index.ts:751 |
-| A default job's schedule set by an admin to the old synchronized default (`0 8 * * *`) | yes: the job is admin-managed (an entry, or its key in `adminSchedules`, which `set --schedule` always writes) and skipped by the legacy migration | `adminManaged`, :679; used at :751 |
-| The legacy migration for a job that is not admin-managed | unchanged from rc13 | :751 |
-| An unreadable settings file, or a malformed `adminSchedules` | every default job counts as admin-managed | :679-685 |
+| A default job's custom schedule | yes, never compared | `scheduleStale`, install_index.ts:774 |
+| A default job's schedule set by an admin to the old synchronized default (`0 8 * * *`) | yes: the job is admin-managed (an entry, or its key in `adminSchedules`, which `set --schedule` always writes) and skipped by the legacy migration | `adminManaged`, :699; used at :774 |
+| The legacy migration for a job that is not admin-managed | unchanged from rc13 | :774 |
+| An entry of `adminSchedules` that is not a default job key | ignored on its own; the other entries still count | `adminScheduleKeys`, job-settings.ts:487 |
+| An unreadable settings file, or an `adminSchedules` that is not a list | every default job counts as admin-managed, and reconcile logs a warning saying so | :699-707 |
+| A job given back with `set --schedule default` | its schedule is the fleet default, which the migration never moves; with no mark, the roll owns it again (a later legacy schedule is migrated as on rc13) | §2 |
 | Pause state (enabled) | yes, `cron edit` keeps it | header :28-34; Hermes `cron/jobs.py:1994` |
 | Window, zone and `adminSchedules` | yes, reconcile never writes the file | (no reference: reconcile has no write) |
-| A template job (`Edge — template: <name>`, template still in `TEMPLATE_NAMES`) | kept, with its id, schedule and pause state; its shape is edited like a default job's; it is listed in `installed_jobs.json`; it is never created by reconcile | retire filter :694; template loop :715 |
-| A job a resident created under exactly a template's name | **adopted**: reconcile treats it as the template job and rewrites its prompt and script | template loop :715 |
-| A near-name of a template (`Edge — template: Brief`) or a retired template's job | removed, like any `Edge —` name that is not current, which is the existing prefix rule | :694 |
-| A leftover `Edge — preview` job | removed, whatever its age; a roll in the minute before a preview fires cancels that preview | :694 |
-| Preview state copies and preview shims older than an hour | removed | `prunePreviewFiles`, :687 |
+| A template job (`Edge — template: <name>`, template still in `TEMPLATE_NAMES`) | kept, with its id, schedule and pause state; its shape is edited like a default job's; it is listed in `installed_jobs.json`; it is never created by reconcile | retire filter :717; template loop :738 |
+| A job a resident created under exactly a template's name | **adopted**: reconcile treats it as the template job and rewrites its prompt and script | template loop :738 |
+| A near-name of a template (`Edge — template: Brief`) or a retired template's job | removed, like any `Edge —` name that is not current, which is the existing prefix rule | :717 |
+| A leftover `Edge — preview` job | removed, whatever its age; a roll in the minute before a preview fires cancels that preview | :717 |
+| Preview state copies and preview shims older than an hour | removed | `prunePreviewFiles`, :710 |
 | A fleet change to a prompt, a script or agent mode | still applied to every job, including admin-managed and template jobs | template loop and spec loop |
 | A fleet change to a default window or zone | reaches every job without an override (defaults live in code, not the file) | `DEFAULT_WINDOWS`, job-settings.ts:65 |
 
@@ -524,7 +651,7 @@ that keeps `jobs.json`: `install/tests/job_commands.test.ts`, "what a roll keeps
 **The signal.** On rc13 the overlay cannot tell a team tenant from a resident. Team status
 (`isTeam`, `AV_EMIT_IS_TEAM`) lives only in the control plane, derived from
 `CONTROL_PLANE_TEAM_EMAILS`. This PR adds one variable that the tenant reads: `AV_TEAM_TENANT`
-(`isTeamTenant`, job-settings.ts:559).
+(`isTeamTenant`, job-settings.ts:617).
 
 - The tenant is a team tenant only when the value is exactly `1` once surrounding whitespace is
   trimmed. Nothing else counts: no quote stripping, so `"1"` is refused, and so are `1 # team`,
@@ -558,7 +685,7 @@ Write exactly `AV_TEAM_TENANT=1`, with no quotes.
 **Two gates.**
 
 1. `jobs.ts preview` refuses (exit 3) before taking the lock or creating anything.
-2. The trigger refuses too (`runPreview`, proactive.ts:838). A preview job that reaches a non-team
+2. The trigger refuses too (`runPreview`, proactive.ts:832). A preview job that reaches a non-team
    tenant by any route stays silent (`preview-refused`): the model is never woken, so nothing is
    delivered.
 
@@ -573,7 +700,7 @@ a manual run to the gateway when delivery is relay-fronted (`_forward_relay_fron
 - The job delivers to telegram with failure target `local`.
 - Its script is the shim under the name `agentvillage_proactive_preview-<key>.sh`, which runs
   `proactive.ts <key> --preview`.
-- Its prompt is `PREVIEW_PREAMBLE` (jobs.ts:89) followed by the job's own prompt. The preamble
+- Its prompt is `PREVIEW_PREAMBLE` (jobs.ts:101) followed by the job's own prompt. The preamble
   tells the model to start the reply with the line `[TEST PREVIEW]`.
 - Every earlier `Edge — preview` job is removed first, so there is one at a time.
 
@@ -584,9 +711,11 @@ a manual run to the gateway when delivery is relay-fronted (`_forward_relay_fron
 - reads the state file once, without the lock (every write of it is a rename), into a private
   copy under `av-events/proactive/preview-*/`;
 - runs the content path against that copy. The copy is deleted afterwards, on the normal path and
-  on the 100 s hard-deadline exit (`hardStopCleanup`, proactive.ts:817);
+  on the 100 s hard-deadline exit (`hardStopCleanup`, proactive.ts:811, called by `main`'s
+  deadline timer; tested end to end in a child process that runs the real `main` with a 300 ms
+  deadline and a content path that never returns, `fixtures/proactive-deadline-child.ts`);
 - applies no record, writes no day mark, stages no outcome ask, and clears no real stage
-  (proactive.ts:703; tested: a seeded stage file is left byte for byte).
+  (proactive.ts:701; tested: a seeded stage file is left byte for byte).
 
 A preview before the real run, or after it, changes nothing the real run reads. The Script Output
 is the real run's, and no message wording changed.
@@ -600,7 +729,7 @@ is the real run's, and no message wording changed.
 | A private state copy `av-events/proactive/preview-XXXXXX/` | only when the trigger was killed outright (for example by Hermes's script timeout) before its own cleanup; removed by the first preview (the trigger's or the command's) or roll more than an hour later |
 
 Each preview and each roll prunes state copies and shims older than one hour
-(`prunePreviewFiles`, job-settings.ts:590). Only those exact name shapes are touched, never
+(`prunePreviewFiles`, job-settings.ts:648). Only those exact name shapes are touched, never
 symlinks or anything younger.
 
 **Limit: the prefix is not guaranteed.** The model writes the `[TEST PREVIEW]` line because the
@@ -627,7 +756,7 @@ job (§2).
 - The evening template skips the outcome ask. The av-events plugin arms the ask for the
   installer's `Edge — evening questions` job only (`plugins/av-events/_outcome_ask.py`
   `staged_action`). From any other job the ask would go out unrecorded and be asked again
-  (proactive.ts:703-710).
+  (proactive.ts:701-708).
 - Template job names are not in `cron_job_names.json`, so `cron.run` reports their `job_name` as
   null. No seed change, so no data release is needed.
 
@@ -636,7 +765,11 @@ job (§2).
 **rc13 parity.** With no settings file:
 
 - The brief's gate opens on exactly rc13's minutes. Every job decides as on origin/main at every
-  30 s over 48 hours (tested for all five).
+  30 s over 48 hours (tested for all five). The test compares the trigger's live decision path
+  (`windowDecision`, proactive.ts:759, which `runAgentAction` calls) against rc13's decision
+  frozen as a fixture, copied verbatim from origin/main at `9ff10b9`
+  (`skills/index-network/scripts/tests/fixtures/rc13-decision.ts`, never edited), so it cannot
+  drift with the source. The trigger no longer carries rc13's `inBriefWindow`.
 - No other job has a window.
 - The wake lines, the state and the log line are unchanged, with no `settings` key.
 
@@ -731,11 +864,14 @@ New detail: `outcome-ask-template-job`.
    tenant, and restart its gateway to end the lag (§5).
 2. **Change jobs and settings only through `bun install/jobs.ts`.** Never write `jobs.json` or
    `job-settings.json` directly, not even to repair one. Pass every value as its own argv
-   element, never through `sh -c`.
+   element, never through `sh -c`. Run it with `HERMES_HOME` set to the tenant's home (§2,
+   "Environment"); the caller's own `HERMES_TIMEZONE` makes no difference.
 3. **Handle exit codes as §2 says.**
    - Exit 0 is done; still read `warning`, `resumeMayFire` and `replaced`.
    - Exit 2 means nothing changed: fix the input.
    - Exit 1 means read back with `list` and re-issue once, then alert. It is not "retry".
+     `jobs-store-unreadable` is the exception: alert at once, and do not run a roll for it.
+   - `list` with `store: "unreadable"` is not "jobs missing": alert, never roll.
    - Exit 3 means not a team tenant.
    - Exit 4 (`busy`) means retry after a few seconds.
 4. **Disable a job with `set --enabled false`, never by removing it.** Reconcile recreates a
@@ -755,20 +891,50 @@ New detail: `outcome-ask-template-job`.
 9. **Resume with care.** `set --enabled true` on a job paused across its slot re-anchors a job
    with no window (`missedSlot: "dropped"`). For a job with a window it reports
    `resumeMayFire: true`; expect a delivery at resume time if that is inside the window (§2).
+10. **Give a default job's schedule back with `set --job <key> --schedule default`**, never by
+    deleting the settings file. It restores the fleet's default for that tenant and clears the
+    admin mark (§1, §2). When `list` says `adminSchedulesInvalid: true`, the next write repairs it
+    (all five marked); clear the ones that should not be marked with `--schedule default`.
+11. **Keep your own command timeout above 150 s**, the jobs lock's stale time. A command never
+    waits on Hermes for more than 60 s per step, and stops with `lock-lost` rather than write past
+    its lock (§2), but a command you kill leaves the lock for up to 150 s (`busy`).
 
 ## 11. Tests
 
-- `skills/index-network/scripts/tests/job-settings.test.ts`: the grammars; the canonical form;
-  the croniter 6.0.0 differential (`fixtures/croniter-6.0.0.json`); never fires and frequency; the
-  year-long window fit with its three results; the reader, `adminSchedules` and the writer; the
+- `skills/index-network/scripts/tests/job-settings.test.ts`: the grammars; the canonical form and
+  its two bounds (the 346 figure by brute force, and a 6,000-expression property that every
+  accepted input reads back); the croniter 6.0.0 differential (`fixtures/croniter-6.0.0.json`);
+  never fires and frequency; the year-long window fit with its three results, from all 24 hours of
+  a day; the reader, `adminSchedules` entry by entry, `scheduleAdminManaged` and the writer; the
   team gate; pruning.
 - `skills/index-network/scripts/tests/proactive-settings.test.ts`: rc13 parity (every minute of a
-  day, and every 30 s over 48 hours for all five jobs); windows, zones and DST; fallbacks; no
-  second send; the template actions; the preview (including a stage file left byte for byte, the
-  hard-deadline cleanup and the prune); the shim names.
+  day, and every 30 s over 48 hours for all five jobs, against `fixtures/rc13-decision.ts`);
+  windows, zones and DST; fallbacks; no second send; the template actions; the preview (including
+  a stage file left byte for byte, the hard-deadline cleanup, in process and through `main` in a
+  child process, and the prune); the shim names.
 - `install/tests/job_commands.test.ts`: every command, every refusal code, idempotency, emptied
   entries, admin schedules, tenant-written text never echoed, resume and the missed slot, add's
   rollback, the lock (including concurrent processes), Hermes's zone, two consecutive rolls,
-  adoption by name, a retired template, the preview job and its leftovers. They run with
-  `install/tests/fake_hermes.ts`, a stand-in Hermes.
-- `skills/index-network/scripts/tests/state-lock.test.ts`: `tryAcquireLock`.
+  adoption by name, a retired template, the preview job and its leftovers; and, from fix round 2,
+  long canonical schedules read back, whole-day window checks, zone links and the caller's
+  environment, `adminSchedules` entry by entry with `list` and reconcile agreeing for every file
+  shape, `--schedule default` over two rolls, Hermes timeouts, a lost lock, and an unreadable
+  store. They run with `install/tests/fake_hermes.ts`, a stand-in Hermes (it can also hang, as a
+  hung CLI would).
+- `skills/index-network/scripts/tests/state-lock.test.ts`: `tryAcquireLock` and `holdsLock`.
+
+## 12. The review's open questions, answered
+
+- **How does a caller recognise an unreadable store?** `list` says `store: "unreadable"` with
+  empty `jobs`, `missing` and `unreadable`; every mutating command refuses `jobs-store-unreadable`,
+  exit 1 (§2). It never reads as "every job missing".
+- **How does a caller see a malformed `adminSchedules`, and clear an admin mark?** `list` says
+  `adminSchedulesInvalid: true` (and every default job `adminSchedule: true`); reconcile logs a
+  warning. An entry that is not a default job key is simply ignored. A mark is cleared with
+  `set --job <key> --schedule default` (§1, §2).
+- **What happens when a holder runs past the stale time?** No Hermes command runs longer than 60 s
+  (`hermes-timeout`), none starts unless it can end before the lock goes stale, and before every
+  write the holder checks the lock is still its own; otherwise it stops with `lock-lost` and writes
+  nothing more (§2).
+- **Which environment must `jobs.ts` run in?** `HERMES_HOME` pointing at the tenant's home; every
+  tenant fact comes from files under it, never from the caller's environment (§2, "Environment").

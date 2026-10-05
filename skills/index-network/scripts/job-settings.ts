@@ -180,6 +180,24 @@ function canonicalField(values: number[], [low, high]: [number, number]): string
   return values.length === high - low + 1 ? "*" : values.join(",");
 }
 
+/** The input bound: a schedule a caller passes is at most this many characters. */
+export const MAX_SCHEDULE_INPUT_CHARS = 100;
+
+/**
+ * The canonical bound: the longest canonical form any accepted input can
+ * produce, so a schedule these commands store always reads back. A field's
+ * longest canonical form lists every value but one (all of them is `*`),
+ * leaving out a shortest value, and a short input reaches it in every field at
+ * once (`1-59 1-23 2-31 2-12 1-6`, 23 characters): 167 + 59 + 81 + 24 + 11
+ * characters and four spaces, 346 (job-settings.test.ts checks the figure).
+ */
+export const MAX_CANONICAL_SCHEDULE_CHARS = FIELD_BOUNDS.reduce((sum, [low, high]) => {
+  const widths = Array.from({ length: high - low + 1 }, (_, i) => String(low + i).length);
+  const all = widths.reduce((total, width) => total + width, 0);
+  // Every value but a shortest one, and one comma fewer than values.
+  return sum + all - Math.min(...widths) + (widths.length - 2);
+}, FIELD_BOUNDS.length - 1);
+
 export interface ParsedCron {
   /**
    * The canonical form, the only form ever sent to Hermes: each field its
@@ -200,7 +218,7 @@ export interface ParsedCron {
 /**
  * A strict five-field cron expression (minute hour day-of-month month
  * day-of-week): digits, `*`, `,`, `-`, `/` and one space between fields, at
- * most 100 characters; numbers inside each field's range (day of week 0-6); a
+ * most MAX_SCHEDULE_INPUT_CHARS (100); numbers inside each field's range (day of week 0-6); a
  * range's end above its start; a step from 1 to the field's width. No names,
  * no `?`, `L`, `W`, `#`, `@daily`, no leading, trailing or doubled spaces.
  * Anything else is null.
@@ -211,7 +229,23 @@ export interface ParsedCron {
  * default `day_or`).
  */
 export function parseStrictCron(text: unknown): ParsedCron | null {
-  if (typeof text !== "string" || text.length > 100 || !CRON_SHAPE_RE.test(text)) return null;
+  return parseCron(text, MAX_SCHEDULE_INPUT_CHARS);
+}
+
+/**
+ * A schedule as stored in Hermes's job record, when it is readable: in
+ * canonical form exactly (every schedule these commands or the installer set
+ * is) and at most MAX_CANONICAL_SCHEDULE_CHARS, so every schedule these
+ * commands set reads back. Any other form is not guessed at, because croniter
+ * can read a non-canonical form differently (`0 23/2 * * *`, `0 8 1-31 * 1`).
+ */
+export function parseStoredCron(text: unknown): ParsedCron | null {
+  const cron = parseCron(text, MAX_CANONICAL_SCHEDULE_CHARS);
+  return cron && cron.expr === text ? cron : null;
+}
+
+function parseCron(text: unknown, maxChars: number): ParsedCron | null {
+  if (typeof text !== "string" || text.length > maxChars || !CRON_SHAPE_RE.test(text)) return null;
   const fields = text.split(" ");
   const parsed = fields.map((field, i) => cronField(field, FIELD_BOUNDS[i]));
   if (parsed.some((values) => values === null)) return null;
@@ -316,12 +350,14 @@ function isoDate(at: number, tz: string): string {
 
 /**
  * Every firing of `cron` in Hermes's zone over `days` calendar days from the
- * day of `from` (firings before `from` skipped), grouped by the Hermes-zone
- * date it runs on. Calendar days come from date arithmetic, firings from the
- * zone: on a day whose offsets do not change the instants are computed from
- * that day's midnight, otherwise one by one.
+ * day of `from`, grouped by the Hermes-zone date it runs on. With `wholeDays`
+ * the first day is whole (its firings before `from` count too), so the result
+ * does not depend on the time of day `from` falls at; without it, firings
+ * before `from` are skipped. Calendar days come from date arithmetic, firings
+ * from the zone: on a day whose offsets do not change the instants are
+ * computed from that day's midnight, otherwise one by one.
  */
-function firingsByDay(cron: ParsedCron, hermesTz: string, from: Date, days: number): number[][] {
+function firingsByDay(cron: ParsedCron, hermesTz: string, from: Date, days: number, wholeDays = false): number[][] {
   const start = wallParts(from, hermesTz);
   const out: number[][] = [];
   const minutesOfDay: number[] = [];
@@ -336,7 +372,7 @@ function firingsByDay(cron: ParsedCron, hermesTz: string, from: Date, days: numb
     const steady = nextMidnight - midnight === 86_400_000;
     const firings = minutesOfDay
       .map((m) => (steady ? midnight + m * 60_000 : wallTimeInstant(year, month, day, Math.floor(m / 60), m % 60, hermesTz)))
-      .filter((at) => at >= from.getTime());
+      .filter((at) => wholeDays || at >= from.getTime());
     if (firings.length > 0) out.push(firings);
   }
   return out;
@@ -358,11 +394,14 @@ export const WINDOW_CHECK_DAYS = 366;
 
 /**
  * Whether a schedule run by Hermes in `hermesTz` lands inside `window` (read
- * in `jobTz`) over a year from `from`, day by day: a day it fires lands when
- * at least one of that day's firings is in the window.
+ * in `jobTz`) over a year of whole days from the Hermes-zone day of `from`,
+ * day by day: a day it fires lands when at least one of that day's firings is
+ * in the window. Whole days only: the day of `from` counts all its firings,
+ * those already past included, so the answer does not depend on the time of
+ * day of the call (a part day would count as a miss).
  */
 export function scheduleWindowFit(cron: ParsedCron, window: DeliveryWindow, jobTz: string, hermesTz: string, from: Date, days = WINDOW_CHECK_DAYS): WindowFit {
-  const byDay = firingsByDay(cron, hermesTz, from, days);
+  const byDay = firingsByDay(cron, hermesTz, from, days, true);
   if (byDay.length === 0) return { fit: "no-firing" };
   let landed = 0;
   let firstMiss: number | null = null;
@@ -436,20 +475,39 @@ export function isDefaultJobKey(value: unknown): value is JobKey {
 
 /**
  * The default jobs whose schedule an admin set (`set --schedule`), from the
- * file's top-level `adminSchedules` list: reconcile's legacy schedule
- * migration never moves them. Only installer code reads it (the trigger
- * ignores the key). `invalid`: the value is not a list of default job keys
- * (or the file is invalid); `keys` then holds the valid members, and
- * reconcile treats every job as admin-managed.
+ * file's top-level `adminSchedules` list. Only installer code reads it (the
+ * trigger ignores the key). Read entry by entry: an entry that is not a
+ * default job key (a key a later release retired, a template key, a non-string)
+ * is ignored on its own and never voids the rest; `ignored` says some were.
+ * `invalid`: the value is there and is not a list at all; `keys` is then empty
+ * and scheduleAdminManaged counts every default job as admin-managed. An
+ * absent or invalid file has no keys and is not `invalid` here (the file's own
+ * state says so).
  */
-export function adminScheduleKeys(read: SettingsRead): { keys: JobKey[]; invalid: boolean } {
-  if (read.status === "absent") return { keys: [], invalid: false };
-  if (read.status === "invalid") return { keys: [], invalid: true };
+export function adminScheduleKeys(read: SettingsRead): { keys: JobKey[]; invalid: boolean; ignored: boolean } {
+  if (read.status !== "ok" || read.adminSchedules === undefined) return { keys: [], invalid: false, ignored: false };
   const raw = read.adminSchedules;
-  if (raw === undefined) return { keys: [], invalid: false };
-  if (!Array.isArray(raw)) return { keys: [], invalid: true };
+  if (!Array.isArray(raw)) return { keys: [], invalid: true, ignored: false };
   const keys = [...new Set(raw.filter(isDefaultJobKey))].sort();
-  return { keys, invalid: keys.length !== raw.length };
+  return { keys, invalid: false, ignored: keys.length !== raw.length };
+}
+
+/**
+ * Whether a job is admin-managed: reconcile's legacy schedule migration never
+ * moves it. The one rule, used by reconcile and by `install/jobs.ts list`
+ * alike. Only a default job can be (a template job's schedule is never
+ * migrated anyway). With no file, none is; with an invalid file, or an
+ * `adminSchedules` that is not a list, every default job is (conservative:
+ * nothing an admin may have set is moved); otherwise a default job is when it
+ * has an entry in `jobs` (its window or zone was checked against its schedule)
+ * or its key is in `adminSchedules`.
+ */
+export function scheduleAdminManaged(key: string, read: SettingsRead): boolean {
+  if (!isDefaultJobKey(key) || read.status === "absent") return false;
+  if (read.status === "invalid") return true;
+  const admin = adminScheduleKeys(read);
+  if (admin.invalid) return true;
+  return Object.prototype.hasOwnProperty.call(read.jobs, key) || admin.keys.includes(key);
 }
 
 /** One entry's settings, or the code of the first field that fails. Unknown fields are ignored. */

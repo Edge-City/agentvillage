@@ -213,6 +213,15 @@ export function tryAcquireLock(path: string, options: { staleMs?: number; now?: 
   return null;
 }
 
+/**
+ * Whether the lock file still holds this lock's token: false once another
+ * holder took it over as stale (or it was removed). A holder that may have run
+ * past the stale time checks this before each write (install/jobs.ts).
+ */
+export function holdsLock(lock: HeldLock): boolean {
+  return heldToken(lock.path) === lock.token;
+}
+
 /** One macrotask turn: unlike a resolved promise, it lets due timers run. */
 function yieldToEventLoop(): Promise<void> {
   return new Promise<void>((resolve) => setImmediate(resolve));

@@ -6,7 +6,7 @@
  * docs/design/job-settings.md.
  *
  *   bun install/jobs.ts list
- *   bun install/jobs.ts set --job <key> [--schedule "<cron>" [--allow-frequent]] [--window HH:MM-HH:MM|default] [--tz <zone>|default] [--enabled true|false]
+ *   bun install/jobs.ts set --job <key> [--schedule "<cron>"|default [--allow-frequent]] [--window HH:MM-HH:MM|default] [--tz <zone>|default] [--enabled true|false]
  *   bun install/jobs.ts add --template <brief|digest-preview|evening-ask> --schedule "<cron>" [--allow-frequent] [--window HH:MM-HH:MM] [--tz <zone>]
  *   bun install/jobs.ts remove --template <name>
  *   bun install/jobs.ts preview --job <key>
@@ -22,16 +22,24 @@
  * Every value is checked against a fixed grammar before use; a schedule is
  * sent to Hermes only in its canonical form (job-settings.ts parseStrictCron)
  * and read back. Hermes is only ever started as an argv (execFileSync), never
- * through a shell, and only with a job id of Hermes's own shape. Nothing
- * free-form read from `jobs.json` or the settings file is ever printed.
+ * through a shell, only with a job id of Hermes's own shape, and never for
+ * longer than HERMES_TIMEOUT_MS. Nothing free-form read from `jobs.json` or
+ * the settings file is ever printed.
+ *
+ * Environment: run it with HERMES_HOME set to the tenant's home. Everything
+ * about the tenant is read from files under it: `cron/jobs.json`, the
+ * settings file, `.env` (Hermes's zone, the stagger seed) and `config.yaml`
+ * (Hermes's zone). The caller's own HERMES_TIMEZONE is never read, and is not
+ * passed on to Hermes. (The Hermes binary is found as the installer finds it,
+ * and the preview gate reads AV_TEAM_TENANT as job-settings.ts isTeamTenant says.)
  */
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import YAML from "yaml";
 
-import { dotenvFileValue } from "./config";
+import { dotenvValue } from "./config";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
 import {
   DIGEST_CRON_SPECS,
@@ -40,10 +48,11 @@ import {
   type StoredCronJob,
   cronCreateArgs,
   cronEditArgs,
+  defaultScheduleFor,
   expectedCronScriptArg,
   hermesAvailable,
   installedJobsPath,
-  readCronJobs,
+  persistedEnvVar,
   readCronPromptBody,
   staleShapeFields,
   storedJobEnabled,
@@ -54,6 +63,7 @@ import { hermesHome } from "./paths";
 import {
   DEFAULT_TZ,
   DEFAULT_WINDOWS,
+  SETTINGS_JOB_KEYS,
   type DeliveryWindow,
   type JobKey,
   type ParsedCron,
@@ -68,17 +78,19 @@ import {
   isTeamTenant,
   isTemplateName,
   isValidTimeZone,
+  parseStoredCron,
   parseStrictCron,
   parseWindow,
   prunePreviewFiles,
   readJobSettings,
   replaceSettingsFile,
+  scheduleAdminManaged,
   scheduleWindowFit,
   settingsFileBytes,
   settingsFileText,
   validateEntry,
 } from "../skills/index-network/scripts/job-settings";
-import { type HeldLock, tryAcquireLock } from "../skills/index-network/scripts/state-lock";
+import { type HeldLock, LOCK_STALE_MS, holdsLock, tryAcquireLock } from "../skills/index-network/scripts/state-lock";
 
 /** The one preview job's name; reconcile removes it on the next roll like any retired name. */
 export const PREVIEW_JOB_NAME = "Edge — preview";
@@ -104,6 +116,19 @@ export const HERMES_ID_RE = /^[0-9a-f]{12}$/;
 /** Every argument value is at most this long. */
 export const MAX_ARG_CHARS = 200;
 
+/**
+ * One Hermes command is killed after this: comfortably below the jobs lock's
+ * stale time (LOCK_STALE_MS, 150 s), so a hung CLI cannot hold the lock until
+ * another command takes it over while this one may still write.
+ */
+export const HERMES_TIMEOUT_MS = 60_000;
+
+/** A larger `cron/jobs.json` is unreadable (`jobs-store-unreadable`). */
+export const MAX_JOBS_STORE_BYTES = 16 * 1024 * 1024;
+
+/** The five default jobs, the only ones `--schedule default` and admin marks apply to. */
+const DEFAULT_JOB_KEYS = SETTINGS_JOB_KEYS.filter(isDefaultJobKey);
+
 /** The tenant's jobs lock: one mutating command at a time (stale after LOCK_STALE_MS, as the state lock). */
 export function jobsLockPath(home: string): string {
   return join(home, "av-events", "jobs.lock");
@@ -116,11 +141,33 @@ export interface CommandResult {
 
 export interface JobsContext {
   home: string;
-  /** Runs one Hermes command (argv after the binary); throws on a non-zero exit. */
+  /** Runs one Hermes command (argv after the binary); throws on a non-zero exit, HermesTimeout when killed at its timeout. */
   hermes: (args: string[]) => void;
   /** Whether the Hermes CLI runs at all. */
   hermesReady: () => boolean;
   now: Date;
+  /** The real clock, for the lock's age (tests move it); Date.now by default. */
+  clock?: () => number;
+}
+
+/** A Hermes command killed at HERMES_TIMEOUT_MS. */
+export class HermesTimeout extends Error {
+  constructor() {
+    super("hermes-timeout");
+    this.name = "HermesTimeout";
+  }
+}
+
+/** The jobs lock is no longer this command's, or would go stale before the next step could finish. */
+class LockLost extends Error {}
+
+/** `cron/jobs.json` is present and cannot be read as Hermes's job list. */
+class StoreUnreadable extends Error {}
+
+/** The context a mutating command runs in: every write first checks the lock (`guard`). */
+interface GuardedContext extends JobsContext {
+  /** Throws LockLost unless the lock is still held and a step of `budgetMs` ends before it goes stale. */
+  guard: (budgetMs: number) => void;
 }
 
 function ok(out: Record<string, unknown>): CommandResult {
@@ -133,6 +180,28 @@ function refused(error: string, extra: Record<string, unknown> = {}): CommandRes
 
 function failed(error: string, extra: Record<string, unknown> = {}): CommandResult {
   return { code: EXIT.failed, out: { ok: false, error, ...extra } };
+}
+
+/** A lost lock or an unreadable store is not a step's failure: it stops the whole command (runJobsCommand). */
+function passUp(err: unknown): void {
+  if (err instanceof LockLost || err instanceof StoreUnreadable) throw err;
+}
+
+/** A Hermes step that failed: `hermes-timeout` when it was killed at its timeout, else `hermes-failed`. */
+function hermesFailure(err: unknown, extra: Record<string, unknown>): CommandResult {
+  return failed(err instanceof HermesTimeout ? "hermes-timeout" : "hermes-failed", extra);
+}
+
+/** Write the settings file, once the lock is known to be still held. */
+function writeSettings(ctx: GuardedContext, text: string | null): void {
+  ctx.guard(0);
+  replaceSettingsFile(ctx.home, text);
+}
+
+/** Write `installed_jobs.json`, once the lock is known to be still held. */
+function writeIds(ctx: GuardedContext, ids: string[]): void {
+  ctx.guard(0);
+  writeInstalledJobIds(ctx.home, ids);
 }
 
 // ── Arguments ───────────────────────────────────────────────────────────────
@@ -212,13 +281,56 @@ export function specForKey(key: JobKey, schedule = ""): DigestCronSpec {
 type UsableJob = StoredCronJob & { id: string };
 
 /**
+ * Hermes's job store, `$HERMES_HOME/cron/jobs.json`, as these commands read
+ * it. No file is no jobs (as Hermes reads it). A file that is not a regular
+ * file, is over MAX_JOBS_STORE_BYTES, cannot be read, is not JSON, or is not
+ * `{"jobs": [...]}` (an object without `jobs` is no jobs, as Hermes reads it)
+ * is unreadable: never "no jobs", so `list` never reports a job `missing`
+ * because of it. Reconcile's own reader (install_index.ts readCronJobs) is
+ * unchanged. (Hermes repairs some shapes on its next write: a bare list, an
+ * id-keyed map, control characters in strings. They are unreadable here until then.)
+ */
+export function readJobsStore(home: string): { jobs: unknown[] } | { unreadable: true } {
+  const path = join(home, "cron", "jobs.json");
+  let text: string;
+  try {
+    if (!existsSync(path)) return { jobs: [] };
+    const stat = statSync(path);
+    if (!stat.isFile() || stat.size > MAX_JOBS_STORE_BYTES) return { unreadable: true };
+    text = readFileSync(path, "utf8");
+  } catch {
+    return { unreadable: true };
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return { unreadable: true };
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { unreadable: true };
+  const jobs = (raw as { jobs?: unknown }).jobs;
+  if (jobs === undefined) return { jobs: [] };
+  return Array.isArray(jobs) ? { jobs } : { unreadable: true };
+}
+
+/** Every job in the store, or StoreUnreadable. */
+function storeJobs(home: string): unknown[] {
+  const store = readJobsStore(home);
+  if ("unreadable" in store) throw new StoreUnreadable();
+  return store.jobs;
+}
+
+/**
  * The Hermes jobs named exactly `name`, read defensively from `jobs.json`
  * (which the resident can write): every one usable, or `unreadable` when any
  * has an id outside Hermes's shape, in which case none is used.
  */
-function jobsNamed(name: string): { jobs: UsableJob[] } | { unreadable: true } {
-  const all: unknown = readCronJobs();
-  const named = (Array.isArray(all) ? all : []).filter(
+function jobsNamed(home: string, name: string): { jobs: UsableJob[] } | { unreadable: true } {
+  return namedIn(storeJobs(home), name);
+}
+
+function namedIn(all: unknown[], name: string): { jobs: UsableJob[] } | { unreadable: true } {
+  const named = all.filter(
     (job): job is StoredCronJob => Boolean(job) && typeof job === "object" && (job as StoredCronJob).name === name,
   );
   if (named.some((job) => typeof job.id !== "string" || !HERMES_ID_RE.test(job.id))) return { unreadable: true };
@@ -226,22 +338,21 @@ function jobsNamed(name: string): { jobs: UsableJob[] } | { unreadable: true } {
 }
 
 /** The job a key names with this id, as `jobs.json` holds it now. */
-function rereadJob(key: JobKey, id: string): UsableJob | undefined {
-  const found = jobsNamed(specForKey(key).name);
+function rereadJob(home: string, key: JobKey, id: string): UsableJob | undefined {
+  const found = jobsNamed(home, specForKey(key).name);
   return "jobs" in found ? found.jobs.find((job) => job.id === id) : undefined;
 }
 
 /** Whether that job's stored schedule is now exactly `expr` (the read-back after an edit). */
-function scheduleIs(key: JobKey, id: string, expr: string): boolean {
-  const job = rereadJob(key, id);
+function scheduleIs(home: string, key: JobKey, id: string, expr: string): boolean {
+  const job = rereadJob(home, key, id);
   return job !== undefined && rawSchedule(job) === expr;
 }
 
 /** The ids of every job now in `jobs.json` that has Hermes's shape. */
-function usableIds(): Set<string> {
-  const all: unknown = readCronJobs();
+function usableIds(home: string): Set<string> {
   return new Set(
-    (Array.isArray(all) ? all : [])
+    storeJobs(home)
       .map((job) => (job && typeof job === "object" ? (job as StoredCronJob).id : undefined))
       .filter((id): id is string => typeof id === "string" && HERMES_ID_RE.test(id)),
   );
@@ -256,15 +367,13 @@ function rawSchedule(job: StoredCronJob): string {
 }
 
 /**
- * The stored schedule when it is readable: it parses and is already in
- * canonical form (every schedule these commands or the installer set is). A
- * schedule in any other form is not guessed at, because croniter can read a
- * non-canonical form differently (`0 23/2 * * *`, `0 8 1-31 * 1`).
+ * The stored schedule when it is readable: canonical exactly, up to the
+ * canonical bound rather than the input bound, so every schedule these
+ * commands set reads back (job-settings.ts parseStoredCron). A schedule in any
+ * other form is not guessed at.
  */
 function storedCron(job: StoredCronJob): ParsedCron | null {
-  const raw = rawSchedule(job);
-  const cron = parseStrictCron(raw);
-  return cron && cron.expr === raw ? cron : null;
+  return parseStoredCron(rawSchedule(job));
 }
 
 /** The schedule as printed: the canonical form, or null with `scheduleUnreadable`. */
@@ -297,9 +406,10 @@ function filesMissing(home: string, spec: DigestCronSpec): CommandResult | null 
   return null;
 }
 
-function installShim(home: string, scriptName: string): void {
-  mkdirSync(join(home, "scripts"), { recursive: true });
-  copyFileSync(join(home, "skills", PROACTIVE_SHIM), join(home, "scripts", scriptName));
+function installShim(ctx: GuardedContext, scriptName: string): void {
+  ctx.guard(0);
+  mkdirSync(join(ctx.home, "scripts"), { recursive: true });
+  copyFileSync(join(ctx.home, "skills", PROACTIVE_SHIM), join(ctx.home, "scripts", scriptName));
 }
 
 // ── Settings ────────────────────────────────────────────────────────────────
@@ -313,7 +423,11 @@ interface CurrentSettings {
   adminSchedules: JobKey[];
   /** The file was unreadable and a rewrite replaces it: `invalid:<code>`. */
   replaced?: string;
-  /** `adminSchedules` held something other than default job keys; a rewrite keeps only those. */
+  /**
+   * `adminSchedules` held entries that are not default job keys (a rewrite
+   * keeps only the keys), or was not a list at all (a rewrite writes all five
+   * default keys, the jobs reconcile was already treating as admin-managed).
+   */
   adminDropped?: true;
 }
 
@@ -323,7 +437,12 @@ function currentSettings(home: string): CurrentSettings {
   if (read.status === "absent") return { bytes, jobs: {}, adminSchedules: [] };
   if (read.status === "invalid") return { bytes, jobs: {}, adminSchedules: [], replaced: `invalid:${read.code}` };
   const admin = adminScheduleKeys(read);
-  return { bytes, jobs: { ...read.jobs }, adminSchedules: admin.keys, ...(admin.invalid ? { adminDropped: true as const } : {}) };
+  return {
+    bytes,
+    jobs: { ...read.jobs },
+    adminSchedules: admin.invalid ? [...DEFAULT_JOB_KEYS] : admin.keys,
+    ...(admin.invalid || admin.ignored ? { adminDropped: true as const } : {}),
+  };
 }
 
 /**
@@ -349,14 +468,15 @@ function mergeEntry(existing: unknown, window: FieldChange, tz: FieldChange): { 
   return { entry, dropped };
 }
 
-/** The settings with one job's entry replaced (deleted when empty) and, maybe, one more admin schedule. */
-function nextSettingsText(current: CurrentSettings, key: JobKey, entry: Entry, addAdmin: boolean): string | null {
+/** The settings with one job's entry replaced (deleted when empty) and, maybe, its admin mark added or cleared. */
+function nextSettingsText(current: CurrentSettings, key: JobKey, entry: Entry, admin: "add" | "clear" | "keep"): string | null {
   const jobs = { ...current.jobs };
   if (Object.keys(entry).length > 0) jobs[key] = entry;
   else delete jobs[key];
-  const admin = new Set<string>(current.adminSchedules);
-  if (addAdmin) admin.add(key);
-  return settingsFileText(jobs, [...admin]);
+  const marks = new Set<string>(current.adminSchedules);
+  if (admin === "add") marks.add(key);
+  if (admin === "clear") marks.delete(key);
+  return settingsFileText(jobs, [...marks]);
 }
 
 /** The window and zone an entry gives a job (its default window when the entry names none). */
@@ -387,26 +507,74 @@ export function isHermesZoneName(name: unknown): name is string {
 }
 
 /**
- * The zone Hermes reads every schedule in, or null when it cannot be
- * determined. Hermes's CLI (hermes_time.py `_resolve_timezone_name`, which
+ * Links the runtime does not resolve, to their canonical IANA zone: the
+ * installer's other spelling of the village zone (install/config.ts
+ * VILLAGE_ZONE_NAMES), and the backward links of UTC. Bun resolves no link
+ * (`Asia/Calcutta` stays `Asia/Calcutta`); a runtime on ICU may resolve the
+ * other way (`Asia/Kolkata` to `Asia/Calcutta`, `Etc/UTC` to `UTC`), so the
+ * table applies after the runtime's own resolution and both ends meet.
+ */
+const ZONE_LINKS: Record<string, string> = {
+  "Asia/Calcutta": "Asia/Kolkata",
+  UTC: "Etc/UTC",
+  UCT: "Etc/UTC",
+  Universal: "Etc/UTC",
+  Zulu: "Etc/UTC",
+  "Etc/UCT": "Etc/UTC",
+  "Etc/Universal": "Etc/UTC",
+  "Etc/Zulu": "Etc/UTC",
+};
+
+/** A zone name Hermes accepts, resolved to its canonical IANA zone: the runtime's resolution, then ZONE_LINKS. */
+export function canonicalZone(name: string): string {
+  let resolved = name;
+  try {
+    resolved = new Intl.DateTimeFormat("en-US", { timeZone: name }).resolvedOptions().timeZone;
+  } catch {
+    // not a zone this runtime knows: isHermesZoneName refuses it first
+  }
+  return ZONE_LINKS[resolved] ?? resolved;
+}
+
+/** The last assignment of `name` in the tenant's `<home>/.env`, as python-dotenv reads it (config.ts dotenvValue); undefined when none. */
+function tenantDotenv(home: string, name: string): string | undefined {
+  let text: string;
+  try {
+    text = readFileSync(join(home, ".env"), "utf8");
+  } catch {
+    return undefined;
+  }
+  const assignment = new RegExp(`^\\s*(?:export\\s+)?${name}\\s*=(.*)$`);
+  let found: string | undefined;
+  for (const line of text.split(/\r?\n/)) {
+    const match = assignment.exec(line);
+    if (match) found = dotenvValue(match[1] ?? "");
+  }
+  return found;
+}
+
+/**
+ * The zone Hermes reads every schedule in, canonical, or null when it cannot
+ * be determined. Hermes's CLI (hermes_time.py `_resolve_timezone_name`, which
  * `cron create|edit|resume` use to compute the next run) reads
  * `HERMES_TIMEZONE` first (its `.env` value overriding the process
  * environment: hermes_cli/env_loader.py:434), then `timezone` in config.yaml,
  * else the host's local time; the gateway, whose ticker fires the jobs, copies
  * config.yaml's `timezone` over `HERMES_TIMEZONE` at startup
- * (gateway/run.py:2087-2089), so there config.yaml wins. Null when neither is
- * set (Hermes would use the host's local time, unknown here), when the two
- * are set and differ (the CLI and the ticker would disagree), or when the
- * name is not one Hermes accepts (it would fall back to local time).
+ * (gateway/run.py:2087-2089), so there config.yaml wins.
+ *
+ * Only the tenant's files are read: `HERMES_TIMEZONE` in `<home>/.env` and
+ * `timezone` in `<home>/config.yaml`, never the caller's process environment
+ * (and defaultContext does not pass the caller's HERMES_TIMEZONE on to
+ * Hermes, so the CLI reads the same two). Each set name must be one Hermes
+ * accepts; the two are compared after canonicalZone, so two names of one zone
+ * (`Asia/Calcutta`, `Asia/Kolkata`) agree. Null when neither is set (Hermes
+ * would use the host's local time, unknown here), when a set name is not one
+ * Hermes accepts (it would fall back to local time), or when the two name
+ * different zones (the CLI and the ticker would disagree).
  */
 export function hermesZone(home: string): string | null {
-  let envZone: string | undefined;
-  try {
-    envZone = dotenvFileValue("HERMES_TIMEZONE");
-  } catch {
-    envZone = undefined;
-  }
-  envZone = (envZone ?? process.env.HERMES_TIMEZONE)?.trim() || undefined;
+  const envZone = tenantDotenv(home, "HERMES_TIMEZONE")?.trim() || undefined;
   let configZone: string | undefined;
   try {
     const doc = YAML.parse(readFileSync(join(home, "config.yaml"), "utf8")) as { timezone?: unknown } | null;
@@ -414,9 +582,10 @@ export function hermesZone(home: string): string | null {
   } catch {
     // no config, or unparseable (Hermes reads that as unset too)
   }
-  if (envZone && configZone && envZone !== configZone) return null;
-  const name = envZone ?? configZone;
-  return name && isHermesZoneName(name) ? name : null;
+  const names = [envZone, configZone].filter((name): name is string => name !== undefined);
+  if (names.length === 0 || !names.every(isHermesZoneName)) return null;
+  const zones = [...new Set(names.map(canonicalZone))];
+  return zones.length === 1 ? zones[0] : null;
 }
 
 /**
@@ -445,7 +614,7 @@ function windowCheck(
 
 const LIST_ORDER: JobKey[] = ["brief", "drop-midday", "drop-evening", "negotiation", "evening", "tpl-brief", "tpl-digest-preview", "tpl-evening-ask"];
 
-function describeJob(key: JobKey, job: UsableJob, settings: ReturnType<typeof readJobSettings>, admin: JobKey[]): Record<string, unknown> {
+function describeJob(key: JobKey, job: UsableJob, settings: ReturnType<typeof readJobSettings>): Record<string, unknown> {
   let entry: Entry = {};
   let state = settings.status === "absent" ? "absent" : settings.status === "invalid" ? `invalid:${settings.code}` : "default";
   if (settings.status === "ok" && Object.prototype.hasOwnProperty.call(settings.jobs, key)) {
@@ -466,31 +635,38 @@ function describeJob(key: JobKey, job: UsableJob, settings: ReturnType<typeof re
     window: delivery.window ? formatWindow(delivery.window) : null,
     tz: delivery.tz,
     settings: state,
-    adminSchedule: admin.includes(key),
+    // The same rule reconcile's legacy migration uses (job-settings.ts scheduleAdminManaged).
+    adminSchedule: scheduleAdminManaged(key, settings),
   };
 }
 
 function listCommand(ctx: JobsContext): CommandResult {
   const settings = readJobSettings(ctx.home);
-  const admin = adminScheduleKeys(settings).keys;
+  const head = {
+    settings: settings.status === "invalid" ? `invalid:${settings.code}` : settings.status,
+    ...(adminScheduleKeys(settings).invalid ? { adminSchedulesInvalid: true } : {}),
+  };
+  // An unreadable store is never "no jobs": nothing is reported missing.
+  const store = readJobsStore(ctx.home);
+  if ("unreadable" in store) return ok({ store: "unreadable", ...head, jobs: [], missing: [], unreadable: [] });
   const jobs: Record<string, unknown>[] = [];
   const missing: string[] = [];
   const unreadable: string[] = [];
   for (const key of LIST_ORDER) {
-    const found = jobsNamed(specForKey(key).name);
+    const found = namedIn(store.jobs, specForKey(key).name);
     if ("unreadable" in found) {
       unreadable.push(key);
       continue;
     }
     if (found.jobs.length === 0 && !key.startsWith("tpl-")) missing.push(key);
-    for (const job of found.jobs) jobs.push(describeJob(key, job, settings, admin));
+    for (const job of found.jobs) jobs.push(describeJob(key, job, settings));
   }
-  return ok({ settings: settings.status === "invalid" ? `invalid:${settings.code}` : settings.status, jobs, missing, unreadable });
+  return ok({ store: "ok", ...head, jobs, missing, unreadable });
 }
 
 /** The one Hermes job a key names, or the refusal. */
-function theJob(key: JobKey): UsableJob | CommandResult {
-  const found = jobsNamed(specForKey(key).name);
+function theJob(home: string, key: JobKey): UsableJob | CommandResult {
+  const found = jobsNamed(home, specForKey(key).name);
   if ("unreadable" in found) return refused("job-unreadable", { job: key });
   if (found.jobs.length === 0) return refused("job-not-installed", { job: key });
   if (found.jobs.length > 1) return refused("job-ambiguous", { job: key, count: found.jobs.length });
@@ -500,6 +676,8 @@ function theJob(key: JobKey): UsableJob | CommandResult {
 interface SetRequest {
   key: JobKey;
   cron?: ParsedCron;
+  /** `--schedule default`: the fleet's default schedule for this tenant, and the admin mark cleared. */
+  scheduleDefault?: true;
   window: FieldChange;
   tz: FieldChange;
   enabled?: boolean;
@@ -509,7 +687,12 @@ function validateSet(flags: Map<string, string>): SetRequest | CommandResult {
   const key = flags.get("--job")!;
   if (!isJobKey(key)) return refused("invalid-job");
   let cron: ParsedCron | undefined;
-  if (flags.has("--schedule")) {
+  let scheduleDefault = false;
+  if (flags.get("--schedule") === "default") {
+    // Only a default job has a fleet schedule to go back to.
+    if (!isDefaultJobKey(key)) return refused("invalid-schedule");
+    scheduleDefault = true;
+  } else if (flags.has("--schedule")) {
     const parsed = scheduleFlag(flags.get("--schedule")!, flags.has("--allow-frequent"));
     if (isResult(parsed)) return parsed;
     cron = parsed;
@@ -520,16 +703,38 @@ function validateSet(flags: Map<string, string>): SetRequest | CommandResult {
   if (tz === "invalid") return refused("invalid-tz");
   const enabledFlag = flags.get("--enabled");
   if (enabledFlag !== undefined && enabledFlag !== "true" && enabledFlag !== "false") return refused("invalid-enabled");
-  if (!cron && !window && !tz && enabledFlag === undefined) return refused("nothing-to-set");
-  return { key, cron, window, tz, ...(enabledFlag === undefined ? {} : { enabled: enabledFlag === "true" }) };
+  if (!cron && !scheduleDefault && !window && !tz && enabledFlag === undefined) return refused("nothing-to-set");
+  return {
+    key,
+    cron,
+    ...(scheduleDefault ? { scheduleDefault: true as const } : {}),
+    window,
+    tz,
+    ...(enabledFlag === undefined ? {} : { enabled: enabledFlag === "true" }),
+  };
 }
 
-function setCommand(ctx: JobsContext, req: SetRequest, applied: string[]): CommandResult {
-  const { key, cron, window, tz } = req;
-  const job = theJob(key);
+/**
+ * The fleet's default schedule for a default job on this tenant, as reconcile
+ * computes it (install_index.ts defaultScheduleFor): the job's staggered slot
+ * for the tenant's seed, `INDEX_API_KEY` as the installer persisted it in
+ * `$HERMES_HOME/.env`, or the spec's own schedule with no seed. An
+ * install-time override (`--digest-send-cron`, `DIGEST_SEND_CRON`) lives only
+ * in a roll's own arguments and environment, and is not seen here.
+ */
+function fleetDefaultCron(home: string, key: JobKey): ParsedCron {
+  const cron = parseStrictCron(defaultScheduleFor(specForKey(key), persistedEnvVar(home, "INDEX_API_KEY")));
+  if (!cron) throw new Error("default schedule outside the grammar");
+  return cron;
+}
+
+function setCommand(ctx: GuardedContext, req: SetRequest, applied: string[]): CommandResult {
+  const { key, window, tz } = req;
+  const job = theJob(ctx.home, key);
   if (isResult(job)) return job;
   if (!ctx.hermesReady()) return failed("hermes-unavailable", { applied: [] });
 
+  const cron = req.cron ?? (req.scheduleDefault ? fleetDefaultCron(ctx.home, key) : undefined);
   const current = currentSettings(ctx.home);
   const { entry, dropped } = mergeEntry(current.jobs[key], window, tz);
   const delivery = effective(key, entry);
@@ -543,24 +748,28 @@ function setCommand(ctx: JobsContext, req: SetRequest, applied: string[]): Comma
   if (cron && cron.expr !== rawSchedule(job)) {
     try {
       ctx.hermes(cronEditArgs(job.id, { schedule: cron.expr }));
-    } catch {
-      // A Hermes that saved and then failed still changed the schedule: say so.
-      if (scheduleIs(key, job.id, cron.expr)) applied.push("schedule");
-      return failed("hermes-failed", { step: "schedule", applied: [...applied] });
+    } catch (err) {
+      passUp(err);
+      // A Hermes that saved and then failed (or was killed) still changed the schedule: say so.
+      if (scheduleIs(ctx.home, key, job.id, cron.expr)) applied.push("schedule");
+      return hermesFailure(err, { step: "schedule", applied: [...applied] });
     }
     applied.push("schedule");
-    if (!scheduleIs(key, job.id, cron.expr)) return failed("schedule-readback-mismatch", { applied: [...applied] });
+    if (!scheduleIs(ctx.home, key, job.id, cron.expr)) return failed("schedule-readback-mismatch", { applied: [...applied] });
   }
   // 2. The settings: the entry (deleted when empty) and, for a default job's
-  // schedule, the admin-schedule mark that keeps reconcile's migration off it.
+  // schedule, the admin mark that keeps reconcile's migration off it: added
+  // by a schedule, cleared by `--schedule default`.
   let replaced: string | undefined;
   const settingsDropped = [...dropped, ...(current.adminDropped ? ["adminSchedules"] : [])];
   if (cron || window || tz) {
-    const text = nextSettingsText(current, key, entry, Boolean(cron) && isDefaultJobKey(key));
+    const admin = !cron || !isDefaultJobKey(key) ? "keep" : req.scheduleDefault ? "clear" : "add";
+    const text = nextSettingsText(current, key, entry, admin);
     if (text !== current.bytes) {
       try {
-        replaceSettingsFile(ctx.home, text);
-      } catch {
+        writeSettings(ctx, text);
+      } catch (err) {
+        passUp(err);
         return failed("settings-write-failed", { applied: [...applied] });
       }
       applied.push("settings");
@@ -571,15 +780,15 @@ function setCommand(ctx: JobsContext, req: SetRequest, applied: string[]): Comma
   let enabled = storedJobEnabled(job);
   const resume: Record<string, unknown> = {};
   if (req.enabled !== undefined && req.enabled !== enabled) {
-    const reread = jobsNamed(specForKey(key).name);
-    const latest = ("jobs" in reread ? reread.jobs.find((entry) => entry.id === job.id) : undefined) ?? job;
+    const latest = rereadJob(ctx.home, key, job.id) ?? job;
     const missed = req.enabled && missedSlot(latest, new Date());
     try {
       ctx.hermes(["cron", req.enabled ? "resume" : "pause", job.id]);
-    } catch {
-      const now = rereadJob(key, job.id);
+    } catch (err) {
+      passUp(err);
+      const now = rereadJob(ctx.home, key, job.id);
       if (now && storedJobEnabled(now) === req.enabled) applied.push("enabled");
-      return failed("hermes-failed", { step: "enabled", applied: [...applied] });
+      return hermesFailure(err, { step: "enabled", applied: [...applied] });
     }
     applied.push("enabled");
     enabled = req.enabled;
@@ -593,8 +802,9 @@ function setCommand(ctx: JobsContext, req: SetRequest, applied: string[]): Comma
       if (!delivery.window && schedule) {
         try {
           ctx.hermes(cronEditArgs(job.id, { schedule: schedule.expr }));
-        } catch {
-          return failed("hermes-failed", { step: "reanchor", applied: [...applied], resumeMayFire: true });
+        } catch (err) {
+          passUp(err);
+          return hermesFailure(err, { step: "reanchor", applied: [...applied], resumeMayFire: true });
         }
         resume.missedSlot = "dropped";
       } else {
@@ -606,7 +816,7 @@ function setCommand(ctx: JobsContext, req: SetRequest, applied: string[]): Comma
     job: key,
     id: job.id,
     changed: [...applied],
-    ...(cron ? { schedule: cron.expr } : scheduleOut(job)),
+    ...(cron ? { schedule: cron.expr, adminSchedule: scheduleAdminManaged(key, readJobSettings(ctx.home)) } : scheduleOut(job)),
     enabled,
     window: delivery.window ? formatWindow(delivery.window) : null,
     tz: delivery.tz,
@@ -637,7 +847,7 @@ function validateAdd(flags: Map<string, string>): AddRequest | CommandResult {
   return { template, cron, window, tz };
 }
 
-function addCommand(ctx: JobsContext, req: AddRequest, applied: string[]): CommandResult {
+function addCommand(ctx: GuardedContext, req: AddRequest, applied: string[]): CommandResult {
   const { template, cron, window, tz } = req;
   const key = `tpl-${template}` as JobKey;
   const spec = templateCronSpec(template, cron.expr);
@@ -649,18 +859,19 @@ function addCommand(ctx: JobsContext, req: AddRequest, applied: string[]): Comma
   const missing = filesMissing(ctx.home, spec);
   if (missing) return missing;
   if (!ctx.hermesReady()) return failed("hermes-unavailable", { applied: [] });
-  const found = jobsNamed(spec.name);
+  const found = jobsNamed(ctx.home, spec.name);
   if ("unreadable" in found) return refused("job-unreadable", { job: key });
   if (found.jobs.length > 1) return refused("job-ambiguous", { job: key, count: found.jobs.length });
 
   // 1. The settings first, so the job never runs, even once, without its
   // window; rolled back if the Hermes step fails, so a failure leaves no entry.
-  const text = nextSettingsText(current, key, entry, false);
+  const text = nextSettingsText(current, key, entry, "keep");
   const settingsChanged = text !== current.bytes;
   if (settingsChanged) {
     try {
-      replaceSettingsFile(ctx.home, text);
-    } catch {
+      writeSettings(ctx, text);
+    } catch (err) {
+      passUp(err);
       return failed("settings-write-failed", { applied: [...applied] });
     }
     applied.push("settings");
@@ -668,7 +879,8 @@ function addCommand(ctx: JobsContext, req: AddRequest, applied: string[]): Comma
   const rollback = (): void => {
     if (!applied.includes("settings")) return;
     try {
-      replaceSettingsFile(ctx.home, current.bytes);
+      // Never without the lock: a lost lock leaves the entry, and `applied` says so.
+      writeSettings(ctx, current.bytes);
       applied.splice(applied.indexOf("settings"), 1);
     } catch {
       // left in place, and `applied` still says so
@@ -678,26 +890,27 @@ function addCommand(ctx: JobsContext, req: AddRequest, applied: string[]): Comma
   let id: string;
   try {
     // 2. The shim under the template's name, then the job.
-    installShim(ctx.home, expectedCronScriptArg(spec)!);
+    installShim(ctx, expectedCronScriptArg(spec)!);
     const promptBody = readCronPromptBody(spec, join(ctx.home, "skills")).trimEnd();
     if (found.jobs.length === 0) {
-      const before = usableIds();
+      const before = usableIds(ctx.home);
       try {
         ctx.hermes(cronCreateArgs(spec, promptBody, ctx.home));
-      } catch {
-        // A Hermes that created the job and then failed keeps its entry; otherwise none is left.
-        const made = jobsNamed(spec.name);
+      } catch (err) {
+        passUp(err);
+        // A Hermes that created the job and then failed (or was killed) keeps its entry; otherwise none is left.
+        const made = jobsNamed(ctx.home, spec.name);
         if ("jobs" in made && made.jobs.some((job) => !before.has(job.id))) applied.push("create");
         else rollback();
-        return failed("hermes-failed", { step: "create", applied: [...applied] });
+        return hermesFailure(err, { step: "create", applied: [...applied] });
       }
-      const after = jobsNamed(spec.name);
+      const after = jobsNamed(ctx.home, spec.name);
       const created = "jobs" in after ? after.jobs.find((job) => !before.has(job.id)) : undefined;
       if (!created) return failed("job-not-found-after-create", { applied: [...applied, "create"] });
       applied.push("create");
       id = created.id;
       if (rawSchedule(created) !== cron.expr) return failed("schedule-readback-mismatch", { applied: [...applied] });
-      writeInstalledJobIds(ctx.home, [...readInstalledIds(ctx.home), id]);
+      writeIds(ctx, [...readInstalledIds(ctx.home), id]);
       result = "created";
     } else {
       const job = found.jobs[0];
@@ -707,24 +920,28 @@ function addCommand(ctx: JobsContext, req: AddRequest, applied: string[]): Comma
       if (Object.keys(stale).length > 0) {
         try {
           ctx.hermes(cronEditArgs(job.id, stale));
-        } catch {
+        } catch (err) {
+          passUp(err);
+          const now = rereadJob(ctx.home, key, job.id);
+          if (now && Object.keys(staleShapeFields(now, spec, promptBody)).length === 0) applied.push("shape");
           rollback();
-          return failed("hermes-failed", { step: "edit", applied: [...applied] });
+          return hermesFailure(err, { step: "edit", applied: [...applied] });
         }
         applied.push("shape");
       }
       if (scheduleChanged) {
         try {
           ctx.hermes(cronEditArgs(job.id, { schedule: cron.expr }));
-        } catch {
-          if (scheduleIs(key, job.id, cron.expr)) applied.push("schedule");
+        } catch (err) {
+          passUp(err);
+          if (scheduleIs(ctx.home, key, job.id, cron.expr)) applied.push("schedule");
           else rollback();
-          return failed("hermes-failed", { step: "schedule", applied: [...applied] });
+          return hermesFailure(err, { step: "schedule", applied: [...applied] });
         }
         applied.push("schedule");
-        if (!scheduleIs(key, job.id, cron.expr)) return failed("schedule-readback-mismatch", { applied: [...applied] });
+        if (!scheduleIs(ctx.home, key, job.id, cron.expr)) return failed("schedule-readback-mismatch", { applied: [...applied] });
       }
-      if (!readInstalledIds(ctx.home).includes(job.id)) writeInstalledJobIds(ctx.home, [...readInstalledIds(ctx.home), job.id]);
+      if (!readInstalledIds(ctx.home).includes(job.id)) writeIds(ctx, [...readInstalledIds(ctx.home), job.id]);
       result = applied.length > 0 ? "updated" : "unchanged";
     }
   } catch (err) {
@@ -753,29 +970,44 @@ function validateTemplate(flags: Map<string, string>): TemplateName | CommandRes
   return isTemplateName(template) ? template : refused("invalid-template");
 }
 
-function removeCommand(ctx: JobsContext, template: TemplateName, applied: string[]): CommandResult {
+function removeCommand(ctx: GuardedContext, template: TemplateName, applied: string[]): CommandResult {
   const key = `tpl-${template}` as JobKey;
-  const found = jobsNamed(templateCronSpec(template, "").name);
+  const found = jobsNamed(ctx.home, templateCronSpec(template, "").name);
   if ("unreadable" in found) return refused("job-unreadable", { job: key });
   if (found.jobs.length > 0 && !ctx.hermesReady()) return failed("hermes-unavailable", { applied: [] });
   const removedIds = new Set<string>();
+  const forget = (): void => {
+    if (removedIds.size > 0) writeIds(ctx, readInstalledIds(ctx.home).filter((id) => !removedIds.has(id)));
+  };
   for (const job of found.jobs) {
     try {
       ctx.hermes(["cron", "remove", job.id]);
-    } catch {
-      return failed("hermes-failed", { step: "remove", applied: [...applied], removed: removedIds.size });
+    } catch (err) {
+      passUp(err);
+      // A Hermes that removed the job and then failed (or was killed): read back, and say so.
+      if (!usableIds(ctx.home).has(job.id)) {
+        removedIds.add(job.id);
+        if (!applied.includes("job")) applied.push("job");
+      }
+      try {
+        forget();
+      } catch (inner) {
+        passUp(inner);
+      }
+      return hermesFailure(err, { step: "remove", applied: [...applied], removed: removedIds.size });
     }
     removedIds.add(job.id);
     if (!applied.includes("job")) applied.push("job");
   }
-  if (removedIds.size > 0) writeInstalledJobIds(ctx.home, readInstalledIds(ctx.home).filter((id) => !removedIds.has(id)));
+  forget();
   const current = currentSettings(ctx.home);
   if (current.replaced === undefined && Object.prototype.hasOwnProperty.call(current.jobs, key)) {
-    const text = nextSettingsText(current, key, {}, false);
+    const text = nextSettingsText(current, key, {}, "keep");
     if (text !== current.bytes) {
       try {
-        replaceSettingsFile(ctx.home, text);
-      } catch {
+        writeSettings(ctx, text);
+      } catch (err) {
+        passUp(err);
         return failed("settings-write-failed", { applied: [...applied], removed: removedIds.size });
       }
       applied.push("settings");
@@ -792,8 +1024,9 @@ function validatePreview(ctx: JobsContext, flags: Map<string, string>): JobKey |
   return key;
 }
 
-function previewCommand(ctx: JobsContext, key: JobKey, applied: string[]): CommandResult {
+function previewCommand(ctx: GuardedContext, key: JobKey, applied: string[]): CommandResult {
   // Leftovers of earlier previews older than an hour (file times, so the real clock): state copies and shims. Earlier preview jobs go below.
+  ctx.guard(0);
   prunePreviewFiles(ctx.home, Date.now());
   const base = specForKey(key, PREVIEW_FIRES);
   const scriptName = `agentvillage_proactive_preview-${key}.sh`;
@@ -806,35 +1039,47 @@ function previewCommand(ctx: JobsContext, key: JobKey, applied: string[]): Comma
     noAgent: false,
     scriptInstallName: scriptName,
   };
-  const earlier = jobsNamed(PREVIEW_JOB_NAME);
+  const earlier = jobsNamed(ctx.home, PREVIEW_JOB_NAME);
   if ("unreadable" in earlier) return refused("job-unreadable", { job: "preview" });
   const missing = filesMissing(ctx.home, spec);
   if (missing) return missing;
   if (!ctx.hermesReady()) return failed("hermes-unavailable", { applied: [] });
-  installShim(ctx.home, scriptName);
+  installShim(ctx, scriptName);
   // One preview job at a time: an earlier one (fired and completed, or not yet fired) goes first.
   for (const job of earlier.jobs) {
     try {
       ctx.hermes(["cron", "remove", job.id]);
-    } catch {
-      return failed("hermes-failed", { step: "remove-previous", applied: [...applied] });
+    } catch (err) {
+      passUp(err);
+      if (!usableIds(ctx.home).has(job.id) && !applied.includes("removed-previous")) applied.push("removed-previous");
+      return hermesFailure(err, { step: "remove-previous", applied: [...applied] });
     }
     if (!applied.includes("removed-previous")) applied.push("removed-previous");
   }
   const prompt = `${PREVIEW_PREAMBLE}${readCronPromptBody(spec, join(ctx.home, "skills")).trimEnd()}`;
-  const before = usableIds();
+  const before = usableIds(ctx.home);
   try {
     ctx.hermes(cronCreateArgs(spec, prompt, ctx.home));
-  } catch {
-    return failed("hermes-failed", { step: "create", applied: [...applied] });
+  } catch (err) {
+    passUp(err);
+    const made = jobsNamed(ctx.home, PREVIEW_JOB_NAME);
+    if ("jobs" in made && made.jobs.some((job) => !before.has(job.id))) applied.push("create");
+    return hermesFailure(err, { step: "create", applied: [...applied] });
   }
   applied.push("create");
-  const after = jobsNamed(PREVIEW_JOB_NAME);
+  const after = jobsNamed(ctx.home, PREVIEW_JOB_NAME);
   const id = ("jobs" in after ? after.jobs.find((job) => !before.has(job.id))?.id : undefined) ?? null;
   return ok({ job: key, id, fires: PREVIEW_FIRES });
 }
 
-/** Run one command. Never throws: an unexpected error is `{"ok": false, "error": "fault", "applied": [...]}`, exit 1. */
+/**
+ * Run one command. Never throws: an unexpected error is `{"ok": false,
+ * "error": "fault", "applied": [...]}`, exit 1. A mutating command holds the
+ * jobs lock throughout, and before each write (each Hermes command, each file
+ * it writes) checks that the lock still holds its token and that the step can
+ * end before the lock goes stale (a Hermes command: HERMES_TIMEOUT_MS); if
+ * not, it stops with `lock-lost`, exit 1, and writes nothing more.
+ */
 export function runJobsCommand(argv: string[], ctx: JobsContext): CommandResult {
   const applied: string[] = [];
   let lock: HeldLock | null = null;
@@ -850,28 +1095,63 @@ export function runJobsCommand(argv: string[], ctx: JobsContext): CommandResult 
       : command === "remove" ? validateTemplate(flags)
       : validatePreview(ctx, flags);
     if (isResult(request)) return request;
-    lock = tryAcquireLock(jobsLockPath(ctx.home));
+    const clock = ctx.clock ?? Date.now;
+    lock = tryAcquireLock(jobsLockPath(ctx.home), { now: clock });
     if (!lock) return { code: EXIT.busy, out: { ok: false, error: "busy" } };
-    if (command === "set") return setCommand(ctx, request as SetRequest, applied);
-    if (command === "add") return addCommand(ctx, request as AddRequest, applied);
-    if (command === "remove") return removeCommand(ctx, request as TemplateName, applied);
-    return previewCommand(ctx, request as JobKey, applied);
-  } catch {
+    const held = lock;
+    const since = clock();
+    const guard = (budgetMs: number): void => {
+      if (!holdsLock(held) || clock() - since + budgetMs >= LOCK_STALE_MS) throw new LockLost();
+    };
+    const run: GuardedContext = {
+      ...ctx,
+      guard,
+      hermes: (args) => {
+        guard(HERMES_TIMEOUT_MS);
+        ctx.hermes(args);
+      },
+    };
+    // An unreadable store is refused before anything is done: it is never read as "no jobs".
+    if ("unreadable" in readJobsStore(ctx.home)) return failed("jobs-store-unreadable", { applied: [] });
+    if (command === "set") return setCommand(run, request as SetRequest, applied);
+    if (command === "add") return addCommand(run, request as AddRequest, applied);
+    if (command === "remove") return removeCommand(run, request as TemplateName, applied);
+    return previewCommand(run, request as JobKey, applied);
+  } catch (err) {
+    if (err instanceof LockLost) return failed("lock-lost", { applied: [...applied] });
+    if (err instanceof StoreUnreadable) return failed("jobs-store-unreadable", { applied: [...applied] });
     return failed("fault", { applied: [...applied] });
   } finally {
+    // Removes the lock file only while it still holds this command's token.
     lock?.release();
   }
 }
 
+/**
+ * Runs Hermes commands as an argv, never through a shell, each killed
+ * (SIGKILL) after `timeoutMs`: a killed command throws HermesTimeout.
+ */
+export function hermesRunner(bin: string, env: NodeJS.ProcessEnv, timeoutMs = HERMES_TIMEOUT_MS): (args: string[]) => void {
+  return (args) => {
+    try {
+      execFileSync(bin, args, { stdio: ["ignore", "ignore", "inherit"], env, timeout: timeoutMs, killSignal: "SIGKILL" });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ETIMEDOUT") throw new HermesTimeout();
+      throw err;
+    }
+  };
+}
+
 export function defaultContext(): JobsContext {
   const bin = hermesBin();
+  // The caller's own zone is not passed on: Hermes's CLI then reads the
+  // tenant's `.env` and config.yaml, the two sources hermesZone checks.
   const env = hermesExecEnv();
+  delete env.HERMES_TIMEZONE;
   return {
     home: hermesHome(),
-    hermes: (args) => {
-      execFileSync(bin, args, { stdio: ["ignore", "ignore", "inherit"], env });
-    },
-    hermesReady: () => hermesAvailable(bin),
+    hermes: hermesRunner(bin, env),
+    hermesReady: () => hermesAvailable(bin, HERMES_TIMEOUT_MS),
     now: new Date(),
   };
 }

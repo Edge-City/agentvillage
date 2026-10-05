@@ -10,6 +10,8 @@ import { join } from "node:path";
 import {
   DEFAULT_TZ,
   DEFAULT_WINDOWS,
+  MAX_CANONICAL_SCHEDULE_CHARS,
+  MAX_SCHEDULE_INPUT_CHARS,
   MAX_SETTINGS_BYTES,
   PREVIEW_MAX_AGE_MS,
   type ParsedCron,
@@ -26,15 +28,17 @@ import {
   jobSettingsPath,
   minuteOfDay,
   nextFiring,
+  parseStoredCron,
   parseStrictCron,
   parseWindow,
   prunePreviewFiles,
   readJobSettings,
+  scheduleAdminManaged,
   scheduleWindowFit,
   settingsFileText,
   writeJobSettings,
 } from "../job-settings";
-import { BRIEF_WINDOW } from "../proactive";
+import { BRIEF_WINDOW } from "./fixtures/rc13-decision";
 import fixture from "./fixtures/croniter-6.0.0.json";
 
 let home: string;
@@ -144,6 +148,60 @@ describe("the schedule grammar: a strict five-field cron, sent to Hermes in cano
     for (const expr of ["0 8 29 2 1", "0 8 29 2,3 *", "0 8 28,29 2 *", "0 8 * 2 *"]) {
       expect({ expr, leap: cronLeapDayOnly(parseStrictCron(expr)!) }).toEqual({ expr, leap: false });
     }
+  });
+
+  test("two bounds: an input is at most 100 characters; a stored canonical form up to the longest any accepted input produces (346)", () => {
+    expect(MAX_SCHEDULE_INPUT_CHARS).toBe(100);
+    // Each field's longest canonical form is every value but one shortest one; a 23-character input reaches all five at once.
+    const longest = parseStrictCron("1-59 1-23 2-31 2-12 1-6")!.expr;
+    expect(longest.split(" ").map((field) => field.length)).toEqual([167, 59, 81, 24, 11]);
+    expect(longest.length).toBe(346);
+    expect(MAX_CANONICAL_SCHEDULE_CHARS).toBe(346);
+    // Brute force over every non-full subset size of each field: none is longer.
+    const bounds: Array<[number, number]> = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 6]];
+    const widest = bounds.map(([low, high]) => {
+      const values = Array.from({ length: high - low + 1 }, (_, i) => String(low + i)).sort((a, b) => b.length - a.length);
+      return Math.max(...Array.from({ length: values.length - 1 }, (_, n) => values.slice(0, n + 1).join(",").length));
+    });
+    expect(widest.reduce((a, b) => a + b, 4)).toBe(MAX_CANONICAL_SCHEDULE_CHARS);
+    // The stored reader takes the longest canonical form; the input reader does not take it as input.
+    expect(parseStoredCron(longest)!.expr).toBe(longest);
+    expect(parseStrictCron(longest)).toBeNull();
+    // The reviewer's case: a 15-character input whose canonical form is over 100 characters.
+    const reviewer = parseStrictCron("0 6-20 1-28 * *")!.expr;
+    expect(reviewer.length).toBeGreaterThan(100);
+    expect(parseStoredCron(reviewer)!.expr).toBe(reviewer);
+    // Still canonical only: a non-canonical stored form is not guessed at, whatever its length.
+    for (const raw of ["0 23/2 * * *", "0 8 1-31 * 1", "0 6-20 1-28 * *", `${longest} `, `${longest},`]) expect({ raw, cron: parseStoredCron(raw) }).toEqual({ raw, cron: null });
+  });
+
+  test("property: no accepted input yields a canonical form the stored reader refuses", () => {
+    // A seeded generator over every item shape of the grammar, biased to long lists and ranges.
+    let seed = 0x5eed1234;
+    const rand = (n: number) => {
+      seed = (Math.imul(seed, 1103515245) + 12345) >>> 0;
+      return seed % n;
+    };
+    const bounds: Array<[number, number]> = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 6]];
+    const item = ([low, high]: [number, number]): string => {
+      const a = low + rand(high - low + 1);
+      const b = a + 1 + rand(Math.max(1, high - a));
+      const step = 1 + rand(high - low + 1);
+      return [`${a}`, `${a}-${Math.min(b, high)}`, `${a}/${step}`, `*/${step}`, `${a}-${Math.min(b, high)}/${step}`, "*"][rand(6)];
+    };
+    let accepted = 0;
+    let over100 = 0;
+    for (let i = 0; i < 6000; i++) {
+      const text = bounds.map((range) => Array.from({ length: 1 + rand(6) }, () => item(range)).join(",")).join(" ");
+      const cron = parseStrictCron(text);
+      if (!cron) continue;
+      accepted++;
+      if (cron.expr.length > 100) over100++;
+      const stored = parseStoredCron(cron.expr);
+      if (!stored || stored.expr !== cron.expr || cron.expr.length > MAX_CANONICAL_SCHEDULE_CHARS) throw new Error(`not read back: ${text}`);
+    }
+    expect(accepted).toBeGreaterThan(2000);
+    expect(over100).toBeGreaterThan(100);
   });
 
   test("frequent: more than one firing in some hour", () => {
@@ -264,6 +322,21 @@ describe("whether a schedule lands in its window, over a full year", () => {
     expect(fit("30 8 * * *", "13:00-14:00", "Europe/London", FROM, "America/New_York").fit).toBe("seasonal");
   });
 
+  test("whole days only: the answer does not depend on the hour of the call", () => {
+    // The reviewer's case: 06:00 and 12:00 with window 05:00-11:00 in one zone with no DST is always, called at any hour.
+    for (let hour = 0; hour < 24; hour++) {
+      const at = new Date(Date.UTC(2026, 9, 5, hour, 17));
+      expect({ hour, fit: fit("0 6,12 * * *", "05:00-11:00", "Asia/Tokyo", at, "Asia/Tokyo") }).toEqual({ hour, fit: { fit: "always" } });
+      expect({ hour, fit: fit("0 6,12 * * *", "05:00-11:00", "Asia/Kolkata", at) }).toEqual({ hour, fit: { fit: "always" } });
+    }
+    // A real DST case is still seasonal, with the same first date, from every hour of the day.
+    for (let hour = 0; hour < 24; hour++) {
+      const at = new Date(Date.UTC(2026, 9, 5, hour, 41));
+      expect({ hour, fit: fit("0 18 * * *", "08:00-09:00", "America/New_York", at) }).toEqual({ hour, fit: { fit: "seasonal", outsideFrom: "2026-11-01" } });
+      expect({ hour, fit: fit("30 16,17 * * *", "07:00-08:00", "America/New_York", at) }).toEqual({ hour, fit: { fit: "always" } });
+    }
+  });
+
   test("every minute (allowed only with --allow-frequent) is checked in good time", () => {
     const started = Date.now();
     expect(fit("* * * * *", "08:00-08:05", "America/New_York")).toEqual({ fit: "always" });
@@ -343,17 +416,35 @@ describe("reading the settings file", () => {
     expect(deliveryFor("brief", readJobSettings(home))).toEqual({ window: DEFAULT_WINDOWS.brief, tz: DEFAULT_TZ, settings: "default" });
   });
 
-  test("adminSchedules: default job keys only; anything else is flagged, and the trigger never reads it", () => {
+  test("adminSchedules is read entry by entry: an entry that is not a default job key is ignored on its own; only a value that is not a list is invalid", () => {
     writeSettings({ v: 1, jobs: {}, adminSchedules: ["negotiation", "brief"] });
-    expect(adminScheduleKeys(readJobSettings(home))).toEqual({ keys: ["brief", "negotiation"], invalid: false });
-    writeSettings({ v: 1, jobs: {}, adminSchedules: ["brief", "tpl-brief", "x"] });
-    expect(adminScheduleKeys(readJobSettings(home))).toEqual({ keys: ["brief"], invalid: true });
-    writeSettings({ v: 1, jobs: {}, adminSchedules: "brief" });
-    expect(adminScheduleKeys(readJobSettings(home))).toEqual({ keys: [], invalid: true });
+    expect(adminScheduleKeys(readJobSettings(home))).toEqual({ keys: ["brief", "negotiation"], invalid: false, ignored: false });
+    // A key a later release retired, a template key, a non-string: each ignored, the rest kept.
+    writeSettings({ v: 1, jobs: {}, adminSchedules: ["brief", "tpl-brief", "weekly-recap", 7, null, "brief"] });
+    expect(adminScheduleKeys(readJobSettings(home))).toEqual({ keys: ["brief"], invalid: false, ignored: true });
+    for (const value of ["brief", { brief: true }, 1, null]) {
+      writeSettings({ v: 1, jobs: {}, adminSchedules: value });
+      expect({ value, admin: adminScheduleKeys(readJobSettings(home)) }).toEqual({ value, admin: { keys: [], invalid: true, ignored: false } });
+    }
     // A malformed list never holds a job silent: the trigger reads only `jobs`.
     expect(deliveryFor("negotiation", readJobSettings(home))).toEqual({ window: null, tz: DEFAULT_TZ, settings: "default" });
-    expect(adminScheduleKeys({ status: "absent" })).toEqual({ keys: [], invalid: false });
-    expect(adminScheduleKeys({ status: "invalid", code: "file-not-json" })).toEqual({ keys: [], invalid: true });
+    expect(adminScheduleKeys({ status: "absent" })).toEqual({ keys: [], invalid: false, ignored: false });
+    expect(adminScheduleKeys({ status: "invalid", code: "file-not-json" })).toEqual({ keys: [], invalid: false, ignored: false });
+  });
+
+  test("scheduleAdminManaged, the one rule reconcile and list share", () => {
+    const defaults = ["brief", "drop-midday", "drop-evening", "negotiation", "evening"];
+    const managed = () => defaults.filter((key) => scheduleAdminManaged(key, readJobSettings(home)));
+    expect(managed()).toEqual([]);
+    writeSettings({ v: 1, jobs: { evening: { tz: "UTC" }, "tpl-brief": { window: "14:00-16:00" } }, adminSchedules: ["brief", "weekly-recap"] });
+    expect(managed()).toEqual(["brief", "evening"]);
+    expect(scheduleAdminManaged("tpl-brief", readJobSettings(home))).toBe(false);
+    // Not a list, or an unreadable file: every default job (nothing an admin set is moved).
+    writeSettings({ v: 1, jobs: {}, adminSchedules: "brief" });
+    expect(managed()).toEqual(defaults);
+    writeSettings("{oops");
+    expect(managed()).toEqual(defaults);
+    expect(scheduleAdminManaged("prefetch", readJobSettings(home))).toBe(false);
   });
 
   test("the writer: sorted, 0600, read back as written; nothing to hold removes the file", () => {

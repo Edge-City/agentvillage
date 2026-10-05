@@ -68,7 +68,7 @@ import { readFlag } from "./args";
 import { upsertEnvVar } from "./env";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
 import { CRON_NAME_PREFIX, hermesHome } from "./paths";
-import { TEMPLATE_NAMES, type TemplateName, adminScheduleKeys, prunePreviewFiles, readJobSettings } from "../skills/index-network/scripts/job-settings";
+import { TEMPLATE_NAMES, type TemplateName, adminScheduleKeys, prunePreviewFiles, readJobSettings, scheduleAdminManaged } from "../skills/index-network/scripts/job-settings";
 
 const PROD_MCP_URL = "https://protocol.index.network/mcp";
 const DEV_MCP_URL = "https://protocol.dev.index.network/mcp";
@@ -138,7 +138,16 @@ function writeMcpServerEntry(apiKey: string, telegramHandle: string): void {
 }
 
 function readPersistedEnvVar(key: string): string {
-  const envPath = join(hermesHome(), ".env");
+  return persistedEnvVar(hermesHome(), key);
+}
+
+/**
+ * A variable as the installer persisted it in `<home>/.env`: the first line
+ * that starts `KEY=`, its value trimmed; "" when there is none. The stagger
+ * seed is read this way by reconcile and by `install/jobs.ts set --schedule default`.
+ */
+export function persistedEnvVar(home: string, key: string): string {
+  const envPath = join(home, ".env");
   if (!existsSync(envPath)) return "";
 
   const prefix = `${key}=`;
@@ -511,13 +520,23 @@ export function isValidCron(expr: string): boolean {
  * default. An override that is not a valid 5-field cron expression is ignored
  * (with a warning) and the staggered/spec default is used.
  */
+/**
+ * The fleet's default schedule for a spec on one tenant, before any
+ * install-time override: the staggered slot for the tenant's seed, or the
+ * spec's own schedule when there is no seed. Reconcile creates a job on it
+ * (resolveCronSchedule), and `install/jobs.ts set --schedule default` restores it.
+ */
+export function defaultScheduleFor(spec: DigestCronSpec, staggerSeed = ""): string {
+  return staggerSeed ? staggeredSchedule(spec, staggerSeed) : spec.schedule;
+}
+
 export function resolveCronSchedule(
   spec: DigestCronSpec,
   argv: string[] = process.argv,
   env: NodeJS.ProcessEnv = process.env,
   staggerSeed = "",
 ): string {
-  const fallback = staggerSeed ? staggeredSchedule(spec, staggerSeed) : spec.schedule;
+  const fallback = defaultScheduleFor(spec, staggerSeed);
   const flagIdx = argv.indexOf(spec.overrideFlag);
   const fromFlag = flagIdx >= 0 ? argv[flagIdx + 1]?.trim() : undefined;
   const override = fromFlag || env[spec.overrideEnv]?.trim();
@@ -594,9 +613,9 @@ export function ensureCronScriptInstalled(spec: DigestCronSpec, home: string, pr
  * resolves on PATH (the augmented env adds ~/.local/bin etc.). So test by
  * executing `hermes --version` rather than string-comparing the resolved name.
  */
-export function hermesAvailable(bin: string): boolean {
+export function hermesAvailable(bin: string, timeoutMs?: number): boolean {
   try {
-    execFileSync(bin, ["--version"], { stdio: "ignore", env: hermesExecEnv() });
+    execFileSync(bin, ["--version"], { stdio: "ignore", env: hermesExecEnv(), ...(timeoutMs ? { timeout: timeoutMs, killSignal: "SIGKILL" as const } : {}) });
     return true;
   } catch {
     return false;
@@ -673,15 +692,19 @@ export function reconcileDigestCronJobs(
   // J2: a default job with a settings entry, or named in the file's
   // `adminSchedules` (an admin set its schedule), is admin-managed: the legacy
   // schedule migration skips it. An unreadable file, or an `adminSchedules`
-  // that is not a list of default job keys, counts every job as managed.
+  // that is not a list, counts every default job as managed, and says so
+  // here; an entry of the list that is not a default job key is ignored on
+  // its own. The rule is scheduleAdminManaged, which `jobs.ts list` reports.
   const settings = readJobSettings(home);
-  const admin = adminScheduleKeys(settings);
   const adminManaged = (spec: DigestCronSpec): boolean => {
     const key = settingsKeyOf(spec);
-    if (!key || settings.status === "absent") return false;
-    if (settings.status === "invalid" || admin.invalid) return true;
-    return Object.prototype.hasOwnProperty.call(settings.jobs, key) || (admin.keys as string[]).includes(key);
+    return key !== null && scheduleAdminManaged(key, settings);
   };
+  if (settings.status === "invalid") {
+    console.warn(`  warning: av-events/job-settings.json is unreadable (${settings.code}); the legacy schedule migration skips every default job`);
+  } else if (adminScheduleKeys(settings).invalid) {
+    console.warn("  warning: adminSchedules in av-events/job-settings.json is not a list; the legacy schedule migration skips every default job");
+  }
   // J2: preview leftovers older than an hour (state copies a killed preview
   // left, preview shims); every `Edge — preview` job goes with the retired names below.
   prunePreviewFiles(home, Date.now());

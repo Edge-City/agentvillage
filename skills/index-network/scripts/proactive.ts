@@ -93,8 +93,6 @@ export function isProactiveAction(value: unknown): value is ProactiveAction {
 
 /** The state key this trigger adds: `proactiveRuns.<action>` = the village date it last woke the model. */
 export const RUNS_KEY = "proactiveRuns";
-/** The brief's delivery window, in minutes since village (IST) midnight. */
-export const BRIEF_WINDOW = { start: 5 * 60, end: 11 * 60 };
 /** The trigger stops itself (silently) after this; Hermes's own script timeout is the backstop. */
 export const HARD_DEADLINE_MS = 100_000;
 const PREFETCH_FILE = "brief-context.json";
@@ -734,19 +732,6 @@ const AGENT_ACTIONS: Record<AgentAction, (run: Run) => Promise<Decision>> = {
   "tpl-evening-ask": eveningAction,
 };
 
-/** Minutes since village (IST) midnight. */
-export function villageMinuteOfDay(now: Date): number {
-  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(now);
-  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? "0");
-  const minute = Number(parts.find((p) => p.type === "minute")?.value ?? "0");
-  return (hour % 24) * 60 + minute;
-}
-
-export function inBriefWindow(now: Date): boolean {
-  const minute = villageMinuteOfDay(now);
-  return minute >= BRIEF_WINDOW.start && minute < BRIEF_WINDOW.end;
-}
-
 /** The silent reason for an error a trigger caught: a known code, else the error's class. */
 function faultReason(err: unknown): string {
   if (err instanceof LockTimeout) return "state-locked";
@@ -766,12 +751,21 @@ export function deliveryGate(delivery: Delivery, now: Date): TriggerResult | nul
   return null;
 }
 
+/**
+ * The first decision of an agent-job run: the job's settings read now, and
+ * the silent result when its window or settings stop it (deliveryGate). The
+ * trigger's own path (runAgentAction); the rc13 parity test calls it too.
+ */
+export function windowDecision(action: AgentAction, home: string, now: Date): { delivery: Delivery; gated: TriggerResult | null } {
+  const delivery = deliveryFor(action, readJobSettings(home));
+  return { delivery, gated: deliveryGate(delivery, now) };
+}
+
 /** One agent-job trigger, start to wake line. Never throws; always exit code 0. */
 async function runAgentAction(action: AgentAction, options: ProactiveOptions): Promise<TriggerResult> {
   const home = homeDir(options);
   const now = (options.now ?? (() => new Date()))();
-  const delivery = deliveryFor(action, readJobSettings(home));
-  const gated = deliveryGate(delivery, now);
+  const { delivery, gated } = windowDecision(action, home, now);
   if (gated) return gated;
   const settings = delivery.settings ? { settings: delivery.settings } : {};
   const stateFile = stateFilePath(home);
@@ -926,11 +920,16 @@ export async function runProactive(action: ProactiveAction, options: ProactiveOp
   return result;
 }
 
-async function main(): Promise<void> {
+/**
+ * The script: `proactive.ts <action> [--preview]`. Exported, with `seams`, for
+ * the hard-deadline test only (a child process runs it with a tiny deadline
+ * and a content path that never returns); the script itself passes none.
+ */
+export async function main(argv: string[] = process.argv.slice(2), seams: { deadlineMs?: number; options?: ProactiveOptions } = {}): Promise<void> {
   // stdout is the Script Output: anything a library prints goes to stderr.
   console.log = console.error;
-  const action = process.argv[2];
-  const extra = process.argv.slice(3);
+  const action = argv[0];
+  const extra = argv.slice(1);
   // The one flag: `--preview` (the shim passes it for a `preview-<action>` name). Anything else is refused.
   if (!isProactiveAction(action) || extra.some((arg) => arg !== "--preview")) {
     process.stdout.write(`${wakeLine(false, "unknown-action")}\n`);
@@ -940,11 +939,11 @@ async function main(): Promise<void> {
   const exitCode = action === "prefetch" && !preview ? 1 : 0;
   const hardStop = setTimeout(() => {
     hardStopCleanup();
-    appendRunLog(homeDir(), { action, decision: "silent", reason: "trigger-timeout", ...(preview ? { preview: true } : {}) });
+    appendRunLog(homeDir(seams.options), { action, decision: "silent", reason: "trigger-timeout", ...(preview ? { preview: true } : {}) });
     process.stderr.write(`proactive: ${action} trigger-timeout\n`);
     process.stdout.write(`${wakeLine(false, "trigger-timeout")}\n`, () => process.exit(exitCode));
-  }, HARD_DEADLINE_MS);
-  const result = await runProactive(action, { preview });
+  }, seams.deadlineMs ?? HARD_DEADLINE_MS);
+  const result = await runProactive(action, { ...seams.options, preview });
   clearTimeout(hardStop);
   process.stderr.write(`proactive: ${action} ${reasonCode(result.reason)}${result.note ? ` ${reasonCode(result.note)}` : ""}\n`);
   // Exit once the last line is written: a lingering child must not keep the trigger alive.
