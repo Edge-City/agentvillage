@@ -56,6 +56,8 @@ AV_ENV_VARS = (
     "AV_APPROVAL_POLL_S",
     "AV_APPROVAL_POLLER",
     "AV_RECORD_INTENTION_MAX_PUBLISH_PER_HOUR",
+    # DATA-312: the terminal argument fix's kill switch.
+    "AV_TERMINAL_ARGS_FIX",
 )
 
 
