@@ -24,7 +24,9 @@
  *   - the picks and their reservations (the existing pick scripts);
  *   - what the model is given: dates, the resident's own data, sanitised
  *     schedule facts, organiser announcements, Index counts and cleaned names
- *     (proactive-text.ts), and Index links rebuilt from validated ids. No
+ *     (proactive-text.ts); an Index link only when it is exactly
+ *     `https://index.network/<kind>/<id>`, and an event link rebuilt from the
+ *     configured portal base and the event id. No
  *     third-party free text: no headline, summary or description written by
  *     or about another person. Every string is cleaned and scanned with the
  *     mirror of Hermes's cron prompt scanner and withheld on a hit.
@@ -46,7 +48,7 @@ import { askQuestions } from "./ask-questions";
 import { type BriefOpportunity, type DailyBriefContext, buildDailyBriefContext, villageDate } from "./build-daily-brief-context";
 import { OPPORTUNITY_DELIVERY_KEY, deliveryLogChanged, pruneDeliveryLog, readDeliveryLog, recordShowings } from "./delivery-state";
 import { dropOpportunity } from "./drop-opportunity";
-import { cleanName, cleanText, cleanTitle, connectionsUrl, cronScanHit } from "./proactive-text";
+import { cleanName, cleanText, cleanTitle, connectionsUrl, cronScanHit, envOrDotenv } from "./proactive-text";
 import { type LockOptions, LockStuck, LockTimeout, releaseHeldLocks, withStateLock } from "./state-lock";
 import { writeStateFile } from "./state-file";
 import { followUp } from "./summarize-negotiations";
@@ -236,12 +238,15 @@ function silent(reason: string, exitCode = 0, withheld?: number): TriggerResult 
 
 /**
  * The Script Output as JSON. Hermes puts it inside a triple-backtick fence,
- * so the backtick is escaped, as are `<`, `>` and the Unicode line and
- * paragraph separators (Python's splitlines splits on them): no string can
- * make a line of its own, close the fence, or be the last line.
+ * so the backtick is escaped, as are `<`, `>`, and every line break
+ * Python's splitlines splits on that JSON.stringify leaves raw (U+0085 and
+ * the Unicode line and paragraph separators; it escapes the C0 controls
+ * itself): no string can make a line of its own, close the fence, or be the
+ * last line.
  */
 export function scriptOutputText(view: Record<string, unknown>): string {
   return JSON.stringify(view, null, 2)
+    .replace(/\u0085/g, "\\u0085")
     .replace(/\u2028/g, "\\u2028")
     .replace(/\u2029/g, "\\u2029")
     .replace(/</g, "\\u003c")
@@ -294,18 +299,50 @@ function person(card: { name?: unknown; userUrl?: unknown; opportunityUrl?: unkn
   return name ? { name, profileUrl: indexUrl("u", card.userUrl), messageUrl: indexUrl("o", card.opportunityUrl) } : null;
 }
 
-/** A portal event link the context built (`<portal>/<event id>`), or null. */
-function eventLink(url: unknown): string | null {
-  return typeof url === "string" && /^https:\/\/[^\s"'`<>()[\]]+\/[A-Za-z0-9_-]{1,128}$/.test(url) ? url : null;
+/**
+ * The portal events base the links are rebuilt on: `AV_PORTAL_URL` (process
+ * environment, else `$HERMES_HOME/.env`) when it parses as an `https` URL with
+ * no user name, password, query or fragment and no character that could break
+ * a message; else null (no event links).
+ */
+export function portalBase(home: string): string | null {
+  const raw = envOrDotenv("AV_PORTAL_URL", home).replace(/\/+$/, "");
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash || !url.hostname) return null;
+    const href = url.href.replace(/\/+$/, "");
+    return /^https:\/\/[^\s"'`<>()[\]]+$/.test(href) && !cronScanHit(href) ? href : null;
+  } catch {
+    return null;
+  }
 }
 
-function eventsView(events: DailyBriefContext["rsvpEvents"] | undefined, w: Withheld): Array<Record<string, string>> {
+/**
+ * An event's link, rebuilt rather than passed through: the last segment of
+ * the fetched link's path must be the whole event id (`[A-Za-z0-9_-]`, at most
+ * 128), and the link is the configured portal base and that id. Null when
+ * either is missing or malformed.
+ */
+export function eventLink(url: unknown, base: string | null): string | null {
+  if (!base || typeof url !== "string") return null;
+  let path: string;
+  try {
+    path = new URL(url).pathname;
+  } catch {
+    return null;
+  }
+  const id = path.slice(path.lastIndexOf("/") + 1);
+  return /^[A-Za-z0-9_-]{1,128}$/.test(id) ? `${base}/${id}` : null;
+}
+
+function eventsView(events: DailyBriefContext["rsvpEvents"] | undefined, w: Withheld, base: string | null): Array<Record<string, string>> {
   return (events ?? []).slice(0, LIST_MAX).flatMap((event) => {
     const title = w.title(event.title, 100);
     if (!title) return [];
     const time = cleanText(event.timeLocal, 20);
     const venue = w.title(event.venue, 60);
-    const link = eventLink(event.eventUrl);
+    const link = eventLink(event.eventUrl, base);
     return [{ title, ...(time ? { time } : {}), ...(venue ? { venue } : {}), ...(link ? { link } : {}) }];
   });
 }
@@ -343,7 +380,7 @@ export function withPrefetchedIndex(context: DailyBriefContext, prefetched: Dail
  */
 export function briefView(
   context: DailyBriefContext,
-  { link, approvals }: { link: string; approvals: number },
+  { link, approvals, portal = null }: { link: string; approvals: number; portal?: string | null },
 ): { view: Record<string, unknown>; withheld: number; shownIds: string[] } {
   const w = new Withheld();
   const named = (context.connectionOpportunities ?? [])
@@ -364,9 +401,9 @@ export function briefView(
     }),
     schedule: {
       known: context.diagnostics.calendarSource !== "unavailable" || context.diagnostics.rsvpSource !== "unavailable",
-      yourRsvps: eventsView(context.rsvpEvents, w),
-      highlighted: eventsView(context.highlightedEvents, w),
-      forYourInterests: eventsView(context.interestEvents, w),
+      yourRsvps: eventsView(context.rsvpEvents, w, portal),
+      highlighted: eventsView(context.highlightedEvents, w, portal),
+      forYourInterests: eventsView(context.interestEvents, w, portal),
     },
     you: {
       interests: (context.userModel?.interestTags ?? []).flatMap((tag) => cleanText(tag, 40) ?? []),
@@ -464,7 +501,7 @@ async function briefAction(run: Run): Promise<Decision> {
   const build = run.options.buildContext ?? buildDailyBriefContext;
   const context = withPrefetchedIndex(await build(contextOptions(run.home, run.date)), readPrefetch(run.home, run.date));
   const approvals = (run.options.approvals ?? approvalsWaiting)(run.home);
-  const { view, withheld, shownIds } = briefView(context, { link: connectionsUrl(run.home), approvals });
+  const { view, withheld, shownIds } = briefView(context, { link: connectionsUrl(run.home), approvals, portal: portalBase(run.home) });
   return { view, withheld, record: (state) => recordBriefShowings(state, shownIds, run.date, villageDate()) };
 }
 
