@@ -14,12 +14,13 @@ Python 3.11, standard library only. See README.md.
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 import time
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
-from . import _approval, _edgeos, _intent_approval, _share_vote
+from . import _approval, _edgeos, _intent_approval, _share_vote, _terminal_args
 from ._collector import Collector, guarded, hermes_version, overlay_ref
 from ._consent import TOOL_NAME as CONSENT_TOOL_NAME
 from ._consent import register_consent_tool
@@ -46,6 +47,8 @@ from ._tools import (
 )
 
 __version__ = PLUGIN_VERSION
+
+logger = logging.getLogger("av-events")
 
 #: Hermes reports a `platform`; the catalogue (spec §4.1 `session.*`) wants a
 #: `source`. Anything unrecognised passes through as-is rather than being
@@ -395,6 +398,9 @@ def _hook_pre_tool_call(collector: Collector, **kwargs: Any) -> None:
     and `guarded` marks it quiet so it skips the config reload too. An unknown
     session is simply not counted — a tool call is worth less than a tool call
     that never happened.
+
+    This body only counts. The DATA-312 `terminal` argument fix that rides the
+    same Hermes hook is `with_terminal_args_fix`, outside the telemetry guard.
     """
     state = collector.peek_session(kwargs.get("session_id"))
     if state is None:
@@ -904,8 +910,42 @@ def build_subscriptions(collector_ref=_collector) -> dict:
     return subscriptions
 
 
+def with_terminal_args_fix(telemetry: Callable) -> Callable:
+    """`pre_tool_call` = the telemetry counter, then the DATA-312 terminal fix.
+
+    The counter (`guarded`) returns None today; if it ever returns a directive,
+    that directive wins and the fix adds nothing. Otherwise the fix may return
+    one `modify` directive for a foreground `terminal` call (`_terminal_args`).
+
+    The fix sits outside `guarded` on purpose: it is not telemetry. It runs
+    with `AV_EVENTS_ENABLED=0`, with no token, with `pre_tool_call` in
+    `AV_HOOKS_DISABLED`, and in a degraded session; only `AV_TERMINAL_ARGS_FIX`
+    switches it off. It cannot raise (`safe_directive`), and the one log line
+    names the keys it switched off, never a value or the command.
+    """
+
+    def pre_tool_call(*args: Any, **kwargs: Any) -> Any:
+        result = telemetry(*args, **kwargs)
+        if result is not None:
+            return result
+        fix = _terminal_args.safe_directive(kwargs.get("tool_name"), kwargs.get("args"))
+        if fix is not None:
+            try:
+                logger.debug("av-events: terminal_args neutralised=%s", ",".join(fix["args"]))
+            except BaseException:  # noqa: BLE001 - a log line must not cost the fix
+                pass
+        return fix
+
+    pre_tool_call.av_hook_name = getattr(telemetry, "av_hook_name", "pre_tool_call")  # type: ignore[attr-defined]
+    return pre_tool_call
+
+
 def build_hooks(collector_ref=_collector) -> dict:
-    """Wrap every hook body in the fail-open guard. One decorator, no exceptions."""
+    """Wrap every hook body in the fail-open guard. One decorator, no exceptions.
+
+    `pre_tool_call` is then wrapped once more by `with_terminal_args_fix`
+    (DATA-312), which is the only thing in this plugin that returns a directive.
+    """
     hooks = {}
     for name, body in HOOK_BODIES.items():
         wrapped = guarded(name, collector_ref, quiet=name in QUIET_HOOKS)(body)
@@ -916,6 +956,8 @@ def build_hooks(collector_ref=_collector) -> dict:
             del wrapped.__wrapped__
         except AttributeError:
             pass
+        if name == "pre_tool_call":
+            wrapped = with_terminal_args_fix(wrapped)
         hooks[name] = wrapped
     return hooks
 
