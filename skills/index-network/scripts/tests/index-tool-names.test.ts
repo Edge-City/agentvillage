@@ -61,7 +61,7 @@ describe("Index tool names in scripts and prose", () => {
       "workspace/SOUL.md",
       "workspace/AGENTS.md",
       "skills/edge-esmeralda/prompts/memory-signals.md",
-      "skills/edge-esmeralda/prompts/send.md",
+      "skills/edge-esmeralda/prompts/brief.md",
       "skills/index-network/tools.md",
       "skills/index-network/SKILL.md",
     ]) {

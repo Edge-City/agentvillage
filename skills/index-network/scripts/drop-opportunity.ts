@@ -50,6 +50,7 @@ import {
   recordShowings,
 } from "./delivery-state";
 import { indexMcpUrl } from "./index-mcp";
+import { writeStateFile } from "./state-file";
 
 interface DropResult {
   opportunity: BriefOpportunity;
@@ -131,7 +132,7 @@ export async function dropOpportunity(options: {
   if (!chosen?.opportunityId) {
     if (!readOnly && deliveryLogChanged(state, log)) {
       state[OPPORTUNITY_DELIVERY_KEY] = log;
-      await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
+      writeStateFile(stateFile, state);
     }
     return { silent: true, reason: "nothing-new" };
   }
@@ -143,7 +144,7 @@ export async function dropOpportunity(options: {
     ids: Array.from(new Set([...deliveredIds, chosen.opportunityId])),
   };
   state[OPPORTUNITY_DELIVERY_KEY] = pruneDeliveryLog(recordShowings(log, [chosen.opportunityId], date), date, listing);
-  if (!readOnly) await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
+  if (!readOnly) writeStateFile(stateFile, state);
 
   return { opportunity: attachIndexLinks(chosen) };
 }

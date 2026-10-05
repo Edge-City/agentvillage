@@ -33,6 +33,7 @@ import {
   recordShowings,
 } from "./delivery-state";
 import { indexMcpUrl } from "./index-mcp";
+import { writeStateFile } from "./state-file";
 
 /** Last day of Edge City India 2026 (Oct 11 – Nov 1). */
 const FINAL_REFLECTION_DATE = "2026-11-01";
@@ -136,13 +137,13 @@ export async function askQuestions(options: {
         if (!readOnly) {
           state.deliveredToday = { date, ids: [...seen, chosen.opportunityId] };
           state[OPPORTUNITY_DELIVERY_KEY] = pruneDeliveryLog(recordShowings(log, [chosen.opportunityId], date), date, listing);
-          await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
+          writeStateFile(stateFile, state);
         }
         const card = cardFrom(chosen);
         if (card) return card;
       } else if (!readOnly && deliveryLogChanged(state, log)) {
         state[OPPORTUNITY_DELIVERY_KEY] = log;
-        await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
+        writeStateFile(stateFile, state);
       }
     } catch {
       // An unwritable state file still allows the last-day closeout.
@@ -158,7 +159,7 @@ export async function askQuestions(options: {
     return { silent: true, reason: "final-reflection-already-delivered" };
   }
   state.questionDelivery = { ...delivered, [FINAL_REFLECTION_QUESTION_ID]: date };
-  await Bun.write(stateFile, `${JSON.stringify(state, null, 2)}\n`);
+  writeStateFile(stateFile, state);
   return { prompt: FINAL_REFLECTION_PROMPT };
 }
 
