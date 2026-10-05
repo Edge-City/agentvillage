@@ -4,7 +4,7 @@
  * a temp HERMES_HOME, covering the create / prompt-edit / schedule-migrate /
  * preserve paths end-to-end.
  */
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -35,17 +35,19 @@ let home: string;
 let stubLog: string;
 let savedEnv: Record<string, string | undefined>;
 
-function writeStubHermes(dir: string, { rejectScheduleFlag = false } = {}): string {
+function writeStubHermes(dir: string, { rejectScheduleFlag = false, failEditIds = [] as string[] } = {}): string {
   const bin = join(dir, "hermes");
   const rejectBlock = rejectScheduleFlag
     ? `for arg in "$@"; do if [ "$arg" = "--schedule" ]; then exit 2; fi; done\n`
     : "";
+  // Logged first, so a failed edit still shows as attempted.
+  const failBlock = failEditIds.map((id) => `if [ "$1" = "cron" ] && [ "$2" = "edit" ] && [ "$3" = "${id}" ]; then exit 1; fi\n`).join("");
   writeFileSync(
     bin,
     `#!/usr/bin/env bash
 if [ "$1" = "--version" ]; then echo "stub 0.0.0"; exit 0; fi
 ${rejectBlock}printf '%s\n' "$(printf '%s\x1f' "$@")" >> "${join(dir, "calls.log")}"
-exit 0
+${failBlock}exit 0
 `,
   );
   chmodSync(bin, 0o755);
@@ -251,8 +253,9 @@ test("jobs still on old synchronized defaults get schedule-only migrations", () 
   const calls = cronCalls();
   expect(calls).toEqual([
     ["cron", "edit", "g1", "--schedule", staggeredSchedule(SIGNALS, SEED)],
-    ["cron", "edit", "p1", "--schedule", staggeredSchedule(PREPARE, SEED)],
     ["cron", "edit", "s1", "--schedule", staggeredSchedule(SEND, SEED)],
+    // The prefetch is reconciled last (B1-fix F9).
+    ["cron", "edit", "p1", "--schedule", staggeredSchedule(PREPARE, SEED)],
   ]);
 });
 
@@ -525,13 +528,14 @@ test("an upgrade roll from the pre-DATA-314 jobs is one in-place edit per job: n
     "cron", "edit", id, "--prompt", prompt, "--script", `agentvillage_proactive_${action}.sh`, "--failure-deliver", "local",
   ];
   expect(cronCalls()).toEqual([
-    [...shape("p1", PREFETCH_PROMPT, "prefetch").slice(0, 7), "--no-agent", "--failure-deliver", "local"],
     shape("s1", "SEND_BODY", "brief"),
     shape("n1", "NEGOTIATION_BODY", "negotiation"),
     shape("e1", "EVENING_BODY", "evening"),
     shape("dm1", "DROP_BODY", "drop-midday"),
     shape("de1", "DROP_BODY", "drop-evening"),
     ["cron", "edit", "a1", "--failure-deliver", "local"],
+    // The prefetch last: edited before the brief, a cut-short roll would leave no brief (B1-fix F9).
+    [...shape("p1", PREFETCH_PROMPT, "prefetch").slice(0, 7), "--no-agent", "--failure-deliver", "local"],
   ]);
   // A second roll finds everything in shape.
   writeJobs(DIGEST_CRON_SPECS.map((spec, n) => currentJob(spec, `job${n}`)));
@@ -546,4 +550,93 @@ test("a job switched to no_agent by hand goes back to agent mode", () => {
   reconcileDigestCronJobs({ ...process.env });
 
   expect(cronCalls()).toEqual([["cron", "edit", "s1", "--agent"]]);
+});
+
+test("F9: one failed edit: every other job is still attempted, the prefetch after the brief, and the failure is named and returned", () => {
+  process.env.HERMES_BIN = writeStubHermes(home, { failEditIds: ["s1"] });
+  writeJobs([
+    currentJob(SIGNALS, "g1"),
+    oldShapeJob(PREPARE, "p1", "OLD_PREPARE"),
+    oldShapeJob(SEND, "s1", "OLD_SEND"),
+    oldShapeJob(NEGOTIATION, "n1", "NEGOTIATION_OLD"),
+    oldShapeJob(EVENING, "e1", "EVENING_OLD"),
+    oldShapeJob(DROP_MIDDAY, "dm1", "DROP_OLD"),
+    oldShapeJob(DROP_EVENING, "de1", "DROP_OLD"),
+    currentJob(TOKEN_AUDIT, "a1"),
+  ]);
+  const lines: string[] = [];
+  const log = spyOn(console, "log").mockImplementation((line: string) => void lines.push(String(line)));
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+
+  let failed: string[];
+  try {
+    failed = reconcileDigestCronJobs({ ...process.env });
+  } finally {
+    log.mockRestore();
+    warn.mockRestore();
+  }
+
+  expect(failed).toEqual([SEND.name]);
+  expect(cronCalls().map((argv) => argv[2])).toEqual(["s1", "n1", "e1", "dm1", "de1", "p1"]);
+  const summary = lines.filter((line) => line.includes("Index crons:"));
+  expect(summary).toEqual([`→ warning: Index crons: 1 failed (${SEND.name}); the tenant may run a mix of old and new jobs`]);
+});
+
+test("F9: nothing failed: an empty list and a one-line all-clear", () => {
+  writeJobs(DIGEST_CRON_SPECS.map((spec, n) => currentJob(spec, `job${n}`)));
+  const lines: string[] = [];
+  const log = spyOn(console, "log").mockImplementation((line: string) => void lines.push(String(line)));
+  let failed: string[];
+  try {
+    failed = reconcileDigestCronJobs({ ...process.env });
+  } finally {
+    log.mockRestore();
+  }
+  expect(failed).toEqual([]);
+  expect(lines.filter((line) => line.includes("Index crons:"))).toEqual(["→ Index crons: every job in shape"]);
+});
+
+test("F9: the standalone reconcile exits non-zero after attempting every job when one fails", () => {
+  process.env.HERMES_BIN = writeStubHermes(home, { failEditIds: ["n1"] });
+  writeJobs([
+    currentJob(SIGNALS, "g1"),
+    currentJob(PREPARE, "p1"),
+    currentJob(SEND, "s1"),
+    oldShapeJob(NEGOTIATION, "n1", "NEGOTIATION_OLD"),
+    oldShapeJob(EVENING, "e1", "EVENING_OLD"),
+    currentJob(DROP_MIDDAY, "dm1"),
+    currentJob(DROP_EVENING, "de1"),
+    currentJob(TOKEN_AUDIT, "a1"),
+  ]);
+  const done = Bun.spawnSync(["bun", join(import.meta.dir, "..", "reconcile_digest_crons.ts")], {
+    env: { ...process.env },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  expect(done.exitCode).toBe(1);
+  expect(done.stderr.toString()).toContain(`1 Index cron job(s) failed to update (${NEGOTIATION.name})`);
+  expect(cronCalls().map((argv) => argv[2])).toEqual(["n1", "e1"]);
+});
+
+test("F13: prompts are compared and sent with trailing whitespace trimmed, so a created job is not re-edited", () => {
+  // `hermes cron create` stores the prompt stripped; a prompt file ends with a newline.
+  writeFileSync(join(home, "skills", SEND.promptFile!), "SEND_BODY\n\n");
+  writeJobs(DIGEST_CRON_SPECS.map((spec, n) => currentJob(spec, spec === SEND ? "s1" : `job${n}`)));
+
+  reconcileDigestCronJobs({ ...process.env });
+  expect(cronCalls()).toEqual([]);
+
+  // A job an older roll edited stores the raw text: also in shape.
+  writeJobs(DIGEST_CRON_SPECS.map((spec, n) => ({ ...currentJob(spec, spec === SEND ? "s1" : `job${n}`), ...(spec === SEND ? { prompt: "SEND_BODY\n\n" } : {}) })));
+  reconcileDigestCronJobs({ ...process.env });
+  expect(cronCalls()).toEqual([]);
+
+  // A stale one gets the trimmed text; a fresh create sends it trimmed too.
+  writeJobs(DIGEST_CRON_SPECS.map((spec, n) => ({ ...currentJob(spec, spec === SEND ? "s1" : `job${n}`), ...(spec === SEND ? { prompt: "OLD" } : {}) })));
+  reconcileDigestCronJobs({ ...process.env });
+  expect(cronCalls()).toEqual([["cron", "edit", "s1", "--prompt", "SEND_BODY"]]);
+  writeFileSync(stubLog, "");
+  writeJobs([]);
+  reconcileDigestCronJobs({ ...process.env });
+  expect(cronCalls().find((argv) => argv[1] === "create" && argv.includes(SEND.name))![3]).toBe("SEND_BODY");
 });

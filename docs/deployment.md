@@ -332,7 +332,16 @@ ignored and the default is used.
 place, one `hermes cron edit <id>` for its shape (prompt, script, agent mode,
 failure target), so ids, schedules, pause state and next run are kept and
 nothing is paused or recreated. The edit takes effect on the job's next run;
-the gateway restart is not needed for it.
+the gateway restart is not needed for it. Prompts are compared and sent with
+trailing whitespace trimmed (`cron create` strips them), so a second roll
+changes nothing. The resident-facing jobs are edited before the 02:00
+prefetch (the prefetch edited and the brief not would leave the old brief
+prompt with nothing to send), and every job is attempted even after one
+fails. The installer then prints one line, `Index crons: N failed (<job
+names>)`, and, after every other step has run (the approval gate and the
+gateway restart included), exits non-zero, so the roll reports the resident
+as failed. Rerun the install on that resident; `reconcile_digest_crons.ts`
+exits non-zero the same way.
 
 **After a roll, on a canary.** Force the brief within the window with
 `hermes cron run <id>` (the daily digest's id from `hermes cron list`): one

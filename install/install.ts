@@ -19,6 +19,8 @@
  *   - opt-in approval.md gate when `AV_APPROVAL_ENABLED=1` (`install_approval.ts`):
  *     a failure there exits non-zero, because an opted-in tenant left ungated
  *     is the failure the gate exists to prevent
+ *   - an Index cron job that fails to update exits non-zero too, but only at
+ *     the end, after every other step (the gate and the restart included) ran
  *
  * Usage (from repo root):
  *   bun install/install.ts --index-api-key <KEY>
@@ -252,10 +254,14 @@ function main(): void {
   // Opt-in and off the core path: a failure here is counted, never fatal.
   safeInstallRecall(SOURCE_SKILLS);
 
+  // Index cron jobs that failed to reconcile. Every later step still runs (the
+  // approval gate and the gateway restart included); the install then exits
+  // non-zero so the roll marks this resident failed (B1-fix F9).
+  let cronFailures: string[] = [];
   if (process.argv.includes("--skip-index")) {
     console.log("→ index network: unconfigured (--skip-index); bundled skills remain installed");
   } else {
-    installIndex();
+    cronFailures = installIndex();
   }
   installEdgeos();
   installGeo();
@@ -271,6 +277,14 @@ function main(): void {
 
   if (!process.argv.includes("--no-restart")) {
     restartGateway();
+  }
+
+  if (cronFailures.length > 0) {
+    console.error(
+      `error: ${cronFailures.length} Index cron job(s) failed to update (${cronFailures.join(", ")}); `
+      + "every other step ran. Rerun the install on this resident.",
+    );
+    process.exit(1);
   }
 
   console.log("");

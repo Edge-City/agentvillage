@@ -24,5 +24,10 @@ console.log("AgentVillage Index cron reconciler");
 console.log("===================================");
 // The proactive triggers' budgets need it, as install.ts sets it (DATA-314).
 configureCronScriptTimeout();
-reconcileDigestCronJobs(hermesExecEnv());
+const failed = reconcileDigestCronJobs(hermesExecEnv());
+if (failed.length > 0) {
+  // Every job was attempted; a mixed tenant is reported, never silent (B1-fix F9).
+  console.error(`error: ${failed.length} Index cron job(s) failed to update (${failed.join(", ")})`);
+  process.exit(1);
+}
 console.log("✓ Index crons reconciled");

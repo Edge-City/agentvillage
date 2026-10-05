@@ -416,7 +416,11 @@ export function cronEditArgs(jobId: string, { prompt, schedule, script, noAgent,
  */
 export function staleShapeFields(job: StoredCronJob, spec: DigestCronSpec, promptBody: string): CronEditFields {
   const fields: CronEditFields = {};
-  if (job.prompt !== promptBody) fields.prompt = promptBody;
+  // `cron create` strips the prompt and `cron edit` stores it raw, so both are
+  // compared and sent with trailing whitespace trimmed: a second roll is a
+  // no-op for a created job too (B1-fix F13).
+  const prompt = promptBody.trimEnd();
+  if (typeof job.prompt !== "string" || job.prompt.trimEnd() !== prompt) fields.prompt = prompt;
   const script = expectedCronScriptArg(spec);
   if (script !== undefined && job.script !== script) fields.script = script;
   if (Boolean(job.no_agent) !== Boolean(spec.noAgent)) fields.noAgent = Boolean(spec.noAgent);
@@ -553,18 +557,35 @@ export function writeInstalledJobIds(home: string, ids: string[]): void {
   }
 }
 
+/**
+ * The order jobs are reconciled in: every job before the no_agent prefetch.
+ * The bad mix is the prefetch edited and the morning brief not (the old brief
+ * prompt then finds nothing staged and no brief goes out), so the prefetch
+ * goes last: a run cut short leaves the old prefetch, which is harmless.
+ */
+export function reconcileOrder(specs: DigestCronSpec[]): DigestCronSpec[] {
+  return [...specs.filter((spec) => !spec.noAgent), ...specs.filter((spec) => spec.noAgent)];
+}
+
+/**
+ * Reconcile the Index cron jobs. Every job is attempted even after one fails;
+ * the names of those whose remove, create or shape edit failed are returned
+ * and named in one summary line at the end (B1-fix F9). A failed schedule
+ * migration only warns: the job keeps working on its old default slot.
+ */
 export function reconcileDigestCronJobs(
   env: NodeJS.ProcessEnv = hermesExecEnv(),
   argv: string[] = process.argv,
-): void {
+): string[] {
   const home = hermesHome();
   const promptsDir = join(home, "skills");
 
   const bin = hermesBin();
   if (!hermesAvailable(bin)) {
     console.warn("  warning: hermes CLI not found — skipping Index crons");
-    return;
+    return [];
   }
+  const failed: string[] = [];
 
   const existing = readCronJobs();
   const idsBefore = new Set(existing.map((job) => job.id));
@@ -588,6 +609,7 @@ export function reconcileDigestCronJobs(
       console.log(`→ removed retired cron ${job.name}`);
     } catch {
       console.warn(`  warning: could not remove cron ${job.name}`);
+      failed.push(job.name);
     }
   }
 
@@ -599,10 +621,11 @@ export function reconcileDigestCronJobs(
     console.warn("  warning: could not run `hermes kanban init` — board may auto-init on first use");
   }
 
-  for (const spec of activeSpecs) {
+  for (const spec of reconcileOrder(activeSpecs)) {
     // Scripts are copied before any edit: Hermes checks a script path when a job is edited.
     ensureCronScriptInstalled(spec, home, promptsDir);
-    const promptBody = readCronPromptBody(spec, promptsDir);
+    // Trimmed as `cron create` stores it (B1-fix F13).
+    const promptBody = readCronPromptBody(spec, promptsDir).trimEnd();
     const job = existing.find((entry) => entry.name === spec.name);
     const schedule = resolveCronSchedule(spec, argv, env, staggerSeed);
 
@@ -627,6 +650,7 @@ export function reconcileDigestCronJobs(
           execFileSync(bin, cronEditArgs(job.id, stale), { stdio: ["ignore", "ignore", "inherit"], env });
         } catch {
           console.warn(`  warning: could not update cron "${spec.name}" — it keeps its previous shape`);
+          failed.push(spec.name);
         }
       }
       // The schedule goes in its own edit, as before, so an older Hermes
@@ -655,14 +679,22 @@ export function reconcileDigestCronJobs(
       });
     } catch {
       console.warn(`  warning: could not install cron "${spec.name}" — gateway may still run`);
+      failed.push(spec.name);
     }
     const created = createdId(spec.name);
     if (created) installed.push(created);
   }
   writeInstalledJobIds(home, installed);
+  console.log(
+    failed.length === 0
+      ? "→ Index crons: every job in shape"
+      : `→ warning: Index crons: ${failed.length} failed (${failed.join(", ")}); the tenant may run a mix of old and new jobs`,
+  );
+  return failed;
 }
 
-export function installIndex(): void {
+/** Returns the names of the Index cron jobs that failed to reconcile (empty when none, or crons skipped). */
+export function installIndex(): string[] {
   const apiKey = readApiKey();
   // Persist the canonical (bare, lowercase) handle so the runtime source
   // (INDEX_TELEGRAM_HANDLE / MCP headers) never drifts from other systems by
@@ -675,7 +707,6 @@ export function installIndex(): void {
   if (telegramHandle) upsertEnvVar("INDEX_TELEGRAM_HANDLE", telegramHandle);
   writeMcpServerEntry(apiKey, telegramHandle);
 
-  if (!process.argv.includes("--skip-crons")) {
-    reconcileDigestCronJobs(hermesExecEnv());
-  }
+  if (process.argv.includes("--skip-crons")) return [];
+  return reconcileDigestCronJobs(hermesExecEnv());
 }
