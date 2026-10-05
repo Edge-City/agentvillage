@@ -102,6 +102,15 @@ describe("the six proactive jobs (DATA-314)", () => {
     }
   });
 
+  test("F11: AGENTS.md, which Hermes loads into these runs, sends no Script Output job to look anything up", () => {
+    const agents = readFileSync(join(import.meta.dir, "..", "..", "workspace", "AGENTS.md"), "utf8");
+    const line = agents.split("\n").find((l) => l.includes("pre-fetch network data"));
+    expect(line).toBeDefined();
+    expect(line).not.toMatch(/or a cron fires\.(\s|$)/);
+    expect(line).toContain("whose prompt says to write only from the Script Output is not one of those");
+    expect(line).toContain("call no tool");
+  });
+
   test("no no_agent job delivers text: the only no_agent job is the prefetch, which delivers nothing", () => {
     const noAgent = DIGEST_CRON_SPECS.filter((spec) => spec.noAgent);
     expect(noAgent.map((spec) => spec.name)).toEqual(["Edge — digest prepare"]);

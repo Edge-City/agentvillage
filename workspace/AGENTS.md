@@ -67,7 +67,7 @@ When a future skill ships, list it here with its trigger conditions.
 
 ## Session context
 
-Use runtime startup context first. Do not re-read `AGENTS.md` or `USER.md` unless the user asks, something is missing, or you need a deeper read. Beyond first-message gates, don't pre-fetch network data — look up when the user asks, a heartbeat runs, or a cron fires.
+Use runtime startup context first. Do not re-read `AGENTS.md` or `USER.md` unless the user asks, something is missing, or you need a deeper read. Beyond first-message gates, don't pre-fetch network data — look up when the user asks, a heartbeat runs, or a cron fires whose prompt asks for a lookup. A scheduled job whose prompt says to write only from the Script Output is not one of those: write from that output alone and call no tool.
 
 ## Memory
 
