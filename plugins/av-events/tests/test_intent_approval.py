@@ -1456,3 +1456,131 @@ def test_sr2_3_no_approval_setting_is_read_from_the_dotfile(mods, home, monkeypa
     assert mods.ap._proc_root() == "/proc"
     monkeypatch.setenv("AV_APPROVAL_TOKEN_FILE", str(token))  # the process environment is honoured
     assert mods.ap.agent_token() == ("dotfile-token-value-01", None)
+
+
+# --------------------------------------------------------------------------
+# DATA-311: an explicit publish=false is honoured in every lineage and for
+# every source. Nothing marked do-not-publish is proposed, held for approval
+# or published, whatever the session or the resident's inferred policy.
+# --------------------------------------------------------------------------
+
+PERSONAL = "my health worry"
+HELD_SESSIONS = [("cron_job_1", "cron"), ("never-seen", "unknown")]
+
+
+def _personal(source: str) -> dict:
+    return {"text": PERSONAL, "source": source, "publish": False, "reason": "personal"}
+
+
+def _assert_local(out: dict, reason: str = "personal") -> None:
+    assert out["success"] is True and out["published"] is False and out["local_reason"] == reason
+    assert out["index_intent_id"] is None
+    for key in ("held", "publish_refused", "approval_state", "approved_by"):
+        assert key not in out, key
+
+
+@pytest.mark.parametrize("policy", ["manual", "autonomous"])
+@pytest.mark.parametrize("source", ["message", "note", "onboarding"])
+@pytest.mark.parametrize("session,lineage", HELD_SESSIONS)
+def test_data311_a_personal_capture_in_a_held_session_stays_local(tctx, serve, index, mods, av, plugin,
+                                                                  session, lineage, source, policy):
+    serve.autonomy[INFERRED] = policy
+    assert mods.ri.held_reason(session) == lineage
+    out = call(tctx, _personal(source), session=session)
+    _assert_local(out)
+    # The lineage still decides the source; only the publish decision changed.
+    assert out["source"] == "ambient"
+    assert serve.calls == [] and index.requests == []
+    assert entry(mods, out["intention_id"]) == {"published": False, "source": "ambient", "local_reason": "personal"}
+    poll(mods)
+    assert serve.calls == [] and index.requests == []
+    [event] = events(av, plugin)
+    payload = event["payload"]
+    assert event["event_type"] == "intention.captured" and payload["source"] == "ambient"
+    assert payload["local_reason"] == "personal" and payload["publish_refused"] is None
+    assert payload["index_intent_id"] is None
+    assert payload.get("approval_state") is None and payload.get("approved_by") is None
+
+
+@pytest.mark.parametrize("policy", ["manual", "autonomous"])
+@pytest.mark.parametrize("session", [SESSION, "cron_job_1", "never-seen"])
+def test_data311_an_ambient_capture_marked_publish_false_stays_local(tctx, serve, index, mods, av, plugin,
+                                                                     session, policy):
+    serve.autonomy[INFERRED] = policy
+    out = call(tctx, {**_personal("ambient"), "reason": "participant_asked"}, session=session)
+    _assert_local(out, "participant_asked")
+    assert out["source"] == "ambient"
+    assert serve.calls == [] and index.requests == []
+    assert "held_norm_hash" not in entry(mods, out["intention_id"])
+    poll(mods)
+    assert serve.calls == [] and index.requests == []
+
+
+@pytest.mark.parametrize("source", ["message", "ambient"])
+@pytest.mark.parametrize("session", ["cron_job_1", "never-seen"])
+def test_data311_publish_false_still_needs_a_reason_in_a_held_session(tctx, serve, index, mods, av, plugin,
+                                                                      session, source):
+    out = call(tctx, {"text": PERSONAL, "source": source, "publish": False}, session=session)
+    assert out["success"] is False and out["error"] == "reason_required"
+    assert serve.calls == [] and index.requests == [] and events(av, plugin) == []
+    assert mods.ri._load_map() == {}
+
+
+def test_data311_the_held_session_event_is_a_normal_local_capture(tctx, serve, index, mods, av, plugin):
+    """The same events a local capture in a human session records: one capture,
+    no publish attempt, no proposal; only the source differs (the lineage's)."""
+    serve.autonomy[INFERRED] = "autonomous"
+    call(tctx, _personal("message"))
+    call(tctx, _personal("message"), session="cron_job_1", tool_call_id="c2")
+    normal, held = events(av, plugin)
+    assert normal["event_type"] == held["event_type"] == "intention.captured"
+    assert normal["payload"]["source"] == "message" and held["payload"]["source"] == "ambient"
+    strip = lambda p: {k: v for k, v in p.items() if k != "source"}  # noqa: E731
+    assert strip(normal["payload"]) == strip(held["payload"])
+    assert serve.calls == [] and index.requests == []
+    # The map tells both apart from a held inferred entry.
+    held_ids = [i for i, v in mods.ri._load_map().items() if v.get("local_reason") == "personal"]
+    assert len(held_ids) == 2
+
+
+@pytest.mark.parametrize("policy", ["manual", "autonomous"])
+@pytest.mark.parametrize("session", ["cron_job_1", "never-seen"])
+def test_data311_a_local_intention_stays_local_through_update_confirm_and_the_poller(
+        tctx, serve, index, mods, av, plugin, session, policy):
+    serve.autonomy[INFERRED] = policy
+    iid = call(tctx, _personal("message"), session=session)["intention_id"]
+    for who, n in ((session, "u1"), (SESSION, "u2")):
+        out = call(tctx, {"action": "update", "intention_id": iid, "text": PERSONAL + " " + n}, session=who,
+                   tool_call_id=n)
+        assert out["success"] is True and out["published"] is False and "publish_refused" not in out
+        poll(mods)
+    for who, n in ((session, "c1"), (SESSION, "c2")):
+        out = call(tctx, {"action": "confirm", "intention_id": iid}, session=who, tool_call_id=n)
+        assert out["success"] is False and out["error"] == "confirm_not_held"
+        poll(mods)
+    assert entry(mods, iid) == {"published": False, "source": "ambient", "local_reason": "personal"}
+    assert serve.calls == [] and index.requests == []
+    # A later stated capture of the same words is not taken for a held one.
+    out = call(tctx, {"text": PERSONAL + " u2", "source": "message"}, tool_call_id="s1")
+    assert out["published"] is True and "publish_refused" not in out
+    out = call(tctx, {"action": "withdraw", "intention_id": iid}, session=session, tool_call_id="w1")
+    assert out["success"] is True and out["published"] is False
+    assert [c["flags"]["--class"] for c in serve.proposals()] == [STATED_CLASS, STATED_CLASS]
+
+
+@pytest.mark.parametrize("publish", [None, True, "true"])
+@pytest.mark.parametrize("source", ["message", "note", "onboarding"])
+@pytest.mark.parametrize("session,lineage", HELD_SESSIONS)
+def test_data311_the_lineage_still_downgrades_a_claimed_stated_source(tctx, serve, index, mods, av, plugin,
+                                                                      session, lineage, source, publish):
+    """The reverse hazard: a held session cannot pass an inferred want off as a
+    stated one. Unless publish is false, it is held and proposed as inferred."""
+    args: dict[str, Any] = {"text": TEXT, "source": source}
+    if publish is not None:
+        args["publish"] = publish
+    out = call(tctx, args, session=session)
+    assert out["source"] == "ambient" and out["publish_refused"] == f"held_{lineage}"
+    assert out["held"] is True and out["published"] is False and "local_reason" not in out
+    assert [p["flags"]["--class"] for p in serve.proposals()] == [INFERRED]
+    assert index.requests == []
+    assert "local_reason" not in entry(mods, out["intention_id"])

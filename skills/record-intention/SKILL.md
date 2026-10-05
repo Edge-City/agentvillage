@@ -31,7 +31,8 @@ only to reword the same want. A different want is a new want and goes through
 Explicit intents (source message, onboarding or note) are published to Index by default. The two legitimate reasons an explicit intent stays local: the resident asked, or the content is personal.
 
 Only in those two cases pass `publish=false`, with `reason=participant_asked`
-or `reason=personal`. Any other `publish=false` is refused.
+or `reason=personal`. Any other `publish=false` is refused. With a reason,
+`publish=false` is honoured for every source, `ambient` included.
 
 ## Source
 
@@ -48,7 +49,9 @@ and stays off Index until the resident approves it in their approval channel.
 Where that channel is set up, the tool sends them the request itself when you
 capture, with the words you recorded, and publishes once they approve; you do
 not need to ask them in chat as well. A yes you read in chat is not an
-approval.
+approval. Something you inferred that is personal is the exception: capture it
+with `publish=false` and `reason=personal`, and it stays local and is never sent
+for approval.
 
 - `action=confirm` (with `intention_id`) checks whether the resident has
   answered and publishes it if they approved. If they have not answered yet,

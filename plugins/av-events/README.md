@@ -478,9 +478,9 @@ Search, which such a gate would not see); its text, the `workspace/AGENTS.md` ro
 |---|---|---|
 | `capture`, source `message`/`onboarding`/`note`, in a session that may publish | `POST /api/intents {description: text, sourceType: "agentvillage"}`, no `sourceId` | `intention_id` = `index_intent_id` = Index's id (corroborated by id, no back-reference needed) |
 | same, Index refused, unreachable, or the hourly cap reached | tried, or not when capped | local uuid v7, `publish_refused` = code |
-| `capture`, `publish=false`, `reason` | none | local uuid v7, `local_reason` = reason |
-| `capture`, source `ambient` | none | local uuid v7, `source=ambient`, held |
-| `capture`, explicit source, in a held session | none | local uuid v7, `source=ambient`, `publish_refused` `held_cron` or `held_unknown` |
+| `capture`, `publish=false`, `reason`, any source, in any session | none | local uuid v7, `local_reason` = reason, never proposed (in a held session `source=ambient`, no `held_*` code) |
+| `capture`, source `ambient` | none | local uuid v7, `source=ambient`, held, unless `publish=false` (kept local) |
+| `capture`, explicit source, in a held session | none | local uuid v7, `source=ambient`, `publish_refused` `held_cron` or `held_unknown`, unless `publish=false` (kept local) |
 | `capture` that would publish, of text already held as ambient (case and whitespace ignored) | none | local uuid v7, `publish_refused="held_ambient_exists"` |
 | `update` / `withdraw` of an id it published | `PATCH /api/intents/{id} {description}` / `PATCH /api/intents/{id}/archive` (no body) | `index_intent_id` set; a failed mirror adds `publish_refused` |
 | `update` of a published id in a held session | none | `publish_refused` `held_cron` or `held_unknown`, `source=ambient` |
@@ -506,6 +506,13 @@ bluebubbles, qqbot, yuanbao; and `cli`, `tui`, `desktop`). A `cron_` id or `plat
 chain is `held_cron`; anything else (`api_server`, `webhook`, `batch`, `acp`, `curator`, `local`,
 an empty platform, a plugin platform, an unseen session, a subagent of unknown ancestry) is
 `held_unknown`.
+
+**`publish=false` always wins (DATA-311).** An explicit `publish=false` (with its reason) is
+honoured for every source and in every lineage: nothing a caller marks do-not-publish is ever
+proposed, held for approval or published, whatever the session. A held session still turns the
+source into `ambient`, so it cannot pass an inferred want off as a stated one; only the publish
+decision is taken first, and `update`, `confirm` (refused `confirm_not_held`) and the approval
+poller never turn such a local intention into a proposed one.
 
 **Held withdrawals (refutation B2, provisional ruling; Carter may overturn).** The same test holds
 a withdrawal of a *published* intention: archiving on Index cannot be undone, and held sessions
@@ -590,7 +597,7 @@ writes to production unless `INDEX_API_URL` (or `INDEX_MCP_URL`) is set in the g
 environment. An id in a path must be a UUID or a hex short id and is URL-encoded.
 No redirects, no proxies. The whole request has a 30 s deadline. `$HERMES_HOME/av-events/intentions.json` (0600, under `flock` on
 `intentions.json.lock`) records each id's `{published, source}`, `refused: rejected` for a local
-capture Index rejected, a `held_norm_hash` (sha256 of the
+capture Index rejected, `local_reason` for a capture kept local on purpose, a `held_norm_hash` (sha256 of the
 case-folded, whitespace-collapsed text, never emitted) for held ambient entries only, replaced on
 update and dropped on withdrawal, and the cap's attempt timestamps; a corrupt file is renamed to
 `intentions.json.corrupt-<n>` and the map starts empty. Logs carry codes only. The observer reads
