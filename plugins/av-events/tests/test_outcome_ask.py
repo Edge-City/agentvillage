@@ -692,6 +692,42 @@ def test_a_truncated_quote_is_judged_by_the_next_message_rule_alone(live, ctx, t
     assert len(events(av, live, "outcome.reported")) == (1 if first else 0)
 
 
+MAYA = "Did you and Maya meet? Reply met, not useful, or missed."
+
+
+def ask_about_maya(live, ctx, tenant, opportunity: str) -> None:
+    execution = uuid.uuid4().hex
+    tenant.stage(subjects=[{"outcome_id": f"opp-outcome:{opportunity}", "opportunity_id": opportunity}], name="Maya")
+    evening_reply(ctx, tenant, execution, MAYA)
+    time.sleep(0.01)
+    tenant.finish(execution)
+    live._COLLECTOR.outcome_tick()
+
+
+def test_a_reply_quoting_a_question_two_asks_share_emits_nothing(live, ctx, tenant, av):
+    """Round 3 item 2: two people with the same cleaned name, asked on
+    consecutive evenings, have identical questions."""
+    ask_about_maya(live, ctx, tenant, "maya-one")
+    time.sleep(0.01)
+    ask_about_maya(live, ctx, tenant, "maya-two")
+    assert len(events(av, live, "outcome.asked")) == 2
+    time.sleep(0.01)
+    resident_says(ctx, pointer(MAYA, "met"))
+    assert live._COLLECTOR.outcome_tick().get("answer_ambiguous") == 1
+    assert events(av, live, "outcome.reported") == []
+
+
+def test_with_two_identical_questions_a_plain_next_message_still_counts_for_the_open_ask(live, ctx, tenant, av):
+    ask_about_maya(live, ctx, tenant, "maya-one")
+    time.sleep(0.01)
+    ask_about_maya(live, ctx, tenant, "maya-two")
+    time.sleep(0.01)
+    resident_says(ctx, "met")
+    live._COLLECTOR.outcome_tick()
+    [reported] = events(av, live, "outcome.reported")
+    assert reported["opportunity_id"] == "maya-two"
+
+
 def test_the_question_hash_is_stored_with_the_ask_and_never_its_text(live, ctx, tenant, av):
     execution = uuid.uuid4().hex
     tenant.stage()

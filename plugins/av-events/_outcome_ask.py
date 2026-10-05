@@ -989,9 +989,19 @@ def tick(state_dir: str, home: str, emit: Callable[..., Optional[dict]], now: fl
                 _count(codes, "answer_not_counted")
                 continue
             quoted = note["pointer_hash"]
-            if quoted is not None and quoted == latest["question_hash"]:
+            # The delivered asks on file (kept ASKS_KEEP_S) whose question the quote carries.
+            quoting = [
+                a for a in confirmed
+                if quoted is not None and a["question_hash"] == quoted and a["finished"] <= at and at - a["finished"] <= ASKS_KEEP_S
+            ] if quoted is not None else []
+            if len(quoting) > 1:
+                # Identical questions (two people with the same cleaned name):
+                # which one the resident replied to cannot be told.
+                _count(codes, "answer_ambiguous")
+                continue
+            if quoting and quoting[0] is latest:
                 pass  # a Telegram reply to the open ask's own question
-            elif quoted is not None and any(quoted == a["question_hash"] for a in confirmed if a is not latest):
+            elif quoting:
                 # A reply to another evening's question is never counted for this one.
                 _count(codes, "answer_other_ask")
                 continue
