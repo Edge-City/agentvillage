@@ -3,7 +3,8 @@
 Status: **as built**, 2026-10-05, after the orchestrator's rulings on the design note (R2 and
 rulings 1 to 7) and fix rounds 1 (F1 to F11), 2 and 3 on PR #198, plus M2b and its fix round 1
 (§8: the plugin can read the intention an ask is about; the trigger's writer is off until a link
-exists). Data-repo references are to `agentvillage-data` origin/main (`10ef97b` for §8). Hermes
+exists). Data-repo references are to `agentvillage-data` origin/main (`10ef97b` and `86ece39` for
+§8). Hermes
 references are to `~/.hermes/hermes-agent` at tag `v2026.9.24`.
 
 ## What changed from the design note
@@ -382,8 +383,8 @@ evenings. One the plugin refuses stops every ask until it is fixed (§1, §2).
 No schema change and no new registration: both payloads fit `@1` as registered, M2b's
 `intention_reason` included (§8). The plugin's
 producer-allowlist row (`src/evidence.ts:409-451`) lacks `outcome.asked` and `outcome.reported`;
-`agentvillage-d4` has taken that change, and data PR #254 (DATA-327, open at `10ef97b`) carries
-it. **Until it is released, ingest quarantines both types as `producer_not_allowed`.** `quarantine:replay` re-checks the allowlist with the original token's
+`agentvillage-d4` has taken that change, and data PR #254 (DATA-327) carries it, merged at
+`86ece39`. **Until it is released, ingest quarantines both types as `producer_not_allowed`.** `quarantine:replay` re-checks the allowlist with the original token's
 provenance (`src/ingest/replay.ts:155`), so they are replayed after it.
 
 ## 6. Switches, logs, files
@@ -666,14 +667,16 @@ file in its home (§4), is accepted and carried onto `outcome.reported`. Both ev
 plugin-asserted (`agent_report` asks, `self_report` answers, §4). The data side must treat the
 intention on them as the plugin's claim, never as an observed link.
 
-**The data side today.** Checked read-only at agentvillage-data origin/main `10ef97b`:
+**The data side today.** Checked read-only at agentvillage-data origin/main `10ef97b`, and again
+at `86ece39`, where data PR #254 (DATA-327) merged on 2026-10-05. That merge is not yet released.
 
-- **Quarantined.** The plugin's row in the producer allowlist (`PRODUCER_ALLOWLIST`,
-  `src/evidence.ts`) does not list `outcome.asked` or `outcome.reported`. Its header says the
-  plugin "emits none of them", so ingest quarantines both as `producer_not_allowed`
-  (`src/ingest/events.ts`). Data PR #254 (DATA-327, open) allowlists them. `quarantine:replay`
-  re-checks the allowlist with the original token's provenance (`src/ingest/replay.ts`), so events
-  held until then are replayed after it.
+- **Quarantined until the data release.** At `10ef97b` the plugin's row in the producer allowlist
+  (`PRODUCER_ALLOWLIST`, `src/evidence.ts`) does not list `outcome.asked` or `outcome.reported`.
+  Its header says the plugin "emits none of them", so ingest quarantines both as
+  `producer_not_allowed` (`src/ingest/events.ts`). PR #254 adds both to that row (`86ece39`), so
+  production quarantines them until that data release is live. `quarantine:replay` re-checks the
+  allowlist with the original token's provenance (`src/ingest/replay.ts`), so events held until
+  then are replayed after it.
 - **Schema.** `intention_id` is an envelope field of every event type, nullable and validated as
   an id (`src/envelope.ts`). `outcome.asked@1` and `outcome.reported@1` are open payloads
   (`additionalProperties: true`, `src/schemas/index.ts`), so `intention_reason` is stored and not
@@ -702,8 +705,9 @@ intention on them as the plugin's claim, never as an observed link.
   - no corroborated path reaches the outcome;
   - it is the earliest declaration.
 
-  That rule is in an open PR. Until it is settled on the data side, no parser may set
-  `matchedIntentIds`, and the writer stays off.
+  That rule is merged on data main and not yet released. A link is not settled until it is live and
+  the data side has confirmed how this overlay's links will be read under it. Until then, no
+  parser may set `matchedIntentIds`, and the writer stays off.
 
 **What would have to change to know the intention.** Any one of these, and then both conditions
 above:
