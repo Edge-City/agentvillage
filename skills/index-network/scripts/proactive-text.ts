@@ -80,7 +80,7 @@ export function cleanName(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   const plain = raw
     .normalize("NFKC")
-    .replace(/[\r\n\t]/g, " ")
+    .replace(/[\r\n\t\u0085\u2028\u2029]/g, " ")
     .replace(INVISIBLE, "")
     .replace(NAME_DISALLOWED, " ")
     .replace(/\s+/g, " ")
@@ -107,7 +107,7 @@ export function cleanText(raw: unknown, max: number): string | null {
   if (typeof raw !== "string") return null;
   const plain = raw
     .normalize("NFKC")
-    .replace(/[\r\n\t]/g, " ")
+    .replace(/[\r\n\t\u0085\u2028\u2029]/g, " ")
     .replace(INVISIBLE, "")
     .replace(LINKS, " ")
     .replace(MARKUP, " ")
