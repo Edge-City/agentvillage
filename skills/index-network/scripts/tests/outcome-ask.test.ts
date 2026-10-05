@@ -147,7 +147,20 @@ describe("the evening asks about one accepted connection announced two or more d
     expect(stage()).toBeNull();
     expect(state().outcomeAsk).toBeUndefined();
     expect(dueSubjects(state(), new Set(), "2026-10-15")).toEqual([OPP]);
-    expect(runLog().at(-1)).toMatchObject({ decision: "woke", detail: "outcome-ask-name-withheld" });
+    // F11: the fallback still carries the count of due names that did not clean.
+    expect(runLog().at(-1)).toMatchObject({ decision: "woke", detail: "outcome-ask-name-withheld", withheld: 1 });
+  });
+
+  test("F11: every due name withheld and nothing pending: silent, and the count is still in the run log", async () => {
+    announced({ [OPP]: "2026-10-09", [OPP2]: "2026-10-11" });
+    const result = await runProactive("evening", options({
+      accepted: async () => [accepted("www evil", OPP), accepted("***", OPP2)],
+      evening: async () => ({ silent: true, reason: "nothing-waiting" }),
+    }));
+    expect(result.woke).toBe(false);
+    expect(result.withheld).toBe(2);
+    expect(runLog().at(-1)).toMatchObject({ decision: "silent", detail: "outcome-ask-name-withheld", withheld: 2 });
+    expect(JSON.stringify(runLog())).not.toContain("evil");
   });
 
   test("a first due subject whose name does not clean is passed over, the second is asked, and the first stays due", async () => {

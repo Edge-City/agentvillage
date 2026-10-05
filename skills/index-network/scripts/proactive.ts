@@ -659,10 +659,13 @@ async function eveningAction(run: Run): Promise<Decision> {
   const ask = await outcomeAskDecision(run);
   if (!("fallback" in ask)) return ask;
   const detail = ask.fallback;
+  // Due names the ask passed over still count in the run log's `withheld`.
+  const askWithheld = ask.withheld ?? 0;
   const result = await (run.options.evening ?? askQuestions)({ date: run.date, stateFile: stateFilePath(run.home) });
-  if ("silent" in result) return { silent: result.reason, detail };
+  if ("silent" in result) return { silent: result.reason, detail, ...(askWithheld ? { withheld: askWithheld } : {}) };
   const { view, withheld } = eveningView(run.date, result);
-  return view ? { view, withheld, detail } : { silent: "name-withheld", withheld, detail };
+  const total = withheld + askWithheld;
+  return view ? { view, withheld: total, detail } : { silent: "name-withheld", withheld: total, detail };
 }
 
 async function negotiationAction(run: Run): Promise<Decision> {
