@@ -4,11 +4,13 @@
  * Hermes resolves each gateway display setting per platform, first non-null
  * wins: `display.platforms.<platform>.<key>`, then `display.<key>`, then its
  * built-in tier for the platform (`gateway/display_config.py`, v2026.9.24).
- * Hermes's own `config.yaml` defaults set the global keys
+ * The gateway reads only `$HERMES_HOME/config.yaml` (no merge of Hermes's
+ * built-in defaults). Hermes's config template, `cli-config.yaml.example`,
+ * which its installer copies to seed that file, sets the global keys
  * (`show_reasoning: true`, `tool_progress: all`,
- * `interim_assistant_messages: true`) and
- * `display.platforms.telegram.streaming: true`, and those outrank the quieter
- * Telegram tier. So a resident saw the model's last reasoning block above every
+ * `interim_assistant_messages: true`); the fleet's files also carry
+ * `display.platforms.telegram.streaming: true` from Hermes's built-in defaults
+ * (`hermes_cli/config_defaults.py`). Those outrank the quieter Telegram tier. So a resident saw the model's last reasoning block above every
  * reply, a progress line per tool call, and mid-turn commentary as separate
  * messages.
  *
