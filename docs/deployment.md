@@ -160,6 +160,13 @@ answers.
 5. Dry run then real run with `scope: all`, at a quiet hour for Goa (IST).
    Residents already proven healthy on the tag are skipped.
 
+**What a roll changes on an agent.** The installer rewrites the overlay's
+files and the `config.yaml` keys it owns (README, "Install"), among them
+the Telegram display keys: from the roll on, a resident sees no reasoning and one
+progress message per reply instead of a line per tool (`AV_DISPLAY_DEFAULTS=0`
+opts a tenant out). Reasoning is still stored in the agent's `state.db`; it is
+hidden, not deleted.
+
 **When it refuses.** A refusal changes nothing. The common ones: the tag is
 lightweight, missing or not on `main`; a branch has the tag's name; seed files
 changed without `allow_seed_change`; the control plane is unhealthy or has not
