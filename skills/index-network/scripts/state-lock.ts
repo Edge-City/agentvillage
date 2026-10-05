@@ -9,7 +9,10 @@
  * is still ours. A lock older than `staleMs` is taken over: its holder was
  * killed (Hermes kills a pre-run script at `cron.script_timeout_seconds`) and
  * can no longer write. Waiting polls; it gives up after `waitMs` and the
- * caller stays silent for that run.
+ * caller stays silent for that run. The deadline is checked on every
+ * iteration, each iteration yields to the event loop (so the trigger's hard
+ * stop can fire), and a stale lock that cannot be removed ends the wait with
+ * LockStuck instead of spinning.
  *
  * Only these triggers take the lock. The memory signal sync's model still
  * writes the file itself (phase 3 moves that write into its gate).
@@ -44,6 +47,14 @@ export class LockTimeout extends Error {
   constructor() {
     super("state-locked");
     this.name = "LockTimeout";
+  }
+}
+
+/** A stale lock that cannot be removed (a directory, an unwritable directory): the wait ends. */
+export class LockStuck extends Error {
+  constructor() {
+    super("state-lock-stuck");
+    this.name = "LockStuck";
   }
 }
 
@@ -124,6 +135,8 @@ export async function acquireStateLock(stateFile: string, options: LockOptions =
       held.add(lock);
       return lock;
     }
+    // The deadline holds on every iteration, the stale-takeover one included.
+    if (now() >= deadline) throw new LockTimeout();
     const observed = heldToken(path);
     const age = ageMs(path, now());
     // A lock dated in the future (a clock jump, or a touched file) is as dead
@@ -134,15 +147,26 @@ export async function acquireStateLock(stateFile: string, options: LockOptions =
       if (heldToken(path) === observed) {
         try {
           unlinkSync(path);
-        } catch {
-          // someone else removed it
+        } catch (err) {
+          // Gone already: someone else removed it. Anything else (the path is
+          // a directory, the directory is not writable) cannot clear by
+          // waiting: a fault, not a spin.
+          if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw new LockStuck();
         }
       }
+      // Yield to the event loop before trying again, so a timer (the
+      // trigger's hard stop) can always fire.
+      await yieldToEventLoop();
       continue;
     }
-    if (now() >= deadline) throw new LockTimeout();
     await sleep(pollMs);
+    await yieldToEventLoop();
   }
+}
+
+/** One macrotask turn: unlike a resolved promise, it lets due timers run. */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 /** Run `fn` holding the lock; the lock is released whatever `fn` does. */

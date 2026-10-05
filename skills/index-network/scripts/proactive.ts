@@ -46,7 +46,7 @@ import { type BriefOpportunity, type DailyBriefContext, buildDailyBriefContext, 
 import { OPPORTUNITY_DELIVERY_KEY, deliveryLogChanged, pruneDeliveryLog, readDeliveryLog, recordShowings } from "./delivery-state";
 import { dropOpportunity } from "./drop-opportunity";
 import { cleanName, cleanText, connectionsUrl, cronScanHit } from "./proactive-text";
-import { type LockOptions, LockTimeout, releaseHeldLocks, withStateLock } from "./state-lock";
+import { type LockOptions, LockStuck, LockTimeout, releaseHeldLocks, withStateLock } from "./state-lock";
 import { writeStateFile } from "./state-file";
 import { followUp } from "./summarize-negotiations";
 
@@ -459,6 +459,14 @@ export function inBriefWindow(now: Date): boolean {
   return minute >= BRIEF_WINDOW.start && minute < BRIEF_WINDOW.end;
 }
 
+/** The silent reason for an error a trigger caught: a known code, else the error's class. */
+function faultReason(err: unknown): string {
+  if (err instanceof LockTimeout) return "state-locked";
+  if (err instanceof LockStuck) return "state-lock-stuck";
+  if (err instanceof StateUnreadable) return "state-unreadable";
+  return errorCode(err);
+}
+
 /** One agent-job trigger, start to wake line. Never throws; always exit code 0. */
 async function runAgentAction(action: AgentAction, options: ProactiveOptions): Promise<TriggerResult> {
   const home = homeDir(options);
@@ -481,7 +489,7 @@ async function runAgentAction(action: AgentAction, options: ProactiveOptions): P
       return { lines: [text, wakeLine(true)], exitCode: 0, woke: true, reason: "woke", ...(decision.withheld ? { withheld: decision.withheld } : {}) };
     }, options.lock);
   } catch (err) {
-    return silent(err instanceof LockTimeout ? "state-locked" : err instanceof StateUnreadable ? "state-unreadable" : errorCode(err));
+    return silent(faultReason(err));
   }
 }
 
@@ -509,7 +517,7 @@ async function runPrefetch(options: ProactiveOptions): Promise<TriggerResult> {
     }, options.lock);
   } catch (err) {
     if (err instanceof LockTimeout) return silent("state-locked");
-    return silent(err instanceof StateUnreadable ? "state-unreadable" : errorCode(err), 1);
+    return silent(faultReason(err), 1);
   }
 }
 
