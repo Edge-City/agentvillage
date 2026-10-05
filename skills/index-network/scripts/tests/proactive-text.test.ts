@@ -152,6 +152,24 @@ describe("F6 cleanTitle: what a non-organiser writes, repaired not refused", () 
     expect(cleanTitle(42, 5)).toBeNull();
   });
 
+  test("R3: the full stops that act as a domain dot are read as dots and repaired; a cashtag loses its $, a price keeps it", () => {
+    const cases: Array<[string, string]> = [
+      ["evil\u3002com/claim", "evil. com claim"],
+      ["evil\uff61com", "evil. com"],
+      ["evil\uff0ecom", "evil. com"],
+      ["Visit www\u3002evil\u3002com", "Visit"],
+      ["$TON airdrop", "TON airdrop"],
+      ["\uff04TON", "TON"],
+      ["Dinner $20, drinks $5.50", "Dinner $20, drinks $5.50"],
+      ["1.2.3.4", "1.2.3.4"],
+    ];
+    for (const [raw, clean] of cases) expect({ raw, clean: cleanTitle(raw, 100) }).toEqual({ raw, clean });
+    for (const raw of ["evil\u3002com", "evil\uff61com", "evil\uff0ecom"]) {
+      expect({ raw, name: cleanName(raw) }).toEqual({ raw, name: "evil. com" });
+    }
+    expect(cleanName("R\u3002Krishnan")).toBe("R. Krishnan");
+  });
+
   test("everything cleanText strips, cleanTitle strips too", () => {
     expect(cleanTitle("`rm` **bold** [x] <tag> #h", 100)).toBe("rm bold x tag h");
     expect(cleanTitle("line one\nline two\u2029three\u0085four", 100)).toBe("line one line two three four");

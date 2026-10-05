@@ -252,9 +252,11 @@ The rules the trigger holds:
   scanner, and withheld on a hit; the whole output is scanned once more before
   the model is woken. Cleaning repairs rather than refuses: a dot between
   letters gets a space after it (`R.Krishnan` is `R. Krishnan`, and no domain
-  stays a link). Text a non-organiser can write (event titles and venues, the
+  stays a link), and in names and titles the full stops that act as a domain
+  dot (U+3002, U+FF0E, U+FF61) are read as dots first. Text a non-organiser can write (event titles and venues, the
   resident's notes and signals) also loses `@`, `/` (except between digits,
-  as in `10/12`) and phone-shaped digit runs, so no `/command` Telegram makes
+  as in `10/12`), a `$` before a letter (no cashtag; `$20` stays) and
+  phone-shaped digit runs, so no `/command` Telegram makes
   tappable reaches the message; names lose phone runs too and are refused only
   when nothing is left, when command-shaped, or on a scanner hit. A pick (the
   drops, the evening note, the follow-up) skips a card whose name does not

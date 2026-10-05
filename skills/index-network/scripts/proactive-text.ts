@@ -74,6 +74,15 @@ const VISIBLE = /[^\p{M}\s]/u;
  * shape Telegram turns into a link. A dot between digits (`7.30pm`) stays.
  */
 const DOT_BETWEEN_LETTERS = /(?<=[\p{L}\p{M}\p{N}])\.(?=\p{L})/gu;
+/**
+ * Full stops a browser or Telegram can read as a domain dot: the ideographic
+ * full stop U+3002 (NFKC turns U+FF61 into it) and U+FF0E (NFKC turns it into
+ * `.`). Folded to `.` before the dot repair, so `evil<U+3002>com` is repaired
+ * like `evil.com`.
+ */
+const DOMAIN_DOTS = /[\u3002\uff0e\uff61]/g;
+/** A `$` directly before a letter makes a cashtag (`$TON`); before a digit it is a price and stays. */
+const CASHTAG = /\$(?=\p{L})/gu;
 /** A phone-shaped run: 7 or more digits with single spaces or dashes between, an optional leading `+`. */
 const PHONE_RUN = /\+?\p{Nd}(?:[ -]?\p{Nd}){6,}/gu;
 /** Dates that look like a phone run (`2026-10-12`, `12-10-2026`): kept. */
@@ -97,8 +106,9 @@ export const NAME_MAX = 40;
  * A person's name as a plain display name, repaired rather than refused:
  * NFKC-normalised; control, format and default-ignorable characters removed;
  * only letters, marks, digits, spaces and `' ’ . , -` kept (so no markup, no
- * backtick, no `@`, `/`, `:` or brackets); a phone-shaped digit run removed; a
- * dot between letters followed by a space (`R.Krishnan` is `R. Krishnan`, and
+ * backtick, no `@`, `/`, `:` or brackets); a phone-shaped digit run removed;
+ * the full stops that act as a domain dot (U+3002, U+FF0E, U+FF61) read as
+ * `.`, and a dot between letters followed by a space (`R.Krishnan` is `R. Krishnan`, and
  * `evil.com` is no longer a link); whitespace collapsed; at most NAME_MAX code
  * points. Null only when no letter or digit is left, when what is left is
  * command-shaped (a flag), or when it would trip Hermes's scanner.
@@ -108,6 +118,7 @@ export function cleanName(raw: unknown): string | null {
   const plain = withoutPhoneRuns(
     raw
       .normalize("NFKC")
+      .replace(DOMAIN_DOTS, ".")
       .replace(LINE_BREAKS, " ")
       .replace(INVISIBLE, "")
       .replace(IGNORABLE, "")
@@ -162,7 +173,9 @@ export function cleanText(raw: unknown, max: number): string | null {
  * cleanText and repaired rather than refused: everything cleanText removes;
  * `@` and `/` removed (a `/` between two digits, as in `10/12`, stays: no
  * command starts there), so no `/command` Telegram makes tappable and no
- * handle; a phone-shaped digit run removed (dashed dates stay); a dot between
+ * handle; a `$` before a letter removed (no cashtag; `$20` stays); a
+ * phone-shaped digit run removed (dashed dates stay); the full stops that act
+ * as a domain dot (U+3002, U+FF0E, U+FF61) read as `.`, and a dot between
  * letters followed by a space, so no domain survives as a link (`7.30pm`
  * stays). Null only when nothing visible is left or Hermes's scanner would
  * block on it. Words that read as an instruction cannot be cleaned away; the
@@ -173,11 +186,13 @@ export function cleanTitle(raw: unknown, max: number): string | null {
   const plain = withoutPhoneRuns(
     raw
       .normalize("NFKC")
+      .replace(DOMAIN_DOTS, ".")
       .replace(LINE_BREAKS, " ")
       .replace(INVISIBLE, "")
       .replace(IGNORABLE, "")
       .replace(LINKS, " ")
       .replace(MARKUP, " ")
+      .replace(CASHTAG, "")
       .replace(/@/g, " ")
       .replace(/(?<!\p{Nd})\/|\/(?!\p{Nd})/gu, " ")
       .replace(/\s+/g, " "),
