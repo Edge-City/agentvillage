@@ -10,54 +10,36 @@ outcome-ask-evening.json`, 0600, ids only. Three steps here:
    and its name in `jobs.json`, as for `cron.run`), whose Hermes task id is
    `cron:<job>:<execution>`, whose row in Hermes's executions ledger names
    that job, and whose stage was written after the run was claimed, before
-   its reply, and under STAGE_MAX_AGE_S ago. A silent reply removes the stage
-   and arms nothing. Otherwise the stage is renamed into
-   `av-events/outcome-ask/armed/<execution>.json` (the rename is the claim)
-   with the keyed hash of the reply (`message.out`'s `content_hash`).
+   its reply, and under STAGE_MAX_AGE_S ago. A silent reply, or one that is
+   not exactly the fixed question (QUESTION_PATTERN, from
+   `outcome_question.json`), removes the stage and arms nothing. Otherwise the
+   stage is renamed into `av-events/outcome-ask/armed/<execution>.json` (the
+   rename is the claim) with the keyed hash of the reply (`message.out`'s
+   `content_hash`).
 2. **Confirm and emit** (the flusher; `tick`). When the ledger has the armed
    run terminal, completed and `delivery_outcome` `delivered` or `queued` (or
    completed, on a Hermes without that column), one `outcome.asked`, and the
    subject goes into `av-events/proactive/outcome-asked.json`, which the
-   trigger reads. Any other end drops the armed file; the subject stays due.
+   trigger reads (never overwritten when it is refused on read). Any other
+   end drops the armed file; the subject stays due.
 3. **The answer** (`pre_llm_call` of the resident's Telegram DM;
-   `note_answer`, then `tick`). A message whose whole text, normalised, is in
-   ANSWERS is noted **in this process's memory only** (value and time).
-   `tick` emits `outcome.reported` for it when the latest ask that started
-   before it named one subject, was delivered, and is under ANSWER_WINDOW_S
-   old. No text and no hash of the reply goes into the event.
+   `note_answer`, then `tick`). While an ask may be open, every resident
+   message is noted in memory as a time; a message whose whole text,
+   normalised, is in ANSWERS (and whose reply pointer, if any, quotes the
+   question) is noted with its value. `tick` emits `outcome.reported` for it
+   when the latest ask DELIVERED before it was the evening job's, is
+   unanswered and under ANSWER_WINDOW_S old, and the message was the
+   resident's next one after that delivery or replied to the question. No
+   text and no hash of the reply goes into the event or onto disk.
 
-**Trust boundary.** Every file here lives in the agent's own home, where the
-model has terminal and file tools: anything on disk can be written by the
-model, or by text that steered it. So, on every read:
-
-- a file must be a regular file (not a symlink), owned by this user, with no
-  group or other permission bits, under a size cap, in a directory owned by
-  this user that no one else can write; it must have exactly the expected
-  keys, each of the expected shape (ids by pattern, one subject, constants
-  where the value is fixed); anything else is refused and removed;
-- the event type, actor, evidence class, `asked_by`, `window_days`,
-  `run_id` and every timestamp come from this code and from Hermes's ledger,
-  never from a file;
-- a stage must fall inside the run the plugin saw (claimed before it, reply
-  after it), and an armed file inside its ledger row's window, for the
-  installer's evening job, delivered, at most once per execution;
-- when this process saw the run's reply, the armed file must be exactly what
-  this process armed (a forged or altered one is refused), and when it saw
-  the reply but armed nothing, no armed file for that run is accepted;
-- answers never touch disk, so a file cannot create one; and the answer's
-  event id is derived from the ask, so ingest keeps at most one answer per
-  ask whatever a file says.
-
-What remains file-asserted, an accepted limit: **which subject** a delivered
-evening ask was about, when the run's arm happened in another process (an
-external cron worker) or before a restart. The plugin cannot observe the
-trigger's pick: the model's reply carries a name, not an id, and every store
-that does carry the id is in the same home. A forger can therefore choose
-the subject of a real, delivered evening ask, and a real resident answer to
-that ask lands on that subject. That is no more than the data side already
-assumes of a plugin: the ask is stored at the plugin cap (`agent_report`),
-the answer as `self_report` from `actor: participant`, and `core.outcomes`
-maps a report to `reported_useful` at most, never `verified_useful`.
+**Trust boundary.** Everything in the agent's home is writable by the agent:
+this module's files, Hermes's executions ledger, the event buffer, the
+tenant's hash key and this plugin's own source. None of the file checks here
+stops a forger; they catch accidents (a stale or half-written file, a run
+never delivered, two processes racing). The only boundary is the data side:
+a plugin token's events are capped at agent-asserted (`agent_report` asks)
+and self-reported (`self_report` answers from `actor: participant`), and
+never count as verified. See `docs/design/outcome-ask.md` §4.
 
 Logs: codes and counts only. Python 3.11, standard library only.
 """

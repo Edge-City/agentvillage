@@ -33,6 +33,7 @@ plugins/av-events/
   tool_categories.json        frozen seed: tool name -> category (tool_categories_v3)
   edgeos_tool_allowlist.json  frozen seed: EdgeOS operations (edgeos_tool_allowlist_v1)
   cron_job_names.json         frozen seed: the cron names cron.run may carry (cron_job_names_v1)
+  outcome_question.json       the evening outcome ask's fixed question: its pattern and marker sentence (outcome_question_v1)
   tests/           pytest suite; drives a fake ctx, never imports Hermes
 ```
 
@@ -218,7 +219,7 @@ backlog can differ from `emitted_at` by minutes. Every `marts` time series is bu
 | `action.receipted` | `post_tool_call` on the EdgeOS read that confirms it | as above, with `receipt` {`kind: edgeos_confirming_read`, `id`: participant id} |
 | `cron.run` | the cron tail, on the flusher thread | `job_id`, `job_name`, `execution_id`, `status`, `input_tokens`, `output_tokens`, `claimed_at`, `started_at`, `finished_at`, `delivery_outcome` — see "Cron capture" |
 | `outcome.asked` | the flusher, once Hermes's ledger shows the evening job's question delivered or queued | `message_hash` (the reply's keyed hash, = that turn's `message.out` `content_hash`; null in `metadata`), `window_days` (1), `asked_by` (`outcome_cron`); envelope `outcome_id`, `opportunity_id` — see "The evening outcome ask" |
-| `outcome.reported` | the flusher, for a resident's Telegram DM whose whole text is an answer to the one open ask | `value`, `matcher_version` (`outcome_reply_v1`); `self_report`, actor `participant`, envelope `outcome_id`, `opportunity_id`, `in_reply_to_event_id` = the ask — see "The evening outcome ask" |
+| `outcome.reported` | the flusher, for a resident's Telegram DM whose whole text is an answer to the one open ask, sent as their next message after it or as a reply to it | `value`, `matcher_version` (`outcome_reply_v2`); `self_report`, actor `participant`, envelope `outcome_id`, `opportunity_id`, `in_reply_to_event_id` = the ask — see "The evening outcome ask" |
 | `profile.updated` | `on_session_finalize`, when a USER.md changed | `kind` ∈ `memory_profile`\|`landing_profile`, `user_md_hash`, plus `length` above `metadata` |
 | `llm.call` | `pre_api_request` + `post_api_request` | `model`, `provider`, the five token buckets, `latency_ms`, `finish_reason`, `tools_hash`, `system_prompt_hash`, plus lengths above `metadata` |
 | `llm.call` (failed) | `pre_api_request` + `api_request_error` | as above with `finish_reason: "error"`, `error_type`, `status_code`, `retryable`, and zeroed token counts |
@@ -1332,40 +1333,42 @@ The whole design, as built, is `docs/design/outcome-ask.md`. In short:
 
 - **Arm.** The 19:00 trigger writes `av-events/proactive/outcome-ask-evening.json` (0600, ids
   only) when it wakes the model with "Did you and <name> meet? Reply met, not useful, or missed."
+  It asks nobody when this plugin idles (blank `AV_EVENTS_TOKEN`, or `outcome_ask` in
+  `AV_HOOKS_DISABLED`) or when the asked ledger is one this plugin would refuse.
   On that run's `post_llm_call` (a cron session whose task id is `cron:<job>:<execution>`, the job
   the installer's "Edge — evening questions" by recorded id and exact name) the stage is renamed
   into `av-events/outcome-ask/armed/<execution>.json` with the reply's keyed hash. These remove
-  the stage and arm nothing: a silent reply; a stage older than the run's claim in Hermes's
-  ledger, newer than the reply, or over 15 minutes old; a ledger row that is missing or names
-  another job.
+  the stage and arm nothing: a silent reply; a reply that, stripped, is not exactly the fixed
+  question (the pattern in `outcome_question.json`); a stage older than the run's claim in
+  Hermes's ledger, newer than the reply, or over 15 minutes old; a ledger row that is missing or
+  names another job.
 - **Confirm.** The flusher, on the cron tail's minute, reads the ledger: a completed run whose
   `delivery_outcome` is `delivered` or `queued` (or any completed run on a Hermes without the
   column) gets one `outcome.asked` per subject, with an id derived from the execution and the
   outcome, and the subject goes into `av-events/proactive/outcome-asked.json`, the only thing that
-  makes the trigger treat it as asked. Any other end drops the armed file; the subject stays due.
+  makes the trigger treat it as asked. That ledger is never overwritten when it is refused on read
+  (`asked_ledger_refused`). Any other end drops the armed file; the subject stays due.
 - **Answer.** In the resident's Telegram DM (`HERMES_SESSION_CHAT_TYPE` `dm`; never a cron run, a
-  subagent, an injected turn, another platform or a group), a message whose whole text, trimmed
-  and case-folded, with apostrophes dropped and other punctuation as spaces, is `met`, `we met`,
-  `useful`, `not useful`, `missed`, `did not happen` or `didnt happen` is noted, in memory only
-  (value and time). The flusher emits `outcome.reported` when the latest ask whose run started
-  before it was the evening job, was delivered, is unanswered, and the message came within 24 hours
-  of it. The event id is derived from the ask, so ingest keeps one answer per ask. Nothing in
-  `metadata` capture. A Telegram reply's `[Replying to ...]` pointer, which Hermes adds, is not
-  part of the message.
+  subagent, an injected turn, another platform or a group), while an ask may be open, every
+  message is noted in memory as a time only. A message whose whole text, trimmed, case-folded and
+  stripped of trailing `.`, `!`, whitespace and emoji, is one of the `outcome_reply_v2` answers
+  (`met`, `yes`, `useful`, `not useful`, `missed`, `no`, `didn't happen` and the other spellings
+  in the design note) is noted with its value; one containing `?` or starting with `>` or a quote
+  mark is not. A Telegram reply's `[Replying to ...]` pointer, which Hermes adds, must quote the
+  question's "Reply met, not useful, or missed." or the message is not an answer. The flusher
+  emits `outcome.reported` for the latest ask **delivered** before the message (the ledger's
+  finish), when it was the evening job, is unanswered, the message came within 24 hours of it,
+  and the message was the resident's next one after the delivery or replied to the question.
+  A failed ledger read keeps the answer for the next pass. The event id is derived from the ask,
+  so ingest keeps one answer per ask. Nothing in `metadata` capture.
 - **Hash.** The hash is of the model's reply. Hermes may wrap a cron delivery
   (`cron.wrap_response`) or prepend a fallback notice, so it is not of the Telegram text.
-- **Untrusted files.** Every file is in the agent's home, where the model can write, so every read
-  is untrusted:
-  - refused unless it is a regular, user-owned 0600 file under a size cap, in a private
-    directory, with exactly the expected keys of the expected shapes;
-  - type, actor, evidence class, `asked_by`, `window_days`, `run_id` and timestamps come from this
-    code and Hermes's ledger;
-  - armed files and asks on file are re-checked against the ledger, and against this process's
-    memory when it saw the run.
-
-  What stays file-asserted is the subject of a delivered evening ask armed in another process.
-  It is stored as plugin-asserted (`agent_report` ask, `self_report` answer). See the design
-  note §4.
+- **Trust boundary.** Everything in the agent's home is writable by the agent: these files,
+  Hermes's ledger, the event buffer and this plugin's source. The file checks (a regular,
+  user-owned 0600 file under a size cap in a private directory, exact keys and shapes, re-checks
+  against the ledger and this process's memory) catch accidents, not forgers. The only boundary is
+  the data side: a plugin token's events are capped at agent-asserted (`agent_report` ask) and
+  self-reported (`self_report` answer), and never count as verified. See the design note §4.
 - Logs carry codes and counts only (`outcome_ask armed`, `outcome_ask_tick asked=1 ...`).
   `outcome_ask` in `AV_HOOKS_DISABLED` turns all of it off.
 - Ingest refuses both types from a plugin token until the data side's allowlist release: they are

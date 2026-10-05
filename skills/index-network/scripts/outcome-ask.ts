@@ -20,8 +20,10 @@
  * records the subject in `av-events/proactive/outcome-asked.json`. Only that
  * ledger makes a subject "asked": a run that replies `[SILENT]`, fails to
  * deliver, or never reaches the plugin leaves it due for the next evening,
- * up to MAX_ATTEMPTS evenings (so a tenant whose plugin is off is not asked
- * the same question every night).
+ * up to MAX_ATTEMPTS evenings. When the plugin idles (blank AV_EVENTS_TOKEN,
+ * or outcome_ask in AV_HOOKS_DISABLED) or its asked ledger is unreadable,
+ * nothing could record an ask, and the evening asks nobody
+ * (proactive.ts outcomePluginOff, readAskedIds).
  */
 
 import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
