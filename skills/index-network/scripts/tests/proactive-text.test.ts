@@ -282,3 +282,14 @@ describe("connectionsUrl", () => {
     expect(connectionsUrl(home)).toBe("https://village.example/%60x%60");
   });
 });
+
+test("a phone number is removed whatever is glued to it with a colon; clock times survive", () => {
+  expect(cleanTitle("Call +919876543210:1", 100)).toBe("Call :1");
+  expect(cleanTitle("Desk 98765 43210:1", 100)).toBe("Desk :1");
+  expect(cleanTitle("+91:98765 43210", 100)).toBe("+91:");
+  expect(cleanTitle("Priya +919876543210:1", 100)).toBe("Priya :1");
+  expect(cleanTitle("Run 2026-10-12 10:00-11:30", 100)).toBe("Run 2026-10-12 10:00-11:30");
+  expect(cleanTitle("Doors 7:30, talk 19:45 sharp", 100)).toBe("Doors 7:30, talk 19:45 sharp");
+  expect(cleanTitle("Ring 9876543210 at 10:00", 100)).toBe("Ring at 10:00");
+  expect(cleanName("Priya +919876543210:1")).toBe("Priya 1");
+});

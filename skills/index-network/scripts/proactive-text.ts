@@ -87,10 +87,14 @@ const CASHTAG = /\$(?=\p{L})/gu;
 /**
  * A digit run that could be a phone number: digits with spaces, dashes, dots
  * or parentheses between them, an optional leading `+` or `(`. It never
- * touches a digit, and never takes in a digit beside a `:` and a digit (a time
- * like `10:00` is not part of one). withoutPhoneRuns decides which runs go.
+ * touches another digit. A `:` ends a run. withoutPhoneRuns decides which
+ * runs go, and sets real clock times aside first.
  */
-const DIGIT_RUN = /(?<!\p{Nd})(?<!\p{Nd}:)\+?\(?\p{Nd}(?:[ .()-]{0,3}\p{Nd})*(?!\p{Nd})(?!:\p{Nd})/gu;
+const DIGIT_RUN = /(?<!\p{Nd})\+?\(?\p{Nd}(?:[ .()-]{0,3}\p{Nd})*(?!\p{Nd})/gu;
+/** A clock time (`7:30`, `10:00`): one or two digits, a colon, exactly two digits, no digit on either side. */
+const CLOCK_TIME = /(?<!\p{Nd})\p{Nd}{1,2}:\p{Nd}{2}(?!\p{Nd})/gu;
+/** Stands in for a clock time while phone runs are removed. Private use: the cleaners strip it from input first. */
+const TIME_MARK = "\ue000";
 /** A `/` that is not between two digits (`10/12` keeps its slash). */
 const SLASH_NOT_BETWEEN_DIGITS = /(?<!\p{Nd})\/|\/(?!\p{Nd})/gu;
 /** Slashes at the very start or end of the text. */
@@ -106,10 +110,19 @@ function codePointSlice(text: string, n: number): string {
  * `1000000 trees`, `Rs 2500 3000`, `2026-10-12`).
  */
 function withoutPhoneRuns(text: string): string {
-  return text.replace(DIGIT_RUN, (run) => {
+  // Clock times are set aside so `10:00-11:30` is not read as a digit run; nothing else shields a run, so a
+  // number with `:1` glued on (`+919876543210:1`) still goes.
+  const times: string[] = [];
+  const masked = text.replaceAll(TIME_MARK, "").replace(CLOCK_TIME, (time) => {
+    times.push(time);
+    return TIME_MARK;
+  });
+  const cut = masked.replace(DIGIT_RUN, (run) => {
     const digits = (run.match(/\p{Nd}/gu) ?? []).length;
     return (digits >= 10 && digits <= 15) || (run.startsWith("+") && digits >= 7) ? " " : run;
   });
+  let next = 0;
+  return cut.replaceAll(TIME_MARK, () => times[next++] ?? "");
 }
 
 /** A name keeps letters, marks, digits, spaces and `' ’ . , -`; anything else becomes a space. */
