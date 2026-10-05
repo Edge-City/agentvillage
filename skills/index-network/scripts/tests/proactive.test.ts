@@ -154,6 +154,22 @@ describe("the morning brief", () => {
     expect(built).toBe(0);
   });
 
+  test("F10: a stored mark on or after today counts as done: a clock that moved back cannot deliver twice", async () => {
+    const drop = async () => ({ opportunity: card("Maya Rao", "op1") });
+    // The clock wrongly a day ahead: the drop runs and marks 10-13.
+    const ahead = await runProactive("drop-midday", options({ now: () => new Date("2026-10-13T07:00:00Z"), drop }));
+    expect(ahead.woke).toBe(true);
+    // Corrected back to 10-12: done, nothing delivered again.
+    const back = await runProactive("drop-midday", options({ now: () => new Date("2026-10-12T07:00:00Z"), drop }));
+    expect(last(back.lines)).toEqual({ wakeAgent: false, reason: "done-today" });
+    // The next real day after the mark runs as usual.
+    const next = await runProactive("drop-midday", options({ now: () => new Date("2026-10-14T07:00:00Z"), drop }));
+    expect(next.woke).toBe(true);
+    // A malformed mark never blocks.
+    writeFileSync(stateFile(), JSON.stringify({ [RUNS_KEY]: { brief: "9999" } }));
+    expect((await runProactive("brief", options())).woke).toBe(true);
+  });
+
   test("silent outside 05:00 to 11:00 IST, before anything is built or written", async () => {
     expect(inBriefWindow(new Date("2026-10-11T23:29:00Z"))).toBe(false); // 04:59 IST
     expect(inBriefWindow(new Date("2026-10-11T23:30:00Z"))).toBe(true); // 05:00

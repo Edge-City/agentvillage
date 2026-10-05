@@ -195,9 +195,14 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
-/** Whether `action` already woke the model on `date`. */
+/**
+ * Whether `action` already woke the model on `date`: a stored mark on or after
+ * `date` counts as done, so a clock that moved back cannot deliver twice
+ * (B1-fix F10). Village dates are `YYYY-MM-DD`, which compare as strings.
+ */
 export function doneToday(state: Record<string, unknown>, action: AgentAction, date: string): boolean {
-  return asRecord(state[RUNS_KEY])[action] === date;
+  const mark = asRecord(state[RUNS_KEY])[action];
+  return typeof mark === "string" && /^\d{4}-\d{2}-\d{2}$/.test(mark) && mark >= date;
 }
 
 export function markDone(state: Record<string, unknown>, action: AgentAction, date: string): Record<string, unknown> {

@@ -264,7 +264,8 @@ The rules the trigger holds:
 - **Once per day per job.** The day is marked done in
   `memory/heartbeat-state.json` (`proactiveRuns.<action>`) at the moment the
   trigger wakes the model. A run that then fails loses that day; there is no
-  delivery tracking.
+  delivery tracking. A mark on or after today's village date counts as done,
+  so a clock that moved back cannot deliver twice.
 - **The state file is locked** (`memory/heartbeat-state.json.lock`) while a
   trigger reads and writes it, and written by temp file and rename. A state
   file that cannot be read as an object (bad JSON, `[]`, `null`, over 5 MB) is
