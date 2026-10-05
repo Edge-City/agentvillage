@@ -606,18 +606,29 @@ async function outcomeAskDecision(run: Run): Promise<Decision | { fallback: stri
     return { fallback: "outcome-ask-index-unavailable" };
   }
   const listed = new Map(accepted.flatMap((card) => (card.opportunityId && card.status === "accepted" ? [[card.opportunityId, card] as const] : [])));
-  const id = due.find((candidate) => listed.has(candidate));
-  if (!id) return { fallback: "outcome-ask-not-listed" };
+  const candidates = due.filter((candidate) => listed.has(candidate));
+  if (candidates.length === 0) return { fallback: "outcome-ask-not-listed" };
+  // A subject whose name does not clean is passed over tonight (counted in
+  // the run log's `withheld`, no attempt recorded) and never blocks the ones
+  // behind it; it stays due and is asked once its name cleans.
   const w = new Withheld();
-  const name = w.name(listed.get(id)!.name);
-  // A name that does not clean: no ask tonight, and the subject stays due.
-  if (!name) return { fallback: "outcome-ask-name-withheld", withheld: w.count };
+  let id: string | undefined;
+  let name: string | null = null;
+  for (const candidate of candidates) {
+    name = w.name(listed.get(candidate)!.name);
+    if (name) {
+      id = candidate;
+      break;
+    }
+  }
+  if (!id || !name) return { fallback: "outcome-ask-name-withheld", withheld: w.count };
+  const subject = id;
   const stage = stageFor(id, run.date, run.now);
   if (!stage) return { fallback: "outcome-ask-bad-id" };
   return {
     view: { job: "evening-note", date: run.date, outcomeQuestion: outcomeQuestion(name) },
     withheld: w.count,
-    record: (latest) => recordAttempt(latest, id, run.date, asked),
+    record: (latest) => recordAttempt(latest, subject, run.date, asked),
     beforeWake: () => writeStage(run.home, stage),
     detail: "outcome-ask",
   };

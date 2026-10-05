@@ -138,6 +138,18 @@ describe("the evening asks about one accepted connection announced two or more d
     expect(runLog().at(-1)).toMatchObject({ decision: "woke", detail: "outcome-ask-name-withheld" });
   });
 
+  test("a first due subject whose name does not clean is passed over, the second is asked, and the first stays due", async () => {
+    announced({ [OPP]: "2026-10-09", [OPP2]: "2026-10-11" });
+    const result = await runProactive("evening", options({ accepted: async () => [accepted("www evil", OPP), accepted("Second Person", OPP2)] }));
+    expect(output(result.lines).outcomeQuestion).toBe(outcomeQuestion("Second Person"));
+    expect(stage()!.subjects).toEqual([{ outcome_id: `opp-outcome:${OPP2}`, opportunity_id: OPP2 }]);
+    // No attempt for the skipped one; the skip is a count in the run log, never a name.
+    expect(state().outcomeAsk).toEqual({ attempts: { [OPP2]: [DATE] } });
+    expect(runLog().at(-1)).toMatchObject({ decision: "woke", detail: "outcome-ask", withheld: 1 });
+    expect(JSON.stringify(runLog())).not.toContain("evil");
+    expect(dueSubjects(state(), new Set(), "2026-10-15")).toContain(OPP);
+  });
+
   test("announced yesterday is not due: the reminder, no stage", async () => {
     announced({ [OPP]: "2026-10-13" });
     let indexRead = false;

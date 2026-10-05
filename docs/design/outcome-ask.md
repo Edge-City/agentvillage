@@ -49,7 +49,7 @@ None of them records anything about the subject, which stays due:
 - nothing is due;
 - Index cannot be read;
 - the due connection is no longer listed;
-- the name does not clean.
+- no listed due subject has a name that cleans. A subject whose name does not clean is passed over that evening and the next due subject is asked. The skipped subject records no attempt, stays due, and is counted in the run log's `withheld`.
 
 The reason is a code in `triggers.jsonl` (`detail`: `outcome-ask`, `outcome-ask-none-due`,
 `outcome-ask-index-unavailable`, `outcome-ask-not-listed`, `outcome-ask-name-withheld`).
