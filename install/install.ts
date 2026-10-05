@@ -19,8 +19,10 @@
  *   - opt-in approval.md gate when `AV_APPROVAL_ENABLED=1` (`install_approval.ts`):
  *     a failure there exits non-zero, because an opted-in tenant left ungated
  *     is the failure the gate exists to prevent
- *   - an Index cron job that fails to update exits non-zero too, but only at
- *     the end, after every other step (the gate and the restart included) ran
+ *   - an Index cron job that fails to update does not fail the install (exit
+ *     0): every run writes `$HERMES_HOME/av-events/install-status.json`
+ *     (`install_status.ts`, `cron_failed` empty when none failed), and a run
+ *     with failures prints one line, `agentvillage-install: cron_failed=<n>`
  *
  * Usage (from repo root):
  *   bun install/install.ts --index-api-key <KEY>
@@ -67,6 +69,7 @@ import {
   targetWorkspace,
 } from "./paths";
 import { captureWelcomeState, restoreWelcomeState } from "./welcome_state";
+import { cronFailedLine, writeInstallStatus } from "./install_status";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const SOURCE_WORKSPACE = join(SCRIPT_DIR, "../workspace");
@@ -254,14 +257,20 @@ function main(): void {
   // Opt-in and off the core path: a failure here is counted, never fatal.
   safeInstallRecall(SOURCE_SKILLS);
 
-  // Index cron jobs that failed to reconcile. Every later step still runs (the
-  // approval gate and the gateway restart included); the install then exits
-  // non-zero so the roll marks this resident failed (B1-fix F9).
+  // Index cron jobs that failed to reconcile. They do not fail the install:
+  // the control plane stops a roll on any non-zero exit, before its later
+  // steps (B1-fix2 R1). They are recorded in the status file, written on
+  // every run, and reported in one line at the end.
   let cronFailures: string[] = [];
   if (process.argv.includes("--skip-index")) {
     console.log("→ index network: unconfigured (--skip-index); bundled skills remain installed");
   } else {
     cronFailures = installIndex();
+  }
+  try {
+    writeInstallStatus(hermesHome(), cronFailures);
+  } catch {
+    console.warn("  warning: could not write av-events/install-status.json");
   }
   installEdgeos();
   installGeo();
@@ -280,11 +289,11 @@ function main(): void {
   }
 
   if (cronFailures.length > 0) {
-    console.error(
-      `error: ${cronFailures.length} Index cron job(s) failed to update (${cronFailures.join(", ")}); `
-      + "every other step ran. Rerun the install on this resident.",
+    console.log(cronFailedLine(cronFailures.length));
+    console.warn(
+      `warning: ${cronFailures.length} Index cron job(s) failed to update (${cronFailures.join(", ")}); `
+      + "this install's other steps ran. Rerun the install on this resident to retry them.",
     );
-    process.exit(1);
   }
 
   console.log("");

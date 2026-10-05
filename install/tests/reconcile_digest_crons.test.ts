@@ -5,7 +5,7 @@
  * preserve paths end-to-end.
  */
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -15,6 +15,7 @@ import {
   reconcileDigestCronJobs,
   staggeredSchedule,
 } from "../install_index";
+import { cronFailedLine, installStatusPath, writeInstallStatus } from "../install_status";
 
 const SEED = "ix_integration_seed";
 const [SIGNALS, PREPARE, SEND, NEGOTIATION, EVENING, DROP_MIDDAY, DROP_EVENING, TOKEN_AUDIT] = DIGEST_CRON_SPECS;
@@ -641,17 +642,71 @@ test("F13: prompts are compared and sent with trailing whitespace trimmed, so a 
   expect(cronCalls().find((argv) => argv[1] === "create" && argv.includes(SEND.name))![3]).toBe("SEND_BODY");
 });
 
-test("F9: install.ts records the cron failures, runs every later step, and exits non-zero only after the restart", () => {
+test("F9: install.ts records the cron failures before the approval gate and the restart, and never exits on them", () => {
   // install.ts runs main() on import, so its order is pinned on the source.
   const source = readFileSync(join(import.meta.dir, "..", "install.ts"), "utf8");
   const main = source.slice(source.indexOf("function main(): void {"));
   const recorded = main.indexOf("cronFailures = installIndex();");
+  const status = main.indexOf("writeInstallStatus(hermesHome(), cronFailures);");
   const approval = main.indexOf("runApprovalStep(SOURCE_SKILLS)");
   const restart = main.indexOf("restartGateway();");
-  const exit = main.indexOf("if (cronFailures.length > 0) {");
+  const report = main.indexOf("if (cronFailures.length > 0) {");
   expect(recorded).toBeGreaterThan(0);
-  expect(approval).toBeGreaterThan(recorded);
+  expect(status).toBeGreaterThan(recorded);
+  expect(approval).toBeGreaterThan(status);
   expect(restart).toBeGreaterThan(approval);
-  expect(exit).toBeGreaterThan(restart);
-  expect(main.slice(exit, exit + 400)).toContain("process.exit(1)");
+  expect(report).toBeGreaterThan(restart);
+  expect(main.slice(report, report + 400)).not.toContain("process.exit");
+});
+
+/** Run install.ts itself against the temp HERMES_HOME and the stub hermes, as the control plane does (--no-restart). */
+function runInstall(): { code: number; stdout: string; stderr: string } {
+  const env: Record<string, string | undefined> = { ...process.env, HOME: home };
+  for (const key of ["AV_APPROVAL_ENABLED", "AV_RECALL_ENABLED", "HERMES_TIMEZONE"]) delete env[key];
+  const done = Bun.spawnSync(["bun", join(import.meta.dir, "..", "install.ts"), "--index-api-key", SEED, "--no-restart"], {
+    cwd: join(import.meta.dir, "..", ".."),
+    env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return { code: done.exitCode ?? -1, stdout: done.stdout.toString(), stderr: done.stderr.toString() };
+}
+
+function installStatus(): { version: number; at: string; cron_failed: string[] } {
+  return JSON.parse(readFileSync(installStatusPath(home), "utf8"));
+}
+
+test("R1: a failed cron edit exits 0, writes the status file with the job's name, and prints the one count line; a clean run empties it", () => {
+  process.env.HERMES_BIN = writeStubHermes(home, { failEditIds: ["n1"] });
+  writeJobs([oldShapeJob(NEGOTIATION, "n1", "NEGOTIATION_OLD")]);
+
+  const failed = runInstall();
+  expect({ code: failed.code, stderr: failed.code === 0 ? "" : failed.stderr }).toEqual({ code: 0, stderr: "" });
+  const status = installStatus();
+  expect(status.version).toBe(1);
+  expect(status.cron_failed).toEqual([NEGOTIATION.name]);
+  expect(new Date(status.at).toISOString()).toBe(status.at);
+  expect(statSync(installStatusPath(home)).mode & 0o777).toBe(0o600);
+  expect(failed.stdout.split("\n").filter((line) => line.startsWith("agentvillage-install:"))).toEqual([cronFailedLine(1)]);
+  expect(cronFailedLine(1)).toBe("agentvillage-install: cron_failed=1");
+  // Nothing claims a gateway restart this process did not do.
+  expect(`${failed.stdout}${failed.stderr}`).not.toContain("gateway restart included");
+  expect(failed.stderr).toContain(`1 Index cron job(s) failed to update (${NEGOTIATION.name})`);
+
+  process.env.HERMES_BIN = writeStubHermes(home);
+  const clean = runInstall();
+  expect(clean.code).toBe(0);
+  expect(installStatus().cron_failed).toEqual([]);
+  expect(clean.stdout).not.toContain("agentvillage-install:");
+  expect(readdirSync(join(home, "av-events")).filter((name) => name.includes(".tmp"))).toEqual([]);
+}, 60_000);
+
+test("R1: the status file is written by temp file and rename, 0600, with an empty list when nothing failed", () => {
+  const at = new Date("2026-10-12T02:30:00.000Z");
+  expect(writeInstallStatus(home, [SEND.name], at)).toEqual({ version: 1, at: "2026-10-12T02:30:00.000Z", cron_failed: [SEND.name] });
+  expect(installStatus()).toEqual({ version: 1, at: "2026-10-12T02:30:00.000Z", cron_failed: [SEND.name] });
+  writeInstallStatus(home, [], at);
+  expect(installStatus().cron_failed).toEqual([]);
+  expect(statSync(installStatusPath(home)).mode & 0o777).toBe(0o600);
+  expect(readdirSync(join(home, "av-events"))).toEqual(["install-status.json"]);
 });

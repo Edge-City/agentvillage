@@ -339,10 +339,22 @@ changes nothing. The resident-facing jobs are edited before the 02:00
 prefetch (the prefetch edited and the brief not would leave the old brief
 prompt with nothing to send), and every job is attempted even after one
 fails. The installer then prints one line, `Index crons: N failed (<job
-names>)`, and, after every other step has run (the approval gate and the
-gateway restart included), exits non-zero, so the roll reports the resident
-as failed. Rerun the install on that resident; `reconcile_digest_crons.ts`
-exits non-zero the same way.
+names>)`, runs its other steps, and still exits 0: the control plane stops a
+roll at any non-zero exit, before it restarts the gateway or records the
+overlay commit, and never reaches the residents after it. Instead:
+- every install run writes `$HERMES_HOME/av-events/install-status.json`
+  (temp file and rename, mode 0600):
+  `{"version": 1, "at": "<UTC ISO time>", "cron_failed": ["<job name>", ...]}`,
+  with an empty list when nothing failed, so a clean run clears an earlier
+  failure;
+- a run with failures prints exactly one fixed line to stdout,
+  `agentvillage-install: cron_failed=<count>`, followed by a warning naming
+  the jobs.
+
+The control plane does not read the status file or the line yet; look for the
+line in the roll's install output. Rerun the install on that resident.
+`reconcile_digest_crons.ts`, the operator's tool, exits non-zero when a job
+fails.
 
 **After a roll, on a canary.** Force the brief within the window with
 `hermes cron run <id>` (the daily digest's id from `hermes cron list`): one
