@@ -240,7 +240,7 @@ describe("the morning brief", () => {
     expect(text).not.toMatch(/\/approve|@host|98765|evil\.example|t\.me/);
   });
 
-  test("R4: the resident's own notes and signals are their own words: cleanText, slashes and numbers kept; event fields stay strict", async () => {
+  test("notes read from memory files and signals read back from Index get the strict cleaner too; years and counts survive", async () => {
     const event = context().rsvpEvents[0];
     const result = await runProactive("brief", options({
       buildContext: async () => context({
@@ -249,7 +249,7 @@ describe("the morning brief", () => {
       }),
     }));
     const view = output(result.lines);
-    expect(view.you.notes).toEqual(["Building AI/ML tools for B2B/SaaS, 2026-2027 cohort", "Planting 1000000 trees, see"]);
+    expect(view.you.notes).toEqual(["Building AI / ML tools for B2B / SaaS, 2026-2027 cohort", "Planting 1000000 trees, see"]);
     expect(view.schedule.yourRsvps[0]).toMatchObject({ title: "AI / ML and / or B2B / SaaS", venue: "Hall B / C" });
 
     const follow = await runProactive("negotiation", options({
@@ -260,7 +260,7 @@ describe("the morning brief", () => {
         newlyResolved: [],
       }) as any,
     }));
-    expect(output(follow.lines).yourSignals).toEqual([{ text: "Hiring for AI/ML and/or data roles", link: "https://index.network/i/s1" }]);
+    expect(output(follow.lines).yourSignals).toEqual([{ text: "Hiring for AI / ML and / or data roles", link: "https://index.network/i/s1" }]);
   });
 
   test("Index unreadable: no count, no names, the link line still there; the overnight prefetch fills in when it has today", async () => {
