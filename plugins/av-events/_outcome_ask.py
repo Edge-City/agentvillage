@@ -105,32 +105,106 @@ MATCHER_VERSION = "outcome_reply_v2"
 DELIVERED = frozenset({"delivered", "queued"})
 
 #: The fixed question, shared with the bun test that pins the evening prompt's
-#: sentence (`install/tests/proactive_jobs.test.ts`): `pattern` is what a
-#: reply must fully match, stripped, to arm; `marker` is the sentence a
-#: Telegram reply pointer must quote for the message to be an answer.
+#: sentence (`install/tests/proactive_jobs.test.ts`); both read every rule
+#: from this file and both check its `cases`:
+#: - `sentence`: the question; a reply arms when, after `normalise_reply`,
+#:   it fully matches it (QUESTION_PATTERN), and a pointer's quote is searched
+#:   for it (QUESTION_SEARCH);
+#: - `marker`: what a Telegram reply pointer's quote must contain for the
+#:   message to be an answer at all (QUESTION_MARKER);
+#: - `normalise`: the spaces and the wrapper pairs `normalise_reply` uses.
 QUESTION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outcome_question.json")
 
 
-def _load_question(path: str = QUESTION_FILE) -> tuple[Optional["re.Pattern[str]"], Optional[str]]:
-    """`(pattern, marker)` from QUESTION_FILE; `(None, None)` when it cannot
-    be read, and then nothing arms and no pointer passes (fail closed)."""
-    try:
-        with open(path, encoding="utf-8") as handle:
-            seed = json.load(handle)
-        pattern, marker = seed.get("pattern"), seed.get("marker")
-        if not (isinstance(pattern, str) and isinstance(marker, str) and marker):
-            return None, None
-        return re.compile(pattern), marker
-    except (OSError, ValueError, AttributeError, re.error):
-        return None, None
+class _Question:
+    """The rules in QUESTION_FILE. When it cannot be read, nothing arms and
+    no pointer passes (fail closed)."""
+
+    def __init__(self, path: str = QUESTION_FILE) -> None:
+        self.pattern: Optional["re.Pattern[str]"] = None
+        self.search: Optional["re.Pattern[str]"] = None
+        self.marker: Optional["re.Pattern[str]"] = None
+        self.spaces: tuple[str, ...] = ()
+        self.wrappers: tuple[tuple[str, str], ...] = ()
+        try:
+            with open(path, encoding="utf-8") as handle:
+                seed = json.load(handle)
+            sentence, marker, rules = seed["sentence"], seed["marker"], seed["normalise"]
+            spaces = tuple(s for s in rules["spaces"] if isinstance(s, str) and len(s) == 1)
+            wrappers = tuple((o, c) for o, c in rules["wrappers"] if isinstance(o, str) and isinstance(c, str) and o and c)
+            if not (isinstance(sentence, str) and isinstance(marker, str) and marker):
+                return
+            self.pattern = re.compile(f"^(?:{sentence})$")
+            self.search = re.compile(sentence)
+            self.marker = re.compile(marker)
+            self.spaces, self.wrappers = spaces, wrappers
+        except (OSError, ValueError, TypeError, KeyError, AttributeError, re.error):
+            self.pattern = self.search = self.marker = None
 
 
-QUESTION_PATTERN, QUESTION_MARKER = _load_question()
+_QUESTION = _Question()
+QUESTION_PATTERN = _QUESTION.pattern
+QUESTION_SEARCH = _QUESTION.search
+QUESTION_MARKER = _QUESTION.marker
+#: Removed from the question key (Telegram shows the markup, never sends it back in a quote).
+_KEY_MARKUP = re.compile(r"[*_`~]")
+
+
+def _emoji(ch: str) -> bool:
+    """An emoji code point, or one of its joiners, selectors, skin tones or tags."""
+    if ch in "‍︎️⃣":
+        return True
+    code = ord(ch)
+    if 0x1F3FB <= code <= 0x1F3FF or 0xE0020 <= code <= 0xE007F:
+        return True
+    return unicodedata.category(ch) == "So"
+
+
+def _strip_trailing_emoji(text: str) -> str:
+    end = len(text)
+    while end and (text[end - 1].isspace() or _emoji(text[end - 1])):
+        end -= 1
+    return text[:end]
+
+
+def _plain_spaces(text: str) -> str:
+    for space in _QUESTION.spaces:
+        text = text.replace(space, " ")
+    return text
+
+
+def normalise_reply(text: str) -> str:
+    """The `normalise` steps of QUESTION_FILE, for matching only: the special
+    spaces as plain spaces; stripped; trailing emoji off; one wrapper pair
+    around the whole reply off; stripped; trailing emoji off again."""
+    text = _strip_trailing_emoji(_plain_spaces(text).strip())
+    for opening, closing in _QUESTION.wrappers:
+        if len(text) > len(opening) + len(closing) and text.startswith(opening) and text.endswith(closing):
+            text = text[len(opening):len(text) - len(closing)]
+            break
+    return _strip_trailing_emoji(text.strip())
 
 
 def is_the_question(reply: Any) -> bool:
-    """The model's reply, stripped, is exactly the fixed question with one name."""
-    return isinstance(reply, str) and QUESTION_PATTERN is not None and QUESTION_PATTERN.fullmatch(reply.strip()) is not None
+    """The model's reply, normalised, is exactly the fixed question with one name."""
+    return isinstance(reply, str) and QUESTION_PATTERN is not None and QUESTION_PATTERN.fullmatch(normalise_reply(reply)) is not None
+
+
+def question_key(sentence: str) -> str:
+    """The `key` of QUESTION_FILE: markup removed, whitespace runs as one
+    space, no final full stop, case-folded. Hashed, never stored as text."""
+    key = " ".join(_KEY_MARKUP.sub("", _plain_spaces(sentence)).split())
+    return (key[:-1] if key.endswith(".") else key).casefold()
+
+
+def quoted_question_key(quote: str) -> Optional[str]:
+    """The question key of the first question sentence in a pointer's quote,
+    or None when the quote holds none (a truncated quote, the resident's own
+    message that happens to contain the marker)."""
+    if QUESTION_SEARCH is None:
+        return None
+    found = QUESTION_SEARCH.search(_plain_spaces(quote))
+    return question_key(found.group(0)) if found else None
 
 #: The whole message, normalised (`normalise`), and the §4.1 value it is
 #: (`outcome.reported@1` `value`: met | useful | not_useful | missed |
@@ -341,12 +415,7 @@ def _subject(data: Any) -> Optional[dict]:
 def _strippable_tail(ch: str) -> bool:
     """A trailing `.`, `!`, whitespace or emoji (with its joiners, variation
     selectors, skin tones and keycap mark)."""
-    if ch in ".!" or ch.isspace() or ch in "‍︎️⃣":
-        return True
-    code = ord(ch)
-    if 0x1F3FB <= code <= 0x1F3FF or 0xE0020 <= code <= 0xE007F:
-        return True
-    return unicodedata.category(ch) == "So"
+    return ch in ".!" or ch.isspace() or _emoji(ch)
 
 
 def normalise(text: Any) -> Optional[str]:
@@ -376,7 +445,7 @@ def parse_answer(text: Any) -> Optional[tuple[str, bool]]:
     body = text.strip()
     found = _REPLY_POINTER.match(body)
     if found:
-        if QUESTION_MARKER is None or QUESTION_MARKER not in found.group(1):
+        if QUESTION_MARKER is None or QUESTION_MARKER.search(_plain_spaces(found.group(1))) is None:
             return None  # a reply to some other message is never an answer
         body = body[found.end():]
     normalised = normalise(body)
@@ -912,6 +981,10 @@ __all__ = [
     "answer_value",
     "QUESTION_MARKER",
     "QUESTION_PATTERN",
+    "QUESTION_SEARCH",
+    "normalise_reply",
+    "question_key",
+    "quoted_question_key",
     "arm",
     "armed_dir",
     "is_the_question",

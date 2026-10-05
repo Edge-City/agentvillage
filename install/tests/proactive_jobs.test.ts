@@ -159,19 +159,41 @@ describe("the six proactive jobs (DATA-314)", () => {
     expect(outcomeQuestion("Maya")).toBe("Did you and Maya meet? Reply met, not useful, or missed.");
   });
 
-  test("DATA-42 F2: the plugin arms only on a reply that fully matches the one shared pattern, and the prompt's sentence matches it", () => {
-    // plugins/av-events/outcome_question.json: the plugin's `QUESTION_PATTERN` and `QUESTION_MARKER`.
+  test("DATA-42 F2: the plugin arms only on a normalised reply that fully matches the one shared sentence, and the prompt's sentence matches it", () => {
+    // plugins/av-events/outcome_question.json: every rule the plugin's `is_the_question` uses, and the cases both suites check.
     const seed = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "plugins", "av-events", "outcome_question.json"), "utf8"));
-    const pattern = new RegExp(seed.pattern, "u");
-    expect(seed.pattern).toBe("^Did you and .{1,64} meet\\? Reply met, not useful, or missed\\.$");
-    // The sentence the evening prompt pins, with a name in it, and the trigger's own question.
+    expect(seed.sentence).toBe("Did you and [^?\\n]{1,64} meet\\? [Rr][Ee][Pp][Ll][Yy] met, not useful, or missed\\.?");
+    const pattern = new RegExp(`^(?:${seed.sentence})$`, "u");
+    const marker = new RegExp(seed.marker, "u");
+    // The plugin's `normalise_reply`, step for step from the file's `normalise`.
+    const emoji = (ch: string) => /[\u200d\ufe0e\ufe0f\u20e3]/u.test(ch) || /\p{So}/u.test(ch) || /[\u{1F3FB}-\u{1F3FF}\u{E0020}-\u{E007F}]/u.test(ch);
+    const stripTrailingEmoji = (text: string) => {
+      const chars = Array.from(text);
+      while (chars.length && (/\s/u.test(chars[chars.length - 1]) || emoji(chars[chars.length - 1]))) chars.pop();
+      return chars.join("");
+    };
+    const normalise = (reply: string) => {
+      let text = reply;
+      for (const space of seed.normalise.spaces as string[]) text = text.split(space).join(" ");
+      text = stripTrailingEmoji(text.trim());
+      for (const [opening, closing] of seed.normalise.wrappers as Array<[string, string]>) {
+        if (text.length > opening.length + closing.length && text.startsWith(opening) && text.endsWith(closing)) {
+          text = text.slice(opening.length, text.length - closing.length);
+          break;
+        }
+      }
+      return stripTrailingEmoji(text.trim());
+    };
+    const arms = (reply: string) => pattern.test(normalise(reply));
+    for (const reply of seed.cases.arm as string[]) expect([reply, arms(reply)]).toEqual([reply, true]);
+    for (const reply of seed.cases.unarmed as string[]) expect([reply, arms(reply)]).toEqual([reply, false]);
+    // The sentence the evening prompt pins, with a name in it, and the trigger's own question: exactly, with no normalising.
     const evening = prompt(proactive.find((spec) => PROACTIVE[spec.name] === "evening")!);
     const sentence = evening.match(/`(Did you and <name> meet\? [^`]+)`/)![1];
     expect(pattern.test(sentence.replace("<name>", "Maya"))).toBe(true);
     expect(pattern.test(outcomeQuestion("Maya"))).toBe(true);
     expect(pattern.test(outcomeQuestion("M".repeat(40)))).toBe(true);
-    expect(outcomeQuestion("Maya").endsWith(seed.marker)).toBe(true);
-    expect(pattern.test(`Hi! ${outcomeQuestion("Maya")}`)).toBe(false);
-    expect(pattern.test("Priya is still waiting to hear from you.")).toBe(false);
+    expect(marker.test(outcomeQuestion("Maya"))).toBe(true);
+    expect(arms(`Hi! ${outcomeQuestion("Maya")}`)).toBe(false);
   });
 });

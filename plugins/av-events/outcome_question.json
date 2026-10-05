@@ -1,5 +1,52 @@
 {
-  "version": "outcome_question_v1",
-  "pattern": "^Did you and .{1,64} meet\\? Reply met, not useful, or missed\\.$",
-  "marker": "Reply met, not useful, or missed."
+  "version": "outcome_question_v2",
+  "about": "The evening outcome ask's fixed question, read by plugins/av-events/_outcome_ask.py and by install/tests/proactive_jobs.test.ts. The plugin arms only when the model's reply, after the normalise steps (for matching only; the message hash is of the reply as it is), fully matches ^sentence$. A Telegram reply pointer can be an answer only when its quote contains marker; the question sentence is then found in the quote by an unanchored search for sentence. Both suites check every entry of cases.",
+  "sentence": "Did you and [^?\\n]{1,64} meet\\? [Rr][Ee][Pp][Ll][Yy] met, not useful, or missed\\.?",
+  "marker": "[Rr][Ee][Pp][Ll][Yy] met, not useful, or missed",
+  "normalise": {
+    "steps": [
+      "spaces: each of these characters becomes a plain space",
+      "strip: surrounding whitespace",
+      "trailing_emoji: strip trailing emoji (Unicode category So, ZWJ, variation selectors, keycap mark, skin tones, tag characters) and whitespace",
+      "wrapper: remove one pair of these around the whole reply, the first that fits, if anything is left inside",
+      "strip: surrounding whitespace",
+      "trailing_emoji: again, for emoji inside the wrapper"
+    ],
+    "spaces": [" ", " ", " "],
+    "wrappers": [["**", "**"], ["*", "*"], ["_", "_"], ["\"", "\""], ["“", "”"], ["‘", "’"], ["'", "'"], ["«", "»"]]
+  },
+  "key": "The question key, hashed with the tenant's key at arm time and for a pointer's quote: the sentence found after normalising, with every *, _, ` and ~ removed, whitespace runs as one space, no final full stop, case-folded.",
+  "cases": {
+    "arm": [
+      "Did you and Maya meet? Reply met, not useful, or missed.",
+      "Did you and **Maya** meet? Reply met, not useful, or missed.",
+      "**Did you and Maya meet? Reply met, not useful, or missed.**",
+      "*Did you and Maya meet? Reply met, not useful, or missed.*",
+      "_Did you and Maya meet? Reply met, not useful, or missed._",
+      "Did you and Maya meet? Reply met, not useful, or missed. 🙂",
+      "**Did you and Maya meet? Reply met, not useful, or missed.** 👋🏽",
+      "Did you and Maya meet? Reply met, not useful, or missed",
+      "Did you and Maya meet? reply met, not useful, or missed.",
+      "Did you and Maya meet? Reply met, not useful, or missed.",
+      "“Did you and Maya meet? Reply met, not useful, or missed.”",
+      "\"Did you and Maya meet? Reply met, not useful, or missed.\"",
+      "  Did you and D’Souza meet? Reply met, not useful, or missed.  \n"
+    ],
+    "unarmed": [
+      "Did you and Maya meet? Also did you and Ravi meet? Reply met, not useful, or missed.",
+      "Did you and Maya meet? Priya is still waiting on you. Reply met, not useful, or missed.",
+      "Did you and Maya\nmeet? Reply met, not useful, or missed.",
+      "Did you and Maya meet?\nReply met, not useful, or missed.",
+      "Did you and Maya meet? Reply met, not useful, or missed. Also, enjoy dinner!",
+      "Good evening! Did you and Maya meet? Reply met, not useful, or missed.",
+      "Cronjob Response: Edge — evening questions\n\nDid you and Maya meet? Reply met, not useful, or missed.",
+      "Did you and Maya meet? Reply met, not useful, or missed.!",
+      "**Did you and Maya meet? Reply met, not useful, or missed.",
+      "***Did you and Maya meet? Reply met, not useful, or missed.***",
+      "Did you and meet? Reply met, not useful, or missed.",
+      "Priya is still waiting to hear from you.",
+      "Sorry, I hit an error and could not finish this note.",
+      "Did you and Maya meet? Reply yes or no."
+    ]
+  }
 }

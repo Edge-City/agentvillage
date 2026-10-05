@@ -228,6 +228,8 @@ NOT_THE_QUESTION = {
     "a name over 64 characters": f"Did you and {'A' * 65} meet? Reply met, not useful, or missed.",
     "no name": "Did you and meet? Reply met, not useful, or missed.",
     "the question twice": f"{QUESTION}\n{QUESTION}",
+    "a second question inside the name slot": "Did you and Maya meet? Also did you and Ravi meet? Reply met, not useful, or missed.",
+    "a reminder inside the name slot": "Did you and Maya meet? Priya is still waiting on you. Reply met, not useful, or missed.",
 }
 
 
@@ -258,12 +260,47 @@ def test_the_question_pattern_is_the_one_shared_constant(plugin):
     prompt's sentence against (`install/tests/proactive_jobs.test.ts`)."""
     mod = module(plugin)
     seed = json.loads(open(mod.QUESTION_FILE, encoding="utf-8").read())
-    assert seed["pattern"] == r"^Did you and .{1,64} meet\? Reply met, not useful, or missed\.$"
-    assert mod.QUESTION_PATTERN.pattern == seed["pattern"]
-    assert mod.QUESTION_MARKER == seed["marker"] == "Reply met, not useful, or missed."
+    assert seed["sentence"] == r"Did you and [^?\n]{1,64} meet\? [Rr][Ee][Pp][Ll][Yy] met, not useful, or missed\.?"
+    assert mod.QUESTION_PATTERN.pattern == f"^(?:{seed['sentence']})$"
+    assert mod.QUESTION_SEARCH.pattern == seed["sentence"]
+    assert mod.QUESTION_MARKER.pattern == seed["marker"]
     assert mod.is_the_question(QUESTION)
     assert mod.is_the_question(f"Did you and {'A' * 64} meet? Reply met, not useful, or missed.")
     assert not mod.is_the_question(None)
+
+
+QUESTION_CASES = json.loads(open(os.path.join(os.path.dirname(__file__), "..", "outcome_question.json"), encoding="utf-8").read())["cases"]
+
+
+@pytest.mark.parametrize("reply", QUESTION_CASES["arm"])
+def test_the_shared_cases_that_arm(plugin, reply):
+    """Bold, a trailing emoji, no final full stop, a non-breaking space, a
+    lower-case "reply", quotes around the whole question: the same table the
+    bun test checks."""
+    assert module(plugin).is_the_question(reply), reply
+
+
+@pytest.mark.parametrize("reply", QUESTION_CASES["unarmed"])
+def test_the_shared_cases_that_stay_unarmed(plugin, reply):
+    """A second question in the name slot, a newline, text after, a greeting
+    before, Hermes's wrapper, an unbalanced wrapper."""
+    assert not module(plugin).is_the_question(reply), reply
+
+
+@pytest.mark.parametrize("reply", [
+    "**Did you and Arjun meet? Reply met, not useful, or missed.** \U0001f642",
+    "Did you and Arjun meet?\u00a0reply met, not useful, or missed",
+    "\u201cDid you and **Arjun** meet? Reply met, not useful, or missed.\u201d",
+])
+def test_a_normal_variation_arms_and_the_hash_stays_the_replys_own(live, ctx, tenant, av, reply):
+    execution = uuid.uuid4().hex
+    tenant.stage()
+    evening_reply(ctx, tenant, execution, reply)
+    tenant.finish(execution)
+    assert live._COLLECTOR.outcome_tick().get("asked") == 1
+    [asked] = events(av, live, "outcome.asked")
+    [out] = [e for e in events(av, live, "message.out") if e["session_id"].startswith("cron_")]
+    assert asked["payload"]["message_hash"] == out["payload"]["content_hash"] == live._COLLECTOR.keyed_hash(reply)
 
 
 @pytest.mark.parametrize("status,delivery", [("completed", "failed"), ("completed", "suppressed"), ("completed", "not_configured"),
