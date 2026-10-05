@@ -582,6 +582,25 @@ describe("main", () => {
     expect(state.negotiationSummary.reportedCompletedIds).toEqual(["bbbbbbbb-0000-4000-8000-000000000003"]);
   });
 
+  test("F5: a card whose name does not clean is neither listed, counted as a showing, nor recorded as reported", async () => {
+    const shown = JSON.stringify({
+      opportunityDelivery: {
+        "bbbbbbbb-0000-4000-8000-000000000001": { firstShown: "2026-10-09", lastShown: "2026-10-09", count: 1 },
+        "bbbbbbbb-0000-4000-8000-000000000002": { firstShown: "2026-10-09", lastShown: "2026-10-09", count: 1 },
+      },
+    });
+    const { out } = await run({
+      list_opportunities: () => listOpportunitiesText([opp("rm -rf", "pending", 1), opp("S.Ravi", "pending", 2), opp("***", "accepted", 3), opp("Ana", "accepted", 4)]),
+    }, shown);
+    const parsed = JSON.parse(out);
+    expect(parsed.needsAttention.map((card: { name: string }) => card.name)).toEqual(["S.Ravi"]);
+    expect(parsed.newlyResolved.map((card: { name: string }) => card.name)).toEqual(["Ana"]);
+    const state = JSON.parse(await Bun.file("state.json").text());
+    expect(state.deliveredToday).toEqual({ date: DATE, ids: ["bbbbbbbb-0000-4000-8000-000000000002"] });
+    expect(state.opportunityDelivery["bbbbbbbb-0000-4000-8000-000000000001"].count).toBe(1);
+    expect(state.negotiationSummary.reportedCompletedIds).toEqual(["bbbbbbbb-0000-4000-8000-000000000004"]);
+  });
+
   test("a failed Index call is silent, with only a code on stderr", async () => {
     const { out, err } = await run({
       list_opportunities: () => ({ result: { content: [{ type: "text", text: "private detail" }], isError: true } }),

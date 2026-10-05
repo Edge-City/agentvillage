@@ -246,11 +246,19 @@ The rules the trigger holds:
 - **No third-party free text reaches the model.** Only dates, the resident's
   own data, sanitised schedule facts, organiser announcements, Index counts and
   cleaned names; no headline, summary or description written by or about
-  another person. Every string is cleaned (`proactive-text.ts`: control and
-  format characters, markup, backticks and links removed, length capped;
-  names also refused when link-shaped or command-shaped) and scanned with a
-  mirror of Hermes's cron prompt scanner, and withheld on a hit; the whole
-  output is scanned once more before the model is woken.
+  another person. Every string is cleaned (`proactive-text.ts`: control,
+  format and default-ignorable characters, markup, backticks and links
+  removed, length capped) and scanned with a mirror of Hermes's cron prompt
+  scanner, and withheld on a hit; the whole output is scanned once more before
+  the model is woken. Cleaning repairs rather than refuses: a dot between
+  letters gets a space after it (`R.Krishnan` is `R. Krishnan`, and no domain
+  stays a link). Text a non-organiser can write (event titles and venues, the
+  resident's notes and signals) also loses `@`, `/` (except between digits,
+  as in `10/12`) and phone-shaped digit runs, so no `/command` Telegram makes
+  tappable reaches the message; names lose phone runs too and are refused only
+  when nothing is left, when command-shaped, or on a scanner hit. A pick (the
+  drops, the evening note, the follow-up) skips a card whose name does not
+  clean, so it never spends the day's slot.
 - **The brief only between 05:00 and 11:00 IST.** Outside it the trigger is
   silent; the other jobs have no window.
 - **Once per day per job.** The day is marked done in

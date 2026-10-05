@@ -33,6 +33,7 @@ import {
   recordShowings,
 } from "./delivery-state";
 import { indexMcpUrl } from "./index-mcp";
+import { cleanName } from "./proactive-text";
 import { writeStateFile } from "./state-file";
 
 /** Last day of Edge City India 2026 (Oct 11 – Nov 1). */
@@ -131,7 +132,8 @@ export async function askQuestions(options: {
       // The read succeeded, so entries for cards no longer pending can go.
       const readOnly = isBackDated(date, realVillageDate());
       const log = pruneDeliveryLog(readDeliveryLog(state, date, realVillageDate()), date, listing);
-      const unseen = fetched.filter((opp) => opp.opportunityId && !seen.has(opp.opportunityId));
+      // A card whose name does not clean is never shown, so it must not take the slot (DATA-314 B1-fix F5).
+      const unseen = fetched.filter((opp) => opp.opportunityId && !seen.has(opp.opportunityId) && cleanName(opp.name));
       const [chosen] = applyCooldown(unseen, log, date).eligible;
       if (chosen?.opportunityId) {
         if (!readOnly) {

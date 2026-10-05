@@ -46,7 +46,7 @@ import { askQuestions } from "./ask-questions";
 import { type BriefOpportunity, type DailyBriefContext, buildDailyBriefContext, villageDate } from "./build-daily-brief-context";
 import { OPPORTUNITY_DELIVERY_KEY, deliveryLogChanged, pruneDeliveryLog, readDeliveryLog, recordShowings } from "./delivery-state";
 import { dropOpportunity } from "./drop-opportunity";
-import { cleanName, cleanText, connectionsUrl, cronScanHit } from "./proactive-text";
+import { cleanName, cleanText, cleanTitle, connectionsUrl, cronScanHit } from "./proactive-text";
 import { type LockOptions, LockStuck, LockTimeout, releaseHeldLocks, withStateLock } from "./state-lock";
 import { writeStateFile } from "./state-file";
 import { followUp } from "./summarize-negotiations";
@@ -271,7 +271,13 @@ class Withheld {
     return name;
   }
   text(raw: unknown, max: number): string | null {
-    const text = cleanText(raw, max);
+    return this.counted(raw, cleanText(raw, max));
+  }
+  /** Text a non-organiser can write: the stricter cleaner (F6). */
+  title(raw: unknown, max: number): string | null {
+    return this.counted(raw, cleanTitle(raw, max));
+  }
+  private counted(raw: unknown, text: string | null): string | null {
     if (raw !== undefined && raw !== null && raw !== "" && !text) this.count++;
     return text;
   }
@@ -295,10 +301,10 @@ function eventLink(url: unknown): string | null {
 
 function eventsView(events: DailyBriefContext["rsvpEvents"] | undefined, w: Withheld): Array<Record<string, string>> {
   return (events ?? []).slice(0, LIST_MAX).flatMap((event) => {
-    const title = w.text(event.title, 100);
+    const title = w.title(event.title, 100);
     if (!title) return [];
     const time = cleanText(event.timeLocal, 20);
-    const venue = w.text(event.venue, 60);
+    const venue = w.title(event.venue, 60);
     const link = eventLink(event.eventUrl);
     return [{ title, ...(time ? { time } : {}), ...(venue ? { venue } : {}), ...(link ? { link } : {}) }];
   });
@@ -364,7 +370,7 @@ export function briefView(
     },
     you: {
       interests: (context.userModel?.interestTags ?? []).flatMap((tag) => cleanText(tag, 40) ?? []),
-      notes: (context.userModel?.phrases ?? []).slice(0, 3).flatMap((phrase) => w.text(phrase, 120) ?? []),
+      notes: (context.userModel?.phrases ?? []).slice(0, 3).flatMap((phrase) => w.title(phrase, 120) ?? []),
     },
     connections: {
       newMatchCount: count,
@@ -426,7 +432,7 @@ export function followUpView(date: string, result: FollowUpResult): { view: Reco
   const newConnections = people(result.newlyResolved);
   const agentsTalking = people(result.waiting).map(({ name, profileUrl }) => ({ name, profileUrl }));
   const yourSignals = result.signals.slice(0, LIST_MAX).flatMap((signal) => {
-    const text = w.text(signal.summary, 120);
+    const text = w.title(signal.summary, 120);
     return text ? [{ text, link: indexUrl("i", signal.url) }] : [];
   });
   if (waitingOnYou.length === 0 && newConnections.length === 0) return { view: null, withheld: w.count };

@@ -115,6 +115,20 @@ describe("askQuestions", () => {
     expect(await Bun.file("state.json").exists()).toBe(false);
   });
 
+  test("F5: skips a card whose name does not clean: it takes no slot and is not recorded as shown", async () => {
+    tempWorkspace();
+    await Bun.write("state.json", JSON.stringify({ opportunityDelivery: {} }));
+    mockList(listText([
+      card("rm -rf", "memory systems", "opp-bad", MAYA_ID),
+      card("R.Krishnan", "village tools", "opp-jon", JON_ID),
+    ]));
+    const result = await askQuestions({ date: "2026-06-17", stateFile: "state.json", apiKey: "test-key" });
+    expect(result).toMatchObject({ name: "R.Krishnan", opportunityUrl: "https://index.network/o/opp-jon" });
+    const state = JSON.parse(await Bun.file("state.json").text());
+    expect(state.deliveredToday).toEqual({ date: "2026-06-17", ids: ["opp-jon"] });
+    expect(Object.keys(state.opportunityDelivery)).toEqual(["opp-jon"]);
+  });
+
   test("skips a card already delivered today", async () => {
     tempWorkspace();
     // An empty delivery log, so only the same-day dedupe keeps Maya out.

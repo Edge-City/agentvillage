@@ -63,6 +63,7 @@ import {
   type PendingListing,
 } from "./delivery-state";
 import { callIndexTool, indexMcpUrl, toolJsonArray, toolJsonObject } from "./index-mcp";
+import { cleanName } from "./proactive-text";
 import { writeStateFile } from "./state-file";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -284,7 +285,9 @@ export interface FollowUpCard {
 
 function followUpCard(opp: BriefOpportunity): FollowUpCard | null {
   const linked = attachIndexLinks(opp);
-  if (!linked.name) return null;
+  // A name that does not clean is never shown: such a card is neither listed,
+  // counted as a showing nor recorded as reported (DATA-314 B1-fix F5).
+  if (!linked.name || !cleanName(linked.name)) return null;
   const headline = linked.headline || linked.mainText || "New match";
   return {
     name: linked.name,
@@ -392,7 +395,7 @@ export async function followUp(options: {
     .filter((card) => card.status === "negotiating" || (card.status === "pending" && !awaitsResident(card)))
     .map(followUpCard)
     .filter((card): card is FollowUpCard => Boolean(card));
-  const newAccepted = cards.filter((card) => card.status === "accepted" && card.opportunityId && !alreadyReported.has(card.opportunityId));
+  const newAccepted = cards.filter((card) => card.status === "accepted" && card.opportunityId && !alreadyReported.has(card.opportunityId) && followUpCard(card));
   const newlyResolved = newAccepted.map(followUpCard).filter((card): card is FollowUpCard => Boolean(card));
 
   if (needsAttention.length === 0 && newlyResolved.length === 0) {

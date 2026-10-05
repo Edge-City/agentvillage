@@ -8,7 +8,10 @@
  * cleaned and scanned:
  *
  *   - cleanName(): a person's name as a plain display name, or null.
- *   - cleanText(): a schedule fact, announcement or note as one plain line, or null.
+ *   - cleanText(): an organiser announcement or a fact the overlay computed
+ *     (a time, the weather) as one plain line, or null.
+ *   - cleanTitle(): text a non-organiser can write (event titles and venues,
+ *     the resident's notes and signals) as one plain line, stricter, or null.
  *   - cronScanHit(): the patterns Hermes's cron prompt scanner blocks a run on.
  *   - connectionsUrl(): the Connections link the brief always carries.
  */
@@ -55,38 +58,67 @@ export function cronScanHit(text: string): string | null {
 
 /** Control, format, private-use and unpaired surrogate code points, and line/paragraph separators. */
 const INVISIBLE = /[\p{Cc}\p{Cf}\p{Co}\p{Cs}\p{Zl}\p{Zp}]/gu;
+/**
+ * Code points that render as nothing: Default_Ignorable_Code_Point, and the
+ * Hangul fillers (U+115F, U+1160, U+3164, U+FFA0). Stripped after NFKC, which
+ * turns U+3164 into U+1160.
+ */
+const IGNORABLE = /[\p{Default_Ignorable_Code_Point}\u115f\u1160\u3164\uffa0]/gu;
+/** Python's splitlines separators that JSON.stringify does not escape, and tabs. */
+const LINE_BREAKS = /[\r\n\t\u0085\u2028\u2029]/g;
+/** Something that renders: not only combining marks and whitespace. */
+const VISIBLE = /[^\p{M}\s]/u;
+/**
+ * A dot between a letter (or digit) and a letter (`R.Krishnan`, `evil.com`):
+ * it gets a space after it, which reads as an initial and is no longer a link
+ * shape Telegram turns into a link. A dot between digits (`7.30pm`) stays.
+ */
+const DOT_BETWEEN_LETTERS = /(?<=[\p{L}\p{M}\p{N}])\.(?=\p{L})/gu;
+/** A phone-shaped run: 7 or more digits with single spaces or dashes between, an optional leading `+`. */
+const PHONE_RUN = /\+?\p{Nd}(?:[ -]?\p{Nd}){6,}/gu;
+/** Dates that look like a phone run (`2026-10-12`, `12-10-2026`): kept. */
+const DASHED_DATE = /^(?:\p{Nd}{4}-\p{Nd}{1,2}-\p{Nd}{1,2}|\p{Nd}{1,2}-\p{Nd}{1,2}-\p{Nd}{2,4})$/u;
 
 function codePointSlice(text: string, n: number): string {
   return [...text].slice(0, n).join("");
 }
 
+function withoutPhoneRuns(text: string): string {
+  return text.replace(PHONE_RUN, (run) => (DASHED_DATE.test(run) ? run : " "));
+}
+
 /** A name keeps letters, marks, digits, spaces and `' ’ . , -`; anything else becomes a space. */
 const NAME_DISALLOWED = /[^\p{L}\p{M}\p{N}\p{Zs}'\u2019.,-]/gu;
-/** Two letter runs joined by a dot (`ana.silva`, `example.com`): Telegram may link it. */
-const DOTTED_WORD = /[\p{L}\p{N}-]\.\p{L}{2}/u;
 /** A command-line flag (`-rf`, `--force`) or a leading `www`. */
 const COMMAND_SHAPED = /(?:^|\s)-{1,2}\p{L}|(?:^|\s)www(?:\s|$)/iu;
 export const NAME_MAX = 40;
 
 /**
- * A person's name as a plain display name: NFKC-normalised; control and
- * format characters removed; only letters, marks, digits, spaces and
- * `' ’ . , -` kept (so no markup, no backtick, no `@`, `/`, `:` or brackets);
- * whitespace collapsed; at most NAME_MAX code points. Null when nothing is
- * left, or when what is left is link-shaped (two words joined by a dot) or
- * command-shaped (a flag), or would trip Hermes's scanner.
+ * A person's name as a plain display name, repaired rather than refused:
+ * NFKC-normalised; control, format and default-ignorable characters removed;
+ * only letters, marks, digits, spaces and `' ’ . , -` kept (so no markup, no
+ * backtick, no `@`, `/`, `:` or brackets); a phone-shaped digit run removed; a
+ * dot between letters followed by a space (`R.Krishnan` is `R. Krishnan`, and
+ * `evil.com` is no longer a link); whitespace collapsed; at most NAME_MAX code
+ * points. Null only when no letter or digit is left, when what is left is
+ * command-shaped (a flag), or when it would trip Hermes's scanner.
  */
 export function cleanName(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
-  const plain = raw
-    .normalize("NFKC")
-    .replace(/[\r\n\t\u0085\u2028\u2029]/g, " ")
-    .replace(INVISIBLE, "")
-    .replace(NAME_DISALLOWED, " ")
+  const plain = withoutPhoneRuns(
+    raw
+      .normalize("NFKC")
+      .replace(LINE_BREAKS, " ")
+      .replace(INVISIBLE, "")
+      .replace(IGNORABLE, "")
+      .replace(NAME_DISALLOWED, " ")
+      .replace(/\s+/g, " "),
+  )
+    .replace(DOT_BETWEEN_LETTERS, ". ")
     .replace(/\s+/g, " ")
     .replace(/^[\s'\u2019.,-]+|[\s,-]+$/gu, "")
     .trim();
-  if (!plain || DOTTED_WORD.test(plain) || COMMAND_SHAPED.test(plain)) return null;
+  if (!/[\p{L}\p{N}]/u.test(plain) || COMMAND_SHAPED.test(plain)) return null;
   const capped = codePointSlice(plain, NAME_MAX).trim();
   return capped && !cronScanHit(capped) ? capped : null;
 }
@@ -96,27 +128,66 @@ const MARKUP = /[`*_~|\\<>[\]{}#]/g;
 /** A URL with a scheme, a `www.` address or an email address. */
 const LINKS = /\b[a-z][a-z0-9+.-]*:\/\/\S*|\bwww\.\S*|\S+@\S+\.\S+/gi;
 
+function capped(plain: string, max: number): string | null {
+  if (!VISIBLE.test(plain)) return null;
+  const cut = [...plain].length > max ? `${codePointSlice(plain, max - 1).trimEnd()}\u2026` : plain;
+  return cronScanHit(cut) ? null : cut;
+}
+
 /**
- * Text from a schedule, an organiser or the resident's notes as one plain
- * line: NFKC-normalised; control and format characters removed; links,
- * addresses and markup characters (backticks included) removed; whitespace
- * collapsed; at most `max` code points (an ellipsis marks a cut). Null when
- * nothing is left or Hermes's scanner would block on it.
+ * Text from an organiser, the overlay's own code or a fixed list as one plain
+ * line: NFKC-normalised; control, format and default-ignorable characters
+ * removed; links, addresses and markup characters (backticks included)
+ * removed; whitespace collapsed; at most `max` code points (an ellipsis marks
+ * a cut). Null when nothing visible is left or Hermes's scanner would block on
+ * it. Text anyone else can write goes through cleanTitle.
  */
 export function cleanText(raw: unknown, max: number): string | null {
   if (typeof raw !== "string") return null;
   const plain = raw
     .normalize("NFKC")
-    .replace(/[\r\n\t\u0085\u2028\u2029]/g, " ")
+    .replace(LINE_BREAKS, " ")
     .replace(INVISIBLE, "")
+    .replace(IGNORABLE, "")
     .replace(LINKS, " ")
     .replace(MARKUP, " ")
     .replace(/\s+/g, " ")
     .trim();
-  if (!plain) return null;
-  const cut = [...plain].length > max ? `${codePointSlice(plain, max - 1).trimEnd()}\u2026` : plain;
-  return cronScanHit(cut) ? null : cut;
+  return capped(plain, max);
 }
+
+/**
+ * Text a non-organiser can write (an event title or venue a resident host
+ * set, the resident's own notes and signals) as one plain line, stricter than
+ * cleanText and repaired rather than refused: everything cleanText removes;
+ * `@` and `/` removed (a `/` between two digits, as in `10/12`, stays: no
+ * command starts there), so no `/command` Telegram makes tappable and no
+ * handle; a phone-shaped digit run removed (dashed dates stay); a dot between
+ * letters followed by a space, so no domain survives as a link (`7.30pm`
+ * stays). Null only when nothing visible is left or Hermes's scanner would
+ * block on it. Words that read as an instruction cannot be cleaned away; the
+ * prompts say the Script Output is data.
+ */
+export function cleanTitle(raw: unknown, max: number): string | null {
+  if (typeof raw !== "string") return null;
+  const plain = withoutPhoneRuns(
+    raw
+      .normalize("NFKC")
+      .replace(LINE_BREAKS, " ")
+      .replace(INVISIBLE, "")
+      .replace(IGNORABLE, "")
+      .replace(LINKS, " ")
+      .replace(MARKUP, " ")
+      .replace(/@/g, " ")
+      .replace(/(?<!\p{Nd})\/|\/(?!\p{Nd})/gu, " ")
+      .replace(/\s+/g, " "),
+  )
+    .replace(DOT_BETWEEN_LETTERS, ". ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return capped(plain, max);
+}
+
 
 // ── The Connections link ─────────────────────────────────────────────────────
 

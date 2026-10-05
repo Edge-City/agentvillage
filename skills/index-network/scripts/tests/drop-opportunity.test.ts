@@ -50,6 +50,41 @@ describe("dropOpportunity", () => {
     expect(state.dreaming).toEqual({ lastRunDate: "2026-10-12" });
   });
 
+  test("F5: a card whose name does not clean is skipped: it takes no slot and is not recorded as shown", async () => {
+    const file = stateFile();
+    await Bun.write(file, JSON.stringify({ opportunityDelivery: {} }));
+    const row = (name: string, id: string, n: number) => ({
+      id,
+      url: `https://index.network/o/${id}`,
+      status: "pending",
+      headline: "h",
+      summary: "s",
+      peer: { name, userId: `cccccccc-0000-4000-8000-00000000000${n}`, url: `https://index.network/u/cccccccc-0000-4000-8000-00000000000${n}` },
+    });
+    globalThis.fetch = indexMcpFake({ tools: { list_opportunities: () => listOpportunitiesText([row("rm -rf", MAYA_OPP, 1), row("K.S.Ramesh", JON_OPP, 2)]) } }).fetch;
+
+    const result = await dropOpportunity({ date: "2026-10-12", stateFile: file, apiKey: "test-key", mcpUrl: FAKE_MCP_URL });
+
+    if ("silent" in result) throw new Error(`unexpected silent result: ${result.reason}`);
+    expect(result.opportunity).toMatchObject({ name: "K.S.Ramesh", opportunityId: JON_OPP });
+    const state = JSON.parse(await Bun.file(file).text());
+    expect(state.deliveredToday).toEqual({ date: "2026-10-12", ids: [JON_OPP] });
+    expect(Object.keys(state.opportunityDelivery)).toEqual([JON_OPP]);
+  });
+
+  test("F5: when every card's name fails to clean the drop is silent and spends nothing", async () => {
+    const file = stateFile();
+    await Bun.write(file, JSON.stringify({ opportunityDelivery: {} }));
+    const row = { id: MAYA_OPP, url: `https://index.network/o/${MAYA_OPP}`, status: "pending", headline: "h", summary: "s", peer: { name: "+91 98765 43210", userId: "cccccccc-0000-4000-8000-000000000001" } };
+    globalThis.fetch = indexMcpFake({ tools: { list_opportunities: () => listOpportunitiesText([row]) } }).fetch;
+
+    const result = await dropOpportunity({ date: "2026-10-12", stateFile: file, apiKey: "test-key", mcpUrl: FAKE_MCP_URL });
+
+    expect(result).toEqual({ silent: true, reason: "nothing-new" });
+    const state = JSON.parse(await Bun.file(file).text());
+    expect(state.deliveredToday).toBeUndefined();
+  });
+
   test("is silent when everything listed was already delivered today", async () => {
     const file = stateFile();
     await Bun.write(file, JSON.stringify({ deliveredToday: { date: "2026-10-12", ids: [MAYA_OPP, JON_OPP] }, opportunityDelivery: {} }));

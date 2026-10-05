@@ -50,6 +50,7 @@ import {
   recordShowings,
 } from "./delivery-state";
 import { indexMcpUrl } from "./index-mcp";
+import { cleanName } from "./proactive-text";
 import { writeStateFile } from "./state-file";
 
 interface DropResult {
@@ -127,7 +128,8 @@ export async function dropOpportunity(options: {
   // The read succeeded, so entries for cards no longer pending can go.
   const readOnly = isBackDated(date, realVillageDate());
   const log = pruneDeliveryLog(readDeliveryLog(state, date, realVillageDate()), date, listing);
-  const candidates = filterDedupedOpportunities(fetched, deliveredIds).filter((opp) => opp.opportunityId);
+  // A card whose name does not clean is never shown, so it must not take the slot (DATA-314 B1-fix F5).
+  const candidates = filterDedupedOpportunities(fetched, deliveredIds).filter((opp) => opp.opportunityId && cleanName(opp.name));
   const chosen = pickBest(applyCooldown(candidates, log, date).eligible, log);
   if (!chosen?.opportunityId) {
     if (!readOnly && deliveryLogChanged(state, log)) {
