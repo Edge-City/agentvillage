@@ -530,7 +530,9 @@ export type FacadeUrlKind = "https" | "loopback" | "unix";
 export function facadeUrlKind(url: string): FacadeUrlKind | null {
   if (/[\s"\\]/.test(url) || /[^\x20-\x7e]/.test(url)) return null;
   if (/^https:\/\/.+$/.test(url)) return "https";
-  const loop = /^http:\/\/127\.0\.0\.1:([0-9]{1,5})(?:\/.*)?$/.exec(url);
+  // No leading zero: the shim's listener check formats the port in hex and a
+  // POSIX printf reads `010` as octal.
+  const loop = /^http:\/\/127\.0\.0\.1:([1-9][0-9]{0,4})(?:\/.*)?$/.exec(url);
   if (loop) {
     const port = Number(loop[1]);
     return port >= 1 && port <= 65535 ? "loopback" : null;

@@ -318,6 +318,13 @@ if [ -z "$SOCK" ]; then
   if [ "$LOOP_PORT" = dflt ]; then
     case $BASE in https://*) LOOP_PORT=443 ;; *) LOOP_PORT=80 ;; esac
   fi
+  # A decimal port with no leading zero: printf '%04X' would read `010` as
+  # octal 8 while curl dials 10, and the listener check would look at the
+  # wrong port. Refuse rather than normalise.
+  case $LOOP_PORT in
+    '' ) ;;
+    0* | *[!0-9]* ) block "the facade URL's port is not a plain decimal port" ;;
+  esac
   if [ -n "$LOOP_PORT" ]; then
     is_int "$LOOP_PORT" && [ "$LOOP_PORT" -ge 1 ] && [ "$LOOP_PORT" -le 65535 ] ||
       block "the facade URL's loopback port is not a port"

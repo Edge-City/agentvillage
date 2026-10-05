@@ -1561,6 +1561,8 @@ describe("DATA-234 amendments: the co-located installer contract", () => {
       "http://localhost:4682",
       "http://127.0.0.1",
       "http://127.0.0.1:99999",
+      "http://127.0.0.1:010",
+      "http://127.0.0.1:04682",
       "http://127.0.0.1:80@evil.example",
       "http://127.0.0.2:4682",
       "unix:relative.sock",
