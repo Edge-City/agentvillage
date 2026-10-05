@@ -1334,8 +1334,10 @@ The whole design, as built, is `docs/design/outcome-ask.md`. In short:
   only) when it wakes the model with "Did you and <name> meet? Reply met, not useful, or missed."
   On that run's `post_llm_call` (a cron session whose task id is `cron:<job>:<execution>`, the job
   the installer's "Edge — evening questions" by recorded id and exact name) the stage is renamed
-  into `av-events/outcome-ask/armed/<execution>.json` with the reply's keyed hash. A silent reply
-  or a stage over 15 minutes old removes it and arms nothing.
+  into `av-events/outcome-ask/armed/<execution>.json` with the reply's keyed hash. These remove
+  the stage and arm nothing: a silent reply; a stage older than the run's claim in Hermes's
+  ledger, newer than the reply, or over 15 minutes old; a ledger row that is missing or names
+  another job.
 - **Confirm.** The flusher, on the cron tail's minute, reads the ledger: a completed run whose
   `delivery_outcome` is `delivered` or `queued` (or any completed run on a Hermes without the
   column) gets one `outcome.asked` per subject, with an id derived from the execution and the
@@ -1344,13 +1346,26 @@ The whole design, as built, is `docs/design/outcome-ask.md`. In short:
 - **Answer.** In the resident's Telegram DM (`HERMES_SESSION_CHAT_TYPE` `dm`; never a cron run, a
   subagent, an injected turn, another platform or a group), a message whose whole text, trimmed
   and case-folded, with apostrophes dropped and other punctuation as spaces, is `met`, `we met`,
-  `useful`, `not useful`, `missed`, `did not happen` or `didnt happen` is noted (value and time
-  only). The flusher emits `outcome.reported` when the latest ask armed before it named one
-  subject, was delivered, is unanswered, and the message came within 24 hours of it. Nothing in
+  `useful`, `not useful`, `missed`, `did not happen` or `didnt happen` is noted, in memory only
+  (value and time). The flusher emits `outcome.reported` when the latest ask whose run started
+  before it was the evening job, was delivered, is unanswered, and the message came within 24 hours
+  of it. The event id is derived from the ask, so ingest keeps one answer per ask. Nothing in
   `metadata` capture. A Telegram reply's `[Replying to ...]` pointer, which Hermes adds, is not
   part of the message.
 - **Hash.** The hash is of the model's reply. Hermes may wrap a cron delivery
   (`cron.wrap_response`) or prepend a fallback notice, so it is not of the Telegram text.
+- **Untrusted files.** Every file is in the agent's home, where the model can write, so every read
+  is untrusted:
+  - refused unless it is a regular, user-owned 0600 file under a size cap, in a private
+    directory, with exactly the expected keys of the expected shapes;
+  - type, actor, evidence class, `asked_by`, `window_days`, `run_id` and timestamps come from this
+    code and Hermes's ledger;
+  - armed files and asks on file are re-checked against the ledger, and against this process's
+    memory when it saw the run.
+
+  What stays file-asserted is the subject of a delivered evening ask armed in another process.
+  It is stored as plugin-asserted (`agent_report` ask, `self_report` answer). See the design
+  note §4.
 - Logs carry codes and counts only (`outcome_ask armed`, `outcome_ask_tick asked=1 ...`).
   `outcome_ask` in `AV_HOOKS_DISABLED` turns all of it off.
 - Ingest refuses both types from a plugin token until the data side's allowlist release: they are

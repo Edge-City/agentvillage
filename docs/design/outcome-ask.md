@@ -84,9 +84,11 @@ of the form `cron:<12 hex>:<32 hex>` (`cron/scheduler.py:2302`). The job must be
 exactly in `jobs.json`, the same test as for `cron.run`. A participant's job with the same name
 never arms.
 
-These cases remove the stage and arm nothing (codes `stale_stage`, `silent`):
+These cases remove the stage and arm nothing:
 
-- the stage is over 15 minutes old, or dated more than two minutes in the future;
+- the stage file is refused on read (§4);
+- Hermes's ledger has no row for the run, or its row names another job;
+- the stage was written before Hermes claimed the run, after the reply, or over 15 minutes ago;
 - the reply is Hermes's silence marker (`is_silent`, the same test as `scheduler.py:2985-2993`).
 
 Otherwise the stage is renamed to `av-events/outcome-ask/armed/<execution>.claim`. The rename is
@@ -96,8 +98,8 @@ with the reply's keyed hash. The flusher's stale-stage sweep also removes a stag
 **Confirm and emit** (`tick`, `_outcome_ask.py:380`). The tick holds an exclusive non-blocking
 `flock`, because every plugin-loading process ticks. It reads Hermes's executions ledger.
 
-When the run is terminal, `completed` and `delivery_outcome` is `delivered` or `queued`, the tick
-does three things:
+The armed file is re-checked against the ledger row (§4). Then, when the run is terminal,
+`completed` and `delivery_outcome` is `delivered` or `queued`, the tick does three things:
 
 - emits one `outcome.asked` per subject;
 - records the subject in `av-events/proactive/outcome-asked.json`, the only thing that makes the
@@ -117,8 +119,9 @@ The `outcome.asked@1` fields (`src/schemas/index.ts:1716-1727`):
 - `asked_by`: `outcome_cron`.
 - Envelope `outcome_id` (required, `REQUIRED_REFS`) and `opportunity_id`, so
   `opportunity_outcome` links it and the funnel reaches the intention through the opportunity.
-- `session_id` and `run_id`: the cron run's.
-- `occurred_at`: the ledger's `finished_at`.
+- `session_id`: the cron run's, accepted only in Hermes's `cron_<that job>_<stamp>` form.
+- `run_id`: built from the ledger row.
+- `occurred_at`: the ledger's `finished_at`; `occurred_at_earliest` is the ledger's claim time.
 - `evidence_class`: `agent_report`. An ask never classifies.
 - `event_id`: a uuid7 derived from the execution and the outcome (`derived_uuid7`), so a second
   process derives the same row.
@@ -157,15 +160,15 @@ The normalised message must be one of these:
 | `missed` | `missed` |
 | `did not happen`, `didnt happen` | `did_not_happen` |
 
-A match is noted as a file holding the value, the time and the session and turn ids, and only
-while an ask might be open. Anything else is not an answer and writes nothing; "met, and it was
+A match is noted **in this process's memory only**, never on disk: the value, the time and the
+session and turn ids. It is noted only while an ask might be open, and a restart drops notes the
+tick has not taken yet. Anything else is not an answer and writes nothing; "met, and it was
 great" is not an answer.
 
-**Counting** (in `tick`). An answer note counts for the latest ask armed before it, and only when
-that ask meets all of these:
+**Counting** (in `tick`). An answer note counts for the latest ask whose run started before it
+(start and end as Hermes's ledger recorded them), and only when that ask meets all of these:
 
-- it was delivered;
-- it named exactly one subject;
+- it is the installer's evening job and was delivered, re-checked against the ledger;
 - it is not yet answered;
 - the message came within 24 hours of it.
 
@@ -174,7 +177,8 @@ It then emits `outcome.reported@1` (`src/schemas/index.ts:1729-1741`):
 - `value` and `matcher_version: outcome_reply_v1`;
 - `evidence_class: self_report`, `actor: participant`;
 - the ask's `outcome_id` and `opportunity_id`;
-- `in_reply_to_event_id` = the ask's event id.
+- `in_reply_to_event_id` = the ask's event id;
+- an event id derived from the ask, so ingest keeps at most one answer per ask.
 
 There is no text and no hash of the reply. These cases emit nothing:
 
@@ -183,7 +187,7 @@ There is no text and no hash of the reply. These cases emit nothing:
 - a note with no ask before it;
 - a note whose ask was never delivered.
 
-"Before the next ask" follows from "the latest ask armed before it". An answer sent after a newer
+"Before the next ask" follows from "the latest ask whose run started before it". An answer sent after a newer
 ask went out belongs to the newer ask, never the older. An answer sent before the newer ask still
 belongs to its own ask, even when the tick sees it later. A note whose ask is armed but not yet
 confirmed waits for the confirmation.
@@ -193,7 +197,75 @@ confirmed waits for the confirmation.
 `outcome.verified` at `platform_record` or stronger from a corroborating token (`outcomes.sql:145-146`),
 and a plugin token may not send `outcome.verified` at all (`src/evidence.ts:225-237`).
 
-## 4. The data half
+## 4. Trust boundary: forged or altered files
+
+Every file here is in the agent's own home, where the model has terminal and file tools. Anything
+on disk can be written by the model, or by text that steered it, not only by the trigger or the
+plugin. That includes Hermes's own ledger and the tenant's hash key. So the plugin treats every file
+as untrusted, bounds what a forged one can cause, and states the one thing it cannot bind.
+
+**Refused on read** (`private_file`, `valid_stage`, `valid_armed`, `_load_asks` in
+`_outcome_ask.py`):
+
+- anything that is not a regular file: a symlink is removed, never followed;
+- a file not owned by this user, with any group or other permission bit, over its size cap (2 KB
+  for a stage or armed file, 16 KB for the asks), or in a directory that is not this user's or that
+  others can write;
+- a file with any key beyond the expected ones, or a missing key;
+- any field of the wrong shape:
+  - ids by pattern, with exactly one subject whose `outcome_id` is `opp-outcome:` plus its own
+    `opportunity_id`;
+  - `asked_by`, `window_days`, `v` and `action` equal to their constants;
+  - a stage `date` that is the village date of its `staged_at`;
+  - a hash of 64 hex characters;
+  - an armed file named for its own execution, with a session id of its own job's form.
+
+**Never from a file.** These come from this code and from Hermes's ledger as the plugin reads it:
+
+- the event type, `actor`, `evidence_class`, `asked_by` and `window_days`;
+- `run_id`;
+- every timestamp.
+
+**Bound to what the plugin observed:**
+
+- *Stage.* It must fall inside the run the plugin saw: the evening job by recorded id and exact
+  name; a ledger row for that execution naming that job; written after Hermes claimed the run and
+  before the reply; at most 15 minutes old.
+- *Armed file.* It must fall inside its ledger row: the installer's evening job; staged after the
+  claim; armed before the finish; delivered; at most one ask per execution.
+- *In-process cross-check.* When this process saw the run's reply, the armed file must be exactly
+  what it armed. If it saw the reply and armed nothing (a reminder evening), no armed file for that
+  run is accepted (`armed_tampered`).
+- *Asks on file.* Each is re-checked against the ledger (evening job, delivered) every time it
+  could take an answer. An ask this process emitted cannot have its subject switched on file
+  (`ask_tampered`).
+- *Answers.* Answers never touch disk, so no file can create one. Each answer's event id is derived
+  from its ask, so a forged "not answered yet" yields at most a duplicate that ingest drops.
+
+**Accepted limit: the subject.** When the arm happened in another process (an external cron worker
+under systemd) or before a restart, the subject of a real, delivered evening ask is file-asserted.
+The plugin cannot observe the trigger's pick:
+
+- the model's reply carries a name, not an id;
+- every store that carries the id is in the same home;
+- the tenant's HMAC key, which could sign a file, is readable there too.
+
+So a forger with file access can choose which opportunity a delivered evening ask was about, and a
+real resident answer to that ask lands on that subject. That is no more than what the data side
+already assumes of anything a plugin sends:
+
+- the ask is stored at the plugin cap, `agent_report`, and never classifies;
+- the answer is `self_report` from `actor: participant`;
+- `core.outcomes` maps a report to `reported_useful` at most;
+- `verified_useful` needs a corroborating token at `platform_record` or stronger, and a plugin
+  token may not send `outcome.verified` at all.
+
+In the funnel, an outcome is owned through the opportunity's link to an eligible intention.
+
+**The asked ledger.** A forged `outcome-asked.json` can mark a subject asked, so it is never asked
+(denial). Or it can drop one, so it is asked again, which the trigger caps at three evenings.
+
+## 5. The data half
 
 No schema change and no new registration: both payloads fit `@1` as registered. The plugin's
 producer-allowlist row (`src/evidence.ts:409-451`) lacks `outcome.asked` and `outcome.reported`;
@@ -201,7 +273,7 @@ producer-allowlist row (`src/evidence.ts:409-451`) lacks `outcome.asked` and `ou
 `producer_not_allowed`.** `quarantine:replay` re-checks the allowlist with the original token's
 provenance (`src/ingest/replay.ts:155`), so they are replayed after it.
 
-## 5. Switches, logs, files
+## 6. Switches, logs, files
 
 - `outcome_ask` in `AV_HOOKS_DISABLED` turns off arming, answers and the tick. A failure in any of
   them never costs the turn's `message.*` event.
@@ -210,10 +282,11 @@ provenance (`src/ingest/replay.ts:155`), so they are replayed after it.
 - Files, all under `$HERMES_HOME/av-events/`, ids, times and codes only:
   - `proactive/outcome-ask-evening.json`: the stage, written by the trigger.
   - `proactive/outcome-asked.json`: the asked ledger, written by the plugin and read by the trigger.
-  - `outcome-ask/armed/`, `outcome-ask/answers/`, `outcome-ask/asks.json` (delivered asks kept for
-    48 hours) and `outcome-ask/.lock`: the plugin's own.
+  - `outcome-ask/armed/`, `outcome-ask/asks.json` (delivered asks, execution and subject only,
+    kept for 48 hours) and `outcome-ask/.lock`: the plugin's own.
+  - Answers are never written to disk.
 
-## 6. Tests and the canary
+## 7. Tests and the canary
 
 **Bun:**
 
@@ -253,7 +326,33 @@ provenance (`src/ingest/replay.ts:155`), so they are replayed after it.
   - an earlier answer keeps its own ask;
   - no ask open; a second answer; an answer before confirmation; an undelivered ask;
   - group, channel, thread or unknown chat; CLI, subagent and injected turns;
-  - nothing in `metadata` capture.
+  - nothing in `metadata` capture;
+  - after a restart, a second answer reuses the first one's event id.
+- Forged stage files, the review flag "integrity / trust boundary (forged stage file)": each of
+  these is refused and removed, and no ask follows:
+  - every bad field (unknown key, two subjects, mismatched outcome id, extra subject key, bad id,
+    another asker, window, version or action, a date not the stamp's, a non-time stamp);
+  - too big;
+  - a symlink (never followed);
+  - group- or other-accessible;
+  - in a directory others can write;
+  - older than the job run, or newer than the reply;
+  - a run Hermes never recorded, or a row of another job.
+- Forged armed files, asks and answers, the review flag "integrity / trust boundary": each of
+  these emits nothing:
+  - an armed file for another job's run, or claiming the evening job for another job's run;
+  - an armed file for an evening run this process saw arm nothing;
+  - an armed file altered after arming;
+  - after a restart, an armed file outside its ledger row (staged before the run, armed after the
+    end, an unknown key, a non-hash, another job's session, the wrong file name);
+  - a symlinked or shared armed file;
+  - a second ask for one run;
+  - a forged answer file;
+  - an ask on file for another job's run, for an undelivered run, with extra keys, with a switched
+    subject, or as a symlink.
+
+  One test pins the accepted limit: after a restart, a well-formed armed file names the subject,
+  and the ask stays `agent_report` and the answer `self_report` from the participant.
 
 **Live canary** (Carter's dogfood tenant, after the roll):
 
