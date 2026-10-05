@@ -9,7 +9,7 @@
  *     negotiation summary (`Edge — negotiation summary`, ~14:00), evening
  *     questions (`Edge — evening questions`, ~19:00), and two
  *     single-opportunity drops (`Edge — opportunity drop (midday)`, ~12:00 and
- *     `Edge — opportunity drop (evening)`, ~17:00) — all host-local; times
+ *     `Edge — opportunity drop (evening)`, ~17:00) — all in Hermes's zone (village time: configureVillageTimezone); times
  *     overridable via --digest-signals-cron /
  *     --digest-prepare-cron / --digest-send-cron / --negotiation-summary-cron /
  *     --evening-questions-cron / --opportunity-drop-midday-cron /

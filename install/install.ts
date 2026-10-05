@@ -11,6 +11,8 @@
  *   - Telegram display: no reasoning, one quiet progress message per reply (`display_defaults.ts`; `AV_DISPLAY_DEFAULTS=0` skips)
  *   - STT enabled with Groq Whisper so voice notes are auto-transcribed
  *   - Telegram backlog kept across gateway restarts (`platforms.telegram.extra.drop_pending_on_cold_boot: false`, only when unset)
+ *   - Cron in village time (`timezone: Asia/Kolkata`, only when no zone is configured; a loud warning when another is)
+ *   - `cron.script_timeout_seconds: 120` when unset, Hermes's default 3600, or lower (the proactive triggers' budgets)
  *   - Index MCP + morning digest cron (`install_index.ts`)
  *   - Geo CLI runtime note (`install_geo.ts`)
  *   - opt-in recall skill + plugin when `AV_RECALL_ENABLED=1` (`install_recall.ts`)
@@ -45,9 +47,11 @@ import { runApprovalStep } from "./install_approval";
 import {
   capModelMaxTokens,
   configureAvEvents,
+  configureCronScriptTimeout,
   configureDashboardAuth,
   configureHostedGateway,
   configureStt,
+  configureVillageTimezone,
   keepTelegramBacklogOnColdBoot,
   setTerminalCwd,
 } from "./config";
@@ -240,6 +244,8 @@ function main(): void {
   configureStt();
   configureHostedGateway();
   keepTelegramBacklogOnColdBoot();
+  configureVillageTimezone();
+  configureCronScriptTimeout();
   configureTelegramDisplay();
   configureDashboardAuth();
   configureAvEvents();

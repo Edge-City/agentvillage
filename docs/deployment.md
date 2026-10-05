@@ -234,7 +234,7 @@ JSON, then the wake line; the model only writes language from that Script
 Output. No prompt of the six asks for a tool call, so a model that mangles tool
 arguments cannot break a job.
 
-| Job | Time (host-local, staggered) | Action | What the model is given |
+| Job | Time (Hermes's zone, which must be IST; staggered) | Action | What the model is given |
 |---|---|---|---|
 | Edge — digest prepare | 02:00 | `prefetch` | Nothing: the one `no_agent` job. It writes the brief's context to `av-events/proactive/brief-context.json` and is always silent. |
 | Edge — daily digest | 08:00 | `brief` | Dates, weather, organiser announcements, today's schedule facts, the resident's interests and notes, the count of eligible new matches, up to three cleaned names, the Connections link, the count of things waiting in their approvals. |
@@ -266,6 +266,41 @@ The rules the trigger holds:
 - Agent-job triggers always exit 0 with the wake line last; a fault is a silent
   run with a code. Each run appends one line of codes and counts to
   `av-events/proactive/triggers.jsonl` (never a name, a URL or any text).
+
+**Village time.** Hermes reads every cron schedule in one zone:
+`HERMES_TIMEZONE`, then `timezone:` in `config.yaml`, else the host's local
+time (`hermes_time.py`); under the multiplexed gateway only `config.yaml`
+counts, and the gateway copies a configured `timezone` over
+`HERMES_TIMEZONE` when it starts. The six schedules are written in village
+time and the brief delivers only between 05:00 and 11:00 IST, so on a host
+whose Hermes zone is not IST every job fires at the wrong village hour and the
+brief is silent every day. The installer therefore:
+- writes `timezone: Asia/Kolkata` into `config.yaml` when no zone is
+  configured (no `timezone` key or an empty one, and `HERMES_TIMEZONE` unset or
+  already `Asia/Kolkata`), with one log line. It never overwrites a value set
+  by hand;
+- changes nothing when another zone is configured, in `config.yaml` or in
+  `HERMES_TIMEZONE` (environment or `$HERMES_HOME/.env`), and prints one line
+  starting `!! WARNING:` that names the zone and says the six jobs will run at
+  the wrong village time and the brief will be silent. Fix it by hand.
+
+Hermes reads the key when the gateway starts, so it takes effect at the
+restart that ends the install. Each existing job's stored `next_run_at` is an
+absolute time; Hermes fires it once more at that time (its
+`timezone_migration` catch-up; on a host ahead of IST it moves it to the
+village hour instead) and from then on at the village hour. On a
+host that was not on IST that one run of the brief falls outside its window
+and is silent, and the once-per-day mark stops any other job from delivering
+twice on one village date. The same key also moves, on such a host, every
+other Hermes clock to IST: the date line of the agent's system prompt,
+message timestamps, the cron tool's times, and any job a resident created
+(its hours are re-read in IST).
+
+**The script timeout.** A trigger waits up to 60 s for the state lock and
+stops itself at 100 s, so Hermes's `cron.script_timeout_seconds` must be
+about 110 s or more. The installer sets it to 120 when it is unset, holds
+Hermes's own default of 3600, or is lower than 120; another value set by hand
+is kept.
 
 **The Connections link.** The brief always ends its Index part with
 `Connections: <link>`. The link is `https://agents.edgecity.live/insights`
