@@ -325,7 +325,9 @@ and is silent, and the once-per-day mark stops any other job from delivering
 twice on one village date. The same key also moves, on such a host, every
 other Hermes clock to IST: the date line of the agent's system prompt,
 message timestamps, the cron tool's times, and any job a resident created
-(its hours are re-read in IST).
+(its hours are re-read in IST). Release note: on a host that was not on IST,
+a resident's own pre-existing cron jobs have their hours read as IST after
+the first roll.
 
 **The script timeout.** A trigger waits up to 60 s for the state lock and
 stops itself at 100 s, so Hermes's `cron.script_timeout_seconds` must be
