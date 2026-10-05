@@ -504,6 +504,40 @@ describe("resuming a job paused across its slot (Hermes keeps the missed run due
     expect(job(MIDDAY)!.next_run_at).toBe("2026-01-01T12:13:00+05:30");
   });
 
+  test("the resume fails after Hermes saved it: hermes-failed, the resume in applied, and the reply says it may fire (S3)", () => {
+    const id = job(MIDDAY)!.id;
+    const failing = ctx({ hermes: (args) => {
+      execFileSync(bin, args, { stdio: "ignore", env: process.env });
+      // Saved, then a non-zero exit.
+      if (args[1] === "resume") throw new Error("hermes exited 1 after saving");
+    } });
+    expect(runJobsCommand(["set", "--job", "drop-midday", "--enabled", "true"], failing))
+      .toEqual({ code: 1, out: { ok: false, error: "hermes-failed", step: "enabled", applied: ["enabled"], resumeMayFire: true } });
+    // No re-anchor ran: Hermes still holds the missed run as due.
+    expect(cronCalls().at(-1)).toEqual(["cron", "resume", id]);
+    expect(job(MIDDAY)!.next_run_at).toBe("2026-01-01T12:13:00+05:30");
+  });
+
+  test("the resume is killed at its timeout after Hermes saved it: hermes-timeout, the resume in applied, and the reply says it may fire (S3)", () => {
+    process.env.FAKE_HERMES_HANG_AFTER = "resume";
+    expect(runJobsCommand(["set", "--job", "drop-midday", "--enabled", "true"], ctx({ hermes: hermesRunner(bin, process.env, 400) })))
+      .toEqual({ code: 1, out: { ok: false, error: "hermes-timeout", step: "enabled", applied: ["enabled"], resumeMayFire: true } });
+    expect(job(MIDDAY)!.next_run_at).toBe("2026-01-01T12:13:00+05:30");
+  });
+
+  test("the resume fails before Hermes saved it, or a pause fails after saving: no word of a catch-up", () => {
+    process.env.FAKE_HERMES_FAIL = "resume";
+    expect(run("set", "--job", "drop-midday", "--enabled", "true")).toEqual({ code: 1, out: { ok: false, error: "hermes-failed", step: "enabled", applied: [] } });
+    delete process.env.FAKE_HERMES_FAIL;
+    expect(run("set", "--job", "drop-midday", "--enabled", "true").out).toMatchObject({ ok: true, missedSlot: "dropped" });
+    const failing = ctx({ hermes: (args) => {
+      execFileSync(bin, args, { stdio: "ignore", env: process.env });
+      if (args[1] === "pause") throw new Error("hermes exited 1 after saving");
+    } });
+    expect(runJobsCommand(["set", "--job", "drop-midday", "--enabled", "false"], failing))
+      .toEqual({ code: 1, out: { ok: false, error: "hermes-failed", step: "enabled", applied: ["enabled"] } });
+  });
+
   test("a lock lost before the resume runs says nothing about a catch-up", () => {
     const takeover = ctx({ hermes: (args) => {
       execFileSync(bin, args, { stdio: "ignore", env: process.env });
@@ -1074,10 +1108,31 @@ describe("admin marks: read entry by entry, one rule for list and reconcile, and
     // add writes the settings: repaired.
     expect(run("add", "--template", "digest-preview", "--schedule", "0 16 * * *", "--window", "15:00-18:00").out)
       .toMatchObject({ ok: true, dropped: ["adminSchedules"], adminSchedulesRepaired: true });
-    // remove rewrites the file when the template had an entry: repaired there too.
+    // remove rewrites the file when the template had an entry: repaired there too,
+    // and, as set and add say it, `dropped` beside the repair (N5).
     writeFileSync(jobSettingsPath(home), JSON.stringify({ v: 1, jobs: { "tpl-digest-preview": { window: "15:00-18:00" } }, adminSchedules: "brief" }));
-    expect(run("remove", "--template", "digest-preview").out).toMatchObject({ ok: true, changed: ["job", "settings"], adminSchedulesRepaired: true });
+    expect(run("remove", "--template", "digest-preview").out)
+      .toMatchObject({ ok: true, changed: ["job", "settings"], dropped: ["adminSchedules"], adminSchedulesRepaired: true });
     expect(settingsFile()).toEqual({ v: 1, jobs: {}, adminSchedules: ["brief", "drop-evening", "drop-midday", "evening", "negotiation"] });
+  });
+
+  test("remove reports `dropped` exactly as set and add do: entries it drops, only when it rewrote the file", () => {
+    roll();
+    // Entries that are not default keys: dropped, no repair.
+    run("add", "--template", "digest-preview", "--schedule", "0 16 * * *", "--window", "15:00-18:00");
+    writeFileSync(jobSettingsPath(home), JSON.stringify({ v: 1, jobs: { "tpl-digest-preview": { window: "15:00-18:00" } }, adminSchedules: ["brief", "retired-job"] }));
+    const removed = run("remove", "--template", "digest-preview").out;
+    expect(removed).toMatchObject({ ok: true, changed: ["job", "settings"], dropped: ["adminSchedules"] });
+    expect(removed.adminSchedulesRepaired).toBeUndefined();
+    expect(settingsFile()).toEqual({ v: 1, jobs: {}, adminSchedules: ["brief"] });
+    // No entry for the template: the file is not rewritten, so nothing is reported dropped.
+    writeFileSync(jobSettingsPath(home), JSON.stringify({ v: 1, jobs: {}, adminSchedules: "brief" }));
+    run("add", "--template", "digest-preview", "--schedule", "0 16 * * *");
+    writeFileSync(jobSettingsPath(home), JSON.stringify({ v: 1, jobs: {}, adminSchedules: "brief" }));
+    const untouched = run("remove", "--template", "digest-preview").out;
+    expect(untouched).toMatchObject({ ok: true, changed: ["job"] });
+    expect(untouched.dropped).toBeUndefined();
+    expect(untouched.adminSchedulesRepaired).toBeUndefined();
   });
 
   test("list and reconcile agree on every default job, for every shape of the file", () => {

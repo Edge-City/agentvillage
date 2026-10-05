@@ -804,8 +804,11 @@ function setCommand(ctx: GuardedContext, req: SetRequest, applied: string[]): Co
     } catch (err) {
       passUp(err);
       const now = rereadJob(ctx.home, key, job.id);
-      if (now && storedJobEnabled(now) === req.enabled) applied.push("enabled");
-      return hermesFailure(err, { step: "enabled", applied: [...applied] });
+      const saved = now !== undefined && storedJobEnabled(now) === req.enabled;
+      if (saved) applied.push("enabled");
+      // Hermes saved the resume and then failed or was killed: the re-anchor
+      // never ran, so a missed occurrence may fire at the next tick.
+      return hermesFailure(err, { step: "enabled", applied: [...applied], ...(missed && saved ? { resumeMayFire: true } : {}) });
     }
     applied.push("enabled");
     enabled = req.enabled;
@@ -1040,6 +1043,8 @@ function removeCommand(ctx: GuardedContext, template: TemplateName, applied: str
     result: found.jobs.length > 0 ? "removed" : "absent",
     removed: found.jobs.length,
     changed: [...applied],
+    // As set and add report them: what the rewrite dropped, and the repair beside it.
+    ...(current.adminDropped && applied.includes("settings") ? { dropped: ["adminSchedules"] } : {}),
     ...(current.adminRepaired && applied.includes("settings") ? { adminSchedulesRepaired: true } : {}),
   });
 }
