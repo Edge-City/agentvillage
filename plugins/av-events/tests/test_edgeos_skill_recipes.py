@@ -276,6 +276,109 @@ def test_list_responses_are_results_and_paging(doc):
     assert "paging: { offset, limit, total }" in text
 
 
+# --------------------------------------------------------------------------
+# DATA-326 follow-ups (lane B7b): more of the skill text against the source,
+# p2p-lanes/edgeos-monorepo df0a10a. File and line references are in the PR.
+# --------------------------------------------------------------------------
+
+README = SKILL.parents[2] / "README.md"
+
+
+def test_every_events_list_recipe_has_a_popup_status_and_window():
+    """Without a window a recurring series is not expanded into occurrences
+    (event/crud.py find_by_popup), so `rsvped_only` misses RSVPs to later
+    instances; the 30-day recipe needs its end bound or it returns every
+    future event."""
+    lists = [(h, c) for h, c in every_recipe() if "/events/portal/events?" in c]
+    assert len(lists) == 5
+    for heading, command in lists:
+        assert f"popup_id={POPUP}" in command and "event_status=published" in command, heading
+        assert "start_after=" in command or "start_before=" in command, heading
+    upcoming = recipe("List upcoming events")
+    assert "start_after=2026-10-11T00:00:00Z" in upcoming
+    assert "start_before=2026-10-12T00:00:00Z" in upcoming
+
+
+def test_the_no_popup_id_path_is_described_as_the_source_has_it():
+    """`list_portal_events` without `popup_id`: a popup-bound key falls back to
+    its popup; anything else drops every filter but `search` and returns the
+    100 newest-created rows. Nothing filters by `created_at`."""
+    text = SKILL.read_text(encoding="utf-8")
+    assert "filters by `created_at`" not in text
+    section3 = re.search(r"^## 3\..*?(?=^## )", text, re.S | re.M).group(0)
+    assert "ignores every filter except `search`" in section3
+    assert "100 most recently created events" in section3
+    assert "This API key does not have access to this popup" in section3
+
+
+@pytest.mark.parametrize("doc", [SKILL, ESMERALDA, README], ids=["edgeos", "edge-esmeralda", "README"])
+def test_no_pointer_to_an_openapi_recipe(doc):
+    text = doc.read_text(encoding="utf-8")
+    assert "§11" not in text
+    assert "OpenAPI" not in text
+
+
+def test_the_directory_search_parameter_is_q():
+    """`list_attendees_directory(..., q, hide_empty_rows)`: there is no
+    `search` parameter and no per-popup filter; `q` matches name, email and
+    Telegram only."""
+    assert "q=QUERY" in recipe("Search attendees in a popup")
+    for doc in (SKILL, ESMERALDA):
+        text = doc.read_text(encoding="utf-8")
+        assert "?search=" not in text, doc.name
+        assert "beyond `search`" not in text, doc.name
+        assert "hide_empty_rows=true" in text, doc.name
+    text = SKILL.read_text(encoding="utf-8")
+    assert "with a name, organization, or role" not in text
+    assert "does not search `role` or `organization`" in text
+
+
+DIRECTORY_FIELDS = ("id", "first_name", "last_name", "email", "telegram", "role", "organization",
+                    "residence", "age", "gender", "picture_url", "category", "participation",
+                    "associated_attendees")
+MASKABLE = ("first_name", "last_name", "email", "telegram", "role", "organization", "residence",
+            "age", "gender")
+
+
+@pytest.mark.parametrize("doc", [SKILL, ESMERALDA], ids=["edgeos", "edge-esmeralda"])
+def test_the_directory_fields_are_the_ones_the_source_returns(doc):
+    """`AttendeesDirectoryEntry` and `_build_directory_entry`: no
+    `personal_goals`, `social_media` or `builder_*`; `associated_attendees`
+    is always `[]`; nine fields can be masked as "*"."""
+    text = doc.read_text(encoding="utf-8")
+    for gone in ("personal_goals", "social_media", "builder_boolean", "builder_description", "start_date"):
+        assert gone not in text, gone
+    for field in DIRECTORY_FIELDS:
+        assert f"`{field}`" in text, field
+    masked = "can hide any of " + ", ".join(f"`{f}`" for f in MASKABLE[:-1]) + f" and `{MASKABLE[-1]}`"
+    assert masked in text
+    assert "always an empty list" in text
+    assert "`picture_url`, `category` and `participation` are never masked" in text
+
+
+def test_esmeralda_lists_no_venue_creation():
+    text = ESMERALDA.read_text(encoding="utf-8")
+    assert "POST /event-venues" not in text
+    assert "Agents cannot create or change events or venues" in text
+
+
+def test_the_participants_prose_says_what_a_missing_occurrence_start_does():
+    """`find_by_event` with a host and no `occurrence_start` filters to
+    `occurrence_start IS NULL`."""
+    text = SKILL.read_text(encoding="utf-8")
+    section6 = re.search(r"^## 6\..*?(?=^## )", text, re.S | re.M).group(0)
+    assert "If you leave it out, the list holds only the RSVPs not tied to any occurrence" in section6
+    assert "does **not** mean nobody is going" in section6
+
+
+def test_the_profile_read_returns_only_the_self_fields():
+    """`GET /humans/me` answers `HumanSelfPublic`: no application content,
+    participation or platform handles."""
+    text = SKILL.read_text(encoding="utf-8")
+    assert "your own application content, registered participation" not in text
+    assert "X handles" not in text
+
+
 def test_the_cancel_seed_path_is_the_portal_route():
     """EdgeOS has both `POST /events/{id}/cancel` (backoffice: an admin or an
     admin-owned key with `events:write`) and `POST /events/portal/events/{id}/cancel`

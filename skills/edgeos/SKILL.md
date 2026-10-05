@@ -1,7 +1,7 @@
 ---
 name: edgeos
 description: Talk to the EdgeOS popup-village platform — read the event schedule in the village's local time, RSVP (after asking the person), list venues and who is going to an event, and, only when a human session token is set, look up the calling user's own profile and browse the attendee directory (the API key cannot reach those). The current village's popup id is `$AV_POPUP_ID`; the current event is Edge City India (Oct 11 – Nov 1 2026, Mandrem, Goa). Agents cannot create or edit village events.
-version: 1.3.0
+version: 1.3.1
 author: Edge City
 tags: [edgeos, events, directory, popup-village]
 required_environment_variables:
@@ -49,7 +49,7 @@ In every curl example below, `<EDGEOS_API_KEY>` and `<EDGEOS_BEARER_TOKEN>` are 
 - Every list endpoint here returns `{ "results": T[], "paging": { "offset", "limit", "total" } }`; there is no `pagination` key. Single-resource endpoints return the resource directly. The events list is **not** paginated (§3). Event participants (§6), venues (§7) and the directory (§9) page with `skip` and `limit` query parameters (`limit` at most 1000); `paging.offset` echoes `skip`.
 - Times from the API are ISO-8601 in UTC (e.g. `2026-10-14T15:00:00Z`). **Before you show any event time, convert it to the village's local time and label it. Never read the UTC clock value out as the local time.** The village timezone is `$HERMES_TIMEZONE` (Edge City India: `Asia/Kolkata`, IST, UTC+5:30, no daylight saving): `15:00:00Z` is **8:30 PM IST**, not 3:00 PM. Your own clock (the date and timezone in your system prompt) is already in that timezone; use it for "now". For the previous popup, Edge Esmeralda (Healdsburg), use `America/Los_Angeles`. Every time you display, every reminder you set, and every "is it soon?" judgment must be in local time. UUIDs are RFC-4122.
 - **"Today", "tomorrow", "this weekend" mean local dates.** Work out the local calendar day first, then convert its local midnight-to-midnight bounds to UTC for `start_after` / `start_before`. In IST, "today" on 2026-10-14 is `start_after=2026-10-13T18:30:00Z&start_before=2026-10-14T18:30:00Z`. Don't use the UTC date: between midnight and 5:30 AM IST it is still yesterday in UTC.
-- Recurring events expand into virtual occurrences when `start_after` is set. When RSVPing to one instance of a recurring event, pass that occurrence's `start_time` as `occurrence_start`.
+- Recurring events expand into virtual occurrences when `start_after` or `start_before` is set. Without either, a series comes back once, as its first occurrence, so give every events list a date window (§3). When RSVPing to one instance of a recurring event, pass that occurrence's `start_time` as `occurrence_start`.
 - Error codes: `401` missing/expired token · `403` token lacks the required scope · `404` not visible to caller · `409` resource has dependents · `422` validation · `429` rate limit (see `Retry-After`).
 - Run every recipe below through `terminal` with exactly `command` (a `workdir` is fine) and nothing else. Do not add `notify`, `heartbeat` or `background`: each call finishes in seconds and its output comes straight back. If the call returns an error about background commands, the request was not sent; make it once more without those arguments.
 
@@ -57,14 +57,16 @@ In every curl example below, `<EDGEOS_API_KEY>` and `<EDGEOS_BEARER_TOKEN>` are 
 
 All event-read recipes use `Authorization: Bearer <EDGEOS_API_KEY>`.
 
-**REQUIRED parameters for all event list queries:** `popup_id={popup_id}` and `event_status=published`. Without `popup_id`, the API filters by `created_at` instead of `start_time`, returning wrong results. `{popup_id}` is the value of `$AV_POPUP_ID` (see the top of this skill).
+**REQUIRED parameters for all event list queries:** `popup_id={popup_id}` and `event_status=published`. `{popup_id}` is the value of `$AV_POPUP_ID` (see the top of this skill). Your API key is bound to one popup: a `popup_id` naming any other popup answers `403` ("This API key does not have access to this popup"), and an omitted one falls back to the key's own popup. Any other token without `popup_id` takes a different path: it ignores every filter except `search` (no `event_status`, `start_after`, `start_before`, `tags`, `kind`, venue or track filter) and returns at most the 100 most recently created events across every popup it can see. So always pass both.
+
+**Give every list a date window.** `start_after` and `start_before` bound the event's start time. With either set, a recurring series comes back as one row per occurrence inside the window; with neither, it comes back once, as its first occurrence, and an RSVP to a later occurrence shows up neither in `rsvped_only=true` nor in `my_rsvp_status`.
 
 **List upcoming events (next 30 days):**
 ```bash
 curl -s -H "Authorization: Bearer <EDGEOS_API_KEY>" \
-  "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events?popup_id={popup_id}&event_status=published&start_after={current_iso_timestamp}"
+  "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events?popup_id={popup_id}&event_status=published&start_after={current_iso_timestamp}&start_before={end_iso}"
 ```
-`{current_iso_timestamp}` must be a literal ISO-8601 UTC string (e.g. `2026-05-26T21:00:00Z`) — compute it in code or via the agent's date tools, not via shell substitution.
+`{current_iso_timestamp}` is now and `{end_iso}` is 30 days later, both literal ISO-8601 UTC strings (e.g. `2026-10-11T00:00:00Z` and `2026-11-10T00:00:00Z`): compute them in code or via the agent's date tools, not via shell substitution. Without `start_before` the call returns every future event, however far ahead.
 
 **List events in a date range:**
 ```bash
@@ -81,13 +83,14 @@ curl -s -H "Authorization: Bearer <EDGEOS_API_KEY>" \
 **Filter by tag, kind, venue, or track:**
 ```bash
 curl -s -H "Authorization: Bearer <EDGEOS_API_KEY>" \
-  "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events?popup_id={popup_id}&event_status=published&tags=AI&tags=Privacy"
+  "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events?popup_id={popup_id}&event_status=published&tags=AI&tags=Privacy&start_after={start_iso}&start_before={end_iso}"
 ```
+`tags` matches events carrying any of the given tags. The other filters are `kind`, `venue_id` (a venue's `id` from §7; repeat `venue_ids` for several) and repeated `track_ids` (an event's `track_id`).
 
 **Only events you've RSVPed to:**
 ```bash
 curl -s -H "Authorization: Bearer <EDGEOS_API_KEY>" \
-  "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events?popup_id={popup_id}&event_status=published&rsvped_only=true"
+  "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events?popup_id={popup_id}&event_status=published&rsvped_only=true&start_after={current_iso_timestamp}"
 ```
 
 **Fetch a single event (includes caller's RSVP status):**
@@ -100,7 +103,7 @@ For a recurring event, scope the RSVP lookup to one instance with `?occurrence_s
 
 **No pagination:** the events list returns every matching event in one response. It takes no `skip` or `limit` (a `limit` you add is ignored), so don't loop over pages; narrow the call with `start_after` / `start_before`, `search`, `tags` and the other filters instead. Its `paging` is informational only: `paging.limit` is the number of results returned, and `paging.total` counts occurrences before visibility filtering, so it can be larger than `results.length`. Never fetch again because `total` looks bigger.
 
-**Your own RSVPs:** EdgeOS has no route that lists one person's RSVPs across events. Use the list with `rsvped_only=true` (above): it returns the events in the popup where the caller has an RSVP that isn't cancelled. Every event, in the list or a single read, also carries `my_rsvp_status` (null when the caller has no RSVP for it).
+**Your own RSVPs:** EdgeOS has no route that lists one person's RSVPs across events. Use the list with `rsvped_only=true` (above): it returns the events in the popup where the caller has an RSVP that isn't cancelled. Every event, in the list or a single read, also carries `my_rsvp_status`: null when the caller has no RSVP for it, otherwise `registered`, `checked_in` or `cancelled` (a cancelled RSVP keeps its row, so `cancelled` means they are not going). A single read also carries `attendee_count`, the number of RSVPs that aren't cancelled (for a recurring event, of the occurrence named by `occurrence_start`).
 
 **Highlighted events:** event records include a boolean `highlighted` field. The list endpoint does not provide a `highlighted` query parameter; fetch the relevant date range and filter client-side with `event.highlighted === true`.
 
@@ -146,11 +149,11 @@ curl -s -H "Authorization: Bearer <EDGEOS_API_KEY>" \
   "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/event-participants/portal/participants?event_id={event_id}&skip=0&limit=100"
 ```
 
-This lists the participants of **one** event, the caller included if they RSVPed; it is not a list of the caller's own RSVPs, and without `event_id` it fails with `422`. Each row carries a participation `status` (a cancelled RSVP stays in the list with its status). For a recurring event, always add `&occurrence_start={occurrence_iso}` (that occurrence's `start_time`): without it the list generally holds only rows not tied to any occurrence, so the RSVPs to individual instances are missing. The event's host is not listed, and attendees who chose to hide their name on their application are left out entirely. It pages with `skip` and `limit` (default 100, at most 1000): fetch again with a larger `skip` only while `skip + results.length < paging.total`. To find the caller's own RSVPs, use the events list with `rsvped_only=true` (§3).
+This lists the participants of **one** event, the caller included if they RSVPed; it is not a list of the caller's own RSVPs, and without `event_id` it fails with `422`. Each row carries a participation `status` (a cancelled RSVP stays in the list with its status). For a recurring event, always add `&occurrence_start={occurrence_iso}` (that occurrence's `start_time`, exactly). If you leave it out, the list holds only the RSVPs not tied to any occurrence (for an event with no host, it mixes the RSVPs of every occurrence instead); RSVPs are made per occurrence, so for a recurring event that list is usually empty or short, and it does **not** mean nobody is going. For the count alone, the single-event read with `?occurrence_start=` returns `attendee_count` (§3). The event's host is not listed, and attendees who chose to hide their name on their application are left out entirely. It pages with `skip` and `limit` (default 100, at most 1000): fetch again with a larger `skip` only while `skip + results.length < paging.total`. To find the caller's own RSVPs, use the events list with `rsvped_only=true` (§3).
 
 ## 7. Venues
 
-**List active venues for a popup (`popup_id` is required, must be a UUID — the active popup skill supplies it):**
+**List active venues for a popup (`popup_id` is required: the UUID in `$AV_POPUP_ID`; your API key answers `403` for any other popup):**
 ```bash
 curl -s -H "Authorization: Bearer <EDGEOS_API_KEY>" \
   "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/event-venues/portal/venues?popup_id={popup_id}&limit=100"
@@ -168,7 +171,7 @@ curl -s -H "Authorization: Bearer <EDGEOS_BEARER_TOKEN>" \
   "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/humans/me"
 ```
 
-Returns the human record for the bearer's owner — your own application content, registered participation, profile fields, and platform handles.
+Returns the bearer's own profile and nothing more: `id`, `tenant_id`, `email`, `first_name`, `last_name`, `telegram`, `gender`, `age`, `residence`, `picture_url`. It carries no application answers, no participation and no other social handles.
 
 **Update basic profile fields** (uses the human bearer; needs `portal:profile:write`):
 ```bash
@@ -190,13 +193,15 @@ curl -s -H "Authorization: Bearer <EDGEOS_BEARER_TOKEN>" \
   "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/applications/my/directory/{popup_id}?skip=0&limit=20&q=QUERY"
 ```
 
-`{popup_id}` is the popup UUID supplied by the active operator skill (e.g. `edge-esmeralda` carries the previous popup Edge Esmeralda's constant). Replace `QUERY` with a name, organization, or role.
+`{popup_id}` is the value of `$AV_POPUP_ID` (use the previous popup Edge Esmeralda's id from the `edge-esmeralda` skill only when the person asks about that popup). Replace `QUERY` with part of a name, an email address or a Telegram handle: `q` matches the first name, last name, full name, email and Telegram fields, and only where the attendee has shared them. It does not search `role` or `organization`; to find people by those, page through the directory and filter the rows yourself. Leave `q` out to list everyone.
 
 **Pagination:** `skip` + `limit` (default 100, at most 1000). Response shape: `{ results: Attendee[], paging: { offset, limit, total } }`. Fetch again with a larger `skip` only while `skip + results.length < paging.total`.
 
-**Filters beyond `search`** depend on the popup's application form (e.g. participation weeks, families-with-kids). The set varies by popup. To discover supported filters for a given popup, fetch the OpenAPI spec (§11) and look up the directory endpoint's query parameters.
+**Other parameters:** the only other filter is `hide_empty_rows=true`, which drops rows with no shared name, email, Telegram, role or organization. There is no week, family or other per-popup filter. The directory lists the main applicants and spouses of accepted applications who hold a ticket (children are not listed), newest first. A popup without an attendee directory answers `404`.
 
-**Privacy:** the attendee response shape and which fields are hidden are popup-curated. Look up the field semantics in the active operator skill, not here. As a universal rule: a field whose value is the literal string `"*"` is intentionally hidden by the attendee — do not infer around it, surface the privacy boundary to the user. The mask is the same for every caller: no token or scope sees behind a `"*"`.
+**Fields:** every row has `id` (the attendee id), `first_name`, `last_name`, `email`, `telegram`, `role`, `organization`, `residence`, `age`, `gender`, `picture_url`, `category` (`main` or `spouse`), `participation` (the attendee's tickets, each `{ id, name, slug, category, duration_type }`) and `associated_attendees` (always an empty list: a spouse is a row of their own). The shape is the same for every popup. Any field can be null when the attendee never filled it in.
+
+**Privacy:** an attendee can hide any of `first_name`, `last_name`, `email`, `telegram`, `role`, `organization`, `residence`, `age` and `gender` on their application; a hidden field comes back as the literal string `"*"`. `picture_url`, `category` and `participation` are never masked. Only a main applicant's row carries masks; a spouse's row has none and leaves `role` and `organization` empty. A `"*"` is intentionally hidden by the attendee: do not infer around it, surface the privacy boundary to the user. The mask is the same for every caller: no token or scope sees behind a `"*"`.
 
 ## 10. Tips for answering well
 
@@ -214,4 +219,4 @@ Be honest about these gaps — do not hallucinate answers.
 - **Real-time venue availability.** The calendar shows scheduled events, but there is no live venue booking system. To check if a venue is free, list events for that date/time and see whether the venue is already taken.
 - **Application-specific profile fields.** Basic profile fields (`first_name`, `last_name`, `telegram`, `gender`, `age`, `residence`, `picture_url`) are editable via `PATCH /api/v1/humans/me` (see §8). But dietary preferences, application answers, "what I'm building", and popup-specific form fields are **not** patchable through this API — those must be edited in the EdgeOS portal UI under `/portal/profile`. You cannot edit anyone else's profile regardless.
 - **Scheduled tasks / recurring summaries / reminders.** The skill itself cannot schedule anything. Use the host agent's scheduling capabilities (`/loop`, `/schedule`, cron). Do not pretend to set up tasks from inside the skill.
-- **Outbound messaging / DMs / introductions on behalf of the user.** EdgeOS has no messaging endpoint. Surface contact info (Telegram, X handles) from the directory (§9) and let the user reach out themselves. Do not claim to have sent a message.
+- **Outbound messaging / DMs / introductions on behalf of the user.** EdgeOS has no messaging endpoint. Surface contact info (a Telegram handle or email, when the attendee shares it) from the directory (§9) and let the user reach out themselves. Do not claim to have sent a message.

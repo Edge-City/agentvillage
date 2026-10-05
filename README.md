@@ -198,9 +198,9 @@ See `skills/README.md` for the full per-host reference.
 - Node 20+ with npm/npx available to run the Geo CLI recipes.
 - *(Optional)* EdgeOS tokens, if you want live event/attendee recipes to work without per-query prompting:
   - `EDGEOS_API_KEY` — long-lived `eos_live_…` automation key, minted via the EdgeCity onboarding flow (see the "EdgeOS tokens" section above). Unlocks the calendar/RSVPs/venues recipes in `skills/edgeos/SKILL.md`.
-  - `EDGEOS_BEARER_TOKEN` — human session JWT obtained via the same email-OTP flow. Unlocks the directory, own-profile, and OpenAPI-spec recipes.
+  - `EDGEOS_BEARER_TOKEN` — human session JWT obtained via the same email-OTP flow. Unlocks the directory and own-profile recipes (it needs the `portal:directory:read` and `portal:profile:read` scopes; the API key cannot reach either).
 
-  Both are optional from AgentVillage's perspective. Without them the agent still runs; EdgeOS recipes will just ask the user for the missing token on first use per the SKILL.md instructions.
+  Both are optional from AgentVillage's perspective. Without them the agent still runs; per the SKILL.md instructions it tells the person that the schedule, or the directory and profile, aren't connected to their agent yet and points them to the Edge City portal.
 
 ## Install
 
