@@ -8,7 +8,10 @@ import {
   checkSuiteDirs,
   chooseVersion,
   clean,
+  escapeData,
+  escapeProperty,
   neutral,
+  refusalLine,
   seedVersionOf,
   suiteDirs,
   tagMessage,
@@ -174,6 +177,27 @@ describe("output hygiene", () => {
     expect(clean("a\r::error ::x\nb\tc\u0000d\u007fe\u2028f\u0085g", 100)).toBe("a ::error ::x b c d e f g");
     expect(clean("x".repeat(10), 8)).toBe("xxxxx...");
     expect(neutral("a`b<c>d\n", 100)).toBe("a'b\u2039c\u203ad ");
+  });
+
+  test("clean turns C1 controls into spaces and removes bidi and zero-width characters", () => {
+    expect(clean("a\u0080b\u009fc\u0090d", 100)).toBe("a b c d");
+    expect(clean("ok\u202eevil\u202c|\u2066x\u2069|\u202a\u202b\u202d\u2067\u2068|z\u200bw\u200c\u200d\ufeffv", 100)).toBe("okevil|x||zwv");
+    expect(clean("caf\u00e9 \u00a0 \u2014", 100)).toBe("caf\u00e9 \u00a0 \u2014"); // printable non-ASCII stays
+  });
+
+  test("GitHub command escaping for data and properties", () => {
+    expect(escapeData("100% a\rb\nc")).toBe("100%25 a%0Db%0Ac");
+    expect(escapeProperty("a: b, c%")).toBe("a%3A b%2C c%25");
+  });
+
+  test("a refusal is one annotation line: cleaned, then escaped", () => {
+    const e = new Refusal("x_code", "first\nsecond\r::warning::y %0A::warning::x");
+    const line = refusalLine(e, { GITHUB_ACTIONS: "true" });
+    expect(line).toBe("::error title=Tag release refused (x_code)::first second ::warning::y %250A::warning::x");
+    expect(line).not.toContain("\n");
+    expect(line).not.toContain("%0A");
+    expect(refusalLine(new Refusal("a,b:c", "m"), { GITHUB_ACTIONS: "true" })).toBe("::error title=Tag release refused (a%2Cb%3Ac)::m");
+    expect(refusalLine(e, {})).toBe("Refused (x_code): first second ::warning::y %0A::warning::x");
   });
 
   test("a seed version must be one plain top-level string", () => {
@@ -455,6 +479,16 @@ describe("makePlan", () => {
     // a file is not a directory
     const file = TEST_YML_TEXT.replace("bun test install/tests scripts/tests", "bun test install/tests README.md");
     expect(refusalCode(() => makePlan(git, { ref: "main", testWorkflow: file }))).toBe("suite_dir_missing");
+    // a directory with no test file would also run nothing
+    f.commit({ "docs/tests/README.md": "x\n", "docs/tests/helper.ts": "\n", "docs/tests/deep/x.test.tsx": "\n" }, "no tests here");
+    f.run(["push", "--quiet", "origin", "main"]);
+    f.run(["fetch", "--quiet", "origin"]);
+    const empty = TEST_YML_TEXT.replace("bun test install/tests scripts/tests", "bun test install/tests docs/tests");
+    expect(refusalCode(() => makePlan(git, { ref: "main", testWorkflow: empty }))).toBe("suite_dir_missing");
+    f.commit({ "docs/tests/deep/y.test.js": "\n" }, "a nested js test");
+    f.run(["push", "--quiet", "origin", "main"]);
+    f.run(["fetch", "--quiet", "origin"]);
+    expect(makePlan(git, { ref: "main", testWorkflow: empty }).version).toBe("v2.0.0-rc2");
     expect(refusalCode(() => makePlan(git, { ref: "main", testWorkflow: null }))).toBe("suite_list_unreadable");
     expect(refusalCode(() => makePlan(git, { ref: "main", testWorkflow: "jobs: {}\n" }))).toBe("suite_list_unreadable");
     expect(() => checkSuiteDirs(git, f.c, TEST_YML_TEXT)).not.toThrow();
@@ -769,6 +803,10 @@ describe("command line", () => {
     expect(bad.code).toBe(1);
     expect(bad.stderr.trimEnd().split("\n")).toHaveLength(1);
     expect(bad.stderr).toStartWith("::error title=Tag release refused (bad_ref)::");
+    const pct = cli(["plan", "--cwd", f.work, "--ref", "x\n%0A::warning::x"], { GITHUB_ACTIONS: "true" });
+    expect(pct.stderr.trimEnd().split("\n")).toHaveLength(1);
+    expect(pct.stderr).toContain("%250A::warning::x");
+    expect(pct.stderr).not.toContain("%0A");
     expect(readFileSync(sum, "utf8")).toMatch(/\*\*bad_ref\.\*\* `[^`\n]*!\[b\]\(https:\/\/e\.example\/b\.png\)[^`\n]*`/);
   });
 

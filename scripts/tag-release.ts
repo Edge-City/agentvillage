@@ -66,10 +66,26 @@ const RUN_URL_RE = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/ac
 // passes through these before it reaches a log line, the step summary or a
 // tag message.
 
-/** C0 controls, DEL and Unicode line breaks become spaces (the runner splits lines on \r too); clipped to max. */
+/**
+ * C0 and C1 controls, DEL and Unicode line breaks become spaces (the runner
+ * splits lines on \r too); bidi controls and zero-width characters are removed;
+ * clipped to max.
+ */
 export function clean(text: string, max: number): string {
-  const t = text.replace(/[\u0000-\u001f\u007f\u0085\u2028\u2029]/g, " ");
+  const t = text
+    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ")
+    .replace(/[\u200b-\u200d\u202a-\u202e\u2066-\u2069\ufeff]/g, "");
   return t.length > max ? `${t.slice(0, Math.max(0, max - 3))}...` : t;
+}
+
+/** GitHub's escaping for a workflow command's data. */
+export function escapeData(text: string): string {
+  return text.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+}
+
+/** GitHub's escaping for a workflow command's property value (title=...). */
+export function escapeProperty(text: string): string {
+  return escapeData(text).replace(/:/g, "%3A").replace(/,/g, "%2C");
 }
 
 /** clean(), then backticks and angle brackets replaced, for markdown. */
@@ -453,11 +469,16 @@ export function checkSuiteDirs(git: Git, commit: string, workflow: string | null
   if (workflow === null) throw new Refusal("suite_list_unreadable", `${TEST_WORKFLOW} was not found, so the suites' directories cannot be checked.`);
   const dirs = suiteDirs(workflow);
   if (dirs === null) throw new Refusal("suite_list_unreadable", `${TEST_WORKFLOW} does not have exactly one plain \`bun test <dirs>\` line.`);
-  const missing = dirs.filter((d) => git(["cat-file", "-t", `${commit}:${d}`], { allowFail: true }).stdout.trim() !== "tree");
+  // A directory must exist at the commit and hold at least one test file, or bun would run nothing there.
+  const missing = dirs.filter((d) => {
+    if (git(["cat-file", "-t", `${commit}:${d}`], { allowFail: true }).stdout.trim() !== "tree") return true;
+    const files = git(["ls-tree", "-r", "--name-only", commit, "--", `${d}/`]).stdout.split("\n");
+    return !files.some((f) => /\.test\.(ts|js)$/.test(f));
+  });
   if (missing.length > 0) {
     throw new Refusal(
       "suite_dir_missing",
-      `${missing.join(", ")} ${missing.length > 1 ? "do" : "does"} not exist at ${commit.slice(0, 7)}, so the suites would skip ${missing.length > 1 ? "them" : "it"} and pass without running. Release a newer commit, or tag by hand after running the suites that exist there.`,
+      `${missing.join(", ")} ${missing.length > 1 ? "do" : "does"} not exist at ${commit.slice(0, 7)}, or hold${missing.length > 1 ? "" : "s"} no *.test.ts or *.test.js file, so the suites would skip ${missing.length > 1 ? "them" : "it"} and pass without running. Release a newer commit, or tag by hand after running the suites that exist there.`,
     );
   }
 }
@@ -824,6 +845,17 @@ function printRepoText(text: string, env: Record<string, string | undefined>) {
   process.stdout.write(`::stop-commands::${token}\n${text}::${token}::\n`);
 }
 
+/**
+ * The refusal as one stderr line, whatever the message carries (a raw input,
+ * git's or the remote's own words): cleaned, and under Actions an ::error
+ * annotation with GitHub's command escaping on the title and the data.
+ */
+export function refusalLine(e: Refusal, env: Record<string, string | undefined>): string {
+  const msg = clean(e.message, 1000);
+  if (env.GITHUB_ACTIONS !== "true") return `Refused (${clean(e.code, 64)}): ${msg}`;
+  return `::error title=${escapeProperty(`Tag release refused (${clean(e.code, 64)})`)}::${escapeData(msg)}`;
+}
+
 function readTestWorkflow(cwd: string): string | null {
   const path = join(cwd, TEST_WORKFLOW);
   return existsSync(path) ? readFileSync(path, "utf8") : null;
@@ -876,9 +908,7 @@ export function main(argv: string[], env: Record<string, string | undefined> = p
     return 0;
   } catch (e) {
     if (!(e instanceof Refusal)) throw e;
-    const where = env.GITHUB_ACTIONS === "true" ? `::error title=Tag release refused (${e.code})::` : `Refused (${e.code}): `;
-    // One line, whatever the message carries (a raw input, git's or the remote's own words).
-    process.stderr.write(`${where}${clean(e.message, 1000)}\n`);
+    process.stderr.write(`${refusalLine(e, env)}\n`);
     emit(summaryPath, `## Tag release refused: nothing was created\n\n**${e.code}.** ${code(e.message, 1000)}\n`);
     return e.code === "bad_usage" ? 2 : 1;
   }
