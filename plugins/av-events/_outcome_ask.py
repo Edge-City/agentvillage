@@ -680,15 +680,30 @@ def _load_asks(state_dir: str, codes: dict) -> list[dict]:
     return asks
 
 
-def _record_asked(state_dir: str, opportunity_id: str, when: str) -> None:
-    data, why = private_file(asked_ledger_path(state_dir), LEDGER_MAX_BYTES)
-    asked = data.get("asked") if why is None and isinstance(data, dict) else None
-    asked = {k: v for k, v in asked.items() if isinstance(k, str) and _OPPORTUNITY.match(k) and isinstance(v, str) and len(v) <= 40} if isinstance(asked, dict) else {}
+def _record_asked(state_dir: str, opportunity_id: str, when: str) -> Optional[str]:
+    """Add the subject to the asked ledger the trigger reads. Returns None, or
+    a code when the ledger was left alone: `asked_ledger_refused` (it exists
+    but is refused on read or is not the ledger's shape; replacing it would
+    make every subject in it due again, so it is never overwritten, and the
+    trigger asks nobody while it stays so) or `asked_ledger_unwritable`."""
+    path = asked_ledger_path(state_dir)
+    data, why = private_file(path, LEDGER_MAX_BYTES)
+    if why == "missing":
+        asked: Any = {}
+    else:
+        asked = data.get("asked") if why is None and isinstance(data, dict) else None
+        if not isinstance(asked, dict):
+            return "asked_ledger_refused"
+    asked = {k: v for k, v in asked.items() if isinstance(k, str) and _OPPORTUNITY.match(k) and isinstance(v, str) and len(v) <= 40}
     asked.pop(opportunity_id, None)
     asked[opportunity_id] = when
     while len(asked) > MAX_ASKED:
         asked.pop(next(iter(asked)))
-    _write(asked_ledger_path(state_dir), {"v": 1, "asked": asked})
+    try:
+        _write(path, {"v": 1, "asked": asked})
+    except OSError:
+        return "asked_ledger_unwritable"
+    return None
 
 
 def _delivered(row: dict) -> bool:
@@ -809,7 +824,9 @@ def tick(state_dir: str, home: str, emit: Callable[..., Optional[dict]], now: fl
             asked_executions.add(execution_id)
             rows[execution_id] = row
             changed = True
-            _record_asked(state_dir, subject["opportunity_id"], asked_at or "")
+            ledger_code = _record_asked(state_dir, subject["opportunity_id"], asked_at or "")
+            if ledger_code:
+                _count(codes, ledger_code)
             _unlink(path)
             _count(codes, "asked")
 

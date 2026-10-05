@@ -6,7 +6,7 @@
  * plugins/av-events/tests/test_outcome_ask.py.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -95,9 +95,11 @@ function runLog(): Array<Record<string, any>> {
   return existsSync(path) ? readFileSync(path, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : [];
 }
 
+/** As the plugin writes it: 0600 in a private directory. */
 function markAsked(...ids: string[]): void {
-  mkdirSync(join(home, "av-events", "proactive"), { recursive: true });
-  writeFileSync(askedLedgerPath(home), JSON.stringify({ v: 1, asked: Object.fromEntries(ids.map((id) => [id, "2026-10-13T13:31:00Z"])) }));
+  mkdirSync(join(home, "av-events", "proactive"), { recursive: true, mode: 0o700 });
+  writeFileSync(askedLedgerPath(home), JSON.stringify({ v: 1, asked: Object.fromEntries(ids.map((id) => [id, "2026-10-13T13:31:00Z"])) }), { mode: 0o600 });
+  chmodSync(askedLedgerPath(home), 0o600);
 }
 
 describe("the evening asks about one accepted connection announced two or more days ago", () => {
@@ -166,6 +168,54 @@ describe("the evening asks about one accepted connection announced two or more d
     const result = await runProactive("evening", options());
     expect(output(result.lines).person).toBeDefined();
     expect(stage()).toBeNull();
+  });
+
+  describe("F9: an asked ledger the plugin would refuse means no ask tonight", () => {
+    const cases: Record<string, () => void> = {
+      "readable by others (restored with the wrong mode)": () => {
+        markAsked("old-subject");
+        chmodSync(askedLedgerPath(home), 0o644);
+      },
+      "not JSON": () => {
+        markAsked();
+        writeFileSync(askedLedgerPath(home), "{not json");
+      },
+      "not the ledger's shape": () => {
+        markAsked();
+        writeFileSync(askedLedgerPath(home), JSON.stringify({ v: 1, asked: ["old-subject"] }));
+      },
+      "a symlink": () => {
+        markAsked("old-subject");
+        const target = join(home, "elsewhere.json");
+        writeFileSync(target, readFileSync(askedLedgerPath(home)), { mode: 0o600 });
+        rmSync(askedLedgerPath(home));
+        symlinkSync(target, askedLedgerPath(home));
+      },
+      "in a directory others can write": () => {
+        markAsked("old-subject");
+        chmodSync(join(home, "av-events", "proactive"), 0o777);
+      },
+    };
+    for (const [label, setUp] of Object.entries(cases)) {
+      test(label, async () => {
+        announced({ [OPP]: "2026-10-10" });
+        setUp();
+        let indexRead = false;
+        const result = await runProactive("evening", options({ accepted: async () => { indexRead = true; return [accepted("Arjun")]; } }));
+        expect(output(result.lines).person.name).toBe("Pending Person");
+        expect(indexRead).toBe(false);
+        expect(stage()).toBeNull();
+        expect(state().outcomeAsk).toBeUndefined();
+        expect(runLog().at(-1)).toMatchObject({ decision: "woke", detail: "outcome-ask-ledger-unreadable" });
+        chmodSync(join(home, "av-events", "proactive"), 0o700);
+      });
+    }
+
+    test("a ledger that does not exist yet is an empty one", async () => {
+      announced({ [OPP]: "2026-10-10" });
+      const result = await runProactive("evening", options());
+      expect(output(result.lines).outcomeQuestion).toBeDefined();
+    });
   });
 
   test("Index down, or the connection no longer accepted: the reminder, and the subject stays due", async () => {

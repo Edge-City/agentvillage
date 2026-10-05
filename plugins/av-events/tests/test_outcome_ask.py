@@ -280,6 +280,44 @@ def test_nothing_on_failed_delivery_and_the_subject_stays_due(live, ctx, tenant,
     assert tenant.armed() == []
 
 
+@pytest.mark.parametrize("label", ["readable by others", "not JSON", "not the ledger's shape"])
+def test_a_refused_asked_ledger_is_left_alone_and_the_ask_still_emitted(live, ctx, tenant, av, label):
+    """F9: replacing it with only the new entry would make every subject in it due again."""
+    path = tenant.state / "proactive" / "outcome-asked.json"
+    old = {"v": 1, "asked": {f"old{i}": "2026-10-01T13:30:00Z" for i in range(30)}}
+    body = {"readable by others": json.dumps(old), "not JSON": "{not json", "not the ledger's shape": json.dumps({"v": 1, "asked": ["old0"]})}[label]
+    tenant.write_private(path, body)
+    if label == "readable by others":
+        os.chmod(path, 0o644)
+    before = path.read_bytes()
+    execution = uuid.uuid4().hex
+    tenant.stage()
+    evening_reply(ctx, tenant, execution)
+    tenant.finish(execution)
+    codes = live._COLLECTOR.outcome_tick()
+    assert codes.get("asked") == 1 and codes.get("asked_ledger_refused") == 1, codes
+    assert len(events(av, live, "outcome.asked")) == 1
+    assert path.read_bytes() == before
+    assert tenant.armed() == []
+
+
+def test_an_asked_ledger_that_cannot_be_written_still_emits_the_ask_once(live, ctx, tenant, av, monkeypatch):
+    def refuse(path, data):
+        raise PermissionError("read-only")
+
+    mod = module(live)
+    real = mod._write
+    monkeypatch.setattr(mod, "_write", lambda path, data: refuse(path, data) if path.endswith("outcome-asked.json") else real(path, data))
+    execution = uuid.uuid4().hex
+    tenant.stage()
+    evening_reply(ctx, tenant, execution)
+    tenant.finish(execution)
+    assert live._COLLECTOR.outcome_tick().get("asked_ledger_unwritable") == 1
+    live._COLLECTOR.outcome_tick()
+    assert len(events(av, live, "outcome.asked")) == 1
+    assert tenant.armed() == []
+
+
 def test_a_hermes_without_the_delivery_column_counts_a_completed_run(plugin, ctx, home, monkeypatch, av):
     monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
     plugin.register(ctx)

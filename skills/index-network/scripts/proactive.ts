@@ -597,6 +597,9 @@ async function outcomeAskDecision(run: Run): Promise<Decision | { fallback: stri
     state = backfilled.state;
   }
   const asked = readAskedIds(run.home);
+  // The plugin never overwrites a ledger it refuses, so it could record no
+  // new ask: asking tonight could ask a subject again and again.
+  if (asked === null) return { fallback: "outcome-ask-ledger-unreadable" };
   const due = dueSubjects(state, asked, run.date);
   if (due.length === 0) return { fallback: "outcome-ask-none-due" };
   let accepted: BriefOpportunity[];

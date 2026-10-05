@@ -24,7 +24,7 @@
  * the same question every night).
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { PENDING_LIST_LIMIT, parseListedOpportunitiesCounted, resolveIndexApiKey, type BriefOpportunity } from "./build-daily-brief-context";
@@ -71,15 +71,37 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
-/** Opportunity ids the plugin recorded as asked (delivered). Missing or unreadable: none. */
-export function readAskedIds(home: string): Set<string> {
+/** The plugin's size cap for the asked ledger (`_outcome_ask.py` LEDGER_MAX_BYTES). */
+const ASKED_LEDGER_MAX_BYTES = 256 * 1024;
+
+/**
+ * Opportunity ids the plugin recorded as asked (delivered): none when the
+ * ledger does not exist yet, and null when it exists but is unreadable. The
+ * test is the plugin's own (`private_file` in `_outcome_ask.py`): the plugin
+ * never overwrites a ledger it refuses, so it could record no new ask, and an
+ * evening that asked anyway would ask the same question again. Null means
+ * "ask nobody tonight".
+ */
+export function readAskedIds(home: string): Set<string> | null {
+  const path = askedLedgerPath(home);
+  const uid = typeof process.getuid === "function" ? process.getuid() : null;
   try {
-    const path = askedLedgerPath(home);
-    if (!existsSync(path) || statSync(path).size > 1024 * 1024) return new Set();
-    const asked = asRecord(asRecord(JSON.parse(readFileSync(path, "utf8"))).asked);
+    let file;
+    try {
+      file = lstatSync(path);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return new Set();
+      return null;
+    }
+    const dir = lstatSync(dirname(path));
+    if (!dir.isDirectory() || (uid !== null && dir.uid !== uid) || dir.mode & 0o022) return null;
+    if (!file.isFile() || (uid !== null && file.uid !== uid) || file.mode & 0o077 || file.size > ASKED_LEDGER_MAX_BYTES) return null;
+    const data = JSON.parse(readFileSync(path, "utf8"));
+    const asked = data && typeof data === "object" && !Array.isArray(data) ? data.asked : undefined;
+    if (!asked || typeof asked !== "object" || Array.isArray(asked)) return null;
     return new Set(Object.keys(asked));
   } catch {
-    return new Set();
+    return null;
   }
 }
 
