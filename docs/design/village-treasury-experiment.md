@@ -1,42 +1,166 @@
 # The village treasury experiment: design
 
-Status: design draft v1 (2026-10-05), task DATA-292. Owner: Carter; rules and research questions
-need Timour's sign-off (DATA-292 AC #1). Base: the ODS spec draft (`operational-datastore-spec.md`,
-DATA-291, PR #191, under review: "ODS spec §n"; §5.3 lists what this design asks of it) and
-`docs/design/operational-datastore.md` v3 in `agentvillage-data` ("base §n"). Marks: [V] verified
-against code or a decision record, [NV] not verified, [DECISION NEEDED: who] open, with a
-recommendation. Code read 2026-10-05 on `origin/main` of `agentvillage-data`, the control plane and
-this repo. Nothing here is built or live until §9.3's acceptance passes on the team tenants.
+Status: design draft v2 (2026-10-05), task DATA-292. Owner: Carter. v2 rebuilds v1 around Carter's
+inputs of 2026-10-05 (approval voting, quorum 20, 150 USD a day and 800 USD on Fridays, one winner a
+day, app first, agents suggest) and puts the preregistration first. Base: the ODS spec draft
+(`operational-datastore-spec.md`, DATA-291, PR #191: "ODS spec §n"), the approval settings spec
+(`approval-settings.md`, DATA-322: "settings spec §n") and `docs/design/operational-datastore.md` v3
+in `agentvillage-data` ("base §n"). Marks: [V] verified against code or a decision record, [NV] not
+verified, [DECISION NEEDED: who] open, with a recommendation. Nothing here is built or live until
+§14's acceptance passes on the team tenants.
 
-Principle (Carter): **agents never vote or spend; humans do, through agents.** An agent drafts and
-its resident taps; Odin proposes and its principal taps; Edge City's operations team pays.
+**The point.** The village budget is a scarce resource that humans and agents have opinions,
+intents and actions about. Each day an amount unlocks; residents propose how to spend it and
+upvote proposals; at the end of the day proposals lock and one proposal wins the money, or the money
+rolls to the next day. Agents never vote or spend on their own in October: they suggest, their
+resident taps. The one thing the experiment assigns is *when* an agent suggests.
 
-## 1. Purpose and the research questions it serves
+Sections 1 to 8 are the preregistration, written to be pasted into aspredicted.org one section per
+box. Sections 9 onward are the mechanics that make them true.
 
-A daily budget residents' agents propose to spend and residents vote on; Odin turns the result into
-allocation proposals a human ratifies. It is the research framing's "bounded representation" module
-("informing the allocation of a shared fund") and the first governed use of a shared resource.
+---
 
-| Research question (`research/overview.md`, data repo) | What the treasury contributes |
-|---|---|
-| RQ1 Collective behaviour (capture, collusion, exclusion) | concentration, capture and bloc measures over a real shared pool (§7.3 M5 to M7) |
-| RQ3 Delegation and ratification | tapped versus policy (`answer`) votes, decline rate of agent drafts, principal overrides (M10 to M12) |
-| RQ4 Human outcomes | whether a funded proposal becomes a verified, useful outcome (M8, M9) |
-| RQ5 Comparative performance | outcomes by observed condition, never assigned (§7.2) |
-| RQ2 Negotiated coordination | not served: no agent-to-agent negotiation is in this design |
+## 1. Data collection: have any data been collected for this study already?
 
-Hypotheses (`research/overview.md`): **coordination**, agents surface and carry out village actions
-that would otherwise not happen; **safety**, a shared pool's safety depends on the rules around it
-(caps, quorum, ratification, kill switch), not on the model. §7.1 makes them testable.
+No. No data have been collected. The treasury opens on Sunday 18 October 2026 (first unlock) and this
+preregistration is filed before that unlock. Test runs on the organisers' own team accounts before
+that date are fixtures, not data, and are excluded. [DECISION NEEDED: Carter and Timour, who files
+it on aspredicted.org and under whose name; recommendation: Carter files, Timour co-author.]
 
-**A useful outcome for a treasury proposal**: the funded thing happened as proposed (operator
-verified against the proposal's `verify_by` line and the payment receipt) and the proposer reports
-it useful. The treasury's primary measure is the village metric's analogue: verified useful
-outcomes per eligible proposal, where eligible means granted by its resident and listed on a ballot.
+## 2. Hypothesis: what is the main question being asked?
 
-**Measured**: proposals, taps, votes, tallies, allocations, executions, outcomes, their timing.
-**Not measured**: whether a funded thing was worth its cost or would have happened anyway, a vote's
-rationale (it never travels), external agents, individual votes without research consent.
+Main question: when a person's AI agent suggests a concrete treasury action on some days and stays
+quiet on others, does the person take part in a shared-budget decision more often, and do the
+proposals agents originate fare as well as the ones people write themselves?
+
+Setting: residents of a three-week residential village (Agent Village, Edge City, Goa, India) share a
+daily budget (150 USD most days, 800 USD on Fridays, 1,700 USD a week). Any resident may propose a
+use (title, description, amount, purpose, beneficiary) and upvote any number of proposals, one vote
+per proposal (approval voting). At the end of each day the proposal with the most votes wins its
+amount if at least 20 distinct people voted that day; otherwise the money rolls to the next day.
+Each resident has a personal AI agent. On randomly assigned "suggestion days" the agent sends one
+message at a fixed time with a draft proposal or a draft vote, which the resident approves or
+declines with one tap; on "quiet days" it sends nothing about the treasury unless asked.
+
+- H1 (confirmatory). A resident is more likely to participate (cast at least one vote or file at
+  least one proposal) on a suggestion day than on a quiet day.
+- H2 (confirmatory, non-inferiority). Proposals filed through an agent's suggestion and the
+  resident's tap are funded at a rate not lower than proposals residents enter themselves, by more
+  than 10 percentage points.
+- H3 (exploratory). The share of days that reach a quorum of 20 voters rises from the first week to
+  the second.
+- H4 (exploratory). Allocation stays unconcentrated: the top decile of beneficiaries receives less
+  than half of the two-week total allocated.
+
+## 3. Dependent variables: describe the key dependent variables and how they are measured
+
+All variables are computed from the village's event log (research database) and its operational
+datastore, both written by the system, not self-reported. A "day" is a budget day: from unlock at
+08:00 to lock at 21:00 India Standard Time.
+
+- Participation (H1), per resident per day: 1 if the resident cast at least one vote (on any
+  proposal or on "save it for tomorrow") or filed at least one proposal during that day's window,
+  through any channel (the app directly or by tapping an agent's suggestion), else 0. Source: events
+  `vote.cast@1` and `treasury.proposed@1` keyed to the resident and the day's ballot. A proposal
+  later withdrawn still counts; a suggestion the resident declined does not.
+- Funded (H2), per proposal: 1 if the proposal won its day at lock, else 0, before any later
+  veto or payment. Source: the day's `tally.closed@1` (winner) and the proposal's channel. Channel
+  is fixed by which system recorded the proposal: the resident's agent after the resident's tap
+  (agent-originated; observed condition `agent_proposed_human_ratified`) or the app directly
+  (human-originated; `human_led`). Proposals the resident asked their agent to draft are reported
+  apart (see 8).
+- Quorum reached (H3), per day: 1 if at least 20 distinct residents voted that day, always judged
+  against 20 even if the operating quorum changes (see 8). Also the count of distinct voters.
+- Concentration (H4), over the 14 days: the share of total allocated USD received by the top
+  ceil(0.1 x B) beneficiaries, where B is the number of distinct beneficiaries who received anything,
+  ranked by amount received. Beneficiaries are as named on the winning proposals (a person, a
+  vendor, a charity, "the village"). Also reported: the Gini coefficient over beneficiaries.
+
+## 4. Conditions: how many and which conditions will participants be assigned to?
+
+One within-person factor with two levels, assigned per resident per day: suggestion day or quiet
+day. Every resident experiences both.
+
+- Suggestion day: once, at 12:00 IST, the agent sends one message: the day's available amount, the
+  number of open proposals and their titles (no descriptions or other text written by others), and
+  one draft: a proposal for the resident, or an upvote on one listed proposal, or (when the
+  resident's own proposal is open) withdrawing it. The resident approves or declines it with one
+  tap. Nothing is filed without the tap.
+- Quiet day: no treasury message. The agent still helps if the resident raises the treasury.
+
+Assignment is blocked by week (Sun 18 to Sat 24 October; Sun 25 to Sat 31 October) and balanced per
+resident: in each week a resident gets 3 or 4 suggestion days, 4 in one week and 3 in the other by a
+fair coin, 7 of 14 in all. The days are drawn by a seeded random permutation per resident and week,
+computed from a secret seed whose SHA-256 is recorded here [the hash, before filing] and revealed with
+the results. Residents who join after 18 October are assigned by the same procedure from their first
+day. Residents are told, at consent, that their agent may suggest treasury actions on some days; they
+are not told which days until the end. Everything else (who proposes, who votes, through which
+channel) is observed, not assigned.
+
+## 5. Analyses: specify exactly which analyses you will conduct
+
+- H1: a mixed-effects logistic regression of participation on a suggestion-day indicator, with a
+  random intercept per resident and a fixed effect per day (14 days, which absorbs the Friday amount
+  and time trends): logit P(participate) = a_resident + g_day + b x suggestion. Fit by maximum
+  likelihood (R lme4 `glmer`, Laplace approximation). H1 is supported if b > 0 with a two-sided
+  p < .05 (Wald test). Analysis by assigned condition (intention to treat), whether or not the
+  message was delivered. Report the odds ratio with 95% CI and the average marginal effect. If the
+  model fails to converge, fit the same model by GEE (logit link, exchangeable correlation,
+  clustered by resident) and report that instead.
+- H2: among proposals listed at lock on days that reached quorum, the difference in funded rate,
+  agent-originated minus human-originated, with a confidence interval clustered by day (wild
+  cluster bootstrap, Rademacher weights, 9,999 draws, since there are at most 14 clusters).
+  Non-inferiority holds if the lower bound of the one-sided 95% interval (the two-sided 90% CI) is
+  above -0.10. An interval that crosses -0.10 is reported as inconclusive, not as refuting.
+- H3: quorum reached in week 1 versus week 2 (counts of days), and a Poisson regression of distinct
+  voters per day on day index with a Friday indicator. Descriptive; no confirmatory test.
+- H4: the top-decile share and the Gini, reported against the 0.5 line. Descriptive.
+
+## 6. Outliers and exclusions
+
+- No outliers are removed. No observation is trimmed or winsorised.
+- Excluded residents: the organisers' team accounts; any resident who withdraws consent (their data
+  are deleted and they leave every analysis); residents without research consent (their acts count
+  toward the live quorum and tally but are not in the analysis data).
+- Excluded days: any day the operator paused the treasury (a recorded pause event), for every
+  analysis.
+- Days that did not reach quorum count for the participation measures (H1, H3) and are excluded
+  from the allocation measures (H2, H4).
+- Resident-days before a resident's consent or after their withdrawal or departure are not
+  observations.
+
+## 7. Sample size: how many observations will be collected?
+
+Every consenting resident with an agent (excluding team accounts) on every budget day from 18 to 31
+October 2026: 14 days. There is no target number of residents; the sample is whoever is enrolled.
+Stopping rule: the last lock, 21:00 IST on 31 October 2026, the end of the village's treasury. No
+interim analysis: until then nobody computes participation or funding by condition; operational
+dashboards show pooled figures only.
+
+## 8. Other: anything else to preregister?
+
+- One permitted rule change. The quorum is 20 distinct voters in week one. If fewer than two of the
+  first seven days (18 to 24 October) reach quorum, the quorum becomes 12 from 25 October, recorded as
+  a dated rule change. No other rule changes. H3 is judged against 20 throughout.
+- Execution of payments may change once, from 25 October, from manual payment by Edge City
+  operations to a held card or a multi-signature wallet; it changes how a winner is paid, not who
+  wins. Recorded as a dated change if it happens.
+- Tie rule: if two proposals tie on votes, the earlier-submitted one wins. A proposal must have
+  more votes than "save it for tomorrow"; a tie with it rolls the money.
+- Secondary measures: (a) time from 12:00 IST to the resident's first vote that day, on suggestion
+  days and quiet days (a Cox model with the same day effects, clustered by resident); (b) the share
+  of agent-originated proposals later withdrawn, against human-originated ones; (c) the decline
+  rate of agent suggestions by kind (proposal, vote, withdrawal); (d) delivery rate of the
+  suggestion message (treatment fidelity); (e) H1 and H2 with proposals the resident asked the agent
+  to draft, outside a suggestion, as a third channel; (f) H1 per protocol (delivered messages only).
+- Exploratory: who wins (person, vendor, charity, village), self-beneficiary proposals, vote
+  timing, executed and verified outcomes (the winner happened as proposed), vetoes.
+- Debrief: after 31 October each resident is told which of their days were suggestion days.
+
+---
+
+> **Checkpoint note (v2 in progress).** Sections 1 to 8 above are v2. Everything below this line is
+> still v1 and is being redrafted; where it conflicts with sections 1 to 8, sections 1 to 8 win.
 
 ## 2. The rules
 
