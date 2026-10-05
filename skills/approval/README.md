@@ -41,7 +41,7 @@ row). In plain words, for the consent screen:
   (`treasury.withdraw`), and creating or changing an EdgeOS event or venue
   (`edgeos.event.write`, `edgeos.venue.write`); no tool proposes these yet.
   Each arrives as a Telegram message from the "Agent Village
-  Approvals" bot with approve and reject buttons as soon as it is proposed
+  Approvals" bot with approve and reject buttons, each on its own
   (`delivery: burst`: one left unanswered does not hold back the next), and
   stays open for up to 72 hours; if the resident does nothing it expires and
   nothing is published, shared or cast. An intention the resident stated in their own words is published
