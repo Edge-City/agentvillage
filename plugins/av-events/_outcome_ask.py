@@ -229,8 +229,8 @@ _QUOTE_MARKS = frozenset("\"'“”‘’«»„‚‹›")
 
 STAGE_KEYS = frozenset({"v", "action", "date", "staged_at", "asked_by", "window_days", "subjects"})
 SUBJECT_KEYS = frozenset({"outcome_id", "opportunity_id"})
-ARMED_KEYS = frozenset({"v", "execution_id", "job_id", "session_id", "staged_epoch", "armed_epoch", "message_hash", "subject"})
-ASK_KEYS = frozenset({"execution_id", "outcome_id", "opportunity_id"})
+ARMED_KEYS = frozenset({"v", "execution_id", "job_id", "session_id", "staged_epoch", "armed_epoch", "message_hash", "question_hash", "subject"})
+ASK_KEYS = frozenset({"execution_id", "outcome_id", "opportunity_id", "question_hash"})
 
 _TASK = re.compile(r"^cron:([0-9a-f]{12}):([0-9a-f]{32})$")
 _EXECUTION = re.compile(r"^[0-9a-f]{32}$")
@@ -435,22 +435,31 @@ def normalise(text: Any) -> Optional[str]:
     return text[:end]
 
 
-def parse_answer(text: Any) -> Optional[tuple[str, bool]]:
-    """`(value, pointer)` when the resident's whole message is an answer, else
-    None. A message sent as a Telegram reply carries Hermes's pointer; it can
-    be an answer only when the quoted message contains the question's sentence
-    (QUESTION_MARKER), and then `pointer` is True."""
+def _parse(text: Any) -> Optional[tuple[str, bool, Optional[str]]]:
+    """`(value, pointer, quote_key)` when the resident's whole message is an
+    answer, else None. A message sent as a Telegram reply carries Hermes's
+    pointer; it can be an answer only when the quote contains QUESTION_MARKER,
+    and then `pointer` is True and `quote_key` is the question key of the
+    question sentence in the quote (None when it holds none)."""
     if not isinstance(text, str) or len(text) > 2000:
         return None
     body = text.strip()
     found = _REPLY_POINTER.match(body)
+    quote_key = None
     if found:
         if QUESTION_MARKER is None or QUESTION_MARKER.search(_plain_spaces(found.group(1))) is None:
             return None  # a reply to some other message is never an answer
+        quote_key = quoted_question_key(found.group(1))
         body = body[found.end():]
     normalised = normalise(body)
     value = ANSWERS.get(normalised) if normalised is not None else None
-    return (value, found is not None) if value else None
+    return (value, found is not None, quote_key) if value else None
+
+
+def parse_answer(text: Any) -> Optional[tuple[str, bool]]:
+    """`(value, pointer)` when the resident's whole message is an answer, else None (`_parse`)."""
+    parsed = _parse(text)
+    return parsed[:2] if parsed else None
 
 
 def answer_value(text: Any) -> Optional[str]:
@@ -569,6 +578,9 @@ def arm(
         return "lost_race"
     session = session_id if isinstance(session_id, str) and re.match(rf"^cron_{job_id}_\d{{8}}_\d{{6}}$", session_id) else None
     message_hash = hasher(reply) if capture != "metadata" else None
+    # The question's key, hashed, so a Telegram reply to it can be told from
+    # a reply to another evening's question. Never the text.
+    question_hash = hasher(question_key(normalise_reply(reply)))
     armed = {
         "v": 1,
         "execution_id": execution_id,
@@ -577,6 +589,7 @@ def arm(
         "staged_epoch": stage["staged"],
         "armed_epoch": now,
         "message_hash": message_hash if isinstance(message_hash, str) and _HASH.match(message_hash) else None,
+        "question_hash": question_hash if isinstance(question_hash, str) and _HASH.match(question_hash) else None,
         "subject": stage["subject"],
     }
     try:
@@ -597,13 +610,14 @@ def note_answer(
     session_id: Optional[str],
     turn_id: Any,
     now: float,
+    hasher: Callable[[str], Optional[str]] = lambda text: None,
 ) -> Optional[str]:
     """Step 3, from every message of the resident's `pre_llm_call` (the
     caller has already decided it is the resident, in a Telegram DM). While an
     ask may be open, notes the message's time (never its text), and, when the
     whole message is an answer, the value too; in memory only. `tick` decides
     whether an answer counts. Returns a code or None."""
-    parsed = parse_answer(text)
+    parsed = _parse(text)
     if not _listing(armed_dir(state_dir)) and not os.path.exists(asks_path(state_dir)):
         return "answer_no_ask" if parsed else None
     with _MEMORY_LOCK:
@@ -618,15 +632,25 @@ def note_answer(
         "at_epoch": now,
         "session_id": session_id if isinstance(session_id, str) and _ID.match(session_id) else None,
         "turn_id": turn_id if isinstance(turn_id, str) and _ID.match(turn_id) else None,
-        # Its place among the resident's messages, and whether it replied to the question.
+        # Its place among the resident's messages, whether it replied to a
+        # question, and the keyed hash of the question it quoted (`tick`
+        # compares it with each ask's `question_hash`).
         "seq": seq,
         "pointer": parsed[1],
+        "pointer_hash": _hash_or_none(hasher, parsed[2]),
     }
     with _MEMORY_LOCK:
         if len(_ANSWERS) >= MAX_ANSWER_NOTES:
             return "answer_backlog"
         _ANSWERS.append(note)
     return "answer_noted"
+
+
+def _hash_or_none(hasher: Callable[[str], Optional[str]], key: Optional[str]) -> Optional[str]:
+    if key is None:
+        return None
+    digest = hasher(key)
+    return digest if isinstance(digest, str) and _HASH.match(digest) else None
 
 
 def _prune_messages(now: float) -> None:
@@ -697,9 +721,10 @@ def valid_armed(data: Any, name: str, now: float) -> Optional[dict]:
     staged, armed_at = _number(data.get("staged_epoch")), _number(data.get("armed_epoch"))
     if staged is None or armed_at is None or not staged <= armed_at + CLOCK_SLACK_S or armed_at > now + CLOCK_SLACK_S:
         return None
-    message_hash = data.get("message_hash")
-    if message_hash is not None and not (isinstance(message_hash, str) and _HASH.match(message_hash)):
-        return None
+    for name in ("message_hash", "question_hash"):
+        value = data.get(name)
+        if value is not None and not (isinstance(value, str) and _HASH.match(value)):
+            return None
     subject = _subject(data.get("subject"))
     if subject is None:
         return None
@@ -723,11 +748,14 @@ def _load_asks(state_dir: str, codes: dict) -> list[dict]:
             continue
         execution_id = entry.get("execution_id")
         subject = _subject({"outcome_id": entry.get("outcome_id"), "opportunity_id": entry.get("opportunity_id")})
+        question_hash = entry.get("question_hash")
+        if question_hash is not None and not (isinstance(question_hash, str) and _HASH.match(question_hash)):
+            subject = None
         if not (isinstance(execution_id, str) and _EXECUTION.match(execution_id)) or subject is None or execution_id in seen:
             _count(codes, "ask_refused")
             continue
         seen.add(execution_id)
-        asks.append({"execution_id": execution_id, **subject})
+        asks.append({"execution_id": execution_id, **subject, "question_hash": question_hash})
     return asks
 
 
@@ -871,7 +899,7 @@ def tick(state_dir: str, home: str, emit: Callable[..., Optional[dict]], now: fl
                 _count(codes, "emit_refused")
                 continue
             _remember(_EMITTED, execution_id, subject)
-            asks.append({"execution_id": execution_id, **subject})
+            asks.append({"execution_id": execution_id, **subject, "question_hash": armed["question_hash"]})
             asked_executions.add(execution_id)
             rows[execution_id] = row
             changed = True
@@ -929,8 +957,15 @@ def tick(state_dir: str, home: str, emit: Callable[..., Optional[dict]], now: fl
             if latest["execution_id"] in answered or at > latest["finished"] + ANSWER_WINDOW_S:
                 _count(codes, "answer_not_counted")
                 continue
-            if not note["pointer"] and not _is_next_message(note, latest["finished"]):
-                # Not the resident's next message after the ask, and not a reply to it.
+            quoted = note["pointer_hash"]
+            if quoted is not None and quoted == latest["question_hash"]:
+                pass  # a Telegram reply to the open ask's own question
+            elif quoted is not None and any(quoted == a["question_hash"] for a in confirmed if a is not latest):
+                # A reply to another evening's question is never counted for this one.
+                _count(codes, "answer_other_ask")
+                continue
+            elif not _is_next_message(note, latest["finished"]):
+                # Not the resident's next message after the ask, and not a reply to its question.
                 _count(codes, "answer_not_next")
                 continue
             event = emit(
@@ -961,7 +996,7 @@ def tick(state_dir: str, home: str, emit: Callable[..., Optional[dict]], now: fl
 
         kept_ids = {a["execution_id"] for a in confirmed if now - a["finished"] <= ASKS_KEEP_S}
         kept_ids |= {a["execution_id"] for a in asks if a["execution_id"] not in rows}  # not yet re-readable: keep
-        kept = [{"execution_id": a["execution_id"], "outcome_id": a["outcome_id"], "opportunity_id": a["opportunity_id"]} for a in asks if a["execution_id"] in kept_ids][-20:]
+        kept = [{key: a[key] for key in sorted(ASK_KEYS)} for a in asks if a["execution_id"] in kept_ids][-20:]
         if changed or len(kept) != len(asks):
             if kept:
                 _write(asks_path(state_dir), {"v": 1, "asks": kept})

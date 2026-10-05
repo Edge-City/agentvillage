@@ -505,7 +505,7 @@ def test_an_answer_is_noted_in_memory_only_with_the_value_and_the_time(live, ctx
     evening_reply(ctx, tenant, uuid.uuid4().hex)
     resident_says(ctx, "Met.")
     [note] = notes(live)
-    assert set(note) == {"id", "value", "at_epoch", "session_id", "turn_id", "seq", "pointer"}
+    assert set(note) == {"id", "value", "at_epoch", "session_id", "turn_id", "seq", "pointer", "pointer_hash"}
     assert note["value"] == "met" and note["pointer"] is False
     assert not (tenant.state / "outcome-ask" / "answers").exists()
 
@@ -577,6 +577,84 @@ def test_a_message_time_dropped_from_memory_means_no_plain_answer_counts(live, c
     assert mod._MESSAGES_FLOOR > 0
     live._COLLECTOR.outcome_tick()
     assert events(av, live, "outcome.reported") == []
+
+
+# -- round 2 item 2: a reply pointer addresses an ask only by its question's hash ----
+
+
+PRIYA = "Did you and **Priya** meet? Reply met, not useful, or missed. \U0001f642"
+#: What Telegram sends back in a reply's quote: the delivered text, markup rendered away.
+PRIYA_AS_QUOTED = "Did you and Priya meet? Reply met, not useful, or missed. \U0001f642"
+
+
+def pointer(quote: str, text: str) -> str:
+    return f'[Replying to: "{quote}"]\n\n{text}'
+
+
+def test_a_reply_to_yesterdays_question_is_never_counted_for_tonights_ask(live, ctx, tenant, av):
+    """Even as the resident's next message after tonight's ask."""
+    ask_delivered(live, ctx, tenant)
+    time.sleep(0.01)
+    execution = uuid.uuid4().hex
+    tenant.stage(subjects=SECOND)
+    evening_reply(ctx, tenant, execution, PRIYA)
+    tenant.finish(execution)
+    live._COLLECTOR.outcome_tick()
+    time.sleep(0.01)
+    resident_says(ctx, pointer(QUESTION, "met"))
+    assert live._COLLECTOR.outcome_tick().get("answer_other_ask") == 1
+    assert events(av, live, "outcome.reported") == []
+
+
+def test_a_reply_to_tonights_question_counts_even_after_other_messages(live, ctx, tenant, av):
+    ask_delivered(live, ctx, tenant)
+    time.sleep(0.01)
+    execution = uuid.uuid4().hex
+    tenant.stage(subjects=SECOND)
+    evening_reply(ctx, tenant, execution, PRIYA)
+    tenant.finish(execution)
+    live._COLLECTOR.outcome_tick()
+    time.sleep(0.01)
+    resident_says(ctx, "thanks! what's on tomorrow?")
+    resident_says(ctx, pointer(f"Cronjob Response: Edge \u2014 evening questions\n\n{PRIYA_AS_QUOTED}", "missed"))
+    assert live._COLLECTOR.outcome_tick().get("answered") == 1
+    [reported] = events(av, live, "outcome.reported")
+    assert reported["opportunity_id"] == "second" and reported["payload"]["value"] == "missed"
+
+
+def test_a_pointer_quoting_the_residents_own_message_with_the_marker_gives_no_bypass(live, ctx, tenant, av):
+    ask_delivered(live, ctx, tenant)
+    resident_says(ctx, "hmm who is that")
+    resident_says(ctx, "what do you mean by 'Reply met, not useful, or missed.' lol")
+    resident_says(ctx, pointer("what do you mean by 'Reply met, not useful, or missed.' lol", "met"))
+    assert live._COLLECTOR.outcome_tick().get("answer_not_next") == 1
+    assert events(av, live, "outcome.reported") == []
+
+
+@pytest.mark.parametrize("first", [True, False])
+def test_a_truncated_quote_is_judged_by_the_next_message_rule_alone(live, ctx, tenant, av, first):
+    """A native partial quote of just the instruction holds no question sentence."""
+    ask_delivered(live, ctx, tenant)
+    if not first:
+        resident_says(ctx, "hello")
+    resident_says(ctx, pointer("Reply met, not useful, or missed.", "met"))
+    live._COLLECTOR.outcome_tick()
+    assert len(events(av, live, "outcome.reported")) == (1 if first else 0)
+
+
+def test_the_question_hash_is_stored_with_the_ask_and_never_its_text(live, ctx, tenant, av):
+    execution = uuid.uuid4().hex
+    tenant.stage()
+    evening_reply(ctx, tenant, execution)
+    armed = json.loads((tenant.armed_dir / f"{execution}.json").read_text())
+    mod = module(live)
+    assert armed["question_hash"] == live._COLLECTOR.keyed_hash("did you and arjun meet? reply met, not useful, or missed")
+    assert mod.question_key(mod.normalise_reply(PRIYA)) == mod.quoted_question_key(f"Cronjob Response\n\n{PRIYA_AS_QUOTED}")
+    tenant.finish(execution)
+    live._COLLECTOR.outcome_tick()
+    asks = (tenant.state / "outcome-ask" / "asks.json").read_text()
+    assert json.loads(asks)["asks"][0]["question_hash"] == armed["question_hash"]
+    assert "Arjun" not in asks and "arjun" not in asks
 
 
 # -- F5: an answer belongs to the latest ask DELIVERED before it -----------------
@@ -962,7 +1040,7 @@ def forged_armed(tenant, execution: str, *, job: str = JOB, staged: float | None
     body = {
         "v": 1, "execution_id": execution, "job_id": job, "session_id": None,
         "staged_epoch": now - 20 if staged is None else staged, "armed_epoch": now - 10 if armed is None else armed,
-        "message_hash": "0" * 64, "subject": subject or {"outcome_id": "opp-outcome:forged", "opportunity_id": "forged"},
+        "message_hash": "0" * 64, "question_hash": None, "subject": subject or {"outcome_id": "opp-outcome:forged", "opportunity_id": "forged"},
     }
     body.update(extra)
     tenant.armed_dir.mkdir(parents=True, exist_ok=True)
@@ -1094,7 +1172,8 @@ def test_a_forged_answer_file_is_never_an_answer(live, ctx, tenant, av):
 
 
 def write_asks(tenant, *entries) -> None:
-    tenant.write_private(tenant.state / "outcome-ask" / "asks.json", {"v": 1, "asks": list(entries)})
+    """Asks on file as the tick writes them (`question_hash` null unless given)."""
+    tenant.write_private(tenant.state / "outcome-ask" / "asks.json", {"v": 1, "asks": [{"question_hash": None, **e} for e in entries]})
 
 
 def test_a_forged_ask_on_file_for_another_jobs_run_takes_no_answer(live, ctx, tenant, av):
@@ -1137,7 +1216,7 @@ def test_a_forged_asks_file_that_is_a_symlink_is_refused(live, ctx, tenant, av, 
     execution = uuid.uuid4().hex
     tenant.finish(execution)
     target = home / "asks-target.json"
-    target.write_text(json.dumps({"v": 1, "asks": [{"execution_id": execution, "outcome_id": OUTCOME, "opportunity_id": OPP}]}))
+    target.write_text(json.dumps({"v": 1, "asks": [{"execution_id": execution, "outcome_id": OUTCOME, "opportunity_id": OPP, "question_hash": None}]}))
     os.chmod(target, 0o600)
     (tenant.state / "outcome-ask").mkdir(parents=True, exist_ok=True)
     os.symlink(target, tenant.state / "outcome-ask" / "asks.json")

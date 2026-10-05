@@ -282,6 +282,7 @@ def _outcome_note_answer(collector: Collector, kwargs: dict, text: Any) -> None:
         session_id=session_id,
         turn_id=kwargs.get("turn_id"),
         now=time.time(),
+        hasher=collector.keyed_hash,
     )
     if code:
         logger.info("av-events: outcome_ask %s", code)
