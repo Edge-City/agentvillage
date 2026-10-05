@@ -34,6 +34,9 @@ function prompt(spec: DigestCronSpec): string {
 
 const proactive = DIGEST_CRON_SPECS.filter((spec) => spec.name in PROACTIVE);
 
+/** The one line every resident-facing prompt carries (B1-fix F3). */
+const SCRIPT_ERROR_LINE = "If the block above is headed Script Error, or there is no Script Output above, reply exactly `[SILENT]`.";
+
 /**
  * The rest of Hermes's strict job-prompt scan (tools/cronjob_prompt_scan.py
  * `_CRON_THREAT_PATTERNS[4:]` and `_CRON_EXFIL_COMMAND_PATTERNS`, v2026.9.24);
@@ -86,6 +89,16 @@ describe("the six proactive jobs (DATA-314)", () => {
         expect(text).toContain("Script Output above");
         expect(text).toContain("reply exactly `[SILENT]`");
       }
+    }
+  });
+
+  test("F3: every resident-facing prompt replies [SILENT] on a Script Error block or no Script Output", () => {
+    // A timed-out, missing or cancelled pre-run script skips the wake gate and
+    // Hermes heads the block "## Script Error" with "Report this to the user."
+    const delivering = proactive.filter((spec) => spec.deliver);
+    expect(delivering).toHaveLength(5);
+    for (const spec of delivering) {
+      expect({ job: spec.name, has: prompt(spec).includes(SCRIPT_ERROR_LINE) }).toEqual({ job: spec.name, has: true });
     }
   });
 

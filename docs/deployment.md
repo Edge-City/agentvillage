@@ -266,6 +266,12 @@ The rules the trigger holds:
 - Agent-job triggers always exit 0 with the wake line last; a fault is a silent
   run with a code. Each run appends one line of codes and counts to
   `av-events/proactive/triggers.jsonl` (never a name, a URL or any text).
+- **A failed pre-run script never reaches the resident.** When the script
+  does not finish (Hermes's script timeout, a missing shim, a cancelled run)
+  Hermes skips the wake gate, heads the block `Script Error` and asks the
+  model to report it, and the reply would go to the resident's chat. Every
+  resident-facing prompt says to reply exactly `[SILENT]` when the block above
+  is headed Script Error or there is no Script Output.
 
 **Village time.** Hermes reads every cron schedule in one zone:
 `HERMES_TIMEZONE`, then `timezone:` in `config.yaml`, else the host's local
