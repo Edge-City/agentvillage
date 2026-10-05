@@ -285,6 +285,8 @@ describe("makePlan", () => {
     const git = gitIn(f.work);
     expect(refusalCode(() => makePlan(git, { ref: "nope" }))).toBe("ref_not_found");
     expect(refusalCode(() => makePlan(git, { ref: "deadbeef" }))).toBe("ref_not_found");
+    // a hex id that is not a commit's (here the rc1 tag object, which peels to a commit) is not taken as one
+    expect(refusalCode(() => makePlan(git, { ref: f.run(["rev-parse", "refs/tags/v2.0.0-rc1"]).slice(0, 12) }))).toBe("ref_not_found");
     expect(refusalCode(() => makePlan(git, { ref: "" }))).toBe("bad_ref");
     expect(refusalCode(() => makePlan(git, { ref: "--upload-pack=touch" }))).toBe("bad_ref");
     expect(refusalCode(() => makePlan(git, { ref: "main~1" }))).toBe("bad_ref");
@@ -366,6 +368,9 @@ const who = { actor: "octocat", runUrl: RUN_URL };
 describe("createTag", () => {
   test("creates an annotated tag naming actor, run, commit, seed line and commits, and pushes only the tag", () => {
     const f = released();
+    // a local main ahead of the remote's, and a local branch: neither may reach the remote
+    f.commit({ "README.md": "local\n" }, "local only");
+    f.run(["branch", "local-branch"]);
     const before = sh(f.origin, ["for-each-ref", "--format=%(refname) %(objectname)", "refs/heads"]);
     const { plan, tagObject } = createTag(gitIn(f.work), { ref: f.c, expectCommit: f.c, expectVersion: "v2.0.0-rc2", fetch: true, ...who });
     expect(plan.version).toBe("v2.0.0-rc2");
