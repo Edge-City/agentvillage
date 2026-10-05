@@ -97,9 +97,16 @@ where this page is briefer.
    names who ran it, the run, the commits and the seed check), and its summary
    gives the Roll inputs. It refuses, creating nothing, when the ref is not on
    `main`, the commit already carries a release tag (roll that one), the commit
-   is older than the latest release tag, a branch has the new tag's name, the
-   `version` given exists or is not higher than every release tag, or the tags
-   changed while it ran. Anyone with write access to this repo can run it
+   does not contain the latest release tag, a branch has the new tag's name, the
+   `version` given exists or is not higher than every release tag, a tag that
+   looks like a release has a number longer than 6 digits, a directory that
+   `test.yml` runs `bun test` on does not exist at the commit
+   (`suite_dir_missing`: the suites would otherwise pass without running it),
+   or the tags or the seed check changed while it ran. Text from the
+   repository (commit subjects, seed `version` strings, tag names) is cleaned
+   of control characters and shown as code in the summary; a seed `version`
+   that is not one plain string is shown as `(unreadable version)` and counts
+   as changed. Anyone with write access to this repo can run it
    (`scripts/tag-release.ts` holds the logic). Its actions are pinned by
    commit SHA, unlike this repo's other workflows, because its tag job holds a
    token that can write; the suites it calls run in their own read-only jobs.
@@ -110,6 +117,7 @@ where this page is briefer.
    |---|---|
    | The suites fail at the commit | Nothing was created. Fix on `main` and tag the new commit, or give an earlier `ref` whose suites pass. |
    | "The tags changed since this run planned" or the push was rejected | Someone tagged meanwhile; nothing of this run was pushed. Run again (a dry run first). |
+   | `suite_dir_missing` | The commit predates a suite directory that `test.yml` on `main` runs. Release a newer commit, or tag by hand after running the suites that exist at that commit. |
    | GitHub refuses the tag push from the workflow's token (a permission or rule error in the tag job) | Tag by hand with the fallback above. If it keeps happening, a repository admin can add a write deploy key as a secret and the workflow can push with it, as the control plane's and data repo's Deploy buttons do; not set up today. |
 2. If the tag changes `plugins/av-events/tool_categories.json`,
    `edgeos_tool_allowlist.json` or `cron_job_names.json`, release the data
@@ -119,8 +127,9 @@ where this page is briefer.
    against the previous release tag and says whether to tick
    `allow_seed_change`; it cannot see the data pipeline's release, so check
    that with the data owner (see "The data pipeline" below). Roll compares
-   with the tag the residents run now, so if they are behind the previous tag
-   it can name more files.
+   with what the residents run now (`EDGE_HERMES_REF`, a tag or a branch tip),
+   so if they are behind the previous tag it can name more files, and it
+   refuses with `seed_uncomparable` when it cannot read that ref.
 3. Make sure your own agent is a canary. Each agent answers only its owner's
    Telegram, so the human check in the procedure below only works on a tenant
    you own. The control plane marks every tenant whose sign-up email is in its
@@ -173,6 +182,36 @@ installer's `drop_pending_on_cold_boot` fix needs a Hermes build from
 2026-09-20 or later in the VM). That events arrive at ingest. A resident's agent
 memory: no memory backups run in production yet, so a bad roll has no memory
 undo.
+
+**First use of the Tag release button.** Once, by the owner, before relying
+on it:
+1. The pull request that added it merged with its `test` checks green (that
+   run also shows `test.yml` still checks out the pull request's own commit).
+2. Settings > Actions > General lets a workflow ask for write access through
+   its `permissions:` (the repository default is read; an organisation policy
+   can cap it).
+3. No ruleset or tag rule stops `github-actions[bot]` from creating `v*` tags.
+4. A dry run with `ref` `main`. If `main` still sits on the latest release tag
+   it refuses with "already tagged"; that is the expected first result.
+5. Once `main` has moved past it, a dry run again: the version is the next
+   rc, the previous tag is the latest one, the commit list and the seed check
+   match what you expect.
+6. In that run, the `test` jobs checked out the planned commit (their checkout
+   step names it) and passed.
+7. The plan step's log has no stray annotations and the summary renders as a
+   table with code spans.
+8. A real run with `dry_run` unticked, `ref` the full commit id from the dry
+   run, the same `version` and `note` if you gave them.
+9. `git fetch --tags` and `git cat-file -p <tag>`: annotated, tagger
+   `github-actions[bot]`, a message naming you, the run, the commit, the seed
+   check and the commits; `git ls-remote --heads origin` unchanged.
+10. If the push was refused: tag by hand with the fallback and see the
+    troubleshooting table above.
+11. If the seed check named files, confirm with the data owner that the data
+    pipeline's release carries those versions before ticking
+    `allow_seed_change`.
+12. Roll's dry run takes the tag (annotated, on `main`); then continue with
+    the staged procedure.
 
 ## The data pipeline
 
