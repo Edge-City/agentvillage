@@ -60,8 +60,10 @@ Hermes runs the shim as a `pre_tool_call` shell hook for `terminal`,
 classifies from approval.md 0.4.0, PR #569; an older core passes them through
 unjudged). The shim POSTs Hermes's envelope to
 `$AV_APPROVAL_URL/hook/hermes` with the agent token in
-`X-Approval-Authorization` (Maritime's proxy strips `Authorization`), passed
-to curl through a config on stdin, never argv. The facade runs the core
+`X-Approval-Authorization` for a hosted facade (Maritime's proxy strips
+`Authorization`; the hosted supervisor moves it back), and in `Authorization`
+for a local one (`unix:` or loopback: that is `approval serve` itself, which
+reads `Authorization` only), passed to curl through a config on stdin, never argv. The facade runs the core
 decider and answers; the shim replays `{}` (allow) or the block directive at
 exit 2. While the facade answers `hook-timeout` (a question is open and waiting
 for the resident) the shim re-asks every 5 s for up to 280 s, inside Hermes's

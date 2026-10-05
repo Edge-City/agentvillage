@@ -1218,7 +1218,9 @@ describe("the vendored shim (bash -c, fake curl)", () => {
     expect(r.calls).toBe(1);
     expect(r.argv[0]).not.toContain(TOKEN);
     expect(r.argv[0].trim().split("\n").at(-1)).toBe(`${URL}/hook/hermes`);
+    // A hosted (https) facade keeps the alternate header Maritime's proxy leaves alone.
     expect(r.stdin[0]).toBe(`header = "X-Approval-Authorization: Bearer ${TOKEN}"\n`);
+    expect(r.stdin[0]).not.toContain('"Authorization:');
     expect(fx.log()).not.toContain(TOKEN);
   });
 
@@ -1667,6 +1669,8 @@ describe("DATA-234 shim: the co-located facade (token file, loopback listener, u
     expect(r.code).toBe(0);
     expect(r.argv[0].trim().split("\n").at(-1)).toBe(`${LOOP_URL}/hook/hermes`);
     expect(r.argv[0]).toContain("=http\n");
+    // `approval serve` itself, no hosted supervisor: it reads Authorization only.
+    expect(r.stdin[0]).toBe(`header = "Authorization: Bearer ${TOKEN}"\n`);
   });
 
   test("loopback: a squatter of another uid, a wildcard or mapped listener of it, or no listener blocks with facade_listener_foreign", () => {
@@ -1742,7 +1746,8 @@ describe("DATA-234 shim: the co-located facade (token file, loopback listener, u
     const argv = r.argv[0].trim().split("\n");
     expect(argv.at(-1)).toBe("http://localhost/hook/hermes");
     expect(argv[argv.indexOf("--unix-socket") + 1]).toBe(sock);
-    expect(r.stdin[0]).toBe(`header = "X-Approval-Authorization: Bearer ${TOKEN}"\n`);
+    // `approval serve` itself, no hosted supervisor: it reads Authorization only.
+    expect(r.stdin[0]).toBe(`header = "Authorization: Bearer ${TOKEN}"\n`);
   });
 
   test("unix socket: another owner, a directory others can write, a link or a plain file blocks with facade_listener_foreign", () => {
