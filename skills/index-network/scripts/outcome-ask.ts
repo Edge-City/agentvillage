@@ -25,11 +25,14 @@
  * nothing could record an ask, and the evening asks nobody
  * (proactive.ts outcomePluginOff, readAskedIds).
  *
- * M2b: the stage's subject also names the intention the connection belongs
- * to (`intention_id`), or null with a reason (`intention_reason`), and the
- * plugin carries it onto `outcome.asked` and `outcome.reported` unchanged
- * (`intentionLink`; docs/design/outcome-ask.md §8). Today it is always null
- * with `not_linked`: Index's `list_opportunities` row names no intent.
+ * M2b: a version 2 stage's subject also names the intention the connection
+ * belongs to (`intention_id`), or null with a reason (`intention_reason`),
+ * and the plugin carries it onto `outcome.asked` and `outcome.reported`
+ * unchanged (`intentionLink`; docs/design/outcome-ask.md §8). The plugin
+ * reads version 2 from this release on, but the trigger still WRITES version
+ * 1, byte for byte as before (STAGE_FORMAT_V2 is off): until every tenant's
+ * plugin reads version 2, a version 2 stage met by the plugin from before is
+ * refused after the question has gone out, and the resident is asked again.
  */
 
 import { createHash } from "node:crypto";
@@ -212,12 +215,15 @@ export function questionSha256(sentence: string): string {
 }
 
 /**
- * Why an ask names no intention: `not_linked` (no intention known for the
- * connection) or `ambiguous` (several, and not the one it was matched on).
- * The plugin adds a third, `predates_link`, for files from before M2b; the
- * trigger never writes it.
+ * Why an ask names no intention (the closed vocabulary, the plugin's
+ * INTENTION_REASONS): `not_linked` (no intention known for the connection),
+ * `ambiguous` (several, and not the one it was matched on), or
+ * `not_recorded` (the stage carried no intention information at all: a
+ * version 1 stage, which is every stage while STAGE_FORMAT_V2 is off). Only
+ * the plugin sets `not_recorded`; a version 2 stage carries one of the first
+ * two, and `stageFor` never writes the third.
  */
-export type IntentionReason = "not_linked" | "ambiguous";
+export type IntentionReason = "not_linked" | "ambiguous" | "not_recorded";
 
 /** The stage subject's intention: an id with a null reason, or a null id with a reason. Never both, never a guess. */
 export interface IntentionLink {
@@ -259,7 +265,7 @@ export function intentionLink(matched: readonly unknown[] | undefined): Intentio
   return typeof only === "string" && INTENTION_ID.test(only) ? { intention_id: only, intention_reason: null } : NOT_LINKED;
 }
 
-/** A link exactly as `intentionLink` makes it, else NOT_LINKED. */
+/** A link exactly as `intentionLink` makes it, else NOT_LINKED (never `not_recorded`, which only the plugin sets). */
 function checkedLink(link: IntentionLink): IntentionLink {
   if (link.intention_id === null) return link.intention_reason === "ambiguous" ? AMBIGUOUS : NOT_LINKED;
   return typeof link.intention_id === "string" && INTENTION_ID.test(link.intention_id) && link.intention_reason === null
@@ -267,11 +273,40 @@ function checkedLink(link: IntentionLink): IntentionLink {
     : NOT_LINKED;
 }
 
-/** The stage version: 2 since M2b (the subject names its intention). The plugin still reads 1 as `predates_link`. */
-export const STAGE_VERSION = 2;
+/**
+ * Whether the trigger writes the version 2 stage (the subject names its
+ * intention). OFF: the trigger writes version 1, the exact bytes the trigger
+ * from before M2b wrote (tests/fixtures/outcome-stage-v1-origin-main.json),
+ * and the link `intentionLink` computes is not written anywhere.
+ *
+ * Why off. During a roll the installer copies skills and plugins first and
+ * restarts the gateway last (install/install.ts), so for a while a new
+ * trigger runs beside the plugin from before, still in memory; and a
+ * roll-back puts that plugin back. That plugin refuses a version 2 stage
+ * (`stage_refused`) after the question has gone out: no `outcome.asked`,
+ * nothing recorded as asked, and the resident gets the same question the
+ * next evening. Nothing can set a link yet either (no parser sets
+ * `BriefOpportunity.matchedIntentIds`), so a version 2 stage would carry
+ * only `not_linked` and buy nothing.
+ *
+ * Turn it on only when BOTH hold:
+ * 1. one full release has passed since every tenant runs a plugin that reads
+ *    version 2 (the M2b reader, `_outcome_ask.py`), so neither a skewed roll
+ *    nor a roll-back can meet a version 2 stage with an older plugin; and
+ * 2. something can actually set a link: a parser sets `matchedIntentIds` from
+ *    a field Index documents as the viewer's matched intent(s), and the data
+ *    side has settled how it reads a plugin-observed intention link
+ *    (docs/design/outcome-ask.md §8).
+ * Tests turn it on through `stageFor`'s `formatV2` option (proactive.ts
+ * `ProactiveOptions.stageFormatV2`), never by editing this constant.
+ */
+export const STAGE_FORMAT_V2 = false;
 
-export interface OutcomeStage {
-  v: typeof STAGE_VERSION;
+/** The stage versions: 1 (no intention, what the trigger writes while STAGE_FORMAT_V2 is off) and 2 (M2b). */
+export const STAGE_VERSION_V1 = 1;
+export const STAGE_VERSION_V2 = 2;
+
+interface StageCommon {
   action: typeof OUTCOME_ASK_ACTION;
   date: string;
   staged_at: string;
@@ -279,14 +314,58 @@ export interface OutcomeStage {
   window_days: number;
   /** The SHA-256 of the key of the exact question shown to the model: the plugin arms only on a reply with this key. */
   question_sha256: string;
+}
+
+/** Version 1: exactly the stage from before M2b, subjects with no intention keys. */
+export interface OutcomeStageV1 extends StageCommon {
+  v: typeof STAGE_VERSION_V1;
+  subjects: Array<{ outcome_id: string; opportunity_id: string }>;
+}
+
+/** Version 2 (M2b, written only with STAGE_FORMAT_V2 on): each subject names its intention or why not. */
+export interface OutcomeStageV2 extends StageCommon {
+  v: typeof STAGE_VERSION_V2;
   subjects: Array<{ outcome_id: string; opportunity_id: string } & IntentionLink>;
 }
 
-export function stageFor(opportunityId: string, date: string, now: Date, question: string, link: IntentionLink = NOT_LINKED): OutcomeStage | null {
+export type OutcomeStage = OutcomeStageV1 | OutcomeStageV2;
+
+export interface StageOptions {
+  /** Write version 2 (default STAGE_FORMAT_V2). A seam for tests. */
+  formatV2?: boolean;
+}
+
+/**
+ * The stage for one ask. With STAGE_FORMAT_V2 off (the default) it is the
+ * version 1 stage, key for key and in the same order as the trigger from
+ * before M2b, and `link` is ignored; with `formatV2` it is version 2 and the
+ * subject carries `link` (only of `intentionLink`'s shape).
+ */
+export function stageFor(
+  opportunityId: string,
+  date: string,
+  now: Date,
+  question: string,
+  link: IntentionLink = NOT_LINKED,
+  options: StageOptions = {},
+): OutcomeStage | null {
   const id = outcomeId(opportunityId);
   if (!id) return null;
+  if (!(options.formatV2 ?? STAGE_FORMAT_V2)) {
+    // Key order is part of the contract: the bytes match the fixture from before M2b.
+    return {
+      v: STAGE_VERSION_V1,
+      action: OUTCOME_ASK_ACTION,
+      date,
+      staged_at: now.toISOString(),
+      asked_by: ASKED_BY,
+      window_days: WINDOW_DAYS,
+      question_sha256: questionSha256(question),
+      subjects: [{ outcome_id: id, opportunity_id: opportunityId }],
+    };
+  }
   return {
-    v: STAGE_VERSION,
+    v: STAGE_VERSION_V2,
     action: OUTCOME_ASK_ACTION,
     date,
     staged_at: now.toISOString(),

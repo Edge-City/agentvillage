@@ -1,0 +1,46 @@
+{
+  "header": {
+    "what": "The exact bytes of the stage file origin/main's evening trigger writes (skills/index-network/scripts/outcome-ask.ts: stageFor(opportunity_id, date, new Date(now), outcomeQuestion(person)) then writeStage), one per case.",
+    "source_commit": "dbabadad4bb10e8e4969a0234126b14283d20434",
+    "source": "git archive of that commit's skills/index-network/scripts, run with bun 1.4.2 on 2026-10-05",
+    "do_not_edit": "FROZEN. Never edit and never regenerate this file. It is the old trigger's output: the reference the new trigger's version 1 writer (STAGE_FORMAT_V2 off) must match byte for byte (outcome-ask.test.ts), and the stage the plugin from that commit is tested against (test_outcome_ask.py, the roll section). If a test against it fails, the writer changed, not the fixture. Delete it together with the version 1 writer, never update it."
+  },
+  "cases": [
+    {
+      "name": "the evening test's own ask (outcome-ask.test.ts OPP, DATE, EVENING, Arjun Mehta)",
+      "opportunity_id": "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d",
+      "date": "2026-10-14",
+      "now": "2026-10-14T13:30:00.000Z",
+      "person": "Arjun Mehta",
+      "question": "Did you and Arjun Mehta meet? Reply met, not useful, or missed.",
+      "bytes": "{\"v\":1,\"action\":\"evening\",\"date\":\"2026-10-14\",\"staged_at\":\"2026-10-14T13:30:00.000Z\",\"asked_by\":\"outcome_cron\",\"window_days\":1,\"question_sha256\":\"8c33e7b2a3c32fd1a4047caea6a5f61c7cd7abe4f219b583c6183e7dad2254b0\",\"subjects\":[{\"outcome_id\":\"opp-outcome:0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d\",\"opportunity_id\":\"0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d\"}]}\n"
+    },
+    {
+      "name": "milliseconds in the stamp, a short id with every punctuation the id allows, a non-ASCII name",
+      "opportunity_id": "opp_1.a:b-c",
+      "date": "2026-10-14",
+      "now": "2026-10-14T13:31:07.123Z",
+      "person": "Zoë Ångström",
+      "question": "Did you and Zoë Ångström meet? Reply met, not useful, or missed.",
+      "bytes": "{\"v\":1,\"action\":\"evening\",\"date\":\"2026-10-14\",\"staged_at\":\"2026-10-14T13:31:07.123Z\",\"asked_by\":\"outcome_cron\",\"window_days\":1,\"question_sha256\":\"35df01c3d238d7fd0af580dddd1631304006a60210c18247caeb5fb79e3c5198\",\"subjects\":[{\"outcome_id\":\"opp-outcome:opp_1.a:b-c\",\"opportunity_id\":\"opp_1.a:b-c\"}]}\n"
+    },
+    {
+      "name": "the longest id (100 characters), the last millisecond of a village day, an apostrophe in the name",
+      "opportunity_id": "Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab",
+      "date": "2026-12-31",
+      "now": "2026-12-31T18:29:59.999Z",
+      "person": "Kieran O'Neil",
+      "question": "Did you and Kieran O'Neil meet? Reply met, not useful, or missed.",
+      "bytes": "{\"v\":1,\"action\":\"evening\",\"date\":\"2026-12-31\",\"staged_at\":\"2026-12-31T18:29:59.999Z\",\"asked_by\":\"outcome_cron\",\"window_days\":1,\"question_sha256\":\"94f6d0a72be88e978615a71448f0919144006c19111f58cba667831e3d11e513\",\"subjects\":[{\"outcome_id\":\"opp-outcome:Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab\",\"opportunity_id\":\"Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab9._:-Ab\"}]}\n"
+    },
+    {
+      "name": "a UTC midnight that is 05:30 the next village day",
+      "opportunity_id": "e3b0c442-98fc-1c14-9afb-f4c8996fb924",
+      "date": "2027-01-01",
+      "now": "2027-01-01T00:00:00.000Z",
+      "person": "Priya",
+      "question": "Did you and Priya meet? Reply met, not useful, or missed.",
+      "bytes": "{\"v\":1,\"action\":\"evening\",\"date\":\"2027-01-01\",\"staged_at\":\"2027-01-01T00:00:00.000Z\",\"asked_by\":\"outcome_cron\",\"window_days\":1,\"question_sha256\":\"d73050210d6a599f5b99272d3b315fe6cca4f17517dee22ef70a890867cc155b\",\"subjects\":[{\"outcome_id\":\"opp-outcome:e3b0c442-98fc-1c14-9afb-f4c8996fb924\",\"opportunity_id\":\"e3b0c442-98fc-1c14-9afb-f4c8996fb924\"}]}\n"
+    }
+  ]
+}

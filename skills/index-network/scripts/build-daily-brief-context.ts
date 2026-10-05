@@ -174,7 +174,10 @@ export interface BriefOpportunity {
    * tests/fixtures/index-mcp-2026-07-28.json) carries no intent reference,
    * and `intentId` above is not used for this because nothing says whose
    * signal it names (a peer's would credit the wrong intention). Set it only
-   * from a field Index documents as the viewer's matched intent(s).
+   * from a field Index documents as the viewer's matched intent(s), and not
+   * before the data side has settled how it reads a plugin-observed
+   * intention link (docs/design/outcome-ask.md §8). Even then it reaches the
+   * stage only once outcome-ask.ts STAGE_FORMAT_V2 is on.
    */
   matchedIntentIds?: string[];
   /** `https://index.network/u/<userId>`. */

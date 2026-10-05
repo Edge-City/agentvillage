@@ -17,8 +17,10 @@ import os
 import sqlite3
 import sys
 import time
+import types
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -28,8 +30,11 @@ OTHER_JOB = "0123456789ab"
 OPP = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d"
 OUTCOME = f"opp-outcome:{OPP}"
 QUESTION = "Did you and Arjun meet? Reply met, not useful, or missed."
-#: M2b: what the trigger stages for every connection today (Index names no intent for it).
+#: M2b: what a version 2 stage (the writer turned on) carries for a connection Index names no intent for.
 NOT_LINKED = {"intention_id": None, "intention_reason": "not_linked"}
+#: M2b fix round 1: what every ask carries today. The trigger writes version 1
+#: (STAGE_FORMAT_V2 off), which carries no intention information.
+NOT_RECORDED = {"intention_id": None, "intention_reason": "not_recorded"}
 
 
 def shown(name: str = "Arjun") -> str:
@@ -74,16 +79,15 @@ class Tenant:
     def stage_file(self):
         return self.state / "proactive" / "outcome-ask-evening.json"
 
-    def stage_body(self, *, at: float | None = None, subjects=None, name: str = "Arjun", legacy: bool = False, **over) -> dict:
-        """The trigger's stage. Version 2 (M2b): a subject given without the
-        intention keys gets the trigger's default, `not_linked`. `legacy`: the
-        version 1 stage a trigger from before M2b writes, two-key subjects."""
+    def stage_body(self, *, at: float | None = None, subjects=None, name: str = "Arjun", **over) -> dict:
+        """The trigger's stage: version 1, two-key subjects (what the trigger
+        writes, STAGE_FORMAT_V2 off), unless a subject carries the intention
+        keys; then version 2 (the writer turned on). `v` can be overridden."""
         staged = time.time() - 5 if at is None else at
         subjects = subjects or [{"outcome_id": OUTCOME, "opportunity_id": OPP}]
-        if not legacy:
-            subjects = [{**NOT_LINKED, **s} if isinstance(s, dict) and "intention_id" not in s else s for s in subjects]
+        keyed = any(isinstance(s, dict) and ("intention_id" in s or "intention_reason" in s) for s in subjects)
         body = {
-            "v": 1 if legacy else 2, "action": "evening", "date": datetime.fromtimestamp(staged, IST).date().isoformat(),
+            "v": 2 if keyed else 1, "action": "evening", "date": datetime.fromtimestamp(staged, IST).date().isoformat(),
             "staged_at": utc(staged), "asked_by": "outcome_cron", "window_days": 1, "question_sha256": shown(name),
             "subjects": subjects,
         }
@@ -195,7 +199,7 @@ def test_the_ask_is_emitted_only_once_delivered_or_queued(live, ctx, tenant, av,
     assert live._COLLECTOR.outcome_tick().get("asked") == 1
     [asked] = events(av, live, "outcome.asked")
     [out] = [e for e in events(av, live, "message.out") if e["session_id"].startswith("cron_")]
-    assert asked["payload"] == {"message_hash": out["payload"]["content_hash"], "window_days": 1, "asked_by": "outcome_cron", "intention_reason": "not_linked"}
+    assert asked["payload"] == {"message_hash": out["payload"]["content_hash"], "window_days": 1, "asked_by": "outcome_cron", "intention_reason": "not_recorded"}
     assert asked["intention_id"] is None
     assert asked["payload"]["message_hash"] and len(asked["payload"]["message_hash"]) == 64
     assert asked["outcome_id"] == OUTCOME and asked["opportunity_id"] == OPP
@@ -550,7 +554,7 @@ def test_an_answer_from_the_list_emits_outcome_reported_with_the_right_ids(live,
     resident_says(ctx, text)
     assert live._COLLECTOR.outcome_tick().get("answered") == 1
     [reported] = events(av, live, "outcome.reported")
-    assert reported["payload"] == {"value": value, "matcher_version": "outcome_reply_v2", "intention_reason": "not_linked"}
+    assert reported["payload"] == {"value": value, "matcher_version": "outcome_reply_v2", "intention_reason": "not_recorded"}
     assert reported["intention_id"] is None
     assert reported["evidence_class"] == "self_report"
     assert reported["actor"] == "participant"
@@ -1092,11 +1096,25 @@ FORGED_STAGES = {
     "another window": dict(window_days=7),
     "a boolean window": dict(window_days=True),
     "another version": dict(v=3),
-    "a version 1 stage with the intention keys": dict(v=1),
+    # N5: the version is an integer, never a float or a bool that equals one.
+    "a float version 2": dict(v=2.0, subjects=[{"outcome_id": OUTCOME, "opportunity_id": OPP, **NOT_LINKED}]),
+    "a float version 1": dict(v=1.0),
+    "a boolean version": dict(v=True),
+    "a version as text": dict(v="1"),
+    "a version 1 stage with the intention keys": dict(v=1, subjects=[{"outcome_id": OUTCOME, "opportunity_id": OPP, **NOT_LINKED}]),
+    "a version 2 stage without the intention keys": dict(v=2),
     # M2b: an intention id and a reason together, a reason only this module sets,
     # an unknown reason, and an intention "id" that is text.
     "an intention id with a reason": dict(subjects=[{"outcome_id": OUTCOME, "opportunity_id": OPP, "intention_id": "i1", "intention_reason": "not_linked"}]),
-    "a reason only the plugin sets": dict(subjects=[{"outcome_id": OUTCOME, "opportunity_id": OPP, "intention_id": None, "intention_reason": "predates_link"}]),
+    "a reason only the plugin sets": dict(subjects=[{"outcome_id": OUTCOME, "opportunity_id": OPP, "intention_id": None, "intention_reason": "not_recorded"}]),
+    "a reason no longer in the vocabulary": dict(subjects=[{"outcome_id": OUTCOME, "opportunity_id": OPP, "intention_id": None, "intention_reason": "predates_link"}]),
+    # N1: a whole-value match; `re.match` with `$` let a trailing newline through.
+    "an intention id with a trailing newline": dict(subjects=[{"outcome_id": OUTCOME, "opportunity_id": OPP, "intention_id": "abc\n", "intention_reason": None}]),
+    "an intention id with a leading space": dict(subjects=[{"outcome_id": OUTCOME, "opportunity_id": OPP, "intention_id": " abc", "intention_reason": None}]),
+    "an intention id with an embedded newline": dict(subjects=[{"outcome_id": OUTCOME, "opportunity_id": OPP, "intention_id": "ab\nc", "intention_reason": None}]),
+    "an opportunity id with a trailing newline": dict(subjects=[{"outcome_id": f"{OUTCOME}\n", "opportunity_id": f"{OPP}\n"}]),
+    "a date with a trailing newline": dict(date=datetime.fromtimestamp(time.time() - 5, IST).date().isoformat() + "\n"),
+    "a question hash with a trailing newline": dict(question_sha256=shown() + "\n"),
     "an unknown reason": dict(subjects=[{"outcome_id": OUTCOME, "opportunity_id": OPP, "intention_id": None, "intention_reason": "guessed"}]),
     "no reason with no id": dict(subjects=[{"outcome_id": OUTCOME, "opportunity_id": OPP, "intention_id": None, "intention_reason": None}]),
     "an intention id that is text": dict(subjects=[{"outcome_id": OUTCOME, "opportunity_id": OPP, "intention_id": "meet people building agent memory", "intention_reason": None}]),
@@ -1238,7 +1256,7 @@ def test_an_armed_file_altered_after_arming_emits_nothing(live, ctx, tenant, av)
     evening_reply(ctx, tenant, execution)
     path = tenant.armed_dir / f"{execution}.json"
     body = json.loads(path.read_text())
-    body["subject"] = {"outcome_id": "opp-outcome:forged", "opportunity_id": "forged", **NOT_LINKED}
+    body["subject"] = {"outcome_id": "opp-outcome:forged", "opportunity_id": "forged"}
     tenant.write_private(path, body)
     tenant.finish(execution)
     assert live._COLLECTOR.outcome_tick().get("armed_tampered") == 1
@@ -1456,14 +1474,19 @@ def test_an_answer_after_a_restart_carries_the_asks_intention_from_file_not_reco
     assert asked["intention_id"] == reported["intention_id"] == INTENT
 
 
-def test_an_ask_staged_before_m2b_and_answered_after_it_names_no_intention_and_says_why(live, ctx, tenant, av):
-    """A version 1 stage (the trigger from before), armed and answered by this plugin."""
-    ask_delivered(live, ctx, tenant, legacy=True)
+def test_a_version_1_stage_names_no_intention_and_says_not_recorded_on_both_events(live, ctx, tenant, av):
+    """What the trigger writes today (STAGE_FORMAT_V2 off), armed and answered
+    by this plugin: the stage carried no intention information at all."""
+    execution = ask_delivered(live, ctx, tenant)
     resident_says(ctx, "met")
     assert live._COLLECTOR.outcome_tick().get("answered") == 1
     asked, reported = asked_and_reported(av, live)
     for event in (asked, reported):
-        assert event["intention_id"] is None and event["payload"]["intention_reason"] == "predates_link"
+        assert event["intention_id"] is None and event["payload"]["intention_reason"] == "not_recorded"
+    # The ask on file keeps the four keys from before M2b.
+    [entry] = json.loads((tenant.state / "outcome-ask" / "asks.json").read_text())["asks"]
+    assert set(entry) == {"execution_id", "outcome_id", "opportunity_id", "question_hash"}
+    assert entry["execution_id"] == execution
 
 
 def test_an_ask_armed_before_m2b_is_still_confirmed_and_names_no_intention(live, tenant, av):
@@ -1473,7 +1496,30 @@ def test_an_ask_armed_before_m2b_is_still_confirmed_and_names_no_intention(live,
     forged_armed(tenant, execution, staged=end - 20, armed=end - 5, subject={"outcome_id": OUTCOME, "opportunity_id": OPP})
     assert live._COLLECTOR.outcome_tick().get("asked") == 1
     [asked] = events(av, live, "outcome.asked")
-    assert asked["intention_id"] is None and asked["payload"]["intention_reason"] == "predates_link"
+    assert asked["intention_id"] is None and asked["payload"]["intention_reason"] == "not_recorded"
+
+
+@pytest.mark.parametrize("version", [1.0, 2.0, True], ids=["float 1", "float 2", "bool"])
+def test_an_armed_file_whose_version_is_not_an_integer_is_refused(live, tenant, av, version):
+    execution = uuid.uuid4().hex
+    end = time.time() - 10
+    tenant.finish(execution, at=end)
+    subject_ = {"outcome_id": OUTCOME, "opportunity_id": OPP, **(NOT_LINKED if version == 2 else {})}
+    forged_armed(tenant, execution, staged=end - 20, armed=end - 5, subject=subject_, v=version)
+    assert live._COLLECTOR.outcome_tick().get("armed_refused") == 1
+    assert events(av, live, "outcome.asked") == []
+
+
+@pytest.mark.parametrize("version", [1.0, True], ids=["float", "bool"])
+def test_an_asks_file_whose_version_is_not_an_integer_is_refused(live, ctx, tenant, av, version):
+    execution = uuid.uuid4().hex
+    tenant.finish(execution, at=time.time() - 60)
+    question_hash = live._COLLECTOR.keyed_hash(module(live).question_key(QUESTION))
+    tenant.write_private(tenant.state / "outcome-ask" / "asks.json", {"v": version, "asks": [
+        {"execution_id": execution, "outcome_id": OUTCOME, "opportunity_id": OPP, "question_hash": question_hash}]})
+    resident_says(ctx, pointer(QUESTION, "met"))
+    assert live._COLLECTOR.outcome_tick().get("asks_refused") == 1
+    assert events(av, live, "outcome.reported") == []
 
 
 def test_an_ask_delivered_before_m2b_answered_after_it_does_not_crash_and_names_no_intention(live, ctx, tenant, av):
@@ -1486,12 +1532,13 @@ def test_an_ask_delivered_before_m2b_answered_after_it_does_not_crash_and_names_
     codes = live._COLLECTOR.outcome_tick()
     assert codes.get("answered") == 1, codes
     [reported] = events(av, live, "outcome.reported")
-    assert reported["intention_id"] is None and reported["payload"]["intention_reason"] == "predates_link"
+    assert reported["intention_id"] is None and reported["payload"]["intention_reason"] == "not_recorded"
     assert reported["outcome_id"] == OUTCOME
-    # The next ask rewrites the file in the new shape, this entry with `predates_link`.
+    # The next ask (a version 2 stage) rewrites the file: each entry in its own
+    # stage's shape, so this one keeps the four keys the plugin from before reads.
     ask_delivered(live, ctx, tenant, subjects=subject(LINKED, "second"))
     entries = {e["opportunity_id"]: e for e in json.loads((tenant.state / "outcome-ask" / "asks.json").read_text())["asks"]}
-    assert (entries[OPP]["intention_id"], entries[OPP]["intention_reason"]) == (None, "predates_link")
+    assert set(entries[OPP]) == {"execution_id", "outcome_id", "opportunity_id", "question_hash"}
     assert (entries["second"]["intention_id"], entries["second"]["intention_reason"]) == (INTENT, None)
 
 
@@ -1520,13 +1567,13 @@ def test_an_intention_switched_in_the_armed_file_emits_nothing(live, ctx, tenant
     assert events(av, live, "outcome.asked") == []
 
 
-@pytest.mark.parametrize("link", [LINKED, AMBIGUOUS, NOT_LINKED], ids=["one", "several", "none"])
+@pytest.mark.parametrize("link", [None, LINKED, AMBIGUOUS, NOT_LINKED], ids=["version 1 (production)", "one", "several", "none"])
 def test_both_events_keep_schema_version_1_and_exactly_these_keys(live, ctx, tenant, av, link):
     """No new event version and no switch: the envelope's `intention_id` is a
     registered field of every type, and `outcome.asked@1` / `outcome.reported@1`
     are open payloads (agentvillage-data `src/schemas/index.ts`). No text: the
     exact key sets, and no value outside ids, hashes, codes and constants."""
-    ask_delivered(live, ctx, tenant, subjects=subject(link))
+    ask_delivered(live, ctx, tenant, **({} if link is None else {"subjects": subject(link)}))
     resident_says(ctx, "met")
     live._COLLECTOR.outcome_tick()
     asked, reported = asked_and_reported(av, live)
@@ -1535,4 +1582,183 @@ def test_both_events_keep_schema_version_1_and_exactly_these_keys(live, ctx, ten
         assert set(event) == ENVELOPE_KEYS
         assert set(event["payload"]) == payload_keys
         assert "Arjun" not in json.dumps(event)
+        assert (event["intention_id"], event["payload"]["intention_reason"]) == ((None, "not_recorded") if link is None else (link["intention_id"], link["intention_reason"]))
     assert reported["payload"]["value"] == "met"
+
+
+# -- M2b fix round 1: a skewed roll and a roll-back, with the plugin from before -------
+#
+# During a roll the installer copies skills and plugins first and restarts the
+# gateway last (install/install.ts), so a new trigger runs beside the plugin
+# from before, still in memory; a roll-back puts that plugin back beside files
+# the new one left. The trigger keeps writing version 1 (STAGE_FORMAT_V2 off,
+# byte for byte the stage from before: outcome-ask.test.ts checks it against
+# the same frozen fixture used here), and this plugin writes the armed file and
+# the ask in the stage's own shape, so neither direction loses or repeats an ask.
+
+#: `plugins/av-events/_outcome_ask.py` at dbabadad (overlay main before M2b),
+#: byte for byte (`git show dbabadad:plugins/av-events/_outcome_ask.py`).
+#: FROZEN: never edit it; delete it with the version 1 writer.
+PLUGIN_BEFORE_M2B = Path(__file__).parent / "vectors" / "outcome_ask_dbabadad.py"
+#: The stage bytes the trigger at dbabadad wrote, which the new trigger writes too. FROZEN.
+FROZEN_STAGES = json.loads(
+    (Path(__file__).resolve().parents[3] / "skills" / "index-network" / "scripts" / "tests" / "fixtures" / "outcome-stage-v1-origin-main.json").read_text(encoding="utf-8")
+)["cases"]
+
+
+def plugin_before_m2b(plugin) -> types.ModuleType:
+    """A fresh copy of the plugin module from before M2b, inside the loaded
+    plugin's package (its `_core`, `_cron` and `_messages`, unchanged since,
+    and its `outcome_question.json`), with memory of its own: another process."""
+    module_ = types.ModuleType(f"{plugin.__name__}._outcome_ask_before_m2b")
+    module_.__file__ = str(Path(plugin.__file__).parent / "_outcome_ask.py")
+    module_.__package__ = plugin.__name__
+    exec(compile(PLUGIN_BEFORE_M2B.read_text(encoding="utf-8"), str(PLUGIN_BEFORE_M2B), "exec"), module_.__dict__)
+    return module_
+
+
+class Roll:
+    """One evening ask on the frozen stage's clock, each step run by whichever
+    plugin module is in memory at the time."""
+
+    def __init__(self, tenant, frozen: dict):
+        self.tenant, self.frozen = tenant, frozen
+        self.staged = datetime.fromisoformat(frozen["now"].replace("Z", "+00:00")).timestamp()
+        self.execution = uuid.uuid4().hex
+        self.events: list[dict] = []
+        tenant.start(self.execution, at=self.staged - 10)
+
+    def stage(self, body: str | None = None) -> None:
+        """The stage file exactly as the trigger writes it (the frozen bytes)."""
+        self.tenant.write_private(self.tenant.stage_file, self.frozen["bytes"] if body is None else body)
+
+    @staticmethod
+    def hasher(text: str) -> str:
+        return hashlib.sha256(f"k|{text}".encode("utf-8")).hexdigest()
+
+    def emit(self, event_type, payload, **refs):
+        event = {"event_type": event_type, "payload": dict(payload), **refs}
+        self.events.append(event)
+        return event
+
+    def arm(self, mod) -> str | None:
+        return mod.arm(str(self.tenant.state), str(self.tenant.home), session_id=f"cron_{JOB}_20261014_190000",
+                       task_id=f"cron:{JOB}:{self.execution}", reply=self.frozen["question"], hasher=self.hasher,
+                       capture="full", now=self.staged + 5)
+
+    def deliver(self) -> None:
+        self.tenant.finish(self.execution, at=self.staged + 30)
+
+    def tick(self, mod, after: float = 35) -> dict:
+        return mod.tick(str(self.tenant.state), str(self.tenant.home), self.emit, self.staged + after)
+
+    def answer(self, mod, text: str = "met") -> dict:
+        """The resident replies to the question (a Telegram reply: it counts after a restart too), then a tick."""
+        mod.note_answer(str(self.tenant.state), text=pointer(self.frozen["question"], text), session_id="tg1", turn_id="t-1",
+                        now=self.staged + 60, hasher=self.hasher)
+        return self.tick(mod, after=65)
+
+    def of(self, event_type: str) -> list[dict]:
+        return [e for e in self.events if e["event_type"] == event_type]
+
+    def asked_on_file(self) -> bool:
+        """The subject is in the asked ledger, which the trigger reads (readAskedIds): it is not asked again."""
+        return self.frozen["opportunity_id"] in self.tenant.asked_ledger()
+
+
+@pytest.mark.parametrize("frozen", FROZEN_STAGES, ids=[c["name"] for c in FROZEN_STAGES])
+def test_the_plugin_from_before_arms_confirms_and_records_the_stage_the_new_trigger_writes(plugin, tenant, frozen):
+    """Probe S6, a skewed roll: the new trigger runs, the gateway still has the
+    plugin from before in memory. Accepted, armed, asked, recorded, answered."""
+    old = plugin_before_m2b(plugin)
+    roll = Roll(tenant, frozen)
+    roll.stage()
+    assert roll.arm(old) == "armed"
+    roll.deliver()
+    codes = roll.tick(old)
+    assert codes == {"asked": 1}, codes
+    assert roll.asked_on_file()
+    [asked] = roll.of("outcome.asked")
+    assert asked["outcome_id"] == f"opp-outcome:{frozen['opportunity_id']}"
+    assert roll.answer(old) == {"answered": 1}
+    assert [e["payload"]["value"] for e in roll.of("outcome.reported")] == ["met"]
+
+
+@pytest.mark.parametrize("frozen", FROZEN_STAGES[:2], ids=[c["name"] for c in FROZEN_STAGES[:2]])
+def test_rolled_back_after_this_plugin_armed_the_plugin_from_before_confirms_the_ask(plugin, tenant, frozen):
+    """Probe S7: this plugin armed the new trigger's stage, then a roll-back
+    restarts the gateway on the plugin from before, which confirms it."""
+    new = module(plugin)
+    new.reset_memory()
+    roll = Roll(tenant, frozen)
+    roll.stage()
+    assert roll.arm(new) == "armed"
+    [armed] = [json.loads(p.read_text()) for p in tenant.armed_dir.glob("*.json")]
+    assert armed["v"] == 1 and set(armed["subject"]) == {"outcome_id", "opportunity_id"}
+    old = plugin_before_m2b(plugin)  # the roll-back: a new process, the old code
+    roll.deliver()
+    codes = roll.tick(old)
+    assert codes == {"asked": 1}, codes
+    assert roll.asked_on_file()
+    assert roll.answer(old) == {"answered": 1}
+
+
+@pytest.mark.parametrize("frozen", FROZEN_STAGES[:2], ids=[c["name"] for c in FROZEN_STAGES[:2]])
+def test_rolled_back_after_this_plugin_asked_the_plugin_from_before_takes_the_answer(plugin, tenant, frozen):
+    """Probe S8: this plugin asked (an ask on file), then a roll-back; the
+    resident's answer is taken by the plugin from before, for the same ask."""
+    new = module(plugin)
+    new.reset_memory()
+    roll = Roll(tenant, frozen)
+    roll.stage()
+    assert roll.arm(new) == "armed"
+    roll.deliver()
+    assert roll.tick(new) == {"asked": 1}
+    [asked] = roll.of("outcome.asked")
+    # What this plugin emits in production today: no intention, `not_recorded`.
+    assert asked["intention_id"] is None and asked["payload"]["intention_reason"] == "not_recorded"
+    [entry] = json.loads((tenant.state / "outcome-ask" / "asks.json").read_text())["asks"]
+    assert set(entry) == {"execution_id", "outcome_id", "opportunity_id", "question_hash"}
+    old = plugin_before_m2b(plugin)
+    codes = roll.answer(old)
+    assert codes == {"answered": 1}, codes
+    [reported] = roll.of("outcome.reported")
+    assert reported["in_reply_to_event_id"] == asked["event_id"]
+    assert roll.asked_on_file()
+
+
+def test_rolled_forward_an_ask_the_plugin_from_before_armed_is_confirmed_and_answered_here(plugin, tenant):
+    """The roll's other direction: armed by the plugin from before, confirmed
+    and answered by this one, with no intention and `not_recorded`."""
+    old = plugin_before_m2b(plugin)
+    roll = Roll(tenant, FROZEN_STAGES[0])
+    roll.stage()
+    assert roll.arm(old) == "armed"
+    new = module(plugin)
+    new.reset_memory()
+    roll.deliver()
+    assert roll.tick(new) == {"asked": 1}
+    assert roll.answer(new) == {"answered": 1}
+    asked, reported = roll.of("outcome.asked")[0], roll.of("outcome.reported")[0]
+    for event in (asked, reported):
+        assert event["intention_id"] is None and event["payload"]["intention_reason"] == "not_recorded"
+    assert reported["in_reply_to_event_id"] == asked["event_id"]
+
+
+def test_why_the_writer_stays_off_the_plugin_from_before_refuses_a_version_2_stage(plugin, tenant):
+    """What STAGE_FORMAT_V2 on would cost before every tenant reads version 2:
+    the question goes out, the stage is refused, nothing is recorded, and the
+    resident is asked again the next evening. This plugin arms the same stage."""
+    frozen = FROZEN_STAGES[0]
+    body = json.loads(frozen["bytes"])
+    body["v"] = 2
+    body["subjects"] = [{**body["subjects"][0], **NOT_LINKED}]
+    old = plugin_before_m2b(plugin)
+    roll = Roll(tenant, frozen)
+    roll.stage(json.dumps(body))
+    assert roll.arm(old) == "stage_refused"
+    assert not roll.asked_on_file()
+    roll.stage(json.dumps(body))
+    new = module(plugin)
+    new.reset_memory()
+    assert roll.arm(new) == "armed"
