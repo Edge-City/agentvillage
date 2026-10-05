@@ -47,6 +47,7 @@ Logs: codes and counts only. Python 3.11, standard library only.
 
 from __future__ import annotations
 
+import hashlib
 import itertools
 import json
 import os
@@ -114,7 +115,11 @@ DELIVERED = frozenset({"delivered", "queued"})
 #:   for it (QUESTION_SEARCH);
 #: - `marker`: what a Telegram reply pointer's quote must contain for the
 #:   message to be an answer at all (QUESTION_MARKER);
-#: - `normalise`: the spaces and the wrapper pairs `normalise_reply` uses.
+#: - `normalise`: the spaces and the wrapper pairs `normalise_reply` uses;
+#: - `key`: the question key (`question_key`); the trigger writes the plain
+#:   SHA-256 of the key of the exact question it showed into the stage
+#:   (`question_sha256`), and `cases.arm` gives the expected key and hash of
+#:   each reply that arms.
 QUESTION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outcome_question.json")
 
 
@@ -128,28 +133,32 @@ class _Question:
         self.marker: Optional["re.Pattern[str]"] = None
         self.spaces: tuple[str, ...] = ()
         self.wrappers: tuple[tuple[str, str], ...] = ()
+        self.key_remove: Optional["re.Pattern[str]"] = None
         try:
             with open(path, encoding="utf-8") as handle:
                 seed = json.load(handle)
             sentence, marker, rules = seed["sentence"], seed["marker"], seed["normalise"]
+            remove = seed["key"]["remove"]
             spaces = tuple(s for s in rules["spaces"] if isinstance(s, str) and len(s) == 1)
             wrappers = tuple((o, c) for o, c in rules["wrappers"] if isinstance(o, str) and isinstance(c, str) and o and c)
-            if not (isinstance(sentence, str) and isinstance(marker, str) and marker):
+            if not (isinstance(sentence, str) and isinstance(marker, str) and marker and isinstance(remove, str) and remove):
                 return
             self.pattern = re.compile(f"^(?:{sentence})$")
             self.search = re.compile(sentence)
             self.marker = re.compile(marker)
+            self.key_remove = re.compile(f"[{re.escape(remove)}]")
             self.spaces, self.wrappers = spaces, wrappers
         except (OSError, ValueError, TypeError, KeyError, AttributeError, re.error):
-            self.pattern = self.search = self.marker = None
+            self.pattern = self.search = self.marker = self.key_remove = None
 
 
 _QUESTION = _Question()
 QUESTION_PATTERN = _QUESTION.pattern
 QUESTION_SEARCH = _QUESTION.search
 QUESTION_MARKER = _QUESTION.marker
-#: Removed from the question key (Telegram shows the markup, never sends it back in a quote).
-_KEY_MARKUP = re.compile(r"[*_`~]")
+#: Collapsed to one space in the question key: ASCII whitespace only, the
+#: same set in Python and in the trigger's TypeScript.
+_KEY_SPACES = re.compile(r"[ \t\n\r\f\v]+")
 
 
 def _emoji(ch: str) -> bool:
@@ -193,10 +202,20 @@ def is_the_question(reply: Any) -> bool:
 
 
 def question_key(sentence: str) -> str:
-    """The `key` of QUESTION_FILE: markup removed, whitespace runs as one
-    space, no final full stop, case-folded. Hashed, never stored as text."""
-    key = " ".join(_KEY_MARKUP.sub("", _plain_spaces(sentence)).split())
-    return (key[:-1] if key.endswith(".") else key).casefold()
+    """The `key` of QUESTION_FILE: the special spaces as spaces, every `*`,
+    `_`, `` ` `` and `~` removed, ASCII whitespace runs as one space,
+    stripped, no final full stop, lower-cased (Unicode default lower case,
+    the same as TypeScript's `toLowerCase`). Hashed, never stored as text."""
+    # `key.remove` goes: Telegram shows the markup and never sends it back in a quote.
+    removed = _QUESTION.key_remove.sub("", _plain_spaces(sentence)) if _QUESTION.key_remove else sentence
+    key = _KEY_SPACES.sub(" ", removed).strip(" ")
+    return (key[:-1] if key.endswith(".") else key).lower()
+
+
+def question_sha256(sentence: str) -> str:
+    """The plain SHA-256 of the question key: what the trigger writes into the
+    stage as `question_sha256` for the question it showed."""
+    return hashlib.sha256(question_key(sentence).encode("utf-8")).hexdigest()
 
 
 def quoted_question_key(quote: str) -> Optional[str]:
@@ -229,7 +248,7 @@ ANSWERS = {
 #: A message starting with one of these is a quote, not an answer.
 _QUOTE_MARKS = frozenset("\"'“”‘’«»„‚‹›")
 
-STAGE_KEYS = frozenset({"v", "action", "date", "staged_at", "asked_by", "window_days", "subjects"})
+STAGE_KEYS = frozenset({"v", "action", "date", "staged_at", "asked_by", "window_days", "question_sha256", "subjects"})
 SUBJECT_KEYS = frozenset({"outcome_id", "opportunity_id"})
 ARMED_KEYS = frozenset({"v", "execution_id", "job_id", "session_id", "staged_epoch", "armed_epoch", "message_hash", "question_hash", "subject"})
 ASK_KEYS = frozenset({"execution_id", "outcome_id", "opportunity_id", "question_hash"})
@@ -492,11 +511,14 @@ def valid_stage(data: Any) -> Optional[dict]:
     staged = epoch_from_iso(iso_from_text(staged_at))
     if staged is None or datetime.fromtimestamp(staged, IST).date().isoformat() != date:
         return None
+    question = data.get("question_sha256")
+    if not (isinstance(question, str) and _HASH.match(question)):
+        return None
     subjects = data.get("subjects")
     if not isinstance(subjects, list) or len(subjects) != 1:
         return None
     subject = _subject(subjects[0])
-    return {"staged": staged, "subject": subject} if subject else None
+    return {"staged": staged, "subject": subject, "question_sha256": question} if subject else None
 
 
 def staged_action(home: str, job_id: Any) -> Optional[str]:
@@ -574,6 +596,11 @@ def arm(
         # Hermes's error text) is treated as silent: no ask, the subject stays due.
         _unlink(path)
         return "not_the_question"
+    if question_sha256(normalise_reply(reply)) != stage["question_sha256"]:
+        # The question's shape, but not the question the trigger showed (other
+        # text in the name slot, another name): treated as silent too.
+        _unlink(path)
+        return "question_mismatch"
     claim = os.path.join(armed_dir(state_dir), f"{execution_id}.claim")
     try:
         os.makedirs(armed_dir(state_dir), mode=DIR_MODE, exist_ok=True)
@@ -1023,6 +1050,7 @@ __all__ = [
     "QUESTION_SEARCH",
     "normalise_reply",
     "question_key",
+    "question_sha256",
     "quoted_question_key",
     "arm",
     "armed_dir",

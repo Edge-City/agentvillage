@@ -11,6 +11,7 @@ the model can write.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -27,6 +28,12 @@ OTHER_JOB = "0123456789ab"
 OPP = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d"
 OUTCOME = f"opp-outcome:{OPP}"
 QUESTION = "Did you and Arjun meet? Reply met, not useful, or missed."
+
+
+def shown(name: str = "Arjun") -> str:
+    """The stage's `question_sha256` for the question the trigger showed with
+    `name`: the plain SHA-256 of its key, computed here independently."""
+    return hashlib.sha256(f"did you and {name.lower()} meet? reply met, not useful, or missed".encode("utf-8")).hexdigest()
 IST = timezone(timedelta(hours=5, minutes=30))
 
 #: `cron/executions.py`'s table with the `delivery_outcome` column later tags add.
@@ -65,11 +72,11 @@ class Tenant:
     def stage_file(self):
         return self.state / "proactive" / "outcome-ask-evening.json"
 
-    def stage_body(self, *, at: float | None = None, subjects=None, **over) -> dict:
+    def stage_body(self, *, at: float | None = None, subjects=None, name: str = "Arjun", **over) -> dict:
         staged = time.time() - 5 if at is None else at
         body = {
             "v": 1, "action": "evening", "date": datetime.fromtimestamp(staged, IST).date().isoformat(),
-            "staged_at": utc(staged), "asked_by": "outcome_cron", "window_days": 1,
+            "staged_at": utc(staged), "asked_by": "outcome_cron", "window_days": 1, "question_sha256": shown(name),
             "subjects": subjects or [{"outcome_id": OUTCOME, "opportunity_id": OPP}],
         }
         body.update(over)
@@ -272,12 +279,55 @@ def test_the_question_pattern_is_the_one_shared_constant(plugin):
 QUESTION_CASES = json.loads(open(os.path.join(os.path.dirname(__file__), "..", "outcome_question.json"), encoding="utf-8").read())["cases"]
 
 
-@pytest.mark.parametrize("reply", QUESTION_CASES["arm"])
-def test_the_shared_cases_that_arm(plugin, reply):
+@pytest.mark.parametrize("case", QUESTION_CASES["arm"], ids=lambda case: case["key"])
+def test_the_shared_cases_that_arm(plugin, case):
     """Bold, a trailing emoji, no final full stop, a non-breaking space, a
-    lower-case "reply", quotes around the whole question: the same table the
-    bun test checks."""
-    assert module(plugin).is_the_question(reply), reply
+    lower-case "reply", quotes around the whole question: the same table, with
+    the same keys and hashes, that the bun test checks against the trigger."""
+    mod = module(plugin)
+    reply = case["reply"]
+    assert mod.is_the_question(reply), reply
+    assert mod.question_key(mod.normalise_reply(reply)) == case["key"]
+    assert mod.question_sha256(mod.normalise_reply(reply)) == case["sha256"] == hashlib.sha256(case["key"].encode("utf-8")).hexdigest()
+
+
+@pytest.mark.parametrize("reply", QUESTION_CASES["mismatch"]["replies"])
+def test_the_shared_cases_that_fit_the_sentence_but_are_not_the_question_shown(live, ctx, tenant, av, reply):
+    """Round 3 item 1: other text in the name slot with no question mark (a
+    second person in brackets, a reminder, a markdown link) fits the pattern;
+    only the trigger's `question_sha256` refuses it."""
+    mod = module(live)
+    name = QUESTION_CASES["mismatch"]["shown_name"]
+    assert mod.is_the_question(reply)
+    assert mod.question_sha256(mod.normalise_reply(reply)) != shown(name)
+    execution = uuid.uuid4().hex
+    tenant.stage(name=name)
+    evening_reply(ctx, tenant, execution, reply)
+    assert not tenant.stage_file.exists() and tenant.armed() == []
+    tenant.finish(execution)
+    live._COLLECTOR.outcome_tick()
+    assert events(av, live, "outcome.asked") == []
+
+
+@pytest.mark.parametrize("reply", [
+    "Did you and Maya meet? Reply met, not useful, or missed.",
+    "Did you and **Maya** meet? Reply met, not useful, or missed.",
+    "**Did you and Maya meet? Reply met, not useful, or missed.** \U0001f642",
+])
+def test_the_question_shown_arms_with_its_name_bold_or_plain(live, ctx, tenant, av, reply):
+    execution = uuid.uuid4().hex
+    tenant.stage(name="Maya")
+    evening_reply(ctx, tenant, execution, reply)
+    tenant.finish(execution)
+    assert live._COLLECTOR.outcome_tick().get("asked") == 1
+
+
+def test_a_stage_without_the_question_hash_does_not_arm(live, ctx, tenant, av):
+    body = tenant.stage_body()
+    del body["question_sha256"]
+    tenant.write_private(tenant.stage_file, body)
+    evening_reply(ctx, tenant, uuid.uuid4().hex)
+    assert not tenant.stage_file.exists() and tenant.armed() == []
 
 
 @pytest.mark.parametrize("reply", QUESTION_CASES["unarmed"])
@@ -596,7 +646,7 @@ def test_a_reply_to_yesterdays_question_is_never_counted_for_tonights_ask(live, 
     ask_delivered(live, ctx, tenant)
     time.sleep(0.01)
     execution = uuid.uuid4().hex
-    tenant.stage(subjects=SECOND)
+    tenant.stage(subjects=SECOND, name="Priya")
     evening_reply(ctx, tenant, execution, PRIYA)
     tenant.finish(execution)
     live._COLLECTOR.outcome_tick()
@@ -610,7 +660,7 @@ def test_a_reply_to_tonights_question_counts_even_after_other_messages(live, ctx
     ask_delivered(live, ctx, tenant)
     time.sleep(0.01)
     execution = uuid.uuid4().hex
-    tenant.stage(subjects=SECOND)
+    tenant.stage(subjects=SECOND, name="Priya")
     evening_reply(ctx, tenant, execution, PRIYA)
     tenant.finish(execution)
     live._COLLECTOR.outcome_tick()
@@ -982,6 +1032,8 @@ FORGED_STAGES = {
     "another action": dict(action="brief"),
     "a date that is not the stamp's": dict(date="2020-01-01"),
     "a stamp that is not a time": dict(staged_at="soon"),
+    "a question hash that is not a hash": dict(question_sha256="Did you and Arjun meet?"),
+    "an upper-case question hash": dict(question_sha256="A" * 64),
 }
 
 

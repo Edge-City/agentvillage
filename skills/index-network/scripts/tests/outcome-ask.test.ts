@@ -6,6 +6,7 @@
  * plugins/av-events/tests/test_outcome_ask.py.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -123,6 +124,8 @@ describe("the evening asks about one accepted connection announced two or more d
     const staged = stage()!;
     expect(staged).toEqual({
       v: 1, action: "evening", date: DATE, staged_at: EVENING.toISOString(), asked_by: "outcome_cron", window_days: 1,
+      // Round 3: the plain SHA-256 of the key of the exact question shown, a hash and never the text.
+      question_sha256: createHash("sha256").update("did you and arjun mehta meet? reply met, not useful, or missed", "utf8").digest("hex"),
       subjects: [{ outcome_id: `opp-outcome:${OPP}`, opportunity_id: OPP }],
     });
     expect(readFileSync(stagePath(home), "utf8")).not.toContain("Arjun");

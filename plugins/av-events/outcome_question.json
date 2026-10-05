@@ -1,6 +1,6 @@
 {
-  "version": "outcome_question_v2",
-  "about": "The evening outcome ask's fixed question, read by plugins/av-events/_outcome_ask.py and by install/tests/proactive_jobs.test.ts. The plugin arms only when the model's reply, after the normalise steps (for matching only; the message hash is of the reply as it is), fully matches ^sentence$. A Telegram reply pointer can be an answer only when its quote contains marker; the question sentence is then found in the quote by an unanchored search for sentence. Both suites check every entry of cases.",
+  "version": "outcome_question_v3",
+  "about": "The evening outcome ask's fixed question, read by plugins/av-events/_outcome_ask.py, by the trigger's questionSha256 (skills/index-network/scripts/outcome-ask.ts) and by install/tests/proactive_jobs.test.ts. The plugin arms only when the model's reply, after the normalise steps (for matching only; the message hash is of the reply as it is), fully matches ^sentence$ AND the SHA-256 of its question key equals the stage's question_sha256, which the trigger computes from the exact question it showed. A Telegram reply pointer's quote is searched for sentence. Both suites check every entry of cases.",
   "sentence": "Did you and [^?\\n]{1,64} meet\\? [Rr][Ee][Pp][Ll][Yy] met, not useful, or missed\\.?",
   "marker": "[Rr][Ee][Pp][Ll][Yy] met, not useful, or missed",
   "normalise": {
@@ -12,25 +12,137 @@
       "strip: surrounding whitespace",
       "trailing_emoji: again, for emoji inside the wrapper"
     ],
-    "spaces": [" ", " ", " "],
-    "wrappers": [["**", "**"], ["*", "*"], ["_", "_"], ["\"", "\""], ["“", "”"], ["‘", "’"], ["'", "'"], ["«", "»"]]
+    "spaces": [
+      "\u00a0",
+      "\u2007",
+      "\u202f"
+    ],
+    "wrappers": [
+      [
+        "**",
+        "**"
+      ],
+      [
+        "*",
+        "*"
+      ],
+      [
+        "_",
+        "_"
+      ],
+      [
+        "\"",
+        "\""
+      ],
+      [
+        "\u201c",
+        "\u201d"
+      ],
+      [
+        "\u2018",
+        "\u2019"
+      ],
+      [
+        "'",
+        "'"
+      ],
+      [
+        "\u00ab",
+        "\u00bb"
+      ]
+    ]
   },
-  "key": "The question key, hashed with the tenant's key at arm time and for a pointer's quote: the sentence found after normalising, with every *, _, ` and ~ removed, whitespace runs as one space, no final full stop, case-folded.",
+  "key": {
+    "about": "The question key: the normalise spaces as plain spaces; every character of remove deleted; each run of whitespace (ASCII space, tab, newline, carriage return, form feed, vertical tab) as one space; stripped of spaces; one final full stop removed; lower-cased by Unicode default lower case (Python str.lower, TypeScript toLowerCase). Its plain SHA-256 (UTF-8) is the stage's question_sha256; its keyed hash is the ask's question_hash.",
+    "remove": "*_`~"
+  },
   "cases": {
     "arm": [
-      "Did you and Maya meet? Reply met, not useful, or missed.",
-      "Did you and **Maya** meet? Reply met, not useful, or missed.",
-      "**Did you and Maya meet? Reply met, not useful, or missed.**",
-      "*Did you and Maya meet? Reply met, not useful, or missed.*",
-      "_Did you and Maya meet? Reply met, not useful, or missed._",
-      "Did you and Maya meet? Reply met, not useful, or missed. 🙂",
-      "**Did you and Maya meet? Reply met, not useful, or missed.** 👋🏽",
-      "Did you and Maya meet? Reply met, not useful, or missed",
-      "Did you and Maya meet? reply met, not useful, or missed.",
-      "Did you and Maya meet? Reply met, not useful, or missed.",
-      "“Did you and Maya meet? Reply met, not useful, or missed.”",
-      "\"Did you and Maya meet? Reply met, not useful, or missed.\"",
-      "  Did you and D’Souza meet? Reply met, not useful, or missed.  \n"
+      {
+        "reply": "Did you and Maya meet? Reply met, not useful, or missed.",
+        "key": "did you and maya meet? reply met, not useful, or missed",
+        "sha256": "f7d6fb48df3635e5844d5d39678c74611dafff7f237e6b17ca711d53afa8259a"
+      },
+      {
+        "reply": "Did you and **Maya** meet? Reply met, not useful, or missed.",
+        "key": "did you and maya meet? reply met, not useful, or missed",
+        "sha256": "f7d6fb48df3635e5844d5d39678c74611dafff7f237e6b17ca711d53afa8259a"
+      },
+      {
+        "reply": "**Did you and Maya meet? Reply met, not useful, or missed.**",
+        "key": "did you and maya meet? reply met, not useful, or missed",
+        "sha256": "f7d6fb48df3635e5844d5d39678c74611dafff7f237e6b17ca711d53afa8259a"
+      },
+      {
+        "reply": "*Did you and Maya meet? Reply met, not useful, or missed.*",
+        "key": "did you and maya meet? reply met, not useful, or missed",
+        "sha256": "f7d6fb48df3635e5844d5d39678c74611dafff7f237e6b17ca711d53afa8259a"
+      },
+      {
+        "reply": "_Did you and Maya meet? Reply met, not useful, or missed._",
+        "key": "did you and maya meet? reply met, not useful, or missed",
+        "sha256": "f7d6fb48df3635e5844d5d39678c74611dafff7f237e6b17ca711d53afa8259a"
+      },
+      {
+        "reply": "Did you and Maya meet? Reply met, not useful, or missed. \ud83d\ude42",
+        "key": "did you and maya meet? reply met, not useful, or missed",
+        "sha256": "f7d6fb48df3635e5844d5d39678c74611dafff7f237e6b17ca711d53afa8259a"
+      },
+      {
+        "reply": "**Did you and Maya meet? Reply met, not useful, or missed.** \ud83d\udc4b\ud83c\udffd",
+        "key": "did you and maya meet? reply met, not useful, or missed",
+        "sha256": "f7d6fb48df3635e5844d5d39678c74611dafff7f237e6b17ca711d53afa8259a"
+      },
+      {
+        "reply": "Did you and Maya meet? Reply met, not useful, or missed",
+        "key": "did you and maya meet? reply met, not useful, or missed",
+        "sha256": "f7d6fb48df3635e5844d5d39678c74611dafff7f237e6b17ca711d53afa8259a"
+      },
+      {
+        "reply": "Did you and Maya meet? reply met, not useful, or missed.",
+        "key": "did you and maya meet? reply met, not useful, or missed",
+        "sha256": "f7d6fb48df3635e5844d5d39678c74611dafff7f237e6b17ca711d53afa8259a"
+      },
+      {
+        "reply": "Did you and Maya meet?\u00a0Reply met, not useful, or missed.",
+        "key": "did you and maya meet? reply met, not useful, or missed",
+        "sha256": "f7d6fb48df3635e5844d5d39678c74611dafff7f237e6b17ca711d53afa8259a"
+      },
+      {
+        "reply": "\u201cDid you and Maya meet? Reply met, not useful, or missed.\u201d",
+        "key": "did you and maya meet? reply met, not useful, or missed",
+        "sha256": "f7d6fb48df3635e5844d5d39678c74611dafff7f237e6b17ca711d53afa8259a"
+      },
+      {
+        "reply": "\"Did you and Maya meet? Reply met, not useful, or missed.\"",
+        "key": "did you and maya meet? reply met, not useful, or missed",
+        "sha256": "f7d6fb48df3635e5844d5d39678c74611dafff7f237e6b17ca711d53afa8259a"
+      },
+      {
+        "reply": "  Did you and D\u2019Souza meet? Reply met, not useful, or missed.  \n",
+        "key": "did you and d\u2019souza meet? reply met, not useful, or missed",
+        "sha256": "e00e0fa23dfdc952db317607149a7a614995f132803edd587fee34fb9e443f3e"
+      },
+      {
+        "reply": "Did you and Stra\u00dfe meet? Reply met, not useful, or missed.",
+        "key": "did you and stra\u00dfe meet? reply met, not useful, or missed",
+        "sha256": "d857684c893d017c2cacdcb667549ab3652e97ac7f3b03a0dadeae412f60ec60"
+      },
+      {
+        "reply": "Did you and \u039f\u0394\u03a5\u03a3\u03a3\u0395\u0391\u03a3 meet? Reply met, not useful, or missed.",
+        "key": "did you and \u03bf\u03b4\u03c5\u03c3\u03c3\u03b5\u03b1\u03c2 meet? reply met, not useful, or missed",
+        "sha256": "2ef5e4aba00ede69fa74160a1c1ff412bdc08260d43a875dc746b49c3e197c42"
+      },
+      {
+        "reply": "Did you and \u0130lkay meet? Reply met, not useful, or missed.",
+        "key": "did you and i\u0307lkay meet? reply met, not useful, or missed",
+        "sha256": "709a11c0befdbd719e6b6a4e5c65cd48152cdeafbb0c68e48cdc6693f8913316"
+      },
+      {
+        "reply": "Did you and Ana   Lu meet? Reply met, not useful, or missed.",
+        "key": "did you and ana lu meet? reply met, not useful, or missed",
+        "sha256": "b5106866c0ad3c9426410e0b12d2e5e6095d2b38183a5ee63f68081c7054b8fc"
+      }
     ],
     "unarmed": [
       "Did you and Maya meet? Also did you and Ravi meet? Reply met, not useful, or missed.",
@@ -39,7 +151,7 @@
       "Did you and Maya meet?\nReply met, not useful, or missed.",
       "Did you and Maya meet? Reply met, not useful, or missed. Also, enjoy dinner!",
       "Good evening! Did you and Maya meet? Reply met, not useful, or missed.",
-      "Cronjob Response: Edge — evening questions\n\nDid you and Maya meet? Reply met, not useful, or missed.",
+      "Cronjob Response: Edge \u2014 evening questions\n\nDid you and Maya meet? Reply met, not useful, or missed.",
       "Did you and Maya meet? Reply met, not useful, or missed.!",
       "**Did you and Maya meet? Reply met, not useful, or missed.",
       "***Did you and Maya meet? Reply met, not useful, or missed.***",
@@ -47,6 +159,18 @@
       "Priya is still waiting to hear from you.",
       "Sorry, I hit an error and could not finish this note.",
       "Did you and Maya meet? Reply yes or no."
-    ]
+    ],
+    "mismatch": {
+      "about": "Replies that fit the sentence but are not the question the trigger showed for shown_name: the plugin does not arm.",
+      "shown_name": "Maya",
+      "replies": [
+        "Did you and Maya (and Ravi) meet? Reply met, not useful, or missed.",
+        "Did you and Maya. Priya is still waiting on you. Also Ravi meet? Reply met, not useful, or missed.",
+        "Did you and Maya meet tonight, and did you and Ravi meet? Reply met, not useful, or missed.",
+        "Did you and [Maya](https://x.example) meet? Reply met, not useful, or missed.",
+        "Did you and Maya \ud83d\ude42 meet? Reply met, not useful, or missed.",
+        "Did you and Ravi meet? Reply met, not useful, or missed."
+      ]
+    }
   }
 }

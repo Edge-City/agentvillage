@@ -26,6 +26,7 @@
  * (proactive.ts outcomePluginOff, readAskedIds).
  */
 
+import { createHash } from "node:crypto";
 import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -180,6 +181,30 @@ export function dueSubjects(state: Record<string, unknown>, asked: Set<string>, 
     .map(([id]) => id);
 }
 
+/**
+ * The question key, as plugins/av-events/outcome_question.json `key` defines
+ * it (and the plugin's `question_key` computes it): these spaces as plain
+ * spaces; every character of KEY_REMOVE deleted; ASCII whitespace runs as one
+ * space; stripped; one final full stop off; lower-cased. The bun test checks
+ * both constants and every case of that file against this function.
+ */
+export const QUESTION_SPACES = ["\u00a0", "\u2007", "\u202f"];
+export const KEY_REMOVE = "*_`~";
+
+export function questionKey(sentence: string): string {
+  let text = sentence;
+  for (const space of QUESTION_SPACES) text = text.split(space).join(" ");
+  text = Array.from(text).filter((ch) => !KEY_REMOVE.includes(ch)).join("");
+  text = text.replace(/[ \t\n\r\f\v]+/g, " ").replace(/^ +| +$/g, "");
+  if (text.endsWith(".")) text = text.slice(0, -1);
+  return text.toLowerCase();
+}
+
+/** The plain SHA-256 (hex) of the question key: the stage's `question_sha256`, a hash and never the text. */
+export function questionSha256(sentence: string): string {
+  return createHash("sha256").update(questionKey(sentence), "utf8").digest("hex");
+}
+
 export interface OutcomeStage {
   v: 1;
   action: typeof OUTCOME_ASK_ACTION;
@@ -187,10 +212,12 @@ export interface OutcomeStage {
   staged_at: string;
   asked_by: typeof ASKED_BY;
   window_days: number;
+  /** The SHA-256 of the key of the exact question shown to the model: the plugin arms only on a reply with this key. */
+  question_sha256: string;
   subjects: Array<{ outcome_id: string; opportunity_id: string }>;
 }
 
-export function stageFor(opportunityId: string, date: string, now: Date): OutcomeStage | null {
+export function stageFor(opportunityId: string, date: string, now: Date, question: string): OutcomeStage | null {
   const id = outcomeId(opportunityId);
   if (!id) return null;
   return {
@@ -200,6 +227,7 @@ export function stageFor(opportunityId: string, date: string, now: Date): Outcom
     staged_at: now.toISOString(),
     asked_by: ASKED_BY,
     window_days: WINDOW_DAYS,
+    question_sha256: questionSha256(question),
     subjects: [{ outcome_id: id, opportunity_id: opportunityId }],
   };
 }

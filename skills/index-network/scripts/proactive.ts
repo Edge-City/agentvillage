@@ -649,10 +649,11 @@ async function outcomeAskDecision(run: Run): Promise<Decision | { fallback: stri
   }
   if (!id || !name) return { fallback: "outcome-ask-name-withheld", withheld: w.count };
   const subject = id;
-  const stage = stageFor(id, run.date, run.now);
+  const question = outcomeQuestion(name);
+  const stage = stageFor(id, run.date, run.now, question);
   if (!stage) return { fallback: "outcome-ask-bad-id" };
   return {
-    view: { job: "evening-note", date: run.date, outcomeQuestion: outcomeQuestion(name) },
+    view: { job: "evening-note", date: run.date, outcomeQuestion: question },
     withheld: w.count,
     record: (latest) => recordAttempt(latest, subject, run.date, asked),
     beforeWake: () => writeStage(run.home, stage),
