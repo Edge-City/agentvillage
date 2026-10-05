@@ -490,6 +490,29 @@ describe("resuming a job paused across its slot (Hermes keeps the missed run due
     expect(run("set", "--job", "drop-midday", "--enabled", "true")).toEqual({ code: 1, out: { ok: false, error: "hermes-failed", step: "reanchor", applied: ["enabled"], resumeMayFire: true } });
   });
 
+  test("the lock is lost after the resume, before the re-anchor: lock-lost, the resume in applied, and the reply says it may fire", () => {
+    const id = job(MIDDAY)!.id;
+    const takeover = ctx({ hermes: (args) => {
+      execFileSync(bin, args, { stdio: "ignore", env: process.env });
+      // Another command took the lock over while the resume ran.
+      if (args[1] === "resume") writeFileSync(jobsLockPath(home), JSON.stringify({ token: "another-command", pid: 1, at: new Date().toISOString() }));
+    } });
+    expect(runJobsCommand(["set", "--job", "drop-midday", "--enabled", "true"], takeover))
+      .toEqual({ code: 1, out: { ok: false, error: "lock-lost", applied: ["enabled"], resumeMayFire: true } });
+    // No re-anchor ran: Hermes still holds the missed run as due.
+    expect(cronCalls().at(-1)).toEqual(["cron", "resume", id]);
+    expect(job(MIDDAY)!.next_run_at).toBe("2026-01-01T12:13:00+05:30");
+  });
+
+  test("a lock lost before the resume runs says nothing about a catch-up", () => {
+    const takeover = ctx({ hermes: (args) => {
+      execFileSync(bin, args, { stdio: "ignore", env: process.env });
+      if (args[1] === "edit") writeFileSync(jobsLockPath(home), JSON.stringify({ token: "another-command", pid: 1, at: new Date().toISOString() }));
+    } });
+    expect(runJobsCommand(["set", "--job", "drop-midday", "--schedule", "0 13 * * *", "--enabled", "true"], takeover))
+      .toEqual({ code: 1, out: { ok: false, error: "lock-lost", applied: ["schedule"] } });
+  });
+
   test("--schedule on a paused job leaves Hermes's next run stale; the resume re-anchors it to the new schedule", () => {
     run("set", "--job", "drop-midday", "--schedule", "0 13 * * *");
     expect(job(MIDDAY)!.next_run_at).toBe("2026-01-01T12:13:00+05:30");
@@ -968,6 +991,28 @@ describe("Hermes's zone: two names of one zone agree, and only the tenant's file
     expect(hermesZone(home)).toBeNull();
   });
 
+  test("only the listed links agree: this runtime resolves no other, so two other names of one zone are refused (the conservative direction)", () => {
+    // Checked on the bun CI pins (1.4.2): Intl leaves every link as written. If a runtime
+    // starts resolving links, these pairs agree instead and docs/design/job-settings.md §3 changes.
+    for (const [link, zone] of [["US/Eastern", "America/New_York"], ["Europe/Kiev", "Europe/Kyiv"], ["Asia/Saigon", "Asia/Ho_Chi_Minh"]]) {
+      expect(new Intl.DateTimeFormat("en-US", { timeZone: link }).resolvedOptions().timeZone).toBe(link);
+      expect(canonicalZone(link)).toBe(link);
+      expect(canonicalZone(zone)).toBe(zone);
+    }
+    roll();
+    writeFileSync(join(home, ".env"), "HERMES_TIMEZONE=US/Eastern\n");
+    writeFileSync(join(home, "config.yaml"), "timezone: America/New_York\n");
+    expect(hermesZone(home)).toBeNull();
+    expect(run("set", "--job", "brief", "--window", "06:00-10:00")).toEqual({ code: 2, out: { ok: false, error: "hermes-zone-unknown" } });
+    writeFileSync(join(home, ".env"), "HERMES_TIMEZONE=Europe/Kiev\n");
+    writeFileSync(join(home, "config.yaml"), "timezone: Europe/Kyiv\n");
+    expect(hermesZone(home)).toBeNull();
+    // The listed ones still agree.
+    writeFileSync(join(home, ".env"), "HERMES_TIMEZONE=Zulu\n");
+    writeFileSync(join(home, "config.yaml"), "timezone: Etc/UTC\n");
+    expect(hermesZone(home)).toBe("Etc/UTC");
+  });
+
   test("the caller's HERMES_TIMEZONE is neither read for the check nor passed on to Hermes", () => {
     roll();
     rmSync(join(home, "config.yaml"));
@@ -1003,9 +1048,36 @@ describe("admin marks: read entry by entry, one rule for list and reconcile, and
     for (const entry of listed.jobs as Job[]) expect({ key: entry.key, adminSchedule: entry.adminSchedule }).toEqual({ key: entry.key, adminSchedule: true });
     expect(rollWarnings().filter((line) => line.includes("adminSchedules"))).toHaveLength(1);
     for (const name of Object.values(DEFAULT_NAMES)) expect({ name, expr: storedExpr(name) }).toEqual({ name, expr: specNamed(name).schedule });
-    expect(run("set", "--job", "negotiation", "--window", "13:00-15:00").out).toMatchObject({ ok: true, changed: ["settings"], dropped: ["adminSchedules"] });
+    // The repair is its own field (all five default jobs now admin-managed on file); `dropped` stays for compatibility.
+    expect(run("set", "--job", "negotiation", "--window", "13:00-15:00").out)
+      .toMatchObject({ ok: true, changed: ["settings"], dropped: ["adminSchedules"], adminSchedulesRepaired: true });
     expect(settingsFile()).toEqual({ v: 1, jobs: { negotiation: { window: "13:00-15:00" } }, adminSchedules: ["brief", "drop-evening", "drop-midday", "evening", "negotiation"] });
     expect(run("list").out.adminSchedulesInvalid).toBeUndefined();
+    // Once repaired, the next write says nothing more.
+    const next = run("set", "--job", "negotiation", "--window", "13:00-16:00").out;
+    expect(next.adminSchedulesRepaired).toBeUndefined();
+    expect(next.dropped).toBeUndefined();
+  });
+
+  test("adminSchedulesRepaired: only for a value that was not a list, only when the file was written, on set, add and remove", () => {
+    roll();
+    // Entries that are not default keys are dropped, not a repair: every job's mark is as it was.
+    writeFileSync(jobSettingsPath(home), JSON.stringify({ v: 1, jobs: {}, adminSchedules: ["brief", "retired-job"] }));
+    const ignored = run("set", "--job", "negotiation", "--window", "13:00-15:00").out;
+    expect(ignored).toMatchObject({ ok: true, dropped: ["adminSchedules"] });
+    expect(ignored.adminSchedulesRepaired).toBeUndefined();
+    // Pausing writes no settings: no repair is reported, and the file is untouched.
+    writeFileSync(jobSettingsPath(home), JSON.stringify({ v: 1, jobs: {}, adminSchedules: "brief" }));
+    const paused = run("set", "--job", "negotiation", "--enabled", "false").out;
+    expect(paused.adminSchedulesRepaired).toBeUndefined();
+    expect(settingsFile()!.adminSchedules).toBe("brief");
+    // add writes the settings: repaired.
+    expect(run("add", "--template", "digest-preview", "--schedule", "0 16 * * *", "--window", "15:00-18:00").out)
+      .toMatchObject({ ok: true, dropped: ["adminSchedules"], adminSchedulesRepaired: true });
+    // remove rewrites the file when the template had an entry: repaired there too.
+    writeFileSync(jobSettingsPath(home), JSON.stringify({ v: 1, jobs: { "tpl-digest-preview": { window: "15:00-18:00" } }, adminSchedules: "brief" }));
+    expect(run("remove", "--template", "digest-preview").out).toMatchObject({ ok: true, changed: ["job", "settings"], adminSchedulesRepaired: true });
+    expect(settingsFile()).toEqual({ v: 1, jobs: {}, adminSchedules: ["brief", "drop-evening", "drop-midday", "evening", "negotiation"] });
   });
 
   test("list and reconcile agree on every default job, for every shape of the file", () => {
