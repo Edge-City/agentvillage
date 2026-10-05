@@ -430,9 +430,105 @@ def test_an_answer_is_noted_in_memory_only_with_the_value_and_the_time(live, ctx
     evening_reply(ctx, tenant, uuid.uuid4().hex)
     resident_says(ctx, "Met.")
     [note] = notes(live)
-    assert set(note) == {"id", "value", "at_epoch", "session_id", "turn_id"}
-    assert note["value"] == "met"
+    assert set(note) == {"id", "value", "at_epoch", "session_id", "turn_id", "seq", "pointer"}
+    assert note["value"] == "met" and note["pointer"] is False
     assert not (tenant.state / "outcome-ask" / "answers").exists()
+
+
+def test_while_an_ask_is_open_every_resident_message_is_noted_as_a_time_only(live, ctx, tenant):
+    mod = module(live)
+    resident_says(ctx, "hello there")  # no ask open: nothing noted
+    assert mod._MESSAGES == []
+    tenant.stage()
+    evening_reply(ctx, tenant, uuid.uuid4().hex)
+    resident_says(ctx, "what's on tomorrow at the Arjun talk?")
+    resident_says(ctx, "met")
+    assert [type(seq) for seq, _ in mod._MESSAGES] == [int, int]
+    assert all(isinstance(at, float) for _, at in mod._MESSAGES)
+    assert "Arjun" not in repr(mod._MESSAGES) and "tomorrow" not in repr(mod._MESSAGES)
+
+
+# -- F4: the answer is the resident's next message after the ask -----------------
+
+
+def test_a_match_after_other_messages_is_not_the_answer(live, ctx, tenant, av):
+    """Three unrelated turns, then `useful` answering something else hours later."""
+    ask_delivered(live, ctx, tenant)
+    resident_says(ctx, "thanks! what's on tomorrow?")
+    resident_says(ctx, "ok book me for the 10am talk")
+    resident_says(ctx, "useful")
+    assert live._COLLECTOR.outcome_tick().get("answer_not_next") == 1
+    assert events(av, live, "outcome.reported") == []
+
+
+def test_a_match_after_other_messages_counts_when_it_replies_to_the_question(live, ctx, tenant, av):
+    ask_delivered(live, ctx, tenant)
+    resident_says(ctx, "thanks! what's on tomorrow?")
+    resident_says(ctx, f'[Replying to your previous message: "{QUESTION}"]\n\nuseful')
+    assert live._COLLECTOR.outcome_tick().get("answered") == 1
+    [reported] = events(av, live, "outcome.reported")
+    assert reported["payload"]["value"] == "useful" and reported["outcome_id"] == OUTCOME
+
+
+def test_a_message_before_the_delivery_does_not_stop_the_next_one_counting(live, ctx, tenant, av):
+    execution = uuid.uuid4().hex
+    tenant.stage()
+    evening_reply(ctx, tenant, execution)
+    resident_says(ctx, "good evening")  # before Hermes delivered the question
+    time.sleep(0.01)
+    tenant.finish(execution)
+    time.sleep(0.01)
+    resident_says(ctx, "met")
+    live._COLLECTOR.outcome_tick()
+    assert [e["payload"]["value"] for e in events(av, live, "outcome.reported")] == ["met"]
+
+
+def test_a_second_match_is_not_the_next_message_even_unanswered(live, ctx, tenant, av):
+    """`hi`, then `met`: the first message after the ask was not an answer, so nothing counts."""
+    ask_delivered(live, ctx, tenant)
+    resident_says(ctx, "hi")
+    resident_says(ctx, "met")
+    live._COLLECTOR.outcome_tick()
+    assert events(av, live, "outcome.reported") == []
+
+
+def test_a_message_time_dropped_from_memory_means_no_plain_answer_counts(live, ctx, tenant, av, monkeypatch):
+    mod = module(live)
+    monkeypatch.setattr(mod, "MAX_MESSAGES", 2)
+    ask_delivered(live, ctx, tenant)
+    resident_says(ctx, "met")  # the next message...
+    resident_says(ctx, "a")
+    resident_says(ctx, "b")    # ...whose time then drops out of memory, with what came after the ask
+    assert mod._MESSAGES_FLOOR > 0
+    live._COLLECTOR.outcome_tick()
+    assert events(av, live, "outcome.reported") == []
+
+
+# -- F5: an answer belongs to the latest ask DELIVERED before it -----------------
+
+
+@pytest.mark.parametrize("armed_before_the_answer", [False, True])
+def test_an_answer_during_the_next_evenings_run_stays_with_the_ask_the_resident_saw(live, ctx, tenant, av, armed_before_the_answer):
+    """Tonight's run is claimed (and maybe armed) but not yet delivered when
+    the resident answers yesterday's question: the answer is yesterday's."""
+    ask_delivered(live, ctx, tenant)
+    [older] = events(av, live, "outcome.asked")
+    tonight = uuid.uuid4().hex
+    tenant.stage(subjects=SECOND)
+    tenant.start(tonight)  # claimed 30 s ago, running
+    if armed_before_the_answer:
+        evening_reply(ctx, tenant, tonight, start=False)
+    time.sleep(0.01)
+    resident_says(ctx, "met")
+    time.sleep(0.01)
+    if not armed_before_the_answer:
+        evening_reply(ctx, tenant, tonight, start=False)
+    tenant.finish(tonight)  # delivered after the answer
+    live._COLLECTOR.outcome_tick()
+    assert len(events(av, live, "outcome.asked")) == 2
+    [reported] = events(av, live, "outcome.reported")
+    assert reported["in_reply_to_event_id"] == older["event_id"]
+    assert reported["outcome_id"] == OUTCOME
 
 
 def test_a_telegram_reply_pointer_is_not_part_of_the_message(live, ctx, tenant, av):
@@ -555,17 +651,36 @@ def test_after_a_restart_a_second_answer_reuses_the_first_ones_event_id(live, ct
 
 
 def test_an_answer_before_the_delivery_is_confirmed_waits_for_it(live, ctx, tenant, av):
+    """Hermes delivered, then the resident answered, and only then did the
+    ledger row turn terminal (its finish is the delivery time)."""
     execution = uuid.uuid4().hex
     tenant.stage()
     evening_reply(ctx, tenant, execution)
+    time.sleep(0.01)
+    delivered = time.time()
+    time.sleep(0.01)
     resident_says(ctx, "met")
     live._COLLECTOR.outcome_tick()
     assert events(av, live, "outcome.reported") == []
-    tenant.finish(execution)
+    assert len(notes(live)) == 1  # waiting
+    tenant.finish(execution, at=delivered)
     live._COLLECTOR.outcome_tick()
     [asked] = events(av, live, "outcome.asked")
     [reported] = events(av, live, "outcome.reported")
     assert reported["in_reply_to_event_id"] == asked["event_id"]
+
+
+def test_a_message_sent_before_the_ask_was_delivered_is_not_its_answer(live, ctx, tenant, av):
+    """F5: compared by delivery time (the ledger's finish), not by when the run started."""
+    execution = uuid.uuid4().hex
+    tenant.stage()
+    evening_reply(ctx, tenant, execution)
+    resident_says(ctx, "met")
+    time.sleep(0.01)
+    tenant.finish(execution)  # delivered after the message
+    assert live._COLLECTOR.outcome_tick().get("answer_no_ask") == 1
+    assert len(events(av, live, "outcome.asked")) == 1
+    assert events(av, live, "outcome.reported") == []
 
 
 def test_an_answer_to_an_ask_that_was_never_delivered_emits_nothing(live, ctx, tenant, av):

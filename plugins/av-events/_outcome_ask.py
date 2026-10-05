@@ -64,6 +64,7 @@ Logs: codes and counts only. Python 3.11, standard library only.
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import re
@@ -104,6 +105,10 @@ ARMED_MAX_AGE_S = MAX_BUFFER_AGE_S
 ASKS_KEEP_S = 48 * 60 * 60
 #: Answers waiting in memory at most.
 MAX_ANSWER_NOTES = 50
+#: Resident message times kept in memory at most, and for how long (a note
+#: waits at most ARMED_MAX_AGE_S, and its ask is at most ANSWER_WINDOW_S older).
+MAX_MESSAGES = 500
+MESSAGES_KEEP_S = ARMED_MAX_AGE_S + ANSWER_WINDOW_S
 #: Subjects remembered in the asked ledger the trigger reads.
 MAX_ASKED = 2000
 #: Runs remembered in memory (`_SEEN`).
@@ -196,15 +201,26 @@ _EMITTED: dict[str, dict] = {}
 _ANSWERED: dict[str, bool] = {}
 #: Answers noted by this process, waiting for the tick. Never written to disk.
 _ANSWERS: list[dict] = []
+#: Every direct-chat message from the resident while an ask may be open, as
+#: `(seq, time)`: never its text. An answer counts only when it is the first
+#: of these after its ask was delivered (or it replies to the question).
+_MESSAGES: list[tuple[int, float]] = []
+#: The latest time of a message dropped from `_MESSAGES` (0: none dropped). An
+#: ask delivered before it cannot be shown to have had no message after it.
+_MESSAGES_FLOOR = 0.0
+_SEQ = itertools.count(1)
 
 
 def reset_memory() -> None:
     """Forget this process's runs and answers (a restart; tests)."""
+    global _MESSAGES_FLOOR
     with _MEMORY_LOCK:
         _SEEN.clear()
         _EMITTED.clear()
         _ANSWERED.clear()
         _ANSWERS.clear()
+        _MESSAGES.clear()
+        _MESSAGES_FLOOR = 0.0
 
 
 def _remember(store: dict, key: str, value: Any) -> None:
@@ -525,28 +541,52 @@ def note_answer(
     turn_id: Any,
     now: float,
 ) -> Optional[str]:
-    """Step 3, from the resident's `pre_llm_call` (the caller has already
-    decided it is the resident, in a Telegram DM). Notes the value and the
-    time, in memory only, when the whole message is an answer and an ask may
-    be open; `tick` decides whether it counts. Returns a code or None."""
+    """Step 3, from every message of the resident's `pre_llm_call` (the
+    caller has already decided it is the resident, in a Telegram DM). While an
+    ask may be open, notes the message's time (never its text), and, when the
+    whole message is an answer, the value too; in memory only. `tick` decides
+    whether an answer counts. Returns a code or None."""
     parsed = parse_answer(text)
+    if not _listing(armed_dir(state_dir)) and not os.path.exists(asks_path(state_dir)):
+        return "answer_no_ask" if parsed else None
+    with _MEMORY_LOCK:
+        seq = next(_SEQ)
+        _MESSAGES.append((seq, now))
+        _prune_messages(now)
     if parsed is None:
         return None
-    value = parsed[0]
-    if not _listing(armed_dir(state_dir)) and not os.path.exists(asks_path(state_dir)):
-        return "answer_no_ask"
     note = {
         "id": uuid7(),
-        "value": value,
+        "value": parsed[0],
         "at_epoch": now,
         "session_id": session_id if isinstance(session_id, str) and _ID.match(session_id) else None,
         "turn_id": turn_id if isinstance(turn_id, str) and _ID.match(turn_id) else None,
+        # Its place among the resident's messages, and whether it replied to the question.
+        "seq": seq,
+        "pointer": parsed[1],
     }
     with _MEMORY_LOCK:
         if len(_ANSWERS) >= MAX_ANSWER_NOTES:
             return "answer_backlog"
         _ANSWERS.append(note)
     return "answer_noted"
+
+
+def _prune_messages(now: float) -> None:
+    """Under _MEMORY_LOCK: drop message times past MESSAGES_KEEP_S, and the
+    oldest past MAX_MESSAGES, raising the floor to each dropped time."""
+    global _MESSAGES_FLOOR
+    while _MESSAGES and (len(_MESSAGES) > MAX_MESSAGES or now - _MESSAGES[0][1] > MESSAGES_KEEP_S):
+        _MESSAGES_FLOOR = max(_MESSAGES_FLOOR, _MESSAGES.pop(0)[1])
+
+
+def _is_next_message(note: dict, delivered: float) -> bool:
+    """The note is the resident's first message after `delivered`, as far as
+    this process saw: no message between, and none dropped from memory since."""
+    with _MEMORY_LOCK:
+        if delivered < _MESSAGES_FLOOR:
+            return False
+        return not any(at > delivered and seq < note["seq"] for seq, at in _MESSAGES)
 
 
 def pending_answers() -> list[dict]:
@@ -781,11 +821,17 @@ def tick(state_dir: str, home: str, emit: Callable[..., Optional[dict]], now: fl
         done: set[str] = set()
         with _MEMORY_LOCK:
             answered = set(_ANSWERED)
-        for note in sorted(answers, key=lambda n: n["at_epoch"]):
+        for note in sorted(answers, key=lambda n: (n["at_epoch"], n["seq"])):
             at = note["at_epoch"]
-            before = [a for a in confirmed if a["start"] <= at]
-            latest = max(before, key=lambda a: a["start"]) if before else None
-            if any(p <= at and (latest is None or p > latest["start"]) for p in pending):
+            # The open ask is the latest DELIVERED before the message (the
+            # ledger's finish), never the latest started: a run in progress
+            # has not asked anything yet.
+            before = [a for a in confirmed if a["finished"] <= at]
+            latest = max(before, key=lambda a: a["finished"]) if before else None
+            # An armed ask not yet confirmed was delivered after its arm time,
+            # so it may be the open one only when it armed before the message
+            # and after the latest delivered ask.
+            if any(p <= at and (latest is None or p > latest["finished"]) for p in pending):
                 if now - at > ARMED_MAX_AGE_S:
                     done.add(note["id"])
                     _count(codes, "answer_expired")
@@ -796,6 +842,10 @@ def tick(state_dir: str, home: str, emit: Callable[..., Optional[dict]], now: fl
                 continue
             if latest["execution_id"] in answered or at > latest["finished"] + ANSWER_WINDOW_S:
                 _count(codes, "answer_not_counted")
+                continue
+            if not note["pointer"] and not _is_next_message(note, latest["finished"]):
+                # Not the resident's next message after the ask, and not a reply to it.
+                _count(codes, "answer_not_next")
                 continue
             event = emit(
                 "outcome.reported",
