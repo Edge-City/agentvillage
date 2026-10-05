@@ -58,7 +58,7 @@ from ._core import (
     sqlite_read,
     uuid7,
 )
-from . import _backup
+from . import _backup, _outcome_ask
 from ._cron import CronCursor, cron_job_id_from, pending_runs
 from ._edgeos import Ledger
 
@@ -484,6 +484,8 @@ class Collector:
         #: Cron-tail passes that raised. The tail runs on the flusher thread,
         #: outside `guarded`, so it keeps its own count.
         self.cron_errors = 0
+        #: Outcome-ask passes that raised (DATA-42), likewise outside `guarded`.
+        self.outcome_errors = 0
         #: The tenant's HMAC key (`hash_key`), loaded on first use.
         self._hash_key: Optional[bytes] = None
         #: Diagnostic counters, names only (`tenant_id_not_uuid`, …).
@@ -1194,6 +1196,22 @@ class Collector:
             self.cron_errors += 1
             return 0
 
+    def outcome_tick(self, now: Optional[float] = None) -> dict:
+        """The evening outcome ask's confirmations and answers (DATA-42,
+        `_outcome_ask.tick`). Flusher thread only, on the cron tail's cadence.
+        Off with `outcome_ask` in `AV_HOOKS_DISABLED`. Returns code -> count;
+        the log line carries those codes and counts only."""
+        if self.plugin_disabled or not self.config.active or "outcome_ask" in self.config.disabled_hooks:
+            return {}
+        try:
+            codes = _outcome_ask.tick(self.config.state_dir, self.config.home, self.emit, time.time() if now is None else now)
+        except Exception:  # noqa: BLE001 - the tick must never take the flusher down
+            self.outcome_errors += 1
+            return {}
+        if codes and set(codes) != {"contended"}:
+            logger.info("av-events: outcome_ask_tick %s", " ".join(f"{code}={count}" for code, count in sorted(codes.items())))
+        return codes
+
     def _cron_event_id(self, payload: dict) -> str:
         execution_id = payload["execution_id"]
         if self.config.tenant_id:
@@ -1449,6 +1467,7 @@ class Collector:
             if time.monotonic() - self._cron_at >= CRON_POLL_INTERVAL_S:
                 self._cron_at = time.monotonic()
                 self.cron_tick()
+                self.outcome_tick()
 
     def tick(self) -> None:
         """One flush pass. Runs on the flusher thread; tests call it directly."""
