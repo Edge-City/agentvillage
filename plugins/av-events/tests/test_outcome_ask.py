@@ -797,10 +797,41 @@ def test_after_a_restart_a_second_answer_reuses_the_first_ones_event_id(live, ct
     resident_says(ctx, "met")
     live._COLLECTOR.outcome_tick()
     module(live).reset_memory()
-    resident_says(ctx, "not useful")
+    # After a restart only a reply to the open ask's own question can count.
+    resident_says(ctx, f'[Replying to: "{QUESTION}"]\n\nnot useful')
     live._COLLECTOR.outcome_tick()
     first, second = events(av, live, "outcome.reported")
     assert first["event_id"] == second["event_id"]
+
+
+# -- round 2 item 3: after a restart, "next message" cannot be shown ---------------
+
+
+def test_after_a_restart_a_plain_match_for_an_earlier_ask_does_not_count(live, ctx, tenant, av):
+    ask_delivered(live, ctx, tenant)
+    resident_says(ctx, "thanks! what's on tomorrow?")
+    module(live).reset_memory()  # a gateway restart: the message log is gone
+    resident_says(ctx, "yes")    # answering something else
+    assert live._COLLECTOR.outcome_tick().get("answer_not_next") == 1
+    assert events(av, live, "outcome.reported") == []
+
+
+def test_after_a_restart_a_reply_to_the_open_question_still_counts(live, ctx, tenant, av):
+    ask_delivered(live, ctx, tenant)
+    resident_says(ctx, "thanks! what's on tomorrow?")
+    module(live).reset_memory()
+    resident_says(ctx, f'[Replying to: "{QUESTION}"]\n\nyes')
+    live._COLLECTOR.outcome_tick()
+    assert [e["payload"]["value"] for e in events(av, live, "outcome.reported")] == ["met"]
+
+
+def test_an_ask_delivered_after_the_restart_takes_a_plain_next_message(live, ctx, tenant, av):
+    module(live).reset_memory()
+    time.sleep(0.01)
+    ask_delivered(live, ctx, tenant)
+    resident_says(ctx, "met")
+    live._COLLECTOR.outcome_tick()
+    assert len(events(av, live, "outcome.reported")) == 1
 
 
 def test_an_answer_before_the_delivery_is_confirmed_waits_for_it(live, ctx, tenant, av):
@@ -1152,11 +1183,13 @@ def test_accepted_limit_after_a_restart_a_well_formed_armed_file_names_the_subje
     it stays `self_report` from the participant, never anything verified."""
     execution = uuid.uuid4().hex
     tenant.finish(execution, at=time.time() - 2)
-    forged_armed(tenant, execution, staged=time.time() - 38, armed=time.time() - 5)
+    question_hash = live._COLLECTOR.keyed_hash(module(live).question_key(QUESTION))
+    forged_armed(tenant, execution, staged=time.time() - 38, armed=time.time() - 5, question_hash=question_hash)
     live._COLLECTOR.outcome_tick()
     [asked] = events(av, live, "outcome.asked")
     assert asked["opportunity_id"] == "forged" and asked["evidence_class"] == "agent_report" and asked["actor"] == "agent"
-    resident_says(ctx, "useful")
+    # Delivered before this process started: only a reply to its question can count.
+    resident_says(ctx, f'[Replying to: "{QUESTION}"]\n\nuseful')
     live._COLLECTOR.outcome_tick()
     [reported] = events(av, live, "outcome.reported")
     assert (reported["evidence_class"], reported["actor"], reported["event_type"]) == ("self_report", "participant", "outcome.reported")

@@ -52,6 +52,7 @@ import os
 import re
 import stat
 import threading
+import time
 import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
@@ -261,9 +262,11 @@ _ANSWERS: list[dict] = []
 #: `(seq, time)`: never its text. An answer counts only when it is the first
 #: of these after its ask was delivered (or it replies to the question).
 _MESSAGES: list[tuple[int, float]] = []
-#: The latest time of a message dropped from `_MESSAGES` (0: none dropped). An
-#: ask delivered before it cannot be shown to have had no message after it.
-_MESSAGES_FLOOR = 0.0
+#: Before this time `_MESSAGES` knows nothing: when this process started
+#: (memory is empty after a restart), raised to each message time dropped from
+#: it. A plain match for an ask delivered before it does not count (lost, not
+#: wrong); a reply to the open ask's question still does.
+_MESSAGES_FLOOR = time.time()
 _SEQ = itertools.count(1)
 
 
@@ -276,7 +279,7 @@ def reset_memory() -> None:
         _ANSWERED.clear()
         _ANSWERS.clear()
         _MESSAGES.clear()
-        _MESSAGES_FLOOR = 0.0
+        _MESSAGES_FLOOR = time.time()
 
 
 def _remember(store: dict, key: str, value: Any) -> None:
