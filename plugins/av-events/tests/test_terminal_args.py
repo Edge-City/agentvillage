@@ -107,6 +107,58 @@ def hermes_merge(args: dict, results: list) -> dict:
     return args if modified is None else modified
 
 
+def _coerce_boolean(value: str):
+    """`tools/arg_coercion.py` `_coerce_boolean` at v2026.9.24, verbatim."""
+    return {"true": True, "false": False}.get(value.strip().lower(), value)
+
+
+def _coerce_number(value: str, integer_only: bool = False):
+    """`tools/arg_coercion.py` `_coerce_number` at v2026.9.24, verbatim."""
+    try:
+        f = float(value)
+    except (ValueError, OverflowError):
+        return value
+    if f != f or f in (float("inf"), float("-inf")):
+        return value  # not JSON-serializable
+    return int(f) if f == int(f) else value if integer_only else f
+
+
+#: `terminal`'s schema types at v2026.9.24 -> the coercer `coerce_tool_args` applies to a
+#: string value. `command`/`workdir` are strings (no coercer); `notify` is an `anyOf` with no
+#: `type` and is skipped; `notify_on_complete`/`watch_patterns` are not in the schema.
+_TERMINAL_COERCERS = {
+    "background": _coerce_boolean,
+    "pty": _coerce_boolean,
+    "timeout": lambda v: _coerce_number(v, integer_only=True),
+    "heartbeat": lambda v: _coerce_number(v, integer_only=True),
+}
+
+
+def deployed_coerce(args: dict) -> dict:
+    """`coerce_tool_args("terminal", args)` at v2026.9.24 for the terminal schema (on a copy)."""
+    out = dict(args)
+    for key, value in list(out.items()):
+        if isinstance(value, str) and key in _TERMINAL_COERCERS:
+            out[key] = _TERMINAL_COERCERS[key](value)
+    return out
+
+
+OURS = (FOREGROUND_ERROR, HEARTBEAT_ERROR, "notify must be true/false")
+
+
+def handler_after_both_orderings(hooked, raw: dict) -> list:
+    """What the handler returns on each Hermes path for the model's `raw` args.
+
+    model_tools path: coerce, then the hook on the coerced args, then the handler.
+    agent loop:       the hook on the raw args, then coerce (inside
+                      `handle_function_call(skip_pre_tool_call_hook=True)`), then the handler.
+    """
+    coerced = deployed_coerce(raw)
+    model_tools_path = deployed_handler_checks(hermes_merge(coerced, fire_terminal(hooked, dict(coerced))))
+    agent_loop = deployed_handler_checks(deployed_coerce(hermes_merge(raw, fire_terminal(hooked, dict(raw)))))
+    return [model_tools_path, agent_loop]
+
+
 @pytest.fixture()
 def ta(plugin, av):
     return sys.modules[f"{av.MODULE_NAME}._terminal_args"]
@@ -189,12 +241,12 @@ def test_clean_foreground_calls_are_left_alone(hooked, args):
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("background", [True, 1, "false", ["x"]])
+@pytest.mark.parametrize("background", [True, 1, "true", " TRUE ", "0", "no", "off", ["x"]])
 def test_background_truthy_is_never_touched(hooked, background):
-    """Truthiness is the handler's own test (`args.get("background", False)`)."""
+    """Truthy as the handler sees it after coercion: only "true"/"false" strings are coerced."""
     args = {"command": "make test", "background": background, "notify": True, "heartbeat": 120}
     assert fire_terminal(hooked, args) == []
-    passed = deployed_handler_checks(args)
+    passed = deployed_handler_checks(deployed_coerce(args))
     assert passed["heartbeat"] == 120 and passed["notify_on_complete"] is True
 
 
@@ -222,7 +274,7 @@ def test_no_tool_name_kwarg_at_all(hooked):
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("value", ["60", True, -1, 60.0, 0.5, "0", float("nan"), [1], {"a": 1}])
+@pytest.mark.parametrize("value", [True, -1, 60.0, 0.5, float("nan"), [1], {"a": 1}])
 def test_odd_truthy_heartbeat_is_switched_off(hooked, value):
     args = {"command": "ls", "heartbeat": value}
     assert deployed_handler_checks(args).startswith((FOREGROUND_ERROR, HEARTBEAT_ERROR))
@@ -394,40 +446,151 @@ def test_the_fix_does_no_io(plugin, ctx, monkeypatch):
 
 
 # --------------------------------------------------------------------------
+# Hermes's argument coercion (refuter SF1) and the notify type check (N1)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("raw,expected_off", [
+    ({"command": "ls", "background": "false", "heartbeat": 60}, {"heartbeat": 0}),
+    ({"command": "ls", "background": " False ", "heartbeat": "60"}, {"heartbeat": 0}),
+    ({"command": "ls", "background": "FALSE", "notify": "false"}, {"notify": False}),
+    ({"command": "ls", "heartbeat": "60"}, {"heartbeat": 0}),
+    ({"command": "ls", "heartbeat": " 60 "}, {"heartbeat": 0}),
+    ({"command": "ls", "heartbeat": "1e2"}, {"heartbeat": 0}),
+    ({"command": "ls", "heartbeat": "0.5"}, {"heartbeat": 0}),   # not integral: stays a string
+    ({"command": "ls", "heartbeat": "abc"}, {"heartbeat": 0}),
+    ({"command": "ls", "heartbeat": "nan"}, {"heartbeat": 0}),
+    ({"command": "ls", "heartbeat": "-1"}, {"heartbeat": 0}),
+    ({"command": "ls", "notify": "true"}, {"notify": False}),    # notify is never coerced
+    ({"command": "ls", "notify_on_complete": "false"}, {"notify_on_complete": False}),  # nor this
+    ({"command": "ls", "watch_patterns": "[]"}, {"watch_patterns": None}),  # nor this
+])
+def test_string_arguments_are_judged_after_coercion(hooked, raw, expected_off):
+    assert fire_terminal(hooked, dict(raw)) == [{"action": "modify", "args": expected_off}]
+    for result in handler_after_both_orderings(hooked, raw):
+        assert isinstance(result, dict), (raw, result)
+        assert result["background"] is False and result["heartbeat"] == 0
+
+
+@pytest.mark.parametrize("raw", [
+    {"command": "ls", "heartbeat": "0"},
+    {"command": "ls", "heartbeat": " 0 "},
+    {"command": "ls", "heartbeat": "0.0"},
+    {"command": "ls", "heartbeat": "-0"},
+    {"command": "ls", "background": "false"},
+    {"command": "ls", "background": "false", "heartbeat": "0", "pty": "false", "timeout": "20"},
+])
+def test_strings_that_coerce_to_off_are_left_alone(hooked, raw):
+    assert fire_terminal(hooked, dict(raw)) == []
+    for result in handler_after_both_orderings(hooked, raw):
+        assert isinstance(result, dict), (raw, result)
+
+
+@pytest.mark.parametrize("raw", [
+    {"command": "make", "background": "true", "notify": True, "heartbeat": "120"},
+    {"command": "make", "background": " True", "heartbeat": 60},
+    {"command": "make", "background": "0", "notify": True},     # "0" is not coerced: truthy
+    {"command": "make", "background": "no", "heartbeat": 60},   # nor "no"
+])
+def test_strings_the_handler_runs_in_the_background_are_untouched(hooked, raw):
+    assert fire_terminal(hooked, dict(raw)) == []
+    assert fire_terminal(hooked, deployed_coerce(raw)) == []
+
+
+_COERCION_PROBES = ("true", "false", " TRUE ", "False\n", "0", "1", "no", "off", "", " ", "60", " 60 ", "0", "-0",
+                    "0.0", "0.5", "60.0", "1e2", "1e400", "-1e400", "nan", "inf", "abc", "6 0", "0x10", "١٢",
+                    0, 1, 60, 0.5, True, False, None, [], ["x"], {})
+
+
+@pytest.mark.parametrize("value", _COERCION_PROBES)
+def test_the_coercion_mirrors_equal_hermes_exactly(ta, value):
+    """Not just the same truthiness: the same value and type as v2026.9.24's coercers."""
+    expected_bool = _coerce_boolean(value) if isinstance(value, str) else value
+    expected_int = _coerce_number(value, integer_only=True) if isinstance(value, str) else value
+    assert ta.coerced_boolean(value) == expected_bool
+    assert type(ta.coerced_boolean(value)) is type(expected_bool)
+    assert ta.coerced_integer(value) == expected_int or (expected_int != expected_int)
+    assert type(ta.coerced_integer(value)) is type(expected_int)
+
+
+def test_the_refuters_case_fails_without_the_fix_on_the_agent_loop(plugin, ctx, monkeypatch):
+    """`{"background": "false", "heartbeat": 60}`: coercion makes it foreground after the hook."""
+    raw = {"command": "ls", "background": "false", "heartbeat": 60}
+    assert deployed_handler_checks(deployed_coerce(raw)).startswith(FOREGROUND_ERROR)
+    plugin.register(ctx)
+    assert all(isinstance(r, dict) for r in handler_after_both_orderings(ctx, raw))
+
+
+@pytest.mark.parametrize("value", [0, "", "maybe", 0.0, {}, (), ("x",), b"", 1.5])
+def test_notify_of_a_type_the_handler_rejects_is_set_false(hooked, value):
+    raw = {"command": "ls", "notify": value}
+    if not value:
+        # Falsy, so the foreground check passes, but the type check after it rejects.
+        assert deployed_handler_checks(raw).startswith("notify must be true/false")
+    assert fire_terminal(hooked, dict(raw)) == [{"action": "modify", "args": {"notify": False}}]
+    for result in handler_after_both_orderings(hooked, raw):
+        assert isinstance(result, dict), (raw, result)
+
+
+def test_notify_type_fix_keeps_the_key_order(hooked):
+    raw = {"command": "ls", "notify": 0, "heartbeat": 60, "watch_patterns": ["x"]}
+    (result,) = fire_terminal(hooked, raw)
+    assert list(result["args"]) == ["notify", "heartbeat", "watch_patterns"]
+
+
+@pytest.mark.parametrize("value", [False, True, [], ["x"], None])
+def test_notify_bool_list_or_none_is_judged_by_truthiness_only(hooked, value):
+    expected = [{"action": "modify", "args": {"notify": False}}] if value else []
+    assert fire_terminal(hooked, {"command": "ls", "notify": value}) == expected
+
+
+def test_notify_type_fix_never_touches_a_background_call(hooked):
+    assert fire_terminal(hooked, {"command": "ls", "background": True, "notify": "maybe"}) == []
+
+
+# --------------------------------------------------------------------------
 # Fuzz
 # --------------------------------------------------------------------------
 
 _KEYS = ("command", "background", "timeout", "workdir", "pty") + BACKGROUND_ONLY + ("extra",)
-_VALUES = (None, True, False, 0, 1, -1, 60, 60.0, 0.0, "", "60", "x", "false", [], ["x"], {}, {"a": 1},
-           float("nan"), b"", (), ("x",))
+_VALUES = (None, True, False, 0, 1, -1, 60, 60.0, 0.0, "", "60", "0", " 0 ", "0.5", "x", "false", " FALSE ",
+           "true", "no", "nan", "1e2", [], ["x"], {}, {"a": 1}, float("nan"), b"", (), ("x",))
 
 
 def _random_args(rng: random.Random) -> dict:
     return {key: rng.choice(_VALUES) for key in rng.sample(_KEYS, rng.randint(0, len(_KEYS)))}
 
 
-def test_fuzz_never_raises_and_only_ever_switches_off_background_only_keys(hooked):
+def test_fuzz_never_raises_and_decides_exactly_as_the_handler_does(hooked):
+    """On both Hermes orderings: a directive appears exactly when the handler, after coercion,
+    would reject the call for a background-only argument (or notify's type), and with it the
+    handler never does; a call the handler runs in the background is never touched."""
     rng = random.Random(312)
     touched = 0
-    for _ in range(600):
+    for _ in range(800):
         args = _random_args(rng)
         snapshot = dict(args)
         results = fire_terminal(hooked, args)
         assert args == snapshot, "the hook must not mutate the args Hermes passes"
+        coerced = deployed_coerce(args)
+        assert fire_terminal(hooked, dict(coerced)) == results, "coerced and raw args must decide alike"
+        if coerced.get("background", False):
+            assert results == [], args
+            continue
+        # `pty` is not ours, and the handler checks it before notify's type: judge with it off.
+        unfixed = deployed_handler_checks({**coerced, "pty": False})
+        ours = isinstance(unfixed, str) and unfixed.startswith(OURS)
+        assert bool(results) == ours, (args, unfixed, results)
         if not results:
-            if not args.get("background", False):
-                assert not any(args.get(k) for k in BACKGROUND_ONLY)
             continue
         touched += 1
         (directive,) = results
         assert directive["action"] == "modify"
-        assert not args.get("background", False)
-        assert set(directive["args"]) == {k for k in BACKGROUND_ONLY if args.get(k)}
+        assert set(directive["args"]) <= set(BACKGROUND_ONLY)
         assert all(directive["args"][k] == OFF[k] for k in directive["args"])
-        checked = deployed_handler_checks(hermes_merge(args, results))
-        # Whatever else the handler may still say, it is never the background-only rejection.
-        if isinstance(checked, str):
-            assert not checked.startswith((FOREGROUND_ERROR, HEARTBEAT_ERROR)), (args, checked)
+        for checked in handler_after_both_orderings(hooked, args):
+            if isinstance(checked, str):
+                assert not checked.startswith(OURS), (args, checked)
     assert touched > 100
 
 
@@ -450,7 +613,7 @@ _HERMES_PY = os.environ.get("AV_HERMES_PYTHON") or str(_HERMES_SRC / "venv" / "b
 
 _REAL_HERMES = r'''
 import inspect, json, os, shutil, sys
-home, plugin_dir, payload = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
+home, plugin_dir, payload, cases = sys.argv[1], sys.argv[2], json.loads(sys.argv[3]), json.loads(sys.argv[4])
 for name in [n for n in os.environ if n.startswith("AV_")]:
     del os.environ[name]
 os.environ["HERMES_HOME"] = home
@@ -506,7 +669,27 @@ def run(args, switch=None, block=None):
     return {"block": block_msg, "modified": modified, "result": result, "gate_saw": list(gate_saw),
             "post_saw": list(post_saw), "spawned": list(spawned)}
 
+def run_agent_loop(args, switch=None):
+    """The agent loop's order (agent/tool_executor.py): the hook on the parsed args, then
+    handle_function_call with skip_pre_tool_call_hook=True, which coerces and dispatches."""
+    gate_saw.clear(); post_saw.clear(); spawned.clear(); blocker[0] = None
+    if switch is None:
+        os.environ.pop("AV_TERMINAL_ARGS_FIX", None)
+    else:
+        os.environ["AV_TERMINAL_ARGS_FIX"] = switch
+    raw = json.loads(json.dumps(args))
+    block_msg, modified = _dispatch_pre_tool_call_hooks("terminal", raw, session_id="s1",
+                                                         tool_call_id="c2", turn_id="u1")
+    final = raw if modified is None else modified
+    result = model_tools.handle_function_call(
+        "terminal", final, task_id="t1", tool_call_id="c2", session_id="s1", turn_id="u1",
+        skip_pre_tool_call_hook=True, skip_tool_request_middleware=True, skip_tool_execution_middleware=True)
+    return {"block": block_msg, "modified": modified, "result": result, "spawned": list(spawned)}
+
 print(json.dumps({
+    "coercion": [{"case": case, "model_tools": run(case), "agent_loop": run_agent_loop(case)} for case in cases],
+    "coercion_off": [{"case": case, "model_tools": run(case, switch="0"),
+                      "agent_loop": run_agent_loop(case, switch="0")} for case in cases[:1]],
     "loaded": loaded,
     "knows_heartbeat": knows_heartbeat,
     "fixed": run(payload),
@@ -517,6 +700,19 @@ print(json.dumps({
     "blocked": run(payload, block={"action": "block", "message": "gate says no"}),
 }, default=repr))
 '''
+
+
+#: (raw args, background as the handler passes it on) for the real-Hermes coercion check.
+#: The first is the refuter's case; it is also run with the switch off as the control.
+REAL_COERCION_CASES = [
+    ({"command": "ls", "background": "false", "heartbeat": 60}, False),
+    ({"command": "ls", "background": " False ", "heartbeat": "60", "notify": "false"}, False),
+    ({"command": "ls", "heartbeat": "0"}, False),
+    ({"command": "ls", "notify": 0}, False),
+    ({"command": "ls", "notify": "maybe", "heartbeat": " 60 "}, False),
+    ({"command": "make", "background": "true", "notify": True, "heartbeat": "120"}, True),
+    ({"command": "make", "background": "0", "notify": True}, "0"),
+]
 
 
 def _real_hermes_available() -> bool:
@@ -530,7 +726,8 @@ def test_model_payload_through_the_real_hermes_dispatcher_and_handler(tmp_path, 
     home.mkdir()
     env = {k: v for k, v in os.environ.items() if not k.startswith("AV_")}
     env.update(PYTHONPATH=str(_HERMES_SRC), PYTHONDONTWRITEBYTECODE="1", HERMES_HOME=str(home))
-    out = subprocess.run([_HERMES_PY, "-c", _REAL_HERMES, str(home), str(av.PLUGIN_DIR), json.dumps(MODEL_PAYLOAD)],
+    out = subprocess.run([_HERMES_PY, "-c", _REAL_HERMES, str(home), str(av.PLUGIN_DIR), json.dumps(MODEL_PAYLOAD),
+                          json.dumps([case for case, _ in REAL_COERCION_CASES])],
                          capture_output=True, text=True, env=env, timeout=300, cwd=str(tmp_path))
     assert out.returncode == 0, out.stderr[-3000:]
     report = json.loads(out.stdout.strip().splitlines()[-1])
@@ -579,3 +776,22 @@ def test_model_payload_through_the_real_hermes_dispatcher_and_handler(tmp_path, 
     blocked = report["blocked"]
     assert blocked["block"] == "gate says no" and blocked["spawned"] == []
     assert "gate says no" in blocked["result"]
+
+    # Refuter SF1/N1 against the real coerce_tool_args, on both orderings Hermes uses.
+    for entry, (_, background) in zip(report["coercion"], REAL_COERCION_CASES):
+        for order in ("model_tools", "agent_loop"):
+            run = entry[order]
+            assert not any(text in run["result"] for text in (
+                "only apply to background", "only applies to background", "heartbeat must be",
+                "notify must be")), (entry["case"], order, run["result"])
+            assert len(run["spawned"]) == 1, (entry["case"], order, run["result"])
+            assert run["spawned"][0]["background"] == background, (entry["case"], order)
+            if background is not False:
+                assert run["modified"] is None, (entry["case"], order)
+            if report["knows_heartbeat"] and background is False:
+                assert run["spawned"][0]["heartbeat"] == 0, (entry["case"], order)
+    if report["knows_heartbeat"]:
+        assert report["coercion"][5]["agent_loop"]["spawned"][0]["heartbeat"] == 120
+        for order in ("model_tools", "agent_loop"):
+            control = report["coercion_off"][0][order]
+            assert control["spawned"] == [] and "only apply to background" in control["result"], order

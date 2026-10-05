@@ -964,12 +964,25 @@ and fell back to `execute_code`.
 
 **What the hook does.** The plugin's `pre_tool_call` (`with_terminal_args_fix` around the telemetry
 counter; the rule is `_terminal_args.py`) returns `{"action": "modify", "args": {...}}` when, and
-only when, the tool name is exactly `terminal`, `args` is a dict, `background` is not truthy (the
-handler's own test), and at least one of `notify`, `heartbeat`, `notify_on_complete`,
-`watch_patterns` is truthy. The directive carries **only** those offending keys, set to `notify:
-false`, `heartbeat: 0`, `notify_on_complete: false`, `watch_patterns: null`: each is falsy for the
-foreground check and passes the handler's type checks (`heartbeat` must be a non-bool int >= 0;
-`notify` a bool or list). A modify directive cannot delete a key, so "off" is a value. `command`,
+only when, the tool name is exactly `terminal`, `args` is a dict, `background` is not truthy **as
+the handler will see it**, and at least one of `notify`, `heartbeat`, `notify_on_complete`,
+`watch_patterns` is truthy as the handler will see it, or `notify` is present but neither a bool
+nor a list (the handler's later "notify must be true/false" rejection, e.g. `0`, `""`, `"maybe"`).
+"As the handler will see it" means after Hermes's schema coercion (`tools/arg_coercion.py`
+`coerce_tool_args`), which runs *before* the hook on the `model_tools.handle_function_call` path
+(`model_tools.py:888`) and *after* it on the agent loop (the hook fires on the parsed arguments,
+then `handle_function_call(skip_pre_tool_call_hook=True)` coerces). The rule mirrors exactly the two
+coercions that can change these keys: `background` (schema boolean) becomes a bool only from a
+string that strips and lower-cases to `"true"` or `"false"` (so `"false"` is a foreground call,
+while `"0"`, `"no"` and `"off"` stay truthy strings, i.e. background); `heartbeat` (schema integer)
+becomes an int only from a string that parses as a finite integral number (`"60"` -> 60, `" 0 "` ->
+0, `"0.5"` stays a string). `notify` (an `anyOf` with no `type`), `notify_on_complete` and
+`watch_patterns` (not in the schema) are never coerced. On already-coerced arguments the mirror is
+the identity, so both paths reach the same decision. The directive carries **only** the offending
+keys, set to `notify: false`, `heartbeat: 0`, `notify_on_complete: false`, `watch_patterns: null`:
+each is falsy for the foreground check and passes the handler's type checks (`heartbeat` must be a
+non-bool int >= 0; `notify` a bool or list), and none is a string, so coercion after the hook leaves
+them alone. A modify directive cannot delete a key, so "off" is a value. `command`,
 `workdir`, `timeout`, `pty` and `background` are never touched; a background call is never touched;
 no other tool is touched. `pty: true` on a foreground call is still the handler's own error, and
 `workdir: ""` is already "no workdir" there (every use is a truthiness test: `terminal_tool.py:846`,
