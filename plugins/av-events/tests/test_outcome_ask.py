@@ -270,7 +270,7 @@ def test_the_question_pattern_is_the_one_shared_constant(plugin):
     assert seed["sentence"] == r"Did you and [^?\n]{1,64} meet\? [Rr][Ee][Pp][Ll][Yy] met, not useful, or missed\.?"
     assert mod.QUESTION_PATTERN.pattern == f"^(?:{seed['sentence']})$"
     assert mod.QUESTION_SEARCH.pattern == seed["sentence"]
-    assert mod.QUESTION_MARKER.pattern == seed["marker"]
+    assert "marker" not in seed  # round 3: no marker gate; a quote is judged by its question alone
     assert mod.is_the_question(QUESTION)
     assert mod.is_the_question(f"Did you and {'A' * 64} meet? Reply met, not useful, or missed.")
     assert not mod.is_the_question(None)
@@ -785,17 +785,34 @@ def test_a_reply_to_the_question_as_hermes_wraps_its_delivery_counts(live, ctx, 
     assert [e["payload"]["value"] for e in events(av, live, "outcome.reported")] == ["missed"]
 
 
-@pytest.mark.parametrize("text", [
+NO_QUESTION_QUOTES = [
     '[Replying to your previous message: "**People Follow-Up**\n\n👤 *New connections*\n- Maya, say hello"]\n\nmet',
     '[Replying to: "did you meet Ravi at lunch?"]\n\nmet',
-    '[Replying to your previous message: "Priya is still waiting to hear from you."]\n\nuseful',
+    '[Replying to your previous message: "Priya is still waiting to hear from you."]\n\nmet',
+    # A native partial quote: the resident selected part of the question.
     '[Replying to your previous message: "Did you and Arjun meet?"]\n\nmet',
-])
-def test_a_reply_to_any_other_message_is_not_an_answer(live, ctx, tenant, av, text):
+    '[Replying to: "Reply met, not useful, or missed."]\n\nmet',
+]
+
+
+@pytest.mark.parametrize("text", NO_QUESTION_QUOTES)
+def test_a_pointer_with_no_recognisable_question_is_judged_by_the_next_message_rule(live, ctx, tenant, av, text):
+    """Round 3 item 3: only a quote of a DIFFERENT ask's question is refused.
+    A pointer whose quote holds no full question counts as the next message."""
     ask_delivered(live, ctx, tenant)
     resident_says(ctx, text)
-    assert notes(live) == []
+    [note] = notes(live)
+    assert note["pointer"] is True and note["pointer_hash"] is None
     live._COLLECTOR.outcome_tick()
+    assert [e["payload"]["value"] for e in events(av, live, "outcome.reported")] == ["met"]
+
+
+@pytest.mark.parametrize("text", NO_QUESTION_QUOTES)
+def test_a_pointer_with_no_recognisable_question_after_other_messages_emits_nothing(live, ctx, tenant, av, text):
+    ask_delivered(live, ctx, tenant)
+    resident_says(ctx, "thanks!")
+    resident_says(ctx, text)
+    assert live._COLLECTOR.outcome_tick().get("answer_not_next") == 1
     assert events(av, live, "outcome.reported") == []
 
 

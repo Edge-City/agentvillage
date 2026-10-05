@@ -1,8 +1,7 @@
 {
   "version": "outcome_question_v3",
-  "about": "The evening outcome ask's fixed question, read by plugins/av-events/_outcome_ask.py, by the trigger's questionSha256 (skills/index-network/scripts/outcome-ask.ts) and by install/tests/proactive_jobs.test.ts. The plugin arms only when the model's reply, after the normalise steps (for matching only; the message hash is of the reply as it is), fully matches ^sentence$ AND the SHA-256 of its question key equals the stage's question_sha256, which the trigger computes from the exact question it showed. A Telegram reply pointer's quote is searched for sentence. Both suites check every entry of cases.",
+  "about": "The evening outcome ask's fixed question, read by plugins/av-events/_outcome_ask.py, by the trigger's questionSha256 (skills/index-network/scripts/outcome-ask.ts) and by install/tests/proactive_jobs.test.ts. The plugin arms only when the model's reply, after the normalise steps (for matching only; the message hash is of the reply as it is), fully matches ^sentence$ AND the SHA-256 of its question key equals the stage's question_sha256, which the trigger computes from the exact question it showed. A Telegram reply pointer's quote is searched for sentence to tell which ask it replies to. Both suites check every entry of cases.",
   "sentence": "Did you and [^?\\n]{1,64} meet\\? [Rr][Ee][Pp][Ll][Yy] met, not useful, or missed\\.?",
-  "marker": "[Rr][Ee][Pp][Ll][Yy] met, not useful, or missed",
   "normalise": {
     "steps": [
       "spaces: each of these characters becomes a plain space",

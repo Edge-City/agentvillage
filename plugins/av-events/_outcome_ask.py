@@ -113,8 +113,6 @@ DELIVERED = frozenset({"delivered", "queued"})
 #: - `sentence`: the question; a reply arms when, after `normalise_reply`,
 #:   it fully matches it (QUESTION_PATTERN), and a pointer's quote is searched
 #:   for it (QUESTION_SEARCH);
-#: - `marker`: what a Telegram reply pointer's quote must contain for the
-#:   message to be an answer at all (QUESTION_MARKER);
 #: - `normalise`: the spaces and the wrapper pairs `normalise_reply` uses;
 #: - `key`: the question key (`question_key`); the trigger writes the plain
 #:   SHA-256 of the key of the exact question it showed into the stage
@@ -130,32 +128,29 @@ class _Question:
     def __init__(self, path: str = QUESTION_FILE) -> None:
         self.pattern: Optional["re.Pattern[str]"] = None
         self.search: Optional["re.Pattern[str]"] = None
-        self.marker: Optional["re.Pattern[str]"] = None
         self.spaces: tuple[str, ...] = ()
         self.wrappers: tuple[tuple[str, str], ...] = ()
         self.key_remove: Optional["re.Pattern[str]"] = None
         try:
             with open(path, encoding="utf-8") as handle:
                 seed = json.load(handle)
-            sentence, marker, rules = seed["sentence"], seed["marker"], seed["normalise"]
+            sentence, rules = seed["sentence"], seed["normalise"]
             remove = seed["key"]["remove"]
             spaces = tuple(s for s in rules["spaces"] if isinstance(s, str) and len(s) == 1)
             wrappers = tuple((o, c) for o, c in rules["wrappers"] if isinstance(o, str) and isinstance(c, str) and o and c)
-            if not (isinstance(sentence, str) and isinstance(marker, str) and marker and isinstance(remove, str) and remove):
+            if not (isinstance(sentence, str) and isinstance(remove, str) and remove):
                 return
             self.pattern = re.compile(f"^(?:{sentence})$")
             self.search = re.compile(sentence)
-            self.marker = re.compile(marker)
             self.key_remove = re.compile(f"[{re.escape(remove)}]")
             self.spaces, self.wrappers = spaces, wrappers
         except (OSError, ValueError, TypeError, KeyError, AttributeError, re.error):
-            self.pattern = self.search = self.marker = self.key_remove = None
+            self.pattern = self.search = self.key_remove = None
 
 
 _QUESTION = _Question()
 QUESTION_PATTERN = _QUESTION.pattern
 QUESTION_SEARCH = _QUESTION.search
-QUESTION_MARKER = _QUESTION.marker
 #: Collapsed to one space in the question key: ASCII whitespace only, the
 #: same set in Python and in the trigger's TypeScript.
 _KEY_SPACES = re.compile(r"[ \t\n\r\f\v]+")
@@ -221,7 +216,7 @@ def question_sha256(sentence: str) -> str:
 def quoted_question_key(quote: str) -> Optional[str]:
     """The question key of the first question sentence in a pointer's quote,
     or None when the quote holds none (a truncated quote, the resident's own
-    message that happens to contain the marker)."""
+    message, a reply to some other message)."""
     if QUESTION_SEARCH is None:
         return None
     found = QUESTION_SEARCH.search(_plain_spaces(quote))
@@ -461,17 +456,17 @@ def normalise(text: Any) -> Optional[str]:
 def _parse(text: Any) -> Optional[tuple[str, bool, Optional[str]]]:
     """`(value, pointer, quote_key)` when the resident's whole message is an
     answer, else None. A message sent as a Telegram reply carries Hermes's
-    pointer; it can be an answer only when the quote contains QUESTION_MARKER,
-    and then `pointer` is True and `quote_key` is the question key of the
-    question sentence in the quote (None when it holds none)."""
+    pointer, which is removed before matching; `pointer` is then True and
+    `quote_key` is the question key of the question sentence in the quote, or
+    None when it holds none (a partial quote, a reply to another message).
+    `tick` refuses only a quote of a different ask's question; with no
+    recognisable question the next-message rule decides."""
     if not isinstance(text, str) or len(text) > 2000:
         return None
     body = text.strip()
     found = _REPLY_POINTER.match(body)
     quote_key = None
     if found:
-        if QUESTION_MARKER is None or QUESTION_MARKER.search(_plain_spaces(found.group(1))) is None:
-            return None  # a reply to some other message is never an answer
         quote_key = quoted_question_key(found.group(1))
         body = body[found.end():]
     normalised = normalise(body)
@@ -1055,7 +1050,6 @@ __all__ = [
     "STAGE_MAX_AGE_S",
     "WINDOW_DAYS",
     "answer_value",
-    "QUESTION_MARKER",
     "QUESTION_PATTERN",
     "QUESTION_SEARCH",
     "normalise_reply",

@@ -165,7 +165,6 @@ describe("the six proactive jobs (DATA-314)", () => {
     const seed = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "plugins", "av-events", "outcome_question.json"), "utf8"));
     expect(seed.sentence).toBe("Did you and [^?\\n]{1,64} meet\\? [Rr][Ee][Pp][Ll][Yy] met, not useful, or missed\\.?");
     const pattern = new RegExp(`^(?:${seed.sentence})$`, "u");
-    const marker = new RegExp(seed.marker, "u");
     // The plugin's `normalise_reply`, step for step from the file's `normalise`.
     const emoji = (ch: string) => /[\u200d\ufe0e\ufe0f\u20e3]/u.test(ch) || /\p{So}/u.test(ch) || /[\u{1F3FB}-\u{1F3FF}\u{E0020}-\u{E007F}]/u.test(ch);
     const stripTrailingEmoji = (text: string) => {
@@ -194,7 +193,6 @@ describe("the six proactive jobs (DATA-314)", () => {
     expect(pattern.test(sentence.replace("<name>", "Maya"))).toBe(true);
     expect(pattern.test(outcomeQuestion("Maya"))).toBe(true);
     expect(pattern.test(outcomeQuestion("M".repeat(40)))).toBe(true);
-    expect(marker.test(outcomeQuestion("Maya"))).toBe(true);
     expect(arms(`Hi! ${outcomeQuestion("Maya")}`)).toBe(false);
   });
 
