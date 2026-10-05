@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+  checkNote,
   chooseVersion,
   createTag,
   gitIn,
@@ -107,6 +108,42 @@ describe("chooseVersion", () => {
     for (const bad of ["2.0.0-rc11", "v2.0.0-rc01", "v2.0.0-rc0", "v2.0.0-RC11", "v2.0.0-rc11 ", "v2.0.0-rc11;x", "v2.0", "release-2026-10-04", "v2.0.0-beta1", "-v2.0.0"]) {
       expect(refusalCode(() => chooseVersion(["v2.0.0-rc10"], bad))).toBe("bad_version");
     }
+  });
+});
+
+describe("checkNote", () => {
+  test("accepts one plain line up to 200 characters; empty is no note", () => {
+    expect(checkNote("")).toBe("");
+    const ok = "Excludes 1a040b9 (Index flow retirement; its tests are red on main): rc10 + #172, 100% & done? yes! a/b_c+d=e 'q' @x";
+    expect(checkNote(ok)).toBe(ok);
+    expect(checkNote("x".repeat(200))).toBe("x".repeat(200));
+  });
+  test("refuses control characters, other characters, length and a leading '-', '#' or space", () => {
+    for (const bad of [
+      "line one\nline two",
+      "a\rb",
+      "tab\there",
+      "nul\u0000",
+      "del\u007f",
+      "x".repeat(201),
+      "-x",
+      "--force",
+      "# heading",
+      "#1",
+      " leading space",
+      "back`tick",
+      "$(id)",
+      "a|b",
+      "<script>",
+      'double "quote"',
+      "back\\slash",
+      "caf\u00e9",
+      "emoji \u{1F600}",
+      "a\u2028b",
+    ]) {
+      expect(refusalCode(() => checkNote(bad))).toBe("bad_note");
+    }
+    expect(() => checkNote("a\nb")).toThrow("one line with no control characters");
   });
 });
 
@@ -390,6 +427,23 @@ describe("createTag", () => {
     expect(body).toContain(`  ${f.c.slice(0, 7)} DATA-2: readme \`code\` # not a comment (#2)`);
   });
 
+  test("a note goes on its own Note: line; a bad note refuses before anything is created", () => {
+    const f = released();
+    const git = gitIn(f.work);
+    expect(renderText(makePlan(git, { ref: "main", note: "first cut for the canaries" }), "dry-run")).toContain("  note         first cut for the canaries");
+    expect(renderSummary(makePlan(git, { ref: "main", note: "first cut" }), "dry-run")).toContain("| Note | first cut |");
+    expect(refusalCode(() => makePlan(git, { ref: "main", note: "a\nRun by: someone-else" }))).toBe("bad_note");
+    expect(refusalCode(() => createTag(git, { ref: f.c, expectCommit: f.c, expectVersion: "v2.0.0-rc2", ...who, note: "-x" }))).toBe("bad_note");
+    expect(sh(f.origin, ["tag", "-l", "v2.0.0-rc*"])).toBe("v2.0.0-rc1");
+    createTag(git, { ref: f.c, expectCommit: f.c, expectVersion: "v2.0.0-rc2", ...who, note: "Excludes 1a040b9 (its tests are red on main)" });
+    const body = sh(f.origin, ["cat-file", "-p", "refs/tags/v2.0.0-rc2"]);
+    expect(body).toContain(`Previous release: v2.0.0-rc1 (${f.a})\nNote: Excludes 1a040b9 (its tests are red on main)\n`);
+    // without a note there is no Note: line
+    const g = released();
+    createTag(gitIn(g.work), { ref: g.c, expectCommit: g.c, expectVersion: "v2.0.0-rc2", ...who });
+    expect(sh(g.origin, ["cat-file", "-p", "refs/tags/v2.0.0-rc2"])).not.toContain("Note:");
+  });
+
   test("a re-run names both actors", () => {
     const f = released();
     createTag(gitIn(f.work), { ref: f.c, expectCommit: f.c, expectVersion: "v2.0.0-rc2", ...who, triggeringActor: "hubot" });
@@ -493,6 +547,18 @@ describe("command line", () => {
     expect(r.stderr).toContain("::error title=Tag release refused (already_tagged)::");
     expect(readFileSync(out, "utf8")).toBe("");
     expect(readFileSync(sum, "utf8")).toContain("nothing was created");
+  });
+
+  test("--note reaches the plan and the tag; a bad note exits 1", () => {
+    const f = released();
+    expect(cli(["plan", "--cwd", f.work, "--ref", "main", "--note", "for the canaries"]).stdout).toContain("note         for the canaries");
+    expect(cli(["plan", "--cwd", f.work, "--ref", "main", "--note", ""]).code).toBe(0);
+    const bad = cli(["plan", "--cwd", f.work, "--ref", "main", "--note", "#x"]);
+    expect(bad.code).toBe(1);
+    expect(bad.stderr).toContain("Refused (bad_note)");
+    const r = cli(["tag", "--cwd", f.work, "--expect-commit", f.c, "--expect-version", "v2.0.0-rc2", "--actor", "octocat", "--run-url", RUN_URL, "--note", "hello there"]);
+    expect(r.code).toBe(0);
+    expect(sh(f.origin, ["cat-file", "-p", "refs/tags/v2.0.0-rc2"])).toContain("\nNote: hello there\n");
   });
 
   test("bad usage exits 2", () => {

@@ -5,13 +5,13 @@
  * the control plane's Roll workflow takes. docs/deployment.md, "Roll", is the
  * procedure; the hand `git tag -a` stays the fallback.
  *
- *   bun scripts/tag-release.ts plan --ref <ref> [--version <v>] [--dry-run true|false]
+ *   bun scripts/tag-release.ts plan --ref <ref> [--version <v>] [--note <text>] [--dry-run true|false]
  *       Read-only. Resolves the ref, refuses what the button must not tag,
  *       computes the next version, lists the commits since the previous release
  *       tag and compares the plugin seed files. Writes the plan to
  *       $GITHUB_OUTPUT and $GITHUB_STEP_SUMMARY when they are set.
  *
- *   bun scripts/tag-release.ts tag --ref <sha> [--version <v>]
+ *   bun scripts/tag-release.ts tag [--version <v>] [--note <text>]
  *       --expect-commit <sha> --expect-version <v> --actor <login> --run-url <url>
  *       [--triggering-actor <login>] [--fetch]
  *       Refreshes the remote's branches and tags (--fetch), plans again, fails
@@ -45,6 +45,10 @@ export const ROLL_WORKFLOW_URL =
 export const DOCS_PATH = "docs/deployment.md";
 /** Subject lines beyond this many are summarised as "and N more". */
 export const MAX_LISTED_COMMITS = 150;
+
+/** An optional one-line note for the tag message: printable ASCII from a small set, at most 200 characters. */
+export const NOTE_MAX = 200;
+const NOTE_RE = /^[A-Za-z0-9 .,:;()\/_+=?!'@#%&-]+$/;
 
 const SHA_RE = /^[0-9a-f]{7,40}$/;
 const FULL_SHA_RE = /^[0-9a-f]{40}$/;
@@ -155,6 +159,23 @@ export function chooseVersion(tags: string[], override: string): VersionChoice {
     );
   }
   return { version: override, highest: highest?.name ?? null, skips: computed !== null && computed !== override ? computed : null };
+}
+
+/**
+ * The note as given, or a refusal. Empty means no note. Refused: control
+ * characters (a newline included), anything outside letters, digits, space and
+ * . , : ; ( ) / _ + = ? ! ' @ # % & -, more than NOTE_MAX characters, and a note
+ * starting with '-', '#' or a space.
+ */
+export function checkNote(note: string): string {
+  if (note === "") return "";
+  if (/[\u0000-\u001f\u007f]/.test(note)) throw new Refusal("bad_note", "The note must be one line with no control characters.");
+  if (note.length > NOTE_MAX) throw new Refusal("bad_note", `The note is ${note.length} characters; at most ${NOTE_MAX}.`);
+  if (/^[-# ]/.test(note)) throw new Refusal("bad_note", "The note must not start with '-', '#' or a space.");
+  if (!NOTE_RE.test(note)) {
+    throw new Refusal("bad_note", "The note may use only letters, digits, spaces and . , : ; ( ) / _ + = ? ! ' @ # % & -");
+  }
+  return note;
 }
 
 // ---------------------------------------------------------------------------
@@ -321,15 +342,17 @@ export type Plan = {
   seeds: SeedFile[];
   seedChanged: boolean;
   ignoredTags: string[];
+  note: string;
 };
 
-export type PlanOptions = { ref: string; version?: string; mainRef?: string; remote?: string };
+export type PlanOptions = { ref: string; version?: string; note?: string; mainRef?: string; remote?: string };
 
 export function makePlan(git: Git, opts: PlanOptions): Plan {
   const mainRef = opts.mainRef ?? "refs/remotes/origin/main";
   const remote = opts.remote ?? "origin";
   const override = (opts.version ?? "").trim();
   const ref = opts.ref.trim();
+  const note = checkNote(opts.note ?? "");
   if (ref === "") throw new Refusal("bad_ref", "The ref is empty. Use main, a commit id or a tag.");
 
   const mainCommit = commitOf(git, mainRef);
@@ -401,6 +424,7 @@ export function makePlan(git: Git, opts: PlanOptions): Plan {
     seeds,
     seedChanged: seeds.some((s) => s.changed),
     ignoredTags,
+    note,
   };
 }
 
@@ -432,6 +456,7 @@ export function tagMessage(plan: Plan, who: { actor: string; triggeringActor?: s
     `Run: ${who.runUrl}`,
     `Commit: ${plan.commit}`,
     `Previous release: ${plan.previous ? `${plan.previous.name} (${plan.previous.commit})` : "none"}`,
+    ...(plan.note ? [`Note: ${plan.note}`] : []),
     "",
     `Seed check: ${seedLine(plan.seeds)}`,
     ...seedDetail(plan.seeds).map((l) => `  ${l}`),
@@ -481,6 +506,7 @@ export function renderText(plan: Plan, stage: Stage): string {
     `  commit       ${plan.commit} (from ${plan.refKind} ${plan.ref}, on main)`,
     `  previous     ${plan.previous ? `${plan.previous.name} (${plan.previous.commit.slice(0, 7)})` : "none"}`,
     `  commits      ${sinceText(plan)}`,
+    ...(plan.note ? [`  note         ${plan.note}`] : []),
     "",
     seedLine(plan.seeds),
     ...seedDetail(plan.seeds).map((l) => `  ${l}`),
@@ -510,6 +536,7 @@ export function renderSummary(plan: Plan, stage: Stage): string {
     `| Commit | \`${plan.commit}\` (from ${plan.refKind} \`${plan.ref}\`, on main) |`,
     `| Previous release | ${plan.previous ? `\`${plan.previous.name}\` (\`${plan.previous.commit.slice(0, 7)}\`)` : "none"} |`,
     `| Commits | ${sinceText(plan)} |`,
+    ...(plan.note ? [`| Note | ${plan.note} |`] : []),
     "",
     `**Seed check.** ${seedLine(plan.seeds)}`,
     "",
@@ -613,8 +640,8 @@ function parseArgs(argv: string[]): { cmd: string; flags: Map<string, string> } 
 }
 
 const KNOWN = {
-  plan: ["ref", "version", "dry-run", "cwd", "main", "remote"],
-  tag: ["ref", "version", "cwd", "main", "remote", "expect-commit", "expect-version", "actor", "triggering-actor", "run-url", "fetch"],
+  plan: ["ref", "version", "note", "dry-run", "cwd", "main", "remote"],
+  tag: ["ref", "version", "note", "cwd", "main", "remote", "expect-commit", "expect-version", "actor", "triggering-actor", "run-url", "fetch"],
 } as const;
 
 function emit(path: string | undefined, text: string) {
@@ -633,6 +660,7 @@ export function main(argv: string[], env: Record<string, string | undefined> = p
     const common = {
       ref: flags.get("ref") ?? "",
       version: flags.get("version") ?? "",
+      note: flags.get("note") ?? "",
       mainRef: flags.get("main") ?? "refs/remotes/origin/main",
       remote: flags.get("remote") ?? "origin",
     };
