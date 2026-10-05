@@ -1,0 +1,5 @@
+{
+  "version": "outcome_question_v1",
+  "pattern": "^Did you and .{1,64} meet\\? Reply met, not useful, or missed\\.$",
+  "marker": "Reply met, not useful, or missed."
+}

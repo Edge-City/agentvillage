@@ -158,4 +158,20 @@ describe("the six proactive jobs (DATA-314)", () => {
     expect(evening).toContain("`Did you and <name> meet? Reply met, not useful, or missed.`");
     expect(outcomeQuestion("Maya")).toBe("Did you and Maya meet? Reply met, not useful, or missed.");
   });
+
+  test("DATA-42 F2: the plugin arms only on a reply that fully matches the one shared pattern, and the prompt's sentence matches it", () => {
+    // plugins/av-events/outcome_question.json: the plugin's `QUESTION_PATTERN` and `QUESTION_MARKER`.
+    const seed = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "plugins", "av-events", "outcome_question.json"), "utf8"));
+    const pattern = new RegExp(seed.pattern, "u");
+    expect(seed.pattern).toBe("^Did you and .{1,64} meet\\? Reply met, not useful, or missed\\.$");
+    // The sentence the evening prompt pins, with a name in it, and the trigger's own question.
+    const evening = prompt(proactive.find((spec) => PROACTIVE[spec.name] === "evening")!);
+    const sentence = evening.match(/`(Did you and <name> meet\? [^`]+)`/)![1];
+    expect(pattern.test(sentence.replace("<name>", "Maya"))).toBe(true);
+    expect(pattern.test(outcomeQuestion("Maya"))).toBe(true);
+    expect(pattern.test(outcomeQuestion("M".repeat(40)))).toBe(true);
+    expect(outcomeQuestion("Maya").endsWith(seed.marker)).toBe(true);
+    expect(pattern.test(`Hi! ${outcomeQuestion("Maya")}`)).toBe(false);
+    expect(pattern.test("Priya is still waiting to hear from you.")).toBe(false);
+  });
 });

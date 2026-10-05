@@ -219,6 +219,53 @@ def test_nothing_on_silent(live, ctx, tenant, av):
     assert tenant.asked_ledger() == {}
 
 
+NOT_THE_QUESTION = {
+    "a second person added": "Hi! Did you and Arjun meet? Also, did you get to talk to Priya? Reply met, not useful, or missed.",
+    "a reminder about someone else": "Priya is still waiting to hear from you. [message Priya](https://t.me/x)",
+    "Hermes's error text": "Sorry, I hit an error and could not finish this note.",
+    "the question with a line after it": f"{QUESTION}\n\nHave a good evening!",
+    "the question with a greeting before it": f"Good evening! {QUESTION}",
+    "a name over 64 characters": f"Did you and {'A' * 65} meet? Reply met, not useful, or missed.",
+    "no name": "Did you and meet? Reply met, not useful, or missed.",
+    "the question twice": f"{QUESTION}\n{QUESTION}",
+}
+
+
+@pytest.mark.parametrize("label", sorted(NOT_THE_QUESTION))
+def test_a_reply_that_is_not_the_fixed_question_is_treated_as_silent(live, ctx, tenant, av, label):
+    execution = uuid.uuid4().hex
+    tenant.stage()
+    evening_reply(ctx, tenant, execution, NOT_THE_QUESTION[label])
+    assert not tenant.stage_file.exists(), label
+    assert tenant.armed() == [], label
+    tenant.finish(execution)
+    live._COLLECTOR.outcome_tick()
+    assert events(av, live, "outcome.asked") == [], label
+    # The subject stays due: nothing in the asked ledger.
+    assert tenant.asked_ledger() == {}
+
+
+def test_the_question_with_surrounding_whitespace_still_arms(live, ctx, tenant, av):
+    execution = uuid.uuid4().hex
+    tenant.stage()
+    evening_reply(ctx, tenant, execution, f"\n  {QUESTION}  \n")
+    tenant.finish(execution)
+    assert live._COLLECTOR.outcome_tick().get("asked") == 1
+
+
+def test_the_question_pattern_is_the_one_shared_constant(plugin):
+    """`outcome_question.json` is also what the bun test pins the evening
+    prompt's sentence against (`install/tests/proactive_jobs.test.ts`)."""
+    mod = module(plugin)
+    seed = json.loads(open(mod.QUESTION_FILE, encoding="utf-8").read())
+    assert seed["pattern"] == r"^Did you and .{1,64} meet\? Reply met, not useful, or missed\.$"
+    assert mod.QUESTION_PATTERN.pattern == seed["pattern"]
+    assert mod.QUESTION_MARKER == seed["marker"] == "Reply met, not useful, or missed."
+    assert mod.is_the_question(QUESTION)
+    assert mod.is_the_question(f"Did you and {'A' * 64} meet? Reply met, not useful, or missed.")
+    assert not mod.is_the_question(None)
+
+
 @pytest.mark.parametrize("status,delivery", [("completed", "failed"), ("completed", "suppressed"), ("completed", "not_configured"),
                                              ("completed", None), ("failed", "delivered"), ("unknown", None)])
 def test_nothing_on_failed_delivery_and_the_subject_stays_due(live, ctx, tenant, av, status, delivery):

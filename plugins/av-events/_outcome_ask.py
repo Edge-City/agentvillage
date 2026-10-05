@@ -116,6 +116,34 @@ LEDGER_MAX_BYTES = 256 * 1024
 MATCHER_VERSION = "outcome_reply_v1"
 DELIVERED = frozenset({"delivered", "queued"})
 
+#: The fixed question, shared with the bun test that pins the evening prompt's
+#: sentence (`install/tests/proactive_jobs.test.ts`): `pattern` is what a
+#: reply must fully match, stripped, to arm; `marker` is the sentence a
+#: Telegram reply pointer must quote for the message to be an answer.
+QUESTION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outcome_question.json")
+
+
+def _load_question(path: str = QUESTION_FILE) -> tuple[Optional["re.Pattern[str]"], Optional[str]]:
+    """`(pattern, marker)` from QUESTION_FILE; `(None, None)` when it cannot
+    be read, and then nothing arms and no pointer passes (fail closed)."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            seed = json.load(handle)
+        pattern, marker = seed.get("pattern"), seed.get("marker")
+        if not (isinstance(pattern, str) and isinstance(marker, str) and marker):
+            return None, None
+        return re.compile(pattern), marker
+    except (OSError, ValueError, AttributeError, re.error):
+        return None, None
+
+
+QUESTION_PATTERN, QUESTION_MARKER = _load_question()
+
+
+def is_the_question(reply: Any) -> bool:
+    """The model's reply, stripped, is exactly the fixed question with one name."""
+    return isinstance(reply, str) and QUESTION_PATTERN is not None and QUESTION_PATTERN.fullmatch(reply.strip()) is not None
+
 #: The whole message, normalised (`normalise`), and the §4.1 value it is.
 ANSWERS = {
     "met": "met",
@@ -408,6 +436,11 @@ def arm(
     if not isinstance(reply, str) or not reply.strip() or is_silent(reply):
         _unlink(path)
         return "silent"
+    if not is_the_question(reply):
+        # Anything but the fixed question (a second person added, a reminder,
+        # Hermes's error text) is treated as silent: no ask, the subject stays due.
+        _unlink(path)
+        return "not_the_question"
     claim = os.path.join(armed_dir(state_dir), f"{execution_id}.claim")
     try:
         os.makedirs(armed_dir(state_dir), mode=DIR_MODE, exist_ok=True)
@@ -762,8 +795,11 @@ __all__ = [
     "STAGE_MAX_AGE_S",
     "WINDOW_DAYS",
     "answer_value",
+    "QUESTION_MARKER",
+    "QUESTION_PATTERN",
     "arm",
     "armed_dir",
+    "is_the_question",
     "asked_ledger_path",
     "asks_path",
     "normalise",
