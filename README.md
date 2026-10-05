@@ -267,6 +267,19 @@ The installer also caps `model.max_tokens` in Hermes `config.yaml` at `4096` by 
 
 The installer also sets `platforms.telegram.extra.drop_pending_on_cold_boot: false` in Hermes `config.yaml`, so a cold gateway start (an update, a redeploy, a crash restart) delivers the Telegram messages residents sent while the gateway was down, in order, instead of discarding them. It takes effect only on Hermes builds from 2026-09-20 or later; older builds ignore the key. The installer writes it only when the key is absent (under `extra` or directly under `platforms.telegram`) and never overwrites a value set by hand, so an operator can set it to `true` to restore the old drop-the-backlog behaviour and later installs keep that choice. Hermes still drops the backlog when it recovers from a Telegram polling conflict (HTTP 409), whatever this key says.
 
+The installer also owns what a resident sees on Telegram while the agent works (DATA-318). Hermes's own `config.yaml` defaults (`display.show_reasoning: true`, `display.tool_progress: all`, `display.interim_assistant_messages: true`, `display.platforms.telegram.streaming: true`) put the model's last reasoning block above every reply and a line per tool call in the chat. The installer writes Telegram-scoped keys under `display.platforms.telegram`, which outrank the global ones for Telegram only, so the CLI and desktop surfaces keep Hermes's defaults:
+
+| Key | Value | Written |
+|---|---|---|
+| `show_reasoning` | `false` | on every install and roll, whatever it was |
+| `tool_progress` | `new` | only while unset (and no legacy `display.tool_progress_overrides.telegram`) |
+| `tool_progress_grouping` | `accumulate` | only while unset |
+| `interim_assistant_messages` | `false` | only while unset |
+| `streaming` | `false` | while unset or `true` (the value Hermes itself writes there) |
+| `cleanup_progress` | `true` | only while unset |
+
+The resident sees one progress message per reply, edited in place with a line each time the agent moves to a different tool (built-in tools get Hermes's friendly label, such as "Reading skill", plugin and MCP tools show their own name, a `terminal` call shows the first line of its command), deleted once the reply lands (kept when the turn fails), and the reply as one message. A value set by hand is kept on later installs, except `show_reasoning`, and except `streaming: true`, which cannot be told from Hermes's default. Set `AV_DISPLAY_DEFAULTS=0` (in the environment or `$HERMES_HOME/.env`) to leave `config.yaml` untouched. Hidden is not deleted: the agent still stores its reasoning in its own `state.db` (`messages.reasoning`, `reasoning_content`, `reasoning_details`). The data pipeline's message archive drops those columns, and the `av-events` telemetry carries only reasoning token counts.
+
 The installer writes any tokens it finds into `env.vars.*` in `~/.openclaw/openclaw.json`; on the next gateway start they become process-env on the gateway and inherit into the agent's shell tool, so `curl -H "Authorization: Bearer $EDGEOS_API_KEY"` recipes and Geo CLI commands work without further plumbing.
 
 The installer:

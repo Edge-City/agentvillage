@@ -10,6 +10,7 @@
  *   - `terminal.cwd` in config.yaml → `$HERMES_HOME`
  *   - STT enabled with Groq Whisper so voice notes are auto-transcribed
  *   - Telegram backlog kept across gateway restarts (`platforms.telegram.extra.drop_pending_on_cold_boot: false`, only when unset)
+ *   - Telegram display: no reasoning, one quiet progress message per reply (`display_defaults.ts`; `AV_DISPLAY_DEFAULTS=0` skips)
  *   - Index MCP + morning digest cron (`install_index.ts`)
  *   - Geo CLI runtime note (`install_geo.ts`)
  *   - opt-in recall skill + plugin when `AV_RECALL_ENABLED=1` (`install_recall.ts`)
@@ -50,6 +51,7 @@ import {
   keepTelegramBacklogOnColdBoot,
   setTerminalCwd,
 } from "./config";
+import { configureTelegramDisplay } from "./display_defaults";
 import { copyPluginTree } from "./plugin_copy";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
 import {
@@ -238,6 +240,7 @@ function main(): void {
   configureStt();
   configureHostedGateway();
   keepTelegramBacklogOnColdBoot();
+  configureTelegramDisplay();
   configureDashboardAuth();
   configureAvEvents();
   // Opt-in and off the core path: a failure here is counted, never fatal.
