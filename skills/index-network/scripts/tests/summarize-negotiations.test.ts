@@ -3,8 +3,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { IndexMcpError } from "../index-mcp";
 import {
   type NegotiationItem,
+  failureCode,
   main,
   summarizeNegotiations,
   updatedWithinDays,
@@ -80,6 +82,32 @@ describe("updatedWithinDays", () => {
 });
 
 // ── summarizeNegotiations ─────────────────────────────────────────────────────
+
+describe("F14: failures are logged as codes, never messages", () => {
+  test("failureCode: an Index error's code, else the error's class", () => {
+    expect(failureCode(new IndexMcpError("mcp-tool-error"))).toBe("mcp-tool-error");
+    expect(failureCode(new IndexMcpError("mcp-http-503"))).toBe("mcp-http-503");
+    expect(failureCode(new TypeError("secret detail https://evil.example"))).toBe("TypeError");
+    expect(failureCode("a string")).toBe("string");
+  });
+
+  test("a fetch that throws with a message writes only its class to stderr", async () => {
+    tempWorkspace();
+    await Bun.write("state.json", "{}");
+    let err = "";
+    const write = process.stderr.write;
+    process.stderr.write = ((chunk: string) => { err += chunk; return true; }) as typeof process.stderr.write;
+    try {
+      await summarizeNegotiations({
+        fetchNegotiations: async () => { throw new Error("secret detail from the server"); },
+        stateFile: "state.json",
+      });
+    } finally {
+      process.stderr.write = write;
+    }
+    expect(err).toBe("negotiation-summary: MCP fetch failed — Error\n");
+  });
+});
 
 describe("summarizeNegotiations", () => {
   test("returns silent when the fetcher throws (non-fatal MCP failure)", async () => {

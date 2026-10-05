@@ -62,7 +62,7 @@ import {
   showingsFor,
   type PendingListing,
 } from "./delivery-state";
-import { callIndexTool, indexMcpUrl, toolJsonArray, toolJsonObject } from "./index-mcp";
+import { IndexMcpError, callIndexTool, indexMcpUrl, toolJsonArray, toolJsonObject } from "./index-mcp";
 import { cleanName } from "./proactive-text";
 import { writeStateFile } from "./state-file";
 
@@ -200,7 +200,7 @@ export async function summarizeNegotiations(opts: {
     allNegotiations = await fetchNegotiations();
   } catch (err) {
     process.stderr.write(
-      `negotiation-summary: MCP fetch failed — ${err instanceof Error ? err.message : String(err)}\n`,
+      `negotiation-summary: MCP fetch failed — ${failureCode(err)}\n`,
     );
     return { silent: true, reason: "mcp-fetch-failed" };
   }
@@ -253,7 +253,7 @@ export async function summarizeNegotiations(opts: {
       signals = await fetchSignals();
     } catch (err) {
       process.stderr.write(
-        `negotiation-summary: signal fetch failed — ${err instanceof Error ? err.message : String(err)}\n`,
+        `negotiation-summary: signal fetch failed — ${failureCode(err)}\n`,
       );
     }
   }
@@ -274,6 +274,17 @@ export async function summarizeNegotiations(opts: {
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
+
+/**
+ * What a failure is logged as: an IndexMcpError's message, which is a code
+ * (`mcp-tool-error`, `mcp-http-503`), else the error's class name; never any
+ * other message, which can carry server text (DATA-314 B1-fix F14).
+ */
+export function failureCode(err: unknown): string {
+  if (err instanceof IndexMcpError && /^[a-z0-9][a-z0-9:_-]{0,63}$/.test(err.message)) return err.message;
+  const name = err instanceof Error ? err.name : typeof err;
+  return String(name).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40) || "unknown";
+}
 
 export interface FollowUpCard {
   name: string;
@@ -368,7 +379,7 @@ export async function followUp(options: {
     signals = intentsFrom(intentText);
   } catch (err) {
     process.stderr.write(
-      `negotiation-summary: MCP fetch failed — ${err instanceof Error ? err.message : String(err)}\n`,
+      `negotiation-summary: MCP fetch failed — ${failureCode(err)}\n`,
     );
     return { silent: true, reason: "mcp-fetch-failed" };
   }
@@ -434,7 +445,7 @@ export async function main(): Promise<void> {
 if (import.meta.main) {
   main().catch((err) => {
     process.stderr.write(
-      `negotiation-summary: fatal — ${err instanceof Error ? err.message : String(err)}\n`,
+      `negotiation-summary: fatal — ${failureCode(err)}\n`,
     );
     process.stdout.write("[SILENT]");
     process.exit(0);
