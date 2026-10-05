@@ -181,7 +181,9 @@ busy resident by hand. To resume, start a new run with the same tag: healthy
 residents are skipped and the stopped one is updated again at its normal turn.
 
 **Roll back.** Run the workflow with the previous tag, test tenants first. A
-rollback is an ordinary roll and restarts every resident in scope again.
+rollback is an ordinary roll and restarts every resident in scope again. Going
+back to a release from before DATA-314 needs one more step per resident first;
+see "The proactive jobs" below.
 
 **What Roll does not guarantee.** That the agent answers. That Telegram
 messages sent during a restart arrive (Hermes drops them on a cold start; the
@@ -219,6 +221,86 @@ on it:
     `allow_seed_change`.
 12. Roll's dry run takes the tag (annotated, on `main`); then continue with
     the staged procedure.
+
+## The proactive jobs (DATA-314)
+
+Six scheduled jobs reach a resident or prepare for one. Each is triggered by a
+deterministic pre-run script: Hermes runs
+`$HERMES_HOME/scripts/agentvillage_proactive_<action>.sh` (one shim,
+`skills/index-network/scripts/shims/agentvillage_proactive.sh`, installed
+under six names), which runs `skills/index-network/scripts/proactive.ts
+<action>`. The script does every deterministic step and prints the facts as
+JSON, then the wake line; the model only writes language from that Script
+Output. No prompt of the six asks for a tool call, so a model that mangles tool
+arguments cannot break a job.
+
+| Job | Time (host-local, staggered) | Action | What the model is given |
+|---|---|---|---|
+| Edge — digest prepare | 02:00 | `prefetch` | Nothing: the one `no_agent` job. It writes the brief's context to `av-events/proactive/brief-context.json` and is always silent. |
+| Edge — daily digest | 08:00 | `brief` | Dates, weather, organiser announcements, today's schedule facts, the resident's interests and notes, the count of eligible new matches, up to three cleaned names, the Connections link, the count of things waiting in their approvals. |
+| Edge — opportunity drop (midday), (evening) | 12:00, 17:00 | `drop-midday`, `drop-evening` | One person: cleaned name, profile and message links. |
+| Edge — negotiation summary | 14:00 | `negotiation` | The resident's own signals; cleaned names with their links. |
+| Edge — evening questions | 19:00 | `evening` | One person (cleaned name, links), or the last-day closeout question. |
+
+The rules the trigger holds:
+- **No third-party free text reaches the model.** Only dates, the resident's
+  own data, sanitised schedule facts, organiser announcements, Index counts and
+  cleaned names; no headline, summary or description written by or about
+  another person. Every string is cleaned (`proactive-text.ts`: control and
+  format characters, markup, backticks and links removed, length capped;
+  names also refused when link-shaped or command-shaped) and scanned with a
+  mirror of Hermes's cron prompt scanner, and withheld on a hit; the whole
+  output is scanned once more before the model is woken.
+- **The brief only between 05:00 and 11:00 IST.** Outside it the trigger is
+  silent; the other jobs have no window.
+- **Once per day per job.** The day is marked done in
+  `memory/heartbeat-state.json` (`proactiveRuns.<action>`) at the moment the
+  trigger wakes the model. A run that then fails loses that day; there is no
+  delivery tracking.
+- **The state file is locked** (`memory/heartbeat-state.json.lock`) while a
+  trigger reads and writes it, and written by temp file and rename.
+- **Every delivered message is recorded.** No `no_agent` job delivers text (a
+  `no_agent` job's stdout would reach the resident with no model turn, so no
+  message event or archive entry), and every job that delivers sends a failure
+  notice to `local`, never to the resident's chat.
+- Agent-job triggers always exit 0 with the wake line last; a fault is a silent
+  run with a code. Each run appends one line of codes and counts to
+  `av-events/proactive/triggers.jsonl` (never a name, a URL or any text).
+
+**The Connections link.** The brief always ends its Index part with
+`Connections: <link>`. The link is `https://agents.edgecity.live/insights`
+unless `AV_CONNECTIONS_URL` (process environment, else `$HERMES_HOME/.env`)
+parses as an `https` URL with no user name or password; anything else is
+ignored and the default is used.
+
+**What a roll does to the jobs.** The installer edits each existing job in
+place, one `hermes cron edit <id>` for its shape (prompt, script, agent mode,
+failure target), so ids, schedules, pause state and next run are kept and
+nothing is paused or recreated. The edit takes effect on the job's next run;
+the gateway restart is not needed for it.
+
+**After a roll, on a canary.** Force the brief within the window with
+`hermes cron run <id>` (the daily digest's id from `hermes cron list`): one
+Telegram message, `cron.run` completed and delivered, `message.out` with
+channel cron, no `tool.call` in that session, and a `woke` line in
+`triggers.jsonl`. A second forced run the same day prints `done-today` and
+sends nothing; a run after 11:00 IST prints `outside-window`.
+
+**Rolling back to a release from before DATA-314.** The older installer only
+rewrites prompts: it never clears a job's script or turns `no_agent` off, and
+the six jobs would keep running the new triggers under the old prompts (the
+02:00 job would stay a silent prefetch, so no brief would be staged). Before
+the rollback roll, on each resident, for each of the six jobs (ids from
+`hermes cron list`):
+
+    hermes cron edit <id> --agent --script ""
+
+Until the rollback roll lands, those jobs run their current prompts with no
+Script Output, and each prompt then replies `[SILENT]`, so nothing reaches the
+resident (the 02:00 job delivers nowhere in any case). Then roll the previous tag as usual; its installer restores its own
+prompts (`prepare.md` and `send.md` come back with its files). The
+`--failure-deliver local` setting can stay. `av-events/proactive/` and the
+`proactiveRuns` key in the state file are left behind and are harmless.
 
 ## The data pipeline
 

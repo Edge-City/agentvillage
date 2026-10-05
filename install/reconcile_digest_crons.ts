@@ -6,8 +6,10 @@
  * Hermes stores a copy of each cron prompt at creation time, so updating the
  * workspace files alone does not update existing residents' scheduled jobs.
  * Run this after copying new skill files into a resident workspace, or as a
- * fleet repair command, to remove stale Edge cron jobs and recreate them with
- * current prompt bodies while preserving all user memory and Kanban data.
+ * fleet repair command: retired Edge cron jobs are removed, and each current
+ * one is edited in place (prompt, script, agent mode, failure target; id,
+ * schedule, pause state and next run kept, DATA-314), preserving all user
+ * memory and Kanban data.
  *
  * Usage:
  *   HERMES_HOME=/opt/data bun install/reconcile_digest_crons.ts
