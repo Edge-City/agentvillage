@@ -24,7 +24,8 @@
  * Exit codes: 0 done, 1 refused or failed (nothing created), 2 bad usage.
  */
 import { spawnSync } from "node:child_process";
-import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -37,8 +38,13 @@ export const SEED_FILES = [
 
 /** Every tag the Roll button would accept (controlplane scripts/roll/lib.js TAG_RE). */
 export const RELEASE_TAG_RE = /^v\d+\.\d+\.\d+(-rc\d+)?$/;
-/** A release tag in canonical form: no leading zeros, rc numbers from 1. The only form this tool creates. */
-export const CANONICAL_RE = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-rc([1-9]\d*))?$/;
+/**
+ * A release tag in canonical form: no leading zeros, rc numbers from 1, every
+ * number at most 6 digits. The only form this tool creates.
+ */
+export const CANONICAL_RE = /^v(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})(?:-rc([1-9]\d{0,5}))?$/;
+/** The test workflow whose `bun test` directories must exist at the commit (main's copy, as the run uses it). */
+export const TEST_WORKFLOW = ".github/workflows/test.yml";
 
 export const ROLL_WORKFLOW_URL =
   "https://github.com/Edge-City/agentvillage-controlplane/actions/workflows/roll.yml";
@@ -55,6 +61,31 @@ const FULL_SHA_RE = /^[0-9a-f]{40}$/;
 const ACTOR_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?$/;
 const RUN_URL_RE = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/actions\/runs\/\d+(?:\/attempts\/\d+)?$/;
 
+// ---------------------------------------------------------------------------
+// Output hygiene: every string that comes from the repository or an input
+// passes through these before it reaches a log line, the step summary or a
+// tag message.
+
+/** C0 controls, DEL and Unicode line breaks become spaces (the runner splits lines on \r too); clipped to max. */
+export function clean(text: string, max: number): string {
+  const t = text.replace(/[\u0000-\u001f\u007f\u0085\u2028\u2029]/g, " ");
+  return t.length > max ? `${t.slice(0, Math.max(0, max - 3))}...` : t;
+}
+
+/** clean(), then backticks and angle brackets replaced, for markdown. */
+export function neutral(text: string, max: number): string {
+  return clean(text, max).replace(/`/g, "'").replace(/</g, "\u2039").replace(/>/g, "\u203a");
+}
+
+/** A markdown code span of neutral(text). */
+export function code(text: string, max: number): string {
+  return `\`${neutral(text, max)}\``;
+}
+
+export const MAX_SUBJECT = 200;
+export const MAX_TAG_NAME = 100;
+export const MAX_VERSION_STRING = 64;
+
 export class Refusal extends Error {
   constructor(
     readonly code: string,
@@ -69,9 +100,12 @@ export class Refusal extends Error {
 
 export type Version = { name: string; major: number; minor: number; patch: number; rc: number | null };
 
-/** Any tag Roll accepts, numbers read as integers (so v2.0.0-rc011 reads as rc 11). */
+/**
+ * A tag Roll accepts with every number at most 6 digits, numbers read as
+ * integers (so v2.0.0-rc011 reads as rc 11). Longer numbers: null.
+ */
 export function parseReleaseTag(name: string): Version | null {
-  const m = /^v(\d+)\.(\d+)\.(\d+)(?:-rc(\d+))?$/.exec(name);
+  const m = /^v(\d{1,6})\.(\d{1,6})\.(\d{1,6})(?:-rc(\d{1,6}))?$/.exec(name);
   if (!m) return null;
   return { name, major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]), rc: m[4] === undefined ? null : Number(m[4]) };
 }
@@ -105,8 +139,18 @@ export type VersionChoice = {
  *    canonical form (its number cannot be trusted).
  *  - Override: must be canonical, must not exist (also not as v2.0.0-rc011 for
  *    rc11), and must be strictly higher than every release tag.
+ *  - Either way: refused when a tag Roll would accept has a number longer than
+ *    6 digits (it cannot be ordered safely), and the result is checked once
+ *    more (canonical, new, higher than every release tag) before it is returned.
  */
 export function chooseVersion(tags: string[], override: string): VersionChoice {
+  const oversize = tags.filter((t) => RELEASE_TAG_RE.test(t) && parseReleaseTag(t) === null);
+  if (oversize.length > 0) {
+    throw new Refusal(
+      "oversize_tags",
+      `Tag${oversize.length > 1 ? "s" : ""} ${oversize.map((t) => clean(t, MAX_TAG_NAME)).join(", ")} look${oversize.length > 1 ? "" : "s"} like a release tag with a number longer than 6 digits, so versions cannot be compared safely. Delete or rename ${oversize.length > 1 ? "them" : "it"}, or tag by hand.`,
+    );
+  }
   const release = tags.map(parseReleaseTag).filter((v): v is Version => v !== null);
   release.sort(compareVersions);
   const highest = release.at(-1) ?? null;
@@ -135,13 +179,13 @@ export function chooseVersion(tags: string[], override: string): VersionChoice {
 
   if (override === "") {
     if (computeRefusal) throw computeRefusal;
-    return { version: computed as string, highest: highest?.name ?? null, skips: null };
+    return assertNewVersion({ version: computed as string, highest: highest?.name ?? null, skips: null }, tags, release);
   }
 
   if (!isCanonical(override)) {
     throw new Refusal(
       "bad_version",
-      `The version "${override}" is not a release version. Use vX.Y.Z or vX.Y.Z-rcN (N from 1, no leading zeros), e.g. v2.0.0-rc11.`,
+      `The version "${clean(override, MAX_TAG_NAME)}" is not a release version. Use vX.Y.Z or vX.Y.Z-rcN (N from 1, no leading zeros), e.g. v2.0.0-rc11.`,
     );
   }
   const wanted = parseReleaseTag(override) as Version;
@@ -158,7 +202,20 @@ export function chooseVersion(tags: string[], override: string): VersionChoice {
       `The version ${override} is lower than the existing release tag ${highest.name}. A new release must be higher than every release tag.`,
     );
   }
-  return { version: override, highest: highest?.name ?? null, skips: computed !== null && computed !== override ? computed : null };
+  return assertNewVersion(
+    { version: override, highest: highest?.name ?? null, skips: computed !== null && computed !== override ? computed : null },
+    tags,
+    release,
+  );
+}
+
+/** The last check on a chosen version: canonical, no tag of that name, strictly higher than every release tag. */
+function assertNewVersion(choice: VersionChoice, tags: string[], release: Version[]): VersionChoice {
+  const v = isCanonical(choice.version) ? parseReleaseTag(choice.version) : null;
+  if (v === null || tags.includes(choice.version) || release.some((r) => compareVersions(r, v) >= 0)) {
+    throw new Refusal("version_check_failed", `The chosen version ${clean(choice.version, MAX_TAG_NAME)} failed the final check (canonical, new, higher than every release tag). Nothing was created.`);
+  }
+  return choice;
 }
 
 /**
@@ -235,7 +292,7 @@ export function validRefInput(ref: string): boolean {
  */
 export function resolveRef(git: Git, ref: string, mainRef: string, remote: string): { commit: string; kind: string } {
   if (!validRefInput(ref)) {
-    throw new Refusal("bad_ref", `The ref "${ref}" is not a commit id, branch or tag name this button accepts.`);
+    throw new Refusal("bad_ref", `The ref "${clean(ref, MAX_TAG_NAME)}" is not a commit id, branch or tag name this button accepts.`);
   }
   if (SHA_RE.test(ref)) {
     const commit = commitOf(git, ref);
@@ -280,52 +337,129 @@ function blobAt(git: Git, commit: string | null, file: string): string | null {
   return r.code === 0 ? r.stdout.trim() : null;
 }
 
-/** The file's top-level "version" string, "(no version)" or "(unreadable)"; null when the file is absent. */
-function seedVersion(git: Git, blob: string | null): string | null {
-  if (blob === null) return null;
-  try {
-    const v = JSON.parse(git(["cat-file", "blob", blob]).stdout)?.version;
-    return typeof v === "string" && v !== "" ? v : "(no version)";
-  } catch {
-    return "(unreadable)";
+/** Shown for a seed file whose "version" cannot be trusted; such a file always counts as changed. */
+export const UNREADABLE_VERSION = "(unreadable version)";
+const SEED_VERSION_RE = /^[A-Za-z0-9._-]{1,64}$/;
+
+/** The keys of a JSON text's top-level object, decoded, in order (duplicates kept); null when it cannot be scanned. */
+export function topLevelKeys(raw: string): string[] | null {
+  const keys: string[] = [];
+  let depth = 0;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < raw.length && raw[j] !== '"') j += raw[j] === "\\" ? 2 : 1;
+      if (j >= raw.length) return null;
+      let k = j + 1;
+      while (k < raw.length && /\s/.test(raw[k])) k++;
+      if (depth === 1 && raw[k] === ":") {
+        try {
+          keys.push(JSON.parse(raw.slice(i, j + 1)));
+        } catch {
+          return null;
+        }
+      }
+      i = j;
+    } else if (ch === "{" || ch === "[") depth++;
+    else if (ch === "}" || ch === "]") depth--;
   }
+  return keys;
+}
+
+/**
+ * The file's top-level "version" string; UNREADABLE_VERSION when the JSON does
+ * not parse, has no or more than one top-level "version" key, or the value is
+ * not 1 to 64 of A-Z a-z 0-9 . _ -; null when the file is absent.
+ */
+export function seedVersionOf(raw: string): string {
+  const keys = topLevelKeys(raw);
+  if (keys === null || keys.filter((k) => k === "version").length !== 1) return UNREADABLE_VERSION;
+  try {
+    const v = JSON.parse(raw)?.version;
+    return typeof v === "string" && SEED_VERSION_RE.test(v) ? v : UNREADABLE_VERSION;
+  } catch {
+    return UNREADABLE_VERSION;
+  }
+}
+
+function seedVersion(git: Git, blob: string | null): string | null {
+  return blob === null ? null : seedVersionOf(git(["cat-file", "blob", blob]).stdout);
 }
 
 export function seedCheck(git: Git, base: string | null, target: string): SeedFile[] {
   return SEED_FILES.map((file) => {
     const a = blobAt(git, base, file);
     const b = blobAt(git, target, file);
+    const after = seedVersion(git, b);
     return {
       file,
       before: { blob: a, version: seedVersion(git, a) },
-      after: { blob: b, version: seedVersion(git, b) },
-      changed: a !== b,
+      after: { blob: b, version: after },
+      changed: a !== b || after === UNREADABLE_VERSION,
     };
   });
 }
 
 const base = (file: string) => file.split("/").pop() as string;
 
-/** The one line the operator acts on for Roll's allow_seed_change input. */
-export function seedLine(seeds: SeedFile[]): string {
+/** The one line the operator acts on for Roll's allow_seed_change input; `since` names the comparison base. */
+export function seedLine(seeds: SeedFile[], since: string | null): string {
+  const from = since ?? "the start (no earlier release tag)";
   const changed = seeds.filter((s) => s.changed);
-  if (changed.length === 0) return "Roll input allow_seed_change: no seed change; leave allow_seed_change off.";
+  if (changed.length === 0) return `Roll input allow_seed_change: no seed change since ${from}; leave allow_seed_change off.`;
   const carries = changed.map((s) => {
     if (s.after.blob === null) return `${base(s.file)} removed`;
+    if (s.after.version === UNREADABLE_VERSION) return `${base(s.file)} ${UNREADABLE_VERSION} (read the file before rolling)`;
     if (s.before.blob !== null && s.before.version === s.after.version) {
       return `${base(s.file)} ${s.after.version} (content changed, version string unchanged: confirm with the data owner)`;
     }
     return `${base(s.file)} ${s.after.version}`;
   });
-  return `Roll input allow_seed_change: tick it ONLY after the data pipeline release carries ${carries.join(" and ")}.`;
+  return `Roll input allow_seed_change: tick it ONLY after the data pipeline release carries ${carries.join(" and ")} (changed since ${from}).`;
 }
 
 export function seedDetail(seeds: SeedFile[]): string[] {
   return seeds.map((s) => {
     const a = s.before.version ?? "(absent)";
     const b = s.after.version ?? "(absent)";
-    return s.changed ? `${base(s.file)}: ${a} -> ${b} (changed)` : `${base(s.file)}: ${b} (unchanged)`;
+    return s.changed ? `${base(s.file)}: ${a} to ${b} (changed)` : `${base(s.file)}: ${b} (unchanged)`;
   });
+}
+
+/** A digest of the seed comparison, so the tag job can tell whether it still matches the plan job's. */
+export function seedDigest(previous: string | null, seeds: SeedFile[]): string {
+  const material = JSON.stringify([previous, seeds.map((s) => [s.file, s.before.blob, s.after.blob, s.changed, s.after.version])]);
+  return createHash("sha256").update(material).digest("hex");
+}
+
+// ---------------------------------------------------------------------------
+// The suites' directories
+
+/**
+ * The directories test.yml's `bun test` line names. Exactly one such line, each
+ * argument a plain relative path; otherwise null.
+ */
+export function suiteDirs(workflow: string): string[] | null {
+  const lines = workflow.split("\n").filter((l) => /^\s*(?:-\s+)?run:\s*bun test\s/.test(l));
+  if (lines.length !== 1) return null;
+  const args = lines[0].replace(/^\s*(?:-\s+)?run:\s*bun test\s+/, "").trim().split(/\s+/);
+  if (args.length === 0 || args.some((a) => !/^[A-Za-z0-9_][A-Za-z0-9._\/-]*$/.test(a) || a.includes(".."))) return null;
+  return args;
+}
+
+/** Refuses unless every directory the suites run exists at the commit (a missing one would be a silent green). */
+export function checkSuiteDirs(git: Git, commit: string, workflow: string | null): void {
+  if (workflow === null) throw new Refusal("suite_list_unreadable", `${TEST_WORKFLOW} was not found, so the suites' directories cannot be checked.`);
+  const dirs = suiteDirs(workflow);
+  if (dirs === null) throw new Refusal("suite_list_unreadable", `${TEST_WORKFLOW} does not have exactly one plain \`bun test <dirs>\` line.`);
+  const missing = dirs.filter((d) => git(["cat-file", "-t", `${commit}:${d}`], { allowFail: true }).stdout.trim() !== "tree");
+  if (missing.length > 0) {
+    throw new Refusal(
+      "suite_dir_missing",
+      `${missing.join(", ")} ${missing.length > 1 ? "do" : "does"} not exist at ${commit.slice(0, 7)}, so the suites would skip ${missing.length > 1 ? "them" : "it"} and pass without running. Release a newer commit, or tag by hand after running the suites that exist there.`,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -341,11 +475,20 @@ export type Plan = {
   commits: { sha: string; subject: string }[];
   seeds: SeedFile[];
   seedChanged: boolean;
+  seedDigest: string;
   ignoredTags: string[];
   note: string;
 };
 
-export type PlanOptions = { ref: string; version?: string; note?: string; mainRef?: string; remote?: string };
+export type PlanOptions = {
+  ref: string;
+  version?: string;
+  note?: string;
+  mainRef?: string;
+  remote?: string;
+  /** test.yml's text (null: the file is absent). Undefined skips the suite-directory check (library use only; the CLI always passes it). */
+  testWorkflow?: string | null;
+};
 
 export function makePlan(git: Git, opts: PlanOptions): Plan {
   const mainRef = opts.mainRef ?? "refs/remotes/origin/main";
@@ -368,7 +511,7 @@ export function makePlan(git: Git, opts: PlanOptions): Plan {
 
   const tags = listTags(git);
   const release = tags.filter((t) => RELEASE_TAG_RE.test(t.name));
-  const ignoredTags = tags.filter((t) => t.name.startsWith("v") && !RELEASE_TAG_RE.test(t.name)).map((t) => t.name);
+  const ignoredTags = tags.filter((t) => t.name.startsWith("v") && !RELEASE_TAG_RE.test(t.name)).map((t) => clean(t.name, MAX_TAG_NAME));
 
   const already = release.filter((t) => t.commit === commit).map((t) => t.name);
   if (already.length > 0) {
@@ -398,10 +541,12 @@ export function makePlan(git: Git, opts: PlanOptions): Plan {
     if (!isAncestor(git, previous.commit, commit)) {
       throw new Refusal(
         "not_after_previous",
-        `${commit.slice(0, 7)} does not contain the previous release ${previous.name} (${previous.commit.slice(0, 7)}). A new release must be at or after the latest one; tag by hand if this is really intended.`,
+        `${commit.slice(0, 7)} does not contain the latest release tag ${previous.name} (${previous.commit.slice(0, 7)}). A new release must be at or after the latest one; tag by hand if this is really intended.`,
       );
     }
   }
+
+  if (opts.testWorkflow !== undefined) checkSuiteDirs(git, commit, opts.testWorkflow);
 
   const range = previous ? [`${previous.commit}..${commit}`] : [commit];
   const commits = git(["log", "--no-color", "--format=%H%x09%s", ...range, "--"]).stdout
@@ -409,7 +554,7 @@ export function makePlan(git: Git, opts: PlanOptions): Plan {
     .filter(Boolean)
     .map((line) => {
       const i = line.indexOf("\t");
-      return { sha: line.slice(0, i), subject: line.slice(i + 1) };
+      return { sha: line.slice(0, i), subject: clean(line.slice(i + 1), MAX_SUBJECT) };
     });
 
   const seeds = seedCheck(git, previous?.commit ?? null, commit);
@@ -423,6 +568,7 @@ export function makePlan(git: Git, opts: PlanOptions): Plan {
     commits,
     seeds,
     seedChanged: seeds.some((s) => s.changed),
+    seedDigest: seedDigest(previous?.name ?? null, seeds),
     ignoredTags,
     note,
   };
@@ -444,8 +590,9 @@ function sinceText(plan: Plan): string {
 }
 
 export const ROLL_CAVEAT =
-  "Roll compares the seed files with the ref the residents run now (EDGE_HERMES_REF), not with the previous tag; " +
-  `if residents are on an older tag, Roll can refuse for a file this check calls unchanged. How to check the data pipeline's release: ${DOCS_PATH}, "The data pipeline".`;
+  "Roll compares the seed files with what the residents run now (EDGE_HERMES_REF, a tag or a branch tip), not with the previous tag: " +
+  "it can name a file this check calls unchanged, and it refuses with seed_uncomparable when it cannot read that ref. " +
+  `How to check the data pipeline's release: ${DOCS_PATH}, "The data pipeline".`;
 
 export function tagMessage(plan: Plan, who: { actor: string; triggeringActor?: string; runUrl: string }): string {
   const by = who.triggeringActor && who.triggeringActor !== who.actor ? `${who.actor} (re-run by ${who.triggeringActor})` : who.actor;
@@ -458,8 +605,9 @@ export function tagMessage(plan: Plan, who: { actor: string; triggeringActor?: s
     `Previous release: ${plan.previous ? `${plan.previous.name} (${plan.previous.commit})` : "none"}`,
     ...(plan.note ? [`Note: ${plan.note}`] : []),
     "",
-    `Seed check: ${seedLine(plan.seeds)}`,
+    `Seed check: ${seedLine(plan.seeds, plan.previous?.name ?? null)}`,
     ...seedDetail(plan.seeds).map((l) => `  ${l}`),
+    ROLL_CAVEAT,
     "",
     plan.previous ? `Commits since ${plan.previous.name}:` : "Commits:",
     ...commitLines(plan, "  "),
@@ -508,7 +656,7 @@ export function renderText(plan: Plan, stage: Stage): string {
     `  commits      ${sinceText(plan)}`,
     ...(plan.note ? [`  note         ${plan.note}`] : []),
     "",
-    seedLine(plan.seeds),
+    seedLine(plan.seeds, plan.previous?.name ?? null),
     ...seedDetail(plan.seeds).map((l) => `  ${l}`),
     ROLL_CAVEAT,
     "",
@@ -523,10 +671,15 @@ export function renderText(plan: Plan, stage: Stage): string {
   return lines.join("\n") + "\n";
 }
 
-/** Markdown for $GITHUB_STEP_SUMMARY. Commit subjects go inside a fenced block with backticks neutralised. */
+/**
+ * Markdown for $GITHUB_STEP_SUMMARY. Everything that came from the repository
+ * or an input is a code span, or a line of the fenced commit list, with
+ * backticks and angle brackets neutralised (so it can neither close the span
+ * or fence nor become HTML, a link or an image).
+ */
 export function renderSummary(plan: Plan, stage: Stage): string {
   const fence = "````";
-  const commits = commitLines(plan, "").map((l) => l.replace(/`/g, "'"));
+  const commits = commitLines(plan, "").map((l) => neutral(l, MAX_SUBJECT + 20));
   const lines = [
     `## Tag release: ${headline(plan, stage)}`,
     "",
@@ -536,15 +689,15 @@ export function renderSummary(plan: Plan, stage: Stage): string {
     `| Commit | \`${plan.commit}\` (from ${plan.refKind} \`${plan.ref}\`, on main) |`,
     `| Previous release | ${plan.previous ? `\`${plan.previous.name}\` (\`${plan.previous.commit.slice(0, 7)}\`)` : "none"} |`,
     `| Commits | ${sinceText(plan)} |`,
-    ...(plan.note ? [`| Note | ${plan.note} |`] : []),
+    ...(plan.note ? [`| Note | ${code(plan.note, NOTE_MAX)} |`] : []),
     "",
-    `**Seed check.** ${seedLine(plan.seeds)}`,
+    `**Seed check.** ${code(seedLine(plan.seeds, plan.previous?.name ?? null), 2000)}`,
     "",
-    ...seedDetail(plan.seeds).map((l) => `- ${l}`),
+    ...seedDetail(plan.seeds).map((l) => `- ${code(l, 300)}`),
     "",
     ROLL_CAVEAT,
     "",
-    ...notes(plan).flatMap((l) => [l, ""]),
+    ...notes(plan).flatMap((l) => [code(l, 2000), ""]),
     "**Next.**",
     "",
     ...nextStep(plan, stage).map((l) => (l.startsWith("  ") ? `  ${l.trim()}` : `- ${l}`)),
@@ -567,6 +720,8 @@ export function renderSummary(plan: Plan, stage: Stage): string {
 export type TagOptions = PlanOptions & {
   expectCommit: string;
   expectVersion: string;
+  /** The plan job's seedDigest; when given, a different fresh digest refuses. */
+  expectSeeds?: string;
   actor: string;
   triggeringActor?: string;
   runUrl: string;
@@ -577,6 +732,7 @@ export function createTag(git: Git, opts: TagOptions): { plan: Plan; tagObject: 
   const remote = opts.remote ?? "origin";
   if (!FULL_SHA_RE.test(opts.expectCommit)) throw new Refusal("bad_usage", "--expect-commit must be a full commit id.");
   if (!isCanonical(opts.expectVersion)) throw new Refusal("bad_usage", "--expect-version must be a release version.");
+  if (opts.expectSeeds !== undefined && !/^[0-9a-f]{64}$/.test(opts.expectSeeds)) throw new Refusal("bad_usage", "--expect-seeds must be the plan's seed digest.");
   if (!ACTOR_RE.test(opts.actor)) throw new Refusal("bad_usage", "--actor must be a GitHub login.");
   if (opts.triggeringActor && !ACTOR_RE.test(opts.triggeringActor)) throw new Refusal("bad_usage", "--triggering-actor must be a GitHub login.");
   if (!RUN_URL_RE.test(opts.runUrl)) throw new Refusal("bad_usage", "--run-url must be a GitHub Actions run URL.");
@@ -590,6 +746,12 @@ export function createTag(git: Git, opts: TagOptions): { plan: Plan; tagObject: 
     throw new Refusal(
       "plan_changed",
       `The tags changed since this run planned ${opts.expectVersion} at ${opts.expectCommit.slice(0, 7)}; it would now be ${plan.version}. Nothing was created. Run Tag release again.`,
+    );
+  }
+  if (opts.expectSeeds !== undefined && plan.seedDigest !== opts.expectSeeds) {
+    throw new Refusal(
+      "plan_changed",
+      `The seed check differs from the one this run planned (the previous release tag moved or changed since). Nothing was created. Run Tag release again and read the new seed check.`,
     );
   }
 
@@ -641,11 +803,30 @@ function parseArgs(argv: string[]): { cmd: string; flags: Map<string, string> } 
 
 const KNOWN = {
   plan: ["ref", "version", "note", "dry-run", "cwd", "main", "remote"],
-  tag: ["ref", "version", "note", "cwd", "main", "remote", "expect-commit", "expect-version", "actor", "triggering-actor", "run-url", "fetch"],
+  tag: ["ref", "version", "note", "cwd", "main", "remote", "expect-commit", "expect-version", "expect-seeds", "actor", "triggering-actor", "run-url", "fetch"],
 } as const;
 
 function emit(path: string | undefined, text: string) {
   if (path) appendFileSync(path, text);
+}
+
+/**
+ * Prints text that carries repository content. Under GitHub Actions it is
+ * wrapped in ::stop-commands:: with a fresh random token, so nothing in it is
+ * read as a workflow command (on top of the per-field cleaning).
+ */
+function printRepoText(text: string, env: Record<string, string | undefined>) {
+  if (env.GITHUB_ACTIONS !== "true") {
+    process.stdout.write(text);
+    return;
+  }
+  const token = randomBytes(16).toString("hex");
+  process.stdout.write(`::stop-commands::${token}\n${text}::${token}::\n`);
+}
+
+function readTestWorkflow(cwd: string): string | null {
+  const path = join(cwd, TEST_WORKFLOW);
+  return existsSync(path) ? readFileSync(path, "utf8") : null;
 }
 
 export function main(argv: string[], env: Record<string, string | undefined> = process.env): number {
@@ -656,23 +837,25 @@ export function main(argv: string[], env: Record<string, string | undefined> = p
     for (const k of flags.keys()) {
       if (!(KNOWN[cmd] as readonly string[]).includes(k)) throw new Refusal("bad_usage", `Unknown option --${k} for ${cmd}.`);
     }
-    const git = gitIn(flags.get("cwd") ?? ".");
+    const cwd = flags.get("cwd") ?? ".";
+    const git = gitIn(cwd);
     const common = {
       ref: flags.get("ref") ?? "",
       version: flags.get("version") ?? "",
       note: flags.get("note") ?? "",
       mainRef: flags.get("main") ?? "refs/remotes/origin/main",
       remote: flags.get("remote") ?? "origin",
+      testWorkflow: readTestWorkflow(cwd),
     };
     if (cmd === "plan") {
       const dry = flags.get("dry-run") ?? "true";
       if (dry !== "true" && dry !== "false") throw new Refusal("bad_usage", "--dry-run must be true or false.");
       const plan = makePlan(git, common);
       const stage: Stage = dry === "true" ? "dry-run" : "planned";
-      process.stdout.write(renderText(plan, stage));
+      printRepoText(renderText(plan, stage), env);
       emit(
         env.GITHUB_OUTPUT,
-        `commit=${plan.commit}\nversion=${plan.version}\nprevious=${plan.previous?.name ?? ""}\nseed_changed=${plan.seedChanged}\n`,
+        `commit=${plan.commit}\nversion=${plan.version}\nprevious=${plan.previous?.name ?? ""}\nseed_changed=${plan.seedChanged}\nseeds=${plan.seedDigest}\n`,
       );
       emit(summaryPath, renderSummary(plan, stage));
       return 0;
@@ -682,20 +865,21 @@ export function main(argv: string[], env: Record<string, string | undefined> = p
       ref: flags.get("expect-commit") ?? "",
       expectCommit: flags.get("expect-commit") ?? "",
       expectVersion: flags.get("expect-version") ?? "",
+      expectSeeds: flags.get("expect-seeds"),
       actor: flags.get("actor") ?? "",
       triggeringActor: flags.get("triggering-actor") || undefined,
       runUrl: flags.get("run-url") ?? "",
       fetch: flags.get("fetch") === "true",
     });
-    process.stdout.write(renderText(plan, "created"));
-    process.stdout.write(`\nTag object ${tagObject}, pushed as refs/tags/${plan.version}.\n`);
+    printRepoText(`${renderText(plan, "created")}\nTag object ${tagObject}, pushed as refs/tags/${plan.version}.\n`, env);
     emit(summaryPath, renderSummary(plan, "created"));
     return 0;
   } catch (e) {
     if (!(e instanceof Refusal)) throw e;
     const where = env.GITHUB_ACTIONS === "true" ? `::error title=Tag release refused (${e.code})::` : `Refused (${e.code}): `;
-    process.stderr.write(`${where}${e.message}\n`);
-    emit(summaryPath, `## Tag release refused: nothing was created\n\n**${e.code}.** ${e.message}\n`);
+    // One line, whatever the message carries (a raw input, git's or the remote's own words).
+    process.stderr.write(`${where}${clean(e.message, 1000)}\n`);
+    emit(summaryPath, `## Tag release refused: nothing was created\n\n**${e.code}.** ${code(e.message, 1000)}\n`);
     return e.code === "bad_usage" ? 2 : 1;
   }
 }

@@ -5,7 +5,15 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   checkNote,
+  checkSuiteDirs,
   chooseVersion,
+  clean,
+  neutral,
+  seedVersionOf,
+  suiteDirs,
+  tagMessage,
+  topLevelKeys,
+  UNREADABLE_VERSION,
   createTag,
   gitIn,
   makePlan,
@@ -104,6 +112,20 @@ describe("chooseVersion", () => {
     expect(refusalCode(() => chooseVersion(["v2.1.0-rc1"], "v2.0.9"))).toBe("version_not_higher");
   });
 
+  test("a tag Roll would accept with a number over 6 digits refuses computation and override", () => {
+    for (const odd of ["v2.0.0-rc1234567", "v1234567.0.0", "v2.0.0000000-rc1"]) {
+      expect(refusalCode(() => chooseVersion(["v2.0.0-rc10", odd], ""))).toBe("oversize_tags");
+      expect(refusalCode(() => chooseVersion(["v2.0.0-rc10", odd], "v3.0.0-rc1"))).toBe("oversize_tags");
+    }
+    // 6 digits is fine; an override over 6 digits is not a release version
+    expect(chooseVersion(["v2.0.0-rc123456"], "").version).toBe("v2.0.0-rc123457");
+    expect(refusalCode(() => chooseVersion(["v2.0.0-rc10"], "v2.0.0-rc1000000"))).toBe("bad_version");
+  });
+
+  test("the computed version is checked again: rc999999 + 1 has 7 digits and is refused", () => {
+    expect(refusalCode(() => chooseVersion(["v2.0.0-rc999999"], ""))).toBe("version_check_failed");
+  });
+
   test("override: anything but a canonical release version is refused", () => {
     for (const bad of ["2.0.0-rc11", "v2.0.0-rc01", "v2.0.0-rc0", "v2.0.0-RC11", "v2.0.0-rc11 ", "v2.0.0-rc11;x", "v2.0", "release-2026-10-04", "v2.0.0-beta1", "-v2.0.0"]) {
       expect(refusalCode(() => chooseVersion(["v2.0.0-rc10"], bad))).toBe("bad_version");
@@ -144,6 +166,43 @@ describe("checkNote", () => {
       expect(refusalCode(() => checkNote(bad))).toBe("bad_note");
     }
     expect(() => checkNote("a\nb")).toThrow("one line with no control characters");
+  });
+});
+
+describe("output hygiene", () => {
+  test("clean turns controls, DEL and Unicode line breaks into spaces and clips", () => {
+    expect(clean("a\r::error ::x\nb\tc\u0000d\u007fe\u2028f\u0085g", 100)).toBe("a ::error ::x b c d e f g");
+    expect(clean("x".repeat(10), 8)).toBe("xxxxx...");
+    expect(neutral("a`b<c>d\n", 100)).toBe("a'b\u2039c\u203ad ");
+  });
+
+  test("a seed version must be one plain top-level string", () => {
+    expect(seedVersionOf('{"version":"tool_categories_v3","x":{"version":"nested"}}')).toBe("tool_categories_v3");
+    for (const bad of [
+      '{"version":"v2\\n::warning title=Seed check::no seed change, leave allow_seed_change off\\n![x](https://e.example/beacon.png)"}',
+      '{"version":"tool_categories_v3","version":"tool_categories_v2"}',
+      '{"\\u0076ersion":"a","version":"b"}',
+      '{"version":"has space"}',
+      '{"version":"' + "x".repeat(65) + '"}',
+      '{"version":""}',
+      '{"version":3}',
+      '{"other":"x"}',
+      "{not json",
+      '["version"]',
+    ]) {
+      expect(seedVersionOf(bad)).toBe(UNREADABLE_VERSION);
+    }
+    expect(topLevelKeys('{"a":1,"b":{"c":2},"a":"x:y","d":["e",{"f":1}]}')).toEqual(["a", "b", "a", "d"]);
+  });
+
+  test("suiteDirs reads the one bun test line; this repository's test.yml lists the four suite directories", () => {
+    const real = readFileSync(join(import.meta.dir, "..", "..", ".github", "workflows", "test.yml"), "utf8");
+    expect(suiteDirs(real)).toEqual(["install/tests", "scripts/tests", "skills/index-network/scripts/tests", "skills/recall/scripts/tests"]);
+    expect(suiteDirs("      - run: bun install\n")).toBeNull();
+    expect(suiteDirs("- run: bun test a\n- run: bun test b\n")).toBeNull();
+    expect(suiteDirs("- run: bun test a $(id)\n")).toBeNull();
+    expect(suiteDirs("- run: bun test ../x\n")).toBeNull();
+    expect(suiteDirs("- run: bun test --bail a\n")).toBeNull();
   });
 });
 
@@ -202,17 +261,37 @@ function fixture(): Fixture {
 const TC = "plugins/av-events/tool_categories.json";
 const AL = "plugins/av-events/edgeos_tool_allowlist.json";
 const CJ = "plugins/av-events/cron_job_names.json";
+const TEST_YML = ".github/workflows/test.yml";
+const TEST_YML_TEXT = "jobs:\n  bun:\n    steps:\n      - run: bun install --frozen-lockfile\n      - run: bun test install/tests scripts/tests\n";
 
 /** main: A (rc1) - B (tool_categories v1 -> v2) - C, pushed, fetched back. */
 function released(): Fixture & { a: string; b: string; c: string } {
   const f = fixture();
-  const a = f.commit({ [TC]: seed("tool_categories_v1"), [AL]: seed("edgeos_tool_allowlist_v1"), [CJ]: seed("cron_job_names_v1"), "README.md": "x\n" }, "first");
+  const a = f.commit(
+    {
+      [TC]: seed("tool_categories_v1"),
+      [AL]: seed("edgeos_tool_allowlist_v1"),
+      [CJ]: seed("cron_job_names_v1"),
+      "README.md": "x\n",
+      [TEST_YML]: TEST_YML_TEXT,
+      "install/tests/a.test.ts": "\n",
+      "scripts/tests/b.test.ts": "\n",
+    },
+    "first",
+  );
   f.run(["tag", "-a", "v2.0.0-rc1", "-m", "rc1", a]);
   const b = f.commit({ [TC]: seed("tool_categories_v2") }, "DATA-1: tool categories v2 (#1)");
   const c = f.commit({ "README.md": "y\n" }, "DATA-2: readme `code` # not a comment (#2)");
   f.run(["push", "--quiet", "origin", "main", "--tags"]);
   f.run(["fetch", "--quiet", "origin"]);
   return { ...f, a, b, c };
+}
+
+function cloneOther(f: Fixture): string {
+  const other = join(dirname(f.work), `other-${Math.random().toString(16).slice(2)}`);
+  sh(dirname(f.work), ["clone", "--quiet", f.origin, other]);
+  for (const [k, v] of [["user.name", "Other"], ["user.email", "o@example.invalid"]]) sh(other, ["config", k, v]);
+  return other;
 }
 
 function originRefs(f: Fixture): string {
@@ -234,12 +313,12 @@ describe("makePlan", () => {
     expect(plan.commits[1].subject).toBe("DATA-1: tool categories v2 (#1)");
     expect(plan.seedChanged).toBe(true);
     expect(plan.seeds.map((s) => s.changed)).toEqual([true, false, false]);
-    expect(seedLine(plan.seeds)).toBe(
-      "Roll input allow_seed_change: tick it ONLY after the data pipeline release carries tool_categories.json tool_categories_v2.",
+    expect(seedLine(plan.seeds, plan.previous?.name ?? null)).toBe(
+      "Roll input allow_seed_change: tick it ONLY after the data pipeline release carries tool_categories.json tool_categories_v2 (changed since v2.0.0-rc1).",
     );
     const text = renderText(plan, "dry-run");
     expect(text).toContain("would create v2.0.0-rc2");
-    expect(text).toContain("tool_categories.json: tool_categories_v1 -> tool_categories_v2 (changed)");
+    expect(text).toContain("tool_categories.json: tool_categories_v1 to tool_categories_v2 (changed)");
     expect(text).toContain("edgeos_tool_allowlist.json: edgeos_tool_allowlist_v1 (unchanged)");
     expect(text).toContain("Nothing was created");
     expect(text).toContain("docs/deployment.md");
@@ -260,7 +339,7 @@ describe("makePlan", () => {
     expect(plan.commit).toBe(d);
     expect(plan.version).toBe("v2.0.0-rc3");
     expect(plan.seedChanged).toBe(false);
-    expect(seedLine(plan.seeds)).toBe("Roll input allow_seed_change: no seed change; leave allow_seed_change off.");
+    expect(seedLine(plan.seeds, plan.previous?.name ?? null)).toBe("Roll input allow_seed_change: no seed change since v2.0.0-rc2; leave allow_seed_change off.");
     expect(renderSummary(plan, "created")).toContain("allow_seed_change: off");
   });
 
@@ -270,7 +349,7 @@ describe("makePlan", () => {
     f.run(["push", "--quiet", "origin", "main"]);
     f.run(["fetch", "--quiet", "origin"]);
     f.run(["tag", "-a", "v2.0.0-rc2", "-m", "rc2", f.c]);
-    const line = seedLine(makePlan(gitIn(f.work), { ref: "main" }).seeds);
+    const line = ((p) => seedLine(p.seeds, p.previous?.name ?? null))(makePlan(gitIn(f.work), { ref: "main" }));
     expect(line).toContain("tool_categories.json tool_categories_v2 (content changed, version string unchanged: confirm with the data owner)");
     expect(line).toContain("cron_job_names.json removed");
 
@@ -281,8 +360,8 @@ describe("makePlan", () => {
     g.run(["push", "--quiet", "origin", "main", "--tags"]);
     g.run(["fetch", "--quiet", "origin"]);
     const plan = makePlan(gitIn(g.work), { ref: "main" });
-    expect(seedLine(plan.seeds)).toBe("Roll input allow_seed_change: tick it ONLY after the data pipeline release carries edgeos_tool_allowlist.json edgeos_tool_allowlist_v1.");
-    expect(renderText(plan, "dry-run")).toContain("edgeos_tool_allowlist.json: (absent) -> edgeos_tool_allowlist_v1 (changed)");
+    expect(seedLine(plan.seeds, plan.previous?.name ?? null)).toBe("Roll input allow_seed_change: tick it ONLY after the data pipeline release carries edgeos_tool_allowlist.json edgeos_tool_allowlist_v1 (changed since v2.0.0-rc1).");
+    expect(renderText(plan, "dry-run")).toContain("edgeos_tool_allowlist.json: (absent) to edgeos_tool_allowlist_v1 (changed)");
   });
 
   test("a seed file that is not JSON is reported, not trusted", () => {
@@ -290,7 +369,7 @@ describe("makePlan", () => {
     f.commit({ [TC]: "{not json" }, "broken");
     f.run(["push", "--quiet", "origin", "main"]);
     f.run(["fetch", "--quiet", "origin"]);
-    expect(seedLine(makePlan(gitIn(f.work), { ref: "main" }).seeds)).toContain("tool_categories.json (unreadable)");
+    expect(((p) => seedLine(p.seeds, p.previous?.name ?? null))(makePlan(gitIn(f.work), { ref: "main" }))).toContain("tool_categories.json (unreadable version)");
   });
 
   test("resolves a full or short commit id and a tag name", () => {
@@ -367,6 +446,71 @@ describe("makePlan", () => {
     expect(refusalCode(() => makePlan(gitIn(f.work), { ref: f.c }))).toBe("tag_name_is_branch");
   });
 
+  test("refuses when a directory the suites run is missing at the commit", () => {
+    const f = released();
+    const git = gitIn(f.work);
+    expect(makePlan(git, { ref: "main", testWorkflow: TEST_YML_TEXT }).version).toBe("v2.0.0-rc2");
+    const more = TEST_YML_TEXT.replace("bun test install/tests scripts/tests", "bun test install/tests scripts/tests skills/new/tests");
+    expect(refusalCode(() => makePlan(git, { ref: "main", testWorkflow: more }))).toBe("suite_dir_missing");
+    // a file is not a directory
+    const file = TEST_YML_TEXT.replace("bun test install/tests scripts/tests", "bun test install/tests README.md");
+    expect(refusalCode(() => makePlan(git, { ref: "main", testWorkflow: file }))).toBe("suite_dir_missing");
+    expect(refusalCode(() => makePlan(git, { ref: "main", testWorkflow: null }))).toBe("suite_list_unreadable");
+    expect(refusalCode(() => makePlan(git, { ref: "main", testWorkflow: "jobs: {}\n" }))).toBe("suite_list_unreadable");
+    expect(() => checkSuiteDirs(git, f.c, TEST_YML_TEXT)).not.toThrow();
+    // the directory exists at main but not at the commit being released
+    f.commit({ "skills/new/tests/c.test.ts": "\n" }, "new suite");
+    f.run(["push", "--quiet", "origin", "main"]);
+    f.run(["fetch", "--quiet", "origin"]);
+    expect(makePlan(git, { ref: "main", testWorkflow: more }).version).toBe("v2.0.0-rc2");
+    expect(refusalCode(() => makePlan(git, { ref: f.c, testWorkflow: more }))).toBe("suite_dir_missing");
+  });
+
+  test("repository content cannot inject workflow commands or markdown", () => {
+    const f = released();
+    const evil = '{"version":"v2\\n::warning title=Seed check::no seed change, leave allow_seed_change off\\n![x](https://e.example/beacon.png)"}\n';
+    f.commit({ [TC]: evil }, "evil seed\r::error ::x");
+    f.run(["tag", "v<img>", f.b]);
+    f.run(["tag", "v`tick`", f.b]);
+    f.run(["push", "--quiet", "origin", "main"]);
+    f.run(["fetch", "--quiet", "origin"]);
+    const plan = makePlan(gitIn(f.work), { ref: "main" });
+    expect(plan.seeds[0].after.version).toBe(UNREADABLE_VERSION);
+    expect(plan.seedChanged).toBe(true);
+    const outputs = [renderText(plan, "dry-run"), renderSummary(plan, "dry-run"), tagMessage(plan, who)];
+    for (const out of outputs) {
+      expect(out).not.toContain("\r");
+      expect(out).not.toContain("beacon");
+      expect(out).not.toMatch(/^\s*::/m);
+      expect(out).toContain("tool_categories.json (unreadable version)");
+    }
+    const md = renderSummary(plan, "dry-run");
+    expect(md).not.toContain("<img");
+    expect(md).toContain("v\u2039img\u203a");
+    expect(md).not.toContain("v`tick`");
+    expect(renderText(plan, "dry-run")).toContain("evil seed ::error ::x");
+  });
+
+  test("an unreadable seed version counts as changed even when the file did not change", () => {
+    const f = fixture();
+    const a = f.commit({ [TC]: '{"version":"a","version":"b"}\n', "README.md": "x\n" }, "first");
+    f.run(["tag", "-a", "v2.0.0-rc1", "-m", "rc1", a]);
+    f.commit({ "README.md": "y\n" }, "second");
+    f.run(["push", "--quiet", "origin", "main", "--tags"]);
+    f.run(["fetch", "--quiet", "origin"]);
+    const plan = makePlan(gitIn(f.work), { ref: "main" });
+    expect(plan.seeds[0]).toMatchObject({ changed: true, after: { version: UNREADABLE_VERSION } });
+    expect(seedLine(plan.seeds, "v2.0.0-rc1")).toContain("tool_categories.json (unreadable version) (read the file before rolling)");
+  });
+
+  test("a release tag on a commit no branch reaches blocks as not after it", () => {
+    const f = released();
+    const tree = f.run(["rev-parse", `${f.a}^{tree}`]);
+    const dangling = f.run(["commit-tree", tree, "-p", f.a, "-m", "nowhere"]);
+    f.run(["tag", "-a", "v2.0.0-rc5", "-m", "rc5", dangling]);
+    expect(refusalCode(() => makePlan(gitIn(f.work), { ref: "main" }))).toBe("not_after_previous");
+  });
+
   test("refuses when main is not fetched", () => {
     const f = fixture();
     f.commit({ "README.md": "x\n" }, "first");
@@ -422,7 +566,9 @@ describe("createTag", () => {
     expect(body).toContain(`Run: ${RUN_URL}`);
     expect(body).toContain(`Commit: ${f.c}`);
     expect(body).toContain(`Previous release: v2.0.0-rc1 (${f.a})`);
-    expect(body).toContain("Seed check: Roll input allow_seed_change: tick it ONLY after the data pipeline release carries tool_categories.json tool_categories_v2.");
+    expect(body).toContain("Seed check: Roll input allow_seed_change: tick it ONLY after the data pipeline release carries tool_categories.json tool_categories_v2 (changed since v2.0.0-rc1).");
+    expect(body).toContain("Roll compares the seed files with what the residents run now (EDGE_HERMES_REF, a tag or a branch tip)");
+    expect(body).toContain("seed_uncomparable");
     expect(body).toContain(`  ${f.b.slice(0, 7)} DATA-1: tool categories v2 (#1)`);
     expect(body).toContain(`  ${f.c.slice(0, 7)} DATA-2: readme \`code\` # not a comment (#2)`);
   });
@@ -431,7 +577,7 @@ describe("createTag", () => {
     const f = released();
     const git = gitIn(f.work);
     expect(renderText(makePlan(git, { ref: "main", note: "first cut for the canaries" }), "dry-run")).toContain("  note         first cut for the canaries");
-    expect(renderSummary(makePlan(git, { ref: "main", note: "first cut" }), "dry-run")).toContain("| Note | first cut |");
+    expect(renderSummary(makePlan(git, { ref: "main", note: "first cut" }), "dry-run")).toContain("| Note | `first cut` |");
     expect(refusalCode(() => makePlan(git, { ref: "main", note: "a\nRun by: someone-else" }))).toBe("bad_note");
     expect(refusalCode(() => createTag(git, { ref: f.c, expectCommit: f.c, expectVersion: "v2.0.0-rc2", ...who, note: "-x" }))).toBe("bad_note");
     expect(sh(f.origin, ["tag", "-l", "v2.0.0-rc*"])).toBe("v2.0.0-rc1");
@@ -469,6 +615,52 @@ describe("createTag", () => {
     sh(other2, ["tag", "-a", "v2.0.0-rc2", "-m", "theirs", g.c]);
     sh(other2, ["push", "--quiet", "origin", "v2.0.0-rc2"]);
     expect(refusalCode(() => createTag(gitIn(g.work), { ref: g.c, expectCommit: g.c, expectVersion: "v2.0.0-rc2", fetch: true, ...who }))).toBe("already_tagged");
+  });
+
+  test("a moved previous tag changes the seed check: plan_changed", () => {
+    const f = released();
+    const planned = makePlan(gitIn(f.work), { ref: "main" });
+    const other = cloneOther(f);
+    sh(other, ["tag", "-f", "-a", "v2.0.0-rc1", "-m", "moved", f.b]);
+    sh(other, ["push", "--quiet", "--force", "origin", "refs/tags/v2.0.0-rc1"]);
+    const before = originRefs(f);
+    expect(
+      refusalCode(() =>
+        createTag(gitIn(f.work), { ref: f.c, expectCommit: f.c, expectVersion: "v2.0.0-rc2", expectSeeds: planned.seedDigest, fetch: true, ...who }),
+      ),
+    ).toBe("plan_changed");
+    expect(originRefs(f)).toBe(before);
+  });
+
+  test("a deleted previous tag is seen by the fetch", () => {
+    const f = released();
+    const other = cloneOther(f);
+    sh(other, ["push", "--quiet", "origin", ":refs/tags/v2.0.0-rc1"]);
+    expect(refusalCode(() => createTag(gitIn(f.work), { ref: f.c, expectCommit: f.c, expectVersion: "v2.0.0-rc2", fetch: true, ...who }))).toBe(
+      "no_release_tags",
+    );
+    expect(sh(f.origin, ["tag", "-l"])).toBe("");
+  });
+
+  test("a release tag pushed meanwhile on a commit no branch reaches is seen by the fetch", () => {
+    const f = released();
+    const other = cloneOther(f);
+    const tree = sh(other, ["rev-parse", `${f.a}^{tree}`]);
+    const dangling = sh(other, ["commit-tree", tree, "-p", f.a, "-m", "nowhere"]);
+    sh(other, ["tag", "-a", "v2.0.0-rc3", "-m", "rc3", dangling]);
+    sh(other, ["push", "--quiet", "origin", "refs/tags/v2.0.0-rc3"]);
+    expect(refusalCode(() => createTag(gitIn(f.work), { ref: f.c, expectCommit: f.c, expectVersion: "v2.0.0-rc2", fetch: true, ...who }))).toBe(
+      "not_after_previous",
+    );
+    expect(sh(f.origin, ["tag", "-l", "v2.0.0-rc2"])).toBe("");
+  });
+
+  test("the seed digest is checked only in its own shape", () => {
+    const f = released();
+    expect(refusalCode(() => createTag(gitIn(f.work), { ref: f.c, expectCommit: f.c, expectVersion: "v2.0.0-rc2", expectSeeds: "abc", ...who }))).toBe("bad_usage");
+    const planned = makePlan(gitIn(f.work), { ref: "main" });
+    createTag(gitIn(f.work), { ref: f.c, expectCommit: f.c, expectVersion: "v2.0.0-rc2", expectSeeds: planned.seedDigest, fetch: true, ...who });
+    expect(sh(f.origin, ["rev-parse", "refs/tags/v2.0.0-rc2^{commit}"])).toBe(f.c);
   });
 
   test("loses cleanly when the tag appears between the fetch and the push", () => {
@@ -530,7 +722,7 @@ describe("command line", () => {
     const r = cli(["plan", "--cwd", f.work, "--ref", "main", "--dry-run", "true"], { GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: sum });
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("Dry run: would create v2.0.0-rc2");
-    expect(readFileSync(out, "utf8")).toBe(`commit=${f.c}\nversion=v2.0.0-rc2\nprevious=v2.0.0-rc1\nseed_changed=true\n`);
+    expect(readFileSync(out, "utf8")).toMatch(new RegExp(`^commit=${f.c}\nversion=v2.0.0-rc2\nprevious=v2.0.0-rc1\nseed_changed=true\nseeds=[0-9a-f]{64}\n$`));
     expect(readFileSync(sum, "utf8")).toContain("## Tag release: Dry run: would create v2.0.0-rc2");
     const real = cli(["plan", "--cwd", f.work, "--ref", "main", "--dry-run", "false"]);
     expect(real.stdout).toContain("Will create v2.0.0-rc2");
@@ -559,6 +751,35 @@ describe("command line", () => {
     const r = cli(["tag", "--cwd", f.work, "--expect-commit", f.c, "--expect-version", "v2.0.0-rc2", "--actor", "octocat", "--run-url", RUN_URL, "--note", "hello there"]);
     expect(r.code).toBe(0);
     expect(sh(f.origin, ["cat-file", "-p", "refs/tags/v2.0.0-rc2"])).toContain("\nNote: hello there\n");
+  });
+
+  test("under Actions, repository text is wrapped in stop-commands with a fresh token; a refusal is one line", () => {
+    const f = released();
+    const run = () => cli(["plan", "--cwd", f.work, "--ref", "main"], { GITHUB_ACTIONS: "true" });
+    const r1 = run();
+    const r2 = run();
+    const lines = r1.stdout.trimEnd().split("\n");
+    const m = /^::stop-commands::([0-9a-f]{32})$/.exec(lines[0]);
+    expect(m).not.toBeNull();
+    expect(lines.at(-1)).toBe(`::${m?.[1]}::`);
+    expect(r2.stdout.split("\n")[0]).not.toBe(lines[0]);
+    const sum = join(dirname(f.work), "summary.md");
+    writeFileSync(sum, "");
+    const bad = cli(["plan", "--cwd", f.work, "--ref", "x\n::warning ::y ![b](https://e.example/b.png)"], { GITHUB_ACTIONS: "true", GITHUB_STEP_SUMMARY: sum });
+    expect(bad.code).toBe(1);
+    expect(bad.stderr.trimEnd().split("\n")).toHaveLength(1);
+    expect(bad.stderr).toStartWith("::error title=Tag release refused (bad_ref)::");
+    expect(readFileSync(sum, "utf8")).toMatch(/\*\*bad_ref\.\*\* `[^`\n]*!\[b\]\(https:\/\/e\.example\/b\.png\)[^`\n]*`/);
+  });
+
+  test("the command line checks the suite directories from the checkout's test.yml", () => {
+    const f = released();
+    writeFileSync(join(f.work, TEST_YML), TEST_YML_TEXT.replace("scripts/tests", "scripts/tests skills/none/tests"));
+    const r = cli(["plan", "--cwd", f.work, "--ref", "main"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("Refused (suite_dir_missing): skills/none/tests does not exist");
+    rmSync(join(f.work, TEST_YML));
+    expect(cli(["plan", "--cwd", f.work, "--ref", "main"]).stderr).toContain("suite_list_unreadable");
   });
 
   test("bad usage exits 2", () => {
