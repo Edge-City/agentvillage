@@ -8,10 +8,11 @@
  * cleaned and scanned:
  *
  *   - cleanName(): a person's name as a plain display name, or null.
- *   - cleanText(): an organiser announcement or a fact the overlay computed
- *     (a time, the weather) as one plain line, or null.
- *   - cleanTitle(): text a non-organiser can write (event titles and venues,
- *     the resident's notes and signals) as one plain line, stricter, or null.
+ *   - cleanText(): an organiser announcement, a fact the overlay computed (a
+ *     time, the weather) or the resident's own words about themself (their
+ *     notes and signals) as one plain line, or null.
+ *   - cleanTitle(): third-party text a non-organiser can write (event titles
+ *     and venues) as one plain line, stricter, or null.
  *   - cronScanHit(): the patterns Hermes's cron prompt scanner blocks a run on.
  *   - connectionsUrl(): the Connections link the brief always carries.
  */
@@ -83,17 +84,32 @@ const DOT_BETWEEN_LETTERS = /(?<=[\p{L}\p{M}\p{N}])\.(?=\p{L})/gu;
 const DOMAIN_DOTS = /[\u3002\uff0e\uff61]/g;
 /** A `$` directly before a letter makes a cashtag (`$TON`); before a digit it is a price and stays. */
 const CASHTAG = /\$(?=\p{L})/gu;
-/** A phone-shaped run: 7 or more digits with single spaces or dashes between, an optional leading `+`. */
-const PHONE_RUN = /\+?\p{Nd}(?:[ -]?\p{Nd}){6,}/gu;
-/** Dates that look like a phone run (`2026-10-12`, `12-10-2026`): kept. */
-const DASHED_DATE = /^(?:\p{Nd}{4}-\p{Nd}{1,2}-\p{Nd}{1,2}|\p{Nd}{1,2}-\p{Nd}{1,2}-\p{Nd}{2,4})$/u;
+/**
+ * A digit run that could be a phone number: digits with spaces, dashes, dots
+ * or parentheses between them, an optional leading `+` or `(`. It never
+ * touches a digit, and never takes in a digit beside a `:` and a digit (a time
+ * like `10:00` is not part of one). withoutPhoneRuns decides which runs go.
+ */
+const DIGIT_RUN = /(?<!\p{Nd})(?<!\p{Nd}:)\+?\(?\p{Nd}(?:[ .()-]{0,3}\p{Nd})*(?!\p{Nd})(?!:\p{Nd})/gu;
+/** A `/` that is not between two digits (`10/12` keeps its slash). */
+const SLASH_NOT_BETWEEN_DIGITS = /(?<!\p{Nd})\/|\/(?!\p{Nd})/gu;
+/** Slashes at the very start or end of the text. */
+const EDGE_SLASHES = /^(?:\/\s*)+|(?:\s*\/)+$/g;
 
 function codePointSlice(text: string, n: number): string {
   return [...text].slice(0, n).join("");
 }
 
+/**
+ * A phone-shaped run removed: one holding 10 to 15 digits, or one starting
+ * with `+` and holding at least 7. Shorter runs stay (`2026-2027 cohort`,
+ * `1000000 trees`, `Rs 2500 3000`, `2026-10-12`).
+ */
 function withoutPhoneRuns(text: string): string {
-  return text.replace(PHONE_RUN, (run) => (DASHED_DATE.test(run) ? run : " "));
+  return text.replace(DIGIT_RUN, (run) => {
+    const digits = (run.match(/\p{Nd}/gu) ?? []).length;
+    return (digits >= 10 && digits <= 15) || (run.startsWith("+") && digits >= 7) ? " " : run;
+  });
 }
 
 /** A name keeps letters, marks, digits, spaces and `' ’ . , -`; anything else becomes a space. */
@@ -115,13 +131,17 @@ export const NAME_MAX = 40;
  */
 export function cleanName(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
+  // Phone runs go before the disallowed characters (so a leading `+` and
+  // parentheses count) and once more after them (a run they split, now joined by spaces).
   const plain = withoutPhoneRuns(
-    raw
-      .normalize("NFKC")
-      .replace(DOMAIN_DOTS, ".")
-      .replace(LINE_BREAKS, " ")
-      .replace(INVISIBLE, "")
-      .replace(IGNORABLE, "")
+    withoutPhoneRuns(
+      raw
+        .normalize("NFKC")
+        .replace(DOMAIN_DOTS, ".")
+        .replace(LINE_BREAKS, " ")
+        .replace(INVISIBLE, "")
+        .replace(IGNORABLE, ""),
+    )
       .replace(NAME_DISALLOWED, " ")
       .replace(/\s+/g, " "),
   )
@@ -146,12 +166,13 @@ function capped(plain: string, max: number): string | null {
 }
 
 /**
- * Text from an organiser, the overlay's own code or a fixed list as one plain
- * line: NFKC-normalised; control, format and default-ignorable characters
- * removed; links, addresses and markup characters (backticks included)
- * removed; whitespace collapsed; at most `max` code points (an ellipsis marks
- * a cut). Null when nothing visible is left or Hermes's scanner would block on
- * it. Text anyone else can write goes through cleanTitle.
+ * Text from an organiser, the overlay's own code, a fixed list or the
+ * resident about themself (their notes and signals) as one plain line:
+ * NFKC-normalised; control, format and default-ignorable characters removed;
+ * links, addresses and markup characters (backticks included) removed;
+ * whitespace collapsed; at most `max` code points (an ellipsis marks a cut).
+ * Null when nothing visible is left or Hermes's scanner would block on it.
+ * Third-party text anyone else can write goes through cleanTitle.
  */
 export function cleanText(raw: unknown, max: number): string | null {
   if (typeof raw !== "string") return null;
@@ -168,13 +189,15 @@ export function cleanText(raw: unknown, max: number): string | null {
 }
 
 /**
- * Text a non-organiser can write (an event title or venue a resident host
- * set, the resident's own notes and signals) as one plain line, stricter than
- * cleanText and repaired rather than refused: everything cleanText removes;
- * `@` and `/` removed (a `/` between two digits, as in `10/12`, stays: no
- * command starts there), so no `/command` Telegram makes tappable and no
+ * Third-party text a non-organiser can write (an event title or venue a
+ * resident host set) as one plain line, stricter than cleanText and repaired
+ * rather than refused: everything cleanText removes; `@` removed; a `/` gets
+ * a space on both sides (`AI / ML`) unless it is between two digits (`10/12`,
+ * `24/7`), and one at the very start or end is dropped, so no `/command`
+ * Telegram makes tappable (a slash followed by a space is none) and no
  * handle; a `$` before a letter removed (no cashtag; `$20` stays); a
- * phone-shaped digit run removed (dashed dates stay); the full stops that act
+ * phone-shaped digit run removed (10 to 15 digits, or `+` and 7 or more:
+ * withoutPhoneRuns); the full stops that act
  * as a domain dot (U+3002, U+FF0E, U+FF61) read as `.`, and a dot between
  * letters followed by a space, so no domain survives as a link (`7.30pm`
  * stays). Null only when nothing visible is left or Hermes's scanner would
@@ -194,11 +217,13 @@ export function cleanTitle(raw: unknown, max: number): string | null {
       .replace(MARKUP, " ")
       .replace(CASHTAG, "")
       .replace(/@/g, " ")
-      .replace(/(?<!\p{Nd})\/|\/(?!\p{Nd})/gu, " ")
+      .replace(SLASH_NOT_BETWEEN_DIGITS, " / ")
       .replace(/\s+/g, " "),
   )
     .replace(DOT_BETWEEN_LETTERS, ". ")
     .replace(/\s+/g, " ")
+    .trim()
+    .replace(EDGE_SLASHES, "")
     .trim();
   return capped(plain, max);
 }

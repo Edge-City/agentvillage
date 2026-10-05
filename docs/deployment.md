@@ -253,11 +253,15 @@ The rules the trigger holds:
   the model is woken. Cleaning repairs rather than refuses: a dot between
   letters gets a space after it (`R.Krishnan` is `R. Krishnan`, and no domain
   stays a link), and in names and titles the full stops that act as a domain
-  dot (U+3002, U+FF0E, U+FF61) are read as dots first. Text a non-organiser can write (event titles and venues, the
-  resident's notes and signals) also loses `@`, `/` (except between digits,
-  as in `10/12`), a `$` before a letter (no cashtag; `$20` stays) and
-  phone-shaped digit runs, so no `/command` Telegram makes
-  tappable reaches the message; names lose phone runs too and are refused only
+  dot (U+3002, U+FF0E, U+FF61) are read as dots first. Third-party text a
+  non-organiser can write (event titles and venues) also loses `@`, a `$`
+  before a letter (no cashtag; `$20` stays) and phone-shaped digit runs (10 to
+  15 digits with spaces, dashes, dots or parentheses between, or `+` and 7 or
+  more; `2026-2027` and `1000000` stay), and a `/` gets a space on both sides
+  (`AI / ML`) unless it is between digits (`10/12`, `24/7`), one at the very
+  start or end dropped, so no `/command` Telegram makes tappable reaches the
+  message. The resident's own notes and signals are their own words and get
+  the ordinary cleaning. Names lose phone runs too and are refused only
   when nothing is left, when command-shaped, or on a scanner hit. A pick (the
   drops, the evening note, the follow-up) skips a card whose name does not
   clean, so it never spends the day's slot.

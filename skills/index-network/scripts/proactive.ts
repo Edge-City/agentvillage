@@ -295,7 +295,7 @@ class Withheld {
   text(raw: unknown, max: number): string | null {
     return this.counted(raw, cleanText(raw, max));
   }
-  /** Text a non-organiser can write: the stricter cleaner (F6). */
+  /** Third-party text a non-organiser can write (event titles, venues): the stricter cleaner (F6). */
   title(raw: unknown, max: number): string | null {
     return this.counted(raw, cleanTitle(raw, max));
   }
@@ -424,7 +424,8 @@ export function briefView(
     },
     you: {
       interests: (context.userModel?.interestTags ?? []).flatMap((tag) => cleanText(tag, 40) ?? []),
-      notes: (context.userModel?.phrases ?? []).slice(0, 3).flatMap((phrase) => w.title(phrase, 120) ?? []),
+      // The resident's own words about themself: cleanText, not cleanTitle (B1-fix2 R4).
+      notes: (context.userModel?.phrases ?? []).slice(0, 3).flatMap((phrase) => w.text(phrase, 120) ?? []),
     },
     connections: {
       newMatchCount: count,
@@ -486,7 +487,8 @@ export function followUpView(date: string, result: FollowUpResult): { view: Reco
   const newConnections = people(result.newlyResolved);
   const agentsTalking = people(result.waiting).map(({ name, profileUrl }) => ({ name, profileUrl }));
   const yourSignals = result.signals.slice(0, LIST_MAX).flatMap((signal) => {
-    const text = w.title(signal.summary, 120);
+    // The resident's own signal: cleanText (B1-fix2 R4).
+    const text = w.text(signal.summary, 120);
     return text ? [{ text, link: indexUrl("i", signal.url) }] : [];
   });
   if (waitingOnYou.length === 0 && newConnections.length === 0) return { view: null, withheld: w.count };

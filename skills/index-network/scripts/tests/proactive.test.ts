@@ -228,18 +228,39 @@ describe("the morning brief", () => {
       buildContext: async () => context({
         rsvpEvents: [{ ...event, title: "Sunrise yoga /approve at 7.30pm", venue: "Ask @host, call +91 98765 43210" }],
         highlightedEvents: [{ ...event, id: "e2", title: "Free passes at evil.example/claim", venue: "t.me/scammer" }],
-        userModel: { phrases: ["Met someone at t.me/x, call 9876543210"], interestTags: ["Energy & Climate"] },
         connectionOpportunities: [card("R.Krishnan", "op1"), card("K.S.Ramesh", "op2")],
       }),
     }));
     const view = output(result.lines);
-    expect(view.schedule.yourRsvps[0]).toMatchObject({ title: "Sunrise yoga approve at 7.30pm", venue: "Ask host, call" });
-    expect(view.schedule.highlighted[0]).toMatchObject({ title: "Free passes at evil. example claim", venue: "t. me scammer" });
-    expect(view.you.notes).toEqual(["Met someone at t. me x, call"]);
+    expect(view.schedule.yourRsvps[0]).toMatchObject({ title: "Sunrise yoga / approve at 7.30pm", venue: "Ask host, call" });
+    expect(view.schedule.highlighted[0]).toMatchObject({ title: "Free passes at evil. example / claim", venue: "t. me / scammer" });
     expect(view.connections.names).toEqual(["R. Krishnan", "K. S. Ramesh"]);
     expect(state().deliveredToday.ids).toEqual(["op1", "op2"]);
     const text = result.lines.join("\n");
     expect(text).not.toMatch(/\/approve|@host|98765|evil\.example|t\.me/);
+  });
+
+  test("R4: the resident's own notes and signals are their own words: cleanText, slashes and numbers kept; event fields stay strict", async () => {
+    const event = context().rsvpEvents[0];
+    const result = await runProactive("brief", options({
+      buildContext: async () => context({
+        rsvpEvents: [{ ...event, title: "AI/ML and/or B2B/SaaS", venue: "Hall B/C" }],
+        userModel: { phrases: ["Building AI/ML tools for B2B/SaaS, 2026-2027 cohort", "Planting 1000000 trees, see https://my.site/x"], interestTags: [] },
+      }),
+    }));
+    const view = output(result.lines);
+    expect(view.you.notes).toEqual(["Building AI/ML tools for B2B/SaaS, 2026-2027 cohort", "Planting 1000000 trees, see"]);
+    expect(view.schedule.yourRsvps[0]).toMatchObject({ title: "AI / ML and / or B2B / SaaS", venue: "Hall B / C" });
+
+    const follow = await runProactive("negotiation", options({
+      followUp: async () => ({
+        signals: [{ summary: "Hiring for AI/ML and/or data roles", url: "https://index.network/i/s1" }],
+        needsAttention: [{ name: "Maya Rao", userUrl: "https://index.network/u/n0", opportunityUrl: "https://index.network/o/n0" }],
+        waiting: [],
+        newlyResolved: [],
+      }) as any,
+    }));
+    expect(output(follow.lines).yourSignals).toEqual([{ text: "Hiring for AI/ML and/or data roles", link: "https://index.network/i/s1" }]);
   });
 
   test("Index unreadable: no count, no names, the link line still there; the overnight prefetch fills in when it has today", async () => {

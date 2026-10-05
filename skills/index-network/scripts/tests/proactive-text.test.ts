@@ -119,21 +119,62 @@ describe("cleanText: one plain line or null", () => {
 describe("F6 cleanTitle: what a non-organiser writes, repaired not refused", () => {
   test("no command, handle, link or phone text survives", () => {
     const cases: Array<[string, string]> = [
-      ["Sunrise yoga /approve", "Sunrise yoga approve"],
+      ["Sunrise yoga /approve", "Sunrise yoga / approve"],
       ["Ask @scammer for passes", "Ask scammer for passes"],
-      ["Free passes at evil.example/claim", "Free passes at evil. example claim"],
-      ["DM t.me/scammer", "DM t. me scammer"],
+      ["Free passes at evil.example/claim", "Free passes at evil. example / claim"],
+      ["DM t.me/scammer", "DM t. me / scammer"],
       ["Call +91 98765 43210", "Call"],
       ["Call 9876543210 now", "Call now"],
       ["Tickets: 022-2345-6789", "Tickets:"],
       ["Visit https://evil.example/x or www.evil.example", "Visit or"],
       ["/start", "start"],
-      ["Yoga/Meditation", "Yoga Meditation"],
+      ["Yoga/Meditation", "Yoga / Meditation"],
     ];
     for (const [raw, clean] of cases) expect({ raw, clean: cleanTitle(raw, 100) }).toEqual({ raw, clean });
     for (const [, clean] of cases) {
-      expect(clean).not.toMatch(/[\/@]/);
+      // A slash is never followed by anything but a space or a digit: no /command.
+      expect(clean).not.toMatch(/@|\/[^\s\p{Nd}]|^\//u);
       expect(clean).not.toMatch(/[\p{L}\p{N}]\.\p{L}/u);
+    }
+  });
+
+  test("R4: the refuter's examples: ordinary numbers and slashes read as written, phone numbers go whole", () => {
+    const cases: Array<[string, string | null]> = [
+      // Phone-shaped runs: 10 to 15 digits, or + and at least 7.
+      ["2026-2027 cohort", "2026-2027 cohort"],
+      ["1000000 trees", "1000000 trees"],
+      ["Rs 2500 3000", "Rs 2500 3000"],
+      ["(987) 654-3210", null],
+      ["Call (987) 654-3210 today", "Call today"],
+      ["+91 98765 43210", null],
+      ["Call +91 98765 now", "Call now"],
+      ["Call 987.654.3210", "Call"],
+      ["Call 1234567890123456", "Call 1234567890123456"],
+      ["Run 2026-10-12 10:00-11:30", "Run 2026-10-12 10:00-11:30"],
+      ["7.30pm sunset", "7.30pm sunset"],
+      ["10:00-11:30", "10:00-11:30"],
+      ["2026-10-12", "2026-10-12"],
+      ["12-10-2026", "12-10-2026"],
+      ["v1.2.3 release", "v1.2.3 release"],
+      ["Python3.12", "Python3.12"],
+      // Slashes: a space on both sides, except between two digits; dropped at the very start or end.
+      ["AI/ML and/or B2B/SaaS", "AI / ML and / or B2B / SaaS"],
+      ["/approve", "approve"],
+      ["/approve now", "approve now"],
+      ["Yoga 10/approve", "Yoga 10 / approve"],
+      ["/start@SomeBot", "start SomeBot"],
+      ["/12", "12"],
+      ["Open mic/", "Open mic"],
+      ["24/7 hackathon", "24/7 hackathon"],
+      ["1/2 marathon", "1/2 marathon"],
+      ["12/34start", "12/34start"],
+      // The dot repair stays as it is.
+      ["e.g. a.m. U.S.A.", "e. g. a. m. U. S. A."],
+      ["Dr.Smith", "Dr. Smith"],
+    ];
+    for (const [raw, clean] of cases) expect({ raw, clean: cleanTitle(raw, 100) }).toEqual({ raw, clean });
+    for (const [raw, clean] of [["2026-2027 cohort", "2026-2027 cohort"], ["1000000 trees", "1000000 trees"], ["Rs 2500 3000", "Rs 2500 3000"], ["Maya (987) 654-3210", "Maya"], ["Maya 98765/43210", "Maya"], ["Maya +91 98765", "Maya"]]) {
+      expect({ raw, clean: cleanName(raw) }).toEqual({ raw, clean });
     }
   });
 
@@ -141,7 +182,7 @@ describe("F6 cleanTitle: what a non-organiser writes, repaired not refused", () 
     for (const raw of ["Yoga 7.30pm", "Dinner 10/12", "Dinner 10/12/2026", "Run 2026-10-12", "Run 12-10-2026", "Talk 6:30-7:30", "Session 1 of 3", "Breathwork on the beach"]) {
       expect({ raw, clean: cleanTitle(raw, 100) }).toEqual({ raw, clean: raw });
     }
-    expect(cleanTitle("Talk at 7.30pm, 10/12 /approve", 100)).toBe("Talk at 7.30pm, 10/12 approve");
+    expect(cleanTitle("Talk at 7.30pm, 10/12 /approve", 100)).toBe("Talk at 7.30pm, 10/12 / approve");
   });
 
   test("withheld only when nothing is left or the scanner hits; capped like cleanText", () => {
@@ -154,7 +195,7 @@ describe("F6 cleanTitle: what a non-organiser writes, repaired not refused", () 
 
   test("R3: the full stops that act as a domain dot are read as dots and repaired; a cashtag loses its $, a price keeps it", () => {
     const cases: Array<[string, string]> = [
-      ["evil\u3002com/claim", "evil. com claim"],
+      ["evil\u3002com/claim", "evil. com / claim"],
       ["evil\uff61com", "evil. com"],
       ["evil\uff0ecom", "evil. com"],
       ["Visit www\u3002evil\u3002com", "Visit"],
