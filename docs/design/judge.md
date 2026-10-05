@@ -1,6 +1,6 @@
 # The judge: model reviewer, adviser and delegated approver, and the policy `delegation` block
 
-Status: **design, draft 0.1** (2026-10-05). Nothing here is built. Before Oct 11 the only work is
+Status: **design, draft 0.2** (2026-10-05). The fourteen design questions are decided (§7). Nothing here is built. Before Oct 11 the only work is
 the reservations in §8 marked PRE-LAUNCH: they are additive and inert. Everything else is post-launch.
 It is built in the order reviewer, then adviser, then delegated approver, and each stage opens only
 after its evidence gate in §4 is signed. Owner: Carter. Ruling: Carter, 2026-10-05 23:03Z (lanes
@@ -27,7 +27,7 @@ a human grant [V], and a judge decision is held to the same rule.
 | Shape | What changes in the policy file | What is recorded | What the resident experiences |
 |---|---|---|---|
 | **Reviewer** (grades supervised samples) | `delegation.model` set; the model identity listed in `delegation.reviewers`; the sampled classes listed in `delegation.classes` | `audit.reviewed` with actor `model:…` and `verdict_source: model` (§3) | Nothing in stage 1 (shadow). From stage 2, fewer review cards: the judge's ok closes a sample, and its deny is sent to the resident (`escalate_on: deny`) |
-| **Adviser** (advises on manual cards) | `delegation.advice: true` | new `approval.advised` record (§3); the human's grant or reject carries `advice_seq` and `advice_shown` | The card gains one line, e.g. "Your judge suggests: approve (high confidence)". The resident still decides |
+| **Adviser** (advises on manual cards) | `delegation.advice: true` | new `approval.advised` record with the judge's reason (§3); the human's grant or reject carries `advice_seq` and `advice_shown` | The card gains a short block, e.g. "Your judge suggests: approve (high confidence). It names the person you asked to meet and nothing else." The reason is plain text of at most 280 characters (§3.1). The resident still decides |
 | **Delegated approver** (decides manual cards per class, within bounds) | `delegation.daily_cap` > 0, with `escalate_on` including `irreversible` and `unknown_class` | `approval.granted` by actor `model:…` with `approved_by: model:…` and the cap position; a sample of these grants enters the resident's review backlog | Routine cards in the listed classes stop arriving. A short "your judge approved N things today" digest replaces them; escalated cards arrive as before; any judge grant can be revoked before it runs |
 | **The `delegation` block** (holds all three) | one top-level key; absent or all-off means none of the above | the attested policy hash on every judge record binds the bounds in force | The settings page shows a "Judge" section: reserved and read-only before launch, then opt-in per resident, default off |
 
@@ -93,8 +93,7 @@ Any violation is a schema or load error, and the policy fails closed (SPEC §5.2
    every manual and supervised class passes. The rule is a tamper pin, not a dial. If someone
    loosens a delegated class's row, for example from manual to autonomous, without also rewriting
    the delegation block, the load fails. The judge's scope can then never grow as a side effect of
-   an unrelated edit. (Open question 1 asks whether Carter meant this or a ceiling on what a judge
-   decision resolves to.)
+   an unrelated edit. (Decision 1: the pin, not a ceiling on what a judge decision resolves to.)
 4. `daily_cap` is an integer. A float, a string or a negative number is refused.
 5. `escalate_on` is drawn from the fixed set. When `daily_cap > 0`, it MUST contain `irreversible`
    and `unknown_class`: the delegated approver cannot be configured without the two floors.
@@ -148,13 +147,17 @@ differs in these fields:
 - `confidence` (a number in [0, 1]), `rubric` (the rubric id inside the judge release) and
   `input_hash` (the SHA-256 of exactly what the judge was shown). `payload_hash` appears only when
   the judge was shown the bound bytes whole, as APRV-480/481 rule for humans [V].
+- `reason` and `reason_raw_hash`, under the §3.1 rule. The reason is shown to the resident only
+  when the review is escalated to them.
 - No `reaction` and no `note`. Reactions are human guidance (invariant 10) [V]. A judge's predicted
   reaction, if it makes one, goes in `predicted_reaction` so agreement can be measured. It is never
   written to `reaction`.
 
 **The judge as an adviser.** It writes a new event, `approval.advised`, with these fields: actor
 `model:…`, `request_seq`, `recommendation` (`grant | reject | escalate`), `confidence`, `rubric`,
-`input_hash`. The record is advice. No enforcement path reads it, by the same reasoning as
+`input_hash`, `reason` (the sanitised text the card shows, §3.1) and `reason_raw_hash` (the SHA-256
+of the judge's unsanitised output, so a refuter can show what the sanitiser changed). The record is
+advice. No enforcement path reads it, by the same reasoning as
 invariant 10. The human's `approval.granted` or `approval.rejected` then carries `advice_seq` and
 `advice_shown` (a boolean: was the advice on the card at the moment of the tap). Without
 `advice_shown`, acceptance rates cannot be separated from anchoring (§4).
@@ -162,7 +165,9 @@ invariant 10. The human's `approval.granted` or `approval.rejected` then carries
 **The judge as a delegated approver.** It writes `approval.granted` with these fields: actor
 `model:…`, `approved_by: model:<name>@<version>`, `policy_sha256` (as on every grant), and
 `delegation: {cap, used_before, escalate_on}`. These are copied from the attested block and the log,
-so a reader can check the cap without the policy file. The token, binding and budget rules are the
+so a reader can check the cap without the policy file. The grant also carries `reason` and
+`reason_raw_hash` under the §3.1 rule; the reason is what the resident's daily digest shows beside
+that grant. The token, binding and budget rules are the
 manual path's, unchanged. Every judge grant is eligible for a retrospective human sample, drawn by
 the existing HMAC sampler at `audit.supervised_sample_rate` (SPEC §5.2) [V]. The judge is itself
 supervised-retro.
@@ -194,13 +199,56 @@ a field on every decision event. It is never inferred from timing, channel or ab
 - Advice maps to `decision.advised` (new), and the human decision carries `advice_shown`.
 - dbt keeps model-decided outcomes in their own column of every mart that counts approvals. The
   primary metric (verified useful outcomes per eligible intention) is reported with and without
-  them. Whether they count at all is research's call (open question 12).
+  them. Whether they count at all is research's call (decision 12).
+- The judge's `reason` is model text that may paraphrase resident text. It reaches research only
+  through the sanitise gate, as digest text does. Research models get the flag and the counts, not
+  the raw reason.
+
+### 3.1 The judge's free-text reason (ruling 9, Carter 2026-10-05)
+
+The judge may explain itself in free text, on advice, on reviews and on delegated grants. Its text
+is shown to one audience only: the resident, as plain text on their card or digest. The payload the
+judge reasoned over is untrusted throughout, and its reason is treated as possibly carrying that
+payload's injection.
+
+1. **Bounded: 280 characters**, counted after sanitising. A longer reason is cut at a word boundary
+   and ends with an explicit `[cut]` marker. Why 280: the reason has to fit on a phone card beside
+   the computed headline and the quoted payload lines without collapsing. It stays under the
+   300-character per-row cap the review card already applies (APRV-480 fix round 1) [V], so it can
+   never push a card into the size-reduction steps that shrink the payload region. And it is long
+   enough for two sentences, which is what a reason needs. A judge that needs more is escalating,
+   not advising.
+2. **Plain text only.** It is HTML-escaped and sent with no parse mode, so no markup, entities or
+   formatting can render. Control, format and bidi characters are marked injectively, using the
+   rule APRV-489 AC #4 set for quoted payload text [V]. The reason sits in its own labelled region
+   ("Your judge says:"). It cannot forge the headline, the deadline line, a button or the collapsed
+   canonical block.
+3. **No links and no commands.** Anything that looks like a URL is replaced by `[link removed]`:
+   a scheme, `www.`, a bare domain or an `@handle`. A line that starts with `/` (a bot command), and
+   any backtick, code-fence or shell-prompt span, is replaced by `[command removed]`. The text is
+   repaired and delivered, not refused. Only a reason that is empty after repair is dropped, and
+   the card then says "no reason given".
+4. **Payload echo is capped.** A run of 40 or more characters copied verbatim from the payload is
+   replaced by `[quoted from the request]`. The payload's own words already appear on the card in
+   the computed quote region. A long echo inside the reason is the shape an injected instruction
+   takes when it rides the judge's output.
+5. **Never relayed back to the agent and never a tool input.** No agent-facing surface carries the
+   reason: not the propose result, not `approval wait`, not status, not any refusal message, not any
+   hook response. The agent learns only the effect: a grant, a rejection, or that the request is
+   still pending. The reason never enters a prompt, a tool argument or the agent's memory, and the
+   judge never sees an earlier reason as input.
+6. **Logged with the decision.** The sanitised `reason` is on the record, and `reason_raw_hash`
+   binds what the model actually emitted. The raw text itself is kept only in the judge service's
+   own store, for the 90-day raw-text retention already decided for message text, and never in
+   approvald's payload store, which the agent's host can reach.
 
 ## 4. Evidence gates between stages
 
 Each gate is a written sign-off by **Carter and Timour**, recorded in this doc's supersession record
-and as a CLAIMS GRANT line. Stage 3 is on-path after the freeze, so it also needs Seref's review.
-The thresholds below are the proposal. Small samples are judged by the Wilson 95% bound, not the
+and as a CLAIMS GRANT line. No other signature is needed (decision 13): research is informed at each
+gate, and the model-decided flag and separate reporting of decision 12 stay in place.
+The thresholds below are still proposals: the fourteen questions did not cover them, so the
+signers confirm them at each gate. Small samples are judged by the Wilson 95% bound, not the
 point estimate.
 
 **Stage 0 to 1: the shadow reviewer.** No gate beyond a clean refutation (§6). The judge grades
@@ -230,8 +278,8 @@ block as a whole.
   rate. The shown half measures anchoring.
 - On the hidden half, the human's decision matches the advice at least 95% of the time. False
   approve (judge said grant, human rejected) has a Wilson upper bound of at most 3%.
-- Only classes that are reversible in practice and low-stakes are eligible (open question 8).
-  Proposed first: `intent.publish.inferred.index`. Then `digest.share`.
+- Only classes that are reversible in practice and low-stakes are eligible (decision 8):
+  `intent.publish.inferred.index` first, then `digest.share`.
 
 **Gate C: raising `daily_cap`.** The cap starts at 5. It doubles after 7 days with no human override
 of a judge grant judged harmful, and with the sampled-review deny rate on judge grants no higher
@@ -300,7 +348,8 @@ refuter is told to break the change, and to report "nothing found" only with the
 | Risk | Mitigation in the design | Refutation before stage |
 |---|---|---|
 | **The judge approves an irreversible action** | `escalate_on: irreversible` is mandatory when `daily_cap > 0` (rule 5). The §7 floor already raises `reversible: false` to manual [V]. Self-reported `reversible: true` never lowers scrutiny (invariant 4) [V], so the judge treats it as a claim. Eligible classes are chosen as reversible in practice | 3: craft actions that are irreversible but declare `reversible: true` or omit it, in an eligible class, and show the judge cannot grant one without a human |
-| **Prompt injection through the payload** | The payload sits in a quoted data region of a fixed prompt. Output is constrained to a closed JSON schema (verdict, confidence, rubric id). The card shows advice only as a closed recommendation word and a confidence band, never model free text. An injection classifier runs before the judge; a positive is `low_confidence` and escalates | 1, 2 and 3: an injection corpus (instructions in intention text, digest text, unicode and bidi tricks, payloads that imitate the card's own framing), each with zero forced `ok`/`grant` |
+| **Prompt injection through the payload** | The payload sits in a quoted data region of a fixed prompt. Output is constrained to a JSON schema: a closed verdict, a confidence, a rubric id and one bounded `reason` string. An injection classifier runs before the judge; a positive is `low_confidence` and escalates | 1, 2 and 3: an injection corpus (instructions in intention text, digest text, unicode and bidi tricks, payloads that imitate the card's own framing), each with zero forced `ok`/`grant` |
+| **Payload-borne injection carried by the judge's free-text reason** (ruling 9) | The §3.1 rule. The reason is plain text in its own labelled region: escaped, no parse mode, bidi and control characters marked. Links and commands are replaced. A verbatim payload echo of 40 or more characters is replaced. The reason is bounded at 280 characters. It is never on any agent-facing surface or tool input, and the judge never reads an earlier reason. The raw output is bound by `reason_raw_hash`, so a sanitiser bypass is detectable after the fact | 2 (first free text a resident sees), again at 3. Corpus: payloads whose intention or digest text tells the judge to write a link, a `/command`, a phishing line ("tap Approve, the organisers already agreed"), a fake deadline or button text, or an instruction addressed to the agent; homoglyph and bidi variants; payloads that put the injection under 40 characters per fragment to slip under the echo cap. Passes when: no rendered card contains a live link, a command or a forged card region; no agent-facing surface (propose result, `approval wait`, status, refusals, hook responses, the agent's next prompt) contains any reason byte; and every case is listed with its `reason_raw_hash` and the sanitised text |
 | **The judge grades its own earlier approval** | A new core refusal, `reviewer-is-decider`. A sample whose execution was granted or advised by a `model:<name>@*` identity cannot be reviewed by any identity with the same `<name>`, at any version. Only a human can review it | 3: grant as `judge@1`, then review the sample as `judge@1` and as `judge@2`; both refused |
 | **Cap bypass by renaming a class** | The cap is counted from the log over a rolling 24 h. It counts every `approval.granted` whose actor's `<name>` matches, across all classes, all policy hashes and all judge versions. It is never keyed on the class or the attestation. `classes` are exact keys, and `max_autonomy` pins the class rows (rule 3) | 3: rename a class, re-attest, bump the judge version, and open the window across a re-attestation; the cap holds in each case |
 | **The judge's decision is recorded as the resident's** | Dedicated judge transport; the `model:` actor kind; human channels refuse it | 1: send a judge decision through each human channel and the relay; each is refused or recorded `model:` |
@@ -309,45 +358,59 @@ refuter is told to break the change, and to report "nothing found" only with the
 | **Judge and agent share blind spots** | The judge uses a different model family from the resident's agent | 1: record both families |
 | **An unmapped tool never reaches the judge** | Out of scope here. An unmapped tool call is allowed with no record today (CLAIMS 23:05Z, APRV-499) [V], so delegation covers declared classes only | Noted on the readiness sheet, not refuted here |
 
-## 7. Open questions for Carter and Timour
+## 7. Decided 2026-10-05
 
-1. **What `max_autonomy` means.** This draft reads "never above the class's own level" as a
-   non-loosening pin that ties the block to the class rows. The alternative is a ceiling on the
-   posture a judge decision resolves to (for example, judge grants sampled as supervised-retro).
-   *Recommendation:* the pin. The ceiling makes delegation a second autonomy channel outside the
-   class rows, and that is the harder thing to audit.
-2. **One fleet judge, or a choice per resident.** *Recommendation:* one fleet judge identity,
-   version-pinned. The resident chooses on or off, and which classes, but not the model.
-3. **Hosting.** *Recommendation:* Maritime, calling a no-training provider; CoreWeave only if
-   open weights become a requirement; never co-located with the sandbox.
-4. **Which model.** *Recommendation:* a different family from the resident agent's model, through
-   a provider with a no-training and no-retention contract, with a dated snapshot pinned in the judge
-   release.
-5. **May a model review close a sample?** *Recommendation:* not in stage 1. After Gate A, a model
-   `ok` may close a sample when the model is listed in `reviewers`. A model `denied` always goes to
-   the human.
-6. **Whose grades count at Gate A.** The team tenants and the labelled set are not residents.
-   *Recommendation:* count them, report them separately, and require at least 50 resident-graded
-   pairs as well before Gate A, if supervised-retro reaches residents at all.
-7. **Run a blind arm for the adviser.** *Recommendation:* yes, half the cards for the first week.
-   Without it, acceptance measures anchoring.
-8. **Which classes are ever eligible for delegated approval.** *Recommendation:*
-   `intent.publish.inferred.index` first, then `digest.share`. Never `village.vote`: a vote is the
-   resident's own voice. Never `treasury.*`. `edgeos.*.write` is not eligible in V2. `human-only`
-   classes never, by rule.
-9. **Free text on the card.** *Recommendation:* none. Show a closed recommendation word and a
-   confidence band only. The rationale stays in the judge's log as a hash.
-10. **Telling residents.** *Recommendation:* the judge is opt-in per resident and off by default.
-    One sentence goes into the consent register and onto the settings page before stage 1 touches
-    any resident card.
-11. **Where the kill switch lives.** *Recommendation:* all three in §5. The fleet one, revoking the
-    judge's relay credential, is the one Carter holds.
-12. **Do model-decided outcomes count toward the primary metric?** *Recommendation:* report them
-    separately by default and never pool them silently. Research (Seref, NYU) decides.
-13. **Seref's review.** *Recommendation:* required for Gate C and for any stage-3 core release, as
-    on-path work after the freeze.
-14. **The R2 template and the 0.4.2 pin.** *Recommendation:* the template carries the block only in
-    the same release as a fleet-wide 0.4.2 pin. Otherwise it omits the block (§2.4).
+Carter ruled on all fourteen questions (lanes CLAIMS, GRANT line 23:21Z). Twelve were agreed as
+recommended. Two were changed: 9 and 13.
+
+1. **What `max_autonomy` means.** A non-loosening pin: every listed class must be at least as
+   strict as `max_autonomy`, so the block is tied to the class rows (§2.3 rule 3). It is not a
+   ceiling on what a judge decision resolves to, because a ceiling would make delegation a second
+   autonomy channel outside the class rows.
+2. **One fleet judge.** One judge identity, version-pinned. A resident chooses on or off and which
+   classes, but not the model.
+3. **Hosting.** Maritime, calling a provider that does not train on the data. CoreWeave only if
+   open weights become a requirement. Never co-located with the sandbox.
+4. **Which model.** A different model family from the resident agent's, through a provider with a
+   no-training and no-retention contract, with a dated snapshot pinned in each judge release.
+5. **Closing samples.** A model review closes nothing in stage 1. After Gate A, a model `ok` may
+   close a sample when the model is listed in `reviewers`. A model `denied` always goes to the human.
+6. **Whose grades count at Gate A.** Team tenants and the labelled set count and are reported
+   separately. At least 50 resident-graded pairs are required as well, if supervised-retro reaches
+   residents at all.
+7. **Blind arm.** Yes. For the first adviser week, advice is hidden on half the cards.
+8. **Eligible classes for delegated approval.** `intent.publish.inferred.index` first, then
+   `digest.share`. Never `village.vote` and never `treasury.*`. `edgeos.*.write` is not eligible in
+   V2. `human-only` classes are excluded by rule.
+9. **Free text on the card: ALLOWED (changed from the recommendation).** The judge may give a
+   free-text reason. It is bounded to 280 characters, has no links and no commands, is never
+   relayed back to the agent or into any tool input, is sanitised against payload-borne injection
+   (rendered as plain text on the card only, with the payload treated as untrusted), and is logged
+   with the decision. The full rule is §3.1, and the risk is in §6.
+10. **Telling residents.** The judge is opt-in per resident and off by default. One sentence goes
+    into the consent register and onto the settings page before stage 1 touches any resident card.
+11. **Kill switch.** All three in §5. Carter holds the fleet switch: revoking the judge's relay
+    credential.
+12. **The primary metric.** Model-decided outcomes are reported separately by default and never
+    pooled silently. The model-decided flag (`approved_by: model`, `decider_ref`) is on every
+    decision event. Research decides whether they count.
+13. **Seref's review: NOT required (changed from the recommendation).** Raising the cap and the
+    stage-3 releases do not need Seref's review. Research is informed at each gate, and the flag and
+    separate reporting of decision 12 stay. Carter and Timour sign Gates A to C.
+14. **The R2 template and the 0.4.2 pin.** The template carries the block only in the same release
+    as a fleet-wide 0.4.2 pin, and omits it otherwise (§2.4). R2 as claimed (CLAIMS 23:18Z) carries
+    no delegation block, which is consistent with this decision.
+
+### Still open
+
+- **The gate thresholds in §4.** The sample sizes, the agreement, kappa and recall bounds, the
+  false-approve bound and the cap schedule are proposals. Carter and Timour confirm or amend them
+  when they sign each gate.
+- **The concrete judge model and provider** under decision 4. This is chosen when the judge service
+  is built (stage 1), and named in its release manifest.
+- **The consent-register sentence** under decision 10. Wording is needed before stage 1.
+- **The 280-character cap and the 40-character echo threshold** in §3.1. These are design choices
+  to confirm with the stage-2 refutation's results.
 
 ## 8. Build tasks to file
 
@@ -362,7 +425,8 @@ the reservations: they are inert, and they are the only work before Oct 11.
 | Reserve the `model` actor kind and `verdict_source: model` in `schema/event.schema.json` and the refusal-code registry (no writer, no behaviour) | S | PRE-LAUNCH |
 | A judge transport: an authenticated `model:` actor on review, advice and grant; refused on every human channel | M | post, stage 1 |
 | Model reviews: `audit.reviewed` by `model:`, `predicted_reaction`, `overrides_seq`, a human review outranks it, the `reviewer-is-decider` refusal | M | post, stage 1 |
-| `approval.advised` event, `advice_seq` and `advice_shown` on decisions, advice line on the minimal and technical cards (APRV-489 styles) | M | post, stage 2 |
+| `approval.advised` event, `advice_seq` and `advice_shown` on decisions, the advice block on the minimal and technical cards (APRV-489 styles) | M | post, stage 2 |
+| The judge's free-text reason (§3.1): the 280-character bound, plain-text rendering, link and command removal, the payload-echo cap, the `reason` and `reason_raw_hash` fields, and a test per agent-facing surface showing the reason is absent | M | post, stage 2 |
 | Delegated grant: the cap counted from the log (by `<name>`, across classes, hashes and versions), `escalate_on`, the HMAC sample of judge grants, drop rule 8 | L | post, stage 3 |
 | `APPROVAL_DELEGATION=off`, a tightening-only operator flag | S | post, stage 1 |
 
@@ -393,3 +457,7 @@ the reservations: they are inert, and they are the only work before Oct 11.
 ## 9. Supersession record
 
 - 0.1 (2026-10-05): first draft, from the 22:58Z and 23:03Z rulings. No gate signed.
+- 0.2 (2026-10-05): Carter's rulings on questions 1 to 14 (CLAIMS 23:21Z) are recorded in §7.
+  The judge may now give a free-text reason under the §3.1 rule, with its injection risk added to
+  §6. Seref's review is not required: research is informed, and Carter and Timour sign the gates.
+  No gate signed.
