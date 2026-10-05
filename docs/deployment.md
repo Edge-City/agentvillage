@@ -276,10 +276,12 @@ The rules the trigger holds:
   malformed) is ignored and overwritten at the next wake.
 - **The state file is locked** (`memory/heartbeat-state.json.lock`) while a
   trigger reads and writes it, and written by temp file and rename. A state
-  file that cannot be read as an object (bad JSON, `[]`, `null`, over 5 MB) is
-  renamed aside under the lock as `heartbeat-state.json.corrupt-<UTC stamp>`
-  (the three newest are kept), the run log line carries
-  `note: state-renamed-aside`, and the run continues from an empty state. A
+  file that was read but is not a JSON object (bad JSON, `[]`, `null`) or is
+  over 5 MB is renamed aside under the lock as
+  `heartbeat-state.json.corrupt-<UTC stamp>` (the three newest are kept), the
+  run log line carries `note: state-renamed-aside`, and the run continues from
+  an empty state. A state file that cannot be read at all (a permission or
+  I/O error) is left alone and the run is silent with `state-unreadable`. A
   stale lock that cannot be removed ends the wait at once
   (`state-lock-stuck`).
 - **Every delivered message is recorded.** No `no_agent` job delivers text (a

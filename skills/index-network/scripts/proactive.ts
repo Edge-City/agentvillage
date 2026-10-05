@@ -19,8 +19,10 @@
  *   - the brief's delivery window, 05:00 to 11:00 IST (outside it: silent);
  *   - once per day per job: the day is marked done when the trigger wakes the
  *     model (a run that then fails loses that day; no delivery tracking);
- *   - an exclusive lock around memory/heartbeat-state.json (state-lock.ts); an
- *     unreadable state file is renamed aside and the run starts from empty;
+ *   - an exclusive lock around memory/heartbeat-state.json (state-lock.ts); a
+ *     state file whose content is not a JSON object is renamed aside and the
+ *     run starts from empty; one that cannot be read at all is left alone and
+ *     the run is silent (`state-unreadable`);
  *   - the picks and their reservations (the existing pick scripts);
  *   - what the model is given: dates, the resident's own data, sanitised
  *     schedule facts, organiser announcements, Index counts and cleaned names
@@ -114,9 +116,10 @@ export function stateFilePath(home: string): string {
   return join(home, "memory", "heartbeat-state.json");
 }
 
-/** A larger state file is unreadable: it is renamed aside (readStateHealing), never read as empty and written over. */
+/** A larger state file is corrupt: it is renamed aside (readStateHealing), never read as empty and written over. */
 export const MAX_STATE_BYTES = 5 * 1024 * 1024;
 
+/** The state file could not be read (EACCES, EIO, a directory, ...): the run is silent and the file is left alone. */
 export class StateUnreadable extends Error {
   constructor() {
     super("state-unreadable");
@@ -124,27 +127,47 @@ export class StateUnreadable extends Error {
   }
 }
 
+/** The state file was read, but its content is not a JSON object, or it is over MAX_STATE_BYTES: it may be renamed aside. */
+export class StateCorrupt extends Error {
+  constructor() {
+    super("state-corrupt");
+    this.name = "StateCorrupt";
+  }
+}
+
 /**
  * memory/heartbeat-state.json as an object. Missing or empty: an empty state
- * (a first run). Present but not readable as an object: StateUnreadable, and
- * nothing is written over it. One short retry first, because the memory
- * signal sync's model writes this file without the lock.
+ * (a first run). Read, but not a JSON object (bad JSON, `[]`, `null`) or over
+ * MAX_STATE_BYTES: StateCorrupt. Not readable at all (any other read error):
+ * StateUnreadable. Nothing is written over it either way. One short retry
+ * first, because the memory signal sync's model writes this file without the
+ * lock.
  */
 export function readState(path: string): Record<string, unknown> {
+  let failure: StateUnreadable | StateCorrupt = new StateUnreadable();
   for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) Bun.sleepSync(150);
+    let text: string;
     try {
       if (!existsSync(path)) return {};
       const size = statSync(path).size;
-      if (size > MAX_STATE_BYTES) throw new StateUnreadable();
+      if (size > MAX_STATE_BYTES) throw new StateCorrupt();
       if (size === 0) return {};
-      const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
-      if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw as Record<string, unknown>;
+      text = readFileSync(path, "utf8");
     } catch (err) {
-      if (err instanceof StateUnreadable) throw err;
+      if (err instanceof StateCorrupt) throw err;
+      failure = new StateUnreadable();
+      continue;
     }
-    if (attempt === 0) Bun.sleepSync(150);
+    try {
+      const raw = JSON.parse(text) as unknown;
+      if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw as Record<string, unknown>;
+    } catch {
+      // not JSON: corrupt, below
+    }
+    failure = new StateCorrupt();
   }
-  throw new StateUnreadable();
+  throw failure;
 }
 
 /** Unreadable state files kept beside the state file after being renamed aside; older ones are deleted. */
@@ -156,17 +179,19 @@ export function corruptStatePath(path: string, at: Date): string {
 }
 
 /**
- * readState that heals: a state file that cannot be read as an object (bad
- * JSON, `[]`, `null`, over MAX_STATE_BYTES) is renamed aside as
- * corruptStatePath (the newest CORRUPT_KEEP such files are kept), and the run
- * continues from an empty state, as the pick scripts on main did. Call it
- * holding the lock. A file that cannot be renamed stays StateUnreadable.
+ * readState that heals: a state file that was read but is not a JSON object
+ * (bad JSON, `[]`, `null`) or is over MAX_STATE_BYTES (StateCorrupt) is
+ * renamed aside as corruptStatePath (the newest CORRUPT_KEEP such files are
+ * kept), and the run continues from an empty state, as the pick scripts on
+ * main did. Call it holding the lock. A file that could not be read at all
+ * (StateUnreadable: a permission or I/O error) is left alone and the error
+ * propagates (B1-fix2 R7), as does a corrupt file that cannot be renamed.
  */
 export function readStateHealing(path: string, at: Date): { state: Record<string, unknown>; healed: boolean } {
   try {
     return { state: readState(path), healed: false };
   } catch (err) {
-    if (!(err instanceof StateUnreadable)) throw err;
+    if (!(err instanceof StateCorrupt)) throw err;
   }
   try {
     renameSync(path, corruptStatePath(path, at));
@@ -575,7 +600,7 @@ export function inBriefWindow(now: Date): boolean {
 function faultReason(err: unknown): string {
   if (err instanceof LockTimeout) return "state-locked";
   if (err instanceof LockStuck) return "state-lock-stuck";
-  if (err instanceof StateUnreadable) return "state-unreadable";
+  if (err instanceof StateUnreadable || err instanceof StateCorrupt) return "state-unreadable";
   return errorCode(err);
 }
 

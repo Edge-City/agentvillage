@@ -10,7 +10,7 @@ import { join } from "node:path";
 
 import { approvalsWaiting, parseHeldCount } from "../approvals-waiting";
 import type { BriefOpportunity, DailyBriefContext } from "../build-daily-brief-context";
-import { MAX_STATE_BYTES, type ProactiveOptions, RUNS_KEY, STATE_HEALED, corruptStatePath, doneToday, eventLink, inBriefWindow, portalBase, runProactive, scriptOutputText } from "../proactive";
+import { MAX_STATE_BYTES, type ProactiveOptions, RUNS_KEY, STATE_HEALED, StateCorrupt, StateUnreadable, corruptStatePath, doneToday, eventLink, readState, inBriefWindow, portalBase, runProactive, scriptOutputText } from "../proactive";
 import { DEFAULT_CONNECTIONS_URL } from "../proactive-text";
 import { lockPathFor } from "../state-lock";
 
@@ -333,6 +333,44 @@ describe("faults are silent, exit 0 for agent jobs, and never write over the sta
     const result = await runProactive("drop-midday", options({ drop: async () => { throw new Error("must not run"); } }));
     expect(last(result.lines)).toEqual({ wakeAgent: false, reason: "state-unreadable" });
     expect(readFileSync(stateFile(), "utf8")).toBe("{not json");
+  });
+
+  test("R7: a state file that cannot be read at all (a directory, no permission) is left alone and the run is silent", async () => {
+    const corruptCopies = () => readdirSync(join(home, "memory")).filter((name) => name.includes(".corrupt-"));
+    const mustNotRun = async () => { throw new Error("must not run"); };
+
+    // EISDIR: a read error, not content.
+    mkdirSync(join(stateFile(), "inside"), { recursive: true });
+    expect(() => readState(stateFile())).toThrow(StateUnreadable);
+    const dir = await runProactive("drop-midday", options({ drop: mustNotRun }));
+    expect(last(dir.lines)).toEqual({ wakeAgent: false, reason: "state-unreadable" });
+    expect(dir.note).toBeUndefined();
+    expect(existsSync(join(stateFile(), "inside"))).toBe(true);
+    expect(corruptCopies()).toEqual([]);
+    const pre = await runProactive("prefetch", options({ now: () => new Date("2026-10-11T20:45:00Z") }));
+    expect({ reason: pre.reason, exit: pre.exitCode, note: pre.note }).toEqual({ reason: "state-unreadable", exit: 1, note: undefined });
+    expect(corruptCopies()).toEqual([]);
+    rmSync(stateFile(), { recursive: true });
+
+    // Content that is not a JSON object is still corrupt, and still healed.
+    writeFileSync(stateFile(), "{not json");
+    expect(() => readState(stateFile())).toThrow(StateCorrupt);
+
+    // EACCES: a good state file with no read permission keeps its delivery history.
+    if (process.getuid?.() === 0) return; // root reads through the mode
+    const good = JSON.stringify({ [RUNS_KEY]: { brief: "2026-10-11" }, opportunityDelivery: { op1: { shown: ["2026-10-11"] } } });
+    writeFileSync(stateFile(), good);
+    chmodSync(stateFile(), 0o000);
+    try {
+      expect(() => readState(stateFile())).toThrow(StateUnreadable);
+      const denied = await runProactive("drop-midday", options({ drop: mustNotRun }));
+      expect(last(denied.lines)).toEqual({ wakeAgent: false, reason: "state-unreadable" });
+      expect(denied.note).toBeUndefined();
+      expect(corruptCopies()).toEqual([]);
+    } finally {
+      chmodSync(stateFile(), 0o600);
+    }
+    expect(readFileSync(stateFile(), "utf8")).toBe(good);
   });
 
   test("a context build that throws: a fault code, never its message", async () => {
