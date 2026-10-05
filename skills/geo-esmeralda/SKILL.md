@@ -44,6 +44,8 @@ Always run the Geo CLI with `npx -y @geoprotocol/geo-edge-esmeralda-cli` as the
 execution surface. Do not call the HTTP API directly unless the user is
 debugging the service itself.
 
+Run it through `terminal` with exactly `command` (a `workdir` is fine) and nothing else. Do not add `notify`, `heartbeat` or `background`: the CLI returns its output directly. If the call returns an error about background commands, the CLI did not run; call it once more without those arguments.
+
 ## 1. Authentication
 
 You need one token, read by the CLI from environment/config:

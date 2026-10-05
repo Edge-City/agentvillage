@@ -105,7 +105,9 @@ cd "${HERMES_HOME:-/opt/data}"
    bun skills/index-network/scripts/stage-daily-brief.ts --prepare-context --state-file memory/heartbeat-state.json --context-out /tmp/daily-brief-context.json
    ```
 
-   If the command exits non-zero, end your turn immediately with the host-specific no-reply marker. Do not diagnose, retry, or attempt alternative staging paths.
+   Call `terminal` with exactly `command` (plus `workdir`, the Hermes home, if you set one) and nothing else. Do not add `notify`, `heartbeat` or `background`: the script finishes in seconds and its output comes straight back. If the call returns an error about background commands, the script did not run; call it once more without those arguments, and if that fails too, end your turn with the host-specific no-reply marker.
+
+   If the command exits non-zero, end your turn immediately with the host-specific no-reply marker. Apart from the background-commands retry above, do not diagnose, retry, or attempt alternative staging paths.
 
    If stdout says `"skipped":true`, today's digest is already staged or delivered. End your turn with the host-specific no-reply marker.
 
@@ -121,15 +123,17 @@ cd "${HERMES_HOME:-/opt/data}"
    DIGEST_BODY
    ```
 
+   Call `terminal` with exactly `command` (plus `workdir`, the Hermes home, if you set one) and nothing else. Do not add `notify`, `heartbeat` or `background`: the script finishes in seconds and its output comes straight back. If the call returns an error about background commands, the script did not run; call it once more without those arguments, and if that fails too, end your turn with the host-specific no-reply marker.
+
    The quoted heredoc keeps markdown intact without creating a persistent draft file. The script reads stdin, validates markers against the context, strips unsafe URLs, creates the Kanban task with argv-safe `--body`, leaves it eligible for the scheduled send pass, and records `prepared.taskId`, delivered opportunity ids, and delivered question ids in `memory/heartbeat-state.json`.
 
-   If the command exits non-zero, end your turn immediately with the host-specific no-reply marker. Do not diagnose, retry, or attempt alternative staging paths.
+   If the command exits non-zero, end your turn immediately with the host-specific no-reply marker. Apart from the background-commands retry above, do not diagnose, retry, or attempt alternative staging paths.
 
 5. **Deliver nothing.** End your turn with the host-specific no-reply marker.
 
 # Hard Rules
 
-- One attempt at context collection and one attempt at staging. No retries.
+- One attempt at context collection and one attempt at staging. For each, call `terminal` with exactly `command` (plus `workdir`, if you set one) and nothing else. Do not add `notify`, `heartbeat` or `background`. If the call returns an error about background commands, the script did not run; call it once more without those arguments, and if that fails too, end your turn with the host-specific no-reply marker. Otherwise no retries.
 - Never invent announcements, events, people, venues, times, tracks, or action URLs.
 - Never fill gaps with Edge Esmeralda (the previous popup) content or describe Healdsburg; if the context has no India calendar items, say plainly that you don't have today's Edge City India schedule yet and point the user to the Edge City portal or the organisers.
 - Never call `list_opportunities` or any other MCP tool here; the context script handles all MCP calls deterministically.

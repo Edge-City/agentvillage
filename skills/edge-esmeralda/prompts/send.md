@@ -12,9 +12,11 @@ Deliver the staged morning brief verbatim from Kanban, then reconcile delivery b
    bun skills/index-network/scripts/send-daily-brief.ts
    ```
 
+   Call `terminal` with exactly `command` (plus `workdir`, the Hermes home, if you set one) and nothing else. Do not add `notify`, `heartbeat` or `background`: the script finishes in seconds and its output comes straight back. If the call returns an error about background commands, the script did not run; call it once more without those arguments, and if that fails too, end your turn with `[SILENT]`.
+
    Do not write Python, shell pipelines, or replacement delivery logic. The script resolves today's Asia/Kolkata date, reads `memory/heartbeat-state.json`, checks the Kanban approval gate, writes `memory/digest-outgoing.md`, uses the opportunity/question ids captured by the prompted prepare step, updates delivery state (today's selected opportunity ids, a showing for each of those cards for the 3-day card cooldown, plus the per-question 3-day re-delivery cooldown under `questionDelivery`), marks the task complete, strips unsafe URLs/internal metadata, and prints either `[SILENT]` or one JSON object.
 
-   If the script exits with a non-zero code, end your turn immediately with `[SILENT]`. Do not diagnose, retry, or attempt alternatives. One attempt only.
+   If the script exits with a non-zero code, end your turn immediately with `[SILENT]`. Apart from the background-commands retry above, do not diagnose, retry, or attempt alternatives. One attempt only.
 
 2. **If stdout is exactly `[SILENT]`, end your turn with exactly `[SILENT]`.** Do not add commentary and do not try a fallback.
 
@@ -31,7 +33,7 @@ Deliver the staged morning brief verbatim from Kanban, then reconcile delivery b
 # Hard rules
 - The Kanban task body is the source of truth. Never regenerate the brief in this send pass.
 - Never reimplement the send flow in generated code. Always call `bun skills/index-network/scripts/send-daily-brief.ts` exactly once.
-- One attempt at the send script. If it fails, end immediately with `[SILENT]` — no retries, no diagnosis, no alternative paths.
+- One attempt at the script: call `terminal` with exactly `command` (plus `workdir`, if you set one) and nothing else. Do not add `notify`, `heartbeat` or `background`. If the call returns an error about background commands, the script did not run; call it once more without those arguments, and if that fails too, end your turn with `[SILENT]`. Otherwise no retries and no diagnosis: a failed run ends the turn with `[SILENT]`. No alternative paths.
 - Deliver only a staged brief whose Kanban status is `ready` or `todo`, depending on Hermes version. A legacy still-`blocked` task means no send — stay silent until an operator edits, unblocks, or archives it out-of-band.
 - Never call MCP tools in this pass — the script owns all delivery bookkeeping.
 - Never expose internal IDs, raw JSON, internal marker comments, or internal vocabulary in the reply.

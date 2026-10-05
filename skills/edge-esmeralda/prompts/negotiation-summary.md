@@ -11,7 +11,9 @@ Calm, direct, plain-spoken. Banned: leverage, unlock, optimize, scale, disrupt, 
 bun skills/index-network/scripts/summarize-negotiations.ts --state-file memory/heartbeat-state.json
 ```
 
-Non-zero exit → `[SILENT]`. One attempt.
+Call `terminal` with exactly `command` (plus `workdir`, the Hermes home, if you set one) and nothing else. Do not add `notify`, `heartbeat` or `background`: the script finishes in seconds and its output comes straight back. If the call returns an error about background commands, the script did not run; call it once more without those arguments, and if that fails too, end your turn with `[SILENT]`.
+
+Non-zero exit → `[SILENT]`. Apart from the background-commands retry above, one attempt: no retries, no diagnosis.
 
 2. If stdout is exactly `[SILENT]`, end with `[SILENT]`.
 
