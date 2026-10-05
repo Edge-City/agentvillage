@@ -40,8 +40,13 @@ export const ASKED_BY = "outcome_cron";
 export const WINDOW_DAYS = 1;
 /** A connection is asked about this many village days after the follow-up announced it, or later. */
 export const DUE_AFTER_DAYS = 2;
-/** Evenings a subject may be staged without the plugin confirming the ask; then it is no longer due. */
-export const MAX_ATTEMPTS = 3;
+/**
+ * Evenings a subject may be staged without the plugin confirming the ask;
+ * then it is no longer due. Two: a plugin that is degraded, not loaded, or in
+ * a degraded cron session is invisible to the trigger, and each unconfirmed
+ * evening asks the resident the same question again.
+ */
+export const MAX_ATTEMPTS = 2;
 /** `negotiationSummary.announcedOn`: opportunity id -> the village date the follow-up announced it. */
 export const ANNOUNCED_KEY = "announcedOn";
 /** The trigger's own state key: `outcomeAsk.attempts` = opportunity id -> dates it was staged. */

@@ -31,7 +31,7 @@ const OPP2 = "1b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d";
 const THIRD_PARTY = "THIRD PARTY WORDS";
 
 let home: string;
-const PLUGIN_ENV = ["AV_EVENTS_TOKEN", "AV_HOOKS_DISABLED"] as const;
+const PLUGIN_ENV = ["AV_EVENTS_TOKEN", "AV_HOOKS_DISABLED", "AV_EVENTS_ENABLED"] as const;
 let savedEnv: Record<string, string | undefined>;
 
 beforeEach(() => {
@@ -41,6 +41,7 @@ beforeEach(() => {
   savedEnv = Object.fromEntries(PLUGIN_ENV.map((name) => [name, process.env[name]]));
   process.env.AV_EVENTS_TOKEN = "test-token";
   delete process.env.AV_HOOKS_DISABLED;
+  delete process.env.AV_EVENTS_ENABLED;
 });
 
 afterEach(() => {
@@ -212,6 +213,21 @@ describe("the evening asks about one accepted connection announced two or more d
       "outcome_ask in AV_HOOKS_DISABLED in .env": () => {
         writeFileSync(join(home, ".env"), "AV_HOOKS_DISABLED=outcome_ask\n");
       },
+      "post_llm_call (the hook that arms) in AV_HOOKS_DISABLED": () => {
+        process.env.AV_HOOKS_DISABLED = "pre_tool_call, POST_LLM_CALL";
+      },
+      "AV_EVENTS_ENABLED=0": () => {
+        process.env.AV_EVENTS_ENABLED = "0";
+      },
+      "AV_EVENTS_ENABLED= Off  in .env": () => {
+        writeFileSync(join(home, ".env"), "AV_EVENTS_ENABLED= Off \n");
+      },
+      "AV_EVENTS_ENABLED=false": () => {
+        process.env.AV_EVENTS_ENABLED = "FALSE";
+      },
+      "AV_EVENTS_ENABLED=no": () => {
+        process.env.AV_EVENTS_ENABLED = "no";
+      },
     };
     for (const [label, setUp] of Object.entries(off)) {
       test(label, async () => {
@@ -227,9 +243,9 @@ describe("the evening asks about one accepted connection announced two or more d
       });
     }
 
-    test("a token only in .env, and another hook disabled: the ask is made", async () => {
+    test("a token only in .env, AV_EVENTS_ENABLED on, and another hook disabled: the ask is made", async () => {
       delete process.env.AV_EVENTS_TOKEN;
-      writeFileSync(join(home, ".env"), "AV_EVENTS_TOKEN=from-dotenv\nAV_HOOKS_DISABLED=cron_run,outcome_asks\n");
+      writeFileSync(join(home, ".env"), "AV_EVENTS_TOKEN=from-dotenv\nAV_EVENTS_ENABLED=1\nAV_HOOKS_DISABLED=cron_run,outcome_asks,pre_llm_call\n");
       announced({ [OPP]: "2026-10-10" });
       const result = await runProactive("evening", options());
       expect(output(result.lines).outcomeQuestion).toBe(outcomeQuestion("Arjun Mehta"));
@@ -313,15 +329,16 @@ describe("the evening asks about one accepted connection announced two or more d
 });
 
 describe("a failed or silent ask leaves the subject due, and the stage is never reused", () => {
-  test("an ask the plugin never confirmed (silent, failed delivery) is due again the next evening, up to MAX_ATTEMPTS evenings", async () => {
+  test("an ask the plugin never confirmed (silent, failed delivery, a plugin the trigger cannot see is off) is due again the next evening, on two evenings at most", async () => {
     announced({ [OPP]: "2026-10-10" });
     const asked: string[] = [];
-    for (let day = 0; day < MAX_ATTEMPTS + 2; day++) {
+    for (let day = 0; day < 5; day++) {
       const now = new Date(EVENING.getTime() + day * 86_400_000);
       const result = await runProactive("evening", options({ now: () => now }));
       if (result.woke && output(result.lines).outcomeQuestion) asked.push(output(result.lines).date);
     }
-    expect(asked).toEqual(["2026-10-14", "2026-10-15", "2026-10-16"].slice(0, MAX_ATTEMPTS));
+    expect(MAX_ATTEMPTS).toBe(2);
+    expect(asked).toEqual(["2026-10-14", "2026-10-15"]);
   });
 
   test("once the plugin records the ask, the subject is not due the next evening", async () => {

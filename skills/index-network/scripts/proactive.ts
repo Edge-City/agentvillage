@@ -577,17 +577,25 @@ async function dropAction(run: Run): Promise<Decision> {
   return view ? { view, withheld } : { silent: "name-withheld", withheld };
 }
 
+/** The av-events plugin's spellings of "off" (`_core.py` DISABLED_VALUES), matched trimmed and case-insensitive. */
+const PLUGIN_OFF_VALUES = new Set(["0", "false", "no", "off"]);
+/** Names in `AV_HOOKS_DISABLED` that leave the ask unrecorded: the ask's own switch, and the hook that arms it. */
+const OUTCOME_ASK_HOOKS = new Set(["outcome_ask", "post_llm_call"]);
+
 /**
- * The av-events plugin idles, so nothing would record an ask: `AV_EVENTS_TOKEN`
- * blank (also how consent is revoked), or `outcome_ask` in `AV_HOOKS_DISABLED`
- * (matched as the plugin does: comma-separated, trimmed, case-insensitive).
- * Both read like every other variable here, the environment else `.env`.
+ * The av-events plugin would not record an ask: `AV_EVENTS_TOKEN` blank (also
+ * how consent is revoked), `AV_EVENTS_ENABLED` an off spelling, or
+ * `outcome_ask` or `post_llm_call` in `AV_HOOKS_DISABLED` (matched as the
+ * plugin does: comma-separated, trimmed, case-insensitive). All read like
+ * every other variable here, the environment else `.env`. The states this
+ * cannot see (the plugin degraded or not loaded) are bounded by MAX_ATTEMPTS.
  */
 export function outcomePluginOff(home: string): boolean {
   if (!envOrDotenv("AV_EVENTS_TOKEN", home)) return true;
+  if (PLUGIN_OFF_VALUES.has(envOrDotenv("AV_EVENTS_ENABLED", home).toLowerCase())) return true;
   return envOrDotenv("AV_HOOKS_DISABLED", home)
     .split(",")
-    .some((part) => part.trim().toLowerCase() === "outcome_ask");
+    .some((part) => OUTCOME_ASK_HOOKS.has(part.trim().toLowerCase()));
 }
 
 /**
