@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -184,6 +184,26 @@ test("a legacy tool_progress_overrides entry for telegram is a hand-set tool_pro
   expect(displayOf(path).tool_progress_overrides).toEqual({ telegram: "verbose" });
 });
 
+// Hermes v2026.9.24 (`gateway/display_config.py`, `_configured_display_value`) reads the legacy map
+// only when it is a dict and its entry for the platform is not None; a null entry or a null map
+// falls through to `display.tool_progress` (`all` in Hermes's template). So a null legacy value is
+// no hand-set choice: `tool_progress: new` is written, and the legacy key itself is left as it was.
+test("a null legacy tool_progress_overrides (or a null entry for telegram) is unset: tool_progress is written", () => {
+  const cases: Array<[string, unknown]> = [
+    ["display:\n  tool_progress: all\n  tool_progress_overrides:\n    telegram: ~\n", { telegram: null }],
+    ["display:\n  tool_progress: all\n  tool_progress_overrides: null\n", null],
+  ];
+  for (const [text, legacy] of cases) {
+    const path = withText(text);
+
+    expect(configureTelegramDisplay().sort()).toEqual(Object.keys(APPLIED).sort());
+
+    expect(telegramOf(path)).toEqual(APPLIED);
+    expect(displayOf(path).tool_progress_overrides).toEqual(legacy);
+    expect(displayOf(path).tool_progress).toBe("all");
+  }
+});
+
 test("idempotent: a second run changes nothing and does not rewrite the file (comments survive)", () => {
   const path = freshHome();
   configureTelegramDisplay();
@@ -256,6 +276,27 @@ test(`${DISPLAY_DEFAULTS_ENV}=0 in $HERMES_HOME/.env leaves config.yaml untouche
   configureTelegramDisplay();
   expect(telegramOf(path2)).toEqual(APPLIED);
 });
+
+// chmod cannot deny root, so the case only holds for a non-root user (GitHub's ubuntu runner is one).
+test.skipIf(process.getuid?.() === 0)(
+  "an unreadable $HERMES_HOME/.env (permission denied) does not stop the roll: the quiet settings are applied with a warning",
+  () => {
+    const path = withDoc({ display: HERMES_DEFAULT_DISPLAY });
+    const dotenv = join(process.env.HERMES_HOME!, ".env");
+    writeFileSync(dotenv, `${DISPLAY_DEFAULTS_ENV}=0\n`);
+    chmodSync(dotenv, 0o000);
+    try {
+      expect(() => readFileSync(dotenv, "utf8")).toThrow(/EACCES/); // the precondition holds
+
+      expect(configureTelegramDisplay().sort()).toEqual(Object.keys(APPLIED).sort());
+
+      expect(telegramOf(path)).toEqual(APPLIED);
+      expect(logged()).toContain(`could not read ${DISPLAY_DEFAULTS_ENV} from $HERMES_HOME/.env`);
+    } finally {
+      chmodSync(dotenv, 0o600);
+    }
+  },
+);
 
 test("leaves the file alone with a warning when a level is not a mapping or holds a merge key", () => {
   const cases: Array<[string, string]> = [
