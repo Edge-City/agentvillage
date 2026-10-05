@@ -84,8 +84,11 @@ where this page is briefer.
    https://github.com/Edge-City/agentvillage/actions/workflows/tag-release.yml.
    Inputs: `ref` (default `main`; a commit, branch or tag that `main`
    contains), `dry_run` (default on: plans and runs the suites, creates
-   nothing) and `version` (leave empty for the highest `vX.Y.Z-rcN` plus one;
-   give one only to start a new line or after a final version). Run a dry run
+   nothing), `version` (leave empty for the highest `vX.Y.Z-rcN` plus one;
+   give one only to start a new line or after a final version) and `note`
+   (optional, one line of at most 200 characters, e.g. what the tag
+   deliberately leaves out; it goes on its own `Note:` line in the tag
+   message). Run a dry run
    first and read its summary: the version, the commit, the commits since the
    previous release tag and the seed check. Then run again with `dry_run`
    unticked and `ref` set to the commit the dry run showed (`main` gets bot
@@ -97,9 +100,17 @@ where this page is briefer.
    is older than the latest release tag, a branch has the new tag's name, the
    `version` given exists or is not higher than every release tag, or the tags
    changed while it ran. Anyone with write access to this repo can run it
-   (`scripts/tag-release.ts` holds the logic).
+   (`scripts/tag-release.ts` holds the logic). Its actions are pinned by
+   commit SHA, unlike this repo's other workflows, because its tag job holds a
+   token that can write; the suites it calls run in their own read-only jobs.
    Fallback, by hand: `git tag -a v2.0.0-rcN <commit> -m "..."` and
    `git push origin v2.0.0-rcN`.
+
+   | Tag release problem | What to do |
+   |---|---|
+   | The suites fail at the commit | Nothing was created. Fix on `main` and tag the new commit, or give an earlier `ref` whose suites pass. |
+   | "The tags changed since this run planned" or the push was rejected | Someone tagged meanwhile; nothing of this run was pushed. Run again (a dry run first). |
+   | GitHub refuses the tag push from the workflow's token (a permission or rule error in the tag job) | Tag by hand with the fallback above. If it keeps happening, a repository admin can add a write deploy key as a secret and the workflow can push with it, as the control plane's and data repo's Deploy buttons do; not set up today. |
 2. If the tag changes `plugins/av-events/tool_categories.json`,
    `edgeos_tool_allowlist.json` or `cron_job_names.json`, release the data
    pipeline with those seeds first, or the new events are quarantined. The
