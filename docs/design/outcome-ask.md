@@ -1,7 +1,7 @@
 # The evening outcome ask: `outcome.asked` and the resident's answer (DATA-42, overlay half)
 
 Status: **as built**, 2026-10-05, after the orchestrator's rulings on the design note (R2 and
-rulings 1 to 7) and fix round 1 on PR #198 (F1 to F11). Data-repo references are to
+rulings 1 to 7) and fix rounds 1 (F1 to F11) and 2 on PR #198. Data-repo references are to
 `agentvillage-data` origin/main. Hermes references are to `~/.hermes/hermes-agent` at tag
 `v2026.9.24`.
 
@@ -24,11 +24,18 @@ two days later (`backfillAnnounced` in `outcome-ask.ts`).
 
 **The plugin must be on.** The evening action (`eveningAction` in `proactive.ts`) first tries the
 outcome ask (`outcomeAskDecision`). Before anything else it checks that the av-events plugin would
-record the ask (`outcomePluginOff`): `AV_EVENTS_TOKEN` must not be blank and `AV_HOOKS_DISABLED`
-must not contain `outcome_ask`. Both are read like every other variable the trigger reads, from the
-environment, else `$HERMES_HOME/.env`. A blank token is also how consent is revoked. Without this
-check, a tenant whose plugin idles was asked the same question three evenings running, for every
-connection, and nothing recorded it.
+record the ask (`outcomePluginOff`):
+
+- `AV_EVENTS_TOKEN` must not be blank (a blank token is also how consent is revoked);
+- `AV_EVENTS_ENABLED` must not be one of the plugin's off spellings (`0`, `false`, `no`, `off`,
+  trimmed, any case);
+- `AV_HOOKS_DISABLED` must not name `outcome_ask` or `post_llm_call`, the hook that arms.
+
+All are read like every other variable the trigger reads, from the environment, else
+`$HERMES_HOME/.env`. Without this check, a tenant whose plugin idles was asked the same question
+evening after evening, for every connection, and nothing recorded it. The states the trigger
+cannot see (the plugin auto-degraded or not loaded, a degraded cron session) are bounded by
+`MAX_ATTEMPTS`, which is two evenings.
 
 **The asked ledger must be readable.** The trigger reads the plugin's asked ledger
 `av-events/proactive/outcome-asked.json` (`readAskedIds`) with the plugin's own refusal test: a
@@ -43,7 +50,7 @@ asking anyway would ask the same subject again.
 - the follow-up announced it `DUE_AFTER_DAYS` = 2 or more village days ago;
 - it is not in the asked ledger;
 - the trigger has not already staged it today;
-- the trigger has staged it on fewer than `MAX_ATTEMPTS` = 3 evenings;
+- the trigger has staged it on fewer than `MAX_ATTEMPTS` = 2 evenings;
 - its id can be an envelope id.
 
 The oldest announcement goes first, then the lowest id. Only when something is due does the
@@ -109,15 +116,32 @@ These cases remove the stage and arm nothing:
 - Hermes's ledger has no row for the run, or its row names another job;
 - the stage was written before Hermes claimed the run, after the reply, or over 15 minutes ago;
 - the reply is Hermes's silence marker (`is_silent`, the same test as `scheduler.py:2985-2993`);
-- the reply, stripped, is not exactly the fixed question (`is_the_question`): it must fully match
-  `^Did you and .{1,64} meet\? Reply met, not useful, or missed\.$`. A second person added, a
-  reminder about someone else, or Hermes's "Sorry, I hit an error" text is treated as silent: no
-  event, and the subject stays due. The pattern is in `plugins/av-events/outcome_question.json`,
-  which the bun test that pins the evening prompt's sentence reads too.
+- the reply, normalised, is not exactly the fixed question (`is_the_question`). A second person
+  added, a second question in the name slot, a reminder about someone else, or Hermes's "Sorry, I
+  hit an error" text is treated as silent: no event, and the subject stays due.
+
+**The question's rules** are all in `plugins/av-events/outcome_question.json`, which the plugin
+reads and the bun test that pins the evening prompt's sentence reads too. The file also holds a
+table of replies that arm and replies that do not, and both suites check every entry:
+
+- `sentence`: `Did you and [^?\n]{1,64} meet\? [Rr][Ee][Pp][Ll][Yy] met, not useful, or missed\.?`.
+  The name slot refuses `?` and newlines. "Reply" matches in any case, and the final full stop is
+  optional. Bold around the name alone fits the slot.
+- `normalise`, for matching only (`normalise_reply`): non-breaking and other special spaces become
+  spaces; the reply is stripped; trailing emoji come off; one pair of `**`, `*`, `_` or quote marks
+  around the whole reply comes off; then it is stripped and trailing emoji come off again. The
+  reply then has to match `^sentence$` in full. The message hash stays the hash of the reply
+  exactly as it is, equal to `message.out`'s.
+- `marker`: `[Rr][Ee][Pp][Ll][Yy] met, not useful, or missed`, what a reply pointer's quote must
+  contain (§3).
+- `key`: the question key. This is the normalised reply with every `*`, `_`, `` ` `` and `~`
+  removed, whitespace runs as one space, no final full stop, case-folded (`question_key`).
 
 Otherwise the stage is renamed to `av-events/outcome-ask/armed/<execution>.claim`. The rename is
 the claim, so two processes cannot both take it. The claim is then written as `<execution>.json`
-with the reply's keyed hash. The flusher's stale-stage sweep also removes a stage no run reached.
+with the reply's keyed hash and the keyed hash of the question key (`question_hash`, never the
+text). The question hash goes with the ask into `outcome-ask/asks.json`. The flusher's stale-stage
+sweep also removes a stage no run reached.
 
 **Confirm and emit** (`tick`). The tick holds an exclusive non-blocking `flock`, because every
 plugin-loading process ticks. It reads Hermes's executions ledger (`read_ledger`), which tells a
@@ -182,11 +206,28 @@ noted in this process's memory as a time and a sequence number, never its text. 
 the tick tell whether an answer was the resident's next message.
 
 **The reply pointer.** A message sent as a Telegram reply carries Hermes's
-`[Replying to (your previous message): "…"]` pointer (`gateway/run_inbound.py:1563-1572`). When it
-is present, the message can be an answer only if the quoted text contains
-`Reply met, not useful, or missed.` (the `marker` in `outcome_question.json`). A reply to the
-14:00 follow-up, the brief or anything else is not an answer. The pointer is then removed and the
-rest is matched.
+`[Replying to (your previous message): "…"]` pointer (`gateway/run_inbound.py:1581-1590` at the
+tag). When it is present, the message can be an answer only if the quote contains the `marker`. A
+reply to the 14:00 follow-up, the brief or anything else is not an answer. The pointer is then
+removed and the rest is matched.
+
+The question sentence is then looked for in the quote with the unanchored `sentence`, and its key
+is hashed the same way as at arm time (`quoted_question_key`). The note keeps that hash, in memory
+only. It decides which ask the pointer addresses (see Counting).
+
+What Hermes quotes, at the tag:
+
+- `_prepend_inbound_reply_context` does not truncate. It deliberately keeps the whole quoted text
+  ("a preview here silently loses later list items").
+- The Telegram adapter (`plugins/platforms/telegram/adapter.py` `_reply_context`) passes
+  Telegram's native partial quote when the resident selected part of the message. Otherwise it
+  passes the full replied-to text as Telegram returns it: plain text, markup rendered away,
+  Hermes's cron header included.
+- The Telegram adapter never sets `reply_to_is_own_message`, so the pointer reads
+  `[Replying to: "…"]`.
+
+So a full question survives in the quote unless the resident quoted only part of it. That is why
+the key drops markup: the model's `**Maya**` comes back as `Maya`.
 
 **The matcher** (`outcome_reply_v2`, `parse_answer`). The message is trimmed, case-folded, and
 stripped of trailing `.`, `!`, whitespace and emoji only. A message containing `?`, or starting
@@ -207,7 +248,8 @@ apostrophe as `’`; both spellings count. Anything else is not an answer: "met,
 "met?", "> met", "met\n\nthanks".
 
 A match is noted in memory with the value, the time, its sequence number, whether it carried a
-passing pointer, and the session and turn ids. A restart drops notes the tick has not taken yet.
+passing pointer and the keyed hash of the question it quoted, and the session and turn ids. A
+restart drops notes the tick has not taken yet.
 
 **Counting** (in `tick`). An answer note counts for the latest ask **delivered** before it, ordered
 and compared by the ledger's finish, and only when that ask meets all of these:
@@ -215,8 +257,21 @@ and compared by the ledger's finish, and only when that ask meets all of these:
 - it is the installer's evening job and was delivered, re-checked against the ledger;
 - it is not yet answered;
 - the message came within 24 hours of it;
-- the message is the resident's first message after the ask was delivered, or it carries a
-  pointer that passes the test above.
+- one of these holds:
+  - the quoted question's hash equals this ask's `question_hash`, so it is a Telegram reply to
+    this ask's own question; or
+  - the message quotes no question this plugin knows, and it is the resident's first message
+    after the ask was delivered.
+
+A pointer whose quoted question's hash equals another delivered ask's is never counted for the open
+ask, even as the next message (`answer_other_ask`). A pointer whose quote holds no question
+sentence, or one that matches no ask, gives no bypass. Examples are a native partial quote, or the
+resident's own message that happens to contain the marker. That message is judged by the
+next-message rule alone.
+
+**After a restart.** The message log starts empty and its floor is the process start time. "Next
+message" cannot be shown for an ask delivered before the restart, so a plain match for it does not
+count: the answer is lost, never assigned wrongly. A reply to that ask's own question still counts.
 
 A note whose candidate ask is armed but not yet confirmed waits, when that ask armed before the
 message and after the latest delivered ask. An armed ask is delivered after its arm time, so a
@@ -239,9 +294,10 @@ There is no text and no hash of the reply. These cases emit nothing:
 - a second answer to the same ask;
 - a note with no ask delivered before it;
 - a note whose ask was never delivered;
-- a match that is not the resident's next message and does not reply to the question
-  (`answer_not_next`). When message times were dropped from memory after the ask (more than 500
-  kept), a plain match does not count either.
+- a match that is not the resident's next message and does not reply to this ask's question
+  (`answer_not_next`). This includes a plain match for an ask delivered before this process
+  started, or before message times were dropped from memory (more than 500 kept);
+- a reply to another ask's question (`answer_other_ask`).
 
 An answer to yesterday's question sent while tonight's run is in progress stays with yesterday's
 subject: tonight's run has asked nothing until Hermes delivers it. An answer sent after a newer
@@ -311,13 +367,13 @@ provenance (`src/ingest/replay.ts:155`), so they are replayed after it.
   then asks nobody. A blank `AV_EVENTS_TOKEN` idles the plugin, and the trigger asks nobody either.
   A failure in any of them never costs the turn's `message.*` event.
 - Logs carry codes and counts only: `outcome_ask armed`, `outcome_ask not_the_question`,
-  `outcome_ask_tick asked=1 answered=1`, `answer_not_next`, `ledger_unreadable`,
+  `outcome_ask_tick asked=1 answered=1`, `answer_not_next`, `answer_other_ask`, `ledger_unreadable`,
   `asked_ledger_refused`, and the trigger's `detail` codes.
 - Files, all under `$HERMES_HOME/av-events/`, ids, times and codes only:
   - `proactive/outcome-ask-evening.json`: the stage, written by the trigger.
   - `proactive/outcome-asked.json`: the asked ledger, written by the plugin and read by the trigger.
-  - `outcome-ask/armed/`, `outcome-ask/asks.json` (delivered asks, execution and subject only,
-    kept for 48 hours) and `outcome-ask/.lock`: the plugin's own.
+  - `outcome-ask/armed/`, `outcome-ask/asks.json` (delivered asks: execution, subject and the
+    question's keyed hash, kept for 48 hours) and `outcome-ask/.lock`: the plugin's own.
   - Answers and the resident's message times are never written to disk.
 - `plugins/av-events/outcome_question.json`: the fixed question's pattern and its marker sentence,
   shipped with the plugin.
@@ -332,7 +388,8 @@ provenance (`src/ingest/replay.ts:155`), so they are replayed after it.
     environment or `.env`, token nowhere, `outcome_ask` disabled) and an asked ledger the plugin
     would refuse (mode, not JSON, wrong shape, symlink, shared directory);
   - the `withheld` count on a fallback;
-  - an unconfirmed ask due again, up to three evenings;
+  - the plugin off also by `AV_EVENTS_ENABLED` or `post_llm_call` disabled;
+  - an unconfirmed ask due again, on two evenings at most;
   - an asked subject never asked again;
   - an old stage removed;
   - `done-today` leaving the earlier stage, and two racing triggers leaving one stage;
@@ -346,7 +403,9 @@ provenance (`src/ingest/replay.ts:155`), so they are replayed after it.
 
 - The ask:
   - emitted only when the run is delivered or queued, with the hash equal to `message.out`'s;
-  - nothing on `[SILENT]`, and nothing on a reply that is not exactly the fixed question;
+  - nothing on `[SILENT]`, and nothing on a reply that is not exactly the fixed question; every
+    entry of `outcome_question.json`'s `cases` (also checked by the bun prompt test), with the
+    hash still the reply's own;
   - nothing on any failed delivery, and the subject stays due;
   - a refused asked ledger left alone, with the ask still emitted;
   - no delivery column means a completed run counts;
@@ -360,8 +419,13 @@ provenance (`src/ingest/replay.ts:155`), so they are replayed after it.
 - The answer:
   - every value in the table, with the right ids and `self_report`, and the non-answers;
   - the note's keys, and the resident's message times held as times only;
-  - a reply pointer quoting the question counts; a reply to any other message does not;
-  - only the resident's next message after the ask counts, unless it replies to the question;
+  - a reply pointer quoting the open ask's question counts, from the delivered text as Telegram
+    quotes it; a reply to any other message does not;
+  - a reply to yesterday's question is never counted for tonight's ask, even as the next message;
+  - a pointer quoting the resident's own message, or a truncated quote, gives no bypass;
+  - only the resident's next message after the ask counts, unless it replies to that question;
+  - after a restart, a plain match for an earlier ask does not count, and a reply to its question
+    still does;
   - nothing after 24 hours;
   - after a newer ask was delivered, it goes to the newer ask; while the newer run is in
     progress, it stays with the ask the resident saw; a message before a delivery is not its answer;

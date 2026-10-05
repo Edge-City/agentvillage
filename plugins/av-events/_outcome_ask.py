@@ -10,12 +10,12 @@ outcome-ask-evening.json`, 0600, ids only. Three steps here:
    and its name in `jobs.json`, as for `cron.run`), whose Hermes task id is
    `cron:<job>:<execution>`, whose row in Hermes's executions ledger names
    that job, and whose stage was written after the run was claimed, before
-   its reply, and under STAGE_MAX_AGE_S ago. A silent reply, or one that is
-   not exactly the fixed question (QUESTION_PATTERN, from
-   `outcome_question.json`), removes the stage and arms nothing. Otherwise the
-   stage is renamed into `av-events/outcome-ask/armed/<execution>.json` (the
-   rename is the claim) with the keyed hash of the reply (`message.out`'s
-   `content_hash`).
+   its reply, and under STAGE_MAX_AGE_S ago. A silent reply, or one that,
+   normalised, is not exactly the fixed question (`outcome_question.json`),
+   removes the stage and arms nothing. Otherwise the stage is renamed into
+   `av-events/outcome-ask/armed/<execution>.json` (the rename is the claim)
+   with the keyed hash of the reply (`message.out`'s `content_hash`) and of
+   the question's key (`question_hash`).
 2. **Confirm and emit** (the flusher; `tick`). When the ledger has the armed
    run terminal, completed and `delivery_outcome` `delivered` or `queued` (or
    completed, on a Hermes without that column), one `outcome.asked`, and the
@@ -28,9 +28,10 @@ outcome-ask-evening.json`, 0600, ids only. Three steps here:
    normalised, is in ANSWERS (and whose reply pointer, if any, quotes the
    question) is noted with its value. `tick` emits `outcome.reported` for it
    when the latest ask DELIVERED before it was the evening job's, is
-   unanswered and under ANSWER_WINDOW_S old, and the message was the
-   resident's next one after that delivery or replied to the question. No
-   text and no hash of the reply goes into the event or onto disk.
+   unanswered and under ANSWER_WINDOW_S old, and the pointer quotes that
+   ask's own question (by keyed hash) or the message was the resident's next
+   one after that delivery (known only since this process started). No text
+   and no hash of the reply goes into the event or onto disk.
 
 **Trust boundary.** Everything in the agent's home is writable by the agent:
 this module's files, Hermes's executions ledger, the event buffer, the

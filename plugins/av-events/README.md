@@ -33,7 +33,7 @@ plugins/av-events/
   tool_categories.json        frozen seed: tool name -> category (tool_categories_v3)
   edgeos_tool_allowlist.json  frozen seed: EdgeOS operations (edgeos_tool_allowlist_v1)
   cron_job_names.json         frozen seed: the cron names cron.run may carry (cron_job_names_v1)
-  outcome_question.json       the evening outcome ask's fixed question: its pattern and marker sentence (outcome_question_v1)
+  outcome_question.json       the evening outcome ask's fixed question: sentence, marker, normalise steps, question key, shared cases (outcome_question_v2)
   tests/           pytest suite; drives a fake ctx, never imports Hermes
 ```
 
@@ -1333,13 +1333,16 @@ The whole design, as built, is `docs/design/outcome-ask.md`. In short:
 
 - **Arm.** The 19:00 trigger writes `av-events/proactive/outcome-ask-evening.json` (0600, ids
   only) when it wakes the model with "Did you and <name> meet? Reply met, not useful, or missed."
-  It asks nobody when this plugin idles (blank `AV_EVENTS_TOKEN`, or `outcome_ask` in
-  `AV_HOOKS_DISABLED`) or when the asked ledger is one this plugin would refuse.
+  It asks nobody when this plugin would not record the ask (blank `AV_EVENTS_TOKEN`,
+  `AV_EVENTS_ENABLED` off, or `outcome_ask` or `post_llm_call` in `AV_HOOKS_DISABLED`) or when the
+  asked ledger is one this plugin would refuse, and stages a subject on two evenings at most.
   On that run's `post_llm_call` (a cron session whose task id is `cron:<job>:<execution>`, the job
   the installer's "Edge — evening questions" by recorded id and exact name) the stage is renamed
-  into `av-events/outcome-ask/armed/<execution>.json` with the reply's keyed hash. These remove
-  the stage and arm nothing: a silent reply; a reply that, stripped, is not exactly the fixed
-  question (the pattern in `outcome_question.json`); a stage older than the run's claim in
+  into `av-events/outcome-ask/armed/<execution>.json` with the reply's keyed hash and the keyed
+  hash of the question's key. These remove
+  the stage and arm nothing: a silent reply; a reply that, normalised for matching (special
+  spaces, surrounding bold or quotes, trailing emoji), is not exactly the fixed question (the
+  rules and a shared case table in `outcome_question.json`); a stage older than the run's claim in
   Hermes's ledger, newer than the reply, or over 15 minutes old; a ledger row that is missing or
   names another job.
 - **Confirm.** The flusher, on the cron tail's minute, reads the ledger: a completed run whose
@@ -1357,8 +1360,10 @@ The whole design, as built, is `docs/design/outcome-ask.md`. In short:
   mark is not. A Telegram reply's `[Replying to ...]` pointer, which Hermes adds, must quote the
   question's "Reply met, not useful, or missed." or the message is not an answer. The flusher
   emits `outcome.reported` for the latest ask **delivered** before the message (the ledger's
-  finish), when it was the evening job, is unanswered, the message came within 24 hours of it,
-  and the message was the resident's next one after the delivery or replied to the question.
+  finish), when it was the evening job, is unanswered, and the message came within 24 hours of it,
+  and either the pointer quotes that ask's own question (by keyed hash) or the message was the
+  resident's next one after the delivery. A reply to another evening's question never counts.
+  After a restart, a plain match for an ask delivered before it does not count.
   A failed ledger read keeps the answer for the next pass. The event id is derived from the ask,
   so ingest keeps one answer per ask. Nothing in `metadata` capture.
 - **Hash.** The hash is of the model's reply. Hermes may wrap a cron delivery
