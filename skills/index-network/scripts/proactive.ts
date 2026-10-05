@@ -195,14 +195,26 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
+/** `YYYY-MM-DD` as a real calendar date (UTC midnight), or null. */
+function calendarDate(text: unknown): Date | null {
+  if (typeof text !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+  const day = new Date(`${text}T00:00:00Z`);
+  return !Number.isNaN(day.getTime()) && day.toISOString().slice(0, 10) === text ? day : null;
+}
+
 /**
- * Whether `action` already woke the model on `date`: a stored mark on or after
- * `date` counts as done, so a clock that moved back cannot deliver twice
- * (B1-fix F10). Village dates are `YYYY-MM-DD`, which compare as strings.
+ * Whether `action` already woke the model on `date`: a stored mark counts as
+ * done only when it is a real calendar date equal to `date` or the day after
+ * it, so a clock that moved back by up to a day cannot deliver twice (B1-fix
+ * F10), and a mark further ahead (a wrong clock, `9999-99-99`) never silences
+ * the job: it is ignored and overwritten at the next wake (B1-fix2 R2).
  */
 export function doneToday(state: Record<string, unknown>, action: AgentAction, date: string): boolean {
-  const mark = asRecord(state[RUNS_KEY])[action];
-  return typeof mark === "string" && /^\d{4}-\d{2}-\d{2}$/.test(mark) && mark >= date;
+  const mark = calendarDate(asRecord(state[RUNS_KEY])[action]);
+  const today = calendarDate(date);
+  if (!mark || !today) return false;
+  const daysAhead = (mark.getTime() - today.getTime()) / 86_400_000;
+  return daysAhead === 0 || daysAhead === 1;
 }
 
 export function markDone(state: Record<string, unknown>, action: AgentAction, date: string): Record<string, unknown> {

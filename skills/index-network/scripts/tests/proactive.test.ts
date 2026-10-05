@@ -10,7 +10,7 @@ import { join } from "node:path";
 
 import { approvalsWaiting, parseHeldCount } from "../approvals-waiting";
 import type { BriefOpportunity, DailyBriefContext } from "../build-daily-brief-context";
-import { MAX_STATE_BYTES, type ProactiveOptions, RUNS_KEY, STATE_HEALED, corruptStatePath, eventLink, inBriefWindow, portalBase, runProactive, scriptOutputText } from "../proactive";
+import { MAX_STATE_BYTES, type ProactiveOptions, RUNS_KEY, STATE_HEALED, corruptStatePath, doneToday, eventLink, inBriefWindow, portalBase, runProactive, scriptOutputText } from "../proactive";
 import { DEFAULT_CONNECTIONS_URL } from "../proactive-text";
 import { lockPathFor } from "../state-lock";
 
@@ -168,6 +168,29 @@ describe("the morning brief", () => {
     // A malformed mark never blocks.
     writeFileSync(stateFile(), JSON.stringify({ [RUNS_KEY]: { brief: "9999" } }));
     expect((await runProactive("brief", options())).woke).toBe(true);
+  });
+
+  test("R2: only today's or tomorrow's real date counts as done; a far-future or malformed mark is ignored and overwritten", async () => {
+    const marked = (mark: unknown) => doneToday({ [RUNS_KEY]: { brief: mark } }, "brief", DATE);
+    expect(marked("2026-10-12")).toBe(true); // today
+    expect(marked("2026-10-13")).toBe(true); // tomorrow: a clock that moved back by a day
+    expect(marked("2026-10-11")).toBe(false); // yesterday
+    expect(marked("2026-10-14")).toBe(false);
+    expect(marked("2027-10-12")).toBe(false); // far future
+    expect(marked("9999-12-31")).toBe(false);
+    for (const bad of ["9999-99-99", "2026-02-30", "2026-13-01", "2026-10-12x", " 2026-10-12", 20261012, null, {}]) {
+      expect({ bad, done: marked(bad) }).toEqual({ bad, done: false });
+    }
+    // The month and year boundaries.
+    expect(doneToday({ [RUNS_KEY]: { brief: "2026-11-01" } }, "brief", "2026-10-31")).toBe(true);
+    expect(doneToday({ [RUNS_KEY]: { brief: "2027-01-01" } }, "brief", "2026-12-31")).toBe(true);
+
+    for (const mark of ["9999-99-99", "2027-10-12"]) {
+      writeFileSync(stateFile(), JSON.stringify({ [RUNS_KEY]: { brief: mark } }));
+      const result = await runProactive("brief", options());
+      expect({ mark, woke: result.woke }).toEqual({ mark, woke: true });
+      expect(state()[RUNS_KEY]).toEqual({ brief: DATE });
+    }
   });
 
   test("silent outside 05:00 to 11:00 IST, before anything is built or written", async () => {
