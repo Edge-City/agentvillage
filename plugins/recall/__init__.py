@@ -358,14 +358,20 @@ def _hash_key(home: Path) -> bytes:
     directory = home / ".recall"
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     path = directory / "query-hash.key"
+    # Whether a key file was there is decided by this one read, never by a later look: between the read and a
+    # later `exists()` another first user can link its key into place, and replacing that key would leave the
+    # two callers hashing with different keys.
+    replacing = True
     try:
         existing = path.read_text(encoding="ascii").strip()
+    except FileNotFoundError:
+        existing = ""
+        replacing = False
     except (OSError, UnicodeDecodeError):
         existing = ""
     if _HEX64.match(existing):
         return bytes.fromhex(existing)
 
-    replacing = path.exists()
     temp = directory / f".query-hash.key.{os.getpid()}.{secrets.token_hex(4)}"
     fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
