@@ -402,9 +402,13 @@ def test_a_failure_in_the_ask_never_costs_the_message_event(live, ctx, tenant, a
 
 
 @pytest.mark.parametrize("text,value", [
-    ("met", "met"), ("Met.", "met"), ("  MET!  ", "met"), ("we met", "met"), ("useful", "useful"),
-    ("not useful", "not_useful"), ("Not useful 👎", "not_useful"), ("missed", "missed"),
-    ("didn't happen", "did_not_happen"), ("Didn’t happen.", "did_not_happen"), ("did not happen", "did_not_happen"),
+    ("met", "met"), ("Met.", "met"), ("  MET!  ", "met"), ("we met", "met"), ("yes", "met"), ("Yes we met!", "met"),
+    ("yep", "met"), ("useful", "useful"), ("Very useful!", "useful"), ("met and useful", "useful"),
+    ("not useful", "not_useful"), ("Not useful 👎", "not_useful"), ("met not useful", "not_useful"),
+    ("met but not useful", "not_useful"), ("missed", "missed"), ("missed it", "missed"), ("no", "missed"),
+    ("Nope.", "missed"), ("not met", "missed"), ("did not meet", "missed"), ("didn't meet", "missed"),
+    ("didnt meet", "missed"), ("didn't happen", "did_not_happen"), ("Didn’t happen.", "did_not_happen"),
+    ("did not happen", "did_not_happen"),
 ])
 def test_an_answer_from_the_list_emits_outcome_reported_with_the_right_ids(live, ctx, tenant, av, text, value):
     ask_delivered(live, ctx, tenant)
@@ -412,7 +416,7 @@ def test_an_answer_from_the_list_emits_outcome_reported_with_the_right_ids(live,
     resident_says(ctx, text)
     assert live._COLLECTOR.outcome_tick().get("answered") == 1
     [reported] = events(av, live, "outcome.reported")
-    assert reported["payload"] == {"value": value, "matcher_version": "outcome_reply_v1"}
+    assert reported["payload"] == {"value": value, "matcher_version": "outcome_reply_v2"}
     assert reported["evidence_class"] == "self_report"
     assert reported["actor"] == "participant"
     assert reported["outcome_id"] == OUTCOME and reported["opportunity_id"] == OPP
@@ -438,7 +442,33 @@ def test_a_telegram_reply_pointer_is_not_part_of_the_message(live, ctx, tenant, 
     assert [e["payload"]["value"] for e in events(av, live, "outcome.reported")] == ["met"]
 
 
-@pytest.mark.parametrize("text", ["met, and it was great", "yes we met", "met Arjun", "not useful at all", "maybe", "met ok"])
+def test_a_reply_to_the_question_as_hermes_wraps_its_delivery_counts(live, ctx, tenant, av):
+    """The pointer quotes the Telegram text, which may carry Hermes's cron header."""
+    ask_delivered(live, ctx, tenant)
+    resident_says(ctx, f'[Replying to your previous message: "Cronjob Response: Edge — evening questions\n\n{QUESTION}"]\n\nmissed')
+    live._COLLECTOR.outcome_tick()
+    assert [e["payload"]["value"] for e in events(av, live, "outcome.reported")] == ["missed"]
+
+
+@pytest.mark.parametrize("text", [
+    '[Replying to your previous message: "**People Follow-Up**\n\n👤 *New connections*\n- Maya, say hello"]\n\nmet',
+    '[Replying to: "did you meet Ravi at lunch?"]\n\nmet',
+    '[Replying to your previous message: "Priya is still waiting to hear from you."]\n\nuseful',
+    '[Replying to your previous message: "Did you and Arjun meet?"]\n\nmet',
+])
+def test_a_reply_to_any_other_message_is_not_an_answer(live, ctx, tenant, av, text):
+    ask_delivered(live, ctx, tenant)
+    resident_says(ctx, text)
+    assert notes(live) == []
+    live._COLLECTOR.outcome_tick()
+    assert events(av, live, "outcome.reported") == []
+
+
+@pytest.mark.parametrize("text", [
+    "met, and it was great", "met Arjun", "not useful at all", "maybe", "met ok", "met?", "Met? Not sure",
+    "> met", '"met"', "“met”", "'met'", "met\n\nthanks", "met, not useful, or missed", "Met. Not useful.",
+    "we  met", "yes, we met", "yeah", "didnt happen", "not really", "मिले", "met met",
+])
 def test_anything_but_the_whole_message_from_the_list_emits_nothing(live, ctx, tenant, av, text):
     ask_delivered(live, ctx, tenant)
     resident_says(ctx, text)
@@ -583,11 +613,23 @@ def test_metadata_capture_notes_no_answer(plugin, ctx, home, monkeypatch, av):
 
 def test_the_matcher_table(plugin):
     mod = module(plugin)
-    assert mod.MATCHER_VERSION == "outcome_reply_v1"
+    assert mod.MATCHER_VERSION == "outcome_reply_v2"
+    # The registered `outcome.reported@1` values (agentvillage-data src/schemas/index.ts).
     assert set(mod.ANSWERS.values()) == {"met", "useful", "not_useful", "missed", "did_not_happen"}
+    assert {k for k in mod.ANSWERS if "’" not in k} == {
+        "met", "we met", "yes", "yes we met", "yep", "useful", "very useful", "met and useful", "not useful",
+        "met not useful", "met but not useful", "missed", "missed it", "no", "nope", "not met", "did not meet",
+        "didn't meet", "didnt meet", "didn't happen", "did not happen",
+    }
     assert mod.answer_value("MET") == "met"
+    assert mod.answer_value("met 👍🏽") == "met"
+    assert mod.answer_value("Met!!") == "met"
+    assert mod.answer_value("didn’t meet") == "missed"
     assert mod.answer_value("met met") is None
     assert mod.answer_value(None) is None
+    # Only trailing marks are stripped: a leading one, or one inside, is part of the message.
+    assert mod.answer_value("!met") is None
+    assert mod.answer_value("met. useful") is None
 
 
 # -- flag: "integrity / trust boundary (forged stage file)" --------------------

@@ -69,6 +69,7 @@ import os
 import re
 import stat
 import threading
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
@@ -113,7 +114,7 @@ ARMED_MAX_BYTES = 2048
 ASKS_MAX_BYTES = 16 * 1024
 LEDGER_MAX_BYTES = 256 * 1024
 
-MATCHER_VERSION = "outcome_reply_v1"
+MATCHER_VERSION = "outcome_reply_v2"
 DELIVERED = frozenset({"delivered", "queued"})
 
 #: The fixed question, shared with the bun test that pins the evening prompt's
@@ -144,16 +145,26 @@ def is_the_question(reply: Any) -> bool:
     """The model's reply, stripped, is exactly the fixed question with one name."""
     return isinstance(reply, str) and QUESTION_PATTERN is not None and QUESTION_PATTERN.fullmatch(reply.strip()) is not None
 
-#: The whole message, normalised (`normalise`), and the §4.1 value it is.
-ANSWERS = {
-    "met": "met",
-    "we met": "met",
-    "useful": "useful",
-    "not useful": "not_useful",
-    "missed": "missed",
-    "did not happen": "did_not_happen",
-    "didnt happen": "did_not_happen",
+#: The whole message, normalised (`normalise`), and the §4.1 value it is
+#: (`outcome.reported@1` `value`: met | useful | not_useful | missed |
+#: did_not_happen; `core.outcomes` reads met and useful as reported_useful,
+#: the other three as not_useful).
+_ANSWER_GROUPS = {
+    "met": ("met", "we met", "yes", "yes we met", "yep"),
+    "useful": ("useful", "very useful", "met and useful"),
+    "not_useful": ("not useful", "met not useful", "met but not useful"),
+    "missed": ("missed", "missed it", "no", "nope", "not met", "did not meet", "didn't meet", "didnt meet"),
+    "did_not_happen": ("didn't happen", "did not happen"),
 }
+#: A phone's keyboard types the apostrophe as U+2019: both spellings count.
+ANSWERS = {
+    spelling: value
+    for value, phrases in _ANSWER_GROUPS.items()
+    for phrase in phrases
+    for spelling in {phrase, phrase.replace("'", "’")}
+}
+#: A message starting with one of these is a quote, not an answer.
+_QUOTE_MARKS = frozenset("\"'“”‘’«»„‚‹›")
 
 STAGE_KEYS = frozenset({"v", "action", "date", "staged_at", "asked_by", "window_days", "subjects"})
 SUBJECT_KEYS = frozenset({"outcome_id", "opportunity_id"})
@@ -167,10 +178,10 @@ _OPPORTUNITY = re.compile(r"^[A-Za-z0-9._:-]{1,100}$")
 _ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _HASH = re.compile(r"^[0-9a-f]{64}$")
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_APOSTROPHES = re.compile(r"['’‘`]")
 #: The pointer Hermes puts in front of a message sent as a Telegram reply
-#: (`gateway/run_inbound.py` `_prepend_inbound_reply_context` at v2026.9.24).
-_REPLY_POINTER = re.compile(r'^\[Replying to(?: your previous message)?: ".*?"\]\n\n', re.DOTALL)
+#: (`gateway/run_inbound.py` `_prepend_inbound_reply_context` at v2026.9.24);
+#: group 1 is the quoted message.
+_REPLY_POINTER = re.compile(r'^\[Replying to(?: your previous message)?: "(.*?)"\]\n\n', re.DOTALL)
 IST = timezone(timedelta(hours=5, minutes=30))
 
 _LOCK = threading.Lock()
@@ -329,20 +340,56 @@ def _subject(data: Any) -> Optional[dict]:
 # -- the answer table ---------------------------------------------------------
 
 
-def normalise(text: Any) -> str:
-    """The resident's whole message, case-folded, apostrophes dropped, every
-    other non-alphanumeric character a space, whitespace collapsed. A leading
-    Telegram reply pointer (Hermes's, not theirs) is removed first."""
+def _strippable_tail(ch: str) -> bool:
+    """A trailing `.`, `!`, whitespace or emoji (with its joiners, variation
+    selectors, skin tones and keycap mark)."""
+    if ch in ".!" or ch.isspace() or ch in "‍︎️⃣":
+        return True
+    code = ord(ch)
+    if 0x1F3FB <= code <= 0x1F3FF or 0xE0020 <= code <= 0xE007F:
+        return True
+    return unicodedata.category(ch) == "So"
+
+
+def normalise(text: Any) -> Optional[str]:
+    """`outcome_reply_v2`: the message (without any reply pointer) trimmed,
+    case-folded, and stripped of trailing `.`, `!`, whitespace and emoji only.
+    None when it cannot be an answer: it contains `?`, or starts with `>` or a
+    quote mark."""
     if not isinstance(text, str) or len(text) > 2000:
-        return ""
-    text = _REPLY_POINTER.sub("", text.strip(), count=1)
-    text = _APOSTROPHES.sub("", text.casefold())
-    return " ".join("".join(ch if ch.isalnum() else " " for ch in text).split())
+        return None
+    text = text.strip()
+    if not text or "?" in text or text[0] == ">" or text[0] in _QUOTE_MARKS:
+        return None
+    text = text.casefold()
+    end = len(text)
+    while end and _strippable_tail(text[end - 1]):
+        end -= 1
+    return text[:end]
+
+
+def parse_answer(text: Any) -> Optional[tuple[str, bool]]:
+    """`(value, pointer)` when the resident's whole message is an answer, else
+    None. A message sent as a Telegram reply carries Hermes's pointer; it can
+    be an answer only when the quoted message contains the question's sentence
+    (QUESTION_MARKER), and then `pointer` is True."""
+    if not isinstance(text, str) or len(text) > 2000:
+        return None
+    body = text.strip()
+    found = _REPLY_POINTER.match(body)
+    if found:
+        if QUESTION_MARKER is None or QUESTION_MARKER not in found.group(1):
+            return None  # a reply to some other message is never an answer
+        body = body[found.end():]
+    normalised = normalise(body)
+    value = ANSWERS.get(normalised) if normalised is not None else None
+    return (value, found is not None) if value else None
 
 
 def answer_value(text: Any) -> Optional[str]:
-    """`outcome_reply_v1`: the value when the whole message is one of ANSWERS, else None."""
-    return ANSWERS.get(normalise(text))
+    """`outcome_reply_v2`: the value when the whole message is one of ANSWERS, else None."""
+    parsed = parse_answer(text)
+    return parsed[0] if parsed else None
 
 
 # -- 1. arm -------------------------------------------------------------------
@@ -482,9 +529,10 @@ def note_answer(
     decided it is the resident, in a Telegram DM). Notes the value and the
     time, in memory only, when the whole message is an answer and an ask may
     be open; `tick` decides whether it counts. Returns a code or None."""
-    value = answer_value(text)
-    if value is None:
+    parsed = parse_answer(text)
+    if parsed is None:
         return None
+    value = parsed[0]
     if not _listing(armed_dir(state_dir)) and not os.path.exists(asks_path(state_dir)):
         return "answer_no_ask"
     note = {
