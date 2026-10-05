@@ -44,6 +44,7 @@ plugins/av-events/
 | `AV_EVENTS_URL` | *(unset)* | Ingest base URL. Events are POSTed to `{AV_EVENTS_URL}/v1/events`; the `consent_status` tool GETs `{AV_EVENTS_URL}/v1/consent`. Empty with a token set is **null-sink mode** (see below). |
 | `AV_EVENTS_ENABLED` | `1` | Any of `0`, `false`, `no`, `off` (case-insensitive, whitespace ignored) disables everything. Re-read at every session boundary, and by the flusher before every pass. |
 | `AV_HOOKS_DISABLED` | *(empty)* | Comma-separated hook names to disable individually, e.g. `pre_tool_call,post_tool_call`. Matched case-insensitively, whitespace stripped. Three names are not hooks: `memory_recalled` (the bus subscription), `cron_run` (the cron tail) and `consent_status` (the tool, which then answers "could not check"). |
+| `AV_TERMINAL_ARGS_FIX` | `1` | Any of `0`, `false`, `no`, `off` turns off the foreground `terminal` argument fix (see "Foreground `terminal` calls (DATA-312)"). **Process environment only**, read on every `pre_tool_call`; a `.env` line reaches it through Hermes's own load at gateway start. Independent of every telemetry switch. |
 | `AV_CAPTURE` | `sanitized` | `metadata` \| `sanitized` \| `full`. An unrecognised value falls back to `sanitized`. |
 | `TENANT_ID`, `AV_TENANT_ID` | *(unset)* | The tenant id, used for one thing only: `cron.run`'s derived event id (spec §4.3). `TENANT_ID` is what the control plane already sets for `dashboard-auth-edgecity`; `AV_TENANT_ID` overrides it. Unset means `cron.run` gets a uuid v7 derived from the execution (see "Cron capture"). |
 | `HERMES_VERSION`, `OVERLAY_REF` | *(unset)* | Optional; populate the envelope fields of the same name. See "What the API does not provide". |
@@ -951,6 +952,94 @@ tool, before any `action.*` or `intention.*` the same call implies.
   another inside the hook: an exception in one is counted against the breaker like any hook
   failure and does not cost the others their events.
 
+## Foreground `terminal` calls (DATA-312)
+
+**Why.** The fleet model (`openai/gpt-6-luna`, since 2026-10-02) fills every parameter of Hermes's
+`terminal` tool on every call, e.g. `{"command": "...", "background": false, "timeout": 20,
+"workdir": "", "pty": false, "notify": false, "heartbeat": 60}`; the schema's `minimum: 60` makes its
+`heartbeat` filler truthy, and Hermes v0.21.5 (2026.9.24) rejects a foreground call with a truthy
+`notify`, `watch_patterns`, `notify_on_complete` or `heartbeat` before running anything
+(`tools/terminal_tool.py:1441-1453` at that tag), so the model retried the identical call four times
+and fell back to `execute_code`.
+
+**What the hook does.** The plugin's `pre_tool_call` (`with_terminal_args_fix` around the telemetry
+counter; the rule is `_terminal_args.py`) returns `{"action": "modify", "args": {...}}` when, and
+only when, the tool name is exactly `terminal`, `args` is a dict, `background` is not truthy (the
+handler's own test), and at least one of `notify`, `heartbeat`, `notify_on_complete`,
+`watch_patterns` is truthy. The directive carries **only** those offending keys, set to `notify:
+false`, `heartbeat: 0`, `notify_on_complete: false`, `watch_patterns: null`: each is falsy for the
+foreground check and passes the handler's type checks (`heartbeat` must be a non-bool int >= 0;
+`notify` a bool or list). A modify directive cannot delete a key, so "off" is a value. `command`,
+`workdir`, `timeout`, `pty` and `background` are never touched; a background call is never touched;
+no other tool is touched. `pty: true` on a foreground call is still the handler's own error, and
+`workdir: ""` is already "no workdir" there (every use is a truthiness test: `terminal_tool.py:846`,
+`:1208`, `terminal_tool_guards.py:41`, `terminal_tool_result.py:223`). The rule is pure (no I/O, no
+clock), cannot raise (any internal error returns `None`, which is what this hook returned before),
+and logs one DEBUG line on the `av-events` logger naming the keys it switched off, never a value or
+the command. If the telemetry part of the hook ever returns a directive, that directive wins.
+
+It is not telemetry, so it sits outside the telemetry guard: it runs with no token, with
+`AV_EVENTS_ENABLED=0`, with `pre_tool_call` in `AV_HOOKS_DISABLED` and in a degraded session. Nothing
+new reaches the event stream. One visible effect: `tool.call`'s `args_hash` / `args_length` for such
+a call describe the modified arguments, because Hermes hands `post_tool_call` the modified args.
+
+**How Hermes applies it** (v2026.9.24, the deployed release; on main `118984d7` of 2026-09-20 the
+merge is the same, but a raising callback is skipped rather than blocking and the first `approve`
+returns at once):
+
+- Every `pre_tool_call` callback is called with the **same original `args`**, in registration order
+  (directory plugins sorted by name, then the config shell hooks, which gateway startup registers
+  after plugin discovery). No callback sees another's modification.
+- The results are folded once (`hermes_cli/plugins.py:1854-1906`): each `modify` shallow-merges its
+  `args` into one accumulated dict built from the original args (`:1881-1888`); the first valid
+  `block` returns at once, carrying whatever modifications came before it (`:1897`); an `approve` is
+  held until the whole list is scanned, so a later block still wins and later modifies still merge
+  (`:1903`). Order therefore cannot change the outcome for this fix: a block blocks, otherwise the
+  merged args run.
+- The modified args are what the tool runs with and what `post_tool_call` receives, on all three
+  paths that fire the hook: `model_tools.py:778-783` (`function_args` replaced; the `_emit` closure
+  at `:896-900` reads the rebound name), `agent/tool_executor.py:651-663` and `:694-696` (the agent
+  loop: `ref.args`/`state.args`, then `prepare_current_terminal(ref)` at `:718` snapshots the
+  modified args, which `validate_prepared_terminal` compares against inside the handler), and
+  `agent/agent_runtime_helpers.py:2347-2358`. The assistant message in the transcript keeps the
+  model's original arguments; only dispatch and the hooks after it see the modified ones.
+- A callback that **raises** is turned into a block (`plugins_dispatch.py:240-242`,
+  `_policy_error_block_directive` at `:59`); one that **times out** (`plugins.hook_callback_timeout`,
+  default 30 s, `:153`) or is still running blocks too (`:229-234`), and a timed-out callback is
+  then skipped, and so blocks, for 60 s. That is why the rule cannot raise and does no I/O.
+
+**The approval gate.** `plugins/av-approval` only raises (a block) on a gated tool while the gate is
+unverified; the approval.md shim is a config shell hook. Both are `pre_tool_call` callbacks and
+both judge the **original** arguments, never this plugin's modification (see above). So the fix
+cannot change what a resident approves: the verdict binds the command and `workdir` the model sent,
+which are exactly what runs; the only difference is that notification behaviour is removed from a
+call that Hermes would otherwise refuse to run at all. Corollary: a gate that refuses a call for
+its arguments (the shim's "absolute `workdir` required" rule, with the model's `workdir: ""`) still
+refuses it, and no `modify` here could change that, because the gate never sees the modification.
+
+**Which processes.** Chat turns run in the gateway process (`gateway run`). Cron turns also run in
+the gateway process: the in-process ticker (`gateway/run.py:4865-4869`) builds an `AIAgent`
+(`cron/scheduler.py:2411`) on its own thread, because an external worker is used only under a
+systemd-managed gateway (`tools/process_registry.py:405-411`: not Linux, or no `INVOCATION_ID`,
+means in process). Under systemd the worker is `python -m cron.scheduler --external-worker-file`,
+and `invoke_hook` discovers plugins lazily there (`hermes_cli/plugins.py:1730`), so the fix loads in
+that process as well. Either way it needs `av-events` in `plugins.enabled`, which the installer
+writes.
+
+**Kill switch.** `AV_TERMINAL_ARGS_FIX=0` (or `false`, `no`, `off`) turns it off; default on. It is
+read from the process environment on every call (a dict lookup, no `.env` stat in a fail-closed
+hook); Hermes loads `$HERMES_HOME/.env` into the process environment at gateway start, so a `.env`
+change takes effect at the next restart.
+
+**Verify on a canary.** After the roll, on the canary's next scheduled script job (or a chat turn
+that runs a script), the `tool.call` event for `terminal` has `status: ok` and a duration in
+seconds, not an error in a few milliseconds; the tool result in `~/.hermes/state.db` (`messages`,
+role `tool`) is the script's output, not "notify/heartbeat only apply to background commands". With
+DEBUG logging on, the gateway log shows `av-events: terminal_args neutralised=heartbeat`.
+
+**Fallback.** The DATA-312 prompt text (call `terminal` with the command only; see the root
+README) stays: it is what remains when this plugin is absent, disabled or switched off.
+
 ## Messages
 
 Spec §4.1 `message.in/out`. `pre_llm_call`'s `user_message` is `message.in`, `post_llm_call`'s
@@ -1527,6 +1616,8 @@ Implements `launch-guardrails-draft.md` §2 and spec scenario 25.
   reload, never opens a session lazily, and never writes to the buffer; a `plugin.degraded` it
   triggers is queued and written by the next hook that is allowed to. An unknown session is simply
   not counted — a missing tool-call count is worth far less than a tool call that never ran.
+  Its one return value is the DATA-312 `modify` directive for a foreground `terminal` call (see
+  "Foreground `terminal` calls"), built by a pure function that cannot raise.
 - **50 ms budget per hook**, measured with `time.perf_counter`. Overruns are *counted, never
   enforced*: aborting a hook halfway is worse for the agent than a slow one. Counts live in
   `collector.overruns`.
@@ -1738,7 +1829,8 @@ names; all eight the spec names exist, plus `on_session_start`, `on_session_fina
   **`pre_tool_call` fails *closed***: a callback that times out or is still running injects a block
   directive and the tool never runs (`_HOOK_TIMEOUT_FAIL_CLOSED_HOOKS`, `plugins.py:441`;
   `_pre_tool_call_timeout_block`, `plugins.py:3726`). Our `pre_tool_call` body is a single counter
-  increment for exactly this reason. `subagent_stop` always runs on the caller thread.
+  increment for exactly this reason. (From DATA-312 it also returns the `terminal` `modify` directive, still
+  without I/O; at v2026.9.24 a *raising* `pre_tool_call` callback blocks too.) `subagent_stop` always runs on the caller thread.
 
 ### Payloads we depend on
 
