@@ -45,6 +45,18 @@
  * stdout would reach the resident without a model turn, so no message event
  * or archive entry would record it. Every job that delivers sets
  * `--failure-deliver local`: a failed run never messages the resident.
+ *
+ * J2 (docs/design/job-settings.md): a job added for one tenant from a template
+ * (`install/jobs.ts add`, named `Edge — template: <name>`) is kept by
+ * reconcile while its template is in TEMPLATE_NAMES: its shape is edited like
+ * a default job's, its schedule and pause state are never touched, and it is
+ * never created here. Any job named exactly `Edge — template: <name>` is
+ * adopted, a resident's own included (its prompt and script are rewritten); a
+ * near name (`Edge — template: Brief`) is removed like any retired `Edge —`
+ * name. A job of a retired template is removed with the other retired names.
+ * A default job with an entry in `av-events/job-settings.json`, or named in
+ * its `adminSchedules`, is admin-managed: the legacy schedule migration below
+ * skips it. Preview leftovers older than an hour are pruned on every run.
  */
 
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -56,6 +68,7 @@ import { readFlag } from "./args";
 import { upsertEnvVar } from "./env";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
 import { CRON_NAME_PREFIX, hermesHome } from "./paths";
+import { TEMPLATE_NAMES, type TemplateName, adminScheduleKeys, prunePreviewFiles, readJobSettings, scheduleAdminManaged } from "../skills/index-network/scripts/job-settings";
 
 const PROD_MCP_URL = "https://protocol.index.network/mcp";
 const DEV_MCP_URL = "https://protocol.dev.index.network/mcp";
@@ -125,7 +138,16 @@ function writeMcpServerEntry(apiKey: string, telegramHandle: string): void {
 }
 
 function readPersistedEnvVar(key: string): string {
-  const envPath = join(hermesHome(), ".env");
+  return persistedEnvVar(hermesHome(), key);
+}
+
+/**
+ * A variable as the installer persisted it in `<home>/.env`: the first line
+ * that starts `KEY=`, its value trimmed; "" when there is none. The stagger
+ * seed is read this way by reconcile and by `install/jobs.ts set --schedule default`.
+ */
+export function persistedEnvVar(home: string, key: string): string {
+  const envPath = join(home, ".env");
   if (!existsSync(envPath)) return "";
 
   const prefix = `${key}=`;
@@ -168,6 +190,15 @@ export interface StoredCronJob {
   schedule_display?: string;
   no_agent?: boolean;
   failure_deliver?: string | null;
+  /** Hermes's pause state: `enabled` false, `state` "paused" or a `paused_at` mark. */
+  enabled?: boolean;
+  state?: string;
+  paused_at?: string | null;
+}
+
+/** Whether Hermes will fire a stored job (cron/jobs.py is_job_runnable: `enabled` and no pause mark). */
+export function storedJobEnabled(job: StoredCronJob): boolean {
+  return job.enabled !== false && job.state !== "paused" && !job.paused_at;
 }
 
 /** Extract the cron expression a stored Hermes job currently runs on. */
@@ -176,7 +207,7 @@ export function storedSchedule(job: StoredCronJob): string {
   return (job.schedule?.expr ?? job.schedule_display ?? "").trim();
 }
 
-function readCronJobs(): StoredCronJob[] {
+export function readCronJobs(): StoredCronJob[] {
   const jobsPath = join(hermesHome(), "cron", "jobs.json");
   if (!existsSync(jobsPath)) return [];
   try {
@@ -352,6 +383,49 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
   },
 ];
 
+/** A template job's Hermes name. Reconcile keeps a job by this name while its template is current. */
+export const TEMPLATE_JOB_PREFIX = `${CRON_NAME_PREFIX} template: `;
+
+export function templateJobName(template: TemplateName): string {
+  return `${TEMPLATE_JOB_PREFIX}${template}`;
+}
+
+/**
+ * The template a job can be added from (J2), on its base job's prompt and the
+ * proactive shim under `agentvillage_proactive_tpl-<name>.sh`:
+ *   brief          the morning brief (brief.md; the brief's default window);
+ *   digest-preview the opportunity drop (opportunity-drop.md): one person
+ *                  waiting to hear from the resident. No job of this name
+ *                  existed; this is the smallest one on an existing prompt
+ *                  (flagged for review in docs/design/job-settings.md);
+ *   evening-ask    the evening questions (ask-questions.md), without the
+ *                  outcome ask (the plugin arms it for the installer's job).
+ * The schedule is the add command's; a template has none of its own.
+ */
+export function templateCronSpec(template: TemplateName, schedule: string): DigestCronSpec {
+  const promptFile = {
+    brief: "edge-esmeralda/prompts/brief.md",
+    "digest-preview": "edge-esmeralda/prompts/opportunity-drop.md",
+    "evening-ask": "edge-esmeralda/prompts/ask-questions.md",
+  }[template];
+  return {
+    schedule,
+    staggerWindowMinutes: 0,
+    promptFile,
+    ...proactiveScript(`tpl-${template}`),
+    name: templateJobName(template),
+    deliver: true,
+    overrideFlag: "",
+    overrideEnv: "",
+  };
+}
+
+/** The job settings key of a proactive spec (`agentvillage_proactive_<key>.sh`), else null. */
+export function settingsKeyOf(spec: DigestCronSpec): string | null {
+  const match = /^agentvillage_proactive_(.+)\.sh$/.exec(spec.scriptInstallName ?? "");
+  return match && match[1] !== "prefetch" ? match[1] : null;
+}
+
 /** FNV-1a 32-bit hash — deterministic, dependency-free. */
 export function fnv1a(input: string): number {
   let hash = 0x811c9dc5;
@@ -446,13 +520,23 @@ export function isValidCron(expr: string): boolean {
  * default. An override that is not a valid 5-field cron expression is ignored
  * (with a warning) and the staggered/spec default is used.
  */
+/**
+ * The fleet's default schedule for a spec on one tenant, before any
+ * install-time override: the staggered slot for the tenant's seed, or the
+ * spec's own schedule when there is no seed. Reconcile creates a job on it
+ * (resolveCronSchedule), and `install/jobs.ts set --schedule default` restores it.
+ */
+export function defaultScheduleFor(spec: DigestCronSpec, staggerSeed = ""): string {
+  return staggerSeed ? staggeredSchedule(spec, staggerSeed) : spec.schedule;
+}
+
 export function resolveCronSchedule(
   spec: DigestCronSpec,
   argv: string[] = process.argv,
   env: NodeJS.ProcessEnv = process.env,
   staggerSeed = "",
 ): string {
-  const fallback = staggerSeed ? staggeredSchedule(spec, staggerSeed) : spec.schedule;
+  const fallback = defaultScheduleFor(spec, staggerSeed);
   const flagIdx = argv.indexOf(spec.overrideFlag);
   const fromFlag = flagIdx >= 0 ? argv[flagIdx + 1]?.trim() : undefined;
   const override = fromFlag || env[spec.overrideEnv]?.trim();
@@ -484,7 +568,7 @@ export function tokenUsageAuditCronDisabled(
     || raw === "disabled";
 }
 
-function readCronPromptBody(spec: DigestCronSpec, promptsDir: string): string {
+export function readCronPromptBody(spec: DigestCronSpec, promptsDir: string): string {
   if (spec.promptFile) {
     const promptPath = join(promptsDir, spec.promptFile);
     if (!existsSync(promptPath)) {
@@ -503,12 +587,12 @@ function expectedCronScriptPath(spec: DigestCronSpec, home: string): string | un
   return join(home, "scripts", expectedCronScriptArg(spec)!);
 }
 
-function expectedCronScriptArg(spec: DigestCronSpec): string | undefined {
+export function expectedCronScriptArg(spec: DigestCronSpec): string | undefined {
   if (!spec.scriptFile) return undefined;
   return spec.scriptInstallName || spec.scriptFile.split("/").pop() || "agentvillage_cron.py";
 }
 
-function ensureCronScriptInstalled(spec: DigestCronSpec, home: string, promptsDir: string): string | undefined {
+export function ensureCronScriptInstalled(spec: DigestCronSpec, home: string, promptsDir: string): string | undefined {
   const expectedScript = expectedCronScriptPath(spec, home);
   if (!expectedScript || !spec.scriptFile) return undefined;
   const sourceScript = join(promptsDir, spec.scriptFile);
@@ -529,9 +613,9 @@ function ensureCronScriptInstalled(spec: DigestCronSpec, home: string, promptsDi
  * resolves on PATH (the augmented env adds ~/.local/bin etc.). So test by
  * executing `hermes --version` rather than string-comparing the resolved name.
  */
-function hermesAvailable(bin: string): boolean {
+export function hermesAvailable(bin: string, timeoutMs?: number): boolean {
   try {
-    execFileSync(bin, ["--version"], { stdio: "ignore", env: hermesExecEnv() });
+    execFileSync(bin, ["--version"], { stdio: "ignore", env: hermesExecEnv(), ...(timeoutMs ? { timeout: timeoutMs, killSignal: "SIGKILL" as const } : {}) });
     return true;
   } catch {
     return false;
@@ -603,12 +687,34 @@ export function reconcileDigestCronJobs(
     (spec) => spec.name !== "Edge — token usage audit" || !tokenUsageAuditCronDisabled(argv, env),
   );
   const specNames = new Set(activeSpecs.map((s) => s.name));
+  // J2: a job added from a current template is kept; a retired template's job is removed below.
+  const templateNames = new Map(TEMPLATE_NAMES.map((template) => [templateJobName(template), template] as const));
+  // J2: a default job with a settings entry, or named in the file's
+  // `adminSchedules` (an admin set its schedule), is admin-managed: the legacy
+  // schedule migration skips it. An unreadable file, or an `adminSchedules`
+  // that is not a list, counts every default job as managed, and says so
+  // here; an entry of the list that is not a default job key is ignored on
+  // its own. The rule is scheduleAdminManaged, which `jobs.ts list` reports.
+  const settings = readJobSettings(home);
+  const adminManaged = (spec: DigestCronSpec): boolean => {
+    const key = settingsKeyOf(spec);
+    return key !== null && scheduleAdminManaged(key, settings);
+  };
+  if (settings.status === "invalid") {
+    console.warn(`  warning: av-events/job-settings.json is unreadable (${settings.code}); the legacy schedule migration skips every default job`);
+  } else if (adminScheduleKeys(settings).invalid) {
+    console.warn("  warning: adminSchedules in av-events/job-settings.json is not a list; the legacy schedule migration skips every default job");
+  }
+  // J2: preview leftovers older than an hour (state copies a killed preview
+  // left, preview shims); every `Edge — preview` job goes with the retired names below.
+  prunePreviewFiles(home, Date.now());
+
   // Stable per-tenant seed for schedule staggering. The tenant's own Index
   // API key never changes across reinstalls, so the derived minute is stable.
   const staggerSeed = process.env.INDEX_API_KEY?.trim() || readPersistedEnvVar("INDEX_API_KEY");
 
   for (const job of existing) {
-    if (!job.name.startsWith(CRON_NAME_PREFIX) || specNames.has(job.name)) continue;
+    if (!job.name.startsWith(CRON_NAME_PREFIX) || specNames.has(job.name) || templateNames.has(job.name)) continue;
     try {
       execFileSync(bin, ["cron", "remove", job.id], { stdio: "ignore", env });
       console.log(`→ removed retired cron ${job.name}`);
@@ -626,6 +732,30 @@ export function reconcileDigestCronJobs(
     console.warn("  warning: could not run `hermes kanban init` — board may auto-init on first use");
   }
 
+  // J2: template jobs (before the specs, so a run cut short still leaves the
+  // prefetch last). Shape only: the schedule and pause state are the
+  // tenant's, and a missing template job is never created here.
+  for (const job of existing) {
+    const template = templateNames.get(job.name);
+    if (!template) continue;
+    const spec = templateCronSpec(template, storedSchedule(job));
+    ensureCronScriptInstalled(spec, home, promptsDir);
+    const stale = staleShapeFields(job, spec, readCronPromptBody(spec, promptsDir).trimEnd());
+    installed.push(job.id);
+    const staleNames = Object.keys(stale);
+    if (staleNames.length === 0) {
+      console.log(`→ cron "${spec.name}" up to date`);
+      continue;
+    }
+    console.log(`→ updating cron "${spec.name}" in place (${staleNames.join(", ")})`);
+    try {
+      execFileSync(bin, cronEditArgs(job.id, stale), { stdio: ["ignore", "ignore", "inherit"], env });
+    } catch {
+      console.warn(`  warning: could not update cron "${spec.name}" — it keeps its previous shape`);
+      failed.push(spec.name);
+    }
+  }
+
   for (const spec of reconcileOrder(activeSpecs)) {
     // Scripts are copied before any edit: Hermes checks a script path when a job is edited.
     ensureCronScriptInstalled(spec, home, promptsDir);
@@ -638,8 +768,10 @@ export function reconcileDigestCronJobs(
       installed.push(job.id);
       // Migrate only jobs still sitting on the old synchronized default
       // (e.g. "0 8 * * *") to their staggered slot. Anything else is a
-      // deliberate per-tenant schedule and is preserved.
-      const scheduleStale = storedSchedule(job) === spec.schedule && schedule !== spec.schedule;
+      // deliberate per-tenant schedule and is preserved. An admin-managed job
+      // (J2: it has a settings entry) is never migrated, even when an admin
+      // set it to the old default on purpose.
+      const scheduleStale = storedSchedule(job) === spec.schedule && schedule !== spec.schedule && !adminManaged(spec);
       const stale = staleShapeFields(job, spec, promptBody);
       const staleNames = Object.keys(stale);
       if (staleNames.length === 0 && !scheduleStale) {

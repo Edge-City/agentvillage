@@ -10,7 +10,7 @@ import { join } from "node:path";
 
 import { approvalsWaiting, parseHeldCount } from "../approvals-waiting";
 import type { BriefOpportunity, DailyBriefContext } from "../build-daily-brief-context";
-import { MAX_STATE_BYTES, type ProactiveOptions, RUNS_KEY, STATE_HEALED, StateCorrupt, StateUnreadable, corruptStatePath, doneToday, eventLink, readState, inBriefWindow, portalBase, runProactive, scriptOutputText } from "../proactive";
+import { MAX_STATE_BYTES, type ProactiveOptions, RUNS_KEY, STATE_HEALED, StateCorrupt, StateUnreadable, corruptStatePath, doneToday, eventLink, readState, portalBase, runProactive, scriptOutputText, windowDecision } from "../proactive";
 import { DEFAULT_CONNECTIONS_URL } from "../proactive-text";
 import { lockPathFor } from "../state-lock";
 
@@ -194,10 +194,12 @@ describe("the morning brief", () => {
   });
 
   test("silent outside 05:00 to 11:00 IST, before anything is built or written", async () => {
-    expect(inBriefWindow(new Date("2026-10-11T23:29:00Z"))).toBe(false); // 04:59 IST
-    expect(inBriefWindow(new Date("2026-10-11T23:30:00Z"))).toBe(true); // 05:00
-    expect(inBriefWindow(new Date("2026-10-12T05:29:00Z"))).toBe(true); // 10:59
-    expect(inBriefWindow(new Date("2026-10-12T05:30:00Z"))).toBe(false); // 11:00
+    // The trigger's own gate, with no settings file (J2: rc13's inBriefWindow is frozen in tests/fixtures/rc13-decision.ts).
+    const gateOpen = (iso: string) => windowDecision("brief", home, new Date(iso)).gated === null;
+    expect(gateOpen("2026-10-11T23:29:00Z")).toBe(false); // 04:59 IST
+    expect(gateOpen("2026-10-11T23:30:00Z")).toBe(true); // 05:00
+    expect(gateOpen("2026-10-12T05:29:00Z")).toBe(true); // 10:59
+    expect(gateOpen("2026-10-12T05:30:00Z")).toBe(false); // 11:00
     let built = 0;
     const late = await runProactive("brief", options({ now: () => new Date("2026-10-12T06:30:00Z"), buildContext: async () => (built++, context()) }));
     expect(last(late.lines)).toEqual({ wakeAgent: false, reason: "outside-window" });
