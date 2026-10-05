@@ -13,7 +13,7 @@ live. Three different things ship, each by its own path, and each leaves a recor
 | What ships | Repo | How it goes live | Record |
 |---|---|---|---|
 | Service code: the control plane and the landing page | `Edge-City/agentvillage-controlplane`, `Edge-City/agentvillage-landing` | The **Deploy** workflow moves that repo's `release` branch, which Railway builds | Annotated tag `release-YYYY-MM-DD[.N]` naming who ran it and the commits that went live |
-| Agent content: skills, prompts, installer, the `av-events` plugin | this repo, `Edge-City/agentvillage` | An annotated tag on `main`, then the **Roll** workflow updates every resident's VM to it | The tag; a GitHub Deployment per roll (environment `residents`); a `tenant.updated` event per resident carrying the tag |
+| Agent content: skills, prompts, installer, the `av-events` plugin | this repo, `Edge-City/agentvillage` | An annotated tag on `main` (the **Tag release** workflow here creates it), then the **Roll** workflow updates every resident's VM to it | The tag; a GitHub Deployment per roll (environment `residents`); a `tenant.updated` event per resident carrying the tag |
 | The data pipeline: ingest and dbt | `Edge-City/agentvillage-data` | The **Deploy** workflow in that repo moves its `release` branch and checks or applies migrations; a hand fast-forward push is the fallback | The `release` branch tip; `releases/manifest.yaml`, written by PR after the fact |
 
 No shared version number, no release calendar. During the event (Oct 11 to
@@ -78,13 +78,38 @@ where this page is briefer.
 | `pause_seconds` | Wait after each resident before checking it. Default 60, minimum 10. |
 | `allow_seed_change` | Default off. The data owner's confirmation that ingest already carries changed plugin seed files. |
 
-**Before a roll, by hand.**
-1. Tag the merged commit on `main`: `git tag -a v2.0.0-rcN -m "..."` and push
-   the tag. Anyone with write access to this repo can.
+**Before a roll.**
+1. Tag the merged commit with the **Tag release** button. Actions tab, workflow
+   "Tag release", "Run workflow", branch `main`:
+   https://github.com/Edge-City/agentvillage/actions/workflows/tag-release.yml.
+   Inputs: `ref` (default `main`; a commit, branch or tag that `main`
+   contains), `dry_run` (default on: plans and runs the suites, creates
+   nothing) and `version` (leave empty for the highest `vX.Y.Z-rcN` plus one;
+   give one only to start a new line or after a final version). Run a dry run
+   first and read its summary: the version, the commit, the commits since the
+   previous release tag and the seed check. Then run again with `dry_run`
+   unticked and `ref` set to the commit the dry run showed (`main` gets bot
+   commits several times a day). The real run tags only after this repo's
+   suites pass at that commit, pushes only the annotated tag (its message
+   names who ran it, the run, the commits and the seed check), and its summary
+   gives the Roll inputs. It refuses, creating nothing, when the ref is not on
+   `main`, the commit already carries a release tag (roll that one), the commit
+   is older than the latest release tag, a branch has the new tag's name, the
+   `version` given exists or is not higher than every release tag, or the tags
+   changed while it ran. Anyone with write access to this repo can run it
+   (`scripts/tag-release.ts` holds the logic).
+   Fallback, by hand: `git tag -a v2.0.0-rcN <commit> -m "..."` and
+   `git push origin v2.0.0-rcN`.
 2. If the tag changes `plugins/av-events/tool_categories.json`,
    `edgeos_tool_allowlist.json` or `cron_job_names.json`, release the data
    pipeline with those seeds first, or the new events are quarantined. The
-   button refuses such a tag until `allow_seed_change` is ticked.
+   button refuses such a tag until `allow_seed_change` is ticked. The Tag
+   release summary names the changed files and their `version` strings
+   against the previous release tag and says whether to tick
+   `allow_seed_change`; it cannot see the data pipeline's release, so check
+   that with the data owner (see "The data pipeline" below). Roll compares
+   with the tag the residents run now, so if they are behind the previous tag
+   it can name more files.
 3. Make sure your own agent is a canary. Each agent answers only its owner's
    Telegram, so the human check in the procedure below only works on a tenant
    you own. The control plane marks every tenant whose sign-up email is in its
@@ -185,7 +210,7 @@ tag and roll, then the manifest PR recording what is live.
 |---|---|
 | Merge to `main` after review | whoever the repo's merge rule names |
 | Deploy the control plane or landing | anyone with write access to that repo, with a group-chat line |
-| Tag this repo | anyone with write access here |
+| Tag this repo (the Tag release button, or by hand) | anyone with write access here |
 | Roll residents | anyone with write access to the controlplane repo, through the staged procedure |
 | Release ingest, run migrations | the data owner |
 | Change a Railway variable or setting | a Railway admin, stating the exact change first |
