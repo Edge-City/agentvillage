@@ -53,11 +53,27 @@ What waits for a tap. Only classes an agent opens with `approval propose`
   - edgeos.event.write, edgeos.venue.write: creating or changing an event or a
     venue in EdgeOS through the agent, beyond an RSVP (DATA-322). No tool uses
     either before Oct 18.
+  - marketplace.app.install: installing an agentic app or an MCP server from
+    the village marketplace, before it is installed (R2; `marketplace.*` is a
+    reserved namespace).
+  - marketplace.app.action: an installed app acting for the agent, before it
+    acts; the request payload names the app and the verb (R2).
+  - resource.allocate: the treasury/ODS allocation class, an allocation of
+    village resources proposed for the resident, before the agent takes it up
+    (R2 addendum). `odin.*` is a reserved namespace for the allocator's own
+    classes (DATA-255): a comment line in the block, no row.
 
-The treasury and EdgeOS rows are reserved now and built later: no tool
-proposes them yet, and writing them before Oct 11 means week two's
-experiments need no policy amendment (a change to every tenant's policy
-bytes, and so a re-attestation, after enforcement starts).
+The treasury, EdgeOS, marketplace and allocation rows are reserved now and
+built later: no tool proposes them yet, and writing them before Oct 11 means
+week two's experiments need no policy amendment (a change to every tenant's policy
+bytes, and so a re-attestation, after enforcement starts). Two more R2 rows
+are reserved the same way and wait for no tap: marketplace.app.read
+(autonomous and recorded: an installed app reads for the agent) and
+review.delegate.model (manual with no `agent_may_request`, so no agent can
+propose it and no hook maps it: kept for the resident to choose later to let
+a model reviewer act first; nothing acts on it today). The `delegation:`
+block of the judge design is not in this policy: core before 0.4.2 refuses an
+unknown top-level key, which would fail every class closed.
 
 A resident may change these in the onboarding review (DATA-259); the rows below
 are the defaults.
@@ -167,6 +183,13 @@ classes:
   treasury.withdraw:             { autonomy: manual, agent_may_request: true }   # DATA-292, a resident's own proposal withdrawn by their agent's suggestion
   edgeos.event.write:            { autonomy: manual, agent_may_request: true }   # reserved; no tool uses this class before Oct 18; DATA-322
   edgeos.venue.write:            { autonomy: manual, agent_may_request: true }   # reserved; no tool uses this class before Oct 18; DATA-322
+  # The village marketplace (reserved namespace marketplace.*) and the model reviewer: reserved, R2.
+  marketplace.app.install:       { autonomy: manual, agent_may_request: true }   # reserved; installing an agentic app or MCP server from the village marketplace
+  marketplace.app.action:        { autonomy: manual, agent_may_request: true }   # reserved; an installed app acting for the agent; the request payload names the app and the verb
+  marketplace.app.read:          { autonomy: autonomous, agent_may_request: true }   # reserved; an installed app reads for the agent; recorded
+  review.delegate.model:         { autonomy: manual }   # reserved; the resident may choose later to let a model reviewer act first; nothing acts on it today; no agent request
+  resource.allocate:             { autonomy: manual, agent_may_request: true }   # reserved; the treasury/ODS allocation class: an allocation of village resources proposed for the resident
+  # odin.* (the allocator producer, DATA-255): a reserved namespace for the allocator's own classes; a comment only, no row here.
   # The gate's own organs and the resident's credentials: never the agent.
   policy.core:                   { autonomy: human-only }
   log.mutate:                    { autonomy: human-only }
