@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, expect, test } from "bun:test";
 
-import { DEFAULT_BASE_URL, baseUrl, queryWords, run, type Context } from "../refs";
+import { DEFAULT_BASE_URL, LIVE_REFRESH_DEFAULT, baseUrl, defaultContext, liveEnabled, queryWords, readKnowledgeCopy, run, type Context } from "../refs";
 
 const SKILL_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const REPO_ROOT = join(SKILL_DIR, "..", "..");
@@ -27,7 +27,8 @@ function installedSnapshot(): { synced_at: string; files: { path: string; sha256
   return JSON.parse(readFileSync(join(INSTALLED, "SNAPSHOT.json"), "utf8"));
 }
 
-function context(overrides: Partial<Context> = {}, env: Record<string, string> = { AV_INDIA_REFS_LIVE: "0" }): Context {
+// No AV_INDIA_REFS_LIVE by default: every test that does not opt in runs the shipped default (off).
+function context(overrides: Partial<Context> = {}, env: Record<string, string> = {}): Context {
   return {
     installedDir: INSTALLED,
     cacheDir: join(temp("india-cache-"), "cache", "edge-india"),
@@ -141,24 +142,50 @@ test("long documents are truncated with the section list", async () => {
   expect(result.out).toContain("Sections:");
 });
 
-test("live refresh is on by default and AV_INDIA_REFS_LIVE=0 switches it off", async () => {
-  const onByDefault = fakeMirror();
-  const on = await run(["status"], context({ fetch: onByDefault.fetchImpl }, {}));
-  expect(onByDefault.requests.length).toBeGreaterThan(0);
+test("live refresh is OFF by default: no command fetches, and only an explicit opt-in turns it on", async () => {
+  expect(LIVE_REFRESH_DEFAULT).toBe(false);
+  for (const value of [undefined, "", "0", "false", "no", "off", "garbage", "enabled"]) {
+    expect(liveEnabled(value === undefined ? {} : { AV_INDIA_REFS_LIVE: value })).toBe(false);
+  }
+  for (const value of ["1", "true", "yes", "on", " ON "]) expect(liveEnabled({ AV_INDIA_REFS_LIVE: value })).toBe(true);
+
+  const offByDefault = fakeMirror();
+  const ctx = context({ fetch: offByDefault.fetchImpl }, {});
+  const outputs = [
+    await run(["status"], ctx),
+    await run(["list"], ctx),
+    await run(["search", "housing", "riva"], ctx),
+    await run(["read", "newsletter/housing-for-edge-city-india.md", "--section", "riva"], ctx),
+  ];
+  expect(offByDefault.requests).toEqual([]);
+  expect(existsSync(ctx.cacheDir)).toBe(false); // not even a fetch-state file
+  expect(outputs[0].out).toContain("live_refresh: off (the default");
+  expect(outputs[3].out).toContain("installed snapshot");
+  expect(outputs[3].out).not.toContain("MIRROR-UPDATE");
+
+  const optedIn = fakeMirror();
+  const on = await run(["status"], context({ fetch: optedIn.fetchImpl }, { AV_INDIA_REFS_LIVE: "1" }));
+  expect(optedIn.requests.length).toBeGreaterThan(0);
   expect(on.out).toContain("live_refresh: on");
   expect(on.out).toContain("live mirror");
+});
 
-  const offMirror = fakeMirror();
-  const off = await run(["status"], context({ fetch: offMirror.fetchImpl }, { AV_INDIA_REFS_LIVE: "0" }));
-  expect(offMirror.requests).toEqual([]);
-  expect(off.out).toContain("live_refresh: off");
-  expect(off.out).toContain("switched off");
+test("the script as an agent runs it (no AV_INDIA_REFS_LIVE): reads local files, creates no cache, says live refresh is off", () => {
+  const home = temp("india-home-");
+  const env: Record<string, string> = { PATH: process.env.PATH ?? "", HOME: home, HERMES_HOME: home };
+  const proc = Bun.spawnSync(["bun", join(SKILL_DIR, "scripts", "refs.ts"), "status"], { env, stdout: "pipe", stderr: "pipe" });
+  expect(proc.exitCode).toBe(0);
+  const out = proc.stdout.toString();
+  expect(out).toContain("live_refresh: off (the default");
+  expect(out).toContain("reading: installed snapshot");
+  expect(existsSync(join(home, "cache"))).toBe(false);
+  expect(defaultContext({ HERMES_HOME: home }).knowledgeDir).toBe(join(home, "knowledge", "edge-india"));
 });
 
 test("the default refresh interval matches the 15-minute sync", async () => {
   const mirror = fakeMirror();
   let now = Date.parse(installedSnapshot().synced_at) + 3_600_000;
-  const ctx = context({ fetch: mirror.fetchImpl, now: () => new Date(now) }, {});
+  const ctx = context({ fetch: mirror.fetchImpl, now: () => new Date(now) }, { AV_INDIA_REFS_LIVE: "1" });
   await run(["status"], ctx);
   const first = mirror.requests.length;
   now += 14 * 60_000;
@@ -222,4 +249,71 @@ test("without any snapshot the script says so and gives the primary sources", as
   expect(result.code).toBe(1);
   expect(result.out).toContain("edgecityindia2026.substack.com");
   expect(readdirSync(join(empty, "references"))).toEqual([]);
+});
+
+/** A background sync copy as knowledge-sync.ts lays it out: the mirror's files minus SNAPSHOT.json, plus _sync.json. */
+function knowledgeCopy(options: { checkedAt: string; fetchedAt?: string; drop?: string; edit?: boolean }) {
+  const dir = join(temp("india-knowledge-"), "knowledge", "edge-india");
+  cpSync(INSTALLED, dir, { recursive: true });
+  rmSync(join(dir, "SNAPSHOT.json"));
+  if (options.edit) {
+    const housing = join(dir, "newsletter", "housing-for-edge-city-india.md");
+    writeFileSync(housing, `${readFileSync(housing, "utf8")}\nSYNC-UPDATE: a newer line from the background sync.\n`);
+  }
+  const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")) as { documents: { path: string }[] };
+  const files = ["index.md", ...manifest.documents.map((doc) => doc.path)];
+  if (options.drop) rmSync(join(dir, options.drop));
+  writeFileSync(join(dir, "_sync.json"), JSON.stringify({
+    v: 1,
+    source: "https://raw.githubusercontent.com/Edge-City/agentvillage/main/skills/edge-india/references/manifest.json",
+    manifest_sha256: sha(readFileSync(join(dir, "manifest.json"))),
+    etag: null,
+    files,
+    bytes: 1,
+    hashes: {},
+    fetched_at: options.fetchedAt ?? options.checkedAt,
+    checked_at: options.checkedAt,
+  }));
+  return dir;
+}
+
+const installedAt = () => Date.parse(installedSnapshot().synced_at);
+
+test("the background sync copy (knowledge/edge-india/) is read when it is newer than the installed snapshot", async () => {
+  const dir = knowledgeCopy({ checkedAt: new Date(installedAt() + 1_800_000).toISOString(), fetchedAt: new Date(installedAt() + 600_000).toISOString(), edit: true });
+  const ctx = context({ knowledgeDir: dir });
+  const result = await run(["read", "newsletter/housing-for-edge-city-india.md"], ctx);
+  expect(result.code).toBe(0);
+  expect(result.out).toContain("SYNC-UPDATE");
+  expect(result.out).toContain("background sync copy");
+  expect(result.out).toContain("last confirmed current");
+  const status = await run(["status"], ctx);
+  expect(status.out).toContain("reading: background sync copy");
+  expect(status.out).toContain("live_refresh: off");
+  const search = await run(["search", "sync", "update"], ctx);
+  expect(search.out).toContain("newsletter/housing-for-edge-city-india.md");
+});
+
+test("an older or incomplete background copy falls back to the installed snapshot, and says why", async () => {
+  const older = knowledgeCopy({ checkedAt: new Date(installedAt() - 86_400_000).toISOString(), edit: true });
+  const fromOlder = await run(["read", "newsletter/housing-for-edge-city-india.md"], context({ knowledgeDir: older }));
+  expect(fromOlder.out).not.toContain("SYNC-UPDATE");
+  expect(fromOlder.out).toContain("installed snapshot");
+  expect(fromOlder.out).toContain("the sync job may be failing");
+
+  const incomplete = knowledgeCopy({ checkedAt: new Date(installedAt() + 1_800_000).toISOString(), edit: true, drop: "wiki-content.md" });
+  expect(readKnowledgeCopy(incomplete)).toBeNull();
+  const fromIncomplete = await run(["read", "newsletter/housing-for-edge-city-india.md"], context({ knowledgeDir: incomplete }));
+  expect(fromIncomplete.out).not.toContain("SYNC-UPDATE");
+  expect(fromIncomplete.out).toContain("no background sync copy");
+
+  expect(readKnowledgeCopy(join(temp("india-none-"), "knowledge", "edge-india"))).toBeNull();
+});
+
+test("a background copy whose last check is over a day old is marked STALE", async () => {
+  const checked = installedAt() + 1_800_000;
+  const dir = knowledgeCopy({ checkedAt: new Date(checked).toISOString() });
+  const result = await run(["read", "wiki-content.md", "--section", "wifi"], context({ knowledgeDir: dir, now: () => new Date(checked + 2 * 86_400_000) }));
+  expect(result.out).toContain("background sync copy");
+  expect(result.out).toContain("STALE");
 });

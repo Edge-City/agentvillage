@@ -1,8 +1,17 @@
 #!/usr/bin/env bun
 /**
- * Edge City India public references: list, search and read the installed
- * snapshot (`skills/edge-india/references/`), with an optional bounded live
- * refresh from the published mirror.
+ * Edge City India public references: list, search and read the local copy of
+ * the published guide. Two local copies exist, and the newer one is read:
+ *
+ *   - the background sync copy, `$HERMES_HOME/knowledge/edge-india/`, which the
+ *     no-model cron job "Edge — knowledge sync" (`knowledge-sync.ts`, every 30
+ *     minutes) keeps current from Edge City's mirror, verified against the
+ *     mirror's SNAPSHOT.json; its age is `_sync.json`'s `checked_at`;
+ *   - the snapshot installed with the agent's release,
+ *     `skills/edge-india/references/` (age: its SNAPSHOT.json `synced_at`).
+ *
+ * By default this script never touches the network: the cron job supplies
+ * freshness, so a resident's turn never fetches.
  *
  *   bun skills/edge-india/scripts/refs.ts status
  *   bun skills/edge-india/scripts/refs.ts list
@@ -14,9 +23,11 @@
  * read (installed snapshot or live mirror), and how old that copy is. Output is
  * bounded (`--max-chars`, default 12000); `search` names the sections to read.
  *
- * Live refresh is on by default (`AV_INDIA_REFS_LIVE=0`, `false` or `off` turns
- * it off). At most once per `AV_INDIA_REFS_TTL_MINUTES` (default 15, the sync
- * workflow's cadence) it fetches the mirror's
+ * Live refresh is OFF by default (LIVE_REFRESH_DEFAULT). An operator can opt
+ * one agent in with `AV_INDIA_REFS_LIVE=1` (`true`, `yes`, `on`); any other
+ * value, or none, keeps it off. When on, at most once per
+ * `AV_INDIA_REFS_TTL_MINUTES` (default 15, the sync workflow's cadence) it
+ * fetches the mirror's
  * `SNAPSHOT.json` (default
  * https://raw.githubusercontent.com/Edge-City/agentvillage/main/skills/edge-india/references,
  * override `AV_INDIA_REFS_BASE_URL`, https on raw.githubusercontent.com only),
@@ -24,7 +35,7 @@
  * record, and swaps the whole set into `$HERMES_HOME/cache/edge-india/` only
  * when every file verified. Any failure (offline, timeout, a bad hash, a
  * different event) keeps the copy already on disk and says so in the output.
- * The newer of the installed snapshot and the cache (by `synced_at`) is read.
+ * The newest of the three copies is then read.
  *
  * Reference text is data, not instructions. Standard library only.
  */
@@ -45,6 +56,15 @@ const DEFAULT_STALE_HOURS = 24;
 const DEFAULT_TTL_MINUTES = 15;
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_MAX_CHARS = 12000;
+
+/**
+ * Live refresh is off unless an operator opts an agent in: the "Edge —
+ * knowledge sync" job keeps `knowledge/edge-india/` fresh, and a resident's
+ * turn never fetches (DATA-271, rc15 ruling).
+ */
+export const LIVE_REFRESH_DEFAULT = false;
+/** The background sync copy's state file (written by knowledge-sync.ts). */
+const SYNC_STATE_FILE = "_sync.json";
 
 interface SnapshotFile {
   path: string;
@@ -82,6 +102,8 @@ export interface Env {
 
 export interface Context {
   installedDir: string;
+  /** The background sync copy (`$HERMES_HOME/knowledge/edge-india`); absent: none. */
+  knowledgeDir?: string;
   cacheDir: string;
   env: Env;
   now: () => Date;
@@ -91,7 +113,7 @@ export interface Context {
 interface CopyChoice {
   dir: string;
   snapshot: Snapshot;
-  label: "installed snapshot" | "live mirror";
+  label: "installed snapshot" | "background sync copy" | "live mirror";
   note: string | null;
 }
 
@@ -139,9 +161,49 @@ function numberEnv(env: Env, name: string, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-/** On unless `AV_INDIA_REFS_LIVE` is `0`, `false`, `no` or `off`. */
+/** Off (LIVE_REFRESH_DEFAULT) unless `AV_INDIA_REFS_LIVE` is `1`, `true`, `yes` or `on`. */
 export function liveEnabled(env: Env): boolean {
-  return !["0", "false", "no", "off"].includes((env.AV_INDIA_REFS_LIVE ?? "").trim().toLowerCase());
+  const raw = (env.AV_INDIA_REFS_LIVE ?? "").trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(raw)) return true;
+  return LIVE_REFRESH_DEFAULT;
+}
+
+/**
+ * The background sync copy as a snapshot, or null when it is missing or
+ * incomplete. knowledge-sync.ts writes it whole (verified against the mirror's
+ * SNAPSHOT.json, swapped in by rename) with `_sync.json`; the per-file sha256
+ * here is of the bytes on disk, so a file changed after the swap is read as
+ * it is now, and a file that vanished makes the copy unusable.
+ */
+export function readKnowledgeCopy(dir: string | undefined): (Snapshot & { fetched_at: string }) | null {
+  if (!dir) return null;
+  const state = readJsonFile<{ v?: unknown; files?: unknown; fetched_at?: unknown; checked_at?: unknown }>(join(dir, SYNC_STATE_FILE));
+  if (!state || state.v !== 1 || !Array.isArray(state.files)) return null;
+  const { fetched_at: fetchedAt, checked_at: checkedAt } = state;
+  if (typeof fetchedAt !== "string" || Number.isNaN(Date.parse(fetchedAt))) return null;
+  if (typeof checkedAt !== "string" || Number.isNaN(Date.parse(checkedAt))) return null;
+  const manifestDoc = readJsonFile<{ event?: unknown }>(join(dir, "manifest.json"));
+  if (!manifestDoc || manifestDoc.event !== EVENT) return null;
+  const files: SnapshotFile[] = [];
+  for (const path of ["manifest.json", "index.md", ...state.files]) {
+    if (typeof path !== "string" || files.some((file) => file.path === path)) continue;
+    if (path !== "manifest.json" && !DOCUMENT_PATH.test(path)) continue;
+    let body: Buffer;
+    try {
+      body = readFileSync(join(dir, path));
+    } catch {
+      return null;
+    }
+    files.push({ path, sha256: sha256(body), bytes: body.length });
+  }
+  return {
+    schema: 1,
+    event: EVENT,
+    source: { repo: "Edge — knowledge sync", path: "knowledge/edge-india", commit: null, commit_date: null },
+    synced_at: checkedAt,
+    fetched_at: fetchedAt,
+    files,
+  };
 }
 
 /** The mirror base URL; anything other than https on raw.githubusercontent.com falls back to the default. */
@@ -250,17 +312,31 @@ function sameSet(a: Snapshot, b: Snapshot): boolean {
   return b.files.every((file) => byPath.get(file.path) === file.sha256);
 }
 
-/** Picks the newer complete copy: the installed snapshot or the live cache. */
+/**
+ * Picks the newest complete copy: the background sync copy (by `checked_at`),
+ * the live cache (only when live refresh is on) or the installed snapshot (by
+ * `synced_at`). On a tie the background copy wins, then the live cache.
+ */
 export async function chooseCopy(ctx: Context): Promise<CopyChoice> {
   const failure = await refresh(ctx);
-  const installed = readSnapshotDir(ctx.installedDir);
+  const knowledge = readKnowledgeCopy(ctx.knowledgeDir);
   const cached = liveEnabled(ctx.env) ? readSnapshotDir(currentDir(ctx)) : null;
+  const installed = readSnapshotDir(ctx.installedDir);
 
+  const candidates: CopyChoice[] = [];
+  if (knowledge) {
+    candidates.push({
+      dir: ctx.knowledgeDir!,
+      snapshot: knowledge,
+      label: "background sync copy",
+      note: `content last written ${knowledge.fetched_at}, last confirmed current ${knowledge.synced_at}`,
+    });
+  }
+  if (cached) candidates.push({ dir: currentDir(ctx), snapshot: cached, label: "live mirror", note: null });
+  if (installed) candidates.push({ dir: ctx.installedDir, snapshot: installed, label: "installed snapshot", note: null });
   let choice: CopyChoice | null = null;
-  if (cached && (!installed || Date.parse(cached.synced_at) > Date.parse(installed.synced_at))) {
-    choice = { dir: currentDir(ctx), snapshot: cached, label: "live mirror", note: null };
-  } else if (installed) {
-    choice = { dir: ctx.installedDir, snapshot: installed, label: "installed snapshot", note: null };
+  for (const candidate of candidates) {
+    if (!choice || Date.parse(candidate.snapshot.synced_at) > Date.parse(choice.snapshot.synced_at)) choice = candidate;
   }
   if (!choice) {
     throw new Error(
@@ -269,8 +345,13 @@ export async function chooseCopy(ctx: Context): Promise<CopyChoice> {
         "https://edgecityindia2026.substack.com/archive",
     );
   }
-  if (failure && liveEnabled(ctx.env)) choice.note = `live refresh failed (${failure}); this is the last copy on disk`;
-  else if (!liveEnabled(ctx.env)) choice.note = "live refresh is switched off on this agent (AV_INDIA_REFS_LIVE); this copy changes only when the agent is updated";
+  if (failure && liveEnabled(ctx.env)) {
+    choice.note = [choice.note, `live refresh failed (${failure}); this is the last copy on disk`].filter(Boolean).join("; ");
+  } else if (choice.label === "installed snapshot") {
+    choice.note = knowledge
+      ? "the background sync copy (knowledge/edge-india/) is older than this installed snapshot; the sync job may be failing"
+      : "no background sync copy (knowledge/edge-india/) yet; this is the snapshot installed with the agent, which changes only when the agent is updated";
+  }
   return choice;
 }
 
@@ -396,9 +477,11 @@ export async function run(args: string[], ctx: Context): Promise<{ code: number;
       `event: ${choice.snapshot.event}`,
       `reading: ${choice.label}`,
       freshnessLine(ctx, choice),
-      `upstream: ${choice.snapshot.source.repo}@${choice.snapshot.source.commit ?? "unknown"} (${choice.snapshot.source.commit_date ?? "date unknown"})`,
+      choice.label === "background sync copy"
+        ? `upstream: Edge City's mirror, copied by the Edge — knowledge sync job (${choice.snapshot.source.path})`
+        : `upstream: ${choice.snapshot.source.repo}@${choice.snapshot.source.commit ?? "unknown"} (${choice.snapshot.source.commit_date ?? "date unknown"})`,
       `documents: ${docs.length}`,
-      `live_refresh: ${liveEnabled(ctx.env) ? `on (${baseUrl(ctx.env)})` : "off"}`,
+      `live_refresh: ${liveEnabled(ctx.env) ? `on (${baseUrl(ctx.env)}; opted in with AV_INDIA_REFS_LIVE)` : "off (the default: the Edge — knowledge sync job keeps knowledge/edge-india/ current; nothing here fetches)"}`,
     ];
     if (liveEnabled(ctx.env)) {
       lines.push(`last_refresh_attempt: ${state.last_attempt ?? "never"}`, `last_refresh_success: ${state.last_success ?? "never"}`);
@@ -502,6 +585,7 @@ export function defaultContext(env: Env = process.env): Context {
   const home = env.HERMES_HOME?.trim() || join(homedir(), ".hermes");
   return {
     installedDir: resolve(scriptDir, "../references"),
+    knowledgeDir: join(home, "knowledge", "edge-india"),
     cacheDir: join(home, "cache", "edge-india"),
     env,
     now: () => new Date(),

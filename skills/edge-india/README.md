@@ -10,7 +10,8 @@ Live data stays with the existing skills: today's events, RSVPs and cancellation
 |---|---|---|
 | `SKILL.md` | Routing, answer rules, topic → document table | hand |
 | `references/` | The generated reference tree: `index.md`, `manifest.json`, `wiki-content.md`, `website-content.md`, `newsletter/*.md`, `residencies/*.md`, `website/about.md`, plus `SNAPSHOT.json` (upstream commit and date, when it was copied, each file's sha256) | `scripts/sync-india-references.ts` only |
-| `scripts/refs.ts` | What the agent runs: `status`, `list`, `search <words>`, `read <path> [--section …]`; checks the published copy for updates first | hand |
+| `scripts/refs.ts` | What the agent runs: `status`, `list`, `search <words>`, `read <path> [--section …]`; reads the newer local copy (`knowledge/edge-india/` or the installed snapshot), never fetches by default | hand |
+| `scripts/knowledge-sync.ts`, `scripts/shims/` | The `Edge — knowledge sync` cron job (no model): copies the mirror into `$HERMES_HOME/knowledge/edge-india/`, verified against `SNAPSHOT.json` (`docs/deployment.md`, "Edge India knowledge") | hand |
 | `scripts/tests/` | `bun test skills/edge-india/scripts/tests` (also run by `.github/workflows/test.yml`) | hand |
 
 ## Where the content comes from
@@ -24,24 +25,29 @@ Live data stays with the existing skills: today's events, RSVPs and cancellation
 | 1. Organizers edit the wiki, Substack or website | any time | | |
 | 2. Upstream indexer regenerates `references/` and commits | every 15 min, best effort; commits only on change | a source blocks the runner or the run fails; the last good files stay | upstream Actions tab; `content_last_changed_upstream` per document |
 | 3. `.github/workflows/sync-edge-india-references.yml` here copies a complete, India-scoped tree to `references/` on `main` | every 15 min; commits only on change | an incomplete or non-India tree is refused and the last snapshot stays | this repo's Actions tab (a red run); `SNAPSHOT.json` |
-| 4. The agent checks the published copy on `main` when asked a village question | at most every `AV_INDIA_REFS_TTL_MINUTES` (15); on by default | offline, timeout, egress blocked or a bad hash: the last copy on disk is used and the output says the check failed | `refs.ts status` (`last_refresh_*`) |
-| 5. Offline fallback | the snapshot installed with the agent's release tag, refreshed at each roll | | `copy_taken` says `installed snapshot` |
+| 4. The agent's `Edge — knowledge sync` job copies the published copy on `main` into `$HERMES_HOME/knowledge/edge-india/` | every 30 minutes, no model | offline, a mixed CDN snapshot or a bad hash: nothing is written, the last good copy stays, and the job logs `failed` or `incomplete` | `av-events/knowledge/sync.jsonl`; `_sync.json` `checked_at`; `refs.ts status` |
+| 5. `refs.ts` reads the newer local copy | every question; never fetches (live check off by default) | the background copy is missing or older: the installed snapshot is read and the output says why | `copy_taken` says `background sync copy` or `installed snapshot` |
+| 6. Offline fallback | the snapshot installed with the agent's release tag, refreshed at each roll | | `copy_taken` says `installed snapshot` |
 
-End to end, a wiki edit reaches an agent's answer in about 15–50 minutes (indexer, sync, the agent's check interval, GitHub's raw-file cache) once upstream is healthy. The agent always sees `copy_taken`, and a STALE marker after `AV_INDIA_REFS_STALE_HOURS` (24), so it can say "as of" and link the source.
+End to end, a wiki edit reaches an agent's answer in about 30–65 minutes (indexer, sync, the job's 30-minute period, GitHub's raw-file cache) once upstream is healthy. The agent always sees `copy_taken`, and a STALE marker after `AV_INDIA_REFS_STALE_HOURS` (24; for the background copy, measured from its last confirmed check), so it can say "as of" and link the source.
 
 **Status on 2026-10-05:** the upstream indexer has failed every run since 2026-10-01 14:07 UTC (a Substack 403 is being diagnosed upstream), so its content, and this snapshot, date from 2026-09-30/10-01. Wiki edits made since (for example check-in and lunch details) are not in it until upstream runs again.
 
-### Live refresh (on by default)
+### Live refresh (OFF by default)
 
-`refs.ts` reads the mirror at `https://raw.githubusercontent.com/Edge-City/agentvillage/main/skills/edge-india/references` (override `AV_INDIA_REFS_BASE_URL`; only https on raw.githubusercontent.com is accepted). It fetches `SNAPSHOT.json`, downloads only the files whose sha256 changed, verifies each, and swaps the set into `$HERMES_HOME/cache/edge-india/current/` only when all of them verified. It reads whichever complete copy is newer, installed or cached. No new service, database or credential; the request is a public GET with a 5 second timeout.
+The cron job supplies freshness, so a resident's turn never fetches:
+`refs.ts` reads local files only unless an operator opts one agent in with
+`AV_INDIA_REFS_LIVE=1` (`true`, `yes` or `on`; any other value or none is
+off, `LIVE_REFRESH_DEFAULT = false` in `refs.ts`). It is a diagnostic, not a
+rollout setting. When opted in, `refs.ts` reads the mirror at `https://raw.githubusercontent.com/Edge-City/agentvillage/main/skills/edge-india/references` (override `AV_INDIA_REFS_BASE_URL`; only https on raw.githubusercontent.com is accepted). It fetches `SNAPSHOT.json`, downloads only the files whose sha256 changed, verifies each, and swaps the set into `$HERMES_HOME/cache/edge-india/current/` only when all of them verified. It reads whichever complete copy is newest: background, cached or installed. No new service, database or credential; the request is a public GET with a 5 second timeout.
 
-Because the mirror is `main`, reference text changes between release tags; each `read` header and `refs.ts status` record which snapshot was read. Until this skill is on `main`, the check gets a 404 and the agent reads its installed copy. `AV_INDIA_REFS_LIVE=0` in a tenant's `.env` switches the check off for that agent.
+Because the mirror is `main`, reference text changes between release tags (through the cron job, with or without this check); each `read` header and `refs.ts status` record which copy was read.
 
 ## Environment
 
 | Variable | Default | Effect |
 |---|---|---|
-| `AV_INDIA_REFS_LIVE` | unset (on) | `0`, `false`, `no` or `off` switches the live check off |
+| `AV_INDIA_REFS_LIVE` | unset (off) | `1`, `true`, `yes` or `on` opts this agent into the in-turn live check; anything else keeps it off |
 | `AV_INDIA_REFS_TTL_MINUTES` | 15 | minimum time between checks |
 | `AV_INDIA_REFS_TIMEOUT_MS` | 5000 | per-request timeout |
 | `AV_INDIA_REFS_STALE_HOURS` | 24 | copy age after which output is marked STALE |
@@ -49,7 +55,7 @@ Because the mirror is `main`, reference text changes between release tags; each 
 
 ## To verify on a hosted agent
 
-The sandbox must reach `raw.githubusercontent.com` over HTTPS. Ask a canary agent "how up to date is your India info?": it runs `refs.ts status`, which should show `last_refresh_success` within the last 15 minutes. A `last_refresh_error` means the agent is answering from its installed copy.
+The sandbox must reach `raw.githubusercontent.com` over HTTPS for the cron job. Ask a canary agent "how up to date is your India info?": it runs `refs.ts status`, which should show `reading: background sync copy` with `copy_taken` within the last hour and `live_refresh: off (the default …)`. `reading: installed snapshot` means the job has not written a copy yet or is failing: check `av-events/knowledge/sync.jsonl`.
 
 ## Maintainer commands
 
