@@ -28,9 +28,19 @@
  * never reads or writes the marker, for a caller that delivers and marks the
  * welcome itself.
  *
- * Stdout is exactly the message (the agent sends it verbatim), and nothing
- * is written to stderr on any normal path: Hermes's `terminal` tool hands the
- * agent both streams. It always exits 0.
+ * Stdout is exactly the message (the agent sends it verbatim). By default
+ * nothing is written to stderr on any normal path: Hermes's `terminal` tool
+ * hands the agent both streams. With `--draft` only, one line follows on
+ * stderr after the message, for the caller that delivers it (the control
+ * plane's Telegram greeting, which records welcome.sent@1 from it): exactly
+ *
+ *   {"welcome":1,"fallback":"none|questions|unreachable","intents_listed":<0..3>}
+ *
+ * `fallback` is the branch the text took (`none`: intents listed;
+ * `questions`: no active intents; `unreachable`: no key, Index unreachable,
+ * or the script failed and printed the unreachable text), and
+ * `intents_listed` the number of `- ` intent lines printed (1..3 for `none`,
+ * else 0). It never carries text. It always exits 0.
  */
 
 import { readFileSync, renameSync, writeFileSync, mkdirSync } from "node:fs";
@@ -68,6 +78,23 @@ export const CONTEXT_QUESTIONS = [
 export type IntentsRead =
   | { kind: "listed"; titles: string[] }
   | { kind: "unreachable" };
+
+const UNREACHABLE: IntentsRead = { kind: "unreachable" };
+
+/** The branch a welcome took, as `--draft` reports it on stderr. */
+export type WelcomeBranch = { fallback: "none" | "questions" | "unreachable"; intents_listed: number };
+
+/** The branch welcomeText takes for `read`, and how many intents it lists. Pure. */
+export function welcomeBranch(read: IntentsRead): WelcomeBranch {
+  if (read.kind === "unreachable") return { fallback: "unreachable", intents_listed: 0 };
+  if (read.titles.length === 0) return { fallback: "questions", intents_listed: 0 };
+  return { fallback: "none", intents_listed: Math.min(read.titles.length, MAX_LISTED) };
+}
+
+/** The `--draft` stderr line for `branch`, without its newline: keys in this order, nothing else. */
+export function draftTrailer(branch: WelcomeBranch): string {
+  return JSON.stringify({ welcome: 1, fallback: branch.fallback, intents_listed: branch.intents_listed });
+}
 
 function homeFrom(argv: string[]): string {
   const i = argv.indexOf("--home");
@@ -202,34 +229,62 @@ export function claimWelcome(home: string, now: Date = new Date()): boolean {
   return true;
 }
 
-/** What the script prints, given its arguments. Never throws. */
-export async function welcome(argv: string[], options: { fetch?: typeof fetch; timeoutMs?: number; now?: Date } = {}): Promise<string> {
+type WelcomeOptions = { fetch?: typeof fetch; timeoutMs?: number; now?: Date };
+
+/**
+ * What the script prints, given its arguments, and the branch the text took
+ * (null for ALREADY_SENT, which `--draft` never prints). Never throws.
+ */
+export async function welcomeRun(argv: string[], options: WelcomeOptions = {}): Promise<{ text: string; branch: WelcomeBranch | null }> {
   const home = homeFrom(argv);
   const draft = argv.includes("--draft");
-  if (!draft && welcomeAlreadySent(home)) return ALREADY_SENT;
+  if (!draft && welcomeAlreadySent(home)) return { text: ALREADY_SENT, branch: null };
   const read = await readIntents({
     apiKey: envOrDotenv("INDEX_API_KEY", home),
     mcpUrl: indexMcpUrl(),
     fetch: options.fetch,
     timeoutMs: options.timeoutMs,
   });
-  const text = welcomeText(welcomeName(home), read, intentsPageUrl(home));
-  if (draft) return text;
+  const welcomed = { text: welcomeText(welcomeName(home), read, intentsPageUrl(home)), branch: welcomeBranch(read) };
+  if (draft) return welcomed;
   try {
-    if (!claimWelcome(home, options.now)) return ALREADY_SENT;
+    if (!claimWelcome(home, options.now)) return { text: ALREADY_SENT, branch: null };
   } catch {
     // The marker could not be written: still welcome (never silent); the next first message may welcome again.
   }
-  return text;
+  return welcomed;
+}
+
+/** What the script prints, given its arguments. Never throws. */
+export async function welcome(argv: string[], options: WelcomeOptions = {}): Promise<string> {
+  return (await welcomeRun(argv, options)).text;
+}
+
+/**
+ * The script: the message and a newline on stdout; with `--draft`, then the
+ * trailer and a newline on stderr; without it, nothing on stderr. A run that
+ * throws prints the unreachable welcome (and, with `--draft`, its trailer).
+ * `run` and the writers are parameters for the tests only.
+ */
+export async function main(
+  argv: string[],
+  io: { stdout: (s: string) => void; stderr: (s: string) => void },
+  run: (argv: string[]) => Promise<{ text: string; branch: WelcomeBranch | null }> = welcomeRun,
+): Promise<void> {
+  let out: { text: string; branch: WelcomeBranch | null };
+  try {
+    out = await run(argv);
+  } catch {
+    out = { text: welcomeText(DEFAULT_NAME, UNREACHABLE, intentsPageUrl(homeFrom(argv))), branch: welcomeBranch(UNREACHABLE) };
+  }
+  io.stdout(`${out.text}\n`);
+  if (argv.includes("--draft") && out.branch) io.stderr(`${draftTrailer(out.branch)}\n`);
 }
 
 if (import.meta.main) {
-  let out: string;
-  try {
-    out = await welcome(process.argv.slice(2));
-  } catch {
-    out = welcomeText(DEFAULT_NAME, { kind: "unreachable" }, intentsPageUrl(homeFrom(process.argv.slice(2))));
-  }
-  process.stdout.write(`${out}\n`);
+  await main(process.argv.slice(2), {
+    stdout: (s) => process.stdout.write(s),
+    stderr: (s) => process.stderr.write(s),
+  });
   process.exit(0);
 }
