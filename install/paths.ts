@@ -19,6 +19,11 @@ export function skillsDir(): string {
 export const EDGE_SKILL_NAMES = [
   "index-network",
   "edgeos",
+  // Edge City India public village knowledge (the current event): read from the
+  // local copy the "Edge — knowledge sync" job keeps (K1), with the snapshot
+  // installed here as the fallback; never fetched in a turn.
+  "edge-india",
+  // The previous popup, background only.
   "edge-esmeralda",
   "geo-esmeralda",
   "token-usage-audit",
@@ -28,12 +33,15 @@ export const EDGE_SKILL_NAMES = [
   // DATA-212: installed everywhere, inert unless the `record_intention` tool
   // is available (tenants with `AV_RECORD_INTENTION` on); its text says so.
   "record-intention",
-  // K1: Edge City India background, read from the local snapshot copy that
-  // the "Edge — knowledge sync" job keeps (never fetched in a turn).
-  "edge-india",
   // P1: the agent's nickname and the resident's own profile, read once per
   // private session from $HERMES_HOME/av-profile.json (the control plane writes it).
   "agent-profile",
 ] as const;
+
+/**
+ * Generated skill directories the installer replaces instead of merging, so a
+ * document removed from the snapshot is removed from existing Hermes homes too.
+ */
+export const REPLACED_SKILL_DIRS = ["edge-india/references"] as const;
 
 export const CRON_NAME_PREFIX = "Edge —";

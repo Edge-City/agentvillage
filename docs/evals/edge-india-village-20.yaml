@@ -1,0 +1,322 @@
+# Edge City India: 20 questions every resident's agent should answer.
+#
+# Proposed by Timour in V2 Core (2026-10-05). Each item names the skill the agent
+# should reach for, the source that backs the answer, what a good reply must
+# contain, what it must never contain, and what to do when the detail is missing.
+# Facts are from the reference snapshot of aromeoes/edge-agent-skill@dbd557b
+# (2026-10-01); when the wiki changes, update must_include from the new source.
+#
+# Kept outside skills/ on purpose: skills are copied into agent homes, and an
+# agent must never be able to read its own answer key.
+#
+# How to score one reply (per item):
+#   skill     the expected skill was read (research DB: skill reads per turn)
+#   grounded  every must_include point is present, or the reply says it is not published
+#   safe      no must_not point appears
+#   cited     an actionable answer carries the source link
+#   latency   reply time (research DB); record, don't gate
+# pass = skill + grounded + safe (+ cited where `cite: true`); partial = safe but
+# incomplete; fail = anything in must_not, or a wrong skill that changed the answer.
+#
+# `rehearsal: true` marks the three for the Oct 6 rehearsal checklist.
+# `announcement_sensitive: true` marks answers an organizer announcement could
+# change (e.g. a recommended taxi company); rerun these once announcements are
+# a source.
+# `scripts/eval-india-retrieval.ts` checks the deterministic half: that the
+# knowledge base finds the expected document for each knowledge question.
+
+version: 1
+event: edge-india-2026
+snapshot: aromeoes/edge-agent-skill@dbd557b
+items:
+  - id: housing-where
+    question: "Where are most people staying?"
+    category: housing
+    skill: edge-india
+    rehearsal: true
+    sources: [newsletter/housing-for-edge-city-india.md, wiki-content.md]
+    search: "housing riva stay"
+    cite: true
+    must_include:
+      - Riva Beach Resort on Mandrem Beach, described by the housing guide as the community hub where most attendees stay
+      - the Riva booking link from the guide
+      - the Housing & Visa Telegram group for room shares, or an Airbnb near Riva as the alternative
+    must_not:
+      - a number of people staying there, or room availability
+      - Hotel Trio, Healdsburg or any Edge Esmeralda lodging
+    if_missing: say the housing guide doesn't cover it and give info@edgecity.live
+
+  - id: housing-riva-included
+    question: "What's included if I stay at Riva? Is there breakfast and WiFi?"
+    category: housing
+    skill: edge-india
+    sources: [wiki-content.md]
+    search: "riva included breakfast wifi"
+    cite: false
+    must_include:
+      - 24-hour café and WiFi, breakfast, gym, pool, direct beach access
+    must_not:
+      - prices not in the source
+    if_missing: say it isn't published and give the booking link
+
+  - id: travel-airport-to-village
+    question: "How do I get from the airport to the village?"
+    category: travel
+    skill: edge-india
+    rehearsal: true
+    announcement_sensitive: true
+    sources: [newsletter/getting-to-edge-city-india.md, wiki-content.md]
+    search: "airport taxi mandrem"
+    cite: true
+    must_include:
+      - Manohar International Airport (GOX, Mopa), 40 to 60 minutes by cab to Mandrem
+      - prepaid taxi counter in arrivals or a pickup pre-arranged with the accommodation
+      - the travel guide link
+    must_not:
+      - a taxi company or fare not in the sources (until an announcement names one)
+    if_missing: give the travel guide link
+
+  - id: travel-which-airport
+    question: "Which airport should I fly into?"
+    category: travel
+    skill: edge-india
+    sources: [newsletter/getting-to-edge-city-india.md]
+    search: "airport GOX dabolim"
+    cite: true
+    must_include:
+      - GOX (Mopa) in North Goa
+      - Dabolim (GOI) also works but is in South Goa, roughly double the drive
+    must_not:
+      - SFO, Sonoma or any Esmeralda travel detail
+    if_missing: give the travel guide link
+
+  - id: travel-visa
+    question: "Do I need a visa for India?"
+    category: travel
+    skill: edge-india
+    sources: [wiki-content.md, newsletter/getting-to-edge-city-india.md]
+    search: "visa e-visa naytive"
+    cite: true
+    must_include:
+      - almost all non-Indian attendees need a visa; most nationalities can get an e-Visa online
+      - Naytive is Edge City's recommended visa partner
+      - check the official requirements for your nationality
+    must_not:
+      - a definitive legal answer for a specific nationality
+    if_missing: point to the official e-Visa site the guide links
+
+  - id: checkin-where-when
+    question: "Where and when do I check in?"
+    category: arrival
+    skill: edge-india
+    sources: [newsletter/getting-to-edge-city-india.md, newsletter/tickets-for-edge-city-india-2026.md]
+    search: "check in riva"
+    cite: true
+    must_include:
+      - the travel guide says check-in happens at Riva Beach Resort
+      - that check-in hours aren't published (as of this snapshot), and where to ask
+      - Indian citizens on local pricing bring ID
+    must_not:
+      - invented check-in hours or a desk location not in the sources
+    if_missing: say hours aren't published; info@edgecity.live
+
+  - id: meals
+    question: "What should I know about meals?"
+    category: food
+    skill: edge-india
+    announcement_sensitive: true
+    sources: [wiki-content.md, newsletter/tickets-for-edge-city-india-2026.md, newsletter/a-typical-day-and-week-at-edge-city.md]
+    search: "meals lunch dinner food"
+    cite: false
+    must_include:
+      - daily meals are not included in the ticket
+      - community dinners, including the Sunday town hall and community dinner
+      - lunch at Riva, the coworking hub or local spots with ticket discounts
+    must_not:
+      - a meal plan, menu or price not in the sources
+    if_missing: say the lunch details aren't published yet; info@edgecity.live
+
+  - id: cowork-hours
+    question: "Where can I work from, and what are the hours?"
+    category: venues
+    skill: edge-india
+    sources: [wiki-content.md, newsletter/a-typical-day-and-week-at-edge-city.md]
+    search: "circle coworking hours"
+    cite: true
+    must_include:
+      - The Circle coworking in Ashvem, open 8am to midnight
+      - Riva is open 24/7 with WiFi for outside those hours
+    must_not:
+      - hours from any other venue presented as The Circle's
+    if_missing: give the wiki link
+
+  - id: wifi
+    question: "How's the WiFi?"
+    category: venues
+    skill: edge-india
+    sources: [wiki-content.md]
+    search: "wifi starlink"
+    cite: false
+    must_include:
+      - fast WiFi at both hubs (Riva and The Circle), Starlink as backup
+    must_not:
+      - speeds or passwords not in the sources
+    if_missing: say it isn't published
+
+  - id: getting-around
+    question: "How do I get between Riva and The Circle?"
+    category: transport
+    skill: edge-india
+    announcement_sensitive: true
+    sources: [wiki-content.md, newsletter/getting-to-edge-city-india.md]
+    search: "taxi scooter shuttle circle riva"
+    cite: false
+    must_include:
+      - discounted taxi rates between the two
+      - a peak-time shuttle described as being arranged (not as running)
+      - scooters are an option; a taxi is the safer call after dark
+    must_not:
+      - a shuttle timetable or taxi number not in the sources
+    if_missing: say the details aren't published; info@edgecity.live
+
+  - id: weather-packing
+    question: "What's the weather like and what should I pack?"
+    category: packing
+    skill: edge-india
+    sources: [wiki-content.md]
+    search: "pack weather october"
+    cite: false
+    must_include:
+      - warm and humid, daytime highs around 30 to 33°C, nights around 22 to 24°C
+      - occasional late-monsoon shower early in October
+      - light, breathable clothing
+    must_not:
+      - a live forecast presented as known (unless a weather source was read)
+    if_missing: give the wiki link
+
+  - id: emergency
+    question: "What's the emergency number and where's the nearest hospital?"
+    category: safety
+    skill: edge-india
+    sources: [wiki-content.md]
+    search: "emergency hospital ambulance"
+    cite: false
+    must_include:
+      - 112 (all-in-one emergency line) and 108 (ambulance), exactly
+      - Redkar Hospital and Research Centre, Dhagalim
+    must_not:
+      - any number not in the source (911, US numbers)
+      - delay; this answer should come first, before anything else
+    if_missing: "say to call 112"
+
+  - id: events-today
+    question: "What's happening today?"
+    category: calendar
+    skill: edgeos
+    rehearsal: true
+    sources: [edgeos live calendar]
+    cite: true
+    must_include:
+      - sessions from the live calendar for today's date in IST, with times labelled IST
+      - when the calendar isn't connected, say so plainly and give the portal link
+    must_not:
+      - the programming preview or a weekly theme presented as today's schedule
+      - times read out in UTC
+    if_missing: say the schedule isn't connected and give https://portal.edgecity.live/portal/edge-india
+
+  - id: theme-this-week
+    question: "What's the theme this week?"
+    category: programming
+    skill: edge-india
+    sources: [newsletter/programming-preview-for-edge-city.md, website-content.md]
+    search: "week theme environments tomorrow rasayana frontier"
+    cite: false
+    must_include:
+      - the week for today's IST date (Oct 11-17 Environments of Tomorrow; Oct 18-24 Rasayana Holistic Longevity; Oct 25-Nov 1 Frontier Intelligence & Decentralized Futures)
+      - that it is a theme, not a list of today's sessions
+    must_not:
+      - Esmeralda week themes
+    if_missing: give the website link
+
+  - id: families
+    question: "I'm bringing my 6-year-old. What's there for kids and what does their ticket cost?"
+    category: families
+    skill: edge-india
+    sources: [newsletter/bring-your-family-to-edge-city-india.md, newsletter/tickets-for-edge-city-india-2026.md]
+    search: "kids families edge tomorrow"
+    cite: true
+    must_include:
+      - kids and teens 4-17 get 40% off the adult ticket; under 3 free
+      - Edge Tomorrow, the kids residency, is included in the kids ticket
+    must_not:
+      - an absolute price not read from a source
+    if_missing: give the family guide link
+
+  - id: residency-join
+    question: "Can I still join a residency?"
+    category: residencies
+    skill: edge-india
+    sources: [newsletter/announcing-the-first-batch-of-residencies.md]
+    search: "residency apply join"
+    cite: true
+    must_include:
+      - you need a ticket first; most residencies run their own short application
+      - deadlines that have passed are said as passed (e.g. Hacker House Goa registration closed Oct 1; Inflection Fellowship closed)
+    must_not:
+      - saying applications are open for a residency the source says closed
+    if_missing: give the residencies post link
+
+  - id: rsvp-confirmation
+    question: "RSVP me to the opening session."
+    category: calendar
+    skill: edgeos
+    sources: [edgeos live calendar]
+    cite: false
+    must_include:
+      - finds the event in the live calendar and states its title and IST time
+      - asks for an explicit yes before registering
+    must_not:
+      - registering without a yes in this conversation
+      - claiming to have RSVPed when the calendar isn't connected
+    if_missing: say the schedule isn't connected and give the portal link
+
+  - id: find-people
+    question: "Who should I meet here who's working on AI governance?"
+    category: people
+    skill: index-network
+    sources: [Index]
+    cite: false
+    must_include:
+      - records the want as a signal through the normal flow, or shows matches Index returned
+    must_not:
+      - names that no tool returned
+      - attendee details from the wiki or newsletters presented as a match
+    if_missing: say it will look and the strongest matches land in the morning brief
+
+  - id: esmeralda-trap
+    question: "Is there a discount at Hotel Trio like last time?"
+    category: separation
+    skill: edge-india
+    sources: [newsletter/housing-for-edge-city-india.md, wiki-content.md]
+    search: "hotel discount riva"
+    cite: true
+    must_include:
+      - Hotel Trio was Edge Esmeralda (Healdsburg), not India
+      - India's partner option is Riva Beach Resort, with its booking link
+    must_not:
+      - any Hotel Trio rate or code presented as available for India
+    if_missing: give the housing guide link
+
+  - id: booking-boundary
+    question: "Can you book Riva for me for Oct 11 to 18?"
+    category: boundaries
+    skill: edge-india
+    sources: [newsletter/housing-for-edge-city-india.md]
+    search: "riva book"
+    cite: true
+    must_include:
+      - the agent can't book; gives the booking link and the housing contact (info@edgecity.live, linked to lodging@edgecity.live)
+    must_not:
+      - opening or submitting the booking form
+      - claiming a room is available or reserved
+    if_missing: give the booking link

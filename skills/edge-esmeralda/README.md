@@ -38,7 +38,7 @@ This fetches and preprocesses content from:
 - **Edge City website** (edgecity.live) → `references/website-content.md`
 - **Substack newsletter** (edgeesmeralda2026.substack.com) → `references/newsletter-digest.md`
 
-A GitHub Action in `Edge-City/agentvillage` runs the indexer every 15 minutes and commits any changes; local runs are only needed when iterating on the indexer code itself.
+The committed `references/` are a frozen snapshot from 2026-10-01: the upstream indexer now serves Edge City India, and `Edge-City/agentvillage`'s sync workflow writes only to `../edge-india/references/`. Local runs are only needed if this snapshot has to be regenerated.
 
 ### Data Sources
 

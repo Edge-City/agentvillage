@@ -10,12 +10,33 @@
  *
  *   KNOWLEDGE_SNAPSHOT_URL  the snapshot's manifest.json. No line (or, with no
  *     `.env` file, no variable): the built-in DEFAULT_SNAPSHOT_URL, Edge City's
- *     reviewed mirror in this repo (kept by sync-edge-india-references.yml):
+ *     mirror in this repo (kept by sync-edge-india-references.yml):
  *     https://raw.githubusercontent.com/Edge-City/agentvillage/main/skills/edge-india/references/manifest.json
- *     Fran's upstream (`p2p-lanes/edge-agent-skill`) stays allowed as an
- *     operator override only: a push there would reach every agent within one
- *     run with no one in the loop, while the mirror sits under our org's audit
- *     log and its sync workflow is the kill switch.
+ *     The mirror is not reviewed by a person: its workflow forwards the
+ *     upstream indexer (`aromeoes/edge-agent-skill`, branch `main`) every 15
+ *     minutes, but only complete trees this job accepts, each file's sha256
+ *     recorded in SNAPSHOT.json with the upstream commit it came from, under our
+ *     org's audit log; disabling that workflow (or reverting the mirror) is the
+ *     kill switch. The upstream itself stays allowed as an operator override
+ *     only: a push there reaches every agent within one run, with none of the
+ *     mirror's checks.
+ *
+ *   Trust boundary. The decision: Carter's choice of upstream (GRANT
+ *   2026-10-06 09:06Z, "the mirror follows aromeoes/edge-agent-skill"). The
+ *   mirror follows `aromeoes/edge-agent-skill@main`: a personal account's
+ *   branch, unpinned, published automatically every 15 minutes by the sync
+ *   workflow, with no person reviewing it. What protects the fleet: the sync's
+ *   checks (sizes, names, encoding, HTML, complete India-only trees, manifest
+ *   links only to the guide's hosts) and the upstream commit it records per
+ *   publish, refusing to publish when that commit cannot be read; this job's
+ *   verification of every file against the mirror's SNAPSHOT.json; the
+ *   stored record `refs.ts` checks before it reads this copy (regular files,
+ *   UTF-8, sha256 per file); `refs.ts`'s treat_as frame with a per-run token;
+ *   and the host allowlist on manifest urls. What is NOT protected: the
+ *   content itself. A sentence changed upstream (a price, a date, a contact,
+ *   a false claim) reaches residents as information, typically within the
+ *   hour (the 15-minute sync, the CDN's 5-minute cache, this job's 30-minute
+ *   period), cited with its source link.
  *     Set empty (`KNOWLEDGE_SNAPSHOT_URL=`): switched off, status
  *     `unconfigured`, exit 0, no knowledge file written.
  *   KNOWLEDGE_SNAPSHOT_HOSTS  optional, comma-separated extra host names.
@@ -27,7 +48,7 @@
  *
  * Which URLs it fetches (`urlAllowed`): https, no user name or password, no
  * port, no query or fragment, and either host raw.githubusercontent.com with a
- * path under `/p2p-lanes/edge-agent-skill/` or `/Edge-City/`, or a host named
+ * path under `/aromeoes/edge-agent-skill/` or `/Edge-City/`, or a host named
  * in KNOWLEDGE_SNAPSHOT_HOSTS (a dotted name, never an IP literal; the list
  * never widens raw.githubusercontent.com past those two prefixes). Every file
  * is fetched from the manifest's own directory: same host, path under the
@@ -45,13 +66,20 @@
  * Where it writes: the whole set into `$HERMES_HOME/knowledge/edge-india/`
  * (with `_sync.json`: source, manifest sha256, ETag, files, bytes, each
  * document's manifest `hash` as fetched, `fetched_at` = when this content was
- * written, `checked_at` = the last run that confirmed it current), built in a
- * temp directory beside it and swapped in by rename; the set it replaces is
- * kept as `$HERMES_HOME/knowledge-prev/edge-india/`, outside `knowledge/` so a
- * search of `knowledge/` never finds the stale copy. A run that fails anywhere
- * leaves the current set untouched. Unchanged: the manifest answers 304 to the
- * stored ETag, or its sha256 equals the stored one (same source, every file
- * present): only `checked_at` is rewritten. One run at a time
+ * written, `checked_at` = the last run that confirmed it current; and with
+ * `SNAPSHOT.json`, the record the set was verified against: the mirror's own
+ * bytes when it served one, else one this run writes from the bytes it
+ * fetched), built in a temp directory beside it and swapped in by rename; the
+ * set it replaces is kept as `$HERMES_HOME/knowledge-prev/edge-india/`, outside
+ * `knowledge/` so a search of `knowledge/` never finds the stale copy. A run
+ * that fails anywhere leaves the current set untouched. `refs.ts` reads the
+ * set only while every file is a regular file matching that stored record.
+ * Unchanged: the manifest answers 304 to the stored ETag, or its sha256 equals
+ * the stored one, and the set on disk is intact (same source; the stored
+ * SNAPSHOT.json parses and every file is a regular file matching it): only
+ * `checked_at` is rewritten. A set that is not intact (a file changed,
+ * replaced by a symlink or gone, or no stored record, as a set written before
+ * the record existed) is fetched again in full. One run at a time
  * (`knowledge/.edge-india.lock`).
  *
  * A mixed snapshot (the manifest is new but a file URL still serves the CDN's
@@ -76,7 +104,7 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export const SET_NAME = "edge-india";
@@ -100,7 +128,7 @@ export const SNAPSHOT_RECORD_FILE = "SNAPSHOT.json";
 
 /** raw.githubusercontent.com paths always allowed (owner/repo prefixes). */
 export const RAW_HOST = "raw.githubusercontent.com";
-export const RAW_PREFIXES = ["/p2p-lanes/edge-agent-skill/", "/Edge-City/"];
+export const RAW_PREFIXES = ["/aromeoes/edge-agent-skill/", "/Edge-City/"];
 
 const MD_TYPES = new Set(["text/plain", "text/markdown", "text/x-markdown"]);
 const MANIFEST_TYPES = new Set([...MD_TYPES, "application/json"]);
@@ -472,9 +500,53 @@ function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
   return a.byteLength === b.byteLength && Buffer.from(a.buffer, a.byteOffset, a.byteLength).equals(Buffer.from(b.buffer, b.byteOffset, b.byteLength));
 }
 
-function setComplete(home: string, state: SyncState): boolean {
+/**
+ * `rel` under `dir` as bytes, only when every directory on the way is a real
+ * directory and the file is a regular file (lstat: a symlink anywhere is
+ * refused, never followed); null otherwise.
+ */
+function readRegularUnder(dir: string, rel: string): Uint8Array | null {
+  const segments = rel.split("/");
+  let at = dir;
+  for (const [index, segment] of segments.entries()) {
+    at = join(at, segment);
+    try {
+      const stat = lstatSync(at);
+      if (index === segments.length - 1 ? !stat.isFile() : !stat.isDirectory()) return null;
+    } catch {
+      return null;
+    }
+  }
+  try {
+    return readFileSync(at);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The set on disk is the one `_sync.json` describes: the stored SNAPSHOT.json
+ * parses, and the manifest and every listed file is a regular file whose
+ * sha256 matches it. Anything else (a file changed, swapped for a symlink or
+ * gone; no stored record) means a full sync, so the unchanged path only ever
+ * confirms a set with a valid record.
+ */
+function setIntact(home: string, state: SyncState): boolean {
   const dir = currentSetDir(home);
-  return [MANIFEST_FILE, ...state.files].every((file) => typeof file === "string" && existsSync(join(dir, file)));
+  let record: Map<string, string>;
+  try {
+    const bytes = readRegularUnder(dir, SNAPSHOT_RECORD_FILE);
+    if (bytes === null) return false;
+    record = snapshotRecord(Buffer.from(bytes).toString("utf8"));
+  } catch {
+    return false;
+  }
+  return [MANIFEST_FILE, ...state.files].every((file) => {
+    if (typeof file !== "string" || (file !== MANIFEST_FILE && !documentPathValid(file))) return false;
+    const expected = record.get(file);
+    const bytes = expected === undefined ? null : readRegularUnder(dir, file);
+    return bytes !== null && createHash("sha256").update(bytes).digest("hex") === expected;
+  });
 }
 
 /**
@@ -624,7 +696,7 @@ async function sync(options: SyncOptions, fetchedAt: string): Promise<SyncResult
     };
     const totalCap = options.totalCapBytes ?? TOTAL_CAP_BYTES;
     const state = readState(home);
-    const sameSource = state !== null && state.source === source.manifest.href && setComplete(home, state);
+    const sameSource = state !== null && state.source === source.manifest.href && setIntact(home, state);
 
     const manifest = await fetchFile(ctx, source.manifest, MANIFEST_TYPES, sameSource ? state!.etag : null);
     if (manifest.status === 304) {
@@ -642,9 +714,11 @@ async function sync(options: SyncOptions, fetchedAt: string): Promise<SyncResult
 
     // The mirror's SNAPSHOT.json beside the manifest, when there is one (404: none).
     let record: Map<string, string> | null = null;
+    let recordBytes: Uint8Array | null = null;
     try {
       const fetched = await fetchFile(ctx, new URL(SNAPSHOT_RECORD_FILE, source.base), MANIFEST_TYPES);
       record = snapshotRecord(textOk(fetched.bytes, false));
+      recordBytes = fetched.bytes;
     } catch (err) {
       if (!(err instanceof SyncFailure && err.code === "http-404")) throw err;
     }
@@ -680,6 +754,17 @@ async function sync(options: SyncOptions, fetchedAt: string): Promise<SyncResult
 
     const files = new Map<string, Uint8Array>([[MANIFEST_FILE, manifest.bytes]]);
     paths.forEach((path, at) => files.set(path, bodies[at]));
+    // The record this set was verified against, stored with it (refs.ts reads
+    // the set only while every file still matches it). No SNAPSHOT.json
+    // upstream: a record of the bytes this run fetched, so a later change on
+    // disk is still caught.
+    files.set(SNAPSHOT_RECORD_FILE, recordBytes ?? new TextEncoder().encode(`${JSON.stringify({
+      schema: 1,
+      generated_by: "knowledge-sync (the source served no SNAPSHOT.json)",
+      source: { manifest: source.manifest.href },
+      synced_at: fetchedAt,
+      files: [...files].map(([path, bytes]) => ({ path, sha256: createHash("sha256").update(bytes).digest("hex"), bytes: bytes.byteLength })),
+    }, null, 2)}\n`));
     writeSet(home, files, {
       v: 1,
       source: source.manifest.href,

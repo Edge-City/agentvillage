@@ -1,0 +1,143 @@
+{
+  "schema": 1,
+  "event": "edge-india-2026",
+  "source": {
+    "repo": "aromeoes/edge-agent-skill",
+    "path": "references",
+    "commit": "dbd557bb01e59aec58e72f39131cab6377bba10f",
+    "commit_date": "2026-10-01T19:20:40.000Z"
+  },
+  "synced_at": "2026-10-05T16:34:25.463Z",
+  "files": [
+    {
+      "path": "index.md",
+      "sha256": "44baa4065d13def86a33dda3d73264e20a3cdd9eaf9db70e03d1dc6e9f4f5092",
+      "bytes": 4943
+    },
+    {
+      "path": "manifest.json",
+      "sha256": "d3272a103db0af3fbe6bc09c842416489f75630f57ac12d2123c32ab6bfdfe1a",
+      "bytes": 10214
+    },
+    {
+      "path": "newsletter/a-typical-day-and-week-at-edge-city.md",
+      "sha256": "932e3a6585cc9d93b101694d34498c5cd1c8821f9251cfd737ef634c2df2259d",
+      "bytes": 7435
+    },
+    {
+      "path": "newsletter/ambhasi-a-consciousness-x-ai-research.md",
+      "sha256": "3c6d1ee53b168b59007f6d6615abe94479668da24e8fb21015d131d467a06910",
+      "bytes": 9274
+    },
+    {
+      "path": "newsletter/announcing-anima-house-the-womens.md",
+      "sha256": "fef11a725d16926e43444c7f095ca58c8eecd16b7a57d852a896475066e1bd2d",
+      "bytes": 6529
+    },
+    {
+      "path": "newsletter/announcing-the-community-builders.md",
+      "sha256": "bc8d97974f0300fef12850423be329f214e3f38975a810694545a2529e73274d",
+      "bytes": 8601
+    },
+    {
+      "path": "newsletter/announcing-the-first-batch-of-residencies.md",
+      "sha256": "3b1eeba8521f7db39dc2a47ab33b30e6789234bf59b084cfafc7b38be90bfed4",
+      "bytes": 18521
+    },
+    {
+      "path": "newsletter/announcing-the-inflection-fellowship.md",
+      "sha256": "f88562b51ff296b483e4d7345c8b916a5cdbbd6a22648f0f16c36c4114a1f711",
+      "bytes": 9933
+    },
+    {
+      "path": "newsletter/bring-your-family-to-edge-city-india.md",
+      "sha256": "3c4a3f4da06c6c54b5cb0750d715dcbc67ee8f69b6b40d66a5d3651884e43fb3",
+      "bytes": 9811
+    },
+    {
+      "path": "newsletter/build3-and-edge-city-are-bringing.md",
+      "sha256": "01fb5d2082f27d33126390545ce40418fe7cec620bbad02a90124e7772814a18",
+      "bytes": 8422
+    },
+    {
+      "path": "newsletter/creative-residency-edge-city-modern.md",
+      "sha256": "502fc3ad5fb69af183bf35d4833419b8788646f3c658a0e9204286a666c7cb82",
+      "bytes": 6240
+    },
+    {
+      "path": "newsletter/getting-to-edge-city-india.md",
+      "sha256": "0df04d6b4e20dfd2a89640bbd9e275a236af7f09119b0e7ed209c46dd29d7b84",
+      "bytes": 10780
+    },
+    {
+      "path": "newsletter/health-and-wellbeing-at-edge-city.md",
+      "sha256": "fba9cc63826d613b75cbcdf02643685c3b07cda0e40e6f33aaa95131d4f3cf4b",
+      "bytes": 8388
+    },
+    {
+      "path": "newsletter/housing-for-edge-city-india.md",
+      "sha256": "4b9c4d1378dbf6023e5757be729e4a2ed7ccac7076dd79512f188d67fec4b19a",
+      "bytes": 6732
+    },
+    {
+      "path": "newsletter/meet-the-inflection-fellowship-cohort.md",
+      "sha256": "805b2d61116652755ba104ec8039d0ae06021c477f626c22aee02db544c4d9ba",
+      "bytes": 9566
+    },
+    {
+      "path": "newsletter/programming-preview-for-edge-city.md",
+      "sha256": "32ea847d57cae82e5657b28c78360f953fa64657674d5f282d7ba0a4e33f940b",
+      "bytes": 14266
+    },
+    {
+      "path": "newsletter/the-future-arrives-locally.md",
+      "sha256": "39920ba5de11ea497d539f9439a56aca904822dc5c9057b8435e2792a1aac944",
+      "bytes": 6482
+    },
+    {
+      "path": "newsletter/the-road-to-edge-backroad-farm-caravan.md",
+      "sha256": "a6d055ed1571a263dbb44525dcd1fc925f2215eb70d44fe2e562f24082b2befe",
+      "bytes": 9898
+    },
+    {
+      "path": "newsletter/tickets-for-edge-city-india-2026.md",
+      "sha256": "6250010b3a63f80528c50af20f038e289feb3024a7106d571d242417818ebc1b",
+      "bytes": 8712
+    },
+    {
+      "path": "newsletter/volunteer-at-edge-city-india-2026.md",
+      "sha256": "058f7091ac703bf9c3a05f50f7d8831c5712d2bf0ba08824aba569dd4809ec6a",
+      "bytes": 4751
+    },
+    {
+      "path": "newsletter/welcome-to-edge-city-india.md",
+      "sha256": "7f364d4c06ffb406768b3c83239ffd7c1cce018488353fbf7ef8fdf7caff63e5",
+      "bytes": 15333
+    },
+    {
+      "path": "residencies/community-builders.md",
+      "sha256": "5ecf112b29ed0c04d9371d438e7c2b699d1d96feace1633d663c942e480231c7",
+      "bytes": 9167
+    },
+    {
+      "path": "residencies/creator-residency.md",
+      "sha256": "6e85d67cf45d51f07bd84212437bb29faa37e3b30504c4a07260148dad859743",
+      "bytes": 6951
+    },
+    {
+      "path": "website-content.md",
+      "sha256": "06dfe889122fcedd0e5249768dfff26824734e928715febcf328ebb0623d994c",
+      "bytes": 52736
+    },
+    {
+      "path": "website/about.md",
+      "sha256": "b0052f94bae2a48d6d7a3d81609e3b77b2180830ca30e8582e8807a09f49a620",
+      "bytes": 13981
+    },
+    {
+      "path": "wiki-content.md",
+      "sha256": "53bb5ca18ccaa950adde07dcf72732e6ff4b96fa6640c439d8a9d2cf195c7076",
+      "bytes": 18468
+    }
+  ]
+}

@@ -6,7 +6,8 @@
  *
  *   - `SOUL.md` → `$HERMES_HOME/SOUL.md` (identity; overwrites generic Hermes soul)
  *   - `AGENTS.md`, `USER.md` → `$HERMES_HOME/`
- *   - Edge skill bundles → `$HERMES_HOME/skills/{index-network,edgeos,edge-esmeralda,geo-esmeralda}/`
+ *   - Edge skill bundles → `$HERMES_HOME/skills/{index-network,edgeos,edge-india,edge-esmeralda,geo-esmeralda,…}/`
+ *     (`skill_copy.ts`; `edge-india/references` is replaced, not merged, so upstream deletions land)
  *   - `terminal.cwd` in config.yaml → `$HERMES_HOME`
  *   - Telegram display: no reasoning, one quiet progress message per reply (`display_defaults.ts`; `AV_DISPLAY_DEFAULTS=0` skips)
  *   - STT enabled with Groq Whisper so voice notes are auto-transcribed
@@ -33,7 +34,6 @@
 
 import {
   existsSync,
-  mkdirSync,
   copyFileSync,
   readdirSync,
   rmSync,
@@ -61,6 +61,7 @@ import {
 } from "./config";
 import { configureTelegramDisplay } from "./display_defaults";
 import { copyPluginTree } from "./plugin_copy";
+import { copySkillBundles } from "./skill_copy";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
 import {
   EDGE_SKILL_NAMES,
@@ -168,25 +169,6 @@ function copyWorkspaceFiles(wipeUser: boolean): void {
   }
 }
 
-function copyTree(sourceDir: string, targetDir: string): number {
-  if (!existsSync(targetDir)) mkdirSync(targetDir, { recursive: true });
-
-  let copied = 0;
-  for (const entry of readdirSync(sourceDir)) {
-    const sourcePath = join(sourceDir, entry);
-    const targetPath = join(targetDir, entry);
-    const stat = statSync(sourcePath);
-
-    if (stat.isDirectory()) {
-      copied += copyTree(sourcePath, targetPath);
-    } else {
-      copyFileSync(sourcePath, targetPath);
-      copied++;
-    }
-  }
-  return copied;
-}
-
 function copyPluginFiles(): void {
   const target = join(hermesHome(), "plugins");
   if (!existsSync(SOURCE_PLUGINS)) return;
@@ -201,15 +183,7 @@ function copyPluginFiles(): void {
 
 function copySkillFiles(): void {
   const targetSkillsRoot = skillsDir();
-  if (!existsSync(targetSkillsRoot)) mkdirSync(targetSkillsRoot, { recursive: true });
-
-  let copied = 0;
-  for (const name of EDGE_SKILL_NAMES) {
-    const sourcePath = join(SOURCE_SKILLS, name);
-    if (!existsSync(sourcePath)) continue;
-    copied += copyTree(sourcePath, join(targetSkillsRoot, name));
-  }
-
+  const copied = copySkillBundles(SOURCE_SKILLS, targetSkillsRoot);
   if (copied > 0) {
     console.log(`→ staged ${copied} files into ${targetSkillsRoot}/{${EDGE_SKILL_NAMES.join(",")}}`);
   }

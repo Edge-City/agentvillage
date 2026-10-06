@@ -222,6 +222,25 @@ on it:
 12. Roll's dry run takes the tag (annotated, on `main`); then continue with
     the staged procedure.
 
+## India reference content (skills/edge-india)
+
+The village knowledge skill ships a snapshot of the public India wiki, Substack
+and website in `skills/edge-india/references/`. The sync workflow
+(`.github/workflows/sync-edge-india-references.yml`) keeps that snapshot on
+`main` current with the upstream indexer (`aromeoes/edge-agent-skill`), every
+15 minutes, refusing incomplete trees and any tree the agents' knowledge sync
+would refuse. That directory on `main` is the mirror the `Edge — knowledge
+sync` job pulls ("Edge India knowledge" below), so this is the one part of
+agent content that does not wait for a roll: the job copies it into
+`$HERMES_HOME/knowledge/edge-india/` every 30 minutes, verified against
+`SNAPSHOT.json`. The skill's `refs.ts` reads the newer of that copy and the
+snapshot installed at the roll (the offline fallback). **Its own live check,
+`AV_INDIA_REFS_LIVE`, is off by default: the cron supplies freshness and a
+resident's turn never fetches.** `AV_INDIA_REFS_LIVE=1` in one tenant's `.env`
+opts that agent in (a diagnostic, not a rollout setting);
+`skills/edge-india/README.md` has the full freshness path.
+Rolling a tag that adds or changes this skill touches no seed files.
+
 ## The proactive jobs (DATA-314)
 
 Six scheduled jobs reach a resident or prepare for one. Each is triggered by a
@@ -409,22 +428,47 @@ harmless to the older release.
 The agent answers Edge City India background questions (housing, getting
 there, visas, tickets, meals, health and safety, residencies, themes) from a
 local copy of the published guide, never by fetching inside a resident's turn.
-The guide is Fran's indexer output (the wiki, the website and the Substack
-newsletter in Markdown), published in `p2p-lanes/edge-agent-skill`,
-directory `references/`. Agents never read it from there by default: the
-built-in default is **Edge City's mirror in this repo**,
+The guide is the upstream indexer's output (the wiki, the website and the
+Substack newsletter in Markdown), published in `aromeoes/edge-agent-skill`
+(branch `main`), directory `references/`. Agents never read it from there by
+default: the built-in default is **Edge City's mirror in this repo**,
 `skills/edge-india/references/` (`https://raw.githubusercontent.com/Edge-City/agentvillage/main/skills/edge-india/references/manifest.json`),
 kept by `sync-edge-india-references.yml` (#203), which copies complete
-snapshots only and writes `SNAPSHOT.json` with each file's sha256. A push to
-upstream would otherwise reach every agent within one run with no human in
-the loop; the mirror sits under our org's audit log, and its sync workflow is
-the kill switch (disable it, or revert the mirror). Neither switch removes a
+snapshots only and writes `SNAPSHOT.json` with each file's sha256 and the
+upstream commit it copied. The mirror is not reviewed by a person: the
+workflow forwards upstream `main` every 15 minutes. What it adds is its
+checks (complete trees, the caps this job and `refs.ts` apply, manifest
+links only to the guide's own sites), a commit per change under our org's
+audit log, and a kill switch (disable the workflow, or revert the mirror). A
+push to upstream read directly would reach every agent within one run with
+none of these.
+
+**Trust boundary.** The decision: Carter's choice of upstream (GRANT
+2026-10-06 09:06Z, "the mirror follows `aromeoes/edge-agent-skill`"). The
+mirror follows `aromeoes/edge-agent-skill@main`: a personal account's branch,
+unpinned, published automatically every 15 minutes by the sync workflow, with
+no person reviewing it. What protects the fleet: the sync's checks (sizes,
+names, encoding, HTML, complete India-only trees, manifest links only to the
+guide's hosts) and the upstream commit it records in `SNAPSHOT.json` per
+publish (it refuses to publish when that commit cannot be read); this job's
+verification of every file against the mirror's `SNAPSHOT.json`; the stored
+record `refs.ts` checks before it reads the local copy (regular files, UTF-8,
+sha256 per file); `refs.ts`'s treat_as frame with a per-run token; and the
+host allowlist on manifest urls. What is **not** protected: the content
+itself. A sentence changed upstream (a price, a date, a contact, a false
+claim) reaches residents as information, typically within the hour (the
+15-minute sync, the CDN's 5-minute cache, the job's 30-minute period), cited
+with its source link. Neither switch removes a
 copy already on disk: disabling the workflow, or writing a tenant's key empty,
 leaves that tenant's last synced set in place; only a revert of the mirror
 pushes a clean copy out, within about 35 minutes (one 30-minute period plus
-the CDN's 5-minute cache). Fran's upstream stays on
-the allowlist as an operator override only. Until #203 merges, the mirror
-has nothing to serve and every run fails `http-404` (exit 1, local notice).
+the CDN's 5-minute cache). The upstream (`aromeoes/edge-agent-skill`) stays on
+the allowlist as an operator override only. The mirror serves from the merge
+of #203 (superseded by the rc15 merge PR); before that every run failed
+`http-404` (exit 1, local notice). The mirror's sync refuses any tree this job
+would refuse (its path rule, document count and text check are imported from
+`knowledge-sync.ts`), and `skills/edge-india/scripts/tests/mirror-consistency.test.ts`
+runs this job against the committed tree at the default URL.
 
 **The job.** `Edge — knowledge sync`, installed and reconciled with the
 Index jobs (same list, `install/install_index.ts`): every 30 minutes on a
@@ -437,7 +481,7 @@ others, so a resident's or admin's pause and schedule are kept. It runs
 - fetches the manifest, `index.md` beside it and every file the manifest lists
   (relative `.md` paths only), all from the manifest's own directory;
 - accepts only https, no credentials, port, query or fragment, on
-  `raw.githubusercontent.com` under `/p2p-lanes/edge-agent-skill/` or
+  `raw.githubusercontent.com` under `/aromeoes/edge-agent-skill/` or
   `/Edge-City/`, or on a host listed in `KNOWLEDGE_SNAPSHOT_HOSTS`
   (comma-separated host names; it never widens `raw.githubusercontent.com`);
   a redirect is followed (at most 3) only to a URL that passes the same check;
@@ -447,11 +491,18 @@ others, so a resident's or admin's pause and schedule are kept. It runs
 - writes the whole set into `$HERMES_HOME/knowledge/edge-india/` (with
   `_sync.json`: source, manifest sha256, ETag, files, each document's manifest
   `hash` as fetched, `fetched_at` = when this content was written,
-  `checked_at` = the last run that confirmed it current) by building it in a
+  `checked_at` = the last run that confirmed it current; and `SNAPSHOT.json`,
+  the record it verified the set against: the mirror's own, or, from a source
+  that serves none, one written from the fetched bytes) by building it in a
   temp directory and renaming it in; the set it replaces is kept as
   `$HERMES_HOME/knowledge-prev/edge-india/`, outside `knowledge/`. Any failure
   leaves the current set as it was. An unchanged manifest (304 to the stored
-  ETag, or the same sha256) rewrites only `checked_at`. The skill warns that
+  ETag, or the same sha256) rewrites only `checked_at`, and only while the set
+  on disk is intact (every file a regular file matching the stored
+  `SNAPSHOT.json`); a changed, symlinked or missing file, or a set with no
+  stored record, is fetched again in full. `refs.ts` reads the copy only while
+  it passes that check (and is valid UTF-8), and otherwise reads the installed
+  snapshot and says why in `refs.ts status`. The skill warns that
   the guide may be out of date when `checked_at` is over a day old;
 - treats a mixed snapshot (one URL still served from an older commit by the
   CDN, `max-age=300`) as `incomplete`: nothing is written and the ETag and
@@ -476,7 +527,7 @@ others, so a resident's or admin's pause and schedule are kept. It runs
 
 | Variable | Meaning |
 |---|---|
-| `KNOWLEDGE_SNAPSHOT_URL` | The snapshot's manifest. No line: the built-in default, the Edge City mirror `https://raw.githubusercontent.com/Edge-City/agentvillage/main/skills/edge-india/references/manifest.json`. Fran's upstream (`https://raw.githubusercontent.com/p2p-lanes/edge-agent-skill/main/references/manifest.json`) is an operator override only. Written empty (`KNOWLEDGE_SNAPSHOT_URL=`): switched off; every run is `unconfigured`, exits 0 and writes no knowledge file. Any other value must pass the allowlist above. |
+| `KNOWLEDGE_SNAPSHOT_URL` | The snapshot's manifest. No line: the built-in default, the Edge City mirror `https://raw.githubusercontent.com/Edge-City/agentvillage/main/skills/edge-india/references/manifest.json`. The upstream (`https://raw.githubusercontent.com/aromeoes/edge-agent-skill/main/references/manifest.json`) is an operator override only. Written empty (`KNOWLEDGE_SNAPSHOT_URL=`): switched off; every run is `unconfigured`, exits 0 and writes no knowledge file. Any other value must pass the allowlist above. |
 | `KNOWLEDGE_SNAPSHOT_HOSTS` | Optional. Extra host names a snapshot may be served from. No line: none. |
 
 The script reads both from `$HERMES_HOME/.env` (the file the control plane
@@ -499,8 +550,10 @@ and an override or a switch-off is a line set by hand per tenant.
 the agent to read `knowledge/edge-india/index.md` and the files it links,
 never to fetch, to cite each fact's source link as the document carries it,
 to prefer newer dated items, and to take times, session venues, attendees and
-RSVPs from `edgeos` only. With no local copy it says so and answers from what
-it knows, without fetching. `workspace/AGENTS.md` routes India background to
+RSVPs from `edgeos` only. Its `refs.ts` searches and reads the newer of
+`knowledge/edge-india/` (age: `checked_at`) and the installed snapshot, and
+never fetches unless `AV_INDIA_REFS_LIVE=1` (off by default). With no local
+copy it says so and answers from what it knows, without fetching. `workspace/AGENTS.md` routes India background to
 it.
 
 **After a roll, on a canary.** With no `KNOWLEDGE_SNAPSHOT_URL` line (the
