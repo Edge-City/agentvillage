@@ -25,6 +25,13 @@
  *     negotiation summary over 14:00–14:24, and evening questions over
  *     19:00–19:24. Opportunity drops spread over 12:00–12:24 and
  *     17:00–17:24.
+ *     K1: the Edge India knowledge sync (`Edge — knowledge sync`, every 30
+ *     minutes, a per-tenant offset in the first 30; no_agent, no delivery;
+ *     --knowledge-sync-cron / KNOWLEDGE_SYNC_CRON) copies the snapshot named
+ *     by KNOWLEDGE_SNAPSHOT_URL (default: Edge City's mirror,
+ *     skills/edge-india/references/ in this repo) to
+ *     `$HERMES_HOME/knowledge/edge-india/`
+ *     (skills/edge-india/scripts/knowledge-sync.ts).
  *     New installs create enabled crons. Reconcile edits each existing job in
  *     place with one `hermes cron edit <id>` for its shape (prompt, script,
  *     agent mode, failure target), which keeps its id, schedule, pause state
@@ -239,7 +246,8 @@ export interface DigestCronSpec {
   deliver: boolean;
   /**
    * `--no-agent`: Hermes runs the script and delivers its stdout with no
-   * model and no session. Only the silent prefetch may set it (DATA-314).
+   * model and no session. Only a silent job with no delivery target may set
+   * it: the 02:00 prefetch (DATA-314) and the knowledge sync (K1).
    */
   noAgent?: boolean;
   /** `--failure-deliver local`: a failure notice stays out of the resident's chat. */
@@ -289,6 +297,19 @@ function proactiveScript(action: string): Pick<DigestCronSpec, "scriptFile" | "s
  */
 export const PREFETCH_PROMPT =
   "Overnight prefetch of the morning brief's context. No model takes part in this job: the script Hermes starts before it is the whole job, and it delivers nothing. If you are a model reading this, reply exactly `[SILENT]`.";
+
+/**
+ * K1: the Edge India knowledge sync (no_agent, every 30 minutes): its shim runs
+ * `skills/edge-india/scripts/knowledge-sync.ts`, which copies the snapshot
+ * named by KNOWLEDGE_SNAPSHOT_URL into `$HERMES_HOME/knowledge/edge-india/`.
+ * It prints only the wake line `{"wakeAgent": false}` and has no delivery
+ * target, so it never reaches the resident.
+ */
+export const KNOWLEDGE_SYNC_JOB = `${CRON_NAME_PREFIX} knowledge sync`;
+export const KNOWLEDGE_SYNC_SHIM = "edge-india/scripts/shims/agentvillage_knowledge_sync.sh";
+/** Its stored prompt: no model reads it while the job is no_agent; one that does replies `[SILENT]`. */
+export const KNOWLEDGE_SYNC_PROMPT =
+  "Edge India knowledge sync. No model takes part in this job: the script Hermes starts is the whole job, and it delivers nothing. If you are a model reading this, reply exactly `[SILENT]`.";
 
 export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
   {
@@ -381,6 +402,22 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
     overrideFlag: "--token-usage-audit-cron",
     overrideEnv: "TOKEN_USAGE_AUDIT_CRON",
   },
+  {
+    // K1: the Edge India snapshot onto disk for the edge-india skill, every
+    // 30 minutes (staggered per tenant). No model, no delivery; a failure
+    // goes to the failure target, local.
+    schedule: "*/30 * * * *",
+    staggerWindowMinutes: 30,
+    promptBody: KNOWLEDGE_SYNC_PROMPT,
+    scriptFile: KNOWLEDGE_SYNC_SHIM,
+    scriptInstallName: "agentvillage_knowledge_sync.sh",
+    noAgent: true,
+    failureDeliver: "local",
+    name: KNOWLEDGE_SYNC_JOB,
+    deliver: false,
+    overrideFlag: "--knowledge-sync-cron",
+    overrideEnv: "KNOWLEDGE_SYNC_CRON",
+  },
 ];
 
 /** A template job's Hermes name. Reconcile keeps a job by this name while its template is current. */
@@ -445,8 +482,12 @@ export function fnv1a(input: string): number {
 export function staggeredSchedule(spec: DigestCronSpec, seed: string): string {
   const fields = spec.schedule.trim().split(/\s+/);
   const minute = fnv1a(`${seed}:${spec.name}`) % Math.max(1, spec.staggerWindowMinutes);
-  const minuteField = fields[0] === "*/30" && spec.staggerWindowMinutes <= 30
-    ? `${minute},${minute + 30}`
+  // An every-N-minutes default (`*/30`, `*/15`; N divides 60) keeps its rate:
+  // the offset minute and every N after it within the hour.
+  const step = /^\*\/(\d+)$/.exec(fields[0]);
+  const every = step ? Number(step[1]) : 0;
+  const minuteField = every > 0 && 60 % every === 0 && spec.staggerWindowMinutes <= every
+    ? Array.from({ length: 60 / every }, (_, i) => minute + i * every).join(",")
     : String(minute);
   return [minuteField, ...fields.slice(1)].join(" ");
 }
@@ -650,10 +691,16 @@ export function writeInstalledJobIds(home: string, ids: string[]): void {
  * The order jobs are reconciled in: every job before the no_agent prefetch.
  * The bad mix is the prefetch edited and the morning brief not (the old brief
  * prompt then finds nothing staged and no brief goes out), so the prefetch
- * goes last: a run cut short leaves the old prefetch, which is harmless.
+ * goes last: a run cut short leaves the old prefetch, which is harmless. The
+ * other no_agent job (the knowledge sync, K1) goes just before it.
  */
 export function reconcileOrder(specs: DigestCronSpec[]): DigestCronSpec[] {
-  return [...specs.filter((spec) => !spec.noAgent), ...specs.filter((spec) => spec.noAgent)];
+  const prefetch = (spec: DigestCronSpec): boolean => spec.scriptInstallName === "agentvillage_proactive_prefetch.sh";
+  return [
+    ...specs.filter((spec) => !spec.noAgent),
+    ...specs.filter((spec) => spec.noAgent && !prefetch(spec)),
+    ...specs.filter((spec) => spec.noAgent && prefetch(spec)),
+  ];
 }
 
 /**

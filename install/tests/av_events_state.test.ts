@@ -12,8 +12,11 @@ const SEED = join(import.meta.dir, "..", "..", "plugins", "av-events", "cron_job
 test("the av-events cron job-name seed is exactly the installer's cron names", () => {
   // cron.run reports a job's name only if it is in this seed; a drift either
   // way loses a name or lets through one the installer never creates.
-  const seed = JSON.parse(readFileSync(SEED, "utf8")) as { names: string[] };
+  const seed = JSON.parse(readFileSync(SEED, "utf8")) as { version: string; names: string[] };
+  expect(seed.version).toBe("cron_job_names_v2");
   expect([...seed.names].sort()).toEqual(DIGEST_CRON_SPECS.map((spec) => spec.name).sort());
+  // K1: the knowledge sync is named (seed v2), so its cron.run rows count as installer jobs.
+  expect(seed.names).toContain("Edge — knowledge sync");
 });
 
 test("reset --wipe-user removes av-events state (snapshot state included) and the memory tool's files", () => {

@@ -236,7 +236,7 @@ arguments cannot break a job.
 
 | Job | Time (Hermes's zone, which must be IST; staggered) | Action | What the model is given |
 |---|---|---|---|
-| Edge — digest prepare | 02:00 | `prefetch` | Nothing: the one `no_agent` job. It writes the brief's context to `av-events/proactive/brief-context.json` and is always silent. |
+| Edge — digest prepare | 02:00 | `prefetch` | Nothing: the one `no_agent` job of the six (the knowledge sync, "Edge India knowledge" below, is the other `no_agent` job). It writes the brief's context to `av-events/proactive/brief-context.json` and is always silent. |
 | Edge — daily digest | 08:00 | `brief` | Dates, weather, organiser announcements, today's schedule facts, the resident's interests and notes, the count of eligible new matches, up to three cleaned names, the Connections link, the count of things waiting in their approvals. |
 | Edge — opportunity drop (midday), (evening) | 12:00, 17:00 | `drop-midday`, `drop-evening` | One person: cleaned name, profile and message links. |
 | Edge — negotiation summary | 14:00 | `negotiation` | The resident's own signals; cleaned names with their links. |
@@ -403,6 +403,119 @@ The `--failure-deliver local` setting, the shims in `$HERMES_HOME/scripts/`,
 `av-events/proactive/`, the `timezone` and `cron.script_timeout_seconds` keys,
 and the `proactiveRuns` key in the state file are left behind; they are
 harmless to the older release.
+
+## Edge India knowledge (K1)
+
+The agent answers Edge City India background questions (housing, getting
+there, visas, tickets, meals, health and safety, residencies, themes) from a
+local copy of the published guide, never by fetching inside a resident's turn.
+The guide is Fran's indexer output (the wiki, the website and the Substack
+newsletter in Markdown), published in `p2p-lanes/edge-agent-skill`,
+directory `references/`. Agents never read it from there by default: the
+built-in default is **Edge City's mirror in this repo**,
+`skills/edge-india/references/` (`https://raw.githubusercontent.com/Edge-City/agentvillage/main/skills/edge-india/references/manifest.json`),
+kept by `sync-edge-india-references.yml` (#203), which copies complete
+snapshots only and writes `SNAPSHOT.json` with each file's sha256. A push to
+upstream would otherwise reach every agent within one run with no human in
+the loop; the mirror sits under our org's audit log, and its sync workflow is
+the kill switch (disable it, or revert the mirror). Neither switch removes a
+copy already on disk: disabling the workflow, or writing a tenant's key empty,
+leaves that tenant's last synced set in place; only a revert of the mirror
+pushes a clean copy out, within about 35 minutes (one 30-minute period plus
+the CDN's 5-minute cache). Fran's upstream stays on
+the allowlist as an operator override only. Until #203 merges, the mirror
+has nothing to serve and every run fails `http-404` (exit 1, local notice).
+
+**The job.** `Edge — knowledge sync`, installed and reconciled with the
+Index jobs (same list, `install/install_index.ts`): every 30 minutes on a
+per-tenant offset in the first 30 (`m,m+30 * * * *`; `KNOWLEDGE_SYNC_CRON` /
+`--knowledge-sync-cron` override it), `no_agent` (no model, no tokens), no
+delivery target, failures to `local`. A roll edits it in place like the
+others, so a resident's or admin's pause and schedule are kept. It runs
+`$HERMES_HOME/scripts/agentvillage_knowledge_sync.sh`, which runs
+`skills/edge-india/scripts/knowledge-sync.ts`:
+- fetches the manifest, `index.md` beside it and every file the manifest lists
+  (relative `.md` paths only), all from the manifest's own directory;
+- accepts only https, no credentials, port, query or fragment, on
+  `raw.githubusercontent.com` under `/p2p-lanes/edge-agent-skill/` or
+  `/Edge-City/`, or on a host listed in `KNOWLEDGE_SNAPSHOT_HOSTS`
+  (comma-separated host names; it never widens `raw.githubusercontent.com`);
+  a redirect is followed (at most 3) only to a URL that passes the same check;
+- requires a text type (`text/plain` or `text/markdown`; `application/json` too
+  for the manifest), UTF-8 with no NUL, and no HTML page; 2 MB a file, 20 MB in
+  all, 20 s a fetch, 90 s a run;
+- writes the whole set into `$HERMES_HOME/knowledge/edge-india/` (with
+  `_sync.json`: source, manifest sha256, ETag, files, each document's manifest
+  `hash` as fetched, `fetched_at` = when this content was written,
+  `checked_at` = the last run that confirmed it current) by building it in a
+  temp directory and renaming it in; the set it replaces is kept as
+  `$HERMES_HOME/knowledge-prev/edge-india/`, outside `knowledge/`. Any failure
+  leaves the current set as it was. An unchanged manifest (304 to the stored
+  ETag, or the same sha256) rewrites only `checked_at`. The skill warns that
+  the guide may be out of date when `checked_at` is over a day old;
+- treats a mixed snapshot (one URL still served from an older commit by the
+  CDN, `max-age=300`) as `incomplete`: nothing is written and the ETag and
+  sha256 are not advanced, so the next run fetches it all again. When the
+  manifest's directory serves `SNAPSHOT.json` (the mirror does), the manifest
+  and every fetched file must match its sha256 (`snapshot-mismatch`; a
+  malformed `SNAPSHOT.json` fails the run as `bad-snapshot`). Without one, the
+  fallback: a document whose manifest `hash` changed but whose URL still
+  serves exactly the stored bytes (`stale-document`);
+- logs one line per run to `$HERMES_HOME/av-events/knowledge/sync.jsonl`:
+  `{"v":1,"event":"knowledge_sync","status":"ok|unchanged|failed|incomplete|unconfigured|skipped","reason":"<code>","files":n,"bytes":n,"sha256":"<manifest sha256>","fetched_at":"<the run's UTC time>"}`,
+  plus `"path"` (the stale document's manifest path) on `incomplete` (codes,
+  counts and that path only; rotated to `.1` at 1 MB), and prints only the
+  wake line `{"wakeAgent": false, ...}`, so Hermes delivers nothing. A
+  `failed` or `incomplete` run exits 1: Hermes records it, and its notice
+  stays local. A run that finds another one holding the lock (a manual
+  `hermes cron run` overlapping a scheduled one) logs `skipped locked` and
+  exits 0. A run cut off by its 90 s budget logs `budget`; a single fetch
+  past its 20 s logs `timeout`.
+
+**The tenant env.**
+
+| Variable | Meaning |
+|---|---|
+| `KNOWLEDGE_SNAPSHOT_URL` | The snapshot's manifest. No line: the built-in default, the Edge City mirror `https://raw.githubusercontent.com/Edge-City/agentvillage/main/skills/edge-india/references/manifest.json`. Fran's upstream (`https://raw.githubusercontent.com/p2p-lanes/edge-agent-skill/main/references/manifest.json`) is an operator override only. Written empty (`KNOWLEDGE_SNAPSHOT_URL=`): switched off; every run is `unconfigured`, exits 0 and writes no knowledge file. Any other value must pass the allowlist above. |
+| `KNOWLEDGE_SNAPSHOT_HOSTS` | Optional. Extra host names a snapshot may be served from. No line: none. |
+
+The script reads both from `$HERMES_HOME/.env` (the file the control plane
+writes) on every run, so a changed line takes effect at the next run with no
+gateway restart. When `.env` exists it is the only source: a key it does not
+carry means the default, whatever the process environment holds (a job's
+environment is the gateway's from its start, so a deleted line would
+otherwise live on until a restart). The process environment counts only when
+there is no `.env` at all. **To switch the sync off, write the key empty
+(`KNOWLEDGE_SNAPSHOT_URL=`); deleting the line brings back the default.**
+The control plane does not write either key yet: its env write
+(`writeIngestEnv` in `control-plane/src/tenants.js`) carries a fixed key set.
+Follow-up for the control-plane repo: add `KNOWLEDGE_SNAPSHOT_URL` (and
+`KNOWLEDGE_SNAPSHOT_HOSTS` when set) from a control-plane variable of the same
+name to that write; to switch the sync off, write the key empty, and leave
+the line out only to mean the default. Until it ships, the default applies
+and an override or a switch-off is a line set by hand per tenant.
+
+**The skill.** `skills/edge-india/SKILL.md` (skill `edge-india-2026`) tells
+the agent to read `knowledge/edge-india/index.md` and the files it links,
+never to fetch, to cite each fact's source link as the document carries it,
+to prefer newer dated items, and to take times, session venues, attendees and
+RSVPs from `edgeos` only. With no local copy it says so and answers from what
+it knows, without fetching. `workspace/AGENTS.md` routes India background to
+it.
+
+**After a roll, on a canary.** With no `KNOWLEDGE_SNAPSHOT_URL` line (the
+default) or one set, force a run
+with `hermes cron run <id>` (the knowledge sync's id from `hermes cron list`):
+a `status: "ok"` line in `av-events/knowledge/sync.jsonl` and
+`knowledge/edge-india/index.md` present; a second forced run logs
+`unchanged`, and `checked_at` in `knowledge/edge-india/_sync.json` moves to
+that run's time. Nothing reaches the resident's chat. `cron.run` events for
+this job carry `job_name` `Edge — knowledge sync`: the name is in the
+av-events seed `cron_job_names.json` from `cron_job_names_v2`. That is a
+seed change: roll the release that first carries it with
+`allow_seed_change` ticked, and only after the data pipeline's release
+carries `cron_job_names_v2` (until then ingest quarantines the name as
+`vocabulary_unknown`).
 
 ## The data pipeline
 

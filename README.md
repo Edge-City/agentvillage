@@ -260,6 +260,9 @@ DIGEST_PREPARE_CRON="0 3 * * *" DIGEST_SEND_CRON="0 9 * * *" \
 | Negotiation summary | `--negotiation-summary-cron "<expr>"` | `NEGOTIATION_SUMMARY_CRON` | `0 14 * * *` |
 | Evening questions | `--evening-questions-cron "<expr>"` | `EVENING_QUESTIONS_CRON` | `0 19 * * *` |
 | Token usage audit | `--token-usage-audit-cron "<expr>"` | `TOKEN_USAGE_AUDIT_CRON` | disabled |
+| Edge India knowledge sync (no model) | `--knowledge-sync-cron "<expr>"` | `KNOWLEDGE_SYNC_CRON` | `*/30 * * * *` (a per-tenant offset in the first 30 minutes) |
+
+The Edge India knowledge sync (`Edge — knowledge sync`) is a `--no-agent` job with no delivery target: its script copies the published Edge City India snapshot named by `KNOWLEDGE_SNAPSHOT_URL` (default: Edge City's mirror, `skills/edge-india/references/manifest.json` in this repo) to `$HERMES_HOME/knowledge/edge-india/`, which the `edge-india` skill reads; with the key written empty (`KNOWLEDGE_SNAPSHOT_URL=`) it does nothing (`docs/deployment.md`, "Edge India knowledge").
 
 The token usage audit cron is disabled by default. To enable it for an install, pass `--token-usage-audit-cron "0 9 * * *"` or set `TOKEN_USAGE_AUDIT_CRON` to a full 5-field cron expression. To remove an existing managed audit cron, rerun the installer with no audit schedule, pass `--skip-token-usage-audit-cron`, or set `TOKEN_USAGE_AUDIT_CRON=off`.
 
@@ -445,6 +448,7 @@ Time-sensitive and background prompts run as **Hermes/OpenClaw cron jobs**. The 
 | `HEARTBEAT.md` | Generic heartbeat tick rules + the cross-backend `memory-curation` task. The Index heartbeat prompt has been removed. |
 | `skills/index-network/SKILL.md` | Index Network skill bundle entry point. Registered with OpenClaw on install; gates on `mcp.servers.index`. Body points at the bundle's sibling reference files. |
 | `skills/edgeos/SKILL.md` | EdgeOS-API skill: events, RSVPs, venues, attendee directory, own profile. Popup-generic; no Edge City India popup id is configured yet. Loaded by OpenClaw alongside index-network. Vendored from `Edge-City/agentvillage-skills`. |
+| `skills/edge-india/SKILL.md` | Edge City India background (skill `edge-india-2026`): reads the local snapshot copy in `knowledge/edge-india/` that the `Edge — knowledge sync` job keeps current, never fetches; the schedule, attendees and RSVPs stay with `edgeos`. |
 | `skills/geo-esmeralda/SKILL.md` | Geo knowledge graph skill: community content, relations, ontology, and attendee-authored writes through the Geo CLI package. |
 
 ## Configuration guide
