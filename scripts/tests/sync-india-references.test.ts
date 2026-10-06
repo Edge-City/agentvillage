@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -190,4 +190,49 @@ test("the sync never writes into the Esmeralda references, and the old Esmeralda
   // The frozen Esmeralda snapshot is still Esmeralda content.
   const esmeraldaWiki = readFileSync(join(REPO_ROOT, "skills", "edge-esmeralda", "references", "wiki-content.md"), "utf8");
   expect(esmeraldaWiki.split("\n", 1)[0]).toContain("Edge Esmeralda 2026");
+});
+
+function withDoc(root: string, doc: { path: string; body: string | Buffer }): string {
+  const refs = join(root, "references");
+  mkdirSync(dirname(join(refs, doc.path)), { recursive: true });
+  writeFileSync(join(refs, doc.path), doc.body);
+  const manifestPath = join(refs, "manifest.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  manifest.documents.push({ path: doc.path, title: doc.path, url: `https://example.org/${doc.path}`, kind: "newsletter" });
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  return root;
+}
+
+test("a tree the agents' knowledge-sync job would refuse is refused here, and nothing is published", () => {
+  const dest = target();
+  // A name the job's documentPathValid refuses although it is lowercase: over 121 characters, or a "..".
+  expectRefusal("unsafe_path", () => syncReferences({ source: withDoc(upstream(BASE), { path: `newsletter/${"a".repeat(130)}.md`, body: "# Long\n" }), target: dest }));
+  expectRefusal("unsafe_path", () => syncReferences({ source: withDoc(upstream(BASE), { path: "newsletter/a..b.md", body: "# Dots\n" }), target: dest }));
+  // Bytes the job's textOk refuses: invalid UTF-8, a NUL, a Markdown file that opens like an HTML page.
+  expectRefusal("not_text", () => syncReferences({ source: withDoc(upstream(BASE), { path: "newsletter/latin1.md", body: Buffer.from([0x23, 0x20, 0xe9, 0x0a]) }), target: dest }));
+  expectRefusal("not_text", () => syncReferences({ source: withDoc(upstream(BASE), { path: "newsletter/nul.md", body: "# a\u0000b\n" }), target: dest }));
+  expectRefusal("not_text", () => syncReferences({ source: withDoc(upstream(BASE), { path: "newsletter/page.md", body: "<!DOCTYPE html><html></html>\n" }), target: dest }));
+  // More documents than the job takes.
+  const many = upstream(BASE);
+  const manifestPath = join(many, "references", "manifest.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  for (let i = 0; i < 500; i++) manifest.documents.push({ path: `newsletter/n${i}.md` });
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  expectRefusal("too_many_documents", () => syncReferences({ source: many, target: dest }));
+  expect(existsSync(dest)).toBe(false);
+});
+
+test("the sync writes only under its target: no staging or retired copy survives a run, refused or not", () => {
+  const dest = target();
+  const parent = dirname(dest);
+  syncReferences({ source: upstream(BASE), target: dest });
+  expect(readdirSync(parent)).toEqual(["references"]);
+  syncReferences({ source: upstream([...BASE.slice(0, 4)]), target: dest });
+  expect(readdirSync(parent)).toEqual(["references"]);
+  expectRefusal("not_text", () => syncReferences({ source: withDoc(upstream(BASE), { path: "newsletter/nul.md", body: "# a\u0000b\n" }), target: dest }));
+  expect(readdirSync(parent)).toEqual(["references"]);
+  // The workflow stages only the target directory for its commit.
+  const workflow = readFileSync(join(REPO_ROOT, ".github", "workflows", "sync-edge-india-references.yml"), "utf8");
+  const adds = workflow.split("\n").filter((line) => /\bgit add\b/.test(line)).map((line) => line.trim());
+  expect(adds).toEqual(["git add -A skills/edge-india/references/"]);
 });

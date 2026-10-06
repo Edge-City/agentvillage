@@ -228,11 +228,16 @@ The village knowledge skill ships a snapshot of the public India wiki, Substack
 and website in `skills/edge-india/references/`. The sync workflow
 (`.github/workflows/sync-edge-india-references.yml`) keeps that snapshot on
 `main` current with the upstream indexer (`aromeoes/edge-agent-skill`), every
-15 minutes, refusing incomplete trees. This is the one part of agent content
-that does not wait for a roll: when asked a village question, the agent's
-`refs.ts` checks that copy on `main` (at most every 15 minutes, verified, last
-good copy kept on failure). The snapshot installed at a roll is its offline
-fallback. `AV_INDIA_REFS_LIVE=0` in a tenant's `.env` switches the check off;
+15 minutes, refusing incomplete trees and any tree the agents' knowledge sync
+would refuse. That directory on `main` is the mirror the `Edge — knowledge
+sync` job pulls ("Edge India knowledge" below), so this is the one part of
+agent content that does not wait for a roll: the job copies it into
+`$HERMES_HOME/knowledge/edge-india/` every 30 minutes, verified against
+`SNAPSHOT.json`. The skill's `refs.ts` reads the newer of that copy and the
+snapshot installed at the roll (the offline fallback). **Its own live check,
+`AV_INDIA_REFS_LIVE`, is off by default: the cron supplies freshness and a
+resident's turn never fetches.** `AV_INDIA_REFS_LIVE=1` in one tenant's `.env`
+opts that agent in (a diagnostic, not a rollout setting);
 `skills/edge-india/README.md` has the full freshness path.
 Rolling a tag that adds or changes this skill touches no seed files.
 
@@ -437,8 +442,12 @@ copy already on disk: disabling the workflow, or writing a tenant's key empty,
 leaves that tenant's last synced set in place; only a revert of the mirror
 pushes a clean copy out, within about 35 minutes (one 30-minute period plus
 the CDN's 5-minute cache). Fran's upstream stays on
-the allowlist as an operator override only. Until #203 merges, the mirror
-has nothing to serve and every run fails `http-404` (exit 1, local notice).
+the allowlist as an operator override only. The mirror serves from the merge
+of #203 (superseded by the rc15 merge PR); before that every run failed
+`http-404` (exit 1, local notice). The mirror's sync refuses any tree this job
+would refuse (its path rule, document count and text check are imported from
+`knowledge-sync.ts`), and `skills/edge-india/scripts/tests/mirror-consistency.test.ts`
+runs this job against the committed tree at the default URL.
 
 **The job.** `Edge — knowledge sync`, installed and reconciled with the
 Index jobs (same list, `install/install_index.ts`): every 30 minutes on a
@@ -513,8 +522,10 @@ and an override or a switch-off is a line set by hand per tenant.
 the agent to read `knowledge/edge-india/index.md` and the files it links,
 never to fetch, to cite each fact's source link as the document carries it,
 to prefer newer dated items, and to take times, session venues, attendees and
-RSVPs from `edgeos` only. With no local copy it says so and answers from what
-it knows, without fetching. `workspace/AGENTS.md` routes India background to
+RSVPs from `edgeos` only. Its `refs.ts` searches and reads the newer of
+`knowledge/edge-india/` (age: `checked_at`) and the installed snapshot, and
+never fetches unless `AV_INDIA_REFS_LIVE=1` (off by default). With no local
+copy it says so and answers from what it knows, without fetching. `workspace/AGENTS.md` routes India background to
 it.
 
 **After a roll, on a canary.** With no `KNOWLEDGE_SNAPSHOT_URL` line (the

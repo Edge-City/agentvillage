@@ -23,13 +23,24 @@
  *   - `SNAPSHOT.json` records the upstream commit, its date, when this copy was
  *     made, and each file's sha256. It is rewritten only when a file changed,
  *     so an unchanged run makes no commit.
+ *   - The tree must be one the agents' "Edge — knowledge sync" job accepts
+ *     (`skills/edge-india/scripts/knowledge-sync.ts`, which fetches this
+ *     mirror and verifies every file against `SNAPSHOT.json`): its path rule
+ *     (`documentPathValid`), its document count (`MAX_DOCUMENTS`) and its text
+ *     check (`textOk`: UTF-8, no NUL, Markdown that does not open like an HTML
+ *     page) are imported from it, so a snapshot that would fail every agent's
+ *     sync is refused here and never published.
+ *   - Everything is written under the target directory: the new tree is staged
+ *     beside it and swapped in by rename, and the staging and retired copies
+ *     are removed whether the run succeeds or fails.
  *
  * Usage:
  *   bun scripts/sync-india-references.ts --source <upstream checkout> \
  *     [--target skills/edge-india/references] [--source-repo aromeoes/edge-agent-skill] \
  *     [--source-commit <sha>] [--source-commit-date <iso>] [--allow-shrink]
  *
- * Standard library only, so the workflow needs no `bun install`.
+ * Standard library only (plus the knowledge-sync script, itself standard
+ * library only), so the workflow needs no `bun install`.
  */
 
 import { createHash } from "node:crypto";
@@ -45,11 +56,25 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
+import {
+  FILE_CAP_BYTES as CRON_FILE_CAP_BYTES,
+  MAX_DOCUMENTS as CRON_MAX_DOCUMENTS,
+  TOTAL_CAP_BYTES as CRON_TOTAL_CAP_BYTES,
+  documentPathValid as cronAcceptsPath,
+  textOk as cronTextOk,
+} from "../skills/edge-india/scripts/knowledge-sync";
+
 export const EVENT = "edge-india-2026";
 export const SNAPSHOT_FILE = "SNAPSHOT.json";
 export const REQUIRED_DOCUMENTS = ["wiki-content.md", "website-content.md"];
 export const MAX_DOCUMENT_BYTES = 1_000_000;
 export const MAX_TOTAL_BYTES = 8_000_000;
+/** The knowledge-sync job refuses a manifest with more documents than this. */
+export const MAX_DOCUMENTS = CRON_MAX_DOCUMENTS;
+// The mirror's caps sit inside the job's, so a snapshot published here always fits.
+if (MAX_DOCUMENT_BYTES > CRON_FILE_CAP_BYTES || MAX_TOTAL_BYTES > CRON_TOTAL_CAP_BYTES) {
+  throw new Error("sync-india-references caps exceed the knowledge-sync job's caps");
+}
 /** A relative path of lowercase segments ending in `.md`; no `..`, no leading `/`. */
 const DOCUMENT_PATH = /^(?:[a-z0-9][a-z0-9_-]*\/)*[a-z0-9][a-z0-9._-]*\.md$/;
 
@@ -105,6 +130,15 @@ function readJson(path: string, code: string): any {
   }
 }
 
+/** The knowledge-sync job's text check, as a refusal here. */
+function cronText(path: string, buffer: Buffer, markdown: boolean): void {
+  try {
+    cronTextOk(buffer, markdown);
+  } catch (error) {
+    throw new SyncRefused("not_text", `${path} would be refused by the knowledge-sync job (${(error as Error).message})`);
+  }
+}
+
 function regularFile(path: string, code: string): Buffer {
   let stat;
   try {
@@ -143,11 +177,14 @@ export function collectSource(sourceRoot: string): Map<string, Buffer> {
   if (manifest.version !== 1 || !Array.isArray(manifest.documents) || manifest.documents.length === 0) {
     throw new SyncRefused("manifest_invalid", "manifest has no version 1 document list");
   }
+  if (manifest.documents.length > MAX_DOCUMENTS) {
+    throw new SyncRefused("too_many_documents", `${manifest.documents.length} documents (the knowledge-sync job takes at most ${MAX_DOCUMENTS})`);
+  }
 
   const files = new Map<string, Buffer>();
   for (const entry of manifest.documents) {
     const path = entry?.path;
-    if (typeof path !== "string" || !DOCUMENT_PATH.test(path)) {
+    if (typeof path !== "string" || !DOCUMENT_PATH.test(path) || !cronAcceptsPath(path)) {
       throw new SyncRefused("unsafe_path", `manifest path ${JSON.stringify(path)} is not a plain relative .md path`);
     }
     if (files.has(path)) throw new SyncRefused("duplicate_path", `${path} is listed twice`);
@@ -168,6 +205,7 @@ export function collectSource(sourceRoot: string): Map<string, Buffer> {
   }
   files.set("index.md", index);
   files.set("manifest.json", readFileSync(join(referencesDir, "manifest.json")));
+  for (const [path, buffer] of files) cronText(path, buffer, path.endsWith(".md"));
 
   let total = 0;
   for (const buffer of files.values()) total += buffer.length;
@@ -253,17 +291,25 @@ export function syncReferences(options: SyncOptions): SyncResult {
   const staging = `${target}.staging-${process.pid}`;
   const retired = `${target}.previous-${process.pid}`;
   rmSync(staging, { recursive: true, force: true });
-  for (const [path, buffer] of files) {
-    const dest = join(staging, path);
-    mkdirSync(dirname(dest), { recursive: true });
-    writeFileSync(dest, buffer);
-  }
-  writeFileSync(join(staging, SNAPSHOT_FILE), `${JSON.stringify(snapshot, null, 2)}\n`);
+  try {
+    for (const [path, buffer] of files) {
+      const dest = join(staging, path);
+      mkdirSync(dirname(dest), { recursive: true });
+      writeFileSync(dest, buffer);
+    }
+    writeFileSync(join(staging, SNAPSHOT_FILE), `${JSON.stringify(snapshot, null, 2)}\n`);
 
-  mkdirSync(dirname(target), { recursive: true });
-  if (existsSync(target)) renameSync(target, retired);
-  renameSync(staging, target);
-  rmSync(retired, { recursive: true, force: true });
+    mkdirSync(dirname(target), { recursive: true });
+    if (existsSync(target)) renameSync(target, retired);
+    renameSync(staging, target);
+  } catch (error) {
+    // Put the previous snapshot back if it was moved aside and not replaced.
+    if (!existsSync(target) && existsSync(retired)) renameSync(retired, target);
+    throw error;
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
+    rmSync(retired, { recursive: true, force: true });
+  }
 
   return { changed: true, added, updated, removed, documents };
 }

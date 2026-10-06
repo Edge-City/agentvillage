@@ -7,9 +7,14 @@
 # Esmeralda-era files and has failed since the upstream moved to India
 # (2026-10-01); skills/edge-esmeralda/references/ is now a frozen snapshot.
 #
-# Agents read this commit: skills/edge-india/scripts/refs.ts checks the copy on
-# main when asked a village question (at most every 15 minutes) and falls back
-# to the snapshot installed at their last roll (skills/edge-india/README.md).
+# Agents read this commit: each agent's "Edge — knowledge sync" job
+# (skills/edge-india/scripts/knowledge-sync.ts, every 30 minutes) fetches
+# skills/edge-india/references/manifest.json from main, its default URL, and
+# verifies every file against the SNAPSHOT.json this run writes. The skill's
+# refs.ts reads that local copy (or the snapshot installed at the agent's last
+# roll) and never fetches in a turn by default (skills/edge-india/README.md).
+# The sync refuses any tree that job would refuse, so a published snapshot is
+# always one every agent can take.
 name: Sync Edge City India References
 
 on:
