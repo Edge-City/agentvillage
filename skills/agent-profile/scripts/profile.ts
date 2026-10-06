@@ -36,8 +36,33 @@ export const PROFILE_FILE = "av-profile.json";
 /** A file larger than any profile the control plane accepts is not one. */
 const MAX_BYTES = 16 * 1024;
 const LIMITS = { nickname: 32, about_me: 600, interests: 12, interest: 40, language: 12 } as const;
-/** The control plane's rule (control-plane/src/tenant-profile.js NICKNAME_RE), restated. */
+// The control plane's nickname rule (control-plane/src/tenant-profile.js, nicknameBreaks),
+// restated expression for expression:
+// 1. A zero-width joiner or non-joiner only between two letters, the first with its vowel signs or
+//    virama (Indic conjuncts and half forms).
+// 2. Nothing that does not show and no emoji: control and format characters, enclosing marks,
+//    variation selectors, Hangul fillers, tag characters, every other default-ignorable code
+//    point, Extended_Pictographic.
+// 3. Letters, marks, digits, space, hyphen, apostrophe; the first a letter or a digit.
+// 4. A mark on a letter or a digit, at most three on one.
+// 5. Not a name that reads as the village or its staff.
+export const NICKNAME_JOINER = /(?<=\p{L}[\p{Mn}\p{Mc}]*)[\u200C\u200D](?=\p{L})/gu;
+export const NICKNAME_HIDDEN = /[\p{Cc}\p{Cf}\p{Me}\p{Default_Ignorable_Code_Point}\p{Extended_Pictographic}\u115F\u1160\u3164\uFFA0\uFE00-\uFE0F\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/u;
 export const NICKNAME_RE = /^[\p{L}\p{Nd}][\p{L}\p{M}\p{Nd} '\u2019-]*$/u;
+export const NICKNAME_LOOSE_MARK = /(?:^|[^\p{L}\p{M}\p{Nd}])\p{M}/u;
+export const NICKNAME_STACKED_MARKS = /\p{M}{4,}/u;
+export const RESERVED_NICKNAMES = ["system", "operator", "admin", "administrator", "edge city", "edge city team", "agent village", "agent village team"] as const;
+const reservedKey = (s: string) => s.normalize("NFKC").toLowerCase().replace(/[-'\u2019]/g, " ").replace(/\s+/g, " ").trim();
+
+/** Which part of the rule a nickname breaks (`hidden`, `symbols`, `marks`, `reserved`), or null. Pure. */
+export function nicknameBreaks(s: string): "hidden" | "symbols" | "marks" | "reserved" | null {
+  const bare = s.replace(NICKNAME_JOINER, "");
+  if (NICKNAME_HIDDEN.test(bare)) return "hidden";
+  if (!NICKNAME_RE.test(bare)) return "symbols";
+  if (NICKNAME_LOOSE_MARK.test(bare) || NICKNAME_STACKED_MARKS.test(bare)) return "marks";
+  if ((RESERVED_NICKNAMES as readonly string[]).includes(reservedKey(s))) return "reserved";
+  return null;
+}
 const LANGUAGE_RE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/;
 const TONES = ["warm", "direct", "playful"] as const;
 const BREVITIES = ["short", "normal"] as const;
@@ -66,8 +91,10 @@ const wellFormed = (s: string) => (s as unknown as { isWellFormed?: () => boolea
 function nicknameOf(v: unknown): string | null | undefined {
   if (v === null) return null;
   if (typeof v !== "string" || !wellFormed(v)) return undefined;
-  if (v !== v.trim() || / {2}/.test(v) || codePoints(v) < 1 || codePoints(v) > LIMITS.nickname) return undefined;
-  return NICKNAME_RE.test(v) ? v : undefined;
+  // As the control plane stores it: NFC, trimmed, one plain space between words.
+  if (v !== v.trim() || / {2}/.test(v) || v !== v.normalize("NFC") || /[^\S ]/u.test(v)) return undefined;
+  if (codePoints(v) < 1 || codePoints(v) > LIMITS.nickname) return undefined;
+  return nicknameBreaks(v) === null ? v : undefined;
 }
 
 function aboutMeOf(v: unknown): string | null | undefined {

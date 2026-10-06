@@ -12,7 +12,20 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { DEFAULT_NAME, NICKNAME_RE, agentName, parseProfile, promptText, readProfile } from "../profile";
+import {
+  DEFAULT_NAME,
+  NICKNAME_HIDDEN,
+  NICKNAME_JOINER,
+  NICKNAME_LOOSE_MARK,
+  NICKNAME_RE,
+  NICKNAME_STACKED_MARKS,
+  RESERVED_NICKNAMES,
+  agentName,
+  nicknameBreaks,
+  parseProfile,
+  promptText,
+  readProfile,
+} from "../profile";
 
 const FIXTURES = join(import.meta.dir, "fixtures");
 const SCRIPT = join(import.meta.dir, "..", "profile.ts");
@@ -130,9 +143,47 @@ describe("parseProfile: each field defensively, the control plane's rule restate
     for (const text of ["null", "[]", '"Mira"', "1"]) expect(parseProfile(text)).toMatchObject({ status: "ignored", reason: "shape_invalid" });
   });
 
-  test("the rule is the control plane's (tenant-profile.js NICKNAME_RE), restated character for character", () => {
+  test("the rule is the control plane's (tenant-profile.js nicknameBreaks), restated expression for expression", () => {
+    expect(NICKNAME_JOINER.source).toBe("(?<=\\p{L}[\\p{Mn}\\p{Mc}]*)[\\u200C\\u200D](?=\\p{L})");
+    expect(NICKNAME_JOINER.flags).toBe("gu");
+    expect(NICKNAME_HIDDEN.source).toBe(
+      "[\\p{Cc}\\p{Cf}\\p{Me}\\p{Default_Ignorable_Code_Point}\\p{Extended_Pictographic}\\u115F\\u1160\\u3164\\uFFA0\\uFE00-\\uFE0F\\u{E0000}-\\u{E007F}\\u{E0100}-\\u{E01EF}]",
+    );
     expect(NICKNAME_RE.source).toBe("^[\\p{L}\\p{Nd}][\\p{L}\\p{M}\\p{Nd} '\\u2019-]*$");
-    expect(NICKNAME_RE.flags).toBe("u");
+    expect(NICKNAME_LOOSE_MARK.source).toBe("(?:^|[^\\p{L}\\p{M}\\p{Nd}])\\p{M}");
+    expect(NICKNAME_STACKED_MARKS.source).toBe("\\p{M}{4,}");
+    for (const re of [NICKNAME_HIDDEN, NICKNAME_RE, NICKNAME_LOOSE_MARK, NICKNAME_STACKED_MARKS]) expect(re.flags).toBe("u");
+    expect([...RESERVED_NICKNAMES]).toEqual(["system", "operator", "admin", "administrator", "edge city", "edge city team", "agent village", "agent village team"]);
+  });
+
+  // P1-fix S2/S3: the refuter's probes, as escapes; the same table as the control plane's tests.
+  test.each([
+    ["\u3164", "hidden"], ["\uFFA0", "hidden"], ["Mira\u3164", "hidden"], ["Carter\u034F", "hidden"], ["Carter\uFE0F", "hidden"],
+    ["1\uFE0F\u20E3", "hidden"], ["A\u20DD", "hidden"], ["A\u180B", "hidden"], ["Mira\u{E0041}", "hidden"], ["Mira \u2764", "hidden"],
+    ["Mira\u200D", "hidden"], ["rtl\u202Eevil", "hidden"],
+    ["C\u0338\u0322\u031B\u0329a\u0337r\u0334t\u0335e\u0336r\u0337", "marks"], ["Mira \u0301", "marks"],
+    ["System", "reserved"], ["edge city team", "reserved"], ["Agent-Village", "reserved"],
+    ["Mira!", "symbols"],
+  ])("nickname probe %p breaks the rule (%s) and falls back to Edge", (given, broken) => {
+    expect(nicknameBreaks(given)).toBe(broken as ReturnType<typeof nicknameBreaks>);
+    const out = nick(given);
+    expect(out.dropped).toEqual(["nickname"]);
+    expect(agentName(out)).toBe("Edge");
+  });
+
+  test.each([
+    ["Marathi eyelash ra", "\u0930\u094D\u200D\u092F\u093E"],
+    ["Sinhala Shri", "\u0DC1\u0DCA\u200D\u0DBB\u0DD3"],
+    ["Malayalam chillu", "\u0D15\u0D4D\u200C\u0D37"],
+    ["three marks", "x\u0301\u0302\u0303"],
+  ])("nickname probe %s keeps the rule and is the agent's name", (_, given) => {
+    expect(nicknameBreaks(given)).toBe(null);
+    expect(agentName(nick(given))).toBe(given);
+  });
+
+  test("a nickname the control plane would have changed (not NFC, a no-break space) is dropped", () => {
+    expect(nick("Zoe\u0308").dropped).toEqual(["nickname"]);
+    expect(nick("Mira\u00A0Bai").dropped).toEqual(["nickname"]);
   });
 });
 
