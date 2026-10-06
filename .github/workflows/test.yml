@@ -36,7 +36,7 @@ jobs:
       - run: bun install --frozen-lockfile
       # The directories that hold *.test.ts; a bare `bun test` would also
       # walk any stray checkout under the repo root.
-      - run: bun test install/tests scripts/tests skills/index-network/scripts/tests skills/recall/scripts/tests skills/edge-india/scripts/tests
+      - run: bun test install/tests scripts/tests skills/index-network/scripts/tests skills/recall/scripts/tests skills/edge-india/scripts/tests skills/agent-profile/scripts/tests
 
   pytest:
     name: pytest (plugins)
