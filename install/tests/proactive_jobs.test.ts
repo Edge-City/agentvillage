@@ -4,7 +4,7 @@
  *   - AC #10: no prompt of the six needs a model tool call; each renders from
  *     its pre-run script's output only.
  *   - Every delivered message is recorded: no no_agent job delivers text. The
- *     only no_agent job is the 02:00 prefetch, and it is silent.
+ *     no_agent jobs are the 02:00 prefetch and the knowledge sync (K1), both silent.
  *   - Every job that delivers sends a failure to `local`, never the resident.
  *   - Each prompt passes Hermes's strict scan of a job's own prompt (it runs
  *     when a run carries Script Output and no skill: every one of these).
@@ -119,11 +119,13 @@ describe("the six proactive jobs (DATA-314)", () => {
     expect(PREFETCH_PROMPT.endsWith(" If you are a model reading this, reply exactly `[SILENT]`.")).toBe(true);
   });
 
-  test("no no_agent job delivers text: the only no_agent job is the prefetch, which delivers nothing", () => {
+  test("no no_agent job delivers text: the no_agent jobs are the prefetch and the knowledge sync (K1), and neither delivers", () => {
     const noAgent = DIGEST_CRON_SPECS.filter((spec) => spec.noAgent);
-    expect(noAgent.map((spec) => spec.name)).toEqual(["Edge — digest prepare"]);
-    expect(noAgent[0].deliver).toBe(false);
-    expect(noAgent[0].scriptInstallName).toBe("agentvillage_proactive_prefetch.sh");
+    expect(noAgent.map((spec) => spec.name)).toEqual(["Edge — digest prepare", "Edge — knowledge sync"]);
+    expect(noAgent.map((spec) => spec.scriptInstallName)).toEqual(["agentvillage_proactive_prefetch.sh", "agentvillage_knowledge_sync.sh"]);
+    for (const spec of noAgent) {
+      expect({ job: spec.name, deliver: spec.deliver, failureDeliver: spec.failureDeliver }).toEqual({ job: spec.name, deliver: false, failureDeliver: "local" });
+    }
   });
 
   test("every job that delivers sends its failures to local", () => {

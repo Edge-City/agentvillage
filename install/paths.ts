@@ -28,6 +28,9 @@ export const EDGE_SKILL_NAMES = [
   // DATA-212: installed everywhere, inert unless the `record_intention` tool
   // is available (tenants with `AV_RECORD_INTENTION` on); its text says so.
   "record-intention",
+  // K1: Edge City India background, read from the local snapshot copy that
+  // the "Edge — knowledge sync" job keeps (never fetched in a turn).
+  "edge-india",
 ] as const;
 
 export const CRON_NAME_PREFIX = "Edge —";

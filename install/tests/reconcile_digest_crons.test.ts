@@ -18,7 +18,7 @@ import {
 import { cronFailedLine, installStatusPath, writeInstallStatus } from "../install_status";
 
 const SEED = "ix_integration_seed";
-const [SIGNALS, PREPARE, SEND, NEGOTIATION, EVENING, DROP_MIDDAY, DROP_EVENING, TOKEN_AUDIT] = DIGEST_CRON_SPECS;
+const [SIGNALS, PREPARE, SEND, NEGOTIATION, EVENING, DROP_MIDDAY, DROP_EVENING, TOKEN_AUDIT, KNOWLEDGE] = DIGEST_CRON_SPECS;
 // The retired "Edge — heartbeat" cron name — used to assert it is torn down.
 const RETIRED_HEARTBEAT_NAME = "Edge — heartbeat";
 const RETIRED_PLAZA_SELFIE_NAME = "Edge — Agent Plaza selfie";
@@ -212,6 +212,7 @@ test("an existing Edge — heartbeat cron is retired on reconcile", () => {
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
     currentJob(TOKEN_AUDIT, "a1"),
+    currentJob(KNOWLEDGE, "k1"),
   ]);
 
   reconcileDigestCronJobs({ ...process.env });
@@ -230,6 +231,7 @@ test("an existing Edge — Agent Plaza selfie cron is retired on reconcile", () 
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
     currentJob(TOKEN_AUDIT, "a1"),
+    currentJob(KNOWLEDGE, "k1"),
   ]);
 
   reconcileDigestCronJobs({ ...process.env });
@@ -247,6 +249,7 @@ test("jobs still on old synchronized defaults get schedule-only migrations", () 
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
     currentJob(TOKEN_AUDIT, "a1"),
+    currentJob(KNOWLEDGE, "k1"),
   ]);
 
   reconcileDigestCronJobs({ ...process.env });
@@ -270,6 +273,7 @@ test("custom schedule is preserved; stale prompt gets a prompt-only edit", () =>
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
     currentJob(TOKEN_AUDIT, "a1"),
+    currentJob(KNOWLEDGE, "k1"),
   ]);
 
   reconcileDigestCronJobs({ ...process.env });
@@ -289,6 +293,7 @@ test("memory signal sync cron gets its script back in place when its script path
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
     currentJob(TOKEN_AUDIT, "a1"),
+    currentJob(KNOWLEDGE, "k1"),
   ]);
 
   reconcileDigestCronJobs({ ...process.env });
@@ -306,6 +311,7 @@ test("stale prompt + old default schedule produce two independent edit calls", (
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
     currentJob(TOKEN_AUDIT, "a1"),
+    currentJob(KNOWLEDGE, "k1"),
   ]);
 
   reconcileDigestCronJobs({ ...process.env });
@@ -327,6 +333,7 @@ test("up-to-date jobs (staggered schedule + current prompt) trigger no cron call
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
     currentJob(TOKEN_AUDIT, "a1"),
+    currentJob(KNOWLEDGE, "k1"),
   ]);
 
   reconcileDigestCronJobs({ ...process.env });
@@ -346,6 +353,7 @@ test("retired Edge-prefixed crons are removed; foreign crons are untouched", () 
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
     currentJob(TOKEN_AUDIT, "a1"),
+    currentJob(KNOWLEDGE, "k1"),
   ]);
 
   reconcileDigestCronJobs({ ...process.env });
@@ -365,6 +373,7 @@ test("token usage audit cron is removed when opted out", () => {
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
     currentJob(TOKEN_AUDIT, "a1"),
+    currentJob(KNOWLEDGE, "k1"),
   ]);
 
   reconcileDigestCronJobs(env);
@@ -384,6 +393,7 @@ test("token usage audit cron is removed when no explicit schedule opts in", () =
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
     currentJob(TOKEN_AUDIT, "a1"),
+    currentJob(KNOWLEDGE, "k1"),
   ]);
 
   reconcileDigestCronJobs(env);
@@ -404,6 +414,7 @@ test("token usage audit cron gets its script back in place when its script path 
       ...currentJob(TOKEN_AUDIT, "a1"),
       script: join(home, "skills", "token-usage-audit/scripts/old_audit.py"),
     },
+    currentJob(KNOWLEDGE, "k1"),
   ]);
 
   reconcileDigestCronJobs({ ...process.env });
@@ -422,6 +433,7 @@ test("a Hermes that rejects --schedule still gets the prompt update (degraded mi
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
     currentJob(TOKEN_AUDIT, "a1"),
+    currentJob(KNOWLEDGE, "k1"),
   ]);
 
   reconcileDigestCronJobs({ ...process.env });
@@ -521,6 +533,7 @@ test("an upgrade roll from the pre-DATA-314 jobs is one in-place edit per job: n
     oldShapeJob(DROP_MIDDAY, "dm1", "DROP_OLD"),
     oldShapeJob(DROP_EVENING, "de1", "DROP_OLD"),
     { ...currentJob(TOKEN_AUDIT, "a1"), failure_deliver: undefined },
+    currentJob(KNOWLEDGE, "k1"),
   ]);
 
   reconcileDigestCronJobs({ ...process.env });
@@ -564,6 +577,7 @@ test("F9: one failed edit: every other job is still attempted, the prefetch afte
     oldShapeJob(DROP_MIDDAY, "dm1", "DROP_OLD"),
     oldShapeJob(DROP_EVENING, "de1", "DROP_OLD"),
     currentJob(TOKEN_AUDIT, "a1"),
+    currentJob(KNOWLEDGE, "k1"),
   ]);
   const lines: string[] = [];
   const log = spyOn(console, "log").mockImplementation((line: string) => void lines.push(String(line)));
@@ -608,6 +622,7 @@ test("F9: the standalone reconcile exits non-zero after attempting every job whe
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
     currentJob(TOKEN_AUDIT, "a1"),
+    currentJob(KNOWLEDGE, "k1"),
   ]);
   const done = Bun.spawnSync(["bun", join(import.meta.dir, "..", "reconcile_digest_crons.ts")], {
     env: { ...process.env },
