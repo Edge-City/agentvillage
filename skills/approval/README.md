@@ -35,10 +35,13 @@ row). In plain words, for the consent screen:
   class of each tool core's Hermes adapter does not class itself: web reads and
   Index's read tools are `read.web`, a new or reworded intention in the
   resident's words (Index `create_intent`/`update_intent`) is
-  `intent.publish.stated.index`, accepting an opportunity (a connection or
-  meeting) is `opportunity.accept`, other Index tools and the media tools are
-  `network.call`; `defaults.unmapped_tool: record` records any other routed
-  tool under `harness.tool.unmapped`. `record_intention` is off the list and
+  `intent.publish.stated.index`, accepting or declining an opportunity (a
+  connection or meeting; Index's `accept_opportunity` and `reject_opportunity`,
+  the Index plugin's `index_update_opportunity`) is `opportunity.accept`, other
+  Index tools and the media tools are `network.call`;
+  `defaults.unmapped_tool: record` records any other routed tool under
+  `harness.tool.unmapped`. A class the hook judges is enforced only while the
+  gate is on. `record_intention` is off the list and
   unrouted. Only the gated list below reaches the hook. A daemon before 0.4.2
   refuses both keys and fails every class closed, so the template needs 0.4.2.
 - **What waits for a tap.** Kinds of act the agent proposes rather than
@@ -63,9 +66,10 @@ row). In plain words, for the consent screen:
   nothing is published, shared or cast. An intention the resident stated in their own words is published
   without a second ask. Three more reserved rows wait for no tap: an installed
   app reading for the agent (`marketplace.app.read`) runs and is recorded,
-  accepting an Index opportunity, a connection or meeting, on the resident's
-  behalf (`opportunity.accept`) runs and is recorded (Carter decides its
-  day-one default before Oct 11), and `review.delegate.model` is kept for the
+  accepting or declining an Index opportunity, a connection or meeting, on the
+  resident's behalf (`opportunity.accept`) runs, and is recorded while the gate
+  is on: only the hook judges it (Carter decides its day-one default before
+  Oct 11), and `review.delegate.model` is kept for the
   resident to choose later to let a model reviewer act first: nothing acts on
   it, and no agent can propose it.
 - **What the agent can never do.** Edit its own gate (the Hermes config, the
@@ -237,9 +241,9 @@ What the gate does not see, or does not judge, today:
   blocks gated calls at the next start or within a minute, but the script
   itself is not stopped. The installer lists the scripts present at install
   and in `--check` (`cron_scripts`); the daily brief's own scripts live there.
-- **MCP tools**: Index's write tools are routed (R3b) and judged by the
-  policy's `tools:` list; Index's read tools and any other MCP server's tools
-  have no matcher. The list already names a class for every Index tool, so
+- **MCP tools**: every Index write tool (the nine of its 14-tool MCP surface)
+  is routed (R3b) and judged by the policy's `tools:` list; Index's read tools
+  and any other MCP server's tools have no matcher. The list already names a class for every Index tool, so
   routing more of them is a matcher change, not a policy change.
 - **Safe mode and plugin disable.** `HERMES_SAFE_MODE=1`, or removing
   `av-approval` from `plugins.enabled`, stops the plugin loading AND stops
