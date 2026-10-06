@@ -35,8 +35,14 @@ def _callback(ctx: FakeCtx):
 
 GATED_SAMPLE = ("terminal", "write_file", "patch", "read_file", "search_files", "execute_code", "process",
                 "process_manage", "web_extract", "browser_exec", "browser_navigate", "skill_manage",
-                "delegate_task", "cronjob_manage", "cronjob", "send_message")
-UNGATED_SAMPLE = ("memory", "todo_list", "web_search", "mcp_index_search", "cronjob_manager", "image_generate", None)
+                "delegate_task", "cronjob_manage", "cronjob", "send_message",
+                # R3b (DATA-344): the side-effecting tools the policy's tools: list judges.
+                "mcp__index__create_intent", "mcp__index__update_intent", "mcp__index__archive_intent",
+                "mcp__index__accept_opportunity", "index_create_intent", "index_accept_opportunity",
+                "image_generate", "video_generate", "text_to_speech", "web_search", "x_search")
+UNGATED_SAMPLE = ("memory", "todo_list", "mcp_index_search", "cronjob_manager", "mcp__index__list_intents",
+                  "mcp__index__get_opportunity", "index_read_intents", "skill_view", "record_intention", "recall",
+                  "vision_analyze", None)
 
 
 # ---------------------------------------------------------------------------

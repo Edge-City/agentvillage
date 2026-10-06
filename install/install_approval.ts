@@ -132,6 +132,19 @@ export const APPROVAL_PLUGIN = "av-approval";
  * maps before the hook (`model_tools._LEGACY_TOOL_ALIASES`); matched anyway.
  * The `av-approval` plugin keeps a copy of this list (`GATED_MATCHERS`); a
  * test holds the two equal.
+ *
+ * R3b (DATA-344, claude-edge 2026-10-06 03:33Z): the side-effecting tools
+ * core's adapter does not class itself are routed too, so the resident
+ * policy's `tools:` list (approval.md 0.4.2, APRV-499) judges them: Index's
+ * writes (its MCP server's `create_intent`, `update_intent`, `archive_intent`
+ * and `accept_opportunity`, and the write tools of Index's Hermes plugin),
+ * media generation, and the web reads `web_search` and `x_search` (with
+ * `web_extract`, one `read.web`). Index's read tools and the local tools
+ * (`skill_view`, `skills_list`, `memory`, `session_search`, `todo`, `clarify`,
+ * `recall`, `consent_status`, `record_intention`) stay unrouted: av-events
+ * records every call as `tool.call`, and the hook is for actions. Each
+ * routed call costs one shim round trip and is blocked while the gate is
+ * unverified, as every entry here is.
  */
 export const APPROVAL_GATED_TOOLS = [
   "terminal",
@@ -147,6 +160,23 @@ export const APPROVAL_GATED_TOOLS = [
   "delegate_task",
   "cronjob(_manage)?",
   "send_message",
+  "mcp__index__create_intent",
+  "mcp__index__update_intent",
+  "mcp__index__archive_intent",
+  "mcp__index__accept_opportunity",
+  "index_create_intent",
+  "index_update_intent",
+  "index_add_intent_to_network",
+  "index_create_network",
+  "index_update_network",
+  "index_join_network",
+  "index_update_opportunity",
+  "index_accept_opportunity",
+  "image_generate",
+  "video_generate",
+  "text_to_speech",
+  "web_search",
+  "x_search",
 ] as const;
 
 /** Hermes's per-entry maximum; it clamps anything above. */

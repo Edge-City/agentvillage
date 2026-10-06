@@ -119,6 +119,24 @@ GATED_MATCHERS: tuple[str, ...] = (
     "delegate_task",
     "cronjob(_manage)?",
     "send_message",
+    # R3b (DATA-344): the side-effecting tools the policy's tools: list judges (install_approval.ts says why).
+    "mcp__index__create_intent",
+    "mcp__index__update_intent",
+    "mcp__index__archive_intent",
+    "mcp__index__accept_opportunity",
+    "index_create_intent",
+    "index_update_intent",
+    "index_add_intent_to_network",
+    "index_create_network",
+    "index_update_network",
+    "index_join_network",
+    "index_update_opportunity",
+    "index_accept_opportunity",
+    "image_generate",
+    "video_generate",
+    "text_to_speech",
+    "web_search",
+    "x_search",
 )
 #: The installer's per-entry timeout.
 ENTRY_TIMEOUT_S = 300

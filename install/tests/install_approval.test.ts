@@ -441,7 +441,7 @@ describe("installing the gate", () => {
 
     // The live fire: one terminal call, deliberately without a workdir.
     expect(hermes.kwargs()).toEqual({ tool_name: "terminal", args: { command: "ls /tmp" }, session_id: "av-approval-selfcheck" });
-    expect(logs.at(-1)).toContain("approval gate installed: 13 pre_tool_call entries (fail_closed)");
+    expect(logs.at(-1)).toContain("approval gate installed: 30 pre_tool_call entries (fail_closed)");
     expect(logs.at(-1)).toContain("live: blocked by the facade), overrides: none");
     expect([...logs, ...errors].join("\n")).not.toContain(TOKEN);
     expect(readFileSync(join(home, "config.yaml"), "utf8")).not.toContain(TOKEN);
@@ -470,6 +470,40 @@ describe("installing the gate", () => {
     }
     // Full-match: a prefix is not the tool.
     for (const tool of ["cronjob_manager", "send_message_x", "mcp_index_search", "memory"]) expect(covers(tool)).toBe(false);
+  });
+
+  test("R3b (DATA-344): the side-effecting tools the policy's tools: list judges are routed, exactly; Index's reads and the local tools are not", () => {
+    const home = tenant();
+    installApproval(SOURCE_SKILLS, opts());
+    const matchers = ourEntries(home).map((e) => String(e.matcher));
+    const covers = (tool: string) => matchers.some((m) => new RegExp(`^(?:${m})$`).test(tool));
+    const before = [
+      "terminal", "write_file", "patch", "read_file", "search_files", "execute_code", "process(_manage)?", "web_extract",
+      "browser_.*", "skill_manage", "delegate_task", "cronjob(_manage)?", "send_message",
+    ];
+    const added = [
+      "mcp__index__create_intent", "mcp__index__update_intent", "mcp__index__archive_intent", "mcp__index__accept_opportunity",
+      "index_create_intent", "index_update_intent", "index_add_intent_to_network", "index_create_network",
+      "index_update_network", "index_join_network", "index_update_opportunity", "index_accept_opportunity",
+      "image_generate", "video_generate", "text_to_speech", "web_search", "x_search",
+    ];
+    // Nothing that was routed changed; the added entries are the whole difference, one per tool.
+    expect(matchers).toEqual([...before, ...added]);
+    expect([...APPROVAL_GATED_TOOLS]).toEqual([...before, ...added]);
+    for (const tool of added) expect([tool, covers(tool)]).toEqual([tool, true]);
+    for (const tool of [
+      // Index's reads, and its writes the ruling did not name.
+      "mcp__index__list_intents", "mcp__index__get_intent", "mcp__index__list_opportunities", "mcp__index__get_opportunity",
+      "mcp__index__get_my_profile", "mcp__index__reject_opportunity", "mcp__index__pause_intent", "mcp__index__resume_intent",
+      "mcp__index__update_my_profile", "mcp__index__enrich_my_profile", "mcp__index__create_intent_x", "mcp__index__",
+      "index_read_intents", "index_list_intent_networks", "index_read_networks", "index_read_network_memberships",
+      "index_list_opportunities", "index_read_docs", "index_agent_me", "index_research_profile", "index_open_app",
+      // The local tools, the overlay's own tools, and the media readers.
+      "skill_view", "skills_list", "memory", "session_search", "todo", "clarify", "recall", "consent_status", "record_intention",
+      "vision_analyze", "video_analyze", "computer_use", "manage_connections", "web_search_x", "xx_search",
+    ]) {
+      expect([tool, covers(tool)]).toEqual([tool, false]);
+    }
   });
 
   test("idempotent: a second run changes no byte of config.yaml or .env and keeps installed_at", () => {
@@ -897,7 +931,7 @@ describe("kill switch (L3): AV_APPROVAL_ENABLED off is fail-open, says so, and t
     expect(existsSync(approvalShimPath())).toBe(false);
     expect(existsSync(approvalSurfacePath())).toBe(false);
     expect(existsSync(join(home, "skills", "approval"))).toBe(false);
-    expect(logs.join("\n")).toContain("removed 13 pre_tool_call entries");
+    expect(logs.join("\n")).toContain("removed 30 pre_tool_call entries");
     expect(logs.join("\n")).toContain("FAIL-OPEN");
   });
 
@@ -1050,7 +1084,7 @@ interface ShimRun {
   stdin: string[];
 }
 
-function shimFixture(mode: string) {
+function shimFixture(mode: string, call: { tool_name: string; tool_input: Record<string, unknown> } | null = null) {
   const root = scratch("av-approval-shim-");
   const fake = join(root, "bin");
   const state = join(root, "state");
@@ -1159,8 +1193,8 @@ exec /usr/bin/perl -e '@s = lstat($ARGV[1]) or exit 1; $f = $ARGV[0]; $f =~ s/%u
     envelope,
     JSON.stringify({
       hook_event_name: "pre_tool_call",
-      tool_name: "terminal",
-      tool_input: { command: "curl -X POST https://api.example.com/send", workdir: "/home/hermes/.hermes" },
+      tool_name: call ? call.tool_name : "terminal",
+      tool_input: call ? call.tool_input : { command: "curl -X POST https://api.example.com/send", workdir: "/home/hermes/.hermes" },
       session_id: "s-1",
       cwd: "/home/hermes/.hermes",
       extra: { tool_call_id: "call-1" },
@@ -1222,6 +1256,21 @@ describe("the vendored shim (bash -c, fake curl)", () => {
     expect(r.stdin[0]).toBe(`header = "X-Approval-Authorization: Bearer ${TOKEN}"\n`);
     expect(r.stdin[0]).not.toContain('"Authorization:');
     expect(fx.log()).not.toContain(TOKEN);
+  });
+
+  test("R3b: an Index write goes through the shim as any gated call: posted to /hook/hermes, the facade's answer replayed, fail closed when it cannot be reached", () => {
+    const call = { tool_name: "mcp__index__accept_opportunity", tool_input: { opportunityId: "00000000-0000-4000-8000-000000000001" } };
+    const ok = shimFixture("allow", call);
+    const a = ok.run();
+    expect([a.code, a.stdout, a.calls]).toEqual([0, "{}", 1]);
+    expect(a.argv[0].trim().split("\n").at(-1)).toBe(`${URL}/hook/hermes`);
+    expect(ok.log()).toContain("tool=mcp__index__accept_opportunity");
+    const b = shimFixture("block", call).run();
+    expect(b.code).toBe(2);
+    expect(JSON.parse(b.stdout).action).toBe("block");
+    const down = shimFixture("unreachable", { tool_name: "image_generate", tool_input: { prompt: "x" } }).run();
+    expect(down.code).toBe(2);
+    expect(JSON.parse(down.stdout).message).toContain("approval facade unreachable");
   });
 
   test("block: the facade's block directive is replayed with exit 2", () => {

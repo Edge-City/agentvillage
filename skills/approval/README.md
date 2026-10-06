@@ -74,7 +74,16 @@ Hermes runs the shim as a `pre_tool_call` shell hook for `terminal`,
 `process(_manage)?`, `web_extract`, `browser_.*`, `skill_manage`,
 `delegate_task`, `cronjob(_manage)?` and `send_message` (which the core adapter
 classifies from approval.md 0.4.0, PR #569; an older core passes them through
-unjudged). The shim POSTs Hermes's envelope to
+unjudged), and (R3b) for the side-effecting tools the core adapter does not
+class itself, which the policy's `tools:` list judges from approval.md 0.4.2:
+Index's writes (`mcp__index__create_intent`, `mcp__index__update_intent`,
+`mcp__index__archive_intent`, `mcp__index__accept_opportunity`, and the
+Index Hermes plugin's `index_*` write tools), media generation
+(`image_generate`, `video_generate`, `text_to_speech`) and the web reads
+`web_search` and `x_search`. Index's read tools and the local tools
+(`skill_view`, `memory`, `todo`, `record_intention` and the like) are not
+routed: av-events records every call as `tool.call`, and the hook is for
+actions. Each routed call costs one shim round trip. The shim POSTs Hermes's envelope to
 `$AV_APPROVAL_URL/hook/hermes` with the agent token in
 `X-Approval-Authorization` for a hosted facade (Maritime's proxy strips
 `Authorization`; the hosted supervisor moves it back), and in `Authorization`
@@ -259,8 +268,11 @@ What the gate does not see, or does not judge, today:
   day-one policy sets every one of them autonomous, with `network.call` and
   `read.web`: each call is recorded and runs, and fails closed only when the
   facade cannot be reached. On an older core the adapter passes them through
-  unjudged (`{}`). `web_extract` reaches the facade but has no classifier rule
-  even in PR #569, so it passes through unjudged. `send_message` is not an
+  unjudged (`{}`). `web_extract`, `web_search`, `x_search`, Index's routed
+  writes and the media tools reach the facade with no classifier rule; from
+  approval.md 0.4.2 the policy's `tools:` list judges them (`read.web`,
+  `intent.publish.stated.index`, `opportunity.accept`, `network.call`), and an
+  older core passes them through unjudged. `send_message` is not an
   agent-callable tool at Hermes v2026.9.24; its entry covers any build or
   plugin that registers it.
 - **The tcp listener window** (above) and ptrace against the gateway.
