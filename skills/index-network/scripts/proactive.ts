@@ -79,6 +79,7 @@ import { writeStateFile } from "./state-file";
 import { followUp } from "./summarize-negotiations";
 import { backfillAnnounced, clearStage, dueSubjects, intentionLink, listAcceptedConnections, outcomeQuestion, readAskedIds, recordAttempt, stageFor, writeStage } from "./outcome-ask";
 import { type Delivery, deliveryFor, inWindow, isTeamTenant, minuteOfDay, prunePreviewFiles, readJobSettings } from "./job-settings";
+import { DEFAULT_NAME, agentName, readProfile } from "../../agent-profile/scripts/profile";
 
 /** The default jobs' actions, one per installer job (install_index.ts DIGEST_CRON_SPECS). */
 export const ACTIONS = ["prefetch", "brief", "drop-midday", "drop-evening", "negotiation", "evening"] as const;
@@ -141,6 +142,28 @@ export interface TriggerResult {
 export const STATE_HEALED = "state-renamed-aside";
 
 // ── Paths, state and logs ───────────────────────────────────────────────────
+
+/**
+ * P1 (S5): the agent's name for a proactive message, `agentName` in every agent job's Script
+ * Output: the resident's nickname from `$HERMES_HOME/av-profile.json`, read through the
+ * agent-profile skill's own reader (the control plane's whole nickname rule, applied again), else
+ * Edge. A nickname that would trip the cron scanner is Edge too (it would otherwise silence the
+ * whole message). Only the name: the resident's about me, interests and preferences are not given
+ * to these jobs. Never throws; a missing or bad file is Edge (one stderr line for a bad one).
+ */
+export function agentNameFor(home: string): string {
+  try {
+    const name = agentName(readProfile(home));
+    return cronScanHit(name) ? DEFAULT_NAME : name;
+  } catch {
+    return DEFAULT_NAME;
+  }
+}
+
+/** The Script Output of an agent job: the agent's name first, then the job's own view. */
+export function withAgentName(home: string, view: Record<string, unknown>): Record<string, unknown> {
+  return { agentName: agentNameFor(home), ...view };
+}
 
 export function homeDir(options: ProactiveOptions = {}): string {
   return options.home ?? (process.env.HERMES_HOME?.trim() || process.cwd());
@@ -790,7 +813,7 @@ async function runAgentAction(action: AgentAction, options: ProactiveOptions): P
       const decision = await AGENT_ACTIONS[action](run);
       const detail = decision.detail ? { detail: decision.detail } : {};
       if ("silent" in decision) return { ...silent(decision.silent, 0, decision.withheld), ...detail };
-      const text = scriptOutputText(decision.view);
+      const text = scriptOutputText(withAgentName(home, decision.view));
       // Every field was scanned; this catches a hit spanning two of them.
       if (cronScanHit(text)) return { ...silent("scan-blocked", 0, decision.withheld), ...detail };
       // The day is done from the moment the model is woken.
@@ -860,7 +883,7 @@ async function runPreview(action: ProactiveAction, options: ProactiveOptions): P
     const decision = await AGENT_ACTIONS[action](run);
     const detail = decision.detail ? { detail: decision.detail } : {};
     if ("silent" in decision) return { ...silent(decision.silent, 0, decision.withheld), ...detail };
-    const text = scriptOutputText(decision.view);
+    const text = scriptOutputText(withAgentName(home, decision.view));
     if (cronScanHit(text)) return { ...silent("scan-blocked", 0, decision.withheld), ...detail };
     return { lines: [text, wakeLine(true)], exitCode: 0, woke: true, reason: "woke", ...(decision.withheld ? { withheld: decision.withheld } : {}), ...detail };
   } catch (err) {

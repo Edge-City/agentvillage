@@ -387,7 +387,7 @@ describe("the drops, the evening note and the follow-up: names and Index links o
   test("a drop wakes with one person, no card text, and marks its own day", async () => {
     const result = await runProactive("drop-midday", options({ drop: async () => ({ opportunity: card("Maya Rao", "op1", { redelivery: true }) }) }));
     expect(output(result.lines)).toEqual({
-      job: "opportunity-drop", date: DATE, kind: "conversation", seenBefore: true,
+      agentName: "Edge", job: "opportunity-drop", date: DATE, kind: "conversation", seenBefore: true,
       person: { name: "Maya Rao", profileUrl: "https://index.network/u/op1-user", messageUrl: "https://index.network/o/op1" },
     });
     expect(result.lines.join("\n")).not.toContain(THIRD_PARTY);
@@ -406,10 +406,10 @@ describe("the drops, the evening note and the follow-up: names and Index links o
 
   test("the evening note: one person, or the closeout question", async () => {
     const person = await runProactive("evening", options({ evening: async () => ({ name: "Arjun", headline: THIRD_PARTY, userUrl: "https://index.network/u/a", opportunityUrl: "https://index.network/o/b" }) }));
-    expect(output(person.lines)).toEqual({ job: "evening-note", date: DATE, person: { name: "Arjun", profileUrl: "https://index.network/u/a", messageUrl: "https://index.network/o/b" } });
+    expect(output(person.lines)).toEqual({ agentName: "Edge", job: "evening-note", date: DATE, person: { name: "Arjun", profileUrl: "https://index.network/u/a", messageUrl: "https://index.network/o/b" } });
     rmSync(stateFile());
     const closeout = await runProactive("evening", options({ evening: async () => ({ prompt: "Quick closeout check: did AgentVillage help you meet anyone?" }) }));
-    expect(output(closeout.lines)).toEqual({ job: "evening-note", date: DATE, closeoutQuestion: "Quick closeout check: did AgentVillage help you meet anyone?" });
+    expect(output(closeout.lines)).toEqual({ agentName: "Edge", job: "evening-note", date: DATE, closeoutQuestion: "Quick closeout check: did AgentVillage help you meet anyone?" });
   });
 
   test("the follow-up: names, links and the resident's own signals; silent when no name survives", async () => {
@@ -421,7 +421,7 @@ describe("the drops, the evening note and the follow-up: names and Index links o
     });
     const result = await runProactive("negotiation", options({ followUp: follow(["Maya Rao"]) }));
     expect(output(result.lines)).toEqual({
-      job: "people-follow-up", date: DATE,
+      agentName: "Edge", job: "people-follow-up", date: DATE,
       yourSignals: [{ text: "Looking for soil scientists", link: "https://index.network/i/s1" }],
       waitingOnYou: [{ name: "Maya Rao", profileUrl: "https://index.network/u/n0", messageUrl: "https://index.network/o/n0" }],
       agentsTalking: [{ name: "Talking Person", profileUrl: "https://index.network/u/t" }],
