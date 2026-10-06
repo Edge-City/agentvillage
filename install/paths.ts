@@ -25,7 +25,6 @@ export const EDGE_SKILL_NAMES = [
   "edge-india",
   // The previous popup, background only.
   "edge-esmeralda",
-  "geo-esmeralda",
   "token-usage-audit",
   "agent-plaza",
   "agent-commons",

@@ -130,7 +130,7 @@ using names, or projecting anything into a public surface.
 - No public posting by default.
 - No recipient extraction before the user opts into a draft.
 - No deterministic parsing of user replies.
-- No use of Commons, Plaza, Simocracy, Geo, or Index as a public/action surface
+- No use of Commons, Plaza, Simocracy, or Index as a public/action surface
   without exact preview and explicit yes. Keep the source labels distinct:
   Simocracy proposal/deliberation, Agent Commons forum, Agent Plaza selfie, and
   Turing Falls provider.

@@ -1,7 +1,7 @@
 {
   "name": "agentvillage",
-  "description": "Edge City India 2026 (Mandrem, Goa, Oct 11 – Nov 1) — popup knowledge, EdgeOS calendar & directory, Geo knowledge graph access, and Index Network discovery skills for the Agent Village.",
-  "version": "1.7.0",
+  "description": "Edge City India 2026 (Mandrem, Goa, Oct 11 – Nov 1) — popup knowledge, EdgeOS calendar & directory, and Index Network discovery skills for the Agent Village.",
+  "version": "1.7.1",
   "skills": "./",
   "author": {
     "name": "Edge City",
@@ -17,7 +17,7 @@
     "edgeosToken": {
       "type": "string",
       "title": "EdgeOS Bearer Token",
-      "description": "Human session JWT for Geo knowledge graph access, content writes, EdgeOS directory, and own profile.",
+      "description": "Human session JWT for EdgeOS directory and own profile.",
       "sensitive": true
     },
     "edgeosApiKey": {

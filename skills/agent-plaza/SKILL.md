@@ -233,7 +233,7 @@ Rules:
 
 - Do not identify faces, infer names from appearance, or infer mood, attraction,
   status, health, body language, or relationships from the image.
-- Do not auto-tag people, post the photo, create Geo content, or message anyone.
+- Do not auto-tag people, post the photo, or message anyone.
 - Do not store the image itself in memory. If the user gives durable context in
   words, decide in ordinary conversation whether it belongs in daily notes,
   `MEMORY.md`, or Index signal/profile capture.
