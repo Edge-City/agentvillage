@@ -13,6 +13,16 @@
  *   - Every document `references/manifest.json` lists must exist, be a regular
  *     Markdown file under `references/`, and be within the size limits. Files
  *     outside the manifest (except `index.md`) are not copied.
+ *   - Every published file, `manifest.json` and `index.md` included, is a
+ *     regular file of at most MAX_DOCUMENT_BYTES (the smaller of the job's and
+ *     refs.ts's per-file caps), so no agent's job or refs.ts refuses it.
+ *   - Each document's manifest `url` is published only when it is https on one
+ *     of the hosts the guide comes from (refs.ts `SOURCE_URL_HOSTS`); any other
+ *     value is replaced by the mirror's own link to the document, never
+ *     passed through. refs.ts applies the same rule when it prints a link.
+ *   - `SNAPSHOT.json` records the upstream commit the tree was copied from
+ *     (`--source-commit`; the workflow passes the checked-out sha of the
+ *     moving upstream `main`), so every publish is attributable.
  *   - The manifest must name event `edge-india-2026`, and the wiki must be the
  *     India wiki, so an Esmeralda-era or half-migrated tree is refused.
  *   - A document the manifest no longer lists is removed here too (the
@@ -39,8 +49,8 @@
  *     [--target skills/edge-india/references] [--source-repo aromeoes/edge-agent-skill] \
  *     [--source-commit <sha>] [--source-commit-date <iso>] [--allow-shrink]
  *
- * Standard library only (plus the knowledge-sync script, itself standard
- * library only), so the workflow needs no `bun install`.
+ * Standard library only (plus the knowledge-sync script and refs.ts, both
+ * standard library only), so the workflow needs no `bun install`.
  */
 
 import { createHash } from "node:crypto";
@@ -63,17 +73,19 @@ import {
   documentPathValid as cronAcceptsPath,
   textOk as cronTextOk,
 } from "../skills/edge-india/scripts/knowledge-sync";
+import { MAX_FILE_BYTES as REFS_FILE_CAP_BYTES, sourceUrl, sourceUrlValid } from "../skills/edge-india/scripts/refs";
 
 export const EVENT = "edge-india-2026";
 export const SNAPSHOT_FILE = "SNAPSHOT.json";
 export const REQUIRED_DOCUMENTS = ["wiki-content.md", "website-content.md"];
-export const MAX_DOCUMENT_BYTES = 1_000_000;
+/** Every published file (documents, index.md and manifest.json): the smaller of the job's and refs.ts's per-file caps. */
+export const MAX_DOCUMENT_BYTES = Math.min(CRON_FILE_CAP_BYTES, REFS_FILE_CAP_BYTES);
 export const MAX_TOTAL_BYTES = 8_000_000;
 /** The knowledge-sync job refuses a manifest with more documents than this. */
 export const MAX_DOCUMENTS = CRON_MAX_DOCUMENTS;
-// The mirror's caps sit inside the job's, so a snapshot published here always fits.
-if (MAX_DOCUMENT_BYTES > CRON_FILE_CAP_BYTES || MAX_TOTAL_BYTES > CRON_TOTAL_CAP_BYTES) {
-  throw new Error("sync-india-references caps exceed the knowledge-sync job's caps");
+// The mirror's caps sit inside the job's and refs.ts's, so a snapshot published here always fits both.
+if (MAX_DOCUMENT_BYTES > CRON_FILE_CAP_BYTES || MAX_DOCUMENT_BYTES > REFS_FILE_CAP_BYTES || MAX_TOTAL_BYTES > CRON_TOTAL_CAP_BYTES) {
+  throw new Error("sync-india-references caps exceed the knowledge-sync job's or refs.ts's caps");
 }
 /** A relative path of lowercase segments ending in `.md`; no `..`, no leading `/`. */
 const DOCUMENT_PATH = /^(?:[a-z0-9][a-z0-9_-]*\/)*[a-z0-9][a-z0-9._-]*\.md$/;
@@ -122,14 +134,6 @@ function sha256(buffer: Buffer): string {
   return createHash("sha256").update(buffer).digest("hex");
 }
 
-function readJson(path: string, code: string): any {
-  try {
-    return JSON.parse(readFileSync(path, "utf8"));
-  } catch (error) {
-    throw new SyncRefused(code, `${path} is missing or not JSON (${(error as Error).message})`);
-  }
-}
-
 /** The knowledge-sync job's text check, as a refusal here. */
 function cronText(path: string, buffer: Buffer, markdown: boolean): void {
   try {
@@ -139,7 +143,7 @@ function cronText(path: string, buffer: Buffer, markdown: boolean): void {
   }
 }
 
-function regularFile(path: string, code: string): Buffer {
+function regularFile(path: string, code: string, tooLarge = "document_too_large"): Buffer {
   let stat;
   try {
     stat = lstatSync(path);
@@ -149,9 +153,25 @@ function regularFile(path: string, code: string): Buffer {
   if (!stat.isFile()) throw new SyncRefused("not_a_regular_file", `${path} is not a regular file`);
   if (stat.size === 0) throw new SyncRefused("empty_document", `${path} is empty`);
   if (stat.size > MAX_DOCUMENT_BYTES) {
-    throw new SyncRefused("document_too_large", `${path} is ${stat.size} bytes (limit ${MAX_DOCUMENT_BYTES})`);
+    throw new SyncRefused(tooLarge, `${path} is ${stat.size} bytes (limit ${MAX_DOCUMENT_BYTES})`);
   }
   return readFileSync(path);
+}
+
+/**
+ * The manifest as published: each document's `url` kept when refs.ts would
+ * print it (https on one of the guide's hosts), otherwise replaced by the
+ * mirror's own link to the document, never passed through. Unchanged bytes
+ * when every url is fine.
+ */
+function publishedManifest(raw: Buffer, manifest: { documents: { path: string; url?: unknown }[] }): Buffer {
+  let replaced = false;
+  for (const entry of manifest.documents) {
+    if (sourceUrlValid(entry.url)) continue;
+    entry.url = sourceUrl(entry.url, entry.path);
+    replaced = true;
+  }
+  return replaced ? Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`) : raw;
 }
 
 /** Reads the previous snapshot record, or null when there is none or it is unreadable. */
@@ -169,7 +189,15 @@ export function readSnapshot(dir: string): Snapshot | null {
 /** Validates the upstream tree and returns the files to copy, keyed by relative path. */
 export function collectSource(sourceRoot: string): Map<string, Buffer> {
   const referencesDir = join(sourceRoot, "references");
-  const manifest = readJson(join(referencesDir, "manifest.json"), "manifest_missing");
+  // The manifest is a published file like any other: regular, non-empty, within the per-file cap.
+  const manifestPath = join(referencesDir, "manifest.json");
+  const manifestRaw = regularFile(manifestPath, "manifest_missing", "manifest_too_large");
+  let manifest: any;
+  try {
+    manifest = JSON.parse(manifestRaw.toString("utf8"));
+  } catch (error) {
+    throw new SyncRefused("manifest_missing", `${manifestPath} is not JSON (${(error as Error).message})`);
+  }
 
   if (manifest?.event !== EVENT) {
     throw new SyncRefused("wrong_event", `manifest event is ${JSON.stringify(manifest?.event)}, expected ${EVENT}`);
@@ -204,7 +232,11 @@ export function collectSource(sourceRoot: string): Map<string, Buffer> {
     throw new SyncRefused("wrong_event", "index.md does not identify Edge City India 2026");
   }
   files.set("index.md", index);
-  files.set("manifest.json", readFileSync(join(referencesDir, "manifest.json")));
+  const published = publishedManifest(manifestRaw, manifest);
+  if (published.length > MAX_DOCUMENT_BYTES) {
+    throw new SyncRefused("manifest_too_large", `manifest.json is ${published.length} bytes as published (limit ${MAX_DOCUMENT_BYTES})`);
+  }
+  files.set("manifest.json", published);
   for (const [path, buffer] of files) cronText(path, buffer, path.endsWith(".md"));
 
   let total = 0;

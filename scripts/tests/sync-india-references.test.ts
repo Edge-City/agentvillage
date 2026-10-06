@@ -5,7 +5,9 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, expect, test } from "bun:test";
 
-import { SyncRefused, readSnapshot, syncReferences } from "../sync-india-references";
+import { FILE_CAP_BYTES as CRON_FILE_CAP_BYTES } from "../../skills/edge-india/scripts/knowledge-sync";
+import { MAX_FILE_BYTES as REFS_FILE_CAP_BYTES } from "../../skills/edge-india/scripts/refs";
+import { MAX_DOCUMENT_BYTES, SyncRefused, readSnapshot, syncReferences } from "../sync-india-references";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const temps: string[] = [];
@@ -220,6 +222,74 @@ test("a tree the agents' knowledge-sync job would refuse is refused here, and no
   writeFileSync(manifestPath, JSON.stringify(manifest));
   expectRefusal("too_many_documents", () => syncReferences({ source: many, target: dest }));
   expect(existsSync(dest)).toBe(false);
+});
+
+test("B1: a manifest over the per-file cap (the smaller of the job's and refs.ts's) is refused, so no agent is handed one it refuses", () => {
+  expect(MAX_DOCUMENT_BYTES).toBe(1_000_000);
+  expect(MAX_DOCUMENT_BYTES).toBeLessThanOrEqual(CRON_FILE_CAP_BYTES);
+  expect(MAX_DOCUMENT_BYTES).toBeLessThanOrEqual(REFS_FILE_CAP_BYTES);
+  const dest = target();
+  syncReferences({ source: upstream(BASE), target: dest });
+  const before = readFileSync(join(dest, "SNAPSHOT.json"), "utf8");
+  // The refuter's two sizes: 2.55 MB (the job refuses it: too-large) and 1.5 MB (the job takes it, refs.ts refuses it).
+  for (const size of [850_000, 500_000]) {
+    const crafted = upstream(BASE);
+    const manifestPath = join(crafted, "references", "manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    for (const doc of manifest.documents.slice(0, 3)) doc.summary = "a".repeat(size);
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+    expectRefusal("manifest_too_large", () => syncReferences({ source: crafted, target: dest }));
+  }
+  expect(readFileSync(join(dest, "SNAPSHOT.json"), "utf8")).toBe(before);
+  // A symlinked manifest is refused like any other non-regular file.
+  const linked = upstream(BASE);
+  const real = join(linked, "manifest-elsewhere.json");
+  writeFileSync(real, readFileSync(join(linked, "references", "manifest.json")));
+  rmSync(join(linked, "references", "manifest.json"));
+  symlinkSync(real, join(linked, "references", "manifest.json"));
+  expectRefusal("not_a_regular_file", () => syncReferences({ source: linked, target: dest }));
+  // index.md has the same cap.
+  expectRefusal("document_too_large", () => syncReferences({ source: upstream(BASE, { index: `# Edge City India 2026 index\n${"x".repeat(1_000_001)}` }), target: dest }));
+});
+
+test("S2: a manifest url off the guide's hosts is published as the mirror's own link to the document; valid urls keep the bytes as they are", () => {
+  const dest = target();
+  const source = upstream(BASE);
+  const manifestPath = join(source, "references", "manifest.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  const urls = ["https://edgecity.notion.site/Edge-City-India-2026-Wiki-038d45cdfc5983c7a1fe013fdc77135b", "https://edgecity-india.example/login", "https://www.edgecity.live/india26", "javascript:alert(1)"];
+  manifest.documents.forEach((doc: { url?: string }, at: number) => {
+    if (at < urls.length) doc.url = urls[at];
+    else delete doc.url;
+  });
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  syncReferences({ source, target: dest });
+  const published = JSON.parse(readFileSync(join(dest, "manifest.json"), "utf8")).documents as { path: string; url: string }[];
+  const mirror = (path: string) => `https://github.com/Edge-City/agentvillage/blob/main/skills/edge-india/references/${path}`;
+  expect(published.map((doc) => doc.url)).toEqual([urls[0], mirror(published[1].path), urls[2], mirror(published[3].path), mirror(published[4].path)]);
+  expect(readSnapshot(dest)!.files.find((file) => file.path === "manifest.json")!.sha256).toMatch(/^[0-9a-f]{64}$/);
+
+  // All valid: the manifest is published byte for byte.
+  const clean = upstream(BASE);
+  const cleanPath = join(clean, "references", "manifest.json");
+  const cleanManifest = JSON.parse(readFileSync(cleanPath, "utf8"));
+  for (const doc of cleanManifest.documents) doc.url = "https://edgecityindia2026.substack.com/archive";
+  writeFileSync(cleanPath, JSON.stringify(cleanManifest));
+  const cleanDest = target();
+  syncReferences({ source: clean, target: cleanDest });
+  expect(readFileSync(join(cleanDest, "manifest.json"), "utf8")).toBe(readFileSync(cleanPath, "utf8"));
+});
+
+test("the upstream follows aromeoes/edge-agent-skill main every 15 minutes, and every publish records the upstream commit it came from", () => {
+  const workflow = readFileSync(join(REPO_ROOT, ".github", "workflows", "sync-edge-india-references.yml"), "utf8");
+  expect(workflow).toContain("repository: aromeoes/edge-agent-skill");
+  expect(workflow).toContain('- cron: "*/15 * * * *"');
+  expect(workflow).toContain("commit=$(git -C reference-source rev-parse HEAD)");
+  expect(workflow).toContain('--source-commit "$commit"');
+  expect(workflow).toContain("--source-repo aromeoes/edge-agent-skill");
+  const committed = readSnapshot(join(REPO_ROOT, "skills", "edge-india", "references"))!;
+  expect(committed.source.repo).toBe("aromeoes/edge-agent-skill");
+  expect(committed.source.commit).toMatch(/^[0-9a-f]{40}$/);
 });
 
 test("the sync writes only under its target: no staging or retired copy survives a run, refused or not", () => {

@@ -55,7 +55,7 @@ Because the mirror is `main`, reference text changes between release tags (throu
 
 ## To verify on a hosted agent
 
-The sandbox must reach `raw.githubusercontent.com` over HTTPS for the cron job. Ask a canary agent "how up to date is your India info?": it runs `refs.ts status`, which should show `reading: background sync copy` with `copy_taken` within the last hour and `live_refresh: off (the default …)`. `reading: installed snapshot` means the job has not written a copy yet or is failing: check `av-events/knowledge/sync.jsonl`.
+The sandbox must reach `raw.githubusercontent.com` over HTTPS for the cron job. Ask a canary agent "how up to date is your India info?": it runs `refs.ts status`, which should show `reading: background sync copy` with `copy_taken` within the last hour and `live_refresh: off (the default …)`. `reading: installed snapshot` means the job has not written a copy yet or is failing: check `av-events/knowledge/sync.jsonl`. When a copy exists but failed `refs.ts`'s check against the `SNAPSHOT.json` the job stored beside it (a file changed, a symlink, not UTF-8, no stored record), the `note:` line says `the background sync copy (knowledge/edge-india/) was not used: <reason>`; the job's next run rewrites such a set.
 
 ## Maintainer commands
 

@@ -428,20 +428,24 @@ harmless to the older release.
 The agent answers Edge City India background questions (housing, getting
 there, visas, tickets, meals, health and safety, residencies, themes) from a
 local copy of the published guide, never by fetching inside a resident's turn.
-The guide is Fran's indexer output (the wiki, the website and the Substack
-newsletter in Markdown), published in `p2p-lanes/edge-agent-skill`,
-directory `references/`. Agents never read it from there by default: the
-built-in default is **Edge City's mirror in this repo**,
+The guide is the upstream indexer's output (the wiki, the website and the
+Substack newsletter in Markdown), published in `aromeoes/edge-agent-skill`
+(branch `main`), directory `references/`. Agents never read it from there by
+default: the built-in default is **Edge City's mirror in this repo**,
 `skills/edge-india/references/` (`https://raw.githubusercontent.com/Edge-City/agentvillage/main/skills/edge-india/references/manifest.json`),
 kept by `sync-edge-india-references.yml` (#203), which copies complete
-snapshots only and writes `SNAPSHOT.json` with each file's sha256. A push to
-upstream would otherwise reach every agent within one run with no human in
-the loop; the mirror sits under our org's audit log, and its sync workflow is
-the kill switch (disable it, or revert the mirror). Neither switch removes a
+snapshots only and writes `SNAPSHOT.json` with each file's sha256 and the
+upstream commit it copied. The mirror is not reviewed by a person: the
+workflow forwards upstream `main` every 15 minutes. What it adds is its
+checks (complete trees, the caps this job and `refs.ts` apply, manifest
+links only to the guide's own sites), a commit per change under our org's
+audit log, and a kill switch (disable the workflow, or revert the mirror). A
+push to upstream read directly would reach every agent within one run with
+none of these. Neither switch removes a
 copy already on disk: disabling the workflow, or writing a tenant's key empty,
 leaves that tenant's last synced set in place; only a revert of the mirror
 pushes a clean copy out, within about 35 minutes (one 30-minute period plus
-the CDN's 5-minute cache). Fran's upstream stays on
+the CDN's 5-minute cache). The upstream (`aromeoes/edge-agent-skill`) stays on
 the allowlist as an operator override only. The mirror serves from the merge
 of #203 (superseded by the rc15 merge PR); before that every run failed
 `http-404` (exit 1, local notice). The mirror's sync refuses any tree this job
@@ -460,7 +464,7 @@ others, so a resident's or admin's pause and schedule are kept. It runs
 - fetches the manifest, `index.md` beside it and every file the manifest lists
   (relative `.md` paths only), all from the manifest's own directory;
 - accepts only https, no credentials, port, query or fragment, on
-  `raw.githubusercontent.com` under `/p2p-lanes/edge-agent-skill/` or
+  `raw.githubusercontent.com` under `/aromeoes/edge-agent-skill/` or
   `/Edge-City/`, or on a host listed in `KNOWLEDGE_SNAPSHOT_HOSTS`
   (comma-separated host names; it never widens `raw.githubusercontent.com`);
   a redirect is followed (at most 3) only to a URL that passes the same check;
@@ -470,11 +474,18 @@ others, so a resident's or admin's pause and schedule are kept. It runs
 - writes the whole set into `$HERMES_HOME/knowledge/edge-india/` (with
   `_sync.json`: source, manifest sha256, ETag, files, each document's manifest
   `hash` as fetched, `fetched_at` = when this content was written,
-  `checked_at` = the last run that confirmed it current) by building it in a
+  `checked_at` = the last run that confirmed it current; and `SNAPSHOT.json`,
+  the record it verified the set against: the mirror's own, or, from a source
+  that serves none, one written from the fetched bytes) by building it in a
   temp directory and renaming it in; the set it replaces is kept as
   `$HERMES_HOME/knowledge-prev/edge-india/`, outside `knowledge/`. Any failure
   leaves the current set as it was. An unchanged manifest (304 to the stored
-  ETag, or the same sha256) rewrites only `checked_at`. The skill warns that
+  ETag, or the same sha256) rewrites only `checked_at`, and only while the set
+  on disk is intact (every file a regular file matching the stored
+  `SNAPSHOT.json`); a changed, symlinked or missing file, or a set with no
+  stored record, is fetched again in full. `refs.ts` reads the copy only while
+  it passes that check (and is valid UTF-8), and otherwise reads the installed
+  snapshot and says why in `refs.ts status`. The skill warns that
   the guide may be out of date when `checked_at` is over a day old;
 - treats a mixed snapshot (one URL still served from an older commit by the
   CDN, `max-age=300`) as `incomplete`: nothing is written and the ETag and
@@ -499,7 +510,7 @@ others, so a resident's or admin's pause and schedule are kept. It runs
 
 | Variable | Meaning |
 |---|---|
-| `KNOWLEDGE_SNAPSHOT_URL` | The snapshot's manifest. No line: the built-in default, the Edge City mirror `https://raw.githubusercontent.com/Edge-City/agentvillage/main/skills/edge-india/references/manifest.json`. Fran's upstream (`https://raw.githubusercontent.com/p2p-lanes/edge-agent-skill/main/references/manifest.json`) is an operator override only. Written empty (`KNOWLEDGE_SNAPSHOT_URL=`): switched off; every run is `unconfigured`, exits 0 and writes no knowledge file. Any other value must pass the allowlist above. |
+| `KNOWLEDGE_SNAPSHOT_URL` | The snapshot's manifest. No line: the built-in default, the Edge City mirror `https://raw.githubusercontent.com/Edge-City/agentvillage/main/skills/edge-india/references/manifest.json`. The upstream (`https://raw.githubusercontent.com/aromeoes/edge-agent-skill/main/references/manifest.json`) is an operator override only. Written empty (`KNOWLEDGE_SNAPSHOT_URL=`): switched off; every run is `unconfigured`, exits 0 and writes no knowledge file. Any other value must pass the allowlist above. |
 | `KNOWLEDGE_SNAPSHOT_HOSTS` | Optional. Extra host names a snapshot may be served from. No line: none. |
 
 The script reads both from `$HERMES_HOME/.env` (the file the control plane
