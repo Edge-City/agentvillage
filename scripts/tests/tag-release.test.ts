@@ -219,9 +219,9 @@ describe("output hygiene", () => {
     expect(topLevelKeys('{"a":1,"b":{"c":2},"a":"x:y","d":["e",{"f":1}]}')).toEqual(["a", "b", "a", "d"]);
   });
 
-  test("suiteDirs reads the one bun test line; this repository's test.yml lists the four suite directories", () => {
+  test("suiteDirs reads the one bun test line; this repository's test.yml lists the five suite directories", () => {
     const real = readFileSync(join(import.meta.dir, "..", "..", ".github", "workflows", "test.yml"), "utf8");
-    expect(suiteDirs(real)).toEqual(["install/tests", "scripts/tests", "skills/index-network/scripts/tests", "skills/recall/scripts/tests"]);
+    expect(suiteDirs(real)).toEqual(["install/tests", "scripts/tests", "skills/index-network/scripts/tests", "skills/recall/scripts/tests", "skills/edge-india/scripts/tests"]);
     expect(suiteDirs("      - run: bun install\n")).toBeNull();
     expect(suiteDirs("- run: bun test a\n- run: bun test b\n")).toBeNull();
     expect(suiteDirs("- run: bun test a $(id)\n")).toBeNull();

@@ -1,14 +1,14 @@
 ---
 name: edge-esmeralda-2026
-description: Background on a PREVIOUS Edge City popup, Edge Esmeralda 2026 (May 30 – Jun 27 2026, Healdsburg, CA) — not the current event. The current event is Edge City India (Oct 11 – Nov 1 2026, Mandrem, Goa). Use this skill only when the user explicitly asks about Edge Esmeralda or Edge City's history/mission; never present its dates, weeks, themes, venues, wiki logistics, or popup id as current or as applying to Edge City India. For India logistics you don't have, say so and point the user to the Edge City portal or organisers.
-version: 3.1.2
+description: Background on a PREVIOUS Edge City popup, Edge Esmeralda 2026 (May 30 – Jun 27 2026, Healdsburg, CA) — not the current event. The current event is Edge City India (Oct 11 – Nov 1 2026, Mandrem, Goa). Use this skill only when the user explicitly asks about Edge Esmeralda or Edge City's history/mission; never present its dates, weeks, themes, venues, wiki logistics, or popup id as current or as applying to Edge City India. For Edge City India questions, use the `edge-india` skill instead.
+version: 3.1.3
 author: Edge City
 tags: [edge-city, edge-esmeralda, popup-village, community]
 ---
 
 # Edge Esmeralda 2026 (previous popup) — Agent Skill
 
-> **Previous popup, not the current event.** You serve residents of **Edge City India** (Mandrem, Goa, India — October 11 to November 1, 2026). Everything below describes **Edge Esmeralda 2026**, an earlier Edge City popup. Use it only as background when the user explicitly asks about Edge Esmeralda or Edge City's history, and always frame it in the past tense. Never answer an India question (schedule, "what's happening", venues, accommodation, travel, tickets, health, kids, transport, local tips) from this skill. If you don't have the India detail, say you don't have it for Edge City India yet and point the user to the Edge City portal or the organisers.
+> **Previous popup, not the current event.** You serve residents of **Edge City India** (Mandrem, Goa, India — October 11 to November 1, 2026). Everything below describes **Edge Esmeralda 2026**, an earlier Edge City popup. Use it only as background when the user explicitly asks about Edge Esmeralda or Edge City's history, and always frame it in the past tense. Never answer an India question (schedule, "what's happening", venues, accommodation, travel, tickets, health, kids, transport, local tips) from this skill: India logistics come from the `edge-india` skill and India's live schedule from `edgeos`. If neither has the India detail, say you don't have it for Edge City India and point the user to the Edge City portal or the organisers.
 >
 > The Edge City website reference (mission, leadership, roadmap, ecosystem) is about the organisation and can be used as general background.
 
@@ -91,7 +91,7 @@ Tags are case-sensitive and may be combined: `?tags=AI&tags=Privacy` returns eve
 
 ## 4. Reference content (wiki, website, newsletter)
 
-For questions about logistics, the organization, or announcements, use the preprocessed reference files shipped alongside this skill. When the Edge installer copies skills into the workspace, these files land under `skills/edge-esmeralda/references/`. If the `references/` directory is present, read the relevant file directly:
+For questions about Edge Esmeralda's logistics, the organization, or announcements, use the preprocessed reference files shipped alongside this skill. They are a frozen snapshot of the Esmeralda sources (last refreshed 2026-10-01, before the upstream indexer moved to India) and are no longer updated. When the Edge installer copies skills into the workspace, these files land under `skills/edge-esmeralda/references/`. If the `references/` directory is present, read the relevant file directly:
 
 - **`references/wiki-content.md`** — Edge Esmeralda Wiki (tickets, accommodation, travel, venues, health, kids, transport, etc.)
 - **`references/website-content.md`** — Edge City Website (mission, leadership, roadmap, ecosystem, media)

@@ -1,0 +1,223 @@
+{
+  "version": 1,
+  "event": "edge-india-2026",
+  "documents": [
+    {
+      "path": "newsletter/a-typical-day-and-week-at-edge-city.md",
+      "title": "A Typical Day (and Week) at Edge City India",
+      "url": "https://edgecityindia2026.substack.com/p/a-typical-day-and-week-at-edge-city",
+      "kind": "newsletter",
+      "published": "2026-09-24T14:22:28.000Z",
+      "hash": "3587c29046ffcb16346411e4875150292630fd565c7c678905c81dad5ec5dc53",
+      "indexed": "2026-09-30T21:31:09.778Z"
+    },
+    {
+      "path": "newsletter/ambhasi-a-consciousness-x-ai-research.md",
+      "title": "Ambhasi: A Consciousness x AI Research Residency at Edge City India",
+      "url": "https://edgecityindia2026.substack.com/p/ambhasi-a-consciousness-x-ai-research",
+      "kind": "newsletter",
+      "published": "2026-09-22T12:34:28.000Z",
+      "hash": "ed624a754d68f1e309c04fbe2ad8b2ed14f378c2a451ee5844e4a1a3d3fb8452",
+      "indexed": "2026-09-30T21:31:09.778Z"
+    },
+    {
+      "path": "newsletter/announcing-anima-house-the-womens.md",
+      "title": "Announcing Anima House: The Women’s Health Residency",
+      "url": "https://edgecityindia2026.substack.com/p/announcing-anima-house-the-womens",
+      "kind": "newsletter",
+      "published": "2026-08-21T13:27:10.000Z",
+      "author": "Charlotte McAdams",
+      "hash": "444f6dfd0298f54f4ca4dfb74083b45894033fece469bcc03f1924e487208e3c",
+      "indexed": "2026-09-30T21:31:09.778Z"
+    },
+    {
+      "path": "newsletter/announcing-the-community-builders.md",
+      "title": "Announcing the Community Builders Residency",
+      "url": "https://edgecityindia2026.substack.com/p/announcing-the-community-builders",
+      "kind": "newsletter",
+      "published": "2026-08-18T19:13:17.000Z",
+      "hash": "18eb6e63575343de0739e3bdb8bd6ce4989d5a621986af2e69e0d2c33ea83143",
+      "indexed": "2026-09-30T21:31:09.778Z"
+    },
+    {
+      "path": "newsletter/announcing-the-first-batch-of-residencies.md",
+      "title": "Announcing the First Batch of Residencies",
+      "url": "https://edgecityindia2026.substack.com/p/announcing-the-first-batch-of-residencies",
+      "kind": "newsletter",
+      "published": "2026-09-09T14:37:22.000Z",
+      "author": "Taylor Lamprecht",
+      "hash": "ef77575eafc1dff86ccf2c078126eefd94aca7ae831d756ccf14570468ea1093",
+      "indexed": "2026-09-30T21:31:09.778Z"
+    },
+    {
+      "path": "newsletter/announcing-the-inflection-fellowship.md",
+      "title": "Announcing the Inflection Fellowship 2026 at Edge City India",
+      "url": "https://edgecityindia2026.substack.com/p/announcing-the-inflection-fellowship",
+      "kind": "newsletter",
+      "published": "2026-08-04T17:52:58.000Z",
+      "hash": "667934669f11e17457be0b3e824206cef633cf693df305876185404042c99cd5",
+      "indexed": "2026-09-30T21:31:09.778Z"
+    },
+    {
+      "path": "newsletter/bring-your-family-to-edge-city-india.md",
+      "title": "Bring your family to Edge City India",
+      "url": "https://edgecityindia2026.substack.com/p/bring-your-family-to-edge-city-india",
+      "kind": "newsletter",
+      "published": "2026-09-03T17:15:48.000Z",
+      "hash": "320479b8eab963710579b1940a71aec35d542ea1c66ddd98bd58ba209a78c727",
+      "indexed": "2026-09-30T21:31:09.778Z"
+    },
+    {
+      "path": "newsletter/build3-and-edge-city-are-bringing.md",
+      "title": "build3 and Edge City are bringing something new for India's startup ecosystem",
+      "url": "https://edgecityindia2026.substack.com/p/build3-and-edge-city-are-bringing",
+      "kind": "newsletter",
+      "published": "2026-08-06T15:20:20.000Z",
+      "hash": "9ec22abe9d438188b37dca414e9ae6819192262a250d85910d6307c2159b6bf3",
+      "indexed": "2026-09-30T21:31:09.778Z"
+    },
+    {
+      "path": "newsletter/creative-residency-edge-city-modern.md",
+      "title": "Creative Residency Edge City: Modern Renaissance",
+      "url": "https://edgecityindia2026.substack.com/p/creative-residency-edge-city-modern",
+      "kind": "newsletter",
+      "published": "2026-08-20T19:21:10.000Z",
+      "hash": "5ad49f131de18a3fa110651ffe9cf3014c400d83d7012c237a5501ca32f66057",
+      "indexed": "2026-09-30T21:31:09.778Z"
+    },
+    {
+      "path": "newsletter/getting-to-edge-city-india.md",
+      "title": "Getting to Edge City India",
+      "url": "https://edgecityindia2026.substack.com/p/getting-to-edge-city-india",
+      "kind": "newsletter",
+      "published": "2026-08-31T17:34:29.000Z",
+      "hash": "61d8822199d953a62701c77a40a00ecc823b2747c4b1516b546ebd56c349a9ef",
+      "indexed": "2026-09-30T21:31:09.778Z"
+    },
+    {
+      "path": "newsletter/health-and-wellbeing-at-edge-city.md",
+      "title": "Health and Wellbeing at Edge City India 2026",
+      "url": "https://edgecityindia2026.substack.com/p/health-and-wellbeing-at-edge-city",
+      "kind": "newsletter",
+      "published": "2026-09-30T15:34:57.000Z",
+      "hash": "e68126a226091650b436e2e54052778cd542ebd2ee65663fd4610483ae0d80e3",
+      "indexed": "2026-09-30T21:31:09.778Z"
+    },
+    {
+      "path": "newsletter/housing-for-edge-city-india.md",
+      "title": "Housing for Edge City India",
+      "url": "https://edgecityindia2026.substack.com/p/housing-for-edge-city-india",
+      "kind": "newsletter",
+      "published": "2026-08-14T15:43:06.000Z",
+      "hash": "c72fe6eec8e2850c452851d8370daa1413bd1169b852f7f7954d9234c742939b",
+      "indexed": "2026-09-30T21:31:09.778Z"
+    },
+    {
+      "path": "newsletter/meet-the-inflection-fellowship-cohort.md",
+      "title": "Meet the Inflection Fellowship cohort at Edge City India 2026",
+      "url": "https://edgecityindia2026.substack.com/p/meet-the-inflection-fellowship-cohort",
+      "kind": "newsletter",
+      "published": "2026-09-28T15:16:08.000Z",
+      "hash": "1287aeaa4198e269d6f761cbd8f739ce65a021f2d1b821d70fab373c4b00c234",
+      "indexed": "2026-09-30T21:15:43.517Z"
+    },
+    {
+      "path": "newsletter/programming-preview-for-edge-city.md",
+      "title": "Programming Preview for Edge City India",
+      "url": "https://edgecityindia2026.substack.com/p/programming-preview-for-edge-city",
+      "kind": "newsletter",
+      "published": "2026-09-14T14:07:58.000Z",
+      "author": "Taylor Lamprecht",
+      "hash": "cde32ceb97f64150da7d5ef653b3dbecf4677f66c3b395c3d18cb0dcdba9fc27",
+      "indexed": "2026-09-30T21:31:09.778Z"
+    },
+    {
+      "path": "newsletter/the-future-arrives-locally.md",
+      "title": "Announcing the Ground Floor Residency",
+      "url": "https://edgecityindia2026.substack.com/p/the-future-arrives-locally",
+      "kind": "newsletter",
+      "published": "2026-08-11T14:49:45.000Z",
+      "hash": "fb4dbb55c68cf3f692b81e015d1e571818d1de811c38c02134f0e571f2ce9794",
+      "indexed": "2026-09-30T21:15:43.517Z"
+    },
+    {
+      "path": "newsletter/the-road-to-edge-backroad-farm-caravan.md",
+      "title": "The Road to Edge: Backroad Farm Caravan Experience",
+      "url": "https://edgecityindia2026.substack.com/p/the-road-to-edge-backroad-farm-caravan",
+      "kind": "newsletter",
+      "published": "2026-08-17T18:19:14.000Z",
+      "author": "Taylor Lamprecht",
+      "hash": "16bfc602c1a9398eac266f28cb1248afcbf1baabe7a89677607da23f961e017a",
+      "indexed": "2026-09-30T21:31:09.778Z"
+    },
+    {
+      "path": "newsletter/tickets-for-edge-city-india-2026.md",
+      "title": "Tickets for Edge City India 2026",
+      "url": "https://edgecityindia2026.substack.com/p/tickets-for-edge-city-india-2026",
+      "kind": "newsletter",
+      "published": "2026-07-24T18:09:13.000Z",
+      "author": "Taylor Lamprecht",
+      "hash": "54400381ac5357f520e241d23add3072f336fb520d42e1ad58e05b3326a953cf",
+      "indexed": "2026-09-30T21:31:09.778Z"
+    },
+    {
+      "path": "newsletter/volunteer-at-edge-city-india-2026.md",
+      "title": "Volunteer at Edge City India 2026",
+      "url": "https://edgecityindia2026.substack.com/p/volunteer-at-edge-city-india-2026",
+      "kind": "newsletter",
+      "published": "2026-07-29T22:27:41.000Z",
+      "hash": "aff4692b32e56007c2617fcaeeecb94e2c23bb5373b6ed8c068010d5839348e7",
+      "indexed": "2026-09-30T21:31:09.778Z"
+    },
+    {
+      "path": "newsletter/welcome-to-edge-city-india.md",
+      "title": "Welcome to Edge City India",
+      "url": "https://edgecityindia2026.substack.com/p/welcome-to-edge-city-india",
+      "kind": "newsletter",
+      "published": "2026-06-29T16:06:34.000Z",
+      "hash": "d5214a4f6b30b2239afa96b9635d1cd1abcefc184f7a75eaa1f0e4b06824ddad",
+      "indexed": "2026-09-30T21:32:35.134Z"
+    },
+    {
+      "path": "residencies/community-builders.md",
+      "title": "Announcing the Community Builders Residency | Blog | Edge City",
+      "url": "https://www.edgecity.live/blog/community-builders-residency-goa",
+      "kind": "website",
+      "hash": "d62770e07515c2d9522a2d50388541d63a1cb490821b718abaae61c4fc6c060e",
+      "indexed": "2026-09-30T21:31:09.778Z"
+    },
+    {
+      "path": "residencies/creator-residency.md",
+      "title": "Creative Residency Edge City: Modern Renaissance | Blog | Edge City",
+      "url": "https://www.edgecity.live/blog/creator-residency-goa-modern-renaissance",
+      "kind": "website",
+      "hash": "f9f19791dd5616ebe54de5f393d0ea93260eb95565aad7b303b140997003543b",
+      "indexed": "2026-09-30T21:31:09.778Z"
+    },
+    {
+      "path": "website-content.md",
+      "title": "Edge City India 2026",
+      "url": "https://www.edgecity.live/india26",
+      "kind": "website",
+      "hash": "bdbdd9947055029326fb6aca508bc5d4b7c376a7d95d60c4b74bc25cb7db0d66",
+      "indexed": "2026-09-30T21:28:06.827Z"
+    },
+    {
+      "path": "website/about.md",
+      "title": "About | Edge City",
+      "url": "https://www.edgecity.live/about",
+      "kind": "website",
+      "hash": "6118d7eaa6069e86574211b569749c20d85afffee4f49701d96c53f0d67eaf69",
+      "indexed": "2026-09-30T21:28:06.827Z"
+    },
+    {
+      "path": "wiki-content.md",
+      "title": "Edge City India 2026 Wiki",
+      "url": "https://edgecity.notion.site/Edge-City-India-2026-Wiki-038d45cdfc5983c7a1fe013fdc77135b",
+      "kind": "wiki",
+      "updated": "2026-09-30T15:28:07.563Z",
+      "hash": "b66722fb982b8994f6ceee1d3e1b4d91d2b9d231e63e5bc5007025da94809162",
+      "indexed": "2026-09-30T21:25:22.185Z"
+    }
+  ]
+}
