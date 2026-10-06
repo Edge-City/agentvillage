@@ -7,7 +7,7 @@ import { afterEach, expect, test } from "bun:test";
 
 import { FILE_CAP_BYTES as CRON_FILE_CAP_BYTES } from "../../skills/edge-india/scripts/knowledge-sync";
 import { MAX_FILE_BYTES as REFS_FILE_CAP_BYTES } from "../../skills/edge-india/scripts/refs";
-import { MAX_DOCUMENT_BYTES, SyncRefused, readSnapshot, syncReferences } from "../sync-india-references";
+import { MAX_DOCUMENT_BYTES, SyncRefused, readSnapshot, sourceCommitValid, syncReferences } from "../sync-india-references";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const temps: string[] = [];
@@ -285,11 +285,34 @@ test("the upstream follows aromeoes/edge-agent-skill main every 15 minutes, and 
   expect(workflow).toContain("repository: aromeoes/edge-agent-skill");
   expect(workflow).toContain('- cron: "*/15 * * * *"');
   expect(workflow).toContain("commit=$(git -C reference-source rev-parse HEAD)");
+  expect(workflow).toContain(`if ! printf '%s' "$commit" | grep -Eq '^[0-9a-f]{40}$'; then`);
   expect(workflow).toContain('--source-commit "$commit"');
+  // The commit check comes before the sync runs.
+  expect(workflow.indexOf("grep -Eq '^[0-9a-f]{40}$'")).toBeLessThan(workflow.indexOf("bun scripts/sync-india-references.ts"));
   expect(workflow).toContain("--source-repo aromeoes/edge-agent-skill");
   const committed = readSnapshot(join(REPO_ROOT, "skills", "edge-india", "references"))!;
   expect(committed.source.repo).toBe("aromeoes/edge-agent-skill");
   expect(committed.source.commit).toMatch(/^[0-9a-f]{40}$/);
+});
+
+test("the command refuses to publish when the upstream commit is missing or not a sha, and records it when given", () => {
+  const script = join(REPO_ROOT, "scripts", "sync-india-references.ts");
+  const source = upstream(BASE);
+  const dest = target();
+  // No network anywhere in this script; the proxy only makes sure of it.
+  const env = { PATH: process.env.PATH ?? "", HOME: tmpdir(), HTTPS_PROXY: "http://127.0.0.1:9", HTTP_PROXY: "http://127.0.0.1:9" };
+  const cli = (extra: string[]) => Bun.spawnSync(["bun", script, "--source", source, "--target", dest, ...extra], { env, stdout: "pipe", stderr: "pipe" });
+  for (const extra of [[], ["--source-commit", ""], ["--source-commit", "HEAD"], ["--source-commit", "abc123"], ["--source-commit", "G".repeat(40)]]) {
+    const proc = cli(extra);
+    expect(proc.exitCode).toBe(1);
+    expect(proc.stderr.toString()).toContain("source_commit_unknown");
+    expect(existsSync(dest)).toBe(false);
+  }
+  expect(sourceCommitValid("a".repeat(64))).toBe(true);
+  const sha = "0123456789abcdef0123456789abcdef01234567";
+  const ok = cli(["--source-commit", sha]);
+  expect(ok.exitCode).toBe(0);
+  expect(readSnapshot(dest)!.source.commit).toBe(sha);
 });
 
 test("the sync writes only under its target: no staging or retired copy survives a run, refused or not", () => {

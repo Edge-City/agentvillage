@@ -47,7 +47,11 @@
  * Usage:
  *   bun scripts/sync-india-references.ts --source <upstream checkout> \
  *     [--target skills/edge-india/references] [--source-repo aromeoes/edge-agent-skill] \
- *     [--source-commit <sha>] [--source-commit-date <iso>] [--allow-shrink]
+ *     --source-commit <sha> [--source-commit-date <iso>] [--allow-shrink]
+ *
+ *   `--source-commit` is required on the command line: without the upstream
+ *   checkout's commit sha (40 or 64 hex), it refuses (exit 1) and publishes
+ *   nothing, so every publish is attributable.
  *
  * Standard library only (plus the knowledge-sync script and refs.ts, both
  * standard library only), so the workflow needs no `bun install`.
@@ -352,6 +356,11 @@ function isoOrNull(value: string | undefined): string | null {
   return Number.isNaN(time) ? null : new Date(time).toISOString();
 }
 
+/** A git commit sha: 40 hex characters (SHA-1) or 64 (SHA-256 repositories). */
+export function sourceCommitValid(value: unknown): value is string {
+  return typeof value === "string" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value);
+}
+
 function argValue(args: string[], name: string): string | undefined {
   const index = args.indexOf(name);
   return index >= 0 ? args[index + 1] : undefined;
@@ -361,15 +370,21 @@ if (import.meta.main) {
   const args = process.argv.slice(2);
   const source = argValue(args, "--source");
   if (!source) {
-    console.error("usage: bun scripts/sync-india-references.ts --source <upstream checkout> [--target dir]");
+    console.error("usage: bun scripts/sync-india-references.ts --source <upstream checkout> --source-commit <sha> [--target dir]");
     process.exit(2);
+  }
+  // Every publish names the upstream commit it came from: without a readable one, nothing is published.
+  const sourceCommit = argValue(args, "--source-commit");
+  if (!sourceCommitValid(sourceCommit)) {
+    console.error(`refused (previous snapshot kept): source_commit_unknown: --source-commit must be the upstream checkout's commit sha (got ${JSON.stringify(sourceCommit ?? null)})`);
+    process.exit(1);
   }
   try {
     const result = syncReferences({
       source,
       target: argValue(args, "--target") ?? "skills/edge-india/references",
       sourceRepo: argValue(args, "--source-repo"),
-      sourceCommit: argValue(args, "--source-commit") ?? null,
+      sourceCommit,
       sourceCommitDate: isoOrNull(argValue(args, "--source-commit-date")),
       allowShrink: args.includes("--allow-shrink"),
     });

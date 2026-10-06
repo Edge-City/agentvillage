@@ -20,6 +20,23 @@
  *     kill switch. The upstream itself stays allowed as an operator override
  *     only: a push there reaches every agent within one run, with none of the
  *     mirror's checks.
+ *
+ *   Trust boundary. The decision: Carter's choice of upstream (GRANT
+ *   2026-10-06 09:06Z, "the mirror follows aromeoes/edge-agent-skill"). The
+ *   mirror follows `aromeoes/edge-agent-skill@main`: a personal account's
+ *   branch, unpinned, published automatically every 15 minutes by the sync
+ *   workflow, with no person reviewing it. What protects the fleet: the sync's
+ *   checks (sizes, names, encoding, HTML, complete India-only trees, manifest
+ *   links only to the guide's hosts) and the upstream commit it records per
+ *   publish, refusing to publish when that commit cannot be read; this job's
+ *   verification of every file against the mirror's SNAPSHOT.json; the
+ *   stored record `refs.ts` checks before it reads this copy (regular files,
+ *   UTF-8, sha256 per file); `refs.ts`'s treat_as frame with a per-run token;
+ *   and the host allowlist on manifest urls. What is NOT protected: the
+ *   content itself. A sentence changed upstream (a price, a date, a contact,
+ *   a false claim) reaches residents as information, typically within the
+ *   hour (the 15-minute sync, the CDN's 5-minute cache, this job's 30-minute
+ *   period), cited with its source link.
  *     Set empty (`KNOWLEDGE_SNAPSHOT_URL=`): switched off, status
  *     `unconfigured`, exit 0, no knowledge file written.
  *   KNOWLEDGE_SNAPSHOT_HOSTS  optional, comma-separated extra host names.

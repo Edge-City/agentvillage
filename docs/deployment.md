@@ -441,7 +441,24 @@ checks (complete trees, the caps this job and `refs.ts` apply, manifest
 links only to the guide's own sites), a commit per change under our org's
 audit log, and a kill switch (disable the workflow, or revert the mirror). A
 push to upstream read directly would reach every agent within one run with
-none of these. Neither switch removes a
+none of these.
+
+**Trust boundary.** The decision: Carter's choice of upstream (GRANT
+2026-10-06 09:06Z, "the mirror follows `aromeoes/edge-agent-skill`"). The
+mirror follows `aromeoes/edge-agent-skill@main`: a personal account's branch,
+unpinned, published automatically every 15 minutes by the sync workflow, with
+no person reviewing it. What protects the fleet: the sync's checks (sizes,
+names, encoding, HTML, complete India-only trees, manifest links only to the
+guide's hosts) and the upstream commit it records in `SNAPSHOT.json` per
+publish (it refuses to publish when that commit cannot be read); this job's
+verification of every file against the mirror's `SNAPSHOT.json`; the stored
+record `refs.ts` checks before it reads the local copy (regular files, UTF-8,
+sha256 per file); `refs.ts`'s treat_as frame with a per-run token; and the
+host allowlist on manifest urls. What is **not** protected: the content
+itself. A sentence changed upstream (a price, a date, a contact, a false
+claim) reaches residents as information, typically within the hour (the
+15-minute sync, the CDN's 5-minute cache, the job's 30-minute period), cited
+with its source link. Neither switch removes a
 copy already on disk: disabling the workflow, or writing a tenant's key empty,
 leaves that tenant's last synced set in place; only a revert of the mirror
 pushes a clean copy out, within about 35 minutes (one 30-minute period plus

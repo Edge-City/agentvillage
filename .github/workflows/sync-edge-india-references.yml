@@ -65,6 +65,11 @@ jobs:
         run: |
           set -euo pipefail
           commit=$(git -C reference-source rev-parse HEAD)
+          # Every publish names the upstream commit it came from: no readable commit, no publish.
+          if ! printf '%s' "$commit" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "refused: the upstream commit could not be read; nothing published" >&2
+            exit 1
+          fi
           commit_date=$(git -C reference-source log -1 --format=%cI)
           shrink=""
           if [ "${{ github.event.inputs.allow_shrink }}" = "true" ]; then shrink="--allow-shrink"; fi
