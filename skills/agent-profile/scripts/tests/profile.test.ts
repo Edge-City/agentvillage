@@ -23,6 +23,7 @@ import {
   NICKNAME_SCRIPTS,
   NICKNAME_STACKED_MARKS,
   NICKNAME_WORD_BREAK,
+  ONE_READS,
   RESERVED_NICKNAMES,
   agentName,
   nicknameBreaks,
@@ -150,12 +151,13 @@ describe("parseProfile: each field defensively, the control plane's rule restate
   // The rule's fixture: byte-identical to the control plane's control-plane/tests/fixtures/nickname-rule.json,
   // which pins the same digest; move both copies and both pins together. With AV_CONTROLPLANE_DIR set to an
   // agentvillage-controlplane checkout, the two copies are also compared byte for byte.
-  const RULE_FIXTURE_SHA256 = "ccddb0b82d4f51f0c2e3c87fdcd3d1617cf765f3263345527253f45878b20d0a";
+  const RULE_FIXTURE_SHA256 = "2767b69798fef70f2750b65796ab74680b0374d104230f9a3984169056c825a6";
   const ruleText = readFileSync(at("nickname-rule.json"), "utf8");
   const rule = JSON.parse(ruleText) as {
     expressions: Record<string, unknown>;
     reserved: string[];
     lookalikes: Record<string, string>;
+    oneReads: string[];
     probes: [string, string, string][];
   };
 
@@ -172,6 +174,7 @@ describe("parseProfile: each field defensively, the control plane's rule restate
     }).toEqual(rule.expressions);
     expect([...RESERVED_NICKNAMES]).toEqual(rule.reserved);
     expect({ ...LOOKALIKES }).toEqual(rule.lookalikes);
+    expect([...ONE_READS]).toEqual(rule.oneReads);
   });
 
   test.each(rule.probes)("nickname probe: %s -> %s", (_, given, expected) => {

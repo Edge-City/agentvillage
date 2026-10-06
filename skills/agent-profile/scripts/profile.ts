@@ -51,7 +51,8 @@ const LIMITS = { nickname: 32, about_me: 600, interests: 12, interest: 40, langu
 // 4. A mark on a letter or a digit, at most three on one.
 // 5. No word mixes Latin, Cyrillic and Greek letters.
 // 6. Not a name that reads as the village or its staff, compared on a skeleton (NFKC, no marks,
-//    lower case, look-alikes as Latin, no spaces, hyphens or apostrophes).
+//    lower case, Cyrillic/Greek look-alikes and the digits 0, 3, 5 as Latin, 1 as l or i, no
+//    spaces, hyphens or apostrophes).
 export const NICKNAME_JOINER = /(?<=\p{L}[\p{Mn}\p{Mc}]*)[\u200C\u200D](?=\p{L})/gu;
 export const NICKNAME_HIDDEN = /[\p{Cc}\p{Cf}\p{Me}\p{Default_Ignorable_Code_Point}\p{Extended_Pictographic}\u115F\u1160\u3164\uFFA0\uFE00-\uFE0F\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/u;
 export const NICKNAME_RE = /^[\p{L}\p{Nd}][\p{L}\p{M}\p{Nd} '\u2019-]*$/u;
@@ -67,15 +68,19 @@ export const LOOKALIKES: Readonly<Record<string, string>> = {
   "\u051B": "q", "\u051D": "w", "\u04BB": "h", "\u04CF": "l",
   "\u03B1": "a", "\u03B2": "b", "\u03B5": "e", "\u03B9": "i", "\u03BA": "k", "\u03BD": "v", "\u03BF": "o", "\u03C1": "p", "\u03C4": "t",
   "\u03C5": "u", "\u03C7": "x", "\u03B7": "n",
+  0: "o", 3: "e", 5: "s",
 };
+/** The digit 1 reads as l or as i: both skeletons are compared. */
+export const ONE_READS = ["l", "i"] as const;
 const RESERVED_KEYS: readonly string[] = RESERVED_NICKNAMES.map((n) => n.replace(/ /g, ""));
 
-/** The skeleton a reserved name is compared on (rule 6). */
-function reservedKey(s: string): string {
-  return [...s.normalize("NFKC").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase()]
+/** The skeletons a reserved name is compared on (rule 6): one per reading of the digit 1. */
+function reservedKeys(s: string): string[] {
+  const key = [...s.normalize("NFKC").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase()]
     .map((c) => LOOKALIKES[c] ?? c)
     .join("")
     .replace(/[\s'\u2019-]/gu, "");
+  return ONE_READS.map((r) => key.replace(/1/g, r));
 }
 
 /** A word with letters of more than one of Latin, Cyrillic and Greek (rule 5). */
@@ -92,7 +97,7 @@ export function nicknameBreaks(s: string): NicknameBreak | null {
   if (!NICKNAME_RE.test(bare)) return "symbols";
   if (NICKNAME_LOOSE_MARK.test(bare) || NICKNAME_STACKED_MARKS.test(bare)) return "marks";
   if (mixesScripts(bare)) return "mixed";
-  if (RESERVED_KEYS.includes(reservedKey(bare))) return "reserved";
+  if (reservedKeys(bare).some((k) => RESERVED_KEYS.includes(k))) return "reserved";
   return null;
 }
 const LANGUAGE_RE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/;

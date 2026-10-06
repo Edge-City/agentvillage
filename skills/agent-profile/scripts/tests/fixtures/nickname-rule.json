@@ -1,5 +1,5 @@
 {
- "about": "P1 nickname rule probes, mirrored byte for byte in agentvillage-controlplane control-plane/tests/fixtures/nickname-rule.json and agentvillage skills/agent-profile/scripts/tests/fixtures/nickname-rule.json. Each probe is [what, nickname (already NFC, trimmed, one space between words), expected]. expected: ok, too_long, or the part of the rule it breaks (hidden, symbols, marks, mixed, reserved). Move both copies and both sha256 pins together.",
+ "about": "P1 nickname rule probes, mirrored byte for byte in agentvillage-controlplane control-plane/tests/fixtures/nickname-rule.json and agentvillage skills/agent-profile/scripts/tests/fixtures/nickname-rule.json. Each probe is [what, nickname (already NFC, trimmed, one space between words), expected]. expected: ok, too_long, or the part of the rule it breaks (hidden, symbols, marks, mixed (the code nickname_mixed_script), reserved). Move both copies and both sha256 pins together.",
  "expressions": {
   "joiner": {
    "source": "(?<=\\p{L}[\\p{Mn}\\p{Mc}]*)[\\u200C\\u200D](?=\\p{L})",
@@ -51,6 +51,9 @@
   "agent village team"
  ],
  "lookalikes": {
+  "0": "o",
+  "3": "e",
+  "5": "s",
   "\u0430": "a",
   "\u0432": "b",
   "\u0435": "e",
@@ -86,6 +89,10 @@
   "\u03c7": "x",
   "\u03b7": "n"
  },
+ "oneReads": [
+  "l",
+  "i"
+ ],
  "probes": [
   [
    "plain",
@@ -516,6 +523,56 @@
    "all-Greek look-alike of operator",
    "\u039f\u03c1\u03b5ra\u03c4or",
    "mixed"
+  ],
+  [
+   "Cyrillic A in Admin (coordinator)",
+   "\u0410dmin",
+   "mixed"
+  ],
+  [
+   "Cyrillic dze in system",
+   "\u0455ystem",
+   "mixed"
+  ],
+  [
+   "fullwidth SYSTEM (coordinator)",
+   "\uff33\uff39\uff33\uff34\uff25\uff2d",
+   "reserved"
+  ],
+  [
+   "zero for o",
+   "0perator",
+   "reserved"
+  ],
+  [
+   "Cyrillic i in Edge City Team",
+   "Edge C\u0456ty Team",
+   "mixed"
+  ],
+  [
+   "one for i",
+   "Adm1n",
+   "reserved"
+  ],
+  [
+   "one for l",
+   "Agent Vi11age",
+   "reserved"
+  ],
+  [
+   "five for s, three for e",
+   "5y5t3m",
+   "reserved"
+  ],
+  [
+   "digits in a plain name",
+   "Agent 47",
+   "ok"
+  ],
+  [
+   "a year",
+   "Mira 2026",
+   "ok"
   ]
  ]
 }
