@@ -34,15 +34,18 @@ row). In plain words, for the consent screen:
 - **What waits for a tap.** Kinds of act the agent proposes rather than
   performs: publishing an intention it inferred to Index, sharing a digest it
   drafted (if digests ship), and casting the resident's answer to the weekly
-  village question or their vote on the daily treasury ballot. Six more are
+  village question or their vote on the daily treasury ballot. Seven more are
   reserved now and built later, so week two needs no policy amendment: filing
   a treasury proposal the agent drafted (`treasury.propose`, from Oct 18),
   withdrawing the resident's own treasury proposal on the agent's suggestion
   (`treasury.withdraw`), creating or changing an EdgeOS event or venue
-  (`edgeos.event.write`, `edgeos.venue.write`), and installing an app from the
+  (`edgeos.event.write`, `edgeos.venue.write`), installing an app from the
   village marketplace or having an installed app act, the request naming the
-  app and the verb (`marketplace.app.install`, `marketplace.app.action`); no
-  tool proposes these yet.
+  app and the verb (`marketplace.app.install`, `marketplace.app.action`), and
+  taking up an allocation of village resources proposed for the resident
+  (`resource.allocate`, the treasury/ODS allocation class); no tool proposes
+  these yet. `odin.*` is reserved for the allocator's own classes (DATA-255),
+  with no row.
   Each arrives as a Telegram message from the "Agent Village
   Approvals" bot with approve and reject buttons, each on its own
   (`delivery: burst`: one left unanswered does not hold back the next), and

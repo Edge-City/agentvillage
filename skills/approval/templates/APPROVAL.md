@@ -58,10 +58,14 @@ What waits for a tap. Only classes an agent opens with `approval propose`
     reserved namespace).
   - marketplace.app.action: an installed app acting for the agent, before it
     acts; the request payload names the app and the verb (R2).
+  - resource.allocate: the treasury/ODS allocation class, an allocation of
+    village resources proposed for the resident, before the agent takes it up
+    (R2 addendum). `odin.*` is a reserved namespace for the allocator's own
+    classes (DATA-255): a comment line in the block, no row.
 
-The treasury, EdgeOS and marketplace rows are reserved now and built later: no
-tool proposes them yet, and writing them before Oct 11 means week two's
-experiments need no policy amendment (a change to every tenant's policy
+The treasury, EdgeOS, marketplace and allocation rows are reserved now and
+built later: no tool proposes them yet, and writing them before Oct 11 means
+week two's experiments need no policy amendment (a change to every tenant's policy
 bytes, and so a re-attestation, after enforcement starts). Two more R2 rows
 are reserved the same way and wait for no tap: marketplace.app.read
 (autonomous and recorded: an installed app reads for the agent) and
@@ -184,6 +188,8 @@ classes:
   marketplace.app.action:        { autonomy: manual, agent_may_request: true }   # reserved; an installed app acting for the agent; the request payload names the app and the verb
   marketplace.app.read:          { autonomy: autonomous, agent_may_request: true }   # reserved; an installed app reads for the agent; recorded
   review.delegate.model:         { autonomy: manual }   # reserved; the resident may choose later to let a model reviewer act first; nothing acts on it today; no agent request
+  resource.allocate:             { autonomy: manual, agent_may_request: true }   # reserved; the treasury/ODS allocation class: an allocation of village resources proposed for the resident
+  # odin.* (the allocator producer, DATA-255): a reserved namespace for the allocator's own classes; a comment only, no row here.
   # The gate's own organs and the resident's credentials: never the agent.
   policy.core:                   { autonomy: human-only }
   log.mutate:                    { autonomy: human-only }
