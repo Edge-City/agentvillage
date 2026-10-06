@@ -65,6 +65,29 @@ def test_a_turn_emits_one_in_and_one_out(live, ctx, av):
         assert event["session_id"] == SESSION and event["turn_id"] == "t0"
 
 
+#: DATA-357: the welcome's exact texts, pinned by skills/index-network/scripts/tests/welcome.test.ts.
+WELCOME_TEXTS = json.loads(
+    (Path(__file__).resolve().parents[3] / "skills" / "index-network" / "scripts" / "tests" / "fixtures" / "welcome-texts.json").read_text(encoding="utf-8")
+)
+
+
+@pytest.mark.parametrize("case", sorted(WELCOME_TEXTS))
+def test_the_welcome_is_recorded_as_one_ordinary_message_out(live, ctx, av, case):
+    """DATA-357: the first-DM welcome is the turn's reply, so it is one `message.out`
+    on the resident's channel like any other: length and keyed hash, never the text."""
+    text = WELCOME_TEXTS[case]
+    converse(ctx, user="hi", agent=text)
+    outbound = messages(av, live, "message.out")
+    assert len(outbound) == 1
+    payload = outbound[0]["payload"]
+    assert outbound[0]["actor"] == "agent"
+    assert payload["channel"] == "telegram" and payload["cron_job_id"] is None
+    assert payload["length"] == len(text)
+    assert payload["content_hash"] == keyed(text)
+    assert payload["flags"]["is_ask"] is (case == "zero")
+    blob = json.dumps(av.read_buffer(live._COLLECTOR))
+    assert "Welcome to Edge City India" not in blob and "morning brief" not in blob
+
 def test_the_message_counts_still_reach_session_ended(live, ctx, av):
     converse(ctx)
     ctx.fire("on_session_finalize", session_id=SESSION)
