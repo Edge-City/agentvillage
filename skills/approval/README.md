@@ -305,15 +305,17 @@ on the facade's `GET /status`, which answers the tenant credential; the
 sandbox holds the agent credential. The DATA-43b follower reads it and writes
 the `approval_md` identity-map row.
 
-R3 fix round 3 (SF1): the marker also carries `shim_sha256`, `gated_entries`
-(how many `pre_tool_call` entries running the shim this install left in
-config.yaml: 35 with R3b) and `written_at` (rewritten by every successful
-install). The control plane reads the count after each install and reports
-the gate `on` only while it equals the list it ships against, so a tenant
-whose installer predates R3b, or was rolled back, never reads its hooked rows
-as enforced. `--check` prints the same count (`gated_entries`, beside
-`gated_entries_expected`) for the per-tenant check before the control plane
-carrying R3 is deployed.
+R3 fix rounds 3 and 4 (SF1): the marker also carries `shim_sha256`,
+`gated_entries` (how many `pre_tool_call` entries running the shim this
+install left in config.yaml: 35 with R3b) and `written_at`, as a hint only.
+The control plane does not trust the file: it reads the install's own stdout
+line, `approval gate installed: <n> pre_tool_call entries (fail_closed),
+matchers sha256=<hex>, ...` (the hex is the sha256 of the routed matchers,
+sorted, one per line), and reports the gate `on` only while both equal what it
+ships against. An installer before R3b prints 13 and no digest, so a tenant on
+one, or rolled back to one, never reads its hooked rows as enforced. `--check`
+prints one JSON line with `"gated_entries":35,"gated_entries_expected":35`; it
+exits 0 whatever the count, so read the field.
 
 ## Enablement under co-location (DATA-233)
 

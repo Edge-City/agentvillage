@@ -446,6 +446,10 @@ describe("installing the gate", () => {
     // The live fire: one terminal call, deliberately without a workdir.
     expect(hermes.kwargs()).toEqual({ tool_name: "terminal", args: { command: "ls /tmp" }, session_id: "av-approval-selfcheck" });
     expect(logs.at(-1)).toContain("approval gate installed: 35 pre_tool_call entries (fail_closed)");
+    // R3 fix round 4 (N6): the sorted matcher list's digest, which the control plane pins.
+    const listSha = createHash("sha256").update([...APPROVAL_GATED_TOOLS].sort().join("\n"), "utf8").digest("hex");
+    expect(listSha).toBe("9cb621bbe4c5761364a956509b705dbad62168e5bf42adff5600fe0a45e11d43");
+    expect(logs.at(-1)).toContain(`approval gate installed: 35 pre_tool_call entries (fail_closed), matchers sha256=${listSha}, `);
     expect(logs.at(-1)).toContain("live: blocked by the facade), overrides: none");
     expect([...logs, ...errors].join("\n")).not.toContain(TOKEN);
     expect(readFileSync(join(home, "config.yaml"), "utf8")).not.toContain(TOKEN);

@@ -523,6 +523,19 @@ export function ourEntryCount(doc: unknown, command: string): number {
   return pre.filter((entry) => isOurEntry(entry, command)).length;
 }
 
+/**
+ * R3 fix round 4 (N6): sha256 (hex) of the sorted matchers of the `pre_tool_call` entries in `doc`
+ * that run the shim, one per line: which list the install routed, not only how many. Printed on
+ * the install's own stdout line, which the control plane reads (it pins the same digest). Pure.
+ */
+export function ourMatchersSha256(doc: unknown, command: string): string {
+  const top = isMapping(doc) ? doc : {};
+  const hooks = isMapping(top.hooks) ? top.hooks : {};
+  const pre = Array.isArray(hooks.pre_tool_call) ? hooks.pre_tool_call : [];
+  const matchers = pre.filter((entry) => isOurEntry(entry, command)).map((entry) => String((entry as Record<string, unknown>).matcher ?? ""));
+  return createHash("sha256").update(matchers.sort().join("\n"), "utf8").digest("hex");
+}
+
 /** `doc` with the gate merged in (write-hooks.py's `merge`, gate only). Pure. */
 export function mergeApprovalHooks(doc: unknown, command: string): Record<string, unknown> {
   if (!isMapping(doc)) throw unmergeable("the top level is not a mapping");
@@ -1315,6 +1328,7 @@ export function installApproval(sourceSkills: string, options: ApprovalOptions =
     copyPluginTree(join(sourceSkills, APPROVAL_SKILL), skillTarget);
     const now = options.now ?? new Date();
     const gatedEntries = ourEntryCount(merged, approvalShimPath());
+    const matchersSha = ourMatchersSha256(merged, approvalShimPath());
     writeSurfaceMarker(now, prior, [], gatedEntries);
 
     const report = checkApprovalReport({ liveScript: join(sourceSkills, APPROVAL_SKILL, "scripts", "live_selfcheck.py"), ...options });
@@ -1347,7 +1361,9 @@ export function installApproval(sourceSkills: string, options: ApprovalOptions =
     }
     console.log(exit1Line(report.exit1));
     console.log(
-      `→ approval gate installed: ${APPROVAL_GATED_TOOLS.length} pre_tool_call entries (fail_closed), ` +
+      // R3 fix round 4 (N1, N6): the control plane reads the count and the list digest from this
+      // stdout line of the install it runs (not from a file the tenant can write afterwards).
+      `→ approval gate installed: ${gatedEntries} pre_tool_call entries (fail_closed), matchers sha256=${matchersSha}, ` +
         `config ${configChanged ? "updated" : "unchanged"}, ${envChanged} .env line(s) set, ` +
         (deferred.length > 0 ? `self-check passed (live: deferred, ${deferred.join(", ")}), ` : "self-check passed (live: blocked by the facade), ") +
         `overrides: ${report.overrides.length > 0 ? report.overrides.join(", ") : "none"}` +
