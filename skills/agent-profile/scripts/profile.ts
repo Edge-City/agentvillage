@@ -21,6 +21,10 @@
  * and apostrophe, for one) is dropped alone (one line, `av_profile.field_dropped
  * fields=<names>`), so a bad nickname falls back to the usual name. It never
  * prints the file's text on stderr, and it always exits 0.
+ *
+ * What it prints is a `terminal` tool result: the control plane copies nothing
+ * to the research database, but this output is archived and sanitised like any
+ * other tool output in a conversation under research consent.
  */
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
