@@ -38,11 +38,13 @@ GATED_SAMPLE = ("terminal", "write_file", "patch", "read_file", "search_files", 
                 "delegate_task", "cronjob_manage", "cronjob", "send_message",
                 # R3b (DATA-344): the side-effecting tools the policy's tools: list judges.
                 "mcp__index__create_intent", "mcp__index__update_intent", "mcp__index__archive_intent",
-                "mcp__index__accept_opportunity", "index_create_intent", "index_accept_opportunity",
+                "mcp__index__pause_intent", "mcp__index__resume_intent", "mcp__index__accept_opportunity",
+                "mcp__index__reject_opportunity", "mcp__index__update_my_profile", "mcp__index__enrich_my_profile",
+                "index_create_intent", "index_update_opportunity", "index_research_profile",
                 "image_generate", "video_generate", "text_to_speech", "web_search", "x_search")
 UNGATED_SAMPLE = ("memory", "todo_list", "mcp_index_search", "cronjob_manager", "mcp__index__list_intents",
                   "mcp__index__get_opportunity", "index_read_intents", "skill_view", "record_intention", "recall",
-                  "vision_analyze", None)
+                  "vision_analyze", "index_accept_opportunity", "index_open_app", None)
 
 
 # ---------------------------------------------------------------------------

@@ -441,7 +441,7 @@ describe("installing the gate", () => {
 
     // The live fire: one terminal call, deliberately without a workdir.
     expect(hermes.kwargs()).toEqual({ tool_name: "terminal", args: { command: "ls /tmp" }, session_id: "av-approval-selfcheck" });
-    expect(logs.at(-1)).toContain("approval gate installed: 30 pre_tool_call entries (fail_closed)");
+    expect(logs.at(-1)).toContain("approval gate installed: 35 pre_tool_call entries (fail_closed)");
     expect(logs.at(-1)).toContain("live: blocked by the facade), overrides: none");
     expect([...logs, ...errors].join("\n")).not.toContain(TOKEN);
     expect(readFileSync(join(home, "config.yaml"), "utf8")).not.toContain(TOKEN);
@@ -472,7 +472,7 @@ describe("installing the gate", () => {
     for (const tool of ["cronjob_manager", "send_message_x", "mcp_index_search", "memory"]) expect(covers(tool)).toBe(false);
   });
 
-  test("R3b (DATA-344): the side-effecting tools the policy's tools: list judges are routed, exactly; Index's reads and the local tools are not", () => {
+  test("R3b (DATA-344): the side-effecting tools the policy's tools: list judges are routed, exactly (every Index write: fix round 2's S1/S2); Index's reads and the local tools are not", () => {
     const home = tenant();
     installApproval(SOURCE_SKILLS, opts());
     const matchers = ourEntries(home).map((e) => String(e.matcher));
@@ -481,23 +481,35 @@ describe("installing the gate", () => {
       "terminal", "write_file", "patch", "read_file", "search_files", "execute_code", "process(_manage)?", "web_extract",
       "browser_.*", "skill_manage", "delegate_task", "cronjob(_manage)?", "send_message",
     ];
+    // Fix round 2: Index's 14-tool MCP surface has nine writes, all routed (S1); the Index Hermes
+    // plugin's accept or decline is index_update_opportunity and it has no index_accept_opportunity
+    // (S2), and its eight write tools are routed, index_research_profile (POST /enrichment/enrich) included.
+    const indexMcpWrites = ["create_intent", "update_intent", "archive_intent", "pause_intent", "resume_intent", "accept_opportunity", "reject_opportunity", "update_my_profile", "enrich_my_profile"];
+    const indexPluginWrites = ["index_create_intent", "index_update_intent", "index_add_intent_to_network", "index_create_network", "index_update_network", "index_join_network", "index_update_opportunity", "index_research_profile"];
     const added = [
-      "mcp__index__create_intent", "mcp__index__update_intent", "mcp__index__archive_intent", "mcp__index__accept_opportunity",
-      "index_create_intent", "index_update_intent", "index_add_intent_to_network", "index_create_network",
-      "index_update_network", "index_join_network", "index_update_opportunity", "index_accept_opportunity",
+      ...indexMcpWrites.map((t) => `mcp__index__${t}`), ...indexPluginWrites,
       "image_generate", "video_generate", "text_to_speech", "web_search", "x_search",
     ];
+    expect([before.length, added.length]).toEqual([13, 22]);
+    // The plugin's tools as the overlay's copy of Index's contract lists them: every tool whose request
+    // writes (any method but GET, less the one POST that lists: index_read_intents' /intents/list) is
+    // routed, every read is not.
+    const contract = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "plugins", "av-events", "tests", "vectors", "index_intent_contract.json"), "utf8"));
+    const requests = contract.hermes_plugin.requests as Record<string, Array<[string, string]>>;
+    expect(Object.keys(requests).sort()).toEqual([...contract.hermes_plugin.tools].sort());
+    const pluginWrites = Object.keys(requests).filter((t) => requests[t].some(([method, p]) => method !== "GET" && !(method === "POST" && p === "/intents/list")));
+    expect(pluginWrites.sort()).toEqual([...indexPluginWrites].sort());
     // Nothing that was routed changed; the added entries are the whole difference, one per tool.
     expect(matchers).toEqual([...before, ...added]);
     expect([...APPROVAL_GATED_TOOLS]).toEqual([...before, ...added]);
     for (const tool of added) expect([tool, covers(tool)]).toEqual([tool, true]);
     for (const tool of [
-      // Index's reads, and its writes the ruling did not name.
+      // Index's reads (the five of its MCP surface and the plugin's seven, and index_open_app, which
+      // makes no request), near misses, and the phantom index_accept_opportunity.
       "mcp__index__list_intents", "mcp__index__get_intent", "mcp__index__list_opportunities", "mcp__index__get_opportunity",
-      "mcp__index__get_my_profile", "mcp__index__reject_opportunity", "mcp__index__pause_intent", "mcp__index__resume_intent",
-      "mcp__index__update_my_profile", "mcp__index__enrich_my_profile", "mcp__index__create_intent_x", "mcp__index__",
+      "mcp__index__get_my_profile", "mcp__index__create_intent_x", "mcp__index__", "mcp__index__pause_intents",
       "index_read_intents", "index_list_intent_networks", "index_read_networks", "index_read_network_memberships",
-      "index_list_opportunities", "index_read_docs", "index_agent_me", "index_research_profile", "index_open_app",
+      "index_list_opportunities", "index_read_docs", "index_agent_me", "index_open_app", "index_accept_opportunity",
       // The local tools, the overlay's own tools, and the media readers.
       "skill_view", "skills_list", "memory", "session_search", "todo", "clarify", "recall", "consent_status", "record_intention",
       "vision_analyze", "video_analyze", "computer_use", "manage_connections", "web_search_x", "xx_search",
@@ -931,7 +943,7 @@ describe("kill switch (L3): AV_APPROVAL_ENABLED off is fail-open, says so, and t
     expect(existsSync(approvalShimPath())).toBe(false);
     expect(existsSync(approvalSurfacePath())).toBe(false);
     expect(existsSync(join(home, "skills", "approval"))).toBe(false);
-    expect(logs.join("\n")).toContain("removed 30 pre_tool_call entries");
+    expect(logs.join("\n")).toContain("removed 35 pre_tool_call entries");
     expect(logs.join("\n")).toContain("FAIL-OPEN");
   });
 

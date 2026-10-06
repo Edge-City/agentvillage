@@ -9,9 +9,10 @@ The resident opted in to a record of what you do. Before `terminal`,
 `write_file`, `patch`, `read_file` and `search_files` run, and `process`,
 `web_extract`, the `browser_*` tools, `skill_manage`, `delegate_task`,
 `cronjob_manage` and `send_message` too, and `web_search`, `x_search`, the
-media tools (`image_generate`, `video_generate`, `text_to_speech`) and Index's
-write tools (creating, rewording or archiving a signal, accepting an
-opportunity), the call is checked against the
+media tools (`image_generate`, `video_generate`, `text_to_speech`) and every
+one of Index's write tools (creating, rewording, pausing, resuming or archiving
+a signal, accepting or declining an opportunity, changing or enriching the
+profile, joining or changing a network), the call is checked against the
 resident's approval policy, which lives with their approval service, not where
 you can edit it. On the starting policy almost every call is recorded and
 passes straight through. Three kinds never run for you: changing the gate
@@ -98,8 +99,8 @@ The resident has been told what is not checked:
   the subagent then calls may not be.
 - `web_extract`, `web_search`, `x_search`, Index's write tools and the media
   tools go through the gate with no built-in rule: the resident's policy
-  names their kind (`read.web`, an intention you state, accepting an
-  opportunity, `network.call`) from approval.md 0.4.2; before that they pass
+  names their kind (`read.web`, an intention you state, accepting or
+  declining an opportunity, `network.call`) from approval.md 0.4.2; before that they pass
   through unjudged.
 - A scheduled job's own script (`script`, `monitor`, `no_agent`) runs at
   every tick with no check at all. Creating or changing the job goes through

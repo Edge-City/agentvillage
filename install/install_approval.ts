@@ -135,11 +135,16 @@ export const APPROVAL_PLUGIN = "av-approval";
  *
  * R3b (DATA-344, claude-edge 2026-10-06 03:33Z): the side-effecting tools
  * core's adapter does not class itself are routed too, so the resident
- * policy's `tools:` list (approval.md 0.4.2, APRV-499) judges them: Index's
- * writes (its MCP server's `create_intent`, `update_intent`, `archive_intent`
- * and `accept_opportunity`, and the write tools of Index's Hermes plugin),
- * media generation, and the web reads `web_search` and `x_search` (with
- * `web_extract`, one `read.web`). Index's read tools and the local tools
+ * policy's `tools:` list (approval.md 0.4.2, APRV-499) judges them: every
+ * Index write (the nine of its 14-tool MCP surface: `create_intent`,
+ * `update_intent`, `archive_intent`, `pause_intent`, `resume_intent`,
+ * `accept_opportunity`, `reject_opportunity`, `update_my_profile`,
+ * `enrich_my_profile`; and the eight write tools of Index's Hermes plugin,
+ * whose accept or decline is `index_update_opportunity`: it has no
+ * `index_accept_opportunity`), media generation, and the web reads
+ * `web_search` and `x_search` (with `web_extract`, one `read.web`). Fix round
+ * 2 (S1/S2) added the five MCP writes, `index_research_profile` and
+ * dropped the phantom name. Index's read tools and the local tools
  * (`skill_view`, `skills_list`, `memory`, `session_search`, `todo`, `clarify`,
  * `recall`, `consent_status`, `record_intention`) stay unrouted: av-events
  * records every call as `tool.call`, and the hook is for actions. Each
@@ -163,7 +168,12 @@ export const APPROVAL_GATED_TOOLS = [
   "mcp__index__create_intent",
   "mcp__index__update_intent",
   "mcp__index__archive_intent",
+  "mcp__index__pause_intent",
+  "mcp__index__resume_intent",
   "mcp__index__accept_opportunity",
+  "mcp__index__reject_opportunity",
+  "mcp__index__update_my_profile",
+  "mcp__index__enrich_my_profile",
   "index_create_intent",
   "index_update_intent",
   "index_add_intent_to_network",
@@ -171,13 +181,46 @@ export const APPROVAL_GATED_TOOLS = [
   "index_update_network",
   "index_join_network",
   "index_update_opportunity",
-  "index_accept_opportunity",
+  "index_research_profile",
   "image_generate",
   "video_generate",
   "text_to_speech",
   "web_search",
   "x_search",
 ] as const;
+
+/**
+ * N3 (R3 fix round 2): the plugins are staged around the approval step, so an
+ * upgrade never leaves the `av-approval` plugin's matcher list
+ * (`GATED_MATCHERS`) ahead of the hooks block the step writes. The plugin
+ * checks at every gateway start that each of its matchers has a shim entry; a
+ * newer plugin against an older block finds `hook-missing`, which is sticky
+ * and blocks every gated call until a restart with the block intact.
+ *
+ * - `before-approval`: every plugin but `av-approval`; and `av-approval` too
+ *   when no copy is installed yet (a fresh install), so a step that fails
+ *   later still leaves the backstop to fail closed.
+ * - `after-approval`, run only once the approval step succeeded:
+ *   `av-approval`, now that the hooks block it checks has been written (or,
+ *   switched off, removed, which the plugin reads as fail-open).
+ *
+ * An upgrade whose approval step fails keeps the installed `av-approval` and
+ * the hooks block it was installed with: the install stops before the restart,
+ * as before, and the next run stages it.
+ */
+export function stagePlugins(sourceRoot: string, targetRoot: string, phase: "before-approval" | "after-approval"): number {
+  if (!existsSync(sourceRoot)) return 0;
+  let copied = 0;
+  for (const name of readdirSync(sourceRoot).sort()) {
+    const source = join(sourceRoot, name);
+    if (!statSync(source).isDirectory()) continue;
+    const approval = name === APPROVAL_PLUGIN;
+    if (phase === "after-approval" && !approval) continue;
+    if (phase === "before-approval" && approval && existsSync(join(targetRoot, name))) continue;
+    copied += copyPluginTree(source, join(targetRoot, name));
+  }
+  return copied;
+}
 
 /** Hermes's per-entry maximum; it clamps anything above. */
 export const APPROVAL_ENTRY_TIMEOUT_S = 300;

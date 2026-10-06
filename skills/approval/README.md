@@ -76,9 +76,12 @@ Hermes runs the shim as a `pre_tool_call` shell hook for `terminal`,
 classifies from approval.md 0.4.0, PR #569; an older core passes them through
 unjudged), and (R3b) for the side-effecting tools the core adapter does not
 class itself, which the policy's `tools:` list judges from approval.md 0.4.2:
-Index's writes (`mcp__index__create_intent`, `mcp__index__update_intent`,
-`mcp__index__archive_intent`, `mcp__index__accept_opportunity`, and the
-Index Hermes plugin's `index_*` write tools), media generation
+every Index write (the nine of its MCP server's 14 tools:
+`mcp__index__create_intent`, `update_intent`, `archive_intent`,
+`pause_intent`, `resume_intent`, `accept_opportunity`, `reject_opportunity`,
+`update_my_profile` and `enrich_my_profile`; and the Index Hermes plugin's
+eight write tools, whose accept or decline is `index_update_opportunity`),
+media generation
 (`image_generate`, `video_generate`, `text_to_speech`) and the web reads
 `web_search` and `x_search`. Index's read tools and the local tools
 (`skill_view`, `memory`, `todo`, `record_intention` and the like) are not
