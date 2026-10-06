@@ -22,6 +22,8 @@ import {
   APPROVAL_GATED_TOOLS,
   APPROVAL_PLUGIN,
   APPROVAL_ROUTED_SHA256,
+  gateReceiptLine,
+  lastInstallRouted,
   ApprovalInstallError,
   ENV_NAME,
   SHIM_TOOLS,
@@ -457,7 +459,9 @@ describe("installing the gate", () => {
     const listSha = createHash("sha256").update([...APPROVAL_GATED_TOOLS].sort().join("\n"), "utf8").digest("hex");
     expect(listSha).toBe("9cb621bbe4c5761364a956509b705dbad62168e5bf42adff5600fe0a45e11d43");
     expect(APPROVAL_ROUTED_SHA256).toBe(listSha);
-    expect(logs.filter((l) => l.includes("approval gate routed"))).toEqual([`→ approval gate routed (Hermes's own load of config.yaml): entries=35 matchers_sha256=${listSha}`]);
+    expect(lastInstallRouted()).toEqual({ entries: 35, sha256: listSha });
+    // Nothing about it is printed by the step: the receipt is install.ts's last line (gateReceiptLine).
+    expect(logs.some((l) => l.includes("av_gate") || l.includes(listSha))).toBe(false);
     expect(logs.at(-1)).toContain("live: blocked by the facade), overrides: none");
     expect([...logs, ...errors].join("\n")).not.toContain(TOKEN);
     expect(readFileSync(join(home, "config.yaml"), "utf8")).not.toContain(TOKEN);
@@ -555,7 +559,7 @@ describe("installing the gate", () => {
     const home = tenant();
     const o = opts();
     installApproval(SOURCE_SKILLS, o);
-    expect(logs.filter((l) => l.includes("approval gate routed"))).toEqual([`→ approval gate routed (Hermes's own load of config.yaml): entries=35 matchers_sha256=${APPROVAL_ROUTED_SHA256}`]);
+    expect(lastInstallRouted()).toEqual({ entries: 35, sha256: APPROVAL_ROUTED_SHA256 });
     const check = () => {
       logs = [];
       const code = checkCli(["--check"], o);
@@ -586,8 +590,33 @@ describe("installing the gate", () => {
     // The next install merges the list back: 35 again, as Hermes loads it.
     logs = [];
     installApproval(SOURCE_SKILLS, o);
-    expect(logs.filter((l) => l.includes("approval gate routed"))).toEqual([`→ approval gate routed (Hermes's own load of config.yaml): entries=35 matchers_sha256=${APPROVAL_ROUTED_SHA256}`]);
+    expect(lastInstallRouted()).toEqual({ entries: 35, sha256: APPROVAL_ROUTED_SHA256 });
     expect(check()).toMatchObject({ code: 0, out: { ok: true, routed_entries: 35 } });
+  });
+
+  test("R3 fix round 4 (output injection): the gate receipt is one JSON object bound to the control plane's nonce; no valid nonce or no routed facts prints none; a failed install leaves none", () => {
+    const nonce = "0123456789abcdef0123456789abcdef";
+    const routed = { entries: 35, sha256: APPROVAL_ROUTED_SHA256 };
+    expect(JSON.parse(gateReceiptLine(nonce, routed)!)).toEqual({ av_gate: { nonce, entries: 35, sha256: APPROVAL_ROUTED_SHA256 } });
+    expect(gateReceiptLine(nonce, routed)!.includes("\n")).toBe(false);
+    for (const bad of [undefined, "", "0123", nonce.toUpperCase(), `${nonce}0`, `${nonce}\n{"av_gate":{}}`]) expect([bad, gateReceiptLine(bad, routed)]).toEqual([bad, null]);
+    expect(gateReceiptLine(nonce, null)).toBe(null);
+    expect(gateReceiptLine(nonce, { entries: 35, sha256: "x" })).toBe(null);
+    // From the environment, after a real install; reset by the next run that does not install.
+    const home = tenant();
+    const o = opts();
+    installApproval(SOURCE_SKILLS, o);
+    process.env.AV_GATE_NONCE = nonce;
+    try {
+      expect(JSON.parse(gateReceiptLine()!)).toEqual({ av_gate: { nonce, entries: 35, sha256: APPROVAL_ROUTED_SHA256 } });
+      // A later run whose self-check cannot run fails, and leaves no receipt.
+      expect(() => installApproval(SOURCE_SKILLS, { ...o, hermesPython: null })).toThrow();
+      expect(lastInstallRouted()).toBe(null);
+      expect(gateReceiptLine()).toBe(null);
+    } finally {
+      delete process.env.AV_GATE_NONCE;
+    }
+    expect(home).toBeTruthy();
   });
 
   test("idempotent: a second run changes no byte of config.yaml or .env and keeps installed_at", () => {

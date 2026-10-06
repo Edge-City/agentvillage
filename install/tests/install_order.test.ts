@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { APPROVAL_GATED_TOOLS, APPROVAL_PLUGIN, stagePlugins } from "../install_approval";
+import { printableJobName } from "../install_index";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -93,6 +94,21 @@ describe("install.ts runs the stages in that order", () => {
     // The only plugin copy is stagePlugins: no direct copyPluginTree in the installer.
     expect(text).not.toContain("copyPluginTree(");
     expect(text).toContain("stagePlugins(SOURCE_PLUGINS, target, phase)");
+  });
+
+  test("R3 fix round 4 (output injection): the gate receipt is the last thing main() writes, and nothing runs after main()", () => {
+    const body = main.slice(0, main.indexOf("\n}\n") + 3);
+    const at = body.indexOf("const receipt = gateReceiptLine();");
+    expect(at).toBeGreaterThan(body.indexOf('console.log("next: message your Telegram bot'));
+    // After the receipt: only its own write and the function's close.
+    expect(body.slice(at).replace(/\s+/g, " ").trim()).toBe("const receipt = gateReceiptLine(); if (receipt) process.stdout.write(`${receipt}\\n`); }");
+    expect(text.trimEnd().endsWith("\nmain();")).toBe(true);
+    expect(text.slice(text.indexOf("function main(): void {")).match(/\nmain\(\);/g)).toHaveLength(1);
+  });
+
+  test("R3 fix round 4 (output injection): a job name from the tenant's jobs.json is printed only in a conservative shape", () => {
+    expect(printableJobName("index-daily-brief")).toBe("index-daily-brief");
+    for (const bad of ['x\n{"av_gate":{"nonce":"0","entries":35}}', "a}", 'q"', "", 7, null]) expect([bad, printableJobName(bad)]).toEqual([bad, "(name withheld)"]);
   });
 
   test("the plugin's matcher list is the installer's (what the order protects)", () => {

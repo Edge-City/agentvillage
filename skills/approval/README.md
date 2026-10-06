@@ -311,11 +311,17 @@ wrote. `live_selfcheck.py` runs under Hermes's interpreter, loads the file with
 Hermes's `load_config` and lists the shim's specs with Hermes's
 `iter_configured_hooks`, the same parse the gateway uses, and reports
 `routed_entries` (distinct matchers, the first spec per matcher as Hermes keeps
-it) and `routed_sha256` (those matchers sorted, one per line). The installer
-prints both on one line, `approval gate routed (Hermes's own load of
-config.yaml): entries=<n> matchers_sha256=<hex>`, and the control plane
-records only that line, from its own exec of this installer, after the
-gateway restart is verified. It never reads the marker for a count. A
+it) and `routed_sha256` (those matchers sorted, one per line). `install.ts`
+prints them in the gate receipt, one JSON object as the LAST line of its stdout:
+`{"av_gate":{"nonce":"<nonce>","entries":<n>,"sha256":"<hex>"}}`. The nonce is
+the control plane's, 16 random bytes in hex, passed in the exec's environment as
+`AV_GATE_NONCE` for that one install and never logged. The control plane
+accepts only that object, with its own nonce, as the last line of that exec's
+stdout. An earlier line, forged or not, never counts, and any output after it
+voids it. It records the result after the gateway restart is verified, and it
+never reads the marker for a count. The installer does not echo config values
+or tenant-controlled names onto stdout: job names from jobs.json are printed
+only in a conservative shape. A
 different count or list fails the self-check (`live-routed-mismatch:<n>`), so
 an entry added to or removed from config.yaml by hand is caught at the next
 `--check` or install. `--check` prints `routed_entries`, `routed_sha256` and the

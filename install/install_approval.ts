@@ -1284,7 +1284,33 @@ export function disableApprovalGate(): void {
   }
 }
 
+/**
+ * R3 fix round 4 (trust boundary, output injection): what this process's last successful approval
+ * install found routed, from Hermes's own parse (live_selfcheck.py 5b); null otherwise.
+ */
+let lastRouted: RoutedFacts | null = null;
+export function lastInstallRouted(): RoutedFacts | null {
+  return lastRouted;
+}
+
+/** The nonce the control plane passes for one install exec (AV_GATE_NONCE): 16 random bytes, hex. */
+export const GATE_NONCE_PATTERN = /^[0-9a-f]{32}$/;
+
+/**
+ * R3 fix round 4: the gate receipt, `{"av_gate":{"nonce":"<nonce>","entries":<n>,"sha256":"<hex>"}}`,
+ * which install.ts prints as the LAST line of its stdout, or null (no valid nonce in the
+ * environment, or no routed facts from a successful install this run). The control plane accepts
+ * only this object, with the nonce it passed that exec, as the last line: an earlier line (forged
+ * or not) never counts, and anything printed after it voids it. The nonce is never logged.
+ */
+export function gateReceiptLine(nonce: string | undefined = process.env.AV_GATE_NONCE, routed: RoutedFacts | null = lastRouted): string | null {
+  if (typeof nonce !== "string" || !GATE_NONCE_PATTERN.test(nonce) || !routed) return null;
+  if (!Number.isInteger(routed.entries) || routed.entries < 0 || !/^[0-9a-f]{64}$/.test(routed.sha256)) return null;
+  return JSON.stringify({ av_gate: { nonce, entries: routed.entries, sha256: routed.sha256 } });
+}
+
 export function installApproval(sourceSkills: string, options: ApprovalOptions = {}): ApprovalOutcome {
+  lastRouted = null;
   const choice = approvalChoice();
   if (choice === "unset") {
     console.log("→ skipped approval gate (opt-in: AV_APPROVAL_ENABLED=1)");
@@ -1352,12 +1378,9 @@ export function installApproval(sourceSkills: string, options: ApprovalOptions =
     }
     console.log(exit1Line(report.exit1));
     // R3 fix round 4 (the trust boundary): what Hermes's own load and parse of the config.yaml this
-    // install just wrote registers for the shim (live_selfcheck.py 5b). The control plane records
-    // this line, and only this line, from its own exec of this installer; a self-check that did not
-    // report it prints none, and the control plane then records no count.
-    if (report.routed) {
-      console.log(`→ approval gate routed (Hermes's own load of config.yaml): entries=${report.routed.entries} matchers_sha256=${report.routed.sha256}`);
-    }
+    // install just wrote registers for the shim (live_selfcheck.py 5b), kept for the gate receipt
+    // install.ts prints last (gateReceiptLine); nothing about it is printed here.
+    lastRouted = report.routed ?? null;
     console.log(
       `→ approval gate installed: ${APPROVAL_GATED_TOOLS.length} pre_tool_call entries (fail_closed), ` +
         `config ${configChanged ? "updated" : "unchanged"}, ${envChanged} .env line(s) set, ` +

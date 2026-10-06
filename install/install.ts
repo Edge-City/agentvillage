@@ -47,7 +47,7 @@ import { installIndex } from "./install_index";
 import { installEdgeos } from "./install_edgeos";
 import { installGeo } from "./install_geo";
 import { safeInstallRecall, wipeRecallIndex } from "./install_recall";
-import { runApprovalStep, stagePlugins } from "./install_approval";
+import { gateReceiptLine, runApprovalStep, stagePlugins } from "./install_approval";
 import {
   capModelMaxTokens,
   configureAvEvents,
@@ -276,6 +276,13 @@ function main(): void {
   console.log(`  HERMES_HOME: ${TARGET_HOME}`);
   console.log("");
   console.log("next: message your Telegram bot — gateway uses terminal.cwd above");
+
+  // R3 fix round 4 (trust boundary): the gate receipt is the LAST line of this process's stdout,
+  // carrying the control plane's per-exec nonce (AV_GATE_NONCE) and what Hermes's own parse of
+  // config.yaml routes. Nothing is printed after it; without a nonce or a successful approval
+  // install it is not printed at all.
+  const receipt = gateReceiptLine();
+  if (receipt) process.stdout.write(`${receipt}\n`);
 }
 
 main();

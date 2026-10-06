@@ -266,7 +266,8 @@ export function configureCronScriptTimeout(): void {
   const lower = Number.isFinite(seconds) && seconds > 0 && seconds < CRON_SCRIPT_TIMEOUT_SECONDS;
   // Hermes's own default (3600) written out by a config save counts as unset.
   if (!unset && !lower && seconds !== HERMES_DEFAULT_SCRIPT_TIMEOUT) {
-    console.log(`→ cron.script_timeout_seconds already set (${String(current)}); left as is`);
+    // R3 fix round 4 (output injection): a config value is never echoed onto the installer's stdout.
+    console.log("→ cron.script_timeout_seconds already set; left as is");
     return;
   }
   cron.script_timeout_seconds = CRON_SCRIPT_TIMEOUT_SECONDS;
