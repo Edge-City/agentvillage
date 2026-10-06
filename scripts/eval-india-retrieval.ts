@@ -32,8 +32,9 @@ interface Item {
 
 const ROOT = join(import.meta.dir, "..");
 const evalFile = parse(readFileSync(join(ROOT, "docs", "evals", "edge-india-village-20.yaml"), "utf8")) as { items: Item[] };
-// The installed snapshot only, so the result does not depend on the network.
-const ctx = defaultContext({ ...process.env, AV_INDIA_REFS_LIVE: "0" });
+// The committed snapshot only, so the result depends neither on the network
+// nor on a background sync copy that happens to sit in this machine's HERMES_HOME.
+const ctx = { ...defaultContext({ ...process.env, AV_INDIA_REFS_LIVE: "0" }), knowledgeDir: undefined };
 
 const rows: { id: string; skill: string; present: boolean; found: boolean; top: string }[] = [];
 for (const item of evalFile.items) {
