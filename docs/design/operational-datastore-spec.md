@@ -1,10 +1,11 @@
 # The operational datastore: specification
 
-Status: draft spec, v1 (2026-10-04), task DATA-291. Owner: Carter. Base
+Status: draft spec, v2 (2026-10-06: Carter's rulings applied, §11), task DATA-291. Owner: Carter. Base
 note: `docs/design/operational-datastore.md` v3 in
 `Edge-City/agentvillage-data` ("base §n"); its decisions stand unless
 marked here. Marks: [V] verified against code or a decision record, [NV]
-not yet verified, [DECISION NEEDED: who] open, with a recommendation. Code
+not yet verified, [DECISION NEEDED: who] open, with a recommendation;
+questions Carter ruled on 2026-10-05/06 are marked [Decided] (§11). Code
 facts were read from `agentvillage-data` `origin/main` on 2026-10-04
 (`src/schemas/index.ts`, `src/evidence.ts`, `src/worker/consent.ts`,
 `src/jobs/index-poller.ts`, `docs/spec-addenda.md` §4.1,
@@ -56,10 +57,16 @@ route, then the event pipeline; ingest alone writes the store.
 | Weekly question | `village.question_opened@1`, `village.question_closed@1` (reserve, §7) | `operator`; `odin` once Odin's seat exists | `operator_verified` / `agent_report` | none: village content, no personal data | `questions` |
 | Votes | `vote.cast@1` [V registered] | `plugin` only [V] | `agent_report` [V] | a ratified grant, or a recorded policy start, in class `village.vote` (rule 5) and village consent | `votes` |
 | Tallies | none in; computed by the writer from `votes`; `tally.closed@1` out (§7) | the writer computes; `odin` or `operator` records | `derived` | aggregate, no personal data | `tallies` |
-| Village intents | `intention.captured/updated/withdrawn` from the Index poller [V types]; text from the poller's in-process read | `poller`, source Index | `platform_record` | the resident published it through the village tool (`sourceType = agentvillage`), not incognito, and village consent [DECISION NEEDED: Seref] | `intents_public` |
+| Village intents | `intention.captured/updated/withdrawn` from the Index poller [V types]; text from the poller's in-process read | `poller`, source Index | `platform_record` | the resident published it through the village tool (`sourceType = agentvillage`), not incognito, and village consent [Decided, Q4] | `intents_public` |
 | Treasury proposals | `treasury.proposed@1`, `treasury.withdrawn@1` (reserve, §7) | `plugin` only; `control_plane` for tier 3 later | `agent_report` | a ratified grant in class `treasury.propose` and village consent | `proposals` |
 | Resource registry | `resource.supplied@1` (reserve) | `operator` | `operator_verified` | none: village content | `resources` |
-| Allocations | `resource.requested@1`, `resource.allocated@1`, `resource.executed@1` (reserve) | `odin` or `plugin`; `odin` or `operator`; `control_plane` | `agent_report`; `agent_report` / `operator_verified`; `platform_record` | the principal's grant on Odin's seat (base §7) and the beneficiary's village consent | `allocations` |
+| Allocations | `resource.requested@1`, `resource.allocated@1`, `resource.executed@1` (reserve) | `odin` or `plugin`; `odin` or `operator`; `control_plane` | `agent_report`; `agent_report` / `operator_verified`; `platform_record` | the principals' grant on Odin's seat (Timour and Carter, no automatic approvals, §7) and the beneficiary's village consent | `allocations` |
+
+**Announcements channel** (week 1). A listener reads the village
+announcements channel into the ODS and feeds the knowledge snapshot
+(CLAIMS 23:50Z). Village content, no personal data; its event and table
+are not yet specified [NV]. No other Telegram group or channel is ingested
+until DATA-216 is live.
 
 ### 2.2 Corrections to the brief and the base note
 
@@ -79,17 +86,23 @@ route, then the event pipeline; ingest alone writes the store.
   allowlist (`INTENT_FIELDS`) without the words [V], so the poller must
   pass text to the ODS writer in-process, never into an event or research.
 
-### 2.3 Per-sink consent routing [DECISION NEEDED: Carter]
+### 2.3 Per-sink consent routing [Decided: Carter, Q5]
 
 Today the worker drops `digest.shared`, `digest.revoked` and `vote.cast`
 for a tenant without research consent: none is on the ops allowlist
 (addenda §4.1; DATA-99 open item (e)) [V]. A resident in the village but
 not in research would share or vote and see nothing happen.
-Recommendation: the ODS sink needs village consent in force
+
+Ruling: consent is tracked per sink in the store, granularly, but the
+onboarding consent covers every sink the village runs. There is one yes at
+signup. Per-sink tracking is for audit and for later opt-outs; it is never
+a second prompt. The ODS sink needs village consent in force
 (`purpose = 'village'`, any scope) plus the item's grant; the research sink
 keeps research consent. The writer takes the accepted event before the
 research drop; the research copy is unchanged, and the gap shows in
-research as coverage.
+research as coverage. Because scope cannot be widened after signup, the
+signup sentence names every sink up front (§10 item 3), including group
+and channel messages.
 
 ### 2.4 Writer rules common to every table
 
@@ -101,6 +114,9 @@ research as coverage.
   question; a proposal's `budget_day` has an open or future ballot.
 - Every write to a published table writes `ods.changes` in the same
   transaction (§5, §6).
+- Group-message edits replace the stored text in place (current state, no
+  edit history; `edited_at` is kept); a Telegram deletion tombstone deletes
+  the row [Decided, Q14].
 - First start replays unexpired `digest.shared` events (7 days at most)
   from the research event table under the same rules; shares the worker
   dropped before per-sink routing are lost (known limitation). No group
@@ -116,16 +132,18 @@ the Agent Village Railway project read base data (§4.3).
 
 | Slice | Fields on the feed | Personal, never in the public class | Consent basis | Retention | Who reads |
 |---|---|---|---|---|---|
-| `questions` | `question_id`, `kind` (`weekly`, `treasury_ballot`), `text`, `options[{key,label}]`, `opens_at`, `closes_at`, `status` | nothing personal | village content | village end + 30 days | public, resident, Odin, Skylight |
-| `tallies` | `question_id`, `tally_rule`, `counts{option: n}` (policy votes apart until Timour rules, DATA-99 AC #5), `turnout_n`, `eligible_n`, `final`, `computed_at` | who voted what; counts below the small-n floor | aggregate | village end + 30 days | public: final tallies only, suppressed below the floor; resident: also the running turnout; Odin |
-| `my_votes` | `question_id`, `answer`, `authorized_by` (`grant`, `policy`), `cast_at` | the whole slice; only the voter sees it | the vote's grant | close + 7 days | the voter only |
-| `proposals` | `proposal_id`, `text`, `amount_usd` (from `amount_cents`), `budget_day`, `status`, `ballot_question_id`, `proposer_ref` (resident class only), `agent_kind` | `proposer_ref` | the `treasury.propose` grant | funded: village end + 30 days; withdrawn, declined, expired: close + 7 days | public without proposer; resident with proposer [DECISION NEEDED: Timour, in DATA-292]; Odin |
+| `questions` | `question_id`, `kind` (`weekly`, `treasury_ballot`), `text`, `options[{key,label}]`, `opens_at`, `closes_at`, `status` | nothing personal | village content | village end + 90 days | public, resident, Odin, Skylight |
+| `tallies` | `question_id`, `tally_rule`, `counts{option: n}` (policy votes apart until Timour rules, DATA-99 AC #5), `turnout_n`, `eligible_n`, `final`, `computed_at` | who voted what; counts below the small-n floor | aggregate | village end + 90 days | public: final tallies only, suppressed below the floor; resident: also the running turnout (turnout only until close, Q7); Odin |
+| `my_votes` | `question_id`, `answer`, `authorized_by` (`grant`, `policy`), `cast_at` | the whole slice; only the voter sees it | the vote's grant | village end + 90 days | the voter only |
+| `proposals` | `proposal_id`, `text`, `amount_usd` (from `amount_cents`), `budget_day`, `status`, `ballot_question_id`, `proposer_ref` (resident class only), `agent_kind` | `proposer_ref` | the `treasury.propose` grant | village end + 90 days; a withdrawn proposal is deleted at once | public without proposer; resident with proposer [Decided, Q6; Timour to confirm]; Odin |
 | `digests` | `digest_id`, `author_ref`, `display_name`, `scope` (`village` only on the feed), `text`, `shared_at`, `expires_at` | the whole slice | the `digest.share` grant | its `expires_at`, at most 7 days [V door cap] | resident; Odin (`village` and `service:coordination` scopes); the author sees their own of every scope |
-| `intents` | `intent_ref`, `author_ref`, `display_name`, `text`, `updated_at`, an Index app link | the whole slice | §2.1 row; [DECISION NEEDED: Seref] | mirror: gone within one poll pass of archive, pause, incognito or withdrawal | resident; Odin |
-| `resources` | `resource_id`, `kind`, `unit`, `supply`, `allocated`, `remaining` | nothing personal | village content | village end + 30 days | public, resident, Odin |
-| `allocations` | treasury: `allocation_id`, `resource_id`, `proposal_id`, `amount`, `status`, `decided_at`, `executed_at`; top-up: daily count and sum per resource only | the beneficiary of any top-up; a treasury beneficiary in the public class | Odin's principal's grant | village end + 30 days; beneficiary nulled at withdrawal | public: aggregates; resident: treasury rows; the beneficiary: their own rows; Odin |
+| `intents` | `intent_ref`, `author_ref`, `display_name`, `text`, `updated_at`, an Index app link | the whole slice | §2.1 row [Decided, Q4: resident class, with text, never public, incognito excluded] | mirror: gone within one poll pass of archive, pause, incognito or withdrawal | resident; Odin |
+| `resources` | `resource_id`, `kind`, `unit`, `supply`, `allocated`, `remaining` | nothing personal | village content | village end + 90 days | public, resident, Odin |
+| `allocations` | treasury: `allocation_id`, `resource_id`, `proposal_id`, `amount`, `status`, `decided_at`, `executed_at`; top-up: daily count and sum per resource only | the beneficiary of any top-up; a treasury beneficiary in the public class | the principals' grant (Timour and Carter) | village end + 90 days; beneficiary nulled at withdrawal | public: aggregates; resident: treasury rows; the beneficiary: their own rows; Odin |
 
-Never on the feed, in any class: `group_messages` (Odin's view only), other
+Group messages (`group_messages`, village end + 90 days at most, or
+sooner on withdrawal, bot revoke or a deletion tombstone) are never on the
+feed. Never on the feed, in any class: `group_messages` (Odin's view only), other
 people's votes, tenant ids, Telegram ids or handles, EdgeOS emails or ids,
 `decision_id`, `policy_version`, the local intention id behind an Index
 intent, top-up beneficiaries.
@@ -136,14 +154,16 @@ Rules for every slice:
   `proposer_ref`: 16 hex of HMAC-SHA256 over the tenant id, computed by
   ingest under `ODS_REF_KEY` (name only), stable for the village, so a
   reader can join a person's digest to their proposal without the tenant id.
-- **Display names** [DECISION NEEDED: Carter]. Recommendation: the feed
-  reads them from the EdgeOS attendee directory at read time, cached an
-  hour, never stored in the ODS. The digest approval card must say the share
-  shows the resident's name (§10).
+- **Display names** [Decided: Carter, Q9]. Display names MAY be stored:
+  `ods.residents.display_name` is a cached copy from the EdgeOS attendee
+  directory, written by ingest when it first needs it and refreshed on a
+  schedule (hourly at most; the feed never calls EdgeOS for it). It is
+  deleted with the `ods.residents` row at withdrawal. The digest approval
+  card must say the share shows the resident's name (§10).
 - **Small-n floor.** A public tally with turnout under 5 shows turnout only
   [NV the number; Timour].
-- **Running counts.** Residents see turnout, not counts, until close
-  [DECISION NEEDED: Timour, DATA-292].
+- **Running counts** [Decided: Carter, Q7; Timour to confirm]. Residents see
+  turnout, not counts, until close.
 
 ## 4. Auth model
 
@@ -159,12 +179,12 @@ Rules for every slice:
 - Own rows (votes, digests of every scope, allocations) are found by
   `ods.residents.edgeos_ref`, a keyed hash of the EdgeOS identity computed
   by ingest and the feed (`ODS_EDGEOS_REF_KEY`); no email reaches the ODS.
-- **Feed keys, week 2** [DECISION NEEDED: Seref]. An EdgeOS bearer given to
-  a third-party agent is a full-power EdgeOS credential. Recommendation:
-  week 1 accepts the bearer (tier 1's zero lift); week 2 adds read-only
-  feed keys minted by a control-plane route under EdgeOS auth, carried to
-  the ODS as events (`feed_key.issued@1`, `feed_key.revoked@1`, hashed key
-  only) so ingest stays the single writer. DATA-293 tells people to use one.
+- **Feed keys, week 2** [Decided: Carter, Q8]. An EdgeOS bearer given to a
+  third-party agent is a full-power EdgeOS credential. Week 1 accepts the
+  bearer (tier 1's zero lift); week 2 adds read-only feed keys minted by a
+  control-plane route under EdgeOS auth, carried to the ODS as events
+  (`feed_key.issued@1`, `feed_key.revoked@1`, hashed key only) so ingest
+  stays the single writer. DATA-293 tells people to use one.
 
 ### 4.2 Services
 
@@ -278,14 +298,16 @@ CREATE TABLE ods.residents (
   resident_ref text NOT NULL UNIQUE,              -- HMAC(ODS_REF_KEY, tenant_id), 16 hex
   edgeos_ref text UNIQUE,                         -- HMAC of the EdgeOS identity, never the email
   group_consent boolean NOT NULL DEFAULT false,   -- DATA-214 sentence in force
+  display_name text,                              -- cached from the EdgeOS directory (Q9)
+  display_name_refreshed_at timestamptz,
   updated_at timestamptz NOT NULL);
 
 CREATE TABLE ods.group_messages (                 -- base §4; chat_hash per DATA-216
   chat_hash text NOT NULL, message_id bigint NOT NULL,
   sender_tenant_id text NOT NULL REFERENCES ods.residents ON DELETE CASCADE,
   sent_at timestamptz NOT NULL, text text NOT NULL, reply_to_message_id bigint,
-  edited_at timestamptz,
-  expires_at timestamptz NOT NULL,                -- sent_at + 14 days (Q2)
+  edited_at timestamptz,                          -- text replaced on edit; row deleted on a deletion tombstone (Q14)
+  expires_at timestamptz NOT NULL,                -- village end + 90 days (Q2)
   ingested_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (chat_hash, message_id));
 CREATE INDEX ON ods.group_messages (chat_hash, sent_at);
@@ -382,11 +404,15 @@ allocations, turnout, own rows), `coord_*` (Odin). Each filters
 on a per-request session setting; row-level security is the build's
 choice [NV].
 
-**Retention jobs** (ingest): hourly, rows past `expires_at` and votes of
-questions closed over 7 days ago; nightly, proposals per §3, tombstones
-over 7 days, revocation memory past `remember_until`. Logs carry counts,
-never ids or text. The instance is dropped at village end + 30 days
-[DECISION NEEDED: Timour].
+**Retention jobs** (ingest): hourly, rows past `expires_at` (group
+messages and every slice with a village-end bound are set to village end +
+90 days, Q2; digests keep their own `expires_at`, at most 7 days, and
+intents their mirror rule); nightly, tombstones over 7 days, revocation
+memory past `remember_until`, and the display-name refresh. Logs carry
+counts, never ids or text. The instance is dropped at village end + 90
+days [Decided: Carter, Q2; Timour to confirm]. The retention bound is "up
+to 90 days after the village": earlier deletion on withdrawal, revocation,
+a deletion tombstone or `expires_at` always wins.
 
 **Withdrawal delete path.** One ingest job deletes from both sinks (base §3):
 
@@ -417,7 +443,7 @@ resident sees.
 | `treasury.proposed@1` | `plugin` only (`PLUGIN_ONLY`) | `agent_report` | `proposal_id` (lower-case UUID), `text` (digest text rule), `amount_cents` (integer), `budget_day` (date), the four approval-link keys (`grant` only), optional `decision_id`, `policy_version` | key `treasury.propose:<proposal_id>`; payload hash over exactly `{proposal_id, text, amount_cents, budget_day}` |
 | `treasury.withdrawn@1` | `plugin` only | `agent_report` | `proposal_id`, optional `decision_id` | no grant, like `digest.revoked` |
 | `resource.supplied@1` | `operator` | `operator_verified` | `resource_id`, `kind`, `unit`, `supply`, `reason` | base §6 |
-| `resource.requested@1` | `odin`, `plugin` | `agent_report` | `request_id`, `resource_id`, `amount`, `decision_id` | base §6; `moralmod` never |
+| `resource.requested@1` | `odin`, `plugin` | `agent_report` | `request_id`, `resource_id`, `amount`, `decision_id` | base §6; `moralmod` never; the `plugin` entry stays reserved but unused on resident seats in October (Q12) |
 | `resource.allocated@1` | `odin`, `operator` | `agent_report` / `operator_verified` | `allocation_id`, `resource_id`, `amount`, `proposal_id` nullable, `recommendation_event_id` nullable, approval-link keys for `odin` | base §6 plus `proposal_id` and the link |
 | `resource.executed@1` | `control_plane` | `platform_record` | `allocation_id`, `resource_id`, `amount`, `execution_token_id`, `receipt` | one outbox transaction with `key.topped_up` |
 | `key.topped_up@2` | `control_plane` | `platform_record` | `@1`'s three plus optional `decision_id`, `execution_token_id`, `policy_version` | `@1` is closed [V], so base §6's additions are a `@2` |
@@ -428,14 +454,16 @@ research-instance migration widening the two CHECKs (next free number;
 `0040` is the last today [V]), a `PRODUCER_ALLOWLIST` row with the types
 above, and a `capFor` line returning `agent_report`. Odin's proposals reach
 `platform_record` only through the follower reading its own approval.md
-seat (DATA-255: a Railway service on the resident pattern, principal
-Timour [V ruling B5b]).
+seat (DATA-255: a Railway service on the resident pattern). Principals for
+allocations are Timour and Carter, no automatic approvals: a policy never
+pre-authorises an allocation, including small ones [Decided, Q3; Timour
+to confirm]. The earlier single-principal ruling (B5b) is superseded.
 
 **One tally event.** The ODS counts voters with village consent; research
 sees only research-consenting ones, so dbt cannot recompute the official
 result. `tally.closed@1` records at close the counts allocated against, no
-voter. Before Odin's seat exists an `operator` script emits it [DECISION
-NEEDED: Carter].
+voter. Before Odin's seat exists an operator script closes tallies and emits it
+[Decided: Carter, Q13].
 
 **Ballots reuse `vote.cast@1`.** A treasury ballot is a question of kind
 `treasury_ballot` whose option keys are proposal ids (a UUID fits the
@@ -444,11 +472,10 @@ changes `vote.cast@1`.
 
 **Approval classes** (policy template and settings page, not events):
 `digest.share` and `village.vote` exist [V `APPROVAL_REVIEW_SWITCH_VALUES`];
-`treasury.propose` must join them before Oct 11 (DATA-292). If residents'
-agents may file `resource.requested` for themselves (base §6 allows it), a
-`resource.request` class must be in the Oct 11 template too, or it is a
-policy amendment later [DECISION NEEDED: Carter; recommendation: not in
-October, a treasury proposal covers it]. Odin's classes
+`treasury.propose` must join them before Oct 11 (DATA-292). There is no
+`resource.request` class on resident seats in October: a treasury proposal
+covers it [Decided: Carter, Q12]; the class would be a policy amendment
+later. Odin's classes
 (`resource.allocate`, `resource.topup`) live on its own policy and land
 with its seat.
 
@@ -468,7 +495,8 @@ memory, the archive or `text.messages`; it never writes the store.
 every viewer sees, so by §4.2 it reads the public class with a `world`
 service credential: question, final tallies, proposals without proposers,
 resource totals. If every viewer is a verified resident it may read the
-resident class on a viewer's bearer [DECISION NEEDED: Timour]. ODS text
+resident class on a viewer's bearer [Decided, Q11: public unless every
+viewer is a verified resident; Timour to confirm]. ODS text
 it passes to a model goes only to a processor that does not train on it.
 
 **External agents, BYOA tier 1** (DATA-290, DATA-293). The feed routes only,
@@ -488,10 +516,10 @@ path]. The app owner builds the page.
 - **Instance.** Its own Railway Postgres service, Carter's hand (base §3)
   [V decision]. `ODS_DATABASE_URL` (`ods_writer`) on ingest only; the feed
   gets its two reader URLs, Odin its own. Names only here.
-- **Feed placement** [DECISION NEEDED: Carter]. Recommendation: a small
-  `ods-feed` service built from `agentvillage-data` holding only reader
-  credentials, so the internet-facing route never sits beside the
-  writer's credential. Routes on ingest save a service and lose that.
+- **Feed placement** [Decided: Carter, Q10]. A separate small `ods-feed`
+  service built from `agentvillage-data`, holding only reader credentials,
+  so the internet-facing route never sits beside the writer's credential.
+  No routes on ingest.
 - **Backups.** Railway volume backups, shortest retention; no logical dump
   leaves the instance. A restore sets a new epoch and, before the feed
   reopens, replays every withdrawal, revocation and deletion since the
@@ -528,68 +556,104 @@ launch and keeps only reservations before it.
 **Before Oct 11: reserve, no build.**
 
 1. Register §7's event types, allowlist rows and the `odin` class.
-2. Add `treasury.propose` (and `resource.request` if Q12 is yes) to the
+2. Add `treasury.propose` to the
    policy template and settings page, manual by default (DATA-292).
-3. Consent wording [DECISION NEEDED: Carter, Timour]: one sentence saying
-   that consenting residents' group-chat messages, and the digests, votes
-   and proposals a resident approves, are shown to village services (Odin,
-   Skylight, the app) and to other residents and the agents they use, for
-   a short time, and deleted on withdrawal. Changing wording after launch
-   means re-consent.
+3. Consent wording [Carter rules the shape (Q5); Timour approves the
+   words]: one yes at signup covering every sink the village runs, so no
+   second prompt follows. It says that messages a resident posts in the
+   village Telegram groups and channels, and the digests, votes and
+   proposals a resident approves, are shown to village services (Odin,
+   Skylight, the app) and to other residents and the agents they use, kept
+   for up to 90 days after the village ends, and deleted on withdrawal.
+   Changing wording after launch means re-consent.
 4. The digest approval card names the audience and that the share shows
    the resident's name (overlay, the Oct 11 tag).
-5. Decide per-sink routing (§2.3); its build is week 1.
+5. Per-sink routing is decided (§2.3, Q5); its build is week 1.
 
 **Week 1 (Oct 12 to 17), backend only:** the service (Carter's hand),
-`migrations/ods/0001`, writer, retention, withdrawal, feed routes, the
-group-message sink if DATA-216 is live, acceptance, Odin's read role.
+`migrations/ods/0001`, writer, retention, withdrawal, the group-message
+sink if DATA-216 is live, the announcements listener, acceptance, Odin's
+read role. Feed routes follow Seref's Q1 ruling (second half below).
 **Week 2 (from Oct 18), treasury live:** proposals, ballots, tallies,
 allocations, Odin's seat (DATA-255), overlay propose and vote tools,
 Skylight's view, feed keys. Tier 3 only after Timour's yes (DATA-290).
 
-**Follow-up build tasks to file:**
+**Build tasks to file.** Numbers are stable ids for this spec.
+
+First half: no open question depends on it. Build may start before launch
+if Carter pulls it forward.
 
 | # | Title | One line | Owner repo |
 |---|---|---|---|
-| 1 | ODS Railway service and credentials | Instance, role URLs, `ODS_DATABASE_URL` on ingest; Carter's hand | `agentvillage-data` (tracking) |
+| 1 | ODS Railway service and credentials | The store's own Postgres instance, role URLs, `ODS_DATABASE_URL` on ingest; Carter's hand | `agentvillage-data` (tracking) |
+| 6 | ODS schema, roles and views | `migrations/ods/0001` (`ods.*` DDL), the roles of §4.3, the cascade test, the role-grant test | `agentvillage-data` |
+| 7 | ODS ingest write path | `digest.shared`, `digest.revoked` and `vote.cast`: resolution rules, change trigger, first-start digest replay, membership checks | `agentvillage-data` |
+| 5 | Per-sink consent routing | ODS sink on village consent plus grant, per-sink tracking for audit; research sink unchanged (Q5) | `agentvillage-data` |
+| 19 | Announcements listener | Reads the village announcements channel into the ODS; feeds the knowledge snapshot | `agentvillage-data` |
+| 21 | Display-name cache | `ods.residents.display_name` refreshed from the EdgeOS directory (Q9) | `agentvillage-data` |
+| 8 | ODS retention and withdrawal deletes | Hourly and nightly jobs (village end + 90 days), the withdrawal pass, the restore replay runbook | `agentvillage-data` |
+
+Reservations before Oct 11 (no build): 2 to 4 below.
+
+| # | Title | One line | Owner repo |
+|---|---|---|---|
 | 2 | Reserve ODS and treasury event types and the `odin` class | §7 schemas, allowlist rows, token-class migration, tests; before Oct 11 | `agentvillage-data` |
-| 3 | Reserve `treasury.propose` in the policy template and settings page | One switch, manual default; before Oct 11 | approval.md template, `controlplane`, the Edge City app |
-| 4 | ODS consent sentence | Item 3 above in the brief; Timour approves; before Oct 11 | landing |
-| 5 | Per-sink consent routing | ODS sink on village consent plus grant; research sink unchanged | `agentvillage-data` |
-| 6 | ODS schema, roles and views | `migrations/ods/0001`, the cascade test, the role-grant test | `agentvillage-data` |
-| 7 | ODS writer | Resolution rules, change trigger, first-start digest replay, membership checks | `agentvillage-data` |
-| 8 | ODS retention and withdrawal deletes | Hourly and nightly jobs, the withdrawal pass, the restore replay runbook | `agentvillage-data` |
-| 9 | Group-message second sink | Archive-write text to `ods.group_messages`; bot revoke; on DATA-216 | `agentvillage-data` |
-| 10 | Public intents sink | Poller passes active, non-incognito `agentvillage` intents in-process; after Q4 and the poller's enable | `agentvillage-data` |
-| 11 | ODS feed service | §5 routes, EdgeOS bearer resolution, classes, limits, display names | `agentvillage-data` (new entrypoint) |
+| 3 | Reserve `treasury.propose` in the policy template and settings page | One switch, manual default; no `resource.request` (Q12); before Oct 11 | approval.md template, `controlplane`, the Edge City app |
+| 4 | ODS consent sentence | Item 3 above in the brief; Timour approves the words; before Oct 11 | landing |
+
+Second half: after Seref's Q1 ruling on feed scope.
+
+| # | Title | One line | Owner repo |
+|---|---|---|---|
+| 11 | ODS feed service | Separate `ods-feed` service (Q10): §5 routes, limits, slices per Q1 | `agentvillage-data` (new entrypoint) |
+| 20 | Auth tiers | EdgeOS bearer resolution into public and resident classes, service credentials, per-class reader roles (§4) | `agentvillage-data` |
+| 14 | Feed keys | Mint and revoke route under EdgeOS auth, `feed_key.*` events; week 2 (Q8) | `controlplane`, `agentvillage-data` |
 | 12 | ODS acceptance on dogfood | §9 scenario, evidence in the task | `agentvillage-data` |
+
+Later, no open question blocks them but they follow the above:
+
+| # | Title | One line | Owner repo |
+|---|---|---|---|
+| 9 | Group-message second sink | Archive-write text to `ods.group_messages`; edits replace, tombstones delete (Q14); bot revoke; on DATA-216 | `agentvillage-data` |
+| 10 | Public intents sink | Poller passes active, non-incognito `agentvillage` intents in-process (Q4); after the poller's enable | `agentvillage-data` |
 | 13 | Odin's read role and first query set | `coord_*` views and Odin's reads | `agentvillage-data` |
-| 14 | Feed keys | Mint and revoke route under EdgeOS auth, `feed_key.*` events; week 2 | `controlplane`, `agentvillage-data` |
 | 15 | Atomic top-up and `key.topped_up@2` | Base §6's control-plane piece with `resource.executed`; Seref reviews | `controlplane` |
 | 16 | Skylight ODS reader | Public-class view of question, tallies, proposals, resources | `Edge-City/skylight` (Timour) |
 | 17 | App `/insights` on the feed | Viewer-bearer reads, own votes and digests | the Edge City app (its owner) |
 | 18 | BYOA tier-1 feed documentation | Routes, classes, deletion terms, feed keys over bearers | `agentvillage` (DATA-293) |
+| 22 | Tally close script | Operator script that closes tallies and emits `tally.closed@1` (Q13) | `agentvillage-data` |
 
-## 11. Open questions
+## 11. Decided 2026-10-05/06
 
-Closed and not reopened: instance placement (Carter, base §3).
+Closed and not reopened: instance placement (Carter, base §3). Carter ruled
+on Q2 to Q14 on 2026-10-05 23:57Z and 2026-10-06 00:02Z (CLAIMS).
 
-| # | Question | Recommendation | Decides |
+| # | Question | Ruling | Status |
 |---|---|---|---|
-| Q1 | Which slices are on the feed, and what a non-resident sees | §3 as written: the public class gets questions, final tallies above the floor, proposals without proposer and resource totals; group messages never | Seref (feed scope) |
-| Q2 | Retention numbers: group messages, votes after close, the instance after the village | 14 days (base §4, which named Carter), 7 days, village end + 30 days | Timour |
-| Q3 | Principal for allocations and whether a policy may pre-authorise small ones | Timour (base §7, DATA-255); no pre-authorisation in October | Timour |
-| Q4 | `intents` slice: does publishing to Index through the village tool cover village readers, and with text | Yes for the resident class, with text, never public; incognito excluded | Seref |
-| Q5 | Per-sink consent routing (§2.3) | Route per sink | Carter |
-| Q6 | Proposer named to residents | Yes to residents, never public | Timour (DATA-292) |
-| Q7 | Running counts during a vote | Turnout only until close | Timour (DATA-292) |
-| Q8 | Feed keys versus EdgeOS bearers for external agents | Bearer in week 1, feed keys in week 2 | Seref |
-| Q9 | Display-name source | EdgeOS directory at read time, cached, never stored | Carter |
-| Q10 | Feed placement | Separate `ods-feed` service with reader credentials only | Carter |
-| Q11 | Skylight's class | Public unless every viewer is a verified resident | Timour |
-| Q12 | `resource.request` on resident seats | Not in October | Carter |
-| Q13 | Who emits `tally.closed` before Odin's seat | An `operator` script | Carter |
-| Q14 | Edits to group messages: base §4 stores none; DATA-216 sends `edited_at` | Replace the text on edit (current state), delete on a Telegram deletion tombstone | Carter |
+| Q2 | Retention: group messages, votes after close, the instance | Up to 90 days after the village, for group messages, votes after close and the instance alike. Digests keep their own `expires_at` (at most 7 days) and intents their mirror rule; earlier deletion on withdrawal always wins | Ruled by Carter, Timour to confirm |
+| Q3 | Principal for allocations; pre-authorisation | Timour and Carter are the principals; no automatic approvals | Ruled by Carter, Timour to confirm |
+| Q4 | `intents` slice | Yes: the village tool's intents are visible to village readers (resident class) with text, never public; incognito excluded | Decided |
+| Q5 | Per-sink consent routing | Consent tracked per sink in the store; the onboarding consent covers every sink the village runs; one yes at signup; per-sink tracking is for audit and later opt-outs, never a second prompt | Decided |
+| Q6 | Proposer named to residents | Yes to residents, never public | Ruled by Carter, Timour to confirm |
+| Q7 | Running counts during a vote | Turnout only until close | Ruled by Carter, Timour to confirm |
+| Q8 | Feed keys versus bearers | EdgeOS bearer in week 1, feed keys in week 2 | Decided |
+| Q9 | Display-name source | Display names may be stored: a cached copy from the EdgeOS directory, refreshed | Decided |
+| Q10 | Feed placement | Separate feed service with reader credentials only | Decided |
+| Q11 | Skylight's class | Public unless every viewer is a verified resident | Ruled by Carter, Timour to confirm |
+| Q12 | `resource.request` on resident seats | None in October | Decided |
+| Q13 | Who emits `tally.closed` before Odin's seat | An operator script closes tallies | Decided |
+| Q14 | Edits to group messages | Replace the text on edit; delete on a deletion tombstone | Decided |
+
+**Still open:**
+
+- Q1 (Seref): which slices are on the feed, and what a non-resident sees.
+  Recommendation: §3 as written; the public class gets questions, final
+  tallies above the floor, proposals without proposer and resource totals;
+  group messages never. It gates the feed service, auth tiers and feed
+  keys (§10, second half), not the first half.
+- Timour's confirmation of Q2, Q3, Q6, Q7 and Q11.
+- Not questions but numbers still [NV]: the small-n floor (Timour), the
+  rate limits (Seref), and the consent wording (Timour approves).
 
 ## 12. Supersession record
 
@@ -598,3 +662,11 @@ Closed and not reopened: instance placement (Carter, base §3).
   per-sink consent (proposed); withdrawal covers votes, proposals and
   intents and nulls beneficiaries; `key.topped_up@2`; base §8's timing
   replaced by the wave-2 reservation rule.
+- 2026-10-06, v2: Carter's rulings Q2 to Q14 applied (§11). Retention is up
+  to 90 days after the village (was 14 days, 7 days and village end + 30
+  days); allocations have two principals, Timour and Carter; display names
+  are stored as a cached copy; the feed is a separate service; no
+  `resource.request` class in October; an operator script closes tallies;
+  group-message edits replace, tombstones delete; consent is tracked per
+  sink under one signup yes; build tasks split into a first half and a
+  second half after Seref's Q1.
