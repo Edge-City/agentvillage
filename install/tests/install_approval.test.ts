@@ -435,7 +435,11 @@ describe("installing the gate", () => {
         },
       },
       shim_sha256: createHash("sha256").update(readFileSync(SHIM_SOURCE)).digest("hex"),
+      // R3 fix round 3 (SF1): the entry count the control plane's gate record keeps, and when.
+      gated_entries: 35,
+      written_at: "2026-10-01T09:00:00.000Z",
     });
+    expect(marker.gated_entries).toBe(APPROVAL_GATED_TOOLS.length);
     expect(statSync(approvalSurfacePath()).mode & 0o777).toBe(0o600);
     expect(readdirSync(join(home, "agent-hooks")).sort()).toEqual(["approval-surface.json", "hermes-hook-shim.sh"]);
 
@@ -518,6 +522,22 @@ describe("installing the gate", () => {
     }
   });
 
+  test("R3 fix round 3 (recheck R3): every tool of Index's production MCP surface (the overlay's tools/list fixture) is routed or on the explicit read list, so a new Index write fails here", () => {
+    const fixture = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "skills", "index-network", "scripts", "tests", "fixtures", "index-mcp-2026-07-28.json"), "utf8"));
+    const tools = fixture.tools as string[];
+    expect(tools.length).toBeGreaterThan(0);
+    // Index's MCP reads: never routed (reading never waits on the gate); the policy prices them read.web.
+    const reads = ["get_my_profile", "list_intents", "get_intent", "list_opportunities", "get_opportunity"];
+    const routed = (name: string) => APPROVAL_GATED_TOOLS.some((m) => new RegExp(`^(?:${m})$`).test(`mcp__index__${name}`));
+    for (const t of tools) {
+      // A tool on neither list is a new Index MCP tool: decide whether it writes, then route it or list it here.
+      expect([t, reads.includes(t) !== routed(t)]).toEqual([t, true]);
+    }
+    for (const r of reads) expect([r, tools.includes(r)]).toEqual([r, true]);
+    // Every routed Index MCP matcher names a tool production serves.
+    for (const m of APPROVAL_GATED_TOOLS.filter((x) => x.startsWith("mcp__index__"))) expect([m, tools.includes(m.slice("mcp__index__".length))]).toEqual([m, true]);
+  });
+
   test("idempotent: a second run changes no byte of config.yaml or .env and keeps installed_at", () => {
     const home = tenant();
     const o = opts();
@@ -527,7 +547,10 @@ describe("installing the gate", () => {
     expect(bytes(home)).toEqual(first);
     expect(ourEntries(home)).toHaveLength(APPROVAL_GATED_TOOLS.length);
     expect(config(home).plugins.enabled.filter((n: string) => n === APPROVAL_PLUGIN)).toHaveLength(1);
-    expect(JSON.parse(readFileSync(approvalSurfacePath(), "utf8")).installed_at).toBe("2026-10-01T09:00:00.000Z");
+    const again = JSON.parse(readFileSync(approvalSurfacePath(), "utf8"));
+    expect(again.installed_at).toBe("2026-10-01T09:00:00.000Z");
+    // SF1: written_at is this run's; the count is the entries config.yaml holds.
+    expect([again.written_at, again.gated_entries]).toEqual(["2026-10-02T09:00:00.000Z", ourEntries(home).length]);
     expect(logs.at(-1)).toContain("config unchanged, 0 .env line(s) set");
   });
 
@@ -731,6 +754,9 @@ describe("M3: the live self-check and --check", () => {
       overrides: [],
       hermes_exit1: "allowed",
       cron_scripts: [],
+      // R3 fix round 3 (SF1 b): the merge plan's per-tenant check reads these two.
+      gated_entries: 35,
+      gated_entries_expected: 35,
     });
     expect(bytes(home)).toEqual(before);
     expect(checkCli([], o)).toBe(2);
@@ -831,6 +857,8 @@ describe("M4: states in which Hermes ignores the gate", () => {
       overrides: expected,
       hermes_exit1: "allowed",
       cron_scripts: [],
+      gated_entries: 35,
+      gated_entries_expected: 35,
     });
   });
 

@@ -515,6 +515,14 @@ function isOurEntry(entry: unknown, command: string): boolean {
   return expanded === command;
 }
 
+/** SF1 (R3 fix round 3): how many `pre_tool_call` entries in `doc` run the shim. Pure. */
+export function ourEntryCount(doc: unknown, command: string): number {
+  const top = isMapping(doc) ? doc : {};
+  const hooks = isMapping(top.hooks) ? top.hooks : {};
+  const pre = Array.isArray(hooks.pre_tool_call) ? hooks.pre_tool_call : [];
+  return pre.filter((entry) => isOurEntry(entry, command)).length;
+}
+
 /** `doc` with the gate merged in (write-hooks.py's `merge`, gate only). Pure. */
 export function mergeApprovalHooks(doc: unknown, command: string): Record<string, unknown> {
   if (!isMapping(doc)) throw unmergeable("the top level is not a mapping");
@@ -794,6 +802,16 @@ export interface SurfaceMarker {
   prior: PriorState;
   /** sha256 of the installed shim; the av-approval plugin's integrity check compares it (DATA-234). */
   shim_sha256: string | null;
+  /**
+   * R3 fix round 3 (SF1): how many `pre_tool_call` entries running the shim this install left in
+   * config.yaml (35 with R3b; 13 before it), and when this install wrote the marker. The control
+   * plane reads both after each install and keeps the count in its gate record: until it equals
+   * the list the control plane ships against, it reports the gate `unknown`, so a tenant whose
+   * installer predates R3b (or was rolled back) never reads its hooked rows as enforced. An
+   * installer before this field writes neither, which the control plane reads as no count.
+   */
+  gated_entries: number;
+  written_at: string;
 }
 
 /** sha256 (hex) of a file's bytes, or `null` when it cannot be read. */
@@ -847,7 +865,7 @@ function capturePrior(doc: Record<string, unknown>): PriorState {
  * sandbox holds the agent credential. The DATA-43b follower holds the tenant
  * credential, reads the id there, and is the writer of the `approval_md` row.
  */
-function writeSurfaceMarker(now: Date, prior: PriorState, overrides: string[]): { tenant: string | null } {
+function writeSurfaceMarker(now: Date, prior: PriorState, overrides: string[], gatedEntries: number): { tenant: string | null } {
   const tenant = gatewayValue("AV_TENANT_ID")?.trim() || gatewayValue("TENANT_ID")?.trim() || null;
   const existing = readMarker();
   const installedAt =
@@ -859,6 +877,8 @@ function writeSurfaceMarker(now: Date, prior: PriorState, overrides: string[]): 
     overrides,
     prior: existing ? existing.prior : prior,
     shim_sha256: fileSha256(approvalShimPath()),
+    gated_entries: gatedEntries,
+    written_at: now.toISOString(),
   };
   writeFileAtomic(approvalSurfacePath(), `${JSON.stringify(marker, null, 2)}\n`, 0o600);
   return { tenant };
@@ -1294,7 +1314,8 @@ export function installApproval(sourceSkills: string, options: ApprovalOptions =
     const envChanged = writeEnvLines();
     copyPluginTree(join(sourceSkills, APPROVAL_SKILL), skillTarget);
     const now = options.now ?? new Date();
-    writeSurfaceMarker(now, prior, []);
+    const gatedEntries = ourEntryCount(merged, approvalShimPath());
+    writeSurfaceMarker(now, prior, [], gatedEntries);
 
     const report = checkApprovalReport({ liveScript: join(sourceSkills, APPROVAL_SKILL, "scripts", "live_selfcheck.py"), ...options });
     // A local facade (the control plane started it before this install) that
@@ -1316,7 +1337,7 @@ export function installApproval(sourceSkills: string, options: ApprovalOptions =
           "Run `bun install/install_approval.ts --check` by hand once the daemon answers.",
       );
     }
-    const { tenant } = writeSurfaceMarker(now, prior, report.overrides);
+    const { tenant } = writeSurfaceMarker(now, prior, report.overrides, gatedEntries);
     const scripts = cronScripts();
     if (scripts.length > 0) {
       console.log(
@@ -1384,6 +1405,14 @@ export function checkCli(argv: string[], options: ApprovalOptions = {}): number 
   } catch {
     // a listing that fails changes no verdict
   }
+  // R3 fix round 3 (SF1 b): how many shim entries config.yaml holds now (35 with R3b), for the
+  // merge plan's per-tenant check before the control plane is deployed; null when unreadable.
+  let gatedEntries: number | null = null;
+  try {
+    gatedEntries = ourEntryCount(readConfig(), approvalShimPath());
+  } catch {
+    // an unreadable config is already a named problem
+  }
   console.log(
     JSON.stringify({
       check: "av-approval",
@@ -1392,6 +1421,8 @@ export function checkCli(argv: string[], options: ApprovalOptions = {}): number 
       overrides,
       hermes_exit1: report.exit1 ?? "unknown",
       cron_scripts: scripts,
+      gated_entries: gatedEntries,
+      gated_entries_expected: APPROVAL_GATED_TOOLS.length,
     }),
   );
   return problems.length === 0 ? 0 : 1;
