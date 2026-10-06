@@ -305,17 +305,24 @@ on the facade's `GET /status`, which answers the tenant credential; the
 sandbox holds the agent credential. The DATA-43b follower reads it and writes
 the `approval_md` identity-map row.
 
-R3 fix rounds 3 and 4 (SF1): the marker also carries `shim_sha256`,
-`gated_entries` (how many `pre_tool_call` entries running the shim this
-install left in config.yaml: 35 with R3b) and `written_at`, as a hint only.
-The control plane does not trust the file: it reads the install's own stdout
-line, `approval gate installed: <n> pre_tool_call entries (fail_closed),
-matchers sha256=<hex>, ...` (the hex is the sha256 of the routed matchers,
-sorted, one per line), and reports the gate `on` only while both equal what it
-ships against. An installer before R3b prints 13 and no digest, so a tenant on
-one, or rolled back to one, never reads its hooked rows as enforced. `--check`
-prints one JSON line with `"gated_entries":35,"gated_entries_expected":35`; it
-exits 0 whatever the count, so read the field.
+R3 fix round 4 (SF1, the trust boundary): what the control plane records as
+routed comes from Hermes's own load and parse of the config.yaml this install
+wrote. `live_selfcheck.py` runs under Hermes's interpreter, loads the file with
+Hermes's `load_config` and lists the shim's specs with Hermes's
+`iter_configured_hooks`, the same parse the gateway uses, and reports
+`routed_entries` (distinct matchers, the first spec per matcher as Hermes keeps
+it) and `routed_sha256` (those matchers sorted, one per line). The installer
+prints both on one line, `approval gate routed (Hermes's own load of
+config.yaml): entries=<n> matchers_sha256=<hex>`, and the control plane
+records only that line, from its own exec of this installer, after the
+gateway restart is verified. It never reads the marker for a count. A
+different count or list fails the self-check (`live-routed-mismatch:<n>`), so
+an entry added to or removed from config.yaml by hand is caught at the next
+`--check` or install. `--check` prints `routed_entries`, `routed_sha256` and the
+expected two in its JSON line. An installer before R3b prints no routed line,
+and the control plane then records no count. A writer inside the sandbox that
+can edit config.yaml can also strip the shim entries outright: that is the
+existing DATA-234 gap (cron scripts run with no hook), and this does not widen it.
 
 ## Enablement under co-location (DATA-233)
 

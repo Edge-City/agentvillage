@@ -21,6 +21,7 @@ import YAML from "yaml";
 import {
   APPROVAL_GATED_TOOLS,
   APPROVAL_PLUGIN,
+  APPROVAL_ROUTED_SHA256,
   ApprovalInstallError,
   ENV_NAME,
   SHIM_TOOLS,
@@ -146,6 +147,8 @@ interface FakeHermesState {
   no_run_once?: boolean;
   fail_closed?: boolean;
   consent?: boolean;
+  /** R3 fix round 4: load config.yaml with PyYAML and build the specs from its hooks block, as Hermes does. */
+  specs_from_config?: boolean;
 }
 
 function fakeHermes(state: FakeHermesState = {}): { kwargs: () => Record<string, unknown> | null } {
@@ -160,6 +163,7 @@ function fakeHermes(state: FakeHermesState = {}): { kwargs: () => Record<string,
     fail_closed: true,
     consent: true,
     specs: APPROVAL_GATED_TOOLS.map((m) => [m, true]),
+    specs_from_config: false,
     ...state,
   };
   const marker = state.signal_marker ?? full.signal_patch;
@@ -175,7 +179,10 @@ function fakeHermes(state: FakeHermesState = {}): { kwargs: () => Record<string,
     join(root, "hermes_cli", "env_loader.py"),
     `import os\ndef load_hermes_dotenv(hermes_home=None, **_):\n    p = os.path.join(hermes_home or os.environ["HERMES_HOME"], ".env")\n    if not os.path.exists(p):\n        return\n    for line in open(p):\n        line = line.strip()\n        if line and not line.startswith("#") and "=" in line:\n            k, v = line.split("=", 1)\n            os.environ[k.strip()] = v.strip()\n`,
   );
-  writeFileSync(join(root, "hermes_cli", "config.py"), `def load_config():\n    return {}\n`);
+  writeFileSync(
+    join(root, "hermes_cli", "config.py"),
+    `import json, os\ndef load_config():\n    if not json.load(open(os.environ["FAKE_HERMES_STATE"])).get("specs_from_config"):\n        return {}\n    import yaml\n    with open(os.path.join(os.environ["HERMES_HOME"], "config.yaml")) as fh:\n        return yaml.safe_load(fh) or {}\n`,
+  );
   writeFileSync(
     join(root, "hermes_cli", "managed_scope.py"),
     `import json, os\ndef get_managed_dir():\n    return json.load(open(os.environ["FAKE_HERMES_STATE"]))["managed_dir"]\n`,
@@ -192,6 +199,9 @@ class ShellHookSpec:
         return re.fullmatch(self.matcher, name) is not None
 def iter_configured_hooks(cfg):
     shim = os.path.join(os.environ["HERMES_HOME"], "agent-hooks", "hermes-hook-shim.sh")
+    if _S.get("specs_from_config"):
+        pre = ((cfg or {}).get("hooks") or {}).get("pre_tool_call") or []
+        return [ShellHookSpec("pre_tool_call", str(e.get("command", "")), e.get("matcher"), e.get("timeout", 60), e.get("fail_closed") is True) for e in pre if isinstance(e, dict)]
     return [ShellHookSpec("pre_tool_call", shim, m, 300, fc and _S["fail_closed"]) for m, fc in _S["specs"]]
 def _resolve_effective_accept(cfg, arg):
     return _S["consent"]
@@ -435,21 +445,19 @@ describe("installing the gate", () => {
         },
       },
       shim_sha256: createHash("sha256").update(readFileSync(SHIM_SOURCE)).digest("hex"),
-      // R3 fix round 3 (SF1): the entry count the control plane's gate record keeps, and when.
-      gated_entries: 35,
-      written_at: "2026-10-01T09:00:00.000Z",
     });
-    expect(marker.gated_entries).toBe(APPROVAL_GATED_TOOLS.length);
     expect(statSync(approvalSurfacePath()).mode & 0o777).toBe(0o600);
     expect(readdirSync(join(home, "agent-hooks")).sort()).toEqual(["approval-surface.json", "hermes-hook-shim.sh"]);
 
     // The live fire: one terminal call, deliberately without a workdir.
     expect(hermes.kwargs()).toEqual({ tool_name: "terminal", args: { command: "ls /tmp" }, session_id: "av-approval-selfcheck" });
     expect(logs.at(-1)).toContain("approval gate installed: 35 pre_tool_call entries (fail_closed)");
-    // R3 fix round 4 (N6): the sorted matcher list's digest, which the control plane pins.
+    // R3 fix round 4 (the trust boundary): the routed count and the sorted list's digest, as Hermes's
+    // own parse reports them (live_selfcheck.py 5b), on their own line; the control plane pins both.
     const listSha = createHash("sha256").update([...APPROVAL_GATED_TOOLS].sort().join("\n"), "utf8").digest("hex");
     expect(listSha).toBe("9cb621bbe4c5761364a956509b705dbad62168e5bf42adff5600fe0a45e11d43");
-    expect(logs.at(-1)).toContain(`approval gate installed: 35 pre_tool_call entries (fail_closed), matchers sha256=${listSha}, `);
+    expect(APPROVAL_ROUTED_SHA256).toBe(listSha);
+    expect(logs.filter((l) => l.includes("approval gate routed"))).toEqual([`→ approval gate routed (Hermes's own load of config.yaml): entries=35 matchers_sha256=${listSha}`]);
     expect(logs.at(-1)).toContain("live: blocked by the facade), overrides: none");
     expect([...logs, ...errors].join("\n")).not.toContain(TOKEN);
     expect(readFileSync(join(home, "config.yaml"), "utf8")).not.toContain(TOKEN);
@@ -542,6 +550,46 @@ describe("installing the gate", () => {
     for (const m of APPROVAL_GATED_TOOLS.filter((x) => x.startsWith("mcp__index__"))) expect([m, tools.includes(m.slice("mcp__index__".length))]).toEqual([m, true]);
   });
 
+  test("R3 fix round 4 (the trust boundary): the routed count and digest come from Hermes's own load of the config.yaml the install wrote; an entry added or removed by hand afterwards is caught at the next --check, and the next install puts the list back", () => {
+    fakeHermes({ specs_from_config: true });
+    const home = tenant();
+    const o = opts();
+    installApproval(SOURCE_SKILLS, o);
+    expect(logs.filter((l) => l.includes("approval gate routed"))).toEqual([`→ approval gate routed (Hermes's own load of config.yaml): entries=35 matchers_sha256=${APPROVAL_ROUTED_SHA256}`]);
+    const check = () => {
+      logs = [];
+      const code = checkCli(["--check"], o);
+      return { code, out: JSON.parse(logs.at(-1)!) };
+    };
+    expect(check()).toMatchObject({ code: 0, out: { ok: true, routed_entries: 35, routed_sha256: APPROVAL_ROUTED_SHA256 } });
+    const path = join(home, "config.yaml");
+    const original = readFileSync(path, "utf8");
+    // Added by hand: one more shim entry (memory), as a sandbox writer could.
+    const doc = YAML.parse(original);
+    doc.hooks.pre_tool_call.push({ matcher: "memory", command: approvalShimPath(), timeout: 300, fail_closed: true });
+    writeFileSync(path, YAML.stringify(doc));
+    const added = check();
+    expect(added.code).toBe(1);
+    expect(added.out.routed_entries).toBe(36);
+    expect(added.out.routed_sha256).not.toBe(APPROVAL_ROUTED_SHA256);
+    expect(added.out.problems).toContain("live-routed-mismatch:36");
+    // Removed by hand: one entry gone (x_search).
+    const fewer = YAML.parse(original);
+    fewer.hooks.pre_tool_call = fewer.hooks.pre_tool_call.filter((e: Record<string, unknown>) => e.matcher !== "x_search");
+    writeFileSync(path, YAML.stringify(fewer));
+    // The static check names the missing entry before the live one runs, so no routed count is
+    // reported at all (null): caught, exit 1, and nothing a control plane could record as 35.
+    const removed = check();
+    expect(removed.code).toBe(1);
+    expect(removed.out.problems).toContain("hook-missing:x_search");
+    expect([removed.out.routed_entries, removed.out.routed_sha256]).toEqual([null, null]);
+    // The next install merges the list back: 35 again, as Hermes loads it.
+    logs = [];
+    installApproval(SOURCE_SKILLS, o);
+    expect(logs.filter((l) => l.includes("approval gate routed"))).toEqual([`→ approval gate routed (Hermes's own load of config.yaml): entries=35 matchers_sha256=${APPROVAL_ROUTED_SHA256}`]);
+    expect(check()).toMatchObject({ code: 0, out: { ok: true, routed_entries: 35 } });
+  });
+
   test("idempotent: a second run changes no byte of config.yaml or .env and keeps installed_at", () => {
     const home = tenant();
     const o = opts();
@@ -551,10 +599,7 @@ describe("installing the gate", () => {
     expect(bytes(home)).toEqual(first);
     expect(ourEntries(home)).toHaveLength(APPROVAL_GATED_TOOLS.length);
     expect(config(home).plugins.enabled.filter((n: string) => n === APPROVAL_PLUGIN)).toHaveLength(1);
-    const again = JSON.parse(readFileSync(approvalSurfacePath(), "utf8"));
-    expect(again.installed_at).toBe("2026-10-01T09:00:00.000Z");
-    // SF1: written_at is this run's; the count is the entries config.yaml holds.
-    expect([again.written_at, again.gated_entries]).toEqual(["2026-10-02T09:00:00.000Z", ourEntries(home).length]);
+    expect(JSON.parse(readFileSync(approvalSurfacePath(), "utf8")).installed_at).toBe("2026-10-01T09:00:00.000Z");
     expect(logs.at(-1)).toContain("config unchanged, 0 .env line(s) set");
   });
 
@@ -758,9 +803,11 @@ describe("M3: the live self-check and --check", () => {
       overrides: [],
       hermes_exit1: "allowed",
       cron_scripts: [],
-      // R3 fix round 3 (SF1 b): the merge plan's per-tenant check reads these two.
-      gated_entries: 35,
-      gated_entries_expected: 35,
+      // R3 fix rounds 3/4 (SF1 b): the merge plan's per-tenant check reads these, from Hermes's own parse.
+      routed_entries: 35,
+      routed_sha256: APPROVAL_ROUTED_SHA256,
+      routed_entries_expected: 35,
+      routed_sha256_expected: APPROVAL_ROUTED_SHA256,
     });
     expect(bytes(home)).toEqual(before);
     expect(checkCli([], o)).toBe(2);
@@ -861,8 +908,10 @@ describe("M4: states in which Hermes ignores the gate", () => {
       overrides: expected,
       hermes_exit1: "allowed",
       cron_scripts: [],
-      gated_entries: 35,
-      gated_entries_expected: 35,
+      routed_entries: 35,
+      routed_sha256: APPROVAL_ROUTED_SHA256,
+      routed_entries_expected: 35,
+      routed_sha256_expected: APPROVAL_ROUTED_SHA256,
     });
   });
 

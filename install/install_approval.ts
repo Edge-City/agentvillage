@@ -515,27 +515,6 @@ function isOurEntry(entry: unknown, command: string): boolean {
   return expanded === command;
 }
 
-/** SF1 (R3 fix round 3): how many `pre_tool_call` entries in `doc` run the shim. Pure. */
-export function ourEntryCount(doc: unknown, command: string): number {
-  const top = isMapping(doc) ? doc : {};
-  const hooks = isMapping(top.hooks) ? top.hooks : {};
-  const pre = Array.isArray(hooks.pre_tool_call) ? hooks.pre_tool_call : [];
-  return pre.filter((entry) => isOurEntry(entry, command)).length;
-}
-
-/**
- * R3 fix round 4 (N6): sha256 (hex) of the sorted matchers of the `pre_tool_call` entries in `doc`
- * that run the shim, one per line: which list the install routed, not only how many. Printed on
- * the install's own stdout line, which the control plane reads (it pins the same digest). Pure.
- */
-export function ourMatchersSha256(doc: unknown, command: string): string {
-  const top = isMapping(doc) ? doc : {};
-  const hooks = isMapping(top.hooks) ? top.hooks : {};
-  const pre = Array.isArray(hooks.pre_tool_call) ? hooks.pre_tool_call : [];
-  const matchers = pre.filter((entry) => isOurEntry(entry, command)).map((entry) => String((entry as Record<string, unknown>).matcher ?? ""));
-  return createHash("sha256").update(matchers.sort().join("\n"), "utf8").digest("hex");
-}
-
 /** `doc` with the gate merged in (write-hooks.py's `merge`, gate only). Pure. */
 export function mergeApprovalHooks(doc: unknown, command: string): Record<string, unknown> {
   if (!isMapping(doc)) throw unmergeable("the top level is not a mapping");
@@ -815,16 +794,6 @@ export interface SurfaceMarker {
   prior: PriorState;
   /** sha256 of the installed shim; the av-approval plugin's integrity check compares it (DATA-234). */
   shim_sha256: string | null;
-  /**
-   * R3 fix round 3 (SF1): how many `pre_tool_call` entries running the shim this install left in
-   * config.yaml (35 with R3b; 13 before it), and when this install wrote the marker. The control
-   * plane reads both after each install and keeps the count in its gate record: until it equals
-   * the list the control plane ships against, it reports the gate `unknown`, so a tenant whose
-   * installer predates R3b (or was rolled back) never reads its hooked rows as enforced. An
-   * installer before this field writes neither, which the control plane reads as no count.
-   */
-  gated_entries: number;
-  written_at: string;
 }
 
 /** sha256 (hex) of a file's bytes, or `null` when it cannot be read. */
@@ -878,7 +847,7 @@ function capturePrior(doc: Record<string, unknown>): PriorState {
  * sandbox holds the agent credential. The DATA-43b follower holds the tenant
  * credential, reads the id there, and is the writer of the `approval_md` row.
  */
-function writeSurfaceMarker(now: Date, prior: PriorState, overrides: string[], gatedEntries: number): { tenant: string | null } {
+function writeSurfaceMarker(now: Date, prior: PriorState, overrides: string[]): { tenant: string | null } {
   const tenant = gatewayValue("AV_TENANT_ID")?.trim() || gatewayValue("TENANT_ID")?.trim() || null;
   const existing = readMarker();
   const installedAt =
@@ -890,8 +859,6 @@ function writeSurfaceMarker(now: Date, prior: PriorState, overrides: string[], g
     overrides,
     prior: existing ? existing.prior : prior,
     shim_sha256: fileSha256(approvalShimPath()),
-    gated_entries: gatedEntries,
-    written_at: now.toISOString(),
   };
   writeFileAtomic(approvalSurfacePath(), `${JSON.stringify(marker, null, 2)}\n`, 0o600);
   return { tenant };
@@ -1113,6 +1080,21 @@ interface LiveFacts {
   signal_patch_marker?: boolean;
   exit1_blocks?: boolean | null;
   consent_effective?: boolean | null;
+  /** R3 fix round 4: what Hermes's own parse of config.yaml registers for the shim (live_selfcheck.py 5b). */
+  routed_entries?: number;
+  routed_sha256?: string;
+}
+
+/**
+ * R3 fix round 4 (the trust boundary): the expected routed list's digest, the sha256 of
+ * APPROVAL_GATED_TOOLS sorted and joined by newlines. The control plane pins the same value.
+ */
+export const APPROVAL_ROUTED_SHA256 = createHash("sha256").update([...APPROVAL_GATED_TOOLS].sort().join("\n"), "utf8").digest("hex");
+
+/** The routed count and digest as Hermes's own parse reports them, or null when the live check did not report them. */
+export interface RoutedFacts {
+  entries: number;
+  sha256: string;
 }
 
 /**
@@ -1130,6 +1112,8 @@ export interface ApprovalReport {
   overrides: string[];
   /** The exit-1 probe's answer (DATA-234 / DATA-228). */
   exit1?: Exit1Behaviour;
+  /** R3 fix round 4: what Hermes registers for the shim, from its own parse of config.yaml. */
+  routed?: RoutedFacts | null;
 }
 
 /** The live fire through Hermes's `run_once`. Accepted dogfood overrides are returned and warned about on stderr. */
@@ -1158,6 +1142,15 @@ export function liveReport(options: ApprovalOptions = {}): ApprovalReport {
   if (facts.managed) problems.push("hermes-managed");
   if (facts.managed_dir) problems.push("hermes-managed-scope");
   if (facts.consent_effective === false) problems.push("consent-missing:hermes-effective");
+  // R3 fix round 4: the routed list as Hermes's own parse sees it; any other count or list than the
+  // installer's (an entry added to or removed from config.yaml after it wrote it) is a problem.
+  const routed: RoutedFacts | null =
+    Number.isInteger(facts.routed_entries) && typeof facts.routed_sha256 === "string" && /^[0-9a-f]{64}$/.test(facts.routed_sha256)
+      ? { entries: facts.routed_entries as number, sha256: facts.routed_sha256 }
+      : null;
+  if (routed && (routed.entries !== APPROVAL_GATED_TOOLS.length || routed.sha256 !== APPROVAL_ROUTED_SHA256)) {
+    problems.push(`live-routed-mismatch:${routed.entries}`);
+  }
   const unpatched: string[] = [];
   if (facts.floor_ok !== true) unpatched.push(`hermes-below-fail-closed-floor:${facts.release_date || "unknown"}`);
   if (facts.signal_patch !== true) {
@@ -1176,7 +1169,7 @@ export function liveReport(options: ApprovalOptions = {}): ApprovalReport {
       problems.push(...unpatched);
     }
   }
-  return { problems, overrides, exit1 };
+  return { problems, overrides, exit1, routed };
 }
 
 /**
@@ -1189,7 +1182,7 @@ export function checkApprovalReport(options: ApprovalOptions = {}): ApprovalRepo
   const problems = approvalProblems(options);
   if (problems.length > 0) return { problems: [...new Set(problems)], overrides: [] };
   const live = liveReport(options);
-  return { problems: [...new Set(live.problems)], overrides: live.overrides, exit1: live.exit1 ?? "unknown" };
+  return { problems: [...new Set(live.problems)], overrides: live.overrides, exit1: live.exit1 ?? "unknown", routed: live.routed ?? null };
 }
 
 /** One line for the exit-1 probe's answer. */
@@ -1327,9 +1320,7 @@ export function installApproval(sourceSkills: string, options: ApprovalOptions =
     const envChanged = writeEnvLines();
     copyPluginTree(join(sourceSkills, APPROVAL_SKILL), skillTarget);
     const now = options.now ?? new Date();
-    const gatedEntries = ourEntryCount(merged, approvalShimPath());
-    const matchersSha = ourMatchersSha256(merged, approvalShimPath());
-    writeSurfaceMarker(now, prior, [], gatedEntries);
+    writeSurfaceMarker(now, prior, []);
 
     const report = checkApprovalReport({ liveScript: join(sourceSkills, APPROVAL_SKILL, "scripts", "live_selfcheck.py"), ...options });
     // A local facade (the control plane started it before this install) that
@@ -1351,7 +1342,7 @@ export function installApproval(sourceSkills: string, options: ApprovalOptions =
           "Run `bun install/install_approval.ts --check` by hand once the daemon answers.",
       );
     }
-    const { tenant } = writeSurfaceMarker(now, prior, report.overrides, gatedEntries);
+    const { tenant } = writeSurfaceMarker(now, prior, report.overrides);
     const scripts = cronScripts();
     if (scripts.length > 0) {
       console.log(
@@ -1360,10 +1351,15 @@ export function installApproval(sourceSkills: string, options: ApprovalOptions =
       );
     }
     console.log(exit1Line(report.exit1));
+    // R3 fix round 4 (the trust boundary): what Hermes's own load and parse of the config.yaml this
+    // install just wrote registers for the shim (live_selfcheck.py 5b). The control plane records
+    // this line, and only this line, from its own exec of this installer; a self-check that did not
+    // report it prints none, and the control plane then records no count.
+    if (report.routed) {
+      console.log(`→ approval gate routed (Hermes's own load of config.yaml): entries=${report.routed.entries} matchers_sha256=${report.routed.sha256}`);
+    }
     console.log(
-      // R3 fix round 4 (N1, N6): the control plane reads the count and the list digest from this
-      // stdout line of the install it runs (not from a file the tenant can write afterwards).
-      `→ approval gate installed: ${gatedEntries} pre_tool_call entries (fail_closed), matchers sha256=${matchersSha}, ` +
+      `→ approval gate installed: ${APPROVAL_GATED_TOOLS.length} pre_tool_call entries (fail_closed), ` +
         `config ${configChanged ? "updated" : "unchanged"}, ${envChanged} .env line(s) set, ` +
         (deferred.length > 0 ? `self-check passed (live: deferred, ${deferred.join(", ")}), ` : "self-check passed (live: blocked by the facade), ") +
         `overrides: ${report.overrides.length > 0 ? report.overrides.join(", ") : "none"}` +
@@ -1421,14 +1417,7 @@ export function checkCli(argv: string[], options: ApprovalOptions = {}): number 
   } catch {
     // a listing that fails changes no verdict
   }
-  // R3 fix round 3 (SF1 b): how many shim entries config.yaml holds now (35 with R3b), for the
-  // merge plan's per-tenant check before the control plane is deployed; null when unreadable.
-  let gatedEntries: number | null = null;
-  try {
-    gatedEntries = ourEntryCount(readConfig(), approvalShimPath());
-  } catch {
-    // an unreadable config is already a named problem
-  }
+
   console.log(
     JSON.stringify({
       check: "av-approval",
@@ -1437,8 +1426,12 @@ export function checkCli(argv: string[], options: ApprovalOptions = {}): number 
       overrides,
       hermes_exit1: report.exit1 ?? "unknown",
       cron_scripts: scripts,
-      gated_entries: gatedEntries,
-      gated_entries_expected: APPROVAL_GATED_TOOLS.length,
+      // R3 fix rounds 3/4 (SF1 b): what Hermes's own parse registers for the shim, against what
+      // this installer writes; null when the live check did not run. A mismatch is also a problem.
+      routed_entries: report.routed?.entries ?? null,
+      routed_sha256: report.routed?.sha256 ?? null,
+      routed_entries_expected: APPROVAL_GATED_TOOLS.length,
+      routed_sha256_expected: APPROVAL_ROUTED_SHA256,
     }),
   );
   return problems.length === 0 ? 0 : 1;
