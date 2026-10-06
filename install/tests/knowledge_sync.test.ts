@@ -60,14 +60,27 @@ function sha(body: string | Uint8Array): string {
   return createHash("sha256").update(body).digest("hex");
 }
 
-/** A complete upstream: the manifest, index.md and every listed file. */
-function serveSnapshot(files: Record<string, string>, etag = '"e1"'): void {
+/** A complete upstream: the manifest, index.md and every listed file (no SNAPSHOT.json unless asked). */
+function serveSnapshot(files: Record<string, string>, etag = '"e1"', base = BASE): void {
   // Upstream's manifest carries a hash per document, so new content is a new manifest.
   const hashes = Object.fromEntries(Object.entries(files).map(([path, body]) => [path, sha(body)]));
-  served.set(MANIFEST_URL, { body: manifest(Object.keys(files), {}, hashes), type: "text/plain; charset=utf-8", etag });
-  served.set(`${BASE}index.md`, { body: "# Index\n\n| [Wiki](./wiki-content.md) |\n", type: "text/plain; charset=utf-8" });
-  for (const [path, body] of Object.entries(files)) served.set(`${BASE}${path}`, { body, type: "text/plain; charset=utf-8" });
+  served.set(`${base}manifest.json`, { body: manifest(Object.keys(files), {}, hashes), type: "text/plain; charset=utf-8", etag });
+  served.set(`${base}index.md`, { body: "# Index\n\n| [Wiki](./wiki-content.md) |\n", type: "text/plain; charset=utf-8" });
+  for (const [path, body] of Object.entries(files)) served.set(`${base}${path}`, { body, type: "text/plain; charset=utf-8" });
 }
+
+/** The mirror's SNAPSHOT.json for what is served under a base right now (#203's shape). */
+function serveRecord(base = BASE, override: Record<string, string> = {}): void {
+  const files = [...served.entries()]
+    .filter(([url]) => url.startsWith(base) && !url.endsWith("SNAPSHOT.json"))
+    .map(([url, entry]) => ({ path: url.slice(base.length), sha256: override[url.slice(base.length)] ?? sha(entry.body ?? ""), bytes: 0 }));
+  served.set(`${base}SNAPSHOT.json`, {
+    body: JSON.stringify({ schema: 1, event: "edge-india-2026", source: { repo: "x/y", path: "references", commit: "0".repeat(40), commit_date: "2026-10-01T00:00:00.000Z" }, synced_at: "2026-10-05T00:00:00.000Z", files }),
+    type: "text/plain; charset=utf-8",
+  });
+}
+
+const MIRROR_BASE = "https://raw.githubusercontent.com/Edge-City/agentvillage/main/skills/edge-india/references/";
 
 const fakeFetch = async (url: string, init: RequestInit): Promise<Response> => {
   const headers = Object.fromEntries(Object.entries((init.headers ?? {}) as Record<string, string>).map(([k, v]) => [k.toLowerCase(), v]));
@@ -137,9 +150,10 @@ describe("switched off, and the default snapshot", () => {
     expect(requests).toEqual([]);
   });
 
-  test("no .env and no variable: the built-in default snapshot (p2p-lanes/edge-agent-skill) is synced", async () => {
-    expect(DEFAULT_SNAPSHOT_URL).toBe("https://raw.githubusercontent.com/p2p-lanes/edge-agent-skill/main/references/manifest.json");
-    serveSnapshot({ "a.md": "A\n" });
+  test("no .env and no variable: the built-in default, Edge City's mirror in this repo, is synced", async () => {
+    expect(DEFAULT_SNAPSHOT_URL).toBe(`${MIRROR_BASE}manifest.json`);
+    serveSnapshot({ "a.md": "A\n" }, '"e1"', MIRROR_BASE);
+    serveRecord(MIRROR_BASE);
     const result = await runKnowledgeSync(opts({}));
     expect(result).toMatchObject({ status: "ok", reason: "written", files: 2 });
     expect(requests[0].url).toBe(DEFAULT_SNAPSHOT_URL);
@@ -148,7 +162,7 @@ describe("switched off, and the default snapshot", () => {
 
   test("a .env without the line means the default, whatever the (stale) process environment holds", async () => {
     // The gateway loaded .env at its start: a deleted line lives on in its environment.
-    serveSnapshot({ "a.md": "A\n" });
+    serveSnapshot({ "a.md": "A\n" }, '"e1"', MIRROR_BASE);
     writeFileSync(join(home, ".env"), "OTHER=1\n");
     const stale = "https://raw.githubusercontent.com/Edge-City/stale/main/manifest.json";
     const result = await runKnowledgeSync(opts({ KNOWLEDGE_SNAPSHOT_URL: stale }));
@@ -200,8 +214,9 @@ describe("the host allowlist", () => {
     });
   }
 
-  test("allowed: p2p-lanes/edge-agent-skill and anything under Edge-City/ on raw.githubusercontent.com", () => {
+  test("allowed: anything under Edge-City/ (the default mirror) and, as an operator override, p2p-lanes/edge-agent-skill on raw.githubusercontent.com", () => {
     const none = new Set<string>();
+    expect(urlAllowed(new URL(DEFAULT_SNAPSHOT_URL), none)).toBe(true);
     expect(urlAllowed(new URL(MANIFEST_URL), none)).toBe(true);
     expect(urlAllowed(new URL("https://raw.githubusercontent.com/Edge-City/agentvillage/main/k/manifest.json"), none)).toBe(true);
     expect(urlAllowed(new URL("https://RAW.githubusercontent.com/Edge-City/agentvillage/main/k/manifest.json"), none)).toBe(true);
@@ -223,7 +238,7 @@ describe("the host allowlist", () => {
     served.set(`${base}a.md`, { body: "# a\n", type: "text/markdown; charset=utf-8" });
     const result = await runKnowledgeSync(opts({ KNOWLEDGE_SNAPSHOT_URL: `${base}manifest.json`, KNOWLEDGE_SNAPSHOT_HOSTS: "knowledge.edgecity.live" }));
     expect(result).toMatchObject({ status: "ok", files: 2 });
-    expect(requests.map((r) => r.url).sort()).toEqual([`${base}a.md`, `${base}index.md`, `${base}manifest.json`]);
+    expect(requests.map((r) => r.url).sort()).toEqual([`${base}SNAPSHOT.json`, `${base}a.md`, `${base}index.md`, `${base}manifest.json`]);
   });
 });
 
@@ -641,6 +656,78 @@ describe("a mixed snapshot across CDN commits heals itself (real fetch, local se
 
     // And the run after that is unchanged by ETag.
     expect(await run("2026-10-11T02:00:00Z")).toMatchObject({ status: "unchanged", reason: "etag" });
+  });
+
+  /** The mirror's SNAPSHOT.json for given file bodies (#203's shape). */
+  const record = (files: Record<string, string>) =>
+    JSON.stringify({ schema: 1, event: "edge-india-2026", source: { repo: "x/y", path: "references", commit: "0".repeat(40), commit_date: "2026-10-01T00:00:00.000Z" }, synced_at: "2026-10-05T00:00:00.000Z", files: Object.entries(files).map(([p, body]) => ({ path: p, sha256: sha(body), bytes: Buffer.byteLength(body) })) });
+
+  test("SNAPSHOT.json beside the manifest: every file is checked against its sha256; a stale file is incomplete, healed next run", async () => {
+    const index = "# Index\n";
+    const a1 = "# A\n\none\n";
+    const a2 = "# A\n\ntwo\n";
+    const mA = manifest(["a.md"], {}, { "a.md": sha(a1) });
+    const mB = manifest(["a.md"], {}, { "a.md": sha(a2) });
+    routes.set(path("manifest.json"), manifestRoute(mA, '"e1"'));
+    routes.set(path("SNAPSHOT.json"), text(record({ "manifest.json": mA, "index.md": index, "a.md": a1 })));
+    routes.set(path("index.md"), text(index));
+    routes.set(path("a.md"), text(a1));
+    expect(await run("2026-10-11T00:00:00Z")).toMatchObject({ status: "ok", reason: "written" });
+    const good = tree(currentSetDir(home));
+
+    // The mirror moved to B (manifest and SNAPSHOT.json), but a.md is still A at the CDN.
+    routes.set(path("manifest.json"), manifestRoute(mB, '"e2"'));
+    routes.set(path("SNAPSHOT.json"), text(record({ "manifest.json": mB, "index.md": index, "a.md": a2 })));
+    const stale = await run("2026-10-11T00:30:00Z");
+    expect(stale).toMatchObject({ status: "incomplete", reason: "snapshot-mismatch", path: "a.md" });
+    expect(exitCode(stale)).toBe(1);
+    expect(tree(currentSetDir(home))).toEqual(good);
+    expect(state()).toMatchObject({ etag: '"e1"', manifest_sha256: sha(mA) });
+
+    // SNAPSHOT.json still the old commit while the manifest is new: the manifest itself mismatches.
+    routes.set(path("SNAPSHOT.json"), text(record({ "manifest.json": mA, "index.md": index, "a.md": a1 })));
+    routes.set(path("a.md"), text(a2));
+    expect(await run("2026-10-11T01:00:00Z")).toMatchObject({ status: "incomplete", reason: "snapshot-mismatch", path: "manifest.json" });
+
+    // All of B at last.
+    routes.set(path("SNAPSHOT.json"), text(record({ "manifest.json": mB, "index.md": index, "a.md": a2 })));
+    expect(await run("2026-10-11T01:30:00Z")).toMatchObject({ status: "ok", reason: "written" });
+    expect(readFileSync(join(currentSetDir(home), "a.md"), "utf8")).toBe(a2);
+    expect(state()).toMatchObject({ etag: '"e2"', manifest_sha256: sha(mB) });
+  });
+
+  test("SNAPSHOT.json catches a stale file the byte heuristic cannot: the very first sync, and a file it does not list", async () => {
+    const index = "# Index\n";
+    const a1 = "# A\n\none\n";
+    const a2 = "# A\n\ntwo\n";
+    const mB = manifest(["a.md"], {}, { "a.md": sha(a2) });
+    routes.set(path("manifest.json"), manifestRoute(mB, '"e2"'));
+    routes.set(path("SNAPSHOT.json"), text(record({ "manifest.json": mB, "index.md": index, "a.md": a2 })));
+    routes.set(path("index.md"), text(index));
+    routes.set(path("a.md"), text(a1));
+    expect(await run("2026-10-11T00:00:00Z")).toMatchObject({ status: "incomplete", reason: "snapshot-mismatch", path: "a.md" });
+    expect(existsSync(currentSetDir(home))).toBe(false);
+    routes.set(path("SNAPSHOT.json"), text(record({ "manifest.json": mB, "a.md": a2 })));
+    routes.set(path("a.md"), text(a2));
+    expect(await run("2026-10-11T00:30:00Z")).toMatchObject({ status: "incomplete", reason: "snapshot-mismatch", path: "index.md" });
+    expect(existsSync(currentSetDir(home))).toBe(false);
+  });
+
+  test("a malformed SNAPSHOT.json fails the run (bad-snapshot) and keeps the last good set", async () => {
+    const index = "# Index\n";
+    const a = "# A\n";
+    const m1 = manifest(["a.md"], {}, { "a.md": sha(a) });
+    routes.set(path("manifest.json"), manifestRoute(m1, '"e1"'));
+    routes.set(path("index.md"), text(index));
+    routes.set(path("a.md"), text(a));
+    expect((await run("2026-10-11T00:00:00Z")).status).toBe("ok");
+    const good = tree(currentSetDir(home));
+    routes.set(path("manifest.json"), manifestRoute(manifest(["a.md"], { generation: 2 }, { "a.md": sha(a) }), '"e2"'));
+    for (const bad of ["{nope", JSON.stringify({ schema: 2, files: [] }), JSON.stringify({ schema: 1, files: [{ path: "a.md", sha256: "XYZ" }] })]) {
+      routes.set(path("SNAPSHOT.json"), text(bad));
+      expect(await run("2026-10-11T00:30:00Z")).toMatchObject({ status: "failed", reason: "bad-snapshot" });
+      expect(tree(currentSetDir(home))).toEqual(good);
+    }
   });
 
   test("a new manifest whose documents kept their hashes and bodies is written normally (no false incomplete)", async () => {

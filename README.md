@@ -262,7 +262,7 @@ DIGEST_PREPARE_CRON="0 3 * * *" DIGEST_SEND_CRON="0 9 * * *" \
 | Token usage audit | `--token-usage-audit-cron "<expr>"` | `TOKEN_USAGE_AUDIT_CRON` | disabled |
 | Edge India knowledge sync (no model) | `--knowledge-sync-cron "<expr>"` | `KNOWLEDGE_SYNC_CRON` | `*/30 * * * *` (a per-tenant offset in the first 30 minutes) |
 
-The Edge India knowledge sync (`Edge — knowledge sync`) is a `--no-agent` job with no delivery target: its script copies the published Edge City India snapshot named by `KNOWLEDGE_SNAPSHOT_URL` (default: the `p2p-lanes/edge-agent-skill` manifest) to `$HERMES_HOME/knowledge/edge-india/`, which the `edge-india` skill reads; with the key written empty (`KNOWLEDGE_SNAPSHOT_URL=`) it does nothing (`docs/deployment.md`, "Edge India knowledge").
+The Edge India knowledge sync (`Edge — knowledge sync`) is a `--no-agent` job with no delivery target: its script copies the published Edge City India snapshot named by `KNOWLEDGE_SNAPSHOT_URL` (default: Edge City's mirror, `skills/edge-india/references/manifest.json` in this repo) to `$HERMES_HOME/knowledge/edge-india/`, which the `edge-india` skill reads; with the key written empty (`KNOWLEDGE_SNAPSHOT_URL=`) it does nothing (`docs/deployment.md`, "Edge India knowledge").
 
 The token usage audit cron is disabled by default. To enable it for an install, pass `--token-usage-audit-cron "0 9 * * *"` or set `TOKEN_USAGE_AUDIT_CRON` to a full 5-field cron expression. To remove an existing managed audit cron, rerun the installer with no audit schedule, pass `--skip-token-usage-audit-cron`, or set `TOKEN_USAGE_AUDIT_CRON=off`.
 

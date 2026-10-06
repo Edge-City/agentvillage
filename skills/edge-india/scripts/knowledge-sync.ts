@@ -9,8 +9,13 @@
  * never fetches inside a resident's turn.
  *
  *   KNOWLEDGE_SNAPSHOT_URL  the snapshot's manifest.json. No line (or, with no
- *     `.env` file, no variable): the built-in DEFAULT_SNAPSHOT_URL,
- *     https://raw.githubusercontent.com/p2p-lanes/edge-agent-skill/main/references/manifest.json
+ *     `.env` file, no variable): the built-in DEFAULT_SNAPSHOT_URL, Edge City's
+ *     reviewed mirror in this repo (kept by sync-edge-india-references.yml):
+ *     https://raw.githubusercontent.com/Edge-City/agentvillage/main/skills/edge-india/references/manifest.json
+ *     Fran's upstream (`p2p-lanes/edge-agent-skill`) stays allowed as an
+ *     operator override only: a push there would reach every agent within one
+ *     run with no one in the loop, while the mirror sits under our org's audit
+ *     log and its sync workflow is the kill switch.
  *     Set empty (`KNOWLEDGE_SNAPSHOT_URL=`): switched off, status
  *     `unconfigured`, exit 0, no knowledge file written.
  *   KNOWLEDGE_SNAPSHOT_HOSTS  optional, comma-separated extra host names.
@@ -49,11 +54,15 @@
  * present): only `checked_at` is rewritten. One run at a time
  * (`knowledge/.edge-india.lock`).
  *
- * A mixed snapshot (the manifest is new but a document URL still serves the
- * CDN's old copy, `max-age=300`): a document whose manifest `hash` changed but
- * whose fetched bytes equal the stored copy is stale, so the run is
- * `incomplete`: nothing is written and the ETag and sha256 stay as they were,
- * so the next run fetches everything again.
+ * A mixed snapshot (the manifest is new but a file URL still serves the CDN's
+ * old copy, `max-age=300`) makes the run `incomplete`: nothing is written and
+ * the ETag and sha256 stay as they were, so the next run fetches everything
+ * again. When the manifest's directory serves `SNAPSHOT.json` (the mirror's
+ * record: `{schema: 1, source, synced_at, files: [{path, sha256, bytes}]}`),
+ * the manifest and every fetched file must match its sha256; any mismatch or
+ * missing entry is `incomplete` (`snapshot-mismatch`). With no SNAPSHOT.json
+ * (404), the fallback: a document whose manifest `hash` changed but whose
+ * fetched bytes equal the stored copy is `incomplete` (`stale-document`).
  *
  * What it says: one line per run in `$HERMES_HOME/av-events/knowledge/sync.jsonl`
  * (`{v, event: "knowledge_sync", status, reason, files, bytes, sha256,
@@ -85,7 +94,9 @@ export const LOCK_STALE_MS = 3 * 60 * 1000; // past Hermes's 120 s script timeou
 const CONCURRENCY = 4;
 
 /** The snapshot used when no `.env` line (or, with no `.env`, no variable) names one. */
-export const DEFAULT_SNAPSHOT_URL = "https://raw.githubusercontent.com/p2p-lanes/edge-agent-skill/main/references/manifest.json";
+export const DEFAULT_SNAPSHOT_URL = "https://raw.githubusercontent.com/Edge-City/agentvillage/main/skills/edge-india/references/manifest.json";
+/** The mirror's per-file sha256 record beside the manifest (Edge-City/agentvillage#203). */
+export const SNAPSHOT_RECORD_FILE = "SNAPSHOT.json";
 
 /** raw.githubusercontent.com paths always allowed (owner/repo prefixes). */
 export const RAW_HOST = "raw.githubusercontent.com";
@@ -262,6 +273,25 @@ export function manifestFiles(text: string): { paths: string[]; hashes: Record<s
     if (typeof hash === "string" && hash.length > 0 && hash.length <= 200) hashes[path] = hash;
   }
   return { paths: files, hashes };
+}
+
+/** The mirror's SNAPSHOT.json as path → sha256 (lowercase hex); throws `bad-snapshot`. */
+export function snapshotRecord(text: string): Map<string, string> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new SyncFailure("bad-snapshot");
+  }
+  const files = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as { schema?: unknown; files?: unknown }) : null;
+  if (!files || files.schema !== 1 || !Array.isArray(files.files) || files.files.length > MAX_DOCUMENTS + 2) throw new SyncFailure("bad-snapshot");
+  const record = new Map<string, string>();
+  for (const entry of files.files) {
+    const { path, sha256 } = (entry && typeof entry === "object" ? entry : {}) as { path?: unknown; sha256?: unknown };
+    if (typeof path !== "string" || typeof sha256 !== "string" || !/^[0-9a-f]{64}$/.test(sha256) || record.has(path)) throw new SyncFailure("bad-snapshot");
+    record.set(path, sha256);
+  }
+  return record;
 }
 
 // ── Fetching ────────────────────────────────────────────────────────────────
@@ -608,6 +638,16 @@ async function sync(options: SyncOptions, fetchedAt: string): Promise<SyncResult
     }
 
     const { paths, hashes } = manifestFiles(manifestText);
+
+    // The mirror's SNAPSHOT.json beside the manifest, when there is one (404: none).
+    let record: Map<string, string> | null = null;
+    try {
+      const fetched = await fetchFile(ctx, new URL(SNAPSHOT_RECORD_FILE, source.base), MANIFEST_TYPES);
+      record = snapshotRecord(textOk(fetched.bytes, false));
+    } catch (err) {
+      if (!(err instanceof SyncFailure && err.code === "http-404")) throw err;
+    }
+
     let total = manifest.bytes.byteLength;
     const bodies = await pool(paths, CONCURRENCY, async (path) => {
       const fetched = await fetchFile(ctx, new URL(path, source.base), MD_TYPES);
@@ -617,11 +657,18 @@ async function sync(options: SyncOptions, fetchedAt: string): Promise<SyncResult
       return fetched.bytes;
     });
 
-    // A mixed snapshot: the manifest says a document changed, but its URL
-    // still serves exactly the bytes stored under the old hash (the CDN's
-    // cached copy). Write nothing and keep the ETag and sha256, so the next
-    // run fetches it all again once the CDN has the new copy.
-    if (state !== null && state.source === source.manifest.href) {
+    if (record !== null) {
+      // Every file this run fetched must be the one the mirror recorded: a
+      // mismatch is one URL served from an older (or newer) commit than another.
+      const check: [string, Uint8Array][] = [[MANIFEST_FILE, manifest.bytes], ...paths.map((path, at): [string, Uint8Array] => [path, bodies[at]])];
+      for (const [path, bytes] of check) {
+        if (record.get(path) !== createHash("sha256").update(bytes).digest("hex")) return { ...result("incomplete", "snapshot-mismatch"), path };
+      }
+    } else if (state !== null && state.source === source.manifest.href) {
+      // No SNAPSHOT.json: the manifest says a document changed, but its URL
+      // still serves exactly the bytes stored under the old hash (the CDN's
+      // cached copy). Write nothing and keep the ETag and sha256, so the next
+      // run fetches it all again once the CDN has the new copy.
       for (const [at, path] of paths.entries()) {
         const before = state.hashes[path];
         if (before === undefined || hashes[path] === undefined || before === hashes[path]) continue;

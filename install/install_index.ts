@@ -28,8 +28,9 @@
  *     K1: the Edge India knowledge sync (`Edge — knowledge sync`, every 30
  *     minutes, a per-tenant offset in the first 30; no_agent, no delivery;
  *     --knowledge-sync-cron / KNOWLEDGE_SYNC_CRON) copies the snapshot named
- *     by KNOWLEDGE_SNAPSHOT_URL (default: the p2p-lanes/edge-agent-skill
- *     manifest) to `$HERMES_HOME/knowledge/edge-india/`
+ *     by KNOWLEDGE_SNAPSHOT_URL (default: Edge City's mirror,
+ *     skills/edge-india/references/ in this repo) to
+ *     `$HERMES_HOME/knowledge/edge-india/`
  *     (skills/edge-india/scripts/knowledge-sync.ts).
  *     New installs create enabled crons. Reconcile edits each existing job in
  *     place with one `hermes cron edit <id>` for its shape (prompt, script,

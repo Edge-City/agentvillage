@@ -410,9 +410,17 @@ The agent answers Edge City India background questions (housing, getting
 there, visas, tickets, meals, health and safety, residencies, themes) from a
 local copy of the published guide, never by fetching inside a resident's turn.
 The guide is Fran's indexer output (the wiki, the website and the Substack
-newsletter in Markdown) at one URL: its `manifest.json`, in
-`p2p-lanes/edge-agent-skill`, directory `references/`. That URL is the
-built-in default, so a tenant syncs it with no configuration.
+newsletter in Markdown), published in `p2p-lanes/edge-agent-skill`,
+directory `references/`. Agents never read it from there by default: the
+built-in default is **Edge City's mirror in this repo**,
+`skills/edge-india/references/` (`https://raw.githubusercontent.com/Edge-City/agentvillage/main/skills/edge-india/references/manifest.json`),
+kept by `sync-edge-india-references.yml` (#203), which copies complete
+snapshots only and writes `SNAPSHOT.json` with each file's sha256. A push to
+upstream would otherwise reach every agent within one run with no human in
+the loop; the mirror sits under our org's audit log, and its sync workflow is
+the kill switch (disable it, or revert the mirror). Fran's upstream stays on
+the allowlist as an operator override only. Until #203 merges, the mirror
+has nothing to serve and every run fails `http-404` (exit 1, local notice).
 
 **The job.** `Edge — knowledge sync`, installed and reconciled with the
 Index jobs (same list, `install/install_index.ts`): every 30 minutes on a
@@ -441,10 +449,14 @@ others, so a resident's or admin's pause and schedule are kept. It runs
   leaves the current set as it was. An unchanged manifest (304 to the stored
   ETag, or the same sha256) rewrites only `checked_at`. The skill warns that
   the guide may be out of date when `checked_at` is over a day old;
-- treats a mixed snapshot as `incomplete`: when the manifest gives a document
-  a new `hash` but its URL still serves exactly the stored bytes (the CDN's
-  cached copy, `max-age=300`), nothing is written and the ETag and sha256 are
-  not advanced, so the next run fetches it all again;
+- treats a mixed snapshot (one URL still served from an older commit by the
+  CDN, `max-age=300`) as `incomplete`: nothing is written and the ETag and
+  sha256 are not advanced, so the next run fetches it all again. When the
+  manifest's directory serves `SNAPSHOT.json` (the mirror does), the manifest
+  and every fetched file must match its sha256 (`snapshot-mismatch`; a
+  malformed `SNAPSHOT.json` fails the run as `bad-snapshot`). Without one, the
+  fallback: a document whose manifest `hash` changed but whose URL still
+  serves exactly the stored bytes (`stale-document`);
 - logs one line per run to `$HERMES_HOME/av-events/knowledge/sync.jsonl`:
   `{"v":1,"event":"knowledge_sync","status":"ok|unchanged|failed|incomplete|unconfigured|skipped","reason":"<code>","files":n,"bytes":n,"sha256":"<manifest sha256>","fetched_at":"<the run's UTC time>"}`,
   plus `"path"` (the stale document's manifest path) on `incomplete` (codes,
@@ -460,7 +472,7 @@ others, so a resident's or admin's pause and schedule are kept. It runs
 
 | Variable | Meaning |
 |---|---|
-| `KNOWLEDGE_SNAPSHOT_URL` | The snapshot's manifest. No line: the built-in default, `https://raw.githubusercontent.com/p2p-lanes/edge-agent-skill/main/references/manifest.json`. Written empty (`KNOWLEDGE_SNAPSHOT_URL=`): switched off; every run is `unconfigured`, exits 0 and writes no knowledge file. Any other value must pass the allowlist above. |
+| `KNOWLEDGE_SNAPSHOT_URL` | The snapshot's manifest. No line: the built-in default, the Edge City mirror `https://raw.githubusercontent.com/Edge-City/agentvillage/main/skills/edge-india/references/manifest.json`. Fran's upstream (`https://raw.githubusercontent.com/p2p-lanes/edge-agent-skill/main/references/manifest.json`) is an operator override only. Written empty (`KNOWLEDGE_SNAPSHOT_URL=`): switched off; every run is `unconfigured`, exits 0 and writes no knowledge file. Any other value must pass the allowlist above. |
 | `KNOWLEDGE_SNAPSHOT_HOSTS` | Optional. Extra host names a snapshot may be served from. No line: none. |
 
 The script reads both from `$HERMES_HOME/.env` (the file the control plane
