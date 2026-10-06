@@ -39,7 +39,7 @@ import { dirname, join } from "node:path";
 
 import { DEFAULT_NAME, agentName, readProfile } from "../../agent-profile/scripts/profile";
 import { callIndexTool, indexMcpUrl, toolJsonArray } from "./index-mcp";
-import { cleanText, connectionsUrl, cronScanHit, envOrDotenv } from "./proactive-text";
+import { cleanTitle, connectionsUrl, cronScanHit, envOrDotenv } from "./proactive-text";
 
 /** The marker, relative to `$HERMES_HOME` (install/welcome_state.ts WELCOME_STATE_RELATIVE_PATH). */
 export const WELCOME_STATE_FILE = join("memory", "welcome-state.json");
@@ -80,7 +80,11 @@ function homeFrom(argv: string[]): string {
  * in Index's order: archived and paused ones dropped (the welcome promises to
  * watch for these, and a paused intent is not being matched), the title from
  * `summary` else `description`, one plain line of at most TITLE_MAX code
- * points, repeats dropped. Throws IndexMcpError when Index's answer is a
+ * points, repeats dropped. Titles go through cleanTitle, the stricter
+ * cleaner for text read back from a store: the resident, Index's summariser
+ * and the agent's own memory job all write intents, and the welcome is sent
+ * as printed, so no link, domain, `@handle`, `/command`, cashtag, phone
+ * number, markup or control character reaches the resident. Throws IndexMcpError when Index's answer is a
  * failure or cannot be read (toolJsonArray), never an empty list for that.
  */
 export function intentTitles(text: string): string[] {
@@ -91,7 +95,7 @@ export function intentTitles(text: string): string[] {
     const intent = row as { summary?: unknown; description?: unknown; status?: unknown };
     if (intent.status === "archived" || intent.status === "paused") continue;
     const raw = typeof intent.summary === "string" && intent.summary.trim() ? intent.summary : intent.description;
-    const title = cleanText(raw, TITLE_MAX);
+    const title = cleanTitle(raw, TITLE_MAX);
     if (!title) continue;
     const key = title.toLocaleLowerCase();
     if (seen.has(key)) continue;
