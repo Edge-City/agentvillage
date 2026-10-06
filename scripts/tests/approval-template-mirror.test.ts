@@ -14,7 +14,9 @@ import { join } from "node:path";
 //    Run: AV_CONTROLPLANE_DIR=/path/to/controlplane bun test scripts/tests/approval-template-mirror.test.ts
 // R2 moved the pin (marketplace.app.install/action/read, review.delegate.model, resource.allocate and
 // the odin.* comment; seven added lines).
-const POLICY_BLOCK_SHA256 = "ebaadf5cfcde7984e9e01bbc5132fe42df04867fd51943d7ff7b69d8006d1cc0";
+// R3 (DATA-344) moved it again: `defaults.unmapped_tool: record` and the APRV-499 `tools:` list
+// (approval.md 0.4.2; a 0.4.0 or 0.4.1 daemon refuses both keys and fails every class closed).
+const POLICY_BLOCK_SHA256 = "b30648f60f31d98b4492197d48eec942f5700e3ff222f0c33d8dc82ee70a6977";
 
 const OPEN = "```yaml approval-policy\n";
 function policyBlock(text: string): string {

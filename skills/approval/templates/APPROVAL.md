@@ -81,9 +81,10 @@ are the defaults.
 intent.publish.stated.index is autonomous: an intention the resident stated in
 their own words is published without a second ask, and still recorded.
 `agent_may_request: true` is what opens `propose` to a class; it exists in the
-core schema from approval.md 0.4.0 (PR #569), so this policy needs a daemon at
-0.4.0 or later. On an older daemon the schema rejects the key and the policy
-resolves every class manual (fail closed).
+core schema from approval.md 0.4.0 (PR #569). `tools:` and
+`defaults.unmapped_tool` exist from 0.4.2 (APRV-499), so this policy needs a
+daemon at 0.4.2 or later. On an older daemon the schema rejects the keys and
+the policy resolves every class manual (fail closed).
 
 TTL. `approval_ttl: 72h` is global because core has no per-class TTL. It is the
 window a proposal has: the plugin polls and executes on its own, so no request
@@ -99,6 +100,24 @@ and read.web, so the file says what day one does: these calls are recorded, not
 gated. A class a resident later makes manual waits at most 240 s inside the tool
 call (above). A cron job's script still runs at every tick with no hook at all,
 so creating or changing the job is the only point a tap could ever come.
+
+Tool names (`tools:`, approval.md 0.4.2, APRV-499). The list names the class a
+hooked tool call is judged under when core's Hermes adapter does not class it
+itself: the shell, file and read tools and the rule table keep precedence, so
+the lines for the rule-table tools are inert and repeat the class the table
+gives. Web reads and Index's read tools are read.web; a new or reworded
+intention in the resident's words, through Index or record_intention, is
+intent.publish.stated.index; every other Index tool, and the tools that send
+content to a model provider, are network.call. Every class is a row above, so
+the settings page needs no row of its own for a tool. `defaults.unmapped_tool:
+record` records any other hooked tool under harness.tool.unmapped (autonomous,
+the tool named in the start's `harness_tool`); `ask` would hold each for a tap
+and is a per-tenant choice for later, not the template's. No class limit on
+harness.tool.unmapped (ruled 2026-10-06 01:37Z). Only the installer's gated
+tools (APPROVAL_GATED_TOOLS) reach the hook, so on today's list one call
+changes: web_extract, which core passed unrecorded, is recorded as read.web.
+The other lines wait for that list to grow. Removing both keys restores the
+0.4.1 behaviour on a 0.4.2 daemon (an unnamed tool passes unrecorded).
 
 The three organ rows are mandatory under an autonomous default. Core classifies
 the Hermes home's config.yaml, agent-hooks/, hooks* and the consent allowlist as
@@ -155,6 +174,7 @@ defaults:
   approval_ttl: 72h             # the proposal window; hook-opened requests still clamp to 240 s
   on_expiry: reject
   token_delivery: sealed
+  unmapped_tool: record         # a hooked tool no tools line names is recorded (harness.tool.unmapped); ask would hold it for a tap
 
 approvers:
   resident:
@@ -205,4 +225,58 @@ classes:
   read.web:                      { autonomy: autonomous }
   # Housekeeping inside the sandbox runs and is recorded.
   files.delete.scratch:          { autonomy: autonomous }
+
+# The agent's tool names (approval.md 0.4.2, APRV-499): the class a hooked tool call is judged
+# under when core's Hermes adapter does not class it itself. First match wins; a tool no line
+# names is recorded under harness.tool.unmapped (defaults.unmapped_tool). Every class is a row
+# above, so the settings page prices these calls with no row of its own. The hook sees only the
+# tools the overlay routes to it (its gated list), so a line for a tool outside that list waits
+# for the list to grow. A daemon before 0.4.2 refuses this key and fails every class closed.
+tools:
+  # Hermes's own tools that core already classes from the call's arguments (cronjob_manage list
+  # and the process reads are reads there): core's table wins over these lines, and each says
+  # the class that table gives, so the file reads as what happens.
+  - { match: cronjob_manage,                   class: cron.manage }
+  - { match: cronjob,                          class: cron.manage }
+  - { match: process_manage,                   class: process.write }
+  - { match: process,                          class: process.write }
+  - { match: "browser_*",                      class: browser.exec }
+  - { match: skill_manage,                     class: skill.manage }
+  - { match: delegate_task,                    class: agent.delegate }
+  - { match: send_message,                     class: message.send }
+  # Reading the web.
+  - { match: web_search,                       class: read.web }
+  - { match: web_extract,                      class: read.web }
+  - { match: x_search,                         class: read.web }
+  # Index's MCP server (Hermes names its tools mcp__index__<tool>): a read is read.web; a new or
+  # reworded intention in the resident's words is intent.publish.stated.index, as the
+  # record_intention tool publishes one; every other Index tool reaches Index as network.call.
+  - { match: mcp__index__get_my_profile,       class: read.web }
+  - { match: mcp__index__list_intents,         class: read.web }
+  - { match: mcp__index__get_intent,           class: read.web }
+  - { match: mcp__index__list_opportunities,   class: read.web }
+  - { match: mcp__index__get_opportunity,      class: read.web }
+  - { match: mcp__index__create_intent,        class: intent.publish.stated.index }
+  - { match: mcp__index__update_intent,        class: intent.publish.stated.index }
+  - { match: "mcp__index__*",                  class: network.call }
+  # Index's Hermes plugin, where installed (bare index_* names): the same split.
+  - { match: index_read_intents,               class: read.web }
+  - { match: index_list_intent_networks,       class: read.web }
+  - { match: index_read_networks,              class: read.web }
+  - { match: index_read_network_memberships,   class: read.web }
+  - { match: index_list_opportunities,         class: read.web }
+  - { match: index_read_docs,                  class: read.web }
+  - { match: index_agent_me,                   class: read.web }
+  - { match: index_create_intent,              class: intent.publish.stated.index }
+  - { match: index_update_intent,              class: intent.publish.stated.index }
+  - { match: "index_*",                        class: network.call }
+  # The overlay's front door for intentions: it publishes a stated one to Index and holds an
+  # inferred one for the resident's tap (that publish is proposed as intent.publish.inferred.index).
+  - { match: record_intention,                 class: intent.publish.stated.index }
+  # Tools that send content to a model provider.
+  - { match: image_generate,                   class: network.call }
+  - { match: video_generate,                   class: network.call }
+  - { match: text_to_speech,                   class: network.call }
+  - { match: vision_analyze,                   class: network.call }
+  - { match: video_analyze,                    class: network.call }
 ```
