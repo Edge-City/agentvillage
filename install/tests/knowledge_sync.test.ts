@@ -15,8 +15,10 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 
 import {
+  DEFAULT_SNAPSHOT_URL,
   LOG_MAX_BYTES,
   currentSetDir,
+  exitCode,
   documentPathValid,
   parseExtraHosts,
   previousSetDir,
@@ -25,6 +27,7 @@ import {
   syncLogPath,
   urlAllowed,
   type SyncOptions,
+  type SyncResult,
 } from "../../skills/edge-india/scripts/knowledge-sync";
 
 const REPO_SKILLS = join(import.meta.dir, "..", "..", "skills");
@@ -44,20 +47,24 @@ let home: string;
 let served: Map<string, Served>;
 let requests: { url: string; headers: Record<string, string> }[];
 
-function manifest(paths: string[], extra: Record<string, unknown> = {}): string {
+function manifest(paths: string[], extra: Record<string, unknown> = {}, hashes: Record<string, string> = {}): string {
   return JSON.stringify({
     version: 1,
     event: "edge-india-2026",
-    documents: paths.map((path) => ({ path, title: path, url: `https://example.org/${path}`, hash: "x" })),
+    documents: paths.map((path) => ({ path, title: path, url: `https://example.org/${path}`, hash: hashes[path] ?? "x" })),
     ...extra,
   }, null, 2);
+}
+
+function sha(body: string | Uint8Array): string {
+  return createHash("sha256").update(body).digest("hex");
 }
 
 /** A complete upstream: the manifest, index.md and every listed file. */
 function serveSnapshot(files: Record<string, string>, etag = '"e1"'): void {
   // Upstream's manifest carries a hash per document, so new content is a new manifest.
-  const hashes = Object.fromEntries(Object.entries(files).map(([path, body]) => [path, createHash("sha256").update(body).digest("hex")]));
-  served.set(MANIFEST_URL, { body: manifest(Object.keys(files), { hashes }), type: "text/plain; charset=utf-8", etag });
+  const hashes = Object.fromEntries(Object.entries(files).map(([path, body]) => [path, sha(body)]));
+  served.set(MANIFEST_URL, { body: manifest(Object.keys(files), {}, hashes), type: "text/plain; charset=utf-8", etag });
   served.set(`${BASE}index.md`, { body: "# Index\n\n| [Wiki](./wiki-content.md) |\n", type: "text/plain; charset=utf-8" });
   for (const [path, body] of Object.entries(files)) served.set(`${BASE}${path}`, { body, type: "text/plain; charset=utf-8" });
 }
@@ -113,17 +120,56 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-describe("unconfigured", () => {
-  test("no KNOWLEDGE_SNAPSHOT_URL: status unconfigured, nothing fetched, no knowledge file written, one log line", async () => {
-    const result = await runKnowledgeSync(opts({}));
+describe("switched off, and the default snapshot", () => {
+  test("KNOWLEDGE_SNAPSHOT_URL= (empty) in .env: unconfigured, nothing fetched, no knowledge file written, one log line", async () => {
+    serveSnapshot({ "a.md": "A\n" });
+    writeFileSync(join(home, ".env"), "KNOWLEDGE_SNAPSHOT_URL=\n");
+    const result = await runKnowledgeSync(opts({ KNOWLEDGE_SNAPSHOT_URL: MANIFEST_URL }));
     expect(result).toMatchObject({ status: "unconfigured", reason: "unset", files: 0, bytes: 0, sha256: null });
+    expect(exitCode(result)).toBe(0);
     expect(requests).toEqual([]);
     expect(existsSync(join(home, "knowledge"))).toBe(false);
     expect(logLines()).toEqual([{ v: 1, event: "knowledge_sync", status: "unconfigured", reason: "unset", files: 0, bytes: 0, sha256: null, fetched_at: "2026-10-11T03:00:00.000Z" }]);
   });
 
-  test("an empty value counts as unset", async () => {
+  test("with no .env, an empty (or blank) variable switches it off too", async () => {
     expect((await runKnowledgeSync(opts({ KNOWLEDGE_SNAPSHOT_URL: "  " }))).status).toBe("unconfigured");
+    expect(requests).toEqual([]);
+  });
+
+  test("no .env and no variable: the built-in default snapshot (p2p-lanes/edge-agent-skill) is synced", async () => {
+    expect(DEFAULT_SNAPSHOT_URL).toBe("https://raw.githubusercontent.com/p2p-lanes/edge-agent-skill/main/references/manifest.json");
+    serveSnapshot({ "a.md": "A\n" });
+    const result = await runKnowledgeSync(opts({}));
+    expect(result).toMatchObject({ status: "ok", reason: "written", files: 2 });
+    expect(requests[0].url).toBe(DEFAULT_SNAPSHOT_URL);
+    expect(JSON.parse(readFileSync(join(currentSetDir(home), "_sync.json"), "utf8")).source).toBe(DEFAULT_SNAPSHOT_URL);
+  });
+
+  test("a .env without the line means the default, whatever the (stale) process environment holds", async () => {
+    // The gateway loaded .env at its start: a deleted line lives on in its environment.
+    serveSnapshot({ "a.md": "A\n" });
+    writeFileSync(join(home, ".env"), "OTHER=1\n");
+    const stale = "https://raw.githubusercontent.com/Edge-City/stale/main/manifest.json";
+    const result = await runKnowledgeSync(opts({ KNOWLEDGE_SNAPSHOT_URL: stale }));
+    expect(result.status).toBe("ok");
+    expect(requests.map((r) => r.url)).not.toContain(stale);
+    expect(requests[0].url).toBe(DEFAULT_SNAPSHOT_URL);
+  });
+
+  test("a .env without KNOWLEDGE_SNAPSHOT_HOSTS means no extra hosts, whatever the process environment holds", async () => {
+    writeFileSync(join(home, ".env"), "KNOWLEDGE_SNAPSHOT_URL=https://knowledge.edgecity.live/india/manifest.json\n");
+    const result = await runKnowledgeSync(opts({ KNOWLEDGE_SNAPSHOT_HOSTS: "knowledge.edgecity.live" }));
+    expect(result).toMatchObject({ status: "failed", reason: "host-not-allowed" });
+    expect(requests).toEqual([]);
+  });
+
+  test("an .env that exists but cannot be read fails the run (env-unreadable), nothing fetched", async () => {
+    mkdirSync(join(home, ".env"));
+    const result = await runKnowledgeSync(opts({ KNOWLEDGE_SNAPSHOT_URL: MANIFEST_URL }));
+    expect(result).toMatchObject({ status: "failed", reason: "env-unreadable" });
+    expect(exitCode(result)).toBe(1);
+    expect(requests).toEqual([]);
   });
 });
 
@@ -192,6 +238,9 @@ describe("a full sync", () => {
     expect(set["wiki-content.md"]).toContain("Source: https://edgecity.notion.site/x");
     const state = JSON.parse(set["_sync.json"]);
     expect(state).toMatchObject({ v: 1, source: MANIFEST_URL, manifest_sha256: sha, etag: '"e1"', files: ["index.md", "wiki-content.md", "newsletter/housing.md"] });
+    expect(state.hashes).toEqual({ "wiki-content.md": createHash("sha256").update("# Wiki\n\nSource: https://edgecity.notion.site/x\n").digest("hex"), "newsletter/housing.md": createHash("sha256").update("# Housing\n").digest("hex") });
+    expect(state.fetched_at).toBe("2026-10-11T03:00:00.000Z");
+    expect(state.checked_at).toBe("2026-10-11T03:00:00.000Z");
     expect(result.bytes).toBe(state.bytes);
     expect(existsSync(previousSetDir(home))).toBe(false);
     expect(knowledgeEntries()).toEqual(["edge-india"]);
@@ -200,7 +249,7 @@ describe("a full sync", () => {
     expect(JSON.stringify(line)).not.toContain("http");
   });
 
-  test("a changed snapshot replaces the set and keeps the one it replaced as edge-india.prev", async () => {
+  test("a changed snapshot replaces the set and keeps the one it replaced in knowledge-prev/, outside knowledge/", async () => {
     serveSnapshot({ "wiki-content.md": "# Wiki v1\n" }, '"e1"');
     await runKnowledgeSync(opts());
     const first = tree(currentSetDir(home));
@@ -210,7 +259,8 @@ describe("a full sync", () => {
     expect(result.status).toBe("ok");
     expect(tree(currentSetDir(home))["wiki-content.md"]).toBe("# Wiki v2\n");
     expect(tree(previousSetDir(home))).toEqual(first);
-    expect(knowledgeEntries()).toEqual(["edge-india", "edge-india.prev"]);
+    expect(previousSetDir(home)).toBe(join(home, "knowledge-prev", "edge-india"));
+    expect(knowledgeEntries()).toEqual(["edge-india"]);
   });
 
   test("a document the manifest drops leaves the current set (it stays in prev)", async () => {
@@ -225,27 +275,37 @@ describe("a full sync", () => {
 });
 
 describe("unchanged", () => {
-  test("the manifest answers 304 to the stored ETag: unchanged, only the manifest requested, nothing written", async () => {
+  test("the manifest answers 304 to the stored ETag: unchanged, only the manifest requested, only checked_at rewritten", async () => {
     serveSnapshot({ "a.md": "A\n" }, '"e1"');
     await runKnowledgeSync(opts());
-    const stamp = statSync(join(currentSetDir(home), "_sync.json")).mtimeMs;
+    const before = tree(currentSetDir(home));
     requests = [];
-    const result = await runKnowledgeSync(opts());
+    const later = () => new Date("2026-10-13T03:00:00Z");
+    const result = await runKnowledgeSync(opts(undefined, { now: later }));
     expect(result).toMatchObject({ status: "unchanged", reason: "etag", files: 2 });
     expect(requests.map((r) => r.url)).toEqual([MANIFEST_URL]);
     expect(requests[0].headers["if-none-match"]).toBe('"e1"');
-    expect(statSync(join(currentSetDir(home), "_sync.json")).mtimeMs).toBe(stamp);
+    const after = tree(currentSetDir(home));
+    const { "_sync.json": stateBefore, ...filesBefore } = before;
+    const { "_sync.json": stateAfter, ...filesAfter } = after;
+    expect(filesAfter).toEqual(filesBefore);
+    // S1: fetched_at stays the time the content was written; checked_at is the last confirmation.
+    expect(JSON.parse(stateAfter)).toEqual({ ...JSON.parse(stateBefore), checked_at: "2026-10-13T03:00:00.000Z" });
+    expect(JSON.parse(stateAfter).fetched_at).toBe("2026-10-11T03:00:00.000Z");
     expect(existsSync(previousSetDir(home))).toBe(false);
+    expect(readdirSync(currentSetDir(home)).filter((name) => name.includes(".tmp-"))).toEqual([]);
   });
 
   test("no ETag but the same manifest sha256: unchanged, no file fetched or written", async () => {
     serveSnapshot({ "a.md": "A\n" }, "");
     await runKnowledgeSync(opts());
     requests = [];
-    const result = await runKnowledgeSync(opts());
+    const result = await runKnowledgeSync(opts(undefined, { now: () => new Date("2026-10-12T09:30:00Z") }));
     expect(result).toMatchObject({ status: "unchanged", reason: "same-sha256" });
     expect(requests.map((r) => r.url)).toEqual([MANIFEST_URL]);
     expect(existsSync(previousSetDir(home))).toBe(false);
+    const state = JSON.parse(readFileSync(join(currentSetDir(home), "_sync.json"), "utf8"));
+    expect(state).toMatchObject({ fetched_at: "2026-10-11T03:00:00.000Z", checked_at: "2026-10-12T09:30:00.000Z" });
   });
 
   test("a set missing a file is not unchanged: it is fetched again in full", async () => {
@@ -383,6 +443,17 @@ describe("any failure keeps the last good set byte for byte", () => {
     expect(tree(currentSetDir(home))).toEqual(before);
   });
 
+  test("a fetch cut off by the run's budget (not its own timeout) logs budget", async () => {
+    const before = await goodSet();
+    const hanging = (url: string, init: RequestInit): Promise<Response> =>
+      url.endsWith("n.md")
+        ? new Promise((_, reject) => init.signal!.addEventListener("abort", () => reject(init.signal!.reason)))
+        : fakeFetch(url, init);
+    const result = await runKnowledgeSync(opts(undefined, { fetchImpl: hanging, fetchTimeoutMs: 10_000, runBudgetMs: 80 }));
+    expect(result).toMatchObject({ status: "failed", reason: "budget" });
+    expect(tree(currentSetDir(home))).toEqual(before);
+  });
+
   test("a network error fails the run", async () => {
     const before = await goodSet();
     const broken = async (): Promise<Response> => {
@@ -447,12 +518,19 @@ describe("crash safety and one run at a time", () => {
     expect(knowledgeEntries()).toEqual(["edge-india"]);
   });
 
-  test("a held lock fails the run without touching the set; a lock older than 3 minutes is taken over", async () => {
+  test("a held lock skips the run without touching the set (exit 0, logged); a lock older than 3 minutes is taken over", async () => {
     serveSnapshot({ "a.md": "A\n" }, '"e1"');
     await runKnowledgeSync(opts());
+    const before = tree(currentSetDir(home));
     const lock = join(home, "knowledge", ".edge-india.lock");
     mkdirSync(lock);
-    expect(await runKnowledgeSync(opts())).toMatchObject({ status: "failed", reason: "locked" });
+    requests = [];
+    const skipped = await runKnowledgeSync(opts());
+    expect(skipped).toMatchObject({ status: "skipped", reason: "locked" });
+    expect(exitCode(skipped)).toBe(0);
+    expect(requests).toEqual([]);
+    expect(tree(currentSetDir(home))).toEqual(before);
+    expect(logLines().at(-1)).toMatchObject({ status: "skipped", reason: "locked" });
     const old = (Date.now() - 4 * 60 * 1000) / 1000;
     utimesSync(lock, old, old);
     expect((await runKnowledgeSync(opts())).status).toBe("unchanged");
@@ -474,7 +552,7 @@ describe("configuration and the log", () => {
     const path = syncLogPath(home);
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, "x".repeat(LOG_MAX_BYTES));
-    await runKnowledgeSync(opts({}));
+    await runKnowledgeSync(opts({ KNOWLEDGE_SNAPSHOT_URL: "" }));
     expect(statSync(`${path}.1`).size).toBe(LOG_MAX_BYTES);
     expect(logLines()).toHaveLength(1);
   });
@@ -485,6 +563,102 @@ describe("configuration and the log", () => {
     }
     const source = snapshotSource(MANIFEST_URL, new Set());
     expect(source.ok && source.base.href).toBe(BASE);
+  });
+});
+
+describe("a mixed snapshot across CDN commits heals itself (real fetch, local server)", () => {
+  // The refuter's pattern: Bun's own fetch against a local server standing in
+  // for raw.githubusercontent.com, two manifest versions, one stale body.
+  let server: ReturnType<typeof Bun.serve>;
+  let routes: Map<string, (req: Request) => Response>;
+
+  beforeEach(() => {
+    routes = new Map();
+    server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(req) {
+        const route = routes.get(new URL(req.url).pathname);
+        return route ? route(req) : new Response("nope", { status: 404, headers: { "content-type": "text/plain" } });
+      },
+    });
+  });
+
+  afterEach(() => {
+    server.stop(true);
+  });
+
+  const local = (url: string, init: RequestInit): Promise<Response> => {
+    const target = new URL(url);
+    if (target.hostname !== "raw.githubusercontent.com") throw new Error(`off-host fetch ${url}`);
+    return fetch(`http://127.0.0.1:${server.port}${target.pathname}`, init);
+  };
+  const path = (rel: string) => new URL(rel, BASE).pathname;
+  const text = (body: string, headers: Record<string, string> = {}) => () =>
+    new Response(body, { headers: { "content-type": "text/plain; charset=utf-8", ...headers } });
+  /** A manifest that answers 304 to its own ETag, as GitHub's raw host does. */
+  const manifestRoute = (body: string, etag: string) => (req: Request) =>
+    req.headers.get("if-none-match") === etag
+      ? new Response(null, { status: 304, headers: { etag } })
+      : new Response(body, { headers: { "content-type": "text/plain; charset=utf-8", etag } });
+  const run = (now: string) => runKnowledgeSync({ home, env: { KNOWLEDGE_SNAPSHOT_URL: MANIFEST_URL }, fetchImpl: local, now: () => new Date(now) });
+  const state = () => JSON.parse(readFileSync(join(currentSetDir(home), "_sync.json"), "utf8"));
+
+  test("a document whose manifest hash changed but whose body is the stored copy: incomplete, nothing advanced, healed on the next run", async () => {
+    const a1 = "# A\n\nversion one\n";
+    const a2 = "# A\n\nversion two\n";
+    const b = "# B\n\nunchanged\n";
+    const manifestA = manifest(["a.md", "b.md"], {}, { "a.md": sha(a1), "b.md": sha(b) });
+    const manifestB = manifest(["a.md", "b.md"], {}, { "a.md": sha(a2), "b.md": sha(b) });
+    routes.set(path("manifest.json"), manifestRoute(manifestA, '"e1"'));
+    routes.set(path("index.md"), text("# Index\n"));
+    routes.set(path("a.md"), text(a1));
+    routes.set(path("b.md"), text(b));
+    expect((await run("2026-10-11T00:00:00Z")).status).toBe("ok");
+    const good = tree(currentSetDir(home));
+    expect(state().hashes).toEqual({ "a.md": sha(a1), "b.md": sha(b) });
+
+    // Upstream pushes: the manifest is B, but the CDN still serves a.md's old bytes.
+    routes.set(path("manifest.json"), manifestRoute(manifestB, '"e2"'));
+    const stale = await run("2026-10-11T00:30:00Z");
+    expect(stale).toMatchObject({ status: "incomplete", reason: "stale-document", path: "a.md" });
+    expect(exitCode(stale)).toBe(1);
+    expect(tree(currentSetDir(home))).toEqual(good);
+    expect(state()).toMatchObject({ etag: '"e1"', manifest_sha256: sha(manifestA), checked_at: "2026-10-11T00:00:00.000Z" });
+    expect(existsSync(previousSetDir(home))).toBe(false);
+    expect(logLines().at(-1)).toMatchObject({ status: "incomplete", reason: "stale-document", path: "a.md" });
+
+    // Still stale on the next run: still incomplete (the ETag was not advanced, so it is not "unchanged").
+    expect((await run("2026-10-11T01:00:00Z")).status).toBe("incomplete");
+
+    // The CDN heals: the next run writes B. b.md (same hash, same body) never blocks it.
+    routes.set(path("a.md"), text(a2));
+    const healed = await run("2026-10-11T01:30:00Z");
+    expect(healed).toMatchObject({ status: "ok", reason: "written" });
+    expect(readFileSync(join(currentSetDir(home), "a.md"), "utf8")).toBe(a2);
+    expect(readFileSync(join(currentSetDir(home), "b.md"), "utf8")).toBe(b);
+    expect(state()).toMatchObject({ etag: '"e2"', manifest_sha256: sha(manifestB), hashes: { "a.md": sha(a2), "b.md": sha(b) } });
+
+    // And the run after that is unchanged by ETag.
+    expect(await run("2026-10-11T02:00:00Z")).toMatchObject({ status: "unchanged", reason: "etag" });
+  });
+
+  test("a new manifest whose documents kept their hashes and bodies is written normally (no false incomplete)", async () => {
+    const a = "# A\n";
+    routes.set(path("manifest.json"), manifestRoute(manifest(["a.md"], {}, { "a.md": sha(a) }), '"e1"'));
+    routes.set(path("index.md"), text("# Index\n"));
+    routes.set(path("a.md"), text(a));
+    expect((await run("2026-10-11T00:00:00Z")).status).toBe("ok");
+    // Only the manifest's own bytes change (a new field): same hash, same body.
+    routes.set(path("manifest.json"), manifestRoute(manifest(["a.md"], { generation: 2 }, { "a.md": sha(a) }), '"e2"'));
+    expect(await run("2026-10-11T00:30:00Z")).toMatchObject({ status: "ok", reason: "written" });
+  });
+});
+
+describe("exit codes", () => {
+  test("failed and incomplete exit 1; ok, unchanged, unconfigured and skipped exit 0", () => {
+    const at = (status: SyncResult["status"]): SyncResult => ({ status, reason: "r", files: 0, bytes: 0, sha256: null, fetched_at: "" });
+    expect(["ok", "unchanged", "unconfigured", "skipped", "failed", "incomplete"].map((status) => exitCode(at(status as SyncResult["status"])))).toEqual([0, 0, 0, 0, 1, 1]);
   });
 });
 
@@ -504,8 +678,9 @@ describe("the shim Hermes runs", () => {
     return spawnSync("bash", [shim], { cwd: tmpdir(), env: clean, encoding: "utf8", timeout: 30_000 });
   }
 
-  test("unconfigured: exit 0, the wake line is the only stdout, and no knowledge file is written", () => {
+  test("switched off (KNOWLEDGE_SNAPSHOT_URL= in .env): exit 0, the wake line is the only stdout, and no knowledge file is written", () => {
     const shim = installShim();
+    writeFileSync(join(home, ".env"), "KNOWLEDGE_SNAPSHOT_URL=\n");
     const run = runShim(shim);
     expect(run.status).toBe(0);
     expect(run.stdout.trim()).toBe(JSON.stringify({ wakeAgent: false, reason: "knowledge-unconfigured-unset" }));

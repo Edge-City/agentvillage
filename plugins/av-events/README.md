@@ -32,7 +32,7 @@ plugins/av-events/
   _brief_items.py  read-only count of inferred intentions awaiting an answer, for the morning brief (DATA-222, DATA-314); never imported by the plugin
   tool_categories.json        frozen seed: tool name -> category (tool_categories_v3)
   edgeos_tool_allowlist.json  frozen seed: EdgeOS operations (edgeos_tool_allowlist_v1)
-  cron_job_names.json         frozen seed: the cron names cron.run may carry (cron_job_names_v1)
+  cron_job_names.json         frozen seed: the cron names cron.run may carry (cron_job_names_v2)
   outcome_question.json       the evening outcome ask's fixed question: sentence, normalise steps, question key rule, shared cases with keys and hashes (outcome_question_v3)
   tests/           pytest suite; drives a fake ctx, never imports Hermes
 ```
@@ -1268,7 +1268,7 @@ never a hook — reads what the scheduler writes, once a minute, read-only:
   execution's window (±2 s); otherwise both are null. The last 512 KiB is read, and only when there
   is something to report.
 - `$HERMES_HOME/cron/jobs.json`: `job_name`, **only when it is exactly one of the names the
-  installer creates**, from the frozen seed `cron_job_names.json` (`cron_job_names_v1`;
+  installer creates**, from the frozen seed `cron_job_names.json` (`cron_job_names_v2`;
   `install/tests/av_events_state.test.ts` fails if it drifts from `DIGEST_CRON_SPECS`). A prefix check
   is not enough: a participant can have the agent schedule a job named `Edge — …` too, and its name
   is then their words. Nor is an exact name (DATA-92): the participant can ask for a job named

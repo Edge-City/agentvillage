@@ -26,8 +26,8 @@ test("nine Index cron specs: digest jobs, opportunity drops, token audit, knowle
   expect(DIGEST_CRON_SPECS.some((s) => s.name === "Edge — Agent Plaza selfie")).toBe(false);
   const [signals, prepare, send, negotiation, evening, dropMidday, dropEvening, tokenAudit, knowledge] = DIGEST_CRON_SPECS;
   expect(knowledge.name).toBe("Edge — knowledge sync");
-  expect(knowledge.schedule).toBe("*/15 * * * *");
-  expect(knowledge.staggerWindowMinutes).toBe(15);
+  expect(knowledge.schedule).toBe("*/30 * * * *");
+  expect(knowledge.staggerWindowMinutes).toBe(30);
   expect(knowledge.noAgent).toBe(true);
   expect(knowledge.deliver).toBe(false);
   expect(knowledge.failureDeliver).toBe("local");
@@ -268,11 +268,11 @@ test("resolveCronSchedule ignores an invalid override and uses the default", () 
   expect(resolveCronSchedule(prepare, [], { DIGEST_PREPARE_CRON: "0 2 * *" })).toBe("0 2 * * *");
 });
 
-test("K1: the knowledge sync is created no_agent, undelivered, failures local, every 15 minutes", () => {
+test("K1: the knowledge sync is created no_agent, undelivered, failures local, every 30 minutes", () => {
   const home = "/home/x/.hermes";
   const knowledge = DIGEST_CRON_SPECS.find((spec) => spec.name === "Edge — knowledge sync")!;
   expect(cronCreateArgs(knowledge, KNOWLEDGE_SYNC_PROMPT, home)).toEqual([
-    "cron", "create", "*/15 * * * *", KNOWLEDGE_SYNC_PROMPT,
+    "cron", "create", "*/30 * * * *", KNOWLEDGE_SYNC_PROMPT,
     "--name", "Edge — knowledge sync", "--failure-deliver", "local",
     "--script", "agentvillage_knowledge_sync.sh", "--no-agent", "--workdir", home,
   ]);
@@ -285,19 +285,19 @@ test("K1: an every-N-minutes default is staggered to one offset in the first N m
     const schedule = staggeredSchedule(knowledge, seed);
     const [minute, ...rest] = schedule.split(" ");
     const minutes = minute.split(",").map(Number);
-    expect(minutes).toHaveLength(4);
+    expect(minutes).toHaveLength(2);
     expect(minutes[0]).toBeGreaterThanOrEqual(0);
-    expect(minutes[0]).toBeLessThan(15);
-    expect(minutes).toEqual([minutes[0], minutes[0] + 15, minutes[0] + 30, minutes[0] + 45]);
+    expect(minutes[0]).toBeLessThan(30);
+    expect(minutes).toEqual([minutes[0], minutes[0] + 30]);
     expect(rest.join(" ")).toBe("* * * *");
     expect(isValidCron(schedule)).toBe(true);
   }
-  expect(resolveCronSchedule(knowledge, [], {}, "")).toBe("*/15 * * * *");
-  expect(resolveCronSchedule(knowledge, ["--knowledge-sync-cron", "*/30 * * * *"], {}, "ix_a")).toBe("*/30 * * * *");
+  expect(resolveCronSchedule(knowledge, [], {}, "")).toBe("*/30 * * * *");
+  expect(resolveCronSchedule(knowledge, ["--knowledge-sync-cron", "*/15 * * * *"], {}, "ix_a")).toBe("*/15 * * * *");
   expect(resolveCronSchedule(knowledge, [], { KNOWLEDGE_SYNC_CRON: "5 * * * *" }, "ix_a")).toBe("5 * * * *");
-  // The */30 shape is unchanged (m, m+30) for a window of at most 30.
-  const half = { ...knowledge, schedule: "*/30 * * * *", staggerWindowMinutes: 30 };
-  const [m] = staggeredSchedule(half, "ix_a").split(" ");
-  const [a, b] = m.split(",").map(Number);
-  expect(b).toBe(a + 30);
+  // Any */N default keeps its rate: */15 with a 15-minute window is m, m+15, m+30, m+45.
+  const quarter = { ...knowledge, schedule: "*/15 * * * *", staggerWindowMinutes: 15 };
+  const [m] = staggeredSchedule(quarter, "ix_a").split(" ");
+  const q = m.split(",").map(Number);
+  expect(q).toEqual([q[0], q[0] + 15, q[0] + 30, q[0] + 45]);
 });

@@ -25,10 +25,11 @@
  *     negotiation summary over 14:00–14:24, and evening questions over
  *     19:00–19:24. Opportunity drops spread over 12:00–12:24 and
  *     17:00–17:24.
- *     K1: the Edge India knowledge sync (`Edge — knowledge sync`, every 15
- *     minutes, a per-tenant offset in the first 15; no_agent, no delivery;
+ *     K1: the Edge India knowledge sync (`Edge — knowledge sync`, every 30
+ *     minutes, a per-tenant offset in the first 30; no_agent, no delivery;
  *     --knowledge-sync-cron / KNOWLEDGE_SYNC_CRON) copies the snapshot named
- *     by KNOWLEDGE_SNAPSHOT_URL to `$HERMES_HOME/knowledge/edge-india/`
+ *     by KNOWLEDGE_SNAPSHOT_URL (default: the p2p-lanes/edge-agent-skill
+ *     manifest) to `$HERMES_HOME/knowledge/edge-india/`
  *     (skills/edge-india/scripts/knowledge-sync.ts).
  *     New installs create enabled crons. Reconcile edits each existing job in
  *     place with one `hermes cron edit <id>` for its shape (prompt, script,
@@ -250,13 +251,6 @@ export interface DigestCronSpec {
   noAgent?: boolean;
   /** `--failure-deliver local`: a failure notice stays out of the resident's chat. */
   failureDeliver?: "local";
-  /**
-   * Not (yet) in the av-events seed `plugins/av-events/cron_job_names.json`,
-   * so its `cron.run` events carry job_name null. Adding a name to the seed is
-   * a seed change: the data pipeline must carry it before a roll (K1 leaves
-   * the knowledge sync out so it rides rc15 without allow_seed_change).
-   */
-  cronRunUnnamed?: true;
   /** CLI flag that overrides `schedule` at install time. */
   overrideFlag: string;
   /** Env var that overrides `schedule` at install time (flag wins). */
@@ -304,7 +298,7 @@ export const PREFETCH_PROMPT =
   "Overnight prefetch of the morning brief's context. No model takes part in this job: the script Hermes starts before it is the whole job, and it delivers nothing. If you are a model reading this, reply exactly `[SILENT]`.";
 
 /**
- * K1: the Edge India knowledge sync (no_agent, every 15 minutes): its shim runs
+ * K1: the Edge India knowledge sync (no_agent, every 30 minutes): its shim runs
  * `skills/edge-india/scripts/knowledge-sync.ts`, which copies the snapshot
  * named by KNOWLEDGE_SNAPSHOT_URL into `$HERMES_HOME/knowledge/edge-india/`.
  * It prints only the wake line `{"wakeAgent": false}` and has no delivery
@@ -409,10 +403,10 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
   },
   {
     // K1: the Edge India snapshot onto disk for the edge-india skill, every
-    // 15 minutes (staggered per tenant). No model, no delivery; a failure
+    // 30 minutes (staggered per tenant). No model, no delivery; a failure
     // goes to the failure target, local.
-    schedule: "*/15 * * * *",
-    staggerWindowMinutes: 15,
+    schedule: "*/30 * * * *",
+    staggerWindowMinutes: 30,
     promptBody: KNOWLEDGE_SYNC_PROMPT,
     scriptFile: KNOWLEDGE_SYNC_SHIM,
     scriptInstallName: "agentvillage_knowledge_sync.sh",
@@ -420,7 +414,6 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
     failureDeliver: "local",
     name: KNOWLEDGE_SYNC_JOB,
     deliver: false,
-    cronRunUnnamed: true,
     overrideFlag: "--knowledge-sync-cron",
     overrideEnv: "KNOWLEDGE_SYNC_CRON",
   },

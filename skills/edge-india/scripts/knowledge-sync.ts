@@ -1,19 +1,24 @@
 #!/usr/bin/env bun
 /**
  * Edge India knowledge sync: the script of the no_agent cron job
- * "Edge — knowledge sync" (install/install_index.ts), run every 15 minutes
+ * "Edge — knowledge sync" (install/install_index.ts), run every 30 minutes
  * through the shim `skills/edge-india/scripts/shims/agentvillage_knowledge_sync.sh`.
  * No model takes part. It copies the published Edge City India snapshot (the
  * wiki, website and newsletter, indexed into Markdown upstream) onto the
  * agent's disk, so the `edge-india` skill reads a local copy and the agent
  * never fetches inside a resident's turn.
  *
- *   KNOWLEDGE_SNAPSHOT_URL  the snapshot's manifest.json, e.g.
+ *   KNOWLEDGE_SNAPSHOT_URL  the snapshot's manifest.json. No line (or, with no
+ *     `.env` file, no variable): the built-in DEFAULT_SNAPSHOT_URL,
  *     https://raw.githubusercontent.com/p2p-lanes/edge-agent-skill/main/references/manifest.json
- *     Unset or empty: status `unconfigured`, exit 0, no knowledge file written.
+ *     Set empty (`KNOWLEDGE_SNAPSHOT_URL=`): switched off, status
+ *     `unconfigured`, exit 0, no knowledge file written.
  *   KNOWLEDGE_SNAPSHOT_HOSTS  optional, comma-separated extra host names.
- *   Both are read from `$HERMES_HOME/.env` first (the file the control plane
- *   writes; Hermes itself lets `.env` win), then the process environment.
+ *   When `$HERMES_HOME/.env` exists (the file the control plane writes) it is
+ *   the only source for both: a key it does not carry means the default (the
+ *   URL above; no extra hosts), whatever the process environment holds, since
+ *   that is the gateway's environment from its start and goes stale when a line
+ *   is deleted. The process environment counts only when there is no `.env`.
  *
  * Which URLs it fetches (`urlAllowed`): https, no user name or password, no
  * port, no query or fragment, and either host raw.githubusercontent.com with a
@@ -33,19 +38,32 @@
  * run (Hermes's script timeout is 120 s).
  *
  * Where it writes: the whole set into `$HERMES_HOME/knowledge/edge-india/`
- * (with `_sync.json`: source, manifest sha256, ETag, files, bytes, time),
- * built in a temp directory beside it and swapped in by rename; the set it
- * replaces is kept as `edge-india.prev/`. A run that fails anywhere leaves the
- * current set untouched. Unchanged: the manifest answers 304 to the stored
- * ETag, or its sha256 equals the stored one (same source, every file present):
- * nothing is written. One run at a time (`knowledge/.edge-india.lock`).
+ * (with `_sync.json`: source, manifest sha256, ETag, files, bytes, each
+ * document's manifest `hash` as fetched, `fetched_at` = when this content was
+ * written, `checked_at` = the last run that confirmed it current), built in a
+ * temp directory beside it and swapped in by rename; the set it replaces is
+ * kept as `$HERMES_HOME/knowledge-prev/edge-india/`, outside `knowledge/` so a
+ * search of `knowledge/` never finds the stale copy. A run that fails anywhere
+ * leaves the current set untouched. Unchanged: the manifest answers 304 to the
+ * stored ETag, or its sha256 equals the stored one (same source, every file
+ * present): only `checked_at` is rewritten. One run at a time
+ * (`knowledge/.edge-india.lock`).
+ *
+ * A mixed snapshot (the manifest is new but a document URL still serves the
+ * CDN's old copy, `max-age=300`): a document whose manifest `hash` changed but
+ * whose fetched bytes equal the stored copy is stale, so the run is
+ * `incomplete`: nothing is written and the ETag and sha256 stay as they were,
+ * so the next run fetches everything again.
  *
  * What it says: one line per run in `$HERMES_HOME/av-events/knowledge/sync.jsonl`
  * (`{v, event: "knowledge_sync", status, reason, files, bytes, sha256,
- * fetched_at}`; codes and counts only, never a URL or any text; rotated to
- * `.1` at 1 MB), then on stdout the wake line `{"wakeAgent": false, ...}`, so
- * Hermes delivers nothing. Exit 1 on `failed` (Hermes records the failure and
- * notifies the job's failure target, `local`), else 0.
+ * fetched_at}` where `fetched_at` is the run's time, plus `path` on
+ * `incomplete`; codes, counts and that manifest path only, never a URL or any
+ * text; rotated to `.1` at 1 MB), then on stdout the wake line
+ * `{"wakeAgent": false, ...}`, so Hermes delivers nothing. Exit 1 on `failed`
+ * and `incomplete` (Hermes records the failure and notifies the job's failure
+ * target, `local`); 0 on `ok`, `unchanged`, `unconfigured` and `skipped` (a run
+ * that found another one holding the lock).
  */
 
 import { createHash, randomBytes } from "node:crypto";
@@ -66,6 +84,9 @@ export const LOG_MAX_BYTES = 1024 * 1024;
 export const LOCK_STALE_MS = 3 * 60 * 1000; // past Hermes's 120 s script timeout: the holder is dead
 const CONCURRENCY = 4;
 
+/** The snapshot used when no `.env` line (or, with no `.env`, no variable) names one. */
+export const DEFAULT_SNAPSHOT_URL = "https://raw.githubusercontent.com/p2p-lanes/edge-agent-skill/main/references/manifest.json";
+
 /** raw.githubusercontent.com paths always allowed (owner/repo prefixes). */
 export const RAW_HOST = "raw.githubusercontent.com";
 export const RAW_PREFIXES = ["/p2p-lanes/edge-agent-skill/", "/Edge-City/"];
@@ -73,7 +94,7 @@ export const RAW_PREFIXES = ["/p2p-lanes/edge-agent-skill/", "/Edge-City/"];
 const MD_TYPES = new Set(["text/plain", "text/markdown", "text/x-markdown"]);
 const MANIFEST_TYPES = new Set([...MD_TYPES, "application/json"]);
 
-export type SyncStatus = "ok" | "unchanged" | "failed" | "unconfigured";
+export type SyncStatus = "ok" | "unchanged" | "failed" | "incomplete" | "unconfigured" | "skipped";
 
 export interface SyncResult {
   status: SyncStatus;
@@ -81,7 +102,15 @@ export interface SyncResult {
   files: number;
   bytes: number;
   sha256: string | null;
+  /** The run's time (in `_sync.json`, `fetched_at` is the time of the last write). */
   fetched_at: string;
+  /** `incomplete` only: the manifest path of the stale document. */
+  path?: string;
+}
+
+/** The job's exit code: a failure for Hermes only when the run failed or must be retried. */
+export function exitCode(result: SyncResult): 0 | 1 {
+  return result.status === "failed" || result.status === "incomplete" ? 1 : 0;
 }
 
 export interface SyncOptions {
@@ -103,7 +132,12 @@ interface SyncState {
   etag: string | null;
   files: string[];
   bytes: number;
+  /** Per document path: the manifest `hash` it was fetched under. */
+  hashes: Record<string, string>;
+  /** When this content was written. */
   fetched_at: string;
+  /** The last run that confirmed this content current (`ok` or `unchanged`). */
+  checked_at: string;
 }
 
 class SyncFailure extends Error {
@@ -114,22 +148,34 @@ class SyncFailure extends Error {
 
 // ── Configuration ───────────────────────────────────────────────────────────
 
-/** A variable from `<home>/.env` when the file sets it, else the environment; trimmed, "" when unset. */
-export function configValue(name: string, home: string, env: Record<string, string | undefined> = process.env): string {
-  try {
-    const file = join(home, ".env");
-    if (existsSync(file)) {
-      let found: string | undefined;
-      for (const line of readFileSync(file, "utf8").split("\n")) {
-        const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
-        if (match && match[1] === name) found = match[2].trim().replace(/^(["'])(.*)\1$/, "$2");
-      }
-      if (found !== undefined) return found.trim();
+/**
+ * A variable, trimmed, or undefined when it is not set. When `<home>/.env`
+ * exists it is the only source (a key it does not carry is undefined, whatever
+ * the environment holds); the environment counts only when there is no `.env`.
+ * An `.env` that exists but cannot be read fails the run (`env-unreadable`).
+ */
+export function configValue(name: string, home: string, env: Record<string, string | undefined> = process.env): string | undefined {
+  const file = join(home, ".env");
+  if (existsSync(file)) {
+    let text: string;
+    try {
+      text = readFileSync(file, "utf8");
+    } catch {
+      throw new SyncFailure("env-unreadable");
     }
-  } catch {
-    // an unreadable .env: the environment decides
+    let found: string | undefined;
+    for (const line of text.split("\n")) {
+      const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+      if (match && match[1] === name) found = match[2].trim().replace(/^(["'])(.*)\1$/, "$2");
+    }
+    return found?.trim();
   }
-  return (env[name] ?? "").trim();
+  return env[name]?.trim();
+}
+
+/** The manifest URL to sync: the configured one, DEFAULT_SNAPSHOT_URL when none is set, "" when set empty (off). */
+export function snapshotUrl(home: string, env: Record<string, string | undefined> = process.env): string {
+  return configValue("KNOWLEDGE_SNAPSHOT_URL", home, env) ?? DEFAULT_SNAPSHOT_URL;
 }
 
 /** The extra host names: lowercase dotted DNS names, never an IP literal or `localhost`. */
@@ -184,8 +230,11 @@ export function documentPathValid(path: unknown): path is string {
   return path !== STATE_FILE && path !== MANIFEST_FILE;
 }
 
-/** The files a manifest names, index.md first; throws `bad-manifest` / `bad-path`. */
-export function manifestFiles(text: string): string[] {
+/**
+ * The files a manifest names, index.md first, and each document's `hash`
+ * where the manifest gives one as a string; throws `bad-manifest` / `bad-path`.
+ */
+export function manifestFiles(text: string): { paths: string[]; hashes: Record<string, string> } {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -198,6 +247,7 @@ export function manifestFiles(text: string): string[] {
     throw new SyncFailure("bad-manifest");
   }
   const files = [ENTRY_FILE];
+  const hashes: Record<string, string> = {};
   const seen = new Set(files);
   for (const doc of documents) {
     const path = doc && typeof doc === "object" ? (doc as { path?: unknown }).path : undefined;
@@ -208,8 +258,10 @@ export function manifestFiles(text: string): string[] {
     }
     seen.add(path);
     files.push(path);
+    const hash = (doc as { hash?: unknown }).hash;
+    if (typeof hash === "string" && hash.length > 0 && hash.length <= 200) hashes[path] = hash;
   }
-  return files;
+  return { paths: files, hashes };
 }
 
 // ── Fetching ────────────────────────────────────────────────────────────────
@@ -275,6 +327,8 @@ async function fetchFile(ctx: FetchContext, start: URL, types: Set<string>, etag
     if (!urlAllowed(url, ctx.extraHosts) || !underBase(url, ctx.base)) throw new SyncFailure(hop === 0 ? "host-not-allowed" : "redirect-refused");
     const remaining = ctx.deadline - Date.now();
     if (remaining <= 0) throw new SyncFailure("budget");
+    // The abort fires at whichever comes first: this fetch's timeout or the run's budget.
+    const timedOut = remaining <= ctx.fetchTimeoutMs ? "budget" : "timeout";
     const headers: Record<string, string> = { accept: "text/markdown, text/plain, application/json;q=0.9" };
     if (etag) headers["if-none-match"] = etag;
     let response: Response;
@@ -286,7 +340,7 @@ async function fetchFile(ctx: FetchContext, start: URL, types: Set<string>, etag
       });
     } catch (err) {
       const name = (err as { name?: string })?.name;
-      throw new SyncFailure(name === "TimeoutError" || name === "AbortError" ? "timeout" : "network");
+      throw new SyncFailure(name === "TimeoutError" || name === "AbortError" ? timedOut : "network");
     }
     if (response.status >= 300 && response.status < 400 && response.status !== 304) {
       await response.body?.cancel().catch(() => {});
@@ -316,7 +370,7 @@ async function fetchFile(ctx: FetchContext, start: URL, types: Set<string>, etag
     } catch (err) {
       if (err instanceof SyncFailure) throw err;
       const name = (err as { name?: string })?.name;
-      throw new SyncFailure(name === "TimeoutError" || name === "AbortError" ? "timeout" : "network");
+      throw new SyncFailure(name === "TimeoutError" || name === "AbortError" ? timedOut : "network");
     }
     return { status: 200, bytes, etag: response.headers.get("etag") };
   }
@@ -332,8 +386,13 @@ export function currentSetDir(home: string): string {
   return join(knowledgeDir(home), SET_NAME);
 }
 
+/** Where the replaced set is kept: outside `knowledge/`, so a search there never finds the stale copy. */
+export function previousRoot(home: string): string {
+  return join(home, "knowledge-prev");
+}
+
 export function previousSetDir(home: string): string {
-  return join(knowledgeDir(home), `${SET_NAME}.prev`);
+  return join(previousRoot(home), SET_NAME);
 }
 
 export function syncLogPath(home: string): string {
@@ -343,11 +402,43 @@ export function syncLogPath(home: string): string {
 function readState(home: string): SyncState | null {
   try {
     const parsed = JSON.parse(readFileSync(join(currentSetDir(home), STATE_FILE), "utf8"));
-    if (parsed && parsed.v === 1 && typeof parsed.manifest_sha256 === "string" && Array.isArray(parsed.files)) return parsed as SyncState;
+    if (parsed && parsed.v === 1 && typeof parsed.manifest_sha256 === "string" && Array.isArray(parsed.files)) {
+      const hashes = parsed.hashes && typeof parsed.hashes === "object" && !Array.isArray(parsed.hashes) ? parsed.hashes : {};
+      return { ...parsed, hashes } as SyncState;
+    }
   } catch {
     // no set yet, or an unreadable one: a full sync
   }
   return null;
+}
+
+/**
+ * An unchanged run: rewrite `_sync.json` with the new `checked_at` (temp file
+ * and rename, so a reader never sees half a file). Best effort: a failed
+ * rewrite leaves the old time, which only makes the copy look older.
+ */
+function touchChecked(home: string, state: SyncState, checkedAt: string): void {
+  const target = join(currentSetDir(home), STATE_FILE);
+  const tmp = join(currentSetDir(home), `.${STATE_FILE}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`);
+  try {
+    writeFileSync(tmp, `${JSON.stringify({ ...state, checked_at: checkedAt }, null, 2)}\n`, { mode: 0o600 });
+    renameSync(tmp, target);
+  } catch {
+    rmSync(tmp, { force: true });
+  }
+}
+
+/** The stored copy of a document in the current set, or null. */
+function storedBytes(home: string, path: string): Uint8Array | null {
+  try {
+    return readFileSync(join(currentSetDir(home), path));
+  } catch {
+    return null;
+  }
+}
+
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  return a.byteLength === b.byteLength && Buffer.from(a.buffer, a.byteOffset, a.byteLength).equals(Buffer.from(b.buffer, b.byteOffset, b.byteLength));
 }
 
 function setComplete(home: string, state: SyncState): boolean {
@@ -414,6 +505,7 @@ function writeSet(home: string, files: Map<string, Uint8Array>, state: SyncState
   const current = currentSetDir(home);
   const prev = previousSetDir(home);
   try {
+    mkdirSync(previousRoot(home), { recursive: true, mode: 0o700 });
     rmSync(prev, { recursive: true, force: true });
     if (existsSync(current)) renameSync(current, prev);
     renameSync(tmp, current);
@@ -473,15 +565,22 @@ async function sync(options: SyncOptions, fetchedAt: string): Promise<SyncResult
   const result = (status: SyncStatus, reason: string, files = 0, bytes = 0, sha256: string | null = null): SyncResult =>
     ({ status, reason, files, bytes, sha256, fetched_at: fetchedAt });
 
-  const raw = configValue("KNOWLEDGE_SNAPSHOT_URL", home, env);
+  let raw: string;
+  let extraHosts: Set<string>;
+  try {
+    raw = snapshotUrl(home, env);
+    extraHosts = parseExtraHosts(configValue("KNOWLEDGE_SNAPSHOT_HOSTS", home, env) ?? "");
+  } catch (err) {
+    return result("failed", err instanceof SyncFailure ? err.code : "error");
+  }
   if (!raw) return result("unconfigured", "unset");
-  const extraHosts = parseExtraHosts(configValue("KNOWLEDGE_SNAPSHOT_HOSTS", home, env));
   const source = snapshotSource(raw, extraHosts);
   if (!source.ok) return result("failed", source.reason);
 
   mkdirSync(knowledgeDir(home), { recursive: true, mode: 0o700 });
   const lock = acquireLock(home, Date.now());
-  if (!lock) return result("failed", "locked");
+  // Another run holds the lock (a manual `hermes cron run` overlapping a scheduled one): benign.
+  if (!lock) return result("skipped", "locked");
   try {
     recover(home);
     const ctx: FetchContext = {
@@ -497,12 +596,18 @@ async function sync(options: SyncOptions, fetchedAt: string): Promise<SyncResult
     const sameSource = state !== null && state.source === source.manifest.href && setComplete(home, state);
 
     const manifest = await fetchFile(ctx, source.manifest, MANIFEST_TYPES, sameSource ? state!.etag : null);
-    if (manifest.status === 304) return result("unchanged", "etag", state!.files.length, state!.bytes, state!.manifest_sha256);
+    if (manifest.status === 304) {
+      touchChecked(home, state!, fetchedAt);
+      return result("unchanged", "etag", state!.files.length, state!.bytes, state!.manifest_sha256);
+    }
     const manifestText = textOk(manifest.bytes, false);
     const sha256 = createHash("sha256").update(manifest.bytes).digest("hex");
-    if (sameSource && state!.manifest_sha256 === sha256) return result("unchanged", "same-sha256", state!.files.length, state!.bytes, sha256);
+    if (sameSource && state!.manifest_sha256 === sha256) {
+      touchChecked(home, state!, fetchedAt);
+      return result("unchanged", "same-sha256", state!.files.length, state!.bytes, sha256);
+    }
 
-    const paths = manifestFiles(manifestText);
+    const { paths, hashes } = manifestFiles(manifestText);
     let total = manifest.bytes.byteLength;
     const bodies = await pool(paths, CONCURRENCY, async (path) => {
       const fetched = await fetchFile(ctx, new URL(path, source.base), MD_TYPES);
@@ -511,6 +616,19 @@ async function sync(options: SyncOptions, fetchedAt: string): Promise<SyncResult
       if (total > totalCap) throw new SyncFailure("total-too-large");
       return fetched.bytes;
     });
+
+    // A mixed snapshot: the manifest says a document changed, but its URL
+    // still serves exactly the bytes stored under the old hash (the CDN's
+    // cached copy). Write nothing and keep the ETag and sha256, so the next
+    // run fetches it all again once the CDN has the new copy.
+    if (state !== null && state.source === source.manifest.href) {
+      for (const [at, path] of paths.entries()) {
+        const before = state.hashes[path];
+        if (before === undefined || hashes[path] === undefined || before === hashes[path]) continue;
+        const stored = storedBytes(home, path);
+        if (stored !== null && sameBytes(stored, bodies[at])) return { ...result("incomplete", "stale-document"), path };
+      }
+    }
 
     const files = new Map<string, Uint8Array>([[MANIFEST_FILE, manifest.bytes]]);
     paths.forEach((path, at) => files.set(path, bodies[at]));
@@ -521,7 +639,9 @@ async function sync(options: SyncOptions, fetchedAt: string): Promise<SyncResult
       etag: manifest.etag,
       files: paths,
       bytes: total,
+      hashes,
       fetched_at: fetchedAt,
+      checked_at: fetchedAt,
     });
     return result("ok", "written", paths.length, total, sha256);
   } catch (err) {
@@ -554,5 +674,5 @@ if (import.meta.main) {
   const home = process.env.HERMES_HOME?.trim() || process.cwd();
   const result = await runKnowledgeSync({ home });
   process.stderr.write(`knowledge-sync: ${result.status} ${result.reason} files=${result.files} bytes=${result.bytes}\n`);
-  process.stdout.write(`${wakeLine(result)}\n`, () => process.exit(result.status === "failed" ? 1 : 0));
+  process.stdout.write(`${wakeLine(result)}\n`, () => process.exit(exitCode(result)));
 }

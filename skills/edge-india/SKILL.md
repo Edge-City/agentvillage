@@ -8,7 +8,7 @@ tags: [edge-city, india, village, logistics, background]
 
 # Edge City India 2026 — background knowledge
 
-A background job ("Edge — knowledge sync", every 15 minutes, no model) copies the
+A background job ("Edge — knowledge sync", every 30 minutes, no model) copies the
 published Edge City India guide onto this machine: the wiki, the website and the
 Substack newsletter, indexed into Markdown. You read that local copy. You never
 fetch it.
@@ -21,8 +21,12 @@ fetch it.
   its source type, published date and last content change. Each row links a file
   in the same directory (`./wiki-content.md`, `./newsletter/<slug>.md`, ...).
 - `manifest.json` lists every document with its title, source `url`, `kind`,
-  `published` and `updated` dates. `_sync.json` says when the copy was fetched
-  (`fetched_at`).
+  `published` date and `indexed` date (the last content change upstream
+  indexed). `_sync.json` holds two times, in UTC:
+  - `fetched_at`: when this content was copied here (it changes only when the
+    guide itself changes, so it can be days old on a quiet week);
+  - `checked_at`: the last time the background job confirmed this copy is
+    still the published one (normally within the last hour).
 - Read with your file tool, or search with one plain command such as
   `grep -ril "check-in" knowledge/edge-india/` and then read the matching file.
   Read only the files you need.
@@ -61,5 +65,7 @@ fetch it.
   Esmeralda details for India.
 - If the detail is not in the copy, say it is not in the published guide and
   point to the organisers. Never guess.
-- If `_sync.json`'s `fetched_at` is more than a day old, mention that the guide
-  on hand may be out of date.
+- If `_sync.json`'s `checked_at` is more than a day old, the background job
+  has not been able to check the guide since then: mention that the guide on
+  hand may be out of date. An old `fetched_at` alone means nothing: the guide
+  has simply not changed.

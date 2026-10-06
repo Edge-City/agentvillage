@@ -411,11 +411,12 @@ there, visas, tickets, meals, health and safety, residencies, themes) from a
 local copy of the published guide, never by fetching inside a resident's turn.
 The guide is Fran's indexer output (the wiki, the website and the Substack
 newsletter in Markdown) at one URL: its `manifest.json`, in
-`p2p-lanes/edge-agent-skill`, directory `references/`.
+`p2p-lanes/edge-agent-skill`, directory `references/`. That URL is the
+built-in default, so a tenant syncs it with no configuration.
 
 **The job.** `Edge — knowledge sync`, installed and reconciled with the
-Index jobs (same list, `install/install_index.ts`): every 15 minutes on a
-per-tenant offset in the first 15 (`KNOWLEDGE_SYNC_CRON` /
+Index jobs (same list, `install/install_index.ts`): every 30 minutes on a
+per-tenant offset in the first 30 (`m,m+30 * * * *`; `KNOWLEDGE_SYNC_CRON` /
 `--knowledge-sync-cron` override it), `no_agent` (no model, no tokens), no
 delivery target, failures to `local`. A roll edits it in place like the
 others, so a resident's or admin's pause and schedule are kept. It runs
@@ -432,33 +433,51 @@ others, so a resident's or admin's pause and schedule are kept. It runs
   for the manifest), UTF-8 with no NUL, and no HTML page; 2 MB a file, 20 MB in
   all, 20 s a fetch, 90 s a run;
 - writes the whole set into `$HERMES_HOME/knowledge/edge-india/` (with
-  `_sync.json`: source, manifest sha256, ETag, files, time) by building it in a
+  `_sync.json`: source, manifest sha256, ETag, files, each document's manifest
+  `hash` as fetched, `fetched_at` = when this content was written,
+  `checked_at` = the last run that confirmed it current) by building it in a
   temp directory and renaming it in; the set it replaces is kept as
-  `knowledge/edge-india.prev/`. Any failure leaves the current set as it was.
-  An unchanged manifest (304 to the stored ETag, or the same sha256) writes
-  nothing;
+  `$HERMES_HOME/knowledge-prev/edge-india/`, outside `knowledge/`. Any failure
+  leaves the current set as it was. An unchanged manifest (304 to the stored
+  ETag, or the same sha256) rewrites only `checked_at`. The skill warns that
+  the guide may be out of date when `checked_at` is over a day old;
+- treats a mixed snapshot as `incomplete`: when the manifest gives a document
+  a new `hash` but its URL still serves exactly the stored bytes (the CDN's
+  cached copy, `max-age=300`), nothing is written and the ETag and sha256 are
+  not advanced, so the next run fetches it all again;
 - logs one line per run to `$HERMES_HOME/av-events/knowledge/sync.jsonl`:
-  `{"v":1,"event":"knowledge_sync","status":"ok|unchanged|failed|unconfigured","reason":"<code>","files":n,"bytes":n,"sha256":"<manifest sha256>","fetched_at":"<UTC>"}`
-  (codes and counts only; rotated to `.1` at 1 MB), and prints only the wake
-  line `{"wakeAgent": false, ...}`, so Hermes delivers nothing. A `failed`
-  run exits 1: Hermes records it, and its notice stays local.
+  `{"v":1,"event":"knowledge_sync","status":"ok|unchanged|failed|incomplete|unconfigured|skipped","reason":"<code>","files":n,"bytes":n,"sha256":"<manifest sha256>","fetched_at":"<the run's UTC time>"}`,
+  plus `"path"` (the stale document's manifest path) on `incomplete` (codes,
+  counts and that path only; rotated to `.1` at 1 MB), and prints only the
+  wake line `{"wakeAgent": false, ...}`, so Hermes delivers nothing. A
+  `failed` or `incomplete` run exits 1: Hermes records it, and its notice
+  stays local. A run that finds another one holding the lock (a manual
+  `hermes cron run` overlapping a scheduled one) logs `skipped locked` and
+  exits 0. A run cut off by its 90 s budget logs `budget`; a single fetch
+  past its 20 s logs `timeout`.
 
 **The tenant env.**
 
 | Variable | Meaning |
 |---|---|
-| `KNOWLEDGE_SNAPSHOT_URL` | The snapshot's manifest, e.g. `https://raw.githubusercontent.com/p2p-lanes/edge-agent-skill/main/references/manifest.json`. Unset or empty: every run is `unconfigured`, exits 0 and writes no knowledge file. |
-| `KNOWLEDGE_SNAPSHOT_HOSTS` | Optional. Extra host names a snapshot may be served from. |
+| `KNOWLEDGE_SNAPSHOT_URL` | The snapshot's manifest. No line: the built-in default, `https://raw.githubusercontent.com/p2p-lanes/edge-agent-skill/main/references/manifest.json`. Written empty (`KNOWLEDGE_SNAPSHOT_URL=`): switched off; every run is `unconfigured`, exits 0 and writes no knowledge file. Any other value must pass the allowlist above. |
+| `KNOWLEDGE_SNAPSHOT_HOSTS` | Optional. Extra host names a snapshot may be served from. No line: none. |
 
-The script reads both from `$HERMES_HOME/.env` first (the file the control
-plane writes, and the one Hermes lets win), then its environment, on every
-run: a changed line takes effect at the next run with no gateway restart.
+The script reads both from `$HERMES_HOME/.env` (the file the control plane
+writes) on every run, so a changed line takes effect at the next run with no
+gateway restart. When `.env` exists it is the only source: a key it does not
+carry means the default, whatever the process environment holds (a job's
+environment is the gateway's from its start, so a deleted line would
+otherwise live on until a restart). The process environment counts only when
+there is no `.env` at all. **To switch the sync off, write the key empty
+(`KNOWLEDGE_SNAPSHOT_URL=`); deleting the line brings back the default.**
 The control plane does not write either key yet: its env write
 (`writeIngestEnv` in `control-plane/src/tenants.js`) carries a fixed key set.
 Follow-up for the control-plane repo: add `KNOWLEDGE_SNAPSHOT_URL` (and
 `KNOWLEDGE_SNAPSHOT_HOSTS` when set) from a control-plane variable of the same
-name to that write, removed from `.env` when the variable is unset. Until it
-ships, set the line by hand per tenant.
+name to that write; to switch the sync off, write the key empty, and leave
+the line out only to mean the default. Until it ships, the default applies
+and an override or a switch-off is a line set by hand per tenant.
 
 **The skill.** `skills/edge-india/SKILL.md` (skill `edge-india-2026`) tells
 the agent to read `knowledge/edge-india/index.md` and the files it links,
@@ -468,13 +487,19 @@ RSVPs from `edgeos` only. With no local copy it says so and answers from what
 it knows, without fetching. `workspace/AGENTS.md` routes India background to
 it.
 
-**After a roll, on a canary.** With `KNOWLEDGE_SNAPSHOT_URL` set, force a run
+**After a roll, on a canary.** With no `KNOWLEDGE_SNAPSHOT_URL` line (the
+default) or one set, force a run
 with `hermes cron run <id>` (the knowledge sync's id from `hermes cron list`):
 a `status: "ok"` line in `av-events/knowledge/sync.jsonl` and
 `knowledge/edge-india/index.md` present; a second forced run logs
-`unchanged`. Nothing reaches the resident's chat. `cron.run` events for this
-job carry `job_name` null: the name is not in the av-events seed
-`cron_job_names.json` yet (adding it is a seed change for the data pipeline).
+`unchanged`, and `checked_at` in `knowledge/edge-india/_sync.json` moves to
+that run's time. Nothing reaches the resident's chat. `cron.run` events for
+this job carry `job_name` `Edge — knowledge sync`: the name is in the
+av-events seed `cron_job_names.json` from `cron_job_names_v2`. That is a
+seed change: roll the release that first carries it with
+`allow_seed_change` ticked, and only after the data pipeline's release
+carries `cron_job_names_v2` (until then ingest quarantines the name as
+`vocabulary_unknown`).
 
 ## The data pipeline
 

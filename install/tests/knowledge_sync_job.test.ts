@@ -1,7 +1,7 @@
 /**
  * K1: the "Edge — knowledge sync" cron job as a roll leaves it, end to end
  * against the stand-in Hermes that keeps jobs.json (fake_hermes.ts): created
- * no_agent with no delivery target, failures local, every 15 minutes on the
+ * no_agent with no delivery target, failures local, every 30 minutes on the
  * tenant's offset; a roll onto an rc14 tenant adds only this job; a resident's
  * pause survives every later roll, including one that edits the job's shape.
  */
@@ -95,7 +95,7 @@ test("the edge-india skill is installed with every other bundle (its sync script
   }
 });
 
-test("a fresh roll creates the knowledge sync: no_agent, no delivery, failures local, every 15 minutes on the tenant's offset", () => {
+test("a fresh roll creates the knowledge sync: no_agent, no delivery, failures local, every 30 minutes on the tenant's offset", () => {
   expect(roll()).toEqual([]);
   const stored = job(KNOWLEDGE_SYNC_JOB)!;
   expect(stored).toBeDefined();
@@ -107,7 +107,7 @@ test("a fresh roll creates the knowledge sync: no_agent, no delivery, failures l
   const expr = staggeredSchedule(KNOWLEDGE, SEED);
   expect(stored.schedule.expr).toBe(expr);
   const minutes = expr.split(" ")[0].split(",").map(Number);
-  expect(minutes.map((m) => m - minutes[0])).toEqual([0, 15, 30, 45]);
+  expect(minutes.map((m) => m - minutes[0])).toEqual([0, 30]);
   // The shim is copied where Hermes runs scripts from, executable, and the job id is ours (DATA-92).
   const shim = join(home, "scripts", "agentvillage_knowledge_sync.sh");
   expect(readFileSync(shim, "utf8")).toContain("skills/edge-india/scripts/knowledge-sync.ts");
@@ -169,6 +169,23 @@ test("a schedule a resident or admin set is kept by a roll", () => {
   roll();
   expect(cronCalls().slice(before)).toEqual([]);
   expect(job(KNOWLEDGE_SYNC_JOB)!.schedule.expr).toBe("0 * * * *");
+});
+
+test("a job created at the earlier 15-minute cadence is edited in place by a roll: same id, its schedule kept, no second job", () => {
+  roll();
+  const id = job(KNOWLEDGE_SYNC_JOB)!.id;
+  // As the job stood before the 30-minute default: four runs an hour, and an older stored prompt.
+  execFileSync(bin, ["cron", "edit", id, "--schedule", "7,22,37,52 * * * *"], { stdio: "ignore", env: process.env });
+  editJobs((all) => {
+    all.find((e) => e.name === KNOWLEDGE_SYNC_JOB)!.prompt = "OLD";
+  });
+  const before = cronCalls().length;
+  expect(roll()).toEqual([]);
+  const calls = cronCalls().slice(before);
+  expect(calls.map((argv) => argv.slice(0, 3))).toEqual([["cron", "edit", id]]);
+  expect(jobs().filter((entry) => entry.name === KNOWLEDGE_SYNC_JOB)).toHaveLength(1);
+  expect(job(KNOWLEDGE_SYNC_JOB)).toMatchObject({ id, prompt: KNOWLEDGE_SYNC_PROMPT, no_agent: true });
+  expect(job(KNOWLEDGE_SYNC_JOB)!.schedule.expr).toBe("7,22,37,52 * * * *");
 });
 
 test("a failed create of the knowledge sync is named in the roll's failures (cron_failed)", () => {
