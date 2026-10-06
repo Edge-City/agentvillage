@@ -124,7 +124,7 @@ describe("the evening asks about one accepted connection announced two or more d
     announced({ [OPP]: "2026-10-12" });
     const result = await runProactive("evening", options());
     expect(result.woke).toBe(true);
-    expect(output(result.lines)).toEqual({ job: "evening-note", date: DATE, outcomeQuestion: "Did you and Arjun Mehta meet? Reply met, not useful, or missed." });
+    expect(output(result.lines)).toEqual({ agentName: "Edge", job: "evening-note", date: DATE, outcomeQuestion: "Did you and Arjun Mehta meet? Reply met, not useful, or missed." });
     expect(result.lines.join("\n")).not.toContain(THIRD_PARTY);
     const staged = stage()!;
     expect(staged).toEqual({
