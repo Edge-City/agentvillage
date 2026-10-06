@@ -88,10 +88,10 @@ Any violation is a schema or load error, and the policy fails closed (SPEC §5.2
    delegated set is a set of lines the operator wrote by name (SPEC §5.2) [V].
 2. No entry of `classes` may resolve to `human-only` (invariant 9) or to `autonomous` (there is
    nothing to judge).
-3. `max_autonomy` is never above the class's own level. In SPEC §5.2's strictness order, it must be
-   at least as strict as the declared autonomy of every listed class. With the default `manual`,
-   every manual and supervised class passes. The rule is a tamper pin, not a dial. If someone
-   loosens a delegated class's row, for example from manual to autonomous, without also rewriting
+3. Every listed class's declared autonomy is at least as strict as `max_autonomy`, in SPEC §5.2's
+   strictness order. With the default `manual` only `manual` rows pass and a supervised row fails
+   the load; `max_autonomy: supervised-retro` also admits a `manual` row. The rule is a tamper
+   pin, not a dial. If someone loosens a delegated class's row, for example from manual to autonomous, without also rewriting
    the delegation block, the load fails. The judge's scope can then never grow as a side effect of
    an unrelated edit. (Decision 1: the pin, not a ceiling on what a judge decision resolves to.)
 4. `daily_cap` is an integer. A float, a string or a negative number is refused.
