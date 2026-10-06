@@ -77,8 +77,8 @@ classifies from approval.md 0.4.0, PR #569; an older core passes them through
 unjudged), and (R3b) for the side-effecting tools the core adapter does not
 class itself, which the policy's `tools:` list judges from approval.md 0.4.2:
 every Index write (the nine of its MCP server's 14 tools:
-`mcp__index__create_intent`, `update_intent`, `archive_intent`,
-`pause_intent`, `resume_intent`, `accept_opportunity`, `reject_opportunity`,
+the intent create, update, archive, pause and resume tools, then
+`accept_opportunity`, `reject_opportunity`,
 `update_my_profile` and `enrich_my_profile`; and the Index Hermes plugin's
 eight write tools, whose accept or decline is `index_update_opportunity`),
 media generation
