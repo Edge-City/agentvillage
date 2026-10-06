@@ -63,6 +63,12 @@ What waits for a tap. Only classes an agent opens with `approval propose`
     (R2 addendum). `odin.*` is a reserved namespace for the allocator's own
     classes (DATA-255): a comment line in the block, no row.
 
+opportunity.accept (R3) waits for no tap on day one: accepting an Index
+opportunity, a connection or meeting, on the resident's behalf is autonomous
+and recorded, with `agent_may_request`, and the settings page offers ask and
+never. It is its own class, not network.call, because it commits the resident
+to something; Carter decides the day-one default before Oct 11.
+
 The treasury, EdgeOS, marketplace and allocation rows are reserved now and
 built later: no tool proposes them yet, and writing them before Oct 11 means
 week two's experiments need no policy amendment (a change to every tenant's policy
@@ -106,17 +112,22 @@ hooked tool call is judged under when core's Hermes adapter does not class it
 itself: the shell, file and read tools and the rule table keep precedence, so
 the lines for the rule-table tools are inert and repeat the class the table
 gives. Web reads and Index's read tools are read.web; a new or reworded
-intention in the resident's words, through Index or record_intention, is
-intent.publish.stated.index; every other Index tool, and the tools that send
-content to a model provider, are network.call. Every class is a row above, so
+intention in the resident's words through Index is intent.publish.stated.index
+(so the resident's "Intents you state" row governs a direct create_intent);
+accepting an opportunity is opportunity.accept; every other Index tool, and
+the tools that send content to a model provider, are network.call.
+record_intention is left off the list and unrouted: it publishes a stated
+intention itself and holds an inferred one for the tap, and an ask on
+intent.publish must never block capture. Every class is a row above, so
 the settings page needs no row of its own for a tool. `defaults.unmapped_tool:
 record` records any other hooked tool under harness.tool.unmapped (autonomous,
 the tool named in the start's `harness_tool`); `ask` would hold each for a tap
 and is a per-tenant choice for later, not the template's. No class limit on
 harness.tool.unmapped (ruled 2026-10-06 01:37Z). Only the installer's gated
-tools (APPROVAL_GATED_TOOLS) reach the hook, so on today's list one call
-changes: web_extract, which core passed unrecorded, is recorded as read.web.
-The other lines wait for that list to grow. Removing both keys restores the
+tools (APPROVAL_GATED_TOOLS) reach the hook. R3b, which merges with this
+policy, routes the side-effecting Index tools, media generation, web_search
+and x_search; Index's read tools and the local tools stay unrouted (av-events
+records every call as tool.call either way). Removing both keys restores the
 0.4.1 behaviour on a 0.4.2 daemon (an unnamed tool passes unrecorded).
 
 The three organ rows are mandatory under an autonomous default. Core classifies
@@ -209,6 +220,7 @@ classes:
   marketplace.app.read:          { autonomy: autonomous, agent_may_request: true }   # reserved; an installed app reads for the agent; recorded
   review.delegate.model:         { autonomy: manual }   # reserved; the resident may choose later to let a model reviewer act first; nothing acts on it today; no agent request
   resource.allocate:             { autonomy: manual, agent_may_request: true }   # reserved; the treasury/ODS allocation class: an allocation of village resources proposed for the resident
+  opportunity.accept:            { autonomy: autonomous, agent_may_request: true }   # reserved; accepting an Index opportunity (a connection or meeting) on the resident's behalf; recorded; R3
   # odin.* (the allocator producer, DATA-255): a reserved namespace for the allocator's own classes; a comment only, no row here.
   # The gate's own organs and the resident's credentials: never the agent.
   policy.core:                   { autonomy: human-only }
@@ -249,8 +261,8 @@ tools:
   - { match: web_extract,                      class: read.web }
   - { match: x_search,                         class: read.web }
   # Index's MCP server (Hermes names its tools mcp__index__<tool>): a read is read.web; a new or
-  # reworded intention in the resident's words is intent.publish.stated.index, as the
-  # record_intention tool publishes one; every other Index tool reaches Index as network.call.
+  # reworded intention in the resident's words is intent.publish.stated.index; accepting an
+  # opportunity is opportunity.accept; every other Index tool reaches Index as network.call.
   - { match: mcp__index__get_my_profile,       class: read.web }
   - { match: mcp__index__list_intents,         class: read.web }
   - { match: mcp__index__get_intent,           class: read.web }
@@ -258,6 +270,7 @@ tools:
   - { match: mcp__index__get_opportunity,      class: read.web }
   - { match: mcp__index__create_intent,        class: intent.publish.stated.index }
   - { match: mcp__index__update_intent,        class: intent.publish.stated.index }
+  - { match: mcp__index__accept_opportunity,   class: opportunity.accept }
   - { match: "mcp__index__*",                  class: network.call }
   # Index's Hermes plugin, where installed (bare index_* names): the same split.
   - { match: index_read_intents,               class: read.web }
@@ -269,10 +282,10 @@ tools:
   - { match: index_agent_me,                   class: read.web }
   - { match: index_create_intent,              class: intent.publish.stated.index }
   - { match: index_update_intent,              class: intent.publish.stated.index }
+  - { match: index_accept_opportunity,         class: opportunity.accept }
   - { match: "index_*",                        class: network.call }
-  # The overlay's front door for intentions: it publishes a stated one to Index and holds an
-  # inferred one for the resident's tap (that publish is proposed as intent.publish.inferred.index).
-  - { match: record_intention,                 class: intent.publish.stated.index }
+  # record_intention is left out on purpose: it is not routed to the hook, and an ask on
+  # intent.publish must never block capturing an intention.
   # Tools that send content to a model provider.
   - { match: image_generate,                   class: network.call }
   - { match: video_generate,                   class: network.call }

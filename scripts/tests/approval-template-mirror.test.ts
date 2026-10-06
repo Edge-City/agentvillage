@@ -15,8 +15,9 @@ import { join } from "node:path";
 // R2 moved the pin (marketplace.app.install/action/read, review.delegate.model, resource.allocate and
 // the odin.* comment; seven added lines).
 // R3 (DATA-344) moved it again: `defaults.unmapped_tool: record` and the APRV-499 `tools:` list
-// (approval.md 0.4.2; a 0.4.0 or 0.4.1 daemon refuses both keys and fails every class closed).
-const POLICY_BLOCK_SHA256 = "b30648f60f31d98b4492197d48eec942f5700e3ff222f0c33d8dc82ee70a6977";
+// (approval.md 0.4.2; a 0.4.0 or 0.4.1 daemon refuses both keys and fails every class closed), and
+// the reserved opportunity.accept row its accept_opportunity lines map to.
+const POLICY_BLOCK_SHA256 = "80bc43ca1b1e3de5f175966769110edf94ac926d07d3f558c8d5152f6b28647f";
 
 const OPEN = "```yaml approval-policy\n";
 function policyBlock(text: string): string {

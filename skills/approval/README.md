@@ -34,13 +34,13 @@ row). In plain words, for the consent screen:
   From approval.md 0.4.2 the policy's `tools:` list (APRV-499) also names the
   class of each tool core's Hermes adapter does not class itself: web reads and
   Index's read tools are `read.web`, a new or reworded intention in the
-  resident's words (Index `create_intent`/`update_intent`, `record_intention`)
-  is `intent.publish.stated.index`, other Index tools and the media tools are
+  resident's words (Index `create_intent`/`update_intent`) is
+  `intent.publish.stated.index`, accepting an opportunity (a connection or
+  meeting) is `opportunity.accept`, other Index tools and the media tools are
   `network.call`; `defaults.unmapped_tool: record` records any other routed
-  tool under `harness.tool.unmapped`. Only the gated list below reaches the
-  hook, so on that list one call changes: `web_extract`, which core passed
-  unrecorded, is recorded as `read.web`. A daemon before 0.4.2 refuses both
-  keys and fails every class closed, so the template needs 0.4.2.
+  tool under `harness.tool.unmapped`. `record_intention` is off the list and
+  unrouted. Only the gated list below reaches the hook. A daemon before 0.4.2
+  refuses both keys and fails every class closed, so the template needs 0.4.2.
 - **What waits for a tap.** Kinds of act the agent proposes rather than
   performs: publishing an intention it inferred to Index, sharing a digest it
   drafted (if digests ship), and casting the resident's answer to the weekly
@@ -61,10 +61,13 @@ row). In plain words, for the consent screen:
   (`delivery: burst`: one left unanswered does not hold back the next), and
   stays open for up to 72 hours; if the resident does nothing it expires and
   nothing is published, shared or cast. An intention the resident stated in their own words is published
-  without a second ask. Two more reserved rows wait for no tap: an installed
-  app reading for the agent (`marketplace.app.read`) runs and is recorded, and
-  `review.delegate.model` is kept for the resident to choose later to let a
-  model reviewer act first: nothing acts on it, and no agent can propose it.
+  without a second ask. Three more reserved rows wait for no tap: an installed
+  app reading for the agent (`marketplace.app.read`) runs and is recorded,
+  accepting an Index opportunity, a connection or meeting, on the resident's
+  behalf (`opportunity.accept`) runs and is recorded (Carter decides its
+  day-one default before Oct 11), and `review.delegate.model` is kept for the
+  resident to choose later to let a model reviewer act first: nothing acts on
+  it, and no agent can propose it.
 - **What the agent can never do.** Edit its own gate (the Hermes config, the
   hooks, the consent allowlist, the daemon's policy), touch the approval log, or
   read or change the resident's credentials (`.env`, `auth.json`). These three
@@ -234,9 +237,10 @@ What the gate does not see, or does not judge, today:
   blocks gated calls at the next start or within a minute, but the script
   itself is not stopped. The installer lists the scripts present at install
   and in `--check` (`cron_scripts`); the daily brief's own scripts live there.
-- **MCP tools** (Index included): no matcher covers them. The policy's
-  `tools:` list already names a class for each Index tool, so routing them is
-  a matcher change here, not a policy change.
+- **MCP tools**: Index's write tools are routed (R3b) and judged by the
+  policy's `tools:` list; Index's read tools and any other MCP server's tools
+  have no matcher. The list already names a class for every Index tool, so
+  routing more of them is a matcher change, not a policy change.
 - **Safe mode and plugin disable.** `HERMES_SAFE_MODE=1`, or removing
   `av-approval` from `plugins.enabled`, stops the plugin loading AND stops
   Hermes's `register_from_config`, so the tenant runs fully ungated with no
@@ -248,10 +252,10 @@ What the gate does not see, or does not judge, today:
   `manage_connections`, `web_search`, `x_search`, `image_generate`,
   `video_generate`, `text_to_speech`, `memory` (all present at Hermes
   v2026.9.24). `computer_use` and `manage_connections` are real action
-  channels; the gated list is a contract, not a discovery. The policy's
-  `tools:` list prices `web_search`, `x_search`, `image_generate`,
-  `video_generate` and `text_to_speech` for the day they are routed; the rest
-  would be recorded under `harness.tool.unmapped`.
+  channels; the gated list is a contract, not a discovery. R3b routes
+  `web_search`, `x_search`, `image_generate`, `video_generate` and
+  `text_to_speech` (the policy's `tools:` list prices them); the rest would be
+  recorded under `harness.tool.unmapped` if routed.
 - **Recheck cadence.** After a healthy start the backstop re-runs its check at
   most once a minute, so a mid-run plugin force-reload that drops a shell hook
   can leave up to 60 s before the next gated call is refused. A failure seen
