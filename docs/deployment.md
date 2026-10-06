@@ -418,7 +418,11 @@ kept by `sync-edge-india-references.yml` (#203), which copies complete
 snapshots only and writes `SNAPSHOT.json` with each file's sha256. A push to
 upstream would otherwise reach every agent within one run with no human in
 the loop; the mirror sits under our org's audit log, and its sync workflow is
-the kill switch (disable it, or revert the mirror). Fran's upstream stays on
+the kill switch (disable it, or revert the mirror). Neither switch removes a
+copy already on disk: disabling the workflow, or writing a tenant's key empty,
+leaves that tenant's last synced set in place; only a revert of the mirror
+pushes a clean copy out, within about 35 minutes (one 30-minute period plus
+the CDN's 5-minute cache). Fran's upstream stays on
 the allowlist as an operator override only. Until #203 merges, the mirror
 has nothing to serve and every run fails `http-404` (exit 1, local notice).
 

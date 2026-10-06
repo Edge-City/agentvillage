@@ -145,6 +145,22 @@ describe("switched off, and the default snapshot", () => {
     expect(logLines()).toEqual([{ v: 1, event: "knowledge_sync", status: "unconfigured", reason: "unset", files: 0, bytes: 0, sha256: null, fetched_at: "2026-10-11T03:00:00.000Z" }]);
   });
 
+  test("CRLF line endings: KNOWLEDGE_SNAPSHOT_URL=\"\" switches it off (recheck S1)", async () => {
+    serveSnapshot({ "a.md": "A\n" });
+    writeFileSync(join(home, ".env"), 'OTHER=1\r\nKNOWLEDGE_SNAPSHOT_URL=""\r\n');
+    const result = await runKnowledgeSync(opts({ KNOWLEDGE_SNAPSHOT_URL: MANIFEST_URL }));
+    expect(result.status).toBe("unconfigured");
+    expect(requests).toEqual([]);
+  });
+
+  test("CRLF line endings: an override URL in .env is honoured, not the default (recheck S1)", async () => {
+    serveSnapshot({ "a.md": "A\n" });
+    writeFileSync(join(home, ".env"), `KNOWLEDGE_SNAPSHOT_URL=${MANIFEST_URL}\r\n`);
+    const result = await runKnowledgeSync(opts({}));
+    expect(result.status).toBe("ok");
+    expect(requests[0].url).toBe(MANIFEST_URL);
+  });
+
   test("with no .env, an empty (or blank) variable switches it off too", async () => {
     expect((await runKnowledgeSync(opts({ KNOWLEDGE_SNAPSHOT_URL: "  " }))).status).toBe("unconfigured");
     expect(requests).toEqual([]);

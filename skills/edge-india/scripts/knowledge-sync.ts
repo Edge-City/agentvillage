@@ -175,7 +175,8 @@ export function configValue(name: string, home: string, env: Record<string, stri
       throw new SyncFailure("env-unreadable");
     }
     let found: string | undefined;
-    for (const line of text.split("\n")) {
+    // CRLF and bare CR line endings too: a hand-edited .env must switch the sync off or override the URL as written.
+    for (const line of text.split(/\r\n|\r|\n/)) {
       const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
       if (match && match[1] === name) found = match[2].trim().replace(/^(["'])(.*)\1$/, "$2");
     }
