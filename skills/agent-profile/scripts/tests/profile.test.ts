@@ -8,7 +8,8 @@
  */
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -18,7 +19,10 @@ import {
   NICKNAME_JOINER,
   NICKNAME_LOOSE_MARK,
   NICKNAME_RE,
+  LOOKALIKES,
+  NICKNAME_SCRIPTS,
   NICKNAME_STACKED_MARKS,
+  NICKNAME_WORD_BREAK,
   RESERVED_NICKNAMES,
   agentName,
   nicknameBreaks,
@@ -143,42 +147,66 @@ describe("parseProfile: each field defensively, the control plane's rule restate
     for (const text of ["null", "[]", '"Mira"', "1"]) expect(parseProfile(text)).toMatchObject({ status: "ignored", reason: "shape_invalid" });
   });
 
-  test("the rule is the control plane's (tenant-profile.js nicknameBreaks), restated expression for expression", () => {
-    expect(NICKNAME_JOINER.source).toBe("(?<=\\p{L}[\\p{Mn}\\p{Mc}]*)[\\u200C\\u200D](?=\\p{L})");
-    expect(NICKNAME_JOINER.flags).toBe("gu");
-    expect(NICKNAME_HIDDEN.source).toBe(
-      "[\\p{Cc}\\p{Cf}\\p{Me}\\p{Default_Ignorable_Code_Point}\\p{Extended_Pictographic}\\u115F\\u1160\\u3164\\uFFA0\\uFE00-\\uFE0F\\u{E0000}-\\u{E007F}\\u{E0100}-\\u{E01EF}]",
-    );
-    expect(NICKNAME_RE.source).toBe("^[\\p{L}\\p{Nd}][\\p{L}\\p{M}\\p{Nd} '\\u2019-]*$");
-    expect(NICKNAME_LOOSE_MARK.source).toBe("(?:^|[^\\p{L}\\p{M}\\p{Nd}])\\p{M}");
-    expect(NICKNAME_STACKED_MARKS.source).toBe("\\p{M}{4,}");
-    for (const re of [NICKNAME_HIDDEN, NICKNAME_RE, NICKNAME_LOOSE_MARK, NICKNAME_STACKED_MARKS]) expect(re.flags).toBe("u");
-    expect([...RESERVED_NICKNAMES]).toEqual(["system", "operator", "admin", "administrator", "edge city", "edge city team", "agent village", "agent village team"]);
+  // The rule's fixture: byte-identical to the control plane's control-plane/tests/fixtures/nickname-rule.json,
+  // which pins the same digest; move both copies and both pins together. With AV_CONTROLPLANE_DIR set to an
+  // agentvillage-controlplane checkout, the two copies are also compared byte for byte.
+  const RULE_FIXTURE_SHA256 = "ccddb0b82d4f51f0c2e3c87fdcd3d1617cf765f3263345527253f45878b20d0a";
+  const ruleText = readFileSync(at("nickname-rule.json"), "utf8");
+  const rule = JSON.parse(ruleText) as {
+    expressions: Record<string, unknown>;
+    reserved: string[];
+    lookalikes: Record<string, string>;
+    probes: [string, string, string][];
+  };
+
+  test("the fixture is the pinned one and ASCII only (every probe an escape)", () => {
+    expect(createHash("sha256").update(ruleText, "utf8").digest("hex")).toBe(RULE_FIXTURE_SHA256);
+    expect(/^[\x00-\x7f]*$/.test(ruleText)).toBe(true);
   });
 
-  // P1-fix S2/S3: the refuter's probes, as escapes; the same table as the control plane's tests.
-  test.each([
-    ["\u3164", "hidden"], ["\uFFA0", "hidden"], ["Mira\u3164", "hidden"], ["Carter\u034F", "hidden"], ["Carter\uFE0F", "hidden"],
-    ["1\uFE0F\u20E3", "hidden"], ["A\u20DD", "hidden"], ["A\u180B", "hidden"], ["Mira\u{E0041}", "hidden"], ["Mira \u2764", "hidden"],
-    ["Mira\u200D", "hidden"], ["rtl\u202Eevil", "hidden"],
-    ["C\u0338\u0322\u031B\u0329a\u0337r\u0334t\u0335e\u0336r\u0337", "marks"], ["Mira \u0301", "marks"],
-    ["System", "reserved"], ["edge city team", "reserved"], ["Agent-Village", "reserved"],
-    ["Mira!", "symbols"],
-  ])("nickname probe %p breaks the rule (%s) and falls back to Edge", (given, broken) => {
-    expect(nicknameBreaks(given)).toBe(broken as ReturnType<typeof nicknameBreaks>);
+  test("the reader uses exactly the control plane's expressions, reserved names and look-alikes (the fixture)", () => {
+    const re = (r: RegExp) => ({ source: r.source, flags: r.flags });
+    expect({
+      joiner: re(NICKNAME_JOINER), hidden: re(NICKNAME_HIDDEN), chars: re(NICKNAME_RE), looseMark: re(NICKNAME_LOOSE_MARK),
+      stackedMarks: re(NICKNAME_STACKED_MARKS), wordBreak: re(NICKNAME_WORD_BREAK), scripts: NICKNAME_SCRIPTS.map(re),
+    }).toEqual(rule.expressions);
+    expect([...RESERVED_NICKNAMES]).toEqual(rule.reserved);
+    expect({ ...LOOKALIKES }).toEqual(rule.lookalikes);
+  });
+
+  test.each(rule.probes)("nickname probe: %s -> %s", (_, given, expected) => {
     const out = nick(given);
+    if (expected === "ok") {
+      expect(nicknameBreaks(given)).toBe(null);
+      expect(out.dropped).toEqual([]);
+      expect(agentName(out)).toBe(given);
+      return;
+    }
+    if (expected !== "too_long") expect(nicknameBreaks(given)).toBe(expected as ReturnType<typeof nicknameBreaks>);
     expect(out.dropped).toEqual(["nickname"]);
     expect(agentName(out)).toBe("Edge");
   });
 
-  test.each([
-    ["Marathi eyelash ra", "\u0930\u094D\u200D\u092F\u093E"],
-    ["Sinhala Shri", "\u0DC1\u0DCA\u200D\u0DBB\u0DD3"],
-    ["Malayalam chillu", "\u0D15\u0D4D\u200C\u0D37"],
-    ["three marks", "x\u0301\u0302\u0303"],
-  ])("nickname probe %s keeps the rule and is the agent's name", (_, given) => {
-    expect(nicknameBreaks(given)).toBe(null);
-    expect(agentName(nick(given))).toBe(given);
+  test("a refused nickname in the file falls back to Edge with one stderr line, and the name line never carries it", () => {
+    for (const [what, given, expected] of rule.probes.filter(([, , e]) => e !== "ok")) {
+      const home = mkdtempSync(join(tmpdir(), "av-profile-probe-"));
+      try {
+        writeFileSync(join(home, "av-profile.json"), JSON.stringify({ version: 1, nickname: given, about_me: null, interests: [], preferences: {}, updated_at: null }));
+        const lines: string[] = [];
+        const result = readProfile(home, (l) => lines.push(l));
+        expect({ what, expected, lines, first: promptText(result).split("\n")[0] }).toEqual({
+          what, expected, lines: ["av_profile.field_dropped fields=nickname"], first: "Your name is Edge. The resident has not given you another name.",
+        });
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test.skipIf(!process.env.AV_CONTROLPLANE_DIR)("with AV_CONTROLPLANE_DIR: the control plane's copy is byte-identical", () => {
+    const other = join(process.env.AV_CONTROLPLANE_DIR ?? "", "control-plane", "tests", "fixtures", "nickname-rule.json");
+    expect(existsSync(other)).toBe(true);
+    expect(readFileSync(other, "utf8")).toBe(ruleText);
   });
 
   test("a nickname the control plane would have changed (not NFC, a no-break space) is dropped", () => {

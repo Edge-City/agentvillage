@@ -1,0 +1,521 @@
+{
+ "about": "P1 nickname rule probes, mirrored byte for byte in agentvillage-controlplane control-plane/tests/fixtures/nickname-rule.json and agentvillage skills/agent-profile/scripts/tests/fixtures/nickname-rule.json. Each probe is [what, nickname (already NFC, trimmed, one space between words), expected]. expected: ok, too_long, or the part of the rule it breaks (hidden, symbols, marks, mixed, reserved). Move both copies and both sha256 pins together.",
+ "expressions": {
+  "joiner": {
+   "source": "(?<=\\p{L}[\\p{Mn}\\p{Mc}]*)[\\u200C\\u200D](?=\\p{L})",
+   "flags": "gu"
+  },
+  "hidden": {
+   "source": "[\\p{Cc}\\p{Cf}\\p{Me}\\p{Default_Ignorable_Code_Point}\\p{Extended_Pictographic}\\u115F\\u1160\\u3164\\uFFA0\\uFE00-\\uFE0F\\u{E0000}-\\u{E007F}\\u{E0100}-\\u{E01EF}]",
+   "flags": "u"
+  },
+  "chars": {
+   "source": "^[\\p{L}\\p{Nd}][\\p{L}\\p{M}\\p{Nd} '\\u2019-]*$",
+   "flags": "u"
+  },
+  "looseMark": {
+   "source": "(?:^|[^\\p{L}\\p{M}\\p{Nd}])\\p{M}",
+   "flags": "u"
+  },
+  "stackedMarks": {
+   "source": "\\p{M}{4,}",
+   "flags": "u"
+  },
+  "wordBreak": {
+   "source": "[ '\\u2019-]+",
+   "flags": "u"
+  },
+  "scripts": [
+   {
+    "source": "\\p{Script=Latin}",
+    "flags": "u"
+   },
+   {
+    "source": "\\p{Script=Cyrillic}",
+    "flags": "u"
+   },
+   {
+    "source": "\\p{Script=Greek}",
+    "flags": "u"
+   }
+  ]
+ },
+ "reserved": [
+  "system",
+  "operator",
+  "admin",
+  "administrator",
+  "edge city",
+  "edge city team",
+  "agent village",
+  "agent village team"
+ ],
+ "lookalikes": {
+  "\u0430": "a",
+  "\u0432": "b",
+  "\u0435": "e",
+  "\u0451": "e",
+  "\u0456": "i",
+  "\u0457": "i",
+  "\u0458": "j",
+  "\u043a": "k",
+  "\u043c": "m",
+  "\u043d": "h",
+  "\u043e": "o",
+  "\u0440": "p",
+  "\u0441": "c",
+  "\u0442": "t",
+  "\u0443": "y",
+  "\u0445": "x",
+  "\u0455": "s",
+  "\u0501": "d",
+  "\u051b": "q",
+  "\u051d": "w",
+  "\u04bb": "h",
+  "\u04cf": "l",
+  "\u03b1": "a",
+  "\u03b2": "b",
+  "\u03b5": "e",
+  "\u03b9": "i",
+  "\u03ba": "k",
+  "\u03bd": "v",
+  "\u03bf": "o",
+  "\u03c1": "p",
+  "\u03c4": "t",
+  "\u03c5": "u",
+  "\u03c7": "x",
+  "\u03b7": "n"
+ },
+ "probes": [
+  [
+   "plain",
+   "Mira",
+   "ok"
+  ],
+  [
+   "hyphen",
+   "Anne-Marie",
+   "ok"
+  ],
+  [
+   "apostrophe",
+   "O'Neil",
+   "ok"
+  ],
+  [
+   "curly apostrophe",
+   "O\u2019Neil",
+   "ok"
+  ],
+  [
+   "digits",
+   "R2 D2",
+   "ok"
+  ],
+  [
+   "precomposed accent",
+   "Zo\u00eb",
+   "ok"
+  ],
+  [
+   "Devanagari",
+   "\u0905\u0928\u093f\u0932",
+   "ok"
+  ],
+  [
+   "Marathi eyelash ra (ZWJ)",
+   "\u0930\u094d\u200d\u092f\u093e",
+   "ok"
+  ],
+  [
+   "Sinhala Shri (ZWJ)",
+   "\u0dc1\u0dca\u200d\u0dbb\u0dd3",
+   "ok"
+  ],
+  [
+   "Malayalam chillu (ZWNJ)",
+   "\u0d15\u0d4d\u200c\u0d37",
+   "ok"
+  ],
+  [
+   "Devanagari half form (ZWJ)",
+   "\u0915\u094d\u200d\u0937",
+   "ok"
+  ],
+  [
+   "Persian ZWNJ",
+   "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645",
+   "ok"
+  ],
+  [
+   "three marks on one letter",
+   "x\u0301\u0302\u0303",
+   "ok"
+  ],
+  [
+   "Tibetan stack",
+   "\u0f66\u0f92\u0fb2\u0f74\u0f56",
+   "ok"
+  ],
+  [
+   "Russian word for admin, all Cyrillic",
+   "\u0410\u0434\u043c\u0438\u043d",
+   "ok"
+  ],
+  [
+   "Latin and Cyrillic in separate words",
+   "Ana \u041f\u0435\u0442\u0440\u043e\u0432\u0438\u045b",
+   "ok"
+  ],
+  [
+   "Greek",
+   "\u0391\u03bb\u03ad\u03be\u03b7\u03c2",
+   "ok"
+  ],
+  [
+   "Japanese",
+   "\u3055\u304f\u3089",
+   "ok"
+  ],
+  [
+   "Chinese",
+   "\u674e\u534e",
+   "ok"
+  ],
+  [
+   "Korean",
+   "\ud558\ub098",
+   "ok"
+  ],
+  [
+   "a first name",
+   "Carter",
+   "ok"
+  ],
+  [
+   "Edge itself",
+   "Edge",
+   "ok"
+  ],
+  [
+   "near a reserved word",
+   "Admiral",
+   "ok"
+  ],
+  [
+   "near a reserved word 2",
+   "Systema",
+   "ok"
+  ],
+  [
+   "one reserved word of two",
+   "Village",
+   "ok"
+  ],
+  [
+   "32 characters",
+   "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "ok"
+  ],
+  [
+   "33 characters",
+   "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "too_long"
+  ],
+  [
+   "Hangul filler alone",
+   "\u3164",
+   "hidden"
+  ],
+  [
+   "halfwidth Hangul filler",
+   "\uffa0",
+   "hidden"
+  ],
+  [
+   "choseong filler",
+   "\u115fMira",
+   "hidden"
+  ],
+  [
+   "a filler after letters",
+   "Mira\u3164",
+   "hidden"
+  ],
+  [
+   "CGJ",
+   "Carter\u034f",
+   "hidden"
+  ],
+  [
+   "VS16",
+   "Carter\ufe0f",
+   "hidden"
+  ],
+  [
+   "VS1",
+   "Carter\ufe00",
+   "hidden"
+  ],
+  [
+   "ideographic VS",
+   "Carter\udb40\udd00",
+   "hidden"
+  ],
+  [
+   "Mongolian FVS",
+   "A\u180b",
+   "hidden"
+  ],
+  [
+   "keycap 1",
+   "1\ufe0f\u20e3",
+   "hidden"
+  ],
+  [
+   "enclosing circle",
+   "A\u20dd",
+   "hidden"
+  ],
+  [
+   "tag characters",
+   "Mira\udb40\udc41\udb40\udc42",
+   "hidden"
+  ],
+  [
+   "an emoji",
+   "Mira \ud83d\ude00",
+   "hidden"
+  ],
+  [
+   "a text-style pictograph",
+   "Mira \u2764",
+   "hidden"
+  ],
+  [
+   "soft hyphen",
+   "Mi\u00adra",
+   "hidden"
+  ],
+  [
+   "ZWJ at the end",
+   "Mira\u200d",
+   "hidden"
+  ],
+  [
+   "ZWJ at the start",
+   "\u200dMira",
+   "hidden"
+  ],
+  [
+   "ZWJ before a space",
+   "Mi\u200d ra",
+   "hidden"
+  ],
+  [
+   "ZWJ between emoji",
+   "A\u2764\u200d\u2764",
+   "hidden"
+  ],
+  [
+   "two joiners in a row",
+   "\u0915\u094d\u200d\u200d\u0937",
+   "hidden"
+  ],
+  [
+   "RLO",
+   "rtl\u202eevil",
+   "hidden"
+  ],
+  [
+   "zero width space",
+   "zero\u200bwidth",
+   "hidden"
+  ],
+  [
+   "word joiner",
+   "Mi\u2060ra",
+   "hidden"
+  ],
+  [
+   "newline",
+   "line\nbreak",
+   "hidden"
+  ],
+  [
+   "tab",
+   "tab\there",
+   "hidden"
+  ],
+  [
+   "NUL",
+   "nul\u0000",
+   "hidden"
+  ],
+  [
+   "at sign",
+   "mira@bot",
+   "symbols"
+  ],
+  [
+   "colon",
+   "Edge: admin",
+   "symbols"
+  ],
+  [
+   "exclamation",
+   "Mira!",
+   "symbols"
+  ],
+  [
+   "full stop",
+   "Mira.",
+   "symbols"
+  ],
+  [
+   "hyphen alone",
+   "-",
+   "symbols"
+  ],
+  [
+   "apostrophe first",
+   "'Mira",
+   "symbols"
+  ],
+  [
+   "markup",
+   "<b>Mira</b>",
+   "symbols"
+  ],
+  [
+   "zalgo (four marks on C)",
+   "C\u0338\u0322\u031b\u0329a\u0337r\u0334t\u0335e\u0336r\u0337",
+   "marks"
+  ],
+  [
+   "a mark on a space",
+   "Mira \u0301",
+   "marks"
+  ],
+  [
+   "a mark after a hyphen",
+   "Mira-\u0301",
+   "marks"
+  ],
+  [
+   "Cyrillic A in Admin",
+   "\u0410dmin",
+   "mixed"
+  ],
+  [
+   "Cyrillic e in System",
+   "Syst\u0435m",
+   "mixed"
+  ],
+  [
+   "Cyrillic a in Paul",
+   "P\u0430ul",
+   "mixed"
+  ],
+  [
+   "Greek A in Admin",
+   "\u0391dmin",
+   "mixed"
+  ],
+  [
+   "Greek E in Edge City",
+   "\u0395dge City",
+   "mixed"
+  ],
+  [
+   "System",
+   "System",
+   "reserved"
+  ],
+  [
+   "SYSTEM",
+   "SYSTEM",
+   "reserved"
+  ],
+  [
+   "operator",
+   "operator",
+   "reserved"
+  ],
+  [
+   "Admin",
+   "Admin",
+   "reserved"
+  ],
+  [
+   "administrator",
+   "administrator",
+   "reserved"
+  ],
+  [
+   "Edge City",
+   "Edge City",
+   "reserved"
+  ],
+  [
+   "edge city team",
+   "edge city team",
+   "reserved"
+  ],
+  [
+   "Agent Village",
+   "Agent Village",
+   "reserved"
+  ],
+  [
+   "AGENT VILLAGE TEAM",
+   "AGENT VILLAGE TEAM",
+   "reserved"
+  ],
+  [
+   "Edge-City",
+   "Edge-City",
+   "reserved"
+  ],
+  [
+   "Sys-tem",
+   "Sys-tem",
+   "reserved"
+  ],
+  [
+   "spaced letters",
+   "S y s t e m",
+   "reserved"
+  ],
+  [
+   "apostrophe inside",
+   "Sys'tem",
+   "reserved"
+  ],
+  [
+   "joined words",
+   "EdgeCity",
+   "reserved"
+  ],
+  [
+   "fullwidth SYSTEM",
+   "\uff33\uff39\uff33\uff34\uff25\uff2d",
+   "reserved"
+  ],
+  [
+   "all-Cyrillic look-alike of system",
+   "\u0405\u0443\u0455\u0442\u0435\u043c",
+   "reserved"
+  ],
+  [
+   "accented Edge City",
+   "\u00c9dge City",
+   "reserved"
+  ],
+  [
+   "all-Greek look-alike of operator",
+   "\u039f\u03c1\u03b5ra\u03c4or",
+   "mixed"
+  ]
+ ]
+}

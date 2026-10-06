@@ -36,8 +36,12 @@ export const PROFILE_FILE = "av-profile.json";
 /** A file larger than any profile the control plane accepts is not one. */
 const MAX_BYTES = 16 * 1024;
 const LIMITS = { nickname: 32, about_me: 600, interests: 12, interest: 40, language: 12 } as const;
-// The control plane's nickname rule (control-plane/src/tenant-profile.js, nicknameBreaks),
-// restated expression for expression:
+// The control plane's nickname rule (agentvillage-controlplane control-plane/src/tenant-profile.js,
+// nicknameBreaks), restated expression for expression. The file on disk can be edited by anything
+// with access to the sandbox, so the reader applies the whole rule itself before it prints a name.
+// tests/fixtures/nickname-rule.json is byte-identical to the control plane's
+// control-plane/tests/fixtures/nickname-rule.json (both pin its sha256): its expressions, reserved
+// names, look-alikes and probes are checked against this module.
 // 1. A zero-width joiner or non-joiner only between two letters, the first with its vowel signs or
 //    virama (Indic conjuncts and half forms).
 // 2. Nothing that does not show and no emoji: control and format characters, enclosing marks,
@@ -45,22 +49,50 @@ const LIMITS = { nickname: 32, about_me: 600, interests: 12, interest: 40, langu
 //    point, Extended_Pictographic.
 // 3. Letters, marks, digits, space, hyphen, apostrophe; the first a letter or a digit.
 // 4. A mark on a letter or a digit, at most three on one.
-// 5. Not a name that reads as the village or its staff.
+// 5. No word mixes Latin, Cyrillic and Greek letters.
+// 6. Not a name that reads as the village or its staff, compared on a skeleton (NFKC, no marks,
+//    lower case, look-alikes as Latin, no spaces, hyphens or apostrophes).
 export const NICKNAME_JOINER = /(?<=\p{L}[\p{Mn}\p{Mc}]*)[\u200C\u200D](?=\p{L})/gu;
 export const NICKNAME_HIDDEN = /[\p{Cc}\p{Cf}\p{Me}\p{Default_Ignorable_Code_Point}\p{Extended_Pictographic}\u115F\u1160\u3164\uFFA0\uFE00-\uFE0F\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/u;
 export const NICKNAME_RE = /^[\p{L}\p{Nd}][\p{L}\p{M}\p{Nd} '\u2019-]*$/u;
 export const NICKNAME_LOOSE_MARK = /(?:^|[^\p{L}\p{M}\p{Nd}])\p{M}/u;
 export const NICKNAME_STACKED_MARKS = /\p{M}{4,}/u;
+export const NICKNAME_WORD_BREAK = /[ '\u2019-]+/u;
+export const NICKNAME_SCRIPTS = [/\p{Script=Latin}/u, /\p{Script=Cyrillic}/u, /\p{Script=Greek}/u] as const;
 export const RESERVED_NICKNAMES = ["system", "operator", "admin", "administrator", "edge city", "edge city team", "agent village", "agent village team"] as const;
-const reservedKey = (s: string) => s.normalize("NFKC").toLowerCase().replace(/[-'\u2019]/g, " ").replace(/\s+/g, " ").trim();
+/** Cyrillic and Greek lower-case letters that read as a Latin one (after NFKC and lower case). */
+export const LOOKALIKES: Readonly<Record<string, string>> = {
+  "\u0430": "a", "\u0432": "b", "\u0435": "e", "\u0451": "e", "\u0456": "i", "\u0457": "i", "\u0458": "j", "\u043A": "k", "\u043C": "m",
+  "\u043D": "h", "\u043E": "o", "\u0440": "p", "\u0441": "c", "\u0442": "t", "\u0443": "y", "\u0445": "x", "\u0455": "s", "\u0501": "d",
+  "\u051B": "q", "\u051D": "w", "\u04BB": "h", "\u04CF": "l",
+  "\u03B1": "a", "\u03B2": "b", "\u03B5": "e", "\u03B9": "i", "\u03BA": "k", "\u03BD": "v", "\u03BF": "o", "\u03C1": "p", "\u03C4": "t",
+  "\u03C5": "u", "\u03C7": "x", "\u03B7": "n",
+};
+const RESERVED_KEYS: readonly string[] = RESERVED_NICKNAMES.map((n) => n.replace(/ /g, ""));
 
-/** Which part of the rule a nickname breaks (`hidden`, `symbols`, `marks`, `reserved`), or null. Pure. */
-export function nicknameBreaks(s: string): "hidden" | "symbols" | "marks" | "reserved" | null {
+/** The skeleton a reserved name is compared on (rule 6). */
+function reservedKey(s: string): string {
+  return [...s.normalize("NFKC").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase()]
+    .map((c) => LOOKALIKES[c] ?? c)
+    .join("")
+    .replace(/[\s'\u2019-]/gu, "");
+}
+
+/** A word with letters of more than one of Latin, Cyrillic and Greek (rule 5). */
+function mixesScripts(s: string): boolean {
+  return s.split(NICKNAME_WORD_BREAK).some((word) => NICKNAME_SCRIPTS.filter((re) => re.test(word)).length > 1);
+}
+
+export type NicknameBreak = "hidden" | "symbols" | "marks" | "mixed" | "reserved";
+
+/** Which part of the rule a nickname breaks, or null. Pure. */
+export function nicknameBreaks(s: string): NicknameBreak | null {
   const bare = s.replace(NICKNAME_JOINER, "");
   if (NICKNAME_HIDDEN.test(bare)) return "hidden";
   if (!NICKNAME_RE.test(bare)) return "symbols";
   if (NICKNAME_LOOSE_MARK.test(bare) || NICKNAME_STACKED_MARKS.test(bare)) return "marks";
-  if ((RESERVED_NICKNAMES as readonly string[]).includes(reservedKey(s))) return "reserved";
+  if (mixesScripts(bare)) return "mixed";
+  if (RESERVED_KEYS.includes(reservedKey(bare))) return "reserved";
   return null;
 }
 const LANGUAGE_RE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/;
