@@ -91,8 +91,8 @@ Any violation is a schema or load error, and the policy fails closed (SPEC §5.2
 3. Every listed class's declared autonomy is at least as strict as `max_autonomy`, in SPEC §5.2's
    strictness order. With the default `manual` only `manual` rows pass and a supervised row fails
    the load; `max_autonomy: supervised-retro` also admits a `manual` row. The rule is a tamper
-   pin, not a dial. If someone loosens a delegated class's row, for example from manual to autonomous, without also rewriting
-   the delegation block, the load fails. The judge's scope can then never grow as a side effect of
+   pin, not a dial. If someone loosens a delegated class's row, for example from manual to
+   autonomous, without also rewriting the delegation block, the load fails. The judge's scope can then never grow as a side effect of
    an unrelated edit. (Decision 1: the pin, not a ceiling on what a judge decision resolves to.)
 4. `daily_cap` is an integer. A float, a string or a negative number is refused.
 5. `escalate_on` is drawn from the fixed set. When `daily_cap > 0`, it MUST contain `irreversible`
