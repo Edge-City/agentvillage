@@ -31,6 +31,9 @@ export const EDGE_SKILL_NAMES = [
   // K1: Edge City India background, read from the local snapshot copy that
   // the "Edge — knowledge sync" job keeps (never fetched in a turn).
   "edge-india",
+  // P1: the agent's nickname and the resident's own profile, read once per
+  // private session from $HERMES_HOME/av-profile.json (the control plane writes it).
+  "agent-profile",
 ] as const;
 
 export const CRON_NAME_PREFIX = "Edge —";
