@@ -140,7 +140,13 @@ def _rewrite_markdown(text: str) -> str:
 
 def _rewrite_autolinks(text: str) -> str:
     def sub(match: re.Match[str]) -> str:
-        return _map_url(match.group(1)) or ""
+        url = match.group(1)
+        # Same guard as the markdown branch: a look-alike host or a port is not an
+        # Index URL, and an unmapped one stays as written (recheck N1).
+        if _INDEX_URL.fullmatch(url) is None:
+            return match.group(0)
+        mapped = _map_url(url)
+        return match.group(0) if mapped is None else mapped
 
     return _INDEX_AUTOLINK.sub(sub, text)
 
@@ -194,9 +200,18 @@ def _dotenv_switch() -> str:
     try:
         with open(path, encoding="utf-8-sig") as handle:
             for line in handle:
-                name, sep, raw = line.strip().partition("=")
+                stripped = line.strip()
+                if stripped.startswith("export "):
+                    stripped = stripped[len("export "):].lstrip()
+                name, sep, raw = stripped.partition("=")
                 if sep and name.strip() == OFF_SWITCH:
-                    value = raw.strip().strip("'\"")
+                    raw = raw.strip()
+                    if raw[:1] in ("'", '"'):
+                        quote = raw[0]
+                        raw = raw[1:].split(quote, 1)[0]
+                    else:
+                        raw = raw.split(" #", 1)[0].split("\t#", 1)[0].strip()
+                    value = raw
     except OSError:
         return ""
     _DOTENV_CACHE.clear()
@@ -205,14 +220,15 @@ def _dotenv_switch() -> str:
 
 
 def switched_off() -> bool:
-    """``AV_INDEX_LINKS`` is off. The process env wins when the variable is
-    present there (even blank); otherwise `$HERMES_HOME/.env` is read, cached on
-    its mtime, so the switch takes effect without a gateway restart (as
-    ``AV_EVENTS_ENABLED`` does for av-events)."""
-    raw = os.environ.get(OFF_SWITCH)
-    if raw is None:
-        raw = _dotenv_switch()
-    return raw.strip().lower() in _OFF_VALUES
+    """``AV_INDEX_LINKS`` is off in the process env OR in `$HERMES_HOME/.env`
+    (read on its mtime, so an edit takes effect without a gateway restart, as
+    ``AV_EVENTS_ENABLED`` does for av-events). Either source saying off wins, so
+    a stale value Hermes loaded at boot cannot keep the rewrite on (recheck S1).
+    ``export KEY=off``, quotes and a trailing ``# comment`` are accepted."""
+    env = os.environ.get(OFF_SWITCH)
+    if env is not None and env.strip().lower() in _OFF_VALUES:
+        return True
+    return _dotenv_switch().strip().lower() in _OFF_VALUES
 
 
 def transform_tool_result(result: Any = None, tool_name: Any = None, **_kwargs: Any) -> Optional[str]:

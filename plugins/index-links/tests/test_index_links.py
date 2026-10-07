@@ -154,11 +154,20 @@ def test_off_switch_in_dotenv_works_without_a_restart(plugin, tmp_path):
     assert hook(plugin, f"Tap {ACCEPT}") == f"Tap {ACCEPT_OUT}"
 
 
-def test_process_env_wins_over_dotenv(plugin, tmp_path, monkeypatch):
+def test_off_from_either_source_wins(plugin, tmp_path, monkeypatch):
+    """Recheck S1: a blank or 'on' process value cannot override an off in .env, and an off in the
+    process env switches it off even when .env says nothing."""
     (tmp_path / ".env").write_text("AV_INDEX_LINKS='off'\n", encoding="utf-8")
     assert hook(plugin, f"Tap {ACCEPT}") is None
     monkeypatch.setenv("AV_INDEX_LINKS", "")
+    assert hook(plugin, f"Tap {ACCEPT}") is None
+    (tmp_path / ".env").write_text("AV_INDEX_LINKS=on\n", encoding="utf-8")
+    import os
+    env = tmp_path / ".env"
+    os.utime(env, ns=(os.stat(env).st_mtime_ns + 1000, os.stat(env).st_mtime_ns + 1000))
     assert hook(plugin, f"Tap {ACCEPT}") == f"Tap {ACCEPT_OUT}"
+    monkeypatch.setenv("AV_INDEX_LINKS", "off")
+    assert hook(plugin, f"Tap {ACCEPT}") is None
 
 
 def test_results_over_256_kib_are_returned_unchanged(plugin):
@@ -226,3 +235,33 @@ def test_register_adds_one_hook(plugin):
     plugin.register(Ctx())
     plugin.register(Ctx())
     assert [name for name, _ in calls] == ["transform_tool_result"]
+
+
+def test_off_switch_dotenv_accepts_export_and_comments(plugin, tmp_path, monkeypatch):
+    """Recheck S1: `export KEY=off` and `KEY=off # note` both switch it off."""
+    monkeypatch.delenv(plugin.OFF_SWITCH, raising=False)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    env = tmp_path / ".env"
+    env.write_text("export AV_INDEX_LINKS=off\n", encoding="utf-8")
+    assert plugin.switched_off() is True
+    env.write_text("AV_INDEX_LINKS=off # kill switch\n", encoding="utf-8")
+    import os
+    os.utime(env, ns=(os.stat(env).st_mtime_ns + 1000, os.stat(env).st_mtime_ns + 1000))
+    assert plugin.switched_off() is True
+    env.write_text('AV_INDEX_LINKS="off"\n', encoding="utf-8")
+    os.utime(env, ns=(os.stat(env).st_mtime_ns + 1000, os.stat(env).st_mtime_ns + 1000))
+    assert plugin.switched_off() is True
+
+
+def test_off_in_dotenv_wins_over_a_stale_on_in_the_process_env(plugin, tmp_path, monkeypatch):
+    """Recheck S1: a value Hermes loaded at boot cannot keep the rewrite on."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv(plugin.OFF_SWITCH, "on")
+    (tmp_path / ".env").write_text("AV_INDEX_LINKS=off\n", encoding="utf-8")
+    assert plugin.switched_off() is True
+
+
+def test_autolink_lookalike_host_is_left_as_written(plugin):
+    """Recheck N1: an autolink on a look-alike host or a port is not an Index URL."""
+    for text in ("<https://index.network.evil.com/u/abc>", "<https://index.network@evil.com/u/abc>", "<https://index.network:8443/u/abc>"):
+        assert plugin.rewrite_index_links(text) == text
