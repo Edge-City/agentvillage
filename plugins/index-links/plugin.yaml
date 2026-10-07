@@ -1,6 +1,6 @@
 name: index-links
 version: 0.1.0
-description: "Rewrites Index URLs in tool results before the model sees them. Opportunity links become the signed accept link with surface=telegram. Silent: no tools, no messages."
+description: "Rewrites Index URLs in tool results before the model sees them. Signed accept links gain surface=telegram. Person links open the Rolodex profile. Signal links open the intent. Silent: no tools, no messages."
 author: Edge City
 kind: backend
 # Documentation only — Hermes reads hooks from ctx.register_hook().
