@@ -74,8 +74,13 @@ import YAML from "yaml";
 import { readFlag } from "./args";
 import { upsertEnvVar } from "./env";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
+import { hermesAvailable } from "../skills/index-network/scripts/hermes-cli";
+import { installedJobsPath, storedJobEnabled } from "../skills/index-network/scripts/message-labels";
 import { CRON_NAME_PREFIX, hermesHome } from "./paths";
 import { TEMPLATE_NAMES, type TemplateName, adminScheduleKeys, prunePreviewFiles, readJobSettings, scheduleAdminManaged } from "../skills/index-network/scripts/job-settings";
+
+// Shared with the skill scripts that run on a box without install/ (DATA-376): one definition each.
+export { hermesAvailable, installedJobsPath, storedJobEnabled };
 
 /**
  * R3 fix round 4 (output injection): a job name read from the tenant's jobs.json is printed only in
@@ -212,10 +217,7 @@ export interface StoredCronJob {
   paused_at?: string | null;
 }
 
-/** Whether Hermes will fire a stored job (cron/jobs.py is_job_runnable: `enabled` and no pause mark). */
-export function storedJobEnabled(job: StoredCronJob): boolean {
-  return job.enabled !== false && job.state !== "paused" && !job.paused_at;
-}
+// storedJobEnabled (Hermes's pause state) lives in message-labels.ts and is re-exported above.
 
 /** Extract the cron expression a stored Hermes job currently runs on. */
 export function storedSchedule(job: StoredCronJob): string {
@@ -659,30 +661,9 @@ export function ensureCronScriptInstalled(spec: DigestCronSpec, home: string, pr
   return expectedScript;
 }
 
-/**
- * Probe whether the Hermes CLI can actually run. `hermesBin()` falls back to the
- * bare name `"hermes"` when it finds no fixed-path binary, but that name still
- * resolves on PATH (the augmented env adds ~/.local/bin etc.). So test by
- * executing `hermes --version` rather than string-comparing the resolved name.
- */
-export function hermesAvailable(bin: string, timeoutMs?: number): boolean {
-  try {
-    execFileSync(bin, ["--version"], { stdio: "ignore", env: hermesExecEnv(), ...(timeoutMs ? { timeout: timeoutMs, killSignal: "SIGKILL" as const } : {}) });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * `$HERMES_HOME/av-events/installed_jobs.json`: the ids of the cron jobs this
- * installer created or manages (DATA-92). The av-events plugin reports a
- * `cron.run` job name only for these ids: a participant can ask the agent for
- * a job named exactly like one of ours, and its name is then their words.
- */
-export function installedJobsPath(home: string): string {
-  return join(home, "av-events", "installed_jobs.json");
-}
+// hermesAvailable (the `hermes --version` probe) and installedJobsPath
+// (`$HERMES_HOME/av-events/installed_jobs.json`, DATA-92) live beside the
+// skill scripts (hermes-cli.ts, message-labels.ts) and are re-exported above.
 
 /** Replace the record, by temp file and rename. Best effort, like `restore.json`. */
 export function writeInstalledJobIds(home: string, ids: string[]): void {
