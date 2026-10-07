@@ -140,7 +140,9 @@ table of replies that arm and replies that do not, and both suites check every e
   The name slot refuses `?` and newlines. "Reply" matches in any case, and the final full stop is
   optional. Bold around the name alone fits the slot.
 - `normalise`, for matching only (`normalise_reply`): non-breaking and other special spaces become
-  spaces; the reply is stripped; trailing emoji come off; one pair of `**`, `*`, `_` or quote marks
+  spaces; the reply is stripped; one trailing manage line (`normalise.manage_line`, any of the four
+  DATA-373 labels, e.g. `(Evening questions message - you can ask me to stop or manage it)`, a model
+  slip on the question) comes off and it is stripped again; trailing emoji come off; one pair of `**`, `*`, `_` or quote marks
   around the whole reply comes off; then it is stripped and trailing emoji come off again. The
   reply then has to match `^sentence$` in full. The message hash stays the hash of the reply
   exactly as it is, equal to `message.out`'s.
@@ -202,9 +204,10 @@ The `outcome.asked@1` fields (`src/schemas/index.ts:1716-1727`):
 
 **The hash is of the reply, not of the Telegram text.** Unless `cron.wrap_response` is false,
 Hermes wraps a cron delivery in a "Cronjob Response: <name>" header (with the job id) and a
-"To stop or manage this job, send me a new message ..." footer (`cron/scheduler_delivery.py:1937-1959`
-at the floor `118984d7`). Since DATA-373 the installer and the digest-cron reconcile set it false, so
-a delivery is the reply as written; each delivering prompt ends its reply with its own manage line
+"To stop or manage this job, send me a new message ..." footer (`cron/scheduler_delivery.py:1944-1966`).
+Since DATA-373 the installer and the digest-cron reconcile set it false, so a delivery carries the
+reply with no header or footer; Hermes still extracts MEDIA tags from it and redacts credentials at
+the same chokepoint (`:1973-1978`). Each delivering prompt ends its reply with its own manage line
 (the evening job: `(Evening questions message - you can ask me to stop or manage it)`, never on the
 outcome question, which stays the whole reply). Hermes may also prepend a fallback-model notice
 (`cron/scheduler.py:2531-2535`), which the overlay does not turn off.

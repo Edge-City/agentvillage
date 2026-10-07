@@ -33,7 +33,7 @@ plugins/av-events/
   tool_categories.json        frozen seed: tool name -> category (tool_categories_v3)
   edgeos_tool_allowlist.json  frozen seed: EdgeOS operations (edgeos_tool_allowlist_v1)
   cron_job_names.json         frozen seed: the cron names cron.run may carry (cron_job_names_v2)
-  outcome_question.json       the evening outcome ask's fixed question: sentence, normalise steps, question key rule, shared cases with keys and hashes (outcome_question_v3)
+  outcome_question.json       the evening outcome ask's fixed question: sentence, normalise steps, question key rule, shared cases with keys and hashes (outcome_question_v4)
   tests/           pytest suite; drives a fake ctx, never imports Hermes
 ```
 
@@ -1349,7 +1349,7 @@ The whole design, as built, is `docs/design/outcome-ask.md`. In short:
   into `av-events/outcome-ask/armed/<execution>.json` with the reply's keyed hash and the keyed
   hash of the question's key. These remove
   the stage and arm nothing: a silent reply; a reply that, normalised for matching (special
-  spaces, surrounding bold or quotes, trailing emoji), is not exactly the fixed question (the
+  spaces, one trailing DATA-373 manage line, surrounding bold or quotes, trailing emoji), is not exactly the fixed question (the
   rules and a shared case table in `outcome_question.json`); a reply whose question key does not
   hash to the stage's `question_sha256` (not the question the trigger showed); a stage older than the run's claim in
   Hermes's ledger, newer than the reply, or over 15 minutes old; a ledger row that is missing or
