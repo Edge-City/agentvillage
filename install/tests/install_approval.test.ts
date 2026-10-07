@@ -1880,7 +1880,7 @@ const DATA380_NODE: [string, string | Buffer][] = [
   ["other non-ASCII on stderr", coreBody({ stdout: "{}\n", stderr: "caf\u00e9 \u{1F600}" })],
   ["stdout { }", coreBody({ stdout: "{ }" })],
   ["exit_code 2.0", '{"exit_code":2.0,"stdout":"{\\"action\\":\\"block\\",\\"message\\":\\"x: y\\"}","stderr":""}'],
-  ["over 16 KiB", coreBody({ stdout: "{}\n", stderr: "z".repeat(20000) })],
+  ["over 8 KiB", coreBody({ stdout: "{}\n", stderr: "z".repeat(8200) })],
   ["\\/ in the message", '{"exit_code":2,"stdout":"{\\"action\\":\\"block\\",\\"message\\":\\"a\\\\/b\\"}","stderr":""}'],
   ["a block with an extra directive key", coreBody({ exit_code: 2, stdout: `${JSON.stringify({ action: "block", message: "x: y", reason: "z" })}\n` })],
 ];

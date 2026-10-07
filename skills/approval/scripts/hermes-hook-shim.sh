@@ -571,7 +571,9 @@ process.stdout.write(String(b.exit_code) + " " + (waiting ? "wait" : isBlock ? "
 # node would decode or replace with U+FFFD), an escape other than \" \\ \n,
 # a key out of order, an extra or duplicate key, a truncated stream, any
 # other stdout, a non-zero exit without a block directive (node's own
-# "BLOCK ..." reason then), or more than 16384 bytes. Its string scan is
+# "BLOCK ..." reason then), more than 8192 bytes, or more than 512 escapes
+# in a string, 64 em dashes in a string, 16 "code" or NOTHING WAS WITHDRAWN
+# in the text it scans (each loop is bounded). Its string scan is
 # strict JSON: a string ends at the first quote no backslash escapes, so a
 # string that decodes cleanly ends exactly where the shape says, and no
 # key, value or directive can hide inside it.
@@ -590,10 +592,15 @@ jdec() {
       [ -n "$EM" ] || EM=$(printf '\342\200\224')
       t=$s
       u=""
+      k=0
       while :; do
         case $t in *"$EM"*) ;; *) break ;; esac
-        u=$u${t%%"$EM"*}
-        t=${t#*"$EM"}
+        k=$((k + 1))
+        [ "$k" -le 64 ] || return 1
+        p=${t%%"$EM"*}
+        u=$u$p
+        t=${t#"$p"}
+        t=${t#"$EM"}
       done
       case $u$t in *[!\ -~]*) return 1 ;; esac
       ;;
@@ -602,10 +609,11 @@ jdec() {
   while :; do
     case $s in *\\*) ;; *) break ;; esac
     k=$((k + 1))
-    [ "$k" -le 2048 ] || return 1
+    [ "$k" -le 512 ] || return 1
     p=${s%%\\*}
     case $p in *\"*) return 1 ;; esac
-    s=${s#*\\}
+    s=${s#"$p"}
+    s=${s#?}
     case $s in
       \"*) JD=$JD$p\" ;;
       \\*) JD=$JD$p\\ ;;
@@ -620,7 +628,7 @@ jdec() {
 verdict_sh() {
   LC_ALL=C
   case $SIZE in '' | *[!0-9]*) return 1 ;; esac
-  [ "$SIZE" -ge 1 ] && [ "$SIZE" -le 16384 ] || return 1
+  [ "$SIZE" -ge 1 ] && [ "$SIZE" -le 8192 ] || return 1
   B=""
   # A newline means more than one line: not the shape (read returns 0).
   IFS= read -r B <"$TMP/body" && return 1
@@ -632,9 +640,10 @@ verdict_sh() {
   [ "$X" -le 255 ] || return 1
   r=${r#"$X"}
   case $r in ',"stdout":"'*) r=${r#',"stdout":"'} ;; *) return 1 ;; esac
-  case $r in *'","stderr":"'*) ;; *) return 1 ;; esac
   S=${r%%'","stderr":"'*}
-  r=${r#*'","stderr":"'}
+  [ "$S" != "$r" ] || return 1
+  r=${r#"$S"}
+  r=${r#'","stderr":"'}
   case $r in
     *'","stdout_truncated":false,"stderr_truncated":false}') E=${r%'","stdout_truncated":false,"stderr_truncated":false}'} ;;
     *'"}') E=${r%'"}'} ;;
@@ -674,8 +683,9 @@ verdict_sh() {
     case $x in *'"code"'*) ;; *) break ;; esac
     k=$((k + 1))
     [ "$k" -le 16 ] || return 1
-    x=${x#*'"code'}
-    case $x in '"'*) ;; *) continue ;; esac
+    p=${x%%'"code"'*}
+    x=${x#"$p"}
+    x=${x#'"code'}
     y=${x#?}
     y=${y#"${y%%[!$W]*}"}
     case $y in :*) y=${y#:} ;; *) continue ;; esac
@@ -705,9 +715,11 @@ verdict_sh() {
       while :; do
         case $x in *'NOTHING WAS WITHDRAWN'*) ;; *) break ;; esac
         k=$((k + 1))
-        [ "$k" -le 64 ] || return 1
-        o=$o${x%%'NOTHING WAS WITHDRAWN'*}
-        x=${x#*'NOTHING WAS WITHDRAWN'}
+        [ "$k" -le 16 ] || return 1
+        p=${x%%'NOTHING WAS WITHDRAWN'*}
+        o=$o$p
+        x=${x#"$p"}
+        x=${x#'NOTHING WAS WITHDRAWN'}
       done
       case $o$x in *'WAS WITHDRAWN'*) ;; *) K=wait ;; esac
     fi

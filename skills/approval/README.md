@@ -132,7 +132,7 @@ surfaces.
 Since DATA-380 an allow or a block starts no node process (node cost 32 ms warm
 and up to 236 ms cold, once or twice per call). The shim reads the facade's
 body in sh when it is exactly the shape the core prints: `exit_code`, `stdout`,
-`stderr`, both `*_truncated` false, in that order, at most 16 KiB, its strings
+`stderr`, both `*_truncated` false, in that order, at most 8 KiB, its strings
 printable ASCII or the em dash with only `\"`, `\\` and `\n` escapes, and its
 stdout empty, `{}` or Hermes's block directive. Every other body still goes to
 the node reading it had before, so the sh reading can only agree with it. The
