@@ -67,6 +67,9 @@ test("rc15 merge of #203 and #206: one edge-india entry, one routing paragraph, 
   expect(new Set(EDGE_SKILL_NAMES).size).toBe(EDGE_SKILL_NAMES.length);
 
   const agents = readFileSync(join(REPO_ROOT, "workspace", "AGENTS.md"), "utf8");
+  // Carter 2026-10-07 21:2xZ: a Haiku welcome hedged that it lacked the schedule; the schedule is EdgeOS, live and complete.
+  expect(agents).toContain("The EdgeOS lookup is the complete, live Edge City India schedule and venue list. Never say you lack the schedule or venues: look them up.");
+  expect(agents).toContain("and never in a greeting.");
   const count = (text: string, needle: string) => text.split(needle).length - 1;
   expect(count(agents, "- **`edge-india`**")).toBe(1);
   // The community-context routing: one paragraph sends India background to the skill.
