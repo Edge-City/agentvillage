@@ -19,6 +19,7 @@ import YAML from "yaml";
 import { configureCronScriptTimeout, configureCronWrapResponse } from "../config";
 import { DIGEST_CRON_SPECS, type DigestCronSpec, templateCronSpec } from "../install_index";
 import { TEMPLATE_NAMES } from "../../skills/index-network/scripts/job-settings";
+import { MESSAGE_LABELS } from "../../skills/index-network/scripts/message-labels";
 
 const ORIGINAL_HOME = process.env.HERMES_HOME;
 let home: string;
@@ -251,7 +252,7 @@ describe("AC #2: each delivering prompt ends with its own manage line", () => {
     expect(alternation).toEqual(emitted.sort());
   });
 
-  test("AGENTS.md maps every label to exactly its jobs; the agent stops only Daily digest and Usage report", () => {
+  test("AGENTS.md maps every label to exactly its jobs; the agent stops and restarts all five with the pause script", () => {
     const agents = readFileSync(join(import.meta.dir, "..", "..", "workspace", "AGENTS.md"), "utf8");
     const section = agents.slice(agents.indexOf("## Cron schedule"), agents.indexOf("## Red lines"));
     expect(section).toContain(`\`(<Label>${MANAGE_TAIL}\``);
@@ -271,16 +272,34 @@ describe("AC #2: each delivering prompt ends with its own manage line", () => {
     }
     expect(Object.fromEntries(listed)).toEqual(Object.fromEntries(expected));
     expect(section).not.toContain("template");
-    // B1: the agent pauses only the two a roll leaves paused; the other three it must not pause.
-    expect(section).toContain("You can stop the Daily digest and the Usage report yourself");
-    expect(section).toContain("pause that job with the `cronjob_manage` tool");
-    expect(section).toContain("Do not pause Conversation update, Evening questions or Introduction suggestion");
-    expect(section).toContain("you can't stop those yet and that this is being worked on");
-    // S1: resume only its own stops, and no promise that a missed one waits.
-    expect(section).toContain("only a message you stopped at their request; never restart one that was switched off some other way");
-    expect(section).toContain("one it missed while stopped may arrive right away");
+    // DATA-376: the pause script's own table is the same mapping.
+    expect(Object.fromEntries(Object.entries(MESSAGE_LABELS).map(([label, names]) => [label, [...names].sort()]))).toEqual(Object.fromEntries(expected));
+    // DATA-376: all five stop and restart through the pause script, which records a hold an update keeps.
+    expect(section).toContain("You can stop and restart any of these five messages when the user asks.");
+    expect(section).toContain('`bun skills/index-network/scripts/pause-job.ts pause --label "<Label>"`');
+    expect(section).toContain("run the same with `resume`");
+    expect(section).toContain("Call `terminal` with exactly `command` plus `workdir` set to your absolute `HERMES_HOME` directory, and nothing else.");
+    expect(section).toContain("an update does not switch it back on");
+    expect(section).toContain("A restarted one comes back at its usual time, not at once.");
+    for (const error of ["held-by-admin", "held-by-settings", "holds-unreadable", "job-missing", "busy"]) expect(section).toContain(`\`${error}\``);
+    // Fix round 1 (S2): the reply's own words win over the default line.
+    expect(section).toContain('If the reply has `"resumeMayFire": true` anywhere, never say "not at once": say it is back on, and that one it missed while stopped may arrive soon.');
+    expect(section).toContain('If it says `"ok": false` but `applied` lists a job, the change went through: say it is stopped (or back on), but you could not finish tidying up and will run it once more, then run the same command once more.');
+    // Fix round 1 (S3): each refusal in its own words.
+    expect(section).toContain("`held-by-admin`: it was switched off by the Edge City team, so you can't restart it, and they can ask the team;");
+    expect(section).toContain("`held-by-settings`: it was switched off in settings the Edge City team manages for now, so ask them to turn it back on;");
+    expect(section).toContain("`holds-unreadable`: something is wrong with its settings file, the Edge City team needs to look, and the message stays as it is for now;");
+    expect(section).not.toContain("switched off by the Edge City team or in settings");
+    expect(section).toContain("Never use `cronjob_manage` on these jobs: a pause made that way is lost at the next update.");
+    // The #224 wording is gone: no "not yet", no cron tool pause, no promise that a missed one may arrive.
+    expect(section).not.toContain("can't stop those yet");
+    expect(section).not.toContain("pause that job with the `cronjob_manage` tool");
+    expect(section).not.toContain("may arrive right away");
     expect(section).toContain("no scheduled message can be moved or added");
     expect(section).not.toContain("can't be changed");
+    // The holds file is not a preferences file, and the line saying so stays true.
+    expect(agents).toContain("Edge keeps no separate preferences file. `av-events/job-holds.json` only records who stopped or restarted a scheduled message");
+    expect(agents).not.toContain("Edge does not keep a separate preferences file.");
   });
 
   test("every template a job can be added from delivers on a labelled prompt, so it carries its base job's line", () => {

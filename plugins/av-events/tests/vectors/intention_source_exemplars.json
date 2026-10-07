@@ -1,0 +1,225 @@
+{
+  "_comment": "DATA-384: which source record_intention gets, by whose words the text is. The contract for the rule in _record_intention.py SOURCE_RULE / DRAFT_RULE and for the examples in skills/record-intention/SKILL.md \"## Source\", which are the rows with a skill line, in this order. said: what the resident said or wrote (for background, what a memory pass read). kind: own-words | asks-agent-to-write | yes-after-draft | quoted | confirms-quoted | translated | setup | note | inferred | background. where: conversation | onboarding | note | background. text: what the agent records. source: the source the rule gives, or null when nothing is recorded (text is then null too). show_words: the agent shows text in its reply after capturing it. why: the reason. skill: the example line in SKILL.md, or null. Checked by plugins/av-events/tests/test_intention_source.py; no model runs.",
+  "exemplars": [
+    {
+      "said": "Based on what you know about me, make me an intent.",
+      "kind": "asks-agent-to-write",
+      "where": "conversation",
+      "text": "Meet founders and researchers working on AI agents for local communities",
+      "source": "ambient",
+      "show_words": true,
+      "why": "They asked you to write it without giving the words; the words are yours.",
+      "skill": "\"Based on what you know about me, make me an intent.\" → `ambient`: the words would be yours."
+    },
+    {
+      "said": "Based on what you know about me, generate an index intent.",
+      "kind": "asks-agent-to-write",
+      "where": "conversation",
+      "text": "Meet people building tools for civic life in small towns",
+      "source": "ambient",
+      "show_words": true,
+      "why": "The rehearsal request of 2026-10-07: the agent composed the text.",
+      "skill": null
+    },
+    {
+      "said": "Generate an index intent for me.",
+      "kind": "asks-agent-to-write",
+      "where": "conversation",
+      "text": "Find collaborators for a community radio project in Goa",
+      "source": "ambient",
+      "show_words": true,
+      "why": "They asked you to write it; the words are yours.",
+      "skill": "\"Generate an index intent for me.\" → `ambient`."
+    },
+    {
+      "said": "Suggest an intent I could post.",
+      "kind": "asks-agent-to-write",
+      "where": "conversation",
+      "text": "Talk with people who have run a residency program",
+      "source": "ambient",
+      "show_words": true,
+      "why": "A suggestion is your wording.",
+      "skill": "\"Suggest an intent I could post.\" → `ambient`."
+    },
+    {
+      "said": "Can you write me an intent about Solana founders in Goa?",
+      "kind": "asks-agent-to-write",
+      "where": "conversation",
+      "text": "Meet founders building on Solana in Goa",
+      "source": "ambient",
+      "show_words": true,
+      "why": "They named the topic, but \"meet\" and \"building\" are your words.",
+      "skill": "\"Can you write me an intent about Solana founders in Goa?\" → `ambient` when you write \"Meet founders building on Solana in Goa\": \"meet\" and \"building\" are yours."
+    },
+    {
+      "said": "Write me an intent: founders building on Solana in Goa.",
+      "kind": "asks-agent-to-write",
+      "where": "conversation",
+      "text": "Founders building on Solana in Goa",
+      "source": "message",
+      "show_words": false,
+      "why": "They gave the words; you only cut. The cut-only test wins over the request to write.",
+      "skill": "\"Write me an intent: founders building on Solana in Goa.\" → `message` when you record \"Founders building on Solana in Goa\": every word is theirs."
+    },
+    {
+      "said": "Write me an intent: founders building on Solana in Goa.",
+      "kind": "asks-agent-to-write",
+      "where": "conversation",
+      "text": "Meet founders building on Solana in Goa during Edge City India",
+      "source": "ambient",
+      "show_words": true,
+      "why": "Same request, but \"meet\", \"during\", \"Edge\", \"City\" and \"India\" are your words.",
+      "skill": null
+    },
+    {
+      "said": "Yes, that's right.",
+      "kind": "yes-after-draft",
+      "where": "conversation",
+      "text": null,
+      "source": null,
+      "show_words": false,
+      "why": "Record nothing new: a yes does not make your words theirs, and the card already asks them (action=confirm checks their answer).",
+      "skill": "\"Yes, that's right.\" after you showed your words → record nothing new: a yes does not make your words theirs, and the card already asks them (action=confirm checks their answer)."
+    },
+    {
+      "said": "[Replying to your previous message: \"Meet founders building on Solana in Goa\"]\n\nYes, that's right.",
+      "kind": "yes-after-draft",
+      "where": "conversation",
+      "text": null,
+      "source": null,
+      "show_words": false,
+      "why": "Hermes puts the message they replied to into theirs; your words quoted back are still a yes. Record nothing new: the card already asks them.",
+      "skill": null
+    },
+    {
+      "said": "Main Goa mein Solana par kaam karne wale founders se milna chahta hoon.",
+      "kind": "translated",
+      "where": "conversation",
+      "text": "Meet founders building on Solana in Goa",
+      "source": "ambient",
+      "show_words": true,
+      "why": "The English is your translation.",
+      "skill": "\"Main Goa mein Solana par kaam karne wale founders se milna chahta hoon.\" recorded in English → `ambient`: the translation is yours."
+    },
+    {
+      "said": "Quiero conocer fundadores que construyen en Solana en Goa.",
+      "kind": "own-words",
+      "where": "conversation",
+      "text": "Conocer fundadores que construyen en Solana en Goa",
+      "source": "message",
+      "show_words": false,
+      "why": "Their words, in the language they used, cut but not added to.",
+      "skill": null
+    },
+    {
+      "said": "Ravi says he's looking for a cofounder in Goa.",
+      "kind": "quoted",
+      "where": "conversation",
+      "text": null,
+      "source": null,
+      "show_words": false,
+      "why": "The words and the want are Ravi's: record nothing unless they say the want is theirs.",
+      "skill": "\"Ravi says he's looking for a cofounder in Goa.\" → record nothing: the words and the want are Ravi's, unless they say the want is theirs."
+    },
+    {
+      "said": "Yes, that's what I want too: I'm looking for a cofounder in Goa.",
+      "kind": "own-words",
+      "where": "conversation",
+      "text": "Looking for a cofounder in Goa",
+      "source": "message",
+      "show_words": false,
+      "why": "After the quote, they say the want is theirs, in their own words.",
+      "skill": "After that, \"Yes, that's what I want too: I'm looking for a cofounder in Goa.\" → `message`: now the want and the words are theirs."
+    },
+    {
+      "said": "Yes.",
+      "kind": "confirms-quoted",
+      "where": "conversation",
+      "text": "Looking for a cofounder in Goa",
+      "source": "ambient",
+      "show_words": true,
+      "why": "They say the want is theirs but give no words: the words you record are yours (or Ravi's).",
+      "skill": "If, asked whether Ravi's want is theirs, they only say \"Yes.\" → `ambient`: the want is theirs, but the words you record are not."
+    },
+    {
+      "said": "Fwd: We are hiring a founding engineer in Bangalore.",
+      "kind": "quoted",
+      "where": "conversation",
+      "text": null,
+      "source": null,
+      "show_words": false,
+      "why": "A forwarded post is someone else's words and want: record nothing unless they say it is theirs.",
+      "skill": null
+    },
+    {
+      "said": "I spent all day fighting our payments integration again.",
+      "kind": "inferred",
+      "where": "conversation",
+      "text": "Meet engineers who have built payments infrastructure",
+      "source": "ambient",
+      "show_words": true,
+      "why": "Inferred: they did not ask for anything.",
+      "skill": null
+    },
+    {
+      "said": "I want to meet founders building on Solana in Goa.",
+      "kind": "own-words",
+      "where": "conversation",
+      "text": "Meet founders building on Solana in Goa",
+      "source": "message",
+      "show_words": false,
+      "why": "Their words, cut but not added to; it publishes.",
+      "skill": "\"I want to meet founders building on Solana in Goa.\" → `message`: record \"Meet founders building on Solana in Goa\" and it publishes."
+    },
+    {
+      "said": "I'm looking for a technical cofounder for a climate hardware startup.",
+      "kind": "own-words",
+      "where": "conversation",
+      "text": "Looking for a technical cofounder for a climate hardware startup",
+      "source": "message",
+      "show_words": false,
+      "why": "Their words, cut but not added to.",
+      "skill": null
+    },
+    {
+      "said": "I'm here to find people working on climate hardware.",
+      "kind": "setup",
+      "where": "onboarding",
+      "text": "Find people working on climate hardware",
+      "source": "onboarding",
+      "show_words": false,
+      "why": "Their own words in a setup answer.",
+      "skill": "A setup answer, \"I'm here to find people working on climate hardware.\" → `onboarding`."
+    },
+    {
+      "said": "find a surf buddy for early mornings in Goa",
+      "kind": "note",
+      "where": "note",
+      "text": "Find a surf buddy for early mornings in Goa",
+      "source": "note",
+      "show_words": false,
+      "why": "Their own words in their notes.",
+      "skill": "A line in their notes, \"find a surf buddy for early mornings in Goa\" → `note`."
+    },
+    {
+      "said": "Kerala trip with Ana next month",
+      "kind": "inferred",
+      "where": "note",
+      "text": "Meet people travelling to Kerala next month",
+      "source": "ambient",
+      "show_words": true,
+      "why": "A note they did not write as a request; the want is your reading of it.",
+      "skill": null
+    },
+    {
+      "said": "Priya is raising a seed round for her solar startup.",
+      "kind": "background",
+      "where": "background",
+      "text": "Raising a seed round for a solar startup",
+      "source": "ambient",
+      "show_words": false,
+      "why": "A background pass found it; there is no chat to show it in.",
+      "skill": null
+    }
+  ]
+}
