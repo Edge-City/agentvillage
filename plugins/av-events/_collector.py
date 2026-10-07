@@ -58,12 +58,19 @@ from ._core import (
     sqlite_read,
     uuid7,
 )
+from ._core import _LOCK_HELD, fcntl
 from . import _backup, _outcome_ask
 from ._cron import CronCursor, cron_job_id_from, pending_runs
 from ._edgeos import Ledger
 
 #: How often the flusher thread looks for finished cron executions.
 CRON_POLL_INTERVAL_S = 60.0
+
+#: The lock that makes one process per `$HERMES_HOME` the cron tail at plugin
+#: load (DATA-362), under `av-events/`. Whoever holds its `flock` started its
+#: flusher at load; the kernel drops it however that process ends, so the next
+#: process to load the plugin takes over.
+CRON_TAIL_LOCK = "cron_tail.lock"
 
 #: How often the flusher looks for a dead process's current file to adopt
 #: (DATA-94). Its first pass is its first tick.
@@ -452,6 +459,20 @@ class Collector:
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        #: Makes `_ensure_thread` check-and-start atomic: hooks run on more
+        #: than one thread, and plugin load starts the flusher too (DATA-362).
+        self._thread_lock = threading.Lock()
+        #: The open `cron_tail.lock` whose `flock` this collector holds, or None.
+        self._tail_lock: Any = None
+        #: Whether the flusher thread does its work (send passes, the cron
+        #: tail). Set by an event of this process's own, a backlog at load, or
+        #: holding the cron tail lock. A thread started without it is on
+        #: standby (DATA-362): it sends nothing and tails nothing, and only
+        #: retries the lock once a minute, so the tail passes to this process
+        #: when the one holding it goes.
+        self._flushing = False
+        #: monotonic time of the last try for the cron tail lock.
+        self._tail_try_at = 0.0
         self._backoff: dict[str, tuple[float, int]] = {}
         self._dropped: dict[str, Any] = {}
         self._atexit_registered = False
@@ -557,17 +578,86 @@ class Collector:
             return None
         return self.buffer
 
-    def _ensure_thread(self) -> None:
-        """Start the flusher lazily, so an idle tenant runs no extra thread."""
-        if self._thread is not None or self.config.idle:
+    def _ensure_thread(self, standby: bool = False) -> None:
+        """Start the flusher once, so an idle tenant runs no extra thread.
+
+        `standby` starts the thread without its work (`_flushing`), for plugin
+        load in a process that did not get the cron tail lock. Any other call
+        makes the thread the flusher, starting it if need be: a thread already
+        on standby is the same thread, and starts sending on its next tick.
+
+        Idempotent across threads: a hook and plugin load (or two hooks) that
+        race here start one thread between them, never two.
+        """
+        if self.config.idle or (self._thread is not None and (standby or self._flushing)):
             return
-        thread = threading.Thread(target=self._loop, name="av-events-flush", daemon=True)
-        self._thread = thread
-        thread.start()
-        self._register_atexit()
+        with self._thread_lock:
+            if self.config.idle:
+                return
+            if not standby and not self._flushing:
+                self._flushing = True
+                self._register_atexit()
+            if self._thread is None:
+                thread = threading.Thread(target=self._loop, name="av-events-flush", daemon=True)
+                self._thread = thread
+                thread.start()
+
+    def _claim_cron_tail(self) -> bool:
+        """Whether this process may tail cron without an event of its own (DATA-362).
+
+        True when this collector holds the `flock` on `av-events/cron_tail.lock`
+        (taken now, or already), and when locking is unavailable here (no
+        `fcntl`, a filesystem without `flock`, a directory that refuses the
+        file): then every active process tails, and ingest keeps one row per
+        `cron.run` id. False when another live process holds it. That process
+        is already tailing, so this one waits on standby, and a `hermes
+        dashboard` or a CLI beside a running gateway sends nothing just by
+        loading the plugin (the DATA-94 rule `has_backlog` keeps). Never
+        blocks, never raises.
+        """
+        if self._tail_lock is not None or fcntl is None:
+            return True
+        path = os.path.join(self.config.state_dir, CRON_TAIL_LOCK)
+        try:
+            fd = os.open(path, os.O_RDWR | os.O_CREAT, FILE_MODE)
+        except OSError:
+            return True
+        handle = os.fdopen(fd, "r+b", buffering=0)
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            handle.close()
+            return exc.errno not in _LOCK_HELD
+        self._tail_lock = handle
+        return True
+
+    def _release_cron_tail(self) -> None:
+        handle, self._tail_lock = self._tail_lock, None
+        if handle is not None:
+            try:
+                handle.close()
+            except OSError:
+                pass
+
+    def _take_over_cron_tail(self) -> bool:
+        """On standby: once every `CRON_POLL_INTERVAL_S`, try the cron tail
+        lock. Holding it makes this thread the flusher, so the tail outlives
+        the process that held it (a CLI that overlapped a gateway restart, a
+        dashboard stopped beside a quiet gateway). Flusher thread only."""
+        now = time.monotonic()
+        if now - self._tail_try_at < CRON_POLL_INTERVAL_S:
+            return False
+        self._tail_try_at = now
+        if self.plugin_disabled or not self.config.active or self.config.null_sink:
+            return False
+        if not self._claim_cron_tail():
+            return False
+        self._ensure_thread()
+        return True
 
     def recover_on_load(self) -> None:
-        """At plugin load: pick up what a previous process left on disk.
+        """At plugin load: pick up what a previous process left on disk, and
+        start the cron tail.
 
         The gateway exits through `os._exit`, so its last batch is never sent
         by the process that wrote it (DATA-94). This opens the buffer (which
@@ -575,17 +665,31 @@ class Collector:
         and, when anything is waiting, starts the flusher now rather than at
         the first event, which on a quiet chat may be hours after a restart.
         The flusher adopts other dead processes' files on its first tick and
-        sends them on its normal pass. Local file operations only; never
-        raises.
+        sends them on its normal pass.
+
+        DATA-362: the cron tail (`cron_tick`) runs on the flusher, and a
+        resident whose cron runs all stay silent never fires a hook, so a
+        flusher started only by an event never reported those runs. So the
+        process that takes the cron tail lock (`_claim_cron_tail`) starts the
+        flusher here even with nothing waiting, and any other active process
+        starts its thread on standby (`_take_over_cron_tail`). Not with a null
+        sink: there is nowhere to send what the tail would buffer.
+
+        Local file operations only; never raises.
         """
         try:
             if self.plugin_disabled or not self.config.active:
                 return
             buffer = self._ensure_buffer()
-            if buffer is None or not buffer.has_backlog():
+            if buffer is None:
                 return
-            self._ensure_thread()
-            self._wake.set()
+            if buffer.has_backlog():
+                self._ensure_thread()
+                self._wake.set()
+            if self.config.null_sink:
+                return
+            self._tail_try_at = time.monotonic()
+            self._ensure_thread(standby=not self._claim_cron_tail())
         except Exception:  # noqa: BLE001 - loading the plugin must never fail on this
             self.count("buffer_recover_error")
 
@@ -618,6 +722,8 @@ class Collector:
         self._wake.set()
         self._backup_wake.set()
         self._thread = None
+        # The successor collector's load takes the cron tail (DATA-362).
+        self._release_cron_tail()
         if self._atexit_registered:
             atexit.unregister(self.shutdown)
             self._atexit_registered = False
@@ -1460,6 +1566,14 @@ class Collector:
             self._wake.clear()
             if self._stop.is_set():
                 return
+            if not self._flushing:
+                # Standby (DATA-362): nothing of this process's own to send,
+                # and another process holds the cron tail.
+                try:
+                    if not self._take_over_cron_tail():
+                        continue
+                except Exception:  # noqa: BLE001 - the flusher never dies
+                    continue
             try:
                 self.tick()
             except Exception:  # noqa: BLE001 - the flusher never dies
@@ -1525,6 +1639,10 @@ class Collector:
                 # this one for a while (`_auth_block_expired` re-reads config).
                 self._auth_blocked_until = time.monotonic() + AUTH_BACKOFF_S
                 self.count("ingest_auth_rejected")
+                # And hand the cron tail lock to one (DATA-362): a process on
+                # standby takes it on its next try. This one keeps tailing,
+                # and ingest keeps one row per `cron.run` id.
+                self._release_cron_tail()
                 break
             elif not retryable:
                 # Ingest will never accept this batch. Quarantine it so the

@@ -1255,8 +1255,13 @@ tenant's RSVPs are recorded as receipted actions without receipt-grade evidence 
 
 ## Cron capture
 
-Spec §4.1 `cron.run`, §4.3, §7.1 "Cron capture". Hermes has no cron hook, so the flusher thread —
-never a hook — reads what the scheduler writes, once a minute, read-only:
+Spec §4.1 `cron.run`, §4.3, §7.1 "Cron capture". Hermes has no cron hook, so the flusher thread
+(never a hook) reads what the scheduler writes, once a minute, read-only. That thread starts at
+plugin load (DATA-362), not at the first event: in the one active process per `$HERMES_HOME` that
+holds the `flock` on `av-events/cron_tail.lock` it works from the start, so a resident whose runs
+all stay silent and who never chats still reports them, and in any other active process it waits
+on standby, sending and tailing nothing, until it has an event of its own or takes the lock (tried
+once a minute, and freed by a holder whose token ingest refuses). It reads:
 
 - `$HERMES_HOME/cron/executions.db` (`cron/executions.py`): every execution in a terminal state
   (`completed`, `failed`, `unknown` — immutable once written) that has not been reported. Its
