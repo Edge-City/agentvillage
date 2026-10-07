@@ -244,30 +244,40 @@ PUBLISH_RULE = (
 #: word in workspace/AGENTS.md, skills/record-intention/SKILL.md and
 #: skills/index-network/tools.md (tests/test_intention_source.py).
 SOURCE_RULE = (
-    "Choose source by whose words the text is, not by where you heard it. "
-    "Use source=message only when the resident said the want in their own words in this "
-    "conversation, so you could quote it back to them; you may cut words, but not add your own. "
-    "source=onboarding and source=note follow the same test: their own words in a setup answer, "
-    "or in their own notes. "
+    "Choose source by whose words the text is, not by where you heard it. Use source=message only "
+    "when the resident said the want in their own words in this conversation, so you could quote "
+    "it back to them; you may cut words, but not add your own. A translation is your wording: "
+    "record their words in the language they used for source=message, or show your translation "
+    "and use source=ambient. Words they quote or forward from someone else are not their own "
+    "words: use source=ambient, or ask whether the want is theirs. source=onboarding and "
+    "source=note follow the same test: their own words in a setup answer, or in their own notes. "
     "Anything you composed, summarised, generalised or inferred is source=ambient, whoever asked "
-    "for it, and so is anything a background or cron run found. "
-    "A resident asking you to write an intention for them is not stating one: the words you write "
-    "are yours."
+    "for it, and so is anything a background or cron run found. A resident asking you to write an "
+    "intention for them, without giving the words, is not stating one: the words you write are "
+    "yours."
 )
 
-#: DATA-384 AC#2: the agent's own wording is shown before it is captured.
+#: DATA-384 AC#2: the agent's own wording is captured as ambient and shown in
+#: the same reply. Capture first, then show: the fleet's Telegram display
+#: settings (install/display_defaults.ts: no interim messages, no streaming)
+#: drop text written beside a tool call, so a draft shown "first" never arrives.
 DRAFT_RULE = (
-    "In conversation, when the words are yours, first show the intention in chat, in one or two "
-    "lines, exactly as you will record it; then capture it with source=ambient. "
-    "Do not ask for a yes in chat: where approvals are set up the tool asks them itself, and a yes "
-    "in chat does not make the words theirs. "
-    "If they then say the want in their own words, withdraw the held one and capture their words "
-    "with source=message."
+    "In conversation, when the words are yours, capture them with source=ambient, then in your "
+    "reply show the intention in one or two lines, exactly as you recorded it, and say it is "
+    "waiting for their approval; the card asks them, so do not ask for a yes in chat, and a yes "
+    "in chat does not make the words theirs. If they then say the want in their own words, "
+    "withdraw the held one and capture their words with source=message."
 )
+
+#: DATA-384: the rule in one sentence, inside the first 500 characters of the
+#: description, which is all tool_search shows.
+SOURCE_SHORT = "source=message only for the resident's own words; anything you composed is ambient."
 
 TOOL_DESCRIPTION = (
     "Record an intention: something the person you work for wants, is looking for, or is open "
-    "to, that meeting people they do not already know could serve. This is the one front door "
+    "to, that meeting people they do not already know could serve. "
+    + SOURCE_SHORT
+    + " This is the one front door "
     "for intentions: never call Index create_intent or index_create_intent for a new want. "
     "This tool publishes to Index in the same call and returns the intention_id to keep for "
     "later update or withdraw calls. "
@@ -297,7 +307,7 @@ TOOL_SCHEMA: dict = {
                        "description": "capture (default), update, withdraw, or confirm a held ambient one."},
             "text": {"type": "string", "description": "The intention, as the resident will read it. Required for capture and update."},
             "summary": {"type": "string", "description": "Optional one-line summary."},
-            "source": {"type": "string", "enum": list(SOURCES), "description": "Whose words the text is: message, onboarding or note for the resident's own words, ambient for yours. Required for capture."},
+            "source": {"type": "string", "enum": list(SOURCES), "description": "Whose words the text is: message, onboarding or note only for the resident's own words; ambient for anything you composed, translated or inferred, and for words they quoted from someone else. Required for capture."},
             "publish": {"type": "boolean",
                         "description": "Default true. false only when the resident asked or the content is personal; then reason is required. Honoured for every source, ambient included: it stays local and is never proposed or published."},
             "reason": {"type": "string", "enum": sorted(LOCAL_REASONS),
@@ -1713,6 +1723,7 @@ __all__ = [
     "PUBLISH_RULE",
     "SOURCE_RULE",
     "DRAFT_RULE",
+    "SOURCE_SHORT",
     "RATE_CAP_ENV",
     "REFUSALS",
     "SOURCES",

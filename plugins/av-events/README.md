@@ -475,11 +475,15 @@ Explicit intents (source message, onboarding or note) are published to Index by
 default. The two legitimate reasons an explicit intent stays local: the resident asked, or the
 content is personal. The skill `skills/record-intention/SKILL.md` says the same. `source` names
 whose words the text is (DATA-384): `message`, `onboarding` or `note` only for the resident's own
-words, which the agent may cut but not add to; anything the agent composed or inferred is `ambient`,
-and in conversation the agent shows that wording before it captures it. `SOURCE_RULE` and
-`DRAFT_RULE` in `_record_intention.py` are the text; the tool description is built from them, and
-`tests/test_intention_source.py` checks that `workspace/AGENTS.md`, the skill and
-`skills/index-network/tools.md` carry every sentence of both. It is installed on
+words, which the agent may cut but not add to; anything the agent composed, translated or inferred,
+and words the resident quoted from someone else, is `ambient`, and in conversation the agent shows
+the words it recorded in the same reply (after the call: the fleet's Telegram settings drop text
+written beside a tool call). `SOURCE_RULE` and
+`DRAFT_RULE` in `_record_intention.py` are the text (with `SOURCE_SHORT`, one sentence inside the
+first 500 characters of the description, which is all `tool_search` shows); the tool description is
+built from them, and `tests/test_intention_source.py` pins whole each passage that states them: the
+`workspace/AGENTS.md` bullet, the skill's two sections, the `skills/index-network/tools.md`
+paragraph, the description and the schema's `source` description. It is installed on
 every tenant with the edge bundles and has no `requires_tools` gate (the tool sits behind Tool
 Search, which such a gate would not see); its text, the `workspace/AGENTS.md` routing line and the
 `create_intent` passages of `skills/index-network/tools.md` and

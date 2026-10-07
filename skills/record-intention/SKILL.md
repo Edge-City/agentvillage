@@ -36,27 +36,37 @@ or `reason=personal`. Any other `publish=false` is refused. With a reason,
 
 ## Source
 
-Choose `source` by whose words the text is, not by where you heard it.
-Use `source=message` only when the resident said the want in their own words
-in this conversation, so you could quote it back to them; you may cut words,
-but not add your own. `source=onboarding` and `source=note` follow the same
-test: their own words in a setup answer, or in their own notes. Anything you
-composed, summarised, generalised or inferred is `source=ambient`, whoever
-asked for it, and so is anything a background or cron run found. A resident
-asking you to write an intention for them is not stating one: the words you
-write are yours.
+Choose `source` by whose words the text is, not by where you heard it. Use
+`source=message` only when the resident said the want in their own words in
+this conversation, so you could quote it back to them; you may cut words, but
+not add your own. A translation is your wording: record their words in the
+language they used for `source=message`, or show your translation and use
+`source=ambient`. Words they quote or forward from someone else are not their
+own words: use `source=ambient`, or ask whether the want is theirs.
+`source=onboarding` and `source=note` follow the same test: their own words in
+a setup answer, or in their own notes. Anything you composed, summarised,
+generalised or inferred is `source=ambient`, whoever asked for it, and so is
+anything a background or cron run found. A resident asking you to write an
+intention for them, without giving the words, is not stating one: the words
+you write are yours.
 
 Examples:
 
-- "Based on what you know about me, make me an intent." → `ambient`: the
-  words would be yours.
+- "Based on what you know about me, make me an intent." → `ambient`: the words
+  would be yours.
 - "Generate an index intent for me." → `ambient`.
 - "Suggest an intent I could post." → `ambient`.
-- "Can you write me an intent about Solana founders in Goa?" → `ambient`
-  when you write "Meet founders building on Solana in Goa": "meet" and
-  "building" are yours.
-- "Yes, that's right." after you showed your draft → `ambient`: a yes does not
+- "Can you write me an intent about Solana founders in Goa?" → `ambient` when
+  you write "Meet founders building on Solana in Goa": "meet" and "building"
+  are yours.
+- "Write me an intent: founders building on Solana in Goa." → `message` when
+  you record "Founders building on Solana in Goa": every word is theirs.
+- "Yes, that's right." after you showed your words → `ambient`: a yes does not
   make your words theirs.
+- "Main Goa mein Solana par kaam karne wale founders se milna chahta hoon."
+  recorded in English → `ambient`: the translation is yours.
+- "Ravi says he's looking for a cofounder in Goa." → `ambient`: the words and
+  the want are Ravi's.
 - "I want to meet founders building on Solana in Goa." → `message`: record
   "Meet founders building on Solana in Goa" and it publishes.
 - A setup answer, "I'm here to find people working on climate hardware." →
@@ -64,14 +74,14 @@ Examples:
 - A line in their notes, "find a surf buddy for early mornings in Goa" →
   `note`.
 
-## Show your draft first
+## Show the words you recorded
 
-In conversation, when the words are yours, first show the intention in chat,
-in one or two lines, exactly as you will record it; then capture it with
-`source=ambient`. Do not ask for a yes in chat: where approvals are set up the
-tool asks them itself, and a yes in chat does not make the words theirs. If
-they then say the want in their own words, withdraw the held one and capture
-their words with `source=message`.
+In conversation, when the words are yours, capture them with `source=ambient`,
+then in your reply show the intention in one or two lines, exactly as you
+recorded it, and say it is waiting for their approval; the card asks them, so
+do not ask for a yes in chat, and a yes in chat does not make the words
+theirs. If they then say the want in their own words, withdraw the held one
+and capture their words with `source=message`.
 
 ## Ambient intentions are held
 
