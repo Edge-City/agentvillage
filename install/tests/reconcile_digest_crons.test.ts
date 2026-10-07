@@ -48,7 +48,7 @@ function writeStubHermes(dir: string, { rejectScheduleFlag = false, failEditIds 
     bin,
     `#!/usr/bin/env bash
 if [ "$1" = "--version" ]; then echo "stub 0.0.0"; exit 0; fi
-${rejectBlock}printf '%s\n' "$(printf '%s\x1f' "$@")" >> "${join(dir, "calls.log")}"
+${rejectBlock}printf '%s\x1e' "$(printf '%s\x1f' "$@")" >> "${join(dir, "calls.log")}"
 ${failBlock}exit 0
 `,
   );
@@ -56,7 +56,11 @@ ${failBlock}exit 0
   return bin;
 }
 
-/** Parse the stub's call log into argv arrays (one per invocation). */
+/**
+ * Parse the stub's call log into argv arrays (one per invocation). Calls end
+ * with \x1e, not a newline: an inline prompt (the token usage audit's) spans
+ * lines.
+ */
 function stubCalls(): string[][] {
   let raw: string;
   try {
@@ -65,7 +69,7 @@ function stubCalls(): string[][] {
     return [];
   }
   return raw
-    .split("\n")
+    .split("\x1e")
     .filter(Boolean)
     .map((line) => line.split("\x1f").filter((part) => part !== ""));
 }
@@ -188,6 +192,9 @@ test("fresh install creates digest crons (no heartbeat or Plaza selfie) on their
   expect(evening[3]).toBe("EVENING_BODY");
   expect(audit[2]).toBe(TOKEN_AUDIT.schedule);
   expect(audit[3]).toContain("deterministic local token usage audit");
+  // The whole multi-line prompt, Usage report line last, is one argument.
+  expect(audit[3]).toBe(TOKEN_AUDIT.promptBody!.trimEnd());
+  expect(audit[3].endsWith("\n\n(Usage report message - you can ask me to stop or manage it)")).toBe(true);
   expect(audit).toContain("--skill");
   expect(audit).toContain("token-usage-audit");
   expect(audit).toContain("--script");

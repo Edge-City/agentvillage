@@ -6,7 +6,8 @@
  *     the standalone reconcile run it (their spawned runs are checked in
  *     reconcile_digest_crons.test.ts, F9 and R1).
  *   - AC #2: every delivering prompt ends with its own manage line, verbatim;
- *     the prompts that never deliver carry none.
+ *     the prompts that never deliver carry none. The token usage audit's
+ *     inline prompt ends with the Usage report line (follow-up round).
  */
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -144,14 +145,21 @@ const PROMPT_LABELS: Record<string, string | null> = {
 };
 
 /**
- * Jobs that deliver to the resident with no manage line yet. The token usage
- * audit (inline prompt) was outside DATA-373's five; its label is Carter's
- * call. Listed so that a new delivering job fails until someone decides.
+ * Delivering jobs with an inline prompt (no prompt file) and their label. The
+ * token usage audit is opt-in; Carter named its label "Usage report". A new
+ * delivering job with neither a prompt file in PROMPT_LABELS nor an entry here
+ * fails the table test below until someone names its label.
  */
-const DELIVERING_WITHOUT_LINE = new Set(["Edge — token usage audit"]);
+const INLINE_LABELS: Record<string, string> = {
+  "Edge — token usage audit": "Usage report",
+};
 
 function promptText(spec: DigestCronSpec): string {
   return spec.promptFile ? readFileSync(join(SKILLS, spec.promptFile), "utf8") : spec.promptBody ?? "";
+}
+
+function labelOf(spec: DigestCronSpec): string | null | undefined {
+  return spec.promptFile ? PROMPT_LABELS[spec.promptFile.split("/").pop()!] : INLINE_LABELS[spec.name];
 }
 
 function lastLine(text: string): string {
@@ -191,23 +199,69 @@ describe("AC #2: each delivering prompt ends with its own manage line", () => {
   test("every delivering job's prompt ends with its label's line; every silent job's prompt has none", () => {
     for (const spec of DIGEST_CRON_SPECS) {
       const text = promptText(spec);
-      const label = spec.promptFile ? PROMPT_LABELS[spec.promptFile.split("/").pop()!] : null;
-      if (spec.deliver && !DELIVERING_WITHOUT_LINE.has(spec.name)) {
+      const label = labelOf(spec);
+      if (spec.deliver) {
         expect({ job: spec.name, label: typeof label }).toEqual({ job: spec.name, label: "string" });
         expect({ job: spec.name, last: lastLine(text) }).toEqual({ job: spec.name, last: manageLine(label!) });
       } else {
         expect({ job: spec.name, line: text.includes(MANAGE_TAIL) }).toEqual({ job: spec.name, line: false });
       }
     }
-    // The five DATA-373 names, so a rename cannot drop one silently.
-    const labelled = DIGEST_CRON_SPECS.filter((spec) => spec.deliver && !DELIVERING_WITHOUT_LINE.has(spec.name)).map((spec) => spec.name);
+    // The five DATA-373 names and the token usage audit, so a rename cannot drop one silently.
+    const labelled = DIGEST_CRON_SPECS.filter((spec) => spec.deliver).map((spec) => [spec.name, labelOf(spec)]);
     expect(labelled).toEqual([
-      "Edge — daily digest",
-      "Edge — negotiation summary",
-      "Edge — evening questions",
-      "Edge — opportunity drop (midday)",
-      "Edge — opportunity drop (evening)",
+      ["Edge — daily digest", "Daily digest"],
+      ["Edge — negotiation summary", "Conversation update"],
+      ["Edge — evening questions", "Evening questions"],
+      ["Edge — opportunity drop (midday)", "Introduction suggestion"],
+      ["Edge — opportunity drop (evening)", "Introduction suggestion"],
+      ["Edge — token usage audit", "Usage report"],
     ]);
+  });
+
+  test("the token usage audit's inline prompt ends with the Usage report line, after a blank line, and keeps it off a [SILENT] reply", () => {
+    const audit = DIGEST_CRON_SPECS.find((spec) => spec.name === "Edge — token usage audit")!;
+    expect(audit.promptFile).toBeUndefined();
+    expect(audit.deliver).toBe(true);
+    const body = audit.promptBody!;
+    // Exactly the last line, once, as a line of its own after a blank line; nothing after it (the installer trims).
+    expect(lastLine(body)).toBe("(Usage report message - you can ask me to stop or manage it)");
+    expect(body.endsWith("\n\n(Usage report message - you can ask me to stop or manage it)")).toBe(true);
+    expect(body.split(MANAGE_TAIL).length - 1).toBe(1);
+    expect(body.split("\n")).toHaveLength(3);
+    // The [SILENT] path adds nothing: the rule above the line says so, and the wake-false rule is unchanged.
+    expect(body).toContain("If the script emitted wakeAgent:false, return [SILENT].");
+    expect(body).toContain("a [SILENT] reply is only that, without the line.");
+    expect(body.indexOf("a [SILENT] reply is only that")).toBeLessThan(body.indexOf("(Usage report message"));
+    // The audit's own text is unchanged ahead of the new sentence.
+    expect(body.startsWith("A deterministic local token usage audit found an actionable driver. ")).toBe(true);
+  });
+
+  test("av-events strips every label the installer emits: the seed's manage_line is exactly these labels' lines", () => {
+    const seed = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "plugins", "av-events", "outcome_question.json"), "utf8"));
+    const manage = new RegExp(`^(?:${seed.normalise.manage_line})$`, "u");
+    const emitted = [...new Set([...Object.values(PROMPT_LABELS), ...Object.values(INLINE_LABELS)].filter((label): label is string => label !== null))];
+    expect(emitted.sort()).toEqual(["Conversation update", "Daily digest", "Evening questions", "Introduction suggestion", "Usage report"]);
+    for (const label of emitted) expect({ label, strips: manage.test(manageLine(label)) }).toEqual({ label, strips: true });
+    // The alternation names these five and nothing else.
+    const alternation = /^\\\(\(\?:([^)]+)\) message/.exec(seed.normalise.manage_line)![1].split("|").sort();
+    expect(alternation).toEqual(emitted.sort());
+  });
+
+  test("AGENTS.md maps every label to its job, and says a scheduled message can be stopped but not moved", () => {
+    const agents = readFileSync(join(import.meta.dir, "..", "..", "workspace", "AGENTS.md"), "utf8");
+    const section = agents.slice(agents.indexOf("## Cron schedule"), agents.indexOf("## Red lines"));
+    expect(section).toContain(`\`(<Label>${MANAGE_TAIL}\``);
+    const mapping = section.match(/Each label maps to its job: (.+?)\. When the user asks to stop one/)![1];
+    for (const spec of DIGEST_CRON_SPECS.filter((s) => s.deliver)) {
+      const label = labelOf(spec)!;
+      // The label's entry names this job's exact name in backticks.
+      const entry = mapping.split("; ").find((part) => part.startsWith(`${label} = `));
+      expect({ job: spec.name, entry: entry?.includes(`\`${spec.name}\``) }).toEqual({ job: spec.name, entry: true });
+    }
+    expect(section).toContain("pause that job with the cron tool");
+    expect(section).toContain("a message can be stopped or restarted, not moved");
+    expect(section).not.toContain("can't be changed");
   });
 
   test("the evening outcome question stays the whole reply: the manage line is never added to it", () => {
