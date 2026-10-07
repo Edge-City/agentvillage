@@ -70,7 +70,7 @@ import { basename, dirname, join } from "node:path";
 
 import { approvalsWaiting } from "./approvals-waiting";
 import { askQuestions } from "./ask-questions";
-import { acceptLink, type BriefOpportunity, type DailyBriefContext, buildDailyBriefContext, villageDate } from "./build-daily-brief-context";
+import { type BriefOpportunity, type DailyBriefContext, buildDailyBriefContext, villageDate } from "./build-daily-brief-context";
 import { OPPORTUNITY_DELIVERY_KEY, deliveryLogChanged, pruneDeliveryLog, readDeliveryLog, recordShowings } from "./delivery-state";
 import { dropOpportunity } from "./drop-opportunity";
 import { cleanName, cleanText, cleanTitle, connectionsUrl, cronScanHit, envOrDotenv } from "./proactive-text";
@@ -393,7 +393,7 @@ const PORTAL_WEB = "https://agents.edgecity.live";
 const lastSegment = (url: string) => url.slice(url.lastIndexOf("/") + 1);
 const profileLink = (url: unknown) => { const u = indexUrl("u", url); return u && `${PORTAL_WEB}/rolodex?person=${lastSegment(u)}`; };
 const signalLink = (url: unknown) => { const u = indexUrl("i", url); return u && `${PORTAL_WEB}/intents?intent=${lastSegment(u)}`; };
-const messageLink = (url: unknown) => { const a = acceptLink(url); return a ? `${a}&surface=telegram` : null; };
+const messageLink = (url: unknown) => { const o = indexUrl("o", url); return o && `${o}?surface=telegram`; };
 
 /** Counts strings that did not survive cleaning, so the run log can say how many were withheld. */
 class Withheld {
@@ -422,9 +422,9 @@ export interface PersonView {
   messageUrl: string | null;
 }
 
-function person(card: { name?: unknown; userUrl?: unknown; acceptUrl?: unknown }, w: Withheld): PersonView | null {
+function person(card: { name?: unknown; userUrl?: unknown; opportunityUrl?: unknown }, w: Withheld): PersonView | null {
   const name = w.name(card.name);
-  return name ? { name, profileUrl: profileLink(card.userUrl), messageUrl: messageLink(card.acceptUrl) } : null;
+  return name ? { name, profileUrl: profileLink(card.userUrl), messageUrl: messageLink(card.opportunityUrl) } : null;
 }
 
 /**

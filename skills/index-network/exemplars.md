@@ -20,10 +20,9 @@ Calendar bullets should put EdgeOS `highlighted: true` events first, then fill w
 > - {timeLocal} IST — {Interest-relevant event title} at {venue}. {One line on why it fits this user.}
 >
 > **3 conversations await you**
-> - [Maya]({userUrl}) — Talk to them about agent memory for long-running workflows. Direct overlap with how you handle persistent context, [accept and message Maya]({acceptUrl}).
-> - [Theo]({userUrl}) — Researching how information surfaces in decentralized networks. That's the type of thinking that sharpens protocol design, [accept and message Theo]({acceptUrl}).
-> - [Priya]({userUrl}) — Building community-owned data infrastructure. Aligned on the ownership layer and complementary on discovery, [accept and message Priya]({acceptUrl}).
-> Tapping a link accepts the introduction and opens Telegram with them.
+> - [Maya]({userUrl}) — Talk to them about agent memory for long-running workflows. Direct overlap with how you handle persistent context, [message Maya]({opportunityUrl}).
+> - [Theo]({userUrl}) — Researching how information surfaces in decentralized networks. That's the type of thinking that sharpens protocol design, [message Theo]({opportunityUrl}).
+> - [Priya]({userUrl}) — Building community-owned data infrastructure. Aligned on the ownership layer and complementary on discovery, [message Priya]({opportunityUrl}).
 >
 > **Help your community**
 > - [Remi]({userUrl}) — Looking for a technical co-founder for his regenerative education platform. Needs someone who thinks in systems and has shipped infrastructure. Know anyone, make intro
@@ -42,7 +41,7 @@ When there is no current organizer announcement you can verify, omit the section
 > - {timeLocal} IST — {Event title} at {venue}. {One line on why it fits this user.}
 >
 > **1 conversation awaits you**
-> - [Priya]({userUrl}) — Building community-owned data infrastructure. Aligned on the ownership layer and complementary on discovery, [accept and message Priya]({acceptUrl}).
+> - [Priya]({userUrl}) — Building community-owned data infrastructure. Aligned on the ownership layer and complementary on discovery, [message Priya]({opportunityUrl}).
 >
 > That's it for now. You can always ask me for more detail, or any other questions you have!
 
@@ -55,7 +54,7 @@ If the live calendar is unavailable (call failed, or no Edge City India calendar
 > Here's what you need to know today:
 >
 > **1 conversation awaits you**
-> - [Ashish]({userUrl}) — His work spans generative software, AI infrastructure, creative AI design, and deep learning research. Several concrete angles for a first conversation, [accept and message Ashish]({acceptUrl}).
+> - [Ashish]({userUrl}) — His work spans generative software, AI infrastructure, creative AI design, and deep learning research. Several concrete angles for a first conversation, [message Ashish]({opportunityUrl}).
 >
 > I don't have today's Edge City India schedule this morning — the Edge City portal or the organisers will have what's on.
 >
@@ -63,7 +62,7 @@ If the live calendar is unavailable (call failed, or no Edge City India calendar
 
 ### Same person, more than one opportunity
 
-One bullet per opportunity, each with its own `acceptUrl`. Do not merge several opportunities into one bullet. They still count toward the three.
+One bullet per opportunity, each with its own `opportunityUrl`. Do not merge several opportunities into one bullet. They still count toward the three.
 
 ## Connector-flow rendering rule
 

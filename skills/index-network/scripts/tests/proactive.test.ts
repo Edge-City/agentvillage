@@ -386,34 +386,30 @@ describe("faults are silent, exit 0 for agent jobs, and never write over the sta
 });
 
 describe("the drops, the evening note and the follow-up: names and Index links only", () => {
-  // Restored after 988f49ac removed them: the message link is now the card's signed `acceptUrl`
-  // (`/o/<id>?action=accept&viewer=..&sig=..`, 47b537c7), never a built `/o/<id>`; the third-party
-  // text and foreign-host guards these tests pinned are unchanged.
-  const ACCEPT = (id: string) => `https://index.network/o/${id}?action=accept&viewer=v1&sig=s1`;
-  const MSG = (id: string) => `${ACCEPT(id)}&surface=telegram`; // what person() emits: the signed link plus the surface
+  const MSG = (id: string) => `https://index.network/o/${id}?surface=telegram`; // what person() emits: the opportunity link plus the surface
 
-  test("a drop wakes with one person, the signed accept link and no card text, and marks its own day", async () => {
-    const result = await runProactive("drop-midday", options({ drop: async () => ({ opportunity: card("Maya Rao", "op1", { redelivery: true, acceptUrl: ACCEPT("op1") }) }) }));
+  test("a drop wakes with one person, the message link and no card text, and marks its own day", async () => {
+    const result = await runProactive("drop-midday", options({ drop: async () => ({ opportunity: card("Maya Rao", "op1", { redelivery: true }) }) }));
     expect(output(result.lines)).toEqual({
       agentName: "Edge", job: "opportunity-drop", date: DATE, kind: "conversation", seenBefore: true,
       person: { name: "Maya Rao", profileUrl: `${PORTAL_WEB}/rolodex?person=op1-user`, messageUrl: MSG("op1") },
     });
     expect(result.lines.join("\n")).not.toContain(THIRD_PARTY);
     expect(state()[RUNS_KEY]).toEqual({ "drop-midday": DATE });
-    // A foreign host, a connect redirect (`/c/<code>`) or a card without acceptUrl: no message link.
-    const evening = await runProactive("drop-evening", options({ drop: async () => ({ opportunity: card("Lena", "op3", { feedCategory: "connector-flow", acceptUrl: "https://evil.example/o/op3?action=accept&viewer=v1&sig=s1" }) }) }));
+    // A foreign host, a connect redirect (`/c/<code>`) or a card without opportunityUrl: no message link.
+    const evening = await runProactive("drop-evening", options({ drop: async () => ({ opportunity: card("Lena", "op3", { feedCategory: "connector-flow", opportunityUrl: "https://evil.example/o/op3" }) }) }));
     expect(output(evening.lines).kind).toBe("community-ask");
     expect(output(evening.lines).person.messageUrl).toBeNull();
     rmSync(stateFile());
-    const redirect = await runProactive("drop-midday", options({ drop: async () => ({ opportunity: card("Lena", "op3", { acceptUrl: "https://index.network/c/abc123" }) }) }));
+    const redirect = await runProactive("drop-midday", options({ drop: async () => ({ opportunity: card("Lena", "op3", { opportunityUrl: "https://index.network/c/abc123" }) }) }));
     expect(output(redirect.lines).person.messageUrl).toBeNull();
     rmSync(stateFile());
-    const plain = await runProactive("drop-midday", options({ drop: async () => ({ opportunity: card("Lena", "op3") }) }));
-    expect(output(plain.lines).person.messageUrl).toBeNull();
+    const none = await runProactive("drop-midday", options({ drop: async () => ({ opportunity: card("Lena", "op3", { opportunityUrl: undefined }) }) }));
+    expect(output(none.lines).person.messageUrl).toBeNull();
   });
 
-  test("the evening note: one person with the signed accept link, or the closeout question", async () => {
-    const person = await runProactive("evening", options({ evening: async () => ({ name: "Arjun", headline: THIRD_PARTY, userUrl: "https://index.network/u/a", opportunityUrl: "https://index.network/o/b", acceptUrl: ACCEPT("b") }) }));
+  test("the evening note: one person with the message link, or the closeout question", async () => {
+    const person = await runProactive("evening", options({ evening: async () => ({ name: "Arjun", headline: THIRD_PARTY, userUrl: "https://index.network/u/a", opportunityUrl: "https://index.network/o/b" }) }));
     expect(output(person.lines)).toEqual({ agentName: "Edge", job: "evening-note", date: DATE, person: { name: "Arjun", profileUrl: `${PORTAL_WEB}/rolodex?person=a`, messageUrl: MSG("b") } });
     expect(person.lines.join("\n")).not.toContain(THIRD_PARTY);
     rmSync(stateFile());
@@ -421,11 +417,11 @@ describe("the drops, the evening note and the follow-up: names and Index links o
     expect(output(closeout.lines)).toEqual({ agentName: "Edge", job: "evening-note", date: DATE, closeoutQuestion: "Quick closeout check: did AgentVillage help you meet anyone?" });
   });
 
-  test("the follow-up: names, signed accept links and the resident's own signals; silent when no name survives", async () => {
+  test("the follow-up: names, message links and the resident's own signals; silent when no name survives", async () => {
     const follow = (needs: string[]) => async () => ({
       signals: [{ summary: "Looking for soil scientists", url: "https://index.network/i/s1" }],
-      needsAttention: needs.map((name, n) => ({ name, headline: THIRD_PARTY, summary: THIRD_PARTY, userUrl: `https://index.network/u/n${n}`, opportunityUrl: `https://index.network/o/n${n}`, acceptUrl: ACCEPT(`n${n}`) })),
-      waiting: [{ name: "Talking Person", headline: THIRD_PARTY, summary: THIRD_PARTY, userUrl: "https://index.network/u/t", opportunityUrl: "https://index.network/o/t", acceptUrl: ACCEPT("t") }],
+      needsAttention: needs.map((name, n) => ({ name, headline: THIRD_PARTY, summary: THIRD_PARTY, userUrl: `https://index.network/u/n${n}`, opportunityUrl: `https://index.network/o/n${n}` })),
+      waiting: [{ name: "Talking Person", headline: THIRD_PARTY, summary: THIRD_PARTY, userUrl: "https://index.network/u/t", opportunityUrl: "https://index.network/o/t" }],
       newlyResolved: [],
     });
     const result = await runProactive("negotiation", options({ followUp: follow(["Maya Rao"]) }));

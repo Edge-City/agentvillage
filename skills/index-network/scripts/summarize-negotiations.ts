@@ -294,7 +294,6 @@ export interface FollowUpCard {
   summary: string;
   userUrl?: string;
   opportunityUrl?: string;
-  acceptUrl?: string;
 }
 
 function followUpCard(opp: BriefOpportunity): FollowUpCard | null {
@@ -309,7 +308,6 @@ function followUpCard(opp: BriefOpportunity): FollowUpCard | null {
     summary: linked.mainText || headline,
     userUrl: linked.userUrl,
     opportunityUrl: linked.opportunityUrl,
-    ...(linked.acceptUrl ? { acceptUrl: linked.acceptUrl } : {}),
   };
 }
 

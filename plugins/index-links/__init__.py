@@ -4,10 +4,9 @@ Hermes calls ``transform_tool_result`` after a tool returns and before the
 model sees the result. A string return replaces that result. ``None`` leaves
 it unchanged.
 
-A signed accept link (``action=accept``) gains ``surface=telegram``. The
-signature does not cover surface, and a plain ``/o/<id>`` opportunity link
-is left as Index minted it. A signed decline link is left as Index minted
-it. A person link becomes ``https://agents.edgecity.live/rolodex?person=<userId>``.
+A plain ``/o/<id>`` opportunity link gains ``surface=telegram``, so opening it
+goes straight to the person's Telegram. One that already has a query is left
+as Index minted it. A person link becomes ``https://agents.edgecity.live/rolodex?person=<userId>``.
 A signal link becomes ``https://agents.edgecity.live/intents?intent=<intentId>``.
 Every other ``index.network`` URL stays as Index minted it.
 
@@ -24,8 +23,6 @@ Bounds (SEREF-OVERLAY refute F2-F4, N1, N4):
   so no input makes a match run in more than linear time.
 * Trailing sentence punctuation (``.`` ``,`` ``;`` ``:`` ``!`` ``?`` ``*``, a
   closing bracket or quote) after a bare URL stays outside the URL.
-* A query that repeats ``action``, ``viewer``, ``sig``, ``surface`` or ``to``
-  is never rewritten.
 * Hosts match in ASCII only, so a Unicode look-alike host is left alone.
 """
 
@@ -34,7 +31,7 @@ from __future__ import annotations
 import os
 import re
 from typing import Any, Optional
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 _OPP_PATH = re.compile(r"^/o/([A-Za-z0-9_-]+)/?$")
 _USER_PATH = re.compile(r"^/u/([A-Za-z0-9_-]+)/?$")
@@ -53,8 +50,6 @@ _URL_CHAR = re.compile(_URL_CHARS)
 #: Sentence punctuation a linkifier leaves outside a bare URL (refute F4). Not
 #: ``_``, ``-`` or ``=``: those can end a base64url signature.
 _TRAILING = ".,;:!?*)]'\"\u2019\u201d\u00bb"
-#: Query keys that must appear at most once for a rewrite (refute N1).
-_SINGLE_KEYS = ("action", "viewer", "sig", "surface", "to")
 #: Hermes's own security-guidance plugin skips results over this size too.
 MAX_RESULT_BYTES = 256 * 1024
 #: Index tool-name prefixes: MCP server ``index`` (two Hermes spellings) and
@@ -78,32 +73,12 @@ def _url_path(url: Any) -> str:
     return parts.path or "/"
 
 
-def _query_pairs(url: str) -> list[tuple[str, str]]:
-    return parse_qsl(urlsplit(url).query, keep_blank_values=True)
-
-
-def _with_surface(url: str) -> str:
-    """Append ``surface=telegram``. Surface is not part of the signature."""
-    parts = urlsplit(url)
-    query = [(key, value) for key, value in parse_qsl(parts.query, keep_blank_values=True) if key not in ("surface", "to")]
-    query.append(("surface", _SURFACE))
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
-
-
 def rewrite_opportunity_link(url: str) -> str:
-    """A signed accept link gains ``surface=telegram``. A plain ``/o/<id>`` stays.
-
-    A link that repeats ``action``, ``viewer``, ``sig``, ``surface`` or ``to``
-    stays as minted: which duplicate counts is the verifier's call, not ours.
-    """
-    pairs = _query_pairs(url)
-    keys = [key for key, _ in pairs]
-    if any(keys.count(key) > 1 for key in _SINGLE_KEYS):
+    """A plain ``/o/<id>`` gains ``surface=telegram``. One with a query stays as minted."""
+    parts = urlsplit(url)
+    if parts.query:
         return url
-    query = dict(pairs)
-    if query.get("action", "") == "accept" and query.get("viewer") and query.get("sig"):
-        return _with_surface(url)
-    return url
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode({"surface": _SURFACE}), parts.fragment))
 
 
 def _portal(path: str) -> str:

@@ -68,7 +68,7 @@ Always include source detail if you make a claim from forum lookup:
 - link only if the result returned one and the user wants to open it
 
 Do not call forum matches "opportunities." They do not have Index
-`acceptUrl`s. If a forum result suggests a real person follow-up, ask before
+opportunity links. If a forum result suggests a real person follow-up, ask before
 turning it into an Index search or message draft.
 
 ## Safety

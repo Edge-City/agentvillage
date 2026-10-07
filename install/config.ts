@@ -174,8 +174,8 @@ export const TELEGRAM_LINK_PREVIEWS_KEY = "disable_link_previews";
 /**
  * Turn Telegram link previews off: `platforms.telegram.extra.disable_link_previews: true`
  * (SEREF-OVERLAY refute F1). Telegram's servers fetch the first link in a bot
- * message to build its preview; that link is often a resident's signed accept
- * link (`acceptUrl`), and a crawler must never be the one to open it. Hermes's
+ * message to build its preview; that link is often a resident's message link
+ * (`/o/<id>?surface=telegram`), and a crawler must never be the one to open it. Hermes's
  * Telegram adapter reads the key from `extra` (default `false`); a copy at the
  * top of the `telegram` block is promoted over `extra`, so one there that is not
  * `true` is set to `true` as well.
