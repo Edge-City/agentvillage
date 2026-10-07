@@ -118,10 +118,10 @@ describe("agentName in every proactive agent job's Script Output", () => {
 
 describe("the prompts that write to the resident take the name from the Script Output", () => {
   const PROMPTS = [
-    "edge-esmeralda/prompts/brief.md",
-    "edge-esmeralda/prompts/opportunity-drop.md",
-    "edge-esmeralda/prompts/ask-questions.md",
-    "edge-esmeralda/prompts/negotiation-summary.md",
+    "index-network/prompts/brief.md",
+    "index-network/prompts/opportunity-drop.md",
+    "index-network/prompts/ask-questions.md",
+    "index-network/prompts/negotiation-summary.md",
   ];
   test.each(PROMPTS)("%s", (file) => {
     const text = readFileSync(join(SKILLS, file), "utf8");

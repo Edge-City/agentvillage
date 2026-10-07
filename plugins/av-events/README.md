@@ -477,7 +477,7 @@ content is personal. The skill `skills/record-intention/SKILL.md` says the same.
 every tenant with the edge bundles and has no `requires_tools` gate (the tool sits behind Tool
 Search, which such a gate would not see); its text, the `workspace/AGENTS.md` routing line and the
 `create_intent` passages of `skills/index-network/tools.md` and
-`skills/edge-esmeralda/prompts/memory-signals.md` all apply only if `record_intention` is available
+`skills/index-network/prompts/memory-signals.md` all apply only if `record_intention` is available
 (in the tool list, or found with `tool_search` and called through `tool_call`).
 
 | Call | Index | Result / event |
