@@ -372,11 +372,18 @@ label line, `(<Label> message - you can ask me to stop or manage it)`, which
 the model writes as the message's last line and leaves off a `[SILENT]`
 reply. The labels and their jobs: Daily digest = `Edge — daily digest`;
 Conversation update = `Edge — negotiation summary`; Evening questions =
-`Edge — evening questions`; Introduction suggestion = both opportunity drops
-(and a resident's `Edge — template: digest-preview`); Usage report =
-`Edge — token usage audit` (opt-in). A resident who asks to stop one gets
-that job paused through the agent's cron tool (`workspace/AGENTS.md`, "Cron
-schedule"); a roll keeps the pause, and times stay fixed.
+`Edge — evening questions`; Introduction suggestion = both opportunity drops;
+Usage report = `Edge — token usage audit` (opt-in). Template jobs added by an
+operator carry their base prompt's line. The agent pauses and resumes only the
+daily digest and the token usage audit on a resident's request
+(`workspace/AGENTS.md`, "Cron schedule"); it does not pause the other three
+and says they can't be stopped yet. An update or roll re-applies the contact
+style (the control plane resumes a paused evening questions, opportunity drop
+or negotiation summary that the style wants on, unless an admin hold covers
+it) and the job settings (any job whose saved setting is enabled is resumed),
+so until DATA-376 a pause set in chat survives only for the daily digest and
+the token usage audit, and only while no saved setting turns them on. Times
+stay fixed.
 av-events strips one trailing manage line (`normalise.manage_line` in
 `plugins/av-events/outcome_question.json`) before matching the evening
 outcome question, so a model that adds the line to the question still arms

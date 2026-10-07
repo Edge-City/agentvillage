@@ -17,7 +17,8 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import YAML from "yaml";
 
 import { configureCronScriptTimeout, configureCronWrapResponse } from "../config";
-import { DIGEST_CRON_SPECS, type DigestCronSpec } from "../install_index";
+import { DIGEST_CRON_SPECS, type DigestCronSpec, templateCronSpec } from "../install_index";
+import { TEMPLATE_NAMES } from "../../skills/index-network/scripts/job-settings";
 
 const ORIGINAL_HOME = process.env.HERMES_HOME;
 let home: string;
@@ -232,6 +233,8 @@ describe("AC #2: each delivering prompt ends with its own manage line", () => {
     // The [SILENT] path adds nothing: the rule above the line says so, and the wake-false rule is unchanged.
     expect(body).toContain("If the script emitted wakeAgent:false, return [SILENT].");
     expect(body).toContain("a [SILENT] reply is only that, without the line.");
+    // The prompt files' wording for the line itself (brief.md "# Last line").
+    expect(body).toContain("exactly as written: never translated, reworded or formatted, with nothing after it");
     expect(body.indexOf("a [SILENT] reply is only that")).toBeLessThan(body.indexOf("(Usage report message"));
     // The audit's own text is unchanged ahead of the new sentence.
     expect(body.startsWith("A deterministic local token usage audit found an actionable driver. ")).toBe(true);
@@ -248,20 +251,47 @@ describe("AC #2: each delivering prompt ends with its own manage line", () => {
     expect(alternation).toEqual(emitted.sort());
   });
 
-  test("AGENTS.md maps every label to its job, and says a scheduled message can be stopped but not moved", () => {
+  test("AGENTS.md maps every label to exactly its jobs; the agent stops only Daily digest and Usage report", () => {
     const agents = readFileSync(join(import.meta.dir, "..", "..", "workspace", "AGENTS.md"), "utf8");
     const section = agents.slice(agents.indexOf("## Cron schedule"), agents.indexOf("## Red lines"));
     expect(section).toContain(`\`(<Label>${MANAGE_TAIL}\``);
-    const mapping = section.match(/Each label maps to its job: (.+?)\. When the user asks to stop one/)![1];
+    const mapping = section.match(/Each label maps to its job: (.+?)\.\n/)![1];
+    // Label -> the backticked job names its entry lists, read back from the text.
+    const listed = new Map(
+      mapping.split("; ").map((part) => {
+        const [label, rest] = part.split(" = ");
+        return [label, [...rest.matchAll(/`([^`]+)`/g)].map((m) => m[1]).sort()] as const;
+      }),
+    );
+    // Exactly the default delivering jobs under their labels: no job missing, none extra, no template (operator previews).
+    const expected = new Map<string, string[]>();
     for (const spec of DIGEST_CRON_SPECS.filter((s) => s.deliver)) {
       const label = labelOf(spec)!;
-      // The label's entry names this job's exact name in backticks.
-      const entry = mapping.split("; ").find((part) => part.startsWith(`${label} = `));
-      expect({ job: spec.name, entry: entry?.includes(`\`${spec.name}\``) }).toEqual({ job: spec.name, entry: true });
+      expected.set(label, [...(expected.get(label) ?? []), spec.name].sort());
     }
-    expect(section).toContain("pause that job with the cron tool");
-    expect(section).toContain("a message can be stopped or restarted, not moved");
+    expect(Object.fromEntries(listed)).toEqual(Object.fromEntries(expected));
+    expect(section).not.toContain("template");
+    // B1: the agent pauses only the two a roll leaves paused; the other three it must not pause.
+    expect(section).toContain("You can stop the Daily digest and the Usage report yourself");
+    expect(section).toContain("pause that job with the `cronjob_manage` tool");
+    expect(section).toContain("Do not pause Conversation update, Evening questions or Introduction suggestion");
+    expect(section).toContain("you can't stop those yet and that this is being worked on");
+    // S1: resume only its own stops, and no promise that a missed one waits.
+    expect(section).toContain("only a message you stopped at their request; never restart one that was switched off some other way");
+    expect(section).toContain("one it missed while stopped may arrive right away");
+    expect(section).toContain("no scheduled message can be moved or added");
     expect(section).not.toContain("can't be changed");
+  });
+
+  test("every template a job can be added from delivers on a labelled prompt, so it carries its base job's line", () => {
+    // Templates are operator-added previews (install/jobs.ts add): AGENTS.md leaves them out, but none may deliver unlabelled.
+    expect([...TEMPLATE_NAMES].sort()).toEqual(["brief", "digest-preview", "evening-ask"]);
+    for (const template of TEMPLATE_NAMES) {
+      const spec = templateCronSpec(template, "0 9 * * *");
+      const label = labelOf(spec);
+      expect({ template, deliver: spec.deliver, label: typeof label }).toEqual({ template, deliver: true, label: "string" });
+      expect({ template, last: lastLine(promptText(spec)) }).toEqual({ template, last: manageLine(label!) });
+    }
   });
 
   test("the evening outcome question stays the whole reply: the manage line is never added to it", () => {

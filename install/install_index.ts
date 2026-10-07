@@ -405,7 +405,7 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
       "If user-facing delivery is warranted, keep it brief: explain whether scheduled background work drove spend, name the likely cron only when confidence is high or medium, and suggest pausing or reporting the driver.",
       "If the script emitted wakeAgent:false, return [SILENT].",
       // DATA-373 follow-up: the manage line, as the delivering prompt files end.
-      "End any message you deliver with one blank line and then the line below, exactly as written and with nothing after it; a [SILENT] reply is only that, without the line.",
+      "End any message you deliver with one blank line and then the line below, exactly as written: never translated, reworded or formatted, with nothing after it; a [SILENT] reply is only that, without the line.",
     ].join(" ") + "\n\n(Usage report message - you can ask me to stop or manage it)",
     name: "Edge — token usage audit",
     deliver: true,
