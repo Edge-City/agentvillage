@@ -251,6 +251,22 @@ once as `prompt.oversize bytes=<n>` and counted as `prompt_oversize`. `tools_has
 `prompt.registered` hash are all computed over `sanitize(body)`, the bytes that leave, so a body with a
 credential shape redacted in it still verifies at the door.
 
+**Capability URLs (DATA-394).** After the credential shapes, `sanitize()` cuts every
+`index.network` URL (any subdomain, with or without a scheme) to its path: the whole query string
+and fragment go, so a signed one-tap accept link
+(`/o/<id>?action=accept&viewer=..&sig=..&surface=telegram`, a bearer capability since rc20) leaves
+the box as `/o/<id>`. An `edgecity.live` URL loses its query only when it names `sig` or `viewer`
+(the portal's `rolodex?person=` and `intents?intent=` links stay as they are). Then, fail-closed,
+every `sig` or `viewer` parameter value left anywhere (another host, a URL the first pass did not
+read: a host split by an invisible character or a Unicode dot; raw, JSON-escaped or
+percent-encoded) becomes `[redacted]`. Nothing is labelled, nothing else in the string changes, and
+dict keys are not touched (as for the credential shapes). Every scan is linear (`str.find` for the
+hosts, no backtracking regex); the tests time 1 MB hostile strings.
+No event carries message text today, so this is a second belt; the archive's own redaction
+(agentvillage-data `archive_redaction_v3`, `src/archive/redact.ts`) is the fix, and the two rules
+are kept in step (`strip_capability_urls`, `_core.py`). A system prompt or tool schema that holds
+such a URL hashes differently once after the change.
+
 `session.ended` carries the per-session hook stats — `hook_calls`, `hook_failures`, `hook_overruns`,
 `hook_max_ms`, `slowest_hook`, `degraded`. That is the data source for the guardrails p95 latency
 gate; without it the 50 ms budget is measured and then thrown away.

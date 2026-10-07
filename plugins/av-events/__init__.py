@@ -32,6 +32,7 @@ from ._core import (
     hash_text,
     iso_from_epoch,
     sanitize,
+    strip_capability_urls,
     uuid7,
 )
 from ._cron import cron_job_id_from
@@ -1175,6 +1176,7 @@ __all__ = [
     "UNLISTED_TOOL_CATEGORY",
     "tool_category",
     "sanitize",
+    "strip_capability_urls",
     "hash_obj",
     "hash_text",
     "plan_intentions",

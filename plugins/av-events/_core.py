@@ -323,11 +323,287 @@ def register_literal_secret(value: str) -> None:
             _LITERAL_SECRETS.add(value)
 
 
+# --------------------------------------------------------------------------
+# Capability URLs (DATA-394)
+# --------------------------------------------------------------------------
+#
+# Since overlay rc20 (2026-10-07) proactive messages carry Index's signed
+# one-tap accept link,
+# `https://index.network/o/<id>?action=accept&viewer=<token>&sig=<token>&surface=telegram`.
+# `sig` is a bearer capability: whoever holds the URL can accept the
+# opportunity for the resident. No event carries message text today, so this
+# is a second belt for every string an event sends, not the fix (the fix is
+# the archive's redaction rule 4, `archive_redaction_v3`, in agentvillage-data
+# `src/archive/redact.ts`, whose header has the full definition and its
+# accepted limits). The rule is the same there and here; keep them in step:
+#
+# - pass 1: a URL whose host is `index.network` or any subdomain of it (any
+#   case, a root dot and a port allowed; with or without a scheme) loses its
+#   whole query string and fragment; a URL whose host is `edgecity.live` or a
+#   subdomain (the portal, whose `/rolodex?person=` and `/intents?intent=`
+#   links carry no capability) loses them only when they name `sig` or
+#   `viewer` (after percent- and \uXXXX-decoding);
+# - pass 2, fail-closed: every `sig` or `viewer` parameter value left anywhere
+#   (any host, a URL pass 1 did not read: a host split by an invisible
+#   character, a Unicode dot; raw, JSON-escaped or percent-encoded) becomes
+#   `[redacted]`;
+# - nothing else changes. Nothing is labelled.
+#
+# Linear time: hosts by `str.find` on an ASCII-lower-cased copy, a label walk
+# back of at most 253 characters, each URL scanned once, and every regex
+# anchored on a short slice or free of nested or adjacent unbounded
+# quantifiers. No string size is relied on; the tests time 1 MB hostile
+# strings.
+
+_CAPABILITY_HOSTS = ("index.network", "edgecity.live")
+_MAX_HOST_CHARS = 253
+_LABEL_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-")
+_HOST_GLUE = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.%-")
+_ENCODED_SLASH_BEFORE = re.compile(r"%(?:25){0,2}2[Ff]\Z")
+_AUTHORITY_SLASHES = re.compile(r"(?:/|\\/)(?:/|\\/)\Z|:(?:/|\\/)\Z")
+_RAW_TAIL = re.compile(r"(?:[/?#]|\\+/|\\+u00(?:2[fF]|3[fF]|23))")
+_ENCODED_TAIL = re.compile(r"%(?:25){0,2}(?:2[fF]|3[fF]|23)")
+_RAW_QUERY = re.compile(r"[?#]|\\u00(?:3[fF]|23)")
+_ENCODED_QUERY = re.compile(r"%(?:25){0,2}(?:3[fF]|23)|[?#]|\\u00(?:3[fF]|23)")
+_PORT = re.compile(r":[0-9]{1,5}")
+_URL_STOP_CHARS = frozenset(
+    [chr(c) for c in range(0x00, 0x21)]
+    + [chr(c) for c in range(0x7F, 0xA1)]
+    + [chr(0x1680)]
+    + [chr(c) for c in range(0x2000, 0x200B)]
+    + [chr(0x2028), chr(0x2029), chr(0x202F), chr(0x205F), chr(0x3000), chr(0xFEFF)]
+    + list('<>"`')
+)
+_HEX4 = re.compile(r"[0-9a-fA-F]{4}")
+_TRAILING = frozenset(".,:;!?*_~'")
+_CLOSERS = {")": "(", "]": "[", "}": "{"}
+# `\Z`, not `$`: Python's `$` also matches before a final newline, and `_decoded_lower` makes `%0A` one.
+_CAPABILITY_PARAM = re.compile(r"(?:^|[?&#;])(?:sig|viewer)(?:[=&#;]|\Z)")
+_CAPABILITY_TOKEN = re.compile(
+    r"(?:(?<![A-Za-z0-9_-])|(?<=%26)|(?<=%2526)|(?<=%252526)|(?<=%3[Ff])|(?<=%253[Ff])|(?<=%23)|(?<=%2523)"
+    r"|(?<=\\u0026)|(?<=\\u003[fF])|(?<=\\u0023))"
+    r"(sig|viewer)(=|%(?:25){0,2}3[dD]|\\u003[dD])",
+    # `re.ASCII`: without it IGNORECASE folds `ſ`, `K` (Kelvin), `ı` and `İ` into s, k and i, which JS `/i`
+    # (no `u` flag, as in redact.ts) does not; the two implementations must give the same bytes.
+    re.IGNORECASE | re.ASCII,
+)
+_CAPABILITY_HINT = re.compile(r"index\.network|edgecity\.live|sig|viewer", re.IGNORECASE | re.ASCII)
+_VALUE_STOP = frozenset("&#()[]{}'\"<>\\")
+_ENCODED_VALUE_END = re.compile(r"%(?:25){0,2}(?:26|23)")
+_VALUE_TRAILING = frozenset(".,:;!?*_~")
+_REDACTED_VALUE = "[redacted]"
+_UNICODE_ESCAPE = re.compile(r"\\u([0-9a-fA-F]{4})")
+_PERCENT = re.compile(r"%([0-9a-fA-F]{2})")
+_ASCII_LOWER = {c: c + 32 for c in range(ord("A"), ord("Z") + 1)}
+
+
+def _url_run_end(text: str, start: int, encoded: bool) -> int:
+    i = start
+    raw_query = False
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c in _URL_STOP_CHARS or ord(c) > 0x7E:
+            break
+        if c == "\\":
+            j = i
+            while j < n and text[j] == "\\":
+                j += 1
+            if j < n and text[j] == "/":
+                i = j + 1
+                continue
+            if j < n and text[j] == "u" and _HEX4.fullmatch(text[j + 1 : j + 5]):
+                decoded = chr(int(text[j + 1 : j + 5], 16))
+                if decoded in _URL_STOP_CHARS or decoded == "\\":
+                    break
+                if decoded in "?#":
+                    raw_query = True
+                if encoded and not raw_query and decoded == "&":
+                    break
+                i = j + 5
+                continue
+            break
+        if c in "?#":
+            raw_query = True
+        if encoded and not raw_query and c == "&":
+            break
+        i += 1
+    return i
+
+
+def _trim_trailing(run: str) -> str:
+    count = {c: run.count(c) for c in "()[]{}"}
+    end = len(run)
+    while end > 0:
+        c = run[end - 1]
+        if c in _TRAILING:
+            end -= 1
+            continue
+        opener = _CLOSERS.get(c)
+        if opener is not None and count[c] > count[opener]:
+            count[c] -= 1
+            end -= 1
+            continue
+        break
+    return run[:end]
+
+
+def _decoded_lower(text: str) -> str:
+    t = _UNICODE_ESCAPE.sub(lambda m: chr(int(m.group(1), 16)), text)
+    for _ in range(3):
+        nxt = _PERCENT.sub(lambda m: chr(int(m.group(1), 16)), t)
+        if nxt == t:
+            break
+        t = nxt
+    return t.lower()
+
+
+def _host_at(text: str, at: int, length: int) -> Optional[tuple[int, int]]:
+    after = at + length
+    n = len(text)
+    nxt = text[after] if after < n else ""
+    if nxt and ((nxt in _LABEL_CHARS and nxt != "_") or (nxt == "." and after + 1 < n and text[after + 1] in _LABEL_CHARS and text[after + 1] != "_")):
+        return None
+    chain = at
+    while chain > 0 and at - chain < _MAX_HOST_CHARS and text[chain - 1] == ".":
+        k = chain - 1
+        while k > 0 and at - k < _MAX_HOST_CHARS and text[k - 1] in _LABEL_CHARS:
+            k -= 1
+        if k == chain - 1:
+            break
+        chain = k
+    start = -1
+    for p in range(chain, at + 1):
+        if p < at and text[p] == ".":
+            continue
+        before = text[p - 1] if p > 0 else ""
+        if before == "" or before not in _HOST_GLUE or _ENCODED_SLASH_BEFORE.search(text[max(0, p - 7) : p]):
+            start = p
+            break
+    if start < 0:
+        return None
+    end = after
+    if end < n and text[end] == ".":
+        end += 1
+    port = _PORT.match(text, end)
+    if port:
+        end = port.end()
+    return start, end
+
+
+def _strip_host_urls(text: str) -> tuple[str, int]:
+    lower = text.translate(_ASCII_LOWER)
+    next_at = [lower.find(h) for h in _CAPABILITY_HOSTS]
+    out: list[str] = []
+    last = 0
+    stripped = 0
+    pos = 0
+    while True:
+        which = -1
+        for k, name in enumerate(_CAPABILITY_HOSTS):
+            if 0 <= next_at[k] < pos:
+                next_at[k] = lower.find(name, pos)
+            if next_at[k] >= 0 and (which < 0 or next_at[k] < next_at[which]):
+                which = k
+        if which < 0:
+            break
+        at = next_at[which]
+        name = _CAPABILITY_HOSTS[which]
+        pos = at + 1
+        host = _host_at(text, at, len(name))
+        if host is None:
+            continue
+        start, tail = host
+        if start > 0 and text[start - 1] == "/" and not _AUTHORITY_SLASHES.search(text[max(0, start - 8) : start]):
+            continue
+        rest = text[tail : tail + 16]
+        raw = _RAW_TAIL.match(rest) is not None
+        if not raw and _ENCODED_TAIL.match(rest) is None:
+            continue
+        run = _trim_trailing(text[tail : _url_run_end(text, tail, not raw)])
+        pos = max(pos, tail + len(run))
+        q = (_RAW_QUERY if raw else _ENCODED_QUERY).search(run)
+        if q is None:
+            continue
+        if name == "edgecity.live" and not _CAPABILITY_PARAM.search(_decoded_lower(run[q.start() :])):
+            continue
+        out.append(text[last : tail + q.start()])
+        last = tail + len(run)
+        stripped += 1
+    if not stripped:
+        return text, 0
+    out.append(text[last:])
+    return "".join(out), stripped
+
+
+def _value_end(text: str, start: int, encoded: bool) -> int:
+    i = start
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c in _URL_STOP_CHARS or c in _VALUE_STOP:
+            break
+        if encoded and c == "%" and _ENCODED_VALUE_END.match(text, i):
+            break
+        i += 1
+    while i > start and text[i - 1] in _VALUE_TRAILING:
+        i -= 1
+    return i
+
+
+def _redact_capability_tokens(text: str) -> tuple[str, int]:
+    out: list[str] = []
+    last = 0
+    stripped = 0
+    pos = 0
+    while True:
+        m = _CAPABILITY_TOKEN.search(text, pos)
+        if m is None:
+            break
+        start = m.end()
+        sep = m.group(2)
+        end = _value_end(text, start, sep != "=" and not sep.startswith("\\"))
+        pos = m.end()
+        if end == start:
+            continue
+        out.append(text[last:start])
+        out.append(_REDACTED_VALUE)
+        last = end
+        pos = end
+        stripped += 1
+    if not stripped:
+        return text, 0
+    out.append(text[last:])
+    return "".join(out), stripped
+
+
+def strip_capability_urls(text: str) -> tuple[str, int]:
+    """`text` with every capability URL cut to its path and every `sig`/`viewer` value redacted.
+
+    Pass 1: every `index.network` URL (subdomains included) loses its query
+    string and fragment; an `edgecity.live` URL loses them only when they name
+    `sig` or `viewer`. Pass 2 (fail-closed): every `sig` or `viewer` parameter
+    value left anywhere becomes `[redacted]`. The count is both. Nothing else
+    in the text changes; idempotent.
+    """
+    if not isinstance(text, str) or not _CAPABILITY_HINT.search(text):
+        return text, 0
+    urls, cut = _strip_host_urls(text)
+    out, redacted = _redact_capability_tokens(urls)
+    if not cut and not redacted:
+        return text, 0
+    return out, cut + redacted
+
+
 def sanitize(text: Any) -> Any:
     """Redact known credential shapes from any string that leaves the process.
 
     Non-strings pass through untouched; containers are walked. This is a last
-    line of defence, not the privacy control — the capture modes are.
+    line of defence, not the privacy control — the capture modes are. After
+    the credential shapes, every capability URL loses its query string and
+    every `sig` / `viewer` parameter value left anywhere is redacted
+    (`strip_capability_urls`, DATA-394): an Index signed accept link's `sig`
+    and `viewer` never leave the box.
     """
     if isinstance(text, str):
         out = text
@@ -338,6 +614,7 @@ def sanitize(text: Any) -> Any:
                 out = out.replace(literal, _REDACTED.format("token"))
         for label, pattern in _SECRET_PATTERNS:
             out = pattern.sub(_REDACTED.format(label), out)
+        out, _ = strip_capability_urls(out)
         return out
     if isinstance(text, dict):
         return {key: sanitize(value) for key, value in text.items()}
