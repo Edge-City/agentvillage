@@ -242,6 +242,27 @@ describe("DATA-374 cutAtWord and cleanTitle's word cut", () => {
     expect(cutAtWord("surf - swim - sing and dance", 15)).toBe("surf - swim…");
   });
 
+  test("a slash is never left dangling before the ellipsis", () => {
+    for (const max of [27, 28, 29]) expect(cutAtWord("Looking for people in AI / ML and robotics and more", max)).toBe("Looking for people in AI…");
+    expect(cleanTitle("Looking for people in AI/ML and robotics and more and more", 27, "word")).toBe("Looking for people in AI…");
+  });
+
+  test("a cut inside a long spaced digit run leaves no phone-shaped run (refuter probe A)", () => {
+    const filler = (n: number) => "jam ".repeat(200).slice(0, n);
+    const raw = `${filler(285)}98765 43210 12345 67890 call me`;
+    // The whole run is 20 digits, too long to be a phone number, so cleaning keeps it; the cut must not leave 10 to 15 of them.
+    expect(cleanTitle(raw, 1000)).toContain("98765 43210 12345 67890");
+    const cut = cleanTitle(raw, 300, "word")!;
+    expect(cut.endsWith("\u2026")).toBe(true);
+    expect([...cut].length).toBeLessThanOrEqual(300);
+    expect(cut.replace(/(?<=\d)[\s-]+(?=\d)/g, "")).not.toMatch(/\d{10}/);
+    for (let max = 2; max < 40; max++) {
+      const out = cutAtWord("ab 98765 43210 12345 67890 cd", max);
+      expect(out.replace(/(?<=\d)[\s-]+(?=\d)/g, "")).not.toMatch(/(?<!\d)\d{10,15}(?!\d)/);
+      expect([...out].length).toBeLessThanOrEqual(max);
+    }
+  });
+
   test("code points by default; UTF-16 code units on request; a surrogate pair is never split", () => {
     const grin = "\u{1F600}";
     expect(cutAtWord(grin.repeat(10), 5)).toBe(`${grin.repeat(4)}…`);

@@ -311,6 +311,18 @@ describe("the welcome text", () => {
     }
   });
 
+  test("a fit inside a long spaced digit run leaves no phone-shaped run in the welcome (refuter probe B)", () => {
+    const filler = (n: number) => "jam ".repeat(200).slice(0, n);
+    // A whole run of 16 or more digits is no phone number and cleaning keeps it; a cut must not leave 10 to 15 of them.
+    const run = (t: string) => t.replace(/(?<=\d)[\s-]+(?=\d)/g, "");
+    for (let f = 100; f < 300; f++) {
+      const titles = [`${filler(f)} 98765 43210 12345 67890 11111`, "x ".repeat(150).trim(), "y ".repeat(150).trim()];
+      const text = welcomeText("Edge", { kind: "listed", titles }, INTENTS_URL);
+      expect(text.length).toBeLessThanOrEqual(WELCOME_MAX_CHARS);
+      for (const line of text.split("\n")) if (/(?<!\d)\d{10,15}(?!\d)/.test(run(line))) throw new Error(`phone-shaped run at f=${f}: ${line.slice(-40)}`);
+    }
+  });
+
   test("fitTitles: unchanged when the titles fit; else the longest give way first, at a word boundary", () => {
     const short = words(50, "s");
     const mid = words(150, "m");

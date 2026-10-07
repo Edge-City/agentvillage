@@ -182,16 +182,27 @@ function capped(plain: string, max: number, cut: TitleCut = "codepoint"): string
   return cronScanHit(out) ? null : out;
 }
 
-/** Spaces and the punctuation a cut should not leave dangling before its ellipsis. */
-const CUT_TAIL = /[\s,;:\u2013\u2014-]+$/u;
+/** Spaces and the punctuation a cut should not leave dangling before its ellipsis (`AI /…` too). */
+const CUT_TAIL = /[\s,;:/\u2013\u2014-]+$/u;
+
+/**
+ * The kept part of a cut, cleaned again: a cut inside a spaced digit run too
+ * long to be a phone number (16 or more digits, which withoutPhoneRuns keeps)
+ * can leave a phone-shaped one, so the phone pass runs once more; then the
+ * dangling tail goes. Only ever shortens.
+ */
+function cutClean(kept: string): string {
+  return withoutPhoneRuns(kept).replace(/\s+/g, " ").trim().replace(CUT_TAIL, "");
+}
 
 /**
  * DATA-374: `plain` (one line, whitespace already collapsed) at most `max`
  * long with an ellipsis marking the cut, cut at the last space before the
  * cap so no word is split; a run with no space in the second half of the
  * room (a single word longer than half the cap) is cut at the cap itself, so
- * one very long word never leaves only the words before it. Spaces, commas,
- * semicolons, colons and dashes before the ellipsis are dropped. `unit`
+ * one very long word never leaves only the words before it. A phone-shaped
+ * digit run the cut leaves is removed (cutClean), and spaces, commas,
+ * semicolons, colons, slashes and dashes before the ellipsis are dropped. `unit`
  * measures the length: code points, or UTF-16 code units (JavaScript's
  * `.length`, what Telegram and the control plane count); a surrogate pair is
  * never split either way. Unchanged when it already fits. Pure.
@@ -209,9 +220,7 @@ export function cutAtWord(plain: string, max: number, unit: "codepoint" | "utf16
   const atBoundary = n < chars.length && /\s/u.test(chars[n]);
   const space = n > 0 ? chars.lastIndexOf(" ", n - 1) : -1;
   const keep = atBoundary || space < n / 2 ? n : space;
-  const head = chars.slice(0, n).join("");
-  const trimmed = chars.slice(0, keep).join("").replace(CUT_TAIL, "");
-  return `${trimmed || head.trimEnd()}\u2026`;
+  return `${cutClean(chars.slice(0, keep).join("")) || cutClean(chars.slice(0, n).join(""))}\u2026`;
 }
 
 /**
