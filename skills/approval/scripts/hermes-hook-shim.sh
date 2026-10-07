@@ -767,7 +767,10 @@ while :; do
   fi
   P0=$(now_ms)
   # `%{size_download}` is the bytes curl wrote to the body file: the sh
-  # reading of the verdict compares it with what the shell read (DATA-380).
+  # reading of the verdict compares it with what the shell read (DATA-380),
+  # so it must stay the bytes IN THE FILE: never add --compressed (or any
+  # option that makes curl decode what it writes) to this call; the NUL and
+  # newline checks in verdict_sh stand on that equality (refuter NOTE 1).
   CODE=$(printf 'header = "%s: Bearer %s"\n' "$AUTH_HEADER" "$TOKEN" | "$T_curl" -q --config - \
     --silent --show-error --max-time "$mt" --proto "$PROTO" --proto-redir "$PROTO" "$@" \
     --request POST --header 'Content-Type: application/json' \
@@ -802,7 +805,7 @@ while :; do
     err=$("$T_node" -e 'try{const b=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const c=b&&b.error&&b.error.code;process.stdout.write(typeof c==="string"?" "+c.slice(0,80):"")}catch{}' "$TMP/body" 2>/dev/null)
     retry_failed "HTTP $CODE$err"
   fi
-  VERDICT=$(verdict_sh)
+  VERDICT=$(verdict_sh 2>/dev/null)
   if [ -z "$VERDICT" ]; then
     VP=node
     VERDICT=$("$T_node" -e "$VERDICT_JS" "$TMP/body" "$TMP/out" "$TMP/err" 2>/dev/null)
