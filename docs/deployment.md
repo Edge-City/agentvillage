@@ -495,10 +495,14 @@ push to upstream read directly would reach every agent within one run with
 none of these.
 
 **Trust boundary.** The decision: Carter's choice of upstream (GRANT
-2026-10-06 09:06Z, "the mirror follows `p2p-lanes/edge-agent-skill`"). The
-mirror follows `p2p-lanes/edge-agent-skill@main`: a personal account's branch,
-unpinned, published automatically every 15 minutes by the sync workflow, with
-no person reviewing it. What protects the fleet: the sync's checks (sizes,
+2026-10-06 09:06Z named `aromeoes/edge-agent-skill`; moved to
+`p2p-lanes/edge-agent-skill` on 2026-10-07 under DATA-393, after the aromeoes
+indexer had failed every run since 2026-10-01 and Fran's live indexer was found
+in `p2p-lanes`, the EdgeOS org, where he said on 2026-10-06 the references live).
+The mirror follows `p2p-lanes/edge-agent-skill@main`: an org branch written by
+Fran's AWS publisher (CodeBuild, committer `edge-india-indexer[bot]`, commits
+unsigned), unpinned, forwarded automatically every 15 minutes by the sync
+workflow, with no person reviewing it. What protects the fleet: the sync's checks (sizes,
 names, encoding, HTML, complete India-only trees, manifest links only to the
 guide's hosts) and the upstream commit it records in `SNAPSHOT.json` per
 publish (it refuses to publish when that commit cannot be read); this job's

@@ -6,7 +6,7 @@ Agent skills for **Edge City India 2026** (Oct 11 – Nov 1, Mandrem, Goa, India
 
 Eight skill bundles give your agent Edge City knowledge, live API access, and local operational guardrails:
 
-- **edge-india** — Edge City India 2026 (the current event) public village knowledge: a verified snapshot of the India wiki, Substack guides and website (housing, travel, check-in, meals, venues, families, tickets, residencies, themes), read through `scripts/refs.ts` with source links and dates. Synced from `aromeoes/edge-agent-skill` by `.github/workflows/sync-edge-india-references.yml`.
+- **edge-india** — Edge City India 2026 (the current event) public village knowledge: a verified snapshot of the India wiki, Substack guides and website (housing, travel, check-in, meals, venues, families, tickets, residencies, themes), read through `scripts/refs.ts` with source links and dates. Synced from `p2p-lanes/edge-agent-skill` by `.github/workflows/sync-edge-india-references.yml`.
 - **edge-esmeralda** — background on the *previous* popup, Edge Esmeralda 2026 (not the current event): popup constants (popup id, week dates, themes), attendee directory field semantics, curated wiki/website/newsletter knowledge base, and the onboarding pointer for obtaining EdgeOS tokens.
 - **edgeos** — backend-generic EdgeOS API recipes: events, RSVPs, venues, attendee directory, and your own profile lookup.
 - **index-network** — Index Network discovery: onboarding ritual, opportunity surfacing, voice exemplars, the cron jobs' prompts (`prompts/`) and the memory-signal gate (`scripts/memory_signal_gate.py`), and heartbeat tasks.

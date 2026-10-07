@@ -13,7 +13,7 @@
  *     mirror in this repo (kept by sync-edge-india-references.yml):
  *     https://raw.githubusercontent.com/Edge-City/agentvillage/main/skills/edge-india/references/manifest.json
  *     The mirror is not reviewed by a person: its workflow forwards the
- *     upstream indexer (`aromeoes/edge-agent-skill`, branch `main`) every 15
+ *     upstream indexer (`p2p-lanes/edge-agent-skill`, branch `main`) every 15
  *     minutes, but only complete trees this job accepts, each file's sha256
  *     recorded in SNAPSHOT.json with the upstream commit it came from, under our
  *     org's audit log; disabling that workflow (or reverting the mirror) is the
@@ -22,10 +22,14 @@
  *     mirror's checks.
  *
  *   Trust boundary. The decision: Carter's choice of upstream (GRANT
- *   2026-10-06 09:06Z, "the mirror follows aromeoes/edge-agent-skill"). The
- *   mirror follows `aromeoes/edge-agent-skill@main`: a personal account's
- *   branch, unpinned, published automatically every 15 minutes by the sync
- *   workflow, with no person reviewing it. What protects the fleet: the sync's
+ *   2026-10-06 09:06Z named aromeoes/edge-agent-skill; moved to
+ *   p2p-lanes/edge-agent-skill on 2026-10-07 under DATA-393, after the aromeoes
+ *   indexer had failed every run since 2026-10-01 and Fran's live indexer was
+ *   found in p2p-lanes, the EdgeOS org). The mirror follows
+ *   `p2p-lanes/edge-agent-skill@main`: an org branch written by Fran's AWS
+ *   publisher (CodeBuild, committer `edge-india-indexer[bot]`, commits unsigned),
+ *   unpinned, forwarded automatically every 15 minutes by the sync workflow,
+ *   with no person reviewing it. What protects the fleet: the sync's
  *   checks (sizes, names, encoding, HTML, complete India-only trees, manifest
  *   links only to the guide's hosts) and the upstream commit it records per
  *   publish, refusing to publish when that commit cannot be read; this job's
@@ -48,7 +52,7 @@
  *
  * Which URLs it fetches (`urlAllowed`): https, no user name or password, no
  * port, no query or fragment, and either host raw.githubusercontent.com with a
- * path under `/aromeoes/edge-agent-skill/` or `/Edge-City/`, or a host named
+ * path under `/p2p-lanes/edge-agent-skill/` or `/Edge-City/`, or a host named
  * in KNOWLEDGE_SNAPSHOT_HOSTS (a dotted name, never an IP literal; the list
  * never widens raw.githubusercontent.com past those two prefixes). Every file
  * is fetched from the manifest's own directory: same host, path under the
@@ -128,7 +132,7 @@ export const SNAPSHOT_RECORD_FILE = "SNAPSHOT.json";
 
 /** raw.githubusercontent.com paths always allowed (owner/repo prefixes). */
 export const RAW_HOST = "raw.githubusercontent.com";
-export const RAW_PREFIXES = ["/aromeoes/edge-agent-skill/", "/Edge-City/"];
+export const RAW_PREFIXES = ["/p2p-lanes/edge-agent-skill/", "/Edge-City/"];
 
 const MD_TYPES = new Set(["text/plain", "text/markdown", "text/x-markdown"]);
 const MANIFEST_TYPES = new Set([...MD_TYPES, "application/json"]);
