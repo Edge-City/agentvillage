@@ -23,6 +23,7 @@ Calendar bullets should put EdgeOS `highlighted: true` events first, then fill w
 > - [Maya]({userUrl}) — Talk to them about agent memory for long-running workflows. Direct overlap with how you handle persistent context, [accept and message Maya]({acceptUrl}).
 > - [Theo]({userUrl}) — Researching how information surfaces in decentralized networks. That's the type of thinking that sharpens protocol design, [accept and message Theo]({acceptUrl}).
 > - [Priya]({userUrl}) — Building community-owned data infrastructure. Aligned on the ownership layer and complementary on discovery, [accept and message Priya]({acceptUrl}).
+> Tapping a link accepts the introduction and opens Telegram with them.
 >
 > **Help your community**
 > - [Remi]({userUrl}) — Looking for a technical co-founder for his regenerative education platform. Needs someone who thinks in systems and has shipped infrastructure. Know anyone, make intro

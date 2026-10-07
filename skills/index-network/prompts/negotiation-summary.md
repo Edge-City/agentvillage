@@ -16,7 +16,7 @@ A few live threads are worth closing while everyone is still here.
 - One short phrase per item of `yourSignals`, from its `text`. Link the phrase with `link` when it is not null.
 
 💬 *Waiting on you*
-- One line per person in `waitingOnYou`: `[name](profileUrl), [accept and message name](messageUrl)`. `messageUrl` is the accept link. Copy it. Do not rebuild it.
+- One line per person in `waitingOnYou`: `[name](profileUrl), [accept and message name](messageUrl)`. `messageUrl` is the accept link. Copy it. Do not rebuild it. Opening it accepts the introduction at once and opens Telegram with that person: never present it as a look or a preview.
 - These are a few earlier conversations due a reminder, not everything waiting. Never call them the full list or count what is waiting.
 
 💬 *Agents talking*
