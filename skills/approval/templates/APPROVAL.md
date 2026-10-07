@@ -67,10 +67,12 @@ opportunity.accept (R3) waits for no tap on day one: accepting or declining an
 Index opportunity, a connection or meeting, on the resident's behalf is
 autonomous, with `agent_may_request`, and the settings page offers ask and
 never. It is its own class, not network.call, because it commits the resident
-to something; Carter decides the day-one default before Oct 11. Nothing
-proposes it: the `tools:` list maps Index's accept_opportunity and
-reject_opportunity (MCP) and the Index Hermes plugin's index_update_opportunity
-(its accept or decline) to it, so only the approval gate judges it. It is
+to something; autonomous is its day-one default (Carter's ruling, Oct 7: the
+accept happens in a conversation with the agent that fires the Index call, so
+a second gate would ask twice). Nothing proposes it: the `tools:` list maps
+Index's accept_opportunity and reject_opportunity (MCP) and the Index Hermes
+plugin's index_update_opportunity (its accept or decline) to it, so only the
+approval gate judges it. It is
 recorded, and the resident's choice applies, only while the gate is on; the
 settings page says so (`enforced_by: hook`).
 

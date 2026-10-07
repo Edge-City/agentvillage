@@ -68,8 +68,8 @@ row). In plain words, for the consent screen:
   app reading for the agent (`marketplace.app.read`) runs and is recorded,
   accepting or declining an Index opportunity, a connection or meeting, on the
   resident's behalf (`opportunity.accept`) runs, and is recorded while the gate
-  is on: only the hook judges it (Carter decides its day-one default before
-  Oct 11), and `review.delegate.model` is kept for the
+  is on: only the hook judges it (autonomous is its day-one default, Carter's
+  ruling of Oct 7), and `review.delegate.model` is kept for the
   resident to choose later to let a model reviewer act first: nothing acts on
   it, and no agent can propose it.
 - **What the agent can never do.** Edit its own gate (the Hermes config, the
