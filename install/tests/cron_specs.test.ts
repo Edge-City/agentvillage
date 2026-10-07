@@ -1,5 +1,8 @@
 import { test, expect } from "bun:test";
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 
+import { TEMPLATE_NAMES } from "../../skills/index-network/scripts/job-settings";
 import {
   DIGEST_CRON_SPECS,
   KNOWLEDGE_SYNC_PROMPT,
@@ -14,6 +17,8 @@ import {
   resolveCronSchedule,
   staggeredSchedule,
   storedSchedule,
+  templateCronSpec,
+  templateJobName,
   tokenUsageAuditCronDisabled,
 } from "../install_index";
 
@@ -37,8 +42,8 @@ test("nine Index cron specs: digest jobs, opportunity drops, token audit, knowle
   expect(knowledge.overrideEnv).toBe("KNOWLEDGE_SYNC_CRON");
   expect(signals.schedule).toBe("0 1 * * *");
   expect(signals.name).toBe("Edge — memory signal sync");
-  expect(signals.promptFile).toBe("edge-esmeralda/prompts/memory-signals.md");
-  expect(signals.scriptFile).toBe("edge-esmeralda/scripts/memory_signal_gate.py");
+  expect(signals.promptFile).toBe("index-network/prompts/memory-signals.md");
+  expect(signals.scriptFile).toBe("index-network/scripts/memory_signal_gate.py");
   expect(signals.scriptInstallName).toBe("agentvillage_memory_signal_gate.py");
   expect(signals.deliver).toBe(false);
   expect(prepare.schedule).toBe("0 2 * * *");
@@ -51,24 +56,24 @@ test("nine Index cron specs: digest jobs, opportunity drops, token audit, knowle
   expect(prepare.deliver).toBe(false);
   expect(send.schedule).toBe("0 8 * * *");
   expect(send.name).toBe("Edge — daily digest");
-  expect(send.promptFile).toBe("edge-esmeralda/prompts/brief.md");
+  expect(send.promptFile).toBe("index-network/prompts/brief.md");
   expect(send.scriptInstallName).toBe("agentvillage_proactive_brief.sh");
   expect(send.deliver).toBe(true);
   expect(negotiation.schedule).toBe("0 14 * * *");
   expect(negotiation.name).toBe("Edge — negotiation summary");
-  expect(negotiation.promptFile).toBe("edge-esmeralda/prompts/negotiation-summary.md");
+  expect(negotiation.promptFile).toBe("index-network/prompts/negotiation-summary.md");
   expect(negotiation.deliver).toBe(true);
   expect(evening.schedule).toBe("0 19 * * *");
   expect(evening.name).toBe("Edge — evening questions");
-  expect(evening.promptFile).toBe("edge-esmeralda/prompts/ask-questions.md");
+  expect(evening.promptFile).toBe("index-network/prompts/ask-questions.md");
   expect(evening.deliver).toBe(true);
   expect(dropMidday.schedule).toBe("0 12 * * *");
   expect(dropMidday.name).toBe("Edge — opportunity drop (midday)");
-  expect(dropMidday.promptFile).toBe("edge-esmeralda/prompts/opportunity-drop.md");
+  expect(dropMidday.promptFile).toBe("index-network/prompts/opportunity-drop.md");
   expect(dropMidday.deliver).toBe(true);
   expect(dropEvening.schedule).toBe("0 17 * * *");
   expect(dropEvening.name).toBe("Edge — opportunity drop (evening)");
-  expect(dropEvening.promptFile).toBe("edge-esmeralda/prompts/opportunity-drop.md");
+  expect(dropEvening.promptFile).toBe("index-network/prompts/opportunity-drop.md");
   expect(dropEvening.deliver).toBe(true);
   expect(tokenAudit.schedule).toBe("0 9 * * *");
   expect(tokenAudit.name).toBe("Edge — token usage audit");
@@ -300,4 +305,40 @@ test("K1: an every-N-minutes default is staggered to one offset in the first N m
   const [m] = staggeredSchedule(quarter, "ix_a").split(" ");
   const q = m.split(",").map(Number);
   expect(q).toEqual([q[0], q[0] + 15, q[0] + 30, q[0] + 45]);
+});
+
+// DATA-361: the cron prompts and the memory-signal gate moved from
+// skills/edge-esmeralda to skills/index-network. Installed jobs are matched by
+// name (templates by templateJobName) and their scripts installed under
+// scriptInstallName, so the move must change neither: this list is the
+// snapshot taken at the move.
+test("DATA-361: every prompt and script a spec names exists under its new home, none under edge-esmeralda, and job names, schedules and installed script names are unchanged", () => {
+  const skills = join(import.meta.dir, "..", "..", "skills");
+  const specs = [...DIGEST_CRON_SPECS, ...TEMPLATE_NAMES.map((template) => templateCronSpec(template, "0 10 * * *"))];
+  for (const spec of specs) {
+    for (const file of [spec.promptFile, spec.scriptFile]) {
+      if (!file) continue;
+      expect({ name: spec.name, file, under: file.startsWith("edge-esmeralda/") }).toEqual({ name: spec.name, file, under: false });
+      expect({ name: spec.name, file, exists: existsSync(join(skills, file)) }).toEqual({ name: spec.name, file, exists: true });
+    }
+  }
+  const oldPrompts = join(skills, "edge-esmeralda", "prompts");
+  expect(existsSync(oldPrompts) ? readdirSync(oldPrompts) : []).toEqual([]);
+  expect(existsSync(join(skills, "edge-esmeralda", "scripts", "memory_signal_gate.py"))).toBe(false);
+  expect(DIGEST_CRON_SPECS.map((spec) => [spec.name, spec.schedule, spec.scriptInstallName ?? null])).toEqual([
+    ["Edge — memory signal sync", "0 1 * * *", "agentvillage_memory_signal_gate.py"],
+    ["Edge — digest prepare", "0 2 * * *", "agentvillage_proactive_prefetch.sh"],
+    ["Edge — daily digest", "0 8 * * *", "agentvillage_proactive_brief.sh"],
+    ["Edge — negotiation summary", "0 14 * * *", "agentvillage_proactive_negotiation.sh"],
+    ["Edge — evening questions", "0 19 * * *", "agentvillage_proactive_evening.sh"],
+    ["Edge — opportunity drop (midday)", "0 12 * * *", "agentvillage_proactive_drop-midday.sh"],
+    ["Edge — opportunity drop (evening)", "0 17 * * *", "agentvillage_proactive_drop-evening.sh"],
+    ["Edge — token usage audit", "0 9 * * *", "agentvillage_token_usage_audit.py"],
+    ["Edge — knowledge sync", "*/30 * * * *", "agentvillage_knowledge_sync.sh"],
+  ]);
+  expect(TEMPLATE_NAMES.map((template) => [templateJobName(template), templateCronSpec(template, "0 10 * * *").promptFile])).toEqual([
+    ["Edge — template: brief", "index-network/prompts/brief.md"],
+    ["Edge — template: digest-preview", "index-network/prompts/opportunity-drop.md"],
+    ["Edge — template: evening-ask", "index-network/prompts/ask-questions.md"],
+  ]);
 });

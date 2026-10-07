@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const scriptPath = join(import.meta.dir, "..", "..", "skills", "edge-esmeralda", "scripts", "memory_signal_gate.py");
+const scriptPath = join(import.meta.dir, "..", "..", "skills", "index-network", "scripts", "memory_signal_gate.py");
 let dirs: string[] = [];
 
 function makeDir(): string {

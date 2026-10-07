@@ -253,6 +253,14 @@ JSON, then the wake line; the model only writes language from that Script
 Output. No prompt of the six asks for a tool call, so a model that mangles tool
 arguments cannot break a job.
 
+The prompts the installer stores in these jobs live in
+`skills/index-network/prompts/` (`brief.md`, `opportunity-drop.md`,
+`negotiation-summary.md`, `ask-questions.md`), with the memory signal sync's
+`memory-signals.md` and its gate `skills/index-network/scripts/memory_signal_gate.py`
+(installed as `$HERMES_HOME/scripts/agentvillage_memory_signal_gate.py`). Until
+DATA-361 they lived under `skills/edge-esmeralda/`; the move changed no job name,
+id, schedule or prompt text, so an update finds every job up to date.
+
 | Job | Time (Hermes's zone, which must be IST; staggered) | Action | What the model is given |
 |---|---|---|---|
 | Edge — digest prepare | 02:00 | `prefetch` | Nothing: the one `no_agent` job of the six (the knowledge sync, "Edge India knowledge" below, is the other `no_agent` job). It writes the brief's context to `av-events/proactive/brief-context.json` and is always silent. |

@@ -18,6 +18,7 @@ import YAML from "yaml";
 import {
   CRON_NAME_PREFIX,
   EDGE_SKILL_NAMES,
+  RETIRED_SKILL_DIRS,
   hermesHome,
   skillsDir,
   targetWorkspace,
@@ -109,7 +110,9 @@ function removeSoulFile(): void {
 function removeEdgeSkills(): void {
   const root = skillsDir();
   let removed = 0;
-  for (const name of [...EDGE_SKILL_NAMES, RECALL_SKILL]) {
+  // DATA-360: a retired bundle (geo-esmeralda) leaves with the shipped ones, so a
+  // reset never leaves it as the only Edge skill until the next installer run.
+  for (const name of [...EDGE_SKILL_NAMES, ...RETIRED_SKILL_DIRS, RECALL_SKILL]) {
     const target = join(root, name);
     if (!existsSync(target)) continue;
     rmSync(target, { recursive: true, force: true });

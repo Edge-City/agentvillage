@@ -23,12 +23,17 @@ import {
   WELCOME_MAX_CHARS,
   WELCOME_STATE_FILE,
   type IntentsRead,
+  type WelcomeBranch,
   claimWelcome,
+  draftTrailer,
   intentTitles,
   intentsPageUrl,
+  main,
   readIntents,
   welcome,
+  welcomeBranch,
   welcomeName,
+  welcomeRun,
   welcomeText,
 } from "../welcome";
 import { FAKE_API_KEY, type ToolHandler, indexMcpFake } from "./index-mcp-fake";
@@ -332,6 +337,144 @@ describe("one welcome per tenant", () => {
     expect(second.exitCode).toBe(0);
     expect(second.stdout.toString()).toBe(`${ALREADY_SENT}\n`);
     expect(second.stderr.toString()).toBe("");
+  });
+});
+
+/**
+ * The control plane runs `--draft` and records welcome.sent@1 from one stderr
+ * line; by default stderr stays empty, because Hermes's `terminal` tool hands
+ * the agent both streams and the agent sends the output verbatim.
+ */
+describe("the --draft trailer: one stderr line naming the branch, never text; nothing on stderr by default", () => {
+  const TRAILER = /^\{"welcome":1,"fallback":"(none|questions|unreachable)","intents_listed":[0-3]\}$/;
+  const BRANCHES: Array<[keyof typeof golden, string | null, unknown[] | null, WelcomeBranch]> = [
+    ["three", "Mira", [MEMORY, DINNER, SURF], { fallback: "none", intents_listed: 3 }],
+    ["moreThanThree", "Mira", [MEMORY, DINNER, SURF, KONKANI], { fallback: "none", intents_listed: 3 }],
+    ["two", null, [MEMORY, DINNER], { fallback: "none", intents_listed: 2 }],
+    ["one", "Mira", [MEMORY], { fallback: "none", intents_listed: 1 }],
+    ["zero", null, [], { fallback: "questions", intents_listed: 0 }],
+    ["unreachable", null, null, { fallback: "unreachable", intents_listed: 0 }],
+  ];
+
+  /** main() with captured streams, against the fake Index (rows null: no key). */
+  async function captured(rows: unknown[] | null, argv: string[], run?: (argv: string[]) => Promise<{ text: string; branch: WelcomeBranch | null }>) {
+    const fake = indexMcpFake({ tools: { list_intents: () => intentsText(rows ?? []) } });
+    process.env.INDEX_API_KEY = rows === null ? "" : FAKE_API_KEY;
+    process.env.INDEX_MCP_URL = fake.url;
+    const out = { stdout: "", stderr: "" };
+    await main(
+      ["--home", home, ...argv],
+      { stdout: (x) => (out.stdout += x), stderr: (x) => (out.stderr += x) },
+      run ?? ((a) => welcomeRun(a, { fetch: fake.fetch, timeoutMs: 50 })),
+    );
+    return out;
+  }
+
+  test("welcomeBranch is the branch welcomeText takes, and the count of dash lines it prints", () => {
+    const reads: IntentsRead[] = [
+      { kind: "unreachable" },
+      { kind: "listed", titles: [] },
+      { kind: "listed", titles: ["a"] },
+      { kind: "listed", titles: ["a", "b"] },
+      { kind: "listed", titles: ["a", "b", "c"] },
+      { kind: "listed", titles: ["a", "b", "c", "d", "e"] },
+    ];
+    for (const read of reads) {
+      const b = welcomeBranch(read);
+      const dashes = welcomeText("Edge", read, INTENTS_URL).split("\n").filter((l) => l.startsWith("- "));
+      const questions = dashes.filter((l) => (CONTEXT_QUESTIONS as readonly string[]).includes(l.slice(2)));
+      expect(b.intents_listed).toBe(dashes.length - questions.length);
+      expect(b.fallback).toBe(read.kind === "unreachable" ? "unreachable" : read.titles.length === 0 ? "questions" : "none");
+      expect(b.fallback === "none").toBe(b.intents_listed >= 1 && b.intents_listed <= MAX_LISTED);
+    }
+  });
+
+  test("the trailer is exactly the contract: welcome 1, the branch, the count, in that key order, nothing else", () => {
+    expect(draftTrailer({ fallback: "none", intents_listed: 2 })).toBe('{"welcome":1,"fallback":"none","intents_listed":2}');
+    expect(draftTrailer({ fallback: "questions", intents_listed: 0 })).toBe('{"welcome":1,"fallback":"questions","intents_listed":0}');
+    expect(draftTrailer({ fallback: "unreachable", intents_listed: 0 })).toBe('{"welcome":1,"fallback":"unreachable","intents_listed":0}');
+  });
+
+  for (const [key, nickname, rows, branch] of BRANCHES) {
+    test(`${key}: --draft prints the welcome on stdout and one trailer line on stderr; by default stderr is empty`, async () => {
+      if (nickname) writeProfile(nickname);
+      const draft = await captured(rows, ["--draft"]);
+      expect(draft.stdout).toBe(`${golden[key]}\n`);
+      expect(draft.stderr.endsWith("\n")).toBe(true);
+      const lines = draft.stderr.slice(0, -1).split("\n");
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(TRAILER);
+      expect(JSON.parse(lines[0])).toEqual({ welcome: 1, ...branch });
+      expect(existsSync(join(home, WELCOME_STATE_FILE))).toBe(false);
+
+      const plain = await captured(rows, []);
+      expect(plain.stdout).toBe(`${golden[key]}\n`);
+      expect(plain.stderr).toBe("");
+      expect(recordsWelcomeSent(marker())).toBe(true);
+      // ALREADY_SENT (default mode only) has no branch and no trailer either.
+      const again = await captured(rows, []);
+      expect(again).toEqual({ stdout: `${ALREADY_SENT}\n`, stderr: "" });
+    });
+  }
+
+  test("the trailer never carries text: no title, no question, no name, no link", async () => {
+    writeProfile("Mira");
+    for (const [, , rows] of BRANCHES) {
+      const { stderr } = await captured(rows, ["--draft"]);
+      for (const word of ["agent memory", "dinner", "surfing", "Konkani", "Mira", "excited", "https", "Welcome"]) expect(stderr).not.toContain(word);
+    }
+  });
+
+  test("a run that throws: the unreachable welcome, its trailer with --draft, still nothing on stderr without it", async () => {
+    const boom = async () => {
+      throw new Error("boom");
+    };
+    const draft = await captured(null, ["--draft"], boom);
+    expect(draft.stdout).toBe(`${golden.unreachable}\n`);
+    expect(draft.stderr).toBe('{"welcome":1,"fallback":"unreachable","intents_listed":0}\n');
+    const plain = await captured(null, [], boom);
+    expect(plain).toEqual({ stdout: `${golden.unreachable}\n`, stderr: "" });
+  });
+
+  test("the script, as a process, for each branch: --draft gives one trailer line on stderr; by default stderr is empty and stdout the same", async () => {
+    // A local HTTP front for the fake Index, so the real process reads intents through the real client.
+    let rows: unknown[] = [];
+    const fake = indexMcpFake({ url: "http://127.0.0.1/mcp", tools: { list_intents: () => intentsText(rows) } });
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: async (req) => fake.fetch(fake.url, { method: req.method, headers: req.headers, body: await req.text() }),
+    });
+    try {
+      const spawn = async (dir: string, key: string, argv: string[]) => {
+        const env = { ...process.env, HERMES_HOME: dir, INDEX_API_KEY: key, INDEX_MCP_URL: `http://127.0.0.1:${server.port}/mcp`, AV_CONNECTIONS_URL: "" };
+        const proc = Bun.spawn(["bun", SCRIPT, ...argv], { env, cwd: dir, stdout: "pipe", stderr: "pipe" });
+        const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+        return { stdout, stderr, code };
+      };
+      const cases: Array<[keyof typeof golden, unknown[] | null, WelcomeBranch]> = [
+        ["two", [MEMORY, DINNER], { fallback: "none", intents_listed: 2 }],
+        ["zero", [], { fallback: "questions", intents_listed: 0 }],
+        ["unreachable", null, { fallback: "unreachable", intents_listed: 0 }],
+      ];
+      for (const [key, r, branch] of cases) {
+        rows = r ?? [];
+        const dir = mkdtempSync(join(tmpdir(), "av-welcome-proc-"));
+        try {
+          const keyValue = r === null ? "" : FAKE_API_KEY;
+          const draft = await spawn(dir, keyValue, ["--draft"]);
+          expect({ key, code: draft.code, stdout: draft.stdout }).toEqual({ key, code: 0, stdout: `${golden[key]}\n` });
+          expect({ key, stderr: draft.stderr }).toEqual({ key, stderr: `${draftTrailer(branch)}\n` });
+          const plain = await spawn(dir, keyValue, []);
+          expect({ key, code: plain.code, stdout: plain.stdout, stderr: plain.stderr }).toEqual({ key, code: 0, stdout: `${golden[key]}\n`, stderr: "" });
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      }
+      expect(fake.calls.filter((c) => c.name === "list_intents")).toHaveLength(4);
+    } finally {
+      server.stop(true);
+    }
   });
 });
 

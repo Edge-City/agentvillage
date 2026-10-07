@@ -6,8 +6,9 @@
  *
  *   - `SOUL.md` → `$HERMES_HOME/SOUL.md` (identity; overwrites generic Hermes soul)
  *   - `AGENTS.md`, `USER.md` → `$HERMES_HOME/`
- *   - Edge skill bundles → `$HERMES_HOME/skills/{index-network,edgeos,edge-india,edge-esmeralda,geo-esmeralda,…}/`
+ *   - Edge skill bundles → `$HERMES_HOME/skills/{index-network,edgeos,edge-india,edge-esmeralda,…}/`
  *     (`skill_copy.ts`; `edge-india/references` is replaced, not merged, so upstream deletions land)
+ *   - retired skill bundles (`RETIRED_SKILL_DIRS`, e.g. `geo-esmeralda`) → removed from `$HERMES_HOME/skills/`
  *   - `terminal.cwd` in config.yaml → `$HERMES_HOME`
  *   - Telegram display: no reasoning, one quiet progress message per reply (`display_defaults.ts`; `AV_DISPLAY_DEFAULTS=0` skips)
  *   - STT enabled with Groq Whisper so voice notes are auto-transcribed
@@ -15,7 +16,6 @@
  *   - Cron in village time (`timezone: Asia/Kolkata`, only when no zone is configured; a loud warning when another is)
  *   - `cron.script_timeout_seconds: 120` when unset, Hermes's default 3600, or lower (the proactive triggers' budgets)
  *   - Index MCP + morning digest cron (`install_index.ts`)
- *   - Geo CLI runtime note (`install_geo.ts`)
  *   - opt-in recall skill + plugin when `AV_RECALL_ENABLED=1` (`install_recall.ts`)
  *   - opt-in approval.md gate when `AV_APPROVAL_ENABLED=1` (`install_approval.ts`):
  *     a failure there exits non-zero, because an opted-in tenant left ungated
@@ -45,7 +45,6 @@ import { execSync } from "node:child_process";
 
 import { installIndex } from "./install_index";
 import { installEdgeos } from "./install_edgeos";
-import { installGeo } from "./install_geo";
 import { safeInstallRecall, wipeRecallIndex } from "./install_recall";
 import { gateReceiptLine, runApprovalStep, stagePlugins } from "./install_approval";
 import {
@@ -60,7 +59,7 @@ import {
   setTerminalCwd,
 } from "./config";
 import { configureTelegramDisplay } from "./display_defaults";
-import { copySkillBundles } from "./skill_copy";
+import { copySkillBundles, removeRetiredSkillDirs } from "./skill_copy";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
 import {
   EDGE_SKILL_NAMES,
@@ -182,6 +181,7 @@ function copyPluginFiles(phase: "before-approval" | "after-approval"): void {
 
 function copySkillFiles(): void {
   const targetSkillsRoot = skillsDir();
+  removeRetiredSkillDirs(targetSkillsRoot);
   const copied = copySkillBundles(SOURCE_SKILLS, targetSkillsRoot);
   if (copied > 0) {
     console.log(`→ staged ${copied} files into ${targetSkillsRoot}/{${EDGE_SKILL_NAMES.join(",")}}`);
@@ -246,7 +246,6 @@ function main(): void {
     console.warn("  warning: could not write av-events/install-status.json");
   }
   installEdgeos();
-  installGeo();
   restoreWelcomeState(welcomeState);
 
   // Opt-in (DATA-43), and the one step that is not fail-open: with

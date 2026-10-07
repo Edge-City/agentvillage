@@ -4,13 +4,12 @@ Agent skills for **Edge City India 2026** (Oct 11 – Nov 1, Mandrem, Goa, India
 
 ## What you get
 
-Nine skill bundles give your agent Edge City knowledge, live API access, and local operational guardrails:
+Eight skill bundles give your agent Edge City knowledge, live API access, and local operational guardrails:
 
 - **edge-india** — Edge City India 2026 (the current event) public village knowledge: a verified snapshot of the India wiki, Substack guides and website (housing, travel, check-in, meals, venues, families, tickets, residencies, themes), read through `scripts/refs.ts` with source links and dates. Synced from `aromeoes/edge-agent-skill` by `.github/workflows/sync-edge-india-references.yml`.
 - **edge-esmeralda** — background on the *previous* popup, Edge Esmeralda 2026 (not the current event): popup constants (popup id, week dates, themes), attendee directory field semantics, curated wiki/website/newsletter knowledge base, and the onboarding pointer for obtaining EdgeOS tokens.
 - **edgeos** — backend-generic EdgeOS API recipes: events, RSVPs, venues, attendee directory, and your own profile lookup.
-- **geo-esmeralda** — Edge Esmeralda 2026 (previous popup) only; not for Edge City India questions. Geo knowledge graph access through the Geo CLI package: ontology, fixed graph tools, guarded native read-only queries, and attendee-authored content/photo creation.
-- **index-network** — Index Network discovery: onboarding ritual, opportunity surfacing, voice exemplars, cron prompts for welcome/digest flows, and heartbeat tasks.
+- **index-network** — Index Network discovery: onboarding ritual, opportunity surfacing, voice exemplars, the cron jobs' prompts (`prompts/`) and the memory-signal gate (`scripts/memory_signal_gate.py`), and heartbeat tasks.
 - **agent-plaza** — Agent Plaza selfie delivery, optional Turing Falls steering, and follow-up guidance: consumes a black-box Plaza image packet, sends Telegram-compatible local images directly through the Telegram Bot API, writes operational state outside model-read memory, teaches ordinary chat how to route later replies toward IRL closeout, and gives agents guarded instructions for human-confirmed villager movement/speech when Turing Falls credentials already exist.
 - **agent-commons** — public Agent Commons forum retrieval: lets the agent privately retrieve source-attributed public agent-forum discussion when the resident describes an IRL memory/photo or when Agent Plaza needs a more whimsical follow-up lens.
 - **simocracy** — Simocracy proposal, deliberation, comment, and decision retrieval: lets the agent privately retrieve source-attributed civic records when Agent Plaza needs a proposal-centered wrong-interpretation lens.
@@ -21,7 +20,7 @@ Two more bundles are **opt-in and Hermes-only**, and are not part of the set abo
 - **recall** — tenant-local search over the agent's own daily notes, `MEMORY.md` and private conversations (SQLite FTS5, no LLM, no network), exposed as the `recall` tool by `plugins/recall` in the [agentvillage](../README.md) repo. It refuses in group chats and never writes into `memory/`. Without that plugin the skill does nothing. See `recall/README.md`.
 - **record-intention** — the one front door for intentions, the `record_intention` tool registered by `plugins/av-events` in the [agentvillage](../README.md) repo when `AV_RECORD_INTENTION` is on: publishes explicit intents to Index by default and holds ambient ones until the resident confirms. It is installed on every Hermes tenant with the edge bundles and is inert without the tool: the text applies only if `record_intention` is available (in the tool list, or found with `tool_search`). The index-network prompts, the nightly memory pass and `AGENTS.md` carry the same condition.
 
-The skills cross-reference each other. `edge-india` answers India logistics and background from public references and hands live schedule questions to `edgeos` and people questions to `index-network`. `edge-esmeralda` supplies the popup id that `edgeos` recipes need. `geo-esmeralda` handles Geo knowledge graph-backed knowledge and attendee-authored writes, `index-network` handles discovery and intent-based matching, `agent-plaza` provides the Plaza image nudge and optional Turing Falls steering contract, `simocracy` provides proposal and deliberation retrieval, `agent-commons` provides public Agent Commons forum retrieval, and `token-usage-audit` provides the local script-cron guardrail. Install all nine together.
+The skills cross-reference each other. `edge-india` answers India logistics and background from public references and hands live schedule questions to `edgeos` and people questions to `index-network`. `edge-esmeralda` supplies the popup id that `edgeos` recipes need. `index-network` handles discovery and intent-based matching, `agent-plaza` provides the Plaza image nudge and optional Turing Falls steering contract, `simocracy` provides proposal and deliberation retrieval, `agent-commons` provides public Agent Commons forum retrieval, and `token-usage-audit` provides the local script-cron guardrail. Install all eight together.
 
 ## Host-specific silence
 
@@ -45,11 +44,11 @@ All hosts read credentials from environment variables. Set these before installi
 | Variable              | Source                                                                                               | Required |
 | --------------------- | ---------------------------------------------------------------------------------------------------- | -------- |
 | `INDEX_API_KEY`       | Index Network signup (BYOA page or [agent-ee26.edgecity.live](https://agent-ee26.edgecity.live/)) | Yes      |
-| `EDGEOS_BEARER_TOKEN` | EdgeOS email-OTP onboarding flow                                                                     | Yes for Geo knowledge graph access and content writes; also used for EdgeOS directory/profile |
+| `EDGEOS_BEARER_TOKEN` | EdgeOS email-OTP onboarding flow                                                                     | Yes for EdgeOS directory and own profile |
 | `EDGEOS_API_KEY`      | EdgeOS email-OTP onboarding flow (`eos_live_...` key)                                                | Optional; needed for EdgeOS events, RSVPs, venues |
 
 
-`INDEX_API_KEY` is required for the Index Network MCP server. `EDGEOS_BEARER_TOKEN` is required for `geo-esmeralda` auth, graph reads, and content writes. `EDGEOS_API_KEY` is only needed for EdgeOS event, RSVP, and venue recipes.
+`INDEX_API_KEY` is required for the Index Network MCP server. `EDGEOS_BEARER_TOKEN` is required for EdgeOS directory and own-profile recipes. `EDGEOS_API_KEY` is only needed for EdgeOS event, RSVP, and venue recipes.
 
 ### BYOA flow
 
@@ -62,14 +61,14 @@ claude plugin marketplace add Edge-City/agentvillage-skills
 claude plugin install agentvillage@agentvillage-skills --config indexApiKey=<YOUR_API_KEY> --config edgeosToken=<YOUR_TOKEN> --config edgeosApiKey=<YOUR_KEY>
 ```
 
-`--config` values are stored in the plugin's `userConfig`. `indexApiKey` is wired to the Index Network MCP server header. A SessionStart hook exports `EDGEOS_API_KEY` and `EDGEOS_BEARER_TOKEN` into every session via `CLAUDE_ENV_FILE`, so the Geo CLI and edgeos skill's curl recipes work without manual shell exports.
+`--config` values are stored in the plugin's `userConfig`. `indexApiKey` is wired to the Index Network MCP server header. A SessionStart hook exports `EDGEOS_API_KEY` and `EDGEOS_BEARER_TOKEN` into every session via `CLAUDE_ENV_FILE`, so the edgeos skill's curl recipes work without manual shell exports.
 
 ### OpenClaw
 
 ```bash
 openclaw plugins install agentvillage --marketplace Edge-City/agentvillage-skills
 openclaw config set mcp.servers.index '{"url":"https://protocol.index.network/mcp","transport":"streamable-http","headers":{"x-api-key":"<YOUR_API_KEY>"}}'
-openclaw config set env.vars.EDGEOS_BEARER_TOKEN '<YOUR_TOKEN>'  # Human session JWT for Geo knowledge graph access and content writes
+openclaw config set env.vars.EDGEOS_BEARER_TOKEN '<YOUR_TOKEN>'  # Human session JWT for EdgeOS directory and own profile
 openclaw config set env.vars.EDGEOS_API_KEY '<YOUR_KEY>'         # Long-lived automation key for events, RSVPs, venues
 openclaw gateway restart
 ```
@@ -82,7 +81,6 @@ OpenClaw persists credentials in `~/.openclaw/openclaw.json` — no shell profil
 hermes skills install Edge-City/agentvillage/skills/edge-india --force
 hermes skills install Edge-City/agentvillage/skills/edge-esmeralda --force
 hermes skills install Edge-City/agentvillage/skills/edgeos --force
-hermes skills install Edge-City/agentvillage/skills/geo-esmeralda --force
 hermes skills install Edge-City/agentvillage/skills/index-network --force
 hermes skills install Edge-City/agentvillage/skills/agent-plaza --force
 hermes skills install Edge-City/agentvillage/skills/simocracy --force
@@ -94,7 +92,7 @@ Add to `~/.hermes/.env`:
 
 ```bash
 INDEX_API_KEY=<YOUR_API_KEY>
-EDGEOS_BEARER_TOKEN=<YOUR_TOKEN>   # Human session JWT for Geo knowledge graph access and content writes
+EDGEOS_BEARER_TOKEN=<YOUR_TOKEN>   # Human session JWT for EdgeOS directory and own profile
 EDGEOS_API_KEY=<YOUR_KEY>          # Long-lived automation key for events, RSVPs, venues
 TELEGRAM_BOT_TOKEN=<YOUR_BOT_TOKEN>        # optional, required for Agent Plaza selfie photo delivery
 TELEGRAM_HOME_CHANNEL=<numeric_chat_id>   # optional, for cron delivery
@@ -117,7 +115,7 @@ For workspace, installer, and cron jobs:
 ```bash
 bun install/install.ts --index-api-key <KEY>
 # add --telegram-handle handle when this runtime serves the user over Telegram and the resident confirmed that handle
-# add --edgeos-bearer-token for Geo knowledge graph access/content writes
+# add --edgeos-bearer-token for EdgeOS directory and own-profile recipes
 # add --edgeos-api-key for EdgeOS event, RSVP, and venue recipes
 # re-onboard: add --wipe-user
 ```
@@ -158,7 +156,7 @@ Configure an HTTP MCP server with the following settings:
 }
 ```
 
-Set `EDGEOS_BEARER_TOKEN` for Geo knowledge graph access and content writes. Set `EDGEOS_API_KEY` as well if the agent supports EdgeOS event, RSVP, or venue recipes.
+Set `EDGEOS_BEARER_TOKEN` for EdgeOS directory and own-profile recipes. Set `EDGEOS_API_KEY` as well if the agent supports EdgeOS event, RSVP, or venue recipes.
 
 For Hermes with workspace + installer, use [agentvillage](https://github.com/Edge-City/agentvillage). For OpenClaw, use [agentvillage](https://github.com/Edge-City/agentvillage).
 
