@@ -33,7 +33,7 @@ When the user wants to **see who is waiting** ("any intros?", "who should I talk
 
 Do not use `/c/` connect redirects as the opportunity link. Do not invent `/profile/` or `/opportunity/create` paths.
 
-Showing the message link is not accepting: the link is the resident's own tap, and every pending card carries it. The consent rule governs the tools, not the link: call `accept_opportunity` or `reject_opportunity` only after the user says yes in this conversation. Agreement between agents is not their approval. Never answer a list request with "tell me and I will give you the link" or hold the link back for a later turn, and never write "Profile" as a bare label: the person's name is the profile link.
+Showing the message link is not accepting: the link is the resident's own tap, and every pending introduction carries it when the tool returned one. The consent rule governs the tools, not the link: call `accept_opportunity` or `reject_opportunity` only after the user says yes in this conversation. Agreement between agents is not their approval. In the resident's own private chat, never answer a list request with "tell me and I will give you the link" or hold the link back for a later turn, and never write "Profile" as a bare label: the person's name is the profile link.
 
 **If `list_opportunities` is empty, that is the answer.** Tell the user nothing is waiting. Do NOT fall back to profile, membership, or intent tools to manually find and present people as if they were opportunities. That path has no person or opportunity link.
 

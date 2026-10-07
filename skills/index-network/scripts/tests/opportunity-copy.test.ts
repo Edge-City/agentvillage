@@ -63,10 +63,10 @@ describe("opportunity copy: the lead line is profiles, every pending card gets i
   });
 
   test("tools.md: showing the link is not accepting; the consent rule governs the tools; no 'tell me and I will give you the link', no bare 'Profile' label", () => {
-    expect(count(tools, "Showing the message link is not accepting: the link is the resident's own tap, and every pending card carries it.")).toBe(1);
+    expect(count(tools, "Showing the message link is not accepting: the link is the resident's own tap, and every pending introduction carries it when the tool returned one.")).toBe(1);
     expect(count(tools, "The consent rule governs the tools, not the link: call `accept_opportunity` or `reject_opportunity` only after the user says yes in this conversation.")).toBe(1);
     expect(count(tools, "Agreement between agents is not their approval.")).toBe(1);
-    expect(count(tools, "Never answer a list request with \"tell me and I will give you the link\" or hold the link back for a later turn, and never write \"Profile\" as a bare label: the person's name is the profile link.")).toBe(1);
+    expect(count(tools, "In the resident's own private chat, never answer a list request with \"tell me and I will give you the link\" or hold the link back for a later turn, and never write \"Profile\" as a bare label: the person's name is the profile link.")).toBe(1);
     expect(tools).not.toContain("Accept or pass only after the user says yes in this conversation:");
   });
 
@@ -82,7 +82,12 @@ describe("opportunity copy: the lead line is profiles, every pending card gets i
     expect(section).not.toMatch(/\[message Lena\]/);
     expect(section).not.toMatch(/tell me and I will give you the link\./);
     expect(section).toContain("never labels a link \"Profile\"");
-    expect(section).toContain("message link copied from that card's `acceptUrl`");
+    expect(count(section, "adds, for every pending introduction (not a community ask), in the resident's own private chat, the message link copied from that card's `acceptUrl`")).toBe(1);
+    expect(count(section, "A `negotiating` card gets no message link yet.")).toBe(1);
+    const lena = section.split("\n").filter((l) => l.includes("[Lena]("));
+    expect(lena).toHaveLength(1);
+    expect(lena[0]).not.toMatch(/acceptUrl|messageUrl/);
+    expect(lena[0]).toContain("your agents are still talking; nothing for you to do yet.");
     // The brief samples are no longer presented as the brief's own shape (DATA-314).
     expect(count(exemplars, "Mimic these exactly when composing an opportunity reply or an introduction drop.")).toBe(1);
     expect(exemplars).not.toContain("when composing the morning brief");
@@ -110,7 +115,10 @@ describe("opportunity copy: the lead line is profiles, every pending card gets i
     for (const { name, text } of everything) {
       // The ban sentence in tools.md is the only place the accept path may be spelled out.
       expect({ name, hits: count(text, "action=accept") }).toEqual({ name, hits: name === "tools.md" ? 1 : 0 });
-      expect({ name, hit: /accept\s*(and|&)\s*message/i.test(text) }).toEqual({ name, hit: false });
+      expect({ name, hit: /accept\s*(and|&|\+|\/)\s*message/i.test(text) }).toEqual({ name, hit: false });
+      expect({ name, hit: /\[Profile\]/i.test(text) }).toEqual({ name, hit: false });
+      // Only the ban in tools.md may spell out a "tell me and I will give you the link" promise.
+      expect({ name, hits: (text.match(/(tell me|say the word|let me know)[^.\n]*(give|send)[^.\n]*link/gi) ?? []).length }).toEqual({ name, hits: name === "tools.md" ? 1 : 0 });
       expect({ name, hit: /\]\(\{?(url|opportunityUrl)\}?\)/.test(text) }).toEqual({ name, hit: false });
       // The Connections page is a look, never an action: no sentence may say residents accept or message from it.
       expect({ name, hit: /(accept|message)[^.\n]*\bfrom the Connections\b/i.test(text) || /Connections[^.\n]*\bwhere (they|you) can (accept|message)\b/i.test(text) }).toEqual({ name, hit: false });
