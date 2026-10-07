@@ -200,25 +200,32 @@ and `""` shows a lone value with no label. A payload with a key the map does
 not name, a class with no entry, a request over 3800 characters (a long
 intention's Full details), or any abnormal fact gets the technical card, and
 the decision record says why (`payload.rendering.fallback`: `unlisted-key`,
-`undeclared`, `too-long`, `anomaly`, ...). `note: summary` shows the agent's
-one-line summary under the box marked "not checked"; `none` leaves it to Full
-details. The payloads quoted: an intention `{text}` (av-events
-_intent_approval.py), a share `{digest_id, scope, text, expires_at}` and a vote
-`{question_id, answer}` (_share_vote.py), and a Hermes tool call the hook
-gates `{tool, input}` (core's hook, APRV-445/499). ids are `~`. The reserved
-classes no tool proposes yet (treasury.*, edgeos.*.write, marketplace.app.*,
-resource.allocate, review.delegate.model) have no entry: their payload keys do
-not exist yet, so they stay technical (`undeclared`) until their tool writes
-one, and that tool's PR adds the entry. opportunity.accept has an entry ahead
-of its row (the tools map, DATA-344): an entry for a class no rule names loads
-and waits.
+`undeclared`, `too-long`, `anomaly`, ...). The agent's one-line summary shows
+under the box marked "not checked" (`note: summary`, the default); `note:
+none` leaves it to Full details. A vote's summary leads with the chosen
+option's label, then the question (_share_vote.py summary_for), because the
+card cuts a claimed line at 280 characters. The payloads quoted: an intention
+`{text}` (av-events _intent_approval.py), a share `{digest_id, scope, text,
+expires_at}` and a vote `{question_id, answer}` (_share_vote.py), and a Hermes
+tool call the hook gates `{tool, input}` (core's hook, APRV-445/499). ids are
+`~`. The reserved classes no tool proposes yet (treasury.*, edgeos.*.write,
+marketplace.app.*, resource.allocate, review.delegate.model) have no entry:
+their payload keys do not exist yet, so they stay technical (`undeclared`)
+until their tool writes one, and that tool's PR adds the entry.
+opportunity.accept has no entry yet either: the control plane's copy has no
+row for it until cp#108, and its say test wants every entry to be a class row
+of the same file; the entry comes back with that row.
 
 The relay's quiet hold reads the `ttl:` row from the card's text; the minimal
 card keeps that row inside "Full details", so `always: [ttl_remaining_ms]`
 stays and the hold works unchanged (core pins it:
 tests/channels-telegram-minimal.test.ts, requirement 6b). A daemon before
 0.4.1 refuses `style` and `say` and fails every class closed; the fleet runs
-0.4.2.
+0.4.2. The switch to this block reaches a box only through the operator's
+amendment: core's attestation diff budget (2400 characters, 60 lines) is
+smaller than the block's diff, so a resident-attested box cannot take it until
+core counts a `say` change per class (the control plane's RAILWAY.md, "Rollout
+of the minimal approval card").
 
 Dogfood tenants may add `supervised-retro` with a `retro_rate` on network.call
 or message.send to exercise the review card. Residents get no review cards on
@@ -256,30 +263,25 @@ channels:
         # request's own words in a box under the labels below, the time left, Approve/Deny, and the whole
         # technical card folded under "Full details". `quote` names EVERY field the request may carry:
         # a label shows the field, ~ keeps it off the card (the card then says "Not shown here"), and a
-        # request with a field not named here gets the technical card instead. `note: summary` adds the
-        # agent's one-line summary under the box, marked "not checked"; `none` leaves it off. A class with
-        # no entry here gets the technical card. Core words the eight Hermes tool classes itself, so their
-        # entries carry no `does`.
+        # request with a field not named here gets the technical card instead. The agent's one-line summary
+        # shows under the box, marked "not checked", unless the entry says `note: none`. A class with no
+        # entry here gets the technical card. Core words the eight Hermes tool classes itself, so their
+        # entries carry no `does`. Every key here must be a class row below (tests/approval-template-say).
         intent.publish.inferred.index:
-          does: "post this to Index as something it thinks you are looking for"
+          does: "post this on Index for others to see, as something it thinks you want"
           quote: { text: "" }         # the intention's words, alone in the box
           note: none                  # the summary only repeats the class and an id
         intent.publish.stated.index:  # asked only if the resident sets "Intents you state" to ask
-          does: "post this to Index as something you said you are looking for"
+          does: "post or update this on Index as something you said you want"
           quote: { text: "Post", tool: "Tool", input: "Details" }   # text from record_intention; tool and input from an Index tool call the hook routes here
           note: none
         digest.share:
-          does: "share a note about you with other people"
+          does: "share a note about you with the village or a village service"
           quote: { text: "Note", scope: "Shared with", expires_at: "Until", digest_id: ~ }
           note: none                  # the summary repeats scope, expiry and id
-        village.vote:
-          does: "vote for you on a village question"
+        village.vote:                 # the summary (shown) leads with the option's label, then the question
+          does: "vote for you on a village question or treasury ballot"
           quote: { answer: "Answer", question_id: ~ }
-          note: summary               # the question's text and the option's label are only in the summary
-        opportunity.accept:           # no row yet: the tools map (DATA-344) adds it; an entry for an unused class loads and waits
-          does: "accept or decline a connection or meeting on Index for you"
-          quote: { tool: "Tool", input: "Details" }
-          note: none
         message.send:   { quote: { tool: "Tool", input: "Details" }, note: none }   # these eight ask only if the resident sets their row to ask
         network.call:   { quote: { tool: "Tool", input: "Details" }, note: none }   # a terminal command is quoted by core itself, not by this map
         read.web:       { quote: { tool: "Tool", input: "Details" }, note: none }

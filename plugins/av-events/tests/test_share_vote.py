@@ -1986,9 +1986,27 @@ def test_spoof_no_line_break_survives_into_the_prompt(tctx, serve, mods, questio
 def test_spoof_the_trusted_part_comes_first_and_the_note_label_once(tctx, serve, mods):
     vote(tctx, rationale="They sleep early")
     summary = vote_summary(serve)
-    assert summary.startswith(mods.sv.PROMPT_HEAD)
+    assert summary.startswith(mods.sv.PROMPT_ANSWER)
+    assert summary.index(mods.sv.PROMPT_ANSWER) < summary.index(mods.sv.PROMPT_HEAD) < summary.index(mods.sv.PROMPT_NOTE)
     assert summary.count(mods.sv.PROMPT_NOTE) == 1 and summary.count(mods.sv.PROMPT_ANSWER) == 1
     assert summary.endswith(f"{mods.sv.PROMPT_NOTE} They sleep early")
+
+
+# The minimal card (DATA-370) cuts the agent's claimed line at 280 code points
+# (core telegram-minimal.ts). The answer's label comes first, so a question as long
+# as the provider allows cannot push it off the card.
+MINIMAL_CARD_CUT = 280
+
+
+def test_s2_the_answer_label_comes_before_a_long_question_and_survives_the_card_cut(tctx, serve, mods, question):
+    question.text = "Should the village " + "really " * 60 + "keep quiet hours?"
+    question.text = question.text[: mods.sv.MAX_PROMPT_QUESTION]
+    vote(tctx, rationale="They sleep early")
+    summary = vote_summary(serve)
+    assert len(summary) > MINIMAL_CARD_CUT
+    shown = summary[:MINIMAL_CARD_CUT]
+    assert shown.startswith(f"{mods.sv.PROMPT_ANSWER} Yes, quiet hours from 22:00 (option yes).")
+    assert f"{mods.sv.PROMPT_HEAD} " in shown and "“Should the village really" in shown
 
 
 def test_spoof_the_share_prompt_carries_only_plugin_values_and_a_quoted_service_name(tctx, serve, mods):
