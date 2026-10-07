@@ -8,6 +8,7 @@
  *   - `AGENTS.md`, `USER.md` → `$HERMES_HOME/`
  *   - Edge skill bundles → `$HERMES_HOME/skills/{index-network,edgeos,edge-india,edge-esmeralda,…}/`
  *     (`skill_copy.ts`; `edge-india/references` is replaced, not merged, so upstream deletions land)
+ *   - retired skill bundles (`RETIRED_SKILL_DIRS`, e.g. `geo-esmeralda`) → removed from `$HERMES_HOME/skills/`
  *   - `terminal.cwd` in config.yaml → `$HERMES_HOME`
  *   - Telegram display: no reasoning, one quiet progress message per reply (`display_defaults.ts`; `AV_DISPLAY_DEFAULTS=0` skips)
  *   - STT enabled with Groq Whisper so voice notes are auto-transcribed
@@ -59,7 +60,7 @@ import {
 } from "./config";
 import { configureTelegramDisplay } from "./display_defaults";
 import { copyPluginTree } from "./plugin_copy";
-import { copySkillBundles } from "./skill_copy";
+import { copySkillBundles, removeRetiredSkillDirs } from "./skill_copy";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
 import {
   EDGE_SKILL_NAMES,
@@ -181,6 +182,7 @@ function copyPluginFiles(): void {
 
 function copySkillFiles(): void {
   const targetSkillsRoot = skillsDir();
+  removeRetiredSkillDirs(targetSkillsRoot);
   const copied = copySkillBundles(SOURCE_SKILLS, targetSkillsRoot);
   if (copied > 0) {
     console.log(`→ staged ${copied} files into ${targetSkillsRoot}/{${EDGE_SKILL_NAMES.join(",")}}`);
