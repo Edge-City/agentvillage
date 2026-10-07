@@ -19,3 +19,9 @@ One or two short, warm lines about `person`:
 - Write the name exactly as given. The only links are `person.profileUrl` and `person.messageUrl`, exactly as given.
 - Banned words: leverage, unlock, optimize, scale, disrupt, AI-powered, maximize value, act fast, networking, match.
 - No preamble, no code block, no raw JSON, no ids. Output only the message.
+
+# Last line
+
+End every message with one blank line and then the line below, exactly as written: never translated, reworded or formatted, with nothing after it. It is part of the message, so "Output only the message" allows it. When you reply `[SILENT]`, write only that and leave this line out.
+
+(Introduction suggestion message - you can ask me to stop or manage it)
