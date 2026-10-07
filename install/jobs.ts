@@ -34,9 +34,8 @@
  * and the preview gate reads AV_TEAM_TENANT as job-settings.ts isTeamTenant says.)
  */
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { execFileSync } from "node:child_process";
 import YAML from "yaml";
 
 import { dotenvValue } from "./config";
@@ -91,6 +90,22 @@ import {
   validateEntry,
 } from "../skills/index-network/scripts/job-settings";
 import { type HeldLock, LOCK_STALE_MS, holdsLock, tryAcquireLock } from "../skills/index-network/scripts/state-lock";
+import { HERMES_TIMEOUT_MS, HermesTimeout, hermesRunner } from "../skills/index-network/scripts/hermes-cli";
+import {
+  HERMES_JOB_ID_RE as HERMES_ID_RE,
+  MAX_JOBS_STORE_BYTES,
+  jobsLockPath,
+  missedSlot,
+  rawSchedule,
+  readJobsStore,
+} from "../skills/index-network/scripts/message-labels";
+
+// Shared with the skill scripts that run on a box without install/ (DATA-376,
+// skills/index-network/scripts/pause-job.ts): one definition each, there.
+// HERMES_ID_RE: Hermes's job id shape; any other id is never used or printed.
+// HERMES_TIMEOUT_MS: one Hermes command is killed after it, below LOCK_STALE_MS.
+// MAX_JOBS_STORE_BYTES: a larger `cron/jobs.json` is unreadable.
+export { HERMES_ID_RE, HERMES_TIMEOUT_MS, HermesTimeout, MAX_JOBS_STORE_BYTES, hermesRunner, jobsLockPath, readJobsStore };
 
 /** The one preview job's name; reconcile removes it on the next roll like any retired name. */
 export const PREVIEW_JOB_NAME = "Edge — preview";
@@ -110,29 +125,11 @@ export const PREVIEW_PREAMBLE = [
 /** Exit codes (docs/design/job-settings.md §2). */
 export const EXIT = { done: 0, failed: 1, refused: 2, notTeam: 3, busy: 4 } as const;
 
-/** Hermes's job id: `uuid.uuid4().hex[:12]` (cron/jobs.py:1781 at v2026.9.24). Any other id is never used or printed. */
-export const HERMES_ID_RE = /^[0-9a-f]{12}$/;
-
 /** Every argument value is at most this long. */
 export const MAX_ARG_CHARS = 200;
 
-/**
- * One Hermes command is killed after this: comfortably below the jobs lock's
- * stale time (LOCK_STALE_MS, 150 s), so a hung CLI cannot hold the lock until
- * another command takes it over while this one may still write.
- */
-export const HERMES_TIMEOUT_MS = 60_000;
-
-/** A larger `cron/jobs.json` is unreadable (`jobs-store-unreadable`). */
-export const MAX_JOBS_STORE_BYTES = 16 * 1024 * 1024;
-
 /** The five default jobs, the only ones `--schedule default` and admin marks apply to. */
 const DEFAULT_JOB_KEYS = SETTINGS_JOB_KEYS.filter(isDefaultJobKey);
-
-/** The tenant's jobs lock: one mutating command at a time (stale after LOCK_STALE_MS, as the state lock). */
-export function jobsLockPath(home: string): string {
-  return join(home, "av-events", "jobs.lock");
-}
 
 export interface CommandResult {
   code: number;
@@ -148,14 +145,6 @@ export interface JobsContext {
   now: Date;
   /** The real clock, for the lock's age (tests move it); Date.now by default. */
   clock?: () => number;
-}
-
-/** A Hermes command killed at HERMES_TIMEOUT_MS. */
-export class HermesTimeout extends Error {
-  constructor() {
-    super("hermes-timeout");
-    this.name = "HermesTimeout";
-  }
 }
 
 /** The jobs lock is no longer this command's, or would go stale before the next step could finish. */
@@ -285,38 +274,9 @@ export function specForKey(key: JobKey, schedule = ""): DigestCronSpec {
 /** A Hermes job this command may use: its id has Hermes's shape. */
 type UsableJob = StoredCronJob & { id: string };
 
-/**
- * Hermes's job store, `$HERMES_HOME/cron/jobs.json`, as these commands read
- * it. No file is no jobs (as Hermes reads it). A file that is not a regular
- * file, is over MAX_JOBS_STORE_BYTES, cannot be read, is not JSON, or is not
- * `{"jobs": [...]}` (an object without `jobs` is no jobs, as Hermes reads it)
- * is unreadable: never "no jobs", so `list` never reports a job `missing`
- * because of it. Reconcile's own reader (install_index.ts readCronJobs) is
- * unchanged. (Hermes repairs some shapes on its next write: a bare list, an
- * id-keyed map, control characters in strings. They are unreadable here until then.)
- */
-export function readJobsStore(home: string): { jobs: unknown[] } | { unreadable: true } {
-  const path = join(home, "cron", "jobs.json");
-  let text: string;
-  try {
-    if (!existsSync(path)) return { jobs: [] };
-    const stat = statSync(path);
-    if (!stat.isFile() || stat.size > MAX_JOBS_STORE_BYTES) return { unreadable: true };
-    text = readFileSync(path, "utf8");
-  } catch {
-    return { unreadable: true };
-  }
-  let raw: unknown;
-  try {
-    raw = JSON.parse(text);
-  } catch {
-    return { unreadable: true };
-  }
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { unreadable: true };
-  const jobs = (raw as { jobs?: unknown }).jobs;
-  if (jobs === undefined) return { jobs: [] };
-  return Array.isArray(jobs) ? { jobs } : { unreadable: true };
-}
+// readJobsStore (Hermes's job store, `$HERMES_HOME/cron/jobs.json`, read
+// defensively: unreadable is never "no jobs") lives in message-labels.ts.
+// Reconcile's own reader (install_index.ts readCronJobs) is unchanged.
 
 /** Every job in the store, or StoreUnreadable. */
 function storeJobs(home: string): unknown[] {
@@ -363,14 +323,6 @@ function usableIds(home: string): Set<string> {
   );
 }
 
-/** The schedule text a stored job holds, read defensively (never trusted, never printed). */
-function rawSchedule(job: StoredCronJob): string {
-  const schedule: unknown = job.schedule;
-  if (typeof schedule === "string") return schedule.trim();
-  if (schedule && typeof schedule === "object" && typeof (schedule as { expr?: unknown }).expr === "string") return (schedule as { expr: string }).expr.trim();
-  return typeof job.schedule_display === "string" ? job.schedule_display.trim() : "";
-}
-
 /**
  * The stored schedule when it is readable: canonical exactly, up to the
  * canonical bound rather than the input bound, so every schedule these
@@ -385,14 +337,6 @@ function storedCron(job: StoredCronJob): ParsedCron | null {
 function scheduleOut(job: StoredCronJob): { schedule: string | null; scheduleUnreadable?: true } {
   const cron = storedCron(job);
   return cron ? { schedule: cron.expr } : { schedule: null, scheduleUnreadable: true };
-}
-
-/** Whether the job's stored next run is already due (an occurrence passed while it was paused), by Hermes's clock: the real one. */
-function missedSlot(job: StoredCronJob, now: Date): boolean {
-  const next = (job as { next_run_at?: unknown }).next_run_at;
-  if (typeof next !== "string") return false;
-  const at = Date.parse(next);
-  return Number.isFinite(at) && at <= now.getTime();
 }
 
 function readInstalledIds(home: string): string[] {
@@ -1158,21 +1102,6 @@ export function runJobsCommand(argv: string[], ctx: JobsContext): CommandResult 
     // Removes the lock file only while it still holds this command's token.
     lock?.release();
   }
-}
-
-/**
- * Runs Hermes commands as an argv, never through a shell, each killed
- * (SIGKILL) after `timeoutMs`: a killed command throws HermesTimeout.
- */
-export function hermesRunner(bin: string, env: NodeJS.ProcessEnv, timeoutMs = HERMES_TIMEOUT_MS): (args: string[]) => void {
-  return (args) => {
-    try {
-      execFileSync(bin, args, { stdio: ["ignore", "ignore", "inherit"], env, timeout: timeoutMs, killSignal: "SIGKILL" });
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ETIMEDOUT") throw new HermesTimeout();
-      throw err;
-    }
-  };
 }
 
 export function defaultContext(): JobsContext {
