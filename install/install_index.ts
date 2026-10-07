@@ -77,6 +77,15 @@ import { hermesBin, hermesExecEnv } from "./hermes_cli";
 import { CRON_NAME_PREFIX, hermesHome } from "./paths";
 import { TEMPLATE_NAMES, type TemplateName, adminScheduleKeys, prunePreviewFiles, readJobSettings, scheduleAdminManaged } from "../skills/index-network/scripts/job-settings";
 
+/**
+ * R3 fix round 4 (output injection): a job name read from the tenant's jobs.json is printed only in
+ * a conservative shape (no newline, no brace, no quote); anything else is withheld, so the
+ * installer's stdout never carries a sandbox-controlled string verbatim.
+ */
+export function printableJobName(name: unknown): string {
+  return typeof name === "string" && /^[A-Za-z0-9 _.:-]{1,80}$/.test(name) ? name : "(name withheld)";
+}
+
 const PROD_MCP_URL = "https://protocol.index.network/mcp";
 const DEV_MCP_URL = "https://protocol.dev.index.network/mcp";
 
@@ -181,9 +190,9 @@ function removeEdgeCronJobs(env: NodeJS.ProcessEnv): void {
     if (!job.name.startsWith(CRON_NAME_PREFIX)) continue;
     try {
       execFileSync(bin, ["cron", "remove", job.id], { stdio: "ignore", env });
-      console.log(`→ removed cron ${job.name}`);
+      console.log(`→ removed cron ${printableJobName(job.name)}`);
     } catch {
-      console.warn(`  warning: could not remove cron ${job.name}`);
+      console.warn(`  warning: could not remove cron ${printableJobName(job.name)}`);
     }
   }
 }
@@ -764,9 +773,9 @@ export function reconcileDigestCronJobs(
     if (!job.name.startsWith(CRON_NAME_PREFIX) || specNames.has(job.name) || templateNames.has(job.name)) continue;
     try {
       execFileSync(bin, ["cron", "remove", job.id], { stdio: "ignore", env });
-      console.log(`→ removed retired cron ${job.name}`);
+      console.log(`→ removed retired cron ${printableJobName(job.name)}`);
     } catch {
-      console.warn(`  warning: could not remove cron ${job.name}`);
+      console.warn(`  warning: could not remove cron ${printableJobName(job.name)}`);
       failed.push(job.name);
     }
   }

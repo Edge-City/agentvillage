@@ -96,6 +96,6 @@ ungated one, the healthy state never blocks, the start failure is sticky, the
 re-check runs at most once a minute, the token is never read, and `register`
 never raises. `test_backstop_in_a_real_hermes` runs the plugin inside a real
 Hermes (opt-in: `AV_HERMES_SRC=<Hermes source tree>
-AV_HERMES_PYTHON=<its interpreter>`): healthy, 13 shell hooks register and
+AV_HERMES_PYTHON=<its interpreter>`): healthy, 35 shell hooks register (13 before R3b) and
 nothing blocks; with a mode-000 allowlist lock, `register_from_config` raises
 `PermissionError` and the backstop blocks `terminal`.

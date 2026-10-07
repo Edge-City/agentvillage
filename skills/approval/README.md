@@ -74,7 +74,19 @@ Hermes runs the shim as a `pre_tool_call` shell hook for `terminal`,
 `process(_manage)?`, `web_extract`, `browser_.*`, `skill_manage`,
 `delegate_task`, `cronjob(_manage)?` and `send_message` (which the core adapter
 classifies from approval.md 0.4.0, PR #569; an older core passes them through
-unjudged). The shim POSTs Hermes's envelope to
+unjudged), and (R3b) for the side-effecting tools the core adapter does not
+class itself, which the policy's `tools:` list judges from approval.md 0.4.2:
+every Index write (the nine of its MCP server's 14 tools:
+the intent create, update, archive, pause and resume tools, then
+`accept_opportunity`, `reject_opportunity`,
+`update_my_profile` and `enrich_my_profile`; and the Index Hermes plugin's
+eight write tools, whose accept or decline is `index_update_opportunity`),
+media generation
+(`image_generate`, `video_generate`, `text_to_speech`) and the web reads
+`web_search` and `x_search`. Index's read tools and the local tools
+(`skill_view`, `memory`, `todo`, `record_intention` and the like) are not
+routed: av-events records every call as `tool.call`, and the hook is for
+actions. Each routed call costs one shim round trip. The shim POSTs Hermes's envelope to
 `$AV_APPROVAL_URL/hook/hermes` with the agent token in
 `X-Approval-Authorization` for a hosted facade (Maritime's proxy strips
 `Authorization`; the hosted supervisor moves it back), and in `Authorization`
@@ -259,8 +271,11 @@ What the gate does not see, or does not judge, today:
   day-one policy sets every one of them autonomous, with `network.call` and
   `read.web`: each call is recorded and runs, and fails closed only when the
   facade cannot be reached. On an older core the adapter passes them through
-  unjudged (`{}`). `web_extract` reaches the facade but has no classifier rule
-  even in PR #569, so it passes through unjudged. `send_message` is not an
+  unjudged (`{}`). `web_extract`, `web_search`, `x_search`, Index's routed
+  writes and the media tools reach the facade with no classifier rule; from
+  approval.md 0.4.2 the policy's `tools:` list judges them (`read.web`,
+  `intent.publish.stated.index`, `opportunity.accept`, `network.call`), and an
+  older core passes them through unjudged. `send_message` is not an
   agent-callable tool at Hermes v2026.9.24; its entry covers any build or
   plugin that registers it.
 - **The tcp listener window** (above) and ptrace against the gateway.
@@ -289,6 +304,31 @@ DATA-43b must not trust it for anything but a hint. The daemon instance id is re
 on the facade's `GET /status`, which answers the tenant credential; the
 sandbox holds the agent credential. The DATA-43b follower reads it and writes
 the `approval_md` identity-map row.
+
+R3 fix round 4 (SF1, the trust boundary): what the control plane records as
+routed comes from Hermes's own load and parse of the config.yaml this install
+wrote. `live_selfcheck.py` runs under Hermes's interpreter, loads the file with
+Hermes's `load_config` and lists the shim's specs with Hermes's
+`iter_configured_hooks`, the same parse the gateway uses, and reports
+`routed_entries` (distinct matchers, the first spec per matcher as Hermes keeps
+it) and `routed_sha256` (those matchers sorted, one per line). `install.ts`
+prints them in the gate receipt, one JSON object as the LAST line of its stdout:
+`{"av_gate":{"nonce":"<nonce>","entries":<n>,"sha256":"<hex>"}}`. The nonce is
+the control plane's, 16 random bytes in hex, passed in the exec's environment as
+`AV_GATE_NONCE` for that one install and never logged. The control plane
+accepts only that object, with its own nonce, as the last line of that exec's
+stdout. An earlier line, forged or not, never counts, and any output after it
+voids it. It records the result after the gateway restart is verified, and it
+never reads the marker for a count. The installer does not echo config values
+or tenant-controlled names onto stdout: job names from jobs.json are printed
+only in a conservative shape. A
+different count or list fails the self-check (`live-routed-mismatch:<n>`), so
+an entry added to or removed from config.yaml by hand is caught at the next
+`--check` or install. `--check` prints `routed_entries`, `routed_sha256` and the
+expected two in its JSON line. An installer before R3b prints no routed line,
+and the control plane then records no count. A writer inside the sandbox that
+can edit config.yaml can also strip the shim entries outright: that is the
+existing DATA-234 gap (cron scripts run with no hook), and this does not widen it.
 
 ## Enablement under co-location (DATA-233)
 

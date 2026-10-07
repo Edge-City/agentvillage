@@ -41,6 +41,14 @@ of its config. Modelled on approval-md-hosted `hermes-image/selfcheck.py`
    Hermes registers (later duplicates are dropped), so it must exist and be
    `fail_closed`. Commands and matchers are compared after Python's `strip()`,
    as Hermes's parser and registration key do.
+5b. R3 fix round 4 (the trust boundary): from the same parse, what Hermes
+   would register for the shim: `routed_entries`, the number of distinct
+   matchers among the shim's `pre_tool_call` specs (first spec per matcher,
+   as Hermes keeps), and `routed_sha256`, the sha256 of those matchers sorted
+   and joined by newlines. The installer prints both on one line, and the
+   control plane records only that line from its own exec of the installer.
+   An entry added to or removed from config.yaml after an install changes
+   them (the installer then reports `live-routed-mismatch`).
 6. Fires the shim's `terminal` entry ONCE through the production spawn
    path (`run_once`) with `terminal`, command `ls /tmp` and deliberately NO
    `workdir`. The facade refuses that call above the policy, before the log is
@@ -58,6 +66,7 @@ Exit 0 always when it could report; 3 when Hermes's modules are unavailable
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -255,6 +264,14 @@ def main() -> int:
 
     specs = [s for s in iter_configured_hooks(cfg)
              if getattr(s, "event", None) == "pre_tool_call" and str(getattr(s, "command", "")).strip() == a.shim]
+    # 5b: what Hermes registers for the shim, from this same parse (first spec per matcher).
+    routed: list = []
+    for s in specs:
+        name = str(getattr(s, "matcher", "") or "").strip()
+        if name not in routed:
+            routed.append(name)
+    facts["routed_entries"] = len(routed)
+    facts["routed_sha256"] = hashlib.sha256("\n".join(sorted(routed)).encode("utf-8")).hexdigest()
     entries: dict = {}
     for m in matchers:
         # Config order: the first spec for (matcher, command) is the one Hermes registers.
