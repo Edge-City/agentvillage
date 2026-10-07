@@ -33,7 +33,7 @@ plugins/av-events/
   tool_categories.json        frozen seed: tool name -> category (tool_categories_v3)
   edgeos_tool_allowlist.json  frozen seed: EdgeOS operations (edgeos_tool_allowlist_v1)
   cron_job_names.json         frozen seed: the cron names cron.run may carry (cron_job_names_v2)
-  outcome_question.json       the evening outcome ask's fixed question: sentence, normalise steps, question key rule, shared cases with keys and hashes (outcome_question_v3)
+  outcome_question.json       the evening outcome ask's fixed question: sentence, normalise steps, question key rule, shared cases with keys and hashes (outcome_question_v4)
   tests/           pytest suite; drives a fake ctx, never imports Hermes
 ```
 
@@ -1349,7 +1349,7 @@ The whole design, as built, is `docs/design/outcome-ask.md`. In short:
   into `av-events/outcome-ask/armed/<execution>.json` with the reply's keyed hash and the keyed
   hash of the question's key. These remove
   the stage and arm nothing: a silent reply; a reply that, normalised for matching (special
-  spaces, surrounding bold or quotes, trailing emoji), is not exactly the fixed question (the
+  spaces, one trailing DATA-373 manage line, surrounding bold or quotes, trailing emoji), is not exactly the fixed question (the
   rules and a shared case table in `outcome_question.json`); a reply whose question key does not
   hash to the stage's `question_sha256` (not the question the trigger showed); a stage older than the run's claim in
   Hermes's ledger, newer than the reply, or over 15 minutes old; a ledger row that is missing or
@@ -1386,8 +1386,10 @@ The whole design, as built, is `docs/design/outcome-ask.md`. In short:
   stage leaves. The trigger still writes version 1 (`STAGE_FORMAT_V2` off in `outcome-ask.ts`),
   so today every ask and answer carries a null id with `not_recorded`. An id, never text. Design
   note §8.
-- **Hash.** The hash is of the model's reply. Hermes may wrap a cron delivery
-  (`cron.wrap_response`) or prepend a fallback notice, so it is not of the Telegram text.
+- **Hash.** The hash is of the model's reply. The installer sets `cron.wrap_response: false`
+  (DATA-373), so Hermes adds no "Cronjob Response" header or "To stop or manage this job" footer;
+  the evening reply ends with its own manage line, never on the outcome question. Hermes may
+  still prepend a fallback notice, so the hash is not of the Telegram text.
 - **Trust boundary.** Everything in the agent's home is writable by the agent: these files,
   Hermes's ledger, the event buffer and this plugin's source. The file checks (a regular,
   user-owned 0600 file under a size cap in a private directory, exact keys and shapes, re-checks

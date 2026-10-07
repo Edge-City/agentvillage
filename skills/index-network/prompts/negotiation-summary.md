@@ -32,3 +32,9 @@ A few live threads are worth closing while everyone is still here.
 - Write names exactly as given; never write a name that is not in the JSON. The only links are the URLs in the JSON, exactly as given.
 - Banned words: leverage, unlock, optimize, scale, disrupt, AI-powered, networking, match.
 - No code block, no raw JSON, no ids. Output only the message; its first characters are `**People Follow-Up**`.
+
+# Last line
+
+End every message with one blank line and then the line below, exactly as written: never translated, reworded or formatted, with nothing after it. It comes after the last section and is part of the message, so "Output only the message" allows it. When you reply `[SILENT]`, write only that and leave this line out.
+
+(Conversation update message - you can ask me to stop or manage it)

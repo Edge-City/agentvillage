@@ -9,14 +9,14 @@
  * fleet repair command: retired Edge cron jobs are removed, and each current
  * one is edited in place (prompt, script, agent mode, failure target; id,
  * schedule, pause state and next run kept, DATA-314), preserving all user
- * memory and Kanban data. It also sets `cron.script_timeout_seconds` as
- * install.ts does.
+ * memory and Kanban data. It also sets `cron.script_timeout_seconds` and
+ * `cron.wrap_response: false` as install.ts does.
  *
  * Usage:
  *   HERMES_HOME=/opt/data bun install/reconcile_digest_crons.ts
  */
 
-import { configureCronScriptTimeout } from "./config";
+import { configureCronScriptTimeout, configureCronWrapResponse } from "./config";
 import { hermesExecEnv } from "./hermes_cli";
 import { reconcileDigestCronJobs } from "./install_index";
 
@@ -24,6 +24,8 @@ console.log("AgentVillage Index cron reconciler");
 console.log("===================================");
 // The proactive triggers' budgets need it, as install.ts sets it (DATA-314).
 configureCronScriptTimeout();
+// The delivering prompts carry their own manage line; no Hermes wrapper (DATA-373).
+configureCronWrapResponse();
 const failed = reconcileDigestCronJobs(hermesExecEnv());
 if (failed.length > 0) {
   // Every job was attempted; a mixed tenant is reported, never silent (B1-fix F9).

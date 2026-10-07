@@ -276,6 +276,36 @@ export function configureCronScriptTimeout(): void {
   console.log(`→ set cron.script_timeout_seconds: ${CRON_SCRIPT_TIMEOUT_SECONDS}`);
 }
 
+/**
+ * Set `cron.wrap_response: false` (DATA-373). With it unset or true, Hermes
+ * wraps every cron delivery in a "Cronjob Response: <job name>" header and a
+ * "To stop or manage this job ..." footer (cron/scheduler_delivery.py at the
+ * floor 118984d7); false sends the model's reply as it is. Each delivering
+ * prompt under skills/index-network/prompts ends with its own one-line manage
+ * note instead. The knob is global, so a resident's own reminders lose the
+ * wrapper too (accepted, Carter 2026-10-07). Hermes wraps on any value but
+ * false, so anything else (unset, true as a config save writes the default,
+ * a stray string) becomes false. Idempotent: when it is already false the
+ * file is not rewritten.
+ */
+export function configureCronWrapResponse(): void {
+  const doc = readConfig();
+  const raw = doc.cron;
+  if (raw !== undefined && raw !== null && (typeof raw !== "object" || Array.isArray(raw))) {
+    console.log("→ warning: cron in config.yaml is not a mapping; left cron.wrap_response unset");
+    return;
+  }
+  const cron = { ...((raw as Record<string, unknown>) ?? {}) };
+  if (cron.wrap_response === false) {
+    console.log("→ cron.wrap_response already false; left as is");
+    return;
+  }
+  cron.wrap_response = false;
+  doc.cron = cron;
+  writeConfig(doc);
+  console.log("→ set cron.wrap_response: false (cron deliveries carry no Hermes header or footer)");
+}
+
 const DASHBOARD_PLUGIN = "dashboard-auth-edgecity";
 
 /** Enable the Edge City dashboard-auth plugin and public URL for hosted dashboards. */

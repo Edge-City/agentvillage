@@ -326,6 +326,8 @@ def test_the_shared_cases_that_fit_the_sentence_but_are_not_the_question_shown(l
     "Did you and Maya meet? Reply met, not useful, or missed.",
     "Did you and **Maya** meet? Reply met, not useful, or missed.",
     "**Did you and Maya meet? Reply met, not useful, or missed.** \U0001f642",
+    # DATA-373 SF1: the evening prompt's manage line, added by a model slip, does not stop the ask.
+    "Did you and Maya meet? Reply met, not useful, or missed.\n\n(Evening questions message - you can ask me to stop or manage it)",
 ])
 def test_the_question_shown_arms_with_its_name_bold_or_plain(live, ctx, tenant, av, reply):
     execution = uuid.uuid4().hex
