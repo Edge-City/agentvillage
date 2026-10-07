@@ -363,6 +363,27 @@ about 110 s or more. The installer sets it to 120 when it is unset, holds
 Hermes's own default of 3600, or is lower than 120; another value set by hand
 is kept.
 
+**Cron wrapper (DATA-373).** The installer sets `cron.wrap_response: false`
+in `config.yaml` at install and at the standalone reconcile
+(`configureCronWrapResponse`), so Hermes no longer wraps a cron delivery in
+its "Cronjob Response: <job name>" header (with the job id) and its "To stop
+or manage this job" footer. Instead each delivering prompt ends with its own
+label line, `(<Label> message - you can ask me to stop or manage it)`, which
+the model writes as the message's last line and leaves off a `[SILENT]`
+reply. The labels and their jobs: Daily digest = `Edge — daily digest`;
+Conversation update = `Edge — negotiation summary`; Evening questions =
+`Edge — evening questions`; Introduction suggestion = both opportunity drops
+(and a resident's `Edge — template: digest-preview`); Usage report =
+`Edge — token usage audit` (opt-in). A resident who asks to stop one gets
+that job paused through the agent's cron tool (`workspace/AGENTS.md`, "Cron
+schedule"); a roll keeps the pause, and times stay fixed.
+av-events strips one trailing manage line (`normalise.manage_line` in
+`plugins/av-events/outcome_question.json`) before matching the evening
+outcome question, so a model that adds the line to the question still arms
+the ask. The gap: the config step runs before `installIndex()`, so under
+`--skip-index`, or for a job left in `cron_failed`, deliveries carry neither
+Hermes's footer nor a manage line until the next roll that succeeds.
+
 **The Connections link.** The brief always ends its Index part with
 `Connections: <link>`. The link is `https://agents.edgecity.live/insights`
 unless `AV_CONNECTIONS_URL` (process environment, else `$HERMES_HOME/.env`)
@@ -427,9 +448,12 @@ that line and the model writes a sentence into that local output instead.
 Then roll the previous tag as usual; its installer rewrites only prompts,
 which restores its own (`prepare.md` and `send.md` come back with its files).
 The `--failure-deliver local` setting, the shims in `$HERMES_HOME/scripts/`,
-`av-events/proactive/`, the `timezone` and `cron.script_timeout_seconds` keys,
-and the `proactiveRuns` key in the state file are left behind; they are
-harmless to the older release.
+`av-events/proactive/`, the `timezone`, `cron.script_timeout_seconds` and
+`cron.wrap_response` (false) keys, and the `proactiveRuns` key in the state
+file are left behind. All but `cron.wrap_response` are harmless to the older
+release: after a rollback to a tag from before DATA-373, whose prompts carry
+no manage line, run `hermes config set cron.wrap_response true` on each
+resident (or delete the key) so Hermes's own stop-or-manage footer comes back.
 
 ## Edge India knowledge (K1)
 
