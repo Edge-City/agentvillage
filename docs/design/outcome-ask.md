@@ -200,10 +200,14 @@ The `outcome.asked@1` fields (`src/schemas/index.ts:1716-1727`):
 - `event_id`: a uuid7 derived from the execution and the outcome (`derived_uuid7`), so a second
   process derives the same row.
 
-**The hash is of the reply, not of the Telegram text.** Unless `cron.wrap_response: false` is set,
-Hermes wraps a cron delivery in a "Cronjob Response: <name>" header and a footer
-(`cron/scheduler_delivery.py:1944-1963`). It may also prepend a fallback-model notice
-(`cron/scheduler.py:2531-2535`). The overlay sets neither, and the fleet's setting is unknown.
+**The hash is of the reply, not of the Telegram text.** Unless `cron.wrap_response` is false,
+Hermes wraps a cron delivery in a "Cronjob Response: <name>" header (with the job id) and a
+"To stop or manage this job, send me a new message ..." footer (`cron/scheduler_delivery.py:1937-1959`
+at the floor `118984d7`). Since DATA-373 the installer and the digest-cron reconcile set it false, so
+a delivery is the reply as written; each delivering prompt ends its reply with its own manage line
+(the evening job: `(Evening questions message - you can ask me to stop or manage it)`, never on the
+outcome question, which stays the whole reply). Hermes may also prepend a fallback-model notice
+(`cron/scheduler.py:2531-2535`), which the overlay does not turn off.
 
 ## 3. The answer
 

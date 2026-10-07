@@ -1386,8 +1386,10 @@ The whole design, as built, is `docs/design/outcome-ask.md`. In short:
   stage leaves. The trigger still writes version 1 (`STAGE_FORMAT_V2` off in `outcome-ask.ts`),
   so today every ask and answer carries a null id with `not_recorded`. An id, never text. Design
   note §8.
-- **Hash.** The hash is of the model's reply. Hermes may wrap a cron delivery
-  (`cron.wrap_response`) or prepend a fallback notice, so it is not of the Telegram text.
+- **Hash.** The hash is of the model's reply. The installer sets `cron.wrap_response: false`
+  (DATA-373), so Hermes adds no "Cronjob Response" header or "To stop or manage this job" footer;
+  the evening reply ends with its own manage line, never on the outcome question. Hermes may
+  still prepend a fallback notice, so the hash is not of the Telegram text.
 - **Trust boundary.** Everything in the agent's home is writable by the agent: these files,
   Hermes's ledger, the event buffer and this plugin's source. The file checks (a regular,
   user-owned 0600 file under a size cap in a private directory, exact keys and shapes, re-checks
