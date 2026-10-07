@@ -53,7 +53,7 @@ beforeEach(() => {
       copyFileSync(join(REPO_SKILLS, file), join(home, "skills", file));
     }
   }
-  copyFileSync(join(REPO_SKILLS, "edge-esmeralda/prompts/ask-questions.md"), join(home, "skills", "edge-esmeralda/prompts/ask-questions.md"));
+  copyFileSync(join(REPO_SKILLS, "index-network/prompts/ask-questions.md"), join(home, "skills", "index-network/prompts/ask-questions.md"));
 });
 
 afterEach(() => {
@@ -566,7 +566,7 @@ describe("add and remove: one job from a template, for one tenant", () => {
     expect(HERMES_ID_RE.test(created.id)).toBe(true);
     expect(added.out).toEqual({ ok: true, job: "tpl-brief", id: created.id, result: "created", changed: ["settings", "create"], schedule: "0 15 * * *", window: "14:00-16:00", tz: "Asia/Kolkata" });
     expect(created).toMatchObject({ schedule: { expr: "0 15 * * *" }, script: "agentvillage_proactive_tpl-brief.sh", deliver: "telegram", failure_deliver: "local", enabled: true });
-    expect(created.prompt).toBe(readFileSync(join(REPO_SKILLS, "edge-esmeralda/prompts/brief.md"), "utf8").trim());
+    expect(created.prompt).toBe(readFileSync(join(REPO_SKILLS, "index-network/prompts/brief.md"), "utf8").trim());
     expect(created.no_agent).toBeUndefined();
     expect(readFileSync(join(home, "scripts", "agentvillage_proactive_tpl-brief.sh"), "utf8")).toBe(readFileSync(join(REPO_SKILLS, PROACTIVE_SHIM), "utf8"));
     expect(installedIds()).toContain(created.id);
@@ -591,9 +591,9 @@ describe("add and remove: one job from a template, for one tenant", () => {
   test("each template maps to its base job's prompt; the drop template has no default window", () => {
     expect(run("add", "--template", "digest-preview", "--schedule", "0 16 * * *").out).toMatchObject({ ok: true, window: null, changed: ["create"] });
     expect(settingsFile()).toBeNull();
-    expect(job("Edge — template: digest-preview")!.prompt).toBe(readFileSync(join(REPO_SKILLS, "edge-esmeralda/prompts/opportunity-drop.md"), "utf8").trim());
+    expect(job("Edge — template: digest-preview")!.prompt).toBe(readFileSync(join(REPO_SKILLS, "index-network/prompts/opportunity-drop.md"), "utf8").trim());
     expect(run("add", "--template", "evening-ask", "--schedule", "0 20 * * *").out).toMatchObject({ ok: true });
-    expect(job("Edge — template: evening-ask")!.prompt).toBe(readFileSync(join(REPO_SKILLS, "edge-esmeralda/prompts/ask-questions.md"), "utf8").trim());
+    expect(job("Edge — template: evening-ask")!.prompt).toBe(readFileSync(join(REPO_SKILLS, "index-network/prompts/ask-questions.md"), "utf8").trim());
     expect(job("Edge — template: evening-ask")!.script).toBe("agentvillage_proactive_tpl-evening-ask.sh");
   });
 
@@ -714,7 +714,7 @@ describe("what a roll keeps", () => {
       for (const entry of all) if (entry.name === "Edge — template: evening-ask" || entry.name === SEND.name) entry.prompt = "AN OLD PROMPT";
     });
     roll();
-    expect(job("Edge — template: evening-ask")!.prompt).toBe(readFileSync(join(REPO_SKILLS, "edge-esmeralda/prompts/ask-questions.md"), "utf8").trim());
+    expect(job("Edge — template: evening-ask")!.prompt).toBe(readFileSync(join(REPO_SKILLS, "index-network/prompts/ask-questions.md"), "utf8").trim());
     expect(job("Edge — template: evening-ask")!.schedule.expr).toBe("0 20 * * *");
     expect(job(SEND.name)!.prompt).toBe(readFileSync(join(REPO_SKILLS, SEND.promptFile!), "utf8").trim());
   });
@@ -732,7 +732,7 @@ describe("what a roll keeps", () => {
     expect(job(PREVIEW_JOB_NAME)).toBeUndefined();
     expect(job("Edge — template: Brief")).toBeUndefined();
     expect(job("Edge — template: brief")).toMatchObject({ id: "d1b2c3d4e5f6", script: "agentvillage_proactive_tpl-brief.sh", schedule: { expr: "0 12 * * *" } });
-    expect(job("Edge — template: brief")!.prompt).toBe(readFileSync(join(REPO_SKILLS, "edge-esmeralda/prompts/brief.md"), "utf8").trim());
+    expect(job("Edge — template: brief")!.prompt).toBe(readFileSync(join(REPO_SKILLS, "index-network/prompts/brief.md"), "utf8").trim());
   });
 });
 
@@ -756,7 +756,7 @@ describe("preview: a one-shot test job on a team tenant only", () => {
     expect(result).toEqual({ code: 0, out: { ok: true, job: "drop-midday", id: preview.id, fires: "in 1m" } });
     expect(preview).toMatchObject({ schedule: { kind: "once" }, script: "agentvillage_proactive_preview-drop-midday.sh", deliver: "telegram", failure_deliver: "local" });
     expect(preview.prompt.startsWith(PREVIEW_PREAMBLE.trim().split("\n")[0])).toBe(true);
-    expect(preview.prompt).toContain(readFileSync(join(REPO_SKILLS, "edge-esmeralda/prompts/opportunity-drop.md"), "utf8").trim());
+    expect(preview.prompt).toContain(readFileSync(join(REPO_SKILLS, "index-network/prompts/opportunity-drop.md"), "utf8").trim());
     expect(existsSync(join(home, "scripts", "agentvillage_proactive_preview-drop-midday.sh"))).toBe(true);
     // A second preview replaces the first: one preview job at a time.
     run("preview", "--job", "tpl-evening-ask");
@@ -795,7 +795,7 @@ describe("preview: a one-shot test job on a team tenant only", () => {
   test("the preview preamble passes the cron prompt scan with every job's prompt", () => {
     expect(cronScanHit(PREVIEW_PREAMBLE)).toBeNull();
     for (const file of ["brief.md", "opportunity-drop.md", "negotiation-summary.md", "ask-questions.md"]) {
-      expect({ file, hit: cronScanHit(`${PREVIEW_PREAMBLE}${readFileSync(join(REPO_SKILLS, "edge-esmeralda/prompts", file), "utf8")}`) }).toEqual({ file, hit: null });
+      expect({ file, hit: cronScanHit(`${PREVIEW_PREAMBLE}${readFileSync(join(REPO_SKILLS, "index-network/prompts", file), "utf8")}`) }).toEqual({ file, hit: null });
     }
   });
 });

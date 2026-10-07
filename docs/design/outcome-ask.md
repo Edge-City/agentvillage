@@ -62,7 +62,7 @@ that Index still lists as accepted.
 **The question.** The name goes through `cleanName`, the same path as every other name. The
 Script Output is `{job: "evening-note", date, outcomeQuestion}`, and `outcomeQuestion` is exactly
 `Did you and <name> meet? Reply met, not useful, or missed.` (`outcomeQuestion` in
-`outcome-ask.ts`). The evening prompt (`skills/edge-esmeralda/prompts/ask-questions.md`) says to
+`outcome-ask.ts`). The evening prompt (`skills/index-network/prompts/ask-questions.md`) says to
 deliver it word for word and nothing else. It keeps the Script Error line every prompt now carries.
 The text is scanned with the rest of the Script Output as before. The trigger's cleaning and
 scanning are unchanged.

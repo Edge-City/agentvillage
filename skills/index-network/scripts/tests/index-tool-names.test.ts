@@ -41,7 +41,7 @@ function filesIn(dir: string, ext: string): string[] {
 const SCRIPTS = filesIn("skills/index-network/scripts", ".ts");
 const PROSE = [
   ...filesIn("workspace", ".md"),
-  ...filesIn("skills/edge-esmeralda/prompts", ".md"),
+  ...filesIn("skills/index-network/prompts", ".md"),
   ...filesIn("skills/index-network", ".md"),
 ];
 
@@ -60,8 +60,8 @@ describe("Index tool names in scripts and prose", () => {
       "skills/index-network/scripts/summarize-negotiations.ts",
       "workspace/SOUL.md",
       "workspace/AGENTS.md",
-      "skills/edge-esmeralda/prompts/memory-signals.md",
-      "skills/edge-esmeralda/prompts/brief.md",
+      "skills/index-network/prompts/memory-signals.md",
+      "skills/index-network/prompts/brief.md",
       "skills/index-network/tools.md",
       "skills/index-network/SKILL.md",
     ]) {
