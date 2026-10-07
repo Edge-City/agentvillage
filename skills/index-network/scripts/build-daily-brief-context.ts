@@ -99,25 +99,119 @@ const EDGE_TAGS = [
   "Food Systems",
 ];
 
-const TAG_KEYWORDS: Record<string, string[]> = {
-  "Health & Longevity": ["health", "longevity", "aging", "wellness", "medicine", "biotech"],
-  "Bio & Neuro": ["bio", "biology", "neuro", "brain", "buck", "science", "lab"],
-  AI: ["ai", "agent", "agents", "llm", "machine learning", "model", "automation"],
-  "Governance & Coordination": ["governance", "coordination", "consent", "collective", "decision", "polis"],
+/**
+ * The words that suggest each tag, matched as whole words (keywordPattern):
+ * case-insensitive, no letter or digit directly before or after, an optional
+ * plural `s`, and a space inside a keyword standing for any run of spaces,
+ * hyphens or underscores. A tag's own name always counts as one of its words.
+ *
+ * DATA-372: no keyword may be a short word that ordinary prose is full of
+ * (the bare `ar` tagged "We are here" as Spatial Computing; `bio` is the
+ * profile blurb, `lab` any lab result), and none may be a word this product
+ * itself puts into every resident's memory (`agent`, `network` from Index
+ * Network, `city` from Edge City, `consent` from research consent), or every
+ * tenant gets the same tags. The short ones left (`ai`, `xr`, `vr`, `zk`,
+ * `p2p`) are not English words.
+ *
+ * Whole words lose the derived and compound forms a substring caught, and a
+ * resident types an interest in their own words, so those forms are listed
+ * outright (healthcare, cybersecurity, musician, ...): DATA-372 S1.
+ */
+export const TAG_KEYWORDS: Record<string, string[]> = {
+  "Health & Longevity": ["health", "healthcare", "healthtech", "longevity", "aging", "wellness", "medicine", "biotech"],
+  "Bio & Neuro": [
+    "biology",
+    "biotechnology",
+    "biohacking",
+    "neuro",
+    "neurotech",
+    "neurology",
+    "neuroscience",
+    "neuroscientist",
+    "brain",
+    "buck institute",
+  ],
+  AI: ["ai", "artificial intelligence", "ai agent", "llm", "machine learning", "model", "automation"],
+  "Governance & Coordination": ["governance", "coordination", "collective", "decision making", "polis"],
   "Hard Tech": ["hardware", "robotics", "manufacturing", "hard tech", "engineering"],
-  Privacy: ["privacy", "security", "cryptography", "zero knowledge", "zk"],
-  "Decentralized Tech": ["decentralized", "protocol", "crypto", "web3", "network", "p2p"],
-  "Creative AI & Technologies": ["creative", "art", "design", "media", "generative"],
-  "Spatial Computing": ["spatial", "xr", "ar", "vr", "metaverse"],
-  "New Urbanism": ["urban", "city", "town", "housing", "real estate"],
+  Privacy: ["privacy", "security", "cybersecurity", "cryptography", "zero knowledge", "zk"],
+  "Decentralized Tech": ["decentralized", "protocol", "crypto", "cryptocurrency", "web3", "p2p"],
+  "Creative AI & Technologies": ["creative", "art", "design", "designer", "media", "generative"],
+  "Spatial Computing": [
+    "spatial",
+    "spatial computing",
+    "xr",
+    "vr",
+    "augmented reality",
+    "virtual reality",
+    "mixed reality",
+    "ar headset",
+    "ar glasses",
+    "metaverse",
+  ],
+  "New Urbanism": ["urban", "urbanism", "urbanist", "town planning", "city building", "housing", "real estate"],
   Education: ["education", "learning", "school", "children", "kids"],
-  "Energy & Climate": ["energy", "climate", "solar", "carbon", "environment"],
-  "Food Systems": ["food", "agriculture", "farming", "nutrition"],
+  "Energy & Climate": ["energy", "climate", "climatetech", "solar", "carbon", "environment"],
+  "Food Systems": ["food", "agriculture", "farming", "nutrition", "nutritionist"],
   Consciousness: ["consciousness", "meditation", "mindfulness", "meaning"],
   Wellbeing: ["wellbeing", "fitness", "workout", "sauna", "breathwork"],
   "d/acc": ["d/acc", "defensive acceleration", "biosecurity"],
-  "Art & Culture": ["art", "culture", "music", "film", "storytelling"],
+  "Art & Culture": ["art", "artist", "culture", "music", "musician", "film", "filmmaker", "storytelling"],
 };
+
+/**
+ * A whole stated interest that names a tag on its own but is too short or too
+ * common to be a keyword in prose (DATA-372 S1). Matched only against a whole
+ * entry of the profile's interests, after NFKC, lower case and trimming.
+ */
+export const STATED_ALIASES: Record<string, string> = {
+  ar: "Spatial Computing",
+  agents: "AI",
+  cities: "New Urbanism",
+  blockchain: "Decentralized Tech",
+  decentralised: "Decentralized Tech",
+  decentralized: "Decentralized Tech",
+};
+
+function aliasKey(entry: string): string {
+  return entry.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/** Phrases removed before matching: they hold a keyword but say nothing about an interest. */
+const NOT_INTEREST_PHRASES = /state[\s_-]+of[\s_-]+the[\s_-]+art/giu;
+
+const keywordPatterns = new Map<string, RegExp>();
+
+/**
+ * A keyword as a whole-word pattern (DATA-372). Boundaries are letters and
+ * digits in any script: anything else (space, punctuation, `-`, `/`, `_`)
+ * separates words, so "AI/ML", "AI-first" and "my_ai_notes" all hold "ai",
+ * while "said", "are" and "start" hold no keyword. An `s` may follow
+ * ("headsets", "protocols"). A space in a keyword matches any run of spaces,
+ * hyphens and underscores ("machine-learning").
+ */
+export function keywordPattern(keyword: string): RegExp {
+  const key = keyword.toLowerCase().trim();
+  let pattern = keywordPatterns.get(key);
+  if (!pattern) {
+    const body = key
+      .split(/\s+/)
+      .map((part) => part.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&"))
+      .join("[\\s_-]+");
+    pattern = new RegExp(`(?<![\\p{L}\\p{N}])${body}s?(?![\\p{L}\\p{N}])`, "iu");
+    keywordPatterns.set(key, pattern);
+  }
+  return pattern;
+}
+
+/** The keyword occurs in the text as a whole word (keywordPattern). */
+export function hasKeyword(text: string, keyword: string): boolean {
+  return keywordPattern(keyword).test(text);
+}
+
+function tagKeywords(tag: string): string[] {
+  return [tag.toLowerCase(), ...(TAG_KEYWORDS[tag] ?? [])];
+}
 
 const INTERNAL_VISIBLE_WORD_PATTERN = /\b(?:bias|intents?|signals?|index|opportunit(?:y|ies)|match(?:es|ing)?|networking)\b/i;
 
@@ -203,8 +297,20 @@ export interface BriefOpportunity {
 
 export interface BriefUserModel {
   phrases: string[];
+  /** Village tags for picking events and notes: from the stated interests when there are any, else from the memory files. */
   interestTags: string[];
+  /**
+   * DATA-372: the interests the resident stated in their profile
+   * (av-profile.json), deduplicated, in their order: the brief's
+   * `you.interests`, exactly. When empty, the brief names no interest
+   * (interestTags only pick events and notes).
+   */
+  statedInterests?: string[];
+  /** Where interestTags came from: the profile, the memory files (event picks and notes only), or nowhere. */
+  interestSource?: InterestSource;
 }
+
+export type InterestSource = "profile" | "memory" | "none";
 
 export interface DailyBriefContext {
   date: string;
@@ -249,6 +355,8 @@ export interface DailyBriefContext {
     dreamingFresh?: boolean;
     warnings: string[];
     interestTags: string[];
+    /** DATA-372: profile (stated interests), memory (extracted from the memory files) or none. */
+    interestSource?: InterestSource;
   };
 }
 
@@ -367,16 +475,73 @@ export function formatVillageTime(iso: string): string {
   }).format(d);
 }
 
-export function extractInterestTags(text: string): string[] {
-  const haystack = text.toLowerCase();
+/**
+ * The village tags a text suggests, best first (at most six): each tag scores
+ * one per keyword found as a whole word (keywordPattern). The fallback when
+ * the resident's profile states no interests (resolveInterests).
+ */
+export function extractInterestTags(text: string, bonus: ReadonlyMap<string, number> = new Map()): string[] {
+  const haystack = text.replace(NOT_INTEREST_PHRASES, " ");
   const scored = EDGE_TAGS.map((tag) => {
-    const keywords = TAG_KEYWORDS[tag] ?? [tag.toLowerCase()];
-    const score = keywords.reduce((sum, keyword) => sum + (haystack.includes(keyword.toLowerCase()) ? 1 : 0), 0);
+    const keywords = new Set(tagKeywords(tag));
+    const score = [...keywords].reduce((sum, keyword) => sum + (hasKeyword(haystack, keyword) ? 1 : 0), bonus.get(tag) ?? 0);
     return { tag, score };
   })
     .filter((entry) => entry.score > 0)
     .sort((a, b) => b.score - a.score || a.tag.localeCompare(b.tag));
   return scored.map((entry) => entry.tag).slice(0, 6);
+}
+
+/**
+ * The profile's interests as stated: trimmed, blank ones dropped, the second
+ * of two that differ only in case or spacing dropped, in the profile's order.
+ */
+export function dedupeInterests(interests: readonly unknown[] | undefined): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of interests ?? []) {
+    if (typeof raw !== "string") continue;
+    const interest = raw.trim();
+    const key = interest.normalize("NFKC").toLowerCase().replace(/\s+/g, " ");
+    if (!interest || seen.has(key)) continue;
+    seen.add(key);
+    out.push(interest);
+  }
+  return out;
+}
+
+/**
+ * DATA-372, profile first. When the resident stated interests in their
+ * profile, those are what the brief names, and the village tags (for picking
+ * events and notes) come from those words alone; the memory files are not
+ * searched for tags. Only when the profile states none are the tags extracted
+ * from the memory files, and then they only pick events and notes: the brief
+ * names no interest (proactive.ts interestsView, DATA-372 B1).
+ */
+/**
+ * The village tags the profile's stated interests suggest, for picking events:
+ * the keywords over the stated words, plus one for each whole entry that is an
+ * alias (STATED_ALIASES: "AR", "Agents", "Cities", ...).
+ */
+export function statedInterestTags(stated: readonly string[]): string[] {
+  const bonus = new Map<string, number>();
+  for (const entry of stated) {
+    const tag = STATED_ALIASES[aliasKey(entry)];
+    if (tag) bonus.set(tag, (bonus.get(tag) ?? 0) + 1);
+  }
+  return extractInterestTags(stated.join("\n"), bonus);
+}
+
+export function resolveInterests(
+  stated: readonly unknown[] | undefined,
+  memoryText: string,
+): { statedInterests: string[]; interestTags: string[]; interestSource: InterestSource } {
+  const statedInterests = dedupeInterests(stated);
+  if (statedInterests.length > 0) {
+    return { statedInterests, interestTags: statedInterestTags(statedInterests), interestSource: "profile" };
+  }
+  const interestTags = extractInterestTags(memoryText);
+  return { statedInterests, interestTags, interestSource: interestTags.length > 0 ? "memory" : "none" };
 }
 
 function stripMarkdownNoise(line: string): string {
@@ -393,8 +558,7 @@ function stripMarkdownNoise(line: string): string {
 export function extractUserModelPhrases(text: string, interestTags: string[]): string[] {
   const keywords = new Set<string>();
   for (const tag of interestTags) {
-    keywords.add(tag.toLowerCase());
-    for (const keyword of TAG_KEYWORDS[tag] ?? []) keywords.add(keyword.toLowerCase());
+    for (const keyword of tagKeywords(tag)) keywords.add(keyword.toLowerCase());
   }
   if (keywords.size === 0) return [];
 
@@ -406,7 +570,8 @@ export function extractUserModelPhrases(text: string, interestTags: string[]): s
     if (/^(date|tags?|notes?|memory|user|today)\s*:/i.test(line)) continue;
     const lower = line.toLowerCase();
     if (INTERNAL_VISIBLE_WORD_PATTERN.test(lower)) continue;
-    if (![...keywords].some((keyword) => lower.includes(keyword))) continue;
+    const scanned = lower.replace(NOT_INTEREST_PHRASES, " ");
+    if (![...keywords].some((keyword) => hasKeyword(scanned, keyword))) continue;
     const sentence = line.split(/(?<=[.!?])\s+/)[0]?.trim() ?? line;
     const phrase = sentence.length > 120 ? `${sentence.slice(0, 119).trimEnd()}…` : sentence;
     const key = phrase.toLowerCase();
@@ -444,7 +609,7 @@ function eventScore(event: EdgeEvent, interestTags: string[]): number {
   for (const tag of interestTags) {
     if (tags.includes(tag)) score += 3;
     for (const keyword of TAG_KEYWORDS[tag] ?? []) {
-      if (title.includes(keyword.toLowerCase())) score += 1;
+      if (hasKeyword(title, keyword)) score += 1;
     }
   }
   return score;
@@ -1068,15 +1233,19 @@ export async function buildDailyBriefContext(options: {
   stateFile?: string;
   opportunitiesFile?: string;
   userFiles?: string[];
+  /** DATA-372: the profile's interests (av-profile.json); when not empty, the memory files are not searched for tags. */
+  statedInterests?: string[];
 } = {}): Promise<DailyBriefContext> {
   const date = options.date ?? villageDate();
   const warnings: string[] = [];
   const userFiles = options.userFiles ?? ["USER.md", "MEMORY.md", `memory/${date}.md`];
   const interestText = (await Promise.all(userFiles.map(readIfExists))).join("\n");
-  const interestTags = extractInterestTags(interestText);
+  const { statedInterests, interestTags, interestSource } = resolveInterests(options.statedInterests, interestText);
   const userModel: BriefUserModel = {
     phrases: extractUserModelPhrases(interestText, interestTags),
     interestTags,
+    statedInterests,
+    interestSource,
   };
 
   // The optional sources run in parallel with the Index read below, each
@@ -1192,6 +1361,7 @@ export async function buildDailyBriefContext(options: {
       dreamingFresh,
       warnings,
       interestTags,
+      interestSource,
     },
   };
 }
