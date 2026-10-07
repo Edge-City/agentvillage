@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * Copies the generated Edge City India reference tree from the upstream
- * indexer checkout (`aromeoes/edge-agent-skill`, `references/`) into
+ * indexer checkout (`p2p-lanes/edge-agent-skill`, `references/`) into
  * `skills/edge-india/references/`, all or nothing.
  *
  * The upstream repo owns content generation: its indexer reads only an
@@ -46,7 +46,7 @@
  *
  * Usage:
  *   bun scripts/sync-india-references.ts --source <upstream checkout> \
- *     [--target skills/edge-india/references] [--source-repo aromeoes/edge-agent-skill] \
+ *     [--target skills/edge-india/references] [--source-repo p2p-lanes/edge-agent-skill] \
  *     --source-commit <sha> [--source-commit-date <iso>] [--allow-shrink]
  *
  *   `--source-commit` is required on the command line: without the upstream
@@ -314,7 +314,7 @@ export function syncReferences(options: SyncOptions): SyncResult {
     schema: 1,
     event: EVENT,
     source: {
-      repo: options.sourceRepo ?? "aromeoes/edge-agent-skill",
+      repo: options.sourceRepo ?? "p2p-lanes/edge-agent-skill",
       path: "references",
       commit: options.sourceCommit ?? null,
       commit_date: options.sourceCommitDate ?? null,

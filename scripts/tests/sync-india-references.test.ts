@@ -280,18 +280,20 @@ test("S2: a manifest url off the guide's hosts is published as the mirror's own 
   expect(readFileSync(join(cleanDest, "manifest.json"), "utf8")).toBe(readFileSync(cleanPath, "utf8"));
 });
 
-test("the upstream follows aromeoes/edge-agent-skill main every 15 minutes, and every publish records the upstream commit it came from", () => {
+test("the upstream follows p2p-lanes/edge-agent-skill main every 15 minutes, and every publish records the upstream commit it came from", () => {
   const workflow = readFileSync(join(REPO_ROOT, ".github", "workflows", "sync-edge-india-references.yml"), "utf8");
-  expect(workflow).toContain("repository: aromeoes/edge-agent-skill");
+  expect(workflow).toContain("repository: p2p-lanes/edge-agent-skill");
   expect(workflow).toContain('- cron: "*/15 * * * *"');
   expect(workflow).toContain("commit=$(git -C reference-source rev-parse HEAD)");
   expect(workflow).toContain(`if ! printf '%s' "$commit" | grep -Eq '^[0-9a-f]{40}$'; then`);
   expect(workflow).toContain('--source-commit "$commit"');
   // The commit check comes before the sync runs.
   expect(workflow.indexOf("grep -Eq '^[0-9a-f]{40}$'")).toBeLessThan(workflow.indexOf("bun scripts/sync-india-references.ts"));
-  expect(workflow).toContain("--source-repo aromeoes/edge-agent-skill");
+  expect(workflow).toContain("--source-repo p2p-lanes/edge-agent-skill");
   const committed = readSnapshot(join(REPO_ROOT, "skills", "edge-india", "references"))!;
-  expect(committed.source.repo).toBe("aromeoes/edge-agent-skill");
+  // The committed snapshot names the upstream it was copied from. After the repoint (2026-10-07) it still
+  // says the former upstream until the first mirror run from p2p-lanes/edge-agent-skill replaces the tree.
+  expect(["p2p-lanes/edge-agent-skill", "aromeoes/edge-agent-skill"]).toContain(committed.source.repo);
   expect(committed.source.commit).toMatch(/^[0-9a-f]{40}$/);
 });
 
