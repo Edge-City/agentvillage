@@ -68,6 +68,6 @@ One bullet per opportunity, each with its own `acceptUrl`. Do not merge several 
 
 For introducer (`connector-flow`) candidates:
 
-- **DO link the person's name** to `userUrl` (`https://index.network/u/<userId>`).
+- **DO link the person's name** to `userUrl` (`https://agents.edgecity.live/rolodex?person=<userId>`).
 - The trailing `make intro` is plain text, not a hyperlink.
 - Do not put a connect redirect or an `&msg=` greeting on these cards.

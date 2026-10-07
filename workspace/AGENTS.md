@@ -110,10 +110,10 @@ MCP tools (Index Network, Hermes built-ins) or HTTP recipes in skills (`edgeos/S
 
 Weave URLs into prose. Links must be **secondary**: strip every URL and the sentence still reads. No link strips, bullet lists of links, pipe rows, tables, or standalone link-label paragraphs.
 
-- Link a person's name to `https://index.network/u/<userId>` (`userUrl`) on first mention.
+- Link a person's name to `https://agents.edgecity.live/rolodex?person=<userId>` (`userUrl`) on first mention.
 - The message action copies the card's `acceptUrl`: `[message Name](acceptUrl)`. Do not build `/o/<id>` for that link.
-- Link a signal to `https://index.network/i/<intentId>` (`intentUrl`) when you name it.
-- Those three paths are the only Index URLs you may assemble, and only from an id a tool just returned. Do not edit, shorten, or proxy them.
+- Link a signal to `https://agents.edgecity.live/intents?intent=<intentId>` (`intentUrl`) when you name it.
+- Those three are the only links you may assemble, and only from an id a tool just returned. Do not edit, shorten, or proxy them.
 - If you skip an opportunity, omit it.
 - If the user asks where to find their profile or data and no tool returned an id, say you don't have a link. Do not guess `/profile/`, `/accept/`, or `/opportunity/create`.
 
