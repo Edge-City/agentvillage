@@ -359,8 +359,8 @@ _CAPABILITY_HOSTS = ("index.network", "edgecity.live")
 _MAX_HOST_CHARS = 253
 _LABEL_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-")
 _HOST_GLUE = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.%-")
-_ENCODED_SLASH_BEFORE = re.compile(r"%(?:25){0,2}2[Ff]$")
-_AUTHORITY_SLASHES = re.compile(r"(?:/|\\/)(?:/|\\/)$|:(?:/|\\/)$")
+_ENCODED_SLASH_BEFORE = re.compile(r"%(?:25){0,2}2[Ff]\Z")
+_AUTHORITY_SLASHES = re.compile(r"(?:/|\\/)(?:/|\\/)\Z|:(?:/|\\/)\Z")
 _RAW_TAIL = re.compile(r"(?:[/?#]|\\+/|\\+u00(?:2[fF]|3[fF]|23))")
 _ENCODED_TAIL = re.compile(r"%(?:25){0,2}(?:2[fF]|3[fF]|23)")
 _RAW_QUERY = re.compile(r"[?#]|\\u00(?:3[fF]|23)")
@@ -377,14 +377,17 @@ _URL_STOP_CHARS = frozenset(
 _HEX4 = re.compile(r"[0-9a-fA-F]{4}")
 _TRAILING = frozenset(".,:;!?*_~'")
 _CLOSERS = {")": "(", "]": "[", "}": "{"}
-_CAPABILITY_PARAM = re.compile(r"(?:^|[?&#;])(?:sig|viewer)(?:[=&#;]|$)")
+# `\Z`, not `$`: Python's `$` also matches before a final newline, and `_decoded_lower` makes `%0A` one.
+_CAPABILITY_PARAM = re.compile(r"(?:^|[?&#;])(?:sig|viewer)(?:[=&#;]|\Z)")
 _CAPABILITY_TOKEN = re.compile(
     r"(?:(?<![A-Za-z0-9_-])|(?<=%26)|(?<=%2526)|(?<=%252526)|(?<=%3[Ff])|(?<=%253[Ff])|(?<=%23)|(?<=%2523)"
     r"|(?<=\\u0026)|(?<=\\u003[fF])|(?<=\\u0023))"
     r"(sig|viewer)(=|%(?:25){0,2}3[dD]|\\u003[dD])",
-    re.IGNORECASE,
+    # `re.ASCII`: without it IGNORECASE folds `ſ`, `K` (Kelvin), `ı` and `İ` into s, k and i, which JS `/i`
+    # (no `u` flag, as in redact.ts) does not; the two implementations must give the same bytes.
+    re.IGNORECASE | re.ASCII,
 )
-_CAPABILITY_HINT = re.compile(r"index\.network|edgecity\.live|sig|viewer", re.IGNORECASE)
+_CAPABILITY_HINT = re.compile(r"index\.network|edgecity\.live|sig|viewer", re.IGNORECASE | re.ASCII)
 _VALUE_STOP = frozenset("&#()[]{}'\"<>\\")
 _ENCODED_VALUE_END = re.compile(r"%(?:25){0,2}(?:26|23)")
 _VALUE_TRAILING = frozenset(".,:;!?*_~")

@@ -310,3 +310,26 @@ def test_a_signed_link_in_a_system_prompt_never_leaves_the_box(plugin, ctx, monk
     blob = json.dumps(av.read_buffer(plugin._COLLECTOR))
     clean(blob)
     assert f"[message Ana]({BARE})" in blob
+
+
+# The security refuter's S1 rows (DATA-394 fix round 1). The oracle is the TS rule's output
+# (agentvillage-data `stripCapabilityUrls`): Python's IGNORECASE must not fold `ſ`, `İ`, `ı` or the
+# Kelvin sign into ASCII (`re.ASCII`), and `$` must not match before a final newline (`\Z`).
+S1_ROWS = [
+    (f"x {chr(0x17F)}ig=SIGtok_9-Z y", f"x {chr(0x17F)}ig=SIGtok_9-Z y", 0),
+    (f"x s{chr(0x130)}g=SIGtok_9-Z y", f"x s{chr(0x130)}g=SIGtok_9-Z y", 0),
+    (f"x v{chr(0x131)}ewer=VIEWtok8 y", f"x v{chr(0x131)}ewer=VIEWtok8 y", 0),
+    (f"x {chr(0x212A)}sig=SIGtok_9-Z y", f"x {chr(0x212A)}sig=[redacted] y", 1),
+    (f"x {chr(0x131)}sig=SIGtok_9-Z y", f"x {chr(0x131)}sig=[redacted] y", 1),
+    ("https://agents.edgecity.live/x?sig%0A", "https://agents.edgecity.live/x?sig%0A", 0),
+    (
+        "see https://agents.edgecity.live/rolodex?person=P1&sig%0A then",
+        "see https://agents.edgecity.live/rolodex?person=P1&sig%0A then",
+        0,
+    ),
+]
+
+
+def test_refuter_s1_rows_match_the_ts_oracle(plugin):
+    for text, out, n in S1_ROWS:
+        assert plugin.strip_capability_urls(text) == (out, n), ascii(text)
