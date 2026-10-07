@@ -10,6 +10,8 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, expect, test } from "bun:test";
 
+import { resetSteps } from "../reset";
+
 import { EDGE_SKILL_NAMES, RETIRED_SKILL_DIRS } from "../paths";
 import { removeRetiredSkillDirs } from "../skill_copy";
 
@@ -170,4 +172,25 @@ test("install.ts over a home holding skills/geo-esmeralda ends without it and ke
   expect(existsSync(join(home, "skills", "geo-esmeralda"))).toBe(false);
   expect(existsSync(join(home, "skills", "apple", "SKILL.md"))).toBe(true);
   expect(existsSync(join(home, "skills", "edge-india", "SKILL.md"))).toBe(true);
+});
+
+test("reset.ts removeEdgeSkills also removes a retired bundle, and keeps a Hermes skill", () => {
+  const home = mkdtempSync(join(tmpdir(), "reset-retired-"));
+  const previous = process.env.HERMES_HOME;
+  process.env.HERMES_HOME = home;
+  try {
+    mkdirSync(join(home, "skills", "geo-esmeralda"), { recursive: true });
+    writeFileSync(join(home, "skills", "geo-esmeralda", "SKILL.md"), "retired\n");
+    mkdirSync(join(home, "skills", "apple"), { recursive: true });
+    writeFileSync(join(home, "skills", "apple", "SKILL.md"), "bundled\n");
+    const step = resetSteps(false).find(([name]) => name === "removeEdgeSkills");
+    expect(step).toBeDefined();
+    step![1]();
+    expect(existsSync(join(home, "skills", "geo-esmeralda"))).toBe(false);
+    expect(existsSync(join(home, "skills", "apple", "SKILL.md"))).toBe(true);
+  } finally {
+    if (previous === undefined) delete process.env.HERMES_HOME;
+    else process.env.HERMES_HOME = previous;
+    rmSync(home, { recursive: true, force: true });
+  }
 });
