@@ -33,7 +33,7 @@ plugins/av-events/
   tool_categories.json        frozen seed: tool name -> category (tool_categories_v3)
   edgeos_tool_allowlist.json  frozen seed: EdgeOS operations (edgeos_tool_allowlist_v1)
   cron_job_names.json         frozen seed: the cron names cron.run may carry (cron_job_names_v2)
-  outcome_question.json       the evening outcome ask's fixed question: sentence, normalise steps, question key rule, shared cases with keys and hashes (outcome_question_v4)
+  outcome_question.json       the evening outcome ask's fixed question: sentence, normalise steps, question key rule, shared cases with keys and hashes (outcome_question_v5)
   tests/           pytest suite; drives a fake ctx, never imports Hermes
 ```
 

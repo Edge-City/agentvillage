@@ -140,8 +140,8 @@ table of replies that arm and replies that do not, and both suites check every e
   The name slot refuses `?` and newlines. "Reply" matches in any case, and the final full stop is
   optional. Bold around the name alone fits the slot.
 - `normalise`, for matching only (`normalise_reply`): non-breaking and other special spaces become
-  spaces; the reply is stripped; one trailing manage line (`normalise.manage_line`, any of the four
-  DATA-373 labels, e.g. `(Evening questions message - you can ask me to stop or manage it)`, a model
+  spaces; the reply is stripped; one trailing manage line (`normalise.manage_line`, any of the five
+  DATA-373 labels including the token usage audit's Usage report, e.g. `(Evening questions message - you can ask me to stop or manage it)`, a model
   slip on the question) comes off and it is stripped again; trailing emoji come off; one pair of `**`, `*`, `_` or quote marks
   around the whole reply comes off; then it is stripped and trailing emoji come off again. The
   reply then has to match `^sentence$` in full. The message hash stays the hash of the reply

@@ -1,5 +1,5 @@
 {
-  "version": "outcome_question_v4",
+  "version": "outcome_question_v5",
   "about": "The evening outcome ask's fixed question, read by plugins/av-events/_outcome_ask.py, by the trigger's questionSha256 (skills/index-network/scripts/outcome-ask.ts) and by install/tests/proactive_jobs.test.ts. The plugin arms only when the model's reply, after the normalise steps (for matching only; the message hash is of the reply as it is), fully matches ^sentence$ AND the SHA-256 of its question key equals the stage's question_sha256, which the trigger computes from the exact question it showed. A Telegram reply pointer's quote is searched for sentence to tell which ask it replies to. Both suites check every entry of cases.",
   "sentence": "Did you and [^?\\n]{1,64} meet\\? [Rr][Ee][Pp][Ll][Yy] met, not useful, or missed\\.?",
   "normalise": {
@@ -17,7 +17,7 @@
       "\u2007",
       "\u202f"
     ],
-    "manage_line": "\\((?:Daily digest|Conversation update|Evening questions|Introduction suggestion) message - you can ask me to stop or manage it\\)",
+    "manage_line": "\\((?:Daily digest|Conversation update|Evening questions|Introduction suggestion|Usage report) message - you can ask me to stop or manage it\\)",
     "wrappers": [
       [
         "**",
@@ -163,6 +163,11 @@
         "reply": "**Did you and Maya meet? Reply met, not useful, or missed.** \ud83d\ude42\n\n(Evening questions message - you can ask me to stop or manage it)",
         "key": "did you and maya meet? reply met, not useful, or missed",
         "sha256": "f7d6fb48df3635e5844d5d39678c74611dafff7f237e6b17ca711d53afa8259a"
+      },
+      {
+        "reply": "Did you and Maya meet? Reply met, not useful, or missed.\n\n(Usage report message - you can ask me to stop or manage it)",
+        "key": "did you and maya meet? reply met, not useful, or missed",
+        "sha256": "f7d6fb48df3635e5844d5d39678c74611dafff7f237e6b17ca711d53afa8259a"
       }
     ],
     "unarmed": [
@@ -184,6 +189,7 @@
       "Did you and Maya meet? Reply met, not useful, or missed.\n\n(Evening questions message - you can ask me to stop or manage it) Thanks!",
       "Did you and Maya meet? Reply met, not useful, or missed.\n\n(Evening questions message - you can ask me to stop it)",
       "Did you and Maya meet? Reply met, not useful, or missed.\n\n(evening questions message - you can ask me to stop or manage it)",
+      "Did you and Maya meet? Reply met, not useful, or missed.\n\n(Token usage message - you can ask me to stop or manage it)",
       "Did you and Maya meet? Reply met, not useful, or missed. Also, enjoy dinner!\n\n(Evening questions message - you can ask me to stop or manage it)",
       "(Evening questions message - you can ask me to stop or manage it)\n\nDid you and Maya meet? Reply met, not useful, or missed."
     ],
