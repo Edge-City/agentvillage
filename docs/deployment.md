@@ -374,16 +374,18 @@ reply. The labels and their jobs: Daily digest = `Edge — daily digest`;
 Conversation update = `Edge — negotiation summary`; Evening questions =
 `Edge — evening questions`; Introduction suggestion = both opportunity drops;
 Usage report = `Edge — token usage audit` (opt-in). Template jobs added by an
-operator carry their base prompt's line. The agent pauses and resumes only the
-daily digest and the token usage audit on a resident's request
-(`workspace/AGENTS.md`, "Cron schedule"); it does not pause the other three
-and says they can't be stopped yet. An update or roll re-applies the contact
-style (the control plane resumes a paused evening questions, opportunity drop
-or negotiation summary that the style wants on, unless an admin hold covers
-it) and the job settings (any job whose saved setting is enabled is resumed),
-so until DATA-376 a pause set in chat survives only for the daily digest and
-the token usage audit, and only while no saved setting turns them on. Times
-stay fixed.
+operator carry their base prompt's line. The agent stops and restarts any of
+the five on a resident's request (`workspace/AGENTS.md`, "Cron schedule") with
+`skills/index-network/scripts/pause-job.ts` (DATA-376). The script pauses or
+resumes the job through the Hermes CLI under the tenant's jobs lock, and
+records a `by: resident` hold in `av-events/job-holds.json`, the control
+plane's holds file (docs/design/job-settings.md, "Resident holds"). With the
+DATA-376 control-plane half deployed, an update or roll leaves a
+resident-held job paused, and a newer switch in the app wins. A resume
+re-applies the schedule, so no missed slot fires at once; the race of two CLI
+processes stays, as for `jobs.ts set --enabled true`. Until the control-plane
+half is deployed the hold is written but not honoured, so this overlay ships
+in the tag after that deploy. Times stay fixed.
 av-events strips one trailing manage line (`normalise.manage_line` in
 `plugins/av-events/outcome_question.json`) before matching the evening
 outcome question, so a model that adds the line to the question still arms
@@ -461,6 +463,11 @@ file are left behind. All but `cron.wrap_response` are harmless to the older
 release: after a rollback to a tag from before DATA-373, whose prompts carry
 no manage line, run `hermes config set cron.wrap_response true` on each
 resident (or delete the key) so Hermes's own stop-or-manage footer comes back.
+Resident holds in `av-events/job-holds.json` are left behind too. The control
+plane owns that file and keeps honouring them, so a message a resident
+stopped stays stopped; after a rollback to a tag from before DATA-376 the
+agent can no longer restart it, and an operator resumes it with the control
+plane's job resume route.
 
 ## Edge India knowledge (K1)
 
