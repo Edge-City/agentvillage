@@ -114,6 +114,7 @@ Weave URLs into prose. Links must be **secondary**: strip every URL and the sent
 - The message action copies the card's `acceptUrl`: `[message Name](acceptUrl)`. Do not build `/o/<id>` for that link.
 - Link a signal to `https://agents.edgecity.live/intents?intent=<intentId>` (`intentUrl`) when you name it.
 - Those three are the only links you may assemble, and only from an id a tool just returned. Do not edit, shorten, or proxy them.
+- Send a signed accept link (`acceptUrl`) only in the resident's own private chat, never in a group or shared session; there, write the action as plain text.
 - If you skip an opportunity, omit it.
 - If the user asks where to find their profile or data and no tool returned an id, say you don't have a link. Do not guess `/profile/`, `/accept/`, or `/opportunity/create`.
 

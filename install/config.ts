@@ -168,6 +168,72 @@ export function keepTelegramBacklogOnColdBoot(): void {
   console.log(`→ set platforms.telegram.extra.${TELEGRAM_COLD_BOOT_KEY}: false (keep Telegram backlog across restarts)`);
 }
 
+/** Hermes `platforms.telegram.extra` key that turns off Telegram's link previews on every outgoing message. */
+export const TELEGRAM_LINK_PREVIEWS_KEY = "disable_link_previews";
+
+/**
+ * Turn Telegram link previews off: `platforms.telegram.extra.disable_link_previews: true`
+ * (SEREF-OVERLAY refute F1). Telegram's servers fetch the first link in a bot
+ * message to build its preview; that link is often a resident's signed accept
+ * link (`acceptUrl`), and a crawler must never be the one to open it. Hermes's
+ * Telegram adapter reads the key from `extra` (default `false`); a copy at the
+ * top of the `telegram` block is promoted over `extra`, so one there that is not
+ * `true` is set to `true` as well.
+ *
+ * Unlike the cold-boot key this is a safety setting, so a `false` someone set by
+ * hand is overwritten (with a log line saying so). The file is left alone, with
+ * a warning, when the top level, `platforms`, `telegram` or `extra` is not a
+ * mapping or holds a YAML merge key, for the reason `keepTelegramBacklogOnColdBoot`
+ * gives; a top-level `telegram:` block (which Hermes reads ahead of
+ * `platforms.telegram`) that sets the key to anything but `true` gets a warning
+ * and is not edited. Idempotent: when nothing changes the file is not rewritten.
+ */
+export function disableTelegramLinkPreviews(): void {
+  const key = TELEGRAM_LINK_PREVIEWS_KEY;
+  const doc: unknown = readConfig();
+  const skip = (why: string): void => console.log(`→ warning: ${why}; left ${key} as is`);
+  if (!isMapping(doc)) return skip("the top level of config.yaml is not a mapping");
+
+  const section = (parent: Record<string, unknown>, name: string, path: string): Record<string, unknown> | string => {
+    const value = parent[name] ?? {};
+    if (!isMapping(value)) return `${path} is not a mapping`;
+    if ("<<" in value) return `YAML merge key "<<" under ${path}; set it by hand`;
+    return value;
+  };
+  const rawPlatforms = section(doc, "platforms", "platforms");
+  if (typeof rawPlatforms === "string") return skip(rawPlatforms);
+  const rawTelegram = section(rawPlatforms, "telegram", "platforms.telegram");
+  if (typeof rawTelegram === "string") return skip(rawTelegram);
+  const rawExtra = section(rawTelegram, "extra", "platforms.telegram.extra");
+  if (typeof rawExtra === "string") return skip(rawExtra);
+
+  const topLevel = doc.telegram;
+  if (isMapping(topLevel)) {
+    const extraTop = isMapping(topLevel.extra) ? topLevel.extra : {};
+    for (const [path, holder] of [["telegram", topLevel], ["telegram.extra", extraTop]] as const) {
+      if (key in holder && holder[key] !== true) {
+        console.log(`→ warning: ${path}.${key} is ${JSON.stringify(holder[key])}; Hermes reads it first, set it to true by hand`);
+      }
+    }
+  }
+
+  const promotedOk = !(key in rawTelegram) || rawTelegram[key] === true;
+  if (rawExtra[key] === true && promotedOk) {
+    console.log(`→ telegram ${key} already true`);
+    return;
+  }
+  const overridden = [
+    ...(key in rawExtra && rawExtra[key] !== true ? [`platforms.telegram.extra.${key}`] : []),
+    ...(promotedOk ? [] : [`platforms.telegram.${key}`]),
+  ];
+  const telegram = { ...rawTelegram, extra: { ...rawExtra, [key]: true } };
+  if (!promotedOk) telegram[key] = true;
+  doc.platforms = { ...rawPlatforms, telegram };
+  writeConfig(doc);
+  const note = overridden.length ? ` (overrode ${overridden.join(", ")})` : "";
+  console.log(`→ set platforms.telegram.extra.${key}: true (no link previews on signed links)${note}`);
+}
+
 /** The village's zone: every schedule this overlay installs is written in it (DATA-314). */
 export const VILLAGE_TIMEZONE = "Asia/Kolkata";
 /** Names Hermes's zoneinfo resolves to the village's zone (the IANA link included). */
