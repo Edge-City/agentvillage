@@ -31,7 +31,7 @@ import {
 } from "../../skills/edge-india/scripts/knowledge-sync";
 
 const REPO_SKILLS = join(import.meta.dir, "..", "..", "skills");
-const BASE = "https://raw.githubusercontent.com/aromeoes/edge-agent-skill/main/references/";
+const BASE = "https://raw.githubusercontent.com/p2p-lanes/edge-agent-skill/main/references/";
 const MANIFEST_URL = `${BASE}manifest.json`;
 
 interface Served {
@@ -205,22 +205,22 @@ describe("switched off, and the default snapshot", () => {
 
 describe("the host allowlist", () => {
   const refused = [
-    ["http, not https", "http://raw.githubusercontent.com/aromeoes/edge-agent-skill/main/references/manifest.json"],
+    ["http, not https", "http://raw.githubusercontent.com/p2p-lanes/edge-agent-skill/main/references/manifest.json"],
     ["another org on raw.githubusercontent.com", "https://raw.githubusercontent.com/evil/edge-agent-skill/main/references/manifest.json"],
-    ["another repo of aromeoes", "https://raw.githubusercontent.com/aromeoes/other/main/references/manifest.json"],
-    ["the former override, p2p-lanes/edge-agent-skill (the upstream is aromeoes/edge-agent-skill)", "https://raw.githubusercontent.com/p2p-lanes/edge-agent-skill/main/references/manifest.json"],
-    ["a look-alike of the upstream repo", "https://raw.githubusercontent.com/aromeoes/edge-agent-skill-evil/main/references/manifest.json"],
+    ["another repo of p2p-lanes", "https://raw.githubusercontent.com/p2p-lanes/other/main/references/manifest.json"],
+    ["the former upstream, aromeoes/edge-agent-skill (the upstream is p2p-lanes/edge-agent-skill since 2026-10-07, DATA-393)", "https://raw.githubusercontent.com/aromeoes/edge-agent-skill/main/references/manifest.json"],
+    ["a look-alike of the upstream repo", "https://raw.githubusercontent.com/p2p-lanes/edge-agent-skill-evil/main/references/manifest.json"],
     ["a look-alike org prefix", "https://raw.githubusercontent.com/Edge-City-evil/x/main/manifest.json"],
-    ["a user name in the URL", "https://u:p@raw.githubusercontent.com/aromeoes/edge-agent-skill/main/references/manifest.json"],
-    ["an explicit port", "https://raw.githubusercontent.com:8443/aromeoes/edge-agent-skill/main/references/manifest.json"],
+    ["a user name in the URL", "https://u:p@raw.githubusercontent.com/p2p-lanes/edge-agent-skill/main/references/manifest.json"],
+    ["an explicit port", "https://raw.githubusercontent.com:8443/p2p-lanes/edge-agent-skill/main/references/manifest.json"],
     ["a query string", `${MANIFEST_URL}?token=x`],
     ["a fragment", `${MANIFEST_URL}#x`],
-    ["github.com itself", "https://github.com/aromeoes/edge-agent-skill/raw/main/references/manifest.json"],
-    ["a look-alike host", "https://raw.githubusercontent.com.evil.example/aromeoes/edge-agent-skill/manifest.json"],
-    ["not a URL", "raw.githubusercontent.com/aromeoes/edge-agent-skill/main/references/manifest.json"],
+    ["github.com itself", "https://github.com/p2p-lanes/edge-agent-skill/raw/main/references/manifest.json"],
+    ["a look-alike host", "https://raw.githubusercontent.com.evil.example/p2p-lanes/edge-agent-skill/manifest.json"],
+    ["not a URL", "raw.githubusercontent.com/p2p-lanes/edge-agent-skill/main/references/manifest.json"],
     ["not a .json manifest", `${BASE}index.md`],
-    ["an encoded dot-dot that climbs out of the allowed repo", "https://raw.githubusercontent.com/aromeoes/edge-agent-skill/%2e%2e/%2e%2e/evil/x/manifest.json"],
-    ["an encoded character in the path", "https://raw.githubusercontent.com/aromeoes/edge-agent-skill/main/references%2Fmanifest.json"],
+    ["an encoded dot-dot that climbs out of the allowed repo", "https://raw.githubusercontent.com/p2p-lanes/edge-agent-skill/%2e%2e/%2e%2e/evil/x/manifest.json"],
+    ["an encoded character in the path", "https://raw.githubusercontent.com/p2p-lanes/edge-agent-skill/main/references%2Fmanifest.json"],
   ];
   for (const [label, url] of refused) {
     test(`refused, nothing fetched or written: ${label}`, async () => {
@@ -232,7 +232,7 @@ describe("the host allowlist", () => {
     });
   }
 
-  test("allowed: anything under Edge-City/ (the default mirror) and, as an operator override, aromeoes/edge-agent-skill on raw.githubusercontent.com", () => {
+  test("allowed: anything under Edge-City/ (the default mirror) and, as an operator override, p2p-lanes/edge-agent-skill on raw.githubusercontent.com", () => {
     const none = new Set<string>();
     expect(urlAllowed(new URL(DEFAULT_SNAPSHOT_URL), none)).toBe(true);
     expect(urlAllowed(new URL(MANIFEST_URL), none)).toBe(true);
@@ -554,9 +554,9 @@ describe("any failure keeps the last good set byte for byte", () => {
     served.set(`${BASE}wiki-content.md`, { status: 302, location: "https://evil.example/wiki-content.md" });
     await expectKept(before, "redirect-refused");
     expect(requests.some((r) => r.url.startsWith("https://evil.example"))).toBe(false);
-    served.set(`${BASE}wiki-content.md`, { status: 301, location: "https://raw.githubusercontent.com/aromeoes/edge-agent-skill/main/other/wiki-content.md" });
+    served.set(`${BASE}wiki-content.md`, { status: 301, location: "https://raw.githubusercontent.com/p2p-lanes/edge-agent-skill/main/other/wiki-content.md" });
     await expectKept(before, "redirect-refused");
-    served.set(`${BASE}wiki-content.md`, { status: 301, location: "http://raw.githubusercontent.com/aromeoes/edge-agent-skill/main/references/wiki-content.md" });
+    served.set(`${BASE}wiki-content.md`, { status: 301, location: "http://raw.githubusercontent.com/p2p-lanes/edge-agent-skill/main/references/wiki-content.md" });
     await expectKept(before, "redirect-refused");
     served.set(`${BASE}wiki-content.md`, { status: 302 });
     await expectKept(before, "redirect-refused");

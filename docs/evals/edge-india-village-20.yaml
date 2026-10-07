@@ -4,7 +4,8 @@
 # should reach for, the source that backs the answer, what a good reply must
 # contain, what it must never contain, and what to do when the detail is missing.
 # Facts are from the reference snapshot of aromeoes/edge-agent-skill@dbd557b
-# (2026-10-01); when the wiki changes, update must_include from the new source.
+# (2026-10-01; the live upstream is p2p-lanes/edge-agent-skill since 2026-10-07, not
+# yet re-checked against it); when the wiki changes, update must_include from the new source.
 #
 # Kept outside skills/ on purpose: skills are copied into agent homes, and an
 # agent must never be able to read its own answer key.

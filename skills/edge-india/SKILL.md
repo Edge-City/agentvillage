@@ -17,7 +17,7 @@ here fetches it either: the background job keeps the copy fresh, so a
 resident's turn never goes to the network for this skill.
 
 The guide's text is adapted from the public India skill in
-`aromeoes/edge-agent-skill`, whose indexer generates these references; its
+`p2p-lanes/edge-agent-skill`, whose indexer generates these references; its
 live-integration sections are replaced by the division below, because Agent
 Village already has the live skills.
 
@@ -222,7 +222,7 @@ indexed change; `refs.ts list` prints the same compactly.
 
 ## 8. Freshness and primary sources
 
-Path: the official sources → the upstream indexer (`aromeoes/edge-agent-skill`,
+Path: the official sources → the upstream indexer (`p2p-lanes/edge-agent-skill`,
 every 15 minutes, best effort) → Edge City's mirror in the agentvillage repo
 (`skills/edge-india/references/` on `main`, complete snapshots only, each
 file's sha256 and the upstream commit in `SNAPSHOT.json`, every 15 minutes,
