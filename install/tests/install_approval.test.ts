@@ -1599,36 +1599,38 @@ describe("DATA-234 G1: the shim's own fatal paths", () => {
 
 // ---------------------------------------------------------------------------
 // DATA-377: the shim's clock. The hosted image's date is uutils coreutils
-// 0.8.0 on the boxes provisioned from the old checkpoints: `%3N` (and `%N`)
-// print the nanoseconds without zero padding, so `date +%s%3N` was 17, 18 or
+// 0.8.0 on the boxes provisioned from the old checkpoints: its `%3N` drops the
+// leading zeros of the nanoseconds (a width under nine strips the padding;
+// plain `%N` IS padded there, as on GNU), so `date +%s%3N` was 16, 17, 18 or
 // 19 digits and the digit-count rule (19 ns, 16 us, 13 ms, 10 s) read about
 // 9 % of the clocks as 0 (b4's read of 2026-10-07: 300 samples per box, 17
 // digits ~1 %, 18 ~9 %, 19 ~90 %). A 0 at T0 turns re-asking off and the
 // first wait verdict becomes a block. The shim now reads `+%s.%N`: the
 // separator makes the split exact, the fraction is left-padded to nine
-// digits and its first three are the milliseconds, on GNU (padded), uutils
-// 0.10.0 (padded) and uutils 0.8.0 (unpadded) alike.
+// digits (a defence: every build measured pads `%N`) and its first three are
+// the milliseconds (DATA-397).
 // ---------------------------------------------------------------------------
 
 /** The padded log fraction (GNU, uutils 0.10.0): nine digits. */
 const UUTILS_FRACTION = "266475125";
-/** uutils 0.8.0's unpadded log fraction for 0.005567380 s: seven digits. */
+/** A trimmed log fraction for 0.005567380 s: seven digits (the shape 0.8.0's `%3N` gives; a defence case for `%N`). */
 const UNPADDED_FRACTION = "5567380";
 
 /**
  * A fake `date` whose `+%s.%N` prints the given shape, advancing in real time:
- * `gnu` nine padded fraction digits (GNU and uutils 0.10.0), `uutils08` the
- * nanoseconds without padding (one to nine digits), `s` whole seconds and no
- * fraction (a date without %N). `gnu` and `uutils08` also print their shape
+ * `gnu` nine padded fraction digits (GNU, uutils 0.8.0 and 0.10.0), `unpadded`
+ * the nanoseconds without their leading zeros (one to nine digits: the shape
+ * 0.8.0's `%3N` gives, kept as a defence case for `%N`), `s` whole seconds and
+ * no fraction (a date without %N). `gnu` and `unpadded` also print their shape
  * of the log stamp.
  */
-function clockFake(shape: "gnu" | "uutils08" | "s"): string {
+function clockFake(shape: "gnu" | "unpadded" | "s"): string {
   const stamp = {
     gnu: `/usr/bin/perl -MTime::HiRes=gettimeofday -e '($s, $u) = gettimeofday; printf("%d.%06d000\\n", $s, $u)'`,
-    uutils08: `/usr/bin/perl -MTime::HiRes=gettimeofday -e '($s, $u) = gettimeofday; printf("%d.%d\\n", $s, $u * 1000)'`,
+    unpadded: `/usr/bin/perl -MTime::HiRes=gettimeofday -e '($s, $u) = gettimeofday; printf("%d.%d\\n", $s, $u * 1000)'`,
     s: "/bin/date +%s",
   }[shape];
-  const logFraction = { gnu: UUTILS_FRACTION, uutils08: UNPADDED_FRACTION, s: "" }[shape];
+  const logFraction = { gnu: UUTILS_FRACTION, unpadded: UNPADDED_FRACTION, s: "" }[shape];
   const logStamp = logFraction
     ? `  -u) [ "$2" = "+%Y-%m-%dT%H:%M:%S.%N" ] && { printf '%s.${logFraction}\\n' "$(/bin/date -u +%Y-%m-%dT%H:%M:%S)"; exit 0; } ;;\n`
     : "";
@@ -1654,7 +1656,7 @@ describe("DATA-377: the shim's clock is read as seconds.fraction, the fraction l
   test("the fake clocks print the shapes they stand for", () => {
     for (const [shape, re] of [
       ["gnu", /^\d{10}\.\d{9}$/],
-      ["uutils08", /^\d{10}\.\d{1,9}$/],
+      ["unpadded", /^\d{10}\.\d{1,9}$/],
       ["s", /^\d{10}$/],
     ] as const) {
       const fx = withClock(shimFixture("allow"), clockFake(shape));
@@ -1663,7 +1665,7 @@ describe("DATA-377: the shim's clock is read as seconds.fraction, the fraction l
     }
   });
 
-  test("the hosted defect (uutils 0.8.0, a short unpadded fraction) reads as milliseconds: the window stays open and the resident's later allow stands", () => {
+  test("the hosted defect (a short fraction, as 0.8.0's %3N printed it) reads as milliseconds: the window stays open and the resident's later allow stands", () => {
     // Before the fix `+%s%3N` printed 17913936005567380 (17 digits), the digit-count rule read 0, WAIT_S became 0 and
     // the first wait answer was the block. A still clock: every read is 1791393600.005 s, so elapsed_ms is 0 throughout.
     for (const stamp of ["1791393600.5567380", "1791393600.7", "1791393600.0", "1791393600.000000001"]) {
@@ -1675,10 +1677,28 @@ describe("DATA-377: the shim's clock is read as seconds.fraction, the fraction l
       expect(log).not.toContain("outcome=block");
       expect(elapsed(log)).toEqual([0, 0, 0, 0]);
     }
+  }, 30000); // 4 real shim runs
+
+  test("a stepping clock pins the place value: elapsed_ms follows the fraction left-padded to nine digits, not dropped or right-padded", () => {
+    // Call k of `date +%s.%N` answers the k-th value; the last repeats. Read left-padded, the values are (ms):
+    // 1 1791393600.5567380 -> ...600005 (a trimmed fraction, 0.005567380 s, as 0.8.0's %3N printed it); 2 .99999999 -> ...600099;
+    // 3 1791393601.7 -> ...601000; 4 ...602.000000001 -> ...602000; 5 ...603.25 -> ...603000; 6 ...604.000000333 -> ...604000;
+    // 7 ...605.5 -> ...605000; 8+ ...606.123456789 -> ...606123. Dropping the pad reads whole seconds, padding on the
+    // right reads 556, 999, 700, 0, 250, 0, 500, 123 ms: neither gives the elapsed values below.
+    const fx = shimFixture("wait-then-allow");
+    withClock(
+      fx,
+      `#!/bin/sh\ncase "$1" in\n  +%s.%N) f=${fx.state}/clock.n; n=$(cat "$f" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$f"\n    case $n in 1) echo 1791393600.5567380 ;; 2) echo 1791393600.99999999 ;; 3) echo 1791393601.7 ;; 4) echo 1791393602.000000001 ;; 5) echo 1791393603.25 ;; 6) echo 1791393604.000000333 ;; 7) echo 1791393605.5 ;; *) echo 1791393606.123456789 ;; esac ;;\n  *) exec /bin/date "$@" ;;\nesac\n`,
+    );
+    const r = fx.run({ APPROVAL_HOOK_WAIT_S: "280" });
+    expect([r.code, r.stdout, r.calls]).toEqual([0, "{}", 3]);
+    // T0 is call 1 (...600005). The shim reads the clock more than once per attempt (P0, the deadline check), so the
+    // four log lines see calls 2, 5, 9 and 10: ...600099 - T0 = 94, ...603000 - T0 = 2995, ...606123 - T0 = 6118, 6118.
+    expect(elapsed(fx.log())).toEqual([94, 2995, 6118, 6118]);
   });
 
-  test("a padded clock (GNU, uutils 0.10.0) and an unpadded one (uutils 0.8.0): a hook-timeout answer is re-asked and the resident's later allow stands", () => {
-    for (const shape of ["gnu", "uutils08"] as const) {
+  test("a padded clock (GNU, uutils 0.8.0 and 0.10.0) and a trimmed one: a hook-timeout answer is re-asked and the resident's later allow stands", () => {
+    for (const shape of ["gnu", "unpadded"] as const) {
       const fx = withClock(shimFixture("wait-then-allow"), clockFake(shape));
       const r = fx.run({ APPROVAL_HOOK_WAIT_S: "280" });
       expect([shape, r.code, r.stdout, r.calls]).toEqual([shape, 0, "{}", 3]);
@@ -1692,7 +1712,7 @@ describe("DATA-377: the shim's clock is read as seconds.fraction, the fraction l
   });
 
   test("both clocks: elapsed_ms is milliseconds (non-negative, rising, under 10000 for the run)", () => {
-    for (const shape of ["gnu", "uutils08"] as const) {
+    for (const shape of ["gnu", "unpadded"] as const) {
       const fx = withClock(shimFixture("wait-then-allow"), clockFake(shape));
       fx.run({ APPROVAL_HOOK_WAIT_S: "280" });
       const ms = elapsed(fx.log());
@@ -1710,7 +1730,7 @@ describe("DATA-377: the shim's clock is read as seconds.fraction, the fraction l
   test("the log stamp keeps three fraction digits, with their place value: .266 from a padded fraction, .005 from uutils 0.8.0's 5567380", () => {
     for (const [shape, want] of [
       ["gnu", UUTILS_FRACTION.slice(0, 3)],
-      ["uutils08", "005"],
+      ["unpadded", "005"],
     ] as const) {
       const fx = withClock(shimFixture("allow"), clockFake(shape));
       fx.run();
@@ -1724,7 +1744,7 @@ describe("DATA-377: the shim's clock is read as seconds.fraction, the fraction l
   });
 
   test("both clocks: the window is measured in milliseconds (WAIT_S=6 closes after a few re-asks, then the last block stands)", () => {
-    for (const shape of ["gnu", "uutils08"] as const) {
+    for (const shape of ["gnu", "unpadded"] as const) {
       const fx = withClock(shimFixture("waiting"), clockFake(shape));
       // A unit read wrongly here would run the loop for hours: bound the run, so it fails instead of hanging.
       const r = fx.run({ APPROVAL_HOOK_WAIT_S: "6" }, { timeoutMs: 20000 });
@@ -1739,7 +1759,7 @@ describe("DATA-377: the shim's clock is read as seconds.fraction, the fraction l
   });
 
   test("an unpadded clock: a first post that hit the curl ceiling is re-asked and the later answer stands", () => {
-    const fx = withClock(shimFixture("first-timeout"), clockFake("uutils08"));
+    const fx = withClock(shimFixture("first-timeout"), clockFake("unpadded"));
     const r = fx.run({ APPROVAL_HOOK_WAIT_S: "8" });
     expect([r.code, r.stdout, r.calls]).toEqual([0, "{}", 2]);
     expect(fx.log()).toContain("outcome=wait http=000 curl=28");
@@ -1759,7 +1779,7 @@ describe("DATA-377: the shim's clock is read as seconds.fraction, the fraction l
   });
 
   test("every clock keeps the verdicts: allow, block, unreachable and an unanswered wait (WAIT_S=0)", () => {
-    for (const shape of ["gnu", "uutils08", "s"] as const) {
+    for (const shape of ["gnu", "unpadded", "s"] as const) {
       for (const [mode, code, calls] of [
         ["allow", 0, 1],
         ["block", 2, 1],
@@ -1784,7 +1804,7 @@ describe("DATA-377: the shim's clock is read as seconds.fraction, the fraction l
       expect(r.stderr).not.toMatch(/arithmetic|octal|base|Illegal number|syntax error/i);
       expect(elapsed(fx.log())).toEqual([0, 0]);
     }
-  });
+  }, 30000); // 5 real shim runs
 
   test("seconds with a leading zero, or more than twelve of them, are 0, not a fatal octal error: a directive every time, verdicts intact, no re-asking", () => {
     for (const stamp of ["01791357719.266000000", "0001791357719.266", "1791357719266000.266"]) {
@@ -1805,7 +1825,7 @@ describe("DATA-377: the shim's clock is read as seconds.fraction, the fraction l
     }
   }, 30000); // 12 real shim runs, as above
 
-  test("a fraction with leading zeros keeps them: .0266 is 26 ms, .000000001 is 0 ms, not an octal error", () => {
+  test("a fraction with leading zeros is read as nanoseconds: .0266 is 266 ns = 0 ms, .000000001 is 0 ms; not an octal error", () => {
     // Two reads of a still clock: elapsed_ms is 0 either way; the point is that neither value is read as 0 at T0
     // (the window stays open, so the wait is re-asked) and that nothing is fatal.
     for (const stamp of ["1791357719.0266", "1791357719.000000001", "1791357719.099999999"]) {

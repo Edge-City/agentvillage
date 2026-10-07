@@ -39,11 +39,12 @@
 #     X-Approval-Authorization across. Every other facade keeps
 #     X-Approval-Authorization, as before.
 #   - DATA-377 (2026-10-07), the clock: the hosted image's `date` is uutils
-#     coreutils 0.8.0 on the old-checkpoint boxes, whose `%3N` and `%N` print
-#     the nanoseconds without zero padding (`+%s%3N` was 17 to 19 digits, and
-#     a digit-count rule read the short ones as 0, round 2). now_ms() reads
-#     `+%s.%N`, left-pads the fraction to nine digits and keeps three; ts()
-#     does the same for the log stamp.
+#     coreutils 0.8.0 on the old-checkpoint boxes, whose `%3N` drops the
+#     leading zeros of the nanoseconds (a width under nine strips the padding;
+#     `+%s%3N` was 16 to 19 digits, and a digit-count rule read the short
+#     ones as 0, round 2 = DATA-397). now_ms() reads `+%s.%N` (`%N` is padded
+#     on every build measured: GNU, uutils 0.8.0 and 0.10.0), left-pads the
+#     fraction to nine digits as a defence and keeps three; ts() likewise.
 #   - DATA-380 (2026-10-07), no node process on the allow and block paths
 #     (node cost 32 ms warm, 135-236 ms cold, once or twice per call); what a
 #     facade answer means is unchanged, byte for byte:
@@ -184,17 +185,20 @@ FACADE_ENV=$HOOK_HOME/facade.env
 AV_PROC_ROOT=/proc
 
 # The clock is read as SECONDS.FRACTION (`+%s.%N`), never as one run of digits
-# (DATA-377 round 2, b4's read of 2026-10-07): the hosted image's date is
-# uutils coreutils 0.8.0 on the boxes provisioned from the old checkpoints,
-# and there `%N` (as `%3N` before it) prints the nanoseconds WITHOUT zero
-# padding, so a fraction of 0.005567380 s came out as 7 digits and the
-# digit-count rule that read `+%s%3N` (19 = ns, 16 = us, 13 = ms, 10 = s)
-# saw an unknown length about 9 % of the time and answered 0. A 0 at start
+# (DATA-377 round 2 = DATA-397, b4's read of 2026-10-07): the hosted image's
+# date is uutils coreutils 0.8.0 on the boxes provisioned from the old
+# checkpoints, and there `%3N` drops the leading zeros of the nanoseconds (a
+# width under nine strips the padding, format_modifiers.rs), so a fraction of
+# 0.005567380 s came out as 7 digits and the digit-count rule that read
+# `+%s%3N` (19 = ns, 16 = us, 13 = ms, 10 = s) saw an unknown length about
+# 9 % of the time and answered 0. A 0 at start
 # turns re-asking off (the T0 guard below), so the first wait verdict became a
 # block; a 0 mid-call logged elapsed_ms as an epoch or a negative epoch. The
-# separator makes the split exact on every build: GNU and uutils 0.10.0 print
-# nine padded digits, uutils 0.8.0 one to nine unpadded; the fraction is
-# left-padded to nine and its first three are the milliseconds. The seconds
+# separator makes the split exact on every build. Plain `%N` is padded to nine
+# digits on every build measured (GNU, uutils 0.8.0 and 0.10.0; the refuter
+# ran the 0.8.0 binary 1000 times); the fraction is still left-padded to nine
+# as a defence against a build that trims it, and its first three digits are
+# the milliseconds. The seconds
 # must be digits with no leading zero (`$(( 0001791357719 - T0 ))` is an
 # invalid octal constant, fatal before any directive; no real clock prints
 # one) and at most 12 of them. A clock whose fraction is not one to nine
@@ -219,8 +223,7 @@ now_ms() {
   printf '%s\n' "$v"
 }
 # The log's timestamp: the same `%N` read, left-padded to nine digits and cut
-# to its first three, so uutils 0.8.0's unpadded fraction keeps its place
-# value; a fraction that is not one to nine digits (BSD's literal N) is printed
+# to its first three, so a trimmed fraction would keep its place value; a fraction that is not one to nine digits (BSD's literal N) is printed
 # as the clock gave it.
 ts() {
   t=$("$T_date" -u +%Y-%m-%dT%H:%M:%S.%N 2>/dev/null) && [ -n "$t" ] || return 0
