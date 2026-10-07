@@ -1,5 +1,5 @@
 {
-  "_comment": "DATA-384: which source record_intention gets, by whose words the text is. The contract for the rule in _record_intention.py SOURCE_RULE / DRAFT_RULE and for the examples in skills/record-intention/SKILL.md \"## Source\", which are the rows with a skill line, in this order. said: what the resident said or wrote (for background, what a memory pass read). kind: own-words | asks-agent-to-write | yes-after-draft | quoted | translated | setup | note | inferred | background. where: conversation | onboarding | note | background. text: what the agent records. source: the source the rule gives. show_words: the agent shows text in its reply after capturing it. why: the reason. skill: the example line in SKILL.md, or null. Checked by plugins/av-events/tests/test_intention_source.py; no model runs.",
+  "_comment": "DATA-384: which source record_intention gets, by whose words the text is. The contract for the rule in _record_intention.py SOURCE_RULE / DRAFT_RULE and for the examples in skills/record-intention/SKILL.md \"## Source\", which are the rows with a skill line, in this order. said: what the resident said or wrote (for background, what a memory pass read). kind: own-words | asks-agent-to-write | yes-after-draft | quoted | confirms-quoted | translated | setup | note | inferred | background. where: conversation | onboarding | note | background. text: what the agent records. source: the source the rule gives, or null when nothing is recorded (text is then null too). show_words: the agent shows text in its reply after capturing it. why: the reason. skill: the example line in SKILL.md, or null. Checked by plugins/av-events/tests/test_intention_source.py; no model runs.",
   "exemplars": [
     {
       "said": "Based on what you know about me, make me an intent.",
@@ -75,20 +75,20 @@
       "said": "Yes, that's right.",
       "kind": "yes-after-draft",
       "where": "conversation",
-      "text": "Meet founders building on Solana in Goa",
-      "source": "ambient",
-      "show_words": true,
-      "why": "A yes to your words does not make them theirs.",
-      "skill": "\"Yes, that's right.\" after you showed your words → `ambient`: a yes does not make your words theirs."
+      "text": null,
+      "source": null,
+      "show_words": false,
+      "why": "Record nothing new: a yes does not make your words theirs, and the card already asks them (action=confirm checks their answer).",
+      "skill": "\"Yes, that's right.\" after you showed your words → record nothing new: a yes does not make your words theirs, and the card already asks them (action=confirm checks their answer)."
     },
     {
       "said": "[Replying to your previous message: \"Meet founders building on Solana in Goa\"]\n\nYes, that's right.",
       "kind": "yes-after-draft",
       "where": "conversation",
-      "text": "Meet founders building on Solana in Goa",
-      "source": "ambient",
-      "show_words": true,
-      "why": "Hermes puts the message they replied to into theirs; your words quoted back are still a yes, not their words.",
+      "text": null,
+      "source": null,
+      "show_words": false,
+      "why": "Hermes puts the message they replied to into theirs; your words quoted back are still a yes. Record nothing new: the card already asks them.",
       "skill": null
     },
     {
@@ -115,20 +115,40 @@
       "said": "Ravi says he's looking for a cofounder in Goa.",
       "kind": "quoted",
       "where": "conversation",
+      "text": null,
+      "source": null,
+      "show_words": false,
+      "why": "The words and the want are Ravi's: record nothing unless they say the want is theirs.",
+      "skill": "\"Ravi says he's looking for a cofounder in Goa.\" → record nothing: the words and the want are Ravi's, unless they say the want is theirs."
+    },
+    {
+      "said": "Yes, that's what I want too: I'm looking for a cofounder in Goa.",
+      "kind": "own-words",
+      "where": "conversation",
+      "text": "Looking for a cofounder in Goa",
+      "source": "message",
+      "show_words": false,
+      "why": "After the quote, they say the want is theirs, in their own words.",
+      "skill": "After that, \"Yes, that's what I want too: I'm looking for a cofounder in Goa.\" → `message`: now the want and the words are theirs."
+    },
+    {
+      "said": "Yes.",
+      "kind": "confirms-quoted",
+      "where": "conversation",
       "text": "Looking for a cofounder in Goa",
       "source": "ambient",
       "show_words": true,
-      "why": "The words, and the want, are Ravi's.",
-      "skill": "\"Ravi says he's looking for a cofounder in Goa.\" → `ambient`: the words and the want are Ravi's."
+      "why": "They say the want is theirs but give no words: the words you record are yours (or Ravi's).",
+      "skill": "If they only say \"Yes.\" → `ambient`: the want is theirs, but the words you record are not."
     },
     {
       "said": "Fwd: We are hiring a founding engineer in Bangalore.",
       "kind": "quoted",
       "where": "conversation",
-      "text": "Hiring a founding engineer in Bangalore",
-      "source": "ambient",
-      "show_words": true,
-      "why": "A forwarded post is someone else's words.",
+      "text": null,
+      "source": null,
+      "show_words": false,
+      "why": "A forwarded post is someone else's words and want: record nothing unless they say it is theirs.",
       "skill": null
     },
     {

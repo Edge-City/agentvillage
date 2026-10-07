@@ -16,12 +16,17 @@ in one of them fails here.
 
 The skill's examples are generated from `vectors/intention_source_exemplars.json`
 (rows with a `skill` line, in order). Every row of that table is checked
-against an oracle: its `kind` decides first (a yes after a draft, quoted or
-forwarded words, a translation, an inferred want and a background find are
-always `ambient`); for the other kinds a stated source needs every recorded
-word to be one of the resident's (`words(text) <= words(said)`, the "cut, not
-add" test). The oracle is that kind table plus a word-subset check, not a
-model; no model runs here.
+against an oracle: its `kind` decides first (a yes after the agent's words
+and quoted or forwarded words record nothing, `source` null; a yes that the
+quoted want is theirs, a translation, an inferred want and a background find
+are always `ambient`); for the other kinds a stated source needs every
+recorded word to be one of the resident's (`words(text) <= words(said)`, the
+"cut, not add" test). The oracle is that kind table plus a word-subset check,
+not a model; no model runs here.
+
+Outside the pinned passages, SKILL.md and tools.md must not say anything that
+reads as the old where-not-whose rule (a forbidden-phrase check), and the
+skill's "Ambient intentions are held" section is pinned whole as well.
 """
 
 from __future__ import annotations
@@ -55,11 +60,14 @@ SOURCE_PARAM = (
 SOURCE_SHORT = "source=message only for the resident's own words; anything you composed is ambient."
 TOOL_SEARCH_CLIP = 500
 
+#: Kinds that record nothing: a yes after the agent's words (the card already
+#: asks), and someone else's quoted or forwarded words (not their want).
+NO_CAPTURE = {"yes-after-draft", "quoted"}
 #: Kinds whose text is never the resident's own words, whatever the overlap.
-ALWAYS_AMBIENT = {"yes-after-draft", "quoted", "translated", "inferred", "background"}
+ALWAYS_AMBIENT = {"confirms-quoted", "translated", "inferred", "background"}
 #: Kinds where the resident's own words give a stated source (cut, never added to).
 STATED_BY_KIND = {"own-words": "message", "asks-agent-to-write": "message", "setup": "onboarding", "note": "note"}
-KINDS = ALWAYS_AMBIENT | set(STATED_BY_KIND)
+KINDS = NO_CAPTURE | ALWAYS_AMBIENT | set(STATED_BY_KIND)
 WHERE_FOR_KIND = {"setup": {"onboarding"}, "note": {"note"}, "background": {"background"}}
 
 
@@ -122,6 +130,65 @@ def test_the_skills_source_section_is_the_rule_and_the_tables_examples(ri):
 
 def test_the_skills_draft_section_is_exactly_the_rule(ri):
     assert flat(section(SKILL.read_text(encoding="utf-8"), "Show the words you recorded")) == ri.DRAFT_RULE
+
+
+#: The skill's "Ambient intentions are held" section, pinned whole: it sits
+#: next to the rule and says what follows a capture.
+AMBIENT_HELD = (
+    "An ambient intention is never published on your word. It is recorded locally and stays off "
+    "Index until the resident approves it in their approval channel. Where that channel is set up, "
+    "the tool sends them the request itself when you capture, with the words you recorded, and "
+    "publishes once they approve; you do not need to ask them in chat as well. A yes you read in "
+    "chat is not an approval. Something you inferred that is personal is the exception: capture it "
+    "with publish=false and reason=personal, and it stays local and is never sent for approval. "
+    "- action=confirm (with intention_id) checks whether the resident has answered and publishes it "
+    "if they approved. If they have not answered yet, it says so; do not ask again and again. Where "
+    "the approval channel is not set up, confirm is refused. - To change the wording of a held "
+    "intention whose request is still open, withdraw it and capture the new wording; an update is "
+    "refused, because the resident was asked about the words as they were. - Do not publish a held "
+    "intention any other way, and do not call create_intent for it. Capturing the same text again as "
+    "message, onboarding or note records it locally but does not publish it. When approvals are set "
+    "up, a stated intention (message, onboarding, note) is checked against the resident's approval "
+    "policy too; normally it is published in the same call. If the result says the resident has been "
+    "asked, leave it: it is published when they approve."
+)
+
+#: Phrases that would key `source` on where the want was heard, or make a
+#: request, a yes or a quote count as the resident's words. Checked over
+#: SKILL.md and tools.md outside the pinned passages (flattened, any case).
+FORBIDDEN = (
+    "source=message",
+    'source="message"',
+    "they told you",
+    "told you in conversation",
+    "counts as theirs",
+    "count as theirs",
+    "record it again as message",
+    "as message",
+)
+
+
+def test_the_skills_ambient_held_section_is_pinned():
+    assert flat(section(SKILL.read_text(encoding="utf-8"), "Ambient intentions are held")) == AMBIENT_HELD
+
+
+def _outside_pinned(ri) -> dict[str, str]:
+    skill = SKILL.read_text(encoding="utf-8")
+    for heading in ("Source", "Show the words you recorded", "Ambient intentions are held"):
+        skill = skill.replace(f"\n## {heading}\n" + section(skill, heading), "\n")
+    tools = "\n\n".join(p for p in TOOLS.read_text(encoding="utf-8").split("\n\n")
+                        if "When you call `record_intention`" not in p)
+    return {"SKILL.md": flat(skill), "tools.md": flat(tools)}
+
+
+def test_nothing_outside_the_pinned_passages_contradicts_the_rule(ri):
+    texts = _outside_pinned(ri)
+    # The cut really removed the pinned passages.
+    assert ri.SOURCE_RULE not in texts["SKILL.md"] and ri.DRAFT_RULE not in texts["SKILL.md"]
+    assert ri.SOURCE_RULE not in texts["tools.md"]
+    hits = [f"{label}: {phrase!r}" for label, text in texts.items() for phrase in FORBIDDEN
+            if phrase.lower() in text.lower()]
+    assert hits == []
 
 
 def test_the_rule_is_stated_once_in_each_prompt(ri):
@@ -195,16 +262,23 @@ def test_the_table_is_well_formed(ri):
         assert row["kind"] in KINDS, row
         assert row["where"] in ("conversation", "onboarding", "note", "background"), row
         assert row["where"] in WHERE_FOR_KIND.get(row["kind"], {"conversation", "note"}), row
-        assert row["source"] in ri.SOURCES, row
-        assert row["text"].strip() and row["said"].strip() and row["why"].strip(), row
+        assert row["source"] in ri.SOURCES or row["source"] is None, row
+        # Nothing recorded means no text; a capture always has text.
+        assert (row["text"] is None) == (row["source"] is None), row
+        assert row["text"] is None or row["text"].strip(), row
+        assert row["said"].strip() and row["why"].strip(), row
         if row["skill"] is not None:
-            # The example's arrow names the row's source.
-            assert f"→ `{row['source']}`" in row["skill"], row
+            # The example's arrow names the row's source, or says to record nothing.
+            arrow = "→ record nothing" if row["source"] is None else f"→ `{row['source']}`"
+            assert arrow in row["skill"], row
             assert f'"{row["said"]}"' in row["skill"], row
-    # Every source and every kind has an example.
-    assert {row["source"] for row in EXEMPLARS} == set(ri.SOURCES)
+    # Every source, "record nothing" and every kind has an example.
+    assert {row["source"] for row in EXEMPLARS} == set(ri.SOURCES) | {None}
     assert {row["kind"] for row in EXEMPLARS} == KINDS
     pairs = {(row["said"], row["text"], row["source"]) for row in EXEMPLARS}
+    # Someone else's words record nothing; a yes after your words records nothing new.
+    assert ("Ravi says he's looking for a cofounder in Goa.", None, None) in pairs
+    assert ("Yes, that's right.", None, None) in pairs
     # The rehearsal and the brief's two examples.
     assert any(s == "Based on what you know about me, generate an index intent." and src == "ambient" for s, _, src in pairs)
     assert any(s == "Based on what you know about me, make me an intent." and src == "ambient" for s, _, src in pairs)
@@ -214,7 +288,9 @@ def test_the_table_is_well_formed(ri):
     assert {src for s, _, src in pairs if s == write_me} == {"message", "ambient"}
 
 
-def expected_source(row: dict) -> str:
+def expected_source(row: dict) -> str | None:
+    if row["kind"] in NO_CAPTURE:
+        return None
     if row["kind"] in ALWAYS_AMBIENT:
         return "ambient"
     if words(row["text"]) <= words(row["said"]):
@@ -222,10 +298,10 @@ def expected_source(row: dict) -> str:
     return "ambient"
 
 
-@pytest.mark.parametrize("row", EXEMPLARS, ids=[f"{row['kind']}:{row['text'][:30]}" for row in EXEMPLARS])
+@pytest.mark.parametrize("row", EXEMPLARS, ids=[f"{row['kind']}:{(row['text'] or row['said'])[:30]}" for row in EXEMPLARS])
 def test_every_row_follows_the_rule(row):
     expected = expected_source(row)
     assert row["source"] == expected, row["why"]
     # In conversation the agent's own words are shown in the reply after the
-    # capture; a background pass has no chat.
+    # capture; a background pass has no chat; nothing recorded, nothing shown.
     assert row["show_words"] == (expected == "ambient" and row["where"] != "background"), row["why"]

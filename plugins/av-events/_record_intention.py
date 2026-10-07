@@ -249,7 +249,8 @@ SOURCE_RULE = (
     "it back to them; you may cut words, but not add your own. A translation is your wording: "
     "record their words in the language they used for source=message, or show your translation "
     "and use source=ambient. Words they quote or forward from someone else are not their own "
-    "words: use source=ambient, or ask whether the want is theirs. source=onboarding and "
+    "words and are not their want: record nothing unless they say the want is theirs; then their "
+    "own words are source=message and anything else source=ambient. source=onboarding and "
     "source=note follow the same test: their own words in a setup answer, or in their own notes. "
     "Anything you composed, summarised, generalised or inferred is source=ambient, whoever asked "
     "for it, and so is anything a background or cron run found. A resident asking you to write an "
@@ -258,15 +259,16 @@ SOURCE_RULE = (
 )
 
 #: DATA-384 AC#2: the agent's own wording is captured as ambient and shown in
-#: the same reply. Capture first, then show: the fleet's Telegram display
+#: the same reply, with what the tool answered (a card, published at once
+#: under an autonomous policy, held with no approvals, or refused). Capture first, then show: the fleet's Telegram display
 #: settings (install/display_defaults.ts: no interim messages, no streaming)
 #: drop text written beside a tool call, so a draft shown "first" never arrives.
 DRAFT_RULE = (
     "In conversation, when the words are yours, capture them with source=ambient, then in your "
-    "reply show the intention in one or two lines, exactly as you recorded it, and say it is "
-    "waiting for their approval; the card asks them, so do not ask for a yes in chat, and a yes "
-    "in chat does not make the words theirs. If they then say the want in their own words, "
-    "withdraw the held one and capture their words with source=message."
+    "reply show the intention in one or two lines, exactly as you recorded it, and tell them what "
+    "the tool answered (normally that it is waiting for their approval on the card); do not ask "
+    "for a yes in chat, and a yes in chat does not make the words theirs. If they then say the "
+    "want in their own words, withdraw the held one and capture their words with source=message."
 )
 
 #: DATA-384: the rule in one sentence, inside the first 500 characters of the

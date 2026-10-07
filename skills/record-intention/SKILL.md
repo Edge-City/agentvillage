@@ -42,13 +42,14 @@ this conversation, so you could quote it back to them; you may cut words, but
 not add your own. A translation is your wording: record their words in the
 language they used for `source=message`, or show your translation and use
 `source=ambient`. Words they quote or forward from someone else are not their
-own words: use `source=ambient`, or ask whether the want is theirs.
-`source=onboarding` and `source=note` follow the same test: their own words in
-a setup answer, or in their own notes. Anything you composed, summarised,
-generalised or inferred is `source=ambient`, whoever asked for it, and so is
-anything a background or cron run found. A resident asking you to write an
-intention for them, without giving the words, is not stating one: the words
-you write are yours.
+own words and are not their want: record nothing unless they say the want is
+theirs; then their own words are `source=message` and anything else
+`source=ambient`. `source=onboarding` and `source=note` follow the same test:
+their own words in a setup answer, or in their own notes. Anything you
+composed, summarised, generalised or inferred is `source=ambient`, whoever
+asked for it, and so is anything a background or cron run found. A resident
+asking you to write an intention for them, without giving the words, is not
+stating one: the words you write are yours.
 
 Examples:
 
@@ -61,12 +62,17 @@ Examples:
   are yours.
 - "Write me an intent: founders building on Solana in Goa." → `message` when
   you record "Founders building on Solana in Goa": every word is theirs.
-- "Yes, that's right." after you showed your words → `ambient`: a yes does not
-  make your words theirs.
+- "Yes, that's right." after you showed your words → record nothing new: a yes
+  does not make your words theirs, and the card already asks them
+  (action=confirm checks their answer).
 - "Main Goa mein Solana par kaam karne wale founders se milna chahta hoon."
   recorded in English → `ambient`: the translation is yours.
-- "Ravi says he's looking for a cofounder in Goa." → `ambient`: the words and
-  the want are Ravi's.
+- "Ravi says he's looking for a cofounder in Goa." → record nothing: the words
+  and the want are Ravi's, unless they say the want is theirs.
+- After that, "Yes, that's what I want too: I'm looking for a cofounder in
+  Goa." → `message`: now the want and the words are theirs.
+- If they only say "Yes." → `ambient`: the want is theirs, but the words you
+  record are not.
 - "I want to meet founders building on Solana in Goa." → `message`: record
   "Meet founders building on Solana in Goa" and it publishes.
 - A setup answer, "I'm here to find people working on climate hardware." →
@@ -78,10 +84,10 @@ Examples:
 
 In conversation, when the words are yours, capture them with `source=ambient`,
 then in your reply show the intention in one or two lines, exactly as you
-recorded it, and say it is waiting for their approval; the card asks them, so
-do not ask for a yes in chat, and a yes in chat does not make the words
-theirs. If they then say the want in their own words, withdraw the held one
-and capture their words with `source=message`.
+recorded it, and tell them what the tool answered (normally that it is waiting
+for their approval on the card); do not ask for a yes in chat, and a yes in
+chat does not make the words theirs. If they then say the want in their own
+words, withdraw the held one and capture their words with `source=message`.
 
 ## Ambient intentions are held
 
