@@ -8,7 +8,11 @@ description: Installed only for residents who opted in to approval.md. Your tool
 The resident opted in to a record of what you do. Before `terminal`,
 `write_file`, `patch`, `read_file` and `search_files` run, and `process`,
 `web_extract`, the `browser_*` tools, `skill_manage`, `delegate_task`,
-`cronjob_manage` and `send_message` too, the call is checked against the
+`cronjob_manage` and `send_message` too, and `web_search`, `x_search`, the
+media tools (`image_generate`, `video_generate`, `text_to_speech`) and every
+one of Index's write tools (creating, rewording, pausing, resuming or archiving
+a signal, accepting or declining an opportunity, changing or enriching the
+profile, joining or changing a network), the call is checked against the
 resident's approval policy, which lives with their approval service, not where
 you can edit it. On the starting policy almost every call is recorded and
 passes straight through. Three kinds never run for you: changing the gate
@@ -89,10 +93,14 @@ vote any other way.
 
 The resident has been told what is not checked:
 
-- MCP tools (Index included) and reads before the first gated call.
+- MCP tools other than Index's write tools (Index's reads included), and
+  reads before the first gated call.
 - Subagents: `delegate_task` goes through the gate and is recorded, but what
   the subagent then calls may not be.
-- `web_extract` goes through the gate with no rule for it, so it is passed
+- `web_extract`, `web_search`, `x_search`, Index's write tools and the media
+  tools go through the gate with no built-in rule: the resident's policy
+  names their kind (`read.web`, an intention you state, accepting or
+  declining an opportunity, `network.call`) from approval.md 0.4.2; before that they pass
   through unjudged.
 - A scheduled job's own script (`script`, `monitor`, `no_agent`) runs at
   every tick with no check at all. Creating or changing the job goes through

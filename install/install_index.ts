@@ -77,6 +77,15 @@ import { hermesBin, hermesExecEnv } from "./hermes_cli";
 import { CRON_NAME_PREFIX, hermesHome } from "./paths";
 import { TEMPLATE_NAMES, type TemplateName, adminScheduleKeys, prunePreviewFiles, readJobSettings, scheduleAdminManaged } from "../skills/index-network/scripts/job-settings";
 
+/**
+ * R3 fix round 4 (output injection): a job name read from the tenant's jobs.json is printed only in
+ * a conservative shape (no newline, no brace, no quote); anything else is withheld, so the
+ * installer's stdout never carries a sandbox-controlled string verbatim.
+ */
+export function printableJobName(name: unknown): string {
+  return typeof name === "string" && /^[A-Za-z0-9 _.:-]{1,80}$/.test(name) ? name : "(name withheld)";
+}
+
 const PROD_MCP_URL = "https://protocol.index.network/mcp";
 const DEV_MCP_URL = "https://protocol.dev.index.network/mcp";
 
@@ -181,9 +190,9 @@ function removeEdgeCronJobs(env: NodeJS.ProcessEnv): void {
     if (!job.name.startsWith(CRON_NAME_PREFIX)) continue;
     try {
       execFileSync(bin, ["cron", "remove", job.id], { stdio: "ignore", env });
-      console.log(`→ removed cron ${job.name}`);
+      console.log(`→ removed cron ${printableJobName(job.name)}`);
     } catch {
-      console.warn(`  warning: could not remove cron ${job.name}`);
+      console.warn(`  warning: could not remove cron ${printableJobName(job.name)}`);
     }
   }
 }
@@ -315,8 +324,8 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
   {
     schedule: "0 1 * * *",
     staggerWindowMinutes: 50,
-    promptFile: "edge-esmeralda/prompts/memory-signals.md",
-    scriptFile: "edge-esmeralda/scripts/memory_signal_gate.py",
+    promptFile: "index-network/prompts/memory-signals.md",
+    scriptFile: "index-network/scripts/memory_signal_gate.py",
     scriptInstallName: "agentvillage_memory_signal_gate.py",
     name: "Edge — memory signal sync",
     deliver: false,
@@ -337,7 +346,7 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
   {
     schedule: "0 8 * * *",
     staggerWindowMinutes: 25,
-    promptFile: "edge-esmeralda/prompts/brief.md",
+    promptFile: "index-network/prompts/brief.md",
     ...proactiveScript("brief"),
     name: "Edge — daily digest",
     deliver: true,
@@ -347,7 +356,7 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
   {
     schedule: "0 14 * * *",
     staggerWindowMinutes: 25,
-    promptFile: "edge-esmeralda/prompts/negotiation-summary.md",
+    promptFile: "index-network/prompts/negotiation-summary.md",
     ...proactiveScript("negotiation"),
     name: "Edge — negotiation summary",
     deliver: true,
@@ -357,7 +366,7 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
   {
     schedule: "0 19 * * *",
     staggerWindowMinutes: 25,
-    promptFile: "edge-esmeralda/prompts/ask-questions.md",
+    promptFile: "index-network/prompts/ask-questions.md",
     ...proactiveScript("evening"),
     name: "Edge — evening questions",
     deliver: true,
@@ -367,7 +376,7 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
   {
     schedule: "0 12 * * *",
     staggerWindowMinutes: 25,
-    promptFile: "edge-esmeralda/prompts/opportunity-drop.md",
+    promptFile: "index-network/prompts/opportunity-drop.md",
     ...proactiveScript("drop-midday"),
     name: "Edge — opportunity drop (midday)",
     deliver: true,
@@ -377,7 +386,7 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
   {
     schedule: "0 17 * * *",
     staggerWindowMinutes: 25,
-    promptFile: "edge-esmeralda/prompts/opportunity-drop.md",
+    promptFile: "index-network/prompts/opportunity-drop.md",
     ...proactiveScript("drop-evening"),
     name: "Edge — opportunity drop (evening)",
     deliver: true,
@@ -441,9 +450,9 @@ export function templateJobName(template: TemplateName): string {
  */
 export function templateCronSpec(template: TemplateName, schedule: string): DigestCronSpec {
   const promptFile = {
-    brief: "edge-esmeralda/prompts/brief.md",
-    "digest-preview": "edge-esmeralda/prompts/opportunity-drop.md",
-    "evening-ask": "edge-esmeralda/prompts/ask-questions.md",
+    brief: "index-network/prompts/brief.md",
+    "digest-preview": "index-network/prompts/opportunity-drop.md",
+    "evening-ask": "index-network/prompts/ask-questions.md",
   }[template];
   return {
     schedule,
@@ -764,9 +773,9 @@ export function reconcileDigestCronJobs(
     if (!job.name.startsWith(CRON_NAME_PREFIX) || specNames.has(job.name) || templateNames.has(job.name)) continue;
     try {
       execFileSync(bin, ["cron", "remove", job.id], { stdio: "ignore", env });
-      console.log(`→ removed retired cron ${job.name}`);
+      console.log(`→ removed retired cron ${printableJobName(job.name)}`);
     } catch {
-      console.warn(`  warning: could not remove cron ${job.name}`);
+      console.warn(`  warning: could not remove cron ${printableJobName(job.name)}`);
       failed.push(job.name);
     }
   }

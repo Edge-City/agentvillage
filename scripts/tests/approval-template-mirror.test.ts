@@ -14,10 +14,16 @@ import { join } from "node:path";
 //    Run: AV_CONTROLPLANE_DIR=/path/to/controlplane bun test scripts/tests/approval-template-mirror.test.ts
 // R2 moved the pin (marketplace.app.install/action/read, review.delegate.model, resource.allocate and
 // the odin.* comment; seven added lines).
+// R3 (DATA-344) moved it again: `defaults.unmapped_tool: record` and the APRV-499 `tools:` list
+// (approval.md 0.4.2; a 0.4.0 or 0.4.1 daemon refuses both keys and fails every class closed), and
+// the reserved opportunity.accept row its accept_opportunity lines map to. Its fix round 2 moved it
+// once more: the plugin's index_update_opportunity and Index's reject_opportunity map to
+// opportunity.accept (accept or decline), the phantom index_accept_opportunity line is gone, and the
+// row's comment says the hook judges it.
 // DATA-370 moved it: `prompt.style: minimal` (Carter's ruling: the default for every resident; the
 // line stands alone because the app's Approvals setting rewrites it) and the `say:` block, one entry
 // per class a resident can be asked about whose payload keys are known (approval.md 0.4.1+, APRV-489).
-const POLICY_BLOCK_SHA256 = "3ba7de95486bde625c00f2e9fc94516f514d11fad623e0872bdb72f94d20c1ca";
+const POLICY_BLOCK_SHA256 = "42c88f1b8018cd17ca999f4b9daf2439a81bda65590804468bcd308d8d197d94";
 
 const OPEN = "```yaml approval-policy\n";
 function policyBlock(text: string): string {

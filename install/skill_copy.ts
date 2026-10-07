@@ -1,7 +1,7 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-import { EDGE_SKILL_NAMES, REPLACED_SKILL_DIRS } from "./paths";
+import { EDGE_SKILL_NAMES, REPLACED_SKILL_DIRS, RETIRED_SKILL_DIRS } from "./paths";
 
 /** Recursive copy that overwrites files and keeps anything already at the target. Returns files copied. */
 export function copyTree(sourceDir: string, targetDir: string): number {
@@ -51,4 +51,55 @@ export function copySkillBundles(
     copied += copyTree(sourcePath, join(targetSkillsRoot, name));
   }
   return copied;
+}
+
+/** A retired name must be one plain directory name directly under the skills root. */
+function isPlainDirName(name: string): boolean {
+  return name !== ""
+    && name !== "."
+    && name !== ".."
+    && !name.includes("/")
+    && !name.includes("\\")
+    && !name.includes("\0");
+}
+
+function presentOrDangling(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Removes the skill bundles this repo no longer ships (`RETIRED_SKILL_DIRS`)
+ * from `<targetSkillsRoot>/<name>/`, one log line per removal, and returns the
+ * names removed. Idempotent: a name already gone is skipped silently. Only a
+ * plain directory name directly under the root is acted on (a name with a path
+ * separator or `..` is refused and logged), and a name still in
+ * `EDGE_SKILL_NAMES` is never removed. Nothing else under the root is read or
+ * touched, so Hermes's bundled skills and a resident's own stay.
+ */
+export function removeRetiredSkillDirs(
+  targetSkillsRoot: string,
+  names: readonly string[] = RETIRED_SKILL_DIRS,
+  log: (line: string) => void = console.log,
+): string[] {
+  const shipped = new Set<string>(EDGE_SKILL_NAMES);
+  const removed: string[] = [];
+  for (const name of names) {
+    if (!isPlainDirName(name)) {
+      log(`  warning: refused retired skill name ${JSON.stringify(name)} (not a plain directory name)`);
+      continue;
+    }
+    if (shipped.has(name)) continue;
+    const target = join(targetSkillsRoot, name);
+    if (!presentOrDangling(target)) continue;
+    // A symlink is unlinked, never followed.
+    rmSync(target, { recursive: true, force: true });
+    removed.push(name);
+    log(`→ removed retired skill ${name} from ${targetSkillsRoot}`);
+  }
+  return removed;
 }

@@ -43,4 +43,27 @@ export const EDGE_SKILL_NAMES = [
  */
 export const REPLACED_SKILL_DIRS = ["edge-india/references"] as const;
 
+/**
+ * Skill bundles this repo once installed and no longer ships. The installer
+ * removes each from `$HERMES_HOME/skills/` on every install and update (one
+ * log line per removal), so a home installed before the retirement stops
+ * registering it. A skill on neither this list nor `EDGE_SKILL_NAMES`
+ * (Hermes's own bundled skills, one a resident added) is never touched.
+ * Add a name here when it leaves `EDGE_SKILL_NAMES`.
+ */
+export const RETIRED_SKILL_DIRS = [
+  // DATA-360: left EDGE_SKILL_NAMES in rc16 (9adff7a6); the Geo CLI it
+  // pointed the agent at is unused.
+  "geo-esmeralda",
+] as const;
+
+// A name on both lists would be copied in and removed again on every run.
+for (const name of RETIRED_SKILL_DIRS) {
+  if ((EDGE_SKILL_NAMES as readonly string[]).includes(name)) {
+    throw new Error(
+      `install/paths.ts: "${name}" is in both EDGE_SKILL_NAMES and RETIRED_SKILL_DIRS; remove it from one`,
+    );
+  }
+}
+
 export const CRON_NAME_PREFIX = "Edge —";

@@ -8,6 +8,7 @@
  *   - `AGENTS.md`, `USER.md` → `$HERMES_HOME/`
  *   - Edge skill bundles → `$HERMES_HOME/skills/{index-network,edgeos,edge-india,edge-esmeralda,…}/`
  *     (`skill_copy.ts`; `edge-india/references` is replaced, not merged, so upstream deletions land)
+ *   - retired skill bundles (`RETIRED_SKILL_DIRS`, e.g. `geo-esmeralda`) → removed from `$HERMES_HOME/skills/`
  *   - `terminal.cwd` in config.yaml → `$HERMES_HOME`
  *   - Telegram display: no reasoning, one quiet progress message per reply (`display_defaults.ts`; `AV_DISPLAY_DEFAULTS=0` skips)
  *   - STT enabled with Groq Whisper so voice notes are auto-transcribed
@@ -45,7 +46,7 @@ import { execSync } from "node:child_process";
 import { installIndex } from "./install_index";
 import { installEdgeos } from "./install_edgeos";
 import { safeInstallRecall, wipeRecallIndex } from "./install_recall";
-import { runApprovalStep } from "./install_approval";
+import { gateReceiptLine, runApprovalStep, stagePlugins } from "./install_approval";
 import {
   capModelMaxTokens,
   configureAvEvents,
@@ -58,8 +59,7 @@ import {
   setTerminalCwd,
 } from "./config";
 import { configureTelegramDisplay } from "./display_defaults";
-import { copyPluginTree } from "./plugin_copy";
-import { copySkillBundles } from "./skill_copy";
+import { copySkillBundles, removeRetiredSkillDirs } from "./skill_copy";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
 import {
   EDGE_SKILL_NAMES,
@@ -167,20 +167,21 @@ function copyWorkspaceFiles(wipeUser: boolean): void {
   }
 }
 
-function copyPluginFiles(): void {
+/**
+ * N3 (R3 fix round 2): `before-approval` stages every plugin but an installed
+ * `av-approval`, whose new copy waits for the approval step (`after-approval`,
+ * below): its matcher list must never run ahead of the hooks block that step
+ * writes (`stagePlugins` in install_approval.ts).
+ */
+function copyPluginFiles(phase: "before-approval" | "after-approval"): void {
   const target = join(hermesHome(), "plugins");
-  if (!existsSync(SOURCE_PLUGINS)) return;
-  let copied = 0;
-  for (const name of readdirSync(SOURCE_PLUGINS)) {
-    const sourcePath = join(SOURCE_PLUGINS, name);
-    if (!statSync(sourcePath).isDirectory()) continue;
-    copied += copyPluginTree(sourcePath, join(target, name));
-  }
-  if (copied > 0) console.log(`→ staged ${copied} plugin files into ${target}`);
+  const copied = stagePlugins(SOURCE_PLUGINS, target, phase);
+  if (copied > 0) console.log(`→ staged ${copied} plugin files into ${target}${phase === "after-approval" ? " (av-approval, after the approval step)" : ""}`);
 }
 
 function copySkillFiles(): void {
   const targetSkillsRoot = skillsDir();
+  removeRetiredSkillDirs(targetSkillsRoot);
   const copied = copySkillBundles(SOURCE_SKILLS, targetSkillsRoot);
   if (copied > 0) {
     console.log(`→ staged ${copied} files into ${targetSkillsRoot}/{${EDGE_SKILL_NAMES.join(",")}}`);
@@ -215,7 +216,7 @@ function main(): void {
   copySoulFile();
   copyWorkspaceFiles(wipeUser);
   copySkillFiles();
-  copyPluginFiles();
+  copyPluginFiles("before-approval");
   setTerminalCwd();
   capModelMaxTokens();
   configureStt();
@@ -254,6 +255,8 @@ function main(): void {
     console.error("error: the approval gate was requested (AV_APPROVAL_ENABLED) but not installed; gateway not restarted");
     process.exit(1);
   }
+  // N3: the av-approval plugin only after its hooks block is written.
+  copyPluginFiles("after-approval");
 
   if (!process.argv.includes("--no-restart")) {
     restartGateway();
@@ -272,6 +275,13 @@ function main(): void {
   console.log(`  HERMES_HOME: ${TARGET_HOME}`);
   console.log("");
   console.log("next: message your Telegram bot — gateway uses terminal.cwd above");
+
+  // R3 fix round 4 (trust boundary): the gate receipt is the LAST line of this process's stdout,
+  // carrying the control plane's per-exec nonce (AV_GATE_NONCE) and what Hermes's own parse of
+  // config.yaml routes. Nothing is printed after it; without a nonce or a successful approval
+  // install it is not printed at all.
+  const receipt = gateReceiptLine();
+  if (receipt) process.stdout.write(`${receipt}\n`);
 }
 
 main();

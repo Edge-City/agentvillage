@@ -132,6 +132,24 @@ export const APPROVAL_PLUGIN = "av-approval";
  * maps before the hook (`model_tools._LEGACY_TOOL_ALIASES`); matched anyway.
  * The `av-approval` plugin keeps a copy of this list (`GATED_MATCHERS`); a
  * test holds the two equal.
+ *
+ * R3b (DATA-344, claude-edge 2026-10-06 03:33Z): the side-effecting tools
+ * core's adapter does not class itself are routed too, so the resident
+ * policy's `tools:` list (approval.md 0.4.2, APRV-499) judges them: every
+ * Index write (the nine of its 14-tool MCP surface: `create_intent`,
+ * `update_intent`, `archive_intent`, `pause_intent`, `resume_intent`,
+ * `accept_opportunity`, `reject_opportunity`, `update_my_profile`,
+ * `enrich_my_profile`; and the eight write tools of Index's Hermes plugin,
+ * whose accept or decline is `index_update_opportunity`: it has no
+ * `index_accept_opportunity`), media generation, and the web reads
+ * `web_search` and `x_search` (with `web_extract`, one `read.web`). Fix round
+ * 2 (S1/S2) added the five MCP writes, `index_research_profile` and
+ * dropped the phantom name. Index's read tools and the local tools
+ * (`skill_view`, `skills_list`, `memory`, `session_search`, `todo`, `clarify`,
+ * `recall`, `consent_status`, `record_intention`) stay unrouted: av-events
+ * records every call as `tool.call`, and the hook is for actions. Each
+ * routed call costs one shim round trip and is blocked while the gate is
+ * unverified, as every entry here is.
  */
 export const APPROVAL_GATED_TOOLS = [
   "terminal",
@@ -147,7 +165,62 @@ export const APPROVAL_GATED_TOOLS = [
   "delegate_task",
   "cronjob(_manage)?",
   "send_message",
+  "mcp__index__create_intent",
+  "mcp__index__update_intent",
+  "mcp__index__archive_intent",
+  "mcp__index__pause_intent",
+  "mcp__index__resume_intent",
+  "mcp__index__accept_opportunity",
+  "mcp__index__reject_opportunity",
+  "mcp__index__update_my_profile",
+  "mcp__index__enrich_my_profile",
+  "index_create_intent",
+  "index_update_intent",
+  "index_add_intent_to_network",
+  "index_create_network",
+  "index_update_network",
+  "index_join_network",
+  "index_update_opportunity",
+  "index_research_profile",
+  "image_generate",
+  "video_generate",
+  "text_to_speech",
+  "web_search",
+  "x_search",
 ] as const;
+
+/**
+ * N3 (R3 fix round 2): the plugins are staged around the approval step, so an
+ * upgrade never leaves the `av-approval` plugin's matcher list
+ * (`GATED_MATCHERS`) ahead of the hooks block the step writes. The plugin
+ * checks at every gateway start that each of its matchers has a shim entry; a
+ * newer plugin against an older block finds `hook-missing`, which is sticky
+ * and blocks every gated call until a restart with the block intact.
+ *
+ * - `before-approval`: every plugin but `av-approval`; and `av-approval` too
+ *   when no copy is installed yet (a fresh install), so a step that fails
+ *   later still leaves the backstop to fail closed.
+ * - `after-approval`, run only once the approval step succeeded:
+ *   `av-approval`, now that the hooks block it checks has been written (or,
+ *   switched off, removed, which the plugin reads as fail-open).
+ *
+ * An upgrade whose approval step fails keeps the installed `av-approval` and
+ * the hooks block it was installed with: the install stops before the restart,
+ * as before, and the next run stages it.
+ */
+export function stagePlugins(sourceRoot: string, targetRoot: string, phase: "before-approval" | "after-approval"): number {
+  if (!existsSync(sourceRoot)) return 0;
+  let copied = 0;
+  for (const name of readdirSync(sourceRoot).sort()) {
+    const source = join(sourceRoot, name);
+    if (!statSync(source).isDirectory()) continue;
+    const approval = name === APPROVAL_PLUGIN;
+    if (phase === "after-approval" && !approval) continue;
+    if (phase === "before-approval" && approval && existsSync(join(targetRoot, name))) continue;
+    copied += copyPluginTree(source, join(targetRoot, name));
+  }
+  return copied;
+}
 
 /** Hermes's per-entry maximum; it clamps anything above. */
 export const APPROVAL_ENTRY_TIMEOUT_S = 300;
@@ -1007,6 +1080,21 @@ interface LiveFacts {
   signal_patch_marker?: boolean;
   exit1_blocks?: boolean | null;
   consent_effective?: boolean | null;
+  /** R3 fix round 4: what Hermes's own parse of config.yaml registers for the shim (live_selfcheck.py 5b). */
+  routed_entries?: number;
+  routed_sha256?: string;
+}
+
+/**
+ * R3 fix round 4 (the trust boundary): the expected routed list's digest, the sha256 of
+ * APPROVAL_GATED_TOOLS sorted and joined by newlines. The control plane pins the same value.
+ */
+export const APPROVAL_ROUTED_SHA256 = createHash("sha256").update([...APPROVAL_GATED_TOOLS].sort().join("\n"), "utf8").digest("hex");
+
+/** The routed count and digest as Hermes's own parse reports them, or null when the live check did not report them. */
+export interface RoutedFacts {
+  entries: number;
+  sha256: string;
 }
 
 /**
@@ -1024,6 +1112,8 @@ export interface ApprovalReport {
   overrides: string[];
   /** The exit-1 probe's answer (DATA-234 / DATA-228). */
   exit1?: Exit1Behaviour;
+  /** R3 fix round 4: what Hermes registers for the shim, from its own parse of config.yaml. */
+  routed?: RoutedFacts | null;
 }
 
 /** The live fire through Hermes's `run_once`. Accepted dogfood overrides are returned and warned about on stderr. */
@@ -1052,6 +1142,15 @@ export function liveReport(options: ApprovalOptions = {}): ApprovalReport {
   if (facts.managed) problems.push("hermes-managed");
   if (facts.managed_dir) problems.push("hermes-managed-scope");
   if (facts.consent_effective === false) problems.push("consent-missing:hermes-effective");
+  // R3 fix round 4: the routed list as Hermes's own parse sees it; any other count or list than the
+  // installer's (an entry added to or removed from config.yaml after it wrote it) is a problem.
+  const routed: RoutedFacts | null =
+    Number.isInteger(facts.routed_entries) && typeof facts.routed_sha256 === "string" && /^[0-9a-f]{64}$/.test(facts.routed_sha256)
+      ? { entries: facts.routed_entries as number, sha256: facts.routed_sha256 }
+      : null;
+  if (routed && (routed.entries !== APPROVAL_GATED_TOOLS.length || routed.sha256 !== APPROVAL_ROUTED_SHA256)) {
+    problems.push(`live-routed-mismatch:${routed.entries}`);
+  }
   const unpatched: string[] = [];
   if (facts.floor_ok !== true) unpatched.push(`hermes-below-fail-closed-floor:${facts.release_date || "unknown"}`);
   if (facts.signal_patch !== true) {
@@ -1070,7 +1169,7 @@ export function liveReport(options: ApprovalOptions = {}): ApprovalReport {
       problems.push(...unpatched);
     }
   }
-  return { problems, overrides, exit1 };
+  return { problems, overrides, exit1, routed };
 }
 
 /**
@@ -1083,7 +1182,7 @@ export function checkApprovalReport(options: ApprovalOptions = {}): ApprovalRepo
   const problems = approvalProblems(options);
   if (problems.length > 0) return { problems: [...new Set(problems)], overrides: [] };
   const live = liveReport(options);
-  return { problems: [...new Set(live.problems)], overrides: live.overrides, exit1: live.exit1 ?? "unknown" };
+  return { problems: [...new Set(live.problems)], overrides: live.overrides, exit1: live.exit1 ?? "unknown", routed: live.routed ?? null };
 }
 
 /** One line for the exit-1 probe's answer. */
@@ -1185,7 +1284,33 @@ export function disableApprovalGate(): void {
   }
 }
 
+/**
+ * R3 fix round 4 (trust boundary, output injection): what this process's last successful approval
+ * install found routed, from Hermes's own parse (live_selfcheck.py 5b); null otherwise.
+ */
+let lastRouted: RoutedFacts | null = null;
+export function lastInstallRouted(): RoutedFacts | null {
+  return lastRouted;
+}
+
+/** The nonce the control plane passes for one install exec (AV_GATE_NONCE): 16 random bytes, hex. */
+export const GATE_NONCE_PATTERN = /^[0-9a-f]{32}$/;
+
+/**
+ * R3 fix round 4: the gate receipt, `{"av_gate":{"nonce":"<nonce>","entries":<n>,"sha256":"<hex>"}}`,
+ * which install.ts prints as the LAST line of its stdout, or null (no valid nonce in the
+ * environment, or no routed facts from a successful install this run). The control plane accepts
+ * only this object, with the nonce it passed that exec, as the last line: an earlier line (forged
+ * or not) never counts, and anything printed after it voids it. The nonce is never logged.
+ */
+export function gateReceiptLine(nonce: string | undefined = process.env.AV_GATE_NONCE, routed: RoutedFacts | null = lastRouted): string | null {
+  if (typeof nonce !== "string" || !GATE_NONCE_PATTERN.test(nonce) || !routed) return null;
+  if (!Number.isInteger(routed.entries) || routed.entries < 0 || !/^[0-9a-f]{64}$/.test(routed.sha256)) return null;
+  return JSON.stringify({ av_gate: { nonce, entries: routed.entries, sha256: routed.sha256 } });
+}
+
 export function installApproval(sourceSkills: string, options: ApprovalOptions = {}): ApprovalOutcome {
+  lastRouted = null;
   const choice = approvalChoice();
   if (choice === "unset") {
     console.log("→ skipped approval gate (opt-in: AV_APPROVAL_ENABLED=1)");
@@ -1252,6 +1377,10 @@ export function installApproval(sourceSkills: string, options: ApprovalOptions =
       );
     }
     console.log(exit1Line(report.exit1));
+    // R3 fix round 4 (the trust boundary): what Hermes's own load and parse of the config.yaml this
+    // install just wrote registers for the shim (live_selfcheck.py 5b), kept for the gate receipt
+    // install.ts prints last (gateReceiptLine); nothing about it is printed here.
+    lastRouted = report.routed ?? null;
     console.log(
       `→ approval gate installed: ${APPROVAL_GATED_TOOLS.length} pre_tool_call entries (fail_closed), ` +
         `config ${configChanged ? "updated" : "unchanged"}, ${envChanged} .env line(s) set, ` +
@@ -1311,6 +1440,7 @@ export function checkCli(argv: string[], options: ApprovalOptions = {}): number 
   } catch {
     // a listing that fails changes no verdict
   }
+
   console.log(
     JSON.stringify({
       check: "av-approval",
@@ -1319,6 +1449,12 @@ export function checkCli(argv: string[], options: ApprovalOptions = {}): number 
       overrides,
       hermes_exit1: report.exit1 ?? "unknown",
       cron_scripts: scripts,
+      // R3 fix rounds 3/4 (SF1 b): what Hermes's own parse registers for the shim, against what
+      // this installer writes; null when the live check did not run. A mismatch is also a problem.
+      routed_entries: report.routed?.entries ?? null,
+      routed_sha256: report.routed?.sha256 ?? null,
+      routed_entries_expected: APPROVAL_GATED_TOOLS.length,
+      routed_sha256_expected: APPROVAL_ROUTED_SHA256,
     }),
   );
   return problems.length === 0 ? 0 : 1;

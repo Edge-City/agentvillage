@@ -725,3 +725,40 @@ test("R1: the status file is written by temp file and rename, 0600, with an empt
   expect(statSync(installStatusPath(home)).mode & 0o777).toBe(0o600);
   expect(readdirSync(join(home, "av-events"))).toEqual(["install-status.json"]);
 });
+
+test("DATA-361: after the prompts and the gate moved to skills/index-network, an existing tenant's jobs are left as they are (same ids, schedules, prompts, script)", () => {
+  // The tenant as an update leaves it: the repo's real prompts and gate at
+  // their new paths, and the copies an older install left under
+  // skills/edge-esmeralda (the skill copy never deletes) still on disk.
+  const repoSkills = join(import.meta.dir, "..", "..", "skills");
+  const skills = join(home, "skills");
+  const moved = [...new Set(DIGEST_CRON_SPECS.flatMap((spec) => [spec.promptFile, spec.scriptFile]).filter((file): file is string => !!file && file.startsWith("index-network/") && !file.includes("/shims/")))];
+  expect(moved.sort()).toEqual([
+    "index-network/prompts/ask-questions.md",
+    "index-network/prompts/brief.md",
+    "index-network/prompts/memory-signals.md",
+    "index-network/prompts/negotiation-summary.md",
+    "index-network/prompts/opportunity-drop.md",
+    "index-network/scripts/memory_signal_gate.py",
+  ]);
+  for (const file of moved) {
+    const text = readFileSync(join(repoSkills, file), "utf8");
+    for (const target of [file, file.replace(/^index-network\//, "edge-esmeralda/")]) {
+      mkdirSync(dirname(join(skills, target)), { recursive: true });
+      writeFileSync(join(skills, target), text);
+    }
+  }
+  // Its jobs were created before the move from the same prompt text (the move
+  // changed no byte of it), on their staggered slots, with their scripts.
+  const jobs = DIGEST_CRON_SPECS.map((spec, n) => ({
+    ...currentJob(spec, `job${n}`),
+    prompt: spec.promptFile ? readFileSync(join(repoSkills, spec.promptFile), "utf8").trimEnd() : spec.promptBody,
+  }));
+  writeJobs(jobs);
+
+  reconcileDigestCronJobs({ ...process.env });
+
+  expect(cronCalls()).toEqual([]);
+  expect(installedIds()).toEqual(jobs.map((job) => job.id as string).sort());
+  expect(readFileSync(installedMemorySignalScript(), "utf8")).toBe(readFileSync(join(repoSkills, SIGNALS.scriptFile!), "utf8"));
+});

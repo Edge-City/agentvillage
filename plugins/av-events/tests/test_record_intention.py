@@ -1441,7 +1441,12 @@ def test_success_results_never_trip_the_failure_heuristic(tctx, index, answer):
 
 
 #: Files that mention `create_intent` without telling the agent to call it.
-NOT_AN_INSTRUCTION: set[str] = set()
+NOT_AN_INSTRUCTION: set[str] = {
+    # The tools map is a routing table the daemon reads, not a prompt.
+    "skills/approval/templates/APPROVAL.md",
+    # The skill's README describes that routing table for humans; SKILL.md is the prompt.
+    "skills/approval/README.md",
+}
 
 
 def test_f8_no_overlay_prompt_calls_create_intent_unconditionally():

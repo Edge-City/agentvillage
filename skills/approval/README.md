@@ -31,6 +31,19 @@ row). In plain words, for the consent screen:
   scheduled-job changes, process writes, browser actions, skill edits,
   subagent hand-offs, sends. Nothing on this path waits for the resident on day
   one. Agent Village's research reads the same log; the resident can export it.
+  From approval.md 0.4.2 the policy's `tools:` list (APRV-499) also names the
+  class of each tool core's Hermes adapter does not class itself: web reads and
+  Index's read tools are `read.web`, a new or reworded intention in the
+  resident's words (Index `create_intent`/`update_intent`) is
+  `intent.publish.stated.index`, accepting or declining an opportunity (a
+  connection or meeting; Index's `accept_opportunity` and `reject_opportunity`,
+  the Index plugin's `index_update_opportunity`) is `opportunity.accept`, other
+  Index tools and the media tools are `network.call`;
+  `defaults.unmapped_tool: record` records any other routed tool under
+  `harness.tool.unmapped`. A class the hook judges is enforced only while the
+  gate is on. `record_intention` is off the list and
+  unrouted. Only the gated list below reaches the hook. A daemon before 0.4.2
+  refuses both keys and fails every class closed, so the template needs 0.4.2.
 - **What waits for a tap.** Kinds of act the agent proposes rather than
   performs: publishing an intention it inferred to Index, sharing a digest it
   drafted (if digests ship), and casting the resident's answer to the weekly
@@ -51,10 +64,14 @@ row). In plain words, for the consent screen:
   (`delivery: burst`: one left unanswered does not hold back the next), and
   stays open for up to 72 hours; if the resident does nothing it expires and
   nothing is published, shared or cast. An intention the resident stated in their own words is published
-  without a second ask. Two more reserved rows wait for no tap: an installed
-  app reading for the agent (`marketplace.app.read`) runs and is recorded, and
-  `review.delegate.model` is kept for the resident to choose later to let a
-  model reviewer act first: nothing acts on it, and no agent can propose it.
+  without a second ask. Three more reserved rows wait for no tap: an installed
+  app reading for the agent (`marketplace.app.read`) runs and is recorded,
+  accepting or declining an Index opportunity, a connection or meeting, on the
+  resident's behalf (`opportunity.accept`) runs, and is recorded while the gate
+  is on: only the hook judges it (Carter decides its day-one default before
+  Oct 11), and `review.delegate.model` is kept for the
+  resident to choose later to let a model reviewer act first: nothing acts on
+  it, and no agent can propose it.
 - **What the agent can never do.** Edit its own gate (the Hermes config, the
   hooks, the consent allowlist, the daemon's policy), touch the approval log, or
   read or change the resident's credentials (`.env`, `auth.json`). These three
@@ -74,7 +91,19 @@ Hermes runs the shim as a `pre_tool_call` shell hook for `terminal`,
 `process(_manage)?`, `web_extract`, `browser_.*`, `skill_manage`,
 `delegate_task`, `cronjob(_manage)?` and `send_message` (which the core adapter
 classifies from approval.md 0.4.0, PR #569; an older core passes them through
-unjudged). The shim POSTs Hermes's envelope to
+unjudged), and (R3b) for the side-effecting tools the core adapter does not
+class itself, which the policy's `tools:` list judges from approval.md 0.4.2:
+every Index write (the nine of its MCP server's 14 tools:
+the intent create, update, archive, pause and resume tools, then
+`accept_opportunity`, `reject_opportunity`,
+`update_my_profile` and `enrich_my_profile`; and the Index Hermes plugin's
+eight write tools, whose accept or decline is `index_update_opportunity`),
+media generation
+(`image_generate`, `video_generate`, `text_to_speech`) and the web reads
+`web_search` and `x_search`. Index's read tools and the local tools
+(`skill_view`, `memory`, `todo`, `record_intention` and the like) are not
+routed: av-events records every call as `tool.call`, and the hook is for
+actions. Each routed call costs one shim round trip. The shim POSTs Hermes's envelope to
 `$AV_APPROVAL_URL/hook/hermes` with the agent token in
 `X-Approval-Authorization` for a hosted facade (Maritime's proxy strips
 `Authorization`; the hosted supervisor moves it back), and in `Authorization`
@@ -224,7 +253,10 @@ What the gate does not see, or does not judge, today:
   blocks gated calls at the next start or within a minute, but the script
   itself is not stopped. The installer lists the scripts present at install
   and in `--check` (`cron_scripts`); the daily brief's own scripts live there.
-- **MCP tools** (Index included): no matcher covers them.
+- **MCP tools**: every Index write tool (the nine of its 14-tool MCP surface)
+  is routed (R3b) and judged by the policy's `tools:` list; Index's read tools
+  and any other MCP server's tools have no matcher. The list already names a class for every Index tool, so
+  routing more of them is a matcher change, not a policy change.
 - **Safe mode and plugin disable.** `HERMES_SAFE_MODE=1`, or removing
   `av-approval` from `plugins.enabled`, stops the plugin loading AND stops
   Hermes's `register_from_config`, so the tenant runs fully ungated with no
@@ -236,7 +268,10 @@ What the gate does not see, or does not judge, today:
   `manage_connections`, `web_search`, `x_search`, `image_generate`,
   `video_generate`, `text_to_speech`, `memory` (all present at Hermes
   v2026.9.24). `computer_use` and `manage_connections` are real action
-  channels; the gated list is a contract, not a discovery.
+  channels; the gated list is a contract, not a discovery. R3b routes
+  `web_search`, `x_search`, `image_generate`, `video_generate` and
+  `text_to_speech` (the policy's `tools:` list prices them); the rest would be
+  recorded under `harness.tool.unmapped` if routed.
 - **Recheck cadence.** After a healthy start the backstop re-runs its check at
   most once a minute, so a mid-run plugin force-reload that drops a shell hook
   can leave up to 60 s before the next gated call is refused. A failure seen
@@ -259,8 +294,11 @@ What the gate does not see, or does not judge, today:
   day-one policy sets every one of them autonomous, with `network.call` and
   `read.web`: each call is recorded and runs, and fails closed only when the
   facade cannot be reached. On an older core the adapter passes them through
-  unjudged (`{}`). `web_extract` reaches the facade but has no classifier rule
-  even in PR #569, so it passes through unjudged. `send_message` is not an
+  unjudged (`{}`). `web_extract`, `web_search`, `x_search`, Index's routed
+  writes and the media tools reach the facade with no classifier rule; from
+  approval.md 0.4.2 the policy's `tools:` list judges them (`read.web`,
+  `intent.publish.stated.index`, `opportunity.accept`, `network.call`), and an
+  older core passes them through unjudged. `send_message` is not an
   agent-callable tool at Hermes v2026.9.24; its entry covers any build or
   plugin that registers it.
 - **The tcp listener window** (above) and ptrace against the gateway.
@@ -289,6 +327,31 @@ DATA-43b must not trust it for anything but a hint. The daemon instance id is re
 on the facade's `GET /status`, which answers the tenant credential; the
 sandbox holds the agent credential. The DATA-43b follower reads it and writes
 the `approval_md` identity-map row.
+
+R3 fix round 4 (SF1, the trust boundary): what the control plane records as
+routed comes from Hermes's own load and parse of the config.yaml this install
+wrote. `live_selfcheck.py` runs under Hermes's interpreter, loads the file with
+Hermes's `load_config` and lists the shim's specs with Hermes's
+`iter_configured_hooks`, the same parse the gateway uses, and reports
+`routed_entries` (distinct matchers, the first spec per matcher as Hermes keeps
+it) and `routed_sha256` (those matchers sorted, one per line). `install.ts`
+prints them in the gate receipt, one JSON object as the LAST line of its stdout:
+`{"av_gate":{"nonce":"<nonce>","entries":<n>,"sha256":"<hex>"}}`. The nonce is
+the control plane's, 16 random bytes in hex, passed in the exec's environment as
+`AV_GATE_NONCE` for that one install and never logged. The control plane
+accepts only that object, with its own nonce, as the last line of that exec's
+stdout. An earlier line, forged or not, never counts, and any output after it
+voids it. It records the result after the gateway restart is verified, and it
+never reads the marker for a count. The installer does not echo config values
+or tenant-controlled names onto stdout: job names from jobs.json are printed
+only in a conservative shape. A
+different count or list fails the self-check (`live-routed-mismatch:<n>`), so
+an entry added to or removed from config.yaml by hand is caught at the next
+`--check` or install. `--check` prints `routed_entries`, `routed_sha256` and the
+expected two in its JSON line. An installer before R3b prints no routed line,
+and the control plane then records no count. A writer inside the sandbox that
+can edit config.yaml can also strip the shim entries outright: that is the
+existing DATA-234 gap (cron scripts run with no hook), and this does not widen it.
 
 ## Enablement under co-location (DATA-233)
 

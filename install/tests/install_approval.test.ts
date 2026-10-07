@@ -21,6 +21,9 @@ import YAML from "yaml";
 import {
   APPROVAL_GATED_TOOLS,
   APPROVAL_PLUGIN,
+  APPROVAL_ROUTED_SHA256,
+  gateReceiptLine,
+  lastInstallRouted,
   ApprovalInstallError,
   ENV_NAME,
   SHIM_TOOLS,
@@ -146,6 +149,8 @@ interface FakeHermesState {
   no_run_once?: boolean;
   fail_closed?: boolean;
   consent?: boolean;
+  /** R3 fix round 4: load config.yaml with PyYAML and build the specs from its hooks block, as Hermes does. */
+  specs_from_config?: boolean;
 }
 
 function fakeHermes(state: FakeHermesState = {}): { kwargs: () => Record<string, unknown> | null } {
@@ -160,6 +165,7 @@ function fakeHermes(state: FakeHermesState = {}): { kwargs: () => Record<string,
     fail_closed: true,
     consent: true,
     specs: APPROVAL_GATED_TOOLS.map((m) => [m, true]),
+    specs_from_config: false,
     ...state,
   };
   const marker = state.signal_marker ?? full.signal_patch;
@@ -175,7 +181,10 @@ function fakeHermes(state: FakeHermesState = {}): { kwargs: () => Record<string,
     join(root, "hermes_cli", "env_loader.py"),
     `import os\ndef load_hermes_dotenv(hermes_home=None, **_):\n    p = os.path.join(hermes_home or os.environ["HERMES_HOME"], ".env")\n    if not os.path.exists(p):\n        return\n    for line in open(p):\n        line = line.strip()\n        if line and not line.startswith("#") and "=" in line:\n            k, v = line.split("=", 1)\n            os.environ[k.strip()] = v.strip()\n`,
   );
-  writeFileSync(join(root, "hermes_cli", "config.py"), `def load_config():\n    return {}\n`);
+  writeFileSync(
+    join(root, "hermes_cli", "config.py"),
+    `import json, os\ndef load_config():\n    if not json.load(open(os.environ["FAKE_HERMES_STATE"])).get("specs_from_config"):\n        return {}\n    import yaml\n    with open(os.path.join(os.environ["HERMES_HOME"], "config.yaml")) as fh:\n        return yaml.safe_load(fh) or {}\n`,
+  );
   writeFileSync(
     join(root, "hermes_cli", "managed_scope.py"),
     `import json, os\ndef get_managed_dir():\n    return json.load(open(os.environ["FAKE_HERMES_STATE"]))["managed_dir"]\n`,
@@ -192,6 +201,9 @@ class ShellHookSpec:
         return re.fullmatch(self.matcher, name) is not None
 def iter_configured_hooks(cfg):
     shim = os.path.join(os.environ["HERMES_HOME"], "agent-hooks", "hermes-hook-shim.sh")
+    if _S.get("specs_from_config"):
+        pre = ((cfg or {}).get("hooks") or {}).get("pre_tool_call") or []
+        return [ShellHookSpec("pre_tool_call", str(e.get("command", "")), e.get("matcher"), e.get("timeout", 60), e.get("fail_closed") is True) for e in pre if isinstance(e, dict)]
     return [ShellHookSpec("pre_tool_call", shim, m, 300, fc and _S["fail_closed"]) for m, fc in _S["specs"]]
 def _resolve_effective_accept(cfg, arg):
     return _S["consent"]
@@ -441,7 +453,15 @@ describe("installing the gate", () => {
 
     // The live fire: one terminal call, deliberately without a workdir.
     expect(hermes.kwargs()).toEqual({ tool_name: "terminal", args: { command: "ls /tmp" }, session_id: "av-approval-selfcheck" });
-    expect(logs.at(-1)).toContain("approval gate installed: 13 pre_tool_call entries (fail_closed)");
+    expect(logs.at(-1)).toContain("approval gate installed: 35 pre_tool_call entries (fail_closed)");
+    // R3 fix round 4 (the trust boundary): the routed count and the sorted list's digest, as Hermes's
+    // own parse reports them (live_selfcheck.py 5b), on their own line; the control plane pins both.
+    const listSha = createHash("sha256").update([...APPROVAL_GATED_TOOLS].sort().join("\n"), "utf8").digest("hex");
+    expect(listSha).toBe("9cb621bbe4c5761364a956509b705dbad62168e5bf42adff5600fe0a45e11d43");
+    expect(APPROVAL_ROUTED_SHA256).toBe(listSha);
+    expect(lastInstallRouted()).toEqual({ entries: 35, sha256: listSha });
+    // Nothing about it is printed by the step: the receipt is install.ts's last line (gateReceiptLine).
+    expect(logs.some((l) => l.includes("av_gate") || l.includes(listSha))).toBe(false);
     expect(logs.at(-1)).toContain("live: blocked by the facade), overrides: none");
     expect([...logs, ...errors].join("\n")).not.toContain(TOKEN);
     expect(readFileSync(join(home, "config.yaml"), "utf8")).not.toContain(TOKEN);
@@ -470,6 +490,133 @@ describe("installing the gate", () => {
     }
     // Full-match: a prefix is not the tool.
     for (const tool of ["cronjob_manager", "send_message_x", "mcp_index_search", "memory"]) expect(covers(tool)).toBe(false);
+  });
+
+  test("R3b (DATA-344): the side-effecting tools the policy's tools: list judges are routed, exactly (every Index write: fix round 2's S1/S2); Index's reads and the local tools are not", () => {
+    const home = tenant();
+    installApproval(SOURCE_SKILLS, opts());
+    const matchers = ourEntries(home).map((e) => String(e.matcher));
+    const covers = (tool: string) => matchers.some((m) => new RegExp(`^(?:${m})$`).test(tool));
+    const before = [
+      "terminal", "write_file", "patch", "read_file", "search_files", "execute_code", "process(_manage)?", "web_extract",
+      "browser_.*", "skill_manage", "delegate_task", "cronjob(_manage)?", "send_message",
+    ];
+    // Fix round 2: Index's 14-tool MCP surface has nine writes, all routed (S1); the Index Hermes
+    // plugin's accept or decline is index_update_opportunity and it has no index_accept_opportunity
+    // (S2), and its eight write tools are routed, index_research_profile (POST /enrichment/enrich) included.
+    const indexMcpWrites = ["create_intent", "update_intent", "archive_intent", "pause_intent", "resume_intent", "accept_opportunity", "reject_opportunity", "update_my_profile", "enrich_my_profile"];
+    const indexPluginWrites = ["index_create_intent", "index_update_intent", "index_add_intent_to_network", "index_create_network", "index_update_network", "index_join_network", "index_update_opportunity", "index_research_profile"];
+    const added = [
+      ...indexMcpWrites.map((t) => `mcp__index__${t}`), ...indexPluginWrites,
+      "image_generate", "video_generate", "text_to_speech", "web_search", "x_search",
+    ];
+    expect([before.length, added.length]).toEqual([13, 22]);
+    // The plugin's tools as the overlay's copy of Index's contract lists them: every tool whose request
+    // writes (any method but GET, less the one POST that lists: index_read_intents' /intents/list) is
+    // routed, every read is not.
+    const contract = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "plugins", "av-events", "tests", "vectors", "index_intent_contract.json"), "utf8"));
+    const requests = contract.hermes_plugin.requests as Record<string, Array<[string, string]>>;
+    expect(Object.keys(requests).sort()).toEqual([...contract.hermes_plugin.tools].sort());
+    const pluginWrites = Object.keys(requests).filter((t) => requests[t].some(([method, p]) => method !== "GET" && !(method === "POST" && p === "/intents/list")));
+    expect(pluginWrites.sort()).toEqual([...indexPluginWrites].sort());
+    // Nothing that was routed changed; the added entries are the whole difference, one per tool.
+    expect(matchers).toEqual([...before, ...added]);
+    expect([...APPROVAL_GATED_TOOLS]).toEqual([...before, ...added]);
+    for (const tool of added) expect([tool, covers(tool)]).toEqual([tool, true]);
+    for (const tool of [
+      // Index's reads (the five of its MCP surface and the plugin's seven, and index_open_app, which
+      // makes no request), near misses, and the phantom index_accept_opportunity.
+      "mcp__index__list_intents", "mcp__index__get_intent", "mcp__index__list_opportunities", "mcp__index__get_opportunity",
+      "mcp__index__get_my_profile", "mcp__index__create_intent_x", "mcp__index__", "mcp__index__pause_intents",
+      "index_read_intents", "index_list_intent_networks", "index_read_networks", "index_read_network_memberships",
+      "index_list_opportunities", "index_read_docs", "index_agent_me", "index_open_app", "index_accept_opportunity",
+      // The local tools, the overlay's own tools, and the media readers.
+      "skill_view", "skills_list", "memory", "session_search", "todo", "clarify", "recall", "consent_status", "record_intention",
+      "vision_analyze", "video_analyze", "computer_use", "manage_connections", "web_search_x", "xx_search",
+    ]) {
+      expect([tool, covers(tool)]).toEqual([tool, false]);
+    }
+  });
+
+  test("R3 fix round 3 (recheck R3): every tool of Index's production MCP surface (the overlay's tools/list fixture) is routed or on the explicit read list, so a new Index write fails here", () => {
+    const fixture = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "skills", "index-network", "scripts", "tests", "fixtures", "index-mcp-2026-07-28.json"), "utf8"));
+    const tools = fixture.tools as string[];
+    expect(tools.length).toBeGreaterThan(0);
+    // Index's MCP reads: never routed (reading never waits on the gate); the policy prices them read.web.
+    const reads = ["get_my_profile", "list_intents", "get_intent", "list_opportunities", "get_opportunity"];
+    const routed = (name: string) => APPROVAL_GATED_TOOLS.some((m) => new RegExp(`^(?:${m})$`).test(`mcp__index__${name}`));
+    for (const t of tools) {
+      // A tool on neither list is a new Index MCP tool: decide whether it writes, then route it or list it here.
+      expect([t, reads.includes(t) !== routed(t)]).toEqual([t, true]);
+    }
+    for (const r of reads) expect([r, tools.includes(r)]).toEqual([r, true]);
+    // Every routed Index MCP matcher names a tool production serves.
+    for (const m of APPROVAL_GATED_TOOLS.filter((x) => x.startsWith("mcp__index__"))) expect([m, tools.includes(m.slice("mcp__index__".length))]).toEqual([m, true]);
+  });
+
+  test("R3 fix round 4 (the trust boundary): the routed count and digest come from Hermes's own load of the config.yaml the install wrote; an entry added or removed by hand afterwards is caught at the next --check, and the next install puts the list back", () => {
+    fakeHermes({ specs_from_config: true });
+    const home = tenant();
+    const o = opts();
+    installApproval(SOURCE_SKILLS, o);
+    expect(lastInstallRouted()).toEqual({ entries: 35, sha256: APPROVAL_ROUTED_SHA256 });
+    const check = () => {
+      logs = [];
+      const code = checkCli(["--check"], o);
+      return { code, out: JSON.parse(logs.at(-1)!) };
+    };
+    expect(check()).toMatchObject({ code: 0, out: { ok: true, routed_entries: 35, routed_sha256: APPROVAL_ROUTED_SHA256 } });
+    const path = join(home, "config.yaml");
+    const original = readFileSync(path, "utf8");
+    // Added by hand: one more shim entry (memory), as a sandbox writer could.
+    const doc = YAML.parse(original);
+    doc.hooks.pre_tool_call.push({ matcher: "memory", command: approvalShimPath(), timeout: 300, fail_closed: true });
+    writeFileSync(path, YAML.stringify(doc));
+    const added = check();
+    expect(added.code).toBe(1);
+    expect(added.out.routed_entries).toBe(36);
+    expect(added.out.routed_sha256).not.toBe(APPROVAL_ROUTED_SHA256);
+    expect(added.out.problems).toContain("live-routed-mismatch:36");
+    // Removed by hand: one entry gone (x_search).
+    const fewer = YAML.parse(original);
+    fewer.hooks.pre_tool_call = fewer.hooks.pre_tool_call.filter((e: Record<string, unknown>) => e.matcher !== "x_search");
+    writeFileSync(path, YAML.stringify(fewer));
+    // The static check names the missing entry before the live one runs, so no routed count is
+    // reported at all (null): caught, exit 1, and nothing a control plane could record as 35.
+    const removed = check();
+    expect(removed.code).toBe(1);
+    expect(removed.out.problems).toContain("hook-missing:x_search");
+    expect([removed.out.routed_entries, removed.out.routed_sha256]).toEqual([null, null]);
+    // The next install merges the list back: 35 again, as Hermes loads it.
+    logs = [];
+    installApproval(SOURCE_SKILLS, o);
+    expect(lastInstallRouted()).toEqual({ entries: 35, sha256: APPROVAL_ROUTED_SHA256 });
+    expect(check()).toMatchObject({ code: 0, out: { ok: true, routed_entries: 35 } });
+  });
+
+  test("R3 fix round 4 (output injection): the gate receipt is one JSON object bound to the control plane's nonce; no valid nonce or no routed facts prints none; a failed install leaves none", () => {
+    const nonce = "0123456789abcdef0123456789abcdef";
+    const routed = { entries: 35, sha256: APPROVAL_ROUTED_SHA256 };
+    expect(JSON.parse(gateReceiptLine(nonce, routed)!)).toEqual({ av_gate: { nonce, entries: 35, sha256: APPROVAL_ROUTED_SHA256 } });
+    expect(gateReceiptLine(nonce, routed)!.includes("\n")).toBe(false);
+    for (const bad of [undefined, "", "0123", nonce.toUpperCase(), `${nonce}0`, `${nonce}\n{"av_gate":{}}`]) expect([bad, gateReceiptLine(bad, routed)]).toEqual([bad, null]);
+    expect(gateReceiptLine(nonce, null)).toBe(null);
+    expect(gateReceiptLine(nonce, { entries: 35, sha256: "x" })).toBe(null);
+    // From the environment, after a real install; reset by the next run that does not install.
+    const home = tenant();
+    const o = opts();
+    installApproval(SOURCE_SKILLS, o);
+    process.env.AV_GATE_NONCE = nonce;
+    try {
+      expect(JSON.parse(gateReceiptLine()!)).toEqual({ av_gate: { nonce, entries: 35, sha256: APPROVAL_ROUTED_SHA256 } });
+      // A later run whose self-check cannot run fails, and leaves no receipt.
+      expect(() => installApproval(SOURCE_SKILLS, { ...o, hermesPython: null })).toThrow();
+      expect(lastInstallRouted()).toBe(null);
+      expect(gateReceiptLine()).toBe(null);
+    } finally {
+      delete process.env.AV_GATE_NONCE;
+    }
+    expect(home).toBeTruthy();
   });
 
   test("idempotent: a second run changes no byte of config.yaml or .env and keeps installed_at", () => {
@@ -685,6 +832,11 @@ describe("M3: the live self-check and --check", () => {
       overrides: [],
       hermes_exit1: "allowed",
       cron_scripts: [],
+      // R3 fix rounds 3/4 (SF1 b): the merge plan's per-tenant check reads these, from Hermes's own parse.
+      routed_entries: 35,
+      routed_sha256: APPROVAL_ROUTED_SHA256,
+      routed_entries_expected: 35,
+      routed_sha256_expected: APPROVAL_ROUTED_SHA256,
     });
     expect(bytes(home)).toEqual(before);
     expect(checkCli([], o)).toBe(2);
@@ -785,6 +937,10 @@ describe("M4: states in which Hermes ignores the gate", () => {
       overrides: expected,
       hermes_exit1: "allowed",
       cron_scripts: [],
+      routed_entries: 35,
+      routed_sha256: APPROVAL_ROUTED_SHA256,
+      routed_entries_expected: 35,
+      routed_sha256_expected: APPROVAL_ROUTED_SHA256,
     });
   });
 
@@ -897,7 +1053,7 @@ describe("kill switch (L3): AV_APPROVAL_ENABLED off is fail-open, says so, and t
     expect(existsSync(approvalShimPath())).toBe(false);
     expect(existsSync(approvalSurfacePath())).toBe(false);
     expect(existsSync(join(home, "skills", "approval"))).toBe(false);
-    expect(logs.join("\n")).toContain("removed 13 pre_tool_call entries");
+    expect(logs.join("\n")).toContain("removed 35 pre_tool_call entries");
     expect(logs.join("\n")).toContain("FAIL-OPEN");
   });
 
@@ -1050,7 +1206,7 @@ interface ShimRun {
   stdin: string[];
 }
 
-function shimFixture(mode: string) {
+function shimFixture(mode: string, call: { tool_name: string; tool_input: Record<string, unknown> } | null = null) {
   const root = scratch("av-approval-shim-");
   const fake = join(root, "bin");
   const state = join(root, "state");
@@ -1159,8 +1315,8 @@ exec /usr/bin/perl -e '@s = lstat($ARGV[1]) or exit 1; $f = $ARGV[0]; $f =~ s/%u
     envelope,
     JSON.stringify({
       hook_event_name: "pre_tool_call",
-      tool_name: "terminal",
-      tool_input: { command: "curl -X POST https://api.example.com/send", workdir: "/home/hermes/.hermes" },
+      tool_name: call ? call.tool_name : "terminal",
+      tool_input: call ? call.tool_input : { command: "curl -X POST https://api.example.com/send", workdir: "/home/hermes/.hermes" },
       session_id: "s-1",
       cwd: "/home/hermes/.hermes",
       extra: { tool_call_id: "call-1" },
@@ -1222,6 +1378,21 @@ describe("the vendored shim (bash -c, fake curl)", () => {
     expect(r.stdin[0]).toBe(`header = "X-Approval-Authorization: Bearer ${TOKEN}"\n`);
     expect(r.stdin[0]).not.toContain('"Authorization:');
     expect(fx.log()).not.toContain(TOKEN);
+  });
+
+  test("R3b: an Index write goes through the shim as any gated call: posted to /hook/hermes, the facade's answer replayed, fail closed when it cannot be reached", () => {
+    const call = { tool_name: "mcp__index__accept_opportunity", tool_input: { opportunityId: "00000000-0000-4000-8000-000000000001" } };
+    const ok = shimFixture("allow", call);
+    const a = ok.run();
+    expect([a.code, a.stdout, a.calls]).toEqual([0, "{}", 1]);
+    expect(a.argv[0].trim().split("\n").at(-1)).toBe(`${URL}/hook/hermes`);
+    expect(ok.log()).toContain("tool=mcp__index__accept_opportunity");
+    const b = shimFixture("block", call).run();
+    expect(b.code).toBe(2);
+    expect(JSON.parse(b.stdout).action).toBe("block");
+    const down = shimFixture("unreachable", { tool_name: "image_generate", tool_input: { prompt: "x" } }).run();
+    expect(down.code).toBe(2);
+    expect(JSON.parse(down.stdout).message).toContain("approval facade unreachable");
   });
 
   test("block: the facade's block directive is replayed with exit 2", () => {
