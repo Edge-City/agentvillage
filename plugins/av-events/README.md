@@ -1255,8 +1255,16 @@ tenant's RSVPs are recorded as receipted actions without receipt-grade evidence 
 
 ## Cron capture
 
-Spec §4.1 `cron.run`, §4.3, §7.1 "Cron capture". Hermes has no cron hook, so the flusher thread —
-never a hook — reads what the scheduler writes, once a minute, read-only:
+Spec §4.1 `cron.run`, §4.3, §7.1 "Cron capture". Hermes has no cron hook, so the flusher thread
+(never a hook) reads what the scheduler writes, once a minute, read-only. That thread starts at
+plugin load (DATA-362), not at the first event: in the one active process per `$HERMES_HOME` that
+holds the `flock` on `av-events/cron_tail.lock` it works from the start, so a resident whose runs
+all stay silent and who never chats still reports them, and in any other active process it waits
+on standby, sending and tailing nothing, until it has an event of its own or takes the lock. Every
+thread without the lock, a flusher included, tries for it once a minute; a holder lets it go when
+ingest refuses its token (and retries only after that wait) or when its process breaker trips. The
+holder also runs the evening outcome ask's pass (`outcome_tick`, below) from load, so on a quiet
+tenant the ask confirms and reads answers without waiting for a chat. It reads:
 
 - `$HERMES_HOME/cron/executions.db` (`cron/executions.py`): every execution in a terminal state
   (`completed`, `failed`, `unknown` — immutable once written) that has not been reported. Its
@@ -1819,7 +1827,10 @@ covered by recovery on the next load (below), not by any hook.
   the flusher at once instead of at the first new event (on a quiet chat that can be hours after a
   restart). "Waiting" means a non-empty rotated batch, or a non-empty current file whose owner is
   gone. A live process's current file is not waiting: it is that process's to send, so a second
-  process loading the plugin beside a running gateway starts no flusher for it. The flusher's first tick adopts each dead process's `current-<pid>.jsonl`, renaming it
+  process loading the plugin beside a running gateway that holds `av-events/cron_tail.lock` starts
+  no flusher for it, only a standby thread (see "Cron capture"). A process that finds the lock free
+  (no gateway up, or the gateway between its restart and its next minute) takes it and starts its
+  flusher at load. The flusher's first tick adopts each dead process's `current-<pid>.jsonl`, renaming it
   `<first-event-ms>-<pid>-orphan.jsonl` so it sorts in the order it was written, and sends it on its
   normal pass. That is typically a second or two after the gateway comes back, under the usual
   retry, 72-hour and `rejected/` rules. Cron runs are not special-cased: their events are in the
@@ -1834,7 +1845,11 @@ covered by recovery on the next load (below), not by any hook.
   is active again.
 - **Any process that loads the plugin can do the sending.** A CLI process that loads the plugin
   while batches are waiting sends them, and may spend up to about 15 s on its exit flush (the 5 s
-  budget, plus one request's 10 s timeout already in flight when it runs out).
+  budget, plus one request's 10 s timeout already in flight when it runs out). Since DATA-362 the
+  same holds for a CLI that loads while the cron tail lock is free: it holds the lock, so it has an
+  exit flush, and if it lives past its first tick (1 s) it also tails cron and sends what that
+  buffered on exit, under the same bound. Beside a gateway that holds the lock, a CLI is on
+  standby and has no exit flush.
 
 How a dead process's file is recognised: each process holds an `flock` on `current-<pid>.lock` for
 as long as its buffer exists. The kernel releases it however the process ends, `os._exit` and

@@ -550,8 +550,15 @@ def test_a_second_process_beside_a_live_gateway_starts_no_flusher(plugin, ctx, m
         monkeypatch.setenv("AV_EVENTS_TOKEN", "stale-token")
         monkeypatch.setenv("AV_EVENTS_URL", "http://127.0.0.1:9")
         plugin.register(ctx)
-        assert plugin._COLLECTOR._thread is None, "a flusher started over a live gateway's file"
-        assert not plugin._COLLECTOR.buffer.has_backlog()
+        # DATA-362: the gateway took the cron tail lock at its load, so this
+        # process's thread waits on standby: it sends nothing, tails nothing
+        # and registers no exit flush until the lock is free or it has an
+        # event of its own.
+        collector = plugin._COLLECTOR
+        assert not collector._flushing, "a flusher started over a live gateway's file"
+        assert not collector._atexit_registered
+        assert collector._tail_lock is None
+        assert not collector.buffer.has_backlog()
     finally:
         gateway.kill()
         gateway.communicate(timeout=10)
