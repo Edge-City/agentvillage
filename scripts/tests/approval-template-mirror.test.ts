@@ -20,7 +20,16 @@ import { join } from "node:path";
 // once more: the plugin's index_update_opportunity and Index's reject_opportunity map to
 // opportunity.accept (accept or decline), the phantom index_accept_opportunity line is gone, and the
 // row's comment says the hook judges it.
-const POLICY_BLOCK_SHA256 = "aa8955efd7818e39ab545d7ef41c1f1c30f77facf87194f48e3146ea8947ac21";
+// DATA-370 moved it: `prompt.style: minimal` (Carter's ruling: the default for every resident; the
+// line stands alone because the app's Approvals setting rewrites it) and the `say:` block, one entry
+// per class a resident can be asked about whose payload keys are known (approval.md 0.4.1+, APRV-489).
+// Its fix round (CARD-refute) reworded the `does` lines, dropped village.vote's default `note` and
+// the opportunity.accept entry (the control plane's say test wants every entry to be a class row
+// there, and its row arrives with cp#108).
+// Until cp#108 lands, this block is R3 + DATA-370 and the control plane's is DATA-370 alone, so the
+// two pins differ and the byte comparison below passes only against a control-plane tree that
+// carries both (#108 merged with #118).
+const POLICY_BLOCK_SHA256 = "5e77414eb33a723f7c2ec15f5da4589b1391cc53883622ad78fed5b8a0e35411";
 
 const OPEN = "```yaml approval-policy\n";
 function policyBlock(text: string): string {

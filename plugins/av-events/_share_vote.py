@@ -486,8 +486,11 @@ def summary_for(entry: dict, question: Optional["vq.Question"] = None) -> str:
     built from the trusted provider's question (its text and the chosen
     option's label), never from anything the agent wrote; where the provider
     gives no text or label the prompt says so and shows the option key. The
-    agent's rationale follows, cleaned again here and labelled as the agent's
-    note; one that fails cleaning, or quotes a held share, is dropped and the
+    answer (the chosen option's label) comes first and the question after it
+    (DATA-370, S2): the minimal card cuts a claimed line at 280 characters, so
+    a long question must not push the answer off the card. The agent's
+    rationale follows, cleaned again here and labelled as the agent's note;
+    one that fails cleaning, or quotes a held share, is dropped and the
     prompt goes out without it."""
     if entry.get("class") == SHARE_CLASS:
         scope = entry.get("scope")
@@ -499,11 +502,11 @@ def summary_for(entry: dict, question: Optional["vq.Question"] = None) -> str:
     text = one_line(question.text, MAX_PROMPT_QUESTION) if question is not None else None
     option = question.option(answer) if question is not None and isinstance(answer, str) else None
     label = one_line(option.label, MAX_PROMPT_LABEL) if option is not None else None
-    head = f"{PROMPT_HEAD} {entry.get('question_id')}: "
+    head = f" {PROMPT_HEAD} {entry.get('question_id')}: "
     if label:
-        answer_line = f" {PROMPT_ANSWER} {label} (option {answer})."
+        answer_line = f"{PROMPT_ANSWER} {label} (option {answer})."
     else:
-        answer_line = f" {PROMPT_ANSWER} option {answer} {PROMPT_NO_LABEL}"
+        answer_line = f"{PROMPT_ANSWER} option {answer} {PROMPT_NO_LABEL}"
     # At most 4 KiB by construction: the answer line is kept whole, the
     # question's text is shortened first if the trusted part alone is too
     # long, and the agent's note gets only what is left.
@@ -513,7 +516,7 @@ def summary_for(entry: dict, question: Optional["vq.Question"] = None) -> str:
         middle = f"\u201c{text}\u201d" if text else PROMPT_NO_TEXT
     else:
         middle = PROMPT_NO_TEXT
-    line = head + middle + answer_line
+    line = answer_line + head + middle
     rationale, problem = clean_rationale(entry.get("rationale"))
     if rationale and problem is None and not quotes_held_share(rationale):
         note = f" {PROMPT_NOTE} "
