@@ -14,7 +14,13 @@ import { join } from "node:path";
 //    Run: AV_CONTROLPLANE_DIR=/path/to/controlplane bun test scripts/tests/approval-template-mirror.test.ts
 // R2 moved the pin (marketplace.app.install/action/read, review.delegate.model, resource.allocate and
 // the odin.* comment; seven added lines).
-const POLICY_BLOCK_SHA256 = "ebaadf5cfcde7984e9e01bbc5132fe42df04867fd51943d7ff7b69d8006d1cc0";
+// R3 (DATA-344) moved it again: `defaults.unmapped_tool: record` and the APRV-499 `tools:` list
+// (approval.md 0.4.2; a 0.4.0 or 0.4.1 daemon refuses both keys and fails every class closed), and
+// the reserved opportunity.accept row its accept_opportunity lines map to. Its fix round 2 moved it
+// once more: the plugin's index_update_opportunity and Index's reject_opportunity map to
+// opportunity.accept (accept or decline), the phantom index_accept_opportunity line is gone, and the
+// row's comment says the hook judges it.
+const POLICY_BLOCK_SHA256 = "aa8955efd7818e39ab545d7ef41c1f1c30f77facf87194f48e3146ea8947ac21";
 
 const OPEN = "```yaml approval-policy\n";
 function policyBlock(text: string): string {
