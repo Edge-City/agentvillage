@@ -141,6 +141,47 @@ would hold back every later card. `burst` sends each request the listener has
 not yet sent, once; nothing about what is pending, or what a tap decides,
 changes. A review walkthrough (supervised-retro) stays paced in both modes.
 
+The card (`prompt.style: minimal`, approval.md 0.4.1+, APRV-489, DATA-370). A
+resident gets core's minimal card: ONE message, "Your agent wants to <phrase>",
+the request's own words quoted in a box under short labels, "Open for about 3
+days", Approve/Deny, and the whole technical card (computed rows, canonical
+rendering, sha256, the agent's claimed summary) folded under "Full details".
+Carter's ruling (2026-10-07): minimal is the default for every resident; the
+style line is written alone on its line because the app's Approvals setting
+(lane CARD-SETTING, in the control plane's approval-settings.js) is to rewrite
+exactly that line to `technical` for a resident who wants the engineer's card.
+
+The `say:` block is the operator's wording, attested with the rest of this file
+(Carter attests the words). Per EXACT class: `does` finishes "Your agent wants
+to ..." (a verb phrase, no sentence punctuation, at most 120 characters); core
+words the eight Hermes tool classes and the shell itself, so those entries set
+no `does`. `quote` names every top-level key the request's payload can carry:
+a label (letters, digits, spaces, at most 24) shows that value verbatim, `~`
+keeps it off the card (core then prints "Not shown here: <key>" under the box),
+and `""` shows a lone value with no label. A payload with a key the map does
+not name, a class with no entry, a request over 3800 characters (a long
+intention's Full details), or any abnormal fact gets the technical card, and
+the decision record says why (`payload.rendering.fallback`: `unlisted-key`,
+`undeclared`, `too-long`, `anomaly`, ...). `note: summary` shows the agent's
+one-line summary under the box marked "not checked"; `none` leaves it to Full
+details. The payloads quoted: an intention `{text}` (av-events
+_intent_approval.py), a share `{digest_id, scope, text, expires_at}` and a vote
+`{question_id, answer}` (_share_vote.py), and a Hermes tool call the hook
+gates `{tool, input}` (core's hook, APRV-445/499). ids are `~`. The reserved
+classes no tool proposes yet (treasury.*, edgeos.*.write, marketplace.app.*,
+resource.allocate, review.delegate.model) have no entry: their payload keys do
+not exist yet, so they stay technical (`undeclared`) until their tool writes
+one, and that tool's PR adds the entry. opportunity.accept has an entry ahead
+of its row (the tools map, DATA-344): an entry for a class no rule names loads
+and waits.
+
+The relay's quiet hold reads the `ttl:` row from the card's text; the minimal
+card keeps that row inside "Full details", so `always: [ttl_remaining_ms]`
+stays and the hold works unchanged (core pins it:
+tests/channels-telegram-minimal.test.ts, requirement 6b). A daemon before
+0.4.1 refuses `style` and `say` and fails every class closed; the fleet runs
+0.4.2.
+
 Dogfood tenants may add `supervised-retro` with a `retro_rate` on network.call
 or message.send to exercise the review card. Residents get no review cards on
 day one. No `budgets` block: proposals carry no cost.
@@ -170,6 +211,44 @@ channels:
     delivery: burst                      # every unsent proposal goes out at once; paced (the default) sends the next only after the current one is answered, and the relay passes no /skip, so one ignored 72 h card would hold back every later one
     prompt:
       always: [ttl_remaining_ms]         # show the time left; the relay holds a prompt overnight only when it outlasts the night
+      style: minimal            # card layout: minimal (default) | technical; the app's Approvals setting rewrites this line
+      say:
+        # The minimal card (approval.md 0.4.1+, APRV-489): one message, "Your agent wants to <does>", the
+        # request's own words in a box under the labels below, the time left, Approve/Deny, and the whole
+        # technical card folded under "Full details". `quote` names EVERY field the request may carry:
+        # a label shows the field, ~ keeps it off the card (the card then says "Not shown here"), and a
+        # request with a field not named here gets the technical card instead. `note: summary` adds the
+        # agent's one-line summary under the box, marked "not checked"; `none` leaves it off. A class with
+        # no entry here gets the technical card. Core words the eight Hermes tool classes itself, so their
+        # entries carry no `does`.
+        intent.publish.inferred.index:
+          does: "post this to Index as something it thinks you are looking for"
+          quote: { text: "" }         # the intention's words, alone in the box
+          note: none                  # the summary only repeats the class and an id
+        intent.publish.stated.index:  # asked only if the resident sets "Intents you state" to ask
+          does: "post this to Index as something you said you are looking for"
+          quote: { text: "Post", tool: "Tool", input: "Details" }   # text from record_intention; tool and input from an Index tool call the hook routes here
+          note: none
+        digest.share:
+          does: "share a note about you with other people"
+          quote: { text: "Note", scope: "Shared with", expires_at: "Until", digest_id: ~ }
+          note: none                  # the summary repeats scope, expiry and id
+        village.vote:
+          does: "vote for you on a village question"
+          quote: { answer: "Answer", question_id: ~ }
+          note: summary               # the question's text and the option's label are only in the summary
+        opportunity.accept:           # no row yet: the tools map (DATA-344) adds it; an entry for an unused class loads and waits
+          does: "accept or decline a connection or meeting on Index for you"
+          quote: { tool: "Tool", input: "Details" }
+          note: none
+        message.send:   { quote: { tool: "Tool", input: "Details" }, note: none }   # these eight ask only if the resident sets their row to ask
+        network.call:   { quote: { tool: "Tool", input: "Details" }, note: none }   # a terminal command is quoted by core itself, not by this map
+        read.web:       { quote: { tool: "Tool", input: "Details" }, note: none }
+        browser.exec:   { quote: { tool: "Tool", input: "Details" }, note: none }
+        cron.manage:    { quote: { tool: "Tool", input: "Details" }, note: none }
+        process.write:  { quote: { tool: "Tool", input: "Details" }, note: none }
+        skill.manage:   { quote: { tool: "Tool", input: "Details" }, note: none }
+        agent.delegate: { quote: { tool: "Tool", input: "Details" }, note: none }
 
 classes:
   # The live gate, propose path only: the resident taps before these happen.

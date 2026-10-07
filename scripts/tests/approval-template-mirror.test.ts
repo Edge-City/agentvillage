@@ -14,7 +14,10 @@ import { join } from "node:path";
 //    Run: AV_CONTROLPLANE_DIR=/path/to/controlplane bun test scripts/tests/approval-template-mirror.test.ts
 // R2 moved the pin (marketplace.app.install/action/read, review.delegate.model, resource.allocate and
 // the odin.* comment; seven added lines).
-const POLICY_BLOCK_SHA256 = "ebaadf5cfcde7984e9e01bbc5132fe42df04867fd51943d7ff7b69d8006d1cc0";
+// DATA-370 moved it: `prompt.style: minimal` (Carter's ruling: the default for every resident; the
+// line stands alone because the app's Approvals setting rewrites it) and the `say:` block, one entry
+// per class a resident can be asked about whose payload keys are known (approval.md 0.4.1+, APRV-489).
+const POLICY_BLOCK_SHA256 = "3ba7de95486bde625c00f2e9fc94516f514d11fad623e0872bdb72f94d20c1ca";
 
 const OPEN = "```yaml approval-policy\n";
 function policyBlock(text: string): string {
