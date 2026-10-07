@@ -379,6 +379,25 @@ export function configureAvEvents(): void {
   }
 }
 
+const INDEX_LINKS_PLUGIN = "index-links";
+
+/** List `index-links` so Hermes loads the tool-result link rewrite. Idempotent. */
+export function configureIndexLinks(): void {
+  const doc = readConfig();
+  const plugins = { ...((doc.plugins as Record<string, unknown>) ?? {}) };
+  const enabled = Array.isArray(plugins.enabled)
+    ? (plugins.enabled as unknown[]).filter((n) => typeof n === "string") as string[]
+    : [];
+  if (!enabled.includes(INDEX_LINKS_PLUGIN)) enabled.push(INDEX_LINKS_PLUGIN);
+  plugins.enabled = enabled;
+  doc.plugins = plugins;
+  writeConfig(doc);
+  console.log(`→ enabled plugin ${INDEX_LINKS_PLUGIN}`);
+  if (Array.isArray(plugins.disabled) && (plugins.disabled as unknown[]).includes(INDEX_LINKS_PLUGIN)) {
+    console.log(`→ warning: ${INDEX_LINKS_PLUGIN} is in plugins.disabled; Hermes will not load it`);
+  }
+}
+
 export const RECALL_PLUGIN = "recall";
 
 /** The only values that turn a flag on. Anything else — `disabled`, `n`, `none`, a typo — is off. */

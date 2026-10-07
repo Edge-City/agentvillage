@@ -801,6 +801,29 @@ function userIdFromProfile(url?: string): string | undefined {
 
 /** An Index page link of one kind: `/o/` opportunity, `/u/` person, `/i/` signal. */
 const INDEX_LINK = /^https:\/\/index\.network\/([oui])\/[A-Za-z0-9_-]+$/;
+const ACCEPT_TOKEN = /^[A-Za-z0-9_-]{1,256}$/;
+
+/**
+ * A signed Index accept link. Query is reduced to `action`, `viewer`, and `sig`.
+ * `surface` is left off; the link plugin adds it.
+ */
+export function acceptLink(supplied: unknown, opportunityId?: string): string | undefined {
+  if (typeof supplied !== "string" || !supplied.startsWith("https://")) return undefined;
+  let url: URL;
+  try {
+    url = new URL(supplied);
+  } catch {
+    return undefined;
+  }
+  const host = url.hostname.toLowerCase();
+  if (host !== "index.network" && !host.endsWith(".index.network")) return undefined;
+  const id = url.pathname.match(/^\/o\/([A-Za-z0-9_-]{1,128})\/?$/)?.[1];
+  if (!id || !ENTITY_ID.test(id) || (opportunityId && id !== opportunityId)) return undefined;
+  const viewer = url.searchParams.get("viewer") ?? "";
+  const sig = url.searchParams.get("sig") ?? "";
+  if (url.searchParams.get("action") !== "accept" || !ACCEPT_TOKEN.test(viewer) || !ACCEPT_TOKEN.test(sig)) return undefined;
+  return `https://${host}/o/${id}?action=accept&viewer=${encodeURIComponent(viewer)}&sig=${encodeURIComponent(sig)}`;
+}
 
 /** A supplied link kept only when it is an Index link of this kind; else rebuilt from a valid id; else none. */
 export function indexLink(kind: "o" | "u" | "i", supplied: string | undefined, id: string | undefined): string | undefined {
@@ -832,6 +855,7 @@ export function attachIndexLinks(opp: BriefOpportunity): BriefOpportunity {
   setOrDrop(next, "intentId", intentId);
   setOrDrop(next, "userUrl", indexLink("u", opp.userUrl, userId));
   setOrDrop(next, "opportunityUrl", indexLink("o", opp.opportunityUrl, opportunityId));
+  setOrDrop(next, "acceptUrl", acceptLink(opp.acceptUrl, opportunityId));
   setOrDrop(next, "intentUrl", indexLink("i", opp.intentUrl, intentId));
   return next;
 }
@@ -852,6 +876,7 @@ function listedCard(row: Record<string, unknown>): BriefOpportunity | null {
   const viewerRole = typeof row.viewerRole === "string" ? row.viewerRole : "";
   const userUrl = typeof peer?.url === "string" ? peer.url : undefined;
   const opportunityUrl = typeof row.url === "string" ? row.url : undefined;
+  const acceptUrl = acceptLink(row.acceptUrl, typeof row.id === "string" ? row.id : undefined);
   const userId = typeof peer?.userId === "string" ? peer.userId : undefined;
   const opportunityId = typeof row.id === "string" ? row.id : undefined;
   const negotiating = row.negotiating === true;
@@ -863,6 +888,7 @@ function listedCard(row: Record<string, unknown>): BriefOpportunity | null {
     stateLabel: OPPORTUNITY_STATE[negotiating ? "negotiating" : status.toLowerCase()],
     userUrl,
     opportunityUrl,
+    ...(acceptUrl ? { acceptUrl } : {}),
     userId,
     opportunityId,
     profileUrl: userUrl,

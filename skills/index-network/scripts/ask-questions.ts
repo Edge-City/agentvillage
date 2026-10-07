@@ -48,6 +48,7 @@ export interface EveningCard {
   headline: string;
   userUrl?: string;
   opportunityUrl?: string;
+  acceptUrl?: string;
 }
 
 interface Closeout {
@@ -102,6 +103,7 @@ function cardFrom(opp: BriefOpportunity): EveningCard | null {
     headline: linked.headline || linked.mainText || "New match",
     userUrl: linked.userUrl,
     opportunityUrl: linked.opportunityUrl,
+    ...(linked.acceptUrl ? { acceptUrl: linked.acceptUrl } : {}),
   };
 }
 

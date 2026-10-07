@@ -16,7 +16,7 @@ One or two short, warm lines about `person`:
 # Rules
 
 - You know nothing about this person beyond their name: never guess what they work on, why they were suggested, or what they want.
-- Write the name exactly as given. The only links are `person.profileUrl` and `person.messageUrl`, exactly as given.
+- Write the name exactly as given. The only links are `person.profileUrl` and `person.messageUrl`, exactly as given. `messageUrl` is the accept link. Do not rebuild it.
 - Banned words: leverage, unlock, optimize, scale, disrupt, AI-powered, maximize value, act fast, networking, match.
 - No preamble, no code block, no raw JSON, no ids. Output only the message.
 

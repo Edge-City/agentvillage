@@ -52,6 +52,7 @@ import {
   configureAvEvents,
   configureCronScriptTimeout,
   configureCronWrapResponse,
+  configureIndexLinks,
   configureDashboardAuth,
   configureHostedGateway,
   configureStt,
@@ -229,6 +230,7 @@ function main(): void {
   configureTelegramDisplay();
   configureDashboardAuth();
   configureAvEvents();
+  configureIndexLinks();
   // Opt-in and off the core path: a failure here is counted, never fatal.
   safeInstallRecall(SOURCE_SKILLS);
 

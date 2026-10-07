@@ -22,13 +22,14 @@ When the user wants to **be found, or to find people** ("find AI agent builders"
 When the user wants to **see who is waiting** ("any intros?", "who should I talk to?", "what's waiting?"):
 → Call `list_opportunities`. The default statuses are `pending` (waiting on you) and `negotiating` (agents talking). The tool leads with a markdown line whose names are already linked. Reuse that line. Do not invent a person who was not in the list, and do not assemble a URL the tool did not return.
 
-**Opportunity copy.** For a `pending` card, use the morning-brief voice: `[Name](userUrl) — one specific overlap from summary or headline, [message Name](opportunityUrl)`. `userUrl` is `peer.url` (`/u/`). `opportunityUrl` is the card's `url` (`/o/`). The heading is **3 conversations await you** when there are three, otherwise the real count. A card whose `viewerRole` is `agent` goes under **Help your community**: link the name to `userUrl`, and leave `make intro` as plain text. `negotiating` means agents are still talking — say that, and do not offer a message link yet. Do not use "say hi", and do not add a correction-path sentence.
+**Opportunity copy.** For a `pending` card, use the morning-brief voice: `[Name](userUrl) — one specific overlap from summary or headline, [message Name](acceptUrl)`. `userUrl` is `peer.url` (`/u/`). `acceptUrl` is the card's signed accept link. Copy it. Do not build `/o/<id>` for that action. If `acceptUrl` is missing, the action is plain text. The heading is **3 conversations await you** when there are three, otherwise the real count. A card whose `viewerRole` is `agent` goes under **Help your community**: link the name to `userUrl`, and leave `make intro` as plain text. `negotiating` means agents are still talking — say that, and do not offer a message link yet. Do not use "say hi", and do not add a correction-path sentence.
 
 **Links that open Index.** Reuse the links on the tool's lead line. When you also have the id, the same pages are:
 
 - Person: `https://index.network/u/<userId>` (`peer.url`)
 - Signal: `https://index.network/i/<intentId>` (the `create_intent` lead line)
-- Opportunity: `https://index.network/o/<opportunityId>` (the card's `url`)
+- Opportunity page: `https://index.network/o/<opportunityId>` (the card's `url`). This is not the message link.
+- Message: the card's `acceptUrl`, copied as returned.
 
 Do not use `/c/` connect redirects as the opportunity link. Do not invent `/profile/` or `/opportunity/create` paths.
 
@@ -52,7 +53,7 @@ If `record_intention` is available (in your tool list, or found with `tool_searc
 
 When an opportunity has been accepted or connected, the next useful message is not another summary. Ask for the actual outcome while the event is still live: whether they met, it was not useful, or they missed it. Use compact language:
 
-> "Maya connected. This is a good moment to close the loop while everyone is still here. [Send Maya a message]({opportunityUrl}). After you connect, reply `met`, `not useful`, or `missed`."
+> "Maya connected. This is a good moment to close the loop while everyone is still here. [Send Maya a message]({acceptUrl}). After you connect, reply `met`, `not useful`, or `missed`."
 
 Do not infer success from a click or acceptance alone. If the user replies with an outcome, interpret it in the normal prompted conversation path. Do not route chat replies through a deterministic parser or state writer. If their reply includes a concrete correction or new useful context, capture it through the ordinary prompted signal/profile flow above; otherwise acknowledge briefly and continue. Do not expose contact details, route a public post, or speak as the user without explicit consent for that action.
 

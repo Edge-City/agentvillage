@@ -70,7 +70,7 @@ import { basename, dirname, join } from "node:path";
 
 import { approvalsWaiting } from "./approvals-waiting";
 import { askQuestions } from "./ask-questions";
-import { type BriefOpportunity, type DailyBriefContext, buildDailyBriefContext, villageDate } from "./build-daily-brief-context";
+import { acceptLink, type BriefOpportunity, type DailyBriefContext, buildDailyBriefContext, villageDate } from "./build-daily-brief-context";
 import { OPPORTUNITY_DELIVERY_KEY, deliveryLogChanged, pruneDeliveryLog, readDeliveryLog, recordShowings } from "./delivery-state";
 import { dropOpportunity } from "./drop-opportunity";
 import { cleanName, cleanText, cleanTitle, connectionsUrl, cronScanHit, envOrDotenv } from "./proactive-text";
@@ -415,9 +415,9 @@ export interface PersonView {
   messageUrl: string | null;
 }
 
-function person(card: { name?: unknown; userUrl?: unknown; opportunityUrl?: unknown }, w: Withheld): PersonView | null {
+function person(card: { name?: unknown; userUrl?: unknown; acceptUrl?: unknown }, w: Withheld): PersonView | null {
   const name = w.name(card.name);
-  return name ? { name, profileUrl: indexUrl("u", card.userUrl), messageUrl: indexUrl("o", card.opportunityUrl) } : null;
+  return name ? { name, profileUrl: indexUrl("u", card.userUrl), messageUrl: acceptLink(card.acceptUrl) ?? null } : null;
 }
 
 /**
