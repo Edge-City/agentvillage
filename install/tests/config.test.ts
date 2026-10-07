@@ -5,7 +5,14 @@ import { join } from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import YAML from "yaml";
 
-import { capModelMaxTokens, configureAvEvents, configureHostedGateway, configureStt } from "../config";
+import {
+  capModelMaxTokens,
+  configureAvEvents,
+  configureHostedGateway,
+  configureIndexLinks,
+  configureStt,
+  disableTelegramLinkPreviews,
+} from "../config";
 
 const ORIGINAL_ENV = {
   HERMES_HOME: process.env.HERMES_HOME,
@@ -306,4 +313,116 @@ test("configureAvEvents does not warn when plugins.disabled lists only other plu
   withConfig({ plugins: { disabled: ["recall"] } });
 
   expect(configureAvEventsLogged()).toEqual(["→ enabled plugin av-events"]);
+});
+
+function logged(step: () => void): string[] {
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    step();
+    return log.mock.calls.map((args) => args.map(String).join(" "));
+  } finally {
+    log.mockRestore();
+  }
+}
+
+// SEREF-OVERLAY refute N11: configureIndexLinks had no test.
+test("configureIndexLinks run twice lists index-links once and keeps enabled, hook_callback_timeout and disabled", () => {
+  const configPath = withConfig({
+    plugins: { enabled: ["dashboard-auth-edgecity", "av-events"], hook_callback_timeout: 600, disabled: ["recall"] },
+  });
+
+  const first = logged(configureIndexLinks);
+  const second = logged(configureIndexLinks);
+
+  const plugins = readConfig(configPath).plugins as Record<string, unknown>;
+  expect(plugins.enabled).toEqual(["dashboard-auth-edgecity", "av-events", "index-links"]);
+  expect(plugins.hook_callback_timeout).toBe(600);
+  expect(plugins.disabled).toEqual(["recall"]);
+  expect(first).toEqual(["→ enabled plugin index-links"]);
+  expect(second).toEqual(first);
+});
+
+test("configureIndexLinks keeps index-links in plugins.disabled and warns (the rollback switch)", () => {
+  const configPath = withConfig({ plugins: { enabled: ["av-events"], disabled: ["index-links"] } });
+
+  const out = logged(configureIndexLinks);
+
+  const plugins = readConfig(configPath).plugins as Record<string, unknown>;
+  expect(plugins.disabled).toEqual(["index-links"]);
+  expect(out).toContain("→ warning: index-links is in plugins.disabled; Hermes will not load it");
+});
+
+// SEREF-OVERLAY refute F1: Telegram's preview crawler must never fetch a signed accept link.
+test("disableTelegramLinkPreviews sets platforms.telegram.extra.disable_link_previews and keeps sibling keys", () => {
+  const configPath = withConfig({
+    model: { default: "m" },
+    platforms: { telegram: { gateway_restart_notification: false, extra: { drop_pending_on_cold_boot: false } } },
+  });
+
+  disableTelegramLinkPreviews();
+
+  const doc = readConfig(configPath);
+  expect(doc.model).toEqual({ default: "m" });
+  expect((doc.platforms as Record<string, unknown>).telegram).toEqual({
+    gateway_restart_notification: false,
+    extra: { drop_pending_on_cold_boot: false, disable_link_previews: true },
+  });
+});
+
+test("disableTelegramLinkPreviews on an empty config and on re-run: written once, then byte-identical", () => {
+  const configPath = withConfig({});
+
+  const first = logged(disableTelegramLinkPreviews);
+  const after = readFileSync(configPath, "utf8");
+  const second = logged(disableTelegramLinkPreviews);
+
+  expect(readConfig(configPath)).toEqual({ platforms: { telegram: { extra: { disable_link_previews: true } } } });
+  expect(readFileSync(configPath, "utf8")).toBe(after);
+  expect(first).toEqual(["→ set platforms.telegram.extra.disable_link_previews: true (no link previews on signed links)"]);
+  expect(second).toEqual(["→ telegram disable_link_previews already true"]);
+});
+
+test("disableTelegramLinkPreviews overrides a hand-set false, under extra and at the top of the telegram block", () => {
+  const configPath = withConfig({ platforms: { telegram: { disable_link_previews: false, extra: { disable_link_previews: false } } } });
+
+  const out = logged(disableTelegramLinkPreviews);
+
+  const telegram = (readConfig(configPath).platforms as Record<string, Record<string, unknown>>).telegram;
+  expect(telegram.disable_link_previews).toBe(true);
+  expect((telegram.extra as Record<string, unknown>).disable_link_previews).toBe(true);
+  expect(out[0]).toContain("overrode platforms.telegram.extra.disable_link_previews, platforms.telegram.disable_link_previews");
+});
+
+test("disableTelegramLinkPreviews leaves a YAML merge key alone and warns; warns on a top-level telegram false", () => {
+  const merged = ["tg: &tg", "  enabled: true", "platforms:", "  telegram:", "    <<: *tg", ""].join("\n");
+  const home = mkdtempSync(join(tmpdir(), "agentvillage-config-"));
+  process.env.HERMES_HOME = home;
+  const mergedPath = join(home, "config.yaml");
+  writeFileSync(mergedPath, merged);
+
+  const out = logged(disableTelegramLinkPreviews);
+
+  expect(readFileSync(mergedPath, "utf8")).toBe(merged);
+  expect(out.join("\n")).toContain('warning: YAML merge key "<<" under platforms.telegram');
+
+  withConfig({ telegram: { disable_link_previews: false } });
+  const top = logged(disableTelegramLinkPreviews);
+  expect(top.join("\n")).toContain("warning: telegram.disable_link_previews is false");
+});
+
+test("configureHostedGateway then disableTelegramLinkPreviews: both keys, idempotent across two passes", () => {
+  const configPath = withConfig({ platforms: { telegram: { extra: { dm_topics: [] } } } });
+  const pass = (): void => {
+    configureHostedGateway();
+    disableTelegramLinkPreviews();
+  };
+
+  logged(pass);
+  const first = readFileSync(configPath, "utf8");
+  logged(pass);
+
+  expect(readFileSync(configPath, "utf8")).toBe(first);
+  const telegram = (readConfig(configPath).platforms as Record<string, Record<string, unknown>>).telegram;
+  expect(telegram.gateway_restart_notification).toBe(false);
+  expect(telegram.extra).toEqual({ dm_topics: [], disable_link_previews: true });
 });

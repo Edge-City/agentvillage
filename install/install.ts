@@ -57,6 +57,7 @@ import {
   configureHostedGateway,
   configureStt,
   configureVillageTimezone,
+  disableTelegramLinkPreviews,
   keepTelegramBacklogOnColdBoot,
   setTerminalCwd,
 } from "./config";
@@ -224,6 +225,7 @@ function main(): void {
   configureStt();
   configureHostedGateway();
   keepTelegramBacklogOnColdBoot();
+  disableTelegramLinkPreviews();
   configureVillageTimezone();
   configureCronScriptTimeout();
   configureCronWrapResponse();
