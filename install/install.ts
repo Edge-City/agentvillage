@@ -51,6 +51,7 @@ import {
   capModelMaxTokens,
   configureAvEvents,
   configureCronScriptTimeout,
+  configureCronWrapResponse,
   configureDashboardAuth,
   configureHostedGateway,
   configureStt,
@@ -224,6 +225,7 @@ function main(): void {
   keepTelegramBacklogOnColdBoot();
   configureVillageTimezone();
   configureCronScriptTimeout();
+  configureCronWrapResponse();
   configureTelegramDisplay();
   configureDashboardAuth();
   configureAvEvents();

@@ -16,6 +16,7 @@ import {
   staggeredSchedule,
 } from "../install_index";
 import { cronFailedLine, installStatusPath, writeInstallStatus } from "../install_status";
+import YAML from "yaml";
 
 const SEED = "ix_integration_seed";
 const [SIGNALS, PREPARE, SEND, NEGOTIATION, EVENING, DROP_MIDDAY, DROP_EVENING, TOKEN_AUDIT, KNOWLEDGE] = DIGEST_CRON_SPECS;
@@ -632,6 +633,8 @@ test("F9: the standalone reconcile exits non-zero after attempting every job whe
   expect(done.exitCode).toBe(1);
   expect(done.stderr.toString()).toContain(`1 Index cron job(s) failed to update (${NEGOTIATION.name})`);
   expect(cronCalls().map((argv) => argv[2])).toEqual(["n1", "e1"]);
+  // DATA-373: the standalone reconcile also turns Hermes's cron wrapper off, as install.ts does.
+  expect(YAML.parse(readFileSync(join(home, "config.yaml"), "utf8")).cron).toEqual({ script_timeout_seconds: 120, wrap_response: false });
 });
 
 test("F13: prompts are compared and sent with trailing whitespace trimmed, so a created job is not re-edited", () => {
@@ -711,6 +714,8 @@ test("R1: a failed cron edit exits 0, writes the status file with the job's name
   process.env.HERMES_BIN = writeStubHermes(home);
   const clean = runInstall();
   expect(clean.code).toBe(0);
+  // DATA-373: after install, Hermes's cron wrapper is off.
+  expect(YAML.parse(readFileSync(join(home, "config.yaml"), "utf8")).cron.wrap_response).toBe(false);
   expect(installStatus().cron_failed).toEqual([]);
   expect(clean.stdout).not.toContain("agentvillage-install:");
   expect(readdirSync(join(home, "av-events")).filter((name) => name.includes(".tmp"))).toEqual([]);
