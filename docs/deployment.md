@@ -233,7 +233,11 @@ would refuse. That directory on `main` is the mirror the `Edge — knowledge
 sync` job pulls ("Edge India knowledge" below), so this is the one part of
 agent content that does not wait for a roll: the job copies it into
 `$HERMES_HOME/knowledge/edge-india/` every 30 minutes, verified against
-`SNAPSHOT.json`. The skill's `refs.ts` reads the newer of that copy and the
+`SNAPSHOT.json`. End to end, an edit Fran's publisher has committed reaches the
+agents 30 to 65 minutes later (publisher 15 min, mirror 15 min, box job 30 min,
+plus raw.githubusercontent's 5 min cache); a session already open reads the
+guide at its next start (DATA-393; read back on 2026-10-07: upstream commit
+14:58Z, on a1909a4b's box by 21:55Z after the rc24 roll). The skill's `refs.ts` reads the newer of that copy and the
 snapshot installed at the roll (the offline fallback). **Its own live check,
 `AV_INDIA_REFS_LIVE`, is off by default: the cron supplies freshness and a
 resident's turn never fetches.** `AV_INDIA_REFS_LIVE=1` in one tenant's `.env`
