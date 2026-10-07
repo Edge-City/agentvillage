@@ -16,7 +16,7 @@ Live data stays with the existing skills: today's events, RSVPs and cancellation
 
 ## Where the content comes from
 
-`aromeoes/edge-agent-skill` generates the references. Its indexer reads an allowlist of public sources only (the India wiki, the Substack and the website) and excludes housing sheets, forms, portals and Telegram history. Content changes belong there; this repo only copies its output.
+`p2p-lanes/edge-agent-skill` generates the references. Its indexer reads an allowlist of public sources only (the India wiki, the Substack and the website) and excludes housing sheets, forms, portals and Telegram history. Content changes belong there; this repo only copies its output.
 
 ## How fresh is it: the full path
 

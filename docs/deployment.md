@@ -227,7 +227,7 @@ on it:
 The village knowledge skill ships a snapshot of the public India wiki, Substack
 and website in `skills/edge-india/references/`. The sync workflow
 (`.github/workflows/sync-edge-india-references.yml`) keeps that snapshot on
-`main` current with the upstream indexer (`aromeoes/edge-agent-skill`), every
+`main` current with the upstream indexer (`p2p-lanes/edge-agent-skill`), every
 15 minutes, refusing incomplete trees and any tree the agents' knowledge sync
 would refuse. That directory on `main` is the mirror the `Edge — knowledge
 sync` job pulls ("Edge India knowledge" below), so this is the one part of
@@ -480,7 +480,7 @@ The agent answers Edge City India background questions (housing, getting
 there, visas, tickets, meals, health and safety, residencies, themes) from a
 local copy of the published guide, never by fetching inside a resident's turn.
 The guide is the upstream indexer's output (the wiki, the website and the
-Substack newsletter in Markdown), published in `aromeoes/edge-agent-skill`
+Substack newsletter in Markdown), published in `p2p-lanes/edge-agent-skill`
 (branch `main`), directory `references/`. Agents never read it from there by
 default: the built-in default is **Edge City's mirror in this repo**,
 `skills/edge-india/references/` (`https://raw.githubusercontent.com/Edge-City/agentvillage/main/skills/edge-india/references/manifest.json`),
@@ -495,8 +495,8 @@ push to upstream read directly would reach every agent within one run with
 none of these.
 
 **Trust boundary.** The decision: Carter's choice of upstream (GRANT
-2026-10-06 09:06Z, "the mirror follows `aromeoes/edge-agent-skill`"). The
-mirror follows `aromeoes/edge-agent-skill@main`: a personal account's branch,
+2026-10-06 09:06Z, "the mirror follows `p2p-lanes/edge-agent-skill`"). The
+mirror follows `p2p-lanes/edge-agent-skill@main`: a personal account's branch,
 unpinned, published automatically every 15 minutes by the sync workflow, with
 no person reviewing it. What protects the fleet: the sync's checks (sizes,
 names, encoding, HTML, complete India-only trees, manifest links only to the
@@ -513,7 +513,7 @@ with its source link. Neither switch removes a
 copy already on disk: disabling the workflow, or writing a tenant's key empty,
 leaves that tenant's last synced set in place; only a revert of the mirror
 pushes a clean copy out, within about 35 minutes (one 30-minute period plus
-the CDN's 5-minute cache). The upstream (`aromeoes/edge-agent-skill`) stays on
+the CDN's 5-minute cache). The upstream (`p2p-lanes/edge-agent-skill`) stays on
 the allowlist as an operator override only. The mirror serves from the merge
 of #203 (superseded by the rc15 merge PR); before that every run failed
 `http-404` (exit 1, local notice). The mirror's sync refuses any tree this job
@@ -532,7 +532,7 @@ others, so a resident's or admin's pause and schedule are kept. It runs
 - fetches the manifest, `index.md` beside it and every file the manifest lists
   (relative `.md` paths only), all from the manifest's own directory;
 - accepts only https, no credentials, port, query or fragment, on
-  `raw.githubusercontent.com` under `/aromeoes/edge-agent-skill/` or
+  `raw.githubusercontent.com` under `/p2p-lanes/edge-agent-skill/` or
   `/Edge-City/`, or on a host listed in `KNOWLEDGE_SNAPSHOT_HOSTS`
   (comma-separated host names; it never widens `raw.githubusercontent.com`);
   a redirect is followed (at most 3) only to a URL that passes the same check;
@@ -578,7 +578,7 @@ others, so a resident's or admin's pause and schedule are kept. It runs
 
 | Variable | Meaning |
 |---|---|
-| `KNOWLEDGE_SNAPSHOT_URL` | The snapshot's manifest. No line: the built-in default, the Edge City mirror `https://raw.githubusercontent.com/Edge-City/agentvillage/main/skills/edge-india/references/manifest.json`. The upstream (`https://raw.githubusercontent.com/aromeoes/edge-agent-skill/main/references/manifest.json`) is an operator override only. Written empty (`KNOWLEDGE_SNAPSHOT_URL=`): switched off; every run is `unconfigured`, exits 0 and writes no knowledge file. Any other value must pass the allowlist above. |
+| `KNOWLEDGE_SNAPSHOT_URL` | The snapshot's manifest. No line: the built-in default, the Edge City mirror `https://raw.githubusercontent.com/Edge-City/agentvillage/main/skills/edge-india/references/manifest.json`. The upstream (`https://raw.githubusercontent.com/p2p-lanes/edge-agent-skill/main/references/manifest.json`) is an operator override only. Written empty (`KNOWLEDGE_SNAPSHOT_URL=`): switched off; every run is `unconfigured`, exits 0 and writes no knowledge file. Any other value must pass the allowlist above. |
 | `KNOWLEDGE_SNAPSHOT_HOSTS` | Optional. Extra host names a snapshot may be served from. No line: none. |
 
 The script reads both from `$HERMES_HOME/.env` (the file the control plane
