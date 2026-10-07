@@ -1,0 +1,109 @@
+{
+  "_comment": "DATA-384: which source record_intention gets, by whose words the text is. The contract for the skill's examples (skills/record-intention/SKILL.md, \"## Source\") and the rule in _record_intention.py SOURCE_RULE / DRAFT_RULE. said: what the resident said or wrote (or, for background, what a memory pass read). where: conversation | onboarding | note | background. text: what the agent records. source: the source the rule gives. draft_first: the agent shows text in chat before it calls the tool. Checked by plugins/av-events/tests/test_intention_source.py; no model runs.",
+  "exemplars": [
+    {
+      "said": "Based on what you know about me, make me an intent.",
+      "where": "conversation",
+      "text": "Meet founders and researchers working on AI agents for local communities",
+      "source": "ambient",
+      "draft_first": true,
+      "why": "They asked you to write it; the words are yours."
+    },
+    {
+      "said": "Based on what you know about me, generate an index intent.",
+      "where": "conversation",
+      "text": "Meet people building tools for civic life in small towns",
+      "source": "ambient",
+      "draft_first": true,
+      "why": "The rehearsal request of 2026-10-07: the agent composed the text."
+    },
+    {
+      "said": "Generate an index intent for me.",
+      "where": "conversation",
+      "text": "Find collaborators for a community radio project in Goa",
+      "source": "ambient",
+      "draft_first": true,
+      "why": "They asked you to write it; the words are yours."
+    },
+    {
+      "said": "Suggest an intent I could post.",
+      "where": "conversation",
+      "text": "Talk with people who have run a residency program",
+      "source": "ambient",
+      "draft_first": true,
+      "why": "A suggestion is your wording."
+    },
+    {
+      "said": "Can you write me an intent about Solana founders in Goa?",
+      "where": "conversation",
+      "text": "Meet founders building on Solana in Goa",
+      "source": "ambient",
+      "draft_first": true,
+      "why": "They named the topic, but \"meet\" and \"building\" are your words."
+    },
+    {
+      "said": "Yes, that's right.",
+      "where": "conversation",
+      "text": "Meet founders building on Solana in Goa",
+      "source": "ambient",
+      "draft_first": true,
+      "why": "A yes to your draft does not make the words theirs."
+    },
+    {
+      "said": "I spent all day fighting our payments integration again.",
+      "where": "conversation",
+      "text": "Meet engineers who have built payments infrastructure",
+      "source": "ambient",
+      "draft_first": true,
+      "why": "Inferred: they did not ask for anything."
+    },
+    {
+      "said": "I want to meet founders building on Solana in Goa.",
+      "where": "conversation",
+      "text": "Meet founders building on Solana in Goa",
+      "source": "message",
+      "draft_first": false,
+      "why": "Their words, cut but not added to; it publishes."
+    },
+    {
+      "said": "I'm looking for a technical cofounder for a climate hardware startup.",
+      "where": "conversation",
+      "text": "Looking for a technical cofounder for a climate hardware startup",
+      "source": "message",
+      "draft_first": false,
+      "why": "Their words, cut but not added to."
+    },
+    {
+      "said": "I'm here to find people working on climate hardware.",
+      "where": "onboarding",
+      "text": "Find people working on climate hardware",
+      "source": "onboarding",
+      "draft_first": false,
+      "why": "Their own words in a setup answer."
+    },
+    {
+      "said": "find a surf buddy for early mornings in Goa",
+      "where": "note",
+      "text": "Find a surf buddy for early mornings in Goa",
+      "source": "note",
+      "draft_first": false,
+      "why": "Their own words in their notes."
+    },
+    {
+      "said": "Kerala trip with Ana next month",
+      "where": "note",
+      "text": "Meet people travelling to Kerala next month",
+      "source": "ambient",
+      "draft_first": true,
+      "why": "A note they did not write as a request; the want is your reading of it."
+    },
+    {
+      "said": "Priya is raising a seed round for her solar startup.",
+      "where": "background",
+      "text": "Raising a seed round for a solar startup",
+      "source": "ambient",
+      "draft_first": false,
+      "why": "A background pass found it; there is no chat to show it in."
+    }
+  ]
+}

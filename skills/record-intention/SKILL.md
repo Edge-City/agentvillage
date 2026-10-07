@@ -12,9 +12,9 @@ capture signal with `create_intent` as the index-network skill says.
 
 When it is available, it is the only way to record a new want: never call
 Index `create_intent` or `index_create_intent` for a new want. That holds in
-conversation (`source=message`), during onboarding (`source=onboarding`), and
-in a background memory pass (`source=ambient`). Call `record_intention`
-instead, once per signal; it creates the intent on Index in the same call and
+conversation, during onboarding and in a background memory pass; "Source"
+below says which `source` to pass. Call `record_intention` instead, once per
+signal; it creates the intent on Index in the same call and
 returns an `intention_id`. Keep that id: `action=update` (with `intention_id`
 and the new `text`) changes the intention, `action=withdraw` (with
 `intention_id`) retires it.
@@ -36,11 +36,42 @@ or `reason=personal`. Any other `publish=false` is refused. With a reason,
 
 ## Source
 
-- `message`: the resident told you in conversation.
-- `onboarding`: they answered it during setup.
-- `note`: their own words, captured in their notes.
-- `ambient`: you inferred it, from conversation or notes they did not write as
-  a request, or a background or cron run found it.
+Choose `source` by whose words the text is, not by where you heard it.
+Use `source=message` only when the resident said the want in their own words
+in this conversation, so you could quote it back to them; you may cut words,
+but not add your own. `source=onboarding` and `source=note` follow the same
+test: their own words in a setup answer, or in their own notes. Anything you
+composed, summarised, generalised or inferred is `source=ambient`, whoever
+asked for it, and so is anything a background or cron run found. A resident
+asking you to write an intention for them is not stating one: the words you
+write are yours.
+
+Examples:
+
+- "Based on what you know about me, make me an intent." → `ambient`: the
+  words would be yours.
+- "Generate an index intent for me." → `ambient`.
+- "Suggest an intent I could post." → `ambient`.
+- "Can you write me an intent about Solana founders in Goa?" → `ambient`
+  when you write "Meet founders building on Solana in Goa": "meet" and
+  "building" are yours.
+- "Yes, that's right." after you showed your draft → `ambient`: a yes does not
+  make your words theirs.
+- "I want to meet founders building on Solana in Goa." → `message`: record
+  "Meet founders building on Solana in Goa" and it publishes.
+- A setup answer, "I'm here to find people working on climate hardware." →
+  `onboarding`.
+- A line in their notes, "find a surf buddy for early mornings in Goa" →
+  `note`.
+
+## Show your draft first
+
+In conversation, when the words are yours, first show the intention in chat,
+in one or two lines, exactly as you will record it; then capture it with
+`source=ambient`. Do not ask for a yes in chat: where approvals are set up the
+tool asks them itself, and a yes in chat does not make the words theirs. If
+they then say the want in their own words, withdraw the held one and capture
+their words with `source=message`.
 
 ## Ambient intentions are held
 
