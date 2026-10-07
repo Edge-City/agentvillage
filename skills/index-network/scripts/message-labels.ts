@@ -91,7 +91,7 @@ export function jobHoldsPath(home: string): string {
 
 // ── The holds file's grammars (control-plane/src/job-control.js) ────────────
 
-/** A larger holds file is unreadable: the control plane reads it with `head -c 65536`. */
+/** The control plane reads the holds file's first 65536 bytes (`head -c 65536`); the pause script reads the same prefix. */
 export const HOLDS_MAX_BYTES = 65_536;
 
 /** HOLD_STATES. */

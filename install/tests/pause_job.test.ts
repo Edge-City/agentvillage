@@ -319,6 +319,18 @@ describe("pause", () => {
     expect(file.by[OTHER]).toBeUndefined();
   });
 
+  test("the hold is in the file before Hermes pauses the job (the control plane never sees it paused and not held)", () => {
+    const seen: Array<{ argv: string[]; hold: unknown; by: unknown; enabled: boolean }> = [];
+    const watching = (args: string[]) => {
+      const file = holdsFile();
+      seen.push({ argv: args, hold: file?.holds?.[args[2]] ?? null, by: file?.by?.[args[2]] ?? null, enabled: storedJobEnabled(allJobs().find((entry) => entry.id === args[2])!) });
+      execFileSync(bin, args, { stdio: "ignore", env: process.env });
+    };
+    expect(runWith({ hermes: watching }, "pause", "--label", "Introduction suggestion").out).toMatchObject({ ok: true, hold: "paused" });
+    expect(seen.map((entry) => entry.argv[1])).toEqual(["pause", "pause"]);
+    for (const entry of seen) expect({ hold: entry.hold, by: entry.by, enabled: entry.enabled }).toEqual({ hold: "paused", by: "resident", enabled: true });
+  });
+
   test("a second pause changes nothing: no Hermes call at all, and the file byte for byte", () => {
     run("pause", "--label", "Daily digest");
     const text = holdsText();
@@ -423,7 +435,7 @@ describe("resume: the missed slot never fires at once (AC#2)", () => {
       entry.next_run_at = PAST;
     });
     const before = calls().length;
-    expect(run("resume", "--label", "Evening questions").out).toEqual({ ok: true, action: "resume", label: "Evening questions", jobs: [{ id, changed: true, resumeMayFire: true }], hold: "active", holds: "ok" });
+    expect(run("resume", "--label", "Evening questions").out).toEqual({ ok: true, action: "resume", label: "Evening questions", jobs: [{ id, changed: true, resumeMayFire: true }], hold: "active", holds: "ok", resumeMayFire: true });
     expect(calls().slice(before).filter((argv) => argv[0] === "cron")).toEqual([["cron", "resume", id]]);
   });
 
@@ -448,6 +460,51 @@ describe("resume: the missed slot never fires at once (AC#2)", () => {
     expect(holdsText()).toBeNull();
     expect(run("resume", "--label", "Evening questions").out).toMatchObject({ ok: true, jobs: [{ id, changed: true }], hold: "active" });
     expect(storedJobEnabled(job(EVENING))).toBe(true);
+  });
+
+  test("the post-resume hold is in the file before Hermes resumes the job: active for a contact-style job, removed for the digest", () => {
+    const seen: Array<[string, unknown]> = [];
+    const watching = (args: string[]) => {
+      if (args[1] === "resume") seen.push([args[2], holdsFile()?.holds?.[args[2]] ?? null]);
+      execFileSync(bin, args, { stdio: "ignore", env: process.env });
+    };
+    run("pause", "--label", "Evening questions");
+    run("pause", "--label", "Daily digest");
+    expect(runWith({ hermes: watching }, "resume", "--label", "Evening questions").out).toMatchObject({ ok: true, hold: "active" });
+    expect(runWith({ hermes: watching }, "resume", "--label", "Daily digest").out).toMatchObject({ ok: true, hold: "cleared" });
+    expect(seen).toEqual([[job(EVENING).id, "active"], [job(DIGEST).id, null]]);
+  });
+
+  test("a retry after a failed re-anchor finishes it: the edit runs, the next run is in the future (B1)", () => {
+    const id = job(DIGEST).id;
+    run("pause", "--label", "Daily digest");
+    setNextRun(DIGEST, PAST);
+    process.env.FAKE_HERMES_FAIL = "edit";
+    expect(run("resume", "--label", "Daily digest").out).toMatchObject({ ok: false, error: "hermes-failed", step: "reanchor", applied: [id], resumeMayFire: true });
+    expect(storedJobEnabled(job(DIGEST))).toBe(true);
+    expect(job(DIGEST).next_run_at).toBe(PAST);
+    delete process.env.FAKE_HERMES_FAIL;
+    const before = calls().length;
+    expect(run("resume", "--label", "Daily digest")).toEqual({ code: 0, out: { ok: true, action: "resume", label: "Daily digest", jobs: [{ id, changed: false, missedSlot: "dropped" }], hold: "cleared", holds: "ok" } });
+    expect(calls().slice(before).filter((argv) => argv[0] === "cron")).toEqual([["cron", "edit", id, "--schedule", job(DIGEST).schedule.expr]]);
+    expect(Date.parse(job(DIGEST).next_run_at)).toBeGreaterThan(Date.now());
+  });
+
+  test("a running job whose next run is already due is re-anchored on resume too; a non-canonical one says it may fire", () => {
+    const id = job(EVENING).id;
+    setNextRun(EVENING, PAST);
+    const before = calls().length;
+    expect(run("resume", "--label", "Evening questions").out).toEqual({ ok: true, action: "resume", label: "Evening questions", jobs: [{ id, changed: false, missedSlot: "dropped" }], hold: "active", holds: "ok" });
+    expect(calls().slice(before).filter((argv) => argv[0] === "cron")).toEqual([["cron", "edit", id, "--schedule", job(EVENING).schedule.expr]]);
+    expect(Date.parse(job(EVENING).next_run_at)).toBeGreaterThan(Date.now());
+    editJobs((all) => {
+      const entry = all.find((e) => e.id === id)!;
+      entry.schedule = { expr: "18 19 * * MON" };
+      entry.next_run_at = PAST;
+    });
+    const later = calls().length;
+    expect(run("resume", "--label", "Evening questions").out).toEqual({ ok: true, action: "resume", label: "Evening questions", jobs: [{ id, changed: false, resumeMayFire: true }], hold: "active", holds: "ok", resumeMayFire: true });
+    expect(calls().slice(later).filter((argv) => argv[0] === "cron")).toEqual([]);
   });
 
   test("a job already running: no Hermes call; the resident's old pause hold gives way", () => {
@@ -491,43 +548,91 @@ describe("resume: the missed slot never fires at once (AC#2)", () => {
   });
 });
 
-describe("an unreadable holds file: the Hermes action still runs, the file is never written", () => {
-  test("an array, a string, null, a number, malformed JSON, over 64 KiB, not UTF-8, a directory", () => {
+describe("the holds file is read as the control plane reads it; resume never runs on one it cannot read", () => {
+  /** Each unreadable shape, made fresh. */
+  const unreadable: Array<[string, () => void]> = [
+    ["array", () => writeHoldsFile("[]")],
+    ["string", () => writeHoldsFile('"paused"')],
+    ["null", () => writeHoldsFile("null")],
+    ["number", () => writeHoldsFile("42")],
+    ["malformed", () => writeHoldsFile('{"version":1,"holds":{')],
+    // Its first 65536 bytes are not a whole JSON value, which is what the control plane parses.
+    ["70 KB, cut by the 64 KiB read", () => writeHoldsFile(JSON.stringify({ version: 1, holds: {}, pad: "x".repeat(70_000) }))],
+  ];
+
+  test("pause on an unreadable file: the job is paused, the file is never written, the reply says so", () => {
     roll();
     const id = job(EVENING).id;
-    const cases: Array<[string, () => void]> = [
-      ["array", () => writeHoldsFile("[]")],
-      ["string", () => writeHoldsFile('"paused"')],
-      ["null", () => writeHoldsFile("null")],
-      ["number", () => writeHoldsFile("42")],
-      ["malformed", () => writeHoldsFile('{"version":1,"holds":{')],
-      ["70 KB", () => writeHoldsFile(JSON.stringify({ version: 1, holds: {}, pad: "x".repeat(70_000) }))],
-      ["over the cap by one byte", () => writeHoldsFile(`${EMPTY_HOLDS}${" ".repeat(HOLDS_MAX_BYTES + 1 - EMPTY_HOLDS.length)}`)],
-      ["not UTF-8", () => {
-        mkdirSync(dirname(holdsPath()), { recursive: true });
-        writeFileSync(holdsPath(), Buffer.from([0x7b, 0xff, 0xfe, 0x7d]));
-      }],
-    ];
-    for (const [name, make] of cases) {
+    for (const [name, make] of unreadable) {
+      execFileSync(bin, ["cron", "resume", id], { stdio: "ignore", env: process.env });
       make();
       const bytes = readFileSync(holdsPath());
       const paused = run("pause", "--label", "Evening questions");
       expect({ name, paused }).toEqual({ name, paused: { code: 0, out: { ok: true, action: "pause", label: "Evening questions", jobs: [{ id, changed: true }], hold: null, holds: "unreadable" } } });
       expect(storedJobEnabled(job(EVENING))).toBe(false);
-      const resumed = run("resume", "--label", "Evening questions");
-      expect({ name, resumed }).toEqual({ name, resumed: { code: 0, out: { ok: true, action: "resume", label: "Evening questions", jobs: [{ id, changed: true }], hold: null, holds: "unreadable" } } });
-      expect(storedJobEnabled(job(EVENING))).toBe(true);
       expect({ name, same: readFileSync(holdsPath()).equals(bytes) }).toEqual({ name, same: true });
       expect(run("status", "--label", "Evening questions").out).toMatchObject({ holds: "unreadable", labels: [{ jobs: [{ hold: null, by: null }] }] });
     }
-    // At the cap exactly, it is read.
-    writeHoldsFile(`${EMPTY_HOLDS}${" ".repeat(HOLDS_MAX_BYTES - EMPTY_HOLDS.length)}`);
-    expect(readFileSync(holdsPath()).length).toBe(HOLDS_MAX_BYTES);
-    expect(run("pause", "--label", "Evening questions").out).toMatchObject({ ok: true, hold: "paused", holds: "ok" });
-    // A directory at the path.
+  });
+
+  test("resume on an unreadable file: holds-unreadable, exit 2, no Hermes call, nothing changed", () => {
+    roll();
+    const id = job(EVENING).id;
+    execFileSync(bin, ["cron", "pause", id], { stdio: "ignore", env: process.env });
+    for (const [name, make] of unreadable) {
+      make();
+      const bytes = readFileSync(holdsPath());
+      const before = calls().length;
+      expect({ name, result: run("resume", "--label", "Evening questions") }).toEqual({ name, result: { code: 2, out: { ok: false, error: "holds-unreadable", label: "Evening questions" } } });
+      expect(calls().length).toBe(before);
+      expect(storedJobEnabled(job(EVENING))).toBe(false);
+      expect({ name, same: readFileSync(holdsPath()).equals(bytes) }).toEqual({ name, same: true });
+    }
+    // A directory at the path: unreadable too.
     rmSync(holdsPath());
     mkdirSync(holdsPath());
-    expect(run("resume", "--label", "Evening questions").out).toMatchObject({ ok: true, hold: null, holds: "unreadable" });
+    expect(run("resume", "--label", "Evening questions").out).toEqual({ ok: false, error: "holds-unreadable", label: "Evening questions" });
+    expect(run("pause", "--label", "Evening questions").out).toMatchObject({ ok: true, hold: null, holds: "unreadable" });
+  });
+
+  test("a hold the control plane can read refuses the resume, however the file is padded or encoded", () => {
+    roll();
+    const id = job(DIGEST).id;
+    run("pause", "--label", "Daily digest");
+    const cases: Array<[string, Buffer | string, string]> = [
+      // One byte that is not UTF-8, in an unrelated string: the control plane decodes it as a replacement character.
+      ["an admin's hold with a stray byte", Buffer.concat([Buffer.from(`{"version":1,"holds":{"${id}":"paused"},"by":{"${id}":"admin"},"note":"`), Buffer.from([0xe9]), Buffer.from('"}\n')]), "held-by-admin"],
+      // Padding past 65536 bytes: the control plane parses the first 65536, which hold the whole object.
+      ["the settings' hold padded to 65537 bytes", (() => {
+        const body = JSON.stringify({ version: 1, holds: { [id]: "paused" }, by: { [id]: "desired" } });
+        return `${body}${" ".repeat(HOLDS_MAX_BYTES + 1 - body.length - 1)}\n`;
+      })(), "held-by-settings"],
+      ["an admin's hold behind a byte-order mark", `﻿{"version":1,"holds":{"${id}":"paused"}}\r\n`, "held-by-admin"],
+    ];
+    for (const [name, text, error] of cases) {
+      writeHoldsFile(text as string);
+      const bytes = readFileSync(holdsPath());
+      const before = calls().length;
+      expect({ name, out: run("resume", "--label", "Daily digest").out }).toEqual({ name, out: { ok: false, error, label: "Daily digest" } });
+      expect(calls().length).toBe(before);
+      expect(storedJobEnabled(job(DIGEST))).toBe(false);
+      expect(readFileSync(holdsPath()).equals(bytes)).toBe(true);
+    }
+  });
+
+  test("a file longer than 64 KiB whose first 64 KiB parse is read, and rewritten whole", () => {
+    roll();
+    const id = job(DIGEST).id;
+    const body = JSON.stringify({ version: 1, holds: { [OTHER]: "paused" }, at: { [OTHER]: OTHER_AT }, by: { [OTHER]: "admin" } });
+    writeHoldsFile(`${body}${" ".repeat(HOLDS_MAX_BYTES * 2)}`);
+    expect(run("pause", "--label", "Daily digest").out).toMatchObject({ ok: true, hold: "paused", holds: "ok" });
+    expect(holdsFile()).toEqual({
+      version: 1,
+      holds: { [OTHER]: "paused", [id]: "paused" },
+      at: { [OTHER]: OTHER_AT, [id]: expect.stringMatching(ISO_MS) },
+      by: { [OTHER]: "admin", [id]: "resident" },
+    });
+    expect(readFileSync(holdsPath()).length).toBeLessThan(1000);
   });
 
   test("a FIFO at the path is never opened (the run does not hang)", () => {
@@ -536,6 +641,7 @@ describe("an unreadable holds file: the Hermes action still runs, the file is ne
     execFileSync("mkfifo", [holdsPath()]);
     const started = Date.now();
     expect(run("pause", "--label", "Daily digest").out).toMatchObject({ ok: true, hold: null, holds: "unreadable" });
+    expect(run("resume", "--label", "Daily digest").out).toEqual({ ok: false, error: "holds-unreadable", label: "Daily digest" });
     expect(Date.now() - started).toBeLessThan(10_000);
   });
 
@@ -665,15 +771,21 @@ describe("a Hermes step that fails on the way: exit 1, step, applied, and a retr
     roll();
   });
 
-  test("the pause fails: nothing applied, no hold written", () => {
+  test("the pause fails: nothing applied, and the hold written before it is put back", () => {
+    seedHolds({ version: 1, holds: { [OTHER]: "paused" }, at: { [OTHER]: OTHER_AT }, by: { [OTHER]: "admin" } });
+    const text = holdsText();
     process.env.FAKE_HERMES_FAIL = "pause";
     expect(run("pause", "--label", "Evening questions")).toEqual({ code: 1, out: { ok: false, error: "hermes-failed", step: "pause", label: "Evening questions", applied: [], hold: null, holds: "ok" } });
-    expect(holdsText()).toBeNull();
+    expect(holdsText()).toBe(text);
+    // With no file before, the file is left with no holds.
+    rmSync(holdsPath());
+    expect(run("pause", "--label", "Evening questions").out).toMatchObject({ ok: false, error: "hermes-failed", hold: null });
+    expect(holdsText()).toBe(`${EMPTY_HOLDS}\n`);
     delete process.env.FAKE_HERMES_FAIL;
     expect(run("pause", "--label", "Evening questions").out).toMatchObject({ ok: true, hold: "paused" });
   });
 
-  test("the second drop's pause fails: the first is applied and held, the second is not", () => {
+  test("the second drop's pause fails: the first is applied and held, the second's hold is put back", () => {
     const midday = job(MIDDAY).id;
     const evening = job(DROP_EVENING).id;
     const order = allJobs().filter((entry) => entry.id === midday || entry.id === evening).map((entry) => entry.id);
@@ -682,13 +794,13 @@ describe("a Hermes step that fails on the way: exit 1, step, applied, and a retr
       execFileSync(bin, args, { stdio: "ignore", env: process.env });
     };
     expect(runWith({ hermes: failing }, "pause", "--label", "Introduction suggestion"))
-      .toEqual({ code: 1, out: { ok: false, error: "hermes-failed", step: "pause", label: "Introduction suggestion", applied: [order[0]], hold: "paused", holds: "ok" } });
+      .toEqual({ code: 1, out: { ok: false, error: "hermes-failed", step: "pause", label: "Introduction suggestion", applied: [order[0]], hold: null, holds: "ok" } });
     expect(holdsFile().holds).toEqual({ [order[0]]: "paused" });
     expect(run("pause", "--label", "Introduction suggestion").out).toMatchObject({ ok: true, hold: "paused" });
     expect(holdsFile().holds).toEqual({ [midday]: "paused", [evening]: "paused" });
   });
 
-  test("the resume fails before saving: nothing applied, no word of a catch-up, the pause hold stays", () => {
+  test("the resume fails before saving: nothing applied, no word of a catch-up, the pause hold is put back byte for byte", () => {
     run("pause", "--label", "Evening questions");
     setNextRun(EVENING, PAST);
     const text = holdsText();
@@ -730,7 +842,7 @@ describe("a Hermes step that fails on the way: exit 1, step, applied, and a retr
     const pid = Number(readFileSync(join(home, "hermes-hang.pid"), "utf8"));
     expect(() => process.kill(pid, 0)).toThrow();
     expect(existsSync(jobsLockPath(home))).toBe(false);
-    expect(holdsText()).toBeNull();
+    expect(holdsText()).toBe(`${EMPTY_HOLDS}\n`);
     // Killed after it saved: read back as applied, and held.
     delete process.env.FAKE_HERMES_HANG;
     process.env.FAKE_HERMES_HANG_AFTER = "pause";
@@ -738,19 +850,20 @@ describe("a Hermes step that fails on the way: exit 1, step, applied, and a retr
       .toEqual({ ok: false, error: "hermes-timeout", step: "pause", label: "Daily digest", applied: [job(DIGEST).id], hold: "paused", holds: "ok" });
   });
 
-  test("the lock is taken over after the resume: lock-lost, nothing more written, and the reply says it may fire", () => {
+  test("the lock is taken over after the resume: lock-lost, no re-anchor, the job held active, and the reply says it may fire", () => {
     const id = job(EVENING).id;
     run("pause", "--label", "Evening questions");
     setNextRun(EVENING, PAST);
-    const text = holdsText();
     const takeover = (args: string[]) => {
       execFileSync(bin, args, { stdio: "ignore", env: process.env });
       if (args[1] === "resume") writeFileSync(jobsLockPath(home), JSON.stringify({ token: "another-command", pid: 1, at: new Date().toISOString() }));
     };
     expect(runWith({ hermes: takeover }, "resume", "--label", "Evening questions"))
-      .toEqual({ code: 1, out: { ok: false, error: "lock-lost", label: "Evening questions", applied: [id], hold: null, holds: "ok", resumeMayFire: true } });
+      .toEqual({ code: 1, out: { ok: false, error: "lock-lost", label: "Evening questions", applied: [id], hold: "active", holds: "ok", resumeMayFire: true } });
     expect(calls().at(-1)).toEqual(["cron", "resume", id]);
-    expect(holdsText()).toBe(text);
+    // The hold went first, and the job did resume: it stays.
+    expect(holdsFile().by[id]).toBe("resident");
+    expect(holdsFile().holds[id]).toBe("active");
     expect(JSON.parse(readFileSync(jobsLockPath(home), "utf8")).token).toBe("another-command");
   });
 
@@ -765,8 +878,43 @@ describe("a Hermes step that fails on the way: exit 1, step, applied, and a retr
     };
     const result = runWith(slow, "pause", "--label", "Introduction suggestion");
     expect(result.out).toMatchObject({ ok: false, error: "lock-lost", hold: null });
-    expect((result.out.applied as string[]).length).toBe(1);
-    expect(holdsText()).toBeNull();
+    const applied = result.out.applied as string[];
+    expect(applied.length).toBe(1);
+    // Both holds went first; the one whose pause never started is put back.
+    expect(holdsFile().holds).toEqual({ [applied[0]]: "paused" });
+  });
+
+  test("a hold that cannot be put back is reported beside the Hermes error, and the reply's hold says what the file holds", () => {
+    const id = job(EVENING).id;
+    const dir = dirname(holdsPath());
+    const failing = (args: string[]) => {
+      // The hold is already written; now nothing in av-events/ can be replaced.
+      chmodSync(dir, 0o555);
+      throw new Error("hermes exited 1");
+    };
+    try {
+      expect(runWith({ hermes: failing }, "pause", "--label", "Evening questions"))
+        .toEqual({ code: 1, out: { ok: false, error: "hermes-failed", step: "pause", label: "Evening questions", applied: [], hold: "paused", holds: "ok", holdError: "hold-restore-failed" } });
+    } finally {
+      chmodSync(dir, 0o700);
+    }
+    // The read-only directory kept the lock file too; a real run would find it stale later.
+    rmSync(jobsLockPath(home), { force: true });
+    expect(holdsFile().holds[id]).toBe("paused");
+    expect(storedJobEnabled(job(EVENING))).toBe(true);
+    // The retry converges.
+    expect(run("pause", "--label", "Evening questions").out).toMatchObject({ ok: true, jobs: [{ id, changed: true }], hold: "paused" });
+  });
+
+  test("a hold put back only while it still reads as this run wrote it", () => {
+    const id = job(EVENING).id;
+    const failing = (args: string[]) => {
+      // Someone else (an admin's route) wrote this job's hold after ours.
+      seedHolds({ version: 1, holds: { [id]: "paused" }, at: { [id]: OTHER_AT }, by: { [id]: "admin" } });
+      throw new Error("hermes exited 1");
+    };
+    expect(runWith({ hermes: failing }, "pause", "--label", "Evening questions").out).toMatchObject({ ok: false, error: "hermes-failed", applied: [], hold: "paused" });
+    expect(holdsFile()).toEqual({ version: 1, holds: { [id]: "paused" }, at: { [id]: OTHER_AT }, by: { [id]: "admin" } });
   });
 
   test("Hermes unavailable: hermes-unavailable, exit 2, nothing changed; not probed when nothing needs it", () => {

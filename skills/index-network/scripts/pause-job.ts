@@ -10,20 +10,27 @@
  * of the five labels the messages end with (message-labels.ts
  * MESSAGE_LABELS). The home is `--home`, else `HERMES_HOME`, else `~/.hermes`.
  *
- * pause and resume run `hermes cron pause|resume <id>` on each installed job
- * the label names, then record a hold in the control plane's holds file,
- * `$HERMES_HOME/av-events/job-holds.json`, with `by: resident`. The control
- * plane reads that file before it re-applies the contact style or the job
- * settings (control-plane/src/job-control.js, tenants.js, job-settings.js),
- * so a held job is left as the resident asked. The format and the hold rules
- * are docs/design/job-settings.md, "Resident holds (DATA-376)".
+ * pause and resume record a hold with `by: resident` in the control plane's
+ * holds file, `$HERMES_HOME/av-events/job-holds.json`, then run
+ * `hermes cron pause|resume <id>` on each installed job the label names. The
+ * hold goes first, so the control plane never finds the job changed and not
+ * yet held; a job whose Hermes step does not happen gets its entry back. The
+ * control plane reads that file before it re-applies the contact style or the
+ * job settings (control-plane/src/job-control.js, tenants.js,
+ * job-settings.js), so a held job is left as the resident asked. A resume
+ * refuses a job held `paused` by an admin or by the settings, and refuses
+ * outright when the file cannot be read, as every control-plane resume path
+ * does; a pause on an unreadable file still pauses and writes nothing. The
+ * format and the hold rules are docs/design/job-settings.md, "Resident holds
+ * (DATA-376)".
  *
  * Output: exactly one JSON line on stdout, `{"ok": true, ...}` or
  * `{"ok": false, "error": "<code>", ...}`, and nothing on stderr (Hermes's
  * `terminal` tool hands the agent both streams). Exit codes, as
  * install/jobs.ts: 0 done; 1 a step failed on the way (`applied` lists the
  * jobs Hermes changed; every step is idempotent, so running it again is
- * safe); 2 refused before anything changed; 4 `busy`: another job command
+ * safe and finishes the job, a missed re-anchor included); 2 refused before
+ * anything changed; 4 `busy`: another job command
  * holds the tenant's jobs lock, nothing changed, try again shortly.
  *
  * The files it reads (`cron/jobs.json`, `installed_jobs.json`, the holds
@@ -275,9 +282,12 @@ export function parseHolds(text: string): HoldsRead {
 }
 
 /**
- * The holds file: missing is no holds. Not a regular file, over
- * HOLDS_MAX_BYTES (the control plane reads `head -c 65536`), not UTF-8, or a
- * failed read: unreadable. An unreadable file is never written.
+ * The holds file, read as the control plane reads it (job-control.js
+ * READ_HOLDS_CMD, `head -c 65536`, then parseHolds): its first
+ * HOLDS_MAX_BYTES bytes, decoded as UTF-8 with replacement characters, then
+ * parsed. A longer file is not unreadable by itself: its prefix is what is
+ * parsed. Missing is no holds. A path that is not a regular file, a failed
+ * read, or a prefix that is not a JSON object is unreadable.
  */
 export function readHolds(home: string): HoldsRead {
   const path = jobHoldsPath(home);
@@ -294,17 +304,15 @@ export function readHolds(home: string): HoldsRead {
     return UNREADABLE;
   }
   try {
-    const stat = fstatSync(fd);
-    if (!stat.isFile() || stat.size > HOLDS_MAX_BYTES) return UNREADABLE;
-    const buffer = Buffer.alloc(HOLDS_MAX_BYTES + 1);
+    if (!fstatSync(fd).isFile()) return UNREADABLE;
+    const buffer = Buffer.alloc(HOLDS_MAX_BYTES);
     let length = 0;
     while (length < buffer.length) {
       const read = readSync(fd, buffer, length, buffer.length - length, null);
       if (read === 0) break;
       length += read;
     }
-    if (length > HOLDS_MAX_BYTES) return UNREADABLE;
-    return parseHolds(new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, length)));
+    return parseHolds(buffer.toString("utf8", 0, length));
   } catch {
     return UNREADABLE;
   } finally {
@@ -368,62 +376,61 @@ function placedBy(hold: Hold): HoldBy {
   return hold.by ?? "admin";
 }
 
-/** The hold the reply reports for a job that ended in the asked state. */
+/** What a job's entry reads as: its state, or `cleared` when it has none. */
 type HoldWord = "paused" | "active" | "cleared";
 
+function wordOf(hold: Hold | undefined): HoldWord {
+  return hold ? hold.state : "cleared";
+}
+
+function sameHold(a: Hold | undefined, b: Hold | undefined): boolean {
+  return a?.state === b?.state && a?.at === b?.at && a?.by === b?.by;
+}
+
+function isContactStyle(job: LabelJob): boolean {
+  return (CONTACT_STYLE_JOB_NAMES as readonly string[]).includes(job.name);
+}
+
+/** The entry the asked action leaves on a job: pause `paused`; resume `active` on a contact-style job, none on any other. */
+function targetWord(action: "pause" | "resume", job: LabelJob): HoldWord {
+  if (action === "pause") return "paused";
+  return isContactStyle(job) ? "active" : "cleared";
+}
+
 /**
- * The holds after this run, for the jobs now in the asked state (`done`):
+ * The entry this run writes for one job, or undefined to leave it as it is
+ * (`willChange`: Hermes's state is about to change):
  * - pause: `paused`, `by: resident`, now. An admin's `paused` hold is kept as
- *   it is, and so is the resident's own when the job was already paused.
+ *   it is, and so is the resident's own when the job is already paused.
  * - resume: a contact-style job holds `active`, `by: resident`, now (an
  *   admin's `active` hold is kept, and so is the resident's own when the job
- *   was already running); any other job's hold is removed, as the control
- *   plane's resume route does. A `paused` hold placed by an admin or the
- *   settings since the refusal check is left as it is.
- * Returns whether anything changed, and what the file says for each job.
+ *   is already running); any other job's entry is removed, as the control
+ *   plane's resume route does. A `paused` hold by an admin or the settings
+ *   never reaches here: the resume is refused first.
  */
-function applyHolds(
-  holds: Map<string, Hold>,
-  action: "pause" | "resume",
-  done: LabelJob[],
-  changedIds: Set<string>,
-  at: string,
-): { changed: boolean; words: Array<HoldWord | null> } {
-  let changed = false;
-  const words: Array<HoldWord | null> = [];
-  for (const job of done) {
-    const current = holds.get(job.id);
-    const by = current ? placedBy(current) : null;
-    const fresh = !changedIds.has(job.id);
-    if (action === "pause") {
-      const keep = current?.state === "paused" && (by === "admin" || (by === "resident" && fresh));
-      if (!keep) {
-        holds.set(job.id, { state: "paused", at, by: "resident" });
-        changed = true;
-      }
-      words.push("paused");
-      continue;
-    }
-    if (current?.state === "paused" && by !== "resident") {
-      words.push(null);
-      continue;
-    }
-    if ((CONTACT_STYLE_JOB_NAMES as readonly string[]).includes(job.name)) {
-      const keep = current?.state === "active" && (by === "admin" || (by === "resident" && fresh));
-      if (!keep) {
-        holds.set(job.id, { state: "active", at, by: "resident" });
-        changed = true;
-      }
-      words.push("active");
-    } else {
-      if (current) {
-        holds.delete(job.id);
-        changed = true;
-      }
-      words.push("cleared");
-    }
+function plannedHold(current: Hold | undefined, action: "pause" | "resume", job: LabelJob, willChange: boolean, at: string): { next: Hold | undefined } | undefined {
+  const by = current ? placedBy(current) : null;
+  const target = targetWord(action, job);
+  if (target === "cleared") return current ? { next: undefined } : undefined;
+  if (current?.state === target && (by === "admin" || (by === "resident" && !willChange))) return undefined;
+  return { next: { state: target, at, by: "resident" } };
+}
+
+/**
+ * A resume refused before anything changed: the holds file cannot be read
+ * (every control-plane resume path fails closed on it too), or a job of the
+ * label is held `paused` by the Edge City team or by the app's settings.
+ */
+function resumeRefusal(action: "pause" | "resume", holds: HoldsRead, jobs: LabelJob[], label: MessageLabel): CommandResult | null {
+  if (action !== "resume") return null;
+  if (holds.status === "unreadable") return refused("holds-unreadable", { label });
+  for (const job of jobs) {
+    const hold = holds.holds.get(job.id);
+    if (hold?.state !== "paused") continue;
+    if (placedBy(hold) === "admin") return refused("held-by-admin", { label });
+    if (placedBy(hold) === "desired") return refused("held-by-settings", { label });
   }
-  return { changed, words };
+  return null;
 }
 
 // ── Commands ────────────────────────────────────────────────────────────────
@@ -453,8 +460,13 @@ function hermesFailure(err: unknown): string {
 
 /**
  * pause or resume, holding the jobs lock. Refuses in this order: the job
- * store, job lookup, a resume of a job someone else paused, Hermes
- * availability. Then, for each job, Hermes's step, then the holds file once.
+ * store, job lookup, a resume the holds file does not allow, Hermes
+ * availability. Then:
+ * 1. the holds, written first, so the control plane never sees the job
+ *    changed and not yet held;
+ * 2. each job's Hermes step;
+ * 3. for a job whose Hermes step did not happen, its entry put back as it
+ *    was, so the file never claims a state Hermes refused.
  */
 function changeCommand(
   action: "pause" | "resume",
@@ -464,81 +476,103 @@ function changeCommand(
   guard: (budgetMs: number) => void,
 ): CommandResult {
   const clock = ctx.clock ?? Date.now;
+  const now = (): Date => new Date(clock());
   const timeoutMs = ctx.hermesTimeoutMs ?? HERMES_TIMEOUT_MS;
   const store = readJobsStore(home);
   if ("unreadable" in store) return refused("jobs-store-unreadable");
   const jobs = labelJobs(store.jobs, label, readInstalledIds(home));
   if (jobs.length === 0) return refused("job-missing", { label });
+  const refusal = resumeRefusal(action, readHolds(home), jobs, label);
+  if (refusal) return refusal;
 
-  const before = readHolds(home);
-  if (action === "resume" && before.status === "ok") {
-    // A job paused by the Edge City team or by the app's settings stays paused: the resident cannot override it from chat.
+  const wantEnabled = action === "resume";
+  const willChange = (job: LabelJob): boolean => storedJobEnabled(job.raw) !== wantEnabled;
+  // A resume also re-anchors a running job whose next run is already due: an
+  // earlier run that resumed it and was cut off before its re-anchor (B1).
+  const needsHermes = (job: LabelJob): boolean => willChange(job) || (wantEnabled && missedSlot(job.raw, now()));
+  if (jobs.some(needsHermes) && !ctx.hermesReady()) return refused("hermes-unavailable", { label });
+
+  // 1. The holds first: read again right before the write, and only this run's entries changed.
+  let holdsStatus: "ok" | "unreadable" = "ok";
+  const placed = new Map<string, { previous: Hold | undefined; next: Hold | undefined }>();
+  const current = readHolds(home);
+  if (current.status === "unreadable") {
+    // Pause still runs (fewer messages is the safe direction) and writes nothing; resume never runs blind.
+    if (action === "resume") return refused("holds-unreadable", { label });
+    holdsStatus = "unreadable";
+  } else {
+    const again = resumeRefusal(action, current, jobs, label);
+    if (again) return again;
+    const at = now().toISOString();
     for (const job of jobs) {
-      const hold = before.holds.get(job.id);
-      if (hold?.state !== "paused") continue;
-      if (placedBy(hold) === "admin") return refused("held-by-admin", { label });
-      if (placedBy(hold) === "desired") return refused("held-by-settings", { label });
+      const plan = plannedHold(current.holds.get(job.id), action, job, willChange(job), at);
+      if (!plan) continue;
+      placed.set(job.id, { previous: current.holds.get(job.id), next: plan.next });
+      if (plan.next) current.holds.set(job.id, plan.next);
+      else current.holds.delete(job.id);
+    }
+    if (placed.size > 0) {
+      try {
+        guard(0);
+        writeHolds(home, current.holds);
+      } catch (err) {
+        return failed(err instanceof LockLost ? "lock-lost" : "hold-write-failed", { label, applied: [], hold: null, holds: "ok" });
+      }
     }
   }
-  const wantEnabled = action === "resume";
-  if (jobs.some((job) => storedJobEnabled(job.raw) !== wantEnabled) && !ctx.hermesReady()) return refused("hermes-unavailable", { label });
 
+  // 2. Hermes.
   const results: JobResult[] = [];
   const applied: string[] = [];
-  const done: LabelJob[] = [];
+  const reached = new Set<string>();
   let failure: Failure | null = null;
-  let lockLost = false;
   let mayFire = false;
   const hermes = (args: string[]): void => {
     guard(timeoutMs);
     ctx.hermes(args);
   };
-
   for (const job of jobs) {
-    if (storedJobEnabled(job.raw) === wantEnabled) {
-      results.push({ id: job.id, changed: false });
-      done.push(job);
-      continue;
-    }
-    // Read before the resume: Hermes keeps an occurrence that passed while the job was paused as due.
-    const missed = wantEnabled && missedSlot(job.raw, new Date(clock()));
-    try {
-      hermes(["cron", action, job.id]);
-    } catch (err) {
-      if (err instanceof LockLost) {
-        lockLost = true;
-        failure = { error: "lock-lost" };
+    const result: JobResult = { id: job.id, changed: false };
+    if (willChange(job)) {
+      try {
+        hermes(["cron", action, job.id]);
+      } catch (err) {
+        // A Hermes that saved and then failed (or was killed) still changed the job: read back, and say so.
+        if (enabledIs(home, job.id, wantEnabled)) {
+          applied.push(job.id);
+          reached.add(job.id);
+          const latest = rereadJob(home, job.id);
+          if (wantEnabled && latest && missedSlot(latest, now())) mayFire = true;
+        }
+        failure = err instanceof LockLost ? { error: "lock-lost" } : { error: hermesFailure(err), step: action };
         break;
       }
-      // A Hermes that saved and then failed (or was killed) still changed the job: read back, and say so.
-      const saved = enabledIs(home, job.id, wantEnabled);
-      if (saved) {
-        applied.push(job.id);
-        done.push(job);
-        if (missed) mayFire = true;
+      if (!enabledIs(home, job.id, wantEnabled)) {
+        failure = { error: "readback-mismatch", step: action };
+        break;
       }
-      failure = { error: hermesFailure(err), step: action };
-      break;
+      applied.push(job.id);
+      result.changed = true;
     }
-    if (!enabledIs(home, job.id, wantEnabled)) {
-      failure = { error: "readback-mismatch", step: action };
-      break;
-    }
-    applied.push(job.id);
-    done.push(job);
-    const result: JobResult = { id: job.id, changed: true };
+    reached.add(job.id);
     results.push(result);
-    if (!missed) continue;
-    // AC#2: a resume asked in chat never sends the missed slot at once. Hermes's
-    // resume keeps a passed next run as due and the next tick fires it
-    // (cron/jobs.py:2080-2105); a schedule edit on a running job recomputes the
-    // next run from now (cron/jobs.py:1994-2004), so the schedule is re-applied
-    // after the resume, in its canonical form. Unlike install/jobs.ts set, this
-    // happens for a job with a delivery window too: the resident asked for the
-    // message to come back at its usual time, not now. The two Hermes commands
-    // are separate processes, so a tick between them can still fire the slot
-    // (docs/design/job-settings.md, "Residual race").
-    const cron = parseStoredCron(rawSchedule(rereadJob(home, job.id) ?? job.raw));
+    if (!wantEnabled) continue;
+    // AC#2: a resume asked in chat never sends the missed slot at once.
+    // Hermes's resume keeps a passed next run as due and the next tick fires
+    // it (cron/jobs.py:2080-2105); a schedule edit on a running job recomputes
+    // the next run from now (cron/jobs.py:1994-2004), so the schedule is
+    // re-applied after the resume, in its canonical form. The job is read
+    // again first, so the check is by Hermes's own state after the resume. A
+    // running job whose next run is already due (an earlier run cut off
+    // before its re-anchor) gets the same re-anchor, so a retry finishes it.
+    // Unlike install/jobs.ts set, this happens for a job with a delivery
+    // window too: the resident asked for the message to come back at its
+    // usual time, not now. The two Hermes commands are separate processes,
+    // so a tick between them can still fire the slot (docs/design/
+    // job-settings.md, "Resident holds").
+    const latest = rereadJob(home, job.id) ?? job.raw;
+    if (!missedSlot(latest, now())) continue;
+    const cron = parseStoredCron(rawSchedule(latest));
     if (!cron) {
       result.resumeMayFire = true;
       mayFire = true;
@@ -548,16 +582,11 @@ function changeCommand(
       hermes(["cron", "edit", job.id, "--schedule", cron.expr]);
     } catch (err) {
       mayFire = true;
-      if (err instanceof LockLost) {
-        lockLost = true;
-        failure = { error: "lock-lost" };
-      } else {
-        failure = { error: hermesFailure(err), step: "reanchor" };
-      }
+      failure = err instanceof LockLost ? { error: "lock-lost" } : { error: hermesFailure(err), step: "reanchor" };
       break;
     }
     const after = rereadJob(home, job.id);
-    if (after && !missedSlot(after, new Date(clock()))) {
+    if (after && !missedSlot(after, now())) {
       result.missedSlot = "dropped";
     } else {
       result.resumeMayFire = true;
@@ -565,37 +594,49 @@ function changeCommand(
     }
   }
 
-  // The holds: for every job now in the asked state, after a failure too, so
-  // the control plane keeps what Hermes now has. Never after a lost lock, and
-  // never into a file that could not be read (it is left as it is).
-  let holdsStatus: "ok" | "unreadable" = before.status;
-  let hold: HoldWord | null = null;
-  if (!lockLost && before.status === "ok" && done.length > 0) {
-    const current = readHolds(home);
-    if (current.status === "unreadable") {
-      holdsStatus = "unreadable";
+  // 3. Put back the entry of every job Hermes did not bring to the asked state.
+  // Only an entry that still reads as this run wrote it: anything written
+  // since is someone else's, and stays.
+  let holdError: string | undefined;
+  const undo = [...placed].filter(([id]) => !reached.has(id));
+  if (undo.length > 0) {
+    const fresh = readHolds(home);
+    if (fresh.status === "unreadable") {
+      holdError = "hold-restore-failed";
     } else {
-      const next = applyHolds(current.holds, action, done, new Set(applied), new Date(clock()).toISOString());
-      let written = !next.changed;
-      if (next.changed) {
+      let changed = false;
+      for (const [id, { previous, next }] of undo) {
+        if (!sameHold(fresh.holds.get(id), next)) continue;
+        if (previous) fresh.holds.set(id, previous);
+        else fresh.holds.delete(id);
+        changed = true;
+      }
+      if (changed) {
         try {
-          guard(0);
-          writeHolds(home, current.holds);
-          written = true;
-        } catch (err) {
-          if (err instanceof LockLost) lockLost = true;
-          failure ??= { error: err instanceof LockLost ? "lock-lost" : "hold-write-failed" };
+          writeHolds(home, fresh.holds);
+        } catch {
+          holdError = "hold-restore-failed";
         }
       }
-      const word = next.words[0] ?? null;
-      if (written && next.words.every((entry) => entry !== null && entry === word)) hold = word;
     }
   }
 
-  const tail = { hold, holds: holdsStatus };
+  // The hold the reply reports: the asked one, when the file now holds it for every job of the label.
+  let hold: HoldWord | null = null;
+  if (holdsStatus === "ok") {
+    const end = readHolds(home);
+    if (end.status === "unreadable") {
+      holdsStatus = "unreadable";
+    } else {
+      const words = jobs.map((job) => (wordOf(end.holds.get(job.id)) === targetWord(action, job) ? targetWord(action, job) : null));
+      if (words.every((word) => word !== null && word === words[0])) hold = words[0];
+    }
+  }
+
+  const tail = { hold, holds: holdsStatus, ...(mayFire ? { resumeMayFire: true } : {}) };
   if (failure) {
     const { error, step } = failure;
-    return failed(error, { ...(step ? { step } : {}), label, applied, ...tail, ...(mayFire ? { resumeMayFire: true } : {}) });
+    return failed(error, { ...(step ? { step } : {}), label, applied, ...tail, ...(holdError ? { holdError } : {}) });
   }
   return ok({ action, label, jobs: results, ...tail });
 }
@@ -653,6 +694,8 @@ export function runPauseJob(argv: string[], contextFor: (home: string) => PauseJ
     const store = readJobsStore(home);
     if ("unreadable" in store) return refused("jobs-store-unreadable");
     if (request.action === "status") return statusCommand(home, store.jobs, request.label);
+    // Looked up once before the lock too, so a home with none of the label's jobs is left untouched (no av-events/ made for the lock).
+    if (labelJobs(store.jobs, request.label!, readInstalledIds(home)).length === 0) return refused("job-missing", { label: request.label });
     const ctx = contextFor(home);
     const clock = ctx.clock ?? Date.now;
     lock = tryAcquireLock(jobsLockPath(home), { now: clock });
