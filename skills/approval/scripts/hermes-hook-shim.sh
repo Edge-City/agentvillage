@@ -42,6 +42,23 @@
 #     uutils coreutils 0.8.0, whose `%3N` prints nine digits, so `+%s%3N` is
 #     nanoseconds (19 digits) there, not milliseconds. now_ms() derives
 #     milliseconds from the digit count, and ts() keeps three fraction digits.
+#   - DATA-380 (2026-10-07), no node process on the allow and block paths
+#     (node cost 32 ms warm, 135-236 ms cold, once or twice per call); what a
+#     facade answer means is unchanged, byte for byte:
+#       * the verdict body is read in sh when it is EXACTLY the shape the core
+#         prints (approval-md src/serve/server.ts streamsBody: exit_code,
+#         stdout, stderr, both *_truncated false), its strings printable ASCII
+#         or the em dash with only the escapes \" \\ \n, its stdout empty,
+#         {} or {"action":"block","message":"..."}, and its size the bytes
+#         curl received. Every other body goes to the node parse below,
+#         unchanged (VERDICT_JS), so the sh reading can only ever agree with it;
+#       * the tool name for the log is read from the envelope's first bytes
+#         when Hermes's own layout puts it there and "tool_name" occurs once
+#         and no \u escape anywhere (grep), else by node as before;
+#       * a block's message is JSON-escaped in sh when it is printable ASCII,
+#         else by node as before;
+#       * every outcome line in the log ends with path=fast (no node process
+#         in this call) or path=node.
 # The Agent Village sandbox has one unix user, so the shim runs "by hand"
 # there (no /opt/approval/hook-home, no setuid launcher; skills/approval/
 # README.md says why). install/install_approval.ts installs this file as
@@ -150,7 +167,7 @@ unset CDPATH ENV BASH_ENV NODE_OPTIONS NODE_PATH NODE_EXTRA_CA_CERTS LD_PRELOAD 
   http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy NO_PROXY no_proxy 2>/dev/null
 
 # Every tool by absolute path, from root-owned directories only.
-for t in curl date mktemp head tr cat rm sleep stat id node; do
+for t in curl date mktemp head tr cat rm sleep stat id node grep; do
   p=""
   for d in /usr/bin /bin /usr/local/bin; do
     if [ -x "$d/$t" ]; then p="$d/$t"; break; fi
@@ -205,6 +222,8 @@ ts() {
 T0=$(now_ms)
 LOG=/dev/null
 TMP=""
+# path=node on the outcome line once any node process ran in this call (DATA-380).
+VP=fast
 
 log() {
   # Best effort: a log that cannot be written must not change the verdict.
@@ -214,16 +233,47 @@ log() {
 cleanup() { [ -n "$TMP" ] && "$T_rm" -rf "$TMP"; }
 trap cleanup EXIT
 
+# JSON.stringify({action:"block",message:$1}), in sh (DATA-380), for a
+# message of printable ASCII only (bytes 0x20-0x7E): there JSON.stringify
+# escapes `"` and `\` and nothing else. Anything else (a control character,
+# DEL, any byte above 0x7E, which node would read as UTF-8 or as U+FFFD)
+# prints nothing, and the caller asks node as before. Run in a subshell:
+# LC_ALL=C makes the range a byte range in bash, and the variables stay there.
+block_json() {
+  LC_ALL=C
+  s=$1
+  o=""
+  case $s in *[!\ -~]*) return 1 ;; esac
+  while :; do
+    case $s in *[\"\\]*) ;; *) break ;; esac
+    p=${s%%[\"\\]*}
+    s=${s#"$p"}
+    case $s in
+      \"*) o=$o$p\\\" ;;
+      *) o=$o$p\\\\ ;;
+    esac
+    s=${s#?}
+  done
+  printf '{"action":"block","message":"%s%s"}' "$o" "$s"
+}
+
 block() {
-  # $1: reason, plain text. JSON-escaped by node when available; a fixed
-  # directive otherwise, so the stdout is a block even if node is gone.
+  # $1: reason, plain text. JSON-escaped in sh, or by node when the reason is
+  # not printable ASCII; a fixed directive when node is not there, so the
+  # stdout is a block even if node is gone.
   reason="approval facade unreachable: $1"
   out=""
-  [ -n "$T_node" ] && out=$("$T_node" -e 'process.stdout.write(JSON.stringify({action:"block",message:process.argv[1]}))' "$reason" 2>/dev/null)
+  if [ -n "$T_node" ]; then
+    out=$(block_json "$reason")
+    if [ -z "$out" ]; then
+      VP=node
+      out=$("$T_node" -e 'process.stdout.write(JSON.stringify({action:"block",message:process.argv[1]}))' "$reason" 2>/dev/null)
+    fi
+  fi
   [ -n "$out" ] || out='{"action":"block","message":"approval facade unreachable"}'
   printf '%s\n' "$out"
   printf 'approval hook shim: %s\n' "$reason" >&2
-  log "outcome=block-shim reason=\"$1\""
+  log "outcome=block-shim reason=\"$1\" path=$VP"
   exit 2
 }
 
@@ -424,7 +474,53 @@ TMP=$("$T_mktemp" -d 2>/dev/null) || TMP=""
 [ -n "$TMP" ] || block "cannot create a temp directory"
 
 "$T_cat" >"$TMP/envelope" || block "cannot read the envelope from stdin"
-TOOL=$("$T_node" -e 'try{const e=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const t=e&&e.tool_name;process.stdout.write(typeof t==="string"&&/^[A-Za-z0-9_.:-]{1,64}$/.test(t)?t:"?")}catch{process.stdout.write("?")}' "$TMP/envelope" 2>/dev/null)
+
+# The tool name, for the log only: the facade reads the envelope itself, and
+# nothing here decides on it. Read in sh (DATA-380) where Hermes's own layout
+# puts it: its payload is json.dumps({"hook_event_name": event, "tool_name":
+# ..., ...}) (agent/shell_hooks.py _serialize_payload, key order is wire
+# order), so the envelope OPENS with those two keys, Python's separators or
+# compact ones. The name must already be what node's rule
+# /^[A-Za-z0-9_.:-]{1,64}$/ accepts, with no escape in it. Node's JSON.parse
+# keeps the LAST of duplicate keys, so the bytes "tool_name" must occur on one
+# line, once, and no \u escape may occur anywhere (the one way to spell a key
+# without its bytes); grep runs with LC_ALL=C so `.` crosses any byte. Every
+# other envelope prints nothing here, and node reads the name as before.
+# Where they can still differ: an envelope that is not JSON at all after that
+# opening, where node logs `?` and this logs the opening's name; the facade
+# refuses such an envelope, and the verdict never reads this name.
+tool_name_sh() {
+  LC_ALL=C
+  export LC_ALL
+  [ -n "$T_grep" ] || return 1
+  h=$("$T_head" -c 160 "$TMP/envelope" 2>/dev/null) || return 1
+  case $h in
+    '{"hook_event_name":"'*) sp="" ;;
+    '{"hook_event_name": "'*) sp=" " ;;
+    *) return 1 ;;
+  esac
+  h=${h#'{"hook_event_name":'"$sp"'"'}
+  ev=${h%%[!abcdefghijklmnopqrstuvwxyz_]*}
+  [ -n "$ev" ] && [ "${#ev}" -le 32 ] || return 1
+  h=${h#"$ev"}
+  case $h in
+    "\",$sp\"tool_name\":$sp\""*) h=${h#"\",$sp\"tool_name\":$sp\""} ;;
+    *) return 1 ;;
+  esac
+  n=${h%%[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.:-]*}
+  [ -n "$n" ] && [ "${#n}" -le 64 ] || return 1
+  case ${h#"$n"} in '",'* | '"}'*) ;; *) return 1 ;; esac
+  c=$("$T_grep" -c '"tool_name"' "$TMP/envelope" 2>/dev/null)
+  [ "$c" = 1 ] || return 1
+  "$T_grep" -q -e '"tool_name".*"tool_name"' -e '\\u' "$TMP/envelope" 2>/dev/null
+  [ $? -eq 1 ] || return 1
+  printf '%s' "$n"
+}
+TOOL=$(tool_name_sh)
+if [ -z "$TOOL" ]; then
+  VP=node
+  TOOL=$("$T_node" -e 'try{const e=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const t=e&&e.tool_name;process.stdout.write(typeof t==="string"&&/^[A-Za-z0-9_.:-]{1,64}$/.test(t)?t:"?")}catch{process.stdout.write("?")}' "$TMP/envelope" 2>/dev/null)
+fi
 log "start tool=${TOOL:-?}"
 
 # Replay. node writes body.stdout and body.stderr to files and prints
@@ -460,6 +556,166 @@ const waiting = isBlock && code === "hook-timeout" && !/WAS WITHDRAWN/.test(mess
 process.stdout.write(String(b.exit_code) + " " + (waiting ? "wait" : isBlock ? "block" : "allow") + " " + code);
 '
 
+# The same reading in sh (DATA-380), for the one body shape the core prints
+# (approval-md src/serve/server.ts streamsBody; JSON.stringify, so one line,
+# keys in this order, no space):
+#   {"exit_code":N,"stdout":"S","stderr":"E"[,"stdout_truncated":false,"stderr_truncated":false]}
+# with S decoding to "", "{}" or {"action":"block","message":"M"}, each
+# optionally followed by one newline (`approval hook hermes` prints `{}\n`
+# or the block and `\n`). It prints what VERDICT_JS prints and writes the
+# same two files, or prints NOTHING and writes nothing, and then node reads
+# the body exactly as before. So it may decline any body, and it declines
+# every body it cannot read to the byte: a size other than the bytes curl
+# received (a NUL or a newline the shell would drop), a byte outside
+# printable ASCII other than the em dash's three (any other non-ASCII, which
+# node would decode or replace with U+FFFD), an escape other than \" \\ \n,
+# a key out of order, an extra or duplicate key, a truncated stream, any
+# other stdout, a non-zero exit without a block directive (node's own
+# "BLOCK ..." reason then), or more than 16384 bytes. Its string scan is
+# strict JSON: a string ends at the first quote no backslash escapes, so a
+# string that decodes cleanly ends exactly where the shape says, and no
+# key, value or directive can hide inside it.
+# Run in a subshell: LC_ALL=C makes ${#B} a byte count and the bracket ranges
+# byte ranges in bash; nothing it sets leaks.
+NL='
+'
+EM=""
+# jdec <JSON string content>: sets JD to the decoded text; 1 if it is not
+# within the alphabet above or holds a quote no backslash escapes.
+jdec() {
+  s=$1
+  JD=""
+  case $s in
+    *[!\ -~]*)
+      [ -n "$EM" ] || EM=$(printf '\342\200\224')
+      t=$s
+      u=""
+      while :; do
+        case $t in *"$EM"*) ;; *) break ;; esac
+        u=$u${t%%"$EM"*}
+        t=${t#*"$EM"}
+      done
+      case $u$t in *[!\ -~]*) return 1 ;; esac
+      ;;
+  esac
+  k=0
+  while :; do
+    case $s in *\\*) ;; *) break ;; esac
+    k=$((k + 1))
+    [ "$k" -le 2048 ] || return 1
+    p=${s%%\\*}
+    case $p in *\"*) return 1 ;; esac
+    s=${s#*\\}
+    case $s in
+      \"*) JD=$JD$p\" ;;
+      \\*) JD=$JD$p\\ ;;
+      n*) JD=$JD$p$NL ;;
+      *) return 1 ;;
+    esac
+    s=${s#?}
+  done
+  case $s in *\"*) return 1 ;; esac
+  JD=$JD$s
+}
+verdict_sh() {
+  LC_ALL=C
+  case $SIZE in '' | *[!0-9]*) return 1 ;; esac
+  [ "$SIZE" -ge 1 ] && [ "$SIZE" -le 16384 ] || return 1
+  B=""
+  # A newline means more than one line: not the shape (read returns 0).
+  IFS= read -r B <"$TMP/body" && return 1
+  [ "${#B}" -eq "$SIZE" ] || return 1
+  case $B in '{"exit_code":'*) ;; *) return 1 ;; esac
+  r=${B#'{"exit_code":'}
+  X=${r%%[!0-9]*}
+  case $X in 0 | [1-9] | [1-9][0-9] | [1-9][0-9][0-9]) ;; *) return 1 ;; esac
+  [ "$X" -le 255 ] || return 1
+  r=${r#"$X"}
+  case $r in ',"stdout":"'*) r=${r#',"stdout":"'} ;; *) return 1 ;; esac
+  case $r in *'","stderr":"'*) ;; *) return 1 ;; esac
+  S=${r%%'","stderr":"'*}
+  r=${r#*'","stderr":"'}
+  case $r in
+    *'","stdout_truncated":false,"stderr_truncated":false}') E=${r%'","stdout_truncated":false,"stderr_truncated":false}'} ;;
+    *'"}') E=${r%'"}'} ;;
+    *) return 1 ;;
+  esac
+  jdec "$S" || return 1
+  D=$JD
+  jdec "$E" || return 1
+  E=$JD
+  # The directive, as JSON.parse(stdout.trim()) reads it, for three spellings.
+  M=""
+  BLK=0
+  d=${D%"$NL"}
+  case $d in
+    '' | '{}') ;;
+    '{"action":"block","message":"'*'"}')
+      d=${d#'{"action":"block","message":"'}
+      d=${d%'"}'}
+      jdec "$d" || return 1
+      M=$JD
+      BLK=1
+      ;;
+    *) return 1 ;;
+  esac
+  [ "$X" -eq 0 ] || [ "$BLK" = 1 ] || return 1
+  # code: the first `"code"\s*:\s*"<1-80 of [A-Za-z0-9_:.-]>"` in stderr
+  # (\s here is a space or a newline, the only blanks in this alphabet; the
+  # run of class characters after the quote is the capture, so it must be
+  # 1-80 long and end at a quote), else the message's leading
+  # `<1-80 of [A-Za-z0-9_.:-]>: ` (the class holds `:`, so the run up to the
+  # first other character must end in `:` and be followed by a space).
+  W=" $NL"
+  C=""
+  x=$E
+  k=0
+  while :; do
+    case $x in *'"code"'*) ;; *) break ;; esac
+    k=$((k + 1))
+    [ "$k" -le 16 ] || return 1
+    x=${x#*'"code'}
+    case $x in '"'*) ;; *) continue ;; esac
+    y=${x#?}
+    y=${y#"${y%%[!$W]*}"}
+    case $y in :*) y=${y#:} ;; *) continue ;; esac
+    y=${y#"${y%%[!$W]*}"}
+    case $y in '"'*) y=${y#?} ;; *) continue ;; esac
+    c=${y%%[!A-Za-z0-9_:.-]*}
+    [ -n "$c" ] && [ "${#c}" -le 80 ] || continue
+    case ${y#"$c"} in '"'*) C=$c; break ;; esac
+  done
+  if [ -z "$C" ]; then
+    c=${M%%[!A-Za-z0-9_.:-]*}
+    case $c in
+      ?*:)
+        case ${M#"$c"} in ' '*) [ "${#c}" -gt 81 ] || C=${c%:} ;; esac
+        ;;
+    esac
+  fi
+  K=allow
+  if [ "$BLK" = 1 ]; then
+    K=block
+    if [ "$C" = hook-timeout ]; then
+      # /WAS WITHDRAWN/ on the message with every NOTHING WAS WITHDRAWN cut
+      # out, left to right, as String.replace with /g does.
+      x=$M
+      o=""
+      k=0
+      while :; do
+        case $x in *'NOTHING WAS WITHDRAWN'*) ;; *) break ;; esac
+        k=$((k + 1))
+        [ "$k" -le 64 ] || return 1
+        o=$o${x%%'NOTHING WAS WITHDRAWN'*}
+        x=${x#*'NOTHING WAS WITHDRAWN'}
+      done
+      case $o$x in *'WAS WITHDRAWN'*) ;; *) K=wait ;; esac
+    fi
+  fi
+  printf '%s' "$D" >"$TMP/out" && printf '%s' "$E" >"$TMP/err" || return 1
+  printf '%s %s %s' "$X" "$K" "$C"
+}
+
 # A re-post that fails (the window's last seconds cut a request short, or the
 # facade went away mid-wait) ends the wait with the facade's own last block,
 # which is already a refusal: nothing on this path can turn into an allow.
@@ -474,7 +730,7 @@ retry_failed() {
   fi
   "$T_cat" "$TMP/last.out"
   "$T_cat" "$TMP/last.err" >&2
-  log "outcome=block http=200 exit=$LAST_EXIT code=${LAST_CODE:--} tool=${TOOL:-?} attempt=$attempt reason=\"re-post: $1\""
+  log "outcome=block http=200 exit=$LAST_EXIT code=${LAST_CODE:--} tool=${TOOL:-?} attempt=$attempt reason=\"re-post: $1\" path=$VP"
   exit "$LAST_EXIT"
 }
 
@@ -498,13 +754,22 @@ while :; do
     set --
   fi
   P0=$(now_ms)
+  # `%{size_download}` is the bytes curl wrote to the body file: the sh
+  # reading of the verdict compares it with what the shell read (DATA-380).
   CODE=$(printf 'header = "%s: Bearer %s"\n' "$AUTH_HEADER" "$TOKEN" | "$T_curl" -q --config - \
     --silent --show-error --max-time "$mt" --proto "$PROTO" --proto-redir "$PROTO" "$@" \
     --request POST --header 'Content-Type: application/json' \
     --data-binary @"$TMP/envelope" \
-    --output "$TMP/body" --write-out '%{http_code}' \
+    --output "$TMP/body" --write-out '%{http_code} %{size_download}' \
     "$BASE/hook/hermes" 2>"$TMP/curl.err")
   RC=$?
+  SIZE=""
+  case $CODE in
+    *' '*)
+      SIZE=${CODE#* }
+      CODE=${CODE%% *}
+      ;;
+  esac
   if [ $RC -ne 0 ]; then
     why=$("$T_head" -c 200 "$TMP/curl.err" 2>/dev/null | "$T_tr" -d '\n"')
     # The first post ran into the ceiling: the facade may well have opened the
@@ -514,17 +779,22 @@ while :; do
       [ $(( $(now_ms) - P0 )) -ge $((MAX_TIME * 1000)) ]; then
       FIRST_TIMEOUT="transport failure (curl exit $RC: $why)"
       [ $(( $(now_ms) + 5000 )) -lt "$DEADLINE" ] || block "$FIRST_TIMEOUT"
-      log "outcome=wait http=000 curl=$RC tool=${TOOL:-?} attempt=$attempt reason=\"first post timed out; re-asking\""
+      log "outcome=wait http=000 curl=$RC tool=${TOOL:-?} attempt=$attempt reason=\"first post timed out; re-asking\" path=$VP"
       "$T_sleep" 5
       continue
     fi
     retry_failed "transport failure (curl exit $RC: $why)"
   fi
   if [ "$CODE" != "200" ]; then
+    VP=node
     err=$("$T_node" -e 'try{const b=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const c=b&&b.error&&b.error.code;process.stdout.write(typeof c==="string"?" "+c.slice(0,80):"")}catch{}' "$TMP/body" 2>/dev/null)
     retry_failed "HTTP $CODE$err"
   fi
-  VERDICT=$("$T_node" -e "$VERDICT_JS" "$TMP/body" "$TMP/out" "$TMP/err" 2>/dev/null)
+  VERDICT=$(verdict_sh)
+  if [ -z "$VERDICT" ]; then
+    VP=node
+    VERDICT=$("$T_node" -e "$VERDICT_JS" "$TMP/body" "$TMP/out" "$TMP/err" 2>/dev/null)
+  fi
   case $VERDICT in
     "") retry_failed "body could not be read" ;;
     "BLOCK "*) retry_failed "${VERDICT#BLOCK }" ;;
@@ -543,11 +813,11 @@ while :; do
     KIND=block
     break
   fi
-  log "outcome=wait http=200 exit=$EXIT code=${RCODE:--} tool=${TOOL:-?} attempt=$attempt"
+  log "outcome=wait http=200 exit=$EXIT code=${RCODE:--} tool=${TOOL:-?} attempt=$attempt path=$VP"
   "$T_sleep" 5
 done
 unset TOKEN
 "$T_cat" "$TMP/out"
 "$T_cat" "$TMP/err" >&2
-log "outcome=$KIND http=200 exit=$EXIT code=${RCODE:--} tool=${TOOL:-?} attempt=$attempt"
+log "outcome=$KIND http=200 exit=$EXIT code=${RCODE:--} tool=${TOOL:-?} attempt=$attempt path=$VP"
 exit "$EXIT"
