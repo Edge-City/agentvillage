@@ -111,7 +111,7 @@ MCP tools (Index Network, Hermes built-ins) or HTTP recipes in skills (`edgeos/S
 Weave URLs into prose. Links must be **secondary**: strip every URL and the sentence still reads. No link strips, bullet lists of links, pipe rows, tables, or standalone link-label paragraphs.
 
 - Link a person's name to `https://agents.edgecity.live/rolodex?person=<userId>` (`userUrl`) on first mention.
-- The message action copies the card's `acceptUrl`: `[accept and message Name](acceptUrl)`. Do not build `/o/<id>` for that link.
+- The message action copies the card's `acceptUrl`: `[accept and message Name](acceptUrl)`. Do not build `/o/<id>` for that link. Opening it accepts the introduction at once and opens Telegram with that person: say so in plain words, and never present it as a look or a preview.
 - Link a signal to `https://agents.edgecity.live/intents?intent=<intentId>` (`intentUrl`) when you name it.
 - Those three are the only links you may assemble, and only from an id a tool just returned. Do not edit, shorten, or proxy them.
 - Send a signed accept link (`acceptUrl`) only in the resident's own private chat, never in a group or shared session; there, write the action as plain text.
