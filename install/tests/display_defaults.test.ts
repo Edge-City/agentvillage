@@ -7,8 +7,8 @@ import YAML from "yaml";
 
 import { DISPLAY_DEFAULTS_ENV, configureTelegramDisplay } from "../display_defaults";
 
-// DATA-318: residents never see reasoning on Telegram and see one quiet,
-// edited-in-place progress message per reply. Telegram-scoped keys only.
+// DATA-318: residents never see reasoning on Telegram. DATA-409: and no progress message
+// either (tool_progress off; the installer wrote `new` until 2026-10-07). Telegram-scoped keys only.
 
 const ORIGINAL = { HERMES_HOME: process.env.HERMES_HOME, [DISPLAY_DEFAULTS_ENV]: process.env[DISPLAY_DEFAULTS_ENV] };
 let logSpy: ReturnType<typeof spyOn>;
@@ -28,7 +28,7 @@ afterEach(() => {
 
 const APPLIED = {
   show_reasoning: false,
-  tool_progress: "new",
+  tool_progress: "off",
   tool_progress_grouping: "accumulate",
   interim_assistant_messages: false,
   streaming: false,
@@ -221,7 +221,7 @@ test("idempotent: a second run changes nothing and does not rewrite the file (co
     "  platforms:",
     "    telegram:",
     "      show_reasoning: false",
-    "      tool_progress: new",
+    "      tool_progress: off",
     "      tool_progress_grouping: accumulate",
     "      interim_assistant_messages: false",
     "      streaming: false",
@@ -231,6 +231,27 @@ test("idempotent: a second run changes nothing and does not rewrite the file (co
   const path2 = withText(commented);
   expect(configureTelegramDisplay()).toEqual([]);
   expect(readFileSync(path2, "utf8")).toBe(commented);
+});
+
+test("DATA-409: a box still holding the installer's old `tool_progress: new` flips to off; other hand-set modes stay", () => {
+  // The DATA-318 file as every box had it before DATA-409: `new` is the old default, not a choice.
+  const path = withDoc({ display: { platforms: { telegram: { ...APPLIED, tool_progress: "new" } } } });
+  expect(configureTelegramDisplay()).toEqual(["tool_progress"]);
+  expect(telegramOf(path)).toEqual(APPLIED);
+  expect(logged()).toContain("tool_progress=off");
+
+  // A mode a resident chose by hand is a choice and is kept, whatever it is.
+  for (const chosen of ["all", "verbose", "log"]) {
+    const kept = withDoc({ display: { platforms: { telegram: { ...APPLIED, tool_progress: chosen } } } });
+    expect(configureTelegramDisplay()).toEqual([]);
+    expect(telegramOf(kept).tool_progress).toBe(chosen);
+    expect(logged()).toContain("kept as set by hand: tool_progress");
+  }
+
+  // A legacy per-platform override still counts as hand-set even when the new key says `new`.
+  const legacy = withDoc({ display: { tool_progress_overrides: { telegram: "all" }, platforms: { telegram: { ...APPLIED, tool_progress: "new" } } } });
+  expect(configureTelegramDisplay()).toEqual([]);
+  expect(telegramOf(legacy).tool_progress).toBe("new");
 });
 
 test("idempotent with hand-set values: a second run leaves them and the file alone", () => {
