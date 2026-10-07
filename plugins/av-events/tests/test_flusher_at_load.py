@@ -333,3 +333,89 @@ def test_a_held_lock_never_blocks_the_load(plugin, ctx, monkeypatch, home, fast)
         assert time.monotonic() - started < 1.0
     finally:
         held.close()
+
+
+# --------------------------------------------------------------------------
+# Fix round (refute B1, S1, N5): the lock is never left free beside a live tail
+# --------------------------------------------------------------------------
+
+
+def test_a_flusher_without_the_lock_takes_it_when_the_holder_goes(plugin, ctx, monkeypatch, home, av, fast):
+    """B1: a gateway that loads beside the old holder (a restart overlap) and
+    gets an event before the holder exits is a flusher with no lock. It must
+    still take the lock, or the next dashboard or CLI would find it free."""
+    active_env(monkeypatch)
+    collector_mod, _ = modules(plugin)
+    held = hold_tail_lock(home)
+    try:
+        plugin.register(ctx)
+        gateway = plugin._COLLECTOR
+        assert not gateway._flushing
+        ctx.fire("on_session_start", session_id="s1", model="m", platform="telegram")
+        assert gateway._flushing and gateway._tail_lock is None
+    finally:
+        held.close()  # the old holder exits
+    assert wait_for(lambda: gateway._tail_lock is not None)
+    beside = collector_mod.Collector()
+    try:
+        beside.recover_on_load()
+        assert not beside._flushing, "a process beside the live gateway became a flusher"
+        assert not beside._atexit_registered
+        assert beside._tail_lock is None
+    finally:
+        beside.retire()
+
+
+def test_a_holder_refused_once_takes_the_lock_back_after_its_backoff(plugin, ctx, monkeypatch, home, av, fast):
+    """B1: a transient 401 hands the lock on; after the backoff and a 202 the
+    holder takes it back (nobody else did)."""
+    collector_mod, core = modules(plugin)
+    monkeypatch.setattr(core, "FLUSH_INTERVAL_S", 0.0)
+    monkeypatch.setattr(collector_mod, "AUTH_BACKOFF_S", 0.3)
+    ledger(home, X("silent-1"))
+    with av.StubIngest(statuses=[401, 202]) as ingest:
+        active_env(monkeypatch, url=ingest.url)
+        plugin.register(ctx)
+        collector = plugin._COLLECTOR
+        assert wait_for(lambda: collector.counters.get("ingest_auth_rejected") == 1)
+        assert wait_for(lambda: ingest.request_count >= 2 and collector._tail_lock is not None)
+        assert [e["event_type"] for e in ingest.received] == ["cron.run"]
+        assert collector.counters.get("ingest_auth_rejected") == 1
+
+
+def test_a_tripped_breaker_hands_the_lock_to_a_standby(plugin, monkeypatch, home, av, fast):
+    """S1: `plugin_disabled` is for the life of the process and tails nothing,
+    so its lock goes to a standby process, which reports the run."""
+    active_env(monkeypatch)
+    collector_mod, _ = modules(plugin)
+    gateway = collector_mod.Collector()
+    beside = collector_mod.Collector()
+    try:
+        gateway.recover_on_load()
+        beside.recover_on_load()
+        assert gateway._tail_lock is not None and not beside._flushing
+        gateway.plugin_disabled = True  # what the process breaker sets
+        ledger(home, X("silent-1"))
+        assert wait_for(lambda: gateway._tail_lock is None and beside._tail_lock is not None)
+        assert beside._flushing
+        assert wait_for(lambda: [e["payload"]["execution_id"] for e in cron_runs(av, beside)] == [X("silent-1")])
+    finally:
+        gateway.retire()
+        beside.retire()
+
+
+def test_a_collector_retired_during_its_pass_does_not_tail(plugin, monkeypatch, home, fast):
+    """N5: `_stop` is re-checked between the flush pass and the cron tail."""
+    active_env(monkeypatch)
+    collector_mod, _ = modules(plugin)
+    collector = collector_mod.Collector()
+    collector._ensure_buffer()
+    tails = []
+    monkeypatch.setattr(collector, "tick", lambda: collector._stop.set())
+    monkeypatch.setattr(collector, "cron_tick", lambda *a, **k: tails.append(1))
+    collector._ensure_thread()
+    try:
+        assert wait_for(lambda: collector._thread is not None and not collector._thread.is_alive())
+        assert tails == []
+    finally:
+        collector.retire()

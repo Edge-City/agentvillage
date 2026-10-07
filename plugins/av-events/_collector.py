@@ -640,14 +640,19 @@ class Collector:
                 pass
 
     def _take_over_cron_tail(self) -> bool:
-        """On standby: once every `CRON_POLL_INTERVAL_S`, try the cron tail
-        lock. Holding it makes this thread the flusher, so the tail outlives
-        the process that held it (a CLI that overlapped a gateway restart, a
-        dashboard stopped beside a quiet gateway). Flusher thread only."""
+        """Without the lock: once every `CRON_POLL_INTERVAL_S`, try the cron
+        tail lock. Holding it makes this thread the flusher, so the tail
+        outlives the process that held it (a CLI that overlapped a gateway
+        restart, a dashboard stopped beside a quiet gateway), and a flusher
+        that started on an event before it held the lock takes it once it is
+        free. Not while ingest's refusal of this process's token is waited
+        out: that refusal is what handed the lock on. Flusher thread only."""
         now = time.monotonic()
         if now - self._tail_try_at < CRON_POLL_INTERVAL_S:
             return False
         self._tail_try_at = now
+        if self._auth_blocked_until:
+            return False
         if self.plugin_disabled or not self.config.active or self.config.null_sink:
             return False
         if not self._claim_cron_tail():
@@ -673,7 +678,10 @@ class Collector:
         process that takes the cron tail lock (`_claim_cron_tail`) starts the
         flusher here even with nothing waiting, and any other active process
         starts its thread on standby (`_take_over_cron_tail`). Not with a null
-        sink: there is nowhere to send what the tail would buffer.
+        sink: there is nowhere to send what the tail would buffer. The
+        holder's flusher runs `outcome_tick` on the tail's cadence too, so the
+        evening outcome ask (DATA-42) confirms and reads answers from load on
+        a quiet tenant as well.
 
         Local file operations only; never raises.
         """
@@ -1566,18 +1574,29 @@ class Collector:
             self._wake.clear()
             if self._stop.is_set():
                 return
-            if not self._flushing:
-                # Standby (DATA-362): nothing of this process's own to send,
-                # and another process holds the cron tail.
+            # DATA-362. A tripped process breaker tails nothing from here on,
+            # so the lock goes to a process that can.
+            if self.plugin_disabled and self._tail_lock is not None:
+                self._release_cron_tail()
+            # Every thread without the lock keeps trying for it, a flusher
+            # too: one that started on an event (or a backlog) before the
+            # holder went must still take it, or a dashboard or CLI loading
+            # beside this live gateway would find it free.
+            if self._tail_lock is None:
                 try:
-                    if not self._take_over_cron_tail():
-                        continue
+                    self._take_over_cron_tail()
                 except Exception:  # noqa: BLE001 - the flusher never dies
-                    continue
+                    pass
+            if not self._flushing:
+                # Standby: nothing of this process's own to send, and another
+                # process holds the cron tail.
+                continue
             try:
                 self.tick()
             except Exception:  # noqa: BLE001 - the flusher never dies
                 pass
+            if self._stop.is_set():
+                return  # retired during the pass: the successor tails
             if time.monotonic() - self._cron_at >= CRON_POLL_INTERVAL_S:
                 self._cron_at = time.monotonic()
                 self.cron_tick()
