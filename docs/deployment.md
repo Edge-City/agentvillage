@@ -376,16 +376,21 @@ Conversation update = `Edge — negotiation summary`; Evening questions =
 Usage report = `Edge — token usage audit` (opt-in). Template jobs added by an
 operator carry their base prompt's line. The agent stops and restarts any of
 the five on a resident's request (`workspace/AGENTS.md`, "Cron schedule") with
-`skills/index-network/scripts/pause-job.ts` (DATA-376). The script pauses or
-resumes the job through the Hermes CLI under the tenant's jobs lock, and
-records a `by: resident` hold in `av-events/job-holds.json`, the control
-plane's holds file (docs/design/job-settings.md, "Resident holds"). With the
-DATA-376 control-plane half deployed, an update or roll leaves a
+`skills/index-network/scripts/pause-job.ts` (DATA-376). Under the tenant's
+jobs lock, the script first records a `by: resident` hold in
+`av-events/job-holds.json`, the control plane's holds file, then pauses or
+resumes the job through the Hermes CLI; a job whose Hermes step fails gets
+its old entry back (docs/design/job-settings.md, "Resident holds"). Writing
+the hold first closes the window the control plane's docs/JOBS.md ("Two
+writers") asks the overlay to close. A resume is refused when the job is held
+paused by an admin or the settings, or when the holds file cannot be read.
+With the DATA-376 control-plane half deployed, an update or roll leaves a
 resident-held job paused, and a newer switch in the app wins. A resume
-re-applies the schedule, so no missed slot fires at once; the race of two CLI
-processes stays, as for `jobs.ts set --enabled true`. Until the control-plane
-half is deployed the hold is written but not honoured, so this overlay ships
-in the tag after that deploy. Times stay fixed.
+re-applies the schedule, so no missed slot fires at once, and a retry
+finishes a re-apply that was cut off; the race of two CLI processes stays, as
+for `jobs.ts set --enabled true`. Until the control-plane half is deployed
+the hold is written but not honoured, so this overlay ships in the tag after
+that deploy. Times stay fixed.
 av-events strips one trailing manage line (`normalise.manage_line` in
 `plugins/av-events/outcome_question.json`) before matching the evening
 outcome question, so a model that adds the line to the question still arms

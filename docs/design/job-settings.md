@@ -717,8 +717,8 @@ that keeps `jobs.json`: `install/tests/job_commands.test.ts`, "what a roll keeps
 A resident can stop and restart a scheduled message from chat. The agent runs
 `bun skills/index-network/scripts/pause-job.ts pause|resume --label "<Label>"`
 (`workspace/AGENTS.md`, "Cron schedule"); `status` reads the same state and changes nothing. The
-script pauses or resumes the label's installed jobs through the Hermes CLI, then records a hold in
-the control plane's holds file, `$HERMES_HOME/av-events/job-holds.json`. The control plane reads
+script records a hold in the control plane's holds file, `$HERMES_HOME/av-events/job-holds.json`,
+then pauses or resumes the label's installed jobs through the Hermes CLI. The control plane reads
 that file before its contact-style apply and its job-settings apply, and leaves a held job as it
 is.
 
@@ -735,9 +735,16 @@ plane's, one line:
   resident's own agent placed the hold. A hold without `by` is an admin's, as before. The
   control-plane half of DATA-376 adds `resident` to its readers; until it is deployed, a
   resident hold reads as an admin's.
-- The script reads at most 64 KiB, like the control plane's `head -c 65536`. A file that is
-  larger, not JSON, not a JSON object, not a regular file or not UTF-8 is unreadable. The Hermes
-  action still runs, the file is never written, and the reply says `"holds": "unreadable"`.
+- The script reads the file as the control plane does (`head -c 65536`, then `parseHolds`): its
+  first 65536 bytes, decoded as UTF-8 with replacement characters, then parsed. A longer file is
+  not unreadable by itself: its first 64 KiB are what is parsed. Unreadable means a prefix that is
+  not JSON or not a JSON object, a path that is not a regular file, or a failed read. So a hold the
+  control plane sees, the script sees too, whatever padding or stray bytes the file carries.
+- On an unreadable file a **resume is refused** (`holds-unreadable`, exit 2, before any Hermes
+  call), as every control-plane resume path fails closed on it (the job-settings apply sends no
+  resume, the contact style only pauses, the run triggers skip). A **pause still runs** (fewer
+  messages is the safe direction) and the file is never written; the reply says
+  `"hold": null, "holds": "unreadable"`.
 - An entry is kept only when its id has Hermes's shape (`^[0-9a-f]{12}$`) and its state is one of
   the two. Its `at` is kept only when it is an ISO time, its `by` only when it is one of the three
   words. Everything else is dropped on the next write, as the control plane's writer drops it.
@@ -753,6 +760,7 @@ What a run does to a job's hold:
 | pause | `paused` by `resident` | kept if the job was already paused; else a new `at` |
 | resume | `paused` by an admin (or no `by`) | refused, `held-by-admin`, exit 2, before any Hermes call |
 | resume | `paused` by `desired` | refused, `held-by-settings`, exit 2 |
+| resume | the file is unreadable | refused, `holds-unreadable`, exit 2 |
 | resume, contact-style job | none, `active`, or `paused` by `resident` | `active`, `by: resident`, `at` now; an admin's `active` is kept |
 | resume, any other job | none, `active`, or `paused` by `resident` | removed |
 
@@ -760,21 +768,34 @@ This follows the control plane's own pause and resume routes (cp#87): a pause ho
 any job; a resume holds `active` for a contact-style job (otherwise the contact-style apply would
 set it to the style) and removes the hold of any other job.
 
-**Resume.** If the job's stored next run is already due, the script re-applies the schedule after
-the resume, as `set --enabled true` does (§2, "Pause, resume and Hermes's catch-up"). Unlike `set`,
-it does so for a job with a delivery window too: a message restarted from chat comes back at its
-usual time, never at once. A stored schedule that is not canonical is not guessed at; the reply
-says `resumeMayFire: true`. The race between the two CLI processes stays.
+**Resume.** After the resume the script reads the job again. If its next run is already due, it
+re-applies the schedule, as `set --enabled true` does (§2, "Pause, resume and Hermes's
+catch-up"). Unlike `set`, it does so for a job with a delivery window too: a message restarted
+from chat comes back at its usual time, never at once. A job that is already running but whose
+next run is due gets the same re-anchor, so a retry after a run cut off between its resume and
+its re-anchor (`reanchor` or `lock-lost`) finishes the job. The cost: a running job asked to
+resume in the very minute of its own slot loses that slot. A stored schedule that is not canonical
+is not guessed at; the reply says `resumeMayFire: true`, on the job and at the top. The race
+between the two CLI processes stays.
 
 **The lock.** Pause and resume take the tenant's jobs lock (`av-events/jobs.lock`, §2), so the
 script never runs beside a `jobs.ts` command; a held lock is `busy`, exit 4. The control plane's
 own holds writes do not take this lock (they run under its rewire lease). The script reads the
 file again just before it writes, so a control-plane write can be lost only if it lands between
-that read and the rename.
+that read and the rename. The control plane's compare-and-swap (a digest check, then `mv -f`) has
+the same kind of gap: the script's rename landing between that check and the `mv` is lost, and
+the resident hold with it. Both windows are milliseconds wide.
 
-**Order and retries.** The hold is written after Hermes's step. After a failure it is still
-written for the jobs Hermes already changed, so the control plane keeps what Hermes now has. Every
-step is idempotent: a second pause changes nothing and calls Hermes zero times.
+**Order and retries.** The hold is written first, for every job of the label, then Hermes runs.
+So the control plane never finds a job paused by the resident and not yet held: a contact-style
+apply or a job-settings resume landing while the script runs sees the hold and leaves the job
+(cp `docs/JOBS.md`, "Two writers", asked for this). If a job's Hermes step then fails, is cut off
+by a lost lock, or reads back wrong, the script puts that job's entry back as it read it, but only
+while the entry still reads as the script wrote it (anything written since is someone else's and
+stays). A failed put-back is reported as `holdError: "hold-restore-failed"` beside the Hermes
+error. The reply's `hold` is the asked hold when the file holds it for every job of the label at
+the end, else `null`. Every step is idempotent: a second pause changes nothing and calls Hermes
+zero times, and a retry after any failure converges.
 
 The control-plane side (the third `by` word, what undoes a resident hold, the settings GET's
 `hold`) is `docs/JOBS.md` in the control-plane repo. Tests: `install/tests/pause_job.test.ts`.
