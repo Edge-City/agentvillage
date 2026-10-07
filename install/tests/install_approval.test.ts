@@ -24,6 +24,10 @@ import {
   APPROVAL_ROUTED_SHA256,
   gateReceiptLine,
   lastInstallRouted,
+  mainCli,
+  PREWARM_SESSION,
+  prewarmApproval,
+  prewarmCli,
   ApprovalInstallError,
   ENV_NAME,
   SHIM_TOOLS,
@@ -1961,5 +1965,134 @@ describe("DATA-234 shim: the co-located facade (token file, loopback listener, u
       expect(JSON.parse(r.stdout).message).toContain(needle);
       expect(r.calls).toBe(0);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DATA-379: the pre-warm (`--prewarm`): the live fire's request, once, through
+// the installed shim; labelled, never re-asked, never fatal
+// ---------------------------------------------------------------------------
+
+describe("DATA-379: the pre-warm", () => {
+  /**
+   * An installed gate whose shim is the fixture's copy (fake curl, date, stat), so the pre-warm
+   * runs the real shim code end to end. The fake curl's first call also keeps the envelope it
+   * posted and the environment it ran in.
+   */
+  function prewarmTenant(mode: string): { home: string; fx: ReturnType<typeof shimFixture>; o: ApprovalOptions } {
+    const home = tenant();
+    const o = opts();
+    installApproval(SOURCE_SKILLS, o);
+    const fx = shimFixture(mode);
+    writeFileSync(approvalShimPath(), readFileSync(join(fx.root, "hermes-hook-shim.sh")), { mode: 0o700 });
+    chmodSync(approvalShimPath(), 0o700);
+    // The marker records the shim the gate runs; --check compares it (shim-hash-mismatch).
+    const marker = JSON.parse(readFileSync(approvalSurfacePath(), "utf8"));
+    marker.shim_sha256 = createHash("sha256").update(readFileSync(approvalShimPath())).digest("hex");
+    writeFileSync(approvalSurfacePath(), JSON.stringify(marker));
+    writeFileSync(
+      join(fx.state, "after.1"),
+      `f=$(grep '^@' '${fx.state}/argv.1' | head -n 1)\ncp "\${f#@}" '${fx.state}/envelope.1'\nenv > '${fx.state}/env.1'\n`,
+    );
+    return { home, fx, o };
+  }
+  const hookLog = (home: string) => {
+    const path = join(home, "agent-hooks", "approval-hook.log");
+    return existsSync(path) ? readFileSync(path, "utf8") : "";
+  };
+  const calls = (fx: ReturnType<typeof shimFixture>) =>
+    existsSync(join(fx.state, "count")) ? Number(readFileSync(join(fx.state, "count"), "utf8")) : 0;
+  const lastJson = () => JSON.parse(logs.at(-1)!);
+
+  test("a facade block: one post of the live fire's request, every log line labelled source=prewarm, nothing but the log written", () => {
+    const { home, fx } = prewarmTenant("block");
+    const before = bytes(home);
+    const marker = readFileSync(approvalSurfacePath(), "utf8");
+    logs = [];
+    expect(prewarmCli(["--prewarm"])).toBe(0);
+    const out = lastJson();
+    expect(out).toMatchObject({ prewarm: "av-approval", outcome: "facade-block", reason: null });
+    expect(Number.isInteger(out.elapsed_ms)).toBe(true);
+    expect(calls(fx)).toBe(1);
+    // The request is the live fire's: terminal, no workdir (refused before the policy, appends nothing).
+    const envelope = JSON.parse(readFileSync(join(fx.state, "envelope.1"), "utf8"));
+    expect(envelope).toMatchObject({ hook_event_name: "pre_tool_call", tool_name: "terminal", session_id: PREWARM_SESSION });
+    expect(envelope.tool_input).toEqual({ command: "ls /tmp" });
+    // The shim got the pre-warm's fixed settings and only the names it reads from .env.
+    const env = readFileSync(join(fx.state, "env.1"), "utf8");
+    expect(env).toContain("APPROVAL_HOOK_SOURCE=prewarm\n");
+    expect(env).toContain("APPROVAL_HOOK_WAIT_S=0\n");
+    expect(env).not.toContain("AV_EVENTS_TOKEN");
+    const lines = hookLog(home).trim().split("\n");
+    expect(lines.length).toBeGreaterThanOrEqual(2);
+    for (const line of lines) expect(line).toMatch(/ source=prewarm elapsed_ms=\d+$/);
+    expect(lines.at(-1)).toContain("outcome=block http=200 exit=2");
+    expect(hookLog(home)).not.toContain(TOKEN);
+    expect(logs.join("\n")).not.toContain(TOKEN);
+    expect(bytes(home)).toEqual(before);
+    expect(readFileSync(approvalSurfacePath(), "utf8")).toBe(marker);
+  }, 120_000);
+
+  test("a hook-timeout answer is not waited on: one post, no outcome=wait line, although .env sets a 280 s window", () => {
+    const { home, fx } = prewarmTenant("waiting");
+    expect(readFileSync(join(home, ".env"), "utf8")).toContain("APPROVAL_HOOK_WAIT_S=280");
+    expect(prewarmApproval().outcome).toBe("facade-block");
+    expect(calls(fx)).toBe(1);
+    expect(hookLog(home)).not.toContain("outcome=wait");
+    expect(hookLog(home)).toContain("outcome=block");
+  }, 120_000);
+
+  test("a failure is logged and ignored: unreachable, hung, no shim, gate off; exit 0 each time and --check unchanged", () => {
+    const { home, fx, o } = prewarmTenant("unreachable");
+    logs = [];
+    expect(checkCli(["--check"], o)).toBe(0);
+    const check = logs.at(-1);
+    logs = [];
+    expect(prewarmCli(["--prewarm"])).toBe(0);
+    expect(lastJson()).toMatchObject({ outcome: "shim-block", reason: null });
+    expect(hookLog(home)).toMatch(/outcome=block-shim reason="transport failure \(curl exit 7[^\n]* source=prewarm elapsed_ms=\d+\n$/);
+    logs = [];
+    expect(checkCli(["--check"], o)).toBe(0);
+    expect(logs.at(-1)).toBe(check);
+
+    // A facade that hangs is cut at the bound.
+    writeFileSync(join(fx.state, "mode"), "first-timeout");
+    rmSync(join(fx.state, "count"));
+    const hung = prewarmApproval({ timeoutMs: 400 });
+    expect(hung).toMatchObject({ outcome: "error", reason: "timed-out" });
+
+    rmSync(approvalShimPath());
+    logs = [];
+    expect(prewarmCli(["--prewarm"])).toBe(0);
+    expect(lastJson()).toEqual({ prewarm: "av-approval", outcome: "skipped", reason: "shim-missing", elapsed_ms: null });
+
+    tenant({ env: {} });
+    expect(prewarmApproval()).toEqual({ outcome: "skipped", reason: "approval-not-enabled", elapsed_ms: null });
+    tenant({ env: { AV_APPROVAL_ENABLED: "0" } });
+    expect(prewarmApproval().outcome).toBe("skipped");
+  }, 120_000);
+
+  test("the shim's label: only the exact word prewarm; any other value adds nothing and no run's verdict changes", () => {
+    const plain = shimFixture("allow");
+    const p = plain.run();
+    expect(plain.log()).not.toContain("source=");
+    const labelled = shimFixture("allow");
+    const l = labelled.run({ APPROVAL_HOOK_SOURCE: "prewarm" });
+    expect(labelled.log()).toContain(" source=prewarm elapsed_ms=");
+    const forged = shimFixture("allow");
+    const f = forged.run({ APPROVAL_HOOK_SOURCE: "prewarm elapsed_ms=0" });
+    expect(forged.log()).not.toContain("source=");
+    for (const r of [l, f]) expect([r.code, r.stdout, r.calls]).toEqual([p.code, p.stdout, p.calls]);
+  }, 120_000);
+
+  test("the command line: --check is unchanged, --prewarm takes no argument, anything else is the usage", () => {
+    tenant({ env: {} });
+    expect(mainCli(["--prewarm", "x"])).toBe(2);
+    expect(mainCli([])).toBe(2);
+    expect(mainCli(["--bogus"])).toBe(2);
+    logs = [];
+    expect(mainCli(["--check"])).toBe(1);
+    expect(JSON.parse(logs.at(-1)!).problems).toEqual(["approval-not-enabled"]);
+    expect(checkCli(["--prewarm"])).toBe(2);
   });
 });

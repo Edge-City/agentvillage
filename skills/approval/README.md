@@ -152,6 +152,38 @@ Under co-location (DATA-233) the control plane writes the token to
 `.env` remains for the hosted dogfood only. The value is never printed or
 logged by the shim, the installer or the plugin (the plugin never reads it).
 
+### Latency and the pre-warm (DATA-379)
+
+The shim log's `elapsed_ms` runs from the shim's own first clock read to its
+outcome line: the shim's programs (sh, coreutils, node once or twice, curl)
+and the daemon's answer. What Hermes spends before it spawns the shim is not
+in it. Measured on a hosted box (2026-10-07): 110 to 450 ms per call warm, 1
+to 2 s on the first calls after a restart, the daemon's `/health` under 35 ms.
+A first call is slow on both sides:
+
+- the daemon runs each hook call on a pooled worker thread (approval-md
+  `serve/hook-thread.ts`); a new thread loads the CLI's modules and proves the
+  log from genesis before its first answer (core cites 633 ms on a mature
+  log). Threads are made on demand, so the first call after a daemon restart
+  pays for one;
+- the shim's programs have to be read from disk again when the page cache no
+  longer holds them.
+
+On an install or update the control plane restarts the daemon (when it
+restarts it at all) BEFORE the install, and the installer's live fire is then
+the first hook call: it warms one thread, and nothing restarts the daemon
+between it and the resident's next call. A daemon restart that no install
+follows (the settings, review and pairing steps) has no such call after it.
+`bun install/install_approval.ts --prewarm` is that call: the live fire's
+request (a `terminal` call with no `workdir`, refused by the facade before
+the policy is loaded, appending nothing, opening no question), sent once
+through the installed shim with no re-ask, logged with `source=prewarm`, its
+verdict discarded and no tool run. It cannot warm the policy load and the
+decision itself (any request that reaches them can be recorded or asked about
+under the resident's policy), nor keep the page cache warm until a call that
+comes hours later: the remaining first-call cost is the shim's process count
+(DATA-380 drops the node hops) and the core's per-thread work.
+
 ## Fail-closed backstop at every gateway start (`av-approval`)
 
 Hermes registers shell hooks once, at gateway start, and only with consent; it

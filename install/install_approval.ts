@@ -78,6 +78,19 @@
  * `hermes_exit1` (the exit-1 probe's answer) and `cron_scripts`. It is a hand
  * step: nothing runs it at gateway start (the `av-approval` plugin's own
  * integrity check does that, DATA-234).
+ *
+ * `bun install/install_approval.ts --prewarm` (DATA-379) sends the live fire's
+ * request (a `terminal` call with no `workdir`, which the facade refuses
+ * before the policy and appends nothing) once through the installed shim
+ * directly, with `APPROVAL_HOOK_WAIT_S=0` and the log label `source=prewarm`,
+ * so the daemon's hook thread and the shim's programs are warm before the
+ * resident's next gated call. It is for the control plane to run after a
+ * daemon restart that no install follows (a settings, review or pairing
+ * step): on an install or update the live fire above already is that request,
+ * after the update's own daemon restart, so the install does not repeat it.
+ * Writes nothing but the shim's log lines; one JSON line out
+ * (`outcome`: facade-block, shim-block, allow, unexpected, error or
+ * skipped); exit 0 whatever happened.
  */
 
 import {
@@ -1460,6 +1473,146 @@ export function checkCli(argv: string[], options: ApprovalOptions = {}): number 
   return problems.length === 0 ? 0 : 1;
 }
 
+// ---------------------------------------------------------------------------
+// DATA-379: the pre-warm
+// ---------------------------------------------------------------------------
+
+/** The word the shim writes as `source=prewarm` on a pre-warm's log lines (the only word it accepts). */
+export const PREWARM_SOURCE = "prewarm";
+/** The pre-warm's session id in the envelope (never a resident's). */
+export const PREWARM_SESSION = "av-approval-prewarm";
+/** One post, no re-ask (`APPROVAL_HOOK_WAIT_S=0`), a short curl ceiling, and a bound on the whole spawn. */
+const PREWARM_MAX_TIME_S = 10;
+const PREWARM_TIMEOUT_MS = 30_000;
+
+export type PrewarmOutcome = "facade-block" | "shim-block" | "allow" | "unexpected" | "error" | "skipped";
+
+/** What one pre-warm did: an outcome, a fixed reason code (never a value), and its wall time. */
+export interface PrewarmReport {
+  outcome: PrewarmOutcome;
+  reason: string | null;
+  elapsed_ms: number | null;
+}
+
+/**
+ * The pre-warm's envelope: the live fire's request (a `terminal` call with NO `workdir`), as
+ * Hermes serializes a pre_tool_call. The facade refuses it before the policy is loaded and before
+ * anything is appended (`hook-unsupported-execution-context`, APRV-415; live_selfcheck.py item 6),
+ * which every install and every `--check` already relies on. Nothing runs whatever the answer: the
+ * verdict is read here and discarded.
+ */
+export function prewarmEnvelope(cwd: string = process.cwd()): string {
+  return JSON.stringify({
+    hook_event_name: "pre_tool_call",
+    tool_name: "terminal",
+    tool_input: { command: "ls /tmp" },
+    session_id: PREWARM_SESSION,
+    cwd,
+    extra: {},
+  });
+}
+
+/**
+ * The hook's environment as the gateway would hand it over, for the names the shim reads by hand
+ * (`.env` first, then this process's environment, as Hermes loads `.env` with override), plus the
+ * pre-warm's three fixed settings. Only these names: nothing else of `.env` reaches the shim.
+ */
+function prewarmEnv(): Record<string, string> {
+  const names = new Set<string>([
+    "APPROVAL_HOOK_URL_ENV",
+    "APPROVAL_HOOK_TOKEN_ENV",
+    "APPROVAL_HOOK_LOG",
+    "APPROVAL_FACADE_ALLOW_HTTP",
+    URL_VAR,
+    TOKEN_VAR,
+    TOKEN_FILE_VAR,
+    DAEMON_UID_VAR,
+  ]);
+  for (const ref of ["APPROVAL_HOOK_URL_ENV", "APPROVAL_HOOK_TOKEN_ENV"]) {
+    const named = gatewayValue(ref)?.trim();
+    if (named && ENV_NAME.test(named)) names.add(named);
+  }
+  const env: Record<string, string> = { PATH: "/usr/local/bin:/usr/bin:/bin" };
+  if (process.env.HOME) env.HOME = process.env.HOME;
+  for (const name of names) {
+    const value = gatewayValue(name);
+    if (value !== undefined) env[name] = value;
+  }
+  env.HERMES_HOME = hermesHome();
+  env.APPROVAL_HOOK_WAIT_S = "0";
+  env.APPROVAL_HOOK_MAX_TIME = String(PREWARM_MAX_TIME_S);
+  env.APPROVAL_HOOK_SOURCE = PREWARM_SOURCE;
+  return env;
+}
+
+/**
+ * DATA-379: one harmless request through the installed shim, so the daemon's hook thread (its
+ * modules and its proof of the log, approval-md `serve/hook-thread.ts`) and the shim's programs
+ * are warm before the resident's next gated call. For the control plane to run after a daemon
+ * restart that no install follows (the install's live fire already is this request, right after
+ * the update's own restart). Never throws, never fails: a gate that is off or not installed is
+ * `skipped`, a facade that does not answer is `shim-block`, both reported and nothing else.
+ * Writes nothing but the shim's own log lines (`source=prewarm`).
+ */
+export function prewarmApproval(options: { timeoutMs?: number } = {}): PrewarmReport {
+  const skipped = (reason: string): PrewarmReport => ({ outcome: "skipped", reason, elapsed_ms: null });
+  try {
+    if (approvalChoice() !== "on") return skipped("approval-not-enabled");
+    const shim = approvalShimPath();
+    let st;
+    try {
+      st = lstatSync(shim);
+    } catch {
+      return skipped("shim-missing");
+    }
+    if (!st.isFile() || st.isSymbolicLink()) return skipped("shim-not-regular");
+    if (!isExecutable(shim)) return skipped("shim-not-executable");
+    const t0 = performance.now();
+    const out = spawnSync(shim, [], {
+      input: prewarmEnvelope(),
+      env: prewarmEnv(),
+      encoding: "utf8",
+      timeout: options.timeoutMs ?? PREWARM_TIMEOUT_MS,
+    });
+    const elapsed = Math.round(performance.now() - t0);
+    const report = (outcome: PrewarmOutcome, reason: string | null = null): PrewarmReport => ({ outcome, reason, elapsed_ms: elapsed });
+    if (out.error) return report("error", (out.error as NodeJS.ErrnoException).code === "ETIMEDOUT" ? "timed-out" : "spawn-error");
+    if (out.status === null) return report("error", "signal");
+    const stdout = (out.stdout ?? "").trim();
+    // An allow is reported, never acted on: the pre-warm runs no tool, whatever the answer.
+    if (out.status === 0) return stdout === "" || stdout === "{}" ? report("allow") : report("unexpected", "exit-0");
+    let directive: unknown = null;
+    try {
+      directive = JSON.parse(stdout);
+    } catch {
+      directive = null;
+    }
+    if (out.status === 2 && isMapping(directive) && directive.action === "block") {
+      const message = typeof directive.message === "string" ? directive.message : "";
+      return message.startsWith("approval facade unreachable") ? report("shim-block") : report("facade-block");
+    }
+    return report("unexpected", `exit-${out.status}`);
+  } catch (err) {
+    return { outcome: "error", reason: err instanceof Error ? err.name : typeof err, elapsed_ms: null };
+  }
+}
+
+/** `bun install/install_approval.ts --prewarm`: one JSON line; exit 0 whatever happened. */
+export function prewarmCli(argv: string[], options: { timeoutMs?: number } = {}): number {
+  if (argv[0] !== "--prewarm" || argv.length > 1) {
+    console.error("usage: bun install/install_approval.ts --prewarm");
+    return 2;
+  }
+  const report = prewarmApproval(options);
+  console.log(JSON.stringify({ prewarm: "av-approval", ...report }));
+  return 0;
+}
+
+/** The command line: `--check` (unchanged) or `--prewarm`. */
+export function mainCli(argv: string[]): number {
+  return argv[0] === "--prewarm" ? prewarmCli(argv) : checkCli(argv);
+}
+
 if (import.meta.main) {
-  process.exit(checkCli(process.argv.slice(2)));
+  process.exit(mainCli(process.argv.slice(2)));
 }

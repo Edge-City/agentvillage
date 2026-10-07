@@ -37,6 +37,12 @@
 #     serve-unauthorized; no hosted supervisor stands in between to move
 #     X-Approval-Authorization across. Every other facade keeps
 #     X-Approval-Authorization, as before.
+#   - DATA-379 (2026-10-07), a log label and nothing else: with
+#     APPROVAL_HOOK_SOURCE=prewarm in the environment (exactly that word; any
+#     other value is ignored) every log line of the run carries
+#     `source=prewarm`, so the installer's pre-warm
+#     (`bun install/install_approval.ts --prewarm`) is told apart from a
+#     resident's call. It changes no request, no verdict and no exit code.
 # The Agent Village sandbox has one unix user, so the shim runs "by hand"
 # there (no /opt/approval/hook-home, no setuid launcher; skills/approval/
 # README.md says why). install/install_approval.ts installs this file as
@@ -170,10 +176,16 @@ ts() { "$T_date" -u +%Y-%m-%dT%H:%M:%S.%3NZ 2>/dev/null; }
 T0=$(now_ms)
 LOG=/dev/null
 TMP=""
+# DATA-379: a label for the log lines only, from a fixed word list (never the
+# raw value, so nothing an environment carries reaches the log).
+case ${APPROVAL_HOOK_SOURCE:-} in
+  prewarm) SRC=" source=prewarm" ;;
+  *) SRC="" ;;
+esac
 
 log() {
   # Best effort: a log that cannot be written must not change the verdict.
-  printf '%s pid=%s %s elapsed_ms=%s\n' "$(ts)" "$$" "$1" "$(( $(now_ms) - T0 ))" >>"$LOG" 2>/dev/null || true
+  printf '%s pid=%s %s%s elapsed_ms=%s\n' "$(ts)" "$$" "$1" "$SRC" "$(( $(now_ms) - T0 ))" >>"$LOG" 2>/dev/null || true
 }
 
 cleanup() { [ -n "$TMP" ] && "$T_rm" -rf "$TMP"; }
