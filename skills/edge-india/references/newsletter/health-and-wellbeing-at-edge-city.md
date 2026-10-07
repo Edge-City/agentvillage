@@ -6,7 +6,7 @@ Source type: newsletter
 
 Published: 2026-09-30T15:34:57.000Z
 
-Last content change indexed: 2026-09-30T21:31:09.778Z
+Last content change indexed: 2026-10-05T13:50:57.008Z
 
 ---
 
@@ -80,7 +80,7 @@ Moving, recovering, and trying something new is easy at Edge City India, thanks 
 
 -   Free for Riva guests
 
--   Everyone else can buy day, week, or month passes, which include access to the three pools (20% off for non-guests)
+-   Everyone else can buy day, week, or month passes, which include access to the three pools
 
 -   Classes in strength, cardio, martial arts, and yoga
 

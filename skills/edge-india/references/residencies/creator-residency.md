@@ -4,17 +4,11 @@ Source: https://www.edgecity.live/blog/creator-residency-goa-modern-renaissance
 
 Source type: website
 
-Last content change indexed: 2026-09-30T21:31:09.778Z
+Last content change indexed: 2026-10-05T13:50:57.008Z
 
 ---
 
-[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6824c58a853ccfc387cf712b_Brand%20Narrative%20%26%20Essence%20-%2016_9.avif)](https://www.edgecity.live/)
-
-**GET UPDATES**
-
-Thanks! You've been added to the list.
-
-Oops! Something went wrong.
+[](https://www.edgecity.live/)
 
 Follow us on
 

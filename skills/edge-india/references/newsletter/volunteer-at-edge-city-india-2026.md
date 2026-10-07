@@ -6,11 +6,15 @@ Source type: newsletter
 
 Published: 2026-07-29T22:27:41.000Z
 
-Last content change indexed: 2026-09-30T21:31:09.778Z
+Last content change indexed: 2026-10-05T13:50:57.008Z
 
 ---
 
-Remember to **[apply to attend](https://bit.ly/4vkFjk3)** and grab your ticket at early bird prices (prices increase regularly between now and October 11). Apply to volunteer **[here](https://app.notion.com/p/39ed45cdfc5980d081bfe1e51fd145c9?pvs=21)**.
+**Volunteer applications for Edge City India are closed.** The village opens on 11 October and our crew is set.
+
+If you’d still like to join us, you can apply and get your ticket **[here](https://portal.edgecity.live/auth?redirect=%2Fportal%2Fedge-india)**.
+
+And if you’d like to volunteer at a future Edge City, follow us on **[X](https://x.com/JoinEdgeCity)**, **[LinkedIn](https://www.linkedin.com/company/edge-city-live/)** and **[Instagram](https://www.instagram.com/joinedgecity/)**, and **[subscribe to our newsletter](https://www.edgecity.live/#contact)**. We’ll let you know when applications open.
 
 * * *
 
@@ -23,8 +27,6 @@ Our volunteers are a core part of that crew. This is your invitation to be one o
 ![](https://substackcdn.com/image/fetch/$s_!9_3z!,w_1456,c_limit,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F9f3ddb7d-25df-4734-a1b7-c6f1b0be56a5_1456x839.webp)
 
 ](https://substackcdn.com/image/fetch/$s_!9_3z!,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F9f3ddb7d-25df-4734-a1b7-c6f1b0be56a5_1456x839.webp)
-
-[Apply to Volunteer](https://edgecity.notion.site/39ed45cdfc5980d081bfe1e51fd145c9)
 
 ## Why volunteer?
 

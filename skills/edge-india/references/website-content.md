@@ -4,7 +4,7 @@ Source: https://www.edgecity.live/india26
 
 Source type: website
 
-Last content change indexed: 2026-09-30T21:28:06.827Z
+Last content change indexed: 2026-10-05T18:52:19.418Z
 
 ---
 
@@ -28,19 +28,7 @@ WIKI
 
 ![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a3427fe3fc94619dde9fcf9_arrow.png)
 
-](https://edgecity.notion.site/Edge-City-India-2026-Wiki-038d45cdfc5983c7a1fe013fdc77135b)[
-
-DONATE
-
-![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a3427fe3fc94619dde9fcf9_arrow.png)
-
-](https://www.edgecity.live/india26#)[
-
-WIKI
-
-![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a3427fe3fc94619dde9fcf9_arrow.png)
-
-](https://www.edgecity.live/india26#)[
+](https://app.notion.com/p/edgecity/Edge-City-India-2026-Wiki-038d45cdfc5983c7a1fe013fdc77135b)[
 
 APPLY
 
@@ -54,7 +42,7 @@ Prototype a Brighter Future
 
 ![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a418783052e7760e01365cf_name.header.avif)
 
-[Book housing](https://www.edgecity.live/india26#)[Apply to attend](https://portal.edgecity.live/portal/edge-india)
+[Apply to attend](https://portal.edgecity.live/portal/edge-india)
 
 POP-UP VILLAGE
 
@@ -63,8 +51,6 @@ Prototype a Brighter Future
 POP-UP VILLAGE
 
 Prototype a Brighter Future
-
-[](https://www.linkedin.com/company/edge-city-live/)[](https://twitter.com/joinedgecity)[](https://www.instagram.com/joinedgecity/)
 
 [
 
@@ -157,18 +143,6 @@ How to attend?
 **Step 2**: We review applications on a rolling basis and follow up with next steps. Tickets are live now\
 \
 **Step 3:** Get [your accommodation](https://forms.fillout.com/t/eGE4xizEwbus) and flights (+ [visa](https://www.edgecity.live/india26#) if needed), and we'll see you in Goa!
-
-Get updates about Edge India 2026
-
-Thanks! You've been added to the list.
-
-Oops! Something went wrong.
-
-Get updates about Edge India 2026
-
-Thank you! Your submission has been received!
-
-Oops! Something went wrong while submitting the form.
 
 ## GALLERY
 
@@ -417,8 +391,6 @@ LEARN MORE
 \
 Anima House_**
 
-_with Chris Morello & Ashutosh Dhasmana_
-
 A field building initiative where 8-12 leaders will live and build the future of women's health out loud. Builders and researchers across mental, physical and spiritual health are invited to apply.
 
 [
@@ -453,8 +425,6 @@ LEARN MORE
 \
 Agent Village 2.0_**
 
-_with 2:47PM Studio_
-
 A three-week live experiment where every resident gets a persistent personal AI agent. V1 at Edge Esmeralda put hundreds of agents into one village: they brokered introductions between residents, informed community treasury decisions, wrote forum posts, and began drafting a constitution, while residents extended them with custom skills, memory systems, and games. V2 puts agents to work: finding you collaborators, negotiating introductions and meeting times on your behalf, organizing real events end to end, and helping the village make shared decisions, with human approval built in for anything consequential. Everything we learn is published openly.
 
 [
@@ -470,8 +440,6 @@ LEARN MORE
 **Oct 18 – Nov 1, 2026 |** [**Apply →**](https://docs.google.com/forms/d/e/1FAIpQLSfFEdcn4bP8mDxh-nOYaSm2Kexxr3Brh3kCMx2prbQ5kgMaRA/viewform)**_\
 \
 Ambhasi: AI x Consciousness Residency_**
-
-_with 2:47PM Studio_
 
 A two-week residency for researchers, philosophers, designers, and builders at the intersection of digital minds and human flourishing, in collaboration with California Institute for Machine Consciousness.\
 The residency will be holding a program of events for the Edge City community, with a special track exploring what Vedic philosophy can teach us about AI sentience.
@@ -494,14 +462,6 @@ _In collaboration with the Ethereum Foundation Funding Coordination team_
 
 An afternoon working session on sustainable funding for open-source software and digital infrastructure. Raul Romanutti will share lessons from Project Odin, a program helping teams build credible paths toward long-term sustainability. We’ll explore funding paths, potential customers, and organizational choices through a short talk, practical exercises, and discussion of real project examples.
 
-[
-
-LEARN MORE
-
-![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a3427fe3fc94619dde9fcf9_arrow.png)
-
-](https://edgecity.notion.site/Research-Partner-Proposal-Agent-Village-V2-at-Edge-City-India-Shared-3c1d45cdfc5981d7b7bac1e216f3678b)
-
 ![Edge City India Creator Residency artwork featuring cameras, a microphone, creators, and Goa architecture](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6abd6e61a6ff3df0fd84cfb8_photo_2026-09-30%2022.17.07.avif)
 
 **Oct 11 – Nov 1, 2026\
@@ -509,8 +469,7 @@ LEARN MORE
 Light DAO + SingularityNET Residency_**
 
 A three-week residency for entrepreneurs, technologists, builders, investors and other innovators committed to beneficial technology, conscious leadership, human sovereignty and business for good.\
-Hosted by Light DAO and  SingularityNET, global communities advancing these values through connection, collaboration and action.\
-Discover collaborations, build with SingularityNET's technology, and potentially qualify for grants supporting aligned projects.
+Hosted by Light DAO + SingularityNET —  global communities advancing these values through connection, collaboration and action.
 
 [
 
@@ -520,10 +479,25 @@ LEARN MORE
 
 ](https://luma.com/LightDAOEdgeResidency)
 
+![Edge City India Creator Residency artwork featuring cameras, a microphone, creators, and Goa architecture](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6abe6ec4db7cd9d766bb882f_photo_2026-10-01%2016.31.18.avif)
+
+**Oct 26 – 28, 2026 |** [**Apply →**](https://docs.google.com/forms/d/e/1FAIpQLSfhHdi_C4y0AIjmxLvPEJZv11NOLcaopPTGGdj4Q3KnSGkQkg/viewform)**_\
+The Awareness Lab with Tso_**
+
+A three-day experiment in measuring inner experience. Participants spend three days in sustained attention to the experience of being themselves - through movement, meditation, breath, bodywork and stillness - while building a record of it: what they report, what practitioners observe, physiology from wearables, behaviour and context, all on a single timeline. The longer question is whether AI can find patterns across those streams that are hard to see any other way.
+
+[
+
+LEARN MORE
+
+![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a3427fe3fc94619dde9fcf9_arrow.png)
+
+](https://tsosanctuaries.com/awareness-lab)
+
 ## Village Overview\
 & Map
 
-[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6aae9e3a9e69e8e09682d992_photo_2026-09-19%2016.37.07.avif)](https://www.edgecity.live/india26#)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6aaea7328e67a384815a7f7e_photo_2026-09-19%2016.37.16.avif)](https://www.edgecity.live/india26#)
+[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6ac3eff26b13686d7c84c232_Goa%20Village%20Map%20Hor%201.avif)](https://www.edgecity.live/india26#)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6ac3eff26b13686d7c84c232_Goa%20Village%20Map%20Hor%201.avif)](https://www.edgecity.live/india26#)
 
 ## Supporting Partners
 
@@ -533,33 +507,19 @@ Edge City India is a collective effort. The support of our partners and attendee
 
 **Build3 / Startup ecoāshrām:** One of India's leading purpose-driven startup accelerators, founded with Varun Chawla (co-founder of 91springboard, one of India's largest coworking networks), with a network of 1,600+ founders and 40+ funded startups. Through Startup Ecoāshrām, they're building a regenerative startup campus in the Western Ghats—and are a key reason Edge City chose Goa. [More Info.](https://www.build3.org/startup-eco-ashram)
 
-**The Circle:** Our main operational partner and the center of the village. One of India's leading coworking networks with campuses across the country - including India's first work-from-the-beach coworking space in Goa - and home to The Circle Founders Club, India's leading cross-border acceleration platform spanning 18+ geographies. Backed by a family office spanning hospitality, real estate, and events. [More info.](https://www.thecircle.work/)
-
-**LocalhostHQ:** Our media lab partner - a multidisciplinary lab for researchers, artists, and founders building India's frontier-tech storytelling scene. They run India's largest AI film festivals, including the one at the Royal Opera House Mumbai, with a flagship campus in Bangalore. [More info.](https://www.localhosthq.com/)
-
 ![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a3f0b3382e75d9e29ef0525_stickers%202.avif)
 
-[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6ab156143a2596e90c501bab_Microsoft-logo_rgb_c-gray.png)](https://www.microsoft.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f8fc_Cosmos_Logo_AW_RGB_Primary%20Logo_Dark%20Blue%20\(2\)%201.png)](https://www.cosmos-institute.org/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6ab2bb8257f8db3d51600a7a_build3.png)](https://www.build3.org/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a4322c1b3745ab147fe79a6_Startup.png)](https://startupecoashram.build3.org/)
+[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6ab156143a2596e90c501bab_Microsoft-logo_rgb_c-gray.png)](https://www.microsoft.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a8dc459f1798ce8cc473505_photo_2026-08-25%2018.30.48%201.png)](https://wisprflow.ai/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6ab2bb8257f8db3d51600a7a_build3.png)](https://www.build3.org/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a4322c1b3745ab147fe79a6_Startup.png)](https://startupecoashram.build3.org/)
 
-[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f897_LongJourney_logo.avif)](https://www.longjourney.vc/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a864aa33e554f1ec6a5b666_elevenlabs-logo-black.png)](https://elevenlabs.io/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a8dc459f1798ce8cc473505_photo_2026-08-25%2018.30.48%201.png)](https://wisprflow.ai/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6aa1c6caf4e5f8ffe64b5ebb_odyssey.png)](https://www.odyssey.build/)
+[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f897_LongJourney_logo.avif)](https://www.longjourney.vc/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f8fc_Cosmos_Logo_AW_RGB_Primary%20Logo_Dark%20Blue%20\(2\)%201.png)](https://www.cosmos-institute.org/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6aa1c6caf4e5f8ffe64b5ebb_odyssey.png)](https://www.odyssey.build/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6abd7bb1877caed175245e83_C%20world.png)](https://world.org/world-id)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6abd7bc3f8933f72f480d617_ethical.nyu.png)](https://www.ethicalintelligencelab.org/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6abd7bd5de32b278b1f99a97_69fa029e1be6730adcb939a3_TheConsciousness_logo.avif)](https://www.cofo.org/)
 
-[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6ab29b06f9d7a9a6ad5f6240_forge.png)](https://www.forge.inc/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a9b031c17a2481e5eac6893_wordmark-dark.svg)](https://www.sarvam.ai/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6aad1875c3e878bc71ac014d_ChatGPT%20Image%20Sep%2018%2C%202026%2C%2012_52_56%20PM.avif)](https://www.thecircle.work/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f885_human.tech_logo_white%201.avif)](https://human.tech/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a864b4646cb341900a31225_devcon-logo-png_seeklogo-491590%201.png)](https://devcon.org/en/)
+[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a864aa33e554f1ec6a5b666_elevenlabs-logo-black.png)](https://elevenlabs.io/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6abd7bf8630fa7634b92c497_CIMC_wordmark_high_quality_transparent%20\(1\).png)](https://cimc.ai/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6abd7c02628c0a7b12f271a5_Ross_Franklin_signature_transparent.png)](https://lossfunk.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6abd7bcf1ede60de463171e1_riffle_wordmark_black.png)](https://www.riffle.studio/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6ab29b06f9d7a9a6ad5f6240_forge.png)](https://www.forge.inc/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6abd7bbc9b04bb92dae80bf0_Logo_Light%20Theme.png)](https://www.dognosis.tech/)
 
-[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a864c23cdf787eccb7c87a0_goa.png)](https://www.startup.goa.gov.in/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a4191eee9225418871966df_Localhost%20HQ.avif)](https://www.localhosthq.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a9546eff386d44011236122_tulsea%201.png)](https://tulsea.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6aa12e263eaebf951a2133b3_Layer_1.png)](https://tulsea.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a4323260889515e7f7e75ab_The%20Circle%20Logo%20\(Feb%202023\)%20for%20Lighter%20Backgrounds%202.png)](https://www.thecircle.work/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a43246963d3384e9dac1924_QvUPxKuQy1JszFj2dS5UAdRaozU%201.png)](https://www.thecirclefc.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6ab29bb22a8804c7f91bb291_GOA.png)](https://goa-tourism.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6ab6c3d440072e1e171aa2f0_nomad.png)](https://nomadgao.com/)
-
-[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f8c3_LOCKUP_HORIZONTAL_2D_LIGHT.avif)](https://cursor.com/home)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f891_protocol-labs_logo.avif)](https://www.protocol.ai/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f879_Geo_logo.avif)](https://www.geobrowser.io/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f8d4_960px-Vector-Foresight-Logo-dark-blue.svg.png)](https://foresight.org/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f89f_Enveda_logo.avif)](https://enveda.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f88d_TheConsciousness_logo.avif)](https://www.cofo.org/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f87d_%5BWorld%5D%20Logo-Black-RGB%203.avif)](https://world.org/)
-
-[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f8f9_MaysFamily.logo.png)](https://maysfamilyfoundation.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f8df_Black_Logo_Mochi.png)](https://joinmochi.com/lp/marketplace)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f8a3_Toku_Logo%201.avif)](https://tokuhealth.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f885_human.tech_logo_white%201.avif)](https://human.tech/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f881_Herasight_logo.avif)](https://www.herasight.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f906_svgviewer-png-output.png)](https://remind.vc/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f90a_BlueDot_Impact_Logo.svg)](https://bluedot.org/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f90b_circleback%20\(3\)%201.png)](https://circleback.ai/)
-
-[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f889_Jhourney_logo.avif)](https://jhourney.io/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f8a6_Single%20Thread.avif)](https://singlethreadfarms.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f89c_Safety%20Wing.avif)](https://safetywing.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f8b8_Healdsburg_logo.avif)](https://www.healdsburg.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f8f8_Spirittechcollective%201.svg)](https://www.spirit-tech-collective.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f8ef_logo-horizontal-black.png)](https://www.localhosthq.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f901_Renaissance%2BPhilanthropy_Full_Full%2BCharcoal_RGB.png.webp)](https://www.renaissancephilanthropy.org/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f90f_Rho-Logo-Black.png)](https://www.rho.co/)
+[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a9b031c17a2481e5eac6893_wordmark-dark.svg)](https://www.sarvam.ai/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a4191eee9225418871966df_Localhost%20HQ.avif)](https://www.localhosthq.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a9546eff386d44011236122_tulsea%201.png)](https://tulsea.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6aa12e263eaebf951a2133b3_Layer_1.png)](https://tulsea.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a4323260889515e7f7e75ab_The%20Circle%20Logo%20\(Feb%202023\)%20for%20Lighter%20Backgrounds%202.png)](https://www.thecircle.work/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a864c23cdf787eccb7c87a0_goa.png)](https://www.startup.goa.gov.in/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6ab29bb22a8804c7f91bb291_GOA.png)](https://goa-tourism.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f885_human.tech_logo_white%201.avif)](https://human.tech/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a864b4646cb341900a31225_devcon-logo-png_seeklogo-491590%201.png)](https://devcon.org/en/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6abd7bce8e38742d2d7164a8_Recurso%201.png)](https://chequpi.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6ab6c3d440072e1e171aa2f0_nomad.png)](https://nomadgao.com/)
 
 ## From the community
 
 On what it feels like to be a part of Edge City
-
-![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a3f0b3575d5f38875775f57_stickers%204.avif)
-
-On what it feels like to be part of Edge City.
 
 ![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/68376b3655e98465d9c9f74c_speakers-cutout-Vitalik-EE.webp)
 
@@ -785,83 +745,6 @@ What's the refund and transfer policy?
 
 Tickets are non-refundable, but you can change your dates or transfer your ticket to someone else.
 
-Do you offer ticket refunds if my plans change and I can’t attend?
-
-We do not offer refunds. You are able to change the dates of your ticket to a different week. If you cannot attend but find someone to take your ticket, we’re happy to transfer it. Please email [info@edgecity.live](mailto:sophie@edgecity.live) with the new attendee’s name and email address.
-
-‍
-
-What is your press & media policy? 
-
-The full media policy [can be found here](https://edgecity.notion.site/Edge-City-Media-Policy-Shared-263d45cdfc59803cbf30f181bb164955).
-
-‍
-
-Community Guidelines
-
-##### **Our Foundation**
-
-Edge Cities are community gatherings focused on genuine connections, collaboration, and co-creation. The magic happens when people feel safe sharing challenges and are generous with knowledge.
-
-‍
-
-Our guiding principle: _Be interested and interesting._
-
-When sharing, ask yourself: _"Am I contributing to a conversation or trying to start a transaction?"_
-
-‍
-
-##### **Core Values**
-
-**Co-Create & Build Together** - We're here to create, not just consume. Focus on tangible creation and real-world experimentation.
-
-**Push the Edge** - Try new things and experiment on projects that might seem absurd but could change the world. Stay curious vs judgmental.
-
-**Healthy by Default** - Daily movement and wellbeing practices. Commit to 30 minutes of activity and fuel your body with wholesome food. Leave healthier than when you arrived.
-
-**Multigenerational** - From youngest to most seasoned participants, we celebrate the full spectrum of human experience and intergenerational learning.
-
-**Multidisciplinary** - Breakthroughs happen where different fields intersect. We weave together diverse expertise for unexpected collaborations.
-
-‍
-
-##### **Community-First Approach**
-
-**What We Love 💚**
-
--   Share your work authentically with your "why," process, and lessons learned
--   Listen for synergies, offer expertise, and connect people who could benefit from knowing each other
--   Share insights, methodologies, and resources freely
-
-**What Doesn't Serve Our Community 👀**
-
--   Sales-focused behavior or pitching products/services
--   One-way broadcasting without genuine interest in dialogue
-
-_When we foster space for vulnerability and encourage sharing, amazing things happen. Help us preserve the magic by choosing community over commerce._
-
-‍
-
-##### **Cultural Norms**
-
-**Welcome the Unexpected** - Magic emerges in unplanned moments. Stay open to stepping outside your comfort zone.
-
-**Embrace JOMO** - Make deliberate choices about where to invest your energy, then show up wholeheartedly.
-
-**Show Up With Purpose** - Engage deeply, volunteer, ask insightful questions, share work-in-progress.
-
-**Navigate Differences Thoughtfully** - Approach disagreements with curiosity, listen actively, choose compassion.
-
-**Honor Our Host Community** - We're guests in Mandrem and Goa. Engage respectfully with local customs and support neighborhood businesses.
-
-‍
-
-##### A Culture of Giving Back
-
-Everything at Edge exists because the community makes it possible. Your ticket, time, and contributions make this community feel alive. Support the experience you're enjoying and help others do the same. If you see someone who might not be aware of our guidelines, feel empowered to share them. We build this together, and it works when we all pitch in.
-
-‍
-
 ## PRINCIPLES
 
 Our villages are shaped by four principles:
@@ -891,32 +774,6 @@ Our community will include everyone from toddlers to centenarians, fostering an 
 We believe that there is huge potential for breakthroughs at the intersections of disciplines. Edge City is designed to foster collaboration between people with diverse expertise—scientists, artists, engineers, urban planners, philosophers, mechanics, and beyond.
 
 ![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a419585205095e38eb16cc5_Frame%2043.avif)
-
-**Focus on Creation**
-
-At Edge Esmeralda, we’re focused on building, moving beyond mere consumption of knowledge. The emphasis is on hands-on applications and experiments, with the goal of fostering new technologies, cultures, ideas, and organizations during our month together.
-
-‍
-
-**Healthy by Default**
-
-Our village promotes health and longevity as a default. This includes organized community workouts, nutritious meals made from local organic ingredients, weekly farmers markets, and partnerships with local restaurants to minimize seed oil use. We aim for all participants to leave healthier than they arrived.
-
-‍
-
-**Multigenerational**
-
-Our community will include everyone from toddlers to centenarians, fostering an environment where different life stages interact and learn from each other, breaking away from the typical age-segregated settings.
-
-‍
-
-**Multidisciplinary**
-
-We believe that there is huge potential for breakthroughs at the intersections of disciplines. Edge Esmeralda is designed to foster collaboration between people with diverse expertise—scientists, artists, engineers, urban planners, philosophers, mechanics, and beyond.
-
-‍
-
-![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/66b1dc2e893d609f5e3d5efa_ec_lockup_wht.svg)
 
 [![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a3aace5f9f790526bd1dc8c_EdgeCity-Logo-Black.avif)](https://www.edgecity.live/)
 
