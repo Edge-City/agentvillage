@@ -1693,7 +1693,7 @@ describe("DATA-377: the shim's clock is read as seconds.fraction, the fraction l
     const r = fx.run({ APPROVAL_HOOK_WAIT_S: "280" });
     expect([r.code, r.stdout, r.calls]).toEqual([0, "{}", 3]);
     // T0 is call 1 (...600005). The shim reads the clock more than once per attempt (P0, the deadline check), so the
-    // four log lines see calls 2, 5, 9 and 10: ...600099 - T0 = 94, ...603000 - T0 = 2995, ...606123 - T0 = 6118, 6118.
+    // four log lines see calls 2, 5, 9 and 12: ...600099 - T0 = 94, ...603000 - T0 = 2995, ...606123 - T0 = 6118, 6118.
     expect(elapsed(fx.log())).toEqual([94, 2995, 6118, 6118]);
   });
 
@@ -1727,7 +1727,7 @@ describe("DATA-377: the shim's clock is read as seconds.fraction, the fraction l
     }
   });
 
-  test("the log stamp keeps three fraction digits, with their place value: .266 from a padded fraction, .005 from uutils 0.8.0's 5567380", () => {
+  test("the log stamp keeps three fraction digits, with their place value: .266 from a padded fraction, .005 from a trimmed 5567380 (the shape 0.8.0's %3N printed)", () => {
     for (const [shape, want] of [
       ["gnu", UUTILS_FRACTION.slice(0, 3)],
       ["unpadded", "005"],
