@@ -255,7 +255,7 @@ def test_switch_on_registers_the_tool(plugin, ri, index, home, monkeypatch, capl
     assert tool["schema"]["name"] == "record_intention"
     assert tool["description"] == ri.TOOL_DESCRIPTION
     assert set(tool["schema"]["parameters"]["properties"]) == {
-        "action", "text", "summary", "source", "publish", "reason", "intention_id",
+        "action", "text", "summary", "source", "publish", "reason", "intention_id", "confirmed_in_chat",
     }
     assert set(ctx.hooks) == set(plugin.HOOK_BODIES)
     assert "av-events: record_intention registered" in caplog.text
@@ -1935,3 +1935,117 @@ def test_data311_ambient_publish_false_needs_a_reason(tctx, index, av, plugin):
 def test_data311_the_schema_says_publish_false_holds_for_every_source(ri):
     text = ri.TOOL_SCHEMA["parameters"]["properties"]["publish"]["description"]
     assert "Ignored for ambient" not in text and "every source" in text
+
+
+# --------------------------------------------------------------------------
+# DATA-410: confirmed_in_chat, the agent's words the resident adopted in chat
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", ["yes", "silence", "standing", " Silence "])
+def test_confirmed_in_chat_goes_with_message_and_reaches_the_payload(tctx, index, av, plugin, value):
+    out = call(tctx, {"text": TEXT, "source": "message", "confirmed_in_chat": value})
+    assert out["success"] is True and out["published"] is True and out["source"] == "message"
+    assert out["confirmed_in_chat"] == value.strip().lower()
+    [event] = intention_events(av, plugin)
+    assert event["event_type"] == "intention.captured"
+    assert event["payload"]["source"] == "message"
+    assert event["payload"]["confirmed_in_chat"] == value.strip().lower()
+    # The marker is a code: no text of the resident's travels with it.
+    assert TEXT not in json.dumps(event)
+
+
+def test_the_residents_own_words_carry_no_marker(tctx, index, av, plugin):
+    out = call(tctx, {"text": TEXT, "source": "message"})
+    assert "confirmed_in_chat" not in out
+    assert "confirmed_in_chat" not in intention_events(av, plugin)[0]["payload"]
+    # null is the same as leaving it out.
+    out = call(tctx, {"text": TEXT + " too", "source": "message", "confirmed_in_chat": None}, tool_call_id="c2")
+    assert out["success"] is True and "confirmed_in_chat" not in out
+    assert "confirmed_in_chat" not in intention_events(av, plugin)[1]["payload"]
+
+
+@pytest.mark.parametrize("source", ["ambient", "onboarding", "note"])
+@pytest.mark.parametrize("value", ["yes", "silence", "standing"])
+def test_confirmed_in_chat_with_another_source_is_refused(tctx, index, av, plugin, ri, source, value):
+    out = call(tctx, {"text": TEXT, "source": source, "confirmed_in_chat": value})
+    assert out == {"success": False, "error": "confirmed_not_message", "message": ri.REFUSALS["confirmed_not_message"]}
+    assert index.requests == []
+    assert intention_events(av, plugin) == []
+
+
+@pytest.mark.parametrize("value", [True, False, 1, "true", "maybe", "", "  ", ["yes"]])
+def test_a_confirmed_in_chat_that_is_not_one_of_the_codes_is_refused(tctx, index, av, plugin, ri, value):
+    out = call(tctx, {"text": TEXT, "source": "message", "confirmed_in_chat": value})
+    assert out["success"] is False and out["error"] == "confirmed_invalid"
+    assert index.requests == []
+    assert intention_events(av, plugin) == []
+
+
+def test_the_refusals_name_the_codes_and_the_ambient_alternative(ri):
+    assert ri.REFUSALS["confirmed_invalid"] == (
+        "Nothing was recorded: confirmed_in_chat must be yes, silence or standing, or left out."
+    )
+    assert "source=ambient" in ri.REFUSALS["confirmed_not_message"]
+
+
+@pytest.mark.parametrize("session,code", [("cron_job_20261012", "held_cron"), ("never-seen", "held_unknown")])
+def test_a_held_session_drops_the_marker_with_the_stated_source(tctx, index, av, plugin, session, code):
+    """The lineage gate holds a message capture as ambient (R10); a capture that
+    is no longer stated carries no confirmed_in_chat. DATA-410's silence branch
+    runs at the agent's next message of its own, which may be a cron run: there
+    it is held for the card, and the agent says what the tool answered."""
+    out = call(tctx, {"text": TEXT, "source": "message", "confirmed_in_chat": "silence"}, session=session)
+    assert out["success"] is True and out["source"] == "ambient" and out["publish_refused"] == code
+    assert "confirmed_in_chat" not in out
+    assert index.requests == []
+    payload = intention_events(av, plugin)[0]["payload"]
+    assert payload["source"] == "ambient" and "confirmed_in_chat" not in payload
+
+
+def test_the_marker_survives_a_local_or_refused_stated_capture(tctx, index, av, plugin):
+    out = call(tctx, {"text": TEXT, "source": "message", "confirmed_in_chat": "yes",
+                      "publish": False, "reason": "personal"})
+    assert out["published"] is False and out["confirmed_in_chat"] == "yes"
+    index.tool = refused()
+    out = call(tctx, {"text": TEXT + " again", "source": "message", "confirmed_in_chat": "yes"}, tool_call_id="c2")
+    assert out["publish_refused"] == "rejected" and out["confirmed_in_chat"] == "yes"
+    assert [e["payload"]["confirmed_in_chat"] for e in intention_events(av, plugin)] == ["yes", "yes"]
+
+
+def test_the_observer_reads_the_marker_only_from_the_overlay_tools_result(tctx, av, plugin):
+    # An MCP server's record_intention is not trusted for codes (F13).
+    tctx.fire(
+        "post_tool_call", tool_name="mcp__x__record_intention",
+        args={"action": "capture", "text": TEXT, "source": "message", "confirmed_in_chat": "yes"},
+        result=json.dumps({"intention_id": "srv-1", "action": "capture", "source": "message", "confirmed_in_chat": "yes"}),
+        session_id=SESSION, task_id="t", turn_id="u", tool_call_id="c9", api_request_id="r",
+        duration_ms=5, status="ok", error_type=None, error_message=None,
+    )
+    assert "confirmed_in_chat" not in intention_events(av, plugin)[0]["payload"]
+
+
+@pytest.mark.parametrize("result_value,source,expected", [
+    ("yes", "message", "yes"),
+    ("standing", "message", "standing"),
+    ("sure", "message", None),
+    (True, "message", None),
+    ("yes", "ambient", None),
+])
+def test_plan_record_keeps_only_a_known_code_on_a_message_capture(av, result_value, source, expected):
+    intentions = sys.modules[f"{av.MODULE_NAME}._intentions"]
+    payload = {"intention_id": INDEX_ID, "action": "capture", "source": source, "confirmed_in_chat": result_value}
+    [planned] = intentions.plan_record({"text": TEXT, "source": source}, payload)
+    assert planned.confirmed_in_chat == expected
+    # Never on an update, whatever the result says.
+    [update] = intentions.plan_record({"action": "update", "intention_id": INDEX_ID, "text": TEXT, "source": source},
+                                      {**payload, "action": "update"})
+    assert update.confirmed_in_chat is None
+    # A cron lineage the observer saw itself makes it ambient: no marker.
+    [cron] = intentions.plan_record({"text": TEXT, "source": source}, payload, cron=True)
+    assert cron.confirmed_in_chat is None
+
+
+def test_the_schema_offers_the_three_codes(ri):
+    prop = ri.TOOL_SCHEMA["parameters"]["properties"]["confirmed_in_chat"]
+    assert prop["type"] == "string" and prop["enum"] == ["yes", "silence", "standing"]

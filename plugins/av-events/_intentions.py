@@ -173,6 +173,12 @@ APPROVED_BY = frozenset({"individual", "rule"})
 #: (ambient-intents spec §4: "the resident asked, or the content is personal").
 LOCAL_REASONS = frozenset({"participant_asked", "personal"})
 
+#: `confirmed_in_chat` on a `record_intention` `message` capture of the agent's
+#: own words (DATA-410): how the resident adopted them. `yes` (they said yes, or
+#: edited them, after one ask), `silence` (no answer by the agent's next message
+#: of its own: published as written), `standing` (a go-ahead without asking).
+CHAT_CONFIRMATIONS = ("yes", "silence", "standing")
+
 #: `publish_refused`: a code, never text. Anything else is dropped to null.
 _CODE_PATTERN = re.compile(r"^[a-z0-9_]{1,64}$")
 
@@ -208,6 +214,7 @@ class IntentionCall:
         "status_only",
         "approved_by",
         "approval_state",
+        "confirmed_in_chat",
     )
 
     def __init__(
@@ -227,6 +234,7 @@ class IntentionCall:
         status_only: bool = False,
         approved_by: Optional[str] = None,
         approval_state: Optional[str] = None,
+        confirmed_in_chat: Optional[str] = None,
     ) -> None:
         self.event_type = event_type
         self.intention_id = intention_id
@@ -246,6 +254,10 @@ class IntentionCall:
         #: state. Codes the tool decided; null everywhere else.
         self.approved_by = approved_by
         self.approval_state = approval_state
+        #: DATA-410, `record_intention` captures only: how the resident adopted
+        #: the agent's words in chat (`CHAT_CONFIRMATIONS`), on a stated
+        #: `message` capture. The tool decided it; null everywhere else.
+        self.confirmed_in_chat = confirmed_in_chat
 
 
 # --------------------------------------------------------------------------
@@ -677,6 +689,11 @@ def plan_record(
     if approved_by not in APPROVED_BY:
         approved_by = None
     approval_state = _result_code(payload_r, outer_r, "approval_state")
+    # DATA-410: read from the result only, one of the tool's codes, and kept
+    # only on a capture whose source stayed message (never one held as ambient).
+    confirmed_in_chat = _result_code(payload_r, outer_r, "confirmed_in_chat")
+    if confirmed_in_chat not in CHAT_CONFIRMATIONS or event_type != "intention.captured" or source != "message":
+        confirmed_in_chat = None
 
     text = _text(args.get("text")) or _text(args.get("description"))
     summary = _text(args.get("summary"))
@@ -698,6 +715,7 @@ def plan_record(
             local_reason=local_reason,
             approved_by=approved_by,
             approval_state=approval_state,
+            confirmed_in_chat=confirmed_in_chat,
         )
     ]
 
@@ -797,6 +815,7 @@ __all__ = [
     "INDEX_PLUGIN_TOOLS",
     "INDEX_STATUSES",
     "LIFECYCLE_STATUS",
+    "CHAT_CONFIRMATIONS",
     "LOCAL_REASONS",
     "RECORD_INTENTION_TOOL",
     "RECORD_SOURCES",
