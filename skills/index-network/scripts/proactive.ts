@@ -388,6 +388,13 @@ export function indexUrl(kind: "u" | "o" | "i", url: unknown): string | null {
   return typeof url === "string" && new RegExp(`^https://index\\.network/${kind}/[A-Za-z0-9_-]{1,128}$`).test(url) ? url : null;
 }
 
+/** Portal forms of Index links. Cron Script Output never passes through the index-links plugin. */
+const PORTAL_WEB = "https://agents.edgecity.live";
+const lastSegment = (url: string) => url.slice(url.lastIndexOf("/") + 1);
+const profileLink = (url: unknown) => { const u = indexUrl("u", url); return u && `${PORTAL_WEB}/rolodex?person=${lastSegment(u)}`; };
+const signalLink = (url: unknown) => { const u = indexUrl("i", url); return u && `${PORTAL_WEB}/intents?intent=${lastSegment(u)}`; };
+const messageLink = (url: unknown) => { const a = acceptLink(url); return a ? `${a}&surface=telegram` : null; };
+
 /** Counts strings that did not survive cleaning, so the run log can say how many were withheld. */
 class Withheld {
   count = 0;
@@ -417,7 +424,7 @@ export interface PersonView {
 
 function person(card: { name?: unknown; userUrl?: unknown; acceptUrl?: unknown }, w: Withheld): PersonView | null {
   const name = w.name(card.name);
-  return name ? { name, profileUrl: indexUrl("u", card.userUrl), messageUrl: acceptLink(card.acceptUrl) ?? null } : null;
+  return name ? { name, profileUrl: profileLink(card.userUrl), messageUrl: messageLink(card.acceptUrl) } : null;
 }
 
 /**
@@ -615,7 +622,7 @@ export function followUpView(date: string, result: FollowUpResult): { view: Reco
   const yourSignals = result.signals.slice(0, LIST_MAX).flatMap((signal) => {
     // A signal's summary comes back from Index, not from the resident's keyboard: the stricter cleaner.
     const text = w.title(signal.summary, 120);
-    return text ? [{ text, link: indexUrl("i", signal.url) }] : [];
+    return text ? [{ text, link: signalLink(signal.url) }] : [];
   });
   if (waitingOnYou.length === 0 && newConnections.length === 0) return { view: null, withheld: w.count };
   return { view: { job: "people-follow-up", date, yourSignals, waitingOnYou, agentsTalking, newConnections }, withheld: w.count };
