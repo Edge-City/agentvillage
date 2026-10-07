@@ -26,10 +26,11 @@ import { join } from "node:path";
 // Its fix round (CARD-refute) reworded the `does` lines, dropped village.vote's default `note` and
 // the opportunity.accept entry (the control plane's say test wants every entry to be a class row
 // there, and its row arrives with cp#108).
-// Until cp#108 lands, this block is R3 + DATA-370 and the control plane's is DATA-370 alone, so the
-// two pins differ and the byte comparison below passes only against a control-plane tree that
-// carries both (#108 merged with #118).
-const POLICY_BLOCK_SHA256 = "5e77414eb33a723f7c2ec15f5da4589b1391cc53883622ad78fed5b8a0e35411";
+// The R3 landing (controlplane#108 merged with cp main's #118/#120, paired with this PR) moved it
+// once more: the opportunity.accept say entry is back ({tool, input}: only an Index tool call the
+// hook routes reaches the class), now that the control plane's copy carries the row. Both copies'
+// blocks are R3 + DATA-370 + that entry, and the two pins are equal again.
+const POLICY_BLOCK_SHA256 = "67dc1fb0ce9f7fc3d505d2881cb39dd82e2dd6cd3d7162794277c22e773f40d9";
 
 const OPEN = "```yaml approval-policy\n";
 function policyBlock(text: string): string {

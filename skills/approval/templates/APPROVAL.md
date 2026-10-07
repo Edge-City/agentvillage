@@ -212,9 +212,11 @@ tool call the hook gates `{tool, input}` (core's hook, APRV-445/499). ids are
 marketplace.app.*, resource.allocate, review.delegate.model) have no entry:
 their payload keys do not exist yet, so they stay technical (`undeclared`)
 until their tool writes one, and that tool's PR adds the entry.
-opportunity.accept has no entry yet either: the control plane's copy has no
-row for it until cp#108, and its say test wants every entry to be a class row
-of the same file; the entry comes back with that row.
+opportunity.accept has an entry: nothing proposes it, so its only payload is
+a Hermes tool call the hook routes to it (Index's accept_opportunity and
+reject_opportunity, the plugin's index_update_opportunity), quoted as `{tool,
+input}`. The control plane's copy carries the same entry since cp#108 added
+the row (its say test wants every entry to be a class row of the same file).
 
 The relay's quiet hold reads the `ttl:` row from the card's text; the minimal
 card keeps that row inside "Full details", so `always: [ttl_remaining_ms]`
@@ -282,6 +284,10 @@ channels:
         village.vote:                 # the summary (shown) leads with the option's label, then the question
           does: "vote for you on a village question or treasury ballot"
           quote: { answer: "Answer", question_id: ~ }
+        opportunity.accept:           # asked only if the resident sets its row to ask; only an Index tool call the hook routes here reaches it
+          does: "accept or decline a connection or meeting on Index for you"
+          quote: { tool: "Tool", input: "Details" }
+          note: none
         message.send:   { quote: { tool: "Tool", input: "Details" }, note: none }   # these eight ask only if the resident sets their row to ask
         network.call:   { quote: { tool: "Tool", input: "Details" }, note: none }   # a terminal command is quoted by core itself, not by this map
         read.web:       { quote: { tool: "Tool", input: "Details" }, note: none }
