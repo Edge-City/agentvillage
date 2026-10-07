@@ -125,7 +125,8 @@ DELIVERED = frozenset({"delivered", "queued"})
 #: - `sentence`: the question; a reply arms when, after `normalise_reply`,
 #:   it fully matches it (QUESTION_PATTERN), and a pointer's quote is searched
 #:   for it (QUESTION_SEARCH);
-#: - `normalise`: the spaces and the wrapper pairs `normalise_reply` uses;
+#: - `normalise`: the spaces, the trailing manage line (DATA-373) and the
+#:   wrapper pairs `normalise_reply` uses;
 #: - `key`: the question key (`question_key`); the trigger writes the plain
 #:   SHA-256 of the key of the exact question it showed into the stage
 #:   (`question_sha256`), and `cases.arm` gives the expected key and hash of
@@ -142,6 +143,7 @@ class _Question:
         self.search: Optional["re.Pattern[str]"] = None
         self.spaces: tuple[str, ...] = ()
         self.wrappers: tuple[tuple[str, str], ...] = ()
+        self.manage_line: Optional["re.Pattern[str]"] = None
         self.key_remove: Optional["re.Pattern[str]"] = None
         try:
             with open(path, encoding="utf-8") as handle:
@@ -152,12 +154,15 @@ class _Question:
             wrappers = tuple((o, c) for o, c in rules["wrappers"] if isinstance(o, str) and isinstance(c, str) and o and c)
             if not (isinstance(sentence, str) and isinstance(remove, str) and remove):
                 return
+            # Optional: a file without it strips no manage line (the matcher stays as strict as before).
+            manage = rules.get("manage_line")
+            self.manage_line = re.compile(f"(?:{manage})\\Z") if isinstance(manage, str) and manage else None
             self.pattern = re.compile(f"^(?:{sentence})$")
             self.search = re.compile(sentence)
             self.key_remove = re.compile(f"[{re.escape(remove)}]")
             self.spaces, self.wrappers = spaces, wrappers
         except (OSError, ValueError, TypeError, KeyError, AttributeError, re.error):
-            self.pattern = self.search = self.key_remove = None
+            self.pattern = self.search = self.key_remove = self.manage_line = None
 
 
 _QUESTION = _Question()
@@ -193,9 +198,17 @@ def _plain_spaces(text: str) -> str:
 
 def normalise_reply(text: str) -> str:
     """The `normalise` steps of QUESTION_FILE, for matching only: the special
-    spaces as plain spaces; stripped; trailing emoji off; one wrapper pair
-    around the whole reply off; stripped; trailing emoji off again."""
-    text = _strip_trailing_emoji(_plain_spaces(text).strip())
+    spaces as plain spaces; stripped; one trailing manage line off (DATA-373:
+    the evening prompt's "(Evening questions message - ...)" line, or another
+    prompt's, should the model add it to the question) and stripped; trailing
+    emoji off; one wrapper pair around the whole reply off; stripped; trailing
+    emoji off again."""
+    text = _plain_spaces(text).strip()
+    if _QUESTION.manage_line is not None:
+        found = _QUESTION.manage_line.search(text)
+        if found:
+            text = text[:found.start()].strip()
+    text = _strip_trailing_emoji(text)
     for opening, closing in _QUESTION.wrappers:
         if len(text) > len(opening) + len(closing) and text.startswith(opening) and text.endswith(closing):
             text = text[len(opening):len(text) - len(closing)]

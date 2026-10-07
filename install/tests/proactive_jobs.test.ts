@@ -177,7 +177,11 @@ describe("the six proactive jobs (DATA-314)", () => {
     const normalise = (reply: string) => {
       let text = reply;
       for (const space of seed.normalise.spaces as string[]) text = text.split(space).join(" ");
-      text = stripTrailingEmoji(text.trim());
+      text = text.trim();
+      // DATA-373: one trailing manage line off, then stripped.
+      const manage = new RegExp(`(?:${seed.normalise.manage_line})$`, "u").exec(text);
+      if (manage) text = text.slice(0, manage.index).trim();
+      text = stripTrailingEmoji(text);
       for (const [opening, closing] of seed.normalise.wrappers as Array<[string, string]>) {
         if (text.length > opening.length + closing.length && text.startsWith(opening) && text.endsWith(closing)) {
           text = text.slice(opening.length, text.length - closing.length);
@@ -214,7 +218,11 @@ describe("the six proactive jobs (DATA-314)", () => {
     const normalise = (reply: string) => {
       let text = reply;
       for (const space of seed.normalise.spaces as string[]) text = text.split(space).join(" ");
-      text = stripTrailingEmoji(text.trim());
+      text = text.trim();
+      // DATA-373: one trailing manage line off, then stripped.
+      const manage = new RegExp(`(?:${seed.normalise.manage_line})$`, "u").exec(text);
+      if (manage) text = text.slice(0, manage.index).trim();
+      text = stripTrailingEmoji(text);
       for (const [opening, closing] of seed.normalise.wrappers as Array<[string, string]>) {
         if (text.length > opening.length + closing.length && text.startsWith(opening) && text.endsWith(closing)) {
           text = text.slice(opening.length, text.length - closing.length);
