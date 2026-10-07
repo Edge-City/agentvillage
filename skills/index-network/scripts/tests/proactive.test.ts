@@ -18,6 +18,7 @@ const DATE = "2026-10-12";
 /** 08:00 IST. */
 const MORNING = new Date("2026-10-12T02:30:00Z");
 const THIRD_PARTY = "THIRD PARTY WORDS";
+const PORTAL_WEB = "https://agents.edgecity.live"; // c13d250/d149856c: person and signal links in proactive output open the portal
 /** The portal events base event links are rebuilt on (AV_PORTAL_URL). */
 const PORTAL = "https://portal.example/events";
 
@@ -263,7 +264,7 @@ describe("the morning brief", () => {
         newlyResolved: [],
       }) as any,
     }));
-    expect(output(follow.lines).yourSignals).toEqual([{ text: "Hiring for AI / ML and / or data roles", link: "https://index.network/i/s1" }]);
+    expect(output(follow.lines).yourSignals).toEqual([{ text: "Hiring for AI / ML and / or data roles", link: `${PORTAL_WEB}/intents?intent=s1` }]);
   });
 
   test("Index unreadable: no count, no names, the link line still there; the overnight prefetch fills in when it has today", async () => {
@@ -389,12 +390,13 @@ describe("the drops, the evening note and the follow-up: names and Index links o
   // (`/o/<id>?action=accept&viewer=..&sig=..`, 47b537c7), never a built `/o/<id>`; the third-party
   // text and foreign-host guards these tests pinned are unchanged.
   const ACCEPT = (id: string) => `https://index.network/o/${id}?action=accept&viewer=v1&sig=s1`;
+  const MSG = (id: string) => `${ACCEPT(id)}&surface=telegram`; // what person() emits: the signed link plus the surface
 
   test("a drop wakes with one person, the signed accept link and no card text, and marks its own day", async () => {
     const result = await runProactive("drop-midday", options({ drop: async () => ({ opportunity: card("Maya Rao", "op1", { redelivery: true, acceptUrl: ACCEPT("op1") }) }) }));
     expect(output(result.lines)).toEqual({
       agentName: "Edge", job: "opportunity-drop", date: DATE, kind: "conversation", seenBefore: true,
-      person: { name: "Maya Rao", profileUrl: "https://index.network/u/op1-user", messageUrl: ACCEPT("op1") },
+      person: { name: "Maya Rao", profileUrl: `${PORTAL_WEB}/rolodex?person=op1-user`, messageUrl: MSG("op1") },
     });
     expect(result.lines.join("\n")).not.toContain(THIRD_PARTY);
     expect(state()[RUNS_KEY]).toEqual({ "drop-midday": DATE });
@@ -412,7 +414,7 @@ describe("the drops, the evening note and the follow-up: names and Index links o
 
   test("the evening note: one person with the signed accept link, or the closeout question", async () => {
     const person = await runProactive("evening", options({ evening: async () => ({ name: "Arjun", headline: THIRD_PARTY, userUrl: "https://index.network/u/a", opportunityUrl: "https://index.network/o/b", acceptUrl: ACCEPT("b") }) }));
-    expect(output(person.lines)).toEqual({ agentName: "Edge", job: "evening-note", date: DATE, person: { name: "Arjun", profileUrl: "https://index.network/u/a", messageUrl: ACCEPT("b") } });
+    expect(output(person.lines)).toEqual({ agentName: "Edge", job: "evening-note", date: DATE, person: { name: "Arjun", profileUrl: `${PORTAL_WEB}/rolodex?person=a`, messageUrl: MSG("b") } });
     expect(person.lines.join("\n")).not.toContain(THIRD_PARTY);
     rmSync(stateFile());
     const closeout = await runProactive("evening", options({ evening: async () => ({ prompt: "Quick closeout check: did AgentVillage help you meet anyone?" }) }));
@@ -429,9 +431,9 @@ describe("the drops, the evening note and the follow-up: names and Index links o
     const result = await runProactive("negotiation", options({ followUp: follow(["Maya Rao"]) }));
     expect(output(result.lines)).toEqual({
       agentName: "Edge", job: "people-follow-up", date: DATE,
-      yourSignals: [{ text: "Looking for soil scientists", link: "https://index.network/i/s1" }],
-      waitingOnYou: [{ name: "Maya Rao", profileUrl: "https://index.network/u/n0", messageUrl: ACCEPT("n0") }],
-      agentsTalking: [{ name: "Talking Person", profileUrl: "https://index.network/u/t" }],
+      yourSignals: [{ text: "Looking for soil scientists", link: `${PORTAL_WEB}/intents?intent=s1` }],
+      waitingOnYou: [{ name: "Maya Rao", profileUrl: `${PORTAL_WEB}/rolodex?person=n0`, messageUrl: MSG("n0") }],
+      agentsTalking: [{ name: "Talking Person", profileUrl: `${PORTAL_WEB}/rolodex?person=t` }],
       newConnections: [],
     });
     expect(result.lines.join("\n")).not.toContain(THIRD_PARTY);
