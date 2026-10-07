@@ -81,8 +81,8 @@ describe("opportunity copy: the lead line is profiles, every pending card gets i
       expect({ name, hits: count(text, "?action=accept") }).toEqual({ name, hits: name === "tools.md" ? 1 : 0 });
       expect({ name, hit: /accept and message/i.test(text) }).toEqual({ name, hit: false });
       expect({ name, hit: /\]\((url|opportunityUrl)\)/.test(text) }).toEqual({ name, hit: false });
-      // A "message Name" label links only to the card's acceptUrl (or the drop's messageUrl), as a field name or a {placeholder}.
-      expect({ name, hit: /\[message [^\]]+\]\((?!\{?(acceptUrl|messageUrl)\}?\))/i.test(text) }).toEqual({ name, hit: false });
+      // A "message Name" label links only to the card's acceptUrl (or the drop's messageUrl), as a field name, a {placeholder} or <person.messageUrl>.
+      expect({ name, hit: /\[message [^\]]+\]\((?![^)]*\b(acceptUrl|messageUrl)\b)/i.test(text) }).toEqual({ name, hit: false });
       expect(text).not.toMatch(/^<<<<<<<|^=======$|^>>>>>>>/m);
     }
   });
