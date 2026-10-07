@@ -29,7 +29,8 @@
 #       * a variable name may not start with a digit (`${1ABC:-}` is a fatal
 #         "bad substitution" that would end the shell before any directive),
 #         and a clock that does not print digits reads as 0 (an arithmetic
-#         error is fatal too) and turns re-asking off.
+#         error is fatal too); a clock that reads 0 at start turns re-asking
+#         off.
 #   - 2026-10-04, the credential's header for a LOCAL facade (unix socket or
 #     loopback): `Authorization`, because there the shim talks to `approval
 #     serve` itself, which reads only `Authorization` (approval-md core 0.4.0,
@@ -165,6 +166,8 @@ AV_PROC_ROOT=/proc
 
 # Digits only: BSD date prints `...3N` for %3N, and `$(( ))` over anything but
 # digits is a fatal error that ends the shell before it can print a directive.
+# A leading zero is refused too: `$(( 0001791357719 - T0 ))` is an invalid
+# octal constant, as fatal (DATA-377 fix round; no real clock prints one).
 # The unit is read from the digit count, never assumed (DATA-377): GNU date
 # prints milliseconds (13 digits), but the hosted image's date is uutils
 # coreutils 0.8.0, whose %3N prints all nine fraction digits, so the same
@@ -173,10 +176,11 @@ AV_PROC_ROOT=/proc
 # hook-timeout answer into a block, and logged elapsed_ms in nanoseconds.
 # 19 digits are nanoseconds, 16 microseconds, 13 milliseconds, 10 seconds;
 # the cut is on the string, so no arithmetic sees the raw value. Any other
-# length reads as 0, as a clock without digits does: no window, no re-asking.
+# length reads as 0, as a clock without digits does; a clock that reads 0 at
+# start turns re-asking off (the T0 guard below).
 now_ms() {
   v=$("$T_date" +%s%3N 2>/dev/null) || v=0
-  case $v in '' | *[!0-9]*) v=0 ;; esac
+  case $v in '' | 0* | *[!0-9]*) v=0 ;; esac
   case ${#v} in
     19) v=${v%??????} ;;
     16) v=${v%???} ;;

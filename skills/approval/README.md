@@ -122,8 +122,9 @@ unparseable body, a missing program, a missing variable, a bad variable name,
 an unreadable token file, a foreign listener) prints a block and exits 2: it
 fails closed. It has no fatal shell path of its own left: a variable name
 starting with a digit is refused before it reaches `eval` (it was a fatal "bad
-substitution"), a clock that does not print digits reads as 0 instead of
-failing `$(( ))` (and turns re-asking off), and the interpreter stays `#!/bin/sh` without `set -u`
+substitution"), a clock that does not print digits, or prints a leading zero,
+reads as 0 instead of failing `$(( ))` (a clock that reads 0 at start turns
+re-asking off), and the interpreter stays `#!/bin/sh` without `set -u`
 (an unset variable expands empty and is then refused by name). Only a signal
 kill (or ptrace) can still end it without a directive; see the uncovered
 surfaces.

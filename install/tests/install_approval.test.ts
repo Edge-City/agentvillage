@@ -1332,7 +1332,7 @@ exec /usr/bin/perl -e '@s = lstat($ARGV[1]) or exit 1; $f = $ARGV[0]; $f =~ s/%u
     state,
     proc,
     fake,
-    run(env: Record<string, string> = {}, o: { bare?: boolean } = {}): ShimRun {
+    run(env: Record<string, string> = {}, o: { bare?: boolean; timeoutMs?: number } = {}): ShimRun {
       const base = o.bare
         ? { PATH: `${fake}:/usr/bin:/bin` }
         : {
@@ -1347,7 +1347,10 @@ exec /usr/bin/perl -e '@s = lstat($ARGV[1]) or exit 1; $f = $ARGV[0]; $f =~ s/%u
             APPROVAL_HOOK_MAX_TIME: "1",
             APPROVAL_HOOK_LOG: join(root, "hook.log"),
           };
-      const proc = Bun.spawnSync(["bash", "-c", `exec "$0" < "$1"`, shim, envelope], { env: { ...base, ...env } });
+      const proc = Bun.spawnSync(["bash", "-c", `exec "$0" < "$1"`, shim, envelope], {
+        env: { ...base, ...env },
+        ...(o.timeoutMs ? { timeout: o.timeoutMs } : {}),
+      });
       const calls = existsSync(join(state, "count")) ? Number(readFileSync(join(state, "count"), "utf8")) : 0;
       const read = (name: string) => Array.from({ length: calls }, (_, i) => readFileSync(join(state, `${name}.${i + 1}`), "utf8"));
       return {
@@ -1667,6 +1670,19 @@ describe("DATA-377: the shim's clock unit is read from the digit count", () => {
     expect(ms.at(-1)!).toBeLessThan(10000);
   });
 
+  test("a millisecond clock (GNU): the window is measured in milliseconds too (WAIT_S=6 closes after a few re-asks, then the last block stands)", () => {
+    const fx = withClock(shimFixture("waiting"), clockFake("ms"));
+    // A unit read wrongly here would run the loop for hours: bound the run, so it fails instead of hanging.
+    const r = fx.run({ APPROVAL_HOOK_WAIT_S: "6" }, { timeoutMs: 20000 });
+    expect(r.code).toBe(2);
+    expect(r.calls).toBeGreaterThan(1);
+    expect(JSON.parse(r.stdout).message).toStartWith("hook-timeout:");
+    // The loop stops once now + 5 s reaches T0 + 6 s: about one second of real time.
+    const ms = elapsed(fx.log());
+    expect(ms.at(-1)!).toBeGreaterThanOrEqual(1000);
+    expect(ms.at(-1)!).toBeLessThan(10000);
+  });
+
   test("a nanosecond clock: a first post that hit the curl ceiling is re-asked and the later answer stands", () => {
     const fx = withClock(shimFixture("first-timeout"), clockFake("ns"));
     const r = fx.run({ APPROVAL_HOOK_WAIT_S: "8" });
@@ -1715,6 +1731,26 @@ describe("DATA-377: the shim's clock unit is read from the digit count", () => {
       expect([stamp, r.code, r.calls]).toEqual([stamp, 2, 1]);
       expect(JSON.parse(r.stdout).message).toStartWith("hook-timeout:");
       expect(elapsed(fx.log())).toEqual([0, 0]);
+    }
+  });
+
+  test("a clock with a leading zero is 0, not a fatal octal error: a directive every time, verdicts intact, no re-asking", () => {
+    // 0 + 13 digits, and 13-digit stamps zero-padded to 16 and 19 (cut, they still lead with 0).
+    for (const stamp of ["01791357719266", "0001791357719266", "0000001791357719266"]) {
+      for (const [mode, code, calls] of [
+        ["allow", 0, 1],
+        ["block", 2, 1],
+        ["unreachable", 2, 1],
+        ["wait-then-allow", 2, 1],
+      ] as const) {
+        const fx = withClock(shimFixture(mode), `#!/bin/sh\ncase "$1" in +%s%3N) echo ${stamp} ;; *) exec /bin/date "$@" ;; esac\n`);
+        const r = fx.run({ APPROVAL_HOOK_WAIT_S: "280" });
+        expect([stamp, mode, r.code, r.calls]).toEqual([stamp, mode, code, calls]);
+        if (code !== 0) expect(JSON.parse(r.stdout).action).toBe("block");
+        else expect(r.stdout).toBe("{}");
+        expect(r.stderr).not.toMatch(/arithmetic|octal|base|Illegal number/i);
+        expect(elapsed(fx.log())).toEqual([0, 0]);
+      }
     }
   });
 });
