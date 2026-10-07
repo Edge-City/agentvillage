@@ -172,10 +172,46 @@ const MARKUP = /[`*_~|\\<>[\]{}#]/g;
 /** A URL with a scheme, a `www.` address or an email address. */
 const LINKS = /\b[a-z][a-z0-9+.-]*:\/\/\S*|\bwww\.\S*|\S+@\S+\.\S+/gi;
 
-function capped(plain: string, max: number): string | null {
+/** How a line over its cap is cut: at the cap itself, or at a word boundary before it (cutAtWord). */
+export type TitleCut = "codepoint" | "word";
+
+function capped(plain: string, max: number, cut: TitleCut = "codepoint"): string | null {
   if (!VISIBLE.test(plain)) return null;
-  const cut = [...plain].length > max ? `${codePointSlice(plain, max - 1).trimEnd()}\u2026` : plain;
-  return cronScanHit(cut) ? null : cut;
+  const out =
+    [...plain].length <= max ? plain : cut === "word" ? cutAtWord(plain, max) : `${codePointSlice(plain, max - 1).trimEnd()}\u2026`;
+  return cronScanHit(out) ? null : out;
+}
+
+/** Spaces and the punctuation a cut should not leave dangling before its ellipsis. */
+const CUT_TAIL = /[\s,;:\u2013\u2014-]+$/u;
+
+/**
+ * DATA-374: `plain` (one line, whitespace already collapsed) at most `max`
+ * long with an ellipsis marking the cut, cut at the last space before the
+ * cap so no word is split; a run with no space in the second half of the
+ * room (a single word longer than half the cap) is cut at the cap itself, so
+ * one very long word never leaves only the words before it. Spaces, commas,
+ * semicolons, colons and dashes before the ellipsis are dropped. `unit`
+ * measures the length: code points, or UTF-16 code units (JavaScript's
+ * `.length`, what Telegram and the control plane count); a surrogate pair is
+ * never split either way. Unchanged when it already fits. Pure.
+ */
+export function cutAtWord(plain: string, max: number, unit: "codepoint" | "utf16" = "codepoint"): string {
+  const size = (ch: string) => (unit === "utf16" ? ch.length : 1);
+  const chars = [...plain];
+  let total = 0;
+  for (const ch of chars) total += size(ch);
+  if (total <= max) return plain;
+  const room = Math.max(0, max - 1); // the ellipsis is one code point and one code unit
+  let used = 0;
+  let n = 0;
+  while (n < chars.length && used + size(chars[n]) <= room) used += size(chars[n++]);
+  const atBoundary = n < chars.length && /\s/u.test(chars[n]);
+  const space = n > 0 ? chars.lastIndexOf(" ", n - 1) : -1;
+  const keep = atBoundary || space < n / 2 ? n : space;
+  const head = chars.slice(0, n).join("");
+  const trimmed = chars.slice(0, keep).join("").replace(CUT_TAIL, "");
+  return `${trimmed || head.trimEnd()}\u2026`;
 }
 
 /**
@@ -213,11 +249,13 @@ export function cleanText(raw: unknown, max: number): string | null {
  * withoutPhoneRuns); the full stops that act
  * as a domain dot (U+3002, U+FF0E, U+FF61) read as `.`, and a dot between
  * letters followed by a space, so no domain survives as a link (`7.30pm`
- * stays). Null only when nothing visible is left or Hermes's scanner would
+ * stays). At most `max` code points: cut at the cap with an ellipsis, or,
+ * with `cut` "word" (the welcome's intent titles, DATA-374), at a word
+ * boundary before it (cutAtWord). Null only when nothing visible is left or Hermes's scanner would
  * block on it. Words that read as an instruction cannot be cleaned away; the
  * prompts say the Script Output is data.
  */
-export function cleanTitle(raw: unknown, max: number): string | null {
+export function cleanTitle(raw: unknown, max: number, cut: TitleCut = "codepoint"): string | null {
   if (typeof raw !== "string") return null;
   const plain = withoutPhoneRuns(
     raw
@@ -238,7 +276,7 @@ export function cleanTitle(raw: unknown, max: number): string | null {
     .trim()
     .replace(EDGE_SLASHES, "")
     .trim();
-  return capped(plain, max);
+  return capped(plain, max, cut);
 }
 
 
