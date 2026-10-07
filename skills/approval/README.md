@@ -113,11 +113,13 @@ decider and answers; the shim replays `{}` (allow) or the block directive at
 exit 2. While the facade answers `hook-timeout` (a question is open and waiting
 for the resident) the shim re-asks every 5 s for up to 280 s, inside Hermes's
 300 s entry timeout. It measures that window, and the log's `elapsed_ms`, in
-milliseconds, reading the unit of `date +%s%3N` from its digit count (10
-seconds, 13 milliseconds, 16 microseconds, 19 nanoseconds; any other count is
-no clock): the hosted image's date (uutils coreutils 0.8.0) prints
-nanoseconds there, which before DATA-377 closed the window at once and made
-every such wait a block. Every failure it can see (facade unreachable, non-200,
+milliseconds, reading `date +%s.%N` and left-padding the fraction to nine
+digits before keeping three (a fraction that is not one to nine digits is no
+clock): the hosted image's date (uutils coreutils 0.8.0 on the old-checkpoint
+boxes) prints the nanoseconds without zero padding, which before DATA-377
+closed the window at once (the unit read as milliseconds) and, until its
+second round, read about 9 % of clocks as 0 and turned those waits into
+blocks. Every failure it can see (facade unreachable, non-200,
 unparseable body, a missing program, a missing variable, a bad variable name,
 an unreadable token file, a foreign listener) prints a block and exits 2: it
 fails closed. It has no fatal shell path of its own left: a variable name
