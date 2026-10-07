@@ -112,16 +112,31 @@ const EDGE_TAGS = [
  * Network, `city` from Edge City, `consent` from research consent), or every
  * tenant gets the same tags. The short ones left (`ai`, `xr`, `vr`, `zk`,
  * `p2p`) are not English words.
+ *
+ * Whole words lose the derived and compound forms a substring caught, and a
+ * resident types an interest in their own words, so those forms are listed
+ * outright (healthcare, cybersecurity, musician, ...): DATA-372 S1.
  */
-const TAG_KEYWORDS: Record<string, string[]> = {
-  "Health & Longevity": ["health", "longevity", "aging", "wellness", "medicine", "biotech"],
-  "Bio & Neuro": ["biology", "neuro", "neuroscience", "brain", "buck institute"],
+export const TAG_KEYWORDS: Record<string, string[]> = {
+  "Health & Longevity": ["health", "healthcare", "healthtech", "longevity", "aging", "wellness", "medicine", "biotech"],
+  "Bio & Neuro": [
+    "biology",
+    "biotechnology",
+    "biohacking",
+    "neuro",
+    "neurotech",
+    "neurology",
+    "neuroscience",
+    "neuroscientist",
+    "brain",
+    "buck institute",
+  ],
   AI: ["ai", "artificial intelligence", "ai agent", "llm", "machine learning", "model", "automation"],
   "Governance & Coordination": ["governance", "coordination", "collective", "decision making", "polis"],
   "Hard Tech": ["hardware", "robotics", "manufacturing", "hard tech", "engineering"],
-  Privacy: ["privacy", "security", "cryptography", "zero knowledge", "zk"],
-  "Decentralized Tech": ["decentralized", "protocol", "crypto", "web3", "p2p"],
-  "Creative AI & Technologies": ["creative", "art", "design", "media", "generative"],
+  Privacy: ["privacy", "security", "cybersecurity", "cryptography", "zero knowledge", "zk"],
+  "Decentralized Tech": ["decentralized", "protocol", "crypto", "cryptocurrency", "web3", "p2p"],
+  "Creative AI & Technologies": ["creative", "art", "design", "designer", "media", "generative"],
   "Spatial Computing": [
     "spatial",
     "spatial computing",
@@ -134,15 +149,33 @@ const TAG_KEYWORDS: Record<string, string[]> = {
     "ar glasses",
     "metaverse",
   ],
-  "New Urbanism": ["urban", "urbanism", "town planning", "city building", "housing", "real estate"],
+  "New Urbanism": ["urban", "urbanism", "urbanist", "town planning", "city building", "housing", "real estate"],
   Education: ["education", "learning", "school", "children", "kids"],
-  "Energy & Climate": ["energy", "climate", "solar", "carbon", "environment"],
-  "Food Systems": ["food", "agriculture", "farming", "nutrition"],
+  "Energy & Climate": ["energy", "climate", "climatetech", "solar", "carbon", "environment"],
+  "Food Systems": ["food", "agriculture", "farming", "nutrition", "nutritionist"],
   Consciousness: ["consciousness", "meditation", "mindfulness", "meaning"],
   Wellbeing: ["wellbeing", "fitness", "workout", "sauna", "breathwork"],
   "d/acc": ["d/acc", "defensive acceleration", "biosecurity"],
-  "Art & Culture": ["art", "culture", "music", "film", "storytelling"],
+  "Art & Culture": ["art", "artist", "culture", "music", "musician", "film", "filmmaker", "storytelling"],
 };
+
+/**
+ * A whole stated interest that names a tag on its own but is too short or too
+ * common to be a keyword in prose (DATA-372 S1). Matched only against a whole
+ * entry of the profile's interests, after NFKC, lower case and trimming.
+ */
+export const STATED_ALIASES: Record<string, string> = {
+  ar: "Spatial Computing",
+  agents: "AI",
+  cities: "New Urbanism",
+  blockchain: "Decentralized Tech",
+  decentralised: "Decentralized Tech",
+  decentralized: "Decentralized Tech",
+};
+
+function aliasKey(entry: string): string {
+  return entry.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
+}
 
 /** Phrases removed before matching: they hold a keyword but say nothing about an interest. */
 const NOT_INTEREST_PHRASES = /state[\s_-]+of[\s_-]+the[\s_-]+art/giu;
@@ -268,11 +301,12 @@ export interface BriefUserModel {
   interestTags: string[];
   /**
    * DATA-372: the interests the resident stated in their profile
-   * (av-profile.json), deduplicated, in their order. When not empty, these
-   * are the brief's `you.interests`, exactly; when empty, interestTags are.
+   * (av-profile.json), deduplicated, in their order: the brief's
+   * `you.interests`, exactly. When empty, the brief names no interest
+   * (interestTags only pick events and notes).
    */
   statedInterests?: string[];
-  /** Where interestTags came from: the profile, the memory files, or nowhere. */
+  /** Where interestTags came from: the profile, the memory files (event picks and notes only), or nowhere. */
   interestSource?: InterestSource;
 }
 
@@ -446,11 +480,11 @@ export function formatVillageTime(iso: string): string {
  * one per keyword found as a whole word (keywordPattern). The fallback when
  * the resident's profile states no interests (resolveInterests).
  */
-export function extractInterestTags(text: string): string[] {
+export function extractInterestTags(text: string, bonus: ReadonlyMap<string, number> = new Map()): string[] {
   const haystack = text.replace(NOT_INTEREST_PHRASES, " ");
   const scored = EDGE_TAGS.map((tag) => {
     const keywords = new Set(tagKeywords(tag));
-    const score = [...keywords].reduce((sum, keyword) => sum + (hasKeyword(haystack, keyword) ? 1 : 0), 0);
+    const score = [...keywords].reduce((sum, keyword) => sum + (hasKeyword(haystack, keyword) ? 1 : 0), bonus.get(tag) ?? 0);
     return { tag, score };
   })
     .filter((entry) => entry.score > 0)
@@ -481,15 +515,30 @@ export function dedupeInterests(interests: readonly unknown[] | undefined): stri
  * profile, those are what the brief names, and the village tags (for picking
  * events and notes) come from those words alone; the memory files are not
  * searched for tags. Only when the profile states none are the tags extracted
- * from the memory files.
+ * from the memory files, and then they only pick events and notes: the brief
+ * names no interest (proactive.ts interestsView, DATA-372 B1).
  */
+/**
+ * The village tags the profile's stated interests suggest, for picking events:
+ * the keywords over the stated words, plus one for each whole entry that is an
+ * alias (STATED_ALIASES: "AR", "Agents", "Cities", ...).
+ */
+export function statedInterestTags(stated: readonly string[]): string[] {
+  const bonus = new Map<string, number>();
+  for (const entry of stated) {
+    const tag = STATED_ALIASES[aliasKey(entry)];
+    if (tag) bonus.set(tag, (bonus.get(tag) ?? 0) + 1);
+  }
+  return extractInterestTags(stated.join("\n"), bonus);
+}
+
 export function resolveInterests(
   stated: readonly unknown[] | undefined,
   memoryText: string,
 ): { statedInterests: string[]; interestTags: string[]; interestSource: InterestSource } {
   const statedInterests = dedupeInterests(stated);
   if (statedInterests.length > 0) {
-    return { statedInterests, interestTags: extractInterestTags(statedInterests.join("\n")), interestSource: "profile" };
+    return { statedInterests, interestTags: statedInterestTags(statedInterests), interestSource: "profile" };
   }
   const interestTags = extractInterestTags(memoryText);
   return { statedInterests, interestTags, interestSource: interestTags.length > 0 ? "memory" : "none" };

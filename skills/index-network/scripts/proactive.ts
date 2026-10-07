@@ -166,7 +166,7 @@ export function agentNameFor(home: string): string {
  * same reader (its interest rule applied: at most 12, each at most 40 code points, no control
  * character; a list that breaks it is dropped whole), for the morning brief's `you.interests`.
  * Empty when there is no file, the file is ignored or the list is empty or dropped: the brief then
- * falls back to tags extracted from the memory files. Silent (an agent job's agentNameFor logs a
+ * names no interest, and tags extracted from the memory files only pick events and notes. Silent (an agent job's agentNameFor logs a
  * bad file once per run; the prefetch logs nothing); never throws.
  */
 export function statedInterestsFor(home: string): string[] {
@@ -495,16 +495,17 @@ export function withPrefetchedIndex(context: DailyBriefContext, prefetched: Dail
 
 /**
  * The brief's `you.interests` (DATA-372): the interests the resident stated in their profile,
- * exactly (in their order, deduplicated), when there are any; else the village tags extracted from
- * the memory files. Stated interests are text the resident (or anything with access to the
- * sandbox) wrote, so they take the stricter cleaner; a tag is the village's own name for it. A
- * stated list whose every entry is withheld leaves the list empty: it never falls back to tags.
+ * exactly (in their order, deduplicated after cleaning), and nothing else. With none stated the
+ * list is empty and the brief names no interest (B1): tags extracted from the memory files only
+ * pick `forYourInterests` and the notes, never what the brief names. Stated interests are text the
+ * resident (or anything with access to the sandbox) wrote, so they take the stricter cleaner, with
+ * room for the spaces it adds (the reader already caps each at 40 code points; S2).
  */
+export const STATED_INTEREST_MAX = 60;
+
 function interestsView(context: DailyBriefContext, w: Withheld): string[] {
   const stated = context.userModel?.statedInterests ?? [];
-  const cleaned = stated.length > 0
-    ? stated.flatMap((interest) => w.title(interest, 40) ?? [])
-    : (context.userModel?.interestTags ?? []).flatMap((tag) => cleanText(tag, 40) ?? []);
+  const cleaned = stated.flatMap((interest) => w.title(interest, STATED_INTEREST_MAX) ?? []);
   const seen = new Set<string>();
   return cleaned.filter((interest) => {
     const key = interest.toLowerCase();

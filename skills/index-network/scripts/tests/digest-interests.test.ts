@@ -7,7 +7,8 @@
  *     City, research consent) tags anyone.
  *   - Profile first (resolveInterests): when av-profile.json states interests,
  *     the brief's `you.interests` is exactly those, in their order; the memory
- *     files are searched for tags only when the profile states none.
+ *     files are searched for tags only when the profile states none, and those
+ *     tags only pick events and notes: with none stated the brief names none (B1).
  *   - brief.md tells the model to name only the listed interests.
  *
  *   bun test skills/index-network/scripts/tests/digest-interests.test.ts
@@ -26,6 +27,8 @@ import {
   extractUserModelPhrases,
   hasKeyword,
   resolveInterests,
+  statedInterestTags,
+  TAG_KEYWORDS,
 } from "../build-daily-brief-context";
 import { type ProactiveOptions, runProactive, statedInterestsFor } from "../proactive";
 
@@ -52,6 +55,16 @@ describe("extractInterestTags matches whole words only", () => {
       "It is a state-of-the-art venue with a state of the art stage.",
     ].join("\n");
     expect(extractInterestTags(prose)).toEqual([]);
+  });
+
+  test("no keyword in the table is a short English word (2-3 letters)", () => {
+    const allowed = new Set(["ai", "llm", "xr", "vr", "zk", "p2p", "art"]); // none an English word but "art", kept on purpose
+    const short = Object.values(TAG_KEYWORDS).flat().filter((k) => k.replace(/[^a-z0-9]/gi, "").length <= 3 && !allowed.has(k));
+    expect(short).toEqual([]);
+  });
+
+  test("the product's own seed USER.md tags nothing", () => {
+    expect(extractInterestTags(readFileSync(join(SKILLS, "..", "workspace", "USER.md"), "utf8"))).toEqual([]);
   });
 
   test("substrings of longer words never count", () => {
@@ -122,6 +135,48 @@ describe("resolveInterests: the profile first, the memory files only when it sta
 
   test("no stated interests and no keyword in memory: none", () => {
     expect(resolveInterests([], "We are here")).toEqual({ statedInterests: [], interestTags: [], interestSource: "none" });
+  });
+
+  test("S1: the stated words' derived and compound forms map to their tags", () => {
+    const table: [string, string][] = [
+      ["Healthcare", "Health & Longevity"],
+      ["Healthtech", "Health & Longevity"],
+      ["Biotechnology", "Bio & Neuro"],
+      ["Neurotech", "Bio & Neuro"],
+      ["Neurology", "Bio & Neuro"],
+      ["Neuroscientist", "Bio & Neuro"],
+      ["Biohacking", "Bio & Neuro"],
+      ["Cryptocurrency", "Decentralized Tech"],
+      ["Cybersecurity", "Privacy"],
+      ["Artist", "Art & Culture"],
+      ["Artists", "Art & Culture"],
+      ["Musician", "Art & Culture"],
+      ["Filmmaker", "Art & Culture"],
+      ["Designer", "Creative AI & Technologies"],
+      ["Urbanist", "New Urbanism"],
+      ["Nutritionist", "Food Systems"],
+      ["Climatetech", "Energy & Climate"],
+    ];
+    for (const [word, tag] of table) {
+      expect({ word, tags: resolveInterests([word], "").interestTags }).toEqual({ word, tags: [tag] });
+    }
+  });
+
+  test("S1: a whole stated entry that is an alias maps to its tag; the same word in prose does not", () => {
+    const table: [string, string][] = [
+      ["AR", "Spatial Computing"],
+      ["Agents", "AI"],
+      ["Cities", "New Urbanism"],
+      ["Blockchain", "Decentralized Tech"],
+      ["Decentralised", "Decentralized Tech"],
+      ["Decentralized", "Decentralized Tech"],
+      ["  ar  ", "Spatial Computing"],
+    ];
+    for (const [entry, tag] of table) {
+      expect({ entry, tags: statedInterestTags([entry]) }).toEqual({ entry, tags: [tag] });
+    }
+    expect(statedInterestTags(["AR and cities in prose"])).toEqual([]);
+    expect(extractInterestTags("We are agents of change in our cities")).toEqual([]);
   });
 
   test("dedupeInterests ignores anything that is not a string", () => {
@@ -236,10 +291,41 @@ describe("the morning brief's you.interests", () => {
     expect(result.lines.join("\n")).not.toContain("ABOUT-ME-TEXT");
   });
 
-  test("a profile with no interests: the memory tags, whole words only", async () => {
+  test("B1: a profile with no interests names none, though memory tags exist (they only pick events and notes)", async () => {
     writeProfile(profile([]));
-    const result = await runProactive("brief", options("We are here. I tinker with VR rigs."));
-    expect(you(result.lines).interests).toEqual(["Spatial Computing"]);
+    const seen: { statedInterests?: string[] }[] = [];
+    const result = await runProactive("brief", options("We are here. I tinker with VR rigs.", seen));
+    expect(seen[0]?.statedInterests).toEqual([]);
+    expect(you(result.lines).interests).toEqual([]);
+  });
+
+  test("B1: the refuter's village-logistics memory, with no profile, names no interest", async () => {
+    const memory = [
+      "- Booked housing at Riva for the first two weeks.",
+      "- Travelling with two kids.",
+      "- Asked where to get food near the venue.",
+      "- Asked about health and safety.",
+    ].join("\n");
+    // The memory fallback still finds tags (for event picks) ...
+    expect(resolveInterests([], memory).interestTags).toEqual(["Education", "Food Systems", "Health & Longevity", "New Urbanism"]);
+    // ... but the brief names none of them.
+    const result = await runProactive("brief", options(memory));
+    expect(you(result.lines).interests).toEqual([]);
+  });
+
+  test("S2: a stated interest the cleaner widens is not cut (cap 60 after cleaning)", async () => {
+    writeProfile(profile(["Climate/energy policy and carbon markets", "Open-source hardware/robotics for farms"]));
+    const result = await runProactive("brief", options(""));
+    expect(you(result.lines).interests).toEqual([
+      "Climate / energy policy and carbon markets",
+      "Open-source hardware / robotics for farms",
+    ]);
+  });
+
+  test("dedupe runs after cleaning: two spellings that clean the same are one", async () => {
+    writeProfile(profile(["AI/ML", "AI / ML", "Music"]));
+    const result = await runProactive("brief", options(""));
+    expect(you(result.lines).interests).toEqual(["AI / ML", "Music"]);
   });
 
   test("no profile and prose with no interest word: the list is empty", async () => {

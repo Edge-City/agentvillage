@@ -123,7 +123,8 @@ describe("the morning brief", () => {
     expect(view.approvalsWaiting).toBe(2);
     expect(view.announcements).toEqual(["Lunch moves to the Banyan Stage at 1pm. Details:"]);
     expect(view.schedule.yourRsvps).toEqual([{ title: "Breathwork on the beach", time: "9:30 AM", venue: "Banyan Stage", link: "https://portal.example/events/e1" }]);
-    expect(view.you).toEqual({ interests: ["Energy & Climate"], notes: ["Working on soil carbon markets"] });
+    // DATA-372 B1: no stated interests (the context carries memory tags only), so the brief names none.
+    expect(view.you).toEqual({ interests: [], notes: ["Working on soil carbon markets"] });
   });
 
   test("no third-party free text, no internal warnings, no person links, no backtick or raw angle bracket", async () => {
