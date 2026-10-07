@@ -1,10 +1,12 @@
 # Index Network — Voice Exemplars
 
-Canonical user-facing renderings for Edge City India's people-finding flows. Mimic these exactly when composing the morning brief. They are the bar for tone, structure, and information density. Edge City India (Mandrem, Goa, October 11 – November 1, 2026) is the literal community in every example — pull facts from `AGENTS.md` Community context, never invent dates, attendee counts, programming formats, announcements, events, venues, or attendees. Calendar lines below are `{placeholders}`: fill them only from the live calendar context, never with example or Edge Esmeralda content.
+Canonical user-facing renderings for Edge City India's people-finding flows. Mimic these exactly when composing an opportunity reply or an introduction drop. They are the bar for tone, structure, and information density. Edge City India (Mandrem, Goa, October 11 – November 1, 2026) is the literal community in every example — pull facts from `AGENTS.md` Community context, never invent dates, attendee counts, programming formats, announcements, events, venues, or attendees. Calendar lines below are `{placeholders}`: fill them only from the live calendar context, never with example or Edge Esmeralda content.
 
 Direct conversations come first. Each card is one specific overlap and one Index opportunity link. Do not describe backend activity, advertise virtual worlds, or turn the brief into a broad digest.
 
 ## Good morning brief (fires once daily, 08:00 village time, IST)
+
+Since DATA-314 the scheduled brief itself (prompts/brief.md) names waiting people in plain text and closes its people part with one `Connections:` line; it carries no per-person link. The cards below are the voice for chat replies and introduction drops, where each pending card carries its own `acceptUrl`.
 
 Calendar bullets should put EdgeOS `highlighted: true` events first, then fill with one interest-relevant event from the remaining live calendar when useful.
 
