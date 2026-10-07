@@ -18,6 +18,7 @@ import { recordsWelcomeSent } from "../../../../install/welcome_state";
 import {
   ALREADY_SENT,
   CONTEXT_QUESTIONS,
+  INTENTS_URL_MAX,
   MAX_LISTED,
   TITLE_MAX,
   WELCOME_MAX_CHARS,
@@ -26,6 +27,7 @@ import {
   type WelcomeBranch,
   claimWelcome,
   draftTrailer,
+  fitTitles,
   intentTitles,
   intentsPageUrl,
   main,
@@ -43,6 +45,19 @@ import golden from "./fixtures/welcome-texts.json";
 const SCRIPT = join(import.meta.dir, "..", "welcome.ts");
 const REPO = join(import.meta.dir, "..", "..", "..", "..");
 const INTENTS_URL = "https://agents.edgecity.live/intents";
+/** The control plane sends its fixed greeting instead of a welcome this long or longer (telegram-onboarding.js WELCOME_MAX_CHARS). */
+const CONTROL_PLANE_WELCOME_MAX = 1200;
+/** A nickname at the profile's 32 code points, each a supplementary-plane letter: 64 UTF-16 code units, the longest name in `.length`. */
+const ASTRAL_NAME = "\u{20000}".repeat(32);
+/** A text of `n` code points, words of four letters and a space (`n` > 0). */
+const words = (n: number, letter = "w") => `${letter.repeat(4)} `.repeat(Math.ceil(n / 5)).slice(0, n).trimEnd().padEnd(n, letter);
+
+/** An AV_CONNECTIONS_URL whose Intents link is exactly `length` characters (dot-separated labels of at most 60). */
+function connectionsUrlFor(length: number): string {
+  const host = "h".repeat(length - "https://".length - "/intents".length - ".example".length);
+  const labels = host.match(/.{1,60}/g)!.join(".").slice(0, host.length).replace(/\.$/, "h");
+  return `https://${labels}.example/insights`;
+}
 const VARS = ["INDEX_API_KEY", "INDEX_MCP_URL", "AV_CONNECTIONS_URL", "HERMES_HOME"];
 const saved: Record<string, string | undefined> = {};
 
@@ -151,13 +166,58 @@ describe("the welcome text", () => {
     expect(intentTitles(intentsText(rows))).toEqual(["Find a cofounder for a climate startup", "Teach a pottery class"]);
   });
 
-  test("over-long titles are cut to TITLE_MAX code points with an ellipsis, as one plain line", async () => {
-    const long = `Looking for **people**\nbuilding [agent memory](https://evil.example) ${"and more ".repeat(30)}`;
+  test("an intent of Carter's shape (about 120 characters) is listed whole, with no ellipsis", async () => {
+    // DATA-374: the 0.4.3 hello cut each of these at 80 ("...would be up for singing with other residents at E…").
+    const carters = [
+      "Looking for musicians and singers who would be up for singing with other residents at Edge City India this month",
+      "Open to hosting a weekly sunrise walk along the beach in Mandrem for anyone who wants to talk about agents and cities",
+      "Hoping to meet founders working on decentralised energy and climate tools, to compare notes and maybe build together",
+    ];
+    for (const t of carters) expect(t.length).toBeGreaterThan(110);
+    writeProfile("Mira");
+    const rows = carters.map((t, i) => intent(t, "active", `e${i}`));
+    expect(intentTitles(intentsText(rows))).toEqual(carters);
+    const { text } = await run(() => intentsText(rows));
+    expect(text.split("\n").filter((l) => l.startsWith("- "))).toEqual(carters.map((t) => `- ${t}`));
+    expect(text).not.toContain("…");
+    expect(text.length).toBeLessThan(WELCOME_MAX_CHARS);
+  });
+
+  test("a title of exactly TITLE_MAX code points is listed whole", async () => {
+    const whole = words(TITLE_MAX);
+    expect([...whole].length).toBe(TITLE_MAX);
+    expect(intentTitles(intentsText([intent(whole, "active", "f1")]))).toEqual([whole]);
+    const { text } = await run(() => intentsText([intent(whole, "active", "f1")]));
+    expect(text).toContain(`\n- ${whole}\n`);
+  });
+
+  test("a 400-character intent is cut at the last word boundary before TITLE_MAX and ends with an ellipsis, never mid-word", async () => {
+    const long = "Looking for musicians and singers to jam with on the beach at sunset ".repeat(6).slice(0, 400).trimEnd();
+    expect(long.length).toBeGreaterThan(390);
+    // A cut at the cap itself would split a word here.
+    expect(/\S\S/.test(long.slice(TITLE_MAX - 2, TITLE_MAX))).toBe(true);
+    const [title] = intentTitles(intentsText([intent(long, "active", "f2")]));
+    expect(title.endsWith("…")).toBe(true);
+    expect([...title].length).toBeLessThanOrEqual(TITLE_MAX);
+    const kept = title.slice(0, -1);
+    expect(long.startsWith(`${kept} `)).toBe(true); // the cut falls on a space: the last word kept is whole
+    expect(long.indexOf(" ", kept.length + 1)).toBeGreaterThan(TITLE_MAX - 1); // the last boundary before the cap, not an earlier one
+    const { text } = await run(() => intentsText([intent(long, "active", "f2")]));
+    expect(text).toContain(`\n- ${title}\n`);
+  });
+
+  test("a single word longer than TITLE_MAX is cut at the cap", () => {
+    const word = "x".repeat(400);
+    expect(intentTitles(intentsText([intent(word, "active", "f3")]))).toEqual([`${"x".repeat(TITLE_MAX - 1)}…`]);
+  });
+
+  test("over-long titles are cleaned to one plain line before the cut", async () => {
+    const long = `Looking for **people**\nbuilding [agent memory](https://evil.example) ${"and more ".repeat(40)}`;
     const titles = intentTitles(intentsText([intent(long, "active", "9")]));
     expect(titles).toHaveLength(1);
     expect([...titles[0]].length).toBeLessThanOrEqual(TITLE_MAX);
-    expect([...titles[0]].length).toBeGreaterThan(TITLE_MAX - 3);
-    expect(titles[0].endsWith("…")).toBe(true);
+    expect(titles[0].startsWith("Looking for people building agent memory")).toBe(true);
+    expect(titles[0]).toMatch(/ (?:and|more)…$/);
     expect(titles[0]).not.toMatch(/[\n*[\]]|https?:/);
     const { text } = await run(() => intentsText([intent(long, "active", "9")]));
     expect(text).toContain(`- ${titles[0]}\n`);
@@ -183,6 +243,38 @@ describe("the welcome text", () => {
     }
   });
 
+  test("WELCOME_MAX_CHARS stays below the control plane's limit", () => {
+    expect(WELCOME_MAX_CHARS).toBeLessThan(CONTROL_PLANE_WELCOME_MAX);
+    for (const t of Object.values(golden)) expect(t.length).toBeLessThanOrEqual(WELCOME_MAX_CHARS);
+  });
+
+  test("the worst case stays under WELCOME_MAX_CHARS: the longest name, the longest link, four titles at TITLE_MAX", async () => {
+    writeProfile(ASTRAL_NAME);
+    expect(welcomeName(home)).toBe(ASTRAL_NAME);
+    expect(ASTRAL_NAME.length).toBe(64);
+    process.env.AV_CONNECTIONS_URL = connectionsUrlFor(INTENTS_URL_MAX);
+    const link = intentsPageUrl(home);
+    expect(link.length).toBe(INTENTS_URL_MAX);
+    // Four, so the longer lead ("Here are three of the things..."); each title TITLE_MAX code points, as
+    // words, as one long word, and as supplementary-plane characters (two UTF-16 code units each).
+    for (const [label, title] of [
+      ["words", (n: number) => words(TITLE_MAX, String.fromCharCode(96 + n))],
+      ["one word", (n: number) => String.fromCharCode(96 + n).repeat(TITLE_MAX)],
+      ["astral", (n: number) => String.fromCodePoint(0x1f600 + n).repeat(TITLE_MAX)],
+    ] as const) {
+      const rows = [1, 2, 3, 4].map((n) => intent(title(n), "active", `w${n}`));
+      expect(intentTitles(intentsText(rows)).map((t) => [...t].length)).toEqual([TITLE_MAX, TITLE_MAX, TITLE_MAX, TITLE_MAX]);
+      rmSync(join(home, WELCOME_STATE_FILE), { force: true });
+      const { text } = await run(() => intentsText(rows));
+      expect({ label, ok: text.includes(`I'm ${ASTRAL_NAME},`) && text.includes(link) }).toEqual({ label, ok: true });
+      expect({ label, length: text.length <= WELCOME_MAX_CHARS }).toEqual({ label, length: true });
+      expect(text.length).toBeLessThan(CONTROL_PLANE_WELCOME_MAX);
+      const listed = text.split("\n").filter((l) => l.startsWith("- "));
+      expect(listed).toHaveLength(MAX_LISTED);
+      for (const line of listed) expect(line.endsWith("…")).toBe(true);
+    }
+  });
+
   test("never over WELCOME_MAX_CHARS after strict cleaning: longest nickname, three titles that cleaning lengthens", async () => {
     const name = "Abcdefghij Klmnopqrst Uvwxyzabcd";
     writeProfile(name);
@@ -195,15 +287,61 @@ describe("the welcome text", () => {
     expect(text.length).toBeLessThanOrEqual(WELCOME_MAX_CHARS);
   });
 
-  test("never over WELCOME_MAX_CHARS: longest nickname, four maximal titles", async () => {
-    const name = "Abcdefghij Klmnopqrst Uvwxyzabcd";
-    expect([...name].length).toBe(32);
-    writeProfile(name);
-    const rows = [1, 2, 3, 4].map((n) => intent(`${"W".repeat(10)} ${n} ${"x".repeat(300)}`, "active", `a${n}`));
-    const { text } = await run(() => intentsText(rows));
-    expect(text).toContain(`I'm ${name},`);
-    expect(text.length).toBeLessThanOrEqual(WELCOME_MAX_CHARS);
-    for (const t of Object.values(golden)) expect(t.length).toBeLessThanOrEqual(WELCOME_MAX_CHARS);
+  test("never over WELCOME_MAX_CHARS for any mix of title lengths, and titles that fit stay whole", () => {
+    const names = ["Edge", "Mira", "Abcdefghij Klmnopqrst Uvwxyzabcd", ASTRAL_NAME];
+    const links = [INTENTS_URL, `https://${"h".repeat(INTENTS_URL_MAX - 16)}/intents`];
+    const lengths = [1, 40, 120, 175, 176, 230, 234, 299, TITLE_MAX];
+    for (const name of names) {
+      for (const link of links) {
+        for (const a of lengths) {
+          for (const b of lengths) {
+            for (const c of [1, 120, TITLE_MAX]) {
+              const titles = [words(a, "a"), words(b, "b"), words(c, "c"), "more"];
+              const text = welcomeText(name, { kind: "listed", titles }, link);
+              if (text.length > WELCOME_MAX_CHARS) throw new Error(`over: ${[name.length, link.length, a, b, c]}`);
+              const rest = welcomeText(name, { kind: "listed", titles: ["", "", "", ""] }, link).length;
+              const whole = a + b + c <= WELCOME_MAX_CHARS - rest;
+              const listed = text.split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
+              if (whole) expect(listed).toEqual(titles.slice(0, 3));
+              else expect(listed.some((l) => l.endsWith("…"))).toBe(true);
+            }
+          }
+        }
+      }
+    }
+  });
+
+  test("a fit inside a long spaced digit run leaves no phone-shaped run in the welcome (refuter probe B)", () => {
+    const filler = (n: number) => "jam ".repeat(200).slice(0, n);
+    // A whole run of 16 or more digits is no phone number and cleaning keeps it; a cut must not leave 10 to 15 of them.
+    const run = (t: string) => t.replace(/(?<=\d)[\s-]+(?=\d)/g, "");
+    for (let f = 100; f < 300; f++) {
+      const titles = [`${filler(f)} 98765 43210 12345 67890 11111`, "x ".repeat(150).trim(), "y ".repeat(150).trim()];
+      const text = welcomeText("Edge", { kind: "listed", titles }, INTENTS_URL);
+      expect(text.length).toBeLessThanOrEqual(WELCOME_MAX_CHARS);
+      for (const line of text.split("\n")) if (/(?<!\d)\d{10,15}(?!\d)/.test(run(line))) throw new Error(`phone-shaped run at f=${f}: ${line.slice(-40)}`);
+    }
+  });
+
+  test("fitTitles: unchanged when the titles fit; else the longest give way first, at a word boundary", () => {
+    const short = words(50, "s");
+    const mid = words(150, "m");
+    const long = words(300, "l");
+    expect(fitTitles([short, mid, long], 500)).toEqual([short, mid, long]);
+    const fitted = fitTitles([short, mid, long], 400);
+    expect(fitted[0]).toBe(short);
+    expect(fitted[1]).toBe(mid);
+    expect(fitted[2].endsWith("…")).toBe(true);
+    expect(long.startsWith(`${fitted[2].slice(0, -1)} `)).toBe(true);
+    expect(fitted.reduce((n, t) => n + t.length, 0)).toBeLessThanOrEqual(400);
+    const tight = fitTitles([short, mid, long], 240);
+    expect(tight[0]).toBe(short);
+    for (const t of tight.slice(1)) expect(t.endsWith("…")).toBe(true);
+    expect(tight.reduce((n, t) => n + t.length, 0)).toBeLessThanOrEqual(240);
+    // Measured in UTF-16 code units, and a surrogate pair is never split.
+    const astral = "\u{1F600}".repeat(100);
+    const [cut] = fitTitles([astral], 51);
+    expect(cut).toBe(`${"\u{1F600}".repeat(25)}…`);
   });
 
   test("no markdown tables, headings or emphasis in any case", () => {
@@ -270,6 +408,12 @@ describe("the agent's name", () => {
     expect(intentsPageUrl(home)).toBe(INTENTS_URL);
     process.env.AV_CONNECTIONS_URL = "https://staging.agents.example/insights";
     expect(intentsPageUrl(home)).toBe("https://staging.agents.example/intents");
+  });
+  test("an Intents link longer than INTENTS_URL_MAX gives way to the default host's", () => {
+    process.env.AV_CONNECTIONS_URL = connectionsUrlFor(INTENTS_URL_MAX);
+    expect(intentsPageUrl(home)).toBe(new URL("/intents", process.env.AV_CONNECTIONS_URL).href);
+    process.env.AV_CONNECTIONS_URL = connectionsUrlFor(INTENTS_URL_MAX + 1);
+    expect(intentsPageUrl(home)).toBe(INTENTS_URL);
   });
 });
 

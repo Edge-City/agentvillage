@@ -9,8 +9,11 @@
  * same intents:
  *
  *   - intents: up to three of the resident's active intents by title, one
- *     line each, what the agent will do with them, and how to add or change
- *     them (the app's Intents page, or just tell me);
+ *     line each (whole up to TITLE_MAX code points, else cut at a word
+ *     boundary, and cut further only when the three together would take the
+ *     welcome past WELCOME_MAX_CHARS: fitTitles), what the agent will do with
+ *     them, and how to add or change them (the app's Intents page, or just
+ *     tell me);
  *   - no active intents: the app's three Context questions, and a promise to
  *     turn the answers into intents the resident confirms;
  *   - no key, Index unreachable or an answer it cannot read: the welcome
@@ -49,7 +52,7 @@ import { dirname, join } from "node:path";
 
 import { DEFAULT_NAME, agentName, readProfile } from "../../agent-profile/scripts/profile";
 import { callIndexTool, indexMcpUrl, toolJsonArray } from "./index-mcp";
-import { cleanTitle, connectionsUrl, cronScanHit, envOrDotenv } from "./proactive-text";
+import { DEFAULT_CONNECTIONS_URL, cleanTitle, connectionsUrl, cronScanHit, cutAtWord, envOrDotenv } from "./proactive-text";
 
 /** The marker, relative to `$HERMES_HOME` (install/welcome_state.ts WELCOME_STATE_RELATIVE_PATH). */
 export const WELCOME_STATE_FILE = join("memory", "welcome-state.json");
@@ -57,10 +60,27 @@ export const WELCOME_STATE_FILE = join("memory", "welcome-state.json");
 export const ALREADY_SENT = "WELCOME_ALREADY_SENT";
 /** Intents the welcome lists at most. */
 export const MAX_LISTED = 3;
-/** Code points of one intent title at most (an ellipsis marks a cut). */
-export const TITLE_MAX = 80;
-/** Characters of the whole welcome at most. */
-export const WELCOME_MAX_CHARS = 900;
+/**
+ * Code points of one intent title at most (DATA-374: was 80, which cut most
+ * real intents). A longer title is cut at the last word boundary before it,
+ * with an ellipsis (cleanTitle "word", cutAtWord).
+ */
+export const TITLE_MAX = 300;
+/**
+ * Characters (UTF-16 code units, JavaScript's `.length`) of the whole welcome
+ * at most. The control plane uses the scripted welcome only when it is
+ * shorter than 1200 (control-plane/src/telegram-onboarding.js
+ * WELCOME_MAX_CHARS) and otherwise sends its fixed greeting, so this stays
+ * below that with room to spare. welcomeText holds every welcome to it: the
+ * listed titles share what the rest of the text leaves (fitTitles).
+ */
+export const WELCOME_MAX_CHARS = 1150;
+/**
+ * Characters of the Intents link at most: a longer one (an AV_CONNECTIONS_URL
+ * host of absurd length) gives way to the default host's, so the link can
+ * never crowd the intents out of the welcome.
+ */
+export const INTENTS_URL_MAX = 200;
 /** The welcome's Index read gives up sooner than the brief's: the resident is waiting for a first reply. */
 export const WELCOME_INDEX_TIMEOUT_MS = 10_000;
 
@@ -107,7 +127,7 @@ function homeFrom(argv: string[]): string {
  * in Index's order: archived and paused ones dropped (the welcome promises to
  * watch for these, and a paused intent is not being matched), the title from
  * `summary` else `description`, one plain line of at most TITLE_MAX code
- * points, repeats dropped. Titles go through cleanTitle, the stricter
+ * points (cut at a word boundary, with an ellipsis), repeats dropped. Titles go through cleanTitle, the stricter
  * cleaner for text read back from a store: the resident, Index's summariser
  * and the agent's own memory job all write intents, and the welcome is sent
  * as printed, so no link, domain, `@handle`, `/command`, cashtag, phone
@@ -122,7 +142,7 @@ export function intentTitles(text: string): string[] {
     const intent = row as { summary?: unknown; description?: unknown; status?: unknown };
     if (intent.status === "archived" || intent.status === "paused") continue;
     const raw = typeof intent.summary === "string" && intent.summary.trim() ? intent.summary : intent.description;
-    const title = cleanTitle(raw, TITLE_MAX);
+    const title = cleanTitle(raw, TITLE_MAX, "word");
     if (!title) continue;
     const key = title.toLocaleLowerCase();
     if (seen.has(key)) continue;
@@ -152,9 +172,14 @@ export async function readIntents(options: {
   }
 }
 
-/** The app's Intents page, on the same host as the brief's Connections link (`AV_CONNECTIONS_URL`). */
+/**
+ * The app's Intents page, on the same host as the brief's Connections link
+ * (`AV_CONNECTIONS_URL`), or on the default host when that link would be
+ * longer than INTENTS_URL_MAX characters.
+ */
 export function intentsPageUrl(home: string): string {
-  return new URL("/intents", connectionsUrl(home)).href;
+  const href = new URL("/intents", connectionsUrl(home)).href;
+  return href.length <= INTENTS_URL_MAX ? href : new URL("/intents", DEFAULT_CONNECTIONS_URL).href;
 }
 
 /** The agent's name: the resident's nickname for it, else Edge. Never throws, never logs. */
@@ -167,8 +192,43 @@ export function welcomeName(home: string): string {
   }
 }
 
-/** The welcome. Pure. */
+/**
+ * The listed titles cut so that together they take at most `budget`
+ * characters (UTF-16 code units). Unchanged when they already fit; otherwise
+ * every title longer than a common length L is cut to L at a word boundary
+ * with an ellipsis (cutAtWord), L being the largest length at which the
+ * titles fit, so the shorter ones stay whole and the longest give way first.
+ * Pure.
+ */
+export function fitTitles(titles: string[], budget: number): string[] {
+  const room = (cap: number) => titles.reduce((sum, t) => sum + Math.min(t.length, cap), 0);
+  const longest = Math.max(0, ...titles.map((t) => t.length));
+  if (room(longest) <= budget) return titles;
+  let fits = 0;
+  let over = longest;
+  while (over - fits > 1) {
+    const mid = Math.floor((fits + over) / 2);
+    if (room(mid) <= budget) fits = mid;
+    else over = mid;
+  }
+  return titles.map((t) => (t.length <= fits ? t : cutAtWord(t, fits, "utf16")));
+}
+
+/**
+ * The welcome. Pure. With intents listed, at most WELCOME_MAX_CHARS long
+ * whenever the rest of the text leaves room, which it always does for a
+ * name of at most 32 code points and a link of at most INTENTS_URL_MAX
+ * characters (welcome.test.ts, the worst case).
+ */
 export function welcomeText(name: string, read: IntentsRead, intentsUrl: string): string {
+  if (read.kind === "unreachable" || read.titles.length === 0) return composeWelcome(name, read, intentsUrl, []);
+  const titles = read.titles.slice(0, MAX_LISTED);
+  const rest = composeWelcome(name, read, intentsUrl, titles.map(() => "")).length;
+  return composeWelcome(name, read, intentsUrl, fitTitles(titles, Math.max(0, WELCOME_MAX_CHARS - rest)));
+}
+
+/** The welcome's text with `listed` as the intent lines (the listed branch only). */
+function composeWelcome(name: string, read: IntentsRead, intentsUrl: string, listed: string[]): string {
   const intro =
     name === DEFAULT_NAME
       ? "Mandrem, Goa, October 11 to November 1. I'm your personal agent for your time in the village. You can call me Edge, or give me whatever name you like."
@@ -185,7 +245,6 @@ export function welcomeText(name: string, read: IntentsRead, intentsUrl: string)
       "I'll turn your answers into intents you can confirm, then look for people and events that fit and bring the best to your morning brief.",
     );
   } else {
-    const listed = read.titles.slice(0, MAX_LISTED);
     const lead = read.titles.length > MAX_LISTED ? "Here are three of the things I have you down for:" : "Here's what I have you down for so far:";
     parts.push(
       [lead, ...listed.map((t) => `- ${t}`)].join("\n"),
