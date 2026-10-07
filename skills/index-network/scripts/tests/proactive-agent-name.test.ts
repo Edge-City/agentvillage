@@ -2,7 +2,9 @@
  * P1-fix S5: every proactive agent job's Script Output names the agent: `agentName` is the
  * resident's nickname from $HERMES_HOME/av-profile.json, read through the agent-profile skill's
  * reader (the control plane's whole nickname rule), else "Edge". Each job's prompt says to use it.
- * Only the name reaches these jobs: never the resident's about me, interests or preferences.
+ * Only the name reaches these jobs: never the resident's about me or preferences. (DATA-372: the
+ * morning brief alone also gets the interests the resident stated, as `you.interests`;
+ * digest-interests.test.ts covers that path. The fake context here carries none.)
  *
  *   bun test skills/index-network/scripts/tests/proactive-agent-name.test.ts
  */
@@ -91,7 +93,7 @@ describe("agentName in every proactive agent job's Script Output", () => {
       const view = output(result.lines);
       expect(Object.keys(view)[0]).toBe("agentName");
       expect(view.agentName).toBe(expected);
-      // Only the name: nothing the resident wrote about themselves reaches these jobs.
+      // Only the name: nothing the resident wrote about themselves reaches these jobs (the brief's stated interests: digest-interests.test.ts).
       const text = result.lines.join("\n");
       expect(text).not.toContain(ABOUT);
       expect(text).not.toContain(INTEREST);

@@ -148,8 +148,9 @@ export const STATE_HEALED = "state-renamed-aside";
  * Output: the resident's nickname from `$HERMES_HOME/av-profile.json`, read through the
  * agent-profile skill's own reader (the control plane's whole nickname rule, applied again), else
  * Edge. A nickname that would trip the cron scanner is Edge too (it would otherwise silence the
- * whole message). Only the name: the resident's about me, interests and preferences are not given
- * to these jobs. Never throws; a missing or bad file is Edge (one stderr line for a bad one).
+ * whole message). Only the name: the resident's about me and preferences are not given to these
+ * jobs; the morning brief alone also gets the interests they stated (statedInterestsFor, DATA-372).
+ * Never throws; a missing or bad file is Edge (one stderr line for a bad one).
  */
 export function agentNameFor(home: string): string {
   try {
@@ -157,6 +158,23 @@ export function agentNameFor(home: string): string {
     return cronScanHit(name) ? DEFAULT_NAME : name;
   } catch {
     return DEFAULT_NAME;
+  }
+}
+
+/**
+ * DATA-372: the interests the resident stated in `$HERMES_HOME/av-profile.json`, read through the
+ * same reader (its interest rule applied: at most 12, each at most 40 code points, no control
+ * character; a list that breaks it is dropped whole), for the morning brief's `you.interests`.
+ * Empty when there is no file, the file is ignored or the list is empty or dropped: the brief then
+ * falls back to tags extracted from the memory files. Silent (an agent job's agentNameFor logs a
+ * bad file once per run; the prefetch logs nothing); never throws.
+ */
+export function statedInterestsFor(home: string): string[] {
+  try {
+    const result = readProfile(home, () => {});
+    return result.status === "ok" ? result.profile.interests : [];
+  } catch {
+    return [];
   }
 }
 
@@ -476,6 +494,27 @@ export function withPrefetchedIndex(context: DailyBriefContext, prefetched: Dail
 }
 
 /**
+ * The brief's `you.interests` (DATA-372): the interests the resident stated in their profile,
+ * exactly (in their order, deduplicated), when there are any; else the village tags extracted from
+ * the memory files. Stated interests are text the resident (or anything with access to the
+ * sandbox) wrote, so they take the stricter cleaner; a tag is the village's own name for it. A
+ * stated list whose every entry is withheld leaves the list empty: it never falls back to tags.
+ */
+function interestsView(context: DailyBriefContext, w: Withheld): string[] {
+  const stated = context.userModel?.statedInterests ?? [];
+  const cleaned = stated.length > 0
+    ? stated.flatMap((interest) => w.title(interest, 40) ?? [])
+    : (context.userModel?.interestTags ?? []).flatMap((tag) => cleanText(tag, 40) ?? []);
+  const seen = new Set<string>();
+  return cleaned.filter((interest) => {
+    const key = interest.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/**
  * The morning brief's Script Output. The Index part is a count, at most
  * three cleaned names, and the Connections link; no card text, no person
  * link. `shownIds` are the cards named, recorded as shown when the model is
@@ -509,7 +548,7 @@ export function briefView(
       forYourInterests: eventsView(context.interestEvents, w, portal),
     },
     you: {
-      interests: (context.userModel?.interestTags ?? []).flatMap((tag) => cleanText(tag, 40) ?? []),
+      interests: interestsView(context, w),
       // Read from the agent's memory files, which can hold text that came from someone else: the stricter cleaner.
       notes: (context.userModel?.phrases ?? []).slice(0, 3).flatMap((phrase) => w.title(phrase, 120) ?? []),
     },
@@ -611,6 +650,7 @@ function contextOptions(home: string, date: string, stateFile = stateFilePath(ho
     date,
     stateFile,
     userFiles: [join(home, "USER.md"), join(home, "MEMORY.md"), join(home, "memory", `${date}.md`)],
+    statedInterests: statedInterestsFor(home),
   };
 }
 
