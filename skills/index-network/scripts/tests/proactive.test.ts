@@ -385,6 +385,60 @@ describe("faults are silent, exit 0 for agent jobs, and never write over the sta
 });
 
 describe("the drops, the evening note and the follow-up: names and Index links only", () => {
+  // Restored after 988f49ac removed them: the message link is now the card's signed `acceptUrl`
+  // (`/o/<id>?action=accept&viewer=..&sig=..`, 47b537c7), never a built `/o/<id>`; the third-party
+  // text and foreign-host guards these tests pinned are unchanged.
+  const ACCEPT = (id: string) => `https://index.network/o/${id}?action=accept&viewer=v1&sig=s1`;
+
+  test("a drop wakes with one person, the signed accept link and no card text, and marks its own day", async () => {
+    const result = await runProactive("drop-midday", options({ drop: async () => ({ opportunity: card("Maya Rao", "op1", { redelivery: true, acceptUrl: ACCEPT("op1") }) }) }));
+    expect(output(result.lines)).toEqual({
+      agentName: "Edge", job: "opportunity-drop", date: DATE, kind: "conversation", seenBefore: true,
+      person: { name: "Maya Rao", profileUrl: "https://index.network/u/op1-user", messageUrl: ACCEPT("op1") },
+    });
+    expect(result.lines.join("\n")).not.toContain(THIRD_PARTY);
+    expect(state()[RUNS_KEY]).toEqual({ "drop-midday": DATE });
+    // A foreign host, a connect redirect (`/c/<code>`) or a card without acceptUrl: no message link.
+    const evening = await runProactive("drop-evening", options({ drop: async () => ({ opportunity: card("Lena", "op3", { feedCategory: "connector-flow", acceptUrl: "https://evil.example/o/op3?action=accept&viewer=v1&sig=s1" }) }) }));
+    expect(output(evening.lines).kind).toBe("community-ask");
+    expect(output(evening.lines).person.messageUrl).toBeNull();
+    rmSync(stateFile());
+    const redirect = await runProactive("drop-midday", options({ drop: async () => ({ opportunity: card("Lena", "op3", { acceptUrl: "https://index.network/c/abc123" }) }) }));
+    expect(output(redirect.lines).person.messageUrl).toBeNull();
+    rmSync(stateFile());
+    const plain = await runProactive("drop-midday", options({ drop: async () => ({ opportunity: card("Lena", "op3") }) }));
+    expect(output(plain.lines).person.messageUrl).toBeNull();
+  });
+
+  test("the evening note: one person with the signed accept link, or the closeout question", async () => {
+    const person = await runProactive("evening", options({ evening: async () => ({ name: "Arjun", headline: THIRD_PARTY, userUrl: "https://index.network/u/a", opportunityUrl: "https://index.network/o/b", acceptUrl: ACCEPT("b") }) }));
+    expect(output(person.lines)).toEqual({ agentName: "Edge", job: "evening-note", date: DATE, person: { name: "Arjun", profileUrl: "https://index.network/u/a", messageUrl: ACCEPT("b") } });
+    expect(person.lines.join("\n")).not.toContain(THIRD_PARTY);
+    rmSync(stateFile());
+    const closeout = await runProactive("evening", options({ evening: async () => ({ prompt: "Quick closeout check: did AgentVillage help you meet anyone?" }) }));
+    expect(output(closeout.lines)).toEqual({ agentName: "Edge", job: "evening-note", date: DATE, closeoutQuestion: "Quick closeout check: did AgentVillage help you meet anyone?" });
+  });
+
+  test("the follow-up: names, signed accept links and the resident's own signals; silent when no name survives", async () => {
+    const follow = (needs: string[]) => async () => ({
+      signals: [{ summary: "Looking for soil scientists", url: "https://index.network/i/s1" }],
+      needsAttention: needs.map((name, n) => ({ name, headline: THIRD_PARTY, summary: THIRD_PARTY, userUrl: `https://index.network/u/n${n}`, opportunityUrl: `https://index.network/o/n${n}`, acceptUrl: ACCEPT(`n${n}`) })),
+      waiting: [{ name: "Talking Person", headline: THIRD_PARTY, summary: THIRD_PARTY, userUrl: "https://index.network/u/t", opportunityUrl: "https://index.network/o/t", acceptUrl: ACCEPT("t") }],
+      newlyResolved: [],
+    });
+    const result = await runProactive("negotiation", options({ followUp: follow(["Maya Rao"]) }));
+    expect(output(result.lines)).toEqual({
+      agentName: "Edge", job: "people-follow-up", date: DATE,
+      yourSignals: [{ text: "Looking for soil scientists", link: "https://index.network/i/s1" }],
+      waitingOnYou: [{ name: "Maya Rao", profileUrl: "https://index.network/u/n0", messageUrl: ACCEPT("n0") }],
+      agentsTalking: [{ name: "Talking Person", profileUrl: "https://index.network/u/t" }],
+      newConnections: [],
+    });
+    expect(result.lines.join("\n")).not.toContain(THIRD_PARTY);
+    rmSync(stateFile());
+    expect(last((await runProactive("negotiation", options({ followUp: follow(["Maya --help"]) }))).lines)).toEqual({ wakeAgent: false, reason: "name-withheld" });
+  });
+
   test("a drop with nothing new, an unusable name or Index down is silent and marks nothing", async () => {
     expect(last((await runProactive("drop-midday", options({ drop: async () => ({ silent: true, reason: "nothing-new" }) }))).lines)).toEqual({ wakeAgent: false, reason: "nothing-new" });
     expect(last((await runProactive("drop-midday", options({ drop: async () => ({ opportunity: card("www evil", "op1") }) }))).lines)).toEqual({ wakeAgent: false, reason: "name-withheld" });
