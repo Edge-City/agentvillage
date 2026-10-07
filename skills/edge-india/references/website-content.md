@@ -4,7 +4,7 @@ Source: https://www.edgecity.live/india26
 
 Source type: website
 
-Last content change indexed: 2026-10-05T18:52:19.418Z
+Last content change indexed: 2026-10-07T22:43:16.609Z
 
 ---
 
@@ -12,11 +12,11 @@ Last content change indexed: 2026-10-05T18:52:19.418Z
 
 [
 
-Accommodation
+Calendar
 
 ![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a3427fe3fc94619dde9fcf9_arrow.png)
 
-](https://forms.fillout.com/t/eGE4xizEwbus)[
+](https://portal.edgecity.live/portal/edge-india/events)[
 
 BLOG
 
@@ -450,7 +450,7 @@ LEARN MORE
 
 ![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a3427fe3fc94619dde9fcf9_arrow.png)
 
-](https://edgecityindia2026.substack.com/p/ambhasi-a-consciousness-x-ai-research?r=46jwce&utm_campaign=post-expanded-share&utm_medium=web)
+](https://cimc.ai/events/ambhasi-residency)
 
 ![Edge City India Creator Residency artwork featuring cameras, a microphone, creators, and Goa architecture](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6aa838e640d24242eaf6e535_Residency%20Card%20Odin%208%201.avif)
 
@@ -513,9 +513,9 @@ Edge City India is a collective effort. The support of our partners and attendee
 
 [![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f897_LongJourney_logo.avif)](https://www.longjourney.vc/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f8fc_Cosmos_Logo_AW_RGB_Primary%20Logo_Dark%20Blue%20\(2\)%201.png)](https://www.cosmos-institute.org/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6aa1c6caf4e5f8ffe64b5ebb_odyssey.png)](https://www.odyssey.build/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6abd7bb1877caed175245e83_C%20world.png)](https://world.org/world-id)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6abd7bc3f8933f72f480d617_ethical.nyu.png)](https://www.ethicalintelligencelab.org/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6abd7bd5de32b278b1f99a97_69fa029e1be6730adcb939a3_TheConsciousness_logo.avif)](https://www.cofo.org/)
 
-[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a864aa33e554f1ec6a5b666_elevenlabs-logo-black.png)](https://elevenlabs.io/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6abd7bf8630fa7634b92c497_CIMC_wordmark_high_quality_transparent%20\(1\).png)](https://cimc.ai/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6abd7c02628c0a7b12f271a5_Ross_Franklin_signature_transparent.png)](https://lossfunk.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6abd7bcf1ede60de463171e1_riffle_wordmark_black.png)](https://www.riffle.studio/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6ab29b06f9d7a9a6ad5f6240_forge.png)](https://www.forge.inc/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6abd7bbc9b04bb92dae80bf0_Logo_Light%20Theme.png)](https://www.dognosis.tech/)
+[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a864aa33e554f1ec6a5b666_elevenlabs-logo-black.png)](https://elevenlabs.io/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6abd7bf8630fa7634b92c497_CIMC_wordmark_high_quality_transparent%20\(1\).png)](https://cimc.ai/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6abd7c02628c0a7b12f271a5_Ross_Franklin_signature_transparent.png)](https://lossfunk.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6abd7bcf1ede60de463171e1_riffle_wordmark_black.png)](https://www.riffle.studio/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6ab29b06f9d7a9a6ad5f6240_forge.png)](https://www.forge.inc/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6abd7bbc9b04bb92dae80bf0_Logo_Light%20Theme.png)](https://www.dognosis.tech/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a864b4646cb341900a31225_devcon-logo-png_seeklogo-491590%201.png)](https://devcon.org/en/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a9b031c17a2481e5eac6893_wordmark-dark.svg)](https://www.sarvam.ai/)
 
-[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a9b031c17a2481e5eac6893_wordmark-dark.svg)](https://www.sarvam.ai/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a4191eee9225418871966df_Localhost%20HQ.avif)](https://www.localhosthq.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a9546eff386d44011236122_tulsea%201.png)](https://tulsea.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6aa12e263eaebf951a2133b3_Layer_1.png)](https://tulsea.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a4323260889515e7f7e75ab_The%20Circle%20Logo%20\(Feb%202023\)%20for%20Lighter%20Backgrounds%202.png)](https://www.thecircle.work/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a864c23cdf787eccb7c87a0_goa.png)](https://www.startup.goa.gov.in/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6ab29bb22a8804c7f91bb291_GOA.png)](https://goa-tourism.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f885_human.tech_logo_white%201.avif)](https://human.tech/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a864b4646cb341900a31225_devcon-logo-png_seeklogo-491590%201.png)](https://devcon.org/en/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6abd7bce8e38742d2d7164a8_Recurso%201.png)](https://chequpi.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6ab6c3d440072e1e171aa2f0_nomad.png)](https://nomadgao.com/)
+[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a4191eee9225418871966df_Localhost%20HQ.avif)](https://www.localhosthq.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a9546eff386d44011236122_tulsea%201.png)](https://tulsea.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6aa12e263eaebf951a2133b3_Layer_1.png)](https://tulsea.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a4323260889515e7f7e75ab_The%20Circle%20Logo%20\(Feb%202023\)%20for%20Lighter%20Backgrounds%202.png)](https://www.thecircle.work/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a864c23cdf787eccb7c87a0_goa.png)](https://www.startup.goa.gov.in/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6ab29bb22a8804c7f91bb291_GOA.png)](https://goa-tourism.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a86435a3ed95081ee51f885_human.tech_logo_white%201.avif)](https://human.tech/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6abd7bce8e38742d2d7164a8_Recurso%201.png)](https://chequpi.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6ab6c3d440072e1e171aa2f0_nomad.png)](https://nomadgao.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6ac6c8e1af78ec271b601c9d_01_Makers_Asylum_transparent_HQ.png)](https://www.makersasylum.com/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6ac6c8e632c5a23c10727a1a_02_Devfolio_transparent_HQ.png)](https://devfolio.co/)[![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6ac6c8d5e9ac44a7dae784f4_ETH.log.svg)](https://ethindia.co/)
 
 ## From the community
 
