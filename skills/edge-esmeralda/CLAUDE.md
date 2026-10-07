@@ -4,7 +4,7 @@ This directory is the **popup-specific knowledge layer** for Edge Esmeralda 2026
 
 For backend-agnostic EdgeOS API recipes, see the sibling `../edgeos/SKILL.md`. For Index Network discovery, see `../index-network/SKILL.md`. Do not duplicate either backend's content here.
 
-This skill is background only. It hosts no cron prompts or scripts: the cron prompts and the memory-signal gate moved to `../index-network/prompts/` and `../index-network/scripts/memory_signal_gate.py` (DATA-361).
+This skill is background only. It hosts no cron prompts or cron scripts (only the references indexer `scripts/index.ts`): the cron prompts and the memory-signal gate moved to `../index-network/prompts/` and `../index-network/scripts/memory_signal_gate.py` (DATA-361).
 
 ## Project Structure
 - `SKILL.md` — Popup-specific agent skill: popup constants (popup id, week dates, themes), attendee-directory field semantics, the curated wiki/website/newsletter references, and the "how to obtain EdgeOS tokens" pointer.

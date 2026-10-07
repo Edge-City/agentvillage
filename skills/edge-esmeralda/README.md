@@ -2,7 +2,7 @@
 
 > Edge Esmeralda 2026 was an earlier Edge City popup. The current event is Edge City India (Mandrem, Goa, Oct 11 – Nov 1 2026); agents treat this skill as past background only and never present its content as current.
 
-This skill is background only (the previous popup). Since DATA-361 it hosts no cron prompts or scripts; those live in `../index-network/prompts/` and `../index-network/scripts/`.
+This skill is background only (the previous popup). Since DATA-361 it hosts no cron prompts or cron scripts (its references indexer `scripts/index.ts` stays); those live in `../index-network/prompts/` and `../index-network/scripts/`.
 
 A skill that gives AI agents popup-specific knowledge for Edge Esmeralda 2026: popup constants (popup id, week dates, themes), attendee-directory field semantics, and the curated wiki / website / newsletter knowledge base.
 
