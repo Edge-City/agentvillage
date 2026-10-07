@@ -58,6 +58,29 @@ describe("opportunity copy: the lead line is profiles, every pending card gets i
     expect(count(tools, "Do not use `/c/` connect redirects as the opportunity link. Do not invent `/profile/` or `/opportunity/create` paths.")).toBe(1);
   });
 
+  test("tools.md: showing the link is not accepting; the consent rule governs the tools; no 'tell me and I will give you the link', no bare 'Profile' label", () => {
+    expect(count(tools, "Showing the message link is not accepting: the link is the resident's own tap, and every pending card carries it.")).toBe(1);
+    expect(count(tools, "The consent rule governs the tools, not the link: call `accept_opportunity` or `reject_opportunity` only after the user says yes in this conversation.")).toBe(1);
+    expect(count(tools, "Agreement between agents is not their approval.")).toBe(1);
+    expect(count(tools, "Never answer a list request with \"tell me and I will give you the link\" or hold the link back for a later turn, and never write \"Profile\" as a bare label: the person's name is the profile link.")).toBe(1);
+    expect(tools).not.toContain("Accept or pass only after the user says yes in this conversation:");
+  });
+
+  test("exemplars.md: one chat-requested list with two pending cards carrying their acceptUrl links and a negotiating card without one", () => {
+    const start = exemplars.indexOf('## Asked in chat: "any intros?"');
+    const end = exemplars.indexOf("## Connector-flow rendering rule");
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const section = exemplars.slice(start, end);
+    expect(section.match(/\[message (Adam|Paul)\]\(\{acceptUrl\}\)/g)).toHaveLength(2);
+    expect(count(section, "> Tapping a link accepts the introduction and opens Telegram with them.")).toBe(1);
+    expect(section).toContain("[Lena]({userUrl})");
+    expect(section).not.toMatch(/\[message Lena\]/);
+    expect(section).not.toMatch(/tell me and I will give you the link\./);
+    expect(section).toContain("never labels a link \"Profile\"");
+    expect(section).toContain("message link copied from that card's `acceptUrl`");
+  });
+
   test("AGENTS.md: the message-action bullet keeps #240's sentence about the accept link, THEN the profile rule, THEN the no-acceptUrl rule", () => {
     const bullets = agents.split("\n").filter((l) => l.startsWith("- The message action copies the card's `acceptUrl`"));
     expect(bullets).toHaveLength(1);

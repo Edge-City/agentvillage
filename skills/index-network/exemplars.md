@@ -65,6 +65,17 @@ If the live calendar is unavailable (call failed, or no Edge City India calendar
 
 One bullet per opportunity, each with its own `acceptUrl`. Do not merge several opportunities into one bullet. They still count toward the three.
 
+## Asked in chat: "any intros?" (list_opportunities, two pending and one negotiating)
+
+The tool's lead line is the roster: names linked to their profiles, no message link. The reply keeps those profile links and adds, for every `pending` card, the message link copied from that card's `acceptUrl` in the JSON below the lead line. A `negotiating` card gets no message link yet. The reply never says "tell me and I will give you the link" and never labels a link "Profile".
+
+> **2 conversations await you**
+> - [Adam]({userUrl}) — Running the hardware track and wants a second pair of hands on the sensor demos. Overlaps with your embedded work, [message Adam]({acceptUrl}).
+> - [Paul]({userUrl}) — Writing about agent memory and looking for builders to interview. You have the long-running-context story, [message Paul]({acceptUrl}).
+> Tapping a link accepts the introduction and opens Telegram with them.
+>
+> Still in motion: [Lena]({userUrl}) — your agents are working out whether a Thursday coffee fits; nothing for you to do yet.
+
 ## Connector-flow rendering rule
 
 For introducer (`connector-flow`) candidates:
