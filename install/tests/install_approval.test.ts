@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -1206,7 +1207,11 @@ interface ShimRun {
   stdin: string[];
 }
 
-function shimFixture(mode: string, call: { tool_name: string; tool_input: Record<string, unknown> } | null = null) {
+function shimFixture(
+  mode: string,
+  call: { tool_name: string; tool_input: Record<string, unknown> } | null = null,
+  opt: { shell?: string } = {},
+) {
   const root = scratch("av-approval-shim-");
   const fake = join(root, "bin");
   const state = join(root, "state");
@@ -1221,7 +1226,7 @@ function shimFixture(mode: string, call: { tool_name: string; tool_input: Record
   mkdirSync(join(proc, "net"), { recursive: true });
   const shim = join(root, "hermes-hook-shim.sh");
   // AV_SHIM_SHELL=/bin/dash (or /bin/bash) runs the copy under that shell instead of /bin/sh.
-  const shell = process.env.AV_SHIM_SHELL;
+  const shell = opt.shell ?? process.env.AV_SHIM_SHELL;
   writeFileSync(
     shim,
     source
@@ -1251,7 +1256,11 @@ function shimFixture(mode: string, call: { tool_name: string; tool_input: Record
   writeFileSync(join(state, "truncated.json"), JSON.stringify({ exit_code: 0, stdout: "{}", stderr: "", stdout_truncated: true }));
 
   // The fake curl: records argv and the config it was handed on stdin, then
-  // answers per the mode file. `--output` and `--write-out` as the shim uses them.
+  // answers per the mode file. `--output` and `--write-out` as the shim uses
+  // them: the write-out format is printed as curl would, with %{http_code}
+  // and %{size_download} (the bytes written to --output) filled in (DATA-380).
+  // A `nosize` file in the state directory drops %{size_download}, which
+  // sends the shim's verdict reading to node; `custom` answers custom.body.
   writeFileSync(
     join(fake, "curl"),
     `#!/bin/sh
@@ -1263,27 +1272,42 @@ cat > "$st/stdin.$n"
 # A test may change the world after call n (the daemon restarted, a squatter bound the port).
 [ -f "$st/after.$n" ] && /bin/sh "$st/after.$n"
 out=""
+wo='%{http_code}'
 while [ $# -gt 0 ]; do
-  case $1 in --output) out=$2; shift ;; esac
+  case $1 in
+    --output) out=$2; shift ;;
+    --write-out) wo=$2; shift ;;
+  esac
   shift
 done
+[ -f "$st/nosize" ] && wo='%{http_code}'
+emit() {
+  sz=0
+  [ -f "$out" ] && sz=$(wc -c < "$out" | tr -d ' ')
+  printf '%s' "$wo" | sed -e "s/%{http_code}/$1/" -e "s/%{size_download}/$sz/"
+}
 mode=$(cat "$st/mode")
 case $mode in
-  allow) cat "$st/allow.json" > "$out"; printf 200 ;;
-  block) cat "$st/block.json" > "$out"; printf 200 ;;
-  waiting) cat "$st/waiting.json" > "$out"; printf 200 ;;
-  exit1-empty) cat "$st/exit1-empty.json" > "$out"; printf 200 ;;
-  truncated) cat "$st/truncated.json" > "$out"; printf 200 ;;
-  unreachable) echo "curl: (7) Failed to connect to facade.example.test port 443" >&2; printf 000; exit 7 ;;
-  http503) printf '{"error":{"code":"serve-unavailable"}}' > "$out"; printf 503 ;;
-  garbage) printf 'not json' > "$out"; printf 200 ;;
+  allow) cat "$st/allow.json" > "$out"; emit 200 ;;
+  block) cat "$st/block.json" > "$out"; emit 200 ;;
+  waiting) cat "$st/waiting.json" > "$out"; emit 200 ;;
+  exit1-empty) cat "$st/exit1-empty.json" > "$out"; emit 200 ;;
+  truncated) cat "$st/truncated.json" > "$out"; emit 200 ;;
+  custom) cat "$st/custom.body" > "$out"; emit 200 ;;
+  # The custom body first, then the allow: a body read as \`wait\` is re-asked and ends allowed.
+  custom-then-allow)
+    if [ "$n" -le 1 ]; then cat "$st/custom.body" > "$out"; else cat "$st/allow.json" > "$out"; fi
+    emit 200 ;;
+  unreachable) echo "curl: (7) Failed to connect to facade.example.test port 443" >&2; emit 000; exit 7 ;;
+  http503) printf '{"error":{"code":"serve-unavailable"}}' > "$out"; emit 503 ;;
+  garbage) printf 'not json' > "$out"; emit 200 ;;
   first-timeout)
-    if [ "$n" -eq 1 ]; then /bin/sleep 1.2; echo "curl: (28) Operation timed out" >&2; printf 000; exit 28; fi
-    cat "$st/allow.json" > "$out"; printf 200 ;;
+    if [ "$n" -eq 1 ]; then /bin/sleep 1.2; echo "curl: (28) Operation timed out" >&2; emit 000; exit 28; fi
+    cat "$st/allow.json" > "$out"; emit 200 ;;
   # DATA-377: the resident taps while the shim re-asks: two hook-timeout answers, then the allow.
   wait-then-allow)
     if [ "$n" -le 2 ]; then cat "$st/waiting.json" > "$out"; else cat "$st/allow.json" > "$out"; fi
-    printf 200 ;;
+    emit 200 ;;
 esac
 exit 0
 `,
@@ -1312,7 +1336,9 @@ exec /usr/bin/perl -e '@s = lstat($ARGV[1]) or exit 1; $f = $ARGV[0]; $f =~ s/%u
     { mode: 0o755 },
   );
   if (!NODE) throw new Error("node is required to run the shim tests");
-  symlinkSync(NODE, join(fake, "node"));
+  // The real node, behind a wrapper that counts its starts (DATA-380: the
+  // allow and block paths start none).
+  writeFileSync(join(fake, "node"), `#!/bin/sh\necho x >> '${state}/node.calls'\nexec '${NODE}' "$@"\n`, { mode: 0o755 });
 
   const envelope = join(root, "envelope.json");
   writeFileSync(
@@ -1363,6 +1389,8 @@ exec /usr/bin/perl -e '@s = lstat($ARGV[1]) or exit 1; $f = $ARGV[0]; $f =~ s/%u
       };
     },
     log: () => (existsSync(join(root, "hook.log")) ? readFileSync(join(root, "hook.log"), "utf8") : ""),
+    /** How many times the shim started node (DATA-380). */
+    nodeCalls: () => (existsSync(join(state, "node.calls")) ? readFileSync(join(state, "node.calls"), "utf8").split("\n").filter(Boolean).length : 0),
   };
 }
 
@@ -1753,6 +1781,487 @@ describe("DATA-377: the shim's clock unit is read from the digit count", () => {
       }
     }
   });
+});
+
+// ---------------------------------------------------------------------------
+// DATA-380: the shim answers allow and block without starting node. Each sh
+// reading stands in for node code the shim still carries and still uses for
+// whatever the sh reading declines, so each is checked against that code:
+// the verdict body (VERDICT_JS), the tool name and the block message's JSON.
+// ---------------------------------------------------------------------------
+
+/** The given shells that are installed, each binary once (/bin/sh is dash on Debian). */
+function data380Shells(candidates: string[]): string[] {
+  const seen = new Set<string>();
+  return candidates.filter((s) => {
+    if (!existsSync(s)) return false;
+    const real = realpathSync(s);
+    if (seen.has(real)) return false;
+    seen.add(real);
+    return true;
+  });
+}
+/** Full shim runs: /bin/sh (bash 3.2 on macOS, dash on Debian) and dash. */
+const DATA380_SHELLS = data380Shells(["/bin/sh", "/bin/dash"]);
+/** The extracted functions, which run in milliseconds: bash as well. */
+const DATA380_UNIT_SHELLS = data380Shells(["/bin/sh", "/bin/dash", "/bin/bash"]);
+
+/** A body as the core's streamsBody prints it (approval-md src/serve/server.ts). */
+function coreBody(o: Record<string, unknown>): string {
+  return JSON.stringify({ exit_code: 0, stdout: "", stderr: "", stdout_truncated: false, stderr_truncated: false, ...o });
+}
+/** `approval hook hermes`'s block, as it prints it. */
+function hermesBlock(message: string): string {
+  return `${JSON.stringify({ action: "block", message })}\n`;
+}
+const HERMES_ALLOW_ERR = "approval hook hermes: allow \u2014 terminal: read-only; class read (no approval needed)\n";
+
+/** Log lines without the stamp, pid, elapsed time and path, for comparing two runs. */
+function outcomes(log: string): string[] {
+  return log
+    .split("\n")
+    .filter((l) => l.includes(" outcome="))
+    .map((l) => l.replace(/^\S* pid=\d+ /, "").replace(/ path=\w+/, "").replace(/ elapsed_ms=-?\d+$/, ""));
+}
+
+/**
+ * A clock that stands still: no perl per call, which these tables would pay
+ * hundreds of times. A re-ask still happens (now + 5 s stays under the
+ * deadline), and the second answer ends it.
+ */
+const STILL_CLOCK = '#!/bin/sh\ncase "$1" in +%s%3N) echo 1791357719266 ;; *) exec /bin/date "$@" ;; esac\n';
+
+/** One body through the shim, the sh reading allowed (fast) or not (nosize: node reads it). */
+function runBody(body: Buffer | string, shell: string, forceNode: boolean) {
+  const fx = withClock(shimFixture("custom-then-allow", null, { shell }), STILL_CLOCK);
+  writeFileSync(join(fx.state, "custom.body"), body);
+  if (forceNode) writeFileSync(join(fx.state, "nosize"), "");
+  const r = fx.run({ APPROVAL_HOOK_WAIT_S: "30" });
+  return { r, log: fx.log(), nodeCalls: fx.nodeCalls() };
+}
+
+// Bodies the sh reading takes: the core's shapes and the fixtures'.
+const DATA380_FAST: [string, string][] = [
+  ["fixture allow", JSON.stringify({ exit_code: 0, stdout: "{}", stderr: "" })],
+  ["fixture block", JSON.stringify({ exit_code: 2, stdout: JSON.stringify({ action: "block", message: "approval-rejected: the resident declined message.send" }), stderr: "" })],
+  ["fixture waiting", JSON.stringify({ exit_code: 2, stdout: JSON.stringify({ action: "block", message: "hook-timeout: no decision yet; the question stays open. NOTHING WAS WITHDRAWN" }), stderr: "" })],
+  ["core allow, reason on stderr with the em dash", coreBody({ stdout: "{}\n", stderr: HERMES_ALLOW_ERR })],
+  ["core block, quotes and backslashes in the message", coreBody({ exit_code: 2, stdout: hermesBlock('approval-rejected: the resident declined "message.send" \u2014 path C:\\tmp\\x') })],
+  ["core hook-timeout, question open", coreBody({ exit_code: 2, stdout: hermesBlock("hook-timeout: no decision within 4m. This tool call is denied and NOTHING WAS WITHDRAWN: retry it \u2014 the retry adopts the question.") })],
+  ["core hook-timeout, withdrawn", coreBody({ exit_code: 2, stdout: hermesBlock("hook-timeout: no decision within 4m: q-1 WAS WITHDRAWN (reason timeout).") })],
+  ["hook-timeout, NOTHING WAS WITHDRAWN then WAS WITHDRAWN", coreBody({ exit_code: 2, stdout: hermesBlock("hook-timeout: NOTHING WAS WITHDRAWN; later q-2 WAS WITHDRAWN") })],
+  ["hook-timeout, the cut joins WAS WITH|DRAWN", coreBody({ exit_code: 2, stdout: hermesBlock("hook-timeout: WAS WITHNOTHING WAS WITHDRAWNDRAWN") })],
+  ["hook-timeout, overlapping NOTHING WAS WITHDRAWNOTHING", coreBody({ exit_code: 2, stdout: hermesBlock("hook-timeout: NOTHING WAS WITHDRAWNOTHING WAS WITHDRAWN") })],
+  ["hook-timeout, lower case was withdrawn", coreBody({ exit_code: 2, stdout: hermesBlock("hook-timeout: it was withdrawn") })],
+  ["code from stderr JSON with blanks and a newline", coreBody({ exit_code: 2, stdout: hermesBlock("approval-rejected: x"), stderr: '{"error":{"code" :\n "hook-timeout","message":"m"}}\n' })],
+  ["code from stderr, overlapping \"code\"code\"", coreBody({ stdout: "{}\n", stderr: '"code"code" : "abc"' })],
+  ["code in stderr 81 long: none, the message's then", coreBody({ exit_code: 2, stdout: hermesBlock("msg-code: x"), stderr: `"code":"${"a".repeat(81)}"` })],
+  ["code in stderr 80 long", coreBody({ stdout: "{}", stderr: `"code":"${"b".repeat(80)}"` })],
+  ["message code 80 long", coreBody({ exit_code: 2, stdout: hermesBlock(`${"c".repeat(80)}: x`) })],
+  ["message code 81 long: none", coreBody({ exit_code: 2, stdout: hermesBlock(`${"c".repeat(81)}: x`) })],
+  ["message code a:b: c", coreBody({ exit_code: 2, stdout: hermesBlock("a:b: c") })],
+  ["message code needs the space", coreBody({ exit_code: 2, stdout: hermesBlock("hook-timeout:x NOTHING") })],
+  ["exit 0 with a block directive", coreBody({ stdout: hermesBlock("approval-rejected: odd") })],
+  ["exit 255 with a block directive", coreBody({ exit_code: 255, stdout: hermesBlock("x: y") })],
+  ["exit 0, empty stdout", coreBody({ stderr: "note\n" })],
+  ["exit 0, stdout one newline", coreBody({ stdout: "\n" })],
+  ["directive-looking text on stderr of an allow", coreBody({ stdout: "{}\n", stderr: '{"action":"block","message":"not the stdout"}\n' })],
+];
+
+// Bodies node reads as an answer but the sh reading declines: node reads them, as before.
+const DATA380_NODE: [string, string | Buffer][] = [
+  ["an extra key", '{"exit_code":0,"stdout":"{}","stderr":"","x":1}'],
+  ["keys out of order", '{"stdout":"{}","exit_code":0,"stderr":""}'],
+  ["\\u escapes in stdout", '{"exit_code":0,"stdout":"\\u007b\\u007d","stderr":""}'],
+  ["blanks between tokens", '{"exit_code": 0, "stdout": "{}", "stderr": ""}'],
+  ["a trailing newline", '{"exit_code":0,"stdout":"{}","stderr":""}\n'],
+  ["the decision dialect", coreBody({ exit_code: 2, stdout: '{"decision":"block","reason":"r"}\n' })],
+  ["a tab escape on stderr", coreBody({ stdout: "{}\n", stderr: "a\tb" })],
+  ["other non-ASCII on stderr", coreBody({ stdout: "{}\n", stderr: "caf\u00e9 \u{1F600}" })],
+  ["stdout { }", coreBody({ stdout: "{ }" })],
+  ["exit_code 2.0", '{"exit_code":2.0,"stdout":"{\\"action\\":\\"block\\",\\"message\\":\\"x: y\\"}","stderr":""}'],
+  ["over 8 KiB", coreBody({ stdout: "{}\n", stderr: "z".repeat(8200) })],
+  ["\\/ in the message", '{"exit_code":2,"stdout":"{\\"action\\":\\"block\\",\\"message\\":\\"a\\\\/b\\"}","stderr":""}'],
+  ["a block with an extra directive key", coreBody({ exit_code: 2, stdout: `${JSON.stringify({ action: "block", message: "x: y", reason: "z" })}\n` })],
+];
+
+const ALLOW_FIXTURE = '{"exit_code":0,"stdout":"{}","stderr":""}';
+// Bodies node cannot read as an answer: every one blocks, on both readings.
+const DATA380_ADVERSARIAL: [string, string | Buffer][] = [
+  ["empty", ""],
+  ["truncated: no closing brace", ALLOW_FIXTURE.slice(0, -1)],
+  ["stdout_truncated true", coreBody({ stdout: "{}\n", stdout_truncated: true })],
+  ["stderr_truncated true", coreBody({ stdout: "{}\n", stderr_truncated: true })],
+  ["exit_code a string", '{"exit_code":"0","stdout":"{}","stderr":""}'],
+  ["exit_code 256", '{"exit_code":256,"stdout":"{}","stderr":""}'],
+  ["exit_code -1", '{"exit_code":-1,"stdout":"{}","stderr":""}'],
+  ["exit_code 0.5", '{"exit_code":0.5,"stdout":"{}","stderr":""}'],
+  ["exit_code 00", '{"exit_code":00,"stdout":"{}","stderr":""}'],
+  ["an array", `[${ALLOW_FIXTURE}]`],
+  ["exit_code nested", '{"exit_code":{"v":0},"stdout":"{}","stderr":""}'],
+  ["garbage after the object", `${ALLOW_FIXTURE}x`],
+  ["NUL inside a string", Buffer.from('{"exit_code":0,"stdout":"{}\u0000","stderr":""}')],
+  ["NUL after the object", Buffer.concat([Buffer.from(ALLOW_FIXTURE), Buffer.from([0])])],
+  ["a raw newline inside stderr", '{"exit_code":0,"stdout":"{}","stderr":"a\nb"}'],
+  ["non-UTF-8 byte after {}", Buffer.concat([Buffer.from('{"exit_code":0,"stdout":"{}'), Buffer.from([0xff]), Buffer.from('","stderr":""}')])],
+  ["half an em dash after {}", Buffer.concat([Buffer.from('{"exit_code":0,"stdout":"{}'), Buffer.from([0xe2, 0x80]), Buffer.from('","stderr":""}')])],
+  ["a byte order mark first", Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(ALLOW_FIXTURE)])],
+  ["stdout not JSON", coreBody({ stdout: "allow" })],
+  ["stdout an array", coreBody({ stdout: "[]" })],
+  ["exit 2 with {}", coreBody({ exit_code: 2, stdout: "{}\n" })],
+  ["exit 1, nothing on stdout", coreBody({ exit_code: 1, stderr: "internal error" })],
+  ["duplicate key: truncated true last", '{"exit_code":0,"stdout":"{}","stderr":"","stdout_truncated":false,"stderr_truncated":false,"stdout_truncated":true}'],
+  ["duplicate key: exit_code 0 then 1", '{"exit_code":0,"stdout":"{}","stderr":"","exit_code":1}'],
+  ["duplicate key: stdout {} then garbage", '{"exit_code":0,"stdout":"{}","stdout":"garbage","stderr":""}'],
+  ["a directive on stderr only, exit 2", coreBody({ exit_code: 2, stderr: '{"action":"block","message":"x"}' })],
+  ["two directives on stdout", coreBody({ stdout: '{"action":"allow"}\n{"action":"block","message":"x"}\n' })],
+  ["a message with a lone backslash before its quote", '{"exit_code":2,"stdout":"{\\"action\\":\\"block\\",\\"message\\":\\"x\\\\\\"}","stderr":""}'],
+  ["a raw tab inside the directive's message", coreBody({ exit_code: 2, stdout: '{"action":"block","message":"a\tb"}\n' })],
+  ["a closing brace too many", coreBody({ exit_code: 2, stdout: '{"action":"block","message":"x"}}\n' })],
+  ["huge and unterminated (1 MiB)", `{"exit_code":0,"stdout":"{}","stderr":"${"x".repeat(1024 * 1024)}`],
+];
+
+/** The shim text between two markers, to run one of its functions alone. */
+function shimSlice(from: string, to: string): string {
+  const source = readFileSync(SHIM_SOURCE, "utf8");
+  const a = source.indexOf(from);
+  const b = source.indexOf(to, a + from.length);
+  expect(a).toBeGreaterThan(-1);
+  expect(b).toBeGreaterThan(a);
+  return source.slice(a, b);
+}
+
+/** A seeded generator (mulberry32), so a failing fuzz case can be found again. */
+function prng(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+describe("DATA-380: the shim answers allow and block without node", () => {
+  test("sh -n, dash -n and bash -n are clean", () => {
+    for (const shell of ["sh", "dash", "bash"]) {
+      if (!Bun.which(shell)) continue;
+      expect([shell, Bun.spawnSync([shell, "-n", SHIM_SOURCE]).exitCode]).toEqual([shell, 0]);
+    }
+  });
+
+  test("allow, block, an answered wait and an unreachable facade start no node; every outcome line says path=fast", () => {
+    for (const shell of DATA380_SHELLS) {
+      for (const [mode, code, calls] of [
+        ["allow", 0, 1],
+        ["block", 2, 1],
+        ["waiting", 2, 1],
+        ["unreachable", 2, 1],
+      ] as const) {
+        const fx = shimFixture(mode, null, { shell });
+        const r = fx.run();
+        expect([shell, mode, r.code, r.calls, fx.nodeCalls()]).toEqual([shell, mode, code, calls, 0]);
+        const lines = fx.log().split("\n").filter((l) => l.includes(" outcome="));
+        expect(lines.length).toBeGreaterThan(0);
+        for (const line of lines) expect(line).toContain(" path=fast elapsed_ms=");
+        expect(fx.log()).toContain("start tool=terminal ");
+      }
+      const fx = shimFixture("wait-then-allow", null, { shell });
+      const r = fx.run({ APPROVAL_HOOK_WAIT_S: "30" });
+      expect([shell, r.code, r.stdout, r.calls, fx.nodeCalls()]).toEqual([shell, 0, "{}", 3, 0]);
+      expect(fx.log().match(/outcome=wait .* path=fast /g)?.length).toBe(2);
+    }
+  });
+
+  test("the core's own allow, under a UTF-8 locale and Hermes's own envelope layout, starts no node", () => {
+    for (const shell of DATA380_SHELLS) {
+      const fx = shimFixture("custom", null, { shell });
+      writeFileSync(join(fx.state, "custom.body"), coreBody({ stdout: "{}\n", stderr: HERMES_ALLOW_ERR }));
+      // Python's json.dumps separators, as Hermes's _serialize_payload writes them (ensure_ascii=False).
+      writeFileSync(
+        join(fx.root, "envelope.json"),
+        '{"hook_event_name": "pre_tool_call", "tool_name": "write_file", "tool_input": {"path": "/home/hermes/caf\u00e9.md", "content": "x\\ny"}, "session_id": "s-1", "cwd": "/home/hermes", "profile": "default", "extra": {}}',
+      );
+      const r = fx.run({ LANG: "en_US.UTF-8", LC_ALL: "en_US.UTF-8" });
+      expect([shell, r.code, r.stdout, r.stderr, fx.nodeCalls()]).toEqual([shell, 0, "{}\n", HERMES_ALLOW_ERR, 0]);
+      expect(fx.log()).toContain("start tool=write_file ");
+      expect(fx.log()).toContain("outcome=allow http=200 exit=0 code=- tool=write_file attempt=1 path=fast ");
+    }
+  });
+
+  test("a facade refusal (HTTP 503) still reads its code with node, and says path=node", () => {
+    const fx = shimFixture("http503");
+    const r = fx.run();
+    expect(r.code).toBe(2);
+    expect(JSON.parse(r.stdout).message).toBe("approval facade unreachable: HTTP 503 serve-unavailable");
+    expect(fx.nodeCalls()).toBe(1);
+    expect(fx.log()).toContain('outcome=block-shim reason="HTTP 503 serve-unavailable" path=node');
+  });
+
+  for (const shell of DATA380_SHELLS) {
+    test(`verdict table on ${shell}: the sh reading answers exactly as node does, and every adversarial body blocks`, () => {
+      const rows: [string, string | Buffer, "fast" | "node" | "adversarial"][] = [
+        ...DATA380_FAST.map(([n, b]) => [n, b, "fast"] as [string, string, "fast"]),
+        ...DATA380_NODE.map(([n, b]) => [n, b, "node"] as [string, string | Buffer, "node"]),
+        ...DATA380_ADVERSARIAL.map(([n, b]) => [n, b, "adversarial"] as [string, string | Buffer, "adversarial"]),
+      ];
+      expect(DATA380_ADVERSARIAL.length).toBeGreaterThanOrEqual(20);
+      for (const [name, body, kind] of rows) {
+        const fast = runBody(body, shell, false);
+        const node = runBody(body, shell, true);
+        const seen = (x: typeof fast) => [name, x.r.code, x.r.stdout, x.r.stderr, x.r.calls, outcomes(x.log)];
+        expect(seen(fast)).toEqual(seen(node));
+        // The forced run read the verdict with node; the fast run did only where the sh reading declined.
+        expect([name, node.nodeCalls]).toEqual([name, node.r.calls]);
+        expect([name, fast.nodeCalls]).toEqual([name, kind === "fast" ? 0 : fast.r.calls]);
+        if (kind === "adversarial") {
+          expect([name, fast.r.code, JSON.parse(fast.r.stdout).action]).toEqual([name, 2, "block"]);
+          expect(JSON.parse(fast.r.stdout).message).toStartWith("approval facade unreachable: ");
+        }
+      }
+    }, 600_000);
+  }
+
+  test("the tool name: read in sh only where node's JSON.parse would read the same name", () => {
+    const cases: [string, string | Buffer, string, boolean][] = [
+      // [case, envelope, the logged name, node started for it]
+      ["compact", '{"hook_event_name":"pre_tool_call","tool_name":"terminal","tool_input":{}}', "terminal", false],
+      ["python separators", '{"hook_event_name": "pre_tool_call", "tool_name": "read_file", "tool_input": {}}', "read_file", false],
+      ["the last key, compact", '{"hook_event_name":"pre_tool_call","tool_name":"terminal"}', "terminal", false],
+      ["a later duplicate wins in JSON.parse", '{"hook_event_name":"pre_tool_call","tool_name":"read_file","tool_input":{},"tool_name":"terminal"}', "terminal", true],
+      ["a duplicate spelled with \\u", '{"hook_event_name":"pre_tool_call","tool_name":"read_file","\\u0074ool_name":"terminal"}', "terminal", true],
+      ["a duplicate on the next line", '{"hook_event_name":"pre_tool_call","tool_name":"read_file",\n"tool_name":"terminal"}', "terminal", true],
+      [
+        "a duplicate past a non-UTF-8 byte",
+        Buffer.concat([Buffer.from('{"hook_event_name":"pre_tool_call","tool_name":"read_file","x":"'), Buffer.from([0xff, 0xfe]), Buffer.from('","tool_name":"terminal"}')]),
+        "terminal",
+        true,
+      ],
+      ["tool_name inside tool_input", '{"hook_event_name":"pre_tool_call","tool_name":"mcp_x","tool_input":{"tool_name":"y"}}', "mcp_x", true],
+      ["a name node refuses (space)", '{"hook_event_name":"pre_tool_call","tool_name":"a b","tool_input":{}}', "?", true],
+      ["a name 65 long", `{"hook_event_name":"pre_tool_call","tool_name":"${"n".repeat(65)}","tool_input":{}}`, "?", true],
+      ["a name 64 long", `{"hook_event_name":"pre_tool_call","tool_name":"${"n".repeat(64)}","tool_input":{}}`, "n".repeat(64), false],
+      ["tool_name null", '{"hook_event_name":"pre_tool_call","tool_name":null}', "?", true],
+      ["an escaped name", '{"hook_event_name":"pre_tool_call","tool_name":"term\\u0069nal"}', "terminal", true],
+      ["another key first", '{"tool_name":"terminal","hook_event_name":"pre_tool_call"}', "terminal", true],
+      ["not JSON", "garbage", "?", true],
+      // The one place the two differ, stated in the shim: an envelope that is
+      // not JSON past Hermes's opening. Node logs `?`; the facade refuses it.
+      ["not JSON past the opening (stated)", '{"hook_event_name":"pre_tool_call","tool_name":"terminal",}', "terminal", false],
+    ];
+    for (const shell of DATA380_SHELLS) {
+      for (const [name, envelope, tool, usesNode] of cases) {
+        const fx = withClock(shimFixture("allow", null, { shell }), STILL_CLOCK);
+        writeFileSync(join(fx.root, "envelope.json"), envelope);
+        const r = fx.run();
+        expect([shell, name, r.code]).toEqual([shell, name, 0]);
+        expect([shell, name, fx.log().match(/ start tool=(\S*) /)?.[1]]).toEqual([shell, name, tool]);
+        expect([shell, name, fx.nodeCalls()]).toEqual([shell, name, usesNode ? 1 : 0]);
+      }
+    }
+  }, 300_000);
+
+  test("fuzz: the sh verdict reading, alone, agrees with node running the shim's own VERDICT_JS wherever it answers", () => {
+    const dir = scratch("av-approval-verdict-fuzz-");
+    const verdictJs = shimSlice("VERDICT_JS='\n", "\n'\n").slice("VERDICT_JS='\n".length);
+    const verdictSh = shimSlice("\nNL='\n", "\n# A re-post that fails");
+    writeFileSync(join(dir, "verdict.js"), verdictJs);
+    writeFileSync(join(dir, "verdict.sh"), verdictSh);
+    // One node process runs VERDICT_JS once per body, with its own argv and exit.
+    writeFileSync(
+      join(dir, "oracle.cjs"),
+      `const fs = require("fs");
+const src = fs.readFileSync(process.argv[2], "utf8");
+const STOP = {};
+for (const d of process.argv.slice(3)) {
+  let said = "";
+  const proc = { argv: ["node", d + "/body", d + "/node.out", d + "/node.err"], stdout: { write: (s) => { said += s; } }, exit: () => { throw STOP; } };
+  try { new Function("require", "process", src)(require, proc); } catch (e) { if (e !== STOP) throw e; }
+  fs.writeFileSync(d + "/node.verdict", said);
+}
+`,
+    );
+    writeFileSync(
+      join(dir, "driver.sh"),
+      `. "$1/verdict.sh"
+shift
+for TMP in "$@"; do
+  SIZE=$(wc -c < "$TMP/body" | tr -d ' ')
+  printf '%s' "$(verdict_sh)" > "$TMP/sh.verdict"
+done
+`,
+    );
+
+    const rnd = prng(380);
+    const pick = <T,>(xs: readonly T[]): T => xs[Math.floor(rnd() * xs.length)];
+    const messages = [
+      "approval-rejected: the resident declined message.send",
+      "hook-timeout: no decision yet. NOTHING WAS WITHDRAWN",
+      "hook-timeout: q WAS WITHDRAWN (reason timeout)",
+      'hook-timeout: say "NOTHING WAS WITHDRAWN" \u2014 or not',
+      "hook-timeout:x",
+      "a:b: c",
+      `${"k".repeat(80)}: long`,
+      "back\\slash: and \"quotes\"",
+      "multi\nline: message",
+      "",
+    ];
+    const stdouts = [
+      "",
+      "\n",
+      "{}",
+      "{}",
+      "{}\n",
+      "{}\n",
+      "{}\n",
+      "{}\n",
+      "{}\n",
+      "{}\n",
+      "{}\n\n",
+      " {}",
+      ...messages.map((m) => hermesBlock(m)),
+      ...messages.map((m) => JSON.stringify({ action: "block", message: m })),
+      '{"decision":"block","reason":"r"}',
+      '{"action":"allow"}',
+      "[]",
+      "allow",
+    ];
+    const stderrs = [
+      "",
+      "",
+      HERMES_ALLOW_ERR,
+      HERMES_ALLOW_ERR,
+      HERMES_ALLOW_ERR,
+      '{"error":{"code":"hook-timeout","message":"m"}}\n',
+      '"code" : \n "x.y:z-1"',
+      '"code"code":"q"',
+      `"code":"${"v".repeat(81)}"`,
+      "tab\there",
+      "caf\u00e9",
+    ];
+    const interesting = [0x22, 0x5c, 0x7b, 0x7d, 0x3a, 0x2c, 0x00, 0x0a, 0x09, 0x20, 0x75, 0x6e, 0x30, 0x32, 0xff, 0xe2, 0x80, 0x94, 0x7f];
+    const mutate = (b: Buffer): Buffer => {
+      const at = Math.floor(rnd() * (b.length + 1));
+      switch (Math.floor(rnd() * 6)) {
+        case 0:
+          return Buffer.concat([b.subarray(0, at), Buffer.from([pick(interesting)]), b.subarray(at)]);
+        case 1:
+          return Buffer.concat([b.subarray(0, at), b.subarray(at + 1)]);
+        case 2: {
+          const c = Buffer.from(b);
+          if (at < c.length) c[at] = pick(interesting);
+          return c;
+        }
+        case 3:
+          return b.subarray(0, at);
+        case 4: {
+          const from = Math.floor(rnd() * b.length);
+          const len = Math.floor(rnd() * 24);
+          return Buffer.concat([b.subarray(0, at), b.subarray(from, from + len), b.subarray(at)]);
+        }
+        default:
+          return Buffer.concat([b.subarray(0, at), Buffer.from(pick([',"x":1', '"', "\\", "\\u0041", "\\n", '","stderr":"', '"}', "\u2014"])), b.subarray(at)]);
+      }
+    };
+    const cases: Buffer[] = [];
+    for (let i = 0; i < 1000; i++) {
+      const exit = pick([0, 0, 0, 2, 2, 2, 1, 255]);
+      const o: Record<string, unknown> = { exit_code: exit, stdout: pick(stdouts), stderr: pick(stderrs) };
+      if (rnd() < 0.7) {
+        o.stdout_truncated = rnd() < 0.9 ? false : true;
+        o.stderr_truncated = rnd() < 0.9 ? false : true;
+      }
+      let b = Buffer.from(JSON.stringify(o));
+      if (rnd() < 0.45) {
+        const n = 1 + Math.floor(rnd() * 3);
+        for (let k = 0; k < n; k++) b = mutate(b);
+      }
+      cases.push(b);
+    }
+    const dirs = cases.map((b, i) => {
+      const d = join(dir, `c${i}`);
+      mkdirSync(d);
+      writeFileSync(join(d, "body"), b);
+      return d;
+    });
+    const o = Bun.spawnSync([NODE!, join(dir, "oracle.cjs"), join(dir, "verdict.js"), ...dirs]);
+    expect(o.exitCode).toBe(0);
+
+    for (const shell of DATA380_UNIT_SHELLS) {
+      for (const d of dirs) for (const f of ["sh.verdict", "out", "err"]) rmSync(join(d, f), { force: true });
+      const s = Bun.spawnSync([shell, join(dir, "driver.sh"), dir, ...dirs]);
+      expect([shell, s.exitCode, s.stderr.toString()]).toEqual([shell, 0, ""]);
+      const answered: Record<string, number> = { allow: 0, block: 0, wait: 0 };
+      for (const d of dirs) {
+        const sh = readFileSync(join(d, "sh.verdict"), "utf8");
+        const node = readFileSync(join(d, "node.verdict"), "utf8");
+        if (sh === "") {
+          // Declined: the sh reading wrote nothing, and node reads the body.
+          expect([shell, d, existsSync(join(d, "out")), existsSync(join(d, "err"))]).toEqual([shell, d, false, false]);
+          continue;
+        }
+        expect([shell, d, sh]).toEqual([shell, d, node]);
+        expect(readFileSync(join(d, "out")).equals(readFileSync(join(d, "node.out")))).toBe(true);
+        expect(readFileSync(join(d, "err")).equals(readFileSync(join(d, "node.err")))).toBe(true);
+        answered[sh.split(" ")[1]]++;
+      }
+      // The sh reading takes a real share of each kind, not just the trivial ones.
+      expect([shell, answered.allow > 30, answered.block > 100, answered.wait > 30]).toEqual([shell, true, true, true]);
+    }
+  }, 300_000);
+
+  test("fuzz: the sh block message JSON is JSON.stringify's for printable ASCII, and declines everything else", () => {
+    const dir = scratch("av-approval-block-json-");
+    writeFileSync(join(dir, "block_json.sh"), shimSlice("block_json() {", "\n}\n") + "\n}\n");
+    writeFileSync(
+      join(dir, "driver.sh"),
+      `. "$1/block_json.sh"
+shift
+for f in "$@"; do
+  s=$(cat "$f"; printf x)
+  s=\${s%x}
+  printf '%s' "$(block_json "approval facade unreachable: $s")" > "$f.sh"
+done
+`,
+    );
+    const rnd = prng(2380);
+    const files: string[] = [];
+    const inputs: Buffer[] = [];
+    for (let i = 0; i < 400; i++) {
+      const len = Math.floor(rnd() * 40);
+      const bytes: number[] = [];
+      const ascii = rnd() < 0.6;
+      for (let k = 0; k < len; k++) {
+        const r = rnd();
+        if (r < 0.15) bytes.push(0x22);
+        else if (r < 0.3) bytes.push(0x5c);
+        else if (ascii || r < 0.85) bytes.push(0x20 + Math.floor(rnd() * 95));
+        else bytes.push(1 + Math.floor(rnd() * 255));
+      }
+      const f = join(dir, `m${i}`);
+      writeFileSync(f, Buffer.from(bytes));
+      files.push(f);
+      inputs.push(Buffer.from(bytes));
+    }
+    for (const shell of DATA380_UNIT_SHELLS) {
+      const s = Bun.spawnSync([shell, join(dir, "driver.sh"), dir, ...files]);
+      expect([shell, s.exitCode]).toEqual([shell, 0]);
+      let printable = 0;
+      files.forEach((f, i) => {
+        const sh = readFileSync(`${f}.sh`, "utf8");
+        const isPrintable = inputs[i].every((c) => c >= 0x20 && c <= 0x7e);
+        if (!isPrintable) {
+          expect([shell, f, sh]).toEqual([shell, f, ""]);
+          return;
+        }
+        printable++;
+        const expected = JSON.stringify({ action: "block", message: `approval facade unreachable: ${inputs[i].toString("latin1")}` });
+        expect([shell, f, sh]).toEqual([shell, f, expected]);
+      });
+      expect(printable).toBeGreaterThan(150);
+    }
+  }, 120_000);
 });
 
 describe("DATA-234 G2: the shim digest the backstop compares", () => {
