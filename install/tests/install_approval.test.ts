@@ -1773,7 +1773,7 @@ describe("DATA-377: the shim's clock is read as seconds.fraction, the fraction l
         else expect(r.stdout).toBe("{}");
       }
     }
-  });
+  }, 30000); // 12 real shim runs: past bun's 5 s default on a loaded machine, as the pre-existing matrices were
 
   test("a fraction that is not one to nine digits (BSD's letter N, empty, ten digits) or a value with no dot and not digits is 0: no re-asking, the first wait answer is the block", () => {
     for (const stamp of ["1700000000.N", "1700000000.", "1700000000.1234567890", "17000000003N", "1700000000.26.6"]) {
@@ -1803,7 +1803,7 @@ describe("DATA-377: the shim's clock is read as seconds.fraction, the fraction l
         expect(elapsed(fx.log())).toEqual([0, 0]);
       }
     }
-  });
+  }, 30000); // 12 real shim runs, as above
 
   test("a fraction with leading zeros keeps them: .0266 is 26 ms, .000000001 is 0 ms, not an octal error", () => {
     // Two reads of a still clock: elapsed_ms is 0 either way; the point is that neither value is read as 0 at T0
