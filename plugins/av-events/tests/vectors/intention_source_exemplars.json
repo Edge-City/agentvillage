@@ -139,7 +139,7 @@
       "source": "ambient",
       "show_words": true,
       "why": "They say the want is theirs but give no words: the words you record are yours (or Ravi's).",
-      "skill": "If they only say \"Yes.\" → `ambient`: the want is theirs, but the words you record are not."
+      "skill": "If, asked whether Ravi's want is theirs, they only say \"Yes.\" → `ambient`: the want is theirs, but the words you record are not."
     },
     {
       "said": "Fwd: We are hiring a founding engineer in Bangalore.",

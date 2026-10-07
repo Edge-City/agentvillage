@@ -71,8 +71,8 @@ Examples:
   and the want are Ravi's, unless they say the want is theirs.
 - After that, "Yes, that's what I want too: I'm looking for a cofounder in
   Goa." → `message`: now the want and the words are theirs.
-- If they only say "Yes." → `ambient`: the want is theirs, but the words you
-  record are not.
+- If, asked whether Ravi's want is theirs, they only say "Yes." → `ambient`:
+  the want is theirs, but the words you record are not.
 - "I want to meet founders building on Solana in Goa." → `message`: record
   "Meet founders building on Solana in Goa" and it publishes.
 - A setup answer, "I'm here to find people working on climate hardware." →
