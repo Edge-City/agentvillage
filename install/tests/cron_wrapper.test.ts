@@ -281,7 +281,15 @@ describe("AC #2: each delivering prompt ends with its own manage line", () => {
     expect(section).toContain("Call `terminal` with exactly `command` plus `workdir` set to your absolute `HERMES_HOME` directory, and nothing else.");
     expect(section).toContain("an update does not switch it back on");
     expect(section).toContain("A restarted one comes back at its usual time, not at once.");
-    for (const error of ["held-by-admin", "held-by-settings", "job-missing", "busy"]) expect(section).toContain(`\`${error}\``);
+    for (const error of ["held-by-admin", "held-by-settings", "holds-unreadable", "job-missing", "busy"]) expect(section).toContain(`\`${error}\``);
+    // Fix round 1 (S2): the reply's own words win over the default line.
+    expect(section).toContain('If the reply has `"resumeMayFire": true` anywhere, never say "not at once": say it is back on, and that one it missed while stopped may arrive soon.');
+    expect(section).toContain('If it says `"ok": false` but `applied` lists a job, the change went through: say it is stopped (or back on), but you could not finish tidying up and will run it once more, then run the same command once more.');
+    // Fix round 1 (S3): each refusal in its own words.
+    expect(section).toContain("`held-by-admin`: it was switched off by the Edge City team, so you can't restart it, and they can ask the team;");
+    expect(section).toContain("`held-by-settings`: it was switched off in settings the Edge City team manages for now, so ask them to turn it back on;");
+    expect(section).toContain("`holds-unreadable`: something is wrong with its settings file, the Edge City team needs to look, and the message stays as it is for now;");
+    expect(section).not.toContain("switched off by the Edge City team or in settings");
     expect(section).toContain("Never use `cronjob_manage` on these jobs: a pause made that way is lost at the next update.");
     // The #224 wording is gone: no "not yet", no cron tool pause, no promise that a missed one may arrive.
     expect(section).not.toContain("can't stop those yet");
