@@ -112,13 +112,18 @@ reads `Authorization` only), passed to curl through a config on stdin, never arg
 decider and answers; the shim replays `{}` (allow) or the block directive at
 exit 2. While the facade answers `hook-timeout` (a question is open and waiting
 for the resident) the shim re-asks every 5 s for up to 280 s, inside Hermes's
-300 s entry timeout. Every failure it can see (facade unreachable, non-200,
+300 s entry timeout. It measures that window, and the log's `elapsed_ms`, in
+milliseconds, reading the unit of `date +%s%3N` from its digit count (10
+seconds, 13 milliseconds, 16 microseconds, 19 nanoseconds; any other count is
+no clock): the hosted image's date (uutils coreutils 0.8.0) prints
+nanoseconds there, which before DATA-377 closed the window at once and made
+every such wait a block. Every failure it can see (facade unreachable, non-200,
 unparseable body, a missing program, a missing variable, a bad variable name,
 an unreadable token file, a foreign listener) prints a block and exits 2: it
 fails closed. It has no fatal shell path of its own left: a variable name
 starting with a digit is refused before it reaches `eval` (it was a fatal "bad
 substitution"), a clock that does not print digits reads as 0 instead of
-failing `$(( ))`, and the interpreter stays `#!/bin/sh` without `set -u`
+failing `$(( ))` (and turns re-asking off), and the interpreter stays `#!/bin/sh` without `set -u`
 (an unset variable expands empty and is then refused by name). Only a signal
 kill (or ptrace) can still end it without a directive; see the uncovered
 surfaces.

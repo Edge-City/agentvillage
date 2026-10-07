@@ -37,6 +37,10 @@
 #     serve-unauthorized; no hosted supervisor stands in between to move
 #     X-Approval-Authorization across. Every other facade keeps
 #     X-Approval-Authorization, as before.
+#   - DATA-377 (2026-10-07), the clock's unit: the hosted image's `date` is
+#     uutils coreutils 0.8.0, whose `%3N` prints nine digits, so `+%s%3N` is
+#     nanoseconds (19 digits) there, not milliseconds. now_ms() derives
+#     milliseconds from the digit count, and ts() keeps three fraction digits.
 # The Agent Village sandbox has one unix user, so the shim runs "by hand"
 # there (no /opt/approval/hook-home, no setuid launcher; skills/approval/
 # README.md says why). install/install_approval.ts installs this file as
@@ -161,12 +165,39 @@ AV_PROC_ROOT=/proc
 
 # Digits only: BSD date prints `...3N` for %3N, and `$(( ))` over anything but
 # digits is a fatal error that ends the shell before it can print a directive.
+# The unit is read from the digit count, never assumed (DATA-377): GNU date
+# prints milliseconds (13 digits), but the hosted image's date is uutils
+# coreutils 0.8.0, whose %3N prints all nine fraction digits, so the same
+# format is NANOSECONDS there (19 digits). Read as milliseconds, that put the
+# re-ask deadline (T0 + WAIT_S * 1000) 0.28 ms after T0 and turned the first
+# hook-timeout answer into a block, and logged elapsed_ms in nanoseconds.
+# 19 digits are nanoseconds, 16 microseconds, 13 milliseconds, 10 seconds;
+# the cut is on the string, so no arithmetic sees the raw value. Any other
+# length reads as 0, as a clock without digits does: no window, no re-asking.
 now_ms() {
   v=$("$T_date" +%s%3N 2>/dev/null) || v=0
   case $v in '' | *[!0-9]*) v=0 ;; esac
+  case ${#v} in
+    19) v=${v%??????} ;;
+    16) v=${v%???} ;;
+    13) ;;
+    10) v=${v}000 ;;
+    *) v=0 ;;
+  esac
   printf '%s\n' "$v"
 }
-ts() { "$T_date" -u +%Y-%m-%dT%H:%M:%S.%3NZ 2>/dev/null; }
+# The log's timestamp. Where %3N prints more than three digits (nine on
+# uutils, above), the fraction is cut to its first three; anything else (GNU's
+# three, BSD's literal `3N`) is printed as the clock gave it.
+ts() {
+  t=$("$T_date" -u +%Y-%m-%dT%H:%M:%S.%3N 2>/dev/null) && [ -n "$t" ] || return 0
+  f=${t##*.}
+  case $f in
+    '' | *[!0-9]* | ? | ?? | ???) ;;
+    *) r=${f#???}; t=${t%"$f"}${f%"$r"} ;;
+  esac
+  printf '%sZ\n' "$t"
+}
 T0=$(now_ms)
 LOG=/dev/null
 TMP=""
