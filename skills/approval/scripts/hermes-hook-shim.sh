@@ -38,10 +38,13 @@
 #     serve-unauthorized; no hosted supervisor stands in between to move
 #     X-Approval-Authorization across. Every other facade keeps
 #     X-Approval-Authorization, as before.
-#   - DATA-377 (2026-10-07), the clock's unit: the hosted image's `date` is
-#     uutils coreutils 0.8.0, whose `%3N` prints nine digits, so `+%s%3N` is
-#     nanoseconds (19 digits) there, not milliseconds. now_ms() derives
-#     milliseconds from the digit count, and ts() keeps three fraction digits.
+#   - DATA-377 (2026-10-07), the clock: the hosted image's `date` is uutils
+#     coreutils 0.8.0 on the old-checkpoint boxes, whose `%3N` drops the
+#     leading zeros of the nanoseconds (a width under nine strips the padding;
+#     `+%s%3N` was 16 to 19 digits, and a digit-count rule read the short
+#     ones as 0, round 2 = DATA-397). now_ms() reads `+%s.%N` (`%N` is padded
+#     on every build measured: GNU, uutils 0.8.0 and 0.10.0), left-pads the
+#     fraction to nine digits as a defence and keeps three; ts() likewise.
 #   - DATA-380 (2026-10-07), no node process on the allow and block paths
 #     (node cost 32 ms warm, 135-236 ms cold, once or twice per call); what a
 #     facade answer means is unchanged, byte for byte:
@@ -181,41 +184,53 @@ FACADE_ENV=$HOOK_HOME/facade.env
 # environment; the test suite substitutes this one line.
 AV_PROC_ROOT=/proc
 
-# Digits only: BSD date prints `...3N` for %3N, and `$(( ))` over anything but
-# digits is a fatal error that ends the shell before it can print a directive.
-# A leading zero is refused too: `$(( 0001791357719 - T0 ))` is an invalid
-# octal constant, as fatal (DATA-377 fix round; no real clock prints one).
-# The unit is read from the digit count, never assumed (DATA-377): GNU date
-# prints milliseconds (13 digits), but the hosted image's date is uutils
-# coreutils 0.8.0, whose %3N prints all nine fraction digits, so the same
-# format is NANOSECONDS there (19 digits). Read as milliseconds, that put the
-# re-ask deadline (T0 + WAIT_S * 1000) 0.28 ms after T0 and turned the first
-# hook-timeout answer into a block, and logged elapsed_ms in nanoseconds.
-# 19 digits are nanoseconds, 16 microseconds, 13 milliseconds, 10 seconds;
-# the cut is on the string, so no arithmetic sees the raw value. Any other
-# length reads as 0, as a clock without digits does; a clock that reads 0 at
-# start turns re-asking off (the T0 guard below).
+# The clock is read as SECONDS.FRACTION (`+%s.%N`), never as one run of digits
+# (DATA-377 round 2 = DATA-397, b4's read of 2026-10-07): the hosted image's
+# date is uutils coreutils 0.8.0 on the boxes provisioned from the old
+# checkpoints, and there `%3N` drops the leading zeros of the nanoseconds (a
+# width under nine strips the padding, format_modifiers.rs), so a fraction of
+# 0.005567380 s came out as 7 digits and the digit-count rule that read
+# `+%s%3N` (19 = ns, 16 = us, 13 = ms, 10 = s) saw an unknown length about
+# 9 % of the time and answered 0. A 0 at start
+# turns re-asking off (the T0 guard below), so the first wait verdict became a
+# block; a 0 mid-call logged elapsed_ms as an epoch or a negative epoch. The
+# separator makes the split exact on every build. Plain `%N` is padded to nine
+# digits on every build measured (GNU, uutils 0.8.0 and 0.10.0; the refuter
+# ran the 0.8.0 binary 1000 times); the fraction is still left-padded to nine
+# as a defence against a build that trims it, and its first three digits are
+# the milliseconds. The seconds
+# must be digits with no leading zero (`$(( 0001791357719 - T0 ))` is an
+# invalid octal constant, fatal before any directive; no real clock prints
+# one) and at most 12 of them. A clock whose fraction is not one to nine
+# digits (BSD date prints `%N` as the letter N) reads as 0, as before; one
+# that prints seconds and no fraction at all reads as whole seconds. `$(( ))`
+# never sees the raw value: every cut is on the string.
 now_ms() {
-  v=$("$T_date" +%s%3N 2>/dev/null) || v=0
-  case $v in '' | 0* | *[!0-9]*) v=0 ;; esac
-  case ${#v} in
-    19) v=${v%??????} ;;
-    16) v=${v%???} ;;
-    13) ;;
-    10) v=${v}000 ;;
-    *) v=0 ;;
+  v=$("$T_date" +%s.%N 2>/dev/null) || v=0
+  case $v in
+    *.*) s=${v%%.*} f=${v#*.} ;;
+    *) s=$v f=000000000 ;;
   esac
+  case $s in '' | 0* | *[!0-9]* | ?????????????*) s="" ;; esac
+  case $f in '' | *[!0-9]* | ??????????*) f="" ;; esac
+  if [ -n "$s" ] && [ -n "$f" ]; then
+    f=000000000$f
+    f=${f#"${f%?????????}"}
+    v=$s${f%??????}
+  else
+    v=0
+  fi
   printf '%s\n' "$v"
 }
-# The log's timestamp. Where %3N prints more than three digits (nine on
-# uutils, above), the fraction is cut to its first three; anything else (GNU's
-# three, BSD's literal `3N`) is printed as the clock gave it.
+# The log's timestamp: the same `%N` read, left-padded to nine digits and cut
+# to its first three, so a trimmed fraction would keep its place value; a fraction that is not one to nine digits (BSD's literal N) is printed
+# as the clock gave it.
 ts() {
-  t=$("$T_date" -u +%Y-%m-%dT%H:%M:%S.%3N 2>/dev/null) && [ -n "$t" ] || return 0
+  t=$("$T_date" -u +%Y-%m-%dT%H:%M:%S.%N 2>/dev/null) && [ -n "$t" ] || return 0
   f=${t##*.}
   case $f in
-    '' | *[!0-9]* | ? | ?? | ???) ;;
-    *) r=${f#???}; t=${t%"$f"}${f%"$r"} ;;
+    '' | *[!0-9]* | ??????????*) ;;
+    *) p=000000000$f; p=${p#"${p%?????????}"}; t=${t%"$f"}${p%??????} ;;
   esac
   printf '%sZ\n' "$t"
 }
