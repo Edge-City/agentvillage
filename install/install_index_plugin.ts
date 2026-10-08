@@ -20,8 +20,20 @@ export const INDEX_PLUGIN = "index-network";
 export const INDEX_PLUGIN_SOURCE = "indexnetwork/hermes-plugin";
 
 export const NEGOTIATOR_SEED = [
-  "// Runs before the built-in negotiator. next() keeps that negotiator.",
-  "export default async function negotiate(_input, next) {",
+  "// Runs before the built-in negotiator. Return next() to keep it.",
+  "// Or return { turn: { action, message } } or { stall: { reason, suggestedAsk } }.",
+  "// action is \"propose\" | \"counter\" | \"accept\" | \"decline\".",
+  "//",
+  "// input:",
+  "//   user: { id, name, intro, location, timezone }",
+  "//   intent: { id, statement }",
+  "//   brief: string",
+  "//   opportunity: {",
+  "//     id, counterpart, status, awaiting, turnCount, actions,",
+  "//     intent: { statement },",
+  "//     turns: [{ turnIndex, actor, action, message, createdAt }]",
+  "//   }",
+  "export default async function negotiate(input, next) {",
   "  return next();",
   "}",
   "",
