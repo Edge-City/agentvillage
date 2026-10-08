@@ -95,6 +95,16 @@ describe("parseContextTags mirrors the app's parser", () => {
     const parsed = parseContextTags(`${CONTEXT_TAGS_MARK}\n- before any heading (setup)\nHere to:\n- Learn Konkani (maybe)\n-not an item`);
     expect(parsed.groups.here).toEqual([{ text: "Learn Konkani (maybe)", marker: "telegram" }]);
   });
+
+  test("(chat, guess) is a guess, never stated; a guess suffix on another marker is dropped", () => {
+    const parsed = parseContextTags(`${CONTEXT_TAGS_MARK}\nOutside work:\n- Sailing (chat, guess)\n- Board games (chat)\n- Pottery (you, guess)`);
+    expect(parsed.groups.fun).toEqual([
+      { text: "Sailing", marker: "guess" },
+      { text: "Board games", marker: "chat" },
+      { text: "Pottery", marker: "you" },
+    ]);
+    expect(statedItems(parsed, "fun")).toEqual(["Board games", "Pottery"]);
+  });
 });
 
 describe("statedItems, contextInterests, contextPreferences", () => {
