@@ -1942,7 +1942,7 @@ def test_data311_the_schema_says_publish_false_holds_for_every_source(ri):
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("value", ["yes", "silence", "standing", " Silence "])
+@pytest.mark.parametrize("value", ["yes", "standing", " Standing "])
 def test_confirmed_in_chat_goes_with_message_and_reaches_the_payload(tctx, index, av, plugin, value):
     out = call(tctx, {"text": TEXT, "source": "message", "confirmed_in_chat": value})
     assert out["success"] is True and out["published"] is True and out["source"] == "message"
@@ -2054,3 +2054,69 @@ def test_plan_record_keeps_only_a_known_code_on_a_message_capture(av, result_val
 def test_the_schema_offers_the_three_codes(ri):
     prop = ri.TOOL_SCHEMA["parameters"]["properties"]["confirmed_in_chat"]
     assert prop["type"] == "string" and prop["enum"] == ["yes", "silence", "standing"]
+
+
+# DATA-410 refutation 2: silence is held in code (B1); the refuter's probes M14-M16 (S4).
+
+
+def test_b1_silence_from_a_human_facing_session_is_held_silence_never_published(tctx, index, av, plugin, ri):
+    """The Telegram session may publish a message capture, but never one passed
+    with confirmed_in_chat=silence: it is held as ambient with its own code."""
+    out = call(tctx, {"text": TEXT, "source": "message", "confirmed_in_chat": "silence"})
+    assert out["success"] is True and out["published"] is False and out["held"] is True
+    assert out["source"] == "ambient" and out["publish_refused"] == "held_silence"
+    assert out["confirmed_in_chat"] == "silence"
+    assert "stays off Index until the resident confirms it" in out["message"]
+    assert index.requests == []
+    [event] = intention_events(av, plugin)
+    assert event["payload"]["source"] == "ambient" and event["payload"]["publish_refused"] == "held_silence"
+    assert event["payload"]["confirmed_in_chat"] == "silence" and event["payload"]["index_intent_id"] is None
+    # The R10 lineage is untouched: the same session still publishes a yes.
+    assert call(tctx, {"text": TEXT + " too", "source": "message", "confirmed_in_chat": "yes"},
+                tool_call_id="c2")["published"] is True
+
+
+def test_b1_silence_from_cron_is_still_held_cron(tctx, index, av, plugin):
+    out = call(tctx, {"text": TEXT, "source": "message", "confirmed_in_chat": "silence"}, session="cron_job_20261012")
+    assert out["publish_refused"] == "held_cron" and out["source"] == "ambient" and out["published"] is False
+    assert index.requests == []
+
+
+def test_b1_silence_with_publish_false_stays_local_and_unheld(tctx, index, ri):
+    """DATA-311 still wins: a capture kept local on purpose is never held or proposed."""
+    out = call(tctx, {"text": TEXT, "source": "message", "confirmed_in_chat": "silence",
+                      "publish": False, "reason": "personal"})
+    assert out["published"] is False and out["local_reason"] == "personal" and "held" not in out
+    assert "publish_refused" not in out and out["confirmed_in_chat"] == "silence"
+    assert "held_norm_hash" not in ri._load_map()[out["intention_id"]]
+    assert index.requests == []
+
+
+@pytest.mark.parametrize("session,code", [("cron_job_20261012", "held_cron"), ("never-seen", "held_unknown")])
+@pytest.mark.parametrize("value", ["yes", "silence", "standing"])
+@pytest.mark.parametrize("text", [TEXT, "Meet founders building on Solana in Goa"])
+def test_m14_every_marker_from_a_cron_or_unknown_session_is_held(tctx, index, av, plugin, session, code, value, text):
+    """Refuter probe M14: no marker gets past the lineage hold (yes and standing included)."""
+    out = call(tctx, {"text": text, "source": "message", "confirmed_in_chat": value}, session=session)
+    assert out["success"] is True and out["published"] is False and out["held"] is True
+    assert out["source"] == "ambient" and out["publish_refused"] == code
+    assert index.requests == []
+    assert intention_events(av, plugin)[0]["payload"]["source"] == "ambient"
+
+
+@pytest.mark.parametrize("session,value", [
+    ("cron_job_20261012", "yes"), ("never-seen", "standing"), (SESSION, "silence"),
+])
+def test_m16_a_held_marker_capture_keeps_its_fingerprint_so_a_chat_yes_cannot_publish_around_it(
+        tctx, index, ri, av, plugin, session, value):
+    """Refuter probe M16: the held capture stores its held fingerprint, so the
+    same words captured later in chat as message + yes are recorded locally
+    (held_ambient_exists), never published around the card."""
+    held = call(tctx, {"text": TEXT, "source": "message", "confirmed_in_chat": value}, session=session)
+    stored = ri._load_map()[held["intention_id"]]
+    assert stored["source"] == "ambient" and stored["held_norm_hash"] == ri.held_norm_hash(TEXT)
+    again = call(tctx, {"text": "  " + TEXT.upper() + " ", "source": "message", "confirmed_in_chat": "yes"},
+                 tool_call_id="c2")
+    assert again["published"] is False and again["publish_refused"] == "held_ambient_exists"
+    assert index.requests == []
+

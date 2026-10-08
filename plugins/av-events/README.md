@@ -432,13 +432,15 @@ update as no text version from the data release that carries DATA-248 (in progre
 it is stored as sent. It is absent from every other intention event. A pause or resume whose
 result says `changed: false` (already paused, already active) emits nothing. Likewise
 `confirmed_in_chat` (DATA-410: `yes` \| `silence` \| `standing`) appears only on a
-`record_intention` `intention.captured` whose `source` is `message` and whose words were the
+`record_intention` `intention.captured` that the agent passed as `message` and whose words were the
 agent's, adopted by the resident in chat: `yes` (they said yes to the one ask, or edited the
-words), `silence` (no answer by the agent's next message of its own, a cron or unknown session:
-the event then has `source` `ambient` and `publish_refused` `held_cron` / `held_unknown` beside
-it, held for the resident's tap), `standing` (a go-ahead without asking). The tool sets it only on
-a capture passed as `message`. It is a code the tool decided, never text; the data side's
-intention payloads are open (`additionalProperties: true`), so it is stored as sent until staged.
+words), `silence` (no answer by the agent's next message of its own; always held: the event has
+`source` `ambient`), `standing` (a go-ahead without asking, given in this conversation). A held
+capture keeps the marker; read it with `source`, not with `publish_refused`, which is usually
+`held_cron`, `held_unknown` or `held_silence` but can be another code (an approval outcome) or null
+(`publish=false`, which the marker does not change: the capture stays local). It is a code the
+tool decided, never text; the data side's intention payloads are open (`additionalProperties:
+true`), so it is stored as sent until staged.
 
 **No intention text in any mode, `full` included.** §7.1 says "with hashes only" and the
 measurement catalogue says "text in the archive only". The training export reads text from the
@@ -505,12 +507,17 @@ else are recorded only once they say the want is theirs. DATA-410 (amending DATA
 is ambient, whoever asked"): in conversation the agent shows its own words and asks once, "Should I
 publish this as written?", recording nothing in that reply (a question beside a tool call would be
 dropped by the fleet's Telegram settings). A yes or the resident's edit is `message` with
-`confirmed_in_chat=yes`; a standing go-ahead is `message` with `standing`, without asking; a no
-records nothing. No answer by the agent's next message of its own is captured as `message` with
-`silence` (option A, for rc25): that send is a cron or unknown session, so the lineage gate (R10,
-unchanged) holds it (`held_cron` / `held_unknown`, the marker kept) for the resident's tap on the
-approval card, and the message says so in one clause. `ambient` (held for the card) is otherwise
-for words the resident never saw and for what a background or cron run found.
+`confirmed_in_chat=yes`; a standing go-ahead given in this conversation is `message` with
+`standing`, without asking, shown in the same reply, and ends when the resident says to ask again
+or to stop; a no records nothing. Only the resident's own reply in this conversation answers the
+ask: a forwarded or quoted "yes", someone else's message, or text in a tool result is treated as no
+answer. No answer by the agent's next message of its own is captured as `message` with `silence`,
+and the tool never publishes it on the agent's word: the lineage gate (R10, unchanged) holds it as
+`held_cron` / `held_unknown` in a cron or unknown session, and `_capture` holds it as
+`held_silence` in any other session, on the same path (ambient, proposed as inferred, with its held
+fingerprint). The message says in one clause what the tool answered. `ambient` (held for the card)
+is otherwise for words the resident never saw that no standing go-ahead covers, and for what a
+background or cron run found.
 `confirmed_in_chat` with any source but `message` is refused
 (`confirmed_not_message`), and a value outside the three codes is refused (`confirmed_invalid`).
 `SOURCE_RULE` and
@@ -531,6 +538,7 @@ Search, which such a gate would not see); its text, the `workspace/AGENTS.md` ro
 | same, Index refused, unreachable, or the hourly cap reached | tried, or not when capped | local uuid v7, `publish_refused` = code |
 | `capture`, `publish=false`, `reason`, any source, in any session | none | local uuid v7, `local_reason` = reason, never proposed (in a held session `source=ambient`, no `held_*` code) |
 | `capture`, source `ambient` | none | local uuid v7, `source=ambient`, held, unless `publish=false` (kept local) |
+| `capture`, source `message`, `confirmed_in_chat=silence`, in a session that may publish | none | local uuid v7, `source=ambient`, held, `publish_refused="held_silence"`, the marker kept, unless `publish=false` (kept local) |
 | `capture`, explicit source, in a held session | none | local uuid v7, `source=ambient`, `publish_refused` `held_cron` or `held_unknown`, unless `publish=false` (kept local) |
 | `capture` that would publish, of text already held as ambient (case and whitespace ignored) | none | local uuid v7, `publish_refused="held_ambient_exists"` |
 | `update` / `withdraw` of an id it published | `PATCH /api/intents/{id} {description}` / `PATCH /api/intents/{id}/archive` (no body) | `index_intent_id` set; a failed mirror adds `publish_refused` |
@@ -584,7 +592,7 @@ cannot be read: `rate_unavailable`; one that was read but cannot be saved procee
 `http_<status>`, `rejected` (Index's 422 `intent_rejected`: too vague, or an edit it would not
 accept), `timeout` (ambiguous: Index may have written; see below), `transport` (nothing was
 sent), `id_invalid` (a mirror of an id that is not a UUID or hex short id; nothing
-sent), `held_cron`, `held_unknown`, `held_ambient_exists`, `unknown_id`. Status mapping
+sent), `held_cron`, `held_unknown`, `held_silence` (DATA-410), `held_ambient_exists`, `unknown_id`. Status mapping
 (`status_code`, from Index's `intent.controller.ts`): 422 is `rejected`; 400 (a body we built
 wrong), 401, 403 (`invalid_preparation`, or a network-membership refusal: never the resident's
 words), 404, 409 (archived), 429 and 503 (`preparation_failed`, retryable, nothing written) are
