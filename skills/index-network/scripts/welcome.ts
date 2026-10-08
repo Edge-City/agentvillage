@@ -108,12 +108,14 @@ export const WELCOME_INDEX_TIMEOUT_MS = 10_000;
  */
 export const WELCOME_SEED_TIMEOUT_MS = 20_000;
 /**
- * Every Index call of one run together, from its start: the control plane
- * stops the `--draft` run at 30 s (telegram-onboarding.js greetingDraft), and
- * a run that is stopped sends its fixed greeting instead. A call that would
- * start with less than WELCOME_MIN_CALL_MS left is not made.
+ * Every Index call of one run together, from its start (DATA-416: 50 s, was
+ * 25 s, so a first welcome that seeds has room for creates that take tens of
+ * seconds): the control plane stops the `--draft` run at its draft timeout
+ * (telegram-onboarding.js greetingDraft, 60 s from DATA-416 W2; it was 30 s),
+ * and a run that is stopped sends its fixed greeting instead. A call that
+ * would start with less than WELCOME_MIN_CALL_MS left is not made.
  */
-export const WELCOME_BUDGET_MS = 25_000;
+export const WELCOME_BUDGET_MS = 50_000;
 export const WELCOME_MIN_CALL_MS = 1_000;
 /** Of WELCOME_BUDGET_MS, what the creates leave for the second list (DATA-416 S1). */
 export const WELCOME_RELIST_RESERVE_MS = 5_000;

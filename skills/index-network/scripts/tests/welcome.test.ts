@@ -651,6 +651,8 @@ describe("the AGENTS.md welcome gate", () => {
       expect(flat).toContain("Do not add `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty`");
       expect(flat).not.toMatch(/exactly `command` and nothing else/);
     }
+    // DATA-416: the first welcome's run may take up to WELCOME_BUDGET_MS (50 s) of Index calls.
+    expect(gate.replace(/\s+/g, " ")).toContain("it finishes within a minute on the first welcome and in a few seconds after that.");
     // The fallback's marker write is a file tool call, which the same gate refuses with a relative path.
     expect(gate.replace(/\s+/g, " ")).toContain("write `memory/welcome-state.json` under your `HERMES_HOME` (give the file tool its absolute path)");
   });

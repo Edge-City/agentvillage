@@ -25,8 +25,14 @@ import {
   SEED_SOURCE_TYPE,
   SELECTED_HEADING,
   TITLE_MAX,
+  WELCOME_BUDGET_MS,
+  WELCOME_INDEX_TIMEOUT_MS,
   WELCOME_MAX_CHARS,
+  WELCOME_MIN_CALL_MS,
+  WELCOME_RELIST_RESERVE_MS,
   WELCOME_SEED_FILE,
+  WELCOME_SEED_TIMEOUT_MS,
+  WELCOME_SEED_WAIT_MS,
   WELCOME_STATE_FILE,
   type WelcomeBranch,
   claimSeed,
@@ -587,6 +593,38 @@ describe("the seed: zero active intents and selected intentions → up to three 
     const hung = await run(fakeIndex({ create: () => ({ hang: true }) }), ["--draft"], { timeoutMs: 200, budgetMs: 500, reserveMs: 200 });
     expect(hung.names).toEqual(["list_intents", "create_intent", "create_intent", "create_intent", "list_intents"]);
     expect(hung.branch).toEqual({ fallback: "questions", intents_listed: 0, intents_seeded: 0, seed_failed: 3 });
+  });
+
+  test("DATA-416: the run's budget is 50 s (the control plane's --draft timeout goes to 60 s); each path's worst case fits in it", () => {
+    expect(WELCOME_BUDGET_MS).toBe(50_000);
+    expect([WELCOME_INDEX_TIMEOUT_MS, WELCOME_RELIST_RESERVE_MS, WELCOME_MIN_CALL_MS]).toEqual([10_000, 5_000, 1_000]);
+    // The run that seeds: the first list, the creates at once (each capped), the second list.
+    expect(WELCOME_INDEX_TIMEOUT_MS + WELCOME_SEED_TIMEOUT_MS + WELCOME_INDEX_TIMEOUT_MS).toBeLessThanOrEqual(WELCOME_BUDGET_MS);
+    // The run that waits for another's seed: the first list, the wait, the second list.
+    expect(WELCOME_INDEX_TIMEOUT_MS + WELCOME_SEED_WAIT_MS + WELCOME_INDEX_TIMEOUT_MS).toBeLessThanOrEqual(WELCOME_BUDGET_MS);
+    // Bun's start and the exec around it keep at least 10 s inside the control plane's 60 s.
+    expect(WELCOME_BUDGET_MS).toBeLessThanOrEqual(60_000 - 10_000);
+  });
+
+  test("DATA-416: welcomeRun's default budget is WELCOME_BUDGET_MS: 44 s into a --draft run the creates are still made; 44.95 s in, the reserve keeps them back and only the second list is made", async () => {
+    writeUserMd(profileText(draftWith(3)));
+    const realNow = Date.now;
+    let offset = 0;
+    Date.now = () => realNow() + offset;
+    try {
+      // The clock jumps once the first list has answered; under the old 25 s budget neither run would create or list again.
+      offset = 0;
+      const made = await run(fakeIndex({ list: (n) => void (n === 1 && (offset = 44_000)) }), ["--draft"]);
+      expect(made.names).toEqual(["list_intents", "create_intent", "create_intent", "create_intent", "list_intents"]);
+      expect(draftTrailer(made.branch!)).toBe(draftTrailer({ fallback: "none", intents_listed: 3, intents_seeded: 3, seed_failed: 0 }));
+      rmSync(join(home, WELCOME_SEED_FILE));
+      offset = 0;
+      const kept = await run(fakeIndex({ list: (n) => void (n === 1 && (offset = 44_950)) }), ["--draft"]);
+      expect(kept.names).toEqual(["list_intents", "list_intents"]);
+      expect(draftTrailer(kept.branch!)).toBe(draftTrailer({ fallback: "questions", intents_listed: 0, intents_seeded: 0, seed_failed: 3 }));
+    } finally {
+      Date.now = realNow;
+    }
   });
 });
 
