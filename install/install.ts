@@ -10,7 +10,7 @@
  *     (`skill_copy.ts`; `edge-india/references` is replaced, not merged, so upstream deletions land)
  *   - retired skill bundles (`RETIRED_SKILL_DIRS`, e.g. `geo-esmeralda`) → removed from `$HERMES_HOME/skills/`
  *   - `terminal.cwd` in config.yaml → `$HERMES_HOME`
- *   - Telegram display: no reasoning, no progress message (`display_defaults.ts`; `AV_DISPLAY_DEFAULTS=0` skips)
+ *   - Telegram display: no reasoning, no tool-progress message (only the 3-minute heartbeat; `display_defaults.ts`; `AV_DISPLAY_DEFAULTS=0` skips)
  *   - STT enabled with Groq Whisper so voice notes are auto-transcribed
  *   - Telegram backlog kept across gateway restarts (`platforms.telegram.extra.drop_pending_on_cold_boot: false`, only when unset)
  *   - Cron in village time (`timezone: Asia/Kolkata`, only when no zone is configured; a loud warning when another is)

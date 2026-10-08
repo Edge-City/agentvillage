@@ -163,7 +163,8 @@ answers.
 **What a roll changes on an agent.** The installer rewrites the overlay's
 files and the `config.yaml` keys it owns (README, "Install"), among them
 the Telegram display keys: from the roll on, a resident sees no reasoning and no
-progress message while the agent works (DATA-409; `AV_DISPLAY_DEFAULTS=0`
+tool-progress message while the agent works (DATA-409; only Hermes's one
+"⏳ Working — N min" heartbeat on a turn over 3 minutes; `AV_DISPLAY_DEFAULTS=0`
 opts a tenant out). Reasoning is still stored in the agent's `state.db`; it is
 hidden, not deleted.
 

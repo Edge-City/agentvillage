@@ -240,8 +240,9 @@ test("DATA-409: a box still holding the installer's old `tool_progress: new` fli
   expect(telegramOf(path)).toEqual(APPLIED);
   expect(logged()).toContain("tool_progress=off");
 
-  // A mode a resident chose by hand is a choice and is kept, whatever it is.
-  for (const chosen of ["all", "verbose", "log"]) {
+  // A mode a resident chose by hand is a choice and is kept, whatever it is: the other modes, a
+  // capitalised `New` (Hermes lowercases it), and the booleans Hermes reads as all/off.
+  for (const chosen of ["all", "verbose", "log", "New", true, false]) {
     const kept = withDoc({ display: { platforms: { telegram: { ...APPLIED, tool_progress: chosen } } } });
     expect(configureTelegramDisplay()).toEqual([]);
     expect(telegramOf(kept).tool_progress).toBe(chosen);

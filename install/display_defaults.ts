@@ -16,8 +16,12 @@
  *
  * The owner's decision: residents never see reasoning, and (DATA-409, after a
  * tester watched 38 seconds of raw curl and python command previews) see no
- * progress message at all while the agent works: `tool_progress: off`, Hermes's
- * own Telegram tier default. The grouping and cleanup keys stay as written so a
+ * tool-progress message while the agent works: `tool_progress: off`, Hermes's
+ * own Telegram tier default. (Hermes's only names-only setting is
+ * `tool_preview_length: 3`, which turns every line into `...`; the owner chose
+ * no progress message instead. A turn over 3 minutes still shows Hermes's one
+ * "⏳ Working — N min" heartbeat line, edited in place and deleted with the
+ * reply, whatever `tool_progress` says.) The grouping and cleanup keys stay as written so a
  * resident who turns progress back on by hand still gets one quiet, edited
  * message. This step writes Telegram-scoped keys only, so the CLI and desktop
  * surfaces operators use keep Hermes's defaults:
@@ -31,7 +35,8 @@
  * | `streaming` | `false` | unset, or `true` (the value Hermes itself writes there) |
  * | `cleanup_progress` | `true` | unset |
  *
- * Together: no progress message; the reply arrives as one message. (With
+ * Together: no tool-progress message (only the 3-minute heartbeat on a long
+ * turn); the reply arrives as one message. (With
  * progress turned on by hand: one message, edited in place at most every 1.5 s
  * with a line per tool, deleted once the reply lands, kept when the turn fails.)
  * Streaming and interim commentary are off because each streamed or commentary
@@ -60,7 +65,7 @@ interface ManagedKey {
   value: DisplayValue;
   /** `always`: written whenever it differs. `unset`: only while absent, null, or one of `hermesDefaults`. */
   policy: "always" | "unset";
-  /** Values Hermes itself writes at this path, which count as unset. */
+  /** Values that count as unset: what Hermes itself writes at this path, or what this installer wrote before (DATA-409: `new`). */
   hermesDefaults?: readonly unknown[];
 }
 
