@@ -35,6 +35,7 @@ See the project hub for the full diagram and decisions.
   - `skills/edge-esmeralda/` — background on the *previous* popup, Edge Esmeralda 2026: popup constants (popup id, week dates, themes), attendee field semantics, the curated wiki/website/newsletter references (a frozen 2026-10-01 snapshot), and the onboarding pointer for obtaining EdgeOS tokens. Background only: it hosts no cron prompts or scripts (they moved to `skills/index-network/` in DATA-361).
   - `skills/token-usage-audit/` — deterministic tenant-local token usage audit script and cron contract. It reads local usage summaries and cron metadata, never calls an LLM, and emits only sanitized aggregate facts.
 - `install/` — bootstrap scripts for plugging AgentVillage into a runtime
+- `docs/negotiator.md` — how to write a resident's `$HERMES_HOME/index/negotiator.ts`
 
 ## Repos
 
