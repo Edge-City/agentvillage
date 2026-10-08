@@ -132,9 +132,14 @@ export const WELCOME_MIN_CALL_MS = 1_000;
 export const WELCOME_RELIST_RESERVE_MS = 5_000;
 /**
  * How long a run that finds another run's seed still in progress (a marker
- * without `done`) waits for it, and how often it looks (DATA-416 S3).
+ * without `done`) waits for it, and how often it looks (DATA-416 S3). The
+ * wait outlasts one seed call (WELCOME_SEED_TIMEOUT_MS, 20 s: the creates run
+ * at once), so a slow create still shows in the waiting run's welcome; it
+ * ends by the budget less the second list's reserve in any case, and the
+ * first list (10 s), the wait and the second list (10 s) fit in
+ * WELCOME_BUDGET_MS (DATA-416 W1 fix round 2: 25 s, was 10 s).
  */
-export const WELCOME_SEED_WAIT_MS = 10_000;
+export const WELCOME_SEED_WAIT_MS = 25_000;
 export const WELCOME_SEED_POLL_MS = 500;
 /**
  * `sourceType` on every intent the overlay creates (the av-events plugin's

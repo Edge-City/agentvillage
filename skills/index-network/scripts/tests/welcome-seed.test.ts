@@ -635,6 +635,9 @@ describe("the seed: zero active intents and selected intentions → up to three 
   test("DATA-416: the run's budget is 50 s (the control plane's --draft timeout goes to 60 s); each path's worst case fits in it", () => {
     expect(WELCOME_BUDGET_MS).toBe(50_000);
     expect([WELCOME_INDEX_TIMEOUT_MS, WELCOME_RELIST_RESERVE_MS, WELCOME_MIN_CALL_MS]).toEqual([10_000, 5_000, 1_000]);
+    // The wait outlasts one seed call (the creates run at once), so a slow create still shows in the waiting run's welcome.
+    expect(WELCOME_SEED_WAIT_MS).toBe(25_000);
+    expect(WELCOME_SEED_WAIT_MS).toBeGreaterThan(WELCOME_SEED_TIMEOUT_MS);
     // The run that seeds: the first list, the creates at once (each capped), the second list.
     expect(WELCOME_INDEX_TIMEOUT_MS + WELCOME_SEED_TIMEOUT_MS + WELCOME_INDEX_TIMEOUT_MS).toBeLessThanOrEqual(WELCOME_BUDGET_MS);
     // The run that waits for another's seed: the first list, the wait, the second list.
@@ -851,6 +854,44 @@ describe("the seed marker: the creates run once per box, in both modes", () => {
     expect(creates(index.fake.calls)).toHaveLength(3);
     expect(readFileSync(join(home, WELCOME_SEED_FILE), "utf8")).toBe(`${JSON.stringify({ seededAt: firstNow.toISOString(), selected: 3, created: 3, failed: 0, done: true })}\n`);
   });
+
+  test(
+    "DATA-416 slice 4: a seeding run whose creates answer after 18 s, and a run that found its marker: the second waits past 10 s (the default wait, 25 s) and lists all three",
+    async () => {
+      writeUserMd(profileText(draftWith(3)));
+      process.env.INDEX_API_KEY = FAKE_API_KEY;
+      let second: ReturnType<typeof welcomeRun> | null = null;
+      let secondStarted = 0;
+      const index = fakeIndex({
+        create: (n, description, id) => {
+          if (n === 1) {
+            // The marker is claimed: the second run starts now, at the defaults (no wait or budget override).
+            setTimeout(() => {
+              secondStarted = Date.now();
+              second = welcomeRun(["--home", home, "--draft"], { fetch: index.fake.fetch, pollMs: 100 });
+            }, 0);
+          }
+          return new Promise<ToolReply>((resolve) =>
+            setTimeout(() => {
+              index.rows.push({ id, summary: description, status: "active" });
+              resolve(createAnswer(id, description));
+            }, 18_000),
+          );
+        },
+      });
+      process.env.INDEX_MCP_URL = index.fake.url;
+      // The seeding run at the defaults too: each create may take WELCOME_SEED_TIMEOUT_MS (20 s).
+      const first = await welcomeRun(["--home", home, "--draft"], { fetch: index.fake.fetch });
+      expect(first.branch).toEqual({ fallback: "none", intents_listed: 3, intents_seeded: 3, seed_failed: 0 });
+      expect(second).not.toBeNull();
+      const late = await second!;
+      expect(Date.now() - secondStarted).toBeGreaterThan(10_000);
+      expect(late.branch).toEqual({ fallback: "none", intents_listed: 3, intents_seeded: 0, seed_failed: 0 });
+      expect([...listedLines(late.text)].sort()).toEqual(KEPT.slice(0, 3).map((k) => k.text).sort());
+      expect(creates(index.fake.calls)).toHaveLength(3);
+    },
+    40_000,
+  );
 
   test("DATA-416 race 2: a marker already done and a first list that predates the creates (1 of 3): the run lists again and the welcome shows that list", async () => {
     writeUserMd(profileText(draftWith(3)));
