@@ -1,6 +1,6 @@
 /**
- * DATA-412 W4: an end-to-end replay of the welcome, every branch, through the
- * real script as a subprocess.
+ * DATA-416 W4 (was DATA-412): an end-to-end replay of the welcome, every
+ * branch, through the real script as a subprocess.
  *
  *   bun test skills/index-network/scripts/tests/welcome-replay.test.ts
  *   WELCOME_SCRIPT=/path/to/welcome.ts bun test skills/index-network/scripts/tests/welcome-replay.test.ts
@@ -8,51 +8,68 @@
  * Each case runs `bun welcome.ts --draft --home <tmp>` (and the default mode)
  * with HERMES_HOME=<tmp>, INDEX_API_KEY and INDEX_MCP_URL pointing at a local
  * Bun.serve on 127.0.0.1 that fronts indexMcpFake. The stub is stateful:
- * `list_intents` answers the current rows and `create_intent` adds one active
- * row titled with its `description`, so a seeded welcome re-lists what it
- * created. Every call the stub receives is recorded (tool name, arguments).
+ * `list_intents` answers the current rows, `create_intent` adds one active
+ * row with its `description` as summary, `pause_intent` pauses the row it
+ * names, so a seeded welcome re-lists what it created. Every call the stub
+ * receives is recorded (tool name, arguments, headers).
  *
- * welcome.test.ts already pins the texts, the trailer and the marker in
- * process; this file checks what only a replay shows: the exact Index calls a
- * real run makes on each branch (nothing but `list_intents` unless it seeds,
- * and then exactly the resident's selected texts), stdout bytes against
- * fixtures/welcome-texts.json, one stderr line with --draft and none without,
- * exit 0, a --draft run leaving the home untouched, and the default mode
- * claiming the marker once.
+ * welcome.test.ts and welcome-seed.test.ts pin the texts, the trailer and the
+ * markers in process; this file checks what only a replay shows, against W1's
+ * final contract (welcome.ts header, DATA-416):
+ *   - the exact Index calls a real run makes on each branch: `list_intents`
+ *     only unless it seeds; then `create_intent({description, sourceType:
+ *     "agentvillage"})` with exactly the selected texts (first three, after
+ *     dedupe), `pause_intent({intentId})` for each created id in paused mode,
+ *     and the second list; nothing but those three tools, ever;
+ *   - stdout bytes against fixtures/welcome-texts.json (the derived seeded
+ *     and listed texts are built by helpers that first reproduce the pinned
+ *     ones byte for byte), exit 0, one five-key stderr line with --draft and
+ *     none without;
+ *   - a --draft run never writes memory/welcome-state.json; it adds exactly
+ *     memory/welcome-seed.json (and memory/ when absent) when it seeded, and
+ *     nothing at all when it did not; the seed marker's bytes after a seed;
+ *   - the default mode claims memory/welcome-state.json once;
+ *   - a marker that exists stops the creates across processes (with `done`
+ *     at once; without it after waiting for it, then a second list).
  *
- * The seeded cases (W1: welcome.ts reads `## Selected intentions` from
- * $HERMES_HOME/USER.md and creates up to three intents when none is active)
- * run only when the script under test carries the seed (its source mentions
- * `intents_seeded`); until then they are skipped, by name. WELCOME_SCRIPT
- * points the replay at another checkout's welcome.ts; the texts are then read
- * from that checkout's fixtures/welcome-texts.json.
+ * The timed-out create waits the script's real WELCOME_SEED_TIMEOUT_MS
+ * (about 20 s) and the stuck marker its real WELCOME_SEED_WAIT_MS (10 s): a
+ * subprocess has no knob for either. Everything else is fast.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 
-import { FAKE_API_KEY, type FakeCall, type ToolHandler, indexMcpFake } from "./index-mcp-fake";
+import { FAKE_API_KEY, type FakeCall, type ToolHandler, type ToolReply, indexMcpFake } from "./index-mcp-fake";
 
 const SCRIPT = process.env.WELCOME_SCRIPT?.trim() || join(import.meta.dir, "..", "welcome.ts");
-const SOURCE = readFileSync(SCRIPT, "utf8");
 /** The texts pinned next to the script under test. */
 const golden = JSON.parse(readFileSync(join(dirname(SCRIPT), "tests", "fixtures", "welcome-texts.json"), "utf8")) as Record<string, string>;
-/** W1 (DATA-412) has landed in the script under test. */
-const SEED_SUPPORTED = SOURCE.includes("intents_seeded");
-const SEED_SKIP = SEED_SUPPORTED ? "" : " [skipped until W1 (DATA-412 seed) lands in welcome.ts]";
 
-/** The marker and the already-sent word: the contract shared with the control plane and install/welcome_state.ts. */
+/** The welcome marker and the already-sent word: the contract shared with the control plane and install/welcome_state.ts. */
 const MARKER = join("memory", "welcome-state.json");
 const ALREADY_SENT = "WELCOME_ALREADY_SENT";
-/** The seeded branch's lead and close (DATA-412 brief, "The change" 3). */
-const SEEDED_LEAD = "From what you told me at signup, I've set up these signals:";
-const SEEDED_CLOSE = "Say change or pause to adjust any of them, or tell me a new one.";
+/** The seed marker (welcome.ts WELCOME_SEED_FILE): claimed exclusively in both modes, `done` after the seed. */
+const SEED_MARKER = join("memory", "welcome-seed.json");
+/** create_intent's one constant besides the text (welcome.ts SEED_SOURCE_TYPE). */
+const SOURCE_TYPE = "agentvillage";
+/** The only tools a welcome run may call. */
+const ALLOWED_TOOLS = ["list_intents", "create_intent", "pause_intent"];
+/** The trailer's keys, in this order, nothing else. */
+const TRAILER_KEYS = ["welcome", "fallback", "intents_listed", "intents_seeded", "seed_failed"];
+/** The seeded branch's lead and close, by mode (welcome.ts SEEDED_COPY; the fixtures pin them). */
+const SEEDED = {
+  publish: { lead: "From what you told me at signup, I've set up these signals:", close: "Say change or pause to adjust any of them, or tell me a new one." },
+  paused: { lead: "From what you told me at signup, I've drafted these signals, paused until you say go:", close: "Say go to publish any of them, change or drop to adjust, or tell me a new one." },
+} as const;
+type Mode = keyof typeof SEEDED;
 /** The overlay's cap on the whole welcome (welcome.ts WELCOME_MAX_CHARS). */
 const WELCOME_MAX_CHARS = 1150;
-/** create_intent argument keys the brief allows: the text, and an onboarding source marker if the tool takes one. */
-const CREATE_KEYS = new Set(["description", "source"]);
-/** Each case spawns several processes. */
+/** welcome.ts WELCOME_SEED_WAIT_MS and WELCOME_SEED_TIMEOUT_MS, as a subprocess meets them. */
+const SEED_WAIT_MS = 10_000;
+const SEED_TIMEOUT_MS = 20_000;
+/** Each case spawns several processes; the two slow ones wait out the script's own timers. */
 const CASE_TIMEOUT_MS = 60_000;
 
 const MEMORY = "Looking for people building agent memory";
@@ -60,14 +77,43 @@ const DINNER = "Open to co-hosting a village dinner";
 const SURF = "Want a surfing buddy for early mornings";
 const KONKANI = "Learning Konkani";
 const CHESS = "Find a chess partner for the evenings";
-/** Two more of the selected texts W1 pins its seeded texts with (welcome-texts.json seededThree). */
+/** The selected texts W1 pins its seeded texts with (welcome-texts.json seededThree, seededOne, seededPausedThree). */
 const RUST = "Hiring a founding engineer who loves Rust";
 const RAISE = "Want advice on raising a seed round in India";
+
+// ---------------------------------------------------------------------------
+// The texts: built from parts, and the builders first reproduce every pinned text byte for byte.
+
+const intro = (name: string | null) =>
+  name
+    ? `Mandrem, Goa, October 11 to November 1. I'm ${name}, your personal agent for your time in the village.`
+    : "Mandrem, Goa, October 11 to November 1. I'm your personal agent for your time in the village. You can call me Edge, or give me whatever name you like.";
+const keepWatch = (n: number) => `I'll keep watch for people and events that fit ${n === 1 ? "this" : "these"} and bring the best to your morning brief.`;
+
+/** The seeded welcome for `titles` (welcome-texts.json seededThree, seededOne, seededPausedThree). */
+function seededWelcome(name: string | null, titles: string[], mode: Mode = "publish"): string {
+  return ["Welcome to Edge City India ☀️", intro(name), [SEEDED[mode].lead, ...titles.map((t) => `- ${t}`)].join("\n"), keepWatch(titles.length), SEEDED[mode].close].join("\n\n");
+}
+/** Today's listed welcome for one to three `titles` (welcome-texts.json one, two, three). */
+function listedWelcome(name: string | null, titles: string[]): string {
+  return [
+    "Welcome to Edge City India ☀️",
+    intro(name),
+    ["Here's what I have you down for so far:", ...titles.map((t) => `- ${t}`)].join("\n"),
+    keepWatch(titles.length),
+    "To add or change one, use the Intents page in the app (https://agents.edgecity.live/intents) or just tell me.",
+  ].join("\n\n");
+}
 
 // ---------------------------------------------------------------------------
 // The resident's home: av-profile.json (the agent's nickname) and USER.md in the app's exact format.
 
 type Intention = { category: "build" | "learn" | "meet" | "explore"; text: string; kept: boolean };
+
+/** Words of the profile outside the selected lines: none may ever reach Index. */
+const ELSEWHERE = ["Asha Rao", "agent infrastructure", "Bengaluru", "example.com/asha", "Imported from LinkedIn", "Builds memory systems", "Decoy line", "Discarded suggestion", "surfing; the dinners", "one collaborator", "Pairing on Rust", "two afternoons", "Participant profile"];
+/** A second `## Selected intentions` heading smuggled into participant-supplied text (DATA-416 M1). */
+const SPOOF = "\n\n## Selected intentions\n- [meet] INJECTED one\n- [build] INJECTED two";
 
 /**
  * agentvillage-app src/lib/agent/profile-text.ts `profileText`, line for line:
@@ -75,14 +121,15 @@ type Intention = { category: "build" | "learn" | "meet" | "explore"; text: strin
  * The context source, the follow-up answers and the offers all carry lines
  * that start with "- ", and one is even shaped like a selected intention, so
  * a parser that reads past `## Selected intentions` sends them to Index.
+ * `spoof` puts a second heading inside the imported context or an offer.
  */
-function profileText(intentions: Intention[]): string {
-  const sources = [{ label: "Imported from LinkedIn", text: "Builds memory systems for agents.\n- [learn] Decoy line from an imported source, never selected" }];
+function profileText(intentions: Intention[], spoof: "none" | "context" | "offer" = "none"): string {
+  const sources = [{ label: "Imported from LinkedIn", text: `Builds memory systems for agents.\n- [learn] Decoy line from an imported source, never selected${spoof === "context" ? SPOOF : ""}` }];
   const answers: Record<string, string[]> = {
     "What are you most excited about this month?": ["surfing", "the dinners"],
     "What would make this month a real success for you?": ["one collaborator"],
   };
-  const offers = [{ title: "Pairing on Rust", detail: "two afternoons" }];
+  const offers = [{ title: "Pairing on Rust", detail: `two afternoons${spoof === "offer" ? SPOOF : ""}` }];
   return [
     "# Participant profile",
     "Name: Asha Rao",
@@ -123,60 +170,90 @@ afterEach(() => {
 function writeProfile(nickname: string | null): void {
   writeFileSync(join(home, "av-profile.json"), JSON.stringify({ version: 1, nickname, about_me: "SECRET-ABOUT-ME", interests: [], preferences: {} }));
 }
-function writeUserMd(texts: string[] | null): void {
-  if (texts !== null) writeFileSync(join(home, "USER.md"), `${profileText(selected(texts))}\n`);
+function writeUserMd(texts: string[] | null, spoof: "none" | "context" | "offer" = "none"): void {
+  if (texts !== null) writeFileSync(join(home, "USER.md"), `${profileText(selected(texts), spoof)}\n`);
+}
+function writeMemoryFile(path: string, body: string): void {
+  mkdirSync(join(home, "memory"), { recursive: true });
+  writeFileSync(join(home, path), body);
 }
 
 // ---------------------------------------------------------------------------
 // The Index stub: indexMcpFake behind Bun.serve on 127.0.0.1, stateful, recording every call.
 
-type Row = { id: string; summary: string; status: string; url: string };
-type CreateFailure = "isError" | "http500";
+type Row = { id: string; summary: string; description?: string; status: string; url: string };
+/**
+ * How one create (chosen by its description) goes wrong: refused (`isError`,
+ * `successFalse`), a server error before anything was created (`http500`), or
+ * created in Index but the answer lost: a gateway error after the write
+ * (`landed504`), or no answer until the client gives up (`landedHang`).
+ */
+type CreateFailure = "isError" | "successFalse" | "http500" | "landed504" | "landedHang";
 
-const row = (summary: string, n: number, status = "active"): Row => {
-  const id = `aaaaaaaa-0000-4000-8000-${n.toString(16).padStart(12, "0")}`;
-  return { id, summary, status, url: `https://index.network/i/${id}` };
-};
+const idFor = (n: number) => `aaaaaaaa-0000-4000-8000-${n.toString(16).padStart(12, "0")}`;
+const row = (summary: string, n: number, status = "active"): Row => ({ id: idFor(n), summary, status, url: `https://index.network/i/${idFor(n)}` });
 /** A `list_intents` text in the live shape (markdown lead, blank line, JSON). */
 function intentsText(rows: Row[]): string {
   return `Your signals:\n\n${JSON.stringify({ success: true, intents: rows, totalWaitingOpportunities: 0, pagination: { limit: 20, offset: 0, count: rows.length } }, null, 2)}`;
 }
+/** A `create_intent` answer in the live shape: the signal link, a blank line, then the JSON. */
+function createAnswer(created: Row): string {
+  return `[${created.summary}](https://agents.edgecity.live/intents?intent=${created.id}) — created\n\n${JSON.stringify({ success: true, data: { intent: { id: created.id, summary: created.summary, status: created.status } } }, null, 2)}`;
+}
 
 const stub = {
   rows: [] as Row[],
+  /** list_intents answers these rows, whatever was created (only the seed marker can stop a second seed). */
+  frozen: null as Row[] | null,
   /** Every request answers HTTP 500. */
   down: false,
-  /** create_intent call numbers (1-based) that fail, and how. */
-  failCreates: new Map<number, CreateFailure>(),
+  /** create_intent failures, by description. */
+  failCreates: new Map<string, CreateFailure>(),
+  /** Every create answers after this long. */
+  createDelayMs: 0,
+  /** pause_intent answers a tool error. */
+  failPause: false,
   creates: 0,
   fake: null as unknown as ReturnType<typeof indexMcpFake>,
 };
 
 function resetStub(rows: string[] = []): void {
   stub.rows = rows.map((summary, i) => row(summary, i + 1));
+  stub.frozen = null;
   stub.down = false;
   stub.failCreates = new Map();
+  stub.createDelayMs = 0;
+  stub.failPause = false;
   stub.creates = 0;
-  const http500 = (): ReturnType<ToolHandler> => ({ response: new Response("internal error", { status: 500 }) });
-  stub.fake = indexMcpFake({
-    url: "http://127.0.0.1/mcp",
-    apiKey: FAKE_API_KEY,
-    tools: {
-      list_intents: () => (stub.down ? http500() : intentsText(stub.rows)),
-      create_intent: (args) => {
-        if (stub.down) return http500();
-        const n = ++stub.creates;
-        const failure = stub.failCreates.get(n);
-        if (failure === "http500") return http500();
-        if (failure === "isError") {
-          return { result: { content: [{ type: "text", text: "Could not create the intent." }], isError: true, resultType: "complete" } };
-        }
-        const created = row(String(args.description ?? ""), 100 + n);
-        stub.rows.push(created);
-        return `Created your signal.\n\n${JSON.stringify({ success: true, intent: created }, null, 2)}`;
-      },
+  const status = (code: number): ToolReply => ({ response: new Response("upstream error", { status: code }) });
+  const toolError = (text: string): ToolReply => ({ result: { content: [{ type: "text", text }], isError: true, resultType: "complete" } });
+  const tools: Record<string, ToolHandler> = {
+    list_intents: () => (stub.down ? status(500) : intentsText(stub.frozen ?? stub.rows)),
+    create_intent: async (args) => {
+      if (stub.down) return status(500);
+      const n = ++stub.creates;
+      if (stub.createDelayMs) await Bun.sleep(stub.createDelayMs);
+      const description = String(args.description ?? "");
+      const failure = stub.failCreates.get(description);
+      if (failure === "isError") return toolError("Could not create the intent.");
+      if (failure === "successFalse") return `Too vague to match on.\n\n${JSON.stringify({ success: false, error: "too vague" })}`;
+      if (failure === "http500") return status(500);
+      const created = row(description, 0x100 + n);
+      stub.rows.push(created);
+      if (failure === "landed504") return status(504);
+      if (failure === "landedHang") return { hang: true };
+      return createAnswer(created);
     },
-  });
+    pause_intent: (args) => {
+      if (stub.down) return status(500);
+      if (stub.failPause) return toolError("Could not pause the intent.");
+      const target = stub.rows.find((r) => r.id === args.intentId);
+      if (!target) return toolError("No such intent.");
+      target.status = "paused";
+      return `[${target.summary}](https://agents.edgecity.live/intents?intent=${target.id}) — paused\n\n${JSON.stringify({ success: true, data: { intentId: target.id, status: "paused", changed: true } })}`;
+    },
+  };
+  stub.fake = indexMcpFake({ url: "http://127.0.0.1/mcp", apiKey: FAKE_API_KEY, tools });
 }
 
 let server: ReturnType<typeof Bun.serve>;
@@ -189,7 +266,8 @@ beforeAll(() => {
   server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
-    fetch: async (req) => stub.fake.fetch(stub.fake.url, { method: req.method, headers: req.headers, body: await req.text() }),
+    idleTimeout: 0,
+    fetch: async (req) => stub.fake.fetch(stub.fake.url, { method: req.method, headers: req.headers, body: await req.text(), signal: req.signal }),
   });
   MCP_URL = `http://127.0.0.1:${server.port}/mcp`;
   const closed = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("") });
@@ -200,16 +278,29 @@ afterAll(() => {
   server.stop(true);
 });
 
+/** Whatever the case, every request that reached Index was a tools/call of an allowed tool, with the key. */
+afterEach(() => {
+  for (const call of stub.fake.calls) {
+    expect({ method: call.method, name: call.name, allowed: ALLOWED_TOOLS.includes(String(call.name)), key: call.headers["x-api-key"] }).toEqual({
+      method: "tools/call",
+      name: call.name,
+      allowed: true,
+      key: FAKE_API_KEY,
+    });
+  }
+});
+
 /** The tool calls the stub received since `from`. */
 const toolCalls = (from = 0): FakeCall[] => stub.fake.calls.slice(from);
 const names = (calls: FakeCall[]) => calls.map((c) => c.name);
 const creates = (calls: FakeCall[]) => calls.filter((c) => c.name === "create_intent");
+const pauses = (calls: FakeCall[]) => calls.filter((c) => c.name === "pause_intent");
 
 // ---------------------------------------------------------------------------
 // The script, as a process.
 
 type Run = { stdout: string; stderr: string; code: number };
-type Spawn = { key?: string; url?: string };
+type Spawn = { key?: string; url?: string; env?: Record<string, string> };
 
 /** Env vars that would change the run; dropped from the child's environment (the seed's mode flag among them). */
 const DROPPED = /^(INDEX_|AV_|HERMES_)|SEED/;
@@ -217,83 +308,122 @@ const DROPPED = /^(INDEX_|AV_|HERMES_)|SEED/;
 async function spawn(argv: string[], options: Spawn = {}): Promise<Run> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !DROPPED.test(k)) env[k] = v;
-  Object.assign(env, { HERMES_HOME: home, INDEX_API_KEY: options.key ?? FAKE_API_KEY, INDEX_MCP_URL: options.url ?? MCP_URL, AV_CONNECTIONS_URL: "" });
+  Object.assign(env, { HERMES_HOME: home, INDEX_API_KEY: options.key ?? FAKE_API_KEY, INDEX_MCP_URL: options.url ?? MCP_URL, AV_CONNECTIONS_URL: "" }, options.env ?? {});
   const proc = Bun.spawn(["bun", SCRIPT, ...argv], { env, cwd: home, stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
   return { stdout, stderr, code };
 }
+const draftArgv = () => ["--draft", "--home", home];
 
-/** Every path under the home with its kind, size and mtime. */
+/** Every path under the home: a file with its size and mtime, a directory by its path (its children show its changes). */
 function snapshot(): string[] {
   const out: string[] = [];
   const walk = (dir: string) => {
     for (const name of readdirSync(dir).sort()) {
       const path = join(dir, name);
       const st = lstatSync(path);
-      out.push(`${relative(home, path)} ${st.isDirectory() ? "dir" : "file"} ${st.size} ${st.mtimeMs}`);
+      out.push(st.isDirectory() ? `${relative(home, path)} dir` : `${relative(home, path)} file ${st.size} ${st.mtimeMs}`);
       if (st.isDirectory()) walk(path);
     }
   };
   walk(home);
   return out;
 }
+const paths = (lines: string[]) => lines.map((line) => line.split(" ")[0]);
+const readOrNull = (path: string) => (existsSync(join(home, path)) ? readFileSync(join(home, path), "utf8") : null);
 
 /**
- * What each --draft run of the current test changed under the home: the
- * snapshot lines it added and removed. Checked at the end of each test
- * (expectDraftsWroteNothing), after the calls and the text, so a write never
- * hides how the rest of the run went.
+ * What each --draft run of the current test changed under the home, and
+ * what it was allowed to: nothing, or (`seed`) exactly the seed marker, plus
+ * memory/ when it was absent. Checked at the end of each test
+ * (expectDraftWrites), after the calls and the text, so a write never hides
+ * how the rest of the run went.
  */
-let draftWrites: Array<{ added: string[]; removed: string[] }> = [];
+type DraftWrites = { allowed: "nothing" | "seed"; added: string[]; removed: string[]; hadMemory: boolean };
+let draftWrites: DraftWrites[] = [];
 beforeEach(() => {
   draftWrites = [];
 });
 
-/** `bun welcome.ts --draft --home <home>`: never the welcome marker; every other change recorded for expectDraftsWroteNothing. */
-async function draft(options: Spawn = {}): Promise<Run> {
+/** `bun welcome.ts --draft --home <home>`: the welcome marker is never touched; every other change recorded for expectDraftWrites. */
+async function draft(allowed: DraftWrites["allowed"], options: Spawn = {}): Promise<Run> {
   const before = snapshot();
-  const run = await spawn(["--draft", "--home", home], options);
-  expect(existsSync(join(home, MARKER))).toBe(false);
+  const welcomeBefore = readOrNull(MARKER);
+  const hadMemory = existsSync(join(home, "memory"));
+  const run = await spawn(draftArgv(), options);
+  expect(readOrNull(MARKER)).toBe(welcomeBefore);
   const after = snapshot();
-  draftWrites.push({ added: after.filter((l) => !before.includes(l)), removed: before.filter((l) => !after.includes(l)) });
+  draftWrites.push({ allowed, added: after.filter((l) => !before.includes(l)), removed: before.filter((l) => !after.includes(l)), hadMemory });
   return run;
 }
 
-/** The brief's W4 line: a --draft run writes nothing, so every --draft run of this test left the home exactly as it found it (paths, sizes, mtimes). */
-function expectDraftsWroteNothing(): void {
+/** W1's contract: a --draft run that seeded added only the seed marker (and memory/ when absent); any other --draft run changed nothing. */
+function expectDraftWrites(): void {
   expect(draftWrites.length).toBeGreaterThan(0);
-  for (const change of draftWrites) expect(change).toEqual({ added: [], removed: [] });
+  for (const change of draftWrites) {
+    const expected = change.allowed === "nothing" ? [] : change.hadMemory ? [SEED_MARKER] : ["memory", SEED_MARKER];
+    expect({ allowed: change.allowed, added: paths(change.added), removed: change.removed }).toEqual({ allowed: change.allowed, added: expected, removed: [] });
+  }
 }
 
-/** The trailer the contract fixes, keys in this order; the seed's two keys only once the script carries them. */
+/** The trailer the contract fixes: five keys in this order, nothing else. */
 function trailer(fallback: "none" | "questions" | "unreachable", listed: number, seeded = 0, failed = 0): string {
-  const line: Record<string, unknown> = { welcome: 1, fallback, intents_listed: listed };
-  if (SEED_SUPPORTED) Object.assign(line, { intents_seeded: seeded, seed_failed: failed });
-  return `${JSON.stringify(line)}\n`;
+  return `${JSON.stringify({ welcome: 1, fallback, intents_listed: listed, intents_seeded: seeded, seed_failed: failed })}\n`;
 }
 
-/** A --draft run's whole observable result. */
+/** A --draft run's whole observable result; the trailer is one line of exactly the five keys, in order. */
 function expectDraft(run: Run, stdout: string, stderr: string): void {
-  expect(run).toEqual({ stdout: `${stdout}\n`, stderr, code: 0 });
+  expect({ stdout: run.stdout, stderr: run.stderr, code: run.code }).toEqual({ stdout: `${stdout}\n`, stderr, code: 0 });
+  expect(stdout.length).toBeLessThanOrEqual(WELCOME_MAX_CHARS);
+  expect(run.stderr.split("\n")).toHaveLength(2);
+  expect(Object.keys(JSON.parse(run.stderr))).toEqual(TRAILER_KEYS);
+}
+
+/**
+ * The seed marker after a seed: exactly `{seededAt, selected, created,
+ * failed, done: true}` in that order and a newline, mode 0600, seededAt the
+ * run's own time.
+ */
+function expectSeedMarker(counts: { selected: number; created: number; failed: number }, t0: number, t1: number): void {
+  const raw = readFileSync(join(home, SEED_MARKER), "utf8");
+  const marker = JSON.parse(raw) as Record<string, unknown>;
+  expect(raw).toBe(`${JSON.stringify({ seededAt: marker.seededAt, ...counts, done: true })}\n`);
+  const at = Date.parse(String(marker.seededAt));
+  expect(new Date(at).toISOString()).toBe(String(marker.seededAt));
+  expect(at).toBeGreaterThanOrEqual(t0 - 1000);
+  expect(at).toBeLessThanOrEqual(t1 + 1000);
+  expect(statSync(join(home, SEED_MARKER)).mode & 0o777).toBe(0o600);
+}
+
+/** A --draft run that is expected to seed, timed for expectSeedMarker. */
+async function seedingDraft(options: Spawn = {}): Promise<Run & { t0: number; t1: number }> {
+  const t0 = Date.now();
+  const run = await draft("seed", options);
+  return { ...run, t0, t1: Date.now() };
 }
 
 /**
  * The default mode, twice: the first run prints `text` with nothing on
- * stderr, adds only the marker to the home, and the marker records the
- * welcome; the second prints WELCOME_ALREADY_SENT and calls Index not at all.
- * Returns the calls the first run made.
+ * stderr, adds only the welcome marker to the home (never the seed marker),
+ * and the marker records the welcome; the second prints WELCOME_ALREADY_SENT
+ * and calls Index not at all. Returns the calls the first run made.
  */
 async function claimOnce(text: string, options: Spawn = {}): Promise<FakeCall[]> {
-  const before = new Set(snapshot().map((line) => line.split(" ")[0]));
+  const before = new Set(paths(snapshot()));
   const from = stub.fake.calls.length;
   const t0 = Date.now();
   const first = await spawn([], options);
   const t1 = Date.now();
   expect(first).toEqual({ stdout: `${text}\n`, stderr: "", code: 0 });
-  const added = snapshot()
-    .map((line) => line.split(" ")[0])
-    .filter((path) => !before.has(path));
+  const added = paths(snapshot()).filter((path) => !before.has(path));
   expect(added.sort()).toEqual(before.has("memory") ? [MARKER] : ["memory", MARKER]);
+  expectWelcomeMarker(t0, t1);
+  const firstCalls = toolCalls(from);
+  await expectSecondDefaultRunSilent(options);
+  return firstCalls;
+}
+
+function expectWelcomeMarker(t0: number, t1: number): void {
   const marker = JSON.parse(readFileSync(join(home, MARKER), "utf8")) as Record<string, unknown>;
   expect(Object.keys(marker)).toEqual(["welcomeSent", "sentAt"]);
   expect(marker.welcomeSent).toBe(true);
@@ -301,67 +431,60 @@ async function claimOnce(text: string, options: Spawn = {}): Promise<FakeCall[]>
   expect(new Date(sentAt).toISOString()).toBe(String(marker.sentAt));
   expect(sentAt).toBeGreaterThanOrEqual(t0 - 1000);
   expect(sentAt).toBeLessThanOrEqual(t1 + 1000);
-  const firstCalls = toolCalls(from);
-
-  const markerBytes = readFileSync(join(home, MARKER), "utf8");
-  const afterFirst = stub.fake.calls.length;
-  const second = await spawn([], options);
-  expect(second).toEqual({ stdout: `${ALREADY_SENT}\n`, stderr: "", code: 0 });
-  expect(stub.fake.calls.length).toBe(afterFirst);
-  expect(readFileSync(join(home, MARKER), "utf8")).toBe(markerBytes);
-  return firstCalls;
 }
 
-/** Only reads: every one of `calls` a `list_intents` with the key, so nothing was created or changed. */
+/** A default run once the welcome marker is set: WELCOME_ALREADY_SENT, no Index call, the home untouched. */
+async function expectSecondDefaultRunSilent(options: Spawn = {}): Promise<void> {
+  const before = snapshot();
+  const from = stub.fake.calls.length;
+  expect(await spawn([], options)).toEqual({ stdout: `${ALREADY_SENT}\n`, stderr: "", code: 0 });
+  expect(stub.fake.calls.length).toBe(from);
+  expect(snapshot()).toEqual(before);
+}
+
+/** Only reads: every one of `calls` a `list_intents`, so nothing was created or changed. */
 function expectReadsOnly(calls: FakeCall[], count: number): void {
   expect(names(calls)).toEqual(Array(count).fill("list_intents"));
-  for (const call of calls) expect(call.headers["x-api-key"]).toBe(FAKE_API_KEY);
+  for (const call of calls) expect(call.arguments).toEqual({ limit: 20 });
 }
-
-/** welcome-texts.json pins at least one seeded text (W1 adds them). */
-const PINS_SEEDED = Object.values(golden).some((text) => text.includes(SEEDED_LEAD));
 
 /**
- * The seeded welcome: the lead, then exactly `titles` as `- ` lines, then
- * the close; under the overlay's cap. When welcome-texts.json pins a seeded
- * text for the same name and titles, the bytes must match it. Returns how
- * many pinned texts it was compared with.
+ * A seeding run's calls: the first list, then `texts` created at once (in
+ * any arrival order), each with exactly `{description, sourceType}` and no
+ * other key, then (paused mode) one pause per created id, then the second
+ * list last. Nothing of USER.md but the selected texts in any call.
  */
-function expectSeededText(stdout: string, name: string | null, titles: string[]): number {
-  const text = stdout.slice(0, -1);
-  expect(stdout.endsWith("\n")).toBe(true);
-  const intro = name
-    ? `Mandrem, Goa, October 11 to November 1. I'm ${name}, your personal agent for your time in the village.`
-    : "Mandrem, Goa, October 11 to November 1. I'm your personal agent for your time in the village. You can call me Edge, or give me whatever name you like.";
-  expect(text.startsWith(`Welcome to Edge City India ☀️\n\n${intro}\n\n`)).toBe(true);
-  const block = [SEEDED_LEAD, ...titles.map((t) => `- ${t}`)].join("\n");
-  expect(text).toContain(`\n\n${block}\n\n`);
-  expect(text.split("\n").filter((l) => l.startsWith("- "))).toEqual(titles.map((t) => `- ${t}`));
-  expect(text).toContain(SEEDED_CLOSE);
-  expect(text.length).toBeLessThan(WELCOME_MAX_CHARS);
-  let compared = 0;
-  for (const pinned of Object.values(golden)) {
-    const dashes = pinned.split("\n").filter((l) => l.startsWith("- "));
-    if (pinned.includes(SEEDED_LEAD) && pinned.includes(intro) && JSON.stringify(dashes) === JSON.stringify(titles.map((t) => `- ${t}`))) {
-      expect(text).toBe(pinned);
-      compared++;
-    }
-  }
-  return compared;
-}
-
-/** The create calls, in order: exactly `texts` as `description`, no key beyond the brief's. */
-function expectCreated(calls: FakeCall[], texts: string[]): void {
-  const made = creates(calls);
-  expect(made.map((c) => c.arguments?.description)).toEqual(texts);
-  for (const call of made) {
-    for (const key of Object.keys(call.arguments ?? {})) expect({ key, allowed: CREATE_KEYS.has(key) }).toEqual({ key, allowed: true });
-    if (call.arguments && "source" in call.arguments) expect(String(call.arguments.source)).toMatch(/onboarding/i);
-    expect(call.headers["x-api-key"]).toBe(FAKE_API_KEY);
+function expectSeedCalls(calls: FakeCall[], texts: string[], pausedIds: string[] = []): void {
+  expect(calls[0]?.name).toBe("list_intents");
+  expect(calls.at(-1)?.name).toBe("list_intents");
+  expect(names(calls.slice(1, -1)).every((n) => n === "create_intent" || n === "pause_intent")).toBe(true);
+  expect(creates(calls).map((c) => c.arguments)).toEqual(
+    expect.arrayContaining(texts.map((description) => ({ description, sourceType: SOURCE_TYPE }))),
+  );
+  expect(creates(calls)).toHaveLength(texts.length);
+  expect(pauses(calls).map((c) => c.arguments).sort((a, b) => String(a?.intentId).localeCompare(String(b?.intentId)))).toEqual(
+    [...pausedIds].sort().map((intentId) => ({ intentId })),
+  );
+  for (const call of calls) {
+    const body = JSON.stringify(call.body);
+    expect(body).not.toMatch(/\[(build|learn|meet|explore)\]/);
+    for (const word of [...ELSEWHERE, "INJECTED", "SECRET-ABOUT-ME"]) expect({ word, sent: body.includes(word) }).toEqual({ word, sent: false });
   }
 }
 
 // ---------------------------------------------------------------------------
+
+describe("the texts this file derives are the pinned ones", () => {
+  test("seededWelcome and listedWelcome reproduce welcome-texts.json byte for byte; the six older keys and the three seeded ones are all there", () => {
+    expect(Object.keys(golden)).toEqual(["three", "moreThanThree", "two", "one", "zero", "unreachable", "seededThree", "seededOne", "seededPausedThree"]);
+    expect(seededWelcome("Mira", [MEMORY, RUST, RAISE])).toBe(golden.seededThree);
+    expect(seededWelcome(null, [MEMORY])).toBe(golden.seededOne);
+    expect(seededWelcome("Mira", [MEMORY, RUST, RAISE], "paused")).toBe(golden.seededPausedThree);
+    expect(listedWelcome("Mira", [MEMORY, DINNER, SURF])).toBe(golden.three);
+    expect(listedWelcome(null, [MEMORY, DINNER])).toBe(golden.two);
+    expect(listedWelcome("Mira", [MEMORY])).toBe(golden.one);
+  });
+});
 
 describe("none: active intents are listed, nothing is created", () => {
   const cases: Array<[string, string | null, string[]]> = [
@@ -373,29 +496,29 @@ describe("none: active intents are listed, nothing is created", () => {
   ];
   for (const [key, nickname, rows] of cases) {
     test(
-      `${rows.length} active (${key}): stdout is the fixture, one trailer line, exit 0; only list_intents; by default the marker is claimed once`,
+      `${rows.length} active (${key}): stdout is the fixture, one trailer line, exit 0; only list_intents; --draft writes nothing; by default the marker is claimed once`,
       async () => {
         resetStub(rows);
         if (nickname) writeProfile(nickname);
         const listed = Math.min(rows.length, 3);
-        expectDraft(await draft(), golden[key], trailer("none", listed));
+        expectDraft(await draft("nothing"), golden[key], trailer("none", listed));
         expectReadsOnly(toolCalls(), 1);
         const calls = await claimOnce(golden[key]);
         expectReadsOnly(calls, 1);
-        expectDraftsWroteNothing();
+        expectDraftWrites();
       },
       CASE_TIMEOUT_MS,
     );
   }
 
   test(
-    "paused and archived intents are not active: with only those, the questions text",
+    "paused and archived intents are not active: with only those and nothing selected, the questions text",
     async () => {
       resetStub();
       stub.rows = [row(MEMORY, 1, "paused"), row(DINNER, 2, "archived")];
-      expectDraft(await draft(), golden.zero, trailer("questions", 0));
+      expectDraft(await draft("nothing"), golden.zero, trailer("questions", 0));
       expectReadsOnly(toolCalls(), 1);
-      expectDraftsWroteNothing();
+      expectDraftWrites();
     },
     CASE_TIMEOUT_MS,
   );
@@ -408,15 +531,15 @@ describe("questions: no active intents and nothing selected", () => {
   ];
   for (const [label, texts] of homes) {
     test(
-      `${label}: the fixture's questions text, zero create calls, stderr empty by default`,
+      `${label}: the fixture's questions text, zero create calls, no seed marker, stderr empty by default`,
       async () => {
         resetStub();
         writeUserMd(texts);
-        expectDraft(await draft(), golden.zero, trailer("questions", 0));
+        expectDraft(await draft("nothing"), golden.zero, trailer("questions", 0));
         expectReadsOnly(toolCalls(), 1);
         const calls = await claimOnce(golden.zero);
         expectReadsOnly(calls, 1);
-        expectDraftsWroteNothing();
+        expectDraftWrites();
       },
       CASE_TIMEOUT_MS,
     );
@@ -431,138 +554,429 @@ describe("unreachable: the fixture's catch-up text and nothing created, even wit
   ];
   for (const [label, options, arrange] of cases) {
     test(
-      `${label}: stdout is the fixture, one trailer line, exit 0; zero create calls; by default stderr empty and the marker claimed once`,
+      `${label}: stdout is the fixture, one trailer line, exit 0; zero create calls, no seed marker; by default stderr empty and the marker claimed once`,
       async () => {
         resetStub();
         arrange();
         writeUserMd([MEMORY, DINNER, SURF]);
-        expectDraft(await draft(options()), golden.unreachable, trailer("unreachable", 0));
-        const calls = toolCalls();
+        expectDraft(await draft("nothing", options()), golden.unreachable, trailer("unreachable", 0));
         // Without a key or a listening port the stub hears nothing; a 500 is one failed read, never followed by a write.
-        expectReadsOnly(calls, label.includes("500") ? 1 : 0);
+        expectReadsOnly(toolCalls(), label.includes("500") ? 1 : 0);
         expectReadsOnly(await claimOnce(golden.unreachable, options()), label.includes("500") ? 1 : 0);
-        expectDraftsWroteNothing();
+        expectDraftWrites();
       },
       CASE_TIMEOUT_MS,
     );
   }
 });
 
-describe("active intents present and intentions selected: the dedupe path creates nothing", () => {
+describe("no seed although intentions are selected", () => {
   test(
-    "an active intent whose title is a selected line, and another selected line: zero create calls, the plain listing",
+    "an active intent (here one whose title is a selected line): zero create calls, no seed marker, the plain listing",
     async () => {
       resetStub([MEMORY]);
       writeProfile("Mira");
       writeUserMd([MEMORY, DINNER, SURF]);
-      expectDraft(await draft(), golden.one, trailer("none", 1));
+      expectDraft(await draft("nothing"), golden.one, trailer("none", 1));
       expectReadsOnly(toolCalls(), 1);
       expectReadsOnly(await claimOnce(golden.one), 1);
-      expectDraftsWroteNothing();
+      expectDraftWrites();
+    },
+    CASE_TIMEOUT_MS,
+  );
+
+  for (const spoof of ["offer", "context"] as const) {
+    test(
+      `DATA-416 M1: a second \`## Selected intentions\` heading inside ${spoof === "offer" ? "an offer" : "the imported context"}: nothing is read, zero creates, no seed marker, the questions text`,
+      async () => {
+        resetStub();
+        writeUserMd([MEMORY, DINNER, SURF], spoof);
+        expect(readFileSync(join(home, "USER.md"), "utf8").split("\n").filter((l) => l === "## Selected intentions")).toHaveLength(2);
+        expectDraft(await draft("nothing"), golden.zero, trailer("questions", 0));
+        expectReadsOnly(toolCalls(), 1);
+        expectReadsOnly(await claimOnce(golden.zero), 1);
+        expectDraftWrites();
+      },
+      CASE_TIMEOUT_MS,
+    );
+  }
+
+  test(
+    "DATA-416 M2: a welcome already sent skips the seed in --draft too: the questions text, zero creates, no seed marker, the welcome marker untouched; by default WELCOME_ALREADY_SENT and no Index call",
+    async () => {
+      resetStub();
+      writeUserMd([MEMORY, RUST, RAISE]);
+      writeMemoryFile(MARKER, JSON.stringify({ welcomeSent: true, sentAt: "2026-10-01T10:00:00.000Z" }));
+      expectDraft(await draft("nothing"), golden.zero, trailer("questions", 0));
+      expectReadsOnly(toolCalls(), 1);
+      await expectSecondDefaultRunSilent();
+      expectDraftWrites();
+    },
+    CASE_TIMEOUT_MS,
+  );
+
+  test(
+    "every selected line is already listed, paused or archived (dedupe): zero creates, no seed marker, the questions text",
+    async () => {
+      resetStub();
+      stub.rows = [row(MEMORY.toUpperCase(), 1, "paused"), { ...row("Index's own summary", 2, "archived"), description: `  ${DINNER} ` }];
+      writeUserMd([MEMORY, DINNER]);
+      expectDraft(await draft("nothing"), golden.zero, trailer("questions", 0));
+      expectReadsOnly(toolCalls(), 1);
+      expectDraftWrites();
     },
     CASE_TIMEOUT_MS,
   );
 });
 
-describe(`seeded (DATA-412 W1): zero active and selected lines in USER.md${SEED_SKIP}`, () => {
-  // The names and texts of welcome-texts.json seededOne and seededThree, so the bytes are compared once W1 pins them.
-  const cases: Array<[number, string | null, string[]]> = [
-    [1, null, [MEMORY]],
-    [3, "Mira", [MEMORY, RUST, RAISE]],
-    [5, "Mira", [MEMORY, RUST, RAISE, KONKANI, CHESS]],
+describe("seeded: zero active intents and selected lines in USER.md", () => {
+  // The names and texts of welcome-texts.json seededOne and seededThree, so the bytes are compared with the pins.
+  const cases: Array<[number, string | null, string[], string]> = [
+    [1, null, [MEMORY], "seededOne"],
+    [3, "Mira", [MEMORY, RUST, RAISE], "seededThree"],
+    [5, "Mira", [MEMORY, RUST, RAISE, KONKANI, CHESS], "seededThree"],
   ];
-  for (const [n, nickname, texts] of cases) {
+  for (const [n, nickname, texts, key] of cases) {
     const seeded = texts.slice(0, 3);
-    test.skipIf(!SEED_SUPPORTED)(
-      `${n} selected${SEED_SKIP}: create_intent once per selected text, first three in order, then the re-list; the seeded text; intents_seeded=${seeded.length}, seed_failed=0`,
+    test(
+      `${n} selected: create_intent({description, sourceType}) once per text, the first three, then the re-list; stdout is ${key}; trailer seeded ${seeded.length}, failed 0; --draft adds only the seed marker, done`,
       async () => {
         resetStub();
         if (nickname) writeProfile(nickname);
         writeUserMd(texts);
-        const run = await draft();
-        expect(run.code).toBe(0);
-        expect(run.stderr).toBe(trailer("none", seeded.length, seeded.length, 0));
-        expect(expectSeededText(run.stdout, nickname, seeded)).toBe(PINS_SEEDED ? 1 : 0);
+        const run = await seedingDraft();
+        expectDraft(run, golden[key], trailer("none", seeded.length, seeded.length, 0));
         const calls = toolCalls();
         expect(names(calls)).toEqual(["list_intents", ...seeded.map(() => "create_intent"), "list_intents"]);
-        expectCreated(calls, seeded);
-        expect(stub.rows.map((r) => r.summary)).toEqual(seeded);
-        expectDraftsWroteNothing();
+        expectSeedCalls(calls, seeded);
+        expect(stub.rows.map((r) => r.summary).sort()).toEqual([...seeded].sort());
+        expectSeedMarker({ selected: n, created: seeded.length, failed: 0 }, run.t0, run.t1);
+        expectDraftWrites();
       },
       CASE_TIMEOUT_MS,
     );
   }
 
-  test.skipIf(!SEED_SUPPORTED)(
-    `a second --draft for the same box (the control plane's retry, a re-attach)${SEED_SKIP}: nothing created again, the plain listing, intents_seeded=0`,
+  test(
+    "AV_WELCOME_SEED_MODE=paused: each created intent is paused with pause_intent({intentId}) of its own create's id, after its create; stdout is seededPausedThree",
     async () => {
       resetStub();
       writeProfile("Mira");
-      writeUserMd([MEMORY, DINNER, SURF]);
-      expect((await draft()).code).toBe(0);
-      expect(creates(toolCalls())).toHaveLength(3);
-      const from = stub.fake.calls.length;
-      expectDraft(await draft(), golden.three, trailer("none", 3, 0, 0));
-      expectReadsOnly(toolCalls(from), 1);
-      expect(creates(stub.fake.calls)).toHaveLength(3);
-      expectDraftsWroteNothing();
+      writeUserMd([MEMORY, RUST, RAISE]);
+      const run = await seedingDraft({ env: { AV_WELCOME_SEED_MODE: "paused" } });
+      expectDraft(run, golden.seededPausedThree, trailer("none", 3, 3, 0));
+      const calls = toolCalls();
+      expectSeedCalls(calls, [MEMORY, RUST, RAISE], stub.rows.map((r) => r.id));
+      for (const created of stub.rows) {
+        const made = calls.findIndex((c) => c.name === "create_intent" && c.arguments?.description === created.summary);
+        const paused = calls.findIndex((c) => c.name === "pause_intent" && c.arguments?.intentId === created.id);
+        expect({ summary: created.summary, order: made >= 0 && paused > made }).toEqual({ summary: created.summary, order: true });
+      }
+      expect(stub.rows.map((r) => r.status)).toEqual(["paused", "paused", "paused"]);
+      expectSeedMarker({ selected: 3, created: 3, failed: 0 }, run.t0, run.t1);
+      expectDraftWrites();
     },
     CASE_TIMEOUT_MS,
   );
 
-  test.skipIf(!SEED_SUPPORTED)(
-    `default mode${SEED_SKIP}: seeds, prints the seeded text with stderr empty, claims the marker; the second run calls Index not at all`,
+  test(
+    "the creates run at once: three creates answering after 1 s each take about 1 s, not 3",
     async () => {
       resetStub();
-      writeUserMd([MEMORY, DINNER]);
-      const before = new Set(snapshot().map((line) => line.split(" ")[0]));
-      const from = stub.fake.calls.length;
+      stub.createDelayMs = 1000;
+      writeProfile("Mira");
+      writeUserMd([MEMORY, RUST, RAISE]);
+      const run = await seedingDraft();
+      expectDraft(run, golden.seededThree, trailer("none", 3, 3, 0));
+      expect(run.t1 - run.t0).toBeLessThan(2500);
+      expectDraftWrites();
+    },
+    CASE_TIMEOUT_MS,
+  );
+
+  test(
+    "dedupe: a selected line repeating an earlier one, or a paused or archived intent (summary or description), is skipped and not counted; the first three fresh lines are created",
+    async () => {
+      resetStub();
+      stub.rows = [row(MEMORY.toUpperCase(), 1, "paused"), { ...row("Index's own summary", 2, "archived"), description: RUST }];
+      writeProfile("Mira");
+      writeUserMd([MEMORY, RUST, KONKANI, "  learning **KONKANI** ", CHESS, SURF, DINNER]);
+      const run = await seedingDraft();
+      expectDraft(run, seededWelcome("Mira", [KONKANI, CHESS, SURF]), trailer("none", 3, 3, 0));
+      expectSeedCalls(toolCalls(), [KONKANI, CHESS, SURF]);
+      // `selected` counts every line the profile selected, deduped ones included.
+      expectSeedMarker({ selected: 7, created: 3, failed: 0 }, run.t0, run.t1);
+      expectDraftWrites();
+    },
+    CASE_TIMEOUT_MS,
+  );
+
+  test(
+    "default mode: seeds, prints seededThree with stderr empty, adds memory/, the seed marker and the welcome marker; the second run calls Index not at all",
+    async () => {
+      resetStub();
+      writeProfile("Mira");
+      writeUserMd([MEMORY, RUST, RAISE]);
+      const before = new Set(paths(snapshot()));
+      const t0 = Date.now();
       const first = await spawn([]);
-      expect({ stderr: first.stderr, code: first.code }).toEqual({ stderr: "", code: 0 });
-      expectSeededText(first.stdout, null, [MEMORY, DINNER]);
-      expectCreated(toolCalls(from), [MEMORY, DINNER]);
-      expect(names(toolCalls(from))).toEqual(["list_intents", "create_intent", "create_intent", "list_intents"]);
-      const added = snapshot()
-        .map((line) => line.split(" ")[0])
-        .filter((p) => !before.has(p));
-      const afterFirst = stub.fake.calls.length;
-      expect(await spawn([])).toEqual({ stdout: `${ALREADY_SENT}\n`, stderr: "", code: 0 });
-      expect(stub.fake.calls.length).toBe(afterFirst);
-      // The welcome marker is claimed; the brief names no other file, so anything else written is reported here, under memory/ only.
-      expect(added).toContain(MARKER);
-      for (const path of added) expect(path === "memory" || path.startsWith("memory/")).toBe(true);
+      const t1 = Date.now();
+      expect(first).toEqual({ stdout: `${golden.seededThree}\n`, stderr: "", code: 0 });
+      expectSeedCalls(toolCalls(), [MEMORY, RUST, RAISE]);
+      expect(paths(snapshot()).filter((p) => !before.has(p)).sort()).toEqual(["memory", SEED_MARKER, MARKER].sort());
+      expectSeedMarker({ selected: 3, created: 3, failed: 0 }, t0, t1);
+      expectWelcomeMarker(t0, t1);
+      await expectSecondDefaultRunSilent();
     },
     CASE_TIMEOUT_MS,
   );
 });
 
-describe(`seed failure (DATA-412 W1): one create fails, the others still go${SEED_SKIP}`, () => {
+describe("a create that fails: the others still go, and the failure is counted", () => {
   const failures: Array<[CreateFailure, number]> = [
-    ["isError", 1],
-    ["isError", 2],
-    ["http500", 3],
+    ["isError", 0],
+    ["successFalse", 1],
+    ["http500", 2],
   ];
   for (const [failure, which] of failures) {
-    test.skipIf(!SEED_SUPPORTED)(
-      `create #${which} answers ${failure}${SEED_SKIP}: all three attempted in order, two created and listed, intents_seeded=2, seed_failed=1`,
+    test(
+      `the create of selected line ${which + 1} answers ${failure}: all three sent, two created and listed in the selected order, trailer seeded 2, failed 1; the marker says so`,
       async () => {
         resetStub();
-        stub.failCreates.set(which, failure);
-        writeProfile("Mira");
         const texts = [MEMORY, DINNER, SURF];
+        stub.failCreates.set(texts[which], failure);
+        writeProfile("Mira");
         writeUserMd(texts);
-        const run = await draft();
-        expect(run.code).toBe(0);
-        expect(run.stderr).toBe(trailer("none", 2, 2, 1));
-        const kept = texts.filter((_, i) => i !== which - 1);
-        expectSeededText(run.stdout, "Mira", kept);
-        const calls = toolCalls();
-        expect(names(calls)).toEqual(["list_intents", "create_intent", "create_intent", "create_intent", "list_intents"]);
-        expectCreated(calls, texts);
-        expect(stub.rows.map((r) => r.summary)).toEqual(kept);
-        expectDraftsWroteNothing();
+        const run = await seedingDraft();
+        const kept = texts.filter((_, i) => i !== which);
+        expectDraft(run, seededWelcome("Mira", kept), trailer("none", 2, 2, 1));
+        expectSeedCalls(toolCalls(), texts);
+        expect(stub.rows.map((r) => r.summary).sort()).toEqual([...kept].sort());
+        expectSeedMarker({ selected: 3, created: 2, failed: 1 }, run.t0, run.t1);
+        expectDraftWrites();
       },
       CASE_TIMEOUT_MS,
     );
   }
+
+  test(
+    "every create fails: the questions text, trailer seeded 0, failed 3; the marker is still claimed and done, so a second run does not try again",
+    async () => {
+      resetStub();
+      for (const t of [MEMORY, DINNER, SURF]) stub.failCreates.set(t, "http500");
+      writeUserMd([MEMORY, DINNER, SURF]);
+      const run = await seedingDraft();
+      expectDraft(run, golden.zero, trailer("questions", 0, 0, 3));
+      expectSeedCalls(toolCalls(), [MEMORY, DINNER, SURF]);
+      expectSeedMarker({ selected: 3, created: 0, failed: 3 }, run.t0, run.t1);
+      const from = stub.fake.calls.length;
+      expectDraft(await draft("nothing"), golden.zero, trailer("questions", 0));
+      expectReadsOnly(toolCalls(from), 1);
+      expectDraftWrites();
+    },
+    CASE_TIMEOUT_MS,
+  );
+
+  test(
+    "DATA-416 S1: a create that landed in Index but whose answer was a gateway 504 counts as seeded once the re-list shows it",
+    async () => {
+      resetStub();
+      stub.failCreates.set(RUST, "landed504");
+      writeProfile("Mira");
+      writeUserMd([MEMORY, RUST, RAISE]);
+      const run = await seedingDraft();
+      expectDraft(run, golden.seededThree, trailer("none", 3, 3, 0));
+      expectSeedCalls(toolCalls(), [MEMORY, RUST, RAISE]);
+      expectSeedMarker({ selected: 3, created: 3, failed: 0 }, run.t0, run.t1);
+      expectDraftWrites();
+    },
+    CASE_TIMEOUT_MS,
+  );
+
+  test(
+    "DATA-416 S1, paused mode: the same landed-but-unanswered create is failed (it was never paused) and left out of the welcome; Index keeps it active",
+    async () => {
+      resetStub();
+      stub.failCreates.set(RUST, "landed504");
+      writeProfile("Mira");
+      writeUserMd([MEMORY, RUST, RAISE]);
+      const run = await seedingDraft({ env: { AV_WELCOME_SEED_MODE: "paused" } });
+      expectDraft(run, seededWelcome("Mira", [MEMORY, RAISE], "paused"), trailer("none", 2, 2, 1));
+      const landed = stub.rows.find((r) => r.summary === RUST)!;
+      expectSeedCalls(toolCalls(), [MEMORY, RUST, RAISE], stub.rows.filter((r) => r !== landed).map((r) => r.id));
+      // What the resident is left with: the unanswered one published, the other two paused.
+      expect(stub.rows.map((r) => [r.summary, r.status]).sort()).toEqual([[MEMORY, "paused"], [RAISE, "paused"], [RUST, "active"]].sort());
+      expectSeedMarker({ selected: 3, created: 2, failed: 1 }, run.t0, run.t1);
+      expectDraftWrites();
+    },
+    CASE_TIMEOUT_MS,
+  );
+
+  test(
+    "paused mode, a pause that fails: the line counts as failed, nothing is retried, and the intent stays active in Index, so the welcome is today's listing of it",
+    async () => {
+      resetStub();
+      stub.failPause = true;
+      writeUserMd([MEMORY]);
+      const run = await seedingDraft({ env: { AV_WELCOME_SEED_MODE: "paused" } });
+      expectDraft(run, listedWelcome(null, [MEMORY]), trailer("none", 1, 0, 1));
+      expect(names(toolCalls())).toEqual(["list_intents", "create_intent", "pause_intent", "list_intents"]);
+      expectSeedCalls(toolCalls(), [MEMORY], [stub.rows[0].id]);
+      expect(stub.rows.map((r) => [r.summary, r.status])).toEqual([[MEMORY, "active"]]);
+      expectSeedMarker({ selected: 1, created: 0, failed: 1 }, run.t0, run.t1);
+      expectDraftWrites();
+    },
+    CASE_TIMEOUT_MS,
+  );
+
+  test(
+    "DATA-416 S1: a create that landed but never answers times out (the script's own ~20 s) and counts as seeded once the re-list shows it; the run still ends inside the control plane's 30 s",
+    async () => {
+      resetStub();
+      stub.failCreates.set(RUST, "landedHang");
+      writeProfile("Mira");
+      writeUserMd([MEMORY, RUST, RAISE]);
+      const run = await seedingDraft();
+      expectDraft(run, golden.seededThree, trailer("none", 3, 3, 0));
+      expectSeedCalls(toolCalls(), [MEMORY, RUST, RAISE]);
+      expect(run.t1 - run.t0).toBeGreaterThanOrEqual(SEED_TIMEOUT_MS - 2000);
+      expect(run.t1 - run.t0).toBeLessThan(30_000);
+      expectSeedMarker({ selected: 3, created: 3, failed: 0 }, run.t0, run.t1);
+      expectDraftWrites();
+    },
+    CASE_TIMEOUT_MS,
+  );
+});
+
+describe("once per box: a seed marker that exists stops every later create, across processes", () => {
+  test(
+    "a second --draft after a seed (the control plane's retry, a re-attach): no create, the plain listing, trailer seeded 0; the marker untouched",
+    async () => {
+      resetStub();
+      writeProfile("Mira");
+      writeUserMd([MEMORY, DINNER, SURF]);
+      expect((await seedingDraft()).code).toBe(0);
+      expect(creates(toolCalls())).toHaveLength(3);
+      const from = stub.fake.calls.length;
+      expectDraft(await draft("nothing"), golden.three, trailer("none", 3, 0, 0));
+      expectReadsOnly(toolCalls(from), 1);
+      // And the default mode: the plain listing, the welcome marker claimed once, still no create.
+      expectReadsOnly(await claimOnce(golden.three), 1);
+      expect(creates(stub.fake.calls)).toHaveLength(3);
+      expectDraftWrites();
+    },
+    CASE_TIMEOUT_MS,
+  );
+
+  test(
+    "Index still lists nothing after the seed (so only the marker can stop it): the second --draft and a default run create nothing and ask the questions",
+    async () => {
+      resetStub();
+      stub.frozen = [];
+      writeUserMd([MEMORY, DINNER, SURF]);
+      const run = await seedingDraft();
+      // The creates were answered but the re-list shows none: seeded, and the text falls back to the seeded titles.
+      expectDraft(run, seededWelcome(null, [MEMORY, DINNER, SURF]), trailer("none", 3, 3, 0));
+      const from = stub.fake.calls.length;
+      expectDraft(await draft("nothing"), golden.zero, trailer("questions", 0));
+      expectReadsOnly(toolCalls(from), 1);
+      expectReadsOnly(await claimOnce(golden.zero), 1);
+      expect(creates(stub.fake.calls)).toHaveLength(3);
+      expectDraftWrites();
+    },
+    CASE_TIMEOUT_MS,
+  );
+
+  test(
+    "DATA-416 S3: a marker without done (another run seeding) is waited for; when it gains done the run lists again and shows what was seeded, without creating",
+    async () => {
+      resetStub();
+      writeProfile("Mira");
+      writeUserMd([MEMORY, DINNER, SURF]);
+      const claimed = { seededAt: "2026-10-11T04:30:00.000Z", selected: 3, created: 0, failed: 0 };
+      writeMemoryFile(SEED_MARKER, `${JSON.stringify(claimed)}\n`);
+      // The other run finishes after 1 s: its three intents are in Index, then its marker gets done.
+      const other = setTimeout(() => {
+        stub.rows.push(row(MEMORY, 0x200), row(DINNER, 0x201), row(SURF, 0x202));
+        writeFileSync(join(home, SEED_MARKER), `${JSON.stringify({ ...claimed, created: 3, done: true })}\n`);
+      }, 1000);
+      try {
+        const t0 = Date.now();
+        const run = await spawn(draftArgv());
+        const took = Date.now() - t0;
+        expectDraft(run, golden.three, trailer("none", 3, 0, 0));
+        expectReadsOnly(toolCalls(), 2);
+        expect(took).toBeGreaterThanOrEqual(1000);
+        expect(took).toBeLessThan(4000);
+        expect(existsSync(join(home, MARKER))).toBe(false);
+      } finally {
+        clearTimeout(other);
+      }
+    },
+    CASE_TIMEOUT_MS,
+  );
+
+  test(
+    "DATA-416 S3: a marker that never gains done is waited for the script's 10 s, then the run lists again and asks the questions; no create, the marker untouched",
+    async () => {
+      resetStub();
+      writeUserMd([MEMORY, DINNER, SURF]);
+      writeMemoryFile(SEED_MARKER, '{"seededAt":"2026-10-11T04:30:00.000Z","selected":3,"created":0,"failed":0}\n');
+      const t0 = Date.now();
+      const run = await draft("nothing");
+      const took = Date.now() - t0;
+      expectDraft(run, golden.zero, trailer("questions", 0));
+      expectReadsOnly(toolCalls(), 2);
+      expect(took).toBeGreaterThanOrEqual(SEED_WAIT_MS - 500);
+      expect(took).toBeLessThan(SEED_WAIT_MS + 5000);
+      expectDraftWrites();
+    },
+    CASE_TIMEOUT_MS,
+  );
+
+  test(
+    "a marker that is done, empty or not JSON: no create, no wait, the questions text, the marker untouched",
+    async () => {
+      resetStub();
+      writeUserMd([MEMORY, DINNER, SURF]);
+      for (const body of ['{"seededAt":"2026-10-11T04:30:00.000Z","selected":3,"created":0,"failed":3,"done":true}\n', "", "seeded"]) {
+        writeMemoryFile(SEED_MARKER, body);
+        const from = stub.fake.calls.length;
+        const t0 = Date.now();
+        expectDraft(await draft("nothing"), golden.zero, trailer("questions", 0));
+        expect({ body, fast: Date.now() - t0 < 3000 }).toEqual({ body, fast: true });
+        expectReadsOnly(toolCalls(from), 1);
+        expect(readFileSync(join(home, SEED_MARKER), "utf8")).toBe(body);
+      }
+      expectDraftWrites();
+    },
+    CASE_TIMEOUT_MS,
+  );
+
+  test(
+    "two --draft processes at once on one box: three creates in all; one run seeded them, the other created nothing and lists the same three",
+    async () => {
+      resetStub();
+      // Creates that take half a second, so the other run meets the claimed marker (S3) rather than racing the writes.
+      stub.createDelayMs = 500;
+      writeProfile("Mira");
+      writeUserMd([MEMORY, DINNER, SURF]);
+      const t0 = Date.now();
+      const both = await Promise.all([spawn(draftArgv()), spawn(draftArgv())]);
+      const t1 = Date.now();
+      expect(creates(toolCalls())).toHaveLength(3);
+      expect(stub.rows.map((r) => r.summary).sort()).toEqual([MEMORY, DINNER, SURF].sort());
+      const [seeder, other] = both[0].stderr === trailer("none", 3, 3, 0) ? both : [both[1], both[0]];
+      expectDraft(seeder, seededWelcome("Mira", [MEMORY, DINNER, SURF]), trailer("none", 3, 3, 0));
+      // The other run created nothing. It normally waits for the marker's done and lists all three; when its first
+      // list falls between the seeder's creates it lists only those that had landed (it does not wait then), in
+      // Index's order: that is W1's behaviour, reported to the lead, and accepted here so the case is not flaky.
+      const k = Number(JSON.parse(other.stderr).intents_listed);
+      expect(k).toBeGreaterThanOrEqual(1);
+      expectDraft(other, listedWelcome("Mira", stub.rows.slice(0, k).map((r) => r.summary)), trailer("none", k, 0, 0));
+      expectSeedMarker({ selected: 3, created: 3, failed: 0 }, t0, t1);
+      expect(existsSync(join(home, MARKER))).toBe(false);
+    },
+    CASE_TIMEOUT_MS,
+  );
 });
