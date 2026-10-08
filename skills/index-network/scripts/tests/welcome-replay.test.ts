@@ -29,12 +29,21 @@
  *     memory/welcome-seed.json (and memory/ when absent) when it seeded, and
  *     nothing at all when it did not; the seed marker's bytes after a seed;
  *   - the default mode claims memory/welcome-state.json once;
- *   - a marker that exists stops the creates across processes (with `done`
- *     at once; without it after waiting for it, then a second list).
+ *   - a marker that exists stops the creates across processes, whatever the
+ *     first list showed (DATA-416 race 1): a run that finds it waits while it
+ *     lacks `done`, then lists again in every case (race 2), so a welcome
+ *     beside another run's seed lists every seeded intent; such a run's
+ *     trailer says intents_seeded 0 (the refuter's C-1, W1's documented
+ *     behaviour);
+ *   - every run ends inside the control plane's 60 s draft timeout, and every
+ *     case inside 60 s.
  *
- * The timed-out create waits the script's real WELCOME_SEED_TIMEOUT_MS
- * (about 20 s) and the stuck marker its real WELCOME_SEED_WAIT_MS (10 s): a
- * subprocess has no knob for either. Everything else is fast.
+ * The timers are read from the script under test (WELCOME_BUDGET_MS,
+ * WELCOME_SEED_WAIT_MS, WELCOME_SEED_TIMEOUT_MS, WELCOME_RELIST_RESERVE_MS).
+ * Two cases wait them out for real, because the timer is what they test and
+ * a subprocess has no knob for it: the timed-out create (WELCOME_SEED_TIMEOUT_MS,
+ * 20 s) and the marker that never gains done (WELCOME_SEED_WAIT_MS, 25 s).
+ * Everything else uses the stub's own latency and finishes in a few seconds.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -44,6 +53,8 @@ import { dirname, join, relative } from "node:path";
 import { FAKE_API_KEY, type FakeCall, type ToolHandler, type ToolReply, indexMcpFake } from "./index-mcp-fake";
 
 const SCRIPT = process.env.WELCOME_SCRIPT?.trim() || join(import.meta.dir, "..", "welcome.ts");
+/** The script under test as a module (its `import.meta.main` guard keeps it from running), for its timers only. */
+const W1 = (await import(SCRIPT)) as typeof import("../welcome");
 /** The texts pinned next to the script under test. */
 const golden = JSON.parse(readFileSync(join(dirname(SCRIPT), "tests", "fixtures", "welcome-texts.json"), "utf8")) as Record<string, string>;
 
@@ -63,14 +74,33 @@ const SEEDED = {
   publish: { lead: "From what you told me at signup, I've set up these signals:", close: "Say change or pause to adjust any of them, or tell me a new one." },
   paused: { lead: "From what you told me at signup, I've drafted these signals, paused until you say go:", close: "Say go to publish any of them, change or drop to adjust, or tell me a new one." },
 } as const;
+/** The same when the seeded welcome lists exactly one intent, singular throughout (welcome.ts SEEDED_COPY_ONE, DATA-416 Q3; seededOne, seededPausedOne). */
+const SEEDED_ONE = {
+  publish: { lead: "From what you told me at signup, I've set up this signal:", close: "Say change or pause to adjust it, or tell me a new one." },
+  paused: { lead: "From what you told me at signup, I've drafted this signal, paused until you say go:", close: "Say go to publish it, change or drop to adjust, or tell me a new one." },
+} as const;
 type Mode = keyof typeof SEEDED;
 /** The overlay's cap on the whole welcome (welcome.ts WELCOME_MAX_CHARS). */
 const WELCOME_MAX_CHARS = 1150;
-/** welcome.ts WELCOME_SEED_WAIT_MS and WELCOME_SEED_TIMEOUT_MS, as a subprocess meets them. */
-const SEED_WAIT_MS = 10_000;
-const SEED_TIMEOUT_MS = 20_000;
-/** Each case spawns several processes; the two slow ones wait out the script's own timers. */
-const CASE_TIMEOUT_MS = 60_000;
+/**
+ * The script's timers, read from it (W1 after its fix round 2: budget 50 s,
+ * was 25 s; seed wait 25 s, was 10 s; one create 20 s; the second list's
+ * reserve 5 s), as a subprocess meets them.
+ */
+const BUDGET_MS = W1.WELCOME_BUDGET_MS;
+const SEED_WAIT_MS = W1.WELCOME_SEED_WAIT_MS;
+const SEED_TIMEOUT_MS = W1.WELCOME_SEED_TIMEOUT_MS;
+const RELIST_RESERVE_MS = W1.WELCOME_RELIST_RESERVE_MS;
+/**
+ * The control plane stops a `--draft` run at its draft timeout and sends its
+ * fixed greeting instead (control-plane telegram-onboarding.js greetingDraft,
+ * 60 s from DATA-416 W2): every run here must end before it.
+ */
+const CP_DRAFT_TIMEOUT_MS = 60_000;
+/** What a subprocess adds to the script's own Index time: bun's start, the imports, the files. */
+const PROCESS_MARGIN_MS = 5_000;
+/** Each case inside the control plane's draft timeout too; the two slow ones wait out the script's own timers. */
+const CASE_TIMEOUT_MS = CP_DRAFT_TIMEOUT_MS;
 
 const MEMORY = "Looking for people building agent memory";
 const DINNER = "Open to co-hosting a village dinner";
@@ -90,9 +120,10 @@ const intro = (name: string | null) =>
     : "Mandrem, Goa, October 11 to November 1. I'm your personal agent for your time in the village. You can call me Edge, or give me whatever name you like.";
 const keepWatch = (n: number) => `I'll keep watch for people and events that fit ${n === 1 ? "this" : "these"} and bring the best to your morning brief.`;
 
-/** The seeded welcome for `titles` (welcome-texts.json seededThree, seededOne, seededPausedThree). */
+/** The seeded welcome for `titles`, singular for one (welcome-texts.json seededThree, seededOne, seededPausedThree, seededPausedOne). */
 function seededWelcome(name: string | null, titles: string[], mode: Mode = "publish"): string {
-  return ["Welcome to Edge City India ☀️", intro(name), [SEEDED[mode].lead, ...titles.map((t) => `- ${t}`)].join("\n"), keepWatch(titles.length), SEEDED[mode].close].join("\n\n");
+  const copy = (titles.length === 1 ? SEEDED_ONE : SEEDED)[mode];
+  return ["Welcome to Edge City India ☀️", intro(name), [copy.lead, ...titles.map((t) => `- ${t}`)].join("\n"), keepWatch(titles.length), copy.close].join("\n\n");
 }
 /** Today's listed welcome for one to three `titles` (welcome-texts.json one, two, three). */
 function listedWelcome(name: string | null, titles: string[]): string {
@@ -211,6 +242,12 @@ const stub = {
   failCreates: new Map<string, CreateFailure>(),
   /** Every create answers after this long. */
   createDelayMs: 0,
+  /** One create (by description) answers after this long instead; its row lands in Index only then. */
+  createDelays: new Map<string, number>(),
+  /** How many active rows each list_intents answer held, in the order they were answered. */
+  listed: [] as number[],
+  /** Runs once, right after the next list_intents is answered: another run's creates landing in between. */
+  afterList: null as (() => void) | null,
   /** pause_intent answers a tool error. */
   failPause: false,
   creates: 0,
@@ -223,17 +260,30 @@ function resetStub(rows: string[] = []): void {
   stub.down = false;
   stub.failCreates = new Map();
   stub.createDelayMs = 0;
+  stub.createDelays = new Map();
+  stub.listed = [];
+  stub.afterList = null;
   stub.failPause = false;
   stub.creates = 0;
   const status = (code: number): ToolReply => ({ response: new Response("upstream error", { status: code }) });
   const toolError = (text: string): ToolReply => ({ result: { content: [{ type: "text", text }], isError: true, resultType: "complete" } });
   const tools: Record<string, ToolHandler> = {
-    list_intents: () => (stub.down ? status(500) : intentsText(stub.frozen ?? stub.rows)),
+    list_intents: () => {
+      if (stub.down) return status(500);
+      const rows = stub.frozen ?? stub.rows;
+      stub.listed.push(rows.filter((r) => r.status === "active").length);
+      const text = intentsText(rows);
+      const after = stub.afterList;
+      stub.afterList = null;
+      after?.();
+      return text;
+    },
     create_intent: async (args) => {
       if (stub.down) return status(500);
       const n = ++stub.creates;
-      if (stub.createDelayMs) await Bun.sleep(stub.createDelayMs);
       const description = String(args.description ?? "");
+      const delay = stub.createDelays.get(description) ?? stub.createDelayMs;
+      if (delay) await Bun.sleep(delay);
       const failure = stub.failCreates.get(description);
       if (failure === "isError") return toolError("Could not create the intent.");
       if (failure === "successFalse") return `Too vague to match on.\n\n${JSON.stringify({ success: false, error: "too vague" })}`;
@@ -305,14 +355,26 @@ type Spawn = { key?: string; url?: string; env?: Record<string, string> };
 /** Env vars that would change the run; dropped from the child's environment (the seed's mode flag among them). */
 const DROPPED = /^(INDEX_|AV_|HERMES_)|SEED/;
 
+/** Every run ends inside the control plane's draft timeout, whatever the case (the cp would have sent its fixed greeting). */
 async function spawn(argv: string[], options: Spawn = {}): Promise<Run> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !DROPPED.test(k)) env[k] = v;
   Object.assign(env, { HERMES_HOME: home, INDEX_API_KEY: options.key ?? FAKE_API_KEY, INDEX_MCP_URL: options.url ?? MCP_URL, AV_CONNECTIONS_URL: "" }, options.env ?? {});
+  const t0 = Date.now();
   const proc = Bun.spawn(["bun", SCRIPT, ...argv], { env, cwd: home, stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+  expect(Date.now() - t0).toBeLessThan(CP_DRAFT_TIMEOUT_MS);
   return { stdout, stderr, code };
 }
+
+/** Each case, all its runs together, inside the control plane's draft timeout as well (and CASE_TIMEOUT_MS stops one that is not). */
+let caseStart = 0;
+beforeEach(() => {
+  caseStart = Date.now();
+});
+afterEach(() => {
+  expect(Date.now() - caseStart).toBeLessThan(CP_DRAFT_TIMEOUT_MS);
+});
 const draftArgv = () => ["--draft", "--home", home];
 
 /** Every path under the home: a file with its size and mtime, a directory by its path (its children show its changes). */
@@ -475,14 +537,24 @@ function expectSeedCalls(calls: FakeCall[], texts: string[], pausedIds: string[]
 // ---------------------------------------------------------------------------
 
 describe("the texts this file derives are the pinned ones", () => {
-  test("seededWelcome and listedWelcome reproduce welcome-texts.json byte for byte; the six older keys and the three seeded ones are all there", () => {
-    expect(Object.keys(golden)).toEqual(["three", "moreThanThree", "two", "one", "zero", "unreachable", "seededThree", "seededOne", "seededPausedThree"]);
+  test("seededWelcome and listedWelcome reproduce welcome-texts.json byte for byte; the six older keys and the four seeded ones are all there", () => {
+    expect(Object.keys(golden)).toEqual(["three", "moreThanThree", "two", "one", "zero", "unreachable", "seededThree", "seededOne", "seededPausedThree", "seededPausedOne"]);
     expect(seededWelcome("Mira", [MEMORY, RUST, RAISE])).toBe(golden.seededThree);
+    // DATA-416 Q3: one seeded intent is singular throughout, in both modes.
     expect(seededWelcome(null, [MEMORY])).toBe(golden.seededOne);
     expect(seededWelcome("Mira", [MEMORY, RUST, RAISE], "paused")).toBe(golden.seededPausedThree);
+    expect(seededWelcome(null, [MEMORY], "paused")).toBe(golden.seededPausedOne);
     expect(listedWelcome("Mira", [MEMORY, DINNER, SURF])).toBe(golden.three);
     expect(listedWelcome(null, [MEMORY, DINNER])).toBe(golden.two);
     expect(listedWelcome("Mira", [MEMORY])).toBe(golden.one);
+  });
+
+  test("the timers this replay meets, read from the script: budget 50 s, seed wait 25 s, one create 20 s, reserve 5 s; a first welcome fits the control plane's 60 s", () => {
+    expect({ BUDGET_MS, SEED_WAIT_MS, SEED_TIMEOUT_MS, RELIST_RESERVE_MS }).toEqual({ BUDGET_MS: 50_000, SEED_WAIT_MS: 25_000, SEED_TIMEOUT_MS: 20_000, RELIST_RESERVE_MS: 5_000 });
+    // The wait outlasts one create, so a slow create still shows in the waiting run's welcome.
+    expect(SEED_WAIT_MS).toBeGreaterThan(SEED_TIMEOUT_MS);
+    // The script's Index time and a process's start fit inside the control plane's draft timeout.
+    expect(BUDGET_MS + PROCESS_MARGIN_MS).toBeLessThanOrEqual(CP_DRAFT_TIMEOUT_MS);
   });
 });
 
@@ -680,6 +752,22 @@ describe("seeded: zero active intents and selected lines in USER.md", () => {
   );
 
   test(
+    "AV_WELCOME_SEED_MODE=paused, one selected: create then pause_intent of its id, the singular paused text (seededPausedOne), trailer seeded 1",
+    async () => {
+      resetStub();
+      writeUserMd([MEMORY]);
+      const run = await seedingDraft({ env: { AV_WELCOME_SEED_MODE: "paused" } });
+      expectDraft(run, golden.seededPausedOne, trailer("none", 1, 1, 0));
+      expect(names(toolCalls())).toEqual(["list_intents", "create_intent", "pause_intent", "list_intents"]);
+      expectSeedCalls(toolCalls(), [MEMORY], [stub.rows[0].id]);
+      expect(stub.rows.map((r) => [r.summary, r.status])).toEqual([[MEMORY, "paused"]]);
+      expectSeedMarker({ selected: 1, created: 1, failed: 0 }, run.t0, run.t1);
+      expectDraftWrites();
+    },
+    CASE_TIMEOUT_MS,
+  );
+
+  test(
     "the creates run at once: three creates answering after 1 s each take about 1 s, not 3",
     async () => {
       resetStub();
@@ -771,7 +859,8 @@ describe("a create that fails: the others still go, and the failure is counted",
       expectSeedMarker({ selected: 3, created: 0, failed: 3 }, run.t0, run.t1);
       const from = stub.fake.calls.length;
       expectDraft(await draft("nothing"), golden.zero, trailer("questions", 0));
-      expectReadsOnly(toolCalls(from), 1);
+      // The marker exists, so the second run lists once more (DATA-416 race 2) and creates nothing.
+      expectReadsOnly(toolCalls(from), 2);
       expectDraftWrites();
     },
     CASE_TIMEOUT_MS,
@@ -830,7 +919,7 @@ describe("a create that fails: the others still go, and the failure is counted",
   );
 
   test(
-    "DATA-416 S1: a create that landed but never answers times out (the script's own ~20 s) and counts as seeded once the re-list shows it; the run still ends inside the control plane's 30 s",
+    "DATA-416 S1: a create that landed but never answers times out (the script's own 20 s) and counts as seeded once the re-list shows it; the run ends inside the script's 50 s budget and the control plane's 60 s",
     async () => {
       resetStub();
       stub.failCreates.set(RUST, "landedHang");
@@ -839,8 +928,11 @@ describe("a create that fails: the others still go, and the failure is counted",
       const run = await seedingDraft();
       expectDraft(run, golden.seededThree, trailer("none", 3, 3, 0));
       expectSeedCalls(toolCalls(), [MEMORY, RUST, RAISE]);
+      // The hung create is cut at WELCOME_SEED_TIMEOUT_MS (20 s); the whole run, both lists included, is bounded by
+      // WELCOME_BUDGET_MS (50 s, every Index call of one run together), plus the process's own start.
       expect(run.t1 - run.t0).toBeGreaterThanOrEqual(SEED_TIMEOUT_MS - 2000);
-      expect(run.t1 - run.t0).toBeLessThan(30_000);
+      expect(run.t1 - run.t0).toBeLessThan(BUDGET_MS + PROCESS_MARGIN_MS);
+      expect(run.t1 - run.t0).toBeLessThan(CP_DRAFT_TIMEOUT_MS);
       expectSeedMarker({ selected: 3, created: 3, failed: 0 }, run.t0, run.t1);
       expectDraftWrites();
     },
@@ -850,7 +942,7 @@ describe("a create that fails: the others still go, and the failure is counted",
 
 describe("once per box: a seed marker that exists stops every later create, across processes", () => {
   test(
-    "a second --draft after a seed (the control plane's retry, a re-attach): no create, the plain listing, trailer seeded 0; the marker untouched",
+    "a second --draft after a seed (the control plane's retry, a re-attach): no create, it lists twice (the marker exists: DATA-416 race 2), the plain listing, trailer seeded 0; the marker untouched",
     async () => {
       resetStub();
       writeProfile("Mira");
@@ -859,9 +951,9 @@ describe("once per box: a seed marker that exists stops every later create, acro
       expect(creates(toolCalls())).toHaveLength(3);
       const from = stub.fake.calls.length;
       expectDraft(await draft("nothing"), golden.three, trailer("none", 3, 0, 0));
-      expectReadsOnly(toolCalls(from), 1);
+      expectReadsOnly(toolCalls(from), 2);
       // And the default mode: the plain listing, the welcome marker claimed once, still no create.
-      expectReadsOnly(await claimOnce(golden.three), 1);
+      expectReadsOnly(await claimOnce(golden.three), 2);
       expect(creates(stub.fake.calls)).toHaveLength(3);
       expectDraftWrites();
     },
@@ -879,8 +971,8 @@ describe("once per box: a seed marker that exists stops every later create, acro
       expectDraft(run, seededWelcome(null, [MEMORY, DINNER, SURF]), trailer("none", 3, 3, 0));
       const from = stub.fake.calls.length;
       expectDraft(await draft("nothing"), golden.zero, trailer("questions", 0));
-      expectReadsOnly(toolCalls(from), 1);
-      expectReadsOnly(await claimOnce(golden.zero), 1);
+      expectReadsOnly(toolCalls(from), 2);
+      expectReadsOnly(await claimOnce(golden.zero), 2);
       expect(creates(stub.fake.calls)).toHaveLength(3);
       expectDraftWrites();
     },
@@ -888,7 +980,7 @@ describe("once per box: a seed marker that exists stops every later create, acro
   );
 
   test(
-    "DATA-416 S3: a marker without done (another run seeding) is waited for; when it gains done the run lists again and shows what was seeded, without creating",
+    "DATA-416 S3: a marker without done (another run seeding) is waited for; when it gains done the run lists again and shows what was seeded, without creating (trailer seeded 0: C-1)",
     async () => {
       resetStub();
       writeProfile("Mira");
@@ -917,7 +1009,7 @@ describe("once per box: a seed marker that exists stops every later create, acro
   );
 
   test(
-    "DATA-416 S3: a marker that never gains done is waited for the script's 10 s, then the run lists again and asks the questions; no create, the marker untouched",
+    "DATA-416 S3: a marker that never gains done is waited for the script's WELCOME_SEED_WAIT_MS (25 s), then the run lists again and asks the questions; no create, the marker untouched",
     async () => {
       resetStub();
       writeUserMd([MEMORY, DINNER, SURF]);
@@ -927,15 +1019,16 @@ describe("once per box: a seed marker that exists stops every later create, acro
       const took = Date.now() - t0;
       expectDraft(run, golden.zero, trailer("questions", 0));
       expectReadsOnly(toolCalls(), 2);
+      // The wait is WELCOME_SEED_WAIT_MS (it ends sooner only at the budget less the reserve, 45 s, which it never meets).
       expect(took).toBeGreaterThanOrEqual(SEED_WAIT_MS - 500);
-      expect(took).toBeLessThan(SEED_WAIT_MS + 5000);
+      expect(took).toBeLessThan(Math.min(SEED_WAIT_MS, BUDGET_MS - RELIST_RESERVE_MS) + PROCESS_MARGIN_MS);
       expectDraftWrites();
     },
     CASE_TIMEOUT_MS,
   );
 
   test(
-    "a marker that is done, empty or not JSON: no create, no wait, the questions text, the marker untouched",
+    "a marker that is done, empty or not JSON: no create, no wait, one more list (DATA-416 race 2), the questions text, the marker untouched",
     async () => {
       resetStub();
       writeUserMd([MEMORY, DINNER, SURF]);
@@ -945,7 +1038,7 @@ describe("once per box: a seed marker that exists stops every later create, acro
         const t0 = Date.now();
         expectDraft(await draft("nothing"), golden.zero, trailer("questions", 0));
         expect({ body, fast: Date.now() - t0 < 3000 }).toEqual({ body, fast: true });
-        expectReadsOnly(toolCalls(from), 1);
+        expectReadsOnly(toolCalls(from), 2);
         expect(readFileSync(join(home, SEED_MARKER), "utf8")).toBe(body);
       }
       expectDraftWrites();
@@ -954,10 +1047,103 @@ describe("once per box: a seed marker that exists stops every later create, acro
   );
 
   test(
-    "two --draft processes at once on one box: three creates in all; one run seeded them, the other created nothing and lists the same three",
+    "DATA-416 race 2: a done marker and a first list that predates the other run's creates (1 of 3 active): the run lists again and the welcome shows all three; no create, no wait",
+    async () => {
+      resetStub([MEMORY]);
+      writeProfile("Mira");
+      writeUserMd([MEMORY, DINNER, SURF]);
+      const done = '{"seededAt":"2026-10-11T04:30:00.000Z","selected":3,"created":3,"failed":0,"done":true}\n';
+      writeMemoryFile(SEED_MARKER, done);
+      // The other run's last two creates land right after this run's first list was answered.
+      stub.afterList = () => stub.rows.push(row(DINNER, 0x201), row(SURF, 0x202));
+      const t0 = Date.now();
+      const run = await draft("nothing");
+      expect(Date.now() - t0).toBeLessThan(3000);
+      // Without the second list (W1 before its fix round 2) this was golden.one, the partial listing.
+      expectDraft(run, golden.three, trailer("none", 3, 0, 0));
+      expectReadsOnly(toolCalls(), 2);
+      expect(stub.listed).toEqual([1, 3]);
+      expect(readFileSync(join(home, SEED_MARKER), "utf8")).toBe(done);
+      expectDraftWrites();
+    },
+    CASE_TIMEOUT_MS,
+  );
+
+  test(
+    "DATA-416 race 1: a run whose first list lands between another run's creates (1 of 3 active) looks at the marker first, waits for done and lists all three; three creates in all",
     async () => {
       resetStub();
-      // Creates that take half a second, so the other run meets the claimed marker (S3) rather than racing the writes.
+      // The seeder's first create answers at once, the other two after 3 s: a window in which Index lists one of three.
+      stub.createDelays = new Map([[DINNER, 3000], [SURF, 3000]]);
+      writeProfile("Mira");
+      writeUserMd([MEMORY, DINNER, SURF]);
+      const t0 = Date.now();
+      const seeding = spawn(draftArgv());
+      while (stub.rows.length < 1 && Date.now() - t0 < 10_000) await Bun.sleep(20);
+      expect(stub.rows.map((r) => r.summary)).toEqual([MEMORY]);
+      const waiting = await spawn(draftArgv());
+      const seeder = await seeding;
+      const t1 = Date.now();
+      // The seeder's first list (none), the waiting run's first list (one of three), then the two second lists (three).
+      expect(stub.listed).toEqual([0, 1, 3, 3]);
+      expect(creates(toolCalls())).toHaveLength(3);
+      expectDraft(seeder, seededWelcome("Mira", [MEMORY, DINNER, SURF]), trailer("none", 3, 3, 0));
+      // Before the fix round (the active count looked at before the marker) this was golden.one, the partial listing.
+      expectDraft(waiting, listedWelcome("Mira", stub.rows.map((r) => r.summary)), trailer("none", 3, 0, 0));
+      expectSeedMarker({ selected: 3, created: 3, failed: 0 }, t0, t1);
+      expect(existsSync(join(home, MARKER))).toBe(false);
+    },
+    CASE_TIMEOUT_MS,
+  );
+
+  test(
+    "C-1, W1's documented behaviour: a --draft run that waited on another run's seed says intents_seeded 0 in its trailer while Index holds the three seeded intents (it lists them as today's listing, not the seeded text)",
+    async () => {
+      resetStub();
+      stub.createDelayMs = 1500;
+      writeProfile("Mira");
+      writeUserMd([MEMORY, DINNER, SURF]);
+      const t0 = Date.now();
+      const seeding = spawn(draftArgv());
+      // The seeder has claimed the marker (it exists, without done) before the waiting run starts.
+      while (!existsSync(join(home, SEED_MARKER)) && Date.now() - t0 < 10_000) await Bun.sleep(20);
+      expect(readFileSync(join(home, SEED_MARKER), "utf8")).not.toContain('"done"');
+      const waiting = await spawn(draftArgv());
+      const seeder = await seeding;
+      expectDraft(seeder, seededWelcome("Mira", [MEMORY, DINNER, SURF]), trailer("none", 3, 3, 0));
+      expect(stub.rows.map((r) => [r.summary, r.status]).sort()).toEqual([MEMORY, DINNER, SURF].map((t) => [t, "active"]).sort());
+      expect(JSON.parse(waiting.stderr)).toEqual({ welcome: 1, fallback: "none", intents_listed: 3, intents_seeded: 0, seed_failed: 0 });
+      expectDraft(waiting, listedWelcome("Mira", stub.rows.map((r) => r.summary)), trailer("none", 3, 0, 0));
+      expect(creates(toolCalls())).toHaveLength(3);
+    },
+    CASE_TIMEOUT_MS,
+  );
+
+  test(
+    "C-1 in paused mode (reported, not production): a run that waited on another run's paused seed lists no active intent, so it asks the questions, while Index holds the three paused drafts",
+    async () => {
+      resetStub();
+      stub.createDelayMs = 1500;
+      writeUserMd([MEMORY, DINNER, SURF]);
+      const env = { AV_WELCOME_SEED_MODE: "paused" };
+      const t0 = Date.now();
+      const seeding = spawn(draftArgv(), { env });
+      while (!existsSync(join(home, SEED_MARKER)) && Date.now() - t0 < 10_000) await Bun.sleep(20);
+      const waiting = await spawn(draftArgv(), { env });
+      const seeder = await seeding;
+      expectDraft(seeder, seededWelcome(null, [MEMORY, DINNER, SURF], "paused"), trailer("none", 3, 3, 0));
+      expect(stub.rows.map((r) => r.status)).toEqual(["paused", "paused", "paused"]);
+      expectDraft(waiting, golden.zero, trailer("questions", 0, 0, 0));
+      expect(creates(toolCalls())).toHaveLength(3);
+    },
+    CASE_TIMEOUT_MS,
+  );
+
+  test(
+    "two --draft processes at once on one box: three creates in all; one run seeded them, the other created nothing, waited for done and lists all three (no partial listing)",
+    async () => {
+      resetStub();
+      // Creates that take half a second, so the seed is still in progress when the other run looks at the marker.
       stub.createDelayMs = 500;
       writeProfile("Mira");
       writeUserMd([MEMORY, DINNER, SURF]);
@@ -968,12 +1154,11 @@ describe("once per box: a seed marker that exists stops every later create, acro
       expect(stub.rows.map((r) => r.summary).sort()).toEqual([MEMORY, DINNER, SURF].sort());
       const [seeder, other] = both[0].stderr === trailer("none", 3, 3, 0) ? both : [both[1], both[0]];
       expectDraft(seeder, seededWelcome("Mira", [MEMORY, DINNER, SURF]), trailer("none", 3, 3, 0));
-      // The other run created nothing. It normally waits for the marker's done and lists all three; when its first
-      // list falls between the seeder's creates it lists only those that had landed (it does not wait then), in
-      // Index's order: that is W1's behaviour, reported to the lead, and accepted here so the case is not flaky.
-      const k = Number(JSON.parse(other.stderr).intents_listed);
-      expect(k).toBeGreaterThanOrEqual(1);
-      expectDraft(other, listedWelcome("Mira", stub.rows.slice(0, k).map((r) => r.summary)), trailer("none", k, 0, 0));
+      // The other run looked at the marker before the active count (DATA-416 race 1), waited for done and listed
+      // again (race 2): all three, in Index's order, and intents_seeded 0 (C-1). The one window left is W1's
+      // documented finding 4 (the marker claimed but not yet written: microseconds), never met here.
+      expectDraft(other, listedWelcome("Mira", stub.rows.map((r) => r.summary)), trailer("none", 3, 0, 0));
+      expect(stub.listed.slice(-2)).toEqual([3, 3]);
       expectSeedMarker({ selected: 3, created: 3, failed: 0 }, t0, t1);
       expect(existsSync(join(home, MARKER))).toBe(false);
     },
