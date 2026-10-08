@@ -66,7 +66,9 @@ What waits for a tap. Only classes an agent opens with `approval propose`
     a decision it is weighing for the resident, before it sends the advisor
     the situation and the choices (ODS-RESERVE, cp#147; reserved, wired to
     the bridge in week 1 after Oct 11). Nothing proposes it yet; the settings
-    page offers ask, on its own and never.
+    page offers ask and never in October (the lead's ruling, Oct 8 20:06Z);
+    "on its own" arrives with the bridge wiring PR, which changes no policy
+    bytes.
 
 opportunity.accept (R3) waits for no tap on day one: accepting or declining an
 Index opportunity, a connection or meeting, on the resident's behalf is
