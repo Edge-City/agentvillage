@@ -143,7 +143,11 @@ tool name for the log is read from the envelope's opening where Hermes puts it,
 and a block's own message is JSON-escaped in sh when it is printable ASCII;
 node does each of these as before otherwise, and still reads the error code of
 a non-200 answer. Each outcome line in the log ends with `path=fast` (no node
-in that call) or `path=node`.
+in that call) or `path=node`. Each sh reading (the envelope's tool name, the
+facade's body, a block's message) sets `LC_ALL=C` before it touches a byte:
+bash 5.2 under a UTF-8 locale rewrites `${s%x}` when `s` holds an invalid
+UTF-8 sequence (DATA-419 caught it in the tests' own reading of their fuzz
+inputs, which now runs under `LC_ALL=C` too).
 
 ### Facade URL forms
 
