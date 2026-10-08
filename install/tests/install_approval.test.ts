@@ -2266,20 +2266,48 @@ done
     }
   }, 300_000);
 
-  test("fuzz: the sh block message JSON is JSON.stringify's for printable ASCII, and declines everything else", () => {
-    const dir = scratch("av-approval-block-json-");
+  /**
+   * block_json, sliced from the shim, behind a driver that reads each file
+   * byte for byte, writes back what it read (`<file>.in`) and block_json's
+   * answer for it (`<file>.sh`). The `x` sentinel is stripped under LC_ALL=C:
+   * bash 5.2 under a UTF-8 locale rewrites `${s%x}` when s holds an invalid
+   * UTF-8 sequence (DATA-419: `\\` 0xd8 `\j>0xi` came out as `\\` and a few
+   * stray bytes, sometimes all printable). The locale is then put back, so
+   * block_json runs under the caller's as it does in the shim.
+   */
+  function blockJsonDir(prefix: string): string {
+    const dir = scratch(prefix);
     writeFileSync(join(dir, "block_json.sh"), shimSlice("block_json() {", "\n}\n") + "\n}\n");
     writeFileSync(
       join(dir, "driver.sh"),
       `. "$1/block_json.sh"
 shift
+lc=\${LC_ALL-} had=\${LC_ALL+1}
 for f in "$@"; do
+  LC_ALL=C
   s=$(cat "$f"; printf x)
   s=\${s%x}
+  if [ -n "$had" ]; then LC_ALL=$lc; else unset LC_ALL; fi
+  printf '%s' "$s" > "$f.in"
   printf '%s' "$(block_json "approval facade unreachable: $s")" > "$f.sh"
 done
 `,
     );
+    return dir;
+  }
+  /** The runner's own locale (LC_ALL unset), then C and C.UTF-8 pinned, so a UTF-8 locale is read on every host. */
+  const BLOCK_JSON_LOCALES: (string | undefined)[] = [undefined, "C", "C.UTF-8"];
+  function runBlockJson(shell: string, lc: string | undefined, dir: string, files: string[]): void {
+    const env: Record<string, string | undefined> = { ...process.env };
+    delete env.LC_ALL;
+    if (lc !== undefined) env.LC_ALL = lc;
+    for (const f of files) for (const x of [".in", ".sh"]) rmSync(`${f}${x}`, { force: true });
+    const s = Bun.spawnSync([shell, join(dir, "driver.sh"), dir, ...files], { env });
+    expect([shell, lc, s.exitCode]).toEqual([shell, lc, 0]);
+  }
+
+  test("fuzz: the sh block message JSON is JSON.stringify's for printable ASCII, and declines everything else", () => {
+    const dir = blockJsonDir("av-approval-block-json-");
     const rnd = prng(2380);
     const files: string[] = [];
     const inputs: Buffer[] = [];
@@ -2299,24 +2327,49 @@ done
       files.push(f);
       inputs.push(Buffer.from(bytes));
     }
-    for (const shell of DATA380_UNIT_SHELLS) {
-      const s = Bun.spawnSync([shell, join(dir, "driver.sh"), dir, ...files]);
-      expect([shell, s.exitCode]).toEqual([shell, 0]);
-      let printable = 0;
-      files.forEach((f, i) => {
-        const sh = readFileSync(`${f}.sh`, "utf8");
-        const isPrintable = inputs[i].every((c) => c >= 0x20 && c <= 0x7e);
-        if (!isPrintable) {
-          expect([shell, f, sh]).toEqual([shell, f, ""]);
-          return;
-        }
-        printable++;
-        const expected = JSON.stringify({ action: "block", message: `approval facade unreachable: ${inputs[i].toString("latin1")}` });
-        expect([shell, f, sh]).toEqual([shell, f, expected]);
-      });
-      expect(printable).toBeGreaterThan(150);
-    }
+    for (const shell of DATA380_UNIT_SHELLS)
+      for (const lc of BLOCK_JSON_LOCALES) {
+        runBlockJson(shell, lc, dir, files);
+        let printable = 0;
+        files.forEach((f, i) => {
+          // What block_json was given is the input itself, so a verdict below is about block_json.
+          expect([shell, lc, f, readFileSync(`${f}.in`).toString("hex")]).toEqual([shell, lc, f, inputs[i].toString("hex")]);
+          const sh = readFileSync(`${f}.sh`, "utf8");
+          const isPrintable = inputs[i].every((c) => c >= 0x20 && c <= 0x7e);
+          if (!isPrintable) {
+            expect([shell, lc, f, sh]).toEqual([shell, lc, f, ""]);
+            return;
+          }
+          printable++;
+          const expected = JSON.stringify({ action: "block", message: `approval facade unreachable: ${inputs[i].toString("latin1")}` });
+          expect([shell, lc, f, sh]).toEqual([shell, lc, f, expected]);
+        });
+        expect(printable).toBeGreaterThan(150);
+      }
   }, 120_000);
+
+  test("DATA-419: the fuzz's m102 and m285 (an invalid UTF-8 sequence after backslashes) reach block_json byte for byte under every shell and locale, and it declines them", () => {
+    const dir = blockJsonDir("av-approval-block-json-419-");
+    // m102: \\ 0xd8 \j>0xi, the input CI failed on; m285: 0xfd \\"yw\.l"!d. Each
+    // came out of bash 5.2's ${s%x} under C.UTF-8 as `\\` or nothing and a few
+    // stray bytes. Then a printable control with both escapes: \\"\ .
+    const cases = [
+      { hex: "5c5cd85c6a3e307869", sh: "" },
+      { hex: "fd5c5c2279775c2e6c222164", sh: "" },
+      { hex: "5c5c225c", sh: JSON.stringify({ action: "block", message: 'approval facade unreachable: \\\\"\\' }) },
+    ];
+    const files = cases.map((c, i) => {
+      const f = join(dir, `c${i}`);
+      writeFileSync(f, Buffer.from(c.hex, "hex"));
+      return f;
+    });
+    for (const shell of DATA380_UNIT_SHELLS)
+      for (const lc of BLOCK_JSON_LOCALES) {
+        runBlockJson(shell, lc, dir, files);
+        const got = files.map((f) => [readFileSync(`${f}.in`).toString("hex"), readFileSync(`${f}.sh`, "utf8")]);
+        expect([shell, lc, got]).toEqual([shell, lc, cases.map((c) => [c.hex, c.sh])]);
+      }
+  });
 });
 
 describe("DATA-234 G2: the shim digest the backstop compares", () => {
