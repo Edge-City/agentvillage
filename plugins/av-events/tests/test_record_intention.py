@@ -1795,6 +1795,8 @@ NOT_AN_INSTRUCTION: set[str] = {
     "skills/approval/templates/APPROVAL.md",
     # The skill's README describes that routing table for humans; SKILL.md is the prompt.
     "skills/approval/README.md",
+    # The memory signal sync names it only to forbid it: it records through record_intention or not at all.
+    "skills/index-network/prompts/memory-signals.md",
 }
 
 
@@ -2771,3 +2773,13 @@ def test_data448_with_approval_on_the_update_is_still_approval_required(tctx, in
     out = call(tctx, {"action": "update", "intention_id": INDEX_ID, "text": TEXT + " indoors"}, tool_call_id="c-up")
     assert out["publish_refused"] == "approval_required" and out["published"] is True
     assert index.requests == []
+
+
+def test_memory_signals_never_falls_back_to_create_intent():
+    """The nightly pass has no create_intent fallback: every mention of it is a prohibition."""
+    prompt = (REPO / "skills" / "index-network" / "prompts" / "memory-signals.md").read_text(encoding="utf-8")
+    assert 'record_intention(text=..., source="ambient")' in prompt
+    assert "records nothing" in prompt
+    for line in prompt.splitlines():
+        if "create_intent" in line:
+            assert "Never call" in line, line
