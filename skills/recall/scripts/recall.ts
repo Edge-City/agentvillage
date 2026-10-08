@@ -536,9 +536,18 @@ export function listKnowledgeSources(home: string): FileSource[] {
   const root = join(home, "knowledge");
   if (!isRealDir(root)) return out;
   const skipped = (name: string) => name.startsWith(".") || name.startsWith("_");
-  for (const provider of readdirSync(root).sort()) {
+  // An unreadable or vanishing directory (mode 000, a swap or a reset in flight) is skipped,
+  // as the memory/ listing does: knowledge must never take MEMORY.md search down with it.
+  const entries = (dir: string): string[] => {
+    try {
+      return readdirSync(dir).sort();
+    } catch {
+      return [];
+    }
+  };
+  for (const provider of entries(root)) {
     if (skipped(provider) || !isRealDir(join(root, provider))) continue;
-    for (const name of readdirSync(join(root, provider)).sort()) {
+    for (const name of entries(join(root, provider))) {
       if (skipped(name) || !name.endsWith(".md")) continue;
       const rel = `knowledge/${provider}/${name}`;
       out.push({ sourceId: `file:${rel}`, kind: "knowledge", abs: join(root, provider, name), rel, filenameDate: null });

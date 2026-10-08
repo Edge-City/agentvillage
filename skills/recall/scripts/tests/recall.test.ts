@@ -868,6 +868,27 @@ describe("knowledge kind (CX1)", () => {
     expect(query(other, { query: "aquaponics", env: DM }).hit_count).toBe(0);
   });
 
+  test("an unreadable provider dir is skipped and never takes the search down (refute S1)", () => {
+    const paths = withKnowledge();
+    const locked = join(paths.home, "knowledge", "locked");
+    mkdirSync(locked);
+    writeFileSync(join(locked, "a.md"), "lockedsecret\n");
+    chmodSync(locked, 0o000);
+    try {
+      const rels = listMarkdownSources(paths.home).filter((s) => s.kind === "knowledge").map((s) => s.rel);
+      expect(rels).toEqual([
+        "knowledge/agentvillage/note-1758000000000.md",
+        "knowledge/agentvillage/upload-1758100000000.md",
+      ]);
+      const res = query(paths, { query: "aquaponics", env: DM });
+      expect(res.status).toBe("ok");
+      expect(res.hit_count).toBe(1);
+      expect(query(paths, { query: "lockedsecret", env: DM }).hit_count).toBe(0);
+    } finally {
+      chmodSync(locked, 0o700);
+    }
+  });
+
   test("no saved_at: the file's mtime; a removed provider (wipe) is purged on the next pass", () => {
     const paths = withKnowledge();
     const plain = join(paths.home, "knowledge", "agentvillage", "note-plain.md");

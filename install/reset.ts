@@ -10,7 +10,7 @@
  *   bun install/reset.ts --wipe-user
  */
 
-import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import YAML from "yaml";
@@ -180,7 +180,14 @@ export function removeWipeUserState(home: string = hermesHome()): string[] {
     join(home, "knowledge", "agentvillage"),
   ];
   for (const target of targets) {
-    if (!existsSync(target)) continue;
+    // lstat, not existsSync: a dangling symlink is present too and must go (install.ts does the same).
+    let present = true;
+    try {
+      lstatSync(target);
+    } catch {
+      present = false;
+    }
+    if (!present) continue;
     rmSync(target, { recursive: true, force: true });
     console.log(`→ removed ${target}`);
     removed.push(target);

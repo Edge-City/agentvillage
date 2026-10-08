@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -77,4 +77,14 @@ test("reset --wipe-user removes knowledge/agentvillage, keeps edge-india and kno
   const index = readFileSync(join(home, "knowledge", "index.md"), "utf8");
   expect(index).toContain("- edge-india: 1 file");
   expect(index).not.toContain("agentvillage");
+});
+
+test("reset --wipe-user removes a dangling symlink at knowledge/agentvillage too (refute S2)", () => {
+  const home = mkdtempSync(join(tmpdir(), "agentvillage-avstate-"));
+  mkdirSync(join(home, "knowledge"));
+  const link = join(home, "knowledge", "agentvillage");
+  symlinkSync(join(home, "gone"), link);
+  expect(existsSync(link)).toBe(false); // dangling: existsSync says absent, lstat says present
+  expect(removeWipeUserState(home)).toEqual([link]);
+  expect(() => lstatSync(link)).toThrow();
 });

@@ -166,10 +166,12 @@ function copyWorkspaceFiles(wipeUser: boolean): void {
         console.log(`→ removed ${path.replace(TARGET_HOME + "/", "")} (--wipe-user)`);
       }
     }
-    // The recall index holds copies of MEMORY.md and notes; it goes with them,
-    // and the epoch keeps earlier conversations out of any future index.
-    wipeRecallIndex();
+    // What the previous user shared goes first, then the recall index, which holds copies of
+    // MEMORY.md, notes and knowledge files; the epoch keeps earlier conversations out of any
+    // future index. (The other order left a window in which a live recall could re-index the
+    // old knowledge files after the index wipe.)
     wipeKnowledgeAgentvillage();
+    wipeRecallIndex();
   }
 }
 
