@@ -30,7 +30,11 @@ import { join } from "node:path";
 // once more: the opportunity.accept say entry is back ({tool, input}: only an Index tool call the
 // hook routes reaches the class), now that the control plane's copy carries the row. Both copies'
 // blocks are R3 + DATA-370 + that entry, and the two pins are equal again.
-const POLICY_BLOCK_SHA256 = "67dc1fb0ce9f7fc3d505d2881cb39dd82e2dd6cd3d7162794277c22e773f40d9";
+// ODS-RESERVE (controlplane#147, paired with this PR) moved it: the reserved moralmod.assess (ask,
+// agent_may_request), moralmod.share_context (human-only until the resident chooses ask) and
+// coordinator.contact (human-only, locked in October) rows and their two comment lines, five added
+// lines in the classes block, nothing else. Both copies carry the same five lines; the pins are equal.
+const POLICY_BLOCK_SHA256 = "8cb5db39b5a6049c77b4f3c9ab2ca8c3dcf64bd749a44c62d56c23a75cbee5ee";
 
 const OPEN = "```yaml approval-policy\n";
 function policyBlock(text: string): string {

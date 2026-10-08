@@ -62,6 +62,11 @@ What waits for a tap. Only classes an agent opens with `approval propose`
     village resources proposed for the resident, before the agent takes it up
     (R2 addendum). `odin.*` is a reserved namespace for the allocator's own
     classes (DATA-255): a comment line in the block, no row.
+  - moralmod.assess: the agent asking the MoralMod research advisor to assess
+    a decision it is weighing for the resident, before it sends the advisor
+    the situation and the choices (ODS-RESERVE, cp#147; reserved, wired to
+    the bridge in week 1 after Oct 11). Nothing proposes it yet; the settings
+    page offers ask, on its own and never.
 
 opportunity.accept (R3) waits for no tap on day one: accepting or declining an
 Index opportunity, a connection or meeting, on the resident's behalf is
@@ -148,6 +153,15 @@ the resident's credentials. log.mutate keeps the daemon's log out of reach for
 the same reason. Core refuses `agent_may_request` on a human-only class at
 load, so these rows carry none.
 
+Two more reserved rows are human-only on day one (ODS-RESERVE, cp#147).
+moralmod.share_context: the resident's context is never included in a group
+assessment other residents see in aggregate unless the resident chooses, in
+the app's settings, to be asked first (the page offers never and ask; ask
+renders the row manual with `agent_may_request`). coordinator.contact: no
+village coordinator agent sends a resident a suggestion in October; the row
+is locked there (the settings page shows it and sets nothing) and becomes
+the resident's choice later.
+
 Read scope on a co-located daemon. The daemon host IS the sandbox now, so the
 paths in the hook envelope (/home/hermes/.hermes/...) are real paths on the
 daemon's own filesystem. They still sit outside every read root: the gate root
@@ -211,7 +225,8 @@ card cuts a claimed line at 280 characters. The payloads quoted: an intention
 expires_at}` and a vote `{question_id, answer}` (_share_vote.py), and a Hermes
 tool call the hook gates `{tool, input}` (core's hook, APRV-445/499). ids are
 `~`. The reserved classes no tool proposes yet (treasury.*, edgeos.*.write,
-marketplace.app.*, resource.allocate, review.delegate.model) have no entry:
+marketplace.app.*, resource.allocate, review.delegate.model, moralmod.*,
+coordinator.contact) have no entry:
 their payload keys do not exist yet, so they stay technical (`undeclared`)
 until their tool writes one, and that tool's PR adds the entry.
 opportunity.accept has an entry: nothing proposes it, so its only payload is
@@ -319,10 +334,15 @@ classes:
   resource.allocate:             { autonomy: manual, agent_may_request: true }   # reserved; the treasury/ODS allocation class: an allocation of village resources proposed for the resident
   opportunity.accept:            { autonomy: autonomous, agent_may_request: true }   # reserved; accepting or declining an Index opportunity (a connection or meeting) on the resident's behalf; Index's tools for it reach it through the hook; R3
   # odin.* (the allocator producer, DATA-255): a reserved namespace for the allocator's own classes; a comment only, no row here.
+  # MoralMod, the research advisor: reserved before Oct 11, wired to the bridge in week 1.
+  moralmod.assess:               { autonomy: manual, agent_may_request: true }   # reserved; MoralMod advisor, wired in week 1 after Oct 11
+  moralmod.share_context:        { autonomy: human-only }   # reserved; never in October unless the resident chooses to be asked; the resident's context in a group assessment others see in aggregate
   # The gate's own organs and the resident's credentials: never the agent.
   policy.core:                   { autonomy: human-only }
   log.mutate:                    { autonomy: human-only }
   account.credential:            { autonomy: human-only }
+  # A village coordinator agent messaging the resident: no coordinator sends anything in October.
+  coordinator.contact:           { autonomy: human-only }   # reserved; locked in October, a resident choice later
   # Hermes tool classes (PR #569 rules): recorded, not gated, on day one.
   cron.manage:                   { autonomy: autonomous }
   process.write:                 { autonomy: autonomous }
