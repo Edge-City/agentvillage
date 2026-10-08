@@ -58,3 +58,23 @@ test("a plain reset keeps user state and never stops the gateway", () => {
   expect(names).not.toContain("stopGateway");
   expect(names[names.length - 1]).toBe("restartGateway");
 });
+
+test("reset --wipe-user removes knowledge/agentvillage, keeps edge-india and knowledge-prev, and regenerates knowledge/index.md", () => {
+  const home = mkdtempSync(join(tmpdir(), "agentvillage-avstate-"));
+  const put = (rel: string, body: string) => {
+    mkdirSync(join(home, rel, ".."), { recursive: true });
+    writeFileSync(join(home, rel), body);
+  };
+  put("knowledge/agentvillage/note-1.md", "previous user\n");
+  put("knowledge/edge-india/index.md", "# Edge India\n");
+  put("knowledge-prev/edge-india/index.md", "# previous\n");
+  put("knowledge/index.md", "stale\n");
+
+  expect(removeWipeUserState(home)).toEqual([join(home, "knowledge", "agentvillage")]);
+  expect(existsSync(join(home, "knowledge", "agentvillage"))).toBe(false);
+  expect(existsSync(join(home, "knowledge", "edge-india", "index.md"))).toBe(true);
+  expect(existsSync(join(home, "knowledge-prev", "edge-india", "index.md"))).toBe(true);
+  const index = readFileSync(join(home, "knowledge", "index.md"), "utf8");
+  expect(index).toContain("- edge-india: 1 file");
+  expect(index).not.toContain("agentvillage");
+});

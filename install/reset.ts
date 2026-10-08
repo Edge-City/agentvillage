@@ -24,6 +24,7 @@ import {
   targetWorkspace,
 } from "./paths";
 import { RECALL_SKILL, resetRecall } from "./install_recall";
+import { describeResult, regenerateKnowledgeIndex } from "./knowledge-index";
 
 const TARGET_HOME = targetWorkspace();
 
@@ -165,15 +166,29 @@ function removeProjectFiles(wipeUser: boolean): void {
  *   `MEMORY.md` at the top level is the landing's, removed by
  *   `removeProjectFiles`). Both are in the memory snapshot (DATA-82), so
  *   leaving either would carry the previous user into the next backup.
+ * - `$HERMES_HOME/knowledge/agentvillage/`: what the previous user shared on
+ *   the Context page (CX1, docs/design/context-sources.md §6); then
+ *   `knowledge/index.md` is regenerated (a failure there is a warning).
+ *   `knowledge/edge-india/` (public) and `knowledge-prev/` stay.
  */
 export function removeWipeUserState(home: string = hermesHome()): string[] {
   const removed: string[] = [];
-  const targets = [join(home, "av-events"), join(home, "memories", "USER.md"), join(home, "memories", "MEMORY.md")];
+  const targets = [
+    join(home, "av-events"),
+    join(home, "memories", "USER.md"),
+    join(home, "memories", "MEMORY.md"),
+    join(home, "knowledge", "agentvillage"),
+  ];
   for (const target of targets) {
     if (!existsSync(target)) continue;
     rmSync(target, { recursive: true, force: true });
     console.log(`→ removed ${target}`);
     removed.push(target);
+  }
+  try {
+    console.log(`→ ${describeResult(regenerateKnowledgeIndex(home))}`);
+  } catch {
+    console.warn("  warning: could not regenerate knowledge/index.md");
   }
   return removed;
 }
