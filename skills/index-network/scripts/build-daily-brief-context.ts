@@ -306,11 +306,15 @@ export interface BriefUserModel {
    * (interestTags only pick events and notes).
    */
   statedInterests?: string[];
-  /** Where interestTags came from: the profile, the memory files (event picks and notes only), or nowhere. */
+  /**
+   * Where interestTags came from: the profile, the Context tags' stated items (when the profile
+   * states none; proactive.ts contextInterestsFor), the memory files (event picks and notes only),
+   * or nowhere.
+   */
   interestSource?: InterestSource;
 }
 
-export type InterestSource = "profile" | "memory" | "none";
+export type InterestSource = "profile" | "context" | "memory" | "none";
 
 export interface DailyBriefContext {
   date: string;
@@ -355,7 +359,7 @@ export interface DailyBriefContext {
     dreamingFresh?: boolean;
     warnings: string[];
     interestTags: string[];
-    /** DATA-372: profile (stated interests), memory (extracted from the memory files) or none. */
+    /** DATA-372: profile (stated interests), context (the Context tags' stated items), memory (extracted from the memory files) or none. */
     interestSource?: InterestSource;
   };
 }
@@ -516,7 +520,10 @@ export function dedupeInterests(interests: readonly unknown[] | undefined): stri
  * events and notes) come from those words alone; the memory files are not
  * searched for tags. Only when the profile states none are the tags extracted
  * from the memory files, and then they only pick events and notes: the brief
- * names no interest (proactive.ts interestsView, DATA-372 B1).
+ * names no interest (proactive.ts interestsView, DATA-372 B1). The caller may
+ * pass the Context tags' stated items in the profile's place when the profile
+ * states none (`statedFrom` "context"); they are then treated exactly as
+ * stated interests, and the source says which.
  */
 /**
  * The village tags the profile's stated interests suggest, for picking events:
@@ -535,10 +542,11 @@ export function statedInterestTags(stated: readonly string[]): string[] {
 export function resolveInterests(
   stated: readonly unknown[] | undefined,
   memoryText: string,
+  statedFrom: "profile" | "context" = "profile",
 ): { statedInterests: string[]; interestTags: string[]; interestSource: InterestSource } {
   const statedInterests = dedupeInterests(stated);
   if (statedInterests.length > 0) {
-    return { statedInterests, interestTags: statedInterestTags(statedInterests), interestSource: "profile" };
+    return { statedInterests, interestTags: statedInterestTags(statedInterests), interestSource: statedFrom };
   }
   const interestTags = extractInterestTags(memoryText);
   return { statedInterests, interestTags, interestSource: interestTags.length > 0 ? "memory" : "none" };
@@ -1261,12 +1269,14 @@ export async function buildDailyBriefContext(options: {
   userFiles?: string[];
   /** DATA-372: the profile's interests (av-profile.json); when not empty, the memory files are not searched for tags. */
   statedInterests?: string[];
+  /** Where statedInterests came from: the profile (default), or the Context tags when the profile states none. */
+  statedFrom?: "profile" | "context";
 } = {}): Promise<DailyBriefContext> {
   const date = options.date ?? villageDate();
   const warnings: string[] = [];
   const userFiles = options.userFiles ?? ["USER.md", "MEMORY.md", `memory/${date}.md`];
   const interestText = (await Promise.all(userFiles.map(readIfExists))).join("\n");
-  const { statedInterests, interestTags, interestSource } = resolveInterests(options.statedInterests, interestText);
+  const { statedInterests, interestTags, interestSource } = resolveInterests(options.statedInterests, interestText, options.statedFrom);
   const userModel: BriefUserModel = {
     phrases: extractUserModelPhrases(interestText, interestTags),
     interestTags,

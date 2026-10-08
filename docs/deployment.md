@@ -269,10 +269,26 @@ id, schedule or prompt text, so an update finds every job up to date.
 | Job | Time (Hermes's zone, which must be IST; staggered) | Action | What the model is given |
 |---|---|---|---|
 | Edge — digest prepare | 02:00 | `prefetch` | Nothing: the one `no_agent` job of the six (the knowledge sync, "Edge India knowledge" below, is the other `no_agent` job). It writes the brief's context to `av-events/proactive/brief-context.json` and is always silent. |
-| Edge — daily digest | 08:00 | `brief` | Dates, weather, organiser announcements, today's schedule facts, the resident's interests and notes, the count of eligible new matches, up to three cleaned names, the Connections link, the count of things waiting in their approvals. |
-| Edge — opportunity drop (midday), (evening) | 12:00, 17:00 | `drop-midday`, `drop-evening` | One person: cleaned name, profile and message links. |
-| Edge — negotiation summary | 14:00 | `negotiation` | The resident's own signals; cleaned names with their links. |
-| Edge — evening questions | 19:00 | `evening` | One person (cleaned name, links), or the last-day closeout question. |
+| Edge — daily digest | 08:00 | `brief` | Dates, weather, organiser announcements, today's schedule facts, the resident's interests (the profile's; when it states none, what they stated on their Context page) and notes, their stated Preferences, the count of eligible new matches, up to three cleaned names, the Connections link, the count of things waiting in their approvals. |
+| Edge — opportunity drop (midday), (evening) | 12:00, 17:00 | `drop-midday`, `drop-evening` | One person: cleaned name, profile and message links; the resident's stated Preferences. |
+| Edge — negotiation summary | 14:00 | `negotiation` | The resident's own signals; cleaned names with their links; their stated Preferences. |
+| Edge — evening questions | 19:00 | `evening` | One person (cleaned name, links, and the resident's stated Preferences), or the last-day closeout question. |
+
+**The Context tags.** The interests and Preferences above come from the entry
+the Agent Village app keeps in `$HERMES_HOME/memories/USER.md`, headed
+`[Context tags, kept in the Agent Village app]`
+(`skills/index-network/scripts/context-tags.ts`). Only items the resident
+stated are read: marked `setup`, `you`, `telegram` or `chat`, or unmarked;
+never a `(guess)` item, the `Summary:` line, or anything under
+`Removed by you:`. The brief takes Here to, Curious about, Working on and
+Wants to meet (each whole, at most 60 characters, 12 in all) as
+`you.interests` only when `av-profile.json` states no interests; the
+Preferences (at most 4) reach the brief, both drops, the follow-up and the
+evening reminder about a person as `you.preferences`, never the outcome ask
+or the closeout question, which go out word for word. Each item takes the
+stricter cleaner and the scan. Without the file or the entry every Script
+Output is exactly what it was before. The resident's about me from
+`av-profile.json` still reaches none of these jobs.
 
 The rules the trigger holds:
 - **No third-party free text reaches the model.** Only dates, the resident's

@@ -2,9 +2,11 @@
  * P1-fix S5: every proactive agent job's Script Output names the agent: `agentName` is the
  * resident's nickname from $HERMES_HOME/av-profile.json, read through the agent-profile skill's
  * reader (the control plane's whole nickname rule), else "Edge". Each job's prompt says to use it.
- * Only the name reaches these jobs: never the resident's about me or preferences. (DATA-372: the
- * morning brief alone also gets the interests the resident stated, as `you.interests`;
- * digest-interests.test.ts covers that path. The fake context here carries none.)
+ * Only the name reaches these jobs from that file: never the resident's about me or its tone,
+ * brevity and language. (DATA-372: the morning brief alone also gets the interests the resident
+ * stated, as `you.interests`; digest-interests.test.ts covers that path. The fake context here
+ * carries none. The Preferences they stated on their Context page arrive as `you.preferences`:
+ * context-tags.test.ts.)
  *
  *   bun test skills/index-network/scripts/tests/proactive-agent-name.test.ts
  */

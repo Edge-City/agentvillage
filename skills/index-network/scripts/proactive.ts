@@ -71,6 +71,7 @@ import { basename, dirname, join } from "node:path";
 import { approvalsWaiting } from "./approvals-waiting";
 import { askQuestions } from "./ask-questions";
 import { acceptLink, type BriefOpportunity, type DailyBriefContext, buildDailyBriefContext, villageDate } from "./build-daily-brief-context";
+import { contextInterests, contextPreferences, readContextTags } from "./context-tags";
 import { OPPORTUNITY_DELIVERY_KEY, deliveryLogChanged, pruneDeliveryLog, readDeliveryLog, recordShowings } from "./delivery-state";
 import { dropOpportunity } from "./drop-opportunity";
 import { cleanName, cleanText, cleanTitle, connectionsUrl, cronScanHit, envOrDotenv } from "./proactive-text";
@@ -148,9 +149,12 @@ export const STATE_HEALED = "state-renamed-aside";
  * Output: the resident's nickname from `$HERMES_HOME/av-profile.json`, read through the
  * agent-profile skill's own reader (the control plane's whole nickname rule, applied again), else
  * Edge. A nickname that would trip the cron scanner is Edge too (it would otherwise silence the
- * whole message). Only the name: the resident's about me and preferences are not given to these
- * jobs; the morning brief alone also gets the interests they stated (statedInterestsFor, DATA-372).
- * Never throws; a missing or bad file is Edge (one stderr line for a bad one).
+ * whole message). Only the name from that file: the resident's about me and its tone, brevity and
+ * language are not given to these jobs (P1 left them to a follow-up). The morning brief also gets
+ * the interests they stated (statedInterestsFor, DATA-372, else contextInterestsFor), and every
+ * job that writes to them about a person, and the brief, gets the Preferences they stated on their
+ * Context page (preferencesFor). Never throws; a missing or bad file is Edge (one stderr line for
+ * a bad one).
  */
 export function agentNameFor(home: string): string {
   try {
@@ -176,6 +180,25 @@ export function statedInterestsFor(home: string): string[] {
   } catch {
     return [];
   }
+}
+
+/**
+ * The brief's interests when av-profile.json states none: the stated items of the Context tags
+ * entry in `$HERMES_HOME/memories/USER.md` (context-tags.ts contextInterests: Here to, Curious
+ * about, Working on, Wants to meet; never a guess or a removed item). Empty without the entry, and
+ * the brief then behaves as before. Never throws.
+ */
+export function contextInterestsFor(home: string): string[] {
+  return contextInterests(readContextTags(home));
+}
+
+/**
+ * How the resident asked to be talked to: the stated items of the Context tags' Preferences
+ * (context-tags.ts contextPreferences), raw; withPreferences and briefView clean them. Empty
+ * without the entry. Never throws.
+ */
+export function preferencesFor(home: string): string[] {
+  return contextPreferences(readContextTags(home));
 }
 
 /** The Script Output of an agent job: the agent's name first, then the job's own view. */
@@ -502,11 +525,13 @@ export function withPrefetchedIndex(context: DailyBriefContext, prefetched: Dail
 
 /**
  * The brief's `you.interests` (DATA-372): the interests the resident stated in their profile,
- * exactly (in their order, deduplicated after cleaning), and nothing else. With none stated the
- * list is empty and the brief names no interest (B1): tags extracted from the memory files only
- * pick `forYourInterests` and the notes, never what the brief names. Stated interests are text the
- * resident (or anything with access to the sandbox) wrote, so they take the stricter cleaner, with
- * room for the spaces it adds (the reader already caps each at 40 code points; S2).
+ * exactly (in their order, deduplicated after cleaning), and nothing else; when the profile states
+ * none, the items they stated on their Context page (contextInterestsFor), the same way. With none
+ * stated in either the list is empty and the brief names no interest (B1): tags extracted from the
+ * memory files only pick `forYourInterests` and the notes, never what the brief names. Stated
+ * interests are text the resident (or anything with access to the sandbox) wrote, so they take the
+ * stricter cleaner, with room for the spaces it adds (the profile reader caps each at 40 code
+ * points, the Context tags reader at 60; S2).
  */
 export const STATED_INTEREST_MAX = 60;
 
@@ -522,6 +547,35 @@ function interestsView(context: DailyBriefContext, w: Withheld): string[] {
   });
 }
 
+/** Most code points of one stated preference handed to the model (the app's own extractor keeps an item to 120). */
+export const PREFERENCE_MAX = 120;
+
+/**
+ * The resident's stated Preferences (preferencesFor), cleaned for `you.preferences`: their own
+ * words, but read from a memory file that anything with access to the sandbox can edit, so the
+ * stricter cleaner and the scan, as for the notes; deduplicated after cleaning. Data, never
+ * instructions: the prompts use them only for tone, length, timing and what to leave out.
+ */
+function preferencesList(raw: readonly string[], w: Withheld): string[] {
+  const seen = new Set<string>();
+  return raw.flatMap((item) => w.title(item, PREFERENCE_MAX) ?? []).filter((item) => {
+    const key = item.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/**
+ * A drop's, the follow-up's or the evening reminder's view with `you.preferences` added, only when
+ * the resident stated any that clean: without them the view is exactly what it was.
+ */
+export function withPreferences(view: Record<string, unknown>, raw: readonly string[]): { view: Record<string, unknown>; withheld: number } {
+  const w = new Withheld();
+  const preferences = preferencesList(raw, w);
+  return { view: preferences.length ? { ...view, you: { preferences } } : view, withheld: w.count };
+}
+
 /**
  * The morning brief's Script Output. The Index part is a count, at most
  * three cleaned names, and the Connections link; no card text, no person
@@ -530,9 +584,10 @@ function interestsView(context: DailyBriefContext, w: Withheld): string[] {
  */
 export function briefView(
   context: DailyBriefContext,
-  { link, approvals, portal = null }: { link: string; approvals: number; portal?: string | null },
+  { link, approvals, portal = null, preferences = [] }: { link: string; approvals: number; portal?: string | null; preferences?: readonly string[] },
 ): { view: Record<string, unknown>; withheld: number; shownIds: string[] } {
   const w = new Withheld();
+  const stated = preferencesList(preferences, w);
   const named = (context.connectionOpportunities ?? [])
     .flatMap((card: BriefOpportunity) => {
       const name = w.name(card.name);
@@ -559,6 +614,7 @@ export function briefView(
       interests: interestsView(context, w),
       // Read from the agent's memory files, which can hold text that came from someone else: the stricter cleaner.
       notes: (context.userModel?.phrases ?? []).slice(0, 3).flatMap((phrase) => w.title(phrase, 120) ?? []),
+      ...(stated.length ? { preferences: stated } : {}),
     },
     connections: {
       newMatchCount: count,
@@ -653,12 +709,20 @@ type Decision =
     }
   | { silent: string; withheld?: number; detail?: string };
 
+/**
+ * The brief's context options. The interests are the profile's (DATA-372); when it states none,
+ * the Context tags' stated items (contextInterestsFor), which then also pick the events in place of
+ * tags from the memory files. Neither: the memory files, as before.
+ */
 function contextOptions(home: string, date: string, stateFile = stateFilePath(home)) {
+  const profile = statedInterestsFor(home);
+  const fromContext = profile.length ? [] : contextInterestsFor(home);
   return {
     date,
     stateFile,
     userFiles: [join(home, "USER.md"), join(home, "MEMORY.md"), join(home, "memory", `${date}.md`)],
-    statedInterests: statedInterestsFor(home),
+    statedInterests: profile.length ? profile : fromContext,
+    ...(fromContext.length ? { statedFrom: "context" as const } : {}),
   };
 }
 
@@ -666,7 +730,7 @@ async function briefAction(run: Run): Promise<Decision> {
   const build = run.options.buildContext ?? buildDailyBriefContext;
   const context = withPrefetchedIndex(await build(contextOptions(run.home, run.date, run.stateFile)), readPrefetch(run.home, run.date));
   const approvals = (run.options.approvals ?? approvalsWaiting)(run.home);
-  const { view, withheld, shownIds } = briefView(context, { link: connectionsUrl(run.home), approvals, portal: portalBase(run.home) });
+  const { view, withheld, shownIds } = briefView(context, { link: connectionsUrl(run.home), approvals, portal: portalBase(run.home), preferences: preferencesFor(run.home) });
   return { view, withheld, record: (state) => recordBriefShowings(state, shownIds, run.date, villageDate()) };
 }
 
@@ -679,7 +743,9 @@ async function dropAction(run: Run): Promise<Decision> {
   }
   if ("silent" in result) return { silent: result.reason };
   const { view, withheld } = dropView(run.date, result.opportunity);
-  return view ? { view, withheld } : { silent: "name-withheld", withheld };
+  if (!view) return { silent: "name-withheld", withheld };
+  const styled = withPreferences(view, preferencesFor(run.home));
+  return { view: styled.view, withheld: withheld + styled.withheld };
 }
 
 /** The av-events plugin's spellings of "off" (`_core.py` DISABLED_VALUES), matched trimmed and case-insensitive. */
@@ -787,15 +853,19 @@ async function eveningAction(run: Run): Promise<Decision> {
   const result = await (run.options.evening ?? askQuestions)({ date: run.date, stateFile: run.stateFile });
   if ("silent" in result) return { silent: result.reason, detail, ...(askWithheld ? { withheld: askWithheld } : {}) };
   const { view, withheld } = eveningView(run.date, result);
-  const total = withheld + askWithheld;
-  return view ? { view, withheld: total, detail } : { silent: "name-withheld", withheld: total, detail };
+  if (!view) return { silent: "name-withheld", withheld: withheld + askWithheld, detail };
+  // The reminder about a person only: the closeout question, like the outcome ask, goes out word for word.
+  const styled = "person" in view ? withPreferences(view, preferencesFor(run.home)) : { view, withheld: 0 };
+  return { view: styled.view, withheld: withheld + askWithheld + styled.withheld, detail };
 }
 
 async function negotiationAction(run: Run): Promise<Decision> {
   const result = await (run.options.followUp ?? followUp)({ date: run.date, stateFile: run.stateFile });
   if ("silent" in result) return { silent: result.reason };
   const { view, withheld } = followUpView(run.date, result);
-  return view ? { view, withheld } : { silent: "name-withheld", withheld };
+  if (!view) return { silent: "name-withheld", withheld };
+  const styled = withPreferences(view, preferencesFor(run.home));
+  return { view: styled.view, withheld: withheld + styled.withheld };
 }
 
 const AGENT_ACTIONS: Record<AgentAction, (run: Run) => Promise<Decision>> = {
