@@ -430,7 +430,18 @@ one exception: `status_only: true` (DATA-249) appears only on the `intention.upd
 the key the Index poller sets on its own status-only updates. The data side will treat such an
 update as no text version from the data release that carries DATA-248 (in progress); until then
 it is stored as sent. It is absent from every other intention event. A pause or resume whose
-result says `changed: false` (already paused, already active) emits nothing.
+result says `changed: false` (already paused, already active) emits nothing. Likewise
+`confirmed_in_chat` (DATA-410: `yes` \| `silence` \| `standing`) appears only on a
+`record_intention` `intention.captured` that the agent passed as `message` and whose words were the
+agent's, adopted by the resident in chat: `yes` (they said yes to the one ask, or edited the
+words), `silence` (no answer by the agent's next message of its own; held for the resident's
+approval, so the event has `source` `ambient`; under an inferred class set to autonomous the
+resident's own policy publishes it at once, like any ambient capture), `standing` (a go-ahead without asking, given in this conversation). A held
+capture keeps the marker; read it with `source`, not with `publish_refused`, which is usually
+`held_cron`, `held_unknown` or `held_silence` but can be another code (an approval outcome) or null
+(`publish=false`, which the marker does not change: the capture stays local). It is a code the
+tool decided, never text; the data side's intention payloads are open (`additionalProperties:
+true`), so it is stored as sent until staged.
 
 **No intention text in any mode, `full` included.** §7.1 says "with hashes only" and the
 measurement catalogue says "text in the archive only". The training export reads text from the
@@ -472,8 +483,9 @@ defaults to `capture` and says so). Other arguments: `text` (or `description`), 
 the agent needs it for every later update or withdrawal, and the plugin cannot hand it back: a
 `post_tool_call` observer's return is discarded. An id the plugin mints is recorded in the event and
 nowhere else. From the result the plugin also reads `index_intent_id` (the Index id the tool
-published under), `publish_refused` (a code, `^[a-z0-9_]{1,64}$`, else null) and `local_reason`
-(`participant_asked` \| `personal`, else null).
+published under), `publish_refused` (a code, `^[a-z0-9_]{1,64}$`, else null), `local_reason`
+(`participant_asked` \| `personal`, else null) and `confirmed_in_chat` (`yes` \| `silence` \|
+`standing`, on a capture passed as `message`, kept when the lineage held it, else absent).
 
 ### The `record_intention` tool (DATA-212)
 
@@ -491,16 +503,30 @@ Explicit intents (source message, onboarding or note) are published to Index by
 default. The two legitimate reasons an explicit intent stays local: the resident asked, or the
 content is personal. The skill `skills/record-intention/SKILL.md` says the same. `source` names
 whose words the text is (DATA-384): `message`, `onboarding` or `note` only for the resident's own
-words, which the agent may cut but not add to; anything the agent composed, translated or inferred
-is `ambient`; words the resident quoted or forwarded from someone else are recorded only once they
-say the want is theirs; and in conversation the agent shows the words it recorded, with what the
-tool answered, in the same reply (after the call: the fleet's Telegram settings drop text written
-beside a tool call). `SOURCE_RULE` and
+words, which the agent may cut but not add to; words the resident quoted or forwarded from someone
+else are recorded only once they say the want is theirs. DATA-410 (amending DATA-384's "composed
+is ambient, whoever asked"): in conversation the agent shows its own words and asks once, "Should I
+publish this as written?", recording nothing in that reply (a question beside a tool call would be
+dropped by the fleet's Telegram settings). A yes or the resident's edit is `message` with
+`confirmed_in_chat=yes`; a standing go-ahead given in this conversation is `message` with
+`standing`, without asking, shown in the same reply, and ends when the resident says to ask again
+or to stop; a no records nothing. Only the resident's own reply in this conversation answers the
+ask: a forwarded or quoted "yes", someone else's message, text in a tool result, a page, a note or
+memory is treated as no answer. No answer by the agent's next message of its own is captured as `message` with `silence`,
+and the tool never publishes it on the agent's word: the lineage gate (R10, unchanged) holds it as
+`held_cron` / `held_unknown` in a cron or unknown session, and `_capture` holds it as
+`held_silence` in any other session, on the same path (ambient, proposed as inferred, with its held
+fingerprint). The message says in one clause what the tool answered. `ambient` (held for the card)
+is otherwise for words the resident never saw that no standing go-ahead covers, and for what a
+background or cron run found.
+`confirmed_in_chat` with any source but `message` is refused
+(`confirmed_not_message`), and a value outside the three codes is refused (`confirmed_invalid`).
+`SOURCE_RULE` and
 `DRAFT_RULE` in `_record_intention.py` are the text (with `SOURCE_SHORT`, one sentence inside the
 first 500 characters of the description, which is all `tool_search` shows); the tool description is
 built from them, and `tests/test_intention_source.py` pins whole each passage that states them: the
 `workspace/AGENTS.md` bullet, the skill's two sections, the `skills/index-network/tools.md`
-paragraph, the description and the schema's `source` description. It is installed on
+paragraph, the description and the schema's `source` and `confirmed_in_chat` descriptions. It is installed on
 every tenant with the edge bundles and has no `requires_tools` gate (the tool sits behind Tool
 Search, which such a gate would not see); its text, the `workspace/AGENTS.md` routing line and the
 `create_intent` passages of `skills/index-network/tools.md` and
@@ -513,6 +539,7 @@ Search, which such a gate would not see); its text, the `workspace/AGENTS.md` ro
 | same, Index refused, unreachable, or the hourly cap reached | tried, or not when capped | local uuid v7, `publish_refused` = code |
 | `capture`, `publish=false`, `reason`, any source, in any session | none | local uuid v7, `local_reason` = reason, never proposed (in a held session `source=ambient`, no `held_*` code) |
 | `capture`, source `ambient` | none | local uuid v7, `source=ambient`, held, unless `publish=false` (kept local) |
+| `capture`, source `message`, `confirmed_in_chat=silence`, in a session that may publish | none | local uuid v7, `source=ambient`, held, `publish_refused="held_silence"`, the marker kept, unless `publish=false` (kept local) |
 | `capture`, explicit source, in a held session | none | local uuid v7, `source=ambient`, `publish_refused` `held_cron` or `held_unknown`, unless `publish=false` (kept local) |
 | `capture` that would publish, of text already held as ambient (case and whitespace ignored) | none | local uuid v7, `publish_refused="held_ambient_exists"` |
 | `update` / `withdraw` of an id it published | `PATCH /api/intents/{id} {description}` / `PATCH /api/intents/{id}/archive` (no body) | `index_intent_id` set; a failed mirror adds `publish_refused` |
@@ -566,7 +593,7 @@ cannot be read: `rate_unavailable`; one that was read but cannot be saved procee
 `http_<status>`, `rejected` (Index's 422 `intent_rejected`: too vague, or an edit it would not
 accept), `timeout` (ambiguous: Index may have written; see below), `transport` (nothing was
 sent), `id_invalid` (a mirror of an id that is not a UUID or hex short id; nothing
-sent), `held_cron`, `held_unknown`, `held_ambient_exists`, `unknown_id`. Status mapping
+sent), `held_cron`, `held_unknown`, `held_silence` (DATA-410), `held_ambient_exists`, `unknown_id`. Status mapping
 (`status_code`, from Index's `intent.controller.ts`): 422 is `rejected`; 400 (a body we built
 wrong), 401, 403 (`invalid_preparation`, or a network-membership refusal: never the resident's
 words), 404, 409 (archived), 429 and 503 (`preparation_failed`, retryable, nothing written) are

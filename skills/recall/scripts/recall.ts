@@ -3,9 +3,9 @@
  * Tenant-local recall index (DATA-83).
  *
  * A SQLite FTS5 index over the agent's own memory — daily notes
- * (`memory/YYYY-MM-DD.md`), long-term memory (`MEMORY.md`) and the owner's
- * private conversations in the local Hermes session store — queried with
- * plain BM25. No LLM, no embeddings, no network. Everything stays inside the
+ * (`memory/YYYY-MM-DD.md`), long-term memory (`MEMORY.md`), what services
+ * wrote for it (`knowledge/<provider>/*.md`, CX1) and the owner's private
+ * conversations in the local Hermes session store — queried with plain BM25. No LLM, no embeddings, no network. Everything stays inside the
  * sandbox.
  *
  *   bun recall.ts rebuild [--home DIR] [--index FILE] [--state-db FILE]
@@ -79,8 +79,8 @@ export const NO_SESSION = "no_session";
 
 export type SessionVerdict = "main" | typeof REFUSED | typeof NO_SESSION;
 
-export type Kind = "daily_note" | "long_term" | "session";
-export type DateSource = "filename" | "inline" | "mtime" | "message";
+export type Kind = "daily_note" | "long_term" | "knowledge" | "session";
+export type DateSource = "filename" | "inline" | "mtime" | "message" | "saved_at";
 
 export interface Paths {
   home: string;
@@ -512,6 +512,75 @@ interface FileSource {
   filenameDate: string | null;
 }
 
+/** A plain directory (lstat: never a symlink), or false. */
+function isRealDir(path: string): boolean {
+  try {
+    const st = lstatSync(path);
+    return st.isDirectory() && !st.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `knowledge/<provider>/*.md` (docs/design/context-sources.md §4): provider
+ * directories directly under `knowledge/`, `.md` files directly inside them,
+ * dot- and `_`-prefixed names skipped at both levels. `knowledge/` itself and
+ * each provider directory must be a real directory (a symlink is refused, never
+ * followed); each file gets the same symlink, hard-link and size refusals as
+ * every other file source (`syncFiles`). `knowledge/index.md` is not in a
+ * provider directory, so it is never indexed.
+ */
+export function listKnowledgeSources(home: string): FileSource[] {
+  const out: FileSource[] = [];
+  const root = join(home, "knowledge");
+  if (!isRealDir(root)) return out;
+  const skipped = (name: string) => name.startsWith(".") || name.startsWith("_");
+  // An unreadable or vanishing directory (mode 000, a swap or a reset in flight) is skipped,
+  // as the memory/ listing does: knowledge must never take MEMORY.md search down with it.
+  const entries = (dir: string): string[] => {
+    try {
+      return readdirSync(dir).sort();
+    } catch {
+      return [];
+    }
+  };
+  for (const provider of entries(root)) {
+    if (skipped(provider) || !isRealDir(join(root, provider))) continue;
+    for (const name of entries(join(root, provider))) {
+      if (skipped(name) || !name.endsWith(".md")) continue;
+      const rel = `knowledge/${provider}/${name}`;
+      out.push({ sourceId: `file:${rel}`, kind: "knowledge", abs: join(root, provider, name), rel, filenameDate: null });
+    }
+  }
+  return out;
+}
+
+/**
+ * The local date of a knowledge file's front matter `saved_at` (§4: the
+ * values are JSON strings), or null when the file has no front matter, no
+ * `saved_at`, or one that is not a timestamp.
+ */
+export function frontMatterSavedAt(text: string): string | null {
+  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/, 64);
+  if (lines[0] !== "---") return null;
+  for (const line of lines.slice(1)) {
+    if (line === "---") return null;
+    const m = /^saved_at:\s*(.+?)\s*$/.exec(line);
+    if (!m) continue;
+    let value: unknown = m[1];
+    try {
+      value = JSON.parse(m[1]!);
+    } catch {
+      // not a JSON string: taken as written
+    }
+    if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}(?:T|$)/.test(value)) return null;
+    const ms = Date.parse(value);
+    return Number.isNaN(ms) ? null : localDate(ms);
+  }
+  return null;
+}
+
 export function listMarkdownSources(home: string): FileSource[] {
   const out: FileSource[] = [];
   const longTerm = join(home, "MEMORY.md");
@@ -530,6 +599,7 @@ export function listMarkdownSources(home: string): FileSource[] {
     const rel = `memory/${name}`;
     out.push({ sourceId: `file:${rel}`, kind: "daily_note", abs: join(memoryDir, name), rel, filenameDate: m[1]! });
   }
+  out.push(...listKnowledgeSources(home));
   return out;
 }
 
@@ -537,8 +607,13 @@ function chunkDate(
   chunk: Chunk,
   source: FileSource,
   mtimeMs: number,
+  savedAt: string | null,
 ): { date: string; dateSource: DateSource } {
   if (source.filenameDate) return { date: source.filenameDate, dateSource: "filename" };
+  // A knowledge file is dated by when it was saved, never by a date in its text.
+  if (source.kind === "knowledge") {
+    return savedAt ? { date: savedAt, dateSource: "saved_at" } : { date: localDate(mtimeMs), dateSource: "mtime" };
+  }
   const inline = ISO_DATE_RE.exec(chunk.body) ?? (chunk.heading ? ISO_DATE_RE.exec(chunk.heading) : null);
   if (inline) return { date: inline[1]!, dateSource: "inline" };
   return { date: localDate(mtimeMs), dateSource: "mtime" };
@@ -598,8 +673,9 @@ function syncFiles(db: Database, home: string, pass: Pass): void {
       }
       pass.deleted += deleteSource(db, source.sourceId);
       const text = bytes.toString("utf8");
+      const savedAt = source.kind === "knowledge" ? frontMatterSavedAt(text) : null;
       const pending = chunkText(text).map((chunk) => {
-        const { date, dateSource } = chunkDate(chunk, source, mtimeMs);
+        const { date, dateSource } = chunkDate(chunk, source, mtimeMs, savedAt);
         return {
           kind: source.kind,
           path: source.rel,

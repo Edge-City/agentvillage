@@ -1584,3 +1584,52 @@ def test_data311_the_lineage_still_downgrades_a_claimed_stated_source(tctx, serv
     assert [p["flags"]["--class"] for p in serve.proposals()] == [INFERRED]
     assert index.requests == []
     assert "local_reason" not in entry(mods, out["intention_id"])
+
+
+# --------------------------------------------------------------------------
+# DATA-410 refutation 2 (M15): a held marker capture is proposed as inferred
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("session,value", [
+    ("cron_job_20261012", "yes"), ("cron_job_20261012", "standing"), ("cron_job_20261012", "silence"),
+    ("never-seen", "yes"), (SESSION, "silence"),
+])
+def test_m15_a_held_marker_capture_goes_on_the_card_as_the_agents_words(tctx, serve, index, mods, av, plugin,
+                                                                        session, value):
+    """Refuter probe M15: with the stated class autonomous (the day-one
+    policy), a held capture proposed as stated would publish at once. It is
+    proposed under the inferred class, as ambient, and waits for the tap."""
+    assert serve.autonomy[STATED_CLASS] == "autonomous" and serve.autonomy[INFERRED] == "manual"
+    out = call(tctx, {"text": TEXT, "source": "message", "confirmed_in_chat": value}, session=session)
+    assert out["success"] is True and out["published"] is False and out["held"] is True
+    assert out["source"] == "ambient" and out["approval_state"] == "requested"
+    [p] = serve.proposals()
+    assert p["flags"]["--class"] == INFERRED
+    assert p["flags"]["--key"] == f"{INFERRED}:{out['intention_id']}"
+    assert index.requests == []
+    [event] = events(av, plugin)
+    assert event["payload"]["source"] == "ambient" and event["payload"]["confirmed_in_chat"] == value
+    assert entry(mods, out["intention_id"])["source"] == "ambient"
+
+
+def test_a_confirmed_yes_from_telegram_is_stated_and_publishes_under_the_stated_policy(tctx, serve, index, av, plugin):
+    out = call(tctx, {"text": STATED, "source": "message", "confirmed_in_chat": "yes"})
+    assert out["published"] is True and out["source"] == "message" and out["confirmed_in_chat"] == "yes"
+    assert {p["flags"].get("--class") for p in serve.proposals()} == {STATED_CLASS}
+    assert events(av, plugin)[0]["payload"]["confirmed_in_chat"] == "yes"
+
+
+def test_sf2_with_approvals_on_a_held_silence_keeps_its_fingerprint(tctx, serve, index, mods):
+    """Recheck SF-2 (mutant R5): with approvals on, the held_silence capture's
+    fingerprint is stored, so the same words captured later in chat as
+    message + yes are held_ambient_exists: no Index request, no second card."""
+    held = call(tctx, {"text": TEXT, "source": "message", "confirmed_in_chat": "silence"})
+    assert held["publish_refused"] == "held_silence" and held["approval_state"] == "requested"
+    again = call(tctx, {"text": "  " + TEXT.upper() + " ", "source": "message", "confirmed_in_chat": "yes"},
+                 tool_call_id="c2")
+    assert again["published"] is False and again["publish_refused"] == "held_ambient_exists"
+    assert index.requests == []
+    [p] = serve.proposals()
+    assert p["flags"]["--class"] == INFERRED and p["flags"]["--key"] == f"{INFERRED}:{held['intention_id']}"
+

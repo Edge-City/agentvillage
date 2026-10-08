@@ -20,6 +20,7 @@ import {
   currentSetDir,
   exitCode,
   documentPathValid,
+  knowledgeIndexCandidates,
   parseExtraHosts,
   previousSetDir,
   runKnowledgeSync,
@@ -282,9 +283,9 @@ describe("a full sync", () => {
     expect(state.checked_at).toBe("2026-10-11T03:00:00.000Z");
     expect(result.bytes).toBe(state.bytes);
     expect(existsSync(previousSetDir(home))).toBe(false);
-    expect(knowledgeEntries()).toEqual(["edge-india"]);
+    expect(knowledgeEntries()).toEqual(["edge-india", "index.md"]); // CX1: the sync regenerates knowledge/index.md after a swap;
     const [line] = logLines();
-    expect(line).toEqual({ v: 1, event: "knowledge_sync", status: "ok", reason: "written", files: 3, bytes: result.bytes, sha256: sha, fetched_at: "2026-10-11T03:00:00.000Z" });
+    expect(line).toEqual({ v: 1, event: "knowledge_sync", status: "ok", reason: "written", files: 3, bytes: result.bytes, sha256: sha, fetched_at: "2026-10-11T03:00:00.000Z", index: "written" });
     expect(JSON.stringify(line)).not.toContain("http");
   });
 
@@ -299,7 +300,7 @@ describe("a full sync", () => {
     expect(tree(currentSetDir(home))["wiki-content.md"]).toBe("# Wiki v2\n");
     expect(tree(previousSetDir(home))).toEqual(first);
     expect(previousSetDir(home)).toBe(join(home, "knowledge-prev", "edge-india"));
-    expect(knowledgeEntries()).toEqual(["edge-india"]);
+    expect(knowledgeEntries()).toEqual(["edge-india", "index.md"]);
   });
 
   test("a document the manifest drops leaves the current set (it stays in prev)", async () => {
@@ -430,7 +431,7 @@ describe("any failure keeps the last good set byte for byte", () => {
     expect(result).toMatchObject({ status: "failed", reason });
     expect(tree(currentSetDir(home))).toEqual(before);
     expect(existsSync(previousSetDir(home))).toBe(false);
-    expect(knowledgeEntries()).toEqual(["edge-india"]);
+    expect(knowledgeEntries()).toEqual(["edge-india", "index.md"]);
     expect(logLines().at(-1)).toMatchObject({ event: "knowledge_sync", status: "failed", reason });
   }
 
@@ -600,7 +601,7 @@ describe("crash safety and one run at a time", () => {
     const result = await runKnowledgeSync(opts());
     expect(result).toMatchObject({ status: "unchanged", reason: "etag" });
     expect(tree(currentSetDir(home))).toEqual(good);
-    expect(knowledgeEntries()).toEqual(["edge-india"]);
+    expect(knowledgeEntries()).toEqual(["edge-india", "index.md"]);
   });
 
   test("a held lock skips the run without touching the set (exit 0, logged); a lock older than 3 minutes is taken over", async () => {
@@ -870,3 +871,86 @@ function copyDir(from: string, to: string): void {
     else copyFileSync(source, join(to, entry));
   }
 }
+
+describe("CX1: knowledge/index.md after the sync", () => {
+  test("a successful swap calls the index step once; the real module (from this checkout) writes knowledge/index.md", async () => {
+    serveSnapshot({ "a.md": "A\n" });
+    const calls: string[] = [];
+    const result = await runKnowledgeSync(opts(undefined, { knowledgeIndex: (h) => { calls.push(h); return { status: "written", providers: 1 }; } }));
+    expect(result).toMatchObject({ status: "ok", index: "written" });
+    expect(calls).toEqual([home]);
+
+    // No stand-in: the loader finds install/knowledge-index.ts beside this checkout (no edge-src in a temp home).
+    served.clear();
+    serveSnapshot({ "a.md": "A2\n" }, '"e2"');
+    const real = await runKnowledgeSync(opts());
+    expect(real).toMatchObject({ status: "ok", index: "written" });
+    expect(readFileSync(join(home, "knowledge", "index.md"), "utf8")).toMatch(/^- edge-india: 2 files, newest \d{4}-\d{2}-\d{2}, start at knowledge\/edge-india\/index\.md$/m);
+    expect(logLines().at(-1)).toMatchObject({ status: "ok", index: "written" });
+  });
+
+  test("a failing index step is logged in the run's line and never fails the sync", async () => {
+    serveSnapshot({ "a.md": "A\n" });
+    const result = await runKnowledgeSync(opts(undefined, { knowledgeIndex: () => { throw new Error("EACCES"); } }));
+    expect(result).toMatchObject({ status: "ok", reason: "written", index: "failed" });
+    expect(exitCode(result)).toBe(0);
+    expect(readFileSync(join(currentSetDir(home), "a.md"), "utf8")).toBe("A\n");
+    const lines = logLines();
+    expect(lines).toHaveLength(1); // a field on the run's line, not a new event
+    expect(lines[0]).toMatchObject({ event: "knowledge_sync", status: "ok", index: "failed" });
+
+    // A module that is not there, or answers nonsense: the same, never a failed run.
+    served.clear();
+    serveSnapshot({ "a.md": "A2\n" }, '"e2"');
+    expect(await runKnowledgeSync(opts(undefined, { knowledgeIndex: null }))).toMatchObject({ status: "ok", index: "unavailable" });
+    served.clear();
+    serveSnapshot({ "a.md": "A3\n" }, '"e3"');
+    expect(await runKnowledgeSync(opts(undefined, { knowledgeIndex: () => ({ status: "x\ny" }) }))).toMatchObject({ status: "ok", index: "failed" });
+  });
+
+  test("an unchanged run calls it only when knowledge/index.md is missing; a failed run never does", async () => {
+    serveSnapshot({ "a.md": "A\n" });
+    await runKnowledgeSync(opts());
+    expect(existsSync(join(home, "knowledge", "index.md"))).toBe(true);
+    let calls = 0;
+    const stub = { knowledgeIndex: () => { calls++; return { status: "written", providers: 1 }; } };
+
+    const unchanged = await runKnowledgeSync(opts(undefined, stub));
+    expect(unchanged.status).toBe("unchanged");
+    expect(unchanged.index).toBeUndefined();
+    expect(logLines().at(-1)).not.toHaveProperty("index");
+    expect(calls).toBe(0);
+
+    rmSync(join(home, "knowledge", "index.md"));
+    expect(await runKnowledgeSync(opts(undefined, stub))).toMatchObject({ status: "unchanged", index: "written" });
+    expect(calls).toBe(1);
+
+    served.clear();
+    serveSnapshot({ "a.md": "A2\n" }, '"e2"');
+    served.delete(`${BASE}a.md`);
+    rmSync(join(home, "knowledge", "index.md"), { force: true });
+    const failed = await runKnowledgeSync(opts(undefined, stub));
+    expect(failed.status).toBe("failed");
+    expect(failed.index).toBeUndefined();
+    expect(calls).toBe(1);
+  });
+
+  test("the module is looked for in $HERMES_HOME/edge-src first; the installed copy never looks beside itself", async () => {
+    const installed = join(home, "skills", "edge-india", "scripts");
+    expect(knowledgeIndexCandidates(home, installed)).toEqual([join(home, "edge-src", "install", "knowledge-index.ts")]);
+    const checkout = join(REPO_SKILLS, "edge-india", "scripts");
+    expect(knowledgeIndexCandidates(home, checkout)).toEqual([
+      join(home, "edge-src", "install", "knowledge-index.ts"),
+      join(REPO_SKILLS, "..", "install", "knowledge-index.ts"),
+    ]);
+
+    // An edge-src copy wins over this checkout's.
+    mkdirSync(join(home, "edge-src", "install"), { recursive: true });
+    writeFileSync(
+      join(home, "edge-src", "install", "knowledge-index.ts"),
+      "export function regenerateKnowledgeIndex(home: string) { return { status: \"not-a-directory\", providers: 0 }; }\n",
+    );
+    serveSnapshot({ "a.md": "A\n" });
+    expect(await runKnowledgeSync(opts())).toMatchObject({ status: "ok", index: "not-a-directory" });
+  });
+});
