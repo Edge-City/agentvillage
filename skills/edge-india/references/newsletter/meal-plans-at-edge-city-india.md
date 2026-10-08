@@ -6,7 +6,7 @@ Source type: newsletter
 
 Published: 2026-10-07T14:45:17.000Z
 
-Last content change indexed: 2026-10-07T14:58:23.108Z
+Last content change indexed: 2026-10-08T08:13:24.503Z
 
 ---
 
@@ -108,7 +108,7 @@ These are local businesses whose owners have welcomed us in, so please make a po
 
 -   **No refunds once a week is booked.** That keeps waste down and lets the restaurants plan properly.
 
--   **Allergies.** Message @jacquelinegomba on Telegram before you book.
+-   **Allergies?** Email jacqueline@edgecity.live before you book.
 
 -   **Breakfast and dinner** are yours to sort. Community dinners run most nights of the week, and we’ll cover those in a separate guide.
 
