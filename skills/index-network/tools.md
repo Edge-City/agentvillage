@@ -39,6 +39,8 @@ Showing the message link is not accepting: the link is the resident's own tap, a
 
 `get_my_profile` is the owner's own profile. Do not use it to look up someone else.
 
+**Their own profile.** When the user asks about their profile, link the `/u/` link `get_my_profile` returned (their Index profile, not the Rolodex) and offer: "tell me the correction here, or edit it in the Edge City app". Never refuse with "I can't change it" or "profile edits happen in the app".
+
 ## Capturing new signal in conversation
 
 The first signal already exists outside chat. Do not ask what they are open to. When they say something new in this conversation, capture it — that is how later wants get matched. Treat any "what I'm working on / looking for / open to" message as capturable on its own merits.
