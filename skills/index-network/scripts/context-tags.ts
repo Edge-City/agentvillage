@@ -73,8 +73,11 @@ export interface ContextTags {
   removed: ContextItem[];
 }
 
-/** One item line: `- text (marker)`, `- text (telegram, intros chat <12 hex>)`, or `- text` (read as telegram). */
-const LINE = /^- (.+?)(?:\s+\((setup|telegram|you|guess|chat)(?:,\s*intros chat\s+([0-9a-f]{12}))?\))?$/i;
+/**
+ * One item line: `- text (marker)`, `- text (telegram, intros chat <12 hex>)`, `- text (chat, guess)`
+ * (a chat item the person did not say outright: read as a guess), or `- text` (read as telegram).
+ */
+const LINE = /^- (.+?)(?:\s+\((setup|telegram|you|guess|chat)(?:,\s*intros chat\s+([0-9a-f]{12})|,\s*(guess))?\))?$/i;
 
 /** The interest groups the morning brief takes when av-profile.json states no interests, in this order. */
 export const INTEREST_GROUPS: readonly ContextGroup[] = ["here", "curious", "work", "meet"];
@@ -105,7 +108,8 @@ export function parseContextTags(entry: string): ContextTags {
     const match = LINE.exec(line);
     const text = match?.[1]?.trim();
     if (!text) continue;
-    const item: ContextItem = { text, marker: (match![2]?.toLowerCase() ?? "telegram") as ContextMarker };
+    const marker = (match![2]?.toLowerCase() ?? "telegram") as ContextMarker;
+    const item: ContextItem = { text, marker: marker === "chat" && match![4] ? "guess" : marker };
     if (group === "removed") removed.push(item);
     else groups[group].push(item);
   }
