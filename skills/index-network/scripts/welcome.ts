@@ -19,19 +19,23 @@
  *   - no key, Index unreachable or an answer it cannot read: the welcome
  *     without the list, saying it will catch up in the morning brief.
  *
- * DATA-412: the seed. When that read succeeds and lists no active intent,
- * the resident selected intentions at signup (`## Selected intentions` in
- * the app's profile at `$HERMES_HOME/USER.md`: selectedIntentions), and the
- * seed marker `memory/welcome-seed.json` does not exist, the script claims
- * that marker (created exclusively, so the creates run once per box, in both
- * modes) and creates up to three of those lines, in order, each with
- * `create_intent(description=<the line's text>)` and nothing else; a line
- * that repeats another one, or any intent Index lists whatever its status, is
- * skipped. `AV_WELCOME_SEED_MODE=paused` pauses each one it created
- * (`pause_intent`). It then lists the intents again and the welcome names
- * the seeded ones first ("From what you told me at signup, ..."). Nothing but
- * the selected texts is sent, and no text is logged. It never changes,
- * publishes or archives an intent it did not create.
+ * DATA-412 / DATA-416: the seed. When no welcome was sent yet (the welcome
+ * marker below, read in both modes), that read succeeds and lists no active
+ * intent, the resident selected intentions at signup (`## Selected
+ * intentions` in the app's profile at `$HERMES_HOME/USER.md`:
+ * selectedIntentions), and the seed marker `memory/welcome-seed.json` does
+ * not exist, the script claims that marker (created exclusively, so the
+ * creates run once per box, in both modes) and creates up to three of those
+ * lines at once, each with `create_intent(description=<the line's text>,
+ * sourceType="agentvillage")` and nothing else; a line that repeats another
+ * one, or any intent Index lists whatever its status, is skipped.
+ * `AV_WELCOME_SEED_MODE=paused` pauses each one it created (`pause_intent`).
+ * It then lists the intents again (the creates leave it
+ * WELCOME_RELIST_RESERVE_MS of the budget) and the welcome names the seeded
+ * ones first ("From what you told me at signup, ..."); the marker then gets
+ * `done`, and a run that finds a marker without it waits for it. Nothing of
+ * the resident's but the selected texts is sent, and no text is logged. It
+ * never changes, publishes or archives an intent it did not create.
  *
  * One welcome per tenant. `memory/welcome-state.json` under `$HERMES_HOME`
  * (`{"welcomeSent":true,"sentAt":"<ISO-8601>"}`) is the marker the control
@@ -40,8 +44,9 @@
  * By default the script prints WELCOME_ALREADY_SENT when the marker is set;
  * otherwise it claims the marker (created exclusively, so two runs at once
  * cannot both win) and prints the welcome. `--draft` prints the welcome and
- * never reads or writes the marker, for a caller that delivers and marks the
- * welcome itself (the seed marker is claimed in both modes).
+ * never writes the marker, for a caller that delivers and marks the welcome
+ * itself; it reads it only to skip the seed once a welcome was sent (the seed
+ * marker is claimed in both modes).
  *
  * Stdout is exactly the message (the agent sends it verbatim). By default
  * nothing is written to stderr on any normal path: Hermes's `terminal` tool
@@ -110,6 +115,28 @@ export const WELCOME_SEED_TIMEOUT_MS = 20_000;
  */
 export const WELCOME_BUDGET_MS = 25_000;
 export const WELCOME_MIN_CALL_MS = 1_000;
+/** Of WELCOME_BUDGET_MS, what the creates leave for the second list (DATA-416 S1). */
+export const WELCOME_RELIST_RESERVE_MS = 5_000;
+/**
+ * How long a run that finds another run's seed still in progress (a marker
+ * without `done`) waits for it, and how often it looks (DATA-416 S3).
+ */
+export const WELCOME_SEED_WAIT_MS = 10_000;
+export const WELCOME_SEED_POLL_MS = 500;
+/**
+ * `sourceType` on every intent the overlay creates (the av-events plugin's
+ * SOURCE_TYPE, which its poller reads; create_intent's input in
+ * plugins/av-events/tests/vectors/index_intent_contract.json): a constant,
+ * never resident text.
+ */
+export const SEED_SOURCE_TYPE = "agentvillage";
+/**
+ * The app's intention categories, a closed set (agentvillage-app
+ * src/lib/agent/client.ts AgentDraft `intentions[].category`, and
+ * src/lib/server/agent/schemas.ts `Intention.category`, z.enum). A line
+ * tagged with anything else is not one the app wrote.
+ */
+export const INTENTION_CATEGORIES: readonly string[] = ["build", "learn", "meet", "explore"];
 
 /** The seed marker, relative to `$HERMES_HOME`: its existence, whatever it holds, means the seed ran on this box. */
 export const WELCOME_SEED_FILE = join("memory", "welcome-seed.json");
@@ -273,9 +300,11 @@ async function listIntents(target: IndexMcpTarget): Promise<Listed> {
  * intentions` section of `$HERMES_HOME/USER.md` (the app's profileText), that
  * is everything after the first `] `, trimmed. The section runs from its
  * heading line to the next line starting with `## `, or the end of the file.
- * The last such heading counts: the app writes it after the context the
- * participant supplied (whose imported text may hold anything), never before.
- * A line of any other shape, or empty after its tag, is skipped. No other
+ * The app writes that heading exactly once; text the participant supplied
+ * (imported context before it, follow-up answers and offers after it) may
+ * hold newlines and so a copy of it, and then nothing is read at all
+ * (DATA-416 M1). A line of any other shape, a category outside
+ * INTENTION_CATEGORIES, or a line empty after its tag, is skipped. No other
  * change is made to the text: these are the resident's own words. A missing
  * or unreadable file, or no section, is none. Never throws, never logs.
  */
@@ -287,12 +316,14 @@ export function selectedIntentions(home: string): string[] {
     return [];
   }
   const lines = text.split("\n").map((line) => line.replace(/\r$/, ""));
-  const start = lines.lastIndexOf(SELECTED_HEADING);
-  if (start < 0) return [];
+  const start = lines.indexOf(SELECTED_HEADING);
+  if (start < 0 || lines.indexOf(SELECTED_HEADING, start + 1) >= 0) return [];
   const selected: string[] = [];
   for (const line of lines.slice(start + 1)) {
     if (line.startsWith("## ")) break;
-    const text = /^- \[[^\]]*\] ([\s\S]*)$/.exec(line)?.[1].trim();
+    const match = /^- \[([^\]]*)\] ([\s\S]*)$/.exec(line);
+    if (!match || !INTENTION_CATEGORIES.includes(match[1])) continue;
+    const text = match[2].trim();
     if (text) selected.push(text);
   }
   return selected;
@@ -367,7 +398,7 @@ export function claimSeed(home: string, selected: number, now: Date = new Date()
   const path = join(home, WELCOME_SEED_FILE);
   mkdirSync(dirname(path), { recursive: true });
   try {
-    writeFileSync(path, seedBody(now, selected, 0, 0), { flag: "wx", mode: 0o600 });
+    writeFileSync(path, seedBody(now, selected, 0, 0, false), { flag: "wx", mode: 0o600 });
     return true;
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code === "EEXIST") return false;
@@ -375,39 +406,78 @@ export function claimSeed(home: string, selected: number, now: Date = new Date()
   }
 }
 
-function seedBody(now: Date, selected: number, created: number, failed: number): string {
-  return `${JSON.stringify({ seededAt: now.toISOString(), selected, created, failed })}\n`;
+function seedBody(now: Date, selected: number, created: number, failed: number, done: boolean): string {
+  return `${JSON.stringify({ seededAt: now.toISOString(), selected, created, failed, ...(done ? { done: true } : {}) })}\n`;
 }
 
-/** The claimed marker, rewritten with the seed's counts (temp file and rename). Never throws: the claim already holds. */
+/** The claimed marker, rewritten with the seed's counts and `done` (temp file and rename). Never throws: the claim already holds. */
 function recordSeed(home: string, now: Date, selected: number, created: number, failed: number): void {
   const path = join(home, WELCOME_SEED_FILE);
   const tmp = `${path}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
   try {
-    writeFileSync(tmp, seedBody(now, selected, created, failed), { mode: 0o600 });
+    writeFileSync(tmp, seedBody(now, selected, created, failed, true), { mode: 0o600 });
     renameSync(tmp, path);
   } catch {
-    // The marker stays as claimed (counts 0): it still means the seed ran.
+    // The marker stays as claimed (counts 0, no done): it still means the seed ran.
   }
 }
 
-type Clock = { deadline: number; cap: number | undefined };
+/**
+ * True while another run is seeding: the marker is the seed's JSON object
+ * without `done: true` (DATA-416 S3). A marker of any other content (not
+ * JSON, empty, unreadable) is never waited for.
+ */
+export function seedInProgress(home: string): boolean {
+  try {
+    const marker = JSON.parse(readFileSync(join(home, WELCOME_SEED_FILE), "utf8")) as unknown;
+    return record(marker) !== null && (marker as { done?: unknown }).done !== true;
+  } catch {
+    return false;
+  }
+}
 
-/** `target` with the timeout a call may still have (null: too little left to make it). */
-function timed(target: IndexMcpTarget, clock: Clock, ms: number): IndexMcpTarget | null {
-  const left = clock.deadline - Date.now();
+type Clock = { deadline: number; cap: number | undefined; reserve: number; wait: number; poll: number };
+
+/**
+ * `target` with the timeout a call may still have, keeping `reserve` of the
+ * budget back (null: too little left to make it).
+ */
+function timed(target: IndexMcpTarget, clock: Clock, ms: number, reserve = 0): IndexMcpTarget | null {
+  const left = clock.deadline - reserve - Date.now();
   const timeoutMs = Math.min(clock.cap ?? ms, left);
   return left < Math.min(WELCOME_MIN_CALL_MS, clock.cap ?? WELCOME_MIN_CALL_MS) || timeoutMs <= 0 ? null : { ...target, timeoutMs };
 }
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
- * The seed, after a read that listed `first` (DATA-412): when no intent is
+ * Another run holds the seed: when it is still seeding, wait for its `done`
+ * (at most clock.wait, polling every clock.poll, within the budget) and list
+ * again, so the welcome shows what it created; else the first read stands.
+ */
+async function awaitSeed(home: string, target: IndexMcpTarget, first: { read: IntentsRead }, clock: Clock): Promise<{ read: IntentsRead; seed: SeedCounts }> {
+  const unchanged = { read: first.read, seed: NO_SEED };
+  if (!seedInProgress(home)) return unchanged;
+  const until = Math.min(Date.now() + clock.wait, clock.deadline - Math.min(clock.reserve, WELCOME_INDEX_TIMEOUT_MS));
+  while (seedInProgress(home) && Date.now() < until) await sleep(Math.max(1, Math.min(clock.poll, until - Date.now())));
+  const relistTarget = timed(target, clock, WELCOME_INDEX_TIMEOUT_MS);
+  const again = relistTarget ? await listIntents(relistTarget) : { read: UNREACHABLE, rows: null };
+  return { read: again.read.kind === "listed" ? again.read : first.read, seed: NO_SEED };
+}
+
+/**
+ * The seed, after a read that listed `first` (DATA-412, DATA-416): when no
+ * welcome was sent yet (`welcomed` false, in both modes), no intent is
  * active, the marker does not exist, and the resident selected intentions,
- * claim the marker and create up to MAX_LISTED of them in order (a line
- * whose seedKey repeats one already sent this run, or any listed intent's
+ * claim the marker and create up to MAX_LISTED of them at once (a line whose
+ * seedKey repeats one already taken this run, or any listed intent's
  * whatever its status, is skipped and not counted; a line with no key is
- * skipped), pausing each in `paused` mode; then list again. The read the
- * welcome is composed from, and the counts. Never throws.
+ * skipped), pausing each in `paused` mode, keeping WELCOME_RELIST_RESERVE_MS
+ * of the budget for the second list; then list again. A create whose own
+ * call failed but whose text the second list shows active is counted as
+ * seeded (publish mode). A marker another run is still filling is waited
+ * for (awaitSeed). The read the welcome is composed from, and the counts.
+ * Never throws.
  */
 async function seedWelcome(
   home: string,
@@ -415,10 +485,12 @@ async function seedWelcome(
   first: { read: IntentsRead; rows: IntentRow[] },
   clock: Clock,
   now: Date,
+  welcomed: boolean,
 ): Promise<{ read: IntentsRead; seed: SeedCounts }> {
   const unchanged = { read: first.read, seed: NO_SEED };
+  if (welcomed) return unchanged;
   if (first.read.kind !== "listed" || first.read.titles.length !== 0) return unchanged;
-  if (existsSync(join(home, WELCOME_SEED_FILE))) return unchanged;
+  if (existsSync(join(home, WELCOME_SEED_FILE))) return awaitSeed(home, target, first, clock);
   const selected = selectedIntentions(home);
   const sent = new Set(first.rows.flatMap((row) => row.keys));
   const lines: Array<{ text: string; title: string; key: string }> = [];
@@ -431,24 +503,29 @@ async function seedWelcome(
   }
   if (lines.length === 0) return unchanged;
   try {
-    if (!claimSeed(home, selected.length, now)) return unchanged;
+    if (!claimSeed(home, selected.length, now)) return awaitSeed(home, target, first, clock);
   } catch {
     return unchanged;
   }
 
   const mode = seedMode(home);
+  const made = (await Promise.allSettled(lines.map((line) => seedOne(target, clock, mode, line.text)))).map((r) =>
+    r.status === "fulfilled" ? r.value : null,
+  );
+  const relistTarget = timed(target, clock, WELCOME_INDEX_TIMEOUT_MS);
+  const again = relistTarget ? await listIntents(relistTarget) : { read: UNREACHABLE, rows: null };
   const seeded: Array<{ id: string | null; title: string; key: string }> = [];
   let failed = 0;
-  for (const line of lines) {
-    const made = await seedOne(target, clock, mode, line.text);
-    if (made) seeded.push({ id: made.id, title: made.title ?? line.title, key: line.key });
+  lines.forEach((line, i) => {
+    const one = made[i];
+    if (one) seeded.push({ id: one.id, title: one.title ?? line.title, key: line.key });
+    // A create that landed after its own call gave up (publish mode: in paused mode it was never paused).
+    else if (mode === "publish" && again.rows?.some((row) => row.active && row.keys.includes(line.key))) seeded.push({ id: null, title: line.title, key: line.key });
     else failed++;
-  }
+  });
   recordSeed(home, now, selected.length, seeded.length, failed);
   const seed = { intents_seeded: seeded.length, seed_failed: failed };
 
-  const relistTarget = timed(target, clock, WELCOME_INDEX_TIMEOUT_MS);
-  const again = relistTarget ? await listIntents(relistTarget) : { read: UNREACHABLE, rows: null };
   if (seeded.length === 0) return { read: again.read.kind === "listed" ? again.read : first.read, seed };
   // A seeded intent's row in the second list: by the id its create answer named, else by the text sent.
   const rowOf = (s: { id: string | null; key: string }) =>
@@ -470,10 +547,11 @@ async function seedWelcome(
 
 /**
  * One selected line: `create_intent` with its text as `description` and
- * nothing else, then, in `paused` mode, `pause_intent` with the id the
- * answer names. The intent (its id and title, when the answer says), or
- * null when the line failed: a throw, an `isError` answer, a refusal, too
- * little time left to call, or in `paused` mode no id to pause or a pause
+ * SEED_SOURCE_TYPE as `sourceType`, nothing else, then, in `paused` mode,
+ * `pause_intent` with the id the answer names. The intent (its id and
+ * title, when the answer says), or null when the line failed: a throw, an
+ * `isError` answer, a refusal, too little time left to call (the second
+ * list's reserve kept back), or in `paused` mode no id to pause or a pause
  * that failed (never retried).
  */
 async function seedOne(
@@ -483,12 +561,12 @@ async function seedOne(
   description: string,
 ): Promise<{ id: string | null; title: string | null } | null> {
   try {
-    const createTarget = timed(target, clock, WELCOME_SEED_TIMEOUT_MS);
+    const createTarget = timed(target, clock, WELCOME_SEED_TIMEOUT_MS, clock.reserve);
     if (!createTarget) return null;
-    const made = createdIntent(await callIndexTool(createTarget, "create_intent", { description }));
+    const made = createdIntent(await callIndexTool(createTarget, "create_intent", { description, sourceType: SEED_SOURCE_TYPE }));
     if (!made || mode === "publish") return made;
     if (made.id === null) return null;
-    const pauseTarget = timed(target, clock, WELCOME_SEED_TIMEOUT_MS);
+    const pauseTarget = timed(target, clock, WELCOME_SEED_TIMEOUT_MS, clock.reserve);
     if (!pauseTarget) return null;
     return writeRefused(await callIndexTool(pauseTarget, "pause_intent", { intentId: made.id })) ? null : made;
   } catch {
@@ -619,8 +697,20 @@ export function claimWelcome(home: string, now: Date = new Date()): boolean {
   return true;
 }
 
-/** `timeoutMs` caps every Index call and `budgetMs` replaces WELCOME_BUDGET_MS (tests only). */
-type WelcomeOptions = { fetch?: typeof fetch; timeoutMs?: number; budgetMs?: number; now?: Date };
+/**
+ * Tests only: `timeoutMs` caps every Index call; `budgetMs`, `reserveMs`,
+ * `waitMs` and `pollMs` replace WELCOME_BUDGET_MS, WELCOME_RELIST_RESERVE_MS,
+ * WELCOME_SEED_WAIT_MS and WELCOME_SEED_POLL_MS.
+ */
+type WelcomeOptions = {
+  fetch?: typeof fetch;
+  timeoutMs?: number;
+  budgetMs?: number;
+  reserveMs?: number;
+  waitMs?: number;
+  pollMs?: number;
+  now?: Date;
+};
 
 /**
  * What the script prints, given its arguments, and the branch the text took
@@ -630,21 +720,28 @@ type WelcomeOptions = { fetch?: typeof fetch; timeoutMs?: number; budgetMs?: num
 export async function welcomeRun(argv: string[], options: WelcomeOptions = {}): Promise<{ text: string; branch: WelcomeBranch | null }> {
   const home = homeFrom(argv);
   const draft = argv.includes("--draft");
-  if (!draft && welcomeAlreadySent(home)) return { text: ALREADY_SENT, branch: null };
-  const clock: Clock = { deadline: Date.now() + (options.budgetMs ?? WELCOME_BUDGET_MS), cap: options.timeoutMs };
+  const welcomed = welcomeAlreadySent(home);
+  if (!draft && welcomed) return { text: ALREADY_SENT, branch: null };
+  const clock: Clock = {
+    deadline: Date.now() + (options.budgetMs ?? WELCOME_BUDGET_MS),
+    cap: options.timeoutMs,
+    reserve: options.reserveMs ?? WELCOME_RELIST_RESERVE_MS,
+    wait: options.waitMs ?? WELCOME_SEED_WAIT_MS,
+    poll: options.pollMs ?? WELCOME_SEED_POLL_MS,
+  };
   const target: IndexMcpTarget = { apiKey: envOrDotenv("INDEX_API_KEY", home), mcpUrl: indexMcpUrl(), fetch: options.fetch };
   const first = await listIntents({ ...target, timeoutMs: options.timeoutMs ?? WELCOME_INDEX_TIMEOUT_MS });
   const { read, seed } = first.rows
-    ? await seedWelcome(home, target, { read: first.read, rows: first.rows }, clock, options.now ?? new Date())
+    ? await seedWelcome(home, target, { read: first.read, rows: first.rows }, clock, options.now ?? new Date(), welcomed)
     : { read: first.read, seed: NO_SEED };
-  const welcomed = { text: welcomeText(welcomeName(home), read, intentsPageUrl(home)), branch: welcomeBranch(read, seed) };
-  if (draft) return welcomed;
+  const out = { text: welcomeText(welcomeName(home), read, intentsPageUrl(home)), branch: welcomeBranch(read, seed) };
+  if (draft) return out;
   try {
     if (!claimWelcome(home, options.now)) return { text: ALREADY_SENT, branch: null };
   } catch {
     // The marker could not be written: still welcome (never silent); the next first message may welcome again.
   }
-  return welcomed;
+  return out;
 }
 
 /** What the script prints, given its arguments. Never throws. */

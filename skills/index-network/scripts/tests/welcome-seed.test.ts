@@ -18,9 +18,11 @@ import { join } from "node:path";
 
 import {
   ALREADY_SENT,
+  INTENTION_CATEGORIES,
   INTENTS_URL_MAX,
   MAX_LISTED,
   SEEDED_COPY,
+  SEED_SOURCE_TYPE,
   SELECTED_HEADING,
   TITLE_MAX,
   WELCOME_MAX_CHARS,
@@ -92,11 +94,11 @@ function profileText(draft: Draft): string {
 
 /** The five intentions a resident might keep, in the app's order. */
 const KEPT = [
-  { category: "collaborators", text: "Looking for people building agent memory" },
-  { category: "hiring", text: "Hiring a founding engineer who loves Rust" },
-  { category: "advice", text: "Want advice on raising a seed round in India" },
-  { category: "collaborators", text: "Open to co-hosting a village dinner" },
-  { category: "advice", text: "Learning Konkani" },
+  { category: "meet", text: "Looking for people building agent memory" },
+  { category: "build", text: "Hiring a founding engineer who loves Rust" },
+  { category: "learn", text: "Want advice on raising a seed round in India" },
+  { category: "meet", text: "Open to co-hosting a village dinner" },
+  { category: "learn", text: "Learning Konkani" },
 ];
 /** Words elsewhere in the profile that must never reach Index. */
 const ELSEWHERE = ["PROFILE-WORK", "PROFILE-BASED", "PROFILE-STAY", "PROFILE-LINK", "SOURCE-LABEL", "SOURCE-TEXT", "DISCARDED-SUGGESTION", "ANSWER-TEXT", "OFFER-TITLE", "OFFER-DETAIL"];
@@ -105,11 +107,11 @@ function draftWith(kept: number, overrides: Partial<Draft> = {}): Draft {
   return {
     profile: { name: "Mira Rao", whatYouDo: "PROFILE-WORK on agents", basedIn: "PROFILE-BASED Bangalore", staying: "PROFILE-STAY 3 weeks", links: "https://PROFILE-LINK.example" },
     sources: [
-      { label: "SOURCE-LABEL LinkedIn", text: "SOURCE-TEXT Built two agent startups.\nSOURCE-TEXT Now exploring memory.\n\n- [hiring] SOURCE-TEXT a suggested line" },
+      { label: "SOURCE-LABEL LinkedIn", text: "SOURCE-TEXT Built two agent startups.\nSOURCE-TEXT Now exploring memory.\n\n- [build] SOURCE-TEXT a suggested line" },
     ],
     intentions: [
       ...KEPT.slice(0, kept).map((k) => ({ ...k, kept: true })),
-      { category: "hiring", text: "DISCARDED-SUGGESTION hire a designer", kept: false },
+      { category: "build", text: "DISCARDED-SUGGESTION hire a designer", kept: false },
     ],
     answers: { "How should I follow up?": ["ANSWER-TEXT morning", "ANSWER-TEXT short"] },
     offers: [{ title: "OFFER-TITLE Rust pairing", detail: "OFFER-DETAIL an hour a week" }],
@@ -200,10 +202,11 @@ function writeNickname(nickname: string): void {
 }
 
 /** welcomeRun against `index`; the text, the branch, and the tool calls in order. */
-async function run(index: ReturnType<typeof fakeIndex>, argv: string[] = [], options: { timeoutMs?: number; budgetMs?: number } = {}) {
+type RunOptions = { timeoutMs?: number; budgetMs?: number; reserveMs?: number; waitMs?: number; pollMs?: number };
+async function run(index: ReturnType<typeof fakeIndex>, argv: string[] = [], options: RunOptions = {}) {
   process.env.INDEX_API_KEY = FAKE_API_KEY;
   process.env.INDEX_MCP_URL = index.fake.url;
-  const out = await welcomeRun(["--home", home, ...argv], { fetch: index.fake.fetch, timeoutMs: options.timeoutMs ?? 200, budgetMs: options.budgetMs });
+  const out = await welcomeRun(["--home", home, ...argv], { fetch: index.fake.fetch, ...options, timeoutMs: options.timeoutMs ?? 200 });
   const calls = index.fake.calls.filter((c) => c.method === "tools/call");
   return { ...out, calls, names: calls.map((c) => c.name) };
 }
@@ -224,42 +227,45 @@ describe("selectedIntentions: the profile's selected intentions, in order, as th
     });
   }
 
-  test("a line of another shape, or empty after its tag, is skipped; a `]` inside the text stays", () => {
+  test("a line of another shape, a category the app does not write, or empty after its tag, is skipped; a `]` inside the text stays", () => {
     writeUserMd(
       [
         "# Participant profile",
         "",
         SELECTED_HEADING,
-        "- [advice] Learn [Rust] fast, with a mentor]",
-        "- [hiring]   ",
-        "- [hiring]",
+        "- [learn] Learn [Rust] fast, with a mentor]",
+        "- [build]   ",
+        "- [build]",
         "-[advice] no space after the dash",
-        "- [advice]no space after the tag",
+        "- [learn]no space after the tag",
         "* [advice] a star bullet",
-        "  - [advice] indented",
+        "  - [learn] indented",
         "- advice: no tag",
         "plain text",
         "### a sub-heading",
-        "- [] an empty category keeps its text",
-        "- [collaborators]  Two spaces, trailing spaces   ",
+        "- [] an empty category",
+        "- [advice] a category the app does not write",
+        "- [Meet] another case",
+        "- [meet] ] an extra bracket after the tag stays",
+        "- [explore]  Two spaces, trailing spaces   ",
         "",
         "## Follow-up preferences",
-        "- [advice] after the section",
+        "- [learn] after the section",
       ].join("\n"),
     );
-    expect(selectedIntentions(home)).toEqual(["Learn [Rust] fast, with a mentor]", "an empty category keeps its text", "Two spaces, trailing spaces"]);
+    expect(selectedIntentions(home)).toEqual(["Learn [Rust] fast, with a mentor]", "] an extra bracket after the tag stays", "Two spaces, trailing spaces"]);
   });
 
   test("no other change to the text: markup, links and odd characters are sent as written", () => {
     const raw = "Meet **builders** at https://x.example/a?b=c or @handle — 7 days/week ☀️";
-    writeUserMd(profileText(draftWith(0, { intentions: [{ category: "collaborators", text: raw, kept: true }] })));
+    writeUserMd(profileText(draftWith(0, { intentions: [{ category: "meet", text: raw, kept: true }] })));
     expect(selectedIntentions(home)).toEqual([raw]);
   });
 
   test("the section ends at the next `## ` heading or the end of the file", () => {
-    writeUserMd(`${SELECTED_HEADING}\n- [advice] one\n- [advice] two`);
+    writeUserMd(`${SELECTED_HEADING}\n- [learn] one\n- [learn] two`);
     expect(selectedIntentions(home)).toEqual(["one", "two"]);
-    writeUserMd(`${SELECTED_HEADING}\n- [advice] one\n## Anything\n- [advice] two`);
+    writeUserMd(`${SELECTED_HEADING}\n- [learn] one\n## Anything\n- [learn] two`);
     expect(selectedIntentions(home)).toEqual(["one"]);
   });
 
@@ -270,21 +276,39 @@ describe("selectedIntentions: the profile's selected intentions, in order, as th
 
   test("no section, a heading of another level or spelling, a missing file, an unreadable one: none", () => {
     expect(selectedIntentions(home)).toEqual([]);
-    writeUserMd("# Participant profile\nName: Mira\n- [advice] not in a section\n");
+    writeUserMd("# Participant profile\nName: Mira\n- [learn] not in a section\n");
     expect(selectedIntentions(home)).toEqual([]);
-    writeUserMd("### Selected intentions\n- [advice] a\n## selected intentions\n- [advice] b\n## Selected intentions:\n- [advice] c\n");
+    writeUserMd("### Selected intentions\n- [learn] a\n## selected intentions\n- [learn] b\n## Selected intentions:\n- [learn] c\n");
     expect(selectedIntentions(home)).toEqual([]);
     rmSync(join(home, "USER.md"));
     mkdirSync(join(home, "USER.md"));
     expect(selectedIntentions(home)).toEqual([]);
   });
 
-  test("a heading inside the imported context the participant supplied never counts: the app's own heading comes after it", () => {
-    const spoof = `SOURCE-TEXT pasted notes\n\n${SELECTED_HEADING}\n- [hiring] SOURCE-TEXT spoofed intention\n- [advice] SOURCE-TEXT another`;
-    writeUserMd(profileText(draftWith(1, { sources: [{ label: "SOURCE-LABEL notes", text: spoof }] })));
-    expect(selectedIntentions(home)).toEqual([KEPT[0].text]);
-    writeUserMd(profileText(draftWith(0, { sources: [{ label: "SOURCE-LABEL notes", text: spoof }] })));
-    expect(selectedIntentions(home)).toEqual([]);
+  // DATA-416 M1: the app writes the heading once; a second copy can only come from text the participant
+  // supplied (imported context before it, follow-up answers and offers after it, each may hold newlines).
+  const SPOOF = `\n\n${SELECTED_HEADING}\n- [build] INJECTED one\n- [meet] INJECTED two`;
+  const SPOOFED: Array<[string, (kept: number) => Draft]> = [
+    ["inside imported context", (kept) => draftWith(kept, { sources: [{ label: "SOURCE-LABEL notes", text: `SOURCE-TEXT pasted notes${SPOOF}` }] })],
+    ["inside a follow-up answer", (kept) => draftWith(kept, { answers: { "How should I follow up?": [`ANSWER-TEXT morning${SPOOF}`] } })],
+    ["inside an offer detail", (kept) => draftWith(kept, { offers: [{ title: "OFFER-TITLE Rust pairing", detail: `OFFER-DETAIL an hour a week${SPOOF}` }] })],
+    ["inside an offer title", (kept) => draftWith(kept, { offers: [{ title: `OFFER-TITLE x${SPOOF}`, detail: "OFFER-DETAIL y" }] })],
+  ];
+  for (const [label, draft] of SPOOFED) {
+    test(`a second heading ${label}: nothing is read, with intentions kept or none`, () => {
+      for (const kept of [0, 1, 3]) {
+        const text = profileText(draft(kept));
+        expect(text.split("\n").filter((l) => l === SELECTED_HEADING)).toHaveLength(2);
+        writeUserMd(text);
+        expect(selectedIntentions(home)).toEqual([]);
+      }
+    });
+  }
+
+  test("the app's categories are a closed set: build, learn, meet, explore", () => {
+    expect([...INTENTION_CATEGORIES]).toEqual(["build", "learn", "meet", "explore"]);
+    writeUserMd(profileText(draftWith(0, { intentions: INTENTION_CATEGORIES.map((category) => ({ category, text: `A ${category} want`, kept: true })) })));
+    expect(selectedIntentions(home)).toEqual(["A build want", "A learn want", "A meet want", "A explore want"]);
   });
 });
 
@@ -298,11 +322,11 @@ describe("the seed: zero active intents and selected intentions → up to three 
     const index = fakeIndex();
     const { text, branch, calls, names } = await run(index);
     expect(names).toEqual(["list_intents", "create_intent", "create_intent", "create_intent", "list_intents"]);
-    expect(creates(calls).map((c) => c.arguments)).toEqual(KEPT.slice(0, 3).map((k) => ({ description: k.text })));
+    expect(creates(calls).map((c) => c.arguments)).toEqual(KEPT.slice(0, 3).map((k) => ({ description: k.text, sourceType: SEED_SOURCE_TYPE })));
     // Nothing else of USER.md went to Index: no tag, no other line, in any call.
     for (const call of calls) {
       const body = JSON.stringify(call.body);
-      expect(body).not.toMatch(/\[(collaborators|hiring|advice)\]/);
+      expect(body).not.toMatch(/\[(build|learn|meet|explore)\]/);
       for (const word of ELSEWHERE) expect(body).not.toContain(word);
       expect(body).not.toContain("Participant profile");
     }
@@ -322,7 +346,7 @@ describe("the seed: zero active intents and selected intentions → up to three 
   test("one selected: one create and the one-line seeded welcome", async () => {
     writeUserMd(profileText(draftWith(1)));
     const { text, branch, calls } = await run(fakeIndex());
-    expect(creates(calls).map((c) => c.arguments)).toEqual([{ description: KEPT[0].text }]);
+    expect(creates(calls).map((c) => c.arguments)).toEqual([{ description: KEPT[0].text, sourceType: SEED_SOURCE_TYPE }]);
     expect(text).toBe(golden.seededOne);
     expect(branch).toEqual({ fallback: "none", intents_listed: 1, intents_seeded: 1, seed_failed: 0 });
   });
@@ -397,23 +421,64 @@ describe("the seed: zero active intents and selected intentions → up to three 
     expect(branch).toEqual({ fallback: "questions", intents_listed: 0, intents_seeded: 0, seed_failed: 3 });
   });
 
-  test("a create that timed out but landed: not counted as seeded, and the second list shows it under today's lead", async () => {
-    writeUserMd(profileText(draftWith(1)));
+  test("DATA-416 S1: a create that answers too late but landed is counted as seeded when the second list shows its text", async () => {
+    writeNickname("Mira");
+    writeUserMd(profileText(draftWith(3)));
+    // The second line's create lands in Index, but its answer comes after the call gave up.
     const index = fakeIndex({
       create: (_n, description, id) => {
+        if (description !== KEPT[1].text) return undefined;
         index.rows.push({ id, summary: description, status: "active" });
         return { hang: true };
       },
     });
     const { text, branch } = await run(index, ["--draft"], { timeoutMs: 50 });
-    expect(branch).toEqual({ fallback: "none", intents_listed: 1, intents_seeded: 0, seed_failed: 1 });
-    expect(text).toContain("Here's what I have you down for so far:\n- Looking for people building agent memory\n");
+    expect(branch).toEqual({ fallback: "none", intents_listed: 3, intents_seeded: 3, seed_failed: 0 });
+    expect(text).toBe(golden.seededThree);
+    expect(seedMarker()).toMatchObject({ created: 3, failed: 0, done: true });
+  });
+
+  test("DATA-416 S1: a late create that never landed is failed; in paused mode a late one is failed even if it landed (it was never paused)", async () => {
+    writeUserMd(profileText(draftWith(2)));
+    const lost = await run(fakeIndex({ create: (_n, d) => (d === KEPT[1].text ? { hang: true } : undefined) }), ["--draft"], { timeoutMs: 50 });
+    expect(lost.branch).toEqual({ fallback: "none", intents_listed: 1, intents_seeded: 1, seed_failed: 1 });
+    rmSync(join(home, WELCOME_SEED_FILE));
+    process.env.AV_WELCOME_SEED_MODE = "paused";
+    const index = fakeIndex({
+      create: (_n, description, id) => {
+        if (description !== KEPT[1].text) return undefined;
+        index.rows.push({ id, summary: description, status: "active" });
+        return { hang: true };
+      },
+    });
+    const paused = await run(index, ["--draft"], { timeoutMs: 50 });
+    expect(paused.branch).toEqual({ fallback: "none", intents_listed: 1, intents_seeded: 1, seed_failed: 1 });
+    expect(listedLines(paused.text)).toEqual([KEPT[0].text]);
+  });
+
+  test("DATA-416 S1: the creates run at once, not one after another", async () => {
+    writeUserMd(profileText(draftWith(3)));
+    // Each create answers after 150 ms: one after another would take 450 ms.
+    const index = fakeIndex();
+    const slow: typeof index.fake.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(init?.body ?? "").includes('"create_intent"')) await new Promise((r) => setTimeout(r, 150));
+      return index.fake.fetch(input, init);
+    }) as typeof fetch;
+    process.env.INDEX_API_KEY = FAKE_API_KEY;
+    process.env.INDEX_MCP_URL = index.fake.url;
+    const started = Date.now();
+    const out = await welcomeRun(["--home", home, "--draft"], { fetch: slow, timeoutMs: 1000 });
+    const took = Date.now() - started;
+    expect(out.branch).toEqual({ fallback: "none", intents_listed: 3, intents_seeded: 3, seed_failed: 0 });
+    expect(took).toBeLessThan(400);
+    // Listed in the selected order whatever order the answers came in.
+    expect(listedLines(out.text)).toEqual(KEPT.slice(0, 3).map((k) => k.text));
   });
 
   test("the second list failing: the titles come from the create answers, else the selected texts, cleaned", async () => {
     writeUserMd(profileText(draftWith(3, { intentions: [
-      { category: "advice", text: "Meet **builders** at evil.example", kept: true },
-      { category: "advice", text: "Second want", kept: true },
+      { category: "learn", text: "Meet **builders** at evil.example", kept: true },
+      { category: "learn", text: "Second want", kept: true },
     ] })));
     const index = fakeIndex({
       list: (n) => (n === 2 ? { response: new Response("down", { status: 503 }) } : undefined),
@@ -443,15 +508,15 @@ describe("the seed: zero active intents and selected intentions → up to three 
       profileText(
         draftWith(0, {
           intentions: [
-            { category: "advice", text: "Learning Konkani", kept: true },
-            { category: "advice", text: "  learning **KONKANI** ", kept: true },
-            { category: "hiring", text: "Resting want", kept: true },
-            { category: "hiring", text: "Old want", kept: true },
-            { category: "hiring", text: "Described differently", kept: true },
-            { category: "advice", text: "https://only-a-link.example/x", kept: true },
-            { category: "collaborators", text: "Fresh want one", kept: true },
-            { category: "collaborators", text: "Fresh want two", kept: true },
-            { category: "collaborators", text: "Fresh want three", kept: true },
+            { category: "learn", text: "Learning Konkani", kept: true },
+            { category: "learn", text: "  learning **KONKANI** ", kept: true },
+            { category: "build", text: "Resting want", kept: true },
+            { category: "build", text: "Old want", kept: true },
+            { category: "build", text: "Described differently", kept: true },
+            { category: "learn", text: "https://only-a-link.example/x", kept: true },
+            { category: "meet", text: "Fresh want one", kept: true },
+            { category: "meet", text: "Fresh want two", kept: true },
+            { category: "meet", text: "Fresh want three", kept: true },
           ],
         }),
       ),
@@ -478,9 +543,9 @@ describe("the seed: zero active intents and selected intentions → up to three 
 
   test("a long selected line is sent whole; the welcome shows it cut at TITLE_MAX", async () => {
     const long = `${words(TITLE_MAX + 100)} end`;
-    writeUserMd(profileText(draftWith(0, { intentions: [{ category: "advice", text: long, kept: true }] })));
+    writeUserMd(profileText(draftWith(0, { intentions: [{ category: "learn", text: long, kept: true }] })));
     const { calls, text } = await run(fakeIndex(), ["--draft"]);
-    expect(creates(calls).map((c) => c.arguments)).toEqual([{ description: long }]);
+    expect(creates(calls).map((c) => c.arguments)).toEqual([{ description: long, sourceType: SEED_SOURCE_TYPE }]);
     const [line] = listedLines(text);
     expect(line.endsWith("…")).toBe(true);
     expect([...line].length).toBeLessThanOrEqual(TITLE_MAX);
@@ -505,23 +570,28 @@ describe("the seed: zero active intents and selected intentions → up to three 
     expect(written).toEqual([]);
   });
 
-  test("a call that would start with too little of the run's budget left is not made, and counts as failed", async () => {
+  test("a call that would start with too little of the run's budget left is not made, and counts as failed; the creates keep the second list's reserve", async () => {
     writeUserMd(profileText(draftWith(3)));
     // No budget at all: the marker is claimed, nothing is sent, all three fail, and the first read stands.
     const none = await run(fakeIndex(), ["--draft"], { budgetMs: 0 });
     expect(none.names).toEqual(["list_intents"]);
     expect(none.branch).toEqual({ fallback: "questions", intents_listed: 0, intents_seeded: 0, seed_failed: 3 });
-    expect(seedMarker()).toMatchObject({ selected: 3, created: 0, failed: 3 });
+    expect(seedMarker()).toMatchObject({ selected: 3, created: 0, failed: 3, done: true });
     rmSync(join(home, WELCOME_SEED_FILE));
-    // Budget for one hanging create (200 ms of 350, so 150 ms of slack either way): the second and third, and the second list, are never sent.
-    const one = await run(fakeIndex({ create: () => ({ hang: true }) }), ["--draft"], { timeoutMs: 200, budgetMs: 350 });
-    expect(one.names).toEqual(["list_intents", "create_intent"]);
-    expect(one.branch).toEqual({ fallback: "questions", intents_listed: 0, intents_seeded: 0, seed_failed: 3 });
+    // The reserve takes all but 100 ms of the budget, under the 200 ms a call needs: no create, but the second list is made.
+    const reserved = await run(fakeIndex(), ["--draft"], { timeoutMs: 200, budgetMs: 300, reserveMs: 200 });
+    expect(reserved.names).toEqual(["list_intents", "list_intents"]);
+    expect(reserved.branch).toEqual({ fallback: "questions", intents_listed: 0, intents_seeded: 0, seed_failed: 3 });
+    rmSync(join(home, WELCOME_SEED_FILE));
+    // Three hanging creates at once (200 ms each, 300 ms left for them); the second list still has about 300 ms (100 ms of slack either way).
+    const hung = await run(fakeIndex({ create: () => ({ hang: true }) }), ["--draft"], { timeoutMs: 200, budgetMs: 500, reserveMs: 200 });
+    expect(hung.names).toEqual(["list_intents", "create_intent", "create_intent", "create_intent", "list_intents"]);
+    expect(hung.branch).toEqual({ fallback: "questions", intents_listed: 0, intents_seeded: 0, seed_failed: 3 });
   });
 });
 
 describe("the seed marker: the creates run once per box, in both modes", () => {
-  test("claimed exclusively before the first create, then rewritten with the counts (0600, these four keys)", async () => {
+  test("claimed exclusively before the first create, then rewritten with the counts and done (0600, these keys)", async () => {
     writeUserMd(profileText(draftWith(3)));
     const now = new Date("2026-10-11T04:30:00.000Z");
     process.env.INDEX_API_KEY = FAKE_API_KEY;
@@ -534,12 +604,12 @@ describe("the seed marker: the creates run once per box, in both modes", () => {
     process.env.INDEX_MCP_URL = index.fake.url;
     await welcomeRun(["--home", home], { fetch: index.fake.fetch, timeoutMs: 200, now });
     const raw = readFileSync(join(home, WELCOME_SEED_FILE), "utf8");
-    expect(raw).toBe(`${JSON.stringify({ seededAt: now.toISOString(), selected: 3, created: 3, failed: 0 })}\n`);
+    expect(raw).toBe(`${JSON.stringify({ seededAt: now.toISOString(), selected: 3, created: 3, failed: 0, done: true })}\n`);
     expect(statSync(join(home, WELCOME_SEED_FILE)).mode & 0o777).toBe(0o600);
   });
 
   for (const [label, content] of [
-    ["the seed's own", '{"seededAt":"2026-10-11T04:30:00.000Z","selected":3,"created":0,"failed":3}\n'],
+    ["the seed's own, done", '{"seededAt":"2026-10-11T04:30:00.000Z","selected":3,"created":0,"failed":3,"done":true}\n'],
     ["empty", ""],
     ["not JSON", "seeded"],
   ] as const) {
@@ -583,6 +653,96 @@ describe("the seed marker: the creates run once per box, in both modes", () => {
     expect((await run(index)).text).toBe(ALREADY_SENT);
   });
 
+  test("DATA-416 M2: a welcome already sent means no seed in --draft either: zero creates, the questions text, trailer seeded 0", async () => {
+    writeUserMd(profileText(draftWith(3)));
+    mkdirSync(join(home, "memory"), { recursive: true });
+    const sent = JSON.stringify({ welcomeSent: true, sentAt: "2026-10-01T10:00:00.000Z" });
+    writeFileSync(join(home, WELCOME_STATE_FILE), sent);
+    const index = fakeIndex();
+    process.env.INDEX_API_KEY = FAKE_API_KEY;
+    process.env.INDEX_MCP_URL = index.fake.url;
+    const out = { stdout: "", stderr: "" };
+    await main(["--home", home, "--draft"], { stdout: (x) => (out.stdout += x), stderr: (x) => (out.stderr += x) }, (a) =>
+      welcomeRun(a, { fetch: index.fake.fetch, timeoutMs: 200 }),
+    );
+    expect(index.fake.calls.filter((c) => c.method === "tools/call").map((c) => c.name)).toEqual(["list_intents"]);
+    expect(out.stdout).toBe(`${golden.zero}\n`);
+    expect(out.stderr).toBe(`${draftTrailer({ fallback: "questions", intents_listed: 0, intents_seeded: 0, seed_failed: 0 })}\n`);
+    expect(existsSync(join(home, WELCOME_SEED_FILE))).toBe(false);
+    // --draft still never writes the welcome marker.
+    expect(readFileSync(join(home, WELCOME_STATE_FILE), "utf8")).toBe(sent);
+  });
+
+  test("DATA-416 M2: a marker that does not record a welcome (welcomeSent false) does not block the seed", async () => {
+    writeUserMd(profileText(draftWith(1)));
+    mkdirSync(join(home, "memory"), { recursive: true });
+    writeFileSync(join(home, WELCOME_STATE_FILE), '{"welcomeSent":false}');
+    const { branch } = await run(fakeIndex(), ["--draft"]);
+    expect(branch).toMatchObject({ intents_seeded: 1 });
+  });
+
+  test("DATA-416 S3: a marker without done (another run seeding) is waited for; when it gains done the run lists what was seeded", async () => {
+    writeUserMd(profileText(draftWith(3)));
+    mkdirSync(join(home, "memory"), { recursive: true });
+    const claimed = { seededAt: "2026-10-11T04:30:00.000Z", selected: 3, created: 0, failed: 0 };
+    writeFileSync(join(home, WELCOME_SEED_FILE), `${JSON.stringify(claimed)}\n`);
+    const index = fakeIndex();
+    // The other run finishes after 1 s: its three intents are in Index, then its marker gets done.
+    const other = setTimeout(() => {
+      KEPT.slice(0, 3).forEach((k, i) => index.rows.push({ id: idFor(0x200 + i), summary: k.text, status: "active" }));
+      writeFileSync(join(home, WELCOME_SEED_FILE), `${JSON.stringify({ ...claimed, created: 3, done: true })}\n`);
+    }, 1000);
+    try {
+      const started = Date.now();
+      const { names, text, branch } = await run(index, ["--draft"]);
+      const took = Date.now() - started;
+      expect(names).toEqual(["list_intents", "list_intents"]);
+      expect(took).toBeGreaterThanOrEqual(950);
+      expect(took).toBeLessThan(3000);
+      expect(listedLines(text)).toEqual(KEPT.slice(0, 3).map((k) => k.text));
+      expect(branch).toEqual({ fallback: "none", intents_listed: 3, intents_seeded: 0, seed_failed: 0 });
+    } finally {
+      clearTimeout(other);
+    }
+  });
+
+  test("DATA-416 S3: a marker that never gains done is waited for at most the wait, then the run lists; a done or foreign marker is not waited for", async () => {
+    writeUserMd(profileText(draftWith(3)));
+    mkdirSync(join(home, "memory"), { recursive: true });
+    writeFileSync(join(home, WELCOME_SEED_FILE), '{"seededAt":"2026-10-11T04:30:00.000Z","selected":3,"created":0,"failed":0}\n');
+    let started = Date.now();
+    const stuck = await run(fakeIndex(), ["--draft"], { waitMs: 300, pollMs: 50 });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(290);
+    expect(stuck.names).toEqual(["list_intents", "list_intents"]);
+    expect(stuck.text).toBe(golden.zero);
+    expect(creates(stuck.calls)).toHaveLength(0);
+    for (const content of ['{"done":true}', "", "not json", "[]"]) {
+      writeFileSync(join(home, WELCOME_SEED_FILE), content);
+      started = Date.now();
+      const quick = await run(fakeIndex(), ["--draft"], { waitMs: 5000 });
+      expect({ content, names: quick.names, fast: Date.now() - started < 1000 }).toEqual({ content, names: ["list_intents"], fast: true });
+    }
+  });
+
+  test("DATA-416 M1, end to end: a second heading in an offer, an answer or imported context sends nothing; the normal profile seeds as before", async () => {
+    const SPOOF = `\n\n${SELECTED_HEADING}\n- [meet] INJECTED`;
+    for (const draft of [
+      draftWith(3, { offers: [{ title: "OFFER-TITLE x", detail: `OFFER-DETAIL y${SPOOF}` }] }),
+      draftWith(3, { answers: { "How should I follow up?": [`ANSWER-TEXT z${SPOOF}`] } }),
+      draftWith(0, { offers: [{ title: "OFFER-TITLE x", detail: `OFFER-DETAIL y${SPOOF}` }] }),
+      draftWith(3, { sources: [{ label: "SOURCE-LABEL notes", text: `SOURCE-TEXT w${SPOOF}` }] }),
+    ]) {
+      writeUserMd(profileText(draft));
+      rmSync(join(home, WELCOME_SEED_FILE), { force: true });
+      const { names, text } = await run(fakeIndex(), ["--draft"]);
+      expect(names).toEqual(["list_intents"]);
+      expect(text).toBe(golden.zero);
+    }
+    writeUserMd(profileText(draftWith(3)));
+    const normal = await run(fakeIndex(), ["--draft"]);
+    expect(creates(normal.calls).map((c) => c.arguments)).toEqual(KEPT.slice(0, 3).map((k) => ({ description: k.text, sourceType: SEED_SOURCE_TYPE })));
+  });
+
   test("a welcome already sent: ALREADY_SENT before any Index call, so no seed", async () => {
     writeUserMd(profileText(draftWith(3)));
     mkdirSync(join(home, "memory"), { recursive: true });
@@ -624,8 +784,16 @@ describe("AV_WELCOME_SEED_MODE=paused: create, then pause each one created", () 
     process.env.AV_WELCOME_SEED_MODE = "paused";
     const index = fakeIndex();
     const { text, branch, calls, names } = await run(index, ["--draft"]);
-    expect(names).toEqual(["list_intents", "create_intent", "pause_intent", "create_intent", "pause_intent", "create_intent", "pause_intent", "list_intents"]);
-    expect(calls.filter((c) => c.name === "pause_intent").map((c) => c.arguments)).toEqual([0x101, 0x102, 0x103].map((n) => ({ intentId: idFor(n) })));
+    // Each line is created then paused; the three lines run at once.
+    expect(names[0]).toBe("list_intents");
+    expect(names.at(-1)).toBe("list_intents");
+    expect(names.filter((n) => n === "create_intent")).toHaveLength(3);
+    expect(calls.filter((c) => c.name === "pause_intent").map((c) => String(c.arguments?.intentId)).sort()).toEqual([0x101, 0x102, 0x103].map(idFor));
+    for (const row of index.rows) {
+      const created = calls.findIndex((c) => c.name === "create_intent" && c.arguments?.description === row.summary);
+      const paused = calls.findIndex((c) => c.name === "pause_intent" && c.arguments?.intentId === row.id);
+      expect(created).toBeLessThan(paused);
+    }
     expect(index.rows.map((r) => r.status)).toEqual(["paused", "paused", "paused"]);
     expect(text).toBe(golden.seededPausedThree);
     expect(branch).toEqual({ fallback: "none", intents_listed: 3, intents_seeded: 3, seed_failed: 0 });
@@ -647,14 +815,16 @@ describe("AV_WELCOME_SEED_MODE=paused: create, then pause each one created", () 
     writeUserMd(profileText(draftWith(3)));
     process.env.AV_WELCOME_SEED_MODE = "paused";
     const index = fakeIndex({
-      create: (n, description, id) => {
-        if (n !== 2) return undefined;
+      create: (_n, description, id) => {
+        if (description !== KEPT[1].text) return undefined;
         index.rows.push({ id, summary: description, status: "active" });
         return `Created your signal.\n\n${JSON.stringify({ success: true, data: { networkIds: [] } })}`;
       },
     });
-    const { names, branch, text } = await run(index, ["--draft"]);
-    expect(names).toEqual(["list_intents", "create_intent", "pause_intent", "create_intent", "create_intent", "pause_intent", "list_intents"]);
+    const { names, branch, text, calls } = await run(index, ["--draft"]);
+    expect([...names].sort()).toEqual(["create_intent", "create_intent", "create_intent", "list_intents", "list_intents", "pause_intent", "pause_intent"]);
+    const unnamed = index.rows.find((r) => r.summary === KEPT[1].text)!;
+    expect(calls.some((c) => c.name === "pause_intent" && c.arguments?.intentId === unnamed.id)).toBe(false);
     expect(branch).toEqual({ fallback: "none", intents_listed: 2, intents_seeded: 2, seed_failed: 1 });
     // The paused lead names only what it paused.
     expect(listedLines(text)).toEqual([KEPT[0].text, KEPT[2].text]);
@@ -754,7 +924,7 @@ describe("the seeded texts", () => {
         ["astral", (n: number) => String.fromCodePoint(0x1f600 + n).repeat(TITLE_MAX)],
       ] as const) {
         const texts = [1, 2, 3].map(title);
-        writeUserMd(profileText(draftWith(0, { intentions: texts.map((text) => ({ category: "advice", text, kept: true })) })));
+        writeUserMd(profileText(draftWith(0, { intentions: texts.map((text) => ({ category: "learn", text, kept: true })) })));
         rmSync(join(home, WELCOME_SEED_FILE), { force: true });
         process.env.AV_WELCOME_SEED_MODE = mode;
         const { text, calls } = await run(fakeIndex(), ["--draft"]);
