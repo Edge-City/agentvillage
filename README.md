@@ -420,6 +420,8 @@ Pass `--wipe-user` to also remove `USER.md`, `MEMORY.md`, and the entire `memory
 bun install/reset.ts --wipe-user
 ```
 
+`--wipe-user` (in `reset.ts` and in `install.ts`) also removes `knowledge/agentvillage/`, what the previous user shared on the Context page, keeps `knowledge/edge-india/` and `knowledge-prev/`, and then regenerates `knowledge/index.md` with `bun install/knowledge-index.ts [--home <dir>]` (one line per provider directory under `knowledge/`; also run by the control plane's renderer and by the edge-india knowledge sync; a missing `knowledge/` is left alone, exit 0).
+
 The ordering (stop the gateway, remove the user state, restart) holds in a hosted sandbox because the
 sandbox's respawn loop restarts a stopped gateway after about 2 seconds (control-plane
 `sandbox.js`), well after the files are gone. Known, pre-existing: Hermes's `_cmd_restart` in

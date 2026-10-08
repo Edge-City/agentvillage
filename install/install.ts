@@ -35,6 +35,7 @@
 import {
   existsSync,
   copyFileSync,
+  lstatSync,
   readdirSync,
   rmSync,
   statSync,
@@ -71,6 +72,7 @@ import {
   targetWorkspace,
 } from "./paths";
 import { captureWelcomeState, restoreWelcomeState } from "./welcome_state";
+import { describeResult, regenerateKnowledgeIndex } from "./knowledge-index";
 import { cronFailedLine, writeInstallStatus } from "./install_status";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -164,9 +166,37 @@ function copyWorkspaceFiles(wipeUser: boolean): void {
         console.log(`→ removed ${path.replace(TARGET_HOME + "/", "")} (--wipe-user)`);
       }
     }
-    // The recall index holds copies of MEMORY.md and notes; it goes with them,
-    // and the epoch keeps earlier conversations out of any future index.
+    // What the previous user shared goes first, then the recall index, which holds copies of
+    // MEMORY.md, notes and knowledge files; the epoch keeps earlier conversations out of any
+    // future index. (The other order left a window in which a live recall could re-index the
+    // old knowledge files after the index wipe.)
+    wipeKnowledgeAgentvillage();
     wipeRecallIndex();
+  }
+}
+
+/**
+ * `--wipe-user`: what the previous user shared on the Context page
+ * (`knowledge/agentvillage/`, written by the control plane's renderer), then
+ * `knowledge/index.md` regenerated. `knowledge/edge-india/` (public) and
+ * `knowledge-prev/` stay. A failed index step is a warning, never fatal.
+ */
+function wipeKnowledgeAgentvillage(): void {
+  const target = join(TARGET_HOME, "knowledge", "agentvillage");
+  let present = true;
+  try {
+    lstatSync(target); // a dangling symlink counts: it goes too
+  } catch {
+    present = false;
+  }
+  if (present) {
+    rmSync(target, { recursive: true, force: true });
+    console.log(`→ removed ${target.replace(TARGET_HOME + "/", "")} (--wipe-user)`);
+  }
+  try {
+    console.log(`→ ${describeResult(regenerateKnowledgeIndex(TARGET_HOME))}`);
+  } catch {
+    console.warn("  warning: could not regenerate knowledge/index.md");
   }
 }
 
