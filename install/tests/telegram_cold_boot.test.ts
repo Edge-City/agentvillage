@@ -12,6 +12,7 @@ import {
   configureHostedGateway,
   configureStt,
   keepTelegramBacklogOnColdBoot,
+  setContextFileMaxChars,
   setTerminalCwd,
 } from "../config";
 
@@ -279,6 +280,7 @@ function installerConfigPass(): void {
   configureStt();
   configureHostedGateway();
   keepTelegramBacklogOnColdBoot();
+  setContextFileMaxChars();
   configureDashboardAuth();
   configureAvEvents();
 }
@@ -297,6 +299,8 @@ test("full installer config pass: sets the key once, keeps it, and is idempotent
   const telegram = telegramOf(path);
   expect(telegram.gateway_restart_notification).toBe(false);
   expect(telegram.extra).toEqual({ disable_link_previews: false, drop_pending_on_cold_boot: false });
+  // AGENTS-MD-CAP: the context-file cap is pinned in the same pass.
+  expect(read(path).context_file_max_chars).toBe(48000);
 });
 
 test("full installer config pass keeps an operator's true", () => {
@@ -319,5 +323,6 @@ for (const [name, text] of [
 
     expect((read(path).terminal as Record<string, unknown>).cwd).toBe(process.env.HERMES_HOME);
     expect(extraOf(path).drop_pending_on_cold_boot).toBe(false);
+    expect(read(path).context_file_max_chars).toBe(48000);
   });
 }

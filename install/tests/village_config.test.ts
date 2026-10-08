@@ -205,7 +205,7 @@ describe("F3: cron.script_timeout_seconds covers the triggers' budgets", () => {
  * cap), keeping an operator's larger value.
  */
 describe("AGENTS-MD-CAP: context_file_max_chars is pinned to at least 48,000", () => {
-  // A box's config.yaml shape (claude-b4's read, 2026-10-08): no context_file_max_chars key at all.
+  // A box's config.yaml shape (fleet read, 2026-10-08): no context_file_max_chars key at all.
   const BOX = { _config_version: 46, model: { default: "m", context_length: 90000 }, cron: { wrap_response: false }, terminal: { cwd: "/h" }, streaming: { enabled: false } };
 
   test("absent: 48000 written at the end, every other key byte-for-byte in order, one log line", () => {
@@ -314,5 +314,10 @@ describe("AGENTS-MD-CAP: context_file_max_chars is pinned to at least 48,000", (
     const pin = at("setContextFileMaxChars();");
     const restart = at("restartGateway();");
     expect(wrap < pin && pin < restart).toBe(true);
+    // A bare statement at main()'s top level (two-space indent, alone on its line): not commented out,
+    // not behind an `if`, not inside a block. The line before it is the cron step, also unconditional.
+    const body = main.slice(0, main.indexOf("\n}\n"));
+    expect(body.match(/^.*setContextFileMaxChars.*$/gm)).toEqual(["  setContextFileMaxChars();"]);
+    expect(body).toMatch(/^  configureCronWrapResponse\(\);\n  setContextFileMaxChars\(\);$/m);
   });
 });

@@ -153,7 +153,8 @@ from memory; read the source.
    never load the whole set.
 3. **Answer from what you read**, briefly, and weave in the source link for
    anything they would act on (booking, travel, contacts). Follow the URL rules
-   in `AGENTS.md`.
+   in `skills/index-network/tools.md` under your `HERMES_HOME`, section "URL
+   preservation".
 4. **When it isn't there, say so.** If `search` finds nothing relevant, that is
    the answer: "the public guides don't cover that yet", plus the primary
    source or info@edgecity.live. Don't go through the files one by one for
