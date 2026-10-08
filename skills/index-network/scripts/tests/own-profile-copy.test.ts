@@ -21,7 +21,7 @@ const RULE =
 const BAN = 'Never refuse with "I can\'t change it" or "profile edits happen in the app".';
 /** Any way of saying the agent cannot change or edit the profile, or that edits only happen in the app. */
 const DENIAL =
-  /\b(can['’]?t|cannot|can not|unable to|not able to|no way to)\b[^.\n]*\b(change|edit|update|correct)\b|\b(profile )?edits? (only )?happen in the (Edge City )?app\b|\bfrom chat\b[^.\n]*\b(can['’]?t|cannot)\b/i;
+  /\b(can['’]?t|cannot|can not|unable to|not able to|no way to)\b[^.\n]*\b(change|edit|update|correct)\b|\b(profile )?edits? (only )?happen in the (Edge City )?app\b|\bfrom chat\b[^.\n]*\b(can['’]?t|cannot)\b|\bonly (be )?(edit|chang|updat|correct)\w*\b[^.\n]*\bin the (Edge City )?app\b|\b(edit|chang|updat|correct)\w*\b[^.\n]*\bonly in the (Edge City )?app\b|\bnot (possible|available|supported)\b[^.\n]*\b(chat|here)\b/i;
 
 describe("own profile: link what get_my_profile returned, offer the correction, never deny the edit", () => {
   test("the rule sits right after the get_my_profile ownership line, names the tool and the /u/ link, and offers chat or the app", () => {

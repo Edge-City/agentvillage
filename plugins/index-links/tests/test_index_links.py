@@ -332,12 +332,43 @@ def test_other_index_tools_still_send_person_links_to_the_rolodex(plugin, tool):
     }
 
 
+def test_the_exempt_set_is_exactly_the_three_profile_tool_names(plugin):
+    """Refute S1: a prefix, suffix or case-folded match would widen the exemption silently."""
+    assert plugin.OWN_PROFILE_TOOLS == frozenset(OWN_PROFILE_TOOLS)
+
+
 @pytest.mark.parametrize(
     "tool",
-    [None, "get_my_profile", "mcp__index__get_my_profile_extra", "mcp__index__update_my_profile", "mcp__indexer__get_my_profile", "read_file"],
+    [
+        None,
+        "get_my_profile",
+        "mcp__index__get_my_profile_extra",
+        "mcp__index__get_my_profile_v2",
+        "index_get_my_profile_v2",
+        "index_get_my_profiles",
+        "mcp__index__GET_MY_PROFILE",
+        "MCP__INDEX__get_my_profile",
+        " mcp__index__get_my_profile",
+        "mcp__index__get_my_profile ",
+        "mcp__index__update_my_profile",
+        "mcp__index__enrich_my_profile",
+        "mcp__indexer__get_my_profile",
+        "read_file",
+        b"mcp__index__get_my_profile",
+        ["mcp__index__get_my_profile"],
+    ],
 )
 def test_only_the_three_profile_tool_names_are_exempt(plugin, tool):
     assert plugin.is_own_profile_tool(tool) is False
+    # Through the hook too: a near miss rewrites the person link like any Index tool.
+    if isinstance(tool, str) and plugin.is_index_tool(tool):
+        assert hook(plugin, f"[Peer]({PEER})", tool=tool) == "[Peer](https://agents.edgecity.live/rolodex?person=peer2)"
+
+
+def test_rewrite_index_links_defaults_to_rewriting_person_links(plugin):
+    """Refute S2: the flag's default is False, so a caller that forgets it keeps today's behaviour."""
+    assert plugin.rewrite_index_links(f"[Peer]({PEER})") == "[Peer](https://agents.edgecity.live/rolodex?person=peer2)"
+    assert plugin.rewrite_index_links(f"[Peer]({PEER})", keep_people=True) == f"[Peer]({PEER})"
 
 
 def test_own_profile_exemption_keeps_the_off_switch_and_size_cap(plugin, monkeypatch):

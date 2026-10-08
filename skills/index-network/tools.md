@@ -26,7 +26,7 @@ When the user wants to **see who is waiting** ("any intros?", "who should I talk
 
 **Links that open Index.** Reuse the links on the tool's lead line. When you also have the id, the same pages are:
 
-- Person: `https://agents.edgecity.live/rolodex?person=<userId>` (`peer.url`)
+- Person: `https://agents.edgecity.live/rolodex?person=<userId>` (`peer.url`); the user's own profile is the `/u/` link `get_my_profile` returned, never this page
 - Signal: `https://agents.edgecity.live/intents?intent=<intentId>` (the `create_intent` lead line)
 - Opportunity page: `https://index.network/o/<opportunityId>` (the card's `url`). This is not the message link.
 - Message: the card's `acceptUrl`, copied as returned.
