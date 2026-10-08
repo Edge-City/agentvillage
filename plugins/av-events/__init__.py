@@ -696,6 +696,8 @@ def _intention_payload(call: IntentionCall, capture: str, parent_session_id: Opt
         payload["approved_by"] = call.approved_by
     if call.approval_state is not None:
         payload["approval_state"] = call.approval_state
+    if call.confirmed_in_chat is not None:
+        payload["confirmed_in_chat"] = call.confirmed_in_chat
     if capture != "metadata":
         payload["text_length"] = len(call.text) if call.text else None
         payload["summary_length"] = len(call.summary) if call.summary else None

@@ -1,10 +1,12 @@
 # Index Network — Voice Exemplars
 
-Canonical user-facing renderings for Edge City India's people-finding flows. Mimic these exactly when composing the morning brief. They are the bar for tone, structure, and information density. Edge City India (Mandrem, Goa, October 11 – November 1, 2026) is the literal community in every example — pull facts from `AGENTS.md` Community context, never invent dates, attendee counts, programming formats, announcements, events, venues, or attendees. Calendar lines below are `{placeholders}`: fill them only from the live calendar context, never with example or Edge Esmeralda content.
+Canonical user-facing renderings for Edge City India's people-finding flows. Mimic these exactly when composing an opportunity reply or an introduction drop. They are the bar for tone, structure, and information density. Edge City India (Mandrem, Goa, October 11 – November 1, 2026) is the literal community in every example — pull facts from `AGENTS.md` Community context, never invent dates, attendee counts, programming formats, announcements, events, venues, or attendees. Calendar lines below are `{placeholders}`: fill them only from the live calendar context, never with example or Edge Esmeralda content.
 
 Direct conversations come first. Each card is one specific overlap and one Index opportunity link. Do not describe backend activity, advertise virtual worlds, or turn the brief into a broad digest.
 
 ## Good morning brief (fires once daily, 08:00 village time, IST)
+
+Since DATA-314 the scheduled brief itself (prompts/brief.md) names waiting people in plain text and closes its people part with one `Connections:` line; it carries no per-person link. The cards below are the voice for chat replies and introduction drops, where each pending card carries its own `acceptUrl`.
 
 Calendar bullets should put EdgeOS `highlighted: true` events first, then fill with one interest-relevant event from the remaining live calendar when useful.
 
@@ -64,6 +66,17 @@ If the live calendar is unavailable (call failed, or no Edge City India calendar
 ### Same person, more than one opportunity
 
 One bullet per opportunity, each with its own `acceptUrl`. Do not merge several opportunities into one bullet. They still count toward the three.
+
+## Asked in chat: "any intros?" (list_opportunities, two pending and one negotiating)
+
+The tool's lead line is the roster: names linked to their profiles, no message link. The reply keeps those profile links and adds, for every pending introduction (not a community ask), in the resident's own private chat, the message link copied from that card's `acceptUrl` in the JSON below the lead line. A `negotiating` card gets no message link yet. The reply never promises the link for a later turn and never labels a link "Profile".
+
+> **2 conversations await you**
+> - [Adam]({userUrl}) — Running the hardware track and wants a second pair of hands on the sensor demos. Overlaps with your embedded work, [message Adam]({acceptUrl}).
+> - [Paul]({userUrl}) — Writing about agent memory and looking for builders to interview. You have the long-running-context story, [message Paul]({acceptUrl}).
+> Tapping a link accepts the introduction and opens Telegram with them.
+>
+> Still in motion: [Lena]({userUrl}) — your agents are still talking; nothing for you to do yet.
 
 ## Connector-flow rendering rule
 

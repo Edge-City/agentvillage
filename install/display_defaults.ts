@@ -14,29 +14,37 @@
  * reply, a progress line per tool call, and mid-turn commentary as separate
  * messages.
  *
- * The owner's decision: residents never see reasoning, and see one quiet
- * progress message per reply that names the tools as the agent works through
- * them. This step writes Telegram-scoped keys only, so the CLI and desktop
+ * The owner's decision: residents never see reasoning, and (DATA-409, after a
+ * tester watched 38 seconds of raw curl and python command previews) see no
+ * tool-progress message while the agent works: `tool_progress: off`, Hermes's
+ * own Telegram tier default. (Hermes's only names-only setting is
+ * `tool_preview_length: 3`, which turns every line into `...`; the owner chose
+ * no progress message instead. A turn over 3 minutes still shows Hermes's one
+ * "⏳ Working — N min" heartbeat line, edited in place and deleted with the
+ * reply, whatever `tool_progress` says.) The grouping and cleanup keys stay as written so a
+ * resident who turns progress back on by hand still gets one quiet, edited
+ * message. This step writes Telegram-scoped keys only, so the CLI and desktop
  * surfaces operators use keep Hermes's defaults:
  *
  * | key | value | written when |
  * |---|---|---|
  * | `show_reasoning` | `false` | always (a privacy and product decision; a resident's `/reasoning show` is undone on the next roll) |
- * | `tool_progress` | `new` | unset (absent or null) and no legacy `display.tool_progress_overrides.telegram` |
+ * | `tool_progress` | `off` | unset (absent or null), or `new` (this installer's value until DATA-409), and no legacy `display.tool_progress_overrides.telegram` |
  * | `tool_progress_grouping` | `accumulate` | unset |
  * | `interim_assistant_messages` | `false` | unset |
  * | `streaming` | `false` | unset, or `true` (the value Hermes itself writes there) |
  * | `cleanup_progress` | `true` | unset |
  *
- * Together: one progress message, edited in place (at most every 1.5 s) with a
- * line each time the agent moves to a different tool, deleted once the reply
- * lands (kept when the turn fails); the reply arrives as one message. Streaming
- * and interim commentary are off because each streamed or commentary message
- * closes the progress message and the next tool starts a new one below it.
+ * Together: no tool-progress message (only the 3-minute heartbeat on a long
+ * turn); the reply arrives as one message. (With
+ * progress turned on by hand: one message, edited in place at most every 1.5 s
+ * with a line per tool, deleted once the reply lands, kept when the turn fails.)
+ * Streaming and interim commentary are off because each streamed or commentary
+ * message would otherwise arrive as its own message before the reply.
  *
  * A value someone set by hand is kept (except `show_reasoning`). A resident who
- * sets `streaming: true` by hand cannot be told from Hermes's default and is
- * reset on the next roll. `AV_DISPLAY_DEFAULTS=0` (or `false`, `no`, `off`),
+ * sets `streaming: true` or `tool_progress: new` by hand cannot be told from the
+ * default that was written there and is reset on the next roll. `AV_DISPLAY_DEFAULTS=0` (or `false`, `no`, `off`),
  * in the process environment or `$HERMES_HOME/.env`, leaves `config.yaml`
  * untouched. The file is also left alone, with a warning, when `display`,
  * `display.platforms` or `display.platforms.telegram` is not a mapping or holds
@@ -57,14 +65,16 @@ interface ManagedKey {
   value: DisplayValue;
   /** `always`: written whenever it differs. `unset`: only while absent, null, or one of `hermesDefaults`. */
   policy: "always" | "unset";
-  /** Values Hermes itself writes at this path, which count as unset. */
+  /** Values that count as unset: what Hermes itself writes at this path, or what this installer wrote before (DATA-409: `new`). */
   hermesDefaults?: readonly unknown[];
 }
 
 /** The keys this step owns under `display.platforms.telegram`, in the order they are written. */
 export const TELEGRAM_DISPLAY_DEFAULTS: readonly ManagedKey[] = [
   { key: "show_reasoning", value: false, policy: "always" },
-  { key: "tool_progress", value: "new", policy: "unset" },
+  // DATA-409: `new` is the value this installer wrote until 2026-10-07 (DATA-318), so a box still
+  // holding it is on the old default, not a hand-set choice, and flips to `off` at its next roll.
+  { key: "tool_progress", value: "off", policy: "unset", hermesDefaults: ["new"] },
   { key: "tool_progress_grouping", value: "accumulate", policy: "unset" },
   { key: "interim_assistant_messages", value: false, policy: "unset" },
   { key: "streaming", value: false, policy: "unset", hermesDefaults: [true] },
