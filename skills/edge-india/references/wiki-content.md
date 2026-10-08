@@ -4,9 +4,9 @@ Source: https://edgecity.notion.site/Edge-City-India-2026-Wiki-038d45cdfc5983c7a
 
 Source type: wiki
 
-Source updated: 2026-10-08T17:13:39.155Z
+Source updated: 2026-10-08T18:23:17.233Z
 
-Last content change indexed: 2026-10-08T17:28:17.141Z
+Last content change indexed: 2026-10-08T18:28:19.577Z
 
 ---
 
@@ -216,7 +216,7 @@ All dinners are on the [calendar](https://portal.edgecity.live/portal/edge-india
 
 #### Shuttle Service for October 11th Arrivals & Opening Ceremony
 
-We will offer a shuttle service from GOX/ Mopa Airport to Riva Beach Resort. This shuttle is complimentary and we will have volunteers, designated with a purple lanyard posted at the GOX airport to help guide you. **For arrival instructions with photos; click** **[HERE.](https://docs.google.com/document/d/161mjFNCXP9dl3JlFdkzvI2Sje7I0Nh9A/edit?usp=sharing&ouid=102473816871369346891&rtpof=true&sd=true)**
+We will offer a shuttle service from GOX/ Mopa Airport to Riva Beach Resort. This shuttle is complimentary and we will have volunteers, designated with a purple lanyard posted at the GOX airport to help guide you (exact location of shuttle details coming- please keep eyes on telegram transportation chat for updates, schedule below:
 
 **October 11th - GOX / Mopa Airport to Riva Beach Resort**
 
@@ -231,6 +231,8 @@ We will offer a shuttle service from GOX/ Mopa Airport to Riva Beach Resort. Thi
 
 **While you are waiting for the shuttle, we have a 10% discount at Artjuna Cafe at GOX Airport. Please mention “Edge City” for a discount!**
 
+**For arrival instructions with photos for taxi; click** **[HERE.](https://docs.google.com/document/d/161mjFNCXP9dl3JlFdkzvI2Sje7I0Nh9A/edit?usp=sharing&ouid=102473816871369346891&rtpof=true&sd=true)**
+
 **October 11th - RIVA to The Forresta Kinaro; Opening Ceremony**
 
 We will offer a complimentary shuttle to the Opening Ceremony at The Forresta Kinaro. Volunteers designated with a purple lanyard will be posted at RIVA Beach Resort parking area and The Forresta Kinaro entrance to assist in getting on the shuttle.
@@ -241,10 +243,19 @@ Shuttle service will resume at 7:30pm - 10:30pm for returning to RIVA Beach reso
 
 #### Shuttle Service & Taxi Information during Edge City India
 
-We will offer a shuttle service from 9am - 5pm from October 12th through October 31st daily. Shuttle stops include NANU Resort > RIVA Beach Resort > Lush Garden (Mandrem) > The Circle Coworking > Lush Garden (Mandrem) > RIVA Beach Resort > NANU Resort.
+We will offer a shuttle service from weekdays 9am - 5pm from October 12th through October 31st daily. Shuttle stops include NANU Resort > RIVA Beach Resort > Lush Garden (Mandrem) > The Circle Coworking > Lush Garden (Mandrem) > RIVA Beach Resort > NANU Resort.
 
-Times will be approximate to traffic.\
+Shuttle times will be approximate to traffic.\
 Please plan accordingly so you do not miss your next session!
+
+Additionally, aligned prices for taxis are below - you can find these outside of Riva and around town.
+
+Please note the prices below are negotiated prices for ongoing relationships with taxi association around town, prices may vary according to your own negotiations, however should not go over these below. Negotiate with respect, please!
+
+A few of our taxi driver friends include:\
+\
+Prasad Gadekar - Whatsapp #+91 - 98503 - 91950\
+Umesh Naik - Whatsapp # +91-83297-44359
 
 ---
 
@@ -385,6 +396,12 @@ Our two hubs, Riva and The Circle, both have fast WiFi, with backup Starlink.
 - Network: **EdgeCity**
 
 - Password: **Edgecitygoa@2026**
+
+- **💻 Riva (co-working)**
+
+  - Network: **Edge City**
+
+  - Password: **Edgecitygoa@2026**
 
 #### 💵 Currency
 
