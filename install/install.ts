@@ -16,6 +16,7 @@
  *   - Cron in village time (`timezone: Asia/Kolkata`, only when no zone is configured; a loud warning when another is)
  *   - `cron.script_timeout_seconds: 120` when unset, Hermes's default 3600, or lower (the proactive triggers' budgets)
  *   - Index MCP + morning digest cron (`install_index.ts`)
+ *   - Index Hermes plugin (`index-network`): install or update, then enable; seed `$HERMES_HOME/index/negotiator.ts` only when absent (`install_index_plugin.ts`)
  *   - opt-in recall skill + plugin when `AV_RECALL_ENABLED=1` (`install_recall.ts`)
  *   - opt-in approval.md gate when `AV_APPROVAL_ENABLED=1` (`install_approval.ts`):
  *     a failure there exits non-zero, because an opted-in tenant left ungated
@@ -44,6 +45,7 @@ import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 
 import { installIndex } from "./install_index";
+import { installIndexPlugin } from "./install_index_plugin";
 import { installEdgeos } from "./install_edgeos";
 import { safeInstallRecall, wipeRecallIndex } from "./install_recall";
 import { gateReceiptLine, runApprovalStep, stagePlugins } from "./install_approval";
@@ -63,7 +65,7 @@ import {
 } from "./config";
 import { configureTelegramDisplay } from "./display_defaults";
 import { copySkillBundles, removeRetiredSkillDirs } from "./skill_copy";
-import { hermesBin, hermesExecEnv } from "./hermes_cli";
+import { hermesBin, hermesExecEnv, hermesRunner } from "./hermes_cli";
 import {
   EDGE_SKILL_NAMES,
   hermesHome,
@@ -191,6 +193,16 @@ function copySkillFiles(): void {
   }
 }
 
+/** Clone or update `index-network`, enable it, and seed the negotiator file. A failure does not stop the install. */
+function installIndexHermesPlugin(): void {
+  try {
+    installIndexPlugin(hermesRunner(hermesBin(), hermesExecEnv(), 120_000));
+  } catch (err) {
+    const kind = err instanceof Error ? err.name : typeof err;
+    console.warn(`  warning: index-network plugin was not installed (${kind}) — core install continues`);
+  }
+}
+
 function restartGateway(): void {
   console.log("→ restarting gateway");
   try {
@@ -263,6 +275,7 @@ function main(): void {
   }
   // N3: the av-approval plugin only after its hooks block is written.
   copyPluginFiles("after-approval");
+  installIndexHermesPlugin();
 
   if (!process.argv.includes("--no-restart")) {
     restartGateway();
