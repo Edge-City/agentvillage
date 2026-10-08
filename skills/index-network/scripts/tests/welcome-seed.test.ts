@@ -22,6 +22,7 @@ import {
   INTENTS_URL_MAX,
   MAX_LISTED,
   SEEDED_COPY,
+  SEEDED_COPY_ONE,
   SEED_SOURCE_TYPE,
   SELECTED_HEADING,
   TITLE_MAX,
@@ -56,6 +57,13 @@ const INTENTS_URL = "https://agents.edgecity.live/intents";
 /** sha256 of the six texts on origin/main 336fdec9, concatenated in this order. */
 const OLD_KEYS = ["three", "moreThanThree", "two", "one", "zero", "unreachable"] as const;
 const OLD_SHA256 = "a69563f1dedda0afab68f1348a7ff64522ec5779548b0cb1696ccce8e5e6123c";
+/** sha256 of each seeded text unchanged since DATA-412 W1 (9a09b3f4): DATA-416's singular wording changes only `seededOne`. */
+const SEEDED_SHA256 = {
+  seededThree: "c682f4529f7e3f8ceb80d4a35211acd6d60e6ed7d1dc8ae6042a9d4a7a13a22f",
+  seededPausedThree: "defbdeb1f45f4a0b9b3f5a00abd4fd6f2cef36172c4b6ee943b6f82ef8284ca9",
+} as const;
+/** sha256 of the whole fixture file as committed (DATA-416: `seededOne` singular, `seededPausedOne` added). */
+const FIXTURE_SHA256 = "c4eedb92a055193ba1bba6f3b854cda406850ddfb722af80ffffeda8b95eef08";
 const ASTRAL_NAME = "\u{20000}".repeat(32);
 /** A text of `n` code points, words of four letters and a space (`n` > 0). */
 const words = (n: number, letter = "w") => `${letter.repeat(4)} `.repeat(Math.ceil(n / 5)).slice(0, n).trimEnd().padEnd(n, letter);
@@ -349,11 +357,40 @@ describe("the seed: zero active intents and selected intentions → up to three 
     expect(seedMarker()).toMatchObject({ selected: 5, created: 3, failed: 0 });
   });
 
-  test("one selected: one create and the one-line seeded welcome", async () => {
+  test("one selected: one create and the one-line seeded welcome, singular throughout (DATA-416 Q3)", async () => {
     writeUserMd(profileText(draftWith(1)));
     const { text, branch, calls } = await run(fakeIndex());
     expect(creates(calls).map((c) => c.arguments)).toEqual([{ description: KEPT[0].text, sourceType: SEED_SOURCE_TYPE }]);
     expect(text).toBe(golden.seededOne);
+    expect(text).toContain(`\n\n${SEEDED_COPY_ONE.publish.lead}\n- ${KEPT[0].text}\n\n`);
+    expect(text.endsWith(`\n\n${SEEDED_COPY_ONE.publish.close}`)).toBe(true);
+    expect(text).not.toMatch(/these signals|any of them/);
+    expect(branch).toEqual({ fallback: "none", intents_listed: 1, intents_seeded: 1, seed_failed: 0 });
+  });
+
+  test("two selected: the plural sentences, byte for byte as before (DATA-416 Q3)", async () => {
+    writeUserMd(profileText(draftWith(2)));
+    const { text, branch } = await run(fakeIndex());
+    expect(branch).toEqual({ fallback: "none", intents_listed: 2, intents_seeded: 2, seed_failed: 0 });
+    expect(text).toBe(
+      [
+        "Welcome to Edge City India ☀️",
+        "Mandrem, Goa, October 11 to November 1. I'm your personal agent for your time in the village. You can call me Edge, or give me whatever name you like.",
+        `From what you told me at signup, I've set up these signals:\n- ${KEPT[0].text}\n- ${KEPT[1].text}`,
+        "I'll keep watch for people and events that fit these and bring the best to your morning brief.",
+        "Say change or pause to adjust any of them, or tell me a new one.",
+      ].join("\n\n"),
+    );
+  });
+
+  test("paused mode, one selected: the paused singular sentences (DATA-416 Q3)", async () => {
+    writeUserMd(profileText(draftWith(1)));
+    process.env.AV_WELCOME_SEED_MODE = "paused";
+    const { text, branch, names } = await run(fakeIndex(), ["--draft"]);
+    expect(names).toEqual(["list_intents", "create_intent", "pause_intent", "list_intents"]);
+    expect(text).toBe(golden.seededPausedOne);
+    expect(text).toContain(`\n\n${SEEDED_COPY_ONE.paused.lead}\n- ${KEPT[0].text}\n\n`);
+    expect(text.endsWith(`\n\n${SEEDED_COPY_ONE.paused.close}`)).toBe(true);
     expect(branch).toEqual({ fallback: "none", intents_listed: 1, intents_seeded: 1, seed_failed: 0 });
   });
 
@@ -1007,11 +1044,14 @@ describe("the answers the seed reads", () => {
 // ── The texts ────────────────────────────────────────────────────────────────
 
 describe("the seeded texts", () => {
-  test("the six older fixture texts are byte for byte as on origin/main; the three new ones are there", () => {
-    const fixture = JSON.parse(readFileSync(FIXTURE_PATH, "utf8")) as Record<string, string>;
-    const hash = new Bun.CryptoHasher("sha256").update(OLD_KEYS.map((k) => fixture[k]).join("")).digest("hex");
-    expect(hash).toBe(OLD_SHA256);
-    expect(Object.keys(fixture)).toEqual([...OLD_KEYS, "seededThree", "seededOne", "seededPausedThree"]);
+  test("the six older fixture texts are byte for byte as on origin/main, and the plural seeded ones as DATA-412 wrote them; the four seeded keys are there", () => {
+    const sha = (text: string) => new Bun.CryptoHasher("sha256").update(text).digest("hex");
+    const raw = readFileSync(FIXTURE_PATH, "utf8");
+    const fixture = JSON.parse(raw) as Record<string, string>;
+    expect(sha(OLD_KEYS.map((k) => fixture[k]).join(""))).toBe(OLD_SHA256);
+    for (const [key, hash] of Object.entries(SEEDED_SHA256)) expect({ key, hash: sha(fixture[key]) }).toEqual({ key, hash });
+    expect(Object.keys(fixture)).toEqual([...OLD_KEYS, "seededThree", "seededOne", "seededPausedThree", "seededPausedOne"]);
+    expect(sha(raw)).toBe(FIXTURE_SHA256);
   });
 
   test("the seeded welcome's parts, exactly", () => {
@@ -1036,6 +1076,29 @@ describe("the seeded texts", () => {
       close: "Say go to publish any of them, change or drop to adjust, or tell me a new one.",
     });
     expect(welcomeText("Edge", { kind: "listed", titles: ["One"], seeded: "publish" }, INTENTS_URL)).toContain("fit this and bring");
+  });
+
+  test("DATA-416 Q3: exactly one listed title takes the singular sentences in both modes; two or more the plural ones", () => {
+    expect(SEEDED_COPY_ONE.publish).toEqual({
+      lead: "From what you told me at signup, I've set up this signal:",
+      close: "Say change or pause to adjust it, or tell me a new one.",
+    });
+    expect(SEEDED_COPY_ONE.paused).toEqual({
+      lead: "From what you told me at signup, I've drafted this signal, paused until you say go:",
+      close: "Say go to publish it, change or drop to adjust, or tell me a new one.",
+    });
+    for (const mode of ["publish", "paused"] as const) {
+      expect(welcomeText("Mira", { kind: "listed", titles: ["One want"], seeded: mode }, INTENTS_URL).split("\n\n").slice(2)).toEqual([
+        `${SEEDED_COPY_ONE[mode].lead}\n- One want`,
+        "I'll keep watch for people and events that fit this and bring the best to your morning brief.",
+        SEEDED_COPY_ONE[mode].close,
+      ]);
+      for (const titles of [["One want", "Two want"], ["One want", "Two want", "Three want"], ["One want", "Two want", "Three want", "Four want"]]) {
+        const parts = welcomeText("Mira", { kind: "listed", titles, seeded: mode }, INTENTS_URL).split("\n\n");
+        expect(parts[2].split("\n")[0]).toBe(SEEDED_COPY[mode].lead);
+        expect(parts[4]).toBe(SEEDED_COPY[mode].close);
+      }
+    }
   });
 
   test("the worst case stays under WELCOME_MAX_CHARS by construction: the longest name, three TITLE_MAX titles, both modes, through the real path", async () => {
@@ -1108,6 +1171,9 @@ describe("the --draft trailer on the seeded branches", () => {
       writeNickname("Mira");
       process.env.AV_WELCOME_SEED_MODE = "paused";
     }, {}, "seededPausedThree", { fallback: "none", intents_listed: 3, intents_seeded: 3, seed_failed: 0 }],
+    ["seededPausedOne", () => {
+      process.env.AV_WELCOME_SEED_MODE = "paused";
+    }, {}, "seededPausedOne", { fallback: "none", intents_listed: 1, intents_seeded: 1, seed_failed: 0 }],
     ["one failed", () => {}, { create: (n) => (n === 3 ? toolError("x") : undefined) }, null, { fallback: "none", intents_listed: 2, intents_seeded: 2, seed_failed: 1 }],
     ["all failed", () => {}, { create: () => toolError("x") }, "zero", { fallback: "questions", intents_listed: 0, intents_seeded: 0, seed_failed: 3 }],
     ["unreachable", () => {}, { list: () => ({ response: new Response("down", { status: 503 }) }) }, "unreachable", { fallback: "unreachable", intents_listed: 0, intents_seeded: 0, seed_failed: 0 }],
@@ -1116,7 +1182,7 @@ describe("the --draft trailer on the seeded branches", () => {
   for (const [label, setup, plan, key, branch] of CASES) {
     test(`${label}: five keys in order, the seed's counts; the default run prints the same and nothing on stderr`, async () => {
       setup();
-      writeUserMd(profileText(draftWith(key === "seededOne" ? 1 : 3)));
+      writeUserMd(profileText(draftWith(key === "seededOne" || key === "seededPausedOne" ? 1 : 3)));
       const draft = await captured(fakeIndex(plan), ["--draft"]);
       if (key) expect(draft.stdout).toBe(`${(golden as Record<string, string>)[key]}\n`);
       const line = draft.stderr.slice(0, -1);

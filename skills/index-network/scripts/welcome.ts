@@ -158,7 +158,7 @@ export const USER_MD_FILE = "USER.md";
 /** The profile's heading over the intentions the resident kept (agentvillage-app profile-text.ts profileText). */
 export const SELECTED_HEADING = "## Selected intentions";
 
-/** The lead and closing sentence of a welcome that seeded intents, by mode. */
+/** The lead and closing sentence of a welcome that seeded intents and lists two or more, by mode. */
 export const SEEDED_COPY = {
   publish: {
     lead: "From what you told me at signup, I've set up these signals:",
@@ -167,6 +167,18 @@ export const SEEDED_COPY = {
   paused: {
     lead: "From what you told me at signup, I've drafted these signals, paused until you say go:",
     close: "Say go to publish any of them, change or drop to adjust, or tell me a new one.",
+  },
+} as const;
+
+/** The same when the seeded welcome lists exactly one intent: singular throughout (DATA-416 Q3). */
+export const SEEDED_COPY_ONE = {
+  publish: {
+    lead: "From what you told me at signup, I've set up this signal:",
+    close: "Say change or pause to adjust it, or tell me a new one.",
+  },
+  paused: {
+    lead: "From what you told me at signup, I've drafted this signal, paused until you say go:",
+    close: "Say go to publish it, change or drop to adjust, or tell me a new one.",
   },
 } as const;
 
@@ -186,7 +198,8 @@ export type SeedMode = "publish" | "paused";
 
 /**
  * `seeded`: this run seeded at least one intent, in that mode, and `titles`
- * starts with them (the seeded lead and closing sentence, SEEDED_COPY).
+ * starts with them (the seeded lead and closing sentence: SEEDED_COPY, or
+ * SEEDED_COPY_ONE when the welcome lists exactly one).
  */
 export type IntentsRead =
   | { kind: "listed"; titles: string[]; seeded?: SeedMode }
@@ -665,7 +678,7 @@ function composeWelcome(name: string, read: IntentsRead, intentsUrl: string, lis
       "I'll turn your answers into intents you can confirm, then look for people and events that fit and bring the best to your morning brief.",
     );
   } else if (read.seeded) {
-    const copy = SEEDED_COPY[read.seeded];
+    const copy = (listed.length === 1 ? SEEDED_COPY_ONE : SEEDED_COPY)[read.seeded];
     parts.push(
       [copy.lead, ...listed.map((t) => `- ${t}`)].join("\n"),
       `I'll keep watch for people and events that fit ${listed.length === 1 ? "this" : "these"} and bring the best to your morning brief.`,
