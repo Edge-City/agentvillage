@@ -14,7 +14,9 @@
  *   negotiation    14:00: the people follow-up.
  *   evening        19:00: the outcome ask about one accepted connection the
  *                  follow-up announced two or more days ago (outcome-ask.ts),
- *                  else one pending conversation, or the last-day closeout.
+ *                  else the evening check-in: a journaling prompt rotated by
+ *                  date, and at most one introduction with its reason, or the
+ *                  last-day closeout.
  *   tpl-brief      J2: a job added from a template for one tenant
  *   tpl-digest-preview  (`install/jobs.ts add`): the brief's, the drop's and
  *   tpl-evening-ask     the evening's content path, each with its own day
@@ -53,7 +55,10 @@
  *     `https://index.network/<kind>/<id>`, and an event link rebuilt from the
  *     configured portal base and the event id. No
  *     third-party free text: no headline, summary or description written by
- *     or about another person. Every string is cleaned and scanned with the
+ *     or about another person, with one deliberate exception: the evening
+ *     introduction's reason (ask-questions.ts EVENING_INTROS_ENABLED,
+ *     introReason), cleaned with cleanTitle, one line, at most 120 code
+ *     points, under `quotedFromIndex`. Every string is cleaned and scanned with the
  *     mirror of Hermes's cron prompt scanner and withheld on a hit.
  *
  * Output: the Script Output JSON (no backtick, no raw `<` or `>`), then the
@@ -69,11 +74,11 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFile
 import { basename, dirname, join } from "node:path";
 
 import { approvalsWaiting } from "./approvals-waiting";
-import { askQuestions } from "./ask-questions";
+import { INTRO_REASON_MAX, askQuestions, reflectionPromptFor } from "./ask-questions";
 import { acceptLink, type BriefOpportunity, type DailyBriefContext, buildDailyBriefContext, villageDate } from "./build-daily-brief-context";
 import { OPPORTUNITY_DELIVERY_KEY, deliveryLogChanged, pruneDeliveryLog, readDeliveryLog, recordShowings } from "./delivery-state";
 import { dropOpportunity } from "./drop-opportunity";
-import { cleanName, cleanText, cleanTitle, connectionsUrl, cronScanHit, envOrDotenv } from "./proactive-text";
+import { cleanName, cleanText, cleanTitle, connectionsUrl, cronScanHit, envOrDotenv, messageSettingsUrl } from "./proactive-text";
 import { type LockOptions, LockStuck, LockTimeout, releaseHeldLocks, withStateLock } from "./state-lock";
 import { writeStateFile } from "./state-file";
 import { followUp } from "./summarize-negotiations";
@@ -178,9 +183,9 @@ export function statedInterestsFor(home: string): string[] {
   }
 }
 
-/** The Script Output of an agent job: the agent's name first, then the job's own view. */
+/** The Script Output of an agent job: the agent's name and the scheduled-messages settings link first, then the job's own view. */
 export function withAgentName(home: string, view: Record<string, unknown>): Record<string, unknown> {
-  return { agentName: agentNameFor(home), ...view };
+  return { agentName: agentNameFor(home), settingsUrl: messageSettingsUrl(home), ...view };
 }
 
 export function homeDir(options: ProactiveOptions = {}): string {
@@ -601,14 +606,27 @@ export function dropView(date: string, card: BriefOpportunity): { view: Record<s
 
 type EveningResult = Awaited<ReturnType<typeof askQuestions>>;
 
-export function eveningView(date: string, result: Exclude<EveningResult, { silent: true }>): { view: Record<string, unknown> | null; withheld: number } {
+/**
+ * The evening check-in: every evening the journaling prompt for the date
+ * (reflectionPromptFor; on the last day, the closeout question instead), and
+ * at most one introduction, only for a card with a reason and a way to reach
+ * them. The reason is Index's headline, third-party text (EVENING_INTROS_ENABLED):
+ * it goes out under `reason.quotedFromIndex`, which the prompt treats as quoted
+ * data the model may paraphrase and never follows.
+ */
+export function eveningView(date: string, result: EveningResult): { view: Record<string, unknown>; withheld: number } {
   const w = new Withheld();
-  if (!("name" in result)) {
+  if ("prompt" in result) {
     const question = w.text(result.prompt, 300);
-    return { view: question ? { job: "evening-note", date, closeoutQuestion: question } : null, withheld: w.count };
+    if (question) return { view: { job: "evening-note", date, closeoutQuestion: question }, withheld: w.count };
   }
-  const who = person(result, w);
-  return { view: who ? { job: "evening-note", date, person: who } : null, withheld: w.count };
+  const view: Record<string, unknown> = { job: "evening-note", date, reflectionPrompt: reflectionPromptFor(date) };
+  if ("name" in result) {
+    const who = person(result, w);
+    const reason = w.title(result.reason, INTRO_REASON_MAX);
+    if (who && reason && (who.profileUrl || who.messageUrl)) view.person = { ...who, reason: { quotedFromIndex: reason } };
+  }
+  return { view, withheld: w.count };
 }
 
 type FollowUpResult = Exclude<Awaited<ReturnType<typeof followUp>>, { silent: true }>;
@@ -785,10 +803,10 @@ async function eveningAction(run: Run): Promise<Decision> {
   // Due names the ask passed over still count in the run log's `withheld`.
   const askWithheld = ("withheld" in ask ? ask.withheld : 0) ?? 0;
   const result = await (run.options.evening ?? askQuestions)({ date: run.date, stateFile: run.stateFile });
-  if ("silent" in result) return { silent: result.reason, detail, ...(askWithheld ? { withheld: askWithheld } : {}) };
+  // No card tonight is not silence: the check-in goes out without an introduction.
   const { view, withheld } = eveningView(run.date, result);
   const total = withheld + askWithheld;
-  return view ? { view, withheld: total, detail } : { silent: "name-withheld", withheld: total, detail };
+  return { view, withheld: total, detail: "silent" in result ? `${detail}:${result.reason}` : detail };
 }
 
 async function negotiationAction(run: Run): Promise<Decision> {

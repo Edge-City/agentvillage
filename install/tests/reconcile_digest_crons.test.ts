@@ -12,6 +12,7 @@ import { dirname, join } from "node:path";
 import {
   DIGEST_CRON_SPECS,
   PREFETCH_PROMPT,
+  USAGE_REPORT_LAST_LINE,
   reconcileDigestCronJobs,
   staggeredSchedule,
 } from "../install_index";
@@ -194,7 +195,7 @@ test("fresh install creates digest crons (no heartbeat or Plaza selfie) on their
   expect(audit[3]).toContain("deterministic local token usage audit");
   // The whole multi-line prompt, Usage report line last, is one argument.
   expect(audit[3]).toBe(TOKEN_AUDIT.promptBody!.trimEnd());
-  expect(audit[3].endsWith("\n\n(Usage report message - you can ask me to stop or manage it)")).toBe(true);
+  expect(audit[3].endsWith(`\n\n${USAGE_REPORT_LAST_LINE}`)).toBe(true);
   expect(audit).toContain("--skill");
   expect(audit).toContain("token-usage-audit");
   expect(audit).toContain("--script");

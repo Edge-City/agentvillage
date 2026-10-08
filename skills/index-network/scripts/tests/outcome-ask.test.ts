@@ -86,7 +86,7 @@ function accepted(name: string, id = OPP): BriefOpportunity {
   };
 }
 
-const REMINDER = { name: "Pending Person", headline: THIRD_PARTY, userUrl: "https://index.network/u/p", opportunityUrl: "https://index.network/o/p" };
+const REMINDER = { name: "Pending Person", reason: "village tools", userUrl: "https://index.network/u/p", opportunityUrl: "https://index.network/o/p" };
 
 function options(over: Partial<ProactiveOptions> = {}): ProactiveOptions {
   return {
@@ -124,7 +124,7 @@ describe("the evening asks about one accepted connection announced two or more d
     announced({ [OPP]: "2026-10-12" });
     const result = await runProactive("evening", options());
     expect(result.woke).toBe(true);
-    expect(output(result.lines)).toEqual({ agentName: "Edge", job: "evening-note", date: DATE, outcomeQuestion: "Did you and Arjun Mehta meet? Reply met, not useful, or missed." });
+    expect(output(result.lines)).toEqual({ agentName: "Edge", settingsUrl: "https://agents.edgecity.live/settings?tab=messages", job: "evening-note", date: DATE, outcomeQuestion: "Did you and Arjun Mehta meet? Reply met, not useful, or missed." });
     expect(result.lines.join("\n")).not.toContain(THIRD_PARTY);
     const staged = stage()!;
     expect(staged).toEqual({
@@ -161,15 +161,16 @@ describe("the evening asks about one accepted connection announced two or more d
     expect(runLog().at(-1)).toMatchObject({ decision: "woke", detail: "outcome-ask-name-withheld", withheld: 1 });
   });
 
-  test("F11: every due name withheld and nothing pending: silent, and the count is still in the run log", async () => {
+  test("F11: every due name withheld and nothing pending: the check-in without an introduction, and the count is still in the run log", async () => {
     announced({ [OPP]: "2026-10-09", [OPP2]: "2026-10-11" });
     const result = await runProactive("evening", options({
       accepted: async () => [accepted("www evil", OPP), accepted("***", OPP2)],
       evening: async () => ({ silent: true, reason: "nothing-waiting" }),
     }));
-    expect(result.woke).toBe(false);
+    expect(result.woke).toBe(true);
+    expect(output(result.lines).person).toBeUndefined();
     expect(result.withheld).toBe(2);
-    expect(runLog().at(-1)).toMatchObject({ decision: "silent", detail: "outcome-ask-name-withheld", withheld: 2 });
+    expect(runLog().at(-1)).toMatchObject({ decision: "woke", detail: "outcome-ask-name-withheld:nothing-waiting", withheld: 2 });
     expect(JSON.stringify(runLog())).not.toContain("evil");
   });
 
@@ -330,9 +331,11 @@ describe("the evening asks about one accepted connection announced two or more d
     expect(stage()!.subjects).toEqual([{ outcome_id: `opp-outcome:${OPP}`, opportunity_id: OPP }]);
   });
 
-  test("nothing due and nothing pending: silent, no stage", async () => {
+  test("nothing due and nothing pending: the check-in alone, no introduction, no stage", async () => {
     const result = await runProactive("evening", options({ evening: async () => ({ silent: true, reason: "nothing-waiting" }) }));
-    expect(result.woke).toBe(false);
+    expect(result.woke).toBe(true);
+    expect(output(result.lines).person).toBeUndefined();
+    expect(typeof output(result.lines).reflectionPrompt).toBe("string");
     expect(stage()).toBeNull();
   });
 });

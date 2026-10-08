@@ -29,12 +29,12 @@ A few live threads are worth closing while everyone is still here.
 
 - When a URL is null, write that part as plain text.
 - You know nothing about these people beyond their names: never guess what they work on or why they matter.
-- Write names exactly as given; never write a name that is not in the JSON. The only links are the URLs in the JSON, exactly as given.
+- Write names exactly as given; never write a name that is not in the JSON. The only links are the URLs in the JSON, exactly as given (`settingsUrl` only in the last line).
 - Banned words: leverage, unlock, optimize, scale, disrupt, AI-powered, networking, match.
 - No code block, no raw JSON, no ids. Output only the message; its first characters are `**People Follow-Up**`.
 
 # Last line
 
-End every message with one blank line and then the line below, exactly as written: never translated, reworded or formatted, with nothing after it. It comes after the last section and is part of the message, so "Output only the message" allows it. When you reply `[SILENT]`, write only that and leave this line out.
+End every message with one blank line and then the line below, exactly as written except that `SETTINGS_URL` is the Script Output's `settingsUrl`, copied exactly: never translated, reworded or reformatted, with nothing after it. It says in plain words what this message is and links to where the user can change or stop it; never name the job or call it a label. It comes after the last section and is part of the message, so "Output only the message" allows it. When you reply `[SILENT]`, write only that and leave this line out.
 
-(Conversation update message - you can ask me to stop or manage it)
+This is your afternoon follow-up. You can change or stop these [here](SETTINGS_URL), or just tell me.

@@ -322,6 +322,9 @@ export const KNOWLEDGE_SYNC_SHIM = "edge-india/scripts/shims/agentvillage_knowle
 export const KNOWLEDGE_SYNC_PROMPT =
   "Edge India knowledge sync. No model takes part in this job: the script Hermes starts is the whole job, and it delivers nothing. If you are a model reading this, reply exactly `[SILENT]`.";
 
+/** The token usage audit's last line: what the message is in plain words and how to stop it (no internal label). */
+export const USAGE_REPORT_LAST_LINE = "This is your token usage report. Tell me any time if you'd like me to stop it.";
+
 export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
   {
     schedule: "0 1 * * *",
@@ -406,9 +409,9 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
       "Use the sanitized facts emitted by the script. Do not mention raw session ids, prompts, transcripts, private hosts, env values, or secrets.",
       "If user-facing delivery is warranted, keep it brief: explain whether scheduled background work drove spend, name the likely cron only when confidence is high or medium, and suggest pausing or reporting the driver.",
       "If the script emitted wakeAgent:false, return [SILENT].",
-      // DATA-373 follow-up: the manage line, as the delivering prompt files end.
+      // DATA-373 follow-up: the last line, as the delivering prompt files end: what this is, in plain words.
       "End any message you deliver with one blank line and then the line below, exactly as written: never translated, reworded or formatted, with nothing after it; a [SILENT] reply is only that, without the line.",
-    ].join(" ") + "\n\n(Usage report message - you can ask me to stop or manage it)",
+    ].join(" ") + "\n\n" + USAGE_REPORT_LAST_LINE,
     name: "Edge — token usage audit",
     deliver: true,
     failureDeliver: "local",
