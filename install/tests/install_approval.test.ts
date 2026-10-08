@@ -2347,6 +2347,29 @@ done
         expect(printable).toBeGreaterThan(150);
       }
   }, 120_000);
+
+  test("DATA-419: the fuzz's m102 and m285 (an invalid UTF-8 sequence after backslashes) reach block_json byte for byte under every shell and locale, and it declines them", () => {
+    const dir = blockJsonDir("av-approval-block-json-419-");
+    // m102: \\ 0xd8 \j>0xi, the input CI failed on; m285: 0xfd \\"yw\.l"!d. Each
+    // came out of bash 5.2's ${s%x} under C.UTF-8 as `\\` or nothing and a few
+    // stray bytes. Then a printable control with both escapes: \\"\ .
+    const cases = [
+      { hex: "5c5cd85c6a3e307869", sh: "" },
+      { hex: "fd5c5c2279775c2e6c222164", sh: "" },
+      { hex: "5c5c225c", sh: JSON.stringify({ action: "block", message: 'approval facade unreachable: \\\\"\\' }) },
+    ];
+    const files = cases.map((c, i) => {
+      const f = join(dir, `c${i}`);
+      writeFileSync(f, Buffer.from(c.hex, "hex"));
+      return f;
+    });
+    for (const shell of DATA380_UNIT_SHELLS)
+      for (const lc of BLOCK_JSON_LOCALES) {
+        runBlockJson(shell, lc, dir, files);
+        const got = files.map((f) => [readFileSync(`${f}.in`).toString("hex"), readFileSync(`${f}.sh`, "utf8")]);
+        expect([shell, lc, got]).toEqual([shell, lc, cases.map((c) => [c.hex, c.sh])]);
+      }
+  });
 });
 
 describe("DATA-234 G2: the shim digest the backstop compares", () => {
