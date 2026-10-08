@@ -4,19 +4,19 @@
   "source": {
     "repo": "p2p-lanes/edge-agent-skill",
     "path": "references",
-    "commit": "f4065f8cc04a7be86b8762602c65dfc0cd12bf28",
-    "commit_date": "2026-10-08T10:58:24.000Z"
+    "commit": "e4c0590d27158cbe09748ee1458fc9d442b1955e",
+    "commit_date": "2026-10-08T17:28:17.000Z"
   },
-  "synced_at": "2026-10-08T11:31:21.106Z",
+  "synced_at": "2026-10-08T18:00:40.191Z",
   "files": [
     {
       "path": "index.md",
-      "sha256": "ac4c1480e4d77b83e81747308c20ca2bfe4eec3af45036bc139261fe9a13eb5c",
+      "sha256": "e256cd341fc2a271e7354d7d683ad3a27e9dd0a805da3b52ea94572bc13471c7",
       "bytes": 5258
     },
     {
       "path": "manifest.json",
-      "sha256": "e1c9b6032ef89f3b87f939f717c63ecd3b7b4eb72d61978c458166b66e0b982b",
+      "sha256": "abec51f25d2fd89a515badd9b3493669c27634c71502517c1ab129cb23632564",
       "bytes": 11011
     },
     {
@@ -71,8 +71,8 @@
     },
     {
       "path": "newsletter/health-and-wellbeing-at-edge-city.md",
-      "sha256": "4fdddcf27e467a2d5143475ac67a9c7633ca669dd0c2cc4f7dad6ec3475b08c1",
-      "bytes": 8363
+      "sha256": "d7e71523ea3dba84ba5c5e7a67ef6233994f13e232608fb7d6a78321745a76c8",
+      "bytes": 8487
     },
     {
       "path": "newsletter/housing-for-edge-city-india.md",
@@ -81,8 +81,8 @@
     },
     {
       "path": "newsletter/meal-plans-at-edge-city-india.md",
-      "sha256": "d6a710cfffa737c92ea30eb73b34adb5d7a7fd536270f8d07df4b5aea7a566a0",
-      "bytes": 6918
+      "sha256": "4ebe156e77cc745600fe8cff5ddab2f61fa22780308a664891ac6c0313222c21",
+      "bytes": 7100
     },
     {
       "path": "newsletter/meet-the-inflection-fellowship-cohort.md",
@@ -146,8 +146,8 @@
     },
     {
       "path": "wiki-content.md",
-      "sha256": "2bd12b84d9b1b43a6353e83ebb43c68c208ad8d6bd9641911834d7c3dc0e108c",
-      "bytes": 22641
+      "sha256": "fb818a51ae31400cf4c13219ffd604756a42f802006b6bc1f70ec63750dc66fe",
+      "bytes": 22864
     }
   ]
 }

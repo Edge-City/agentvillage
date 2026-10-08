@@ -6,7 +6,7 @@ Source type: newsletter
 
 Published: 2026-09-30T15:34:57.000Z
 
-Last content change indexed: 2026-10-05T13:50:57.008Z
+Last content change indexed: 2026-10-08T16:28:28.025Z
 
 ---
 
@@ -99,6 +99,12 @@ Moving, recovering, and trying something new is easy at Edge City India, thanks 
 **Wakeboarding park**, 5 minutes from Riva
 
 -   15% off for all Edge participants
+
+**[Swell Cats Surf Club](https://swellcatssurfclub.com/)** (Mandrem)
+
+-   15% off one-day lessons
+
+-   20% off all courses
 
 We’ll also be sharing a guide soon to the healthy restaurants and cafés around the village that are offering Edge discounts. **[Subscribe to our Substack](https://edgecityindia2026.substack.com/subscribe)** to get it as soon as it’s out.
 

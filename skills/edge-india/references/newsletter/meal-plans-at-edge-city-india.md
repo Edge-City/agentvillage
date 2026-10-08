@@ -6,7 +6,7 @@ Source type: newsletter
 
 Published: 2026-10-07T14:45:17.000Z
 
-Last content change indexed: 2026-10-08T08:13:24.503Z
+Last content change indexed: 2026-10-08T15:43:22.446Z
 
 ---
 
@@ -78,7 +78,7 @@ Each week closes a few days before it starts so the kitchens know how much to co
 
 ## Eating out & partner discounts
 
-Mandrem’s beach shacks, cafes, and family restaurants are a big part of what makes the village feel like home, and a **[growing list](https://edgecity.notion.site/Edge-City-India-2026-Wiki-038d45cdfc5983c7a1fe013fdc77135b)** of them are offering Edge City attendees a discount when you show your wristband.
+Mandrem’s beach shacks, cafes, and family restaurants are a big part of what makes the village feel like home, and a **[growing list](https://edgecity.notion.site/Edge-City-India-2026-Wiki-038d45cdfc5983c7a1fe013fdc77135b)** [](https://edgecity.notion.site/Edge-City-India-2026-Wiki-038d45cdfc5983c7a1fe013fdc77135b)of them are offering Edge City attendees a discount when you show your wristband.
 
 -   **[Brisa by the Beach](https://www.google.com/maps/search/Brisa+by+the+Beach+Mandrem+Goa)**, 20% off. Continental, beachfront, open 12pm to 12am.
 
@@ -102,7 +102,7 @@ Mandrem’s beach shacks, cafes, and family restaurants are a big part of what m
 
 These are local businesses whose owners have welcomed us in, so please make a point of stopping by, whether for a coffee at Hari Cafe, dinner at Brisa by the Beach, or anywhere else on the list.
 
-> Head to the **[Wiki](https://edgecity.notion.site/Edge-City-India-2026-Wiki-038d45cdfc5983c7a1fe013fdc77135b)** for the growing list of discounts beyond just places to eat!
+> Head to the **[Wiki](https://edgecity.notion.site/Edge-City-India-2026-Wiki-038d45cdfc5983c7a1fe013fdc77135b)** [](https://edgecity.notion.site/Edge-City-India-2026-Wiki-038d45cdfc5983c7a1fe013fdc77135b)for the growing list of discounts beyond just places to eat!
 
 ## Good to know
 
