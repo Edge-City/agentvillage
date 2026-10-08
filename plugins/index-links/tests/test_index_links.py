@@ -265,3 +265,84 @@ def test_autolink_lookalike_host_is_left_as_written(plugin):
     """Recheck N1: an autolink on a look-alike host or a port is not an Index URL."""
     for text in ("<https://index.network.evil.com/u/abc>", "<https://index.network@evil.com/u/abc>", "<https://index.network:8443/u/abc>"):
         assert plugin.rewrite_index_links(text) == text
+
+
+# --- DATA-413: the owner's own profile keeps its Index person links -----------
+
+OWN_PROFILE_TOOLS = ["mcp__index__get_my_profile", "mcp_index_get_my_profile", "index_get_my_profile"]
+OWN = "https://index.network/u/own1"
+PEER = "https://index.network/u/peer2"
+
+
+@pytest.mark.parametrize("tool", OWN_PROFILE_TOOLS)
+@pytest.mark.parametrize(
+    "raw",
+    [
+        f"[Your Index profile]({OWN})",
+        json.dumps({"name": "Fixture Resident", "url": OWN, "intro": "builds things"}),
+        f"Profile: {OWN}.",
+    ],
+    ids=["markdown", "json", "bare"],
+)
+def test_own_profile_result_keeps_its_person_link(plugin, tool, raw):
+    assert plugin.is_own_profile_tool(tool) is True
+    # Nothing else to rewrite: the hook keeps the result as Index returned it.
+    assert hook(plugin, raw, tool=tool) is None
+
+
+@pytest.mark.parametrize("tool", OWN_PROFILE_TOOLS)
+def test_own_profile_result_keeps_a_second_persons_link_too(plugin, tool):
+    raw = json.dumps({"url": OWN, "referredBy": PEER, "note": f"met [Peer]({PEER}) at {PEER}"})
+    assert hook(plugin, raw, tool=tool) is None
+
+
+@pytest.mark.parametrize("tool", OWN_PROFILE_TOOLS)
+def test_own_profile_result_still_rewrites_signal_and_accept_links(plugin, tool):
+    raw = f"[You]({OWN}) signal [build](https://index.network/i/int9) and {ACCEPT}, peer {PEER}."
+    out = hook(plugin, raw, tool=tool)
+    assert out == (
+        f"[You]({OWN}) signal [build](https://agents.edgecity.live/intents?intent=int9) and {ACCEPT_OUT}, peer {PEER}."
+    )
+    payload = json.dumps({"url": OWN, "signalUrl": "https://index.network/i/int9", "acceptUrl": ACCEPT})
+    rewritten = json.loads(hook(plugin, payload, tool=tool))
+    assert rewritten == {
+        "url": OWN,
+        "signalUrl": "https://agents.edgecity.live/intents?intent=int9",
+        "acceptUrl": ACCEPT_OUT,
+    }
+
+
+@pytest.mark.parametrize("tool", OWN_PROFILE_TOOLS)
+def test_own_profile_autolink_keeps_the_index_url(plugin, tool):
+    """An autolink loses its angle brackets as every Index autolink does; the URL stays on Index."""
+    assert hook(plugin, f"<{OWN}>", tool=tool) == OWN
+
+
+@pytest.mark.parametrize(
+    "tool",
+    ["mcp__index__list_opportunities", "mcp__index__get_opportunity", "index_list_intents"],
+)
+def test_other_index_tools_still_send_person_links_to_the_rolodex(plugin, tool):
+    """The regression pin: the exemption is the profile tool's alone."""
+    assert plugin.is_own_profile_tool(tool) is False
+    assert hook(plugin, f"[Peer]({PEER})", tool=tool) == "[Peer](https://agents.edgecity.live/rolodex?person=peer2)"
+    assert hook(plugin, f"see {PEER}.", tool=tool) == "see https://agents.edgecity.live/rolodex?person=peer2."
+    assert json.loads(hook(plugin, json.dumps({"url": PEER}), tool=tool)) == {
+        "url": "https://agents.edgecity.live/rolodex?person=peer2"
+    }
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [None, "get_my_profile", "mcp__index__get_my_profile_extra", "mcp__index__update_my_profile", "mcp__indexer__get_my_profile", "read_file"],
+)
+def test_only_the_three_profile_tool_names_are_exempt(plugin, tool):
+    assert plugin.is_own_profile_tool(tool) is False
+
+
+def test_own_profile_exemption_keeps_the_off_switch_and_size_cap(plugin, monkeypatch):
+    tool = "mcp__index__get_my_profile"
+    filler = "x" * plugin.MAX_RESULT_BYTES
+    assert hook(plugin, f"{ACCEPT} {OWN} {filler}", tool=tool) is None
+    monkeypatch.setenv("AV_INDEX_LINKS", "off")
+    assert hook(plugin, f"{ACCEPT} {OWN}", tool=tool) is None
