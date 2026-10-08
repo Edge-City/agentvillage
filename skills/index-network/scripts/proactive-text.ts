@@ -288,6 +288,22 @@ export function cleanTitle(raw: unknown, max: number, cut: TitleCut = "codepoint
   return capped(plain, max, cut);
 }
 
+// ── The scheduled-messages settings link ─────────────────────────────────────
+
+/** The app's Settings › Scheduled messages tab, where a resident sees and changes what their agent sends on a schedule. */
+export const MESSAGE_SETTINGS_PATH = "/settings?tab=messages";
+
+/**
+ * The link every delivered scheduled message carries to change or stop it:
+ * MESSAGE_SETTINGS_PATH on the app origin of connectionsUrl (`AV_CONNECTIONS_URL`,
+ * else https://agents.edgecity.live). Contains no `)`, `\`, whitespace or
+ * bracket, so a Markdown link `[here](<url>)` survives Hermes's Telegram
+ * MarkdownV2 conversion unchanged.
+ */
+export function messageSettingsUrl(home: string): string {
+  return new URL(MESSAGE_SETTINGS_PATH, connectionsUrl(home)).href;
+}
+
 
 // ── The Connections link ─────────────────────────────────────────────────────
 

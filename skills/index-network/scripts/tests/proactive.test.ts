@@ -10,6 +10,7 @@ import { join } from "node:path";
 
 import { approvalsWaiting, parseHeldCount } from "../approvals-waiting";
 import type { BriefOpportunity, DailyBriefContext } from "../build-daily-brief-context";
+import { reflectionPromptFor } from "../ask-questions";
 import { MAX_STATE_BYTES, type ProactiveOptions, RUNS_KEY, STATE_HEALED, StateCorrupt, StateUnreadable, corruptStatePath, doneToday, eventLink, readState, portalBase, runProactive, scriptOutputText, windowDecision } from "../proactive";
 import { DEFAULT_CONNECTIONS_URL } from "../proactive-text";
 import { lockPathFor } from "../state-lock";
@@ -395,7 +396,7 @@ describe("the drops, the evening note and the follow-up: names and Index links o
   test("a drop wakes with one person, the signed accept link and no card text, and marks its own day", async () => {
     const result = await runProactive("drop-midday", options({ drop: async () => ({ opportunity: card("Maya Rao", "op1", { redelivery: true, acceptUrl: ACCEPT("op1") }) }) }));
     expect(output(result.lines)).toEqual({
-      agentName: "Edge", job: "opportunity-drop", date: DATE, kind: "conversation", seenBefore: true,
+      agentName: "Edge", settingsUrl: "https://agents.edgecity.live/settings?tab=messages", job: "opportunity-drop", date: DATE, kind: "conversation", seenBefore: true,
       person: { name: "Maya Rao", profileUrl: `${PORTAL_WEB}/rolodex?person=op1-user`, messageUrl: MSG("op1") },
     });
     expect(result.lines.join("\n")).not.toContain(THIRD_PARTY);
@@ -412,13 +413,37 @@ describe("the drops, the evening note and the follow-up: names and Index links o
     expect(output(plain.lines).person.messageUrl).toBeNull();
   });
 
-  test("the evening note: one person with the signed accept link, or the closeout question", async () => {
-    const person = await runProactive("evening", options({ evening: async () => ({ name: "Arjun", headline: THIRD_PARTY, userUrl: "https://index.network/u/a", opportunityUrl: "https://index.network/o/b", acceptUrl: ACCEPT("b") }) }));
-    expect(output(person.lines)).toEqual({ agentName: "Edge", job: "evening-note", date: DATE, person: { name: "Arjun", profileUrl: `${PORTAL_WEB}/rolodex?person=a`, messageUrl: MSG("b") } });
-    expect(person.lines.join("\n")).not.toContain(THIRD_PARTY);
-    rmSync(stateFile());
+  test("the evening note: the check-in with a dated journaling prompt, at most one introduction with its quoted reason, or the closeout question", async () => {
+    const person = await runProactive("evening", options({ evening: async () => ({ name: "Arjun", reason: "**memory** systems https://x.example", userUrl: "https://index.network/u/a", opportunityUrl: "https://index.network/o/b", acceptUrl: ACCEPT("b") }) }));
+    expect(output(person.lines)).toEqual({
+      agentName: "Edge", settingsUrl: "https://agents.edgecity.live/settings?tab=messages", job: "evening-note", date: DATE,
+      reflectionPrompt: reflectionPromptFor(DATE),
+      person: { name: "Arjun", profileUrl: `${PORTAL_WEB}/rolodex?person=a`, messageUrl: MSG("b"), reason: { quotedFromIndex: "memory systems" } },
+    });
+  });
+
+  test("the evening note: No card tonight", async () => {
+    // No card tonight: the check-in still goes out, and never names anyone.
+    const alone = await runProactive("evening", options({ evening: async () => ({ silent: true, reason: "nothing-waiting" }) }));
+    expect(alone.woke).toBe(true);
+    expect(output(alone.lines)).toEqual({ agentName: "Edge", settingsUrl: "https://agents.edgecity.live/settings?tab=messages", job: "evening-note", date: DATE, reflectionPrompt: reflectionPromptFor(DATE) });
+  });
+
+  test("the evening note: A reason that does not survive", async () => {
+    // A reason that does not survive the cleaner: no introduction.
+    const noReason = await runProactive("evening", options({ evening: async () => ({ name: "Arjun", reason: "https://x.example", userUrl: "https://index.network/u/a", opportunityUrl: "https://index.network/o/b" }) }));
+    expect(output(noReason.lines).person).toBeUndefined();
+  });
+
+  test("the evening note: No way to reach them", async () => {
+    // No way to reach them: no introduction.
+    const noLink = await runProactive("evening", options({ evening: async () => ({ name: "Arjun", reason: "memory systems", userUrl: "javascript:alert(1)" }) }));
+    expect(output(noLink.lines).person).toBeUndefined();
+  });
+
+  test("the evening note: const closeout = await runProactive('evening'", async () => {
     const closeout = await runProactive("evening", options({ evening: async () => ({ prompt: "Quick closeout check: did AgentVillage help you meet anyone?" }) }));
-    expect(output(closeout.lines)).toEqual({ agentName: "Edge", job: "evening-note", date: DATE, closeoutQuestion: "Quick closeout check: did AgentVillage help you meet anyone?" });
+    expect(output(closeout.lines)).toEqual({ agentName: "Edge", settingsUrl: "https://agents.edgecity.live/settings?tab=messages", job: "evening-note", date: DATE, closeoutQuestion: "Quick closeout check: did AgentVillage help you meet anyone?" });
   });
 
   test("the follow-up: names, signed accept links and the resident's own signals; silent when no name survives", async () => {
@@ -430,7 +455,7 @@ describe("the drops, the evening note and the follow-up: names and Index links o
     });
     const result = await runProactive("negotiation", options({ followUp: follow(["Maya Rao"]) }));
     expect(output(result.lines)).toEqual({
-      agentName: "Edge", job: "people-follow-up", date: DATE,
+      agentName: "Edge", settingsUrl: "https://agents.edgecity.live/settings?tab=messages", job: "people-follow-up", date: DATE,
       yourSignals: [{ text: "Looking for soil scientists", link: `${PORTAL_WEB}/intents?intent=s1` }],
       waitingOnYou: [{ name: "Maya Rao", profileUrl: `${PORTAL_WEB}/rolodex?person=n0`, messageUrl: MSG("n0") }],
       agentsTalking: [{ name: "Talking Person", profileUrl: `${PORTAL_WEB}/rolodex?person=t` }],

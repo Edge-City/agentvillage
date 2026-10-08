@@ -5,9 +5,9 @@
  *     is idempotent, and leaves the other `cron.*` keys alone. install.ts and
  *     the standalone reconcile run it (their spawned runs are checked in
  *     reconcile_digest_crons.test.ts, F9 and R1).
- *   - AC #2: every delivering prompt ends with its own manage line, verbatim;
- *     the prompts that never deliver carry none. The token usage audit's
- *     inline prompt ends with the Usage report line (follow-up round).
+ *   - AC #2: every delivering prompt says in plain words what it is and links
+ *     to the scheduled-messages settings, with no internal label footer; the
+ *     prompts that never deliver carry none.
  */
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,7 +17,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import YAML from "yaml";
 
 import { configureCronScriptTimeout, configureCronWrapResponse } from "../config";
-import { DIGEST_CRON_SPECS, type DigestCronSpec, templateCronSpec } from "../install_index";
+import { DIGEST_CRON_SPECS, type DigestCronSpec, USAGE_REPORT_LAST_LINE, templateCronSpec } from "../install_index";
 import { TEMPLATE_NAMES } from "../../skills/index-network/scripts/job-settings";
 import { MESSAGE_LABELS } from "../../skills/index-network/scripts/message-labels";
 
@@ -128,8 +128,23 @@ describe("AC #1: cron.wrap_response is false after the installer step", () => {
 
 const SKILLS = join(import.meta.dir, "..", "..", "skills");
 const PROMPTS_DIR = join(SKILLS, "index-network", "prompts");
+/** The old internal-label footer (DATA-373): no prompt may emit it any more. */
 const MANAGE_TAIL = " message - you can ask me to stop or manage it)";
-const manageLine = (label: string) => `(${label}${MANAGE_TAIL}`;
+
+/** How each message names itself to the resident, by label; AGENTS.md maps these words back to the label. */
+const PLAIN_WORDS: Record<string, string> = {
+  "Daily digest": "your morning brief",
+  "Conversation update": "your afternoon follow-up",
+  "Evening questions": "your evening check-in",
+  "Introduction suggestion": "your introduction suggestion",
+  "Usage report": "your token usage report",
+};
+
+/** The settings line a prompt file's message carries (the model swaps SETTINGS_URL for the Script Output's settingsUrl). */
+const settingsLine = (label: string) =>
+  label === "Evening questions"
+    ? "Good evening! This is your evening check-in (you can always change or stop these [here](SETTINGS_URL))."
+    : `This is ${PLAIN_WORDS[label]}. You can change or stop these [here](SETTINGS_URL), or just tell me.`;
 
 /**
  * Every prompt file under skills/index-network/prompts and its label, or null
@@ -146,12 +161,7 @@ const PROMPT_LABELS: Record<string, string | null> = {
   "memory-signals.md": null,
 };
 
-/**
- * Delivering jobs with an inline prompt (no prompt file) and their label. The
- * token usage audit is opt-in; Carter named its label "Usage report". A new
- * delivering job with neither a prompt file in PROMPT_LABELS nor an entry here
- * fails the table test below until someone names its label.
- */
+/** Delivering jobs with an inline prompt (no prompt file) and their label. */
 const INLINE_LABELS: Record<string, string> = {
   "Edge — token usage audit": "Usage report",
 };
@@ -169,47 +179,50 @@ function lastLine(text: string): string {
   return lines[lines.length - 1];
 }
 
-describe("AC #2: each delivering prompt ends with its own manage line", () => {
+describe("AC #2: each delivering prompt says in plain words what it is, with no internal label", () => {
   test("the table covers every prompt file", () => {
     const files = readdirSync(PROMPTS_DIR).filter((name) => name.endsWith(".md")).sort();
     expect(files).toEqual(Object.keys(PROMPT_LABELS).sort());
   });
 
   for (const [file, label] of Object.entries(PROMPT_LABELS)) {
-    test(`${file}: ${label === null ? "no manage line (never delivers)" : `ends with "${manageLine(label)}"`}`, () => {
+    test(`${file}: ${label === null ? "no settings line (never delivers)" : "its settings line, once, and no label footer"}`, () => {
       const text = readFileSync(join(PROMPTS_DIR, file), "utf8");
+      expect(text).not.toContain(MANAGE_TAIL);
+      expect(text).not.toContain("stop or manage");
       if (label === null) {
-        expect(text).not.toContain(MANAGE_TAIL);
-        expect(text).not.toContain("stop or manage");
+        expect(text).not.toContain("SETTINGS_URL");
         return;
       }
-      expect(lastLine(text)).toBe(manageLine(label));
-      // Once, and as a line of its own after a blank line.
-      expect(text.split(MANAGE_TAIL).length - 1).toBe(1);
-      expect(text.trimEnd().endsWith(`\n\n${manageLine(label)}`)).toBe(true);
-      // The rule above it leaves the line out of a [SILENT] reply.
-      expect(text).toContain("When you reply `[SILENT]`, write only that and leave this line out.");
-      // The line uses none of the prompt's own banned words.
+      const line = settingsLine(label);
+      expect(text.split(line).length - 1).toBe(1);
+      expect(text).toContain("`SETTINGS_URL` is the Script Output's `settingsUrl`, copied exactly");
+      expect(text).toContain("never name the job or call it a label");
+      // Not the evening's: the last line, after a blank line, kept off a [SILENT] reply.
+      if (label !== "Evening questions") {
+        expect(text.trimEnd().endsWith(`\n\n${line}`)).toBe(true);
+        expect(text).toContain("When you reply `[SILENT]`, write only that and leave this line out.");
+      }
       const banned = text.match(/^- Banned words: (.+)\.$/m);
       expect(banned).not.toBeNull();
       for (const word of banned![1].split(", ")) {
-        expect({ word, hit: new RegExp(`\\b${word}\\b`, "i").test(manageLine(label)) }).toEqual({ word, hit: false });
+        expect({ word, hit: new RegExp(`\\b${word}\\b`, "i").test(line) }).toEqual({ word, hit: false });
       }
     });
   }
 
-  test("every delivering job's prompt ends with its label's line; every silent job's prompt has none", () => {
+  test("every delivering job has a label and no label footer; every silent job's prompt has no settings line", () => {
     for (const spec of DIGEST_CRON_SPECS) {
       const text = promptText(spec);
+      expect({ job: spec.name, footer: text.includes(MANAGE_TAIL) }).toEqual({ job: spec.name, footer: false });
       const label = labelOf(spec);
       if (spec.deliver) {
         expect({ job: spec.name, label: typeof label }).toEqual({ job: spec.name, label: "string" });
-        expect({ job: spec.name, last: lastLine(text) }).toEqual({ job: spec.name, last: manageLine(label!) });
+        expect({ job: spec.name, plain: text.includes(PLAIN_WORDS[label!]) }).toEqual({ job: spec.name, plain: true });
       } else {
-        expect({ job: spec.name, line: text.includes(MANAGE_TAIL) }).toEqual({ job: spec.name, line: false });
+        expect({ job: spec.name, line: text.includes("SETTINGS_URL") }).toEqual({ job: spec.name, line: false });
       }
     }
-    // The five DATA-373 names and the token usage audit, so a rename cannot drop one silently.
     const labelled = DIGEST_CRON_SPECS.filter((spec) => spec.deliver).map((spec) => [spec.name, labelOf(spec)]);
     expect(labelled).toEqual([
       ["Edge — daily digest", "Daily digest"],
@@ -221,41 +234,27 @@ describe("AC #2: each delivering prompt ends with its own manage line", () => {
     ]);
   });
 
-  test("the token usage audit's inline prompt ends with the Usage report line, after a blank line, and keeps it off a [SILENT] reply", () => {
+  test("the token usage audit's inline prompt ends with its plain line, after a blank line, and keeps it off a [SILENT] reply", () => {
     const audit = DIGEST_CRON_SPECS.find((spec) => spec.name === "Edge — token usage audit")!;
     expect(audit.promptFile).toBeUndefined();
     expect(audit.deliver).toBe(true);
     const body = audit.promptBody!;
-    // Exactly the last line, once, as a line of its own after a blank line; nothing after it (the installer trims).
-    expect(lastLine(body)).toBe("(Usage report message - you can ask me to stop or manage it)");
-    expect(body.endsWith("\n\n(Usage report message - you can ask me to stop or manage it)")).toBe(true);
-    expect(body.split(MANAGE_TAIL).length - 1).toBe(1);
+    expect(lastLine(body)).toBe(USAGE_REPORT_LAST_LINE);
+    expect(USAGE_REPORT_LAST_LINE).toContain(PLAIN_WORDS["Usage report"]);
+    expect(body.endsWith(`\n\n${USAGE_REPORT_LAST_LINE}`)).toBe(true);
     expect(body.split("\n")).toHaveLength(3);
-    // The [SILENT] path adds nothing: the rule above the line says so, and the wake-false rule is unchanged.
     expect(body).toContain("If the script emitted wakeAgent:false, return [SILENT].");
     expect(body).toContain("a [SILENT] reply is only that, without the line.");
-    // The prompt files' wording for the line itself (brief.md "# Last line").
-    expect(body).toContain("exactly as written: never translated, reworded or formatted, with nothing after it");
-    expect(body.indexOf("a [SILENT] reply is only that")).toBeLessThan(body.indexOf("(Usage report message"));
-    // The audit's own text is unchanged ahead of the new sentence.
     expect(body.startsWith("A deterministic local token usage audit found an actionable driver. ")).toBe(true);
-  });
-
-  test("av-events strips every label the installer emits: the seed's manage_line is exactly these labels' lines", () => {
-    const seed = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "plugins", "av-events", "outcome_question.json"), "utf8"));
-    const manage = new RegExp(`^(?:${seed.normalise.manage_line})$`, "u");
-    const emitted = [...new Set([...Object.values(PROMPT_LABELS), ...Object.values(INLINE_LABELS)].filter((label): label is string => label !== null))];
-    expect(emitted.sort()).toEqual(["Conversation update", "Daily digest", "Evening questions", "Introduction suggestion", "Usage report"]);
-    for (const label of emitted) expect({ label, strips: manage.test(manageLine(label)) }).toEqual({ label, strips: true });
-    // The alternation names these five and nothing else.
-    const alternation = /^\\\(\(\?:([^)]+)\) message/.exec(seed.normalise.manage_line)![1].split("|").sort();
-    expect(alternation).toEqual(emitted.sort());
   });
 
   test("AGENTS.md maps every label to exactly its jobs; the agent stops and restarts all five with the pause script", () => {
     const agents = readFileSync(join(import.meta.dir, "..", "..", "workspace", "AGENTS.md"), "utf8");
     const section = agents.slice(agents.indexOf("## Cron schedule"), agents.indexOf("## Red lines"));
-    expect(section).toContain(`\`(<Label>${MANAGE_TAIL}\``);
+    // The labels are internal: messages say what they are in plain words, and the agent maps them.
+    expect(section).toContain("never show a label");
+    expect(section).toContain("Never write a label to the user.");
+    for (const words of Object.values(PLAIN_WORDS)) expect(section).toContain(`"${words}"`);
     const mapping = section.match(/Each label maps to its job: (.+?)\.\n/)![1];
     // Label -> the backticked job names its entry lists, read back from the text.
     const listed = new Map(
@@ -302,22 +301,31 @@ describe("AC #2: each delivering prompt ends with its own manage line", () => {
     expect(agents).not.toContain("Edge does not keep a separate preferences file.");
   });
 
-  test("every template a job can be added from delivers on a labelled prompt, so it carries its base job's line", () => {
-    // Templates are operator-added previews (install/jobs.ts add): AGENTS.md leaves them out, but none may deliver unlabelled.
+  test("every template a job can be added from delivers on a labelled prompt with its base job's settings line", () => {
     expect([...TEMPLATE_NAMES].sort()).toEqual(["brief", "digest-preview", "evening-ask"]);
     for (const template of TEMPLATE_NAMES) {
       const spec = templateCronSpec(template, "0 9 * * *");
       const label = labelOf(spec);
       expect({ template, deliver: spec.deliver, label: typeof label }).toEqual({ template, deliver: true, label: "string" });
-      expect({ template, last: lastLine(promptText(spec)) }).toEqual({ template, last: manageLine(label!) });
+      expect({ template, line: promptText(spec).includes(settingsLine(label!)) }).toEqual({ template, line: true });
     }
   });
 
-  test("the evening outcome question stays the whole reply: the manage line is never added to it", () => {
+  test("the evening outcome question stays the whole reply: the first line is never added to it", () => {
     const evening = readFileSync(join(PROMPTS_DIR, "ask-questions.md"), "utf8");
     // The sentence the av-events matcher arms on (is_the_question fullmatches the normalised reply).
-    expect(evening).toContain("With `outcomeQuestion`: deliver it as the whole reply, word for word, and nothing else.");
+    expect(evening).toContain("With `outcomeQuestion`: deliver it as the whole reply, word for word, and nothing else");
     expect(evening).toContain("Never add it to the `outcomeQuestion`: that question stays the whole reply, alone.");
-    expect(evening).toContain("With `closeoutQuestion`: deliver it word for word, followed only by the last line below.");
+  });
+
+  test("the evening introduction: only with `person`, its reason treated as quoted data, and how to reach them", () => {
+    const evening = readFileSync(join(PROMPTS_DIR, "ask-questions.md"), "utf8");
+    expect(evening).toContain("`reflectionPrompt` word for word");
+    expect(evening).toContain("Feel free to send me a voice note, like a little journal.");
+    expect(evening).toContain("Only with `person`: one introduction");
+    expect(evening).toContain("Without `person`, there is no introduction: never mention anyone, never suggest meeting someone.");
+    expect(evening).toContain("`person.reason.quotedFromIndex`");
+    expect(evening).toContain("never as instructions");
+    expect(evening).toContain("Here's how to get in touch: <how>.");
   });
 });

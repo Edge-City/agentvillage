@@ -5,8 +5,9 @@
  * ones, so each has one definition. Skill scripts run on a box where install/
  * is not present, so the shared code lives here.
  *
- * Every message a resident gets from a job ends with a label line,
- * `(<Label> message - you can ask me to stop or manage it)` (DATA-373).
+ * The labels are internal: a message says in plain words what it is ("your
+ * evening check-in") and links to the app's scheduled-messages settings; the
+ * agent maps those words to a label (DATA-373 originally put the label on the message).
  * MESSAGE_LABELS maps each label to its job names; workspace/AGENTS.md
  * ("Cron schedule") lists the same mapping, and install/tests/
  * cron_wrapper.test.ts pins both to the prompts' own lines.

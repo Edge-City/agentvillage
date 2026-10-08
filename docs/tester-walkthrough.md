@@ -94,15 +94,17 @@ welcome; blur Telegram ids and other people's names.
 
 ### 10. That evening
 - Do: nothing. Around 19:00 India time scheduled messages run.
-- Expect: as a brand-new resident you get the evening reminder, not the outcome question (that goes
-  to residents with an older connection). Scheduled messages end with a line in parentheses saying
-  what the message is and that you can ask the agent to stop or manage it.
-- If not: a message with a "Cronjob Response" header, or no footer line: report with the time.
+- Expect: as a brand-new resident you get the evening check-in, not the outcome question (that goes
+  to residents with an older connection): "Good evening! This is your evening check-in" with a
+  "here" link to Settings › Scheduled messages, a journaling prompt inviting a voice note, and at
+  most one introduction that says why and how to reach them. No line in parentheses naming the job.
+- If not: a message with a "Cronjob Response" header, an internal label line, or an introduction with
+  no reason: report with the time.
 
 ### 11. Next morning
 - Do: nothing. The daily digest arrives around 08:15 India time.
 - Expect: a digest that names only interests you actually stated (steps 3 and 8), nothing invented,
-  ending with "(Daily digest message - you can ask me to stop or manage it)". It may say there is
+  ending with "This is your morning brief. You can change or stop these here, or just tell me." It may say there is
   nothing today; that is fine.
 - If not: an interest you never gave, or the header/footer from the previous point: report.
 

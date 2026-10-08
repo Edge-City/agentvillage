@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { askQuestions } from "../ask-questions";
+import { INTRO_REASON_MAX, REFLECTION_PROMPTS, askQuestions, introReason, reflectionPromptFor } from "../ask-questions";
 import { FAKE_MCP_URL, indexMcpFake, listOpportunitiesText } from "./index-mcp-fake";
 import { failureInputs } from "./index-failure-inputs";
 import { pinDeliveryClock } from "./pin-clock";
@@ -57,7 +57,7 @@ function mockList(text: string) {
 
 const MAYA_CARD = {
   name: "Maya",
-  headline: "memory systems",
+  reason: "memory systems",
   userUrl: `https://index.network/u/${MAYA_ID}`,
   opportunityUrl: "https://index.network/o/opp-maya",
 };
@@ -143,7 +143,7 @@ describe("askQuestions", () => {
     const result = await askQuestions({ date: "2026-06-17", stateFile: "state.json", apiKey: "test-key" });
     expect(result).toEqual({
       name: "Jon",
-      headline: "village tools",
+      reason: "village tools",
       userUrl: `https://index.network/u/${JON_ID}`,
       opportunityUrl: "https://index.network/o/opp-jon",
     });
@@ -251,7 +251,7 @@ describe("askQuestions against Index's answers", () => {
     expect(JSON.parse(await Bun.file("state.json").text()).deliveredToday).toEqual({ date: "2026-06-17", ids: ["opp-maya"] });
   });
 
-  test("the evening card carries only Index links of their kind", async () => {
+  test("a card whose links are not Index links of their kind has no way to reach them, so it is not the evening card", async () => {
     tempWorkspace();
     mockList(listText([{
       id: "opp-maya",
@@ -262,7 +262,7 @@ describe("askQuestions against Index's answers", () => {
       peer: { name: "Maya", userId: "../../x", url: "javascript:alert(1)" },
     }] as unknown as ReturnType<typeof card>[]));
     const result = await askQuestions({ date: "2026-06-17", stateFile: "state.json", apiKey: "test-key" });
-    expect(result).toEqual({ name: "Maya", headline: "memory systems", opportunityUrl: "https://index.network/o/opp-maya" });
+    expect(result).toEqual({ silent: true, reason: "nothing-waiting" });
   });
 
   test("a card without a valid id is never the evening card", async () => {
@@ -275,5 +275,44 @@ describe("askQuestions against Index's answers", () => {
     const result = await askQuestions({ date: "2026-06-17", stateFile: "state.json", apiKey: "test-key" });
     expect(result).toEqual({ silent: true, reason: "nothing-waiting" });
     expect(await Bun.file("state.json").exists()).toBe(false);
+  });
+
+  test("a card with no reason is passed over and spends no showing; the next card with one is the evening card", async () => {
+    tempWorkspace();
+    mockList(listText([card("Jon", "", "opp-jon", JON_ID), card("Maya", "memory systems", "opp-maya", MAYA_ID)]));
+    const result = await askQuestions({ date: "2026-06-17", stateFile: "state.json", apiKey: "test-key" });
+    expect(result).toEqual(MAYA_CARD);
+    expect(JSON.parse(await Bun.file("state.json").text()).deliveredToday).toEqual({ date: "2026-06-17", ids: ["opp-maya"] });
+  });
+});
+
+describe("introReason: Index's headline as one plain, short line", () => {
+  test("links, handles, markup and line breaks are gone; the cut is at a word, at most INTRO_REASON_MAX", () => {
+    expect(introReason({ headline: "**Both** into\nmemory systems, see https://x.example @maya" })).toBe("Both into memory systems, see maya");
+    const long = introReason({ headline: "word ".repeat(60) })!;
+    expect([...long].length).toBeLessThanOrEqual(INTRO_REASON_MAX);
+    expect(long.endsWith("word\u2026")).toBe(true);
+  });
+
+  test("falls back to the main text; null when neither has visible text", () => {
+    expect(introReason({ headline: "", mainText: "climate tools" })).toBe("climate tools");
+    expect(introReason({ headline: "  ", mainText: undefined })).toBeNull();
+    expect(introReason({})).toBeNull();
+  });
+});
+
+describe("reflectionPromptFor: the script, not the model, rotates the journaling prompt", () => {
+  test("the same date always gets the same prompt", () => {
+    expect(reflectionPromptFor("2026-10-12")).toBe(reflectionPromptFor("2026-10-12"));
+  });
+
+  test("consecutive days walk the whole list before repeating", () => {
+    const days = Array.from({ length: REFLECTION_PROMPTS.length }, (_, i) => reflectionPromptFor(`2026-10-${String(11 + i).padStart(2, "0")}`));
+    expect(new Set(days).size).toBe(REFLECTION_PROMPTS.length);
+    expect(reflectionPromptFor("2026-10-11")).toBe(reflectionPromptFor(`2026-10-${11 + REFLECTION_PROMPTS.length}`));
+  });
+
+  test("a malformed date still gets a prompt", () => {
+    expect(REFLECTION_PROMPTS).toContain(reflectionPromptFor("not-a-date"));
   });
 });

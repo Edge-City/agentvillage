@@ -22,13 +22,13 @@ A short, warm note the user can read in under a minute, written for this user. I
 
 - Use only facts from the Script Output and what you already know of the user. Never invent an event, a time, a venue, a person or an announcement, and never fill a gap with Edge Esmeralda (the previous popup) or Healdsburg.
 - The only people you name are those in `connections.names`, written exactly as given.
-- The only links are the `link` fields, written exactly as given. Write no other URL, domain or address.
+- The only links are the `link` fields and the last line's `settingsUrl`, written exactly as given. Write no other URL, domain or address.
 - Banned words: leverage, unlock, optimize, scale, disrupt, AI-powered, maximize value, act fast, networking, match, Index, signal, intent, opportunity.
 - Do not infer emotions, personal life, ambitions or needs.
 - No code block, no raw JSON, no ids. Output only the brief.
 
 # Last line
 
-End every brief with one blank line and then the line below, exactly as written: never translated, reworded or formatted, with nothing after it. It comes after everything else, the closing question included. It is part of the brief, so "Output only the brief" allows it, and it stays even when the user has asked for a shorter or plainer brief. When you reply `[SILENT]`, write only that and leave this line out.
+End every brief with one blank line and then the line below, exactly as written except that `SETTINGS_URL` is the Script Output's `settingsUrl`, copied exactly: never translated, reworded or reformatted, with nothing after it. It says in plain words what this message is and links to where the user can change or stop it; never name the job or call it a label. It comes after everything else, the closing question included. It is part of the brief, so "Output only the brief" allows it, and it stays even when the user has asked for a shorter or plainer brief. When you reply `[SILENT]`, write only that and leave this line out.
 
-(Daily digest message - you can ask me to stop or manage it)
+This is your morning brief. You can change or stop these [here](SETTINGS_URL), or just tell me.

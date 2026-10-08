@@ -372,10 +372,13 @@ is kept.
 in `config.yaml` at install and at the standalone reconcile
 (`configureCronWrapResponse`), so Hermes no longer wraps a cron delivery in
 its "Cronjob Response: <job name>" header (with the job id) and its "To stop
-or manage this job" footer. Instead each delivering prompt ends with its own
-label line, `(<Label> message - you can ask me to stop or manage it)`, which
-the model writes as the message's last line and leaves off a `[SILENT]`
-reply. The labels and their jobs: Daily digest = `Edge — daily digest`;
+or manage this job" footer. Instead each delivering prompt has the model say
+in plain words what the message is ("This is your morning brief.", "Good
+evening! This is your evening check-in ...") with a link to the app's
+Settings › Scheduled messages (`/settings?tab=messages` on the
+`AV_CONNECTIONS_URL` origin, default https://agents.edgecity.live), left off a
+`[SILENT]` reply. The labels stay internal (the agent maps those words to a
+label for pause-job.ts); the labels and their jobs: Daily digest = `Edge — daily digest`;
 Conversation update = `Edge — negotiation summary`; Evening questions =
 `Edge — evening questions`; Introduction suggestion = both opportunity drops;
 Usage report = `Edge — token usage audit` (opt-in). Template jobs added by an
