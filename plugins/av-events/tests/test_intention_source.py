@@ -303,7 +303,7 @@ def test_the_draft_rule_states_each_answer_once(ri):
     assert ("If they have not answered by the next message you send them on your own, capture your words as "
             "shown with source=message and confirmed_in_chat=silence; the tool never publishes them on your word "
             "but holds them for the resident's approval, and your message says in one clause what the tool "
-            "answered (only when it answered that they wait on the approval card, for example: \"I didn't hear "
+            "answered (for example, only when it answered that they wait on the approval card: \"I didn't hear "
             "back, so it's waiting on your approval card as written\")") in rule_text
     # S1: the silence clause and the standing one both report what the tool answered.
     assert rule_text.count("what the tool answered") == 2
@@ -330,7 +330,7 @@ def test_the_draft_rule_states_each_answer_once(ri):
 REVERSED = (
     "do not ask for a yes in chat", "does not make the words theirs", "does not make your words theirs",
     "publish your words as written", "published them as written", "publish as written and say so",
-    "one tap publishes it", "it's on your approval card",
+    "one tap publishes it", "one tap will publish it", "it's on your approval card",
 )
 README = REPO / "plugins" / "av-events" / "README.md"
 
@@ -425,6 +425,8 @@ def test_the_table_is_well_formed(ri):
     # S2: the standing row is scoped to this conversation and shows what was recorded.
     [standing] = by_kind["go-ahead"]
     assert "for the rest of this conversation" in standing["skill"] and "show what you recorded" in standing["skill"]
+    # Matches DRAFT_RULE: it ends at "ask again" or "stop".
+    assert "it ends once they say to ask again or to stop" in standing["skill"]
     # Ambient only for words the resident never saw.
     assert {r["kind"] for r in EXEMPLARS if r["source"] == "ambient"} == ALWAYS_AMBIENT
 

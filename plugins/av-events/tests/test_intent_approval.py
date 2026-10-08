@@ -1619,3 +1619,17 @@ def test_a_confirmed_yes_from_telegram_is_stated_and_publishes_under_the_stated_
     assert {p["flags"].get("--class") for p in serve.proposals()} == {STATED_CLASS}
     assert events(av, plugin)[0]["payload"]["confirmed_in_chat"] == "yes"
 
+
+def test_sf2_with_approvals_on_a_held_silence_keeps_its_fingerprint(tctx, serve, index, mods):
+    """Recheck SF-2 (mutant R5): with approvals on, the held_silence capture's
+    fingerprint is stored, so the same words captured later in chat as
+    message + yes are held_ambient_exists: no Index request, no second card."""
+    held = call(tctx, {"text": TEXT, "source": "message", "confirmed_in_chat": "silence"})
+    assert held["publish_refused"] == "held_silence" and held["approval_state"] == "requested"
+    again = call(tctx, {"text": "  " + TEXT.upper() + " ", "source": "message", "confirmed_in_chat": "yes"},
+                 tool_call_id="c2")
+    assert again["published"] is False and again["publish_refused"] == "held_ambient_exists"
+    assert index.requests == []
+    [p] = serve.proposals()
+    assert p["flags"]["--class"] == INFERRED and p["flags"]["--key"] == f"{INFERRED}:{held['intention_id']}"
+

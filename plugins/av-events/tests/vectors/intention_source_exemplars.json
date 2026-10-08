@@ -323,7 +323,7 @@
       "confirmed_in_chat": "standing",
       "held": false,
       "why": "A standing go-ahead given in this conversation: you do not ask, your words publish as stated, and you show them exactly as recorded in the same reply. It lasts only for this conversation and ends when they say to ask again or to stop.",
-      "skill": "\"Don't ask me each time; just post the intents you think fit.\" → for the rest of this conversation `message` with `confirmed_in_chat=standing`, without asking; show what you recorded in the same reply, and ask again once they say to."
+      "skill": "\"Don't ask me each time; just post the intents you think fit.\" → for the rest of this conversation `message` with `confirmed_in_chat=standing`, without asking; show what you recorded in the same reply; it ends once they say to ask again or to stop."
     },
     {
       "said": "Yes, that's right.",

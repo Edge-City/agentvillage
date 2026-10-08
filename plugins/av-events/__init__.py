@@ -696,10 +696,6 @@ def _intention_payload(call: IntentionCall, capture: str, parent_session_id: Opt
         payload["approved_by"] = call.approved_by
     if call.approval_state is not None:
         payload["approval_state"] = call.approval_state
-    # DATA-410: present only on a `record_intention` capture of the agent's
-    # words that the resident adopted in chat, passed as `message`: `yes`,
-    # `silence` or `standing` (with `source` ambient and a held_* code when the
-    # lineage held it). Absent on every other event, as `status_only` is.
     if call.confirmed_in_chat is not None:
         payload["confirmed_in_chat"] = call.confirmed_in_chat
     if capture != "metadata":

@@ -93,8 +93,8 @@ Examples:
   message says in one clause what the tool answered; do not ask again.
 - "Don't ask me each time; just post the intents you think fit." → for the
   rest of this conversation `message` with `confirmed_in_chat=standing`,
-  without asking; show what you recorded in the same reply, and ask again once
-  they say to.
+  without asking; show what you recorded in the same reply; it ends once they
+  say to ask again or to stop.
 - "Yes, that's right." after you recorded your words → record nothing new:
   they are already recorded.
 
@@ -111,16 +111,16 @@ capture the edited text the same way. If they say no, record nothing. If they
 have not answered by the next message you send them on your own, capture your
 words as shown with `source=message` and `confirmed_in_chat=silence`; the tool
 never publishes them on your word but holds them for the resident's approval,
-and your message says in one clause what the tool answered (only when it
-answered that they wait on the approval card, for example: "I didn't hear
-back, so it's waiting on your approval card as written"). If they have told
-you in this conversation to go ahead without asking, do not ask: capture your
-words with `source=message` and `confirmed_in_chat=standing`, then in the same
-reply show them exactly as you recorded them and say what the tool answered;
-the go-ahead lasts only for this conversation and ends as soon as they say to
-ask again or to stop. Never ask twice; a yes after you recorded them records
-nothing new. If they later object, withdraw it; if they say the want in their
-own words, withdraw it and capture their words with `source=message`.
+and your message says in one clause what the tool answered (for example, only
+when it answered that they wait on the approval card: "I didn't hear back, so
+it's waiting on your approval card as written"). If they have told you in this
+conversation to go ahead without asking, do not ask: capture your words with
+`source=message` and `confirmed_in_chat=standing`, then in the same reply show
+them exactly as you recorded them and say what the tool answered; the go-ahead
+lasts only for this conversation and ends as soon as they say to ask again or
+to stop. Never ask twice; a yes after you recorded them records nothing new.
+If they later object, withdraw it; if they say the want in their own words,
+withdraw it and capture their words with `source=message`.
 
 ## Ambient intentions are held
 

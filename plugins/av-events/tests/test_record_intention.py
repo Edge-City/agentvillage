@@ -2059,10 +2059,14 @@ def test_the_schema_offers_the_three_codes(ri):
 # DATA-410 refutation 2: silence is held in code (B1); the refuter's probes M14-M16 (S4).
 
 
-def test_b1_silence_from_a_human_facing_session_is_held_silence_never_published(tctx, index, av, plugin, ri):
+@pytest.mark.parametrize("source", ["message", " MESSAGE "])
+@pytest.mark.parametrize("marker", ["silence", " Silence ", "SILENCE"])
+def test_b1_silence_from_a_human_facing_session_is_held_silence_never_published(tctx, index, av, plugin, ri,
+                                                                                source, marker):
     """The Telegram session may publish a message capture, but never one passed
-    with confirmed_in_chat=silence: it is held as ambient with its own code."""
-    out = call(tctx, {"text": TEXT, "source": "message", "confirmed_in_chat": "silence"})
+    with confirmed_in_chat=silence: it is held as ambient with its own code.
+    The hold follows the folded marker and source (recheck SF-1, mutants R11/R12)."""
+    out = call(tctx, {"text": TEXT, "source": source, "confirmed_in_chat": marker})
     assert out["success"] is True and out["published"] is False and out["held"] is True
     assert out["source"] == "ambient" and out["publish_refused"] == "held_silence"
     assert out["confirmed_in_chat"] == "silence"

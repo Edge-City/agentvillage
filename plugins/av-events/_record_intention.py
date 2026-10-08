@@ -294,7 +294,7 @@ DRAFT_RULE = (
     "answered by the next message you send them on your own, capture your words as shown with "
     "source=message and confirmed_in_chat=silence; the tool never publishes them on your word but "
     "holds them for the resident's approval, and your message says in one clause what the tool "
-    "answered (only when it answered that they wait on the approval card, for example: \"I didn't "
+    "answered (for example, only when it answered that they wait on the approval card: \"I didn't "
     "hear back, so it's waiting on your approval card as written\"). If they have told you in this "
     "conversation to go ahead without asking, do not ask: capture your words with source=message "
     "and confirmed_in_chat=standing, then in the same reply show them exactly as you recorded them "

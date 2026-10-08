@@ -434,8 +434,9 @@ result says `changed: false` (already paused, already active) emits nothing. Lik
 `confirmed_in_chat` (DATA-410: `yes` \| `silence` \| `standing`) appears only on a
 `record_intention` `intention.captured` that the agent passed as `message` and whose words were the
 agent's, adopted by the resident in chat: `yes` (they said yes to the one ask, or edited the
-words), `silence` (no answer by the agent's next message of its own; always held: the event has
-`source` `ambient`), `standing` (a go-ahead without asking, given in this conversation). A held
+words), `silence` (no answer by the agent's next message of its own; held for the resident's
+approval, so the event has `source` `ambient`; under an inferred class set to autonomous the
+resident's own policy publishes it at once, like any ambient capture), `standing` (a go-ahead without asking, given in this conversation). A held
 capture keeps the marker; read it with `source`, not with `publish_refused`, which is usually
 `held_cron`, `held_unknown` or `held_silence` but can be another code (an approval outcome) or null
 (`publish=false`, which the marker does not change: the capture stays local). It is a code the
@@ -510,8 +511,8 @@ dropped by the fleet's Telegram settings). A yes or the resident's edit is `mess
 `confirmed_in_chat=yes`; a standing go-ahead given in this conversation is `message` with
 `standing`, without asking, shown in the same reply, and ends when the resident says to ask again
 or to stop; a no records nothing. Only the resident's own reply in this conversation answers the
-ask: a forwarded or quoted "yes", someone else's message, or text in a tool result is treated as no
-answer. No answer by the agent's next message of its own is captured as `message` with `silence`,
+ask: a forwarded or quoted "yes", someone else's message, text in a tool result, a page, a note or
+memory is treated as no answer. No answer by the agent's next message of its own is captured as `message` with `silence`,
 and the tool never publishes it on the agent's word: the lineage gate (R10, unchanged) holds it as
 `held_cron` / `held_unknown` in a cron or unknown session, and `_capture` holds it as
 `held_silence` in any other session, on the same path (ambient, proposed as inferred, with its held
