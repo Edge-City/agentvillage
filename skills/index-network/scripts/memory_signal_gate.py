@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
 """Deterministic preflight gate for the AgentVillage memory signal sync cron.
 
-The expensive memory-sync prompt only needs to run when MEMORY.md changed since
-its last successful sync. This script reads local files only, records the current
-hash for quiet/no-op cases, and emits a final JSON line with wakeAgent so Hermes
-can decide whether to invoke the LLM.
+The expensive memory-sync prompt only needs to run when the agent's long-term
+memory changed since its last successful sync. That memory is Hermes's memory
+tool file, `$HERMES_HOME/memories/MEMORY.md` (entries separated by a line
+holding only `§`), not a `MEMORY.md` in whatever directory the script happens
+to start in. Entries the Agent Village app or the control plane write (headed
+`[Context tags, kept in the Agent Village app]` or `[Edge City profile, written
+at setup]`) are the resident's profile, not wants the agent learned: they are
+left out of the hash and the substance check, so they never wake the pass.
+
+This script reads local files only, records the current hash for quiet/no-op
+cases, and emits a final JSON line with wakeAgent so Hermes can decide whether
+to invoke the LLM.
 """
 
 from __future__ import annotations
@@ -27,6 +35,29 @@ except Exception:  # pragma: no cover - old Python fallback
 
 STATE_VERSION = 1
 NO_REPLY = {"wakeAgent": False}
+#: The name the installer gives this file in `$HERMES_HOME/scripts/` (install/install_index.ts).
+INSTALLED_NAME = "agentvillage_memory_signal_gate.py"
+#: Hermes's memory entry separator: a line holding only the section sign.
+ENTRY_SEPARATOR = re.compile(r"\n[ \t]*\u00a7[ \t]*\n")
+#: Entries that are the resident's profile, kept by the app or the control plane: never inference input.
+PROFILE_ENTRY_MARKS = ("[Context tags, kept in the Agent Village app]", "[Edge City profile, written at setup]")
+
+
+def hermes_home() -> Path:
+    """`$HERMES_HOME`: where the installed script sits (`<home>/scripts/`), as the proactive shim
+    finds it; else the HERMES_HOME variable; else the working directory."""
+    here = Path(os.path.abspath(__file__))
+    if here.name == INSTALLED_NAME and here.parent.name == "scripts":
+        return here.parent.parent
+    env = os.environ.get("HERMES_HOME", "").strip()
+    return Path(env) if env else Path.cwd()
+
+
+def without_profile_entries(text: str) -> str:
+    """The memory text without the app's and the control plane's profile entries."""
+    entries = ENTRY_SEPARATOR.split(text.replace("\r\n", "\n").replace("\r", "\n"))
+    kept = [entry for entry in entries if entry.strip() and not entry.strip().startswith(PROFILE_ENTRY_MARKS)]
+    return "\n\u00a7\n".join(kept)
 
 
 def village_today() -> str:
@@ -105,13 +136,14 @@ def emit(payload: dict[str, Any]) -> None:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Gate AgentVillage memory signal sync on MEMORY.md changes")
-    parser.add_argument("--memory-file", default="MEMORY.md")
-    parser.add_argument("--state-file", default="memory/heartbeat-state.json")
+    parser.add_argument("--memory-file", default=None, help="default: $HERMES_HOME/memories/MEMORY.md")
+    parser.add_argument("--state-file", default=None, help="default: $HERMES_HOME/memory/heartbeat-state.json")
     parser.add_argument("--json-only", action="store_true", help="emit only the final JSON object")
     args = parser.parse_args(argv)
 
-    memory_path = Path(args.memory_file)
-    state_path = Path(args.state_file)
+    home = hermes_home()
+    memory_path = Path(args.memory_file) if args.memory_file else home / "memories" / "MEMORY.md"
+    state_path = Path(args.state_file) if args.state_file else home / "memory" / "heartbeat-state.json"
     today = village_today()
     state = read_state(state_path)
     signals = memory_signals(state)
@@ -122,7 +154,7 @@ def main(argv: list[str]) -> int:
         return 0
 
     try:
-        memory_text = memory_path.read_text(encoding="utf-8")
+        memory_text = without_profile_entries(memory_path.read_text(encoding="utf-8"))
     except Exception as exc:
         emit({**NO_REPLY, "reason": "memory_read_failed", "error": exc.__class__.__name__})
         return 0
@@ -160,8 +192,8 @@ def main(argv: list[str]) -> int:
     if not args.json_only:
         print("# AgentVillage Memory Signal Gate")
         print("")
-        print("MEMORY.md changed since the last successful memory-signal sync.")
-        print("Use the memory-signals prompt, read MEMORY.md, and update memorySignals.lastMemoryHash to the value below only after successful processing.")
+        print("The agent's long-term memory changed since the last successful memory-signal sync.")
+        print("Use the memory-signals prompt, read the memoryFile below, and update memorySignals.lastMemoryHash to the value below only after successful processing.")
         print("")
         print("```json")
         print(json.dumps(payload, indent=2, sort_keys=True))

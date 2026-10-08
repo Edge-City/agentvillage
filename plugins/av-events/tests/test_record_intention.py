@@ -1446,6 +1446,8 @@ NOT_AN_INSTRUCTION: set[str] = {
     "skills/approval/templates/APPROVAL.md",
     # The skill's README describes that routing table for humans; SKILL.md is the prompt.
     "skills/approval/README.md",
+    # The memory signal sync names it only to forbid it: it records through record_intention or not at all.
+    "skills/index-network/prompts/memory-signals.md",
 }
 
 
@@ -2124,3 +2126,13 @@ def test_m16_a_held_marker_capture_keeps_its_fingerprint_so_a_chat_yes_cannot_pu
     assert again["published"] is False and again["publish_refused"] == "held_ambient_exists"
     assert index.requests == []
 
+
+
+def test_memory_signals_never_falls_back_to_create_intent():
+    """The nightly pass has no create_intent fallback: every mention of it is a prohibition."""
+    prompt = (REPO / "skills" / "index-network" / "prompts" / "memory-signals.md").read_text(encoding="utf-8")
+    assert 'record_intention(text=..., source="ambient")' in prompt
+    assert "records nothing" in prompt
+    for line in prompt.splitlines():
+        if "create_intent" in line:
+            assert "Never call" in line, line
