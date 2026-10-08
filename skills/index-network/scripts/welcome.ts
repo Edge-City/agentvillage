@@ -33,9 +33,20 @@
  * It then lists the intents again (the creates leave it
  * WELCOME_RELIST_RESERVE_MS of the budget) and the welcome names the seeded
  * ones first ("From what you told me at signup, ..."); the marker then gets
- * `done`, and a run that finds a marker without it waits for it. Nothing of
- * the resident's but the selected texts is sent, and no text is logged. It
- * never changes, publishes or archives an intent it did not create.
+ * `done`. A run that finds the marker already there, whatever its first list
+ * showed (another run's creates may have landed only in part), waits while it
+ * lacks `done` and then lists again, so its welcome shows what was seeded.
+ * Nothing of the resident's but the selected texts is sent, and no text is
+ * logged. It never changes, publishes or archives an intent it did not
+ * create.
+ *
+ * Known limits (DATA-416). In paused mode, a create that landed but answered
+ * too late, or whose `pause_intent` failed, stays published while the trailer
+ * counts it failed and the paused welcome leaves it out (paused mode is not
+ * used in production). The seed marker is claimed by an exclusive create and
+ * then written, not in one atomic step: a run that reads it in between finds
+ * it empty, does not wait, and may list only part of the seed (theoretical:
+ * a window of microseconds).
  *
  * One welcome per tenant. `memory/welcome-state.json` under `$HERMES_HOME`
  * (`{"welcomeSent":true,"sentAt":"<ISO-8601>"}`) is the marker the control
@@ -453,13 +464,14 @@ function timed(target: IndexMcpTarget, clock: Clock, ms: number, reserve = 0): I
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Another run holds the seed: when it is still seeding, wait for its `done`
- * (at most clock.wait, polling every clock.poll, within the budget) and list
- * again, so the welcome shows what it created; else the first read stands.
+ * The seed marker exists (another run claimed it, now or before): while that
+ * run is still seeding, wait for its `done` (at most clock.wait, polling every
+ * clock.poll, within the budget), then list again once, whether the marker
+ * was done from the start or not, since the first read may predate that
+ * run's creates (DATA-416 race 2). The welcome then shows what Index lists;
+ * the first read stands only when that second list fails or is not made.
  */
 async function awaitSeed(home: string, target: IndexMcpTarget, first: { read: IntentsRead }, clock: Clock): Promise<{ read: IntentsRead; seed: SeedCounts }> {
-  const unchanged = { read: first.read, seed: NO_SEED };
-  if (!seedInProgress(home)) return unchanged;
   const until = Math.min(Date.now() + clock.wait, clock.deadline - Math.min(clock.reserve, WELCOME_INDEX_TIMEOUT_MS));
   while (seedInProgress(home) && Date.now() < until) await sleep(Math.max(1, Math.min(clock.poll, until - Date.now())));
   const relistTarget = timed(target, clock, WELCOME_INDEX_TIMEOUT_MS);
@@ -477,8 +489,10 @@ async function awaitSeed(home: string, target: IndexMcpTarget, first: { read: In
  * skipped), pausing each in `paused` mode, keeping WELCOME_RELIST_RESERVE_MS
  * of the budget for the second list; then list again. A create whose own
  * call failed but whose text the second list shows active is counted as
- * seeded (publish mode). A marker another run is still filling is waited
- * for (awaitSeed). The read the welcome is composed from, and the counts.
+ * seeded (publish mode). When the marker already exists, whatever the first
+ * read listed (a run whose first list landed between another run's creates
+ * sees only some of them: DATA-416 race 1), the run waits for it and lists
+ * again (awaitSeed). The read the welcome is composed from, and the counts.
  * Never throws.
  */
 async function seedWelcome(
@@ -491,8 +505,10 @@ async function seedWelcome(
 ): Promise<{ read: IntentsRead; seed: SeedCounts }> {
   const unchanged = { read: first.read, seed: NO_SEED };
   if (welcomed) return unchanged;
-  if (first.read.kind !== "listed" || first.read.titles.length !== 0) return unchanged;
+  if (first.read.kind !== "listed") return unchanged;
+  // The marker before the active count: another run's creates may already be partly listed (DATA-416 race 1).
   if (existsSync(join(home, WELCOME_SEED_FILE))) return awaitSeed(home, target, first, clock);
+  if (first.read.titles.length !== 0) return unchanged;
   const selected = selectedIntentions(home);
   const sent = new Set(first.rows.flatMap((row) => row.keys));
   const lines: Array<{ text: string; title: string; key: string }> = [];

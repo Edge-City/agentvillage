@@ -142,8 +142,8 @@ const toolError = (text: string): ToolReply => ({ result: { content: [{ type: "t
 
 type Plan = {
   rows?: Row[];
-  /** Replaces the answer to the nth create (1-based); `undefined` keeps the normal one. */
-  create?: (n: number, description: string, id: string) => ToolReply | undefined;
+  /** Replaces the answer to the nth create (1-based), now or later; `undefined` keeps the normal one. */
+  create?: (n: number, description: string, id: string) => ToolReply | Promise<ToolReply> | undefined;
   pause?: (id: string) => ToolReply | undefined;
   /** list_intents ignores the creates (always these rows). */
   frozen?: boolean;
@@ -651,12 +651,12 @@ describe("the seed marker: the creates run once per box, in both modes", () => {
     ["empty", ""],
     ["not JSON", "seeded"],
   ] as const) {
-    test(`a marker that exists (${label}) means no create, even with no active intent and lines selected; it is left as it was`, async () => {
+    test(`a marker that exists (${label}) means no create, even with no active intent and lines selected, and one more list (DATA-416 race 2); it is left as it was`, async () => {
       writeUserMd(profileText(draftWith(3)));
       mkdirSync(join(home, "memory"), { recursive: true });
       writeFileSync(join(home, WELCOME_SEED_FILE), content);
       const { names, text, branch } = await run(fakeIndex(), ["--draft"]);
-      expect(names).toEqual(["list_intents"]);
+      expect(names).toEqual(["list_intents", "list_intents"]);
       expect(text).toBe(golden.zero);
       expect(branch).toEqual({ fallback: "questions", intents_listed: 0, intents_seeded: 0, seed_failed: 0 });
       expect(readFileSync(join(home, WELCOME_SEED_FILE), "utf8")).toBe(content);
@@ -670,7 +670,8 @@ describe("the seed marker: the creates run once per box, in both modes", () => {
     expect(creates(first.calls)).toHaveLength(3);
     const second = await run(index, ["--draft"]);
     expect(creates(second.calls)).toHaveLength(3); // the same three: none added
-    expect(second.names.slice(first.names.length)).toEqual(["list_intents"]);
+    // It lists, finds the marker, and lists once more (DATA-416 race 2).
+    expect(second.names.slice(first.names.length)).toEqual(["list_intents", "list_intents"]);
     // And a default run after them: still no create.
     const third = await run(index);
     expect(creates(third.calls)).toHaveLength(3);
@@ -744,7 +745,7 @@ describe("the seed marker: the creates run once per box, in both modes", () => {
     }
   });
 
-  test("DATA-416 S3: a marker that never gains done is waited for at most the wait, then the run lists; a done or foreign marker is not waited for", async () => {
+  test("DATA-416 S3: a marker that never gains done is waited for at most the wait, then the run lists; a done or foreign marker is not waited for, only listed again", async () => {
     writeUserMd(profileText(draftWith(3)));
     mkdirSync(join(home, "memory"), { recursive: true });
     writeFileSync(join(home, WELCOME_SEED_FILE), '{"seededAt":"2026-10-11T04:30:00.000Z","selected":3,"created":0,"failed":0}\n');
@@ -758,8 +759,93 @@ describe("the seed marker: the creates run once per box, in both modes", () => {
       writeFileSync(join(home, WELCOME_SEED_FILE), content);
       started = Date.now();
       const quick = await run(fakeIndex(), ["--draft"], { waitMs: 5000 });
-      expect({ content, names: quick.names, fast: Date.now() - started < 1000 }).toEqual({ content, names: ["list_intents"], fast: true });
+      expect({ content, names: quick.names, fast: Date.now() - started < 1000 }).toEqual({ content, names: ["list_intents", "list_intents"], fast: true });
     }
+  });
+
+  test("DATA-416 race 1: a run whose first list lands between another run's creates (1 of 3 active) waits for done and lists all three; the marker is claimed once, three creates in all", async () => {
+    writeUserMd(profileText(draftWith(3)));
+    process.env.INDEX_API_KEY = FAKE_API_KEY;
+    const firstNow = new Date("2026-10-11T04:30:00.000Z");
+    const secondNow = new Date("2026-10-11T04:30:01.000Z");
+    const activeAtList: number[] = [];
+    const secondNames: string[] = [];
+    let second: ReturnType<typeof welcomeRun> | null = null;
+    const index = fakeIndex({
+      list: () => void activeAtList.push(index.rows.filter((r) => r.status === "active").length),
+      create: (n, description, id) => {
+        if (n === 1) {
+          // This create lands at once; the second run starts now, while the other two are still on their way.
+          setTimeout(() => {
+            second = welcomeRun(["--home", home, "--draft"], { fetch: secondFetch, timeoutMs: 2000, pollMs: 20, now: secondNow });
+          }, 0);
+          return undefined;
+        }
+        return new Promise<ToolReply>((resolve) =>
+          setTimeout(() => {
+            index.rows.push({ id, summary: description, status: "active" });
+            resolve(createAnswer(id, description));
+          }, 400),
+        );
+      },
+    });
+    const secondFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      try {
+        const body = JSON.parse(String(init?.body ?? "")) as { method?: string; params?: { name?: string } };
+        if (body.method === "tools/call") secondNames.push(String(body.params?.name));
+      } catch {
+        // Not a JSON-RPC body: the fake answers it.
+      }
+      return index.fake.fetch(input, init);
+    }) as typeof fetch;
+    process.env.INDEX_MCP_URL = index.fake.url;
+    const first = await welcomeRun(["--home", home, "--draft"], { fetch: index.fake.fetch, timeoutMs: 2000, now: firstNow });
+    expect(second).not.toBeNull();
+    const late = await second!;
+    // The race happened: the first run listed none, the second run's first list saw one of the three.
+    expect(activeAtList.slice(0, 2)).toEqual([0, 1]);
+    expect(first.branch).toEqual({ fallback: "none", intents_listed: 3, intents_seeded: 3, seed_failed: 0 });
+    // The second run created nothing, waited, and listed all three.
+    expect(secondNames).toEqual(["list_intents", "list_intents"]);
+    expect(late.branch).toEqual({ fallback: "none", intents_listed: 3, intents_seeded: 0, seed_failed: 0 });
+    expect(late.text).toContain("\n\nHere's what I have you down for so far:\n");
+    expect([...listedLines(late.text)].sort()).toEqual(KEPT.slice(0, 3).map((k) => k.text).sort());
+    // One claim (the first run's, never rewritten by the second) and three creates in all.
+    expect(creates(index.fake.calls)).toHaveLength(3);
+    expect(readFileSync(join(home, WELCOME_SEED_FILE), "utf8")).toBe(`${JSON.stringify({ seededAt: firstNow.toISOString(), selected: 3, created: 3, failed: 0, done: true })}\n`);
+  });
+
+  test("DATA-416 race 2: a marker already done and a first list that predates the creates (1 of 3): the run lists again and the welcome shows that list", async () => {
+    writeUserMd(profileText(draftWith(3)));
+    mkdirSync(join(home, "memory"), { recursive: true });
+    const done = `${JSON.stringify({ seededAt: "2026-10-11T04:30:00.000Z", selected: 3, created: 3, failed: 0, done: true })}\n`;
+    writeFileSync(join(home, WELCOME_SEED_FILE), done);
+    const all: Row[] = KEPT.slice(0, 3).map((k, i) => ({ id: idFor(0x300 + i), summary: k.text, status: "active" }));
+    const stale = (n: number) => (n === 1 ? intentsText(all.slice(0, 1)) : undefined);
+    const started = Date.now();
+    const out = await run(fakeIndex({ rows: all, list: stale }), ["--draft"], { waitMs: 5000 });
+    expect(Date.now() - started).toBeLessThan(1000); // done: nothing to wait for
+    expect(out.names).toEqual(["list_intents", "list_intents"]);
+    expect(listedLines(out.text)).toEqual(KEPT.slice(0, 3).map((k) => k.text));
+    expect(out.branch).toEqual({ fallback: "none", intents_listed: 3, intents_seeded: 0, seed_failed: 0 });
+    expect(readFileSync(join(home, WELCOME_SEED_FILE), "utf8")).toBe(done);
+    // The second list failing: the first read stands.
+    const down = await run(fakeIndex({ rows: all, list: (n) => (n === 1 ? intentsText(all.slice(0, 1)) : { response: new Response("down", { status: 503 }) }) }), ["--draft"]);
+    expect(down.names).toEqual(["list_intents", "list_intents"]);
+    expect(listedLines(down.text)).toEqual([KEPT[0].text]);
+    expect(down.branch).toEqual({ fallback: "none", intents_listed: 1, intents_seeded: 0, seed_failed: 0 });
+    // No marker: one list, as before.
+    rmSync(join(home, WELCOME_SEED_FILE));
+    expect((await run(fakeIndex({ rows: all }), ["--draft"])).names).toEqual(["list_intents"]);
+    // A welcome already sent: --draft lists once and no more, the default run calls nothing.
+    writeFileSync(join(home, WELCOME_SEED_FILE), done);
+    writeFileSync(join(home, WELCOME_STATE_FILE), JSON.stringify({ welcomeSent: true, sentAt: "2026-10-11T05:00:00.000Z" }));
+    const sent = await run(fakeIndex({ rows: all, list: stale }), ["--draft"]);
+    expect(sent.names).toEqual(["list_intents"]);
+    expect(listedLines(sent.text)).toEqual([KEPT[0].text]);
+    const plain = await run(fakeIndex({ rows: all }));
+    expect(plain.text).toBe(ALREADY_SENT);
+    expect(plain.names).toEqual([]);
   });
 
   test("DATA-416 M1, end to end: a second heading in an offer, an answer or imported context sends nothing; the normal profile seeds as before", async () => {
