@@ -15,6 +15,7 @@
  *   - Telegram backlog kept across gateway restarts (`platforms.telegram.extra.drop_pending_on_cold_boot: false`, only when unset)
  *   - Cron in village time (`timezone: Asia/Kolkata`, only when no zone is configured; a loud warning when another is)
  *   - `cron.script_timeout_seconds: 120` when unset, Hermes's default 3600, or lower (the proactive triggers' budgets)
+ *   - `context_file_max_chars: 48000` unless already 48000 or more (Hermes's dynamic 21,600 cap truncated AGENTS.md)
  *   - Index MCP + morning digest cron (`install_index.ts`)
  *   - opt-in recall skill + plugin when `AV_RECALL_ENABLED=1` (`install_recall.ts`)
  *   - opt-in approval.md gate when `AV_APPROVAL_ENABLED=1` (`install_approval.ts`):
@@ -60,6 +61,7 @@ import {
   configureVillageTimezone,
   disableTelegramLinkPreviews,
   keepTelegramBacklogOnColdBoot,
+  setContextFileMaxChars,
   setTerminalCwd,
 } from "./config";
 import { configureTelegramDisplay } from "./display_defaults";
@@ -259,6 +261,7 @@ function main(): void {
   configureVillageTimezone();
   configureCronScriptTimeout();
   configureCronWrapResponse();
+  setContextFileMaxChars();
   configureTelegramDisplay();
   configureDashboardAuth();
   configureAvEvents();

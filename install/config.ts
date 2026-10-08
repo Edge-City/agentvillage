@@ -372,6 +372,71 @@ export function configureCronWrapResponse(): void {
   console.log("→ set cron.wrap_response: false (cron deliveries carry no Hermes header or footer)");
 }
 
+/**
+ * The floor for Hermes's per-file context cap, top-level `context_file_max_chars`
+ * in config.yaml (AGENTS-MD-CAP). Hermes's `_get_context_file_max_chars`
+ * (agent/prompt_builder.py, v2026.9.24 = Hermes 0.21.5) uses `int(val)` when
+ * the top-level key is an `int` or `float` above 0, else the dynamic cap
+ * `max(20000, min(context_length * 4 * 0.06, 500000))`. No box sets the key, and
+ * the control plane pins `model.context_length: 90000` (DATA-401), so the cap
+ * there is 21,600; unpinned at 200,000 it was 48,000, so this value restores
+ * exactly the pre-pin cap. Over the cap Hermes keeps the head and the tail of a
+ * context file around a marker and drops the middle: rc24 to rc26 shipped a
+ * `workspace/AGENTS.md` of 25,232 to 29,714 chars, and the cut removed most of
+ * its "Red lines" on every box. The control plane's model step writes only
+ * `model.context_length`, so this key survives it.
+ */
+export const CONTEXT_FILE_MAX_CHARS = 48000;
+
+/** A config value's kind for a log line, never the value itself. */
+function kindOf(value: unknown): string {
+  if (Array.isArray(value)) return "a list";
+  if (isMapping(value)) return "a mapping";
+  if (typeof value === "number") return "a non-finite number";
+  return `a ${typeof value}`;
+}
+
+/**
+ * Pin `context_file_max_chars` to at least `CONTEXT_FILE_MAX_CHARS`, the safety
+ * net under the AGENTS.md budget (scripts/tests/agents-md-budget.test.ts).
+ *
+ * - Absent, null, or not a number Hermes honours (a string, a boolean, a
+ *   non-finite or non-positive number, a number below 48,000): set to 48,000.
+ * - A finite number of 48,000 or more: an operator's larger cap, left as is.
+ * The file is left alone, with a warning, when its top level is not a mapping
+ * or holds a YAML merge key, for the reason `keepTelegramBacklogOnColdBoot`
+ * gives. A config value is never echoed onto the installer's stdout (only its
+ * type, or a number). Idempotent: when nothing changes the file is not
+ * rewritten. Hermes reads the key when it builds a prompt.
+ */
+export function setContextFileMaxChars(): void {
+  const key = "context_file_max_chars";
+  const doc: unknown = readConfig();
+  if (!isMapping(doc)) {
+    console.log(`→ warning: the top level of config.yaml is not a mapping; left ${key} unset`);
+    return;
+  }
+  if ("<<" in doc) {
+    console.log(`→ warning: YAML merge key "<<" at the top of config.yaml; left ${key} unset (set it by hand to ${CONTEXT_FILE_MAX_CHARS} or more)`);
+    return;
+  }
+  const raw = doc[key];
+  // Hermes reads a bool as an int (True == 1): only a real finite number counts.
+  const number = typeof raw === "number" && Number.isFinite(raw);
+  if (number && raw >= CONTEXT_FILE_MAX_CHARS) {
+    console.log(`→ ${key} already ${raw} (at least ${CONTEXT_FILE_MAX_CHARS}); left as is`);
+    return;
+  }
+  const why =
+    raw === undefined ? "was unset"
+    : raw === null ? "was null (Hermes's dynamic cap)"
+    : number ? `was ${raw}, below ${CONTEXT_FILE_MAX_CHARS}`
+    : `was ${kindOf(raw)}, not a number Hermes reads`;
+  doc[key] = CONTEXT_FILE_MAX_CHARS;
+  writeConfig(doc);
+  console.log(`→ set ${key}: ${CONTEXT_FILE_MAX_CHARS} (${why}; Hermes truncates a longer context file)`);
+}
+
 const DASHBOARD_PLUGIN = "dashboard-auth-edgecity";
 
 /** Enable the Edge City dashboard-auth plugin and public URL for hosted dashboards. */
