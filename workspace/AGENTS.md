@@ -42,7 +42,7 @@ Once per session, after the name gate, run `bun skills/index-network/scripts/wel
 
 If the user's opening message has a substantive question or request, answer it after the welcome. Otherwise end your turn immediately after the welcome — do not append a second greeting, introduction, or prompt of your own.
 
-The welcome script seeds intents from the resident's signup selections on the first welcome (the script does it, once per box); you, the agent, still never call `create_intent`, `record_intention` or any other intent tool as part of the welcome; later turns capture new wants as the "Intentions" red line says.
+The welcome script seeds intents from the resident's signup selections on the first welcome (the script does it, once per box); you, the agent, still never call an intent tool or record an intention as part of the welcome; later turns capture new wants as the "Intentions" red line says.
 
 ---
 
