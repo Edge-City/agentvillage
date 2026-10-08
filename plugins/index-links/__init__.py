@@ -11,6 +11,14 @@ it. A person link becomes ``https://agents.edgecity.live/rolodex?person=<userId>
 A signal link becomes ``https://agents.edgecity.live/intents?intent=<intentId>``.
 Every other ``index.network`` URL stays as Index minted it.
 
+The owner's own profile is the one exemption (DATA-413). In a ``get_my_profile``
+result every person link (``/u/<id>``) stays as Index minted it, so the agent
+links the resident's Index profile, not the Rolodex view of themselves. The rule
+is deliberately simple: the profile result is the owner's, so no ``/u/`` in it is
+rewritten, even a second person's that the profile happens to carry. Everything
+else in that result follows the normal rules, and every other Index tool's
+``/u/`` still opens the Rolodex.
+
 Bounds (SEREF-OVERLAY refute F2-F4, N1, N4):
 
 * Only results of Index tools are touched: the Index MCP server's tools
@@ -60,6 +68,8 @@ MAX_RESULT_BYTES = 256 * 1024
 #: Index tool-name prefixes: MCP server ``index`` (two Hermes spellings) and
 #: Index's Hermes plugin, whose tools register under their bare names.
 INDEX_TOOL_PREFIXES = ("mcp__index__", "mcp_index_", "index_")
+#: The owner's own profile tool, under each Index prefix (DATA-413).
+OWN_PROFILE_TOOLS = frozenset(prefix + "get_my_profile" for prefix in INDEX_TOOL_PREFIXES)
 OFF_SWITCH = "AV_INDEX_LINKS"
 _OFF_VALUES = frozenset({"off", "0", "false", "no"})
 _PORTAL_HOST = "agents.edgecity.live"
@@ -110,7 +120,8 @@ def _portal(path: str) -> str:
     return "https://" + _PORTAL_HOST + path
 
 
-def _map_url(url: str) -> Optional[str]:
+def _map_url(url: str, keep_people: bool = False) -> Optional[str]:
+    """``keep_people`` leaves a person link (``/u/<id>``) as minted (own profile, DATA-413)."""
     path = _url_path(url)
     if not path:
         return None
@@ -118,19 +129,19 @@ def _map_url(url: str) -> Optional[str]:
         return rewrite_opportunity_link(url)
     user = _USER_PATH.fullmatch(path)
     if user:
-        return _portal("/rolodex?person=" + user.group(1))
+        return url if keep_people else _portal("/rolodex?person=" + user.group(1))
     intent = _INTENT_PATH.fullmatch(path)
     if intent:
         return _portal("/intents?intent=" + intent.group(1))
     return url
 
 
-def _rewrite_markdown(text: str) -> str:
+def _rewrite_markdown(text: str, keep_people: bool) -> str:
     def sub(match: re.Match[str]) -> str:
         label, url = match.group(1), match.group(2).strip()
         if _INDEX_URL.fullmatch(url) is None:
             return match.group(0)
-        mapped = _map_url(url)
+        mapped = _map_url(url, keep_people)
         if not mapped:
             return label
         return "[" + label + "](" + mapped + ")"
@@ -138,20 +149,20 @@ def _rewrite_markdown(text: str) -> str:
     return _INDEX_MARKDOWN.sub(sub, text)
 
 
-def _rewrite_autolinks(text: str) -> str:
+def _rewrite_autolinks(text: str, keep_people: bool) -> str:
     def sub(match: re.Match[str]) -> str:
         url = match.group(1)
         # Same guard as the markdown branch: a look-alike host or a port is not an
         # Index URL, and an unmapped one stays as written (recheck N1).
         if _INDEX_URL.fullmatch(url) is None:
             return match.group(0)
-        mapped = _map_url(url)
+        mapped = _map_url(url, keep_people)
         return match.group(0) if mapped is None else mapped
 
     return _INDEX_AUTOLINK.sub(sub, text)
 
 
-def _rewrite_bare_urls(text: str) -> str:
+def _rewrite_bare_urls(text: str, keep_people: bool) -> str:
     def sub(match: re.Match[str]) -> str:
         whole = match.group(0)
         end = match.end()
@@ -160,7 +171,7 @@ def _rewrite_bare_urls(text: str) -> str:
         url = whole.rstrip(_TRAILING)
         if not url or _INDEX_URL.fullmatch(url) is None:
             return whole
-        return (_map_url(url) or "") + whole[len(url):]
+        return (_map_url(url, keep_people) or "") + whole[len(url):]
 
     return _INDEX_URL.sub(sub, text)
 
@@ -169,17 +180,28 @@ def _too_big(text: str) -> bool:
     return len(text) > MAX_RESULT_BYTES or len(text.encode("utf-8", errors="ignore")) > MAX_RESULT_BYTES
 
 
-def rewrite_index_links(result: Any) -> Any:
-    """Replace Index URLs in a tool-result string. Anything else is returned as-is."""
+def rewrite_index_links(result: Any, keep_people: bool = False) -> Any:
+    """Replace Index URLs in a tool-result string. Anything else is returned as-is.
+
+    ``keep_people`` leaves every person link (``/u/<id>``) as Index minted it;
+    the hook sets it for the owner's own profile result (DATA-413).
+    """
     if not isinstance(result, str) or _too_big(result) or "index.network" not in result.lower():
         return result
-    text = _rewrite_markdown(result)
-    text = _rewrite_autolinks(text)
-    return _rewrite_bare_urls(text)
+    text = _rewrite_markdown(result, keep_people)
+    text = _rewrite_autolinks(text, keep_people)
+    return _rewrite_bare_urls(text, keep_people)
 
 
 def is_index_tool(tool_name: Any) -> bool:
     return isinstance(tool_name, str) and tool_name.startswith(INDEX_TOOL_PREFIXES)
+
+
+def is_own_profile_tool(tool_name: Any) -> bool:
+    """``get_my_profile`` under an Index prefix: the result is the owner's own profile,
+    so its person links stay on Index (DATA-413). Exactly ``mcp__index__get_my_profile``,
+    ``mcp_index_get_my_profile`` and ``index_get_my_profile``."""
+    return isinstance(tool_name, str) and tool_name in OWN_PROFILE_TOOLS
 
 
 #: (path, mtime_ns) -> the switch's value in `$HERMES_HOME/.env`.
@@ -236,7 +258,7 @@ def transform_tool_result(result: Any = None, tool_name: Any = None, **_kwargs: 
     try:
         if not is_index_tool(tool_name) or switched_off():
             return None
-        rewritten = rewrite_index_links(result)
+        rewritten = rewrite_index_links(result, keep_people=is_own_profile_tool(tool_name))
     except Exception:
         return None
     if not isinstance(rewritten, str) or rewritten == result:

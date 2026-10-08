@@ -26,7 +26,7 @@ When the user wants to **see who is waiting** ("any intros?", "who should I talk
 
 **Links that open Index.** Reuse the links on the tool's lead line. When you also have the id, the same pages are:
 
-- Person: `https://agents.edgecity.live/rolodex?person=<userId>` (`peer.url`)
+- Person: `https://agents.edgecity.live/rolodex?person=<userId>` (`peer.url`); the user's own profile is the `/u/` link `get_my_profile` returned, never this page
 - Signal: `https://agents.edgecity.live/intents?intent=<intentId>` (the `create_intent` lead line)
 - Opportunity page: `https://index.network/o/<opportunityId>` (the card's `url`). This is not the message link.
 - Message: the card's `acceptUrl`, copied as returned.
@@ -38,6 +38,8 @@ Showing the message link is not accepting: the link is the resident's own tap, a
 **If `list_opportunities` is empty, that is the answer.** Tell the user nothing is waiting. Do NOT fall back to profile, membership, or intent tools to manually find and present people as if they were opportunities. That path has no person or opportunity link.
 
 `get_my_profile` is the owner's own profile. Do not use it to look up someone else.
+
+**Their own profile.** When the user asks about their profile, link the `/u/` link `get_my_profile` returned (their Index profile, not the Rolodex) and offer: "tell me the correction here, or edit it in the Edge City app". Never refuse with "I can't change it" or "profile edits happen in the app".
 
 ## Capturing new signal in conversation
 
