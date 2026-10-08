@@ -14,7 +14,7 @@ Edge's bundle for surfacing opportunities through Edge City India's Index Networ
 
 ## When to read each file
 
-- **Any non-trivial tool call** → [tools.md](tools.md). MCP tool families, entity model, capturing new signal from conversation, output translation rules.
+- **Any non-trivial tool call** → [tools.md](tools.md). MCP tool families, entity model, capturing new signal from conversation, output translation rules; at its end, the sections `AGENTS.md` points to: Cron schedule, URL preservation, Channel formatting, What the app knows about them, Backend notes.
 - **Composing user-facing opportunity renderings** → [exemplars.md](exemplars.md). Canonical morning-digest voice samples.
 
 Read `get_my_profile` only to use the profile that already exists. Call `update_my_profile` only when they explicitly correct a field. A new want and a question about who is waiting both follow [tools.md](tools.md). The welcome in `AGENTS.md` is a separate first-message greeting. Do not send it again from here.

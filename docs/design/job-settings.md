@@ -716,7 +716,7 @@ that keeps `jobs.json`: `install/tests/job_commands.test.ts`, "what a roll keeps
 
 A resident can stop and restart a scheduled message from chat. The agent runs
 `bun skills/index-network/scripts/pause-job.ts pause|resume --label "<Label>"`
-(`workspace/AGENTS.md`, "Cron schedule"); `status` reads the same state and changes nothing. The
+(`skills/index-network/tools.md`, "Cron schedule"); `status` reads the same state and changes nothing. The
 script records a hold in the control plane's holds file, `$HERMES_HOME/av-events/job-holds.json`,
 then pauses or resumes the label's installed jobs through the Hermes CLI. The control plane reads
 that file before its contact-style apply and its job-settings apply, and leaves a held job as it

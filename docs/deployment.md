@@ -380,7 +380,7 @@ Conversation update = `Edge — negotiation summary`; Evening questions =
 `Edge — evening questions`; Introduction suggestion = both opportunity drops;
 Usage report = `Edge — token usage audit` (opt-in). Template jobs added by an
 operator carry their base prompt's line. The agent stops and restarts any of
-the five on a resident's request (`workspace/AGENTS.md`, "Cron schedule") with
+the five on a resident's request (`skills/index-network/tools.md`, "Cron schedule") with
 `skills/index-network/scripts/pause-job.ts` (DATA-376). Under the tenant's
 jobs lock, the script first records a `by: resident` hold in
 `av-events/job-holds.json`, the control plane's holds file, then pauses or

@@ -252,9 +252,17 @@ describe("AC #2: each delivering prompt ends with its own manage line", () => {
     expect(alternation).toEqual(emitted.sort());
   });
 
-  test("AGENTS.md maps every label to exactly its jobs; the agent stops and restarts all five with the pause script", () => {
+  test("tools.md's Cron schedule maps every label to exactly its jobs; the agent stops and restarts all five with the pause script", () => {
+    // AGENTS-MD-CAP: the section moved verbatim from workspace/AGENTS.md to the index-network skill's tools.md
+    // (AGENTS.md keeps a pointer to it); the holds-file paragraph moved with it.
     const agents = readFileSync(join(import.meta.dir, "..", "..", "workspace", "AGENTS.md"), "utf8");
-    const section = agents.slice(agents.indexOf("## Cron schedule"), agents.indexOf("## Red lines"));
+    const tools = readFileSync(join(import.meta.dir, "..", "..", "skills", "index-network", "tools.md"), "utf8");
+    expect(agents).not.toContain("## Cron schedule");
+    expect(agents).toContain("read `skills/index-network/tools.md` under your `HERMES_HOME`");
+    const start = tools.indexOf("## Cron schedule");
+    expect(start).toBeGreaterThan(-1);
+    const next = tools.indexOf("\n## ", start + 1);
+    const section = tools.slice(start, next < 0 ? undefined : next);
     expect(section).toContain(`\`(<Label>${MANAGE_TAIL}\``);
     const mapping = section.match(/Each label maps to its job: (.+?)\.\n/)![1];
     // Label -> the backticked job names its entry lists, read back from the text.
@@ -298,8 +306,9 @@ describe("AC #2: each delivering prompt ends with its own manage line", () => {
     expect(section).toContain("no scheduled message can be moved or added");
     expect(section).not.toContain("can't be changed");
     // The holds file is not a preferences file, and the line saying so stays true.
-    expect(agents).toContain("Edge keeps no separate preferences file. `av-events/job-holds.json` only records who stopped or restarted a scheduled message");
+    expect(section).toContain("Edge keeps no separate preferences file. `av-events/job-holds.json` only records who stopped or restarted a scheduled message");
     expect(agents).not.toContain("Edge does not keep a separate preferences file.");
+    expect(tools).not.toContain("Edge does not keep a separate preferences file.");
   });
 
   test("every template a job can be added from delivers on a labelled prompt, so it carries its base job's line", () => {
