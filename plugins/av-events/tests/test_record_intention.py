@@ -1990,17 +1990,19 @@ def test_the_refusals_name_the_codes_and_the_ambient_alternative(ri):
 
 
 @pytest.mark.parametrize("session,code", [("cron_job_20261012", "held_cron"), ("never-seen", "held_unknown")])
-def test_a_held_session_drops_the_marker_with_the_stated_source(tctx, index, av, plugin, session, code):
-    """The lineage gate holds a message capture as ambient (R10); a capture that
-    is no longer stated carries no confirmed_in_chat. DATA-410's silence branch
-    runs at the agent's next message of its own, which may be a cron run: there
-    it is held for the card, and the agent says what the tool answered."""
+def test_a_silence_capture_from_the_agents_own_send_is_held_and_keeps_its_marker(tctx, index, av, plugin, session, code):
+    """DATA-410 option A: the silence capture is made at the agent's next message
+    of its own, a cron (or unknown) session. The lineage gate (R10, unchanged)
+    holds it as ambient for the resident's tap on the card; the marker stays
+    beside the held_* code, so the event says what happened."""
     out = call(tctx, {"text": TEXT, "source": "message", "confirmed_in_chat": "silence"}, session=session)
     assert out["success"] is True and out["source"] == "ambient" and out["publish_refused"] == code
-    assert "confirmed_in_chat" not in out
+    assert out["published"] is False and out["held"] is True
+    assert out["confirmed_in_chat"] == "silence"
     assert index.requests == []
     payload = intention_events(av, plugin)[0]["payload"]
-    assert payload["source"] == "ambient" and "confirmed_in_chat" not in payload
+    assert payload["source"] == "ambient" and payload["publish_refused"] == code
+    assert payload["confirmed_in_chat"] == "silence"
 
 
 def test_the_marker_survives_a_local_or_refused_stated_capture(tctx, index, av, plugin):
@@ -2030,7 +2032,9 @@ def test_the_observer_reads_the_marker_only_from_the_overlay_tools_result(tctx, 
     ("standing", "message", "standing"),
     ("sure", "message", None),
     (True, "message", None),
-    ("yes", "ambient", None),
+    # The tool names the marker beside a held (ambient) source only when the
+    # lineage held a capture passed as message: kept.
+    ("silence", "ambient", "silence"),
 ])
 def test_plan_record_keeps_only_a_known_code_on_a_message_capture(av, result_value, source, expected):
     intentions = sys.modules[f"{av.MODULE_NAME}._intentions"]
@@ -2041,9 +2045,10 @@ def test_plan_record_keeps_only_a_known_code_on_a_message_capture(av, result_val
     [update] = intentions.plan_record({"action": "update", "intention_id": INDEX_ID, "text": TEXT, "source": source},
                                       {**payload, "action": "update"})
     assert update.confirmed_in_chat is None
-    # A cron lineage the observer saw itself makes it ambient: no marker.
+    # A cron lineage the observer saw itself makes the source ambient; the
+    # tool's marker stays beside it.
     [cron] = intentions.plan_record({"text": TEXT, "source": source}, payload, cron=True)
-    assert cron.confirmed_in_chat is None
+    assert cron.source == "ambient" and cron.confirmed_in_chat == expected
 
 
 def test_the_schema_offers_the_three_codes(ri):

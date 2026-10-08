@@ -86,8 +86,8 @@ Examples:
 - Asked that, "No, don't post that." → record nothing.
 - Asked that, they say something else ("What's on at the hall tonight?") or
   nothing → at your next message of your own, `message` with
-  `confirmed_in_chat=silence`: publish as written and say so in one clause; do
-  not ask again.
+  `confirmed_in_chat=silence`: the tool holds it for their tap on the approval
+  card, and that message says so in one clause; do not ask again.
 - "Don't ask me each time; just post the intents you think fit." → from then
   on `message` with `confirmed_in_chat=standing`, without asking; show what
   you recorded.
@@ -101,16 +101,16 @@ ask once: "Should I publish this as written?" Record nothing in that reply. If
 they say yes, capture your words as shown with `source=message` and
 `confirmed_in_chat=yes`; if they answer with their own edit of your words,
 capture the edited text the same way. If they say no, record nothing. If they
-have not answered by the next message you send them on your own, publish your
-words as written: capture them with `source=message` and
-`confirmed_in_chat=silence`, and say in one clause of that message what the
-tool answered (normally that you published them as written since you did not
-hear back). If they have told you to go ahead without asking, do not ask:
-capture your words with `source=message` and `confirmed_in_chat=standing`,
-then show them as recorded and say what the tool answered. Never ask twice; a
-yes after you recorded them records nothing new. If they later object,
-withdraw it; if they say the want in their own words, withdraw it and capture
-their words with `source=message`.
+have not answered by the next message you send them on your own, capture your
+words as shown with `source=message` and `confirmed_in_chat=silence`; the tool
+holds them for the resident's tap on the approval card, and your message says
+so in one clause (for example: "I didn't hear back, so it's on your approval
+card as written; one tap publishes it."). If they have told you to go ahead
+without asking, do not ask: capture your words with `source=message` and
+`confirmed_in_chat=standing`, then show them as recorded and say what the tool
+answered. Never ask twice; a yes after you recorded them records nothing new.
+If they later object, withdraw it; if they say the want in their own words,
+withdraw it and capture their words with `source=message`.
 
 ## Ambient intentions are held
 

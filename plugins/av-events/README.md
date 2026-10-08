@@ -434,8 +434,10 @@ result says `changed: false` (already paused, already active) emits nothing. Lik
 `confirmed_in_chat` (DATA-410: `yes` \| `silence` \| `standing`) appears only on a
 `record_intention` `intention.captured` whose `source` is `message` and whose words were the
 agent's, adopted by the resident in chat: `yes` (they said yes to the one ask, or edited the
-words), `silence` (no answer by the agent's next message of its own; published as written),
-`standing` (a go-ahead without asking). It is a code the tool decided, never text; the data side's
+words), `silence` (no answer by the agent's next message of its own, a cron or unknown session:
+the event then has `source` `ambient` and `publish_refused` `held_cron` / `held_unknown` beside
+it, held for the resident's tap), `standing` (a go-ahead without asking). The tool sets it only on
+a capture passed as `message`. It is a code the tool decided, never text; the data side's
 intention payloads are open (`additionalProperties: true`), so it is stored as sent until staged.
 
 **No intention text in any mode, `full` included.** §7.1 says "with hashes only" and the
@@ -480,7 +482,7 @@ the agent needs it for every later update or withdrawal, and the plugin cannot h
 nowhere else. From the result the plugin also reads `index_intent_id` (the Index id the tool
 published under), `publish_refused` (a code, `^[a-z0-9_]{1,64}$`, else null), `local_reason`
 (`participant_asked` \| `personal`, else null) and `confirmed_in_chat` (`yes` \| `silence` \|
-`standing`, kept only on a capture whose source stayed `message`, else absent).
+`standing`, on a capture passed as `message`, kept when the lineage held it, else absent).
 
 ### The `record_intention` tool (DATA-212)
 
@@ -503,12 +505,13 @@ else are recorded only once they say the want is theirs. DATA-410 (amending DATA
 is ambient, whoever asked"): in conversation the agent shows its own words and asks once, "Should I
 publish this as written?", recording nothing in that reply (a question beside a tool call would be
 dropped by the fleet's Telegram settings). A yes or the resident's edit is `message` with
-`confirmed_in_chat=yes`; no answer by the agent's next message of its own is `message` with
-`silence` (published as written, and that message says so in one clause); a standing go-ahead is
-`message` with `standing`, without asking; a no records nothing. `ambient` (held for the card) is for
-words the resident never saw and for what a background or cron run found. A `silence` capture made
-in a cron or unknown-lineage session is still held as ambient by the lineage gate (R10), and the
-marker is dropped. `confirmed_in_chat` with any source but `message` is refused
+`confirmed_in_chat=yes`; a standing go-ahead is `message` with `standing`, without asking; a no
+records nothing. No answer by the agent's next message of its own is captured as `message` with
+`silence` (option A, for rc25): that send is a cron or unknown session, so the lineage gate (R10,
+unchanged) holds it (`held_cron` / `held_unknown`, the marker kept) for the resident's tap on the
+approval card, and the message says so in one clause. `ambient` (held for the card) is otherwise
+for words the resident never saw and for what a background or cron run found.
+`confirmed_in_chat` with any source but `message` is refused
 (`confirmed_not_message`), and a value outside the three codes is refused (`confirmed_invalid`).
 `SOURCE_RULE` and
 `DRAFT_RULE` in `_record_intention.py` are the text (with `SOURCE_SHORT`, one sentence inside the

@@ -6,11 +6,14 @@ it published as a stated intention with no approval card. DATA-384 made
 `message`, `onboarding` and `note` the resident's own words only. DATA-410
 (Carter's ruling the same day, corrected by the lead): the agent shows its own
 words and asks once, "Should I publish this as written?", recording nothing in
-that reply. A yes or the resident's own edit (`confirmed_in_chat=yes`), no
-answer by the agent's next message of its own (`silence`: published as
-written, said in one clause), or a standing go-ahead (`standing`: no ask) make
-the words the resident's: `source=message`. A no records nothing. `ambient` is
-for words the resident never saw, and for what a background or cron run found.
+that reply. A yes or the resident's own edit (`confirmed_in_chat=yes`) or a
+standing go-ahead (`standing`: no ask) make the words the resident's:
+`source=message`. No answer by the agent's next message of its own is captured
+the same way (`silence`), and since that send is a cron or unknown session the
+tool holds it for the resident's tap on the card, which the message says in
+one clause (the lead's option A: the lineage gate is unchanged). A no records
+nothing. `ambient` is for words the resident never saw, and for what a
+background or cron run found.
 
 `SOURCE_RULE`, `DRAFT_RULE` and `SOURCE_SHORT` in `_record_intention.py` are
 the one source of truth. Each passage that states the rule is pinned whole:
@@ -68,16 +71,18 @@ SOURCE_PARAM = (
 #: DATA-410: the schema's `confirmed_in_chat` description, pinned literally.
 CONFIRMED_PARAM = (
     "Only with source=message, for your words the resident adopted: yes (they said yes, or edited "
-    "them, after you asked once), silence (no answer by the next message you sent them on your "
-    "own), standing (they told you to go ahead without asking). Leave it out for their own words."
+    "them, after you asked once), silence (no answer by the next message you send them on your "
+    "own; the tool holds it for their tap on the card), standing (they told you to go ahead "
+    "without asking). Leave it out for their own words."
 )
 #: The one ask, word for word.
 ASK = "Should I publish this as written?"
 
 #: The one-sentence rule tool_search shows (it clips descriptions at 500 chars).
 SOURCE_SHORT = (
-    "source=message for the resident's own words, or for your words once shown and adopted in "
-    "chat (with confirmed_in_chat); anything you composed and never showed them is ambient."
+    "source=message for the resident's own words, and for your words with confirmed_in_chat (yes, "
+    "silence or standing) as the ask-once rule says; anything you composed and never showed them "
+    "is ambient."
 )
 TOOL_SEARCH_CLIP = 500
 
@@ -279,17 +284,20 @@ def test_the_draft_rule_asks_once_before_recording_and_is_for_conversation_only(
 
 
 def test_the_draft_rule_states_each_answer_once(ri):
-    """DATA-410 as corrected: one ask; yes or an edit, silence through the next
-    message of the agent's own (published as written, said in one clause), a
-    standing go-ahead (no ask), and a no."""
+    """DATA-410 as corrected (option A): one ask; yes or an edit, silence
+    through the next message of the agent's own (captured as message, held by
+    the tool for the resident's tap, said in one clause), a standing go-ahead
+    (no ask), and a no."""
     rule_text = ri.DRAFT_RULE
     assert rule_text.count(ASK) == 1
     for marker in ("yes", "silence", "standing"):
         assert rule_text.count(f"source=message and confirmed_in_chat={marker}") == 1, marker
     assert "their own edit of your words, capture the edited text the same way" in rule_text
     assert "If they say no, record nothing." in rule_text
-    assert "If they have not answered by the next message you send them on your own, publish your words as written" in rule_text
-    assert "say in one clause of that message what the tool answered" in rule_text
+    assert ("If they have not answered by the next message you send them on your own, capture your words as "
+            "shown with source=message and confirmed_in_chat=silence; the tool holds them for the resident's tap "
+            "on the approval card, and your message says so in one clause") in rule_text
+    assert "\"I didn't hear back, so it's on your approval card as written; one tap publishes it.\"" in rule_text
     assert "If they have told you to go ahead without asking, do not ask" in rule_text
     assert "Never ask twice" in rule_text
     # The correction: no answer and a standing go-ahead are never ambient.
@@ -297,8 +305,12 @@ def test_the_draft_rule_states_each_answer_once(ri):
     assert "Anything you never showed them, and anything a background or cron run found, is source=ambient." in ri.SOURCE_RULE
 
 
-#: DATA-384's no-ask sentences, reversed by DATA-410: in no prompt any more.
-REVERSED = ("do not ask for a yes in chat", "does not make the words theirs", "does not make your words theirs")
+#: DATA-384's no-ask sentences, reversed by DATA-410, and option A's withdrawn
+#: claim that silence publishes: in no prompt any more.
+REVERSED = (
+    "do not ask for a yes in chat", "does not make the words theirs", "does not make your words theirs",
+    "publish your words as written", "published them as written", "publish as written and say so",
+)
 
 
 def test_the_reversed_no_ask_rule_is_gone_everywhere(ri):
@@ -322,7 +334,7 @@ def test_the_background_memory_pass_still_records_ambient():
 def test_the_table_is_well_formed(ri):
     assert len(EXEMPLARS) >= 15
     for row in EXEMPLARS:
-        assert list(row) == ["said", "kind", "where", "draft", "text", "source", "confirmed_in_chat", "why", "skill"], row
+        assert list(row) == ["said", "kind", "where", "draft", "text", "source", "confirmed_in_chat", "held", "why", "skill"], row
         assert row["kind"] in KINDS, row
         assert row["where"] in ("conversation", "onboarding", "note", "background"), row
         assert row["where"] in WHERE_FOR_KIND.get(row["kind"], {"conversation", "note"}), row
@@ -378,6 +390,10 @@ def test_the_table_is_well_formed(ri):
     assert {(r["source"], r["confirmed_in_chat"]) for k in ADOPTED for r in by_kind[k]} == {
         ("message", "yes"), ("message", "silence"), ("message", "standing")}
     assert all(r["source"] is None for r in by_kind["declines-draft"])
+    # Option A: silence is captured as message with its marker and held for the tap.
+    assert {(r["source"], r["confirmed_in_chat"], r["held"]) for r in by_kind["unanswered-draft"]} == {
+        ("message", "silence", True)}
+    assert all("holds it for their tap" in r["skill"] for r in by_kind["unanswered-draft"] if r["skill"])
     # Ambient only for words the resident never saw.
     assert {r["kind"] for r in EXEMPLARS if r["source"] == "ambient"} == ALWAYS_AMBIENT
 
@@ -404,8 +420,12 @@ def test_every_row_follows_the_rule(row):
     source, confirmed = expected(row)
     assert row["source"] == source, row["why"]
     assert row["confirmed_in_chat"] == confirmed, row["why"]
+    # The tool's answer: held for the card when ambient, and for silence, whose
+    # capture comes from the agent's own cron send (the R10 gate, unchanged).
+    held = None if source is None else (source == "ambient" or row["kind"] == "unanswered-draft")
+    assert row["held"] is held, row["why"]
     if row["kind"] in ("confirms-draft", "unanswered-draft"):
-        # Adopted or published as written: the words shown, unchanged.
+        # Adopted, or captured on silence: the words shown, unchanged.
         assert row["text"] == row["draft"], row["why"]
     if row["kind"] == "edits-draft":
         # Their edit is the text: every word is yours as shown or theirs.

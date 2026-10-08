@@ -173,10 +173,11 @@ APPROVED_BY = frozenset({"individual", "rule"})
 #: (ambient-intents spec §4: "the resident asked, or the content is personal").
 LOCAL_REASONS = frozenset({"participant_asked", "personal"})
 
-#: `confirmed_in_chat` on a `record_intention` `message` capture of the agent's
-#: own words (DATA-410): how the resident adopted them. `yes` (they said yes, or
-#: edited them, after one ask), `silence` (no answer by the agent's next message
-#: of its own: published as written), `standing` (a go-ahead without asking).
+#: `confirmed_in_chat` on a `record_intention` capture of the agent's own words,
+#: passed as `message` (DATA-410): how the resident adopted them. `yes` (they
+#: said yes, or edited them, after one ask), `silence` (no answer by the agent's
+#: next message of its own; that send is a cron or unknown session, so the
+#: capture is held for their tap on the card), `standing` (a go-ahead without asking).
 CHAT_CONFIRMATIONS = ("yes", "silence", "standing")
 
 #: `publish_refused`: a code, never text. Anything else is dropped to null.
@@ -689,10 +690,12 @@ def plan_record(
     if approved_by not in APPROVED_BY:
         approved_by = None
     approval_state = _result_code(payload_r, outer_r, "approval_state")
-    # DATA-410: read from the result only, one of the tool's codes, and kept
-    # only on a capture whose source stayed message (never one held as ambient).
+    # DATA-410: read from the result only (the tool sets it only for a capture
+    # passed as message), one of the tool's codes, on a capture only. Kept when
+    # the source was held as ambient: the event then says held_cron or
+    # held_unknown beside it (a silence capture is made from a cron send).
     confirmed_in_chat = _result_code(payload_r, outer_r, "confirmed_in_chat")
-    if confirmed_in_chat not in CHAT_CONFIRMATIONS or event_type != "intention.captured" or source != "message":
+    if confirmed_in_chat not in CHAT_CONFIRMATIONS or event_type != "intention.captured":
         confirmed_in_chat = None
 
     text = _text(args.get("text")) or _text(args.get("description"))

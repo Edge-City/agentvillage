@@ -17,8 +17,8 @@ the observer reads (only for this unprefixed tool, never an MCP server's
 `record_intention`): `action`, `intention_id`, `index_intent_id`, `source`,
 `publish_refused` (a code), `local_reason` (`participant_asked` | `personal`)
 and `confirmed_in_chat` (DATA-410: `yes` | `silence` | `standing`, only on a
-`message` capture of the agent's words that the resident adopted in chat;
-absent otherwise).
+capture the caller passed as `message`, of the agent's words the resident
+adopted in chat; kept when the lineage held it as ambient; absent otherwise).
 
 **Ids.** A published capture's `intention_id` is Index's intent id, as an
 observed Index `create_intent` would be, so the poller corroborates it by id.
@@ -271,21 +271,24 @@ SOURCE_RULE = (
 #: recording nothing in that reply, so the question is never text beside a tool
 #: call (the fleet's Telegram display settings, install/display_defaults.ts: no
 #: interim messages, no streaming, drop that). A yes or the resident's own edit
-#: (confirmed_in_chat=yes), no answer by the agent's next message of its own
-#: (silence: published as written, and that message says so in one clause), and
-#: a standing go-ahead (standing: no ask) are all stated, source=message; a no
-#: records nothing. The approval card stays for words the resident never saw.
-#: After a capture the agent says what the tool answered (published, asked on a
-#: card under the resident's policy, held in a cron or unknown session, or refused).
+#: (confirmed_in_chat=yes) and a standing go-ahead (standing: no ask) are
+#: stated, source=message, and publish. No answer by the agent's next message
+#: of its own is captured the same way (silence), but that send is a cron or
+#: unknown session, so the lineage gate (R10, unchanged) holds it as held_cron /
+#: held_unknown for the resident's tap on the card, and the message says so in
+#: one clause (the lead's ruling, option A, for rc25). A no records nothing.
+#: The card is otherwise for words the resident never saw. After a capture the
+#: agent says what the tool answered.
 DRAFT_RULE = (
     "In conversation, when the words are yours, show them in one or two lines and ask once: "
     "\"Should I publish this as written?\" Record nothing in that reply. If they say yes, capture "
     "your words as shown with source=message and confirmed_in_chat=yes; if they answer with their "
     "own edit of your words, capture the edited text the same way. If they say no, record "
-    "nothing. If they have not answered by the next message you send them on your own, publish "
-    "your words as written: capture them with source=message and confirmed_in_chat=silence, and "
-    "say in one clause of that message what the tool answered (normally that you published them "
-    "as written since you did not hear back). If they have told you to go ahead without asking, "
+    "nothing. If they have not answered by the next message you send them on your own, capture "
+    "your words as shown with source=message and confirmed_in_chat=silence; the tool holds them "
+    "for the resident's tap on the approval card, and your message says so in one clause (for "
+    "example: \"I didn't hear back, so it's on your approval card as written; one tap publishes "
+    "it.\"). If they have told you to go ahead without asking, "
     "do not ask: capture your words with source=message and confirmed_in_chat=standing, then show "
     "them as recorded and say what the tool answered. Never ask twice; a yes after you recorded "
     "them records nothing new. If they later object, withdraw it; if they say the want in their "
@@ -295,8 +298,9 @@ DRAFT_RULE = (
 #: DATA-384: the rule in one sentence, inside the first 500 characters of the
 #: description, which is all tool_search shows.
 SOURCE_SHORT = (
-    "source=message for the resident's own words, or for your words once shown and adopted in "
-    "chat (with confirmed_in_chat); anything you composed and never showed them is ambient."
+    "source=message for the resident's own words, and for your words with confirmed_in_chat (yes, "
+    "silence or standing) as the ask-once rule says; anything you composed and never showed them "
+    "is ambient."
 )
 
 TOOL_DESCRIPTION = (
@@ -335,7 +339,7 @@ TOOL_SCHEMA: dict = {
             "summary": {"type": "string", "description": "Optional one-line summary."},
             "source": {"type": "string", "enum": list(SOURCES), "description": "Whose words the text is: message, onboarding or note only for the resident's own words, and message also for your words they adopted in chat (with confirmed_in_chat); ambient for anything you composed, translated or inferred and never showed them, and for anything a background run found. Required for capture."},
             "confirmed_in_chat": {"type": "string", "enum": list(CHAT_CONFIRMATIONS),
-                                  "description": "Only with source=message, for your words the resident adopted: yes (they said yes, or edited them, after you asked once), silence (no answer by the next message you sent them on your own), standing (they told you to go ahead without asking). Leave it out for their own words."},
+                                  "description": "Only with source=message, for your words the resident adopted: yes (they said yes, or edited them, after you asked once), silence (no answer by the next message you send them on your own; the tool holds it for their tap on the card), standing (they told you to go ahead without asking). Leave it out for their own words."},
             "publish": {"type": "boolean",
                         "description": "Default true. false only when the resident asked or the content is personal; then reason is required. Honoured for every source, ambient included: it stays local and is never proposed or published."},
             "reason": {"type": "string", "enum": sorted(LOCAL_REASONS),
@@ -1220,8 +1224,10 @@ def _capture(args: dict, held: Optional[str]) -> dict:
 
     # `action` tells the observer what was done when the call left it to the default.
     result: dict[str, Any] = {"success": True, "action": "capture", "source": source}
-    if confirmed is not None and source == "message":
-        # Not when the lineage held the capture as ambient: it is no longer stated.
+    if confirmed is not None:
+        # Kept when the lineage holds the capture as ambient (held_cron /
+        # held_unknown): a silence capture is made from the agent's own send,
+        # which is such a session, and research reads the pair.
         result["confirmed_in_chat"] = confirmed
     approval_on = _approval_on()
     if not publish:

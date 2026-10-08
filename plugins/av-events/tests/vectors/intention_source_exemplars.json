@@ -1,5 +1,5 @@
 {
-  "_comment": "DATA-384, amended by DATA-410 (Carter's ruling 2026-10-07, corrected by the lead): which source record_intention gets, by whose words the text is. The contract for the rule in _record_intention.py SOURCE_RULE / DRAFT_RULE and for the examples in skills/record-intention/SKILL.md \"## Source\", which are the rows with a skill line, in this order. said: what the resident said or wrote (for background, what a memory pass read). kind: own-words | asks-agent-to-write | yes-after-capture | quoted | confirms-quoted | translated | setup | note | inferred | background | confirms-draft | edits-draft | declines-draft | unanswered-draft | go-ahead. where: conversation | onboarding | note | background. draft: the agent's own words it shows with the one ask \"Should I publish this as written?\" (the ask kinds: it records nothing yet) or showed before `said` (the answer kinds: confirms-, edits-, declines-, unanswered-draft); null when nothing is asked. text: what the agent records. source: the source the rule gives, or null when nothing is recorded now (text is then null too). confirmed_in_chat: yes | silence | standing on a message capture of the agent's words the resident adopted, else null. why: the reason. skill: the example line in SKILL.md, or null. Checked by plugins/av-events/tests/test_intention_source.py; no model runs.",
+  "_comment": "DATA-384, amended by DATA-410 (Carter's ruling 2026-10-07, corrected by the lead): which source record_intention gets, by whose words the text is. The contract for the rule in _record_intention.py SOURCE_RULE / DRAFT_RULE and for the examples in skills/record-intention/SKILL.md \"## Source\", which are the rows with a skill line, in this order. said: what the resident said or wrote (for background, what a memory pass read). kind: own-words | asks-agent-to-write | yes-after-capture | quoted | confirms-quoted | translated | setup | note | inferred | background | confirms-draft | edits-draft | declines-draft | unanswered-draft | go-ahead. where: conversation | onboarding | note | background. draft: the agent's own words it shows with the one ask \"Should I publish this as written?\" (the ask kinds: it records nothing yet) or showed before `said` (the answer kinds: confirms-, edits-, declines-, unanswered-draft); null when nothing is asked. text: what the agent records. source: the source the rule gives, or null when nothing is recorded now (text is then null too). confirmed_in_chat: yes | silence | standing on a message capture of the agent's words the resident adopted, else null. held: the tool's answer is a hold for the resident's tap on the approval card (ambient, and silence, whose capture is made from the agent's own cron send: held_cron), false when it publishes, null when nothing is recorded. why: the reason. skill: the example line in SKILL.md, or null. Checked by plugins/av-events/tests/test_intention_source.py; no model runs.",
   "exemplars": [
     {
       "said": "Based on what you know about me, make me an intent.",
@@ -9,6 +9,7 @@
       "text": null,
       "source": null,
       "confirmed_in_chat": null,
+      "held": null,
       "why": "They asked you to write it without giving the words; the words are yours: show them and ask once.",
       "skill": "\"Based on what you know about me, make me an intent.\" → show your words and ask once: \"Should I publish this as written?\" Record nothing yet."
     },
@@ -20,6 +21,7 @@
       "text": null,
       "source": null,
       "confirmed_in_chat": null,
+      "held": null,
       "why": "The rehearsal request of 2026-10-07: the agent composed the text, so it shows it and asks once.",
       "skill": null
     },
@@ -31,6 +33,7 @@
       "text": null,
       "source": null,
       "confirmed_in_chat": null,
+      "held": null,
       "why": "They asked you to write it; the words are yours.",
       "skill": "\"Generate an index intent for me.\" → show your words and ask once."
     },
@@ -42,6 +45,7 @@
       "text": null,
       "source": null,
       "confirmed_in_chat": null,
+      "held": null,
       "why": "A suggestion is your wording.",
       "skill": "\"Suggest an intent I could post.\" → show your words and ask once."
     },
@@ -53,6 +57,7 @@
       "text": null,
       "source": null,
       "confirmed_in_chat": null,
+      "held": null,
       "why": "They named the topic, but \"meet\" and \"building\" are your words.",
       "skill": "\"Can you write me an intent about Solana founders in Goa?\" → show \"Meet founders building on Solana in Goa\" and ask once: \"meet\" and \"building\" are yours."
     },
@@ -64,6 +69,7 @@
       "text": "Founders building on Solana in Goa",
       "source": "message",
       "confirmed_in_chat": null,
+      "held": false,
       "why": "They gave the words; you only cut. The cut-only test wins over the request to write.",
       "skill": "\"Write me an intent: founders building on Solana in Goa.\" → `message` when you record \"Founders building on Solana in Goa\": every word is theirs."
     },
@@ -75,6 +81,7 @@
       "text": null,
       "source": null,
       "confirmed_in_chat": null,
+      "held": null,
       "why": "Same request, but \"meet\", \"during\", \"Edge\", \"City\" and \"India\" are your words: show them and ask once.",
       "skill": null
     },
@@ -86,6 +93,7 @@
       "text": null,
       "source": null,
       "confirmed_in_chat": null,
+      "held": null,
       "why": "The English is your translation: show it and ask once.",
       "skill": "\"Main Goa mein Solana par kaam karne wale founders se milna chahta hoon.\" recorded in English → show your translation and ask once: the translation is yours."
     },
@@ -97,6 +105,7 @@
       "text": "Conocer fundadores que construyen en Solana en Goa",
       "source": "message",
       "confirmed_in_chat": null,
+      "held": false,
       "why": "Their words, in the language they used, cut but not added to.",
       "skill": null
     },
@@ -108,6 +117,7 @@
       "text": null,
       "source": null,
       "confirmed_in_chat": null,
+      "held": null,
       "why": "The words and the want are Ravi's: record nothing unless they say the want is theirs.",
       "skill": "\"Ravi says he's looking for a cofounder in Goa.\" → record nothing: the words and the want are Ravi's, unless they say the want is theirs."
     },
@@ -119,6 +129,7 @@
       "text": "Looking for a cofounder in Goa",
       "source": "message",
       "confirmed_in_chat": null,
+      "held": false,
       "why": "After the quote, they say the want is theirs, in their own words.",
       "skill": "After that, \"Yes, that's what I want too: I'm looking for a cofounder in Goa.\" → `message`: now the want and the words are theirs."
     },
@@ -130,6 +141,7 @@
       "text": null,
       "source": null,
       "confirmed_in_chat": null,
+      "held": null,
       "why": "They say the want is theirs but give no words: the words you would record are yours (or Ravi's), so show them and ask once.",
       "skill": "If, asked whether Ravi's want is theirs, they only say \"Yes.\" → show your words and ask once: the want is theirs, but the words you record are not."
     },
@@ -141,6 +153,7 @@
       "text": null,
       "source": null,
       "confirmed_in_chat": null,
+      "held": null,
       "why": "A forwarded post is someone else's words and want: record nothing unless they say it is theirs.",
       "skill": null
     },
@@ -152,6 +165,7 @@
       "text": null,
       "source": null,
       "confirmed_in_chat": null,
+      "held": null,
       "why": "Inferred: they did not ask for anything; the words are yours, so show them and ask once.",
       "skill": null
     },
@@ -163,6 +177,7 @@
       "text": "Meet founders building on Solana in Goa",
       "source": "message",
       "confirmed_in_chat": null,
+      "held": false,
       "why": "Their words, cut but not added to; it publishes.",
       "skill": "\"I want to meet founders building on Solana in Goa.\" → `message`: record \"Meet founders building on Solana in Goa\" and it publishes."
     },
@@ -174,6 +189,7 @@
       "text": "Looking for a technical cofounder for a climate hardware startup",
       "source": "message",
       "confirmed_in_chat": null,
+      "held": false,
       "why": "Their words, cut but not added to.",
       "skill": null
     },
@@ -185,6 +201,7 @@
       "text": "Find people working on climate hardware",
       "source": "onboarding",
       "confirmed_in_chat": null,
+      "held": false,
       "why": "Their own words in a setup answer.",
       "skill": "A setup answer, \"I'm here to find people working on climate hardware.\" → `onboarding`."
     },
@@ -196,6 +213,7 @@
       "text": "Find a surf buddy for early mornings in Goa",
       "source": "note",
       "confirmed_in_chat": null,
+      "held": false,
       "why": "Their own words in their notes.",
       "skill": "A line in their notes, \"find a surf buddy for early mornings in Goa\" → `note`."
     },
@@ -207,6 +225,7 @@
       "text": null,
       "source": null,
       "confirmed_in_chat": null,
+      "held": null,
       "why": "A note they did not write as a request; the want is your reading of it, so show it and ask once.",
       "skill": null
     },
@@ -218,6 +237,7 @@
       "text": "Meet people building tools for civic life in small towns",
       "source": "message",
       "confirmed_in_chat": "yes",
+      "held": false,
       "why": "The rehearsal draft, adopted: a yes to the ask makes your words theirs; a card after it would be a double ask.",
       "skill": "Asked \"Should I publish this as written?\", \"Yes, publish that.\" → `message` with `confirmed_in_chat=yes`: they adopted your words as shown."
     },
@@ -229,6 +249,7 @@
       "text": "Meet founders and researchers working on AI agents for local communities",
       "source": "message",
       "confirmed_in_chat": "yes",
+      "held": false,
       "why": "An explicit yes to the ask.",
       "skill": null
     },
@@ -240,6 +261,7 @@
       "text": "Meet engineers who have built payments infrastructure",
       "source": "message",
       "confirmed_in_chat": "yes",
+      "held": false,
       "why": "An inferred want, shown and adopted: stated.",
       "skill": null
     },
@@ -251,6 +273,7 @@
       "text": "Meet founders building on Solana in Goa",
       "source": "message",
       "confirmed_in_chat": "yes",
+      "held": false,
       "why": "Their edit of your words is the text, and it is adopted.",
       "skill": "Asked about \"Meet founders building on Solana in Bangalore\", \"Yes, but say Goa, not Bangalore.\" → `message` with `confirmed_in_chat=yes`, recording \"Meet founders building on Solana in Goa\": their edit is the text."
     },
@@ -262,6 +285,7 @@
       "text": null,
       "source": null,
       "confirmed_in_chat": null,
+      "held": null,
       "why": "A no: nothing is recorded and nothing is published.",
       "skill": "Asked that, \"No, don't post that.\" → record nothing."
     },
@@ -273,8 +297,9 @@
       "text": "Find collaborators for a community radio project in Goa",
       "source": "message",
       "confirmed_in_chat": "silence",
-      "why": "They did not answer the ask; at your next message of your own the words are published as written, and that message says so in one clause. Never a second ask.",
-      "skill": "Asked that, they say something else (\"What's on at the hall tonight?\") or nothing → at your next message of your own, `message` with `confirmed_in_chat=silence`: publish as written and say so in one clause; do not ask again."
+      "held": true,
+      "why": "They did not answer the ask. At your next message of your own, capture the words as shown with source=message and confirmed_in_chat=silence; that send is a cron run, so the tool holds them (held_cron) for their tap on the approval card, and the message says so in one clause. Never a second ask.",
+      "skill": "Asked that, they say something else (\"What's on at the hall tonight?\") or nothing → at your next message of your own, `message` with `confirmed_in_chat=silence`: the tool holds it for their tap on the approval card, and that message says so in one clause; do not ask again."
     },
     {
       "said": "Don't ask me each time; just post the intents you think fit.",
@@ -284,6 +309,7 @@
       "text": "Talk with people who have run a residency program",
       "source": "message",
       "confirmed_in_chat": "standing",
+      "held": false,
       "why": "A standing go-ahead: you do not ask, and your words publish as stated; show what you recorded.",
       "skill": "\"Don't ask me each time; just post the intents you think fit.\" → from then on `message` with `confirmed_in_chat=standing`, without asking; show what you recorded."
     },
@@ -295,6 +321,7 @@
       "text": null,
       "source": null,
       "confirmed_in_chat": null,
+      "held": null,
       "why": "Record nothing new: your words are already recorded.",
       "skill": "\"Yes, that's right.\" after you recorded your words → record nothing new: they are already recorded."
     },
@@ -306,6 +333,7 @@
       "text": null,
       "source": null,
       "confirmed_in_chat": null,
+      "held": null,
       "why": "Hermes puts the message they replied to into theirs; your words quoted back are still a yes after the capture. Record nothing new.",
       "skill": null
     },
@@ -317,6 +345,7 @@
       "text": "Raising a seed round for a solar startup",
       "source": "ambient",
       "confirmed_in_chat": null,
+      "held": true,
       "why": "A background pass found it and the resident never saw the words: ambient, and the card asks.",
       "skill": null
     }
