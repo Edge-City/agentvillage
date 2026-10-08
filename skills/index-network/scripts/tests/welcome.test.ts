@@ -669,8 +669,13 @@ describe("the AGENTS.md welcome gate", () => {
     expect(copy).toBe(golden.unreachable);
   });
 
-  test("the welcome never publishes on the agent's part; the script's seed (DATA-412) is its only write, and only list, create and pause", () => {
-    expect(gate).toContain("Never create, publish or change an intent as part of the welcome");
+  test("the agent never writes an intent as part of the welcome; the script's seed (DATA-412) is the only write, and only list, create and pause", () => {
+    const flat = gate.replace(/\s+/g, " ");
+    expect(flat).toContain(
+      "The welcome script seeds intents from the resident's signup selections on the first welcome (the script does it, once per box); you, the agent, still never call `create_intent`, `record_intention` or any other intent tool as part of the welcome; later turns capture new wants as the \"Intentions\" red line says.",
+    );
+    expect(flat).toContain("(on the first welcome it also seeds intents from the selections the resident made at signup and reads them again: the script does that, once per box, never you)");
+    expect(flat).not.toContain("it never creates or changes one");
     const source = readFileSync(SCRIPT, "utf8");
     expect(source.match(/callIndexTool\(/g)).toHaveLength(3);
     expect([...source.matchAll(/callIndexTool\(\w+, "(\w+)"/g)].map((m) => m[1])).toEqual(["list_intents", "create_intent", "pause_intent"]);
