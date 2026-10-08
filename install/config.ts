@@ -383,8 +383,11 @@ export function configureCronWrapResponse(): void {
  * exactly the pre-pin cap. Over the cap Hermes keeps the head and the tail of a
  * context file around a marker and drops the middle: rc24 to rc26 shipped a
  * `workspace/AGENTS.md` of 25,232 to 29,714 chars, and the cut removed most of
- * its "Red lines" on every box. The control plane's model step writes only
- * `model.context_length`, so this key survives it.
+ * its "Red lines" on every box. The control plane sets exactly three Hermes
+ * keys at every root step (`model`, `cron.model`, `model.context_length`) and
+ * never resets config.yaml, so this key survives provision, update, recreate
+ * and rewire. A Hermes older than the key ignores an extra top-level key, so
+ * the pin is harmless there and never fails the install.
  */
 export const CONTEXT_FILE_MAX_CHARS = 48000;
 
