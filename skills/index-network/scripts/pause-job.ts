@@ -6,7 +6,8 @@
  *   bun skills/index-network/scripts/pause-job.ts <pause|resume|status> [--label "<Label>"] [--home DIR]
  *
  * The agent runs it through `terminal` when a resident asks to stop or
- * restart a message (workspace/AGENTS.md, "Cron schedule"). `<Label>` is one
+ * restart a message (skills/index-network/tools.md, "Cron schedule", which
+ * workspace/AGENTS.md points to). `<Label>` is one
  * of the five labels the messages end with (message-labels.ts
  * MESSAGE_LABELS). The home is `--home`, else `HERMES_HOME`, else `~/.hermes`.
  *

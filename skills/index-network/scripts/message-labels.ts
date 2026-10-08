@@ -7,8 +7,8 @@
  *
  * Every message a resident gets from a job ends with a label line,
  * `(<Label> message - you can ask me to stop or manage it)` (DATA-373).
- * MESSAGE_LABELS maps each label to its job names; workspace/AGENTS.md
- * ("Cron schedule") lists the same mapping, and install/tests/
+ * MESSAGE_LABELS maps each label to its job names; skills/index-network/tools.md
+ * ("Cron schedule", moved there from workspace/AGENTS.md) lists the same mapping, and install/tests/
  * cron_wrapper.test.ts pins both to the prompts' own lines.
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
