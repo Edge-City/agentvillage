@@ -466,6 +466,19 @@ export function setContextFileMaxChars(): void {
  */
 export const HYGIENE_MAX_TURN_HOLD_SECONDS = 25;
 
+/** Operator switch: `keep` leaves an existing explicit `auxiliary.compression` route as it is (RC28). */
+export const COMPRESSION_ROUTE_ENV = "AV_COMPRESSION_ROUTE";
+
+/** Whether `AV_COMPRESSION_ROUTE` says `keep`; an unreadable `.env` counts as not set, with a warning. */
+function keepCompressionRoute(lines: string[]): boolean {
+  try {
+    return (envOrDotenv(COMPRESSION_ROUTE_ENV) ?? "").trim().toLowerCase() === "keep";
+  } catch {
+    lines.push(`→ warning: could not read ${COMPRESSION_ROUTE_ENV} from $HERMES_HOME/.env; the compression route follows model.default`);
+    return false;
+  }
+}
+
 /**
  * Pin the compaction settings behind the deferred-compression notice loop (RC28):
  *
@@ -499,17 +512,29 @@ export const HYGIENE_MAX_TURN_HOLD_SECONDS = 25;
  *    false}` on the summary call (agent/auxiliary_client.py:6144-6195). The
  *    provider and model are this box's own `model.provider` and `model.default`,
  *    what `auto` resolves to (auxiliary_client.py:2428-2455), so the summary
- *    model does not change. A route already explicit (a provider or model not
- *    empty and not `auto`, or a `base_url`) is kept, this step's own earlier
- *    write included; `reasoning_effort` is added when absent, null or empty and
- *    otherwise kept. With no named `model.provider` and `model.default` the
- *    block is skipped with a warning.
+ *    model does not change. The route follows the main model on every run (the
+ *    lead's ruling, Oct 9): this installer is the only writer of
+ *    `auxiliary.compression` on the fleet and only the control plane changes
+ *    `model.default` (DATA-400), so a route (a provider or model not empty and
+ *    not `auto`, or a `base_url`) that differs from `model.provider` /
+ *    `model.default` gets its provider and model rewritten to them, with one
+ *    line naming the new route; a matching one is left as it is.
+ *    `reasoning_effort` is added when absent, null or empty and otherwise kept;
+ *    the other keys of the block (a `base_url` among them) are never touched.
+ *    `AV_COMPRESSION_ROUTE=keep` (case-folded and trimmed, in the process
+ *    environment or `$HERMES_HOME/.env`) leaves an existing explicit route
+ *    entirely as it is, `reasoning_effort` included; it only protects an
+ *    existing route, so with no route there this step still writes its own.
+ *    With no named `model.provider` and `model.default` the block is skipped
+ *    with a warning.
  *
  * Each pin is independent: one that cannot be written is skipped with a
  * `→ warning:` line and the others still apply. The whole step is skipped when
  * the top level of config.yaml is not a mapping or holds a YAML merge key, for
  * the reason `keepTelegramBacklogOnColdBoot` gives. One `→` line per pin; a
- * config value is never echoed onto stdout (only its type, or a number).
+ * config value is never echoed onto stdout (only its type, or a number), except
+ * the main provider and model names in the route-follow line, and only when
+ * they are plain identifiers.
  * Idempotent: a second run changes nothing, says so, and does not rewrite the
  * file.
  */
@@ -587,29 +612,35 @@ export function setCompactionSettings(): void {
   const auxiliary = section(doc, "auxiliary", "auxiliary");
   const route = typeof auxiliary === "string" ? auxiliary : section(auxiliary, "compression", routePath);
   const main = section(doc, "model", "model");
+  const explicit = typeof route !== "string" &&
+    (named(route.provider) || named(route.model) || (typeof route.base_url === "string" && route.base_url.trim() !== ""));
+  const keep = explicit && keepCompressionRoute(lines);
   if (typeof auxiliary === "string" || typeof route === "string") {
     lines.push(`→ warning: ${typeof auxiliary === "string" ? auxiliary : route}; left ${routePath} as is`);
-  } else if (named(route.provider) || named(route.model) || (typeof route.base_url === "string" && route.base_url.trim())) {
-    // A route already explicit (this step's own write on an earlier run, or an operator's) is kept.
-    const ours = typeof main !== "string" && named(main.provider) && named(main.default)
-      && route.provider === main.provider.trim() && route.model === main.default.trim();
-    if (effortUnset(route.reasoning_effort)) {
-      doc.auxiliary = { ...auxiliary, compression: { ...route, reasoning_effort: "none" } };
-      changed = true;
-      lines.push(`→ set ${routePath}.reasoning_effort: none (kept the explicit route already there)`);
-    } else if (ours) {
-      lines.push(`→ ${routePath} already this box's main provider and model; left as is`);
-    } else {
-      lines.push(`→ ${routePath} has an explicit route other than this box's main model; left as is`);
-    }
+  } else if (keep) {
+    lines.push(`→ ${routePath}: explicit route kept (${COMPRESSION_ROUTE_ENV}=keep)`);
   } else if (typeof main === "string" || !named(main.provider) || !named(main.default)) {
     lines.push(`→ warning: config.yaml names no model.provider and model.default; left ${routePath} as is (the summary keeps the provider's default reasoning)`);
   } else {
-    const keptEffort = !effortUnset(route.reasoning_effort);
-    const next = { ...route, provider: main.provider.trim(), model: main.default.trim(), ...(keptEffort ? {} : { reasoning_effort: "none" }) };
-    doc.auxiliary = { ...auxiliary, compression: next };
-    changed = true;
-    lines.push(`→ set ${routePath}: this box's main provider and model, ${keptEffort ? "reasoning_effort kept as set" : "reasoning_effort: none (the summary runs with reasoning off)"}`);
+    const provider = main.provider.trim();
+    const model = main.default.trim();
+    const matches = route.provider === provider && route.model === model;
+    const effortSet = !effortUnset(route.reasoning_effort);
+    if (matches && effortSet) {
+      lines.push(`→ ${routePath} already this box's main provider and model; left as is`);
+    } else {
+      doc.auxiliary = { ...auxiliary, compression: { ...route, provider, model, ...(effortSet ? {} : { reasoning_effort: "none" }) } };
+      changed = true;
+      if (!explicit) {
+        lines.push(`→ set ${routePath}: this box's main provider and model, ${effortSet ? "reasoning_effort kept as set" : "reasoning_effort: none (the summary runs with reasoning off)"}`);
+      } else if (!matches) {
+        // Names only, and only when they are plain identifiers: a config value never injects a line.
+        const shown = /^[\w.:@+\/-]+$/.test(`${provider}/${model}`) ? `${provider}/${model}` : "(names not shown: unusual characters)";
+        lines.push(`→ compression route follows model.default: ${shown}`);
+      } else {
+        lines.push(`→ set ${routePath}.reasoning_effort: none (the route is already this box's main provider and model)`);
+      }
+    }
   }
 
   if (changed) writeConfig(doc);

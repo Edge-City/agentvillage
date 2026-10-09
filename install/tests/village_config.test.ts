@@ -9,7 +9,7 @@
  *   - F3: the triggers wait 60 s for the lock and stop at 100 s, so
  *     `cron.script_timeout_seconds` must be about 110 s or more.
  */
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import YAML from "yaml";
 
 import {
+  COMPRESSION_ROUTE_ENV,
   CONTEXT_FILE_MAX_CHARS,
   CRON_SCRIPT_TIMEOUT_SECONDS,
   HYGIENE_MAX_TURN_HOLD_SECONDS,
@@ -28,7 +29,7 @@ import {
 } from "../config";
 import { configureTelegramDisplay } from "../display_defaults";
 
-const ORIGINAL = { HERMES_HOME: process.env.HERMES_HOME, HERMES_TIMEZONE: process.env.HERMES_TIMEZONE };
+const ORIGINAL = { HERMES_HOME: process.env.HERMES_HOME, HERMES_TIMEZONE: process.env.HERMES_TIMEZONE, AV_COMPRESSION_ROUTE: process.env.AV_COMPRESSION_ROUTE };
 let home: string;
 let logSpy: ReturnType<typeof spyOn>;
 let warnSpy: ReturnType<typeof spyOn>;
@@ -37,6 +38,7 @@ beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "agentvillage-village-config-"));
   process.env.HERMES_HOME = home;
   delete process.env.HERMES_TIMEZONE;
+  delete process.env.AV_COMPRESSION_ROUTE;
   logSpy = spyOn(console, "log").mockImplementation(() => {});
   warnSpy = spyOn(console, "warn").mockImplementation(() => {});
 });
@@ -505,18 +507,97 @@ describe("RC28: compaction settings (hold 25, Telegram warnings off, summary rea
     expect(Object.keys(after.compression)).toEqual(Object.keys(route));
   });
 
-  test("summary route: an operator's explicit route is kept; reasoning_effort only added when unset", () => {
-    withDoc({ model: BOX.model, auxiliary: { compression: { provider: "openrouter", model: "google/gemini-3.5-flash" } } });
+  test("summary route: a route that differs from the main model follows model.default, one line naming it", () => {
+    // The control plane moved the box to another model after an earlier install wrote the route.
+    withDoc({ model: BOX.model, auxiliary: { compression: { provider: "openrouter", model: "google/gemini-3.5-flash", timeout: 120 } } });
     setCompactionSettings();
-    expect(read().auxiliary.compression).toEqual({ provider: "openrouter", model: "google/gemini-3.5-flash", reasoning_effort: "none" });
-    expect(lines()[2]).toBe("→ set auxiliary.compression.reasoning_effort: none (kept the explicit route already there)");
+    expect(read().auxiliary.compression).toEqual({ provider: "openrouter", model: "anthropic/claude-haiku-5.5", timeout: 120, reasoning_effort: "none" });
+    expect(lines()[2]).toBe("→ compression route follows model.default: openrouter/anthropic/claude-haiku-5.5");
+    expect(lines()).toHaveLength(3);
 
+    // A reasoning_effort already there is kept; other keys (a base_url among them) are never touched.
     logSpy.mockClear();
-    const text = YAML.stringify({ model: BOX.model, compression: { hygiene_max_turn_hold_seconds: 25 }, display: { platforms: { telegram: { suppress_warning_notifications: true } } }, auxiliary: { compression: { base_url: "https://example.invalid/v1", reasoning_effort: "low" } } });
+    withDoc({ model: BOX.model, auxiliary: { compression: { base_url: "https://example.invalid/v1", reasoning_effort: "low" } } });
+    setCompactionSettings();
+    expect(read().auxiliary.compression).toEqual({ base_url: "https://example.invalid/v1", reasoning_effort: "low", provider: "openrouter", model: "anthropic/claude-haiku-5.5" });
+    expect(lines()[2]).toBe("→ compression route follows model.default: openrouter/anthropic/claude-haiku-5.5");
+
+    // The same route with reasoning unset: only reasoning_effort is added.
+    logSpy.mockClear();
+    withDoc({ model: BOX.model, auxiliary: { compression: { provider: "openrouter", model: "anthropic/claude-haiku-5.5", reasoning_effort: "" } } });
+    setCompactionSettings();
+    expect(read().auxiliary.compression).toEqual({ provider: "openrouter", model: "anthropic/claude-haiku-5.5", reasoning_effort: "none" });
+    expect(lines()[2]).toBe("→ set auxiliary.compression.reasoning_effort: none (the route is already this box's main provider and model)");
+  });
+
+  test("summary route: the same route and a reasoning_effort set is already in place, file untouched", () => {
+    const text = YAML.stringify({ model: BOX.model, compression: { hygiene_max_turn_hold_seconds: 25 }, display: { platforms: { telegram: { suppress_warning_notifications: true } } }, auxiliary: { compression: { provider: "openrouter", model: "anthropic/claude-haiku-5.5", reasoning_effort: "low" } } });
     withText(text);
     setCompactionSettings();
     expect(readFileSync(configPath(), "utf8")).toBe(text);
-    expect(lines()[2]).toBe("→ auxiliary.compression has an explicit route other than this box's main model; left as is");
+    expect(lines()[2]).toBe("→ auxiliary.compression already this box's main provider and model; left as is");
+  });
+
+  test("summary route: a main model name with unusual characters is not echoed", () => {
+    withDoc({ model: { default: "evil\n→ set everything", provider: "openrouter" }, auxiliary: { compression: { provider: "openrouter", model: "x" } } });
+    setCompactionSettings();
+    expect(read().auxiliary.compression.model).toBe("evil\n→ set everything");
+    expect(lines()[2]).toBe("→ compression route follows model.default: (names not shown: unusual characters)");
+  });
+
+  describe(`${COMPRESSION_ROUTE_ENV}=keep`, () => {
+    const ROUTE = { provider: "openrouter", model: "google/gemini-3.5-flash" };
+    afterEach(() => {
+      delete process.env[COMPRESSION_ROUTE_ENV];
+    });
+
+    test("a differing explicit route is left entirely as it is (reasoning_effort included), one kept line", () => {
+      for (const spelling of ["keep", " KEEP ", "Keep"]) {
+        logSpy.mockClear();
+        process.env[COMPRESSION_ROUTE_ENV] = spelling;
+        const text = YAML.stringify({ model: BOX.model, compression: { hygiene_max_turn_hold_seconds: 25 }, display: { platforms: { telegram: { suppress_warning_notifications: true } } }, auxiliary: { compression: ROUTE } });
+        withText(text);
+        setCompactionSettings();
+        expect(readFileSync(configPath(), "utf8")).toBe(text);
+        expect(lines()[2]).toBe(`→ auxiliary.compression: explicit route kept (${COMPRESSION_ROUTE_ENV}=keep)`);
+      }
+    });
+
+    test("read from $HERMES_HOME/.env too; any other value follows model.default", () => {
+      writeFileSync(join(home, ".env"), `${COMPRESSION_ROUTE_ENV}=keep\n`);
+      withDoc({ model: BOX.model, auxiliary: { compression: ROUTE } });
+      setCompactionSettings();
+      expect(read().auxiliary.compression).toEqual(ROUTE);
+
+      writeFileSync(join(home, ".env"), `${COMPRESSION_ROUTE_ENV}=follow\n`);
+      setCompactionSettings();
+      expect(read().auxiliary.compression).toEqual({ provider: "openrouter", model: "anthropic/claude-haiku-5.5", reasoning_effort: "none" });
+    });
+
+    test("with no route there, keep protects nothing: the main route is written", () => {
+      process.env[COMPRESSION_ROUTE_ENV] = "keep";
+      withDoc({ model: BOX.model });
+      setCompactionSettings();
+      expect(read().auxiliary).toEqual({ compression: { provider: "openrouter", model: "anthropic/claude-haiku-5.5", reasoning_effort: "none" } });
+      expect(lines()[2]).toStartWith("→ set auxiliary.compression: this box's main provider and model");
+    });
+
+    // chmod cannot deny root, so the case only holds for a non-root user (GitHub's ubuntu runner is one).
+    test.skipIf(process.getuid?.() === 0)("an unreadable $HERMES_HOME/.env does not stop the step: a warning, and the route follows model.default", () => {
+      const dotenv = join(home, ".env");
+      writeFileSync(dotenv, `${COMPRESSION_ROUTE_ENV}=keep\n`);
+      chmodSync(dotenv, 0o000);
+      try {
+        expect(() => readFileSync(dotenv, "utf8")).toThrow(/EACCES/);
+        withDoc({ model: BOX.model, auxiliary: { compression: ROUTE } });
+        setCompactionSettings();
+        expect(read().auxiliary.compression).toEqual({ provider: "openrouter", model: "anthropic/claude-haiku-5.5", reasoning_effort: "none" });
+        expect(logged()).toContain(`→ warning: could not read ${COMPRESSION_ROUTE_ENV} from $HERMES_HOME/.env; the compression route follows model.default`);
+        expect(logged()).toContain("→ compression route follows model.default: openrouter/anthropic/claude-haiku-5.5");
+      } finally {
+        chmodSync(dotenv, 0o600);
+      }
+    });
   });
 
   test("summary route: an existing reasoning_effort on an unset route is kept, the provider and model still filled", () => {
