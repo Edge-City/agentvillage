@@ -4,19 +4,19 @@
   "source": {
     "repo": "p2p-lanes/edge-agent-skill",
     "path": "references",
-    "commit": "e9b7ec450adce708b7f398371506dcd2d372ed3e",
-    "commit_date": "2026-10-09T08:43:20.000Z"
+    "commit": "ee7ff45f081ce856e51c52cc629c937dda6cee3b",
+    "commit_date": "2026-10-09T19:28:21.000Z"
   },
-  "synced_at": "2026-10-09T10:12:38.469Z",
+  "synced_at": "2026-10-09T21:42:38.206Z",
   "files": [
     {
       "path": "index.md",
-      "sha256": "7725e6f3252f1ef8ca47d4894830b742d182368e9a9cc97a00a0cb1ffeae851c",
+      "sha256": "98010e224621c3ba1af30512dc8f9f9e03ba4161105b3661f34661502f720c57",
       "bytes": 5418
     },
     {
       "path": "manifest.json",
-      "sha256": "67e221344abecff5ac8d77bb4b46481c4960f7151ff3a5320746b34766b4166f",
+      "sha256": "24c99babb8668526ee5623e1a469a9951b15e4cfda35105e034be9b786495c91",
       "bytes": 11401
     },
     {
@@ -101,8 +101,8 @@
     },
     {
       "path": "newsletter/the-first-three-days-at-edge-city.md",
-      "sha256": "54f5388041f394271b2045b4b33d52efc1e059070b33194c4742ccfce0f195a9",
-      "bytes": 13643
+      "sha256": "df74bb8ed8f046950a7726f7107eb28bcb373b2d1b331c9da22de2c211dd3b9d",
+      "bytes": 13634
     },
     {
       "path": "newsletter/the-future-arrives-locally.md",
@@ -151,8 +151,8 @@
     },
     {
       "path": "wiki-content.md",
-      "sha256": "7a5116ecd3bd30f7fee31847d09cbd24b20ee2fa68717c4a58cb7912cdd551a0",
-      "bytes": 24912
+      "sha256": "8f5f01e3578281f11f6ddeb89e9dc97cc5bf5f5c43114f4a0fc41274ed3208df",
+      "bytes": 25241
     }
   ]
 }

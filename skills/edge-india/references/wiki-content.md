@@ -4,9 +4,9 @@ Source: https://edgecity.notion.site/Edge-City-India-2026-Wiki-038d45cdfc5983c7a
 
 Source type: wiki
 
-Source updated: 2026-10-09T07:08:44.292Z
+Source updated: 2026-10-09T19:18:58.926Z
 
-Last content change indexed: 2026-10-09T07:13:19.143Z
+Last content change indexed: 2026-10-09T19:28:20.813Z
 
 ---
 
@@ -421,7 +421,7 @@ Think tropical beach village: easy, light, and made for warm days and warm water
 
 ---
 
-#### 🛜 Wifi
+#### 🛜 Wifi & Getting Connected
 
 Our two hubs, Riva and The Circle, both have fast WiFi, with backup Starlink.
 
@@ -436,6 +436,14 @@ Our two hubs, Riva and The Circle, both have fast WiFi, with backup Starlink.
   - Network: **Edge City**
 
   - Password: **Edgecitygoa@2026**
+
+- 📱 SIM cards available weekend
+
+Our eSIM partner is coming with SIM cards, (and CheqUPI, see below) at 1200INR for unlimited Airtell data for 30 days (best wifi service in Mandrem)
+
+Find them at Riva:\
+•⁠ ⁠Saturday 11-12:30 at Wisteria Cafe in Riva\
+•⁠ ⁠Sunday 11 - 3p at Check-in Reception
 
 #### 💵 Currency
 
