@@ -1,3 +1,4 @@
+import { installMorning } from "./moralmod_morning";
 /** Managed V2 replacement for the pinned plugin's runtime executable.
  * The existing sidecar still owns the per-home process lock and Hermes model bridge.
  */
@@ -137,6 +138,7 @@ export function activateMoralmod(
     )
       throw Error("Unowned plugin runtime was modified");
   }
+  installMorning(home);
   const configFile = join(home, "index", "moralmod", "resident.json");
   const entry = `${marker}\nimport {readFileSync} from 'node:fs';\nimport {startResident} from ${JSON.stringify(join(release.directory, "negotiator-runtime.js"))};\nconst config=JSON.parse(readFileSync(${JSON.stringify(configFile)},'utf8'));\ntry {\n const resident=await startResident({...process.env,...config,DECISION_JOURNAL_PATH:${JSON.stringify(join(home,"index","moralmod","fallback.sqlite"))}});\n const stop=()=>void resident.stop().finally(()=>process.exit(0));\n process.on('SIGTERM',stop);process.on('SIGINT',stop);\n console.log(JSON.stringify({ready:true,port:resident.port}));\n} catch { console.error(JSON.stringify({level:'warn',event:'moralmod_startup_unready'}));process.exit(1); }\n`;
   mkdirSync(join(plugin, "runtime", "dist"), { recursive: true });
