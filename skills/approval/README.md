@@ -166,6 +166,10 @@ listener is read just before curl connects, so a process that binds in the
 instant between the two (the daemon having died in that instant) is not seen.
 The unix form has no such window (the directory is the daemon's).
 
+The facade URL and the agent credential must each be printable ASCII (bytes
+0x21-0x7E, no space) with no `"` or `\`, whatever the hook's locale; any other
+byte blocks before the first post (DATA-424).
+
 ### The agent token
 
 By hand (every Agent Village sandbox), the shim reads the agent credential from

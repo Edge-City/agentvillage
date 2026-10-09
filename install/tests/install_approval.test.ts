@@ -1377,7 +1377,7 @@ exec /usr/bin/perl -e '@s = lstat($ARGV[1]) or exit 1; $f = $ARGV[0]; $f =~ s/%u
     state,
     proc,
     fake,
-    run(env: Record<string, string> = {}, o: { bare?: boolean; timeoutMs?: number } = {}): ShimRun {
+    run(env: Record<string, string> = {}, o: { bare?: boolean; timeoutMs?: number; printf?: Record<string, string> } = {}): ShimRun {
       const base = o.bare
         ? { PATH: `${fake}:/usr/bin:/bin` }
         : {
@@ -1392,7 +1392,11 @@ exec /usr/bin/perl -e '@s = lstat($ARGV[1]) or exit 1; $f = $ARGV[0]; $f =~ s/%u
             APPROVAL_HOOK_MAX_TIME: "1",
             APPROVAL_HOOK_LOG: join(root, "hook.log"),
           };
-      const proc = Bun.spawnSync(["bash", "-c", `exec "$0" < "$1"`, shim, envelope], {
+      // o.printf: variables the wrapper sets from printf formats before the shim
+      // starts, for bytes a JS env string cannot carry (a lone 0x80; DATA-424).
+      const pf = Object.entries(o.printf ?? {});
+      const pre = pf.map(([k], i) => `${k}=$(printf "\${${i + 2}}"); export ${k}; `).join("");
+      const proc = Bun.spawnSync(["bash", "-c", `${pre}exec "$0" < "$1"`, shim, envelope, ...pf.map(([, f]) => f)], {
         env: { ...base, ...env },
         ...(o.timeoutMs ? { timeout: o.timeoutMs } : {}),
       });
@@ -3255,4 +3259,63 @@ describe("DATA-379: the pre-warm", () => {
     expect(JSON.parse(logs.at(-1)!).problems).toEqual(["approval-not-enabled"]);
     expect(checkCli(["--prewarm"])).toBe(2);
   });
+});
+
+// ---------------------------------------------------------------------------
+// DATA-424: the facade URL and credential checks are locale-independent.
+// They used `[![:print:]]`, which follows the hook's locale: under a UTF-8
+// locale a valid multibyte character such as 'é' (c3 a9) passed, under C it
+// was refused. Ruling (the lead in Carter's absence, CLAIMS SWEEP-L44,
+// 2026-10-09 11:40Z): ASCII-only. Each value must be bytes 0x21-0x7E with no
+// `"` or `\`, matched under LC_ALL=C, whatever LC_ALL the shim inherits.
+// ---------------------------------------------------------------------------
+
+/** The installed locales among C.UTF-8 (always run) and en_US.UTF-8, as `locale -a` names them. */
+function data424Locales(): string[] {
+  const have = Bun.spawnSync(["locale", "-a"]).stdout.toString().split("\n").map((l) => l.trim().toLowerCase().replace("-", ""));
+  return ["C", "C.UTF-8", ...(have.includes("en_us.utf8") ? ["en_US.UTF-8"] : [])];
+}
+
+describe("DATA-424: the shim's facade URL and credential checks are printable ASCII under every locale", () => {
+  const shells = data380Shells(["/bin/sh", "/bin/dash", "/bin/bash", ...(process.env.AV_SHIM_SHELL ? [process.env.AV_SHIM_SHELL] : [])]);
+  const locales = data424Locales();
+  const URL_BLOCK = `${JSON.stringify({ action: "block", message: "approval facade unreachable: the facade URL contains a character a URL cannot" })}\n`;
+  const TOKEN_BLOCK = `${JSON.stringify({
+    action: "block",
+    message: "approval facade unreachable: the facade credential contains a character a credential cannot",
+  })}\n`;
+  // [name, the bytes as a printf format]: each refused in the URL and in the credential.
+  const refused: [string, string][] = [
+    ["é (c3 a9)", "x\\303\\251y"],
+    ["tab", "x\\ty"],
+    ["space", "x y"],
+    ["double quote", 'x\\"y'],
+    ["backslash", "x\\\\y"],
+    ["DEL (7f)", "x\\177y"],
+    ["0x80", "x\\200y"],
+  ];
+
+  // One test per shell and locale: each runs the shim 16 times.
+  for (const shell of shells)
+    for (const lc of locales)
+      test(`${shell}, LC_ALL=${lc}: a URL or credential holding é, a tab, a space, a quote, a backslash, DEL or 0x80 is refused with the existing block message; plain ASCII passes, ! and ~ included`, () => {
+        for (const [name, fmt] of refused) {
+          const u = shimFixture("allow", null, { shell }).run({ LC_ALL: lc }, { printf: { AV_APPROVAL_URL: `${URL}/${fmt}` } });
+          expect(["url", name, u.code, u.calls, u.stdout]).toEqual(["url", name, 2, 0, URL_BLOCK]);
+          expect(u.stderr).not.toContain("setlocale");
+          const t = shimFixture("allow", null, { shell }).run({ LC_ALL: lc }, { printf: { AV_APPROVAL_TOKEN: `${TOKEN}${fmt}` } });
+          expect(["token", name, t.code, t.calls, t.stdout]).toEqual(["token", name, 2, 0, TOKEN_BLOCK]);
+          expect(t.stderr).not.toContain("setlocale");
+        }
+        for (const [url, token] of [
+          [URL, TOKEN],
+          [`${URL}/~a!b`, `${TOKEN}!~`],
+        ]) {
+          const r = shimFixture("allow", null, { shell }).run({ LC_ALL: lc, AV_APPROVAL_URL: url, AV_APPROVAL_TOKEN: token });
+          expect([url, r.code, r.calls, r.stdout]).toEqual([url, 0, 1, "{}"]);
+          expect(r.argv[0].trim().split("\n").at(-1)).toBe(`${url}/hook/hermes`);
+          expect(r.stdin[0]).toBe(`header = "X-Approval-Authorization: Bearer ${token}"\n`);
+          expect(r.stderr).not.toContain("setlocale");
+        }
+      });
 });
