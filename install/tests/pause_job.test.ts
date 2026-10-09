@@ -44,7 +44,7 @@ const MIDDAY = "Edge — opportunity drop (midday)";
 const DROP_EVENING = "Edge — opportunity drop (evening)";
 const AUDIT = "Edge — token usage audit";
 const ENV_KEYS = ["HERMES_HOME", "HERMES_BIN", "INDEX_API_KEY", "TOKEN_USAGE_AUDIT_CRON", "FAKE_HERMES_FAIL", "FAKE_HERMES_HANG", "FAKE_HERMES_HANG_AFTER", "HERMES_TIMEZONE",
-  "DIGEST_SIGNALS_CRON", "DIGEST_PREPARE_CRON", "DIGEST_SEND_CRON"];
+  "DIGEST_SIGNALS_CRON", "DIGEST_PREPARE_CRON", "DIGEST_SEND_CRON", "PENDING_ALERT_ENABLED"];
 const savedEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
 /** Another job's hold, an admin's, that every write must keep exactly. */
 const OTHER = "aaaaaaaaaaaa";
@@ -82,7 +82,11 @@ afterEach(() => {
   }
 });
 
-/** A roll: the installer's reconcile creates the jobs and installed_jobs.json, quietly. */
+/**
+ * A roll: the installer's reconcile creates the jobs and installed_jobs.json,
+ * quietly. Its own Hermes calls (rc29: the pending alert's pause) are not the
+ * script's, so the call log starts after it.
+ */
 function roll(): void {
   const log = console.log;
   const warn = console.warn;
@@ -94,6 +98,7 @@ function roll(): void {
     console.log = log;
     console.warn = warn;
   }
+  rmSync(join(home, "hermes-calls.jsonl"), { force: true });
 }
 
 type Job = Record<string, any>;
@@ -259,6 +264,8 @@ describe("only the jobs the overlay installed", () => {
   });
 
   test("DATA-430: Pending opportunity pauses the hourly pending alert, and its hold clears on resume (not a contact-style job)", () => {
+    // rc29 installs it paused; the switch turns it on (pending_alert_off.test.ts).
+    process.env.PENDING_ALERT_ENABLED = "true";
     roll();
     const id = job("Edge — pending opportunity").id;
     expect(run("pause", "--label", "Pending opportunity").out).toMatchObject({ ok: true, jobs: [{ id, changed: true }], hold: "paused" });

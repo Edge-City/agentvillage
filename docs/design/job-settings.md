@@ -77,7 +77,7 @@ the other two tests. The control plane changes it with one non-interactive comma
 | `adminSchedules` | a list of default job keys whose schedule an admin set with `set --schedule`; read entry by entry (below) | `[]` |
 
 **Job keys.** The six default agent jobs are `brief`, `drop-midday`, `drop-evening`,
-`negotiation`, `evening` and `pending` (DATA-430's hourly pending opportunity alert). The three template jobs are `tpl-brief`, `tpl-digest-preview` and
+`negotiation`, `evening` and `pending` (DATA-430's hourly pending opportunity alert; installed paused in rc29, §4). The three template jobs are `tpl-brief`, `tpl-digest-preview` and
 `tpl-evening-ask`. The prefetch has no settings, because it delivers nothing.
 
 **Defaults** (`DEFAULT_WINDOWS`, job-settings.ts:65):
@@ -701,6 +701,7 @@ jobs are admin-managed, by the rule `list` reports (`scheduleAdminManaged`, §1)
 | An unreadable settings file, or an `adminSchedules` that is not a list | every default job counts as admin-managed, and reconcile logs a warning saying so | :699-707 |
 | A job given back with `set --schedule default` | its schedule is the fleet default, which the migration never moves; with no mark, the roll owns it again (a later legacy schedule is migrated as on rc13) | §2 |
 | Pause state (enabled) | yes, `cron edit` keeps it | header :28-34; Hermes `cron/jobs.py:1994` |
+| The pending alert's pause state (`pending`, rc29) | the one job whose pause state a roll sets, by the switch `PENDING_ALERT_ENABLED` (below) | `pendingAlertStep` |
 | Window, zone and `adminSchedules` | yes, reconcile never writes the file | (no reference: reconcile has no write) |
 | A template job (`Edge — template: <name>`, template still in `TEMPLATE_NAMES`) | kept, with its id, schedule and pause state; its shape is edited like a default job's; it is listed in `installed_jobs.json`; it is never created by reconcile | retire filter :717; template loop :738 |
 | A job a resident created under exactly a template's name | **adopted**: reconcile treats it as the template job and rewrites its prompt and script | template loop :738 |
@@ -709,6 +710,41 @@ jobs are admin-managed, by the rule `list` reports (`scheduleAdminManaged`, §1)
 | Preview state copies and preview shims older than an hour | removed | `prunePreviewFiles`, :710 |
 | A fleet change to a prompt, a script or agent mode | still applied to every job, including admin-managed and template jobs | template loop and spec loop |
 | A fleet change to a default window or zone | reaches every job without an override (defaults live in code, not the file) | `DEFAULT_WINDOWS`, job-settings.ts:65 |
+
+**The pending alert ships paused (rc29, Carter's ruling on DATA-430).** `Edge — pending opportunity`
+is created with `hermes cron create --paused` (stored disabled in the create's one write, `next_run_at`
+null; Hermes v2026.9.11 and later), so it never exists running, and its id is recorded in
+`installed_jobs.json` as before. A roll reads the switch `PENDING_ALERT_ENABLED` (the flag
+`--pending-alert-enabled true|false` or `=true|false`, else the roll's environment, else `$HERMES_HOME/.env`) and
+does one of three things (`pendingAlertStep`):
+
+| Switch | A running job | A paused job |
+| --- | --- | --- |
+| unset (the control plane's roll passes nothing) | paused once per job id, the first roll that sees it (a new job, or one an earlier main build created running); after that, left running | left paused |
+| `true` | left running | resumed, unless `av-events/job-holds.json` holds it `paused` (`by` resident, admin or desired) or cannot be read; a resume whose slot already passed re-applies the schedule, as `set --enabled true` does |
+| `false` | paused | left paused |
+
+The id the installer has settled is `av-events/pending-alert.json` (`{"v":1,"settled":"<id>"}`), so
+with the switch unset a roll never pauses a job turned on with `bun install/jobs.ts set --job pending
+--enabled true` inside the tenant (a sandbox exec), nor one resumed by hand: that resume survives every
+later roll, as every other job's does. An explicit `false` is the operator's own desired state and wins
+on each roll that carries it. Today the switch and that command are the only ways to turn it on: the
+control plane's job-settings route does not know the `pending` key (`PUT /tenants/:id/jobs/pending`
+answers `404 job_not_found`), and its job routes (cp#87) do not list the job. `PENDING_ALERT_CRON` moves
+the schedule only.
+
+**Never left running.** Every Hermes call here (pause, resume, remove) is killed after
+`HERMES_TIMEOUT_MS` (60 s). A pause that fails, times out or does not read back paused, and a new job
+that reads back running (a Hermes that took the create but not `--paused`), is answered by
+`hermes cron remove <id>`: the job is named among the roll's failed jobs, its id leaves
+`installed_jobs.json`, and the next roll creates it paused. A Hermes older than v2026.9.11 refuses
+`--paused`, so the create fails and no job exists, which is still off. A failed resume leaves the job
+paused and named as failed. Nothing is recorded unless the job settled, so the next roll tries again.
+
+**The resident.** tools.md tells the agent the Pending opportunity message is off unless the Edge City
+team turned it on: it may stop it, never restart it, and leaves it out of "turn everything back on".
+The pause script itself still resumes it when run (the installer's pause records no hold, so that the
+switch can still turn it on).
 
 Tests cover two consecutive rolls for all of these. They run end to end against a stand-in Hermes
 that keeps `jobs.json`: `install/tests/job_commands.test.ts`, "what a roll keeps".
