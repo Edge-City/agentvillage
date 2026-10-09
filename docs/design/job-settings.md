@@ -115,7 +115,7 @@ Template jobs are never admin-managed: reconcile never migrates their schedule.
   `"dropped": [..., "adminSchedules"]`.
 - **A value that is not a list** counts every default job as admin-managed, so nothing an admin set
   is moved. The command that next writes the file (`set`, `add`, or a `remove` that rewrites it)
-  writes all five default keys in its place (the same jobs reconcile was already treating as
+  writes all six default keys in its place (the same jobs reconcile was already treating as
   managed). It reports that as `"adminSchedulesRepaired": true`, so the caller knows every default
   job is now admin-managed on file. For compatibility, `set` and `add` still list
   `"adminSchedules"` in `dropped` as well. A command that writes no settings (a pause, say) leaves
@@ -334,7 +334,7 @@ Success line:
 | `missedSlot: "dropped"` | a resume found a missed run, and re-anchored the next run so it does not fire (below) |
 | `resumeMayFire: true` | a resume left a missed run due: the next Hermes tick may fire it (below) |
 | `dropped` | names removed because they were invalid: `"window"`, `"tz"`, `"entry"` (the old entry was not an object) or `"adminSchedules"`. Present only when the file was written. |
-| `adminSchedulesRepaired: true` | `adminSchedules` was not a list, and this write replaced it with all five default keys: every default job is now admin-managed on file (§1). Clear the ones that should not be with `--schedule default`. Present only when the file was written. |
+| `adminSchedulesRepaired: true` | `adminSchedules` was not a list, and this write replaced it with all six default keys: every default job is now admin-managed on file (§1). Clear the ones that should not be with `--schedule default`. Present only when the file was written. |
 | `replaced` | `invalid:<code>`: the file was unreadable and was replaced. Every other job's entries in it are gone; re-apply the desired state (§10.5). |
 
 **Pause, resume and Hermes's catch-up.**
@@ -1049,7 +1049,7 @@ New detail: `outcome-ask-template-job`.
 10. **Give a default job's schedule back with `set --job <key> --schedule default`**, never by
     deleting the settings file. It restores the fleet's default for that tenant and clears the
     admin mark (§1, §2). When `list` says `adminSchedulesInvalid: true`, the next write repairs it
-    (all five marked); clear the ones that should not be marked with `--schedule default`.
+    (all six marked); clear the ones that should not be marked with `--schedule default`.
 11. **Keep your own command timeout above 150 s**, the jobs lock's stale time. A command never
     waits on Hermes for more than 60 s per step, and stops with `lock-lost` rather than write past
     its lock (§2), but a command you kill leaves the lock for up to 150 s (`busy`).

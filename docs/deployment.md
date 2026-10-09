@@ -248,19 +248,19 @@ Rolling a tag that adds or changes this skill touches no seed files.
 
 ## The proactive jobs (DATA-314)
 
-Six scheduled jobs reach a resident or prepare for one. Each is triggered by a
+Seven scheduled jobs reach a resident or prepare for one. Each is triggered by a
 deterministic pre-run script: Hermes runs
 `$HERMES_HOME/scripts/agentvillage_proactive_<action>.sh` (one shim,
 `skills/index-network/scripts/shims/agentvillage_proactive.sh`, installed
-under six names), which runs `skills/index-network/scripts/proactive.ts
+under seven names), which runs `skills/index-network/scripts/proactive.ts
 <action>`. The script does every deterministic step and prints the facts as
 JSON, then the wake line; the model only writes language from that Script
-Output. No prompt of the six asks for a tool call, so a model that mangles tool
+Output. No prompt of the seven asks for a tool call, so a model that mangles tool
 arguments cannot break a job.
 
 The prompts the installer stores in these jobs live in
 `skills/index-network/prompts/` (`brief.md`, `opportunity-drop.md`,
-`negotiation-summary.md`, `ask-questions.md`), with the memory signal sync's
+`negotiation-summary.md`, `ask-questions.md`, `pending-alert.md`), with the memory signal sync's
 `memory-signals.md` and its gate `skills/index-network/scripts/memory_signal_gate.py`
 (installed as `$HERMES_HOME/scripts/agentvillage_memory_signal_gate.py`). Until
 DATA-361 they lived under `skills/edge-esmeralda/`; the move changed no job name,
@@ -268,11 +268,12 @@ id, schedule or prompt text, so an update finds every job up to date.
 
 | Job | Time (Hermes's zone, which must be IST; staggered) | Action | What the model is given |
 |---|---|---|---|
-| Edge — digest prepare | 02:00 | `prefetch` | Nothing: the one `no_agent` job of the six (the knowledge sync, "Edge India knowledge" below, is the other `no_agent` job). It writes the brief's context to `av-events/proactive/brief-context.json` and is always silent. |
+| Edge — digest prepare | 02:00 | `prefetch` | Nothing: the one `no_agent` job of the seven (the knowledge sync, "Edge India knowledge" below, is the other `no_agent` job). It writes the brief's context to `av-events/proactive/brief-context.json` and is always silent. |
 | Edge — daily digest | 08:00 | `brief` | Dates, weather, organiser announcements, today's schedule facts, the resident's interests and notes, the count of eligible new matches, up to three cleaned names, the Connections link, the count of things waiting in their approvals. |
 | Edge — opportunity drop (midday), (evening) | 12:00, 17:00 | `drop-midday`, `drop-evening` | One person: cleaned name, profile and message links. |
 | Edge — negotiation summary | 14:00 | `negotiation` | The resident's own signals; cleaned names with their links. |
 | Edge — evening questions | 19:00 | `evening` | One person (cleaned name, links), or the last-day closeout question. |
+| Edge — pending opportunity (DATA-430) | hourly at :20 (staggered :20-:29), delivering 08:00-22:00 only | `pending` | Up to three cards that newly turned pending for the resident: cleaned name, the app link to that card (`appUrl`), the deadline's words or null (`respondBy`; null today: Index serves no deadline). No once-a-day mark; the per-card ledger `pendingAlerts` is the gate, and the first run on a box seeds it silently. Outside contact style: a quiet or balanced resident gets it too (it is about their own pending decision, not outreach); the quiet hours and the stop-by-label (`Pending opportunity`) still apply. |
 
 The rules the trigger holds:
 - **No third-party free text reaches the model.** Only dates, the resident's
@@ -335,7 +336,7 @@ The rules the trigger holds:
 `HERMES_TIMEZONE`, then `timezone:` in `config.yaml`, else the host's local
 time (`hermes_time.py`); under the multiplexed gateway only `config.yaml`
 counts, and the gateway copies a configured `timezone` over
-`HERMES_TIMEZONE` when it starts. The six schedules are written in village
+`HERMES_TIMEZONE` when it starts. The seven schedules are written in village
 time and the brief delivers only between 05:00 and 11:00 IST, so on a host
 whose Hermes zone is not IST every job fires at the wrong village hour and the
 brief is silent every day. The installer therefore:
@@ -345,7 +346,7 @@ brief is silent every day. The installer therefore:
   by hand;
 - changes nothing when another zone is configured, in `config.yaml` or in
   `HERMES_TIMEZONE` (environment or `$HERMES_HOME/.env`), and prints one line
-  starting `!! WARNING:` that names the zone and says the six jobs will run at
+  starting `!! WARNING:` that names the zone and says the seven jobs will run at
   the wrong village time and the brief will be silent. Fix it by hand.
 
 Hermes reads the key when the gateway starts, so it takes effect at the
@@ -629,6 +630,14 @@ seed change: roll the release that first carries it with
 `allow_seed_change` ticked, and only after the data pipeline's release
 carries `cron_job_names_v2` (until then ingest quarantines the name as
 `vocabulary_unknown`).
+
+**The pending opportunity alert (DATA-430) bumps the seed to `cron_job_names_v3`**
+(adds `Edge — pending opportunity`). The data pipeline's copy is
+agentvillage-data PR #407 (`cron_job_names.v3.json`, riding data release 6). It
+must be deployed BEFORE any roll that carries this overlay change, and that roll
+runs with `allow_seed_change` ticked. Until then a box's `cron.run` rows for the
+pending job are quarantined as `vocabulary_unknown`, and replayable once the
+data release carries v3.
 
 ## The data pipeline
 
