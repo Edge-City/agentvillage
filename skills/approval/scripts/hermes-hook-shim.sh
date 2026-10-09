@@ -71,6 +71,12 @@
 #     does: inside the loop a clock that reads 0 (date failed after the start)
 #     or reads below its last good value (it stepped back) counts as the
 #     deadline passed, and the attempts are capped at WAIT_S/5 + 2.
+#   - DATA-424 (2026-10-09), the facade URL and credential checks are
+#     locale-independent: each must be bytes 0x21-0x7E with no `"` or `\`,
+#     matched against the 92 characters spelled out (curl_value_ok: no range,
+#     no class, no fork). The `[:print:]` class followed the hook's locale, so
+#     a UTF-8 locale let a non-ASCII character through. Same block messages,
+#     same exit.
 # The Agent Village sandbox has one unix user, so the shim runs "by hand"
 # there (no /opt/approval/hook-home, no setuid launcher; skills/approval/
 # README.md says why). install/install_approval.ts installs this file as
@@ -394,13 +400,20 @@ is_int "$WAIT_S" && [ "$WAIT_S" -le 285 ] || WAIT_S=0
 is_int "$MAX_TIME" && [ "$MAX_TIME" -ge 1 ] && [ "$MAX_TIME" -le 60 ] || MAX_TIME=25
 
 # The URL and the credential go into a curl config line: nothing that could
-# end the quoted value or start another option.
-case $BASE in
-  *[[:space:]\"\\]* | *[![:print:]]*) block "the facade URL contains a character a URL cannot" ;;
-esac
-case $TOKEN in
-  *[[:space:]\"\\]* | *[![:print:]]*) block "the facade credential contains a character a credential cannot" ;;
-esac
+# end the quoted value or start another option. curl_value_ok <value>: 0
+# when every byte is printable ASCII other than the space, `"` and `\`
+# (0x21-0x7E less 0x22 and 0x5C; DATA-424). The 92 allowed characters are
+# spelled out, with no range and no class, so no shell reads them through the
+# hook's locale (under UTF-8, [:print:] passed a multibyte character such as
+# \303\251, and a collating locale reorders a range), and nothing forks.
+curl_value_ok() {
+  case $1 in
+    *[!0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ\!\#\$\%\&\'\(\)\*\+\,\.\/\:\;\<\=\>\?\@\[\]\^\_\`\{\|\}\~\-]*) return 1 ;;
+  esac
+  return 0
+}
+curl_value_ok "$BASE" || block "the facade URL contains a character a URL cannot"
+curl_value_ok "$TOKEN" || block "the facade credential contains a character a credential cannot"
 # Where the facade listens. A unix socket (`unix:<absolute path>`, the
 # co-located daemon under APPROVALD_LISTEN=unix) is dialled with curl
 # --unix-socket and a fixed http://localhost request URL. A loopback URL
