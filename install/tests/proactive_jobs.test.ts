@@ -1,7 +1,7 @@
 /**
- * DATA-314 brief-lite: the six proactive jobs as the installer defines them.
+ * DATA-314 brief-lite: the seven proactive jobs as the installer defines them (DATA-430 added the pending alert).
  *
- *   - AC #10: no prompt of the six needs a model tool call; each renders from
+ *   - AC #10: no prompt of the seven needs a model tool call; each renders from
  *     its pre-run script's output only.
  *   - Every delivered message is recorded: no no_agent job delivers text. The
  *     no_agent jobs are the 02:00 prefetch and the knowledge sync (K1), both silent.
@@ -28,6 +28,7 @@ const PROACTIVE: Record<string, string> = {
   "Edge — opportunity drop (evening)": "drop-evening",
   "Edge — negotiation summary": "negotiation",
   "Edge — evening questions": "evening",
+  "Edge — pending opportunity": "pending",
 };
 
 function prompt(spec: DigestCronSpec): string {
@@ -71,8 +72,8 @@ const TOOL_NEEDING = [
   /\bread\s+(?:the\s+)?(?:file\b|`[^`]*\.(?:md|json|txt|ts|py|sh)`)/i,
 ];
 
-describe("the six proactive jobs (DATA-314)", () => {
-  test("all six exist, one per trigger action, each with its own shim name", () => {
+describe("the seven proactive jobs (DATA-314, DATA-430)", () => {
+  test("all seven exist, one per trigger action, each with its own shim name", () => {
     expect(proactive.map((spec) => PROACTIVE[spec.name]).sort()).toEqual([...ACTIONS].sort());
     for (const spec of proactive) {
       expect(spec.scriptFile).toBe(PROACTIVE_SHIM);
@@ -98,7 +99,7 @@ describe("the six proactive jobs (DATA-314)", () => {
     // A timed-out, missing or cancelled pre-run script skips the wake gate and
     // Hermes heads the block "## Script Error" with "Report this to the user."
     const delivering = proactive.filter((spec) => spec.deliver);
-    expect(delivering).toHaveLength(5);
+    expect(delivering).toHaveLength(6);
     for (const spec of delivering) {
       expect({ job: spec.name, has: prompt(spec).includes(SCRIPT_ERROR_LINE) }).toEqual({ job: spec.name, has: true });
     }
