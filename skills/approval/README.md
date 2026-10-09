@@ -112,7 +112,10 @@ reads `Authorization` only), passed to curl through a config on stdin, never arg
 decider and answers; the shim replays `{}` (allow) or the block directive at
 exit 2. While the facade answers `hook-timeout` (a question is open and waiting
 for the resident) the shim re-asks every 5 s for up to 280 s, inside Hermes's
-300 s entry timeout. It measures that window, and the log's `elapsed_ms`, in
+300 s entry timeout. A clock that fails, or steps back below its last read,
+mid-run ends the window with the block, as the deadline does, and the attempts
+are capped at `WAIT_S/5 + 2` (58 for 280 s) whatever the clock says
+(DATA-378). The shim measures the window, and the log's `elapsed_ms`, in
 milliseconds, reading `date +%s.%N` and left-padding the fraction to nine
 digits before keeping three (a fraction that is not one to nine digits is no
 clock). The hosted image's date (uutils coreutils 0.8.0 on the old-checkpoint
