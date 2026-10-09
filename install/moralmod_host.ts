@@ -12,7 +12,6 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import {
-  installMoralmodRelease,
   INDEX_PLUGIN_REVISION,
   type InstalledRelease,
 } from "./moralmod_release";
@@ -156,34 +155,4 @@ export function activateMoralmod(
       ready: false,
     }) + "\n",
   );
-}
-export function installManagedMoralmod(
-  run: (args: string[]) => void,
-  home: string,
-  source: string,
-  configuration: string,
-): InstalledRelease {
-  checkResidentHook(home);
-  const config = residentConfiguration(configuration);
-  const release = installMoralmodRelease(home, source);
-  const plugin = join(home, "plugins", "index-network");
-  if (existsSync(join(plugin, "plugin.yaml"))) {
-    const r = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: plugin });
-    if (
-      r.exitCode !== 0 ||
-      r.stdout.toString().trim() !== INDEX_PLUGIN_REVISION
-    )
-      throw Error("Existing plugin requires explicit pinned migration");
-  } else
-    run([
-      "plugins",
-      "install",
-      "indexnetwork/hermes-plugin",
-      "--ref",
-      INDEX_PLUGIN_REVISION,
-      "--enable",
-    ]);
-  activateMoralmod(home, release, config);
-  run(["plugins", "enable", "index-network"]);
-  return release;
 }

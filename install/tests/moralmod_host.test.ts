@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { installIndexPlugin, NEGOTIATOR_SEED } from "../install_index_plugin";
+import { installIndexPlugin, NEGOTIATOR_SEED, installMetadataPath } from "../install_index_plugin";
 import { INDEX_PLUGIN_REVISION } from "../moralmod_release";
 const plugin = resolve(import.meta.dir, "../../../index-hermes-plugin");
 const bundle = resolve(
@@ -47,6 +47,7 @@ function fixture() {
         join(home, "plugins", "index-network"),
       ]);
       if (r.exitCode) throw Error("Local pinned plugin fixture clone failed");
+      writeFileSync(installMetadataPath(home), JSON.stringify({ "index-network": { pinned: true, revision: INDEX_PLUGIN_REVISION } }));
     }
   };
   return { home, config, calls, run };
@@ -55,13 +56,19 @@ function use(f: ReturnType<typeof fixture>, work: () => void) {
   const previous = {
     release: process.env.MORALMOD_RELEASE_DIR,
     config: process.env.MORALMOD_RESIDENT_CONFIG,
+    home: process.env.HERMES_HOME,
+    key: process.env.INDEX_API_KEY,
   };
+  process.env.HERMES_HOME = f.home;
+  process.env.INDEX_API_KEY = "synthetic-key";
   process.env.MORALMOD_RELEASE_DIR = bundle;
   process.env.MORALMOD_RESIDENT_CONFIG = f.config;
   try {
     work();
   } finally {
     for (const [name, v] of [
+      ["HERMES_HOME", previous.home],
+      ["INDEX_API_KEY", previous.key],
       ["MORALMOD_RELEASE_DIR", previous.release],
       ["MORALMOD_RESIDENT_CONFIG", previous.config],
     ] as const) {
@@ -82,14 +89,14 @@ test.skipIf(
     const f = fixture();
     use(f, () => {
       writeFileSync(join(f.home, "index", "negotiator.ts"), NEGOTIATOR_SEED);
-      installIndexPlugin(f.run, f.home);
+      installIndexPlugin(f.run, ["bun", "install"], true);
       expect(f.calls[0]).toEqual([
         "plugins",
         "install",
         "indexnetwork/hermes-plugin",
         "--ref",
         INDEX_PLUGIN_REVISION,
-        "--enable",
+        "--no-enable",
       ]);
       const runtime = join(
         f.home,
@@ -119,7 +126,7 @@ test.skipIf(
       const config = JSON.parse(readFileSync(f.config, "utf8"));
       config.VILLAGE_INSTALLATION_CREDENTIAL = "new-credential".repeat(4);
       writeFileSync(f.config, JSON.stringify(config));
-      installIndexPlugin(f.run, f.home);
+      installIndexPlugin(f.run, ["bun", "install"], true);
       expect(f.calls.filter((a) => a[1] === "install")).toHaveLength(1);
       expect(
         JSON.parse(
@@ -130,7 +137,7 @@ test.skipIf(
         ).VILLAGE_INSTALLATION_CREDENTIAL,
       ).toBe(config.VILLAGE_INSTALLATION_CREDENTIAL);
       writeFileSync(runtime, "resident modification");
-      expect(() => installIndexPlugin(f.run, f.home)).toThrow("modified");
+      expect(installIndexPlugin(f.run, ["bun", "install"], true).state).toBe("failed");
       expect(readFileSync(runtime, "utf8")).toBe("resident modification");
     });
   },
@@ -142,13 +149,13 @@ test("unowned custom hook and fleet credentials are rejected before plugin insta
       join(f.home, "index", "negotiator.ts"),
       "custom resident hook",
     );
-    expect(() => installIndexPlugin(f.run, f.home)).toThrow("customized");
+    expect(installIndexPlugin(f.run, ["bun", "install"], true).state).toBe("failed");
     expect(f.calls).toHaveLength(0);
     writeFileSync(join(f.home, "index", "negotiator.ts"), NEGOTIATOR_SEED);
     const c = JSON.parse(readFileSync(f.config, "utf8"));
     c.OPENAI_API_KEY = "not-allowed";
     writeFileSync(f.config, JSON.stringify(c));
-    expect(() => installIndexPlugin(f.run, f.home)).toThrow("Unknown");
+    expect(installIndexPlugin(f.run, ["bun", "install"], true).state).toBe("failed");
     expect(f.calls).toHaveLength(0);
   });
 });

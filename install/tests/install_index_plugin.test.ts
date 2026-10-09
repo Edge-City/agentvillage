@@ -599,11 +599,11 @@ describe("OV-249 (A3): the negotiator sidecar's env is an allowlist, or the plug
     expect(patched).not.toContain("os.environ.copy()");
     expect(patched.split(SIDECAR_MARKER)).toHaveLength(2);
     expect(patched).toContain(
-      '            child_env = {name: os.environ[name] for name in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ") if name in os.environ}\n' +
+      '            child_env = {name: os.environ[name] for name in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ", "AV_MORALMOD_ARM") if name in os.environ}\n' +
         '            child_env["BUN_OPTIONS"] = "--no-env-file"\n' +
         "            child_env.update({\n",
     );
-    expect(SIDECAR_ENV_ALLOWLIST).toEqual(["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ"]);
+    expect(SIDECAR_ENV_ALLOWLIST).toEqual(["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ", "AV_MORALMOD_ARM"]);
     expect(SIDECAR_ENV_ALLOWLIST).not.toContain("INDEX_SESSION_TOKEN");
     // Set, never copied: a gateway's own BUN_OPTIONS (an --env-file, say) does not reach the child.
     expect(SIDECAR_ENV_ALLOWLIST).not.toContain("BUN_OPTIONS");
@@ -645,7 +645,7 @@ describe("OV-249 (A3): the negotiator sidecar's env is an allowlist, or the plug
     ["anchor altered (dict(os.environ))", SIDECAR_AT_REF.replace("os.environ.copy()", "dict(os.environ)"), "anchor missing"],
     ["anchor re-indented", SIDECAR_AT_REF.replace(SIDECAR_ANCHOR, SIDECAR_ANCHOR.replaceAll("            child_env", "        child_env")), "anchor missing"],
     ["anchor twice", SIDECAR_HEAD + SIDECAR_ANCHOR + SIDECAR_ANCHOR + SIDECAR_TAIL, "anchor ambiguous"],
-    ["the marker over an altered line", PATCHED_AT_REF.replace('"TZ")', '"TZ", "TELEGRAM_BOT_TOKEN")'), "a partial or altered patch"],
+    ["the marker over an altered line", PATCHED_AT_REF.replace('"AV_MORALMOD_ARM")', '"TZ", "TELEGRAM_BOT_TOKEN")'), "a partial or altered patch"],
     ["patched and the anchor both", SIDECAR_HEAD + SIDECAR_PATCHED + SIDECAR_ANCHOR + SIDECAR_TAIL, "a partial or altered patch"],
     ["patched twice", SIDECAR_HEAD + SIDECAR_PATCHED + SIDECAR_PATCHED + SIDECAR_TAIL, "a partial or altered patch"],
     ["the first patch (V1) twice", SIDECAR_HEAD + SIDECAR_PATCHED_V1 + SIDECAR_PATCHED_V1 + SIDECAR_TAIL, "a partial or altered patch"],
@@ -732,8 +732,8 @@ describe("OV-249 (A3): the negotiator sidecar's env is an allowlist, or the plug
       "            # agentvillage OV-249 A3: env allowlist (installer patch: no gateway secret reaches the child)\n" +
         '            child_env = {name: os.environ[name] for name in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ") if name in os.environ}\n',
     );
-    expect(SIDECAR_PATCHED.startsWith(SIDECAR_PATCHED_V1)).toBe(true);
-    expect(SIDECAR_PATCHED.slice(SIDECAR_PATCHED_V1.length)).toBe('            child_env["BUN_OPTIONS"] = "--no-env-file"\n');
+    expect(SIDECAR_PATCHED.startsWith(SIDECAR_PATCHED_V1)).toBe(false);
+    expect(SIDECAR_PATCHED).toContain('            child_env["BUN_OPTIONS"] = "--no-env-file"\n');
     config(ENABLED);
     installedAt(INDEX_PLUGIN_REF, true);
     writeFileSync(sidecarPath(home), SIDECAR_HEAD + SIDECAR_PATCHED_V1 + SIDECAR_TAIL);

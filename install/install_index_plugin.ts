@@ -1,3 +1,7 @@
+/** Managed experiment installations run the same Index lifecycle for ON and OFF.
+ * AV_MORALMOD_ARM controls assessment, not process ownership. Non-experiment
+ * installations retain the upstream installer behavior described below.
+ */
 /**
  * The Index Hermes plugin (`index-network`), MoralMod's carrier, for ON
  * residents only, and the negotiator file it loads.
@@ -79,6 +83,8 @@ import { dotenvFileValue, readConfig, writeConfig } from "./config";
 import { persistedEnvVar, readCronJobs } from "./install_index";
 import { installStatusPath } from "./install_status";
 import { hermesHome } from "./paths";
+import { activateMoralmod, checkResidentHook, residentConfiguration } from "./moralmod_host";
+import { installMoralmodRelease } from "./moralmod_release";
 
 export const INDEX_PLUGIN = "index-network";
 export const INDEX_PLUGIN_SOURCE = "indexnetwork/hermes-plugin";
@@ -98,7 +104,7 @@ export const SIDECAR_ANCHOR_PIN = {
   sha256: "15dbfddb11217ba5162aff96ec473cca8f949b5386fd466650d2906f8636a1b6",
 } as const;
 /** The names the negotiator child keeps from the gateway's environment (Bun needs PATH and HOME). */
-export const SIDECAR_ENV_ALLOWLIST = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ"] as const;
+export const SIDECAR_ENV_ALLOWLIST = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ", "AV_MORALMOD_ARM"] as const;
 /**
  * Set in the child env, never copied: the child has no `cwd=`, so it runs in the gateway's working
  * directory, and Bun auto-loads `.env`, `.env.local` and `.env.development` from there.
@@ -307,10 +313,13 @@ export function checkAnchorPin(pin: { ref: string; sha256: string }, ref: string
 export function patchSidecarSource(source: string, pin: { ref: string; sha256: string } = SIDECAR_ANCHOR_PIN): { source: string; changed: boolean } | { reason: string } {
   const unpinned = checkAnchorPin(pin, INDEX_PLUGIN_REF, SIDECAR_ANCHOR);
   if (unpinned) return { reason: unpinned };
+  const v2 = SIDECAR_PATCHED.replace(', "AV_MORALMOD_ARM"', "");
+  if (count(source, v2) === 1 && count(source, SIDECAR_MARKER) === 1 && !source.includes(SIDECAR_ANCHOR))
+    return { source: source.replace(v2, () => SIDECAR_PATCHED), changed: true };
   const anchors = count(source, SIDECAR_ANCHOR);
   const patched = count(source, SIDECAR_PATCHED);
   // The V1 block is a prefix of the current one: count only the V1 blocks that stand alone.
-  const v1 = count(source, SIDECAR_PATCHED_V1) - patched;
+  const v1 = count(source, SIDECAR_PATCHED_V1);
   if (patched === 1 && v1 === 0 && anchors === 0) return { source, changed: false };
   if (v1 === 1 && patched === 0 && anchors === 0 && !source.includes("BUN_OPTIONS")) {
     return { source: source.replace(SIDECAR_PATCHED_V1, () => SIDECAR_PATCHED), changed: true };
@@ -447,9 +456,14 @@ function operatorDisabled(): boolean {
 export function installIndexPlugin(run: (args: string[]) => void, argv: string[] = process.argv, gateVerified = false): IndexPluginResult {
   const home = hermesHome();
   const armOn = moralmodArmOn();
-  if (!armOn || !gateVerified) {
+  // Managed experiment residents share one runtime in both arms. The flag controls
+  // assessment only; all existing approval and environment isolation gates remain.
+  const source = process.env.MORALMOD_RELEASE_DIR;
+  const configuration = process.env.MORALMOD_RESIDENT_CONFIG;
+  const managed = Boolean(source || configuration || existsSync(join(home, "index", "moralmod", "active.json")));
+  if ((!armOn && !managed) || !gateVerified) {
     let off: IndexPluginFailure | null = null;
-    const why = armOn ? "withheld: the approval gate was not installed and live-checked on this run" : `off (${MORALMOD_ARM_ENV} is not on)`;
+    const why = armOn || managed ? "withheld: the approval gate was not installed and live-checked on this run" : `off (${MORALMOD_ARM_ENV} is not on)`;
     try {
       const dropped = setIndexPluginEnabled(false);
       console.log(`→ index-network plugin: ${why}${dropped ? "; removed from plugins.enabled" : ""}`);
@@ -459,7 +473,7 @@ export function installIndexPlugin(run: (args: string[]) => void, argv: string[]
     }
     if (!stopMorningJob(run, home)) off ??= "hermes";
     // Withheld: `config` first (the plugin may still be listed), else `gate`, a cron failure only warned.
-    if (armOn) return { state: "withheld", failed: off === "config" ? "config" : "gate" };
+    if (armOn || managed) return { state: "withheld", failed: off === "config" ? "config" : "gate" };
     return { state: "off", failed: off };
   }
   if (argv.includes("--skip-index") || !hasIndexKey(argv, home)) {
@@ -490,6 +504,15 @@ export function installIndexPlugin(run: (args: string[]) => void, argv: string[]
     return { state: "failed", failed: "config" };
   }
 
+  let prepared: { release: ReturnType<typeof installMoralmodRelease>; config: ReturnType<typeof residentConfiguration> } | undefined;
+  if (managed) {
+    try {
+      if (!source || !configuration) throw Error("Managed release configuration missing");
+      checkResidentHook(home);
+      const config = residentConfiguration(configuration);
+      prepared = { config, release: installMoralmodRelease(home, source) };
+    } catch { return withholdForSidecar(run, home, "managed configuration invalid", null); }
+  }
   let failed: IndexPluginFailure | null = null;
   let state: IndexPluginResult["state"] = "pinned";
   removeInstallLeftovers(home);
@@ -516,6 +539,10 @@ export function installIndexPlugin(run: (args: string[]) => void, argv: string[]
     const sidecar = patchInstalledSidecar(home);
     if (typeof sidecar === "object") return withholdForSidecar(run, home, sidecar.reason, failed);
     if (sidecar === "patched") console.log(`→ index-network plugin: sidecar.py env allowlisted (${sidecarPath(home)})`);
+    if (prepared) {
+      try { activateMoralmod(home, prepared.release, prepared.config); }
+      catch { return withholdForSidecar(run, home, "managed runtime invalid", failed); }
+    }
     try {
       if (setIndexPluginEnabled(true)) console.log(`→ enabled plugin ${INDEX_PLUGIN}`);
     } catch {
