@@ -340,7 +340,7 @@ describe("RC28: compaction settings (hold 25, Telegram warnings off, summary rea
   const BOX = {
     _config_version: 46,
     model: { default: "anthropic/claude-haiku-5.5", provider: "openrouter", context_length: 90000, max_tokens: 4096 },
-    display: { show_reasoning: true, platforms: { telegram: { show_reasoning: false, tool_progress: "off", streaming: false } } },
+    display: { show_reasoning: true, platforms: { telegram: { show_reasoning: false, tool_progress: false, streaming: false } } },
     cron: { wrap_response: false },
     context_file_max_chars: 48000,
   };
@@ -354,7 +354,7 @@ describe("RC28: compaction settings (hold 25, Telegram warnings off, summary rea
     expect(doc.compression).toEqual({ hygiene_max_turn_hold_seconds: 25 });
     expect(doc.display).toEqual({
       show_reasoning: true,
-      platforms: { telegram: { show_reasoning: false, tool_progress: "off", streaming: false, suppress_warning_notifications: true } },
+      platforms: { telegram: { show_reasoning: false, tool_progress: false, streaming: false, suppress_warning_notifications: true } },
     });
     expect(doc.auxiliary).toEqual({ compression: { provider: "openrouter", model: "anthropic/claude-haiku-5.5", reasoning_effort: "none" } });
     // Untouched keys keep their order; the new top-level mappings land at the end.
@@ -492,7 +492,8 @@ describe("RC28: compaction settings (hold 25, Telegram warnings off, summary rea
     expect(readFileSync(configPath(), "utf8")).toBe(once);
     const telegram = read().display.platforms.telegram;
     expect(telegram.suppress_warning_notifications).toBe(true);
-    expect(telegram.tool_progress).toBe("off");
+    expect(telegram.tool_progress).toBe("new");
+    expect(read().display.tool_progress_command).toBe(true);
   });
 
   test("summary route: Hermes's own default block (auto, empty strings) counts as unset and is filled in place", () => {
