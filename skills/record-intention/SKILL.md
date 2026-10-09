@@ -124,14 +124,24 @@ withdraw it and capture their words with `source=message`.
 
 ## When your next message is a scheduled one
 
+When you ask, show your words as one quoted block, each line starting with
+`> `, and put the question on the next line of its own, with nothing else
+between them and no other quoted block or question in that reply:
+
+> Meet founders building on Solana in Goa
+
+Should I publish this as written?
+
 If the next message you send them on your own comes from a scheduled run and
-you capture your words there with `confirmed_in_chat=silence`, pass them
-exactly as you showed them with the one ask, character for character. The tool
-publishes them only when they match the words it saw you show, within its
-window, and only once. Words reworded or retyped, words you never showed,
-words the resident answered in any way since, and words shown before the agent
-restarted are held for their approval card, as before. Your message says in
-one clause what the tool answered.
+you capture your words there with `confirmed_in_chat=silence`, pass the words
+of that block exactly, character for character, without the `> `. The tool
+publishes them only when they match the one block it saw you show, at least
+half an hour and within its window after the ask, and only once. Anything
+else is held for their approval card, as before: words reworded or retyped,
+words you never showed, an ask shaped any other way, words the resident
+answered in any way since (a reaction or a command counts), and words shown
+before the agent restarted. Your message says in one clause what the tool
+answered.
 
 ## Ambient intentions are held
 

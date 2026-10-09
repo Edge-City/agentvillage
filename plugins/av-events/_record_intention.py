@@ -104,23 +104,28 @@ event says only `source=ambient`.]
 
 **Silence publishes the exact draft the resident saw (DATA-411).** The one pass
 through R10. At the ask, the tool's own `post_llm_call` listener (outside the
-collector's guard, like the lineage ones) reads the reply the agent sent; when
+collector's guard, like the lineage ones) reads the reply the agent sent. When
 the session itself is a root session seen on a `HUMAN_PLATFORMS` platform with
-no cron in its lineage, and the reply holds `ASK_QUESTION` word for word and is
-at most `MAX_ASK_REPLY_CHARS`, it opens an ask in this process's memory
-(`_OPEN_DRAFTS`, never a file: anything in the sandbox can write a file, and a
-forged ask would open the gate; a gateway restart loses them, and the capture
-is then held_cron): the sha256 of each candidate span's exact UTF-8 bytes
-(`draft_candidates`: exact substrings, never rewritten; any span a chat
-formatter could render differently is dropped), `shown_at`, the session id and
-platform; at most `MAX_OPEN_DRAFTS`, oldest dropped. A cron, subagent or unknown session opens nothing. The tool's
-`pre_llm_call` listener closes every open ask at any turn but a cron run's:
-whatever the resident said, it was not silence. A capture passed as `message`
-with `confirmed_in_chat=silence` that R10 holds as `held_cron` (and
-`publish` true) publishes as stated only when sha256 of its exact text bytes is
-in an open ask shown at most `SILENCE_PUBLISH_WINDOW_HOURS` ago (24, pending
-Carter); every ask holding those bytes is closed before the publish
-goes on, so a second capture is `held_cron` again. Its result carries
+no cron in its lineage, and the reply (at most `MAX_ASK_REPLY_CHARS`) shows
+exactly one draft (`draft_block`: one `> ` quote block directly above
+`ASK_QUESTION` on its own line, and no other quote or question), it opens an
+ask in this process's memory (`_OPEN_DRAFTS`, never a file: anything in the
+sandbox can write a file, and a forged ask would open the gate; a gateway
+restart loses them, and the capture is then held_cron): the sha256 of the
+draft's exact UTF-8 bytes, `shown_at`, the session id and platform; at most
+`MAX_OPEN_DRAFTS`, oldest dropped. A cron, subagent or unknown session opens
+nothing. Every open ask is closed by anything the gateway receives from a chat
+(`pre_gateway_dispatch`: any message, commands included; `gateway_platform_event`:
+a reaction or an edit) and by any model turn but a real cron run's
+(`pre_llm_call`; `cron_root`): whatever the resident did, it was not silence.
+A capture passed as `message` with `confirmed_in_chat=silence` that R10 holds
+as `held_cron`, from a chain whose root was seen with platform exactly `cron`
+(a `cron_` id prefix alone never passes), with `publish` true, publishes as
+stated only when sha256 of its exact text bytes is an open ask's, shown at
+least `SILENCE_PUBLISH_MIN_AGE_MINUTES` (30) and at most
+`SILENCE_PUBLISH_WINDOW_HOURS` (24) ago, both pending Carter. Every ask holding
+those bytes is closed before the publish goes on, so a second capture is
+`held_cron` again. Only a capture that then publishes carries
 `publish_via="open_draft"` and `draft_shown_at`. Every other cron capture is
 held exactly as before, and `held_unknown` / `held_silence` never read the
 open asks. [Reversal: drop `DRAFT_HOOKS` and the pass; silence from cron is held_cron.]
@@ -1210,23 +1215,29 @@ def reserve_publish() -> Optional[str]:
 # ---- Open drafts (DATA-411) ------------------------------------------------
 
 #: How long after the ask a shown draft may be published from a cron send on
-#: silence. PENDING Carter's decision (DATA-411 AC#4); 24 is the proposal.
+#: silence. PENDING Carter's decision (DATA-411 AC#4); 24 is the proposal (the
+#: refuter recommends 12).
 SILENCE_PUBLISH_WINDOW_HOURS = 24
+#: How long the silence must have lasted at least: a cron run in the minutes
+#: after the ask (the hourly :20 job) does not count as the resident's silence.
+#: PENDING Carter's decision with the window; 30 is the refuter's proposal.
+SILENCE_PUBLISH_MIN_AGE_MINUTES = 30
 #: Asks kept open at once; the oldest is dropped first.
 MAX_OPEN_DRAFTS = 20
-#: The one ask, word for word as DRAFT_RULE gives it. A reply without it opens nothing.
+#: The one ask, word for word as DRAFT_RULE gives it, on its own line. A reply
+#: without it (or with it twice) opens nothing.
 ASK_QUESTION = "Should I publish this as written?"
 #: A longer reply opens nothing: it might be split into several Telegram
 #: messages (4096 per message; MarkdownV2 escaping at most doubles the length).
 MAX_ASK_REPLY_CHARS = 2000
-#: Per ask: the most candidate spans kept, and the longest one.
-MAX_DRAFT_CANDIDATES = 32
 MAX_DRAFT_CHARS = 600
+#: A draft line: Telegram's blockquote (`> ` at the start of the line).
+DRAFT_LINE_PREFIX = "> "
 #: The trace a silence capture published from an open draft carries.
 PUBLISH_VIA_OPEN_DRAFT = "open_draft"
 _ISO_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
-#: A span holding any of these is not opened: a chat platform's formatter may
+#: A draft holding any of these is not opened: a chat platform's formatter may
 #: turn it into something else on screen (Telegram MarkdownV2 bold, italic,
 #: strike, spoiler, code, links, headers, quotes; Slack and HTML entities), so
 #: the bytes would not be what the resident saw.
@@ -1235,16 +1246,8 @@ _UNSAFE_DRAFT_CHARS = frozenset("*_~|`[]\\<>#&")
 #: overrides, zero-width), surrogates, private use, unassigned. A newline is
 #: allowed once, for a two-line draft.
 _UNSAFE_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"})
-#: Quote pairs whose inner text is a candidate.
-_QUOTED = tuple(re.compile(p) for p in (
-    r'"([^"]+)"', "\u201c([^\u201d]+)\u201d", "\u00ab([^\u00bb]+)\u00bb", "\u201e([^\u201c\u201d]+)[\u201c\u201d]",
-))
-#: A line's leading blockquote, bullet or number marker.
-_LEAD_MARKER = re.compile(r"(?:>+[ \t]*|[-\u2022][ \t]+|\d{1,2}[.)][ \t]+)")
-#: Emphasis wrapping a whole span (`*x*`, `**x**`, `_x_`, `__x__`).
-_WRAPPED = re.compile(r"(\*\*|__|\*|_)(.+)\1", re.DOTALL)
 
-#: The open asks, oldest first: `{hashes, shown_at (epoch), session_id,
+#: The open asks, oldest first: `{hash, shown_at (epoch), session_id,
 #: platform}`. In this process's memory only, like the lineage tables, never in
 #: a file: anything in the sandbox (the agent's own terminal tool included) can
 #: write a file under $HERMES_HOME, and a forged ask would open the gate. A
@@ -1263,87 +1266,64 @@ def _iso(epoch: float) -> str:
     return time.strftime(_ISO_FORMAT, time.gmtime(epoch))
 
 
-def _trim(text: str, start: int, end: int) -> tuple[int, int]:
-    """Move a span's ends inward past whitespace. The bytes are not changed;
-    only where the span starts and ends is chosen."""
-    while start < end and text[start].isspace():
-        start += 1
-    while end > start and text[end - 1].isspace():
-        end -= 1
-    return start, end
-
-
-def _line_spans(text: str, start: int, end: int, out: list[tuple[int, int]]) -> None:
-    """A line's span, the same span after a leading marker, and the inside of
-    emphasis that wraps either whole: each an exact substring, never a part of
-    the words (no label is cut off: "Draft: X" opens only "Draft: X")."""
-    starts = [start]
-    marker = _LEAD_MARKER.match(text, start, end)
-    if marker is not None and marker.end() < end:
-        starts.append(marker.end())
-    for s in starts:
-        s, e = _trim(text, s, end)
-        if s >= e:
-            continue
-        out.append((s, e))
-        wrapped = _WRAPPED.fullmatch(text, s, e)
-        if wrapped is not None:
-            out.append(_trim(text, *wrapped.span(2)))
-
-
-def _openable(span: str) -> bool:
-    if not span.strip() or len(span) > MAX_DRAFT_CHARS or ASK_QUESTION in span or "MEDIA:" in span:
+def _openable(draft: str) -> bool:
+    if not draft.strip() or len(draft) > MAX_DRAFT_CHARS or ASK_QUESTION in draft or "MEDIA:" in draft:
         return False
-    if span.rstrip().endswith(":"):
+    if draft.rstrip().endswith(":"):
         return False  # an introduction ("Here is how I'd put it:"), never the draft
-    if span.count("\n") > 1 or any(ch in _UNSAFE_DRAFT_CHARS for ch in span):
+    if draft.count("\n") > 1 or any(ch in _UNSAFE_DRAFT_CHARS for ch in draft):
         return False
-    return not any(ch != "\n" and unicodedata.category(ch) in _UNSAFE_CATEGORIES for ch in span)
+    return not any(ch != "\n" and unicodedata.category(ch) in _UNSAFE_CATEGORIES for ch in draft)
+
+
+def _quote_line(line: str) -> bool:
+    """Any line a chat could show as a quote (`>`, `>>`, `**>`, indented or not)."""
+    return line.lstrip().startswith((">", "**>"))
+
+
+def draft_block(reply: Any) -> Optional[str]:
+    """The one draft an ask reply shows, or None (fix round 1, M2).
+
+    The reply must hold `ASK_QUESTION` exactly once, as a line of its own, and
+    exactly one quote block in all: consecutive lines each starting with `> `
+    (Telegram's blockquote), directly above the question (only blank lines
+    between). The draft is those lines with the `> ` cut off, joined with a
+    newline: exact bytes otherwise, never rewritten. No block, two blocks, a
+    block anywhere else, a quote line of another shape, or a draft that would
+    not render as its own bytes (`_openable`): nothing opens, and a silence
+    capture is held for the card as before."""
+    if not isinstance(reply, str) or len(reply) > MAX_ASK_REPLY_CHARS or reply.count(ASK_QUESTION) != 1:
+        return None
+    lines = reply.split("\n")
+    asks = [i for i, line in enumerate(lines) if line.strip() == ASK_QUESTION]
+    if len(asks) != 1:
+        return None
+    blocks: list[tuple[int, int]] = []
+    i = 0
+    while i < len(lines):
+        if _quote_line(lines[i]):
+            j = i
+            while j + 1 < len(lines) and _quote_line(lines[j + 1]):
+                j += 1
+            blocks.append((i, j))
+            i = j + 1
+        else:
+            i += 1
+    if len(blocks) != 1:
+        return None
+    first, last = blocks[0]
+    if last >= asks[0] or any(lines[k].strip() for k in range(last + 1, asks[0])):
+        return None
+    if not all(line.startswith(DRAFT_LINE_PREFIX) for line in lines[first:last + 1]):
+        return None
+    draft = "\n".join(line[len(DRAFT_LINE_PREFIX):] for line in lines[first:last + 1])
+    return draft if _openable(draft) else None
 
 
 def draft_candidates(reply: Any) -> list[str]:
-    """The spans of an ask reply that a silence capture may name: each an exact
-    substring of what the resident was shown, never rewritten.
-
-    Only a reply that holds `ASK_QUESTION` word for word, of at most
-    `MAX_ASK_REPLY_CHARS`, opens anything. Its spans: each line (edges
-    trimmed), the words before the question on its own line, a line after a
-    leading `>` / bullet / number, the inside of emphasis wrapping a whole
-    line, the inside of a quote pair (straight, curly, guillemets, low-high),
-    and two adjacent lines together. A span
-    holding the question, a formatting character (`_UNSAFE_DRAFT_CHARS`), a
-    control or invisible character, `MEDIA:`, or more than one newline, or
-    ending in a colon, is dropped, so what is opened renders on screen as its
-    own bytes."""
-    if not isinstance(reply, str) or ASK_QUESTION not in reply or len(reply) > MAX_ASK_REPLY_CHARS:
-        return []
-    spans: list[tuple[int, int]] = []
-    lines: list[tuple[int, int]] = []
-    pos = 0
-    for raw in reply.split("\n"):
-        s, e = _trim(reply, pos, pos + len(raw))
-        if s < e:
-            lines.append((s, e))
-        pos += len(raw) + 1
-    for s, e in lines:
-        q = reply.find(ASK_QUESTION, s, e)
-        _line_spans(reply, s, e if q == -1 else _trim(reply, s, q)[1], spans)
-    for (s1, e1), (s2, e2) in zip(lines, lines[1:]):
-        if reply[e1:s2].count("\n") == 1 and ASK_QUESTION not in reply[s1:e2]:
-            marker = _LEAD_MARKER.match(reply, s1, e1)
-            for s in (s1, marker.end() if marker is not None else s1):
-                spans.append(_trim(reply, s, e2))
-    for pattern in _QUOTED:
-        for match in pattern.finditer(reply):
-            spans.append(match.span(1))
-    seen: list[str] = []
-    for s, e in spans:
-        span = reply[s:e]
-        if s < e and span not in seen and _openable(span):
-            seen.append(span)
-            if len(seen) >= MAX_DRAFT_CANDIDATES:
-                break
-    return seen
+    """`[draft_block(reply)]`, or `[]`: at most one draft per ask."""
+    draft = draft_block(reply)
+    return [] if draft is None else [draft]
 
 
 def _speaking_root(session_id: str, platform: Any) -> bool:
@@ -1361,18 +1341,36 @@ def _speaking_root(session_id: str, platform: Any) -> bool:
     return held_reason(session_id) is None
 
 
+def cron_root(session_id: Any) -> bool:
+    """R10 says `cron` AND the root of the delegation chain was seen with
+    platform exactly `cron` (Hermes's scheduler; `on_session_start` fires before
+    the run's first `pre_llm_call`). A `cron_` id prefix alone is not enough
+    (fix round 1, S3): it holds as before, but never passes or keeps an ask open."""
+    sid = str(session_id or "").strip()
+    if held_reason(sid) != "cron":
+        return False
+    with _LINEAGE_LOCK:
+        current = sid
+        for _ in range(MAX_LINEAGE_DEPTH):
+            parent = _PARENTS.get(current)
+            if parent is None:
+                return _PLATFORMS.get(current) == CRON_PLATFORM
+            current = parent
+    return False
+
+
 def note_ask(session_id: Any, platform: Any, reply: Any) -> int:
-    """Open a draft: the reply the agent sent the resident asked the one ask.
-    Records the spans' hashes, when, and the session and platform, in memory.
-    Returns how many spans were opened (0: nothing opened)."""
+    """Open a draft: the reply the agent sent the resident asked the one ask
+    about one quoted draft. Records its hash, when, and the session and
+    platform, in memory. Returns 1 when an ask opened, else 0."""
     sid = str(session_id or "").strip()
     if not _speaking_root(sid, platform):
         return 0
-    candidates = draft_candidates(reply)
-    if not candidates:
+    draft = draft_block(reply)
+    if draft is None:
         return 0
     entry = {
-        "hashes": frozenset(draft_hash(c) for c in candidates),
+        "hash": draft_hash(draft),
         "shown_at": float(_clock()),
         "session_id": sid,
         "platform": _PLATFORMS.get(sid) or "",
@@ -1380,40 +1378,45 @@ def note_ask(session_id: Any, platform: Any, reply: Any) -> int:
     with _DRAFTS_LOCK:
         _OPEN_DRAFTS.append(entry)
         del _OPEN_DRAFTS[:-MAX_OPEN_DRAFTS]
-    return len(candidates)
+    return 1
 
 
-def close_open_drafts(session_id: Any) -> None:
-    """A turn from anyone but a cron run: whatever the resident said (a yes, an
-    edit, a no, something else), the silence is over, so every open ask is
-    closed and a later cron capture of its words is held. Fail closed: a
-    session of unknown lineage closes them too."""
-    try:
-        if held_reason(str(session_id or "").strip()) == "cron":
-            return
-    except Exception:  # noqa: BLE001 - unsure closes
-        pass
+def close_all_open_drafts() -> None:
     with _DRAFTS_LOCK:
         _OPEN_DRAFTS.clear()
 
 
+def close_open_drafts(session_id: Any) -> None:
+    """A model turn in any session but a real cron run's: whatever was said (a
+    yes, an edit, a no, something else), the silence is over, so every open
+    ask is closed. Fail closed: an unknown session, a `cron_` id never seen on
+    the `cron` platform, or a lineage check that raises closes them too."""
+    try:
+        if cron_root(session_id):
+            return
+    except Exception:  # noqa: BLE001 - unsure closes
+        pass
+    close_all_open_drafts()
+
+
 def take_open_draft(text: str) -> Optional[str]:
-    """The `shown_at` (UTC ISO) of an open ask whose spans include these exact
-    bytes and that was shown within `SILENCE_PUBLISH_WINDOW_HOURS`, closing
-    every ask that holds them (once only) before the caller publishes; else
-    None."""
+    """The `shown_at` (UTC ISO) of an open ask whose draft is these exact bytes
+    and that was shown at least `SILENCE_PUBLISH_MIN_AGE_MINUTES` and at most
+    `SILENCE_PUBLISH_WINDOW_HOURS` ago, closing every ask that holds them (once
+    only) before the caller publishes; else None."""
     wanted = draft_hash(text)
     with _DRAFTS_LOCK:
-        matching = [d for d in _OPEN_DRAFTS if wanted in d["hashes"]]
+        matching = [d for d in _OPEN_DRAFTS if d["hash"] == wanted]
         if not matching:
             return None
         now = float(_clock())
+        shortest = SILENCE_PUBLISH_MIN_AGE_MINUTES * 60.0
         window = SILENCE_PUBLISH_WINDOW_HOURS * 3600.0
-        # A future `shown_at` (a clock set back) is not fresh.
-        fresh = [d for d in matching if 0.0 <= now - d["shown_at"] <= window]
+        # A future `shown_at` (a clock set back) is not fresh either.
+        fresh = [d for d in matching if shortest <= now - d["shown_at"] <= window]
         if not fresh:
             return None
-        _OPEN_DRAFTS[:] = [d for d in _OPEN_DRAFTS if wanted not in d["hashes"]]
+        _OPEN_DRAFTS[:] = [d for d in _OPEN_DRAFTS if d["hash"] != wanted]
         return _iso(max(d["shown_at"] for d in fresh))
 
 
@@ -1425,13 +1428,27 @@ def _on_pre_llm_call(**kwargs: Any) -> None:
     close_open_drafts(kwargs.get("session_id"))
 
 
+def _on_inbound(**_kwargs: Any) -> None:
+    """Anything the gateway receives from a chat closes every open ask (fix
+    round 1, M1): `pre_gateway_dispatch` fires once per inbound message,
+    `/stop` and `/new` included, before auth, voice transcription and
+    compaction; `gateway_platform_event` is a reaction or an edit. A cron run
+    never receives an inbound event, so no lineage check is needed."""
+    close_all_open_drafts()
+
+
 #: DATA-411: the open-draft listeners, registered with the tool, outside the
 #: collector's guard like the lineage ones. They return nothing (a
-#: `pre_llm_call` return would be injected into the prompt).
+#: `pre_llm_call` return would be injected into the prompt; a
+#: `pre_gateway_dispatch` dict would skip or rewrite the message). The closers
+#: come first: the opener is registered only after all of them were.
 DRAFT_HOOKS: dict[str, Callable[..., None]] = {
+    "pre_gateway_dispatch": _listener(_on_inbound),
+    "gateway_platform_event": _listener(_on_inbound),
     "pre_llm_call": _listener(_on_pre_llm_call),
     "post_llm_call": _listener(_on_post_llm_call),
 }
+DRAFT_CLOSERS = ("pre_gateway_dispatch", "gateway_platform_event", "pre_llm_call")
 
 
 # ---- Actions --------------------------------------------------------------
@@ -1444,7 +1461,7 @@ def _publish_precheck() -> Optional[str]:
     return api_origin()[1]
 
 
-def _capture(args: dict, held: Optional[str]) -> dict:
+def _capture(args: dict, held: Optional[str], cron_rooted: bool = False) -> dict:
     if args.get("intention_id") is not None:
         return _refuse("intention_id_unexpected")
     text = _text(args.get("text"))
@@ -1491,11 +1508,11 @@ def _capture(args: dict, held: Optional[str]) -> dict:
         publish = parsed
     norm = held_norm_hash(text)
     shown_at: Optional[str] = None
-    if publish and held == "cron" and held_code == "held_cron" and confirmed == "silence":
-        # DATA-411: the one pass through R10. A cron send's silence capture of
-        # the exact words an open ask showed the resident, within the window,
-        # publishes as stated; the ask is closed first, so it passes once.
-        # Anything else from cron stays held_cron as above.
+    if publish and held == "cron" and cron_rooted and held_code == "held_cron" and confirmed == "silence":
+        # DATA-411: the one pass through R10. A real cron run's silence capture
+        # of the exact draft an open ask showed the resident, within the
+        # window, publishes as stated; the ask is closed first, so it passes
+        # once. Anything else from cron stays held_cron as above.
         shown_at = take_open_draft(text)
         if shown_at is not None:
             held_code = None
@@ -1503,8 +1520,6 @@ def _capture(args: dict, held: Optional[str]) -> dict:
 
     # `action` tells the observer what was done when the call left it to the default.
     result: dict[str, Any] = {"success": True, "action": "capture", "source": source}
-    if shown_at is not None:
-        result.update(publish_via=PUBLISH_VIA_OPEN_DRAFT, draft_shown_at=shown_at)
     if confirmed is not None:
         # Kept when the capture is held as ambient (held_cron, held_unknown,
         # held_silence), so the event says what the agent passed. publish=false
@@ -1555,7 +1570,7 @@ def _capture(args: dict, held: Optional[str]) -> dict:
             # L1: whether the gate is on could not be read: hold, never publish around it.
             code = "approval_unavailable"
         if code is None and approval_on is True:
-            return _stated_through_approval(result, text, source)
+            return _via_draft(_stated_through_approval(result, text, source), shown_at)
         index_id: Optional[str] = None
         if code is None:
             code = reserve_publish()
@@ -1593,6 +1608,15 @@ def _capture(args: dict, held: Optional[str]) -> dict:
         refused=result.get("publish_refused"),
         local_reason=local_reason,
     )
+    return _via_draft(result, shown_at)
+
+
+def _via_draft(result: dict, shown_at: Optional[str]) -> dict:
+    """DATA-411 S4: the trace only on a capture the open draft actually
+    published. A draft taken and then refused (`no_key`, `held_ambient_exists`,
+    an Index failure) is used up, and the result carries only that code."""
+    if shown_at is not None and result.get("published") is True:
+        result.update(publish_via=PUBLISH_VIA_OPEN_DRAFT, draft_shown_at=shown_at)
     return result
 
 
@@ -1957,7 +1981,11 @@ def record_intention_answer(args: Any, session_id: Optional[str]) -> dict:
     except Exception:  # noqa: BLE001 - unsure is held
         held = "unknown"
     if action == "capture":
-        return _capture(safe, held)
+        try:
+            rooted = held == "cron" and cron_root(session_id)
+        except Exception:  # noqa: BLE001 - unsure never passes
+            rooted = False
+        return _capture(safe, held, rooted)
     return _update_or_withdraw(action, safe, held)
 
 
@@ -2040,9 +2068,10 @@ def register_record_intention_tool(ctx: Any, emit: Optional[Callable[..., None]]
             except Exception:  # noqa: BLE001 - a missing listener only holds more as ambient
                 continue
         try:
-            # DATA-411: the closer first; without it the opener is never
-            # registered, so a draft the resident answered cannot stay open.
-            register_hook("pre_llm_call", DRAFT_HOOKS["pre_llm_call"])
+            # DATA-411: every closer first; without all of them the opener is
+            # never registered, so a draft the resident answered cannot stay open.
+            for name in DRAFT_CLOSERS:
+                register_hook(name, DRAFT_HOOKS[name])
             register_hook("post_llm_call", DRAFT_HOOKS["post_llm_call"])
         except Exception:  # noqa: BLE001 - nothing opens: a silence capture from cron stays held
             pass
@@ -2074,6 +2103,7 @@ __all__ = [
     "SOURCE_SHORT",
     "RATE_CAP_ENV",
     "REFUSALS",
+    "SILENCE_PUBLISH_MIN_AGE_MINUTES",
     "SILENCE_PUBLISH_WINDOW_HOURS",
     "SOURCES",
     "SOURCE_TYPE",
@@ -2085,7 +2115,10 @@ __all__ = [
     "UPDATE_PATH",
     "lookup",
     "api_origin",
+    "close_all_open_drafts",
     "close_open_drafts",
+    "cron_root",
+    "draft_block",
     "draft_candidates",
     "held_reason",
     "index_request",

@@ -257,7 +257,9 @@ def test_switch_on_registers_the_tool(plugin, ri, index, home, monkeypatch, capl
     assert set(tool["schema"]["parameters"]["properties"]) == {
         "action", "text", "summary", "source", "publish", "reason", "intention_id", "confirmed_in_chat",
     }
-    assert set(ctx.hooks) == set(plugin.HOOK_BODIES)
+    # DATA-411 fix round 1 (M1): the tool's own open-draft closers also listen on
+    # the gateway's inbound hooks, which the telemetry hooks do not use.
+    assert set(ctx.hooks) == set(plugin.HOOK_BODIES) | {"pre_gateway_dispatch", "gateway_platform_event"}
     assert "av-events: record_intention registered" in caplog.text
 
 
