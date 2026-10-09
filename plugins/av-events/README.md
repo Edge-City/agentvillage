@@ -441,7 +441,10 @@ capture keeps the marker; read it with `source`, not with `publish_refused`, whi
 `held_cron`, `held_unknown` or `held_silence` but can be another code (an approval outcome) or null
 (`publish=false`, which the marker does not change: the capture stays local). It is a code the
 tool decided, never text; the data side's intention payloads are open (`additionalProperties:
-true`), so it is stored as sent until staged.
+true`), so it is stored as sent until staged. `publish_via` (`open_draft`), `draft_shown_at`
+(UTC, `YYYY-MM-DDTHH:MM:SSZ`) and `draft_cron_job_id` (the delivering job, 12 hex) appear only on a `record_intention` `intention.captured` that a cron
+send's silence capture published from an open draft (DATA-411, below); its `source` is `ambient`
+(the observer's own cron check) beside a set `index_intent_id`. Absent everywhere else.
 
 **No intention text in any mode, `full` included.** §7.1 says "with hashes only" and the
 measurement catalogue says "text in the archive only". The training export reads text from the
@@ -485,7 +488,8 @@ the agent needs it for every later update or withdrawal, and the plugin cannot h
 nowhere else. From the result the plugin also reads `index_intent_id` (the Index id the tool
 published under), `publish_refused` (a code, `^[a-z0-9_]{1,64}$`, else null), `local_reason`
 (`participant_asked` \| `personal`, else null) and `confirmed_in_chat` (`yes` \| `silence` \|
-`standing`, on a capture passed as `message`, kept when the lineage held it, else absent).
+`standing`, on a capture passed as `message`, kept when the lineage held it, else absent), and
+`publish_via` with `draft_shown_at` (DATA-411, on a capture only).
 
 ### The `record_intention` tool (DATA-212)
 
@@ -541,6 +545,7 @@ Search, which such a gate would not see); its text, the `workspace/AGENTS.md` ro
 | `capture`, source `ambient` | none | local uuid v7, `source=ambient`, held, unless `publish=false` (kept local) |
 | `capture`, source `message`, `confirmed_in_chat=silence`, in a session that may publish | none | local uuid v7, `source=ambient`, held, `publish_refused="held_silence"`, the marker kept, unless `publish=false` (kept local) |
 | `capture`, explicit source, in a held session | none | local uuid v7, `source=ambient`, `publish_refused` `held_cron` or `held_unknown`, unless `publish=false` (kept local) |
+| `capture`, source `message`, `confirmed_in_chat=silence`, in a cron run (root platform `cron`, inside the run's scope) of a job that delivers to the resident's chat, exact text of the one draft block of an ask still open, shown between 30 min and 12 h ago (DATA-411) | as a stated capture | as a stated capture, plus `publish_via="open_draft"`, `draft_shown_at` and `draft_cron_job_id` when it publishes; the ask is closed first. The event's `source` stays `ambient` (the observer's cron check): until a data follow-up stages it, read `source=ambient` with a set `index_intent_id` and `publish_via="open_draft"` together as this pass, not as a leak |
 | `capture` that would publish, of text already held as ambient (case and whitespace ignored) | none | local uuid v7, `publish_refused="held_ambient_exists"` |
 | `update` / `withdraw` of an id it published | `PATCH /api/intents/{id} {description}` / `PATCH /api/intents/{id}/archive` (no body) | `index_intent_id` set; a failed mirror adds `publish_refused` |
 | `update` of a published id in a held session | none | `publish_refused` `held_cron` or `held_unknown`, `source=ambient` |
@@ -566,6 +571,73 @@ bluebubbles, qqbot, yuanbao; and `cli`, `tui`, `desktop`). A `cron_` id or `plat
 chain is `held_cron`; anything else (`api_server`, `webhook`, `batch`, `acp`, `curator`, `local`,
 an empty platform, a plugin platform, an unseen session, a subagent of unknown ancestry) is
 `held_unknown`.
+
+**Silence publishes the exact shown draft (DATA-411; window 12 h and minimum age 30 min by the
+lead's ruling).** The one pass through R10.
+
+- **Opening an ask.** At the one ask, the tool's own `post_llm_call` listener (registered with
+  the tool, outside the collector's guard) reads the reply the agent sent. It opens an ask only
+  for a turn a person started: the tool's `pre_llm_call` listener reads the turn's own user dict,
+  and any Hermes mark on it (`display_kind`, which Hermes stamps on every internal event and the
+  heartbeat, a muted diagnostic wake included; a `notification_category`; the `/goal`
+  continuation header), or no user dict, means no ask opens in that turn. The mark is kept per
+  session and Hermes `turn_id` (both hooks carry it), so an interrupted turn's mark is never
+  taken by a later turn; a missing `turn_id` is no mark. One ask per turn at most. The session itself must be a root session seen on a human-facing platform with no cron in
+  its lineage (never a subagent, a cron run or an unknown session), and the reply (at most 2,000
+  characters) shows exactly one draft: one quote block, consecutive lines each starting with
+  `> `, directly above "Should I publish this as written?" on a line of its own (only blank
+  lines between), with no other quote line and no second question anywhere in the reply. The
+  draft is those lines with `> ` cut off, joined with a newline, at most two lines, and no line
+  of it blank (an empty `> ` line shows as a literal `>`). No block,
+  two blocks, a block elsewhere, an alternative or a third party's words between the block and
+  the question: nothing opens, and a silence capture is held for the card as before. A draft
+  holding a character a chat formatter could render as something else (an asterisk,
+  underscore, tilde, pipe, backtick, bracket, backslash, angle bracket, `#` or `&`), a control
+  or invisible character (bidi overrides, zero-width), `MEDIA:`, or ending in a colon, is not
+  opened.
+- **Where it is kept.** The ask is the sha256 of the draft's exact UTF-8 bytes, `shown_at`, the
+  session id and the platform, never the words, in the gateway process's memory and never in a
+  file: the agent's own `terminal` tool runs as the same user and could forge a file, and the
+  lineage tables are in memory for the same reason. At most 20 asks are open; the oldest is
+  dropped. A gateway restart between the ask and the cron send loses every open ask, and the
+  capture is `held_cron`: fail closed by design (the cron send runs in the same gateway process
+  as the ask, as the lineage listeners already assume).
+- **Closing.** Every open ask is closed by anything the gateway receives from a chat:
+  `pre_gateway_dispatch` fires once per inbound message, `/stop` and `/new` included, before
+  auth, voice transcription and compaction; `gateway_platform_event` is a reaction or an edit.
+  Every model turn but a real cron run's closes them too (`pre_llm_call`). Whatever the resident
+  did, a no or a thumbs-down included, it was not silence, so a reply about something else also
+  leaves the words for the card. A model turn counts as a cron run's only inside the run's own
+  scope (Hermes's `HERMES_CRON_SESSION` ContextVar). The opener is registered only after all three
+  closers were, and only when Hermes's `VALID_HOOKS` can be read and holds all four hooks
+  (Hermes keeps an unknown hook name with only a warning and never fires it); a Hermes whose hook
+  list cannot be read gets the closers and no opener, so no ask ever opens there.
+- **The pass.** A capture passed as `message` with `confirmed_in_chat=silence` that R10 holds as
+  `held_cron`, with `publish` true, is published as a stated capture only when all of these hold:
+  - the chain's root was seen with platform exactly `cron` (a `cron_` id prefix alone holds as
+    before but never passes);
+  - the call runs inside that cron run's own scope (`HERMES_CRON_SESSION` is "1"), so a session
+    that reuses a cron run's id from another surface never passes;
+  - the job delivers to a person's chat: Hermes's `HERMES_CRON_AUTO_DELIVER_PLATFORM` ContextVar
+    names a human-facing platform. A `deliver: false` job (the installer's memory signal sync
+    and knowledge sync; digest prepare runs no model) leaves it empty and never passes. Both
+    ContextVars are read directly, never through `os.environ`, which `.env` feeds;
+  - the job's id is known (`cron_<job_id>_<stamp>`, 12 hex);
+  - the sha256 of its exact text is an open ask's;
+  - that ask was shown at least `SILENCE_PUBLISH_MIN_AGE_MINUTES` (30) and at most
+    `SILENCE_PUBLISH_WINDOW_HOURS` (12) ago, the lead's ruling (DATA-411 AC#4). The longest gap
+    between the fleet's delivering sends is overnight, so 12 h covers the next send for an ask at
+    any hour.
+
+  Every ask holding those bytes is closed before the publish goes on, so the same capture again
+  is `held_cron`. Only a capture that then publishes carries `publish_via="open_draft"`,
+  `draft_shown_at` and `draft_cron_job_id` (the delivering job; its name is joined from that job's
+  `cron.run`). Whether the run's reply then ends `[SILENT]` is known only after the capture, so a
+  delivering job whose run stays silent can still publish: a documented residual. A draft taken
+  and then refused (`no_key`, `held_ambient_exists`, an Index
+  failure) is used up and carries only that code. Every other capture from cron is held exactly
+  as before. `held_unknown` and `held_silence` never read the open asks, and nothing else reads
+  them. [Reversal: drop the listeners and the pass; silence from cron is `held_cron`.]
 
 **`publish=false` always wins (DATA-311).** An explicit `publish=false` (with its reason) is
 honoured for every source and in every lineage: nothing a caller marks do-not-publish is ever
