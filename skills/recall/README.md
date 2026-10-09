@@ -5,6 +5,7 @@ sandbox:
 
 - daily notes, `memory/YYYY-MM-DD.md`
 - long-term memory, `MEMORY.md`
+- what services wrote for the agent, `knowledge/<provider>/*.md` (kind `knowledge`; one level, `_`/dot names skipped, dated by front matter `saved_at`, else mtime)
 - the owner's private conversations in the local Hermes session store
   (`$HERMES_HOME/state.db`, opened read-only)
 

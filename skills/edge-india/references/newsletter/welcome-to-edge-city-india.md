@@ -4,9 +4,9 @@ Source: https://edgecityindia2026.substack.com/p/welcome-to-edge-city-india
 
 Source type: newsletter
 
-Published: 2026-06-29T16:06:34.000Z
+Source updated: 2026-08-05T12:13:07.976Z
 
-Last content change indexed: 2026-09-30T21:32:35.134Z
+Last content change indexed: 2026-10-08T09:58:22.660Z
 
 ---
 

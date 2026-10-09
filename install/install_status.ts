@@ -3,7 +3,7 @@
  * undone, written on every run so a stale failure never outlives a clean run
  * (B1-fix2 R1). The install exits 0 when the only problem is Index cron jobs
  * that failed to update; this file and one fixed stdout line are how that is
- * reported. The control plane does not read it yet.
+ * reported. The control plane reads it as a report only, never failing an update for it.
  */
 
 import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";

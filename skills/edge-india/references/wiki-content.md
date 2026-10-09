@@ -4,9 +4,9 @@ Source: https://edgecity.notion.site/Edge-City-India-2026-Wiki-038d45cdfc5983c7a
 
 Source type: wiki
 
-Source updated: 2026-10-07T14:22:45.133Z
+Source updated: 2026-10-09T07:08:44.292Z
 
-Last content change indexed: 2026-10-07T14:28:21.243Z
+Last content change indexed: 2026-10-09T07:13:19.143Z
 
 ---
 
@@ -20,7 +20,7 @@ Edge City India 2026 is a 3 week-long popup village (October 11 - November 1) in
 
 - **[Apply here](https://portal.edgecity.live/auth?redirect=%2Fportal%2Fedge-india)** if you haven’t already. ✨ We are reviewing applications on a rolling basis.
 
-- **~~Housing:** Once you have your ticket, make sure you book accommodation. You can book our discounted rates for ~\[~Riva Beach Resort here~\](~~[https://forms.fillout.com/t/eGE4xizEwbus](https://forms.fillout.com/t/eGE4xizEwbus)~~)~. ~~\[SOLD OUT\]
+- **Housing:** Once you have your ticket, make sure you book accommodation. You can book our discounted rates for ~\[Riva Beach Resort here\]~ \[SOLD OUT\]
 
   - **Housing & Visa Telegram group:** [Join here](https://t.me/+QIGTcyKbP0RjNDQx) to coordinate shared housing and meet other participants. Please read the 'Read This First' channel that is pinned at the top as soon as you enter.
 
@@ -40,13 +40,13 @@ Tickets do not include accommodation; you need to organize your housing. Some op
 
 **🏘️ Additional Options**
 
-- [Nanu Beach Resort](https://maps.app.goo.gl/m7WKin2V3GmxcCk28)
+- [Nanu Beach Resort](https://maps.app.goo.gl/m7WKin2V3GmxcCk28) (shuttle stop)
+
+- [North Goa Villas in Mandrem area](https://www.natrajsadan.com/edge/) **w/ Edge City Discount!**
 
 - [Airbnbs in Mandrem area](https://www.airbnb.com/s/Mandrem--Goa--India/homes?search_type=autocomplete_click&refinement_paths%5B%5D=%2Fhomes&flexible_trip_lengths%5B%5D=one_week&monthly_start_date=2026-08-01&monthly_length=3&monthly_end_date=2026-11-01&price_filter_input_type=2&channel=EXPLORE&acp_id=a47a0b64-fee3-4ea1-ab58-651c75f8c1a7&date_picker_type=calendar&search_mode=regular_search&price_filter_num_nights=5&zoom_level=13&location_bb=QXsVo0KTiWVBej3hQpNo1g%3D%3D&source=structured_search_input_header)
 
 - [Villas in Mandrem area](https://villagoa.in/villas/luxury-villas-morjim-mandrem/)
-
-- Additional [Villas in Mandrem area](https://www.natrajsadan.com/edge/)
 
 **Ways to reduce costs:**
 
@@ -104,7 +104,7 @@ Anyone with a ticket can create and host. Click **\+ Create event** (top right),
 
 1. **Pick a venue:** an ECI26 shared venue, a custom location (give it a name and paste a Google Maps link), or **Meeting** for online events.
 
-1. **Add details:** title, date (within October 11 to November 1), start time, duration, description, capacity, tags (less is more), and a track if it's part of an official program.
+1. **Add details:** title, date , start time, duration, description, capacity, photo, and a track if it's part of an official program.
 
 1. **Set visibility:** **Public** (all participants), **Private** (only people you invite by email), or **Unlisted** (accessible by link only).
 
@@ -126,11 +126,11 @@ Once it's created, you can invite people by email, see who has RSVPed, edit any 
 
 Every attendee needs to check in to collect their wristband. Please bring your ticket QR code.
 
-**Opening days (Oct 10–12)**
+**Opening days (Oct 11–12)**
 
-- **Sat–Sun, Oct 10–11:**
+- **Sun, Oct 11:**
 
-  - 11am–1pm, [Riva Beach Resort](https://maps.app.goo.gl/povPE89dFNAFtz5x6) (near reception)
+  - 11am–5pm, [Riva Beach Resort](https://maps.app.goo.gl/povPE89dFNAFtz5x6) (near reception)
 
   - 5pm-9pm, [Opening Ceremony](https://luma.com/fbh5z4kp)
 
@@ -148,6 +148,18 @@ Every attendee needs to check in to collect their wristband. Please bring your t
 
 **Arriving outside these hours?** You can join sessions before checking in - keep your ticket QR code handy.
 
+The most important communication channel is our Telegram group for all participants.
+
+_→ All ticket holders receive the invitation link via email to join._
+
+---
+
+#### 💬 Community Chat Group on Telegram
+
+The most important communication channel is our Telegram group for all participants.
+
+_→ All ticket holders receive the invitation link via email to join._
+
 ---
 
 #### 🤸🏽 Wellbeing
@@ -160,145 +172,87 @@ At Edge City India, health is the **default state** — we build environments wh
 
 We offer a variety of health & well-being activities including run club, yoga, strength training, community hikes, meditation, sauna, and more.
 
+**Wellness Partners and Discounts**
+
+Moving, recovering, and trying something new is easy at Edge City India, thanks to a few local spots around the village. Show your Edge wristband at any of them to get the deal.
+
+- **[The Gym at the Beach](https://maps.app.goo.gl/5WDXWnJikekthNrV6)**, next to Riva
+
+  - Free for Riva guests
+
+  - Everyone else can buy day, week, or month passes, which include access to the three pools - Edge City has negotiated the ability to share these passes amongst up to 5 friends- pick your gym buddies and you can trade days!
+
+  - Classes in strength, cardio, martial arts, and yoga
+
+- **[Arti Spa](https://artispagoa.com/)**, next to The Circle in Ashvem
+
+  - Free sauna for Edge participants
+
+  - 20% off spa services
+
+  - Ice baths for ₹2,000 with a day’s notice
+
+- **[Human Potential Movement](https://maps.app.goo.gl/3pR3csApVT2hX3fL8)**, next to The Circle in Ashvem
+
+  - Edge passes from ₹400 a day, with weekly and monthly options
+
+- **Wakeboarding park**, 5 minutes from Riva
+
+  - 15% off for all Edge participants
+
+- **[Swell Cats Surf Club](https://swellcatssurfclub.com/)** (Mandrem)
+
+  - 15% off one-day lessons
+
+  - 20% off all courses
+
 ---
 
 #### 🥗 Food
 
-We've partnered with local restaurants and businesses to offer ECI26 participants exclusive discounts. A full list of locations will be added soon!
+We've partnered with local restaurants and businesses to offer ECI26 participants exclusive discounts. Browse all offers on our [Notion page](https://edgecity.notion.site/3f3d45cdfc598175b9c4fcde149a1b9c) page.
 
 **Lunch Meal Plans**
 
 TLDR;
 
-- We’ve partnered with [Om Kafe](https://share.google/uhNPlKfRJ9AzUd34Z) and [Hari Cafe](https://www.haricafe.com/) to provide fresh and healthy lunches Monday - Friday delivered to The Circle.Work from 1:00-2:00 PM!
+We’ve partnered with [Om Kafe](https://share.google/uhNPlKfRJ9AzUd34Z) and [Hari Cafe](https://www.haricafe.com/) to provide fresh and healthy lunches Monday - Friday delivered to The Circle.Work from 1:00-2:00 PM!
 
-- Participants must pay for a pre-purchased meal ticket [here](https://portal.edgecity.live/checkout/edge-india/lunch-tickets).
+Participants must pay for a pre-purchased meal ticket [here](https://portal.edgecity.live/checkout/edge-india/lunch-tickets).
 
-- ₹3,000 per week ($36) - 5 lunches, Monday - Friday.
+₹3,000 per week ($36) - 5 lunches, Monday - Friday.
 
-- ⚠️_Order deadline:_ Week 1 orders close **Oct 10 at 10am IST**. Week 2 closes **Oct 16 at 10am IST** and week 3 closes Oct 21, so the kitchens know how much to cook.
+⚠️_Order deadline:_ Week 1 orders close **Oct 10 at 10am IST**. Week 2 closes **Oct 16 at 10am IST** and week 3 closes Oct 21, so the kitchens know how much to cook.
 
-- We have a no refund policy once you’ve purchased a meal plan for a given week: this keeps waste down and lets the restaurants plan properly.
+We have a no refund policy once you’ve purchased a meal plan for a given week: this keeps waste down and lets the restaurants plan properly.
 
-- If you have allergies or specific questions DM @jacquelinegomba
+If you have allergies or specific questions DM @jacquelinegomba
 
----
+**Dinners**
 
----
+Dinners are pay-as-you-go and rotate across partner venues so you can explore the best of Mandrem’s food scene.
 
-#### 🐣 Kids & Families
+Join the Edge City India community at 7:00pm, Monday to Thursday, to unwind and connect over shared meals! Just show up, order off the menu and show your wristband for the discount.
 
-Edge City India is proudly multigenerational - kids, teens, and elders make the village richer for everyone. We believe the best communities are ones where people of all ages collaborate, learn from one another, and create meaningful things together. We created Edge Tomorrow so creative families can get the most out of Edge City India.
+- **Mondays** at [Oo! Olivia](https://maps.google.com/?q=Oo+Olivia+Mandrem+Goa) for 15% off
 
-**→** **[Apply here](https://portal.edgecity.live/auth?redirect=%2Fportal%2Fedge-india)** **(mention your children in your application)**
+- **Tuesdays** at [Ashwe 351](https://maps.google.com/?q=Ashwe+351+Palma+Beach+Resort+Ashvem+Goa) (inside Palma Beach Resort) for 10% off
 
----
+- **Wednesdays** at [Brisa by the Beach](https://maps.app.goo.gl/Takho1eVV5XxEwNR7) for 20% off
 
-#### 🎨 Edge Tomorrow- Residency for Kids
+- **Thursdays** at [Prana Cafe](https://maps.app.goo.gl/ic5HquVKgzwtDASt8) for 10% off
 
-Edge Tomorrow is the network of places, activities, and people that will serve as the social and creative anchor for families with children.
+- **Sunday Oct 18** at [Jadugari](https://maps.google.com/?q=Jadugari+Morjim+Goa) for 20% off
 
-These spaces are designed, curated, and facilitated with kids in mind. The purpose is to spark self-directed creativity and cross-age creative endeavors, relating to themes and projects in the larger village.
+- **Sunday Oct 25** at [Morjim Culture](https://maps.app.goo.gl/cEsyyW2Rp81frcuN7) for 10% off
 
-Edge Tomorrow includes our worldbuilding facilitators, and an intergenerational creative hub with rich, carefully selected materials, where kids collaborate with adults to co-create and demo multi-day creative projects each week.
+All dinners are on the [calendar](https://portal.edgecity.live/portal/edge-india/events).
 
-At Edge Tomorrow Healdsburg, participants worked together to create a giant cardboard metropolis, start 3 micro businesses, produce birthday parties for Edge participants, create two complex sculptures using quantum math modeling tools, and even build an escape room.
+#### Shuttle Service for October 11th Arrivals & Opening Ceremony
 
-The container is deeply influenced by our environment and we are excited to see what Edge Tomorrow Goa brings!
+We will offer a shuttle service from GOX/ Mopa Airport to Riva Beach Resort. This shuttle is complimentary and we will have volunteers, designated with a purple lanyard posted at the GOX airport to help guide you (exact location of shuttle details coming- please keep eyes on telegram transportation chat for updates, schedule below:
 
-**→** [More information Here](https://edgecityindia2026.substack.com/p/bring-your-family-to-edge-city-india)
-
----
-
-#### 🏖️ Outdoor Adventure Planning
-
-_**We will have some group weekend adventures planned - coming soon!**_
-
-Mandrem sits on North Goa's coast, and the surrounding area is full of things to explore — beaches, waterfalls, and the Western Ghats are all within reach. Late October/November is post-monsoon, so everything is green and the waterfalls are full.
-
-**Ideas for weekends and downtime:**
-
-- Kayak through the dense mangrove tunnels of North Goa's Chapora River, Nerul River, or the Sal Backwaters near Nuvem
-
-- Take the [Chorao Ferry](https://oneboard.app/places/chorao-ferry) to Chorao Island and paddle the Dr. Salim Ali Bird Sanctuary
-
-- Beach-hop the quiet northern stretch - walk from Mandrem to **Ashwem** and **Morjim** (a sea-turtle nesting beach) to the south, or **Arambol** to the north for its Sweet Water Lake, banyan tree, and evening drum circles
-
-- Head to the far north tip for **Keri (Querim) Beach** and the clifftop **Tiracol Fort**, reached by a short river ferry
-
-- Chase a waterfall — **Arvalem (Harvalem) Falls** near Bicholim is an easy half-day trip, while **Dudhsagar Falls**, Goa's tallest, makes a bigger full-day outing into the Western Ghats
-
-- Explore the Ghats inland: a spice plantation tour or a jeep safari in the **Mhadei / Bhagwan Mahavir wildlife sanctuaries**
-
-_A full outdoor adventure guide will be published on the_ _[Edge City India blog](https://edgecityindia2026.substack.com/)_ _closer to the event._
-
----
-
-#### 🎟 Tickets
-
-Edge City is a registered 501(c)(3) nonprofit. Our goal is to responsibly cover the real costs of this three-week village.
-
-**Current Ticket Prices available when your application has been approved-** **[apply here](https://portal.edgecity.live/auth?redirect=%2Fportal%2Fedge-india)****!**
-
-Prices rise regularly between now and October 11. Grab your ticket early for the best rate. You'll pay whatever the current Sunday price is when you check out.
-
-- **Full 3-Week Pass** (Oct 11 – Nov 1): **$1,950** → $2,000 final release
-
-- **1-Week Pass** **(Weeks 1 & 2)**: **$975** → $1,000 final release
-
-- **1-Week Pass (Week** **3 — Tech Week + Final Demos): $1,560** → $1,600 final release
-
-- **Day Pass**: **$245** → $250 final release
-
-- **Kids and teens (4–17)** → 40% off adult ticket
-
-- **Kids under 3** → free
-
-_**Indian citizens receive 50% off any of the above. Please indicate you’re a local in your application. ID required at check-in.**_
-
-_**Spouses and partners receive 10% off any of the above.**_
-
-_All ticket sales are final. We do not offer refunds. If your plans change, you can transfer your ticket to someone else. Email_ _[info@edgecity.live](mailto:info@edgecity.live)_ _with the new attendee's name and email._
-
----
-
-**Patron tickets** start at $7,500 and include all standard ticket benefits plus an additional donation to our 501(c)(3). Patron tickets help keep prices accessible for builders, researchers, and young people, and help fund scholarships.
-
-**What your ticket includes:**
-
-- Access to all sessions, seminars, events, hackathons, workshops, and beyond
-
-- Access to our collaborative calendar to host your own events
-
-- Coworking space in Mandrem, with meeting rooms and fast WiFi
-
-- Group wellness activities, including daily workouts
-
-- Community events, including village dinners
-
-- Access to the Edge City India chat groups
-
-- Discounts at partner venues in Mandrem and North Goa
-
-_Accommodation and daily meals are not included in the ticket price. Ticket holders get access to discounted hotel rates on a first-come-first-served basis. Community dinners run throughout the three weeks; Goa's food scene handles the rest._
-
-**Scholarships:**
-
-We have a limited number of scholarships for those who need financial assistance to participate. Scholarship recipients are expected to contribute roughly 10 hours per week of volunteer effort during the event. We prioritize scholars who apply for the full experience (October 11 – November 1).
-
-To **[apply](https://portal.edgecity.live/auth?redirect=%2Fportal%2Fedge-india)**, select the scholarship option in your application and submit a 60-second video explaining why you’re applying and what your contribution might be.
-
-**~~Volunteering:** We are looking for highly motivated people who are willing to volunteer in exchange for a ticket discount (up to 100% off). Apply as a volunteer ~\[~here~\](~~[Notion page](https://edgecity.notion.site/39ed45cdfc5980d081bfe1e51fd145c9)~~)~.~~
-
-[Apply to attend](https://portal.edgecity.live/auth?redirect=%2Fportal%2Fedge-india) →
-
----
-
-#### 🚲 Transport & Getting Around
-
-We've negotiated discounted taxi rates between Riva and The Circle, and we'll share a list of trusted taxi contacts soon. Shuttle service between the two locations is also being arranged for peak times. Renting a scooter or bike is common and an easy way to get around if you're comfortable with it.
-
-October 11th - GOX / Mopa Airport to Riva Beach Resort
+**October 11th - GOX / Mopa Airport to Riva Beach Resort**
 
 **9:30 AM Shuttle service starts at airport - first pickup**\
 10:15 AM Shuttle drops at RIVA\
@@ -309,9 +263,33 @@ October 11th - GOX / Mopa Airport to Riva Beach Resort
 **4:45 PM Shuttle service - fourth & final pickup**\
 5:15 PM Shuttle final drops at RIVA
 
-October 11th - RIVA to The Forresta; Opening Ceremony
+**While you are waiting for the shuttle, we have a 10% discount at Artjuna Cafe at GOX Airport. Please mention “Edge City” for a discount!**
 
-Note: roads at night have limited lighting, so a taxi or a flashlight is the safer call after dark.
+**For arrival instructions with photos for taxi; click** **[HERE.](https://docs.google.com/document/d/161mjFNCXP9dl3JlFdkzvI2Sje7I0Nh9A/edit?usp=sharing&ouid=102473816871369346891&rtpof=true&sd=true)**
+
+**October 11th - RIVA to The Forresta Kinaro; Opening Ceremony**
+
+We will offer a complimentary shuttle to the Opening Ceremony at The Forresta Kinaro. Volunteers designated with a purple lanyard will be posted at RIVA Beach Resort parking area and The Forresta Kinaro entrance to assist in getting on the shuttle.
+
+Shuttle service will be starting at 5:00pm at RIVA Beach Resort and dropping off at The Forresta Kinaro on a loop every 15 mins. They will be on standby from 7:00pm - 7:30pm.
+
+Shuttle service will resume at 7:30pm - 10:30pm for returning to RIVA Beach resort from The Forresta Kinaro.
+
+#### Shuttle Service & Taxi Information during Edge City India
+
+We will offer a shuttle service from weekdays 9am - 5pm from October 12th through October 31st daily. Shuttle stops include NANU Resort > RIVA Beach Resort > Lush Garden (Mandrem) > The Circle Coworking > Lush Garden (Mandrem) > RIVA Beach Resort > NANU Resort.
+
+Shuttle times will be approximate to traffic.\
+Please plan accordingly so you do not miss your next session!
+
+Additionally, aligned prices for taxis are below - you can find these outside of Riva and around town.
+
+Please note the prices below are negotiated prices for ongoing relationships with taxi association around town, prices may vary according to your own negotiations, however should not go over these below. Negotiate with respect, please!
+
+A few of our taxi driver friends include:\
+\
+Prasad Gadekar - Whatsapp #+91 - 98503 - 91950\
+Umesh Naik - Whatsapp # +91-83297-44359
 
 ---
 
@@ -321,9 +299,11 @@ Mandrem is a coastal village in North Goa (Pernem taluka), on the Arabian Sea ju
 
 **Nearest airports:**
 
-- GOX (Manohar International / Mopa Airport, North Goa): ~25 km, 30–40 min drive. This is the closest and the one to aim for.
+- GOX (Manohar International / Mopa Airport, North Goa): ~25 km, 30–40 min drive. This is the closest and the one to aim for. **For arrival instructions with photos; click** **[HERE.](https://docs.google.com/document/d/161mjFNCXP9dl3JlFdkzvI2Sje7I0Nh9A/edit?usp=sharing&ouid=102473816871369346891&rtpof=true&sd=true)**
 
-- GOI (Dabolim / Goa International Airport, South Goa): ~1.5–2 hrs drive. Fine as a backup if the fares or timing work better.
+  - While you are waiting for the shuttle, we have a 10% discount at Artjuna Cafe at GOX Airport. Please mention “Edge City” for a discount!
+
+- GOI (Dabolim / Goa International Airport, South Goa): ~1.5–2 hrs drive. Fine as a backup if the fares or timing work better. **For arrival instructions with photos; click** **[HERE](https://docs.google.com/document/d/1L3TubgdDo_xHatkOPLzh5AM1LMGY57ZFaTTmtoScwbo/edit?usp=sharing)****.**
 
 #### 🛂 Visas & Entry to India
 
@@ -451,6 +431,12 @@ Our two hubs, Riva and The Circle, both have fast WiFi, with backup Starlink.
 
 - Password: **Edgecitygoa@2026**
 
+- **💻 Riva Resort**
+
+  - Network: **Edge City**
+
+  - Password: **Edgecitygoa@2026**
+
 #### 💵 Currency
 
 For transfer/initial expenses, best obtain **Indian rupees (INR)** **before** **leaving the airport**
@@ -469,7 +455,7 @@ Many restaurants, hotels and larger businesses accept international cards, but a
 
 Keep cash in smaller denominations for street vendors, taxis and other small transactions rather than relying on card acceptance at places.
 
-UPI is another option, but international visitors need a compatible tourist-payment service with completed verification. More details on UPI soon!\
+UPI is another option, but international visitors need a compatible tourist-payment service with completed verification. **On Sunday October 11th from 12-3pm, our partner CheqUPI will be at Check-in to help get people set up with UPI payment, please bring your passport and a picture of your visa!**
 
 ---
 
@@ -498,3 +484,25 @@ You can also join Edge City India via a residency. Either way you need a ticket.
 **Step 3:** Book your travel and get excited!
 
 _Note: This is the most reliable way to join us. Your spot is guaranteed once you purchased your ticket, you can join a residency later._
+
+## Restaurant Discounts & Partners
+
+Show your colorful Edge City wristband at any of these partners to get your discount. It applies any day, not just on community dinner nights.
+
+| Partner | Discount | Cuisine | Notes |
+| --- | --- | --- | --- |
+| 🌊 [**Brisa by the Beach**](https://maps.app.goo.gl/Takho1eVV5XxEwNR7) | **20% off** | Continental, beachfront | Wednesday dinner spot. Open 12pm to 12am |
+| 🍛 [**Jadugari**](https://maps.google.com/?q=Jadugari+Morjim+Goa) | **20% off** | Gourmet Indian | Sunday dinner spot, Oct 18. Morjim, about 10 min by car |
+| 🌿 [**Lush Garden**](https://maps.app.goo.gl/1ecyxZYxawCtnkiZ8) | **20% off** | Healthy, mostly vegetarian |  |
+| 🍴 [**Zorba Vibes**](https://maps.google.com/?q=Zorba+Vibes+Ashvem+Beach+Road+Mandrem+Goa) | **20% off** | North Indian, Chinese, seafood, bar food | Ashvem Beach Road, short walk from The Circle. Open 9am to 10pm |
+| ☕ [**Hari Cafe**](https://maps.google.com/?q=Hari+Cafe+Ashvem+Beach+Mandrem+Goa) | **15% off** | Coffee, healthy, fully vegetarian | Weekdays only, doesn't stack with the lunch plan. Two min walk from The Circle |
+| 🥘 [**Om Cafe**](https://maps.google.com/?q=Om+Cafe+Mandrem+Goa) | **15% off** | Healthy Indian | Lunch partner weeks 1 and 3 |
+| 🍝 [**Oo! Olivia**](https://maps.google.com/?q=Oo+Olivia+Mandrem+Goa) | **15% off** | International | Monday dinner spot |
+| 🔥 Cuebebar on the Beach | **15% off** | BBQ | In The Circle building |
+| 🥭 [**Wango Wango**](https://maps.app.goo.gl/JYSAsAN4FuEHFs9W9) | **15% off** | South and North Indian | Arambol side of Mandrem, closer to Riva |
+| 🎸 [**Ashwe 351**](https://maps.google.com/?q=Ashwe+351+Palma+Beach+Resort+Ashvem+Goa) | **10% off** | Multi cuisine, international | Tuesday dinner spot. Inside Palma Beach Resort |
+| 🍵 [**For Kicks Cafe**](https://maps.app.goo.gl/aoibZi1gm43scPG5A) | **10% off drinks** | Specialty coffee, matcha and bakes | Right below Odd Table |
+| 🌱 [**Prana Cafe**](https://maps.app.goo.gl/ic5HquVKgzwtDASt8) | **10% off** | Locally sourced, international | Thursday dinner spot |
+| 🌅 [**Morjim Culture**](https://maps.app.goo.gl/cEsyyW2Rp81frcuN7) | **10% off** |  | Sunday dinner spot, Oct 25. Morjim |
+
+More places are joining as we confirm them, so check back!

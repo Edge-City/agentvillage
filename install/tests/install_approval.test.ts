@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -25,6 +26,15 @@ import {
   APPROVAL_ROUTED_SHA256,
   gateReceiptLine,
   lastInstallRouted,
+  mainCli,
+  PREWARM_ENV,
+  PREWARM_SESSION,
+  prewarmAfterInstall,
+  prewarmApproval,
+  prewarmCli,
+  PREWARM_MAX_TIME_S,
+  PREWARM_TIMEOUT_MS,
+  type PrewarmReport,
   ApprovalInstallError,
   ENV_NAME,
   SHIM_TOOLS,
@@ -71,6 +81,8 @@ const ENV_NAMES = [
   "APPROVAL_HOOK_WAIT_S",
   "PYTHONPATH",
   "FAKE_HERMES_STATE",
+  "AV_APPROVAL_PREWARM",
+  "APPROVAL_HOOK_LOG",
 ] as const;
 const ORIGINAL_ENV = Object.fromEntries(ENV_NAMES.map((n) => [n, process.env[n]]));
 const TOKEN = "agent-token-SENTINEL-0123";
@@ -83,11 +95,18 @@ let logs: string[] = [];
 let errors: string[] = [];
 let logSpy: ReturnType<typeof spyOn>;
 let errSpy: ReturnType<typeof spyOn>;
+/** DATA-379: the stub pre-warm every install in this file runs unless a test asks for the real one. */
+let prewarmCalls = 0;
+const stubPrewarm = (): PrewarmReport => {
+  prewarmCalls++;
+  return { outcome: "facade-block", reason: null, elapsed_ms: 1 };
+};
 
 beforeEach(() => {
   for (const name of ENV_NAMES) delete process.env[name];
   logs = [];
   errors = [];
+  prewarmCalls = 0;
   logSpy = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
     logs.push(args.join(" "));
   });
@@ -242,7 +261,7 @@ ${full.no_run_once ? "" : `def run_once(spec, kwargs):
 function opts(extra: ApprovalOptions = {}): ApprovalOptions {
   if (!PYTHON) throw new Error("python3 is required for the live self-check tests");
   if (!process.env.FAKE_HERMES_STATE) fakeHermes();
-  return { toolDirs: [toolDir()], managedDir: join(tmpdir(), "av-approval-no-managed-scope"), hermesPython: PYTHON, ...extra };
+  return { toolDirs: [toolDir()], managedDir: join(tmpdir(), "av-approval-no-managed-scope"), hermesPython: PYTHON, prewarm: stubPrewarm, ...extra };
 }
 
 const OPERATOR_HOOK = { matcher: "terminal", command: "/usr/local/bin/operator-audit.sh", timeout: 30 };
@@ -1358,7 +1377,7 @@ exec /usr/bin/perl -e '@s = lstat($ARGV[1]) or exit 1; $f = $ARGV[0]; $f =~ s/%u
     state,
     proc,
     fake,
-    run(env: Record<string, string> = {}, o: { bare?: boolean; timeoutMs?: number } = {}): ShimRun {
+    run(env: Record<string, string> = {}, o: { bare?: boolean; timeoutMs?: number; printf?: Record<string, string> } = {}): ShimRun {
       const base = o.bare
         ? { PATH: `${fake}:/usr/bin:/bin` }
         : {
@@ -1373,7 +1392,11 @@ exec /usr/bin/perl -e '@s = lstat($ARGV[1]) or exit 1; $f = $ARGV[0]; $f =~ s/%u
             APPROVAL_HOOK_MAX_TIME: "1",
             APPROVAL_HOOK_LOG: join(root, "hook.log"),
           };
-      const proc = Bun.spawnSync(["bash", "-c", `exec "$0" < "$1"`, shim, envelope], {
+      // o.printf: variables the wrapper sets from printf formats before the shim
+      // starts, for bytes a JS env string cannot carry (a lone 0x80; DATA-424).
+      const pf = Object.entries(o.printf ?? {});
+      const pre = pf.map(([k], i) => `${k}=$(printf "\${${i + 2}}"); export ${k}; `).join("");
+      const proc = Bun.spawnSync(["bash", "-c", `${pre}exec "$0" < "$1"`, shim, envelope, ...pf.map(([, f]) => f)], {
         env: { ...base, ...env },
         ...(o.timeoutMs ? { timeout: o.timeoutMs } : {}),
       });
@@ -1622,9 +1645,11 @@ const UNPADDED_FRACTION = "5567380";
  * the nanoseconds without their leading zeros (one to nine digits: the shape
  * 0.8.0's `%3N` gives, kept as a defence case for `%N`), `s` whole seconds and
  * no fraction (a date without %N). `gnu` and `unpadded` also print their shape
- * of the log stamp.
+ * of the log stamp. With `offsetFile` (DATA-378: virtualSleep's file) the
+ * seconds the fake sleeps added are added to the reading, so the clock moves
+ * 5 s per re-ask as it does on a box.
  */
-function clockFake(shape: "gnu" | "unpadded" | "s"): string {
+function clockFake(shape: "gnu" | "unpadded" | "s", offsetFile?: string): string {
   const stamp = {
     gnu: `/usr/bin/perl -MTime::HiRes=gettimeofday -e '($s, $u) = gettimeofday; printf("%d.%06d000\\n", $s, $u)'`,
     unpadded: `/usr/bin/perl -MTime::HiRes=gettimeofday -e '($s, $u) = gettimeofday; printf("%d.%d\\n", $s, $u * 1000)'`,
@@ -1634,7 +1659,23 @@ function clockFake(shape: "gnu" | "unpadded" | "s"): string {
   const logStamp = logFraction
     ? `  -u) [ "$2" = "+%Y-%m-%dT%H:%M:%S.%N" ] && { printf '%s.${logFraction}\\n' "$(/bin/date -u +%Y-%m-%dT%H:%M:%S)"; exit 0; } ;;\n`
     : "";
-  return `#!/bin/sh\ncase "$1" in\n  +%s.%N) exec ${stamp} ;;\n${logStamp}esac\nexec /bin/date "$@"\n`;
+  const read = offsetFile
+    ? `v=$(${stamp}); o=$(cat '${offsetFile}' 2>/dev/null || echo 0); case $v in *.*) echo "$((\${v%%.*} + o)).\${v#*.}" ;; *) echo "$((v + o))" ;; esac; exit 0`
+    : `exec ${stamp}`;
+  return `#!/bin/sh\ncase "$1" in\n  +%s.%N) ${read} ;;\n${logStamp}esac\nexec /bin/date "$@"\n`;
+}
+
+/**
+ * DATA-378: the fixture's `sleep` adds its seconds to a virtual offset and
+ * returns at once (the fixture's own fake sleeps 0.05 s and the clock does not
+ * move). A clock that adds the offset then sees 5 s pass per re-ask, as on a
+ * box, so the attempt cap (WAIT_S/5 + 2, which counts on those 5 s) is not
+ * reached before the window closes. Returns the offset file (whole seconds).
+ */
+function virtualSleep(fx: ReturnType<typeof shimFixture>): string {
+  const f = join(fx.state, "vsec");
+  writeFileSync(join(fx.fake, "sleep"), `#!/bin/sh\nf='${f}'\necho $(( $(cat "$f" 2>/dev/null || echo 0) + $1 )) > "$f"\n`, { mode: 0o755 });
+  return f;
 }
 
 /** A fake `date` whose `+%s.%N` prints one fixed value. */
@@ -1745,15 +1786,19 @@ describe("DATA-377: the shim's clock is read as seconds.fraction, the fraction l
 
   test("both clocks: the window is measured in milliseconds (WAIT_S=6 closes after a few re-asks, then the last block stands)", () => {
     for (const shape of ["gnu", "unpadded"] as const) {
-      const fx = withClock(shimFixture("waiting"), clockFake(shape));
+      const fx = shimFixture("waiting");
+      // DATA-378: each pause moves the clock 5 s, as on a box. With the fixture's 0.05 s pause and a real-time clock
+      // the attempt cap (WAIT_S/5 + 2 = 3) ended the loop before the window did.
+      withClock(fx, clockFake(shape, virtualSleep(fx)));
       // A unit read wrongly here would run the loop for hours: bound the run, so it fails instead of hanging.
       const r = fx.run({ APPROVAL_HOOK_WAIT_S: "6" }, { timeoutMs: 20000 });
       expect([shape, r.code]).toEqual([shape, 2]);
-      expect(r.calls).toBeGreaterThan(1);
+      // Exactly 2: attempt 1's check comes within 1 s of T0 (as before), and the 5 s pause then closes the window.
+      expect(r.calls).toBe(2);
       expect(JSON.parse(r.stdout).message).toStartWith("hook-timeout:");
-      // The loop stops once now + 5 s reaches T0 + 6 s: about one second of real time.
+      // The loop stops once now + 5 s reaches T0 + 6 s: after the first 5 s pause, so the last line reads about 5 s.
       const ms = elapsed(fx.log());
-      expect(ms.at(-1)!).toBeGreaterThanOrEqual(1000);
+      expect(ms.at(-1)!).toBeGreaterThanOrEqual(5000);
       expect(ms.at(-1)!).toBeLessThan(10000);
     }
   });
@@ -2266,20 +2311,48 @@ done
     }
   }, 300_000);
 
-  test("fuzz: the sh block message JSON is JSON.stringify's for printable ASCII, and declines everything else", () => {
-    const dir = scratch("av-approval-block-json-");
+  /**
+   * block_json, sliced from the shim, behind a driver that reads each file
+   * byte for byte, writes back what it read (`<file>.in`) and block_json's
+   * answer for it (`<file>.sh`). The `x` sentinel is stripped under LC_ALL=C:
+   * bash 5.2 under a UTF-8 locale rewrites `${s%x}` when s holds an invalid
+   * UTF-8 sequence (DATA-419: `\\` 0xd8 `\j>0xi` came out as `\\` and a few
+   * stray bytes, sometimes all printable). The locale is then put back, so
+   * block_json runs under the caller's as it does in the shim.
+   */
+  function blockJsonDir(prefix: string): string {
+    const dir = scratch(prefix);
     writeFileSync(join(dir, "block_json.sh"), shimSlice("block_json() {", "\n}\n") + "\n}\n");
     writeFileSync(
       join(dir, "driver.sh"),
       `. "$1/block_json.sh"
 shift
+lc=\${LC_ALL-} had=\${LC_ALL+1}
 for f in "$@"; do
+  LC_ALL=C
   s=$(cat "$f"; printf x)
   s=\${s%x}
+  if [ -n "$had" ]; then LC_ALL=$lc; else unset LC_ALL; fi
+  printf '%s' "$s" > "$f.in"
   printf '%s' "$(block_json "approval facade unreachable: $s")" > "$f.sh"
 done
 `,
     );
+    return dir;
+  }
+  /** The runner's own locale (LC_ALL unset), then C and C.UTF-8 pinned, so a UTF-8 locale is read on every host. */
+  const BLOCK_JSON_LOCALES: (string | undefined)[] = [undefined, "C", "C.UTF-8"];
+  function runBlockJson(shell: string, lc: string | undefined, dir: string, files: string[]): void {
+    const env: Record<string, string | undefined> = { ...process.env };
+    delete env.LC_ALL;
+    if (lc !== undefined) env.LC_ALL = lc;
+    for (const f of files) for (const x of [".in", ".sh"]) rmSync(`${f}${x}`, { force: true });
+    const s = Bun.spawnSync([shell, join(dir, "driver.sh"), dir, ...files], { env });
+    expect([shell, lc, s.exitCode]).toEqual([shell, lc, 0]);
+  }
+
+  test("fuzz: the sh block message JSON is JSON.stringify's for printable ASCII, and declines everything else", () => {
+    const dir = blockJsonDir("av-approval-block-json-");
     const rnd = prng(2380);
     const files: string[] = [];
     const inputs: Buffer[] = [];
@@ -2299,24 +2372,197 @@ done
       files.push(f);
       inputs.push(Buffer.from(bytes));
     }
-    for (const shell of DATA380_UNIT_SHELLS) {
-      const s = Bun.spawnSync([shell, join(dir, "driver.sh"), dir, ...files]);
-      expect([shell, s.exitCode]).toEqual([shell, 0]);
-      let printable = 0;
-      files.forEach((f, i) => {
-        const sh = readFileSync(`${f}.sh`, "utf8");
-        const isPrintable = inputs[i].every((c) => c >= 0x20 && c <= 0x7e);
-        if (!isPrintable) {
-          expect([shell, f, sh]).toEqual([shell, f, ""]);
-          return;
-        }
-        printable++;
-        const expected = JSON.stringify({ action: "block", message: `approval facade unreachable: ${inputs[i].toString("latin1")}` });
-        expect([shell, f, sh]).toEqual([shell, f, expected]);
-      });
-      expect(printable).toBeGreaterThan(150);
-    }
+    for (const shell of DATA380_UNIT_SHELLS)
+      for (const lc of BLOCK_JSON_LOCALES) {
+        runBlockJson(shell, lc, dir, files);
+        let printable = 0;
+        files.forEach((f, i) => {
+          // What block_json was given is the input itself, so a verdict below is about block_json.
+          expect([shell, lc, f, readFileSync(`${f}.in`).toString("hex")]).toEqual([shell, lc, f, inputs[i].toString("hex")]);
+          const sh = readFileSync(`${f}.sh`, "utf8");
+          const isPrintable = inputs[i].every((c) => c >= 0x20 && c <= 0x7e);
+          if (!isPrintable) {
+            expect([shell, lc, f, sh]).toEqual([shell, lc, f, ""]);
+            return;
+          }
+          printable++;
+          const expected = JSON.stringify({ action: "block", message: `approval facade unreachable: ${inputs[i].toString("latin1")}` });
+          expect([shell, lc, f, sh]).toEqual([shell, lc, f, expected]);
+        });
+        expect(printable).toBeGreaterThan(150);
+      }
   }, 120_000);
+
+  test("DATA-419: the fuzz's m102 and m285 (an invalid UTF-8 sequence after backslashes) reach block_json byte for byte under every shell and locale, and it declines them", () => {
+    const dir = blockJsonDir("av-approval-block-json-419-");
+    // m102: \\ 0xd8 \j>0xi, the input CI failed on; m285: 0xfd \\"yw\.l"!d. Each
+    // came out of bash 5.2's ${s%x} under C.UTF-8 as `\\` or nothing and a few
+    // stray bytes. Then a printable control with both escapes: \\"\ .
+    const cases = [
+      { hex: "5c5cd85c6a3e307869", sh: "" },
+      { hex: "fd5c5c2279775c2e6c222164", sh: "" },
+      { hex: "5c5c225c", sh: JSON.stringify({ action: "block", message: 'approval facade unreachable: \\\\"\\' }) },
+    ];
+    const files = cases.map((c, i) => {
+      const f = join(dir, `c${i}`);
+      writeFileSync(f, Buffer.from(c.hex, "hex"));
+      return f;
+    });
+    for (const shell of DATA380_UNIT_SHELLS)
+      for (const lc of BLOCK_JSON_LOCALES) {
+        runBlockJson(shell, lc, dir, files);
+        const got = files.map((f) => [readFileSync(`${f}.in`).toString("hex"), readFileSync(`${f}.sh`, "utf8")]);
+        expect([shell, lc, got]).toEqual([shell, lc, cases.map((c) => [c.hex, c.sh])]);
+      }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DATA-378: the re-ask loop is bounded whatever the clock does. Found by the
+// DATA-377 refuter (NOTE 1): the loop ended only when now + 5 s reached
+// T0 + WAIT_S, so a clock that read 0 after the start (date failed or printed
+// no digits) or stepped back kept it re-posting for as long as the facade
+// answered hook-timeout, past Hermes's 300 s entry timeout. Inside the loop a
+// read of 0 or below the last good read now counts as the deadline passed,
+// and the attempts are capped at WAIT_S/5 + 2.
+//
+// The virtual clock below starts at 1791393600.266 s and moves only when the
+// fake sleep adds its 5 s, so every count here is exact. The shim reads it
+// (call numbers, waiting mode): 1 T0, 2 the start line, then attempt 1: 3 P0,
+// 4 the deadline check, 5 the wait line; attempt k >= 2: 4k-2 the time left,
+// 4k-1 P0, 4k the deadline check, 4k+1 the wait line.
+// ---------------------------------------------------------------------------
+
+const V0_S = 1791393600;
+
+/**
+ * A fake `date` on the virtual clock: `+%s.%N` prints V0_S plus the seconds
+ * virtualSleep added, and counts its calls in state/clock.n, so `rule` (sh;
+ * $n is the call number, $s the seconds about to be printed) can break the
+ * clock from some call on.
+ */
+function virtualClock(fx: ReturnType<typeof shimFixture>, rule = ""): ReturnType<typeof shimFixture> {
+  const vsec = virtualSleep(fx);
+  return withClock(
+    fx,
+    `#!/bin/sh
+case "$1" in
+  +%s.%N)
+    f='${fx.state}/clock.n'; n=$(( $(cat "$f" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$f"
+    s=$(( ${V0_S} + $(cat '${vsec}' 2>/dev/null || echo 0) ))
+    ${rule}
+    echo "$s.266000000" ;;
+  *) exec /bin/date "$@" ;;
+esac
+`,
+  );
+}
+
+/** The virtual seconds the fake sleep added (0 when it never ran). */
+function virtualSeconds(fx: ReturnType<typeof shimFixture>): number {
+  const f = join(fx.state, "vsec");
+  return existsSync(f) ? Number(readFileSync(f, "utf8")) : 0;
+}
+
+/** The facade's own hook-timeout block, replayed at exit 2, with the log's last line the loop's outcome=block. */
+function expectWaitBlock(label: string, fx: ReturnType<typeof shimFixture>, r: ShimRun, posts: number): void {
+  expect([label, r.code, r.calls]).toEqual([label, 2, posts]);
+  expect(JSON.parse(r.stdout).message).toStartWith("hook-timeout:");
+  const last = fx.log().trim().split("\n").at(-1)!;
+  expect(last).toMatch(
+    new RegExp(` outcome=block http=200 exit=2 code=hook-timeout tool=terminal attempt=${posts} path=\\w+ elapsed_ms=-?\\d+$`),
+  );
+  expect(r.stderr).not.toMatch(/arithmetic|octal|base|Illegal number|syntax error/i);
+}
+
+describe("DATA-378: a clock that reads 0 or steps back mid-run ends the re-ask window, and the attempts are capped", () => {
+  // A broken loop would run until killed: every run is bounded, so a regression fails instead of hanging. The bound and
+  // the test timeouts are generous: a sound run takes a second or two, but this machine under load (XProtect scanning
+  // each new fake) has taken over 10 s to reach the first post.
+  const BOUND = { timeoutMs: 25000 };
+
+  for (const shell of DATA380_SHELLS) {
+    test(`AC #1: a clock that stops after the start (exit 1, or nothing at exit 0) ends with the block, at most WAIT_S/5 + 2 posts, within WAIT_S + 5 s virtual (${shell})`, () => {
+      // From call 3 (attempt 1's P0), 6 (attempt 2's time left) and 10 (attempt 3's): the post under way is the last,
+      // so 1, 2 and 3 posts. Before DATA-378 each of these ran until killed. A clock lost at the time-left read is the
+      // deadline passed, so that last post gets the 1 s floor, not MAX_TIME (before, a 0 there made the time left
+      // an epoch and the post got the full MAX_TIME).
+      for (const [from, posts, lastMaxTime] of [
+        [3, 1, "25"],
+        [6, 2, "1"],
+        [10, 3, "1"],
+      ] as const) {
+        for (const stop of ["exit 1", "exit 0"]) {
+          const fx = virtualClock(shimFixture("waiting", null, { shell }), `[ "$n" -lt ${from} ] || ${stop}`);
+          const r = fx.run({ APPROVAL_HOOK_WAIT_S: "20", APPROVAL_HOOK_MAX_TIME: "25" }, BOUND);
+          expectWaitBlock(`${shell} from=${from} ${stop}`, fx, r, posts);
+          expect(r.calls).toBeLessThanOrEqual(20 / 5 + 2);
+          expect(virtualSeconds(fx)).toBeLessThanOrEqual(20 + 5);
+          const argv = r.argv.at(-1)!.split("\n");
+          expect([from, argv[argv.indexOf("--max-time") + 1]]).toEqual([from, lastMaxTime]);
+        }
+      }
+    }, 180000);
+
+    test(`AC #2: a clock stepped back 60 s mid-run ends with the block at the first read that sees the step, never later than the deadline (${shell})`, () => {
+      // The step lands at call 6 (attempt 2's time left) or 8 (attempt 2's deadline check): attempt 2 is the last
+      // post either way, so exactly 2. Before DATA-378 the step moved the deadline out by 60 s (16 posts, 75 s
+      // virtual); without the backwards check the cap ends it at 6.
+      for (const at of [6, 8]) {
+        const fx = virtualClock(shimFixture("waiting", null, { shell }), `[ "$n" -lt ${at} ] || s=$((s - 60))`);
+        const r = fx.run({ APPROVAL_HOOK_WAIT_S: "20" }, BOUND);
+        expectWaitBlock(`${shell} at=${at}`, fx, r, 2);
+        expect(virtualSeconds(fx)).toBe(5);
+      }
+    }, 60000);
+
+    test(`the cap: a clock that stands still (now + 5 s never reaches the deadline) ends after exactly WAIT_S/5 + 2 posts (${shell})`, () => {
+      for (const [wait, cap] of [
+        ["20", 6],
+        ["6", 3],
+      ] as const) {
+        const fx = withClock(shimFixture("waiting", null, { shell }), fixedClock(`${V0_S}.266000000`));
+        const r = fx.run({ APPROVAL_HOOK_WAIT_S: wait }, BOUND);
+        expectWaitBlock(`${shell} WAIT_S=${wait}`, fx, r, cap);
+        expect(fx.log().match(/outcome=wait /g)?.length).toBe(cap - 1);
+      }
+    }, 60000);
+
+    test(`negative control: a clock that works ends at the deadline, not at the cap; WAIT_S=20 posts 4 times as before DATA-378 (${shell})`, () => {
+      const fx = virtualClock(shimFixture("waiting", null, { shell }));
+      const r = fx.run({ APPROVAL_HOOK_WAIT_S: "20" }, BOUND);
+      // Posts at 0, 5, 10 and 15 s; at 15 s, 15 + 5 reaches the 20 s deadline. The cap would be 6.
+      expectWaitBlock(shell, fx, r, 4);
+      expect(elapsed(fx.log())).toEqual([0, 0, 5000, 10000, 15000]);
+      expect(virtualSeconds(fx)).toBe(15);
+    }, 30000);
+
+    test(`negative control at the installed window: WAIT_S=280 ends at the deadline after 56 posts, under the cap of 58 (${shell})`, () => {
+      const fx = virtualClock(shimFixture("waiting", null, { shell }));
+      const r = fx.run({ APPROVAL_HOOK_WAIT_S: "280" }, { timeoutMs: 60000 });
+      expectWaitBlock(shell, fx, r, 56);
+      expect(elapsed(fx.log()).at(-1)).toBe(275000);
+    }, 90000);
+
+    test(`a working clock and a resident who taps: the later allow stands, as before (${shell})`, () => {
+      const fx = virtualClock(shimFixture("wait-then-allow", null, { shell }));
+      const r = fx.run({ APPROVAL_HOOK_WAIT_S: "20" }, BOUND);
+      expect([r.code, r.stdout, r.calls]).toEqual([0, "{}", 3]);
+      expect(elapsed(fx.log())).toEqual([0, 0, 5000, 10000]);
+    }, 30000);
+
+    test(`a clock lost at the first post's P0 and good again after it: a first post that timed out is final, not re-asked (${shell})`, () => {
+      // Refuter S1. Call 3 (attempt 1's P0) fails, so LOST is set and P0 is the last good read (T0). From call 4 the
+      // clock reads 1 s later: the first-timeout check measures NOW - P0 = 1000 ms >= MAX_TIME (1 s) and enters the
+      // branch, where LOST blocks with the transport reason. Without that guard the shim re-asked and the fixture's
+      // second answer (allow) stood: exit 0, 2 posts.
+      const fx = virtualClock(shimFixture("first-timeout", null, { shell }), `[ "$n" -ne 3 ] || exit 1; [ "$n" -lt 4 ] || s=$((s + 1))`);
+      const r = fx.run({ APPROVAL_HOOK_WAIT_S: "8" }, BOUND);
+      expect([r.code, r.calls]).toEqual([2, 1]);
+      expect(JSON.parse(r.stdout).message).toContain("transport failure (curl exit 28");
+      expect(fx.log()).not.toContain("outcome=wait");
+    }, 30000);
+  }
 });
 
 describe("DATA-234 G2: the shim digest the backstop compares", () => {
@@ -2719,4 +2965,373 @@ describe("DATA-234 shim: the co-located facade (token file, loopback listener, u
       expect(r.calls).toBe(0);
     }
   });
+});
+
+// ---------------------------------------------------------------------------
+// DATA-379: the pre-warm after the live fire (and `--prewarm` for the control
+// plane): the live fire's request once more, through the installed shim;
+// labelled source=prewarm, never re-asked, never fatal
+// ---------------------------------------------------------------------------
+
+describe("DATA-379: the pre-warm", () => {
+  /** The facade's refusal of a Hermes terminal call with no workdir, as the core prints it (APRV-415). */
+  const REFUSED = coreBody({
+    exit_code: 2,
+    stdout: hermesBlock("hook-unsupported-execution-context: Hermes terminal states no workdir; set workdir to an absolute path"),
+  });
+  const LOCAL_URL = "http://127.0.0.1:4682";
+  const SHIM_UNREACHABLE = {
+    returncode: 2,
+    stdout: JSON.stringify({ action: "block", message: "approval facade unreachable: transport failure (curl exit 7)" }),
+    parsed: { action: "block", message: "x" },
+    error: null,
+    timed_out: false,
+  };
+  const PREWARM_SENT = "→ approval gate: pre-warm sent (refused by the facade as expected";
+
+  /**
+   * An overlay source tree whose shim is the fixture's copy (fake curl, date, stat), so the real
+   * pre-warm runs the real shim code end to end. The fake curl's first call also keeps the
+   * envelope it posted and the environment it ran in.
+   */
+  function prewarmWorld(mode: string): { fx: ReturnType<typeof shimFixture>; skills: string } {
+    const fx = shimFixture(mode);
+    writeFileSync(join(fx.state, "custom.body"), REFUSED);
+    const skills = scratch("av-approval-prewarm-skills-");
+    cpSync(join(SOURCE_SKILLS, "approval"), join(skills, "approval"), { recursive: true });
+    writeFileSync(join(skills, "approval", "scripts", "hermes-hook-shim.sh"), readFileSync(join(fx.root, "hermes-hook-shim.sh")));
+    writeFileSync(
+      join(fx.state, "after.1"),
+      `f=$(grep '^@' '${fx.state}/argv.1' | head -n 1)\ncp "\${f#@}" '${fx.state}/envelope.1'\nenv > '${fx.state}/env.1'\n`,
+    );
+    return { fx, skills };
+  }
+  const hookLog = (home: string) => {
+    const path = join(home, "agent-hooks", "approval-hook.log");
+    return existsSync(path) ? readFileSync(path, "utf8") : "";
+  };
+  const calls = (fx: ReturnType<typeof shimFixture>) =>
+    existsSync(join(fx.state, "count")) ? Number(readFileSync(join(fx.state, "count"), "utf8")) : 0;
+  const prewarmLines = (lines: string[]) => lines.filter((l) => l.includes("pre-warm"));
+
+  test("after a live fire the facade answered, the install sends ONE pre-warm through the installed shim: the live fire's request, every log line source=prewarm, nothing else written", () => {
+    const { fx, skills } = prewarmWorld("custom");
+    const home = tenant();
+    fakeHermes();
+    // The default (no stub): what install.ts runs.
+    expect(installApproval(skills, opts({ prewarm: undefined }))).toBe("installed");
+    expect(calls(fx)).toBe(1);
+    // The request is the live fire's: terminal, no workdir (refused before the policy decision, appends nothing).
+    const envelope = JSON.parse(readFileSync(join(fx.state, "envelope.1"), "utf8"));
+    expect(envelope).toMatchObject({ hook_event_name: "pre_tool_call", tool_name: "terminal", session_id: PREWARM_SESSION });
+    expect(envelope.tool_input).toEqual({ command: "ls /tmp" });
+    // The shim got the pre-warm's fixed settings and only the names it reads from .env.
+    const env = readFileSync(join(fx.state, "env.1"), "utf8");
+    expect(env).toContain("APPROVAL_HOOK_SOURCE=prewarm\n");
+    expect(env).toContain("APPROVAL_HOOK_WAIT_S=0\n");
+    expect(env).toContain(`APPROVAL_HOOK_MAX_TIME=${PREWARM_MAX_TIME_S}\n`);
+    expect(PREWARM_MAX_TIME_S).toBe(10);
+    for (const foreign of ["AV_EVENTS_TOKEN", "FAKE_HERMES_STATE", "PYTHONPATH"]) expect(env).not.toContain(foreign);
+    // The shim log: the pre-warm's lines only (the fake Hermes's live fire runs no shim), each labelled.
+    const lines = hookLog(home).trim().split("\n");
+    expect(lines.length).toBeGreaterThanOrEqual(2);
+    for (const line of lines) expect(line).toMatch(/ source=prewarm elapsed_ms=\d+$/);
+    expect(lines[0]).toContain(" start tool=terminal");
+    expect(lines.at(-1)).toContain(" outcome=block http=200 exit=2 code=hook-unsupported-execution-context tool=terminal attempt=1 path=fast source=prewarm elapsed_ms=");
+    // One receipt line on stdout, before the step's own last line; nothing on stderr.
+    expect(prewarmLines(logs)).toHaveLength(1);
+    expect(prewarmLines(logs)[0]).toStartWith(PREWARM_SENT);
+    expect(logs.at(-1)).toContain("approval gate installed: 35 pre_tool_call entries (fail_closed)");
+    expect(prewarmLines(errors)).toEqual([]);
+    expect([...logs, ...errors, hookLog(home)].join("\n")).not.toContain(TOKEN);
+
+    // A second pre-warm (the control plane's `--prewarm`) writes nothing but the log either.
+    const before = { files: bytes(home), marker: readFileSync(approvalSurfacePath(), "utf8"), dir: readdirSync(join(home, "agent-hooks")).sort() };
+    expect(prewarmApproval()).toMatchObject({ outcome: "facade-block", reason: null });
+    expect(calls(fx)).toBe(2);
+    expect({ files: bytes(home), marker: readFileSync(approvalSurfacePath(), "utf8"), dir: readdirSync(join(home, "agent-hooks")).sort() }).toEqual(before);
+    expect(before.dir).toEqual(["approval-hook.log", "approval-surface.json", "hermes-hook-shim.sh"]);
+  }, 120_000);
+
+  test("runs once per install after a passing live fire; never after a failed or deferred one, nor with the gate unset or off", () => {
+    tenant();
+    fakeHermes();
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+    expect(prewarmCalls).toBe(1);
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+    expect(prewarmCalls).toBe(2);
+
+    // A failed live fire: the step fails, nothing is pre-warmed.
+    prewarmCalls = 0;
+    tenant();
+    fakeHermes({ run_once: { returncode: 0, stdout: "{}", parsed: null, error: null, timed_out: false } });
+    failsWith("live-call-allowed");
+    tenant();
+    fakeHermes({ run_once: SHIM_UNREACHABLE });
+    failsWith("live-facade-unreachable");
+    tenant();
+    fakeHermes();
+    expect(() => installApproval(SOURCE_SKILLS, opts({ hermesPython: null }))).toThrow();
+    expect(prewarmCalls).toBe(0);
+
+    // A deferred live fire (a local facade that did not answer): installed, not pre-warmed, and said so.
+    tenant({ env: { AV_APPROVAL_ENABLED: "1", AV_APPROVAL_URL: LOCAL_URL, AV_APPROVAL_TOKEN: TOKEN, TENANT_ID: TENANT } });
+    fakeHermes({ run_once: SHIM_UNREACHABLE });
+    logs = [];
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+    expect(prewarmCalls).toBe(0);
+    expect(prewarmLines(logs)).toEqual(["→ approval gate: pre-warm not run (the live self-check was deferred)"]);
+    expect(logs.at(-1)).toContain("self-check passed (live: deferred, live-facade-unreachable)");
+
+    // Unset and off never reach the live fire.
+    tenant({ env: {} });
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("skipped");
+    tenant({ env: { AV_APPROVAL_ENABLED: "0" } });
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("disabled");
+    expect(prewarmCalls).toBe(0);
+  });
+
+  test(`${PREWARM_ENV}=0 (or false, no, off; process environment first, then .env) skips it, and says so`, () => {
+    for (const off of ["0", "false", "No", " OFF "]) {
+      tenant();
+      fakeHermes();
+      process.env[PREWARM_ENV] = off;
+      logs = [];
+      expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+      expect(prewarmLines(logs)).toEqual([`→ approval gate: pre-warm skipped (${PREWARM_ENV} is off)`]);
+      expect(logs.at(-1)).toContain("approval gate installed");
+    }
+    expect(prewarmCalls).toBe(0);
+    expect(prewarmApproval()).toEqual({ outcome: "skipped", reason: "opted-out", elapsed_ms: null });
+    logs = [];
+    expect(prewarmCli(["--prewarm"])).toBe(0);
+    expect(JSON.parse(logs.at(-1)!)).toEqual({ prewarm: "av-approval", outcome: "skipped", reason: "opted-out", elapsed_ms: null });
+
+    delete process.env[PREWARM_ENV];
+    const home = tenant();
+    appendEnv(home, `${PREWARM_ENV}=off`);
+    fakeHermes();
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+    expect(prewarmCalls).toBe(0);
+    // Any other value runs it; the process environment is read before .env, as AV_DISPLAY_DEFAULTS is.
+    process.env[PREWARM_ENV] = "1";
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+    expect(prewarmCalls).toBe(1);
+  });
+
+  test("a failure is logged (one stderr line) and ignored: daemon down, an error answer, a throw, a hang, no shim; the install stands and --check is unchanged", () => {
+    const { fx, skills } = prewarmWorld("unreachable");
+    const home = tenant();
+    fakeHermes();
+    const o = opts();
+    expect(installApproval(skills, o)).toBe("installed");
+    logs = [];
+    expect(checkCli(["--check"], o)).toBe(0);
+    const check = logs.at(-1);
+
+    // Daemon down (curl exit 7): the shim's own block, labelled; the step still succeeds.
+    logs = [];
+    errors = [];
+    expect(runApprovalStep(skills, opts({ prewarm: undefined }))).toBe(true);
+    expect(calls(fx)).toBe(1);
+    expect(prewarmLines(errors)).toEqual(["! approval gate: pre-warm shim-block; ignored, the install does not depend on it"]);
+    expect(prewarmLines(logs)).toEqual([]);
+    expect(logs.at(-1)).toContain("approval gate installed");
+    expect(hookLog(home)).toMatch(/outcome=block-shim reason="transport failure \(curl exit 7[^\n]* source=prewarm elapsed_ms=\d+\n$/);
+    expect(ourEntries(home)).toHaveLength(APPROVAL_GATED_TOOLS.length);
+    logs = [];
+    expect(checkCli(["--check"], o)).toBe(0);
+    expect(logs.at(-1)).toBe(check);
+
+    // The facade answering an error status: the same.
+    writeFileSync(join(fx.state, "mode"), "http503");
+    errors = [];
+    expect(prewarmAfterInstall({ prewarm: undefined })).toMatchObject({ outcome: "shim-block" });
+    expect(prewarmLines(errors)).toEqual(["! approval gate: pre-warm shim-block; ignored, the install does not depend on it"]);
+
+    // A pre-warm that throws: reported by name, the install stands (nothing rolled back).
+    errors = [];
+    expect(
+      installApproval(SOURCE_SKILLS, opts({ prewarm: () => { throw new TypeError("boom"); } })),
+    ).toBe("installed");
+    expect(prewarmLines(errors)).toEqual(["! approval gate: pre-warm error (TypeError); ignored, the install does not depend on it"]);
+    expect(ourEntries(home)).toHaveLength(APPROVAL_GATED_TOOLS.length);
+    expect(errors.join("\n")).not.toContain("boom");
+
+    // A facade that hangs is cut at the bound.
+    installApproval(skills, o);
+    writeFileSync(join(fx.state, "mode"), "first-timeout");
+    rmSync(join(fx.state, "count"), { force: true });
+    expect(prewarmApproval({ timeoutMs: 400 })).toMatchObject({ outcome: "error", reason: "timed-out" });
+
+    // No shim, or one that cannot run: skipped, exit 0, said on stderr by the install's call.
+    chmodSync(approvalShimPath(), 0o600);
+    expect(prewarmApproval()).toEqual({ outcome: "skipped", reason: "shim-not-executable", elapsed_ms: null });
+    rmSync(approvalShimPath());
+    logs = [];
+    expect(prewarmCli(["--prewarm"])).toBe(0);
+    expect(JSON.parse(logs.at(-1)!)).toEqual({ prewarm: "av-approval", outcome: "skipped", reason: "shim-missing", elapsed_ms: null });
+    errors = [];
+    prewarmAfterInstall({ prewarm: undefined });
+    expect(prewarmLines(errors)).toEqual(["! approval gate: pre-warm skipped (shim-missing); ignored, the install does not depend on it"]);
+
+    // The gate off: nothing to warm.
+    tenant({ env: {} });
+    expect(prewarmApproval()).toEqual({ outcome: "skipped", reason: "approval-not-enabled", elapsed_ms: null });
+  }, 120_000);
+
+  test("a hook-timeout answer is not waited on: one post, no outcome=wait line, although .env sets a 280 s window", () => {
+    const { fx, skills } = prewarmWorld("waiting");
+    const home = tenant();
+    fakeHermes();
+    expect(installApproval(skills, opts())).toBe("installed");
+    expect(readFileSync(join(home, ".env"), "utf8")).toContain("APPROVAL_HOOK_WAIT_S=280");
+    // Another code than the live fire's: reported, still nothing acted on.
+    expect(prewarmApproval()).toMatchObject({ outcome: "facade-block", reason: "code-not-matched" });
+    expect(calls(fx)).toBe(1);
+    expect(hookLog(home)).not.toContain("outcome=wait");
+    expect(hookLog(home)).toContain("outcome=block");
+  }, 120_000);
+
+  test("fix round 1 (S1): a live fire blocked with ANOTHER code (a core that decided it) passes the install but is not repeated", () => {
+    for (const message of ["approval-rejected: the policy denies terminal ls /tmp", "hook-policy-unavailable: no policy"]) {
+      tenant();
+      fakeHermes({ run_once: { ...FACADE_BLOCK, stdout: JSON.stringify({ action: "block", message }), parsed: { action: "block", message } } });
+      logs = [];
+      errors = [];
+      expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+      expect(prewarmCalls).toBe(0);
+      expect(prewarmLines(logs)).toEqual(["→ approval gate: pre-warm not run (the live fire was decided, not refused)"]);
+      expect(prewarmLines(errors)).toEqual([]);
+      expect(logs.at(-1)).toContain("self-check passed (live: blocked by the facade)");
+    }
+    // The expected refusal still pre-warms (the control case of the same fixture).
+    tenant();
+    fakeHermes();
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+    expect(prewarmCalls).toBe(1);
+  });
+
+  test("fix round 1 (S2): the default spawn bound is 15 s and the default path uses it (a facade that answers after 20 s is cut, timed-out)", () => {
+    expect(PREWARM_TIMEOUT_MS).toBe(15_000);
+    const { fx, skills } = prewarmWorld("custom");
+    tenant();
+    fakeHermes();
+    expect(installApproval(skills, opts())).toBe("installed");
+    // The fake curl answers the expected refusal, but only after 20 s (above the bound, below the test's own).
+    writeFileSync(join(fx.state, "after.1"), "/bin/sleep 20\n");
+    const t0 = performance.now();
+    const r = prewarmApproval();
+    const took = performance.now() - t0;
+    expect(r).toMatchObject({ outcome: "error", reason: "timed-out" });
+    expect(took).toBeGreaterThanOrEqual(PREWARM_TIMEOUT_MS - 500);
+    // No upper bound here: the bound kills the shim, and spawnSync then waits for its pipes, which the
+    // fake curl (a grandchild, sleeping 20 s) still holds. A real curl holds them at most its own
+    // --max-time (APPROVAL_HOOK_MAX_TIME=10, asserted in the first test).
+  }, 120_000);
+
+  test("the shim's label: only the exact word prewarm; any other value adds nothing and no run's verdict changes", () => {
+    const plain = shimFixture("allow");
+    const p = plain.run();
+    expect(plain.log()).not.toContain("source=");
+    const labelled = shimFixture("allow");
+    const l = labelled.run({ APPROVAL_HOOK_SOURCE: "prewarm" });
+    for (const line of labelled.log().trim().split("\n")) expect(line).toMatch(/ source=prewarm elapsed_ms=\d+$/);
+    for (const forgedValue of ["prewarm elapsed_ms=0", "Prewarm", "prewarm\n", "resident"]) {
+      const forged = shimFixture("allow");
+      const f = forged.run({ APPROVAL_HOOK_SOURCE: forgedValue });
+      expect([forgedValue, forged.log().includes("source=")]).toEqual([forgedValue, false]);
+      expect([f.code, f.stdout, f.calls]).toEqual([p.code, p.stdout, p.calls]);
+    }
+    expect([l.code, l.stdout, l.calls]).toEqual([p.code, p.stdout, p.calls]);
+  }, 120_000);
+
+  test("the command line: --check is unchanged, --prewarm takes no argument, anything else is the usage", () => {
+    tenant({ env: {} });
+    expect(mainCli(["--prewarm", "x"])).toBe(2);
+    expect(mainCli([])).toBe(2);
+    expect(mainCli(["--bogus"])).toBe(2);
+    logs = [];
+    expect(mainCli(["--prewarm"])).toBe(0);
+    expect(JSON.parse(logs.at(-1)!)).toEqual({ prewarm: "av-approval", outcome: "skipped", reason: "approval-not-enabled", elapsed_ms: null });
+    logs = [];
+    expect(mainCli(["--check"])).toBe(1);
+    expect(JSON.parse(logs.at(-1)!).problems).toEqual(["approval-not-enabled"]);
+    expect(checkCli(["--prewarm"])).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DATA-424: the facade URL and credential checks are locale-independent.
+// They used `[![:print:]]`, which follows the hook's locale: under a UTF-8
+// locale a valid multibyte character such as 'é' (c3 a9) passed, under C it
+// was refused. Ruling (the lead in Carter's absence, CLAIMS SWEEP-L44,
+// 2026-10-09 11:40Z): ASCII-only. Each value must be bytes 0x21-0x7E with no
+// `"` or `\`, whatever LC_ALL the shim inherits. Fix round 1 (the refuter's
+// SHOULD-1): the 92 allowed characters are spelled out in the pattern, with no
+// range, no class and no LC_ALL, so CI's dash and bash 5 pin the same contract
+// as the Mac's bash 3.2. A pass case holds all 92, so dropping any one fails.
+// ---------------------------------------------------------------------------
+
+/** The installed locales among C.UTF-8 (always run) and en_US.UTF-8, as `locale -a` names them. */
+function data424Locales(): string[] {
+  const have = Bun.spawnSync(["locale", "-a"]).stdout.toString().split("\n").map((l) => l.trim().toLowerCase().replace("-", ""));
+  return ["C", "C.UTF-8", ...(have.includes("en_us.utf8") ? ["en_US.UTF-8"] : [])];
+}
+
+describe("DATA-424: the shim's facade URL and credential checks are printable ASCII under every locale", () => {
+  const shells = data380Shells(["/bin/sh", "/bin/dash", "/bin/bash", ...(process.env.AV_SHIM_SHELL ? [process.env.AV_SHIM_SHELL] : [])]);
+  const locales = data424Locales();
+  const URL_BLOCK = `${JSON.stringify({ action: "block", message: "approval facade unreachable: the facade URL contains a character a URL cannot" })}\n`;
+  const TOKEN_BLOCK = `${JSON.stringify({
+    action: "block",
+    message: "approval facade unreachable: the facade credential contains a character a credential cannot",
+  })}\n`;
+  // [name, the bytes as a printf format]: each refused in the URL and in the credential.
+  const refused: [string, string][] = [
+    ["é (c3 a9)", "x\\303\\251y"],
+    ["tab", "x\\ty"],
+    ["space", "x y"],
+    ["double quote", 'x\\"y'],
+    ["backslash", "x\\\\y"],
+    ["DEL (7f)", "x\\177y"],
+    ["0x80", "x\\200y"],
+    ["CR", "x\\ry"],
+    ["LF", "x\\ny"],
+    ["VT", "x\\vy"],
+    ["FF", "x\\fy"],
+  ];
+  // Every byte the check allows: 0x21-0x7E less `"` and `\`, 92 characters.
+  const ALLOWED = Array.from({ length: 0x7e - 0x21 + 1 }, (_, i) => String.fromCharCode(0x21 + i))
+    .filter((c) => c !== '"' && c !== "\\")
+    .join("");
+
+  test("the allowed set is 92 characters", () => {
+    expect(ALLOWED.length).toBe(92);
+  });
+
+  // One test per shell and locale: each runs the shim 25 times.
+  for (const shell of shells)
+    for (const lc of locales)
+      test(`${shell}, LC_ALL=${lc}: a URL or credential holding é, tab, space, quote, backslash, DEL, 0x80, CR, LF, VT or FF is refused with the existing block message; plain ASCII passes, all 92 allowed characters included`, () => {
+        for (const [name, fmt] of refused) {
+          const u = shimFixture("allow", null, { shell }).run({ LC_ALL: lc }, { printf: { AV_APPROVAL_URL: `${URL}/${fmt}` } });
+          expect(["url", name, u.code, u.calls, u.stdout]).toEqual(["url", name, 2, 0, URL_BLOCK]);
+          expect(u.stderr).not.toContain("setlocale");
+          const t = shimFixture("allow", null, { shell }).run({ LC_ALL: lc }, { printf: { AV_APPROVAL_TOKEN: `${TOKEN}${fmt}` } });
+          expect(["token", name, t.code, t.calls, t.stdout]).toEqual(["token", name, 2, 0, TOKEN_BLOCK]);
+          expect(t.stderr).not.toContain("setlocale");
+        }
+        for (const [url, token] of [
+          [URL, TOKEN],
+          [`${URL}/~a!b`, `${TOKEN}!~`],
+          [`${URL}/${ALLOWED}`, ALLOWED],
+        ]) {
+          const r = shimFixture("allow", null, { shell }).run({ LC_ALL: lc, AV_APPROVAL_URL: url, AV_APPROVAL_TOKEN: token });
+          expect([url, r.code, r.calls, r.stdout]).toEqual([url, 0, 1, "{}"]);
+          expect(r.argv[0].trim().split("\n").at(-1)).toBe(`${url}/hook/hermes`);
+          expect(r.stdin[0]).toBe(`header = "X-Approval-Authorization: Bearer ${token}"\n`);
+          expect(r.stderr).not.toContain("setlocale");
+        }
+      });
 });

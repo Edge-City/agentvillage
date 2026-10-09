@@ -490,14 +490,16 @@ describe("one welcome per tenant", () => {
  * the agent both streams and the agent sends the output verbatim.
  */
 describe("the --draft trailer: one stderr line naming the branch, never text; nothing on stderr by default", () => {
-  const TRAILER = /^\{"welcome":1,"fallback":"(none|questions|unreachable)","intents_listed":[0-3]\}$/;
+  const TRAILER = /^\{"welcome":1,"fallback":"(none|questions|unreachable)","intents_listed":[0-3],"intents_seeded":[0-3],"seed_failed":[0-3]\}$/;
+  /** DATA-412: no seed attempted. */
+  const S0 = { intents_seeded: 0, seed_failed: 0 };
   const BRANCHES: Array<[keyof typeof golden, string | null, unknown[] | null, WelcomeBranch]> = [
-    ["three", "Mira", [MEMORY, DINNER, SURF], { fallback: "none", intents_listed: 3 }],
-    ["moreThanThree", "Mira", [MEMORY, DINNER, SURF, KONKANI], { fallback: "none", intents_listed: 3 }],
-    ["two", null, [MEMORY, DINNER], { fallback: "none", intents_listed: 2 }],
-    ["one", "Mira", [MEMORY], { fallback: "none", intents_listed: 1 }],
-    ["zero", null, [], { fallback: "questions", intents_listed: 0 }],
-    ["unreachable", null, null, { fallback: "unreachable", intents_listed: 0 }],
+    ["three", "Mira", [MEMORY, DINNER, SURF], { fallback: "none", intents_listed: 3, ...S0 }],
+    ["moreThanThree", "Mira", [MEMORY, DINNER, SURF, KONKANI], { fallback: "none", intents_listed: 3, ...S0 }],
+    ["two", null, [MEMORY, DINNER], { fallback: "none", intents_listed: 2, ...S0 }],
+    ["one", "Mira", [MEMORY], { fallback: "none", intents_listed: 1, ...S0 }],
+    ["zero", null, [], { fallback: "questions", intents_listed: 0, ...S0 }],
+    ["unreachable", null, null, { fallback: "unreachable", intents_listed: 0, ...S0 }],
   ];
 
   /** main() with captured streams, against the fake Index (rows null: no key). */
@@ -533,10 +535,13 @@ describe("the --draft trailer: one stderr line naming the branch, never text; no
     }
   });
 
-  test("the trailer is exactly the contract: welcome 1, the branch, the count, in that key order, nothing else", () => {
-    expect(draftTrailer({ fallback: "none", intents_listed: 2 })).toBe('{"welcome":1,"fallback":"none","intents_listed":2}');
-    expect(draftTrailer({ fallback: "questions", intents_listed: 0 })).toBe('{"welcome":1,"fallback":"questions","intents_listed":0}');
-    expect(draftTrailer({ fallback: "unreachable", intents_listed: 0 })).toBe('{"welcome":1,"fallback":"unreachable","intents_listed":0}');
+  test("the trailer is exactly the contract: welcome 1, the branch, the count, the seed's two counts, in that key order, nothing else", () => {
+    expect(draftTrailer({ fallback: "none", intents_listed: 2, ...S0 })).toBe('{"welcome":1,"fallback":"none","intents_listed":2,"intents_seeded":0,"seed_failed":0}');
+    expect(draftTrailer({ fallback: "questions", intents_listed: 0, ...S0 })).toBe('{"welcome":1,"fallback":"questions","intents_listed":0,"intents_seeded":0,"seed_failed":0}');
+    expect(draftTrailer({ fallback: "unreachable", intents_listed: 0, ...S0 })).toBe('{"welcome":1,"fallback":"unreachable","intents_listed":0,"intents_seeded":0,"seed_failed":0}');
+    expect(draftTrailer({ fallback: "none", intents_listed: 3, intents_seeded: 2, seed_failed: 1 })).toBe(
+      '{"welcome":1,"fallback":"none","intents_listed":3,"intents_seeded":2,"seed_failed":1}',
+    );
   });
 
   for (const [key, nickname, rows, branch] of BRANCHES) {
@@ -575,7 +580,7 @@ describe("the --draft trailer: one stderr line naming the branch, never text; no
     };
     const draft = await captured(null, ["--draft"], boom);
     expect(draft.stdout).toBe(`${golden.unreachable}\n`);
-    expect(draft.stderr).toBe('{"welcome":1,"fallback":"unreachable","intents_listed":0}\n');
+    expect(draft.stderr).toBe('{"welcome":1,"fallback":"unreachable","intents_listed":0,"intents_seeded":0,"seed_failed":0}\n');
     const plain = await captured(null, [], boom);
     expect(plain).toEqual({ stdout: `${golden.unreachable}\n`, stderr: "" });
   });
@@ -597,9 +602,9 @@ describe("the --draft trailer: one stderr line naming the branch, never text; no
         return { stdout, stderr, code };
       };
       const cases: Array<[keyof typeof golden, unknown[] | null, WelcomeBranch]> = [
-        ["two", [MEMORY, DINNER], { fallback: "none", intents_listed: 2 }],
-        ["zero", [], { fallback: "questions", intents_listed: 0 }],
-        ["unreachable", null, { fallback: "unreachable", intents_listed: 0 }],
+        ["two", [MEMORY, DINNER], { fallback: "none", intents_listed: 2, ...S0 }],
+        ["zero", [], { fallback: "questions", intents_listed: 0, ...S0 }],
+        ["unreachable", null, { fallback: "unreachable", intents_listed: 0, ...S0 }],
       ];
       for (const [key, r, branch] of cases) {
         rows = r ?? [];
@@ -646,6 +651,8 @@ describe("the AGENTS.md welcome gate", () => {
       expect(flat).toContain("Do not add `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty`");
       expect(flat).not.toMatch(/exactly `command` and nothing else/);
     }
+    // DATA-416: the first welcome's run may take up to WELCOME_BUDGET_MS (50 s) of Index calls.
+    expect(gate.replace(/\s+/g, " ")).toContain("it finishes within a minute on the first welcome and in a few seconds after that.");
     // The fallback's marker write is a file tool call, which the same gate refuses with a relative path.
     expect(gate.replace(/\s+/g, " ")).toContain("write `memory/welcome-state.json` under your `HERMES_HOME` (give the file tool its absolute path)");
   });
@@ -664,11 +671,18 @@ describe("the AGENTS.md welcome gate", () => {
     expect(copy).toBe(golden.unreachable);
   });
 
-  test("the welcome never publishes: the gate forbids it and the script calls only list_intents", () => {
-    expect(gate).toContain("Never create, publish or change an intent as part of the welcome");
+  test("the agent never writes an intent as part of the welcome; the script's seed (DATA-412) is the only write, and only list, create and pause", () => {
+    const flat = gate.replace(/\s+/g, " ");
+    expect(flat).toContain(
+      "The welcome script seeds intents from the resident's signup selections on the first welcome (the script does it, once per box); you, the agent, still never call an intent tool or record an intention as part of the welcome; later turns capture new wants as the \"Intentions\" red line says.",
+    );
+    expect(flat).toContain("(on the first welcome it also seeds intents from the selections the resident made at signup and reads them again: the script does that, once per box, never you)");
+    expect(flat).not.toContain("it never creates or changes one");
+    // The gate names no intent tool: AGENTS.md speaks of them only on its one record_intention line (av-events test_index_contract.py, test_record_intention.py).
+    expect(gate).not.toMatch(/create_intent|record_intention/);
     const source = readFileSync(SCRIPT, "utf8");
-    expect(source.match(/callIndexTool\(/g)).toHaveLength(1);
-    expect(source).toContain('"list_intents",');
-    expect(source).not.toMatch(/create_intent|update_intent|record_intention|"archive_intent"/);
+    expect(source.match(/callIndexTool\(/g)).toHaveLength(3);
+    expect([...source.matchAll(/callIndexTool\(\w+, "(\w+)"/g)].map((m) => m[1])).toEqual(["list_intents", "create_intent", "pause_intent"]);
+    expect(source).not.toMatch(/update_intent|record_intention|archive_intent|resume_intent/);
   });
 });

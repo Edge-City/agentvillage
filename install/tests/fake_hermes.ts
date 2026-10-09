@@ -22,8 +22,15 @@
  * - `pause` clears `enabled`, sets `state: paused` and `paused_at`, and keeps
  *   `next_run_at`; `resume` keeps a `next_run_at` already due (so the next
  *   tick fires it, :2080-2105) and recomputes a future one;
- * - a script must exist under `$HERMES_HOME/scripts/`.
+ * - a script must exist under `$HERMES_HOME/scripts/`;
+ * - `cron create --paused [--paused-reason <text>]` stores the job disabled
+ *   in the one write: `enabled: false`, `state: paused`, `paused_at`, the
+ *   reason (Hermes's default when none), `next_run_at: null` (:1827-1832).
  * Test switches: FAKE_HERMES_FAIL=<sub> exits 1 before acting;
+ * FAKE_HERMES_NOOP=<sub> exits 0 without acting (a CLI that says done and
+ * saved nothing); FAKE_HERMES_PAUSED=refuse exits 2 on `--paused` as a Hermes
+ * before v2026.9.11 does (argparse: unrecognized arguments), and
+ * FAKE_HERMES_PAUSED=ignore creates the job running despite it;
  * FAKE_HERMES_HANG=<sub> hangs before acting, and FAKE_HERMES_HANG_AFTER=<sub>
  * hangs after saving (each writes its pid to `$HERMES_HOME/hermes-hang.pid`),
  * as a hung CLI would, until it is killed.
@@ -98,10 +105,17 @@ const jobs = load();
 if (process.env.FAKE_HERMES_FAIL && process.env.FAKE_HERMES_FAIL === sub) fail(`forced failure of ${sub}`);
 if (process.env.FAKE_HERMES_HANG && process.env.FAKE_HERMES_HANG === sub) await hang();
 const hangAfter = process.env.FAKE_HERMES_HANG_AFTER === sub;
+if (process.env.FAKE_HERMES_NOOP && process.env.FAKE_HERMES_NOOP === sub) process.exit(0);
 
 if (sub === "create") {
   const [scheduleText, prompt, ...flags] = rest;
   const script = flag(flags, "--script");
+  if (flags.includes("--paused") && process.env.FAKE_HERMES_PAUSED === "refuse") {
+    process.stderr.write("hermes: error: unrecognized arguments: --paused\n");
+    process.exit(2);
+  }
+  if (flags.includes("--paused-reason") && !flags.includes("--paused")) fail("paused_reason requires paused=True.");
+  const paused = flags.includes("--paused") && process.env.FAKE_HERMES_PAUSED !== "ignore";
   checkScript(script);
   const { schedule, next } = parseSchedule(scheduleText ?? "");
   const job: Job = {
@@ -109,10 +123,11 @@ if (sub === "create") {
     name: flag(flags, "--name") ?? "unnamed",
     prompt: (prompt ?? "").trim(),
     schedule,
-    enabled: true,
-    state: "scheduled",
+    enabled: !paused,
+    state: paused ? "paused" : "scheduled",
     created_at: new Date().toISOString(),
-    next_run_at: next,
+    next_run_at: paused ? null : next,
+    ...(paused ? { paused_at: new Date().toISOString(), paused_reason: flag(flags, "--paused-reason") ?? "Created paused; awaiting operator approval." } : {}),
     ...(flag(flags, "--deliver") ? { deliver: flag(flags, "--deliver") } : {}),
     ...(flag(flags, "--failure-deliver") ? { failure_deliver: flag(flags, "--failure-deliver") } : {}),
     ...(script ? { script } : {}),
@@ -150,7 +165,7 @@ if (sub === "edit") {
   const stored = typeof job.next_run_at === "string" ? Date.parse(job.next_run_at) : NaN;
   const due = Number.isFinite(stored) && stored <= Date.now();
   const expr = (job.schedule as { expr?: string } | undefined)?.expr ?? "";
-  Object.assign(job, { enabled: true, state: "scheduled", paused_at: null, next_run_at: due ? job.next_run_at : parseSchedule(expr).next });
+  Object.assign(job, { enabled: true, state: "scheduled", paused_at: null, paused_reason: null, next_run_at: due ? job.next_run_at : parseSchedule(expr).next });
 } else if (sub === "remove") {
   jobs.splice(jobs.indexOf(job), 1);
 } else {

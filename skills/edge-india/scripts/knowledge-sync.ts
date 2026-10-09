@@ -96,11 +96,20 @@
  * (404), the fallback: a document whose manifest `hash` changed but whose
  * fetched bytes equal the stored copy is `incomplete` (`stale-document`).
  *
+ * After the swap (`ok`), and after an `unchanged` run only when
+ * `knowledge/index.md` is missing, it regenerates `knowledge/index.md` through
+ * `install/knowledge-index.ts` (CX1), loaded from the overlay checkout the
+ * control plane keeps at `$HERMES_HOME/edge-src`, or from the checkout this
+ * script runs in. The outcome is the line's `index` field (`written`,
+ * `unchanged`, `no-knowledge-dir`, `not-a-directory`, `unavailable` when the
+ * module is not there, `failed` when it threw); it never fails the run.
+ *
  * What it says: one line per run in `$HERMES_HOME/av-events/knowledge/sync.jsonl`
  * (`{v, event: "knowledge_sync", status, reason, files, bytes, sha256,
  * fetched_at}` where `fetched_at` is the run's time, plus `path` on
- * `incomplete`; codes, counts and that manifest path only, never a URL or any
- * text; rotated to `.1` at 1 MB), then on stdout the wake line
+ * `incomplete` and `index` when the index step ran; codes, counts and that
+ * manifest path only, never a URL or any text; rotated to `.1` at 1 MB), then
+ * on stdout the wake line
  * `{"wakeAgent": false, ...}`, so Hermes delivers nothing. Exit 1 on `failed`
  * and `incomplete` (Hermes records the failure and notifies the job's failure
  * target, `local`); 0 on `ok`, `unchanged`, `unconfigured` and `skipped` (a run
@@ -109,7 +118,7 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, isAbsolute } from "node:path";
 
 export const SET_NAME = "edge-india";
 export const STATE_FILE = "_sync.json";
@@ -149,6 +158,8 @@ export interface SyncResult {
   fetched_at: string;
   /** `incomplete` only: the manifest path of the stale document. */
   path?: string;
+  /** The `knowledge/index.md` step's outcome, when it ran (never fails the run). */
+  index?: string;
 }
 
 /** The job's exit code: a failure for Hermes only when the run failed or must be retried. */
@@ -166,6 +177,8 @@ export interface SyncOptions {
   runBudgetMs?: number;
   fileCapBytes?: number;
   totalCapBytes?: number;
+  /** Stand-in for install/knowledge-index.ts's `regenerateKnowledgeIndex` (tests); null: the module is not there. */
+  knowledgeIndex?: ((home: string) => unknown) | null;
 }
 
 interface SyncState {
@@ -788,6 +801,57 @@ async function sync(options: SyncOptions, fetchedAt: string): Promise<SyncResult
   }
 }
 
+// ── knowledge/index.md (CX1) ────────────────────────────────────────────────
+
+/**
+ * Where install/knowledge-index.ts may be: the overlay checkout the control
+ * plane keeps at `$HERMES_HOME/edge-src`, then the checkout this script runs
+ * in (`skills/edge-india/scripts/` → `install/`), the latter only when this
+ * script is not the copy installed under `$HERMES_HOME/skills/`.
+ */
+export function knowledgeIndexCandidates(home: string, scriptDir: string = import.meta.dir): string[] {
+  const out = [join(home, "edge-src", "install", "knowledge-index.ts")];
+  const rel = relative(join(home, "skills"), scriptDir);
+  const installedCopy = rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  if (!installedCopy) out.push(join(scriptDir, "..", "..", "..", "install", "knowledge-index.ts"));
+  return out;
+}
+
+async function loadKnowledgeIndex(home: string): Promise<((home: string) => unknown) | null> {
+  for (const path of knowledgeIndexCandidates(home)) {
+    try {
+      if (!lstatSync(path).isFile()) continue;
+    } catch {
+      continue;
+    }
+    const mod = (await import(path)) as { regenerateKnowledgeIndex?: unknown };
+    if (typeof mod.regenerateKnowledgeIndex === "function") return mod.regenerateKnowledgeIndex as (home: string) => unknown;
+  }
+  return null;
+}
+
+/** Regenerate `knowledge/index.md`; the outcome as a short code. Never throws. */
+export async function refreshKnowledgeIndex(options: SyncOptions): Promise<string> {
+  try {
+    const regenerate = options.knowledgeIndex !== undefined ? options.knowledgeIndex : await loadKnowledgeIndex(options.home);
+    if (!regenerate) return "unavailable";
+    const outcome = (await regenerate(options.home)) as { status?: unknown } | null;
+    const status = outcome && typeof outcome === "object" ? outcome.status : undefined;
+    return typeof status === "string" && /^[a-z-]{1,32}$/.test(status) ? status : "failed";
+  } catch {
+    return "failed";
+  }
+}
+
+function indexMissing(home: string): boolean {
+  try {
+    lstatSync(join(knowledgeDir(home), "index.md"));
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 /** One sync run, logged. Never throws. */
 export async function runKnowledgeSync(options: SyncOptions): Promise<SyncResult> {
   const fetchedAt = (options.now ?? (() => new Date()))().toISOString();
@@ -796,6 +860,10 @@ export async function runKnowledgeSync(options: SyncOptions): Promise<SyncResult
     result = await sync(options, fetchedAt);
   } catch {
     result = { status: "failed", reason: "error", files: 0, bytes: 0, sha256: null, fetched_at: fetchedAt };
+  }
+  // After a swap; after an unchanged run only when the index is missing. Never changes the status.
+  if (result.status === "ok" || (result.status === "unchanged" && indexMissing(options.home))) {
+    result.index = await refreshKnowledgeIndex(options);
   }
   appendSyncLog(options.home, result);
   return result;

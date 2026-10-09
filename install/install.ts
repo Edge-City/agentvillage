@@ -15,6 +15,7 @@
  *   - Telegram backlog kept across gateway restarts (`platforms.telegram.extra.drop_pending_on_cold_boot: false`, only when unset)
  *   - Cron in village time (`timezone: Asia/Kolkata`, only when no zone is configured; a loud warning when another is)
  *   - `cron.script_timeout_seconds: 120` when unset, Hermes's default 3600, or lower (the proactive triggers' budgets)
+ *   - `context_file_max_chars: 48000` unless already 48000 or more (Hermes's dynamic 21,600 cap truncated AGENTS.md)
  *   - Index MCP + morning digest cron (`install_index.ts`)
  *   - Index Hermes plugin (`index-network`): install or update, then enable; seed `$HERMES_HOME/index/negotiator.ts` only when absent (`install_index_plugin.ts`)
  *   - opt-in recall skill + plugin when `AV_RECALL_ENABLED=1` (`install_recall.ts`)
@@ -36,6 +37,7 @@
 import {
   existsSync,
   copyFileSync,
+  lstatSync,
   readdirSync,
   rmSync,
   statSync,
@@ -61,9 +63,12 @@ import {
   configureVillageTimezone,
   disableTelegramLinkPreviews,
   keepTelegramBacklogOnColdBoot,
+  setCompactionSettings,
+  setContextFileMaxChars,
   setTerminalCwd,
 } from "./config";
 import { configureTelegramDisplay } from "./display_defaults";
+import { configureAvDisplay } from "./av_display";
 import { copySkillBundles, removeRetiredSkillDirs } from "./skill_copy";
 import { hermesBin, hermesExecEnv, hermesRunner } from "./hermes_cli";
 import {
@@ -73,6 +78,7 @@ import {
   targetWorkspace,
 } from "./paths";
 import { captureWelcomeState, restoreWelcomeState } from "./welcome_state";
+import { describeResult, regenerateKnowledgeIndex } from "./knowledge-index";
 import { cronFailedLine, writeInstallStatus } from "./install_status";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -166,9 +172,37 @@ function copyWorkspaceFiles(wipeUser: boolean): void {
         console.log(`→ removed ${path.replace(TARGET_HOME + "/", "")} (--wipe-user)`);
       }
     }
-    // The recall index holds copies of MEMORY.md and notes; it goes with them,
-    // and the epoch keeps earlier conversations out of any future index.
+    // What the previous user shared goes first, then the recall index, which holds copies of
+    // MEMORY.md, notes and knowledge files; the epoch keeps earlier conversations out of any
+    // future index. (The other order left a window in which a live recall could re-index the
+    // old knowledge files after the index wipe.)
+    wipeKnowledgeAgentvillage();
     wipeRecallIndex();
+  }
+}
+
+/**
+ * `--wipe-user`: what the previous user shared on the Context page
+ * (`knowledge/agentvillage/`, written by the control plane's renderer), then
+ * `knowledge/index.md` regenerated. `knowledge/edge-india/` (public) and
+ * `knowledge-prev/` stay. A failed index step is a warning, never fatal.
+ */
+function wipeKnowledgeAgentvillage(): void {
+  const target = join(TARGET_HOME, "knowledge", "agentvillage");
+  let present = true;
+  try {
+    lstatSync(target); // a dangling symlink counts: it goes too
+  } catch {
+    present = false;
+  }
+  if (present) {
+    rmSync(target, { recursive: true, force: true });
+    console.log(`→ removed ${target.replace(TARGET_HOME + "/", "")} (--wipe-user)`);
+  }
+  try {
+    console.log(`→ ${describeResult(regenerateKnowledgeIndex(TARGET_HOME))}`);
+  } catch {
+    console.warn("  warning: could not regenerate knowledge/index.md");
   }
 }
 
@@ -241,10 +275,13 @@ function main(): void {
   configureVillageTimezone();
   configureCronScriptTimeout();
   configureCronWrapResponse();
+  setContextFileMaxChars();
+  setCompactionSettings();
   configureTelegramDisplay();
   configureDashboardAuth();
   configureAvEvents();
   configureIndexLinks();
+  configureAvDisplay();
   // Opt-in and off the core path: a failure here is counted, never fatal.
   safeInstallRecall(SOURCE_SKILLS);
 

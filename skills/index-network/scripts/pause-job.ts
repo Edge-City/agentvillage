@@ -6,8 +6,9 @@
  *   bun skills/index-network/scripts/pause-job.ts <pause|resume|status> [--label "<Label>"] [--home DIR]
  *
  * The agent runs it through `terminal` when a resident asks to stop or
- * restart a message (workspace/AGENTS.md, "Cron schedule"). `<Label>` is one
- * of the five labels the messages end with (message-labels.ts
+ * restart a message (skills/index-network/tools.md, "Cron schedule", which
+ * workspace/AGENTS.md points to). `<Label>` is one
+ * of the six labels the messages end with (message-labels.ts
  * MESSAGE_LABELS). The home is `--home`, else `HERMES_HOME`, else `~/.hermes`.
  *
  * pause and resume record a hold with `by: resident` in the control plane's
@@ -132,7 +133,7 @@ interface Request {
  * `<action> [--label <label>] [--home <dir>]`, each flag at most once; or the
  * refusal: `invalid-action`, `invalid-args` (an unknown or repeated flag, a
  * flag without a value, a `--home` that is not an absolute path),
- * `invalid-label` (not one of the five labels), `missing-label` (pause and
+ * `invalid-label` (not one of the six labels), `missing-label` (pause and
  * resume need one).
  */
 export function parseArgs(argv: string[]): Request | CommandResult {

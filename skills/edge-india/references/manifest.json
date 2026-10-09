@@ -100,8 +100,8 @@
       "url": "https://edgecityindia2026.substack.com/p/health-and-wellbeing-at-edge-city",
       "kind": "newsletter",
       "published": "2026-09-30T15:34:57.000Z",
-      "hash": "840d0527d7a81de189251c6ee5ac0ee672e95bce53d12ba2bacf3ac94605baad",
-      "indexed": "2026-10-05T13:50:57.008Z"
+      "hash": "452a960bcc094766687d093275187303d9e4a2323b3e5ea2fd479f33f07a0ea6",
+      "indexed": "2026-10-08T16:28:28.025Z"
     },
     {
       "path": "newsletter/housing-for-edge-city-india.md",
@@ -118,8 +118,8 @@
       "url": "https://edgecityindia2026.substack.com/p/meal-plans-at-edge-city-india",
       "kind": "newsletter",
       "published": "2026-10-07T14:45:17.000Z",
-      "hash": "64ce7335bc57876cba6f37c9e41a54cc46f876e6aa314c3e88f9dec98605f0e6",
-      "indexed": "2026-10-07T14:58:23.108Z"
+      "hash": "93bf21a3a815f4065de7671b85ec326f693eaa9f68e2ec89b30b8062c674d041",
+      "indexed": "2026-10-08T15:43:22.446Z"
     },
     {
       "path": "newsletter/meet-the-inflection-fellowship-cohort.md",
@@ -139,6 +139,24 @@
       "author": "Taylor Lamprecht",
       "hash": "cde32ceb97f64150da7d5ef653b3dbecf4677f66c3b395c3d18cb0dcdba9fc27",
       "indexed": "2026-09-30T21:31:09.778Z"
+    },
+    {
+      "path": "newsletter/the-community-calendar.md",
+      "title": "The Community Calendar",
+      "url": "https://edgecityindia2026.substack.com/p/the-community-calendar",
+      "kind": "newsletter",
+      "published": "2026-10-08T09:55:33.000Z",
+      "hash": "073625942dbdcacbad4753302f48c899a513a8728b0aed775da5c18db04612d4",
+      "indexed": "2026-10-08T09:58:22.660Z"
+    },
+    {
+      "path": "newsletter/the-first-three-days-at-edge-city.md",
+      "title": "The First Three Days at Edge City India",
+      "url": "https://edgecityindia2026.substack.com/p/the-first-three-days-at-edge-city",
+      "kind": "newsletter",
+      "published": "2026-10-09T08:38:38.000Z",
+      "hash": "daea113e252c225ce9b4477aebfe848c7158f50d620b724eaea9a2d27f7f1dda",
+      "indexed": "2026-10-09T08:43:19.724Z"
     },
     {
       "path": "newsletter/the-future-arrives-locally.md",
@@ -164,10 +182,9 @@
       "title": "Tickets for Edge City India 2026",
       "url": "https://edgecityindia2026.substack.com/p/tickets-for-edge-city-india-2026",
       "kind": "newsletter",
-      "published": "2026-07-24T18:09:13.000Z",
-      "author": "Taylor Lamprecht",
-      "hash": "6ad5a7230ca41208af2bb1b596d56a60bccbcec36b6106693e22be615e7bd25f",
-      "indexed": "2026-10-06T11:28:24.122Z"
+      "updated": "2026-10-06T11:28:45.503Z",
+      "hash": "29d054019a9ab7d98bf0ac7feafb546c35ade1a7429acbad4d6875df9a403011",
+      "indexed": "2026-10-09T08:43:19.724Z"
     },
     {
       "path": "newsletter/volunteer-at-edge-city-india-2026.md",
@@ -183,9 +200,9 @@
       "title": "Welcome to Edge City India",
       "url": "https://edgecityindia2026.substack.com/p/welcome-to-edge-city-india",
       "kind": "newsletter",
-      "published": "2026-06-29T16:06:34.000Z",
-      "hash": "d5214a4f6b30b2239afa96b9635d1cd1abcefc184f7a75eaa1f0e4b06824ddad",
-      "indexed": "2026-09-30T21:32:35.134Z"
+      "updated": "2026-08-05T12:13:07.976Z",
+      "hash": "2867919c0f610426116f2eddba9ed524bf2e12ea1c5b537cb3f1e2f1def91895",
+      "indexed": "2026-10-08T09:58:22.660Z"
     },
     {
       "path": "residencies/community-builders.md",
@@ -208,8 +225,8 @@
       "title": "Edge City India 2026",
       "url": "https://www.edgecity.live/india26",
       "kind": "website",
-      "hash": "9b34243ea1aa207871791a3ed4f6ee62221db8762ae77f2a7c80f2071a8266b8",
-      "indexed": "2026-10-07T22:43:16.609Z"
+      "hash": "8cf0f0db7de9682adc000ec40483d55eda296ba12f8c59c56ce6c2feeb22e94b",
+      "indexed": "2026-10-08T19:43:20.805Z"
     },
     {
       "path": "website/about.md",
@@ -224,9 +241,9 @@
       "title": "Edge City India 2026 Wiki",
       "url": "https://edgecity.notion.site/Edge-City-India-2026-Wiki-038d45cdfc5983c7a1fe013fdc77135b",
       "kind": "wiki",
-      "updated": "2026-10-07T14:22:45.133Z",
-      "hash": "7429fc92f602c2987f5819529002c053dcf2f258a5dee4e50d0d97c019045c7d",
-      "indexed": "2026-10-07T14:28:21.243Z"
+      "updated": "2026-10-09T07:08:44.292Z",
+      "hash": "8185da4b232b7cabf14d5fbabf6aac4817e322e175ee80f4af206ad253e38977",
+      "indexed": "2026-10-09T07:13:19.143Z"
     }
   ]
 }

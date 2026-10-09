@@ -1,0 +1,394 @@
+#!/usr/bin/env bun
+/**
+ * The pending-opportunity alert (DATA-430, overlay half): one Telegram line,
+ * within the hour, for each opportunity that newly turned pending for the
+ * resident, so a pending window never runs out with nobody told.
+ *
+ * The hourly job `Edge — pending opportunity` (install_index.ts, 20 * * * *)
+ * runs it through the proactive trigger (proactive.ts `pending`), which reads
+ * the job's delivery window first (job-settings.ts: 08:00 to 22:00 village
+ * time by default): a run outside it never gets here, so it writes nothing. It
+ * has no once-a-day mark: the per-card ledger below is the only gate.
+ *
+ *   - Reads Index's pending list through the path the opportunity drops use
+ *     (listOpportunitiesFromMcp, INDEX_API_KEY): no new credential, no
+ *     control-plane call.
+ *   - A card is newly pending when it is on that list (status `pending`, or
+ *     no status: the read asks for pending only), it awaits the resident
+ *     (delivery-state.ts awaitsResident: not `negotiating`), and its id is not
+ *     in the ledger below.
+ *   - The ledger is PENDING_ALERTS_KEY in memory/heartbeat-state.json:
+ *
+ *       "pendingAlerts": { "<opportunityId>": { "firstSeen": "<ISO>", "lastSeen": "<ISO>", "alertedAt": "<ISO>" | null } }
+ *
+ *     `firstSeen` is the first in-window run that saw the card pending;
+ *     `lastSeen` the latest run that saw it on the list (an entry written
+ *     before `lastSeen` existed reads it as `firstSeen`); `alertedAt` is
+ *     when it was handed to the agent to send, null while it waits for a slot
+ *     (at most MAX_ALERTS_PER_RUN per run, the oldest `firstSeen` first; the
+ *     rest go at the next run).
+ *   - FIRST RUN on a box (the key absent): every card pending now is recorded
+ *     as already alerted (`alertedAt` = now) and nothing is sent, so the
+ *     install never sends the backlog of cards that were pending before this
+ *     job existed. The key is written even when the list is empty.
+ *   - Pruning (DATA-430 fix round 1, S1). Index's list is lossy: it keeps the
+ *     newest card per counterparty, hides a pending card its owner already
+ *     committed to, and looks back over about 150 rows (agentvillage-data
+ *     runbook, DATA-248 D1), so a card missing from one read may still be
+ *     pending and come back. Absence is therefore weak evidence:
+ *       - an entry absent from a complete read is dropped only when its
+ *         `lastSeen` is more than PRUNE_GRACE_HOURS old; a card back within
+ *         the grace keeps its entry and is not alerted again;
+ *       - a read with no rows at all prunes nothing (a transient empty answer
+ *         must not re-arm every card);
+ *       - a cut-short read never drops an entry for being absent
+ *         (delivery-state.ts PendingListing);
+ *       - positive evidence drops at once, even on a cut-short read: a card
+ *         seen `negotiating` is no longer waiting on the resident, so if it
+ *         turns pending again later it counts as new and is alerted again.
+ *   - A card is recorded as alerted when it is handed to the agent, before
+ *     delivery, as the drops record their showing: a send that fails after
+ *     that loses the alert, and never repeats it.
+ *   - A failed Index read writes nothing and is silent (`index-unavailable`).
+ *
+ * `respondBy`: Index serves no deadline on any route the box uses today
+ * (the recorded reply, the index-mcp fixture under tests/fixtures, verified
+ * 2026-10-03; Index main 61b71ac read 2026-10-09), so it is null in
+ * production. The parser (build-daily-brief-context.ts listedCard,
+ * parseExpiresAt) takes a row's ISO `expiresAt` when one appears (the field
+ * name is the control plane's assumption); any other shape or absence is
+ * null. Never computed or invented. The words are RESPOND_BY_WORDS.
+ *
+ * As a script (`bun pending-alert.ts [--state-file <path>] [--read-only]`,
+ * from $HERMES_HOME): takes the state lock, prints `[SILENT]` (the reason on
+ * stderr) or the Script Output the trigger would give the model:
+ * `{ agentName, job, cards: [{ name, profileUrl, appUrl, acceptUrl,
+ * opportunityId, firstSeen, respondBy }] }`. It ignores the delivery window.
+ * `--read-only` picks as a real run would and writes nothing.
+ */
+
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
+
+import { type BriefOpportunity, listOpportunitiesFromMcp, resolveIndexApiKey } from "./build-daily-brief-context";
+import { type PendingListing, awaitsResident } from "./delivery-state";
+import { indexMcpUrl } from "./index-mcp";
+import { DEFAULT_TZ } from "./job-settings";
+import { cleanName } from "./proactive-text";
+import { writeStateFile } from "./state-file";
+
+/** The state-file key of the ledger. */
+export const PENDING_ALERTS_KEY = "pendingAlerts";
+/** Most cards one run hands to the agent; the rest wait for the next run. */
+export const MAX_ALERTS_PER_RUN = 3;
+/** The ledger never holds more entries than this. */
+export const MAX_LEDGER_ENTRIES = 200;
+/** An entry absent from complete reads is kept this long after it was last seen (Index's list is lossy). */
+export const PRUNE_GRACE_HOURS = 24;
+
+export interface LedgerEntry {
+  firstSeen: string;
+  lastSeen: string;
+  alertedAt: string | null;
+}
+
+export type PendingLedger = Record<string, LedgerEntry>;
+
+/** A card as the list read hands it over (`respondBy`: listedCard's parse of Index's `expiresAt`). */
+export type PendingSourceCard = BriefOpportunity;
+
+export interface DueCard {
+  card: PendingSourceCard;
+  opportunityId: string;
+  firstSeen: string;
+}
+
+export interface PendingAlertResult {
+  cards: DueCard[];
+}
+
+export interface PendingSilentResult {
+  silent: true;
+  reason: string;
+}
+
+const ID = /^[A-Za-z0-9_-]{1,200}$/;
+/** Names that are not plain own keys of an object (N4): never ledger ids. */
+const RESERVED_IDS = new Set(["__proto__", "constructor", "prototype"]);
+
+/** An id the ledger can hold. */
+export function isLedgerId(id: unknown): id is string {
+  return typeof id === "string" && ID.test(id) && !RESERVED_IDS.has(id);
+}
+
+/** An empty ledger with no prototype: no id can reach Object.prototype. */
+function emptyLedger(): PendingLedger {
+  return Object.create(null) as PendingLedger;
+}
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function isoStamp(value: unknown): value is string {
+  return typeof value === "string" && ISO.test(value) && !Number.isNaN(Date.parse(value));
+}
+
+/**
+ * The ledger in a parsed state file, or null when there is none yet (the key
+ * absent, or not an object: a first run, which seeds silently). An entry that
+ * is not a valid record is dropped alone (its card then counts as new); a
+ * missing or malformed `lastSeen` (an entry from before it existed) reads as
+ * `firstSeen`.
+ */
+export function readPendingLedger(state: Record<string, unknown>): PendingLedger | null {
+  const map = asRecord(state[PENDING_ALERTS_KEY]);
+  if (!map) return null;
+  const ledger = emptyLedger();
+  for (const [id, value] of Object.entries(map)) {
+    const row = asRecord(value);
+    if (!isLedgerId(id) || !row || !isoStamp(row.firstSeen)) continue;
+    if (row.alertedAt !== null && !isoStamp(row.alertedAt)) continue;
+    ledger[id] = { firstSeen: row.firstSeen, lastSeen: isoStamp(row.lastSeen) ? row.lastSeen : row.firstSeen, alertedAt: row.alertedAt as string | null };
+  }
+  return ledger;
+}
+
+/** Whether a card is pending and waiting on the resident, with an id the ledger can hold. */
+export function awaitsAlert(card: BriefOpportunity): card is BriefOpportunity & { opportunityId: string } {
+  const status = (card.status ?? "").trim().toLowerCase();
+  return (status === "" || status === "pending") && awaitsResident(card) && isLedgerId(card.opportunityId);
+}
+
+/**
+ * One run's decision, pure. `ledger` null is a first run: every card pending
+ * now is recorded as alerted at `nowIso` and none is due. Otherwise every
+ * listed card's `lastSeen` becomes `nowIso`, a card with no entry gets one
+ * (`alertedAt` null); the due cards are the entries not yet alerted whose
+ * card is listed now with a name that cleans, the oldest `firstSeen` first
+ * (then Index's order), at most `max`; they come back recorded as alerted at
+ * `nowIso`. Pruning is the header's rule: a card seen negotiating goes at
+ * once; an absent one only on a complete read with rows, after
+ * PRUNE_GRACE_HOURS since it was last seen.
+ */
+export function planPendingAlerts(
+  ledger: PendingLedger | null,
+  fetched: PendingSourceCard[],
+  listing: PendingListing,
+  nowIso: string,
+  max = MAX_ALERTS_PER_RUN,
+): { ledger: PendingLedger; due: DueCard[]; seeded: boolean } {
+  const awaiting = fetched.filter(awaitsAlert);
+  const awaitingIds = new Set(awaiting.map((card) => card.opportunityId));
+  if (ledger === null) {
+    const seeded = emptyLedger();
+    for (const card of awaiting) seeded[card.opportunityId] ??= { firstSeen: nowIso, lastSeen: nowIso, alertedAt: nowIso };
+    return { ledger: capLedger(seeded, awaitingIds), due: [], seeded: true };
+  }
+  const negotiating = new Set(fetched.flatMap((card) => (!awaitsResident(card) && card.opportunityId ? [card.opportunityId] : [])));
+  // A read with no rows at all is no evidence of absence (S1).
+  const absenceCounts = listing.complete && (fetched.length > 0 || listing.pendingIds.size > 0);
+  const graceMs = PRUNE_GRACE_HOURS * 3_600_000;
+  const nowMs = Date.parse(nowIso);
+  const next = emptyLedger();
+  for (const [id, entry] of Object.entries(ledger)) {
+    if (awaitingIds.has(id)) {
+      next[id] = { ...entry, lastSeen: nowIso };
+      continue;
+    }
+    // Positive evidence: no longer waiting on the resident, even on a cut-short read.
+    if (negotiating.has(id)) continue;
+    if (absenceCounts && nowMs - Date.parse(entry.lastSeen) > graceMs) continue;
+    next[id] = entry;
+  }
+  for (const card of awaiting) {
+    if (!Object.hasOwn(next, card.opportunityId)) next[card.opportunityId] = { firstSeen: nowIso, lastSeen: nowIso, alertedAt: null };
+  }
+  const order = new Map(awaiting.map((card, index) => [card.opportunityId, index] as const));
+  const byId = new Map(awaiting.map((card) => [card.opportunityId, card] as const));
+  const due = [...byId.values()]
+    .filter((card) => next[card.opportunityId].alertedAt === null && cleanName(card.name))
+    .sort((a, b) => {
+      const fa = next[a.opportunityId].firstSeen;
+      const fb = next[b.opportunityId].firstSeen;
+      return fa < fb ? -1 : fa > fb ? 1 : (order.get(a.opportunityId) ?? 0) - (order.get(b.opportunityId) ?? 0);
+    })
+    .slice(0, Math.max(0, max))
+    .map((card) => ({ card, opportunityId: card.opportunityId, firstSeen: next[card.opportunityId].firstSeen }));
+  for (const item of due) next[item.opportunityId] = { ...next[item.opportunityId], alertedAt: nowIso };
+  return { ledger: capLedger(next, awaitingIds), due, seeded: false };
+}
+
+/**
+ * At most MAX_LEDGER_ENTRIES (N1, as pruneDeliveryLog): entries whose card is
+ * not on the current list go first, then alerted entries before unalerted
+ * ones, each the oldest `firstSeen` first. A listed, alerted card is never
+ * dropped while an unlisted entry is left to drop.
+ */
+function capLedger(ledger: PendingLedger, listed: ReadonlySet<string>): PendingLedger {
+  const entries = Object.entries(ledger);
+  if (entries.length <= MAX_LEDGER_ENTRIES) return ledger;
+  const dropOrder = [...entries].sort(
+    ([ia, a], [ib, b]) =>
+      (listed.has(ia) ? 1 : 0) - (listed.has(ib) ? 1 : 0) ||
+      (a.alertedAt === null ? 1 : 0) - (b.alertedAt === null ? 1 : 0) ||
+      (a.firstSeen < b.firstSeen ? -1 : a.firstSeen > b.firstSeen ? 1 : 0) ||
+      (ia < ib ? -1 : 1),
+  );
+  const dropped = new Set(dropOrder.slice(0, entries.length - MAX_LEDGER_ENTRIES).map(([id]) => id));
+  const kept = emptyLedger();
+  for (const [id, entry] of entries) if (!dropped.has(id)) kept[id] = entry;
+  return kept;
+}
+
+/**
+ * The words for a deadline, kept in one place: the app's pending card uses the
+ * same ones (DATA-430 app half), and they are proposals until Carter approves
+ * them there.
+ */
+export const RESPOND_BY_WORDS = {
+  today: (time: string) => `by ${time} today`,
+  /** Within the coming week (1 to 6 village days ahead). */
+  otherDay: (weekday: string, time: string) => `by ${weekday} ${time}`,
+  /** 7 or more village days ahead: the date too, so a bare weekday is never read as this week's (N3). */
+  later: (weekday: string, day: string, month: string, time: string) => `by ${weekday} ${day} ${month} ${time}`,
+} as const;
+
+function villageParts(at: Date): { day: string; weekday: string; time: string; dayOfMonth: string; month: string } {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: DEFAULT_TZ,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      weekday: "short",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    })
+      .formatToParts(at)
+      .map((part) => [part.type, part.value]),
+  );
+  const day = `${parts.year}-${parts.month}-${parts.day}`;
+  return {
+    day,
+    weekday: parts.weekday,
+    time: `${parts.hour}:${parts.minute} ${String(parts.dayPeriod).toLowerCase()}`,
+    dayOfMonth: String(Number(parts.day)),
+    month: new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short" }).format(new Date(`${day}T12:00:00Z`)),
+  };
+}
+
+/** Whole days from village day `a` to village day `b` (both YYYY-MM-DD). */
+function daysApart(a: string, b: string): number {
+  return Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000);
+}
+
+/**
+ * A deadline as the line's words, in village time: `by 6:30 pm today` when it
+ * falls on the current village day, `by Fri 6:30 pm` within the coming week
+ * (1 to 6 days ahead), else `by Fri 16 Oct 6:30 pm`. Null for no
+ * deadline, one that does not parse, or one not after `now` (a past deadline
+ * says nothing: Index changes the status).
+ */
+export function respondByText(deadline: unknown, now: Date): string | null {
+  if (typeof deadline !== "string" || deadline.length > 64) return null;
+  const at = Date.parse(deadline);
+  if (Number.isNaN(at) || at <= now.getTime()) return null;
+  const when = villageParts(new Date(at));
+  const ahead = daysApart(villageParts(now).day, when.day);
+  if (ahead === 0) return RESPOND_BY_WORDS.today(when.time);
+  return ahead < 7 ? RESPOND_BY_WORDS.otherDay(when.weekday, when.time) : RESPOND_BY_WORDS.later(when.weekday, when.dayOfMonth, when.month, when.time);
+}
+
+function hermesHome(): string {
+  return process.env.HERMES_HOME?.trim() || "/opt/data";
+}
+
+function resolveHermesPath(path: string): string {
+  return isAbsolute(path) ? path : join(hermesHome(), path);
+}
+
+/**
+ * The state file as an object: missing or empty is `{}`; anything that is not
+ * a JSON object throws (the trigger has renamed such a file aside before this
+ * runs, proactive.ts readStateHealing; run alone, the script never writes over it).
+ */
+function readStateObject(path: string): Record<string, unknown> {
+  if (!existsSync(path) || statSync(path).size === 0) return {};
+  const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  const state = asRecord(parsed);
+  if (!state) throw new Error("state-corrupt");
+  return state;
+}
+
+export async function pendingAlert(options: {
+  stateFile?: string;
+  now?: Date;
+  apiKey?: string;
+  mcpUrl?: string;
+  listOpportunities?: typeof listOpportunitiesFromMcp;
+  /** Pick as a real run would and write nothing. */
+  readOnly?: boolean;
+  max?: number;
+} = {}): Promise<PendingAlertResult | PendingSilentResult> {
+  const stateFile = resolveHermesPath(options.stateFile ?? "memory/heartbeat-state.json");
+  const apiKey = options.apiKey ?? resolveIndexApiKey();
+  if (!apiKey) return { silent: true, reason: "no-api-key" };
+  const mcpUrl = options.mcpUrl ?? indexMcpUrl();
+  let read: Awaited<ReturnType<typeof listOpportunitiesFromMcp>>;
+  try {
+    read = await (options.listOpportunities ?? listOpportunitiesFromMcp)({ apiKey, mcpUrl });
+  } catch {
+    return { silent: true, reason: "index-unavailable" };
+  }
+  let state: Record<string, unknown>;
+  try {
+    state = readStateObject(stateFile);
+  } catch {
+    return { silent: true, reason: "state-unreadable" };
+  }
+  const nowIso = (options.now ?? new Date()).toISOString();
+  const before = state[PENDING_ALERTS_KEY];
+  const plan = planPendingAlerts(readPendingLedger(state), read.cards, read.listing, nowIso, options.max);
+  if (!options.readOnly && JSON.stringify(before) !== JSON.stringify(plan.ledger)) {
+    writeStateFile(stateFile, { ...state, [PENDING_ALERTS_KEY]: plan.ledger });
+  }
+  if (plan.seeded) return { silent: true, reason: "seeded" };
+  if (plan.due.length === 0) return { silent: true, reason: "nothing-new" };
+  return { cards: plan.due };
+}
+
+function argValue(args: string[], name: string): string | undefined {
+  const idx = args.indexOf(name);
+  return idx >= 0 ? args[idx + 1] : undefined;
+}
+
+async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+  const stateFile = resolveHermesPath(argValue(args, "--state-file") ?? "memory/heartbeat-state.json");
+  const readOnly = args.includes("--read-only");
+  // The trigger's view and lock, loaded here only: proactive.ts imports this file.
+  const { pendingView, withAgentName, scriptOutputText } = await import("./proactive");
+  const { withStateLock } = await import("./state-lock");
+  const now = new Date();
+  const run = () => pendingAlert({ stateFile, now, readOnly });
+  const result = readOnly ? await run() : await withStateLock(stateFile, run);
+  if ("silent" in result) {
+    process.stderr.write(`pending-alert: ${result.reason}\n`);
+    process.stdout.write("[SILENT]\n");
+    return;
+  }
+  const { view } = pendingView(result.cards, now);
+  if (!view) {
+    process.stderr.write("pending-alert: name-withheld\n");
+    process.stdout.write("[SILENT]\n");
+    return;
+  }
+  process.stdout.write(`${scriptOutputText(withAgentName(hermesHome(), view))}\n`);
+}
+
+if (import.meta.main) {
+  await main();
+}

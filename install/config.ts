@@ -14,9 +14,66 @@ export function readConfig(): Record<string, unknown> {
   return (YAML.parse(readFileSync(configPath, "utf8")) ?? {}) as Record<string, unknown>;
 }
 
-/** Write `$HERMES_HOME/config.yaml` from `doc` (the `yaml` package's stringify, as every step here does). */
+/**
+ * The plain-scalar patterns YAML 1.1 resolves to something other than a string, taken from the
+ * `yaml` package's own `yaml-1.1` schema: booleans (y, n, yes, no, on, off, true, false in their
+ * case forms), null and `~`, 1.1 integers (`0b101`, `0755`, `1_000`, base-60 `22:00`), floats and
+ * timestamps (`2026-10-08`). The merge key `<<` is not in the list (see `needsQuotes`).
+ */
+const YAML11_IMPLICIT: readonly RegExp[] = new YAML.Document(null, { version: "1.1" }).schema.tags.flatMap((tag) =>
+  "test" in tag && tag.test instanceof RegExp && tag.default === true ? [tag.test] : [],
+);
+
+/**
+ * PyYAML's own timestamp resolver (yaml/resolver.py), which is wider than the `yaml` package's 1.1
+ * schema in two spots: a time-zone hour of one or two digits (`+35`, which PyYAML then refuses as an
+ * offset, so the whole file is unreadable) and a fraction with no digits after the dot
+ * (`10:00:00.`, read as a datetime). Refuter M1 (lanes-b3/DATA-434-refute.md).
+ */
+const PYYAML_TIMESTAMP =
+  /^(?:[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}(?:[Tt]|[ \t]+)[0-9]{1,2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]*)?(?:[ \t]*(?:Z|[-+][0-9]{1,2}(?::[0-9]{2})?))?)$/;
+
+/**
+ * Whether a string scalar must be quoted for PyYAML. Also `=` anywhere and `<<` as a value: PyYAML
+ * resolves both bare words to tags `safe_load` cannot construct and refuses the whole file. A `<<`
+ * key stays bare, as before, so a merge PyYAML performs is still a merge. A single-line string
+ * holding a tab is quoted too: the `yaml` package emits it plain, and PyYAML and ruamel (Hermes's
+ * writer) both refuse a tab inside a plain scalar, which makes the whole file unreadable. A
+ * multi-line string is emitted as a block scalar, which both readers accept with tabs.
+ */
+function needsQuotes(value: string, isKey: boolean): boolean {
+  if (value === "=" || (value === "<<" && !isKey)) return true;
+  if (value.includes("\t") && !value.includes("\n")) return true;
+  if (PYYAML_TIMESTAMP.test(value)) return true;
+  return YAML11_IMPLICIT.some((re) => re.test(value));
+}
+
+/**
+ * `doc` as config.yaml text (DATA-434). Hermes reads the file with PyYAML (YAML 1.1;
+ * hermes_cli/config.py:436, utils.py `fast_safe_load`) while the `yaml` package writes YAML 1.2,
+ * where only true/false/null are reserved; a string such as a resident's `/verbose` "off" came out
+ * as the bare word `off`, which Hermes reads as boolean False and its next save writes as `false`.
+ * So this is the package's YAML 1.2 dump (a string 1.2 would read as another type is quoted as
+ * before) with every string, key or value, that YAML 1.1 would read as another type double-quoted
+ * too; Hermes's own writer double-quotes the boolean and null words the same way (utils.py
+ * `_rt_value`). Every string then reads back as itself under both readers, and nothing else
+ * changes form. Not `version: "1.1"`: that writer drops the quotes from a string such as "0o755"
+ * (a plain string to 1.1, an integer to `readConfig`'s 1.2 parse), so the next installer pass
+ * would turn it into a number.
+ */
+export function dumpConfig(doc: Record<string, unknown>): string {
+  const out = new YAML.Document(doc);
+  YAML.visit(out, {
+    Scalar(key, node) {
+      if (typeof node.value === "string" && needsQuotes(node.value, key === "key")) node.type = "QUOTE_DOUBLE";
+    },
+  });
+  return out.toString();
+}
+
+/** Write `$HERMES_HOME/config.yaml` from `doc` through `dumpConfig`, the one writer every installer step uses. */
 export function writeConfig(doc: Record<string, unknown>): void {
-  writeFileSync(join(hermesHome(), "config.yaml"), YAML.stringify(doc));
+  writeFileSync(join(hermesHome(), "config.yaml"), dumpConfig(doc));
 }
 
 function configuredMaxTokens(): number {
@@ -370,6 +427,211 @@ export function configureCronWrapResponse(): void {
   doc.cron = cron;
   writeConfig(doc);
   console.log("→ set cron.wrap_response: false (cron deliveries carry no Hermes header or footer)");
+}
+
+/**
+ * The floor for Hermes's per-file context cap, top-level `context_file_max_chars`
+ * in config.yaml (AGENTS-MD-CAP). Hermes's `_get_context_file_max_chars`
+ * (agent/prompt_builder.py, v2026.9.24 = Hermes 0.21.5) uses `int(val)` when
+ * the top-level key is an `int` or `float` above 0, else the dynamic cap
+ * `max(20000, min(context_length * 4 * 0.06, 500000))`. No box sets the key, and
+ * the control plane pins `model.context_length: 90000` (DATA-401), so the cap
+ * there is 21,600; unpinned at 200,000 it was 48,000, so this value restores
+ * exactly the pre-pin cap. Over the cap Hermes keeps the head and the tail of a
+ * context file around a marker and drops the middle: rc24 to rc26 shipped a
+ * `workspace/AGENTS.md` of 25,232 to 29,714 chars, and the cut removed most of
+ * its "Red lines" on every box. The control plane sets exactly three Hermes
+ * keys at every root step (`model`, `cron.model`, `model.context_length`) and
+ * never resets config.yaml, so this key survives provision, update, recreate
+ * and rewire. A Hermes older than the key ignores an extra top-level key, so
+ * the pin is harmless there and never fails the install.
+ */
+export const CONTEXT_FILE_MAX_CHARS = 48000;
+
+/** A config value's kind for a log line, never the value itself. */
+function kindOf(value: unknown): string {
+  if (Array.isArray(value)) return "a list";
+  if (isMapping(value)) return "a mapping";
+  if (typeof value === "number") return "a non-finite number";
+  return `a ${typeof value}`;
+}
+
+/**
+ * Pin `context_file_max_chars` to at least `CONTEXT_FILE_MAX_CHARS`, the safety
+ * net under the AGENTS.md budget (scripts/tests/agents-md-budget.test.ts).
+ *
+ * - Absent, null, or not a number Hermes honours (a string, a boolean, a
+ *   non-finite or non-positive number, a number below 48,000): set to 48,000.
+ * - A finite number of 48,000 or more: an operator's larger cap, left as is.
+ * The file is left alone, with a warning, when its top level is not a mapping
+ * or holds a YAML merge key, for the reason `keepTelegramBacklogOnColdBoot`
+ * gives. A config value is never echoed onto the installer's stdout (only its
+ * type, or a number). Idempotent: when nothing changes the file is not
+ * rewritten. Hermes reads the key when it builds a prompt.
+ */
+export function setContextFileMaxChars(): void {
+  const key = "context_file_max_chars";
+  const doc: unknown = readConfig();
+  if (!isMapping(doc)) {
+    console.log(`→ warning: the top level of config.yaml is not a mapping; left ${key} unset`);
+    return;
+  }
+  if ("<<" in doc) {
+    console.log(`→ warning: YAML merge key "<<" at the top of config.yaml; left ${key} unset (set it by hand to ${CONTEXT_FILE_MAX_CHARS} or more)`);
+    return;
+  }
+  const raw = doc[key];
+  // Hermes reads a bool as an int (True == 1): only a real finite number counts.
+  const number = typeof raw === "number" && Number.isFinite(raw);
+  if (number && raw >= CONTEXT_FILE_MAX_CHARS) {
+    console.log(`→ ${key} already ${raw} (at least ${CONTEXT_FILE_MAX_CHARS}); left as is`);
+    return;
+  }
+  const why =
+    raw === undefined ? "was unset"
+    : raw === null ? "was null (Hermes's dynamic cap)"
+    : number ? `was ${raw}, below ${CONTEXT_FILE_MAX_CHARS}`
+    : `was ${kindOf(raw)}, not a number Hermes reads`;
+  doc[key] = CONTEXT_FILE_MAX_CHARS;
+  writeConfig(doc);
+  console.log(`→ set ${key}: ${CONTEXT_FILE_MAX_CHARS} (${why}; Hermes truncates a longer context file)`);
+}
+
+/**
+ * RC28: the seconds the gateway holds an arriving message while the pre-turn
+ * session-hygiene summary finishes, `compression.hygiene_max_turn_hold_seconds`
+ * (nested under the top-level `compression` mapping; Hermes 0.21.5 =
+ * v2026.9.24 reads it at gateway/run_turn.py:651-672, default 10 at
+ * hermes_cli/config_defaults.py:620-624, re-read every turn, no restart).
+ *
+ * Hygiene fires when the previous turn's prompt reached 85% of
+ * `model.context_length` (76,500 at the control plane's 90,000 pin). A summary
+ * still running when the hold expires sends "Context compression deferred —
+ * summary still streaming" to the chat (run_turn.py:999-1001) and the turn runs
+ * uncompressed; the stored token count stays high, so the notice repeats on
+ * every message. A summary that lands inside the hold is adopted inline and
+ * resets that count (run_turn.py:1142-1144), so the hold is the fix.
+ *
+ * Why 25: the haiku-5.5 summary measured on the affected box took 16-18 s
+ * (Oct 9), so the 10 s default expired every time; 25 covers it with margin.
+ * It stays under `compression.hygiene_timeout_seconds` (default 30, a
+ * no-progress window that flips to a different warning and a 300 s cooldown)
+ * and under Hermes's own "keep under chat idle timeouts, Telegram ~30s" note;
+ * the resident sees the typing indicator while the turn is held. The lead's
+ * first ask was 45: the number moves here, in this one constant. Summary
+ * bounds for scale: output about 4,500 tokens, input capped at 160k chars.
+ */
+export const HYGIENE_MAX_TURN_HOLD_SECONDS = 25;
+
+/** A number written as a string that Python's float() reads (Hermes's `_knob`, run_turn.py:657-665). */
+const NUMERIC_STRING = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+/**
+ * Pin the compaction settings behind the deferred-compression notice loop (RC28):
+ *
+ * 1. `compression.hygiene_max_turn_hold_seconds: 25` (see
+ *    `HYGIENE_MAX_TURN_HOLD_SECONDS`). Absent, null, not a number Hermes reads
+ *    (a boolean, which Hermes's float() reads as 1, a list, a word) or below 25:
+ *    set to 25. A number of 25 or more is an operator's longer hold, left as
+ *    is, and so is a number written as a string (`"45"`), which Hermes's float()
+ *    reads the same way (refute N3); one below 25 is set to 25. `compression`
+ *    absent or null is created; `compression` not a mapping, or holding a YAML
+ *    merge key, is left alone with a warning.
+ * 2. `auxiliary.compression.reasoning_effort: none`, so the summary runs with
+ *    reasoning off. Hermes folds this key into the summary request on any route,
+ *    the default `provider: auto` included (agent/auxiliary_client.py:6242-6270
+ *    `_get_task_extra_body`, then :6615-6622 into `reasoning_config`), and
+ *    strips it only when the block names an explicit provider and model that the
+ *    call did not use (:6178-6195, `_compression_config_claims_fast_lane` is
+ *    false for `auto`). So no explicit route is written: the summary keeps
+ *    running on the box's main provider and model, and an explicit route an
+ *    operator set is left alone (this step only adds the key). Written when
+ *    absent, null or empty (Hermes's own block writes `""`, the provider's
+ *    default); any other value is kept. `auxiliary` or `auxiliary.compression`
+ *    not a mapping, or holding a merge key, is left alone with a warning. A
+ *    model that cannot turn reasoning off is stepped up to its lowest level by
+ *    Hermes (agent/auxiliary_reasoning_floor.py), not broken.
+ *
+ * Not here: hiding Hermes's warning notices on Telegram
+ * (`display.platforms.telegram.suppress_warning_notifications`). The switch also
+ * hides failures a resident must act on (a dropped message, an aborted turn, a
+ * failed upload, cron failures), so rc28 drops it (the lead, Oct 9) and never
+ * touches the key; DATA-409's chat half stays open upstream.
+ *
+ * Each pin is independent: one that cannot be written is skipped with a
+ * `→ warning:` line and the other still applies. The whole step is skipped when
+ * the top level of config.yaml is not a mapping or holds a YAML merge key, for
+ * the reason `keepTelegramBacklogOnColdBoot` gives. One `→` line per pin; a
+ * config value is never echoed onto stdout (only its type, or a number).
+ * Idempotent: a second run changes nothing, says so, and does not rewrite the
+ * file.
+ */
+export function setCompactionSettings(): void {
+  const holdPath = "compression.hygiene_max_turn_hold_seconds";
+  const effortPath = "auxiliary.compression.reasoning_effort";
+  const doc: unknown = readConfig();
+  if (!isMapping(doc)) {
+    console.log("→ warning: the top level of config.yaml is not a mapping; left the compaction settings unset");
+    return;
+  }
+  if ("<<" in doc) {
+    console.log('→ warning: YAML merge key "<<" at the top of config.yaml; left the compaction settings unset (set them by hand)');
+    return;
+  }
+  // Each level may be absent or null (treated as empty); anything else must be a plain mapping.
+  const section = (parent: Record<string, unknown>, key: string, path: string): Record<string, unknown> | string => {
+    const value = parent[key] ?? {};
+    if (!isMapping(value)) return `${path} is not a mapping`;
+    if ("<<" in value) return `YAML merge key "<<" under ${path}; set it by hand`;
+    return value;
+  };
+  const lines: string[] = [];
+  let changed = false;
+
+  // 1. The turn hold.
+  const compression = section(doc, "compression", "compression");
+  if (typeof compression === "string") {
+    lines.push(`→ warning: ${compression}; left ${holdPath} unset`);
+  } else {
+    const raw = compression.hygiene_max_turn_hold_seconds;
+    const number = typeof raw === "number" && Number.isFinite(raw);
+    const fromString = typeof raw === "string" && NUMERIC_STRING.test(raw.trim()) ? Number(raw.trim()) : Number.NaN;
+    const stringNumber = Number.isFinite(fromString);
+    if (number && raw >= HYGIENE_MAX_TURN_HOLD_SECONDS) {
+      lines.push(`→ ${holdPath} already ${raw} (at least ${HYGIENE_MAX_TURN_HOLD_SECONDS}); left as is`);
+    } else if (stringNumber && fromString >= HYGIENE_MAX_TURN_HOLD_SECONDS) {
+      lines.push(`→ ${holdPath} already ${fromString}, written as a string Hermes reads as a number (at least ${HYGIENE_MAX_TURN_HOLD_SECONDS}); left as is`);
+    } else {
+      const why =
+        raw === undefined ? "was unset"
+        : raw === null ? "was null"
+        : number ? `was ${raw}, below ${HYGIENE_MAX_TURN_HOLD_SECONDS}`
+        : stringNumber ? `was ${fromString} written as a string, below ${HYGIENE_MAX_TURN_HOLD_SECONDS}`
+        : `was ${kindOf(raw)}, not a number`;
+      doc.compression = { ...compression, hygiene_max_turn_hold_seconds: HYGIENE_MAX_TURN_HOLD_SECONDS };
+      changed = true;
+      lines.push(`→ set ${holdPath}: ${HYGIENE_MAX_TURN_HOLD_SECONDS} (${why}; a summary that lands inside the hold is adopted with no notice)`);
+    }
+  }
+
+  // 2. The summary with reasoning off, on whatever route the box already uses.
+  const auxiliary = section(doc, "auxiliary", "auxiliary");
+  const route = typeof auxiliary === "string" ? auxiliary : section(auxiliary, "compression", "auxiliary.compression");
+  if (typeof auxiliary === "string" || typeof route === "string") {
+    lines.push(`→ warning: ${typeof auxiliary === "string" ? auxiliary : route}; left ${effortPath} unset`);
+  } else {
+    const raw = route.reasoning_effort;
+    if (raw === undefined || raw === null || (typeof raw === "string" && !raw.trim())) {
+      doc.auxiliary = { ...auxiliary, compression: { ...route, reasoning_effort: "none" } };
+      changed = true;
+      lines.push(`→ set ${effortPath}: none (the summary runs on the box's main model with reasoning off)`);
+    } else {
+      lines.push(`→ ${effortPath} already set; left as is`);
+    }
+  }
+
+  if (changed) writeConfig(doc);
+  for (const line of lines) console.log(line);
 }
 
 const DASHBOARD_PLUGIN = "dashboard-auth-edgecity";

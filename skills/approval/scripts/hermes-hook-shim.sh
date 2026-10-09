@@ -45,6 +45,11 @@
 #     ones as 0, round 2 = DATA-397). now_ms() reads `+%s.%N` (`%N` is padded
 #     on every build measured: GNU, uutils 0.8.0 and 0.10.0), left-pads the
 #     fraction to nine digits as a defence and keeps three; ts() likewise.
+#   - DATA-379 (2026-10-09), a log label and nothing else: with
+#     APPROVAL_HOOK_SOURCE=prewarm (exactly that word; any other value is
+#     ignored) every log line of the run carries ` source=prewarm`, so the
+#     installer's pre-warm is told apart from a resident's call. It changes
+#     no request, no verdict and no exit code.
 #   - DATA-380 (2026-10-07), no node process on the allow and block paths
 #     (node cost 32 ms warm, 135-236 ms cold, once or twice per call); what a
 #     facade answer means is unchanged, byte for byte:
@@ -62,6 +67,16 @@
 #         else by node as before;
 #       * every outcome line in the log ends with path=fast (no node process
 #         in this call) or path=node.
+#   - DATA-378 (2026-10-08), the re-ask loop is bounded whatever the clock
+#     does: inside the loop a clock that reads 0 (date failed after the start)
+#     or reads below its last good value (it stepped back) counts as the
+#     deadline passed, and the attempts are capped at WAIT_S/5 + 2.
+#   - DATA-424 (2026-10-09), the facade URL and credential checks are
+#     locale-independent: each must be bytes 0x21-0x7E with no `"` or `\`,
+#     matched against the 92 characters spelled out (curl_value_ok: no range,
+#     no class, no fork). The `[:print:]` class followed the hook's locale, so
+#     a UTF-8 locale let a non-ASCII character through. Same block messages,
+#     same exit.
 # The Agent Village sandbox has one unix user, so the shim runs "by hand"
 # there (no /opt/approval/hook-home, no setuid launcher; skills/approval/
 # README.md says why). install/install_approval.ts installs this file as
@@ -135,7 +150,9 @@
 # until APPROVAL_HOOK_WAIT_S have passed since it started; then it replays the
 # last block. An allow, or any other block, is replayed at once. With the
 # image's 280 s the effective human window is about 280 s, inside Hermes's
-# 300 s per-entry timeout.
+# 300 s per-entry timeout. A clock that reads 0 or below its last read during
+# the wait ends it as the deadline does, and the attempts are capped at
+# WAIT_S/5 + 2 whatever the clock says (DATA-378).
 #
 # A FIRST POST THAT TIMED OUT (HOSTED-14). The facade's own hook wait must sit
 # well under MAX_TIME (12 s for the 25 s default). When it does not, the first
@@ -239,10 +256,16 @@ LOG=/dev/null
 TMP=""
 # path=node on the outcome line once any node process ran in this call (DATA-380).
 VP=fast
+# DATA-379: a label for the log lines only, from a fixed word list (never the
+# raw value, so nothing an environment carries reaches the log).
+case ${APPROVAL_HOOK_SOURCE:-} in
+  prewarm) SRC=" source=prewarm" ;;
+  *) SRC="" ;;
+esac
 
 log() {
   # Best effort: a log that cannot be written must not change the verdict.
-  printf '%s pid=%s %s elapsed_ms=%s\n' "$(ts)" "$$" "$1" "$(( $(now_ms) - T0 ))" >>"$LOG" 2>/dev/null || true
+  printf '%s pid=%s %s%s elapsed_ms=%s\n' "$(ts)" "$$" "$1" "$SRC" "$(( $(now_ms) - T0 ))" >>"$LOG" 2>/dev/null || true
 }
 
 cleanup() { [ -n "$TMP" ] && "$T_rm" -rf "$TMP"; }
@@ -377,13 +400,20 @@ is_int "$WAIT_S" && [ "$WAIT_S" -le 285 ] || WAIT_S=0
 is_int "$MAX_TIME" && [ "$MAX_TIME" -ge 1 ] && [ "$MAX_TIME" -le 60 ] || MAX_TIME=25
 
 # The URL and the credential go into a curl config line: nothing that could
-# end the quoted value or start another option.
-case $BASE in
-  *[[:space:]\"\\]* | *[![:print:]]*) block "the facade URL contains a character a URL cannot" ;;
-esac
-case $TOKEN in
-  *[[:space:]\"\\]* | *[![:print:]]*) block "the facade credential contains a character a credential cannot" ;;
-esac
+# end the quoted value or start another option. curl_value_ok <value>: 0
+# when every byte is printable ASCII other than the space, `"` and `\`
+# (0x21-0x7E less 0x22 and 0x5C; DATA-424). The 92 allowed characters are
+# spelled out, with no range and no class, so no shell reads them through the
+# hook's locale (under UTF-8, [:print:] passed a multibyte character such as
+# \303\251, and a collating locale reorders a range), and nothing forks.
+curl_value_ok() {
+  case $1 in
+    *[!0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ\!\#\$\%\&\'\(\)\*\+\,\.\/\:\;\<\=\>\?\@\[\]\^\_\`\{\|\}\~\-]*) return 1 ;;
+  esac
+  return 0
+}
+curl_value_ok "$BASE" || block "the facade URL contains a character a URL cannot"
+curl_value_ok "$TOKEN" || block "the facade credential contains a character a credential cannot"
 # Where the facade listens. A unix socket (`unix:<absolute path>`, the
 # co-located daemon under APPROVALD_LISTEN=unix) is dialled with curl
 # --unix-socket and a fixed http://localhost request URL. A loopback URL
@@ -762,12 +792,28 @@ retry_failed() {
 }
 
 DEADLINE=$((T0 + WAIT_S * 1000))
+# DATA-378: every clock read in the loop goes through clock_read, once per
+# check. A read of 0 (date stopped printing a clock after T0) or one below the
+# last good read (the clock stepped back) sets LOST, which the loop reads as
+# the deadline passed; NOW keeps the last good read. CAP bounds the attempts
+# whatever the clock says: one per 5 s pause in the window, and two more.
+NOW=$T0
+LOST=0
+# The cap counts attempts, not time: in real time it is CAP x (5 + MAX_TIME) s
+# at worst (a still clock, 58 x 30 s), a backstop past the window, not the window.
+CAP=$((WAIT_S / 5 + 2))
+clock_read() {
+  CLK=$(now_ms)
+  if [ "$CLK" -gt 0 ] && [ "$CLK" -ge "$NOW" ]; then NOW=$CLK; else LOST=1; fi
+}
 attempt=0
 while :; do
   attempt=$((attempt + 1))
   mt=$MAX_TIME
   if [ "$attempt" -gt 1 ]; then
-    left=$(( (DEADLINE - $(now_ms)) / 1000 ))
+    clock_read
+    left=$(( (DEADLINE - NOW) / 1000 ))
+    [ "$LOST" = 0 ] || left=0
     [ "$left" -lt "$mt" ] && mt=$left
     [ "$mt" -ge 1 ] || mt=1
   fi
@@ -780,7 +826,8 @@ while :; do
     [ -z "$LOOP_PORT" ] || listener_check
     set --
   fi
-  P0=$(now_ms)
+  clock_read
+  P0=$NOW
   # `%{size_download}` is the bytes curl wrote to the body file: the sh
   # reading of the verdict compares it with what the shell read (DATA-380),
   # so it must stay the bytes IN THE FILE: never add --compressed (or any
@@ -805,10 +852,10 @@ while :; do
     # The first post ran into the ceiling: the facade may well have opened the
     # question and still be waiting on it. Re-ask, as on a hook-timeout block.
     # A clock that cannot be read measures 0 ms here, which stays final.
-    if [ "$attempt" -eq 1 ] && [ $RC -eq 28 ] && [ "$WAIT_S" -gt 0 ] &&
-      [ $(( $(now_ms) - P0 )) -ge $((MAX_TIME * 1000)) ]; then
+    if [ "$attempt" -eq 1 ] && [ $RC -eq 28 ] && [ "$WAIT_S" -gt 0 ] && clock_read &&
+      [ $(( NOW - P0 )) -ge $((MAX_TIME * 1000)) ]; then
       FIRST_TIMEOUT="transport failure (curl exit $RC: $why)"
-      [ $(( $(now_ms) + 5000 )) -lt "$DEADLINE" ] || block "$FIRST_TIMEOUT"
+      [ "$LOST" = 0 ] && [ $(( NOW + 5000 )) -lt "$DEADLINE" ] || block "$FIRST_TIMEOUT"
       log "outcome=wait http=000 curl=$RC tool=${TOOL:-?} attempt=$attempt reason=\"first post timed out; re-asking\" path=$VP"
       "$T_sleep" 5
       continue
@@ -839,7 +886,8 @@ while :; do
   LAST_EXIT=$EXIT
   LAST_CODE=$RCODE
   # Still open. Ask again in 5 s while the window allows another attempt.
-  if [ $(( $(now_ms) + 5000 )) -ge "$DEADLINE" ]; then
+  clock_read
+  if [ "$LOST" = 1 ] || [ $(( NOW + 5000 )) -ge "$DEADLINE" ] || [ "$attempt" -ge "$CAP" ]; then
     KIND=block
     break
   fi

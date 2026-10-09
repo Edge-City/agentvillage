@@ -83,10 +83,11 @@ describe("the window grammar: HH:MM-HH:MM, start inclusive, end exclusive", () =
       .toEqual([false, true, true, true, true, false, false]);
   });
 
-  test("the brief's default is rc13's window, and only the brief and its template have one", () => {
+  test("the brief's default is rc13's window; only the brief, its template and DATA-430's pending alert (08:00-22:00) have one", () => {
     expect(DEFAULT_WINDOWS.brief).toEqual(BRIEF_WINDOW);
     expect(DEFAULT_WINDOWS["tpl-brief"]).toEqual(BRIEF_WINDOW);
-    expect(Object.keys(DEFAULT_WINDOWS).sort()).toEqual(["brief", "tpl-brief"]);
+    expect(DEFAULT_WINDOWS.pending).toEqual({ start: 8 * 60, end: 22 * 60 });
+    expect(Object.keys(DEFAULT_WINDOWS).sort()).toEqual(["brief", "pending", "tpl-brief"]);
     expect(DEFAULT_TZ).toBe("Asia/Kolkata");
   });
 });

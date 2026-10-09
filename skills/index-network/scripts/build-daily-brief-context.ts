@@ -293,6 +293,16 @@ export interface BriefOpportunity {
    * waiting on the resident (see awaitsResident in delivery-state.ts).
    */
   negotiating?: boolean;
+  /**
+   * DATA-430: the card's deadline, as a canonical ISO instant, only when
+   * Index's row carries an ISO date-time `expiresAt` (parseExpiresAt). Index
+   * serves no deadline on any route the box uses today (Index main 61b71ac,
+   * read 2026-10-09: the opportunities table's nullable `expires_at` is set
+   * by nothing and returned by no route), so this is absent in production;
+   * the field name is the control plane's assumption from Index's table and
+   * web type. Never computed or invented.
+   */
+  respondBy?: string;
 }
 
 export interface BriefUserModel {
@@ -866,6 +876,30 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+const ISO_DATE_TIME = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(?:Z|([+-])(\d{2}):(\d{2}))$/;
+
+/**
+ * DATA-430: a row's `expiresAt` as a canonical ISO instant when it is a
+ * string holding an ISO date-time with a zone (`Z` or an offset up to
+ * ±14:00) whose calendar date and time are real: the instant, shifted back
+ * by its offset, must re-format to the same date, hour, minute and second
+ * (N3: `2026-02-30` or `T24:00` would otherwise roll over). Any other
+ * shape (absent, null, a number, a date alone, no zone, garbage) is
+ * undefined. Tolerant: never throws, never drops the card.
+ */
+export function parseExpiresAt(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length > 40) return undefined;
+  const match = ISO_DATE_TIME.exec(value);
+  if (!match) return undefined;
+  const [, date, hh, mm, ss = "00", sign, oh = "00", om = "00"] = match;
+  if (Number(oh) * 60 + Number(om) > 14 * 60 || Number(om) > 59) return undefined;
+  const at = Date.parse(value);
+  if (Number.isNaN(at)) return undefined;
+  const offsetMs = (sign === "-" ? -1 : 1) * (Number(oh) * 60 + Number(om)) * 60_000;
+  const wall = new Date(at + offsetMs).toISOString();
+  return wall.slice(0, 19) === `${date}T${hh}:${mm}:${ss}` ? new Date(at).toISOString() : undefined;
+}
+
 function listedCard(row: Record<string, unknown>): BriefOpportunity | null {
   const peer = asRecord(row.peer);
   const name = typeof peer?.name === "string" ? peer.name.trim() : "";
@@ -880,6 +914,7 @@ function listedCard(row: Record<string, unknown>): BriefOpportunity | null {
   const userId = typeof peer?.userId === "string" ? peer.userId : undefined;
   const opportunityId = typeof row.id === "string" ? row.id : undefined;
   const negotiating = row.negotiating === true;
+  const respondBy = parseExpiresAt(row.expiresAt);
   return {
     name,
     headline: headline || undefined,
@@ -894,6 +929,7 @@ function listedCard(row: Record<string, unknown>): BriefOpportunity | null {
     profileUrl: userUrl,
     feedCategory: viewerRole === "agent" ? "connector-flow" : "connection",
     ...(negotiating ? { negotiating: true } : {}),
+    ...(respondBy ? { respondBy } : {}),
   };
 }
 

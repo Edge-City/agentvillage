@@ -110,3 +110,36 @@ test("installer preserves welcome marker on normal reinstall and removes it on w
   expect(wipe.exitCode).toBe(0);
   expect(existsSync(markerPath(home))).toBe(false);
 });
+
+test("installer --wipe-user removes knowledge/agentvillage, keeps edge-india and knowledge-prev, and regenerates knowledge/index.md", () => {
+  const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const installScript = join(repoRoot, "install", "install.ts");
+  const home = tempHome();
+  const hermesBin = fakeHermesBin(home);
+  const put = (rel: string, body: string) => {
+    mkdirSync(dirname(join(home, rel)), { recursive: true });
+    writeFileSync(join(home, rel), body);
+  };
+  put("knowledge/agentvillage/index.md", "| file | label |\n");
+  put("knowledge/agentvillage/note-1.md", '---\nprovider: "agentvillage"\n---\nprevious user\n');
+  put("knowledge/edge-india/index.md", "# Edge India\n");
+  put("knowledge-prev/edge-india/index.md", "# Edge India (previous)\n");
+  put("knowledge/index.md", "stale: lists agentvillage\n");
+
+  const wipe = Bun.spawnSync({
+    cmd: ["bun", installScript, "--index-api-key", "ix_test", "--no-restart", "--wipe-user"],
+    cwd: repoRoot,
+    env: { ...process.env, HOME: home, HERMES_HOME: home, HERMES_BIN: hermesBin },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  expect(wipe.exitCode).toBe(0);
+  expect(wipe.stdout.toString()).toContain("→ removed knowledge/agentvillage (--wipe-user)");
+  expect(existsSync(join(home, "knowledge", "agentvillage"))).toBe(false);
+  expect(readFileSync(join(home, "knowledge", "edge-india", "index.md"), "utf8")).toBe("# Edge India\n");
+  expect(readFileSync(join(home, "knowledge-prev", "edge-india", "index.md"), "utf8")).toBe("# Edge India (previous)\n");
+  const index = readFileSync(join(home, "knowledge", "index.md"), "utf8");
+  expect(index).toContain("- edge-india: 1 file");
+  expect(index).not.toContain("agentvillage");
+});

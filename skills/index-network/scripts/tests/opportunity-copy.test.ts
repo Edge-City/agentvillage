@@ -33,7 +33,9 @@ describe("opportunity copy: the lead line is profiles, every pending card gets i
     expect(count(line, "Reuse the names and their profile links, then add, for every `pending` card whose `viewerRole` is not `agent` (a community ask keeps `make intro` as plain text), the message link from that card's own `acceptUrl` field in the JSON below the lead line: `[message Name](acceptUrl)`.")).toBe(1);
     expect(count(line, "This holds in the resident's own private chat; in a group or shared session the action stays plain text, as everywhere else.")).toBe(1);
     // The group rule the clause defers to, and the negotiating rule, both stay.
-    expect(count(agents, "Send a signed accept link (`acceptUrl`) only in the resident's own private chat, never in a group or shared session; there, write the action as plain text.")).toBe(1);
+    // AGENTS-MD-CAP: URL preservation moved verbatim from AGENTS.md to tools.md.
+    expect(count(tools, "Send a signed accept link (`acceptUrl`) only in the resident's own private chat, never in a group or shared session; there, write the action as plain text.")).toBe(1);
+    expect(count(agents, "Send a signed accept link (`acceptUrl`)")).toBe(0);
     expect(count(tools, "`negotiating` means agents are still talking — say that, and do not offer a message link yet.")).toBe(1);
     expect(count(line, "A reply that lists pending introductions with profile links only and no message link is wrong: the resident cannot accept from it.")).toBe(1);
     // The old wording that let a model stop at the lead line is gone.
@@ -94,14 +96,15 @@ describe("opportunity copy: the lead line is profiles, every pending card gets i
     expect(count(exemplars, "it carries no per-person link. The cards below are the voice for chat replies and introduction drops")).toBe(1);
   });
 
-  test("AGENTS.md: the message-action bullet keeps #240's sentence about the accept link, THEN the profile rule, THEN the no-acceptUrl rule", () => {
-    const bullets = agents.split("\n").filter((l) => l.startsWith("- The message action copies the card's `acceptUrl`"));
+  test("tools.md (URL preservation, moved from AGENTS.md): the message-action bullet keeps #240's sentence about the accept link, THEN the profile rule, THEN the no-acceptUrl rule", () => {
+    expect(agents.split("\n").filter((l) => l.startsWith("- The message action copies the card's `acceptUrl`"))).toHaveLength(0);
+    const bullets = tools.split("\n").filter((l) => l.startsWith("- The message action copies the card's `acceptUrl`"));
     expect(bullets).toHaveLength(1);
     const bullet = bullets[0];
     const accept = "Opening it accepts the introduction at once and opens Telegram with that person: say so in plain words, and never present it as a look or a preview.";
     const profiles = "The lead line's name links are profiles, not the action: every pending introduction (not a community ask) gets its own `[message Name](acceptUrl)`.";
     const missing = "A pending card without an `acceptUrl` gets `message Name` as plain text and, once per reply, a pointer in words to the Connections line in the morning brief, never an invented link.";
-    expect(count(agents, accept)).toBe(1);
+    expect(count(tools, accept)).toBe(1);
     expect(count(bullet, profiles)).toBe(1);
     expect(count(bullet, missing)).toBe(1);
     // "It" in the accept sentence must still mean the acceptUrl link: the accept sentence comes first.

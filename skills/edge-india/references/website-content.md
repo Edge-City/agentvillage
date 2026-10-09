@@ -4,7 +4,7 @@ Source: https://www.edgecity.live/india26
 
 Source type: website
 
-Last content change indexed: 2026-10-07T22:43:16.609Z
+Last content change indexed: 2026-10-08T19:43:20.805Z
 
 ---
 
@@ -16,7 +16,7 @@ Calendar
 
 ![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a3427fe3fc94619dde9fcf9_arrow.png)
 
-](https://portal.edgecity.live/portal/edge-india/events)[
+](https://portal.edgecity.live/edge-india/calendar)[
 
 BLOG
 
@@ -43,6 +43,8 @@ Prototype a Brighter Future
 ![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a418783052e7760e01365cf_name.header.avif)
 
 [Apply to attend](https://portal.edgecity.live/portal/edge-india)
+
+[](https://www.linkedin.com/company/edge-city-live/)[](https://twitter.com/joinedgecity)[](https://www.instagram.com/joinedgecity/)
 
 POP-UP VILLAGE
 
@@ -71,6 +73,12 @@ GALLERY
 themes
 
 ](https://www.edgecity.live/india26#themes)[
+
+![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a3568b68fd1ac58cff4991f_menu.icon.png)
+
+calendar
+
+](https://www.edgecity.live/india26#calendar)[
 
 ![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a3568b68fd1ac58cff4991f_menu.icon.png)
 
@@ -194,6 +202,8 @@ MORE INFO
 ![](https://cdn.prod.website-files.com/65b2cb5abdecf7cd7747e170/6a3427fe3fc94619dde9fcf9_arrow.png)
 
 ](https://edgecityindia2026.substack.com/p/programming-preview-for-edge-city)
+
+## CALENDAR
 
 ## Residencies\
 & Experiments

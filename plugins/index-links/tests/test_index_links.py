@@ -265,3 +265,172 @@ def test_autolink_lookalike_host_is_left_as_written(plugin):
     """Recheck N1: an autolink on a look-alike host or a port is not an Index URL."""
     for text in ("<https://index.network.evil.com/u/abc>", "<https://index.network@evil.com/u/abc>", "<https://index.network:8443/u/abc>"):
         assert plugin.rewrite_index_links(text) == text
+
+
+# --- DATA-413, DATA-423: the owner's own profile keeps its Index person links --
+
+#: Written out, not built from the plugin's constants, so the pin is independent of them.
+OWN_PROFILE_TOOLS = [
+    "mcp__index__get_my_profile",
+    "mcp_index_get_my_profile",
+    "index_get_my_profile",
+    "mcp__index__update_my_profile",
+    "mcp_index_update_my_profile",
+    "index_update_my_profile",
+    "mcp__index__enrich_my_profile",
+    "mcp_index_enrich_my_profile",
+    "index_enrich_my_profile",
+]
+CORRECTION_TOOLS = [tool for tool in OWN_PROFILE_TOOLS if "get_my_profile" not in tool]
+OWN = "https://index.network/u/own1"
+PEER = "https://index.network/u/peer2"
+
+
+@pytest.mark.parametrize("tool", OWN_PROFILE_TOOLS)
+@pytest.mark.parametrize(
+    "raw",
+    [
+        f"[Your Index profile]({OWN})",
+        json.dumps({"name": "Fixture Resident", "url": OWN, "intro": "builds things"}),
+        f"Profile: {OWN}.",
+    ],
+    ids=["markdown", "json", "bare"],
+)
+def test_own_profile_result_keeps_its_person_link(plugin, tool, raw):
+    assert plugin.is_own_profile_tool(tool) is True
+    # Nothing else to rewrite: the hook keeps the result as Index returned it.
+    assert hook(plugin, raw, tool=tool) is None
+
+
+@pytest.mark.parametrize("tool", OWN_PROFILE_TOOLS)
+def test_own_profile_result_keeps_a_second_persons_link_too(plugin, tool):
+    raw = json.dumps({"url": OWN, "referredBy": PEER, "note": f"met [Peer]({PEER}) at {PEER}"})
+    assert hook(plugin, raw, tool=tool) is None
+
+
+@pytest.mark.parametrize("tool", OWN_PROFILE_TOOLS)
+def test_own_profile_result_still_rewrites_signal_and_accept_links(plugin, tool):
+    raw = f"[You]({OWN}) signal [build](https://index.network/i/int9) and {ACCEPT}, peer {PEER}."
+    out = hook(plugin, raw, tool=tool)
+    assert out == (
+        f"[You]({OWN}) signal [build](https://agents.edgecity.live/intents?intent=int9) and {ACCEPT_OUT}, peer {PEER}."
+    )
+    payload = json.dumps({"url": OWN, "signalUrl": "https://index.network/i/int9", "acceptUrl": ACCEPT})
+    rewritten = json.loads(hook(plugin, payload, tool=tool))
+    assert rewritten == {
+        "url": OWN,
+        "signalUrl": "https://agents.edgecity.live/intents?intent=int9",
+        "acceptUrl": ACCEPT_OUT,
+    }
+
+
+@pytest.mark.parametrize("tool", OWN_PROFILE_TOOLS)
+def test_own_profile_autolink_keeps_the_index_url(plugin, tool):
+    """An autolink loses its angle brackets as every Index autolink does; the URL stays on Index."""
+    assert hook(plugin, f"<{OWN}>", tool=tool) == OWN
+
+
+@pytest.mark.parametrize("tool", CORRECTION_TOOLS)
+def test_a_correction_result_keeps_the_owners_link_as_minted(plugin, tool):
+    """DATA-413 refute N3: right after a correction the agent shows the link the update or
+    enrich result returned, so that result's `/u/` must stay on Index, not open the Rolodex."""
+    assert len(CORRECTION_TOOLS) == 6
+    assert plugin.is_own_profile_tool(tool) is True
+    updated = json.dumps({"updated": ["intro"], "profile": {"name": "Fixture Resident", "url": OWN}})
+    assert hook(plugin, updated, tool=tool) is None
+    said = f"Updated your intro. [Your Index profile]({OWN}), introduced by [Peer]({PEER}) at {PEER}."
+    assert hook(plugin, said, tool=tool) is None
+    # A signal link in the same result still opens the portal; the person links stay.
+    mixed = f"Profile {OWN}, signal https://index.network/i/int9, accept {ACCEPT}."
+    assert hook(plugin, mixed, tool=tool) == (
+        f"Profile {OWN}, signal https://agents.edgecity.live/intents?intent=int9, accept {ACCEPT_OUT}."
+    )
+
+
+@pytest.mark.parametrize(
+    "tool",
+    ["mcp__index__list_opportunities", "mcp__index__get_opportunity", "index_list_intents"],
+)
+def test_other_index_tools_still_send_person_links_to_the_rolodex(plugin, tool):
+    """The regression pin: the exemption is the three profile tools' alone."""
+    assert plugin.is_own_profile_tool(tool) is False
+    assert hook(plugin, f"[Peer]({PEER})", tool=tool) == "[Peer](https://agents.edgecity.live/rolodex?person=peer2)"
+    assert hook(plugin, f"see {PEER}.", tool=tool) == "see https://agents.edgecity.live/rolodex?person=peer2."
+    assert json.loads(hook(plugin, json.dumps({"url": PEER}), tool=tool)) == {
+        "url": "https://agents.edgecity.live/rolodex?person=peer2"
+    }
+
+
+def test_the_exempt_set_is_exactly_the_nine_profile_tool_names(plugin):
+    """Refute S1: a prefix, suffix or case-folded match would widen the exemption silently.
+    Nine names: get/update/enrich_my_profile under each of the three Index prefixes (DATA-423)."""
+    assert len(OWN_PROFILE_TOOLS) == len(set(OWN_PROFILE_TOOLS)) == 9
+    assert plugin.OWN_PROFILE_TOOLS == frozenset(OWN_PROFILE_TOOLS)
+    for tool in OWN_PROFILE_TOOLS:
+        assert plugin.is_own_profile_tool(tool) is True
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        None,
+        "get_my_profile",
+        "mcp__index__get_my_profile_extra",
+        "mcp__index__get_my_profile_v2",
+        "index_get_my_profile_v2",
+        "index_get_my_profiles",
+        "mcp__index__GET_MY_PROFILE",
+        "MCP__INDEX__get_my_profile",
+        " mcp__index__get_my_profile",
+        "mcp__index__get_my_profile ",
+        "mcp__index__get_my_profiles",
+        "mcp__indexer__get_my_profile",
+        # DATA-423: the correction and enrichment tools' near misses.
+        "update_my_profile",
+        "enrich_my_profile",
+        "mcp__index__update_profile",
+        "mcp__index__enrich_profile",
+        "index_update_profile",
+        "mcp__index__get_profile",
+        "index_update_my_profile_x",
+        "mcp__index__update_my_profile_v2",
+        "mcp_index_enrich_my_profile_extra",
+        "mcp__index__update_my_profiles",
+        "index_enrich_my_profiles",
+        "index__update_my_profile",
+        "mcp__index__UPDATE_MY_PROFILE",
+        "mcp_index_Enrich_My_Profile",
+        "INDEX_update_my_profile",
+        " index_update_my_profile",
+        "mcp__index__enrich_my_profile ",
+        "mcp__index__update_my_profile\n",
+        "mcp__indexer__update_my_profile",
+        "mcp__edgeos__update_my_profile",
+        "edgeos_enrich_my_profile",
+        "mcp__index__update_my_intent",
+        "read_file",
+        b"mcp__index__get_my_profile",
+        b"mcp__index__update_my_profile",
+        ["mcp__index__get_my_profile"],
+        ("mcp__index__enrich_my_profile",),
+    ],
+)
+def test_only_the_nine_profile_tool_names_are_exempt(plugin, tool):
+    assert plugin.is_own_profile_tool(tool) is False
+    # Through the hook too: a near miss rewrites the person link like any Index tool.
+    if isinstance(tool, str) and plugin.is_index_tool(tool):
+        assert hook(plugin, f"[Peer]({PEER})", tool=tool) == "[Peer](https://agents.edgecity.live/rolodex?person=peer2)"
+
+
+def test_rewrite_index_links_defaults_to_rewriting_person_links(plugin):
+    """Refute S2: the flag's default is False, so a caller that forgets it keeps today's behaviour."""
+    assert plugin.rewrite_index_links(f"[Peer]({PEER})") == "[Peer](https://agents.edgecity.live/rolodex?person=peer2)"
+    assert plugin.rewrite_index_links(f"[Peer]({PEER})", keep_people=True) == f"[Peer]({PEER})"
+
+
+@pytest.mark.parametrize("tool", OWN_PROFILE_TOOLS)
+def test_own_profile_exemption_keeps_the_off_switch_and_size_cap(plugin, monkeypatch, tool):
+    filler = "x" * plugin.MAX_RESULT_BYTES
+    assert hook(plugin, f"{ACCEPT} {OWN} {filler}", tool=tool) is None
+    monkeypatch.setenv("AV_INDEX_LINKS", "off")
+    assert hook(plugin, f"{ACCEPT} {OWN}", tool=tool) is None
