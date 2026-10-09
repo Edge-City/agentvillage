@@ -78,3 +78,14 @@ describe("the Script Output the line is written from", () => {
     ] as never);
   });
 });
+
+describe("N8: the 01:00 memory signal sync rewrites the state file by hand, so it names the keys it must keep", () => {
+  test("prompts/memory-signals.md preserves the pending ledger and the day marks with the other keys", () => {
+    const memory = readFileSync(join(REPO, "skills/index-network/prompts/memory-signals.md"), "utf8");
+    const line = memory.split("\n").find((l) => l.includes("Preserve every other key in the file"))!;
+    expect(line).toBeDefined();
+    const keys = [...line.slice(line.indexOf("Preserve every other key")).matchAll(/`([A-Za-z]+)`/g)].map((m) => m[1]);
+    expect(keys).toEqual(["prepared", "deliveredToday", "opportunityDelivery", "pendingAlerts", "proactiveRuns", "signalElicitation", "questionDelivery", "dreaming"]);
+    expect(line).toContain("exactly as you found them");
+  });
+});
