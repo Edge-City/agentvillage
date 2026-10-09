@@ -119,3 +119,27 @@ describe("install.ts runs the stages in that order", () => {
     expect(listed).toHaveLength(35);
   });
 });
+
+describe("DATA-379: the approval step pre-warms after its live fire, inside the step", () => {
+  const text = readFileSync(join(import.meta.dir, "..", "install_approval.ts"), "utf8");
+  const step = text.slice(text.indexOf("export function installApproval("), text.indexOf("export function runApprovalStep("));
+
+  test("live fire, then its verdict, then the pre-warm (only when not deferred), then the installed line; one call, and install.ts adds none", () => {
+    const at = (needle: string) => {
+      const i = step.indexOf(needle);
+      expect([needle, i >= 0]).toEqual([needle, true]);
+      expect([needle, step.indexOf(needle, i + 1)]).toEqual([needle, -1]);
+      return i;
+    };
+    const fire = at("const report = checkApprovalReport(");
+    const hard = at("if (hard.length > 0) {");
+    const marker = at("const { tenant } = writeSurfaceMarker(now, prior, report.overrides);");
+    const gate = at('if (deferred.length > 0) console.log("→ approval gate: pre-warm not run (the live self-check was deferred)");');
+    const call = at("else prewarmAfterInstall(options);");
+    const installed = at("approval gate installed: ");
+    expect(fire < hard && hard < marker && marker < gate && gate < call && call < installed).toBe(true);
+    expect(gate + step.slice(gate).indexOf("\n") + 1).toBe(step.indexOf("    else prewarmAfterInstall(options);"));
+    const install = readFileSync(join(import.meta.dir, "..", "install.ts"), "utf8");
+    expect(install).not.toMatch(/prewarm/i);
+  });
+});

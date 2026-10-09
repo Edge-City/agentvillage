@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -25,6 +26,13 @@ import {
   APPROVAL_ROUTED_SHA256,
   gateReceiptLine,
   lastInstallRouted,
+  mainCli,
+  PREWARM_ENV,
+  PREWARM_SESSION,
+  prewarmAfterInstall,
+  prewarmApproval,
+  prewarmCli,
+  type PrewarmReport,
   ApprovalInstallError,
   ENV_NAME,
   SHIM_TOOLS,
@@ -71,6 +79,8 @@ const ENV_NAMES = [
   "APPROVAL_HOOK_WAIT_S",
   "PYTHONPATH",
   "FAKE_HERMES_STATE",
+  "AV_APPROVAL_PREWARM",
+  "APPROVAL_HOOK_LOG",
 ] as const;
 const ORIGINAL_ENV = Object.fromEntries(ENV_NAMES.map((n) => [n, process.env[n]]));
 const TOKEN = "agent-token-SENTINEL-0123";
@@ -83,11 +93,18 @@ let logs: string[] = [];
 let errors: string[] = [];
 let logSpy: ReturnType<typeof spyOn>;
 let errSpy: ReturnType<typeof spyOn>;
+/** DATA-379: the stub pre-warm every install in this file runs unless a test asks for the real one. */
+let prewarmCalls = 0;
+const stubPrewarm = (): PrewarmReport => {
+  prewarmCalls++;
+  return { outcome: "facade-block", reason: null, elapsed_ms: 1 };
+};
 
 beforeEach(() => {
   for (const name of ENV_NAMES) delete process.env[name];
   logs = [];
   errors = [];
+  prewarmCalls = 0;
   logSpy = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
     logs.push(args.join(" "));
   });
@@ -242,7 +259,7 @@ ${full.no_run_once ? "" : `def run_once(spec, kwargs):
 function opts(extra: ApprovalOptions = {}): ApprovalOptions {
   if (!PYTHON) throw new Error("python3 is required for the live self-check tests");
   if (!process.env.FAKE_HERMES_STATE) fakeHermes();
-  return { toolDirs: [toolDir()], managedDir: join(tmpdir(), "av-approval-no-managed-scope"), hermesPython: PYTHON, ...extra };
+  return { toolDirs: [toolDir()], managedDir: join(tmpdir(), "av-approval-no-managed-scope"), hermesPython: PYTHON, prewarm: stubPrewarm, ...extra };
 }
 
 const OPERATOR_HOOK = { matcher: "terminal", command: "/usr/local/bin/operator-audit.sh", timeout: 30 };
@@ -2771,5 +2788,260 @@ describe("DATA-234 shim: the co-located facade (token file, loopback listener, u
       expect(JSON.parse(r.stdout).message).toContain(needle);
       expect(r.calls).toBe(0);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DATA-379: the pre-warm after the live fire (and `--prewarm` for the control
+// plane): the live fire's request once more, through the installed shim;
+// labelled source=prewarm, never re-asked, never fatal
+// ---------------------------------------------------------------------------
+
+describe("DATA-379: the pre-warm", () => {
+  /** The facade's refusal of a Hermes terminal call with no workdir, as the core prints it (APRV-415). */
+  const REFUSED = coreBody({
+    exit_code: 2,
+    stdout: hermesBlock("hook-unsupported-execution-context: Hermes terminal states no workdir; set workdir to an absolute path"),
+  });
+  const LOCAL_URL = "http://127.0.0.1:4682";
+  const SHIM_UNREACHABLE = {
+    returncode: 2,
+    stdout: JSON.stringify({ action: "block", message: "approval facade unreachable: transport failure (curl exit 7)" }),
+    parsed: { action: "block", message: "x" },
+    error: null,
+    timed_out: false,
+  };
+  const PREWARM_SENT = "→ approval gate: pre-warm sent (refused by the facade as expected";
+
+  /**
+   * An overlay source tree whose shim is the fixture's copy (fake curl, date, stat), so the real
+   * pre-warm runs the real shim code end to end. The fake curl's first call also keeps the
+   * envelope it posted and the environment it ran in.
+   */
+  function prewarmWorld(mode: string): { fx: ReturnType<typeof shimFixture>; skills: string } {
+    const fx = shimFixture(mode);
+    writeFileSync(join(fx.state, "custom.body"), REFUSED);
+    const skills = scratch("av-approval-prewarm-skills-");
+    cpSync(join(SOURCE_SKILLS, "approval"), join(skills, "approval"), { recursive: true });
+    writeFileSync(join(skills, "approval", "scripts", "hermes-hook-shim.sh"), readFileSync(join(fx.root, "hermes-hook-shim.sh")));
+    writeFileSync(
+      join(fx.state, "after.1"),
+      `f=$(grep '^@' '${fx.state}/argv.1' | head -n 1)\ncp "\${f#@}" '${fx.state}/envelope.1'\nenv > '${fx.state}/env.1'\n`,
+    );
+    return { fx, skills };
+  }
+  const hookLog = (home: string) => {
+    const path = join(home, "agent-hooks", "approval-hook.log");
+    return existsSync(path) ? readFileSync(path, "utf8") : "";
+  };
+  const calls = (fx: ReturnType<typeof shimFixture>) =>
+    existsSync(join(fx.state, "count")) ? Number(readFileSync(join(fx.state, "count"), "utf8")) : 0;
+  const prewarmLines = (lines: string[]) => lines.filter((l) => l.includes("pre-warm"));
+
+  test("after a live fire the facade answered, the install sends ONE pre-warm through the installed shim: the live fire's request, every log line source=prewarm, nothing else written", () => {
+    const { fx, skills } = prewarmWorld("custom");
+    const home = tenant();
+    fakeHermes();
+    // The default (no stub): what install.ts runs.
+    expect(installApproval(skills, opts({ prewarm: undefined }))).toBe("installed");
+    expect(calls(fx)).toBe(1);
+    // The request is the live fire's: terminal, no workdir (refused before the policy decision, appends nothing).
+    const envelope = JSON.parse(readFileSync(join(fx.state, "envelope.1"), "utf8"));
+    expect(envelope).toMatchObject({ hook_event_name: "pre_tool_call", tool_name: "terminal", session_id: PREWARM_SESSION });
+    expect(envelope.tool_input).toEqual({ command: "ls /tmp" });
+    // The shim got the pre-warm's fixed settings and only the names it reads from .env.
+    const env = readFileSync(join(fx.state, "env.1"), "utf8");
+    expect(env).toContain("APPROVAL_HOOK_SOURCE=prewarm\n");
+    expect(env).toContain("APPROVAL_HOOK_WAIT_S=0\n");
+    for (const foreign of ["AV_EVENTS_TOKEN", "FAKE_HERMES_STATE", "PYTHONPATH"]) expect(env).not.toContain(foreign);
+    // The shim log: the pre-warm's lines only (the fake Hermes's live fire runs no shim), each labelled.
+    const lines = hookLog(home).trim().split("\n");
+    expect(lines.length).toBeGreaterThanOrEqual(2);
+    for (const line of lines) expect(line).toMatch(/ source=prewarm elapsed_ms=\d+$/);
+    expect(lines[0]).toContain(" start tool=terminal");
+    expect(lines.at(-1)).toContain(" outcome=block http=200 exit=2 code=hook-unsupported-execution-context tool=terminal attempt=1 path=fast source=prewarm elapsed_ms=");
+    // One receipt line on stdout, before the step's own last line; nothing on stderr.
+    expect(prewarmLines(logs)).toHaveLength(1);
+    expect(prewarmLines(logs)[0]).toStartWith(PREWARM_SENT);
+    expect(logs.at(-1)).toContain("approval gate installed: 35 pre_tool_call entries (fail_closed)");
+    expect(prewarmLines(errors)).toEqual([]);
+    expect([...logs, ...errors, hookLog(home)].join("\n")).not.toContain(TOKEN);
+
+    // A second pre-warm (the control plane's `--prewarm`) writes nothing but the log either.
+    const before = { files: bytes(home), marker: readFileSync(approvalSurfacePath(), "utf8"), dir: readdirSync(join(home, "agent-hooks")).sort() };
+    expect(prewarmApproval()).toMatchObject({ outcome: "facade-block", reason: null });
+    expect(calls(fx)).toBe(2);
+    expect({ files: bytes(home), marker: readFileSync(approvalSurfacePath(), "utf8"), dir: readdirSync(join(home, "agent-hooks")).sort() }).toEqual(before);
+    expect(before.dir).toEqual(["approval-hook.log", "approval-surface.json", "hermes-hook-shim.sh"]);
+  }, 120_000);
+
+  test("runs once per install after a passing live fire; never after a failed or deferred one, nor with the gate unset or off", () => {
+    tenant();
+    fakeHermes();
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+    expect(prewarmCalls).toBe(1);
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+    expect(prewarmCalls).toBe(2);
+
+    // A failed live fire: the step fails, nothing is pre-warmed.
+    prewarmCalls = 0;
+    tenant();
+    fakeHermes({ run_once: { returncode: 0, stdout: "{}", parsed: null, error: null, timed_out: false } });
+    failsWith("live-call-allowed");
+    tenant();
+    fakeHermes({ run_once: SHIM_UNREACHABLE });
+    failsWith("live-facade-unreachable");
+    tenant();
+    fakeHermes();
+    expect(() => installApproval(SOURCE_SKILLS, opts({ hermesPython: null }))).toThrow();
+    expect(prewarmCalls).toBe(0);
+
+    // A deferred live fire (a local facade that did not answer): installed, not pre-warmed, and said so.
+    tenant({ env: { AV_APPROVAL_ENABLED: "1", AV_APPROVAL_URL: LOCAL_URL, AV_APPROVAL_TOKEN: TOKEN, TENANT_ID: TENANT } });
+    fakeHermes({ run_once: SHIM_UNREACHABLE });
+    logs = [];
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+    expect(prewarmCalls).toBe(0);
+    expect(prewarmLines(logs)).toEqual(["→ approval gate: pre-warm not run (the live self-check was deferred)"]);
+    expect(logs.at(-1)).toContain("self-check passed (live: deferred, live-facade-unreachable)");
+
+    // Unset and off never reach the live fire.
+    tenant({ env: {} });
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("skipped");
+    tenant({ env: { AV_APPROVAL_ENABLED: "0" } });
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("disabled");
+    expect(prewarmCalls).toBe(0);
+  });
+
+  test(`${PREWARM_ENV}=0 (or false, no, off; process environment first, then .env) skips it, and says so`, () => {
+    for (const off of ["0", "false", "No", " OFF "]) {
+      tenant();
+      fakeHermes();
+      process.env[PREWARM_ENV] = off;
+      logs = [];
+      expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+      expect(prewarmLines(logs)).toEqual([`→ approval gate: pre-warm skipped (${PREWARM_ENV} is off)`]);
+      expect(logs.at(-1)).toContain("approval gate installed");
+    }
+    expect(prewarmCalls).toBe(0);
+    expect(prewarmApproval()).toEqual({ outcome: "skipped", reason: "opted-out", elapsed_ms: null });
+    logs = [];
+    expect(prewarmCli(["--prewarm"])).toBe(0);
+    expect(JSON.parse(logs.at(-1)!)).toEqual({ prewarm: "av-approval", outcome: "skipped", reason: "opted-out", elapsed_ms: null });
+
+    delete process.env[PREWARM_ENV];
+    const home = tenant();
+    appendEnv(home, `${PREWARM_ENV}=off`);
+    fakeHermes();
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+    expect(prewarmCalls).toBe(0);
+    // Any other value runs it; the process environment is read before .env, as AV_DISPLAY_DEFAULTS is.
+    process.env[PREWARM_ENV] = "1";
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+    expect(prewarmCalls).toBe(1);
+  });
+
+  test("a failure is logged (one stderr line) and ignored: daemon down, an error answer, a throw, a hang, no shim; the install stands and --check is unchanged", () => {
+    const { fx, skills } = prewarmWorld("unreachable");
+    const home = tenant();
+    fakeHermes();
+    const o = opts();
+    expect(installApproval(skills, o)).toBe("installed");
+    logs = [];
+    expect(checkCli(["--check"], o)).toBe(0);
+    const check = logs.at(-1);
+
+    // Daemon down (curl exit 7): the shim's own block, labelled; the step still succeeds.
+    logs = [];
+    errors = [];
+    expect(runApprovalStep(skills, opts({ prewarm: undefined }))).toBe(true);
+    expect(calls(fx)).toBe(1);
+    expect(prewarmLines(errors)).toEqual(["! approval gate: pre-warm shim-block; ignored, the install does not depend on it"]);
+    expect(prewarmLines(logs)).toEqual([]);
+    expect(logs.at(-1)).toContain("approval gate installed");
+    expect(hookLog(home)).toMatch(/outcome=block-shim reason="transport failure \(curl exit 7[^\n]* source=prewarm elapsed_ms=\d+\n$/);
+    expect(ourEntries(home)).toHaveLength(APPROVAL_GATED_TOOLS.length);
+    logs = [];
+    expect(checkCli(["--check"], o)).toBe(0);
+    expect(logs.at(-1)).toBe(check);
+
+    // The facade answering an error status: the same.
+    writeFileSync(join(fx.state, "mode"), "http503");
+    errors = [];
+    expect(prewarmAfterInstall({ prewarm: undefined })).toMatchObject({ outcome: "shim-block" });
+    expect(prewarmLines(errors)).toEqual(["! approval gate: pre-warm shim-block; ignored, the install does not depend on it"]);
+
+    // A pre-warm that throws: reported by name, the install stands (nothing rolled back).
+    errors = [];
+    expect(
+      installApproval(SOURCE_SKILLS, opts({ prewarm: () => { throw new TypeError("boom"); } })),
+    ).toBe("installed");
+    expect(prewarmLines(errors)).toEqual(["! approval gate: pre-warm error (TypeError); ignored, the install does not depend on it"]);
+    expect(ourEntries(home)).toHaveLength(APPROVAL_GATED_TOOLS.length);
+    expect(errors.join("\n")).not.toContain("boom");
+
+    // A facade that hangs is cut at the bound.
+    installApproval(skills, o);
+    writeFileSync(join(fx.state, "mode"), "first-timeout");
+    rmSync(join(fx.state, "count"), { force: true });
+    expect(prewarmApproval({ timeoutMs: 400 })).toMatchObject({ outcome: "error", reason: "timed-out" });
+
+    // No shim, or one that cannot run: skipped, exit 0, said on stderr by the install's call.
+    chmodSync(approvalShimPath(), 0o600);
+    expect(prewarmApproval()).toEqual({ outcome: "skipped", reason: "shim-not-executable", elapsed_ms: null });
+    rmSync(approvalShimPath());
+    logs = [];
+    expect(prewarmCli(["--prewarm"])).toBe(0);
+    expect(JSON.parse(logs.at(-1)!)).toEqual({ prewarm: "av-approval", outcome: "skipped", reason: "shim-missing", elapsed_ms: null });
+    errors = [];
+    prewarmAfterInstall({ prewarm: undefined });
+    expect(prewarmLines(errors)).toEqual(["! approval gate: pre-warm skipped (shim-missing); ignored, the install does not depend on it"]);
+
+    // The gate off: nothing to warm.
+    tenant({ env: {} });
+    expect(prewarmApproval()).toEqual({ outcome: "skipped", reason: "approval-not-enabled", elapsed_ms: null });
+  }, 120_000);
+
+  test("a hook-timeout answer is not waited on: one post, no outcome=wait line, although .env sets a 280 s window", () => {
+    const { fx, skills } = prewarmWorld("waiting");
+    const home = tenant();
+    fakeHermes();
+    expect(installApproval(skills, opts())).toBe("installed");
+    expect(readFileSync(join(home, ".env"), "utf8")).toContain("APPROVAL_HOOK_WAIT_S=280");
+    // Another code than the live fire's: reported, still nothing acted on.
+    expect(prewarmApproval()).toMatchObject({ outcome: "facade-block", reason: "code-not-matched" });
+    expect(calls(fx)).toBe(1);
+    expect(hookLog(home)).not.toContain("outcome=wait");
+    expect(hookLog(home)).toContain("outcome=block");
+  }, 120_000);
+
+  test("the shim's label: only the exact word prewarm; any other value adds nothing and no run's verdict changes", () => {
+    const plain = shimFixture("allow");
+    const p = plain.run();
+    expect(plain.log()).not.toContain("source=");
+    const labelled = shimFixture("allow");
+    const l = labelled.run({ APPROVAL_HOOK_SOURCE: "prewarm" });
+    for (const line of labelled.log().trim().split("\n")) expect(line).toMatch(/ source=prewarm elapsed_ms=\d+$/);
+    for (const forgedValue of ["prewarm elapsed_ms=0", "Prewarm", "prewarm\n", "resident"]) {
+      const forged = shimFixture("allow");
+      const f = forged.run({ APPROVAL_HOOK_SOURCE: forgedValue });
+      expect([forgedValue, forged.log().includes("source=")]).toEqual([forgedValue, false]);
+      expect([f.code, f.stdout, f.calls]).toEqual([p.code, p.stdout, p.calls]);
+    }
+    expect([l.code, l.stdout, l.calls]).toEqual([p.code, p.stdout, p.calls]);
+  }, 120_000);
+
+  test("the command line: --check is unchanged, --prewarm takes no argument, anything else is the usage", () => {
+    tenant({ env: {} });
+    expect(mainCli(["--prewarm", "x"])).toBe(2);
+    expect(mainCli([])).toBe(2);
+    expect(mainCli(["--bogus"])).toBe(2);
+    logs = [];
+    expect(mainCli(["--prewarm"])).toBe(0);
+    expect(JSON.parse(logs.at(-1)!)).toEqual({ prewarm: "av-approval", outcome: "skipped", reason: "approval-not-enabled", elapsed_ms: null });
+    logs = [];
+    expect(mainCli(["--check"])).toBe(1);
+    expect(JSON.parse(logs.at(-1)!).problems).toEqual(["approval-not-enabled"]);
+    expect(checkCli(["--prewarm"])).toBe(2);
   });
 });

@@ -178,6 +178,32 @@ Under co-location (DATA-233) the control plane writes the token to
 `.env` remains for the hosted dogfood only. The value is never printed or
 logged by the shim, the installer or the plugin (the plugin never reads it).
 
+### The pre-warm (DATA-379)
+
+After a live fire the facade answered (not after a failed or deferred one) the
+installer sends the live fire's request once more, straight through the
+installed shim: a `terminal` call with no `workdir`, one post
+(`APPROVAL_HOOK_WAIT_S=0`), every log line of that run marked
+`source=prewarm`. Core refuses that request (`hook-unsupported-execution-context`)
+before the classifier, the decision and any append, so it records nothing,
+opens no question and charges no budget; its verdict is discarded and no tool
+runs. What it warms: the shim's programs in the page cache (until something
+evicts them; a resident's call twenty minutes later can find them cold again)
+and the daemon's pooled hook thread (its modules, its proof of the log and the
+policy load each call runs before the hook). What it cannot warm: the
+classifier, the decision and the signed append of the first real call (no
+request from here reaches them without being recorded or asked about under the
+resident's policy), nor a second thread for a concurrent call. On an update the
+live fire seconds earlier already warmed the same thread, so there it adds the
+marker and little else. A failure (daemon down, facade unreachable, shim
+missing, a hang cut at 15 s) is one `! approval gate: pre-warm …` line on
+stderr; the install's result and `--check` are unchanged. `AV_APPROVAL_PREWARM=0`
+(or `false`, `no`, `off`) turns it off. `bun install/install_approval.ts
+--prewarm` runs it alone (one JSON line, exit 0 always): the entry point for the
+control plane after a daemon restart no install follows. A latency reading of
+resident calls leaves out `source=prewarm` lines (and the live fire's own
+`code=hook-unsupported-execution-context` line).
+
 ## Fail-closed backstop at every gateway start (`av-approval`)
 
 Hermes registers shell hooks once, at gateway start, and only with consent; it
@@ -341,6 +367,7 @@ What the gate does not see, or does not judge, today:
 | `AV_APPROVAL_DAEMON_UID` | `.env`, else environment | The uid that must own a loopback listener or the unix socket. Default `10001`. |
 | `HERMES_ACCEPT_HOOKS=1` | `.env`, written | Headless consent, second form (the first is `hooks_auto_accept: true`). |
 | `APPROVAL_HOOK_URL_ENV`, `APPROVAL_HOOK_TOKEN_ENV`, `APPROVAL_HOOK_WAIT_S` | `.env`, written | The shim's settings: `AV_APPROVAL_URL`, `AV_APPROVAL_TOKEN`, `280`. |
+| `AV_APPROVAL_PREWARM` | environment, else `.env` | `0/false/no/off`: no pre-warm after the live fire, and `--prewarm` skips (above). |
 
 ## Identity map
 
