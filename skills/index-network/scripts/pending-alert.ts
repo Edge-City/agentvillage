@@ -19,21 +19,33 @@
  *     in the ledger below.
  *   - The ledger is PENDING_ALERTS_KEY in memory/heartbeat-state.json:
  *
- *       "pendingAlerts": { "<opportunityId>": { "firstSeen": "<ISO>", "alertedAt": "<ISO>" | null } }
+ *       "pendingAlerts": { "<opportunityId>": { "firstSeen": "<ISO>", "lastSeen": "<ISO>", "alertedAt": "<ISO>" | null } }
  *
  *     `firstSeen` is the first in-window run that saw the card pending;
- *     `alertedAt` is when it was handed to the agent to send, null while it
- *     waits for a slot (at most MAX_ALERTS_PER_RUN per run, the oldest
- *     `firstSeen` first; the rest go at the next run).
+ *     `lastSeen` the latest run that saw it on the list (an entry written
+ *     before `lastSeen` existed reads it as `firstSeen`); `alertedAt` is
+ *     when it was handed to the agent to send, null while it waits for a slot
+ *     (at most MAX_ALERTS_PER_RUN per run, the oldest `firstSeen` first; the
+ *     rest go at the next run).
  *   - FIRST RUN on a box (the key absent): every card pending now is recorded
  *     as already alerted (`alertedAt` = now) and nothing is sent, so the
  *     install never sends the backlog of cards that were pending before this
  *     job existed. The key is written even when the list is empty.
- *   - An entry whose card has left the pending list (accepted, rejected,
- *     gone) is dropped on the next complete read, and so is one whose card is
- *     seen `negotiating` again, so an id that comes back pending later counts
- *     as new and is alerted again. A cut-short read never drops an entry for
- *     being absent (delivery-state.ts PendingListing).
+ *   - Pruning (DATA-430 fix round 1, S1). Index's list is lossy: it keeps the
+ *     newest card per counterparty, hides a pending card its owner already
+ *     committed to, and looks back over about 150 rows (agentvillage-data
+ *     runbook, DATA-248 D1), so a card missing from one read may still be
+ *     pending and come back. Absence is therefore weak evidence:
+ *       - an entry absent from a complete read is dropped only when its
+ *         `lastSeen` is more than PRUNE_GRACE_HOURS old; a card back within
+ *         the grace keeps its entry and is not alerted again;
+ *       - a read with no rows at all prunes nothing (a transient empty answer
+ *         must not re-arm every card);
+ *       - a cut-short read never drops an entry for being absent
+ *         (delivery-state.ts PendingListing);
+ *       - positive evidence drops at once, even on a cut-short read: a card
+ *         seen `negotiating` is no longer waiting on the resident, so if it
+ *         turns pending again later it counts as new and is alerted again.
  *   - A card is recorded as alerted when it is handed to the agent, before
  *     delivery, as the drops record their showing: a send that fails after
  *     that loses the alert, and never repeats it.
@@ -71,9 +83,12 @@ export const PENDING_ALERTS_KEY = "pendingAlerts";
 export const MAX_ALERTS_PER_RUN = 3;
 /** The ledger never holds more entries than this. */
 export const MAX_LEDGER_ENTRIES = 200;
+/** An entry absent from complete reads is kept this long after it was last seen (Index's list is lossy). */
+export const PRUNE_GRACE_HOURS = 24;
 
 export interface LedgerEntry {
   firstSeen: string;
+  lastSeen: string;
   alertedAt: string | null;
 }
 
@@ -98,6 +113,18 @@ export interface PendingSilentResult {
 }
 
 const ID = /^[A-Za-z0-9_-]{1,200}$/;
+/** Names that are not plain own keys of an object (N4): never ledger ids. */
+const RESERVED_IDS = new Set(["__proto__", "constructor", "prototype"]);
+
+/** An id the ledger can hold. */
+export function isLedgerId(id: unknown): id is string {
+  return typeof id === "string" && ID.test(id) && !RESERVED_IDS.has(id);
+}
+
+/** An empty ledger with no prototype: no id can reach Object.prototype. */
+function emptyLedger(): PendingLedger {
+  return Object.create(null) as PendingLedger;
+}
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -111,35 +138,39 @@ function isoStamp(value: unknown): value is string {
 /**
  * The ledger in a parsed state file, or null when there is none yet (the key
  * absent, or not an object: a first run, which seeds silently). An entry that
- * is not a valid record is dropped alone (its card then counts as new).
+ * is not a valid record is dropped alone (its card then counts as new); a
+ * missing or malformed `lastSeen` (an entry from before it existed) reads as
+ * `firstSeen`.
  */
 export function readPendingLedger(state: Record<string, unknown>): PendingLedger | null {
   const map = asRecord(state[PENDING_ALERTS_KEY]);
   if (!map) return null;
-  return Object.fromEntries(
-    Object.entries(map).flatMap(([id, value]) => {
-      const row = asRecord(value);
-      if (!ID.test(id) || !row || !isoStamp(row.firstSeen)) return [];
-      if (row.alertedAt !== null && !isoStamp(row.alertedAt)) return [];
-      return [[id, { firstSeen: row.firstSeen, alertedAt: row.alertedAt as string | null }]];
-    }),
-  );
+  const ledger = emptyLedger();
+  for (const [id, value] of Object.entries(map)) {
+    const row = asRecord(value);
+    if (!isLedgerId(id) || !row || !isoStamp(row.firstSeen)) continue;
+    if (row.alertedAt !== null && !isoStamp(row.alertedAt)) continue;
+    ledger[id] = { firstSeen: row.firstSeen, lastSeen: isoStamp(row.lastSeen) ? row.lastSeen : row.firstSeen, alertedAt: row.alertedAt as string | null };
+  }
+  return ledger;
 }
 
 /** Whether a card is pending and waiting on the resident, with an id the ledger can hold. */
 export function awaitsAlert(card: BriefOpportunity): card is BriefOpportunity & { opportunityId: string } {
   const status = (card.status ?? "").trim().toLowerCase();
-  return (status === "" || status === "pending") && awaitsResident(card) && typeof card.opportunityId === "string" && ID.test(card.opportunityId);
+  return (status === "" || status === "pending") && awaitsResident(card) && isLedgerId(card.opportunityId);
 }
 
 /**
  * One run's decision, pure. `ledger` null is a first run: every card pending
- * now is recorded as alerted at `nowIso` and none is due. Otherwise a card
- * with no entry gets one (`alertedAt` null); the due cards are the entries
- * not yet alerted whose card is listed now with a name that cleans, the
- * oldest `firstSeen` first (then Index's order), at most `max`; they come
- * back recorded as alerted at `nowIso`. Entries whose card left the list
- * (complete read) or is seen negotiating are dropped.
+ * now is recorded as alerted at `nowIso` and none is due. Otherwise every
+ * listed card's `lastSeen` becomes `nowIso`, a card with no entry gets one
+ * (`alertedAt` null); the due cards are the entries not yet alerted whose
+ * card is listed now with a name that cleans, the oldest `firstSeen` first
+ * (then Index's order), at most `max`; they come back recorded as alerted at
+ * `nowIso`. Pruning is the header's rule: a card seen negotiating goes at
+ * once; an absent one only on a complete read with rows, after
+ * PRUNE_GRACE_HOURS since it was last seen.
  */
 export function planPendingAlerts(
   ledger: PendingLedger | null,
@@ -151,19 +182,28 @@ export function planPendingAlerts(
   const awaiting = fetched.filter(awaitsAlert);
   const awaitingIds = new Set(awaiting.map((card) => card.opportunityId));
   if (ledger === null) {
-    const seeded: PendingLedger = {};
-    for (const card of awaiting) seeded[card.opportunityId] ??= { firstSeen: nowIso, alertedAt: nowIso };
-    return { ledger: capLedger(seeded), due: [], seeded: true };
+    const seeded = emptyLedger();
+    for (const card of awaiting) seeded[card.opportunityId] ??= { firstSeen: nowIso, lastSeen: nowIso, alertedAt: nowIso };
+    return { ledger: capLedger(seeded, awaitingIds), due: [], seeded: true };
   }
   const negotiating = new Set(fetched.flatMap((card) => (!awaitsResident(card) && card.opportunityId ? [card.opportunityId] : [])));
-  const next: PendingLedger = {};
+  // A read with no rows at all is no evidence of absence (S1).
+  const absenceCounts = listing.complete && (fetched.length > 0 || listing.pendingIds.size > 0);
+  const graceMs = PRUNE_GRACE_HOURS * 3_600_000;
+  const nowMs = Date.parse(nowIso);
+  const next = emptyLedger();
   for (const [id, entry] of Object.entries(ledger)) {
-    if (negotiating.has(id) && !awaitingIds.has(id)) continue;
-    if (listing.complete && !awaitingIds.has(id)) continue;
+    if (awaitingIds.has(id)) {
+      next[id] = { ...entry, lastSeen: nowIso };
+      continue;
+    }
+    // Positive evidence: no longer waiting on the resident, even on a cut-short read.
+    if (negotiating.has(id)) continue;
+    if (absenceCounts && nowMs - Date.parse(entry.lastSeen) > graceMs) continue;
     next[id] = entry;
   }
   for (const card of awaiting) {
-    if (!Object.hasOwn(next, card.opportunityId)) next[card.opportunityId] = { firstSeen: nowIso, alertedAt: null };
+    if (!Object.hasOwn(next, card.opportunityId)) next[card.opportunityId] = { firstSeen: nowIso, lastSeen: nowIso, alertedAt: null };
   }
   const order = new Map(awaiting.map((card, index) => [card.opportunityId, index] as const));
   const byId = new Map(awaiting.map((card) => [card.opportunityId, card] as const));
@@ -176,20 +216,30 @@ export function planPendingAlerts(
     })
     .slice(0, Math.max(0, max))
     .map((card) => ({ card, opportunityId: card.opportunityId, firstSeen: next[card.opportunityId].firstSeen }));
-  for (const item of due) next[item.opportunityId] = { firstSeen: item.firstSeen, alertedAt: nowIso };
-  return { ledger: capLedger(next), due, seeded: false };
+  for (const item of due) next[item.opportunityId] = { ...next[item.opportunityId], alertedAt: nowIso };
+  return { ledger: capLedger(next, awaitingIds), due, seeded: false };
 }
 
-/** At most MAX_LEDGER_ENTRIES: alerted entries go first, the oldest `firstSeen` first. */
-function capLedger(ledger: PendingLedger): PendingLedger {
+/**
+ * At most MAX_LEDGER_ENTRIES (N1, as pruneDeliveryLog): entries whose card is
+ * not on the current list go first, then alerted entries before unalerted
+ * ones, each the oldest `firstSeen` first. A listed, alerted card is never
+ * dropped while an unlisted entry is left to drop.
+ */
+function capLedger(ledger: PendingLedger, listed: ReadonlySet<string>): PendingLedger {
   const entries = Object.entries(ledger);
   if (entries.length <= MAX_LEDGER_ENTRIES) return ledger;
   const dropOrder = [...entries].sort(
     ([ia, a], [ib, b]) =>
-      (a.alertedAt === null ? 1 : 0) - (b.alertedAt === null ? 1 : 0) || (a.firstSeen < b.firstSeen ? -1 : a.firstSeen > b.firstSeen ? 1 : 0) || (ia < ib ? -1 : 1),
+      (listed.has(ia) ? 1 : 0) - (listed.has(ib) ? 1 : 0) ||
+      (a.alertedAt === null ? 1 : 0) - (b.alertedAt === null ? 1 : 0) ||
+      (a.firstSeen < b.firstSeen ? -1 : a.firstSeen > b.firstSeen ? 1 : 0) ||
+      (ia < ib ? -1 : 1),
   );
   const dropped = new Set(dropOrder.slice(0, entries.length - MAX_LEDGER_ENTRIES).map(([id]) => id));
-  return Object.fromEntries(entries.filter(([id]) => !dropped.has(id)));
+  const kept = emptyLedger();
+  for (const [id, entry] of entries) if (!dropped.has(id)) kept[id] = entry;
+  return kept;
 }
 
 /**

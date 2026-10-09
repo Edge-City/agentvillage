@@ -498,7 +498,7 @@ describe("DATA-430: the hourly pending alert (`pending`)", () => {
         respondBy: null,
       }],
     });
-    expect(state().pendingAlerts[PENDING_ID(2)]).toEqual({ firstSeen: at.toISOString(), alertedAt: at.toISOString() });
+    expect(state().pendingAlerts[PENDING_ID(2)]).toEqual({ firstSeen: at.toISOString(), lastSeen: at.toISOString(), alertedAt: at.toISOString() });
   });
 
   test("the once-a-day mark never gates it: a second new card the same day wakes again; no day mark is written, and a stale one is ignored", async () => {

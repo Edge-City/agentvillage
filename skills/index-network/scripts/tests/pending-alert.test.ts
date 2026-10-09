@@ -10,7 +10,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { MAX_ALERTS_PER_RUN, PENDING_ALERTS_KEY, RESPOND_BY_WORDS, pendingAlert, planPendingAlerts, readPendingLedger, respondByText } from "../pending-alert";
+import { MAX_ALERTS_PER_RUN, PENDING_ALERTS_KEY, PRUNE_GRACE_HOURS, RESPOND_BY_WORDS, isLedgerId, pendingAlert, planPendingAlerts, readPendingLedger, respondByText } from "../pending-alert";
 import { pendingView } from "../proactive";
 import { parseExpiresAt } from "../build-daily-brief-context";
 import { FAKE_API_KEY, FAKE_MCP_URL, type ToolHandler, indexMcpFake, pagedOpportunities } from "./index-mcp-fake";
@@ -74,9 +74,9 @@ describe("pendingAlert", () => {
     expect(await run(file, T0)).toEqual({ silent: true, reason: "seeded" });
     const state = readState(file);
     expect(state[PENDING_ALERTS_KEY]).toEqual({
-      [id(1)]: { firstSeen: T0.toISOString(), alertedAt: T0.toISOString() },
-      [id(2)]: { firstSeen: T0.toISOString(), alertedAt: T0.toISOString() },
-      [id(3)]: { firstSeen: T0.toISOString(), alertedAt: T0.toISOString() },
+      [id(1)]: { firstSeen: T0.toISOString(), lastSeen: T0.toISOString(), alertedAt: T0.toISOString() },
+      [id(2)]: { firstSeen: T0.toISOString(), lastSeen: T0.toISOString(), alertedAt: T0.toISOString() },
+      [id(3)]: { firstSeen: T0.toISOString(), lastSeen: T0.toISOString(), alertedAt: T0.toISOString() },
     });
     expect(state.deliveredToday).toEqual({ date: "2026-10-12", ids: [] });
     expect(state.proactiveRuns).toEqual({ brief: "2026-10-12" });
@@ -101,7 +101,9 @@ describe("pendingAlert", () => {
     const result = await run(file, T1);
     if ("silent" in result) throw new Error(result.reason);
     expect(result.cards.map((c) => [c.opportunityId, c.firstSeen])).toEqual([[id(4), T1.toISOString()]]);
-    expect(readState(file)[PENDING_ALERTS_KEY][id(4)]).toEqual({ firstSeen: T1.toISOString(), alertedAt: T1.toISOString() });
+    expect(readState(file)[PENDING_ALERTS_KEY][id(4)]).toEqual({ firstSeen: T1.toISOString(), lastSeen: T1.toISOString(), alertedAt: T1.toISOString() });
+    // Every listed card's lastSeen moves with each run.
+    expect(readState(file)[PENDING_ALERTS_KEY][id(1)]).toEqual({ firstSeen: T0.toISOString(), lastSeen: T1.toISOString(), alertedAt: T0.toISOString() });
 
     const { view } = pendingView(result.cards, T1);
     expect(view).toEqual({
@@ -124,28 +126,61 @@ describe("pendingAlert", () => {
     expect(await run(file, T3)).toEqual({ silent: true, reason: "nothing-new" });
   });
 
-  test("a card that leaves the pending list is pruned on a complete read and, coming back, alerts again", async () => {
+  test("S1: an alerted card that vanishes from a complete read and returns within the grace is kept and NOT alerted again", async () => {
+    expect(PRUNE_GRACE_HOURS).toBe(24);
+    const file = stateFile();
+    serve([row(1, "Asha"), row(2, "Bilal")]);
+    await run(file, T0);
+    // Index's lossy list drops Bilal (a newer card with the same person, say) for most of a day.
+    serve([row(1, "Asha")]);
+    const later = new Date(T0.getTime() + 23 * 3_600_000);
+    expect(await run(file, T1)).toEqual({ silent: true, reason: "nothing-new" });
+    expect(await run(file, later)).toEqual({ silent: true, reason: "nothing-new" });
+    expect(readState(file)[PENDING_ALERTS_KEY][id(2)]).toEqual({ firstSeen: T0.toISOString(), lastSeen: T0.toISOString(), alertedAt: T0.toISOString() });
+    serve([row(1, "Asha"), row(2, "Bilal")]);
+    expect(await run(file, new Date(later.getTime() + 3_600_000))).toEqual({ silent: true, reason: "nothing-new" });
+  });
+
+  test("S1: a card absent from complete reads for more than the grace is pruned and, coming back, alerts again", async () => {
     const file = stateFile();
     serve([row(1, "Asha"), row(2, "Bilal")]);
     await run(file, T0);
     serve([row(1, "Asha")]);
-    expect(await run(file, T1)).toEqual({ silent: true, reason: "nothing-new" });
+    // Exactly the grace: still kept.
+    expect(await run(file, new Date(T0.getTime() + 24 * 3_600_000))).toEqual({ silent: true, reason: "nothing-new" });
+    expect(Object.keys(readState(file)[PENDING_ALERTS_KEY]).sort()).toEqual([id(1), id(2)]);
+    // Past it: gone.
+    expect(await run(file, new Date(T0.getTime() + 25 * 3_600_000))).toEqual({ silent: true, reason: "nothing-new" });
     expect(Object.keys(readState(file)[PENDING_ALERTS_KEY])).toEqual([id(1)]);
     serve([row(1, "Asha"), row(2, "Bilal")]);
-    const back = await run(file, T2);
+    const back = await run(file, new Date(T0.getTime() + 26 * 3_600_000));
     if ("silent" in back) throw new Error(back.reason);
     expect(back.cards.map((c) => c.opportunityId)).toEqual([id(2)]);
   });
 
-  test("a cut-short read (a full page) never prunes an absent card", async () => {
-    const file = stateFile({ [PENDING_ALERTS_KEY]: { [id(900)]: { firstSeen: T0.toISOString(), alertedAt: T0.toISOString() } } });
-    const rows = Array.from({ length: 50 }, (_, i) => row(i + 1, `Person${i + 1}`));
-    serve(rows);
-    await run(file, T1);
-    expect(readState(file)[PENDING_ALERTS_KEY][id(900)]).toEqual({ firstSeen: T0.toISOString(), alertedAt: T0.toISOString() });
+  test("S1: a complete read with zero rows prunes nothing, however long the cards have been away", async () => {
+    const file = stateFile();
+    serve([row(1, "Asha"), row(2, "Bilal")]);
+    await run(file, T0);
+    const before = readState(file)[PENDING_ALERTS_KEY];
+    serve([]);
+    expect(await run(file, new Date(T0.getTime() + 72 * 3_600_000))).toEqual({ silent: true, reason: "nothing-new" });
+    expect(readState(file)[PENDING_ALERTS_KEY]).toEqual(before);
+    // Back on the next normal read: nothing is re-sent.
+    serve([row(1, "Asha"), row(2, "Bilal")]);
+    expect(await run(file, new Date(T0.getTime() + 73 * 3_600_000))).toEqual({ silent: true, reason: "nothing-new" });
   });
 
-  test("a negotiating card never alerts; an alerted card seen negotiating is dropped, and alerts again once it awaits the resident", async () => {
+  test("a cut-short read (a full page) never prunes an absent card", async () => {
+    const file = stateFile({ [PENDING_ALERTS_KEY]: { [id(900)]: { firstSeen: T0.toISOString(), lastSeen: T0.toISOString(), alertedAt: T0.toISOString() } } });
+    const rows = Array.from({ length: 50 }, (_, i) => row(i + 1, `Person${i + 1}`));
+    serve(rows);
+    // Even long past the grace.
+    await run(file, new Date(T0.getTime() + 100 * 3_600_000));
+    expect(readState(file)[PENDING_ALERTS_KEY][id(900)]).toEqual({ firstSeen: T0.toISOString(), lastSeen: T0.toISOString(), alertedAt: T0.toISOString() });
+  });
+
+  test("a negotiating card never alerts; an alerted card seen negotiating is dropped at once (positive evidence), and alerts again once it awaits the resident", async () => {
     const file = stateFile();
     serve([row(1, "Asha")]);
     await run(file, T0);
@@ -167,8 +202,8 @@ describe("pendingAlert", () => {
     if ("silent" in first) throw new Error(first.reason);
     expect(first.cards.map((c) => c.opportunityId)).toEqual([id(5), id(1), id(2)]);
     const ledger = readState(file)[PENDING_ALERTS_KEY];
-    expect(ledger[id(3)]).toEqual({ firstSeen: T1.toISOString(), alertedAt: null });
-    expect(ledger[id(4)]).toEqual({ firstSeen: T1.toISOString(), alertedAt: null });
+    expect(ledger[id(3)]).toEqual({ firstSeen: T1.toISOString(), lastSeen: T1.toISOString(), alertedAt: null });
+    expect(ledger[id(4)]).toEqual({ firstSeen: T1.toISOString(), lastSeen: T1.toISOString(), alertedAt: null });
     const second = await run(file, T2);
     if ("silent" in second) throw new Error(second.reason);
     expect(second.cards.map((c) => [c.opportunityId, c.firstSeen])).toEqual([[id(3), T1.toISOString()], [id(4), T1.toISOString()]]);
@@ -181,7 +216,7 @@ describe("pendingAlert", () => {
     const result = await run(file, T1);
     if ("silent" in result) throw new Error(result.reason);
     expect(result.cards.map((c) => c.opportunityId)).toEqual([id(2)]);
-    expect(readState(file)[PENDING_ALERTS_KEY][id(1)]).toEqual({ firstSeen: T1.toISOString(), alertedAt: null });
+    expect(readState(file)[PENDING_ALERTS_KEY][id(1)]).toEqual({ firstSeen: T1.toISOString(), lastSeen: T1.toISOString(), alertedAt: null });
   });
 
   for (const failure of failureInputs("opportunities")) {
@@ -234,16 +269,32 @@ describe("pendingAlert", () => {
 describe("the ledger and the plan", () => {
   const listing = (ids: string[], complete = true) => ({ complete, pendingIds: new Set(ids) });
 
-  test("readPendingLedger: absent or not an object is a first run; a bad entry is dropped alone", () => {
+  test("readPendingLedger: absent or not an object is a first run; a bad entry is dropped alone; a missing lastSeen reads as firstSeen", () => {
     expect(readPendingLedger({})).toBeNull();
     expect(readPendingLedger({ [PENDING_ALERTS_KEY]: [] })).toBeNull();
     expect(readPendingLedger({ [PENDING_ALERTS_KEY]: "x" })).toBeNull();
-    const ok = { firstSeen: T0.toISOString(), alertedAt: null };
-    expect(
-      readPendingLedger({
-        [PENDING_ALERTS_KEY]: { good: ok, "bad id!": ok, noSeen: { alertedAt: null }, badAlerted: { firstSeen: T0.toISOString(), alertedAt: "yesterday" } },
-      }),
-    ).toEqual({ good: ok });
+    const ok = { firstSeen: T0.toISOString(), lastSeen: T1.toISOString(), alertedAt: null };
+    const old = { firstSeen: T0.toISOString(), alertedAt: T0.toISOString() };
+    const ledger = readPendingLedger({
+      [PENDING_ALERTS_KEY]: { good: ok, old, badLast: { ...old, lastSeen: "noon" }, "bad id!": ok, noSeen: { alertedAt: null }, badAlerted: { firstSeen: T0.toISOString(), alertedAt: "yesterday" } },
+    });
+    expect({ ...ledger }).toEqual({
+      good: ok,
+      old: { ...old, lastSeen: T0.toISOString() },
+      badLast: { ...old, lastSeen: T0.toISOString() },
+    });
+  });
+
+  test("N4: an id that is not a plain own key (__proto__, constructor, prototype) is never held or alerted", () => {
+    for (const bad of ["__proto__", "constructor", "prototype"]) expect(isLedgerId(bad)).toBe(false);
+    expect(isLedgerId("a1")).toBe(true);
+    const fromFile = readPendingLedger(JSON.parse(`{"${PENDING_ALERTS_KEY}": {"__proto__": {"firstSeen": "${T0.toISOString()}", "alertedAt": null}, "a1": {"firstSeen": "${T0.toISOString()}", "alertedAt": null}}}`))!;
+    expect(Object.keys(fromFile)).toEqual(["a1"]);
+    const cards = [{ name: "Asha", opportunityId: "__proto__", status: "pending" }, { name: "Bilal", opportunityId: "constructor", status: "pending" }];
+    const first = planPendingAlerts({}, cards, listing(["__proto__", "constructor"]), T1.toISOString());
+    expect(first.due).toEqual([]);
+    expect(Object.keys(first.ledger)).toEqual([]);
+    expect(Object.getPrototypeOf(first.ledger)).toBeNull();
   });
 
   test("a card listed with another status is not pending; a card without an id is never tracked", () => {
@@ -257,12 +308,28 @@ describe("the ledger and the plan", () => {
     expect(Object.keys(plan.ledger)).toEqual(["c1"]);
   });
 
-  test("the ledger is capped, alerted entries going first", () => {
-    const ledger = Object.fromEntries(Array.from({ length: 205 }, (_, i) => [`x${i}`, { firstSeen: new Date(T0.getTime() + i * 1000).toISOString(), alertedAt: T0.toISOString() }]));
+  test("the ledger is capped: unlisted entries first, then alerted before unalerted, oldest first", () => {
+    const entry = (i: number) => ({ firstSeen: new Date(T0.getTime() + i * 1000).toISOString(), lastSeen: T0.toISOString(), alertedAt: T0.toISOString() });
+    const ledger = Object.fromEntries(Array.from({ length: 205 }, (_, i) => [`x${i}`, entry(i)]));
     const plan = planPendingAlerts(ledger, [{ name: "Asha", opportunityId: "new1", status: "pending" }], listing([], false), T1.toISOString(), 0);
     expect(Object.keys(plan.ledger)).toHaveLength(200);
-    expect(plan.ledger.new1).toEqual({ firstSeen: T1.toISOString(), alertedAt: null });
+    expect(plan.ledger.new1).toEqual({ firstSeen: T1.toISOString(), lastSeen: T1.toISOString(), alertedAt: null });
     expect(plan.ledger.x0).toBeUndefined();
+  });
+
+  test("N1: a listed, alerted card is never dropped by the cap while unlisted entries exist, so it is never re-alerted", () => {
+    const entry = (i: number) => ({ firstSeen: new Date(T0.getTime() + i * 1000).toISOString(), lastSeen: T0.toISOString(), alertedAt: T0.toISOString() });
+    // 200 alerted entries; the five oldest are still listed (a cut-short read), the rest are not.
+    const ledger = Object.fromEntries(Array.from({ length: 200 }, (_, i) => [`k${String(i).padStart(3, "0")}`, entry(i)]));
+    const listed = ["k000", "k001", "k002", "k003", "k004"];
+    const cards = [...listed, "new1"].map((opportunityId) => ({ name: "Asha", opportunityId, status: "pending" }));
+    const plan = planPendingAlerts(ledger, cards, listing([...listed, "new1"], false), T1.toISOString(), 0);
+    expect(Object.keys(plan.ledger)).toHaveLength(200);
+    for (const id of listed) expect({ id, kept: Boolean(plan.ledger[id]) }).toEqual({ id, kept: true });
+    expect(plan.ledger.k005).toBeUndefined();
+    // The next run alerts nothing of the listed ones again.
+    const next = planPendingAlerts(plan.ledger, cards, listing([...listed, "new1"], false), T2.toISOString(), 3);
+    expect(next.due.map((d) => d.opportunityId)).toEqual(["new1"]);
   });
 });
 
