@@ -79,9 +79,11 @@
  * step: nothing runs it at gateway start (the `av-approval` plugin's own
  * integrity check does that, DATA-234).
  *
- * DATA-379, the pre-warm: after a live fire the facade answered (not after a
- * failed or deferred one) the step sends the live fire's request once more,
- * straight through the installed shim, labelled `source=prewarm` in the
+ * DATA-379, the pre-warm: after a live fire the facade REFUSED with
+ * `hook-unsupported-execution-context` (not after a failed or deferred one, nor
+ * one blocked with another code, which a core that decided it would give)
+ * the step sends the live fire's request once more, straight through the
+ * installed shim, labelled `source=prewarm` in the
  * shim's log (`prewarmApproval`). The facade refuses that request before the
  * policy decision and appends nothing, so it records no approval, opens no
  * question and charges no budget; its verdict is discarded and no tool runs.
@@ -333,7 +335,7 @@ export interface ApprovalOptions {
   liveScript?: string;
   /** Clock for `installed_at`. */
   now?: Date;
-  /** DATA-379: the pre-warm run after a live fire the facade answered (default `prewarmApproval`). Tests pass a stub. */
+  /** DATA-379: the pre-warm run after a live fire the facade refused (default `prewarmApproval`). Tests pass a stub. */
   prewarm?: () => PrewarmReport;
 }
 
@@ -1087,6 +1089,8 @@ export function resolveHermesPython(): string | null {
 
 interface LiveFacts {
   problems?: string[];
+  /** The fire itself (live_selfcheck.py item 6); `code_matched` only on a facade block. */
+  fire?: { verdict?: string; code_matched?: boolean };
   safe_mode?: boolean;
   managed?: boolean;
   managed_dir?: string | null;
@@ -1130,6 +1134,12 @@ export interface ApprovalReport {
   exit1?: Exit1Behaviour;
   /** R3 fix round 4: what Hermes registers for the shim, from its own parse of config.yaml. */
   routed?: RoutedFacts | null;
+  /**
+   * DATA-379 (fix round 1): the live fire was blocked by the facade with `hook-unsupported-execution-context`,
+   * i.e. REFUSED before any decision (true), blocked with another code (false: a core that decided it), or
+   * not reported (null). The pre-warm repeats the fire only when it is true.
+   */
+  liveCodeMatched?: boolean | null;
 }
 
 /** The live fire through Hermes's `run_once`. Accepted dogfood overrides are returned and warned about on stderr. */
@@ -1185,7 +1195,8 @@ export function liveReport(options: ApprovalOptions = {}): ApprovalReport {
       problems.push(...unpatched);
     }
   }
-  return { problems, overrides, exit1, routed };
+  const liveCodeMatched = typeof facts.fire?.code_matched === "boolean" ? facts.fire.code_matched : null;
+  return { problems, overrides, exit1, routed, liveCodeMatched };
 }
 
 /**
@@ -1198,7 +1209,7 @@ export function checkApprovalReport(options: ApprovalOptions = {}): ApprovalRepo
   const problems = approvalProblems(options);
   if (problems.length > 0) return { problems: [...new Set(problems)], overrides: [] };
   const live = liveReport(options);
-  return { problems: [...new Set(live.problems)], overrides: live.overrides, exit1: live.exit1 ?? "unknown", routed: live.routed ?? null };
+  return { problems: [...new Set(live.problems)], overrides: live.overrides, exit1: live.exit1 ?? "unknown", routed: live.routed ?? null, liveCodeMatched: live.liveCodeMatched ?? null };
 }
 
 /** One line for the exit-1 probe's answer. */
@@ -1385,9 +1396,11 @@ export function installApproval(sourceSkills: string, options: ApprovalOptions =
       );
     }
     const { tenant } = writeSurfaceMarker(now, prior, report.overrides);
-    // DATA-379: only after a live fire the facade answered; never fatal (prewarmAfterInstall cannot throw).
+    // DATA-379: only after a live fire the facade REFUSED (its expected code; a block with another code means a
+    // core decided it, and the pre-warm would be a second decided request); never fatal (it cannot throw).
     if (deferred.length > 0) console.log("→ approval gate: pre-warm not run (the live self-check was deferred)");
-    else prewarmAfterInstall(options);
+    else if (report.liveCodeMatched === true) prewarmAfterInstall(options);
+    else console.log("→ approval gate: pre-warm not run (the live fire was decided, not refused)");
     const scripts = cronScripts();
     if (scripts.length > 0) {
       console.log(
@@ -1491,8 +1504,8 @@ export const PREWARM_SESSION = "av-approval-prewarm";
 export const PREWARM_ENV = "AV_APPROVAL_PREWARM";
 const PREWARM_OFF = new Set(["0", "false", "no", "off"]);
 /** One post (`APPROVAL_HOOK_WAIT_S=0`), a short curl ceiling, and a bound on the whole spawn. */
-const PREWARM_MAX_TIME_S = 10;
-const PREWARM_TIMEOUT_MS = 15_000;
+export const PREWARM_MAX_TIME_S = 10;
+export const PREWARM_TIMEOUT_MS = 15_000;
 /** The facade's refusal of the live fire's request (APRV-415; live_selfcheck.py item 6). */
 const PREWARM_EXPECTED_CODE = "hook-unsupported-execution-context";
 const SHIM_BLOCK_PREFIX = "approval facade unreachable";
@@ -1621,7 +1634,7 @@ export function prewarmApproval(options: { timeoutMs?: number } = {}): PrewarmRe
 }
 
 /**
- * The install's call (step 8, after a live fire the facade answered): the pre-warm, then one line,
+ * The install's call (step 8, after a live fire the facade refused): the pre-warm, then one line,
  * on stdout when the facade refused it as expected or it was opted out, else on stderr. Never
  * throws: whatever the pre-warm did, the step's result is the one it would have been without it.
  */

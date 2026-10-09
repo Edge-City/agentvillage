@@ -32,6 +32,8 @@ import {
   prewarmAfterInstall,
   prewarmApproval,
   prewarmCli,
+  PREWARM_MAX_TIME_S,
+  PREWARM_TIMEOUT_MS,
   type PrewarmReport,
   ApprovalInstallError,
   ENV_NAME,
@@ -3023,6 +3025,8 @@ describe("DATA-379: the pre-warm", () => {
     const env = readFileSync(join(fx.state, "env.1"), "utf8");
     expect(env).toContain("APPROVAL_HOOK_SOURCE=prewarm\n");
     expect(env).toContain("APPROVAL_HOOK_WAIT_S=0\n");
+    expect(env).toContain(`APPROVAL_HOOK_MAX_TIME=${PREWARM_MAX_TIME_S}\n`);
+    expect(PREWARM_MAX_TIME_S).toBe(10);
     for (const foreign of ["AV_EVENTS_TOKEN", "FAKE_HERMES_STATE", "PYTHONPATH"]) expect(env).not.toContain(foreign);
     // The shim log: the pre-warm's lines only (the fake Hermes's live fire runs no shim), each labelled.
     const lines = hookLog(home).trim().split("\n");
@@ -3183,6 +3187,43 @@ describe("DATA-379: the pre-warm", () => {
     expect(calls(fx)).toBe(1);
     expect(hookLog(home)).not.toContain("outcome=wait");
     expect(hookLog(home)).toContain("outcome=block");
+  }, 120_000);
+
+  test("fix round 1 (S1): a live fire blocked with ANOTHER code (a core that decided it) passes the install but is not repeated", () => {
+    for (const message of ["approval-rejected: the policy denies terminal ls /tmp", "hook-policy-unavailable: no policy"]) {
+      tenant();
+      fakeHermes({ run_once: { ...FACADE_BLOCK, stdout: JSON.stringify({ action: "block", message }), parsed: { action: "block", message } } });
+      logs = [];
+      errors = [];
+      expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+      expect(prewarmCalls).toBe(0);
+      expect(prewarmLines(logs)).toEqual(["→ approval gate: pre-warm not run (the live fire was decided, not refused)"]);
+      expect(prewarmLines(errors)).toEqual([]);
+      expect(logs.at(-1)).toContain("self-check passed (live: blocked by the facade)");
+    }
+    // The expected refusal still pre-warms (the control case of the same fixture).
+    tenant();
+    fakeHermes();
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+    expect(prewarmCalls).toBe(1);
+  });
+
+  test("fix round 1 (S2): the default spawn bound is 15 s and the default path uses it (a facade that answers after 20 s is cut, timed-out)", () => {
+    expect(PREWARM_TIMEOUT_MS).toBe(15_000);
+    const { fx, skills } = prewarmWorld("custom");
+    tenant();
+    fakeHermes();
+    expect(installApproval(skills, opts())).toBe("installed");
+    // The fake curl answers the expected refusal, but only after 20 s (above the bound, below the test's own).
+    writeFileSync(join(fx.state, "after.1"), "/bin/sleep 20\n");
+    const t0 = performance.now();
+    const r = prewarmApproval();
+    const took = performance.now() - t0;
+    expect(r).toMatchObject({ outcome: "error", reason: "timed-out" });
+    expect(took).toBeGreaterThanOrEqual(PREWARM_TIMEOUT_MS - 500);
+    // No upper bound here: the bound kills the shim, and spawnSync then waits for its pipes, which the
+    // fake curl (a grandchild, sleeping 20 s) still holds. A real curl holds them at most its own
+    // --max-time (APPROVAL_HOOK_MAX_TIME=10, asserted in the first test).
   }, 120_000);
 
   test("the shim's label: only the exact word prewarm; any other value adds nothing and no run's verdict changes", () => {

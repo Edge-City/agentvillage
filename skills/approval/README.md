@@ -183,8 +183,10 @@ logged by the shim, the installer or the plugin (the plugin never reads it).
 
 ### The pre-warm (DATA-379)
 
-After a live fire the facade answered (not after a failed or deferred one) the
-installer sends the live fire's request once more, straight through the
+After a live fire the facade refused with `hook-unsupported-execution-context`
+(not after a failed or deferred one, nor one blocked with another code, which
+would mean a core decided it: then it prints `pre-warm not run`) the installer
+sends the live fire's request once more, straight through the
 installed shim: a `terminal` call with no `workdir`, one post
 (`APPROVAL_HOOK_WAIT_S=0`), every log line of that run marked
 `source=prewarm`. Core refuses that request (`hook-unsupported-execution-context`)
@@ -204,8 +206,10 @@ stderr; the install's result and `--check` are unchanged. `AV_APPROVAL_PREWARM=0
 (or `false`, `no`, `off`) turns it off. `bun install/install_approval.ts
 --prewarm` runs it alone (one JSON line, exit 0 always): the entry point for the
 control plane after a daemon restart no install follows. A latency reading of
-resident calls leaves out `source=prewarm` lines (and the live fire's own
-`code=hook-unsupported-execution-context` line).
+resident calls leaves out `source=prewarm` lines (gate 7's script does). Do not
+drop every `code=hook-unsupported-execution-context` line to that end: a
+resident's own refused calls carry it too. The only other line that is not a
+resident's is the live fire's, one per install, unlabelled.
 
 ## Fail-closed backstop at every gateway start (`av-approval`)
 

@@ -124,7 +124,7 @@ describe("DATA-379: the approval step pre-warms after its live fire, inside the 
   const text = readFileSync(join(import.meta.dir, "..", "install_approval.ts"), "utf8");
   const step = text.slice(text.indexOf("export function installApproval("), text.indexOf("export function runApprovalStep("));
 
-  test("live fire, then its verdict, then the pre-warm (only when not deferred), then the installed line; one call, and install.ts adds none", () => {
+  test("live fire, then its verdict, then the pre-warm (only when not deferred and the fire was refused with its own code), then the installed line; one call, and install.ts adds none", () => {
     const at = (needle: string) => {
       const i = step.indexOf(needle);
       expect([needle, i >= 0]).toEqual([needle, true]);
@@ -135,10 +135,12 @@ describe("DATA-379: the approval step pre-warms after its live fire, inside the 
     const hard = at("if (hard.length > 0) {");
     const marker = at("const { tenant } = writeSurfaceMarker(now, prior, report.overrides);");
     const gate = at('if (deferred.length > 0) console.log("→ approval gate: pre-warm not run (the live self-check was deferred)");');
-    const call = at("else prewarmAfterInstall(options);");
+    const call = at("else if (report.liveCodeMatched === true) prewarmAfterInstall(options);");
+    const decided = at('else console.log("→ approval gate: pre-warm not run (the live fire was decided, not refused)");');
     const installed = at("approval gate installed: ");
-    expect(fire < hard && hard < marker && marker < gate && gate < call && call < installed).toBe(true);
-    expect(gate + step.slice(gate).indexOf("\n") + 1).toBe(step.indexOf("    else prewarmAfterInstall(options);"));
+    expect(fire < hard && hard < marker && marker < gate && gate < call && call < decided && decided < installed).toBe(true);
+    expect(gate + step.slice(gate).indexOf("\n") + 1).toBe(step.indexOf("    else if (report.liveCodeMatched === true) prewarmAfterInstall(options);"));
+    expect(step).not.toMatch(/\n\s*prewarmAfterInstall\(/);
     const install = readFileSync(join(import.meta.dir, "..", "install.ts"), "utf8");
     expect(install).not.toMatch(/prewarm/i);
   });
