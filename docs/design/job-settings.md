@@ -76,13 +76,14 @@ the other two tests. The control plane changes it with one non-interactive comma
 | `jobs.<key>.tz` | an IANA zone (rules in §3) | `Asia/Kolkata` |
 | `adminSchedules` | a list of default job keys whose schedule an admin set with `set --schedule`; read entry by entry (below) | `[]` |
 
-**Job keys.** The five default agent jobs are `brief`, `drop-midday`, `drop-evening`,
-`negotiation` and `evening`. The three template jobs are `tpl-brief`, `tpl-digest-preview` and
+**Job keys.** The six default agent jobs are `brief`, `drop-midday`, `drop-evening`,
+`negotiation`, `evening` and `pending` (DATA-430's hourly pending opportunity alert). The three template jobs are `tpl-brief`, `tpl-digest-preview` and
 `tpl-evening-ask`. The prefetch has no settings, because it delivers nothing.
 
 **Defaults** (`DEFAULT_WINDOWS`, job-settings.ts:65):
 
 - `brief` and `tpl-brief`: 05:00 to 11:00, which is rc13's brief window.
+- `pending` (DATA-430): 08:00 to 22:00, its quiet hours; a card that turns pending outside them is alerted at the first run inside, and the job has no once-a-day mark (its per-card ledger is the gate).
 - Every other job: no window. It delivers whenever its schedule runs it, as on rc13.
 
 **Overrides only.** `jobs` holds overrides and nothing else:
