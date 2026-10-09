@@ -8,7 +8,7 @@
  * against the stand-in Hermes (fake_hermes.ts, taught `plugins install`).
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import YAML from "yaml";
@@ -19,6 +19,8 @@ import {
   INDEX_PLUGIN_REF,
   INDEX_PLUGIN_SOURCE,
   MORALMOD_ARM_ENV,
+  MORNING_JOB,
+  MORNING_LAUNCHER,
   NEGOTIATOR_SEED,
   indexPluginFailedLine,
   installIndexPlugin,
@@ -64,8 +66,31 @@ function recorder(fail = false) {
       const ref = args[args.indexOf("--ref") + 1]!;
       installedAt(ref, true);
     }
+    if (args[0] === "cron" && args[1] === "remove") writeJobs(cronJobs().filter((job) => job.id !== args[2]));
   };
   return { calls, run };
+}
+
+type Job = { id: string; name: string; script?: string };
+function cronJobs(): Job[] {
+  const path = join(home, "cron", "jobs.json");
+  return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")).jobs : [];
+}
+function writeJobs(jobs: Job[]): void {
+  mkdirSync(join(home, "cron"), { recursive: true });
+  writeFileSync(join(home, "cron", "jobs.json"), JSON.stringify({ jobs }, null, 2));
+}
+const launcher = () => join(home, "scripts", MORNING_LAUNCHER);
+/** The plugin's `Index morning` job and launcher as morning.py creates them at REF, beside three jobs that are not it. */
+function plantMorning(): void {
+  mkdirSync(join(home, "scripts"), { recursive: true });
+  writeFileSync(launcher(), "import runpy\n");
+  writeJobs([
+    { id: "aaaaaaaaaaaa", name: MORNING_JOB, script: launcher() },
+    { id: "bbbbbbbbbbbb", name: "Edge — morning brief", script: "index-digest-send.py" },
+    { id: "cccccccccccc", name: MORNING_JOB, script: "someone-else.py" },
+    { id: "dddddddddddd", name: "Index morning (mine)", script: launcher() },
+  ]);
 }
 
 /** The tree and record Hermes leaves after an install at `revision`. */
@@ -129,10 +154,11 @@ describe("the arm: only `on` installs", () => {
       expect([value, step(run).state]).toEqual([value, "off"]);
       expect([value, calls]).toEqual([value, []]);
       expect([value, plugins().enabled]).toEqual([value, ["av-events", "index-links"]]);
+      expect([value, existsSync(negotiatorPath(home))]).toEqual([value, false]);
     }
   });
 
-  test("`on` trimmed and in any case is ON; read from $HERMES_HOME/.env when the environment has none; the environment wins", () => {
+  test("`on` trimmed and in any case is ON; read from $HERMES_HOME/.env when the environment has none; .env wins over the environment", () => {
     for (const value of ["on", " ON ", "On"]) {
       rmSync(join(home, "plugins"), { recursive: true, force: true });
       process.env[MORALMOD_ARM_ENV] = value;
@@ -146,10 +172,25 @@ describe("the arm: only `on` installs", () => {
     const fromFile = recorder();
     expect(step(fromFile.run).state).toBe("installed");
     expect(fromFile.calls).toEqual([FRESH]);
+    // A create-time `off` in the install shell does not beat the control plane's later `.env` on.
     process.env[MORALMOD_ARM_ENV] = "off";
     const overridden = recorder();
-    expect(step(overridden.run).state).toBe("off");
+    expect(step(overridden.run).state).toBe("pinned");
     expect(overridden.calls).toEqual([]);
+  });
+
+  test("refute S1: environment on, .env off -> OFF (the .env flip wins); .env blank -> OFF; .env silent -> the environment", () => {
+    config(BASE);
+    process.env[MORALMOD_ARM_ENV] = "on";
+    writeFileSync(join(home, ".env"), `INDEX_API_KEY=ix_x\n${MORALMOD_ARM_ENV}=off\n`);
+    const flipped = recorder();
+    expect(step(flipped.run).state).toBe("off");
+    expect(flipped.calls).toEqual([]);
+    expect(plugins().enabled).toEqual(["av-events", "index-links"]);
+    writeFileSync(join(home, ".env"), `INDEX_API_KEY=ix_x\n${MORALMOD_ARM_ENV}=\n`);
+    expect(step(recorder().run).state).toBe("off");
+    writeFileSync(join(home, ".env"), "INDEX_API_KEY=ix_x\n");
+    expect(step(recorder().run).state).toBe("installed");
   });
 
   test("ON but --skip-index or no Index key (no flag, no INDEX_API_KEY, none in .env): skipped, no Hermes call", () => {
@@ -291,6 +332,50 @@ describe("the operator's off switches", () => {
     expect(plugins().enabled).toContain(INDEX_PLUGIN);
   });
 
+  test("refute S2: OFF after ON removes the plugin's `Index morning` job (cron remove <id>) and its launcher; jobs that are not it stay", () => {
+    config(BASE);
+    process.env[MORALMOD_ARM_ENV] = "on";
+    step(recorder().run);
+    plantMorning();
+    // ON leaves both to the plugin
+    const on = recorder();
+    expect(step(on.run).state).toBe("pinned");
+    expect(on.calls).toEqual([]);
+    expect(cronJobs().map((job) => job.id)).toEqual(["aaaaaaaaaaaa", "bbbbbbbbbbbb", "cccccccccccc", "dddddddddddd"]);
+    expect(existsSync(launcher())).toBe(true);
+    process.env[MORALMOD_ARM_ENV] = "off";
+    const off = recorder();
+    expect(step(off.run)).toMatchObject({ state: "off", failed: null });
+    expect(off.calls).toEqual([["cron", "remove", "aaaaaaaaaaaa"]]);
+    expect(cronJobs().map((job) => job.id)).toEqual(["bbbbbbbbbbbb", "cccccccccccc", "dddddddddddd"]);
+    expect(existsSync(launcher())).toBe(false);
+    // and the next OFF roll: nothing left to do
+    const again = recorder();
+    expect(step(again.run)).toMatchObject({ state: "off", failed: null });
+    expect(again.calls).toEqual([]);
+  });
+
+  test("refute S2: OFF on a box that never had them is a no-op (no Hermes call, jobs.json and scripts/ untouched)", () => {
+    writeJobs([{ id: "bbbbbbbbbbbb", name: "Edge — morning brief", script: "index-digest-send.py" }]);
+    const before = readFileSync(join(home, "cron", "jobs.json"), "utf8");
+    const { calls, run } = recorder();
+    expect(step(run)).toMatchObject({ state: "off", failed: null });
+    expect(calls).toEqual([]);
+    expect(readFileSync(join(home, "cron", "jobs.json"), "utf8")).toBe(before);
+    expect(existsSync(join(home, "scripts"))).toBe(false);
+  });
+
+  test("refute S2: a failed or ineffective cron remove is failed=hermes, and the launcher is still deleted", () => {
+    plantMorning();
+    expect(step(recorder(true).run)).toMatchObject({ state: "off", failed: "hermes" });
+    expect(existsSync(launcher())).toBe(false);
+    plantMorning();
+    const calls: string[][] = [];
+    expect(step((args) => { calls.push(args); }).failed).toBe("hermes");
+    expect(calls).toEqual([["cron", "remove", "aaaaaaaaaaaa"]]);
+    expect(existsSync(launcher())).toBe(false);
+  });
+
   test("off with index-network in both lists: dropped from enabled, kept in disabled", () => {
     config("plugins:\n  enabled:\n    - index-network\n  disabled:\n    - index-network\n");
     step(recorder().run);
@@ -330,6 +415,45 @@ describe("writes and failures", () => {
     expect(step(run)).toMatchObject({ state: "failed", failed: "hermes" });
     expect(calls).toEqual([FORCED]);
     expect(plugins().enabled).toEqual([INDEX_PLUGIN]);
+  });
+
+  test("refute N1: a failed or timed-out install removes the temporary clones it left; another plugin's, Hermes's metadata files and other names stay", () => {
+    process.env[MORALMOD_ARM_ENV] = "on";
+    const plugins_ = join(home, "plugins");
+    const clone = (name: string, manifest?: string) => {
+      mkdirSync(join(plugins_, name, "plugin"), { recursive: true });
+      if (manifest) writeFileSync(join(plugins_, name, "plugin", "plugin.yaml"), `name: ${manifest}\n`);
+    };
+    clone(".install-zzzz9999", "other-plugin"); // another install's, there before the call
+    writeFileSync(join(plugins_, ".install-metadata.json"), "{}\n");
+    writeFileSync(join(plugins_, ".install-metadata.json.lock"), "");
+    const calls: string[][] = [];
+    const killed = (args: string[]) => {
+      calls.push(args);
+      clone(".install-abcd_123", INDEX_PLUGIN); // killed after checkout
+      clone(".install-efgh5678"); // killed mid-clone
+      const err = new Error("hermes-timeout");
+      err.name = "HermesTimeout";
+      throw err;
+    };
+    expect(step(killed)).toMatchObject({ state: "failed", failed: "hermes" });
+    expect(calls).toEqual([FRESH]);
+    const left = readdirSync(plugins_).sort();
+    expect(left).toEqual([".install-metadata.json", ".install-metadata.json.lock", ".install-zzzz9999"]);
+  });
+
+  test("refute N1: an index-network clone a killed earlier run left is removed on an ON roll, with no Hermes call when pinned; a name off Hermes's pattern stays", () => {
+    process.env[MORALMOD_ARM_ENV] = "on";
+    installedAt(INDEX_PLUGIN_REF, true);
+    for (const name of [".install-old_0001", ".install-toolongname1"]) {
+      mkdirSync(join(home, "plugins", name, "plugin"), { recursive: true });
+      writeFileSync(join(home, "plugins", name, "plugin", "plugin.yaml"), `name: ${INDEX_PLUGIN}\n`);
+    }
+    const { calls, run } = recorder();
+    expect(step(run).state).toBe("pinned");
+    expect(calls).toEqual([]);
+    expect(existsSync(join(home, "plugins", ".install-old_0001"))).toBe(false);
+    expect(existsSync(join(home, "plugins", ".install-toolongname1"))).toBe(true);
   });
 
   test("an unreadable config.yaml: failed=config and no Hermes call, ON or OFF", () => {
@@ -416,6 +540,33 @@ describe("the tool surface at INDEX_PLUGIN_REF", () => {
     expect([...WRITE, ...NOT_GATED].sort()).toEqual([...PROVIDES_TOOLS].sort());
   });
 
+  // refute N5: the names register() registers at INDEX_PLUGIN_REF, in its order, copied by hand
+  // (`gh api repos/indexnetwork/hermes-plugin/contents/__init__.py?ref=<REF>`, the ctx.register_tool loop).
+  const REGISTERED = [
+    "index_read_intents",
+    "index_create_intent",
+    "index_update_intent",
+    "index_list_intent_networks",
+    "index_add_intent_to_network",
+    "index_read_networks",
+    "index_read_network_memberships",
+    "index_create_network",
+    "index_update_network",
+    "index_join_network",
+    "index_list_opportunities",
+    "index_update_opportunity",
+    "index_research_profile",
+    "index_read_docs",
+    "index_agent_me",
+    "index_open_app",
+  ];
+
+  test("refute N5: provides_tools is exactly what register() registers at the pin", () => {
+    expect(INDEX_PLUGIN_REF).toBe(PINNED_AT);
+    expect([...REGISTERED].sort()).toEqual([...PROVIDES_TOOLS].sort());
+    expect(new Set(REGISTERED).size).toBe(REGISTERED.length);
+  });
+
   test("every write tool is in APPROVAL_GATED_TOOLS", () => {
     expect(WRITE.filter((tool) => !gated(tool))).toEqual([]);
   });
@@ -462,7 +613,21 @@ describe("end to end: install.ts against the stand-in Hermes", () => {
     expect(pluginCalls()).toEqual([]);
     expect(plugins().enabled).toContain(INDEX_PLUGIN);
 
+    // the plugin's own morning job and launcher, as morning.py leaves them (the fake's jobs.json shape)
+    const jobsPath = join(home, "cron", "jobs.json");
+    const jobs = existsSync(jobsPath) ? JSON.parse(readFileSync(jobsPath, "utf8")).jobs : [];
+    jobs.push({ id: "e2e0morning0", name: MORNING_JOB, script: join(home, "scripts", MORNING_LAUNCHER), no_agent: true });
+    jobs.push({ id: "e2e0unrelate", name: "Edge — morning brief", script: "index-digest-send.py" });
+    mkdirSync(join(home, "cron"), { recursive: true });
+    writeFileSync(jobsPath, JSON.stringify({ jobs }));
+    mkdirSync(join(home, "scripts"), { recursive: true });
+    writeFileSync(join(home, "scripts", MORNING_LAUNCHER), "import runpy\n");
+    rmSync(join(home, "hermes-calls.jsonl"), { force: true });
     const off = install({ [MORALMOD_ARM_ENV]: "off" });
+    const cronCalls = readFileSync(join(home, "hermes-calls.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l) as string[]).filter((a) => a[0] === "cron");
+    expect(cronCalls).toEqual([["cron", "remove", "e2e0morning0"]]);
+    expect(JSON.parse(readFileSync(jobsPath, "utf8")).jobs.map((job: { id: string }) => job.id)).toEqual(["e2e0unrelate"]);
+    expect(existsSync(join(home, "scripts", MORNING_LAUNCHER))).toBe(false);
     expect(off.code).toBe(0);
     expect(pluginCalls()).toEqual([]);
     expect(plugins().enabled).not.toContain(INDEX_PLUGIN);

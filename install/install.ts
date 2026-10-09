@@ -20,7 +20,8 @@
  *   - Index Hermes plugin (`index-network`) for `AV_MORALMOD_ARM=on` residents only: installed at the
  *     reviewed commit `INDEX_PLUGIN_REF` (no Hermes call once there), listed in `plugins.enabled`, and
  *     `$HERMES_HOME/index/negotiator.ts` seeded only when absent; an `index-network` entry in
- *     `plugins.disabled` is left alone; OFF drops it from `plugins.enabled`. A failure does not fail the
+ *     `plugins.disabled` is left alone; OFF drops it from `plugins.enabled` and removes the plugin's
+ *     `Index morning` cron job and launcher. A failure does not fail the
  *     install: `index_plugin_failed` in the status file and one line,
  *     `agentvillage-install: index_plugin_failed=<hermes|config|seed>` (`install_index_plugin.ts`)
  *   - opt-in recall skill + plugin when `AV_RECALL_ENABLED=1` (`install_recall.ts`)
@@ -239,7 +240,8 @@ function copySkillFiles(): void {
 function installIndexHermesPlugin(): IndexPluginFailure | null {
   let failed: IndexPluginFailure | null;
   try {
-    failed = installIndexPlugin(hermesRunner(hermesBin(), hermesExecEnv(), 120_000)).failed;
+    // 60 s: one call inside the control plane's 300 s bound on the whole install (refute S3).
+    failed = installIndexPlugin(hermesRunner(hermesBin(), hermesExecEnv(), 60_000)).failed;
   } catch (err) {
     const kind = err instanceof Error ? err.name : typeof err;
     console.warn(`  warning: index-network plugin step failed (${kind}); core install continues`);

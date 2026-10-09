@@ -2,9 +2,12 @@
  * The Index Hermes plugin (`index-network`), MoralMod's carrier, for ON
  * residents only, and the negotiator file it loads.
  *
- * - The arm: `AV_MORALMOD_ARM` (install environment, else `$HERMES_HOME/.env`;
- *   the control plane writes `on|off` per tenant). `on`, trimmed and in any
- *   case, is ON; absent, blank or anything else is OFF.
+ * - The arm: `AV_MORALMOD_ARM`, read as the gateway sees it: `$HERMES_HOME/.env`
+ *   first (the control plane writes `on|off` there per tenant), the install
+ *   environment only when `.env` does not assign it, as the approval switch
+ *   does (`gatewayValue`): the control plane's install shell carries
+ *   create-time variables that must not beat a later `.env` flip. `on`,
+ *   trimmed and in any case, is ON; absent, blank or anything else is OFF.
  * - ON: the plugin is installed at one reviewed commit, `INDEX_PLUGIN_REF`.
  *   When Hermes's own record (`plugins/.install-metadata.json`) says
  *   `index-network` is pinned at that commit and its `plugin.yaml` is on disk,
@@ -19,9 +22,21 @@
  *   changes the constant (and the tool list in the test that holds it).
  * - An `index-network` entry in `plugins.disabled` is the operator's: the step
  *   prints one warning and does nothing else.
- * - OFF: no Hermes command; `index-network` is dropped from `plugins.enabled`
- *   when listed. Nothing is uninstalled (`plugins remove` would also clear an
- *   operator's `plugins.disabled` entry).
+ * - OFF: `index-network` is dropped from `plugins.enabled` when listed, and
+ *   the plugin's own scheduled code is stopped: its `Index morning` cron job
+ *   (exact name, script `index-morning.py`) is removed with `hermes cron
+ *   remove <id>`, as the Index cron reconcile removes a retired job, and its
+ *   launcher `$HERMES_HOME/scripts/index-morning.py` is deleted. The plugin
+ *   removes both only from its `on_unload`, which Hermes does not run when
+ *   the gateway exits (morning.py `sync_morning_cron` at REF). No other
+ *   Hermes command; nothing is uninstalled (`plugins remove` would also
+ *   clear an operator's `plugins.disabled` entry). ON leaves both to the
+ *   plugin.
+ * - ON clears Hermes's own temporary clones (`plugins/.install-` + 8 of
+ *   `[a-z0-9_]`, Python's `TemporaryDirectory`, plugins_cmd.py:864) that a
+ *   killed install left: those holding an `index-network` manifest, and after
+ *   a failed or timed-out call those it created. Hermes's discovery does not
+ *   skip dot directories, so one would load as a second `index-network`.
  * - `--skip-index`, or no Index key, skips the ON install as `installIndex()`
  *   is skipped.
  * - `$HERMES_HOME/index/negotiator.ts` is seeded for ON residents only when
@@ -33,11 +48,11 @@
  *   printed as one fixed line by install.ts.
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 
-import { envOrDotenv, readConfig, writeConfig } from "./config";
-import { persistedEnvVar } from "./install_index";
+import { dotenvFileValue, readConfig, writeConfig } from "./config";
+import { persistedEnvVar, readCronJobs } from "./install_index";
 import { installStatusPath } from "./install_status";
 import { hermesHome } from "./paths";
 
@@ -46,6 +61,11 @@ export const INDEX_PLUGIN_SOURCE = "indexnetwork/hermes-plugin";
 /** The reviewed commit of indexnetwork/hermes-plugin (dev = main on 2026-10-08; Hermes's install scan: safe). */
 export const INDEX_PLUGIN_REF = "eaec4fc02ffc251fca2cfd56b728c845562f6a3b";
 export const MORALMOD_ARM_ENV = "AV_MORALMOD_ARM";
+/** The plugin's own cron job and its launcher under `$HERMES_HOME/scripts/` (morning.py `JOB_NAME`, `LAUNCHER` at REF). */
+export const MORNING_JOB = "Index morning";
+export const MORNING_LAUNCHER = "index-morning.py";
+/** Hermes's temporary clone directory: `TemporaryDirectory(prefix=".install-")`, 8 of Python's `[a-z0-9_]`. */
+export const HERMES_INSTALL_TMP = /^\.install-[a-z0-9_]{8}$/;
 
 /** Why the step failed, one fixed word each: the Hermes command, the config.yaml write, the negotiator seed. */
 export type IndexPluginFailure = "hermes" | "config" | "seed";
@@ -90,9 +110,85 @@ export function seedNegotiator(home: string): boolean {
   return true;
 }
 
-/** `AV_MORALMOD_ARM` is `on` (trimmed, any case). Anything else, absent included, is OFF. */
+/** `AV_MORALMOD_ARM` is `on` (trimmed, any case), `.env` first. Anything else, absent included, is OFF. */
 export function moralmodArmOn(): boolean {
-  return envOrDotenv(MORALMOD_ARM_ENV)?.trim().toLowerCase() === "on";
+  return (dotenvFileValue(MORALMOD_ARM_ENV) ?? process.env[MORALMOD_ARM_ENV])?.trim().toLowerCase() === "on";
+}
+
+/** The plugin's `Index morning` jobs: that exact name and a script whose file is `index-morning.py`. */
+export function morningJobIds(): string[] {
+  return readCronJobs()
+    .filter((job) => job.name === MORNING_JOB && typeof job.script === "string" && basename(job.script.trim()) === MORNING_LAUNCHER)
+    .map((job) => job.id);
+}
+
+/**
+ * OFF: remove the plugin's `Index morning` jobs (`hermes cron remove <id>`, confirmed gone from
+ * jobs.json) and delete its launcher. A box that never had them makes no Hermes call.
+ *
+ * @returns Whether every job is gone.
+ */
+export function stopMorningJob(run: (args: string[]) => void, home: string): boolean {
+  let ok = true;
+  for (const id of morningJobIds()) {
+    try {
+      run(["cron", "remove", id]);
+      console.log(`→ removed cron ${MORNING_JOB} (${MORALMOD_ARM_ENV} is not on)`);
+    } catch {
+      ok = false;
+      console.warn(`  warning: could not remove cron ${MORNING_JOB}`);
+    }
+  }
+  if (ok && morningJobIds().length > 0) {
+    ok = false;
+    console.warn(`  warning: cron ${MORNING_JOB} is still there after its removal`);
+  }
+  const launcher = join(home, "scripts", MORNING_LAUNCHER);
+  if (existsSync(launcher)) {
+    // Without it the job, if one is left, fails without running the plugin's code.
+    rmSync(launcher, { force: true });
+    console.log(`→ removed ${launcher}`);
+  }
+  return ok;
+}
+
+function installTmpDirs(home: string): string[] {
+  const dir = join(home, "plugins");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).filter((name) => {
+    if (!HERMES_INSTALL_TMP.test(name)) return false;
+    try {
+      return statSync(join(dir, name)).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+}
+
+function holdsIndexPlugin(tmp: string): boolean {
+  try {
+    return /^name:\s*["']?index-network["']?\s*$/m.test(readFileSync(join(tmp, "plugin", "plugin.yaml"), "utf8"));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Remove Hermes's temporary clone directories under `plugins/` that hold an `index-network`
+ * manifest, and, when `before` is given, every one that was not there before the call.
+ *
+ * @returns The names removed.
+ */
+export function removeInstallLeftovers(home: string, before?: Set<string>): string[] {
+  const removed: string[] = [];
+  for (const name of installTmpDirs(home)) {
+    const path = join(home, "plugins", name);
+    if (!(before && !before.has(name)) && !holdsIndexPlugin(path)) continue;
+    rmSync(path, { recursive: true, force: true });
+    removed.push(name);
+  }
+  if (removed.length > 0) console.log(`→ removed ${removed.length} leftover plugin install director${removed.length === 1 ? "y" : "ies"}`);
+  return removed;
 }
 
 /** Hermes's record of `--ref` installs (hermes_cli/plugins_cmd.py `_install_metadata_path`, v2026.9.24). */
@@ -169,14 +265,16 @@ function operatorDisabled(): boolean {
 export function installIndexPlugin(run: (args: string[]) => void, argv: string[] = process.argv): IndexPluginResult {
   const home = hermesHome();
   if (!moralmodArmOn()) {
+    let off: IndexPluginFailure | null = null;
     try {
       const dropped = setIndexPluginEnabled(false);
       console.log(`→ index-network plugin: off (${MORALMOD_ARM_ENV} is not on)${dropped ? "; removed from plugins.enabled" : ""}`);
-      return { state: "off", failed: null };
     } catch {
+      off = "config";
       console.warn("  warning: index-network plugin: could not update plugins.enabled in config.yaml");
-      return { state: "off", failed: "config" };
     }
+    if (!stopMorningJob(run, home)) off ??= "hermes";
+    return { state: "off", failed: off };
   }
   if (argv.includes("--skip-index") || !hasIndexKey(argv, home)) {
     console.log("→ index-network plugin: skipped (no Index key or --skip-index)");
@@ -194,9 +292,11 @@ export function installIndexPlugin(run: (args: string[]) => void, argv: string[]
 
   let failed: IndexPluginFailure | null = null;
   let state: IndexPluginResult["state"] = "pinned";
+  removeInstallLeftovers(home);
   if (pinnedAtRef(home)) {
     console.log(`→ index-network plugin: at ${INDEX_PLUGIN_REF.slice(0, 8)}, no Hermes call`);
   } else {
+    const before = new Set(installTmpDirs(home));
     try {
       run(pinnedInstallArgs(home));
       state = "installed";
@@ -205,6 +305,8 @@ export function installIndexPlugin(run: (args: string[]) => void, argv: string[]
       failed = "hermes";
       const kind = err instanceof Error ? err.name : typeof err;
       console.warn(`  warning: index-network plugin was not installed at ${INDEX_PLUGIN_REF.slice(0, 8)} (${kind}); core install continues`);
+      // A call killed at its timeout skips Hermes's own cleanup of its temporary clone.
+      removeInstallLeftovers(home, before);
     }
   }
   // Enabled only when there is a plugin on disk to load (a failed first install leaves none; a
