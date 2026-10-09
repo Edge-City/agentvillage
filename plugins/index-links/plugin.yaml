@@ -1,6 +1,6 @@
 name: index-links
-version: 0.3.0
-description: "Rewrites Index URLs in Index tool results (mcp__index__*, mcp_index_*, index_*) before the model sees them; every other tool's result passes untouched. Signed accept links gain surface=telegram. Person links open the Rolodex profile, except in the owner's own get_my_profile result, where they stay on Index. Signal links open the intent. Results over 256 KiB pass unchanged. Set AV_INDEX_LINKS=off to make it a no-op. Silent: no tools, no messages."
+version: 0.4.0
+description: "Rewrites Index URLs in Index tool results (mcp__index__*, mcp_index_*, index_*) before the model sees them; every other tool's result passes untouched. Signed accept links gain surface=telegram. Person links open the Rolodex profile, except in the owner's own profile results (get_my_profile, update_my_profile, enrich_my_profile), where they stay on Index. Signal links open the intent. Results over 256 KiB pass unchanged. Set AV_INDEX_LINKS=off to make it a no-op. Silent: no tools, no messages."
 author: Edge City
 kind: backend
 # Documentation only — Hermes reads hooks from ctx.register_hook().

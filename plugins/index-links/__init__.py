@@ -11,13 +11,16 @@ it. A person link becomes ``https://agents.edgecity.live/rolodex?person=<userId>
 A signal link becomes ``https://agents.edgecity.live/intents?intent=<intentId>``.
 Every other ``index.network`` URL stays as Index minted it.
 
-The owner's own profile is the one exemption (DATA-413). In a ``get_my_profile``
-result every person link (``/u/<id>``) stays as Index minted it, so the agent
-links the resident's Index profile, not the Rolodex view of themselves. The rule
-is deliberately simple: the profile result is the owner's, so no ``/u/`` in it is
-rewritten, even a second person's that the profile happens to carry. Everything
-else in that result follows the normal rules, and every other Index tool's
-``/u/`` still opens the Rolodex.
+The owner's own profile is the one exemption (DATA-413, DATA-423). In a result
+of ``get_my_profile``, ``update_my_profile`` or ``enrich_my_profile`` every person
+link (``/u/<id>``) stays as Index minted it, so the agent links the resident's
+Index profile, not the Rolodex view of themselves. All three return the owner's
+own profile: a correction's result is the profile too, and when only the read was
+exempt the agent answered a correction with "I updated your intro" and the
+Rolodex link (DATA-413 refute N3). The rule is deliberately simple: the profile
+result is the owner's, so no ``/u/`` in it is rewritten, even a second person's
+that the profile happens to carry. Everything else in that result follows the
+normal rules, and every other Index tool's ``/u/`` still opens the Rolodex.
 
 Bounds (SEREF-OVERLAY refute F2-F4, N1, N4):
 
@@ -68,8 +71,12 @@ MAX_RESULT_BYTES = 256 * 1024
 #: Index tool-name prefixes: MCP server ``index`` (two Hermes spellings) and
 #: Index's Hermes plugin, whose tools register under their bare names.
 INDEX_TOOL_PREFIXES = ("mcp__index__", "mcp_index_", "index_")
-#: The owner's own profile tool, under each Index prefix (DATA-413).
-OWN_PROFILE_TOOLS = frozenset(prefix + "get_my_profile" for prefix in INDEX_TOOL_PREFIXES)
+#: The tools whose result is the owner's own profile: the read (DATA-413) and the
+#: correction and enrichment, which return the profile too, so the link the agent
+#: shows right after a correction stays on Index (DATA-423). Nine exact names: each
+#: tool under each Index prefix.
+OWN_PROFILE_TOOL_NAMES = ("get_my_profile", "update_my_profile", "enrich_my_profile")
+OWN_PROFILE_TOOLS = frozenset(prefix + name for prefix in INDEX_TOOL_PREFIXES for name in OWN_PROFILE_TOOL_NAMES)
 OFF_SWITCH = "AV_INDEX_LINKS"
 _OFF_VALUES = frozenset({"off", "0", "false", "no"})
 _PORTAL_HOST = "agents.edgecity.live"
@@ -121,7 +128,7 @@ def _portal(path: str) -> str:
 
 
 def _map_url(url: str, keep_people: bool = False) -> Optional[str]:
-    """``keep_people`` leaves a person link (``/u/<id>``) as minted (own profile, DATA-413)."""
+    """``keep_people`` leaves a person link (``/u/<id>``) as minted (own profile, DATA-413/423)."""
     path = _url_path(url)
     if not path:
         return None
@@ -184,7 +191,7 @@ def rewrite_index_links(result: Any, keep_people: bool = False) -> Any:
     """Replace Index URLs in a tool-result string. Anything else is returned as-is.
 
     ``keep_people`` leaves every person link (``/u/<id>``) as Index minted it;
-    the hook sets it for the owner's own profile result (DATA-413).
+    the hook sets it for the owner's own profile result (DATA-413, DATA-423).
     """
     if not isinstance(result, str) or _too_big(result) or "index.network" not in result.lower():
         return result
@@ -198,9 +205,10 @@ def is_index_tool(tool_name: Any) -> bool:
 
 
 def is_own_profile_tool(tool_name: Any) -> bool:
-    """``get_my_profile`` under an Index prefix: the result is the owner's own profile,
-    so its person links stay on Index (DATA-413). Exactly ``mcp__index__get_my_profile``,
-    ``mcp_index_get_my_profile`` and ``index_get_my_profile``."""
+    """``get_my_profile``, ``update_my_profile`` or ``enrich_my_profile`` under an Index
+    prefix: the result is the owner's own profile, so its person links stay on Index
+    (DATA-413, DATA-423). Exactly the nine names in ``OWN_PROFILE_TOOLS``, compared
+    whole and case-sensitively: no prefix, suffix or case-folded match."""
     return isinstance(tool_name, str) and tool_name in OWN_PROFILE_TOOLS
 
 
