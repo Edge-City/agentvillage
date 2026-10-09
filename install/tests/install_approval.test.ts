@@ -26,6 +26,7 @@ import {
   APPROVAL_ROUTED_SHA256,
   gateReceiptLine,
   lastInstallRouted,
+  lastInstallVerified,
   mainCli,
   PREWARM_ENV,
   PREWARM_SESSION,
@@ -3089,6 +3090,38 @@ describe("DATA-379: the pre-warm", () => {
     tenant({ env: { AV_APPROVAL_ENABLED: "0" } });
     expect(installApproval(SOURCE_SKILLS, opts())).toBe("disabled");
     expect(prewarmCalls).toBe(0);
+  });
+
+  test("OV-249 (B): lastInstallVerified is true only after an install whose live fire the facade answered with the full routed list; a failed, deferred, unset or off run resets it", () => {
+    const verified = () => {
+      tenant();
+      fakeHermes();
+      expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+      expect(lastInstallVerified()).toBe(true);
+    };
+    verified();
+    // A failed live fire, or none at all: the step throws and the flag is false.
+    fakeHermes({ run_once: { returncode: 0, stdout: "{}", parsed: null, error: null, timed_out: false } });
+    failsWith("live-call-allowed");
+    expect(lastInstallVerified()).toBe(false);
+    verified();
+    expect(() => installApproval(SOURCE_SKILLS, opts({ hermesPython: null }))).toThrow();
+    expect(lastInstallVerified()).toBe(false);
+    // Deferred (a local facade that did not answer): installed, but not verified.
+    verified();
+    tenant({ env: { AV_APPROVAL_ENABLED: "1", AV_APPROVAL_URL: LOCAL_URL, AV_APPROVAL_TOKEN: TOKEN, TENANT_ID: TENANT } });
+    fakeHermes({ run_once: SHIM_UNREACHABLE });
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+    expect(lastInstallVerified()).toBe(false);
+    // Unset and off.
+    verified();
+    tenant({ env: {} });
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("skipped");
+    expect(lastInstallVerified()).toBe(false);
+    verified();
+    tenant({ env: { AV_APPROVAL_ENABLED: "0" } });
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("disabled");
+    expect(lastInstallVerified()).toBe(false);
   });
 
   test(`${PREWARM_ENV}=0 (or false, no, off; process environment first, then .env) skips it, and says so`, () => {

@@ -117,15 +117,15 @@ function plugins(): { enabled?: string[]; disabled?: string[] } {
   return (YAML.parse(configText()) ?? {}).plugins ?? {};
 }
 
-/** The step, quietly; returns its result and the lines it printed. */
-function step(run: (args: string[]) => void, argv: string[] = ARGV) {
+/** The step, quietly; returns its result and the lines it printed. `gate`: this run's approval step verified the gate. */
+function step(run: (args: string[]) => void, argv: string[] = ARGV, gate = true) {
   const lines: string[] = [];
   const log = console.log;
   const warn = console.warn;
   console.log = (...a: unknown[]) => lines.push(a.join(" "));
   console.warn = (...a: unknown[]) => lines.push(a.join(" "));
   try {
-    return { ...installIndexPlugin(run, argv), lines };
+    return { ...installIndexPlugin(run, argv, gate), lines };
   } finally {
     console.log = log;
     console.warn = warn;
@@ -383,6 +383,93 @@ describe("the operator's off switches", () => {
   });
 });
 
+describe("OV-249 (B): ON only behind a gate this run verified", () => {
+  const WITHHELD = "→ index-network plugin: withheld: the approval gate was not installed and live-checked on this run";
+
+  test("arm on, gate not verified, fresh box: no Hermes call, not enabled, no seed, config.yaml not rewritten, failed=gate, one line", () => {
+    config(BASE);
+    process.env[MORALMOD_ARM_ENV] = "on";
+    const { calls, run } = recorder();
+    const result = step(run, ARGV, false);
+    expect(calls).toEqual([]);
+    expect(result).toMatchObject({ state: "withheld", failed: "gate" });
+    expect(result.lines).toEqual([WITHHELD]);
+    expect(configText()).toBe(BASE);
+    expect(existsSync(negotiatorPath(home))).toBe(false);
+    expect(existsSync(join(home, "plugins", INDEX_PLUGIN))).toBe(false);
+  });
+
+  test("arm on, enabled behind a verified gate, then a run whose gate is not verified: dropped from plugins.enabled, the morning job and launcher removed; verified again: enabled with no Hermes call", () => {
+    config(BASE);
+    process.env[MORALMOD_ARM_ENV] = "on";
+    expect(step(recorder().run).state).toBe("installed");
+    expect(plugins().enabled).toContain(INDEX_PLUGIN);
+    plantMorning();
+    const withheld = recorder();
+    const result = step(withheld.run, ARGV, false);
+    expect(result).toMatchObject({ state: "withheld", failed: "gate" });
+    expect(result.lines[0]).toBe(`${WITHHELD}; removed from plugins.enabled`);
+    expect(withheld.calls).toEqual([["cron", "remove", "aaaaaaaaaaaa"]]);
+    expect(plugins().enabled).toEqual(["av-events", "index-links"]);
+    expect(existsSync(launcher())).toBe(false);
+    const again = recorder();
+    expect(step(again.run, ARGV, true).state).toBe("pinned");
+    expect(again.calls).toEqual([]);
+    expect(plugins().enabled).toContain(INDEX_PLUGIN);
+  });
+
+  test("withheld comes before --skip-index, a missing key and plugins.disabled: an earlier enabled entry never survives an unverified gate", () => {
+    process.env[MORALMOD_ARM_ENV] = "on";
+    for (const argv of [[...ARGV, "--skip-index"], ["bun", "install.ts"]]) {
+      config("plugins:\n  enabled:\n    - av-events\n    - index-network\n");
+      expect([argv, step(recorder().run, argv, false).state]).toEqual([argv, "withheld"]);
+      expect([argv, plugins().enabled]).toEqual([argv, ["av-events"]]);
+    }
+    config("plugins:\n  enabled:\n    - index-network\n  disabled:\n    - index-network\n");
+    expect(step(recorder().run, ARGV, false)).toMatchObject({ state: "withheld", failed: "gate" });
+    expect(plugins()).toEqual({ enabled: [], disabled: [INDEX_PLUGIN] });
+  });
+
+  test("withheld with an unreadable config.yaml is failed=config (the plugin may still be listed); a failed cron remove stays gate", () => {
+    process.env[MORALMOD_ARM_ENV] = "on";
+    config("plugins: [unclosed\n");
+    expect(step(recorder().run, ARGV, false)).toMatchObject({ state: "withheld", failed: "config" });
+    config(BASE);
+    plantMorning();
+    expect(step(recorder(true).run, ARGV, false)).toMatchObject({ state: "withheld", failed: "gate" });
+    expect(existsSync(launcher())).toBe(false);
+  });
+
+  test("arm off ignores the gate: OFF either way; arm on with a verified gate installs", () => {
+    config(BASE);
+    expect(step(recorder().run, ARGV, true)).toMatchObject({ state: "off", failed: null });
+    expect(step(recorder().run, ARGV, false)).toMatchObject({ state: "off", failed: null });
+    process.env[MORALMOD_ARM_ENV] = "on";
+    const { calls, run } = recorder();
+    expect(step(run, ARGV, true)).toMatchObject({ state: "installed", failed: null });
+    expect(calls).toEqual([FRESH]);
+    expect(plugins().enabled).toEqual(["av-events", "index-links", INDEX_PLUGIN]);
+  });
+
+  test("the default is fail-closed: a caller that passes no gate gets withheld", () => {
+    config(BASE);
+    process.env[MORALMOD_ARM_ENV] = "on";
+    const { calls, run } = recorder();
+    const log = console.log;
+    console.log = () => {};
+    try {
+      expect(installIndexPlugin(run, ARGV)).toMatchObject({ state: "withheld", failed: "gate" });
+    } finally {
+      console.log = log;
+    }
+    expect(calls).toEqual([]);
+  });
+
+  test("the line and the status field carry the word", () => {
+    expect(indexPluginFailedLine("gate")).toBe("agentvillage-install: index_plugin_failed=gate");
+  });
+});
+
 describe("writes and failures", () => {
   test("config.yaml goes through writeConfig: YAML 1.1 words stay quoted, the hooks block is untouched", () => {
     process.env[MORALMOD_ARM_ENV] = "on";
@@ -596,26 +683,13 @@ describe("end to end: install.ts against the stand-in Hermes", () => {
   }
   const status = () => JSON.parse(readFileSync(installStatusPath(home), "utf8"));
 
-  test("ON fresh installs at REF and enables it; a re-roll makes no Hermes call; OFF removes it from plugins.enabled", () => {
-    const first = install({ [MORALMOD_ARM_ENV]: "on" });
-    expect(first.code).toBe(0);
-    expect(pluginCalls()).toEqual([FRESH]);
-    expect(JSON.parse(readFileSync(installMetadataPath(home), "utf8"))[INDEX_PLUGIN]).toMatchObject({ pinned: true, revision: INDEX_PLUGIN_REF });
-    expect(plugins().enabled).toContain(INDEX_PLUGIN);
-    expect(plugins().enabled).toContain("av-events");
-    expect(existsSync(negotiatorPath(home))).toBe(true);
-    expect(status().index_plugin_failed).toBeNull();
-    expect(first.out).not.toContain("index_plugin_failed");
-
-    rmSync(join(home, "hermes-calls.jsonl"));
-    const reroll = install({ [MORALMOD_ARM_ENV]: "on" });
-    expect(reroll.code).toBe(0);
-    expect(pluginCalls()).toEqual([]);
-    expect(plugins().enabled).toContain(INDEX_PLUGIN);
-
-    // the plugin's own morning job and launcher, as morning.py leaves them (the fake's jobs.json shape)
+  /** What an earlier verified roll left: index-network in plugins.enabled, the plugin's morning job and launcher. */
+  function plantEnabled(): string {
+    const doc = YAML.parse(configText()) ?? {};
+    doc.plugins = { ...(doc.plugins ?? {}), enabled: [...(doc.plugins?.enabled ?? []), INDEX_PLUGIN] };
+    writeFileSync(join(home, "config.yaml"), YAML.stringify(doc));
     const jobsPath = join(home, "cron", "jobs.json");
-    const jobs = existsSync(jobsPath) ? JSON.parse(readFileSync(jobsPath, "utf8")).jobs : [];
+    const jobs = (existsSync(jobsPath) ? JSON.parse(readFileSync(jobsPath, "utf8")).jobs : []).filter((job: { id: string }) => !job.id.startsWith("e2e0"));
     jobs.push({ id: "e2e0morning0", name: MORNING_JOB, script: join(home, "scripts", MORNING_LAUNCHER), no_agent: true });
     jobs.push({ id: "e2e0unrelate", name: "Edge — morning brief", script: "index-digest-send.py" });
     mkdirSync(join(home, "cron"), { recursive: true });
@@ -623,25 +697,49 @@ describe("end to end: install.ts against the stand-in Hermes", () => {
     mkdirSync(join(home, "scripts"), { recursive: true });
     writeFileSync(join(home, "scripts", MORNING_LAUNCHER), "import runpy\n");
     rmSync(join(home, "hermes-calls.jsonl"), { force: true });
+    return jobsPath;
+  }
+  function cronCalls(): string[][] {
+    const path = join(home, "hermes-calls.jsonl");
+    if (!existsSync(path)) return [];
+    return readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l) as string[]).filter((a) => a[0] === "cron");
+  }
+
+  test("OV-249 (B): ON with the approval gate unset or off is withheld: no plugin install, an earlier enabled entry and the morning job removed, exit 0, the status file and one stdout line say gate", () => {
+    expect(install({ [MORALMOD_ARM_ENV]: "off" }).code).toBe(0);
+    for (const gate of ["", "0"]) {
+      const jobsPath = plantEnabled();
+      expect(plugins().enabled).toContain(INDEX_PLUGIN);
+      const run = install({ [MORALMOD_ARM_ENV]: "on", AV_APPROVAL_ENABLED: gate });
+      expect([gate, run.code]).toEqual([gate, 0]);
+      expect([gate, pluginCalls()]).toEqual([gate, []]);
+      expect([gate, cronCalls()]).toEqual([gate, [["cron", "remove", "e2e0morning0"]]]);
+      expect(JSON.parse(readFileSync(jobsPath, "utf8")).jobs.map((job: { id: string }) => job.id)).toEqual(["e2e0unrelate"]);
+      expect(existsSync(join(home, "scripts", MORNING_LAUNCHER))).toBe(false);
+      expect([gate, plugins().enabled.includes(INDEX_PLUGIN)]).toEqual([gate, false]);
+      expect(plugins().enabled).toContain("av-events");
+      expect([gate, status().index_plugin_failed]).toEqual([gate, "gate"]);
+      expect(run.out.split("\n").filter((l) => l.includes("index_plugin_failed"))).toEqual(["agentvillage-install: index_plugin_failed=gate"]);
+      expect(run.out).toContain("→ index-network plugin: withheld: the approval gate was not installed and live-checked on this run; removed from plugins.enabled");
+      expect(run.out).toContain("✓ installed");
+      expect(existsSync(negotiatorPath(home))).toBe(false);
+      expect(existsSync(join(home, "plugins", INDEX_PLUGIN))).toBe(false);
+      expect(existsSync(installMetadataPath(home))).toBe(false);
+    }
+  }, 180_000);
+
+  test("OFF removes it from plugins.enabled and the morning job; no line, index_plugin_failed null", () => {
+    expect(install({ [MORALMOD_ARM_ENV]: "off" }).code).toBe(0);
+    const jobsPath = plantEnabled();
     const off = install({ [MORALMOD_ARM_ENV]: "off" });
-    const cronCalls = readFileSync(join(home, "hermes-calls.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l) as string[]).filter((a) => a[0] === "cron");
-    expect(cronCalls).toEqual([["cron", "remove", "e2e0morning0"]]);
+    expect(off.code).toBe(0);
+    expect(cronCalls()).toEqual([["cron", "remove", "e2e0morning0"]]);
     expect(JSON.parse(readFileSync(jobsPath, "utf8")).jobs.map((job: { id: string }) => job.id)).toEqual(["e2e0unrelate"]);
     expect(existsSync(join(home, "scripts", MORNING_LAUNCHER))).toBe(false);
-    expect(off.code).toBe(0);
     expect(pluginCalls()).toEqual([]);
     expect(plugins().enabled).not.toContain(INDEX_PLUGIN);
     expect(plugins().enabled).toContain("av-events");
-  }, 120_000);
-
-  test("Hermes fails: the install exits 0, the status file and one stdout line name it, the seed is written", () => {
-    const run = install({ [MORALMOD_ARM_ENV]: "on", FAKE_HERMES_FAIL: "install" });
-    expect(run.code).toBe(0);
-    expect(pluginCalls()).toEqual([FRESH]);
-    expect(status().index_plugin_failed).toBe("hermes");
-    expect(run.out.split("\n").filter((l) => l.includes("index_plugin_failed"))).toEqual(["agentvillage-install: index_plugin_failed=hermes"]);
-    expect(run.out).toContain("✓ installed");
-    expect(readFileSync(negotiatorPath(home), "utf8")).toBe(NEGOTIATOR_SEED);
-    expect(plugins().enabled ?? []).not.toContain(INDEX_PLUGIN);
+    expect(status().index_plugin_failed).toBeNull();
+    expect(off.out).not.toContain("index_plugin_failed");
   }, 120_000);
 });

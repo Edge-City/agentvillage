@@ -56,7 +56,7 @@ import { installIndex } from "./install_index";
 import { type IndexPluginFailure, indexPluginFailedLine, installIndexPlugin, recordIndexPluginStatus } from "./install_index_plugin";
 import { installEdgeos } from "./install_edgeos";
 import { safeInstallRecall, wipeRecallIndex } from "./install_recall";
-import { gateReceiptLine, runApprovalStep, stagePlugins } from "./install_approval";
+import { gateReceiptLine, lastInstallVerified, runApprovalStep, stagePlugins } from "./install_approval";
 import {
   capModelMaxTokens,
   configureAvEvents,
@@ -241,7 +241,8 @@ function installIndexHermesPlugin(): IndexPluginFailure | null {
   let failed: IndexPluginFailure | null;
   try {
     // 60 s: one call inside the control plane's 300 s bound on the whole install (refute S3).
-    failed = installIndexPlugin(hermesRunner(hermesBin(), hermesExecEnv(), 60_000)).failed;
+    // OV-249 (B): an ON resident gets the plugin only behind a gate this run verified.
+    failed = installIndexPlugin(hermesRunner(hermesBin(), hermesExecEnv(), 60_000), process.argv, lastInstallVerified()).failed;
   } catch (err) {
     const kind = err instanceof Error ? err.name : typeof err;
     console.warn(`  warning: index-network plugin step failed (${kind}); core install continues`);

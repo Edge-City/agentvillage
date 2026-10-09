@@ -37,6 +37,14 @@
  *   killed install left: those holding an `index-network` manifest, and after
  *   a failed or timed-out call those it created. Hermes's discovery does not
  *   skip dot directories, so one would load as a second `index-network`.
+ * - Withheld (OV-249 B, fail closed): ON is honoured only when this run's
+ *   approval step installed the gate, its live fire was answered by the
+ *   facade, and Hermes routes exactly `APPROVAL_GATED_TOOLS`, which holds the
+ *   plugin's eight write tools (`lastInstallVerified`). Otherwise the step does
+ *   what OFF does and reports `gate` (`config` when the drop failed). That
+ *   makes the writes reach the resident's daemon; whether one waits for a tap
+ *   is the policy's row (`opportunity.accept` is autonomous in the template),
+ *   which the installer neither reads nor writes.
  * - `--skip-index`, or no Index key, skips the ON install as `installIndex()`
  *   is skipped.
  * - `$HERMES_HOME/index/negotiator.ts` is seeded for ON residents only when
@@ -67,12 +75,15 @@ export const MORNING_LAUNCHER = "index-morning.py";
 /** Hermes's temporary clone directory: `TemporaryDirectory(prefix=".install-")`, 8 of Python's `[a-z0-9_]`. */
 export const HERMES_INSTALL_TMP = /^\.install-[a-z0-9_]{8}$/;
 
-/** Why the step failed, one fixed word each: the Hermes command, the config.yaml write, the negotiator seed. */
-export type IndexPluginFailure = "hermes" | "config" | "seed";
+/**
+ * Why the step failed, one fixed word each: the Hermes command, the config.yaml write, the
+ * negotiator seed, or `gate`: the arm is on but this run's approval step did not verify the gate.
+ */
+export type IndexPluginFailure = "hermes" | "config" | "seed" | "gate";
 
 export interface IndexPluginResult {
   /** What the step did. */
-  state: "off" | "skipped" | "disabled" | "pinned" | "installed" | "failed";
+  state: "off" | "withheld" | "skipped" | "disabled" | "pinned" | "installed" | "failed";
   /** The first failure, or null. */
   failed: IndexPluginFailure | null;
 }
@@ -133,7 +144,7 @@ export function stopMorningJob(run: (args: string[]) => void, home: string): boo
   for (const id of morningJobIds()) {
     try {
       run(["cron", "remove", id]);
-      console.log(`→ removed cron ${MORNING_JOB} (${MORALMOD_ARM_ENV} is not on)`);
+      console.log(`→ removed cron ${MORNING_JOB} (the plugin is not enabled)`);
     } catch {
       ok = false;
       console.warn(`  warning: could not remove cron ${MORNING_JOB}`);
@@ -261,19 +272,25 @@ function operatorDisabled(): boolean {
  *
  * @param run - One Hermes invocation, argv without the binary.
  * @param argv - The installer's argv (`--skip-index`, `--index-api-key`).
+ * @param gateVerified - This run's approval step installed the gate and its live fire passed
+ *   (`lastInstallVerified`). False, an ON resident is withheld: treated as OFF, reported `gate`.
  */
-export function installIndexPlugin(run: (args: string[]) => void, argv: string[] = process.argv): IndexPluginResult {
+export function installIndexPlugin(run: (args: string[]) => void, argv: string[] = process.argv, gateVerified = false): IndexPluginResult {
   const home = hermesHome();
-  if (!moralmodArmOn()) {
+  const armOn = moralmodArmOn();
+  if (!armOn || !gateVerified) {
     let off: IndexPluginFailure | null = null;
+    const why = armOn ? "withheld: the approval gate was not installed and live-checked on this run" : `off (${MORALMOD_ARM_ENV} is not on)`;
     try {
       const dropped = setIndexPluginEnabled(false);
-      console.log(`→ index-network plugin: off (${MORALMOD_ARM_ENV} is not on)${dropped ? "; removed from plugins.enabled" : ""}`);
+      console.log(`→ index-network plugin: ${why}${dropped ? "; removed from plugins.enabled" : ""}`);
     } catch {
       off = "config";
       console.warn("  warning: index-network plugin: could not update plugins.enabled in config.yaml");
     }
     if (!stopMorningJob(run, home)) off ??= "hermes";
+    // Withheld: `config` first (the plugin may still be listed), else `gate`, a cron failure only warned.
+    if (armOn) return { state: "withheld", failed: off === "config" ? "config" : "gate" };
     return { state: "off", failed: off };
   }
   if (argv.includes("--skip-index") || !hasIndexKey(argv, home)) {

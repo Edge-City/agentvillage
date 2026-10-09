@@ -18,6 +18,8 @@ export default async function negotiate(input, next) {
 
 Do not import `@indexnetwork/agent`. That package is not installed on the resident.
 
+Never read, log or send `process.env` or files under `$HERMES_HOME`: at the pinned plugin the process starts with the gateway's whole environment, every `.env` secret included (`sidecar.py:149-159`), and runs as the resident's own user.
+
 ## What you return
 
 - `{ turn: { action, message } }`. `action` is `"propose"`, `"counter"`, `"accept"`, or `"decline"`. When `input.opportunity.actions` is set, use one of those.

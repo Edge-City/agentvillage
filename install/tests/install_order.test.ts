@@ -111,6 +111,14 @@ describe("install.ts runs the stages in that order", () => {
     expect(plugin).not.toMatch(/\.hooks\b/);
   });
 
+  test("OV-249 (B): the plugin step is handed this run's approval verdict (lastInstallVerified), read after the approval step, and nothing else decides it", () => {
+    const helper = text.slice(text.indexOf("function installIndexHermesPlugin("), text.indexOf("function restartGateway("));
+    expect(helper).toContain("installIndexPlugin(hermesRunner(hermesBin(), hermesExecEnv(), 60_000), process.argv, lastInstallVerified())");
+    expect(text.match(/lastInstallVerified\(\)/g)).toHaveLength(1);
+    expect(text).toContain('import { gateReceiptLine, lastInstallVerified, runApprovalStep, stagePlugins } from "./install_approval";');
+    expect(main.indexOf("if (!runApprovalStep(SOURCE_SKILLS)) {")).toBeLessThan(main.indexOf("const indexPluginFailed = installIndexHermesPlugin();"));
+  });
+
   test("R3 fix round 4 (output injection): the gate receipt is the last thing main() writes, and nothing runs after main()", () => {
     const body = main.slice(0, main.indexOf("\n}\n") + 3);
     const at = body.indexOf("const receipt = gateReceiptLine();");
