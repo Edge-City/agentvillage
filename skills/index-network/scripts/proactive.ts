@@ -73,6 +73,7 @@ import { askQuestions } from "./ask-questions";
 import { acceptLink, type BriefOpportunity, type DailyBriefContext, buildDailyBriefContext, villageDate } from "./build-daily-brief-context";
 import { OPPORTUNITY_DELIVERY_KEY, deliveryLogChanged, pruneDeliveryLog, readDeliveryLog, recordShowings } from "./delivery-state";
 import { dropOpportunity } from "./drop-opportunity";
+import { type DueCard, pendingAlert, respondByText } from "./pending-alert";
 import { cleanName, cleanText, cleanTitle, connectionsUrl, cronScanHit, envOrDotenv } from "./proactive-text";
 import { type LockOptions, LockStuck, LockTimeout, releaseHeldLocks, withStateLock } from "./state-lock";
 import { writeStateFile } from "./state-file";
@@ -394,6 +395,9 @@ const lastSegment = (url: string) => url.slice(url.lastIndexOf("/") + 1);
 const profileLink = (url: unknown) => { const u = indexUrl("u", url); return u && `${PORTAL_WEB}/rolodex?person=${lastSegment(u)}`; };
 const signalLink = (url: unknown) => { const u = indexUrl("i", url); return u && `${PORTAL_WEB}/intents?intent=${lastSegment(u)}`; };
 const messageLink = (url: unknown) => { const a = acceptLink(url); return a ? `${a}&surface=telegram` : null; };
+/** DATA-430: the app's deep link to one pending card (the Intents page scrolls to it; an unknown id shows the page). */
+export const appOpportunityLink = (id: unknown): string | null =>
+  typeof id === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(id) ? `${PORTAL_WEB}/intents?opportunity=${id}` : null;
 
 /** Counts strings that did not survive cleaning, so the run log can say how many were withheld. */
 class Withheld {
@@ -597,6 +601,23 @@ export function dropView(date: string, card: BriefOpportunity): { view: Record<s
     },
     withheld: w.count,
   };
+}
+
+/**
+ * DATA-430: the pending alert's Script Output, one entry per card the pick
+ * handed over (pending-alert.ts). The prompt links only `appUrl` (the app's
+ * deep link to that card, where the resident decides); `acceptUrl` (Index's
+ * signed accept link, which accepts at once) is kept for completeness and is
+ * not rendered. `respondBy` is the deadline's words (respondByText), or null.
+ */
+export function pendingView(cards: DueCard[], now: Date): { view: Record<string, unknown> | null; withheld: number } {
+  const w = new Withheld();
+  const shown = cards.flatMap(({ card, opportunityId, firstSeen }) => {
+    const who = person(card, w);
+    if (!who) return [];
+    return [{ name: who.name, profileUrl: who.profileUrl, appUrl: appOpportunityLink(opportunityId), acceptUrl: who.messageUrl, opportunityId, firstSeen, respondBy: respondByText(card.respondBy, now) }];
+  });
+  return { view: shown.length > 0 ? { job: "pending-opportunity", cards: shown } : null, withheld: w.count };
 }
 
 type EveningResult = Awaited<ReturnType<typeof askQuestions>>;
