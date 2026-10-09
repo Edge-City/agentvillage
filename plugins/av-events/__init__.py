@@ -21,7 +21,7 @@ import re
 import time
 from typing import Any, Callable, Optional
 
-from . import _approval, _edgeos, _intent_approval, _outcome_ask, _share_vote, _terminal_args
+from . import _approval, _approvals_reminder, _edgeos, _intent_approval, _outcome_ask, _share_vote, _terminal_args
 from ._collector import Collector, guarded, hermes_version, overlay_ref
 from ._consent import TOOL_NAME as CONSENT_TOOL_NAME
 from ._consent import register_consent_tool
@@ -1038,11 +1038,76 @@ def with_terminal_args_fix(telemetry: Callable) -> Callable:
     return pre_tool_call
 
 
+def _approvals_reminder_for(kwargs: dict, collector: Optional[Collector]) -> Optional[str]:
+    """DATA-444: the Connect-approvals reminder for this turn, or None.
+
+    Only a human's own message in the root session of their Telegram DM: the
+    outcome ask's gate (`_outcome_note_answer`) without its capture test. Never
+    a cron run (`platform=cron`, a `cron_` id, or a cron ancestor), a subagent
+    (`parent_session_id` from Hermes or `subagent_start`), a turn Hermes
+    injected, another platform, a group, or a chat whose type Hermes does not
+    say. The platform must be Telegram both in this hook's payload and in what
+    the collector saw, when it saw anything. Then `_approvals_reminder` reads
+    the control plane's file and remembers the session."""
+    session_id = str(kwargs.get("session_id") or "").strip()
+    if not session_id or session_id.startswith("cron_"):
+        return None
+    if str(kwargs.get("parent_session_id") or "").strip():
+        return None
+    text = kwargs.get("user_message")
+    if not text or is_injected_turn(text, kwargs.get("conversation_history")):
+        return None
+    if _source_for(kwargs.get("platform")) != "telegram":
+        return None
+    if collector is not None:
+        if _is_cron_session(collector, session_id) or collector.parent_of(session_id) is not None:
+            return None
+        state = collector.peek_session(session_id)
+        if state is not None and state.source not in (None, "telegram"):
+            return None
+    if _session_chat_type() != "dm":
+        return None
+    return _approvals_reminder.reminder_for(session_id)
+
+
+def with_approvals_reminder(telemetry: Callable, collector_ref=_collector) -> Callable:
+    """`pre_llm_call` = the telemetry body, then the DATA-444 reminder.
+
+    The telemetry (`guarded`) returns None today. Whatever it returns is kept
+    and comes first; the reminder is appended after it (`_approvals_reminder.compose`).
+
+    Like the DATA-312 fix, the reminder sits outside `guarded`: it is not
+    telemetry, so `AV_EVENTS_ENABLED=0`, no token or `pre_llm_call` in
+    `AV_HOOKS_DISABLED` does not stop it. The control plane's file is its only
+    switch. It never raises into the turn: any failure is no reminder.
+    """
+
+    def pre_llm_call(*args: Any, **kwargs: Any) -> Any:
+        result = telemetry(*args, **kwargs)
+        try:
+            reminder = _approvals_reminder_for(kwargs, collector_ref())
+        except SystemExit:
+            raise
+        except BaseException:  # noqa: BLE001 - a reminder never costs the turn
+            reminder = None
+        if not reminder:
+            return result
+        try:
+            return _approvals_reminder.compose(result, reminder)
+        except BaseException:  # noqa: BLE001
+            return result
+
+    pre_llm_call.av_hook_name = getattr(telemetry, "av_hook_name", "pre_llm_call")  # type: ignore[attr-defined]
+    return pre_llm_call
+
+
 def build_hooks(collector_ref=_collector) -> dict:
     """Wrap every hook body in the fail-open guard. One decorator, no exceptions.
 
     `pre_tool_call` is then wrapped once more by `with_terminal_args_fix`
-    (DATA-312), which is the only thing in this plugin that returns a directive.
+    (DATA-312), which is the only thing in this plugin that returns a directive,
+    and `pre_llm_call` by `with_approvals_reminder` (DATA-444), the only thing
+    that returns context.
     """
     hooks = {}
     for name, body in HOOK_BODIES.items():
@@ -1056,6 +1121,8 @@ def build_hooks(collector_ref=_collector) -> dict:
             pass
         if name == "pre_tool_call":
             wrapped = with_terminal_args_fix(wrapped)
+        elif name == "pre_llm_call":
+            wrapped = with_approvals_reminder(wrapped, collector_ref)
         hooks[name] = wrapped
     return hooks
 

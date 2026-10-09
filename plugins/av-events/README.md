@@ -27,6 +27,7 @@ plugins/av-events/
   _edgeos.py       the curl parser, EdgeOS operations, the action ledger and planner
   _cron.py         cron.run from the executions ledger and usage audit (flusher thread only)
   _outcome_ask.py  the evening outcome ask: outcome.asked and the resident's answer (DATA-42)
+  _approvals_reminder.py  one Connect-approvals reminder per Telegram DM session while the welcome's button is unstarted (DATA-444)
   _backup.py       memory.snapshot: collect, pack and upload the memory files (backup thread only)
   _consent.py      the consent_status tool: GET /v1/consent and the answer in words (DATA-157)
   _brief_items.py  read-only count of inferred intentions awaiting an answer, for the morning brief (DATA-222, DATA-314); never imported by the plugin
@@ -2046,6 +2047,13 @@ There is no generic abort; each call site interprets its own hook's returns.
   string, all returns joined). It cannot abort the call and cannot rewrite messages or the system
   prompt — the hook exists precisely to keep the system prompt byte-stable for prompt caching
   (`plugins.py:5586`, `agent/turn_context.py:1408`).
+  This plugin's only such return is the DATA-444 reminder (`with_approvals_reminder`,
+  `_approvals_reminder.py`): `{"context": "At the end of this reply add one line: One more step: tap
+  Connect approvals above to finish setting up approvals."}`, after any telemetry return, once per
+  root Telegram DM session (no cron, subagent, injected turn, group or other platform), and only while
+  the control plane's `memory/approvals-pairing.json` parses to `started` false, `button` `"sent"` and
+  an `at` under 30 minutes old (at most 5 minutes ahead); anything else, a read failure included, is
+  no reminder. Outside the telemetry guard and switches; the plugin never writes that file.
 - `post_llm_call`, `pre_api_request`, `post_api_request`, `on_session_*`, `subagent_*` and
   `on_stream_*` are **pure observers**; their returns are discarded.
 - Mutating the outbound provider payload requires **middleware**, not a hook:
