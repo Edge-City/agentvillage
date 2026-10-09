@@ -440,6 +440,143 @@ export function setContextFileMaxChars(): void {
   console.log(`→ set ${key}: ${CONTEXT_FILE_MAX_CHARS} (${why}; Hermes truncates a longer context file)`);
 }
 
+/**
+ * RC28: the seconds the gateway holds an arriving message while the pre-turn
+ * session-hygiene summary finishes, `compression.hygiene_max_turn_hold_seconds`
+ * (nested under the top-level `compression` mapping; Hermes 0.21.5 =
+ * v2026.9.24 reads it at gateway/run_turn.py:651-672, default 10 at
+ * hermes_cli/config_defaults.py:620-624, re-read every turn, no restart).
+ *
+ * Hygiene fires when the previous turn's prompt reached 85% of
+ * `model.context_length` (76,500 at the control plane's 90,000 pin). A summary
+ * still running when the hold expires sends "Context compression deferred —
+ * summary still streaming" to the chat (run_turn.py:999-1001) and the turn runs
+ * uncompressed; the stored token count stays high, so the notice repeats on
+ * every message. A summary that lands inside the hold is adopted inline and
+ * resets that count (run_turn.py:1142-1144), so the hold is the fix.
+ *
+ * Why 25: the haiku-5.5 summary measured on the affected box took 16-18 s
+ * (Oct 9), so the 10 s default expired every time; 25 covers it with margin.
+ * It stays under `compression.hygiene_timeout_seconds` (default 30, a
+ * no-progress window that flips to a different warning and a 300 s cooldown)
+ * and under Hermes's own "keep under chat idle timeouts, Telegram ~30s" note;
+ * the resident sees the typing indicator while the turn is held. The lead's
+ * first ask was 45: the number moves here, in this one constant. Summary
+ * bounds for scale: output about 4,500 tokens, input capped at 160k chars.
+ */
+export const HYGIENE_MAX_TURN_HOLD_SECONDS = 25;
+
+/** A number written as a string that Python's float() reads (Hermes's `_knob`, run_turn.py:657-665). */
+const NUMERIC_STRING = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+/**
+ * Pin the compaction settings behind the deferred-compression notice loop (RC28):
+ *
+ * 1. `compression.hygiene_max_turn_hold_seconds: 25` (see
+ *    `HYGIENE_MAX_TURN_HOLD_SECONDS`). Absent, null, not a number Hermes reads
+ *    (a boolean, which Hermes's float() reads as 1, a list, a word) or below 25:
+ *    set to 25. A number of 25 or more is an operator's longer hold, left as
+ *    is, and so is a number written as a string (`"45"`), which Hermes's float()
+ *    reads the same way (refute N3); one below 25 is set to 25. `compression`
+ *    absent or null is created; `compression` not a mapping, or holding a YAML
+ *    merge key, is left alone with a warning.
+ * 2. `auxiliary.compression.reasoning_effort: none`, so the summary runs with
+ *    reasoning off. Hermes folds this key into the summary request on any route,
+ *    the default `provider: auto` included (agent/auxiliary_client.py:6242-6270
+ *    `_get_task_extra_body`, then :6615-6622 into `reasoning_config`), and
+ *    strips it only when the block names an explicit provider and model that the
+ *    call did not use (:6178-6195, `_compression_config_claims_fast_lane` is
+ *    false for `auto`). So no explicit route is written: the summary keeps
+ *    running on the box's main provider and model, and an explicit route an
+ *    operator set is left alone (this step only adds the key). Written when
+ *    absent, null or empty (Hermes's own block writes `""`, the provider's
+ *    default); any other value is kept. `auxiliary` or `auxiliary.compression`
+ *    not a mapping, or holding a merge key, is left alone with a warning. A
+ *    model that cannot turn reasoning off is stepped up to its lowest level by
+ *    Hermes (agent/auxiliary_reasoning_floor.py), not broken.
+ *
+ * Not here: hiding Hermes's warning notices on Telegram
+ * (`display.platforms.telegram.suppress_warning_notifications`). The switch also
+ * hides failures a resident must act on (a dropped message, an aborted turn, a
+ * failed upload, cron failures), so rc28 drops it (the lead, Oct 9) and never
+ * touches the key; DATA-409's chat half stays open upstream.
+ *
+ * Each pin is independent: one that cannot be written is skipped with a
+ * `→ warning:` line and the other still applies. The whole step is skipped when
+ * the top level of config.yaml is not a mapping or holds a YAML merge key, for
+ * the reason `keepTelegramBacklogOnColdBoot` gives. One `→` line per pin; a
+ * config value is never echoed onto stdout (only its type, or a number).
+ * Idempotent: a second run changes nothing, says so, and does not rewrite the
+ * file.
+ */
+export function setCompactionSettings(): void {
+  const holdPath = "compression.hygiene_max_turn_hold_seconds";
+  const effortPath = "auxiliary.compression.reasoning_effort";
+  const doc: unknown = readConfig();
+  if (!isMapping(doc)) {
+    console.log("→ warning: the top level of config.yaml is not a mapping; left the compaction settings unset");
+    return;
+  }
+  if ("<<" in doc) {
+    console.log('→ warning: YAML merge key "<<" at the top of config.yaml; left the compaction settings unset (set them by hand)');
+    return;
+  }
+  // Each level may be absent or null (treated as empty); anything else must be a plain mapping.
+  const section = (parent: Record<string, unknown>, key: string, path: string): Record<string, unknown> | string => {
+    const value = parent[key] ?? {};
+    if (!isMapping(value)) return `${path} is not a mapping`;
+    if ("<<" in value) return `YAML merge key "<<" under ${path}; set it by hand`;
+    return value;
+  };
+  const lines: string[] = [];
+  let changed = false;
+
+  // 1. The turn hold.
+  const compression = section(doc, "compression", "compression");
+  if (typeof compression === "string") {
+    lines.push(`→ warning: ${compression}; left ${holdPath} unset`);
+  } else {
+    const raw = compression.hygiene_max_turn_hold_seconds;
+    const number = typeof raw === "number" && Number.isFinite(raw);
+    const fromString = typeof raw === "string" && NUMERIC_STRING.test(raw.trim()) ? Number(raw.trim()) : Number.NaN;
+    const stringNumber = Number.isFinite(fromString);
+    if (number && raw >= HYGIENE_MAX_TURN_HOLD_SECONDS) {
+      lines.push(`→ ${holdPath} already ${raw} (at least ${HYGIENE_MAX_TURN_HOLD_SECONDS}); left as is`);
+    } else if (stringNumber && fromString >= HYGIENE_MAX_TURN_HOLD_SECONDS) {
+      lines.push(`→ ${holdPath} already ${fromString}, written as a string Hermes reads as a number (at least ${HYGIENE_MAX_TURN_HOLD_SECONDS}); left as is`);
+    } else {
+      const why =
+        raw === undefined ? "was unset"
+        : raw === null ? "was null"
+        : number ? `was ${raw}, below ${HYGIENE_MAX_TURN_HOLD_SECONDS}`
+        : stringNumber ? `was ${fromString} written as a string, below ${HYGIENE_MAX_TURN_HOLD_SECONDS}`
+        : `was ${kindOf(raw)}, not a number`;
+      doc.compression = { ...compression, hygiene_max_turn_hold_seconds: HYGIENE_MAX_TURN_HOLD_SECONDS };
+      changed = true;
+      lines.push(`→ set ${holdPath}: ${HYGIENE_MAX_TURN_HOLD_SECONDS} (${why}; a summary that lands inside the hold is adopted with no notice)`);
+    }
+  }
+
+  // 2. The summary with reasoning off, on whatever route the box already uses.
+  const auxiliary = section(doc, "auxiliary", "auxiliary");
+  const route = typeof auxiliary === "string" ? auxiliary : section(auxiliary, "compression", "auxiliary.compression");
+  if (typeof auxiliary === "string" || typeof route === "string") {
+    lines.push(`→ warning: ${typeof auxiliary === "string" ? auxiliary : route}; left ${effortPath} unset`);
+  } else {
+    const raw = route.reasoning_effort;
+    if (raw === undefined || raw === null || (typeof raw === "string" && !raw.trim())) {
+      doc.auxiliary = { ...auxiliary, compression: { ...route, reasoning_effort: "none" } };
+      changed = true;
+      lines.push(`→ set ${effortPath}: none (the summary runs on the box's main model with reasoning off)`);
+    } else {
+      lines.push(`→ ${effortPath} already set; left as is`);
+    }
+  }
+
+  if (changed) writeConfig(doc);
+  for (const line of lines) console.log(line);
+}
+
 const DASHBOARD_PLUGIN = "dashboard-auth-edgecity";
 
 /** Enable the Edge City dashboard-auth plugin and public URL for hosted dashboards. */

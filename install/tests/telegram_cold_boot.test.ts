@@ -12,6 +12,7 @@ import {
   configureHostedGateway,
   configureStt,
   keepTelegramBacklogOnColdBoot,
+  setCompactionSettings,
   setContextFileMaxChars,
   setTerminalCwd,
 } from "../config";
@@ -281,6 +282,7 @@ function installerConfigPass(): void {
   configureHostedGateway();
   keepTelegramBacklogOnColdBoot();
   setContextFileMaxChars();
+  setCompactionSettings();
   configureDashboardAuth();
   configureAvEvents();
 }
@@ -301,6 +303,29 @@ test("full installer config pass: sets the key once, keeps it, and is idempotent
   expect(telegram.extra).toEqual({ disable_link_previews: false, drop_pending_on_cold_boot: false });
   // AGENTS-MD-CAP: the context-file cap is pinned in the same pass.
   expect(read(path).context_file_max_chars).toBe(48000);
+  // RC28: the hygiene turn hold and the summary's reasoning off in the same pass; the Telegram
+  // warning switch is never written (refute M1).
+  expect(read(path).compression).toEqual({ hygiene_max_turn_hold_seconds: 25 });
+  expect(read(path).display).toBeUndefined();
+  expect(read(path).auxiliary).toEqual({ compression: { reasoning_effort: "none" } });
+});
+
+test("full installer config pass on a box's shape: hold raised, reasoning off, provider and model left to Hermes", () => {
+  const path = withDoc({
+    model: { default: "anthropic/claude-haiku-5.5", provider: "openrouter", context_length: 90000 },
+    compression: { hygiene_max_turn_hold_seconds: 10 },
+    display: { platforms: { telegram: { tool_progress: "off" } } },
+  });
+
+  installerConfigPass();
+  const first = readFileSync(path, "utf8");
+  installerConfigPass();
+
+  expect(readFileSync(path, "utf8")).toBe(first);
+  expect(read(path).compression).toEqual({ hygiene_max_turn_hold_seconds: 25 });
+  expect(read(path).display).toEqual({ platforms: { telegram: { tool_progress: "off" } } });
+  expect(read(path).auxiliary).toEqual({ compression: { reasoning_effort: "none" } });
+  expect((read(path).model as Record<string, unknown>).max_tokens).toBe(4096);
 });
 
 test("full installer config pass keeps an operator's true", () => {
@@ -324,5 +349,7 @@ for (const [name, text] of [
     expect((read(path).terminal as Record<string, unknown>).cwd).toBe(process.env.HERMES_HOME);
     expect(extraOf(path).drop_pending_on_cold_boot).toBe(false);
     expect(read(path).context_file_max_chars).toBe(48000);
+    expect(read(path).compression).toEqual({ hygiene_max_turn_hold_seconds: 25 });
+    expect(read(path).auxiliary).toEqual({ compression: { reasoning_effort: "none" } });
   });
 }
