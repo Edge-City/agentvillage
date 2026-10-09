@@ -9,7 +9,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import YAML from "yaml";
@@ -25,13 +25,17 @@ import {
   NEGOTIATOR_SEED,
   SIDECAR_ANCHOR,
   SIDECAR_ANCHOR_PIN,
+  SIDECAR_BUN_OPTIONS,
   SIDECAR_ENV_ALLOWLIST,
   SIDECAR_MARKER,
   SIDECAR_PATCHED,
+  SIDECAR_PATCHED_V1,
+  checkAnchorPin,
   indexPluginFailedLine,
   installIndexPlugin,
   installMetadataPath,
   negotiatorPath,
+  patchInstalledSidecar,
   patchSidecarSource,
   recordIndexPluginStatus,
   sidecarPath,
@@ -547,9 +551,9 @@ describe("OV-249 (A3): the negotiator sidecar's env is an allowlist, or the plug
 
   /**
    * Import `file` standalone (python3 -I, the script outside the fixture's directory) and return the
-   * names in the child env `child_env_for()` builds when the gateway's environment is `env`.
+   * child env `child_env_for()` builds when the gateway's environment is `env`.
    */
-  function childEnvNames(file: string, env: Record<string, string>): string[] {
+  function childEnv(file: string, env: Record<string, string>): Record<string, string> {
     const scripts = mkdtempSync(join(tmpdir(), "av-sidecar-run-"));
     try {
       const script = join(scripts, "child_env.py");
@@ -558,12 +562,12 @@ describe("OV-249 (A3): the negotiator sidecar's env is an allowlist, or the plug
         'spec = importlib.util.spec_from_file_location("sidecar_under_test", sys.argv[1])',
         "module = importlib.util.module_from_spec(spec)",
         "spec.loader.exec_module(module)",
-        'print(json.dumps(sorted(module.Sidecar().child_env_for("agent-1", "ix_key"))))',
+        'print(json.dumps(module.Sidecar().child_env_for("agent-1", "ix_key")))',
         "",
       ].join("\n"));
       const run = Bun.spawnSync([python(), "-I", script, file], { env, stdout: "pipe", stderr: "pipe", cwd: scripts });
       expect(run.exitCode).toBe(0);
-      return JSON.parse(run.stdout.toString()) as string[];
+      return JSON.parse(run.stdout.toString()) as Record<string, string>;
     } finally {
       rmSync(scripts, { recursive: true, force: true });
     }
@@ -595,10 +599,14 @@ describe("OV-249 (A3): the negotiator sidecar's env is an allowlist, or the plug
     expect(patched).not.toContain("os.environ.copy()");
     expect(patched.split(SIDECAR_MARKER)).toHaveLength(2);
     expect(patched).toContain(
-      '            child_env = {name: os.environ[name] for name in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ") if name in os.environ}\n            child_env.update({\n',
+      '            child_env = {name: os.environ[name] for name in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ") if name in os.environ}\n' +
+        '            child_env["BUN_OPTIONS"] = "--no-env-file"\n' +
+        "            child_env.update({\n",
     );
     expect(SIDECAR_ENV_ALLOWLIST).toEqual(["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ"]);
     expect(SIDECAR_ENV_ALLOWLIST).not.toContain("INDEX_SESSION_TOKEN");
+    // Set, never copied: a gateway's own BUN_OPTIONS (an --env-file, say) does not reach the child.
+    expect(SIDECAR_ENV_ALLOWLIST).not.toContain("BUN_OPTIONS");
     expect(sidecarLines(result.lines)).toEqual([`→ index-network plugin: sidecar.py env allowlisted (${sidecarPath(home)})`]);
     // Idempotent: the same bytes, the same inode (no temp-and-rename), no line.
     const ino = statSync(sidecarPath(home)).ino;
@@ -639,6 +647,11 @@ describe("OV-249 (A3): the negotiator sidecar's env is an allowlist, or the plug
     ["anchor twice", SIDECAR_HEAD + SIDECAR_ANCHOR + SIDECAR_ANCHOR + SIDECAR_TAIL, "anchor ambiguous"],
     ["the marker over an altered line", PATCHED_AT_REF.replace('"TZ")', '"TZ", "TELEGRAM_BOT_TOKEN")'), "a partial or altered patch"],
     ["patched and the anchor both", SIDECAR_HEAD + SIDECAR_PATCHED + SIDECAR_ANCHOR + SIDECAR_TAIL, "a partial or altered patch"],
+    ["patched twice", SIDECAR_HEAD + SIDECAR_PATCHED + SIDECAR_PATCHED + SIDECAR_TAIL, "a partial or altered patch"],
+    ["the first patch (V1) twice", SIDECAR_HEAD + SIDECAR_PATCHED_V1 + SIDECAR_PATCHED_V1 + SIDECAR_TAIL, "a partial or altered patch"],
+    ["V1 then an altered Bun line", SIDECAR_HEAD + SIDECAR_PATCHED_V1 + '            child_env["BUN_OPTIONS"] = ""\n' + SIDECAR_TAIL, "a partial or altered patch"],
+    ["V1 and the anchor both", SIDECAR_HEAD + SIDECAR_PATCHED_V1 + SIDECAR_ANCHOR + SIDECAR_TAIL, "a partial or altered patch"],
+    ["V1 and the current block both", SIDECAR_HEAD + SIDECAR_PATCHED_V1 + SIDECAR_PATCHED + SIDECAR_TAIL, "a partial or altered patch"],
     ["sidecar.py missing", null, "missing"],
   ];
   for (const [label, body, reason] of BROKEN) {
@@ -696,10 +709,176 @@ describe("OV-249 (A3): the negotiator sidecar's env is an allowlist, or the plug
     }
   });
 
-  test("patchSidecarSource: at REF patched once; patched is a no-op; nothing else is accepted", () => {
+  test("patchSidecarSource: at REF patched once; patched is a no-op; the V1 block is brought to the current one; nothing else is accepted", () => {
     expect(patchSidecarSource(SIDECAR_AT_REF)).toEqual({ source: PATCHED_AT_REF, changed: true });
     expect(patchSidecarSource(PATCHED_AT_REF)).toEqual({ source: PATCHED_AT_REF, changed: false });
+    expect(patchSidecarSource(SIDECAR_HEAD + SIDECAR_PATCHED_V1 + SIDECAR_TAIL)).toEqual({ source: PATCHED_AT_REF, changed: true });
     for (const [, body, reason] of BROKEN) if (body !== null) expect(patchSidecarSource(body)).toEqual({ reason });
+  });
+
+  test("the run-time pin guard: a pin taken at another ref, or whose sha256 is not the anchor's, refuses even a file at REF", () => {
+    expect(checkAnchorPin(SIDECAR_ANCHOR_PIN, INDEX_PLUGIN_REF, SIDECAR_ANCHOR)).toBeNull();
+    expect(checkAnchorPin(SIDECAR_ANCHOR_PIN, OTHER_REF, SIDECAR_ANCHOR)).toBe("the anchor was not re-taken at INDEX_PLUGIN_REF");
+    expect(checkAnchorPin(SIDECAR_ANCHOR_PIN, INDEX_PLUGIN_REF, SIDECAR_ANCHOR.replace("copy()", "copy( )"))).toBe("the anchor is not the pinned one");
+    // Through patchSidecarSource itself, so the guard cannot be dropped from it unnoticed.
+    expect(patchSidecarSource(SIDECAR_AT_REF, { ref: OTHER_REF, sha256: SIDECAR_ANCHOR_PIN.sha256 })).toEqual({ reason: "the anchor was not re-taken at INDEX_PLUGIN_REF" });
+    expect(patchSidecarSource(SIDECAR_AT_REF, { ref: INDEX_PLUGIN_REF, sha256: "0".repeat(64) })).toEqual({ reason: "the anchor is not the pinned one" });
+    expect(patchSidecarSource(PATCHED_AT_REF, { ref: OTHER_REF, sha256: SIDECAR_ANCHOR_PIN.sha256 })).toEqual({ reason: "the anchor was not re-taken at INDEX_PLUGIN_REF" });
+  });
+
+  test("V1 → current: a sidecar.py the first A3 patch (d1395502) wrote gains the Bun line in place (mode kept), stays enabled; a second run writes nothing", () => {
+    // d1395502's block, byte for byte: the allowlist with no BUN_OPTIONS line.
+    expect(SIDECAR_PATCHED_V1).toBe(
+      "            # agentvillage OV-249 A3: env allowlist (installer patch: no gateway secret reaches the child)\n" +
+        '            child_env = {name: os.environ[name] for name in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ") if name in os.environ}\n',
+    );
+    expect(SIDECAR_PATCHED.startsWith(SIDECAR_PATCHED_V1)).toBe(true);
+    expect(SIDECAR_PATCHED.slice(SIDECAR_PATCHED_V1.length)).toBe('            child_env["BUN_OPTIONS"] = "--no-env-file"\n');
+    config(ENABLED);
+    installedAt(INDEX_PLUGIN_REF, true);
+    writeFileSync(sidecarPath(home), SIDECAR_HEAD + SIDECAR_PATCHED_V1 + SIDECAR_TAIL);
+    chmodSync(sidecarPath(home), 0o640);
+    const ino = statSync(sidecarPath(home)).ino;
+    const result = step(recorder().run);
+    expect(result).toMatchObject({ state: "pinned", failed: null });
+    expect(readSidecar()).toBe(PATCHED_AT_REF);
+    expect(statSync(sidecarPath(home)).ino).not.toBe(ino);
+    expect(statSync(sidecarPath(home)).mode & 0o7777).toBe(0o640);
+    expect(sidecarLines(result.lines)).toEqual([`→ index-network plugin: sidecar.py env allowlisted (${sidecarPath(home)})`]);
+    expect(plugins().enabled).toEqual(["av-events", INDEX_PLUGIN]);
+    const after = statSync(sidecarPath(home)).ino;
+    const again = step(recorder().run);
+    expect(again).toMatchObject({ state: "pinned", failed: null });
+    expect(statSync(sidecarPath(home)).ino).toBe(after);
+    expect(sidecarLines(again.lines)).toEqual([]);
+  });
+
+  test("a symlinked sidecar.py: not a regular file, fail closed, the link and its target untouched", () => {
+    config(ENABLED);
+    installedAt(INDEX_PLUGIN_REF, true);
+    const target = join(home, "elsewhere.py");
+    writeFileSync(target, SIDECAR_AT_REF);
+    rmSync(sidecarPath(home));
+    symlinkSync(target, sidecarPath(home));
+    const result = step(recorder().run);
+    expect(result).toMatchObject({ state: "failed", failed: "sidecar" });
+    expect(sidecarLines(result.lines)).toEqual([
+      "  warning: index-network plugin: not enabled, sidecar.py env not allowlisted (not a regular file); removed from plugins.enabled",
+    ]);
+    expect(lstatSync(sidecarPath(home)).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(sidecarPath(home))).toBe(target);
+    expect(readFileSync(target, "utf8")).toBe(SIDECAR_AT_REF);
+    expect(plugins().enabled).toEqual(["av-events"]);
+  });
+
+  test("refute N1: a symlink planted at the temp path is refused (exclusive create), never written through; fail closed, the link left", () => {
+    config(ENABLED);
+    installedAt(INDEX_PLUGIN_REF, true);
+    const outside = join(home, "outside.txt");
+    writeFileSync(outside, "outside\n");
+    const tmp = `${sidecarPath(home)}.av-${process.pid}.tmp`;
+    symlinkSync(outside, tmp);
+    const result = step(recorder().run);
+    expect(result).toMatchObject({ state: "failed", failed: "sidecar" });
+    expect(sidecarLines(result.lines)).toEqual([
+      "  warning: index-network plugin: not enabled, sidecar.py env not allowlisted (write failed); removed from plugins.enabled",
+    ]);
+    expect(readFileSync(outside, "utf8")).toBe("outside\n");
+    expect(lstatSync(sidecarPath(home)).isFile()).toBe(true);
+    expect(readSidecar()).toBe(SIDECAR_AT_REF);
+    expect(lstatSync(tmp).isSymbolicLink()).toBe(true);
+    expect(plugins().enabled).toEqual(["av-events"]);
+  });
+
+  test("refute N1: a directory planted at the temp path: no throw, fail closed, the directory and what is in it left", () => {
+    config(ENABLED);
+    installedAt(INDEX_PLUGIN_REF, true);
+    const tmp = `${sidecarPath(home)}.av-${process.pid}.tmp`;
+    mkdirSync(tmp);
+    writeFileSync(join(tmp, "keep"), "keep\n");
+    const result = step(recorder().run);
+    expect(result).toMatchObject({ state: "failed", failed: "sidecar" });
+    expect(sidecarLines(result.lines)).toEqual([
+      "  warning: index-network plugin: not enabled, sidecar.py env not allowlisted (write failed); removed from plugins.enabled",
+    ]);
+    expect(readFileSync(join(tmp, "keep"), "utf8")).toBe("keep\n");
+    expect(readSidecar()).toBe(SIDECAR_AT_REF);
+    expect(plugins().enabled).toEqual(["av-events"]);
+  });
+
+  test("the re-read check: a read-back that differs, or fails, is a reason (the plugin is not enabled)", () => {
+    installedAt(INDEX_PLUGIN_REF, true);
+    expect(patchInstalledSidecar(home, () => SIDECAR_AT_REF)).toEqual({ reason: "re-read differs" });
+    writeFileSync(sidecarPath(home), SIDECAR_AT_REF);
+    expect(
+      patchInstalledSidecar(home, () => {
+        throw new Error("EIO");
+      }),
+    ).toEqual({ reason: "re-read failed" });
+    writeFileSync(sidecarPath(home), SIDECAR_AT_REF);
+    expect(patchInstalledSidecar(home)).toBe("patched");
+    expect(patchInstalledSidecar(home)).toBe("already");
+  });
+
+  describe("refute S2: the skipped route (--skip-index, or no Index key)", () => {
+    const SKIPS: Array<[string, string[]]> = [
+      ["--skip-index", [...ARGV, "--skip-index"]],
+      ["no Index key", ["bun", "install.ts"]],
+    ];
+    for (const [label, argv] of SKIPS) {
+      test(`${label}, enabled by an earlier run, sidecar.py reinstalled unpatched: patched, still enabled, skipped, no Hermes call`, () => {
+        config(ENABLED);
+        installedAt(INDEX_PLUGIN_REF, true);
+        const { calls, run } = recorder();
+        const result = step(run, argv);
+        expect(result).toMatchObject({ state: "skipped", failed: null });
+        expect(calls).toEqual([]);
+        expect(readSidecar()).toBe(PATCHED_AT_REF);
+        expect(plugins().enabled).toEqual(["av-events", INDEX_PLUGIN]);
+        expect(sidecarLines(result.lines)).toEqual([`→ index-network plugin: sidecar.py env allowlisted (${sidecarPath(home)})`]);
+        expect(existsSync(negotiatorPath(home))).toBe(false);
+        // Already patched: nothing written, no line.
+        const ino = statSync(sidecarPath(home)).ino;
+        const again = step(recorder().run, argv);
+        expect(again).toMatchObject({ state: "skipped", failed: null });
+        expect(statSync(sidecarPath(home)).ino).toBe(ino);
+        expect(sidecarLines(again.lines)).toEqual([]);
+      });
+
+      test(`${label}, enabled by an earlier run, anchor missing: dropped from plugins.enabled, the morning job removed, failed=sidecar, the file untouched`, () => {
+        config(ENABLED);
+        installedAt(INDEX_PLUGIN_REF, true);
+        writeFileSync(sidecarPath(home), SIDECAR_HEAD + SIDECAR_TAIL);
+        plantMorning();
+        const { calls, run } = recorder();
+        const result = step(run, argv);
+        expect(result).toMatchObject({ state: "failed", failed: "sidecar" });
+        expect(plugins().enabled).toEqual(["av-events"]);
+        expect(calls).toEqual([["cron", "remove", "aaaaaaaaaaaa"]]);
+        expect(existsSync(launcher())).toBe(false);
+        expect(readSidecar()).toBe(SIDECAR_HEAD + SIDECAR_TAIL);
+        expect(sidecarLines(result.lines)).toEqual([
+          "  warning: index-network plugin: not enabled, sidecar.py env not allowlisted (anchor missing); removed from plugins.enabled",
+        ]);
+        expect(existsSync(negotiatorPath(home))).toBe(false);
+      });
+
+      test(`${label}, not enabled: sidecar.py not read or written (bytes, inode, mtime), config.yaml not rewritten, no Hermes call`, () => {
+        config(BASE);
+        installedAt(INDEX_PLUGIN_REF, true);
+        const before = statSync(sidecarPath(home));
+        const cfg = configText();
+        const { calls, run } = recorder();
+        const result = step(run, argv);
+        expect(result).toMatchObject({ state: "skipped", failed: null });
+        expect(calls).toEqual([]);
+        expect(readSidecar()).toBe(SIDECAR_AT_REF);
+        const after = statSync(sidecarPath(home));
+        expect([after.ino, after.mtimeMs]).toEqual([before.ino, before.mtimeMs]);
+        expect(configText()).toBe(cfg);
+        expect(sidecarLines(result.lines)).toEqual([]);
+      });
+    }
   });
 
   test("the patched file is valid Python (ast.parse)", () => {
@@ -711,7 +890,7 @@ describe("OV-249 (A3): the negotiator sidecar's env is an allowlist, or the plug
     expect(parse.exitCode).toBe(0);
   });
 
-  test("behaviour: the patched env builder hands the child no secret name (TELEGRAM_BOT_TOKEN, a model key, INDEX_SESSION_TOKEN); the unpatched one does", () => {
+  test("behaviour: the patched env builder hands the child no secret name (TELEGRAM_BOT_TOKEN, a model key, INDEX_SESSION_TOKEN) and BUN_OPTIONS=--no-env-file (Bun loads no .env* from the gateway's cwd); the unpatched one leaks", () => {
     config(BASE);
     installedAt(INDEX_PLUGIN_REF, true);
     const unpatched = join(home, "unpatched_sidecar.py");
@@ -726,18 +905,27 @@ describe("OV-249 (A3): the negotiator sidecar's env is an allowlist, or the plug
       OPENROUTER_API_KEY: "x",
       INDEX_SESSION_TOKEN: "x",
       AV_APPROVAL_TOKEN_FILE: "/run/x",
+      // The gateway's own Bun options (an env file, say) are not what the child gets.
+      BUN_OPTIONS: "--env-file=/home/hermes/.hermes/.env",
     };
     // Control: at REF the leak is real, so the check below can see it.
-    const leaked = childEnvNames(unpatched, gateway);
+    const leaked = Object.keys(childEnv(unpatched, gateway));
     expect(leaked).toContain("TELEGRAM_BOT_TOKEN");
     expect(leaked).toContain("OPENROUTER_API_KEY");
     expect(leaked).not.toContain("INDEX_SESSION_TOKEN");
-    const names = childEnvNames(sidecarPath(home), gateway);
+    const env = childEnv(sidecarPath(home), gateway);
+    const names = Object.keys(env).sort();
     expect(names).not.toContain("TELEGRAM_BOT_TOKEN");
     expect(names).not.toContain("OPENROUTER_API_KEY");
     expect(names).not.toContain("AV_APPROVAL_TOKEN_FILE");
     expect(names).not.toContain("INDEX_SESSION_TOKEN");
-    expect(names).toEqual([...INDEX_CHILD_NAMES, "HOME", "LANG", "PATH", "TZ"].sort());
+    expect(names).toEqual([...INDEX_CHILD_NAMES, "BUN_OPTIONS", "HOME", "LANG", "PATH", "TZ"].sort());
+    expect(env.BUN_OPTIONS).toBe("--no-env-file");
+    expect(SIDECAR_BUN_OPTIONS).toBe("--no-env-file");
+    // A gateway with no BUN_OPTIONS at all: the child still gets it.
+    const bare: Record<string, string> = { ...gateway };
+    delete bare.BUN_OPTIONS;
+    expect(childEnv(sidecarPath(home), bare).BUN_OPTIONS).toBe("--no-env-file");
   });
 
   test("the line and the status field carry the word", () => {

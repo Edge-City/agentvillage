@@ -18,7 +18,7 @@ export default async function negotiate(input, next) {
 
 Do not import `@indexnetwork/agent`. That package is not installed on the resident.
 
-Never read, log or send `process.env` or files under `$HERMES_HOME`. The installer patches the plugin's `sidecar.py:149-150` so the process starts with only `PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_ALL`, `TZ` and the plugin's `INDEX_*` names (no patch, no plugin: the failure is `sidecar`), but it still runs as the resident's own user and can read every file the gateway can, `.env` included.
+Never read, log or send `process.env` or files under `$HERMES_HOME`. The installer patches the plugin's `sidecar.py:149-150` so the process starts with only `PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_ALL`, `TZ`, `BUN_OPTIONS=--no-env-file` (Bun then loads no `.env*` from the gateway's working directory) and the plugin's `INDEX_*` names (no patch, no plugin: the failure is `sidecar`), but it still runs as the resident's own user and can read every file the gateway can, `.env` included.
 
 ## What you return
 

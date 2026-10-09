@@ -50,14 +50,18 @@
  *   `INDEX_SESSION_TOKEN`, every gateway secret included. Every ON run, after
  *   the Hermes install or no-op and before enabling, the installed
  *   `plugins/index-network/sidecar.py` has that exact two-line anchor replaced
- *   by an allowlist (`SIDECAR_ENV_ALLOWLIST` from `os.environ`, then the
- *   plugin's own `INDEX_*` names, unchanged). An already-patched file is left
- *   byte for byte. Anything else (anchor missing or twice, unreadable, write or
- *   re-read failed) is fail closed: the step does what withheld does, reports
+ *   by an allowlist (`SIDECAR_ENV_ALLOWLIST` from `os.environ`, plus
+ *   `BUN_OPTIONS=--no-env-file` so Bun loads no `.env*` from the gateway's
+ *   working directory, then the plugin's own `INDEX_*` names, unchanged). An
+ *   already-patched file is left byte for byte; a file the first A3 patch
+ *   wrote (`SIDECAR_PATCHED_V1`, exactly) is brought to the current block.
+ *   Anything else (anchor missing or twice, unreadable, write or re-read
+ *   failed) is fail closed: the step does what withheld does, reports
  *   `sidecar` and logs one line naming the reason. Comes out when the plugin
  *   offers a hook (the request to Index on #249).
  * - `--skip-index`, or no Index key, skips the ON install as `installIndex()`
- *   is skipped.
+ *   is skipped. An entry an earlier run put in `plugins.enabled` stays only
+ *   with the sidecar patched (A3, as above); otherwise it is dropped.
  * - `$HERMES_HOME/index/negotiator.ts` is seeded for ON residents only when
  *   absent, whether or not the Hermes command succeeded, so an update never
  *   replaces a resident's negotiator. The seed calls `next()`, the built-in
@@ -95,14 +99,27 @@ export const SIDECAR_ANCHOR_PIN = {
 } as const;
 /** The names the negotiator child keeps from the gateway's environment (Bun needs PATH and HOME). */
 export const SIDECAR_ENV_ALLOWLIST = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ"] as const;
+/**
+ * Set in the child env, never copied: the child has no `cwd=`, so it runs in the gateway's working
+ * directory, and Bun auto-loads `.env`, `.env.local` and `.env.development` from there.
+ */
+export const SIDECAR_BUN_OPTIONS = "--no-env-file";
 /** Marks the patched region, so a re-run recognises an already-patched file. */
 export const SIDECAR_MARKER = "# agentvillage OV-249 A3: env allowlist";
 /** What replaces `SIDECAR_ANCHOR`, at its indent; the plugin's `child_env.update({INDEX_*})` follows unchanged. */
 export const SIDECAR_PATCHED = [
   `            ${SIDECAR_MARKER} (installer patch: no gateway secret reaches the child)`,
   `            child_env = {name: os.environ[name] for name in (${SIDECAR_ENV_ALLOWLIST.map((n) => `"${n}"`).join(", ")}) if name in os.environ}`,
+  `            child_env["BUN_OPTIONS"] = "${SIDECAR_BUN_OPTIONS}"`,
   "",
 ].join("\n");
+/**
+ * The block the first A3 patch (d1395502) wrote, byte for byte: no `BUN_OPTIONS`. Found exactly once
+ * (and no `BUN_OPTIONS` anywhere), it is replaced by `SIDECAR_PATCHED`; it is a prefix of it.
+ */
+export const SIDECAR_PATCHED_V1 =
+  '            # agentvillage OV-249 A3: env allowlist (installer patch: no gateway secret reaches the child)\n' +
+  '            child_env = {name: os.environ[name] for name in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ") if name in os.environ}\n';
 export const MORALMOD_ARM_ENV = "AV_MORALMOD_ARM";
 /** The plugin's own cron job and its launcher under `$HERMES_HOME/scripts/` (morning.py `JOB_NAME`, `LAUNCHER` at REF). */
 export const MORNING_JOB = "Index morning";
@@ -270,20 +287,38 @@ function count(text: string, needle: string): number {
 }
 
 /**
+ * Why `anchor` may not be used, or null: the pin was taken at another ref than `ref`, or its sha256
+ * is not the anchor's (a bump that did not re-take the anchor).
+ */
+export function checkAnchorPin(pin: { ref: string; sha256: string }, ref: string, anchor: string): string | null {
+  if (pin.ref !== ref) return "the anchor was not re-taken at INDEX_PLUGIN_REF";
+  if (createHash("sha256").update(anchor).digest("hex") !== pin.sha256) return "the anchor is not the pinned one";
+  return null;
+}
+
+/**
  * `source` with the anchor replaced by the allowlist (OV-249 A3), or the reason it cannot be: one
  * fixed phrase, never file content. Already patched (the exact patched block once, no anchor) is
- * returned unchanged.
+ * returned unchanged. The first patch's block (`SIDECAR_PATCHED_V1` once, standing alone, no anchor,
+ * no `BUN_OPTIONS`) is replaced by the current one.
+ *
+ * @param pin - The anchor's pin (a seam for the test of the run-time guard).
  */
-export function patchSidecarSource(source: string): { source: string; changed: boolean } | { reason: string } {
-  if (SIDECAR_ANCHOR_PIN.ref !== INDEX_PLUGIN_REF) return { reason: "the anchor was not re-taken at INDEX_PLUGIN_REF" };
-  if (createHash("sha256").update(SIDECAR_ANCHOR).digest("hex") !== SIDECAR_ANCHOR_PIN.sha256) return { reason: "the anchor is not the pinned one" };
+export function patchSidecarSource(source: string, pin: { ref: string; sha256: string } = SIDECAR_ANCHOR_PIN): { source: string; changed: boolean } | { reason: string } {
+  const unpinned = checkAnchorPin(pin, INDEX_PLUGIN_REF, SIDECAR_ANCHOR);
+  if (unpinned) return { reason: unpinned };
   const anchors = count(source, SIDECAR_ANCHOR);
   const patched = count(source, SIDECAR_PATCHED);
-  if (patched === 1 && anchors === 0) return { source, changed: false };
-  if (patched > 0 || count(source, SIDECAR_MARKER) > 0) return { reason: "a partial or altered patch" };
+  // The V1 block is a prefix of the current one: count only the V1 blocks that stand alone.
+  const v1 = count(source, SIDECAR_PATCHED_V1) - patched;
+  if (patched === 1 && v1 === 0 && anchors === 0) return { source, changed: false };
+  if (v1 === 1 && patched === 0 && anchors === 0 && !source.includes("BUN_OPTIONS")) {
+    return { source: source.replace(SIDECAR_PATCHED_V1, () => SIDECAR_PATCHED), changed: true };
+  }
+  if (patched > 0 || v1 > 0 || count(source, SIDECAR_MARKER) > 0) return { reason: "a partial or altered patch" };
   if (anchors === 0) return { reason: "anchor missing" };
   if (anchors > 1) return { reason: "anchor ambiguous" };
-  return { source: source.replace(SIDECAR_ANCHOR, SIDECAR_PATCHED), changed: true };
+  return { source: source.replace(SIDECAR_ANCHOR, () => SIDECAR_PATCHED), changed: true };
 }
 
 export function sidecarPath(home: string): string {
@@ -292,11 +327,13 @@ export function sidecarPath(home: string): string {
 
 /**
  * Bring the installed sidecar.py to the env allowlist: no write when already patched; otherwise a
- * temp file beside it, with its mode and owner, renamed over it and read back.
+ * temp file beside it, created exclusively (a file, link or directory already at that path is
+ * refused, never written through or removed), with its mode and owner, renamed over it and read back.
  *
+ * @param reread - Reads the file back after the rename (a seam for the test of the re-read check).
  * @returns `patched`, `already`, or the reason (fixed phrase) the plugin must not be enabled.
  */
-export function patchInstalledSidecar(home: string): "patched" | "already" | { reason: string } {
+export function patchInstalledSidecar(home: string, reread: (path: string) => string = (p) => readFileSync(p, "utf8")): "patched" | "already" | { reason: string } {
   const path = sidecarPath(home);
   let source: string;
   let mode: number;
@@ -314,17 +351,27 @@ export function patchInstalledSidecar(home: string): "patched" | "already" | { r
   if ("reason" in result) return result;
   if (!result.changed) return "already";
   const tmp = `${path}.av-${process.pid}.tmp`;
+  let created = false;
   try {
-    writeFileSync(tmp, result.source, { mode: mode & 0o7777 });
+    // `wx`: O_CREAT|O_EXCL, so a planted file, symlink or directory at `tmp` fails here (EEXIST).
+    writeFileSync(tmp, result.source, { mode: mode & 0o7777, flag: "wx" });
+    created = true;
     chmodSync(tmp, mode & 0o7777);
     chownSync(tmp, uid, gid);
     renameSync(tmp, path);
   } catch {
-    rmSync(tmp, { force: true });
+    // Only the file this call created, never recursively, and never a throw from the cleanup.
+    if (created) {
+      try {
+        rmSync(tmp, { force: true });
+      } catch {
+        // left behind; the reason below already keeps the plugin off
+      }
+    }
     return { reason: "write failed" };
   }
   try {
-    if (readFileSync(path, "utf8") !== result.source) return { reason: "re-read differs" };
+    if (reread(path) !== result.source) return { reason: "re-read differs" };
   } catch {
     return { reason: "re-read failed" };
   }
@@ -363,6 +410,26 @@ export function setIndexPluginEnabled(on: boolean): boolean {
   return true;
 }
 
+/**
+ * OV-249 A3, fail closed: the sidecar could not be brought to the allowlist, so the plugin is
+ * dropped from `plugins.enabled` and its morning job removed, as withheld does; one line naming
+ * `reason`. The word is `config` when the drop failed (the plugin may still be listed), else
+ * `failed` (an earlier failure of this run), else `sidecar`.
+ */
+function withholdForSidecar(run: (args: string[]) => void, home: string, reason: string, failed: IndexPluginFailure | null): IndexPluginResult {
+  let dropped = false;
+  try {
+    dropped = setIndexPluginEnabled(false);
+  } catch {
+    failed = "config";
+  }
+  const tail = failed === "config" ? "; could not update plugins.enabled in config.yaml" : dropped ? "; removed from plugins.enabled" : "";
+  console.warn(`  warning: index-network plugin: not enabled, sidecar.py env not allowlisted (${reason})${tail}`);
+  stopMorningJob(run, home);
+  failed ??= "sidecar";
+  return { state: "failed", failed };
+}
+
 function operatorDisabled(): boolean {
   const plugins = readConfig().plugins as Record<string, unknown> | undefined;
   return stringList(plugins?.disabled).includes(INDEX_PLUGIN);
@@ -397,6 +464,20 @@ export function installIndexPlugin(run: (args: string[]) => void, argv: string[]
   }
   if (argv.includes("--skip-index") || !hasIndexKey(argv, home)) {
     console.log("→ index-network plugin: skipped (no Index key or --skip-index)");
+    // OV-249 A3: an entry an earlier run enabled is not kept over a sidecar.py Hermes or an
+    // operator has since reinstalled unpatched. Not listed: nothing is read or written.
+    let listed: boolean;
+    try {
+      listed = stringList((readConfig().plugins as Record<string, unknown> | undefined)?.enabled).includes(INDEX_PLUGIN);
+    } catch {
+      console.warn("  warning: index-network plugin: could not read config.yaml");
+      return { state: "failed", failed: "config" };
+    }
+    if (listed) {
+      const sidecar = patchInstalledSidecar(home);
+      if (typeof sidecar === "object") return withholdForSidecar(run, home, sidecar.reason, null);
+      if (sidecar === "patched") console.log(`→ index-network plugin: sidecar.py env allowlisted (${sidecarPath(home)})`);
+    }
     return { state: "skipped", failed: null };
   }
   try {
@@ -433,20 +514,7 @@ export function installIndexPlugin(run: (args: string[]) => void, argv: string[]
   if (existsSync(join(pluginDir(home), "plugin.yaml"))) {
     // OV-249 A3: never enabled with a sidecar that hands the negotiator the gateway's environment.
     const sidecar = patchInstalledSidecar(home);
-    if (typeof sidecar === "object") {
-      let dropped = false;
-      try {
-        dropped = setIndexPluginEnabled(false);
-      } catch {
-        failed = "config";
-      }
-      const tail = failed === "config" ? "; could not update plugins.enabled in config.yaml" : dropped ? "; removed from plugins.enabled" : "";
-      console.warn(`  warning: index-network plugin: not enabled, sidecar.py env not allowlisted (${sidecar.reason})${tail}`);
-      stopMorningJob(run, home);
-      // `config` first (the plugin may still be listed), else the first failure, else `sidecar`.
-      failed ??= "sidecar";
-      return { state: "failed", failed };
-    }
+    if (typeof sidecar === "object") return withholdForSidecar(run, home, sidecar.reason, failed);
     if (sidecar === "patched") console.log(`→ index-network plugin: sidecar.py env allowlisted (${sidecarPath(home)})`);
     try {
       if (setIndexPluginEnabled(true)) console.log(`→ enabled plugin ${INDEX_PLUGIN}`);
