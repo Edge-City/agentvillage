@@ -142,6 +142,8 @@ const PROMPT_LABELS: Record<string, string | null> = {
   "ask-questions.md": "Evening questions",
   // Both opportunity drops (midday and evening) share this file and its label.
   "opportunity-drop.md": "Introduction suggestion",
+  // DATA-430: the hourly alert for an opportunity that newly turned pending.
+  "pending-alert.md": "Pending opportunity",
   // The 01:00 sync: silent, deliver false.
   "memory-signals.md": null,
 };
@@ -209,7 +211,7 @@ describe("AC #2: each delivering prompt ends with its own manage line", () => {
         expect({ job: spec.name, line: text.includes(MANAGE_TAIL) }).toEqual({ job: spec.name, line: false });
       }
     }
-    // The five DATA-373 names and the token usage audit, so a rename cannot drop one silently.
+    // The five DATA-373 names, DATA-430's pending alert and the token usage audit, so a rename cannot drop one silently.
     const labelled = DIGEST_CRON_SPECS.filter((spec) => spec.deliver).map((spec) => [spec.name, labelOf(spec)]);
     expect(labelled).toEqual([
       ["Edge — daily digest", "Daily digest"],
@@ -217,6 +219,7 @@ describe("AC #2: each delivering prompt ends with its own manage line", () => {
       ["Edge — evening questions", "Evening questions"],
       ["Edge — opportunity drop (midday)", "Introduction suggestion"],
       ["Edge — opportunity drop (evening)", "Introduction suggestion"],
+      ["Edge — pending opportunity", "Pending opportunity"],
       ["Edge — token usage audit", "Usage report"],
     ]);
   });
@@ -244,7 +247,12 @@ describe("AC #2: each delivering prompt ends with its own manage line", () => {
   test("av-events strips every label the installer emits: the seed's manage_line is exactly these labels' lines", () => {
     const seed = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "plugins", "av-events", "outcome_question.json"), "utf8"));
     const manage = new RegExp(`^(?:${seed.normalise.manage_line})$`, "u");
-    const emitted = [...new Set([...Object.values(PROMPT_LABELS), ...Object.values(INLINE_LABELS)].filter((label): label is string => label !== null))];
+    // DATA-430: the pending alert's label is not in the seed's alternation. The seed strips a manage line
+    // from the evening outcome ask's reply only (the one job that arms an ask, under the Evening questions
+    // label); the pending alert never arms one, and changing the seed is the av-events plugin's contract
+    // (outcome_question.json), left to that owner. Every other label stays pinned.
+    const NOT_IN_OUTCOME_SEED = new Set(["Pending opportunity"]);
+    const emitted = [...new Set([...Object.values(PROMPT_LABELS), ...Object.values(INLINE_LABELS)].filter((label): label is string => label !== null && !NOT_IN_OUTCOME_SEED.has(label)))];
     expect(emitted.sort()).toEqual(["Conversation update", "Daily digest", "Evening questions", "Introduction suggestion", "Usage report"]);
     for (const label of emitted) expect({ label, strips: manage.test(manageLine(label)) }).toEqual({ label, strips: true });
     // The alternation names these five and nothing else.
@@ -252,9 +260,17 @@ describe("AC #2: each delivering prompt ends with its own manage line", () => {
     expect(alternation).toEqual(emitted.sort());
   });
 
-  test("AGENTS.md maps every label to exactly its jobs; the agent stops and restarts all five with the pause script", () => {
+  test("tools.md's Cron schedule maps every label to exactly its jobs; the agent stops and restarts all six with the pause script", () => {
+    // AGENTS-MD-CAP: the section moved verbatim from workspace/AGENTS.md to the index-network skill's tools.md
+    // (AGENTS.md keeps a pointer to it); the holds-file paragraph moved with it.
     const agents = readFileSync(join(import.meta.dir, "..", "..", "workspace", "AGENTS.md"), "utf8");
-    const section = agents.slice(agents.indexOf("## Cron schedule"), agents.indexOf("## Red lines"));
+    const tools = readFileSync(join(import.meta.dir, "..", "..", "skills", "index-network", "tools.md"), "utf8");
+    expect(agents).not.toContain("## Cron schedule");
+    expect(agents).toContain("read `skills/index-network/tools.md` under your `HERMES_HOME`");
+    const start = tools.indexOf("## Cron schedule");
+    expect(start).toBeGreaterThan(-1);
+    const next = tools.indexOf("\n## ", start + 1);
+    const section = tools.slice(start, next < 0 ? undefined : next);
     expect(section).toContain(`\`(<Label>${MANAGE_TAIL}\``);
     const mapping = section.match(/Each label maps to its job: (.+?)\.\n/)![1];
     // Label -> the backticked job names its entry lists, read back from the text.
@@ -274,8 +290,9 @@ describe("AC #2: each delivering prompt ends with its own manage line", () => {
     expect(section).not.toContain("template");
     // DATA-376: the pause script's own table is the same mapping.
     expect(Object.fromEntries(Object.entries(MESSAGE_LABELS).map(([label, names]) => [label, [...names].sort()]))).toEqual(Object.fromEntries(expected));
-    // DATA-376: all five stop and restart through the pause script, which records a hold an update keeps.
-    expect(section).toContain("You can stop and restart any of these five messages when the user asks.");
+    // DATA-376: all six (DATA-430 added the pending alert) stop and restart through the pause script, which records a hold an update keeps.
+    expect(section).toContain("You can stop and restart any of these six messages when the user asks.");
+    expect(section).toContain("Pending opportunity = `Edge — pending opportunity`");
     expect(section).toContain('`bun skills/index-network/scripts/pause-job.ts pause --label "<Label>"`');
     expect(section).toContain("run the same with `resume`");
     expect(section).toContain("Call `terminal` with exactly `command` plus `workdir` set to your absolute `HERMES_HOME` directory, and nothing else.");
@@ -298,8 +315,9 @@ describe("AC #2: each delivering prompt ends with its own manage line", () => {
     expect(section).toContain("no scheduled message can be moved or added");
     expect(section).not.toContain("can't be changed");
     // The holds file is not a preferences file, and the line saying so stays true.
-    expect(agents).toContain("Edge keeps no separate preferences file. `av-events/job-holds.json` only records who stopped or restarted a scheduled message");
+    expect(section).toContain("Edge keeps no separate preferences file. `av-events/job-holds.json` only records who stopped or restarted a scheduled message");
     expect(agents).not.toContain("Edge does not keep a separate preferences file.");
+    expect(tools).not.toContain("Edge does not keep a separate preferences file.");
   });
 
   test("every template a job can be added from delivers on a labelled prompt, so it carries its base job's line", () => {

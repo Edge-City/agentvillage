@@ -4,20 +4,20 @@
   "source": {
     "repo": "p2p-lanes/edge-agent-skill",
     "path": "references",
-    "commit": "f11869f4e9933f33b8c16d09422ee57222e34c8b",
-    "commit_date": "2026-10-07T22:43:17.000Z"
+    "commit": "e9b7ec450adce708b7f398371506dcd2d372ed3e",
+    "commit_date": "2026-10-09T08:43:20.000Z"
   },
-  "synced_at": "2026-10-07T23:50:26.900Z",
+  "synced_at": "2026-10-09T10:12:38.469Z",
   "files": [
     {
       "path": "index.md",
-      "sha256": "c2254d2e81351b9b682fe12c0744e273a94eaa09074f6523a34b01e93c17f109",
-      "bytes": 5126
+      "sha256": "7725e6f3252f1ef8ca47d4894830b742d182368e9a9cc97a00a0cb1ffeae851c",
+      "bytes": 5418
     },
     {
       "path": "manifest.json",
-      "sha256": "d46430ecf2669f9d10aa42f71ee2189e3d4628abb65c28911094637f70ca81b9",
-      "bytes": 10624
+      "sha256": "67e221344abecff5ac8d77bb4b46481c4960f7151ff3a5320746b34766b4166f",
+      "bytes": 11401
     },
     {
       "path": "newsletter/a-typical-day-and-week-at-edge-city.md",
@@ -71,8 +71,8 @@
     },
     {
       "path": "newsletter/health-and-wellbeing-at-edge-city.md",
-      "sha256": "4fdddcf27e467a2d5143475ac67a9c7633ca669dd0c2cc4f7dad6ec3475b08c1",
-      "bytes": 8363
+      "sha256": "d7e71523ea3dba84ba5c5e7a67ef6233994f13e232608fb7d6a78321745a76c8",
+      "bytes": 8487
     },
     {
       "path": "newsletter/housing-for-edge-city-india.md",
@@ -81,8 +81,8 @@
     },
     {
       "path": "newsletter/meal-plans-at-edge-city-india.md",
-      "sha256": "a5969a00d25f9e2f49fe09498d94527eb93636194e5d144b424c858d4588e1c6",
-      "bytes": 6924
+      "sha256": "4ebe156e77cc745600fe8cff5ddab2f61fa22780308a664891ac6c0313222c21",
+      "bytes": 7100
     },
     {
       "path": "newsletter/meet-the-inflection-fellowship-cohort.md",
@@ -93,6 +93,16 @@
       "path": "newsletter/programming-preview-for-edge-city.md",
       "sha256": "32ea847d57cae82e5657b28c78360f953fa64657674d5f282d7ba0a4e33f940b",
       "bytes": 14266
+    },
+    {
+      "path": "newsletter/the-community-calendar.md",
+      "sha256": "d7f3d4678da211d3d603114b5003364e53b058f4e7755635683c9da912b0e3fc",
+      "bytes": 6032
+    },
+    {
+      "path": "newsletter/the-first-three-days-at-edge-city.md",
+      "sha256": "54f5388041f394271b2045b4b33d52efc1e059070b33194c4742ccfce0f195a9",
+      "bytes": 13643
     },
     {
       "path": "newsletter/the-future-arrives-locally.md",
@@ -106,8 +116,8 @@
     },
     {
       "path": "newsletter/tickets-for-edge-city-india-2026.md",
-      "sha256": "48c3e77d51d0f9689760d6760a2f6638f62f5c798ee23f6dc6203ece134f253b",
-      "bytes": 8716
+      "sha256": "e686db15efc7936d252234aa54f5db3571c50d0358836432a9c9b1a101b76951",
+      "bytes": 8695
     },
     {
       "path": "newsletter/volunteer-at-edge-city-india-2026.md",
@@ -116,8 +126,8 @@
     },
     {
       "path": "newsletter/welcome-to-edge-city-india.md",
-      "sha256": "7f364d4c06ffb406768b3c83239ffd7c1cce018488353fbf7ef8fdf7caff63e5",
-      "bytes": 15333
+      "sha256": "4d2087cc309641699eff06348420df6587165375a602f91896ed83b95af7b597",
+      "bytes": 15338
     },
     {
       "path": "residencies/community-builders.md",
@@ -131,8 +141,8 @@
     },
     {
       "path": "website-content.md",
-      "sha256": "71f6e1672133dbf05204d332d5af6613585e3cff40a7b53c3b72386856124e35",
-      "bytes": 44869
+      "sha256": "d6b5eb242d57d25f2fe7d4c42b78a121f880c80912920b36c72b397d865357f8",
+      "bytes": 45173
     },
     {
       "path": "website/about.md",
@@ -141,8 +151,8 @@
     },
     {
       "path": "wiki-content.md",
-      "sha256": "c5adb037a575a8182272ea6fb7c227917672366dc48b783290722852bef2c75e",
-      "bytes": 23850
+      "sha256": "7a5116ecd3bd30f7fee31847d09cbd24b20ee2fa68717c4a58cb7912cdd551a0",
+      "bytes": 24912
     }
   ]
 }

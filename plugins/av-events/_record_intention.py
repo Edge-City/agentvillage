@@ -135,10 +135,22 @@ every read-modify-write: id -> `{published, source}`, `refused: rejected` for a
 local capture Index rejected, `local_reason` for a capture kept local on purpose
 (DATA-311), plus `held_norm_hash`
 for a held ambient entry only: sha256 of its text case-folded with whitespace
-collapsed, used for this check alone and never emitted. It is replaced when the
-held intention is updated and dropped when it is withdrawn. A capture that
-would publish (explicit source, `publish` true, a session that may publish)
-whose normalised text matches a held entry is recorded locally, not refused:
+collapsed, used for this check alone and never emitted. Beside it (DATA-387),
+`held_norm_hash_v2`: sha256 of the text under NFKC, case-folded, invisible
+format characters and variation selectors deleted, and every punctuation and
+symbol character (Unicode P* and S*) read as a space, except the symbols that
+carry meaning (currency signs, `+ # % @ < > = & ~ ^ |`, a sign on a number, a
+slash inside a number), with whitespace collapsed (`held_norm_text_v2`). So
+the draft plus a full stop, other quotes, dashes, Markdown or full-width forms
+is the same text, while "$500" and "\u20ac500" are not; letters and digits are
+kept exactly and nothing fuzzier is matched (a rewording is the resident's own
+words). Both are
+written, and a v2 hash counts only on an entry that still carries its v1 (a
+save drops a v2 left alone), so whatever drops v1 drops the pair. They are
+replaced when the held intention is updated and dropped when it is withdrawn.
+A capture that would publish (explicit source, `publish` true, a session that
+may publish) whose normalised text matches a held entry under either hash is
+recorded locally, not refused:
 the event is emitted with `publish_refused="held_ambient_exists"` and the agent
 is told a held intention is published only through confirmation. A personal
 (`publish=false`) capture is never checked. [Reversal R9: drop the hash and
@@ -181,6 +193,7 @@ import re
 import tempfile
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -998,6 +1011,11 @@ def _load_locked() -> tuple[dict[str, dict], list[float]]:
 
 
 def _save_locked(entries: dict[str, dict], publishes: list[float]) -> None:
+    for entry in entries.values():
+        # DATA-387: a v2 held hash lives only beside its v1, so whatever drops
+        # the v1 (publish, rejection, withdrawal) drops the pair.
+        if HELD_HASH_V2_KEY in entry and HELD_HASH_KEY not in entry:
+            entry.pop(HELD_HASH_V2_KEY, None)
     path = map_path()
     directory = os.path.dirname(path)
     fd, tmp = tempfile.mkstemp(prefix=".intentions.", dir=directory)
@@ -1032,19 +1050,98 @@ def lookup(intention_id: str) -> Optional[dict]:
 HELD_HASH_KEY = "held_norm_hash"
 
 
+#: DATA-387: the same, under the stronger normalisation. Written beside
+#: HELD_HASH_KEY and honoured only while that is there.
+HELD_HASH_V2_KEY = "held_norm_hash_v2"
+
+#: Characters used as apostrophes that Unicode files as letters or as a
+#: spacing accent NFKC would split (U+00B4): read as one, before NFKC.
+_APOSTROPHES = {ord(c): "'" for c in "\u00b4\u02b9\u02bc"}
+
+#: Symbols that carry meaning ("C++" is not "C#", "$500" is not "\u20ac500",
+#: "100%" is not "100"): kept as their own token, as is every currency sign (Sc).
+_KEPT_SYMBOLS = frozenset("+#%@<>=&~^|")
+
+#: Markdown markup at a line's start (a heading's "#", a quote's ">"), once
+#: the symbols above stand as tokens: dropped like other punctuation.
+_LINE_MARKUP = re.compile(r"^[^\S\n]*(?:(?:#+|>+)(?=\s|$)[^\S\n]*)+", re.M)
+
+
+def _invisible(ch: str) -> bool:
+    """Format characters (Cf: ZWSP, ZWJ, ZWNJ, BOM, soft hyphen, word joiner)
+    and variation selectors: deleted, so they never split or join a word."""
+    code = ord(ch)
+    return 0xFE00 <= code <= 0xFE0F or 0xE0100 <= code <= 0xE01EF or unicodedata.category(ch) == "Cf"
+
+
 def held_norm_hash(text: str) -> str:
     """sha256 of the text case-folded with whitespace collapsed. Used for the
     held-text check only; never emitted (the event's `text_hash` is exact)."""
     return hashlib.sha256(" ".join(text.split()).casefold().encode("utf-8", errors="surrogatepass")).hexdigest()
 
 
-def held_hash_exists(norm_hash: str) -> bool:
+def held_norm_text_v2(text: str) -> str:
+    """DATA-387: NFKC and case-folded (curly quotes, dashes and full-width forms
+    then differ only in punctuation), format characters and variation
+    selectors deleted, then every punctuation or symbol character (Unicode P*,
+    S*) read as a space, except the ones that carry meaning: a currency sign
+    or one of `+ # % @ < > = & ~ ^ |` stays a token, a `-`, `\u2212` or `\u2013`
+    that is a sign ("-5") stays on its digit, and a `/` or fraction slash
+    between digits ("1/2", NFKC's "\u00bd") stays in the number. Markdown's "#"
+    and ">" at a line's start are dropped. Whitespace is collapsed. Letters and
+    digits, any script, are kept exactly; a space keeps "1.5" apart from "15".
+    It is idempotent (normalising a normal form gives it back): invisible
+    characters go before NFKC, so none is left to block a composition, and the
+    apostrophes are mapped again after it (NFKC makes U+02BC of U+0149)."""
+    visible = "".join(ch for ch in text if not _invisible(ch)).translate(_APOSTROPHES)
+    folded = unicodedata.normalize("NFKC", unicodedata.normalize("NFKC", visible).casefold())
+    chars = list(folded.translate(_APOSTROPHES))
+    out: list[str] = []
+    for i, ch in enumerate(chars):
+        prev = chars[i - 1] if i else ""
+        nxt = chars[i + 1] if i + 1 < len(chars) else ""
+        if ch in _KEPT_SYMBOLS or unicodedata.category(ch) == "Sc":
+            out.append(" " + ch)
+        elif ch in "-\u2212\u2013" and nxt.isdecimal() and not prev.isalnum():
+            out.append(" -")
+        elif ch in "/\u2044" and prev.isdecimal() and nxt.isdecimal():
+            out.append("/")
+        elif unicodedata.category(ch)[0] in "PS":
+            out.append(" ")
+        else:
+            out.append(ch)
+    return " ".join(_LINE_MARKUP.sub(" ", "".join(out)).split())
+
+
+def held_norm_hash_v2(text: str) -> Optional[str]:
+    """sha256 of `held_norm_text_v2`, or None when nothing but punctuation and
+    symbols is left (two such texts are not the same want: v1 alone decides)."""
+    norm = held_norm_text_v2(text)
+    if not norm:
+        return None
+    return hashlib.sha256(norm.encode("utf-8", errors="surrogatepass")).hexdigest()
+
+
+def _held_match(entry: dict, norm_hash: str, norm_hash_v2: Optional[str]) -> bool:
+    """A held entry whose text is the capture's, case, whitespace (v1) or
+    punctuation, quotes and width (v2) aside. A v1-only entry (held before
+    DATA-387) is matched by v1; a capture's v2 equal to a stored v1 also counts,
+    since that v1 is then a v2 normal form, and the normal form is idempotent."""
+    stored = entry.get(HELD_HASH_KEY)
+    if stored is None:
+        return False
+    if stored == norm_hash or (norm_hash_v2 is not None and stored == norm_hash_v2):
+        return True
+    return norm_hash_v2 is not None and entry.get(HELD_HASH_V2_KEY) == norm_hash_v2
+
+
+def held_hash_exists(norm_hash: str, norm_hash_v2: Optional[str] = None) -> bool:
     try:
         entries = _load_map()
     except Exception as exc:  # noqa: BLE001
         logger.warning("av-events: record_intention map_read_failed=%s", type(exc).__name__)
         return False
-    return any(v.get(HELD_HASH_KEY) == norm_hash for v in entries.values())
+    return any(_held_match(v, norm_hash, norm_hash_v2) for v in entries.values())
 
 
 #: B2: set on a published entry once its archive mirror succeeded, so a second
@@ -1067,8 +1164,8 @@ def mark_archived(intention_id: str) -> None:
         logger.warning("av-events: record_intention map_write_failed=%s", type(exc).__name__)
 
 
-def set_held_hash(intention_id: str, norm_hash: Optional[str]) -> None:
-    """Replace (or, with None, drop) a known entry's held hash. Best effort."""
+def set_held_hash(intention_id: str, norm_hash: Optional[str], norm_hash_v2: Optional[str] = None) -> None:
+    """Replace (or, with None, drop) a known entry's held hashes. Best effort."""
     try:
         with _Locked():
             entries, publishes = _load_locked()
@@ -1076,11 +1173,34 @@ def set_held_hash(intention_id: str, norm_hash: Optional[str]) -> None:
             if entry is None:
                 return
             if norm_hash is None:
-                if HELD_HASH_KEY not in entry:
+                if HELD_HASH_KEY not in entry and HELD_HASH_V2_KEY not in entry:
                     return
                 entry.pop(HELD_HASH_KEY, None)
+                entry.pop(HELD_HASH_V2_KEY, None)
             else:
                 entry[HELD_HASH_KEY] = norm_hash
+                if norm_hash_v2 is None:
+                    entry.pop(HELD_HASH_V2_KEY, None)
+                else:
+                    entry[HELD_HASH_V2_KEY] = norm_hash_v2
+            _save_locked(entries, publishes)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("av-events: record_intention map_write_failed=%s", type(exc).__name__)
+
+
+def _add_held_v2(intention_id: str, norm_hash: str, norm_hash_v2: Optional[str]) -> None:
+    """DATA-387: put the v2 hash beside a v1 another writer stored (the
+    approval entry), while that v1 is still this text's. Best effort: without
+    it the entry is matched by v1, as before."""
+    if norm_hash_v2 is None:
+        return
+    try:
+        with _Locked():
+            entries, publishes = _load_locked()
+            entry = entries.get(intention_id)
+            if entry is None or entry.get(HELD_HASH_KEY) != norm_hash:
+                return
+            entry[HELD_HASH_V2_KEY] = norm_hash_v2
             _save_locked(entries, publishes)
     except Exception as exc:  # noqa: BLE001
         logger.warning("av-events: record_intention map_write_failed=%s", type(exc).__name__)
@@ -1093,7 +1213,7 @@ LOCAL_REASON_KEY = "local_reason"
 
 def remember(
     intention_id: str, *, published: bool, source: str, norm_hash: Optional[str] = None,
-    refused: Optional[str] = None, local_reason: Optional[str] = None,
+    refused: Optional[str] = None, local_reason: Optional[str] = None, norm_hash_v2: Optional[str] = None,
 ) -> None:
     """Best effort: a map that cannot be written costs a later Index mirror, not the capture."""
     try:
@@ -1104,6 +1224,8 @@ def remember(
             # R9: the hash only for a held ambient entry.
             if norm_hash is not None and source == RESTRICTIVE_SOURCE and not published:
                 entry[HELD_HASH_KEY] = norm_hash
+                if norm_hash_v2 is not None:
+                    entry[HELD_HASH_V2_KEY] = norm_hash_v2
             # M2: a label (a code), for a local capture Index rejected.
             if refused == "rejected" and not published:
                 entry["refused"] = refused
@@ -1245,6 +1367,7 @@ def _capture(args: dict, held: Optional[str]) -> dict:
         # held_silence), so the event says what the agent passed. publish=false
         # keeps it too (DATA-311 still wins: local, never proposed).
         result["confirmed_in_chat"] = confirmed
+    norm_v2 = held_norm_hash_v2(text)
     approval_on = _approval_on()
     if not publish:
         # DATA-311: an explicit `publish=false` is honoured for every source and
@@ -1267,12 +1390,12 @@ def _capture(args: dict, held: Optional[str]) -> dict:
         if held_code is not None:
             result["publish_refused"] = held_code
         if approval_on is True:
-            return _held_through_approval(result, intention_id, text, norm)
+            return _held_through_approval(result, intention_id, text, norm, norm_v2)
         result["message"] = (
             f"Held as an ambient intention (intention_id {intention_id}). It stays off Index until the "
             "resident confirms it, and confirmation is not available yet: do not publish it another way."
         )
-    elif held_hash_exists(norm):
+    elif held_hash_exists(norm, norm_v2):
         # R9 revised: the same intention is held as ambient. Record this
         # capture locally (the event is emitted) and never publish around the
         # confirmation.
@@ -1325,6 +1448,7 @@ def _capture(args: dict, held: Optional[str]) -> dict:
         source=source,
         # A local capture is not held: no held hash, whatever its source.
         norm_hash=norm if source == RESTRICTIVE_SOURCE and local_reason is None else None,
+        norm_hash_v2=norm_v2 if source == RESTRICTIVE_SOURCE and local_reason is None else None,
         refused=result.get("publish_refused"),
         local_reason=local_reason,
     )
@@ -1379,20 +1503,21 @@ def _index_tail(code: str) -> str:
     return f"Index could not take it just now (code {code}). It is recorded; do not retry it with another tool."
 
 
-def _held_through_approval(result: dict, intention_id: str, text: str, norm: str) -> dict:
+def _held_through_approval(result: dict, intention_id: str, text: str, norm: str, norm_v2: Optional[str]) -> dict:
     """An ambient capture: hold the text and propose `intent.publish.inferred.index`."""
     ia = _ia()
     code = ia.open_entry(intention_id, cls=ia.INFERRED_CLASS, text=text, source=RESTRICTIVE_SOURCE, norm_hash=norm)
     if code is not None:
         # Nothing could be held for the resident (too large, or no map): the
         # old held capture, hash only, never published.
-        remember(intention_id, published=False, source=RESTRICTIVE_SOURCE, norm_hash=norm)
+        remember(intention_id, published=False, source=RESTRICTIVE_SOURCE, norm_hash=norm, norm_hash_v2=norm_v2)
         result["approval_state"] = "unavailable"
         result["message"] = (
             f"Held as an ambient intention (intention_id {intention_id}). It could not be sent to the resident "
             f"for approval (code {code}), so it stays off Index. {_NO_OTHER_WAY}"
         )
         return result
+    _add_held_v2(intention_id, norm, norm_v2)
     outcome = _advance_inline(intention_id, ia.INFERRED_CLASS)
     result["approval_state"] = outcome.state
     held = f"Held as an ambient intention (intention_id {intention_id})."
@@ -1627,7 +1752,10 @@ def _update_or_withdraw(action: str, args: dict, held: Optional[str]) -> dict:
     if not published and entry.get("source") == RESTRICTIVE_SOURCE and entry.get(LOCAL_REASON_KEY) not in LOCAL_REASONS:
         # R9 revised: a held entry's hash follows its text, and goes with it.
         # A local-on-purpose entry is not held and never gets one.
-        set_held_hash(intention_id, held_norm_hash(text) if action == "update" and text is not None else None)
+        if action == "update" and text is not None:
+            set_held_hash(intention_id, held_norm_hash(text), held_norm_hash_v2(text))
+        else:
+            set_held_hash(intention_id, None)
     code: Optional[str] = None
     already_archived = published and entry.get(ARCHIVED_KEY) is True
     if published:

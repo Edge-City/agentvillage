@@ -7,8 +7,8 @@
  *
  * Every message a resident gets from a job ends with a label line,
  * `(<Label> message - you can ask me to stop or manage it)` (DATA-373).
- * MESSAGE_LABELS maps each label to its job names; workspace/AGENTS.md
- * ("Cron schedule") lists the same mapping, and install/tests/
+ * MESSAGE_LABELS maps each label to its job names; skills/index-network/tools.md
+ * ("Cron schedule", moved there from workspace/AGENTS.md) lists the same mapping, and install/tests/
  * cron_wrapper.test.ts pins both to the prompts' own lines.
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
@@ -22,6 +22,8 @@ export const MESSAGE_LABELS = Object.freeze({
   "Conversation update": Object.freeze(["Edge — negotiation summary"]),
   "Evening questions": Object.freeze(["Edge — evening questions"]),
   "Introduction suggestion": Object.freeze(["Edge — opportunity drop (midday)", "Edge — opportunity drop (evening)"]),
+  // DATA-430: the hourly alert for an opportunity that newly turned pending.
+  "Pending opportunity": Object.freeze(["Edge — pending opportunity"]),
   // Opt-in: absent on most boxes.
   "Usage report": Object.freeze(["Edge — token usage audit"]),
 } as const);

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Agent Village proactive job trigger (DATA-314 brief-lite).
-# install/install_index.ts copies this one file into $HERMES_HOME/scripts/ under six names (and
+# install/install_index.ts copies this one file into $HERMES_HOME/scripts/ under seven names (and
 # install/jobs.ts under a template or preview job's name),
 # agentvillage_proactive_<action>.sh, because Hermes runs a cron pre-run script from there only,
 # through bash, with no arguments. The action is read from the file name; this runs
@@ -22,9 +22,9 @@ silent() {
 # team tenant's one-off preview (install/jobs.ts preview), run as `proactive.ts <action> --preview`.
 PREVIEW=""
 case "$ACTION" in
-  prefetch|brief|drop-midday|drop-evening|negotiation|evening) ;;
+  prefetch|brief|drop-midday|drop-evening|negotiation|evening|pending) ;;
   tpl-brief|tpl-digest-preview|tpl-evening-ask) ;;
-  preview-brief|preview-drop-midday|preview-drop-evening|preview-negotiation|preview-evening|\
+  preview-brief|preview-drop-midday|preview-drop-evening|preview-negotiation|preview-evening|preview-pending|\
 preview-tpl-brief|preview-tpl-digest-preview|preview-tpl-evening-ask)
     ACTION="${ACTION#preview-}"; PREVIEW="--preview" ;;
   *) ACTION="unknown"; silent unknown-action; exit 0 ;;

@@ -10,7 +10,7 @@
  *   bun install/reset.ts --wipe-user
  */
 
-import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import YAML from "yaml";
@@ -23,7 +23,9 @@ import {
   skillsDir,
   targetWorkspace,
 } from "./paths";
+import { dumpConfig } from "./config";
 import { RECALL_SKILL, resetRecall } from "./install_recall";
+import { describeResult, regenerateKnowledgeIndex } from "./knowledge-index";
 
 const TARGET_HOME = targetWorkspace();
 
@@ -96,7 +98,7 @@ function removeIndexMcpEntry(): void {
 
   delete mcpServers.index;
   if (Object.keys(mcpServers).length === 0) delete doc.mcp_servers;
-  writeFileSync(configPath, YAML.stringify(doc));
+  writeFileSync(configPath, dumpConfig(doc));
   console.log("→ removed mcp_servers.index from config.yaml");
 }
 
@@ -165,15 +167,36 @@ function removeProjectFiles(wipeUser: boolean): void {
  *   `MEMORY.md` at the top level is the landing's, removed by
  *   `removeProjectFiles`). Both are in the memory snapshot (DATA-82), so
  *   leaving either would carry the previous user into the next backup.
+ * - `$HERMES_HOME/knowledge/agentvillage/`: what the previous user shared on
+ *   the Context page (CX1, docs/design/context-sources.md §6); then
+ *   `knowledge/index.md` is regenerated (a failure there is a warning).
+ *   `knowledge/edge-india/` (public) and `knowledge-prev/` stay.
  */
 export function removeWipeUserState(home: string = hermesHome()): string[] {
   const removed: string[] = [];
-  const targets = [join(home, "av-events"), join(home, "memories", "USER.md"), join(home, "memories", "MEMORY.md")];
+  const targets = [
+    join(home, "av-events"),
+    join(home, "memories", "USER.md"),
+    join(home, "memories", "MEMORY.md"),
+    join(home, "knowledge", "agentvillage"),
+  ];
   for (const target of targets) {
-    if (!existsSync(target)) continue;
+    // lstat, not existsSync: a dangling symlink is present too and must go (install.ts does the same).
+    let present = true;
+    try {
+      lstatSync(target);
+    } catch {
+      present = false;
+    }
+    if (!present) continue;
     rmSync(target, { recursive: true, force: true });
     console.log(`→ removed ${target}`);
     removed.push(target);
+  }
+  try {
+    console.log(`→ ${describeResult(regenerateKnowledgeIndex(home))}`);
+  } catch {
+    console.warn("  warning: could not regenerate knowledge/index.md");
   }
   return removed;
 }

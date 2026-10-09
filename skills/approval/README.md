@@ -112,7 +112,10 @@ reads `Authorization` only), passed to curl through a config on stdin, never arg
 decider and answers; the shim replays `{}` (allow) or the block directive at
 exit 2. While the facade answers `hook-timeout` (a question is open and waiting
 for the resident) the shim re-asks every 5 s for up to 280 s, inside Hermes's
-300 s entry timeout. It measures that window, and the log's `elapsed_ms`, in
+300 s entry timeout. A clock that fails, or steps back below its last read,
+mid-run ends the window with the block, as the deadline does, and the attempts
+are capped at `WAIT_S/5 + 2` (58 for 280 s) whatever the clock says
+(DATA-378). The shim measures the window, and the log's `elapsed_ms`, in
 milliseconds, reading `date +%s.%N` and left-padding the fraction to nine
 digits before keeping three (a fraction that is not one to nine digits is no
 clock). The hosted image's date (uutils coreutils 0.8.0 on the old-checkpoint
@@ -143,7 +146,11 @@ tool name for the log is read from the envelope's opening where Hermes puts it,
 and a block's own message is JSON-escaped in sh when it is printable ASCII;
 node does each of these as before otherwise, and still reads the error code of
 a non-200 answer. Each outcome line in the log ends with `path=fast` (no node
-in that call) or `path=node`.
+in that call) or `path=node`. Each sh reading (the envelope's tool name, the
+facade's body, a block's message) sets `LC_ALL=C` before it touches a byte:
+bash 5.2 under a UTF-8 locale rewrites `${s%x}` when `s` holds an invalid
+UTF-8 sequence (DATA-419 caught it in the tests' own reading of their fuzz
+inputs, which now runs under `LC_ALL=C` too).
 
 ### Facade URL forms
 
@@ -159,6 +166,10 @@ listener is read just before curl connects, so a process that binds in the
 instant between the two (the daemon having died in that instant) is not seen.
 The unix form has no such window (the directory is the daemon's).
 
+The facade URL and the agent credential must each be printable ASCII (bytes
+0x21-0x7E, no space) with no `"` or `\`, whatever the hook's locale; any other
+byte blocks before the first post (DATA-424).
+
 ### The agent token
 
 By hand (every Agent Village sandbox), the shim reads the agent credential from
@@ -173,6 +184,36 @@ Under co-location (DATA-233) the control plane writes the token to
 `AV_APPROVAL_TOKEN` line: the token is not in `.env`. `AV_APPROVAL_TOKEN` in
 `.env` remains for the hosted dogfood only. The value is never printed or
 logged by the shim, the installer or the plugin (the plugin never reads it).
+
+### The pre-warm (DATA-379)
+
+After a live fire the facade refused with `hook-unsupported-execution-context`
+(not after a failed or deferred one, nor one blocked with another code, which
+would mean a core decided it: then it prints `pre-warm not run`) the installer
+sends the live fire's request once more, straight through the
+installed shim: a `terminal` call with no `workdir`, one post
+(`APPROVAL_HOOK_WAIT_S=0`), every log line of that run marked
+`source=prewarm`. Core refuses that request (`hook-unsupported-execution-context`)
+before the classifier, the decision and any append, so it records nothing,
+opens no question and charges no budget; its verdict is discarded and no tool
+runs. What it warms: the shim's programs in the page cache (until something
+evicts them; a resident's call twenty minutes later can find them cold again)
+and the daemon's pooled hook thread (its modules, its proof of the log and the
+policy load each call runs before the hook). What it cannot warm: the
+classifier, the decision and the signed append of the first real call (no
+request from here reaches them without being recorded or asked about under the
+resident's policy), nor a second thread for a concurrent call. On an update the
+live fire seconds earlier already warmed the same thread, so there it adds the
+marker and little else. A failure (daemon down, facade unreachable, shim
+missing, a hang cut at 15 s) is one `! approval gate: pre-warm …` line on
+stderr; the install's result and `--check` are unchanged. `AV_APPROVAL_PREWARM=0`
+(or `false`, `no`, `off`) turns it off. `bun install/install_approval.ts
+--prewarm` runs it alone (one JSON line, exit 0 always): the entry point for the
+control plane after a daemon restart no install follows. A latency reading of
+resident calls leaves out `source=prewarm` lines (gate 7's script does). Do not
+drop every `code=hook-unsupported-execution-context` line to that end: a
+resident's own refused calls carry it too. The only other line that is not a
+resident's is the live fire's, one per install, unlabelled.
 
 ## Fail-closed backstop at every gateway start (`av-approval`)
 
@@ -337,6 +378,7 @@ What the gate does not see, or does not judge, today:
 | `AV_APPROVAL_DAEMON_UID` | `.env`, else environment | The uid that must own a loopback listener or the unix socket. Default `10001`. |
 | `HERMES_ACCEPT_HOOKS=1` | `.env`, written | Headless consent, second form (the first is `hooks_auto_accept: true`). |
 | `APPROVAL_HOOK_URL_ENV`, `APPROVAL_HOOK_TOKEN_ENV`, `APPROVAL_HOOK_WAIT_S` | `.env`, written | The shim's settings: `AV_APPROVAL_URL`, `AV_APPROVAL_TOKEN`, `280`. |
+| `AV_APPROVAL_PREWARM` | environment, else `.env` | `0/false/no/off`: no pre-warm after the live fire, and `--prewarm` skips (above). |
 
 ## Identity map
 

@@ -44,7 +44,7 @@ const MIDDAY = "Edge — opportunity drop (midday)";
 const DROP_EVENING = "Edge — opportunity drop (evening)";
 const AUDIT = "Edge — token usage audit";
 const ENV_KEYS = ["HERMES_HOME", "HERMES_BIN", "INDEX_API_KEY", "TOKEN_USAGE_AUDIT_CRON", "FAKE_HERMES_FAIL", "FAKE_HERMES_HANG", "FAKE_HERMES_HANG_AFTER", "HERMES_TIMEZONE",
-  "DIGEST_SIGNALS_CRON", "DIGEST_PREPARE_CRON", "DIGEST_SEND_CRON"];
+  "DIGEST_SIGNALS_CRON", "DIGEST_PREPARE_CRON", "DIGEST_SEND_CRON", "PENDING_ALERT_ENABLED"];
 const savedEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
 /** Another job's hold, an admin's, that every write must keep exactly. */
 const OTHER = "aaaaaaaaaaaa";
@@ -82,7 +82,11 @@ afterEach(() => {
   }
 });
 
-/** A roll: the installer's reconcile creates the jobs and installed_jobs.json, quietly. */
+/**
+ * A roll: the installer's reconcile creates the jobs and installed_jobs.json,
+ * quietly. Its own Hermes calls (rc29: the pending alert's pause) are not the
+ * script's, so the call log starts after it.
+ */
 function roll(): void {
   const log = console.log;
   const warn = console.warn;
@@ -94,6 +98,7 @@ function roll(): void {
     console.log = log;
     console.warn = warn;
   }
+  rmSync(join(home, "hermes-calls.jsonl"), { force: true });
 }
 
 type Job = Record<string, any>;
@@ -165,7 +170,7 @@ function spawn(argv: string[], env: Record<string, string> = {}) {
 
 const ISO_MS = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
-describe("the label: one of the five, read leniently, nothing else", () => {
+describe("the label: one of the six, read leniently, nothing else", () => {
   test("each label resolves in any case, with spaces around or doubled inside", () => {
     const cases: Array<[string, string]> = [
       ["Daily digest", "Daily digest"],
@@ -175,6 +180,7 @@ describe("the label: one of the five, read leniently, nothing else", () => {
       ["conversation  update", "Conversation update"],
       ["Evening Questions", "Evening questions"],
       ["introduction suggestion", "Introduction suggestion"],
+      ["pending  OPPORTUNITY ", "Pending opportunity"],
       [" usage REPORT", "Usage report"],
     ];
     for (const [raw, label] of cases) expect({ raw, label: normalizeLabel(raw) }).toEqual({ raw, label });
@@ -255,6 +261,17 @@ describe("only the jobs the overlay installed", () => {
     expect(pauses).toEqual([["cron", "pause", ours]]);
     expect(storedJobEnabled(allJobs().find((entry) => entry.id === "0123456789ab")!)).toBe(true);
     expect(Object.keys(holdsFile().holds)).toEqual([ours]);
+  });
+
+  test("DATA-430: Pending opportunity pauses the hourly pending alert, and its hold clears on resume (not a contact-style job)", () => {
+    // rc29 installs it paused; the switch turns it on (pending_alert_off.test.ts).
+    process.env.PENDING_ALERT_ENABLED = "true";
+    roll();
+    const id = job("Edge — pending opportunity").id;
+    expect(run("pause", "--label", "Pending opportunity").out).toMatchObject({ ok: true, jobs: [{ id, changed: true }], hold: "paused" });
+    expect(storedJobEnabled(job("Edge — pending opportunity"))).toBe(false);
+    expect(run("resume", "--label", "pending opportunity").out).toMatchObject({ ok: true, jobs: [{ id, changed: true }], hold: "cleared" });
+    expect(storedJobEnabled(job("Edge — pending opportunity"))).toBe(true);
   });
 
   test("Usage report with no audit job: job-missing, exit 2, no Hermes call", () => {
@@ -953,13 +970,15 @@ describe("status: read-only, no lock, no Hermes", () => {
       ["Conversation update", true],
       ["Evening questions", true],
       ["Introduction suggestion", true],
+      ["Pending opportunity", true],
       ["Usage report", false],
     ]);
     expect(labels[0].jobs).toEqual([{ id: digest, enabled: false, hold: "paused", by: "resident", nextRunDue: true }]);
     // A hold with no `by` is an admin's.
     expect(labels[2].jobs).toEqual([{ id: evening, enabled: true, hold: "active", by: "admin", nextRunDue: false }]);
     expect(labels[3].jobs.length).toBe(2);
-    expect(labels[4].jobs).toEqual([]);
+    expect(labels[4].jobs.length).toBe(1);
+    expect(labels[5].jobs).toEqual([]);
     for (const entry of labels.flatMap((l) => l.jobs)) expect(Object.keys(entry).sort()).toEqual(["by", "enabled", "hold", "id", "nextRunDue"]);
     expect(run("status", "--label", "evening questions").out).toEqual({ ok: true, action: "status", labels: [labels[2]], holds: "ok" });
     expect(JSON.parse(readFileSync(jobsLockPath(home), "utf8")).token).toBe("held-by-another-command");

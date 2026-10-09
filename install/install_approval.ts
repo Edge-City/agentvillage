@@ -78,6 +78,22 @@
  * `hermes_exit1` (the exit-1 probe's answer) and `cron_scripts`. It is a hand
  * step: nothing runs it at gateway start (the `av-approval` plugin's own
  * integrity check does that, DATA-234).
+ *
+ * DATA-379, the pre-warm: after a live fire the facade REFUSED with
+ * `hook-unsupported-execution-context` (not after a failed or deferred one, nor
+ * one blocked with another code, which a core that decided it would give)
+ * the step sends the live fire's request once more, straight through the
+ * installed shim, labelled `source=prewarm` in the
+ * shim's log (`prewarmApproval`). The facade refuses that request before the
+ * policy decision and appends nothing, so it records no approval, opens no
+ * question and charges no budget; its verdict is discarded and no tool runs.
+ * A pre-warm that fails (daemon down, facade unreachable, shim missing, a
+ * hang cut at its bound) is one line on stderr and nothing else: the step's
+ * result does not depend on it. `AV_APPROVAL_PREWARM=0` (or `false`, `no`,
+ * `off`), in the process environment or `.env`, turns it off.
+ * `bun install/install_approval.ts --prewarm` runs it alone, for the control
+ * plane after a daemon restart that no install follows: one JSON line out,
+ * exit 0 whatever happened.
  */
 
 import {
@@ -101,7 +117,7 @@ import { basename, dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import YAML, { isAlias, isMap, isScalar, isSeq } from "yaml";
 
-import { dotenvFileValue, readConfig, writeConfig } from "./config";
+import { dotenvFileValue, dumpConfig, envOrDotenv, readConfig, writeConfig } from "./config";
 import { upsertEnvVar } from "./env";
 import { hermesBin } from "./hermes_cli";
 import { hermesHome, skillsDir } from "./paths";
@@ -319,6 +335,8 @@ export interface ApprovalOptions {
   liveScript?: string;
   /** Clock for `installed_at`. */
   now?: Date;
+  /** DATA-379: the pre-warm run after a live fire the facade refused (default `prewarmApproval`). Tests pass a stub. */
+  prewarm?: () => PrewarmReport;
 }
 
 /**
@@ -570,7 +588,7 @@ export function removeApprovalHooks(doc: unknown, command: string): { doc: Recor
 
 /** Write `next` only when it serialises differently from `before`, so a re-run leaves the file alone. */
 function writeIfChanged(before: Record<string, unknown>, next: Record<string, unknown>): boolean {
-  if (YAML.stringify(before) === YAML.stringify(next)) return false;
+  if (dumpConfig(before) === dumpConfig(next)) return false;
   writeConfig(next);
   return true;
 }
@@ -1071,6 +1089,8 @@ export function resolveHermesPython(): string | null {
 
 interface LiveFacts {
   problems?: string[];
+  /** The fire itself (live_selfcheck.py item 6); `code_matched` only on a facade block. */
+  fire?: { verdict?: string; code_matched?: boolean };
   safe_mode?: boolean;
   managed?: boolean;
   managed_dir?: string | null;
@@ -1114,6 +1134,12 @@ export interface ApprovalReport {
   exit1?: Exit1Behaviour;
   /** R3 fix round 4: what Hermes registers for the shim, from its own parse of config.yaml. */
   routed?: RoutedFacts | null;
+  /**
+   * DATA-379 (fix round 1): the live fire was blocked by the facade with `hook-unsupported-execution-context`,
+   * i.e. REFUSED before any decision (true), blocked with another code (false: a core that decided it), or
+   * not reported (null). The pre-warm repeats the fire only when it is true.
+   */
+  liveCodeMatched?: boolean | null;
 }
 
 /** The live fire through Hermes's `run_once`. Accepted dogfood overrides are returned and warned about on stderr. */
@@ -1169,7 +1195,8 @@ export function liveReport(options: ApprovalOptions = {}): ApprovalReport {
       problems.push(...unpatched);
     }
   }
-  return { problems, overrides, exit1, routed };
+  const liveCodeMatched = typeof facts.fire?.code_matched === "boolean" ? facts.fire.code_matched : null;
+  return { problems, overrides, exit1, routed, liveCodeMatched };
 }
 
 /**
@@ -1182,7 +1209,7 @@ export function checkApprovalReport(options: ApprovalOptions = {}): ApprovalRepo
   const problems = approvalProblems(options);
   if (problems.length > 0) return { problems: [...new Set(problems)], overrides: [] };
   const live = liveReport(options);
-  return { problems: [...new Set(live.problems)], overrides: live.overrides, exit1: live.exit1 ?? "unknown", routed: live.routed ?? null };
+  return { problems: [...new Set(live.problems)], overrides: live.overrides, exit1: live.exit1 ?? "unknown", routed: live.routed ?? null, liveCodeMatched: live.liveCodeMatched ?? null };
 }
 
 /** One line for the exit-1 probe's answer. */
@@ -1369,6 +1396,11 @@ export function installApproval(sourceSkills: string, options: ApprovalOptions =
       );
     }
     const { tenant } = writeSurfaceMarker(now, prior, report.overrides);
+    // DATA-379: only after a live fire the facade REFUSED (its expected code; a block with another code means a
+    // core decided it, and the pre-warm would be a second decided request); never fatal (it cannot throw).
+    if (deferred.length > 0) console.log("→ approval gate: pre-warm not run (the live self-check was deferred)");
+    else if (report.liveCodeMatched === true) prewarmAfterInstall(options);
+    else console.log("→ approval gate: pre-warm not run (the live fire was decided, not refused)");
     const scripts = cronScripts();
     if (scripts.length > 0) {
       console.log(
@@ -1460,6 +1492,192 @@ export function checkCli(argv: string[], options: ApprovalOptions = {}): number 
   return problems.length === 0 ? 0 : 1;
 }
 
+// ---------------------------------------------------------------------------
+// DATA-379: the pre-warm
+// ---------------------------------------------------------------------------
+
+/** The word the shim writes as `source=prewarm` on the pre-warm's log lines (the only word it accepts). */
+export const PREWARM_SOURCE = "prewarm";
+/** The pre-warm's session id in the envelope (never a resident's). */
+export const PREWARM_SESSION = "av-approval-prewarm";
+/** Operator override: an "off" spelling skips the pre-warm, as `AV_DISPLAY_DEFAULTS` does its step. */
+export const PREWARM_ENV = "AV_APPROVAL_PREWARM";
+const PREWARM_OFF = new Set(["0", "false", "no", "off"]);
+/** One post (`APPROVAL_HOOK_WAIT_S=0`), a short curl ceiling, and a bound on the whole spawn. */
+export const PREWARM_MAX_TIME_S = 10;
+export const PREWARM_TIMEOUT_MS = 15_000;
+/** The facade's refusal of the live fire's request (APRV-415; live_selfcheck.py item 6). */
+const PREWARM_EXPECTED_CODE = "hook-unsupported-execution-context";
+const SHIM_BLOCK_PREFIX = "approval facade unreachable";
+
+export type PrewarmOutcome = "facade-block" | "shim-block" | "allow" | "unexpected" | "error" | "skipped";
+
+/** What one pre-warm did: an outcome, a fixed reason code (never a value or a message), and its wall time. */
+export interface PrewarmReport {
+  outcome: PrewarmOutcome;
+  reason: string | null;
+  elapsed_ms: number | null;
+}
+
+/** `AV_APPROVAL_PREWARM` off (process environment first, then `.env`, as `AV_DISPLAY_DEFAULTS`). A read that fails is not off. */
+export function prewarmOptedOut(): boolean {
+  try {
+    const raw = envOrDotenv(PREWARM_ENV);
+    return raw !== undefined && PREWARM_OFF.has(raw.trim().toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The pre-warm's envelope: the live fire's request (a `terminal` call with NO `workdir`), as Hermes
+ * serializes a pre_tool_call. Core v0.4.3 refuses it in `commandHook` before the open window, the
+ * policy decision, the classifier and any append (`hook-unsupported-execution-context`, APRV-415),
+ * which every install and every `--check` already relies on. Nothing runs whatever the answer.
+ */
+export function prewarmEnvelope(cwd: string = process.cwd()): string {
+  return JSON.stringify({
+    hook_event_name: "pre_tool_call",
+    tool_name: "terminal",
+    tool_input: { command: "ls /tmp" },
+    session_id: PREWARM_SESSION,
+    cwd,
+    extra: {},
+  });
+}
+
+/**
+ * The hook's environment as the gateway would hand it over, for the names the shim reads by hand
+ * (`.env` first, then this process's environment, as Hermes loads `.env` with override), plus the
+ * pre-warm's three fixed settings. Only these names: nothing else of `.env` reaches the shim.
+ */
+function prewarmEnv(): Record<string, string> {
+  const names = new Set<string>([
+    "APPROVAL_HOOK_URL_ENV",
+    "APPROVAL_HOOK_TOKEN_ENV",
+    "APPROVAL_HOOK_LOG",
+    "APPROVAL_FACADE_ALLOW_HTTP",
+    URL_VAR,
+    TOKEN_VAR,
+    TOKEN_FILE_VAR,
+    DAEMON_UID_VAR,
+  ]);
+  for (const ref of NAME_VALUED_LINES) {
+    const named = gatewayValue(ref)?.trim();
+    if (named && ENV_NAME.test(named)) names.add(named);
+  }
+  const env: Record<string, string> = { PATH: "/usr/local/bin:/usr/bin:/bin" };
+  if (process.env.HOME) env.HOME = process.env.HOME;
+  for (const name of names) {
+    const value = gatewayValue(name);
+    if (value !== undefined) env[name] = value;
+  }
+  env.HERMES_HOME = hermesHome();
+  env.APPROVAL_HOOK_WAIT_S = "0";
+  env.APPROVAL_HOOK_MAX_TIME = String(PREWARM_MAX_TIME_S);
+  env.APPROVAL_HOOK_SOURCE = PREWARM_SOURCE;
+  return env;
+}
+
+/**
+ * DATA-379: the live fire's request once more, through the installed shim, so the shim's programs
+ * and the daemon's pooled hook thread (its modules, its proof of the log and the policy load the
+ * thread runs before every call) are warm before the resident's next gated call. What it cannot warm:
+ * the classifier, the decision and the append, which no request from here can reach without being
+ * recorded or asked about under the resident's policy. Never throws, never fails: a gate that is
+ * off, opted out or not installed is `skipped`, a facade that does not answer is `shim-block`, a hang
+ * is `error`/`timed-out`. Writes nothing but the shim's own log lines (`source=prewarm`).
+ */
+export function prewarmApproval(options: { timeoutMs?: number } = {}): PrewarmReport {
+  const skipped = (reason: string): PrewarmReport => ({ outcome: "skipped", reason, elapsed_ms: null });
+  try {
+    if (prewarmOptedOut()) return skipped("opted-out");
+    if (approvalChoice() !== "on") return skipped("approval-not-enabled");
+    const shim = approvalShimPath();
+    let st;
+    try {
+      st = lstatSync(shim);
+    } catch {
+      return skipped("shim-missing");
+    }
+    if (!st.isFile() || st.isSymbolicLink()) return skipped("shim-not-regular");
+    if (!isExecutable(shim)) return skipped("shim-not-executable");
+    const t0 = performance.now();
+    const out = spawnSync(shim, [], {
+      input: prewarmEnvelope(),
+      env: prewarmEnv(),
+      encoding: "utf8",
+      timeout: options.timeoutMs ?? PREWARM_TIMEOUT_MS,
+    });
+    const elapsed = Math.round(performance.now() - t0);
+    const report = (outcome: PrewarmOutcome, reason: string | null = null): PrewarmReport => ({ outcome, reason, elapsed_ms: elapsed });
+    if (out.error) return report("error", (out.error as NodeJS.ErrnoException).code === "ETIMEDOUT" ? "timed-out" : "spawn-error");
+    if (out.status === null) return report("error", "signal");
+    const stdout = (out.stdout ?? "").trim();
+    // An allow is reported, never acted on: the pre-warm runs no tool, whatever the answer.
+    if (out.status === 0) return stdout === "" || stdout === "{}" ? report("allow") : report("unexpected", "exit-0");
+    let directive: unknown = null;
+    try {
+      directive = JSON.parse(stdout);
+    } catch {
+      directive = null;
+    }
+    if (out.status === 2 && isMapping(directive) && directive.action === "block") {
+      const message = typeof directive.message === "string" ? directive.message : "";
+      if (message.startsWith(SHIM_BLOCK_PREFIX)) return report("shim-block");
+      return report("facade-block", message.includes(PREWARM_EXPECTED_CODE) ? null : "code-not-matched");
+    }
+    return report("unexpected", `exit-${out.status}`);
+  } catch (err) {
+    return { outcome: "error", reason: err instanceof Error ? err.name : typeof err, elapsed_ms: null };
+  }
+}
+
+/**
+ * The install's call (step 8, after a live fire the facade refused): the pre-warm, then one line,
+ * on stdout when the facade refused it as expected or it was opted out, else on stderr. Never
+ * throws: whatever the pre-warm did, the step's result is the one it would have been without it.
+ */
+export function prewarmAfterInstall(options: ApprovalOptions = {}): PrewarmReport {
+  let report: PrewarmReport;
+  try {
+    if (prewarmOptedOut()) report = { outcome: "skipped", reason: "opted-out", elapsed_ms: null };
+    else report = (options.prewarm ?? prewarmApproval)();
+  } catch (err) {
+    report = { outcome: "error", reason: err instanceof Error ? err.name : typeof err, elapsed_ms: null };
+  }
+  try {
+    if (report.reason === "opted-out") {
+      console.log(`→ approval gate: pre-warm skipped (${PREWARM_ENV} is off)`);
+    } else if (report.outcome === "facade-block" && report.reason === null) {
+      console.log(`→ approval gate: pre-warm sent (refused by the facade as expected, ${report.elapsed_ms ?? "?"} ms; shim log source=prewarm)`);
+    } else {
+      console.error(
+        `! approval gate: pre-warm ${report.outcome}${report.reason ? ` (${report.reason})` : ""}; ignored, the install does not depend on it`,
+      );
+    }
+  } catch {
+    // a line that cannot be printed changes nothing
+  }
+  return report;
+}
+
+/** `bun install/install_approval.ts --prewarm`: one JSON line; exit 0 whatever happened. */
+export function prewarmCli(argv: string[], options: { timeoutMs?: number } = {}): number {
+  if (argv[0] !== "--prewarm" || argv.length > 1) {
+    console.error("usage: bun install/install_approval.ts --prewarm");
+    return 2;
+  }
+  const report = prewarmApproval(options);
+  console.log(JSON.stringify({ prewarm: "av-approval", ...report }));
+  return 0;
+}
+
+/** The command line: `--check` (unchanged) or `--prewarm`. */
+export function mainCli(argv: string[]): number {
+  return argv[0] === "--prewarm" ? prewarmCli(argv) : checkCli(argv);
+}
+
 if (import.meta.main) {
-  process.exit(checkCli(process.argv.slice(2)));
+  process.exit(mainCli(process.argv.slice(2)));
 }

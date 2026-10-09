@@ -22,7 +22,9 @@ import { dirname, join } from "node:path";
 import {
   assertIndexOutsideMemory,
   chunkText,
+  frontMatterSavedAt,
   fts5Available,
+  listMarkdownSources,
   query,
   queryTerms,
   rebuild,
@@ -787,5 +789,127 @@ describe("session store resilience", () => {
   test("query terms are cut at 64 code points, not UTF-16 units", () => {
     const term = queryTerms("\u{1D49C}".repeat(70))[0]!;
     expect(Array.from(term).length).toBe(64);
+  });
+});
+
+describe("knowledge kind (CX1)", () => {
+  const KNOWLEDGE_FIXTURE = join(import.meta.dir, "fixtures", "knowledge");
+
+  /** The fixture workspace plus `knowledge/agentvillage/` (two §4 files and `_skipped.md`). */
+  function withKnowledge(): Paths {
+    const paths = workspace();
+    cpSync(KNOWLEDGE_FIXTURE, join(paths.home, "knowledge"), { recursive: true });
+    return paths;
+  }
+
+  test("hits carry kind knowledge and a knowledge/<provider>/<file> ref; the saved_at date wins over an inline date", () => {
+    const paths = withKnowledge();
+    const cv = query(paths, { query: "aquaponics", env: DM });
+    if (cv.status !== "ok") throw new Error(cv.reason);
+    expect(cv.hits.map((h) => h.ref)).toEqual(["knowledge/agentvillage/upload-1758100000000.md:13"]);
+    const hit = cv.hits[0]!;
+    expect(hit.kind).toBe("knowledge");
+    // The provider is the ref's (and path's) second segment: no separate field.
+    expect(hit.path).toBe("knowledge/agentvillage/upload-1758100000000.md");
+    expect(hit.ref.split("/")[1]).toBe("agentvillage");
+    expect(hit.date).toBe("2026-09-17"); // saved_at, not the inline 2024-03-01, not the mtime
+    expect(hit.date_source).toBe("saved_at");
+
+    const books = query(paths, { query: "legibility", env: DM });
+    if (books.status !== "ok") throw new Error(books.reason);
+    expect(books.hits.map((h) => [h.ref, h.date, h.date_source])).toEqual([
+      ["knowledge/agentvillage/note-1758000000000.md:13-14", "2026-09-15", "saved_at"],
+    ]);
+    // since filters on the saved_at date.
+    expect(query(paths, { query: "legibility", since: "2026-09-16", env: DM }).hit_count).toBe(0);
+  });
+
+  test("_-prefixed and dot-prefixed files, knowledge/index.md and non-.md files are never indexed", () => {
+    const paths = withKnowledge();
+    writeFileSync(join(paths.home, "knowledge", "index.md"), "# Knowledge by provider\n- indexsecret: 2 files\n");
+    writeFileSync(join(paths.home, "knowledge", "agentvillage", ".hiddensecret.md"), "dotsecret\n");
+    writeFileSync(join(paths.home, "knowledge", "agentvillage", "_manifest.json"), '{"manifestsecret": 1}\n');
+    mkdirSync(join(paths.home, "knowledge", "_staging"));
+    writeFileSync(join(paths.home, "knowledge", "_staging", "a.md"), "stagingsecret\n");
+    for (const word of ["skippedsecret", "indexsecret", "dotsecret", "manifestsecret", "stagingsecret"]) {
+      expect(query(paths, { query: word, env: DM }).hit_count).toBe(0);
+    }
+    const rels = listMarkdownSources(paths.home).filter((s) => s.kind === "knowledge").map((s) => s.rel);
+    expect(rels).toEqual([
+      "knowledge/agentvillage/note-1758000000000.md",
+      "knowledge/agentvillage/upload-1758100000000.md",
+    ]);
+  });
+
+  test("a symlinked provider dir, a symlinked knowledge/ and symlinked or hard-linked files are refused", () => {
+    const paths = withKnowledge();
+    const outsideDir = mkdtempSync(join(tmpdir(), "recall-outside-"));
+    homes.push(outsideDir);
+    writeFileSync(join(outsideDir, "a.md"), "linkedprovidersecret\n");
+    writeFileSync(join(outsideDir, "b.md"), "linkedfilesecret\n");
+    writeFileSync(join(outsideDir, "c.md"), "hardlinkedsecret\n");
+    symlinkSync(outsideDir, join(paths.home, "knowledge", "linked"));
+    symlinkSync(join(outsideDir, "b.md"), join(paths.home, "knowledge", "agentvillage", "linked.md"));
+    linkSync(join(outsideDir, "c.md"), join(paths.home, "knowledge", "agentvillage", "hard.md"));
+    const stats = rebuild(paths);
+    expect(stats.files.skipped).toBe(2); // the two linked files; the linked provider is never listed
+    for (const word of ["linkedprovidersecret", "linkedfilesecret", "hardlinkedsecret"]) {
+      expect(query(paths, { query: word, env: DM }).hit_count).toBe(0);
+    }
+    expect(query(paths, { query: "aquaponics", env: DM }).hit_count).toBe(1);
+
+    // knowledge/ itself a symlink: nothing under it is listed.
+    const other = workspace();
+    const target = mkdtempSync(join(tmpdir(), "recall-outside-"));
+    homes.push(target);
+    cpSync(KNOWLEDGE_FIXTURE, target, { recursive: true });
+    symlinkSync(target, join(other.home, "knowledge"));
+    expect(listMarkdownSources(other.home).filter((s) => s.kind === "knowledge")).toEqual([]);
+    expect(query(other, { query: "aquaponics", env: DM }).hit_count).toBe(0);
+  });
+
+  test("an unreadable provider dir is skipped and never takes the search down (refute S1)", () => {
+    const paths = withKnowledge();
+    const locked = join(paths.home, "knowledge", "locked");
+    mkdirSync(locked);
+    writeFileSync(join(locked, "a.md"), "lockedsecret\n");
+    chmodSync(locked, 0o000);
+    try {
+      const rels = listMarkdownSources(paths.home).filter((s) => s.kind === "knowledge").map((s) => s.rel);
+      expect(rels).toEqual([
+        "knowledge/agentvillage/note-1758000000000.md",
+        "knowledge/agentvillage/upload-1758100000000.md",
+      ]);
+      const res = query(paths, { query: "aquaponics", env: DM });
+      expect(res.status).toBe("ok");
+      expect(res.hit_count).toBe(1);
+      expect(query(paths, { query: "lockedsecret", env: DM }).hit_count).toBe(0);
+    } finally {
+      chmodSync(locked, 0o700);
+    }
+  });
+
+  test("no saved_at: the file's mtime; a removed provider (wipe) is purged on the next pass", () => {
+    const paths = withKnowledge();
+    const plain = join(paths.home, "knowledge", "agentvillage", "note-plain.md");
+    writeFileSync(plain, "rooftop beekeeping notes from 2025-01-02\n");
+    utimesSync(plain, new Date("2026-09-12T12:00:00Z"), new Date("2026-09-12T12:00:00Z"));
+    const res = query(paths, { query: "beekeeping", env: DM });
+    if (res.status !== "ok") throw new Error(res.reason);
+    expect(res.hits.map((h) => [h.ref, h.date, h.date_source])).toEqual([
+      ["knowledge/agentvillage/note-plain.md:1", "2026-09-12", "mtime"],
+    ]);
+
+    rmSync(join(paths.home, "knowledge", "agentvillage"), { recursive: true, force: true });
+    expect(query(paths, { query: "aquaponics beekeeping legibility", env: DM }).hit_count).toBe(0);
+  });
+
+  test("frontMatterSavedAt reads the JSON-string value and nothing outside the front matter", () => {
+    expect(frontMatterSavedAt('---\nsaved_at: "2026-09-15T08:30:00.000Z"\n---\nx\n')).toBe("2026-09-15");
+    expect(frontMatterSavedAt("---\nsaved_at: 2026-09-15T08:30:00Z\n---\n")).toBe("2026-09-15");
+    expect(frontMatterSavedAt('---\nlabel: "x"\n---\nsaved_at: "2026-09-15T08:30:00Z"\n')).toBeNull();
+    expect(frontMatterSavedAt('saved_at: "2026-09-15T08:30:00Z"\n')).toBeNull();
+    expect(frontMatterSavedAt('---\nsaved_at: "yesterday"\n---\n')).toBeNull();
+    expect(frontMatterSavedAt('---\nsaved_at: "2026-13-45T00:00:00Z"\n---\n')).toBeNull();
   });
 });
