@@ -161,9 +161,19 @@ def test_pre_tool_call_never_returns_a_directive(plugin, ctx, monkeypatch):
     assert results == []
 
 
-def test_pre_llm_call_never_injects_context(plugin, ctx, monkeypatch):
-    """A str or {"context": ...} return would be appended to the user message."""
+def test_pre_llm_call_injects_no_context_without_the_pairing_file(plugin, ctx, home, monkeypatch):
+    """A str or {"context": ...} return would be appended to the user message.
+
+    The plugin's one such return is the DATA-444 reminder, and only while the
+    control plane's `memory/approvals-pairing.json` says unstarted. Without
+    that file there is no context, even in a human's root Telegram DM.
+    """
     monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
+    monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "dm")
     plugin.register(ctx)
+    assert not (home / "memory" / "approvals-pairing.json").exists()
     results = ctx.fire("pre_llm_call", session_id="s", user_message="hi", turn_id="t0")
+    assert results == []
+    results = ctx.fire("pre_llm_call", session_id="s2", user_message="hi", turn_id="t0", platform="telegram",
+                       conversation_history=[{"role": "user", "content": "hi"}], parent_session_id="")
     assert results == []
