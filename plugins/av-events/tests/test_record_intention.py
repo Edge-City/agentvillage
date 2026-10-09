@@ -2511,7 +2511,33 @@ def test_data447_update_of_a_published_id_to_held_text_is_refused(tctx, index, r
     assert event["payload"]["publish_refused"] == "held_ambient_exists"
     assert event["payload"]["index_intent_id"] == INDEX_ID
     for words in (variant, HELD_B, "fintech"):
-        assert words not in json.dumps(event) and words not in json.dumps(out)
+        # ensure_ascii=False: the curly-quote and em-dash variant is checked as written, not \u-escaped.
+        assert words not in json.dumps(event, ensure_ascii=False)
+        assert words not in json.dumps(out, ensure_ascii=False)
+
+
+
+def test_data447_a_v1_only_held_entry_refuses_the_update(tctx, index, ri):
+    """Refuter S1 (p9): a held entry written before DATA-387 has v1 alone; v1 decides."""
+    held = _published_and_held(tctx, index, ri)
+    with ri._Locked():
+        entries, publishes = ri._load_locked()
+        entries[held["intention_id"]].pop(ri.HELD_HASH_V2_KEY)
+        ri._save_locked(entries, publishes)
+    assert ri.HELD_HASH_V2_KEY not in ri.lookup(held["intention_id"])
+    out = call(tctx, {"action": "update", "intention_id": INDEX_ID, "text": HELD_B}, tool_call_id="c-up")
+    assert out["publish_refused"] == "held_ambient_exists" and index.requests == []
+
+
+def test_data447_a_held_text_with_no_v2_hash_refuses_the_update(tctx, index, ri):
+    """Refuter S1 (p10): an emoji-only text has no v2 normal form by design; v1 decides."""
+    _published_and_held(tctx, index, ri)
+    emoji = "\U0001F642\U0001F642"
+    assert ri.held_norm_hash_v2(emoji) is None
+    held = call(tctx, {"text": emoji, "source": "ambient"}, tool_call_id="c-emoji")
+    assert held["held"] is True and ri.HELD_HASH_V2_KEY not in ri.lookup(held["intention_id"])
+    out = call(tctx, {"action": "update", "intention_id": INDEX_ID, "text": emoji}, tool_call_id="c-up")
+    assert out["publish_refused"] == "held_ambient_exists" and index.requests == []
 
 
 @pytest.mark.parametrize("gate", [True, None], ids=["approval-on", "approval-unreadable"])
