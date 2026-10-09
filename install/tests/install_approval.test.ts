@@ -1770,11 +1770,12 @@ describe("DATA-377: the shim's clock is read as seconds.fraction, the fraction l
       // A unit read wrongly here would run the loop for hours: bound the run, so it fails instead of hanging.
       const r = fx.run({ APPROVAL_HOOK_WAIT_S: "6" }, { timeoutMs: 20000 });
       expect([shape, r.code]).toEqual([shape, 2]);
-      expect(r.calls).toBeGreaterThan(1);
+      // Exactly 2: attempt 1's check comes within 1 s of T0 (as before), and the 5 s pause then closes the window.
+      expect(r.calls).toBe(2);
       expect(JSON.parse(r.stdout).message).toStartWith("hook-timeout:");
       // The loop stops once now + 5 s reaches T0 + 6 s: after the first 5 s pause, so the last line reads about 5 s.
       const ms = elapsed(fx.log());
-      expect(ms.at(-1)!).toBeGreaterThanOrEqual(1000);
+      expect(ms.at(-1)!).toBeGreaterThanOrEqual(5000);
       expect(ms.at(-1)!).toBeLessThan(10000);
     }
   });
@@ -2525,6 +2526,18 @@ describe("DATA-378: a clock that reads 0 or steps back mid-run ends the re-ask w
       const r = fx.run({ APPROVAL_HOOK_WAIT_S: "20" }, BOUND);
       expect([r.code, r.stdout, r.calls]).toEqual([0, "{}", 3]);
       expect(elapsed(fx.log())).toEqual([0, 0, 5000, 10000]);
+    }, 30000);
+
+    test(`a clock lost at the first post's P0 and good again after it: a first post that timed out is final, not re-asked (${shell})`, () => {
+      // Refuter S1. Call 3 (attempt 1's P0) fails, so LOST is set and P0 is the last good read (T0). From call 4 the
+      // clock reads 1 s later: the first-timeout check measures NOW - P0 = 1000 ms >= MAX_TIME (1 s) and enters the
+      // branch, where LOST blocks with the transport reason. Without that guard the shim re-asked and the fixture's
+      // second answer (allow) stood: exit 0, 2 posts.
+      const fx = virtualClock(shimFixture("first-timeout", null, { shell }), `[ "$n" -ne 3 ] || exit 1; [ "$n" -lt 4 ] || s=$((s + 1))`);
+      const r = fx.run({ APPROVAL_HOOK_WAIT_S: "8" }, BOUND);
+      expect([r.code, r.calls]).toEqual([2, 1]);
+      expect(JSON.parse(r.stdout).message).toContain("transport failure (curl exit 28");
+      expect(fx.log()).not.toContain("outcome=wait");
     }, 30000);
   }
 });

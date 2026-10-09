@@ -139,7 +139,9 @@
 # until APPROVAL_HOOK_WAIT_S have passed since it started; then it replays the
 # last block. An allow, or any other block, is replayed at once. With the
 # image's 280 s the effective human window is about 280 s, inside Hermes's
-# 300 s per-entry timeout.
+# 300 s per-entry timeout. A clock that reads 0 or below its last read during
+# the wait ends it as the deadline does, and the attempts are capped at
+# WAIT_S/5 + 2 whatever the clock says (DATA-378).
 #
 # A FIRST POST THAT TIMED OUT (HOSTED-14). The facade's own hook wait must sit
 # well under MAX_TIME (12 s for the 25 s default). When it does not, the first
@@ -773,6 +775,8 @@ DEADLINE=$((T0 + WAIT_S * 1000))
 # whatever the clock says: one per 5 s pause in the window, and two more.
 NOW=$T0
 LOST=0
+# The cap counts attempts, not time: in real time it is CAP x (5 + MAX_TIME) s
+# at worst (a still clock, 58 x 30 s), a backstop past the window, not the window.
 CAP=$((WAIT_S / 5 + 2))
 clock_read() {
   CLK=$(now_ms)
