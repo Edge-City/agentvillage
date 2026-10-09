@@ -43,7 +43,7 @@ describe("own profile: link what get_my_profile returned, offer the correction, 
     expect(count(tools, "- **Profile correction** — the user explicitly corrects their own name, intro, location, or timezone → call `update_my_profile` with only that field.")).toBe(1);
   });
 
-  test("after a correction, the link to show is the /u/ link the update or enrich result returned (DATA-423)", () => {
+  test("after a correction, the link to show is the /u/ link the update_my_profile result returned (DATA-423)", () => {
     const after =
       "After the correction, link the `/u/` link the `update_my_profile` result returned (their Index profile, not the Rolodex).";
     expect(count(tools, after)).toBe(1);
