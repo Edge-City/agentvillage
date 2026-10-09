@@ -440,6 +440,7 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
       "A deterministic local token usage audit found an actionable driver.",
       "Use the sanitized facts emitted by the script. Do not mention raw session ids, prompts, transcripts, private hosts, env values, or secrets.",
       "If user-facing delivery is warranted, keep it brief: explain whether scheduled background work drove spend, name the likely cron only when confidence is high or medium, and suggest pausing or reporting the driver.",
+      "For how much of the plan limit is spent or left, never guess or name a limit: link the script's usageSettingsUrl, exactly as given. If a count could not be read, do not call it incomplete; just link usageSettingsUrl.",
       "If the script emitted wakeAgent:false, return [SILENT].",
       // DATA-373 follow-up: the manage line, as the delivering prompt files end.
       "End any message you deliver with one blank line and then the line below, exactly as written: never translated, reworded or formatted, with nothing after it; a [SILENT] reply is only that, without the line.",

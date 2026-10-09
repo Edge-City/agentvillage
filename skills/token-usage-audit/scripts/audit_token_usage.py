@@ -22,6 +22,10 @@ from typing import Any
 
 SCHEMA = "agentvillage.token_usage_audit.v1"
 DASHBOARD_URL = "http://127.0.0.1:9119"
+# The app's Settings › Usage tab: the agent's model credit spent against its plan limit. On the app
+# origin of AV_CONNECTIONS_URL (env, else $HERMES_HOME/.env), as the scheduled messages' settings link.
+DEFAULT_APP_URL = "https://agents.edgecity.live"
+USAGE_SETTINGS_PATH = "/settings?tab=usage"
 SESSION_HEADER = "X-Hermes-Session-Token"
 STATE_RELATIVE_PATH = Path("memory/token-usage-audit.json")
 
@@ -769,7 +773,7 @@ def decide_alert(
                     "budgetTokens": limit,
                     "usedTokens": used,
                     "confidence": "high",
-                    "action": "Reduce or pause scheduled background work until budget is refreshed.",
+                    "action": "Reduce or pause scheduled background work; the plan limit and what is left are at usageSettingsUrl.",
                 }
             )
         elif limit and used and used >= limit * 0.80:
@@ -782,7 +786,7 @@ def decide_alert(
                     "budgetTokens": limit,
                     "usedTokens": used,
                     "confidence": "high",
-                    "action": "Reduce or pause scheduled background work until budget is refreshed.",
+                    "action": "Reduce or pause scheduled background work; the plan limit and what is left are at usageSettingsUrl.",
                 }
             )
 
@@ -814,6 +818,29 @@ def decide_alert(
     return False, {"suppressedByCooldown": True, "candidateCount": len(candidates)}
 
 
+def env_or_dotenv(name: str, root: Path) -> str:
+    if name in os.environ:
+        return os.environ[name].strip()
+    try:
+        for line in (root / ".env").read_text(encoding="utf-8").splitlines():
+            match = re.match(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$", line)
+            if match and match.group(1) == name:
+                return match.group(2).strip().strip("\"'")
+    except OSError:
+        pass
+    return ""
+
+
+def usage_settings_url(root: Path) -> str:
+    """Settings › Usage on the app origin of AV_CONNECTIONS_URL; the default origin for anything unsafe."""
+    raw = env_or_dotenv("AV_CONNECTIONS_URL", root)
+    origin = DEFAULT_APP_URL
+    match = re.match(r"^https://([A-Za-z0-9.-]+(?::\d+)?)(?:[/?#][^\s\"'`<>()\[\]]*)?$", raw)
+    if match:
+        origin = f"https://{match.group(1)}"
+    return origin + USAGE_SETTINGS_PATH
+
+
 def run_audit(
     root: Path,
     lookback_hours: float,
@@ -834,6 +861,7 @@ def run_audit(
         "schema": SCHEMA,
         "generatedAt": now.isoformat(),
         "lookbackHours": lookback_hours,
+        "usageSettingsUrl": usage_settings_url(root),
         "privacy": {
             "redacted": True,
             "rawContentIncluded": False,
@@ -868,6 +896,7 @@ def alert_prompt(result: dict[str, Any], driver: dict[str, Any]) -> str:
         "wakeAgent": True,
         "generatedAt": result["generatedAt"],
         "lookbackHours": result["lookbackHours"],
+        "usageSettingsUrl": result["usageSettingsUrl"],
         "driver": driver,
         "totals": result["totals"],
         "bySource": result["bySource"][:5],
@@ -884,6 +913,7 @@ def alert_prompt(result: dict[str, Any], driver: dict[str, Any]) -> str:
             "A deterministic local audit found an actionable token usage driver.",
             "Use only these sanitized facts. Do not mention raw session ids, private hosts, prompts, transcripts, or secrets.",
             "If messaging the resident, keep it brief: name the likely scheduled driver when confidence is high/medium, explain that background work drove spend, and suggest pausing or reporting the driver.",
+            "For how much of the plan limit is spent or left, never guess or name a limit: link usageSettingsUrl, exactly as given. If a count could not be read, do not call it incomplete; just link usageSettingsUrl.",
             "",
             "```json",
             json.dumps(safe_payload, indent=2, sort_keys=True),

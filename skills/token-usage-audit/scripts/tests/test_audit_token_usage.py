@@ -180,6 +180,24 @@ class TokenUsageAuditTests(unittest.TestCase):
         self.assertEqual(last["driver"]["type"], "single_cron")
         self.assertIn("Edge - digest prepare", completed.stdout)
         self.assertNotIn("raw-secret-session-id", completed.stdout)
+        self.assertIn('"usageSettingsUrl": "https://agents.edgecity.live/settings?tab=usage"', completed.stdout)
+        self.assertIn("never guess or name a limit", completed.stdout)
+
+    def test_usage_settings_url_uses_the_app_origin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prev = audit.os.environ.pop("AV_CONNECTIONS_URL", None)
+            try:
+                self.assertEqual(audit.usage_settings_url(root), "https://agents.edgecity.live/settings?tab=usage")
+                (root / ".env").write_text('AV_CONNECTIONS_URL="https://staging.example.com/insights"\n', encoding="utf-8")
+                self.assertEqual(audit.usage_settings_url(root), "https://staging.example.com/settings?tab=usage")
+                for bad in ("http://x.example.com/insights", "https://u:p@x.example.com/", "https://x.example.com/a b"):
+                    audit.os.environ["AV_CONNECTIONS_URL"] = bad
+                    self.assertEqual(audit.usage_settings_url(root), "https://agents.edgecity.live/settings?tab=usage")
+            finally:
+                audit.os.environ.pop("AV_CONNECTIONS_URL", None)
+                if prev is not None:
+                    audit.os.environ["AV_CONNECTIONS_URL"] = prev
 
 
 if __name__ == "__main__":

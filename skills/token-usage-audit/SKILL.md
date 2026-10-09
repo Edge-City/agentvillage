@@ -35,6 +35,8 @@ The script prints a final JSON line. When no action is needed, the line is:
 
 When action is needed, the script prints a short sanitized agent prompt plus a final JSON line with `wakeAgent:true`. The agent should use only the facts in that prompt, keep any user-facing message brief, name a likely cron only when confidence is high or medium, and suggest pausing/reporting the driver. If attribution is unknown or ambiguous, say that plainly instead of guessing.
 
+The output carries `usageSettingsUrl`: the app's Settings › Usage (`/settings?tab=usage` on the app origin of `AV_CONNECTIONS_URL`, else https://agents.edgecity.live), where the resident sees their model credit spent against the plan limit. The agent never guesses or names a plan limit and never calls a count incomplete when the dashboard was unreachable; it links that URL.
+
 ## Alert Policy
 
 Defaults:
