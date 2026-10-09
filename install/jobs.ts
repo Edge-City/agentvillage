@@ -128,7 +128,7 @@ export const EXIT = { done: 0, failed: 1, refused: 2, notTeam: 3, busy: 4 } as c
 /** Every argument value is at most this long. */
 export const MAX_ARG_CHARS = 200;
 
-/** The five default jobs, the only ones `--schedule default` and admin marks apply to. */
+/** The six default jobs, the only ones `--schedule default` and admin marks apply to. */
 const DEFAULT_JOB_KEYS = SETTINGS_JOB_KEYS.filter(isDefaultJobKey);
 
 export interface CommandResult {
@@ -573,7 +573,7 @@ function windowCheck(
 
 // ── Commands ────────────────────────────────────────────────────────────────
 
-const LIST_ORDER: JobKey[] = ["brief", "drop-midday", "drop-evening", "negotiation", "evening", "tpl-brief", "tpl-digest-preview", "tpl-evening-ask"];
+const LIST_ORDER: JobKey[] = ["brief", "drop-midday", "drop-evening", "negotiation", "evening", "pending", "tpl-brief", "tpl-digest-preview", "tpl-evening-ask"];
 
 function describeJob(key: JobKey, job: UsableJob, settings: ReturnType<typeof readJobSettings>): Record<string, unknown> {
   let entry: Entry = {};

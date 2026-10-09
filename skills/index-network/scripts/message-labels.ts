@@ -22,6 +22,8 @@ export const MESSAGE_LABELS = Object.freeze({
   "Conversation update": Object.freeze(["Edge — negotiation summary"]),
   "Evening questions": Object.freeze(["Edge — evening questions"]),
   "Introduction suggestion": Object.freeze(["Edge — opportunity drop (midday)", "Edge — opportunity drop (evening)"]),
+  // DATA-430: the hourly alert for an opportunity that newly turned pending.
+  "Pending opportunity": Object.freeze(["Edge — pending opportunity"]),
   // Opt-in: absent on most boxes.
   "Usage report": Object.freeze(["Edge — token usage audit"]),
 } as const);

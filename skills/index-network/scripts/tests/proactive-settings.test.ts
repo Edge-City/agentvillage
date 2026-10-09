@@ -12,6 +12,7 @@ import type { BriefOpportunity, DailyBriefContext } from "../build-daily-brief-c
 import { PREVIEW_MAX_AGE_MS, deliveryFor, jobSettingsPath, minuteOfDay, readJobSettings } from "../job-settings";
 import { stagePath } from "../outcome-ask";
 import { type ProactiveOptions, RUNS_KEY, deliveryGate, hardStopCleanup, runProactive, windowDecision } from "../proactive";
+import { pendingAlert } from "../pending-alert";
 import { lockPathFor } from "../state-lock";
 import { inBriefWindow, rc13WindowDecision, villageMinuteOfDay } from "./fixtures/rc13-decision";
 
@@ -428,5 +429,152 @@ describe("the shim: template and preview names", () => {
     for (const name of ["preview-prefetch", "tpl-other", "preview-", "preview-preview-brief", "tpl-brief --preview"]) {
       expect({ name, ...runAs(name) }).toEqual({ name, code: 0, args: "", last: { wakeAgent: false, reason: "unknown-action" } });
     }
+  });
+});
+
+describe("DATA-430: the hourly pending alert (`pending`)", () => {
+  const PENDING_ID = (n: number) => `ffffffff-0000-4000-8000-${String(n).padStart(12, "0")}`;
+  const pendingCard = (n: number, name: string): BriefOpportunity => ({
+    name,
+    status: "pending",
+    opportunityId: PENDING_ID(n),
+    userUrl: `https://index.network/u/u${n}`,
+    acceptUrl: `https://index.network/o/${PENDING_ID(n)}?action=accept&viewer=v${n}&sig=s${n}`,
+  });
+  /** The real pick over a fixed list: the trigger's own path, no network. */
+  const realPick = (cards: () => BriefOpportunity[], calls?: Array<{ stateFile?: string; now?: Date }>): ProactiveOptions["pending"] =>
+    (async (opts: { stateFile?: string; now?: Date }) => {
+      calls?.push(opts);
+      return pendingAlert({ ...opts, apiKey: "fake-key", mcpUrl: "https://index-mcp.fake.test/mcp", listOpportunities: async () => ({ cards: cards(), unidentified: 0, listing: { complete: true, pendingIds: new Set(cards().map((c) => c.opportunityId!)) } }) });
+    }) as ProactiveOptions["pending"];
+
+  test("no settings file: its gate opens on exactly 08:00 to 22:00 IST, every minute of a day", () => {
+    const absent = readJobSettings(home);
+    expect(deliveryFor("pending", absent)).toEqual({ window: { start: 480, end: 1320 }, tz: "Asia/Kolkata" });
+    for (let minute = 0; minute < 24 * 60; minute++) {
+      const at = new Date(Date.UTC(2026, 9, 11, 18, 30) + minute * 60_000); // from 00:00 IST
+      const open = deliveryGate(deliveryFor("pending", absent), at) === null;
+      if (open !== (minute >= 8 * 60 && minute < 22 * 60)) throw new Error(`pending gate wrong at minute ${minute}`);
+    }
+  });
+
+  test("outside its window: silent `outside-window`, before anything is read or written", async () => {
+    let picked = 0;
+    const pending = (async () => (picked++, { silent: true, reason: "nothing-new" })) as ProactiveOptions["pending"];
+    for (const utc of ["2026-10-12T02:29:00Z", "2026-10-12T16:30:00Z", "2026-10-12T20:00:00Z"]) { // 07:59, 22:00, 01:30 IST
+      const result = await runProactive("pending", options({ now: () => new Date(utc), pending }));
+      expect({ utc, line: last(result.lines) }).toEqual({ utc, line: { wakeAgent: false, reason: "outside-window" } });
+    }
+    expect(picked).toBe(0);
+    expect(existsSync(stateFile())).toBe(false);
+  });
+
+  test("a card that turned pending overnight is alerted at the first run inside the window, not before", async () => {
+    let cards = [pendingCard(1, "Asha")];
+    const pending = realPick(() => cards);
+    // Seeded on the evening before (21:20 IST).
+    expect(last((await runProactive("pending", options({ now: () => new Date("2026-10-11T15:50:00Z"), pending }))).lines)).toEqual({ wakeAgent: false, reason: "seeded" });
+    cards = [pendingCard(1, "Asha"), pendingCard(2, "Bilal")];
+    // 23:20 and 07:20 IST: quiet hours; nothing written for the new card.
+    for (const utc of ["2026-10-11T17:50:00Z", "2026-10-12T01:50:00Z"]) {
+      expect(last((await runProactive("pending", options({ now: () => new Date(utc), pending }))).lines)).toEqual({ wakeAgent: false, reason: "outside-window" });
+    }
+    expect(Object.keys(state().pendingAlerts)).toEqual([PENDING_ID(1)]);
+    // 08:20 IST: alerted.
+    const at = new Date("2026-10-12T02:50:00Z");
+    const woke = await runProactive("pending", options({ now: () => at, pending }));
+    expect(woke.woke).toBe(true);
+    const view = JSON.parse(woke.lines.slice(0, -1).join("\n"));
+    expect(view).toEqual({
+      agentName: "Edge",
+      job: "pending-opportunity",
+      cards: [{
+        name: "Bilal",
+        profileUrl: "https://agents.edgecity.live/rolodex?person=u2",
+        appUrl: `https://agents.edgecity.live/intents?opportunity=${PENDING_ID(2)}`,
+        acceptUrl: `https://index.network/o/${PENDING_ID(2)}?action=accept&viewer=v2&sig=s2&surface=telegram`,
+        opportunityId: PENDING_ID(2),
+        firstSeen: at.toISOString(),
+        respondBy: null,
+      }],
+    });
+    expect(state().pendingAlerts[PENDING_ID(2)]).toEqual({ firstSeen: at.toISOString(), alertedAt: at.toISOString() });
+  });
+
+  test("the once-a-day mark never gates it: a second new card the same day wakes again; no day mark is written, and a stale one is ignored", async () => {
+    let cards = [pendingCard(1, "Asha")];
+    const calls: Array<{ stateFile?: string; now?: Date }> = [];
+    const pending = realPick(() => cards, calls);
+    writeFileSync(stateFile(), JSON.stringify({ [RUNS_KEY]: { pending: DATE, brief: DATE } }));
+    expect(last((await runProactive("pending", options({ pending }))).lines)).toEqual({ wakeAgent: false, reason: "seeded" });
+    cards = [pendingCard(1, "Asha"), pendingCard(2, "Bilal")];
+    expect((await runProactive("pending", options({ now: () => new Date("2026-10-12T03:50:00Z"), pending }))).woke).toBe(true); // 09:20 IST
+    // A repeat poll sends nothing.
+    expect(last((await runProactive("pending", options({ now: () => new Date("2026-10-12T04:50:00Z"), pending }))).lines)).toEqual({ wakeAgent: false, reason: "nothing-new" });
+    cards = [pendingCard(1, "Asha"), pendingCard(2, "Bilal"), pendingCard(3, "Chen")];
+    expect((await runProactive("pending", options({ now: () => AFTERNOON, pending }))).woke).toBe(true);
+    // The day marks are as they were: the pending alert neither reads nor writes one.
+    expect(state()[RUNS_KEY]).toEqual({ pending: DATE, brief: DATE });
+    expect(calls.map((call) => call.stateFile)).toEqual(Array(4).fill(stateFile()));
+    expect(runLog().map((line) => line.reason)).toEqual(["seeded", "woke", "nothing-new", "woke"]);
+  });
+
+  test("its own window from the settings file, like any job (J2)", async () => {
+    settings({ pending: { window: "09:00-18:00" } });
+    const pending = (async () => ({ silent: true, reason: "nothing-new" })) as ProactiveOptions["pending"];
+    expect(last((await runProactive("pending", options({ pending }))).lines)).toEqual({ wakeAgent: false, reason: "outside-window" }); // 08:00 IST
+    expect(last((await runProactive("pending", options({ now: () => AFTERNOON, pending }))).lines)).toEqual({ wakeAgent: false, reason: "nothing-new" });
+    // A malformed entry falls back to its default window, never to all day.
+    settings({ pending: { window: "9-18" } });
+    expect(last((await runProactive("pending", options({ now: () => new Date("2026-10-12T17:00:00Z"), pending }))).lines)).toEqual({ wakeAgent: false, reason: "outside-window" }); // 22:30 IST
+    expect(runLog().at(-1)).toMatchObject({ action: "pending", settings: "invalid:window" });
+  });
+
+  test("a corrupt state file follows the trigger's healing rule: renamed aside, the run starts from empty and seeds silently", async () => {
+    writeFileSync(stateFile(), "{not json");
+    const result = await runProactive("pending", options({ pending: realPick(() => [pendingCard(1, "Asha")]) }));
+    expect(last(result.lines)).toEqual({ wakeAgent: false, reason: "seeded" });
+    expect(result.note).toBe("state-renamed-aside");
+    expect(readdirSync(join(home, "memory")).filter((name) => name.includes(".corrupt-"))).toHaveLength(1);
+    expect(Object.keys(state().pendingAlerts)).toEqual([PENDING_ID(1)]);
+  });
+
+  test("a failed Index read inside the pick: silent `index-unavailable`, nothing written", async () => {
+    const before = JSON.stringify({ pendingAlerts: {} });
+    writeFileSync(stateFile(), before);
+    const pending = (async (opts: { stateFile?: string; now?: Date }) =>
+      pendingAlert({ ...opts, apiKey: "fake-key", mcpUrl: "https://index-mcp.fake.test/mcp", listOpportunities: async () => { throw new Error("mcp-unparsed"); } })) as ProactiveOptions["pending"];
+    expect(last((await runProactive("pending", options({ pending }))).lines)).toEqual({ wakeAgent: false, reason: "index-unavailable" });
+    expect(readFileSync(stateFile(), "utf8")).toBe(before);
+  });
+
+  test("a preview of it (team tenants) writes nothing the real run reads", async () => {
+    process.env.AV_TEAM_TENANT = "1";
+    const before = JSON.stringify({ pendingAlerts: {} });
+    writeFileSync(stateFile(), before);
+    const result = await runProactive("pending", options({ preview: true, now: () => new Date("2026-10-12T20:00:00Z"), pending: realPick(() => [pendingCard(1, "Asha")]) }));
+    expect(result.woke).toBe(true);
+    expect(readFileSync(stateFile(), "utf8")).toBe(before);
+  });
+
+  test("the shim runs it, and its preview", () => {
+    const SHIM = join(import.meta.dir, "..", "shims", "agentvillage_proactive.sh");
+    const run = (action: string) => {
+      const bin = join(home, "fakebin");
+      mkdirSync(bin, { recursive: true });
+      const argsFile = join(home, "bun-args");
+      rmSync(argsFile, { force: true });
+      writeFileSync(join(bin, "bun"), `#!/usr/bin/env bash\necho "$@" > "${argsFile}"\necho '{"wakeAgent": true}'\nexit 0\n`);
+      chmodSync(join(bin, "bun"), 0o755);
+      mkdirSync(join(home, "scripts"), { recursive: true });
+      mkdirSync(join(home, "skills", "index-network", "scripts"), { recursive: true });
+      writeFileSync(join(home, "skills", "index-network", "scripts", "proactive.ts"), "");
+      const script = join(home, "scripts", `agentvillage_proactive_${action}.sh`);
+      copyFileSync(SHIM, script);
+      Bun.spawnSync(["bash", script], { env: { PATH: `${bin}:/usr/bin:/bin`, HOME: home }, cwd: tmpdir() });
+      return existsSync(argsFile) ? readFileSync(argsFile, "utf8").trim() : "";
+    };
+    expect(run("pending")).toBe("skills/index-network/scripts/proactive.ts pending");
+    expect(run("preview-pending")).toBe("skills/index-network/scripts/proactive.ts pending --preview");
   });
 });
