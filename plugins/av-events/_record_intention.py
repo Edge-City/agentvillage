@@ -18,7 +18,9 @@ the observer reads (only for this unprefixed tool, never an MCP server's
 `publish_refused` (a code), `local_reason` (`participant_asked` | `personal`)
 and `confirmed_in_chat` (DATA-410: `yes` | `silence` | `standing`, only on a
 capture the caller passed as `message`, of the agent's words the resident
-adopted in chat; kept when the lineage held it as ambient; absent otherwise).
+adopted in chat; kept when the lineage held it as ambient; absent otherwise),
+`publish_via` and `draft_shown_at` (DATA-411: `open_draft` and the ask's UTC
+time, only on a silence capture published from an open draft).
 
 **Ids.** A published capture's `intention_id` is Index's intent id, as an
 observed Index `create_intent` would be, so the poller corroborates it by id.
@@ -100,6 +102,29 @@ requested `message`/`onboarding`/`note` into ambient, the event carries
 same way with `"held_silence"` (DATA-410). [Reversal: no code; the
 event says only `source=ambient`.]
 
+**Silence publishes the exact draft the resident saw (DATA-411).** The one pass
+through R10. At the ask, the tool's own `post_llm_call` listener (outside the
+collector's guard, like the lineage ones) reads the reply the agent sent; when
+the session itself is a root session seen on a `HUMAN_PLATFORMS` platform with
+no cron in its lineage, and the reply holds `ASK_QUESTION` word for word and is
+at most `MAX_ASK_REPLY_CHARS`, it opens an ask in
+`$HERMES_HOME/av-events/open_drafts.json` (0600, `flock` on
+`open_drafts.json.lock`, write-temp-and-rename): the sha256 of each candidate
+span's exact UTF-8 bytes (`draft_candidates`: exact substrings, never
+rewritten; any span a chat formatter could render differently is dropped),
+`shown_at` (UTC ISO), the session id and platform; at most `MAX_OPEN_DRAFTS`,
+oldest dropped. A cron, subagent or unknown session opens nothing. The tool's
+`pre_llm_call` listener closes every open ask at any turn but a cron run's:
+whatever the resident said, it was not silence. A capture passed as `message`
+with `confirmed_in_chat=silence` that R10 holds as `held_cron` (and
+`publish` true) publishes as stated only when sha256 of its exact text bytes is
+in an open ask shown at most `SILENCE_PUBLISH_WINDOW_HOURS` ago (24, pending
+Carter); every ask holding those bytes is closed and saved before the publish
+goes on, so a second capture is `held_cron` again. Its result carries
+`publish_via="open_draft"` and `draft_shown_at`. Every other cron capture is
+held exactly as before, and `held_unknown` / `held_silence` never read the
+file. [Reversal: drop `DRAFT_HOOKS` and the pass; silence from cron is held_cron.]
+
 **Held updates (F4, M3).** In a held session `action=update` of a published id
 never mirrors to Index; the local event carries `publish_refused` `held_cron` or
 `held_unknown` and `source` ambient. [Reversal: mirror updates from any session.]
@@ -171,6 +196,7 @@ Python 3.11, standard library only.
 
 from __future__ import annotations
 
+import calendar
 import hashlib
 import http.client
 import ipaddress
@@ -181,6 +207,7 @@ import re
 import tempfile
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -1181,6 +1208,339 @@ def reserve_publish() -> Optional[str]:
         return "rate_unavailable"
 
 
+# ---- Open drafts (DATA-411) ------------------------------------------------
+
+#: How long after the ask a shown draft may be published from a cron send on
+#: silence. PENDING Carter's decision (DATA-411 AC#4); 24 is the proposal.
+SILENCE_PUBLISH_WINDOW_HOURS = 24
+#: Asks kept open at once; the oldest is dropped first.
+MAX_OPEN_DRAFTS = 20
+OPEN_DRAFTS_FILE = "open_drafts.json"
+#: The one ask, word for word as DRAFT_RULE gives it. A reply without it opens nothing.
+ASK_QUESTION = "Should I publish this as written?"
+#: A longer reply opens nothing: it might be split into several Telegram
+#: messages (4096 per message; MarkdownV2 escaping at most doubles the length).
+MAX_ASK_REPLY_CHARS = 2000
+#: Per ask: the most candidate spans kept, and the longest one.
+MAX_DRAFT_CANDIDATES = 32
+MAX_DRAFT_CHARS = 600
+#: The trace a silence capture published from an open draft carries.
+PUBLISH_VIA_OPEN_DRAFT = "open_draft"
+_ISO_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+_SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
+
+#: A span holding any of these is not opened: a chat platform's formatter may
+#: turn it into something else on screen (Telegram MarkdownV2 bold, italic,
+#: strike, spoiler, code, links, headers, quotes; Slack and HTML entities), so
+#: the bytes would not be what the resident saw.
+_UNSAFE_DRAFT_CHARS = frozenset("*_~|`[]\\<>#&")
+#: Unicode categories never opened: controls, format characters (bidi
+#: overrides, zero-width), surrogates, private use, unassigned. A newline is
+#: allowed once, for a two-line draft.
+_UNSAFE_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"})
+#: Quote pairs whose inner text is a candidate.
+_QUOTED = tuple(re.compile(p) for p in (
+    r'"([^"]+)"', "\u201c([^\u201d]+)\u201d", "\u00ab([^\u00bb]+)\u00bb", "\u201e([^\u201c\u201d]+)[\u201c\u201d]",
+))
+#: A line's leading blockquote, bullet or number marker.
+_LEAD_MARKER = re.compile(r"(?:>+[ \t]*|[-\u2022][ \t]+|\d{1,2}[.)][ \t]+)")
+#: Emphasis wrapping a whole span (`*x*`, `**x**`, `_x_`, `__x__`).
+_WRAPPED = re.compile(r"(\*\*|__|\*|_)(.+)\1", re.DOTALL)
+
+_DRAFTS_LOCK = threading.Lock()
+
+#: Tests replace this to simulate a crash between the temp file and the rename.
+_rename: Callable[[str, str], None] = os.replace
+
+
+def drafts_path() -> str:
+    return os.path.join(hermes_home(), "av-events", OPEN_DRAFTS_FILE)
+
+
+def draft_hash(text: str) -> str:
+    """sha256 of the exact UTF-8 bytes: no strip, no case fold, no collapse."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _iso(epoch: float) -> str:
+    return time.strftime(_ISO_FORMAT, time.gmtime(epoch))
+
+
+def _epoch(value: Any) -> Optional[float]:
+    if not isinstance(value, str):
+        return None
+    try:
+        return float(calendar.timegm(time.strptime(value, _ISO_FORMAT)))
+    except (ValueError, OverflowError):
+        return None
+
+
+class _DraftsLocked:
+    """The in-process lock plus `flock` on `open_drafts.json.lock`."""
+
+    def __enter__(self) -> "_DraftsLocked":
+        _DRAFTS_LOCK.acquire()
+        self._fd: Optional[int] = None
+        try:
+            os.makedirs(os.path.dirname(drafts_path()), mode=DIR_MODE, exist_ok=True)
+            self._fd = os.open(drafts_path() + ".lock", os.O_RDWR | os.O_CREAT, FILE_MODE)
+            if fcntl is not None:
+                fcntl.flock(self._fd, fcntl.LOCK_EX)
+        except BaseException:
+            self._release()
+            raise
+        return self
+
+    def _release(self) -> None:
+        try:
+            if self._fd is not None:
+                if fcntl is not None:
+                    fcntl.flock(self._fd, fcntl.LOCK_UN)
+                os.close(self._fd)
+        finally:
+            self._fd = None
+            _DRAFTS_LOCK.release()
+
+    def __exit__(self, *exc: Any) -> None:
+        self._release()
+
+
+def _load_drafts_locked() -> list[dict]:
+    """The open asks, oldest first. A missing or malformed file is no open ask
+    (fail closed: nothing passes); one that cannot be read raises."""
+    try:
+        with open(drafts_path(), encoding="utf-8") as handle:
+            raw = handle.read()
+    except FileNotFoundError:
+        return []
+    except OSError:
+        raise MapUnreadable() from None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        data = None
+    drafts = data.get("drafts") if isinstance(data, dict) else None
+    if not isinstance(drafts, list):
+        return []
+    clean: list[dict] = []
+    for item in drafts:
+        if not isinstance(item, dict) or _epoch(item.get("shown_at")) is None:
+            continue
+        hashes = item.get("hashes")
+        if not isinstance(hashes, list) or not hashes:
+            continue
+        if not all(isinstance(h, str) and _SHA256_HEX.fullmatch(h) for h in hashes):
+            continue
+        clean.append(item)
+    return clean
+
+
+def _save_drafts_locked(drafts: list[dict]) -> None:
+    """Write-temp-and-rename: a crash before the rename leaves the old file whole."""
+    path = drafts_path()
+    fd, tmp = tempfile.mkstemp(prefix=".open_drafts.", dir=os.path.dirname(path))
+    try:
+        os.fchmod(fd, FILE_MODE)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump({"v": 1, "drafts": drafts}, handle, separators=(",", ":"))
+        _rename(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _trim(text: str, start: int, end: int) -> tuple[int, int]:
+    """Move a span's ends inward past whitespace. The bytes are not changed;
+    only where the span starts and ends is chosen."""
+    while start < end and text[start].isspace():
+        start += 1
+    while end > start and text[end - 1].isspace():
+        end -= 1
+    return start, end
+
+
+def _line_spans(text: str, start: int, end: int, out: list[tuple[int, int]]) -> None:
+    """A line's span, the same span after a leading marker, and the inside of
+    emphasis that wraps either whole: each an exact substring, never a part of
+    the words (no label is cut off: "Draft: X" opens only "Draft: X")."""
+    starts = [start]
+    marker = _LEAD_MARKER.match(text, start, end)
+    if marker is not None and marker.end() < end:
+        starts.append(marker.end())
+    for s in starts:
+        s, e = _trim(text, s, end)
+        if s >= e:
+            continue
+        out.append((s, e))
+        wrapped = _WRAPPED.fullmatch(text, s, e)
+        if wrapped is not None:
+            out.append(_trim(text, *wrapped.span(2)))
+
+
+def _openable(span: str) -> bool:
+    if not span.strip() or len(span) > MAX_DRAFT_CHARS or ASK_QUESTION in span or "MEDIA:" in span:
+        return False
+    if span.rstrip().endswith(":"):
+        return False  # an introduction ("Here is how I'd put it:"), never the draft
+    if span.count("\n") > 1 or any(ch in _UNSAFE_DRAFT_CHARS for ch in span):
+        return False
+    return not any(ch != "\n" and unicodedata.category(ch) in _UNSAFE_CATEGORIES for ch in span)
+
+
+def draft_candidates(reply: Any) -> list[str]:
+    """The spans of an ask reply that a silence capture may name: each an exact
+    substring of what the resident was shown, never rewritten.
+
+    Only a reply that holds `ASK_QUESTION` word for word, of at most
+    `MAX_ASK_REPLY_CHARS`, opens anything. Its spans: each line (edges
+    trimmed), the words before the question on its own line, a line after a
+    leading `>` / bullet / number, the inside of emphasis wrapping a whole
+    line, the inside of a quote pair (straight, curly, guillemets, low-high),
+    and two adjacent lines together. A span
+    holding the question, a formatting character (`_UNSAFE_DRAFT_CHARS`), a
+    control or invisible character, `MEDIA:`, or more than one newline, or
+    ending in a colon, is dropped, so what is opened renders on screen as its
+    own bytes."""
+    if not isinstance(reply, str) or ASK_QUESTION not in reply or len(reply) > MAX_ASK_REPLY_CHARS:
+        return []
+    spans: list[tuple[int, int]] = []
+    lines: list[tuple[int, int]] = []
+    pos = 0
+    for raw in reply.split("\n"):
+        s, e = _trim(reply, pos, pos + len(raw))
+        if s < e:
+            lines.append((s, e))
+        pos += len(raw) + 1
+    for s, e in lines:
+        q = reply.find(ASK_QUESTION, s, e)
+        _line_spans(reply, s, e if q == -1 else _trim(reply, s, q)[1], spans)
+    for (s1, e1), (s2, e2) in zip(lines, lines[1:]):
+        if reply[e1:s2].count("\n") == 1 and ASK_QUESTION not in reply[s1:e2]:
+            marker = _LEAD_MARKER.match(reply, s1, e1)
+            for s in (s1, marker.end() if marker is not None else s1):
+                spans.append(_trim(reply, s, e2))
+    for pattern in _QUOTED:
+        for match in pattern.finditer(reply):
+            spans.append(match.span(1))
+    seen: list[str] = []
+    for s, e in spans:
+        span = reply[s:e]
+        if s < e and span not in seen and _openable(span):
+            seen.append(span)
+            if len(seen) >= MAX_DRAFT_CANDIDATES:
+                break
+    return seen
+
+
+def _speaking_root(session_id: str, platform: Any) -> bool:
+    """R10 says a person is speaking in this session itself: not a delegated
+    child, seen on a human-facing platform, and no cron in its lineage. A reply
+    from anywhere else never reaches the resident as the agent's ask."""
+    if not session_id:
+        return False
+    named = str(platform or "").strip().lower()
+    if named and named not in HUMAN_PLATFORMS:
+        return False
+    with _LINEAGE_LOCK:
+        if session_id in _PARENTS or _PLATFORMS.get(session_id) not in HUMAN_PLATFORMS:
+            return False
+    return held_reason(session_id) is None
+
+
+def note_ask(session_id: Any, platform: Any, reply: Any) -> int:
+    """Open a draft: the reply the agent sent the resident asked the one ask.
+    Records the spans' hashes, when, and the session and platform. Returns how
+    many spans were opened (0: nothing written). Best effort: a failure opens
+    nothing, so a later silence capture is held (fail closed)."""
+    sid = str(session_id or "").strip()
+    if not _speaking_root(sid, platform):
+        return 0
+    candidates = draft_candidates(reply)
+    if not candidates:
+        return 0
+    entry = {
+        "hashes": [draft_hash(c) for c in candidates],
+        "shown_at": _iso(float(_clock())),
+        "session_id": sid,
+        "platform": _PLATFORMS.get(sid) or "",
+    }
+    try:
+        with _DraftsLocked():
+            drafts = _load_drafts_locked()
+            drafts.append(entry)
+            _save_drafts_locked(drafts[-MAX_OPEN_DRAFTS:])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("av-events: record_intention draft_write_failed=%s", type(exc).__name__)
+        return 0
+    return len(candidates)
+
+
+def close_open_drafts(session_id: Any) -> None:
+    """A turn from anyone but a cron run: whatever the resident said (a yes, an
+    edit, a no, something else), the silence is over, so every open ask is
+    closed and a later cron capture of its words is held. Fail closed: a
+    session of unknown lineage closes them too."""
+    try:
+        if held_reason(str(session_id or "").strip()) == "cron":
+            return
+    except Exception:  # noqa: BLE001 - unsure closes
+        pass
+    if not os.path.exists(drafts_path()):
+        return
+    try:
+        with _DraftsLocked():
+            if _load_drafts_locked():
+                _save_drafts_locked([])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("av-events: record_intention draft_close_failed=%s", type(exc).__name__)
+
+
+def take_open_draft(text: str) -> Optional[str]:
+    """The `shown_at` of an open ask whose spans include these exact bytes and
+    that was shown within `SILENCE_PUBLISH_WINDOW_HOURS`, closing every ask that
+    holds them (once only) before the caller publishes; else None. The close
+    must be saved for the pass: a write that fails passes nothing."""
+    wanted = draft_hash(text)
+    try:
+        with _DraftsLocked():
+            drafts = _load_drafts_locked()
+            matching = [d for d in drafts if wanted in d["hashes"]]
+            if not matching:
+                return None
+            now = float(_clock())
+            window = SILENCE_PUBLISH_WINDOW_HOURS * 3600.0
+            # Loaded entries all have a parseable `shown_at`. A future one (a clock
+            # set back) is not fresh.
+            fresh = [d for d in matching if 0.0 <= now - float(_epoch(d["shown_at"]) or 0.0) <= window]
+            if not fresh:
+                return None
+            _save_drafts_locked([d for d in drafts if wanted not in d["hashes"]])
+            return max(d["shown_at"] for d in fresh)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("av-events: record_intention draft_read_failed=%s", type(exc).__name__)
+        return None
+
+
+def _on_post_llm_call(**kwargs: Any) -> None:
+    note_ask(kwargs.get("session_id"), kwargs.get("platform"), kwargs.get("assistant_response"))
+
+
+def _on_pre_llm_call(**kwargs: Any) -> None:
+    close_open_drafts(kwargs.get("session_id"))
+
+
+#: DATA-411: the open-draft listeners, registered with the tool, outside the
+#: collector's guard like the lineage ones. They return nothing (a
+#: `pre_llm_call` return would be injected into the prompt).
+DRAFT_HOOKS: dict[str, Callable[..., None]] = {
+    "pre_llm_call": _listener(_on_pre_llm_call),
+    "post_llm_call": _listener(_on_post_llm_call),
+}
+
+
 # ---- Actions --------------------------------------------------------------
 
 
@@ -1237,9 +1597,21 @@ def _capture(args: dict, held: Optional[str]) -> dict:
             return _refuse("publish_invalid")
         publish = parsed
     norm = held_norm_hash(text)
+    shown_at: Optional[str] = None
+    if publish and held == "cron" and held_code == "held_cron" and confirmed == "silence":
+        # DATA-411: the one pass through R10. A cron send's silence capture of
+        # the exact words an open ask showed the resident, within the window,
+        # publishes as stated; the ask is closed first, so it passes once.
+        # Anything else from cron stays held_cron as above.
+        shown_at = take_open_draft(text)
+        if shown_at is not None:
+            held_code = None
+            source = "message"
 
     # `action` tells the observer what was done when the call left it to the default.
     result: dict[str, Any] = {"success": True, "action": "capture", "source": source}
+    if shown_at is not None:
+        result.update(publish_via=PUBLISH_VIA_OPEN_DRAFT, draft_shown_at=shown_at)
     if confirmed is not None:
         # Kept when the capture is held as ambient (held_cron, held_unknown,
         # held_silence), so the event says what the agent passed. publish=false
@@ -1728,6 +2100,10 @@ def make_handler() -> Callable[..., str]:
                     # Lane B: a code, only on the approval path.
                     line += " approval=%s"
                     fields.append(result["approval_state"])
+                if result.get("publish_via"):
+                    # DATA-411: a silence capture published from an open draft.
+                    line += " via=%s"
+                    fields.append(result["publish_via"])
                 logger.info(line, *fields)
             else:
                 logger.info("av-events: record_intention action=%s refused=%s", label, result.get("error"))
@@ -1770,6 +2146,13 @@ def register_record_intention_tool(ctx: Any, emit: Optional[Callable[..., None]]
                 register_hook(name, callback)
             except Exception:  # noqa: BLE001 - a missing listener only holds more as ambient
                 continue
+        try:
+            # DATA-411: the closer first; without it the opener is never
+            # registered, so a draft the resident answered cannot stay open.
+            register_hook("pre_llm_call", DRAFT_HOOKS["pre_llm_call"])
+            register_hook("post_llm_call", DRAFT_HOOKS["post_llm_call"])
+        except Exception:  # noqa: BLE001 - nothing opens: a silence capture from cron stays held
+            pass
     try:
         ia = _ia()
         ia.set_emitter(emit)
@@ -1788,6 +2171,7 @@ __all__ = [
     "CREATE_PATH",
     "DEFAULT_API_URL",
     "DEFAULT_RATE_CAP",
+    "DRAFT_HOOKS",
     "INDEX_DEADLINE_S",
     "INDEX_TIMEOUT_S",
     "LINEAGE_HOOKS",
@@ -1797,6 +2181,7 @@ __all__ = [
     "SOURCE_SHORT",
     "RATE_CAP_ENV",
     "REFUSALS",
+    "SILENCE_PUBLISH_WINDOW_HOURS",
     "SOURCES",
     "SOURCE_TYPE",
     "SWITCH",
@@ -1807,16 +2192,21 @@ __all__ = [
     "UPDATE_PATH",
     "lookup",
     "api_origin",
+    "close_open_drafts",
+    "draft_candidates",
+    "drafts_path",
     "held_reason",
     "index_request",
     "make_handler",
     "map_path",
     "mirror_update",
+    "note_ask",
     "publish_intent",
     "record_intention_answer",
     "register_record_intention_tool",
     "reserve_publish",
     "status_code",
     "switch_on",
+    "take_open_draft",
     "url_allowed",
 ]

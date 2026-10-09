@@ -698,6 +698,10 @@ def _intention_payload(call: IntentionCall, capture: str, parent_session_id: Opt
         payload["approval_state"] = call.approval_state
     if call.confirmed_in_chat is not None:
         payload["confirmed_in_chat"] = call.confirmed_in_chat
+    # DATA-411: only on a silence capture published from an open draft.
+    if call.publish_via is not None:
+        payload["publish_via"] = call.publish_via
+        payload["draft_shown_at"] = call.draft_shown_at
     if capture != "metadata":
         payload["text_length"] = len(call.text) if call.text else None
         payload["summary_length"] = len(call.summary) if call.summary else None

@@ -180,6 +180,12 @@ LOCAL_REASONS = frozenset({"participant_asked", "personal"})
 #: capture is held for their tap on the card), `standing` (a go-ahead without asking).
 CHAT_CONFIRMATIONS = ("yes", "silence", "standing")
 
+#: `publish_via` on a `record_intention` capture (DATA-411): `open_draft` when a
+#: cron send's silence capture matched the exact draft an open ask showed the
+#: resident, with that ask's `draft_shown_at` (UTC, second precision).
+PUBLISH_VIAS = frozenset({"open_draft"})
+_SHOWN_AT = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
 #: `publish_refused`: a code, never text. Anything else is dropped to null.
 _CODE_PATTERN = re.compile(r"^[a-z0-9_]{1,64}$")
 
@@ -216,6 +222,8 @@ class IntentionCall:
         "approved_by",
         "approval_state",
         "confirmed_in_chat",
+        "publish_via",
+        "draft_shown_at",
     )
 
     def __init__(
@@ -236,6 +244,8 @@ class IntentionCall:
         approved_by: Optional[str] = None,
         approval_state: Optional[str] = None,
         confirmed_in_chat: Optional[str] = None,
+        publish_via: Optional[str] = None,
+        draft_shown_at: Optional[str] = None,
     ) -> None:
         self.event_type = event_type
         self.intention_id = intention_id
@@ -259,6 +269,10 @@ class IntentionCall:
         #: the agent's words in chat (`CHAT_CONFIRMATIONS`), on a stated
         #: `message` capture. The tool decided it; null everywhere else.
         self.confirmed_in_chat = confirmed_in_chat
+        #: DATA-411, `record_intention` captures only: `open_draft` and the
+        #: ask's time when a silence capture published from an open draft.
+        self.publish_via = publish_via
+        self.draft_shown_at = draft_shown_at
 
 
 # --------------------------------------------------------------------------
@@ -697,6 +711,17 @@ def plan_record(
     confirmed_in_chat = _result_code(payload_r, outer_r, "confirmed_in_chat")
     if confirmed_in_chat not in CHAT_CONFIRMATIONS or event_type != "intention.captured":
         confirmed_in_chat = None
+    # DATA-411: the same, read from the result only, on a capture only.
+    publish_via = _result_code(payload_r, outer_r, "publish_via")
+    draft_shown_at = None
+    if publish_via not in PUBLISH_VIAS or event_type != "intention.captured":
+        publish_via = None
+    else:
+        present, value = _result_has(payload_r, "draft_shown_at")
+        if not present:
+            present, value = _result_has(outer_r, "draft_shown_at")
+        if isinstance(value, str) and _SHOWN_AT.fullmatch(value):
+            draft_shown_at = value
 
     text = _text(args.get("text")) or _text(args.get("description"))
     summary = _text(args.get("summary"))
@@ -719,6 +744,8 @@ def plan_record(
             approved_by=approved_by,
             approval_state=approval_state,
             confirmed_in_chat=confirmed_in_chat,
+            publish_via=publish_via,
+            draft_shown_at=draft_shown_at,
         )
     ]
 
