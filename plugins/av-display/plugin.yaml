@@ -1,0 +1,5 @@
+name: av-display
+version: 0.1.0
+description: "Telegram tool-progress lines name the tool, never the command (RC28). At register() it extends two display tables in Hermes's agent.display: _TOOL_VERBS gains a verb for the Village's own tools (Index, recall, av-events), and _TOOL_VERBS_NO_PREVIEW gains the built-ins whose argument preview is a command, a file or a memory (terminal, execute_code, read_file, write_file, patch, search_files, memory, todo_list, delegate_task, cronjob_manage) and those Village tools. web_search and web_extract keep their query or URL. Nothing else is patched; tool execution is untouched. A Hermes without either table is left alone. Silent: no tools, no hooks, no messages."
+author: Edge City
+kind: backend

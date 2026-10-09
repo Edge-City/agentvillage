@@ -66,6 +66,7 @@ import {
   setTerminalCwd,
 } from "./config";
 import { configureTelegramDisplay } from "./display_defaults";
+import { configureAvDisplay } from "./av_display";
 import { copySkillBundles, removeRetiredSkillDirs } from "./skill_copy";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
 import {
@@ -268,6 +269,7 @@ function main(): void {
   configureDashboardAuth();
   configureAvEvents();
   configureIndexLinks();
+  configureAvDisplay();
   // Opt-in and off the core path: a failure here is counted, never fatal.
   safeInstallRecall(SOURCE_SKILLS);
 
