@@ -28,13 +28,14 @@ Timestamps below record the last indexed content change, not the latest successf
 | [Meet the Inflection Fellowship cohort at Edge City India 2026](./newsletter/meet-the-inflection-fellowship-cohort.md) | newsletter | 2026-09-28T15:16:08.000Z | 2026-09-30T21:15:43.517Z | Current source |
 | [Programming Preview for Edge City India](./newsletter/programming-preview-for-edge-city.md) | newsletter | 2026-09-14T14:07:58.000Z | 2026-09-30T21:31:09.778Z | Current source |
 | [The Community Calendar](./newsletter/the-community-calendar.md) | newsletter | 2026-10-08T09:55:33.000Z | 2026-10-08T09:58:22.660Z | Current source |
+| [The First Three Days at Edge City India](./newsletter/the-first-three-days-at-edge-city.md) | newsletter | 2026-10-09T08:38:38.000Z | 2026-10-09T08:43:19.724Z | Current source |
 | [Announcing the Ground Floor Residency](./newsletter/the-future-arrives-locally.md) | newsletter | 2026-08-11T14:49:45.000Z | 2026-09-30T21:15:43.517Z | Current source |
 | [The Road to Edge: Backroad Farm Caravan Experience](./newsletter/the-road-to-edge-backroad-farm-caravan.md) | newsletter | 2026-08-17T18:19:14.000Z | 2026-09-30T21:31:09.778Z | Current source |
-| [Tickets for Edge City India 2026](./newsletter/tickets-for-edge-city-india-2026.md) | newsletter | 2026-07-24T18:09:13.000Z | 2026-10-06T11:28:24.122Z | Current source |
+| [Tickets for Edge City India 2026](./newsletter/tickets-for-edge-city-india-2026.md) | newsletter | — | 2026-10-09T08:43:19.724Z | Current source |
 | [Volunteer at Edge City India 2026](./newsletter/volunteer-at-edge-city-india-2026.md) | newsletter | 2026-07-29T22:27:41.000Z | 2026-10-05T13:50:57.008Z | Current source |
 | [Welcome to Edge City India](./newsletter/welcome-to-edge-city-india.md) | newsletter | — | 2026-10-08T09:58:22.660Z | Current source |
 | [Announcing the Community Builders Residency   Blog   Edge City](./residencies/community-builders.md) | website | — | 2026-10-05T13:50:57.008Z | Current source |
 | [Creative Residency Edge City: Modern Renaissance   Blog   Edge City](./residencies/creator-residency.md) | website | — | 2026-10-05T13:50:57.008Z | Current source |
 | [Edge City India 2026](./website-content.md) | website | — | 2026-10-08T19:43:20.805Z | Current source |
 | [About   Edge City](./website/about.md) | website | — | 2026-09-30T21:28:06.827Z | Current source |
-| [Edge City India 2026 Wiki](./wiki-content.md) | wiki | — | 2026-10-08T18:28:19.577Z | Current source |
+| [Edge City India 2026 Wiki](./wiki-content.md) | wiki | — | 2026-10-09T07:13:19.143Z | Current source |
