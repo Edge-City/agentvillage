@@ -27,13 +27,14 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-/** The agent jobs a settings entry can name: the five default jobs, then the three template jobs. */
+/** The agent jobs a settings entry can name: the six default jobs, then the three template jobs. */
 export const SETTINGS_JOB_KEYS = [
   "brief",
   "drop-midday",
   "drop-evening",
   "negotiation",
   "evening",
+  "pending",
   "tpl-brief",
   "tpl-digest-preview",
   "tpl-evening-ask",
@@ -61,10 +62,15 @@ export interface DeliveryWindow {
   end: number;
 }
 
-/** rc13's brief window, 05:00 to 11:00 village time; the brief template inherits it. No other job has one. */
+/**
+ * rc13's brief window, 05:00 to 11:00 village time; the brief template
+ * inherits it. DATA-430: the hourly pending alert's quiet hours, delivering
+ * 08:00 to 22:00 village time. No other job has one.
+ */
 export const DEFAULT_WINDOWS: Partial<Record<JobKey, DeliveryWindow>> = {
   brief: { start: 5 * 60, end: 11 * 60 },
   "tpl-brief": { start: 5 * 60, end: 11 * 60 },
+  pending: { start: 8 * 60, end: 22 * 60 },
 };
 
 /** A larger settings file is refused whole. */
@@ -474,7 +480,7 @@ export function readJobSettings(home: string): SettingsRead {
   return { status: "ok", jobs: raw.jobs, ...admin };
 }
 
-/** Whether a key is one of the five default jobs (the ones reconcile's legacy schedule migration can move). */
+/** Whether a key is one of the six default jobs (the ones reconcile's legacy schedule migration can move). */
 export function isDefaultJobKey(value: unknown): value is JobKey {
   return isJobKey(value) && !value.startsWith("tpl-");
 }

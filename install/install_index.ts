@@ -9,14 +9,17 @@
  *     negotiation summary (`Edge — negotiation summary`, ~14:00), evening
  *     questions (`Edge — evening questions`, ~19:00), and two
  *     single-opportunity drops (`Edge — opportunity drop (midday)`, ~12:00 and
- *     `Edge — opportunity drop (evening)`, ~17:00) — all in Hermes's zone (village time: configureVillageTimezone); times
+ *     `Edge — opportunity drop (evening)`, ~17:00), and the hourly pending
+ *     opportunity alert (`Edge — pending opportunity`, ~:20 past every hour,
+ *     DATA-430) — all in Hermes's zone (village time: configureVillageTimezone); times
  *     overridable via --digest-signals-cron /
  *     --digest-prepare-cron / --digest-send-cron / --negotiation-summary-cron /
  *     --evening-questions-cron / --opportunity-drop-midday-cron /
- *     --opportunity-drop-evening-cron (or
+ *     --opportunity-drop-evening-cron / --pending-alert-cron (or
  *     DIGEST_SIGNALS_CRON / DIGEST_PREPARE_CRON / DIGEST_SEND_CRON /
  *     NEGOTIATION_SUMMARY_CRON / EVENING_QUESTIONS_CRON /
- *     OPPORTUNITY_DROP_MIDDAY_CRON / OPPORTUNITY_DROP_EVENING_CRON). To
+ *     OPPORTUNITY_DROP_MIDDAY_CRON / OPPORTUNITY_DROP_EVENING_CRON /
+ *     PENDING_ALERT_CRON). To
  *     avoid the whole fleet hitting the LLM provider in the same minute
  *     (OpenRouter caps gemini-flash at 300 req/min account-wide), each tenant
  *     gets a deterministic minute offset derived from its INDEX_API_KEY:
@@ -24,7 +27,7 @@
  *     01:00–01:49, prepare over 02:00–02:49, send over 08:00–08:24,
  *     negotiation summary over 14:00–14:24, and evening questions over
  *     19:00–19:24. Opportunity drops spread over 12:00–12:24 and
- *     17:00–17:24.
+ *     17:00–17:24; the pending alert over :20–:29 of every hour.
  *     K1: the Edge India knowledge sync (`Edge — knowledge sync`, every 30
  *     minutes, a per-tenant offset in the first 30; no_agent, no delivery;
  *     --knowledge-sync-cron / KNOWLEDGE_SYNC_CRON) copies the snapshot named
@@ -40,8 +43,9 @@
  *     staggered slot in a separate edit (user-customized schedules are never
  *     touched).
  *
- * DATA-314 (brief-lite): the six proactive jobs (digest prepare, daily digest,
- * negotiation summary, evening questions, the two opportunity drops) are
+ * DATA-314 (brief-lite): the seven proactive jobs (digest prepare, daily digest,
+ * negotiation summary, evening questions, the two opportunity drops, and
+ * DATA-430's hourly pending alert) are
  * triggered by a pre-run script, the one shim
  * `skills/index-network/scripts/shims/agentvillage_proactive.sh` copied to
  * `$HERMES_HOME/scripts/agentvillage_proactive_<action>.sh`, which runs
@@ -397,6 +401,20 @@ export const DIGEST_CRON_SPECS: DigestCronSpec[] = [
     overrideEnv: "OPPORTUNITY_DROP_EVENING_CRON",
   },
   {
+    // DATA-430: hourly, so an opportunity that turns pending is told within
+    // the hour; its delivery window (job-settings.ts, 08:00 to 22:00 by
+    // default) keeps it quiet at night, and its per-card ledger
+    // (pending-alert.ts) is its only gate: no once-a-day mark.
+    schedule: "20 * * * *",
+    staggerWindowMinutes: 10,
+    promptFile: "index-network/prompts/pending-alert.md",
+    ...proactiveScript("pending"),
+    name: "Edge — pending opportunity",
+    deliver: true,
+    overrideFlag: "--pending-alert-cron",
+    overrideEnv: "PENDING_ALERT_CRON",
+  },
+  {
     schedule: "0 9 * * *",
     staggerWindowMinutes: 50,
     scriptFile: "token-usage-audit/scripts/audit_token_usage.py",
@@ -490,12 +508,17 @@ export function fnv1a(input: string): number {
 /**
  * Per-tenant staggered schedule: replace the minute field of the spec default
  * with a deterministic offset in [0, staggerWindowMinutes) derived from a
- * stable tenant seed. Spreads the fleet so simultaneous digest runs don't
- * blow through the shared OpenRouter per-model rate limit.
+ * stable tenant seed, counted from the default's own minute when that is a
+ * plain number whose window stays inside the hour (DATA-430: `20 * * * *`
+ * spreads over :20 to :29; every `0 ...` default is unchanged). Spreads the
+ * fleet so simultaneous digest runs don't blow through the shared OpenRouter
+ * per-model rate limit.
  */
 export function staggeredSchedule(spec: DigestCronSpec, seed: string): string {
   const fields = spec.schedule.trim().split(/\s+/);
-  const minute = fnv1a(`${seed}:${spec.name}`) % Math.max(1, spec.staggerWindowMinutes);
+  const window = Math.max(1, spec.staggerWindowMinutes);
+  const base = /^\d+$/.test(fields[0]) && Number(fields[0]) + window <= 60 ? Number(fields[0]) : 0;
+  const minute = base + (fnv1a(`${seed}:${spec.name}`) % window);
   // An every-N-minutes default (`*/30`, `*/15`; N divides 60) keeps its rate:
   // the offset minute and every N after it within the hour.
   const step = /^\*\/(\d+)$/.exec(fields[0]);

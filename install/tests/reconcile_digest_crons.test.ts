@@ -19,7 +19,7 @@ import { cronFailedLine, installStatusPath, writeInstallStatus } from "../instal
 import YAML from "yaml";
 
 const SEED = "ix_integration_seed";
-const [SIGNALS, PREPARE, SEND, NEGOTIATION, EVENING, DROP_MIDDAY, DROP_EVENING, TOKEN_AUDIT, KNOWLEDGE] = DIGEST_CRON_SPECS;
+const [SIGNALS, PREPARE, SEND, NEGOTIATION, EVENING, DROP_MIDDAY, DROP_EVENING, PENDING, TOKEN_AUDIT, KNOWLEDGE] = DIGEST_CRON_SPECS;
 // The retired "Edge — heartbeat" cron name — used to assert it is torn down.
 const RETIRED_HEARTBEAT_NAME = "Edge — heartbeat";
 const RETIRED_PLAZA_SELFIE_NAME = "Edge — Agent Plaza selfie";
@@ -31,6 +31,7 @@ const PROMPT_BODIES = new Map([
   [EVENING.promptFile, "EVENING_BODY"],
   // Both opportunity-drop crons share one prompt file.
   [DROP_MIDDAY.promptFile, "DROP_BODY"],
+  [PENDING.promptFile, "PENDING_BODY"],
 ]);
 
 let home: string;
@@ -170,6 +171,18 @@ test("fresh install creates digest crons (no heartbeat or Plaza selfie) on their
   const negotiation = creates.find((argv) => argv.includes(NEGOTIATION.name))!;
   const evening = creates.find((argv) => argv.includes(EVENING.name))!;
   const audit = creates.find((argv) => argv.includes(TOKEN_AUDIT.name))!;
+  // DATA-430: the hourly pending alert, staggered over :20 to :29, delivered, failures local.
+  const pending = creates.find((argv) => argv.includes(PENDING.name))!;
+  expect(PENDING.name).toBe("Edge — pending opportunity");
+  expect(pending[2]).toBe(staggeredSchedule(PENDING, SEED));
+  expect(Number(pending[2].split(" ")[0])).toBeGreaterThanOrEqual(20);
+  expect(Number(pending[2].split(" ")[0])).toBeLessThan(30);
+  expect(pending[3]).toBe("PENDING_BODY");
+  expect(pending).toContain("agentvillage_proactive_pending.sh");
+  expect(pending).toContain("--deliver");
+  expect(pending).not.toContain("--no-agent");
+  expect(pending[pending.indexOf("--failure-deliver") + 1]).toBe("local");
+  expect(readFileSync(join(home, "scripts", "agentvillage_proactive_pending.sh"), "utf8")).toContain("wakeAgent");
   expect(signals[2]).toBe(staggeredSchedule(SIGNALS, SEED));
   expect(signals[3]).toBe("SIGNALS_BODY");
   expect(signals).toContain("--script");
@@ -219,6 +232,7 @@ test("an existing Edge — heartbeat cron is retired on reconcile", () => {
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
+    currentJob(PENDING, "pa1"),
     currentJob(TOKEN_AUDIT, "a1"),
     currentJob(KNOWLEDGE, "k1"),
   ]);
@@ -238,6 +252,7 @@ test("an existing Edge — Agent Plaza selfie cron is retired on reconcile", () 
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
+    currentJob(PENDING, "pa1"),
     currentJob(TOKEN_AUDIT, "a1"),
     currentJob(KNOWLEDGE, "k1"),
   ]);
@@ -256,6 +271,7 @@ test("jobs still on old synchronized defaults get schedule-only migrations", () 
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
+    currentJob(PENDING, "pa1"),
     currentJob(TOKEN_AUDIT, "a1"),
     currentJob(KNOWLEDGE, "k1"),
   ]);
@@ -280,6 +296,7 @@ test("custom schedule is preserved; stale prompt gets a prompt-only edit", () =>
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
+    currentJob(PENDING, "pa1"),
     currentJob(TOKEN_AUDIT, "a1"),
     currentJob(KNOWLEDGE, "k1"),
   ]);
@@ -300,6 +317,7 @@ test("memory signal sync cron gets its script back in place when its script path
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
+    currentJob(PENDING, "pa1"),
     currentJob(TOKEN_AUDIT, "a1"),
     currentJob(KNOWLEDGE, "k1"),
   ]);
@@ -318,6 +336,7 @@ test("stale prompt + old default schedule produce two independent edit calls", (
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
+    currentJob(PENDING, "pa1"),
     currentJob(TOKEN_AUDIT, "a1"),
     currentJob(KNOWLEDGE, "k1"),
   ]);
@@ -340,6 +359,7 @@ test("up-to-date jobs (staggered schedule + current prompt) trigger no cron call
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
+    currentJob(PENDING, "pa1"),
     currentJob(TOKEN_AUDIT, "a1"),
     currentJob(KNOWLEDGE, "k1"),
   ]);
@@ -360,6 +380,7 @@ test("retired Edge-prefixed crons are removed; foreign crons are untouched", () 
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
+    currentJob(PENDING, "pa1"),
     currentJob(TOKEN_AUDIT, "a1"),
     currentJob(KNOWLEDGE, "k1"),
   ]);
@@ -380,6 +401,7 @@ test("token usage audit cron is removed when opted out", () => {
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
+    currentJob(PENDING, "pa1"),
     currentJob(TOKEN_AUDIT, "a1"),
     currentJob(KNOWLEDGE, "k1"),
   ]);
@@ -400,6 +422,7 @@ test("token usage audit cron is removed when no explicit schedule opts in", () =
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
+    currentJob(PENDING, "pa1"),
     currentJob(TOKEN_AUDIT, "a1"),
     currentJob(KNOWLEDGE, "k1"),
   ]);
@@ -418,6 +441,7 @@ test("token usage audit cron gets its script back in place when its script path 
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
+    currentJob(PENDING, "pa1"),
     {
       ...currentJob(TOKEN_AUDIT, "a1"),
       script: join(home, "skills", "token-usage-audit/scripts/old_audit.py"),
@@ -440,6 +464,7 @@ test("a Hermes that rejects --schedule still gets the prompt update (degraded mi
     currentJob(EVENING, "e1"),
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
+    currentJob(PENDING, "pa1"),
     currentJob(TOKEN_AUDIT, "a1"),
     currentJob(KNOWLEDGE, "k1"),
   ]);
@@ -540,6 +565,7 @@ test("an upgrade roll from the pre-DATA-314 jobs is one in-place edit per job: n
     oldShapeJob(EVENING, "e1", "EVENING_OLD"),
     oldShapeJob(DROP_MIDDAY, "dm1", "DROP_OLD"),
     oldShapeJob(DROP_EVENING, "de1", "DROP_OLD"),
+    oldShapeJob(PENDING, "pa1", "PENDING_OLD"),
     { ...currentJob(TOKEN_AUDIT, "a1"), failure_deliver: undefined },
     currentJob(KNOWLEDGE, "k1"),
   ]);
@@ -555,6 +581,7 @@ test("an upgrade roll from the pre-DATA-314 jobs is one in-place edit per job: n
     shape("e1", "EVENING_BODY", "evening"),
     shape("dm1", "DROP_BODY", "drop-midday"),
     shape("de1", "DROP_BODY", "drop-evening"),
+    shape("pa1", "PENDING_BODY", "pending"),
     ["cron", "edit", "a1", "--failure-deliver", "local"],
     // The prefetch last: edited before the brief, a cut-short roll would leave no brief (B1-fix F9).
     [...shape("p1", PREFETCH_PROMPT, "prefetch").slice(0, 7), "--no-agent", "--failure-deliver", "local"],
@@ -584,6 +611,7 @@ test("F9: one failed edit: every other job is still attempted, the prefetch afte
     oldShapeJob(EVENING, "e1", "EVENING_OLD"),
     oldShapeJob(DROP_MIDDAY, "dm1", "DROP_OLD"),
     oldShapeJob(DROP_EVENING, "de1", "DROP_OLD"),
+    currentJob(PENDING, "pa1"),
     currentJob(TOKEN_AUDIT, "a1"),
     currentJob(KNOWLEDGE, "k1"),
   ]);
@@ -629,6 +657,7 @@ test("F9: the standalone reconcile exits non-zero after attempting every job whe
     oldShapeJob(EVENING, "e1", "EVENING_OLD"),
     currentJob(DROP_MIDDAY, "dm1"),
     currentJob(DROP_EVENING, "de1"),
+    currentJob(PENDING, "pa1"),
     currentJob(TOKEN_AUDIT, "a1"),
     currentJob(KNOWLEDGE, "k1"),
   ]);
@@ -751,6 +780,8 @@ test("DATA-361: after the prompts and the gate moved to skills/index-network, an
     "index-network/prompts/memory-signals.md",
     "index-network/prompts/negotiation-summary.md",
     "index-network/prompts/opportunity-drop.md",
+    // DATA-430: new since the move; it never lived under edge-esmeralda (the copy there is harmless).
+    "index-network/prompts/pending-alert.md",
     "index-network/scripts/memory_signal_gate.py",
   ]);
   for (const file of moved) {
