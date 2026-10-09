@@ -1486,6 +1486,24 @@ def _approval_on() -> Optional[bool]:
 
 
 _NO_OTHER_WAY = "Do not publish it another way."
+#: index-links never sees this tool's result, so a published call names the
+#: portal page. Without it the agent builds https://index.network/i/<id>.
+_PORTAL_INTENT = "https://agents.edgecity.live/intents?intent="
+
+
+def _attach_intent_link(result: dict) -> dict:
+    """Name the portal page when this call left the intent on Index."""
+    if result.get("published") is not True:
+        return result
+    index_id = result.get("index_intent_id")
+    if not valid_id(index_id):
+        return result
+    link = _PORTAL_INTENT + index_id
+    result["url"] = link
+    message = result.get("message")
+    if isinstance(message, str) and link not in message:
+        result["message"] = message + " Link it as " + link + "."
+    return result
 
 
 def _advance_inline(intention_id: str, cls: str):
@@ -1830,14 +1848,14 @@ def record_intention_answer(args: Any, session_id: Optional[str]) -> dict:
         if not _approval_on():
             return _refuse("confirmation_not_wired" if os.environ.get("AV_APPROVAL_URL", "").strip()
                            else "no_confirmation_channel")
-        return _confirm(safe)
+        return _attach_intent_link(_confirm(safe))
     try:
         held = held_reason(session_id)
     except Exception:  # noqa: BLE001 - unsure is held
         held = "unknown"
     if action == "capture":
-        return _capture(safe, held)
-    return _update_or_withdraw(action, safe, held)
+        return _attach_intent_link(_capture(safe, held))
+    return _attach_intent_link(_update_or_withdraw(action, safe, held))
 
 
 def make_handler() -> Callable[..., str]:

@@ -357,6 +357,8 @@ def test_publish_returns_index_id(tctx, index):
     assert out["intention_id"] == INDEX_ID
     assert out["index_intent_id"] == INDEX_ID
     assert out["published"] is True
+    assert out["url"] == f"https://agents.edgecity.live/intents?intent={INDEX_ID}"
+    assert out["url"] in out["message"]
     assert "publish_refused" not in out and "local_reason" not in out
 
 
