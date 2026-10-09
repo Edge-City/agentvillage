@@ -16,8 +16,9 @@ The rule here: remind only when the file parses to an object whose `started`
 is exactly `false`, whose `button` is exactly `"sent"`, and whose `at` is a
 timezone-aware ISO time under `WINDOW_S` old (a time more than
 `FUTURE_SKEW_S` ahead of this clock is no reminder). Anything else (missing,
-unreadable, too large, not JSON, wrong types, `started:true`) is no reminder,
-and nothing here raises. This module never writes the file.
+unreadable, too large, not JSON, nested too deep to parse, wrong types,
+`started:true`) is no reminder, and nothing here raises. This module never
+writes the file.
 
 Once per session: an in-process, bounded set of session ids. A gateway restart
 inside the window may remind once more in a session; the window bounds that.
@@ -43,10 +44,18 @@ from ._core import hermes_home
 #: The control plane's file, relative to `$HERMES_HOME`.
 PAIRING_FILE = os.path.join("memory", "approvals-pairing.json")
 
-#: The instruction appended to the resident's message, for that turn only
-#: (`pre_llm_call` context; Hermes v2026.9.24 `agent/turn_context.py:745-797`).
+#: The `pre_llm_call` context Hermes appends to the resident's message on the
+#: reminding turn (v2026.9.24 `agent/turn_context.py:745-797`). It does not stay
+#: in that turn: Hermes stamps the sent bytes into the user row's `api_content`
+#: (`turn_context.py:884-922`), persists them to SessionDB
+#: (`agent/session_persistence.py:194-198`) and replays them on every later turn
+#: of the session to keep the prompt cache byte-stable (`turn_context.py:1255-1262`);
+#: a compaction summary may carry it further. It is appended raw, with no label
+#: (`compose_user_api_content`), so the text labels itself as a note that is not
+#: the resident's words, and scopes the instruction to the one reply.
 REMINDER = (
-    "At the end of this reply add one line: "
+    "[Agent Village note, not from the resident] "
+    "In this reply only, add one line at the end: "
     "One more step: tap Connect approvals above to finish setting up approvals."
 )
 
@@ -68,8 +77,9 @@ def pairing_path(home: Optional[str] = None) -> str:
 
 
 def read_pairing(path: str) -> Any:
-    """The parsed file, or None when it is missing, not a regular file, too
-    large, unreadable or not JSON. Never raises."""
+    """The parsed file, or None when it is missing, not a regular file (a FIFO
+    is opened non-blocking, so it never waits for a writer), too large,
+    unreadable, not JSON or nested too deep to parse. Never raises."""
     try:
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
         fd = os.open(path, flags)
@@ -82,7 +92,7 @@ def read_pairing(path: str) -> Any:
         if len(raw) > MAX_FILE_BYTES:
             return None
         return json.loads(raw.decode("utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
     finally:
         try:

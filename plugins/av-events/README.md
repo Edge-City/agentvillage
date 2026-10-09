@@ -47,7 +47,7 @@ plugins/av-events/
 | `AV_EVENTS_TOKEN` | *(unset)* | Per-tenant ingest token. **Unset or blank means the plugin idles**: hooks are registered, but no event is emitted or buffered and no flusher thread starts; memory backups still run when `AV_BACKUP_URL`, `AV_BACKUP_TOKEN` and the tenant id are set (the control plane sets them only while village consent is in force and `BACKUP_WRITE_MASTER` is configured). |
 | `AV_EVENTS_URL` | *(unset)* | Ingest base URL. Events are POSTed to `{AV_EVENTS_URL}/v1/events`; the `consent_status` tool GETs `{AV_EVENTS_URL}/v1/consent`. Empty with a token set is **null-sink mode** (see below). |
 | `AV_EVENTS_ENABLED` | `1` | Any of `0`, `false`, `no`, `off` (case-insensitive, whitespace ignored) disables everything. Re-read at every session boundary, and by the flusher before every pass. |
-| `AV_HOOKS_DISABLED` | *(empty)* | Comma-separated hook names to disable individually, e.g. `pre_tool_call,post_tool_call`. Matched case-insensitively, whitespace stripped. Four names are not hooks: `memory_recalled` (the bus subscription), `cron_run` (the cron tail), `consent_status` (the tool, which then answers "could not check") and `outcome_ask` (the evening outcome ask: arming, answers and its pass). |
+| `AV_HOOKS_DISABLED` | *(empty)* | Comma-separated hook names to disable individually, e.g. `pre_tool_call,post_tool_call`. Matched case-insensitively, whitespace stripped. Five names are not hooks: `memory_recalled` (the bus subscription), `cron_run` (the cron tail), `consent_status` (the tool, which then answers "could not check"), `outcome_ask` (the evening outcome ask: arming, answers and its pass) and `approvals_reminder` (the DATA-444 Connect-approvals reminder, which `AV_EVENTS_ENABLED=0` does not stop). |
 | `AV_TERMINAL_ARGS_FIX` | `1` | Any of `0`, `false`, `no`, `off` turns off the foreground `terminal` argument fix (see "Foreground `terminal` calls (DATA-312)"). **Process environment only**, read on every `pre_tool_call`; a `.env` line reaches it through Hermes's own load at gateway start. Independent of every telemetry switch. |
 | `AV_CAPTURE` | `sanitized` | `metadata` \| `sanitized` \| `full`. An unrecognised value falls back to `sanitized`. |
 | `TENANT_ID`, `AV_TENANT_ID` | *(unset)* | The tenant id, used for one thing only: `cron.run`'s derived event id (spec §4.3). `TENANT_ID` is what the control plane already sets for `dashboard-auth-edgecity`; `AV_TENANT_ID` overrides it. Unset means `cron.run` gets a uuid v7 derived from the execution (see "Cron capture"). |
@@ -2048,12 +2048,20 @@ There is no generic abort; each call site interprets its own hook's returns.
   prompt — the hook exists precisely to keep the system prompt byte-stable for prompt caching
   (`plugins.py:5586`, `agent/turn_context.py:1408`).
   This plugin's only such return is the DATA-444 reminder (`with_approvals_reminder`,
-  `_approvals_reminder.py`): `{"context": "At the end of this reply add one line: One more step: tap
-  Connect approvals above to finish setting up approvals."}`, after any telemetry return, once per
-  root Telegram DM session (no cron, subagent, injected turn, group or other platform), and only while
-  the control plane's `memory/approvals-pairing.json` parses to `started` false, `button` `"sent"` and
-  an `at` under 30 minutes old (at most 5 minutes ahead); anything else, a read failure included, is
-  no reminder. Outside the telemetry guard and switches; the plugin never writes that file.
+  `_approvals_reminder.py`): `{"context": "[Agent Village note, not from the resident] In this reply
+  only, add one line at the end: One more step: tap Connect approvals above to finish setting up
+  approvals."}`, after any telemetry return, once per root Telegram DM session (no cron, subagent,
+  injected turn, group or other platform), and only while the control plane's
+  `memory/approvals-pairing.json` parses to `started` false, `button` `"sent"` and an `at` under 30
+  minutes old (at most 5 minutes ahead); anything else, a read failure included, is no reminder.
+  The text is not confined to that turn: Hermes stamps it into the user row's `api_content`, persists
+  it to SessionDB and replays it on every later turn of the session (prompt-cache parity,
+  `agent/turn_context.py:884-922,1255-1262`), appended raw with no label, so the text labels itself
+  as a note that is not the resident's words and scopes itself to that one reply. Outside the
+  telemetry guard and its switches (`AV_EVENTS_ENABLED=0` or `pre_llm_call` in `AV_HOOKS_DISABLED`
+  do not stop it); `approvals_reminder` in `AV_HOOKS_DISABLED` does, re-read at session boundaries.
+  Each reminder given logs one info line, `av-events: approvals_reminder given`, with nothing about
+  the session or the file. The plugin never writes that file.
 - `post_llm_call`, `pre_api_request`, `post_api_request`, `on_session_*`, `subagent_*` and
   `on_stream_*` are **pure observers**; their returns are discarded.
 - Mutating the outbound provider payload requires **middleware**, not a hook:

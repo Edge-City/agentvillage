@@ -1038,10 +1038,16 @@ def with_terminal_args_fix(telemetry: Callable) -> Callable:
     return pre_tool_call
 
 
+#: The name `AV_HOOKS_DISABLED` takes to turn off the DATA-444 reminder, read
+#: like the outcome ask's `OUTCOME_ASK_SWITCH` (re-read at session boundaries).
+APPROVALS_REMINDER_SWITCH = "approvals_reminder"
+
+
 def _approvals_reminder_for(kwargs: dict, collector: Optional[Collector]) -> Optional[str]:
     """DATA-444: the Connect-approvals reminder for this turn, or None.
 
-    Only a human's own message in the root session of their Telegram DM: the
+    None whenever `approvals_reminder` is in `AV_HOOKS_DISABLED`. Otherwise
+    only a human's own message in the root session of their Telegram DM: the
     outcome ask's gate (`_outcome_note_answer`) without its capture test. Never
     a cron run (`platform=cron`, a `cron_` id, or a cron ancestor), a subagent
     (`parent_session_id` from Hermes or `subagent_start`), a turn Hermes
@@ -1049,6 +1055,8 @@ def _approvals_reminder_for(kwargs: dict, collector: Optional[Collector]) -> Opt
     say. The platform must be Telegram both in this hook's payload and in what
     the collector saw, when it saw anything. Then `_approvals_reminder` reads
     the control plane's file and remembers the session."""
+    if collector is not None and APPROVALS_REMINDER_SWITCH in collector.config.disabled_hooks:
+        return None
     session_id = str(kwargs.get("session_id") or "").strip()
     if not session_id or session_id.startswith("cron_"):
         return None
@@ -1078,24 +1086,30 @@ def with_approvals_reminder(telemetry: Callable, collector_ref=_collector) -> Ca
 
     Like the DATA-312 fix, the reminder sits outside `guarded`: it is not
     telemetry, so `AV_EVENTS_ENABLED=0`, no token or `pre_llm_call` in
-    `AV_HOOKS_DISABLED` does not stop it. The control plane's file is its only
-    switch. It never raises into the turn: any failure is no reminder.
+    `AV_HOOKS_DISABLED` does not stop it. Its switches are the control plane's
+    file and its own name, `approvals_reminder`, in `AV_HOOKS_DISABLED`.
+    Like DATA-312's `safe_directive`, the reminder never raises into the turn:
+    any failure, `SystemExit` included, is no reminder. One info line says a
+    reminder was given, with nothing about the session or the file.
     """
 
     def pre_llm_call(*args: Any, **kwargs: Any) -> Any:
         result = telemetry(*args, **kwargs)
         try:
             reminder = _approvals_reminder_for(kwargs, collector_ref())
-        except SystemExit:
-            raise
         except BaseException:  # noqa: BLE001 - a reminder never costs the turn
             reminder = None
         if not reminder:
             return result
         try:
-            return _approvals_reminder.compose(result, reminder)
+            composed = _approvals_reminder.compose(result, reminder)
         except BaseException:  # noqa: BLE001
             return result
+        try:
+            logger.info("av-events: approvals_reminder given")
+        except BaseException:  # noqa: BLE001 - a log line must not cost the reminder
+            pass
+        return composed
 
     pre_llm_call.av_hook_name = getattr(telemetry, "av_hook_name", "pre_llm_call")  # type: ignore[attr-defined]
     return pre_llm_call

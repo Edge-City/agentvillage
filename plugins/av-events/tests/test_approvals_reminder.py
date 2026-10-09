@@ -11,8 +11,10 @@ session, only while that file says unstarted, button sent, and `at` is under
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
+import threading
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -83,8 +85,11 @@ def test_unstarted_button_sent_reminds_once_per_session(dm, ctx, home):
 
 
 def test_the_reminder_text_is_the_scoped_line(dm):
+    # Hermes replays it on every later turn, unlabelled (`api_content`), so it
+    # says who is speaking and that it is for one reply only.
     assert mod(dm).REMINDER == (
-        "At the end of this reply add one line: "
+        "[Agent Village note, not from the resident] "
+        "In this reply only, add one line at the end: "
         "One more step: tap Connect approvals above to finish setting up approvals."
     )
 
@@ -245,6 +250,42 @@ def test_an_oversized_file_never_reminds(dm, ctx, home):
     assert say(ctx) == []
 
 
+def test_a_file_nested_too_deep_to_parse_is_none_and_never_raises(dm, ctx, home):
+    """`json.loads` raises RecursionError (not a ValueError) on deep nesting."""
+    raw = "[" * 3000 + "]" * 1000
+    assert len(raw) <= mod(dm).MAX_FILE_BYTES
+    path = write_pairing(home, raw)
+    with pytest.raises(RecursionError):
+        json.loads(raw)
+    assert mod(dm).read_pairing(path) is None
+    assert say(ctx) == []
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no FIFOs here")
+def test_a_fifo_in_place_of_the_file_returns_none_without_waiting_for_a_writer(dm, ctx, home):
+    """Opening a FIFO with no writer blocks unless O_NONBLOCK; the turn must not wait."""
+    (home / "memory").mkdir(parents=True)
+    path = str(home / "memory" / "approvals-pairing.json")
+    os.mkfifo(path, 0o600)
+    outcome: dict = {}
+
+    def read() -> None:
+        outcome["read"] = mod(dm).read_pairing(path)
+        outcome["said"] = say(ctx)
+
+    worker = threading.Thread(target=read, daemon=True)
+    worker.start()
+    worker.join(timeout=2)
+    try:
+        assert not worker.is_alive(), "read_pairing blocked on a FIFO with no writer"
+        assert outcome == {"read": None, "said": []}
+    finally:
+        if worker.is_alive():
+            # Release the blocked reader so the thread ends: a writer that opens and closes.
+            os.close(os.open(path, os.O_WRONLY | os.O_NONBLOCK))
+            worker.join(timeout=2)
+
+
 def test_a_failing_read_never_reaches_the_turn(dm, ctx, home, monkeypatch):
     write_pairing(home, unstarted())
 
@@ -256,6 +297,13 @@ def test_a_failing_read_never_reaches_the_turn(dm, ctx, home, monkeypatch):
     monkeypatch.setattr(mod(dm), "read_pairing", lambda *_a, **_k: 1 / 0)
     assert say(ctx) == []
 
+    def leave(*_a, **_k):
+        raise SystemExit(3)
+
+    # Like DATA-312's `safe_directive`: SystemExit included, no reminder and no raise.
+    monkeypatch.setattr(mod(dm), "read_pairing", leave)
+    assert say(ctx) == []
+
 
 def test_the_overlay_never_writes_the_file(dm, ctx, home):
     path = write_pairing(home, unstarted())
@@ -264,6 +312,46 @@ def test_the_overlay_never_writes_the_file(dm, ctx, home):
     say(ctx)
     assert (os.stat(path).st_mtime_ns, open(path, "rb").read()) == before
     assert sorted(os.listdir(home / "memory")) == ["approvals-pairing.json"]
+
+
+# ---- the kill switch and the log line -------------------------------------------
+
+
+def test_approvals_reminder_in_av_hooks_disabled_turns_it_off(plugin, ctx, home, monkeypatch, caplog):
+    monkeypatch.setenv("AV_HOOKS_DISABLED", " Approvals_Reminder , pre_tool_call")
+    monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "dm")
+    plugin.register(ctx)
+    mod(plugin).reset()
+    ctx.fire("on_session_start", session_id=SESSION, model="m", platform="telegram")
+    write_pairing(home, unstarted())
+    with caplog.at_level(logging.DEBUG, logger="av-events"):
+        assert say(ctx) == []
+        assert say(ctx, session="other-dm") == []
+    assert not [r for r in caplog.records if "approvals_reminder" in r.getMessage()]
+    # Re-read at the next session boundary, like `outcome_ask`: cleared, a new session is reminded.
+    monkeypatch.setenv("AV_HOOKS_DISABLED", "pre_tool_call")
+    ctx.fire("on_session_start", session_id="after-switch", model="m", platform="telegram")
+    assert say(ctx, session="after-switch") == [{"context": mod(plugin).REMINDER}]
+
+
+def test_a_reminder_given_logs_one_info_line_with_nothing_identifying(dm, ctx, home, caplog):
+    session = "tg-dm-secret-session-id"
+    write_pairing(home, unstarted())
+    with caplog.at_level(logging.DEBUG, logger="av-events"):
+        assert len(say(ctx, session=session, text="private words")) == 1
+        assert say(ctx, session=session) == []
+    lines = [(r.levelno, r.getMessage()) for r in caplog.records
+             if r.name == "av-events" and "approvals_reminder" in r.getMessage()]
+    assert lines == [(logging.INFO, "av-events: approvals_reminder given")]
+    ours = " ".join(r.getMessage() for r in caplog.records if r.name == "av-events")
+    assert session not in ours and "private words" not in ours
+
+
+def test_no_reminder_logs_nothing(dm, ctx, home, caplog):
+    write_pairing(home, {"started": True, "at": iso(1)})
+    with caplog.at_level(logging.DEBUG, logger="av-events"):
+        assert say(ctx) == []
+    assert not [r for r in caplog.records if "approvals_reminder" in r.getMessage()]
 
 
 # ---- sessions that are not a human's root DM -----------------------------------
