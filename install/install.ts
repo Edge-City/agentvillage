@@ -61,6 +61,7 @@ import {
   configureVillageTimezone,
   disableTelegramLinkPreviews,
   keepTelegramBacklogOnColdBoot,
+  setCompactionSettings,
   setContextFileMaxChars,
   setTerminalCwd,
 } from "./config";
@@ -262,6 +263,7 @@ function main(): void {
   configureCronScriptTimeout();
   configureCronWrapResponse();
   setContextFileMaxChars();
+  setCompactionSettings();
   configureTelegramDisplay();
   configureDashboardAuth();
   configureAvEvents();
