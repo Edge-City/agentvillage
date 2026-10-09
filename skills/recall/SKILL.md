@@ -32,6 +32,9 @@ leaves the sandbox.
   `MEMORY.md` does not already say it. A term you use about them must appear
   verbatim in a tool result or a memory file; `recall` is how you check.
 - A note from weeks ago might matter to what they are asking now.
+- A long chat was compacted: its older turns now reach you only as a summary.
+  The original messages are still searchable, so for the exact words ("what
+  did I say about the budget?") search and use the `session` hits.
 
 Use short keywords: a name, a project, a place, a topic. Add `since`
 (`YYYY-MM-DD`) when the user means a recent period.
