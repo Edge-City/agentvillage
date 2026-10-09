@@ -180,7 +180,9 @@ reads outside the gate root visibly separate.
 The channel. `token_env: APPROVAL_RELAY_TOKEN` is the control-plane relay
 credential in approvald's 0600 env; the daemon's Telegram channel runs under
 `approval up --api-base $APPROVAL_RELAY_API_BASE`, pointed at the relay, so the
-prompt reaches the resident through the "Agent Village Approvals" bot.
+prompt reaches the resident through the "Agent Approval (Edge City)" bot (its
+BotFather display name since Oct 9, 2026, formerly "Agent Village Approvals";
+the username and token are unchanged).
 `chat_id_env: APPROVAL_RESIDENT_CHAT` names a variable the control plane must
 write into that env (one line in ensureApprovald): core refuses a tap whose chat
 differs from the configured one (`foreign-chat`), so the daemon must know it.
