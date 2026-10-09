@@ -382,9 +382,9 @@ the model writes as the message's last line and leaves off a `[SILENT]`
 reply. The labels and their jobs: Daily digest = `Edge — daily digest`;
 Conversation update = `Edge — negotiation summary`; Evening questions =
 `Edge — evening questions`; Introduction suggestion = both opportunity drops;
-Usage report = `Edge — token usage audit` (opt-in). Template jobs added by an
+Usage report = `Edge — token usage audit` (opt-in); Pending opportunity = `Edge — pending opportunity`. Template jobs added by an
 operator carry their base prompt's line. The agent stops and restarts any of
-the five on a resident's request (`skills/index-network/tools.md`, "Cron schedule") with
+the six on a resident's request (`skills/index-network/tools.md`, "Cron schedule") with
 `skills/index-network/scripts/pause-job.ts` (DATA-376). Under the tenant's
 jobs lock, the script first records a `by: resident` hold in
 `av-events/job-holds.json`, the control plane's holds file, then pauses or
@@ -449,7 +449,7 @@ sends nothing; a run after 11:00 IST prints `outside-window`.
 
 **Rolling back to a release from before DATA-314.** The older installer only
 rewrites prompts: it never clears a job's script or turns `no_agent` off, and
-the six jobs would keep running the new triggers under the old prompts (the
+the six DATA-314 jobs (and the hourly pending job of DATA-430 alike) would keep running the new triggers under the old prompts (the
 02:00 job would stay a silent prefetch, so no brief would be staged). Before
 the rollback roll, on each resident, for each of the six jobs (ids from
 `hermes cron list`):
