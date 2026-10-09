@@ -4,20 +4,20 @@
   "source": {
     "repo": "p2p-lanes/edge-agent-skill",
     "path": "references",
-    "commit": "05ad8890e725a1b313fd802e99b2cca45f50cb41",
-    "commit_date": "2026-10-08T19:43:21.000Z"
+    "commit": "e9b7ec450adce708b7f398371506dcd2d372ed3e",
+    "commit_date": "2026-10-09T08:43:20.000Z"
   },
-  "synced_at": "2026-10-08T23:15:10.771Z",
+  "synced_at": "2026-10-09T10:12:38.469Z",
   "files": [
     {
       "path": "index.md",
-      "sha256": "edef62b77162b56e8377bac240a53c26095fb8b490c2c6d6b18ac64775933b6f",
-      "bytes": 5258
+      "sha256": "7725e6f3252f1ef8ca47d4894830b742d182368e9a9cc97a00a0cb1ffeae851c",
+      "bytes": 5418
     },
     {
       "path": "manifest.json",
-      "sha256": "f22270c834dc76b35d4c30b38faf974b0a5bec1ec001126c326061c1b19e5ff0",
-      "bytes": 11011
+      "sha256": "67e221344abecff5ac8d77bb4b46481c4960f7151ff3a5320746b34766b4166f",
+      "bytes": 11401
     },
     {
       "path": "newsletter/a-typical-day-and-week-at-edge-city.md",
@@ -100,6 +100,11 @@
       "bytes": 6032
     },
     {
+      "path": "newsletter/the-first-three-days-at-edge-city.md",
+      "sha256": "54f5388041f394271b2045b4b33d52efc1e059070b33194c4742ccfce0f195a9",
+      "bytes": 13643
+    },
+    {
       "path": "newsletter/the-future-arrives-locally.md",
       "sha256": "39920ba5de11ea497d539f9439a56aca904822dc5c9057b8435e2792a1aac944",
       "bytes": 6482
@@ -111,8 +116,8 @@
     },
     {
       "path": "newsletter/tickets-for-edge-city-india-2026.md",
-      "sha256": "48c3e77d51d0f9689760d6760a2f6638f62f5c798ee23f6dc6203ece134f253b",
-      "bytes": 8716
+      "sha256": "e686db15efc7936d252234aa54f5db3571c50d0358836432a9c9b1a101b76951",
+      "bytes": 8695
     },
     {
       "path": "newsletter/volunteer-at-edge-city-india-2026.md",
@@ -146,8 +151,8 @@
     },
     {
       "path": "wiki-content.md",
-      "sha256": "de733b032f1d74d870668c9ce176f75c32c61d530c21b9c15eff0d18a1fbff68",
-      "bytes": 23580
+      "sha256": "7a5116ecd3bd30f7fee31847d09cbd24b20ee2fa68717c4a58cb7912cdd551a0",
+      "bytes": 24912
     }
   ]
 }

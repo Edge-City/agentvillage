@@ -4,11 +4,9 @@ Source: https://edgecityindia2026.substack.com/p/tickets-for-edge-city-india-202
 
 Source type: newsletter
 
-Published: 2026-07-24T18:09:13.000Z
+Source updated: 2026-10-06T11:28:45.503Z
 
-Author: Taylor Lamprecht
-
-Last content change indexed: 2026-10-06T11:28:24.122Z
+Last content change indexed: 2026-10-09T08:43:19.724Z
 
 ---
 
