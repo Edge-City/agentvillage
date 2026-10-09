@@ -511,7 +511,8 @@ describe("RC28: compaction settings (hold 25, summary reasoning off)", () => {
     setCompactionSettings();
     configureTelegramDisplay();
     expect(readFileSync(configPath(), "utf8")).toBe(once);
-    expect(read().display.platforms.telegram.tool_progress).toBe("new");
+    // rc29 (DATA-434): BOX's `tool_progress: false` is kept (rc28 turned it into `new`).
+    expect(read().display.platforms.telegram.tool_progress).toBe(false);
     expect(read().display.tool_progress_command).toBe(true);
     expect(read().compression).toEqual({ hygiene_max_turn_hold_seconds: 25 });
   });

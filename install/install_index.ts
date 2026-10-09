@@ -72,6 +72,7 @@ import { execFileSync } from "node:child_process";
 import YAML from "yaml";
 
 import { readFlag } from "./args";
+import { dumpConfig } from "./config";
 import { upsertEnvVar } from "./env";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
 import { hermesAvailable } from "../skills/index-network/scripts/hermes-cli";
@@ -154,7 +155,7 @@ function writeMcpServerEntry(apiKey: string, telegramHandle: string): void {
     headers: buildIndexMcpHeaders(apiKey, telegramHandle),
   };
   doc.mcp_servers = mcpServers;
-  writeFileSync(configPath, YAML.stringify(doc));
+  writeFileSync(configPath, dumpConfig(doc));
   console.log("→ wrote mcp_servers.index in config.yaml");
 }
 

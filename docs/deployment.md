@@ -164,7 +164,9 @@ answers.
 files and the `config.yaml` keys it owns (README, "Install"), among them
 the Telegram display keys: from the roll on, a resident sees no reasoning and
 one tool-progress bubble per reply, deleted with the reply (RC28; DATA-409 had it
-off), which they can switch with `/verbose`; its lines name the tool, never the
+off), which they can switch with `/verbose` (a saved `off` is kept on later rolls
+from rc29, which assumes rc28 rolled first: a box that skipped rc28 keeps
+DATA-409's `false` and the bubble stays off); its lines name the tool, never the
 command, not even a `terminal` code block (the `av-display` plugin; web search
 keeps its query); `AV_DISPLAY_DEFAULTS=0` opts a
 tenant out of those display keys (not the `av-display` plugin entry or the

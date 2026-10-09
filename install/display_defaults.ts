@@ -43,28 +43,23 @@
  * | key | value | written when |
  * |---|---|---|
  * | `platforms.telegram.show_reasoning` | `false` | always (a privacy and product decision; a resident's `/reasoning show` is undone on the next roll) |
- * | `platforms.telegram.tool_progress` | `new` | unset (absent or null), boolean `false` or the string `off` (both DATA-409's write; see below), and no legacy `display.tool_progress_overrides.telegram`; any other mode is kept |
+ * | `platforms.telegram.tool_progress` | `new` | unset (absent or null) and no legacy `display.tool_progress_overrides.telegram`; any other value is kept, `off` and `false` included (rc29; see below) |
  * | `platforms.telegram.tool_progress_grouping` | `accumulate` | unset |
  * | `platforms.telegram.interim_assistant_messages` | `false` | unset |
  * | `platforms.telegram.streaming` | `false` | unset, or `true` (the value Hermes itself writes there) |
  * | `platforms.telegram.cleanup_progress` | `true` | unset |
  * | `tool_progress_command` (under `display`) | `true` | unset (absent or null); any other value is kept |
  *
- * Why `false` and `off` count as unset in rc28: nobody could have chosen `off`
- * before rc28 (`/verbose` was gated off). DATA-409 wrote the string "off"
- * through the `yaml` package (YAML 1.2), which dumps it as the bare word `off`;
- * Hermes loads config.yaml with PyYAML (YAML 1.1; utils.py `fast_safe_load`,
- * hermes_cli/config.py:436), which reads a bare `off` as boolean False, and the
- * first Hermes config save after the roll re-dumped it as `false` (b4's fleet
- * read, Oct 9: 10 of 10 boxes carry `false`). Hermes resolves both to off
- * (display_config.py:135-146 `_norm_tristate`), so DATA-409's behaviour held.
- * rc29 drops `off` from the list, so that a resident's `/verbose` off sticks
- * from then on. The rule: this installer never writes a YAML 1.1 boolean word
- * (off, on, yes, no, y, n) as a string value. Known gap for rc29: `writeConfig`
- * re-dumps a string already in the file with the same YAML 1.2 writer, so a
- * resident's quoted `off` goes back bare whenever any step rewrites
- * config.yaml; Hermes still reads it as off, but a later Hermes save turns it
- * into `false`.
+ * rc29 (DATA-434): an `off` or a `false` in `tool_progress` is a resident's
+ * `/verbose` choice and is kept; only an absent or null value gets `new`.
+ * (History: rc28 treated both as unset, to undo DATA-409's own `off`, which
+ * the YAML 1.2 writer had left bare and Hermes's PyYAML had re-saved as
+ * `false` on 10 of 10 boxes.) Since rc29 `writeConfig` (`dumpConfig`)
+ * double-quotes every string YAML 1.1 reads as another type, so Hermes's
+ * PyYAML (utils.py `fast_safe_load`, hermes_cli/config.py:436) reads a saved
+ * `off` back as the string through any installer rewrite and any later Hermes
+ * save. Hermes resolves `off` and `false` alike (display_config.py:135-146
+ * `_norm_tristate`): the bubble is hidden.
  *
  * Together: one tool-progress message per reply, edited in place at most every
  * 1.5 s with a line per tool, deleted once the reply lands (kept when the turn
@@ -95,16 +90,16 @@ interface ManagedKey {
   value: DisplayValue;
   /** `always`: written whenever it differs. `unset`: only while absent, null, or one of `hermesDefaults`. */
   policy: "always" | "unset";
-  /** Values that count as unset: what Hermes itself writes at this path, or what this installer wrote before (RC28: DATA-409's `off`, and the `false` PyYAML re-dumps it as). */
+  /** Values that count as unset besides absent and null: what Hermes itself writes at this path. */
   hermesDefaults?: readonly unknown[];
 }
 
 /** The keys this step owns under `display.platforms.telegram`, in the order they are written. */
 export const TELEGRAM_DISPLAY_DEFAULTS: readonly ManagedKey[] = [
   { key: "show_reasoning", value: false, policy: "always" },
-  // RC28: the bubble is back (`new`). `false` and `off` are DATA-409's own write (bare `off`, re-saved
-  // by Hermes as `false`), never a resident's choice before rc28; rc29 drops "off" so /verbose off sticks.
-  { key: "tool_progress", value: "new", policy: "unset", hermesDefaults: [false, "off"] },
+  // RC28: the bubble is back (`new`). rc29 (DATA-434): nothing but absent or null counts as unset, so a
+  // resident's /verbose `off` (or the `false` an older Hermes save left) is kept.
+  { key: "tool_progress", value: "new", policy: "unset", hermesDefaults: [] },
   { key: "tool_progress_grouping", value: "accumulate", policy: "unset" },
   { key: "interim_assistant_messages", value: false, policy: "unset" },
   { key: "streaming", value: false, policy: "unset", hermesDefaults: [true] },

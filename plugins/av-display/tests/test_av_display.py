@@ -190,6 +190,30 @@ def test_the_wrap_is_idempotent_and_keeps_the_original(plugin, fake_display, fak
     assert getattr(wrapped, "__wrapped__").__name__ == "_progress_terminal_blocks"
 
 
+def test_the_wrap_passes_every_argument_after_the_adapter_through(plugin, fake_display, monkeypatch):
+    """A later Hermes may add a parameter (positional or keyword); off Telegram it reaches the original."""
+    seen = []
+    module = types.ModuleType("gateway.run_turn_runner")
+
+    class TurnRunner:
+        def _progress_terminal_blocks(self, adapter, tool_name, args, emoji, *extra, **options):
+            seen.append((adapter, tool_name, args, emoji, extra, options))
+            return "full", "short"
+
+    module.TurnRunner = TurnRunner
+    monkeypatch.setitem(sys.modules, "gateway.run_turn_runner", module)
+    plugin.register(None)
+    runner, discord = TurnRunner(), DiscordAdapter()
+    assert runner._progress_terminal_blocks(discord, "terminal", CURL, "⚙️", "later", width=40) == ("full", "short")
+    assert runner._progress_terminal_blocks(adapter=discord, tool_name="terminal", args=CURL, emoji="⚙️") == ("full", "short")
+    assert seen == [
+        (discord, "terminal", CURL, "⚙️", ("later",), {"width": 40}),
+        (discord, "terminal", CURL, "⚙️", (), {}),
+    ]
+    assert runner._progress_terminal_blocks(TelegramAdapter(), "terminal", CURL, "⚙️", "later", width=40) == (None, None)
+    assert len(seen) == 2
+
+
 def test_a_runner_without_the_method_is_left_alone(plugin, fake_display, monkeypatch):
     module = types.ModuleType("gateway.run_turn_runner")
 

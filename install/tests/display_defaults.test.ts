@@ -5,11 +5,12 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import YAML from "yaml";
 
-import { DISPLAY_DEFAULTS_ENV, configureTelegramDisplay } from "../display_defaults";
+import { DISPLAY_DEFAULTS_ENV, TELEGRAM_DISPLAY_DEFAULTS, configureTelegramDisplay } from "../display_defaults";
 
 // DATA-318: residents never see reasoning on Telegram. RC28 (Carter, Oct 9): the tool-progress
 // bubble is back (`new`; DATA-409's `off` was history) and /verbose is enabled so each resident can
-// switch it. Telegram-scoped keys, plus the gateway-wide /verbose gate under `display`.
+// switch it; rc29 (DATA-434) keeps a resident's `off`. Telegram-scoped keys, plus the gateway-wide
+// /verbose gate under `display`.
 
 const ORIGINAL = { HERMES_HOME: process.env.HERMES_HOME, [DISPLAY_DEFAULTS_ENV]: process.env[DISPLAY_DEFAULTS_ENV] };
 let logSpy: ReturnType<typeof spyOn>;
@@ -243,27 +244,54 @@ test("idempotent: a second run changes nothing and does not rewrite the file (co
   expect(readFileSync(path2, "utf8")).toBe(commented);
 });
 
-test("RC28: tool_progress false or off (DATA-409's write, before and after a PyYAML round trip) becomes new; other modes are kept", () => {
-  // The rc27 box as Hermes re-saved it (false: 10 of 10 boxes), and as the installer wrote it (bare off).
-  for (const [leftover, text] of [
-    [false, "display:\n  tool_progress_command: true\n  platforms:\n    telegram:\n      tool_progress: false\n"],
+test("rc29 (DATA-434): tool_progress hermesDefaults is empty, so only absent or null counts as unset", () => {
+  expect(TELEGRAM_DISPLAY_DEFAULTS.find((k) => k.key === "tool_progress")).toEqual({
+    key: "tool_progress",
+    value: "new",
+    policy: "unset",
+    hermesDefaults: [],
+  });
+});
+
+test("rc29 (DATA-434): a resident's /verbose off is kept, as the string or the boolean, and the file is not rewritten", () => {
+  // As Hermes's writer saves it (double-quoted), as rc28's writer left it (bare), single-quoted,
+  // and the boolean an older Hermes save left (rc28 turned those back into `new`).
+  for (const [kept, text] of [
+    ["off", 'display:\n  tool_progress_command: true\n  platforms:\n    telegram:\n      tool_progress: "off"\n'],
     ["off", "display:\n  tool_progress_command: true\n  platforms:\n    telegram:\n      tool_progress: off\n"],
     ["off", "display:\n  tool_progress_command: true\n  platforms:\n    telegram:\n      tool_progress: 'off'\n"],
+    [false, "display:\n  tool_progress_command: true\n  platforms:\n    telegram:\n      tool_progress: false\n"],
   ] as const) {
     logSpy.mockClear();
     const path = withText(text);
-    expect([leftover, configureTelegramDisplay().includes("tool_progress")]).toEqual([leftover, true]);
-    expect(telegramOf(path).tool_progress).toBe("new");
-    expect(logged()).toContain("tool_progress=new");
+    expect([kept, configureTelegramDisplay().includes("tool_progress")]).toEqual([kept, false]);
+    expect(telegramOf(path).tool_progress).toBe(kept);
+    expect(logged()).toContain("kept as set by hand: tool_progress");
   }
-  logSpy.mockClear();
-  const path = withDoc({ display: { ...GATE, platforms: { telegram: { ...APPLIED, tool_progress: false } } } });
-  expect(configureTelegramDisplay()).toEqual(["tool_progress"]);
-  expect(telegramOf(path)).toEqual(APPLIED);
-  expect(logged()).toBe("→ telegram display: tool_progress=new");
+});
 
-  // The modes a resident can cycle to with /verbose (other than off), and other hand edits, are kept.
-  for (const chosen of ["all", "verbose", "log", "New", true]) {
+test("rc29 (DATA-434): when the step rewrites config.yaml around a resident's off, off is written double-quoted and PyYAML (YAML 1.1) reads the string", () => {
+  const path = withText('display:\n  platforms:\n    telegram:\n      tool_progress: "off"\n');
+  expect(configureTelegramDisplay().sort()).toEqual(ALL_KEYS.filter((k) => k !== "tool_progress"));
+  const text = readFileSync(path, "utf8");
+  expect(text).toContain('\n      tool_progress: "off"\n');
+  const asHermes = YAML.parse(text, { version: "1.1" }) as { display: { platforms: { telegram: Record<string, unknown> } } };
+  expect(asHermes.display.platforms.telegram.tool_progress).toBe("off");
+  expect(configureTelegramDisplay()).toEqual([]);
+  expect(readFileSync(path, "utf8")).toBe(text);
+});
+
+test("RC28: tool_progress absent or null becomes new; the modes a resident can choose are kept", () => {
+  for (const unset of [undefined, null]) {
+    logSpy.mockClear();
+    const path = withDoc({ display: { ...GATE, platforms: { telegram: { ...APPLIED, tool_progress: unset } } } });
+    expect(configureTelegramDisplay()).toEqual(["tool_progress"]);
+    expect(telegramOf(path)).toEqual(APPLIED);
+    expect(logged()).toBe("→ telegram display: tool_progress=new");
+  }
+
+  // The modes a resident can cycle to with /verbose, and other hand edits, are kept.
+  for (const chosen of ["off", false, "all", "verbose", "log", "New", true]) {
     logSpy.mockClear();
     const kept = withDoc({ display: { ...GATE, platforms: { telegram: { ...APPLIED, tool_progress: chosen } } } });
     const before = readFileSync(kept, "utf8");
@@ -285,10 +313,11 @@ test("RC28: tool_progress false or off (DATA-409's write, before and after a PyY
   expect(configureTelegramDisplay().sort()).toEqual(Object.keys(APPLIED).filter((k) => k !== "show_reasoning").sort());
   expect(telegramOf(absent).tool_progress).toBe("new");
 
-  // A legacy per-platform override still counts as hand-set, even over a false.
-  const legacy = withDoc({ display: { ...GATE, tool_progress_overrides: { telegram: "all" }, platforms: { telegram: { ...APPLIED, tool_progress: false } } } });
+  // A legacy per-platform override still counts as hand-set, even over an absent tool_progress.
+  const { tool_progress: _absent, ...withoutToolProgress } = APPLIED;
+  const legacy = withDoc({ display: { ...GATE, tool_progress_overrides: { telegram: "all" }, platforms: { telegram: withoutToolProgress } } });
   expect(configureTelegramDisplay()).toEqual([]);
-  expect(telegramOf(legacy).tool_progress).toBe(false);
+  expect(telegramOf(legacy).tool_progress).toBeUndefined();
 });
 
 test("RC28: display.tool_progress_command (the /verbose gate) is written when unset and kept otherwise", () => {
@@ -309,7 +338,7 @@ test("RC28: display.tool_progress_command (the /verbose gate) is written when un
   }
   // Both levels in one write, one log line.
   logSpy.mockClear();
-  const path = withDoc({ display: { platforms: { telegram: { ...APPLIED, tool_progress: false } } } });
+  const path = withDoc({ display: { platforms: { telegram: { ...APPLIED, tool_progress: null } } } });
   expect(configureTelegramDisplay()).toEqual(["tool_progress", "tool_progress_command"]);
   expect(logSpy.mock.calls).toHaveLength(1);
   expect(logged()).toBe("→ telegram display: tool_progress=new, tool_progress_command=true");
