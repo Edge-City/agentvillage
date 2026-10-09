@@ -659,9 +659,11 @@ No redirects, no proxies. The whole request has a 30 s deadline. `$HERMES_HOME/a
 `intentions.json.lock`) records each id's `{published, source}`, `refused: rejected` for a local
 capture Index rejected, `local_reason` for a capture kept local on purpose, a `held_norm_hash` (sha256 of the
 case-folded, whitespace-collapsed text, never emitted) for held ambient entries only, and beside it
-`held_norm_hash_v2` (DATA-387: sha256 of the text under NFKC, case-folded, every Unicode punctuation
-and symbol character read as a space, whitespace collapsed; letters and digits of any script kept
-exactly, no fuzzy matching), both replaced on update and dropped on withdrawal (a v2 is dropped
+`held_norm_hash_v2` (DATA-387: sha256 of the text under NFKC, case-folded, format characters and
+variation selectors deleted, every Unicode punctuation and symbol character read as a space except
+currency signs, `+ # % @ < > = & ~ ^ |`, a sign on a number and a slash inside one, which stay
+tokens; Markdown `#`/`>` at a line's start dropped; whitespace collapsed; letters and digits of any
+script kept exactly, no fuzzy matching), both replaced on update and dropped on withdrawal (a v2 is dropped
 with its v1 on any save, and counts only beside it). A capture matches a held entry by either
 hash; an entry held before DATA-387 has v1 only and is matched as before. The v1 key stays until no
 pre-DATA-387 held entry can remain (the map is bounded by count, not age), and the cap's attempt

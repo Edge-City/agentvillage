@@ -136,11 +136,15 @@ local capture Index rejected, `local_reason` for a capture kept local on purpose
 (DATA-311), plus `held_norm_hash`
 for a held ambient entry only: sha256 of its text case-folded with whitespace
 collapsed, used for this check alone and never emitted. Beside it (DATA-387),
-`held_norm_hash_v2`: sha256 of the text under NFKC, case-folded, with every
-punctuation and symbol character (Unicode P* and S*) read as a space and
-whitespace collapsed, so the draft plus a full stop, other quotes, dashes or
-full-width forms is the same text; letters and digits are kept exactly and
-nothing fuzzier is matched (a rewording is the resident's own words). Both are
+`held_norm_hash_v2`: sha256 of the text under NFKC, case-folded, invisible
+format characters and variation selectors deleted, and every punctuation and
+symbol character (Unicode P* and S*) read as a space, except the symbols that
+carry meaning (currency signs, `+ # % @ < > = & ~ ^ |`, a sign on a number, a
+slash inside a number), with whitespace collapsed (`held_norm_text_v2`). So
+the draft plus a full stop, other quotes, dashes, Markdown or full-width forms
+is the same text, while "$500" and "\u20ac500" are not; letters and digits are
+kept exactly and nothing fuzzier is matched (a rewording is the resident's own
+words). Both are
 written, and a v2 hash counts only on an entry that still carries its v1 (a
 save drops a v2 left alone), so whatever drops v1 drops the pair. They are
 replaced when the held intention is updated and dropped when it is withdrawn.
@@ -1050,8 +1054,24 @@ HELD_HASH_KEY = "held_norm_hash"
 #: HELD_HASH_KEY and honoured only while that is there.
 HELD_HASH_V2_KEY = "held_norm_hash_v2"
 
-#: Apostrophes Unicode files as letters (Lm), not punctuation: read as one.
-_APOSTROPHE_LETTERS = frozenset("\u02bc")
+#: Characters used as apostrophes that Unicode files as letters or as a
+#: spacing accent NFKC would split (U+00B4): read as one, before NFKC.
+_APOSTROPHES = {ord(c): "'" for c in "\u00b4\u02b9\u02bc"}
+
+#: Symbols that carry meaning ("C++" is not "C#", "$500" is not "\u20ac500",
+#: "100%" is not "100"): kept as their own token, as is every currency sign (Sc).
+_KEPT_SYMBOLS = frozenset("+#%@<>=&~^|")
+
+#: Markdown markup at a line's start (a heading's "#", a quote's ">"), once
+#: the symbols above stand as tokens: dropped like other punctuation.
+_LINE_MARKUP = re.compile(r"^[^\S\n]*(?:(?:#+|>+)(?=\s|$)[^\S\n]*)+", re.M)
+
+
+def _invisible(ch: str) -> bool:
+    """Format characters (Cf: ZWSP, ZWJ, ZWNJ, BOM, soft hyphen, word joiner)
+    and variation selectors: deleted, so they never split or join a word."""
+    code = ord(ch)
+    return 0xFE00 <= code <= 0xFE0F or 0xE0100 <= code <= 0xE01EF or unicodedata.category(ch) == "Cf"
 
 
 def held_norm_hash(text: str) -> str:
@@ -1062,14 +1082,31 @@ def held_norm_hash(text: str) -> str:
 
 def held_norm_text_v2(text: str) -> str:
     """DATA-387: NFKC and case-folded (curly quotes, dashes and full-width forms
-    then differ only in punctuation), every punctuation or symbol character
-    (Unicode P*, S*) read as a space, whitespace collapsed. Letters and digits,
+    then differ only in punctuation), format characters and variation
+    selectors deleted, then every punctuation or symbol character (Unicode P*,
+    S*) read as a space, except the ones that carry meaning: a currency sign
+    or one of `+ # % @ < > = & ~ ^ |` stays a token, a `-` or `\u2212` that is
+    a sign ("-5") stays on its digit, and a `/` or fraction slash between
+    digits ("1/2", NFKC's "\u00bd") stays in the number. Markdown's "#" and ">"
+    at a line's start are dropped. Whitespace is collapsed. Letters and digits,
     any script, are kept exactly; a space keeps "1.5" apart from "15"."""
-    folded = unicodedata.normalize("NFKC", unicodedata.normalize("NFKC", text).casefold())
-    kept = "".join(
-        " " if ch in _APOSTROPHE_LETTERS or unicodedata.category(ch)[0] in "PS" else ch for ch in folded
-    )
-    return " ".join(kept.split())
+    folded = unicodedata.normalize("NFKC", unicodedata.normalize("NFKC", text.translate(_APOSTROPHES)).casefold())
+    chars = [ch for ch in folded if not _invisible(ch)]
+    out: list[str] = []
+    for i, ch in enumerate(chars):
+        prev = chars[i - 1] if i else ""
+        nxt = chars[i + 1] if i + 1 < len(chars) else ""
+        if ch in _KEPT_SYMBOLS or unicodedata.category(ch) == "Sc":
+            out.append(" " + ch)
+        elif ch in "-\u2212" and nxt.isdecimal() and not prev.isalnum():
+            out.append(" -")
+        elif ch in "/\u2044" and prev.isdecimal() and nxt.isdecimal():
+            out.append("/")
+        elif unicodedata.category(ch)[0] in "PS":
+            out.append(" ")
+        else:
+            out.append(ch)
+    return " ".join(_LINE_MARKUP.sub(" ", "".join(out)).split())
 
 
 def held_norm_hash_v2(text: str) -> Optional[str]:
@@ -1326,6 +1363,7 @@ def _capture(args: dict, held: Optional[str]) -> dict:
         # held_silence), so the event says what the agent passed. publish=false
         # keeps it too (DATA-311 still wins: local, never proposed).
         result["confirmed_in_chat"] = confirmed
+    norm_v2 = held_norm_hash_v2(text)
     approval_on = _approval_on()
     if not publish:
         # DATA-311: an explicit `publish=false` is honoured for every source and
@@ -1348,12 +1386,12 @@ def _capture(args: dict, held: Optional[str]) -> dict:
         if held_code is not None:
             result["publish_refused"] = held_code
         if approval_on is True:
-            return _held_through_approval(result, intention_id, text, norm)
+            return _held_through_approval(result, intention_id, text, norm, norm_v2)
         result["message"] = (
             f"Held as an ambient intention (intention_id {intention_id}). It stays off Index until the "
             "resident confirms it, and confirmation is not available yet: do not publish it another way."
         )
-    elif held_hash_exists(norm, held_norm_hash_v2(text)):
+    elif held_hash_exists(norm, norm_v2):
         # R9 revised: the same intention is held as ambient. Record this
         # capture locally (the event is emitted) and never publish around the
         # confirmation.
@@ -1406,7 +1444,7 @@ def _capture(args: dict, held: Optional[str]) -> dict:
         source=source,
         # A local capture is not held: no held hash, whatever its source.
         norm_hash=norm if source == RESTRICTIVE_SOURCE and local_reason is None else None,
-        norm_hash_v2=held_norm_hash_v2(text) if source == RESTRICTIVE_SOURCE and local_reason is None else None,
+        norm_hash_v2=norm_v2 if source == RESTRICTIVE_SOURCE and local_reason is None else None,
         refused=result.get("publish_refused"),
         local_reason=local_reason,
     )
@@ -1461,11 +1499,10 @@ def _index_tail(code: str) -> str:
     return f"Index could not take it just now (code {code}). It is recorded; do not retry it with another tool."
 
 
-def _held_through_approval(result: dict, intention_id: str, text: str, norm: str) -> dict:
+def _held_through_approval(result: dict, intention_id: str, text: str, norm: str, norm_v2: Optional[str]) -> dict:
     """An ambient capture: hold the text and propose `intent.publish.inferred.index`."""
     ia = _ia()
     code = ia.open_entry(intention_id, cls=ia.INFERRED_CLASS, text=text, source=RESTRICTIVE_SOURCE, norm_hash=norm)
-    norm_v2 = held_norm_hash_v2(text)
     if code is not None:
         # Nothing could be held for the resident (too large, or no map): the
         # old held capture, hash only, never published.

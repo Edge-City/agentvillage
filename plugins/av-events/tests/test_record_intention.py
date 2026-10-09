@@ -1323,6 +1323,30 @@ NEAR_COPIES = [
     pytest.param(HELD, "“" + HELD.upper().replace("'", "’").replace(" - ", " — ") + ".”",
                  id="all-at-once"),
     pytest.param(TEXT, TEXT + ".", id="unpunctuated-held-plus-stop"),
+    # Fix round 1, N2: apostrophes filed as letters or as a spacing accent.
+    pytest.param(HELD, HELD.replace("'", "\u00b4"), id="acute-accent-apostrophe"),
+    pytest.param(HELD, HELD.replace("'", "\u02b9"), id="modifier-prime-apostrophe"),
+    # Fix round 1, N1: invisible format characters and variation selectors.
+    pytest.param(HELD, HELD.replace("climbing", "clim\u200bbing"), id="zero-width-space-in-a-word"),
+    pytest.param(HELD, HELD.replace("partner", "part\u200dner"), id="zwj-in-a-word"),
+    pytest.param(HELD, HELD.replace("partner", "part\u200cner"), id="zwnj-in-a-word"),
+    pytest.param(HELD, "\ufeff" + HELD, id="leading-bom"),
+    pytest.param(HELD, HELD.replace("weekends", "week\u00adends"), id="soft-hyphen"),
+    pytest.param(HELD, HELD.replace("weekends", "week\u2060ends"), id="word-joiner"),
+    pytest.param(HELD + " \u2764", HELD + " \u2764\ufe0f", id="vs16-added"),
+    pytest.param(HELD, HELD + " \U0001f468\u200d\U0001f4bb", id="zwj-emoji-appended"),
+    # Fix round 1, S1: Markdown markup stays punctuation.
+    pytest.param(HELD, "> " + HELD, id="markdown-quote"),
+    pytest.param(HELD, "# " + HELD, id="markdown-heading"),
+    pytest.param(HELD, "## " + HELD + "\n", id="markdown-subheading"),
+    pytest.param(HELD, "**" + HELD + "**", id="markdown-bold"),
+    pytest.param(HELD, "_" + HELD + "_", id="markdown-italic"),
+    pytest.param(HELD, "`" + HELD + "`", id="markdown-code"),
+    pytest.param(HELD, "- " + HELD, id="markdown-list-dash"),
+    pytest.param(HELD, "\u2022 " + HELD, id="bullet"),
+    pytest.param("Rent under $500 in Goa", "\u201cRent under $500 in Goa.\u201d", id="currency-kept-quotes-dropped"),
+    pytest.param("Swim when it is -5", "Swim when it is \u22125.", id="minus-sign-forms"),
+    pytest.param("Need 1/2 kg of coffee", "Need \u00bd kg of coffee", id="vulgar-fraction-is-its-slash-form"),
 ]
 
 
@@ -1374,7 +1398,40 @@ REWORDINGS = [
     pytest.param("東京で週末に一緒に登山する仲間を探しています", "大阪で週末に一緒に登山する仲間を探しています",
                  id="japanese-one-word-changed"),
     pytest.param("Ищу партнёра по скалолазанию в Гоа", "Ищу партнёра по скалолазанию в Пуне", id="russian-one-word"),
+    # Fix round 1, S1: a one-symbol correction is the resident's own words.
+    pytest.param("Looking for a C++ developer in Goa", "Looking for a C# developer in Goa", id="cpp-vs-csharp"),
+    pytest.param("Looking for a C++ developer in Goa", "Looking for a C developer in Goa", id="cpp-vs-c"),
+    pytest.param("Looking for a C# developer in Goa", "Looking for a C developer in Goa", id="csharp-vs-c"),
+    pytest.param("Rent under $500 in Goa", "Rent under \u20ac500 in Goa", id="dollar-vs-euro"),
+    pytest.param("Rent under $500 in Goa", "Rent under \u20b9500 in Goa", id="dollar-vs-rupee"),
+    pytest.param("Want 100% remote work", "Want 100 remote work", id="percent-dropped"),
+    pytest.param("Meet @alice in Goa", "Meet alice in Goa", id="at-dropped"),
+    pytest.param("Swim when it is +5", "Swim when it is -5", id="plus-vs-minus"),
+    pytest.param("Swim when it is 5", "Swim when it is -5", id="sign-added"),
+    pytest.param("Flats < 500 in Goa", "Flats > 500 in Goa", id="less-vs-greater"),
+    pytest.param("Need \u00bd kg of coffee", "Need 1.2 kg of coffee", id="half-vs-one-point-two"),
+    pytest.param("Need 1/2 kg of coffee", "Need 1.2 kg of coffee", id="slash-vs-point-in-a-number"),
+    pytest.param("Tea & cake in Goa", "Tea cake in Goa", id="ampersand-dropped"),
+    pytest.param("Price = 500 in Goa", "Price 500 in Goa", id="equals-dropped"),
 ]
+
+
+#: Documented misses (fix round 1, N2): near-copies left to publish rather than
+#: add fuzzy rules. Each would need a rule that also merges real differences.
+DOCUMENTED_MISSES = [
+    pytest.param("Rent under $1,000 in Goa", "Rent under $1000 in Goa", id="thousands-separator"),
+    pytest.param("Tea at 5pm in Goa", "Tea at 5 pm in Goa", id="5pm-vs-5-pm"),
+    pytest.param(HELD, HELD.replace("I'd", "Id"), id="apostrophe-dropped"),
+    pytest.param(HELD, "1. " + HELD, id="numbered-list-marker"),
+    pytest.param("\u0130zmir trip with friends", "Izmir trip with friends", id="turkish-dotted-capital-i"),
+]
+
+
+@pytest.mark.parametrize("held,again", DOCUMENTED_MISSES)
+def test_data387_documented_misses_publish(tctx, index, held, again):
+    call(tctx, {"text": held, "source": "ambient"})
+    out = call(tctx, {"text": again, "source": "message"}, tool_call_id="c2")
+    assert out["published"] is True and "publish_refused" not in out
 
 
 @pytest.mark.parametrize("held,again", REWORDINGS)
@@ -1394,12 +1451,32 @@ def test_data387_a_rewording_publishes(tctx, index, held, again):
     ("café", "café"),
     ("café", "café"),
     ("STRASSE straße", "strasse strasse"),
-    ("price: $5 + 10%", "price 5 10"),
+    ("price: $5 + 10%", "price $5 + 10 %"),
     ("\U0001f642", ""),
+    ("Looking for a C++ dev", "looking for a c + + dev"),
+    ("C# dev", "c # dev"),
+    ("Rent under \u20ac500.", "rent under \u20ac500"),
+    ("Meet @alice & bob", "meet @alice & bob"),
+    ("It is \u22125, not +5 or 5-6", "it is -5 not +5 or 5 6"),
+    ("covid-19", "covid 19"),
+    ("flats < 500 > 100 = ok ~ ^ |", "flats < 500 > 100 = ok ~ ^ |"),
+    ("Need \u00bd kg, 1/2 kg, and/or 1.2", "need 1/2 kg 1/2 kg and or 1 2"),
+    ("> # Meet *founders*", "meet founders"),
+    ("#1 priority, >5 flats", "#1 priority >5 flats"),
+    ("I\u00b4d I\u02b9d I\u02bcd I\u2019d", "i d i d i d i d"),
+    ("clim\u200bbing\u00ad \ufeffgoa\u2060 \u2764\ufe0f", "climbing goa"),
+    ("\u2764\ufe0f", ""),
 ])
 def test_data387_the_v2_normal_form(ri, raw, norm):
     assert ri.held_norm_text_v2(raw) == norm
     assert ri.held_norm_text_v2(norm) == norm  # idempotent
+
+
+def test_data387_two_emoji_only_texts_with_vs16_do_not_match(tctx, index, ri):
+    """N1: a variation selector is deleted, not kept as the whole normal form."""
+    assert ri.held_norm_hash_v2("\u2764\ufe0f") is None and ri.held_norm_hash_v2("\u263a\ufe0f") is None
+    call(tctx, {"text": "\u2764\ufe0f", "source": "ambient"})
+    assert call(tctx, {"text": "\u263a\ufe0f", "source": "message"}, tool_call_id="c2")["published"] is True
 
 
 def test_data387_text_with_nothing_but_symbols_gets_no_v2_hash(tctx, index, ri):
