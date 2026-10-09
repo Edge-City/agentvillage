@@ -917,6 +917,8 @@ describe("M4: states in which Hermes ignores the gate", () => {
     const home = tenant();
     appendEnv(home, "AV_APPROVAL_ALLOW_UNPATCHED_HERMES=1");
     expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+    // OV-249 fix round 2 (R2-S1): an override install may fail open, so it is not a verified gate.
+    expect(lastInstallVerified()).toBe(false);
     expect(errors.join("\n")).toContain("!! approval gate: AV_APPROVAL_ALLOW_UNPATCHED_HERMES=1 accepts hermes-below-fail-closed-floor");
     expect(errors.join("\n")).toContain("DOGFOOD ONLY");
   });
@@ -928,6 +930,7 @@ describe("M4: states in which Hermes ignores the gate", () => {
     const home = tenant();
     appendEnv(home, "AV_APPROVAL_ALLOW_UNPATCHED_HERMES=1");
     expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+    expect(lastInstallVerified()).toBe(false);
     expect(errors.join("\n")).toContain("accepts hermes-signal-patch-missing");
   });
 
@@ -946,6 +949,7 @@ describe("M4: states in which Hermes ignores the gate", () => {
     fakeHermes({ signal_patch: false });
     const o = opts();
     expect(installApproval(SOURCE_SKILLS, o)).toBe("installed");
+    expect(lastInstallVerified()).toBe(false);
     const expected = ["AV_APPROVAL_ALLOW_UNPATCHED_HERMES:hermes-signal-patch-missing(marker:absent)"];
     expect(logs.at(-1)).toContain(`overrides: ${expected[0]}`);
     expect(JSON.parse(readFileSync(approvalSurfacePath(), "utf8")).overrides).toEqual(expected);
@@ -3121,6 +3125,37 @@ describe("DATA-379: the pre-warm", () => {
     verified();
     tenant({ env: { AV_APPROVAL_ENABLED: "0" } });
     expect(installApproval(SOURCE_SKILLS, opts())).toBe("disabled");
+    expect(lastInstallVerified()).toBe(false);
+  });
+
+  test("OV-249 fix round 2 (R2-N1): a live report without the routed facts installs, but is not a verified gate", () => {
+    // The real live self-check, with routed_entries and routed_sha256 stripped from its last line.
+    const dir = scratch("av-approval-no-routed-");
+    const wrapper = join(dir, "live_selfcheck_no_routed.py");
+    const real = join(SOURCE_SKILLS, "approval", "scripts", "live_selfcheck.py");
+    writeFileSync(
+      wrapper,
+      [
+        "import json, subprocess, sys",
+        `out = subprocess.run([sys.executable, ${JSON.stringify(real)}, *sys.argv[1:]], capture_output=True, text=True)`,
+        'lines = out.stdout.strip().split("\\n")',
+        "facts = json.loads(lines[-1])",
+        'facts.pop("routed_entries", None)',
+        'facts.pop("routed_sha256", None)',
+        'sys.stdout.write("\\n".join(lines[:-1] + [json.dumps(facts)]) + "\\n")',
+        "sys.stderr.write(out.stderr)",
+        "sys.exit(out.returncode)",
+        "",
+      ].join("\n"),
+    );
+    tenant();
+    fakeHermes();
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+    expect(lastInstallVerified()).toBe(true);
+    tenant();
+    fakeHermes();
+    expect(installApproval(SOURCE_SKILLS, opts({ liveScript: wrapper }))).toBe("installed");
+    expect(lastInstallRouted()).toBe(null);
     expect(lastInstallVerified()).toBe(false);
   });
 

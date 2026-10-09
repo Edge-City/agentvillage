@@ -53,7 +53,7 @@ import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 
 import { installIndex } from "./install_index";
-import { type IndexPluginFailure, indexPluginFailedLine, installIndexPlugin, recordIndexPluginStatus } from "./install_index_plugin";
+import { type IndexPluginFailure, indexPluginFailedLine, installIndexPlugin, recordIndexPluginStatus, setIndexPluginEnabled } from "./install_index_plugin";
 import { installEdgeos } from "./install_edgeos";
 import { safeInstallRecall, wipeRecallIndex } from "./install_recall";
 import { gateReceiptLine, lastInstallVerified, runApprovalStep, stagePlugins } from "./install_approval";
@@ -247,6 +247,13 @@ function installIndexHermesPlugin(): IndexPluginFailure | null {
     const kind = err instanceof Error ? err.name : typeof err;
     console.warn(`  warning: index-network plugin step failed (${kind}); core install continues`);
     failed = "hermes";
+    // OV-249 fix round 2 (R2-N2): a throw may come before the withheld check, so an earlier
+    // enabled entry would survive; drop it, best effort (fail closed: no plugin, not an ungated one).
+    try {
+      if (setIndexPluginEnabled(false)) console.log("→ index-network plugin: removed from plugins.enabled after the failure");
+    } catch {
+      // The failure above is already reported.
+    }
   }
   try {
     recordIndexPluginStatus(hermesHome(), failed);

@@ -119,6 +119,20 @@ describe("install.ts runs the stages in that order", () => {
     expect(main.indexOf("if (!runApprovalStep(SOURCE_SKILLS)) {")).toBeLessThan(main.indexOf("const indexPluginFailed = installIndexHermesPlugin();"));
   });
 
+  test("OV-249 fix round 2 (R2-N2): a throw in the plugin step drops index-network from plugins.enabled, best effort, and still reports hermes", () => {
+    const helper = text.slice(text.indexOf("function installIndexHermesPlugin("), text.indexOf("function restartGateway("));
+    const outerCatch = helper.indexOf("} catch (err) {");
+    const drop = helper.indexOf("setIndexPluginEnabled(false)");
+    expect(outerCatch).toBeGreaterThan(0);
+    expect(drop).toBeGreaterThan(outerCatch);
+    expect(helper.indexOf('failed = "hermes";', outerCatch)).toBeGreaterThan(outerCatch);
+    // Its own failure is swallowed: the drop sits in a try whose catch rethrows nothing.
+    const tail = helper.slice(drop, helper.indexOf("recordIndexPluginStatus("));
+    expect(tail).toContain("} catch {");
+    expect(tail).not.toContain("throw");
+    expect(helper.match(/setIndexPluginEnabled\(/g)).toHaveLength(1);
+  });
+
   test("R3 fix round 4 (output injection): the gate receipt is the last thing main() writes, and nothing runs after main()", () => {
     const body = main.slice(0, main.indexOf("\n}\n") + 3);
     const at = body.indexOf("const receipt = gateReceiptLine();");

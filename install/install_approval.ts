@@ -1322,9 +1322,10 @@ export function lastInstallRouted(): RoutedFacts | null {
 
 /**
  * OV-249 (B): this process's last approval step installed the gate, its live fire was answered by
- * the facade (not deferred), and Hermes's own parse routes exactly APPROVAL_GATED_TOOLS. False
- * otherwise: skipped, switched off, failed, deferred, or another routed list. The Index plugin step
- * enables `index-network` for an ON resident only when this is true.
+ * the facade (not deferred), no dogfood override was accepted, and Hermes's own parse routes exactly
+ * APPROVAL_GATED_TOOLS. False otherwise: skipped, switched off, failed, deferred, overridden, or no
+ * or another routed list. The Index plugin step enables `index-network` for an ON resident only when
+ * this is true.
  */
 let lastVerified = false;
 export function lastInstallVerified(): boolean {
@@ -1425,7 +1426,12 @@ export function installApproval(sourceSkills: string, options: ApprovalOptions =
     // install just wrote registers for the shim (live_selfcheck.py 5b), kept for the gate receipt
     // install.ts prints last (gateReceiptLine); nothing about it is printed here.
     lastRouted = report.routed ?? null;
-    lastVerified = deferred.length === 0 && lastRouted?.entries === APPROVAL_GATED_TOOLS.length && lastRouted.sha256 === APPROVAL_ROUTED_SHA256;
+    // OV-249 fix round 2 (R2-S1): an accepted dogfood override is a gate that may fail open, so not verified.
+    lastVerified =
+      deferred.length === 0 &&
+      report.overrides.length === 0 &&
+      lastRouted?.entries === APPROVAL_GATED_TOOLS.length &&
+      lastRouted.sha256 === APPROVAL_ROUTED_SHA256;
     console.log(
       `→ approval gate installed: ${APPROVAL_GATED_TOOLS.length} pre_tool_call entries (fail_closed), ` +
         `config ${configChanged ? "updated" : "unchanged"}, ${envChanged} .env line(s) set, ` +
