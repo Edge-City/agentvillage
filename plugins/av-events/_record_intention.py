@@ -153,8 +153,12 @@ may publish) whose normalised text matches a held entry under either hash is
 recorded locally, not refused:
 the event is emitted with `publish_refused="held_ambient_exists"` and the agent
 is told a held intention is published only through confirmation. A personal
-(`publish=false`) capture is never checked. [Reversal R9: drop the hash and
-rely on the prompt.] A corrupt file is renamed aside to
+(`publish=false`) capture is never checked. DATA-447: with approval off, an
+update of a published id whose new text matches a held entry the same way is
+not mirrored either: the event says `publish_refused="held_ambient_exists"`,
+Index keeps the old wording and the map entry is unchanged (with approval on,
+any update of a published id is `approval_required` before this check).
+[Reversal R9: drop the hash and rely on the prompt.] A corrupt file is renamed aside to
 `intentions.json.corrupt-<n>`, logged `map_corrupt`, and the map starts empty.
 An update or withdrawal of an id not in the map mirrors nothing: its event is
 ambient with `publish_refused="unknown_id"`.
@@ -1766,6 +1770,11 @@ def _update_or_withdraw(action: str, args: dict, held: Optional[str]) -> dict:
             # without the resident seeing them. Local only; capture the new
             # wording to propose it.
             code = "approval_required"
+        elif action == "update" and held_hash_exists(held_norm_hash(text), held_norm_hash_v2(text)):
+            # DATA-447: the capture path's R9/DATA-387 check, on new words. A
+            # held ambient text never reaches Index around the resident's
+            # confirmation, as a capture or as a rewording of a published one.
+            code = "held_ambient_exists"
         elif action == "update":
             code = mirror_update(index_id, description=text)
         elif already_archived:
@@ -1782,6 +1791,13 @@ def _update_or_withdraw(action: str, args: dict, held: Optional[str]) -> dict:
         result["message"] = f"{verb} intention {intention_id}; it was already withdrawn on Index."
     elif code is None:
         result["message"] = f"{verb} intention {intention_id} here and on Index."
+    elif code == "held_ambient_exists":
+        # DATA-447: before the held_* session codes, which it is not.
+        result["message"] = (
+            f"{verb} intention {intention_id} locally only: the new wording is already held as ambient, and a "
+            "held intention is published only through the resident's confirmation, so Index still has the old "
+            "wording. Do not publish it another way."
+        )
     elif code.startswith("held_"):
         result["message"] = f"{verb} intention {intention_id} locally; this session cannot change it on Index."
     elif code == "approval_required":
