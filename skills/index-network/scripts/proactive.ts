@@ -15,6 +15,9 @@
  *   evening        19:00: the outcome ask about one accepted connection the
  *                  follow-up announced two or more days ago (outcome-ask.ts),
  *                  else one pending conversation, or the last-day closeout.
+ *   pending        hourly at :20 (DATA-430): one line per opportunity that
+ *                  newly turned pending for the resident (pending-alert.ts).
+ *                  No once-a-day mark: the per-card ledger is the gate.
  *   tpl-brief      J2: a job added from a template for one tenant
  *   tpl-digest-preview  (`install/jobs.ts add`): the brief's, the drop's and
  *   tpl-evening-ask     the evening's content path, each with its own day
@@ -25,7 +28,8 @@
  * J2 per-job settings (job-settings.ts, docs/design/job-settings.md): each
  * agent job's delivery window and zone come from `av-events/job-settings.json`
  * when it has an entry, else from the defaults (the brief: 05:00 to 11:00
- * Asia/Kolkata; every other job: no window), which is rc13's behaviour. A
+ * Asia/Kolkata; the pending alert: 08:00 to 22:00; every other job: no
+ * window), which is rc13's behaviour for the rc13 jobs. A
  * run outside its window is silent (`outside-window`); a job whose entry is
  * invalid falls back to its default window, or, with none, is silent
  * (`settings-invalid`). The once-a-day mark stays on the village date, so a
@@ -42,6 +46,7 @@
  *   - the brief's delivery window, 05:00 to 11:00 IST (outside it: silent);
  *   - once per day per job: the day is marked done when the trigger wakes the
  *     model (a run that then fails loses that day; no delivery tracking);
+ *     the hourly pending alert has no day mark (DAY_MARK_EXEMPT);
  *   - an exclusive lock around memory/heartbeat-state.json (state-lock.ts); a
  *     state file whose content is not a JSON object is renamed aside and the
  *     run starts from empty; one that cannot be read at all is left alone and
@@ -73,6 +78,7 @@ import { askQuestions } from "./ask-questions";
 import { acceptLink, type BriefOpportunity, type DailyBriefContext, buildDailyBriefContext, villageDate } from "./build-daily-brief-context";
 import { OPPORTUNITY_DELIVERY_KEY, deliveryLogChanged, pruneDeliveryLog, readDeliveryLog, recordShowings } from "./delivery-state";
 import { dropOpportunity } from "./drop-opportunity";
+import { type DueCard, pendingAlert, respondByText } from "./pending-alert";
 import { cleanName, cleanText, cleanTitle, connectionsUrl, cronScanHit, envOrDotenv } from "./proactive-text";
 import { type LockOptions, LockStuck, LockTimeout, releaseHeldLocks, withStateLock } from "./state-lock";
 import { writeStateFile } from "./state-file";
@@ -82,7 +88,7 @@ import { type Delivery, deliveryFor, inWindow, isTeamTenant, minuteOfDay, pruneP
 import { DEFAULT_NAME, agentName, readProfile } from "../../agent-profile/scripts/profile";
 
 /** The default jobs' actions, one per installer job (install_index.ts DIGEST_CRON_SPECS). */
-export const ACTIONS = ["prefetch", "brief", "drop-midday", "drop-evening", "negotiation", "evening"] as const;
+export const ACTIONS = ["prefetch", "brief", "drop-midday", "drop-evening", "negotiation", "evening", "pending"] as const;
 /** The template jobs' actions (J2), `tpl-<template>`: a job only a template add creates. */
 export const TEMPLATE_ACTIONS = ["tpl-brief", "tpl-digest-preview", "tpl-evening-ask"] as const;
 export type ProactiveAction = (typeof ACTIONS)[number] | (typeof TEMPLATE_ACTIONS)[number];
@@ -109,6 +115,8 @@ export interface ProactiveOptions {
   /** Seams for tests; production uses the real functions. */
   buildContext?: typeof buildDailyBriefContext;
   drop?: typeof dropOpportunity;
+  /** The pending alert's pick (pending-alert.ts). */
+  pending?: typeof pendingAlert;
   evening?: typeof askQuestions;
   followUp?: typeof followUp;
   approvals?: (home: string) => number;
@@ -394,6 +402,16 @@ const lastSegment = (url: string) => url.slice(url.lastIndexOf("/") + 1);
 const profileLink = (url: unknown) => { const u = indexUrl("u", url); return u && `${PORTAL_WEB}/rolodex?person=${lastSegment(u)}`; };
 const signalLink = (url: unknown) => { const u = indexUrl("i", url); return u && `${PORTAL_WEB}/intents?intent=${lastSegment(u)}`; };
 const messageLink = (url: unknown) => { const a = acceptLink(url); return a ? `${a}&surface=telegram` : null; };
+/**
+ * DATA-430: the app's deep link to one pending card, `<portal>/intents?opportunity=<id>#opportunity-<id>`
+ * (the app half's literal: the Intents page scrolls to that card; an unknown id shows the page). The id
+ * is encoded once in each place (a valid id encodes to itself).
+ */
+export const appOpportunityLink = (id: unknown): string | null => {
+  if (typeof id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(id)) return null;
+  const encoded = encodeURIComponent(id);
+  return `${PORTAL_WEB}/intents?opportunity=${encoded}#opportunity-${encoded}`;
+};
 
 /** Counts strings that did not survive cleaning, so the run log can say how many were withheld. */
 class Withheld {
@@ -599,6 +617,23 @@ export function dropView(date: string, card: BriefOpportunity): { view: Record<s
   };
 }
 
+/**
+ * DATA-430: the pending alert's Script Output, one entry per card the pick
+ * handed over (pending-alert.ts). The prompt links only `appUrl` (the app's
+ * deep link to that card, where the resident decides); `acceptUrl` (Index's
+ * signed accept link, which accepts at once) is kept for completeness and is
+ * not rendered. `respondBy` is the deadline's words (respondByText), or null.
+ */
+export function pendingView(cards: DueCard[], now: Date): { view: Record<string, unknown> | null; withheld: number } {
+  const w = new Withheld();
+  const shown = cards.flatMap(({ card, opportunityId, firstSeen }) => {
+    const who = person(card, w);
+    if (!who) return [];
+    return [{ name: who.name, profileUrl: who.profileUrl, appUrl: appOpportunityLink(opportunityId), acceptUrl: who.messageUrl, opportunityId, firstSeen, respondBy: respondByText(card.respondBy, now) }];
+  });
+  return { view: shown.length > 0 ? { job: "pending-opportunity", cards: shown } : null, withheld: w.count };
+}
+
 type EveningResult = Awaited<ReturnType<typeof askQuestions>>;
 
 export function eveningView(date: string, result: Exclude<EveningResult, { silent: true }>): { view: Record<string, unknown> | null; withheld: number } {
@@ -679,6 +714,18 @@ async function dropAction(run: Run): Promise<Decision> {
   }
   if ("silent" in result) return { silent: result.reason };
   const { view, withheld } = dropView(run.date, result.opportunity);
+  return view ? { view, withheld } : { silent: "name-withheld", withheld };
+}
+
+/**
+ * DATA-430: the cards that newly turned pending, recorded as alerted by the
+ * pick (pending-alert.ts) before the model is woken, as the drops record a
+ * showing. The window was checked before this (deliveryGate).
+ */
+async function pendingAction(run: Run): Promise<Decision> {
+  const result = await (run.options.pending ?? pendingAlert)({ stateFile: run.stateFile, now: run.now });
+  if ("silent" in result) return { silent: result.reason };
+  const { view, withheld } = pendingView(result.cards, run.now);
   return view ? { view, withheld } : { silent: "name-withheld", withheld };
 }
 
@@ -804,10 +851,18 @@ const AGENT_ACTIONS: Record<AgentAction, (run: Run) => Promise<Decision>> = {
   "drop-evening": dropAction,
   negotiation: negotiationAction,
   evening: eveningAction,
+  pending: pendingAction,
   "tpl-brief": briefAction,
   "tpl-digest-preview": dropAction,
   "tpl-evening-ask": eveningAction,
 };
+
+/**
+ * Actions with no once-a-day mark (DATA-430): the hourly pending alert runs
+ * every hour of its window and its own per-card ledger is the only gate, so
+ * the day mark is neither read nor written for it.
+ */
+export const DAY_MARK_EXEMPT: ReadonlySet<AgentAction> = new Set<AgentAction>(["pending"]);
 
 /** The silent reason for an error a trigger caught: a known code, else the error's class. */
 function faultReason(err: unknown): string {
@@ -857,7 +912,8 @@ async function runAgentAction(action: AgentAction, options: ProactiveOptions): P
   try {
     result = await withStateLock(stateFile, async () => {
       // An unreadable state file is renamed aside before anything is picked or written.
-      if (doneToday(read(), action, run.date)) return silent("done-today");
+      const marked = !DAY_MARK_EXEMPT.has(action);
+      if (doneToday(read(), action, run.date) && marked) return silent("done-today");
       const decision = await AGENT_ACTIONS[action](run);
       const detail = decision.detail ? { detail: decision.detail } : {};
       if ("silent" in decision) return { ...silent(decision.silent, 0, decision.withheld), ...detail };
@@ -867,8 +923,11 @@ async function runAgentAction(action: AgentAction, options: ProactiveOptions): P
       // The day is done from the moment the model is woken.
       // A stage that cannot be written stops the wake before the day is marked.
       decision.beforeWake?.();
-      const latest = read();
-      writeStateFile(stateFile, markDone(decision.record ? decision.record(latest) : latest, action, run.date));
+      if (marked || decision.record) {
+        const latest = read();
+        const recorded = decision.record ? decision.record(latest) : latest;
+        writeStateFile(stateFile, marked ? markDone(recorded, action, run.date) : recorded);
+      }
       return { lines: [text, wakeLine(true)], exitCode: 0, woke: true, reason: "woke", ...(decision.withheld ? { withheld: decision.withheld } : {}), ...detail };
     }, options.lock);
   } catch (err) {

@@ -864,7 +864,9 @@ describe("list, and the zone Hermes reads schedules in", () => {
     expect(listed.out.missing).toEqual([]);
     expect(listed.out.unreadable).toEqual([]);
     const byKey = Object.fromEntries((listed.out.jobs as Job[]).map((entry) => [entry.key, entry]));
-    expect(Object.keys(byKey).sort()).toEqual(["brief", "drop-evening", "drop-midday", "evening", "negotiation"]);
+    expect(Object.keys(byKey).sort()).toEqual(["brief", "drop-evening", "drop-midday", "evening", "negotiation", "pending"]);
+    // DATA-430: the hourly pending alert is a default job with its own default window, 08:00-22:00.
+    expect(byKey.pending).toMatchObject({ window: "08:00-22:00", tz: "Asia/Kolkata", settings: "default", adminSchedule: false });
     expect(byKey.brief).toEqual({ key: "brief", id: job(SEND.name)!.id, name: SEND.name, schedule: staggeredSchedule(SEND, SEED), enabled: true, window: "06:00-09:00", tz: "Asia/Kolkata", settings: "custom", adminSchedule: true });
     // adminSchedule is reconcile's own rule: an entry (the brief's window) keeps the legacy migration off a job.
     expect(byKey.negotiation).toMatchObject({ window: null, settings: "default", adminSchedule: false });
@@ -941,6 +943,7 @@ const DEFAULT_NAMES: Record<string, string> = {
   "drop-evening": "Edge — opportunity drop (evening)",
   negotiation: "Edge — negotiation summary",
   evening: "Edge — evening questions",
+  pending: "Edge — pending opportunity",
 };
 const specNamed = (name: string) => DIGEST_CRON_SPECS.find((spec) => spec.name === name)!;
 
@@ -1067,13 +1070,13 @@ describe("admin marks: read entry by entry, one rule for list and reconcile, and
     const listed = run("list").out;
     expect(listed.adminSchedulesInvalid).toBeUndefined();
     expect(Object.fromEntries((listed.jobs as Job[]).map((entry) => [entry.key, entry.adminSchedule])))
-      .toEqual({ brief: true, "drop-midday": false, "drop-evening": false, negotiation: false, evening: false });
+      .toEqual({ brief: true, "drop-midday": false, "drop-evening": false, negotiation: false, evening: false, pending: false });
     expect(rollWarnings().filter((line) => line.includes("adminSchedules"))).toEqual([]);
     expect(storedExpr(SEND.name)).toBe("0 8 * * *");
     expect(storedExpr(DEFAULT_NAMES.negotiation)).toBe(staggeredSchedule(specNamed(DEFAULT_NAMES.negotiation), SEED));
   });
 
-  test("a value that is not a list: list says so and counts every default job managed; reconcile warns and moves none; the next write keeps all five marked", () => {
+  test("a value that is not a list: list says so and counts every default job managed; reconcile warns and moves none; the next write keeps all six marked", () => {
     roll();
     onLegacyDefaults();
     writeFileSync(jobSettingsPath(home), JSON.stringify({ v: 1, jobs: {}, adminSchedules: "brief" }));
@@ -1082,10 +1085,10 @@ describe("admin marks: read entry by entry, one rule for list and reconcile, and
     for (const entry of listed.jobs as Job[]) expect({ key: entry.key, adminSchedule: entry.adminSchedule }).toEqual({ key: entry.key, adminSchedule: true });
     expect(rollWarnings().filter((line) => line.includes("adminSchedules"))).toHaveLength(1);
     for (const name of Object.values(DEFAULT_NAMES)) expect({ name, expr: storedExpr(name) }).toEqual({ name, expr: specNamed(name).schedule });
-    // The repair is its own field (all five default jobs now admin-managed on file); `dropped` stays for compatibility.
+    // The repair is its own field (all six default jobs now admin-managed on file); `dropped` stays for compatibility.
     expect(run("set", "--job", "negotiation", "--window", "13:00-15:00").out)
       .toMatchObject({ ok: true, changed: ["settings"], dropped: ["adminSchedules"], adminSchedulesRepaired: true });
-    expect(settingsFile()).toEqual({ v: 1, jobs: { negotiation: { window: "13:00-15:00" } }, adminSchedules: ["brief", "drop-evening", "drop-midday", "evening", "negotiation"] });
+    expect(settingsFile()).toEqual({ v: 1, jobs: { negotiation: { window: "13:00-15:00" } }, adminSchedules: ["brief", "drop-evening", "drop-midday", "evening", "negotiation", "pending"] });
     expect(run("list").out.adminSchedulesInvalid).toBeUndefined();
     // Once repaired, the next write says nothing more.
     const next = run("set", "--job", "negotiation", "--window", "13:00-16:00").out;
@@ -1113,7 +1116,7 @@ describe("admin marks: read entry by entry, one rule for list and reconcile, and
     writeFileSync(jobSettingsPath(home), JSON.stringify({ v: 1, jobs: { "tpl-digest-preview": { window: "15:00-18:00" } }, adminSchedules: "brief" }));
     expect(run("remove", "--template", "digest-preview").out)
       .toMatchObject({ ok: true, changed: ["job", "settings"], dropped: ["adminSchedules"], adminSchedulesRepaired: true });
-    expect(settingsFile()).toEqual({ v: 1, jobs: {}, adminSchedules: ["brief", "drop-evening", "drop-midday", "evening", "negotiation"] });
+    expect(settingsFile()).toEqual({ v: 1, jobs: {}, adminSchedules: ["brief", "drop-evening", "drop-midday", "evening", "negotiation", "pending"] });
   });
 
   test("remove reports `dropped` exactly as set and add do: entries it drops, only when it rewrote the file", () => {
@@ -1312,7 +1315,7 @@ describe("an unreadable jobs.json is never read as no jobs (N-H)", () => {
     // No file is no jobs, as Hermes reads it: every default job is missing (a roll recreates them). So is `{}`.
     for (const content of [null, "{}"]) {
       if (content !== null) writeFileSync(path, content);
-      expect(run("list").out).toMatchObject({ ok: true, store: "ok", jobs: [], missing: ["brief", "drop-midday", "drop-evening", "negotiation", "evening"] });
+      expect(run("list").out).toMatchObject({ ok: true, store: "ok", jobs: [], missing: ["brief", "drop-midday", "drop-evening", "negotiation", "evening", "pending"] });
     }
   });
 });

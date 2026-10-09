@@ -1,8 +1,9 @@
-import { test, expect } from "bun:test";
+import { describe, test, expect } from "bun:test";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { TEMPLATE_NAMES } from "../../skills/index-network/scripts/job-settings";
+import { DEFAULT_WINDOWS, TEMPLATE_NAMES, formatWindow } from "../../skills/index-network/scripts/job-settings";
+import { MESSAGE_LABELS } from "../../skills/index-network/scripts/message-labels";
 import {
   DIGEST_CRON_SPECS,
   KNOWLEDGE_SYNC_PROMPT,
@@ -22,14 +23,15 @@ import {
   tokenUsageAuditCronDisabled,
 } from "../install_index";
 
-test("nine Index cron specs: digest jobs, opportunity drops, token audit, knowledge sync (heartbeat and Plaza selfie retired)", () => {
-  expect(DIGEST_CRON_SPECS).toHaveLength(9);
+test("ten Index cron specs: digest jobs, opportunity drops, the pending alert, token audit, knowledge sync (heartbeat and Plaza selfie retired)", () => {
+  expect(DIGEST_CRON_SPECS).toHaveLength(10);
   // The 30-minute "Edge — heartbeat" cron was retired (it drained OpenRouter
   // key budget fleet-wide); it must no longer be installed.
   expect(DIGEST_CRON_SPECS.some((s) => s.name === "Edge — heartbeat")).toBe(false);
   // The Agent Plaza selfie is an operator one-off, not a scheduled tenant cron.
   expect(DIGEST_CRON_SPECS.some((s) => s.name === "Edge — Agent Plaza selfie")).toBe(false);
-  const [signals, prepare, send, negotiation, evening, dropMidday, dropEvening, tokenAudit, knowledge] = DIGEST_CRON_SPECS;
+  const [signals, prepare, send, negotiation, evening, dropMidday, dropEvening, pending, tokenAudit, knowledge] = DIGEST_CRON_SPECS;
+  expect(pending.name).toBe("Edge — pending opportunity");
   expect(knowledge.name).toBe("Edge — knowledge sync");
   expect(knowledge.schedule).toBe("*/30 * * * *");
   expect(knowledge.staggerWindowMinutes).toBe(30);
@@ -85,7 +87,8 @@ test("nine Index cron specs: digest jobs, opportunity drops, token audit, knowle
 
 test("cron create args handle delivered and scripted specs", () => {
   const home = "/home/x/.hermes";
-  const [signals, prepare, send, , , , , tokenAudit] = DIGEST_CRON_SPECS;
+  const [signals, prepare, send] = DIGEST_CRON_SPECS;
+  const tokenAudit = DIGEST_CRON_SPECS.find((spec) => spec.name === "Edge — token usage audit")!;
 
   expect(cronCreateArgs(signals, "SIGNALS_BODY", home)).toEqual([
     "cron", "create", "0 1 * * *", "SIGNALS_BODY",
@@ -188,7 +191,7 @@ test("invalid telegram MCP handle is omitted", () => {
 });
 
 test("each spec declares its install-time override flag + env var", () => {
-  const [signals, prepare, send, , , dropMidday, dropEvening, tokenAudit] = DIGEST_CRON_SPECS;
+  const [signals, prepare, send, , , dropMidday, dropEvening, pending, tokenAudit] = DIGEST_CRON_SPECS;
   expect(signals.overrideFlag).toBe("--digest-signals-cron");
   expect(signals.overrideEnv).toBe("DIGEST_SIGNALS_CRON");
   expect(prepare.overrideFlag).toBe("--digest-prepare-cron");
@@ -199,6 +202,8 @@ test("each spec declares its install-time override flag + env var", () => {
   expect(dropMidday.overrideEnv).toBe("OPPORTUNITY_DROP_MIDDAY_CRON");
   expect(dropEvening.overrideFlag).toBe("--opportunity-drop-evening-cron");
   expect(dropEvening.overrideEnv).toBe("OPPORTUNITY_DROP_EVENING_CRON");
+  expect(pending.overrideFlag).toBe("--pending-alert-cron");
+  expect(pending.overrideEnv).toBe("PENDING_ALERT_CRON");
   expect(tokenAudit.overrideFlag).toBe("--token-usage-audit-cron");
   expect(tokenAudit.overrideEnv).toBe("TOKEN_USAGE_AUDIT_CRON");
 });
@@ -333,6 +338,7 @@ test("DATA-361: every prompt and script a spec names exists under its new home, 
     ["Edge — evening questions", "0 19 * * *", "agentvillage_proactive_evening.sh"],
     ["Edge — opportunity drop (midday)", "0 12 * * *", "agentvillage_proactive_drop-midday.sh"],
     ["Edge — opportunity drop (evening)", "0 17 * * *", "agentvillage_proactive_drop-evening.sh"],
+    ["Edge — pending opportunity", "20 * * * *", "agentvillage_proactive_pending.sh"],
     ["Edge — token usage audit", "0 9 * * *", "agentvillage_token_usage_audit.py"],
     ["Edge — knowledge sync", "*/30 * * * *", "agentvillage_knowledge_sync.sh"],
   ]);
@@ -341,4 +347,61 @@ test("DATA-361: every prompt and script a spec names exists under its new home, 
     ["Edge — template: digest-preview", "index-network/prompts/opportunity-drop.md"],
     ["Edge — template: evening-ask", "index-network/prompts/ask-questions.md"],
   ]);
+});
+
+describe("DATA-430: the hourly pending-opportunity alert", () => {
+  const pending = DIGEST_CRON_SPECS.find((spec) => spec.name === "Edge — pending opportunity")!;
+
+  test("the spec: hourly at :20, a 10-minute stagger, its prompt, the proactive shim as `pending`, delivered, failures local, its override", () => {
+    expect(pending).toEqual({
+      schedule: "20 * * * *",
+      staggerWindowMinutes: 10,
+      promptFile: "index-network/prompts/pending-alert.md",
+      scriptFile: PROACTIVE_SHIM,
+      scriptInstallName: "agentvillage_proactive_pending.sh",
+      failureDeliver: "local",
+      name: "Edge — pending opportunity",
+      deliver: true,
+      overrideFlag: "--pending-alert-cron",
+      overrideEnv: "PENDING_ALERT_CRON",
+    });
+    // Right after the two drops, before the opt-in audit.
+    const names = DIGEST_CRON_SPECS.map((spec) => spec.name);
+    expect(names.indexOf("Edge — pending opportunity")).toBe(names.indexOf("Edge — opportunity drop (evening)") + 1);
+    expect(cronCreateArgs(pending, "P", "/home/x")).toEqual([
+      "cron", "create", "20 * * * *", "P", "--name", "Edge — pending opportunity",
+      "--deliver", "telegram", "--failure-deliver", "local",
+      "--script", "agentvillage_proactive_pending.sh", "--workdir", "/home/x",
+    ]);
+  });
+
+  test("its label is Pending opportunity, and its default window is 08:00-22:00", () => {
+    expect(MESSAGE_LABELS["Pending opportunity"]).toEqual(["Edge — pending opportunity"]);
+    expect(formatWindow(DEFAULT_WINDOWS.pending!)).toBe("08:00-22:00");
+  });
+
+  test("staggered over :20 to :29 of every hour, deterministic per tenant; every `0 ...` default keeps its old slot", () => {
+    const minutes = new Set<number>();
+    for (let n = 0; n < 200; n++) {
+      const schedule = staggeredSchedule(pending, `ix_tenant_${n}`);
+      expect(staggeredSchedule(pending, `ix_tenant_${n}`)).toBe(schedule);
+      const [minute, ...rest] = schedule.split(" ");
+      expect(rest.join(" ")).toBe("* * * *");
+      expect(/^\d+$/.test(minute)).toBe(true);
+      minutes.add(Number(minute));
+    }
+    expect([...minutes].sort((a, b) => a - b)).toEqual([20, 21, 22, 23, 24, 25, 26, 27, 28, 29]);
+    // The base minute is counted from only for this spec: a `0` default is offset from 0, as before.
+    for (const spec of DIGEST_CRON_SPECS.filter((s) => s.schedule.startsWith("0 "))) {
+      const minute = Number(staggeredSchedule(spec, "ix_tenant_key").split(" ")[0]);
+      expect(minute).toBe(fnv1a(`ix_tenant_key:${spec.name}`) % spec.staggerWindowMinutes);
+    }
+  });
+
+  test("the override flag wins over the env, which wins over the staggered default", () => {
+    expect(resolveCronSchedule(pending, ["bun", "--pending-alert-cron", "45 * * * *"], { PENDING_ALERT_CRON: "50 * * * *" }, "seed")).toBe("45 * * * *");
+    expect(resolveCronSchedule(pending, [], { PENDING_ALERT_CRON: "50 * * * *" }, "seed")).toBe("50 * * * *");
+    expect(resolveCronSchedule(pending, [], {}, "seed")).toBe(staggeredSchedule(pending, "seed"));
+    expect(resolveCronSchedule(pending, [], {}, "")).toBe("20 * * * *");
+  });
 });
