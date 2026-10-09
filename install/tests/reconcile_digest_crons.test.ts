@@ -118,12 +118,17 @@ function currentJob(spec: typeof DIGEST_CRON_SPECS[number], id: string): Record<
   if (spec.scriptFile) job.script = spec.scriptInstallName;
   if (spec.noAgent) job.no_agent = true;
   if (spec.failureDeliver) job.failure_deliver = spec.failureDeliver;
-  return job;
+  return { ...job, ...rc29PauseState(spec) };
+}
+
+/** rc29 installs the pending alert paused (pending_alert_off.test.ts); a fixture of an installed tenant holds it so. */
+function rc29PauseState(spec: typeof DIGEST_CRON_SPECS[number]): Record<string, unknown> {
+  return spec === PENDING ? { enabled: false, state: "paused", paused_at: "2026-10-09T09:20:00Z" } : {};
 }
 
 /** A job as main left it before DATA-314: no proactive script, agent mode, no failure target. */
 function oldShapeJob(spec: typeof DIGEST_CRON_SPECS[number], id: string, prompt: string): Record<string, unknown> {
-  return { id, name: spec.name, prompt, schedule: { expr: staggeredSchedule(spec, SEED) } };
+  return { id, name: spec.name, prompt, schedule: { expr: staggeredSchedule(spec, SEED) }, ...rc29PauseState(spec) };
 }
 
 beforeEach(() => {
@@ -732,7 +737,8 @@ function installStatus(): { version: number; at: string; cron_failed: string[] }
 
 test("R1: a failed cron edit exits 0, writes the status file with the job's name, and prints the one count line; a clean run empties it", () => {
   process.env.HERMES_BIN = writeStubHermes(home, { failEditIds: ["n1"] });
-  writeJobs([oldShapeJob(NEGOTIATION, "n1", "NEGOTIATION_OLD")]);
+  // The pending alert is present (paused): the stub keeps no jobs.json, so one it created could not be read back and paused.
+  writeJobs([oldShapeJob(NEGOTIATION, "n1", "NEGOTIATION_OLD"), currentJob(PENDING, "pa1")]);
 
   const failed = runInstall();
   expect({ code: failed.code, stderr: failed.code === 0 ? "" : failed.stderr }).toEqual({ code: 0, stderr: "" });
