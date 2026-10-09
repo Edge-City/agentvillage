@@ -3267,7 +3267,10 @@ describe("DATA-379: the pre-warm", () => {
 // locale a valid multibyte character such as 'é' (c3 a9) passed, under C it
 // was refused. Ruling (the lead in Carter's absence, CLAIMS SWEEP-L44,
 // 2026-10-09 11:40Z): ASCII-only. Each value must be bytes 0x21-0x7E with no
-// `"` or `\`, matched under LC_ALL=C, whatever LC_ALL the shim inherits.
+// `"` or `\`, whatever LC_ALL the shim inherits. Fix round 1 (the refuter's
+// SHOULD-1): the 92 allowed characters are spelled out in the pattern, with no
+// range, no class and no LC_ALL, so CI's dash and bash 5 pin the same contract
+// as the Mac's bash 3.2. A pass case holds all 92, so dropping any one fails.
 // ---------------------------------------------------------------------------
 
 /** The installed locales among C.UTF-8 (always run) and en_US.UTF-8, as `locale -a` names them. */
@@ -3293,12 +3296,24 @@ describe("DATA-424: the shim's facade URL and credential checks are printable AS
     ["backslash", "x\\\\y"],
     ["DEL (7f)", "x\\177y"],
     ["0x80", "x\\200y"],
+    ["CR", "x\\ry"],
+    ["LF", "x\\ny"],
+    ["VT", "x\\vy"],
+    ["FF", "x\\fy"],
   ];
+  // Every byte the check allows: 0x21-0x7E less `"` and `\`, 92 characters.
+  const ALLOWED = Array.from({ length: 0x7e - 0x21 + 1 }, (_, i) => String.fromCharCode(0x21 + i))
+    .filter((c) => c !== '"' && c !== "\\")
+    .join("");
 
-  // One test per shell and locale: each runs the shim 16 times.
+  test("the allowed set is 92 characters", () => {
+    expect(ALLOWED.length).toBe(92);
+  });
+
+  // One test per shell and locale: each runs the shim 25 times.
   for (const shell of shells)
     for (const lc of locales)
-      test(`${shell}, LC_ALL=${lc}: a URL or credential holding é, a tab, a space, a quote, a backslash, DEL or 0x80 is refused with the existing block message; plain ASCII passes, ! and ~ included`, () => {
+      test(`${shell}, LC_ALL=${lc}: a URL or credential holding é, tab, space, quote, backslash, DEL, 0x80, CR, LF, VT or FF is refused with the existing block message; plain ASCII passes, all 92 allowed characters included`, () => {
         for (const [name, fmt] of refused) {
           const u = shimFixture("allow", null, { shell }).run({ LC_ALL: lc }, { printf: { AV_APPROVAL_URL: `${URL}/${fmt}` } });
           expect(["url", name, u.code, u.calls, u.stdout]).toEqual(["url", name, 2, 0, URL_BLOCK]);
@@ -3310,6 +3325,7 @@ describe("DATA-424: the shim's facade URL and credential checks are printable AS
         for (const [url, token] of [
           [URL, TOKEN],
           [`${URL}/~a!b`, `${TOKEN}!~`],
+          [`${URL}/${ALLOWED}`, ALLOWED],
         ]) {
           const r = shimFixture("allow", null, { shell }).run({ LC_ALL: lc, AV_APPROVAL_URL: url, AV_APPROVAL_TOKEN: token });
           expect([url, r.code, r.calls, r.stdout]).toEqual([url, 0, 1, "{}"]);
