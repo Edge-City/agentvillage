@@ -107,23 +107,23 @@ through R10. At the ask, the tool's own `post_llm_call` listener (outside the
 collector's guard, like the lineage ones) reads the reply the agent sent; when
 the session itself is a root session seen on a `HUMAN_PLATFORMS` platform with
 no cron in its lineage, and the reply holds `ASK_QUESTION` word for word and is
-at most `MAX_ASK_REPLY_CHARS`, it opens an ask in
-`$HERMES_HOME/av-events/open_drafts.json` (0600, `flock` on
-`open_drafts.json.lock`, write-temp-and-rename): the sha256 of each candidate
-span's exact UTF-8 bytes (`draft_candidates`: exact substrings, never
-rewritten; any span a chat formatter could render differently is dropped),
-`shown_at` (UTC ISO), the session id and platform; at most `MAX_OPEN_DRAFTS`,
-oldest dropped. A cron, subagent or unknown session opens nothing. The tool's
+at most `MAX_ASK_REPLY_CHARS`, it opens an ask in this process's memory
+(`_OPEN_DRAFTS`, never a file: anything in the sandbox can write a file, and a
+forged ask would open the gate; a gateway restart loses them, and the capture
+is then held_cron): the sha256 of each candidate span's exact UTF-8 bytes
+(`draft_candidates`: exact substrings, never rewritten; any span a chat
+formatter could render differently is dropped), `shown_at`, the session id and
+platform; at most `MAX_OPEN_DRAFTS`, oldest dropped. A cron, subagent or unknown session opens nothing. The tool's
 `pre_llm_call` listener closes every open ask at any turn but a cron run's:
 whatever the resident said, it was not silence. A capture passed as `message`
 with `confirmed_in_chat=silence` that R10 holds as `held_cron` (and
 `publish` true) publishes as stated only when sha256 of its exact text bytes is
 in an open ask shown at most `SILENCE_PUBLISH_WINDOW_HOURS` ago (24, pending
-Carter); every ask holding those bytes is closed and saved before the publish
+Carter); every ask holding those bytes is closed before the publish
 goes on, so a second capture is `held_cron` again. Its result carries
 `publish_via="open_draft"` and `draft_shown_at`. Every other cron capture is
 held exactly as before, and `held_unknown` / `held_silence` never read the
-file. [Reversal: drop `DRAFT_HOOKS` and the pass; silence from cron is held_cron.]
+open asks. [Reversal: drop `DRAFT_HOOKS` and the pass; silence from cron is held_cron.]
 
 **Held updates (F4, M3).** In a held session `action=update` of a published id
 never mirrors to Index; the local event carries `publish_refused` `held_cron` or
@@ -196,7 +196,6 @@ Python 3.11, standard library only.
 
 from __future__ import annotations
 
-import calendar
 import hashlib
 import http.client
 import ipaddress
@@ -1215,7 +1214,6 @@ def reserve_publish() -> Optional[str]:
 SILENCE_PUBLISH_WINDOW_HOURS = 24
 #: Asks kept open at once; the oldest is dropped first.
 MAX_OPEN_DRAFTS = 20
-OPEN_DRAFTS_FILE = "open_drafts.json"
 #: The one ask, word for word as DRAFT_RULE gives it. A reply without it opens nothing.
 ASK_QUESTION = "Should I publish this as written?"
 #: A longer reply opens nothing: it might be split into several Telegram
@@ -1227,7 +1225,6 @@ MAX_DRAFT_CHARS = 600
 #: The trace a silence capture published from an open draft carries.
 PUBLISH_VIA_OPEN_DRAFT = "open_draft"
 _ISO_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
-_SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 
 #: A span holding any of these is not opened: a chat platform's formatter may
 #: turn it into something else on screen (Telegram MarkdownV2 bold, italic,
@@ -1247,14 +1244,14 @@ _LEAD_MARKER = re.compile(r"(?:>+[ \t]*|[-\u2022][ \t]+|\d{1,2}[.)][ \t]+)")
 #: Emphasis wrapping a whole span (`*x*`, `**x**`, `_x_`, `__x__`).
 _WRAPPED = re.compile(r"(\*\*|__|\*|_)(.+)\1", re.DOTALL)
 
+#: The open asks, oldest first: `{hashes, shown_at (epoch), session_id,
+#: platform}`. In this process's memory only, like the lineage tables, never in
+#: a file: anything in the sandbox (the agent's own terminal tool included) can
+#: write a file under $HERMES_HOME, and a forged ask would open the gate. A
+#: gateway restart between the ask and the cron send loses them, and the
+#: capture is held_cron (fail closed).
+_OPEN_DRAFTS: list[dict] = []
 _DRAFTS_LOCK = threading.Lock()
-
-#: Tests replace this to simulate a crash between the temp file and the rename.
-_rename: Callable[[str, str], None] = os.replace
-
-
-def drafts_path() -> str:
-    return os.path.join(hermes_home(), "av-events", OPEN_DRAFTS_FILE)
 
 
 def draft_hash(text: str) -> str:
@@ -1264,92 +1261,6 @@ def draft_hash(text: str) -> str:
 
 def _iso(epoch: float) -> str:
     return time.strftime(_ISO_FORMAT, time.gmtime(epoch))
-
-
-def _epoch(value: Any) -> Optional[float]:
-    if not isinstance(value, str):
-        return None
-    try:
-        return float(calendar.timegm(time.strptime(value, _ISO_FORMAT)))
-    except (ValueError, OverflowError):
-        return None
-
-
-class _DraftsLocked:
-    """The in-process lock plus `flock` on `open_drafts.json.lock`."""
-
-    def __enter__(self) -> "_DraftsLocked":
-        _DRAFTS_LOCK.acquire()
-        self._fd: Optional[int] = None
-        try:
-            os.makedirs(os.path.dirname(drafts_path()), mode=DIR_MODE, exist_ok=True)
-            self._fd = os.open(drafts_path() + ".lock", os.O_RDWR | os.O_CREAT, FILE_MODE)
-            if fcntl is not None:
-                fcntl.flock(self._fd, fcntl.LOCK_EX)
-        except BaseException:
-            self._release()
-            raise
-        return self
-
-    def _release(self) -> None:
-        try:
-            if self._fd is not None:
-                if fcntl is not None:
-                    fcntl.flock(self._fd, fcntl.LOCK_UN)
-                os.close(self._fd)
-        finally:
-            self._fd = None
-            _DRAFTS_LOCK.release()
-
-    def __exit__(self, *exc: Any) -> None:
-        self._release()
-
-
-def _load_drafts_locked() -> list[dict]:
-    """The open asks, oldest first. A missing or malformed file is no open ask
-    (fail closed: nothing passes); one that cannot be read raises."""
-    try:
-        with open(drafts_path(), encoding="utf-8") as handle:
-            raw = handle.read()
-    except FileNotFoundError:
-        return []
-    except OSError:
-        raise MapUnreadable() from None
-    try:
-        data = json.loads(raw)
-    except ValueError:
-        data = None
-    drafts = data.get("drafts") if isinstance(data, dict) else None
-    if not isinstance(drafts, list):
-        return []
-    clean: list[dict] = []
-    for item in drafts:
-        if not isinstance(item, dict) or _epoch(item.get("shown_at")) is None:
-            continue
-        hashes = item.get("hashes")
-        if not isinstance(hashes, list) or not hashes:
-            continue
-        if not all(isinstance(h, str) and _SHA256_HEX.fullmatch(h) for h in hashes):
-            continue
-        clean.append(item)
-    return clean
-
-
-def _save_drafts_locked(drafts: list[dict]) -> None:
-    """Write-temp-and-rename: a crash before the rename leaves the old file whole."""
-    path = drafts_path()
-    fd, tmp = tempfile.mkstemp(prefix=".open_drafts.", dir=os.path.dirname(path))
-    try:
-        os.fchmod(fd, FILE_MODE)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump({"v": 1, "drafts": drafts}, handle, separators=(",", ":"))
-        _rename(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
 
 
 def _trim(text: str, start: int, end: int) -> tuple[int, int]:
@@ -1452,9 +1363,8 @@ def _speaking_root(session_id: str, platform: Any) -> bool:
 
 def note_ask(session_id: Any, platform: Any, reply: Any) -> int:
     """Open a draft: the reply the agent sent the resident asked the one ask.
-    Records the spans' hashes, when, and the session and platform. Returns how
-    many spans were opened (0: nothing written). Best effort: a failure opens
-    nothing, so a later silence capture is held (fail closed)."""
+    Records the spans' hashes, when, and the session and platform, in memory.
+    Returns how many spans were opened (0: nothing opened)."""
     sid = str(session_id or "").strip()
     if not _speaking_root(sid, platform):
         return 0
@@ -1462,19 +1372,14 @@ def note_ask(session_id: Any, platform: Any, reply: Any) -> int:
     if not candidates:
         return 0
     entry = {
-        "hashes": [draft_hash(c) for c in candidates],
-        "shown_at": _iso(float(_clock())),
+        "hashes": frozenset(draft_hash(c) for c in candidates),
+        "shown_at": float(_clock()),
         "session_id": sid,
         "platform": _PLATFORMS.get(sid) or "",
     }
-    try:
-        with _DraftsLocked():
-            drafts = _load_drafts_locked()
-            drafts.append(entry)
-            _save_drafts_locked(drafts[-MAX_OPEN_DRAFTS:])
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("av-events: record_intention draft_write_failed=%s", type(exc).__name__)
-        return 0
+    with _DRAFTS_LOCK:
+        _OPEN_DRAFTS.append(entry)
+        del _OPEN_DRAFTS[:-MAX_OPEN_DRAFTS]
     return len(candidates)
 
 
@@ -1488,40 +1393,28 @@ def close_open_drafts(session_id: Any) -> None:
             return
     except Exception:  # noqa: BLE001 - unsure closes
         pass
-    if not os.path.exists(drafts_path()):
-        return
-    try:
-        with _DraftsLocked():
-            if _load_drafts_locked():
-                _save_drafts_locked([])
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("av-events: record_intention draft_close_failed=%s", type(exc).__name__)
+    with _DRAFTS_LOCK:
+        _OPEN_DRAFTS.clear()
 
 
 def take_open_draft(text: str) -> Optional[str]:
-    """The `shown_at` of an open ask whose spans include these exact bytes and
-    that was shown within `SILENCE_PUBLISH_WINDOW_HOURS`, closing every ask that
-    holds them (once only) before the caller publishes; else None. The close
-    must be saved for the pass: a write that fails passes nothing."""
+    """The `shown_at` (UTC ISO) of an open ask whose spans include these exact
+    bytes and that was shown within `SILENCE_PUBLISH_WINDOW_HOURS`, closing
+    every ask that holds them (once only) before the caller publishes; else
+    None."""
     wanted = draft_hash(text)
-    try:
-        with _DraftsLocked():
-            drafts = _load_drafts_locked()
-            matching = [d for d in drafts if wanted in d["hashes"]]
-            if not matching:
-                return None
-            now = float(_clock())
-            window = SILENCE_PUBLISH_WINDOW_HOURS * 3600.0
-            # Loaded entries all have a parseable `shown_at`. A future one (a clock
-            # set back) is not fresh.
-            fresh = [d for d in matching if 0.0 <= now - float(_epoch(d["shown_at"]) or 0.0) <= window]
-            if not fresh:
-                return None
-            _save_drafts_locked([d for d in drafts if wanted not in d["hashes"]])
-            return max(d["shown_at"] for d in fresh)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("av-events: record_intention draft_read_failed=%s", type(exc).__name__)
-        return None
+    with _DRAFTS_LOCK:
+        matching = [d for d in _OPEN_DRAFTS if wanted in d["hashes"]]
+        if not matching:
+            return None
+        now = float(_clock())
+        window = SILENCE_PUBLISH_WINDOW_HOURS * 3600.0
+        # A future `shown_at` (a clock set back) is not fresh.
+        fresh = [d for d in matching if 0.0 <= now - d["shown_at"] <= window]
+        if not fresh:
+            return None
+        _OPEN_DRAFTS[:] = [d for d in _OPEN_DRAFTS if wanted not in d["hashes"]]
+        return _iso(max(d["shown_at"] for d in fresh))
 
 
 def _on_post_llm_call(**kwargs: Any) -> None:
@@ -2194,7 +2087,6 @@ __all__ = [
     "api_origin",
     "close_open_drafts",
     "draft_candidates",
-    "drafts_path",
     "held_reason",
     "index_request",
     "make_handler",

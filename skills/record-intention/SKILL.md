@@ -128,9 +128,10 @@ If the next message you send them on your own comes from a scheduled run and
 you capture your words there with `confirmed_in_chat=silence`, pass them
 exactly as you showed them with the one ask, character for character. The tool
 publishes them only when they match the words it saw you show, within its
-window, and only once. Words reworded or retyped, words you never showed, and
-words the resident answered in any way since are held for their approval card,
-as before. Your message says in one clause what the tool answered.
+window, and only once. Words reworded or retyped, words you never showed,
+words the resident answered in any way since, and words shown before the agent
+restarted are held for their approval card, as before. Your message says in
+one clause what the tool answered.
 
 ## Ambient intentions are held
 

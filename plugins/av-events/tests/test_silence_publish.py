@@ -2,9 +2,9 @@
 the resident already saw.
 
 At the one ask ("Should I publish this as written?") the tool's own
-`post_llm_call` listener opens a draft in `$HERMES_HOME/av-events/open_drafts.json`:
-the sha256 of each candidate span's exact bytes, when, and the session and
-platform; only from a root session that R10 says a person is speaking in. The
+`post_llm_call` listener opens a draft in the process's memory (never a file,
+which anything in the sandbox could forge): the sha256 of each candidate span's
+exact bytes, when, and the session and platform; only from a root session that R10 says a person is speaking in. The
 tool's `pre_llm_call` listener closes every open ask at any turn but a cron
 run's. A capture passed as `message` with `confirmed_in_chat=silence` that R10
 holds as `held_cron` publishes as stated only when its exact text is in an open
@@ -16,7 +16,8 @@ Mutants (one at a time, see the lane report): (a) no window check, killed by
 `test_a_stale_draft_is_held` and the stale probe; (b) no close on use, killed by
 `test_the_same_capture_again_is_held_cron`; (c) the capture's text stripped
 before hashing, killed by `test_a_one_byte_edit_is_held`; (d) the open from a
-cron lineage, killed by `test_a_cron_or_delegated_ask_opens_nothing`.
+cron lineage, killed by `test_a_cron_or_delegated_ask_opens_nothing`; (e) no
+close on a resident turn, killed by `test_a_resident_turn_closes_every_open_draft`.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ import io
 import json
 import os
 import re
-import stat
+import builtins
 import sys
 import threading
 import urllib.parse
@@ -176,8 +177,9 @@ def silence(text: str = DRAFT, **extra: Any) -> dict:
 
 
 def drafts(ri) -> list[dict]:
-    path = Path(ri.drafts_path())
-    return json.loads(path.read_text(encoding="utf-8"))["drafts"] if path.exists() else []
+    """The open asks, with `shown_at` as the UTC string the result carries."""
+    with ri._DRAFTS_LOCK:
+        return [{**d, "shown_at": ri._iso(d["shown_at"])} for d in ri._OPEN_DRAFTS]
 
 
 def intention_events(av, plugin) -> list[dict]:
@@ -220,9 +222,8 @@ def test_a_human_facing_ask_opens_a_draft(tctx, ri, clock):
     assert entry["shown_at"] == ri._iso(T0) and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", entry["shown_at"])
     assert entry["session_id"] == SESSION and entry["platform"] == "telegram"
     assert set(entry) == {"hashes", "shown_at", "session_id", "platform"}
-    assert stat.S_IMODE(os.stat(ri.drafts_path()).st_mode) == 0o600
-    # Hashes only: the words are not in the file.
-    assert DRAFT not in Path(ri.drafts_path()).read_text(encoding="utf-8")
+    # Hashes only: the words are not kept.
+    assert DRAFT not in repr(ri._OPEN_DRAFTS)
 
 
 def test_the_listener_returns_nothing_to_hermes(tctx, ri):
@@ -253,7 +254,7 @@ def test_a_cron_or_delegated_ask_opens_nothing(tctx, ri, index, setup, session, 
         else:
             tctx.fire(hook, session_id=sid, platform=value, model="m")
     show(tctx, ask_reply(), session=session, platform=platform)
-    assert not os.path.exists(ri.drafts_path())
+    assert ri._OPEN_DRAFTS == []
     assert_held_cron(call(tctx, silence()), index)
 
 
@@ -345,7 +346,7 @@ def test_a_one_byte_edit_is_held(tctx, ri, index, edited):
 
 def test_a_marker_without_any_draft_is_held(tctx, ri, index):
     assert_held_cron(call(tctx, silence()), index)
-    assert not os.path.exists(ri.drafts_path())
+    assert ri._OPEN_DRAFTS == []
 
 
 @pytest.mark.parametrize("marker", ["yes", "standing", None])
@@ -386,7 +387,7 @@ def test_publish_false_wins_and_leaves_the_draft_open(tctx, ri, index):
 def test_a_marker_from_the_cron_session_itself_is_held(tctx, ri, index):
     """The cron run shows a draft and asks (or says it did): nothing opens."""
     show(tctx, ask_reply(), session=CRON, platform="cron")
-    assert not os.path.exists(ri.drafts_path())
+    assert ri._OPEN_DRAFTS == []
     assert_held_cron(call(tctx, silence()), index)
 
 
@@ -467,48 +468,55 @@ def test_a_new_ask_after_a_resident_turn_opens_again(tctx, ri, index, clock):
 
 
 # --------------------------------------------------------------------------
-# The state file
+# The open asks live in memory only
 # --------------------------------------------------------------------------
 
 
-def test_the_write_goes_through_a_temp_file_and_a_crash_before_the_rename_keeps_the_old_file(tctx, ri, index, monkeypatch):
+def test_the_open_drafts_never_touch_a_file(tctx, ri, index, monkeypatch, home):
+    """Fix round 0: anything in the sandbox can write a file under
+    $HERMES_HOME, so the open asks live in memory only. Opening, taking and
+    closing never open, write, rename or create a path."""
+    def refuse(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError(f"file access on the open-draft path: {args[:1]!r}")
+
+    with monkeypatch.context() as m:
+        for target, name in ((builtins, "open"), (os, "open"), (os, "replace"), (os, "rename"),
+                             (os, "makedirs"), (os, "mkdir"), (os, "unlink"), (os, "stat")):
+            m.setattr(target, name, refuse)
+        assert ri.note_ask(SESSION, "telegram", ask_reply()) > 0
+        assert ri.take_open_draft(DRAFT) == ri._iso(T0)
+        assert ri.note_ask(SESSION, "telegram", ask_reply(OTHER)) > 0
+        ri.close_open_drafts(SESSION)
+    assert ri._OPEN_DRAFTS == []
+    # A full ask -> cron pass through the hooks and the tool leaves no draft file.
     show(tctx, ask_reply())
-    path = Path(ri.drafts_path())
-    before = path.read_bytes()
-    seen: list[tuple[str, str]] = []
+    assert call(tctx, silence())["published"] is True
+    assert [p for p in Path(home).rglob("*") if "draft" in p.name] == []
 
-    def crash(src: str, dst: str) -> None:
-        seen.append((src, dst))
-        raise OSError("crash between temp and rename")
 
-    monkeypatch.setattr(ri, "_rename", crash)
-    show(tctx, ask_reply(OTHER))
-    [(src, dst)] = seen
-    assert dst == str(path) and os.path.dirname(src) == os.path.dirname(dst)
-    assert os.path.basename(src).startswith(".open_drafts.")
-    assert path.read_bytes() == before
-    assert [p.name for p in path.parent.iterdir() if p.name.startswith(".open_drafts.")] == []
-    # A close that cannot be saved passes nothing (fail closed).
+def test_a_forged_drafts_file_opens_nothing(tctx, ri, index, home):
+    """The attack the file design allowed: a cron session's terminal writes an
+    "open ask" for any text, then captures it with silence. Held."""
+    forged = {"v": 1, "drafts": [{"hashes": [ri.draft_hash(DRAFT)], "shown_at": ri._iso(T0),
+                                  "session_id": SESSION, "platform": "telegram"}]}
+    for name in ("open_drafts.json", "drafts.json"):
+        target = Path(home) / "av-events" / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(forged), encoding="utf-8")
     assert_held_cron(call(tctx, silence()), index)
-    assert path.read_bytes() == before
+
+
+def test_a_restart_between_the_ask_and_the_cron_send_holds_it(tctx, ri, index, plugin, av):
+    """A gateway restart loses the open asks (memory only): fail closed."""
+    show(tctx, ask_reply())
     assert len(drafts(ri)) == 1
-
-
-@pytest.mark.parametrize("content", [
-    "not json", "[]", '{"drafts": {}}', '{"drafts": [{"hashes": ["zz"], "shown_at": "2026-10-03T00:00:00Z"}]}',
-    '{"drafts": [{"hashes": [], "shown_at": "2026-10-03T00:00:00Z"}]}',
-])
-def test_a_malformed_file_is_no_open_draft(tctx, ri, index, content):
-    Path(ri.drafts_path()).parent.mkdir(parents=True, exist_ok=True)
-    Path(ri.drafts_path()).write_text(content, encoding="utf-8")
+    with ri._DRAFTS_LOCK:
+        ri._OPEN_DRAFTS.clear()  # what a fresh process starts with
     assert_held_cron(call(tctx, silence()), index)
 
 
-def test_an_entry_with_a_bad_time_is_dropped(tctx, ri, index):
-    Path(ri.drafts_path()).parent.mkdir(parents=True, exist_ok=True)
-    entry = {"hashes": [ri.draft_hash(DRAFT)], "shown_at": "yesterday", "session_id": SESSION, "platform": "telegram"}
-    Path(ri.drafts_path()).write_text(json.dumps({"v": 1, "drafts": [entry]}), encoding="utf-8")
-    assert_held_cron(call(tctx, silence()), index)
+def test_a_reloaded_module_starts_with_no_open_draft(ri):
+    assert ri._OPEN_DRAFTS == [] and ri.take_open_draft(DRAFT) is None
 
 
 def test_through_approval_the_pass_is_a_stated_capture(tctx, ri, index, monkeypatch):
