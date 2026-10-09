@@ -544,6 +544,7 @@ Search, which such a gate would not see); its text, the `workspace/AGENTS.md` ro
 | `capture` that would publish, of text already held as ambient (case, whitespace, punctuation, quotes, dashes and full-width forms ignored; DATA-387) | none | local uuid v7, `publish_refused="held_ambient_exists"` |
 | `update` / `withdraw` of an id it published | `PATCH /api/intents/{id} {description}` / `PATCH /api/intents/{id}/archive` (no body) | `index_intent_id` set; a failed mirror adds `publish_refused` |
 | `update` of a published id in a held session | none | `publish_refused` `held_cron` or `held_unknown`, `source=ambient` |
+| `update` of a published id to text held as ambient (matched as for a capture; DATA-447), approval off | none | `publish_refused="held_ambient_exists"`, `index_intent_id` set, Index keeps the old wording, the map entry unchanged |
 | `withdraw` of a published id in a held session | none | refused (`success: false`, no event): `held_cron` or `held_unknown` |
 | `withdraw` of a published id already archived by this tool | none | `intention.withdrawn`, told it was already withdrawn on Index |
 | `update` / `withdraw` of an id it recorded locally | none | local only |

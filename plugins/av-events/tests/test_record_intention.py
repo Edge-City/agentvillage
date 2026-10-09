@@ -2461,3 +2461,129 @@ def test_m16_a_held_marker_capture_keeps_its_fingerprint_so_a_chat_yes_cannot_pu
     assert again["published"] is False and again["publish_refused"] == "held_ambient_exists"
     assert index.requests == []
 
+
+
+# --------------------------------------------------------------------------
+# DATA-447: with approval off, an update of a published id to a held ambient
+# text is held_ambient_exists, as a capture of it is (refuter DATA-387 S3).
+# --------------------------------------------------------------------------
+
+#: The text held as ambient in these tests; TEXT is the published one.
+HELD_B = "I'd like a fintech cofounder in Bangalore - evenings only"
+
+
+def _published_and_held(tctx, index, ri) -> dict:
+    """TEXT published under INDEX_ID, HELD_B captured as ambient (held); Index's log cleared."""
+    pub = call(tctx, {"text": TEXT, "source": "message"})
+    assert pub["published"] is True and pub["intention_id"] == INDEX_ID
+    held = call(tctx, {"text": HELD_B, "source": "ambient"}, tool_call_id="c-held")
+    assert held["held"] is True and [c["name"] for c in index.tool_calls()] == ["create_intent"]
+    index.requests.clear()
+    return held
+
+
+@pytest.mark.parametrize("variant", [
+    pytest.param(HELD_B, id="exact"),
+    pytest.param(HELD_B + ".", id="trailing-full-stop"),
+    pytest.param(HELD_B.upper(), id="upper-case"),
+    pytest.param(HELD_B.swapcase(), id="swapped-case"),
+    pytest.param(HELD_B.replace("'", "’").replace(" - ", " — "), id="curly-quote-em-dash"),
+])
+def test_data447_update_of_a_published_id_to_held_text_is_refused(tctx, index, ri, av, plugin, variant):
+    """Refuter probe S3: publish A, hold B, update A's id to B (or a DATA-387
+    near-copy): never mirrored. Index sees no update_intent."""
+    held = _published_and_held(tctx, index, ri)
+    entry_before = ri.lookup(INDEX_ID)
+    held_before = ri.lookup(held["intention_id"])
+    out = call(tctx, {"action": "update", "intention_id": INDEX_ID, "text": variant}, tool_call_id="c-up")
+    assert out["success"] is True and out["action"] == "update"
+    assert out["publish_refused"] == "held_ambient_exists"
+    # Still published (Index keeps the old wording), under its own id.
+    assert out["published"] is True and out["index_intent_id"] == INDEX_ID
+    assert "already held as ambient" in out["message"] and "Do not publish it another way" in out["message"]
+    assert index.requests == []
+    # The local record: the published entry and the held one are unchanged.
+    assert ri.lookup(INDEX_ID) == entry_before
+    assert ri.lookup(held["intention_id"]) == held_before
+    # The event carries the code and a hash, never the words.
+    event = intention_events(av, plugin)[-1]
+    assert event["event_type"] == "intention.updated" and event["intention_id"] == INDEX_ID
+    assert event["payload"]["publish_refused"] == "held_ambient_exists"
+    assert event["payload"]["index_intent_id"] == INDEX_ID
+    for words in (variant, HELD_B, "fintech"):
+        # ensure_ascii=False: the curly-quote and em-dash variant is checked as written, not \u-escaped.
+        assert words not in json.dumps(event, ensure_ascii=False)
+        assert words not in json.dumps(out, ensure_ascii=False)
+
+
+
+def test_data447_a_v1_only_held_entry_refuses_the_update(tctx, index, ri):
+    """Refuter S1 (p9): a held entry written before DATA-387 has v1 alone; v1 decides."""
+    held = _published_and_held(tctx, index, ri)
+    with ri._Locked():
+        entries, publishes = ri._load_locked()
+        entries[held["intention_id"]].pop(ri.HELD_HASH_V2_KEY)
+        ri._save_locked(entries, publishes)
+    assert ri.HELD_HASH_V2_KEY not in ri.lookup(held["intention_id"])
+    out = call(tctx, {"action": "update", "intention_id": INDEX_ID, "text": HELD_B}, tool_call_id="c-up")
+    assert out["publish_refused"] == "held_ambient_exists" and index.requests == []
+
+
+def test_data447_a_held_text_with_no_v2_hash_refuses_the_update(tctx, index, ri):
+    """Refuter S1 (p10): an emoji-only text has no v2 normal form by design; v1 decides."""
+    _published_and_held(tctx, index, ri)
+    emoji = "\U0001F642\U0001F642"
+    assert ri.held_norm_hash_v2(emoji) is None
+    held = call(tctx, {"text": emoji, "source": "ambient"}, tool_call_id="c-emoji")
+    assert held["held"] is True and ri.HELD_HASH_V2_KEY not in ri.lookup(held["intention_id"])
+    out = call(tctx, {"action": "update", "intention_id": INDEX_ID, "text": emoji}, tool_call_id="c-up")
+    assert out["publish_refused"] == "held_ambient_exists" and index.requests == []
+
+
+@pytest.mark.parametrize("gate", [True, None], ids=["approval-on", "approval-unreadable"])
+def test_data447_with_approval_on_the_update_is_still_approval_required(tctx, index, ri, monkeypatch, gate):
+    """AC2: approval on (or unreadable) answers before the held check, unchanged."""
+    _published_and_held(tctx, index, ri)
+    monkeypatch.setattr(ri, "_approval_on", lambda: gate)
+    for n, text in enumerate((HELD_B, HELD_B + ".", TEXT + " indoors")):
+        out = call(tctx, {"action": "update", "intention_id": INDEX_ID, "text": text}, tool_call_id=f"c{n}")
+        assert out["publish_refused"] == "approval_required" and out["published"] is True
+    assert index.requests == []
+
+
+def test_data447_an_update_to_unrelated_text_still_publishes(tctx, index, ri, av, plugin):
+    _published_and_held(tctx, index, ri)
+    index.tool = {"intentId": INDEX_ID, "description": TEXT + " indoors", "sourceType": "agentvillage", "sourceId": None}
+    out = call(tctx, {"action": "update", "intention_id": INDEX_ID, "text": TEXT + " indoors"}, tool_call_id="c-up")
+    assert out["success"] is True and out["published"] is True and "publish_refused" not in out
+    assert index.tool_calls() == [{"name": "update_intent", "arguments": {"description": TEXT + " indoors"}}]
+    assert intention_events(av, plugin)[-1]["payload"]["publish_refused"] is None
+
+
+def test_data447_a_no_op_edit_of_its_own_text_is_not_refused(tctx, index, ri):
+    """Decision: only a HELD entry refuses. The published text plus a full stop
+    matches no held entry (a published entry carries no held hash), so it is mirrored."""
+    _published_and_held(tctx, index, ri)
+    index.tool = {"intentId": INDEX_ID, "description": TEXT + ".", "sourceType": "agentvillage", "sourceId": None}
+    out = call(tctx, {"action": "update", "intention_id": INDEX_ID, "text": TEXT + "."}, tool_call_id="c-up")
+    assert "publish_refused" not in out
+    assert index.tool_calls() == [{"name": "update_intent", "arguments": {"description": TEXT + "."}}]
+
+
+def test_data447_once_the_held_text_is_withdrawn_the_update_publishes(tctx, index, ri):
+    held = _published_and_held(tctx, index, ri)
+    call(tctx, {"action": "withdraw", "intention_id": held["intention_id"]}, tool_call_id="c-wd")
+    assert index.requests == []
+    index.tool = {"intentId": INDEX_ID, "description": HELD_B, "sourceType": "agentvillage", "sourceId": None}
+    out = call(tctx, {"action": "update", "intention_id": INDEX_ID, "text": HELD_B}, tool_call_id="c-up")
+    assert "publish_refused" not in out
+    assert index.tool_calls() == [{"name": "update_intent", "arguments": {"description": HELD_B}}]
+
+
+def test_data447_a_held_session_still_answers_first(tctx, index, ri, av, plugin):
+    """F4 is unchanged: a cron update of a published id is held_cron, whatever its text."""
+    _published_and_held(tctx, index, ri)
+    cron = "cron_memsync_20261009_030000"
+    tctx.fire("on_session_start", session_id=cron, model="m", platform="cron")
+    out = call(tctx, {"action": "update", "intention_id": INDEX_ID, "text": HELD_B}, session=cron, tool_call_id="c-up")
+    assert out["publish_refused"] == "held_cron" and index.requests == []
