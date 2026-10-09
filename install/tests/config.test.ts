@@ -12,6 +12,8 @@ import {
   configureIndexLinks,
   configureStt,
   disableTelegramLinkPreviews,
+  dumpConfig,
+  setTerminalCwd,
 } from "../config";
 
 const ORIGINAL_ENV = {
@@ -425,4 +427,73 @@ test("configureHostedGateway then disableTelegramLinkPreviews: both keys, idempo
   const telegram = (readConfig(configPath).platforms as Record<string, Record<string, unknown>>).telegram;
   expect(telegram.gateway_restart_notification).toBe(false);
   expect(telegram.extra).toEqual({ dm_topics: [], disable_link_previews: true });
+});
+
+// DATA-434: Hermes reads config.yaml with PyYAML (YAML 1.1), where a bare off/on/yes/no is a
+// boolean; the `yaml` package's YAML 1.1 parse stands in for PyYAML below (`python3` with PyYAML
+// checks the real reader when it is installed).
+const YAML11_WORDS = [
+  "y", "Y", "yes", "Yes", "YES", "n", "N", "no", "No", "NO", "on", "On", "ON", "off", "Off", "OFF",
+  "true", "True", "TRUE", "false", "False", "FALSE", "null", "Null", "NULL", "~",
+  "0b101", "0755", "1_000", "22:00", "8:30", "1.", "2026-10-08", "2026-10-08T12:00:00Z",
+];
+const PLAIN_STRINGS = ["new", "all", "verbose", "log", "accumulate", "Asia/Kolkata", "/data/.hermes", "oFf", "0o755", "1e3", "a: b", "multi\nline\n"];
+const PYYAML = Bun.spawnSync(["python3", "-c", "import yaml"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+
+test("DATA-434: a resident's /verbose 'off' survives an installer rewrite of config.yaml as the string, and a re-run rewrites nothing new", () => {
+  const home = mkdtempSync(join(tmpdir(), "agentvillage-config-"));
+  process.env.HERMES_HOME = home;
+  const configPath = join(home, "config.yaml");
+  // As Hermes's own writer leaves it after /verbose (utils.py `_rt_value` double-quotes the word).
+  writeFileSync(configPath, 'display:\n  platforms:\n    telegram:\n      tool_progress: "off"\n');
+
+  logged(setTerminalCwd);
+  const first = readFileSync(configPath, "utf8");
+  logged(setTerminalCwd);
+
+  expect(first).toBe(`display:\n  platforms:\n    telegram:\n      tool_progress: "off"\nterminal:\n  cwd: ${home}\n`);
+  expect(readFileSync(configPath, "utf8")).toBe(first);
+  const asHermes = YAML.parse(first, { version: "1.1" }) as { display: { platforms: { telegram: { tool_progress: unknown } } } };
+  expect(asHermes.display.platforms.telegram.tool_progress).toBe("off");
+});
+
+test("DATA-434: dumpConfig double-quotes every string YAML 1.1 reads as another type, as value, list item and key; other scalars keep the 1.2 dump's bytes", () => {
+  for (const word of YAML11_WORDS) {
+    const doc = { k: word, l: [word], m: { [word]: 1 } };
+    const text = dumpConfig(doc);
+    expect(text).toBe(`k: "${word}"\nl:\n  - "${word}"\nm:\n  "${word}": 1\n`);
+    expect(YAML.parse(text, { version: "1.1" })).toEqual(doc);
+    expect(YAML.parse(text)).toEqual(doc);
+  }
+  const rest = {
+    strings: PLAIN_STRINGS,
+    numbers: [0, -1, 4096, 1.5, 0.1],
+    flags: [true, false, null],
+    nested: { show_reasoning: false, tool_progress: "new", list: [] as unknown[], empty: {} },
+  };
+  expect(dumpConfig(rest)).toBe(YAML.stringify(rest));
+  expect(YAML.parse(dumpConfig(rest))).toEqual(rest);
+});
+
+test("DATA-434: dumpConfig quotes `=` anywhere and `<<` as a value (PyYAML refuses either bare); a `<<` key stays bare", () => {
+  const doc = { a: "=", b: "<<", l: ["=", "<<"], "=": 1, "<<": { x: 1 } };
+  expect(dumpConfig(doc)).toBe('a: "="\nb: "<<"\nl:\n  - "="\n  - "<<"\n"=": 1\n<<:\n  x: 1\n');
+  expect(YAML.parse(dumpConfig(doc))).toEqual(doc);
+});
+
+test.skipIf(!PYYAML)("DATA-434: PyYAML (Hermes's reader) reads every dumpConfig string back as that string", () => {
+  const doc = {
+    values: [...YAML11_WORDS, ...PLAIN_STRINGS, "=", "<<"],
+    keys: Object.fromEntries([...YAML11_WORDS, "="].map((w, i) => [w, i])),
+  };
+  const script = [
+    "import json, sys, yaml",
+    "got = yaml.safe_load(sys.stdin.read())",
+    "print(json.dumps({'values': [[type(v).__name__, v] for v in got['values']], 'keys': [[type(k).__name__, k] for k in got['keys']]}, default=str))",
+  ].join("\n");
+  const run = Bun.spawnSync(["python3", "-c", script], { stdin: Buffer.from(dumpConfig(doc)) });
+  expect(run.exitCode).toBe(0);
+  const out = JSON.parse(run.stdout.toString()) as { values: [string, unknown][]; keys: [string, unknown][] };
+  expect(out.values).toEqual(doc.values.map((v) => ["str", v]));
+  expect(out.keys).toEqual([...YAML11_WORDS, "="].map((w) => ["str", w]));
 });

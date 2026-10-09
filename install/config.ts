@@ -14,9 +14,52 @@ export function readConfig(): Record<string, unknown> {
   return (YAML.parse(readFileSync(configPath, "utf8")) ?? {}) as Record<string, unknown>;
 }
 
-/** Write `$HERMES_HOME/config.yaml` from `doc` (the `yaml` package's stringify, as every step here does). */
+/**
+ * The plain-scalar patterns YAML 1.1 resolves to something other than a string, taken from the
+ * `yaml` package's own `yaml-1.1` schema: booleans (y, n, yes, no, on, off, true, false in their
+ * case forms), null and `~`, 1.1 integers (`0b101`, `0755`, `1_000`, base-60 `22:00`), floats and
+ * timestamps (`2026-10-08`). The merge key `<<` is not in the list (see `needsQuotes`).
+ */
+const YAML11_IMPLICIT: readonly RegExp[] = new YAML.Document(null, { version: "1.1" }).schema.tags.flatMap((tag) =>
+  "test" in tag && tag.test instanceof RegExp && tag.default === true ? [tag.test] : [],
+);
+
+/**
+ * Whether a string scalar must be quoted for PyYAML. Also `=` anywhere and `<<` as a value: PyYAML
+ * resolves both bare words to tags `safe_load` cannot construct and refuses the whole file. A `<<`
+ * key stays bare, as before, so a merge PyYAML performs is still a merge.
+ */
+function needsQuotes(value: string, isKey: boolean): boolean {
+  if (value === "=" || (value === "<<" && !isKey)) return true;
+  return YAML11_IMPLICIT.some((re) => re.test(value));
+}
+
+/**
+ * `doc` as config.yaml text (DATA-434). Hermes reads the file with PyYAML (YAML 1.1;
+ * hermes_cli/config.py:436, utils.py `fast_safe_load`) while the `yaml` package writes YAML 1.2,
+ * where only true/false/null are reserved; a string such as a resident's `/verbose` "off" came out
+ * as the bare word `off`, which Hermes reads as boolean False and its next save writes as `false`.
+ * So this is the package's YAML 1.2 dump (a string 1.2 would read as another type is quoted as
+ * before) with every string, key or value, that YAML 1.1 would read as another type double-quoted
+ * too; Hermes's own writer double-quotes the boolean and null words the same way (utils.py
+ * `_rt_value`). Every string then reads back as itself under both readers, and nothing else
+ * changes form. Not `version: "1.1"`: that writer drops the quotes from a string such as "0o755"
+ * (a plain string to 1.1, an integer to `readConfig`'s 1.2 parse), so the next installer pass
+ * would turn it into a number.
+ */
+export function dumpConfig(doc: Record<string, unknown>): string {
+  const out = new YAML.Document(doc);
+  YAML.visit(out, {
+    Scalar(key, node) {
+      if (typeof node.value === "string" && needsQuotes(node.value, key === "key")) node.type = "QUOTE_DOUBLE";
+    },
+  });
+  return out.toString();
+}
+
+/** Write `$HERMES_HOME/config.yaml` from `doc` through `dumpConfig`, the one writer every installer step uses. */
 export function writeConfig(doc: Record<string, unknown>): void {
-  writeFileSync(join(hermesHome(), "config.yaml"), YAML.stringify(doc));
+  writeFileSync(join(hermesHome(), "config.yaml"), dumpConfig(doc));
 }
 
 function configuredMaxTokens(): number {
