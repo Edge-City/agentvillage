@@ -964,7 +964,12 @@ def test_an_unsavable_map_still_publishes_and_logs_the_count_failure_once(tctx, 
 
 
 def test_an_unreadable_count_fails_closed(tctx, index, ri, monkeypatch):
-    def unreadable():
+    real = ri._load_locked
+
+    def unreadable(*, strict: bool = False):
+        if strict:
+            # DATA-448: the held check reads first (strict) and passes; the count read fails.
+            return real(strict=True)
         raise ri.MapUnreadable()
 
     monkeypatch.setattr(ri, "_load_locked", unreadable)
@@ -1165,11 +1170,18 @@ def test_f5_a_corrupt_map_is_set_aside(tctx, index, ri, caplog):
     with open(path, "a", encoding="utf-8") as handle:
         handle.write("garbage")
     index.tool = created(SECOND_ID)
-    call(tctx, {"text": TEXT + " 2", "source": "message"}, tool_call_id="c2")
+    # DATA-448: the held check finds it corrupt, sets it aside and refuses that capture.
+    refused_now = call(tctx, {"text": TEXT + " 2", "source": "message"}, tool_call_id="c2")
+    assert refused_now["publish_refused"] == "map_unreadable"
+    assert [c["name"] for c in index.tool_calls()] == ["create_intent"]
     aside = Path(str(path) + ".corrupt-1")
     assert aside.exists() and first["intention_id"] in aside.read_text(encoding="utf-8")
     assert "av-events: record_intention map_corrupt=1" in caplog.text
-    assert set(json.loads(path.read_text(encoding="utf-8"))["intentions"]) == {SECOND_ID}
+    assert set(json.loads(path.read_text(encoding="utf-8"))["intentions"]) == {refused_now["intention_id"]}
+    # One-shot: the retry finds a fresh map and publishes.
+    retried = call(tctx, {"text": TEXT + " 2", "source": "message"}, tool_call_id="c3")
+    assert retried["published"] is True and retried["intention_id"] == SECOND_ID
+    assert set(json.loads(path.read_text(encoding="utf-8"))["intentions"]) == {refused_now["intention_id"], SECOND_ID}
     path.write_text("[]", encoding="utf-8")
     ri.lookup("x")
     assert Path(str(path) + ".corrupt-2").exists()
@@ -2587,3 +2599,139 @@ def test_data447_a_held_session_still_answers_first(tctx, index, ri, av, plugin)
     tctx.fire("on_session_start", session_id=cron, model="m", platform="cron")
     out = call(tctx, {"action": "update", "intention_id": INDEX_ID, "text": HELD_B}, session=cron, tool_call_id="c-up")
     assert out["publish_refused"] == "held_cron" and index.requests == []
+
+
+# --------------------------------------------------------------------------
+# DATA-448 (ruling R13): a held check that cannot read the map refuses the
+# publish (fail closed) instead of reading as "nothing held".
+# --------------------------------------------------------------------------
+
+#: An OSError on reading the map (MapUnreadable): permissions flipped, or a
+#: directory where the file was (root-proof).
+UNREADABLE = ["mode-0000", "a-directory"]
+
+
+@pytest.fixture()
+def break_map(ri):
+    """Make the existing map unreadable or corrupt in place; its mode is restored after."""
+    path = Path(ri.map_path())
+
+    def apply(how: str) -> None:
+        if how == "mode-0000":
+            if hasattr(os, "geteuid") and os.geteuid() == 0:
+                pytest.skip("root reads a 0000 file")
+            os.chmod(path, 0)
+        elif how == "a-directory":
+            path.unlink()
+            path.mkdir()
+        else:
+            assert how == "corrupt"
+            path.write_text("{not json", encoding="utf-8")
+
+    yield apply
+    if path.is_file():
+        os.chmod(path, 0o600)
+
+
+def _breaking_after_lookup(ri, monkeypatch, break_map, how: str) -> None:
+    """The update's own lookup reads the map; it breaks before the held check."""
+    real = ri.lookup
+    broken: list[bool] = []
+
+    def lookup(intention_id: str):
+        entry = real(intention_id)
+        if not broken:
+            broken.append(True)
+            break_map(how)
+        return entry
+
+    monkeypatch.setattr(ri, "lookup", lookup)
+
+
+@pytest.mark.parametrize("how", UNREADABLE)
+def test_data448_an_unreadable_map_refuses_a_capture(tctx, index, ri, av, plugin, break_map, caplog, how):
+    """AC1: nothing reaches Index; its own code; the agent is told to retry."""
+    call(tctx, {"text": HELD_B, "source": "ambient"}, tool_call_id="c-held")
+    assert index.requests == []
+    break_map(how)
+    out = call(tctx, {"text": TEXT, "source": "message"}, tool_call_id="c-cap")
+    assert out["success"] is True and out["published"] is False and out["index_intent_id"] is None
+    assert out["publish_refused"] == "map_unreadable"
+    assert "Capture it again in a moment" in out["message"] and "Nothing was sent" in out["message"]
+    assert index.requests == []
+    assert "map_read_failed=MapUnreadable publish_refused=map_unreadable" in caplog.text
+    event = intention_events(av, plugin)[-1]
+    assert event["event_type"] == "intention.captured"
+    assert event["payload"]["publish_refused"] == "map_unreadable" and event["payload"]["source"] == "message"
+    assert event["payload"]["index_intent_id"] is None
+
+
+@pytest.mark.parametrize("how", UNREADABLE + ["corrupt"])
+def test_data448_with_approval_on_a_capture_is_not_proposed_either(tctx, index, ri, monkeypatch, break_map, how):
+    """AC4: approval on, nothing leaves the box: no proposal, no Index request."""
+    call(tctx, {"text": HELD_B, "source": "ambient"}, tool_call_id="c-held")
+    monkeypatch.setattr(ri, "_approval_on", lambda: True)
+    proposed: list[str] = []
+    monkeypatch.setattr(ri, "_stated_through_approval", lambda result, text, source: proposed.append(text))
+    break_map(how)
+    out = call(tctx, {"text": TEXT, "source": "message"}, tool_call_id="c-cap")
+    assert out["publish_refused"] == "map_unreadable" and out["published"] is False
+    assert proposed == [] and index.requests == []
+
+
+def test_data448_a_corrupt_map_refuses_that_capture_and_the_next_reads_a_new_map(tctx, index, ri, break_map, caplog):
+    """AC3: corrupt is unreadable for the call that finds it (and sets it
+    aside), not an empty map; the refusal is one-shot, so the retry publishes."""
+    held = call(tctx, {"text": HELD_B, "source": "ambient"}, tool_call_id="c-held")
+    break_map("corrupt")
+    path = Path(ri.map_path())
+    out = call(tctx, {"text": TEXT, "source": "message"}, tool_call_id="c-cap")
+    assert out["publish_refused"] == "map_unreadable" and out["published"] is False
+    assert index.requests == []
+    assert Path(str(path) + ".corrupt-1").read_text(encoding="utf-8") == "{not json"
+    assert "av-events: record_intention map_corrupt=1" in caplog.text
+    assert held["intention_id"] not in ri._load_map()
+    again = call(tctx, {"text": TEXT, "source": "message"}, tool_call_id="c-again")
+    assert again["published"] is True and again["intention_id"] == INDEX_ID
+    assert [c["name"] for c in index.tool_calls()] == ["create_intent"]
+
+
+def test_data448_a_missing_map_is_a_first_run_and_publishes(tctx, index, ri):
+    """AC3: no map yet means nothing held, as before."""
+    assert not Path(ri.map_path()).exists()
+    assert ri.held_refusal(ri.held_norm_hash(TEXT), ri.held_norm_hash_v2(TEXT)) is None
+    out = call(tctx, {"text": TEXT, "source": "message"})
+    assert out["published"] is True and "publish_refused" not in out
+    assert [c["name"] for c in index.tool_calls()] == ["create_intent"]
+
+
+@pytest.mark.parametrize("how", UNREADABLE + ["corrupt"])
+def test_data448_an_unreadable_map_refuses_an_approval_off_update(
+        tctx, index, ri, av, plugin, monkeypatch, break_map, how):
+    """AC2 (and AC3 for the update): no update_intent while the map cannot be read."""
+    pub = call(tctx, {"text": TEXT, "source": "message"})
+    assert pub["published"] is True and pub["intention_id"] == INDEX_ID
+    index.requests.clear()
+    _breaking_after_lookup(ri, monkeypatch, break_map, how)
+    out = call(tctx, {"action": "update", "intention_id": INDEX_ID, "text": TEXT + " indoors"}, tool_call_id="c-up")
+    assert out["success"] is True and out["action"] == "update"
+    assert out["publish_refused"] == "map_unreadable"
+    assert out["published"] is True and out["index_intent_id"] == INDEX_ID
+    assert "Make the same update again in a moment" in out["message"]
+    assert "Index still has the old wording" in out["message"]
+    assert index.requests == []
+    event = intention_events(av, plugin)[-1]
+    assert event["event_type"] == "intention.updated" and event["intention_id"] == INDEX_ID
+    assert event["payload"]["publish_refused"] == "map_unreadable"
+
+
+@pytest.mark.parametrize("how", UNREADABLE + ["corrupt"])
+def test_data448_with_approval_on_the_update_is_still_approval_required(tctx, index, ri, monkeypatch, break_map, how):
+    """AC4: approval on answers before the held check, unchanged."""
+    call(tctx, {"text": TEXT, "source": "message"})
+    index.requests.clear()
+    monkeypatch.setattr(ri, "_approval_on", lambda: True)
+    _breaking_after_lookup(ri, monkeypatch, break_map, how)
+    out = call(tctx, {"action": "update", "intention_id": INDEX_ID, "text": TEXT + " indoors"}, tool_call_id="c-up")
+    assert out["publish_refused"] == "approval_required" and out["published"] is True
+    assert index.requests == []
