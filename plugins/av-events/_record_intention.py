@@ -165,11 +165,15 @@ gates a publish, so when it cannot read the map (an `OSError` other than a
 missing file, `MapUnreadable`) or finds it corrupt (set aside as above), that
 capture or approval-off update is not published or mirrored, nor proposed:
 `publish_refused="map_unreadable"`, recorded locally like
-`held_ambient_exists`, and the agent is told to try again shortly. The refusal
-is one-shot for a corrupt map: the file is set aside by the refusing call, so
-the next call finds no map and proceeds as on a first run. A missing map (first
-run) holds nothing and publishes as before. Every other map read (lookups, the
-rate count, the approval pass) keeps its own failure handling.
+`held_ambient_exists`, and the agent is told not to publish it another way and
+to capture it again only if the resident stated those words. For a corrupt map
+(not JSON, or not UTF-8) the refusal is at most one-shot: whichever read meets
+it first (a lookup, `remember`, the rate count, the approval pass or the held
+check) sets it aside and every later read starts from an empty map, as on a
+first run. Only when the held check is that first read is a publish refused;
+after the set-aside, held entries that lived only in that file are gone and no
+held check can hold them. A missing map (first run) holds nothing and publishes
+as before. Every other map read keeps its own failure handling.
 An update or withdrawal of an id not in the map mirrors nothing: its event is
 ambient with `publish_refused="unknown_id"`.
 
@@ -1001,19 +1005,26 @@ def _set_aside(path: str) -> None:
 
 
 def _load_locked(*, strict: bool = False) -> tuple[dict[str, dict], list[float]]:
-    """(entries, publish timestamps). Call under `_Locked`. A corrupt map is
-    set aside and read as empty; with `strict` (DATA-448, the held check that
-    gates a publish) it is still set aside, then raises `MapUnreadable`."""
+    """(entries, publish timestamps). Call under `_Locked`. A corrupt map (not
+    JSON, not UTF-8, or no `intentions` object) is set aside by whichever read
+    meets it first and read as empty; with `strict` (DATA-448, the held check
+    that gates a publish) it is still set aside, then raises `MapUnreadable`.
+    So a publish is refused only when the held check is that first read; after
+    any set-aside, held entries that lived only in the old file are gone and
+    no later check can hold them. An `OSError` other than a missing file raises
+    `MapUnreadable` in both modes, on every call while it lasts."""
     path = map_path()
     try:
         with open(path, encoding="utf-8") as handle:
-            raw = handle.read()
+            raw: Optional[str] = handle.read()
     except FileNotFoundError:
         return {}, []
+    except UnicodeDecodeError:
+        raw = None  # DATA-448: bytes that are not UTF-8 are a corrupt map, not an unreadable one
     except OSError:
         raise MapUnreadable() from None
     try:
-        data = json.loads(raw)
+        data = json.loads(raw) if raw is not None else None
     except ValueError:
         data = None
     entries = data.get("intentions") if isinstance(data, dict) else None
@@ -1156,7 +1167,11 @@ def _held_match(entry: dict, norm_hash: str, norm_hash_v2: Optional[str]) -> boo
 def held_hash_exists(norm_hash: str, norm_hash_v2: Optional[str] = None) -> bool:
     """Whether a held entry matches. Raises when the map cannot be read or is
     corrupt (set aside first), so a caller can never read failure as "none
-    held" (DATA-448); a missing map holds nothing. Gate a publish with
+    held" (DATA-448); a missing map holds nothing. Only a corrupt map this
+    check is the first to meet raises: if a lookup, `remember`, the rate count
+    or the approval pass met it first, it was set aside there and read as
+    empty, and this check then reads the fresh map, which cannot hold the
+    entries that were only in the old file. Gate a publish with
     `held_refusal`, which turns that into a code."""
     entries = _load_map(strict=True)
     return any(_held_match(v, norm_hash, norm_hash_v2) for v in entries.values())
@@ -1169,9 +1184,9 @@ MAP_UNREADABLE = "map_unreadable"
 def held_refusal(norm_hash: str, norm_hash_v2: Optional[str] = None) -> Optional[str]:
     """The `publish_refused` code the held check gives a publish: None when
     nothing held matches, `held_ambient_exists` when something does, and
-    `map_unreadable` when the map could not be read or was corrupt (R13: fail
-    closed; a refusal costs a retry, a wrong publish puts unconfirmed words on
-    Index)."""
+    `map_unreadable` when the map could not be read or this check was the first
+    to meet it corrupt, or the read failed any other way (R13: fail closed; a
+    refusal costs a retry, a wrong publish puts unconfirmed words on Index)."""
     try:
         return "held_ambient_exists" if held_hash_exists(norm_hash, norm_hash_v2) else None
     except Exception as exc:  # noqa: BLE001
@@ -1437,15 +1452,18 @@ def _capture(args: dict, held: Optional[str]) -> dict:
     elif held_refused == MAP_UNREADABLE:
         # DATA-448 (R13): whether this text is held cannot be known. Record it
         # locally, the same way, and send nothing anywhere (not to Index, not
-        # proposed); a retry once the map reads again is checked as usual.
+        # proposed). A retry is checked against whatever map it reads, and a
+        # corrupt one set aside no longer holds what it held, so the message
+        # allows a stated retry only for the resident's own words.
         intention_id = uuid7()
         result.update(intention_id=intention_id, index_intent_id=None, published=False,
                       publish_refused=MAP_UNREADABLE)
         result["message"] = (
             f"Recorded locally (intention_id {intention_id}), not published: this agent's private record of "
             "held intentions could not be read, so whether the same intention is waiting for the resident's "
-            "confirmation is unknown. Nothing was sent. Capture it again in a moment; do not publish it "
-            "another way."
+            "confirmation is unknown. Nothing was sent; do not publish it another way. Capture it again only "
+            "if the resident stated these words themselves in this conversation; if they are your wording or "
+            "inferred, capture them again as ambient instead."
         )
     elif held_refused is not None:
         # R9 revised: the same intention is held as ambient. Record this

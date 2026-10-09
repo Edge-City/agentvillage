@@ -543,7 +543,7 @@ Search, which such a gate would not see); its text, the `workspace/AGENTS.md` ro
 | `capture`, source `message`, `confirmed_in_chat=silence`, in a session that may publish | none | local uuid v7, `source=ambient`, held, `publish_refused="held_silence"`, the marker kept, unless `publish=false` (kept local) |
 | `capture`, explicit source, in a held session | none | local uuid v7, `source=ambient`, `publish_refused` `held_cron` or `held_unknown`, unless `publish=false` (kept local) |
 | `capture` that would publish, of text already held as ambient (case, whitespace, punctuation, quotes, dashes and full-width forms ignored; DATA-387) | none | local uuid v7, `publish_refused="held_ambient_exists"` |
-| `capture` that would publish while the held check cannot read the map (unreadable, or corrupt and set aside by this call; DATA-448), approval on or off | none, nothing proposed | local uuid v7, `publish_refused="map_unreadable"`, told to capture it again shortly |
+| `capture` that would publish while the held check cannot read the map (unreadable, or corrupt and first met by this check, which sets it aside; DATA-448), approval on or off | none, nothing proposed | local uuid v7, `publish_refused="map_unreadable"`, told not to publish it another way and to capture it again only if the resident stated the words in this conversation (otherwise again as ambient) |
 | `update` / `withdraw` of an id it published | `PATCH /api/intents/{id} {description}` / `PATCH /api/intents/{id}/archive` (no body) | `index_intent_id` set; a failed mirror adds `publish_refused` |
 | `update` of a published id in a held session | none | `publish_refused` `held_cron` or `held_unknown`, `source=ambient` |
 | `update` of a published id to text held as ambient (matched as for a capture; DATA-447), approval off | none | `publish_refused="held_ambient_exists"`, `index_intent_id` set, Index keeps the old wording, the map entry unchanged |
@@ -679,10 +679,16 @@ timestamps; a corrupt file is renamed to
 `intentions.json.corrupt-<n>` and the map starts empty. DATA-448 (ruling R13, fail closed): when the
 held check, the map read that gates a capture's publish or an approval-off update's mirror, finds
 the map unreadable (an `OSError` other than a missing file) or corrupt, that call sends nothing
-(not to Index, not proposed) and answers `publish_refused="map_unreadable"`; the agent is told to
-try again shortly. For a corrupt map the refusal is one-shot: the refusing call sets the file
-aside, so the next call proceeds on an empty map, as a first run does (a held text that was only
-in the set-aside file then publishes). A missing map holds nothing and publishes as before. Logs carry codes only. The observer reads
+(not to Index, not proposed) and answers `publish_refused="map_unreadable"`. A capture is told not
+to publish it another way and to capture it again only if the resident stated those words in this
+conversation (wording of the agent's own or an inference goes again as ambient); an update is told
+to make the same update again. An unreadable map refuses on every call while it lasts. A corrupt
+map (not JSON, or not UTF-8) refuses at most once: whichever reader meets it first (a lookup,
+`remember`, the rate count, the approval pass, or the held check) sets it aside and reads it as
+empty, and every later read starts from an empty map, as a first run does. Only when the held
+check is that first reader is a publish refused. After the set-aside, held entries that lived only
+in that file are gone and the held check can no longer hold them, so such a text publishes when
+stated. A missing map holds nothing and publishes as before. Logs carry codes only. The observer reads
 the result's `action`, `source`, `index_intent_id` and codes only for the unprefixed overlay tool;
 a result that names `index_intent_id` decides it, null included.
 

@@ -2609,6 +2609,10 @@ def test_data447_a_held_session_still_answers_first(tctx, index, ri, av, plugin)
 #: An OSError on reading the map (MapUnreadable): permissions flipped, or a
 #: directory where the file was (root-proof).
 UNREADABLE = ["mode-0000", "a-directory"]
+#: A corrupt map, set aside by the read that meets it first: not JSON, or JSON
+#: whose bytes are not UTF-8 (fix round 1, N1: the same path, not an OSError).
+CORRUPT_BYTES = {"corrupt": b"{not json", "not-utf8": b'{"v":1,"intentions":{"\xff":{}},"publishes":[]}'}
+CORRUPT = list(CORRUPT_BYTES)
 
 
 @pytest.fixture()
@@ -2625,8 +2629,7 @@ def break_map(ri):
             path.unlink()
             path.mkdir()
         else:
-            assert how == "corrupt"
-            path.write_text("{not json", encoding="utf-8")
+            path.write_bytes(CORRUPT_BYTES[how])
 
     yield apply
     if path.is_file():
@@ -2657,7 +2660,11 @@ def test_data448_an_unreadable_map_refuses_a_capture(tctx, index, ri, av, plugin
     out = call(tctx, {"text": TEXT, "source": "message"}, tool_call_id="c-cap")
     assert out["success"] is True and out["published"] is False and out["index_intent_id"] is None
     assert out["publish_refused"] == "map_unreadable"
-    assert "Capture it again in a moment" in out["message"] and "Nothing was sent" in out["message"]
+    assert "Nothing was sent" in out["message"]
+    # Fix round 1 (S1): the steer, since a retry after a set-aside is not held.
+    assert "do not publish it another way" in out["message"]
+    assert "Capture it again only if the resident stated these words themselves in this conversation" in out["message"]
+    assert "capture them again as ambient instead" in out["message"]
     assert index.requests == []
     assert "map_read_failed=MapUnreadable publish_refused=map_unreadable" in caplog.text
     event = intention_events(av, plugin)[-1]
@@ -2666,7 +2673,7 @@ def test_data448_an_unreadable_map_refuses_a_capture(tctx, index, ri, av, plugin
     assert event["payload"]["index_intent_id"] is None
 
 
-@pytest.mark.parametrize("how", UNREADABLE + ["corrupt"])
+@pytest.mark.parametrize("how", UNREADABLE + CORRUPT)
 def test_data448_with_approval_on_a_capture_is_not_proposed_either(tctx, index, ri, monkeypatch, break_map, how):
     """AC4: approval on, nothing leaves the box: no proposal, no Index request."""
     call(tctx, {"text": HELD_B, "source": "ambient"}, tool_call_id="c-held")
@@ -2679,21 +2686,49 @@ def test_data448_with_approval_on_a_capture_is_not_proposed_either(tctx, index, 
     assert proposed == [] and index.requests == []
 
 
-def test_data448_a_corrupt_map_refuses_that_capture_and_the_next_reads_a_new_map(tctx, index, ri, break_map, caplog):
+@pytest.mark.parametrize("how", CORRUPT)
+def test_data448_a_corrupt_map_refuses_that_capture_and_the_next_reads_a_new_map(
+        tctx, index, ri, break_map, caplog, how):
     """AC3: corrupt is unreadable for the call that finds it (and sets it
-    aside), not an empty map; the refusal is one-shot, so the retry publishes."""
+    aside), not an empty map; the refusal is one-shot, so the retry publishes.
+    Fix round 1 (N1): a map that is not UTF-8 takes the same path, set aside
+    once, not refused on every call as an unreadable map is."""
     held = call(tctx, {"text": HELD_B, "source": "ambient"}, tool_call_id="c-held")
-    break_map("corrupt")
+    break_map(how)
     path = Path(ri.map_path())
     out = call(tctx, {"text": TEXT, "source": "message"}, tool_call_id="c-cap")
     assert out["publish_refused"] == "map_unreadable" and out["published"] is False
     assert index.requests == []
-    assert Path(str(path) + ".corrupt-1").read_text(encoding="utf-8") == "{not json"
+    assert Path(str(path) + ".corrupt-1").read_bytes() == CORRUPT_BYTES[how]
     assert "av-events: record_intention map_corrupt=1" in caplog.text
+    assert "map_read_failed=MapUnreadable publish_refused=map_unreadable" in caplog.text
     assert held["intention_id"] not in ri._load_map()
     again = call(tctx, {"text": TEXT, "source": "message"}, tool_call_id="c-again")
     assert again["published"] is True and again["intention_id"] == INDEX_ID
     assert [c["name"] for c in index.tool_calls()] == ["create_intent"]
+    assert not Path(str(path) + ".corrupt-2").exists()
+
+
+def test_data448_any_failure_of_the_held_read_refuses_the_publish(tctx, index, ri, monkeypatch, caplog):
+    """Fix round 1 (MC): the held check's broad except is load-bearing. A
+    strict read failing with something other than MapUnreadable still gives
+    map_unreadable, and the capture is not published."""
+    call(tctx, {"text": HELD_B, "source": "ambient"}, tool_call_id="c-held")
+    real = ri._load_map
+
+    def load_map(*, strict: bool = False):
+        if strict:
+            raise RuntimeError("boom")
+        return real(strict=strict)
+
+    monkeypatch.setattr(ri, "_load_map", load_map)
+    assert ri.held_refusal(ri.held_norm_hash(TEXT), ri.held_norm_hash_v2(TEXT)) == "map_unreadable"
+    out = call(tctx, {"text": TEXT, "source": "message"}, tool_call_id="c-cap")
+    assert out["success"] is True and out["published"] is False and out["index_intent_id"] is None
+    assert out["publish_refused"] == "map_unreadable"
+    assert index.requests == []
+    assert "map_read_failed=RuntimeError publish_refused=map_unreadable" in caplog.text
+    assert "boom" not in out["message"]
 
 
 def test_data448_a_missing_map_is_a_first_run_and_publishes(tctx, index, ri):
@@ -2705,7 +2740,7 @@ def test_data448_a_missing_map_is_a_first_run_and_publishes(tctx, index, ri):
     assert [c["name"] for c in index.tool_calls()] == ["create_intent"]
 
 
-@pytest.mark.parametrize("how", UNREADABLE + ["corrupt"])
+@pytest.mark.parametrize("how", UNREADABLE + CORRUPT)
 def test_data448_an_unreadable_map_refuses_an_approval_off_update(
         tctx, index, ri, av, plugin, monkeypatch, break_map, how):
     """AC2 (and AC3 for the update): no update_intent while the map cannot be read."""
@@ -2719,13 +2754,14 @@ def test_data448_an_unreadable_map_refuses_an_approval_off_update(
     assert out["published"] is True and out["index_intent_id"] == INDEX_ID
     assert "Make the same update again in a moment" in out["message"]
     assert "Index still has the old wording" in out["message"]
+    assert "do not publish it another way" in out["message"]
     assert index.requests == []
     event = intention_events(av, plugin)[-1]
     assert event["event_type"] == "intention.updated" and event["intention_id"] == INDEX_ID
     assert event["payload"]["publish_refused"] == "map_unreadable"
 
 
-@pytest.mark.parametrize("how", UNREADABLE + ["corrupt"])
+@pytest.mark.parametrize("how", UNREADABLE + CORRUPT)
 def test_data448_with_approval_on_the_update_is_still_approval_required(tctx, index, ri, monkeypatch, break_map, how):
     """AC4: approval on answers before the held check, unchanged."""
     call(tctx, {"text": TEXT, "source": "message"})
