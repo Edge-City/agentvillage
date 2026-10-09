@@ -40,7 +40,7 @@
  *   - A failed Index read writes nothing and is silent (`index-unavailable`).
  *
  * `respondBy`: Index's `list_opportunities` row carries no deadline field (the
- * recorded reply, tests/fixtures/index-mcp-2026-07-28.json, verified
+ * recorded reply, the index-mcp fixture under tests/fixtures, verified
  * 2026-10-03), and listedCard (build-daily-brief-context.ts) keeps none, so
  * respondBy is null on every card today. It is read only from a card's
  * `respondBy` (an ISO date-time) once the parser carries a field Index
