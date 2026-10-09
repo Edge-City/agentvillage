@@ -383,7 +383,7 @@ label line, `(<Label> message - you can ask me to stop or manage it)`, which
 the model writes as the message's last line and leaves off a `[SILENT]`
 reply. The labels and their jobs: Daily digest = `Edge — daily digest`;
 Conversation update = `Edge — negotiation summary`; Evening questions =
-`Edge — evening questions`; Introduction suggestion = both opportunity drops;
+`Edge — evening questions`; Extra introduction drops = both opportunity drops;
 Usage report = `Edge — token usage audit` (opt-in); Pending opportunity = `Edge — pending opportunity`. Template jobs added by an
 operator carry their base prompt's line. The agent stops and restarts any of
 the six on a resident's request (`skills/index-network/tools.md`, "Cron schedule") with
