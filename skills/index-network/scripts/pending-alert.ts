@@ -39,12 +39,13 @@
  *     that loses the alert, and never repeats it.
  *   - A failed Index read writes nothing and is silent (`index-unavailable`).
  *
- * `respondBy`: Index's `list_opportunities` row carries no deadline field (the
- * recorded reply, the index-mcp fixture under tests/fixtures, verified
- * 2026-10-03), and listedCard (build-daily-brief-context.ts) keeps none, so
- * respondBy is null on every card today. It is read only from a card's
- * `respondBy` (an ISO date-time) once the parser carries a field Index
- * serves; it is never invented. The words are RESPOND_BY_WORDS.
+ * `respondBy`: Index serves no deadline on any route the box uses today
+ * (the recorded reply, the index-mcp fixture under tests/fixtures, verified
+ * 2026-10-03; Index main 61b71ac read 2026-10-09), so it is null in
+ * production. The parser (build-daily-brief-context.ts listedCard,
+ * parseExpiresAt) takes a row's ISO `expiresAt` when one appears (the field
+ * name is the control plane's assumption); any other shape or absence is
+ * null. Never computed or invented. The words are RESPOND_BY_WORDS.
  *
  * As a script (`bun pending-alert.ts [--state-file <path>] [--read-only]`,
  * from $HERMES_HOME): takes the state lock, prints `[SILENT]` (the reason on
@@ -78,8 +79,8 @@ export interface LedgerEntry {
 
 export type PendingLedger = Record<string, LedgerEntry>;
 
-/** A card as the list read hands it over; `respondBy` only once a parser carries Index's deadline. */
-export type PendingSourceCard = BriefOpportunity & { respondBy?: unknown };
+/** A card as the list read hands it over (`respondBy`: listedCard's parse of Index's `expiresAt`). */
+export type PendingSourceCard = BriefOpportunity;
 
 export interface DueCard {
   card: PendingSourceCard;
@@ -286,7 +287,7 @@ export async function pendingAlert(options: {
   }
   const nowIso = (options.now ?? new Date()).toISOString();
   const before = state[PENDING_ALERTS_KEY];
-  const plan = planPendingAlerts(readPendingLedger(state), read.cards as PendingSourceCard[], read.listing, nowIso, options.max);
+  const plan = planPendingAlerts(readPendingLedger(state), read.cards, read.listing, nowIso, options.max);
   if (!options.readOnly && JSON.stringify(before) !== JSON.stringify(plan.ledger)) {
     writeStateFile(stateFile, { ...state, [PENDING_ALERTS_KEY]: plan.ledger });
   }

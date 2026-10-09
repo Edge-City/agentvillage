@@ -12,6 +12,7 @@ import { join } from "node:path";
 
 import { MAX_ALERTS_PER_RUN, PENDING_ALERTS_KEY, RESPOND_BY_WORDS, pendingAlert, planPendingAlerts, readPendingLedger, respondByText } from "../pending-alert";
 import { pendingView } from "../proactive";
+import { parseExpiresAt } from "../build-daily-brief-context";
 import { FAKE_API_KEY, FAKE_MCP_URL, type ToolHandler, indexMcpFake, pagedOpportunities } from "./index-mcp-fake";
 import { failureInputs } from "./index-failure-inputs";
 
@@ -290,5 +291,48 @@ describe("respondBy: the deadline's words (DATA-430; the app's pending card uses
     const card = { name: "Asha", opportunityId: "a1", status: "pending", respondBy: "2026-10-12T13:00:00Z" };
     const { view } = pendingView([{ card, opportunityId: "a1", firstSeen: T0.toISOString() }], now);
     expect((view as any).cards[0].respondBy).toBe("by 6:30 pm today");
+  });
+});
+
+describe("respondBy from Index's row: an ISO `expiresAt` only (DATA-430; Index serves none today, the name is assumed)", () => {
+  // Monday 2026-10-12 15:00 IST.
+  const now = new Date("2026-10-12T09:30:00Z");
+
+  test("a row carrying an ISO expiresAt: parsed into respondBy and rendered as the deadline's words", async () => {
+    const file = stateFile({ [PENDING_ALERTS_KEY]: {} });
+    serve([row(1, "Asha", { expiresAt: "2026-10-12T13:00:00.000Z" }), row(2, "Bilal", { expiresAt: "2026-10-16T18:30:00+05:30" })]);
+    const result = await run(file, now);
+    if ("silent" in result) throw new Error(result.reason);
+    expect(result.cards.map((c) => c.card.respondBy)).toEqual(["2026-10-12T13:00:00.000Z", "2026-10-16T13:00:00.000Z"]);
+    const { view } = pendingView(result.cards, now);
+    expect((view as any).cards.map((c: any) => [c.name, c.respondBy])).toEqual([["Asha", "by 6:30 pm today"], ["Bilal", "by Fri 6:30 pm"]]);
+  });
+
+  test("a row without expiresAt (the recorded shape): respondBy null", async () => {
+    const file = stateFile({ [PENDING_ALERTS_KEY]: {} });
+    serve([row(1, "Asha")]);
+    const result = await run(file, now);
+    if ("silent" in result) throw new Error(result.reason);
+    expect(result.cards[0].card.respondBy).toBeUndefined();
+    expect((pendingView(result.cards, now).view as any).cards[0].respondBy).toBeNull();
+  });
+
+  test("any other shape is null, never a guess: no zone, a date alone, a number, null, garbage, another key", async () => {
+    for (const bad of [undefined, null, 1760000000000, "", "2026-10-12", "2026-10-12T13:00:00", "2026-13-40T99:00:00Z", "tomorrow", { at: "2026-10-12T13:00:00Z" }, "2026-10-12T13:00:00Z ".repeat(5)]) {
+      expect({ bad, parsed: parseExpiresAt(bad) }).toEqual({ bad, parsed: undefined });
+    }
+    const file = stateFile({ [PENDING_ALERTS_KEY]: {} });
+    serve([row(1, "Asha", { expires_at: "2026-10-12T13:00:00Z", respondBy: "2026-10-12T13:00:00Z", deadline: "2026-10-12T13:00:00Z" }), row(2, "Bilal", { expiresAt: "soon" })]);
+    const result = await run(file, now);
+    if ("silent" in result) throw new Error(result.reason);
+    expect((pendingView(result.cards, now).view as any).cards.map((c: any) => c.respondBy)).toEqual([null, null]);
+  });
+
+  test("a past expiresAt is parsed, but says nothing", async () => {
+    const file = stateFile({ [PENDING_ALERTS_KEY]: {} });
+    serve([row(1, "Asha", { expiresAt: "2026-10-12T09:00:00Z" })]);
+    const result = await run(file, now);
+    if ("silent" in result) throw new Error(result.reason);
+    expect((pendingView(result.cards, now).view as any).cards[0].respondBy).toBeNull();
   });
 });
