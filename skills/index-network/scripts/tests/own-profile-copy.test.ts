@@ -6,6 +6,8 @@
  * available for explicit corrections, so the prose must say to link the profile `get_my_profile`
  * returned, offer the correction in chat or in the Edge City app, and nowhere say the agent cannot
  * change the profile (the one ban sentence quotes the refusal it forbids, and is the only place it may).
+ * DATA-423: index-links 0.4.0 keeps the `/u/` links in `update_my_profile` and `enrich_my_profile`
+ * results too, so the correction rule says to link the `/u/` link that result returned.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -39,6 +41,13 @@ describe("own profile: link what get_my_profile returned, offer the correction, 
   test("the correction path stays wired to update_my_profile for an explicit correction", () => {
     expect(count(tools, "Call `update_my_profile` only when the user explicitly corrects a field.")).toBe(1);
     expect(count(tools, "- **Profile correction** — the user explicitly corrects their own name, intro, location, or timezone → call `update_my_profile` with only that field.")).toBe(1);
+  });
+
+  test("after a correction, the link to show is the /u/ link the update_my_profile result returned (DATA-423)", () => {
+    const after =
+      "After the correction, link the `/u/` link the `update_my_profile` result returned (their Index profile, not the Rolodex).";
+    expect(count(tools, after)).toBe(1);
+    expect(tools).toContain("→ call `update_my_profile` with only that field. " + after + " Do not draft");
   });
 
   test("outside the one ban sentence, tools.md nowhere says the agent cannot change the profile", () => {
