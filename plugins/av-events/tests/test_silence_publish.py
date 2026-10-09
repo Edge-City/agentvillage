@@ -31,7 +31,10 @@ gateway closers, killed by `test_anything_the_gateway_receives_closes_every_open
 `test_a_lineage_check_that_raises_still_closes`. Fix round 2: (a2) the window back
 to 24 h, killed by `test_a_stale_draft_is_held`; (s2) a job that delivers nowhere
 passes, killed by `test_only_a_delivering_cron_job_passes`; (s6) an injected turn
-opens, killed by `test_an_injected_or_unmarked_turn_never_opens_an_ask`.
+opens, killed by `test_an_injected_or_unmarked_turn_never_opens_an_ask`. Fix round 3:
+(k3) the person-turn mark keyed by session only, killed by
+`test_a_mark_from_another_turn_is_never_taken`; (h3) no readable hook list still
+registers the opener, killed by `test_without_hermes_hook_list_no_ask_ever_opens`.
 """
 
 from __future__ import annotations
@@ -57,6 +60,22 @@ JOB = "0123456789ab"
 CRON = f"cron_{JOB}_20261009_180000"
 #: The turn's user dict as Hermes hands it to `pre_llm_call` for a person's message.
 HUMAN_HISTORY = [{"role": "user", "content": "hi"}]
+#: The hooks Hermes v2026.9.24 fires that the tool registers (`VALID_HOOKS`).
+KNOWN_HOOKS = frozenset({"pre_gateway_dispatch", "gateway_platform_event", "pre_llm_call", "post_llm_call",
+                         "on_session_start", "pre_api_request", "subagent_start"})
+
+
+def fake_hook_list(monkeypatch, known: Any = KNOWN_HOOKS) -> None:
+    """`hermes_cli.plugins.VALID_HOOKS` as the tool reads it; None: not importable."""
+    if known is None:
+        monkeypatch.setitem(sys.modules, "hermes_cli.plugins", None)
+        return
+    hermes_cli = types.ModuleType("hermes_cli")
+    plugins = types.ModuleType("hermes_cli.plugins")
+    plugins.VALID_HOOKS = frozenset(known)
+    hermes_cli.plugins = plugins
+    monkeypatch.setitem(sys.modules, "hermes_cli", hermes_cli)
+    monkeypatch.setitem(sys.modules, "hermes_cli.plugins", plugins)
 KEY = "index-key-for-silence-publish-tests-0123456789"
 INDEX_ID = "9b2f0c1e-0000-4000-8000-00000000d411"
 DRAFT = "Meet founders building on Solana in Goa"
@@ -176,6 +195,7 @@ class Hermes:
         gateway.session_context = session_context
         monkeypatch.setitem(sys.modules, "gateway", gateway)
         monkeypatch.setitem(sys.modules, "gateway.session_context", session_context)
+        fake_hook_list(monkeypatch)
         self.set("HERMES_CRON_SESSION", "1")
         self.set("HERMES_CRON_AUTO_DELIVER_PLATFORM", "telegram")
 
@@ -217,7 +237,7 @@ def show(ctx: ToolFireCtx, reply: Any, *, session: str = SESSION, platform: Any 
     clock.now = now - ago
     # The turn a person started (what `pre_llm_call` records), without the
     # close that the real `pre_llm_call` also does.
-    ctx.ri.note_turn(session, "hi", HUMAN_HISTORY)
+    ctx.ri.note_turn(session, "u", "hi", HUMAN_HISTORY)
     try:
         ctx.fire("post_llm_call", session_id=session, task_id="t", turn_id="u", user_message="hi",
                  assistant_response=reply, conversation_history=[], model="m", platform=platform)
@@ -287,6 +307,7 @@ def test_the_listeners_are_registered_with_the_tool_and_only_then(plugin, ri, tc
 
 @pytest.mark.parametrize("refused", ["pre_gateway_dispatch", "gateway_platform_event", "pre_llm_call"])
 def test_without_every_closer_the_opener_is_never_registered(plugin, ri, index, clock, home, monkeypatch, refused):
+    fake_hook_list(monkeypatch)
     monkeypatch.setenv("AV_RECORD_INTENTION", "1")
     monkeypatch.setenv("INDEX_API_KEY", KEY)
 
@@ -776,15 +797,15 @@ def test_the_open_drafts_never_touch_a_file(tctx, ri, index, clock, monkeypatch,
         for target, name in ((builtins, "open"), (os, "open"), (os, "replace"), (os, "rename"),
                              (os, "makedirs"), (os, "mkdir"), (os, "unlink"), (os, "stat")):
             m.setattr(target, name, refuse)
-        ri.note_turn(SESSION, "hi", HUMAN_HISTORY)
-        assert ri.note_ask(SESSION, "telegram", ask_reply()) == 1
+        ri.note_turn(SESSION, "t1", "hi", HUMAN_HISTORY)
+        assert ri.note_ask(SESSION, "telegram", ask_reply(), "t1") == 1
         clock.now = T0 + HOUR
         assert ri.take_open_draft(DRAFT) == ri._iso(T0)
-        ri.note_turn(SESSION, "hi", HUMAN_HISTORY)
-        assert ri.note_ask(SESSION, "telegram", ask_reply(OTHER)) == 1
+        ri.note_turn(SESSION, "t2", "hi", HUMAN_HISTORY)
+        assert ri.note_ask(SESSION, "telegram", ask_reply(OTHER), "t2") == 1
         ri.close_open_drafts(SESSION)
-        ri.note_turn(SESSION, "hi", HUMAN_HISTORY)
-        assert ri.note_ask(SESSION, "telegram", ask_reply(OTHER)) == 1
+        ri.note_turn(SESSION, "t3", "hi", HUMAN_HISTORY)
+        assert ri.note_ask(SESSION, "telegram", ask_reply(OTHER), "t3") == 1
         ri.close_all_open_drafts()
     assert ri._OPEN_DRAFTS == []
     # A full ask -> cron pass through the hooks and the tool leaves no draft file.
@@ -995,3 +1016,76 @@ def test_the_opener_needs_every_closer_to_be_a_hook_hermes_fires(plugin, ri, ind
     assert (ri.DRAFT_HOOKS["post_llm_call"] in ctx.hooks.get("post_llm_call", [])) is opener
     for name in ri.DRAFT_CLOSERS:
         assert ri.DRAFT_HOOKS[name] in ctx.hooks.get(name, [])
+
+
+# --------------------------------------------------------------------------
+# Fix round 3: the turn mark keyed by turn (R2-N1); no hook list, no opener (R2-N2)
+# --------------------------------------------------------------------------
+
+
+def _pre(ctx: ToolFireCtx, turn_id: Any, history: Any = HUMAN_HISTORY) -> None:
+    ctx.fire("pre_llm_call", session_id=SESSION, task_id="t", turn_id=turn_id, user_message="hi",
+             conversation_history=history, is_first_turn=False, model="m", platform="telegram",
+             parent_session_id="", sender_id="")
+
+
+def _post(ctx: ToolFireCtx, turn_id: Any, reply: str) -> None:
+    ctx.fire("post_llm_call", session_id=SESSION, task_id="t", turn_id=turn_id, user_message="hi",
+             assistant_response=reply, conversation_history=[], model="m", platform="telegram")
+
+
+@pytest.mark.parametrize("pre_turn,post_turn", [
+    ("turn-1", "turn-2"),  # turn 1 interrupted (no post_llm_call); turn 2's pre_llm_call skipped
+    ("turn-1", None),
+    ("turn-1", ""),
+    (None, "turn-1"),
+    ("", ""),
+    (None, None),
+])
+def test_a_mark_from_another_turn_is_never_taken(tctx, ri, index, pre_turn, post_turn):
+    """R2-N1, mutant (k3): the mark is (session, turn_id); a missing turn_id
+    on either side is no mark."""
+    _pre(tctx, pre_turn)
+    _post(tctx, post_turn, ask_reply())
+    assert drafts(ri) == []
+
+
+def test_the_same_turn_takes_its_own_mark(tctx, ri, index):
+    _pre(tctx, "turn-1")
+    _post(tctx, "turn-1", ask_reply())
+    assert len(drafts(ri)) == 1
+    # Taken: a second reply in turn 1 opens nothing more.
+    _post(tctx, "turn-1", ask_reply(OTHER))
+    assert len(drafts(ri)) == 1
+
+
+def test_an_interrupted_turns_mark_stays_with_that_turn(tctx, ri, index):
+    """Turn 1 was a person's and was interrupted; turn 2 is injected. Turn 2's
+    reply opens nothing although turn 1's mark is still there."""
+    _pre(tctx, "turn-1")
+    _pre(tctx, "turn-2", [{"role": "user", "content": "x", "display_kind": "internal_notification"}])
+    _post(tctx, "turn-2", ask_reply())
+    assert drafts(ri) == []
+
+
+def test_without_hermes_hook_list_no_ask_ever_opens(plugin, ri, index, clock, home, monkeypatch, caplog):
+    """R2-N2, mutant (h3): when `hermes_cli.plugins.VALID_HOOKS` cannot be
+    imported, the closers register and the opener does not."""
+    Hermes(monkeypatch)
+    fake_hook_list(monkeypatch, None)
+    monkeypatch.setenv("AV_RECORD_INTENTION", "1")
+    monkeypatch.setenv("INDEX_API_KEY", KEY)
+    ctx = ToolFireCtx()
+    ctx.clock, ctx.ri = clock, ri
+    plugin.register(ctx)
+    assert ri.DRAFT_HOOKS["post_llm_call"] not in ctx.hooks.get("post_llm_call", [])
+    for name in ri.DRAFT_CLOSERS:
+        assert ri.DRAFT_HOOKS[name] in ctx.hooks.get(name, [])
+    assert "draft_opener=off reason=no_hook_list" in caplog.text
+    ctx.fire("on_session_start", session_id=SESSION, model="m", platform="telegram")
+    ctx.fire("on_session_start", session_id=CRON, model="m", platform="cron")
+    _pre(ctx, "turn-1")
+    _post(ctx, "turn-1", ask_reply())
+    assert drafts(ri) == []
+    clock.now = T0 + HOUR
+    assert_held_cron(call(ctx, silence()), index)

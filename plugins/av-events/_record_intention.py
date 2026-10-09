@@ -1412,9 +1412,19 @@ def cron_root(session_id: Any) -> bool:
     return cron_root_session(session_id) is not None
 
 
-#: Per session, whether the turn now running was started by a person (fix
-#: round 2, S6): set at the turn's `pre_llm_call`, taken at its `post_llm_call`.
-_HUMAN_TURNS: "OrderedDict[str, bool]" = OrderedDict()
+#: Per (session, turn), whether the turn was started by a person (fix round 2,
+#: S6): set at the turn's `pre_llm_call`, taken at its `post_llm_call`. Keyed by
+#: Hermes's `turn_id` too (fix round 3, R2-N1), which both hooks carry at
+#: v2026.9.24, so a mark left by an interrupted turn is never taken by a later
+#: turn whose `pre_llm_call` did not run.
+_HUMAN_TURNS: "OrderedDict[tuple[str, str], bool]" = OrderedDict()
+
+
+def _turn_key(session_id: Any, turn_id: Any) -> Optional[tuple[str, str]]:
+    """(session, turn), or None when either is missing: no mark (fail closed)."""
+    sid = str(session_id or "").strip()
+    tid = str(turn_id or "").strip()
+    return (sid, tid) if sid and tid else None
 
 
 def human_turn(user_message: Any, history: Any) -> bool:
@@ -1435,26 +1445,27 @@ def human_turn(user_message: Any, history: Any) -> bool:
     return not (isinstance(user_message, str) and user_message.lstrip().startswith(INJECTED_PREFIXES))
 
 
-def note_turn(session_id: Any, user_message: Any, history: Any) -> None:
-    sid = str(session_id or "").strip()
-    if not sid:
+def note_turn(session_id: Any, turn_id: Any, user_message: Any, history: Any) -> None:
+    key = _turn_key(session_id, turn_id)
+    if key is None:
         return
     human = human_turn(user_message, history)
     with _DRAFTS_LOCK:
-        _HUMAN_TURNS.pop(sid, None)
-        _HUMAN_TURNS[sid] = human
+        _HUMAN_TURNS.pop(key, None)
+        _HUMAN_TURNS[key] = human
         while len(_HUMAN_TURNS) > MAX_LINEAGE:
             _HUMAN_TURNS.popitem(last=False)
 
 
-def note_ask(session_id: Any, platform: Any, reply: Any) -> int:
+def note_ask(session_id: Any, platform: Any, reply: Any, turn_id: Any = None) -> int:
     """Open a draft: the reply the agent sent the resident asked the one ask
     about one quoted draft. Records its hash, when, and the session and
     platform, in memory. Returns 1 when an ask opened, else 0."""
     sid = str(session_id or "").strip()
+    key = _turn_key(sid, turn_id)
     with _DRAFTS_LOCK:
-        # S6: one ask per turn, and only for a turn a person started.
-        human = _HUMAN_TURNS.pop(sid, False) if sid else False
+        # S6: one ask per turn, and only for this turn, if a person started it.
+        human = _HUMAN_TURNS.pop(key, False) if key is not None else False
     if not human or not _speaking_root(sid, platform):
         return 0
     draft = draft_block(reply)
@@ -1512,12 +1523,14 @@ def take_open_draft(text: str) -> Optional[str]:
 
 
 def _on_post_llm_call(**kwargs: Any) -> None:
-    note_ask(kwargs.get("session_id"), kwargs.get("platform"), kwargs.get("assistant_response"))
+    note_ask(kwargs.get("session_id"), kwargs.get("platform"), kwargs.get("assistant_response"),
+             kwargs.get("turn_id"))
 
 
 def _on_pre_llm_call(**kwargs: Any) -> None:
     try:
-        note_turn(kwargs.get("session_id"), kwargs.get("user_message"), kwargs.get("conversation_history"))
+        note_turn(kwargs.get("session_id"), kwargs.get("turn_id"), kwargs.get("user_message"),
+                  kwargs.get("conversation_history"))
     finally:
         close_open_drafts(kwargs.get("session_id"))
 
@@ -2142,8 +2155,8 @@ def make_handler() -> Callable[..., str]:
 
 
 def _known_hooks() -> Optional[frozenset]:
-    """Hermes's `VALID_HOOKS`, or None when it cannot be read (no Hermes: the
-    tests; then the registration itself is the only check)."""
+    """Hermes's `VALID_HOOKS`, or None when it cannot be read; then the opener
+    is not registered (fail closed, fix round 3)."""
     try:
         from hermes_cli.plugins import VALID_HOOKS  # type: ignore[import-not-found]
 
@@ -2192,10 +2205,12 @@ def register_record_intention_tool(ctx: Any, emit: Optional[Callable[..., None]]
             known = _known_hooks()
             # R1-N3: Hermes keeps an unknown hook name with only a warning, and
             # never fires it; the opener needs every closer to be one it fires.
-            if known is None or all(n in known for n in (*DRAFT_CLOSERS, "post_llm_call")):
+            # R2-N2: a Hermes whose hook list cannot be read gets no opener.
+            if known is not None and all(n in known for n in (*DRAFT_CLOSERS, "post_llm_call")):
                 register_hook("post_llm_call", DRAFT_HOOKS["post_llm_call"])
             else:
-                logger.warning("av-events: record_intention draft_opener=off reason=unknown_hook")
+                logger.warning("av-events: record_intention draft_opener=off reason=%s",
+                               "no_hook_list" if known is None else "unknown_hook")
         except Exception:  # noqa: BLE001 - nothing opens: a silence capture from cron stays held
             pass
     try:

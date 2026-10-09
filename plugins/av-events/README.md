@@ -580,8 +580,9 @@ lead's ruling).** The one pass through R10.
   for a turn a person started: the tool's `pre_llm_call` listener reads the turn's own user dict,
   and any Hermes mark on it (`display_kind`, which Hermes stamps on every internal event and the
   heartbeat, a muted diagnostic wake included; a `notification_category`; the `/goal`
-  continuation header), or no user dict, means no ask opens in that turn. One ask per turn at
-  most. The session itself must be a root session seen on a human-facing platform with no cron in
+  continuation header), or no user dict, means no ask opens in that turn. The mark is kept per
+  session and Hermes `turn_id` (both hooks carry it), so an interrupted turn's mark is never
+  taken by a later turn; a missing `turn_id` is no mark. One ask per turn at most. The session itself must be a root session seen on a human-facing platform with no cron in
   its lineage (never a subagent, a cron run or an unknown session), and the reply (at most 2,000
   characters) shows exactly one draft: one quote block, consecutive lines each starting with
   `> `, directly above "Should I publish this as written?" on a line of its own (only blank
@@ -608,8 +609,9 @@ lead's ruling).** The one pass through R10.
   did, a no or a thumbs-down included, it was not silence, so a reply about something else also
   leaves the words for the card. A model turn counts as a cron run's only inside the run's own
   scope (Hermes's `HERMES_CRON_SESSION` ContextVar). The opener is registered only after all three
-  closers were, and, when Hermes's `VALID_HOOKS` can be read, only when all four hooks are in it
-  (Hermes keeps an unknown hook name with only a warning and never fires it).
+  closers were, and only when Hermes's `VALID_HOOKS` can be read and holds all four hooks
+  (Hermes keeps an unknown hook name with only a warning and never fires it); a Hermes whose hook
+  list cannot be read gets the closers and no opener, so no ask ever opens there.
 - **The pass.** A capture passed as `message` with `confirmed_in_chat=silence` that R10 holds as
   `held_cron`, with `publish` true, is published as a stated capture only when all of these hold:
   - the chain's root was seen with platform exactly `cron` (a `cron_` id prefix alone holds as
