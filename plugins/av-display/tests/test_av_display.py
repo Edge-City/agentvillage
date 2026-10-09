@@ -140,3 +140,78 @@ def test_the_village_tool_names_match_their_plugins(plugin):
     assert 'SHARE_TOOL = "share_digest"' in share_vote and 'VOTE_TOOL = "village_vote"' in share_vote
     manifest = (plugins / "av-events" / "plugin.yaml").read_text()
     assert "  - record_intention\n" in manifest
+
+
+class _Platform:
+    def __init__(self, value):
+        self.value = value
+
+
+class TelegramAdapter:
+    """Shaped like Hermes's: supports_code_blocks True (telegram/adapter.py:483), platform telegram."""
+    supports_code_blocks = True
+
+    def __init__(self):
+        self.platform = _Platform("telegram")
+
+
+class DiscordAdapter:
+    supports_code_blocks = True
+
+    def __init__(self):
+        self.platform = _Platform("discord")
+
+
+
+CURL = {"command": "curl -s https://api.example.invalid/v1/x -H 'Authorization: Bearer $TOKEN'"}
+
+
+def test_terminal_on_telegram_gives_the_verb_alone_in_hermes_real_branch_order(plugin, fake_display, fake_runner):
+    runner = fake_runner.TurnRunner(TelegramAdapter())
+    # Before the plugin: the code-block branch wins, the command reaches the chat (refute M2).
+    before = runner._progress_build_message("terminal", "curl -s https://api...", CURL)
+    assert before.startswith("⚙️ terminal\n```\ncurl -s")
+    plugin.register(None)
+    assert runner._progress_build_message("terminal", "curl -s https://api...", CURL) == "⚙️ Running"
+    assert runner._progress_build_message("execute_code", "import os", {"code": "import os"}) == "⚙️ Running code"
+
+
+def test_other_platforms_keep_hermes_terminal_block(plugin, fake_display, fake_runner):
+    plugin.register(None)
+    runner = fake_runner.TurnRunner(DiscordAdapter())
+    assert runner._progress_build_message("terminal", "curl", CURL).startswith("⚙️ terminal\n```\ncurl -s")
+
+
+def test_the_wrap_is_idempotent_and_keeps_the_original(plugin, fake_display, fake_runner):
+    plugin.register(None)
+    wrapped = fake_runner.TurnRunner._progress_terminal_blocks
+    plugin.register(None)
+    assert fake_runner.TurnRunner._progress_terminal_blocks is wrapped
+    assert getattr(wrapped, "__wrapped__").__name__ == "_progress_terminal_blocks"
+
+
+def test_a_runner_without_the_method_is_left_alone(plugin, fake_display, monkeypatch):
+    module = types.ModuleType("gateway.run_turn_runner")
+
+    class TurnRunner:
+        pass
+
+    module.TurnRunner = TurnRunner
+    monkeypatch.setitem(sys.modules, "gateway.run_turn_runner", module)
+    plugin.register(None)
+    assert not hasattr(TurnRunner, "_progress_terminal_blocks")
+    # The tables were still extended.
+    assert "terminal" in fake_display._TOOL_VERBS_NO_PREVIEW
+
+
+def test_a_missing_runner_module_does_not_raise(plugin, fake_display, monkeypatch):
+    monkeypatch.setitem(sys.modules, "gateway.run_turn_runner", None)
+    plugin.register(None)
+    assert "terminal" in fake_display._TOOL_VERBS_NO_PREVIEW
+
+
+def test_is_telegram_reads_the_platform_value(plugin):
+    assert plugin.is_telegram(TelegramAdapter())
+    assert not plugin.is_telegram(DiscordAdapter())
+    assert not plugin.is_telegram(None)
+    assert plugin.is_telegram(types.SimpleNamespace(platform="telegram"))
