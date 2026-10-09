@@ -8,6 +8,7 @@
  * against the stand-in Hermes (fake_hermes.ts, taught `plugins install`).
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,11 +23,18 @@ import {
   MORNING_JOB,
   MORNING_LAUNCHER,
   NEGOTIATOR_SEED,
+  SIDECAR_ANCHOR,
+  SIDECAR_ANCHOR_PIN,
+  SIDECAR_ENV_ALLOWLIST,
+  SIDECAR_MARKER,
+  SIDECAR_PATCHED,
   indexPluginFailedLine,
   installIndexPlugin,
   installMetadataPath,
   negotiatorPath,
+  patchSidecarSource,
   recordIndexPluginStatus,
+  sidecarPath,
 } from "../install_index_plugin";
 import { installStatusPath, writeInstallStatus } from "../install_status";
 
@@ -93,10 +101,64 @@ function plantMorning(): void {
   ]);
 }
 
-/** The tree and record Hermes leaves after an install at `revision`. */
+/**
+ * OV-249 A3: a stand-in for the plugin's sidecar.py at REF. Lines 146-159 of `Sidecar.start()` (the
+ * negotiator child's env) byte for byte at their indent, in a module Python imports standalone:
+ * `child_env_for()` returns the env instead of starting Bun. The anchor is `SIDECAR_ANCHOR` itself.
+ */
+const SIDECAR_HEAD = [
+  '"""Stand-in for indexnetwork/hermes-plugin sidecar.py at INDEX_PLUGIN_REF (the child env, :146-159)."""',
+  "",
+  "import os",
+  "from pathlib import Path",
+  "from types import SimpleNamespace",
+  "",
+  "",
+  "def api_origin():",
+  '    return "https://index.example.test"',
+  "",
+  "",
+  "class Sidecar:",
+  "    def __init__(self):",
+  '        self.bridge = SimpleNamespace(url="http://127.0.0.1:1", token="bridge-token")',
+  '        self.state_path = Path("/home/hermes/.hermes/index-negotiator.json")',
+  "",
+  "    def child_env_for(self, agent_id, api_key):",
+  "        for _ in (0,):",
+  "            # Same process group as the gateway: a group signal reaches Bun too.",
+  "            # The child authenticates with the API key. It does not read the",
+  "            # device session, so that token stays in the gateway process.",
+  "",
+].join("\n");
+const SIDECAR_TAIL = [
+  "            child_env.update({",
+  '                "INDEX_BRIDGE_URL": self.bridge.url,',
+  '                "INDEX_BRIDGE_TOKEN": self.bridge.token,',
+  '                "INDEX_API_URL": api_origin(),',
+  '                "INDEX_API_KEY": api_key,',
+  '                "INDEX_AGENT_ID": agent_id,',
+  '                "INDEX_SUPERVISOR_PID": str(os.getpid()),',
+  '                "INDEX_NEGOTIATOR_MODULE": str(self.state_path.parent / "index" / "negotiator.ts"),',
+  "            })",
+  "            return child_env",
+  "",
+].join("\n");
+const SIDECAR_AT_REF = SIDECAR_HEAD + SIDECAR_ANCHOR + SIDECAR_TAIL;
+const INDEX_CHILD_NAMES = [
+  "INDEX_AGENT_ID",
+  "INDEX_API_KEY",
+  "INDEX_API_URL",
+  "INDEX_BRIDGE_TOKEN",
+  "INDEX_BRIDGE_URL",
+  "INDEX_NEGOTIATOR_MODULE",
+  "INDEX_SUPERVISOR_PID",
+];
+
+/** The tree and record Hermes leaves after an install at `revision` (sidecar.py as at REF, unpatched). */
 function installedAt(revision: string, pinned: boolean, manifest = true): void {
   mkdirSync(join(home, "plugins", INDEX_PLUGIN), { recursive: true });
   if (manifest) writeFileSync(join(home, "plugins", INDEX_PLUGIN, "plugin.yaml"), `name: ${INDEX_PLUGIN}\n`);
+  writeFileSync(sidecarPath(home), SIDECAR_AT_REF);
   const path = installMetadataPath(home);
   let prior = {};
   try {
@@ -467,6 +529,222 @@ describe("OV-249 (B): ON only behind a gate this run verified", () => {
 
   test("the line and the status field carry the word", () => {
     expect(indexPluginFailedLine("gate")).toBe("agentvillage-install: index_plugin_failed=gate");
+  });
+});
+
+describe("OV-249 (A3): the negotiator sidecar's env is an allowlist, or the plugin is not enabled", () => {
+  const PATCHED_AT_REF = SIDECAR_HEAD + SIDECAR_PATCHED + SIDECAR_TAIL;
+  const PYTHON = Bun.which("python3");
+  /** The interpreter itself (a pyenv shim needs the caller's PATH), so the child env can be exactly the one given. */
+  const python = (): string => {
+    expect(PYTHON).not.toBeNull();
+    const out = Bun.spawnSync([PYTHON!, "-I", "-c", "import sys; print(sys.executable)"], { stdout: "pipe" });
+    return out.stdout.toString().trim();
+  };
+  const readSidecar = () => readFileSync(sidecarPath(home), "utf8");
+  const sidecarLines = (lines: string[]) => lines.filter((line) => line.includes("sidecar"));
+  const ENABLED = "plugins:\n  enabled:\n    - av-events\n    - index-network\n";
+
+  /**
+   * Import `file` standalone (python3 -I, the script outside the fixture's directory) and return the
+   * names in the child env `child_env_for()` builds when the gateway's environment is `env`.
+   */
+  function childEnvNames(file: string, env: Record<string, string>): string[] {
+    const scripts = mkdtempSync(join(tmpdir(), "av-sidecar-run-"));
+    try {
+      const script = join(scripts, "child_env.py");
+      writeFileSync(script, [
+        "import importlib.util, json, sys",
+        'spec = importlib.util.spec_from_file_location("sidecar_under_test", sys.argv[1])',
+        "module = importlib.util.module_from_spec(spec)",
+        "spec.loader.exec_module(module)",
+        'print(json.dumps(sorted(module.Sidecar().child_env_for("agent-1", "ix_key"))))',
+        "",
+      ].join("\n"));
+      const run = Bun.spawnSync([python(), "-I", script, file], { env, stdout: "pipe", stderr: "pipe", cwd: scripts });
+      expect(run.exitCode).toBe(0);
+      return JSON.parse(run.stdout.toString()) as string[];
+    } finally {
+      rmSync(scripts, { recursive: true, force: true });
+    }
+  }
+
+  beforeEach(() => {
+    process.env[MORALMOD_ARM_ENV] = "on";
+  });
+
+  test("the anchor is paired with the pin: bumping INDEX_PLUGIN_REF fails here until the anchor is re-taken from the new ref and its sha256 moved", () => {
+    expect(SIDECAR_ANCHOR_PIN.ref).toBe(INDEX_PLUGIN_REF);
+    expect(createHash("sha256").update(SIDECAR_ANCHOR).digest("hex")).toBe(SIDECAR_ANCHOR_PIN.sha256);
+    expect(SIDECAR_ANCHOR_PIN.sha256).toBe("15dbfddb11217ba5162aff96ec473cca8f949b5386fd466650d2906f8636a1b6");
+    expect(SIDECAR_ANCHOR).toBe('            child_env = os.environ.copy()\n            child_env.pop("INDEX_SESSION_TOKEN", None)\n');
+  });
+
+  test("unpatched at REF: patched in place (mode kept), the allowlist then the plugin's INDEX_* lines, marked once; enabled; a second run writes nothing", () => {
+    config(BASE);
+    installedAt(INDEX_PLUGIN_REF, true);
+    chmodSync(sidecarPath(home), 0o640);
+    const { calls, run } = recorder();
+    const result = step(run);
+    expect(calls).toEqual([]);
+    expect(result).toMatchObject({ state: "pinned", failed: null });
+    expect(plugins().enabled).toEqual(["av-events", "index-links", INDEX_PLUGIN]);
+    expect(readSidecar()).toBe(PATCHED_AT_REF);
+    expect(statSync(sidecarPath(home)).mode & 0o7777).toBe(0o640);
+    const patched = readSidecar();
+    expect(patched).not.toContain("os.environ.copy()");
+    expect(patched.split(SIDECAR_MARKER)).toHaveLength(2);
+    expect(patched).toContain(
+      '            child_env = {name: os.environ[name] for name in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ") if name in os.environ}\n            child_env.update({\n',
+    );
+    expect(SIDECAR_ENV_ALLOWLIST).toEqual(["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ"]);
+    expect(SIDECAR_ENV_ALLOWLIST).not.toContain("INDEX_SESSION_TOKEN");
+    expect(sidecarLines(result.lines)).toEqual([`→ index-network plugin: sidecar.py env allowlisted (${sidecarPath(home)})`]);
+    // Idempotent: the same bytes, the same inode (no temp-and-rename), no line.
+    const ino = statSync(sidecarPath(home)).ino;
+    const again = step(recorder().run);
+    expect(again).toMatchObject({ state: "pinned", failed: null });
+    expect(readSidecar()).toBe(PATCHED_AT_REF);
+    expect(statSync(sidecarPath(home)).ino).toBe(ino);
+    expect(sidecarLines(again.lines)).toEqual([]);
+    expect(plugins().enabled).toContain(INDEX_PLUGIN);
+  });
+
+  test("a fresh install is patched before it is enabled", () => {
+    config(BASE);
+    const { calls, run } = recorder();
+    expect(step(run)).toMatchObject({ state: "installed", failed: null });
+    expect(calls).toEqual([FRESH]);
+    expect(readSidecar()).toBe(PATCHED_AT_REF);
+    expect(plugins().enabled).toContain(INDEX_PLUGIN);
+  });
+
+  test("already patched: unchanged bytes and inode, enabled", () => {
+    config(BASE);
+    installedAt(INDEX_PLUGIN_REF, true);
+    writeFileSync(sidecarPath(home), PATCHED_AT_REF);
+    const ino = statSync(sidecarPath(home)).ino;
+    const result = step(recorder().run);
+    expect(result).toMatchObject({ state: "pinned", failed: null });
+    expect(readSidecar()).toBe(PATCHED_AT_REF);
+    expect(statSync(sidecarPath(home)).ino).toBe(ino);
+    expect(sidecarLines(result.lines)).toEqual([]);
+    expect(plugins().enabled).toContain(INDEX_PLUGIN);
+  });
+
+  const BROKEN: Array<[string, string | null, string]> = [
+    ["anchor absent", SIDECAR_HEAD + SIDECAR_TAIL, "anchor missing"],
+    ["anchor altered (dict(os.environ))", SIDECAR_AT_REF.replace("os.environ.copy()", "dict(os.environ)"), "anchor missing"],
+    ["anchor re-indented", SIDECAR_AT_REF.replace(SIDECAR_ANCHOR, SIDECAR_ANCHOR.replaceAll("            child_env", "        child_env")), "anchor missing"],
+    ["anchor twice", SIDECAR_HEAD + SIDECAR_ANCHOR + SIDECAR_ANCHOR + SIDECAR_TAIL, "anchor ambiguous"],
+    ["the marker over an altered line", PATCHED_AT_REF.replace('"TZ")', '"TZ", "TELEGRAM_BOT_TOKEN")'), "a partial or altered patch"],
+    ["patched and the anchor both", SIDECAR_HEAD + SIDECAR_PATCHED + SIDECAR_ANCHOR + SIDECAR_TAIL, "a partial or altered patch"],
+    ["sidecar.py missing", null, "missing"],
+  ];
+  for (const [label, body, reason] of BROKEN) {
+    test(`${label}: not enabled (an earlier entry dropped), the morning job and launcher removed, the file untouched, failed=sidecar, one line naming the reason`, () => {
+      config(ENABLED);
+      installedAt(INDEX_PLUGIN_REF, true);
+      if (body === null) rmSync(sidecarPath(home));
+      else writeFileSync(sidecarPath(home), body);
+      plantMorning();
+      const { calls, run } = recorder();
+      const result = step(run);
+      expect(result).toMatchObject({ state: "failed", failed: "sidecar" });
+      expect(plugins().enabled).toEqual(["av-events"]);
+      expect(calls).toEqual([["cron", "remove", "aaaaaaaaaaaa"]]);
+      expect(existsSync(launcher())).toBe(false);
+      expect(cronJobs().map((job) => job.id)).toEqual(["bbbbbbbbbbbb", "cccccccccccc", "dddddddddddd"]);
+      if (body === null) expect(existsSync(sidecarPath(home))).toBe(false);
+      else expect(readSidecar()).toBe(body);
+      expect(sidecarLines(result.lines)).toEqual([
+        `  warning: index-network plugin: not enabled, sidecar.py env not allowlisted (${reason}); removed from plugins.enabled`,
+      ]);
+      expect(result.lines.join("\n")).not.toContain("child_env");
+      expect(existsSync(negotiatorPath(home))).toBe(false);
+      expect(readdirSync(join(home, "plugins", INDEX_PLUGIN)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    });
+  }
+
+  test("a write that fails (read-only plugin directory): not enabled, failed=sidecar, the file and directory as they were", () => {
+    config(BASE);
+    installedAt(INDEX_PLUGIN_REF, true);
+    const dir = join(home, "plugins", INDEX_PLUGIN);
+    chmodSync(dir, 0o555);
+    try {
+      const result = step(recorder().run);
+      expect(result).toMatchObject({ state: "failed", failed: "sidecar" });
+      expect(sidecarLines(result.lines)).toEqual(["  warning: index-network plugin: not enabled, sidecar.py env not allowlisted (write failed)"]);
+      expect(readdirSync(dir).sort()).toEqual(["plugin.yaml", "sidecar.py"]);
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+    expect(readSidecar()).toBe(SIDECAR_AT_REF);
+    expect(plugins().enabled).toEqual(["av-events", "index-links"]);
+  });
+
+  test("OFF and withheld never read or patch sidecar.py", () => {
+    for (const [arm, gate] of [["off", true], ["on", false]] as const) {
+      config(ENABLED);
+      installedAt(INDEX_PLUGIN_REF, true);
+      writeFileSync(sidecarPath(home), SIDECAR_HEAD + SIDECAR_TAIL);
+      process.env[MORALMOD_ARM_ENV] = arm;
+      const result = step(recorder().run, ARGV, gate);
+      expect([arm, result.failed]).toEqual([arm, arm === "off" ? null : "gate"]);
+      expect(readSidecar()).toBe(SIDECAR_HEAD + SIDECAR_TAIL);
+      expect(sidecarLines(result.lines)).toEqual([]);
+    }
+  });
+
+  test("patchSidecarSource: at REF patched once; patched is a no-op; nothing else is accepted", () => {
+    expect(patchSidecarSource(SIDECAR_AT_REF)).toEqual({ source: PATCHED_AT_REF, changed: true });
+    expect(patchSidecarSource(PATCHED_AT_REF)).toEqual({ source: PATCHED_AT_REF, changed: false });
+    for (const [, body, reason] of BROKEN) if (body !== null) expect(patchSidecarSource(body)).toEqual({ reason });
+  });
+
+  test("the patched file is valid Python (ast.parse)", () => {
+    config(BASE);
+    installedAt(INDEX_PLUGIN_REF, true);
+    step(recorder().run);
+    const parse = Bun.spawnSync([python(), "-I", "-c", "import ast,sys; ast.parse(open(sys.argv[1]).read())", sidecarPath(home)], { stderr: "pipe" });
+    expect(parse.stderr.toString()).toBe("");
+    expect(parse.exitCode).toBe(0);
+  });
+
+  test("behaviour: the patched env builder hands the child no secret name (TELEGRAM_BOT_TOKEN, a model key, INDEX_SESSION_TOKEN); the unpatched one does", () => {
+    config(BASE);
+    installedAt(INDEX_PLUGIN_REF, true);
+    const unpatched = join(home, "unpatched_sidecar.py");
+    writeFileSync(unpatched, SIDECAR_AT_REF);
+    step(recorder().run);
+    const gateway = {
+      PATH: "/usr/bin:/bin",
+      HOME: "/home/hermes",
+      LANG: "C.UTF-8",
+      TZ: "Asia/Kolkata",
+      TELEGRAM_BOT_TOKEN: "x",
+      OPENROUTER_API_KEY: "x",
+      INDEX_SESSION_TOKEN: "x",
+      AV_APPROVAL_TOKEN_FILE: "/run/x",
+    };
+    // Control: at REF the leak is real, so the check below can see it.
+    const leaked = childEnvNames(unpatched, gateway);
+    expect(leaked).toContain("TELEGRAM_BOT_TOKEN");
+    expect(leaked).toContain("OPENROUTER_API_KEY");
+    expect(leaked).not.toContain("INDEX_SESSION_TOKEN");
+    const names = childEnvNames(sidecarPath(home), gateway);
+    expect(names).not.toContain("TELEGRAM_BOT_TOKEN");
+    expect(names).not.toContain("OPENROUTER_API_KEY");
+    expect(names).not.toContain("AV_APPROVAL_TOKEN_FILE");
+    expect(names).not.toContain("INDEX_SESSION_TOKEN");
+    expect(names).toEqual([...INDEX_CHILD_NAMES, "HOME", "LANG", "PATH", "TZ"].sort());
+  });
+
+  test("the line and the status field carry the word", () => {
+    expect(indexPluginFailedLine("sidecar")).toBe("agentvillage-install: index_plugin_failed=sidecar");
+    writeInstallStatus(home, []);
+    expect(recordIndexPluginStatus(home, "sidecar")).toBe(true);
+    expect(JSON.parse(readFileSync(installStatusPath(home), "utf8")).index_plugin_failed).toBe("sidecar");
   });
 });
 

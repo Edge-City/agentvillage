@@ -45,6 +45,17 @@
  *   makes the writes reach the resident's daemon; whether one waits for a tap
  *   is the policy's row (`opportunity.accept` is autonomous in the template),
  *   which the installer neither reads nor writes.
+ * - Sidecar env allowlist (OV-249 A3, the lead's R11): at REF the plugin's
+ *   `sidecar.py` starts the Bun negotiator with `os.environ.copy()` minus
+ *   `INDEX_SESSION_TOKEN`, every gateway secret included. Every ON run, after
+ *   the Hermes install or no-op and before enabling, the installed
+ *   `plugins/index-network/sidecar.py` has that exact two-line anchor replaced
+ *   by an allowlist (`SIDECAR_ENV_ALLOWLIST` from `os.environ`, then the
+ *   plugin's own `INDEX_*` names, unchanged). An already-patched file is left
+ *   byte for byte. Anything else (anchor missing or twice, unreadable, write or
+ *   re-read failed) is fail closed: the step does what withheld does, reports
+ *   `sidecar` and logs one line naming the reason. Comes out when the plugin
+ *   offers a hook (the request to Index on #249).
  * - `--skip-index`, or no Index key, skips the ON install as `installIndex()`
  *   is skipped.
  * - `$HERMES_HOME/index/negotiator.ts` is seeded for ON residents only when
@@ -56,7 +67,8 @@
  *   printed as one fixed line by install.ts.
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { chmodSync, chownSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { dotenvFileValue, readConfig, writeConfig } from "./config";
@@ -68,6 +80,29 @@ export const INDEX_PLUGIN = "index-network";
 export const INDEX_PLUGIN_SOURCE = "indexnetwork/hermes-plugin";
 /** The reviewed commit of indexnetwork/hermes-plugin (dev = main on 2026-10-08; Hermes's install scan: safe). */
 export const INDEX_PLUGIN_REF = "eaec4fc02ffc251fca2cfd56b728c845562f6a3b";
+/**
+ * OV-249 A3: the exact bytes of `sidecar.py:149-150` at `INDEX_PLUGIN_REF` (the negotiator child's
+ * env: the gateway's whole environment minus the device session), which the installer replaces.
+ * A pin bump must re-take the anchor from the new ref (`gh api
+ * repos/indexnetwork/hermes-plugin/contents/sidecar.py?ref=<REF>`) and move `SIDECAR_ANCHOR_PIN`
+ * with it: a pin whose `ref` is not `INDEX_PLUGIN_REF`, or whose sha256 is not the anchor's, fails
+ * closed at run time and fails the test that holds the pairing.
+ */
+export const SIDECAR_ANCHOR = '            child_env = os.environ.copy()\n            child_env.pop("INDEX_SESSION_TOKEN", None)\n';
+export const SIDECAR_ANCHOR_PIN = {
+  ref: "eaec4fc02ffc251fca2cfd56b728c845562f6a3b",
+  sha256: "15dbfddb11217ba5162aff96ec473cca8f949b5386fd466650d2906f8636a1b6",
+} as const;
+/** The names the negotiator child keeps from the gateway's environment (Bun needs PATH and HOME). */
+export const SIDECAR_ENV_ALLOWLIST = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ"] as const;
+/** Marks the patched region, so a re-run recognises an already-patched file. */
+export const SIDECAR_MARKER = "# agentvillage OV-249 A3: env allowlist";
+/** What replaces `SIDECAR_ANCHOR`, at its indent; the plugin's `child_env.update({INDEX_*})` follows unchanged. */
+export const SIDECAR_PATCHED = [
+  `            ${SIDECAR_MARKER} (installer patch: no gateway secret reaches the child)`,
+  `            child_env = {name: os.environ[name] for name in (${SIDECAR_ENV_ALLOWLIST.map((n) => `"${n}"`).join(", ")}) if name in os.environ}`,
+  "",
+].join("\n");
 export const MORALMOD_ARM_ENV = "AV_MORALMOD_ARM";
 /** The plugin's own cron job and its launcher under `$HERMES_HOME/scripts/` (morning.py `JOB_NAME`, `LAUNCHER` at REF). */
 export const MORNING_JOB = "Index morning";
@@ -77,9 +112,10 @@ export const HERMES_INSTALL_TMP = /^\.install-[a-z0-9_]{8}$/;
 
 /**
  * Why the step failed, one fixed word each: the Hermes command, the config.yaml write, the
- * negotiator seed, or `gate`: the arm is on but this run's approval step did not verify the gate.
+ * negotiator seed, `gate`: the arm is on but this run's approval step did not verify the gate, or
+ * `sidecar`: the installed sidecar.py could not be brought to the env allowlist (OV-249 A3).
  */
-export type IndexPluginFailure = "hermes" | "config" | "seed" | "gate";
+export type IndexPluginFailure = "hermes" | "config" | "seed" | "gate" | "sidecar";
 
 export interface IndexPluginResult {
   /** What the step did. */
@@ -229,6 +265,72 @@ export function pinnedAtRef(home: string): boolean {
   }
 }
 
+function count(text: string, needle: string): number {
+  return text.split(needle).length - 1;
+}
+
+/**
+ * `source` with the anchor replaced by the allowlist (OV-249 A3), or the reason it cannot be: one
+ * fixed phrase, never file content. Already patched (the exact patched block once, no anchor) is
+ * returned unchanged.
+ */
+export function patchSidecarSource(source: string): { source: string; changed: boolean } | { reason: string } {
+  if (SIDECAR_ANCHOR_PIN.ref !== INDEX_PLUGIN_REF) return { reason: "the anchor was not re-taken at INDEX_PLUGIN_REF" };
+  if (createHash("sha256").update(SIDECAR_ANCHOR).digest("hex") !== SIDECAR_ANCHOR_PIN.sha256) return { reason: "the anchor is not the pinned one" };
+  const anchors = count(source, SIDECAR_ANCHOR);
+  const patched = count(source, SIDECAR_PATCHED);
+  if (patched === 1 && anchors === 0) return { source, changed: false };
+  if (patched > 0 || count(source, SIDECAR_MARKER) > 0) return { reason: "a partial or altered patch" };
+  if (anchors === 0) return { reason: "anchor missing" };
+  if (anchors > 1) return { reason: "anchor ambiguous" };
+  return { source: source.replace(SIDECAR_ANCHOR, SIDECAR_PATCHED), changed: true };
+}
+
+export function sidecarPath(home: string): string {
+  return join(pluginDir(home), "sidecar.py");
+}
+
+/**
+ * Bring the installed sidecar.py to the env allowlist: no write when already patched; otherwise a
+ * temp file beside it, with its mode and owner, renamed over it and read back.
+ *
+ * @returns `patched`, `already`, or the reason (fixed phrase) the plugin must not be enabled.
+ */
+export function patchInstalledSidecar(home: string): "patched" | "already" | { reason: string } {
+  const path = sidecarPath(home);
+  let source: string;
+  let mode: number;
+  let uid: number;
+  let gid: number;
+  try {
+    const st = lstatSync(path);
+    if (!st.isFile()) return { reason: "not a regular file" };
+    ({ mode, uid, gid } = st);
+    source = readFileSync(path, "utf8");
+  } catch (err) {
+    return { reason: (err as { code?: unknown } | null)?.code === "ENOENT" ? "missing" : "unreadable" };
+  }
+  const result = patchSidecarSource(source);
+  if ("reason" in result) return result;
+  if (!result.changed) return "already";
+  const tmp = `${path}.av-${process.pid}.tmp`;
+  try {
+    writeFileSync(tmp, result.source, { mode: mode & 0o7777 });
+    chmodSync(tmp, mode & 0o7777);
+    chownSync(tmp, uid, gid);
+    renameSync(tmp, path);
+  } catch {
+    rmSync(tmp, { force: true });
+    return { reason: "write failed" };
+  }
+  try {
+    if (readFileSync(path, "utf8") !== result.source) return { reason: "re-read differs" };
+  } catch {
+    return { reason: "re-read failed" };
+  }
+  return "patched";
+}
+
 /** The Hermes argv that brings the plugin to the pin. */
 export function pinnedInstallArgs(home: string): string[] {
   const force = existsSync(pluginDir(home)) ? ["--force"] : [];
@@ -329,6 +431,23 @@ export function installIndexPlugin(run: (args: string[]) => void, argv: string[]
   // Enabled only when there is a plugin on disk to load (a failed first install leaves none; a
   // failed bump leaves the previous tree in place, Hermes swaps only after a good clone).
   if (existsSync(join(pluginDir(home), "plugin.yaml"))) {
+    // OV-249 A3: never enabled with a sidecar that hands the negotiator the gateway's environment.
+    const sidecar = patchInstalledSidecar(home);
+    if (typeof sidecar === "object") {
+      let dropped = false;
+      try {
+        dropped = setIndexPluginEnabled(false);
+      } catch {
+        failed = "config";
+      }
+      const tail = failed === "config" ? "; could not update plugins.enabled in config.yaml" : dropped ? "; removed from plugins.enabled" : "";
+      console.warn(`  warning: index-network plugin: not enabled, sidecar.py env not allowlisted (${sidecar.reason})${tail}`);
+      stopMorningJob(run, home);
+      // `config` first (the plugin may still be listed), else the first failure, else `sidecar`.
+      failed ??= "sidecar";
+      return { state: "failed", failed };
+    }
+    if (sidecar === "patched") console.log(`→ index-network plugin: sidecar.py env allowlisted (${sidecarPath(home)})`);
     try {
       if (setIndexPluginEnabled(true)) console.log(`→ enabled plugin ${INDEX_PLUGIN}`);
     } catch {
