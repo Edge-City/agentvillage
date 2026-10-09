@@ -10,7 +10,7 @@ function fixture() {
   const content = { "negotiator-core.js": "export const hookVersion='moralmod-lifecycle-2';", "negotiator-runtime.js": "export async function startResident(){return {port:1,stop(){}}}", "INDEX-LICENSE": "fixture MIT license" };
   for (const [name, value] of Object.entries(content)) writeFileSync(join(source, name), value);
   const manifest = { schema: "moralmod-negotiator-release-1", hook_version: MORALMOD_HOOK_VERSION, hermes_plugin_revision: INDEX_PLUGIN_REVISION,
-    bun_version: "1.3.6", files: Object.fromEntries(Object.entries(content).map(([name, value]) => [name, createHash("sha256").update(value).digest("hex")])) };
+    bun_version: "1.4.2", files: Object.fromEntries(Object.entries(content).map(([name, value]) => [name, createHash("sha256").update(value).digest("hex")])) };
   writeFileSync(join(source, "release.json"), JSON.stringify(manifest));
   return { source, home, manifest, cleanup: () => { rmSync(source, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); } };
 }
@@ -36,8 +36,8 @@ test("tampered source and installed files cannot be activated or overwritten", (
     expect(readFileSync(join(installed.directory, "negotiator-core.js"), "utf8")).toBe("resident edit");
   } finally { other.cleanup(); }
 });
-test("old hook, wrong plugin and additional release files fail before install", () => {
-  for (const change of [{ hook_version: "old" }, { hermes_plugin_revision: "unreviewed" }, { files: { "../secret": "abc" } }]) {
+test("old hook, wrong runtime/plugin and additional release files fail before install", () => {
+  for (const change of [{ hook_version: "old" }, { bun_version: "1.3.6" }, { bun_version: "1.4.3" }, { hermes_plugin_revision: "unreviewed" }, { files: { "../secret": "abc" } }]) {
     const f = fixture(); try {
       writeFileSync(join(f.source, "release.json"), JSON.stringify({ ...f.manifest, ...change }));
       expect(() => installMoralmodRelease(f.home, f.source)).toThrow("Incompatible");

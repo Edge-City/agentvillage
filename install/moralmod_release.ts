@@ -23,7 +23,7 @@ export function installMoralmodRelease(home: string, source: string): InstalledR
   const manifest: unknown = JSON.parse(raw);
   if (!object(manifest) || manifest.schema !== "moralmod-negotiator-release-1"
       || manifest.hook_version !== MORALMOD_HOOK_VERSION || manifest.hermes_plugin_revision !== INDEX_PLUGIN_REVISION
-      || manifest.bun_version !== "1.3.6" || !object(manifest.files)
+      || manifest.bun_version !== "1.4.2" || manifest.bun_version !== Bun.version || !object(manifest.files)
       || Object.keys(manifest.files).sort().join() !== [...FILES].sort().join()) throw new Error("Incompatible MoralMod release");
   const expected = manifest.files;
   const files = FILES.map(name => {
