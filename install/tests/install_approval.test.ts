@@ -1622,9 +1622,11 @@ const UNPADDED_FRACTION = "5567380";
  * the nanoseconds without their leading zeros (one to nine digits: the shape
  * 0.8.0's `%3N` gives, kept as a defence case for `%N`), `s` whole seconds and
  * no fraction (a date without %N). `gnu` and `unpadded` also print their shape
- * of the log stamp.
+ * of the log stamp. With `offsetFile` (DATA-378: virtualSleep's file) the
+ * seconds the fake sleeps added are added to the reading, so the clock moves
+ * 5 s per re-ask as it does on a box.
  */
-function clockFake(shape: "gnu" | "unpadded" | "s"): string {
+function clockFake(shape: "gnu" | "unpadded" | "s", offsetFile?: string): string {
   const stamp = {
     gnu: `/usr/bin/perl -MTime::HiRes=gettimeofday -e '($s, $u) = gettimeofday; printf("%d.%06d000\\n", $s, $u)'`,
     unpadded: `/usr/bin/perl -MTime::HiRes=gettimeofday -e '($s, $u) = gettimeofday; printf("%d.%d\\n", $s, $u * 1000)'`,
@@ -1634,7 +1636,23 @@ function clockFake(shape: "gnu" | "unpadded" | "s"): string {
   const logStamp = logFraction
     ? `  -u) [ "$2" = "+%Y-%m-%dT%H:%M:%S.%N" ] && { printf '%s.${logFraction}\\n' "$(/bin/date -u +%Y-%m-%dT%H:%M:%S)"; exit 0; } ;;\n`
     : "";
-  return `#!/bin/sh\ncase "$1" in\n  +%s.%N) exec ${stamp} ;;\n${logStamp}esac\nexec /bin/date "$@"\n`;
+  const read = offsetFile
+    ? `v=$(${stamp}); o=$(cat '${offsetFile}' 2>/dev/null || echo 0); case $v in *.*) echo "$((\${v%%.*} + o)).\${v#*.}" ;; *) echo "$((v + o))" ;; esac; exit 0`
+    : `exec ${stamp}`;
+  return `#!/bin/sh\ncase "$1" in\n  +%s.%N) ${read} ;;\n${logStamp}esac\nexec /bin/date "$@"\n`;
+}
+
+/**
+ * DATA-378: the fixture's `sleep` adds its seconds to a virtual offset and
+ * returns at once (the fixture's own fake sleeps 0.05 s and the clock does not
+ * move). A clock that adds the offset then sees 5 s pass per re-ask, as on a
+ * box, so the attempt cap (WAIT_S/5 + 2, which counts on those 5 s) is not
+ * reached before the window closes. Returns the offset file (whole seconds).
+ */
+function virtualSleep(fx: ReturnType<typeof shimFixture>): string {
+  const f = join(fx.state, "vsec");
+  writeFileSync(join(fx.fake, "sleep"), `#!/bin/sh\nf='${f}'\necho $(( $(cat "$f" 2>/dev/null || echo 0) + $1 )) > "$f"\n`, { mode: 0o755 });
+  return f;
 }
 
 /** A fake `date` whose `+%s.%N` prints one fixed value. */
@@ -1745,13 +1763,16 @@ describe("DATA-377: the shim's clock is read as seconds.fraction, the fraction l
 
   test("both clocks: the window is measured in milliseconds (WAIT_S=6 closes after a few re-asks, then the last block stands)", () => {
     for (const shape of ["gnu", "unpadded"] as const) {
-      const fx = withClock(shimFixture("waiting"), clockFake(shape));
+      const fx = shimFixture("waiting");
+      // DATA-378: each pause moves the clock 5 s, as on a box. With the fixture's 0.05 s pause and a real-time clock
+      // the attempt cap (WAIT_S/5 + 2 = 3) ended the loop before the window did.
+      withClock(fx, clockFake(shape, virtualSleep(fx)));
       // A unit read wrongly here would run the loop for hours: bound the run, so it fails instead of hanging.
       const r = fx.run({ APPROVAL_HOOK_WAIT_S: "6" }, { timeoutMs: 20000 });
       expect([shape, r.code]).toEqual([shape, 2]);
       expect(r.calls).toBeGreaterThan(1);
       expect(JSON.parse(r.stdout).message).toStartWith("hook-timeout:");
-      // The loop stops once now + 5 s reaches T0 + 6 s: about one second of real time.
+      // The loop stops once now + 5 s reaches T0 + 6 s: after the first 5 s pause, so the last line reads about 5 s.
       const ms = elapsed(fx.log());
       expect(ms.at(-1)!).toBeGreaterThanOrEqual(1000);
       expect(ms.at(-1)!).toBeLessThan(10000);
@@ -2370,6 +2391,142 @@ done
         expect([shell, lc, got]).toEqual([shell, lc, cases.map((c) => [c.hex, c.sh])]);
       }
   });
+});
+
+// ---------------------------------------------------------------------------
+// DATA-378: the re-ask loop is bounded whatever the clock does. Found by the
+// DATA-377 refuter (NOTE 1): the loop ended only when now + 5 s reached
+// T0 + WAIT_S, so a clock that read 0 after the start (date failed or printed
+// no digits) or stepped back kept it re-posting for as long as the facade
+// answered hook-timeout, past Hermes's 300 s entry timeout. Inside the loop a
+// read of 0 or below the last good read now counts as the deadline passed,
+// and the attempts are capped at WAIT_S/5 + 2.
+//
+// The virtual clock below starts at 1791393600.266 s and moves only when the
+// fake sleep adds its 5 s, so every count here is exact. The shim reads it
+// (call numbers, waiting mode): 1 T0, 2 the start line, then attempt 1: 3 P0,
+// 4 the deadline check, 5 the wait line; attempt k >= 2: 4k-2 the time left,
+// 4k-1 P0, 4k the deadline check, 4k+1 the wait line.
+// ---------------------------------------------------------------------------
+
+const V0_S = 1791393600;
+
+/**
+ * A fake `date` on the virtual clock: `+%s.%N` prints V0_S plus the seconds
+ * virtualSleep added, and counts its calls in state/clock.n, so `rule` (sh;
+ * $n is the call number, $s the seconds about to be printed) can break the
+ * clock from some call on.
+ */
+function virtualClock(fx: ReturnType<typeof shimFixture>, rule = ""): ReturnType<typeof shimFixture> {
+  const vsec = virtualSleep(fx);
+  return withClock(
+    fx,
+    `#!/bin/sh
+case "$1" in
+  +%s.%N)
+    f='${fx.state}/clock.n'; n=$(( $(cat "$f" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$f"
+    s=$(( ${V0_S} + $(cat '${vsec}' 2>/dev/null || echo 0) ))
+    ${rule}
+    echo "$s.266000000" ;;
+  *) exec /bin/date "$@" ;;
+esac
+`,
+  );
+}
+
+/** The virtual seconds the fake sleep added (0 when it never ran). */
+function virtualSeconds(fx: ReturnType<typeof shimFixture>): number {
+  const f = join(fx.state, "vsec");
+  return existsSync(f) ? Number(readFileSync(f, "utf8")) : 0;
+}
+
+/** The facade's own hook-timeout block, replayed at exit 2, with the log's last line the loop's outcome=block. */
+function expectWaitBlock(label: string, fx: ReturnType<typeof shimFixture>, r: ShimRun, posts: number): void {
+  expect([label, r.code, r.calls]).toEqual([label, 2, posts]);
+  expect(JSON.parse(r.stdout).message).toStartWith("hook-timeout:");
+  const last = fx.log().trim().split("\n").at(-1)!;
+  expect(last).toMatch(
+    new RegExp(` outcome=block http=200 exit=2 code=hook-timeout tool=terminal attempt=${posts} path=\\w+ elapsed_ms=-?\\d+$`),
+  );
+  expect(r.stderr).not.toMatch(/arithmetic|octal|base|Illegal number|syntax error/i);
+}
+
+describe("DATA-378: a clock that reads 0 or steps back mid-run ends the re-ask window, and the attempts are capped", () => {
+  // A broken loop would run until killed: every run is bounded, so a regression fails instead of hanging. The bound and
+  // the test timeouts are generous: a sound run takes a second or two, but this machine under load (XProtect scanning
+  // each new fake) has taken over 10 s to reach the first post.
+  const BOUND = { timeoutMs: 25000 };
+
+  for (const shell of DATA380_SHELLS) {
+    test(`AC #1: a clock that stops after the start (exit 1, or nothing at exit 0) ends with the block, at most WAIT_S/5 + 2 posts, within WAIT_S + 5 s virtual (${shell})`, () => {
+      // From call 3 (attempt 1's P0), 6 (attempt 2's time left) and 10 (attempt 3's): the post under way is the last,
+      // so 1, 2 and 3 posts. Before DATA-378 each of these ran until killed. A clock lost at the time-left read is the
+      // deadline passed, so that last post gets the 1 s floor, not MAX_TIME (before, a 0 there made the time left
+      // an epoch and the post got the full MAX_TIME).
+      for (const [from, posts, lastMaxTime] of [
+        [3, 1, "25"],
+        [6, 2, "1"],
+        [10, 3, "1"],
+      ] as const) {
+        for (const stop of ["exit 1", "exit 0"]) {
+          const fx = virtualClock(shimFixture("waiting", null, { shell }), `[ "$n" -lt ${from} ] || ${stop}`);
+          const r = fx.run({ APPROVAL_HOOK_WAIT_S: "20", APPROVAL_HOOK_MAX_TIME: "25" }, BOUND);
+          expectWaitBlock(`${shell} from=${from} ${stop}`, fx, r, posts);
+          expect(r.calls).toBeLessThanOrEqual(20 / 5 + 2);
+          expect(virtualSeconds(fx)).toBeLessThanOrEqual(20 + 5);
+          const argv = r.argv.at(-1)!.split("\n");
+          expect([from, argv[argv.indexOf("--max-time") + 1]]).toEqual([from, lastMaxTime]);
+        }
+      }
+    }, 180000);
+
+    test(`AC #2: a clock stepped back 60 s mid-run ends with the block at the first read that sees the step, never later than the deadline (${shell})`, () => {
+      // The step lands at call 6 (attempt 2's time left) or 8 (attempt 2's deadline check): attempt 2 is the last
+      // post either way, so exactly 2. Before DATA-378 the step moved the deadline out by 60 s (16 posts, 75 s
+      // virtual); without the backwards check the cap ends it at 6.
+      for (const at of [6, 8]) {
+        const fx = virtualClock(shimFixture("waiting", null, { shell }), `[ "$n" -lt ${at} ] || s=$((s - 60))`);
+        const r = fx.run({ APPROVAL_HOOK_WAIT_S: "20" }, BOUND);
+        expectWaitBlock(`${shell} at=${at}`, fx, r, 2);
+        expect(virtualSeconds(fx)).toBe(5);
+      }
+    }, 60000);
+
+    test(`the cap: a clock that stands still (now + 5 s never reaches the deadline) ends after exactly WAIT_S/5 + 2 posts (${shell})`, () => {
+      for (const [wait, cap] of [
+        ["20", 6],
+        ["6", 3],
+      ] as const) {
+        const fx = withClock(shimFixture("waiting", null, { shell }), fixedClock(`${V0_S}.266000000`));
+        const r = fx.run({ APPROVAL_HOOK_WAIT_S: wait }, BOUND);
+        expectWaitBlock(`${shell} WAIT_S=${wait}`, fx, r, cap);
+        expect(fx.log().match(/outcome=wait /g)?.length).toBe(cap - 1);
+      }
+    }, 60000);
+
+    test(`negative control: a clock that works ends at the deadline, not at the cap; WAIT_S=20 posts 4 times as before DATA-378 (${shell})`, () => {
+      const fx = virtualClock(shimFixture("waiting", null, { shell }));
+      const r = fx.run({ APPROVAL_HOOK_WAIT_S: "20" }, BOUND);
+      // Posts at 0, 5, 10 and 15 s; at 15 s, 15 + 5 reaches the 20 s deadline. The cap would be 6.
+      expectWaitBlock(shell, fx, r, 4);
+      expect(elapsed(fx.log())).toEqual([0, 0, 5000, 10000, 15000]);
+      expect(virtualSeconds(fx)).toBe(15);
+    }, 30000);
+
+    test(`negative control at the installed window: WAIT_S=280 ends at the deadline after 56 posts, under the cap of 58 (${shell})`, () => {
+      const fx = virtualClock(shimFixture("waiting", null, { shell }));
+      const r = fx.run({ APPROVAL_HOOK_WAIT_S: "280" }, { timeoutMs: 60000 });
+      expectWaitBlock(shell, fx, r, 56);
+      expect(elapsed(fx.log()).at(-1)).toBe(275000);
+    }, 90000);
+
+    test(`a working clock and a resident who taps: the later allow stands, as before (${shell})`, () => {
+      const fx = virtualClock(shimFixture("wait-then-allow", null, { shell }));
+      const r = fx.run({ APPROVAL_HOOK_WAIT_S: "20" }, BOUND);
+      expect([r.code, r.stdout, r.calls]).toEqual([0, "{}", 3]);
+      expect(elapsed(fx.log())).toEqual([0, 0, 5000, 10000]);
+    }, 30000);
+  }
 });
 
 describe("DATA-234 G2: the shim digest the backstop compares", () => {

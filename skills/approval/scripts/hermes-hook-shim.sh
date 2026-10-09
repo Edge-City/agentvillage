@@ -62,6 +62,10 @@
 #         else by node as before;
 #       * every outcome line in the log ends with path=fast (no node process
 #         in this call) or path=node.
+#   - DATA-378 (2026-10-08), the re-ask loop is bounded whatever the clock
+#     does: inside the loop a clock that reads 0 (date failed after the start)
+#     or reads below its last good value (it stepped back) counts as the
+#     deadline passed, and the attempts are capped at WAIT_S/5 + 2.
 # The Agent Village sandbox has one unix user, so the shim runs "by hand"
 # there (no /opt/approval/hook-home, no setuid launcher; skills/approval/
 # README.md says why). install/install_approval.ts installs this file as
@@ -762,12 +766,26 @@ retry_failed() {
 }
 
 DEADLINE=$((T0 + WAIT_S * 1000))
+# DATA-378: every clock read in the loop goes through clock_read, once per
+# check. A read of 0 (date stopped printing a clock after T0) or one below the
+# last good read (the clock stepped back) sets LOST, which the loop reads as
+# the deadline passed; NOW keeps the last good read. CAP bounds the attempts
+# whatever the clock says: one per 5 s pause in the window, and two more.
+NOW=$T0
+LOST=0
+CAP=$((WAIT_S / 5 + 2))
+clock_read() {
+  CLK=$(now_ms)
+  if [ "$CLK" -gt 0 ] && [ "$CLK" -ge "$NOW" ]; then NOW=$CLK; else LOST=1; fi
+}
 attempt=0
 while :; do
   attempt=$((attempt + 1))
   mt=$MAX_TIME
   if [ "$attempt" -gt 1 ]; then
-    left=$(( (DEADLINE - $(now_ms)) / 1000 ))
+    clock_read
+    left=$(( (DEADLINE - NOW) / 1000 ))
+    [ "$LOST" = 0 ] || left=0
     [ "$left" -lt "$mt" ] && mt=$left
     [ "$mt" -ge 1 ] || mt=1
   fi
@@ -780,7 +798,8 @@ while :; do
     [ -z "$LOOP_PORT" ] || listener_check
     set --
   fi
-  P0=$(now_ms)
+  clock_read
+  P0=$NOW
   # `%{size_download}` is the bytes curl wrote to the body file: the sh
   # reading of the verdict compares it with what the shell read (DATA-380),
   # so it must stay the bytes IN THE FILE: never add --compressed (or any
@@ -805,10 +824,10 @@ while :; do
     # The first post ran into the ceiling: the facade may well have opened the
     # question and still be waiting on it. Re-ask, as on a hook-timeout block.
     # A clock that cannot be read measures 0 ms here, which stays final.
-    if [ "$attempt" -eq 1 ] && [ $RC -eq 28 ] && [ "$WAIT_S" -gt 0 ] &&
-      [ $(( $(now_ms) - P0 )) -ge $((MAX_TIME * 1000)) ]; then
+    if [ "$attempt" -eq 1 ] && [ $RC -eq 28 ] && [ "$WAIT_S" -gt 0 ] && clock_read &&
+      [ $(( NOW - P0 )) -ge $((MAX_TIME * 1000)) ]; then
       FIRST_TIMEOUT="transport failure (curl exit $RC: $why)"
-      [ $(( $(now_ms) + 5000 )) -lt "$DEADLINE" ] || block "$FIRST_TIMEOUT"
+      [ "$LOST" = 0 ] && [ $(( NOW + 5000 )) -lt "$DEADLINE" ] || block "$FIRST_TIMEOUT"
       log "outcome=wait http=000 curl=$RC tool=${TOOL:-?} attempt=$attempt reason=\"first post timed out; re-asking\" path=$VP"
       "$T_sleep" 5
       continue
@@ -839,7 +858,8 @@ while :; do
   LAST_EXIT=$EXIT
   LAST_CODE=$RCODE
   # Still open. Ask again in 5 s while the window allows another attempt.
-  if [ $(( $(now_ms) + 5000 )) -ge "$DEADLINE" ]; then
+  clock_read
+  if [ "$LOST" = 1 ] || [ $(( NOW + 5000 )) -ge "$DEADLINE" ] || [ "$attempt" -ge "$CAP" ]; then
     KIND=block
     break
   fi
