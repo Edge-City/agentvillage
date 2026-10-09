@@ -8,7 +8,7 @@ import { join } from "node:path";
 
 export const MORALMOD_HOOK_VERSION = "moralmod-lifecycle-2";
 export const INDEX_PLUGIN_REVISION = "eaec4fc02ffc251fca2cfd56b728c845562f6a3b";
-const FILES = ["negotiator-core.js", "INDEX-LICENSE"] as const;
+const FILES = ["negotiator-core.js", "negotiator-runtime.js", "INDEX-LICENSE"] as const;
 const hash = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const regular = (path: string) => { if (existsSync(path) && !lstatSync(path).isFile()) throw new Error("MoralMod managed path must be a regular file"); };

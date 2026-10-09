@@ -14,6 +14,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { installManagedMoralmod } from "./moralmod_host";
 import { hermesHome } from "./paths";
 
 export const INDEX_PLUGIN = "index-network";
@@ -22,7 +23,7 @@ export const INDEX_PLUGIN_SOURCE = "indexnetwork/hermes-plugin";
 export const NEGOTIATOR_SEED = [
   "// Runs before the built-in negotiator. Return next() to keep it.",
   "// Or return { turn: { action, message } } or { stall: { reason, suggestedAsk } }.",
-  "// action is \"propose\" | \"counter\" | \"accept\" | \"decline\".",
+  '// action is "propose" | "counter" | "accept" | "decline".',
   "//",
   "// input:",
   "//   user: { id, name, intro, location, timezone }",
@@ -58,8 +59,29 @@ export function seedNegotiator(home: string): boolean {
  * @param run - One Hermes invocation, argv without the binary.
  * @param home - The Hermes home. Defaults to `hermesHome()`.
  */
-export function installIndexPlugin(run: (args: string[]) => void, home: string = hermesHome()): void {
-  const installed = existsSync(join(home, "plugins", INDEX_PLUGIN, "plugin.yaml"));
+export function installIndexPlugin(
+  run: (args: string[]) => void,
+  home: string = hermesHome(),
+): void {
+  const release = process.env.MORALMOD_RELEASE_DIR?.trim();
+  const config = process.env.MORALMOD_RESIDENT_CONFIG?.trim();
+  if (release || config) {
+    if (!release || !config)
+      throw Error("MoralMod requires both release and resident config");
+    installManagedMoralmod(run, home, release, config);
+    console.log(
+      "→ installed pinned MoralMod lifecycle; selection/readiness verified at runtime",
+    );
+    return;
+  }
+  // A managed resident must never be silently overwritten by a floating update.
+  if (existsSync(join(home, "index", "moralmod", "active.json")))
+    throw Error(
+      "Managed MoralMod update requires explicit pinned release/config",
+    );
+  const installed = existsSync(
+    join(home, "plugins", INDEX_PLUGIN, "plugin.yaml"),
+  );
   if (installed) run(["plugins", "update", INDEX_PLUGIN]);
   else run(["plugins", "install", INDEX_PLUGIN_SOURCE, "--enable"]);
   run(["plugins", "enable", INDEX_PLUGIN]);

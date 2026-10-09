@@ -7,7 +7,7 @@ import { installMoralmodRelease, INDEX_PLUGIN_REVISION, MORALMOD_HOOK_VERSION } 
 
 function fixture() {
   const source = mkdtempSync(join(tmpdir(), "av-release-")), home = mkdtempSync(join(tmpdir(), "av-resident-"));
-  const content = { "negotiator-core.js": "export const hookVersion='moralmod-lifecycle-2';", "INDEX-LICENSE": "fixture MIT license" };
+  const content = { "negotiator-core.js": "export const hookVersion='moralmod-lifecycle-2';", "negotiator-runtime.js": "export async function startResident(){return {port:1,stop(){}}}", "INDEX-LICENSE": "fixture MIT license" };
   for (const [name, value] of Object.entries(content)) writeFileSync(join(source, name), value);
   const manifest = { schema: "moralmod-negotiator-release-1", hook_version: MORALMOD_HOOK_VERSION, hermes_plugin_revision: INDEX_PLUGIN_REVISION,
     bun_version: "1.3.6", files: Object.fromEntries(Object.entries(content).map(([name, value]) => [name, createHash("sha256").update(value).digest("hex")])) };

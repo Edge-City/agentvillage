@@ -1,5 +1,7 @@
 # Custom negotiator
 
+For the managed MoralMod lifecycle (pre-brief assessment and durable turn submission), see [MoralMod installation](moralmod_lifecycle.md). The original optional post-brief hook below remains the unconfigured path.
+
 For someone writing the turn a resident's Hermes agent sends.
 
 The file is `$HERMES_HOME/index/negotiator.ts`. The installer writes a pass-through the first time and leaves an existing file alone. Hermes reads it when the negotiator process starts. After an edit, run `hermes gateway restart`.
