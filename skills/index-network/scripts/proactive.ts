@@ -402,9 +402,16 @@ const lastSegment = (url: string) => url.slice(url.lastIndexOf("/") + 1);
 const profileLink = (url: unknown) => { const u = indexUrl("u", url); return u && `${PORTAL_WEB}/rolodex?person=${lastSegment(u)}`; };
 const signalLink = (url: unknown) => { const u = indexUrl("i", url); return u && `${PORTAL_WEB}/intents?intent=${lastSegment(u)}`; };
 const messageLink = (url: unknown) => { const a = acceptLink(url); return a ? `${a}&surface=telegram` : null; };
-/** DATA-430: the app's deep link to one pending card (the Intents page scrolls to it; an unknown id shows the page). */
-export const appOpportunityLink = (id: unknown): string | null =>
-  typeof id === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(id) ? `${PORTAL_WEB}/intents?opportunity=${id}` : null;
+/**
+ * DATA-430: the app's deep link to one pending card, `<portal>/intents?opportunity=<id>#opportunity-<id>`
+ * (the app half's literal: the Intents page scrolls to that card; an unknown id shows the page). The id
+ * is encoded once in each place (a valid id encodes to itself).
+ */
+export const appOpportunityLink = (id: unknown): string | null => {
+  if (typeof id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(id)) return null;
+  const encoded = encodeURIComponent(id);
+  return `${PORTAL_WEB}/intents?opportunity=${encoded}#opportunity-${encoded}`;
+};
 
 /** Counts strings that did not survive cleaning, so the run log can say how many were withheld. */
 class Withheld {

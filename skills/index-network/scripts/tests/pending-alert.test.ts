@@ -112,7 +112,7 @@ describe("pendingAlert", () => {
         {
           name: "Dina",
           profileUrl: `https://agents.edgecity.live/rolodex?person=${user(4)}`,
-          appUrl: `https://agents.edgecity.live/intents?opportunity=${id(4)}`,
+          appUrl: `https://agents.edgecity.live/intents?opportunity=${id(4)}#opportunity-${id(4)}`,
           acceptUrl: `https://index.network/o/${id(4)}?action=accept&viewer=viewer4&sig=sig4&surface=telegram`,
           opportunityId: id(4),
           firstSeen: T1.toISOString(),
@@ -385,7 +385,11 @@ describe("respondBy from Index's row: an ISO `expiresAt` only (DATA-430; Index s
   });
 
   test("any other shape is null, never a guess: no zone, a date alone, a number, null, garbage, another key", async () => {
-    for (const bad of [undefined, null, 1760000000000, "", "2026-10-12", "2026-10-12T13:00:00", "2026-13-40T99:00:00Z", "tomorrow", { at: "2026-10-12T13:00:00Z" }, "2026-10-12T13:00:00Z ".repeat(5)]) {
+    for (const bad of [
+      undefined, null, 1760000000000, "", "2026-10-12", "2026-10-12T13:00:00", "2026-13-40T99:00:00Z", "tomorrow", { at: "2026-10-12T13:00:00Z" }, "2026-10-12T13:00:00Z ".repeat(5),
+      // N3: impossible calendar dates and times that Date.parse would roll over, and offsets past ±14:00.
+      "2026-02-30T10:00:00Z", "2026-10-12T24:00:00Z", "2026-10-12T23:60:00Z", "2026-10-12T23:00:60Z", "2026-10-12T13:00:00+14:59", "2026-10-12T13:00:00+05:60",
+    ]) {
       expect({ bad, parsed: parseExpiresAt(bad) }).toEqual({ bad, parsed: undefined });
     }
     const file = stateFile({ [PENDING_ALERTS_KEY]: {} });
@@ -393,6 +397,14 @@ describe("respondBy from Index's row: an ISO `expiresAt` only (DATA-430; Index s
     const result = await run(file, now);
     if ("silent" in result) throw new Error(result.reason);
     expect((pendingView(result.cards, now).view as any).cards.map((c: any) => c.respondBy)).toEqual([null, null]);
+  });
+
+  test("N3: real instants with offsets are kept, the date checked in the string's own offset", () => {
+    expect(parseExpiresAt("2026-10-12T23:30:00+05:30")).toBe("2026-10-12T18:00:00.000Z");
+    expect(parseExpiresAt("2026-10-13T01:00:00+05:30")).toBe("2026-10-12T19:30:00.000Z");
+    expect(parseExpiresAt("2026-10-12T13:00Z")).toBe("2026-10-12T13:00:00.000Z");
+    expect(parseExpiresAt("2026-10-12T13:00:00.123456Z")).toBe("2026-10-12T13:00:00.123Z");
+    expect(parseExpiresAt("2028-02-29T10:00:00-14:00")).toBe("2028-03-01T00:00:00.000Z");
   });
 
   test("a past expiresAt is parsed, but says nothing", async () => {

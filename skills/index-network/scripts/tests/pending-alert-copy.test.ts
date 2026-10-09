@@ -48,15 +48,21 @@ describe("prompts/pending-alert.md", () => {
 });
 
 describe("the Script Output the line is written from", () => {
-  test("appUrl: the app's Intents page scrolled to that one card, `https://agents.edgecity.live/intents?opportunity=<id>`", () => {
-    expect(appOpportunityLink("bbbbbbbb-0000-4000-8000-000000000001")).toBe("https://agents.edgecity.live/intents?opportunity=bbbbbbbb-0000-4000-8000-000000000001");
+  test("appUrl: the app's Intents page scrolled to that one card, `https://agents.edgecity.live/intents?opportunity=<id>#opportunity-<id>`", () => {
+    expect(appOpportunityLink("bbbbbbbb-0000-4000-8000-000000000001")).toBe(
+      "https://agents.edgecity.live/intents?opportunity=bbbbbbbb-0000-4000-8000-000000000001#opportunity-bbbbbbbb-0000-4000-8000-000000000001",
+    );
     for (const bad of ["", "a/b", "a?b", "a b", "x".repeat(129), null, 7]) expect(appOpportunityLink(bad)).toBeNull();
   });
 
-  test("the deadline words: `by 6:30 pm today` on the current village day, else `by Fri 6:30 pm`; a past one says nothing", () => {
+  test("the deadline words: `by 6:30 pm today` on the current village day, `by Fri 6:30 pm` within the week, `by Fri 30 Oct 6:30 pm` from 7 days on; a past one says nothing", () => {
     const now = new Date("2026-10-12T09:30:00Z"); // Monday 15:00 IST
     expect(respondByText("2026-10-12T13:00:00Z", now)).toBe("by 6:30 pm today");
     expect(respondByText("2026-10-16T13:00:00Z", now)).toBe("by Fri 6:30 pm");
+    expect(respondByText("2026-10-18T13:00:00Z", now)).toBe("by Sun 6:30 pm"); // 6 days ahead
+    expect(respondByText("2026-10-19T13:00:00Z", now)).toBe("by Mon 19 Oct 6:30 pm"); // 7 days ahead
+    expect(respondByText("2026-10-30T13:00:00Z", now)).toBe("by Fri 30 Oct 6:30 pm");
+    expect(RESPOND_BY_WORDS.later("Fri", "16", "Oct", "6:30 pm")).toBe("by Fri 16 Oct 6:30 pm");
     expect(respondByText("2026-10-12T08:00:00Z", now)).toBeNull();
     expect(RESPOND_BY_WORDS.today("6:30 pm")).toBe("by 6:30 pm today");
     expect(RESPOND_BY_WORDS.otherDay("Fri", "6:30 pm")).toBe("by Fri 6:30 pm");
@@ -68,7 +74,7 @@ describe("the Script Output the line is written from", () => {
     expect(pendingView([due("​", "a1")], now)).toEqual({ view: null, withheld: 1 });
     const { view } = pendingView([due("​", "a1"), due("Asha", "a2")], now);
     expect((view as { cards: Array<{ name: string; appUrl: string; profileUrl: null; acceptUrl: null }> }).cards).toEqual([
-      { name: "Asha", profileUrl: null, appUrl: "https://agents.edgecity.live/intents?opportunity=a2", acceptUrl: null, opportunityId: "a2", firstSeen: now.toISOString(), respondBy: null },
+      { name: "Asha", profileUrl: null, appUrl: "https://agents.edgecity.live/intents?opportunity=a2#opportunity-a2", acceptUrl: null, opportunityId: "a2", firstSeen: now.toISOString(), respondBy: null },
     ] as never);
   });
 });

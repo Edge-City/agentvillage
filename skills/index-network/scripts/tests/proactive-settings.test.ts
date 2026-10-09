@@ -491,7 +491,7 @@ describe("DATA-430: the hourly pending alert (`pending`)", () => {
       cards: [{
         name: "Bilal",
         profileUrl: "https://agents.edgecity.live/rolodex?person=u2",
-        appUrl: `https://agents.edgecity.live/intents?opportunity=${PENDING_ID(2)}`,
+        appUrl: `https://agents.edgecity.live/intents?opportunity=${PENDING_ID(2)}#opportunity-${PENDING_ID(2)}`,
         acceptUrl: `https://index.network/o/${PENDING_ID(2)}?action=accept&viewer=v2&sig=s2&surface=telegram`,
         opportunityId: PENDING_ID(2),
         firstSeen: at.toISOString(),

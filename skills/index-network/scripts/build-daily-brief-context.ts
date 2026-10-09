@@ -876,18 +876,28 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-const ISO_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})$/;
+const ISO_DATE_TIME = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(?:Z|([+-])(\d{2}):(\d{2}))$/;
 
 /**
  * DATA-430: a row's `expiresAt` as a canonical ISO instant when it is a
- * string holding an ISO date-time with a zone (`Z` or an offset) that is a
- * real instant; any other shape (absent, null, a number, a date alone, no
- * zone, garbage) is undefined. Tolerant: never throws, never drops the card.
+ * string holding an ISO date-time with a zone (`Z` or an offset up to
+ * ±14:00) whose calendar date and time are real: the instant, shifted back
+ * by its offset, must re-format to the same date, hour, minute and second
+ * (N3: `2026-02-30` or `T24:00` would otherwise roll over). Any other
+ * shape (absent, null, a number, a date alone, no zone, garbage) is
+ * undefined. Tolerant: never throws, never drops the card.
  */
 export function parseExpiresAt(value: unknown): string | undefined {
-  if (typeof value !== "string" || value.length > 40 || !ISO_DATE_TIME.test(value)) return undefined;
+  if (typeof value !== "string" || value.length > 40) return undefined;
+  const match = ISO_DATE_TIME.exec(value);
+  if (!match) return undefined;
+  const [, date, hh, mm, ss = "00", sign, oh = "00", om = "00"] = match;
+  if (Number(oh) * 60 + Number(om) > 14 * 60 || Number(om) > 59) return undefined;
   const at = Date.parse(value);
-  return Number.isNaN(at) ? undefined : new Date(at).toISOString();
+  if (Number.isNaN(at)) return undefined;
+  const offsetMs = (sign === "-" ? -1 : 1) * (Number(oh) * 60 + Number(om)) * 60_000;
+  const wall = new Date(at + offsetMs).toISOString();
+  return wall.slice(0, 19) === `${date}T${hh}:${mm}:${ss}` ? new Date(at).toISOString() : undefined;
 }
 
 function listedCard(row: Record<string, unknown>): BriefOpportunity | null {

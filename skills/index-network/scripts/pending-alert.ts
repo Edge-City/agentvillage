@@ -249,10 +249,13 @@ function capLedger(ledger: PendingLedger, listed: ReadonlySet<string>): PendingL
  */
 export const RESPOND_BY_WORDS = {
   today: (time: string) => `by ${time} today`,
+  /** Within the coming week (1 to 6 village days ahead). */
   otherDay: (weekday: string, time: string) => `by ${weekday} ${time}`,
+  /** 7 or more village days ahead: the date too, so a bare weekday is never read as this week's (N3). */
+  later: (weekday: string, day: string, month: string, time: string) => `by ${weekday} ${day} ${month} ${time}`,
 } as const;
 
-function villageParts(at: Date): { day: string; weekday: string; time: string } {
+function villageParts(at: Date): { day: string; weekday: string; time: string; dayOfMonth: string; month: string } {
   const parts = Object.fromEntries(
     new Intl.DateTimeFormat("en-US", {
       timeZone: DEFAULT_TZ,
@@ -267,16 +270,25 @@ function villageParts(at: Date): { day: string; weekday: string; time: string } 
       .formatToParts(at)
       .map((part) => [part.type, part.value]),
   );
+  const day = `${parts.year}-${parts.month}-${parts.day}`;
   return {
-    day: `${parts.year}-${parts.month}-${parts.day}`,
+    day,
     weekday: parts.weekday,
     time: `${parts.hour}:${parts.minute} ${String(parts.dayPeriod).toLowerCase()}`,
+    dayOfMonth: String(Number(parts.day)),
+    month: new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short" }).format(new Date(`${day}T12:00:00Z`)),
   };
+}
+
+/** Whole days from village day `a` to village day `b` (both YYYY-MM-DD). */
+function daysApart(a: string, b: string): number {
+  return Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000);
 }
 
 /**
  * A deadline as the line's words, in village time: `by 6:30 pm today` when it
- * falls on the current village day, else `by Fri 6:30 pm`. Null for no
+ * falls on the current village day, `by Fri 6:30 pm` within the coming week
+ * (1 to 6 days ahead), else `by Fri 16 Oct 6:30 pm`. Null for no
  * deadline, one that does not parse, or one not after `now` (a past deadline
  * says nothing: Index changes the status).
  */
@@ -285,7 +297,9 @@ export function respondByText(deadline: unknown, now: Date): string | null {
   const at = Date.parse(deadline);
   if (Number.isNaN(at) || at <= now.getTime()) return null;
   const when = villageParts(new Date(at));
-  return when.day === villageParts(now).day ? RESPOND_BY_WORDS.today(when.time) : RESPOND_BY_WORDS.otherDay(when.weekday, when.time);
+  const ahead = daysApart(villageParts(now).day, when.day);
+  if (ahead === 0) return RESPOND_BY_WORDS.today(when.time);
+  return ahead < 7 ? RESPOND_BY_WORDS.otherDay(when.weekday, when.time) : RESPOND_BY_WORDS.later(when.weekday, when.dayOfMonth, when.month, when.time);
 }
 
 function hermesHome(): string {
