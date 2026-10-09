@@ -167,7 +167,8 @@ one tool-progress bubble per reply, deleted with the reply (RC28; DATA-409 had i
 off), which they can switch with `/verbose`; its lines name the tool, never the
 command, not even a `terminal` code block (the `av-display` plugin; web search
 keeps its query); `AV_DISPLAY_DEFAULTS=0` opts a
-tenant out. Reasoning is still stored in the agent's `state.db`; it is
+tenant out of those display keys (not the `av-display` plugin entry or the
+installer's other keys). Reasoning is still stored in the agent's `state.db`; it is
 hidden, not deleted.
 
 **When it refuses.** A refusal changes nothing. The common ones: the tag is

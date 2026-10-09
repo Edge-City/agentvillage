@@ -466,82 +466,52 @@ export function setContextFileMaxChars(): void {
  */
 export const HYGIENE_MAX_TURN_HOLD_SECONDS = 25;
 
-/** Operator switch: `keep` leaves an existing explicit `auxiliary.compression` route as it is (RC28). */
-export const COMPRESSION_ROUTE_ENV = "AV_COMPRESSION_ROUTE";
-
-/** Whether `AV_COMPRESSION_ROUTE` says `keep`; an unreadable `.env` counts as not set, with a warning. */
-function keepCompressionRoute(lines: string[]): boolean {
-  try {
-    return (envOrDotenv(COMPRESSION_ROUTE_ENV) ?? "").trim().toLowerCase() === "keep";
-  } catch {
-    lines.push(`→ warning: could not read ${COMPRESSION_ROUTE_ENV} from $HERMES_HOME/.env; the compression route follows model.default`);
-    return false;
-  }
-}
+/** A number written as a string that Python's float() reads (Hermes's `_knob`, run_turn.py:657-665). */
+const NUMERIC_STRING = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
 
 /**
  * Pin the compaction settings behind the deferred-compression notice loop (RC28):
  *
  * 1. `compression.hygiene_max_turn_hold_seconds: 25` (see
- *    `HYGIENE_MAX_TURN_HOLD_SECONDS`). Absent, null, not a finite number (a
- *    string, a boolean, which Hermes's float() reads as 1) or below 25: set to
- *    25. A number of 25 or more is an operator's longer hold, left as is.
- *    `compression` absent or null is created; `compression` not a mapping, or
- *    holding a YAML merge key, is left alone with a warning.
- * 2. `display.platforms.telegram.suppress_warning_notifications: true`
- *    (DATA-409, the chat half). Hermes sends its warning-class diagnostics
- *    through `adapter.emit_warning` and the diagnostic status rail and drops
- *    them on a platform where this resolves true
- *    (gateway/warning_notifications.py:90-101, gateway/display_config.py:82-112,
- *    read at send time). Trade-off: on Telegram it hides every warning
- *    diagnostic, not only the deferred notice: the hygiene timeout and failure
- *    warnings, the "Configured compression model ... failed" notice, the
- *    context-file TRUNCATED status line and media-send fallback notices. It
- *    never hides an assistant reply or a command response. Written for Telegram
- *    only, the resident surface; the global `display` key is never written. An
- *    explicit `false` is an operator's choice, kept with one log line; any other
- *    value but `true` is set to `true`. The Telegram display step
- *    (install/display_defaults.ts) walks the same `display.platforms.telegram`
- *    mapping, refuses the same shapes and never writes this key, so the two
- *    steps cannot undo each other.
- * 3. An explicit `auxiliary.compression` route `{provider, model,
- *    reasoning_effort: none}`. With Hermes's default `provider: auto` the
- *    summary already runs on the main provider and model but never with
- *    reasoning disabled; an explicit provider and model matching the route used,
- *    with `reasoning_effort: none`, make Hermes send `reasoning: {enabled:
- *    false}` on the summary call (agent/auxiliary_client.py:6144-6195). The
- *    provider and model are this box's own `model.provider` and `model.default`,
- *    what `auto` resolves to (auxiliary_client.py:2428-2455), so the summary
- *    model does not change. The route follows the main model on every run (the
- *    lead's ruling, Oct 9): this installer is the only writer of
- *    `auxiliary.compression` on the fleet and only the control plane changes
- *    `model.default` (DATA-400), so a route (a provider or model not empty and
- *    not `auto`, or a `base_url`) that differs from `model.provider` /
- *    `model.default` gets its provider and model rewritten to them, with one
- *    line naming the new route; a matching one is left as it is.
- *    `reasoning_effort` is added when absent, null or empty and otherwise kept;
- *    the other keys of the block (a `base_url` among them) are never touched.
- *    `AV_COMPRESSION_ROUTE=keep` (case-folded and trimmed, in the process
- *    environment or `$HERMES_HOME/.env`) leaves an existing explicit route
- *    entirely as it is, `reasoning_effort` included; it only protects an
- *    existing route, so with no route there this step still writes its own.
- *    With no named `model.provider` and `model.default` the block is skipped
- *    with a warning.
+ *    `HYGIENE_MAX_TURN_HOLD_SECONDS`). Absent, null, not a number Hermes reads
+ *    (a boolean, which Hermes's float() reads as 1, a list, a word) or below 25:
+ *    set to 25. A number of 25 or more is an operator's longer hold, left as
+ *    is, and so is a number written as a string (`"45"`), which Hermes's float()
+ *    reads the same way (refute N3); one below 25 is set to 25. `compression`
+ *    absent or null is created; `compression` not a mapping, or holding a YAML
+ *    merge key, is left alone with a warning.
+ * 2. `auxiliary.compression.reasoning_effort: none`, so the summary runs with
+ *    reasoning off. Hermes folds this key into the summary request on any route,
+ *    the default `provider: auto` included (agent/auxiliary_client.py:6242-6270
+ *    `_get_task_extra_body`, then :6615-6622 into `reasoning_config`), and
+ *    strips it only when the block names an explicit provider and model that the
+ *    call did not use (:6178-6195, `_compression_config_claims_fast_lane` is
+ *    false for `auto`). So no explicit route is written: the summary keeps
+ *    running on the box's main provider and model, and an explicit route an
+ *    operator set is left alone (this step only adds the key). Written when
+ *    absent, null or empty (Hermes's own block writes `""`, the provider's
+ *    default); any other value is kept. `auxiliary` or `auxiliary.compression`
+ *    not a mapping, or holding a merge key, is left alone with a warning. A
+ *    model that cannot turn reasoning off is stepped up to its lowest level by
+ *    Hermes (agent/auxiliary_reasoning_floor.py), not broken.
+ *
+ * Not here: hiding Hermes's warning notices on Telegram
+ * (`display.platforms.telegram.suppress_warning_notifications`). The switch also
+ * hides failures a resident must act on (a dropped message, an aborted turn, a
+ * failed upload, cron failures), so rc28 drops it (the lead, Oct 9) and never
+ * touches the key; DATA-409's chat half stays open upstream.
  *
  * Each pin is independent: one that cannot be written is skipped with a
- * `→ warning:` line and the others still apply. The whole step is skipped when
+ * `→ warning:` line and the other still applies. The whole step is skipped when
  * the top level of config.yaml is not a mapping or holds a YAML merge key, for
  * the reason `keepTelegramBacklogOnColdBoot` gives. One `→` line per pin; a
- * config value is never echoed onto stdout (only its type, or a number), except
- * the main provider and model names in the route-follow line, and only when
- * they are plain identifiers.
+ * config value is never echoed onto stdout (only its type, or a number).
  * Idempotent: a second run changes nothing, says so, and does not rewrite the
  * file.
  */
 export function setCompactionSettings(): void {
   const holdPath = "compression.hygiene_max_turn_hold_seconds";
-  const suppressPath = "display.platforms.telegram.suppress_warning_notifications";
-  const routePath = "auxiliary.compression";
+  const effortPath = "auxiliary.compression.reasoning_effort";
   const doc: unknown = readConfig();
   if (!isMapping(doc)) {
     console.log("→ warning: the top level of config.yaml is not a mapping; left the compaction settings unset");
@@ -568,13 +538,18 @@ export function setCompactionSettings(): void {
   } else {
     const raw = compression.hygiene_max_turn_hold_seconds;
     const number = typeof raw === "number" && Number.isFinite(raw);
+    const fromString = typeof raw === "string" && NUMERIC_STRING.test(raw.trim()) ? Number(raw.trim()) : Number.NaN;
+    const stringNumber = Number.isFinite(fromString);
     if (number && raw >= HYGIENE_MAX_TURN_HOLD_SECONDS) {
       lines.push(`→ ${holdPath} already ${raw} (at least ${HYGIENE_MAX_TURN_HOLD_SECONDS}); left as is`);
+    } else if (stringNumber && fromString >= HYGIENE_MAX_TURN_HOLD_SECONDS) {
+      lines.push(`→ ${holdPath} already ${fromString}, written as a string Hermes reads as a number (at least ${HYGIENE_MAX_TURN_HOLD_SECONDS}); left as is`);
     } else {
       const why =
         raw === undefined ? "was unset"
         : raw === null ? "was null"
         : number ? `was ${raw}, below ${HYGIENE_MAX_TURN_HOLD_SECONDS}`
+        : stringNumber ? `was ${fromString} written as a string, below ${HYGIENE_MAX_TURN_HOLD_SECONDS}`
         : `was ${kindOf(raw)}, not a number`;
       doc.compression = { ...compression, hygiene_max_turn_hold_seconds: HYGIENE_MAX_TURN_HOLD_SECONDS };
       changed = true;
@@ -582,64 +557,19 @@ export function setCompactionSettings(): void {
     }
   }
 
-  // 2. Telegram warning diagnostics off (DATA-409).
-  const display = section(doc, "display", "display");
-  const platforms = typeof display === "string" ? display : section(display, "platforms", "display.platforms");
-  const telegram = typeof platforms === "string" ? platforms : section(platforms, "telegram", "display.platforms.telegram");
-  if (typeof display === "string" || typeof platforms === "string" || typeof telegram === "string") {
-    const why = typeof display === "string" ? display : typeof platforms === "string" ? platforms : telegram;
-    lines.push(`→ warning: ${why}; left ${suppressPath} unset`);
-  } else {
-    const raw = telegram.suppress_warning_notifications;
-    if (raw === true) {
-      lines.push(`→ ${suppressPath} already true`);
-    } else if (raw === false) {
-      lines.push(`→ ${suppressPath} is false (set by hand); left as is, so Hermes warning diagnostics still reach Telegram`);
-    } else {
-      const why = raw === undefined ? "was unset" : raw === null ? "was null" : `was ${typeof raw === "number" ? "a number" : kindOf(raw)}`;
-      doc.display = { ...display, platforms: { ...platforms, telegram: { ...telegram, suppress_warning_notifications: true } } };
-      changed = true;
-      lines.push(`→ set ${suppressPath}: true (${why}; Hermes warning diagnostics, the compaction notices among them, stay out of the resident's chat)`);
-    }
-  }
-
-  // 3. The summary call's explicit route, reasoning off.
-  const named = (value: unknown): value is string =>
-    typeof value === "string" && value.trim() !== "" && value.trim().toLowerCase() !== "auto";
-  // Hermes's own block writes `reasoning_effort: ""` (the provider's default): that counts as unset.
-  const effortUnset = (value: unknown): boolean =>
-    value === undefined || value === null || (typeof value === "string" && !value.trim());
+  // 2. The summary with reasoning off, on whatever route the box already uses.
   const auxiliary = section(doc, "auxiliary", "auxiliary");
-  const route = typeof auxiliary === "string" ? auxiliary : section(auxiliary, "compression", routePath);
-  const main = section(doc, "model", "model");
-  const explicit = typeof route !== "string" &&
-    (named(route.provider) || named(route.model) || (typeof route.base_url === "string" && route.base_url.trim() !== ""));
-  const keep = explicit && keepCompressionRoute(lines);
+  const route = typeof auxiliary === "string" ? auxiliary : section(auxiliary, "compression", "auxiliary.compression");
   if (typeof auxiliary === "string" || typeof route === "string") {
-    lines.push(`→ warning: ${typeof auxiliary === "string" ? auxiliary : route}; left ${routePath} as is`);
-  } else if (keep) {
-    lines.push(`→ ${routePath}: explicit route kept (${COMPRESSION_ROUTE_ENV}=keep)`);
-  } else if (typeof main === "string" || !named(main.provider) || !named(main.default)) {
-    lines.push(`→ warning: config.yaml names no model.provider and model.default; left ${routePath} as is (the summary keeps the provider's default reasoning)`);
+    lines.push(`→ warning: ${typeof auxiliary === "string" ? auxiliary : route}; left ${effortPath} unset`);
   } else {
-    const provider = main.provider.trim();
-    const model = main.default.trim();
-    const matches = route.provider === provider && route.model === model;
-    const effortSet = !effortUnset(route.reasoning_effort);
-    if (matches && effortSet) {
-      lines.push(`→ ${routePath} already this box's main provider and model; left as is`);
-    } else {
-      doc.auxiliary = { ...auxiliary, compression: { ...route, provider, model, ...(effortSet ? {} : { reasoning_effort: "none" }) } };
+    const raw = route.reasoning_effort;
+    if (raw === undefined || raw === null || (typeof raw === "string" && !raw.trim())) {
+      doc.auxiliary = { ...auxiliary, compression: { ...route, reasoning_effort: "none" } };
       changed = true;
-      if (!explicit) {
-        lines.push(`→ set ${routePath}: this box's main provider and model, ${effortSet ? "reasoning_effort kept as set" : "reasoning_effort: none (the summary runs with reasoning off)"}`);
-      } else if (!matches) {
-        // Names only, and only when they are plain identifiers: a config value never injects a line.
-        const shown = /^[\w.:@+\/-]+$/.test(`${provider}/${model}`) ? `${provider}/${model}` : "(names not shown: unusual characters)";
-        lines.push(`→ compression route follows model.default: ${shown}`);
-      } else {
-        lines.push(`→ set ${routePath}.reasoning_effort: none (the route is already this box's main provider and model)`);
-      }
+      lines.push(`→ set ${effortPath}: none (the summary runs on the box's main model with reasoning off)`);
+    } else {
+      lines.push(`→ ${effortPath} already set; left as is`);
     }
   }
 
