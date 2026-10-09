@@ -3,48 +3,78 @@
  *
  * Hermes resolves each gateway display setting per platform, first non-null
  * wins: `display.platforms.<platform>.<key>`, then `display.<key>`, then its
- * built-in tier for the platform (`gateway/display_config.py`, v2026.9.24).
- * The gateway reads only `$HERMES_HOME/config.yaml` (no merge of Hermes's
- * built-in defaults). Hermes's config template, `cli-config.yaml.example`,
- * which its installer copies to seed that file, sets the global keys
- * (`show_reasoning: true`, `tool_progress: all`,
- * `interim_assistant_messages: true`); the fleet's files also carry
- * `display.platforms.telegram.streaming: true` from Hermes's built-in defaults
- * (`hermes_cli/config_defaults.py`). Those outrank the quieter Telegram tier. So a resident saw the model's last reasoning block above every
- * reply, a progress line per tool call, and mid-turn commentary as separate
- * messages.
+ * built-in tier for the platform, then a global default
+ * (`gateway/display_config.py`, v2026.9.24). The gateway reads only
+ * `$HERMES_HOME/config.yaml` (no merge of Hermes's built-in defaults). Hermes's
+ * config template, `cli-config.yaml.example`, which its installer copies to
+ * seed that file, sets the global keys (`show_reasoning: true`,
+ * `tool_progress: all`, `interim_assistant_messages: true`); the fleet's files
+ * also carry `display.platforms.telegram.streaming: true` from Hermes's
+ * built-in defaults (`hermes_cli/config_defaults.py`). Those outrank the
+ * quieter Telegram tier. So a resident saw the model's last reasoning block
+ * above every reply, a progress line per tool call, and mid-turn commentary as
+ * separate messages.
  *
- * The owner's decision: residents never see reasoning, and (DATA-409, after a
- * tester watched 38 seconds of raw curl and python command previews) see no
- * tool-progress message while the agent works: `tool_progress: off`, Hermes's
- * own Telegram tier default. (Hermes's only names-only setting is
- * `tool_preview_length: 3`, which turns every line into `...`; the owner chose
- * no progress message instead. A turn over 3 minutes still shows Hermes's one
- * "⏳ Working — N min" heartbeat line, edited in place and deleted with the
- * reply, whatever `tool_progress` says.) The grouping and cleanup keys stay as written so a
- * resident who turns progress back on by hand still gets one quiet, edited
- * message. This step writes Telegram-scoped keys only, so the CLI and desktop
- * surfaces operators use keep Hermes's defaults:
+ * The owner's decisions: residents never see reasoning. Tool progress (Carter,
+ * Oct 9, RC28): the progress bubble is back for everyone as `tool_progress:
+ * new`, one quiet message edited in place and deleted with the reply (the
+ * grouping and cleanup keys below; its lines carry Hermes's 40-char tool
+ * preview, accepted). The string has to be written: Hermes's Telegram tier
+ * default for `tool_progress` is `off` (display_config.py:53,
+ * `_PLATFORM_DEFAULTS`), so an unset key does not bring the bubble back. Each
+ * resident can switch it with Hermes's `/verbose`
+ * (gateway/slash_commands.py:961-986: it cycles off → new → all → verbose → log
+ * for the current platform and saves the string to
+ * `display.platforms.telegram.tool_progress`), which this step enables with
+ * `display.tool_progress_command: true` (default false,
+ * hermes_cli/config_defaults.py:901; never enabled on the fleet before RC28,
+ * so no resident could have chosen a mode before). Hermes posts its one-time
+ * first-time tip after a slow tool (agent/onboarding.py
+ * `tool_progress_hint_gateway`); accepted. A written value is "explicit" to
+ * Hermes (display_config.py:115-126 `resolve_tool_progress`), which only
+ * matters for Slack's native task cards (gateway/run_turn.py:3018-3029: a
+ * written `off` turns them off too); on Telegram a written `new` shows the
+ * bubble and a written `off` hides it, nothing more. (History: DATA-409, Oct 7,
+ * had set `off`.) A turn over 3 minutes also shows Hermes's one
+ * "⏳ Working — N min" heartbeat line, whatever `tool_progress` says. This step
+ * writes Telegram-scoped keys, plus the one gateway-wide `/verbose` gate, so
+ * the CLI and desktop surfaces operators use keep Hermes's display defaults:
  *
  * | key | value | written when |
  * |---|---|---|
- * | `show_reasoning` | `false` | always (a privacy and product decision; a resident's `/reasoning show` is undone on the next roll) |
- * | `tool_progress` | `off` | unset (absent or null), or `new` (this installer's value until DATA-409), and no legacy `display.tool_progress_overrides.telegram` |
- * | `tool_progress_grouping` | `accumulate` | unset |
- * | `interim_assistant_messages` | `false` | unset |
- * | `streaming` | `false` | unset, or `true` (the value Hermes itself writes there) |
- * | `cleanup_progress` | `true` | unset |
+ * | `platforms.telegram.show_reasoning` | `false` | always (a privacy and product decision; a resident's `/reasoning show` is undone on the next roll) |
+ * | `platforms.telegram.tool_progress` | `new` | unset (absent or null), boolean `false` or the string `off` (both DATA-409's write; see below), and no legacy `display.tool_progress_overrides.telegram`; any other mode is kept |
+ * | `platforms.telegram.tool_progress_grouping` | `accumulate` | unset |
+ * | `platforms.telegram.interim_assistant_messages` | `false` | unset |
+ * | `platforms.telegram.streaming` | `false` | unset, or `true` (the value Hermes itself writes there) |
+ * | `platforms.telegram.cleanup_progress` | `true` | unset |
+ * | `tool_progress_command` (under `display`) | `true` | unset (absent or null); any other value is kept |
  *
- * Together: no tool-progress message (only the 3-minute heartbeat on a long
- * turn); the reply arrives as one message. (With
- * progress turned on by hand: one message, edited in place at most every 1.5 s
- * with a line per tool, deleted once the reply lands, kept when the turn fails.)
- * Streaming and interim commentary are off because each streamed or commentary
- * message would otherwise arrive as its own message before the reply.
+ * Why `false` and `off` count as unset in rc28: nobody could have chosen `off`
+ * before rc28 (`/verbose` was gated off). DATA-409 wrote the string "off"
+ * through the `yaml` package (YAML 1.2), which dumps it as the bare word `off`;
+ * Hermes loads config.yaml with PyYAML (YAML 1.1; utils.py `fast_safe_load`,
+ * hermes_cli/config.py:436), which reads a bare `off` as boolean False, and the
+ * first Hermes config save after the roll re-dumped it as `false` (b4's fleet
+ * read, Oct 9: 10 of 10 boxes carry `false`). Hermes resolves both to off
+ * (display_config.py:135-146 `_norm_tristate`), so DATA-409's behaviour held.
+ * rc29 drops `off` from the list, so that a resident's `/verbose` off sticks
+ * from then on. The rule: this installer never writes a YAML 1.1 boolean word
+ * (off, on, yes, no, y, n) as a string value. Known gap for rc29: `writeConfig`
+ * re-dumps a string already in the file with the same YAML 1.2 writer, so a
+ * resident's quoted `off` goes back bare whenever any step rewrites
+ * config.yaml; Hermes still reads it as off, but a later Hermes save turns it
+ * into `false`.
+ *
+ * Together: one tool-progress message per reply, edited in place at most every
+ * 1.5 s with a line per tool, deleted once the reply lands (kept when the turn
+ * fails); the reply arrives as one message. Streaming and interim commentary
+ * are off because each streamed or commentary message would otherwise arrive
+ * as its own message before the reply.
  *
  * A value someone set by hand is kept (except `show_reasoning`). A resident who
- * sets `streaming: true` or `tool_progress: new` by hand cannot be told from the
- * default that was written there and is reset on the next roll. `AV_DISPLAY_DEFAULTS=0` (or `false`, `no`, `off`),
+ * sets `streaming: true` by hand cannot be told from the default that was
+ * written there and is reset on the next roll. `AV_DISPLAY_DEFAULTS=0` (or `false`, `no`, `off`),
  * in the process environment or `$HERMES_HOME/.env`, leaves `config.yaml`
  * untouched. The file is also left alone, with a warning, when `display`,
  * `display.platforms` or `display.platforms.telegram` is not a mapping or holds
@@ -65,20 +95,25 @@ interface ManagedKey {
   value: DisplayValue;
   /** `always`: written whenever it differs. `unset`: only while absent, null, or one of `hermesDefaults`. */
   policy: "always" | "unset";
-  /** Values that count as unset: what Hermes itself writes at this path, or what this installer wrote before (DATA-409: `new`). */
+  /** Values that count as unset: what Hermes itself writes at this path, or what this installer wrote before (RC28: DATA-409's `off`, and the `false` PyYAML re-dumps it as). */
   hermesDefaults?: readonly unknown[];
 }
 
 /** The keys this step owns under `display.platforms.telegram`, in the order they are written. */
 export const TELEGRAM_DISPLAY_DEFAULTS: readonly ManagedKey[] = [
   { key: "show_reasoning", value: false, policy: "always" },
-  // DATA-409: `new` is the value this installer wrote until 2026-10-07 (DATA-318), so a box still
-  // holding it is on the old default, not a hand-set choice, and flips to `off` at its next roll.
-  { key: "tool_progress", value: "off", policy: "unset", hermesDefaults: ["new"] },
+  // RC28: the bubble is back (`new`). `false` and `off` are DATA-409's own write (bare `off`, re-saved
+  // by Hermes as `false`), never a resident's choice before rc28; rc29 drops "off" so /verbose off sticks.
+  { key: "tool_progress", value: "new", policy: "unset", hermesDefaults: [false, "off"] },
   { key: "tool_progress_grouping", value: "accumulate", policy: "unset" },
   { key: "interim_assistant_messages", value: false, policy: "unset" },
   { key: "streaming", value: false, policy: "unset", hermesDefaults: [true] },
   { key: "cleanup_progress", value: true, policy: "unset" },
+];
+
+/** The key this step owns directly under `display`: the gate on Hermes's /verbose (RC28). */
+export const DISPLAY_LEVEL_DEFAULTS: readonly ManagedKey[] = [
+  { key: "tool_progress_command", value: true, policy: "unset" },
 ];
 
 function isMapping(value: unknown): value is Record<string, unknown> {
@@ -130,28 +165,38 @@ export function configureTelegramDisplay(): string[] {
   const legacy = display.tool_progress_overrides;
   const legacyToolProgress = isMapping(legacy) && legacy.telegram !== undefined && legacy.telegram !== null;
 
-  const next = { ...telegram };
   const written: string[] = [];
   const kept: string[] = [];
-  for (const { key, value, policy, hermesDefaults } of TELEGRAM_DISPLAY_DEFAULTS) {
-    const current = telegram[key];
-    if (current === value) continue;
-    const unset = current === undefined || current === null || (hermesDefaults ?? []).includes(current);
-    const handSet = !unset || (key === "tool_progress" && legacyToolProgress);
-    if (policy === "unset" && handSet) {
-      kept.push(key);
-      continue;
+  const apply = (block: Record<string, unknown>, keys: readonly ManagedKey[]): Record<string, unknown> => {
+    const next = { ...block };
+    for (const { key, value, policy, hermesDefaults } of keys) {
+      const current = block[key];
+      if (current === value) continue;
+      const unset = current === undefined || current === null || (hermesDefaults ?? []).includes(current);
+      const handSet = !unset || (key === "tool_progress" && legacyToolProgress);
+      if (policy === "unset" && handSet) {
+        kept.push(key);
+        continue;
+      }
+      next[key] = value;
+      written.push(`${key}=${value}`);
     }
-    next[key] = value;
-    written.push(`${key}=${value}`);
-  }
+    return next;
+  };
+  const nextTelegram = apply(telegram, TELEGRAM_DISPLAY_DEFAULTS);
+  const telegramChanged = written.length > 0;
+  const nextDisplay = apply(display, DISPLAY_LEVEL_DEFAULTS);
 
   const keptNote = kept.length ? ` (kept as set by hand: ${kept.join(", ")})` : "";
   if (written.length === 0) {
     console.log(`→ telegram display settings already in place${keptNote}`);
     return [];
   }
-  doc.display = { ...display, platforms: { ...platforms, telegram: next } };
+  // Existing keys keep their place (a spread); a new `platforms` lands before a new gate key.
+  const out: Record<string, unknown> = { ...display };
+  if (telegramChanged) out.platforms = { ...platforms, telegram: nextTelegram };
+  for (const { key } of DISPLAY_LEVEL_DEFAULTS) out[key] = nextDisplay[key];
+  doc.display = out;
   writeConfig(doc);
   console.log(`→ telegram display: ${written.join(", ")}${keptNote}`);
   return written.map((entry) => entry.slice(0, entry.indexOf("=")));

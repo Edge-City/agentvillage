@@ -19,11 +19,14 @@ import YAML from "yaml";
 import {
   CONTEXT_FILE_MAX_CHARS,
   CRON_SCRIPT_TIMEOUT_SECONDS,
+  HYGIENE_MAX_TURN_HOLD_SECONDS,
   VILLAGE_TIMEZONE,
   configureCronScriptTimeout,
   configureVillageTimezone,
+  setCompactionSettings,
   setContextFileMaxChars,
 } from "../config";
+import { configureTelegramDisplay } from "../display_defaults";
 
 const ORIGINAL = { HERMES_HOME: process.env.HERMES_HOME, HERMES_TIMEZONE: process.env.HERMES_TIMEZONE };
 let home: string;
@@ -319,5 +322,243 @@ describe("AGENTS-MD-CAP: context_file_max_chars is pinned to at least 48,000", (
     const body = main.slice(0, main.indexOf("\n}\n"));
     expect(body.match(/^.*setContextFileMaxChars.*$/gm)).toEqual(["  setContextFileMaxChars();"]);
     expect(body).toMatch(/^  configureCronWrapResponse\(\);\n  setContextFileMaxChars\(\);$/m);
+  });
+});
+
+/**
+ * RC28: the deferred-compression notice loop. The gateway holds an arriving
+ * message at most `compression.hygiene_max_turn_hold_seconds` (Hermes default
+ * 10) for the pre-turn summary; a slower summary sends "Context compression
+ * deferred" to the chat and the turn runs uncompressed, again on every message.
+ * The installer pins the hold to 25 and turns the summary's reasoning off
+ * (`auxiliary.compression.reasoning_effort: none`, on whatever route the box
+ * uses). Fix round 1: the Telegram warning switch is never written (refute M1),
+ * no explicit route is written (refute S2), and a hold written as a number in a
+ * string is read as Hermes reads it (refute N3).
+ */
+describe("RC28: compaction settings (hold 25, summary reasoning off)", () => {
+  const HOLD = "compression.hygiene_max_turn_hold_seconds";
+  const EFFORT = "auxiliary.compression.reasoning_effort";
+  const SET_EFFORT = `→ set ${EFFORT}: none (the summary runs on the box's main model with reasoning off)`;
+  // A box's shape: the control plane's model block, display keys from the Telegram display step, no compression block.
+  const BOX = {
+    _config_version: 46,
+    model: { default: "anthropic/claude-haiku-5.5", provider: "openrouter", context_length: 90000, max_tokens: 4096 },
+    display: { show_reasoning: true, platforms: { telegram: { show_reasoning: false, tool_progress: false, streaming: false } } },
+    cron: { wrap_response: false },
+    context_file_max_chars: 48000,
+  };
+  const lines = () => logSpy.mock.calls.map((c) => String(c[0]));
+
+  test("a box with neither key: both written, every other key byte-for-byte in order, one line per pin", () => {
+    withDoc(BOX);
+    setCompactionSettings();
+    const doc = read();
+    expect(HYGIENE_MAX_TURN_HOLD_SECONDS).toBe(25);
+    expect(doc.compression).toEqual({ hygiene_max_turn_hold_seconds: 25 });
+    expect(doc.auxiliary).toEqual({ compression: { reasoning_effort: "none" } });
+    expect(Object.keys(doc)).toEqual([...Object.keys(BOX), "compression", "auxiliary"]);
+    expect(readFileSync(configPath(), "utf8")).toBe(YAML.stringify({ ...BOX, compression: doc.compression, auxiliary: doc.auxiliary }));
+    expect(lines()).toEqual([
+      `→ set ${HOLD}: 25 (was unset; a summary that lands inside the hold is adopted with no notice)`,
+      SET_EFFORT,
+    ]);
+  });
+
+  test("refute M1: the Telegram warning switch is never written, and a value already there stays as it is", () => {
+    withDoc(BOX);
+    setCompactionSettings();
+    expect(read().display).toEqual(BOX.display);
+    for (const value of [true, false]) {
+      const display = { platforms: { telegram: { suppress_warning_notifications: value } } };
+      withDoc({ display });
+      setCompactionSettings();
+      expect(read().display).toEqual(display);
+    }
+    expect(logged()).not.toContain("suppress_warning_notifications");
+  });
+
+  test("hold 10 (Hermes's default written out) or any number below 25 is raised in place; the other compression keys stay", () => {
+    for (const low of [10, 0, -5, 24.5]) {
+      logSpy.mockClear();
+      withDoc({ a: 1, compression: { enabled: true, hygiene_max_turn_hold_seconds: low, hygiene_timeout_seconds: 30 }, z: 2 });
+      setCompactionSettings();
+      expect(read().compression).toEqual({ enabled: true, hygiene_max_turn_hold_seconds: 25, hygiene_timeout_seconds: 30 });
+      expect(Object.keys(read()).slice(0, 3)).toEqual(["a", "compression", "z"]);
+      expect(lines()[0]).toBe(`→ set ${HOLD}: 25 (was ${low}, below 25; a summary that lands inside the hold is adopted with no notice)`);
+    }
+  });
+
+  test("an operator's hold of 25 or more is kept, the log says so", () => {
+    for (const kept of [25, 60]) {
+      logSpy.mockClear();
+      withDoc({ compression: { hygiene_max_turn_hold_seconds: kept } });
+      setCompactionSettings();
+      expect(read().compression).toEqual({ hygiene_max_turn_hold_seconds: kept });
+      expect(lines()[0]).toBe(`→ ${HOLD} already ${kept} (at least 25); left as is`);
+    }
+  });
+
+  test("refute N3: a hold written as a number in a string (Hermes's float() reads it) is kept at 25 or more, raised below", () => {
+    for (const [text, n] of [['"45"', 45], ['"25"', 25], ["' 30.5 '", 30.5], ['"1e2"', 100]] as const) {
+      logSpy.mockClear();
+      const before = `compression:\n  hygiene_max_turn_hold_seconds: ${text}\nauxiliary:\n  compression:\n    reasoning_effort: none\n`;
+      withText(before);
+      setCompactionSettings();
+      expect(readFileSync(configPath(), "utf8")).toBe(before);
+      expect(lines()[0]).toBe(`→ ${HOLD} already ${n}, written as a string Hermes reads as a number (at least 25); left as is`);
+    }
+    logSpy.mockClear();
+    withText('compression:\n  hygiene_max_turn_hold_seconds: "10"\n');
+    setCompactionSettings();
+    expect(read().compression).toEqual({ hygiene_max_turn_hold_seconds: 25 });
+    expect(lines()[0]).toBe(`→ set ${HOLD}: 25 (was 10 written as a string, below 25; a summary that lands inside the hold is adopted with no notice)`);
+  });
+
+  test("null, true, a word, a list or an empty value is set to the number 25; the log names the kind, never the text", () => {
+    const cases: [string, string][] = [
+      ["compression:\n  hygiene_max_turn_hold_seconds: secret-ish\n", "was a string, not a number"],
+      ['compression:\n  hygiene_max_turn_hold_seconds: "inf"\n', "was a string, not a number"],
+      ["compression:\n  hygiene_max_turn_hold_seconds: null\n", "was null"],
+      ["compression:\n  hygiene_max_turn_hold_seconds: true\n", "was a boolean, not a number"],
+      ["compression:\n  hygiene_max_turn_hold_seconds: [1]\n", "was a list, not a number"],
+      ["compression:\n", "was unset"],
+    ];
+    for (const [text, why] of cases) {
+      logSpy.mockClear();
+      withText(text);
+      setCompactionSettings();
+      expect(read().compression).toEqual({ hygiene_max_turn_hold_seconds: 25 });
+      expect(lines()[0]).toBe(`→ set ${HOLD}: 25 (${why}; a summary that lands inside the hold is adopted with no notice)`);
+      expect(logged()).not.toContain("secret-ish");
+    }
+  });
+
+  test("compression not a mapping, or holding a merge key: that pin is skipped with a warning, the other still applies", () => {
+    for (const [text, kept] of [
+      ["compression: off\n", "off"],
+      ["compression:\n  - 1\n", [1]],
+    ] as const) {
+      logSpy.mockClear();
+      withText(text);
+      setCompactionSettings();
+      expect(read().compression).toEqual(kept);
+      expect(lines()[0]).toBe(`→ warning: compression is not a mapping; left ${HOLD} unset`);
+      expect(read().auxiliary).toEqual({ compression: { reasoning_effort: "none" } });
+    }
+    logSpy.mockClear();
+    withText("base: &b\n  hygiene_max_turn_hold_seconds: 5\ncompression:\n  <<: *b\n");
+    setCompactionSettings();
+    expect(lines()[0]).toBe(`→ warning: YAML merge key "<<" under compression; set it by hand; left ${HOLD} unset`);
+    expect(read().compression).toEqual({ "<<": { hygiene_max_turn_hold_seconds: 5 } });
+  });
+
+  test("refute S2: only reasoning_effort is written; provider, model and every other key of the block stay as they are", () => {
+    // Hermes's own default block, written out by a config save.
+    const route = { provider: "auto", model: "", base_url: "", api_key: "", timeout: 120, extra_body: {}, reasoning_effort: "", no_progress_timeout: null };
+    withDoc({ model: BOX.model, auxiliary: { vision: { provider: "auto" }, compression: route } });
+    setCompactionSettings();
+    expect(read().auxiliary).toEqual({ vision: { provider: "auto" }, compression: { ...route, reasoning_effort: "none" } });
+    expect(Object.keys(read().auxiliary.compression)).toEqual(Object.keys(route));
+    expect(lines()[1]).toBe(SET_EFFORT);
+
+    // An explicit route an operator set (base_url and key included) is left alone; the key is added.
+    logSpy.mockClear();
+    const explicit = { provider: "openrouter", model: "google/gemini-3.5-flash", base_url: "https://example.invalid/v1", key_env: "X_KEY" };
+    withDoc({ model: BOX.model, auxiliary: { compression: explicit } });
+    setCompactionSettings();
+    expect(read().auxiliary.compression).toEqual({ ...explicit, reasoning_effort: "none" });
+  });
+
+  test("an existing reasoning_effort is kept, whatever it is; the file is not rewritten", () => {
+    for (const value of ["low", "none", false, "high"]) {
+      logSpy.mockClear();
+      const text = YAML.stringify({ compression: { hygiene_max_turn_hold_seconds: 25 }, auxiliary: { compression: { reasoning_effort: value } } });
+      withText(text);
+      setCompactionSettings();
+      expect(readFileSync(configPath(), "utf8")).toBe(text);
+      expect(lines()[1]).toBe(`→ ${EFFORT} already set; left as is`);
+    }
+  });
+
+  test("null or blank reasoning_effort counts as unset", () => {
+    for (const text of ["auxiliary:\n  compression:\n    reasoning_effort: null\n", 'auxiliary:\n  compression:\n    reasoning_effort: "  "\n', "auxiliary:\n  compression:\n"]) {
+      withText(text);
+      setCompactionSettings();
+      expect(read().auxiliary.compression).toEqual({ reasoning_effort: "none" });
+    }
+  });
+
+  test("auxiliary or auxiliary.compression not a mapping, or holding a merge key, is left alone with a warning", () => {
+    for (const [aux, why] of [["off", "auxiliary is not a mapping"], [{ compression: "fast" }, "auxiliary.compression is not a mapping"]] as const) {
+      logSpy.mockClear();
+      withDoc({ model: BOX.model, auxiliary: aux });
+      setCompactionSettings();
+      expect(read().auxiliary).toEqual(aux);
+      expect(lines()[1]).toBe(`→ warning: ${why}; left ${EFFORT} unset`);
+    }
+    logSpy.mockClear();
+    withText("r: &r\n  reasoning_effort: low\nauxiliary:\n  compression:\n    <<: *r\n");
+    setCompactionSettings();
+    expect(lines()[1]).toBe(`→ warning: YAML merge key "<<" under auxiliary.compression; set it by hand; left ${EFFORT} unset`);
+  });
+
+  test("the Telegram display step and this step run in sequence without undoing each other", () => {
+    withDoc(BOX);
+    setCompactionSettings();
+    configureTelegramDisplay();
+    const once = readFileSync(configPath(), "utf8");
+    setCompactionSettings();
+    configureTelegramDisplay();
+    expect(readFileSync(configPath(), "utf8")).toBe(once);
+    expect(read().display.platforms.telegram.tool_progress).toBe("new");
+    expect(read().display.tool_progress_command).toBe(true);
+    expect(read().compression).toEqual({ hygiene_max_turn_hold_seconds: 25 });
+  });
+
+  test("a second run changes nothing (same bytes), says so in one line per pin, and does not rewrite the file", () => {
+    withDoc(BOX);
+    setCompactionSettings();
+    const once = readFileSync(configPath(), "utf8");
+    logSpy.mockClear();
+    writeFileSync(configPath(), `# marker comment survives only if the file is not rewritten\n${once}`);
+    setCompactionSettings();
+    expect(readFileSync(configPath(), "utf8")).toBe(`# marker comment survives only if the file is not rewritten\n${once}`);
+    expect(lines()).toEqual([`→ ${HOLD} already 25 (at least 25); left as is`, `→ ${EFFORT} already set; left as is`]);
+  });
+
+  test("no config.yaml at all: both keys written", () => {
+    setCompactionSettings();
+    expect(read()).toEqual({ compression: { hygiene_max_turn_hold_seconds: 25 }, auxiliary: { compression: { reasoning_effort: "none" } } });
+  });
+
+  test("a top level that is not a mapping, or holds a merge key, is left alone with one warning", () => {
+    for (const text of ["- a\n- b\n", "just a string\n", "base: &b\n  compression: {}\n<<: *b\n"]) {
+      logSpy.mockClear();
+      withText(text);
+      setCompactionSettings();
+      expect(readFileSync(configPath(), "utf8")).toBe(text);
+      expect(logSpy.mock.calls).toHaveLength(1);
+      expect(logged()).toStartWith("→ warning: ");
+      expect(logged()).toContain("left the compaction settings unset");
+    }
+  });
+
+  test("install.ts runs the step right after the context-file cap, before the display step and the restart", () => {
+    const text = readFileSync(join(import.meta.dir, "..", "install.ts"), "utf8");
+    const main = text.slice(text.indexOf("function main(): void {"));
+    const at = (needle: string) => {
+      const i = main.indexOf(needle);
+      expect([needle, i >= 0, main.indexOf(needle, i + 1)]).toEqual([needle, true, -1]);
+      return i;
+    };
+    const cap = at("setContextFileMaxChars();");
+    const step = at("setCompactionSettings();");
+    const display = at("configureTelegramDisplay();");
+    const restart = at("restartGateway();");
+    expect(cap < step && step < display && display < restart).toBe(true);
+    const body = main.slice(0, main.indexOf("\n}\n"));
+    expect(body.match(/^.*setCompactionSettings.*$/gm)).toEqual(["  setCompactionSettings();"]);
+    expect(body).toMatch(/^  setContextFileMaxChars\(\);\n  setCompactionSettings\(\);$/m);
   });
 });
