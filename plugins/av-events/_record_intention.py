@@ -19,8 +19,9 @@ the observer reads (only for this unprefixed tool, never an MCP server's
 and `confirmed_in_chat` (DATA-410: `yes` | `silence` | `standing`, only on a
 capture the caller passed as `message`, of the agent's words the resident
 adopted in chat; kept when the lineage held it as ambient; absent otherwise),
-`publish_via` and `draft_shown_at` (DATA-411: `open_draft` and the ask's UTC
-time, only on a silence capture published from an open draft).
+`publish_via`, `draft_shown_at` and `draft_cron_job_id` (DATA-411: `open_draft`,
+the ask's UTC time and the delivering job's id, only on a silence capture
+published from an open draft).
 
 **Ids.** A published capture's `intention_id` is Index's intent id, as an
 observed Index `create_intent` would be, so the poller corroborates it by id.
@@ -104,31 +105,36 @@ event says only `source=ambient`.]
 
 **Silence publishes the exact draft the resident saw (DATA-411).** The one pass
 through R10. At the ask, the tool's own `post_llm_call` listener (outside the
-collector's guard, like the lineage ones) reads the reply the agent sent. When
-the session itself is a root session seen on a `HUMAN_PLATFORMS` platform with
-no cron in its lineage, and the reply (at most `MAX_ASK_REPLY_CHARS`) shows
+collector's guard, like the lineage ones) reads the reply the agent sent. It
+opens an ask only for a turn a person started (`pre_llm_call` saw the turn's
+user dict unmarked: never an internal or heartbeat turn, a muted diagnostic
+wake included), in a root session seen on a `HUMAN_PLATFORMS` platform with no
+cron in its lineage, when the reply (at most `MAX_ASK_REPLY_CHARS`) shows
 exactly one draft (`draft_block`: one `> ` quote block directly above
-`ASK_QUESTION` on its own line, and no other quote or question), it opens an
-ask in this process's memory (`_OPEN_DRAFTS`, never a file: anything in the
-sandbox can write a file, and a forged ask would open the gate; a gateway
-restart loses them, and the capture is then held_cron): the sha256 of the
-draft's exact UTF-8 bytes, `shown_at`, the session id and platform; at most
-`MAX_OPEN_DRAFTS`, oldest dropped. A cron, subagent or unknown session opens
-nothing. Every open ask is closed by anything the gateway receives from a chat
-(`pre_gateway_dispatch`: any message, commands included; `gateway_platform_event`:
-a reaction or an edit) and by any model turn but a real cron run's
-(`pre_llm_call`; `cron_root`): whatever the resident did, it was not silence.
-A capture passed as `message` with `confirmed_in_chat=silence` that R10 holds
-as `held_cron`, from a chain whose root was seen with platform exactly `cron`
-(a `cron_` id prefix alone never passes), with `publish` true, publishes as
-stated only when sha256 of its exact text bytes is an open ask's, shown at
-least `SILENCE_PUBLISH_MIN_AGE_MINUTES` (30) and at most
-`SILENCE_PUBLISH_WINDOW_HOURS` (24) ago, both pending Carter. Every ask holding
+`ASK_QUESTION` on its own line, and no other quote or question). The ask lives
+in this process's memory (`_OPEN_DRAFTS`, never a file: anything in the sandbox
+can write a file, and a forged ask would open the gate; a gateway restart loses
+them, and the capture is then held_cron): the sha256 of the draft's exact UTF-8
+bytes, `shown_at`, the session id and platform; at most `MAX_OPEN_DRAFTS`,
+oldest dropped. Every open ask is closed by anything the gateway receives from
+a chat (`pre_gateway_dispatch`: any message, commands included;
+`gateway_platform_event`: a reaction or an edit) and by any model turn but a
+real cron run's (`pre_llm_call`; `cron_root` and `in_cron_scope`). A capture
+passed as `message` with `confirmed_in_chat=silence` that R10 holds as
+`held_cron`, with `publish` true, publishes as stated only when all hold: the
+chain's root was seen with platform exactly `cron`; the call runs inside that
+run's own scope (Hermes's `HERMES_CRON_SESSION` ContextVar); the job delivers to
+a human-facing chat (`HERMES_CRON_AUTO_DELIVER_PLATFORM`; a `deliver: false` job
+never passes); its job id is known; and sha256 of its exact text bytes is an
+open ask's, shown at least `SILENCE_PUBLISH_MIN_AGE_MINUTES` (30) and at most
+`SILENCE_PUBLISH_WINDOW_HOURS` (12) ago, the lead's ruling. Every ask holding
 those bytes is closed before the publish goes on, so a second capture is
 `held_cron` again. Only a capture that then publishes carries
-`publish_via="open_draft"` and `draft_shown_at`. Every other cron capture is
-held exactly as before, and `held_unknown` / `held_silence` never read the
-open asks. [Reversal: drop `DRAFT_HOOKS` and the pass; silence from cron is held_cron.]
+`publish_via="open_draft"`, `draft_shown_at` and `draft_cron_job_id`. Whether
+the run's reply then ends `[SILENT]` is known only after the capture, so a
+delivering job's silent run can still publish (documented). Every other cron
+capture is held exactly as before, and `held_unknown` / `held_silence` never
+read the open asks. [Reversal: drop `DRAFT_HOOKS` and the pass; silence from cron is held_cron.]
 
 **Held updates (F4, M3).** In a held session `action=update` of a published id
 never mirrors to Index; the local event carries `publish_refused` `held_cron` or
@@ -223,6 +229,7 @@ try:  # POSIX; without it the map is guarded by the in-process lock only.
 except ImportError:  # pragma: no cover - Windows
     fcntl = None  # type: ignore[assignment]
 
+from ._messages import INJECTED_PREFIXES
 from ._core import (
     DIR_MODE,
     FILE_MODE,
@@ -233,6 +240,7 @@ from ._core import (
     register_literal_secret,
     uuid7,
 )
+from ._cron import cron_job_id_from
 from ._intentions import (
     CHAT_CONFIRMATIONS,
     LOCAL_REASONS,
@@ -1215,12 +1223,12 @@ def reserve_publish() -> Optional[str]:
 # ---- Open drafts (DATA-411) ------------------------------------------------
 
 #: How long after the ask a shown draft may be published from a cron send on
-#: silence. PENDING Carter's decision (DATA-411 AC#4); 24 is the proposal (the
-#: refuter recommends 12).
-SILENCE_PUBLISH_WINDOW_HOURS = 24
+#: silence. The lead's ruling (fix round 2): 12 hours, which covers the next
+#: delivering send for an ask at any hour (the longest gap is overnight).
+SILENCE_PUBLISH_WINDOW_HOURS = 12
 #: How long the silence must have lasted at least: a cron run in the minutes
 #: after the ask (the hourly :20 job) does not count as the resident's silence.
-#: PENDING Carter's decision with the window; 30 is the refuter's proposal.
+#: The lead's ruling (fix round 2): 30 minutes.
 SILENCE_PUBLISH_MIN_AGE_MINUTES = 30
 #: Asks kept open at once; the oldest is dropped first.
 MAX_OPEN_DRAFTS = 20
@@ -1314,7 +1322,10 @@ def draft_block(reply: Any) -> Optional[str]:
     first, last = blocks[0]
     if last >= asks[0] or any(lines[k].strip() for k in range(last + 1, asks[0])):
         return None
-    if not all(line.startswith(DRAFT_LINE_PREFIX) for line in lines[first:last + 1]):
+    # R1-N1: every line `> ` then text that is not blank (Telegram quotes `^> (.+)$`
+    # only; an empty `> ` line would show as a literal `>`).
+    if not all(line.startswith(DRAFT_LINE_PREFIX) and line[len(DRAFT_LINE_PREFIX):].strip()
+               for line in lines[first:last + 1]):
         return None
     draft = "\n".join(line[len(DRAFT_LINE_PREFIX):] for line in lines[first:last + 1])
     return draft if _openable(draft) else None
@@ -1341,22 +1352,99 @@ def _speaking_root(session_id: str, platform: Any) -> bool:
     return held_reason(session_id) is None
 
 
-def cron_root(session_id: Any) -> bool:
-    """R10 says `cron` AND the root of the delegation chain was seen with
+#: Hermes's per-run ContextVars (`gateway/session_context.py` `_VAR_MAP`,
+#: v2026.9.24): `_CronRunScope.enter()` sets `HERMES_CRON_SESSION` to "1" for a
+#: cron run, and `_reload_dotenv_and_publish_delivery_target` sets
+#: `HERMES_CRON_AUTO_DELIVER_PLATFORM` to the job's delivery platform, or leaves
+#: it "" when the job delivers nowhere (`deliver: local`, i.e. the installer's
+#: `deliver: false`). Both are in this process's memory and propagated into the
+#: tool and hook threads; neither is read from `os.environ`, which `.env` feeds.
+CRON_SCOPE_VAR = "HERMES_CRON_SESSION"
+CRON_DELIVER_VAR = "HERMES_CRON_AUTO_DELIVER_PLATFORM"
+
+
+def _session_var(name: str) -> Optional[str]:
+    """The ContextVar's own value, or None (unset, not a string, or no Hermes).
+    Never `get_session_env`, whose unset case falls back to `os.environ`."""
+    try:
+        from gateway.session_context import _VAR_MAP  # type: ignore[import-not-found]
+
+        var = _VAR_MAP.get(name)
+        value = var.get() if var is not None else None
+    except Exception:  # noqa: BLE001 - no Hermes, or a shape we do not know: unknown
+        return None
+    return value if isinstance(value, str) else None
+
+
+def in_cron_scope() -> bool:
+    """This call runs inside a cron run's own scope (R1-N2): a session id that
+    merely reuses a cron run's id, from another surface, is not."""
+    return _session_var(CRON_SCOPE_VAR) == "1"
+
+
+def cron_delivers() -> bool:
+    """The running cron job delivers to a human-facing chat (fix round 2, S2):
+    a job with no delivery target never passes."""
+    value = _session_var(CRON_DELIVER_VAR)
+    return bool(value) and value.strip().lower() in HUMAN_PLATFORMS
+
+
+def cron_root_session(session_id: Any) -> Optional[str]:
+    """The root session of a chain R10 calls `cron` whose root was seen with
     platform exactly `cron` (Hermes's scheduler; `on_session_start` fires before
-    the run's first `pre_llm_call`). A `cron_` id prefix alone is not enough
-    (fix round 1, S3): it holds as before, but never passes or keeps an ask open."""
+    the run's first `pre_llm_call`), else None. A `cron_` id prefix alone is not
+    enough (fix round 1, S3): it holds as before, but never passes or keeps an
+    ask open."""
     sid = str(session_id or "").strip()
     if held_reason(sid) != "cron":
-        return False
+        return None
     with _LINEAGE_LOCK:
         current = sid
         for _ in range(MAX_LINEAGE_DEPTH):
             parent = _PARENTS.get(current)
             if parent is None:
-                return _PLATFORMS.get(current) == CRON_PLATFORM
+                return current if _PLATFORMS.get(current) == CRON_PLATFORM else None
             current = parent
-    return False
+    return None
+
+
+def cron_root(session_id: Any) -> bool:
+    return cron_root_session(session_id) is not None
+
+
+#: Per session, whether the turn now running was started by a person (fix
+#: round 2, S6): set at the turn's `pre_llm_call`, taken at its `post_llm_call`.
+_HUMAN_TURNS: "OrderedDict[str, bool]" = OrderedDict()
+
+
+def human_turn(user_message: Any, history: Any) -> bool:
+    """Whether `pre_llm_call`'s turn is a person's message, not one Hermes
+    injected. The turn's own user dict is the last item of the history; any
+    `display_kind` on it (Hermes stamps `internal_notification` on every
+    internal event and the heartbeat, a muted diagnostic wake included), a
+    `diagnostic` notification category, the `/goal` continuation header, or no
+    user dict at all: not a person's (fail closed)."""
+    if not isinstance(history, (list, tuple)) or not history:
+        return False
+    last = history[-1]
+    if not isinstance(last, dict) or last.get("role") != "user" or last.get("display_kind") is not None:
+        return False
+    meta = last.get("display_metadata")
+    if isinstance(meta, dict) and meta.get("notification_category") is not None:
+        return False
+    return not (isinstance(user_message, str) and user_message.lstrip().startswith(INJECTED_PREFIXES))
+
+
+def note_turn(session_id: Any, user_message: Any, history: Any) -> None:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return
+    human = human_turn(user_message, history)
+    with _DRAFTS_LOCK:
+        _HUMAN_TURNS.pop(sid, None)
+        _HUMAN_TURNS[sid] = human
+        while len(_HUMAN_TURNS) > MAX_LINEAGE:
+            _HUMAN_TURNS.popitem(last=False)
 
 
 def note_ask(session_id: Any, platform: Any, reply: Any) -> int:
@@ -1364,7 +1452,10 @@ def note_ask(session_id: Any, platform: Any, reply: Any) -> int:
     about one quoted draft. Records its hash, when, and the session and
     platform, in memory. Returns 1 when an ask opened, else 0."""
     sid = str(session_id or "").strip()
-    if not _speaking_root(sid, platform):
+    with _DRAFTS_LOCK:
+        # S6: one ask per turn, and only for a turn a person started.
+        human = _HUMAN_TURNS.pop(sid, False) if sid else False
+    if not human or not _speaking_root(sid, platform):
         return 0
     draft = draft_block(reply)
     if draft is None:
@@ -1392,7 +1483,7 @@ def close_open_drafts(session_id: Any) -> None:
     ask is closed. Fail closed: an unknown session, a `cron_` id never seen on
     the `cron` platform, or a lineage check that raises closes them too."""
     try:
-        if cron_root(session_id):
+        if cron_root(session_id) and in_cron_scope():
             return
     except Exception:  # noqa: BLE001 - unsure closes
         pass
@@ -1425,7 +1516,10 @@ def _on_post_llm_call(**kwargs: Any) -> None:
 
 
 def _on_pre_llm_call(**kwargs: Any) -> None:
-    close_open_drafts(kwargs.get("session_id"))
+    try:
+        note_turn(kwargs.get("session_id"), kwargs.get("user_message"), kwargs.get("conversation_history"))
+    finally:
+        close_open_drafts(kwargs.get("session_id"))
 
 
 def _on_inbound(**_kwargs: Any) -> None:
@@ -1461,7 +1555,8 @@ def _publish_precheck() -> Optional[str]:
     return api_origin()[1]
 
 
-def _capture(args: dict, held: Optional[str], cron_rooted: bool = False) -> dict:
+def _capture(args: dict, held: Optional[str], cron_rooted: bool = False,
+             cron_job_id: Optional[str] = None) -> dict:
     if args.get("intention_id") is not None:
         return _refuse("intention_id_unexpected")
     text = _text(args.get("text"))
@@ -1570,7 +1665,7 @@ def _capture(args: dict, held: Optional[str], cron_rooted: bool = False) -> dict
             # L1: whether the gate is on could not be read: hold, never publish around it.
             code = "approval_unavailable"
         if code is None and approval_on is True:
-            return _via_draft(_stated_through_approval(result, text, source), shown_at)
+            return _via_draft(_stated_through_approval(result, text, source), shown_at, cron_job_id)
         index_id: Optional[str] = None
         if code is None:
             code = reserve_publish()
@@ -1608,15 +1703,18 @@ def _capture(args: dict, held: Optional[str], cron_rooted: bool = False) -> dict
         refused=result.get("publish_refused"),
         local_reason=local_reason,
     )
-    return _via_draft(result, shown_at)
+    return _via_draft(result, shown_at, cron_job_id)
 
 
-def _via_draft(result: dict, shown_at: Optional[str]) -> dict:
+def _via_draft(result: dict, shown_at: Optional[str], cron_job_id: Optional[str] = None) -> dict:
     """DATA-411 S4: the trace only on a capture the open draft actually
     published. A draft taken and then refused (`no_key`, `held_ambient_exists`,
     an Index failure) is used up, and the result carries only that code."""
     if shown_at is not None and result.get("published") is True:
         result.update(publish_via=PUBLISH_VIA_OPEN_DRAFT, draft_shown_at=shown_at)
+        if cron_job_id is not None:
+            # S2: the delivering job that published it.
+            result["draft_cron_job_id"] = cron_job_id
     return result
 
 
@@ -1961,7 +2059,7 @@ def _update_or_withdraw(action: str, args: dict, held: Optional[str]) -> dict:
     return result
 
 
-def record_intention_answer(args: Any, session_id: Optional[str]) -> dict:
+def record_intention_answer(args: Any, session_id: Optional[str], task_id: Optional[str] = None) -> dict:
     if not switch_on():
         return _refuse("disabled")
     safe = args if isinstance(args, dict) else {}
@@ -1981,11 +2079,18 @@ def record_intention_answer(args: Any, session_id: Optional[str]) -> dict:
     except Exception:  # noqa: BLE001 - unsure is held
         held = "unknown"
     if action == "capture":
+        rooted, job_id = False, None
         try:
-            rooted = held == "cron" and cron_root(session_id)
+            # The pass needs all of it: a chain rooted in a run seen on platform
+            # cron (S3), this call inside that run's own scope (R1-N2), a job that
+            # delivers to the resident's chat (S2), and the job's id to record.
+            root = cron_root_session(session_id) if held == "cron" else None
+            if root is not None and in_cron_scope() and cron_delivers():
+                job_id = cron_job_id_from(root, task_id if root == str(session_id or "").strip() else None)
+                rooted = job_id is not None
         except Exception:  # noqa: BLE001 - unsure never passes
-            rooted = False
-        return _capture(safe, held, rooted)
+            rooted, job_id = False, None
+        return _capture(safe, held, rooted, job_id if rooted else None)
     return _update_or_withdraw(action, safe, held)
 
 
@@ -2002,7 +2107,8 @@ def make_handler() -> Callable[..., str]:
                 held = held_reason(sid) or "-"
             except Exception:  # noqa: BLE001
                 held = "unknown"
-            result = record_intention_answer(args, sid)
+            task = kwargs.get("task_id")
+            result = record_intention_answer(args, sid, str(task) if task else None)
         except SystemExit:
             raise
         except BaseException as exc:  # noqa: BLE001 - fail open
@@ -2033,6 +2139,17 @@ def make_handler() -> Callable[..., str]:
         return json.dumps(result)
 
     return record_intention_tool
+
+
+def _known_hooks() -> Optional[frozenset]:
+    """Hermes's `VALID_HOOKS`, or None when it cannot be read (no Hermes: the
+    tests; then the registration itself is the only check)."""
+    try:
+        from hermes_cli.plugins import VALID_HOOKS  # type: ignore[import-not-found]
+
+        return frozenset(VALID_HOOKS)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def register_record_intention_tool(ctx: Any, emit: Optional[Callable[..., None]] = None) -> bool:
@@ -2072,7 +2189,13 @@ def register_record_intention_tool(ctx: Any, emit: Optional[Callable[..., None]]
             # never registered, so a draft the resident answered cannot stay open.
             for name in DRAFT_CLOSERS:
                 register_hook(name, DRAFT_HOOKS[name])
-            register_hook("post_llm_call", DRAFT_HOOKS["post_llm_call"])
+            known = _known_hooks()
+            # R1-N3: Hermes keeps an unknown hook name with only a warning, and
+            # never fires it; the opener needs every closer to be one it fires.
+            if known is None or all(n in known for n in (*DRAFT_CLOSERS, "post_llm_call")):
+                register_hook("post_llm_call", DRAFT_HOOKS["post_llm_call"])
+            else:
+                logger.warning("av-events: record_intention draft_opener=off reason=unknown_hook")
         except Exception:  # noqa: BLE001 - nothing opens: a silence capture from cron stays held
             pass
     try:
@@ -2117,7 +2240,12 @@ __all__ = [
     "api_origin",
     "close_all_open_drafts",
     "close_open_drafts",
+    "cron_delivers",
     "cron_root",
+    "cron_root_session",
+    "human_turn",
+    "in_cron_scope",
+    "note_turn",
     "draft_block",
     "draft_candidates",
     "held_reason",

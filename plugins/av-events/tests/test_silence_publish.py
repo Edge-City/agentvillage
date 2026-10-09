@@ -28,18 +28,23 @@ close on a resident turn, killed by `test_a_resident_turn_closes_every_open_draf
 check in the pass, killed by `test_a_cron_prefix_alone_never_passes`; (h) no
 gateway closers, killed by `test_anything_the_gateway_receives_closes_every_open_ask`;
 (x) the closer returns when the lineage check raises, killed by
-`test_a_lineage_check_that_raises_still_closes`.
+`test_a_lineage_check_that_raises_still_closes`. Fix round 2: (a2) the window back
+to 24 h, killed by `test_a_stale_draft_is_held`; (s2) a job that delivers nowhere
+passes, killed by `test_only_a_delivering_cron_job_passes`; (s6) an injected turn
+opens, killed by `test_an_injected_or_unmarked_turn_never_opens_an_ask`.
 """
 
 from __future__ import annotations
 
 import builtins
+import contextvars
 import io
 import json
 import os
 import re
 import sys
 import threading
+import types
 import urllib.parse
 from pathlib import Path
 from typing import Any, Callable
@@ -47,7 +52,11 @@ from typing import Any, Callable
 import pytest
 
 SESSION = "sess-ask"
-CRON = "cron_evening_20261009_180000"
+#: Hermes names a cron session `cron_<job_id>_<YYYYmmdd>_<HHMMSS>`, the job id 12 hex.
+JOB = "0123456789ab"
+CRON = f"cron_{JOB}_20261009_180000"
+#: The turn's user dict as Hermes hands it to `pre_llm_call` for a person's message.
+HUMAN_HISTORY = [{"role": "user", "content": "hi"}]
 KEY = "index-key-for-silence-publish-tests-0123456789"
 INDEX_ID = "9b2f0c1e-0000-4000-8000-00000000d411"
 DRAFT = "Meet founders building on Solana in Goa"
@@ -153,15 +162,46 @@ def clock(ri, monkeypatch):
     return fake
 
 
+class Hermes:
+    """Hermes's per-run ContextVars (`gateway.session_context._VAR_MAP` at
+    v2026.9.24) as the tool reads them: by default a cron run's scope that
+    delivers to Telegram."""
+
+    def __init__(self, monkeypatch) -> None:
+        self.var_map: dict[str, contextvars.ContextVar] = {}
+        gateway = types.ModuleType("gateway")
+        session_context = types.ModuleType("gateway.session_context")
+        session_context._VAR_MAP = self.var_map
+        session_context.get_session_env = lambda name, default="": os.environ.get(name, default)
+        gateway.session_context = session_context
+        monkeypatch.setitem(sys.modules, "gateway", gateway)
+        monkeypatch.setitem(sys.modules, "gateway.session_context", session_context)
+        self.set("HERMES_CRON_SESSION", "1")
+        self.set("HERMES_CRON_AUTO_DELIVER_PLATFORM", "telegram")
+
+    def set(self, name: str, value: Any) -> None:
+        """A ContextVar whose value (in every thread) is `value`; None unsets it."""
+        if value is None:
+            self.var_map.pop(name, None)
+        else:
+            self.var_map[name] = contextvars.ContextVar(name, default=value)
+
+
 @pytest.fixture()
-def tctx(plugin, index, clock, monkeypatch, home):
+def hermes(monkeypatch):
+    return Hermes(monkeypatch)
+
+
+@pytest.fixture()
+def tctx(plugin, index, clock, monkeypatch, home, hermes, ri):
     """The plugin registered and live, the tool on, in a Telegram session, and a
-    cron run Hermes started on platform `cron`."""
+    cron run Hermes started on platform `cron` for a job that delivers."""
     monkeypatch.setenv("AV_RECORD_INTENTION", "1")
     monkeypatch.setenv("INDEX_API_KEY", KEY)
     monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
     ctx = ToolFireCtx()
     ctx.clock = clock
+    ctx.ri = ri
     plugin.register(ctx)
     ctx.fire("on_session_start", session_id=SESSION, model="m", platform="telegram")
     ctx.fire("on_session_start", session_id=CRON, model="m", platform="cron")
@@ -175,6 +215,9 @@ def show(ctx: ToolFireCtx, reply: Any, *, session: str = SESSION, platform: Any 
     clock = ctx.clock
     now = clock.now
     clock.now = now - ago
+    # The turn a person started (what `pre_llm_call` records), without the
+    # close that the real `pre_llm_call` also does.
+    ctx.ri.note_turn(session, "hi", HUMAN_HISTORY)
     try:
         ctx.fire("post_llm_call", session_id=session, task_id="t", turn_id="u", user_message="hi",
                  assistant_response=reply, conversation_history=[], model="m", platform=platform)
@@ -226,7 +269,7 @@ def assert_held_cron(out: dict, index: FakeIndex) -> None:
 
 def test_the_constants(ri):
     assert ri.ASK_QUESTION == ASK and ASK in ri.DRAFT_RULE
-    assert ri.SILENCE_PUBLISH_WINDOW_HOURS == 24 and ri.SILENCE_PUBLISH_MIN_AGE_MINUTES == 30
+    assert ri.SILENCE_PUBLISH_WINDOW_HOURS == 12 and ri.SILENCE_PUBLISH_MIN_AGE_MINUTES == 30
     assert ri.MAX_OPEN_DRAFTS == 20 and ri.DRAFT_LINE_PREFIX == "> "
 
 
@@ -360,6 +403,10 @@ def test_the_draft_is_the_one_block_above_the_question(ri, reply, draft):
     f"**> {DRAFT}||\n\n{ASK}",
     f"> {DRAFT}\n> and researchers in Pune\n> and Delhi\n\n{ASK}",
     f"> {DRAFT}\n>\n> and researchers in Pune\n\n{ASK}",
+    # R1-N1: an empty `> ` line shows as a literal `>`, not a quote.
+    f"> {DRAFT}\n> \n\n{ASK}",
+    f"> \n> {DRAFT}\n\n{ASK}",
+    f">  \n> {DRAFT}\n\n{ASK}",
     f"> Here is my draft:\n\n{ASK}",
 ])
 def test_anything_but_one_block_above_the_question_opens_nothing(ri, reply):
@@ -410,6 +457,7 @@ def test_a_cron_silence_capture_of_the_shown_draft_publishes_and_closes_it(tctx,
     [event] = intention_events(av, plugin)
     payload = event["payload"]
     assert payload["publish_via"] == "open_draft" and payload["draft_shown_at"] == ri._iso(ASKED)
+    assert out["draft_cron_job_id"] == JOB and payload["draft_cron_job_id"] == JOB
     assert payload["confirmed_in_chat"] == "silence" and payload["index_intent_id"] == INDEX_ID
     assert payload["publish_refused"] is None and payload["source"] == "ambient"
     # The local map has it as a published stated intention, no held hash.
@@ -426,8 +474,9 @@ def test_the_same_capture_again_is_held_cron(tctx, ri, index):
 
 @pytest.mark.parametrize("age,passes", [
     (0, False), (60, False), (30 * 60 - 1, False),  # mutant (f): the hourly run at :20, seconds after the ask
-    (30 * 60, True), (HOUR, True), (24 * HOUR, True),
-    (24 * HOUR + 1, False), (72 * HOUR, False), (-1, False),  # mutant (a); a clock set back
+    (30 * 60, True), (HOUR, True), (12 * HOUR, True),
+    (12 * HOUR + 1, False), (24 * HOUR, False), (72 * HOUR, False),  # mutants (a), (a2)
+    (-1, False),  # a clock set back
 ])
 def test_a_stale_draft_is_held(tctx, ri, index, clock, age, passes):
     """Mutants (a) no window and (f) no minimum age are killed here. A draft
@@ -643,7 +692,7 @@ def test_a_lineage_check_that_raises_still_closes(tctx, ri, index, monkeypatch):
 
 def test_a_lineage_check_that_raises_never_passes(tctx, ri, index, monkeypatch):
     show(tctx, ask_reply())
-    monkeypatch.setattr(ri, "cron_root", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("x")))
+    monkeypatch.setattr(ri, "cron_root_session", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("x")))
     assert_held_cron(call(tctx, silence()), index)
 
 
@@ -727,11 +776,14 @@ def test_the_open_drafts_never_touch_a_file(tctx, ri, index, clock, monkeypatch,
         for target, name in ((builtins, "open"), (os, "open"), (os, "replace"), (os, "rename"),
                              (os, "makedirs"), (os, "mkdir"), (os, "unlink"), (os, "stat")):
             m.setattr(target, name, refuse)
+        ri.note_turn(SESSION, "hi", HUMAN_HISTORY)
         assert ri.note_ask(SESSION, "telegram", ask_reply()) == 1
         clock.now = T0 + HOUR
         assert ri.take_open_draft(DRAFT) == ri._iso(T0)
+        ri.note_turn(SESSION, "hi", HUMAN_HISTORY)
         assert ri.note_ask(SESSION, "telegram", ask_reply(OTHER)) == 1
         ri.close_open_drafts(SESSION)
+        ri.note_turn(SESSION, "hi", HUMAN_HISTORY)
         assert ri.note_ask(SESSION, "telegram", ask_reply(OTHER)) == 1
         ri.close_all_open_drafts()
     assert ri._OPEN_DRAFTS == []
@@ -807,3 +859,139 @@ def test_every_probe(tctx, ri, index, clock, av, plugin, probe):
         assert index.requests == []
         assert event["payload"]["publish_refused"] == probe["expect"]
         assert "publish_via" not in event["payload"]
+
+
+# --------------------------------------------------------------------------
+# Fix round 2: a delivering send only (S2), a person's turn only (S6), the
+# cron run's own scope (R1-N2), known hooks only (R1-N3)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("deliver,passes", [
+    ("telegram", True),
+    ("", False),  # deliver: false / local: Hermes leaves it empty
+    (None, False),  # never set: not a cron run Hermes scoped
+    ("api_server", False),  # not a person's chat
+    ("TELEGRAM", True),
+])
+def test_only_a_delivering_cron_job_passes(tctx, ri, index, hermes, deliver, passes):
+    """S2, mutant (s2): a run whose job delivers nowhere keeps the capture held_cron."""
+    hermes.set("HERMES_CRON_AUTO_DELIVER_PLATFORM", deliver)
+    show(tctx, ask_reply())
+    out = call(tctx, silence())
+    if passes:
+        assert out["published"] is True and out["draft_cron_job_id"] == JOB
+    else:
+        assert_held_cron(out, index)
+        assert len(drafts(ri)) == 1
+
+
+def test_no_hermes_context_never_passes(tctx, ri, index, monkeypatch):
+    """Outside Hermes (no `gateway.session_context`) nothing is known: held."""
+    monkeypatch.setitem(sys.modules, "gateway.session_context", None)
+    show(tctx, ask_reply())
+    assert_held_cron(call(tctx, silence()), index)
+
+
+def test_the_os_environ_is_never_read_for_the_delivery(tctx, ri, index, hermes, monkeypatch):
+    """`.env` feeds `os.environ`, and the agent can write `.env`: the ContextVar alone counts."""
+    hermes.set("HERMES_CRON_AUTO_DELIVER_PLATFORM", None)
+    hermes.set("HERMES_CRON_SESSION", None)
+    monkeypatch.setenv("HERMES_CRON_AUTO_DELIVER_PLATFORM", "telegram")
+    monkeypatch.setenv("HERMES_CRON_SESSION", "1")
+    show(tctx, ask_reply())
+    assert_held_cron(call(tctx, silence()), index)
+
+
+def test_a_cron_id_outside_the_cron_runs_own_scope_never_passes(tctx, ri, index, hermes):
+    """R1-N2: a session that reuses a real cron run's id from another surface
+    (recorded `cron`, but not inside the run's scope) gets no pass, and its own
+    turn closes the asks."""
+    hermes.set("HERMES_CRON_SESSION", "")
+    show(tctx, ask_reply())
+    assert_held_cron(call(tctx, silence()), index)
+    assert len(drafts(ri)) == 1
+    resident_says(tctx, "hello", session=CRON, platform="api_server")
+    assert drafts(ri) == []
+
+
+@pytest.mark.parametrize("session", ["cron_evening_20261009_180000", "cron_0123456789ab"])
+def test_a_cron_run_without_a_job_id_never_passes(tctx, ri, index, session):
+    tctx.fire("on_session_start", session_id=session, model="m", platform="cron")
+    show(tctx, ask_reply())
+    assert_held_cron(call(tctx, silence(), session=session), index)
+
+
+@pytest.mark.parametrize("history,text", [
+    # Hermes stamps every internal event and the heartbeat (a muted diagnostic wake included).
+    ([{"role": "user", "content": "x", "display_kind": "internal_notification"}], "x"),
+    ([{"role": "user", "content": "x", "display_kind": "internal_notification",
+       "display_metadata": {"notification_category": "diagnostic"}}], "x"),
+    ([{"role": "user", "content": "x", "display_metadata": {"notification_category": "diagnostic"}}], "x"),
+    ([{"role": "user", "content": "x", "display_kind": "something_new"}], "x"),
+    # The /goal continuation carries no mark, only its header.
+    ([{"role": "user", "content": "x"}], "[Continuing toward your standing goal] keep going"),
+    # No user dict where Hermes puts the turn's own: unknown, so not a person's.
+    ([], "x"),
+    (None, "x"),
+    ([{"role": "assistant", "content": "x"}], "x"),
+])
+def test_an_injected_or_unmarked_turn_never_opens_an_ask(tctx, ri, index, history, text):
+    """S6, mutant (s6): only a turn a person started can open an ask."""
+    tctx.fire("pre_llm_call", session_id=SESSION, task_id="t", turn_id="u", user_message=text,
+              conversation_history=history, is_first_turn=False, model="m", platform="telegram",
+              parent_session_id="", sender_id="")
+    tctx.fire("post_llm_call", session_id=SESSION, task_id="t", turn_id="u", user_message=text,
+              assistant_response=ask_reply(), conversation_history=history or [], model="m", platform="telegram")
+    assert drafts(ri) == []
+
+
+def test_a_persons_turn_opens_through_the_real_hooks(tctx, ri, index, clock):
+    """End to end: the resident's message (pre_llm_call), the agent's ask
+    (post_llm_call), silence, then the delivering cron run."""
+    tctx.fire("pre_llm_call", session_id=SESSION, task_id="t", turn_id="u", user_message="write me an intent",
+              conversation_history=[{"role": "user", "content": "write me an intent"}], is_first_turn=False,
+              model="m", platform="telegram", parent_session_id="", sender_id="")
+    tctx.fire("post_llm_call", session_id=SESSION, task_id="t", turn_id="u", user_message="write me an intent",
+              assistant_response=ask_reply(), conversation_history=[], model="m", platform="telegram")
+    assert len(drafts(ri)) == 1
+    clock.now = T0 + HOUR
+    out = call(tctx, silence())
+    assert out["published"] is True and out["draft_cron_job_id"] == JOB
+
+
+def test_one_turn_opens_at_most_one_ask(tctx, ri, index):
+    """The turn's mark is used up by its `post_llm_call`: a second reply in the
+    same turn (no `pre_llm_call` between) opens nothing."""
+    show(tctx, ask_reply())
+    tctx.fire("post_llm_call", session_id=SESSION, task_id="t", turn_id="u", user_message="hi",
+              assistant_response=ask_reply(OTHER), conversation_history=[], model="m", platform="telegram")
+    [entry] = drafts(ri)
+    assert entry["hash"] == ri.draft_hash(DRAFT)
+
+
+@pytest.mark.parametrize("missing,opener", [
+    (None, True),
+    ("gateway_platform_event", False),
+    ("pre_gateway_dispatch", False),
+    ("post_llm_call", False),
+])
+def test_the_opener_needs_every_closer_to_be_a_hook_hermes_fires(plugin, ri, index, clock, home, monkeypatch,
+                                                                  missing, opener):
+    """R1-N3: Hermes keeps an unknown hook name with only a warning; without a
+    closer it fires, the opener is not registered."""
+    monkeypatch.setenv("AV_RECORD_INTENTION", "1")
+    monkeypatch.setenv("INDEX_API_KEY", KEY)
+    known = {"pre_gateway_dispatch", "gateway_platform_event", "pre_llm_call", "post_llm_call",
+             "on_session_start", "pre_api_request", "subagent_start"} - {missing}
+    hermes_cli = types.ModuleType("hermes_cli")
+    plugins = types.ModuleType("hermes_cli.plugins")
+    plugins.VALID_HOOKS = frozenset(known)
+    hermes_cli.plugins = plugins
+    monkeypatch.setitem(sys.modules, "hermes_cli", hermes_cli)
+    monkeypatch.setitem(sys.modules, "hermes_cli.plugins", plugins)
+    ctx = ToolFireCtx()
+    plugin.register(ctx)
+    assert (ri.DRAFT_HOOKS["post_llm_call"] in ctx.hooks.get("post_llm_call", [])) is opener
+    for name in ri.DRAFT_CLOSERS:
+        assert ri.DRAFT_HOOKS[name] in ctx.hooks.get(name, [])

@@ -185,6 +185,8 @@ CHAT_CONFIRMATIONS = ("yes", "silence", "standing")
 #: resident, with that ask's `draft_shown_at` (UTC, second precision).
 PUBLISH_VIAS = frozenset({"open_draft"})
 _SHOWN_AT = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+#: The delivering cron job that published it (fix round 2): Hermes's job id.
+_CRON_JOB_ID = re.compile(r"^[0-9a-f]{12}$")
 
 #: `publish_refused`: a code, never text. Anything else is dropped to null.
 _CODE_PATTERN = re.compile(r"^[a-z0-9_]{1,64}$")
@@ -224,6 +226,7 @@ class IntentionCall:
         "confirmed_in_chat",
         "publish_via",
         "draft_shown_at",
+        "draft_cron_job_id",
     )
 
     def __init__(
@@ -246,6 +249,7 @@ class IntentionCall:
         confirmed_in_chat: Optional[str] = None,
         publish_via: Optional[str] = None,
         draft_shown_at: Optional[str] = None,
+        draft_cron_job_id: Optional[str] = None,
     ) -> None:
         self.event_type = event_type
         self.intention_id = intention_id
@@ -273,6 +277,7 @@ class IntentionCall:
         #: ask's time when a silence capture published from an open draft.
         self.publish_via = publish_via
         self.draft_shown_at = draft_shown_at
+        self.draft_cron_job_id = draft_cron_job_id
 
 
 # --------------------------------------------------------------------------
@@ -714,6 +719,7 @@ def plan_record(
     # DATA-411: the same, read from the result only, on a capture only.
     publish_via = _result_code(payload_r, outer_r, "publish_via")
     draft_shown_at = None
+    draft_cron_job_id = None
     if publish_via not in PUBLISH_VIAS or event_type != "intention.captured":
         publish_via = None
     else:
@@ -722,6 +728,9 @@ def plan_record(
             present, value = _result_has(outer_r, "draft_shown_at")
         if isinstance(value, str) and _SHOWN_AT.fullmatch(value):
             draft_shown_at = value
+        job = _result_code(payload_r, outer_r, "draft_cron_job_id")
+        if isinstance(job, str) and _CRON_JOB_ID.fullmatch(job):
+            draft_cron_job_id = job
 
     text = _text(args.get("text")) or _text(args.get("description"))
     summary = _text(args.get("summary"))
@@ -746,6 +755,7 @@ def plan_record(
             confirmed_in_chat=confirmed_in_chat,
             publish_via=publish_via,
             draft_shown_at=draft_shown_at,
+            draft_cron_job_id=draft_cron_job_id,
         )
     ]
 

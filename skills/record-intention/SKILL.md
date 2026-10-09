@@ -132,16 +132,20 @@ between them and no other quoted block or question in that reply:
 
 Should I publish this as written?
 
-If the next message you send them on your own comes from a scheduled run and
-you capture your words there with `confirmed_in_chat=silence`, pass the words
-of that block exactly, character for character, without the `> `. The tool
-publishes them only when they match the one block it saw you show, at least
-half an hour and within its window after the ask, and only once. Anything
-else is held for their approval card, as before: words reworded or retyped,
-words you never showed, an ask shaped any other way, words the resident
+Ask only in a reply to the resident's own message, never in a turn that a
+notice, a reminder or a scheduled run started.
+
+If the next message you send them on your own comes from a scheduled run that
+messages them and you capture your words there with
+`confirmed_in_chat=silence`, pass the words of that block exactly, character
+for character, without the `> `. The tool publishes them only when they match
+the one block it saw you show, at least half an hour and at most twelve hours
+after the ask, and only once. Anything else is held for their approval card,
+as before: words reworded or retyped, words you never showed, an ask shaped
+any other way, a scheduled run that does not message them, words the resident
 answered in any way since (a reaction or a command counts), and words shown
 before the agent restarted. Your message says in one clause what the tool
-answered.
+answered; do not reply `[SILENT]` after it published.
 
 ## Ambient intentions are held
 

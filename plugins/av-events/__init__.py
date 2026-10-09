@@ -702,6 +702,7 @@ def _intention_payload(call: IntentionCall, capture: str, parent_session_id: Opt
     if call.publish_via is not None:
         payload["publish_via"] = call.publish_via
         payload["draft_shown_at"] = call.draft_shown_at
+        payload["draft_cron_job_id"] = call.draft_cron_job_id
     if capture != "metadata":
         payload["text_length"] = len(call.text) if call.text else None
         payload["summary_length"] = len(call.summary) if call.summary else None
