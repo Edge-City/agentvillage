@@ -1085,20 +1085,24 @@ def held_norm_text_v2(text: str) -> str:
     then differ only in punctuation), format characters and variation
     selectors deleted, then every punctuation or symbol character (Unicode P*,
     S*) read as a space, except the ones that carry meaning: a currency sign
-    or one of `+ # % @ < > = & ~ ^ |` stays a token, a `-` or `\u2212` that is
-    a sign ("-5") stays on its digit, and a `/` or fraction slash between
-    digits ("1/2", NFKC's "\u00bd") stays in the number. Markdown's "#" and ">"
-    at a line's start are dropped. Whitespace is collapsed. Letters and digits,
-    any script, are kept exactly; a space keeps "1.5" apart from "15"."""
-    folded = unicodedata.normalize("NFKC", unicodedata.normalize("NFKC", text.translate(_APOSTROPHES)).casefold())
-    chars = [ch for ch in folded if not _invisible(ch)]
+    or one of `+ # % @ < > = & ~ ^ |` stays a token, a `-`, `\u2212` or `\u2013`
+    that is a sign ("-5") stays on its digit, and a `/` or fraction slash
+    between digits ("1/2", NFKC's "\u00bd") stays in the number. Markdown's "#"
+    and ">" at a line's start are dropped. Whitespace is collapsed. Letters and
+    digits, any script, are kept exactly; a space keeps "1.5" apart from "15".
+    It is idempotent (normalising a normal form gives it back): invisible
+    characters go before NFKC, so none is left to block a composition, and the
+    apostrophes are mapped again after it (NFKC makes U+02BC of U+0149)."""
+    visible = "".join(ch for ch in text if not _invisible(ch)).translate(_APOSTROPHES)
+    folded = unicodedata.normalize("NFKC", unicodedata.normalize("NFKC", visible).casefold())
+    chars = list(folded.translate(_APOSTROPHES))
     out: list[str] = []
     for i, ch in enumerate(chars):
         prev = chars[i - 1] if i else ""
         nxt = chars[i + 1] if i + 1 < len(chars) else ""
         if ch in _KEPT_SYMBOLS or unicodedata.category(ch) == "Sc":
             out.append(" " + ch)
-        elif ch in "-\u2212" and nxt.isdecimal() and not prev.isalnum():
+        elif ch in "-\u2212\u2013" and nxt.isdecimal() and not prev.isalnum():
             out.append(" -")
         elif ch in "/\u2044" and prev.isdecimal() and nxt.isdecimal():
             out.append("/")
@@ -1122,7 +1126,7 @@ def _held_match(entry: dict, norm_hash: str, norm_hash_v2: Optional[str]) -> boo
     """A held entry whose text is the capture's, case, whitespace (v1) or
     punctuation, quotes and width (v2) aside. A v1-only entry (held before
     DATA-387) is matched by v1; a capture's v2 equal to a stored v1 also counts,
-    since that v1 then has no punctuation left and is its own v2."""
+    since that v1 is then a v2 normal form, and the normal form is idempotent."""
     stored = entry.get(HELD_HASH_KEY)
     if stored is None:
         return False

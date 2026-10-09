@@ -663,7 +663,10 @@ case-folded, whitespace-collapsed text, never emitted) for held ambient entries 
 variation selectors deleted, every Unicode punctuation and symbol character read as a space except
 currency signs, `+ # % @ < > = & ~ ^ |`, a sign on a number and a slash inside one, which stay
 tokens; Markdown `#`/`>` at a line's start dropped; whitespace collapsed; letters and digits of any
-script kept exactly, no fuzzy matching), both replaced on update and dropped on withdrawal (a v2 is dropped
+script kept exactly, no fuzzy matching; idempotent. Known misses, left to publish or to match rather
+than add fuzzy rules: "$1,000" vs "$1000", "5pm" vs "5 pm", a dropped apostrophe, a leading "1. ",
+Turkish "İ" vs "I", "Goa - 5pm" vs "Goa -5pm", "1/2" vs "1 / 2"; and an emoji used as a noun,
+e.g. ☕ vs 🍺, counts as the same text), both replaced on update and dropped on withdrawal (a v2 is dropped
 with its v1 on any save, and counts only beside it). A capture matches a held entry by either
 hash; an entry held before DATA-387 has v1 only and is matched as before. The v1 key stays until no
 pre-DATA-387 held entry can remain (the map is bounded by count, not age), and the cap's attempt

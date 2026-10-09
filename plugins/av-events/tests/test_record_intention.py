@@ -1346,6 +1346,8 @@ NEAR_COPIES = [
     pytest.param(HELD, "\u2022 " + HELD, id="bullet"),
     pytest.param("Rent under $500 in Goa", "\u201cRent under $500 in Goa.\u201d", id="currency-kept-quotes-dropped"),
     pytest.param("Swim when it is -5", "Swim when it is \u22125.", id="minus-sign-forms"),
+    pytest.param("Swim when it is -5", "Swim when it is \u20135", id="en-dash-sign"),
+    pytest.param("Tea at 5-6 in Goa", "Tea at 5\u20136 in Goa", id="en-dash-range"),
     pytest.param("Need 1/2 kg of coffee", "Need \u00bd kg of coffee", id="vulgar-fraction-is-its-slash-form"),
 ]
 
@@ -1424,6 +1426,8 @@ DOCUMENTED_MISSES = [
     pytest.param(HELD, HELD.replace("I'd", "Id"), id="apostrophe-dropped"),
     pytest.param(HELD, "1. " + HELD, id="numbered-list-marker"),
     pytest.param("\u0130zmir trip with friends", "Izmir trip with friends", id="turkish-dotted-capital-i"),
+    pytest.param("Tea in Goa - 5pm", "Tea in Goa -5pm", id="spaced-dash-vs-sign"),
+    pytest.param("Need 1/2 kg of coffee", "Need 1 / 2 kg of coffee", id="spaced-slash-in-a-number"),
 ]
 
 
@@ -1466,10 +1470,45 @@ def test_data387_a_rewording_publishes(tctx, index, held, again):
     ("I\u00b4d I\u02b9d I\u02bcd I\u2019d", "i d i d i d i d"),
     ("clim\u200bbing\u00ad \ufeffgoa\u2060 \u2764\ufe0f", "climbing goa"),
     ("\u2764\ufe0f", ""),
+    # Fix round 2: NFKC after casefold recomposes (one NFKC leaves these decomposed).
+    ("\u01f0 \u0390", "\u01f0 \u0390"),
+    # Fix round 2: NFKC makes U+02BC of U+0149 and U+02B9 of U+0374; both are apostrophes.
+    ("\u0149 x\u0374y", "n x y"),
+    ("e\u200b\u0301", "\u00e9"),
+    ("-5 \u20135 \u22125 5\u20136 5-6", "-5 -5 -5 5 6 5 6"),
 ])
 def test_data387_the_v2_normal_form(ri, raw, norm):
     assert ri.held_norm_text_v2(raw) == norm
     assert ri.held_norm_text_v2(norm) == norm  # idempotent
+
+
+#: A mixed alphabet for the idempotence property: letters that NFKC or casefold
+#: expand or compose, combining marks, invisible characters, apostrophe forms,
+#: signs, slashes, kept symbols, Markdown, emoji, CJK, whitespace.
+_IDEMPOTENCE_ALPHABET = (
+    "aAeEiIjJnN05 \t\n.,'\"-/#>+$%@"
+    "\u0301\u0308\u030c\u0342\u0345"
+    "\u200b\u200c\u200d\ufeff\u00ad\u2060\ufe0f"
+    "\u0149\u0374\u00b4\u02b9\u02bc\u2019"
+    "\u2212\u2013\u2014\u2044\u00bd\ufb01\uff34\uff10\u3000"
+    "\u0130\u00df\u01f0\u0390\u03c2\u1e9e\u2126\u212b"
+    "\u20ac\u20b9\U0001f642\U0001f468\u6771\u3002\u300c"
+)
+
+
+def test_data387_the_v2_normal_form_is_idempotent_over_a_random_sample(ri):
+    """Fix round 2 (recheck N-R1): normalise(normalise(x)) == normalise(x), so
+    a stored v1 equal to a capture's v2 is that text's own v2 (`_held_match`)."""
+    import random
+
+    rng = random.Random(387)
+    misses = []
+    for _ in range(20_000):
+        raw = "".join(rng.choice(_IDEMPOTENCE_ALPHABET) for _ in range(rng.randint(0, 12)))
+        once = ri.held_norm_text_v2(raw)
+        if ri.held_norm_text_v2(once) != once:
+            misses.append(raw)
+    assert misses == []
 
 
 def test_data387_two_emoji_only_texts_with_vs16_do_not_match(tctx, index, ri):
