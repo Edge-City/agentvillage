@@ -4,7 +4,7 @@ For the managed MoralMod lifecycle (pre-brief assessment and durable turn submis
 
 For someone writing the turn a resident's Hermes agent sends.
 
-The file is `$HERMES_HOME/index/negotiator.ts`. The installer writes a pass-through the first time and leaves an existing file alone. Hermes reads it when the negotiator process starts. After an edit, run `hermes gateway restart`.
+The file is `$HERMES_HOME/index/negotiator.ts`. For a resident whose `AV_MORALMOD_ARM` is `on`, the installer writes a pass-through the first time and leaves an existing file alone; it never writes one for an OFF resident. Hermes reads it when the negotiator process starts. After an edit, run `hermes gateway restart`.
 
 A missing file leaves the built-in negotiator in place. A file whose default export is not a function stops that process from starting.
 
@@ -19,6 +19,8 @@ export default async function negotiate(input, next) {
 `next()` runs the built-in negotiator and returns its turn or stall. It does not send anything. Return that result, or your own. The host sends the turn.
 
 Do not import `@indexnetwork/agent`. That package is not installed on the resident.
+
+Never read, log or send `process.env` or files under `$HERMES_HOME`. The installer patches the plugin's `sidecar.py:149-150` so the process starts with only `PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_ALL`, `TZ`, `BUN_OPTIONS=--no-env-file` (Bun then loads no `.env*` from the gateway's working directory) and the plugin's `INDEX_*` names (no patch, no plugin: the failure is `sidecar`), but it still runs as the resident's own user and can read every file the gateway can, `.env` included.
 
 ## What you return
 

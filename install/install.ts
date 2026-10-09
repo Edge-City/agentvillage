@@ -17,7 +17,14 @@
  *   - `cron.script_timeout_seconds: 120` when unset, Hermes's default 3600, or lower (the proactive triggers' budgets)
  *   - `context_file_max_chars: 48000` unless already 48000 or more (Hermes's dynamic 21,600 cap truncated AGENTS.md)
  *   - Index MCP + morning digest cron (`install_index.ts`)
- *   - Index Hermes plugin (`index-network`): install or update, then enable; seed `$HERMES_HOME/index/negotiator.ts` only when absent (`install_index_plugin.ts`)
+ *   - Index Hermes plugin (`index-network`) for `AV_MORALMOD_ARM=on` residents only: installed at the
+ *     reviewed commit `INDEX_PLUGIN_REF` (no Hermes call once there), listed in `plugins.enabled`, and
+ *     `$HERMES_HOME/index/negotiator.ts` seeded only when absent; an `index-network` entry in
+ *     `plugins.disabled` is left alone; OFF drops it from `plugins.enabled` and removes the plugin's
+ *     `Index morning` cron job and launcher. A failure does not fail the
+ *     install: `index_plugin_failed` in the status file and one line,
+ *     `agentvillage-install: index_plugin_failed=<hermes|config|seed|gate|sidecar>` (`install_index_plugin.ts`);
+ *     ON patches the installed `sidecar.py` to an env allowlist first, and is not enabled when it cannot (`sidecar`)
  *   - opt-in recall skill + plugin when `AV_RECALL_ENABLED=1` (`install_recall.ts`)
  *   - opt-in approval.md gate when `AV_APPROVAL_ENABLED=1` (`install_approval.ts`):
  *     a failure there exits non-zero, because an opted-in tenant left ungated
@@ -47,10 +54,10 @@ import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 
 import { installIndex } from "./install_index";
-import { installIndexPlugin } from "./install_index_plugin";
+import { type IndexPluginFailure, indexPluginFailedLine, installIndexPlugin, recordIndexPluginStatus, setIndexPluginEnabled } from "./install_index_plugin";
 import { installEdgeos } from "./install_edgeos";
 import { safeInstallRecall, wipeRecallIndex } from "./install_recall";
-import { gateReceiptLine, runApprovalStep, stagePlugins } from "./install_approval";
+import { gateReceiptLine, lastInstallVerified, runApprovalStep, stagePlugins } from "./install_approval";
 import {
   capModelMaxTokens,
   configureAvEvents,
@@ -227,14 +234,34 @@ function copySkillFiles(): void {
   }
 }
 
-/** Clone or update `index-network`, enable it, and seed the negotiator file. A failure does not stop the install. */
-function installIndexHermesPlugin(): void {
+/**
+ * The Index Hermes plugin for ON residents (`install_index_plugin.ts`). A failure does not stop the
+ * install: it is recorded in the status file and returned for the one stdout line.
+ */
+function installIndexHermesPlugin(): IndexPluginFailure | null {
+  let failed: IndexPluginFailure | null;
   try {
-    installIndexPlugin(hermesRunner(hermesBin(), hermesExecEnv(), 120_000));
+    // 60 s: one call inside the control plane's 300 s bound on the whole install (refute S3).
+    // OV-249 (B): an ON resident gets the plugin only behind a gate this run verified.
+    failed = installIndexPlugin(hermesRunner(hermesBin(), hermesExecEnv(), 60_000), process.argv, lastInstallVerified()).failed;
   } catch (err) {
     const kind = err instanceof Error ? err.name : typeof err;
-    console.warn(`  warning: index-network plugin was not installed (${kind}) — core install continues`);
+    console.warn(`  warning: index-network plugin step failed (${kind}); core install continues`);
+    failed = "hermes";
+    // OV-249 fix round 2 (R2-N2): a throw may come before the withheld check, so an earlier
+    // enabled entry would survive; drop it, best effort (fail closed: no plugin, not an ungated one).
+    try {
+      if (setIndexPluginEnabled(false)) console.log("→ index-network plugin: removed from plugins.enabled after the failure");
+    } catch {
+      // The failure above is already reported.
+    }
   }
+  try {
+    recordIndexPluginStatus(hermesHome(), failed);
+  } catch {
+    console.warn("  warning: could not record the index-network plugin step in av-events/install-status.json");
+  }
+  return failed;
 }
 
 function restartGateway(): void {
@@ -312,12 +339,13 @@ function main(): void {
   }
   // N3: the av-approval plugin only after its hooks block is written.
   copyPluginFiles("after-approval");
-  installIndexHermesPlugin();
+  const indexPluginFailed = installIndexHermesPlugin();
 
   if (!process.argv.includes("--no-restart")) {
     restartGateway();
   }
 
+  if (indexPluginFailed) console.log(indexPluginFailedLine(indexPluginFailed));
   if (cronFailures.length > 0) {
     console.log(cronFailedLine(cronFailures.length));
     console.warn(
