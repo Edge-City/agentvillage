@@ -1633,3 +1633,52 @@ def test_sf2_with_approvals_on_a_held_silence_keeps_its_fingerprint(tctx, serve,
     [p] = serve.proposals()
     assert p["flags"]["--class"] == INFERRED and p["flags"]["--key"] == f"{INFERRED}:{held['intention_id']}"
 
+
+
+# --------------------------------------------------------------------------
+# DATA-387: the punctuation-blind held hash, through approval.md
+# --------------------------------------------------------------------------
+
+#: Punctuated, so its v1 and v2 hashes differ and only v2 catches the variants.
+HELD_P = "I'd like a climbing partner in Goa - weekends only"
+NEAR_P = "“I’d like a climbing partner in Goa — weekends only.”"
+
+
+def test_data387_with_approvals_on_a_held_text_keeps_both_hashes_and_a_near_copy_is_held(tctx, serve, index, mods):
+    held = call(tctx, {"text": HELD_P, "source": "ambient"})
+    assert held["approval_state"] == "requested"
+    e = entry(mods, held["intention_id"])
+    assert e[mods.ri.HELD_HASH_KEY] == mods.ri.held_norm_hash(HELD_P)
+    assert e[mods.ri.HELD_HASH_V2_KEY] == mods.ri.held_norm_hash_v2(HELD_P)
+    again = call(tctx, {"text": NEAR_P, "source": "message", "confirmed_in_chat": "yes"}, tool_call_id="c2")
+    assert again["published"] is False and again["publish_refused"] == "held_ambient_exists"
+    assert index.requests == []
+    [p] = serve.proposals()
+    assert p["flags"]["--key"] == f"{INFERRED}:{held['intention_id']}"
+
+
+def test_data387_a_held_silence_near_copy_is_held_through_approval(tctx, serve, index, mods):
+    held = call(tctx, {"text": HELD_P, "source": "message", "confirmed_in_chat": "silence"})
+    assert held["publish_refused"] == "held_silence"
+    again = call(tctx, {"text": HELD_P + ".", "source": "message", "confirmed_in_chat": "yes"}, tool_call_id="c2")
+    assert again["publish_refused"] == "held_ambient_exists" and index.requests == []
+
+
+def test_data387_published_on_a_grant_drops_both_hashes(tctx, serve, index, mods):
+    iid = call(tctx, {"text": HELD_P, "source": "ambient"})["intention_id"]
+    serve.grant(f"{INFERRED}:{iid}")
+    poll(mods)
+    e = entry(mods, iid)
+    assert e["published"] is True
+    assert mods.ri.HELD_HASH_KEY not in e and mods.ri.HELD_HASH_V2_KEY not in e
+    assert mods.ri.held_hash_exists(mods.ri.held_norm_hash(NEAR_P), mods.ri.held_norm_hash_v2(NEAR_P)) is False
+
+
+def test_data387_rejected_by_index_drops_both_hashes(tctx, serve, index, mods):
+    iid = call(tctx, {"text": HELD_P, "source": "ambient"})["intention_id"]
+    serve.grant(f"{INFERRED}:{iid}")
+    index.answers = [http_error(422)]
+    poll(mods)
+    e = entry(mods, iid)
+    assert e["refused"] == "rejected"
+    assert mods.ri.HELD_HASH_KEY not in e and mods.ri.HELD_HASH_V2_KEY not in e

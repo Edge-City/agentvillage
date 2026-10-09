@@ -541,7 +541,7 @@ Search, which such a gate would not see); its text, the `workspace/AGENTS.md` ro
 | `capture`, source `ambient` | none | local uuid v7, `source=ambient`, held, unless `publish=false` (kept local) |
 | `capture`, source `message`, `confirmed_in_chat=silence`, in a session that may publish | none | local uuid v7, `source=ambient`, held, `publish_refused="held_silence"`, the marker kept, unless `publish=false` (kept local) |
 | `capture`, explicit source, in a held session | none | local uuid v7, `source=ambient`, `publish_refused` `held_cron` or `held_unknown`, unless `publish=false` (kept local) |
-| `capture` that would publish, of text already held as ambient (case and whitespace ignored) | none | local uuid v7, `publish_refused="held_ambient_exists"` |
+| `capture` that would publish, of text already held as ambient (case, whitespace, punctuation, quotes, dashes and full-width forms ignored; DATA-387) | none | local uuid v7, `publish_refused="held_ambient_exists"` |
 | `update` / `withdraw` of an id it published | `PATCH /api/intents/{id} {description}` / `PATCH /api/intents/{id}/archive` (no body) | `index_intent_id` set; a failed mirror adds `publish_refused` |
 | `update` of a published id in a held session | none | `publish_refused` `held_cron` or `held_unknown`, `source=ambient` |
 | `withdraw` of a published id in a held session | none | refused (`success: false`, no event): `held_cron` or `held_unknown` |
@@ -658,8 +658,14 @@ environment. An id in a path must be a UUID or a hex short id and is URL-encoded
 No redirects, no proxies. The whole request has a 30 s deadline. `$HERMES_HOME/av-events/intentions.json` (0600, under `flock` on
 `intentions.json.lock`) records each id's `{published, source}`, `refused: rejected` for a local
 capture Index rejected, `local_reason` for a capture kept local on purpose, a `held_norm_hash` (sha256 of the
-case-folded, whitespace-collapsed text, never emitted) for held ambient entries only, replaced on
-update and dropped on withdrawal, and the cap's attempt timestamps; a corrupt file is renamed to
+case-folded, whitespace-collapsed text, never emitted) for held ambient entries only, and beside it
+`held_norm_hash_v2` (DATA-387: sha256 of the text under NFKC, case-folded, every Unicode punctuation
+and symbol character read as a space, whitespace collapsed; letters and digits of any script kept
+exactly, no fuzzy matching), both replaced on update and dropped on withdrawal (a v2 is dropped
+with its v1 on any save, and counts only beside it). A capture matches a held entry by either
+hash; an entry held before DATA-387 has v1 only and is matched as before. The v1 key stays until no
+pre-DATA-387 held entry can remain (the map is bounded by count, not age), and the cap's attempt
+timestamps; a corrupt file is renamed to
 `intentions.json.corrupt-<n>` and the map starts empty. Logs carry codes only. The observer reads
 the result's `action`, `source`, `index_intent_id` and codes only for the unprefixed overlay tool;
 a result that names `index_intent_id` decides it, null included.

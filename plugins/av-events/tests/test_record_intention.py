@@ -935,7 +935,9 @@ def test_map_is_ids_only_and_private(tctx, index, ri, home):
     # R9 revised: the normalised text's hash, and only for the held ambient entry.
     norm = hashlib.sha256(" ".join(TEXT.split()).casefold().encode()).hexdigest()
     held = [v for v in entries.values() if v["source"] == "ambient"]
-    assert held == [{"published": False, "source": "ambient", "held_norm_hash": norm}]
+    # DATA-387: and beside it the punctuation-blind v2 hash.
+    norm_v2 = hashlib.sha256(" ".join(TEXT.split()).casefold().encode()).hexdigest()  # no punctuation in TEXT
+    assert held == [{"published": False, "source": "ambient", "held_norm_hash": norm, "held_norm_hash_v2": norm_v2}]
     assert len(data["publishes"]) == 1  # one create_intent attempt, a timestamp only
     assert stat.S_IMODE(os.stat(str(path) + ".lock").st_mode) == 0o600
 
@@ -1276,6 +1278,225 @@ def test_m2_whitespace_and_case_variants_are_caught(tctx, index, variant):
 def test_m2_other_text_still_publishes(tctx, index):
     call(tctx, {"text": TEXT, "source": "ambient"})
     assert call(tctx, {"text": TEXT + " indoors", "source": "message"}, tool_call_id="c2")["published"] is True
+
+
+# DATA-387: a held text re-captured with only punctuation, quote, dash, width or
+# case differences is held_ambient_exists too (refuter SF6: the draft plus a
+# full stop captured as message published at once).
+
+#: A held text with an apostrophe and a dash, so every variant has something to vary.
+HELD = "I'd like a climbing partner in Goa - weekends only"
+
+
+def _fullwidth(text: str) -> str:
+    """ASCII to its full-width forms (NFKC maps them back), space to U+3000."""
+    return "".join("　" if c == " " else chr(ord(c) + 0xFEE0) if "!" <= c <= "~" else c for c in text)
+
+
+#: (held text, re-captured text): each pair differs only in punctuation, quotes,
+#: dashes, whitespace, case or width.
+NEAR_COPIES = [
+    pytest.param(HELD, HELD + ".", id="trailing-full-stop"),
+    pytest.param(HELD, HELD + "!", id="trailing-bang"),
+    pytest.param(HELD, HELD + "?", id="trailing-question"),
+    pytest.param(HELD, HELD + "…", id="trailing-ellipsis-char"),
+    pytest.param(HELD, HELD + "...", id="trailing-three-dots"),
+    pytest.param(HELD, HELD + " .", id="spaced-full-stop"),
+    pytest.param(HELD + ".", HELD, id="held-has-the-full-stop"),
+    pytest.param(HELD, '"' + HELD + '"', id="straight-double-quotes"),
+    pytest.param(HELD, "'" + HELD + "'", id="straight-single-quotes"),
+    pytest.param(HELD, "“" + HELD + "”", id="curly-double-quotes"),
+    pytest.param(HELD, "‘" + HELD + "’", id="curly-single-quotes"),
+    pytest.param(HELD, "«" + HELD + "»", id="guillemets"),
+    pytest.param(HELD, HELD.replace("'", "’"), id="curly-apostrophe"),
+    pytest.param(HELD.replace("'", "’"), HELD, id="held-curly-apostrophe"),
+    pytest.param(HELD, HELD.replace("'", "ʼ"), id="modifier-letter-apostrophe"),
+    pytest.param(HELD, HELD.replace(" - ", " – "), id="en-dash"),
+    pytest.param(HELD, HELD.replace(" - ", " — "), id="em-dash"),
+    pytest.param(HELD, HELD.replace(" - ", "—"), id="em-dash-unspaced"),
+    pytest.param(HELD, HELD.replace(" - ", ", "), id="comma-for-dash"),
+    pytest.param(HELD, HELD.replace(" ", "  ") + " ", id="extra-spaces"),
+    pytest.param(HELD, HELD.upper(), id="upper-case"),
+    pytest.param(HELD, HELD.lower(), id="lower-case"),
+    pytest.param(HELD, _fullwidth(HELD), id="full-width-forms"),
+    pytest.param(HELD, HELD + " \U0001f642", id="trailing-emoji"),
+    pytest.param(HELD, "“" + HELD.upper().replace("'", "’").replace(" - ", " — ") + ".”",
+                 id="all-at-once"),
+    pytest.param(TEXT, TEXT + ".", id="unpunctuated-held-plus-stop"),
+]
+
+
+@pytest.mark.parametrize("held,again", NEAR_COPIES)
+def test_data387_a_near_copy_of_a_held_text_is_held_ambient_exists(tctx, index, held, again):
+    call(tctx, {"text": held, "source": "ambient"})
+    out = call(tctx, {"text": again, "source": "message"}, tool_call_id="c2")
+    assert out["success"] is True and out["published"] is False
+    assert out["publish_refused"] == "held_ambient_exists"
+    assert index.tool_calls() == []
+
+
+@pytest.mark.parametrize("source", ["onboarding", "note"])
+def test_data387_every_explicit_source_is_checked_for_a_near_copy(tctx, index, source):
+    call(tctx, {"text": HELD, "source": "ambient"})
+    out = call(tctx, {"text": "“" + HELD + ".”", "source": source}, tool_call_id="c2")
+    assert out["publish_refused"] == "held_ambient_exists" and index.tool_calls() == []
+
+
+#: (held text, re-captured text) in other scripts: punctuation variants only.
+NON_LATIN = [
+    pytest.param("東京で週末に一緒に登山する仲間を探しています", "「東京で週末に一緒に登山する仲間を探しています！」",
+                 id="japanese-brackets-fullwidth-bang"),
+    pytest.param("東京で週末に一緒に登山する仲間を探しています。", "東京で週末に一緒に登山する仲間を探しています",
+                 id="japanese-ideographic-full-stop"),
+    pytest.param("Ищу партнёра по скалолазанию в Гоа", "«Ищу партнёра по скалолазанию в Гоа».", id="russian"),
+    pytest.param("أبحث عن شريك تسلق في غوا", "أبحث عن شريك تسلق في غوا؟", id="arabic-question-mark"),
+    pytest.param("गोवा में चढ़ाई का साथी चाहिए", "गोवा में चढ़ाई का साथी चाहिए।", id="devanagari-danda"),
+    pytest.param("Ψάχνω συνεργάτη για αναρρίχηση", "ΨΆΧΝΩ ΣΥΝΕΡΓΆΤΗ ΓΙΑ ΑΝΑΡΡΊΧΗΣΗ;", id="greek-case-and-question"),
+]
+
+
+@pytest.mark.parametrize("held,again", NON_LATIN)
+def test_data387_non_latin_punctuation_variants_are_held(tctx, index, held, again):
+    call(tctx, {"text": held, "source": "ambient"})
+    out = call(tctx, {"text": again, "source": "message"}, tool_call_id="c2")
+    assert out["publish_refused"] == "held_ambient_exists" and index.tool_calls() == []
+
+
+#: (held text, re-captured text): a real change of words, digits or letters.
+#: Nothing fuzzier than punctuation is matched; these are the resident's own words.
+REWORDINGS = [
+    pytest.param(HELD, HELD.replace("climbing", "surfing"), id="one-word-changed"),
+    pytest.param(HELD, HELD + " please", id="one-word-added"),
+    pytest.param(HELD, HELD.replace("climbing ", ""), id="one-word-dropped"),
+    pytest.param(HELD, HELD.replace("climbing", "climbin"), id="one-letter-dropped"),
+    pytest.param("Need 1.5 kg of coffee beans", "Need 15 kg of coffee beans", id="digits-kept-apart"),
+    pytest.param("Looking for a cafe to work from", "Looking for a café to work from", id="accent-is-a-letter"),
+    pytest.param("東京で週末に一緒に登山する仲間を探しています", "大阪で週末に一緒に登山する仲間を探しています",
+                 id="japanese-one-word-changed"),
+    pytest.param("Ищу партнёра по скалолазанию в Гоа", "Ищу партнёра по скалолазанию в Пуне", id="russian-one-word"),
+]
+
+
+@pytest.mark.parametrize("held,again", REWORDINGS)
+def test_data387_a_rewording_publishes(tctx, index, held, again):
+    call(tctx, {"text": held, "source": "ambient"})
+    out = call(tctx, {"text": again, "source": "message"}, tool_call_id="c2")
+    assert out["published"] is True and "publish_refused" not in out
+    assert [c["name"] for c in index.tool_calls()] == ["create_intent"]
+
+
+@pytest.mark.parametrize("raw,norm", [
+    ("“I’d like tea — at 5…”", "i d like tea at 5"),
+    ("I'd like tea - at 5.", "i d like tea at 5"),
+    ("Ｔｅａ　！", "tea"),
+    ("ﬁne  tea\t", "fine tea"),
+    ("Need 1.5 kg", "need 1 5 kg"),
+    ("café", "café"),
+    ("café", "café"),
+    ("STRASSE straße", "strasse strasse"),
+    ("price: $5 + 10%", "price 5 10"),
+    ("\U0001f642", ""),
+])
+def test_data387_the_v2_normal_form(ri, raw, norm):
+    assert ri.held_norm_text_v2(raw) == norm
+    assert ri.held_norm_text_v2(norm) == norm  # idempotent
+
+
+def test_data387_text_with_nothing_but_symbols_gets_no_v2_hash(tctx, index, ri):
+    """Two emoji-only texts are not the same want: no v2, v1 alone decides."""
+    assert ri.held_norm_hash_v2("\U0001f642!") is None
+    held = call(tctx, {"text": "\U0001f642", "source": "ambient"})
+    assert ri.HELD_HASH_V2_KEY not in ri._load_map()[held["intention_id"]]
+    assert call(tctx, {"text": "\U0001f375", "source": "message"}, tool_call_id="c2")["published"] is True
+    again = call(tctx, {"text": " \U0001f642 ", "source": "message"}, tool_call_id="c3")
+    assert again["publish_refused"] == "held_ambient_exists"
+
+
+def test_data387_the_held_entry_carries_both_hashes(tctx, index, ri):
+    held = call(tctx, {"text": HELD, "source": "ambient"})
+    stored = ri._load_map()[held["intention_id"]]
+    assert stored[ri.HELD_HASH_KEY] == ri.held_norm_hash(HELD)
+    assert stored[ri.HELD_HASH_V2_KEY] == ri.held_norm_hash_v2(HELD)
+    assert stored[ri.HELD_HASH_KEY] != stored[ri.HELD_HASH_V2_KEY]  # HELD has punctuation
+    raw = Path(ri.map_path()).read_text(encoding="utf-8")
+    assert "climbing" not in raw and ri.held_norm_text_v2(HELD) not in raw
+
+
+def _v1_only(ri, intention_id: str, text: str) -> None:
+    """A held entry as a release before DATA-387 wrote it: the v1 hash alone."""
+    ri.remember(intention_id, published=False, source="ambient", norm_hash=ri.held_norm_hash(text))
+    assert ri.HELD_HASH_V2_KEY not in ri._load_map()[intention_id]
+
+
+V1_ID = "0190aaaa-bbbb-7ccc-8ddd-eeeeffff0387"
+
+
+@pytest.mark.parametrize("again", ["  " + HELD.upper() + " ", HELD.lower(), HELD.replace(" ", "\t")])
+def test_data387_a_v1_only_entry_still_matches_a_case_and_space_variant(tctx, index, ri, again):
+    _v1_only(ri, V1_ID, HELD)
+    out = call(tctx, {"text": again, "source": "message"})
+    assert out["publish_refused"] == "held_ambient_exists" and index.tool_calls() == []
+
+
+def test_data387_a_v1_only_unpunctuated_entry_matches_the_draft_plus_a_stop(tctx, index, ri):
+    """A capture's v2 equal to a stored v1: that v1 has no punctuation left, so it is its own v2."""
+    _v1_only(ri, V1_ID, TEXT)
+    out = call(tctx, {"text": "“" + TEXT + ".”", "source": "message"})
+    assert out["publish_refused"] == "held_ambient_exists" and index.tool_calls() == []
+
+
+def test_data387_a_v1_only_punctuated_entry_is_not_rehashed(tctx, index, ri):
+    """The map keeps no text to rehash: a pre-DATA-387 held text with punctuation
+    is matched on case and whitespace only, as before, until it ages out."""
+    _v1_only(ri, V1_ID, HELD)
+    assert call(tctx, {"text": HELD + ".", "source": "message"})["published"] is True
+
+
+def test_data387_a_v2_hash_without_its_v1_is_dropped_and_never_matches(tctx, index, ri):
+    with ri._Locked():
+        entries, publishes = ri._load_locked()
+        entries[V1_ID] = {"published": False, "source": "ambient",
+                          ri.HELD_HASH_V2_KEY: ri.held_norm_hash_v2(HELD)}
+        # The save itself drops a v2 left alone.
+        ri._save_locked(entries, publishes)
+    assert ri.HELD_HASH_V2_KEY not in ri._load_map()[V1_ID]
+    assert ri.held_hash_exists(ri.held_norm_hash(HELD), ri.held_norm_hash_v2(HELD)) is False
+    assert ri._held_match({ri.HELD_HASH_V2_KEY: ri.held_norm_hash_v2(HELD)},
+                          ri.held_norm_hash(HELD), ri.held_norm_hash_v2(HELD)) is False
+
+
+def test_data387_the_event_carries_the_code_and_no_text(tctx, index, ri, av, plugin):
+    call(tctx, {"text": HELD, "source": "ambient"})
+    again = "“" + HELD + ".”"
+    out = call(tctx, {"text": again, "source": "message"}, tool_call_id="c2")
+    assert out["publish_refused"] == "held_ambient_exists"
+    events = intention_events(av, plugin)
+    assert [e["event_type"] for e in events] == ["intention.captured", "intention.captured"]
+    payload = events[1]["payload"]
+    assert payload["publish_refused"] == "held_ambient_exists" and payload["source"] == "message"
+    dumped = json.dumps(events, ensure_ascii=False)
+    for word in ("climbing", "Goa", "weekends", HELD, again, ri.held_norm_text_v2(HELD)):
+        assert word not in dumped
+    for leaked in (ri.HELD_HASH_KEY, ri.held_norm_hash(HELD), ri.held_norm_hash_v2(HELD),
+                   ri.held_norm_hash(again), ri.held_norm_hash_v2(again)):
+        assert leaked not in dumped
+    assert "climbing" not in out["message"]
+
+
+def test_data387_an_update_refreshes_both_hashes_and_a_withdrawal_drops_both(tctx, index, ri):
+    held = call(tctx, {"text": "wants a cofounder", "source": "ambient"})
+    iid = held["intention_id"]
+    call(tctx, {"action": "update", "intention_id": iid, "text": HELD}, tool_call_id="c2")
+    stored = ri._load_map()[iid]
+    assert stored[ri.HELD_HASH_KEY] == ri.held_norm_hash(HELD)
+    assert stored[ri.HELD_HASH_V2_KEY] == ri.held_norm_hash_v2(HELD)
+    blocked = call(tctx, {"text": HELD + "!", "source": "message"}, tool_call_id="c3")
+    assert blocked["publish_refused"] == "held_ambient_exists" and index.tool_calls() == []
+    assert call(tctx, {"text": "Wants a cofounder.", "source": "message"}, tool_call_id="c4")["published"] is True
+    call(tctx, {"action": "withdraw", "intention_id": iid}, tool_call_id="c5")
+    stored = ri._load_map()[iid]
+    assert ri.HELD_HASH_KEY not in stored and ri.HELD_HASH_V2_KEY not in stored
+    assert call(tctx, {"text": HELD + ".", "source": "message"}, tool_call_id="c6")["published"] is True
 
 
 # M3: a held explicit capture leaves a trace.
