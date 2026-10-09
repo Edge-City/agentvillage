@@ -173,6 +173,8 @@ tenant out of those display keys (not the `av-display` plugin entry or the
 installer's other keys). Reasoning is still stored in the agent's `state.db`; it is
 hidden, not deleted.
 
+**MoralMod arm (OV-249).** A resident whose `AV_MORALMOD_ARM` is `on` gets Index's Hermes plugin `index-network` at the commit pinned in `install/install_index_plugin.ts`, enabled, with its 16 `index_*` tools and a pass-through `index/negotiator.ts`; any other value (absent included) is off and a roll drops it from `plugins.enabled`; a failed plugin install leaves the roll going and prints `agentvillage-install: index_plugin_failed=<hermes|config|seed>` (README, "Install", step 9).
+
 **When it refuses.** A refusal changes nothing. The common ones: the tag is
 lightweight, missing or not on `main`; a branch has the tag's name; seed files
 changed without `allow_seed_change`; the control plane is unhealthy or has not

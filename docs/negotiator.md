@@ -2,7 +2,7 @@
 
 For someone writing the turn a resident's Hermes agent sends.
 
-The file is `$HERMES_HOME/index/negotiator.ts`. The installer writes a pass-through the first time and leaves an existing file alone. Hermes reads it when the negotiator process starts. After an edit, run `hermes gateway restart`.
+The file is `$HERMES_HOME/index/negotiator.ts`. For a resident whose `AV_MORALMOD_ARM` is `on`, the installer writes a pass-through the first time and leaves an existing file alone; it never writes one for an OFF resident. Hermes reads it when the negotiator process starts. After an edit, run `hermes gateway restart`.
 
 A missing file leaves the built-in negotiator in place. A file whose default export is not a function stops that process from starting.
 

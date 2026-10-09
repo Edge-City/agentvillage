@@ -17,7 +17,12 @@
  *   - `cron.script_timeout_seconds: 120` when unset, Hermes's default 3600, or lower (the proactive triggers' budgets)
  *   - `context_file_max_chars: 48000` unless already 48000 or more (Hermes's dynamic 21,600 cap truncated AGENTS.md)
  *   - Index MCP + morning digest cron (`install_index.ts`)
- *   - Index Hermes plugin (`index-network`): install or update, then enable; seed `$HERMES_HOME/index/negotiator.ts` only when absent (`install_index_plugin.ts`)
+ *   - Index Hermes plugin (`index-network`) for `AV_MORALMOD_ARM=on` residents only: installed at the
+ *     reviewed commit `INDEX_PLUGIN_REF` (no Hermes call once there), listed in `plugins.enabled`, and
+ *     `$HERMES_HOME/index/negotiator.ts` seeded only when absent; an `index-network` entry in
+ *     `plugins.disabled` is left alone; OFF drops it from `plugins.enabled`. A failure does not fail the
+ *     install: `index_plugin_failed` in the status file and one line,
+ *     `agentvillage-install: index_plugin_failed=<hermes|config|seed>` (`install_index_plugin.ts`)
  *   - opt-in recall skill + plugin when `AV_RECALL_ENABLED=1` (`install_recall.ts`)
  *   - opt-in approval.md gate when `AV_APPROVAL_ENABLED=1` (`install_approval.ts`):
  *     a failure there exits non-zero, because an opted-in tenant left ungated
@@ -47,7 +52,7 @@ import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 
 import { installIndex } from "./install_index";
-import { installIndexPlugin } from "./install_index_plugin";
+import { type IndexPluginFailure, indexPluginFailedLine, installIndexPlugin, recordIndexPluginStatus } from "./install_index_plugin";
 import { installEdgeos } from "./install_edgeos";
 import { safeInstallRecall, wipeRecallIndex } from "./install_recall";
 import { gateReceiptLine, runApprovalStep, stagePlugins } from "./install_approval";
@@ -227,14 +232,25 @@ function copySkillFiles(): void {
   }
 }
 
-/** Clone or update `index-network`, enable it, and seed the negotiator file. A failure does not stop the install. */
-function installIndexHermesPlugin(): void {
+/**
+ * The Index Hermes plugin for ON residents (`install_index_plugin.ts`). A failure does not stop the
+ * install: it is recorded in the status file and returned for the one stdout line.
+ */
+function installIndexHermesPlugin(): IndexPluginFailure | null {
+  let failed: IndexPluginFailure | null;
   try {
-    installIndexPlugin(hermesRunner(hermesBin(), hermesExecEnv(), 120_000));
+    failed = installIndexPlugin(hermesRunner(hermesBin(), hermesExecEnv(), 120_000)).failed;
   } catch (err) {
     const kind = err instanceof Error ? err.name : typeof err;
-    console.warn(`  warning: index-network plugin was not installed (${kind}) — core install continues`);
+    console.warn(`  warning: index-network plugin step failed (${kind}); core install continues`);
+    failed = "hermes";
   }
+  try {
+    recordIndexPluginStatus(hermesHome(), failed);
+  } catch {
+    console.warn("  warning: could not record the index-network plugin step in av-events/install-status.json");
+  }
+  return failed;
 }
 
 function restartGateway(): void {
@@ -312,12 +328,13 @@ function main(): void {
   }
   // N3: the av-approval plugin only after its hooks block is written.
   copyPluginFiles("after-approval");
-  installIndexHermesPlugin();
+  const indexPluginFailed = installIndexHermesPlugin();
 
   if (!process.argv.includes("--no-restart")) {
     restartGateway();
   }
 
+  if (indexPluginFailed) console.log(indexPluginFailedLine(indexPluginFailed));
   if (cronFailures.length > 0) {
     console.log(cronFailedLine(cronFailures.length));
     console.warn(
