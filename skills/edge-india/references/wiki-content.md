@@ -4,9 +4,9 @@ Source: https://edgecity.notion.site/Edge-City-India-2026-Wiki-038d45cdfc5983c7a
 
 Source type: wiki
 
-Source updated: 2026-10-08T18:23:17.233Z
+Source updated: 2026-10-09T07:08:44.292Z
 
-Last content change indexed: 2026-10-08T18:28:19.577Z
+Last content change indexed: 2026-10-09T07:13:19.143Z
 
 ---
 
@@ -171,6 +171,40 @@ TLDR;
 At Edge City India, health is the **default state** — we build environments where good food, daily movement, and meaningful connection are easy and natural.
 
 We offer a variety of health & well-being activities including run club, yoga, strength training, community hikes, meditation, sauna, and more.
+
+**Wellness Partners and Discounts**
+
+Moving, recovering, and trying something new is easy at Edge City India, thanks to a few local spots around the village. Show your Edge wristband at any of them to get the deal.
+
+- **[The Gym at the Beach](https://maps.app.goo.gl/5WDXWnJikekthNrV6)**, next to Riva
+
+  - Free for Riva guests
+
+  - Everyone else can buy day, week, or month passes, which include access to the three pools - Edge City has negotiated the ability to share these passes amongst up to 5 friends- pick your gym buddies and you can trade days!
+
+  - Classes in strength, cardio, martial arts, and yoga
+
+- **[Arti Spa](https://artispagoa.com/)**, next to The Circle in Ashvem
+
+  - Free sauna for Edge participants
+
+  - 20% off spa services
+
+  - Ice baths for ₹2,000 with a day’s notice
+
+- **[Human Potential Movement](https://maps.app.goo.gl/3pR3csApVT2hX3fL8)**, next to The Circle in Ashvem
+
+  - Edge passes from ₹400 a day, with weekly and monthly options
+
+- **Wakeboarding park**, 5 minutes from Riva
+
+  - 15% off for all Edge participants
+
+- **[Swell Cats Surf Club](https://swellcatssurfclub.com/)** (Mandrem)
+
+  - 15% off one-day lessons
+
+  - 20% off all courses
 
 ---
 
@@ -397,7 +431,7 @@ Our two hubs, Riva and The Circle, both have fast WiFi, with backup Starlink.
 
 - Password: **Edgecitygoa@2026**
 
-- **💻 Riva (co-working)**
+- **💻 Riva Resort**
 
   - Network: **Edge City**
 
@@ -421,7 +455,7 @@ Many restaurants, hotels and larger businesses accept international cards, but a
 
 Keep cash in smaller denominations for street vendors, taxis and other small transactions rather than relying on card acceptance at places.
 
-UPI is another option, but international visitors need a compatible tourist-payment service with completed verification. More details on UPI soon!\
+UPI is another option, but international visitors need a compatible tourist-payment service with completed verification. **On Sunday October 11th from 12-3pm, our partner CheqUPI will be at Check-in to help get people set up with UPI payment, please bring your passport and a picture of your visa!**
 
 ---
 

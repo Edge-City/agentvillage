@@ -150,6 +150,15 @@
       "indexed": "2026-10-08T09:58:22.660Z"
     },
     {
+      "path": "newsletter/the-first-three-days-at-edge-city.md",
+      "title": "The First Three Days at Edge City India",
+      "url": "https://edgecityindia2026.substack.com/p/the-first-three-days-at-edge-city",
+      "kind": "newsletter",
+      "published": "2026-10-09T08:38:38.000Z",
+      "hash": "daea113e252c225ce9b4477aebfe848c7158f50d620b724eaea9a2d27f7f1dda",
+      "indexed": "2026-10-09T08:43:19.724Z"
+    },
+    {
       "path": "newsletter/the-future-arrives-locally.md",
       "title": "Announcing the Ground Floor Residency",
       "url": "https://edgecityindia2026.substack.com/p/the-future-arrives-locally",
@@ -173,10 +182,9 @@
       "title": "Tickets for Edge City India 2026",
       "url": "https://edgecityindia2026.substack.com/p/tickets-for-edge-city-india-2026",
       "kind": "newsletter",
-      "published": "2026-07-24T18:09:13.000Z",
-      "author": "Taylor Lamprecht",
-      "hash": "6ad5a7230ca41208af2bb1b596d56a60bccbcec36b6106693e22be615e7bd25f",
-      "indexed": "2026-10-06T11:28:24.122Z"
+      "updated": "2026-10-06T11:28:45.503Z",
+      "hash": "29d054019a9ab7d98bf0ac7feafb546c35ade1a7429acbad4d6875df9a403011",
+      "indexed": "2026-10-09T08:43:19.724Z"
     },
     {
       "path": "newsletter/volunteer-at-edge-city-india-2026.md",
@@ -233,9 +241,9 @@
       "title": "Edge City India 2026 Wiki",
       "url": "https://edgecity.notion.site/Edge-City-India-2026-Wiki-038d45cdfc5983c7a1fe013fdc77135b",
       "kind": "wiki",
-      "updated": "2026-10-08T18:23:17.233Z",
-      "hash": "af0536e1fbcbfeaecfb8383b60ea3fffa6634797388e232c20963f435ffb1795",
-      "indexed": "2026-10-08T18:28:19.577Z"
+      "updated": "2026-10-09T07:08:44.292Z",
+      "hash": "8185da4b232b7cabf14d5fbabf6aac4817e322e175ee80f4af206ad253e38977",
+      "indexed": "2026-10-09T07:13:19.143Z"
     }
   ]
 }
