@@ -508,7 +508,8 @@ if (args[0] === "--version") { console.log("stub 0.0.0"); process.exit(0); }
 const path = ${JSON.stringify(join(dir, "cron", "jobs.json"))};
 const doc = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : { jobs: [] };
 if (args[0] === "cron" && args[1] === "create") {
-  doc.jobs.push({ id: randomBytes(6).toString("hex"), name: args[args.indexOf("--name") + 1] });
+  // --paused (Hermes v2026.9.11+, the pending alert's create since rc29): stored disabled in the one write.
+  doc.jobs.push({ id: randomBytes(6).toString("hex"), name: args[args.indexOf("--name") + 1], ...(args.includes("--paused") ? { enabled: false, state: "paused" } : {}) });
 } else if (args[0] === "cron" && args[1] === "remove") {
   doc.jobs = doc.jobs.filter((job) => job.id !== args[2]);
 }

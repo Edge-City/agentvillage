@@ -15,6 +15,7 @@ import { execFileSync } from "node:child_process";
 import {
   DIGEST_CRON_SPECS,
   PENDING_ALERT_JOB,
+  PENDING_ALERT_PAUSED_REASON,
   PENDING_ALERT_SWITCH_ENV,
   PENDING_ALERT_SWITCH_FLAG,
   installedJobsPath,
@@ -32,7 +33,7 @@ const REPO_SKILLS = join(import.meta.dir, "..", "..", "skills");
 const FAKE = join(import.meta.dir, "fake_hermes.ts");
 const SEED = "ix_pending_alert_off_seed";
 const ENV_KEYS = ["HERMES_HOME", "HERMES_BIN", "INDEX_API_KEY", "TOKEN_USAGE_AUDIT_CRON", "FAKE_HERMES_FAIL", "HERMES_TIMEZONE",
-  "PENDING_ALERT_ENABLED", "PENDING_ALERT_CRON"];
+  "PENDING_ALERT_ENABLED", "PENDING_ALERT_CRON", "FAKE_HERMES_HANG", "FAKE_HERMES_NOOP", "FAKE_HERMES_PAUSED"];
 const savedEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
 
 let home: string;
@@ -108,16 +109,35 @@ function installedIds(): string[] {
 
 /** A roll (the installer's reconcile), quietly, with this install's argv; returns the failed names. */
 function roll(...args: string[]): string[] {
+  return rollWithTimeout(undefined, ...args);
+}
+
+/** A roll whose pending-alert Hermes calls are killed after `timeoutMs` (undefined: the installer's own). */
+function rollWithTimeout(timeoutMs: number | undefined, ...args: string[]): string[] {
   const log = console.log;
   const warn = console.warn;
   console.log = () => {};
   console.warn = () => {};
   try {
-    return reconcileDigestCronJobs({ ...process.env }, ["bun", "install.ts", ...args]);
+    return reconcileDigestCronJobs({ ...process.env }, ["bun", "install.ts", ...args], timeoutMs);
   } finally {
     console.log = log;
     console.warn = warn;
   }
+}
+
+/** The `cron create` call for the pending alert, as Hermes was given it. */
+function pendingCreate(): string[] | undefined {
+  return calls().find((argv) => argv[0] === "cron" && argv[1] === "create" && argv.includes(PENDING_ALERT_JOB));
+}
+
+/** A box whose pending alert runs and was never settled (a main build after fbba5d65): created by the switch, its record removed. */
+function runningUnsettled(): string {
+  roll(PENDING_ALERT_SWITCH_FLAG, "true");
+  rmSync(pendingAlertSettledPath(home));
+  expect(storedJobEnabled(pending())).toBe(true);
+  clearCalls();
+  return pending().id;
 }
 
 function seedHolds(holds: Record<string, string>, by: Record<string, string>): void {
@@ -126,12 +146,17 @@ function seedHolds(holds: Record<string, string>, by: Record<string, string>): v
 }
 
 describe("rc29 installs the hourly pending alert present and paused", () => {
-  test("a fresh install (a future box, or an rc28 box where the job does not exist yet) creates it, then pauses it; its id is recorded", () => {
+  test("a fresh install (a future box, or an rc28 box where the job does not exist yet) creates it paused in one write; its id is recorded", () => {
     expect(roll()).toEqual([]);
     const job = pending();
-    expect({ enabled: job.enabled, state: job.state, paused: Boolean(job.paused_at) }).toEqual({ enabled: false, state: "paused", paused: true });
+    expect({ enabled: job.enabled, state: job.state, paused: Boolean(job.paused_at), next: job.next_run_at }).toEqual({ enabled: false, state: "paused", paused: true, next: null });
     expect(storedJobEnabled(job)).toBe(false);
-    expect(stateCalls(job.id)).toEqual([["cron", "pause", job.id]]);
+    const create = pendingCreate()!;
+    expect(create).toContain("--paused");
+    expect(create[create.indexOf("--paused-reason") + 1]).toBe(PENDING_ALERT_PAUSED_REASON);
+    expect(job.paused_reason).toBe(PENDING_ALERT_PAUSED_REASON);
+    // No second call: there is no moment it exists running.
+    expect(stateCalls(job.id)).toEqual([]);
     // Still installed and still ours: av-events classifies its cron.run rows by this id.
     expect(installedIds()).toContain(job.id);
     expect(readPendingAlertSettled(home)).toBe(job.id);
@@ -178,17 +203,14 @@ describe("rc29 installs the hourly pending alert present and paused", () => {
       expect({ name: spec.name, deliver: stored.deliver === "telegram" }).toEqual({ name: spec.name, deliver: spec.deliver });
       expect({ name: spec.name, enabled: storedJobEnabled(stored) }).toEqual({ name: spec.name, enabled: spec.name !== PENDING_ALERT_JOB });
     }
-    // The only pause a roll makes is the pending alert's.
-    expect(calls().filter((argv) => argv[1] === "pause" || argv[1] === "resume")).toEqual([["cron", "pause", pending().id]]);
+    // A roll pauses or resumes nothing; only the pending alert's create carries --paused.
+    expect(calls().filter((argv) => argv[1] === "pause" || argv[1] === "resume")).toEqual([]);
+    expect(calls().filter((argv) => argv[1] === "create" && argv.includes("--paused")).map((argv) => argv[argv.indexOf("--name") + 1])).toEqual([PENDING_ALERT_JOB]);
     expect(installedIds().sort()).toEqual(jobs().map((entry) => entry.id).sort());
   });
 
   test("a box whose job an earlier main build created running is paused once by the first rc29 roll, then left alone", () => {
-    roll(PENDING_ALERT_SWITCH_FLAG, "true");
-    const id = pending().id;
-    rmSync(pendingAlertSettledPath(home));
-    expect(storedJobEnabled(pending())).toBe(true);
-    clearCalls();
+    const id = runningUnsettled();
     roll();
     expect(stateCalls(id)).toEqual([["cron", "pause", id]]);
     expect(storedJobEnabled(pending())).toBe(false);
@@ -204,6 +226,7 @@ describe("the switch: PENDING_ALERT_ENABLED", () => {
     expect(roll()).toEqual([]);
     const id = pending().id;
     expect(storedJobEnabled(pending())).toBe(true);
+    expect(pendingCreate()).not.toContain("--paused");
     expect(stateCalls(id)).toEqual([]);
     clearCalls();
     roll();
@@ -256,6 +279,16 @@ describe("the switch: PENDING_ALERT_ENABLED", () => {
     expect(stateCalls(id)).toEqual([]);
   });
 
+  test("refuter P3: the `=` form on a roll: --pending-alert-enabled=false pauses a resumed job, =true resumes it", () => {
+    roll();
+    const id = pending().id;
+    execFileSync(bin, ["cron", "resume", id], { stdio: "ignore", env: process.env });
+    roll("--pending-alert-enabled=false");
+    expect(storedJobEnabled(pending())).toBe(false);
+    roll("--pending-alert-enabled=true");
+    expect(storedJobEnabled(pending())).toBe(true);
+  });
+
   test("an admin's resume without the switch (jobs.ts set --enabled true: `hermes cron resume`) survives every later roll", () => {
     roll();
     const id = pending().id;
@@ -303,14 +336,99 @@ describe("the switch: PENDING_ALERT_ENABLED", () => {
     expect(storedJobEnabled(pending())).toBe(true);
   });
 
-  test("a failed pause is named as a failed job, nothing is recorded, and the next roll pauses it", () => {
+  test("a corrupt settled record over a running job: paused (it reads as no record)", () => {
+    roll();
+    const id = pending().id;
+    execFileSync(bin, ["cron", "resume", id], { stdio: "ignore", env: process.env });
+    for (const text of ["{corrupt", '{"v":1,"settled":"NOT-AN-ID"}', `{"v":2,"settled":"${id}"}`]) {
+      writeFileSync(pendingAlertSettledPath(home), text);
+      clearCalls();
+      expect(roll()).toEqual([]);
+      expect({ text, enabled: storedJobEnabled(pending()), calls: stateCalls(id) }).toEqual({ text, enabled: false, calls: [["cron", "pause", id]] });
+      execFileSync(bin, ["cron", "resume", id], { stdio: "ignore", env: process.env });
+    }
+  });
+});
+
+describe("never left running: a job that should be off and cannot be confirmed paused is removed", () => {
+  test("refuter P1: a fresh install whose `cron pause` would fail: created paused, no pause call, nothing running", () => {
+    process.env.FAKE_HERMES_FAIL = "pause";
+    expect(roll()).toEqual([]);
+    expect(jobs().filter((entry) => entry.name === PENDING_ALERT_JOB && storedJobEnabled(entry))).toEqual([]);
+    expect(storedJobEnabled(pending())).toBe(false);
+  });
+
+  test("a Hermes before --paused refuses the create: no pending job at all (off), named as failed; the other jobs are created", () => {
+    process.env.FAKE_HERMES_PAUSED = "refuse";
+    expect(roll()).toEqual([PENDING_ALERT_JOB]);
+    expect(jobs().filter((entry) => entry.name === PENDING_ALERT_JOB)).toEqual([]);
+    expect(jobs().length).toBe(DIGEST_CRON_SPECS.length - 2);
+    expect(jobs().every((entry) => storedJobEnabled(entry))).toBe(true);
+    delete process.env.FAKE_HERMES_PAUSED;
+    expect(roll()).toEqual([]);
+    expect(storedJobEnabled(pending())).toBe(false);
+  });
+
+  test("a Hermes that takes the create and not --paused: the job read back running is removed, named as failed, and not recorded", () => {
+    process.env.FAKE_HERMES_PAUSED = "ignore";
+    expect(roll()).toEqual([PENDING_ALERT_JOB]);
+    expect(jobs().filter((entry) => entry.name === PENDING_ALERT_JOB)).toEqual([]);
+    expect(installedIds().sort()).toEqual(jobs().map((entry) => entry.id).sort());
+    expect(existsSync(pendingAlertSettledPath(home))).toBe(false);
+  });
+
+  test("a failed pause of an existing running job: removed, named as failed, nothing recorded; the next roll creates it paused", () => {
+    const id = runningUnsettled();
     process.env.FAKE_HERMES_FAIL = "pause";
     expect(roll()).toEqual([PENDING_ALERT_JOB]);
-    expect(storedJobEnabled(pending())).toBe(true);
+    expect(jobs().filter((entry) => entry.name === PENDING_ALERT_JOB)).toEqual([]);
+    expect(stateCalls(id)).toEqual([["cron", "pause", id]]);
+    expect(calls().filter((argv) => argv[1] === "remove")).toEqual([["cron", "remove", id]]);
+    expect(installedIds()).not.toContain(id);
     expect(existsSync(pendingAlertSettledPath(home))).toBe(false);
     delete process.env.FAKE_HERMES_FAIL;
     expect(roll()).toEqual([]);
     expect(storedJobEnabled(pending())).toBe(false);
+    expect(pending().id).not.toBe(id);
+    expect(installedIds()).toContain(pending().id);
+  });
+
+  test("a pause that exits 0 and saves nothing (no read-back would trust it): removed", () => {
+    const id = runningUnsettled();
+    process.env.FAKE_HERMES_NOOP = "pause";
+    expect(roll()).toEqual([PENDING_ALERT_JOB]);
+    expect(jobs().filter((entry) => entry.name === PENDING_ALERT_JOB)).toEqual([]);
+    expect(calls().filter((argv) => argv[1] === "remove")).toEqual([["cron", "remove", id]]);
+  });
+
+  test("a hung pause is killed at the timeout, and the job removed", () => {
+    const id = runningUnsettled();
+    process.env.FAKE_HERMES_HANG = "pause";
+    const started = Date.now();
+    expect(rollWithTimeout(1_500)).toEqual([PENDING_ALERT_JOB]);
+    expect(Date.now() - started).toBeLessThan(20_000);
+    expect(jobs().filter((entry) => entry.name === PENDING_ALERT_JOB)).toEqual([]);
+    expect(calls().filter((argv) => argv[1] === "remove")).toEqual([["cron", "remove", id]]);
+  }, 30_000);
+
+  test("a failed remove after a failed pause: named as failed, the job reported as possibly running", () => {
+    const id = runningUnsettled();
+    process.env.FAKE_HERMES_NOOP = "pause";
+    process.env.FAKE_HERMES_FAIL = "remove";
+    expect(roll()).toEqual([PENDING_ALERT_JOB]);
+    expect(pending().id).toBe(id);
+    expect(existsSync(pendingAlertSettledPath(home))).toBe(false);
+  });
+
+  test("a failed resume (switch on) leaves it paused and named as failed; the next roll resumes it", () => {
+    roll();
+    process.env.PENDING_ALERT_ENABLED = "true";
+    process.env.FAKE_HERMES_FAIL = "resume";
+    expect(roll()).toEqual([PENDING_ALERT_JOB]);
+    expect(storedJobEnabled(pending())).toBe(false);
+    delete process.env.FAKE_HERMES_FAIL;
+    expect(roll()).toEqual([]);
+    expect(storedJobEnabled(pending())).toBe(true);
   });
 });
 
@@ -330,6 +448,18 @@ describe("the switch and the rule, read directly", () => {
       console.warn = warn;
     }
     expect(pendingAlertSwitch(argv("false"), { PENDING_ALERT_ENABLED: "true" })).toBe("off");
+    // readFlag's `=` form too.
+    expect(pendingAlertSwitch(["bun", "install.ts", "--pending-alert-enabled=true"], {})).toBe("on");
+    expect(pendingAlertSwitch(["bun", "install.ts", "--pending-alert-enabled=false"], { PENDING_ALERT_ENABLED: "true" })).toBe("off");
+    // A flag with no value is ignored (with a warning), never an exit: the environment decides.
+    const quiet = console.warn;
+    console.warn = () => {};
+    try {
+      expect(pendingAlertSwitch(["bun", "install.ts", PENDING_ALERT_SWITCH_FLAG], { PENDING_ALERT_ENABLED: "true" })).toBe("on");
+      expect(pendingAlertSwitch(["bun", "install.ts", PENDING_ALERT_SWITCH_FLAG, "--dev"], {})).toBe("unset");
+    } finally {
+      console.warn = quiet;
+    }
     writeFileSync(join(home, ".env"), "PENDING_ALERT_ENABLED='true' # turned on\n");
     expect(pendingAlertSwitch([], {})).toBe("on");
     expect(pendingAlertSwitch([], { PENDING_ALERT_ENABLED: "" })).toBe("unset");

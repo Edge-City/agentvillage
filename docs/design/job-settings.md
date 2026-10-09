@@ -712,9 +712,10 @@ jobs are admin-managed, by the rule `list` reports (`scheduleAdminManaged`, §1)
 | A fleet change to a default window or zone | reaches every job without an override (defaults live in code, not the file) | `DEFAULT_WINDOWS`, job-settings.ts:65 |
 
 **The pending alert ships paused (rc29, Carter's ruling on DATA-430).** `Edge — pending opportunity`
-is created like every other job, then paused (`hermes cron pause <id>`), and its id is recorded in
+is created with `hermes cron create --paused` (stored disabled in the create's one write, `next_run_at`
+null; Hermes v2026.9.11 and later), so it never exists running, and its id is recorded in
 `installed_jobs.json` as before. A roll reads the switch `PENDING_ALERT_ENABLED` (the flag
-`--pending-alert-enabled true|false`, else the roll's environment, else `$HERMES_HOME/.env`) and
+`--pending-alert-enabled true|false` or `=true|false`, else the roll's environment, else `$HERMES_HOME/.env`) and
 does one of three things (`pendingAlertStep`):
 
 | Switch | A running job | A paused job |
@@ -724,13 +725,26 @@ does one of three things (`pendingAlertStep`):
 | `false` | paused | left paused |
 
 The id the installer has settled is `av-events/pending-alert.json` (`{"v":1,"settled":"<id>"}`), so
-with the switch unset a roll never pauses a job an admin turned on with `set --job pending --enabled
-true`, nor one the resident resumed from chat: that resume survives every later roll, as every
-other job's does. An explicit `false` is the operator's own desired state and wins on each roll that
-carries it; the control plane's job-settings apply after the roll may then resume it again (a
-desired `enabled: true`), so leave the switch unset when the settings own the job. `PENDING_ALERT_CRON`
-moves the schedule only. A failed pause or resume is named among the roll's failed jobs and is not
-recorded, so the next roll tries again.
+with the switch unset a roll never pauses a job turned on with `bun install/jobs.ts set --job pending
+--enabled true` inside the tenant (a sandbox exec), nor one resumed by hand: that resume survives every
+later roll, as every other job's does. An explicit `false` is the operator's own desired state and wins
+on each roll that carries it. Today the switch and that command are the only ways to turn it on: the
+control plane's job-settings route does not know the `pending` key (`PUT /tenants/:id/jobs/pending`
+answers `404 job_not_found`), and its job routes (cp#87) do not list the job. `PENDING_ALERT_CRON` moves
+the schedule only.
+
+**Never left running.** Every Hermes call here (pause, resume, remove) is killed after
+`HERMES_TIMEOUT_MS` (60 s). A pause that fails, times out or does not read back paused, and a new job
+that reads back running (a Hermes that took the create but not `--paused`), is answered by
+`hermes cron remove <id>`: the job is named among the roll's failed jobs, its id leaves
+`installed_jobs.json`, and the next roll creates it paused. A Hermes older than v2026.9.11 refuses
+`--paused`, so the create fails and no job exists, which is still off. A failed resume leaves the job
+paused and named as failed. Nothing is recorded unless the job settled, so the next roll tries again.
+
+**The resident.** tools.md tells the agent the Pending opportunity message is off unless the Edge City
+team turned it on: it may stop it, never restart it, and leaves it out of "turn everything back on".
+The pause script itself still resumes it when run (the installer's pause records no hold, so that the
+switch can still turn it on).
 
 Tests cover two consecutive rolls for all of these. They run end to end against a stand-in Hermes
 that keeps `jobs.json`: `install/tests/job_commands.test.ts`, "what a roll keeps".

@@ -46,8 +46,10 @@
  *     touched).
  *
  * DATA-430 follow-up (Carter's ruling, rc29): `Edge — pending opportunity` is
- * installed PRESENT and PAUSED (Hermes's pause state, `enabled: false`), and
- * its id is still recorded in installed_jobs.json. The switch is
+ * installed PRESENT and PAUSED (`hermes cron create --paused`: `enabled:
+ * false` in the create's one write), and its id is still recorded in
+ * installed_jobs.json. A job that should be off and cannot be confirmed
+ * paused is removed, never left running (the next roll creates it paused). The switch is
  * PENDING_ALERT_ENABLED (`--pending-alert-enabled true|false`, else the
  * process environment, else `$HERMES_HOME/.env`): `true` resumes it unless a
  * hold in av-events/job-holds.json keeps it paused (a resident's, an admin's
@@ -91,7 +93,7 @@ import { readFlag } from "./args";
 import { dotenvFileValue, dumpConfig } from "./config";
 import { upsertEnvVar } from "./env";
 import { hermesBin, hermesExecEnv } from "./hermes_cli";
-import { hermesAvailable } from "../skills/index-network/scripts/hermes-cli";
+import { HERMES_TIMEOUT_MS, HermesTimeout, hermesAvailable, hermesRunner } from "../skills/index-network/scripts/hermes-cli";
 import { HERMES_JOB_ID_RE, installedJobsPath, missedSlot, rawSchedule, storedJobEnabled } from "../skills/index-network/scripts/message-labels";
 import { type HoldsRead, readHolds } from "../skills/index-network/scripts/pause-job";
 import { CRON_NAME_PREFIX, hermesHome } from "./paths";
@@ -675,8 +677,31 @@ const SWITCH_ON_WORDS = new Set(["1", "true", "yes", "on", "enabled"]);
 const SWITCH_OFF_WORDS = new Set(["0", "false", "no", "off", "disabled"]);
 
 /**
- * The switch as this install reads it: `--pending-alert-enabled <value>`,
- * else PENDING_ALERT_ENABLED in the environment (present, even blank, it is
+ * The flag's value on this install's command line, in install/args.ts
+ * readFlag's two forms (`--pending-alert-enabled <v>` and
+ * `--pending-alert-enabled=<v>`), read from `argv` rather than process.argv.
+ * Unlike readFlag it never exits: a flag with no value is warned about and
+ * counts as absent, so a roll is never cut short half-way through the jobs.
+ */
+function switchFlagValue(argv: string[]): string | undefined {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (arg === PENDING_ALERT_SWITCH_FLAG) {
+      const next = argv[i + 1];
+      if (next === undefined || next.startsWith("--")) {
+        console.warn(`  warning: ${PENDING_ALERT_SWITCH_FLAG} has no value; it is ignored`);
+        return undefined;
+      }
+      return next;
+    }
+    if (arg.startsWith(`${PENDING_ALERT_SWITCH_FLAG}=`)) return arg.slice(PENDING_ALERT_SWITCH_FLAG.length + 1);
+  }
+  return undefined;
+}
+
+/**
+ * The switch as this install reads it: `--pending-alert-enabled <value>` (or
+ * `=<value>`), else PENDING_ALERT_ENABLED in the environment (present, even blank, it is
  * authoritative, as config.ts envOrDotenv), else its last assignment in
  * `$HERMES_HOME/.env`. `true`/`on`/`1`/`yes`/`enabled` is on,
  * `false`/`off`/`0`/`no`/`disabled` is off, blank or absent is unset. Any
@@ -687,8 +712,7 @@ export function pendingAlertSwitch(
   argv: string[] = process.argv,
   env: NodeJS.ProcessEnv = process.env,
 ): PendingAlertSwitch {
-  const flagIdx = argv.indexOf(PENDING_ALERT_SWITCH_FLAG);
-  const fromFlag = flagIdx >= 0 ? argv[flagIdx + 1] : undefined;
+  const fromFlag = switchFlagValue(argv);
   const raw = fromFlag ?? (env[PENDING_ALERT_SWITCH_ENV] !== undefined ? env[PENDING_ALERT_SWITCH_ENV] : dotenvFileValue(PENDING_ALERT_SWITCH_ENV));
   const word = (raw ?? "").trim().toLowerCase();
   if (!word) return "unset";
@@ -766,49 +790,100 @@ export function pendingAlertStep(
   return job.enabled ? "pause" : "keep";
 }
 
+/** The reason Hermes stores on the job it creates paused (`--paused-reason`). */
+export const PENDING_ALERT_PAUSED_REASON = "Off by default since rc29; PENDING_ALERT_ENABLED=true turns it on";
+
 /**
- * Settle the pending alert job's pause state for this install (pendingAlertStep),
- * read it back, and record its id as settled. A resume whose next run is
- * already due re-applies the stored schedule, so the job does not fire at
- * the next tick (as pause-job.ts and `jobs.ts set --enabled true`). Returns
- * false when the pause or resume failed or did not read back: the caller
- * counts the job as failed, and nothing is recorded, so the next roll tries
- * again.
+ * The flags the pending alert's `cron create` adds: unless the switch is on,
+ * `--paused` (Hermes v2026.9.11 and later, the cp's MIN_HERMES_TAG v2026.9.21
+ * included: `enabled: false`, `state: paused`, `next_run_at: null`, in the
+ * create's one write), so the job never exists running. An older Hermes
+ * refuses the flag, and then no job exists: still off.
  */
-function settlePendingAlert(job: StoredCronJob, sw: PendingAlertSwitch, bin: string, env: NodeJS.ProcessEnv, home: string): boolean {
+export function pendingAlertCreateFlags(sw: PendingAlertSwitch): string[] {
+  return sw === "on" ? [] : ["--paused", "--paused-reason", PENDING_ALERT_PAUSED_REASON];
+}
+
+/** How settling went: `removed` means the job could not be confirmed paused and was removed (the next roll recreates it paused). */
+export type PendingAlertSettled = "ok" | "failed" | "removed";
+
+/**
+ * Remove a pending alert job that should be off and could not be confirmed
+ * paused: a job that may be running is never left in place. `removed` when
+ * it is gone from jobs.json afterwards, else `failed`.
+ */
+function removePendingAlert(id: string, run: (args: string[]) => void): PendingAlertSettled {
+  try {
+    run(["cron", "remove", id]);
+  } catch (err) {
+    console.warn(`  warning: could not remove cron "${PENDING_ALERT_JOB}"${err instanceof HermesTimeout ? " (timed out)" : ""}; it may be running`);
+    return "failed";
+  }
+  if (readCronJobs().some((entry) => entry.id === id)) {
+    console.warn(`  warning: cron "${PENDING_ALERT_JOB}" is still there after its removal; it may be running`);
+    return "failed";
+  }
+  console.warn(`  warning: removed cron "${PENDING_ALERT_JOB}": it could not be paused; the next roll creates it paused`);
+  return "removed";
+}
+
+/**
+ * Settle the pending alert job's pause state for this install
+ * (pendingAlertStep), read it back, and record its id as settled. Every
+ * Hermes call is killed at the timeout (`run`, hermesRunner).
+ *   - A pause that fails, times out or does not read back paused: the job is
+ *     removed (removePendingAlert), never left running until the next roll.
+ *   - A resume that fails or does not read back: `failed`; the job is left
+ *     as it is (paused, unless Hermes saved the resume and then failed).
+ *   - A resume whose next run is already due re-applies the stored schedule,
+ *     so the job does not fire at the next tick (as pause-job.ts and
+ *     `jobs.ts set --enabled true`).
+ * Nothing is recorded unless the result is `ok`, so the next roll tries again.
+ */
+function settlePendingAlert(job: StoredCronJob, sw: PendingAlertSwitch, run: (args: string[]) => void, home: string): PendingAlertSettled {
   const settled = readPendingAlertSettled(home);
   const step = pendingAlertStep(sw, { id: job.id, enabled: storedJobEnabled(job) }, settled, () => readHolds(home));
-  if (step === "pause" || step === "resume") {
+  if (step === "pause") {
+    let paused = true;
     try {
-      execFileSync(bin, ["cron", step, job.id], { stdio: ["ignore", "ignore", "inherit"], env });
-    } catch {
-      console.warn(`  warning: could not ${step} cron "${PENDING_ALERT_JOB}"`);
-      return false;
+      run(["cron", "pause", job.id]);
+    } catch (err) {
+      console.warn(`  warning: could not pause cron "${PENDING_ALERT_JOB}"${err instanceof HermesTimeout ? " (timed out)" : ""}`);
+      paused = false;
+    }
+    const now = paused ? readCronJobs().find((entry) => entry.id === job.id) : undefined;
+    if (!now || storedJobEnabled(now)) {
+      if (paused) console.warn(`  warning: cron "${PENDING_ALERT_JOB}" did not read back paused`);
+      return removePendingAlert(job.id, run);
+    }
+    console.log(`→ cron "${PENDING_ALERT_JOB}" paused (${sw === "off" ? `${PENDING_ALERT_SWITCH_ENV}=false` : `off in rc29; ${PENDING_ALERT_SWITCH_ENV}=true turns it on`})`);
+  } else if (step === "resume") {
+    try {
+      run(["cron", "resume", job.id]);
+    } catch (err) {
+      console.warn(`  warning: could not resume cron "${PENDING_ALERT_JOB}"${err instanceof HermesTimeout ? " (timed out)" : ""}`);
+      return "failed";
     }
     const now = readCronJobs().find((entry) => entry.id === job.id);
-    if (!now || storedJobEnabled(now) !== (step === "resume")) {
-      console.warn(`  warning: cron "${PENDING_ALERT_JOB}" did not read back ${step === "resume" ? "running" : "paused"}`);
-      return false;
+    if (!now || !storedJobEnabled(now)) {
+      console.warn(`  warning: cron "${PENDING_ALERT_JOB}" did not read back running`);
+      return "failed";
     }
-    if (step === "resume" && missedSlot(now, new Date()) && isValidCron(rawSchedule(now))) {
+    if (missedSlot(now, new Date()) && isValidCron(rawSchedule(now))) {
       try {
-        execFileSync(bin, cronEditArgs(job.id, { schedule: rawSchedule(now) }), { stdio: ["ignore", "ignore", "inherit"], env });
+        run(cronEditArgs(job.id, { schedule: rawSchedule(now) }));
       } catch {
         console.warn(`  warning: could not re-anchor cron "${PENDING_ALERT_JOB}"; a missed run may fire at the next tick`);
       }
     }
-    console.log(
-      step === "resume"
-        ? `→ cron "${PENDING_ALERT_JOB}" on (${PENDING_ALERT_SWITCH_ENV}=true)`
-        : `→ cron "${PENDING_ALERT_JOB}" paused (${sw === "off" ? `${PENDING_ALERT_SWITCH_ENV}=false` : `off in rc29; ${PENDING_ALERT_SWITCH_ENV}=true turns it on`})`,
-    );
+    console.log(`→ cron "${PENDING_ALERT_JOB}" on (${PENDING_ALERT_SWITCH_ENV}=true)`);
   } else if (step === "held") {
     console.log(`→ cron "${PENDING_ALERT_JOB}" left paused: a hold keeps it (av-events/job-holds.json)`);
   }
   if (settled !== job.id && !writePendingAlertSettled(home, job.id)) {
     console.warn(`  warning: could not record "${PENDING_ALERT_JOB}" as settled; the next roll may pause it again`);
   }
-  return true;
+  return "ok";
 }
 
 export function readCronPromptBody(spec: DigestCronSpec, promptsDir: string): string {
@@ -893,6 +968,8 @@ export function reconcileOrder(specs: DigestCronSpec[]): DigestCronSpec[] {
 export function reconcileDigestCronJobs(
   env: NodeJS.ProcessEnv = hermesExecEnv(),
   argv: string[] = process.argv,
+  /** The kill timeout of the pending alert's pause, resume and remove (tests pass a short one). */
+  hermesTimeoutMs: number = HERMES_TIMEOUT_MS,
 ): string[] {
   const home = hermesHome();
   const promptsDir = join(home, "skills");
@@ -917,6 +994,13 @@ export function reconcileDigestCronJobs(
   const specNames = new Set(activeSpecs.map((s) => s.name));
   // rc29: the hourly pending alert ships off; this install's switch for it (pendingAlertStep).
   const pendingSwitch = pendingAlertSwitch(argv, env);
+  const runHermes = hermesRunner(bin, env, hermesTimeoutMs);
+  /** One settle result: a failure is named; a removed job's id leaves `installed`. */
+  const settledPending = (result: PendingAlertSettled, id: string): void => {
+    if (result !== "ok") failed.push(PENDING_ALERT_JOB);
+    const at = installed.indexOf(id);
+    if (result === "removed" && at >= 0) installed.splice(at, 1);
+  };
   // J2: a job added from a current template is kept; a retired template's job is removed below.
   const templateNames = new Map(TEMPLATE_NAMES.map((template) => [templateJobName(template), template] as const));
   // J2: a default job with a settings entry, or named in the file's
@@ -997,7 +1081,12 @@ export function reconcileDigestCronJobs(
     if (job) {
       installed.push(job.id);
       // rc29: the pending alert's pause state, before the shape edit (which keeps it).
-      if (spec.name === PENDING_ALERT_JOB && !settlePendingAlert(job, pendingSwitch, bin, env, home)) failed.push(spec.name);
+      if (spec.name === PENDING_ALERT_JOB) {
+        const result = settlePendingAlert(job, pendingSwitch, runHermes, home);
+        settledPending(result, job.id);
+        // Removed (it could not be confirmed paused): nothing left to edit; the next roll creates it paused.
+        if (result === "removed") continue;
+      }
       // Migrate only jobs still sitting on the old synchronized default
       // (e.g. "0 8 * * *") to their staggered slot. Anything else is a
       // deliberate per-tenant schedule and is preserved. An admin-managed job
@@ -1043,7 +1132,10 @@ export function reconcileDigestCronJobs(
     console.log(`→ installing cron "${spec.name}" (${schedule})${suffix}`);
     let createFailed = false;
     try {
-      execFileSync(bin, cronCreateArgs(resolved, promptBody, home), {
+      const createArgs = cronCreateArgs(resolved, promptBody, home);
+      // rc29: the pending alert is created paused in the one write, unless the switch is on.
+      if (spec.name === PENDING_ALERT_JOB) createArgs.push(...pendingAlertCreateFlags(pendingSwitch));
+      execFileSync(bin, createArgs, {
         stdio: ["ignore", "ignore", "inherit"],
         env,
       });
@@ -1054,13 +1146,19 @@ export function reconcileDigestCronJobs(
     }
     const created = createdId(spec.name);
     if (created) installed.push(created);
-    // rc29: Hermes creates every job running; the pending alert is then paused
-    // (or left on by the switch). A created job that cannot be read back
-    // cannot be paused, so it counts as failed.
+    // rc29: the pending alert was created paused (or running, by the switch).
+    // Read back: one that should be off and reads back running (a Hermes that
+    // took the create and not the pause) is removed at once; one that cannot
+    // be read back at all counts as failed.
     if (spec.name === PENDING_ALERT_JOB) {
       const fresh = created === undefined ? undefined : readCronJobs().find((entry) => entry.id === created);
       if (fresh) {
-        if (!settlePendingAlert(fresh, pendingSwitch, bin, env, home)) failed.push(spec.name);
+        if (pendingSwitch !== "on" && storedJobEnabled(fresh)) {
+          console.warn(`  warning: cron "${spec.name}" was created running`);
+          settledPending(removePendingAlert(fresh.id, runHermes), fresh.id);
+        } else {
+          settledPending(settlePendingAlert(fresh, pendingSwitch, runHermes, home), fresh.id);
+        }
       } else if (!createFailed) {
         console.warn(`  warning: could not read back cron "${spec.name}" — it may be running`);
         failed.push(spec.name);
