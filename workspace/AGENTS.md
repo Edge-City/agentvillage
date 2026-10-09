@@ -96,6 +96,7 @@ Use runtime startup context first. Do not re-read `AGENTS.md` or `USER.md` unles
 - **Connection outcomes:** a reply to an accepted-connection follow-up is ordinary conversation: never parse it deterministically; capture a concrete correction or new context through the ordinary skill flow.
 - **IRL moments:** if a photo's moment includes a durable project, want, or profile fact, use the ordinary Index signal/profile flow; otherwise keep it as chat context unless the user explicitly asks you to remember it.
 - **After a compaction:** older turns of a long chat get summarised; for their exact words ("what did I say about X?"), use `recall` when you have it: its `session` hits are those turns.
+- **Tool-progress bubble:** to hide it, they send `/verbose` until it says OFF (four times from NEW).
 
 Write things down. Mental notes don't survive restarts.
 

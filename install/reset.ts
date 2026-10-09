@@ -23,6 +23,7 @@ import {
   skillsDir,
   targetWorkspace,
 } from "./paths";
+import { dumpConfig } from "./config";
 import { RECALL_SKILL, resetRecall } from "./install_recall";
 import { describeResult, regenerateKnowledgeIndex } from "./knowledge-index";
 
@@ -97,7 +98,7 @@ function removeIndexMcpEntry(): void {
 
   delete mcpServers.index;
   if (Object.keys(mcpServers).length === 0) delete doc.mcp_servers;
-  writeFileSync(configPath, YAML.stringify(doc));
+  writeFileSync(configPath, dumpConfig(doc));
   console.log("→ removed mcp_servers.index from config.yaml");
 }
 

@@ -101,7 +101,7 @@ import { basename, dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import YAML, { isAlias, isMap, isScalar, isSeq } from "yaml";
 
-import { dotenvFileValue, readConfig, writeConfig } from "./config";
+import { dotenvFileValue, dumpConfig, readConfig, writeConfig } from "./config";
 import { upsertEnvVar } from "./env";
 import { hermesBin } from "./hermes_cli";
 import { hermesHome, skillsDir } from "./paths";
@@ -570,7 +570,7 @@ export function removeApprovalHooks(doc: unknown, command: string): { doc: Recor
 
 /** Write `next` only when it serialises differently from `before`, so a re-run leaves the file alone. */
 function writeIfChanged(before: Record<string, unknown>, next: Record<string, unknown>): boolean {
-  if (YAML.stringify(before) === YAML.stringify(next)) return false;
+  if (dumpConfig(before) === dumpConfig(next)) return false;
   writeConfig(next);
   return true;
 }

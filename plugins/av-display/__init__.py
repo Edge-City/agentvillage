@@ -128,10 +128,12 @@ def apply_terminal_blocks(runner_module: Any) -> bool:
     if getattr(original, _WRAPPED_MARK, False):
         return True
 
-    def _progress_terminal_blocks(self: Any, adapter: Any, tool_name: Any, args: Any, emoji: Any) -> Any:
+    # Hermes calls it as (adapter, tool_name, args, emoji) (run_turn_runner.py:270); everything after
+    # the adapter passes through untouched, so a later Hermes that adds a parameter loses nothing.
+    def _progress_terminal_blocks(self: Any, adapter: Any, *args: Any, **kwargs: Any) -> Any:
         if is_telegram(adapter):
             return None, None
-        return original(self, adapter, tool_name, args, emoji)
+        return original(self, adapter, *args, **kwargs)
 
     setattr(_progress_terminal_blocks, _WRAPPED_MARK, True)
     _progress_terminal_blocks.__wrapped__ = original  # type: ignore[attr-defined]
