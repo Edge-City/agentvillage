@@ -25,12 +25,26 @@ const YAML11_IMPLICIT: readonly RegExp[] = new YAML.Document(null, { version: "1
 );
 
 /**
+ * PyYAML's own timestamp resolver (yaml/resolver.py), which is wider than the `yaml` package's 1.1
+ * schema in two spots: a time-zone hour of one or two digits (`+35`, which PyYAML then refuses as an
+ * offset, so the whole file is unreadable) and a fraction with no digits after the dot
+ * (`10:00:00.`, read as a datetime). Refuter M1 (lanes-b3/DATA-434-refute.md).
+ */
+const PYYAML_TIMESTAMP =
+  /^(?:[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}(?:[Tt]|[ \t]+)[0-9]{1,2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]*)?(?:[ \t]*(?:Z|[-+][0-9]{1,2}(?::[0-9]{2})?))?)$/;
+
+/**
  * Whether a string scalar must be quoted for PyYAML. Also `=` anywhere and `<<` as a value: PyYAML
  * resolves both bare words to tags `safe_load` cannot construct and refuses the whole file. A `<<`
- * key stays bare, as before, so a merge PyYAML performs is still a merge.
+ * key stays bare, as before, so a merge PyYAML performs is still a merge. A single-line string
+ * holding a tab is quoted too: the `yaml` package emits it plain, and PyYAML and ruamel (Hermes's
+ * writer) both refuse a tab inside a plain scalar, which makes the whole file unreadable. A
+ * multi-line string is emitted as a block scalar, which both readers accept with tabs.
  */
 function needsQuotes(value: string, isKey: boolean): boolean {
   if (value === "=" || (value === "<<" && !isKey)) return true;
+  if (value.includes("\t") && !value.includes("\n")) return true;
+  if (PYYAML_TIMESTAMP.test(value)) return true;
   return YAML11_IMPLICIT.some((re) => re.test(value));
 }
 

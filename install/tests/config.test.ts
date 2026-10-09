@@ -438,7 +438,13 @@ const YAML11_WORDS = [
   "0b101", "0755", "1_000", "22:00", "8:30", "1.", "2026-10-08", "2026-10-08T12:00:00Z",
 ];
 const PLAIN_STRINGS = ["new", "all", "verbose", "log", "accumulate", "Asia/Kolkata", "/data/.hermes", "oFf", "0o755", "1e3", "a: b", "multi\nline\n"];
+// Strings the `yaml` package's 1.1 schema reads as strings but PyYAML does not (refuter M1): a tab
+// in a single-line scalar (PyYAML and ruamel refuse the file), a time zone PyYAML refuses as an
+// offset, and a fraction with no digits (a datetime to PyYAML). A tab in a multi-line string needs
+// nothing: the package emits a block scalar, which both readers accept.
+const PYYAML_ONLY = ["a\tb", "2026-10-08T10:00:00+35", "2026-10-08T10:00:00."];
 const PYYAML = Bun.spawnSync(["python3", "-c", "import yaml"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+if (process.env.CI && !PYYAML) throw new Error("DATA-434: CI must have PyYAML (python3 -c 'import yaml' failed), or the Hermes read-back test is skipped silently");
 
 test("DATA-434: a resident's /verbose 'off' survives an installer rewrite of config.yaml as the string, and a re-run rewrites nothing new", () => {
   const home = mkdtempSync(join(tmpdir(), "agentvillage-config-"));
@@ -481,10 +487,22 @@ test("DATA-434: dumpConfig quotes `=` anywhere and `<<` as a value (PyYAML refus
   expect(YAML.parse(dumpConfig(doc))).toEqual(doc);
 });
 
+test("DATA-434: dumpConfig quotes the strings PyYAML alone misreads (a single-line tab, a wide time zone, an empty fraction); a multi-line tab stays a block scalar", () => {
+  for (const s of PYYAML_ONLY) {
+    const text = dumpConfig({ k: s, l: [s], m: { [s]: 1 } });
+    expect(text.startsWith('k: "')).toBe(true);
+    expect(text).toContain('\n  - "');
+    expect(text).toContain('\n  "');
+    expect(YAML.parse(text, { version: "1.1" })).toEqual({ k: s, l: [s], m: { [s]: 1 } });
+    expect(YAML.parse(text)).toEqual({ k: s, l: [s], m: { [s]: 1 } });
+  }
+  expect(dumpConfig({ k: "a\tb\nc\n" })).toBe("k: |\n  a\tb\n  c\n");
+});
+
 test.skipIf(!PYYAML)("DATA-434: PyYAML (Hermes's reader) reads every dumpConfig string back as that string", () => {
   const doc = {
-    values: [...YAML11_WORDS, ...PLAIN_STRINGS, "=", "<<"],
-    keys: Object.fromEntries([...YAML11_WORDS, "="].map((w, i) => [w, i])),
+    values: [...YAML11_WORDS, ...PLAIN_STRINGS, ...PYYAML_ONLY, "a\tb\nc\n", "=", "<<"],
+    keys: Object.fromEntries([...YAML11_WORDS, ...PYYAML_ONLY, "="].map((w, i) => [w, i])),
   };
   const script = [
     "import json, sys, yaml",
@@ -495,5 +513,5 @@ test.skipIf(!PYYAML)("DATA-434: PyYAML (Hermes's reader) reads every dumpConfig 
   expect(run.exitCode).toBe(0);
   const out = JSON.parse(run.stdout.toString()) as { values: [string, unknown][]; keys: [string, unknown][] };
   expect(out.values).toEqual(doc.values.map((v) => ["str", v]));
-  expect(out.keys).toEqual([...YAML11_WORDS, "="].map((w) => ["str", w]));
+  expect(out.keys).toEqual([...YAML11_WORDS, ...PYYAML_ONLY, "="].map((w) => ["str", w]));
 });
