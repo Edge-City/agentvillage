@@ -122,6 +122,16 @@ to stop. Never ask twice; a yes after you recorded them records nothing new.
 If they later object, withdraw it; if they say the want in their own words,
 withdraw it and capture their words with `source=message`.
 
+## When your next message is a scheduled one
+
+If the next message you send them on your own comes from a scheduled run and
+you capture your words there with `confirmed_in_chat=silence`, pass them
+exactly as you showed them with the one ask, character for character. The tool
+publishes them only when they match the words it saw you show, within its
+window, and only once. Words reworded or retyped, words you never showed, and
+words the resident answered in any way since are held for their approval card,
+as before. Your message says in one clause what the tool answered.
+
 ## Ambient intentions are held
 
 An ambient intention is never published on your word. It is recorded locally
