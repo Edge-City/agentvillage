@@ -1,7 +1,7 @@
 ---
 name: edgeos
 description: Talk to the EdgeOS popup-village platform — read the event schedule in the village's local time, RSVP (after asking the person), list venues and who is going to an event, and, only when a human session token is set, look up the calling user's own profile and browse the attendee directory (the API key cannot reach those). The current village's popup id is `$AV_POPUP_ID`; the current event is Edge City India (Oct 11 – Nov 1 2026, Mandrem, Goa). Agents cannot create or edit village events.
-version: 1.3.1
+version: 1.3.2
 author: Edge City
 tags: [edgeos, events, directory, popup-village]
 required_environment_variables:
@@ -31,7 +31,7 @@ Your `$EDGEOS_API_KEY` is a partner-app attendee key. EdgeOS limits partner apps
 
 - You **can** read the schedule, read venues, see who is going to an event, RSVP the person to an event, and cancel their RSVP.
 - You **cannot** create, edit, cancel, or invite people to village events, and cannot create or change venues. Those calls fail with `403`. When the person wants to host or change an event, tell them plainly that agents can't create village events and send them to the Edge City portal (the events page, `$AV_PORTAL_URL` when set) to do it themselves. Don't attempt those calls.
-- Your API key **cannot** reach the attendee directory (§9) or `/humans/me` (§8). EdgeOS lets `eos_live_` keys call only its event, event-participant, RSVP-eligibility, venue, track, event-settings and popup routes, plus `register` and `cancel-registration`; anything else answers `403` ("API keys are restricted to approved event automation routes"). The directory and the profile need a human session token, `$EDGEOS_BEARER_TOKEN`, that carries the right scope (§1). When `EDGEOS_BEARER_TOKEN` is unset or empty, tell the person the directory and profile aren't connected to their agent and point them to the Edge City portal; never retry those calls with the API key.
+- Your API key **cannot** reach the attendee directory (§9) or `/humans/me` (§8). EdgeOS lets `eos_live_` keys call only its event, event-participant, RSVP-eligibility, venue, track, event-settings and popup routes, plus `register` and `cancel-registration`; anything else answers `403` ("API keys are restricted to approved event automation routes"). The directory and the profile need a human session token, `$EDGEOS_BEARER_TOKEN`, that carries the right scope (§1). When `EDGEOS_BEARER_TOKEN` is unset or empty, tell the person the directory and profile aren't connected to their agent and point them to the Edge City portal; never retry those calls with the API key. A `401` from any call that uses `$EDGEOS_BEARER_TOKEN` means that token has expired: treat it like an unset one, telling the person their agent's connection to the directory and profile has expired and pointing them to the Edge City portal; don't retry the call (not with the API key either), never show the error, status code or token, and for the rest of the conversation give the same answer to any directory or profile request without calling.
 
 **Ask before every RSVP or cancel.** Before each `POST` to `register` or `cancel-registration` (one call per event; no batch approvals), tell the person the event title, its local date and time, and whether you're RSVPing or cancelling, and wait for an explicit "yes / go ahead / confirm" in reply. Do **not** act on earlier conversational intent, a paraphrase, or a standing instruction ("RSVP me to anything about AI"). The same rule applies to `PATCH /humans/me`: show the exact fields you'll change and wait for a yes.
 
@@ -39,7 +39,7 @@ Your `$EDGEOS_API_KEY` is a partner-app attendee key. EdgeOS limits partner apps
 
 You need two tokens, both passed as `Authorization: Bearer <token>`:
 
-- **`$EDGEOS_BEARER_TOKEN`** — human session JWT. Required for: `/humans/me`, `/applications/my/directory/{popup_id}`. Scopes: `portal:profile:read` to read `/humans/me`, `portal:profile:write` to change it, `portal:directory:read` for the directory. A token without the scope gets `403`; an expired one gets `401`. It may be unset: then those calls are unavailable (§0).
+- **`$EDGEOS_BEARER_TOKEN`** — human session JWT. Required for: `/humans/me`, `/applications/my/directory/{popup_id}`. Scopes: `portal:profile:read` to read `/humans/me`, `portal:profile:write` to change it, `portal:directory:read` for the directory. A token without the scope gets `403`; an expired one gets `401`. It may be unset or expired: then those calls are unavailable (§0).
 - **`$EDGEOS_API_KEY`** — long-lived `eos_live_...` automation key. Required for events, RSVPs, venues and event participants. It never works for the directory or `/humans/me` (§0).
 
 In every curl example below, `<EDGEOS_API_KEY>` and `<EDGEOS_BEARER_TOKEN>` are placeholders — substitute the actual token values from your environment before running the command.
@@ -50,7 +50,7 @@ In every curl example below, `<EDGEOS_API_KEY>` and `<EDGEOS_BEARER_TOKEN>` are 
 - Times from the API are ISO-8601 in UTC (e.g. `2026-10-14T15:00:00Z`). **Before you show any event time, convert it to the village's local time and label it. Never read the UTC clock value out as the local time.** The village timezone is `$HERMES_TIMEZONE` (Edge City India: `Asia/Kolkata`, IST, UTC+5:30, no daylight saving): `15:00:00Z` is **8:30 PM IST**, not 3:00 PM. Your own clock (the date and timezone in your system prompt) is already in that timezone; use it for "now". For the previous popup, Edge Esmeralda (Healdsburg), use `America/Los_Angeles`. Every time you display, every reminder you set, and every "is it soon?" judgment must be in local time. UUIDs are RFC-4122.
 - **"Today", "tomorrow", "this weekend" mean local dates.** Work out the local calendar day first, then convert its local midnight-to-midnight bounds to UTC for `start_after` / `start_before`. In IST, "today" on 2026-10-14 is `start_after=2026-10-13T18:30:00Z&start_before=2026-10-14T18:30:00Z`. Don't use the UTC date: between midnight and 5:30 AM IST it is still yesterday in UTC.
 - Recurring events expand into virtual occurrences when `start_after` or `start_before` is set. Without either, a series comes back once, as its first occurrence, so give every events list a date window (§3). When RSVPing to one instance of a recurring event, pass that occurrence's `start_time` as `occurrence_start`.
-- Error codes: `401` missing/expired token · `403` token lacks the required scope · `404` not visible to caller · `409` resource has dependents · `422` validation · `429` rate limit (see `Retry-After`).
+- Error codes: `401` missing/expired token (from `$EDGEOS_BEARER_TOKEN`: §0, no retry) · `403` token lacks the required scope · `404` not visible to caller · `409` resource has dependents · `422` validation · `429` rate limit (see `Retry-After`).
 - Run every recipe below through `terminal` with exactly `command` (a `workdir` is fine) and nothing else. Do not add `notify`, `heartbeat` or `background`: each call finishes in seconds and its output comes straight back. If the call returns an error about background commands, the request was not sent; make it once more without those arguments.
 
 ## 3. Reading events
@@ -163,7 +163,7 @@ Creating, editing, or deleting venues needs `venues:write`, which agents don't h
 
 ## 8. Your own profile (`portal:profile:read`; human session token only)
 
-Only with `$EDGEOS_BEARER_TOKEN`. The API key gets `403` here; when the bearer token is unset, say the profile isn't connected (§0).
+Only with `$EDGEOS_BEARER_TOKEN`. The API key gets `403` here; when the bearer token is unset, or a call with it answers `401`, follow §0 (not connected or expired; no retry).
 
 **Read the calling user's profile** (uses the human bearer, not the API key):
 ```bash
@@ -185,7 +185,7 @@ Patchable fields: `first_name`, `last_name`, `telegram`, `gender`, `age`, `resid
 
 ## 9. Attendee directory (`portal:directory:read`; human session token only)
 
-The directory does **not** work with your API key: EdgeOS answers an `eos_live_` key here with `403` (§0). It needs `$EDGEOS_BEARER_TOKEN` carrying the scope `portal:directory:read`. When that token is unset or empty, don't call the directory at all: tell the person the attendee directory isn't connected to their agent and point them to the Edge City portal.
+The directory does **not** work with your API key: EdgeOS answers an `eos_live_` key here with `403` (§0). It needs `$EDGEOS_BEARER_TOKEN` carrying the scope `portal:directory:read`. When that token is unset or empty, don't call the directory at all: tell the person the attendee directory isn't connected to their agent and point them to the Edge City portal. A `401` from the directory means the token has expired: follow §0 and don't retry.
 
 **Search attendees in a popup** (uses the human bearer):
 ```bash
