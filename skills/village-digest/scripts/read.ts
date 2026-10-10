@@ -46,7 +46,7 @@ function parseHighlight(v: unknown): Highlight | null {
   if (!record(v) || !keysAre(v, ["messageIds", "sourceUrl", "summary", "title", "topicId", "topicTitle"])) return null;
   if (!text(v.title, 1, 80) || !text(v.summary, 1, 420)) return null;
   if (v.topicId !== null && !id(v.topicId)) return null;
-  if (v.topicTitle !== null && !text(v.topicTitle, 1, 160)) return null;
+  if (v.topicTitle !== null && !text(v.topicTitle, 1, 512)) return null;
   if (!Array.isArray(v.messageIds) || v.messageIds.length < 1 || v.messageIds.length > 8 || !v.messageIds.every(id)) return null;
   if (typeof v.sourceUrl !== "string" || !TELEGRAM.test(v.sourceUrl)) return null;
   const path = new URL(v.sourceUrl).pathname.split("/").filter(Boolean);

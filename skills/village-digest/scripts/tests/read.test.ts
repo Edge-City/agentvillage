@@ -64,6 +64,14 @@ describe("strict response validation", () => {
     ];
     for (const value of invalid) expect(parseResponse(value, NOW)).toBeUndefined();
   });
+  test("accepts observed topic titles through 512 characters and refuses 513", () => {
+    const withTitle = (length: number) => ({
+      digest: { ...digest, highlights: [{ ...digest.highlights[0], topicTitle: "t".repeat(length) }] },
+    });
+    expect(parseResponse(withTitle(161), NOW)).not.toBeUndefined();
+    expect(parseResponse(withTitle(512), NOW)).not.toBeUndefined();
+    expect(parseResponse(withTitle(513), NOW)).toBeUndefined();
+  });
   test("bounds the body and never reflects it or the token", async () => {
     const tooLarge = new Response("x", { headers: { "content-length": String(MAX_BODY_BYTES + 1) } });
     const got = await readDigest(ENV, (async () => tooLarge) as typeof fetch, NOW);
@@ -78,4 +86,3 @@ describe("strict response validation", () => {
     expect(none).toMatchObject({ status: "ok", filter: { topic: "robotics", matched: 0 }, digest: { highlights: [] } });
   });
 });
-
