@@ -35,6 +35,10 @@ export const EDGE_SKILL_NAMES = [
   // P1: the agent's nickname and the resident's own profile, read once per
   // private session from $HERMES_HOME/av-profile.json (the control plane writes it).
   "agent-profile",
+  // Read-only, bounded access to the app's current main-group Village Digest.
+  // It is inert unless the operator explicitly configures its dedicated URL
+  // and read secret; the installer never injects either one.
+  "village-digest",
 ] as const;
 
 /**
