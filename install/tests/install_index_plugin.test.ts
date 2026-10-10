@@ -1208,4 +1208,33 @@ describe("end to end: install.ts against the stand-in Hermes", () => {
     expect(status().index_plugin_failed).toBeNull();
     expect(off.out).not.toContain("index_plugin_failed");
   }, 120_000);
+
+  test("OV-249 post-hoc M1: arm off or unset with MORALMOD_RELEASE_DIR and MORALMOD_RESIDENT_CONFIG in the install env is OFF: no plugin call, the earlier entry and morning job removed, nothing MoralMod written, the status file notes moralmod_arm_not_on", () => {
+    const supply = mkdtempSync(join(tmpdir(), "av-mm-e2e-"));
+    try {
+      // Never read on the OFF path: the files only have to be named.
+      const moralmod = { MORALMOD_RELEASE_DIR: join(supply, "release"), MORALMOD_RESIDENT_CONFIG: join(supply, "resident.json") };
+      expect(install({ [MORALMOD_ARM_ENV]: "off" }).code).toBe(0);
+      for (const arm of ["off", ""]) {
+        const jobsPath = plantEnabled();
+        const run = install({ [MORALMOD_ARM_ENV]: arm, ...moralmod });
+        expect([arm, run.code]).toEqual([arm, 0]);
+        expect([arm, pluginCalls()]).toEqual([arm, []]);
+        expect([arm, cronCalls()]).toEqual([arm, [["cron", "remove", "e2e0morning0"]]]);
+        expect(JSON.parse(readFileSync(jobsPath, "utf8")).jobs.map((job: { id: string }) => job.id)).toEqual(["e2e0unrelate"]);
+        expect(plugins().enabled).not.toContain(INDEX_PLUGIN);
+        expect([arm, status().index_plugin_failed, status().index_plugin_note]).toEqual([arm, null, "moralmod_arm_not_on"]);
+        expect(run.out).toContain("MoralMod release or resident config present, not activated: the managed negotiator runs only for ON");
+        expect(run.out).not.toContain("index_plugin_failed");
+        expect(existsSync(join(home, "index", "moralmod"))).toBe(false);
+        expect(existsSync(negotiatorPath(home))).toBe(false);
+        expect(existsSync(join(home, "plugins", INDEX_PLUGIN))).toBe(false);
+      }
+      // Without MoralMod files the note is absent.
+      install({ [MORALMOD_ARM_ENV]: "off" });
+      expect("index_plugin_note" in status()).toBe(false);
+    } finally {
+      rmSync(supply, { recursive: true, force: true });
+    }
+  }, 180_000);
 });

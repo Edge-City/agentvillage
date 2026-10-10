@@ -23,8 +23,10 @@
  *     `plugins.disabled` is left alone; OFF drops it from `plugins.enabled` and removes the plugin's
  *     `Index morning` cron job and launcher. A failure does not fail the
  *     install: `index_plugin_failed` in the status file and one line,
- *     `agentvillage-install: index_plugin_failed=<hermes|config|seed|gate|sidecar>` (`install_index_plugin.ts`);
- *     ON patches the installed `sidecar.py` to an env allowlist first, and is not enabled when it cannot (`sidecar`)
+ *     `agentvillage-install: index_plugin_failed=<hermes|config|seed|gate|sidecar|release_unpinned>` (`install_index_plugin.ts`);
+ *     ON patches the installed `sidecar.py` to an env allowlist first, and is not enabled when it cannot (`sidecar`);
+ *     the managed MoralMod release runs for ON only and only when it is the pinned one (`release_unpinned`);
+ *     an OFF or unset arm with MoralMod files present is OFF (`index_plugin_note`: `moralmod_arm_not_on`)
  *   - opt-in recall skill + plugin when `AV_RECALL_ENABLED=1` (`install_recall.ts`)
  *   - opt-in approval.md gate when `AV_APPROVAL_ENABLED=1` (`install_approval.ts`):
  *     a failure there exits non-zero, because an opted-in tenant left ungated
@@ -54,7 +56,7 @@ import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 
 import { installIndex } from "./install_index";
-import { type IndexPluginFailure, indexPluginFailedLine, installIndexPlugin, recordIndexPluginStatus, setIndexPluginEnabled } from "./install_index_plugin";
+import { type IndexPluginFailure, type IndexPluginNote, indexPluginFailedLine, installIndexPlugin, recordIndexPluginStatus, setIndexPluginEnabled } from "./install_index_plugin";
 import { installEdgeos } from "./install_edgeos";
 import { safeInstallRecall, wipeRecallIndex } from "./install_recall";
 import { gateReceiptLine, lastInstallVerified, runApprovalStep, stagePlugins } from "./install_approval";
@@ -240,10 +242,11 @@ function copySkillFiles(): void {
  */
 function installIndexHermesPlugin(): IndexPluginFailure | null {
   let failed: IndexPluginFailure | null;
+  let note: IndexPluginNote | undefined;
   try {
     // 60 s: one call inside the control plane's 300 s bound on the whole install (refute S3).
     // OV-249 (B): an ON resident gets the plugin only behind a gate this run verified.
-    failed = installIndexPlugin(hermesRunner(hermesBin(), hermesExecEnv(), 60_000), process.argv, lastInstallVerified()).failed;
+    ({ failed, note } = installIndexPlugin(hermesRunner(hermesBin(), hermesExecEnv(), 60_000), process.argv, lastInstallVerified()));
   } catch (err) {
     const kind = err instanceof Error ? err.name : typeof err;
     console.warn(`  warning: index-network plugin step failed (${kind}); core install continues`);
@@ -257,7 +260,7 @@ function installIndexHermesPlugin(): IndexPluginFailure | null {
     }
   }
   try {
-    recordIndexPluginStatus(hermesHome(), failed);
+    recordIndexPluginStatus(hermesHome(), failed, note);
   } catch {
     console.warn("  warning: could not record the index-network plugin step in av-events/install-status.json");
   }

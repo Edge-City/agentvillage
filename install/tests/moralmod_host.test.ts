@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { createHash } from "node:crypto";
 import { installIndexPlugin, NEGOTIATOR_SEED, installMetadataPath } from "../install_index_plugin";
 import { INDEX_PLUGIN_REVISION } from "../moralmod_release";
 const plugin = resolve(import.meta.dir, "../../../index-hermes-plugin");
@@ -58,7 +59,10 @@ function use(f: ReturnType<typeof fixture>, work: () => void) {
     config: process.env.MORALMOD_RESIDENT_CONFIG,
     home: process.env.HERMES_HOME,
     key: process.env.INDEX_API_KEY,
+    arm: process.env.AV_MORALMOD_ARM,
   };
+  // The managed lifecycle is for ON residents only (OV-249 post-hoc M1); OFF is in moralmod_arm_pin.test.ts.
+  process.env.AV_MORALMOD_ARM = "on";
   process.env.HERMES_HOME = f.home;
   process.env.INDEX_API_KEY = "synthetic-key";
   process.env.MORALMOD_RELEASE_DIR = bundle;
@@ -69,6 +73,7 @@ function use(f: ReturnType<typeof fixture>, work: () => void) {
     for (const [name, v] of [
       ["HERMES_HOME", previous.home],
       ["INDEX_API_KEY", previous.key],
+      ["AV_MORALMOD_ARM", previous.arm],
       ["MORALMOD_RELEASE_DIR", previous.release],
       ["MORALMOD_RESIDENT_CONFIG", previous.config],
     ] as const) {
@@ -87,9 +92,11 @@ test.skipIf(
   "actual installer pins plugin, replaces only its seed, rotates scoped config and rejects modified runtime",
   () => {
     const f = fixture();
+    // The sibling build stands in for the reviewed release: pin its own release.json (post-hoc M2).
+    const pin = createHash("sha256").update(readFileSync(join(bundle, "release.json"))).digest("hex");
     use(f, () => {
       writeFileSync(join(f.home, "index", "negotiator.ts"), NEGOTIATOR_SEED);
-      installIndexPlugin(f.run, ["bun", "install"], true);
+      installIndexPlugin(f.run, ["bun", "install"], true, pin);
       expect(f.calls[0]).toEqual([
         "plugins",
         "install",
@@ -126,7 +133,7 @@ test.skipIf(
       const config = JSON.parse(readFileSync(f.config, "utf8"));
       config.VILLAGE_INSTALLATION_CREDENTIAL = "new-credential".repeat(4);
       writeFileSync(f.config, JSON.stringify(config));
-      installIndexPlugin(f.run, ["bun", "install"], true);
+      installIndexPlugin(f.run, ["bun", "install"], true, pin);
       expect(f.calls.filter((a) => a[1] === "install")).toHaveLength(1);
       expect(
         JSON.parse(
@@ -137,7 +144,7 @@ test.skipIf(
         ).VILLAGE_INSTALLATION_CREDENTIAL,
       ).toBe(config.VILLAGE_INSTALLATION_CREDENTIAL);
       writeFileSync(runtime, "resident modification");
-      expect(installIndexPlugin(f.run, ["bun", "install"], true).state).toBe("failed");
+      expect(installIndexPlugin(f.run, ["bun", "install"], true, pin).state).toBe("failed");
       expect(readFileSync(runtime, "utf8")).toBe("resident modification");
     });
   },
