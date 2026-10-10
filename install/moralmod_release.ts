@@ -17,7 +17,7 @@ export const INDEX_PLUGIN_REVISION = "eaec4fc02ffc251fca2cfd56b728c845562f6a3b";
  * file, so no bundle activates. Moving it is a PR that changes this constant
  * (docs/moralmod_lifecycle.md, "The release pin").
  */
-export const MORALMOD_RELEASE_SHA256 = "unpinned: no reviewed MoralMod release yet";
+export const MORALMOD_RELEASE_SHA256 = "93eab95f9ed270e500c694b79f2c48b5950c30cd1553e0ce75383774f558d2a1";
 const FILES = ["negotiator-core.js", "negotiator-runtime.js", "INDEX-LICENSE"] as const;
 const hash = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
