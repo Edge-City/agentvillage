@@ -4,7 +4,7 @@ Agent skills for **Edge City India 2026** (Oct 11 – Nov 1, Mandrem, Goa, India
 
 ## What you get
 
-Eight skill bundles give your agent Edge City knowledge, live API access, and local operational guardrails:
+Nine skill bundles give your agent Edge City knowledge, live API access, and local operational guardrails:
 
 - **edge-india** — Edge City India 2026 (the current event) public village knowledge: a verified snapshot of the India wiki, Substack guides and website (housing, travel, check-in, meals, venues, families, tickets, residencies, themes), read through `scripts/refs.ts` with source links and dates. Synced from `p2p-lanes/edge-agent-skill` by `.github/workflows/sync-edge-india-references.yml`.
 - **edge-esmeralda** — background on the *previous* popup, Edge Esmeralda 2026 (not the current event): popup constants (popup id, week dates, themes), attendee directory field semantics, curated wiki/website/newsletter knowledge base, and the onboarding pointer for obtaining EdgeOS tokens.
@@ -14,13 +14,14 @@ Eight skill bundles give your agent Edge City knowledge, live API access, and lo
 - **agent-commons** — public Agent Commons forum retrieval: lets the agent privately retrieve source-attributed public agent-forum discussion when the resident describes an IRL memory/photo or when Agent Plaza needs a more whimsical follow-up lens.
 - **simocracy** — Simocracy proposal, deliberation, comment, and decision retrieval: lets the agent privately retrieve source-attributed civic records when Agent Plaza needs a proposal-centered wrong-interpretation lens.
 - **token-usage-audit** — deterministic local token usage audit script and Hermes script-cron contract. It wakes the agent only when meaningful usage has an actionable driver and emits no raw transcripts, prompts, session ids, env values, private hosts, or secrets.
+- **village-digest** — read-only access to a bounded, source-linked summary of recent discussion in the Village's main Telegram group. It uses its own optional credential, is off without explicit configuration, and cannot read raw messages or take actions.
 
 Two more bundles are **opt-in and Hermes-only**, and are not part of the set above:
 
 - **recall** — tenant-local search over the agent's own daily notes, `MEMORY.md` and private conversations (SQLite FTS5, no LLM, no network), exposed as the `recall` tool by `plugins/recall` in the [agentvillage](../README.md) repo. It refuses in group chats and never writes into `memory/`. Without that plugin the skill does nothing. See `recall/README.md`.
 - **record-intention** — the one front door for intentions, the `record_intention` tool registered by `plugins/av-events` in the [agentvillage](../README.md) repo when `AV_RECORD_INTENTION` is on: publishes explicit intents to Index by default and holds ambient ones until the resident confirms. It is installed on every Hermes tenant with the edge bundles and is inert without the tool: the text applies only if `record_intention` is available (in the tool list, or found with `tool_search`). The index-network prompts, the nightly memory pass and `AGENTS.md` carry the same condition.
 
-The skills cross-reference each other. `edge-india` answers India logistics and background from public references and hands live schedule questions to `edgeos` and people questions to `index-network`. `edge-esmeralda` supplies the popup id that `edgeos` recipes need. `index-network` handles discovery and intent-based matching, `agent-plaza` provides the Plaza image nudge and optional Turing Falls steering contract, `simocracy` provides proposal and deliberation retrieval, `agent-commons` provides public Agent Commons forum retrieval, and `token-usage-audit` provides the local script-cron guardrail. Install all eight together.
+The skills cross-reference each other. `edge-india` answers India logistics and background from public references and hands live schedule questions to `edgeos` and people questions to `index-network`. `edge-esmeralda` supplies the popup id that `edgeos` recipes need. `index-network` handles discovery and intent-based matching, `agent-plaza` provides the Plaza image nudge and optional Turing Falls steering contract, `simocracy` provides proposal and deliberation retrieval, `agent-commons` provides public Agent Commons forum retrieval, `village-digest` provides the recent main-group summary, and `token-usage-audit` provides the local script-cron guardrail. Install all nine together.
 
 ## Host-specific silence
 
@@ -46,6 +47,8 @@ All hosts read credentials from environment variables. Set these before installi
 | `INDEX_API_KEY`       | Index Network signup (BYOA page or [agent-ee26.edgecity.live](https://agent-ee26.edgecity.live/)) | Yes      |
 | `EDGEOS_BEARER_TOKEN` | EdgeOS email-OTP onboarding flow                                                                     | Yes for EdgeOS directory and own profile |
 | `EDGEOS_API_KEY`      | EdgeOS email-OTP onboarding flow (`eos_live_...` key)                                                | Optional; needed for EdgeOS events, RSVPs, venues |
+| `VILLAGE_DIGEST_BASE_URL` | Operator (`https://agents.edgecity.live` only)                                                   | Optional; enables Village Digest reads with the next variable |
+| `VILLAGE_DIGEST_READ_SECRET` | Operator; dedicated mapping of the app's `DIGEST_READ_SECRET`                               | Optional; Village Digest only |
 
 
 `INDEX_API_KEY` is required for the Index Network MCP server. `EDGEOS_BEARER_TOKEN` is required for EdgeOS directory and own-profile recipes. `EDGEOS_API_KEY` is only needed for EdgeOS event, RSVP, and venue recipes.
@@ -86,6 +89,7 @@ hermes skills install Edge-City/agentvillage/skills/agent-plaza --force
 hermes skills install Edge-City/agentvillage/skills/simocracy --force
 hermes skills install Edge-City/agentvillage/skills/agent-commons --force
 hermes skills install Edge-City/agentvillage/skills/token-usage-audit --force
+hermes skills install Edge-City/agentvillage/skills/village-digest --force
 ```
 
 Add to `~/.hermes/.env`:
@@ -94,6 +98,8 @@ Add to `~/.hermes/.env`:
 INDEX_API_KEY=<YOUR_API_KEY>
 EDGEOS_BEARER_TOKEN=<YOUR_TOKEN>   # Human session JWT for EdgeOS directory and own profile
 EDGEOS_API_KEY=<YOUR_KEY>          # Long-lived automation key for events, RSVPs, venues
+VILLAGE_DIGEST_BASE_URL=https://agents.edgecity.live # optional, operator-configured
+VILLAGE_DIGEST_READ_SECRET=<DEDICATED_READ_SECRET>   # optional; never APP_INTERNAL_SECRET
 TELEGRAM_BOT_TOKEN=<YOUR_BOT_TOKEN>        # optional, required for Agent Plaza selfie photo delivery
 TELEGRAM_HOME_CHANNEL=<numeric_chat_id>   # optional, for cron delivery
 ```
