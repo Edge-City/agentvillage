@@ -3,6 +3,8 @@
 # (pytest.ini: plugins/av-events/tests, plugins/recall/tests,
 # plugins/dashboard-auth-edgecity/tests, plugins/av-approval/tests; the Hermes-backed tests skip here). The same thing
 # `bun test` and `python3 -m pytest` run locally; nothing here deploys.
+# WARNING: Tag release (tag-release.yml) trusts a green push-to-main run of this
+# workflow as proof the suites ran at that commit, so no job here may be skipped on push.
 name: test
 
 on:

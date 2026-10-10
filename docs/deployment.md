@@ -97,7 +97,8 @@ where this page is briefer.
    minutes) unless `main`'s own `test` run from the push of that exact commit
    (the file `.github/workflows/test.yml`, newest run, latest attempt) already
    succeeded; the plan job's "Suites" line names that run, or says why it does
-   not count, and `force_tests` runs them regardless. It then pushes only the
+   not count, and `force_tests` runs them regardless. A commit whose
+   `test.yml` differs from `main`'s always runs them here. It then pushes only the
    annotated tag (its message names who ran it, the run, the commits and the
    seed check), and its summary gives the Roll inputs. It refuses, creating
    nothing, when the ref is not on `main`, the commit already carries a

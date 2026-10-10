@@ -17,7 +17,8 @@
 # .github/workflows/test.yml (matched by path and workflow id, never by display
 # name) started by a push to main with that head_sha is completed and its latest
 # attempt concluded success; any API error, a PR run, another branch, workflow or
-# commit, a run still going or a failed re-run means tested=false) >
+# commit, a run still going or a failed re-run means tested=false; a commit whose
+# test.yml differs from main's in any byte always runs the suites here) >
 # test (test.yml, the suites every pull request runs, at that commit; skipped
 # when the plan proved the commit tested, unless force_tests) > tag (real runs
 # only, after green suites here or the plan's proof; serialised; fetches again,

@@ -20,7 +20,10 @@
  *       a branch). A tag pushed by someone else meanwhile makes the push fail.
  *
  *   bun scripts/tag-release.ts tested --commit <sha> [--force-tests true|false] [--repo owner/name]
- *       Read-only, through the REST API (`gh api`, GH_TOKEN with actions: read).
+ *       Read-only: git, then the REST API (`gh api`, GH_TOKEN with actions: read).
+ *       First compares <sha>'s own .github/workflows/test.yml with the
+ *       checked-out copy (main's): not byte for byte the same, or either
+ *       unreadable, gives tested=false without asking the API.
  *       Writes tested=true and tested_run=<id> to $GITHUB_OUTPUT when the newest
  *       run of .github/workflows/test.yml (by path and workflow id, not by name)
  *       that a push to main started at exactly <sha> is completed and its latest
@@ -854,14 +857,38 @@ const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !
 const fullName = (v: unknown): unknown => (isObj(v) ? v.full_name : undefined);
 const errText = (e: unknown) => clean(e instanceof Error ? e.message : String(e), 300);
 
+export const TEST_WORKFLOW_DIFFERS = "test.yml at the commit differs from main's";
+const OBJECT_ID_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/**
+ * Whether the commit's own test.yml is byte for byte the copy in the working
+ * tree (main's, as the plan job checks it out). Compared as git object ids:
+ * the commit's blob, and the hash of the working-tree file's raw bytes (no
+ * filters). Either one unreadable: "unreadable".
+ */
+export function compareTestWorkflow(git: Git, commit: string): "same" | "differs" | "unreadable" {
+  try {
+    const atCommit = git(["rev-parse", "--verify", "--quiet", "--end-of-options", `${commit}:${TEST_WORKFLOW}`], { allowFail: true });
+    const here = git(["hash-object", "--no-filters", "--", TEST_WORKFLOW], { allowFail: true });
+    const a = atCommit.code === 0 ? atCommit.stdout.trim() : "";
+    const b = here.code === 0 ? here.stdout.trim() : "";
+    if (!OBJECT_ID_RE.test(a) || !OBJECT_ID_RE.test(b)) return "unreadable";
+    return a === b ? "same" : "differs";
+  } catch {
+    return "unreadable";
+  }
+}
+
 /**
  * Looks for the newest run of this repository's test.yml (matched by its file
  * path and workflow id, never by display name) that a push to main started at
  * exactly `commit`. tested only when that run is completed and its latest
- * attempt concluded success. API errors and unexpected answers mean not tested
- * (the suites then run); bad arguments refuse.
+ * attempt concluded success. That run used the commit's own test.yml, so first
+ * the commit's test.yml must be byte for byte main's (the working tree's);
+ * otherwise not tested, without asking the API. API errors and unexpected
+ * answers mean not tested (the suites then run); bad arguments refuse.
  */
-export function findTestedRun(api: Api, repo: string, commit: string): TestedCheck {
+export function findTestedRun(git: Git, api: Api, repo: string, commit: string): TestedCheck {
   if (!REPO_RE.test(repo)) throw new Refusal("bad_usage", "--repo (or GITHUB_REPOSITORY) must be owner/name.");
   if (!FULL_SHA_RE.test(commit)) throw new Refusal("bad_usage", "--commit must be a full commit id.");
   const short = commit.slice(0, 7);
@@ -871,6 +898,10 @@ export function findTestedRun(api: Api, repo: string, commit: string): TestedChe
     attempt: run && Number.isSafeInteger(run.run_attempt) ? (run.run_attempt as number) : null,
     reason: clean(reason, 600),
   });
+
+  const same = compareTestWorkflow(git, commit);
+  if (same === "differs") return no(`${TEST_WORKFLOW_DIFFERS} (${short}), so its push run proves less than the suites run here`);
+  if (same === "unreadable") return no(`${TEST_WORKFLOW_DIFFERS} (${short}): one of the two copies could not be read`);
 
   // The workflow by its file: GitHub resolves the file name to that file's workflow id.
   const file = TEST_WORKFLOW.split("/").pop() as string;
@@ -957,7 +988,7 @@ function parseArgs(argv: string[]): { cmd: string; flags: Map<string, string> } 
 const KNOWN = {
   plan: ["ref", "version", "note", "dry-run", "cwd", "main", "remote"],
   tag: ["ref", "version", "note", "cwd", "main", "remote", "expect-commit", "expect-version", "expect-seeds", "actor", "triggering-actor", "run-url", "fetch"],
-  tested: ["commit", "repo", "force-tests"],
+  tested: ["commit", "repo", "force-tests", "cwd"],
 } as const;
 
 function emit(path: string | undefined, text: string) {
@@ -994,7 +1025,7 @@ function readTestWorkflow(cwd: string): string | null {
   return existsSync(path) ? readFileSync(path, "utf8") : null;
 }
 
-export function main(argv: string[], env: Record<string, string | undefined> = process.env, deps: { api?: Api } = {}): number {
+export function main(argv: string[], env: Record<string, string | undefined> = process.env, deps: { api?: Api; git?: Git } = {}): number {
   const summaryPath = env.GITHUB_STEP_SUMMARY || undefined;
   try {
     const { cmd, flags } = parseArgs(argv);
@@ -1012,7 +1043,7 @@ export function main(argv: string[], env: Record<string, string | undefined> = p
       const check: TestedCheck =
         force === "true"
           ? { tested: false, runId: null, attempt: null, reason: "force_tests is on" }
-          : findTestedRun(deps.api ?? ghApi(), repo, commit);
+          : findTestedRun(deps.git ?? gitIn(flags.get("cwd") ?? "."), deps.api ?? ghApi(), repo, commit);
       const line = testedLine(check, force === "true");
       const url = check.runId !== null ? runUrl(env, repo, check.runId) : null;
       printRepoText(`${line}
