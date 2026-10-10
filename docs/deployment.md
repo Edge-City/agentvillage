@@ -83,21 +83,27 @@ where this page is briefer.
    "Tag release", "Run workflow", branch `main`:
    https://github.com/Edge-City/agentvillage/actions/workflows/tag-release.yml.
    Inputs: `ref` (default `main`; a commit, branch or tag that `main`
-   contains), `dry_run` (default on: plans and runs the suites, creates
+   contains), `dry_run` (default on: plans and checks the suites, creates
    nothing), `version` (leave empty for the highest `vX.Y.Z-rcN` plus one;
-   give one only to start a new line or after a final version) and `note`
+   give one only to start a new line or after a final version), `note`
    (optional, one line of at most 200 characters, e.g. what the tag
    deliberately leaves out; it goes on its own `Note:` line in the tag
-   message). Run a dry run
+   message), and `force_tests` (default off, see below). Run a dry run
    first and read its summary: the version, the commit, the commits since the
    previous release tag and the seed check. Then run again with `dry_run`
    unticked and `ref` set to the commit the dry run showed (`main` gets bot
    commits several times a day). The real run tags only after this repo's
-   suites pass at that commit, pushes only the annotated tag (its message
-   names who ran it, the run, the commits and the seed check), and its summary
-   gives the Roll inputs. It refuses, creating nothing, when the ref is not on
-   `main`, the commit already carries a release tag (roll that one), the commit
-   does not contain the latest release tag, a branch has the new tag's name, the
+   suites pass at that commit. They run again in the workflow (about 5
+   minutes) unless `main`'s own `test` run from the push of that exact commit
+   (the file `.github/workflows/test.yml`, newest run, latest attempt) already
+   succeeded; the plan job's "Suites" line names that run, or says why it does
+   not count, and `force_tests` runs them regardless. A commit whose
+   `test.yml` differs from `main`'s always runs them here. It then pushes only the
+   annotated tag (its message names who ran it, the run, the commits and the
+   seed check), and its summary gives the Roll inputs. It refuses, creating
+   nothing, when the ref is not on `main`, the commit already carries a
+   release tag (roll that one), the commit does not contain the latest release
+   tag, a branch has the new tag's name, the
    `version` given exists or is not higher than every release tag, a tag that
    looks like a release has a number longer than 6 digits, a directory that
    `test.yml` runs `bun test` on does not exist at the commit
