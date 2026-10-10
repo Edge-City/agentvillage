@@ -21,7 +21,7 @@ export const MESSAGE_LABELS = Object.freeze({
   "Daily digest": Object.freeze(["Edge — daily digest"]),
   "Conversation update": Object.freeze(["Edge — negotiation summary"]),
   "Evening questions": Object.freeze(["Edge — evening questions"]),
-  "Introduction suggestion": Object.freeze(["Edge — opportunity drop (midday)", "Edge — opportunity drop (evening)"]),
+  "Extra introduction drops": Object.freeze(["Edge — opportunity drop (midday)", "Edge — opportunity drop (evening)"]),
   // DATA-430: the hourly alert for an opportunity that newly turned pending.
   "Pending opportunity": Object.freeze(["Edge — pending opportunity"]),
   // Opt-in: absent on most boxes.
@@ -41,6 +41,11 @@ export function isMessageLabel(value: unknown): value is MessageLabel {
   return typeof value === "string" && Object.hasOwn(MESSAGE_LABELS, value);
 }
 
+/** Former label names, folded to lower case, and the label each now means. Already-sent messages carry these. */
+const LABEL_ALIASES: Readonly<Record<string, MessageLabel>> = Object.freeze({
+  "introduction suggestion": "Extra introduction drops",
+});
+
 /**
  * The label `raw` names, or null. At most MAX_LABEL_CHARS characters; leading
  * and trailing spaces are dropped, a run of spaces or tabs inside counts as
@@ -50,7 +55,7 @@ export function isMessageLabel(value: unknown): value is MessageLabel {
 export function normalizeLabel(raw: unknown): MessageLabel | null {
   if (typeof raw !== "string" || raw.length > MAX_LABEL_CHARS) return null;
   const folded = raw.replace(/[ \t]+/g, " ").trim().toLowerCase();
-  return MESSAGE_LABEL_NAMES.find((label) => label.toLowerCase() === folded) ?? null;
+  return MESSAGE_LABEL_NAMES.find((label) => label.toLowerCase() === folded) ?? (Object.hasOwn(LABEL_ALIASES, folded) ? LABEL_ALIASES[folded] : null);
 }
 
 /**

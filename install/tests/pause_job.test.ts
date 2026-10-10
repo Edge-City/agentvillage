@@ -179,7 +179,9 @@ describe("the label: one of the six, read leniently, nothing else", () => {
       ["Daily\tdigest", "Daily digest"],
       ["conversation  update", "Conversation update"],
       ["Evening Questions", "Evening questions"],
-      ["introduction suggestion", "Introduction suggestion"],
+      ["extra INTRODUCTION drops", "Extra introduction drops"],
+      ["introduction suggestion", "Extra introduction drops"],
+      ["  Introduction  SUGGESTION ", "Extra introduction drops"],
       ["pending  OPPORTUNITY ", "Pending opportunity"],
       [" usage REPORT", "Usage report"],
     ];
@@ -343,7 +345,7 @@ describe("pause", () => {
       seen.push({ argv: args, hold: file?.holds?.[args[2]] ?? null, by: file?.by?.[args[2]] ?? null, enabled: storedJobEnabled(allJobs().find((entry) => entry.id === args[2])!) });
       execFileSync(bin, args, { stdio: "ignore", env: process.env });
     };
-    expect(runWith({ hermes: watching }, "pause", "--label", "Introduction suggestion").out).toMatchObject({ ok: true, hold: "paused" });
+    expect(runWith({ hermes: watching }, "pause", "--label", "Extra introduction drops").out).toMatchObject({ ok: true, hold: "paused" });
     expect(seen.map((entry) => entry.argv[1])).toEqual(["pause", "pause"]);
     for (const entry of seen) expect({ hold: entry.hold, by: entry.by, enabled: entry.enabled }).toEqual({ hold: "paused", by: "resident", enabled: true });
   });
@@ -357,10 +359,21 @@ describe("pause", () => {
     expect(holdsText()).toBe(text);
   });
 
-  test("Introduction suggestion pauses both drops: two calls, two holds", () => {
+  test("the former label Introduction suggestion pauses and resumes both drops", () => {
     const midday = job(MIDDAY).id;
     const evening = job(DROP_EVENING).id;
-    const result = run("pause", "--label", "Introduction suggestion");
+    const paused = run("pause", "--label", "Introduction suggestion");
+    expect(paused.out).toMatchObject({ ok: true, label: "Extra introduction drops", hold: "paused", holds: "ok" });
+    expect(holdsFile().holds).toEqual({ [midday]: "paused", [evening]: "paused" });
+    const resumed = run("resume", "--label", "introduction suggestion");
+    expect(resumed.out).toMatchObject({ ok: true, label: "Extra introduction drops", hold: "active", holds: "ok" });
+    expect(holdsFile().holds).toEqual({ [midday]: "active", [evening]: "active" });
+  });
+
+  test("Extra introduction drops pauses both drops: two calls, two holds", () => {
+    const midday = job(MIDDAY).id;
+    const evening = job(DROP_EVENING).id;
+    const result = run("pause", "--label", "Extra introduction drops");
     const byId = (a: Job, b: Job) => a.id.localeCompare(b.id);
     expect([...(result.out.jobs as Job[])].sort(byId)).toEqual([{ id: midday, changed: true }, { id: evening, changed: true }].sort(byId));
     expect(result.out).toMatchObject({ ok: true, hold: "paused", holds: "ok" });
@@ -456,13 +469,13 @@ describe("resume: the missed slot never fires at once (AC#2)", () => {
     expect(calls().slice(before).filter((argv) => argv[0] === "cron")).toEqual([["cron", "resume", id]]);
   });
 
-  test("Introduction suggestion: both drops resumed and re-anchored, both held active", () => {
+  test("Extra introduction drops: both drops resumed and re-anchored, both held active", () => {
     const midday = job(MIDDAY).id;
     const evening = job(DROP_EVENING).id;
-    run("pause", "--label", "Introduction suggestion");
+    run("pause", "--label", "Extra introduction drops");
     setNextRun(MIDDAY, PAST);
     setNextRun(DROP_EVENING, PAST);
-    const result = run("resume", "--label", "Introduction suggestion");
+    const result = run("resume", "--label", "Extra introduction drops");
     expect(result.out).toMatchObject({ ok: true, hold: "active" });
     expect([...(result.out.jobs as Job[])].sort((a, b) => a.id.localeCompare(b.id))).toEqual(
       [{ id: midday, changed: true, missedSlot: "dropped" }, { id: evening, changed: true, missedSlot: "dropped" }].sort((a, b) => a.id.localeCompare(b.id)),
@@ -554,12 +567,12 @@ describe("resume: the missed slot never fires at once (AC#2)", () => {
     }
   });
 
-  test("Introduction suggestion with one drop held by an admin: refused before any Hermes call for either", () => {
+  test("Extra introduction drops with one drop held by an admin: refused before any Hermes call for either", () => {
     const midday = job(MIDDAY).id;
-    run("pause", "--label", "Introduction suggestion");
+    run("pause", "--label", "Extra introduction drops");
     seedHolds({ ...holdsFile(), by: { ...holdsFile().by, [midday]: "admin" } });
     const before = calls().length;
-    expect(run("resume", "--label", "Introduction suggestion").out).toEqual({ ok: false, error: "held-by-admin", label: "Introduction suggestion" });
+    expect(run("resume", "--label", "Extra introduction drops").out).toEqual({ ok: false, error: "held-by-admin", label: "Extra introduction drops" });
     expect(calls().length).toBe(before);
     expect(storedJobEnabled(job(DROP_EVENING))).toBe(false);
   });
@@ -810,10 +823,10 @@ describe("a Hermes step that fails on the way: exit 1, step, applied, and a retr
       if (args[2] === order[1]) throw new Error("hermes exited 1");
       execFileSync(bin, args, { stdio: "ignore", env: process.env });
     };
-    expect(runWith({ hermes: failing }, "pause", "--label", "Introduction suggestion"))
-      .toEqual({ code: 1, out: { ok: false, error: "hermes-failed", step: "pause", label: "Introduction suggestion", applied: [order[0]], hold: null, holds: "ok" } });
+    expect(runWith({ hermes: failing }, "pause", "--label", "Extra introduction drops"))
+      .toEqual({ code: 1, out: { ok: false, error: "hermes-failed", step: "pause", label: "Extra introduction drops", applied: [order[0]], hold: null, holds: "ok" } });
     expect(holdsFile().holds).toEqual({ [order[0]]: "paused" });
-    expect(run("pause", "--label", "Introduction suggestion").out).toMatchObject({ ok: true, hold: "paused" });
+    expect(run("pause", "--label", "Extra introduction drops").out).toMatchObject({ ok: true, hold: "paused" });
     expect(holdsFile().holds).toEqual({ [midday]: "paused", [evening]: "paused" });
   });
 
@@ -893,7 +906,7 @@ describe("a Hermes step that fails on the way: exit 1, step, applied, and a retr
         t += LOCK_STALE_MS - hermesCli.HERMES_TIMEOUT_MS;
       },
     };
-    const result = runWith(slow, "pause", "--label", "Introduction suggestion");
+    const result = runWith(slow, "pause", "--label", "Extra introduction drops");
     expect(result.out).toMatchObject({ ok: false, error: "lock-lost", hold: null });
     const applied = result.out.applied as string[];
     expect(applied.length).toBe(1);
@@ -969,7 +982,7 @@ describe("status: read-only, no lock, no Hermes", () => {
       ["Daily digest", true],
       ["Conversation update", true],
       ["Evening questions", true],
-      ["Introduction suggestion", true],
+      ["Extra introduction drops", true],
       ["Pending opportunity", true],
       ["Usage report", false],
     ]);

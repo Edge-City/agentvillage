@@ -173,6 +173,8 @@ tenant out of those display keys (not the `av-display` plugin entry or the
 installer's other keys). Reasoning is still stored in the agent's `state.db`; it is
 hidden, not deleted.
 
+**MoralMod arm (OV-249).** A resident whose `AV_MORALMOD_ARM` is `on` gets Index's Hermes plugin `index-network` at the commit pinned in `install/install_index_plugin.ts`, enabled, with its 16 `index_*` tools and a pass-through `index/negotiator.ts`; any other value (absent included) is off and a roll drops it from `plugins.enabled` and removes the plugin's `Index morning` cron job and launcher; the arm is read from `.env` first, so write it there, before the install; a failed plugin install leaves the roll going and prints `agentvillage-install: index_plugin_failed=<hermes|config|seed|gate|sidecar>` (README, "Install", step 9). The installer patches the installed plugin's `sidecar.py` on every ON run so the negotiator child gets an allowlisted env (`PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_ALL`, `TZ`, `BUN_OPTIONS=--no-env-file` and the plugin's `INDEX_*` names, no `.env` secret, and Bun loads no `.env*` from the gateway's working directory); when the pinned anchor is not found exactly once the plugin is not enabled, as OFF removes it, and the line says `sidecar`. ON needs the approval gate verified on the same run (`AV_APPROVAL_ENABLED=1`, a live fire the daemon answered, no `AV_APPROVAL_ALLOW_UNPATCHED_HERMES` override); without it the plugin is withheld as OFF removes it and the line says `gate`. The gate only routes the writes to the daemon: whether the accept (`index_update_opportunity`, class `opportunity.accept`, autonomous in the template) waits for the resident's tap is that tenant's policy row.
+
 **When it refuses.** A refusal changes nothing. The common ones: the tag is
 lightweight, missing or not on `main`; a branch has the tag's name; seed files
 changed without `allow_seed_change`; the control plane is unhealthy or has not
@@ -383,7 +385,7 @@ label line, `(<Label> message - you can ask me to stop or manage it)`, which
 the model writes as the message's last line and leaves off a `[SILENT]`
 reply. The labels and their jobs: Daily digest = `Edge — daily digest`;
 Conversation update = `Edge — negotiation summary`; Evening questions =
-`Edge — evening questions`; Introduction suggestion = both opportunity drops;
+`Edge — evening questions`; Extra introduction drops = both opportunity drops;
 Usage report = `Edge — token usage audit` (opt-in); Pending opportunity = `Edge — pending opportunity`. Template jobs added by an
 operator carry their base prompt's line. The agent stops and restarts any of
 the six on a resident's request (`skills/index-network/tools.md`, "Cron schedule") with

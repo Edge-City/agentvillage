@@ -141,7 +141,7 @@ const PROMPT_LABELS: Record<string, string | null> = {
   "negotiation-summary.md": "Conversation update",
   "ask-questions.md": "Evening questions",
   // Both opportunity drops (midday and evening) share this file and its label.
-  "opportunity-drop.md": "Introduction suggestion",
+  "opportunity-drop.md": "Extra introduction drops",
   // DATA-430: the hourly alert for an opportunity that newly turned pending.
   "pending-alert.md": "Pending opportunity",
   // The 01:00 sync: silent, deliver false.
@@ -217,8 +217,8 @@ describe("AC #2: each delivering prompt ends with its own manage line", () => {
       ["Edge — daily digest", "Daily digest"],
       ["Edge — negotiation summary", "Conversation update"],
       ["Edge — evening questions", "Evening questions"],
-      ["Edge — opportunity drop (midday)", "Introduction suggestion"],
-      ["Edge — opportunity drop (evening)", "Introduction suggestion"],
+      ["Edge — opportunity drop (midday)", "Extra introduction drops"],
+      ["Edge — opportunity drop (evening)", "Extra introduction drops"],
       ["Edge — pending opportunity", "Pending opportunity"],
       ["Edge — token usage audit", "Usage report"],
     ]);
@@ -253,11 +253,12 @@ describe("AC #2: each delivering prompt ends with its own manage line", () => {
     // (outcome_question.json), left to that owner. Every other label stays pinned.
     const NOT_IN_OUTCOME_SEED = new Set(["Pending opportunity"]);
     const emitted = [...new Set([...Object.values(PROMPT_LABELS), ...Object.values(INLINE_LABELS)].filter((label): label is string => label !== null && !NOT_IN_OUTCOME_SEED.has(label)))];
-    expect(emitted.sort()).toEqual(["Conversation update", "Daily digest", "Evening questions", "Introduction suggestion", "Usage report"]);
+    expect(emitted.sort()).toEqual(["Conversation update", "Daily digest", "Evening questions", "Extra introduction drops", "Usage report"]);
     for (const label of emitted) expect({ label, strips: manage.test(manageLine(label)) }).toEqual({ label, strips: true });
-    // The alternation names these five and nothing else.
+    // The alternation names these five plus the former "Introduction suggestion" (already-sent messages carry it), and nothing else.
+    expect(manage.test(manageLine("Introduction suggestion"))).toBe(true);
     const alternation = /^\\\(\(\?:([^)]+)\) message/.exec(seed.normalise.manage_line)![1].split("|").sort();
-    expect(alternation).toEqual(emitted.sort());
+    expect(alternation).toEqual([...emitted, "Introduction suggestion"].sort());
   });
 
   test("tools.md's Cron schedule maps every label to exactly its jobs; the agent stops and restarts all six with the pause script", () => {

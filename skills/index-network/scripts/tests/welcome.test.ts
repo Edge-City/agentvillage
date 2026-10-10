@@ -17,7 +17,9 @@ import { join } from "node:path";
 import { recordsWelcomeSent } from "../../../../install/welcome_state";
 import {
   ALREADY_SENT,
+  CONTEXT_COPY,
   CONTEXT_QUESTIONS,
+  USER_MD_FILE,
   INTENTS_URL_MAX,
   MAX_LISTED,
   TITLE_MAX,
@@ -29,6 +31,7 @@ import {
   draftTrailer,
   fitTitles,
   intentTitles,
+  hasSetupContext,
   intentsPageUrl,
   main,
   readIntents,
@@ -140,6 +143,65 @@ describe("the welcome text", () => {
     const { text } = await run(() => intentsText([]));
     expect(text).toBe(golden.zero);
     for (const q of CONTEXT_QUESTIONS) expect(text).toContain(`- ${q}`);
+  });
+
+  /** The app's profileText (agentvillage-app profile-text.ts) with these section bodies, the rest as the app always writes them. */
+  const userMd = (sections: { context?: string[]; selected?: string[]; answers?: string[]; offers?: string[] } = {}) =>
+    [
+      "# Participant profile",
+      "Name: Mira",
+      "Work: ",
+      "Based in: ",
+      "Staying: ",
+      "Links: ",
+      "The participant has not selected intentions yet. Treat the context below as background, and ask before pursuing any goal on their behalf.",
+      "\n## Context supplied by the participant",
+      ...(sections.context ?? []),
+      "\n## Selected intentions",
+      ...(sections.selected ?? []),
+      "\n## Follow-up preferences",
+      ...(sections.answers ?? []),
+      "\n## Offers",
+      ...(sections.offers ?? []),
+      "The participant wants to choose offer recipients themselves. Do not allocate offers automatically.",
+    ].join("\n");
+
+  test("zero intents, but setup context in USER.md: no questions, the context text, and the trailer says context", async () => {
+    writeFileSync(join(home, USER_MD_FILE), userMd({ context: ["### Pasted notes\nBuilding agent memory; keen to meet researchers."] }));
+    const { text } = await run(() => intentsText([]));
+    expect(text).toBe(golden.context);
+    for (const q of CONTEXT_QUESTIONS) expect(text).not.toContain(q);
+    expect(text).toContain(CONTEXT_COPY.lead);
+    const fake = indexMcpFake({ tools: { list_intents: () => intentsText([]) } });
+    process.env.INDEX_MCP_URL = fake.url;
+    const draft = await welcomeRun(["--home", home, "--draft"], { fetch: fake.fetch, timeoutMs: 50 });
+    expect(draft.branch).toEqual({ fallback: "context", intents_listed: 0, intents_seeded: 0, seed_failed: 0 });
+  });
+
+  test("zero intents and the app's profile with every setup section empty: still the questions", async () => {
+    writeFileSync(join(home, USER_MD_FILE), userMd({ context: ["### Empty source\n"], answers: ["- What brings you here?: "] }));
+    const { text } = await run(() => intentsText([]));
+    expect(text).toBe(golden.zero);
+  });
+
+  test("hasSetupContext: something under one of the app's setup sections, never the headings, labels or fixed lines alone", () => {
+    const cases: Array<[string, string | null, boolean]> = [
+      ["no USER.md", null, false],
+      ["empty sections", userMd(), false],
+      ["a source label with no text", userMd({ context: ["### LinkedIn\n   "] }), false],
+      ["a follow-up question with no answer", userMd({ answers: ["- Where do you work best?: "] }), false],
+      ["imported context", userMd({ context: ["### Notes\nI run a robotics lab."] }), true],
+      ["a selected intention", userMd({ selected: ["- [connect] Meet climate founders"] }), true],
+      ["a follow-up answer", userMd({ answers: ["- Where do you work best?: Mornings; cafes"] }), true],
+      ["an offer", userMd({ offers: ["- Intro to investors: happy to help"] }), true],
+      ["text under an unrelated heading only", "# Notes\n\n## Something else\nlots of text here\n", false],
+      ["Windows line ends", userMd({ context: ["### Notes\r\nI run a robotics lab.\r"] }).replace(/\n/g, "\r\n"), true],
+    ];
+    for (const [label, text, want] of cases) {
+      rmSync(join(home, USER_MD_FILE), { force: true });
+      if (text !== null) writeFileSync(join(home, USER_MD_FILE), text);
+      expect({ label, got: hasSetupContext(home) }).toEqual({ label, got: want });
+    }
   });
 
   test("only archived or paused intents count as none", async () => {
@@ -490,7 +552,7 @@ describe("one welcome per tenant", () => {
  * the agent both streams and the agent sends the output verbatim.
  */
 describe("the --draft trailer: one stderr line naming the branch, never text; nothing on stderr by default", () => {
-  const TRAILER = /^\{"welcome":1,"fallback":"(none|questions|unreachable)","intents_listed":[0-3],"intents_seeded":[0-3],"seed_failed":[0-3]\}$/;
+  const TRAILER = /^\{"welcome":1,"fallback":"(none|questions|context|unreachable)","intents_listed":[0-3],"intents_seeded":[0-3],"seed_failed":[0-3]\}$/;
   /** DATA-412: no seed attempted. */
   const S0 = { intents_seeded: 0, seed_failed: 0 };
   const BRANCHES: Array<[keyof typeof golden, string | null, unknown[] | null, WelcomeBranch]> = [
@@ -526,18 +588,25 @@ describe("the --draft trailer: one stderr line naming the branch, never text; no
       { kind: "listed", titles: ["a", "b", "c", "d", "e"] },
     ];
     for (const read of reads) {
-      const b = welcomeBranch(read);
-      const dashes = welcomeText("Edge", read, INTENTS_URL).split("\n").filter((l) => l.startsWith("- "));
-      const questions = dashes.filter((l) => (CONTEXT_QUESTIONS as readonly string[]).includes(l.slice(2)));
-      expect(b.intents_listed).toBe(dashes.length - questions.length);
-      expect(b.fallback).toBe(read.kind === "unreachable" ? "unreachable" : read.titles.length === 0 ? "questions" : "none");
-      expect(b.fallback === "none").toBe(b.intents_listed >= 1 && b.intents_listed <= MAX_LISTED);
+      for (const context of [false, true]) {
+        const b = welcomeBranch(read, undefined, context);
+        const text = welcomeText("Edge", read, INTENTS_URL, context);
+        const dashes = text.split("\n").filter((l) => l.startsWith("- "));
+        const questions = dashes.filter((l) => (CONTEXT_QUESTIONS as readonly string[]).includes(l.slice(2)));
+        expect(b.intents_listed).toBe(dashes.length - questions.length);
+        const empty = read.kind === "listed" && read.titles.length === 0;
+        expect(b.fallback).toBe(read.kind === "unreachable" ? "unreachable" : !empty ? "none" : context ? "context" : "questions");
+        expect(b.fallback === "none").toBe(b.intents_listed >= 1 && b.intents_listed <= MAX_LISTED);
+        expect(questions.length).toBe(b.fallback === "questions" ? CONTEXT_QUESTIONS.length : 0);
+        expect(text.includes(CONTEXT_COPY.lead)).toBe(b.fallback === "context");
+      }
     }
   });
 
   test("the trailer is exactly the contract: welcome 1, the branch, the count, the seed's two counts, in that key order, nothing else", () => {
     expect(draftTrailer({ fallback: "none", intents_listed: 2, ...S0 })).toBe('{"welcome":1,"fallback":"none","intents_listed":2,"intents_seeded":0,"seed_failed":0}');
     expect(draftTrailer({ fallback: "questions", intents_listed: 0, ...S0 })).toBe('{"welcome":1,"fallback":"questions","intents_listed":0,"intents_seeded":0,"seed_failed":0}');
+    expect(draftTrailer({ fallback: "context", intents_listed: 0, ...S0 })).toBe('{"welcome":1,"fallback":"context","intents_listed":0,"intents_seeded":0,"seed_failed":0}');
     expect(draftTrailer({ fallback: "unreachable", intents_listed: 0, ...S0 })).toBe('{"welcome":1,"fallback":"unreachable","intents_listed":0,"intents_seeded":0,"seed_failed":0}');
     expect(draftTrailer({ fallback: "none", intents_listed: 3, intents_seeded: 2, seed_failed: 1 })).toBe(
       '{"welcome":1,"fallback":"none","intents_listed":3,"intents_seeded":2,"seed_failed":1}',
