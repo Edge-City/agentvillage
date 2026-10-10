@@ -1,12 +1,15 @@
 import {test,expect} from "bun:test";
-import {readFileSync,mkdtempSync,writeFileSync,rmSync} from "node:fs";
+import {existsSync,readFileSync,mkdtempSync,writeFileSync,rmSync} from "node:fs";
 import {join,resolve} from "node:path";
 import {tmpdir} from "node:os";
 import {morningSource,installMorning} from "../moralmod_morning";
 import {INDEX_PLUGIN_REVISION} from "../moralmod_release";
-const repo=resolve(import.meta.dir,"../../../index-hermes-plugin");
+// CI supplies its pinned checkout explicitly; local runs can use the sibling checkout.
+const repo=resolve(process.env.AV_INDEX_PLUGIN_TEST_DIR ?? resolve(import.meta.dir,"../../../index-hermes-plugin"));
+if(!existsSync(repo)) throw new Error("Missing Index plugin test checkout; set AV_INDEX_PLUGIN_TEST_DIR to a checkout containing "+INDEX_PLUGIN_REVISION);
 const pinned=Bun.spawnSync(["git","show",`${INDEX_PLUGIN_REVISION}:morning.py`],{cwd:repo});
-test.skipIf(pinned.exitCode!==0)("actual pinned Python cron uses opt-out, reconciles one job and preserves pause",()=>{
+if(pinned.exitCode!==0) throw new Error("Index plugin test checkout lacks pinned morning.py at "+INDEX_PLUGIN_REVISION);
+test("actual pinned Python cron uses opt-out, reconciles one job and preserves pause",()=>{
  const dir=mkdtempSync(join(tmpdir(),"mm-morning-"));
  try {
   const source=join(dir,"morning.py");writeFileSync(source,morningSource(pinned.stdout.toString()));
@@ -44,7 +47,7 @@ import shutil;shutil.rmtree(home)
   const r=Bun.spawnSync(["python3","-c",script,source]);expect(r.stderr.toString()).toBe("");expect(r.exitCode).toBe(0);
  } finally {rmSync(dir,{recursive:true,force:true});}
 });
-test.skipIf(pinned.exitCode!==0)("owned installer is repeatable and refuses a modified morning file",()=>{
+test("owned installer is repeatable and refuses a modified morning file",()=>{
  const home=mkdtempSync(join(tmpdir(),"mm-morning-install-"));
  try {
   Bun.spawnSync(["mkdir","-p",join(home,"plugins")]);
