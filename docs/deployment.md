@@ -286,9 +286,9 @@ id, schedule or prompt text, so an update finds every job up to date.
 the Agent Village app keeps in `$HERMES_HOME/memories/USER.md`, headed
 `[Context tags, kept in the Agent Village app]`
 (`skills/index-network/scripts/context-tags.ts`). Only items the resident
-stated are read: marked `setup`, `you`, `telegram` or `chat`, or unmarked;
-never a `(guess)` item, the `Summary:` line, or anything under
-`Removed by you:`. The brief takes Here to, Curious about, Working on and
+stated are read: marked `setup`, `you` or `telegram`, or unmarked; never a
+`(guess)` or `(chat, guess)` item, never a plain `(chat)` item, never the
+`Summary:` line, and never anything under `Removed by you:`. The brief takes Here to, Curious about, Working on and
 Wants to meet (each whole, at most 60 characters, 12 in all) as
 `you.interests` only when `av-profile.json` states no interests (they then
 pick the events too; when they suggest no village tag, the tags from the
@@ -300,13 +300,14 @@ stricter cleaner and the scan. Without the file or the entry every Script
 Output is exactly what it was before. The resident's about me from
 `av-profile.json` still reaches none of these jobs.
 
-**Roll gate for the Context tags.** Roll an overlay with this reader only
-after Edge-City/agentvillage-app#117 is live and has re-delivered every entry
-(the app does that once, about 10 minutes after its deploy). Before #117 the
-app writes an item it only guessed from chat as plain `(chat)`, which this
-reader takes as stated, so a guess could be named as an interest or silence a
-message as a preference. From #117 on the app writes it as `(chat, guess)`,
-which this reader leaves out.
+**Chat items are never used.** A plain `(chat)` item is the app's reading
+of the agent's own chat notes, not the resident's words, so no job uses it
+(the app's Skylight read leaves it out too). This also means the reader does
+not depend on the app's version: an app build before
+Edge-City/agentvillage-app#117 writes a chat guess as plain `(chat)`, and a
+box can keep that old entry for a while after #117 (an entry the app cannot
+fit is retried later). `(chat, guess)` is parsed as a guess and left out like
+any other guess.
 
 The rules the trigger holds:
 - **No third-party free text reaches the model.** Only dates, the resident's

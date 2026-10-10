@@ -167,3 +167,18 @@ test("profile entries (Context tags, setup profile) never wake the pass", () => 
   writeMemory(mixed, `${CONTEXT_TAGS}${SEP}${agentNote}${SEP}User is raising a seed round.`);
   expect(runGate(mixed).json).toMatchObject({ wakeAgent: true, reason: "memory_changed" });
 });
+
+test("OV-278 S3: the wake payload names memories/USER.md, where the Removed by you list lives, and never copies its text", () => {
+  const dir = makeDir();
+  mkdirSync(join(dir, "memories"), { recursive: true });
+  writeFileSync(join(dir, "memories", "USER.md"), "[Context tags, kept in the Agent Village app]\nRemoved by you:\n- REMOVED-HOUSING-POLICY (setup)");
+  writeMemory(dir, "User is looking for housing policy collaborators.");
+  const woke = runGate(dir);
+  expect(woke.json).toMatchObject({ wakeAgent: true, userFile: join(dir, "memories", "USER.md") });
+  expect(woke.stdout).not.toContain("REMOVED-HOUSING-POLICY");
+  // The prompt drops any candidate that matches a removal, silently.
+  const prompt = readFileSync(join(import.meta.dir, "..", "..", "skills", "index-network", "prompts", "memory-signals.md"), "utf8");
+  expect(prompt).toContain("Never propose anything that matches an item under `Removed by you:` in the Context tags entry");
+  expect(prompt).toContain("the preflight's `userFile`");
+  expect(prompt).toContain("drop it silently");
+});

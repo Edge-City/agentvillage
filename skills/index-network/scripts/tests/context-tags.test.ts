@@ -4,7 +4,7 @@
  *
  *   - the parser mirrors the app's (person-model/render.ts parseEntryText), with the `chat`
  *     marker and the `Personal:` heading;
- *   - only stated items are used: never a `(guess)`, the Summary, or anything under
+ *   - only stated items are used: never a `(guess)`, a plain `(chat)`, the Summary, or anything under
  *     `Removed by you:` (nor a group item matching one);
  *   - the morning brief takes Here to, Curious about, Working on and Wants to meet as
  *     `you.interests` when av-profile.json states none; the profile still wins;
@@ -58,7 +58,8 @@ const ENTRY = [
   "Preferences:",
   "- Short messages, please (you)",
   "- PREF-GUESS (Guess)",
-  "- No intros on weekends (chat)",
+  "- No intros on weekends (telegram)",
+  "- CHAT-PREF-NEVER-STATED (chat)",
   "Outside work:",
   "- Long bike rides (setup)",
   "Personal:",
@@ -80,7 +81,7 @@ describe("parseContextTags mirrors the app's parser", () => {
       { text: "How rivers change course", marker: "chat" },
       { text: "Mycology", marker: "telegram" },
     ]);
-    expect(tags.groups.prefs.map((item) => item.marker)).toEqual(["you", "guess", "chat"]);
+    expect(tags.groups.prefs.map((item) => item.marker)).toEqual(["you", "guess", "telegram", "chat"]);
   });
 
   test("the Personal heading is its own group; Removed by you is kept apart; the header and Summary are skipped", () => {
@@ -96,14 +97,14 @@ describe("parseContextTags mirrors the app's parser", () => {
     expect(parsed.groups.here).toEqual([{ text: "Learn Konkani (maybe)", marker: "telegram" }]);
   });
 
-  test("(chat, guess) is a guess, never stated; a guess suffix on another marker is dropped", () => {
+  test("(chat, guess) is a guess and plain (chat) is the agent's reading: neither is stated; a guess suffix on another marker is dropped", () => {
     const parsed = parseContextTags(`${CONTEXT_TAGS_MARK}\nOutside work:\n- Sailing (chat, guess)\n- Board games (chat)\n- Pottery (you, guess)`);
     expect(parsed.groups.fun).toEqual([
       { text: "Sailing", marker: "guess" },
       { text: "Board games", marker: "chat" },
       { text: "Pottery", marker: "you" },
     ]);
-    expect(statedItems(parsed, "fun")).toEqual(["Board games", "Pottery"]);
+    expect(statedItems(parsed, "fun")).toEqual(["Pottery"]);
   });
 });
 
@@ -113,6 +114,17 @@ describe("statedItems, contextInterests, contextPreferences", () => {
   test("no guess, nothing removed", () => {
     expect(statedItems(tags, "here")).toEqual(["Find a pilot partner for the soil kit"]);
     expect(statedItems(tags, "work")).toEqual(["A field kit that measures soil moisture"]);
+  });
+
+  test("OV-278 S1/S2: a plain (chat) item never reaches contextInterests or contextPreferences", () => {
+    // What an app build before agentvillage-app#117 writes for a chat guess, and what the app's Skylight read leaves out.
+    const chat = parseContextTags(
+      `${CONTEXT_TAGS_MARK}\nHere to:\n- Sailing (chat)\n- Find a pilot partner (setup)\nCurious about:\n- Tide pools (CHAT)\nPreferences:\n- No messages in the evening (chat)\n- Short messages (you)`,
+    );
+    expect(contextInterests(chat)).toEqual(["Find a pilot partner"]);
+    expect(contextPreferences(chat)).toEqual(["Short messages"]);
+    expect(statedItems(tags, "curious")).toEqual(["Mycology"]);
+    expect(contextPreferences(tags)).not.toContain("CHAT-PREF-NEVER-STATED");
   });
 
   test("a removal the app cut to 80 characters still removes the item it came from", () => {
@@ -127,7 +139,6 @@ describe("statedItems, contextInterests, contextPreferences", () => {
   test("interests: Here to, Curious about, Working on, Wants to meet, in that order, stated only", () => {
     expect(contextInterests(tags)).toEqual([
       "Find a pilot partner for the soil kit",
-      "How rivers change course",
       "Mycology",
       "A field kit that measures soil moisture",
       "People who run seed libraries",
@@ -261,13 +272,12 @@ describe("the morning brief's interests from the Context tags", () => {
     const you = output(result.lines).you;
     expect(you.interests).toEqual([
       "Find a pilot partner for the soil kit",
-      "How rivers change course",
       "Mycology",
       "A field kit that measures soil moisture",
       "People who run seed libraries",
     ]);
     const text = result.lines.join("\n");
-    for (const never of ["GUESS-HERE", "Housing policy", "OFFER-NOT-AN-INTEREST", "SUMMARY-TEXT", "INFJ", "bike"]) expect(text).not.toContain(never);
+    for (const never of ["GUESS-HERE", "Housing policy", "OFFER-NOT-AN-INTEREST", "SUMMARY-TEXT", "INFJ", "bike", "How rivers", "CHAT-PREF"]) expect(text).not.toContain(never);
   });
 
   test("the profile's interests still win", async () => {
@@ -332,6 +342,7 @@ describe("you.preferences in the jobs that write to the resident", () => {
       expect(output(result.lines).you.preferences).toEqual(STATED);
       const text = result.lines.join("\n");
       expect(text).not.toContain("PREF-GUESS");
+      expect(text).not.toContain("CHAT-PREF-NEVER-STATED");
       expect(text).not.toContain("ABOUT-ME");
     },
   );

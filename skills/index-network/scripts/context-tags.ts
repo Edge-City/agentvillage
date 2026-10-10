@@ -22,10 +22,14 @@
  * src/lib/person-model/render.ts, parseEntryText and its LINE expression),
  * with the `chat` marker the app adds for items it read from the agent's chat
  * notes. A scheduled job uses only what the resident stated: items marked
- * `setup`, `you`, `telegram` (with or without an intros-chat reference),
- * `chat`, or unmarked (the app reads an unmarked item as `telegram`). Never a
- * `(guess)` item, never the `Summary:` line (the app's reading), and never
- * anything under `Removed by you:`, nor a group item that matches one.
+ * `setup`, `you`, `telegram` (with or without an intros-chat reference), or
+ * unmarked (the app reads an unmarked item as `telegram`). Never a `(guess)`
+ * or `(chat, guess)` item, and never a plain `(chat)` item either: that is
+ * the app's reading of the agent's own chat notes, which the app's Skylight
+ * read leaves out too, and an app build before agentvillage-app#117 wrote a
+ * chat guess as plain `(chat)` (OV-278 S1, S2). Never the `Summary:` line
+ * (the app's reading), and never anything under `Removed by you:`, nor a
+ * group item that matches one.
  *
  * The read is defensive and quiet: a missing, unreadable or oversized file,
  * or a file without the entry, is "no tags" (null), and the jobs then behave
@@ -144,8 +148,9 @@ function itemKey(text: string): string {
 }
 
 /**
- * A group's items the resident stated, in the entry's order: no `(guess)`, and
- * none the resident removed. The app keeps a removal cut to 80 characters with
+ * A group's items the resident stated, in the entry's order: no `(guess)`, no
+ * `(chat)` (the agent's reading, never the resident's words), and none the
+ * resident removed. The app keeps a removal cut to 80 characters with
  * an ellipsis, so an item that starts with a cut removal counts as removed too.
  * Pure.
  */
@@ -155,7 +160,7 @@ export function statedItems(tags: ContextTags, group: ContextGroup): string[] {
     return { key: itemKey(item.text.trimEnd().replace(/…$/u, "")), cut };
   });
   return tags.groups[group]
-    .filter((item) => item.marker !== "guess")
+    .filter((item) => item.marker !== "guess" && item.marker !== "chat")
     .map((item) => item.text)
     .filter((text) => {
       const key = itemKey(text);

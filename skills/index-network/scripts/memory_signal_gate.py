@@ -188,6 +188,9 @@ def main(argv: list[str]) -> int:
         "previousMemoryHashPresent": bool(previous_hash),
         "stateFile": str(state_path),
         "memoryFile": str(memory_path),
+        # The Context tags entry's "Removed by you:" list lives here: the prompt drops any candidate
+        # that matches it (OV-278 S3). A path only; the gate never copies the resident's text out.
+        "userFile": str(home / "memories" / "USER.md"),
     }
     if not args.json_only:
         print("# AgentVillage Memory Signal Gate")
