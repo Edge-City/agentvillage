@@ -19,6 +19,15 @@
  *       annotated tag and pushes only refs/tags/<version> (never --force, never
  *       a branch). A tag pushed by someone else meanwhile makes the push fail.
  *
+ *   bun scripts/tag-release.ts tested --commit <sha> [--force-tests true|false] [--repo owner/name]
+ *       Read-only, through the REST API (`gh api`, GH_TOKEN with actions: read).
+ *       Writes tested=true and tested_run=<id> to $GITHUB_OUTPUT when the newest
+ *       run of .github/workflows/test.yml (by path and workflow id, not by name)
+ *       that a push to main started at exactly <sha> is completed and its latest
+ *       attempt succeeded; tested=false otherwise, on any API error, and always
+ *       with --force-tests true. The workflow skips the suites only on
+ *       tested=true. --repo defaults to $GITHUB_REPOSITORY.
+ *
  * Common options: --cwd <dir> (default .), --main <ref> (default
  * refs/remotes/origin/main), --remote <name> (default origin).
  * Exit codes: 0 done, 1 refused or failed (nothing created), 2 bad usage.
@@ -644,10 +653,10 @@ function nextStep(plan: Plan, stage: Stage): string[] {
     return [
       `Nothing was created. To create it, run Tag release again with dry_run unticked and ref ${plan.commit} ` +
         `(the version is worked out again then; put ${plan.version} in the version input to insist on it).`,
-      "The real run tags only after this repository's suites pass at that commit.",
+      "The real run tags only once this repository's suites have passed at that commit (in main's own push run of test.yml, or run again by the workflow).",
     ];
   }
-  if (stage === "planned") return ["The tag is created after the suites pass, by the tag job of this run."];
+  if (stage === "planned") return ["The tag is created by the tag job of this run, once the suites have passed at that commit."];
   return [
     `Roll it: ${ROLL_WORKFLOW_URL}`,
     `  Use workflow from: main; tag: ${plan.version}; dry_run: on; scope: test-tenants; allow_seed_change: ${seedInput}.`,
@@ -803,6 +812,129 @@ export function createTag(git: Git, opts: TagOptions): { plan: Plan; tagObject: 
 }
 
 // ---------------------------------------------------------------------------
+// Whether the suites already passed at the commit
+//
+// main's own push run of test.yml tests exactly the commit the button tags.
+// When the newest such run (its latest attempt) succeeded, the workflow skips
+// running the same suites again. Anything less than that proof runs them.
+
+/** A GET of a REST API path relative to the API root; returns the parsed JSON, throws on any failure. */
+export type Api = (path: string) => unknown;
+
+/** The REST API through the runner's `gh` (GH_TOKEN in the environment). */
+export function ghApi(): Api {
+  return (path) => {
+    const r = spawnSync(
+      "gh",
+      ["api", "--method", "GET", "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2022-11-28", path],
+      { encoding: "utf8", timeout: 60_000, env: { ...process.env, GH_PROMPT_DISABLED: "1", NO_COLOR: "1" } },
+    );
+    if (r.error) throw new Error(`gh could not run: ${r.error.message}`);
+    if (r.status !== 0) throw new Error(`gh api exited ${r.status}: ${(r.stderr || r.stdout).trim().split("\n").slice(-1)[0] ?? ""}`);
+    return JSON.parse(r.stdout);
+  };
+}
+
+/** The branch whose push runs count. */
+export const TESTED_BRANCH = "main";
+const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
+const SERVER_RE = /^https:\/\/[A-Za-z0-9.-]+(?::\d+)?$/;
+
+export type TestedCheck = {
+  tested: boolean;
+  /** The run that proves the commit (tested), or the newest candidate that did not (null: none). */
+  runId: number | null;
+  attempt: number | null;
+  /** One line: what proved the commit, or why it is not proven. Cleaned. */
+  reason: string;
+};
+
+type Obj = Record<string, unknown>;
+const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
+const fullName = (v: unknown): unknown => (isObj(v) ? v.full_name : undefined);
+const errText = (e: unknown) => clean(e instanceof Error ? e.message : String(e), 300);
+
+/**
+ * Looks for the newest run of this repository's test.yml (matched by its file
+ * path and workflow id, never by display name) that a push to main started at
+ * exactly `commit`. tested only when that run is completed and its latest
+ * attempt concluded success. API errors and unexpected answers mean not tested
+ * (the suites then run); bad arguments refuse.
+ */
+export function findTestedRun(api: Api, repo: string, commit: string): TestedCheck {
+  if (!REPO_RE.test(repo)) throw new Refusal("bad_usage", "--repo (or GITHUB_REPOSITORY) must be owner/name.");
+  if (!FULL_SHA_RE.test(commit)) throw new Refusal("bad_usage", "--commit must be a full commit id.");
+  const short = commit.slice(0, 7);
+  const no = (reason: string, run: Obj | null = null): TestedCheck => ({
+    tested: false,
+    runId: run ? (run.id as number) : null,
+    attempt: run && Number.isSafeInteger(run.run_attempt) ? (run.run_attempt as number) : null,
+    reason: clean(reason, 600),
+  });
+
+  // The workflow by its file: GitHub resolves the file name to that file's workflow id.
+  const file = TEST_WORKFLOW.split("/").pop() as string;
+  let wf: unknown;
+  try {
+    wf = api(`repos/${repo}/actions/workflows/${file}`);
+  } catch (e) {
+    return no(`could not read the workflow ${TEST_WORKFLOW}: ${errText(e)}`);
+  }
+  if (!isObj(wf) || !Number.isSafeInteger(wf.id) || wf.path !== TEST_WORKFLOW) {
+    return no(`the API did not answer with the workflow ${TEST_WORKFLOW}`);
+  }
+  const workflowId = wf.id as number;
+
+  let list: unknown;
+  try {
+    list = api(
+      `repos/${repo}/actions/workflows/${workflowId}/runs?head_sha=${commit}&event=push&branch=${TESTED_BRANCH}&exclude_pull_requests=true&per_page=100`,
+    );
+  } catch (e) {
+    return no(`could not list the runs of ${TEST_WORKFLOW}: ${errText(e)}`);
+  }
+  if (!isObj(list) || !Array.isArray(list.workflow_runs)) return no(`the API did not answer with a list of runs of ${TEST_WORKFLOW}`);
+
+  // The server filtered already; every condition is checked again here.
+  const runs = list.workflow_runs.filter(isObj);
+  const matching = runs.filter(
+    (r) =>
+      Number.isSafeInteger(r.id) &&
+      (r.id as number) > 0 &&
+      r.workflow_id === workflowId &&
+      r.path === TEST_WORKFLOW &&
+      r.head_sha === commit &&
+      r.event === "push" &&
+      r.head_branch === TESTED_BRANCH &&
+      fullName(r.repository) === repo &&
+      fullName(r.head_repository) === repo,
+  );
+  const ignored = list.workflow_runs.length - matching.length;
+  const ignoredText = ignored > 0 ? ` (${ignored} other run${ignored === 1 ? "" : "s"} ignored: another workflow, event, branch, commit or repository)` : "";
+  if (matching.length === 0) return no(`no run of ${TEST_WORKFLOW} from a push to ${TESTED_BRANCH} at ${short}${ignoredText}`);
+
+  // The newest run decides; the run object carries its latest attempt's status and conclusion.
+  const num = (v: unknown) => (Number.isSafeInteger(v) ? (v as number) : -1);
+  const newest = matching.sort((a, b) => num(b.run_number) - num(a.run_number) || (b.id as number) - (a.id as number))[0];
+  const attempt = Number.isSafeInteger(newest.run_attempt) ? (newest.run_attempt as number) : null;
+  const which = `run ${newest.id}${attempt !== null ? ` (attempt ${attempt})` : ""} of ${TEST_WORKFLOW}, from a push to ${TESTED_BRANCH} at ${short},`;
+  if (newest.status !== "completed") return no(`${which} has not finished (${clean(String(newest.status), 40)})`, newest);
+  if (newest.conclusion !== "success") return no(`${which} concluded ${clean(String(newest.conclusion), 40)}`, newest);
+  return { tested: true, runId: newest.id as number, attempt, reason: clean(`${which} succeeded`, 600) };
+}
+
+export function runUrl(env: Record<string, string | undefined>, repo: string, runId: number): string {
+  const server = env.GITHUB_SERVER_URL && SERVER_RE.test(env.GITHUB_SERVER_URL) ? env.GITHUB_SERVER_URL : "https://github.com";
+  return `${server}/${repo}/actions/runs/${runId}`;
+}
+
+export function testedLine(check: TestedCheck, forced: boolean): string {
+  if (forced) return "Suites: they run in this workflow (force_tests is on).";
+  if (check.tested) return `Suites: not run again here. Proved by ${check.reason}.`;
+  return `Suites: they run in this workflow. Not proven by an earlier run: ${check.reason}.`;
+}
+
+// ---------------------------------------------------------------------------
 // CLI
 
 function parseArgs(argv: string[]): { cmd: string; flags: Map<string, string> } {
@@ -825,6 +957,7 @@ function parseArgs(argv: string[]): { cmd: string; flags: Map<string, string> } 
 const KNOWN = {
   plan: ["ref", "version", "note", "dry-run", "cwd", "main", "remote"],
   tag: ["ref", "version", "note", "cwd", "main", "remote", "expect-commit", "expect-version", "expect-seeds", "actor", "triggering-actor", "run-url", "fetch"],
+  tested: ["commit", "repo", "force-tests"],
 } as const;
 
 function emit(path: string | undefined, text: string) {
@@ -861,13 +994,33 @@ function readTestWorkflow(cwd: string): string | null {
   return existsSync(path) ? readFileSync(path, "utf8") : null;
 }
 
-export function main(argv: string[], env: Record<string, string | undefined> = process.env): number {
+export function main(argv: string[], env: Record<string, string | undefined> = process.env, deps: { api?: Api } = {}): number {
   const summaryPath = env.GITHUB_STEP_SUMMARY || undefined;
   try {
     const { cmd, flags } = parseArgs(argv);
-    if (cmd !== "plan" && cmd !== "tag") throw new Refusal("bad_usage", "Usage: tag-release.ts plan|tag --ref <ref> [...] (see the header of scripts/tag-release.ts).");
+    if (cmd !== "plan" && cmd !== "tag" && cmd !== "tested") throw new Refusal("bad_usage", "Usage: tag-release.ts plan|tag|tested [...] (see the header of scripts/tag-release.ts).");
     for (const k of flags.keys()) {
       if (!(KNOWN[cmd] as readonly string[]).includes(k)) throw new Refusal("bad_usage", `Unknown option --${k} for ${cmd}.`);
+    }
+    if (cmd === "tested") {
+      const force = flags.get("force-tests") ?? "false";
+      if (force !== "true" && force !== "false") throw new Refusal("bad_usage", "--force-tests must be true or false.");
+      const repo = flags.get("repo") ?? env.GITHUB_REPOSITORY ?? "";
+      const commit = flags.get("commit") ?? "";
+      if (!REPO_RE.test(repo)) throw new Refusal("bad_usage", "--repo (or GITHUB_REPOSITORY) must be owner/name.");
+      if (!FULL_SHA_RE.test(commit)) throw new Refusal("bad_usage", "--commit must be a full commit id.");
+      const check: TestedCheck =
+        force === "true"
+          ? { tested: false, runId: null, attempt: null, reason: "force_tests is on" }
+          : findTestedRun(deps.api ?? ghApi(), repo, commit);
+      const line = testedLine(check, force === "true");
+      const url = check.runId !== null ? runUrl(env, repo, check.runId) : null;
+      printRepoText(`${line}
+${url ? `  ${url}
+` : ""}`, env);
+      emit(env.GITHUB_OUTPUT, `tested=${check.tested}\ntested_run=${check.tested ? check.runId : ""}\n`);
+      emit(summaryPath, `**Suites.** ${code(line, 1000)}${url ? ` [run ${check.runId}](${url})` : ""}\n`);
+      return 0;
     }
     const cwd = flags.get("cwd") ?? ".";
     const git = gitIn(cwd);

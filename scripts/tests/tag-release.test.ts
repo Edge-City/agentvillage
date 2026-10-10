@@ -4,6 +4,11 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+  type Api,
+  findTestedRun,
+  main,
+  runUrl,
+  testedLine,
   checkNote,
   checkSuiteDirs,
   chooseVersion,
@@ -835,5 +840,223 @@ describe("command line", () => {
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("Created v2.0.0-rc2");
     expect(sh(f.origin, ["rev-parse", "refs/tags/v2.0.0-rc2^{commit}"])).toBe(f.c);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Whether main's own test run already passed at the commit (the API mocked)
+
+const REPO = "Edge-City/agentvillage";
+const SHA = "6f9c5fca09ff4d7b6a0a276cf2258967439e8b56";
+const OTHER_SHA = "714433926f881601657153873ba6c6847c0d7ca8";
+const WF_ID = 372158421;
+const WORKFLOW = { id: WF_ID, name: "test", path: ".github/workflows/test.yml", state: "active" };
+
+function run(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 38085948159,
+    name: "test",
+    path: ".github/workflows/test.yml",
+    workflow_id: WF_ID,
+    head_sha: SHA,
+    head_branch: "main",
+    event: "push",
+    status: "completed",
+    conclusion: "success",
+    run_attempt: 1,
+    run_number: 380,
+    repository: { full_name: REPO },
+    head_repository: { full_name: REPO },
+    ...over,
+  };
+}
+
+function mockApi(runs: unknown[] | (() => unknown), workflow: unknown = WORKFLOW): { api: Api; calls: string[] } {
+  const calls: string[] = [];
+  const api: Api = (path) => {
+    calls.push(path);
+    if (path === `repos/${REPO}/actions/workflows/test.yml`) {
+      if (workflow instanceof Error) throw workflow;
+      return workflow;
+    }
+    if (path.startsWith(`repos/${REPO}/actions/workflows/${WF_ID}/runs?`)) {
+      const list = typeof runs === "function" ? runs() : runs;
+      return { total_count: Array.isArray(list) ? list.length : 0, workflow_runs: list };
+    }
+    throw new Error(`HTTP 404: Not Found (${path})`);
+  };
+  return { api, calls };
+}
+
+describe("findTestedRun", () => {
+  test("a successful run of test.yml from a push to main at the commit: tested, with its id", () => {
+    const { api, calls } = mockApi([run()]);
+    const r = findTestedRun(api, REPO, SHA);
+    expect(r).toEqual({ tested: true, runId: 38085948159, attempt: 1, reason: expect.stringContaining("run 38085948159 (attempt 1) of .github/workflows/test.yml") });
+    expect(r.reason).toContain("succeeded");
+    // The workflow is looked up by its file, the runs by its id and the exact commit.
+    expect(calls[0]).toBe(`repos/${REPO}/actions/workflows/test.yml`);
+    expect(calls[1]).toStartWith(`repos/${REPO}/actions/workflows/${WF_ID}/runs?head_sha=${SHA}&event=push&branch=main&`);
+  });
+
+  test("a failed run is not tested", () => {
+    const r = findTestedRun(mockApi([run({ conclusion: "failure" })]).api, REPO, SHA);
+    expect(r.tested).toBe(false);
+    expect(r.runId).toBe(38085948159);
+    expect(r.reason).toContain("concluded failure");
+  });
+
+  test("cancelled, skipped, timed out and still running are not tested", () => {
+    for (const over of [{ conclusion: "cancelled" }, { conclusion: "skipped" }, { conclusion: "timed_out" }, { conclusion: "neutral" }, { status: "in_progress", conclusion: null }, { status: "queued", conclusion: null }]) {
+      expect(findTestedRun(mockApi([run(over)]).api, REPO, SHA).tested).toBe(false);
+    }
+    expect(findTestedRun(mockApi([run({ status: "in_progress", conclusion: null })]).api, REPO, SHA).reason).toContain("has not finished (in_progress)");
+  });
+
+  test("a re-run whose latest attempt failed after an earlier success is not tested", () => {
+    // The run object carries the latest attempt: attempt 1 succeeded, attempt 2 failed.
+    const r = findTestedRun(mockApi([run({ run_attempt: 2, conclusion: "failure" })]).api, REPO, SHA);
+    expect(r.tested).toBe(false);
+    expect(r.reason).toContain("(attempt 2)");
+    // A re-run still going after a success is not proof either.
+    expect(findTestedRun(mockApi([run({ run_attempt: 2, status: "in_progress", conclusion: null })]).api, REPO, SHA).tested).toBe(false);
+    // A re-run that succeeded is.
+    expect(findTestedRun(mockApi([run({ run_attempt: 3 })]).api, REPO, SHA)).toMatchObject({ tested: true, attempt: 3 });
+  });
+
+  test("the newest matching run decides, not any older success", () => {
+    const older = run({ id: 100, run_number: 10 });
+    const newer = run({ id: 200, run_number: 11, conclusion: "failure" });
+    expect(findTestedRun(mockApi([older, newer]).api, REPO, SHA)).toMatchObject({ tested: false, runId: 200 });
+    expect(findTestedRun(mockApi([newer, older]).api, REPO, SHA)).toMatchObject({ tested: false, runId: 200 });
+    expect(findTestedRun(mockApi([run({ id: 100, run_number: 10, conclusion: "failure" }), run({ id: 200, run_number: 11 })]).api, REPO, SHA)).toMatchObject({ tested: true, runId: 200 });
+  });
+
+  test("a pull request run, even from a fork whose branch is called main, is not tested", () => {
+    const pr = run({ event: "pull_request" });
+    expect(findTestedRun(mockApi([pr]).api, REPO, SHA)).toMatchObject({ tested: false, runId: null });
+    const fork = run({ event: "pull_request_target", head_repository: { full_name: "someone/agentvillage" } });
+    expect(findTestedRun(mockApi([fork]).api, REPO, SHA).tested).toBe(false);
+    const forkPush = run({ head_repository: { full_name: "someone/agentvillage" } });
+    expect(findTestedRun(mockApi([forkPush]).api, REPO, SHA).tested).toBe(false);
+    expect(findTestedRun(mockApi([run({ repository: { full_name: "someone/agentvillage" } })]).api, REPO, SHA).tested).toBe(false);
+    expect(findTestedRun(mockApi([run({ head_repository: null })]).api, REPO, SHA).tested).toBe(false);
+  });
+
+  test("other events and branches are not tested", () => {
+    for (const over of [{ event: "workflow_dispatch" }, { event: "workflow_call" }, { event: "schedule" }, { head_branch: "release/x" }, { head_branch: "Main" }, { head_branch: null }]) {
+      expect(findTestedRun(mockApi([run(over)]).api, REPO, SHA).tested).toBe(false);
+    }
+  });
+
+  test("another workflow, even one named test, is not tested", () => {
+    const sameName = run({ path: ".github/workflows/other.yml", workflow_id: 999, name: "test" });
+    expect(findTestedRun(mockApi([sameName]).api, REPO, SHA).tested).toBe(false);
+    // The right id with another path, or the right path with another id: not tested.
+    expect(findTestedRun(mockApi([run({ path: ".github/workflows/other.yml" })]).api, REPO, SHA).tested).toBe(false);
+    expect(findTestedRun(mockApi([run({ workflow_id: 999 })]).api, REPO, SHA).tested).toBe(false);
+    expect(findTestedRun(mockApi([run({ path: ".github/workflows/test.yml@refs/heads/x" })]).api, REPO, SHA).tested).toBe(false);
+    // The workflow lookup must name test.yml's own path.
+    const r = findTestedRun(mockApi([run()], { ...WORKFLOW, path: ".github/workflows/other.yml" }).api, REPO, SHA);
+    expect(r.tested).toBe(false);
+    expect(r.reason).toContain("did not answer with the workflow");
+    expect(findTestedRun(mockApi([run()], { ...WORKFLOW, id: "372158421" }).api, REPO, SHA).tested).toBe(false);
+  });
+
+  test("a run at another commit is not tested", () => {
+    expect(findTestedRun(mockApi([run({ head_sha: OTHER_SHA })]).api, REPO, SHA).tested).toBe(false);
+    expect(findTestedRun(mockApi([run({ head_sha: SHA.slice(0, 7) })]).api, REPO, SHA).tested).toBe(false);
+    expect(findTestedRun(mockApi([run({ head_sha: SHA.toUpperCase() })]).api, REPO, SHA).tested).toBe(false);
+  });
+
+  test("no run, an API error or an unexpected answer: not tested, with the reason", () => {
+    const none = findTestedRun(mockApi([]).api, REPO, SHA);
+    expect(none).toEqual({ tested: false, runId: null, attempt: null, reason: `no run of .github/workflows/test.yml from a push to main at ${SHA.slice(0, 7)}` });
+    const ignored = findTestedRun(mockApi([run({ event: "pull_request" }), "junk", null]).api, REPO, SHA);
+    expect(ignored.reason).toContain("(3 other runs ignored");
+    const down = findTestedRun(mockApi([], new Error("HTTP 403: Resource not accessible by integration")).api, REPO, SHA);
+    expect(down.tested).toBe(false);
+    expect(down.reason).toContain("could not read the workflow .github/workflows/test.yml: HTTP 403");
+    const listFails = findTestedRun(mockApi(() => {
+      throw new Error("HTTP 502\n::warning::x");
+    }).api, REPO, SHA);
+    expect(listFails.tested).toBe(false);
+    expect(listFails.reason).not.toContain("\n");
+    expect(findTestedRun(() => ({ workflow_runs: "nope", id: WF_ID, path: ".github/workflows/test.yml" }), REPO, SHA).tested).toBe(false);
+    expect(findTestedRun(() => null, REPO, SHA).tested).toBe(false);
+    expect(findTestedRun(mockApi([run({ id: "38085948159" })]).api, REPO, SHA).tested).toBe(false);
+  });
+
+  test("API text in the reason is cleaned", () => {
+    const r = findTestedRun(mockApi([run({ conclusion: "fail\n::error::x‮" })]).api, REPO, SHA);
+    expect(r.tested).toBe(false);
+    expect(r.reason).not.toMatch(/[\n‮]/);
+  });
+
+  test("bad arguments refuse", () => {
+    const { api, calls } = mockApi([run()]);
+    expect(refusalCode(() => findTestedRun(api, REPO, SHA.slice(0, 7)))).toBe("bad_usage");
+    expect(refusalCode(() => findTestedRun(api, "Edge-City/agentvillage/../x", SHA))).toBe("bad_usage");
+    expect(refusalCode(() => findTestedRun(api, "", SHA))).toBe("bad_usage");
+    expect(calls).toHaveLength(0);
+  });
+
+  test("the log line and the run link", () => {
+    const yes = findTestedRun(mockApi([run()]).api, REPO, SHA);
+    expect(testedLine(yes, false)).toStartWith("Suites: not run again here. Proved by run 38085948159");
+    expect(testedLine({ tested: false, runId: null, attempt: null, reason: "x" }, false)).toBe("Suites: they run in this workflow. Not proven by an earlier run: x.");
+    expect(testedLine(yes, true)).toContain("force_tests is on");
+    expect(runUrl({}, REPO, 5)).toBe(`https://github.com/${REPO}/actions/runs/5`);
+    expect(runUrl({ GITHUB_SERVER_URL: "https://ghe.example.com" }, REPO, 5)).toBe(`https://ghe.example.com/${REPO}/actions/runs/5`);
+    expect(runUrl({ GITHUB_SERVER_URL: "javascript:alert(1)" }, REPO, 5)).toBe(`https://github.com/${REPO}/actions/runs/5`);
+  });
+});
+
+describe("command line: tested", () => {
+  function outFiles() {
+    const root = mkdtempSync(join(tmpdir(), "tag-release-tested-"));
+    dirs.push(root);
+    const out = join(root, "out");
+    const sum = join(root, "summary.md");
+    writeFileSync(out, "");
+    writeFileSync(sum, "");
+    return { out, sum };
+  }
+
+  test("tested=true and the run id when main's run proved the commit", () => {
+    const { out, sum } = outFiles();
+    const code = main(["tested", "--commit", SHA, "--force-tests", "false"], { GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: sum, GITHUB_REPOSITORY: REPO }, { api: mockApi([run()]).api });
+    expect(code).toBe(0);
+    expect(readFileSync(out, "utf8")).toBe("tested=true\ntested_run=38085948159\n");
+    expect(readFileSync(sum, "utf8")).toContain(`[run 38085948159](https://github.com/${REPO}/actions/runs/38085948159)`);
+  });
+
+  test("tested=false (exit 0) when not proven, so the suites run", () => {
+    const { out } = outFiles();
+    const code = main(["tested", "--commit", SHA, "--repo", REPO], { GITHUB_OUTPUT: out }, { api: mockApi([run({ conclusion: "failure" })]).api });
+    expect(code).toBe(0);
+    expect(readFileSync(out, "utf8")).toBe("tested=false\ntested_run=\n");
+  });
+
+  test("--force-tests true never asks the API and writes tested=false", () => {
+    const { out } = outFiles();
+    const { api, calls } = mockApi([run()]);
+    expect(main(["tested", "--commit", SHA, "--force-tests", "true"], { GITHUB_OUTPUT: out, GITHUB_REPOSITORY: REPO }, { api })).toBe(0);
+    expect(calls).toHaveLength(0);
+    expect(readFileSync(out, "utf8")).toBe("tested=false\ntested_run=\n");
+  });
+
+  test("bad usage exits 2 and writes no outputs", () => {
+    const { out } = outFiles();
+    const { api, calls } = mockApi([run()]);
+    const env = { GITHUB_OUTPUT: out, GITHUB_REPOSITORY: REPO };
+    expect(main(["tested", "--commit", SHA, "--force-tests", "yes"], env, { api })).toBe(2);
+    expect(main(["tested", "--commit", SHA, "--force-tests", ""], env, { api })).toBe(2);
+    expect(main(["tested", "--commit", "main"], env, { api })).toBe(2);
+    expect(main(["tested", "--commit", SHA], { GITHUB_OUTPUT: out }, { api })).toBe(2);
+    expect(main(["tested", "--commit", SHA, "--ref", "main"], env, { api })).toBe(2);
+    expect(main(["plan", "--force-tests", "true"], env, { api })).toBe(2);
+    expect(calls).toHaveLength(0);
+    expect(readFileSync(out, "utf8")).toBe("");
   });
 });

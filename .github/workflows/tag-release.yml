@@ -4,22 +4,33 @@
 #
 #   Actions > Tag release > Run workflow (Use workflow from: main)
 #     ref       commit, branch or tag to release (default main; main must contain it)
-#     dry_run   default on: plan and run the suites, create nothing
+#     dry_run   default on: plan and check the suites, create nothing
 #     version   optional: the version to create (default: the highest vX.Y.Z-rcN + 1)
 #     note      optional: one line (at most 200 characters) for the tag message's Note: line
+#     force_tests  default off: run the suites here even when main's own run proved the commit
 #
 # Jobs: plan (read-only: resolve and check the ref, work out the version, list
 # the commits since the previous release tag, compare the plugin seed files,
-# refuse when a directory test.yml's bun test line names is missing there) >
-# test (test.yml, the suites every pull request runs, at that commit) > tag (real
-# runs only, after green suites; serialised; fetches again, plans again and fails
-# if the commit, the version or the seed check changed, creates the annotated tag and pushes only
-# refs/tags/<version>: never a branch, never forced).
+# refuse when a directory test.yml's bun test line names is missing there; then
+# ask the API whether main's own push run of test.yml already passed at that
+# exact commit: tested=true only when the newest run of the file
+# .github/workflows/test.yml (matched by path and workflow id, never by display
+# name) started by a push to main with that head_sha is completed and its latest
+# attempt concluded success; any API error, a PR run, another branch, workflow or
+# commit, a run still going or a failed re-run means tested=false) >
+# test (test.yml, the suites every pull request runs, at that commit; skipped
+# when the plan proved the commit tested, unless force_tests) > tag (real runs
+# only, after green suites here or the plan's proof; serialised; fetches again,
+# plans again and fails if the commit, the version or the seed check changed,
+# creates the annotated tag and pushes only refs/tags/<version>: never a branch,
+# never forced).
 # Logic and its tests: scripts/tag-release.ts, scripts/tests/tag-release.test.ts.
 # The hand fallback: git tag -a vX.Y.Z-rcN <commit> -m "..." && git push origin vX.Y.Z-rcN
 #
-# No secrets. The tag job pushes with this run's GITHUB_TOKEN (contents: write);
-# the tagger is github-actions[bot] and the message names who ran it. A tag
+# No secrets. The plan job reads test.yml's runs with its own GITHUB_TOKEN
+# (contents: read, actions: read), handed (as GH_TOKEN) only to the step that
+# asks. The tag job pushes with this run's GITHUB_TOKEN (contents: write); the
+# tagger is github-actions[bot] and the message names who ran it. A tag
 # pushed with GITHUB_TOKEN starts no other workflow (none here listens for tags).
 # Actions are pinned by full commit SHA (version in the comment), unlike test.yml
 # and the sync workflows here, which use major version tags: this workflow has a
@@ -52,6 +63,10 @@ on:
         type: string
         required: false
         default: ''
+      force_tests:
+        description: "Run the suites here even when main's own test run already passed at this commit"
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -61,6 +76,7 @@ env:
   TAG_DRY_RUN: ${{ inputs.dry_run }}
   TAG_VERSION: ${{ inputs.version }}
   TAG_NOTE: ${{ inputs.note }}
+  TAG_FORCE_TESTS: ${{ inputs.force_tests }}
 
 jobs:
   plan:
@@ -68,10 +84,13 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
+      actions: read # the runs of test.yml, to skip suites that already passed at the commit
     outputs:
       commit: ${{ steps.plan.outputs.commit }}
       version: ${{ steps.plan.outputs.version }}
       seeds: ${{ steps.plan.outputs.seeds }}
+      tested: ${{ steps.tested.outputs.tested }}
+      tested_run: ${{ steps.tested.outputs.tested_run }}
     steps:
       - name: Require the workflow from main
         run: |
@@ -92,20 +111,35 @@ jobs:
       - name: Plan
         id: plan
         run: bun scripts/tag-release.ts plan --ref "$TAG_REF" --version "$TAG_VERSION" --note "$TAG_NOTE" --dry-run "$TAG_DRY_RUN"
+      # Logs the run that proved the commit, or why none did. Any error: tested=false.
+      - name: Did main's test run already pass at this commit
+        id: tested
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLAN_COMMIT: ${{ steps.plan.outputs.commit }}
+        run: bun scripts/tag-release.ts tested --commit "$PLAN_COMMIT" --force-tests "$TAG_FORCE_TESTS"
 
-  # The same suites as every pull request, at the commit to be tagged. A dry run
-  # runs them too, so it tells you whether the real run would tag.
+  # The same suites as every pull request, at the commit to be tagged, unless
+  # main's own push run of test.yml already passed there (the plan job's
+  # tested). A dry run decides the same way, so it tells you whether the real
+  # run would tag.
   test:
     needs: plan
+    if: ${{ needs.plan.outputs.tested != 'true' }}
     permissions:
       contents: read
     uses: ./.github/workflows/test.yml
     with:
       ref: ${{ needs.plan.outputs.commit }}
 
+  # !cancelled(): a skipped test job would otherwise skip this one too. It tags
+  # only after green suites here, or with them skipped because the plan proved
+  # the commit; a failed or cancelled plan or test job never tags.
   tag:
     needs: [plan, test]
-    if: ${{ !inputs.dry_run }}
+    if: >-
+      ${{ !cancelled() && !inputs.dry_run && needs.plan.result == 'success' &&
+      (needs.test.result == 'success' || (needs.test.result == 'skipped' && needs.plan.outputs.tested == 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
