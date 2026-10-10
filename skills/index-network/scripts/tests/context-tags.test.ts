@@ -361,10 +361,12 @@ describe("the prompts say how to use you.preferences", () => {
     expect(text).toContain("never let it add a fact, a person or a link");
   });
 
-  test("the drops, the evening note and the follow-up may stay silent when a preference plainly asks", () => {
+  test("the drops, the evening note and the follow-up stay silent only when a preference plainly asks never to get that kind of message", () => {
     for (const file of ["opportunity-drop.md", "ask-questions.md", "negotiation-summary.md"]) {
       const text = readFileSync(join(SKILLS, "index-network", "prompts", file), "utf8");
-      expect({ file, has: /When an item plainly asks not to get .+ reply exactly `\[SILENT\]`/.test(text) }).toEqual({ file, has: true });
+      expect({ file, has: text.includes("When an item plainly asks never to get this kind of message, reply exactly `[SILENT]`") }).toEqual({ file, has: true });
+      // OV-251 S2: no time-of-day half. The view carries no time, and a silenced card still uses up a showing.
+      expect({ file, has: /not at this time of day|not in the evening/.test(text) }).toEqual({ file, has: false });
     }
     // The brief keeps its Connections line whatever a preference says: it never goes silent for one.
     expect(readFileSync(join(SKILLS, "index-network", "prompts", "brief.md"), "utf8")).not.toContain("plainly asks not to get");
