@@ -1683,3 +1683,67 @@ def test_data387_rejected_by_index_drops_both_hashes(tctx, serve, index, mods):
     e = entry(mods, iid)
     assert e["refused"] == "rejected"
     assert mods.ri.HELD_HASH_KEY not in e and mods.ri.HELD_HASH_V2_KEY not in e
+
+
+# --------------------------------------------------------------------------
+# The portal link (ov#273 fix round 1): only on a publish made by this call
+# --------------------------------------------------------------------------
+
+PORTAL = "https://agents.edgecity.live/intents?intent="
+
+
+def _no_link(out: dict) -> None:
+    assert "url" not in out
+    assert "Link it as" not in out.get("message", "") and PORTAL not in out.get("message", "")
+
+
+def test_link_an_inferred_publish_in_the_call_names_index_id_not_the_local_one(tctx, serve, index, mods):
+    serve.autonomy[INFERRED] = "autonomous"
+    out = call(tctx, {"text": TEXT, "source": "ambient"})
+    assert out["published"] is True and out["intention_id"] != INDEX_ID
+    assert out["url"] == PORTAL + INDEX_ID
+    assert out["message"].endswith("Link it as: " + out["url"])
+
+
+def test_link_a_stated_publish_in_the_call_ends_the_message(tctx, serve, index, mods):
+    out = call(tctx, {"text": STATED, "source": "message"})
+    assert out["published"] is True and out["intention_id"] != INDEX_ID
+    assert out["message"].endswith("Link it as: " + PORTAL + INDEX_ID)
+
+
+def test_link_never_while_the_approval_is_pending(tctx, serve, index, mods):
+    inferred = call(tctx, {"text": TEXT, "source": "ambient"}, tool_call_id="c1")
+    assert inferred["published"] is False and inferred["approval_state"] == "requested"
+    _no_link(inferred)
+    serve.autonomy[STATED_CLASS] = "manual"
+    stated = call(tctx, {"text": STATED, "source": "message"}, tool_call_id="c2")
+    assert stated["publish_refused"] == "approval_pending"
+    _no_link(stated)
+    assert index.requests == []
+
+
+def test_link_on_a_confirm_that_publishes_and_never_on_already_published(tctx, serve, index, mods):
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    serve.grant(f"{INFERRED}:{iid}")
+    out = call(tctx, {"action": "confirm", "intention_id": iid}, tool_call_id="c2")
+    assert out["published"] is True and iid != INDEX_ID
+    assert out["url"] == PORTAL + INDEX_ID
+    again = call(tctx, {"action": "confirm", "intention_id": iid}, tool_call_id="c3")
+    assert again["published"] is True and "already published" in again["message"]
+    _no_link(again)
+
+
+def test_link_never_on_update_withdraw_or_confirm_after_a_withdrawal(tctx, serve, index, mods):
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    serve.grant(f"{INFERRED}:{iid}")
+    poll(mods)
+    up = call(tctx, {"action": "update", "intention_id": iid, "text": TEXT + " and bouldering"}, tool_call_id="c2")
+    assert up["publish_refused"] == "approval_required" and up["published"] is True
+    _no_link(up)
+    index.default = {"success": True}
+    gone = call(tctx, {"action": "withdraw", "intention_id": iid}, tool_call_id="c3")
+    assert gone["success"] is True and gone["published"] is True
+    _no_link(gone)
+    after = call(tctx, {"action": "confirm", "intention_id": iid}, tool_call_id="c4")
+    assert after["success"] is True
+    _no_link(after)

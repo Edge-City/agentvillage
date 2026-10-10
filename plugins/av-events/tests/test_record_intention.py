@@ -2773,3 +2773,89 @@ def test_data448_with_approval_on_the_update_is_still_approval_required(tctx, in
     out = call(tctx, {"action": "update", "intention_id": INDEX_ID, "text": TEXT + " indoors"}, tool_call_id="c-up")
     assert out["publish_refused"] == "approval_required" and out["published"] is True
     assert index.requests == []
+
+
+# --------------------------------------------------------------------------
+# The portal link (ov#273 fix round 1): only on a publish made by this call
+# --------------------------------------------------------------------------
+
+PORTAL = "https://agents.edgecity.live/intents?intent="
+
+
+def _no_link(out: dict) -> None:
+    assert "url" not in out
+    assert "Link it as" not in out.get("message", "") and PORTAL not in out.get("message", "")
+
+
+def test_link_a_capture_publish_names_index_id_and_ends_the_message(tctx, index):
+    out = call(tctx, {"text": TEXT, "source": "message"})
+    assert out["url"] == PORTAL + INDEX_ID
+    # N1: the url is last, with nothing glued to it.
+    assert out["message"].endswith("Link it as: " + out["url"])
+
+
+def test_link_never_on_a_withdrawal_of_a_published_intention(tctx, index):
+    call(tctx, {"text": TEXT, "source": "message"})
+    index.tool = {"success": True}
+    first = call(tctx, {"action": "withdraw", "intention_id": INDEX_ID}, tool_call_id="c2")
+    assert first["success"] is True and first["published"] is True and "publish_refused" not in first
+    _no_link(first)
+    second = call(tctx, {"action": "withdraw", "intention_id": INDEX_ID}, tool_call_id="c3")
+    assert "already withdrawn on Index" in second["message"]
+    _no_link(second)
+
+
+def test_link_never_on_a_successful_update_of_a_published_intention(tctx, index):
+    call(tctx, {"text": TEXT, "source": "message"})
+    index.tool = {"intentId": INDEX_ID, "description": TEXT + "!", "sourceType": "agentvillage", "sourceId": None}
+    out = call(tctx, {"action": "update", "intention_id": INDEX_ID, "text": TEXT + "!"}, tool_call_id="c2")
+    assert out["published"] is True and "publish_refused" not in out
+    _no_link(out)
+
+
+def test_link_never_on_a_refused_update_of_a_published_intention(tctx, index, ri, monkeypatch):
+    call(tctx, {"text": TEXT, "source": "message"})
+    index.tool = http_error(409)
+    failed = call(tctx, {"action": "update", "intention_id": INDEX_ID, "text": TEXT + "!"}, tool_call_id="c2")
+    assert failed["publish_refused"] == "http_409"
+    _no_link(failed)
+    held = call(tctx, {"action": "update", "intention_id": INDEX_ID, "text": TEXT + "!!"},
+                session="never-seen", tool_call_id="c3")
+    assert held["publish_refused"] == "held_unknown" and held["published"] is True
+    _no_link(held)
+    monkeypatch.setattr(ri, "held_refusal", lambda *a, **k: ri.MAP_UNREADABLE)
+    unreadable = call(tctx, {"action": "update", "intention_id": INDEX_ID, "text": TEXT + "!!!"}, tool_call_id="c4")
+    assert unreadable["publish_refused"] == "map_unreadable" and unreadable["published"] is True
+    _no_link(unreadable)
+
+
+def test_link_never_on_a_capture_that_did_not_publish(tctx, index, ri, monkeypatch):
+    ambient = call(tctx, {"text": TEXT + " ambient", "source": "ambient"}, tool_call_id="c1")
+    assert ambient["held"] is True
+    _no_link(ambient)
+    held = call(tctx, {"text": TEXT + " cron", "source": "message"}, session="never-seen", tool_call_id="c2")
+    assert held["publish_refused"] == "held_unknown"
+    _no_link(held)
+    local = call(tctx, {"text": TEXT, "source": "message", "publish": False, "reason": "personal"}, tool_call_id="c3")
+    assert local["published"] is False
+    _no_link(local)
+    exists = call(tctx, {"text": TEXT + " ambient", "source": "message"}, tool_call_id="c4")
+    assert exists["publish_refused"] == "held_ambient_exists"
+    _no_link(exists)
+    assert index.requests == []
+    monkeypatch.setattr(ri, "held_refusal", lambda *a, **k: ri.MAP_UNREADABLE)
+    unreadable = call(tctx, {"text": TEXT + " other", "source": "message"}, tool_call_id="c5")
+    assert unreadable["publish_refused"] == "map_unreadable"
+    _no_link(unreadable)
+
+
+@pytest.mark.parametrize("answer", [
+    pytest.param(lambda: refused(), id="rejected"),
+    pytest.param(lambda: http_error(500), id="http-500"),
+    pytest.param(lambda: urllib.error.URLError(TimeoutError()), id="transport"),
+])
+def test_link_never_on_a_failed_publish(tctx, index, answer):
+    index.tool = answer()
+    out = call(tctx, {"text": TEXT, "source": "message"})
+    assert out["published"] is False and out["publish_refused"]
+    _no_link(out)
