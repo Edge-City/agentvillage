@@ -121,6 +121,7 @@ The ladder is about what leaves the sandbox, not about how much detail is record
 | `tools_hash`, `system_prompt_hash` | yes | yes | yes |
 | Listed tool names and categories, EdgeOS operation names, `action.*`, `cron.run`, `message.out.silent` | yes | yes | yes |
 | `action.*` `edgeos_event_id` | keyed hash | the id | the id |
+| Receipt id (EdgeOS participant record) on `action.receipted` and `tool.call` (DATA-308) | keyed hash | keyed hash | keyed hash |
 | Lengths (`system_prompt_length`, `assistant_content_chars`, …) | no | yes | yes |
 | Intention `text_hash`, `summary_hash` (plain SHA-256) | yes | yes | yes |
 | Profile `user_md_hash` (keyed) | yes | yes | yes |
@@ -154,8 +155,8 @@ is irrelevant; any change to a tool's schema changes the hash. Text is encoded a
 exactly as plain UTF-8.
 
 **Keyed hashes.** `message.*` `content_hash`, `tool.call` `args_hash` / `result_hash`,
-`profile.updated` `user_md_hash`, and in
-`metadata` the EdgeOS event and participant ids on `action.*`, are HMAC-SHA256 under a per-tenant
+`profile.updated` `user_md_hash`, the EdgeOS participant record id in a receipt (every mode,
+DATA-308), and in `metadata` the EdgeOS event id on `action.*`, are HMAC-SHA256 under a per-tenant
 random key at `$HERMES_HOME/av-events/hash.key` (64 hex characters, mode 0600). The key never leaves
 the sandbox, so these digests count and join within a tenant and are useless to anyone else.
 **A key, once written, never rotates** (`load_or_create_key`): a missing file is created by linking a
@@ -199,7 +200,15 @@ server's tool names never reach ingest. A missing or malformed seed lists nothin
 
 All carry `evidence_class: agent_report` — this plugin observes the agent, not the world, and ingest
 downgrades anything stronger in any case (spec scenario 4) — **except `action.receipted`**, which
-claims `provider_receipt` because it carries a checkable receipt (see "EdgeOS actions").
+claims `provider_receipt` because it carries a receipt (see "EdgeOS actions"; since DATA-308 the
+receipt's id is keyed in every mode, so ingest stores the claim at `agent_report`, divergence 31).
+
+`schema_version` is 1 for every type but `tool.call` and `action.receipted`, which are 2 since
+DATA-308 (`_core.SCHEMA_VERSIONS`): version 2 is version 1 with the receipt's participant id always
+its keyed hash. Under contract-v1 a producer change after the tag is a new version beside the old
+one, so ingest can hold version 2 to the keyed form and still take a raw UUID at version 1 from a
+sandbox on an older overlay. Ingest must register version 2 before this overlay reaches a sandbox;
+until then those events quarantine as an unknown version (replayable).
 `event_id` is a uuid v7 (RFC 9562 §5.7, implemented here because the 3.11 stdlib has none) with a
 monotonic counter in `rand_a`, so ids sort in emission order — **except `cron.run`**, whose id is
 §4.3's derived uuid v5, or without a tenant id a v7 derived from the execution (see "Cron capture").
@@ -217,7 +226,7 @@ backlog can differ from `emitted_at` by minutes. Every `marts` time series is bu
 | `message.out` | `post_llm_call` (`assistant_response`) | as above; `silent` is set on a cron run's reply |
 | `tool.call` | `post_tool_call` | `tool_name`, `tool_category`, `args_hash`, `result_hash`, `ok`, `status`, `latency_ms`, `receipt`, `error_type`, `operation`, `target_system`, `category_version`, plus `args_length` / `result_length` above `metadata` — see "Tool calls" |
 | `action.attempted` / `action.failed` | `post_tool_call` on an EdgeOS RSVP or cancellation | `action_class`, `target_system`, `receipt`, `execution_token_id`, `error`, `reverses_action_id`, `reversal`, `supersedes_action_id`, `operation`, `edgeos_event_id`, `occurrence_start`, `allowlist_version` — see "EdgeOS actions" |
-| `action.receipted` | `post_tool_call` on the EdgeOS read that confirms it | as above, with `receipt` {`kind: edgeos_confirming_read`, `id`: participant id} |
+| `action.receipted` | `post_tool_call` on the EdgeOS read that confirms it | as above, with `receipt` {`kind: edgeos_confirming_read`, `id`: the participant id's keyed hash} |
 | `cron.run` | the cron tail, on the flusher thread | `job_id`, `job_name`, `execution_id`, `status`, `input_tokens`, `output_tokens`, `claimed_at`, `started_at`, `finished_at`, `delivery_outcome` — see "Cron capture" |
 | `outcome.asked` | the flusher, once Hermes's ledger shows the evening job's question delivered or queued | `message_hash` (the reply's keyed hash, = that turn's `message.out` `content_hash`; null in `metadata`), `window_days` (1), `asked_by` (`outcome_cron`), `intention_reason` (null, or `not_linked` \| `ambiguous` \| `not_recorded`; `not_recorded` today); envelope `outcome_id`, `opportunity_id`, `intention_id` (null today) — see "The evening outcome ask" |
 | `outcome.reported` | the flusher, for a resident's Telegram DM whose whole text is an answer to the one open ask, sent as their next message after it or as a reply to it | `value`, `matcher_version` (`outcome_reply_v2`), `intention_reason` (the ask's); `self_report`, actor `participant`, envelope `outcome_id`, `opportunity_id`, `intention_id` (the ask's), `in_reply_to_event_id` = the ask — see "The evening outcome ask" |
@@ -283,8 +292,9 @@ caps several of these types at `platform_record` while scenario 4 requires inges
 class a plugin token claims. The two disagree; this code follows scenario 4, which is the
 enforceable one. `action.receipted` claims `provider_receipt` because §4.1's row says "provider_receipt
 with receipt" and §2.1 honours it only for a checkable receipt (`action.*` type,
-`receipt.kind = edgeos_confirming_read`, a non-empty string `receipt.id`) — which is exactly what the
-event carries. `core.actions` still does not treat a plugin's own receipt as corroboration.
+`receipt.kind = edgeos_confirming_read`, and a `receipt.id` someone could look up). Since DATA-308
+the id is a keyed hash in every mode, so ingest stores the claim at `agent_report` (divergence 31).
+`core.actions` never treated a plugin's own receipt as corroboration in any case.
 
 ### Events from other plugins
 
@@ -1294,10 +1304,10 @@ waiting action: `registered` or `checked_in` confirms an RSVP; `cancelled` confi
 and a null status confirms one only when the plugin saw the RSVP it reverses (otherwise "not
 registered" may simply mean "never was"). Anything else, or an object without the key, confirms
 nothing and the action keeps waiting. The `action.receipted` event reuses the action's id, carries
-`receipt: {kind: "edgeos_confirming_read", id: <participant id>}` — the record the RSVP or
-cancellation created, which a checker re-reads with `GET /event-participants/{id}` — and claims
-`provider_receipt`. The read's own `tool.call` carries the same `receipt` when it confirmed exactly
-one action.
+`receipt: {kind: "edgeos_confirming_read", id: <keyed hash of the participant id>}` — the record the
+RSVP or cancellation created, which only the sandbox can re-read with `GET /event-participants/{id}`
+(DATA-308, below) — and claims `provider_receipt`. The read's own `tool.call` carries the same
+`receipt` when it confirmed exactly one action.
 
 **Ledger.** `$HERMES_HOME/av-events/edgeos_actions.json`, 0600: the waiting actions and, per
 occurrence, the last action of each class that landed. It is changed and written only **after** the
@@ -1313,12 +1323,20 @@ are always set explicitly. A cancellation of an RSVP the plugin never saw is sti
 with `reverses_action_id: null`.
 
 Actions are emitted in every capture mode: they carry ids and fixed labels, nothing a participant
-wrote. In `metadata`, `edgeos_event_id` and the receipt's participant id (on `action.receipted` and
-on the read's `tool.call`) are replaced by their keyed hashes: joins within a tenant still work, but
-**the receipt is not checkable in `metadata`** — nobody outside the sandbox can re-read a hashed id.
-`sanitized` and `full` keep both ids in clear. The event still claims `provider_receipt`, but ingest
-stores a receipt whose id is a keyed hash at `agent_report`, not `provider_receipt`: a `metadata`
-tenant's RSVPs are recorded as receipted actions without receipt-grade evidence (divergence 31).
+wrote. **The receipt's participant id** (on `action.receipted` and on the read's `tool.call`) is
+replaced by its keyed hash **in every mode** (DATA-308), the same HMAC under the tenant's `hash.key`
+that `metadata` has always sent, or null without a key. A participant record is one person's RSVP
+and EdgeOS resolves its id to that person; the rule (Carter, 2026-10-04) is to hash an identifier
+wherever the artefact can be read by someone who does not already hold the mapping, and nobody
+downstream of ingest holds the EdgeOS one. **`edgeos_event_id`** keeps the capture distinction: an
+event id names an event, not who went to it, so `sanitized` and `full` send it in clear and only
+`metadata` keys it (the set of a resident's events is still their footprint). Joins within a tenant
+still work, but **the receipt is not checkable outside the sandbox in any mode** — nobody else can
+re-read a hashed id. The event still claims `provider_receipt`, but ingest stores a receipt whose id
+is a keyed hash at `agent_report`, not `provider_receipt`, flagged `_receipt_unverifiable`: every
+tenant's plugin-reported RSVPs are receipted actions without receipt-grade evidence (divergence
+31). The funnel's verified stage never read the plugin's own receipt anyway: it takes only a
+receipt from a non-plugin producer.
 
 ## Cron capture
 
@@ -2153,13 +2171,14 @@ These are the divergences this milestone had to resolve. Each one is a decision 
     and the "navigate the event" measure will have to key on `operation`, not `tool_name`. An agent
     that reaches EdgeOS by `execute_code` or `web_extract` is not seen.
 19. **`action.receipted` claims `provider_receipt`.** Every other event is `agent_report`. §4.1's
-    action row asks for it and §2.1 honours it only for a checkable receipt, which this is.
+    action row asks for it and §2.1 honours it only for a checkable receipt, which this was in
+    `sanitized` and `full` until DATA-308 keyed the id (divergence 31).
 20. **The receipt id is the participant id.** EdgeOS's live OpenAPI (`api.edgeos.world/openapi.json`,
     read 2026-09-22) documents `POST …/register/{event_id}` and `…/cancel-registration/{event_id}` as
     returning an `EventParticipantPublic` with its own `id`, which contradicts the Sept 18 finding
     "no documented response body". That record is the positive evidence an action landed, and its
-    `id` is the receipt id (`GET /event-participants/{id}` re-reads it). The receipt is still
-    attached at the confirming read, as the plan says.
+    `id` is the receipt id (`GET /event-participants/{id}` re-reads it), sent as its keyed hash
+    since DATA-308. The receipt is still attached at the confirming read, as the plan says.
 21. **Cost is per session, not per `llm.call`.** `post_api_request` carries no cost (Hermes prices
     after the hook). Cost goes on `session.ended` from `state.db`, as §4.1 lists it there. In practice
     Hermes fills `estimated_cost_usd` (a pricing-table estimate) and rarely `actual_cost_usd`; the
@@ -2192,10 +2211,12 @@ These are the divergences this milestone had to resolve. Each one is a decision 
     `kind`.
 30. **`cron.run.delivery_outcome` is null at the pinned tag**: the ledger column arrives in a later
     Hermes.
-31. **`metadata` receipts cannot be checked.** The participant id is hashed there. The plugin's
-    claim is unchanged (`provider_receipt`); ingest stores a receipt with a hashed id at
-    `agent_report`, not `provider_receipt`, so in `metadata` an RSVP is a receipted action without
-    receipt-grade evidence.
+31. **Receipts cannot be checked outside the sandbox.** The participant id is hashed in every
+    capture mode since DATA-308 (in `metadata` only before it). The plugin's claim is unchanged
+    (`provider_receipt`); ingest stores a receipt with a hashed id at `agent_report`, not
+    `provider_receipt`, so a plugin-reported RSVP is a receipted action without receipt-grade
+    evidence. Rows from an older overlay (`schema_version` 1, `sanitized` or `full`) still carry
+    the raw id and keep the class they were stored at.
 
 ---
 

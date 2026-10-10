@@ -42,6 +42,7 @@ from ._core import (
     MAX_SESSION_FAILURES,
     MAX_TRACKED_SESSIONS,
     SCHEMA_VERSION,
+    SCHEMA_VERSIONS,
     TICK_INTERVAL_S,
     Buffer,
     SendResult,
@@ -784,7 +785,8 @@ class Collector:
             # uuid v7 unless the caller derived one (`cron.run`, §4.3).
             "event_id": refs.pop("event_id", None) or uuid7(),
             "event_type": event_type,
-            "schema_version": SCHEMA_VERSION,
+            # 1, or the later version a type has moved to (`SCHEMA_VERSIONS`).
+            "schema_version": SCHEMA_VERSIONS.get(event_type, SCHEMA_VERSION),
             "occurred_at": refs.pop("occurred_at", None) or stamp,
             "occurred_at_earliest": refs.pop("occurred_at_earliest", None),
             "occurred_at_latest": refs.pop("occurred_at_latest", None),
