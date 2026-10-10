@@ -189,6 +189,27 @@ const ARMS: [string, "env" | "dotenv" | "unset", string][] = [
   ["env yes (not on)", "env", "yes"],
 ];
 
+describe("rewire paths are read from the box .env first", () => {
+  test.skipIf(!havePlugin)("persisted paths activate even when the shell paths are stale", () => {
+    const pin = supplyRelease();
+    writeFileSync(join(home, ".env"), `${MORALMOD_ARM_ENV}=on\nMORALMOD_RELEASE_DIR=${process.env.MORALMOD_RELEASE_DIR}\nMORALMOD_RESIDENT_CONFIG=${process.env.MORALMOD_RESIDENT_CONFIG}\n`);
+    process.env.MORALMOD_RELEASE_DIR = "/missing-old-release";
+    process.env.MORALMOD_RESIDENT_CONFIG = "/missing-old-resident.json";
+    const { run } = recorder();
+    expect(step(run, true, pin)).toMatchObject({ state: "installed", failed: null });
+    expect(JSON.parse(readFileSync(join(home, "index/moralmod/active.json"), "utf8")).release_digest).toBe(pin);
+  });
+
+  test("an explicitly blank persisted path does not fall back to a stale shell value", () => {
+    const pin = supplyRelease();
+    writeFileSync(join(home, ".env"), `${MORALMOD_ARM_ENV}=on\nMORALMOD_RELEASE_DIR=\nMORALMOD_RESIDENT_CONFIG=${process.env.MORALMOD_RESIDENT_CONFIG}\n`);
+    const { run, calls } = recorder();
+    expect(step(run, true, pin)).toMatchObject({ state: "failed" });
+    expect(calls).toEqual([]);
+    expect(existsSync(join(home, "index/moralmod/active.json"))).toBe(false);
+  });
+});
+
 describe("M1: arm off or unset with MoralMod files present is OFF", () => {
   for (const [label, where, value] of ARMS) {
     for (const gate of [true, false]) {

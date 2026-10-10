@@ -489,8 +489,9 @@ export function installIndexPlugin(
 ): IndexPluginResult {
   const home = hermesHome();
   const armOn = moralmodArmOn();
-  const source = process.env.MORALMOD_RELEASE_DIR;
-  const configuration = process.env.MORALMOD_RESIDENT_CONFIG;
+  // Rewire writes the box's .env; the install shell may still carry older paths.
+  const source = dotenvFileValue("MORALMOD_RELEASE_DIR") ?? process.env.MORALMOD_RELEASE_DIR;
+  const configuration = dotenvFileValue("MORALMOD_RESIDENT_CONFIG") ?? process.env.MORALMOD_RESIDENT_CONFIG;
   const managed = Boolean(source || configuration || existsSync(join(home, "index", "moralmod", "active.json")));
   // OV-249 post-hoc M1: the managed negotiator is for ON residents only, as the plugin is. With the
   // arm off or unset, MoralMod files present take the OFF path like any other OFF resident: the
