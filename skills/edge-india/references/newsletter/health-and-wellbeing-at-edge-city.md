@@ -6,7 +6,7 @@ Source type: newsletter
 
 Published: 2026-09-30T15:34:57.000Z
 
-Last content change indexed: 2026-10-08T16:28:28.025Z
+Last content change indexed: 2026-10-10T12:28:21.961Z
 
 ---
 
@@ -36,7 +36,7 @@ Over our 21 days together, we’d love for you to leave healthier than you arriv
 
 -   **Bring your own yoga mat**, plus plenty of sun protection and mosquito repellent.
 
--   **[Rasayana Week (Oct 18 to 24)](https://edgeesmeralda2026.substack.com/p/programming-preview-for-edge-esmeralda?r=7jhl3k&utm_campaign=post-expanded-share&utm_medium=web)** brings talks and workshops on Ayurveda, longevity, and healthspan.
+-   **[Rasayana Week (Oct 18 to 24)](https://edgecityindia2026.substack.com/p/programming-preview-for-edge-city?r=7jhl3k&utm_campaign=post-expanded-share&utm_medium=web)** brings talks and workshops on Ayurveda, longevity, and healthspan.
 
 -   **[Apply here](https://portal.edgecity.live/portal/edge-india)** to join us for a week or all three at Edge City India.
 
@@ -146,7 +146,7 @@ Our second week is themed Rasayana, Holistic Longevity. Rasayana is the Ayurvedi
 
 Expect talks and workshops on Ayurveda, healthspan, longevity science, and consciousness, alongside Anima House, our women’s health residency. Every talk, workshop, and demo is open to every ticket holder, so you don’t need to join a residency to take part.
 
-**[See the full programming preview here →](https://edgecityindia2026.substack.com/p/programming-preview-for-edge-city)**
+**[See the full programming preview here →](https://edgecityindia2026.substack.com/p/programming-preview-for-edge-city?r=7jhl3k&utm_campaign=post-expanded-share&utm_medium=web)**
 
 * * *
 

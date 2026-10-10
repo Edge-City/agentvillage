@@ -30,6 +30,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
+      - name: Check out pinned Index plugin for morning tests
+        uses: actions/checkout@v4
+        with:
+          repository: indexnetwork/hermes-plugin
+          ref: eaec4fc02ffc251fca2cfd56b728c845562f6a3b
+          path: .test-deps/index-hermes-plugin
+          persist-credentials: false
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
@@ -37,6 +44,8 @@ jobs:
       # The directories that hold *.test.ts; a bare `bun test` would also
       # walk any stray checkout under the repo root.
       - run: bun test install/tests scripts/tests skills/index-network/scripts/tests skills/recall/scripts/tests skills/edge-india/scripts/tests skills/agent-profile/scripts/tests
+        env:
+          AV_INDEX_PLUGIN_TEST_DIR: ${{ github.workspace }}/.test-deps/index-hermes-plugin
 
   pytest:
     name: pytest (plugins)
