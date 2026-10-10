@@ -17,7 +17,7 @@
       "\u2007",
       "\u202f"
     ],
-    "manage_line": "\\((?:Daily digest|Conversation update|Evening questions|Introduction suggestion|Usage report) message - you can ask me to stop or manage it\\)",
+    "manage_line": "\\((?:Daily digest|Conversation update|Evening questions|Extra introduction drops|Introduction suggestion|Usage report) message - you can ask me to stop or manage it\\)",
     "wrappers": [
       [
         "**",

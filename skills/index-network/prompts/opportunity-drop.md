@@ -24,4 +24,4 @@ One or two short, warm lines about `person`:
 
 End every message with one blank line and then the line below, exactly as written: never translated, reworded or formatted, with nothing after it. It is part of the message, so "Output only the message" allows it. When you reply `[SILENT]`, write only that and leave this line out.
 
-(Introduction suggestion message - you can ask me to stop or manage it)
+(Extra introduction drops message - you can ask me to stop or manage it)
