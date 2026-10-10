@@ -1,6 +1,8 @@
-/** Managed experiment installations run the same Index lifecycle for ON and OFF.
- * AV_MORALMOD_ARM controls assessment, not process ownership. Non-experiment
- * installations retain the upstream installer behavior described below.
+/** The managed MoralMod lifecycle (`docs/moralmod_lifecycle.md`) runs for ON residents only
+ * (OV-249 post-hoc M1): with `AV_MORALMOD_ARM` off or unset, MoralMod files on the box or in the
+ * installer environment change nothing, the OFF path below runs and its line says why. Its release
+ * must be the one pinned in `MORALMOD_RELEASE_SHA256` (post-hoc M2), else the plugin is withheld
+ * (`release_unpinned`).
  */
 /**
  * The Index Hermes plugin (`index-network`), MoralMod's carrier, for ON
@@ -84,12 +86,17 @@ import { persistedEnvVar, readCronJobs } from "./install_index";
 import { installStatusPath } from "./install_status";
 import { hermesHome } from "./paths";
 import { activateMoralmod, checkResidentHook, residentConfiguration } from "./moralmod_host";
-import { installMoralmodRelease } from "./moralmod_release";
+import { MORALMOD_RELEASE_SHA256, MoralmodReleaseUnpinned, installMoralmodRelease } from "./moralmod_release";
 
 export const INDEX_PLUGIN = "index-network";
 export const INDEX_PLUGIN_SOURCE = "indexnetwork/hermes-plugin";
 /** The reviewed commit of indexnetwork/hermes-plugin (dev = main on 2026-10-08; Hermes's install scan: safe). */
 export const INDEX_PLUGIN_REF = "eaec4fc02ffc251fca2cfd56b728c845562f6a3b";
+/**
+ * The managed MoralMod release is pinned beside it: `MORALMOD_RELEASE_SHA256` in
+ * `moralmod_release.ts`, the sha256 of the reviewed `release.json` (a sentinel until one is supplied).
+ */
+export { MORALMOD_RELEASE_SHA256 } from "./moralmod_release";
 /**
  * OV-249 A3: the exact bytes of `sidecar.py:149-150` at `INDEX_PLUGIN_REF` (the negotiator child's
  * env: the gateway's whole environment minus the device session), which the installer replaces.
@@ -135,16 +142,27 @@ export const HERMES_INSTALL_TMP = /^\.install-[a-z0-9_]{8}$/;
 
 /**
  * Why the step failed, one fixed word each: the Hermes command, the config.yaml write, the
- * negotiator seed, `gate`: the arm is on but this run's approval step did not verify the gate, or
- * `sidecar`: the installed sidecar.py could not be brought to the env allowlist (OV-249 A3).
+ * negotiator seed, `gate`: the arm is on but this run's approval step did not verify the gate,
+ * `sidecar`: the installed sidecar.py could not be brought to the env allowlist (OV-249 A3), or
+ * `release_unpinned`: the managed MoralMod release is not the one pinned in
+ * `MORALMOD_RELEASE_SHA256` (OV-249 post-hoc M2).
  */
-export type IndexPluginFailure = "hermes" | "config" | "seed" | "gate" | "sidecar";
+export type IndexPluginFailure = "hermes" | "config" | "seed" | "gate" | "sidecar" | "release_unpinned";
+
+/**
+ * Why a clean run did what it did, when the state alone does not say: `moralmod_arm_not_on`, the
+ * arm is off or unset while MoralMod files are present (`MORALMOD_RELEASE_DIR`,
+ * `MORALMOD_RESIDENT_CONFIG` or `index/moralmod/active.json`), so nothing MoralMod was activated.
+ */
+export type IndexPluginNote = "moralmod_arm_not_on";
 
 export interface IndexPluginResult {
   /** What the step did. */
   state: "off" | "withheld" | "skipped" | "disabled" | "pinned" | "installed" | "failed";
   /** The first failure, or null. */
   failed: IndexPluginFailure | null;
+  /** Set only when it applies. */
+  note?: IndexPluginNote;
 }
 
 export const NEGOTIATOR_SEED = [
@@ -423,9 +441,17 @@ export function setIndexPluginEnabled(on: boolean): boolean {
  * OV-249 A3, fail closed: the sidecar could not be brought to the allowlist, so the plugin is
  * dropped from `plugins.enabled` and its morning job removed, as withheld does; one line naming
  * `reason`. The word is `config` when the drop failed (the plugin may still be listed), else
- * `failed` (an earlier failure of this run), else `sidecar`.
+ * `failed` (an earlier failure of this run), else `word` (`sidecar`; `release_unpinned` for the
+ * post-hoc M2 refusal, whose line says `what` instead of the sidecar's).
  */
-function withholdForSidecar(run: (args: string[]) => void, home: string, reason: string, failed: IndexPluginFailure | null): IndexPluginResult {
+function withholdForSidecar(
+  run: (args: string[]) => void,
+  home: string,
+  reason: string,
+  failed: IndexPluginFailure | null,
+  word: IndexPluginFailure = "sidecar",
+  what = "sidecar.py env not allowlisted",
+): IndexPluginResult {
   let dropped = false;
   try {
     dropped = setIndexPluginEnabled(false);
@@ -433,9 +459,9 @@ function withholdForSidecar(run: (args: string[]) => void, home: string, reason:
     failed = "config";
   }
   const tail = failed === "config" ? "; could not update plugins.enabled in config.yaml" : dropped ? "; removed from plugins.enabled" : "";
-  console.warn(`  warning: index-network plugin: not enabled, sidecar.py env not allowlisted (${reason})${tail}`);
+  console.warn(`  warning: index-network plugin: not enabled, ${what} (${reason})${tail}`);
   stopMorningJob(run, home);
-  failed ??= "sidecar";
+  failed ??= word;
   return { state: "failed", failed };
 }
 
@@ -452,18 +478,29 @@ function operatorDisabled(): boolean {
  * @param argv - The installer's argv (`--skip-index`, `--index-api-key`).
  * @param gateVerified - This run's approval step installed the gate and its live fire passed
  *   (`lastInstallVerified`). False, an ON resident is withheld: treated as OFF, reported `gate`.
+ * @param releasePin - The expected sha256 of the managed release's `release.json` (a seam for
+ *   tests, as `patchSidecarSource`'s pin is; install.ts passes none).
  */
-export function installIndexPlugin(run: (args: string[]) => void, argv: string[] = process.argv, gateVerified = false): IndexPluginResult {
+export function installIndexPlugin(
+  run: (args: string[]) => void,
+  argv: string[] = process.argv,
+  gateVerified = false,
+  releasePin: string = MORALMOD_RELEASE_SHA256,
+): IndexPluginResult {
   const home = hermesHome();
   const armOn = moralmodArmOn();
-  // Managed experiment residents share one runtime in both arms. The flag controls
-  // assessment only; all existing approval and environment isolation gates remain.
   const source = process.env.MORALMOD_RELEASE_DIR;
   const configuration = process.env.MORALMOD_RESIDENT_CONFIG;
   const managed = Boolean(source || configuration || existsSync(join(home, "index", "moralmod", "active.json")));
-  if ((!armOn && !managed) || !gateVerified) {
+  // OV-249 post-hoc M1: the managed negotiator is for ON residents only, as the plugin is. With the
+  // arm off or unset, MoralMod files present take the OFF path like any other OFF resident: the
+  // plugin is not enabled, its morning job and launcher are removed, nothing is seeded, the plugin's
+  // negotiator.js and morning.py are not touched; the line and the note say why.
+  if (!armOn || !gateVerified) {
     let off: IndexPluginFailure | null = null;
-    const why = armOn || managed ? "withheld: the approval gate was not installed and live-checked on this run" : `off (${MORALMOD_ARM_ENV} is not on)`;
+    const why = armOn
+      ? "withheld: the approval gate was not installed and live-checked on this run"
+      : `off (${MORALMOD_ARM_ENV} is not on)${managed ? "; MoralMod release or resident config present, not activated: the managed negotiator runs only for ON" : ""}`;
     try {
       const dropped = setIndexPluginEnabled(false);
       console.log(`→ index-network plugin: ${why}${dropped ? "; removed from plugins.enabled" : ""}`);
@@ -473,8 +510,8 @@ export function installIndexPlugin(run: (args: string[]) => void, argv: string[]
     }
     if (!stopMorningJob(run, home)) off ??= "hermes";
     // Withheld: `config` first (the plugin may still be listed), else `gate`, a cron failure only warned.
-    if (armOn || managed) return { state: "withheld", failed: off === "config" ? "config" : "gate" };
-    return { state: "off", failed: off };
+    if (armOn) return { state: "withheld", failed: off === "config" ? "config" : "gate" };
+    return managed ? { state: "off", failed: off, note: "moralmod_arm_not_on" } : { state: "off", failed: off };
   }
   if (argv.includes("--skip-index") || !hasIndexKey(argv, home)) {
     console.log("→ index-network plugin: skipped (no Index key or --skip-index)");
@@ -510,8 +547,14 @@ export function installIndexPlugin(run: (args: string[]) => void, argv: string[]
       if (!source || !configuration) throw Error("Managed release configuration missing");
       checkResidentHook(home);
       const config = residentConfiguration(configuration);
-      prepared = { config, release: installMoralmodRelease(home, source) };
-    } catch { return withholdForSidecar(run, home, "managed configuration invalid", null); }
+      prepared = { config, release: installMoralmodRelease(home, source, releasePin) };
+    } catch (err) {
+      // OV-249 post-hoc M2: refused exactly like a plugin revision mismatch; nothing is replaced.
+      if (err instanceof MoralmodReleaseUnpinned) {
+        return withholdForSidecar(run, home, "its release.json is not MORALMOD_RELEASE_SHA256", null, "release_unpinned", "MoralMod release not pinned");
+      }
+      return withholdForSidecar(run, home, "managed configuration invalid", null);
+    }
   }
   let failed: IndexPluginFailure | null = null;
   let state: IndexPluginResult["state"] = "pinned";
@@ -568,12 +611,13 @@ export function indexPluginFailedLine(failed: IndexPluginFailure): string {
 /**
  * Add `index_plugin_failed` (the fixed word, or null) to this run's
  * `av-events/install-status.json`, which `writeInstallStatus` wrote earlier
- * in the run; the same temp-file-and-rename write, mode 0600. A missing or
- * unreadable file is left alone (the run could not write it either).
+ * in the run, and `index_plugin_note` when there is one (`IndexPluginNote`);
+ * the same temp-file-and-rename write, mode 0600. A missing or unreadable file
+ * is left alone (the run could not write it either).
  *
  * @returns Whether the field was written.
  */
-export function recordIndexPluginStatus(home: string, failed: IndexPluginFailure | null): boolean {
+export function recordIndexPluginStatus(home: string, failed: IndexPluginFailure | null, note?: IndexPluginNote): boolean {
   const path = installStatusPath(home);
   let status: Record<string, unknown>;
   try {
@@ -584,6 +628,7 @@ export function recordIndexPluginStatus(home: string, failed: IndexPluginFailure
     return false;
   }
   status.index_plugin_failed = failed;
+  if (note) status.index_plugin_note = note;
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, `${JSON.stringify(status)}\n`, { mode: 0o600 });

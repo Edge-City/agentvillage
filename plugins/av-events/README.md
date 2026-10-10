@@ -555,6 +555,11 @@ records only through `record_intention` with `source=ambient`, and records nothi
 | `update` / `withdraw` of an id it has no record of | none | `publish_refused="unknown_id"`, `source=ambient` |
 | `confirm`, approval not configured | none | refused: `no_confirmation_channel` (`confirmation_not_wired` when `AV_APPROVAL_URL` is set but `AV_APPROVAL_ENABLED` is not on) |
 
+`url` (`https://agents.edgecity.live/intents?intent=<Index id>`, also the last words of `message`
+after "Link it as: ") is only on a publish made by this call: a capture published now, directly or
+through the approval policy in the same call, or a `confirm` that published now. Never on `update`,
+`withdraw`, an "already published" `confirm` or any result with `publish_refused`.
+
 With `AV_APPROVAL_ENABLED` on and `AV_APPROVAL_URL` set, captures that would publish go through the
 resident's approval.md first: see "Through approval.md" below. That changes three rows: an ambient
 capture is proposed to the resident (and publishes on their grant), a stated capture is proposed
