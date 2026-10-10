@@ -6,7 +6,7 @@ Source type: newsletter
 
 Published: 2026-10-09T08:38:38.000Z
 
-Last content change indexed: 2026-10-09T08:43:19.724Z
+Last content change indexed: 2026-10-09T18:58:18.226Z
 
 ---
 
@@ -58,11 +58,11 @@ The first few days of the village are all about setting the foundation: getting 
 
 For quick links and any questions, head to our [Substack](https://edgecityindia2026.substack.com/).
 
-We’ve shared comprehensive guides, including [how to get here](https://edgecityindia2026.substack.com/p/getting-to-edge-city-india), [where to stay](https://edgecityindia2026.substack.com/p/housing-for-edge-city-india), and our [Edge City India Wiki](https://app.notion.com/p/Edge-City-India-2026-Wiki-038d45cdfc5983c7a1fe013fdc77135b?pvs=21), which has everything you need to know.
+We’ve shared comprehensive guides, including [how to get here](https://edgecityindia2026.substack.com/p/getting-to-edge-city-india), [where to stay](https://edgecityindia2026.substack.com/p/housing-for-edge-city-india), and our [Edge City India Wiki](https://edgecity.notion.site/Edge-City-India-2026-Wiki-038d45cdfc5983c7a1fe013fdc77135b), which has everything you need to know.
 
 ## Check In & Arrival
 
-You received a pre-arrival email with details about wristband pickup, the Telegram group link, venue addresses, and other helpful resources. If you haven’t, please reach out to [info@edgecity.live](mailto:info@edgecity.live). For the most current details, check the [Wiki](https://app.notion.com/p/Edge-City-India-2026-Wiki-038d45cdfc5983c7a1fe013fdc77135b?pvs=21).
+You received a pre-arrival email with details about wristband pickup, the Telegram group link, venue addresses, and other helpful resources. If you haven’t, please reach out to [info@edgecity.live](mailto:info@edgecity.live). For the most current details, check the [Wiki](https://edgecity.notion.site/Edge-City-India-2026-Wiki-038d45cdfc5983c7a1fe013fdc77135b).
 
 **Where to pick up your wristband:**
 
@@ -74,7 +74,7 @@ You received a pre-arrival email with details about wristband pickup, the Telegr
 
 Free airport shuttles run from GOX to Riva on **Sunday 11 October only.** If you’re arriving on any other day, you’ll need a taxi. Shuttles also run between Riva and The Forresta Kinaro for the Opening Ceremony, and between our main venues once the village is underway.
 
-> _Full check-in and shuttle details live on the **[Wiki](https://app.notion.com/p/Edge-City-India-2026-Wiki-038d45cdfc5983c7a1fe013fdc77135b?pvs=21)**._
+> _Full check-in and shuttle details live on the **[Wiki](https://edgecity.notion.site/Edge-City-India-2026-Wiki-038d45cdfc5983c7a1fe013fdc77135b)**._
 
 [
 
