@@ -819,25 +819,30 @@ def decide_alert(
 
 
 def env_or_dotenv(name: str, root: Path) -> str:
+    """Never raises: an unreadable or badly encoded .env reads as unset."""
     if name in os.environ:
         return os.environ[name].strip()
     try:
-        for line in (root / ".env").read_text(encoding="utf-8").splitlines():
+        text = (root / ".env").read_text(encoding="utf-8-sig", errors="replace")
+        for line in text.splitlines():
             match = re.match(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$", line)
             if match and match.group(1) == name:
                 return match.group(2).strip().strip("\"'")
-    except OSError:
+    except (OSError, ValueError):
         pass
     return ""
 
 
 def usage_settings_url(root: Path) -> str:
-    """Settings › Usage on the app origin of AV_CONNECTIONS_URL; the default origin for anything unsafe."""
-    raw = env_or_dotenv("AV_CONNECTIONS_URL", root)
+    """Settings › Usage on the app origin of AV_CONNECTIONS_URL; the default origin for anything unsafe or unreadable."""
     origin = DEFAULT_APP_URL
-    match = re.match(r"^https://([A-Za-z0-9.-]+(?::\d+)?)(?:[/?#][^\s\"'`<>()\[\]]*)?$", raw)
-    if match:
-        origin = f"https://{match.group(1)}"
+    try:
+        raw = env_or_dotenv("AV_CONNECTIONS_URL", root)
+        match = re.match(r"^https://([A-Za-z0-9.-]+(?::\d+)?)(?:[/?#][^\s\"'`<>()\[\]]*)?$", raw)
+        if match:
+            origin = f"https://{match.group(1)}"
+    except Exception:
+        origin = DEFAULT_APP_URL
     return origin + USAGE_SETTINGS_PATH
 
 

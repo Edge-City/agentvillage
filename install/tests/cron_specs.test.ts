@@ -83,6 +83,10 @@ test("ten Index cron specs: digest jobs, opportunity drops, the pending alert, t
   expect(tokenAudit.scriptInstallName).toBe("agentvillage_token_usage_audit.py");
   expect(tokenAudit.skill).toBe("token-usage-audit");
   expect(tokenAudit.deliver).toBe(true);
+  // #272: the plan-limit answer links the script's usageSettingsUrl (Settings › Usage), never a guessed limit.
+  expect(tokenAudit.promptBody).toContain(
+    "For how much of the plan limit is spent or left, never guess or name a limit: link the script's usageSettingsUrl, exactly as given.",
+  );
 });
 
 test("cron create args handle delivered and scripted specs", () => {
