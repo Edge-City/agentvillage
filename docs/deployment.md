@@ -298,6 +298,14 @@ stricter cleaner and the scan. Without the file or the entry every Script
 Output is exactly what it was before. The resident's about me from
 `av-profile.json` still reaches none of these jobs.
 
+**Roll gate for the Context tags.** Roll an overlay with this reader only
+after Edge-City/agentvillage-app#117 is live and has re-delivered every entry
+(the app does that once, about 10 minutes after its deploy). Before #117 the
+app writes an item it only guessed from chat as plain `(chat)`, which this
+reader takes as stated, so a guess could be named as an interest or silence a
+message as a preference. From #117 on the app writes it as `(chat, guess)`,
+which this reader leaves out.
+
 The rules the trigger holds:
 - **No third-party free text reaches the model.** Only dates, the resident's
   own data, sanitised schedule facts, organiser announcements, Index counts and
