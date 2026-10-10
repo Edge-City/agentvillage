@@ -1320,6 +1320,18 @@ export function lastInstallRouted(): RoutedFacts | null {
   return lastRouted;
 }
 
+/**
+ * OV-249 (B): this process's last approval step installed the gate, its live fire was answered by
+ * the facade (not deferred), no dogfood override was accepted, and Hermes's own parse routes exactly
+ * APPROVAL_GATED_TOOLS. False otherwise: skipped, switched off, failed, deferred, overridden, or no
+ * or another routed list. The Index plugin step enables `index-network` for an ON resident only when
+ * this is true.
+ */
+let lastVerified = false;
+export function lastInstallVerified(): boolean {
+  return lastVerified;
+}
+
 /** The nonce the control plane passes for one install exec (AV_GATE_NONCE): 16 random bytes, hex. */
 export const GATE_NONCE_PATTERN = /^[0-9a-f]{32}$/;
 
@@ -1338,6 +1350,7 @@ export function gateReceiptLine(nonce: string | undefined = process.env.AV_GATE_
 
 export function installApproval(sourceSkills: string, options: ApprovalOptions = {}): ApprovalOutcome {
   lastRouted = null;
+  lastVerified = false;
   const choice = approvalChoice();
   if (choice === "unset") {
     console.log("→ skipped approval gate (opt-in: AV_APPROVAL_ENABLED=1)");
@@ -1413,6 +1426,12 @@ export function installApproval(sourceSkills: string, options: ApprovalOptions =
     // install just wrote registers for the shim (live_selfcheck.py 5b), kept for the gate receipt
     // install.ts prints last (gateReceiptLine); nothing about it is printed here.
     lastRouted = report.routed ?? null;
+    // OV-249 fix round 2 (R2-S1): an accepted dogfood override is a gate that may fail open, so not verified.
+    lastVerified =
+      deferred.length === 0 &&
+      report.overrides.length === 0 &&
+      lastRouted?.entries === APPROVAL_GATED_TOOLS.length &&
+      lastRouted.sha256 === APPROVAL_ROUTED_SHA256;
     console.log(
       `→ approval gate installed: ${APPROVAL_GATED_TOOLS.length} pre_tool_call entries (fail_closed), ` +
         `config ${configChanged ? "updated" : "unchanged"}, ${envChanged} .env line(s) set, ` +
