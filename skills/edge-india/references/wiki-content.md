@@ -4,9 +4,9 @@ Source: https://edgecity.notion.site/Edge-City-India-2026-Wiki-038d45cdfc5983c7a
 
 Source type: wiki
 
-Source updated: 2026-10-10T05:42:34.578Z
+Source updated: 2026-10-10T12:10:41.134Z
 
-Last content change indexed: 2026-10-10T05:43:22.500Z
+Last content change indexed: 2026-10-10T12:13:16.798Z
 
 ---
 
@@ -124,15 +124,13 @@ Once it's created, you can invite people by email, see who has RSVPed, edit any 
 
 #### **🎫** Check-in & **wristband pick-up (mandatory)**
 
-Every attendee needs to check in to collect their wristband. Please bring your ticket QR code.
+Every attendee needs to check in to collect their wristband. Please bring your ticket QR code. **PLEASE NOTE: There is a $50 USD charge for lost wristbands.** **If your wristband is too tight, needs to be cut or you need a replacement with your original one in hand, you can exchange it complimentary.**
 
 **Opening days (Oct 11–12)**
 
 - **Sun, Oct 11:**
 
   - 11am–5pm, [Riva Beach Resort](https://maps.app.goo.gl/povPE89dFNAFtz5x6) (near reception)
-
-  - 5pm-9pm, [Opening Ceremony](https://luma.com/fbh5z4kp)
 
 - **Mon, Oct 12:**
 
@@ -267,13 +265,15 @@ We will offer a shuttle service from GOX/ Mopa Airport to Riva Beach Resort. Thi
 
 **For arrival instructions with photos for taxi; click** **[HERE.](https://docs.google.com/document/d/161mjFNCXP9dl3JlFdkzvI2Sje7I0Nh9A/edit?usp=sharing&ouid=102473816871369346891&rtpof=true&sd=true)**
 
-**October 11th - The Forresta Kinaro; Opening Ceremony**
+**October 11th -** **[The Forresta Kinaro; Opening Ceremony](https://luma.com/fbh5z4kp)**
 
 We will offer a complimentary shuttle to the Opening Ceremony at The Forresta Kinaro. Volunteers designated with a purple lanyard will be posted at RIVA Beach Resort parking area and The Forresta Kinaro entrance to assist in getting on the shuttle.
 
 Shuttle service will be starting at 5:00pm at RIVA Beach Resort and dropping off at The Forresta Kinaro on a loop every 15 mins. They will be on standby from 7:00pm - 7:30pm.
 
 Shuttle service will resume at 7:30pm - 10:30pm for returning to RIVA Beach resort from The Forresta Kinaro.
+
+Don’t forget to RSVP! You can do so **[here.](https://luma.com/fbh5z4kp)**
 
 #### Shuttle Service & Taxi Information during Edge City India
 
