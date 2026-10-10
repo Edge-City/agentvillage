@@ -36,10 +36,28 @@
  * as a hung CLI would, until it is killed.
  * What it does not do: fire anything (there is no ticker), or apply the
  * late / catch-up policy. Tests read `next_run_at` to see what a tick would do.
+ *
+ * `plugins` (the Index Hermes plugin step, install_index_plugin.ts), after
+ * hermes_cli/plugins_cmd.py and subcommands/plugins.py at v2026.9.24:
+ * - `plugins install <owner/repo> [--force] [--ref <40-hex>] [--enable|--no-enable]`
+ *   refuses a `--ref` that is not 40 hex, an existing directory without
+ *   `--force`, and an existing pinned plugin without `--ref` (exit 1); else it
+ *   writes `plugins/<name>/plugin.yaml` (the name is the repo's, `index-network`
+ *   for indexnetwork/hermes-plugin) and the plugin's record in
+ *   `plugins/.install-metadata.json`, `{pinned, revision, source}` (sorted
+ *   keys, indent 2), the revision being the `--ref` or a fixed fake HEAD;
+ *   `--enable` lists it in `plugins.enabled` and drops it from
+ *   `plugins.disabled`, as `_set_plugin_enabled` does;
+ * - `plugins update <name>` refuses a pinned plugin (exit 1) and otherwise
+ *   records the fake HEAD; `plugins enable <name>` does what `--enable` does;
+ *   `plugins remove <name>` deletes the directory and its record and drops the
+ *   name from both lists;
+ * - FAKE_HERMES_FAIL=<plugins sub> exits 1 before acting.
  */
 import { randomBytes } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import YAML from "yaml";
 
 import { cronNeverFires, nextFiring, parseStoredCron, parseStrictCron } from "../../skills/index-network/scripts/job-settings";
 
@@ -98,6 +116,7 @@ function parseSchedule(text: string): { schedule: Record<string, unknown>; next:
 
 if (argv[0] === "--version") process.exit(0);
 if (argv[0] === "kanban") process.exit(0);
+if (argv[0] === "plugins") plugins(argv.slice(1));
 if (argv[0] !== "cron") fail("unknown command");
 
 const [, sub, ...rest] = argv;
@@ -174,3 +193,72 @@ if (sub === "edit") {
 save(jobs);
 if (hangAfter) await hang();
 process.exit(0);
+
+/** The `plugins` subcommands the Index plugin step could run (see the header); always exits. */
+function plugins(args: string[]): never {
+  const [sub, ...rest] = args;
+  if (process.env.FAKE_HERMES_FAIL && process.env.FAKE_HERMES_FAIL === sub) fail(`forced failure of plugins ${sub}`);
+  const dir = join(home, "plugins");
+  const metaPath = join(dir, ".install-metadata.json");
+  const FAKE_HEAD = "0".repeat(40);
+  const meta = (): Record<string, Record<string, unknown>> => (existsSync(metaPath) ? JSON.parse(readFileSync(metaPath, "utf8")) : {});
+  const saveMeta = (value: Record<string, Record<string, unknown>>) => {
+    mkdirSync(dir, { recursive: true });
+    const sorted = Object.fromEntries(Object.keys(value).sort().map((k) => [k, Object.fromEntries(Object.entries(value[k]!).sort(([a], [b]) => a.localeCompare(b)))]));
+    writeFileSync(metaPath, `${JSON.stringify(sorted, null, 2)}\n`);
+  };
+  const setEnabled = (name: string, on: boolean, both = false) => {
+    const configPath = join(home, "config.yaml");
+    const doc = (existsSync(configPath) ? YAML.parse(readFileSync(configPath, "utf8")) : null) ?? {};
+    const section = (doc.plugins ??= {});
+    const list = (key: string) => (Array.isArray(section[key]) ? section[key] : []) as string[];
+    section.enabled = on ? [...list("enabled").filter((n) => n !== name), name] : list("enabled").filter((n) => n !== name);
+    section.disabled = list("disabled").filter((n) => n !== name);
+    if (!on && !both) section.disabled.push(name);
+    writeFileSync(configPath, YAML.stringify(doc));
+  };
+  if (sub === "install") {
+    const [identifier, ...flags] = rest;
+    const parts = (identifier ?? "").split("/").filter(Boolean);
+    if (parts.length < 2) fail(`Invalid plugin identifier: '${identifier}'`);
+    const ref = flag(flags, "--ref");
+    if (flags.includes("--ref") && !/^[0-9a-fA-F]{40}$/.test(ref ?? "")) fail("--ref must be a full 40-character commit SHA.");
+    if (flags.includes("--enable") && flags.includes("--no-enable")) {
+      process.stderr.write("hermes: error: argument --no-enable: not allowed with argument --enable\n");
+      process.exit(2);
+    }
+    const name = parts[0] === "indexnetwork" && parts[1] === "hermes-plugin" ? "index-network" : parts[1]!;
+    const target = join(dir, name);
+    const prior = meta()[name];
+    if (existsSync(target) && !flags.includes("--force")) fail(`Plugin '${name}' already exists. Use force reinstall or run \`hermes plugins update ${name}\`.`);
+    if (existsSync(target) && ref === undefined && prior?.pinned === true) fail(`Plugin '${name}' is pinned. Reinstall it with an explicit --ref <40-character commit SHA> to change its source or revision.`);
+    rmSync(target, { recursive: true, force: true });
+    mkdirSync(target, { recursive: true });
+    writeFileSync(join(target, "plugin.yaml"), `name: ${name}\nversion: 0.0.0-fake\n`);
+    saveMeta({ ...meta(), [name]: { pinned: ref !== undefined, revision: (ref ?? FAKE_HEAD).toLowerCase(), source: `https://github.com/${parts[0]}/${parts[1]}.git` } });
+    if (flags.includes("--enable")) setEnabled(name, true);
+    process.exit(0);
+  }
+  const [name] = rest;
+  if (!name) fail(`plugins ${sub}: a name is required`);
+  if (sub === "update") {
+    const record = meta()[name];
+    if (!existsSync(join(dir, name))) fail(`Plugin '${name}' is not installed.`);
+    if (record?.pinned === true) fail(`Plugin '${name}' is pinned at ${String(record.revision).slice(0, 8)}; reinstall with --ref to move it.`);
+    if (record) saveMeta({ ...meta(), [name]: { ...record, revision: FAKE_HEAD } });
+    process.exit(0);
+  }
+  if (sub === "enable") {
+    setEnabled(name, true);
+    process.exit(0);
+  }
+  if (sub === "remove") {
+    rmSync(join(dir, name), { recursive: true, force: true });
+    const all = meta();
+    delete all[name];
+    saveMeta(all);
+    setEnabled(name, false, true);
+    process.exit(0);
+  }
+  fail(`unknown plugins command ${sub}`);
+}
