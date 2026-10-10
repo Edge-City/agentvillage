@@ -306,12 +306,12 @@ describe("M1: arm off or unset with MoralMod files present is OFF", () => {
 });
 
 describe("M2: the release must be the one pinned in MORALMOD_RELEASE_SHA256", () => {
-  test("ON, gate verified, a self-consistent release under the shipped (sentinel) pin: withheld as release_unpinned before any Hermes call; an earlier listing and the morning job are removed; nothing is installed or seeded", () => {
+  test("ON, gate verified, a self-consistent fixture differs from the shipped pin: withheld as release_unpinned before any Hermes call; an earlier listing and the morning job are removed; nothing is installed or seeded", () => {
     process.env[MORALMOD_ARM_ENV] = "on";
-    supplyRelease();
+    const fixturePin = supplyRelease();
     listPlugin();
     plantMorningJob();
-    expect(MORALMOD_RELEASE_SHA256).not.toMatch(/^[0-9a-f]{64}$/);
+    expect(MORALMOD_RELEASE_SHA256).not.toBe(fixturePin);
     const { calls, run } = recorder();
     const result = step(run);
     expect(result).toMatchObject({ state: "failed", failed: "release_unpinned" });
