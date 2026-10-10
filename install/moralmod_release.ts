@@ -7,7 +7,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, wri
 import { join } from "node:path";
 
 export const MORALMOD_HOOK_VERSION = "moralmod-lifecycle-2";
-export const INDEX_PLUGIN_REVISION = "eaec4fc02ffc251fca2cfd56b728c845562f6a3b";
+export const INDEX_PLUGIN_REVISION = "04d833b840541fedabe78cbdad306c18853d784a";
 /**
  * OV-249 post-hoc M2: the sha256 of the one reviewed MoralMod release's `release.json`, pinned here
  * as `INDEX_PLUGIN_REF` pins the plugin. `release.json` lists the sha256 of every bundle file, so

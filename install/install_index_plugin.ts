@@ -52,15 +52,25 @@
  *   is the policy's row (`opportunity.accept` is autonomous in the template),
  *   which the installer neither reads nor writes.
  * - Sidecar env allowlist (OV-249 A3, the lead's R11): at REF the plugin's
- *   `sidecar.py` starts the Bun negotiator with `os.environ.copy()` minus
- *   `INDEX_SESSION_TOKEN`, every gateway secret included. Every ON run, after
- *   the Hermes install or no-op and before enabling, the installed
- *   `plugins/index-network/sidecar.py` has that exact two-line anchor replaced
- *   by an allowlist (`SIDECAR_ENV_ALLOWLIST` from `os.environ`, plus
- *   `BUN_OPTIONS=--no-env-file` so Bun loads no `.env*` from the gateway's
- *   working directory, then the plugin's own `INDEX_*` names, unchanged). An
+ *   `sidecar.py` builds the Bun negotiator's env with its own
+ *   `negotiator_child_env()`: six names, widened by any name listed in
+ *   `INDEX_NEGOTIATOR_ENV_PASSTHROUGH` from the gateway's environment, minus
+ *   `INDEX_SESSION_TOKEN` (before 04d833b8 it was `os.environ.copy()`, every
+ *   gateway secret included). That knob is open-ended and owned by whatever
+ *   writes the gateway env, so the overlay keeps its own fixed list (refute S1
+ *   at 04d833b8). Every ON run, after the Hermes install or no-op and before
+ *   enabling, the installed `plugins/index-network/sidecar.py` has that exact
+ *   one-line call replaced by an allowlist (`SIDECAR_ENV_ALLOWLIST` from
+ *   `os.environ`, plus `BUN_OPTIONS=--no-env-file` so Bun loads no `.env*`
+ *   from the gateway's working directory, then the plugin's own `INDEX_*`
+ *   names, unchanged). `negotiator_child_env()` stays defined but is never
+ *   called, so `INDEX_NEGOTIATOR_ENV_PASSTHROUGH` is never read. An
  *   already-patched file is left byte for byte; a file the first A3 patch
  *   wrote (`SIDECAR_PATCHED_V1`, exactly) is brought to the current block.
+ *   A pin bump reaches a box patched at the previous REF through the
+ *   `--force` reinstall: Hermes writes a fresh `sidecar.py` at the new REF,
+ *   which this step then patches (a bump that fails leaves the previous tree,
+ *   patched or not, and it is judged as it stands).
  *   Anything else (anchor missing or twice, unreadable, write or re-read
  *   failed) is fail closed: the step does what withheld does, reports
  *   `sidecar` and logs one line naming the reason. Comes out when the plugin
@@ -90,25 +100,31 @@ import { MORALMOD_RELEASE_SHA256, MoralmodReleaseUnpinned, installMoralmodReleas
 
 export const INDEX_PLUGIN = "index-network";
 export const INDEX_PLUGIN_SOURCE = "indexnetwork/hermes-plugin";
-/** The reviewed commit of indexnetwork/hermes-plugin (dev = main on 2026-10-08; Hermes's install scan: safe). */
-export const INDEX_PLUGIN_REF = "eaec4fc02ffc251fca2cfd56b728c845562f6a3b";
+/**
+ * The reviewed commit of indexnetwork/hermes-plugin (on dev and main 2026-10-10; refute
+ * PLUGIN-04d833b8: 0 MUST). Hermes's install scan was last recorded safe at eaec4fc0; re-run it
+ * at this ref before the bump ships (04d833b8 adds `tests/test_sidecar_env.py`, which uses
+ * `tempfile` and `chmod`).
+ */
+export const INDEX_PLUGIN_REF = "04d833b840541fedabe78cbdad306c18853d784a";
 /**
  * The managed MoralMod release is pinned beside it: `MORALMOD_RELEASE_SHA256` in
  * `moralmod_release.ts`, the sha256 of the reviewed `release.json` (a sentinel until one is supplied).
  */
 export { MORALMOD_RELEASE_SHA256 } from "./moralmod_release";
 /**
- * OV-249 A3: the exact bytes of `sidecar.py:149-150` at `INDEX_PLUGIN_REF` (the negotiator child's
- * env: the gateway's whole environment minus the device session), which the installer replaces.
- * A pin bump must re-take the anchor from the new ref (`gh api
- * repos/indexnetwork/hermes-plugin/contents/sidecar.py?ref=<REF>`) and move `SIDECAR_ANCHOR_PIN`
- * with it: a pin whose `ref` is not `INDEX_PLUGIN_REF`, or whose sha256 is not the anchor's, fails
- * closed at run time and fails the test that holds the pairing.
+ * OV-249 A3: the exact bytes of `sidecar.py:164` at `INDEX_PLUGIN_REF` (the negotiator child's env:
+ * upstream's `negotiator_child_env()`, its six names plus whatever `INDEX_NEGOTIATOR_ENV_PASSTHROUGH`
+ * lists, refute S1), which the installer replaces with the overlay's fixed list. The sha256 is of
+ * the anchor string itself, not the file (`checkAnchorPin`). A pin bump must re-take the anchor
+ * from the new ref (`gh api repos/indexnetwork/hermes-plugin/contents/sidecar.py?ref=<REF>`) and
+ * move `SIDECAR_ANCHOR_PIN` with it: a pin whose `ref` is not `INDEX_PLUGIN_REF`, or whose sha256
+ * is not the anchor's, fails closed at run time and fails the test that holds the pairing.
  */
-export const SIDECAR_ANCHOR = '            child_env = os.environ.copy()\n            child_env.pop("INDEX_SESSION_TOKEN", None)\n';
+export const SIDECAR_ANCHOR = "            child_env = negotiator_child_env()\n";
 export const SIDECAR_ANCHOR_PIN = {
-  ref: "eaec4fc02ffc251fca2cfd56b728c845562f6a3b",
-  sha256: "15dbfddb11217ba5162aff96ec473cca8f949b5386fd466650d2906f8636a1b6",
+  ref: "04d833b840541fedabe78cbdad306c18853d784a",
+  sha256: "7a8db4b9d74f5aad5a3811ef1a70704f204f9de0828a73a68ff66fc6a8e10b9f",
 } as const;
 /** The names the negotiator child keeps from the gateway's environment (Bun needs PATH and HOME). */
 export const SIDECAR_ENV_ALLOWLIST = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ", "AV_MORALMOD_ARM"] as const;

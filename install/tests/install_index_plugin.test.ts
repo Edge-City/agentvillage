@@ -41,6 +41,7 @@ import {
   sidecarPath,
 } from "../install_index_plugin";
 import { installStatusPath, writeInstallStatus } from "../install_status";
+import { INDEX_PLUGIN_REVISION } from "../moralmod_release";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const FAKE = join(import.meta.dir, "fake_hermes.ts");
@@ -106,12 +107,29 @@ function plantMorning(): void {
 }
 
 /**
- * OV-249 A3: a stand-in for the plugin's sidecar.py at REF. Lines 146-159 of `Sidecar.start()` (the
- * negotiator child's env) byte for byte at their indent, in a module Python imports standalone:
- * `child_env_for()` returns the env instead of starting Bun. The anchor is `SIDECAR_ANCHOR` itself.
+ * OV-249 A3: a stand-in for the plugin's sidecar.py at REF. Upstream's env builder (`:65-76`,
+ * `UPSTREAM_CHILD_ENV`) and lines 161-173 of `Sidecar.start()` (the negotiator child's env) byte for
+ * byte at their indent, in a module Python imports standalone: `child_env_for()` returns the env
+ * instead of starting Bun. The anchor is `SIDECAR_ANCHOR` itself. The test "the stand-in is the real
+ * sidecar.py's bytes" holds both copies to the pinned file when the plugin checkout is present.
  */
-const SIDECAR_HEAD = [
-  '"""Stand-in for indexnetwork/hermes-plugin sidecar.py at INDEX_PLUGIN_REF (the child env, :146-159)."""',
+const UPSTREAM_CHILD_ENV = [
+  '_CHILD_ENV_KEEP = {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ"}',
+  "",
+  "",
+  "def negotiator_child_env() -> dict[str, str]:",
+  '    """Env for the Bun negotiator: a short allowlist, never the gateway\'s secrets."""',
+  "    keep = set(_CHILD_ENV_KEEP)",
+  '    extra = os.environ.get("INDEX_NEGOTIATOR_ENV_PASSTHROUGH", "")',
+  '    keep |= {name.strip() for name in extra.split(",") if name.strip()}',
+  '    keep.discard("INDEX_SESSION_TOKEN")',
+  "    child = {key: value for key, value in os.environ.items() if key in keep}",
+  '    child["BUN_OPTIONS"] = "--no-env-file"',
+  "    return child",
+  "",
+].join("\n");
+const SIDECAR_TOP = [
+  '"""Stand-in for indexnetwork/hermes-plugin sidecar.py at INDEX_PLUGIN_REF (the child env, :65-76 and :161-173)."""',
   "",
   "import os",
   "from pathlib import Path",
@@ -120,6 +138,11 @@ const SIDECAR_HEAD = [
   "",
   "def api_origin():",
   '    return "https://index.example.test"',
+  "",
+  "",
+  "",
+].join("\n");
+const SIDECAR_CLASS = [
   "",
   "",
   "class Sidecar:",
@@ -134,6 +157,7 @@ const SIDECAR_HEAD = [
   "            # device session, so that token stays in the gateway process.",
   "",
 ].join("\n");
+const SIDECAR_HEAD = SIDECAR_TOP + UPSTREAM_CHILD_ENV + SIDECAR_CLASS;
 const SIDECAR_TAIL = [
   "            child_env.update({",
   '                "INDEX_BRIDGE_URL": self.bridge.url,',
@@ -148,6 +172,19 @@ const SIDECAR_TAIL = [
   "",
 ].join("\n");
 const SIDECAR_AT_REF = SIDECAR_HEAD + SIDECAR_ANCHOR + SIDECAR_TAIL;
+/** sidecar.py as at the previous pin (eaec4fc0): no `negotiator_child_env()`, the two-line anchor it had. */
+const PREVIOUS_ANCHOR = '            child_env = os.environ.copy()\n            child_env.pop("INDEX_SESSION_TOKEN", None)\n';
+const SIDECAR_AT_PREVIOUS = SIDECAR_TOP + SIDECAR_CLASS + PREVIOUS_ANCHOR + SIDECAR_TAIL;
+/** The live call sites of upstream's env builder in `source` (its `def` line is not one). */
+const childEnvCalls = (source: string) => source.split("\n").filter((line) => line.includes("negotiator_child_env(") && !line.startsWith("def "));
+/** The pinned plugin checkout (CI: AV_INDEX_PLUGIN_TEST_DIR); the real sidecar.py at REF, or null without one. */
+const PLUGIN_CHECKOUT = process.env.AV_INDEX_PLUGIN_TEST_DIR;
+const REAL_SIDECAR: string | null = (() => {
+  if (!PLUGIN_CHECKOUT) return null;
+  const show = Bun.spawnSync(["git", "show", `${INDEX_PLUGIN_REF}:sidecar.py`], { cwd: PLUGIN_CHECKOUT, stdout: "pipe", stderr: "pipe" });
+  // Set but unusable is a failure (in the test below), never a silent skip.
+  return show.exitCode === 0 ? show.stdout.toString() : "";
+})();
 const INDEX_CHILD_NAMES = [
   "INDEX_AGENT_ID",
   "INDEX_API_KEY",
@@ -359,6 +396,13 @@ describe("pinned, never updated", () => {
   test("INDEX_PLUGIN_REF is one full lowercase commit SHA", () => {
     expect(INDEX_PLUGIN_REF).toMatch(/^[0-9a-f]{40}$/);
   });
+
+  test("refute N5: the pins move together: moralmod_release's INDEX_PLUGIN_REVISION and CI's plugin checkout are INDEX_PLUGIN_REF", () => {
+    expect(INDEX_PLUGIN_REVISION).toBe(INDEX_PLUGIN_REF);
+    const workflow = readFileSync(join(REPO_ROOT, ".github", "workflows", "test.yml"), "utf8");
+    const checkout = workflow.match(/repository: indexnetwork\/hermes-plugin\n\s+ref: ([0-9a-f]+)\n/);
+    expect(checkout?.[1]).toBe(INDEX_PLUGIN_REF);
+  });
 });
 
 describe("the operator's off switches", () => {
@@ -538,6 +582,8 @@ describe("OV-249 (B): ON only behind a gate this run verified", () => {
 
 describe("OV-249 (A3): the negotiator sidecar's env is an allowlist, or the plugin is not enabled", () => {
   const PATCHED_AT_REF = SIDECAR_HEAD + SIDECAR_PATCHED + SIDECAR_TAIL;
+  const V1_AT_PREVIOUS = SIDECAR_TOP + SIDECAR_CLASS + SIDECAR_PATCHED_V1 + SIDECAR_TAIL;
+  const PATCHED_AT_PREVIOUS = SIDECAR_TOP + SIDECAR_CLASS + SIDECAR_PATCHED + SIDECAR_TAIL;
   const PYTHON = Bun.which("python3");
   /** The interpreter itself (a pyenv shim needs the caller's PATH), so the child env can be exactly the one given. */
   const python = (): string => {
@@ -580,8 +626,35 @@ describe("OV-249 (A3): the negotiator sidecar's env is an allowlist, or the plug
   test("the anchor is paired with the pin: bumping INDEX_PLUGIN_REF fails here until the anchor is re-taken from the new ref and its sha256 moved", () => {
     expect(SIDECAR_ANCHOR_PIN.ref).toBe(INDEX_PLUGIN_REF);
     expect(createHash("sha256").update(SIDECAR_ANCHOR).digest("hex")).toBe(SIDECAR_ANCHOR_PIN.sha256);
-    expect(SIDECAR_ANCHOR_PIN.sha256).toBe("15dbfddb11217ba5162aff96ec473cca8f949b5386fd466650d2906f8636a1b6");
-    expect(SIDECAR_ANCHOR).toBe('            child_env = os.environ.copy()\n            child_env.pop("INDEX_SESSION_TOKEN", None)\n');
+    expect(SIDECAR_ANCHOR_PIN.sha256).toBe("7a8db4b9d74f5aad5a3811ef1a70704f204f9de0828a73a68ff66fc6a8e10b9f");
+    expect(SIDECAR_ANCHOR).toBe("            child_env = negotiator_child_env()\n");
+  });
+
+  test("refute S1: the patched source never calls negotiator_child_env(), so INDEX_NEGOTIATOR_ENV_PASSTHROUGH is never consulted", () => {
+    expect(childEnvCalls(SIDECAR_AT_REF)).toEqual(["            child_env = negotiator_child_env()"]);
+    const result = patchSidecarSource(SIDECAR_AT_REF);
+    expect(result).toEqual({ source: PATCHED_AT_REF, changed: true });
+    expect(childEnvCalls(PATCHED_AT_REF)).toEqual([]);
+    // Still defined (upstream's code, untouched), only no longer called.
+    expect(PATCHED_AT_REF).toContain("def negotiator_child_env() -> dict[str, str]:\n");
+    expect(SIDECAR_PATCHED).not.toContain("INDEX_NEGOTIATOR_ENV_PASSTHROUGH");
+    expect(SIDECAR_PATCHED).not.toContain("negotiator_child_env");
+  });
+
+  test.skipIf(PLUGIN_CHECKOUT === undefined)("the stand-in is the real sidecar.py's bytes at REF; the real file has the anchor once and, patched, no call to negotiator_child_env()", () => {
+    const real = REAL_SIDECAR!;
+    expect(real).not.toBe("");
+    expect(real.split(SIDECAR_ANCHOR)).toHaveLength(2);
+    expect(real).toContain(UPSTREAM_CHILD_ENV);
+    const comments = SIDECAR_CLASS.slice(SIDECAR_CLASS.indexOf("            # Same process group"));
+    expect(real).toContain(comments + SIDECAR_ANCHOR + SIDECAR_TAIL.replace("            return child_env\n", ""));
+    const result = patchSidecarSource(real);
+    if (!("source" in result)) throw new Error(`not patched: ${result.reason}`);
+    expect(result.changed).toBe(true);
+    expect(childEnvCalls(result.source)).toEqual([]);
+    expect(result.source).toBe(real.replace(SIDECAR_ANCHOR, SIDECAR_PATCHED));
+    expect(result.source).toContain(SIDECAR_PATCHED + "            child_env.update({\n");
+    expect(patchSidecarSource(result.source)).toEqual({ source: result.source, changed: false });
   });
 
   test("unpatched at REF: patched in place (mode kept), the allowlist then the plugin's INDEX_* lines, marked once; enabled; a second run writes nothing", () => {
@@ -596,7 +669,7 @@ describe("OV-249 (A3): the negotiator sidecar's env is an allowlist, or the plug
     expect(readSidecar()).toBe(PATCHED_AT_REF);
     expect(statSync(sidecarPath(home)).mode & 0o7777).toBe(0o640);
     const patched = readSidecar();
-    expect(patched).not.toContain("os.environ.copy()");
+    expect(childEnvCalls(patched)).toEqual([]);
     expect(patched.split(SIDECAR_MARKER)).toHaveLength(2);
     expect(patched).toContain(
       '            child_env = {name: os.environ[name] for name in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ", "AV_MORALMOD_ARM") if name in os.environ}\n' +
@@ -616,6 +689,28 @@ describe("OV-249 (A3): the negotiator sidecar's env is an allowlist, or the plug
     expect(statSync(sidecarPath(home)).ino).toBe(ino);
     expect(sidecarLines(again.lines)).toEqual([]);
     expect(plugins().enabled).toContain(INDEX_PLUGIN);
+  });
+
+  test("pin bump: a box patched at the previous pin is reinstalled with --force, and the fresh sidecar.py at REF is patched before it is enabled; a failed bump keeps the previous patched tree", () => {
+    const previousPatched = PATCHED_AT_PREVIOUS;
+    expect(patchSidecarSource(SIDECAR_AT_PREVIOUS)).toEqual({ reason: "anchor missing" });
+    config(ENABLED);
+    installedAt(OTHER_REF, true);
+    writeFileSync(sidecarPath(home), previousPatched);
+    const { calls, run } = recorder();
+    expect(step(run)).toMatchObject({ state: "installed", failed: null });
+    expect(calls).toEqual([FORCED]);
+    expect(readSidecar()).toBe(PATCHED_AT_REF);
+    expect(childEnvCalls(readSidecar())).toEqual([]);
+    expect(plugins().enabled).toEqual(["av-events", INDEX_PLUGIN]);
+    // Hermes fails the bump and keeps the previous tree: already allowlisted, it stays enabled.
+    installedAt(OTHER_REF, true);
+    writeFileSync(sidecarPath(home), previousPatched);
+    const failing = recorder(true);
+    expect(step(failing.run)).toMatchObject({ state: "failed", failed: "hermes" });
+    expect(failing.calls).toEqual([FORCED]);
+    expect(readSidecar()).toBe(previousPatched);
+    expect(plugins().enabled).toEqual(["av-events", INDEX_PLUGIN]);
   });
 
   test("a fresh install is patched before it is enabled", () => {
@@ -642,7 +737,8 @@ describe("OV-249 (A3): the negotiator sidecar's env is an allowlist, or the plug
 
   const BROKEN: Array<[string, string | null, string]> = [
     ["anchor absent", SIDECAR_HEAD + SIDECAR_TAIL, "anchor missing"],
-    ["anchor altered (dict(os.environ))", SIDECAR_AT_REF.replace("os.environ.copy()", "dict(os.environ)"), "anchor missing"],
+    ["anchor altered (dict(os.environ))", SIDECAR_AT_REF.replace("child_env = negotiator_child_env()", "child_env = dict(os.environ)"), "anchor missing"],
+    ["the previous pin's file (eaec4fc0's two-line anchor, unpatched)", SIDECAR_AT_PREVIOUS, "anchor missing"],
     ["anchor re-indented", SIDECAR_AT_REF.replace(SIDECAR_ANCHOR, SIDECAR_ANCHOR.replaceAll("            child_env", "        child_env")), "anchor missing"],
     ["anchor twice", SIDECAR_HEAD + SIDECAR_ANCHOR + SIDECAR_ANCHOR + SIDECAR_TAIL, "anchor ambiguous"],
     ["the marker over an altered line", PATCHED_AT_REF.replace('"AV_MORALMOD_ARM")', '"TZ", "TELEGRAM_BOT_TOKEN")'), "a partial or altered patch"],
@@ -712,14 +808,18 @@ describe("OV-249 (A3): the negotiator sidecar's env is an allowlist, or the plug
   test("patchSidecarSource: at REF patched once; patched is a no-op; the V1 block is brought to the current one; nothing else is accepted", () => {
     expect(patchSidecarSource(SIDECAR_AT_REF)).toEqual({ source: PATCHED_AT_REF, changed: true });
     expect(patchSidecarSource(PATCHED_AT_REF)).toEqual({ source: PATCHED_AT_REF, changed: false });
-    expect(patchSidecarSource(SIDECAR_HEAD + SIDECAR_PATCHED_V1 + SIDECAR_TAIL)).toEqual({ source: PATCHED_AT_REF, changed: true });
+    // V1 was only ever written into files of earlier pins, which had no BUN_OPTIONS of their own; at REF
+    // upstream's negotiator_child_env() names BUN_OPTIONS, so a V1 block in a REF file is refused.
+    expect(patchSidecarSource(V1_AT_PREVIOUS)).toEqual({ source: PATCHED_AT_PREVIOUS, changed: true });
+    expect(patchSidecarSource(SIDECAR_HEAD + SIDECAR_PATCHED_V1 + SIDECAR_TAIL)).toEqual({ reason: "a partial or altered patch" });
     for (const [, body, reason] of BROKEN) if (body !== null) expect(patchSidecarSource(body)).toEqual({ reason });
   });
 
   test("the run-time pin guard: a pin taken at another ref, or whose sha256 is not the anchor's, refuses even a file at REF", () => {
     expect(checkAnchorPin(SIDECAR_ANCHOR_PIN, INDEX_PLUGIN_REF, SIDECAR_ANCHOR)).toBeNull();
     expect(checkAnchorPin(SIDECAR_ANCHOR_PIN, OTHER_REF, SIDECAR_ANCHOR)).toBe("the anchor was not re-taken at INDEX_PLUGIN_REF");
-    expect(checkAnchorPin(SIDECAR_ANCHOR_PIN, INDEX_PLUGIN_REF, SIDECAR_ANCHOR.replace("copy()", "copy( )"))).toBe("the anchor is not the pinned one");
+    expect(checkAnchorPin(SIDECAR_ANCHOR_PIN, INDEX_PLUGIN_REF, SIDECAR_ANCHOR.replace("env()", "env( )"))).toBe("the anchor is not the pinned one");
+    expect(SIDECAR_ANCHOR.replace("env()", "env( )")).not.toBe(SIDECAR_ANCHOR);
     // Through patchSidecarSource itself, so the guard cannot be dropped from it unnoticed.
     expect(patchSidecarSource(SIDECAR_AT_REF, { ref: OTHER_REF, sha256: SIDECAR_ANCHOR_PIN.sha256 })).toEqual({ reason: "the anchor was not re-taken at INDEX_PLUGIN_REF" });
     expect(patchSidecarSource(SIDECAR_AT_REF, { ref: INDEX_PLUGIN_REF, sha256: "0".repeat(64) })).toEqual({ reason: "the anchor is not the pinned one" });
@@ -736,12 +836,13 @@ describe("OV-249 (A3): the negotiator sidecar's env is an allowlist, or the plug
     expect(SIDECAR_PATCHED).toContain('            child_env["BUN_OPTIONS"] = "--no-env-file"\n');
     config(ENABLED);
     installedAt(INDEX_PLUGIN_REF, true);
-    writeFileSync(sidecarPath(home), SIDECAR_HEAD + SIDECAR_PATCHED_V1 + SIDECAR_TAIL);
+    // A file of an earlier pin (V1 never met a REF file), with the record at REF so no Hermes call runs.
+    writeFileSync(sidecarPath(home), V1_AT_PREVIOUS);
     chmodSync(sidecarPath(home), 0o640);
     const ino = statSync(sidecarPath(home)).ino;
     const result = step(recorder().run);
     expect(result).toMatchObject({ state: "pinned", failed: null });
-    expect(readSidecar()).toBe(PATCHED_AT_REF);
+    expect(readSidecar()).toBe(PATCHED_AT_PREVIOUS);
     expect(statSync(sidecarPath(home)).ino).not.toBe(ino);
     expect(statSync(sidecarPath(home)).mode & 0o7777).toBe(0o640);
     expect(sidecarLines(result.lines)).toEqual([`→ index-network plugin: sidecar.py env allowlisted (${sidecarPath(home)})`]);
@@ -890,7 +991,7 @@ describe("OV-249 (A3): the negotiator sidecar's env is an allowlist, or the plug
     expect(parse.exitCode).toBe(0);
   });
 
-  test("behaviour: the patched env builder hands the child no secret name (TELEGRAM_BOT_TOKEN, a model key, INDEX_SESSION_TOKEN) and BUN_OPTIONS=--no-env-file (Bun loads no .env* from the gateway's cwd); the unpatched one leaks", () => {
+  test("behaviour: the patched env builder hands the child no secret name (TELEGRAM_BOT_TOKEN, a model key, INDEX_SESSION_TOKEN) whatever INDEX_NEGOTIATOR_ENV_PASSTHROUGH lists, keeps AV_MORALMOD_ARM, and sets BUN_OPTIONS=--no-env-file (Bun loads no .env* from the gateway's cwd); the unpatched one leaks what the passthrough lists (refute S1)", () => {
     config(BASE);
     installedAt(INDEX_PLUGIN_REF, true);
     const unpatched = join(home, "unpatched_sidecar.py");
@@ -901,25 +1002,34 @@ describe("OV-249 (A3): the negotiator sidecar's env is an allowlist, or the plug
       HOME: "/home/hermes",
       LANG: "C.UTF-8",
       TZ: "Asia/Kolkata",
+      AV_MORALMOD_ARM: "on",
       TELEGRAM_BOT_TOKEN: "x",
       OPENROUTER_API_KEY: "x",
       INDEX_SESSION_TOKEN: "x",
       AV_APPROVAL_TOKEN_FILE: "/run/x",
+      // refute S1: upstream widens its list by this gateway-env knob; the patched file never reads it.
+      INDEX_NEGOTIATOR_ENV_PASSTHROUGH: "TELEGRAM_BOT_TOKEN,OPENROUTER_API_KEY,INDEX_SESSION_TOKEN",
       // The gateway's own Bun options (an env file, say) are not what the child gets.
       BUN_OPTIONS: "--env-file=/home/hermes/.hermes/.env",
     };
-    // Control: at REF the leak is real, so the check below can see it.
+    // Control: at REF the passthrough leak is real, so the check below can see it.
     const leaked = Object.keys(childEnv(unpatched, gateway));
     expect(leaked).toContain("TELEGRAM_BOT_TOKEN");
     expect(leaked).toContain("OPENROUTER_API_KEY");
     expect(leaked).not.toContain("INDEX_SESSION_TOKEN");
+    // And without the knob upstream's own list drops the arm, which the overlay's list keeps.
+    const noKnob: Record<string, string> = { ...gateway };
+    delete noKnob.INDEX_NEGOTIATOR_ENV_PASSTHROUGH;
+    expect(Object.keys(childEnv(unpatched, noKnob))).not.toContain("AV_MORALMOD_ARM");
     const env = childEnv(sidecarPath(home), gateway);
     const names = Object.keys(env).sort();
     expect(names).not.toContain("TELEGRAM_BOT_TOKEN");
     expect(names).not.toContain("OPENROUTER_API_KEY");
     expect(names).not.toContain("AV_APPROVAL_TOKEN_FILE");
     expect(names).not.toContain("INDEX_SESSION_TOKEN");
-    expect(names).toEqual([...INDEX_CHILD_NAMES, "BUN_OPTIONS", "HOME", "LANG", "PATH", "TZ"].sort());
+    expect(names).not.toContain("INDEX_NEGOTIATOR_ENV_PASSTHROUGH");
+    expect(names).toEqual([...INDEX_CHILD_NAMES, "AV_MORALMOD_ARM", "BUN_OPTIONS", "HOME", "LANG", "PATH", "TZ"].sort());
+    expect(Object.keys(childEnv(sidecarPath(home), noKnob)).sort()).toEqual(names);
     expect(env.BUN_OPTIONS).toBe("--no-env-file");
     expect(SIDECAR_BUN_OPTIONS).toBe("--no-env-file");
     // A gateway with no BUN_OPTIONS at all: the child still gets it.
@@ -1041,7 +1151,7 @@ describe("the tool surface at INDEX_PLUGIN_REF", () => {
   // provides_tools in plugin.yaml at INDEX_PLUGIN_REF, copied by hand
   // (`gh api repos/indexnetwork/hermes-plugin/contents/plugin.yaml?ref=<REF>`).
   // A pin bump re-copies it, re-sorts each name into READ or WRITE, and moves PINNED_AT.
-  const PINNED_AT = "eaec4fc02ffc251fca2cfd56b728c845562f6a3b";
+  const PINNED_AT = "04d833b840541fedabe78cbdad306c18853d784a";
   const PROVIDES_TOOLS = [
     "index_read_intents",
     "index_research_profile",
