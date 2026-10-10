@@ -36,7 +36,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: indexnetwork/hermes-plugin
-          ref: eaec4fc02ffc251fca2cfd56b728c845562f6a3b
+          ref: 04d833b840541fedabe78cbdad306c18853d784a
           path: .test-deps/index-hermes-plugin
           persist-credentials: false
       - uses: oven-sh/setup-bun@v2
