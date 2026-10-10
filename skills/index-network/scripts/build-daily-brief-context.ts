@@ -533,7 +533,10 @@ export function dedupeInterests(interests: readonly unknown[] | undefined): stri
  * names no interest (proactive.ts interestsView, DATA-372 B1). The caller may
  * pass the Context tags' stated items in the profile's place when the profile
  * states none (`statedFrom` "context"); they are then treated exactly as
- * stated interests, and the source says which.
+ * stated interests, and the source says which, with one difference: Context
+ * items are sentences that often suggest no village tag, so when they suggest
+ * none the tags come from the memory files, as they did before (OV-251 S3).
+ * The brief still names only the Context items.
  */
 /**
  * The village tags the profile's stated interests suggest, for picking events:
@@ -556,7 +559,9 @@ export function resolveInterests(
 ): { statedInterests: string[]; interestTags: string[]; interestSource: InterestSource } {
   const statedInterests = dedupeInterests(stated);
   if (statedInterests.length > 0) {
-    return { statedInterests, interestTags: statedInterestTags(statedInterests), interestSource: statedFrom };
+    const statedTags = statedInterestTags(statedInterests);
+    const interestTags = statedTags.length === 0 && statedFrom === "context" ? extractInterestTags(memoryText) : statedTags;
+    return { statedInterests, interestTags, interestSource: statedFrom };
   }
   const interestTags = extractInterestTags(memoryText);
   return { statedInterests, interestTags, interestSource: interestTags.length > 0 ? "memory" : "none" };

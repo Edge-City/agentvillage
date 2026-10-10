@@ -290,7 +290,9 @@ stated are read: marked `setup`, `you`, `telegram` or `chat`, or unmarked;
 never a `(guess)` item, the `Summary:` line, or anything under
 `Removed by you:`. The brief takes Here to, Curious about, Working on and
 Wants to meet (each whole, at most 60 characters, 12 in all) as
-`you.interests` only when `av-profile.json` states no interests; the
+`you.interests` only when `av-profile.json` states no interests (they then
+pick the events too; when they suggest no village tag, the tags from the
+memory files pick them, as before); the
 Preferences (at most 4) reach the brief, both drops, the follow-up and the
 evening reminder about a person as `you.preferences`, never the outcome ask
 or the closeout question, which go out word for word. Each item takes the

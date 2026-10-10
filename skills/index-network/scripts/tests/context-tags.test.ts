@@ -289,6 +289,18 @@ describe("the morning brief's interests from the Context tags", () => {
     expect(output(after.lines).you).toEqual({ interests: [], notes: [] });
   });
 
+  test("OV-251 S3: Context items that suggest no village tag leave the event picks to the memory files", () => {
+    const memory = "I tinker with VR rigs and care about climate.";
+    const context = resolveInterests(["Learn how to surf", "Two or three collaborators for a seed library"], memory, "context");
+    expect(context.statedInterests).toEqual(["Learn how to surf", "Two or three collaborators for a seed library"]);
+    expect(context.interestSource).toBe("context");
+    expect(context.interestTags).toEqual(["Energy & Climate", "Spatial Computing"]);
+    // Items that do suggest a tag still pick the events alone, as profile interests do.
+    expect(resolveInterests(["Mycology", "AI safety"], memory, "context").interestTags).toEqual(["AI"]);
+    // The profile path is unchanged: its tags come from its words alone, even when there are none.
+    expect(resolveInterests(["Learn how to surf"], memory).interestTags).toEqual([]);
+  });
+
   test("buildDailyBriefContext reports the source as context", async () => {
     const originalFetch = globalThis.fetch;
     const savedKey = process.env.INDEX_API_KEY;
