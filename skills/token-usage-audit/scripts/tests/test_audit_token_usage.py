@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,12 @@ SPEC.loader.exec_module(audit)
 
 
 NOW = datetime(2026, 6, 22, 12, 0, tzinfo=timezone.utc)
+DEFAULT_USAGE_URL = "https://agents.edgecity.live/settings?tab=usage"
+
+
+def hermetic_env() -> dict[str, str]:
+    """The caller's AV_CONNECTIONS_URL must not leak into the subprocess under test."""
+    return {k: v for k, v in os.environ.items() if k != "AV_CONNECTIONS_URL"}
 
 
 class TokenUsageAuditTests(unittest.TestCase):
@@ -131,55 +138,105 @@ class TokenUsageAuditTests(unittest.TestCase):
                 text=True,
                 capture_output=True,
                 check=True,
+                env=hermetic_env(),
             )
 
         self.assertEqual(json.loads(completed.stdout.strip().splitlines()[-1]), {"wakeAgent": False})
         self.assertNotIn("raw-secret-session-id", completed.stdout)
 
+    def run_alerting_cli(self, root: Path) -> subprocess.CompletedProcess[str]:
+        current = datetime.now(timezone.utc).isoformat()
+        self.write_json(
+            root / "cron/jobs.json",
+            {"jobs": [{"id": "job1", "name": "Edge - digest prepare", "lastRunAt": current}]},
+        )
+        sessions = root / "sessions.json"
+        self.write_json(
+            sessions,
+            {
+                "sessions": [
+                    {
+                        "id": "raw-secret-session-id",
+                        "createdAt": current,
+                        "source": "cron",
+                        "model": "gpt-test",
+                        "metadata": {"jobId": "job1"},
+                        "usage": {"totalTokens": 180_000},
+                        "toolCalls": 7,
+                    }
+                ]
+            },
+        )
+        return subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--root",
+                str(root),
+                "--dashboard-sessions-file",
+                str(sessions),
+            ],
+            text=True,
+            capture_output=True,
+            check=True,
+            env=hermetic_env(),
+        )
+
     def test_cli_alert_shape_uses_sanitized_facts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            current = datetime.now(timezone.utc).isoformat()
-            self.write_json(
-                root / "cron/jobs.json",
-                {"jobs": [{"id": "job1", "name": "Edge - digest prepare", "lastRunAt": current}]},
-            )
-            sessions = root / "sessions.json"
-            self.write_json(
-                sessions,
-                {
-                    "sessions": [
-                        {
-                            "id": "raw-secret-session-id",
-                            "createdAt": current,
-                            "source": "cron",
-                            "model": "gpt-test",
-                            "metadata": {"jobId": "job1"},
-                            "usage": {"totalTokens": 180_000},
-                            "toolCalls": 7,
-                        }
-                    ]
-                },
-            )
-            completed = subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPT),
-                    "--root",
-                    str(root),
-                    "--dashboard-sessions-file",
-                    str(sessions),
-                ],
-                text=True,
-                capture_output=True,
-                check=True,
-            )
+            completed = self.run_alerting_cli(Path(tmp))
 
         last = json.loads(completed.stdout.strip().splitlines()[-1])
         self.assertTrue(last["wakeAgent"])
         self.assertEqual(last["driver"]["type"], "single_cron")
         self.assertIn("Edge - digest prepare", completed.stdout)
         self.assertNotIn("raw-secret-session-id", completed.stdout)
+        self.assertIn('"usageSettingsUrl": "https://agents.edgecity.live/settings?tab=usage"', completed.stdout)
+        self.assertIn("never guess or name a limit", completed.stdout)
+
+    def test_cli_survives_a_non_utf8_dotenv(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".env").write_bytes(b"NAME=caf\xe9\nAV_CONNECTIONS_URL=https://stag\xe9ing.example.com/x\n")
+            completed = self.run_alerting_cli(root)
+
+        last = json.loads(completed.stdout.strip().splitlines()[-1])
+        self.assertTrue(last["wakeAgent"])
+        self.assertNotIn("audit_script_failed", completed.stdout)
+        self.assertIn(f'"usageSettingsUrl": "{DEFAULT_USAGE_URL}"', completed.stdout)
+
+    def test_dotenv_read_never_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prev = audit.os.environ.pop("AV_CONNECTIONS_URL", None)
+            try:
+                env = root / ".env"
+                env.write_bytes(b"NAME=caf\xe9\nAV_CONNECTIONS_URL=https://staging.example.com/x\n")
+                self.assertEqual(audit.usage_settings_url(root), "https://staging.example.com/settings?tab=usage")
+                env.write_bytes(b"\xef\xbb\xbfAV_CONNECTIONS_URL=https://staging.example.com/x\n")
+                self.assertEqual(audit.usage_settings_url(root), "https://staging.example.com/settings?tab=usage")
+                env.unlink()
+                env.mkdir()
+                self.assertEqual(audit.usage_settings_url(root), DEFAULT_USAGE_URL)
+            finally:
+                if prev is not None:
+                    audit.os.environ["AV_CONNECTIONS_URL"] = prev
+
+    def test_usage_settings_url_uses_the_app_origin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prev = audit.os.environ.pop("AV_CONNECTIONS_URL", None)
+            try:
+                self.assertEqual(audit.usage_settings_url(root), "https://agents.edgecity.live/settings?tab=usage")
+                (root / ".env").write_text('AV_CONNECTIONS_URL="https://staging.example.com/insights"\n', encoding="utf-8")
+                self.assertEqual(audit.usage_settings_url(root), "https://staging.example.com/settings?tab=usage")
+                for bad in ("http://x.example.com/insights", "https://u:p@x.example.com/", "https://x.example.com/a b"):
+                    audit.os.environ["AV_CONNECTIONS_URL"] = bad
+                    self.assertEqual(audit.usage_settings_url(root), "https://agents.edgecity.live/settings?tab=usage")
+            finally:
+                audit.os.environ.pop("AV_CONNECTIONS_URL", None)
+                if prev is not None:
+                    audit.os.environ["AV_CONNECTIONS_URL"] = prev
 
 
 if __name__ == "__main__":
