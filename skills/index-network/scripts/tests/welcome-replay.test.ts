@@ -429,7 +429,7 @@ function expectDraftWrites(): void {
 }
 
 /** The trailer the contract fixes: five keys in this order, nothing else. */
-function trailer(fallback: "none" | "questions" | "unreachable", listed: number, seeded = 0, failed = 0): string {
+function trailer(fallback: "none" | "questions" | "context" | "unreachable", listed: number, seeded = 0, failed = 0): string {
   return `${JSON.stringify({ welcome: 1, fallback, intents_listed: listed, intents_seeded: seeded, seed_failed: failed })}\n`;
 }
 
@@ -537,8 +537,8 @@ function expectSeedCalls(calls: FakeCall[], texts: string[], pausedIds: string[]
 // ---------------------------------------------------------------------------
 
 describe("the texts this file derives are the pinned ones", () => {
-  test("seededWelcome and listedWelcome reproduce welcome-texts.json byte for byte; the six older keys and the four seeded ones are all there", () => {
-    expect(Object.keys(golden)).toEqual(["three", "moreThanThree", "two", "one", "zero", "unreachable", "seededThree", "seededOne", "seededPausedThree", "seededPausedOne"]);
+  test("seededWelcome and listedWelcome reproduce welcome-texts.json byte for byte; the six older keys, the four seeded ones and `context` are all there", () => {
+    expect(Object.keys(golden)).toEqual(["three", "moreThanThree", "two", "one", "zero", "unreachable", "seededThree", "seededOne", "seededPausedThree", "seededPausedOne", "context"]);
     expect(seededWelcome("Mira", [MEMORY, RUST, RAISE])).toBe(golden.seededThree);
     // DATA-416 Q3: one seeded intent is singular throughout, in both modes.
     expect(seededWelcome(null, [MEMORY])).toBe(golden.seededOne);
@@ -596,20 +596,25 @@ describe("none: active intents are listed, nothing is created", () => {
   );
 });
 
-describe("questions: no active intents and nothing selected", () => {
-  const homes: Array<[string, string[] | null]> = [
-    ["no USER.md", null],
-    ["a USER.md whose `## Selected intentions` is empty (follow-up answers, offers and an imported source still carry `- ` lines)", []],
+describe("questions or context: no active intents and nothing selected", () => {
+  const homes: Array<[string, string[] | null, "zero" | "context", "questions" | "context"]> = [
+    ["no USER.md: the fixture's questions text", null, "zero", "questions"],
+    [
+      "a USER.md whose `## Selected intentions` is empty (follow-up answers, offers and an imported source still carry `- ` lines): the fixture's context text, no questions",
+      [],
+      "context",
+      "context",
+    ],
   ];
-  for (const [label, texts] of homes) {
+  for (const [label, texts, key, fallback] of homes) {
     test(
-      `${label}: the fixture's questions text, zero create calls, no seed marker, stderr empty by default`,
+      `${label}, zero create calls, no seed marker, stderr empty by default`,
       async () => {
         resetStub();
         writeUserMd(texts);
-        expectDraft(await draft("nothing"), golden.zero, trailer("questions", 0));
+        expectDraft(await draft("nothing"), golden[key], trailer(fallback, 0));
         expectReadsOnly(toolCalls(), 1);
-        const calls = await claimOnce(golden.zero);
+        const calls = await claimOnce(golden[key]);
         expectReadsOnly(calls, 1);
         expectDraftWrites();
       },
@@ -659,14 +664,14 @@ describe("no seed although intentions are selected", () => {
 
   for (const spoof of ["offer", "context"] as const) {
     test(
-      `DATA-416 M1: a second \`## Selected intentions\` heading inside ${spoof === "offer" ? "an offer" : "the imported context"}: nothing is read, zero creates, no seed marker, the questions text`,
+      `DATA-416 M1: a second \`## Selected intentions\` heading inside ${spoof === "offer" ? "an offer" : "the imported context"}: nothing is read, zero creates, no seed marker, the context text`,
       async () => {
         resetStub();
         writeUserMd([MEMORY, DINNER, SURF], spoof);
         expect(readFileSync(join(home, "USER.md"), "utf8").split("\n").filter((l) => l === "## Selected intentions")).toHaveLength(2);
-        expectDraft(await draft("nothing"), golden.zero, trailer("questions", 0));
+        expectDraft(await draft("nothing"), golden.context, trailer("context", 0));
         expectReadsOnly(toolCalls(), 1);
-        expectReadsOnly(await claimOnce(golden.zero), 1);
+        expectReadsOnly(await claimOnce(golden.context), 1);
         expectDraftWrites();
       },
       CASE_TIMEOUT_MS,
@@ -674,12 +679,12 @@ describe("no seed although intentions are selected", () => {
   }
 
   test(
-    "DATA-416 M2: a welcome already sent skips the seed in --draft too: the questions text, zero creates, no seed marker, the welcome marker untouched; by default WELCOME_ALREADY_SENT and no Index call",
+    "DATA-416 M2: a welcome already sent skips the seed in --draft too: the context text, zero creates, no seed marker, the welcome marker untouched; by default WELCOME_ALREADY_SENT and no Index call",
     async () => {
       resetStub();
       writeUserMd([MEMORY, RUST, RAISE]);
       writeMemoryFile(MARKER, JSON.stringify({ welcomeSent: true, sentAt: "2026-10-01T10:00:00.000Z" }));
-      expectDraft(await draft("nothing"), golden.zero, trailer("questions", 0));
+      expectDraft(await draft("nothing"), golden.context, trailer("context", 0));
       expectReadsOnly(toolCalls(), 1);
       await expectSecondDefaultRunSilent();
       expectDraftWrites();
@@ -688,12 +693,12 @@ describe("no seed although intentions are selected", () => {
   );
 
   test(
-    "every selected line is already listed, paused or archived (dedupe): zero creates, no seed marker, the questions text",
+    "every selected line is already listed, paused or archived (dedupe): zero creates, no seed marker, the context text",
     async () => {
       resetStub();
       stub.rows = [row(MEMORY.toUpperCase(), 1, "paused"), { ...row("Index's own summary", 2, "archived"), description: `  ${DINNER} ` }];
       writeUserMd([MEMORY, DINNER]);
-      expectDraft(await draft("nothing"), golden.zero, trailer("questions", 0));
+      expectDraft(await draft("nothing"), golden.context, trailer("context", 0));
       expectReadsOnly(toolCalls(), 1);
       expectDraftWrites();
     },
@@ -848,17 +853,17 @@ describe("a create that fails: the others still go, and the failure is counted",
   }
 
   test(
-    "every create fails: the questions text, trailer seeded 0, failed 3; the marker is still claimed and done, so a second run does not try again",
+    "every create fails: the context text, trailer seeded 0, failed 3; the marker is still claimed and done, so a second run does not try again",
     async () => {
       resetStub();
       for (const t of [MEMORY, DINNER, SURF]) stub.failCreates.set(t, "http500");
       writeUserMd([MEMORY, DINNER, SURF]);
       const run = await seedingDraft();
-      expectDraft(run, golden.zero, trailer("questions", 0, 0, 3));
+      expectDraft(run, golden.context, trailer("context", 0, 0, 3));
       expectSeedCalls(toolCalls(), [MEMORY, DINNER, SURF]);
       expectSeedMarker({ selected: 3, created: 0, failed: 3 }, run.t0, run.t1);
       const from = stub.fake.calls.length;
-      expectDraft(await draft("nothing"), golden.zero, trailer("questions", 0));
+      expectDraft(await draft("nothing"), golden.context, trailer("context", 0));
       // The marker exists, so the second run lists once more (DATA-416 race 2) and creates nothing.
       expectReadsOnly(toolCalls(from), 2);
       expectDraftWrites();
@@ -961,7 +966,7 @@ describe("once per box: a seed marker that exists stops every later create, acro
   );
 
   test(
-    "Index still lists nothing after the seed (so only the marker can stop it): the second --draft and a default run create nothing and ask the questions",
+    "Index still lists nothing after the seed (so only the marker can stop it): the second --draft and a default run create nothing and skip the questions (signup context)",
     async () => {
       resetStub();
       stub.frozen = [];
@@ -970,9 +975,9 @@ describe("once per box: a seed marker that exists stops every later create, acro
       // The creates were answered but the re-list shows none: seeded, and the text falls back to the seeded titles.
       expectDraft(run, seededWelcome(null, [MEMORY, DINNER, SURF]), trailer("none", 3, 3, 0));
       const from = stub.fake.calls.length;
-      expectDraft(await draft("nothing"), golden.zero, trailer("questions", 0));
+      expectDraft(await draft("nothing"), golden.context, trailer("context", 0));
       expectReadsOnly(toolCalls(from), 2);
-      expectReadsOnly(await claimOnce(golden.zero), 2);
+      expectReadsOnly(await claimOnce(golden.context), 2);
       expect(creates(stub.fake.calls)).toHaveLength(3);
       expectDraftWrites();
     },
@@ -1009,7 +1014,7 @@ describe("once per box: a seed marker that exists stops every later create, acro
   );
 
   test(
-    "DATA-416 S3: a marker that never gains done is waited for the script's WELCOME_SEED_WAIT_MS (25 s), then the run lists again and asks the questions; no create, the marker untouched",
+    "DATA-416 S3: a marker that never gains done is waited for the script's WELCOME_SEED_WAIT_MS (25 s), then the run lists again and gives the context text; no create, the marker untouched",
     async () => {
       resetStub();
       writeUserMd([MEMORY, DINNER, SURF]);
@@ -1017,7 +1022,7 @@ describe("once per box: a seed marker that exists stops every later create, acro
       const t0 = Date.now();
       const run = await draft("nothing");
       const took = Date.now() - t0;
-      expectDraft(run, golden.zero, trailer("questions", 0));
+      expectDraft(run, golden.context, trailer("context", 0));
       expectReadsOnly(toolCalls(), 2);
       // The wait is WELCOME_SEED_WAIT_MS (it ends sooner only at the budget less the reserve, 45 s, which it never meets).
       expect(took).toBeGreaterThanOrEqual(SEED_WAIT_MS - 500);
@@ -1028,7 +1033,7 @@ describe("once per box: a seed marker that exists stops every later create, acro
   );
 
   test(
-    "a marker that is done, empty or not JSON: no create, no wait, one more list (DATA-416 race 2), the questions text, the marker untouched",
+    "a marker that is done, empty or not JSON: no create, no wait, one more list (DATA-416 race 2), the context text, the marker untouched",
     async () => {
       resetStub();
       writeUserMd([MEMORY, DINNER, SURF]);
@@ -1036,7 +1041,7 @@ describe("once per box: a seed marker that exists stops every later create, acro
         writeMemoryFile(SEED_MARKER, body);
         const from = stub.fake.calls.length;
         const t0 = Date.now();
-        expectDraft(await draft("nothing"), golden.zero, trailer("questions", 0));
+        expectDraft(await draft("nothing"), golden.context, trailer("context", 0));
         expect({ body, fast: Date.now() - t0 < 3000 }).toEqual({ body, fast: true });
         expectReadsOnly(toolCalls(from), 2);
         expect(readFileSync(join(home, SEED_MARKER), "utf8")).toBe(body);
@@ -1120,7 +1125,7 @@ describe("once per box: a seed marker that exists stops every later create, acro
   );
 
   test(
-    "C-1 in paused mode (reported, not production): a run that waited on another run's paused seed lists no active intent, so it asks the questions, while Index holds the three paused drafts",
+    "C-1 in paused mode (reported, not production): a run that waited on another run's paused seed lists no active intent, so it gives the context text, while Index holds the three paused drafts",
     async () => {
       resetStub();
       stub.createDelayMs = 1500;
@@ -1133,7 +1138,7 @@ describe("once per box: a seed marker that exists stops every later create, acro
       const seeder = await seeding;
       expectDraft(seeder, seededWelcome(null, [MEMORY, DINNER, SURF], "paused"), trailer("none", 3, 3, 0));
       expect(stub.rows.map((r) => r.status)).toEqual(["paused", "paused", "paused"]);
-      expectDraft(waiting, golden.zero, trailer("questions", 0, 0, 0));
+      expectDraft(waiting, golden.context, trailer("context", 0, 0, 0));
       expect(creates(toolCalls())).toHaveLength(3);
     },
     CASE_TIMEOUT_MS,

@@ -62,8 +62,8 @@ const SEEDED_SHA256 = {
   seededThree: "c682f4529f7e3f8ceb80d4a35211acd6d60e6ed7d1dc8ae6042a9d4a7a13a22f",
   seededPausedThree: "defbdeb1f45f4a0b9b3f5a00abd4fd6f2cef36172c4b6ee943b6f82ef8284ca9",
 } as const;
-/** sha256 of the whole fixture file as committed (DATA-416: `seededOne` singular, `seededPausedOne` added). */
-const FIXTURE_SHA256 = "c4eedb92a055193ba1bba6f3b854cda406850ddfb722af80ffffeda8b95eef08";
+/** sha256 of the whole fixture file as committed (DATA-416: `seededOne` singular, `seededPausedOne` added; then `context` added). */
+const FIXTURE_SHA256 = "de3fb703b734b7340fe1c4b1dc3013f2834ea4c9872c4948708fea067ed85125";
 const ASTRAL_NAME = "\u{20000}".repeat(32);
 /** A text of `n` code points, words of four letters and a space (`n` > 0). */
 const words = (n: number, letter = "w") => `${letter.repeat(4)} `.repeat(Math.ceil(n / 5)).slice(0, n).trimEnd().padEnd(n, letter);
@@ -394,12 +394,12 @@ describe("the seed: zero active intents and selected intentions → up to three 
     expect(branch).toEqual({ fallback: "none", intents_listed: 1, intents_seeded: 1, seed_failed: 0 });
   });
 
-  test("none selected and no active intents: no create, no marker, today's questions text byte for byte", async () => {
+  test("none selected and no active intents, but signup context: no create, no marker, the context text (no questions) byte for byte", async () => {
     writeUserMd(profileText(draftWith(0)));
     const { text, names, branch } = await run(fakeIndex());
     expect(names).toEqual(["list_intents"]);
-    expect(text).toBe(golden.zero);
-    expect(branch).toEqual({ fallback: "questions", intents_listed: 0, intents_seeded: 0, seed_failed: 0 });
+    expect(text).toBe(golden.context);
+    expect(branch).toEqual({ fallback: "context", intents_listed: 0, intents_seeded: 0, seed_failed: 0 });
     expect(existsSync(join(home, WELCOME_SEED_FILE))).toBe(false);
   });
 
@@ -456,12 +456,12 @@ describe("the seed: zero active intents and selected intentions → up to three 
     });
   }
 
-  test("every create failing: nothing seeded, so today's text from the list (no active intent: the questions)", async () => {
+  test("every create failing: nothing seeded, so today's text from the list (no active intent, signup context: the context text)", async () => {
     writeUserMd(profileText(draftWith(3)));
     const { text, branch, names } = await run(fakeIndex({ create: () => toolError("down") }), ["--draft"]);
     expect(names).toEqual(["list_intents", "create_intent", "create_intent", "create_intent", "list_intents"]);
-    expect(text).toBe(golden.zero);
-    expect(branch).toEqual({ fallback: "questions", intents_listed: 0, intents_seeded: 0, seed_failed: 3 });
+    expect(text).toBe(golden.context);
+    expect(branch).toEqual({ fallback: "context", intents_listed: 0, intents_seeded: 0, seed_failed: 3 });
   });
 
   test("DATA-416 S1: a create that answers too late but landed is counted as seeded when the second list shows its text", async () => {
@@ -580,7 +580,7 @@ describe("the seed: zero active intents and selected intentions → up to three 
     const rows = [{ id: idFor(1), summary: KEPT[0].text.toUpperCase(), status: "paused" }];
     const { names, text } = await run(fakeIndex({ rows }));
     expect(names).toEqual(["list_intents"]);
-    expect(text).toBe(golden.zero);
+    expect(text).toBe(golden.context);
     expect(existsSync(join(home, WELCOME_SEED_FILE))).toBe(false);
   });
 
@@ -618,18 +618,18 @@ describe("the seed: zero active intents and selected intentions → up to three 
     // No budget at all: the marker is claimed, nothing is sent, all three fail, and the first read stands.
     const none = await run(fakeIndex(), ["--draft"], { budgetMs: 0 });
     expect(none.names).toEqual(["list_intents"]);
-    expect(none.branch).toEqual({ fallback: "questions", intents_listed: 0, intents_seeded: 0, seed_failed: 3 });
+    expect(none.branch).toEqual({ fallback: "context", intents_listed: 0, intents_seeded: 0, seed_failed: 3 });
     expect(seedMarker()).toMatchObject({ selected: 3, created: 0, failed: 3, done: true });
     rmSync(join(home, WELCOME_SEED_FILE));
     // The reserve takes all but 100 ms of the budget, under the 200 ms a call needs: no create, but the second list is made.
     const reserved = await run(fakeIndex(), ["--draft"], { timeoutMs: 200, budgetMs: 300, reserveMs: 200 });
     expect(reserved.names).toEqual(["list_intents", "list_intents"]);
-    expect(reserved.branch).toEqual({ fallback: "questions", intents_listed: 0, intents_seeded: 0, seed_failed: 3 });
+    expect(reserved.branch).toEqual({ fallback: "context", intents_listed: 0, intents_seeded: 0, seed_failed: 3 });
     rmSync(join(home, WELCOME_SEED_FILE));
     // Three hanging creates at once (200 ms each, 300 ms left for them); the second list still has about 300 ms (100 ms of slack either way).
     const hung = await run(fakeIndex({ create: () => ({ hang: true }) }), ["--draft"], { timeoutMs: 200, budgetMs: 500, reserveMs: 200 });
     expect(hung.names).toEqual(["list_intents", "create_intent", "create_intent", "create_intent", "list_intents"]);
-    expect(hung.branch).toEqual({ fallback: "questions", intents_listed: 0, intents_seeded: 0, seed_failed: 3 });
+    expect(hung.branch).toEqual({ fallback: "context", intents_listed: 0, intents_seeded: 0, seed_failed: 3 });
   });
 
   test("DATA-416: the run's budget is 50 s (the control plane's --draft timeout goes to 60 s); each path's worst case fits in it", () => {
@@ -661,7 +661,7 @@ describe("the seed: zero active intents and selected intentions → up to three 
       offset = 0;
       const kept = await run(fakeIndex({ list: (n) => void (n === 1 && (offset = 44_950)) }), ["--draft"]);
       expect(kept.names).toEqual(["list_intents", "list_intents"]);
-      expect(draftTrailer(kept.branch!)).toBe(draftTrailer({ fallback: "questions", intents_listed: 0, intents_seeded: 0, seed_failed: 3 }));
+      expect(draftTrailer(kept.branch!)).toBe(draftTrailer({ fallback: "context", intents_listed: 0, intents_seeded: 0, seed_failed: 3 }));
     } finally {
       Date.now = realNow;
     }
@@ -697,8 +697,8 @@ describe("the seed marker: the creates run once per box, in both modes", () => {
       writeFileSync(join(home, WELCOME_SEED_FILE), content);
       const { names, text, branch } = await run(fakeIndex(), ["--draft"]);
       expect(names).toEqual(["list_intents", "list_intents"]);
-      expect(text).toBe(golden.zero);
-      expect(branch).toEqual({ fallback: "questions", intents_listed: 0, intents_seeded: 0, seed_failed: 0 });
+      expect(text).toBe(golden.context);
+      expect(branch).toEqual({ fallback: "context", intents_listed: 0, intents_seeded: 0, seed_failed: 0 });
       expect(readFileSync(join(home, WELCOME_SEED_FILE), "utf8")).toBe(content);
     });
   }
@@ -732,7 +732,7 @@ describe("the seed marker: the creates run once per box, in both modes", () => {
     expect((await run(index)).text).toBe(ALREADY_SENT);
   });
 
-  test("DATA-416 M2: a welcome already sent means no seed in --draft either: zero creates, the questions text, trailer seeded 0", async () => {
+  test("DATA-416 M2: a welcome already sent means no seed in --draft either: zero creates, the context text, trailer seeded 0", async () => {
     writeUserMd(profileText(draftWith(3)));
     mkdirSync(join(home, "memory"), { recursive: true });
     const sent = JSON.stringify({ welcomeSent: true, sentAt: "2026-10-01T10:00:00.000Z" });
@@ -745,8 +745,8 @@ describe("the seed marker: the creates run once per box, in both modes", () => {
       welcomeRun(a, { fetch: index.fake.fetch, timeoutMs: 200 }),
     );
     expect(index.fake.calls.filter((c) => c.method === "tools/call").map((c) => c.name)).toEqual(["list_intents"]);
-    expect(out.stdout).toBe(`${golden.zero}\n`);
-    expect(out.stderr).toBe(`${draftTrailer({ fallback: "questions", intents_listed: 0, intents_seeded: 0, seed_failed: 0 })}\n`);
+    expect(out.stdout).toBe(`${golden.context}\n`);
+    expect(out.stderr).toBe(`${draftTrailer({ fallback: "context", intents_listed: 0, intents_seeded: 0, seed_failed: 0 })}\n`);
     expect(existsSync(join(home, WELCOME_SEED_FILE))).toBe(false);
     // --draft still never writes the welcome marker.
     expect(readFileSync(join(home, WELCOME_STATE_FILE), "utf8")).toBe(sent);
@@ -793,7 +793,7 @@ describe("the seed marker: the creates run once per box, in both modes", () => {
     const stuck = await run(fakeIndex(), ["--draft"], { waitMs: 300, pollMs: 50 });
     expect(Date.now() - started).toBeGreaterThanOrEqual(290);
     expect(stuck.names).toEqual(["list_intents", "list_intents"]);
-    expect(stuck.text).toBe(golden.zero);
+    expect(stuck.text).toBe(golden.context);
     expect(creates(stuck.calls)).toHaveLength(0);
     for (const content of ['{"done":true}', "", "not json", "[]"]) {
       writeFileSync(join(home, WELCOME_SEED_FILE), content);
@@ -938,7 +938,7 @@ describe("the seed marker: the creates run once per box, in both modes", () => {
       rmSync(join(home, WELCOME_SEED_FILE), { force: true });
       const { names, text } = await run(fakeIndex(), ["--draft"]);
       expect(names).toEqual(["list_intents"]);
-      expect(text).toBe(golden.zero);
+      expect(text).toBe(golden.context);
     }
     writeUserMd(profileText(draftWith(3)));
     const normal = await run(fakeIndex(), ["--draft"]);
@@ -960,7 +960,7 @@ describe("the seed marker: the creates run once per box, in both modes", () => {
     writeFileSync(join(home, "memory"), "not a directory");
     const { names, text } = await run(fakeIndex(), ["--draft"]);
     expect(names).toEqual(["list_intents"]);
-    expect(text).toBe(golden.zero);
+    expect(text).toBe(golden.context);
   });
 
   test("two runs at once in one home: one seeds and the other only lists, three creates in all (across processes the exclusive claim decides: claimSeed below)", async () => {
@@ -1085,13 +1085,13 @@ describe("the answers the seed reads", () => {
 // ── The texts ────────────────────────────────────────────────────────────────
 
 describe("the seeded texts", () => {
-  test("the six older fixture texts are byte for byte as on origin/main, and the plural seeded ones as DATA-412 wrote them; the four seeded keys are there", () => {
+  test("the six older fixture texts are byte for byte as on origin/main, and the plural seeded ones as DATA-412 wrote them; the four seeded keys and `context` are there", () => {
     const sha = (text: string) => new Bun.CryptoHasher("sha256").update(text).digest("hex");
     const raw = readFileSync(FIXTURE_PATH, "utf8");
     const fixture = JSON.parse(raw) as Record<string, string>;
     expect(sha(OLD_KEYS.map((k) => fixture[k]).join(""))).toBe(OLD_SHA256);
     for (const [key, hash] of Object.entries(SEEDED_SHA256)) expect({ key, hash: sha(fixture[key]) }).toEqual({ key, hash });
-    expect(Object.keys(fixture)).toEqual([...OLD_KEYS, "seededThree", "seededOne", "seededPausedThree", "seededPausedOne"]);
+    expect(Object.keys(fixture)).toEqual([...OLD_KEYS, "seededThree", "seededOne", "seededPausedThree", "seededPausedOne", "context"]);
     expect(sha(raw)).toBe(FIXTURE_SHA256);
   });
 
@@ -1193,7 +1193,7 @@ describe("the seeded texts", () => {
 });
 
 describe("the --draft trailer on the seeded branches", () => {
-  const TRAILER = /^\{"welcome":1,"fallback":"(none|questions|unreachable)","intents_listed":[0-3],"intents_seeded":[0-3],"seed_failed":[0-3]\}$/;
+  const TRAILER = /^\{"welcome":1,"fallback":"(none|questions|context|unreachable)","intents_listed":[0-3],"intents_seeded":[0-3],"seed_failed":[0-3]\}$/;
 
   async function captured(index: ReturnType<typeof fakeIndex>, argv: string[]) {
     process.env.INDEX_API_KEY = FAKE_API_KEY;
@@ -1216,7 +1216,7 @@ describe("the --draft trailer on the seeded branches", () => {
       process.env.AV_WELCOME_SEED_MODE = "paused";
     }, {}, "seededPausedOne", { fallback: "none", intents_listed: 1, intents_seeded: 1, seed_failed: 0 }],
     ["one failed", () => {}, { create: (n) => (n === 3 ? toolError("x") : undefined) }, null, { fallback: "none", intents_listed: 2, intents_seeded: 2, seed_failed: 1 }],
-    ["all failed", () => {}, { create: () => toolError("x") }, "zero", { fallback: "questions", intents_listed: 0, intents_seeded: 0, seed_failed: 3 }],
+    ["all failed", () => {}, { create: () => toolError("x") }, "context", { fallback: "context", intents_listed: 0, intents_seeded: 0, seed_failed: 3 }],
     ["unreachable", () => {}, { list: () => ({ response: new Response("down", { status: 503 }) }) }, "unreachable", { fallback: "unreachable", intents_listed: 0, intents_seeded: 0, seed_failed: 0 }],
   ];
 

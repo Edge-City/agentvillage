@@ -14,8 +14,12 @@
  *     welcome past WELCOME_MAX_CHARS: fitTitles), what the agent will do with
  *     them, and how to add or change them (the app's Intents page, or just
  *     tell me);
- *   - no active intents: the app's three Context questions, and a promise to
+ *   - no active intents, and the resident told the app nothing at signup
+ *     (hasSetupContext): the app's three Context questions, and a promise to
  *     turn the answers into intents the resident confirms;
+ *   - no active intents, but the resident did tell the app something at
+ *     signup: CONTEXT_COPY, which says the agent read it and asks what to
+ *     look for first, never the three questions again;
  *   - no key, Index unreachable or an answer it cannot read: the welcome
  *     without the list, saying it will catch up in the morning brief.
  *
@@ -65,11 +69,13 @@
  * stderr after the message, for the caller that delivers it (the control
  * plane's Telegram greeting, which records welcome.sent@1 from it): exactly
  *
- *   {"welcome":1,"fallback":"none|questions|unreachable","intents_listed":<0..3>,"intents_seeded":<0..3>,"seed_failed":<0..3>}
+ *   {"welcome":1,"fallback":"none|questions|context|unreachable","intents_listed":<0..3>,"intents_seeded":<0..3>,"seed_failed":<0..3>}
  *
  * `fallback` is the branch the text took (`none`: intents listed, seeded
- * ones included; `questions`: no active intents; `unreachable`: no key,
- * Index unreachable, or the script failed and printed the unreachable text),
+ * ones included; `questions`: no active intents and no signup context;
+ * `context`: no active intents, signup context read, questions skipped;
+ * `unreachable`: no key, Index unreachable, or the script failed and printed
+ * the unreachable text),
  * `intents_listed` the number of `- ` intent lines printed (1..3 for `none`,
  * else 0), `intents_seeded` the intents this run created (and, paused mode,
  * paused) and `seed_failed` the lines it meant to seed and could not (both 0
@@ -162,6 +168,15 @@ export const WELCOME_SEED_FILE = join("memory", "welcome-seed.json");
 export const USER_MD_FILE = "USER.md";
 /** The profile's heading over the intentions the resident kept (agentvillage-app profile-text.ts profileText). */
 export const SELECTED_HEADING = "## Selected intentions";
+/**
+ * The profile's sections that hold what the resident told the app at signup
+ * (agentvillage-app profile-text.ts profileText, in its order): imported
+ * context, kept intentions, follow-up answers, offers.
+ */
+export const CONTEXT_HEADING = "## Context supplied by the participant";
+export const FOLLOW_UP_HEADING = "## Follow-up preferences";
+export const OFFERS_HEADING = "## Offers";
+export const SETUP_HEADINGS = [CONTEXT_HEADING, SELECTED_HEADING, FOLLOW_UP_HEADING, OFFERS_HEADING] as const;
 
 /** The lead and closing sentence of a welcome that seeded intents and lists two or more, by mode. */
 export const SEEDED_COPY = {
@@ -198,6 +213,17 @@ export const CONTEXT_QUESTIONS = [
   "What are you unusually good at helping other people with?",
 ] as const;
 
+/**
+ * The welcome's paragraphs when Index lists no active intent but the resident
+ * told the app something at signup (hasSetupContext): never the three
+ * questions they already answered. The lead opens its own paragraph (the
+ * control plane's WELCOME_BRANCHES reads it).
+ */
+export const CONTEXT_COPY = {
+  lead: "I've read what you shared when you signed up. Tell me what you'd like me to look for first, and I'll turn it into intents you can confirm.",
+  close: "Then I'll look for people and events that fit and bring the best to your morning brief.",
+} as const;
+
 /** How the seed leaves what it creates: published (the default), or paused until the resident says go. */
 export type SeedMode = "publish" | "paused";
 
@@ -217,13 +243,17 @@ export type SeedCounts = { intents_seeded: number; seed_failed: number };
 const NO_SEED: SeedCounts = { intents_seeded: 0, seed_failed: 0 };
 
 /** The branch a welcome took, as `--draft` reports it on stderr. */
-export type WelcomeBranch = { fallback: "none" | "questions" | "unreachable"; intents_listed: number } & SeedCounts;
+export type WelcomeBranch = { fallback: "none" | "questions" | "context" | "unreachable"; intents_listed: number } & SeedCounts;
 
-/** The branch welcomeText takes for `read`, how many intents it lists, and what the seed did. Pure. */
-export function welcomeBranch(read: IntentsRead, seed: SeedCounts = NO_SEED): WelcomeBranch {
+/**
+ * The branch welcomeText takes for `read`, how many intents it lists, and
+ * what the seed did. `context`: the resident told the app something at
+ * signup (hasSetupContext). Pure.
+ */
+export function welcomeBranch(read: IntentsRead, seed: SeedCounts = NO_SEED, context = false): WelcomeBranch {
   const counts = { intents_seeded: seed.intents_seeded, seed_failed: seed.seed_failed };
   if (read.kind === "unreachable") return { fallback: "unreachable", intents_listed: 0, ...counts };
-  if (read.titles.length === 0) return { fallback: "questions", intents_listed: 0, ...counts };
+  if (read.titles.length === 0) return { fallback: context ? "context" : "questions", intents_listed: 0, ...counts };
   return { fallback: "none", intents_listed: Math.min(read.titles.length, MAX_LISTED), ...counts };
 }
 
@@ -321,6 +351,41 @@ async function listIntents(target: IndexMcpTarget): Promise<Listed> {
   } catch {
     return { read: UNREACHABLE, rows: null };
   }
+}
+
+/**
+ * True when `$HERMES_HOME/USER.md` holds something the resident told the app
+ * at signup, under one of SETUP_HEADINGS (each section runs to the next `#`
+ * heading of level 1 or 2): under CONTEXT_HEADING, any non-blank line that is
+ * not a `###` source label; under the others, a `- ` line with text after
+ * it (a follow-up answer: text after its `: `). The app always writes the
+ * headings and the name/work lines, so those alone are not context. A
+ * missing or unreadable file is none. Never throws, never logs.
+ */
+export function hasSetupContext(home: string): boolean {
+  let text: string;
+  try {
+    text = readFileSync(join(home, USER_MD_FILE), "utf8");
+  } catch {
+    return false;
+  }
+  let section: string | null = null;
+  for (const raw of text.split("\n")) {
+    const line = raw.replace(/\r$/, "");
+    if (/^#{1,2} /.test(line)) {
+      section = (SETUP_HEADINGS as readonly string[]).includes(line) ? line : null;
+      continue;
+    }
+    if (section === null || !line.trim()) continue;
+    if (section === CONTEXT_HEADING) {
+      if (!line.startsWith("### ")) return true;
+    } else if (section === FOLLOW_UP_HEADING) {
+      if (/^- .*?:\s*\S/.test(line)) return true;
+    } else if (/^- \s*\S/.test(line)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // ── The seed (DATA-412) ──────────────────────────────────────────────────────
@@ -656,17 +721,19 @@ export function fitTitles(titles: string[], budget: number): string[] {
  * The welcome. Pure. With intents listed (seeded or not), at most
  * WELCOME_MAX_CHARS long whenever the rest of the text leaves room, which it
  * always does for a name of at most 32 code points and a link of at most
- * INTENTS_URL_MAX characters (welcome.test.ts, the worst cases).
+ * INTENTS_URL_MAX characters (welcome.test.ts, the worst cases). `context`:
+ * the resident told the app something at signup (hasSetupContext), so with
+ * no active intent the welcome is CONTEXT_COPY, not the three questions.
  */
-export function welcomeText(name: string, read: IntentsRead, intentsUrl: string): string {
-  if (read.kind === "unreachable" || read.titles.length === 0) return composeWelcome(name, read, intentsUrl, []);
+export function welcomeText(name: string, read: IntentsRead, intentsUrl: string, context = false): string {
+  if (read.kind === "unreachable" || read.titles.length === 0) return composeWelcome(name, read, intentsUrl, [], context);
   const titles = read.titles.slice(0, MAX_LISTED);
   const rest = composeWelcome(name, read, intentsUrl, titles.map(() => "")).length;
   return composeWelcome(name, read, intentsUrl, fitTitles(titles, Math.max(0, WELCOME_MAX_CHARS - rest)));
 }
 
-/** The welcome's text with `listed` as the intent lines (the listed branch only). */
-function composeWelcome(name: string, read: IntentsRead, intentsUrl: string, listed: string[]): string {
+/** The welcome's text with `listed` as the intent lines (the listed branch only); `context` as welcomeText's. */
+function composeWelcome(name: string, read: IntentsRead, intentsUrl: string, listed: string[], context = false): string {
   const intro =
     name === DEFAULT_NAME
       ? "Mandrem, Goa, October 11 to November 1. I'm your personal agent for your time in the village. You can call me Edge, or give me whatever name you like."
@@ -677,6 +744,8 @@ function composeWelcome(name: string, read: IntentsRead, intentsUrl: string, lis
       "I can't see what you're here for just yet, so I'll catch up and bring people and events that fit to your morning brief.",
       "Meanwhile, tell me what you're looking for, or ask me anything about the village.",
     );
+  } else if (read.titles.length === 0 && context) {
+    parts.push(CONTEXT_COPY.lead, CONTEXT_COPY.close);
   } else if (read.titles.length === 0) {
     parts.push(
       ["To find your people, I'd love three quick answers, a line or two each:", ...CONTEXT_QUESTIONS.map((q) => `- ${q}`)].join("\n"),
@@ -770,7 +839,8 @@ export async function welcomeRun(argv: string[], options: WelcomeOptions = {}): 
   const { read, seed } = first.rows
     ? await seedWelcome(home, target, { read: first.read, rows: first.rows }, clock, options.now ?? new Date(), welcomed)
     : { read: first.read, seed: NO_SEED };
-  const out = { text: welcomeText(welcomeName(home), read, intentsPageUrl(home)), branch: welcomeBranch(read, seed) };
+  const context = read.kind === "listed" && read.titles.length === 0 && hasSetupContext(home);
+  const out = { text: welcomeText(welcomeName(home), read, intentsPageUrl(home), context), branch: welcomeBranch(read, seed, context) };
   if (draft) return out;
   try {
     if (!claimWelcome(home, options.now)) return { text: ALREADY_SENT, branch: null };
