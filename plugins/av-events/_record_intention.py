@@ -1492,6 +1492,7 @@ def _capture(args: dict, held: Optional[str]) -> dict:
         if index_id is not None:
             result.update(intention_id=index_id, index_intent_id=index_id, published=True)
             result["message"] = f"Recorded and published to Index (intention_id {index_id})."
+            _attach_intent_link(result)
         else:
             intention_id = uuid7()
             result.update(intention_id=intention_id, index_intent_id=None, published=False, publish_refused=code)
@@ -1552,6 +1553,28 @@ def _approval_on() -> Optional[bool]:
 
 
 _NO_OTHER_WAY = "Do not publish it another way."
+#: index-links never sees this tool's result, so a published call names the
+#: portal page. Without it the agent builds https://index.network/i/<id>.
+_PORTAL_INTENT = "https://agents.edgecity.live/intents?intent="
+
+
+def _attach_intent_link(result: dict) -> dict:
+    """Name the portal page by Index's id. Called only where this call itself
+    published the intention (a capture, an in-call approval publish, a
+    `confirm` that published now); never on an update, a withdrawal or an
+    "already published" answer. The url ends the message, so no punctuation
+    is glued to it."""
+    if result.get("published") is not True or result.get("publish_refused") is not None:
+        return result
+    index_id = result.get("index_intent_id")
+    if not valid_id(index_id):
+        return result
+    link = _PORTAL_INTENT + index_id
+    result["url"] = link
+    message = result.get("message")
+    if isinstance(message, str) and link not in message:
+        result["message"] = message + " Link it as: " + link
+    return result
 
 
 def _advance_inline(intention_id: str, cls: str):
@@ -1598,6 +1621,7 @@ def _held_through_approval(result: dict, intention_id: str, text: str, norm: str
         result["message"] = (
             f"Published to Index under the resident's approval policy (intention_id {intention_id})."
         )
+        _attach_intent_link(result)
     elif outcome.state in ("requested", "cleared", "starting", "publishing"):
         result["message"] = (
             f"{held} The resident has been asked in their approval channel whether to publish it, and it is "
@@ -1646,7 +1670,7 @@ def _stated_through_approval(result: dict, text: str, source: str) -> dict:
         if outcome.approved_by:
             result["approved_by"] = outcome.approved_by
         result["message"] = f"Recorded and published to Index (intention_id {intention_id})."
-        return result
+        return _attach_intent_link(result)
     if outcome.state in ("requested", "starting"):
         refused = "approval_pending"
         message = (
@@ -1718,6 +1742,7 @@ def _confirm(args: dict) -> dict:
         if outcome.approved_by:
             result["approved_by"] = outcome.approved_by
         result["message"] = f"The resident approved it: intention {intention_id} is published to Index."
+        _attach_intent_link(result)
     elif outcome.state in ("requested", "unknown"):
         # A manual class with no grant on the daemon: refused, never published.
         return _refuse("awaiting_resident")
