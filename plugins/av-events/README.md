@@ -530,9 +530,10 @@ built from them, and `tests/test_intention_source.py` pins whole each passage th
 paragraph, the description and the schema's `source` and `confirmed_in_chat` descriptions. It is installed on
 every tenant with the edge bundles and has no `requires_tools` gate (the tool sits behind Tool
 Search, which such a gate would not see); its text, the `workspace/AGENTS.md` routing line and the
-`create_intent` passages of `skills/index-network/tools.md` and
-`skills/index-network/prompts/memory-signals.md` all apply only if `record_intention` is available
-(in the tool list, or found with `tool_search` and called through `tool_call`).
+`create_intent` passages of `skills/index-network/tools.md` all apply only if `record_intention` is
+available (in the tool list, or found with `tool_search` and called through `tool_call`). The memory
+signal sync (`skills/index-network/prompts/memory-signals.md`) has no `create_intent` fallback: it
+records only through `record_intention` with `source=ambient`, and records nothing without it.
 
 | Call | Index | Result / event |
 |---|---|---|

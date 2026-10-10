@@ -276,11 +276,38 @@ id, schedule or prompt text, so an update finds every job up to date.
 | Job | Time (Hermes's zone, which must be IST; staggered) | Action | What the model is given |
 |---|---|---|---|
 | Edge — digest prepare | 02:00 | `prefetch` | Nothing: the one `no_agent` job of the seven (the knowledge sync, "Edge India knowledge" below, is the other `no_agent` job). It writes the brief's context to `av-events/proactive/brief-context.json` and is always silent. |
-| Edge — daily digest | 08:00 | `brief` | Dates, weather, organiser announcements, today's schedule facts, the resident's interests and notes, the count of eligible new matches, up to three cleaned names, the Connections link, the count of things waiting in their approvals. |
-| Edge — opportunity drop (midday), (evening) | 12:00, 17:00 | `drop-midday`, `drop-evening` | One person: cleaned name, profile and message links. |
-| Edge — negotiation summary | 14:00 | `negotiation` | The resident's own signals; cleaned names with their links. |
-| Edge — evening questions | 19:00 | `evening` | One person (cleaned name, links), or the last-day closeout question. |
+| Edge — daily digest | 08:00 | `brief` | Dates, weather, organiser announcements, today's schedule facts, the resident's interests (the profile's; when it states none, what they stated on their Context page) and notes, their stated Preferences, the count of eligible new matches, up to three cleaned names, the Connections link, the count of things waiting in their approvals. |
+| Edge — opportunity drop (midday), (evening) | 12:00, 17:00 | `drop-midday`, `drop-evening` | One person: cleaned name, profile and message links; the resident's stated Preferences. |
+| Edge — negotiation summary | 14:00 | `negotiation` | The resident's own signals; cleaned names with their links; their stated Preferences. |
+| Edge — evening questions | 19:00 | `evening` | One person (cleaned name, links, and the resident's stated Preferences), or the last-day closeout question. |
 | Edge — pending opportunity (DATA-430) | hourly at :20 (staggered :20-:29), delivering 08:00-22:00 only; **installed paused in rc29**, turned on by `PENDING_ALERT_ENABLED=true` (README, "Overriding the Index cron times") | `pending` | Up to three cards that newly turned pending for the resident: cleaned name, the app link to that card (`appUrl`), the deadline's words or null (`respondBy`; null today: Index serves no deadline). No once-a-day mark; the per-card ledger `pendingAlerts` is the gate, and the first run on a box seeds it silently. Outside contact style: a quiet or balanced resident gets it too (it is about their own pending decision, not outreach); the quiet hours and the stop-by-label (`Pending opportunity`) still apply. |
+
+**The Context tags.** The interests and Preferences above come from the entry
+the Agent Village app keeps in `$HERMES_HOME/memories/USER.md`, headed
+`[Context tags, kept in the Agent Village app]`
+(`skills/index-network/scripts/context-tags.ts`). Only items the resident
+stated are read: marked `setup`, `you` or `telegram`, or unmarked; never a
+`(guess)` or `(chat, guess)` item, never a plain `(chat)` item, never the
+`Summary:` line, and never anything under `Removed by you:`. The brief takes Here to, Curious about, Working on and
+Wants to meet (each whole, at most 60 characters, 12 in all) as
+`you.interests` only when `av-profile.json` states no interests (they then
+pick the events too; when they suggest no village tag, the tags from the
+memory files pick them, as before); the
+Preferences (at most 4) reach the brief, both drops, the follow-up and the
+evening reminder about a person as `you.preferences`, never the outcome ask
+or the closeout question, which go out word for word. Each item takes the
+stricter cleaner and the scan. Without the file or the entry every Script
+Output is exactly what it was before. The resident's about me from
+`av-profile.json` still reaches none of these jobs.
+
+**Chat items are never used.** A plain `(chat)` item is the app's reading
+of the agent's own chat notes, not the resident's words, so no job uses it
+(the app's Skylight read leaves it out too). This also means the reader does
+not depend on the app's version: an app build before
+Edge-City/agentvillage-app#117 writes a chat guess as plain `(chat)`, and a
+box can keep that old entry for a while after #117 (an entry the app cannot
+fit is retried later). `(chat, guess)` is parsed as a guess and left out like
+any other guess.
 
 The rules the trigger holds:
 - **No third-party free text reaches the model.** Only dates, the resident's

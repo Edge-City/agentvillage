@@ -35,7 +35,10 @@
  * it, the brief's send before the agent replies), not when the message is
  * confirmed delivered, because no delivery confirmation exists anywhere in
  * the chain. A send that fails after that point still costs the card its
- * COOLDOWN_DAYS wait and one of its MAX_SHOWINGS showings.
+ * COOLDOWN_DAYS wait and one of its MAX_SHOWINGS showings. So does a message
+ * the model leaves `[SILENT]` because the resident's stated Preferences
+ * plainly ask never to get that kind of message (the prompts allow nothing
+ * narrower, such as a time of day; OV-251 S2).
  *
  * Everything here is pure. Callers read and write the state file themselves
  * and replace only OPPORTUNITY_DELIVERY_KEY, so sibling keys are never
