@@ -61,6 +61,7 @@ Python 3.11, standard library only.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Callable, Optional
 
 from . import _approval
@@ -85,6 +86,10 @@ DECIDERS = ("resident", "operator", "timeout", "system")
 INFERRED_CLASS = "intent.publish.inferred.index"
 STATED_CLASS = "intent.publish.stated.index"
 STATED_SOURCES = frozenset({"message", "onboarding", "note"})
+
+#: The contract's `uuid`: canonical, lowercase. The map is the agent's to write
+#: (same uid), so nothing read back from it is sent unchecked.
+UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 #: One per ask: the first, two re-asks after a lapse, ten after a void, with room.
 MAX_CARDS = 16
@@ -210,14 +215,18 @@ def _iso(value: Any) -> Optional[str]:
     return iso_from_epoch(value)
 
 
+def _uuid(value: Any) -> Optional[str]:
+    return value if isinstance(value, str) and UUID.fullmatch(value) else None
+
+
 def requested_payload(intention_id: str, entry: dict, ap: dict, card: dict) -> Optional[dict]:
     requested_at = _iso(card.get("requested_at"))
-    if requested_at is None or not isinstance(card.get("id"), str):
+    if requested_at is None or _uuid(card.get("id")) is None:
         return None
     origin = entry.get(ORIGIN_KEY)
     return {
         "card_id": card["id"],
-        "intent_id": intention_id,
+        "intent_id": _uuid(intention_id),
         "origin": origin if origin in ORIGINS else None,
         "kind": kind_for(ap.get("class"), entry.get("source")),
         "requested_at": requested_at,
@@ -226,12 +235,12 @@ def requested_payload(intention_id: str, entry: dict, ap: dict, card: dict) -> O
 
 def resolved_payload(intention_id: str, card: dict) -> Optional[dict]:
     requested_at, resolved_at = _iso(card.get("requested_at")), _iso(card.get("resolved_at"))
-    if (requested_at is None or resolved_at is None or not isinstance(card.get("id"), str)
+    if (requested_at is None or resolved_at is None or _uuid(card.get("id")) is None
             or card.get("resolution") not in RESOLUTIONS or card.get("decided_by") not in DECIDERS):
         return None
     return {
         "card_id": card["id"],
-        "intent_id": intention_id,
+        "intent_id": _uuid(intention_id),
         "resolution": card["resolution"],
         "decided_by": card["decided_by"],
         "requested_at": requested_at,

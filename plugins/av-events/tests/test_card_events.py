@@ -463,3 +463,28 @@ def test_resolution_of_every_status(mods):
     assert r("rejected") == r("revoked") == ("declined", "resident")
     assert r("expired") == ("expired", "timeout")
     assert r("withdrawn") == r("void") == r("anything") == ("withdrawn", "system")
+
+
+def test_a_forged_card_on_the_map_is_never_sent(tctx, serve, mods, av, plugin):
+    """The map is the agent's to write: a card with a malformed id, time or
+    code, or text where an id belongs, is marked unsendable, not sent."""
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    ri = mods.ri
+    with ri._Locked():
+        entries, publishes = ri._load_locked()
+        forged = entries[iid]["approval"]["cards"]
+        forged += [
+            {"id": TEXT, "requested_at": 1760200000.0, "resolution": None, "decided_by": None, "resolved_at": None,
+             "requested_sent": False, "resolved_sent": False},
+            {"id": "0199d0a4-1b2c-7d3e-8f40-123456789abc", "requested_at": "yesterday", "resolution": None,
+             "decided_by": None, "resolved_at": None, "requested_sent": False, "resolved_sent": False},
+            {"id": "0199d0a4-1b2c-7d3e-8f40-123456789abd", "requested_at": 1760200000.0, "resolution": TEXT,
+             "decided_by": "resident", "resolved_at": 1760200001.0, "requested_sent": True, "resolved_sent": False},
+        ]
+        ri._save_locked(entries, publishes)
+    mods.cards.sweep()
+    evs = cards(av, plugin)
+    assert len(evs) == 1 and evs[0]["event_type"] == REQUESTED  # the genuine one, from the capture
+    no_text(evs, TEXT)
+    assert all(c["requested_sent"] and (c["resolution"] is None or c["resolved_sent"])
+               for c in entry(mods, iid)["approval"]["cards"][1:])
