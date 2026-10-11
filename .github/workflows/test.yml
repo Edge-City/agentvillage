@@ -45,7 +45,7 @@ jobs:
       - run: bun install --frozen-lockfile
       # The directories that hold *.test.ts; a bare `bun test` would also
       # walk any stray checkout under the repo root.
-      - run: bun test install/tests scripts/tests skills/index-network/scripts/tests skills/recall/scripts/tests skills/edge-india/scripts/tests skills/agent-profile/scripts/tests
+      - run: bun test install/tests scripts/tests skills/index-network/scripts/tests skills/recall/scripts/tests skills/edge-india/scripts/tests skills/agent-profile/scripts/tests skills/village-digest/scripts/tests
         env:
           AV_INDEX_PLUGIN_TEST_DIR: ${{ github.workspace }}/.test-deps/index-hermes-plugin
 
