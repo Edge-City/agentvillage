@@ -2,7 +2,13 @@
  * (OV-249 post-hoc M1): with `AV_MORALMOD_ARM` off or unset, MoralMod files on the box or in the
  * installer environment change nothing, the OFF path below runs and its line says why. Its release
  * must be the one pinned in `MORALMOD_RELEASE_SHA256` (post-hoc M2), else the plugin is withheld
- * (`release_unpinned`).
+ * (`release_unpinned`). That holds on every ON run, not only a keyed one handed a release (ov#277
+ * refute S1): a managed loader an earlier run left in the plugin's `runtime/dist/negotiator.js` is
+ * kept only when it is exactly the loader for the pinned release and that release is intact on disk;
+ * otherwise it is taken out (the plugin's own file put back, or the loader deleted) and the run is
+ * withheld as `release_unpinned`, except a keyed run handed a release, which holds that release to
+ * the pin below. The first OFF run after an ON-to-OFF flip takes the loader out too (refute S2);
+ * `active.json`, the release and the resident config stay.
  */
 /**
  * The Index Hermes plugin (`index-network`), MoralMod's carrier, for ON
@@ -77,7 +83,8 @@
  *   offers a hook (the request to Index on #249).
  * - `--skip-index`, or no Index key, skips the ON install as `installIndex()`
  *   is skipped. An entry an earlier run put in `plugins.enabled` stays only
- *   with the sidecar patched (A3, as above); otherwise it is dropped.
+ *   with the sidecar patched (A3, as above) and no managed loader other than
+ *   the pinned release's (ov#277 refute S1); otherwise it is dropped.
  * - `$HERMES_HOME/index/negotiator.ts` is seeded for ON residents only when
  *   absent, whether or not the Hermes command succeeded, so an update never
  *   replaces a resident's negotiator. The seed calls `next()`, the built-in
@@ -95,7 +102,7 @@ import { dotenvFileValue, readConfig, writeConfig } from "./config";
 import { persistedEnvVar, readCronJobs } from "./install_index";
 import { installStatusPath } from "./install_status";
 import { hermesHome } from "./paths";
-import { activateMoralmod, checkResidentHook, residentConfiguration } from "./moralmod_host";
+import { activateMoralmod, checkResidentHook, managedLoaderPinned, managedLoaderPresent, residentConfiguration, retireManagedLoader } from "./moralmod_host";
 import { MORALMOD_RELEASE_SHA256, MoralmodReleaseUnpinned, installMoralmodRelease } from "./moralmod_release";
 
 export const INDEX_PLUGIN = "index-network";
@@ -481,6 +488,13 @@ function withholdForSidecar(
   return { state: "failed", failed };
 }
 
+/** ov#277 refute S1, S2: what `retireManagedLoader` did, for the one line. */
+const LOADER_RETIRED = {
+  restored: "managed loader replaced by the plugin's own negotiator.js",
+  removed: "managed loader removed",
+  failed: "managed loader could not be removed",
+} as const;
+
 function operatorDisabled(): boolean {
   const plugins = readConfig().plugins as Record<string, unknown> | undefined;
   return stringList(plugins?.disabled).includes(INDEX_PLUGIN);
@@ -512,12 +526,15 @@ export function installIndexPlugin(
   // OV-249 post-hoc M1: the managed negotiator is for ON residents only, as the plugin is. With the
   // arm off or unset, MoralMod files present take the OFF path like any other OFF resident: the
   // plugin is not enabled, its morning job and launcher are removed, nothing is seeded, the plugin's
-  // negotiator.js and morning.py are not touched; the line and the note say why.
+  // morning.py is not touched; the line and the note say why. ov#277 refute S2: a managed loader an
+  // earlier ON run left in the plugin's negotiator.js is taken out on the first OFF run after the flip.
   if (!armOn || !gateVerified) {
     let off: IndexPluginFailure | null = null;
+    const loader = !armOn && managedLoaderPresent(home) ? retireManagedLoader(home) : null;
+    const files = managed || loader !== null;
     const why = armOn
       ? "withheld: the approval gate was not installed and live-checked on this run"
-      : `off (${MORALMOD_ARM_ENV} is not on)${managed ? "; MoralMod release or resident config present, not activated: the managed negotiator runs only for ON" : ""}`;
+      : `off (${MORALMOD_ARM_ENV} is not on)${files ? "; MoralMod release or resident config present, not activated: the managed negotiator runs only for ON" : ""}${loader ? `; ${LOADER_RETIRED[loader]}` : ""}`;
     try {
       const dropped = setIndexPluginEnabled(false);
       console.log(`→ index-network plugin: ${why}${dropped ? "; removed from plugins.enabled" : ""}`);
@@ -528,9 +545,19 @@ export function installIndexPlugin(
     if (!stopMorningJob(run, home)) off ??= "hermes";
     // Withheld: `config` first (the plugin may still be listed), else `gate`, a cron failure only warned.
     if (armOn) return { state: "withheld", failed: off === "config" ? "config" : "gate" };
-    return managed ? { state: "off", failed: off, note: "moralmod_arm_not_on" } : { state: "off", failed: off };
+    return files ? { state: "off", failed: off, note: "moralmod_arm_not_on" } : { state: "off", failed: off };
   }
-  if (argv.includes("--skip-index") || !hasIndexKey(argv, home)) {
+  const skipped = argv.includes("--skip-index") || !hasIndexKey(argv, home);
+  // ov#277 refute S1: every ON run, --skip-index, keyless and the pinnedAtRef path included, holds a
+  // managed loader on disk to the pin. A keyed run handed a release (MORALMOD_RELEASE_DIR and
+  // MORALMOD_RESIDENT_CONFIG) goes on: the managed block below holds that release to the pin and
+  // activates only it, or withholds.
+  if (managedLoaderPresent(home) && !managedLoaderPinned(home, releasePin)) {
+    const reason = `a managed loader on disk is not MORALMOD_RELEASE_SHA256's release; ${LOADER_RETIRED[retireManagedLoader(home)]}`;
+    if (!source || !configuration || skipped) return withholdForSidecar(run, home, reason, null, "release_unpinned", "MoralMod release not pinned");
+    console.warn(`  warning: index-network plugin: ${reason}`);
+  }
+  if (skipped) {
     console.log("→ index-network plugin: skipped (no Index key or --skip-index)");
     // OV-249 A3: an entry an earlier run enabled is not kept over a sidecar.py Hermes or an
     // operator has since reinstalled unpatched. Not listed: nothing is read or written.

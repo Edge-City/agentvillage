@@ -36,6 +36,27 @@ export class MoralmodReleaseUnpinned extends Error {
 }
 export interface InstalledRelease { hookVersion: string; releaseDigest: string; directory: string; changed: boolean }
 
+/**
+ * ov#277 refute S1: the release a managed loader on disk imports, `index/moralmod/<pin>/`, is the
+ * pinned one: `pin` is a sha256, that directory's `release.json` hashes to it, and every bundle file
+ * to the digest that `release.json` lists. False for the sentinel, so no loader passes under it.
+ */
+export function installedReleasePinned(home: string, pin: string = MORALMOD_RELEASE_SHA256): boolean {
+  if (!SHA256_HEX.test(pin)) return false;
+  const directory = join(home, "index", "moralmod", pin);
+  try {
+    regular(join(directory, "release.json"));
+    const manifestBytes = readFileSync(join(directory, "release.json"));
+    if (hash(manifestBytes) !== pin) return false;
+    const manifest: unknown = JSON.parse(manifestBytes.toString("utf8"));
+    if (!object(manifest) || !object(manifest.files)) return false;
+    const listed = manifest.files;
+    return FILES.every((name) => { regular(join(directory, name)); return hash(readFileSync(join(directory, name))) === listed[name]; });
+  } catch {
+    return false;
+  }
+}
+
 /** @param pin - The expected sha256 of `release.json` (a seam for tests; production passes none). */
 export function installMoralmodRelease(home: string, source: string, pin: string = MORALMOD_RELEASE_SHA256): InstalledRelease {
   // Pinned first, over the bytes as `shasum -a 256 release.json` reads them: an unreviewed manifest

@@ -5,7 +5,9 @@
  * clear an operator's `plugins.disabled` entry), enabled and disabled through
  * `writeConfig`; a failure is recorded and never fails the install. The step
  * runs against an injected runner, then once end to end through install.ts
- * against the stand-in Hermes (fake_hermes.ts, taught `plugins install`).
+ * against the stand-in Hermes (fake_hermes.ts, taught `plugins install`); the
+ * MoralMod cases there run with the gate verified (gate_verified_preload.ts,
+ * ov#277 refute S3), the condition the OV-249 post-hoc M1 broke.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
@@ -41,7 +43,8 @@ import {
   sidecarPath,
 } from "../install_index_plugin";
 import { installStatusPath, writeInstallStatus } from "../install_status";
-import { INDEX_PLUGIN_REVISION } from "../moralmod_release";
+import { managedLoaderSource } from "../moralmod_host";
+import { INDEX_PLUGIN_REVISION, MORALMOD_HOOK_VERSION } from "../moralmod_release";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const FAKE = join(import.meta.dir, "fake_hermes.ts");
@@ -1242,9 +1245,14 @@ describe("end to end: install.ts against the stand-in Hermes", () => {
     chmodSync(bin, 0o755);
     return bin;
   }
-  function install(env: Record<string, string>): { code: number | null; out: string } {
+  /**
+   * install.ts end to end. `verified`: under gate_verified_preload.ts, this run's approval verdict
+   * reads verified (the step itself is install_approval.test.ts's). `args` replaces the Index key.
+   */
+  function install(env: Record<string, string>, opts: { verified?: boolean; args?: string[] } = {}): { code: number | null; out: string } {
+    const preload = opts.verified ? ["--preload", join(import.meta.dir, "gate_verified_preload.ts")] : [];
     const run = Bun.spawnSync({
-      cmd: ["bun", join(REPO_ROOT, "install", "install.ts"), "--no-restart", "--skip-crons", "--index-api-key", "ix_plugin_e2e"],
+      cmd: ["bun", ...preload, join(REPO_ROOT, "install", "install.ts"), "--no-restart", "--skip-crons", ...(opts.args ?? ["--index-api-key", "ix_plugin_e2e"])],
       cwd: REPO_ROOT,
       env: { ...process.env, HOME: home, HERMES_HOME: home, HERMES_BIN: hermes(), AV_APPROVAL_ENABLED: "", AV_GATE_NONCE: "", ...env },
       stdout: "pipe",
@@ -1319,30 +1327,130 @@ describe("end to end: install.ts against the stand-in Hermes", () => {
     expect(off.out).not.toContain("index_plugin_failed");
   }, 120_000);
 
-  test("OV-249 post-hoc M1: arm off or unset with MORALMOD_RELEASE_DIR and MORALMOD_RESIDENT_CONFIG in the install env is OFF: no plugin call, the earlier entry and morning job removed, nothing MoralMod written, the status file notes moralmod_arm_not_on", () => {
+  /**
+   * A self-consistent release (every file matches its own release.json, which is not the pinned one)
+   * and a valid 0600 resident config in `supply`, as an operator hands them over; the install env
+   * naming them, and the release.json's sha256.
+   */
+  function supplyRelease(supply: string): { env: Record<string, string>; digest: string } {
+    const release = join(supply, "release");
+    mkdirSync(release, { recursive: true });
+    const content: Record<string, string> = {
+      "negotiator-core.js": "export const hookVersion='moralmod-lifecycle-2';",
+      "negotiator-runtime.js": "export async function startResident(){return {port:1,stop(){}}}",
+      "INDEX-LICENSE": "fixture MIT license",
+    };
+    for (const [name, value] of Object.entries(content)) writeFileSync(join(release, name), value);
+    const sha = (v: string) => createHash("sha256").update(v).digest("hex");
+    const manifest = JSON.stringify({
+      schema: "moralmod-negotiator-release-1",
+      hook_version: MORALMOD_HOOK_VERSION,
+      hermes_plugin_revision: INDEX_PLUGIN_REVISION,
+      bun_version: "1.4.2",
+      files: Object.fromEntries(Object.entries(content).map(([name, value]) => [name, sha(value)])),
+    });
+    writeFileSync(join(release, "release.json"), manifest);
+    const resident = join(supply, "resident.json");
+    writeFileSync(
+      resident,
+      JSON.stringify({
+        DECISION_SERVICE_URL: "http://127.0.0.1:1",
+        DECISION_EXPERIMENT_ID: "00000000-0000-4000-8000-000000000000",
+        DECISION_INPUT_KIND: "synthetic",
+        DECISION_RUNTIME_REVISION: "release-1",
+        VILLAGE_CONTROL_PLANE_URL: "http://127.0.0.1:2",
+        VILLAGE_SUBJECT_REF: "mm_" + "a".repeat(32),
+        VILLAGE_INSTALLATION_CREDENTIAL: "r".repeat(32),
+      }),
+      { mode: 0o600 },
+    );
+    return { env: { MORALMOD_RELEASE_DIR: release, MORALMOD_RESIDENT_CONFIG: resident }, digest: sha(manifest) };
+  }
+  const loaderPath = () => join(home, "plugins", INDEX_PLUGIN, "runtime", "dist", "negotiator.js");
+  const MANAGED_SEED = "// Managed MoralMod lifecycle 2; see index/moralmod/active.json.\n";
+  /**
+   * What an earlier managed ON run left (a #249 box): the plugin tree at REF with the loader for
+   * `digest`'s release in negotiator.js and the managed morning.py, active.json naming it, the
+   * managed seed. With `plantEnabled`, the plugin listed and its morning job.
+   */
+  function plantManaged(digest: string): string[] {
+    const plugin = join(home, "plugins", INDEX_PLUGIN);
+    mkdirSync(join(plugin, "runtime", "dist"), { recursive: true });
+    writeFileSync(join(plugin, "plugin.yaml"), `name: ${INDEX_PLUGIN}\n`);
+    writeFileSync(join(plugin, "morning.py"), 'SCHEDULE = "*/5 * * * *"\n');
+    writeFileSync(installMetadataPath(home), JSON.stringify({ [INDEX_PLUGIN]: { pinned: true, revision: INDEX_PLUGIN_REF } }));
+    writeFileSync(loaderPath(), managedLoaderSource(home, join(home, "index", "moralmod", digest)));
+    mkdirSync(join(home, "index", "moralmod"), { recursive: true });
+    writeFileSync(join(home, "index", "moralmod", "active.json"), JSON.stringify({ release_digest: digest }) + "\n");
+    writeFileSync(negotiatorPath(home), MANAGED_SEED);
+    return [join(plugin, "plugin.yaml"), join(plugin, "morning.py"), join(home, "index", "moralmod", "active.json"), negotiatorPath(home)];
+  }
+  const bytes = (paths: string[]) => paths.map((p) => [p, existsSync(p) ? readFileSync(p, "utf8") : null]);
+
+  test("the control for the MoralMod cases below: under gate_verified_preload.ts, ON reaches the plugin install (no gate withhold)", () => {
+    const run = install({ [MORALMOD_ARM_ENV]: "on" }, { verified: true });
+    expect(run.code).toBe(0);
+    expect(pluginCalls()).toEqual([FRESH]);
+    expect(status().index_plugin_failed).not.toBe("gate");
+    expect(run.out).not.toContain("withheld: the approval gate");
+  }, 120_000);
+
+  test("OV-249 post-hoc M1, the exact state (ov#277 refute S3): gate verified, MORALMOD_RELEASE_DIR and MORALMOD_RESIDENT_CONFIG in the install env, active.json and the managed loader on disk, the plugin listed, arm off or unset: OFF, no plugin call, dropped from plugins.enabled, the morning job removed, the managed loader taken out, no release installed, the status file notes moralmod_arm_not_on", () => {
     const supply = mkdtempSync(join(tmpdir(), "av-mm-e2e-"));
     try {
-      // Never read on the OFF path: the files only have to be named.
-      const moralmod = { MORALMOD_RELEASE_DIR: join(supply, "release"), MORALMOD_RESIDENT_CONFIG: join(supply, "resident.json") };
+      const { env: moralmod, digest } = supplyRelease(supply);
       expect(install({ [MORALMOD_ARM_ENV]: "off" }).code).toBe(0);
       for (const arm of ["off", ""]) {
         const jobsPath = plantEnabled();
-        const run = install({ [MORALMOD_ARM_ENV]: arm, ...moralmod });
+        const kept = plantManaged(digest);
+        const before = bytes(kept);
+        expect(plugins().enabled).toContain(INDEX_PLUGIN);
+        const run = install({ [MORALMOD_ARM_ENV]: arm, ...moralmod }, { verified: true });
         expect([arm, run.code]).toEqual([arm, 0]);
         expect([arm, pluginCalls()]).toEqual([arm, []]);
         expect([arm, cronCalls()]).toEqual([arm, [["cron", "remove", "e2e0morning0"]]]);
         expect(JSON.parse(readFileSync(jobsPath, "utf8")).jobs.map((job: { id: string }) => job.id)).toEqual(["e2e0unrelate"]);
-        expect(plugins().enabled).not.toContain(INDEX_PLUGIN);
+        expect([arm, plugins().enabled.includes(INDEX_PLUGIN)]).toEqual([arm, false]);
         expect([arm, status().index_plugin_failed, status().index_plugin_note]).toEqual([arm, null, "moralmod_arm_not_on"]);
-        expect(run.out).toContain("MoralMod release or resident config present, not activated: the managed negotiator runs only for ON");
+        expect(run.out).toContain("MoralMod release or resident config present, not activated: the managed negotiator runs only for ON; managed loader removed; removed from plugins.enabled");
         expect(run.out).not.toContain("index_plugin_failed");
-        expect(existsSync(join(home, "index", "moralmod"))).toBe(false);
-        expect(existsSync(negotiatorPath(home))).toBe(false);
-        expect(existsSync(join(home, "plugins", INDEX_PLUGIN))).toBe(false);
+        // The managed loader is not used: gone from the plugin's negotiator.js.
+        expect([arm, existsSync(loaderPath())]).toEqual([arm, false]);
+        // Nothing MoralMod written: no release installed, no config, the seed and active.json as they were.
+        expect(readdirSync(join(home, "index", "moralmod"))).toEqual(["active.json"]);
+        expect(bytes(kept)).toEqual(before);
       }
       // Without MoralMod files the note is absent.
-      install({ [MORALMOD_ARM_ENV]: "off" });
+      rmSync(join(home, "index", "moralmod"), { recursive: true, force: true });
+      install({ [MORALMOD_ARM_ENV]: "off" }, { verified: true });
       expect("index_plugin_note" in status()).toBe(false);
+    } finally {
+      rmSync(supply, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  test("ov#277 refute S1, probe P3 end to end: arm ON, gate verified, sentinel pin, MORALMOD_* at an unpinned bundle, the loader and active.json for release deadbeef on disk, --skip-index or no Index key: release_unpinned in the status file and the one line, dropped from plugins.enabled, the morning job removed, the loader taken out, no plugin call", () => {
+    const supply = mkdtempSync(join(tmpdir(), "av-mm-e2e-"));
+    try {
+      const { env: moralmod } = supplyRelease(supply);
+      expect(install({ [MORALMOD_ARM_ENV]: "off" }).code).toBe(0);
+      for (const args of [["--skip-index"], []]) {
+        const label = args.join(" ") || "no Index key";
+        const jobsPath = plantEnabled();
+        const kept = plantManaged("deadbeef");
+        const before = bytes(kept);
+        const run = install({ [MORALMOD_ARM_ENV]: "on", ...moralmod }, { verified: true, args });
+        expect([label, run.code]).toEqual([label, 0]);
+        expect([label, pluginCalls()]).toEqual([label, []]);
+        expect([label, cronCalls()]).toEqual([label, [["cron", "remove", "e2e0morning0"]]]);
+        expect(JSON.parse(readFileSync(jobsPath, "utf8")).jobs.map((job: { id: string }) => job.id)).toEqual(["e2e0unrelate"]);
+        expect([label, plugins().enabled.includes(INDEX_PLUGIN)]).toEqual([label, false]);
+        expect([label, status().index_plugin_failed]).toEqual([label, "release_unpinned"]);
+        expect(run.out.split("\n").filter((l) => l.includes("index_plugin_failed"))).toEqual(["agentvillage-install: index_plugin_failed=release_unpinned"]);
+        expect([label, existsSync(loaderPath())]).toEqual([label, false]);
+        expect(readdirSync(join(home, "index", "moralmod"))).toEqual(["active.json"]);
+        expect(bytes(kept)).toEqual(before);
+      }
     } finally {
       rmSync(supply, { recursive: true, force: true });
     }
