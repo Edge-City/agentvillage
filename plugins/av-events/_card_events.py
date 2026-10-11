@@ -48,6 +48,14 @@ stated source, `other` for anything else. `origin` is the entry's `origin`
 when the capture recorded one (`note_origin`, the memory-signal lane's hook),
 else null.
 
+**What a payload may hold.** Uuids (`card_id`, minted here; `intent_id`, the
+map key, sent only when it is a canonical uuid, else null), the contract's
+closed enums (`kind`, `origin`, `resolution`, `decided_by`, each checked
+against its list before sending) and RFC 3339 times from the plugin's clock.
+Nothing derived from the card's text or summary, the intention, the resident,
+the model or a daemon / tool answer (no status words, no error codes, no
+task id). The envelope's `intention_id` follows the same rule.
+
 **`decided_by`.** Core's `wait` answer names a state, not the actor. Reject
 and revoke are human-only in core and the box's daemon has one human, the
 resident (`APPROVAL_HUMAN=human:resident`): `resident`. A lapse is `timeout`.
@@ -249,7 +257,11 @@ def resolved_payload(intention_id: str, card: dict) -> Optional[dict]:
 
 
 def event_id(event_type: str, card: dict) -> str:
-    """Fixed by the card: a re-send is the same row at ingest."""
+    """Fixed by the card: a re-send is the same row at ingest. Its inputs are
+    the event type (a constant), the card's uuid and one of its times: nothing
+    from the card's text, the intention or the resident."""
+    if event_type not in (REQUESTED, RESOLVED) or _uuid(card.get("id")) is None:
+        raise ValueError("card_id")
     at = card.get("resolved_at") if event_type == RESOLVED else card.get("requested_at")
     return derived_uuid7(int(float(at) * 1000), f"av-events|{event_type}|{card['id']}")
 
@@ -260,7 +272,7 @@ def _send(event_type: str, payload: dict, card: dict, at_key: str, intention_id:
         return False
     try:
         return bool(fn(event_type, payload, event_id=event_id(event_type, card),
-                       occurred_at=_iso(card.get(at_key)), intention_id=intention_id))
+                       occurred_at=_iso(card.get(at_key)), intention_id=_uuid(intention_id)))
     except Exception as exc:  # noqa: BLE001 - left unsent; the next sweep tries again
         logger.warning("av-events: card_events emit_failed=%s", type(exc).__name__)
         return False

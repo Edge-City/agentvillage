@@ -488,3 +488,62 @@ def test_a_forged_card_on_the_map_is_never_sent(tctx, serve, mods, av, plugin):
     no_text(evs, TEXT)
     assert all(c["requested_sent"] and (c["resolution"] is None or c["resolved_sent"])
                for c in entry(mods, iid)["approval"]["cards"][1:])
+
+
+SENTINEL = "SENTINEL-7f3a9c-CARD-TEXT"
+
+
+@pytest.mark.parametrize("ending", ["grant", "reject", "expire", "withdraw"])
+def test_a_sentinel_in_the_card_text_and_title_reaches_no_payload_and_no_event_id(tctx, serve, index, mods, av,
+                                                                                 plugin, monkeypatch, ending):
+    """Coordinator's audit: the card's text (the proposal payload) and its title
+    (the summary the resident's prompt shows) both carry a sentinel; it appears
+    in neither event's payload, envelope or idempotency key (the event id and
+    the string it is derived from)."""
+    monkeypatch.setitem(mods.ia.SUMMARIES, INFERRED, f"Publish {SENTINEL} to Index")
+    derived: list[str] = []
+    real_derive = mods.cards.derived_uuid7
+
+    def spy(ms, name):
+        derived.append(name)
+        return real_derive(ms, name)
+
+    monkeypatch.setattr(mods.cards, "derived_uuid7", spy)
+    text = f"Looking for {SENTINEL} partners in Goa"
+    iid = call(tctx, {"text": text, "source": "ambient"})["intention_id"]
+    key = f"{INFERRED}:{iid}"
+    assert SENTINEL in serve.proposals()[0]["flags"]["--summary"]  # the title really carries it
+    assert SENTINEL in serve.proposals()[0]["flags"]["--payload-json"]  # and so does the text
+    if ending == "grant":
+        serve.grant(key)
+    elif ending == "reject":
+        serve.reject(key)
+    elif ending == "expire":
+        serve.expire(key)
+    else:
+        call(tctx, {"action": "withdraw", "intention_id": iid}, tool_call_id="c2")
+    poll(mods)
+    evs = cards(av, plugin)
+    assert of(evs, REQUESTED) and of(evs, RESOLVED)
+    blob = json.dumps(evs, ensure_ascii=False)
+    assert SENTINEL not in blob and "7f3a9c" not in blob
+    for e in evs:
+        conforms(e)
+        assert SENTINEL not in json.dumps(e["payload"]) and SENTINEL not in e["event_id"]
+    assert derived and all(SENTINEL not in name for name in derived)
+    assert all(re.fullmatch(r"av-events\|approval\.card_(requested|resolved)\|[0-9a-f-]{36}", n) for n in derived)
+    # Every payload value is a uuid, a closed code, an RFC 3339 time or null.
+    codes = {v for sch in CONTRACT["schemas"].values() for vals in sch["enums"].values() for v in vals}
+    for e in evs:
+        for k, v in e["payload"].items():
+            assert v is None or UUID.match(v) or v in codes or RFC3339.match(v), (k, v)
+
+
+def test_a_forged_intention_key_never_reaches_the_envelope(mods):
+    card = {"id": "0199d0a4-1b2c-7d3e-8f40-123456789abc", "requested_at": 1760200000.0, "resolution": None,
+            "decided_by": None, "resolved_at": None}
+    body = mods.cards.requested_payload(SENTINEL, {"source": "ambient", "origin": SENTINEL},
+                                        {"class": INFERRED}, card)
+    assert body["intent_id"] is None and body["origin"] is None and SENTINEL not in json.dumps(body)
+    with pytest.raises(ValueError):
+        mods.cards.event_id(REQUESTED, {**card, "id": SENTINEL})
