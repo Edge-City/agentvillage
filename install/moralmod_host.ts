@@ -338,27 +338,30 @@ export function activateMoralmod(
   regular(runtime);
   const state = join(home, "index", "moralmod", "active.json");
   regular(state);
+  const configFile = join(home, "index", "moralmod", "resident.json");
+  const entry = managedLoaderSource(home, release.directory);
+  // ov#282: a prior attempt can replace the loader before it commits active.json (first activation),
+  // or before it commits the new release's active.json (upgrade). The exact loader generated from this
+  // verified release is recoverable without its receipt; the managed marker alone never authorizes
+  // other bytes, so a customized loader is still refused.
+  const entryHash = hash(entry);
   if (existsSync(state)) {
     const previous = JSON.parse(readFileSync(state, "utf8"));
     // The plugin's own file is accepted too: an OFF run or a revoked pin put it back (ov#277 refute S1, S2).
     const current = hash(readFileSync(runtime));
-    if (current !== previous.entry_sha256 && current !== upstreamRuntimeSha256(plugin))
+    if (current !== previous.entry_sha256 && current !== entryHash && current !== upstreamRuntimeSha256(plugin))
       throw Error("Managed plugin runtime was modified");
   } else {
     const upstream = Bun.spawnSync(
       ["git", "show", "HEAD:runtime/dist/negotiator.js"],
       { cwd: plugin },
     );
-    if (
-      upstream.exitCode !== 0 ||
-      !existsSync(runtime) ||
-      hash(readFileSync(runtime)) !== hash(upstream.stdout)
-    )
+    if (upstream.exitCode !== 0 || !existsSync(runtime)) throw Error("Unowned plugin runtime was modified");
+    const current = hash(readFileSync(runtime));
+    if (current !== hash(upstream.stdout) && current !== entryHash)
       throw Error("Unowned plugin runtime was modified");
   }
   installMorning(home);
-  const configFile = join(home, "index", "moralmod", "resident.json");
-  const entry = managedLoaderSource(home, release.directory);
   mkdirSync(join(plugin, "runtime", "dist"), { recursive: true });
   atomic(configFile, JSON.stringify(config) + "\n");
   atomic(runtime, entry);
@@ -369,7 +372,7 @@ export function activateMoralmod(
       hook_version: release.hookVersion,
       release_digest: release.releaseDigest,
       plugin_revision: INDEX_PLUGIN_REVISION,
-      entry_sha256: hash(entry),
+      entry_sha256: entryHash,
       installed: true,
       selected: "unverified",
       ready: false,

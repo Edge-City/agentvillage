@@ -336,6 +336,8 @@ describe("M2: the release must be the one pinned in MORALMOD_RELEASE_SHA256", ()
     const fixturePin = supplyRelease();
     listPlugin();
     plantMorningJob();
+    // The shipped pin is a real digest (not a value that matches no file), and not this fixture's.
+    expect(MORALMOD_RELEASE_SHA256).toMatch(/^[0-9a-f]{64}$/);
     expect(MORALMOD_RELEASE_SHA256).not.toBe(fixturePin);
     const { calls, run } = recorder();
     const result = step(run);
