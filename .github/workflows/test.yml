@@ -35,7 +35,7 @@ permissions:
 # a merge to main never cancels it.
 concurrency:
   group: ${{ (github.event_name == 'pull_request' || github.event_name == 'push') && format('test-{0}', github.ref) || format('test-call-{0}', github.run_id) }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   bun:
