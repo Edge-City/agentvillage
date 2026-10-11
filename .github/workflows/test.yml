@@ -1,14 +1,20 @@
-# Tests on every pull request and every push to main: the TypeScript suites
-# (installer, scripts, the two skills with tests) and the plugin pytest suites
-# (pytest.ini: plugins/av-events/tests, plugins/recall/tests,
-# plugins/dashboard-auth-edgecity/tests, plugins/av-approval/tests; the Hermes-backed tests skip here). The same thing
-# `bun test` and `python3 -m pytest` run locally; nothing here deploys.
+# Tests on pull requests (opened, new commits, reopened, marked ready) and on
+# every push to main: the TypeScript suites (installer, scripts, the skills with
+# tests) and the plugin pytest suites (pytest.ini's testpaths; the Hermes-backed
+# tests skip here). The same thing `bun test` and `python3 -m pytest` run
+# locally; nothing here deploys.
 # WARNING: Tag release (tag-release.yml) trusts a green push-to-main run of this
 # workflow as proof the suites ran at that commit, so no job here may be skipped on push.
+# On a push to main, and when Tag release calls this file, both suites always run
+# in full. Only on a pull request may a job end early, with "nothing to test",
+# when every file the pull request changes is one that suite never reads (the
+# "scope" step in each job lists them; anything else, or a diff it cannot read,
+# runs the suite). Each job still runs and passes, so its check stays green.
 name: test
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
   # tag-release.yml runs these suites at the commit it is about to tag.
@@ -23,29 +29,69 @@ on:
 permissions:
   contents: read
 
+# A newer run on the same pull request, or on main, cancels the older one (a
+# cancelled main run only means Tag release runs the suites itself at that
+# commit). When Tag release calls this file, each call has a group of its own, so
+# a merge to main never cancels it.
+concurrency:
+  group: ${{ (github.event_name == 'pull_request' || github.event_name == 'push') && format('test-{0}', github.ref) || format('test-call-{0}', github.run_id) }}
+  cancel-in-progress: true
+
 jobs:
   bun:
     name: bun test (install, scripts, skills)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      # Depth 2: on a pull request the checkout is GitHub's merge commit, and its
+      # first parent is the base branch, so HEAD^1..HEAD is what the PR changes.
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
+          fetch-depth: 2
+      # Paths the bun suites never read (checked 2026-10-11): docs/, the root
+      # README.md and LICENSE, pytest.ini, the root tests/ (Python vectors).
+      # They do read plugins/, workspace/ and .github/workflows/, so those run it.
+      - name: Scope (pull requests only)
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          run=true
+          if [ "$EVENT" = pull_request ]; then
+            if files=$(git diff --name-only --no-renames HEAD^1 HEAD); then
+              run=false
+              while IFS= read -r f; do
+                case "$f" in
+                  '') ;;
+                  docs/*|README.md|LICENSE|pytest.ini|tests/*) ;;
+                  *) run=true; echo "runs the suite: $f"; break ;;
+                esac
+              done <<<"$files"
+            else
+              echo "::warning::could not list the pull request's changed files; running the suite"
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          if [ "$run" = false ]; then echo "nothing to test: this pull request changes only files the bun suites never read"; fi
       - name: Check out pinned Index plugin for morning tests
+        if: steps.scope.outputs.run == 'true'
         uses: actions/checkout@v4
         with:
           repository: indexnetwork/hermes-plugin
           ref: 04d833b840541fedabe78cbdad306c18853d784a
           path: .test-deps/index-hermes-plugin
           persist-credentials: false
-      - uses: oven-sh/setup-bun@v2
+      - if: steps.scope.outputs.run == 'true'
+        uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
-      - run: bun install --frozen-lockfile
+      - if: steps.scope.outputs.run == 'true'
+        run: bun install --frozen-lockfile
       # The directories that hold *.test.ts; a bare `bun test` would also
       # walk any stray checkout under the repo root.
-      - run: bun test install/tests scripts/tests skills/index-network/scripts/tests skills/recall/scripts/tests skills/edge-india/scripts/tests skills/agent-profile/scripts/tests
+      - if: steps.scope.outputs.run == 'true'
+        run: bun test install/tests scripts/tests skills/index-network/scripts/tests skills/recall/scripts/tests skills/edge-india/scripts/tests skills/agent-profile/scripts/tests
         env:
           AV_INDEX_PLUGIN_TEST_DIR: ${{ github.workspace }}/.test-deps/index-hermes-plugin
 
@@ -57,8 +103,40 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
-      - uses: actions/setup-python@v5
+          fetch-depth: 2
+      # Paths the pytest suites never read (checked 2026-10-11): docs/, LICENSE,
+      # .gitignore, the root scripts/, install/tests/, *.test.ts files,
+      # package.json, bun.lock, and workflows other than this one. They do read
+      # install/*.ts, skills/ (SKILL.md, prompts, fixtures, recall.ts),
+      # workspace/, the root README.md and tests/vectors, so those run it.
+      - name: Scope (pull requests only)
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          run=true
+          if [ "$EVENT" = pull_request ]; then
+            if files=$(git diff --name-only --no-renames HEAD^1 HEAD); then
+              run=false
+              while IFS= read -r f; do
+                case "$f" in
+                  '') ;;
+                  .github/workflows/test.yml) run=true; echo "runs the suite: $f"; break ;;
+                  docs/*|LICENSE|.gitignore|scripts/*|install/tests/*|*.test.ts|package.json|bun.lock|.github/*) ;;
+                  *) run=true; echo "runs the suite: $f"; break ;;
+                esac
+              done <<<"$files"
+            else
+              echo "::warning::could not list the pull request's changed files; running the suite"
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          if [ "$run" = false ]; then echo "nothing to test: this pull request changes only files the pytest suites never read"; fi
+      - if: steps.scope.outputs.run == 'true'
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python -m pip install --quiet pytest pyyaml
-      - run: python -m pytest -q
+      - if: steps.scope.outputs.run == 'true'
+        run: python -m pip install --quiet pytest pyyaml
+      - if: steps.scope.outputs.run == 'true'
+        run: python -m pytest -q
