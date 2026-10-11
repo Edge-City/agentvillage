@@ -12,11 +12,19 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { installIndexPlugin, NEGOTIATOR_SEED, installMetadataPath } from "../install_index_plugin";
-import { INDEX_PLUGIN_REVISION } from "../moralmod_release";
-const plugin = resolve(import.meta.dir, "../../../index-hermes-plugin");
+import { INDEX_PLUGIN_REVISION, MORALMOD_RELEASE_SHA256 } from "../moralmod_release";
+// The pinned plugin checkout (CI: AV_INDEX_PLUGIN_TEST_DIR, as the other installer tests find it).
+const plugin = resolve(
+  process.env.AV_INDEX_PLUGIN_TEST_DIR ??
+    resolve(import.meta.dir, "../../../index-hermes-plugin"),
+);
+// The release: CI fetches the published, pinned one (MORALMOD_RELEASE_SHA256) from this repo's
+// release assets into AV_MORALMOD_RELEASE_TEST_DIR (.github/workflows/test.yml); otherwise a local
+// Decision Studio build beside the checkout.
+const published = process.env.AV_MORALMOD_RELEASE_TEST_DIR;
 const bundle = resolve(
-  import.meta.dir,
-  "../../../decision-studio/custom-negotiator/dist/village",
+  published ??
+    resolve(import.meta.dir, "../../../decision-studio/custom-negotiator/dist/village"),
 );
 function fixture() {
   const home = mkdtempSync(join(tmpdir(), "moralmod-host-"));
@@ -48,6 +56,10 @@ function fixture() {
         join(home, "plugins", "index-network"),
       ]);
       if (r.exitCode) throw Error("Local pinned plugin fixture clone failed");
+      const pinned = Bun.spawnSync(["git", "checkout", "--quiet", INDEX_PLUGIN_REVISION], {
+        cwd: join(home, "plugins", "index-network"),
+      });
+      if (pinned.exitCode) throw Error("Local pinned plugin fixture checkout failed");
       writeFileSync(installMetadataPath(home), JSON.stringify({ "index-network": { pinned: true, revision: INDEX_PLUGIN_REVISION } }));
     }
   };
@@ -92,8 +104,10 @@ test.skipIf(
   "actual installer pins plugin, replaces only its seed, rotates scoped config and rejects modified runtime",
   () => {
     const f = fixture();
-    // The sibling build stands in for the reviewed release: pin its own release.json (post-hoc M2).
+    // A sibling build stands in for the reviewed release: pin its own release.json (post-hoc M2).
+    // The published release must be the pinned one itself.
     const pin = createHash("sha256").update(readFileSync(join(bundle, "release.json"))).digest("hex");
+    if (published) expect(pin).toBe(MORALMOD_RELEASE_SHA256);
     use(f, () => {
       writeFileSync(join(f.home, "index", "negotiator.ts"), NEGOTIATOR_SEED);
       installIndexPlugin(f.run, ["bun", "install"], true, pin);

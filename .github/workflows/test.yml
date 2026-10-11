@@ -74,6 +74,8 @@ jobs:
           fi
           echo "run=$run" >> "$GITHUB_OUTPUT"
           if [ "$run" = false ]; then echo "nothing to test: this pull request changes only files the bun suites never read"; fi
+      # Full history: the plugin-bump tests in moralmod_arm_pin.test.ts move a box's checkout to
+      # another real revision (ov#288 refute M1); they skip if that revision is not here.
       - name: Check out pinned Index plugin for morning tests
         if: steps.scope.outputs.run == 'true'
         uses: actions/checkout@v4
@@ -81,7 +83,26 @@ jobs:
           repository: indexnetwork/hermes-plugin
           ref: 04d833b840541fedabe78cbdad306c18853d784a
           path: .test-deps/index-hermes-plugin
+          fetch-depth: 0
           persist-credentials: false
+      # The reviewed MoralMod release the overlay pins, for the connected installer test in
+      # moralmod_host.test.ts: the public release assets of this repo, so no token. The digest and
+      # the tag come from install/moralmod_release.ts; release.json must hash to the pin (the
+      # installer then checks every other file against release.json). No pin, no fetch: it skips.
+      - name: Fetch the pinned MoralMod release
+        if: steps.scope.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          pin=$(sed -n 's/^export const MORALMOD_RELEASE_SHA256 = "\([0-9a-f]\{64\}\)";$/\1/p' install/moralmod_release.ts)
+          if [ -z "$pin" ]; then echo "no release pinned: the connected installer test skips"; exit 0; fi
+          page=$(grep -o "https://github\.com/[A-Za-z0-9_.-]*/[A-Za-z0-9_.-]*/releases/tag/moralmod-[0-9a-f]*-${pin:0:12}" install/moralmod_release.ts | head -n 1 || true)
+          if [ -z "$page" ]; then echo "::error::install/moralmod_release.ts names no release page for the pin ${pin:0:12}"; exit 1; fi
+          dir=.test-deps/moralmod-release
+          mkdir -p "$dir"
+          for f in release.json negotiator-core.js negotiator-runtime.js INDEX-LICENSE; do
+            curl --fail --silent --show-error --location --retry 3 -o "$dir/$f" "${page/\/tag\//\/download\/}/$f"
+          done
+          echo "$pin  $dir/release.json" | sha256sum -c -
       - if: steps.scope.outputs.run == 'true'
         uses: oven-sh/setup-bun@v2
         with:
@@ -94,6 +115,7 @@ jobs:
         run: bun test install/tests scripts/tests skills/index-network/scripts/tests skills/recall/scripts/tests skills/edge-india/scripts/tests skills/agent-profile/scripts/tests
         env:
           AV_INDEX_PLUGIN_TEST_DIR: ${{ github.workspace }}/.test-deps/index-hermes-plugin
+          AV_MORALMOD_RELEASE_TEST_DIR: ${{ github.workspace }}/.test-deps/moralmod-release
 
   pytest:
     name: pytest (plugins)
