@@ -15,7 +15,8 @@
  * plugin's negotiator.js (`--skip-index`, keyless, or keyed with active.json gone and MORALMOD_*
  * unset, probe P3) withholds the plugin as `release_unpinned` and is taken out unless it is exactly
  * the pinned release's loader and that release is intact. S2: the first OFF run after an ON-to-OFF
- * flip takes the loader out.
+ * flip takes the loader out. ov#282 M1: once active.json exists, the plugin's own negotiator.js (a
+ * Hermes reinstall puts it back) is accepted as well as the recorded loader; a customized file never is.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
@@ -372,7 +373,7 @@ describe("M2: the release must be the one pinned in MORALMOD_RELEASE_SHA256", ()
   });
 
   test.skipIf(!havePlugin)(
-    "the pin computed from the fixture activates for ON (loader imports that digest's runtime, active.json names it, morning.py patched, enabled); a moved pin then withholds it; a flip to OFF leaves the files and drops the plugin",
+    "the pin computed from the fixture activates for ON (loader imports that digest's runtime, active.json names it, morning.py patched, enabled); a moved pin then withholds it; a flip to OFF puts the plugin's own negotiator.js back and drops the plugin",
     () => {
       process.env[MORALMOD_ARM_ENV] = "on";
       writeFileSync(join(home, "config.yaml"), BASE);
@@ -426,6 +427,58 @@ describe("M2: the release must be the one pinned in MORALMOD_RELEASE_SHA256", ()
       expect(step(recorder().run, true, pin)).toMatchObject({ state: "pinned", failed: null });
       expect(readFileSync(runtime, "utf8")).toBe(loader);
       expect(enabled()).toEqual(["av-events", INDEX_PLUGIN]);
+    },
+    60_000,
+  );
+});
+
+describe("ov#282 M1: a plugin reinstall on an activated box keeps the receipt valid", () => {
+  test.skipIf(!havePlugin)(
+    "activated, then Hermes puts the plugin's own negotiator.js back (a --force reinstall in the run, or a fresh tree between runs): the next keyed ON run activates again over it; a customized negotiator.js with the receipt is still refused and left as it is",
+    () => {
+      process.env[MORALMOD_ARM_ENV] = "on";
+      writeFileSync(join(home, "config.yaml"), BASE);
+      const pin = supplyRelease();
+      expect(step(recorder().run, true, pin)).toMatchObject({ state: "installed", failed: null });
+      const plugin = join(home, "plugins", INDEX_PLUGIN);
+      const runtime = join(plugin, "runtime", "dist", "negotiator.js");
+      const state = join(home, "index", "moralmod", "active.json");
+      const loader = managedLoaderSource(home, join(home, "index", "moralmod", pin));
+      expect(readFileSync(runtime, "utf8")).toBe(loader);
+      const upstream = Bun.spawnSync(["git", "show", "HEAD:runtime/dist/negotiator.js"], { cwd: plugin }).stdout.toString();
+      expect(upstream).not.toBe(loader);
+
+      // A reinstall inside the run (no Hermes record at the ref, so the step calls `plugins install`,
+      // which replaces the tree as --force does): the receipt names the loader, the file is upstream again.
+      rmSync(installMetadataPath(home));
+      const reinstall = recorder();
+      const forced = (args: string[]) => {
+        if (args[0] === "plugins" && args[1] === "install") rmSync(plugin, { recursive: true, force: true });
+        reinstall.run(args);
+      };
+      expect(step(forced, true, pin)).toMatchObject({ state: "installed", failed: null });
+      expect(reinstall.calls).toEqual([["plugins", "install", INDEX_PLUGIN_SOURCE, "--force", "--ref", INDEX_PLUGIN_REF, "--no-enable"]]);
+      expect(readFileSync(runtime, "utf8")).toBe(loader);
+      expect(JSON.parse(readFileSync(state, "utf8"))).toMatchObject({ release_digest: pin, entry_sha256: sha256(loader) });
+      expect(enabled()).toEqual(["av-events", INDEX_PLUGIN]);
+
+      // A fresh tree between runs (refute probe P2): the plugin's own file is back, no Hermes call.
+      expect(Bun.spawnSync(["git", "checkout", "--", "runtime/dist/negotiator.js"], { cwd: plugin }).exitCode).toBe(0);
+      expect(readFileSync(runtime, "utf8")).toBe(upstream);
+      const fresh = recorder();
+      expect(step(fresh.run, true, pin)).toMatchObject({ state: "pinned", failed: null });
+      expect(fresh.calls).toEqual([]);
+      expect(readFileSync(runtime, "utf8")).toBe(loader);
+      expect(enabled()).toEqual(["av-events", INDEX_PLUGIN]);
+
+      // Never a customized file: neither the receipt's loader nor the plugin's own bytes. Refused,
+      // not enabled, and the file left byte for byte.
+      const custom = upstream + "\n// a resident's own change\n";
+      writeFileSync(runtime, custom);
+      const refused = step(recorder().run, true, pin);
+      expect(refused).toMatchObject({ state: "failed", failed: "sidecar" });
+      expect(enabled()).toEqual(["av-events"]);
+      expect(readFileSync(runtime, "utf8")).toBe(custom);
     },
     60_000,
   );
