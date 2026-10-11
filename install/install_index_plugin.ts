@@ -7,8 +7,14 @@
  * kept only when it is exactly the loader for the pinned release and that release is intact on disk;
  * otherwise it is taken out (the plugin's own file put back, or the loader deleted) and the run is
  * withheld as `release_unpinned`, except a keyed run handed a release, which holds that release to
- * the pin below. The first OFF run after an ON-to-OFF flip takes the loader out too (refute S2);
- * `active.json`, the release and the resident config stay.
+ * the pin below. An `active.json` naming another release withholds every ON run not handed a release,
+ * not only the first (ov#284 refute S1). Taking a loader out takes the marker in
+ * `index/negotiator.ts` and the managed `morning.py` with it, and an ON run that will not activate
+ * takes out a marker left without its loader, so the plugin's own negotiator.js is never enabled
+ * beside the marker it cannot load (ov#284 refute M2). Every OFF run (a withdrawal included) removes
+ * every managed asset: `resident.json` first, the loader, the marker, the managed `morning.py`,
+ * `active.json` and the installed release directories, and reports `moralmod_cleanup` when one
+ * stays (refute S2; ov#284 refute M1, `retireManagedAssets`).
  */
 /**
  * The Index Hermes plugin (`index-network`), MoralMod's carrier, for ON
@@ -43,7 +49,8 @@
  *   the gateway exits (morning.py `sync_morning_cron` at REF). No other
  *   Hermes command; nothing is uninstalled (`plugins remove` would also
  *   clear an operator's `plugins.disabled` entry). ON leaves both to the
- *   plugin.
+ *   plugin. The managed MoralMod assets an earlier ON run wrote are removed
+ *   (`retireManagedAssets`, ov#284 refute M1); the resident's own files stay.
  * - ON clears Hermes's own temporary clones (`plugins/.install-` + 8 of
  *   `[a-z0-9_]`, Python's `TemporaryDirectory`, plugins_cmd.py:864) that a
  *   killed install left: those holding an `index-network` manifest, and after
@@ -102,7 +109,7 @@ import { dotenvFileValue, readConfig, writeConfig } from "./config";
 import { persistedEnvVar, readCronJobs } from "./install_index";
 import { installStatusPath } from "./install_status";
 import { hermesHome } from "./paths";
-import { activateMoralmod, checkResidentHook, managedLoaderPinned, managedLoaderPresent, residentConfiguration, retireManagedLoader } from "./moralmod_host";
+import { type Retirement, activateMoralmod, activeReleaseUnpinned, checkResidentHook, managedHookPresent, managedLoaderPinned, managedLoaderPresent, residentConfiguration, retireManagedAssets, retireManagedLoader } from "./moralmod_host";
 import { MORALMOD_RELEASE_SHA256, MoralmodReleaseUnpinned, installMoralmodRelease } from "./moralmod_release";
 
 export const INDEX_PLUGIN = "index-network";
@@ -168,9 +175,10 @@ export const HERMES_INSTALL_TMP = /^\.install-[a-z0-9_]{8}$/;
  * negotiator seed, `gate`: the arm is on but this run's approval step did not verify the gate,
  * `sidecar`: the installed sidecar.py could not be brought to the env allowlist (OV-249 A3), or
  * `release_unpinned`: the managed MoralMod release is not the one pinned in
- * `MORALMOD_RELEASE_SHA256` (OV-249 post-hoc M2).
+ * `MORALMOD_RELEASE_SHA256` (OV-249 post-hoc M2), or `moralmod_cleanup`: an OFF run found managed
+ * MoralMod files it could not remove (ov#284 refute M1; its warning line names them).
  */
-export type IndexPluginFailure = "hermes" | "config" | "seed" | "gate" | "sidecar" | "release_unpinned";
+export type IndexPluginFailure = "hermes" | "config" | "seed" | "gate" | "sidecar" | "release_unpinned" | "moralmod_cleanup";
 
 /**
  * Why a clean run did what it did, when the state alone does not say: `moralmod_arm_not_on`, the
@@ -495,6 +503,11 @@ const LOADER_RETIRED = {
   failed: "managed loader could not be removed",
 } as const;
 
+/** ov#284 refute M1, M2: what a retirement did, as the tail of one line (empty when it did nothing). */
+function retired(r: Retirement): string {
+  return `${r.loader ? `; ${LOADER_RETIRED[r.loader]}` : ""}${r.cleaned.length ? `; MoralMod files cleaned up: ${r.cleaned.join(", ")}` : ""}`;
+}
+
 function operatorDisabled(): boolean {
   const plugins = readConfig().plugins as Record<string, unknown> | undefined;
   return stringList(plugins?.disabled).includes(INDEX_PLUGIN);
@@ -525,16 +538,18 @@ export function installIndexPlugin(
   const managed = Boolean(source || configuration || existsSync(join(home, "index", "moralmod", "active.json")));
   // OV-249 post-hoc M1: the managed negotiator is for ON residents only, as the plugin is. With the
   // arm off or unset, MoralMod files present take the OFF path like any other OFF resident: the
-  // plugin is not enabled, its morning job and launcher are removed, nothing is seeded, the plugin's
-  // morning.py is not touched; the line and the note say why. ov#277 refute S2: a managed loader an
-  // earlier ON run left in the plugin's negotiator.js is taken out on the first OFF run after the flip.
+  // plugin is not enabled, its morning job and launcher are removed, nothing is seeded; the line and
+  // the note say why. ov#277 refute S2, ov#284 refute M1: every managed asset an earlier ON run left
+  // (the credential, the loader, the marker hook, the managed morning.py, active.json, the release)
+  // is removed on the first OFF run after the flip, and a later OFF run finishes a half-done removal.
   if (!armOn || !gateVerified) {
     let off: IndexPluginFailure | null = null;
-    const loader = !armOn && managedLoaderPresent(home) ? retireManagedLoader(home) : null;
-    const files = managed || loader !== null;
+    // ov#284 refute M1: OFF (a withdrawal included) removes every managed asset, idempotently.
+    const cleanup = armOn ? null : retireManagedAssets(home);
+    const files = managed || (cleanup !== null && (cleanup.loader !== null || cleanup.cleaned.length > 0 || cleanup.left.length > 0));
     const why = armOn
       ? "withheld: the approval gate was not installed and live-checked on this run"
-      : `off (${MORALMOD_ARM_ENV} is not on)${files ? "; MoralMod release or resident config present, not activated: the managed negotiator runs only for ON" : ""}${loader ? `; ${LOADER_RETIRED[loader]}` : ""}`;
+      : `off (${MORALMOD_ARM_ENV} is not on)${files ? "; MoralMod release or resident config present, not activated: the managed negotiator runs only for ON" : ""}${cleanup ? retired(cleanup) : ""}`;
     try {
       const dropped = setIndexPluginEnabled(false);
       console.log(`→ index-network plugin: ${why}${dropped ? "; removed from plugins.enabled" : ""}`);
@@ -543,19 +558,44 @@ export function installIndexPlugin(
       console.warn("  warning: index-network plugin: could not update plugins.enabled in config.yaml");
     }
     if (!stopMorningJob(run, home)) off ??= "hermes";
+    if (cleanup?.left.length) {
+      console.warn(`  warning: index-network plugin: MoralMod cleanup did not finish (left: ${cleanup.left.join(", ")})`);
+      off ??= "moralmod_cleanup";
+    }
     // Withheld: `config` first (the plugin may still be listed), else `gate`, a cron failure only warned.
     if (armOn) return { state: "withheld", failed: off === "config" ? "config" : "gate" };
     return files ? { state: "off", failed: off, note: "moralmod_arm_not_on" } : { state: "off", failed: off };
   }
   const skipped = argv.includes("--skip-index") || !hasIndexKey(argv, home);
+  // A keyed run handed a release (MORALMOD_RELEASE_DIR and MORALMOD_RESIDENT_CONFIG): the managed
+  // block below holds that release to the pin and activates only it, or withholds.
+  const handed = Boolean(source && configuration) && !skipped;
   // ov#277 refute S1: every ON run, --skip-index, keyless and the pinnedAtRef path included, holds a
-  // managed loader on disk to the pin. A keyed run handed a release (MORALMOD_RELEASE_DIR and
-  // MORALMOD_RESIDENT_CONFIG) goes on: the managed block below holds that release to the pin and
-  // activates only it, or withholds.
+  // managed loader on disk to the pin. ov#284 refute M2: taking it out takes the marker hook and the
+  // managed morning.py with it, so a later run never pairs the plugin's own negotiator.js with them.
   if (managedLoaderPresent(home) && !managedLoaderPinned(home, releasePin)) {
-    const reason = `a managed loader on disk is not MORALMOD_RELEASE_SHA256's release; ${LOADER_RETIRED[retireManagedLoader(home)]}`;
-    if (!source || !configuration || skipped) return withholdForSidecar(run, home, reason, null, "release_unpinned", "MoralMod release not pinned");
+    const reason = `a managed loader on disk is not MORALMOD_RELEASE_SHA256's release${retired(retireManagedLoader(home))}`;
+    if (!handed) return withholdForSidecar(run, home, reason, null, "release_unpinned", "MoralMod release not pinned");
     console.warn(`  warning: index-network plugin: ${reason}`);
+  }
+  // ov#284 refute S1: active.json names a release that is not the pin (the pin moved, or the
+  // sentinel is back): withheld on every ON run that is not handed a release, not only the first.
+  // An OFF run deletes active.json, so this never holds an OFF resident.
+  if (!handed && activeReleaseUnpinned(home, releasePin)) {
+    const reason = `index/moralmod/active.json names a release that is not MORALMOD_RELEASE_SHA256${retired(retireManagedLoader(home))}`;
+    return withholdForSidecar(run, home, reason, null, "release_unpinned", "MoralMod release not pinned");
+  }
+  // ov#284 refute M2: the managed marker in index/negotiator.ts without the pinned loader (the
+  // loader went with a Hermes reinstall, the control plane's clean, or a run before this fix): the
+  // plugin's own negotiator.js exits at startup on it. A run that will not activate takes it out
+  // (and the managed morning.py), then seeds the hook below; when it cannot, the plugin is withheld.
+  if (!handed && managedHookPresent(home) && !managedLoaderPinned(home, releasePin)) {
+    const cleaned = retireManagedLoader(home);
+    const left = new Set([...cleaned.left, ...(managedHookPresent(home) ? ["index/negotiator.ts"] : [])]);
+    if (left.size) {
+      return withholdForSidecar(run, home, `the managed index/negotiator.ts has no loader and could not be taken out (left: ${[...left].join(", ")})`, null, "sidecar", "managed negotiator hook stale");
+    }
+    console.log(`→ index-network plugin: managed index/negotiator.ts without its loader${retired(cleaned)}; the plugin's own negotiator is used`);
   }
   if (skipped) {
     console.log("→ index-network plugin: skipped (no Index key or --skip-index)");

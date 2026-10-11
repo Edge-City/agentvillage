@@ -23,13 +23,20 @@ For a resident whose arm is off, unset, blank or anything but `on`, these files 
 - the `index-network` plugin is not in `plugins.enabled`;
 - its `Index morning` cron job and launcher are removed;
 - no `index/negotiator.ts` is written;
-- a managed loader an earlier ON run wrote over the plugin's `runtime/dist/negotiator.js` is taken out: the plugin's own file is put back from its checkout at the pinned revision, or, without that checkout, the loader is deleted (ov#277 refute S2);
-- the plugin's `morning.py` is not touched;
-- no release is installed under `index/moralmod/`.
+- no release is installed under `index/moralmod/`;
+- every managed asset an earlier ON run left is removed (ov#277 refute S2, ov#284 refute M1), in this order:
+  1. `index/moralmod/resident.json`, which holds the resident credential;
+  2. the managed loader over the plugin's `runtime/dist/negotiator.js`: the plugin's own file is put back from its checkout at the pinned revision, or, without that checkout, the loader is deleted;
+  3. `index/negotiator.ts`, when it is exactly the managed marker;
+  4. the plugin's `morning.py`, when it is exactly the managed rewrite: the plugin's own file is put back from its checkout at the pinned revision;
+  5. `index/moralmod/active.json`;
+  6. each installed release directory `index/moralmod/<64 hex>/` that holds only release files: the bundle files, then `release.json`, then the empty directory.
 
-The run prints `→ index-network plugin: off (AV_MORALMOD_ARM is not on); MoralMod release or resident config present, not activated: the managed negotiator runs only for ON`, followed by `; managed loader removed` (or `replaced by the plugin's own negotiator.js`) when it took one out. `av-events/install-status.json` gets `index_plugin_failed: null` and `index_plugin_note: "moralmod_arm_not_on"`.
+Each step is decided on that file's own bytes or name, never on the loader's hash, so a step still runs when an earlier one already happened: an interrupted OFF run, or the control plane's `clean`, is finished by the next OFF run, and a second OFF run changes nothing. A release directory with any other file in it is left whole. `fallback.sqlite`, journals and queued evidence, staging directories, the control plane's `sources/` and `provisioned.json`, a resident config outside `index/moralmod/`, and the resident's own files stay.
 
-`active.json`, the installed release and the resident config an earlier ON run left stay on disk; the plugin that would load them is not enabled and the loader is gone. This holds from the first install after an ON-to-OFF flip. A flip through the control plane's arm PATCH only rewrites `.env` and restarts the gateway; until the next install runs, the box keeps what the last install left.
+The run prints `→ index-network plugin: off (AV_MORALMOD_ARM is not on); MoralMod release or resident config present, not activated: the managed negotiator runs only for ON`, followed by `; managed loader removed` (or `replaced by the plugin's own negotiator.js`) when it took one out and `; MoralMod files cleaned up: <names>` when it removed or put back others. `av-events/install-status.json` gets `index_plugin_note: "moralmod_arm_not_on"` and `index_plugin_failed: null`, or `moralmod_cleanup` when a managed file could not be removed (a warning line names it).
+
+This holds from the first install after an ON-to-OFF flip. A flip through the control plane's arm PATCH only rewrites `.env` and restarts the gateway; until the next install runs, the box keeps what the last install left. A later ON run re-activates from the `MORALMOD_*` it is handed.
 
 Use `live` only for the explicitly authorized live experiment. The installer does not allocate an arm. The CP must already have an enrollment, saved assignment, registered installation/agent/epoch and a resident credential. Decision Service must trust its issuer/JWKS/client and allow the resident scopes `negotiations:manage_self`, `runs:create_self`, `runs:read_authorized`, and `contexts:write_self` for the approved experiment. Permissions still control each operation; OFF residents do not run this runtime.
 
@@ -49,12 +56,16 @@ A `release.json` with any other sha256 is refused before it is parsed, however c
 
 - the plugin is not enabled;
 - its morning job is removed;
-- nothing under the plugin is replaced, other than a managed loader taken out (below), and nothing is written under `index/moralmod/`;
+- nothing under the plugin is replaced, other than a managed loader taken out with the marker and the managed `morning.py` (below), and nothing is written under `index/moralmod/`;
 - the install reports `index_plugin_failed=release_unpinned`.
 
 Until a reviewed release is supplied, the constant is a sentinel that is not a sha256, so no bundle activates on any resident.
 
-The pin holds on every ON run, not only a keyed run handed a release (ov#277 refute S1). A `--skip-index` run, a run with no Index key, and a keyed run with no `MORALMOD_*` and no `active.json` never install a release, but a loader an earlier run wrote may still be in the plugin's `runtime/dist/negotiator.js`. Each of them keeps that loader only when it is exactly the loader for the pinned release and `index/moralmod/<pin>/` still holds that release (its `release.json` hashes to the pin, every file to its listed digest). Otherwise the loader is taken out as on OFF, the plugin is not enabled, its morning job is removed and the install reports `index_plugin_failed=release_unpinned`. A keyed run handed a release takes the loader out the same way, then holds that release to the pin as above. So moving the pin, or putting the sentinel back, stops an activated release on the next install of any kind.
+The pin holds on every ON run, not only a keyed run handed a release (ov#277 refute S1). A `--skip-index` run, a run with no Index key, and a keyed run with no `MORALMOD_*` and no `active.json` never install a release, but a loader an earlier run wrote may still be in the plugin's `runtime/dist/negotiator.js`. Each of them keeps that loader only when it is exactly the loader for the pinned release and `index/moralmod/<pin>/` still holds that release (its `release.json` hashes to the pin, every file to its listed digest). Otherwise the loader is taken out as on OFF, together with the marker in `index/negotiator.ts` and the managed `morning.py` (the plugin's own negotiator.js cannot load the marker), the plugin is not enabled, its morning job is removed and the install reports `index_plugin_failed=release_unpinned`. A keyed run handed a release takes the loader out the same way, then holds that release to the pin as above. So moving the pin, or putting the sentinel back, stops an activated release on the next install of any kind.
+
+The withhold is not only on the first run (ov#284 refute S1): while `index/moralmod/active.json` names a release other than the pin, every ON run that is not handed a release (`--skip-index`, keyless, keyed without `MORALMOD_*`) is withheld as `release_unpinned`. `active.json` stays for that; `resident.json` and the release stay too, for an ON resident. An OFF run removes all of them.
+
+A marker in `index/negotiator.ts` with no pinned loader beside it (a Hermes reinstall or the control plane's `clean` took the loader, or a run before this rule) is taken out with the managed `morning.py` by the next ON run that does not activate; that run seeds the hook and says so on its line (`managed index/negotiator.ts without its loader`). When it cannot, the plugin is withheld (`sidecar`). The plugin is never enabled with its own negotiator.js beside the marker (ov#284 refute M2).
 
 To pin a release (or move the pin):
 

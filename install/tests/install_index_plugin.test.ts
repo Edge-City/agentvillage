@@ -1395,14 +1395,15 @@ describe("end to end: install.ts against the stand-in Hermes", () => {
     expect(run.out).not.toContain("withheld: the approval gate");
   }, 120_000);
 
-  test("OV-249 post-hoc M1, the exact state (ov#277 refute S3): gate verified, MORALMOD_RELEASE_DIR and MORALMOD_RESIDENT_CONFIG in the install env, active.json and the managed loader on disk, the plugin listed, arm off or unset: OFF, no plugin call, dropped from plugins.enabled, the morning job removed, the managed loader taken out, no release installed, the status file notes moralmod_arm_not_on", () => {
+  test("OV-249 post-hoc M1, the exact state (ov#277 refute S3): gate verified, MORALMOD_RELEASE_DIR and MORALMOD_RESIDENT_CONFIG in the install env, active.json and the managed loader on disk, the plugin listed, arm off or unset: OFF, no plugin call, dropped from plugins.enabled, the morning job removed, the managed loader, the marker and active.json removed (ov#284 refute M1), no release installed, the status file notes moralmod_arm_not_on", () => {
     const supply = mkdtempSync(join(tmpdir(), "av-mm-e2e-"));
     try {
       const { env: moralmod, digest } = supplyRelease(supply);
       expect(install({ [MORALMOD_ARM_ENV]: "off" }).code).toBe(0);
       for (const arm of ["off", ""]) {
         const jobsPath = plantEnabled();
-        const kept = plantManaged(digest);
+        const [yaml, morning, active, hook] = plantManaged(digest);
+        const kept = [yaml!, morning!];
         const before = bytes(kept);
         expect(plugins().enabled).toContain(INDEX_PLUGIN);
         const run = install({ [MORALMOD_ARM_ENV]: arm, ...moralmod }, { verified: true });
@@ -1412,12 +1413,14 @@ describe("end to end: install.ts against the stand-in Hermes", () => {
         expect(JSON.parse(readFileSync(jobsPath, "utf8")).jobs.map((job: { id: string }) => job.id)).toEqual(["e2e0unrelate"]);
         expect([arm, plugins().enabled.includes(INDEX_PLUGIN)]).toEqual([arm, false]);
         expect([arm, status().index_plugin_failed, status().index_plugin_note]).toEqual([arm, null, "moralmod_arm_not_on"]);
-        expect(run.out).toContain("MoralMod release or resident config present, not activated: the managed negotiator runs only for ON; managed loader removed; removed from plugins.enabled");
+        expect(run.out).toContain("MoralMod release or resident config present, not activated: the managed negotiator runs only for ON; managed loader removed; MoralMod files cleaned up: index/negotiator.ts, active.json; removed from plugins.enabled");
         expect(run.out).not.toContain("index_plugin_failed");
         // The managed loader is not used: gone from the plugin's negotiator.js.
         expect([arm, existsSync(loaderPath())]).toEqual([arm, false]);
-        // Nothing MoralMod written: no release installed, no config, the seed and active.json as they were.
-        expect(readdirSync(join(home, "index", "moralmod"))).toEqual(["active.json"]);
+        // Nothing MoralMod written, and nothing managed left: no release, no active.json, no marker.
+        expect(readdirSync(join(home, "index", "moralmod"))).toEqual([]);
+        expect([arm, existsSync(active!), existsSync(hook!)]).toEqual([arm, false, false]);
+        // A morning.py that is not the managed rewrite of the pinned file, and plugin.yaml, as they were.
         expect(bytes(kept)).toEqual(before);
       }
       // Without MoralMod files the note is absent.
@@ -1429,7 +1432,7 @@ describe("end to end: install.ts against the stand-in Hermes", () => {
     }
   }, 180_000);
 
-  test("ov#277 refute S1, probe P3 end to end: arm ON, gate verified, sentinel pin, MORALMOD_* at an unpinned bundle, the loader and active.json for release deadbeef on disk, --skip-index or no Index key: release_unpinned in the status file and the one line, dropped from plugins.enabled, the morning job removed, the loader taken out, no plugin call", () => {
+  test("ov#277 refute S1, probe P3 end to end: arm ON, gate verified, sentinel pin, MORALMOD_* at an unpinned bundle, the loader and active.json for release deadbeef on disk, --skip-index or no Index key: release_unpinned in the status file and the one line, dropped from plugins.enabled, the morning job removed, the loader and the marker taken out (ov#284 refute M2), no plugin call", () => {
     const supply = mkdtempSync(join(tmpdir(), "av-mm-e2e-"));
     try {
       const { env: moralmod } = supplyRelease(supply);
@@ -1437,7 +1440,8 @@ describe("end to end: install.ts against the stand-in Hermes", () => {
       for (const args of [["--skip-index"], []]) {
         const label = args.join(" ") || "no Index key";
         const jobsPath = plantEnabled();
-        const kept = plantManaged("deadbeef");
+        const [yaml, morning, active, hook] = plantManaged("deadbeef");
+        const kept = [yaml!, morning!, active!];
         const before = bytes(kept);
         const run = install({ [MORALMOD_ARM_ENV]: "on", ...moralmod }, { verified: true, args });
         expect([label, run.code]).toEqual([label, 0]);
@@ -1447,7 +1451,7 @@ describe("end to end: install.ts against the stand-in Hermes", () => {
         expect([label, plugins().enabled.includes(INDEX_PLUGIN)]).toEqual([label, false]);
         expect([label, status().index_plugin_failed]).toEqual([label, "release_unpinned"]);
         expect(run.out.split("\n").filter((l) => l.includes("index_plugin_failed"))).toEqual(["agentvillage-install: index_plugin_failed=release_unpinned"]);
-        expect([label, existsSync(loaderPath())]).toEqual([label, false]);
+        expect([label, existsSync(loaderPath()), existsSync(hook!)]).toEqual([label, false, false]);
         expect(readdirSync(join(home, "index", "moralmod"))).toEqual(["active.json"]);
         expect(bytes(kept)).toEqual(before);
       }

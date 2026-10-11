@@ -23,10 +23,11 @@
  *     `plugins.disabled` is left alone; OFF drops it from `plugins.enabled` and removes the plugin's
  *     `Index morning` cron job and launcher. A failure does not fail the
  *     install: `index_plugin_failed` in the status file and one line,
- *     `agentvillage-install: index_plugin_failed=<hermes|config|seed|gate|sidecar|release_unpinned>` (`install_index_plugin.ts`);
+ *     `agentvillage-install: index_plugin_failed=<hermes|config|seed|gate|sidecar|release_unpinned|moralmod_cleanup>` (`install_index_plugin.ts`);
  *     ON patches the installed `sidecar.py` to an env allowlist first, and is not enabled when it cannot (`sidecar`);
  *     the managed MoralMod release runs for ON only and only when it is the pinned one (`release_unpinned`);
- *     an OFF or unset arm with MoralMod files present is OFF (`index_plugin_note`: `moralmod_arm_not_on`)
+ *     an OFF or unset arm with MoralMod files present is OFF (`index_plugin_note`: `moralmod_arm_not_on`) and removes
+ *     the managed MoralMod files (`moralmod_cleanup` when one could not be removed)
  *   - opt-in recall skill + plugin when `AV_RECALL_ENABLED=1` (`install_recall.ts`)
  *   - opt-in approval.md gate when `AV_APPROVAL_ENABLED=1` (`install_approval.ts`):
  *     a failure there exits non-zero, because an opted-in tenant left ungated

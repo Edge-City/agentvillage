@@ -17,10 +17,16 @@
  * the pinned release's loader and that release is intact. S2: the first OFF run after an ON-to-OFF
  * flip takes the loader out. ov#282 M1: once active.json exists, the plugin's own negotiator.js (a
  * Hermes reinstall puts it back) is accepted as well as the recorded loader; a customized file never is.
+ *
+ * ov#284 refute M1: OFF removes every managed asset (resident.json, the loader, the marker hook, the
+ * managed morning.py, active.json, the release) and finishes a half-done removal. M2: taking the
+ * loader out takes the marker and the managed morning.py with it, and a marker left without its
+ * loader is taken out by the next ON run, so the plugin's own negotiator.js never runs beside it.
+ * S1: an active.json naming another release withholds every ON run not handed a release.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import YAML from "yaml";
@@ -52,7 +58,8 @@ const FRESH = ["plugins", "install", INDEX_PLUGIN_SOURCE, "--ref", INDEX_PLUGIN_
 const BASE = "plugins:\n  enabled:\n    - av-events\n";
 const OFF_LINE = `→ index-network plugin: off (${MORALMOD_ARM_ENV} is not on); MoralMod release or resident config present, not activated: the managed negotiator runs only for ON`;
 const UNPINNED_LINE = "  warning: index-network plugin: not enabled, MoralMod release not pinned (its release.json is not MORALMOD_RELEASE_SHA256)";
-const STALE = "a managed loader on disk is not MORALMOD_RELEASE_SHA256's release; managed loader removed";
+const STALE = "a managed loader on disk is not MORALMOD_RELEASE_SHA256's release; managed loader removed; MoralMod files cleaned up: index/negotiator.ts";
+const RECEIPT_LINE = "  warning: index-network plugin: not enabled, MoralMod release not pinned (index/moralmod/active.json names a release that is not MORALMOD_RELEASE_SHA256)";
 const STALE_LINE = `  warning: index-network plugin: not enabled, MoralMod release not pinned (${STALE}); removed from plugins.enabled`;
 
 // The pinned plugin checkout, as moralmod_morning.test.ts finds it (CI: AV_INDEX_PLUGIN_TEST_DIR).
@@ -271,7 +278,7 @@ describe("M1: arm off or unset with MoralMod files present is OFF", () => {
     expect(calls).toEqual([]);
   });
 
-  test("a box an earlier managed ON run left (plugin listed, morning job, active.json, loader) flipped to off or unset: dropped from plugins.enabled, the job removed with cron remove and its launcher deleted, the managed loader taken out of negotiator.js (ov#277 refute S2); plugin.yaml, morning.py, active.json and the seed are left byte for byte", () => {
+  test("a box an earlier managed ON run left (plugin listed, morning job, resident.json, active.json, loader, marker) flipped to off or unset: dropped from plugins.enabled, the job removed with cron remove and its launcher deleted, the managed loader taken out (ov#277 refute S2), resident.json, active.json and the marker removed (ov#284 refute M1); plugin.yaml, a morning.py that is not the managed rewrite, fallback.sqlite and the resident's own files are left byte for byte", () => {
     for (const [label, where, value] of [ARMS[0]!, ARMS[1]!]) {
       rmSync(join(home, ".env"), { force: true });
       delete process.env[MORALMOD_ARM_ENV];
@@ -285,12 +292,16 @@ describe("M1: arm off or unset with MoralMod files present is OFF", () => {
       writeFileSync(join(plugin, "morning.py"), 'SCHEDULE = "*/5 * * * *"\n');
       mkdirSync(join(home, "index", "moralmod"), { recursive: true });
       writeFileSync(join(home, "index", "moralmod", "active.json"), JSON.stringify({ release_digest: pin }) + "\n");
+      writeFileSync(join(home, "index", "moralmod", "resident.json"), readFileSync(process.env.MORALMOD_RESIDENT_CONFIG!), { mode: 0o600 });
+      writeFileSync(join(home, "index", "moralmod", "fallback.sqlite"), "queued evidence\n");
+      writeFileSync(join(home, "index", "notes.md"), "the resident's own file\n");
       writeFileSync(negotiatorPath(home), "// Managed MoralMod lifecycle 2; see index/moralmod/active.json.\n");
       const kept = snapshot([
         join(plugin, "plugin.yaml"),
         join(plugin, "morning.py"),
-        join(home, "index", "moralmod", "active.json"),
-        negotiatorPath(home),
+        join(home, "index", "moralmod", "fallback.sqlite"),
+        join(home, "index", "notes.md"),
+        process.env.MORALMOD_RESIDENT_CONFIG!,
       ]);
       setArm(where, value);
       const { calls, run } = recorder();
@@ -303,7 +314,9 @@ describe("M1: arm off or unset with MoralMod files present is OFF", () => {
       expect(snapshot(Object.keys(kept))).toEqual(kept);
       // No pinned checkout under this stand-in tree to put the plugin's own file back from: deleted.
       expect(existsSync(join(plugin, "runtime", "dist", "negotiator.js"))).toBe(false);
-      expect(result.lines[0]).toBe(`${OFF_LINE}; managed loader removed; removed from plugins.enabled`);
+      expect([label, existsSync(negotiatorPath(home))]).toEqual([label, false]);
+      expect([label, readdirSync(join(home, "index", "moralmod"))]).toEqual([label, ["fallback.sqlite"]]);
+      expect(result.lines[0]).toBe(`${OFF_LINE}; managed loader removed; MoralMod files cleaned up: resident.json, index/negotiator.ts, active.json; removed from plugins.enabled`);
     }
   });
 
@@ -373,7 +386,7 @@ describe("M2: the release must be the one pinned in MORALMOD_RELEASE_SHA256", ()
   });
 
   test.skipIf(!havePlugin)(
-    "the pin computed from the fixture activates for ON (loader imports that digest's runtime, active.json names it, morning.py patched, enabled); a moved pin then withholds it; a flip to OFF puts the plugin's own negotiator.js back and drops the plugin",
+    "the pin computed from the fixture activates for ON (loader imports that digest's runtime, active.json names it, morning.py patched, enabled); a moved pin then withholds it and puts the plugin's own negotiator.js and morning.py back; a flip to OFF leaves no managed file (ov#284 refute M1) and the plugin's own files in place; a flip back ON activates again",
     () => {
       process.env[MORALMOD_ARM_ENV] = "on";
       writeFileSync(join(home, "config.yaml"), BASE);
@@ -393,40 +406,64 @@ describe("M2: the release must be the one pinned in MORALMOD_RELEASE_SHA256", ()
       // The pin moves (a reviewed PR) while the box is still handed the old bundle: withheld, and the
       // old release's loader taken out, the plugin's own negotiator.js put back (ov#277 refute S1).
       const upstream = Bun.spawnSync(["git", "show", "HEAD:runtime/dist/negotiator.js"], { cwd: plugin }).stdout.toString();
-      const kept = snapshot([join(plugin, "morning.py")]);
+      const moralmod = join(home, "index", "moralmod");
+      const managedFiles = [join(moralmod, "resident.json"), join(moralmod, "active.json"), join(moralmod, pin), negotiatorPath(home)];
+      expect(managedFiles.map(existsSync)).toEqual([true, true, true, true]);
       const moved = recorder();
       const movedResult = step(moved.run, true, "f".repeat(64));
       expect(movedResult).toMatchObject({ state: "failed", failed: "release_unpinned" });
       expect(moved.calls).toEqual([]);
       expect(enabled()).toEqual(["av-events"]);
-      expect(snapshot(Object.keys(kept))).toEqual(kept);
+      // ov#284 refute M2: the marker and the managed morning.py go with the loader.
       expect(readFileSync(runtime, "utf8")).toBe(upstream);
-      expect(movedResult.lines).toContain("  warning: index-network plugin: a managed loader on disk is not MORALMOD_RELEASE_SHA256's release; managed loader replaced by the plugin's own negotiator.js");
+      expect(readFileSync(join(plugin, "morning.py"), "utf8")).toBe(upstreamMorning);
+      expect(existsSync(negotiatorPath(home))).toBe(false);
+      expect(movedResult.lines).toContain("  warning: index-network plugin: a managed loader on disk is not MORALMOD_RELEASE_SHA256's release; managed loader replaced by the plugin's own negotiator.js; MoralMod files cleaned up: index/negotiator.ts, morning.py");
 
       // Back on the pin: activated again over the plugin's own file (active.json still names the old loader).
       expect(step(recorder().run, true, pin)).toMatchObject({ state: "pinned", failed: null });
       expect(enabled()).toEqual(["av-events", INDEX_PLUGIN]);
       const loader = readFileSync(runtime, "utf8");
       expect(loader).toBe(managedLoaderSource(home, join(home, "index", "moralmod", pin)));
+      expect(readFileSync(join(plugin, "morning.py"), "utf8")).toBe(morningSource(upstreamMorning));
 
-      // The arm flips off: on this first OFF run, OFF, the note, the plugin's own negotiator.js put
-      // back (ov#277 refute S2); morning.py and active.json kept.
+      // The arm flips off: on this first OFF run, OFF, the note, and no managed file left (ov#284
+      // refute M1): the plugin's own negotiator.js and morning.py back, no marker, no resident.json,
+      // no active.json, no release; queued evidence and the resident's own files stay.
+      writeFileSync(join(moralmod, "fallback.sqlite"), "queued evidence\n");
+      writeFileSync(join(home, "index", "notes.md"), "the resident's own file\n");
+      const ownFiles = snapshot([join(moralmod, "fallback.sqlite"), join(home, "index", "notes.md"), process.env.MORALMOD_RESIDENT_CONFIG!]);
       process.env[MORALMOD_ARM_ENV] = "off";
       const off = recorder();
       const offResult = step(off.run, true, pin);
       expect(offResult).toMatchObject({ state: "off", failed: null, note: "moralmod_arm_not_on" });
       expect(off.calls).toEqual([]);
       expect(enabled()).toEqual(["av-events"]);
-      expect(snapshot(Object.keys(kept))).toEqual(kept);
       expect(readFileSync(runtime, "utf8")).toBe(upstream);
-      expect(existsSync(join(home, "index", "moralmod", "active.json"))).toBe(true);
-      expect(offResult.lines[0]).toBe(`${OFF_LINE}; managed loader replaced by the plugin's own negotiator.js; removed from plugins.enabled`);
+      expect(readFileSync(join(plugin, "morning.py"), "utf8")).toBe(upstreamMorning);
+      expect(managedFiles.map(existsSync)).toEqual([false, false, false, false]);
+      expect(readdirSync(moralmod)).toEqual(["fallback.sqlite"]);
+      expect(snapshot(Object.keys(ownFiles))).toEqual(ownFiles);
+      // The plugin tree is its pinned checkout again, but for the overlay's own sidecar.py allowlist (A3).
+      expect(Bun.spawnSync(["git", "status", "--porcelain"], { cwd: plugin }).stdout.toString()).toBe(" M sidecar.py\n");
+      expect(offResult.lines[0]).toBe(
+        `${OFF_LINE}; managed loader replaced by the plugin's own negotiator.js; MoralMod files cleaned up: resident.json, index/negotiator.ts, morning.py, active.json, release ${pin.slice(0, 8)}; removed from plugins.enabled`,
+      );
+      // A second OFF run changes nothing.
+      const again = step(recorder().run, true, pin);
+      expect(again).toMatchObject({ state: "off", failed: null, note: "moralmod_arm_not_on" });
+      expect(again.lines).toEqual([OFF_LINE]);
+      expect(readdirSync(moralmod)).toEqual(["fallback.sqlite"]);
 
-      // Flipped back on: activated again.
+      // Flipped back on (OFF -> ON): activated again, cleanly, from the MORALMOD_* it is handed.
       process.env[MORALMOD_ARM_ENV] = "on";
       expect(step(recorder().run, true, pin)).toMatchObject({ state: "pinned", failed: null });
       expect(readFileSync(runtime, "utf8")).toBe(loader);
       expect(enabled()).toEqual(["av-events", INDEX_PLUGIN]);
+      expect(managedFiles.map(existsSync)).toEqual([true, true, true, true]);
+      expect(JSON.parse(readFileSync(join(moralmod, "active.json"), "utf8"))).toMatchObject({ release_digest: pin, entry_sha256: sha256(loader) });
+      expect(readFileSync(join(plugin, "morning.py"), "utf8")).toBe(morningSource(upstreamMorning));
+      expect(snapshot(Object.keys(ownFiles))).toEqual(ownFiles);
     },
     60_000,
   );
@@ -508,10 +545,10 @@ describe("ov#277 refute S1: a managed loader on disk is held to the pin on every
     listPlugin();
     plantMorningJob();
   }
-  const keptFiles = () => [join(plugin(), "plugin.yaml"), join(plugin(), "sidecar.py"), negotiatorPath(home)];
+  const keptFiles = () => [join(plugin(), "plugin.yaml"), join(plugin(), "sidecar.py")];
 
   for (const [label, argv] of [["--skip-index (P3)", SKIP], ["no Index key (P3b)", KEYLESS]] as const) {
-    test(`${label}: arm ON, gate verified, sentinel pin, MORALMOD_* at an unpinned bundle, the loader and active.json for release deadbeef on disk: withheld as release_unpinned, dropped from plugins.enabled, the morning job removed, the loader taken out; active.json, the seed and the tree left; no plugin call`, () => {
+    test(`${label}: arm ON, gate verified, sentinel pin, MORALMOD_* at an unpinned bundle, the loader and active.json for release deadbeef on disk: withheld as release_unpinned, dropped from plugins.enabled, the morning job removed, the loader and the marker taken out; active.json and the tree left; no plugin call; the next such run is withheld again (ov#284 refute S1)`, () => {
       process.env[MORALMOD_ARM_ENV] = "on";
       supplyRelease();
       plantManagedBox("deadbeef");
@@ -525,15 +562,17 @@ describe("ov#277 refute S1: a managed loader on disk is held to the pin on every
       expect(existsSync(loaderPath())).toBe(false);
       expect(snapshot(Object.keys(kept))).toEqual(kept);
       expect(readdirSync(moralmod())).toEqual(["active.json"]);
+      expect(existsSync(negotiatorPath(home))).toBe(false);
       expect(result.lines[0]).toBe(STALE_LINE);
-      // The next such run finds no loader: skipped, nothing listed again.
+      // The next such run finds no loader, but active.json still names deadbeef: withheld again, not skipped.
       const again = step(recorder().run, true, undefined, [...argv]);
-      expect(again).toMatchObject({ state: "skipped", failed: null });
+      expect(again).toMatchObject({ state: "failed", failed: "release_unpinned" });
+      expect(again.lines[0]).toBe(RECEIPT_LINE);
       expect(enabled()).toEqual(["av-events"]);
     });
   }
 
-  test("keyed, active.json deleted and MORALMOD_* unset, the plugin at REF (the pinnedAtRef path, P3c): withheld as release_unpinned before any plugin call, not enabled, the loader taken out", () => {
+  test("keyed, active.json deleted and MORALMOD_* unset, the plugin at REF (the pinnedAtRef path, P3c): withheld as release_unpinned before any plugin call, not enabled, the loader and the marker taken out; run 2 enables the plain plugin with the seed hook, never beside the marker (ov#284 refute M2)", () => {
     process.env[MORALMOD_ARM_ENV] = "on";
     plantManagedBox("deadbeef");
     rmSync(join(moralmod(), "active.json"));
@@ -544,8 +583,15 @@ describe("ov#277 refute S1: a managed loader on disk is held to the pin on every
     expect(calls).toEqual([["cron", "remove", "aaaaaaaaaaaa"]]);
     expect(enabled()).toEqual(["av-events"]);
     expect(existsSync(loaderPath())).toBe(false);
+    expect(existsSync(negotiatorPath(home))).toBe(false);
     expect(snapshot(Object.keys(kept))).toEqual(kept);
     expect(result.lines[0]).toBe(STALE_LINE);
+    // Run 2: no loader, no active.json, no marker: the plain plugin, its hook the seed.
+    const second = recorder();
+    expect(step(second.run)).toMatchObject({ state: "pinned", failed: null });
+    expect(second.calls).toEqual([]);
+    expect(enabled()).toEqual(["av-events", INDEX_PLUGIN]);
+    expect(readFileSync(negotiatorPath(home), "utf8")).toBe(NEGOTIATOR_SEED);
   });
 
   test("keyed with MORALMOD_* at an unpinned bundle and active.json present (the managed path): the loader is taken out too, then the bundle is refused as before", () => {
@@ -592,18 +638,21 @@ describe("ov#277 refute S1: a managed loader on disk is held to the pin on every
     }
   });
 
-  test("S2: an ON-to-OFF flip (the arm line in .env goes to off) takes the OFF path on the first install after it: dropped from plugins.enabled, the morning job removed, the loader taken out; active.json, the release and the resident config stay; a second OFF run changes nothing", () => {
+  test("S2, ov#284 refute M1: an ON-to-OFF flip (the arm line in .env goes to off) takes the OFF path on the first install after it: dropped from plugins.enabled, the morning job removed, the loader, the marker, resident.json, active.json and the release removed; fallback.sqlite, a journal, a staging directory and the operator's resident config stay; a second OFF run changes nothing", () => {
     process.env[MORALMOD_ARM_ENV] = "on";
     const pin = supplyRelease();
     installMoralmodRelease(home, process.env.MORALMOD_RELEASE_DIR!, pin);
     plantManagedBox(pin);
+    writeFileSync(join(moralmod(), "resident.json"), readFileSync(process.env.MORALMOD_RESIDENT_CONFIG!), { mode: 0o600 });
+    writeFileSync(join(moralmod(), "fallback.sqlite"), "queued evidence\n");
+    writeFileSync(join(moralmod(), "journal-1.jsonl"), "{}\n");
+    mkdirSync(join(moralmod(), ".00000000-0000-4000-8000-000000000000.staging"));
     expect(step(recorder().run, true, pin, SKIP)).toMatchObject({ state: "skipped", failed: null });
     expect(enabled()).toEqual(["av-events", INDEX_PLUGIN]);
     const kept = snapshot([
       ...keptFiles(),
-      join(moralmod(), "active.json"),
-      join(moralmod(), pin, "release.json"),
-      join(moralmod(), pin, "negotiator-runtime.js"),
+      join(moralmod(), "fallback.sqlite"),
+      join(moralmod(), "journal-1.jsonl"),
       process.env.MORALMOD_RESIDENT_CONFIG!,
     ]);
     // The control plane's rewire writes the arm to .env, which wins over the install environment.
@@ -614,11 +663,13 @@ describe("ov#277 refute S1: a managed loader on disk is held to the pin on every
       expect(result).toMatchObject({ state: "off", failed: null, note: "moralmod_arm_not_on" });
       expect(enabled()).toEqual(["av-events"]);
       expect(existsSync(loaderPath())).toBe(false);
+      expect(existsSync(negotiatorPath(home))).toBe(false);
       expect(snapshot(Object.keys(kept))).toEqual(kept);
+      expect(readdirSync(moralmod()).sort()).toEqual([".00000000-0000-4000-8000-000000000000.staging", "fallback.sqlite", "journal-1.jsonl"]);
       if (argv === ARGV) {
         expect(calls).toEqual([["cron", "remove", "aaaaaaaaaaaa"]]);
         expect(existsSync(launcher())).toBe(false);
-        expect(result.lines[0]).toBe(`${OFF_LINE}; managed loader removed; removed from plugins.enabled`);
+        expect(result.lines[0]).toBe(`${OFF_LINE}; managed loader removed; MoralMod files cleaned up: resident.json, index/negotiator.ts, active.json, release ${pin.slice(0, 8)}; removed from plugins.enabled`);
       } else {
         expect(calls).toEqual([]);
         expect(result.lines).toEqual([OFF_LINE]);
@@ -634,7 +685,8 @@ describe("ov#277 refute S1: a managed loader on disk is held to the pin on every
     expect(result).toMatchObject({ state: "off", failed: null, note: "moralmod_arm_not_on" });
     expect(existsSync(loaderPath())).toBe(false);
     expect(enabled()).toEqual(["av-events"]);
-    expect(result.lines[0]).toBe(`${OFF_LINE}; managed loader removed; removed from plugins.enabled`);
+    expect(existsSync(negotiatorPath(home))).toBe(false);
+    expect(result.lines[0]).toBe(`${OFF_LINE}; managed loader removed; MoralMod files cleaned up: index/negotiator.ts; removed from plugins.enabled`);
   });
 
   test("an ON box with no loader (the plugin's own negotiator.js) is not touched by the check", () => {
@@ -649,4 +701,165 @@ describe("ov#277 refute S1: a managed loader on disk is held to the pin on every
     expect(enabled()).toEqual(["av-events", INDEX_PLUGIN]);
     expect(readFileSync(loaderPath(), "utf8")).toBe("// upstream negotiator\n");
   });
+
+  test("ov#284 refute S1: release A activated, then the pin goes back to the sentinel: run 1 takes the loader out, and every later ON run not handed a release (--skip-index, keyless, keyed without MORALMOD_*) is withheld as release_unpinned, never skipped or pinned; an OFF run then clears active.json and the release, and the next ON run is the plain plugin", () => {
+    process.env[MORALMOD_ARM_ENV] = "on";
+    const pin = supplyRelease();
+    installMoralmodRelease(home, process.env.MORALMOD_RELEASE_DIR!, pin);
+    plantManagedBox(pin);
+    delete process.env.MORALMOD_RELEASE_DIR;
+    delete process.env.MORALMOD_RESIDENT_CONFIG;
+    expect(step(recorder().run, true, pin, SKIP)).toMatchObject({ state: "skipped", failed: null });
+    expect(enabled()).toEqual(["av-events", INDEX_PLUGIN]);
+    // The shipped constant (the sentinel): no pin argument.
+    const first = step(recorder().run, true, undefined, SKIP);
+    expect(first).toMatchObject({ state: "failed", failed: "release_unpinned" });
+    expect(first.lines[0]).toBe(STALE_LINE);
+    expect(existsSync(loaderPath())).toBe(false);
+    for (const [label, argv] of [["--skip-index", SKIP], ["keyless", KEYLESS], ["keyed", ARGV], ["--skip-index again", SKIP]] as const) {
+      const { calls, run } = recorder();
+      const result = step(run, true, undefined, [...argv]);
+      expect([label, result.state, result.failed]).toEqual([label, "failed", "release_unpinned"]);
+      expect([label, result.lines]).toEqual([label, [RECEIPT_LINE]]);
+      expect([label, calls]).toEqual([label, []]);
+      expect([label, enabled()]).toEqual([label, ["av-events"]]);
+    }
+    setArm("env", "off");
+    const off = step(recorder().run);
+    expect(off).toMatchObject({ state: "off", failed: null, note: "moralmod_arm_not_on" });
+    expect(off.lines).toEqual([`${OFF_LINE}; MoralMod files cleaned up: active.json, release ${pin.slice(0, 8)}`]);
+    expect(readdirSync(moralmod())).toEqual([]);
+    process.env[MORALMOD_ARM_ENV] = "on";
+    const plain = recorder();
+    expect(step(plain.run)).toMatchObject({ state: "pinned", failed: null });
+    expect(plain.calls).toEqual([]);
+    expect(enabled()).toEqual(["av-events", INDEX_PLUGIN]);
+    expect(readFileSync(negotiatorPath(home), "utf8")).toBe(NEGOTIATOR_SEED);
+  });
+
+  test("ov#284 refute M1: a half-removed box (resident.json and the loader already gone, a release directory without its release.json, an emptied one, the marker and active.json still there) is finished by the next OFF run; a second OFF run changes nothing", () => {
+    plantManagedBox("deadbeef");
+    writeFileSync(loaderPath(), "// upstream negotiator\n");
+    const half = join(moralmod(), "a".repeat(64));
+    mkdirSync(half);
+    writeFileSync(join(half, "negotiator-runtime.js"), "export {}\n");
+    writeFileSync(join(half, "INDEX-LICENSE"), "license\n");
+    mkdirSync(join(moralmod(), "b".repeat(64)));
+    writeFileSync(join(moralmod(), "fallback.sqlite"), "queued evidence\n");
+    setArm("env", "off");
+    const result = step(recorder().run);
+    expect(result).toMatchObject({ state: "off", failed: null, note: "moralmod_arm_not_on" });
+    expect(readFileSync(loaderPath(), "utf8")).toBe("// upstream negotiator\n");
+    expect(existsSync(negotiatorPath(home))).toBe(false);
+    expect(readdirSync(moralmod())).toEqual(["fallback.sqlite"]);
+    expect(result.lines[0]).toBe(`${OFF_LINE}; MoralMod files cleaned up: index/negotiator.ts, active.json, release aaaaaaaa, release bbbbbbbb; removed from plugins.enabled`);
+    const again = step(recorder().run);
+    expect(again).toEqual({ state: "off", failed: null, lines: [`→ index-network plugin: off (${MORALMOD_ARM_ENV} is not on)`] });
+    expect(readdirSync(moralmod())).toEqual(["fallback.sqlite"]);
+  });
+
+  test("ov#284 refute M1: a release directory holding a file that is not a release file is left whole (the control plane's clean can still verify it); the OFF run removes everything else and reports moralmod_cleanup with a warning naming it", () => {
+    const pin = supplyRelease();
+    installMoralmodRelease(home, process.env.MORALMOD_RELEASE_DIR!, pin);
+    plantManagedBox(pin);
+    writeFileSync(join(moralmod(), pin, "notes.txt"), "not a release file\n");
+    const before = snapshot(readdirSync(join(moralmod(), pin)).map((name) => join(moralmod(), pin, name)));
+    setArm("env", "off");
+    const result = step(recorder().run);
+    expect(result).toMatchObject({ state: "off", failed: "moralmod_cleanup", note: "moralmod_arm_not_on" });
+    expect(snapshot(Object.keys(before))).toEqual(before);
+    expect(readdirSync(moralmod())).toEqual([pin]);
+    expect(existsSync(loaderPath())).toBe(false);
+    expect(existsSync(negotiatorPath(home))).toBe(false);
+    expect(result.lines).toContain(`  warning: index-network plugin: MoralMod cleanup did not finish (left: release ${pin.slice(0, 8)})`);
+    expect(indexPluginFailedLine(result.failed!)).toBe("agentvillage-install: index_plugin_failed=moralmod_cleanup");
+  });
+
+  test("ov#284 refute M2: the marker left in index/negotiator.ts without its loader (no active.json, no MORALMOD_*; the control plane's clean or a run before the fix left it): a keyed ON run takes it out, says so, seeds the hook and enables the plain plugin; a --skip-index run with the plugin listed takes it out and keeps the plugin", () => {
+    process.env[MORALMOD_ARM_ENV] = "on";
+    for (const argv of [ARGV, SKIP]) {
+      plantManagedBox("deadbeef");
+      writeFileSync(loaderPath(), "// upstream negotiator\n");
+      rmSync(join(moralmod(), "active.json"));
+      const { calls, run } = recorder();
+      const result = step(run, true, undefined, [...argv]);
+      expect([argv.length, result.state, result.failed]).toEqual([argv.length, argv === SKIP ? "skipped" : "pinned", null]);
+      expect(calls).toEqual([]);
+      expect(enabled()).toEqual(["av-events", INDEX_PLUGIN]);
+      expect(result.lines[0]).toBe("→ index-network plugin: managed index/negotiator.ts without its loader; MoralMod files cleaned up: index/negotiator.ts; the plugin's own negotiator is used");
+      if (argv === SKIP) expect(existsSync(negotiatorPath(home))).toBe(false);
+      else expect(readFileSync(negotiatorPath(home), "utf8")).toBe(NEGOTIATOR_SEED);
+    }
+  });
+
+  // A read-only directory stops an unlink only for a user other than root.
+  test.skipIf(process.getuid?.() === 0)("ov#284 refute M2: when that marker cannot be taken out, the plugin is withheld (sidecar), never enabled beside it", () => {
+    process.env[MORALMOD_ARM_ENV] = "on";
+    plantManagedBox("deadbeef");
+    writeFileSync(loaderPath(), "// upstream negotiator\n");
+    rmSync(join(moralmod(), "active.json"));
+    const index = join(home, "index");
+    chmodSync(index, 0o555);
+    try {
+      const result = step(recorder().run);
+      expect(result).toMatchObject({ state: "failed", failed: "sidecar" });
+      expect(enabled()).toEqual(["av-events"]);
+      expect(readFileSync(negotiatorPath(home), "utf8")).toBe("// Managed MoralMod lifecycle 2; see index/moralmod/active.json.\n");
+      expect(result.lines[0]).toBe("  warning: index-network plugin: not enabled, managed negotiator hook stale (the managed index/negotiator.ts has no loader and could not be taken out (left: index/negotiator.ts)); removed from plugins.enabled");
+    } finally {
+      chmodSync(index, 0o755);
+    }
+  });
+});
+
+describe("ov#284 refute M2 with the pinned plugin checkout: the plugin's own negotiator.js is never enabled beside the marker", () => {
+  test.skipIf(!havePlugin)(
+    "probe R2b: A activated, active.json deleted and MORALMOD_* unset (kept as pinned), then the pin goes to the sentinel: run 1 withholds and puts the plugin's negotiator.js and morning.py back and takes the marker out; run 2 enables the plain plugin with the seed hook. The state the control plane's clean leaves when the loader hash no longer matches (marker and managed morning.py, no active.json) is put right by the next ON run, and by an OFF run",
+    () => {
+      process.env[MORALMOD_ARM_ENV] = "on";
+      writeFileSync(join(home, "config.yaml"), BASE);
+      const pin = supplyRelease();
+      expect(step(recorder().run, true, pin)).toMatchObject({ state: "installed", failed: null });
+      const plugin = join(home, "plugins", INDEX_PLUGIN);
+      const runtime = join(plugin, "runtime", "dist", "negotiator.js");
+      const upstream = Bun.spawnSync(["git", "show", "HEAD:runtime/dist/negotiator.js"], { cwd: plugin }).stdout.toString();
+      const upstreamMorning = Bun.spawnSync(["git", "show", "HEAD:morning.py"], { cwd: plugin }).stdout.toString();
+      const loader = readFileSync(runtime, "utf8");
+      rmSync(join(home, "index", "moralmod", "active.json"));
+      delete process.env.MORALMOD_RELEASE_DIR;
+      delete process.env.MORALMOD_RESIDENT_CONFIG;
+      expect(step(recorder().run, true, pin)).toMatchObject({ state: "pinned", failed: null });
+      expect(readFileSync(runtime, "utf8")).toBe(loader);
+      // The pin goes to the sentinel. Run 1:
+      expect(step(recorder().run)).toMatchObject({ state: "failed", failed: "release_unpinned" });
+      expect(readFileSync(runtime, "utf8")).toBe(upstream);
+      expect(readFileSync(join(plugin, "morning.py"), "utf8")).toBe(upstreamMorning);
+      expect(existsSync(negotiatorPath(home))).toBe(false);
+      // Run 2: the plain plugin, the seed hook, never the marker.
+      expect(step(recorder().run)).toMatchObject({ state: "pinned", failed: null });
+      expect(enabled()).toEqual(["av-events", INDEX_PLUGIN]);
+      expect(readFileSync(negotiatorPath(home), "utf8")).toBe(NEGOTIATOR_SEED);
+
+      // The clean leftover: the managed morning.py and the marker, the loader already gone, no active.json.
+      writeFileSync(join(plugin, "morning.py"), morningSource(upstreamMorning));
+      writeFileSync(negotiatorPath(home), "// Managed MoralMod lifecycle 2; see index/moralmod/active.json.\n");
+      const fixed = step(recorder().run);
+      expect(fixed).toMatchObject({ state: "pinned", failed: null });
+      expect(fixed.lines[0]).toBe("→ index-network plugin: managed index/negotiator.ts without its loader; MoralMod files cleaned up: index/negotiator.ts, morning.py; the plugin's own negotiator is used");
+      expect(readFileSync(join(plugin, "morning.py"), "utf8")).toBe(upstreamMorning);
+      expect(readFileSync(negotiatorPath(home), "utf8")).toBe(NEGOTIATOR_SEED);
+      expect(readFileSync(runtime, "utf8")).toBe(upstream);
+
+      // The same leftover under OFF: both put right, the plugin dropped.
+      writeFileSync(join(plugin, "morning.py"), morningSource(upstreamMorning));
+      writeFileSync(negotiatorPath(home), "// Managed MoralMod lifecycle 2; see index/moralmod/active.json.\n");
+      process.env[MORALMOD_ARM_ENV] = "off";
+      const off = step(recorder().run);
+      expect(off).toMatchObject({ state: "off", failed: null, note: "moralmod_arm_not_on" });
+      expect(readFileSync(join(plugin, "morning.py"), "utf8")).toBe(upstreamMorning);
+      expect(existsSync(negotiatorPath(home))).toBe(false);
+      expect(enabled()).toEqual(["av-events"]);
+    },
+    60_000,
+  );
 });
