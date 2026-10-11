@@ -384,19 +384,25 @@ export function sidecarPath(home: string): string {
   return join(pluginDir(home), "sidecar.py");
 }
 
-/** Before --force, only complete pinned upstream or known overlay bytes may be replaced. */
+/**
+ * Before --force, only complete upstream or known overlay bytes may be replaced. ov#288 refute M1:
+ * upstream is the checkout's own `HEAD:sidecar.py`, at whatever revision the tree is (on a plugin bump
+ * it is still the old one), and no file at all has nothing to protect.
+ */
 function sidecarReplaceable(home: string): boolean {
   try {
     const plugin = pluginDir(home), path = sidecarPath(home);
-    if (!lstatSync(path).isFile()) return false;
-    const head = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: plugin });
-    if (head.exitCode || head.stdout.toString().trim() !== INDEX_PLUGIN_REF) return false;
+    try {
+      if (!lstatSync(path).isFile()) return false;
+    } catch (err) {
+      return (err as { code?: unknown } | null)?.code === "ENOENT";
+    }
     const original = Bun.spawnSync(["git", "show", "HEAD:sidecar.py"], { cwd: plugin });
     if (original.exitCode) return false;
     const base = original.stdout.toString(), current = readFileSync(path, "utf8");
-    const patched = patchSidecarSource(base);
-    if ("reason" in patched) return false;
-    return [base, patched.source,
+    // The upstream file, the current patch, and the two earlier patches a box may still hold.
+    return [base,
+      base.replace(SIDECAR_ANCHOR, () => SIDECAR_PATCHED),
       base.replace(SIDECAR_ANCHOR, () => SIDECAR_PATCHED_V1),
       base.replace(SIDECAR_ANCHOR, () => SIDECAR_PATCHED.replace(', "AV_MORALMOD_ARM"', "")),
     ].includes(current);

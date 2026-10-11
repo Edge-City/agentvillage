@@ -122,11 +122,16 @@ export function managedLoaderSource(home: string, directory: string): string {
   const configFile = join(home, "index", "moralmod", "resident.json");
   return `${marker}\nimport {readFileSync} from 'node:fs';\nimport {startResident} from ${JSON.stringify(join(directory, "negotiator-runtime.js"))};\nconst config=JSON.parse(readFileSync(${JSON.stringify(configFile)},'utf8'));\ntry {\n const resident=await startResident({...process.env,...config,DECISION_JOURNAL_PATH:${JSON.stringify(join(home,"index","moralmod","fallback.sqlite"))}});\n const stop=()=>void resident.stop().finally(()=>process.exit(0));\n process.on('SIGTERM',stop);process.on('SIGINT',stop);\n console.log(JSON.stringify({ready:true,port:resident.port}));\n} catch { console.error(JSON.stringify({level:'warn',event:'moralmod_startup_unready'}));process.exit(1); }\n`;
 }
-/** The plugin's own `runtime/dist/negotiator.js` from its checkout at `INDEX_PLUGIN_REVISION`, or null. */
-function upstreamRuntime(plugin: string): Uint8Array | null {
+/**
+ * The plugin's own `runtime/dist/negotiator.js` from its checkout's `HEAD`, or null. With `revision`,
+ * only when the checkout is at that revision (retirement puts back only the pinned plugin's file).
+ */
+function upstreamRuntime(plugin: string, revision: string | null = INDEX_PLUGIN_REVISION): Uint8Array | null {
   try {
-    const head = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: plugin });
-    if (head.exitCode !== 0 || head.stdout.toString().trim() !== INDEX_PLUGIN_REVISION) return null;
+    if (revision !== null) {
+      const head = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: plugin });
+      if (head.exitCode !== 0 || head.stdout.toString().trim() !== revision) return null;
+    }
     const upstream = Bun.spawnSync(["git", "show", "HEAD:runtime/dist/negotiator.js"], { cwd: plugin });
     return upstream.exitCode === 0 ? upstream.stdout : null;
   } catch {
@@ -152,8 +157,9 @@ export function managedLoaderPresent(home: string): boolean {
   }
 }
 /** Recognize the complete generated loader and its home-bound, digest-named release path, not just a marker.
- * No receipt or intact release is required: retirement also handles interrupted activation
- * and partially removed releases. This proves ownership of the loader, not permission to run it.
+ * No receipt or intact release is required. This proves ownership of the loader, not permission to
+ * run it. Used only before a forced reinstall (`managedRuntimeReplaceable`); retirement does not
+ * need it (ov#288 refute M2: ov#284's take-it-out rule stands, so a changed loader is taken out).
  */
 function managedLoaderOwned(home: string): boolean {
   try {
@@ -176,13 +182,20 @@ function managedLoaderOwned(home: string): boolean {
 /** A forced reinstall replaces the plugin tree before activation can inspect it.
  * Check the current bytes first, even when a resident removed every managed marker.
  * Missing Hermes metadata or an ownership receipt does not authorize unknown content.
+ * ov#288 refute M1: the plugin's own file is the checkout's `HEAD`, at whatever revision the tree is
+ * (on a plugin bump the tree is still at the old one), and no file at all has nothing to protect.
  */
 export function managedRuntimeReplaceable(home: string): boolean {
   try {
     const runtime = runtimePath(home);
-    if (!lstatSync(runtime).isFile()) return false;
-    return managedLoaderOwned(home) ||
-      hash(readFileSync(runtime)) === upstreamRuntimeSha256(join(home, "plugins", "index-network"));
+    try {
+      if (!lstatSync(runtime).isFile()) return false;
+    } catch (err) {
+      return (err as { code?: unknown } | null)?.code === "ENOENT";
+    }
+    if (managedLoaderOwned(home)) return true;
+    const upstream = upstreamRuntime(join(home, "plugins", "index-network"), null);
+    return upstream !== null && hash(readFileSync(runtime)) === hash(upstream);
   } catch {
     return false;
   }
@@ -202,11 +215,11 @@ export function managedLoaderPinned(home: string, pin: string): boolean {
 /**
  * ov#277 refute S1, S2: take a managed loader out of the plugin. The plugin's own negotiator.js is
  * put back from its checkout at `INDEX_PLUGIN_REVISION` (`restored`); without that checkout the
- * loader is deleted (`removed`); `failed` when ownership is unverified or neither worked.
+ * loader is deleted (`removed`); `failed` when neither worked. ov#284's take-it-out rule (lead
+ * ruling, 11 Oct; ov#288 refute M2): a loader that is not the pinned release's exact one is taken
+ * out whoever changed it, so its bytes never run and an OFF box keeps no MoralMod loader.
  */
 function retireLoaderFile(home: string): "restored" | "removed" | "failed" {
-  // A resident's customization may retain our marker. Never overwrite or delete those bytes.
-  if (!managedLoaderOwned(home)) return "failed";
   const runtime = runtimePath(home);
   const upstream = upstreamRuntime(join(home, "plugins", "index-network"));
   if (upstream) {

@@ -1440,7 +1440,7 @@ describe("end to end: install.ts against the stand-in Hermes", () => {
       for (const args of [["--skip-index"], []]) {
         const label = args.join(" ") || "no Index key";
         const jobsPath = plantEnabled();
-        const [yaml, morning, active, hook] = plantManaged("deadbeef".repeat(8));
+        const [yaml, morning, active, hook] = plantManaged("deadbeef");
         const kept = [yaml!, morning!, active!];
         const before = bytes(kept);
         const run = install({ [MORALMOD_ARM_ENV]: "on", ...moralmod }, { verified: true, args });

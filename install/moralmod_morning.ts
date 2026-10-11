@@ -43,11 +43,24 @@ function morningState(home: string): { path: string; base: string; wanted: strin
   const base=original.stdout.toString(), wanted=morningSource(base), current=readFileSync(path,"utf8");
   return {path, base, wanted, current, mode:stat.mode & 0o777};
 }
-/** Hermes --force replaces this file before installMorning can inspect it. Check ownership first. */
+/**
+ * Hermes --force replaces this file before installMorning can inspect it. Check ownership first.
+ * ov#288 refute M1: against the checkout's own `HEAD:morning.py`, at whatever revision the tree is (on
+ * a plugin bump it is still the old one), and no file at all has nothing to protect.
+ */
 export function morningReplaceable(home: string): boolean {
   try {
-    const {base, wanted, current}=morningState(home);
-    return current===base || current===wanted;
+    const plugin=join(home,"plugins/index-network"), path=join(plugin,"morning.py");
+    try {
+      if(!lstatSync(path).isFile()) return false;
+    } catch(err) {
+      return (err as {code?:unknown}|null)?.code==="ENOENT";
+    }
+    const original=Bun.spawnSync(["git","show","HEAD:morning.py"],{cwd:plugin});
+    if(original.exitCode) return false;
+    const base=original.stdout.toString(), current=readFileSync(path,"utf8");
+    if(current===base) return true;
+    try { return current===morningSource(base); } catch { return false; }
   } catch {
     return false;
   }
