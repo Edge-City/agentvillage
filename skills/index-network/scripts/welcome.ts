@@ -1244,8 +1244,10 @@ export function reseedLines(home: string): string[] {
  * first, create only on ready, refusals kept) up to MAX_LISTED of
  * reseedLines that are not already listed in Index (seedKey, any status),
  * and write a new marker WELCOME_RESEED_PREFIX<time>.json with the counts,
- * the codes and the refused lines. The branch for the operator's trailer.
- * Never throws.
+ * the codes and the refused lines. A refused line also goes into the seed
+ * marker's `refused` (mergeReseedRefused, gap G1), so the first chat turn's
+ * REFUSED_SEEDS block asks the resident about it. The branch for the
+ * operator's trailer. Never throws.
  */
 export async function reseedRun(home: string, options: WelcomeOptions = {}): Promise<WelcomeBranch> {
   const now = options.now ?? new Date();
@@ -1278,7 +1280,9 @@ export async function reseedRun(home: string, options: WelcomeOptions = {}): Pro
       return welcomeBranch(first.read);
     }
     const { again, seeded, failed, refused, codes, kinds } = await seedLines(home, target, clock, lines, now);
-    recordReseed(home, now, { selected: all.length, created: seeded.length, failed, codes, refused });
+    const counts = { selected: all.length, created: seeded.length, failed };
+    const merged = refused.length ? await mergeReseedRefused(home, now, refused, counts) : null;
+    recordReseed(home, now, { ...counts, codes, refused, ...(merged === null ? {} : { refusedMerged: merged }) });
     const read = again.read.kind === "listed" ? again.read : first.read;
     return welcomeBranch(read, { intents_seeded: seeded.length, seed_failed: failed, seed_codes: codes, seed_recovery_kinds: kinds });
   } catch {
@@ -1286,8 +1290,71 @@ export async function reseedRun(home: string, options: WelcomeOptions = {}): Pro
   }
 }
 
-/** The `--reseed` run's own marker (0600, a new file each run); never touches welcome-state.json or the seed marker. Never throws. */
-function recordReseed(home: string, now: Date, body: { selected: number; created: number; failed: number; codes: string[]; refused: RefusedSeed[] }): void {
+/**
+ * Gap G1 (context@b3, RESEED-RESEND.md): the lines a `--reseed` saw refused,
+ * merged into the seed marker's `refused` (ov#302's list, which the first chat
+ * turn's REFUSED_SEEDS block reads; surfaceRefusedSeeds), each entry exactly
+ * as the welcome's seed keeps one (refusedSeed) and never `surfacedAt`, so the
+ * block names it at the resident's next session. An entry for the same line
+ * (as kept, refusedLine) is replaced by the new one in its place, its
+ * `surfacedAt`, `notShown` and `questionWithheld` gone with it; other entries
+ * stay as they are. Under the marker's lock (surfaceRefusedSeeds's), temp file
+ * and rename. A done marker keeps its fields; a marker left claimed (no
+ * `done`) is completed with `done: true` unless it is younger than
+ * RESEED_SEED_BUSY_MS (a welcome seeding right now, whose own write would
+ * drop the entries: left alone); no marker, or one that is not a JSON object,
+ * becomes recordSeed's shape with this run's counts. True when the entries
+ * were written. Never throws.
+ */
+async function mergeReseedRefused(home: string, now: Date, refused: RefusedSeed[], counts: { selected: number; created: number; failed: number }): Promise<boolean> {
+  try {
+    const path = join(home, WELCOME_SEED_FILE);
+    const lock = await acquireStateLock(path, { waitMs: REFUSED_LOCK_WAIT_MS, staleMs: REFUSED_LOCK_STALE_MS });
+    try {
+      let marker: Record<string, unknown> | null = null;
+      try {
+        marker = record(JSON.parse(readFileSync(path, "utf8")));
+      } catch {
+        // No marker, or not JSON: written whole below.
+      }
+      if (marker && marker.done !== true) {
+        const claimed = typeof marker.seededAt === "string" ? Date.parse(marker.seededAt) : Number.NaN;
+        if (Number.isFinite(claimed) && now.getTime() - claimed < RESEED_SEED_BUSY_MS) return false;
+      }
+      const list: unknown[] = Array.isArray(marker?.refused) ? [...marker.refused] : [];
+      for (const entry of refused) {
+        const same = list.flatMap((e, i) => (record(e)?.line === entry.line ? [i] : []));
+        if (same.length === 0) {
+          list.push(entry);
+          continue;
+        }
+        list[same[0]!] = entry;
+        for (const i of same.slice(1).reverse()) list.splice(i, 1);
+      }
+      replaceSeedMarker(
+        home,
+        marker
+          ? `${JSON.stringify({ ...marker, done: true, refused: list })}\n`
+          : seedBody(now, counts.selected, counts.created, counts.failed, true, list as RefusedSeed[]),
+      );
+      return true;
+    } finally {
+      lock.release();
+    }
+  } catch {
+    return false;
+  }
+}
+
+/** A seed marker without `done` younger than this is a welcome seeding now (its budget, twice): mergeReseedRefused leaves it alone. */
+const RESEED_SEED_BUSY_MS = 2 * WELCOME_BUDGET_MS;
+
+/**
+ * The `--reseed` run's own marker (0600, a new file each run), with
+ * `refusedMerged` when it saw refused lines (whether mergeReseedRefused wrote
+ * them into the seed marker); never touches welcome-state.json. Never throws.
+ */
+function recordReseed(home: string, now: Date, body: { selected: number; created: number; failed: number; codes: string[]; refused: RefusedSeed[]; refusedMerged?: boolean }): void {
   try {
     const path = join(home, `${WELCOME_RESEED_PREFIX}${now.toISOString().replace(/[:.]/g, "-")}.json`);
     mkdirSync(dirname(path), { recursive: true });

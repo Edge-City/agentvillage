@@ -418,12 +418,12 @@ describe("(3) the trailer: exactly the five keys, plus at most seed_codes and se
 });
 
 describe("--reseed: the operator's one-shot second seed (Carter's ruling (4))", () => {
-  async function reseed(index: ReturnType<typeof fakeIndex>) {
+  async function reseed(index: ReturnType<typeof fakeIndex>, extra: string[] = []) {
     process.env.INDEX_API_KEY = FAKE_API_KEY;
     process.env.INDEX_MCP_URL = FAKE_MCP_URL;
     const out: string[] = [];
     const err: string[] = [];
-    await main(["--home", home, RESEED_FLAG], { stdout: (s) => out.push(s), stderr: (s) => err.push(s) }, (argv) => welcomeRun(argv, { fetch: index.fetch, timeoutMs: 200 }));
+    await main(["--home", home, RESEED_FLAG, ...extra], { stdout: (s) => out.push(s), stderr: (s) => err.push(s) }, (argv) => welcomeRun(argv, { fetch: index.fetch, timeoutMs: 200 }));
     const creates = index.fake.calls.filter((c) => c.method === "tools/call" && c.name === "create_intent");
     return { stdout: out.join(""), trailer: JSON.parse(err.join("").trim()) as Record<string, unknown>, creates };
   }
@@ -435,7 +435,7 @@ describe("--reseed: the operator's one-shot second seed (Carter's ruling (4))", 
     return state;
   }
 
-  test("after a sent welcome: prints nothing on stdout, seeds through prepare, writes its own marker, leaves welcome-state and the seed marker untouched", async () => {
+  test("after a sent welcome: prints nothing on stdout, seeds through prepare, writes its own marker, leaves welcome-state untouched", async () => {
     const state = welcomed();
     const seedMarker = `${JSON.stringify({ seededAt: "2026-10-12T15:47:18.759Z", selected: 3, created: 0, failed: 3, done: true })}\n`;
     writeFileSync(join(home, WELCOME_SEED_FILE), seedMarker);
@@ -447,12 +447,88 @@ describe("--reseed: the operator's one-shot second seed (Carter's ruling (4))", 
     expect(creates.map((c) => c.arguments?.description)).toEqual(LINES.slice(1));
     expect(trailer).toMatchObject({ welcome: 1, intents_seeded: 2, seed_failed: 1, seed_codes: ["intent_needs_revision:vague_or_invalid"], seed_recovery_kinds: ["single", "multi", "text"] });
     expect(readFileSync(join(home, WELCOME_STATE_FILE), "utf8")).toBe(state);
-    expect(readFileSync(join(home, WELCOME_SEED_FILE), "utf8")).toBe(seedMarker);
+    // G1: the seed marker keeps its own fields; only the refused line is added (below).
+    const { refused: _added, ...kept } = marker();
+    expect(`${JSON.stringify(kept)}\n`).toBe(seedMarker);
     const files = reseedMarkers();
     expect(files).toHaveLength(1);
     const m = JSON.parse(readFileSync(join(home, "memory", files[0]!), "utf8"));
-    expect(m).toMatchObject({ selected: 3, created: 2, failed: 1, codes: ["intent_needs_revision:vague_or_invalid"] });
+    expect(m).toMatchObject({ selected: 3, created: 2, failed: 1, codes: ["intent_needs_revision:vague_or_invalid"], refusedMerged: true });
     expect(m.refused.map((r: { line: string }) => r.line)).toEqual([LINES[0]]);
+  });
+
+  describe("G1: a line Index refuses again reaches the resident (the seed marker's refused, which REFUSED_SEEDS reads)", () => {
+    const entry = (line: string, extra: Record<string, unknown> = {}) => ({ line, feedback: null, code: "intent_needs_revision", at: "2026-10-12T15:47:18.759Z", keys: ["status"], ...extra });
+
+    test("a done marker without refused (welcomed before ov#302): the refusal lands with surfacedAt unset, and the first turn's block names it", async () => {
+      welcomed();
+      writeFileSync(join(home, WELCOME_SEED_FILE), `${JSON.stringify({ seededAt: "2026-10-12T15:47:18.759Z", selected: 3, created: 0, failed: 3, done: true })}\n`);
+      writeLines(LINES);
+      const index = fakeIndex((p) => (p === LINES[0] ? revise(VAGUE) : ready()));
+      await reseed(index);
+      const m = marker();
+      expect(m).toMatchObject({ seededAt: "2026-10-12T15:47:18.759Z", selected: 3, created: 0, failed: 3, done: true });
+      expect(m.refused).toHaveLength(1);
+      expect(m.refused[0]).toMatchObject({ line: LINES[0], code: "intent_needs_revision", category: "vague_or_invalid" });
+      expect(m.refused[0].recovery.map((q: { kind: string }) => q.kind)).toEqual(["single", "multi", "text"]);
+      expect("surfacedAt" in m.refused[0]).toBe(false);
+      // The reseed's own marker is still written, with the same refused line.
+      const files = reseedMarkers();
+      expect(files).toHaveLength(1);
+      expect(JSON.parse(readFileSync(join(home, "memory", files[0]!), "utf8")).refused.map((r: { line: string }) => r.line)).toEqual([LINES[0]]);
+      // ov#302's first-turn reader, unchanged, now surfaces it once.
+      const block = await surfaceRefusedSeeds(home);
+      expect(block?.startsWith(`${REFUSED_SEEDS} `)).toBe(true);
+      expect(JSON.parse(block!.slice(REFUSED_SEEDS.length + 1))[0].line).toBe(LINES[0]);
+      expect(typeof marker().refused[0].surfacedAt).toBe("string");
+      expect(await surfaceRefusedSeeds(home)).toBeNull();
+    });
+
+    test("a second refusal of the same line replaces the old entry in place (surfacedAt, notShown, questionWithheld cleared); other entries stay", async () => {
+      welcomed();
+      const other = entry("Another line the resident wrote", { surfacedAt: "2026-10-12T16:00:00.000Z", notShown: "cap" });
+      const old = [entry(LINES[0]!, { surfacedAt: "2026-10-12T16:00:00.000Z", questionWithheld: "shape" }), other, entry(LINES[0]!, { surfacedAt: "2026-10-12T16:00:00.000Z" })];
+      writeFileSync(join(home, WELCOME_SEED_FILE), `${JSON.stringify({ seededAt: "2026-10-12T15:47:18.759Z", selected: 2, created: 0, failed: 2, done: true, refused: old })}\n`);
+      writeLines(LINES);
+      const index = fakeIndex((p) => (p === LINES[0] ? revise(NON_ACTIONABLE) : ready()));
+      await reseed(index);
+      const refused = marker().refused;
+      expect(refused.map((r: { line: string }) => r.line)).toEqual([LINES[0], other.line]);
+      expect(refused[0]).toMatchObject({ line: LINES[0], category: "non_actionable" });
+      for (const key of ["surfacedAt", "notShown", "questionWithheld"]) expect(key in refused[0]).toBe(false);
+      expect(refused[1]).toEqual(other);
+      const block = await surfaceRefusedSeeds(home);
+      expect(JSON.parse(block!.slice(REFUSED_SEEDS.length + 1)).map((r: { line: string }) => r.line)).toEqual([LINES[0]]);
+    });
+
+    test("no seed marker: a minimal one in recordSeed's shape (done, this run's counts) holding the refusal", async () => {
+      welcomed();
+      writeLines(LINES);
+      const index = fakeIndex((p) => (p === LINES[2] ? revise(BROAD, []) : ready()));
+      await reseed(index);
+      const m = marker();
+      expect(Object.keys(m)).toEqual(["seededAt", "selected", "created", "failed", "done", "refused"]);
+      expect(m).toMatchObject({ selected: 3, created: 2, failed: 1, done: true });
+      expect(m.refused.map((r: { line: string }) => r.line)).toEqual([LINES[2]]);
+      expect("surfacedAt" in m.refused[0]).toBe(false);
+    });
+
+    test("a marker another run claimed moments ago (no done) is left alone; nothing refused, the seed marker is not touched", async () => {
+      welcomed();
+      writeLines(LINES);
+      const busy = `${JSON.stringify({ seededAt: new Date().toISOString(), selected: 3, created: 0, failed: 0 })}\n`;
+      writeFileSync(join(home, WELCOME_SEED_FILE), busy);
+      await reseed(fakeIndex((p) => (p === LINES[0] ? revise(VAGUE) : ready())));
+      expect(readFileSync(join(home, WELCOME_SEED_FILE), "utf8")).toBe(busy);
+      const files = reseedMarkers();
+      expect(JSON.parse(readFileSync(join(home, "memory", files[0]!), "utf8")).refusedMerged).toBe(false);
+      rmSync(join(home, WELCOME_SEED_FILE));
+      for (const f of files) rmSync(join(home, "memory", f));
+      await new Promise((r) => setTimeout(r, 5));
+      const clean = await reseed(fakeIndex(() => ready()));
+      expect(clean.trailer).toMatchObject({ seed_failed: 0 });
+      expect(existsSync(join(home, WELCOME_SEED_FILE))).toBe(false);
+    });
   });
 
   test("a line already in Index is skipped (not prepared, not created, not counted)", async () => {
