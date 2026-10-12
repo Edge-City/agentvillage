@@ -632,15 +632,28 @@ function writeIfChanged(before: Record<string, unknown>, next: Record<string, un
   return true;
 }
 
+/**
+ * List `av-approval` in `plugins.enabled` (on) or take it out (off). On also takes it out of
+ * `plugins.disabled` (SEC-1): Hermes's `plugins.disabled` is a deny-list that outranks
+ * `plugins.enabled` (`plugins_cmd.py:1188`), so a resident's Disable click would otherwise keep
+ * the backstop off through every upgrade. Exact name match only (the plugin's canonical key, leaf
+ * and manifest name are all `av-approval`); every other entry keeps its place, and a `disabled`
+ * that is not a list is left as it is. No change returns `doc` itself, so `writeIfChanged` leaves
+ * the file alone.
+ */
 function withPluginListed(doc: Record<string, unknown>, on: boolean): Record<string, unknown> {
   const plugins = mappingAt(doc, "plugins", "plugins");
   const enabled = Array.isArray(plugins.enabled)
     ? ((plugins.enabled as unknown[]).filter((n) => typeof n === "string") as string[])
     : [];
   const has = enabled.includes(APPROVAL_PLUGIN);
-  if (on === has) return doc;
-  const next = on ? [...enabled, APPROVAL_PLUGIN] : enabled.filter((n) => n !== APPROVAL_PLUGIN);
-  return { ...doc, plugins: { ...plugins, enabled: next } };
+  const disabled = Array.isArray(plugins.disabled) ? (plugins.disabled as unknown[]) : null;
+  const vetoed = on && disabled !== null && disabled.includes(APPROVAL_PLUGIN);
+  if (on === has && !vetoed) return doc;
+  const nextPlugins: Record<string, unknown> = { ...plugins };
+  if (on !== has) nextPlugins.enabled = on ? [...enabled, APPROVAL_PLUGIN] : enabled.filter((n) => n !== APPROVAL_PLUGIN);
+  if (vetoed && disabled !== null) nextPlugins.disabled = disabled.filter((n) => n !== APPROVAL_PLUGIN);
+  return { ...doc, plugins: nextPlugins };
 }
 
 // ---------------------------------------------------------------------------

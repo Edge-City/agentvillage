@@ -1,6 +1,8 @@
-"""Edge City dashboard auth: owner email OTP on Hermes's login form, plus the archive_read bearer.
+"""Edge City dashboard auth: owner email OTP on Hermes's login form, the archive_read bearer, and
+admin-only plugin management.
 
-See README.md. The archive_read token logic is in `_archive` (standard library only).
+See README.md. The archive_read token logic is in `_archive` and the plugin-management guard in
+`_plugins_admin` (both standard library only).
 """
 
 from __future__ import annotations
@@ -50,7 +52,7 @@ except ModuleNotFoundError as _missing:
 else:
     _HERMES_MISSING = None
 
-from . import _archive
+from . import _archive, _plugins_admin
 
 _log = logging.getLogger("dashboard-auth-edgecity")
 
@@ -528,12 +530,32 @@ def _register_archive_read(ctx) -> None:
         _log.warning("dashboard-auth-edgecity: archive_read not installed (%s)", type(exc).__name__)
 
 
+def _install_plugins_admin() -> None:
+    """Wrap Hermes's cookie gate so plugin management is admin only (SEC-1). Any failure is logged
+    and leaves the gate untouched, which leaves plugin management open to every dashboard session,
+    as it was before this plugin version; the log says so."""
+    try:
+        from hermes_cli.dashboard_auth import middleware
+
+        if _plugins_admin.install(middleware):
+            _log.info("dashboard-auth-edgecity: plugin management admin only (edgecity admin sessions)")
+        else:
+            _log.warning("dashboard-auth-edgecity: plugin management NOT restricted (seam_missing); "
+                         "every dashboard session can manage plugins")
+    except Exception as exc:  # noqa: BLE001 - never break the owner login over the plugin guard
+        _log.warning("dashboard-auth-edgecity: plugin management NOT restricted (%s); "
+                     "every dashboard session can manage plugins", type(exc).__name__)
+
+
 def register(ctx) -> None:
     if _HERMES_MISSING is not None:
         raise ImportError("dashboard-auth-edgecity needs hermes_cli.dashboard_auth") from _HERMES_MISSING
     try:
         ctx.register_dashboard_auth_provider(EdgeCityDashboardAuth())
     except ValueError:
+        # No edgecity provider means no edgecity admin: the plugin surface is closed to everyone.
+        _install_plugins_admin()
         return
     _register_archive_read(ctx)
+    _install_plugins_admin()
     _patch_hermes_login()

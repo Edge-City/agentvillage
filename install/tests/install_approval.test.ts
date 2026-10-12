@@ -1091,6 +1091,87 @@ describe("kill switch (L3): AV_APPROVAL_ENABLED off is fail-open, says so, and t
   });
 });
 
+describe("SEC-1: an install takes av-approval out of plugins.disabled", () => {
+  const withPlugins = (plugins: Record<string, unknown>) => ({ ...BASE_CONFIG, plugins });
+
+  test("a resident's Disable is undone: disabled keeps every other entry, enabled lists av-approval once", () => {
+    const home = tenant({ config: withPlugins({ enabled: ["dashboard-auth-edgecity", "av-events"], disabled: ["something", APPROVAL_PLUGIN] }) });
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+    const doc = config(home);
+    expect(doc.plugins.disabled).toEqual(["something"]);
+    expect(doc.plugins.enabled).toEqual(["dashboard-auth-edgecity", "av-events", APPROVAL_PLUGIN]);
+  });
+
+  test("already enabled and also disabled: only the disabled entry goes", () => {
+    const home = tenant({ config: withPlugins({ enabled: [APPROVAL_PLUGIN, "av-events"], disabled: [APPROVAL_PLUGIN, "something"] }) });
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+    const doc = config(home);
+    expect(doc.plugins.disabled).toEqual(["something"]);
+    expect(doc.plugins.enabled).toEqual([APPROVAL_PLUGIN, "av-events"]);
+  });
+
+  test("exact name only: every copy goes, lookalikes and non-strings stay in place", () => {
+    const disabled = [APPROVAL_PLUGIN, "av-approval-old", "AV-APPROVAL", " av-approval", 7, null, APPROVAL_PLUGIN, "user/av-approval"];
+    const home = tenant({ config: withPlugins({ enabled: ["av-events"], disabled }) });
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+    expect(config(home).plugins.disabled).toEqual(["av-approval-old", "AV-APPROVAL", " av-approval", 7, null, "user/av-approval"]);
+  });
+
+  test("an emptied disabled list stays a list", () => {
+    const home = tenant({ config: withPlugins({ enabled: ["av-events"], disabled: [APPROVAL_PLUGIN] }) });
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+    expect(config(home).plugins.disabled).toEqual([]);
+  });
+
+  test("a doc without disabled gets no disabled key: plugins changes only by enabled (and the gate's callback timeout)", () => {
+    const home = tenant({ config: withPlugins({ enabled: ["dashboard-auth-edgecity", "av-events"], other: { keep: true } }) });
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+    expect(config(home).plugins).toEqual({
+      enabled: ["dashboard-auth-edgecity", "av-events", APPROVAL_PLUGIN],
+      other: { keep: true },
+      hook_callback_timeout: 600,
+    });
+  });
+
+  test("a disabled that is not a list is left as it is", () => {
+    const home = tenant({ config: withPlugins({ enabled: ["av-events"], disabled: "something" }) });
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("installed");
+    expect(config(home).plugins.disabled).toBe("something");
+  });
+
+  test("idempotent: a second run changes no byte", () => {
+    const home = tenant({ config: withPlugins({ enabled: ["av-events"], disabled: ["something", APPROVAL_PLUGIN] }) });
+    const o = opts();
+    installApproval(SOURCE_SKILLS, { ...o, now: new Date("2026-10-01T09:00:00Z") });
+    const first = bytes(home);
+    installApproval(SOURCE_SKILLS, { ...o, now: new Date("2026-10-02T09:00:00Z") });
+    expect(bytes(home)).toEqual(first);
+    expect(config(home).plugins.disabled).toEqual(["something"]);
+  });
+
+  test("the kill switch is unchanged: off leaves disabled as it is and av-approval listed (L1 fail-open)", () => {
+    const home = tenant();
+    installApproval(SOURCE_SKILLS, opts());
+    const path = join(home, "config.yaml");
+    const doc = config(home);
+    doc.plugins.disabled = ["something", APPROVAL_PLUGIN];
+    writeFileSync(path, YAML.stringify(doc));
+    const envPath = join(home, ".env");
+    writeFileSync(envPath, readFileSync(envPath, "utf8").replace("AV_APPROVAL_ENABLED=1", "AV_APPROVAL_ENABLED=0"));
+    expect(installApproval(SOURCE_SKILLS, opts())).toBe("disabled");
+    const after = config(home);
+    expect(after.plugins.disabled).toEqual(["something", APPROVAL_PLUGIN]);
+    expect(after.plugins.enabled).toContain(APPROVAL_PLUGIN);
+  });
+
+  test("a failed install restores the config bytes, disabled entry included", () => {
+    const home = tenant({ config: withPlugins({ enabled: ["av-events"], disabled: ["something", APPROVAL_PLUGIN] }) });
+    const before = readFileSync(join(home, "config.yaml"), "utf8");
+    expect(() => installApproval(SOURCE_SKILLS, opts({ hermesPython: null }))).toThrow();
+    expect(readFileSync(join(home, "config.yaml"), "utf8")).toBe(before);
+  });
+});
+
 describe("R2-1: commands compared the way Hermes strips them", () => {
   test("the \\x1F reproduction: a trailing control char is the same hook to Hermes, so it is replaced", () => {
     const home = tenant();

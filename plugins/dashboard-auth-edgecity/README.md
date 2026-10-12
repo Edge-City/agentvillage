@@ -7,9 +7,10 @@ Hermes dashboard auth for Edge City tenants. It registers three things with Herm
 | `edgecity` | interactive session (password form) | the tenant's owner: email, then a one-time code sent by the control plane; landing admins through `/admin/dashboard-sso` |
 | `edgecity-archive` | token only, never offered at login | the archive job (DATA-66), with the tenant's `archive_read` bearer (DATA-88) |
 | a route wrapper around Hermes's token seam | middleware | scopes the `archive_read` bearer to two routes |
+| a wrapper around Hermes's cookie gate | middleware | makes plugin management admin only (SEC-1) |
 
 The owner flow is described in `docs/deployment.md` ("Edge City authentication and local
-verification"). This README covers the `archive_read` bearer.
+verification"). This README covers the `archive_read` bearer and admin-only plugin management.
 
 ## The archive_read bearer
 
@@ -132,17 +133,111 @@ next run; the old token is refused on the first request after its tenant's `.env
 - Hermes below the control plane's minimum (v2026.9.21) is not special-cased. The seam this
   depends on was read at Hermes v2026.9.24 (0.21.5) and is byte-identical at 0.21.3.
 
+## Admin-only plugin management (SEC-1)
+
+Residents may not install plugins; admins may (Carter, 12 Oct 2026). A Hermes plugin is arbitrary
+Python running as `hermes` inside the gateway, so a plugin install is outside what approval.md
+gates. Hermes puts every plugin route behind `_require_token`, which under the cookie gate only
+checks that some session exists, so this plugin narrows it.
+
+### What is covered
+
+Every request, any method but `HEAD` and `OPTIONS`, whose path starts with one of three prefixes
+(the line numbers are `hermes_cli/web_routers/dashboard_ui.py` at v2026.9.24):
+
+| Method | Route | Line |
+|---|---|---|
+| `GET` | `/api/dashboard/plugins/rescan` (rescans on a GET) | 149 |
+| `GET` | `/api/dashboard/plugins/hub` (the Plugins page) | 156 |
+| `GET` | `/api/dashboard/plugins/catalog` (the Plugins page) | 181 |
+| `POST` | `/api/dashboard/agent-plugins/install` | 222 |
+| `POST` | `/api/dashboard/agent-plugins/<name>/enable` | 255 |
+| `POST` | `/api/dashboard/agent-plugins/<name>/disable` | 262 |
+| `POST` | `/api/dashboard/agent-plugins/<name>/update` | 269 |
+| `DELETE` | `/api/dashboard/agent-plugins/<name>` | 284 |
+| `POST` | `/api/dashboard/agent-plugins/activate` | 290 |
+| `PUT` | `/api/dashboard/plugin-providers` | 317 |
+| `POST` | `/api/dashboard/plugins/<name>/visibility` | 345 |
+
+The prefixes are `/api/dashboard/agent-plugins`, `/api/dashboard/plugins` and
+`/api/dashboard/plugin-providers`, matched as plain prefixes (no trailing slash), so a path no
+route serves under them (`/api/dashboard/pluginsx`, a future route) is covered too; the cost is a
+403 where Hermes would have said 404. The one exception is `GET /api/dashboard/plugins` exactly
+(`dashboard_ui.py:131`): it is the manifest list every page loads to mount dashboard plugin tabs
+(`web/src/plugins/usePlugins.ts:87`), not the Plugins page, and a resident needs it. `HEAD` and
+`OPTIONS` are left to Hermes: they are not mutations, and FastAPI routes neither to these
+handlers (a `HEAD` on the rescan GET is a 405).
+
+Matching is on both the parsed URL path (what the gate matches on) and the ASGI scope path (what
+the router dispatches on), with no normalisation: a request is on the surface when either path is,
+so a percent-encoded `?` or `#` that makes the two disagree cannot slip past.
+
+### The allow-list
+
+Admin is exactly `session.provider == "edgecity" and session.org_id == "admin"`, both plain
+strings. The `edgecity` provider mints `org_id = "admin"` only in `complete_login`, the landing
+admin SSO exchange with the control plane (`/dashboard-admin/exchange`); the owner's email-code
+login mints `"owner"`. Nothing else is admin: no session, a token principal
+(`request.state.token_authenticated`, any service bearer), a session from another provider, any
+other role, or an exception while deciding. There is no email list and no route deny-list.
+
+### What a resident sees
+
+- Every covered route answers `403` with
+  `{"error": "forbidden", "detail": "Plugin management is admin only.", "reason": "plugin_admin_only"}`.
+  The request never reaches Hermes's handler. Without a session the gate's own `401` (or `302` to
+  `/login`) comes first, as before.
+- The Plugins nav entry is hidden and `/plugins` (also under a proxy prefix) is sent to `/`. The
+  SPA's `index.html` served to a non-admin gets, before `</head>`, two `<style>` rules hiding the
+  nav link whose `href` ends in `/plugins` (and its `<li>`) and a `<script>` that replaces
+  `location` with the base path's `/` whenever the path is `/plugins`, on load and on every
+  client-side navigation. It is cosmetic: the API is what is closed. Only a `200` `text/html`
+  response with no `content-encoding` that carries Hermes's bootstrap
+  (`window.__HERMES_BASE_PATH__=`) is changed; the login page, `/api/` and `/auth/` responses
+  are never read, an admin's page is byte-identical, and anything else goes out unchanged.
+  Starlette hands a middleware every response as a stream, so the body is read up to 4 MiB; a
+  bigger one, or one that carries an ASGI message, goes out untouched.
+- Plugins already installed and enabled before this version keep running. This closes the door;
+  it does not clean the room.
+
+### Loopback
+
+With the gate off (`auth_required` false: a local `hermes dashboard`), Hermes's cookie gate hands
+every request on with no session, so nothing is admin and the surface is closed there too. On
+village boxes the gate is always on.
+
+### How it is installed
+
+`register()` replaces `hermes_cli.dashboard_auth.middleware.gated_auth_middleware` with a wrapper
+(`_plugins_admin.install`), after the providers are registered. `web_server._dashboard_auth_gate`
+imports the attribute at call time (`web_server.py:645`), so the wrapper takes on the next
+request. It calls the original gate with a guarded `call_next`: the gate has set
+`request.state.session` before it calls `call_next` on every authenticated path (cookie, refreshed
+cookie, native-app bearer), so the guard judges the verified session and the refreshed path's
+rotated cookies still land on a 403. One layer: a wrapper already there (an earlier load of the
+plugin) is replaced, wrapping the gate it wrapped. If the install fails the gate is left as it is
+and the log says plugin management is NOT restricted. The wrapper is installed even when the
+`edgecity` provider cannot start (no `TENANT_ID`): with no edgecity provider nobody is admin.
+
+Logs go to `dashboard-auth-edgecity.plugins-admin`: one code per decision and the running counts,
+never the email, token or path. Denials at INFO (`denied_non_admin`, `denied_no_session`,
+`denied_token_principal`, `denied_other_provider`, `denied_error`); `admin_allowed` and
+`html_hidden` at DEBUG.
+
 ## Tests
 
 `python3 -m pytest -q` from the repository root runs `tests/` here (listed in `pytest.ini`).
-Without Hermes importable (CI) the package still loads, the Hermes-free half drives the real
-route wrapper through a stand-in seam and cookie gate, and the `test_hermes_*` tests skip. To run
-those against the real seam, gate and registry, put the pinned Hermes source on `PYTHONPATH`:
+Without Hermes importable (CI) the package still loads, the Hermes-free halves drive the real
+wrappers through a stand-in seam and cookie gate, and the `test_hermes_*` tests skip. To run
+those against the real seam, gate, registry and (`test_plugins_admin.py`) the real `web_server`
+app, put the pinned Hermes source on `PYTHONPATH`:
 
 ```sh
 mkdir -p /tmp/hermes-v2026.9.24
 git -C ~/.hermes/hermes-agent archive v2026.9.24 | tar -x -C /tmp/hermes-v2026.9.24
-PYTHONPATH=/tmp/hermes-v2026.9.24 python3 -m pytest -q plugins/dashboard-auth-edgecity/tests
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/tmp/hermes-v2026.9.24 python3 -m pytest -q plugins/dashboard-auth-edgecity/tests
 ```
 
-(needs `fastapi` and `httpx` in that interpreter).
+(needs `fastapi` and `httpx` in that interpreter). `test_plugins_admin.py` imports
+`hermes_cli.web_server` with a stand-in `HERMES_WEB_DIST` and a scratch `HERMES_HOME`, and stubs
+the plugin route bodies an admin reaches, so nothing is cloned, rescanned or written.
