@@ -59,7 +59,7 @@ from ._core import (
     uuid7,
 )
 from ._core import _LOCK_HELD, fcntl
-from . import _backup, _outcome_ask
+from . import _backup, _headline_flagged, _outcome_ask
 from ._cron import CronCursor, cron_job_id_from, pending_runs
 from ._edgeos import Ledger
 
@@ -507,6 +507,8 @@ class Collector:
         self.cron_errors = 0
         #: Outcome-ask passes that raised (DATA-42), likewise outside `guarded`.
         self.outcome_errors = 0
+        #: Headline-flag passes that raised (DATA-487), likewise outside `guarded`.
+        self.headline_errors = 0
         #: The tenant's HMAC key (`hash_key`), loaded on first use.
         self._hash_key: Optional[bytes] = None
         #: Diagnostic counters, names only (`tenant_id_not_uuid`, …).
@@ -1326,6 +1328,23 @@ class Collector:
             logger.info("av-events: outcome_ask_tick %s", " ".join(f"{code}={count}" for code, count in sorted(codes.items())))
         return codes
 
+    def headline_tick(self, now: Optional[float] = None) -> dict:
+        """The trigger's flagged headlines (DATA-487, `_headline_flagged.tick`):
+        one `opportunity.headline_flagged` per record, ids and codes only.
+        Flusher thread only, on the cron tail's cadence. Off with
+        `headline_flagged` in `AV_HOOKS_DISABLED`. Returns code -> count; the
+        log line carries those codes and counts only."""
+        if self.plugin_disabled or not self.config.active or _headline_flagged.SWITCH in self.config.disabled_hooks:
+            return {}
+        try:
+            codes = _headline_flagged.tick(self.config.state_dir, self.emit, time.time() if now is None else now)
+        except Exception:  # noqa: BLE001 - the pass must never take the flusher down
+            self.headline_errors += 1
+            return {}
+        if codes:
+            logger.info("av-events: headline_flagged_tick %s", " ".join(f"{code}={count}" for code, count in sorted(codes.items())))
+        return codes
+
     def _cron_event_id(self, payload: dict) -> str:
         execution_id = payload["execution_id"]
         if self.config.tenant_id:
@@ -1601,6 +1620,7 @@ class Collector:
                 self._cron_at = time.monotonic()
                 self.cron_tick()
                 self.outcome_tick()
+                self.headline_tick()
 
     def tick(self) -> None:
         """One flush pass. Runs on the flusher thread; tests call it directly."""

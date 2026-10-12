@@ -309,28 +309,35 @@ export function cleanTitle(raw: unknown, max: number, cut: TitleCut = "codepoint
 }
 
 
-// ── A match field (INDEX-COMMS A; OV-301 fix round 1, refute M1 and S3; fix round 2, recheck M1, M2, S1, N1-N3) ──
+// ── A match field (INDEX-COMMS A; OV-301 fix round 1, refute M1 and S3; fix round 2, recheck M1, M2, S1, N1-N3; fix round 3, recheck fab55b9 M1, M2, N1-N3) ──
 //
 // A match field (Index's `headline` for a card, the resident's own intent text) reaches the model
 // only when it is shaped like a short topic label. The gate is a closed allow-shape, not a deny
-// list (fix round 2): every word is letters of one allowed script, digits and `' - & /`, and the
+// list (fix round 2): every word is letters of one allowed script, digits and `' ’ - & /`, and the
 // text that is checked is the text that is sent (cleanMatchField).
 
 /**
- * Strong signals that a match field is an address to someone, an instruction or a payment ask
- * rather than a topic label. A field holding one as a whole word, read through lookalikeFold, is
- * withheld whole: the second gate, after the allow-shape. Whole words only (`systems`, `youth`,
- * `payments` pass). Fix round 2 (recheck S2) keeps the strong signals only: `open`, `call`,
- * `text`, `us`, `i`, `we`, `message`, `now`, `system` and the contact words of round 1 withheld
- * about a third of real topics. A first-person possessive (`my project on memory`) still is.
+ * Strong signals that a match field is an address to someone, an instruction, a contact lure or a
+ * payment ask rather than a topic label. A field holding one as a whole word, read through
+ * lookalikeFold (and the other check readings, matchFieldReadings), is withheld whole: the second
+ * gate, after the allow-shape. Whole words only (`systems`, `youth`, `payments`, `phonetics`,
+ * `nowcasting` pass). Fix round 2 (recheck S2) dropped `open`, `call`, `text`, `us`, `i`, `we`,
+ * `message` and `system`, which withheld about a third of real topics. Fix round 3 (recheck fab55b9
+ * M1) restores the contact, ask and role words round 2 also dropped (`telegram`, `whatsapp`,
+ * `email`, `phone`, `handle`, `sms`, `u`, `ur`, `please`, `pls`, `plz`, `must`, `should`, `now`,
+ * `mode`): none of the 50 sampled topics holds one. A first-person possessive (`my project on
+ * memory`) is withheld too.
  */
 export const MATCH_FIELD_STOP_WORDS: readonly string[] = Object.freeze([
   // address: second person, and the first person as the object of an ask
-  "you", "your", "yours", "yourself", "me", "my", "mine", "myself",
+  "you", "your", "yours", "yourself", "me", "my", "mine", "myself", "u", "ur",
   // asks to act or to get in touch
   "reply", "respond", "send", "dm", "dms", "click", "tap", "visit", "urgent",
+  "please", "pls", "plz", "must", "should", "now",
+  // contact channels and details
+  "telegram", "whatsapp", "email", "phone", "handle", "sms",
   // instructions to the model
-  "ignore", "forget", "disregard", "override", "instruction", "instructions", "rule", "rules", "assistant", "admin",
+  "ignore", "forget", "disregard", "override", "instruction", "instructions", "rule", "rules", "assistant", "admin", "mode",
   // secrets and money
   "password", "otp", "wallet", "pay", "transfer",
 ]);
@@ -366,16 +373,29 @@ export const MATCH_FIELD_MAX_LENGTH = 4000;
  * small capitals or other phonetic letters; CJK is Han, Hiragana and Katakana. Anything else
  * (Armenian, Cherokee, Georgian, braille, symbols, emoji, maths or enclosed letters NFKC leaves,
  * a combining mark NFKC cannot compose onto its letter) withholds the field.
+ *
+ * Fix round 3 (recheck fab55b9 M2): a Latin letter outside ASCII is allowed only when it reads as
+ * ASCII letters to the check: its NFD with every mark removed is ASCII (`é`, `ǐ`, `ơ`), or the
+ * look-alike fold maps it (`ı`, `ø`, `ł`, `đ`, `ħ`), or it is one of MATCH_FIELD_LATIN_KEPT. Any
+ * other (`Ɨ`, `ǥ`, `Ƥ`, `ƚ`, `ɇ`, `ƴ`, `ǝ`, ...) withholds the field.
  */
 export const MATCH_FIELD_SCRIPTS = Object.freeze(["Latin", "Cyrillic", "Greek", "Devanagari", "Arabic", "Hebrew", "CJK", "Thai", "Hangul"] as const);
 type FieldScript = (typeof MATCH_FIELD_SCRIPTS)[number];
+/** The Latin blocks a match field's letters may come from (code point ranges; the click letters U+01C0-01C3 are not letters of a word). */
+export const MATCH_FIELD_LATIN_RANGES: ReadonlyArray<readonly [number, number]> = Object.freeze([[0x0000, 0x01bf], [0x01c4, 0x024f], [0x1e00, 0x1eff]] as const);
+/** Non-ASCII Latin letters NFD cannot take apart and the fold does not map, kept as letters of a real word (fix round 3, recheck M2). */
+export const MATCH_FIELD_LATIN_KEPT: readonly string[] = Object.freeze(["æ", "Æ", "œ", "Œ", "ß", "ẞ", "ð", "Ð", "þ", "Þ", "ŋ", "Ŋ"]);
 
 const IS_LETTER = /\p{L}/u;
 const IS_LETTER_OR_MARK = /[\p{L}\p{M}]/u;
 const IS_LETTER_MARK_OR_DIGIT = /[\p{L}\p{M}\p{Nd}]/u;
 const inRange = (cp: number, from: number, to: number) => cp >= from && cp <= to;
+/** A non-ASCII Latin letter reads as ASCII letters to the check (MATCH_FIELD_SCRIPTS, fix round 3). */
+function latinReadsPlain(ch: string, cp: number): boolean {
+  return cp < 0x80 || /^[A-Za-z]+$/.test(ch.normalize("NFD").replace(/\p{M}+/gu, "")) || ch in LOOKALIKES || MATCH_FIELD_LATIN_KEPT.includes(ch);
+}
 const SCRIPT_OF: ReadonlyArray<readonly [FieldScript, (ch: string, cp: number) => boolean]> = [
-  ["Latin", (ch, cp) => (cp <= 0x24f ? !inRange(cp, 0x1c0, 0x1c3) : inRange(cp, 0x1e00, 0x1eff)) && IS_LETTER.test(ch) && /\p{Script=Latin}/u.test(ch)],
+  ["Latin", (ch, cp) => MATCH_FIELD_LATIN_RANGES.some(([from, to]) => inRange(cp, from, to)) && IS_LETTER.test(ch) && /\p{Script=Latin}/u.test(ch) && latinReadsPlain(ch, cp)],
   ["Cyrillic", (ch, cp) => inRange(cp, 0x400, 0x52f) && IS_LETTER.test(ch) && /\p{Script=Cyrillic}/u.test(ch)],
   ["Greek", (ch, cp) => (inRange(cp, 0x370, 0x3ff) || inRange(cp, 0x1f00, 0x1fff)) && IS_LETTER.test(ch) && /\p{Script=Greek}/u.test(ch)],
   ["Devanagari", (ch, cp) => inRange(cp, 0x900, 0x97f) && IS_LETTER_MARK_OR_DIGIT.test(ch) && /\p{Script=Devanagari}/u.test(ch)],
@@ -389,10 +409,14 @@ const SCRIPT_OF: ReadonlyArray<readonly [FieldScript, (ch: string, cp: number) =
   ["Thai", (ch, cp) => inRange(cp, 0xe01, 0xe59) && IS_LETTER_MARK_OR_DIGIT.test(ch) && /\p{Script=Thai}/u.test(ch)],
   ["Hangul", (_ch, cp) => inRange(cp, 0xac00, 0xd7a3) || (inRange(cp, 0x1100, 0x11ff) && cp !== 0x115f && cp !== 0x1160)],
 ];
-/** The punctuation a match field may hold: inside a word (between two letters or digits), and `/ & -` alone as a word. */
-const JOINERS = "'-&/";
+/**
+ * The punctuation a match field may hold: inside a word (between two letters or digits), and
+ * `/ & -` alone as a word. Fix round 3 (recheck fab55b9 N1): the typographic apostrophe `’`
+ * (phones type it) is allowed where `'` is; the check reads it as `'`.
+ */
+const JOINERS = "'’-&/";
 const LONE_JOINERS = "/&-";
-const JOINER_RUNS = /['\-&/]+/g;
+const JOINER_RUNS = /['’\-&/]+/g;
 
 type CharKind = FieldScript | "digit" | "joiner";
 function charKind(ch: string): CharKind | null {
@@ -427,34 +451,48 @@ function wordShapeHit(word: string): string | null {
 /**
  * Characters that withhold a match field whole rather than being stripped (fix round 2): tag
  * characters, variation selectors, private-use characters, lone surrogates and the bidi controls
- * (a reversed text stays reversed once the override is stripped). Other format characters (zero
- * width, soft hyphen) are removed before the check, so the check reads the joined word.
+ * (a reversed text stays reversed once the override is stripped). Fix round 3 (recheck fab55b9
+ * N2): the zero-width characters too (ZERO_WIDTH). Other format characters (soft hyphen) are
+ * removed before the check, so the check reads the joined word.
  */
 const HIDDEN_CARRIERS = /[\u{E0000}-\u{E007F}︀-️\u{E0100}-\u{E01EF}᠋-᠍᠏\p{Co}\p{Cs}؜‎‏‪-‮⁦-⁩]/u;
+
+/**
+ * Zero-width characters withhold a match field whole (fix round 3, recheck fab55b9 N2): removing
+ * them would join two words the reader sees apart (`memory​systems`). U+200B, U+2060-2064, U+FEFF,
+ * U+180E anywhere; the zero-width non-joiner and joiner (U+200C, U+200D) unless both neighbours are
+ * Arabic or Devanagari, where they shape real words (Persian, Hindi half forms); there they are
+ * removed as before.
+ */
+export const ZERO_WIDTH = /[​⁠-⁤﻿᠎]|(?<![\p{Script=Arabic}\p{Script=Devanagari}ً-ٰٟ])[‌‍]|[‌‍](?![\p{Script=Arabic}\p{Script=Devanagari}])/u;
 
 /**
  * Letters that look like Latin ones, folded to the Latin letter for the check only (the text sent
  * is never folded): Cyrillic and Greek (an all-Greek `ΡΑΥ` reads as `pay`; a word mixing scripts is
  * withheld by the allow-shape already) and the Latin letters with a stroke NFD cannot take apart.
+ * Fix round 3 (recheck fab55b9 M2): Cyrillic `м п г ԍ`, Greek `γ`, and the kept Latin letters
+ * (MATCH_FIELD_LATIN_KEPT) by what they look like.
  */
 const LOOKALIKES: Readonly<Record<string, string>> = Object.freeze({
   // Cyrillic lower case
   "а": "a", "с": "c", "ԁ": "d", "е": "e", "һ": "h", "і": "i", "ј": "j",
   "ӏ": "l", "о": "o", "р": "p", "ԛ": "q", "ѕ": "s", "ԝ": "w", "х": "x",
-  "у": "y", "ү": "y", "ɡ": "g",
+  "у": "y", "ү": "y", "ɡ": "g", "м": "m", "п": "n", "г": "r", "ԍ": "g",
   // Cyrillic upper case
   "А": "a", "В": "b", "С": "c", "Е": "e", "Н": "h", "І": "i", "Ј": "j",
   "К": "k", "М": "m", "О": "o", "Р": "p", "Ѕ": "s", "Т": "t", "Х": "x",
   "У": "y", "Ү": "y", "Ԛ": "q", "Ԝ": "w", "Ӏ": "i",
   // Greek lower case
   "α": "a", "ε": "e", "ι": "i", "κ": "k", "ν": "v", "ο": "o", "ρ": "p",
-  "τ": "t", "υ": "u", "χ": "x", "ϲ": "c", "ϳ": "j",
+  "τ": "t", "υ": "u", "χ": "x", "ϲ": "c", "ϳ": "j", "γ": "y",
   // Greek upper case
   "Α": "a", "Β": "b", "Ε": "e", "Ζ": "z", "Η": "h", "Ι": "i", "Κ": "k",
   "Μ": "m", "Ν": "n", "Ο": "o", "Ρ": "p", "Τ": "t", "Υ": "y", "Χ": "x",
   // Latin letters NFKC and NFD keep: dotless, stroked
   "ı": "i", "ȷ": "j", "ĸ": "k", "ø": "o", "Ø": "o", "ł": "l", "Ł": "l", "đ": "d", "Đ": "d",
   "ħ": "h", "Ħ": "h", "ŧ": "t", "Ŧ": "t", "ƀ": "b", "Ƀ": "b",
+  // the kept Latin letters (MATCH_FIELD_LATIN_KEPT)
+  "æ": "ae", "Æ": "ae", "œ": "oe", "Œ": "oe", "ß": "ss", "ẞ": "ss", "ð": "d", "Ð": "d", "þ": "p", "Þ": "p", "ŋ": "n", "Ŋ": "n",
 });
 
 /**
@@ -488,15 +526,16 @@ export function withoutDoubleQuotes(raw: string): string {
  *      withholds it;
  *   2. at most MATCH_FIELD_MAX_WORDS words, at most MATCH_FIELD_MAX_LENGTH code points;
  *   3. no IPv4- or phone-shaped digit run;
- *   4. Hermes's scanner, on the text, then on its lookalikeFold with `' - & /` read as a space
- *      and once more with them removed (`in-structions`);
- *   5. no word of MATCH_FIELD_STOP_WORDS and no phrase of MATCH_FIELD_STOP_PHRASES in any of those
- *      three folded forms.
+ *   4. Hermes's scanner, on the text, then on every check reading of it (matchFieldReadings);
+ *   5. in every reading: no word of MATCH_FIELD_STOP_WORDS and no phrase of
+ *      MATCH_FIELD_STOP_PHRASES, also when two or more adjacent words are read as one
+ *      (`igno re`, `u r`); and the scanner's phrases not in the reading with every space and
+ *      joiner removed (`ignoreallpreviousinstructions`).
  * The reason is an id only: nothing of the text is returned or logged.
  */
 export function matchFieldShapeHit(text: string): string | null {
   if (!text || [...text].length > MATCH_FIELD_MAX_LENGTH) return "length";
-  if (HIDDEN_CARRIERS.test(text)) return "hidden";
+  if (HIDDEN_CARRIERS.test(text) || ZERO_WIDTH.test(text)) return "hidden";
   let words = 0;
   for (const word of text.split(" ")) {
     if (!word) return "spacing";
@@ -507,41 +546,143 @@ export function matchFieldShapeHit(text: string): string | null {
   if (words > MATCH_FIELD_MAX_WORDS) return "too_many_words";
   if (IPV4_SHAPE.test(text) || PHONE_SHAPE.test(text)) return "digits";
   if (cronScanHit(text)) return "scanner";
-  const folded = lookalikeFold(text);
-  const split = folded.replace(JOINER_RUNS, " ");
-  const joined = folded.replace(JOINER_RUNS, "");
-  for (const form of [folded, split, joined]) {
-    if (cronScanHit(form)) return "scanner";
+  for (const form of matchFieldReadings(text)) {
+    if (cronScanHit(form) || joinedScanHit(form.replace(/[\s'\-&/]+/g, ""))) return "scanner";
     const tokens = form.split(/\s+/).filter(Boolean);
     if (tokens.some((t) => MATCH_FIELD_STOP_WORDS.includes(t))) return "address_or_instruction";
     const padded = ` ${tokens.join(" ")} `;
     if (MATCH_FIELD_STOP_PHRASES.some((phrase) => padded.includes(` ${phrase} `))) return "banned_phrase";
+    if (adjacentJoinHit(tokens)) return "joined_words";
   }
   return null;
 }
 
+/** Leetspeak digits (and `@ $`) read as letters, in a check copy of a word that mixes letters and digits (fix round 3, recheck fab55b9 M2). */
+const LEET: Readonly<Record<string, string>> = Object.freeze({ "0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "@": "a", "$": "s" });
+/** `1` also reads as `l` (`ru1es`). */
+const LEET_L: Readonly<Record<string, string>> = Object.freeze({ ...LEET, "1": "l" });
+
+function leetFold(folded: string, map: Readonly<Record<string, string>>): string {
+  return folded
+    .split(" ")
+    .map((word) => (/\p{L}/u.test(word) && /[0-9@$]/.test(word) ? [...word].map((ch) => map[ch] ?? ch).join("") : word))
+    .join(" ");
+}
+
+/** A word split where its case changes (`IgnoreAllPrevious` is `Ignore All Previous`, `XMLParser` is `XML Parser`). */
+function camelSplit(text: string): string {
+  return text.replace(/(\p{Ll})(\p{Lu})/gu, "$1 $2").replace(/(\p{Lu})(\p{Lu}\p{Ll})/gu, "$1 $2");
+}
+
+/** `n't` read as ` not` (`don't` is `do not`, which the scanner reads), and `dont` as `do not`. */
+function notExpanded(folded: string): string {
+  return folded
+    .replace(/n't(?![\p{L}\p{N}])/gu, " not")
+    .replace(/(?<![\p{L}\p{N}])dont(?![\p{L}\p{N}])/gu, "do not")
+    .replace(/ +/g, " ")
+    .trim();
+}
+
 /**
- * A match field as the model may see it, or null (withheld whole). The pipeline (fix round 2):
- *   1. Hermes's scanner on the raw text;
- *   2. NFKC; a tag character, variation selector, private-use character or bidi control
- *      withholds it (HIDDEN_CARRIERS);
- *   3. double quotes to a space (refute N5), line breaks to a space, the other control, format
- *      and default-ignorable characters removed, whitespace collapsed;
- *   4. matchFieldShapeHit on that text; nothing is rewritten after this point except the cut;
- *   5. cut at a word to `max` code points (cutAtWord), and matchFieldShapeHit and the scanner run
- *      again on what is sent (the cut can end on a listed word: recheck N1).
- * The string checked is the string sent: NFKC, never folded, no markup or link removed (a field
- * holding one is withheld, not repaired).
+ * The check copies of a match field (never sent), fix round 3 (recheck fab55b9 M2): the text with
+ * `’` read as `'`, and the same split where its case changes; each through lookalikeFold with `n't`
+ * read as `not`; each of those as is and with leetspeak digits read as letters (`1` as `i`, then as
+ * `l`); and each of those as is, with `' - & /` read as a space and with them removed.
  */
-export function cleanMatchField(raw: unknown, max: number): string | null {
-  if (typeof raw !== "string" || cronScanHit(raw)) return null;
+export function matchFieldReadings(text: string): string[] {
+  const plain = text.replace(/’/g, "'");
+  const readings = new Set<string>();
+  for (const base of [plain, camelSplit(plain)]) {
+    const folded = notExpanded(lookalikeFold(base));
+    for (const form of [folded, leetFold(folded, LEET), leetFold(folded, LEET_L)]) {
+      readings.add(form);
+      readings.add(form.replace(JOINER_RUNS, " ").replace(/ +/g, " ").trim());
+      readings.add(form.replace(JOINER_RUNS, ""));
+    }
+  }
+  return [...readings];
+}
+
+/** A stop word or stop phrase with its spaces removed: what two or more adjacent words may not join to. */
+const JOINED_STOPS: ReadonlySet<string> = new Set([...MATCH_FIELD_STOP_WORDS, ...MATCH_FIELD_STOP_PHRASES.map((phrase) => phrase.replace(/ /g, ""))]);
+const JOINED_STOP_MAX = Math.max(...[...JOINED_STOPS].map((s) => s.length));
+
+/** Two or more adjacent words that read as one stop word or phrase (`igno re`, `u r`, `ask meto stop`). */
+function adjacentJoinHit(tokens: readonly string[]): boolean {
+  for (let i = 0; i < tokens.length; i++) {
+    let joined = tokens[i];
+    for (let j = i + 1; j < tokens.length; j++) {
+      joined += tokens[j];
+      if (joined.length > JOINED_STOP_MAX) break;
+      if (JOINED_STOPS.has(joined)) return true;
+    }
+  }
+  return false;
+}
+
+/** The scanner's four phrases in a reading with every space and joiner removed. */
+function joinedScanHit(joined: string): boolean {
+  const ignore = joined.indexOf("ignore");
+  if (ignore >= 0) {
+    const end = joined.lastIndexOf("instructions");
+    if (end > ignore && /previous|all|above|prior/.test(joined.slice(ignore + "ignore".length, end))) return true;
+  }
+  return joined.includes("donottelltheuser") || joined.includes("systempromptoverride") || /disregard(?:your|all|any)(?:instructions|rules|guidelines)/.test(joined);
+}
+
+/** Why a match field was withheld or cut, for the detection event (DATA-487): a code and the gate, never any text. */
+export type MatchFieldReason = "cleaner_withheld" | "scanner_flagged" | "shape_withheld" | "length_capped";
+export type MatchFieldStage = "cleaner" | "scanner" | "shape";
+export interface MatchFieldVerdict {
+  /** The field as the model may see it, or null (withheld whole). */
+  text: string | null;
+  /** Set when the field was withheld, flagged or cut; null when it went out whole or was absent. */
+  flag: { reason: MatchFieldReason; stage: MatchFieldStage } | null;
+}
+
+const shapeReason = (hit: string): MatchFieldReason => (hit === "scanner" ? "scanner_flagged" : "shape_withheld");
+
+/**
+ * A match field as the model may see it, or null (withheld whole), and why it was withheld or cut.
+ * The pipeline (fix round 2):
+ *   1. Hermes's scanner on the raw text (`scanner_flagged`, stage `scanner`);
+ *   2. NFKC; a tag character, variation selector, private-use character, bidi control or
+ *      zero-width character withholds it (HIDDEN_CARRIERS, ZERO_WIDTH; `cleaner_withheld`, stage
+ *      `cleaner`);
+ *   3. double quotes to a space (refute N5), line breaks to a space, the other control, format
+ *      and default-ignorable characters removed, whitespace collapsed; nothing left is
+ *      `cleaner_withheld`, stage `cleaner`;
+ *   4. matchFieldShapeHit on that text (stage `shape`: `scanner_flagged` for a scanner phrase in
+ *      any reading, else `shape_withheld`); nothing is rewritten after this point except the cut;
+ *   5. cut at a word to `max` code points (cutAtWord), and matchFieldShapeHit (stage `shape`) and
+ *      the scanner (stage `scanner`) run again on what is sent (the cut can end on a listed word:
+ *      recheck N1). A cut that passes is `length_capped`, stage `cleaner`.
+ * The string checked is the string sent: NFKC, never folded, no markup or link removed (a field
+ * holding one is withheld, not repaired). An absent field (undefined, null, "") has no flag; any
+ * other value that is not a string is `cleaner_withheld`.
+ */
+export function matchFieldVerdict(raw: unknown, max: number): MatchFieldVerdict {
+  const withheld = (reason: MatchFieldReason, stage: MatchFieldStage): MatchFieldVerdict => ({ text: null, flag: { reason, stage } });
+  if (raw === undefined || raw === null || raw === "") return { text: null, flag: null };
+  if (typeof raw !== "string") return withheld("cleaner_withheld", "cleaner");
+  if (cronScanHit(raw)) return withheld("scanner_flagged", "scanner");
   const nfkc = raw.normalize("NFKC");
-  if (HIDDEN_CARRIERS.test(nfkc)) return null;
+  if (HIDDEN_CARRIERS.test(nfkc) || ZERO_WIDTH.test(nfkc)) return withheld("cleaner_withheld", "cleaner");
   const text = withoutDoubleQuotes(nfkc).replace(LINE_BREAKS, " ").replace(INVISIBLE, "").replace(IGNORABLE, "").replace(/\s+/g, " ").trim();
-  if (matchFieldShapeHit(text)) return null;
+  if (!text) return withheld("cleaner_withheld", "cleaner");
+  const hit = matchFieldShapeHit(text);
+  if (hit) return withheld(shapeReason(hit), "shape");
   const out = cutAtWord(text, max);
   const sent = out === text ? out : out.replace(/…$/u, "");
-  return !matchFieldShapeHit(sent) && !cronScanHit(out) ? out : null;
+  const sentHit = matchFieldShapeHit(sent);
+  if (sentHit) return withheld(shapeReason(sentHit), "shape");
+  if (cronScanHit(out)) return withheld("scanner_flagged", "scanner");
+  return { text: out, flag: out === text ? null : { reason: "length_capped", stage: "cleaner" } };
+}
+
+/** A match field as the model may see it, or null (withheld whole): matchFieldVerdict's text. */
+export function cleanMatchField(raw: unknown, max: number): string | null {
+  return matchFieldVerdict(raw, max).text;
 }
 
 // ── The Connections link ─────────────────────────────────────────────────────

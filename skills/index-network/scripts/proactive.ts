@@ -79,6 +79,7 @@
 
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { randomBytes } from "node:crypto";
 
 import { approvalsWaiting } from "./approvals-waiting";
 import { askQuestions } from "./ask-questions";
@@ -87,7 +88,7 @@ import { contextInterests, contextPreferences, readContextTags } from "./context
 import { OPPORTUNITY_DELIVERY_KEY, deliveryLogChanged, pruneDeliveryLog, readDeliveryLog, recordShowings } from "./delivery-state";
 import { dropOpportunity } from "./drop-opportunity";
 import { type DueCard, pendingAlert, respondByText } from "./pending-alert";
-import { cleanMatchField, cleanName, cleanText, cleanTitle, connectionsUrl, cronScanHit, envOrDotenv } from "./proactive-text";
+import { type MatchFieldReason, type MatchFieldStage, cleanMatchField, cleanName, cleanText, cleanTitle, connectionsUrl, cronScanHit, envOrDotenv, matchFieldVerdict } from "./proactive-text";
 import { type LockOptions, LockStuck, LockTimeout, releaseHeldLocks, withStateLock } from "./state-lock";
 import { writeStateFile } from "./state-file";
 import { followUp } from "./summarize-negotiations";
@@ -96,7 +97,7 @@ import { type Delivery, deliveryFor, inWindow, isTeamTenant, minuteOfDay, pruneP
 import { DEFAULT_NAME, agentName, readProfile } from "../../agent-profile/scripts/profile";
 
 /** OV-301 fix rounds 1 and 2: what a match field may hold (proactive-text.ts). */
-export { MATCH_FIELD_MAX_LENGTH, MATCH_FIELD_MAX_WORDS, MATCH_FIELD_SCRIPTS, MATCH_FIELD_STOP_PHRASES, MATCH_FIELD_STOP_WORDS } from "./proactive-text";
+export { MATCH_FIELD_LATIN_KEPT, MATCH_FIELD_LATIN_RANGES, MATCH_FIELD_MAX_LENGTH, MATCH_FIELD_MAX_WORDS, MATCH_FIELD_SCRIPTS, MATCH_FIELD_STOP_PHRASES, MATCH_FIELD_STOP_WORDS } from "./proactive-text";
 
 /** The default jobs' actions, one per installer job (install_index.ts DIGEST_CRON_SPECS). */
 export const ACTIONS = ["prefetch", "brief", "drop-midday", "drop-evening", "negotiation", "evening", "pending"] as const;
@@ -147,6 +148,12 @@ export interface TriggerResult {
   reason: string;
   /** Strings withheld because they did not clean or would trip Hermes's scanner. */
   withheld?: number;
+  /** DATA-487: headline flags handed to the av-events plugin (writeHeadlineFlags). */
+  flagged?: number;
+  /** DATA-487: headline flags not handed over (the plugin off, its folder full, the write failed). */
+  flagUnsent?: number;
+  /** DATA-487: flagged headlines whose card had no Index opportunity id or counterpart user id: counted, never emitted. */
+  flagUnattributed?: number;
   /** A code for something the run repaired on its way (STATE_HEALED). */
   note?: string;
   /** A code for which path an action took (the evening's outcome ask, or why it fell back). */
@@ -484,10 +491,79 @@ class Withheld {
   matchField(raw: unknown, max: number): string | null {
     return this.counted(raw, cleanMatchField(raw, max));
   }
+  /**
+   * Detection (DATA-487, Carter's ruling of 12 Oct 2026 18:25Z): Index's headline for a card, as
+   * matchField, plus one HeadlineFlag when it was withheld, flagged or cut: the card's Index
+   * opportunity id, the counterpart's Index user id, a reason code, the gate and the raw length.
+   * Never any text. A flagged card without both ids is counted in `unattributed`, never guessed.
+   */
+  matchHeadline(raw: unknown, max: number, ids: CardIds): string | null {
+    const verdict = matchFieldVerdict(raw, max);
+    if (verdict.flag) {
+      const opportunityId = indexIdOf(ids.opportunityId, ids.opportunityUrl, "o");
+      const counterpartId = indexIdOf(ids.userId, ids.userUrl, "u");
+      if (opportunityId && counterpartId) {
+        this.flags.push({
+          opportunity_id: opportunityId,
+          counterpart_index_user_id: counterpartId,
+          reason_code: verdict.flag.reason,
+          stage: verdict.flag.stage,
+          headline_length: Math.min(typeof raw === "string" ? [...raw].length : 0, HEADLINE_LENGTH_MAX),
+        });
+      } else {
+        this.unattributed++;
+      }
+    }
+    return this.counted(raw, verdict.text);
+  }
+  /** DATA-487: one per withheld, flagged or cut `match.headline` (matchHeadline). */
+  flags: HeadlineFlag[] = [];
+  /** DATA-487: flagged headlines whose card had no Index opportunity id or counterpart user id. */
+  unattributed = 0;
+  /** The detection keys a view result carries: none when nothing was flagged. */
+  flagged(): { flags?: HeadlineFlag[]; flagUnattributed?: number } {
+    return { ...(this.flags.length ? { flags: this.flags } : {}), ...(this.unattributed ? { flagUnattributed: this.unattributed } : {}) };
+  }
   private counted(raw: unknown, text: string | null): string | null {
     if (raw !== undefined && raw !== null && raw !== "" && !text) this.count++;
     return text;
   }
+}
+
+/**
+ * DATA-487 `opportunity.headline_flagged@1`'s payload, closed: every key required, ids and codes
+ * only, no text of any kind. The script hands it to the av-events plugin (writeHeadlineFlags);
+ * the plugin emits it (plugins/av-events/_headline_flagged.py).
+ */
+export interface HeadlineFlag {
+  /** The Index opportunity id of the card (at most 64 of `[A-Za-z0-9_-]`). */
+  opportunity_id: string;
+  /** The card's other party's Index user id: the id behind `https://index.network/u/<userId>` (`peer.userId`). */
+  counterpart_index_user_id: string;
+  reason_code: MatchFieldReason;
+  stage: MatchFieldStage;
+  /** The raw headline's length in code points, capped at HEADLINE_LENGTH_MAX. */
+  headline_length: number;
+}
+/** `headline_length`'s cap (DATA-487: an int 0..2000). */
+export const HEADLINE_LENGTH_MAX = 2000;
+/** An Index id the event may carry: the Index id shape, at most 64 characters. */
+const FLAG_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const INDEX_PAGE_ID = { o: /^https:\/\/index\.network\/o\/([A-Za-z0-9_-]{1,64})$/, u: /^https:\/\/index\.network\/u\/([A-Za-z0-9_-]{1,64})$/ } as const;
+
+/** The ids a card carries for the detection event: the ids themselves, else the Index pages attachIndexLinks built from them. */
+export interface CardIds {
+  opportunityId?: unknown;
+  opportunityUrl?: unknown;
+  userId?: unknown;
+  userUrl?: unknown;
+}
+
+/** An Index id from the id field, else from its Index page link (`https://index.network/<kind>/<id>`); null when neither holds one. */
+function indexIdOf(id: unknown, url: unknown, kind: "o" | "u"): string | null {
+  if (typeof id === "string" && FLAG_ID.test(id)) return id;
+  if (typeof url === "string") return url.match(INDEX_PAGE_ID[kind])?.[1] ?? null;
+  return null;
 }
 
 export interface PersonView {
@@ -519,10 +595,11 @@ export interface MatchFacts {
  *   - `you.intent`: the resident's own intent text for the card (BriefOpportunity.matchedIntentText;
  *     no parser sets it today), only when `intent` is allowed (a community ask is not the
  *     resident's match).
- * Absent facts are absent keys: the prompts then say nothing about them.
+ * Absent facts are absent keys: the prompts then say nothing about them. A withheld, flagged or
+ * cut headline adds one HeadlineFlag for the card `ids` name (DATA-487); the intent never does.
  */
-function matchFacts(headline: unknown, intent: unknown, w: Withheld, { withIntent = true } = {}): MatchFacts {
-  const cleanHeadline = w.matchField(headline, MATCH_HEADLINE_MAX);
+function matchFacts(headline: unknown, intent: unknown, w: Withheld, ids: CardIds, { withIntent = true } = {}): MatchFacts {
+  const cleanHeadline = w.matchHeadline(headline, MATCH_HEADLINE_MAX, ids);
   const cleanIntent = withIntent ? w.matchField(intent, MATCH_INTENT_MAX) : null;
   return { ...(cleanHeadline ? { match: { headline: cleanHeadline } } : {}), ...(cleanIntent ? { you: { intent: cleanIntent } } : {}) };
 }
@@ -719,7 +796,10 @@ export function recordBriefShowings(state: Record<string, unknown>, ids: string[
   return next;
 }
 
-export function dropView(date: string, card: BriefOpportunity): { view: Record<string, unknown> | null; withheld: number } {
+/** A view and its withheld count; `flags` and `flagUnattributed` only when a headline was flagged (DATA-487). */
+export type ViewResult = { view: Record<string, unknown> | null; withheld: number; flags?: HeadlineFlag[]; flagUnattributed?: number };
+
+export function dropView(date: string, card: BriefOpportunity): ViewResult {
   const w = new Withheld();
   const who = person(card, w);
   if (!who) return { view: null, withheld: w.count };
@@ -731,9 +811,10 @@ export function dropView(date: string, card: BriefOpportunity): { view: Record<s
       kind,
       seenBefore: Boolean(card.redelivery),
       person: who,
-      ...matchFacts(card.headline, card.matchedIntentText, w, { withIntent: kind === "conversation" }),
+      ...matchFacts(card.headline, card.matchedIntentText, w, card, { withIntent: kind === "conversation" }),
     },
     withheld: w.count,
+    ...w.flagged(),
   };
 }
 
@@ -744,21 +825,21 @@ export function dropView(date: string, card: BriefOpportunity): { view: Record<s
  * signed accept link, which accepts at once) is kept for completeness and is
  * not rendered. `respondBy` is the deadline's words (respondByText), or null.
  */
-export function pendingView(cards: DueCard[], now: Date): { view: Record<string, unknown> | null; withheld: number } {
+export function pendingView(cards: DueCard[], now: Date): ViewResult {
   const w = new Withheld();
   const shown = cards.flatMap(({ card, opportunityId, firstSeen }) => {
     const who = person(card, w);
     if (!who) return [];
     // INDEX-COMMS A: the fixed line may name Index's headline; never the resident's intent here.
-    const { match } = matchFacts(card.headline, undefined, w, { withIntent: false });
+    const { match } = matchFacts(card.headline, undefined, w, { ...card, opportunityId }, { withIntent: false });
     return [{ name: who.name, profileUrl: who.profileUrl, appUrl: appOpportunityLink(opportunityId), acceptUrl: who.messageUrl, opportunityId, firstSeen, respondBy: respondByText(card.respondBy, now), ...(match ? { match } : {}) }];
   });
-  return { view: shown.length > 0 ? { job: "pending-opportunity", cards: shown } : null, withheld: w.count };
+  return { view: shown.length > 0 ? { job: "pending-opportunity", cards: shown } : null, withheld: w.count, ...w.flagged() };
 }
 
 type EveningResult = Awaited<ReturnType<typeof askQuestions>>;
 
-export function eveningView(date: string, result: Exclude<EveningResult, { silent: true }>): { view: Record<string, unknown> | null; withheld: number } {
+export function eveningView(date: string, result: Exclude<EveningResult, { silent: true }>): ViewResult {
   const w = new Withheld();
   if (!("name" in result)) {
     const question = w.text(result.prompt, 300);
@@ -767,18 +848,20 @@ export function eveningView(date: string, result: Exclude<EveningResult, { silen
   const who = person(result, w);
   if (!who) return { view: null, withheld: w.count };
   // `matchHeadline` is Index's own headline: the card's `headline` falls back to the summary and is never read.
-  return { view: { job: "evening-note", date, person: who, ...matchFacts(result.matchHeadline, result.matchedIntentText, w) }, withheld: w.count };
+  // DATA-487: the evening card carries the Index pages (attachIndexLinks), not the ids.
+  const facts = matchFacts(result.matchHeadline, result.matchedIntentText, w, result);
+  return { view: { job: "evening-note", date, person: who, ...facts }, withheld: w.count, ...w.flagged() };
 }
 
 type FollowUpResult = Exclude<Awaited<ReturnType<typeof followUp>>, { silent: true }>;
 
-export function followUpView(date: string, result: FollowUpResult): { view: Record<string, unknown> | null; withheld: number } {
+export function followUpView(date: string, result: FollowUpResult): ViewResult {
   const w = new Withheld();
   const people = (cards: FollowUpResult["needsAttention"]) => cards.slice(0, LIST_MAX).flatMap((card) => person(card, w) ?? []);
   // INDEX-COMMS A: a Waiting on you row may name the match (Index's own headline, the resident's intent).
   const waitingOnYou = result.needsAttention.slice(0, LIST_MAX).flatMap((card) => {
     const who = person(card, w);
-    return who ? [{ ...who, ...matchFacts(card.matchHeadline, card.matchedIntentText, w) }] : [];
+    return who ? [{ ...who, ...matchFacts(card.matchHeadline, card.matchedIntentText, w, card) }] : [];
   });
   const newConnections = people(result.newlyResolved);
   const agentsTalking = people(result.waiting).map(({ name, profileUrl }) => ({ name, profileUrl }));
@@ -787,8 +870,8 @@ export function followUpView(date: string, result: FollowUpResult): { view: Reco
     const text = w.title(signal.summary, 120);
     return text ? [{ text, link: signalLink(signal.url) }] : [];
   });
-  if (waitingOnYou.length === 0 && newConnections.length === 0) return { view: null, withheld: w.count };
-  return { view: { job: "people-follow-up", date, yourSignals, waitingOnYou, agentsTalking, newConnections }, withheld: w.count };
+  if (waitingOnYou.length === 0 && newConnections.length === 0) return { view: null, withheld: w.count, ...w.flagged() };
+  return { view: { job: "people-follow-up", date, yourSignals, waitingOnYou, agentsTalking, newConnections }, withheld: w.count, ...w.flagged() };
 }
 
 // ── Actions ─────────────────────────────────────────────────────────────────
@@ -806,15 +889,23 @@ interface Run {
 
 /** What an action decided: the view to wake on (and what to record with the day mark), or why to stay silent. */
 type Decision =
-  | {
+  | ({
       view: Record<string, unknown>;
       withheld: number;
       record?: (state: Record<string, unknown>) => Record<string, unknown>;
       /** Runs holding the lock just before the day mark is written (the outcome ask's stage file); a throw keeps the run silent. */
       beforeWake?: () => void;
       detail?: string;
-    }
-  | { silent: string; withheld?: number; detail?: string };
+    } & Flagged)
+  | ({ silent: string; withheld?: number; detail?: string } & Flagged);
+
+/** DATA-487: the headline flags a view collected (ViewResult), carried to the run. */
+type Flagged = { flags?: HeadlineFlag[]; flagUnattributed?: number };
+
+/** The flag keys of a view result, for a Decision. */
+function flagsOf(result: Flagged): Flagged {
+  return { ...(result.flags?.length ? { flags: result.flags } : {}), ...(result.flagUnattributed ? { flagUnattributed: result.flagUnattributed } : {}) };
+}
 
 /**
  * The brief's context options. The interests are the profile's (DATA-372); when it states none,
@@ -849,10 +940,11 @@ async function dropAction(run: Run): Promise<Decision> {
     return { silent: "index-unavailable" };
   }
   if ("silent" in result) return { silent: result.reason };
-  const { view, withheld } = dropView(run.date, result.opportunity);
-  if (!view) return { silent: "name-withheld", withheld };
+  const shown = dropView(run.date, result.opportunity);
+  const { view, withheld } = shown;
+  if (!view) return { silent: "name-withheld", withheld, ...flagsOf(shown) };
   const styled = withPreferences(view, preferencesFor(run.home));
-  return { view: styled.view, withheld: withheld + styled.withheld };
+  return { view: styled.view, withheld: withheld + styled.withheld, ...flagsOf(shown) };
 }
 
 /**
@@ -863,8 +955,9 @@ async function dropAction(run: Run): Promise<Decision> {
 async function pendingAction(run: Run): Promise<Decision> {
   const result = await (run.options.pending ?? pendingAlert)({ stateFile: run.stateFile, now: run.now });
   if ("silent" in result) return { silent: result.reason };
-  const { view, withheld } = pendingView(result.cards, run.now);
-  return view ? { view, withheld } : { silent: "name-withheld", withheld };
+  const shown = pendingView(result.cards, run.now);
+  const { view, withheld } = shown;
+  return view ? { view, withheld, ...flagsOf(shown) } : { silent: "name-withheld", withheld, ...flagsOf(shown) };
 }
 
 /** The av-events plugin's spellings of "off" (`_core.py` DISABLED_VALUES), matched trimmed and case-insensitive. */
@@ -971,20 +1064,22 @@ async function eveningAction(run: Run): Promise<Decision> {
   const askWithheld = ("withheld" in ask ? ask.withheld : 0) ?? 0;
   const result = await (run.options.evening ?? askQuestions)({ date: run.date, stateFile: run.stateFile });
   if ("silent" in result) return { silent: result.reason, detail, ...(askWithheld ? { withheld: askWithheld } : {}) };
-  const { view, withheld } = eveningView(run.date, result);
-  if (!view) return { silent: "name-withheld", withheld: withheld + askWithheld, detail };
+  const shown = eveningView(run.date, result);
+  const { view, withheld } = shown;
+  if (!view) return { silent: "name-withheld", withheld: withheld + askWithheld, detail, ...flagsOf(shown) };
   // The reminder about a person only: the closeout question, like the outcome ask, goes out word for word.
   const styled = "person" in view ? withPreferences(view, preferencesFor(run.home)) : { view, withheld: 0 };
-  return { view: styled.view, withheld: withheld + askWithheld + styled.withheld, detail };
+  return { view: styled.view, withheld: withheld + askWithheld + styled.withheld, detail, ...flagsOf(shown) };
 }
 
 async function negotiationAction(run: Run): Promise<Decision> {
   const result = await (run.options.followUp ?? followUp)({ date: run.date, stateFile: run.stateFile });
   if ("silent" in result) return { silent: result.reason };
-  const { view, withheld } = followUpView(run.date, result);
-  if (!view) return { silent: "name-withheld", withheld };
+  const shown = followUpView(run.date, result);
+  const { view, withheld } = shown;
+  if (!view) return { silent: "name-withheld", withheld, ...flagsOf(shown) };
   const styled = withPreferences(view, preferencesFor(run.home));
-  return { view: styled.view, withheld: withheld + styled.withheld };
+  return { view: styled.view, withheld: withheld + styled.withheld, ...flagsOf(shown) };
 }
 
 const AGENT_ACTIONS: Record<AgentAction, (run: Run) => Promise<Decision>> = {
@@ -1057,11 +1152,13 @@ async function runAgentAction(action: AgentAction, options: ProactiveOptions): P
       const marked = !DAY_MARK_EXEMPT.has(action);
       if (doneToday(read(), action, run.date) && marked) return silent("done-today");
       const decision = await AGENT_ACTIONS[action](run);
-      const detail = decision.detail ? { detail: decision.detail } : {};
-      if ("silent" in decision) return { ...silent(decision.silent, 0, decision.withheld), ...detail };
+      // DATA-487: every withheld, flagged or cut headline this run saw, ids and codes only, whatever the run does next.
+      const flagged = handOffFlags(home, decision, now);
+      const extra = { ...(decision.detail ? { detail: decision.detail } : {}), ...flagged };
+      if ("silent" in decision) return { ...silent(decision.silent, 0, decision.withheld), ...extra };
       const text = scriptOutputText(withAgentName(home, decision.view));
       // Every field was scanned; this catches a hit spanning two of them.
-      if (cronScanHit(text)) return { ...silent("scan-blocked", 0, decision.withheld), ...detail };
+      if (cronScanHit(text)) return { ...silent("scan-blocked", 0, decision.withheld), ...extra };
       // The day is done from the moment the model is woken.
       // A stage that cannot be written stops the wake before the day is marked.
       decision.beforeWake?.();
@@ -1070,12 +1167,75 @@ async function runAgentAction(action: AgentAction, options: ProactiveOptions): P
         const recorded = decision.record ? decision.record(latest) : latest;
         writeStateFile(stateFile, marked ? markDone(recorded, action, run.date) : recorded);
       }
-      return { lines: [text, wakeLine(true)], exitCode: 0, woke: true, reason: "woke", ...(decision.withheld ? { withheld: decision.withheld } : {}), ...detail };
+      return { lines: [text, wakeLine(true)], exitCode: 0, woke: true, reason: "woke", ...(decision.withheld ? { withheld: decision.withheld } : {}), ...extra };
     }, options.lock);
   } catch (err) {
     result = silent(faultReason(err));
   }
   return { ...(healed ? { ...result, note: STATE_HEALED } : result), ...settings };
+}
+
+// ── Detection (DATA-487): withheld, flagged or cut headlines, handed to the av-events plugin ──
+
+/**
+ * The folder the trigger hands headline flags to the av-events plugin in
+ * (plugins/av-events/_headline_flagged.py emits `opportunity.headline_flagged@1`
+ * for each record, then removes the file). Scripts never write events themselves.
+ */
+export function headlineFlagDir(home: string): string {
+  return join(proactiveDir(home), "headline-flagged");
+}
+/** Files waiting in headlineFlagDir at most: past it the run hands nothing over (a plugin that never reads them). */
+export const HEADLINE_FLAG_FILES_MAX = 200;
+/** The plugin's own name for this in `AV_HOOKS_DISABLED`. */
+export const HEADLINE_FLAG_SWITCH = "headline_flagged";
+
+/**
+ * The av-events plugin would not emit the flags (as outcomePluginOff): `AV_EVENTS_TOKEN` blank,
+ * `AV_EVENTS_ENABLED` an off spelling, or `headline_flagged` in `AV_HOOKS_DISABLED`.
+ */
+export function headlineFlagPluginOff(home: string): boolean {
+  if (!envOrDotenv("AV_EVENTS_TOKEN", home)) return true;
+  if (PLUGIN_OFF_VALUES.has(envOrDotenv("AV_EVENTS_ENABLED", home).toLowerCase())) return true;
+  return envOrDotenv("AV_HOOKS_DISABLED", home)
+    .split(",")
+    .some((part) => part.trim().toLowerCase() === HEADLINE_FLAG_SWITCH);
+}
+
+/**
+ * Write one hand-off file for the av-events plugin: `{"v":1,"written_at":<ISO>,"records":[...]}`,
+ * each record exactly the five keys of HeadlineFlag (ids, codes and a length; no name, no
+ * headline, no intent, no text), 0600 in a 0700 folder, by temp file and rename. True when it was
+ * written; false when the plugin is off, the folder is full or the write failed. Never throws.
+ */
+export function writeHeadlineFlags(home: string, flags: readonly HeadlineFlag[], now: Date): boolean {
+  if (flags.length === 0) return false;
+  try {
+    if (headlineFlagPluginOff(home)) return false;
+    const dir = headlineFlagDir(home);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    if (readdirSync(dir).filter((name) => name.endsWith(".json")).length >= HEADLINE_FLAG_FILES_MAX) return false;
+    const records = flags.map(({ opportunity_id, counterpart_index_user_id, reason_code, stage, headline_length }) => ({ opportunity_id, counterpart_index_user_id, reason_code, stage, headline_length }));
+    const path = join(dir, `${now.getTime()}-${process.pid}-${randomBytes(6).toString("hex")}.json`);
+    const tmp = `${path}.tmp`;
+    writeFileSync(tmp, `${JSON.stringify({ v: 1, written_at: now.toISOString(), records })}\n`, { mode: 0o600 });
+    chmodSync(tmp, 0o600);
+    renameSync(tmp, path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Hand a decision's flags over and say, in counts only, what happened to them (the run log's `flagged`, `flag_unsent`, `flag_unattributed`). */
+function handOffFlags(home: string, decision: Flagged, now: Date): Pick<TriggerResult, "flagged" | "flagUnsent" | "flagUnattributed"> {
+  const flags = decision.flags ?? [];
+  const sent = flags.length > 0 && writeHeadlineFlags(home, flags, now);
+  return {
+    ...(sent ? { flagged: flags.length } : {}),
+    ...(flags.length && !sent ? { flagUnsent: flags.length } : {}),
+    ...(decision.flagUnattributed ? { flagUnattributed: decision.flagUnattributed } : {}),
+  };
 }
 
 /** Private state copies a preview in this process is using, so the hard stop can remove them. */
@@ -1190,6 +1350,9 @@ export async function runProactive(action: ProactiveAction, options: ProactiveOp
     decision: result.woke ? "woke" : "silent",
     reason: reasonCode(result.reason),
     ...(result.withheld ? { withheld: result.withheld } : {}),
+    ...(result.flagged ? { flagged: result.flagged } : {}),
+    ...(result.flagUnsent ? { flag_unsent: result.flagUnsent } : {}),
+    ...(result.flagUnattributed ? { flag_unattributed: result.flagUnattributed } : {}),
     ...(result.note ? { note: reasonCode(result.note) } : {}),
     ...(result.detail ? { detail: reasonCode(result.detail) } : {}),
     ...(result.settings ? { settings: reasonCode(result.settings) } : {}),
