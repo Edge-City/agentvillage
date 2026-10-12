@@ -511,6 +511,44 @@ export function lookalikeFold(text: string): string {
 const IPV4_SHAPE = /\p{Nd}+\.\p{Nd}+\.\p{Nd}+\.\p{Nd}+/u;
 /** A phone-shaped run: a digit and six or more digits, spaces or dashes after it. */
 const PHONE_SHAPE = /\+?\p{Nd}[\p{Nd}\s-]{6,}/u;
+/** The shortest word that reads as a wallet address (destinationShapeHit). */
+const DESTINATION_WORD_MIN = 20;
+/** The fewest digits in one word or one joined digit run that read as a phone or account number (destinationShapeHit). */
+const DESTINATION_DIGITS_MIN = 9;
+/** A run of digits joined by spaces, `-`, `/`, `&`, `'` or `’` (`0171/123/4567`, `9876&543&210`). */
+const JOINED_DIGIT_RUN = /\p{Nd}+(?:[\s'’\-&/]+\p{Nd}+)*/gu;
+/** A lower-case letter followed by a capital (`dC`); a word of DESTINATION_WORD_MIN or more with two of them reads as an address. */
+const LOWER_THEN_CAPITAL = /\p{Ll}\p{Lu}/gu;
+
+const countDigits = (text: string) => (text.match(/\p{Nd}/gu) ?? []).length;
+/**
+ * Letters typed for digits (`O` or `o` for 0, `I` or `l` for 1), read as digits in a part of a word
+ * (between joiners) made of digits and those letters only, with two or more digits (`O171/I23/4567`;
+ * `GPT-4o` stays).
+ */
+const digitLettersRead = (text: string) =>
+  text.replace(/[\p{L}\p{Nd}]+/gu, (part) => (/^[\p{Nd}OoIl]+$/u.test(part) && countDigits(part) >= 2 ? part.replace(/[Oo]/g, "0").replace(/[Il]/g, "1") : part));
+
+/**
+ * A payment or contact destination in a shape the IPv4 and phone checks miss (fix round 5, recheck
+ * 4dadc91d M2). The check only: nothing is rewritten, and a date (`12/10/2026`, 8 digits) is not one.
+ *   - a wallet address: a word of DESTINATION_WORD_MIN or more code points that mixes letters and
+ *     digits (ETH `0x…`, BTC `bc1…`, Solana, TON), or that turns from lower case to a capital twice
+ *     or more (a Solana or TON address ground to hold no digit; `McDonald's-sponsored` stays);
+ *   - a phone or account number: DESTINATION_DIGITS_MIN or more digits in one word (`0171x123x4567`)
+ *     or in one run of digits joined by a space, `-`, `/`, `&`, `'` or `’` (`0171/123/4567`,
+ *     `9876&543&210`), reading `O o` as 0 and `I l` as 1 in a part of a word made of digits and
+ *     those letters, with two or more digits (`O171/I23/4567`).
+ */
+export function destinationShapeHit(text: string): boolean {
+  for (const word of text.split(/\s+/)) {
+    if ([...word].length < DESTINATION_WORD_MIN || !/\p{L}/u.test(word)) continue;
+    if (/\p{Nd}/u.test(word) || (word.match(LOWER_THEN_CAPITAL) ?? []).length >= 2) return true;
+  }
+  const read = digitLettersRead(text.replace(/\s+/g, " "));
+  if (read.split(" ").some((word) => countDigits(word) >= DESTINATION_DIGITS_MIN)) return true;
+  return (read.match(JOINED_DIGIT_RUN) ?? []).some((run) => countDigits(run) >= DESTINATION_DIGITS_MIN);
+}
 /** Straight and typographic double quotes: a match field sits inside a quoted template (refute N5). */
 const DOUBLE_QUOTES = /["“”„‟«»″‶❝❞⹂〝〞〟＂]/g;
 
@@ -527,7 +565,8 @@ export function withoutDoubleQuotes(raw: string): string {
  *      and `-` may also stand alone); any other character, a mixed-script word or a stray mark
  *      withholds it;
  *   2. at most MATCH_FIELD_MAX_WORDS words, at most MATCH_FIELD_MAX_LENGTH code points;
- *   3. no IPv4- or phone-shaped digit run;
+ *   3. no IPv4- or phone-shaped digit run, and no wallet-address-shaped word or joined run of 9 or
+ *      more digits (destinationShapeHit, fix round 5);
  *   4. Hermes's scanner, on the text, then on every check reading of it (matchFieldReadings);
  *   5. in every reading: no word of MATCH_FIELD_STOP_WORDS and no phrase of
  *      MATCH_FIELD_STOP_PHRASES, also when two or more adjacent words are read as one
@@ -547,6 +586,7 @@ export function matchFieldShapeHit(text: string): string | null {
   }
   if (words > MATCH_FIELD_MAX_WORDS) return "too_many_words";
   if (IPV4_SHAPE.test(text) || PHONE_SHAPE.test(text)) return "digits";
+  if (destinationShapeHit(text)) return "destination";
   if (cronScanHit(text)) return "scanner";
   for (const form of matchFieldReadings(text)) {
     if (cronScanHit(form) || joinedScanHit(form.replace(/[\s'\-&/]+/g, ""))) return "scanner";

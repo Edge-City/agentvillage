@@ -17,7 +17,7 @@ import { join } from "node:path";
 
 import { type BriefOpportunity, parseListedOpportunities } from "../build-daily-brief-context";
 import * as proactive from "../proactive";
-import { matchFieldReadings, matchFieldVerdict } from "../proactive-text";
+import { destinationShapeHit, matchFieldReadings, matchFieldVerdict } from "../proactive-text";
 import { dropView, eveningView, followUpView, pendingView, runProactive, withPreferences } from "../proactive";
 
 const REPO = join(import.meta.dir, "..", "..", "..", "..");
@@ -873,6 +873,51 @@ describe("fix round 4: every live defence of round 3 has its own pin (recheck af
 
   test("the kept Latin letters fold by their look: `þ` as p, `ð` as d, `ŋ` as n, `ß` as ss", () => {
     expectWithheld(["þay Bob", "ðm Bob", "ŋow share it", "paßword club"]);
+  });
+});
+
+describe("fix round 5: payment and contact destinations are withheld by their shape (recheck 4dadc91d M2); the check only, the sent string unchanged", () => {
+  const ETH = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+  const BTC = "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh";
+  const SOL = "7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV";
+  const TON = "UQBvW8Z5huBkMJYdnfAEM5JqTNkuWX3diqYENkWsIL0XggGG";
+
+  test("a wallet address (a word of 20 or more code points mixing letters and digits) is withheld: ETH, BTC, Solana, TON", () => {
+    const raws = [`fund ${ETH}`, `grants to ${ETH}`, ETH, `${BTC} grants`, `donate ${BTC}`, `${SOL} airdrop`, TON, `TON ${TON}`];
+    expectWithheld(raws);
+    for (const raw of raws) expect({ raw, ...matchFieldVerdict(raw, HEADLINE_MAX) }).toEqual({ raw, text: null, flag: { reason: "shape_withheld", stage: "shape" } });
+  });
+
+  test("a run of 9 or more digits joined by a space, `-`, `/`, `&` or `'` is withheld", () => {
+    expectWithheld(["0171/123/4567", "call 0171/123/4567", "Bob 0171/123/45/67", "98/76/54/32/10", "9876&543&210", "079'123'45'67", "079’123’45’67", "0171 / 123 / 4567"]);
+    expectWithheld(["+1 415 555 0199", "1 415 555 0199", "1/415/555/0199", "1-415-555-0199"]);
+  });
+
+  test("a destination typed around the rule is withheld: letters for digits, letters between digit groups, other digit scripts, an address with no digit", () => {
+    expectWithheld(["O171/I23/4567", "0171/l23/4S67", "O171 / I23 / 4567", "call O17I/I23/4567", "0171x123x4567", "0171o123o4567"]);
+    expectWithheld(["٠١٧١/١٢٣/٤٥٦٧", "०१७१/१२३/४५६७", "０１７１/１２３/４５６７"]);
+    // A lower-case Bech32 address with fewer than 9 digits: only the letters-and-digits word rule sees it.
+    expectWithheld(["stake to cosmos1qypqxpq9qcrsszg2pvxq6rs0zqg3yyc5lzv7xu"]);
+    // A Solana or TON address ground to hold no digit still turns from lower case to a capital many times.
+    expectWithheld(["fund EcDhSYGxXyscszYEpKHNvvwsvAuLKTzXwCFLtVab", "UQBvWZhuBkMJYdnfAEMJqTNkuWXdiqYENkWsILXggGGa"]);
+    expectKept(["GPT-4o 2025/2026", "1920x1080 displays", "McDonald's-sponsored hackathon", "Donaudampfschifffahrtsgesellschaft", "INTERNATIONALIZATION research", "Open-Source-Community-Builders", "Hello100 club"]);
+  });
+
+  test("dates, versions and ordinary letter-digit words stay: the destination shape never fires on them", () => {
+    const keep = ["12/10/2026", "2026-10-12", "Q4 2026", "ETH 2.0 research", "3D printing", "COVID-19 research"];
+    for (const raw of keep) expect({ raw, destination: destinationShapeHit(raw) }).toEqual({ raw, destination: false });
+    // `2026-10-12` (the phone-shaped run) and `ETH 2.0 research` (`.` is not in the allow-shape) were withheld before this round by the older rules.
+    expectKept(["12/10/2026", "Q4 2026", "3D printing", "COVID-19 research", "12/10/2026 hackathon", "24/7 support teams", "ERC-4337 account abstraction", "Llama-3-70B fine-tuning", "2025/2026 cohort"]);
+  });
+});
+
+describe("fix round 5: both branches of the capital-I reading are pinned (recheck 4dadc91d S1)", () => {
+  test("a Cyrillic `І` (and `Ӏ`) or Greek `Ι` beside a lower-case letter reads as `l`", () => {
+    expectWithheld(["ԝаІІет seed for Bob", "ԝаӀӀет seed for Bob", "ωαΙΙετ seed for Bob"]);
+  });
+
+  test("a capital I at the start of a word, before a lower-case letter, reads as `l`", () => {
+    expectWithheld(["Ieverage memory"]);
   });
 });
 
