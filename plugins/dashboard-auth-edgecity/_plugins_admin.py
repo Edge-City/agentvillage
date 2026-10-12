@@ -1,6 +1,7 @@
 """Admin-only plugin management for the Edge City dashboard (SEC-1).
 
-Residents may not install, enable, disable, update or remove plugins; landing admins may. Hermes
+Residents may not install, enable, disable, update, remove or select plugins (memory-provider
+plugins included); landing admins may. Hermes
 puts every plugin mutation behind `_require_token`, which under the cookie gate only checks that a
 session exists (`web_server.py:431-443`), so the narrowing lives here: a wrapper installed around
 Hermes's cookie gate (`dashboard_auth.middleware.gated_auth_middleware`) at plugin `register()`
@@ -33,17 +34,29 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 ADMIN_PROVIDER = "edgecity"
 ADMIN_ROLE = "admin"
 
-#: Every path under these prefixes is plugin management (`hermes_cli/web_routers/dashboard_ui.py`
-#: v2026.9.24: `/api/dashboard/plugins/{rescan,hub,catalog}` :149/:156/:181, `/api/dashboard/plugins/
-#: {name}/visibility` :345, `/api/dashboard/agent-plugins/...` :222-:290, `/api/dashboard/plugin-
-#: providers` :317). A plain prefix, no trailing slash: `/api/dashboard/plugins?/hub` (a decoded
-#: `%3F`) is on the surface too. Fail closed: a path no route serves only turns a 404 into a 403.
-SURFACE_PREFIXES = ("/api/dashboard/agent-plugins", "/api/dashboard/plugins", "/api/dashboard/plugin-providers")
+#: Plugin management: each prefix itself and everything below it, matched on path segments
+#: (`prefix` exactly or `prefix + "/..."`). Hermes v2026.9.24, every core route under them:
+#: - `hermes_cli/web_routers/dashboard_ui.py`: `/api/dashboard/plugins/{rescan,hub,catalog}`
+#:   :149/:156/:181, `/api/dashboard/plugins/{name}/visibility` :345, `/api/dashboard/agent-plugins/...`
+#:   :222-:290, `/api/dashboard/plugin-providers` :317.
+#: - The memory-provider plugins, driven only from the Plugins page (`web/src/pages/PluginsPage.tsx`
+#:   :358/:469/:477/:503): `PUT /api/memory/provider` (`web_routers/ops.py:497`, the same
+#:   `memory.provider` key `plugin-providers` writes), `/api/memory/providers/{name}/config` GET/PUT
+#:   (`web_routers/memory_providers.py:520/:563`), `POST .../setup` (:540: pip-installs the provider
+#:   plugin's declared dependencies and runs its declared setup commands) and
+#:   `/api/memory/providers/{provider}/oauth/{start,status}` (`memory_oauth.py`).
+SURFACE_PREFIXES = (
+    "/api/dashboard/agent-plugins",
+    "/api/dashboard/plugins",
+    "/api/dashboard/plugin-providers",
+    "/api/memory/provider",
+    "/api/memory/providers",
+)
 #: The one exception: `GET /api/dashboard/plugins` (`dashboard_ui.py:131`) is the manifest list every
 #: page loads to mount dashboard plugin tabs (`web/src/plugins/usePlugins.ts:87`), not the Plugins page.
 MANIFEST_PATH = "/api/dashboard/plugins"
-#: Not mutations, and no FastAPI route answers them on a GET or POST route (a HEAD on the rescan GET
-#: is a 405): left to Hermes.
+#: Not mutations, and FastAPI routes neither to a GET or POST handler (a HEAD on the rescan GET is a
+#: 405): left to Hermes.
 PASS_METHODS = frozenset({"HEAD", "OPTIONS"})
 
 FORBIDDEN = {"error": "forbidden", "detail": "Plugin management is admin only.", "reason": "plugin_admin_only"}
@@ -97,21 +110,30 @@ def counts() -> dict[str, int]:
         return dict(_counts)
 
 
+def _under(path: str) -> bool:
+    return any(path == prefix or path.startswith(prefix + "/") for prefix in SURFACE_PREFIXES)
+
+
 def _path_on_surface(method: Any, path: Any) -> bool:
     if not isinstance(path, str):
         return True  # unknown is closed
-    if not path.startswith(SURFACE_PREFIXES):
+    if not _under(path):
         return False
     return not (path == MANIFEST_PATH and method == "GET")
 
 
 def on_surface(method: Any, url_path: Any, scope_path: Any) -> bool:
     """Plugin management, on either the parsed URL path (what Hermes's gate matches on) or the ASGI
-    scope path (what the router dispatches on). No normalisation: a path the two disagree on is on
-    the surface when either one is."""
+    scope path (what the router dispatches on), by path segment. No normalisation. When the two
+    paths disagree (a percent-encoded `?` or `#`, say) and either one so much as starts with a
+    surface prefix, the request is on the surface too: fail closed on the ambiguous case."""
     if isinstance(method, str) and method in PASS_METHODS:
         return False
-    return _path_on_surface(method, url_path) or _path_on_surface(method, scope_path)
+    if _path_on_surface(method, url_path) or _path_on_surface(method, scope_path):
+        return True
+    if url_path != scope_path:
+        return any(isinstance(p, str) and p.startswith(SURFACE_PREFIXES) for p in (url_path, scope_path))
+    return False
 
 
 def admin_code(state: Any) -> str:

@@ -194,6 +194,14 @@ MUTATIONS = [
     ("POST", "/api/dashboard/agent-plugins/org/nested/enable"),    # {name:path}
     ("PATCH", "/api/dashboard/agent-plugins/av-approval"),
     ("POST", "/api/dashboard/agent-plugins"),
+    ("POST", "/api/dashboard/plugins/rescan"),
+    ("POST", "/api/dashboard/agent-plugins/install/"),                # trailing slash (redirect_slashes)
+    ("PUT", "/api/dashboard/plugin-providers?profile=other"),
+    ("PUT", "/api/memory/provider"),                                  # ops.py:497, same key as plugin-providers
+    ("PUT", "/api/memory/provider?profile=other"),
+    ("PUT", "/api/memory/providers/honcho/config"),                   # memory_providers.py:563
+    ("POST", "/api/memory/providers/honcho/setup"),                   # memory_providers.py:540, pip installs
+    ("POST", "/api/memory/providers/honcho/oauth/start"),             # memory_oauth.py
 ]
 PAGE_FEEDS = [
     ("GET", "/api/dashboard/plugins/hub"),      # :156
@@ -201,6 +209,10 @@ PAGE_FEEDS = [
     ("GET", "/api/dashboard/plugins/rescan"),   # :149, a GET that rescans
     ("GET", "/api/dashboard/agent-plugins/av-approval"),
     ("GET", "/api/dashboard/plugins/hub?refresh=1"),
+    ("GET", "/api/dashboard/plugins/hub/"),
+    ("GET", "/api/dashboard/plugins/catalog?profile=default"),
+    ("GET", "/api/memory/providers/honcho/config"),                   # memory_providers.py:520
+    ("GET", "/api/memory/providers/honcho/oauth/status"),
 ]
 SURFACE = MUTATIONS + PAGE_FEEDS
 OFF_SURFACE = [
@@ -212,6 +224,12 @@ OFF_SURFACE = [
     ("PUT", "/api/dashboard/theme"),
     ("POST", "/api/cron/jobs"),
     ("GET", "/dashboard-plugins/av-events/dist/index.js"),
+    ("GET", "/api/memory"),             # SystemPage.tsx:272
+    ("POST", "/api/memory/reset"),
+    ("GET", "/api/plugins/kanban/board"),   # a dashboard plugin's own API, not plugin management
+    ("POST", "/api/plugins/kanban/tasks"),
+    ("GET", "/api/dashboard/pluginsx"),     # segment match: not under the prefix
+    ("PUT", "/api/memory/providersx"),
 ]
 
 
@@ -338,15 +356,23 @@ def test_a_path_the_url_and_the_scope_disagree_on_is_on_the_surface(dash, target
     assert dash.routed == []
 
 
-def test_the_surface_is_a_plain_prefix_so_lookalikes_are_closed_too(plugins_admin):
+def test_the_surface_is_matched_on_path_segments(plugins_admin):
     on = plugins_admin.on_surface
-    for path in ("/api/dashboard/pluginsx", "/api/dashboard/plugins/", "/api/dashboard/plugin-providers/x",
-                 "/api/dashboard/agent-pluginsx", "/api/dashboard/plugins//hub"):
+    for path in ("/api/dashboard/plugins/", "/api/dashboard/plugin-providers/x", "/api/dashboard/plugins//hub",
+                 "/api/dashboard/agent-plugins", "/api/dashboard/agent-plugins/", "/api/memory/provider",
+                 "/api/memory/provider/", "/api/memory/providers", "/api/memory/providers/x/setup"):
         assert on("GET", path, path) and on("POST", path, path), path
+    for path in ("/api/dashboard/pluginsx", "/api/dashboard/agent-pluginsx", "/api/dashboard/plugin-providersx",
+                 "/api/memory/providersx", "/api/memory", "/api/memory/reset", "/api/dashboard/theme",
+                 "/api/plugins/av-events/x", "/dashboard-plugins/x/y.js", "/plugins", "/x/api/dashboard/plugins/hub",
+                 "//api/dashboard/plugins/hub", "/api//dashboard/plugins/hub"):
+        assert not on("POST", path, path), path
     assert not on("GET", "/api/dashboard/plugins", "/api/dashboard/plugins")
     assert on("POST", "/api/dashboard/plugins", "/api/dashboard/plugins")  # only the GET is the manifest
-    for path in ("/api/dashboard/theme", "/api/plugins/av-events/x", "/dashboard-plugins/x/y.js", "/plugins"):
-        assert not on("POST", path, path), path
+    # The two paths disagree: on the surface if either merely starts with a prefix.
+    assert on("GET", "/api/dashboard/plugins", "/api/dashboard/plugins?/hub")
+    assert on("GET", "/api/memory/providersx", "/api/memory/providersx#")
+    assert not on("GET", "/api/sessions", "/api/sessions?x")
     assert on("GET", None, "/api/sessions") and on("GET", "/api/sessions", None)  # unknown is closed
 
 
@@ -702,6 +728,10 @@ HERMES_SURFACE = [
     ("GET", "/api/dashboard/plugins/rescan", None),
     ("GET", "/api/dashboard/plugins/hub", None),
     ("GET", "/api/dashboard/plugins/catalog", None),
+    ("PUT", "/api/memory/provider", {"provider": "a..b"}),
+    ("GET", "/api/memory/providers/a..b/config", None),
+    ("PUT", "/api/memory/providers/a..b/config", {"values": {}}),
+    ("POST", "/api/memory/providers/a..b/setup", {"values": {}}),
 ]
 
 
@@ -745,7 +775,9 @@ def test_hermes_an_admin_reaches_every_plugin_route(hermes, method, path, body):
         pytest.skip(f"{method} {path} is not a route in this Hermes")
     resp = send(as_role(hermes, "admin"), method, path, body)
     assert resp.status_code != 403, resp.text
-    if "a..b" in path or (body and body.get("name") == "a..b"):
+    if path.startswith("/api/memory/"):
+        assert resp.status_code not in (401, 403) and "plugin_admin_only" not in resp.text  # the handler's own refusal
+    elif "a..b" in path or (body and body.get("name") == "a..b"):
         assert resp.status_code == 400 and resp.json()["detail"] == "Invalid plugin name."  # the handler's own check
     else:
         assert resp.status_code == 200, resp.text
@@ -876,3 +908,107 @@ def test_hermes_the_login_page_is_untouched(hermes):
 def test_hermes_under_a_proxy_prefix_the_hide_reads_the_base_path(hermes):
     resp = as_role(hermes, "owner").get("/plugins", headers={"X-Forwarded-Prefix": "/hermes"})
     assert 'window.__HERMES_BASE_PATH__="/hermes"' in resp.text and HIDE_MARK in resp.text
+
+
+# ---- every plugin route Hermes mounts, found by code ---------------------------------------------
+
+
+def all_routes(app):
+    """(method, path, endpoint module) for every HTTP route the app mounts: through FastAPI's
+    included routers (`_IncludedRouter` in recent FastAPI) and plain routes alike."""
+    out = set()
+
+    def walk(routes):
+        for route in routes:
+            if hasattr(route, "effective_candidates"):
+                walk(list(route.effective_candidates()) + list(route.effective_low_priority_routes()))
+                continue
+            path = getattr(route, "path", None)
+            if path is None:
+                continue
+            original = getattr(route, "original_route", route)
+            endpoint = getattr(route, "endpoint", None) or getattr(original, "endpoint", None)
+            methods = getattr(original, "methods", None)
+            if methods is None:
+                out.add(("MOUNT", path, type(route).__name__))
+                continue
+            for method in methods:
+                out.add((method, path, getattr(endpoint, "__module__", "") or ""))
+
+    walk(app.router.routes)
+    return sorted(out, key=lambda r: (r[1], r[0]))
+
+
+#: Plugin-named routes that are not plugin management, each for a reason:
+#: the manifest list every page loads (usePlugins.ts:87) and the enabled plugins' static assets.
+NOT_MANAGEMENT = {("GET", "/api/dashboard/plugins"), ("GET", "/dashboard-plugins/{plugin_name}/{file_path:path}")}
+
+
+def plugin_named(path):
+    return "plugin" in path.lower() or path.startswith("/api/memory/provider")
+
+
+def test_hermes_every_plugin_route_hermes_mounts_is_covered(hermes):
+    """Enumerate the real app's routes and send each plugin-management one, with an owner
+    session, through the real gate and the wrapper. A dashboard plugin's own API
+    (`/api/plugins/<name>/...`, defined by that plugin's module, not by `hermes_cli`) is the
+    plugin's feature, not plugin management. Anything else plugin-named must be a 403: a route
+    Hermes adds that the matcher misses fails here."""
+    import re
+
+    on = hermes.plugin._plugins_admin.on_surface
+    client = as_role(hermes, "owner")
+    covered, feature, exempt, missed = [], [], [], []
+    for method, path, module in all_routes(hermes.app):
+        if not plugin_named(path) or method in ("HEAD", "OPTIONS"):
+            continue
+        if (method, path) in NOT_MANAGEMENT:
+            exempt.append((method, path))
+            assert not on(method, path, path)
+            continue
+        if path.startswith("/api/plugins/") and module.startswith("hermes_dashboard_plugin_"):
+            feature.append((method, path))
+            continue
+        concrete = re.sub(r"\{[^}]+\}", "x", path)
+        resp = client.request(method, concrete, json={})
+        if not (resp.status_code == 403 and resp.headers.get("content-type", "").startswith("application/json")
+                and resp.json().get("reason") == "plugin_admin_only") or not on(method, concrete, concrete):
+            missed.append((method, path, module, resp.status_code))
+        else:
+            covered.append((method, path))
+    assert missed == []
+    assert hermes.calls == []
+    assert len(covered) >= 17, covered  # the walk found the routes (v2026.9.24: 17)
+    assert ("POST", "/api/dashboard/agent-plugins/install") in covered
+    assert ("PUT", "/api/memory/provider") in covered
+    assert ("POST", "/api/memory/providers/{name}/setup") in covered
+    hermes.found = SimpleNamespace(covered=covered, feature=feature, exempt=exempt)
+
+
+def test_hermes_slash_variants_never_reach_a_plugin_handler(hermes):
+    owner = as_role(hermes, "owner")
+    assert owner.get("/api/dashboard/plugins/hub/").status_code == 403
+    assert owner.post("/api/dashboard/agent-plugins/install/", json={"identifier": "x"}).status_code == 403
+    assert owner.put("/api/memory/provider/", json={"provider": "x"}).status_code == 403
+    for target in ("http://testserver//api/dashboard/plugins/hub", "http://testserver/api/dashboard//plugins/hub",
+                   "http://testserver//api/dashboard/agent-plugins/install"):
+        resp = owner.request("GET" if target.endswith("hub") else "POST", target)
+        assert resp.status_code != 200 or resp.headers["content-type"].startswith("text/html"), target
+        assert "stub" not in resp.text
+    assert hermes.calls == []
+    # An admin's trailing slash is not the wrapper's business: Hermes answers it itself (here the
+    # SPA catch-all's 405; a redirect_slashes 307 would bring it back through the wrapper) and no
+    # plugin handler runs.
+    admin = as_role(hermes, "admin")
+    resp = admin.post("/api/dashboard/agent-plugins/install/", json={"identifier": "https://example.invalid/x.git"},
+                      follow_redirects=False)
+    assert resp.status_code in (307, 405)
+    assert hermes.calls == []
+
+
+def test_hermes_profile_query_variants_are_covered(hermes):
+    owner = as_role(hermes, "owner")
+    assert owner.put("/api/dashboard/plugin-providers?profile=default", json={}).status_code == 403
+    assert owner.get("/api/dashboard/plugins/catalog?profile=default").status_code == 403
+    assert owner.put("/api/memory/provider?profile=default", json={"provider": "x"}).status_code == 403
+    assert owner.get("/api/dashboard/plugins?profile=default").status_code == 200

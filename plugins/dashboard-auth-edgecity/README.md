@@ -142,35 +142,58 @@ checks that some session exists, so this plugin narrows it.
 
 ### What is covered
 
-Every request, any method but `HEAD` and `OPTIONS`, whose path starts with one of three prefixes
-(the line numbers are `hermes_cli/web_routers/dashboard_ui.py` at v2026.9.24):
+Every request, any method but `HEAD` and `OPTIONS`, whose path is one of five prefixes or lies
+below one (`prefix` exactly or `prefix/...`, matched on path segments): `/api/dashboard/agent-plugins`,
+`/api/dashboard/plugins`, `/api/dashboard/plugin-providers`, `/api/memory/provider` and
+`/api/memory/providers`. At Hermes v2026.9.24 that is these 17 routes, found by walking the real
+app's routes in `test_hermes_every_plugin_route_hermes_mounts_is_covered` (which fails if Hermes
+adds a plugin-named core route the matcher misses):
 
-| Method | Route | Line |
+| Method | Route | Hermes file:line |
 |---|---|---|
-| `GET` | `/api/dashboard/plugins/rescan` (rescans on a GET) | 149 |
-| `GET` | `/api/dashboard/plugins/hub` (the Plugins page) | 156 |
-| `GET` | `/api/dashboard/plugins/catalog` (the Plugins page) | 181 |
-| `POST` | `/api/dashboard/agent-plugins/install` | 222 |
-| `POST` | `/api/dashboard/agent-plugins/<name>/enable` | 255 |
-| `POST` | `/api/dashboard/agent-plugins/<name>/disable` | 262 |
-| `POST` | `/api/dashboard/agent-plugins/<name>/update` | 269 |
-| `DELETE` | `/api/dashboard/agent-plugins/<name>` | 284 |
-| `POST` | `/api/dashboard/agent-plugins/activate` | 290 |
-| `PUT` | `/api/dashboard/plugin-providers` | 317 |
-| `POST` | `/api/dashboard/plugins/<name>/visibility` | 345 |
+| `GET` | `/api/dashboard/plugins/rescan` (rescans on a GET) | `web_routers/dashboard_ui.py:149` |
+| `GET` | `/api/dashboard/plugins/hub` (the Plugins page) | `dashboard_ui.py:156` |
+| `GET` | `/api/dashboard/plugins/catalog` (the Plugins page) | `dashboard_ui.py:181` |
+| `POST` | `/api/dashboard/agent-plugins/install` | `dashboard_ui.py:222` |
+| `POST` | `/api/dashboard/agent-plugins/<name>/enable` | `dashboard_ui.py:255` |
+| `POST` | `/api/dashboard/agent-plugins/<name>/disable` | `dashboard_ui.py:262` |
+| `POST` | `/api/dashboard/agent-plugins/<name>/update` | `dashboard_ui.py:269` |
+| `DELETE` | `/api/dashboard/agent-plugins/<name>` | `dashboard_ui.py:284` |
+| `POST` | `/api/dashboard/agent-plugins/activate` | `dashboard_ui.py:290` |
+| `PUT` | `/api/dashboard/plugin-providers` (memory provider, context engine) | `dashboard_ui.py:317` |
+| `POST` | `/api/dashboard/plugins/<name>/visibility` | `dashboard_ui.py:345` |
+| `PUT` | `/api/memory/provider` (the same `memory.provider` key as `plugin-providers`) | `web_routers/ops.py:497` |
+| `GET` | `/api/memory/providers/<name>/config` | `web_routers/memory_providers.py:520` |
+| `PUT` | `/api/memory/providers/<name>/config` | `memory_providers.py:563` |
+| `POST` | `/api/memory/providers/<name>/setup` (pip-installs the provider plugin's declared dependencies, runs its declared setup commands) | `memory_providers.py:540` |
+| `POST` | `/api/memory/providers/<provider>/oauth/start` | `memory_oauth.py:51` |
+| `GET` | `/api/memory/providers/<provider>/oauth/status` | `memory_oauth.py:65` |
 
-The prefixes are `/api/dashboard/agent-plugins`, `/api/dashboard/plugins` and
-`/api/dashboard/plugin-providers`, matched as plain prefixes (no trailing slash), so a path no
-route serves under them (`/api/dashboard/pluginsx`, a future route) is covered too; the cost is a
-403 where Hermes would have said 404. The one exception is `GET /api/dashboard/plugins` exactly
-(`dashboard_ui.py:131`): it is the manifest list every page loads to mount dashboard plugin tabs
-(`web/src/plugins/usePlugins.ts:87`), not the Plugins page, and a resident needs it. `HEAD` and
-`OPTIONS` are left to Hermes: they are not mutations, and FastAPI routes neither to these
-handlers (a `HEAD` on the rescan GET is a 405).
+The memory-provider routes are plugin management by another prefix: memory providers are Hermes
+plugins, the SPA calls these routes only from the Plugins page (`web/src/pages/PluginsPage.tsx`
+:358, :469, :477, :503), and `setup` installs code. Leaving them open beside a closed
+`plugin-providers` would be a sibling path to the same config key.
+
+Not covered, each for a reason:
+
+- `GET /api/dashboard/plugins` exactly (`dashboard_ui.py:131`): the manifest list every page
+  loads to mount dashboard plugin tabs (`web/src/plugins/usePlugins.ts:87`), not the Plugins page.
+- `GET /dashboard-plugins/<plugin>/<file>` (`dashboard_ui.py:383`): enabled plugins' static assets.
+- `/api/plugins/<name>/...`: a dashboard plugin's own API, defined by that plugin's module (52 routes
+  of the bundled `kanban` and `hermes-achievements` at v2026.9.24), mounted only for enabled
+  plugins and gated by Hermes's `_plugin_api_runtime_gate`. That is a plugin's feature, not plugin
+  management.
+- `GET /api/memory` and `POST /api/memory/reset`: memory status and data, not provider selection.
+
+Query strings are not part of the match, so `?profile=` variants are covered. A trailing slash
+is under the prefix too; `//api/...` and `/api//dashboard/...` match no Hermes route (tested: no
+plugin handler runs). `HEAD` and `OPTIONS` are left to Hermes: they are not mutations, and FastAPI
+routes neither to these handlers (a `HEAD` on the rescan GET is a 405).
 
 Matching is on both the parsed URL path (what the gate matches on) and the ASGI scope path (what
 the router dispatches on), with no normalisation: a request is on the surface when either path is,
-so a percent-encoded `?` or `#` that makes the two disagree cannot slip past.
+and when the two disagree (a percent-encoded `?` or `#`) and either one so much as starts with a
+prefix, it is on the surface too.
 
 ### The allow-list
 
