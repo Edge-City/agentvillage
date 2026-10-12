@@ -85,24 +85,25 @@ function inputs(dir: string): string {
 function sessionStore(dir: string): Database {
   const db = new Database(join(dir, "state.db"), { create: true });
   db.run(`CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, chat_type TEXT,
-    parent_session_id TEXT, started_at REAL NOT NULL DEFAULT 0)`);
+    parent_session_id TEXT, model_config TEXT, end_reason TEXT, started_at REAL NOT NULL DEFAULT 0)`);
   db.run(`CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
     role TEXT NOT NULL, content TEXT, timestamp REAL NOT NULL, active INTEGER NOT NULL DEFAULT 1,
     compacted INTEGER NOT NULL DEFAULT 0, _compressed_summary INTEGER NOT NULL DEFAULT 0, display_kind TEXT)`);
   return db;
 }
 
-type Msg = { text: string; ago?: number; role?: string; session?: string; source?: string; chatType?: string | null; parent?: string | null; displayKind?: string | null; active?: number };
+type Msg = { text: string; ago?: number; role?: string; session?: string; source?: string; chatType?: string | null; parent?: string | null; displayKind?: string | null; active?: number; modelConfig?: Record<string, unknown> | null; at?: number };
 function messages(dir: string, items: Msg[]): void {
   const db = sessionStore(dir);
   const now = Date.now() / 1000;
   for (const m of items) {
     const session = m.session ?? "dm-1";
-    db.run("INSERT OR IGNORE INTO sessions (id, source, chat_type, parent_session_id) VALUES (?, ?, ?, ?)", [
+    db.run("INSERT OR IGNORE INTO sessions (id, source, chat_type, parent_session_id, model_config) VALUES (?, ?, ?, ?, ?)", [
       session, m.source ?? "telegram", m.chatType === undefined ? "dm" : m.chatType, m.parent ?? null,
+      m.modelConfig ? JSON.stringify(m.modelConfig) : null,
     ]);
     db.run("INSERT INTO messages (session_id, role, content, timestamp, active, display_kind) VALUES (?, ?, ?, ?, ?, ?)", [
-      session, m.role ?? "user", m.text, now - (m.ago ?? 600), m.active ?? 1, m.displayKind ?? null,
+      session, m.role ?? "user", m.text, m.at ?? now - (m.ago ?? 600), m.active ?? 1, m.displayKind ?? null,
     ]);
   }
   db.close();
@@ -156,13 +157,15 @@ describe("evidence: the model wakes only on the resident's new material", () => 
     expect(woke.json.runId).toBe(lastRun(three).run_id);
   });
 
-  test("only the resident's own turns count: not the agent, a group, a cron run, a subagent, an injected turn, a slash command or a rewound turn", () => {
+  test("only the resident's own turns count: not the agent, a group, a cron run, a delegate child (by Hermes's marker), an injected turn, a slash command or a rewound turn", () => {
     const dir = home();
     messages(dir, [
       { text: LONG(1), role: "assistant" },
       { text: LONG(2), chatType: "group", session: "grp" },
       { text: LONG(3), source: "cron", chatType: null, session: "cron_ab12cd34ef56_20261012_010000" },
-      { text: LONG(4), session: "child", parent: "dm-1" },
+      // Hermes's subagent marks: source `subagent`, or `_delegate_from` on a child that inherited the gateway's source.
+      { text: LONG(4), session: "delegate", parent: "dm-1", modelConfig: { _delegate_from: "dm-1" } },
+      { text: LONG(11), session: "sub", parent: "dm-1", source: "subagent", chatType: "dm" },
       { text: LONG(5), displayKind: "internal_notification" },
       { text: `/goal ${LONG(6)}` },
       { text: `[IMPORTANT: Background process proc_1 completed. ${LONG(7)}]` },
@@ -174,6 +177,55 @@ describe("evidence: the model wakes only on the resident's new material", () => 
     expect(result.json).toMatchObject({ wakeAgent: false, reason: "no_evidence" });
     expect(lastRun(dir).resident_messages_since_last_run).toBe(2);
     expect(signals(dir).lastSignal).toMatchObject({ residentMessages: 2, substantiveMessages: 2 });
+  });
+
+  // M1 (refutation at 6834329): Hermes continues a resident's DM in a child session after a reset, the
+  // daily/idle reset and a compression; each carries parent_session_id but not the subagent marker.
+  const continuations: [string, Record<string, unknown> | null][] = [
+    ["a /reset or idle reset", { _reset_from: "dm-root" }],
+    ["a daily reset (no marker, parent ended daily)", null],
+    ["a compression continuation", { _compressed_from: "dm-root" }],
+  ];
+  for (const [label, modelConfig] of continuations) {
+    test(`five DMs in ${label} wake the model`, () => {
+      const dir = home();
+      messages(dir, [{ text: "hello there, an old message from before the reset", session: "dm-root", ago: 3 * DAY }]);
+      messages(dir, [1, 2, 3, 4, 5].map((n) => ({ text: LONG(n), session: "dm-child", parent: "dm-root", modelConfig })));
+      const result = runGate(dir);
+      expect(result.json).toMatchObject({ wakeAgent: true, evidence: { substantiveMessages: 5 } });
+      expect(inputs(dir)).toContain("message 5");
+    });
+  }
+
+  test("a marked subagent's turns never count, whatever its source", () => {
+    const dir = home();
+    messages(dir, [1, 2, 3, 4, 5].map((n) => ({ text: LONG(n), session: "delegate", parent: "dm-1", modelConfig: { _delegate_from: "dm-1" } })));
+    expect(runGate(dir).json).toMatchObject({ wakeAgent: false, reason: "no_evidence" });
+    expect(lastRun(dir).resident_messages_since_last_run).toBe(0);
+  });
+
+  test("turns compression copied from the parent into its child count once", () => {
+    const dir = home();
+    const now = Date.now() / 1000;
+    const turns = [1, 2].map((n) => ({ text: LONG(n), at: now - 900 + n }));
+    messages(dir, turns.map((t) => ({ ...t, session: "dm-root" })));
+    messages(dir, turns.map((t) => ({ ...t, session: "dm-child", parent: "dm-root", modelConfig: { _compressed_from: "dm-root" } })));
+    expect(runGate(dir).json).toMatchObject({ wakeAgent: false, reason: "no_evidence" });
+    expect(lastRun(dir).resident_messages_since_last_run).toBe(2);
+  });
+
+  test("a stored last run in the future (the clock went back) falls back to the first-run window", () => {
+    const dir = home();
+    writeState(dir, { lastRunAt: Date.now() / 1000 + 3 * 3600, memoryFilterVersion: 2 });
+    messages(dir, threeSubstantive());
+    expect(runGate(dir).json.wakeAgent).toBe(true);
+  });
+
+  test("the lookback never exceeds 7 days, however old the last run", () => {
+    const dir = home();
+    writeState(dir, { lastRunAt: Date.now() / 1000 - 30 * DAY, memoryFilterVersion: 2 });
+    messages(dir, [1, 2, 3].map((n) => ({ text: LONG(n), ago: 8 * DAY })));
+    expect(runGate(dir).json).toMatchObject({ wakeAgent: false, reason: "no_evidence" });
   });
 
   test("messages count since the last run only: the same three do not wake it twice", () => {

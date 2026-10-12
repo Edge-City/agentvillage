@@ -409,10 +409,27 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
 
 
+def is_delegate_child(source: Any, model_config: Any) -> bool:
+    """Hermes's own subagent test (`hermes_state_common.py` 813-828 at v2026.9.24): `source` is
+    `subagent`, or `model_config` carries the `_delegate_from` creation marker (a child spawned under
+    a gateway turn inherits the gateway's source). A reset, daily, branch or compression continuation
+    of the resident's chat also has a `parent_session_id` but never the marker: it stays theirs (M1)."""
+    if str(source or "") == "subagent":
+        return True
+    if not model_config:
+        return False
+    try:
+        config = json.loads(model_config) if isinstance(model_config, str) else model_config
+    except (TypeError, ValueError):
+        return False
+    return isinstance(config, dict) and config.get("_delegate_from") is not None
+
+
 def resident_messages(state_db: Path, since: float) -> tuple[Optional[list[tuple[float, str]]], Optional[str]]:
     """The resident's own turns after `since`, oldest first, or (None, code) when the store
-    cannot be read. Read only; a direct chat or a local surface; user turns that Hermes did not
-    inject; no slash command."""
+    cannot be read. Read only; a direct chat or a local surface, its reset, daily and compression
+    continuations included, never a delegate child; user turns that Hermes did not inject; no slash
+    command. A turn compression copied from a parent into its child is counted once (same text)."""
     if not state_db.exists():
         return [], None
     try:
@@ -430,18 +447,17 @@ def resident_messages(state_db: Path, since: float) -> tuple[Optional[list[tuple
             "m.content != ''",
             "m.timestamp > ?",
             f"(s.chat_type = 'dm' OR ((s.chat_type IS NULL OR s.chat_type = '') AND s.source IN ({local})))",
-            "s.source != 'cron'",
+            "s.source NOT IN ('cron', 'subagent')",
         ]
-        if "parent_session_id" in s_cols:
-            where.append("(s.parent_session_id IS NULL OR s.parent_session_id = '')")
         if "active" in m_cols:
             where.append("(m.active = 1 OR m.compacted = 1)" if "compacted" in m_cols else "m.active = 1")
         if "_compressed_summary" in m_cols:
             where.append("m._compressed_summary = 0")
         if "display_kind" in m_cols:
             where.append("(m.display_kind IS NULL OR m.display_kind = '')")
+        config = "s.model_config" if "model_config" in s_cols else "NULL"
         rows = conn.execute(
-            "SELECT m.timestamp, m.content FROM messages m JOIN sessions s ON s.id = m.session_id "
+            f"SELECT m.timestamp, m.content, s.source, {config} FROM messages m JOIN sessions s ON s.id = m.session_id "
             f"WHERE {' AND '.join(where)} ORDER BY m.timestamp, m.id",
             (since,),
         ).fetchall()
@@ -450,14 +466,21 @@ def resident_messages(state_db: Path, since: float) -> tuple[Optional[list[tuple
     finally:
         conn.close()
     out: list[tuple[float, str]] = []
-    for stamp, content in rows:
+    seen: set[str] = set()
+    for stamp, content, source, model_config in rows:
+        if is_delegate_child(source, model_config):
+            continue
         text = str(content).strip()
         if not text or text.startswith("/") or text.startswith(INJECTED_OPENINGS):
+            continue
+        key = hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
+        if key in seen:
             continue
         try:
             out.append((float(stamp), text))
         except (TypeError, ValueError):
             continue
+        seen.add(key)
     return out, None
 
 
@@ -698,7 +721,11 @@ def gate(home: Path, memory_path: Path, state_path: Path, *, now: float) -> dict
 
     # Their own messages since the last run.
     last_run_at = _stamp(previous.get("lastRunAt"))
-    since = now - FIRST_RUN_WINDOW_S if last_run_at is None else max(last_run_at, now - MAX_WINDOW_S)
+    if last_run_at is None or last_run_at > now:
+        # No run yet, or a stored time in the future (the clock went back): the first-run window.
+        since = now - FIRST_RUN_WINDOW_S
+    else:
+        since = max(last_run_at, now - MAX_WINDOW_S)
     messages, messages_note = resident_messages(home / "state.db", since)
     substantive = [m for m in (messages or []) if len(m[1]) >= SUBSTANTIVE_CHARS]
 
