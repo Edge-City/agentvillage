@@ -202,7 +202,9 @@ describe("F6 cleanTitle: what a non-organiser writes, repaired not refused", () 
       ["$TON airdrop", "TON airdrop"],
       ["\uff04TON", "TON"],
       ["Dinner $20, drinks $5.50", "Dinner $20, drinks $5.50"],
-      ["1.2.3.4", "1.2.3.4"],
+      ["1.2.3", "1.2.3"],
+      // OV-301 fix round 1 (refute S2): four dotted digit runs read as an IPv4 address and go.
+      ["v 1.2.3.4", "v"],
     ];
     for (const [raw, clean] of cases) expect({ raw, clean: cleanTitle(raw, 100) }).toEqual({ raw, clean });
     for (const raw of ["evil\u3002com", "evil\uff61com", "evil\uff0ecom"]) {
@@ -361,4 +363,31 @@ test("a phone number is removed whatever is glued to it with a colon; clock time
   expect(cleanTitle("Doors 7:30, talk 19:45 sharp", 100)).toBe("Doors 7:30, talk 19:45 sharp");
   expect(cleanTitle("Ring 9876543210 at 10:00", 100)).toBe("Ring at 10:00");
   expect(cleanName("Priya +919876543210:1")).toBe("Priya 1");
+});
+
+describe("fix round 1 (OV-301 refute S2): a bare IPv4 address and a domain hidden by marks or format characters are repaired", () => {
+  test("a bare IPv4 address is removed; a decimal, a version and a clock time stay", () => {
+    expect(cleanTitle("go to 203.0.113.7 now", 100)).toBe("go to now");
+    expect(cleanTitle("203.0.113.7", 100)).toBeNull();
+    expect(cleanTitle("memory 192.168.1.1:8080 now", 100)).not.toMatch(/\d+\.\d+\.\d+\.\d+/);
+    expect(cleanTitle("１９２。１６８。１。１ hub", 100)).toBe("hub");
+    expect(cleanName("Maya 203.0.113.7")).toBe("Maya");
+    for (const kept of ["Web 3.0 tooling", "v1.2.3 release", "7.30pm walk", "Rs 2.5 lakh"]) {
+      expect({ kept, out: cleanTitle(kept, 100) }).toEqual({ kept, out: kept });
+    }
+  });
+
+  test("a combining mark, a soft hyphen or a zero-width character around the dot does not keep a domain whole", () => {
+    for (const [raw, out] of [
+      ["evil.́com", "evil. com"],
+      ["evil.́̂com/claim", "evil. com / claim"],
+      ["evil­com", "evilcom"],
+      ["evil.­com", "evil. com"],
+      ["evil­.com", "evil. com"],
+      ["evil​.com", "evil. com"],
+      ["evil.​com", "evil. com"],
+    ] as const) {
+      expect({ raw, title: cleanTitle(raw, 100), name: cleanName(raw.replace("/claim", "")) }).toEqual({ raw, title: out, name: out.replace(" / claim", "") });
+    }
+  });
 });

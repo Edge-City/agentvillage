@@ -76,6 +76,23 @@ const VISIBLE = /[^\p{M}\s]/u;
  */
 const DOT_BETWEEN_LETTERS = /(?<=[\p{L}\p{M}\p{N}])\.(?=\p{L})/gu;
 /**
+ * OV-301 fix round 1 (refute S2): combining marks directly after a dot (`evil.\u0301com`). They
+ * would hide the letter after the dot from DOT_BETWEEN_LETTERS, so they go before the dot repair.
+ * Format characters around a dot (soft hyphen, zero-width space) are already gone (INVISIBLE).
+ */
+const MARKS_AFTER_DOT = /\.\p{M}+/gu;
+/**
+ * OV-301 fix round 1 (refute S2): a bare IPv4 address (`203.0.113.7`), removed: four runs of one
+ * to three digits joined by dots, no digit or dotted digit on either side. A decimal (`3.0`), a
+ * version (`1.2.3`) and a time (`7.30pm`) stay.
+ */
+const BARE_IPV4 = /(?<![\p{Nd}.])\p{Nd}{1,3}(?:\.\p{Nd}{1,3}){3}(?!\p{Nd}|\.\p{Nd})/gu;
+
+/** The domain repair cleanName and cleanTitle share: no IPv4 address, no mark hiding a dot, a space after a dot between letters. */
+function withoutDomains(text: string): string {
+  return text.replace(BARE_IPV4, " ").replace(MARKS_AFTER_DOT, ".").replace(DOT_BETWEEN_LETTERS, ". ");
+}
+/**
  * Full stops a browser or Telegram can read as a domain dot: the ideographic
  * full stop U+3002 (NFKC turns U+FF61 into it) and U+FF0E (NFKC turns it into
  * `.`). Folded to `.` before the dot repair, so `evil<U+3002>com` is repaired
@@ -138,7 +155,8 @@ export const NAME_MAX = 40;
  * backtick, no `@`, `/`, `:` or brackets); a phone-shaped digit run removed;
  * the full stops that act as a domain dot (U+3002, U+FF0E, U+FF61) read as
  * `.`, and a dot between letters followed by a space (`R.Krishnan` is `R. Krishnan`, and
- * `evil.com` is no longer a link); whitespace collapsed; at most NAME_MAX code
+ * `evil.com` is no longer a link), after a combining mark directly after a
+ * dot is dropped, and a bare IPv4 address removed (withoutDomains); whitespace collapsed; at most NAME_MAX code
  * points. Null only when no letter or digit is left, when what is left is
  * command-shaped (a flag), or when it would trip Hermes's scanner.
  */
@@ -146,7 +164,7 @@ export function cleanName(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   // Phone runs go before the disallowed characters (so a leading `+` and
   // parentheses count) and once more after them (a run they split, now joined by spaces).
-  const plain = withoutPhoneRuns(
+  const spaced = withoutPhoneRuns(
     withoutPhoneRuns(
       raw
         .normalize("NFKC")
@@ -158,7 +176,8 @@ export function cleanName(raw: unknown): string | null {
       .replace(NAME_DISALLOWED, " ")
       .replace(/\s+/g, " "),
   )
-    .replace(DOT_BETWEEN_LETTERS, ". ")
+    .replace(/\s+/g, " ");
+  const plain = withoutDomains(spaced)
     .replace(/\s+/g, " ")
     .replace(/^[\s'\u2019.,-]+|[\s,-]+$/gu, "")
     .trim();
@@ -258,15 +277,17 @@ export function cleanText(raw: unknown, max: number): string | null {
  * withoutPhoneRuns); the full stops that act
  * as a domain dot (U+3002, U+FF0E, U+FF61) read as `.`, and a dot between
  * letters followed by a space, so no domain survives as a link (`7.30pm`
- * stays). At most `max` code points: cut at the cap with an ellipsis, or,
+ * stays), after a combining mark directly after a dot is dropped, and a bare
+ * IPv4 address removed (withoutDomains). At most `max` code points: cut at the cap with an ellipsis, or,
  * with `cut` "word" (the welcome's intent titles, DATA-374), at a word
  * boundary before it (cutAtWord). Null only when nothing visible is left or Hermes's scanner would
  * block on it. Words that read as an instruction cannot be cleaned away; the
- * prompts say the Script Output is data.
+ * prompts say the Script Output is data, and a match field (Index's headline,
+ * the resident's intent) that holds them is withheld whole (matchFieldShapeHit).
  */
 export function cleanTitle(raw: unknown, max: number, cut: TitleCut = "codepoint"): string | null {
   if (typeof raw !== "string") return null;
-  const plain = withoutPhoneRuns(
+  const spaced = withoutPhoneRuns(
     raw
       .normalize("NFKC")
       .replace(DOMAIN_DOTS, ".")
@@ -279,8 +300,8 @@ export function cleanTitle(raw: unknown, max: number, cut: TitleCut = "codepoint
       .replace(/@/g, " ")
       .replace(SLASH_NOT_BETWEEN_DIGITS, " / ")
       .replace(/\s+/g, " "),
-  )
-    .replace(DOT_BETWEEN_LETTERS, ". ")
+  );
+  const plain = withoutDomains(spaced)
     .replace(/\s+/g, " ")
     .trim()
     .replace(EDGE_SLASHES, "")
@@ -288,6 +309,145 @@ export function cleanTitle(raw: unknown, max: number, cut: TitleCut = "codepoint
   return capped(plain, max, cut);
 }
 
+
+// ── The shape of a match field (INDEX-COMMS A; OV-301 fix round 1, refute M1 and S3) ──
+
+/**
+ * Words that make a match field (Index's `headline` for a card, the resident's own intent text)
+ * read as an address to someone or an instruction rather than a short topic label. A field that
+ * holds any of them as a whole word, after NFKC, the look-alike fold (lookalikeFold) and
+ * lower-casing, is withheld whole (matchFieldShapeHit): the cleaner cannot clean away words that
+ * read as an instruction, and the prompts use the headline's words as the topic. Whole words only:
+ * `systems`, `phonetics`, `opening` and `youth` pass. Deliberately conservative: a topic label that
+ * holds one (`open source`, `food system`, an intent in the first person) is withheld too, and
+ * the message then says nothing about the topic.
+ */
+export const MATCH_FIELD_STOP_WORDS: readonly string[] = Object.freeze([
+  // address: second and first person
+  "you", "your", "yours", "yourself", "yourselves", "u", "ur",
+  "me", "my", "mine", "myself", "i", "we", "us", "our", "ours", "ourselves",
+  // asks to act or to get in touch
+  "reply", "respond", "send", "dm", "dms", "message", "call", "text", "sms", "click", "tap", "open", "visit",
+  "please", "pls", "plz", "now", "must", "should", "urgent",
+  // instructions to the model
+  "ignore", "forget", "disregard", "override", "instruction", "instructions", "rule", "rules",
+  "system", "assistant", "admin", "mode",
+  // contact details and secrets
+  "password", "otp", "phone", "handle", "telegram", "whatsapp", "email",
+]);
+
+/**
+ * Phrases a match field may not hold (matched as whole words after the same fold): the padding
+ * sentences the prompts ban, the names of the delivery labels and their tail, and the words the
+ * cron prompts ban. The prompts use the headline's words as the topic, so a headline that holds
+ * one would set two rules against each other (refute S3): it is withheld instead.
+ */
+export const MATCH_FIELD_STOP_PHRASES: readonly string[] = Object.freeze([
+  // padding sentences
+  "nothing has gone out yet", "nothing has gone out", "say so",
+  // delivery labels: "(<Label> message - you can ask me to stop or manage it)"
+  "extra introduction drops", "evening questions", "conversation update", "pending opportunity",
+  "daily digest", "token usage", "usage report", "ask me to stop", "manage it",
+  // banned words of the cron prompts
+  "leverage", "unlock", "optimize", "scale", "disrupt", "ai powered", "maximize value", "act fast", "networking", "match",
+]);
+
+/** The most words (whitespace-separated runs holding a letter or digit) a match field may have. */
+export const MATCH_FIELD_MAX_WORDS = 8;
+
+/**
+ * Cyrillic and Greek letters that look like Latin ones, folded to the Latin letter for the shape
+ * check only (never for the text that is sent): `іgnore` (Cyrillic і) is read as `ignore`.
+ */
+const LOOKALIKES: Readonly<Record<string, string>> = Object.freeze({
+  // Cyrillic lower case
+  "а": "a", "с": "c", "ԁ": "d", "е": "e", "һ": "h", "і": "i", "ј": "j",
+  "ӏ": "l", "о": "o", "р": "p", "ԛ": "q", "ѕ": "s", "ԝ": "w", "х": "x",
+  "у": "y", "ү": "y", "ɡ": "g",
+  // Cyrillic upper case
+  "А": "a", "В": "b", "С": "c", "Е": "e", "Н": "h", "І": "i", "Ј": "j",
+  "К": "k", "М": "m", "О": "o", "Р": "p", "Ѕ": "s", "Т": "t", "Х": "x",
+  "У": "y", "Ү": "y", "Ԛ": "q", "Ԝ": "w", "Ӏ": "i",
+  // Greek lower case
+  "α": "a", "ε": "e", "ι": "i", "κ": "k", "ν": "v", "ο": "o", "ρ": "p",
+  "τ": "t", "υ": "u", "χ": "x", "ϲ": "c", "ϳ": "j",
+  // Greek upper case
+  "Α": "a", "Β": "b", "Ε": "e", "Ζ": "z", "Η": "h", "Ι": "i", "Κ": "k",
+  "Μ": "m", "Ν": "n", "Ο": "o", "Ρ": "p", "Τ": "t", "Υ": "y", "Χ": "x",
+  // Latin look-alikes NFKC keeps
+  "ı": "i", "ȷ": "j",
+});
+
+/**
+ * The text the shape check reads: NFKC; control, format and default-ignorable characters removed;
+ * decomposed and every combining mark removed (`réply` is `reply`); look-alike letters folded;
+ * lower case.
+ */
+export function lookalikeFold(text: string): string {
+  const plain = text.normalize("NFKC").replace(INVISIBLE, "").replace(IGNORABLE, "").normalize("NFD").replace(/\p{M}+/gu, "");
+  return [...plain].map((ch) => LOOKALIKES[ch] ?? ch).join("").toLowerCase().normalize("NFKC");
+}
+
+/** A word mixing Latin with Cyrillic or Greek letters (`pаyments` with a Cyrillic а). */
+const MIXED_SCRIPT_WORD = /[\p{L}\p{M}]*(?:\p{Script=Latin}[\p{L}\p{M}]*[\p{Script=Cyrillic}\p{Script=Greek}]|[\p{Script=Cyrillic}\p{Script=Greek}][\p{L}\p{M}]*\p{Script=Latin})/u;
+/** An IPv4-shaped run (four dotted digit runs). */
+const IPV4_SHAPE = /\p{Nd}+\.\p{Nd}+\.\p{Nd}+\.\p{Nd}+/u;
+/** A phone-shaped run: a digit and six or more digits, spaces or dashes after it. */
+const PHONE_SHAPE = /\+?\p{Nd}[\p{Nd}\s-]{6,}/u;
+/** Marks that end a sentence or a clause (`.`, `!`, `?`, `:`, `;`, `…`, the Devanagari danda). */
+const SENTENCE_MARK = /[.!?:;…।॥]/gu;
+/** Straight and typographic double quotes: a match field sits inside a quoted template (refute N5). */
+const DOUBLE_QUOTES = /["“”„‟«»″‶❝❞⹂〝〞〟＂]/g;
+
+/** A match field's raw text with every double quote replaced by a space (refute N5); NFKC first, so `＂` is caught. */
+export function withoutDoubleQuotes(raw: string): string {
+  return raw.normalize("NFKC").replace(DOUBLE_QUOTES, " ");
+}
+
+/**
+ * A sentence mark with more text after it, or a colon or semicolon anywhere (a role marker or a
+ * key: `system:`, `messageUrl :`); a dot or a colon between two digits (`3.0`, `7:30`) is not one.
+ */
+function sentenceMarkInside(text: string): boolean {
+  for (const m of text.matchAll(SENTENCE_MARK)) {
+    const i = m.index ?? 0;
+    if (m[0] !== ":" && m[0] !== ";" && !/[\p{L}\p{N}]/u.test(text.slice(i + 1))) continue;
+    if ((m[0] === "." || m[0] === ":") && /\p{Nd}/u.test(text[i - 1] ?? "") && /\p{Nd}/u.test(text[i + 1] ?? "")) continue;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Why a match field is not a short topic label, or null when it is one. `raw` is the field as
+ * Index or the store gave it, `cleaned` the whole cleaned text (cleanTitle, before any cut). The
+ * field is withheld whole when either text, read through lookalikeFold:
+ *   - holds a word of MATCH_FIELD_STOP_WORDS or a phrase of MATCH_FIELD_STOP_PHRASES;
+ *   - holds a word mixing Latin with Cyrillic or Greek letters;
+ *   - would trip Hermes's scanner once the look-alikes are folded;
+ *   - holds an IPv4- or phone-shaped digit run;
+ * or when the cleaned text has more than MATCH_FIELD_MAX_WORDS words, a sentence mark (`.`,
+ * `!`, `?`, `…`) with more text after it, or a `:` or `;` anywhere (not a clock time). The reason is an id only: nothing of the text is
+ * returned or logged.
+ */
+export function matchFieldShapeHit(raw: string, cleaned: string): string | null {
+  const words = cleaned.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w));
+  if (words.length > MATCH_FIELD_MAX_WORDS) return "too_many_words";
+  if (sentenceMarkInside(cleaned)) return "sentence";
+  for (const text of [raw, cleaned]) {
+    const unhidden = text.normalize("NFKC").replace(INVISIBLE, "").replace(IGNORABLE, "");
+    if (MIXED_SCRIPT_WORD.test(unhidden)) return "mixed_script";
+    const folded = lookalikeFold(text);
+    if (cronScanHit(folded)) return "scanner";
+    const flat = folded.replace(/\s+/g, " ");
+    if (IPV4_SHAPE.test(flat) || PHONE_SHAPE.test(flat)) return "digits";
+    const tokens = folded.match(/[\p{L}\p{N}]+/gu) ?? [];
+    if (tokens.some((t) => MATCH_FIELD_STOP_WORDS.includes(t))) return "address_or_instruction";
+    const joined = ` ${tokens.join(" ")} `;
+    if (MATCH_FIELD_STOP_PHRASES.some((phrase) => joined.includes(` ${phrase} `))) return "banned_phrase";
+  }
+  return null;
+}
 
 // ── The Connections link ─────────────────────────────────────────────────────
 
