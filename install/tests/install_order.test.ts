@@ -6,13 +6,13 @@
  * gated call. A fresh install still stages it first, so a later failure leaves
  * the backstop in place (fail closed).
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { APPROVAL_GATED_TOOLS, APPROVAL_PLUGIN, stagePlugins } from "../install_approval";
+import { APPROVAL_GATED_TOOLS, APPROVAL_PLUGIN, NOT_STAGED_PLUGINS, stagePlugins } from "../install_approval";
 import { printableJobName } from "../install_index";
 
 const roots: string[] = [];
@@ -74,6 +74,36 @@ describe("stagePlugins: av-approval waits for the approval step on an upgrade", 
   });
 });
 
+describe("stagePlugins: OV-300 M1, a plugin in NOT_STAGED_PLUGINS is never staged and an installed copy is removed", () => {
+  test("village-bridge is in the set, and the real plugins/ tree has it", () => {
+    expect([...NOT_STAGED_PLUGINS]).toEqual(["village-bridge"]);
+    expect(existsSync(join(import.meta.dir, "..", "..", "plugins", "village-bridge", "plugin.yaml"))).toBe(true);
+  });
+
+  test("fresh install and upgrade: never staged in either phase; a copy an earlier installer staged is removed", () => {
+    const { source, target } = world();
+    plugin(source, "village-bridge", "ungated village tool");
+    expect(stagePlugins(source, target, "before-approval")).toBe(4);
+    expect(existsSync(join(target, "village-bridge"))).toBe(false);
+    expect(stagePlugins(source, target, "after-approval")).toBe(2);
+    expect(existsSync(join(target, "village-bridge"))).toBe(false);
+    // An upgrade from a build that staged it (rc34 was never rolled; this is the heal).
+    plugin(target, "village-bridge", "old ungated copy");
+    expect(stagePlugins(source, target, "before-approval")).toBe(2);
+    expect(existsSync(join(target, "village-bridge"))).toBe(false);
+    expect(marker(target, "av-events")).toContain("new events");
+  });
+
+  test("the heal also runs when the source tree is absent, and leaves every other installed plugin alone", () => {
+    const { target } = world();
+    plugin(target, "village-bridge", "old ungated copy");
+    plugin(target, "av-events", "old events");
+    expect(stagePlugins(join(target, "absent"), target, "before-approval")).toBe(0);
+    expect(existsSync(join(target, "village-bridge"))).toBe(false);
+    expect(marker(target, "av-events")).toContain("old events");
+  });
+});
+
 describe("install.ts runs the stages in that order", () => {
   const text = readFileSync(join(import.meta.dir, "..", "install.ts"), "utf8");
   const main = text.slice(text.indexOf("function main(): void {"));
@@ -115,7 +145,7 @@ describe("install.ts runs the stages in that order", () => {
     const helper = text.slice(text.indexOf("function installIndexHermesPlugin("), text.indexOf("function restartGateway("));
     expect(helper).toContain("installIndexPlugin(hermesRunner(hermesBin(), hermesExecEnv(), 60_000), process.argv, lastInstallVerified())");
     expect(text.match(/lastInstallVerified\(\)/g)).toHaveLength(1);
-    expect(text).toContain('import { gateReceiptLine, lastInstallVerified, runApprovalStep, stagePlugins } from "./install_approval";');
+    expect(text).toContain('import { gateReceiptLine, lastInstallVerified, NOT_STAGED_PLUGINS, runApprovalStep, stagePlugins } from "./install_approval";');
     expect(main.indexOf("if (!runApprovalStep(SOURCE_SKILLS)) {")).toBeLessThan(main.indexOf("const indexPluginFailed = installIndexHermesPlugin();"));
   });
 

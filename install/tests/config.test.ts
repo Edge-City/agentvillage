@@ -11,12 +11,13 @@ import {
   configureAvEvents,
   configureHostedGateway,
   configureIndexLinks,
-  configureVillageBridge,
   configureStt,
   disableTelegramLinkPreviews,
   dumpConfig,
   setTerminalCwd,
+  unlistPlugins,
 } from "../config";
+import { NOT_STAGED_PLUGINS } from "../install_approval";
 
 const ORIGINAL_ENV = {
   HERMES_HOME: process.env.HERMES_HOME,
@@ -43,13 +44,40 @@ function readConfig(path: string): Record<string, unknown> {
   return YAML.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
 }
 
-test("village tool install is idempotent and preserves a deliberate disabled setting", () => {
-  const path = withConfig({ plugins: { enabled: ["existing"], disabled: ["village-bridge"], hook_callback_timeout: 30 } });
-  configureVillageBridge();
+test("OV-300 M1: unlistPlugins drops a not-staged plugin from plugins.enabled, keeps everything else, and is idempotent", () => {
+  const path = withConfig({
+    plugins: { enabled: ["existing", "village-bridge", "av-approval", "village-bridge"], disabled: ["village-bridge"], hook_callback_timeout: 30 },
+  });
+  expect(unlistPlugins(NOT_STAGED_PLUGINS)).toEqual(["village-bridge"]);
+  expect(readConfig(path).plugins).toEqual({ enabled: ["existing", "av-approval"], disabled: ["village-bridge"], hook_callback_timeout: 30 });
   const first = readFileSync(path, "utf8");
-  configureVillageBridge();
+  expect(unlistPlugins(NOT_STAGED_PLUGINS)).toEqual([]);
   expect(readFileSync(path, "utf8")).toBe(first);
-  expect(readConfig(path).plugins).toEqual({ enabled: ["existing", "village-bridge"], disabled: ["village-bridge"], hook_callback_timeout: 30 });
+});
+
+test("OV-300 M1: unlistPlugins writes nothing when no listed plugin is enabled, or there is no plugins block", () => {
+  const raw = "# operator comment\nplugins:\n  enabled: [existing]\n";
+  const path = withConfig({});
+  writeFileSync(path, raw);
+  expect(unlistPlugins(NOT_STAGED_PLUGINS)).toEqual([]);
+  expect(readFileSync(path, "utf8")).toBe(raw);
+  writeFileSync(path, "model: {}\n");
+  expect(unlistPlugins(NOT_STAGED_PLUGINS)).toEqual([]);
+  expect(readFileSync(path, "utf8")).toBe("model: {}\n");
+});
+
+test("OV-300 M1: install.ts no longer enables village-bridge and runs the strip in the plugin config step", () => {
+  const install = readFileSync(join(import.meta.dir, "..", "install.ts"), "utf8");
+  const config = readFileSync(join(import.meta.dir, "..", "config.ts"), "utf8");
+  expect(install).not.toContain("configureVillageBridge");
+  expect(config).not.toContain("configureVillageBridge");
+  expect(install).not.toMatch(/["']village-bridge["']/);
+  const main = install.slice(install.indexOf("function main(): void {"));
+  const approval = main.indexOf("configureAvApproval();");
+  const strip = main.indexOf("unlistPlugins(NOT_STAGED_PLUGINS)");
+  expect(approval).toBeGreaterThan(0);
+  expect(strip).toBeGreaterThan(approval);
+  expect(main.indexOf("unlistPlugins(", strip + 1)).toBe(-1);
 });
 
 test("capModelMaxTokens adds a safe default cap when missing", () => {

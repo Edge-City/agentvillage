@@ -206,6 +206,34 @@ export const APPROVAL_GATED_TOOLS = [
 ] as const;
 
 /**
+ * Plugins in `plugins/` the installer never stages, and removes when an earlier
+ * installer staged them. Each entry says why. The plugin config step
+ * (`unlistPlugins` in config.ts, called from install.ts) also drops these names
+ * from `plugins.enabled`, so a box upgraded from a build that listed one is
+ * healed. `install/tests/plugin_tools_gated.test.ts` requires each of their
+ * tools to carry the reason "not staged: OV-300 M1 / BRIDGE-1" in its
+ * `NOT_GATED` table, and fails if the entry here is removed without the tool
+ * being gated.
+ */
+export const NOT_STAGED_PLUGINS: ReadonlySet<string> = new Set([
+  // OV-300 M1 (ov#300, a0b087c5): `village` is a write tool (star sends, meeting marks) in neither
+  // APPROVAL_GATED_TOOLS nor av-approval's GATED_MATCHERS. Off every box until BRIDGE-1 brings it back
+  // under the gate. Without its plugin.yaml on the box the control plane's token writer refuses
+  // (`village_plugin_missing`), so no village-bridge.json lands either (OV-300 M2).
+  "village-bridge",
+]);
+
+/** True when `path` exists, a dangling symlink included (`existsSync` follows links). */
+function lstatExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * N3 (R3 fix round 2): the plugins are staged around the approval step, so an
  * upgrade never leaves the `av-approval` plugin's matcher list
  * (`GATED_MATCHERS`) ahead of the hooks block the step writes. The plugin
@@ -223,13 +251,24 @@ export const APPROVAL_GATED_TOOLS = [
  * An upgrade whose approval step fails keeps the installed `av-approval` and
  * the hooks block it was installed with: the install stops before the restart,
  * as before, and the next run stages it.
+ *
+ * A plugin in `NOT_STAGED_PLUGINS` is never staged, in either phase, and an
+ * installed copy of it is removed (fail closed: OV-300 M1).
  */
 export function stagePlugins(sourceRoot: string, targetRoot: string, phase: "before-approval" | "after-approval"): number {
+  // Heal an upgrade: a copy staged by an earlier installer is removed (no box has one: rc34 was never rolled).
+  for (const name of NOT_STAGED_PLUGINS) {
+    const staged = join(targetRoot, name);
+    if (!lstatExists(staged)) continue;
+    rmSync(staged, { recursive: true, force: true });
+    console.log(`→ removed plugin ${name} from ${targetRoot} (not staged: OV-300 M1)`);
+  }
   if (!existsSync(sourceRoot)) return 0;
   let copied = 0;
   for (const name of readdirSync(sourceRoot).sort()) {
     const source = join(sourceRoot, name);
     if (!statSync(source).isDirectory()) continue;
+    if (NOT_STAGED_PLUGINS.has(name)) continue;
     const approval = name === APPROVAL_PLUGIN;
     if (phase === "after-approval" && !approval) continue;
     if (phase === "before-approval" && approval && existsSync(join(targetRoot, name))) continue;

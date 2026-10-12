@@ -60,7 +60,7 @@ import { installIndex } from "./install_index";
 import { type IndexPluginFailure, type IndexPluginNote, indexPluginFailedLine, installIndexPlugin, recordIndexPluginStatus, setIndexPluginEnabled } from "./install_index_plugin";
 import { installEdgeos } from "./install_edgeos";
 import { safeInstallRecall, wipeRecallIndex } from "./install_recall";
-import { gateReceiptLine, lastInstallVerified, runApprovalStep, stagePlugins } from "./install_approval";
+import { gateReceiptLine, lastInstallVerified, NOT_STAGED_PLUGINS, runApprovalStep, stagePlugins } from "./install_approval";
 import {
   capModelMaxTokens,
   configureAvEvents,
@@ -68,7 +68,6 @@ import {
   configureCronScriptTimeout,
   configureCronWrapResponse,
   configureIndexLinks,
-  configureVillageBridge,
   configureDashboardAuth,
   configureHostedGateway,
   configureStt,
@@ -78,6 +77,7 @@ import {
   setCompactionSettings,
   setContextFileMaxChars,
   setTerminalCwd,
+  unlistPlugins,
 } from "./config";
 import { configureTelegramDisplay } from "./display_defaults";
 import { configureAvDisplay } from "./av_display";
@@ -314,7 +314,7 @@ function main(): void {
   configureDashboardAuth();
   configureAvEvents();
   configureAvApproval();
-  configureVillageBridge();
+  for (const name of unlistPlugins(NOT_STAGED_PLUGINS)) console.log(`→ removed plugin ${name} from plugins.enabled (not staged: OV-300 M1)`);
   configureIndexLinks();
   configureAvDisplay();
   // Opt-in and off the core path: a failure here is counted, never fatal.

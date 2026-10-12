@@ -896,13 +896,22 @@ export function configureRecall(): void {
   console.log(choice ? `→ enabled plugin ${RECALL_PLUGIN}` : `→ disabled plugin ${RECALL_PLUGIN} (AV_RECALL_ENABLED off)`);
 }
 
-/** Native village tool uses narrow credentials provisioned automatically for the existing paired account. */
-export function configureVillageBridge(): void {
+/**
+ * Drop each of `names` from `plugins.enabled` (install.ts passes `NOT_STAGED_PLUGINS`), so a box
+ * whose config an earlier installer wrote is healed (OV-300 M1: `village-bridge`). Writes only when
+ * an entry is removed; every other entry, `plugins.disabled` included, is left as it is. The names
+ * removed, for the log line.
+ */
+export function unlistPlugins(names: Iterable<string>): string[] {
   const doc = readConfig();
-  const plugins = { ...((doc.plugins as Record<string, unknown>) ?? {}) };
-  const enabled = Array.isArray(plugins.enabled) ? plugins.enabled.filter((v: unknown) => typeof v === "string") : [];
-  if (!enabled.includes("village-bridge")) enabled.push("village-bridge");
-  plugins.enabled = enabled;
-  doc.plugins = plugins;
+  const plugins = doc.plugins;
+  if (!plugins || typeof plugins !== "object" || Array.isArray(plugins)) return [];
+  const enabled = (plugins as Record<string, unknown>).enabled;
+  if (!Array.isArray(enabled)) return [];
+  const drop = new Set(names);
+  const removed = [...new Set(enabled.filter((n): n is string => typeof n === "string" && drop.has(n)))];
+  if (removed.length === 0) return [];
+  doc.plugins = { ...(plugins as Record<string, unknown>), enabled: enabled.filter((n) => !(typeof n === "string" && drop.has(n))) };
   writeConfig(doc);
+  return removed;
 }
