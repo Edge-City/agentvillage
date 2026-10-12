@@ -23,7 +23,7 @@ Calendar bullets should put EdgeOS `highlighted: true` events first, then fill w
 > - {timeLocal} IST — {Interest-relevant event title} at {venue}. {One line on why it fits this user.}
 >
 > **3 conversations await you**
-> Tapping a link accepts the introduction at once, then opens Telegram with them if Index has their Telegram, or Index's page if not.
+> Tapping a link opens Agent Village, where one tap accepts; once you have both accepted, it opens Telegram with them.
 > - [Maya]({userUrl}) — waiting to hear from you about {topic}, [message Maya]({acceptUrl}).
 > - [Theo]({userUrl}) — waiting to hear from you about {topic}, [message Theo]({acceptUrl}).
 > - [Priya]({userUrl}) — waiting to hear from you about {topic}, [message Priya]({acceptUrl}).
@@ -47,7 +47,7 @@ When there is no current organizer announcement you can verify, omit the section
 > - {timeLocal} IST — {Event title} at {venue}. {One line on why it fits this user.}
 >
 > **1 conversation awaits you**
-> Tapping the link accepts the introduction at once, then opens Telegram with them if Index has their Telegram, or Index's page if not.
+> Tapping the link opens Agent Village, where one tap accepts; once you have both accepted, it opens Telegram with them.
 > - [Priya]({userUrl}) — waiting to hear from you about {topic}, [message Priya]({acceptUrl}).
 >
 > Agent Village: https://agents.edgecity.live
@@ -63,7 +63,7 @@ If the live calendar is unavailable (call failed, or no Edge City India calendar
 > Here's what you need to know today:
 >
 > **1 conversation awaits you**
-> Tapping the link accepts the introduction at once, then opens Telegram with them if Index has their Telegram, or Index's page if not.
+> Tapping the link opens Agent Village, where one tap accepts; once you have both accepted, it opens Telegram with them.
 > - [Ashish]({userUrl}) — waiting to hear from you about {topic}, [message Ashish]({acceptUrl}).
 >
 > I don't have today's Edge City India schedule this morning — the Edge City portal or the organisers will have what's on.
@@ -81,7 +81,7 @@ One bullet per opportunity, each with its own `acceptUrl`. Do not merge several 
 The tool's lead line is the roster: names linked to their profiles, no message link. The reply keeps those profile links and adds, for every pending introduction (not a community ask), in the resident's own private chat, the message link copied from that card's `acceptUrl` in the JSON below the lead line. A `negotiating` card gets no message link yet. The reply never promises the link for a later turn and never labels a link "Profile".
 
 > **2 conversations await you**
-> Tapping a link accepts the introduction at once, then opens Telegram with them if Index has their Telegram, or Index's page if not.
+> Tapping a link opens Agent Village, where one tap accepts; once you have both accepted, it opens Telegram with them.
 > - [Adam]({userUrl}) — waiting to hear from you about {topic}, [message Adam]({acceptUrl}).
 > - [Paul]({userUrl}) — waiting to hear from you about {topic}, [message Paul]({acceptUrl}).
 >
