@@ -103,6 +103,8 @@ def test_the_event_id_is_a_function_of_the_file_and_the_record(live, home, av):
 
 @pytest.mark.parametrize("reason,stage", [
     ("cleaner_withheld", "cleaner"), ("scanner_flagged", "scanner"), ("scanner_flagged", "shape"),
+    # `length_capped` is reserved (fix round 4, recheck af3ef6ae S2): the trigger no longer writes it,
+    # but it stays in the closed set data registered, so a record carrying it is still well-shaped.
     ("shape_withheld", "shape"), ("length_capped", "cleaner"),
 ])
 def test_every_reason_code_the_trigger_writes_is_emitted(live, home, av, reason, stage):
@@ -261,6 +263,68 @@ def test_a_temp_file_is_left_for_the_writer(live, home, av):
     os.chmod(tmp, 0o600)
     assert tick(live) == {}
     assert tmp.exists()
+
+
+@pytest.mark.parametrize("mode", [0o770, 0o707, 0o777])
+def test_a_folder_others_could_write_is_a_visible_drop_on_every_pass_and_its_files_are_left(live, home, av, mode):
+    """Fix round 4 (recheck af3ef6ae N1): counted, never silent."""
+    path = hand_off(home, body())
+    os.chmod(flag_dir(home), mode)
+    try:
+        assert tick(live) == {"flag_dropped_folder": 1}
+        assert tick(live) == {"flag_dropped_folder": 1}
+        assert path.exists()
+        assert flagged(av, live) == []
+        assert live._COLLECTOR.counters.get("headline_flag_dropped_folder") == 2
+    finally:
+        os.chmod(flag_dir(home), 0o700)
+
+
+def test_a_symlinked_folder_is_a_visible_drop_and_never_followed(live, home, av, tmp_path):
+    """Fix round 4 (recheck af3ef6ae N1)."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    os.chmod(elsewhere, 0o700)
+    target = elsewhere / "1760250600000-1-aa.json"
+    target.write_text(json.dumps(body()))
+    os.chmod(target, 0o600)
+    flag_dir(home).parent.mkdir(parents=True, exist_ok=True)
+    flag_dir(home).symlink_to(elsewhere, target_is_directory=True)
+    assert tick(live) == {"flag_dropped_folder": 1}
+    assert target.exists()
+    assert flagged(av, live) == []
+
+
+def test_no_folder_at_all_is_silence(live, home, av):
+    assert not os.path.lexists(flag_dir(home))
+    assert tick(live) == {}
+
+
+def test_an_empty_directory_named_json_is_removed_and_counted_once(live, home, av):
+    """Fix round 4 (recheck af3ef6ae N2)."""
+    good = hand_off(home, body(), name="2-1-b.json")
+    odd = flag_dir(home) / "1-1-a.json"
+    odd.mkdir()
+    assert tick(live) == {"flag_dropped_not_regular": 1, "emitted": 1}
+    assert not odd.exists() and not good.exists()
+    assert tick(live) == {}
+
+
+def test_a_directory_named_json_that_holds_something_is_counted_once_never_on_every_pass(live, home, av):
+    """Fix round 4 (recheck af3ef6ae N2)."""
+    module = sys.modules[f"{live.__name__}._headline_flagged"]
+    module._COUNTED_DIRS.clear()
+    odd = flag_dir(home) / "1-1-a.json"
+    odd.mkdir(parents=True)
+    os.chmod(flag_dir(home), 0o700)
+    (odd / "inside").write_text("x")
+    assert tick(live) == {"flag_dropped_not_regular": 1}
+    assert tick(live) == {}
+    assert tick(live) == {}
+    assert odd.is_dir() and (odd / "inside").exists()
+    # The next good file still goes.
+    hand_off(home, body(), name="2-1-b.json")
+    assert tick(live) == {"emitted": 1}
 
 
 # -- switches -------------------------------------------------------------------

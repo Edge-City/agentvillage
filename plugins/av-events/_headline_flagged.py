@@ -1,7 +1,7 @@
 """DATA-487: `opportunity.headline_flagged@1`, from the trigger's hand-off files.
 
 Carter's ruling of 12 Oct 2026 18:25Z (ov#301): every Index headline the
-proactive trigger's cleaner, scanner or shape check withholds, flags or cuts
+proactive trigger's cleaner, scanner or shape check withholds or flags
 is reported as an event with the Index opportunity id, the counterpart's Index
 user id and a reason code, and no text, so the data side can spot a
 counterpart who sends lures.
@@ -25,7 +25,8 @@ and each record is exactly the closed payload below. The flusher's pass
   behind `https://index.network/u/<userId>`: a UUID, as the trigger's
   `attachIndexLinks` (USER_ID) and FLAG_USER_ID require;
 - `reason_code`: `cleaner_withheld` | `scanner_flagged` | `shape_withheld` |
-  `length_capped`;
+  `length_capped` (reserved: kept in the closed set, the trigger does not
+  emit it, since a cut headline was checked whole before the cut);
 - `stage`: `cleaner` | `scanner` | `shape`, in the pairs the trigger writes
   (PAIRS);
 - `headline_length`: the raw headline's length in code points, an int 0..2000.
@@ -47,7 +48,10 @@ emit raises or is refused, is dropped and counted, and the others still go; a
 file that cannot be read, is not private, is too big, is not the shape, is
 stale or is from the future is dropped and counted; past RECORDS_MAX the first
 records go and the rest are counted. Every file read is consumed (removed),
-so nothing is re-read forever, and nothing raises out of `tick`. The codes are
+so nothing is re-read forever, and nothing raises out of `tick`. A folder that
+exists but is not private (group or other writable, another user's, a
+symlink) is counted `folder` on each pass and left unread; a directory named
+`*.json` is removed when empty and counted `not_regular` once. The codes are
 `flag_dropped_<reason>` (and `emitted`); the collector logs them and keeps
 them on its counters.
 
@@ -64,11 +68,12 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 import time
 from typing import Any, Callable, Optional
 
 from ._core import MAX_BUFFER_AGE_S, derived_uuid7, epoch_from_iso, iso_from_epoch, iso_from_text
-from ._outcome_ask import _listing, _unlink, private_file
+from ._outcome_ask import _listing, _unlink, private_dir, private_file
 
 #: The event this module emits (`opportunity.headline_flagged@1`: schema 1, the envelope's).
 EVENT_TYPE = "opportunity.headline_flagged"
@@ -81,7 +86,8 @@ PAYLOAD_KEYS = ("opportunity_id", "counterpart_index_user_id", "reason_code", "s
 FILE_KEYS = frozenset({"v", "written_at", "records"})
 REASON_CODES = frozenset({"cleaner_withheld", "scanner_flagged", "shape_withheld", "length_capped"})
 STAGES = frozenset({"cleaner", "scanner", "shape"})
-#: (reason_code, stage) as the trigger writes them (proactive-text.ts matchFieldVerdict).
+#: (reason_code, stage) as the trigger writes them (proactive-text.ts matchFieldVerdict), and the
+#: reserved `length_capped` pair the trigger no longer writes (kept in the registered closed set).
 PAIRS = frozenset({
     ("cleaner_withheld", "cleaner"),
     ("scanner_flagged", "scanner"),
@@ -107,6 +113,9 @@ CLOCK_SLACK_S = 5 * 60
 
 #: The drop codes: `flag_dropped_<reason>`.
 DROPPED = "flag_dropped_"
+#: Directories named `*.json` already counted by this process (device, inode): one that cannot be
+#: removed (not empty) is counted once, never on every pass (fix round 4, recheck af3ef6ae N2).
+_COUNTED_DIRS: set[tuple[int, int]] = set()
 
 
 def flag_dir(state_dir: str) -> str:
@@ -186,15 +195,46 @@ def _one_file(path: str, name: str, emit: Callable[..., Optional[dict]], now: fl
         _count(codes, "emitted" if event is not None else DROPPED + "emit_refused")
 
 
+def _directory(path: str, codes: dict) -> bool:
+    """True when `path` is a directory (named `*.json`): removed when empty, counted
+    `not_regular` once (when removed, or the first time this process sees it), and never
+    read or counted again (fix round 4, recheck af3ef6ae N2)."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    if not stat.S_ISDIR(st.st_mode):
+        return False
+    key = (st.st_dev, st.st_ino)
+    try:
+        os.rmdir(path)
+        removed = True
+    except OSError:
+        removed = False
+    if removed or key not in _COUNTED_DIRS:
+        _count(codes, DROPPED + "not_regular")
+    if not removed:
+        _COUNTED_DIRS.add(key)
+    return True
+
+
 def tick(state_dir: str, emit: Callable[..., Optional[dict]], now: Optional[float] = None) -> dict:
     """Emit the waiting records and consume their files. Returns code -> count:
     `emitted` (events) and `flag_dropped_<reason>` (files or records dropped:
     the private_file codes, `bad_file`, `future`, `stale`, `over_cap`,
-    `bad_record`, `emit_error`, `emit_refused`, `error`). Never raises."""
+    `bad_record`, `emit_error`, `emit_refused`, `error`; `folder` once per
+    pass while the folder exists but is not private: group or other
+    writable, another user's, or a symlink, whose files are left unread).
+    Never raises."""
     now = time.time() if now is None else now
     codes: dict[str, int] = {}
     try:
         folder = flag_dir(state_dir)
+        # Fix round 4 (recheck af3ef6ae N1): a folder that exists but is not private is a visible
+        # drop, not silence. Its files are not read (a symlinked folder is never followed).
+        if os.path.lexists(folder) and not private_dir(folder):
+            _count(codes, DROPPED + "folder")
+            return codes
         names = _listing(folder)[:FILES_PER_TICK]
     except Exception:  # noqa: BLE001
         _count(codes, DROPPED + "error")
@@ -202,6 +242,8 @@ def tick(state_dir: str, emit: Callable[..., Optional[dict]], now: Optional[floa
     for name in names:
         path = os.path.join(folder, name)
         try:
+            if _directory(path, codes):
+                continue
             _one_file(path, name, emit, now, codes)
         except Exception:  # noqa: BLE001 - one file never stops the others
             _count(codes, DROPPED + "error")

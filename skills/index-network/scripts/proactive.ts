@@ -494,7 +494,7 @@ class Withheld {
   }
   /**
    * Detection (DATA-487, Carter's ruling of 12 Oct 2026 18:25Z): Index's headline for a card, as
-   * matchField, plus one HeadlineFlag when it was withheld, flagged or cut: the card's Index
+   * matchField, plus one HeadlineFlag when it was withheld or flagged: the card's Index
    * opportunity id, the counterpart's Index user id, a reason code, the gate and the raw length.
    * Never any text. A flagged card without both ids is counted in `unattributed`, never guessed.
    */
@@ -517,7 +517,7 @@ class Withheld {
     }
     return this.counted(raw, verdict.text);
   }
-  /** DATA-487: one per withheld, flagged or cut `match.headline` (matchHeadline). */
+  /** DATA-487: one per withheld or flagged `match.headline` (matchHeadline). */
   flags: HeadlineFlag[] = [];
   /** DATA-487: flagged headlines whose card had no Index opportunity id or counterpart user id. */
   unattributed = 0;
@@ -1159,7 +1159,7 @@ async function runAgentAction(action: AgentAction, options: ProactiveOptions): P
       const marked = !DAY_MARK_EXEMPT.has(action);
       if (doneToday(read(), action, run.date) && marked) return silent("done-today");
       const decision = await AGENT_ACTIONS[action](run);
-      // DATA-487: every withheld, flagged or cut headline this run saw, ids and codes only, whatever the run does next.
+      // DATA-487: every withheld or flagged headline this run saw, ids and codes only, whatever the run does next.
       const flagged = handOffFlags(home, decision, now);
       const extra = { ...(decision.detail ? { detail: decision.detail } : {}), ...flagged };
       if ("silent" in decision) return { ...silent(decision.silent, 0, decision.withheld), ...extra };
@@ -1182,7 +1182,7 @@ async function runAgentAction(action: AgentAction, options: ProactiveOptions): P
   return { ...(healed ? { ...result, note: STATE_HEALED } : result), ...settings };
 }
 
-// ── Detection (DATA-487): withheld, flagged or cut headlines, handed to the av-events plugin ──
+// ── Detection (DATA-487): withheld or flagged headlines, handed to the av-events plugin ──
 
 /**
  * The folder the trigger hands headline flags to the av-events plugin in
