@@ -33,14 +33,16 @@ on evidence:
 * **Evidence** wakes the model: at least EVIDENCE_MIN_MESSAGES resident
   messages of at least SUBSTANTIVE_CHARS characters since the last run, or a
   changed stated goal, or a changed filtered memory hash.
-* **Caps** keep it from waking when it may not record: at most one inferred
-  intent per resident per night, none while an inferred approval card is open,
-  none within DECLINE_COOLDOWN_S of a declined inferred suggestion, and none
-  without `record_intention` (`AV_RECORD_INTENTION` off).
-* **State** is written on every exit path, the early stops included:
-  `memorySignals.lastMemoryHash`, `lastGoalsHash`, `lastRunAt`, the signal
-  counters. A run that stops never leaves the hash unset (rc31 left it unset
-  on 9 of 15 boxes, so each would have woken every night for nothing).
+* **Caps** keep it from waking when it may not record (`exit_branch` `capped`: a cap,
+  not a judgement): at most one inferred intent per resident per night, none while an
+  inferred approval card is open, none within DECLINE_COOLDOWN_S of a declined inferred
+  suggestion; and none without `record_intention` (`AV_RECORD_INTENTION` off: `tool_unavailable`).
+* **State.** Every exit records `lastRunAt`, the reason and the counters. The evidence pointers
+  (`lastMemoryHash`, `lastGoalsHash`, `messageCursor`) move only when the evidence was dealt with:
+  at once on `gated_no_change`; for a wake, once that run completed (the next run commits its
+  `pendingEvidence`). A cap, the switch off, an unreadable map or an exception leaves them, so no
+  evidence the model never saw is discarded; a wake that never completes is retried at most
+  MAX_UNCOMPLETED_WAKES times on the same evidence, then given up as an error.
 * **Run record**: one entry per run in `$HERMES_HOME/av-events/memory_signal_runs.json`
   (counts and codes; the text of an intention this pass recorded, kept on the
   box only so a declined one is never proposed again). The av-events plugin
@@ -516,6 +518,13 @@ class MapUnreadable(Exception):
     pass
 
 
+#: Branches on which the plugin closes a woken run that finished its work.
+COMPLETED_BRANCHES = frozenset({"no_candidate", "candidate_already_covered", "candidate_previously_declined",
+                                "capped", "recorded"})
+#: A wake whose run never completes is retried at most this many times on the same evidence.
+MAX_UNCOMPLETED_WAKES = 2
+
+
 class StateWriteFailed(Exception):
     """`memory/heartbeat-state.json` could not be written."""
 
@@ -656,6 +665,43 @@ def emit(payload: dict[str, Any]) -> None:
 # ---- The model's input ------------------------------------------------------------
 
 
+def last_known_intents(runs: list[dict]) -> Optional[int]:
+    """The active intents the newest run that listed them counted, or None when no run ever did."""
+    for run in reversed(runs):
+        value = run.get("existing_intents")
+        if run.get("intents_listed") is True and isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+    return None
+
+
+def last_known(state: dict, runs: list[dict]) -> dict:
+    """S3: the counters a run that could not compute its own reports: the last ones the gate wrote
+    (`memorySignals.lastSignal`), else 0 (never known), and the last listed intents."""
+    signals = state.get("memorySignals") if isinstance(state.get("memorySignals"), dict) else {}
+    last = signals.get("lastSignal") if isinstance(signals.get("lastSignal"), dict) else {}
+
+    def count(key: str) -> int:
+        value = last.get(key)
+        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
+    return {
+        "memory_bytes": count("memoryBytes"),
+        "resident_messages_since_last_run": count("substantiveMessages"),
+        "stated_goals": count("statedGoals"),
+        "prior_declines": count("priorDeclines"),
+        "existing_intents": last_known_intents(runs),
+    }
+
+
+#: N2: the fence lines the inputs file uses. Content that holds one is rewritten, so nothing a
+#: resident or a memory note says can close the data block early.
+FENCE = re.compile(r"(BEGIN|END)(\s+)RESIDENT(\s+)DATA", re.I)
+
+
+def unfenced(text: str) -> str:
+    return FENCE.sub("[fence marker removed]", text)
+
+
 def inputs_text(*, run_id: str, goals: list[str], messages: list[tuple[float, str]], removed: list[str],
                 declined: list[str], declined_count: int, memory: str, messages_note: Optional[str]) -> str:
     zone = village_zone()
@@ -669,27 +715,27 @@ def inputs_text(*, run_id: str, goals: list[str], messages: list[tuple[float, st
         "",
         "## Stated goals (their Context page, in their own words)",
     ]
-    out += [f"- {goal}" for goal in goals] or ["(none)"]
+    out += [f"- {unfenced(goal)}" for goal in goals] or ["(none)"]
     out += ["", "## Their own messages since the last run (oldest first)"]
     if messages_note:
         out.append(f"(could not be read: {messages_note})")
     elif messages:
         for stamp, text in messages:
             when = datetime.fromtimestamp(stamp, zone).strftime("%Y-%m-%d %H:%M")
-            out.append(f"- [{when}] " + text.replace("\n", " / "))
+            out.append(f"- [{when}] " + unfenced(text.replace("\n", " / ")))
     else:
         out.append("(none)")
     out += ["", "## Removed by you (never propose these, or anything close to them)"]
-    out += [f"- {item}" for item in removed[:MAX_REMOVED]] or ["(none)"]
+    out += [f"- {unfenced(item)}" for item in removed[:MAX_REMOVED]] or ["(none)"]
     out += ["", "## Suggestions they declined on their approval card (never propose these, or anything close to them)"]
     if declined:
-        out += [f"- {item}" for item in declined]
+        out += [f"- {unfenced(' / '.join(item.splitlines()))}" for item in declined]
     if declined_count > len(declined):
         out.append(f"({declined_count - len(declined)} more declined earlier; their words are not kept)")
     if not declined and not declined_count:
         out.append("(none)")
     out += ["", "## Your own memory notes about them (secondary; your housekeeping left out)"]
-    out.append(memory if memory.strip() else "(none)")
+    out.append(unfenced(memory) if memory.strip() else "(none)")
     out += ["", "END RESIDENT DATA", ""]
     return "\n".join(out)
 
@@ -697,40 +743,79 @@ def inputs_text(*, run_id: str, goals: list[str], messages: list[tuple[float, st
 # ---- The gate ---------------------------------------------------------------------
 
 
+def run_completed(pending: dict, outcome: Any, runs: list[dict]) -> bool:
+    """A woken run finished its work: the model wrote its outcome for that run, or the tool noted a
+    capture, or the plugin closed its record on a branch that is not a failure."""
+    run_id = pending.get("runId")
+    if not run_id:
+        return False
+    if isinstance(outcome, dict) and outcome.get("runId") == run_id:
+        return True
+    for run in runs:
+        if run.get("run_id") == run_id:
+            return bool(run.get("recorded_intent_id")) or run.get("exit_branch") in COMPLETED_BRANCHES
+    return False
+
+
 def gate(home: Path, memory_path: Path, state_path: Path, *, now: float) -> dict:
-    """The final JSON line. Writes the state, the run record and (on a wake) the model's input."""
+    """The final JSON line. Writes the state, the run record and (on a wake) the model's input.
+
+    The evidence pointers (`lastMemoryHash`, `lastGoalsHash`, `messageCursor`) move only when the
+    evidence was dealt with: at once on a `gated_no_change` exit; for a wake, held as
+    `pendingEvidence` and committed by the next run once that run completed (its outcome written, a
+    capture noted, or its record closed on a non-failure branch). A stop for any other reason (record
+    off, a cap, an unreadable map, an exception) leaves them, so the next run reads the same
+    evidence again; it still records `lastRunAt`, the reason and the counters. A wake that never
+    completes is retried at most MAX_UNCOMPLETED_WAKES times on the same evidence, then committed and
+    reported as an error, so a model that never writes its outcome cannot cost a wake every night."""
     today = village_date(now)
     run_id = uuid7(now)
     state = read_state(state_path)
     previous = state.get("memorySignals") if isinstance(state.get("memorySignals"), dict) else {}
     signals = dict(previous)
+    runs = read_runs(home)
+
+    # A wake from an earlier run: commit its evidence if it completed.
+    pending = previous.get("pendingEvidence") if isinstance(previous.get("pendingEvidence"), dict) else None
+    uncompleted_wakes = 0
+    if pending is not None:
+        if run_completed(pending, previous.get("lastOutcome"), runs):
+            for key, field in (("memoryHash", "lastMemoryHash"), ("goalsHash", "lastGoalsHash"), ("cursor", "messageCursor"),
+                               ("memoryFilterVersion", "memoryFilterVersion")):
+                if key in pending:
+                    signals[field] = pending[key]
+            signals.pop("pendingEvidence", None)
+            pending = None
+        else:
+            attempts = pending.get("attempts")
+            uncompleted_wakes = attempts if isinstance(attempts, int) and not isinstance(attempts, bool) else 1
+    committed = signals
 
     # The agent's memory, secondary: no profile entry, no housekeeping.
     memory_text = resident_memory(read_text(memory_path) or "")
     memory = clip_bytes(memory_text, MAX_MEMORY_BYTES)
     current_memory_hash = memory_hash(memory_text)
-    stored_memory_hash = previous.get("lastMemoryHash") if isinstance(previous.get("lastMemoryHash"), str) else ""
-    same_filter = previous.get("memoryFilterVersion") == MEMORY_FILTER_VERSION
+    stored_memory_hash = committed.get("lastMemoryHash") if isinstance(committed.get("lastMemoryHash"), str) else ""
+    same_filter = committed.get("memoryFilterVersion") == MEMORY_FILTER_VERSION
     memory_changed = bool(memory_text.strip()) and same_filter and bool(stored_memory_hash) and stored_memory_hash != current_memory_hash
 
     # The stated goals and the removals on their Context page.
     groups, removed = context_tags(read_text(home / "memories" / "USER.md"))
     goals = stated_goals(groups, removed)
     current_goals_hash = goals_hash(goals)
-    goals_changed = bool(goals) and previous.get("lastGoalsHash") != current_goals_hash
+    goals_changed = bool(goals) and committed.get("lastGoalsHash") != current_goals_hash
 
-    # Their own messages since the last run.
-    last_run_at = _stamp(previous.get("lastRunAt"))
-    if last_run_at is None or last_run_at > now:
-        # No run yet, or a stored time in the future (the clock went back): the first-run window.
+    # Their own messages since the evidence was last dealt with (the message cursor).
+    cursor = _stamp(committed.get("messageCursor"))
+    if cursor is None or cursor > now:
+        # No cursor yet, or one in the future (the clock went back): the first-run window.
         since = now - FIRST_RUN_WINDOW_S
     else:
-        since = max(last_run_at, now - MAX_WINDOW_S)
+        since = max(cursor, now - MAX_WINDOW_S)
     messages, messages_note = resident_messages(home / "state.db", since)
     substantive = [m for m in (messages or []) if len(m[1]) >= SUBSTANTIVE_CHARS]
 
     # What the resident declined, and what is still open.
-    runs = read_runs(home)
     map_error: Optional[str] = None
     try:
         inferred = approvals(home)
@@ -752,24 +837,38 @@ def gate(home: Path, memory_path: Path, state_path: Path, *, now: float) -> dict
     elif map_error:
         exit_branch, reason, error_code = "error", map_error, "io_error"
     elif recorded_tonight(runs, today):
-        exit_branch, reason, error_code = "candidate_already_covered", "capped_nightly", None
+        exit_branch, reason, error_code = "capped", "capped_nightly", None
     elif open_card:
-        exit_branch, reason, error_code = "candidate_already_covered", "capped_open_card", None
+        exit_branch, reason, error_code = "capped", "capped_open_card", None
     elif last_declined is not None and now - last_declined < DECLINE_COOLDOWN_S:
-        exit_branch, reason, error_code = "candidate_previously_declined", "capped_recent_decline", None
+        exit_branch, reason, error_code = "capped", "capped_recent_decline", None
+    elif uncompleted_wakes >= MAX_UNCOMPLETED_WAKES:
+        # The same evidence woke the model this many times and no run completed: stop paying for it.
+        exit_branch, reason, error_code = "error", "uncompleted_wakes", "state_write_failed"
     else:
         exit_branch, reason, error_code = None, "evidence", None
 
-    # Every exit path writes the hashes and the counters, the early stops included.
+    fresh = {"memoryHash": current_memory_hash, "goalsHash": current_goals_hash, "cursor": now,
+             "memoryFilterVersion": MEMORY_FILTER_VERSION}
+    if not same_filter:
+        # A new filter re-bases the memory hash at once: that discards no evidence.
+        signals.update(lastMemoryHash=current_memory_hash, memoryFilterVersion=MEMORY_FILTER_VERSION)
+    if exit_branch in ("gated_no_change",) or reason == "uncompleted_wakes":
+        # The evidence was dealt with: move the pointers.
+        signals.update(lastMemoryHash=fresh["memoryHash"], lastGoalsHash=fresh["goalsHash"],
+                       messageCursor=fresh["cursor"], memoryFilterVersion=MEMORY_FILTER_VERSION)
+        signals.pop("pendingEvidence", None)
+    elif exit_branch is None:
+        # A wake: the pointers move when this run completes (the next run commits them).
+        signals["pendingEvidence"] = {"runId": run_id, **fresh, "attempts": uncompleted_wakes + 1}
+    # Any other stop leaves the pointers (and an uncompleted wake's pending evidence) as they were.
+
     signals.update(
         lastRunAt=now,
         lastRunDate=today,
         lastCheckDate=today,
         lastGateReason=reason,
         gateVersion=STATE_VERSION,
-        lastMemoryHash=current_memory_hash,
-        memoryFilterVersion=MEMORY_FILTER_VERSION,
-        lastGoalsHash=current_goals_hash,
         lastRunId=run_id,
         lastSignal={
             "residentMessages": len(messages or []),
@@ -781,10 +880,6 @@ def gate(home: Path, memory_path: Path, state_path: Path, *, now: float) -> dict
             "memoryBytes": counters["memory_bytes"],
         },
     )
-    try:
-        write_state(state_path, state, signals)
-    except Exception as exc:
-        raise StateWriteFailed() from exc
     record = {
         "run_id": run_id,
         "village_date": today,
@@ -795,39 +890,46 @@ def gate(home: Path, memory_path: Path, state_path: Path, *, now: float) -> dict
         "gate_reason": reason,
         "error_code": error_code,
         **counters,
-        "existing_intents": None,
+        # The last list the model made (the gate cannot call Index): a stop reports what was last known.
+        "existing_intents": last_known_intents(runs),
         "candidates_considered": 0,
         "recorded_intent_id": None,
         "recorded_text": None,
     }
     append_run(home, record)
-
     if exit_branch is not None:
         write_inputs(home, None)
-        return {**NO_REPLY, "reason": reason, "runId": run_id, "memoryHash": current_memory_hash}
-    write_inputs(home, inputs_text(
-        run_id=run_id,
-        goals=goals,
-        messages=messages_for_model(messages or []),
-        removed=removed,
-        declined=declined_texts(runs, inferred),
-        declined_count=declined_count,
-        memory=memory,
-        messages_note=messages_note,
-    ))
-    return {
-        "wakeAgent": True,
-        "reason": reason,
-        "runId": run_id,
-        "memoryHash": current_memory_hash,
-        "evidence": {
-            "substantiveMessages": len(substantive),
-            "goalsChanged": goals_changed,
-            "memoryChanged": memory_changed,
-        },
-        "inputsFile": str(home / INPUTS_FILE),
-        "stateFile": str(state_path),
-    }
+        payload: dict[str, Any] = {**NO_REPLY, "reason": reason, "runId": run_id, "memoryHash": current_memory_hash}
+    else:
+        write_inputs(home, inputs_text(
+            run_id=run_id,
+            goals=goals,
+            messages=messages_for_model(messages or []),
+            removed=removed,
+            declined=declined_texts(runs, inferred),
+            declined_count=declined_count,
+            memory=memory,
+            messages_note=messages_note,
+        ))
+        payload = {
+            "wakeAgent": True,
+            "reason": reason,
+            "runId": run_id,
+            "memoryHash": current_memory_hash,
+            "evidence": {
+                "substantiveMessages": len(substantive),
+                "goalsChanged": goals_changed,
+                "memoryChanged": memory_changed,
+            },
+            "inputsFile": str(home / INPUTS_FILE),
+            "stateFile": str(state_path),
+        }
+    # Last: an exception anywhere above leaves the evidence pointers where they were.
+    try:
+        write_state(state_path, state, signals)
+    except Exception as exc:
+        raise StateWriteFailed() from exc
+    return payload
 
 
 def main(argv: list[str]) -> int:
@@ -847,14 +949,22 @@ def main(argv: list[str]) -> int:
             write_inputs(home, None)
         except Exception:  # noqa: BLE001
             pass
+        known = last_known(read_state(state_path), read_runs(home))
         try:
             append_run(home, {
                 "run_id": uuid7(), "village_date": village_today(), "started_at": iso_utc(time.time()),
                 "finished_at": iso_utc(time.time()), "woke": False, "exit_branch": "error", "gate_reason": "gate_failed",
-                "error_code": failure_code(exc), "memory_bytes": 0, "resident_messages_since_last_run": 0,
-                "stated_goals": 0, "prior_declines": 0, "existing_intents": None, "candidates_considered": 0,
+                "error_code": failure_code(exc), **known, "candidates_considered": 0,
                 "recorded_intent_id": None, "recorded_text": None,
             })
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            # N1: best effort, the time of this run and why it stopped (no hash it could not compute).
+            state = read_state(state_path)
+            signals = dict(state.get("memorySignals")) if isinstance(state.get("memorySignals"), dict) else {}
+            signals.update(lastRunAt=time.time(), lastRunDate=village_today(), lastGateReason="gate_failed")
+            write_state(state_path, state, signals)
         except Exception:  # noqa: BLE001
             pass
         emit({**NO_REPLY, "reason": "gate_failed", "error": exc.__class__.__name__})
