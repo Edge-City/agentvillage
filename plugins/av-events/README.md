@@ -1450,10 +1450,14 @@ writes its state on every exit. It appends one record per run to
 | `nightly_limit_reached` | another run recorded one this village night |
 | `inferred_card_open` | an inferred proposal is still unanswered (`unfiled`, `requested`, `cleared`, `starting`, `publishing`) |
 | `recently_declined` | the resident declined an inferred proposal less than 3 days ago |
-| `previously_declined` | the text's held hash is a declined proposal's |
+| `previously_declined` | the text's held hash is a declined proposal's, or it matches a declined text this pass recorded, ignoring case, whitespace, punctuation, hyphens and unicode dashes |
 | `caps_unknown` | the map cannot be read |
 
-`list_intents` is seen by the tool's own `post_tool_call` listener (registered with the lineage
+The first refusal ends the pass: it is noted on the run record (`refusal`) and every later capture in
+that run is refused with the same code (a corrupt map is set aside by the first read, so a retry would
+otherwise forget an open card).
+
+`list_intents` (or, on a MoralMod arm-on box, the Index Hermes plugin's bare `index_read_intents`) is seen by the tool's own `post_tool_call` listener (registered with the lineage
 listeners, outside the collector's guard, so the caps never depend on telemetry), through Hermes's
 `tool_call` bridge too; it notes `intents_listed` and the active count. A capture it lets through
 is noted on the run record (`recorded_intent_id`, and its text, kept on the box only so a declined
@@ -1474,9 +1478,9 @@ the execution's window), removes the inputs file, and, with `AV_INFERENCE_RUN_EV
 | `run_id` | the gate's uuid v7 (a v7 derived from the execution when the gate left no record) |
 | `job` | `memory_signal_sync` |
 | `started_at`, `finished_at` | the gate's start; the execution's finish |
-| `exit_branch` | the gate's stop (`gated_no_change`, `tool_unavailable`, `candidate_already_covered` for the nightly and open-card caps, `candidate_previously_declined` for a recent decline, `error`); for a woken run, `recorded` when the tool noted a capture, else the model's `memorySignals.lastOutcome.exit` for this `runId` |
-| `memory_bytes`, `resident_messages_since_last_run` (40+ characters), `stated_goals`, `prior_declines` (declined inferred proposals plus `Removed by you` items) | the gate |
-| `existing_intents` | the active intents in this run's `list_intents` answer (0 when not listed) |
+| `exit_branch` | the gate's stop (`gated_no_change`, `tool_unavailable`, `capped` for the nightly, open-card and recent-decline caps, `error`); for a woken run, `recorded` when the tool noted a capture, `capped` when the tool refused on a cap, `candidate_previously_declined` when it refused a declined text, else the model's `memorySignals.lastOutcome.exit` for this `runId` |
+| `memory_bytes`, `resident_messages_since_last_run` (40+ characters), `stated_goals`, `prior_declines` (declined inferred proposals plus `Removed by you` items) | the gate; when it left no record or the run failed, the last known values (the newest gate record, else `memorySignals.lastSignal`), 0 only when never known |
+| `existing_intents` | the active intents in this run's list answer, else the last list's (0 when no run ever listed) |
 | `candidates_considered` | the model's count (at least 1 when recorded; 0 for a gate stop) |
 | `recorded_intent_id` | only with `recorded` |
 | `model`, `input_tokens`, `output_tokens` | Hermes's usage audit line for the run; `none` and zeros when the gate stopped it |
