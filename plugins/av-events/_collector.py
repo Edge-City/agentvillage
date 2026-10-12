@@ -1327,7 +1327,7 @@ class Collector:
             except Exception as exc:  # noqa: BLE001 - reported as error/unknown, never with its text
                 self.inference_errors += 1
                 logger.warning("av-events: inference_run finalize_failed=%s", type(exc).__name__)
-                payload = _inference_run.failure_payload(execution)
+                payload = _inference_run.failure_payload(execution, self.config.home)
             if not _inference_run.flag_on() or _inference_run.HOOK_NAME in self.config.disabled_hooks:
                 return None
             model = payload["model"]

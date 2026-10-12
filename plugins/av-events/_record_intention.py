@@ -975,8 +975,9 @@ def memory_signal_session(session_id: Optional[str]) -> bool:
     return root is not None and _inference_run.is_memory_signal_job(hermes_home(), cron_job_id_from(root))
 
 
-#: Index's read of the resident's intents: its MCP tool, or a bare tool of that name.
-LIST_INTENTS_TOOL = "list_intents"
+#: Index's read of the resident's intents: its MCP tool (or a bare tool of that name), and on a
+#: MoralMod arm-on box the Index Hermes plugin's own read, registered by bare name.
+LIST_INTENTS_TOOLS = frozenset({"list_intents", "index_read_intents"})
 
 
 def _called_tool(kwargs: dict) -> tuple[Optional[str], str]:
@@ -994,7 +995,7 @@ def _on_post_tool_call(**kwargs: Any) -> None:
     then decide) is what `record_intention` checks there, and the run records the active count.
     The tool's own listener, so the check never depends on telemetry being on."""
     server, tool = _called_tool(kwargs)
-    if tool != LIST_INTENTS_TOOL or server not in (None, "index"):
+    if tool not in LIST_INTENTS_TOOLS or server not in (None, "index") or (tool == "index_read_intents" and server):
         return
     if not memory_signal_session(kwargs.get("session_id")):
         return
@@ -2038,14 +2039,21 @@ def _memory_signal_capture(args: dict, held: Optional[str]) -> dict:
     try:
         entries = _load_map(strict=True)
     except Exception:  # noqa: BLE001 - unknown caps hold, never record around them
+        # S4: and they end the pass: the map a retry reads was set aside and holds no card.
+        _inference_run.note_refused(home, "caps_unknown", now)
         return _refuse("caps_unknown")
-    code = _inference_run.cap_refusal(home, now, entries, norm, norm_v2)
+    code = _inference_run.cap_refusal(home, now, entries, norm, norm_v2, text)
     if code is not None:
         logger.info("av-events: record_intention memory_signal_cap=%s", code)
+        if code != "no_gate_run":
+            _inference_run.note_refused(home, code, now)
         return _refuse(code)
     result = _capture(args, held)
     if result.get("success") is True and isinstance(result.get("intention_id"), str) and text is not None:
         _inference_run.note_recorded(home, result["intention_id"], text, now)
+    elif result.get("success") is not True and isinstance(result.get("error"), str):
+        # S4: any refusal ends the pass, a validation one included.
+        _inference_run.note_refused(home, result["error"], now)
     return result
 
 

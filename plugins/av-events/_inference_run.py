@@ -39,6 +39,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import unicodedata
 import tempfile
 import threading
 import time
@@ -71,8 +72,10 @@ MAX_RUN_RECORDS = 30
 
 EXIT_BRANCHES = (
     "gated_no_change", "no_candidate", "candidate_already_covered", "candidate_previously_declined",
-    "recorded", "tool_unavailable", "error",
+    "capped", "recorded", "tool_unavailable", "error",
 )
+#: Tool refusals inside a woken run that are caps (the contract's `capped`: not a model judgement).
+CAP_REFUSALS = frozenset({"nightly_limit_reached", "inferred_card_open", "recently_declined"})
 #: What the model may report in `memorySignals.lastOutcome.exit`.
 MODEL_EXITS = frozenset({"no_candidate", "candidate_already_covered", "candidate_previously_declined",
                          "recorded", "tool_unavailable", "error"})
@@ -243,6 +246,21 @@ def note_listed(home: str, count: Optional[int], now: float) -> Optional[dict]:
     return update_current_run(home, change, now)
 
 
+def note_refused(home: str, code: str, now: float) -> Optional[dict]:
+    """S4: the first refusal in a run ends the pass; later captures in the run are refused with it."""
+    def change(run: dict) -> None:
+        run.setdefault("refusal", code)
+
+    return update_current_run(home, change, now)
+
+
+def loose_key(text: Any) -> str:
+    """Declined-text matching (S4): case, whitespace, punctuation, hyphens and every unicode dash
+    ignored, so "co-founder" and "cofounder" are the same text. Letters and digits only, NFKC."""
+    folded = unicodedata.normalize("NFKC", str(text or "")).casefold()
+    return "".join(ch for ch in folded if unicodedata.category(ch)[0] in ("L", "N"))
+
+
 def note_recorded(home: str, intention_id: str, text: str, now: float) -> Optional[dict]:
     def change(run: dict) -> None:
         run["recorded_intent_id"] = intention_id
@@ -265,11 +283,14 @@ def _inferred(entries: dict[str, dict]) -> dict[str, tuple[dict, dict]]:
 
 
 def cap_refusal(home: str, now: float, entries: dict[str, dict], norm_hash: Optional[str],
-                norm_hash_v2: Optional[str] = None) -> Optional[str]:
+                norm_hash_v2: Optional[str] = None, text: Optional[str] = None) -> Optional[str]:
     """Why this pass may not capture now (a code), or None. `entries` is the plugin's map."""
     run = current_run(home, now)
     if run is None:
         return "no_gate_run"
+    if isinstance(run.get("refusal"), str):
+        # The first refusal ended this pass.
+        return run["refusal"]
     if run.get("intents_listed") is not True:
         return "intents_not_listed"
     if run.get("recorded_intent_id"):
@@ -293,6 +314,12 @@ def cap_refusal(home: str, now: float, entries: dict[str, dict], norm_hash: Opti
         if (norm_hash and entry.get("held_norm_hash") == norm_hash) or (
                 norm_hash_v2 and entry.get("held_norm_hash_v2") == norm_hash_v2):
             return "previously_declined"
+    key = loose_key(text)
+    if key:
+        declined = {i for i, (_, approval) in inferred.items() if approval.get("state") == DECLINED_STATE}
+        for other in load_runs(home):
+            if other.get("recorded_intent_id") in declined and loose_key(other.get("recorded_text")) == key:
+                return "previously_declined"
     return None
 
 
@@ -306,6 +333,31 @@ def _outcome(home: str, run_id: Any) -> Optional[dict]:
     if isinstance(outcome, dict) and run_id and outcome.get("runId") == run_id:
         return outcome
     return None
+
+
+def last_known(home: str) -> dict:
+    """S3: the counters a run that could not compute its own reports: the newest gate record's,
+    else the gate's `memorySignals.lastSignal`, else 0 (never known); intents from the newest list."""
+    out = {"memory_bytes": 0, "resident_messages_since_last_run": 0, "stated_goals": 0, "prior_declines": 0,
+           "existing_intents": 0}
+    state = _read_json(os.path.join(home, STATE_FILE))
+    signals = state.get("memorySignals") if isinstance(state, dict) else None
+    last = signals.get("lastSignal") if isinstance(signals, dict) else None
+    if isinstance(last, dict):
+        for key, field in (("memoryBytes", "memory_bytes"), ("substantiveMessages", "resident_messages_since_last_run"),
+                           ("statedGoals", "stated_goals"), ("priorDeclines", "prior_declines")):
+            out[field] = _int(last.get(key))
+    runs = load_runs(home)
+    for run in reversed(runs):
+        if run.get("exit_branch") != "error" or run.get("gate_reason") not in ("gate_failed",):
+            for field in ("memory_bytes", "resident_messages_since_last_run", "stated_goals", "prior_declines"):
+                out[field] = _int(run.get(field))
+            break
+    for run in reversed(runs):
+        if isinstance(run.get("existing_intents"), int) and not isinstance(run.get("existing_intents"), bool):
+            out["existing_intents"] = _int(run.get("existing_intents"))
+            break
+    return out
 
 
 def _model(audit: Optional[dict]) -> str:
@@ -335,7 +387,8 @@ def _match(runs: list[dict], earliest: Optional[float], latest: Optional[float])
     return hits[-1] if hits else None
 
 
-def build(run: Optional[dict], execution: dict, audit: Optional[dict], outcome: Optional[dict]) -> dict:
+def build(run: Optional[dict], execution: dict, audit: Optional[dict], outcome: Optional[dict],
+          known: Optional[dict] = None) -> dict:
     """The closed `intention.inference_run@1` payload for one execution of the job.
 
     `run` is the gate's record (None when the gate left none), `execution` the
@@ -358,6 +411,13 @@ def build(run: Optional[dict], execution: dict, audit: Optional[dict], outcome: 
             error_code = _code(run.get("error_code"))
     elif recorded_id is not None:
         exit_branch, considered = "recorded", max(considered, 1)
+    elif run.get("refusal") in CAP_REFUSALS:
+        # The tool stopped the pass on a cap (a race the gate did not see): a cap, not a judgement.
+        exit_branch = "capped"
+    elif run.get("refusal") == "previously_declined":
+        exit_branch = "candidate_previously_declined"
+    elif run.get("refusal") == "caps_unknown":
+        exit_branch, error_code = "error", "io_error"
     elif execution.get("status") != "completed":
         exit_branch, error_code = "error", _failed_run_code(execution, audit)
     else:
@@ -377,17 +437,19 @@ def build(run: Optional[dict], execution: dict, audit: Optional[dict], outcome: 
         # No gate record (or a malformed one): a v7 derived from the execution, the same in every process.
         stamp = epoch_from_iso(iso_from_text(started))
         run_id = derived_uuid7(int(stamp * 1000) if stamp is not None else 0, f"av-events|inference_run_id|{execution.get('execution_id')}")
+    counts = run if run is not None else (known or {})
     return {
         "run_id": run_id,
         "job": JOB,
         "started_at": iso_from_text(started),
         "finished_at": iso_from_text(finished),
         "exit_branch": exit_branch,
-        "memory_bytes": _int((run or {}).get("memory_bytes")),
-        "resident_messages_since_last_run": _int((run or {}).get("resident_messages_since_last_run")),
-        "stated_goals": _int((run or {}).get("stated_goals")),
-        "existing_intents": _int((run or {}).get("existing_intents")),
-        "prior_declines": _int((run or {}).get("prior_declines")),
+        "memory_bytes": _int(counts.get("memory_bytes")),
+        "resident_messages_since_last_run": _int(counts.get("resident_messages_since_last_run")),
+        "stated_goals": _int(counts.get("stated_goals")),
+        "existing_intents": _int(counts.get("existing_intents")) if counts.get("existing_intents") is not None
+        else _int((known or {}).get("existing_intents")),
+        "prior_declines": _int(counts.get("prior_declines")),
         "candidates_considered": considered,
         "recorded_intent_id": recorded_id if exit_branch == "recorded" else None,
         "model": _model(audit) if woke else "none",
@@ -397,11 +459,15 @@ def build(run: Optional[dict], execution: dict, audit: Optional[dict], outcome: 
     }
 
 
-def failure_payload(execution: dict) -> dict:
+def failure_payload(execution: dict, home: Optional[str] = None) -> dict:
     """The event for a run whose record could not be completed (an unexpected exception):
     `error` / `unknown`, ids, times and zeros only. Never the exception or its message."""
     stamp = epoch_from_iso(iso_from_text(execution.get("started_at") or execution.get("claimed_at") or execution.get("finished_at")))
     finished = iso_from_text(execution.get("finished_at"))
+    try:
+        known = last_known(home) if home else {}
+    except Exception:  # noqa: BLE001 - the report must still go out
+        known = {}
     return {
         "run_id": derived_uuid7(int(stamp * 1000) if stamp is not None else 0,
                                 f"av-events|inference_run_id|{execution.get('execution_id')}"),
@@ -409,11 +475,11 @@ def failure_payload(execution: dict) -> dict:
         "started_at": iso_from_text(execution.get("started_at") or execution.get("claimed_at")) or finished,
         "finished_at": finished,
         "exit_branch": "error",
-        "memory_bytes": 0,
-        "resident_messages_since_last_run": 0,
-        "stated_goals": 0,
-        "existing_intents": 0,
-        "prior_declines": 0,
+        "memory_bytes": _int(known.get("memory_bytes")),
+        "resident_messages_since_last_run": _int(known.get("resident_messages_since_last_run")),
+        "stated_goals": _int(known.get("stated_goals")),
+        "existing_intents": _int(known.get("existing_intents")),
+        "prior_declines": _int(known.get("prior_declines")),
         "candidates_considered": 0,
         "recorded_intent_id": None,
         "model": "unknown",
@@ -445,7 +511,8 @@ def finalize(home: str, execution: dict) -> dict:
         outcome = _outcome(home, (snapshot or {}).get("run_id"))
         audits = read_usage_audit(os.path.join(home, "cron", "usage_audit.jsonl")) if snapshot and snapshot.get("woke") else []
         audit = match_audit(execution.get("job_id") or "", earliest, latest, audits) if audits else None
-        payload = build(snapshot, execution, audit, outcome)
+        known = last_known(home) if snapshot is None or snapshot.get("existing_intents") is None else None
+        payload = build(snapshot, execution, audit, outcome, known)
         if run is not None and not run.get("finished_at"):
             run["finished_at"] = payload["finished_at"]
             run["exit_branch"] = payload["exit_branch"]
@@ -478,7 +545,10 @@ __all__ = [
     "finalize",
     "flag_on",
     "is_memory_signal_job",
+    "last_known",
     "load_runs",
+    "loose_key",
     "note_listed",
+    "note_refused",
     "note_recorded",
 ]

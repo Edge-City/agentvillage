@@ -38,7 +38,7 @@ KEYS = {
     "input_tokens", "output_tokens", "error_code",
 }
 EXIT_BRANCHES = {"gated_no_change", "no_candidate", "candidate_already_covered", "candidate_previously_declined",
-                 "recorded", "tool_unavailable", "error"}
+                 "capped", "recorded", "tool_unavailable", "error"}
 ERROR_CODES = {"tool_unavailable", "model_error", "model_timeout", "io_error", "state_write_failed", "unknown"}
 UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 MODEL = re.compile(r"^[a-z0-9][a-z0-9./:_-]{0,63}$")
@@ -475,8 +475,12 @@ def test_none_within_three_days_of_a_decline_and_never_the_declined_text_again(t
     box.approvals((ID1, "rejected", 2 * 24 * 3600, None))
     listed(tool)
     assert capture(tool)["error"] == "recently_declined"
+    box.run(started_at=iso(80))  # the next night's run
     box.approvals((ID1, "rejected", 4 * 24 * 3600, ri.held_norm_hash(TEXT)))
+    listed(tool)
     assert capture(tool)["error"] == "previously_declined"
+    box.run(started_at=iso(75))
+    listed(tool)
     assert capture(tool, "Looking for soil scientists to meet this month")["success"] is True
 
 
@@ -494,10 +498,11 @@ def test_the_caps_hold_with_telemetry_off(plugin, box, monkeypatch):
     plugin.register(ctx)
     ctx.fire("on_session_start", session_id=CRON_SESSION, model="m", platform="cron")
     box.run()
-    assert capture(ctx)["error"] == "intents_not_listed"
     listed(ctx)
     assert capture(ctx)["success"] is True
     assert capture(ctx, "Another want entirely, a running partner")["error"] == "pass_limit_reached"
+    box.run()
+    assert capture(ctx)["error"] == "intents_not_listed"
 
 
 def test_another_cron_job_is_not_capped_here_and_its_origin_is_other(tool, box, av, plugin):
@@ -564,3 +569,115 @@ def test_end_to_end_gate_list_record_and_the_recorded_event(tool, box, av, plugi
     assert payload["exit_branch"] == "recorded" and payload["recorded_intent_id"] == out["intention_id"]
     assert payload["resident_messages_since_last_run"] == 3 and payload["existing_intents"] == 2
     assert payload["candidates_considered"] == 1
+
+
+# --------------------------------------------------------------------------
+# Fix round (refutation at 6834329): S1 capped, S3 last known, S4 the first refusal ends the pass
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("reason", ["capped_nightly", "capped_open_card", "capped_recent_decline"])
+def test_s1_a_gate_cap_stop_is_reported_as_capped(live, box, av, reason):
+    box.run(woke=False, exit_branch="capped", gate_reason=reason, finished_at=iso(84))
+    box.execution()
+    payload = tick_one(av, live)["payload"]
+    assert payload["exit_branch"] == "capped" and payload["error_code"] is None
+    assert payload["candidates_considered"] == 0 and payload["model"] == "none"
+
+
+def test_s1_a_tool_cap_inside_a_woken_run_is_capped_not_the_models_word(tool, box, av, plugin, monkeypatch):
+    monkeypatch.setenv("AV_INFERENCE_RUN_EVENTS", "1")
+    record = box.run()
+    listed(tool)
+    box.approvals((ID1, "requested", 60, None))  # a card opened after the gate looked
+    assert capture(tool)["error"] == "inferred_card_open"
+    box.outcome(record["run_id"], "no_candidate", considered=1)
+    box.execution()
+    box.audit()
+    plugin._COLLECTOR.cron_tick()
+    payload = events(av, plugin)[0]["payload"]
+    check_contract(payload)
+    assert payload["exit_branch"] == "capped"
+
+
+def test_s4_the_first_refusal_ends_the_pass_and_declined_text_is_matched_loosely(tool, box, av, plugin, monkeypatch):
+    monkeypatch.setenv("AV_INFERENCE_RUN_EVENTS", "1")
+    box.run(recorded_intent_id=ID1, recorded_text="Looking for a hardware co-founder for the seed library",
+            village_date="2026-10-01", started_at=iso(10 * 24 * 3600), finished_at=iso(10 * 24 * 3600 - 60), woke=True)
+    record = box.run()
+    box.approvals((ID1, "rejected", 5 * 24 * 3600, None))
+    listed(tool)
+    # Case, spacing, punctuation, a hyphen or a unicode dash: the same declined text.
+    assert capture(tool, "looking for a HARDWARE cofounder,  for the seed library!")["error"] == "previously_declined"
+    assert capture(tool, "Looking for a hardware co\u2010founder for the seed library")["error"] == "previously_declined"
+    # Anything else in this run is refused too: the first refusal ended it.
+    assert capture(tool, "Looking for soil scientists to meet this month")["error"] == "previously_declined"
+    assert box.runs()[-1]["recorded_intent_id"] is None and box.runs()[-1]["refusal"] == "previously_declined"
+    box.execution()
+    plugin._COLLECTOR.cron_tick()
+    payload = events(av, plugin)[0]["payload"]
+    assert payload["run_id"] == record["run_id"] and payload["exit_branch"] == "candidate_previously_declined"
+
+
+def test_s4_a_corrupt_map_ends_the_pass_with_no_record(tool, box, home):
+    box.run()
+    listed(tool)
+    (home / "av-events" / "intentions.json").write_text("{not json")
+    assert capture(tool)["error"] == "caps_unknown"
+    # The corrupt map was set aside, so a retry would see no open card: it is refused all the same.
+    assert capture(tool)["error"] == "caps_unknown"
+    assert box.runs()[-1]["recorded_intent_id"] is None
+
+
+def test_s4_a_validation_refusal_ends_the_pass_too(tool, box):
+    box.run()
+    listed(tool)
+    out = tool.tools["record_intention"]["handler"]({"text": TEXT, "source": "ambient", "publish": "maybe"},
+                                                    session_id=CRON_SESSION, task_id="t")
+    assert json.loads(out)["error"] == "publish_invalid"
+    assert capture(tool)["error"] == "publish_invalid"
+
+
+def test_arm_on_boxes_index_read_intents_counts_as_listed(tool, box):
+    box.run()
+    listed(tool, name="index_read_intents", args={})
+    assert box.runs()[-1]["intents_listed"] is True
+    assert capture(tool)["success"] is True
+
+
+def test_an_index_read_intents_behind_some_mcp_server_is_not_the_plugin(tool, box):
+    box.run()
+    listed(tool, name="mcp__other__index_read_intents", args={})
+    assert capture(tool)["error"] == "intents_not_listed"
+
+
+def test_s3_no_gate_record_sends_the_last_known_counters(live, box, av, home):
+    box.run(woke=False, exit_branch="gated_no_change", finished_at=iso(5000), started_at=iso(5100),
+            stated_goals=2, memory_bytes=300, prior_declines=1, resident_messages_since_last_run=1,
+            existing_intents=4, intents_listed=True)
+    box.execution()  # a run whose gate left nothing
+    payload = tick_one(av, live)["payload"]
+    assert (payload["exit_branch"], payload["error_code"]) == ("error", "unknown")
+    assert (payload["stated_goals"], payload["memory_bytes"], payload["prior_declines"], payload["existing_intents"]) == (2, 300, 1, 4)
+
+
+def test_s3_an_exception_sends_the_last_known_counters_and_still_no_text(live, box, av, monkeypatch):
+    import sys as _sys
+
+    ir = _sys.modules[f"{live.__name__}._inference_run"]
+    box.run(stated_goals=3, memory_bytes=120, existing_intents=2, intents_listed=True)
+
+    def boom(home, execution):
+        raise RuntimeError("SECRET")
+
+    monkeypatch.setattr(ir, "finalize", boom)
+    box.execution()
+    payload = tick_one(av, live)["payload"]
+    assert (payload["exit_branch"], payload["error_code"]) == ("error", "unknown")
+    assert payload["stated_goals"] == 3 and payload["existing_intents"] == 2
+
+
+def test_s3_a_gated_run_sends_the_last_listed_intents(live, box, av):
+    box.run(woke=False, exit_branch="gated_no_change", finished_at=iso(84), existing_intents=5)
+    box.execution()
+    assert tick_one(av, live)["payload"]["existing_intents"] == 5
