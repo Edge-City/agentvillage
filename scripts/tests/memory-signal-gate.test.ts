@@ -235,8 +235,8 @@ describe("evidence: the model wakes only on the resident's new material", () => 
 describe("the hash and the counters are written on every exit path", () => {
   const exits: [string, (dir: string) => void, string, string | null][] = [
     ["no evidence", () => {}, "gated_no_change", null],
-    ["record_intention off", (dir) => { messages(dir, threeSubstantive()); writeFileSync(join(dir, ".env"), "AV_RECORD_INTENTION=0\n"); }, "tool_unavailable", "record_intention_off"],
-    ["a map that cannot be read", (dir) => { messages(dir, threeSubstantive()); mkdirSync(join(dir, "av-events"), { recursive: true }); writeFileSync(join(dir, "av-events", "intentions.json"), "{not json"); }, "error", "map_unreadable"],
+    ["record_intention off", (dir) => { messages(dir, threeSubstantive()); writeFileSync(join(dir, ".env"), "AV_RECORD_INTENTION=0\n"); }, "tool_unavailable", "tool_unavailable"],
+    ["a map that cannot be read", (dir) => { messages(dir, threeSubstantive()); mkdirSync(join(dir, "av-events"), { recursive: true }); writeFileSync(join(dir, "av-events", "intentions.json"), "{not json"); }, "error", "io_error"],
     ["an open inferred card", (dir) => { messages(dir, threeSubstantive()); writeMap(dir, [{ id: ID1, state: "requested" }]); }, "candidate_already_covered", null],
     ["a decline yesterday", (dir) => { messages(dir, threeSubstantive()); writeMap(dir, [{ id: ID1, state: "rejected", updatedAgo: DAY }]); }, "candidate_previously_declined", null],
     ["a wake", (dir) => { messages(dir, threeSubstantive()); }, "", null],
@@ -403,7 +403,8 @@ describe("where the gate looks", () => {
     const result = runGate(dir);
     expect(result.code).toBe(0);
     expect(result.json).toMatchObject({ wakeAgent: false, reason: "gate_failed" });
-    expect(lastRun(dir)).toMatchObject({ exit_branch: "error", error_code: "gate_failed" });
+    // The contract's closed list: the local detail stays in gate_reason, the event carries the code.
+    expect(lastRun(dir)).toMatchObject({ exit_branch: "error", error_code: "state_write_failed", gate_reason: "gate_failed" });
   });
 });
 

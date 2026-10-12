@@ -493,6 +493,23 @@ class MapUnreadable(Exception):
     pass
 
 
+class StateWriteFailed(Exception):
+    """`memory/heartbeat-state.json` could not be written."""
+
+
+#: `intention.inference_run@1` `error_code`: a closed list (the event goes to every tenant's ops rows,
+#: so it is never free text). The run record's `gate_reason` keeps the local detail.
+ERROR_CODES = ("tool_unavailable", "model_error", "model_timeout", "io_error", "state_write_failed", "unknown")
+
+
+def failure_code(exc: BaseException) -> str:
+    if isinstance(exc, StateWriteFailed):
+        return "state_write_failed"
+    if isinstance(exc, (OSError, sqlite3.Error)):
+        return "io_error"
+    return "unknown"
+
+
 def approvals(home: Path) -> dict[str, dict]:
     """intention id -> its approval (class, state, updated_at) from the plugin's map; {} without one."""
     path = home / INTENTIONS_MAP
@@ -704,9 +721,9 @@ def gate(home: Path, memory_path: Path, state_path: Path, *, now: float) -> dict
     if not evidence:
         exit_branch, reason, error_code = "gated_no_change", "no_evidence", None
     elif dotenv_value(home, RECORD_SWITCH).lower() not in TRUTHY:
-        exit_branch, reason, error_code = "tool_unavailable", "record_intention_off", "record_intention_off"
+        exit_branch, reason, error_code = "tool_unavailable", "record_intention_off", "tool_unavailable"
     elif map_error:
-        exit_branch, reason, error_code = "error", map_error, map_error
+        exit_branch, reason, error_code = "error", map_error, "io_error"
     elif recorded_tonight(runs, today):
         exit_branch, reason, error_code = "candidate_already_covered", "capped_nightly", None
     elif open_card:
@@ -737,7 +754,10 @@ def gate(home: Path, memory_path: Path, state_path: Path, *, now: float) -> dict
             "memoryBytes": counters["memory_bytes"],
         },
     )
-    write_state(state_path, state, signals)
+    try:
+        write_state(state_path, state, signals)
+    except Exception as exc:
+        raise StateWriteFailed() from exc
     record = {
         "run_id": run_id,
         "village_date": today,
@@ -804,7 +824,7 @@ def main(argv: list[str]) -> int:
             append_run(home, {
                 "run_id": uuid7(), "village_date": village_today(), "started_at": iso_utc(time.time()),
                 "finished_at": iso_utc(time.time()), "woke": False, "exit_branch": "error", "gate_reason": "gate_failed",
-                "error_code": "gate_failed", "memory_bytes": 0, "resident_messages_since_last_run": 0,
+                "error_code": failure_code(exc), "memory_bytes": 0, "resident_messages_since_last_run": 0,
                 "stated_goals": 0, "prior_declines": 0, "existing_intents": None, "candidates_considered": 0,
                 "recorded_intent_id": None, "recorded_text": None,
             })
