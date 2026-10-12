@@ -16,7 +16,7 @@
  * pinned here as (1)..(5); Carter's ruling (18:23Z) as "verbatim".
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -28,17 +28,21 @@ import {
   PREPARE_READY,
   RESEED_ALREADY_RAN,
   RESEED_FLAG,
+  RESEED_IN_PROGRESS,
+  RESEED_NO_LINES,
   REFUSED_SEEDS,
   SEED_CODE,
   SEED_SOURCE_TYPE,
   SELECTED_HEADING,
   WELCOME_SEED_FILE,
+  WELCOME_RESEED_LOCK,
   WELCOME_STATE_FILE,
   admissionCategory,
   draftTrailer,
   main,
   recoveryQuestions,
   reseedLines,
+  reseedRun,
   seedCode,
   seedTrailerV2,
   surfaceRefusedSeeds,
@@ -533,6 +537,30 @@ describe("--reseed: the operator's one-shot second seed (Carter's ruling (4))", 
       expect(clean.trailer).toMatchObject({ seed_failed: 0 });
       expect(existsSync(join(home, WELCOME_SEED_FILE))).toBe(false);
     });
+
+    test("an old claimed marker (no done: a welcome that died mid-seed) gains done with the refusal, and the unchanged reader surfaces it exactly once", async () => {
+      welcomed();
+      writeLines(LINES);
+      const old = new Date(Date.now() - 3_600_000).toISOString();
+      writeFileSync(join(home, WELCOME_SEED_FILE), `${JSON.stringify({ seededAt: old, selected: 3, created: 0, failed: 0, refused: [entry("Other", { surfacedAt: old })] })}\n`);
+      await reseed(fakeIndex((p) => (p === LINES[0] ? revise(VAGUE) : ready())));
+      expect(marker()).toMatchObject({ seededAt: old, done: true });
+      expect(marker().refused.map((r: { line: string }) => r.line)).toEqual(["Other", LINES[0]]);
+      const block = await surfaceRefusedSeeds(home);
+      expect(JSON.parse(block!.slice(REFUSED_SEEDS.length + 1)).map((r: { line: string }) => r.line)).toEqual([LINES[0]]);
+      expect(await surfaceRefusedSeeds(home)).toBeNull();
+    });
+
+    test("the merge waits on the seed marker's lock: a live holder keeps the marker untouched (refusedMerged false)", async () => {
+      welcomed();
+      writeLines(LINES);
+      const body = `${JSON.stringify({ seededAt: "2026-10-12T15:47:18.759Z", selected: 3, created: 0, failed: 3, done: true })}\n`;
+      writeFileSync(join(home, WELCOME_SEED_FILE), body);
+      writeFileSync(join(home, `${WELCOME_SEED_FILE}.lock`), JSON.stringify({ token: "other", pid: 1, at: new Date().toISOString() }));
+      await reseed(fakeIndex((p) => (p === LINES[0] ? revise(VAGUE) : ready())));
+      expect(readFileSync(join(home, WELCOME_SEED_FILE), "utf8")).toBe(body);
+      expect(JSON.parse(readFileSync(join(home, "memory", reseedMarkers()[0]!), "utf8")).refusedMerged).toBe(false);
+    }, 10_000);
   });
 
   test("a line already in Index is skipped (not prepared, not created, not counted)", async () => {
@@ -556,24 +584,90 @@ describe("--reseed: the operator's one-shot second seed (Carter's ruling (4))", 
     expect(creates.map((c) => c.arguments?.description)).toEqual([LINES[1], LINES[2]]);
   });
 
-  test("nothing to send: no Index write, a marker with zero counts, still no stdout; Index unreachable: the same, coded list-unavailable", async () => {
+  test("nothing to send: zero Index calls, no marker, trailer coded no_lines; list unavailable or no key: no marker; the run-once is not spent", async () => {
     welcomed();
     writeLines([]);
     const index = fakeIndex(() => ready());
     const quiet = await reseed(index);
     expect(quiet.stdout).toBe("");
+    expect(index.fake.calls).toHaveLength(0);
     expect(index.prepared).toHaveLength(0);
-    expect(quiet.creates).toHaveLength(0);
-    expect(quiet.trailer).toMatchObject({ intents_seeded: 0, seed_failed: 0 });
-    expect(reseedMarkers()).toHaveLength(1);
+    expect(quiet.trailer).toEqual({ welcome: 1, fallback: "unreachable", intents_listed: 0, intents_seeded: 0, seed_failed: 0, seed_codes: [RESEED_NO_LINES] });
+    expect(reseedMarkers()).toHaveLength(0);
+    writeLines(LINES);
+    process.env.INDEX_MCP_URL = FAKE_MCP_URL;
+    const runs: Array<Record<string, unknown>> = [];
+    const down = (async () => new Response("down", { status: 503 })) as unknown as typeof globalThis.fetch;
+    for (const key of [FAKE_API_KEY, undefined]) {
+      if (key === undefined) delete process.env.INDEX_API_KEY;
+      else process.env.INDEX_API_KEY = key;
+      const err: string[] = [];
+      await main(["--home", home, RESEED_FLAG], { stdout: () => { throw new Error("stdout written"); }, stderr: (s) => err.push(s) }, (argv) => welcomeRun(argv, { fetch: down, timeoutMs: 200 }));
+      runs.push(JSON.parse(err.join("")));
+    }
+    for (const t of runs) expect(t).toMatchObject({ fallback: "unreachable", intents_seeded: 0, seed_codes: ["list-unavailable"] });
+    expect(reseedMarkers()).toHaveLength(0);
+    // A zero-count marker an earlier build left does not count either: the real pass runs without --again.
+    writeFileSync(join(home, "memory", "welcome-reseed-2026-10-12T22-00-00-000Z.json"), `${JSON.stringify({ reseededAt: "2026-10-12T22:00:00.000Z", selected: 0, created: 0, failed: 0, codes: [] })}\n`);
+    const real = await reseed(fakeIndex(() => ready()));
+    expect(real.creates.map((c) => c.arguments?.description)).toEqual(LINES);
+    expect(reseedMarkers()).toHaveLength(2);
+    expect((statSync(join(home, "memory", reseedMarkers().find((f) => !f.includes("22-00-00"))!)).mode & 0o777).toString(8)).toBe("600");
+    // Every line already in Index: nothing sent, no marker.
+    await new Promise((r) => setTimeout(r, 5));
+    const listed = fakeIndex(() => ready(), undefined, LINES.map((l, i) => ({ id: `bbbbbbbb-0000-4000-8000-00000000000${i}`, summary: l, status: "active" })));
+    expect((await reseed(listed, [AGAIN_FLAG])).creates).toHaveLength(0);
+    expect(reseedMarkers()).toHaveLength(2);
+  });
+
+  test("the refused[] fallback is filtered as the first turn's reader filters it: never a line marked gone or removed, nothing when the tags are unreadable; --dry-run the same", async () => {
+    welcomed();
+    writeLines([]);
+    const [gone, removed, held] = ["Wants to meet people working on climate tools", "Here to meet founders", "Working on a climate data startup"];
+    const row = (line: string, extra: Record<string, unknown> = {}) => ({ line, feedback: null, code: "intent_needs_revision", at: "x", keys: [], ...extra });
+    writeFileSync(join(home, WELCOME_SEED_FILE), `${JSON.stringify({ seededAt: "x", selected: 3, created: 0, failed: 3, done: true, refused: [row(gone, { surfacedAt: "y", notShown: "gone" }), row(removed), row(held)] })}\n`);
+    mkdirSync(join(home, "memories"), { recursive: true });
+    const tags = ["[Context tags, kept in the Agent Village app]", "Here to:", `- ${removed} (setup)`, "Working on:", `- ${held} (setup)`, `- ${gone} (setup)`, "Removed by you:", `- ${removed} (setup)`].join("\n");
+    writeFileSync(join(home, "memories", "USER.md"), tags);
+    expect(reseedLines(home)).toEqual([held]);
+    const dry = fakeIndex(() => ready());
+    await reseed(dry, [DRY_RUN_FLAG]);
+    expect(dry.prepared.map((c) => c.payload)).toEqual([held]);
+    const index = fakeIndex(() => ready());
+    const { creates } = await reseed(index);
+    expect(index.prepared.map((c) => c.payload)).toEqual([held]);
+    expect(creates.map((c) => c.arguments?.description)).toEqual([held]);
+    // Tags unreadable (a directory where the file should be): fail closed, no Index call at all.
+    rmSync(join(home, "memories", "USER.md"));
+    mkdirSync(join(home, "memories", "USER.md"));
+    expect(reseedLines(home)).toEqual([]);
+    const blind = fakeIndex(() => ready());
+    const out = await reseed(blind, [AGAIN_FLAG]);
+    expect(blind.fake.calls).toHaveLength(0);
+    expect(out.trailer).toMatchObject({ seed_codes: [RESEED_NO_LINES] });
+  });
+
+  test("two real runs at once: one holds the lock and sends each line once, the other leaves reseed_in_progress with no Index call; a stale lock is taken over", async () => {
+    welcomed();
     writeLines(LINES);
     process.env.INDEX_API_KEY = FAKE_API_KEY;
     process.env.INDEX_MCP_URL = FAKE_MCP_URL;
-    const err: string[] = [];
-    const down = (async () => new Response("down", { status: 503 })) as unknown as typeof globalThis.fetch;
-    await new Promise((r) => setTimeout(r, 5));
-    await main(["--home", home, RESEED_FLAG, AGAIN_FLAG], { stdout: () => { throw new Error("stdout written"); }, stderr: (s) => err.push(s) }, (argv) => welcomeRun(argv, { fetch: down, timeoutMs: 200 }));
-    expect(JSON.parse(err.join(""))).toMatchObject({ fallback: "unreachable", seed_codes: ["list-unavailable"] });
+    const index = fakeIndex(() => ready());
+    const runs = await Promise.all([0, 1].map((ms) => reseedRun(home, { fetch: index.fetch, timeoutMs: 200, now: new Date(Date.UTC(2026, 9, 13, 0, 0, 0, ms)) })));
+    expect(index.fake.calls.filter((c) => c.method === "tools/call" && c.name === "create_intent")).toHaveLength(3);
+    expect(runs.map((r) => r.intents_seeded).sort()).toEqual([0, 3]);
+    expect(draftTrailer(runs.find((r) => r.intents_seeded === 0)!, true)).toBe(`{"welcome":1,"fallback":"unreachable","intents_listed":0,"intents_seeded":0,"seed_failed":0,"seed_codes":["${RESEED_IN_PROGRESS}"]}`);
+    expect(reseedMarkers()).toHaveLength(1);
+    expect(existsSync(join(home, WELCOME_RESEED_LOCK))).toBe(false);
+    // A live lock (another process): refused at once, nothing listed. A stale one (a killed run): taken over.
+    writeFileSync(join(home, WELCOME_RESEED_LOCK), JSON.stringify({ token: "other", pid: 1, at: new Date().toISOString() }));
+    const held = fakeIndex(() => ready());
+    expect((await reseed(held, [AGAIN_FLAG])).trailer).toMatchObject({ seed_codes: [RESEED_IN_PROGRESS] });
+    expect(held.fake.calls).toHaveLength(0);
+    utimesSync(join(home, WELCOME_RESEED_LOCK), new Date(Date.now() - 3_600_000), new Date(Date.now() - 3_600_000));
+    const stale = fakeIndex(() => ready());
+    expect((await reseed(stale, [AGAIN_FLAG])).creates).toHaveLength(3);
+    expect(existsSync(join(home, WELCOME_RESEED_LOCK))).toBe(false);
   });
 
   describe("G2: --dry-run, and a run-once guard that --again overrides", () => {
