@@ -47,7 +47,8 @@ plugins/av-events/
 | `AV_EVENTS_TOKEN` | *(unset)* | Per-tenant ingest token. **Unset or blank means the plugin idles**: hooks are registered, but no event is emitted or buffered and no flusher thread starts; memory backups still run when `AV_BACKUP_URL`, `AV_BACKUP_TOKEN` and the tenant id are set (the control plane sets them only while village consent is in force and `BACKUP_WRITE_MASTER` is configured). |
 | `AV_EVENTS_URL` | *(unset)* | Ingest base URL. Events are POSTed to `{AV_EVENTS_URL}/v1/events`; the `consent_status` tool GETs `{AV_EVENTS_URL}/v1/consent`. Empty with a token set is **null-sink mode** (see below). |
 | `AV_EVENTS_ENABLED` | `1` | Any of `0`, `false`, `no`, `off` (case-insensitive, whitespace ignored) disables everything. Re-read at every session boundary, and by the flusher before every pass. |
-| `AV_HOOKS_DISABLED` | *(empty)* | Comma-separated hook names to disable individually, e.g. `pre_tool_call,post_tool_call`. Matched case-insensitively, whitespace stripped. Five names are not hooks: `memory_recalled` (the bus subscription), `cron_run` (the cron tail), `consent_status` (the tool, which then answers "could not check"), `outcome_ask` (the evening outcome ask: arming, answers and its pass) and `approvals_reminder` (the DATA-444 Connect-approvals reminder, which `AV_EVENTS_ENABLED=0` does not stop). |
+| `AV_HOOKS_DISABLED` | *(empty)* | Comma-separated hook names to disable individually, e.g. `pre_tool_call,post_tool_call`. Matched case-insensitively, whitespace stripped. Six names are not hooks: `memory_recalled` (the bus subscription), `cron_run` (the cron tail), `consent_status` (the tool, which then answers "could not check"), `outcome_ask` (the evening outcome ask: arming, answers and its pass), `approvals_reminder` (the DATA-444 Connect-approvals reminder, which `AV_EVENTS_ENABLED=0` does not stop) and `inference_run` (the memory signal sync's `intention.inference_run` event; its run record is still completed). |
+| `AV_INFERENCE_RUN_EVENTS` | *(off)* | `1`, `true`, `yes` or `on` emits `intention.inference_run@1` for every run of the memory signal sync (see "The memory signal sync (DATA-470)"). **Off until the data release that registers the type is live**: ingest quarantines an unknown type. Read like the other switches (process environment, then `.env`), at every run's report. |
 | `AV_TERMINAL_ARGS_FIX` | `1` | Any of `0`, `false`, `no`, `off` turns off the foreground `terminal` argument fix (see "Foreground `terminal` calls (DATA-312)"). **Process environment only**, read on every `pre_tool_call`; a `.env` line reaches it through Hermes's own load at gateway start. Independent of every telemetry switch. |
 | `AV_CAPTURE` | `sanitized` | `metadata` \| `sanitized` \| `full`. An unrecognised value falls back to `sanitized`. |
 | `TENANT_ID`, `AV_TENANT_ID` | *(unset)* | The tenant id, used for one thing only: `cron.run`'s derived event id (spec §4.3). `TENANT_ID` is what the control plane already sets for `dashboard-auth-edgecity`; `AV_TENANT_ID` overrides it. Unset means `cron.run` gets a uuid v7 derived from the execution (see "Cron capture"). |
@@ -1422,6 +1423,77 @@ last 4096; Hermes keeps 1000 terminal rows). An id is added only after its event
 inert emit is retried on the next pass. The tail is off with the plugin, and individually with
 `AV_HOOKS_DISABLED=cron_run`; a pass that raises is counted in `Collector.cron_errors` and never
 stops the flusher.
+
+## The memory signal sync (DATA-470)
+
+"Edge — memory signal sync" (01:00 IST) is the one path to an inferred (ambient) intent and an
+`intent.publish.inferred.index` approval card. Its preflight gate
+(`skills/index-network/scripts/memory_signal_gate.py`) assembles the resident's own material (the
+stated goals of their Context page, their own messages since the last run from `state.db`, the
+`Removed by you` list, the inferred suggestions they declined, and the agent's `MEMORY.md` without its
+housekeeping) into `$HERMES_HOME/memory/memory-signal-inputs.md` (0600), wakes the model only on
+evidence (3+ resident messages of 40+ characters since the last run, a changed stated goal, or a
+changed filtered memory hash), stops before the model when a cap or the switch forbids a capture, and
+writes its state on every exit. It appends one record per run to
+`$HERMES_HOME/av-events/memory_signal_runs.json` (counts and codes; under `flock` on
+`memory_signal_runs.json.lock`, which this plugin takes too). `_inference_run.py` does the rest.
+
+**The caps, in the tool.** In that job's own cron session (its id is in `installed_jobs.json` and
+`cron/jobs.json` names it "Edge — memory signal sync"; a subagent it delegated to counts as it),
+`record_intention` checks before it captures, and refuses with a code otherwise (nothing recorded):
+
+| Code | When |
+|---|---|
+| `no_gate_run` | no woken run of the gate is in progress (one started in the last 3 hours) |
+| `intents_not_listed` | Index's `list_intents` has not answered in this run (the prompt's step order) |
+| `pass_limit_reached` | this run recorded one already |
+| `nightly_limit_reached` | another run recorded one this village night |
+| `inferred_card_open` | an inferred proposal is still unanswered (`unfiled`, `requested`, `cleared`, `starting`, `publishing`) |
+| `recently_declined` | the resident declined an inferred proposal less than 3 days ago |
+| `previously_declined` | the text's held hash is a declined proposal's |
+| `caps_unknown` | the map cannot be read |
+
+`list_intents` is seen by the tool's own `post_tool_call` listener (registered with the lineage
+listeners, outside the collector's guard, so the caps never depend on telemetry), through Hermes's
+`tool_call` bridge too; it notes `intents_listed` and the active count. A capture it lets through
+is noted on the run record (`recorded_intent_id`, and its text, kept on the box only so a declined
+one is never proposed again). Other cron jobs and chat sessions are not affected.
+
+**`origin` on `intention.captured`** (additive, nullable in the contract): `memory_signal_sync` for
+a capture in that job's session, `chat` for a session on a human platform (`HUMAN_PLATFORMS`,
+`desktop`), `other` for anything else. From the session lineage, never from the model or the
+tool's result. `context_goal` is reserved for the Context-goal path when it is built.
+
+**`intention.inference_run@1`.** When the cron tail reports a terminal execution of that job
+(`cron.run` with its `job_name`), it completes the matching run record (the gate's, started inside
+the execution's window), removes the inputs file, and, with `AV_INFERENCE_RUN_EVENTS` on and
+`inference_run` not in `AV_HOOKS_DISABLED`, emits one event. Closed payload, no text:
+
+| Field | From |
+|---|---|
+| `run_id` | the gate's uuid v7 (a v7 derived from the execution when the gate left no record) |
+| `job` | `memory_signal_sync` |
+| `started_at`, `finished_at` | the gate's start; the execution's finish |
+| `exit_branch` | the gate's stop (`gated_no_change`, `tool_unavailable`, `candidate_already_covered` for the nightly and open-card caps, `candidate_previously_declined` for a recent decline, `error`); for a woken run, `recorded` when the tool noted a capture, else the model's `memorySignals.lastOutcome.exit` for this `runId` |
+| `memory_bytes`, `resident_messages_since_last_run` (40+ characters), `stated_goals`, `prior_declines` (declined inferred proposals plus `Removed by you` items) | the gate |
+| `existing_intents` | the active intents in this run's `list_intents` answer (0 when not listed) |
+| `candidates_considered` | the model's count (at least 1 when recorded; 0 for a gate stop) |
+| `recorded_intent_id` | only with `recorded` |
+| `model`, `input_tokens`, `output_tokens` | Hermes's usage audit line for the run; `none` and zeros when the gate stopped it |
+| `error_code` | only with `error` / `tool_unavailable`, from the closed list `tool_unavailable`, `model_error`, `model_timeout`, `io_error`, `state_write_failed`, `unknown` |
+
+A woken run that did not complete is `model_timeout` when Hermes's audit line says it timed out
+(read locally, never sent), else `model_error` (`unknown` for Hermes's `unknown` status); a
+completed run with no outcome written is `state_write_failed`; a model-reported `error` or an
+unconfirmed `recorded` is `unknown`. Any exception while completing the record emits
+`error` / `unknown` with ids, times and zeros, never its text (`Collector.inference_errors`
+counts it). The event id is a v7 derived from the execution (ingest takes a plugin v5 only for
+`cron.run`), so every process tailing the ledger derives the same one; `run_id` in the envelope is
+`cron:<job>:<execution>`, as on `cron.run`.
+
+**Release order.** The data release registering `intention.inference_run@1` (and `origin` on
+`intention.captured`) goes first; then `AV_INFERENCE_RUN_EVENTS` goes on. `origin` ships unflagged:
+`intention.captured` is an open payload at the door today, so a producer with or without it lands.
 
 ## The evening outcome ask (DATA-42)
 

@@ -290,8 +290,9 @@ export interface DigestCronSpec {
 }
 
 /**
- * Memory signal sync (01:00, no deliver, script-gated so unchanged MEMORY.md
- * does not wake the LLM), prepare (02:00, no deliver; since DATA-314 the
+ * Memory signal sync (01:00, no deliver, script-gated: the gate wakes the LLM
+ * only on the resident's evidence, new messages of their own, a changed stated
+ * goal or changed memory notes, and within its caps; DATA-470), prepare (02:00, no deliver; since DATA-314 the
  * silent no_agent prefetch of the brief's context), send (08:00, deliver
  * telegram; the morning brief), then
  * evening questions (19:00, deliver telegram). Signal sync runs an hour before
