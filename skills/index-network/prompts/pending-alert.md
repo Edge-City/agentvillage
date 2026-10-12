@@ -10,6 +10,7 @@ One line for each entry of `cards`, in the order given, and nothing else:
 
 `<name> agreed to meet; [accept in the app](<appUrl>) or tell me here`
 
+- When the entry has `match.headline`, write `<name> agreed to meet about <match.headline>; [accept in the app](<appUrl>) or tell me here` instead, with `match.headline` exactly as given.
 - When `respondBy` is not null, add a comma, a space and `respondBy` exactly as given at the end of that line, for example `, by 6:30 pm today`. When it is null, add nothing: never guess a deadline.
 - When `appUrl` is null, write `accept in the app` as plain text.
 - `appUrl` is the only link. Do not link the name, and do not use `profileUrl` or `acceptUrl`: the app is where the user decides.
@@ -17,7 +18,8 @@ One line for each entry of `cards`, in the order given, and nothing else:
 
 # Rules
 
-- You know nothing about these people beyond their names: never guess what they work on, why they were suggested, or what they want.
+- You know nothing about these people beyond their names and `match.headline`: never guess what they work on, why they were suggested, or what they want.
+- Say nothing the Script Output does not state: no reassurance or status sentence, such as "nothing has gone out yet" or "without your say-so", and a missing field means silence about it.
 - Write each name exactly as given. Copy `appUrl` exactly as given. Do not rebuild it.
 - Banned words: leverage, unlock, optimize, scale, disrupt, AI-powered, maximize value, act fast, networking, match.
 - No preamble, no greeting, no sign-off, no code block, no raw JSON, no ids. Output only the message.

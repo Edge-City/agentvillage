@@ -45,7 +45,8 @@ function card(name: string, id: string, extra: Partial<BriefOpportunity> = {}): 
     name,
     opportunityId: id,
     mainText: `${THIRD_PARTY} summary`,
-    headline: `${THIRD_PARTY} headline`,
+    // INDEX-COMMS A (Carter, 12 Oct): Index's headline may reach a drop as `match.headline`; the summary never.
+    headline: "memory systems",
     userUrl: `https://index.network/u/${id}-user`,
     opportunityUrl: `https://index.network/o/${id}`,
     feedCategory: "connection",
@@ -394,11 +395,12 @@ describe("the drops, the evening note and the follow-up: names and Index links o
   const ACCEPT = (id: string) => `https://index.network/o/${id}?action=accept&viewer=v1&sig=s1`;
   const MSG = (id: string) => `${PORTAL_WEB}/intro/${id}`; // what person() emits (INTRO-TELEGRAM): the app's /intro page, never the signed link
 
-  test("a drop wakes with one person, the signed accept link and no card text, and marks its own day", async () => {
+  test("a drop wakes with one person, the signed accept link, Index's headline and no other card text, and marks its own day", async () => {
     const result = await runProactive("drop-midday", options({ drop: async () => ({ opportunity: card("Maya Rao", "op1", { redelivery: true, acceptUrl: ACCEPT("op1") }) }) }));
     expect(output(result.lines)).toEqual({
       agentName: "Edge", job: "opportunity-drop", date: DATE, kind: "conversation", seenBefore: true,
       person: { name: "Maya Rao", profileUrl: `${PORTAL_WEB}/rolodex?person=op1-user`, messageUrl: MSG("op1") },
+      match: { headline: "memory systems" },
     });
     expect(result.lines.join("\n")).not.toContain(THIRD_PARTY);
     expect(state()[RUNS_KEY]).toEqual({ "drop-midday": DATE });

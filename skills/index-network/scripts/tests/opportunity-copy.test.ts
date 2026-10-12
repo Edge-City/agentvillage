@@ -59,7 +59,7 @@ describe("opportunity copy: the lead line is profiles, every pending card gets i
     expect(tools).not.toContain("If `acceptUrl` is missing, the action is plain text.");
     expect(tools).not.toContain(", no link)");
     expect(count(tools, "`acceptUrl` is the card's signed accept link. Copy it. Do not build `/o/<id>` for that action.")).toBe(1);
-    expect(count(tools, "Opening that link opens Agent Village, where one tap accepts the introduction and, once you have both accepted, opens Telegram: say so, never as a look or a preview.")).toBe(1);
+    expect(count(tools, "Opening a message link accepts the introduction at once, then opens Telegram with them if Index has their Telegram, or Index's page if not: say so in one sentence before the list, never as a look or a preview.")).toBe(1);
     expect(count(tools, "- Message: the card's `acceptUrl`, copied as returned.")).toBe(1);
     expect(count(tools, "Do not use `/c/` connect redirects as the opportunity link. Do not invent `/profile/` or `/opportunity/create` paths.")).toBe(1);
   });
@@ -81,7 +81,7 @@ describe("opportunity copy: the lead line is profiles, every pending card gets i
     expect(end).toBeGreaterThan(start);
     const section = exemplars.slice(start, end);
     expect(section.match(/\[message (Adam|Paul)\]\(\{acceptUrl\}\)/g)).toHaveLength(2);
-    expect(count(section, "> Tapping a link opens Agent Village, where one tap accepts; once you have both accepted, it opens Telegram with them.")).toBe(1);
+    expect(count(section, "> Tapping a link accepts the introduction at once, then opens Telegram with them if Index has their Telegram, or Index's page if not.")).toBe(1);
     expect(section).toContain("[Lena]({userUrl})");
     expect(section).not.toMatch(/\[message Lena\]/);
     expect(section).not.toMatch(/tell me and I will give you the link\./);
@@ -103,7 +103,7 @@ describe("opportunity copy: the lead line is profiles, every pending card gets i
     const bullets = tools.split("\n").filter((l) => l.startsWith("- The message action copies the card's `acceptUrl`"));
     expect(bullets).toHaveLength(1);
     const bullet = bullets[0];
-    const accept = "Opening it opens Agent Village, where one tap accepts the introduction and, once you have both accepted, opens Telegram with that person: say so in plain words, and never present it as a look or a preview.";
+    const accept = "Opening it accepts the introduction at once, then opens Telegram with that person if Index has their Telegram, or Index's page if not: say so in plain words, and never present it as a look or a preview.";
     const profiles = "The lead line's name links are profiles, not the action: every pending introduction (not a community ask) gets its own `[message Name](acceptUrl)`.";
     const missing = "A pending card without an `acceptUrl` gets `message Name` as plain text and, once per reply, a pointer in words to the Connections line in the morning brief, never an invented link.";
     expect(count(tools, accept)).toBe(1);

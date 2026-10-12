@@ -34,7 +34,8 @@ describe("prompts/pending-alert.md", () => {
     expect(count(prompt, "When `appUrl` is null, write `accept in the app` as plain text.")).toBe(1);
     expect(count(prompt, "`appUrl` is the only link. Do not link the name, and do not use `profileUrl` or `acceptUrl`: the app is where the user decides.")).toBe(1);
     // Only the one link pattern appears in the prompt.
-    expect(prompt.match(/\]\(<[^>]+>\)/g)).toEqual(["](<appUrl>)"]);
+    // INDEX-COMMS A: the line and its `match.headline` variant, each with the app link.
+    expect(prompt.match(/\]\(<[^>]+>\)/g)).toEqual(["](<appUrl>)", "](<appUrl>)"]);
     expect(prompt).not.toContain("action=accept");
     expect(prompt).not.toMatch(/\[message /);
   });

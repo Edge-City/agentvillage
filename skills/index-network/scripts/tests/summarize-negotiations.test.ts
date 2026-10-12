@@ -602,6 +602,8 @@ describe("main", () => {
     expect(parsed.newlyResolved).toEqual([{
       name: "Ana",
       headline: "Ana headline",
+      // INDEX-COMMS A: Index's own headline, with no fallback, for `match.headline`.
+      matchHeadline: "Ana headline",
       summary: "Ana summary",
       userUrl: "https://index.network/u/cccccccc-0000-4000-8000-000000000003",
       opportunityUrl: "https://index.network/o/bbbbbbbb-0000-4000-8000-000000000003",
@@ -683,6 +685,7 @@ describe("main", () => {
     expect(parsed.needsAttention).toEqual([{
       name: "Maya",
       headline: "h",
+      matchHeadline: "h",
       summary: "h",
       opportunityUrl: "https://index.network/o/bbbbbbbb-0000-4000-8000-000000000001",
     }]);

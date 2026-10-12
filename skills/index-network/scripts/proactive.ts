@@ -57,9 +57,13 @@
  *     (proactive-text.ts); an Index link only when it is exactly
  *     `https://index.network/<kind>/<id>`, and an event link rebuilt from the
  *     configured portal base and the event id. No
- *     third-party free text: no headline, summary or description written by
- *     or about another person. Every string is cleaned and scanned with the
- *     mirror of Hermes's cron prompt scanner and withheld on a hit.
+ *     third-party free text: no summary or description written by or about
+ *     another person. One exception (INDEX-COMMS A, Carter's ruling of
+ *     12 Oct 2026): a card's Index `headline` (a short label) as
+ *     `match.headline`, beside the resident's own intent text for the card
+ *     as `you.intent` (matchFacts); Index's `summary` never. Every string is
+ *     cleaned and scanned with the mirror of Hermes's cron prompt scanner
+ *     and withheld on a hit.
  *
  * Output: the Script Output JSON (no backtick, no raw `<` or `>`), then the
  * wake line as the LAST line: `{"wakeAgent": true}`, or `{"wakeAgent": false,
@@ -463,6 +467,18 @@ class Withheld {
   title(raw: unknown, max: number): string | null {
     return this.counted(raw, cleanTitle(raw, max));
   }
+  /**
+   * INDEX-COMMS A: one fact about a match (Index's headline, the resident's own intent): the
+   * stricter cleaner, cut at a word, and withheld whole when the raw text or the whole cleaned
+   * text would trip the scanner, so a hit past the cap never leaves its first part behind.
+   */
+  matchField(raw: unknown, max: number): string | null {
+    if (typeof raw === "string" && raw.trim() && (cronScanHit(raw) || !cleanTitle(raw, MATCH_SCAN_MAX))) {
+      this.count++;
+      return null;
+    }
+    return this.counted(raw, cleanTitle(raw, max, "word"));
+  }
   private counted(raw: unknown, text: string | null): string | null {
     if (raw !== undefined && raw !== null && raw !== "" && !text) this.count++;
     return text;
@@ -478,6 +494,34 @@ export interface PersonView {
 function person(card: { name?: unknown; userUrl?: unknown; acceptUrl?: unknown }, w: Withheld): PersonView | null {
   const name = w.name(card.name);
   return name ? { name, profileUrl: profileLink(card.userUrl), messageUrl: messageLink(card.acceptUrl) } : null;
+}
+
+/** INDEX-COMMS A: most code points of Index's headline for a card in a message. */
+export const MATCH_HEADLINE_MAX = 60;
+/** INDEX-COMMS A: most code points of the resident's own intent text for a card in a message. */
+export const MATCH_INTENT_MAX = 120;
+/** The whole cleaned text a match field is scanned at before it is cut. */
+const MATCH_SCAN_MAX = 4000;
+
+export interface MatchFacts {
+  match?: { headline: string };
+  you?: { intent: string };
+}
+
+/**
+ * INDEX-COMMS A (Carter's ruling, 12 Oct 2026): what a message may say the match is about. At
+ * most two facts, each present only when it cleans and scans (Withheld.matchField):
+ *   - `match.headline`: Index's own `headline` for the card, never the `summary` (nor a fallback
+ *     to it: callers pass the row's headline alone);
+ *   - `you.intent`: the resident's own intent text for the card (BriefOpportunity.matchedIntentText;
+ *     no parser sets it today), only when `intent` is allowed (a community ask is not the
+ *     resident's match).
+ * Absent facts are absent keys: the prompts then say nothing about them.
+ */
+function matchFacts(headline: unknown, intent: unknown, w: Withheld, { withIntent = true } = {}): MatchFacts {
+  const cleanHeadline = w.matchField(headline, MATCH_HEADLINE_MAX);
+  const cleanIntent = withIntent ? w.matchField(intent, MATCH_INTENT_MAX) : null;
+  return { ...(cleanHeadline ? { match: { headline: cleanHeadline } } : {}), ...(cleanIntent ? { you: { intent: cleanIntent } } : {}) };
 }
 
 /**
@@ -603,7 +647,9 @@ function preferencesList(raw: readonly string[], w: Withheld): string[] {
 export function withPreferences(view: Record<string, unknown>, raw: readonly string[]): { view: Record<string, unknown>; withheld: number } {
   const w = new Withheld();
   const preferences = preferencesList(raw, w);
-  return { view: preferences.length ? { ...view, you: { preferences } } : view, withheld: w.count };
+  // INDEX-COMMS A: beside `you.intent` when the view has one, never replacing it.
+  const you = view.you && typeof view.you === "object" ? (view.you as Record<string, unknown>) : {};
+  return { view: preferences.length ? { ...view, you: { ...you, preferences } } : view, withheld: w.count };
 }
 
 /**
@@ -674,13 +720,15 @@ export function dropView(date: string, card: BriefOpportunity): { view: Record<s
   const w = new Withheld();
   const who = person(card, w);
   if (!who) return { view: null, withheld: w.count };
+  const kind = card.feedCategory === "connector-flow" ? "community-ask" : "conversation";
   return {
     view: {
       job: "opportunity-drop",
       date,
-      kind: card.feedCategory === "connector-flow" ? "community-ask" : "conversation",
+      kind,
       seenBefore: Boolean(card.redelivery),
       person: who,
+      ...matchFacts(card.headline, card.matchedIntentText, w, { withIntent: kind === "conversation" }),
     },
     withheld: w.count,
   };
@@ -698,7 +746,9 @@ export function pendingView(cards: DueCard[], now: Date): { view: Record<string,
   const shown = cards.flatMap(({ card, opportunityId, firstSeen }) => {
     const who = person(card, w);
     if (!who) return [];
-    return [{ name: who.name, profileUrl: who.profileUrl, appUrl: appOpportunityLink(opportunityId), acceptUrl: who.messageUrl, opportunityId, firstSeen, respondBy: respondByText(card.respondBy, now) }];
+    // INDEX-COMMS A: the fixed line may name Index's headline; never the resident's intent here.
+    const { match } = matchFacts(card.headline, undefined, w, { withIntent: false });
+    return [{ name: who.name, profileUrl: who.profileUrl, appUrl: appOpportunityLink(opportunityId), acceptUrl: who.messageUrl, opportunityId, firstSeen, respondBy: respondByText(card.respondBy, now), ...(match ? { match } : {}) }];
   });
   return { view: shown.length > 0 ? { job: "pending-opportunity", cards: shown } : null, withheld: w.count };
 }
@@ -712,7 +762,9 @@ export function eveningView(date: string, result: Exclude<EveningResult, { silen
     return { view: question ? { job: "evening-note", date, closeoutQuestion: question } : null, withheld: w.count };
   }
   const who = person(result, w);
-  return { view: who ? { job: "evening-note", date, person: who } : null, withheld: w.count };
+  if (!who) return { view: null, withheld: w.count };
+  // `matchHeadline` is Index's own headline: the card's `headline` falls back to the summary and is never read.
+  return { view: { job: "evening-note", date, person: who, ...matchFacts(result.matchHeadline, result.matchedIntentText, w) }, withheld: w.count };
 }
 
 type FollowUpResult = Exclude<Awaited<ReturnType<typeof followUp>>, { silent: true }>;
@@ -720,7 +772,11 @@ type FollowUpResult = Exclude<Awaited<ReturnType<typeof followUp>>, { silent: tr
 export function followUpView(date: string, result: FollowUpResult): { view: Record<string, unknown> | null; withheld: number } {
   const w = new Withheld();
   const people = (cards: FollowUpResult["needsAttention"]) => cards.slice(0, LIST_MAX).flatMap((card) => person(card, w) ?? []);
-  const waitingOnYou = people(result.needsAttention);
+  // INDEX-COMMS A: a Waiting on you row may name the match (Index's own headline, the resident's intent).
+  const waitingOnYou = result.needsAttention.slice(0, LIST_MAX).flatMap((card) => {
+    const who = person(card, w);
+    return who ? [{ ...who, ...matchFacts(card.matchHeadline, card.matchedIntentText, w) }] : [];
+  });
   const newConnections = people(result.newlyResolved);
   const agentsTalking = people(result.waiting).map(({ name, profileUrl }) => ({ name, profileUrl }));
   const yourSignals = result.signals.slice(0, LIST_MAX).flatMap((signal) => {
