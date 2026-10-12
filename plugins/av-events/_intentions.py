@@ -216,6 +216,7 @@ class IntentionCall:
         "approved_by",
         "approval_state",
         "confirmed_in_chat",
+        "origin",
     )
 
     def __init__(
@@ -236,6 +237,7 @@ class IntentionCall:
         approved_by: Optional[str] = None,
         approval_state: Optional[str] = None,
         confirmed_in_chat: Optional[str] = None,
+        origin: Optional[str] = None,
     ) -> None:
         self.event_type = event_type
         self.intention_id = intention_id
@@ -259,6 +261,10 @@ class IntentionCall:
         #: the agent's words in chat (`CHAT_CONFIRMATIONS`), on a stated
         #: `message` capture. The tool decided it; null everywhere else.
         self.confirmed_in_chat = confirmed_in_chat
+        #: DATA-470, `intention.captured` only: which path produced the capture
+        #: (`memory_signal_sync`, `context_goal`, `chat`, `other`); the observer
+        #: sets it from the session, never from the model.
+        self.origin = origin
 
 
 # --------------------------------------------------------------------------

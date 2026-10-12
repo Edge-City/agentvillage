@@ -233,11 +233,16 @@ from ._core import (
     register_literal_secret,
     uuid7,
 )
+from . import _inference_run
+from ._cron import cron_job_id_from
 from ._intentions import (
     CHAT_CONFIRMATIONS,
     LOCAL_REASONS,
     RECORD_INTENTION_TOOL,
     RESTRICTIVE_SOURCE,
+    result_succeeded,
+    split_tool_name,
+    unwrap_result,
     valid_id,
 )
 
@@ -466,6 +471,39 @@ REFUSALS: dict[str, str] = {
     "text_invalid": (
         "Nothing was recorded: the text holds a character that cannot be sent (an unpaired surrogate). "
         "Record it again as plain text."
+    ),
+    # DATA-470: the memory signal sync's own caps (`_inference_run.cap_refusal`).
+    "no_gate_run": (
+        "Nothing was recorded: the memory signal sync records only in a run its preflight woke. "
+        "This pass ends here; do not record it another way."
+    ),
+    "intents_not_listed": (
+        "Nothing was recorded: the memory signal sync lists the resident's intents with list_intents "
+        "before it decides, and no list came back in this run. This pass ends here; do not record it another way."
+    ),
+    "pass_limit_reached": (
+        "Nothing was recorded: the memory signal sync records at most one intention a run, and this run "
+        "recorded one already. This pass ends here."
+    ),
+    "nightly_limit_reached": (
+        "Nothing was recorded: the memory signal sync records at most one inferred intention a night, "
+        "and tonight's is recorded already. This pass ends here."
+    ),
+    "inferred_card_open": (
+        "Nothing was recorded: an intention this agent inferred is still waiting for the resident's "
+        "answer on their approval card, and nothing new is proposed until they answer. This pass ends here."
+    ),
+    "recently_declined": (
+        "Nothing was recorded: the resident declined an inferred intention less than three days ago, "
+        "so nothing new is proposed yet. This pass ends here."
+    ),
+    "previously_declined": (
+        "Nothing was recorded: the resident declined this same intention on their approval card. "
+        "Never propose it again. This pass ends here."
+    ),
+    "caps_unknown": (
+        "Nothing was recorded: whether an inferred intention is still waiting for the resident could "
+        "not be read. This pass ends here; do not record it another way."
     ),
     # B2: withdrawing a published intention archives it on Index for good.
     "held_cron": (
@@ -918,11 +956,60 @@ def _on_subagent_start(**kwargs: Any) -> None:
     note_parent(kwargs.get("child_session_id"), kwargs.get("parent_session_id"))
 
 
+def cron_root(session_id: Optional[str]) -> Optional[str]:
+    """The `cron_<job>_<stamp>` session at or above `session_id` in its delegation chain, or None."""
+    current = str(session_id or "").strip()
+    with _LINEAGE_LOCK:
+        for _ in range(MAX_LINEAGE_DEPTH):
+            if not current:
+                return None
+            if current.startswith("cron_"):
+                return current
+            current = _PARENTS.get(current, "")
+    return None
+
+
+def memory_signal_session(session_id: Optional[str]) -> bool:
+    """DATA-470: a session of the installer's memory signal sync job (or a subagent it delegated to)."""
+    root = cron_root(session_id)
+    return root is not None and _inference_run.is_memory_signal_job(hermes_home(), cron_job_id_from(root))
+
+
+#: Index's read of the resident's intents: its MCP tool, or a bare tool of that name.
+LIST_INTENTS_TOOL = "list_intents"
+
+
+def _called_tool(kwargs: dict) -> tuple[Optional[str], str]:
+    """(server, tool) of a `post_tool_call`, looking through Hermes's `tool_call` bridge."""
+    name, args = kwargs.get("tool_name"), kwargs.get("args")
+    if name == "tool_call" and isinstance(args, dict):
+        calls = args.get("calls")
+        entry = calls[0] if isinstance(calls, list) and calls and isinstance(calls[0], dict) else args
+        name = entry.get("name")
+    return split_tool_name(name)
+
+
+def _on_post_tool_call(**kwargs: Any) -> None:
+    """DATA-470: `list_intents` answered in a memory signal sync run. The pass's step order (list,
+    then decide) is what `record_intention` checks there, and the run records the active count.
+    The tool's own listener, so the check never depends on telemetry being on."""
+    server, tool = _called_tool(kwargs)
+    if tool != LIST_INTENTS_TOOL or server not in (None, "index"):
+        return
+    if not memory_signal_session(kwargs.get("session_id")):
+        return
+    payload = unwrap_result(kwargs.get("result"))
+    if not result_succeeded(kwargs.get("status"), payload):
+        return
+    _inference_run.note_listed(hermes_home(), _inference_run.active_intent_count(payload), float(_clock()))
+
+
 #: The tool's own listeners: never through the collector's guard.
 LINEAGE_HOOKS: dict[str, Callable[..., None]] = {
     "on_session_start": _listener(_on_platform),
     "pre_api_request": _listener(_on_platform),
     "subagent_start": _listener(_on_subagent_start),
+    "post_tool_call": _listener(_on_post_tool_call),
 }
 
 
@@ -1936,8 +2023,30 @@ def record_intention_answer(args: Any, session_id: Optional[str]) -> dict:
     except Exception:  # noqa: BLE001 - unsure is held
         held = "unknown"
     if action == "capture":
+        if held == "cron" and memory_signal_session(session_id):
+            return _memory_signal_capture(safe, held)
         return _capture(safe, held)
     return _update_or_withdraw(action, safe, held)
+
+
+def _memory_signal_capture(args: dict, held: Optional[str]) -> dict:
+    """DATA-470: a capture by the memory signal sync, inside its caps, noted on its run record."""
+    home, now = hermes_home(), float(_clock())
+    text = _text(args.get("text"))
+    norm = held_norm_hash(text) if text is not None and not _has_lone_surrogate(text) else None
+    norm_v2 = held_norm_hash_v2(text) if norm is not None else None
+    try:
+        entries = _load_map(strict=True)
+    except Exception:  # noqa: BLE001 - unknown caps hold, never record around them
+        return _refuse("caps_unknown")
+    code = _inference_run.cap_refusal(home, now, entries, norm, norm_v2)
+    if code is not None:
+        logger.info("av-events: record_intention memory_signal_cap=%s", code)
+        return _refuse(code)
+    result = _capture(args, held)
+    if result.get("success") is True and isinstance(result.get("intention_id"), str) and text is not None:
+        _inference_run.note_recorded(home, result["intention_id"], text, now)
+    return result
 
 
 def make_handler() -> Callable[..., str]:

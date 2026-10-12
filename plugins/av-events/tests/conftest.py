@@ -58,6 +58,8 @@ AV_ENV_VARS = (
     "AV_RECORD_INTENTION_MAX_PUBLISH_PER_HOUR",
     # DATA-312: the terminal argument fix's kill switch.
     "AV_TERMINAL_ARGS_FIX",
+    # DATA-470: intention.inference_run, off until the data release registers it.
+    "AV_INFERENCE_RUN_EVENTS",
 )
 
 

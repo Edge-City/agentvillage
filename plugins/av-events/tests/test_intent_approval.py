@@ -1536,7 +1536,9 @@ def test_data311_the_held_session_event_is_a_normal_local_capture(tctx, serve, i
     normal, held = events(av, plugin)
     assert normal["event_type"] == held["event_type"] == "intention.captured"
     assert normal["payload"]["source"] == "message" and held["payload"]["source"] == "ambient"
-    strip = lambda p: {k: v for k, v in p.items() if k != "source"}  # noqa: E731
+    # DATA-470: and where it came from (a chat, or another cron job than the memory signal sync).
+    assert normal["payload"]["origin"] == "chat" and held["payload"]["origin"] == "other"
+    strip = lambda p: {k: v for k, v in p.items() if k not in ("source", "origin")}  # noqa: E731
     assert strip(normal["payload"]) == strip(held["payload"])
     assert serve.calls == [] and index.requests == []
     # The map tells both apart from a held inferred entry.

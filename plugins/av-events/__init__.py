@@ -21,11 +21,11 @@ import re
 import time
 from typing import Any, Callable, Optional
 
-from . import _approval, _approvals_reminder, _edgeos, _intent_approval, _outcome_ask, _share_vote, _terminal_args
+from . import _approval, _approvals_reminder, _edgeos, _inference_run, _intent_approval, _outcome_ask, _share_vote, _terminal_args
 from ._collector import Collector, guarded, hermes_version, overlay_ref
 from ._consent import TOOL_NAME as CONSENT_TOOL_NAME
 from ._consent import register_consent_tool
-from ._record_intention import register_record_intention_tool
+from ._record_intention import HUMAN_PLATFORMS, register_record_intention_tool
 from ._core import (
     PLUGIN_VERSION,
     hash_obj,
@@ -698,6 +698,9 @@ def _intention_payload(call: IntentionCall, capture: str, parent_session_id: Opt
         payload["approval_state"] = call.approval_state
     if call.confirmed_in_chat is not None:
         payload["confirmed_in_chat"] = call.confirmed_in_chat
+    # DATA-470: additive and nullable on `intention.captured` only.
+    if call.event_type == "intention.captured":
+        payload["origin"] = call.origin
     if capture != "metadata":
         payload["text_length"] = len(call.text) if call.text else None
         payload["summary_length"] = len(call.summary) if call.summary else None
@@ -729,6 +732,29 @@ def _is_cron_session(collector: Collector, session_id: Optional[str]) -> bool:
     return False
 
 
+#: `session.source` values where a person speaks to the agent (R10's platforms; cli, tui and
+#: desktop arrive as `desktop`).
+CHAT_SOURCES = HUMAN_PLATFORMS | {"desktop"}
+
+
+def _origin(collector: Collector, session_id: Optional[str], task_id: Any, cron: bool) -> str:
+    """DATA-470 `intention.captured.origin`: the memory signal sync's run, a chat with the
+    resident, or anything else. From the session's lineage, never from the model."""
+    current, root = session_id, session_id
+    for _ in range(MAX_LINEAGE_DEPTH):
+        if not current:
+            break
+        root = current
+        if str(current).startswith("cron_"):
+            break
+        current = collector.parent_of(current)
+    if cron:
+        job = cron_job_id_from(root, task_id)
+        return "memory_signal_sync" if _inference_run.is_memory_signal_job(collector.config.home, job) else "other"
+    state = collector.peek_session(root)
+    return "chat" if state is not None and state.source in CHAT_SOURCES else "other"
+
+
 def _capture_intentions(collector: Collector, kwargs: dict) -> None:
     """Emit one `intention.*` per intention the tool call recorded.
 
@@ -737,15 +763,21 @@ def _capture_intentions(collector: Collector, kwargs: dict) -> None:
     a filter on it would drop real intentions. Ingest dedupes on `event_id`.
     """
     refs = _refs(kwargs)
+    cron = _is_cron_session(collector, refs["session_id"])
     calls = plan_intentions(
         kwargs.get("tool_name"),
         kwargs.get("args"),
         kwargs.get("result"),
         kwargs.get("status"),
-        cron=_is_cron_session(collector, refs["session_id"]),
+        cron=cron,
     )
     if not calls:
         return
+    if any(call.event_type == "intention.captured" for call in calls):
+        origin = _origin(collector, refs["session_id"], kwargs.get("task_id"), cron)
+        for call in calls:
+            if call.event_type == "intention.captured":
+                call.origin = origin
 
     tool_call_id = _tool_call_id(kwargs)
     # The call's own window: Hermes reports `duration_ms` and we fire at its end.

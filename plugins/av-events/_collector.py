@@ -59,7 +59,7 @@ from ._core import (
     uuid7,
 )
 from ._core import _LOCK_HELD, fcntl
-from . import _backup, _outcome_ask
+from . import _backup, _inference_run, _outcome_ask
 from ._cron import CronCursor, cron_job_id_from, pending_runs
 from ._edgeos import Ledger
 
@@ -507,6 +507,8 @@ class Collector:
         self.cron_errors = 0
         #: Outcome-ask passes that raised (DATA-42), likewise outside `guarded`.
         self.outcome_errors = 0
+        #: DATA-470: failures completing a memory signal sync run's record or its event.
+        self.inference_errors = 0
         #: The tenant's HMAC key (`hash_key`), loaded on first use.
         self._hash_key: Optional[bytes] = None
         #: Diagnostic counters, names only (`tenant_id_not_uuid`, …).
@@ -1301,6 +1303,8 @@ class Collector:
                 )
                 if event is None:
                     break
+                if payload.get("job_name") == _inference_run.JOB_NAME:
+                    self.inference_run(payload)
                 cursor.add(execution_id)
                 emitted += 1
             if emitted:
@@ -1309,6 +1313,38 @@ class Collector:
         except Exception:  # noqa: BLE001 - the tail must never take the flusher down
             self.cron_errors += 1
             return 0
+
+    def inference_run(self, execution: dict) -> Optional[dict]:
+        """DATA-470: one `intention.inference_run@1` for a finished run of the memory signal
+        sync (`_inference_run`), gated runs included. The run's record is completed whatever
+        the flag says; the event is emitted only with AV_INFERENCE_RUN_EVENTS on (ingest
+        quarantines the type until the data release registering it is live) and
+        `inference_run` not in AV_HOOKS_DISABLED. Its id is a v7 derived from the
+        execution, so every process tailing the ledger derives the same one."""
+        try:
+            try:
+                payload = _inference_run.finalize(self.config.home, execution)
+            except Exception as exc:  # noqa: BLE001 - reported as error/unknown, never with its text
+                self.inference_errors += 1
+                logger.warning("av-events: inference_run finalize_failed=%s", type(exc).__name__)
+                payload = _inference_run.failure_payload(execution)
+            if not _inference_run.flag_on() or _inference_run.HOOK_NAME in self.config.disabled_hooks:
+                return None
+            model = payload["model"]
+            return self.emit(
+                _inference_run.EVENT_TYPE,
+                payload,
+                event_id=_inference_run.event_id(execution),
+                occurred_at=payload["finished_at"],
+                occurred_at_earliest=payload["started_at"],
+                occurred_at_latest=payload["finished_at"],
+                actor="system",
+                run_id=f"cron:{execution['job_id']}:{execution['execution_id']}",
+                model_id=model if model not in ("none", "unknown") else None,
+            )
+        except Exception:  # noqa: BLE001 - never takes the cron tail down
+            self.inference_errors += 1
+            return None
 
     def outcome_tick(self, now: Optional[float] = None) -> dict:
         """The evening outcome ask's confirmations and answers (DATA-42,
