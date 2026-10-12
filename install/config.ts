@@ -751,11 +751,15 @@ export function configureAvApproval(): void {
     : [];
   if (!enabled.includes(AV_APPROVAL_PLUGIN)) enabled.push(AV_APPROVAL_PLUGIN);
   plugins.enabled = enabled;
+  // SEC-1 (S3): Hermes's plugins.disabled outranks plugins.enabled, so an earlier Disable would keep
+  // custody off through every upgrade. Remove exact av-approval entries; keep every other entry.
+  const wasDisabled = Array.isArray(plugins.disabled) && (plugins.disabled as unknown[]).includes(AV_APPROVAL_PLUGIN);
+  if (Array.isArray(plugins.disabled)) plugins.disabled = (plugins.disabled as unknown[]).filter((n) => n !== AV_APPROVAL_PLUGIN);
   doc.plugins = plugins;
   writeConfig(doc);
   console.log(`→ enabled plugin ${AV_APPROVAL_PLUGIN} (credential custody; the gate half follows AV_APPROVAL_ENABLED)`);
-  if (Array.isArray(plugins.disabled) && (plugins.disabled as unknown[]).includes(AV_APPROVAL_PLUGIN)) {
-    console.log(`→ warning: ${AV_APPROVAL_PLUGIN} is in plugins.disabled; Hermes will not load it and custody is off`);
+  if (wasDisabled) {
+    console.log(`→ removed ${AV_APPROVAL_PLUGIN} from plugins.disabled (custody must run on every box)`);
   }
 }
 

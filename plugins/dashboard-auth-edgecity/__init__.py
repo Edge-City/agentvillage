@@ -1,8 +1,8 @@
 """Edge City dashboard auth: owner email OTP on Hermes's login form, the archive_read bearer, and
-admin-only plugin management.
+the resident guard (residents get a named set of dashboard features; landing admins get all).
 
-See README.md. The archive_read token logic is in `_archive` and the plugin-management guard in
-`_plugins_admin` (both standard library only).
+See README.md. The archive_read token logic is in `_archive` and the resident guard in
+`_resident_guard` (both standard library only).
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import os
 import re
 import secrets
 import sqlite3
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -52,13 +53,17 @@ except ModuleNotFoundError as _missing:
 else:
     _HERMES_MISSING = None
 
-from . import _archive, _plugins_admin
+from . import _archive, _resident_guard
 
 _log = logging.getLogger("dashboard-auth-edgecity")
 
 _SIG_LEN = hashlib.sha256().digest_size
 _ACCESS_TTL = 12 * 60 * 60
 _REFRESH_TTL = 30 * 24 * 60 * 60
+#: The signing key's generation. 1.3.0 replaces any key from before it once (SEC-1 M4): until 1.3.0
+#: any dashboard session could download this store, so an older key may be known to a resident.
+#: Every session signs in again once. Raise it to rotate again.
+_KEY_EPOCH = "2"
 
 
 def _env(name: str) -> str:
@@ -282,13 +287,24 @@ class EdgeCityDashboardAuth(DashboardAuthProvider):
         os.close(fd)
         os.chmod(self._db_path, 0o600)
         with self._db() as db:
+            # One writer at a time across processes, so exactly one of them rotates an old key.
+            db.execute("BEGIN IMMEDIATE")
             db.execute("CREATE TABLE IF NOT EXISTS identity (tenant TEXT PRIMARY KEY, secret BLOB NOT NULL)")
-            db.execute("INSERT OR IGNORE INTO identity VALUES (?, ?)", (self._tenant_id, secrets.token_bytes(32)))
-            self._secret = bytes(db.execute("SELECT secret FROM identity WHERE tenant = ?", (self._tenant_id,)).fetchone()[0])
             db.execute("""CREATE TABLE IF NOT EXISTS sessions (
                 sid TEXT PRIMARY KEY, tenant TEXT NOT NULL, subject TEXT NOT NULL,
                 email TEXT NOT NULL, role TEXT NOT NULL, absolute_exp INTEGER NOT NULL,
                 refresh_hash TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0)""")
+            db.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            epoch = db.execute("SELECT value FROM meta WHERE key = 'key_epoch'").fetchone()
+            if epoch is None or epoch[0] != _KEY_EPOCH:
+                # A key from an older version may have been downloaded: replace it, and drop every
+                # session row (no token signed with the old key verifies any more).
+                db.execute("DELETE FROM identity")
+                db.execute("DELETE FROM sessions")
+                db.execute("INSERT OR REPLACE INTO meta VALUES ('key_epoch', ?)", (_KEY_EPOCH,))
+                _log.info("dashboard-auth-edgecity: signing key generation %s; every session signs in again once", _KEY_EPOCH)
+            db.execute("INSERT OR IGNORE INTO identity VALUES (?, ?)", (self._tenant_id, secrets.token_bytes(32)))
+            self._secret = bytes(db.execute("SELECT secret FROM identity WHERE tenant = ?", (self._tenant_id,)).fetchone()[0])
 
     @contextmanager
     def _db(self):
@@ -530,32 +546,84 @@ def _register_archive_read(ctx) -> None:
         _log.warning("dashboard-auth-edgecity: archive_read not installed (%s)", type(exc).__name__)
 
 
-def _install_plugins_admin() -> None:
-    """Wrap Hermes's cookie gate so plugin management is admin only (SEC-1). Any failure is logged
-    and leaves the gate untouched, which leaves plugin management open to every dashboard session,
-    as it was before this plugin version; the log says so."""
+class ResidentGuardNotInstalled(RuntimeError):
+    """The HTTP seam is missing: the plugin refuses to load, so Hermes refuses to serve a gated
+    dashboard without its provider (fail closed, `web_server.py:1136`)."""
+
+
+def _gateway_modules():
+    """`tui_gateway.server` and `tui_gateway.ws`, loaded the first time a resident opens the chat
+    socket (in the dashboard, `start_server` has imported `tui_gateway.server` by then)."""
+    from tui_gateway import server, ws
+
+    return server, ws
+
+
+def _files_module():
+    return sys.modules.get("hermes_cli.web_routers.files")
+
+
+def _install_resident_guard() -> None:
+    """Install the resident guard on its three seams (README "Resident guard"). The HTTP seam is
+    required: without it the plugin does not load. Without the socket seam the embedded chat is
+    switched off for every session. The gateway seam installs the first time a resident opens the
+    chat socket; until it is in place, residents cannot open it."""
+    guard = _resident_guard
+    try:
+        import hermes_cli
+
+        guard.set_private_roots([os.path.dirname(os.path.dirname(os.path.abspath(hermes_cli.__file__)))])
+    except Exception:  # noqa: BLE001 - HERMES_HOME's own trees are private regardless
+        pass
     try:
         from hermes_cli.dashboard_auth import middleware
 
-        if _plugins_admin.install(middleware):
-            _log.info("dashboard-auth-edgecity: plugin management admin only (edgecity admin sessions)")
-        else:
-            _log.warning("dashboard-auth-edgecity: plugin management NOT restricted (seam_missing); "
-                         "every dashboard session can manage plugins")
-    except Exception as exc:  # noqa: BLE001 - never break the owner login over the plugin guard
-        _log.warning("dashboard-auth-edgecity: plugin management NOT restricted (%s); "
-                     "every dashboard session can manage plugins", type(exc).__name__)
+        http_ok = guard.install(middleware)
+    except Exception as exc:  # noqa: BLE001
+        _log.error("dashboard-auth-edgecity: resident guard NOT installed (%s); refusing to load", type(exc).__name__)
+        raise ResidentGuardNotInstalled(type(exc).__name__) from exc
+    if not http_ok:
+        _log.error("dashboard-auth-edgecity: resident guard NOT installed (seam_missing); refusing to load")
+        raise ResidentGuardNotInstalled("seam_missing")
+    try:
+        from hermes_cli.dashboard_auth import ws_tickets
+
+        tickets_ok = guard.install_tickets(ws_tickets)
+    except Exception:  # noqa: BLE001
+        tickets_ok = False
+    if not tickets_ok:
+        _log.warning("dashboard-auth-edgecity: socket tickets carry no role (seam_missing); "
+                     "every socket is a resident's, the console and terminal are closed to admins too")
+    try:
+        from hermes_cli import web_server_chat
+
+        ws_ok = guard.install_ws(web_server_chat)
+    except Exception:  # noqa: BLE001
+        ws_ok = False
+    if not ws_ok:
+        web_server = sys.modules.get("hermes_cli.web_server")
+        closed = web_server is not None and guard.close_embedded_chat(web_server)
+        _log.error("dashboard-auth-edgecity: socket guard NOT installed (seam_missing); embedded chat %s",
+                   "switched off for every session" if closed else "left to Hermes (no dashboard in this process)")
+    guard.set_loader("gateway", _gateway_modules)
+    guard.set_loader("files", _files_module)
+    if "tui_gateway.server" in sys.modules and "tui_gateway.ws" in sys.modules:
+        guard._ensure("gateway")
+    _log.info("dashboard-auth-edgecity: resident guard on (edgecity admin sessions: everything; "
+              "everyone else: the resident allow-list)")
 
 
 def register(ctx) -> None:
     if _HERMES_MISSING is not None:
         raise ImportError("dashboard-auth-edgecity needs hermes_cli.dashboard_auth") from _HERMES_MISSING
+    # The guard first: if it cannot install, no provider is registered and a gated dashboard does
+    # not start.
+    _install_resident_guard()
     try:
-        ctx.register_dashboard_auth_provider(EdgeCityDashboardAuth())
+        provider = EdgeCityDashboardAuth()
     except ValueError:
-        # No edgecity provider means no edgecity admin: the plugin surface is closed to everyone.
-        _install_plugins_admin()
+        # No edgecity provider means no edgecity admin: every session gets the resident list.
         return
+    ctx.register_dashboard_auth_provider(provider)
     _register_archive_read(ctx)
-    _install_plugins_admin()
     _patch_hermes_login()

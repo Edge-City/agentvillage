@@ -644,16 +644,60 @@ for (const approvalSwitch of [undefined, "0", "1"]) {
   });
 }
 
-test("configureAvApproval on a config with no plugins block, and a warning when it is disabled", () => {
+test("configureAvApproval on a config with no plugins block", () => {
   const log = spyOn(console, "log").mockImplementation(() => {});
   try {
     const bare = withConfig({});
     configureAvApproval();
-    expect((readConfig(bare).plugins as Record<string, unknown>).enabled).toEqual(["av-approval"]);
-    withConfig({ plugins: { enabled: [], disabled: ["av-approval"] } });
-    configureAvApproval();
+    const plugins = readConfig(bare).plugins as Record<string, unknown>;
+    expect(plugins.enabled).toEqual(["av-approval"]);
+    expect("disabled" in plugins).toBe(false);
+  } finally {
+    log.mockRestore();
+  }
+});
+
+// SEC-1 (S3): with AV_APPROVAL_ENABLED unset or off, installApproval never runs its own
+// plugins.disabled fix, so configureAvApproval (every run) takes av-approval out of the deny-list.
+for (const approvalSwitch of [undefined, "0", "1"]) {
+  test(`configureAvApproval removes av-approval from plugins.disabled with AV_APPROVAL_ENABLED=${approvalSwitch ?? "unset"}`, () => {
+    const before = process.env.AV_APPROVAL_ENABLED;
+    if (approvalSwitch === undefined) delete process.env.AV_APPROVAL_ENABLED;
+    else process.env.AV_APPROVAL_ENABLED = approvalSwitch;
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const configPath = withConfig({
+        plugins: { enabled: ["av-events"], disabled: ["av-approval", "other", "av-approval", "user/av-approval", 7, "AV-APPROVAL"] },
+      });
+      configureAvApproval();
+      const plugins = readConfig(configPath).plugins as Record<string, unknown>;
+      expect(plugins.disabled).toEqual(["other", "user/av-approval", 7, "AV-APPROVAL"]);
+      expect(plugins.enabled).toEqual(["av-events", "av-approval"]);
+      const lines = log.mock.calls.map((args) => args.map(String).join(" "));
+      expect(lines.at(-1)).toBe("→ removed av-approval from plugins.disabled (custody must run on every box)");
+      const bytes = readFileSync(configPath, "utf8");
+      configureAvApproval();
+      expect(readFileSync(configPath, "utf8")).toBe(bytes);
+    } finally {
+      log.mockRestore();
+      if (before === undefined) delete process.env.AV_APPROVAL_ENABLED;
+      else process.env.AV_APPROVAL_ENABLED = before;
+    }
+  });
+}
+
+test("configureAvApproval leaves a plugins.disabled that is not a list, or that lacks av-approval, as it is", () => {
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    for (const disabled of ["av-approval", null, { "av-approval": true }, ["other"], []]) {
+      const configPath = withConfig({ plugins: { enabled: [], disabled } });
+      configureAvApproval();
+      const plugins = readConfig(configPath).plugins as Record<string, unknown>;
+      expect(plugins.disabled).toEqual(disabled);
+      expect(plugins.enabled).toEqual(["av-approval"]);
+    }
     const lines = log.mock.calls.map((args) => args.map(String).join(" "));
-    expect(lines.at(-1)).toBe("→ warning: av-approval is in plugins.disabled; Hermes will not load it and custody is off");
+    expect(lines.some((line) => line.startsWith("→ removed"))).toBe(false);
   } finally {
     log.mockRestore();
   }
