@@ -62,7 +62,8 @@
  *     12 Oct 2026): a card's Index `headline` (a short label) as
  *     `match.headline`, beside the resident's own intent text for the card
  *     as `you.intent` (matchFacts), each withheld whole unless it is shaped
- *     like a short topic label (matchFieldShapeHit, OV-301 fix round 1);
+ *     like a short topic label (cleanMatchField: a closed allow-shape checked
+ *     on the string that is sent, OV-301 fix round 2);
  *     Index's `summary` never. Every string is
  *     cleaned and scanned with the mirror of Hermes's cron prompt scanner
  *     and withheld on a hit.
@@ -86,7 +87,7 @@ import { contextInterests, contextPreferences, readContextTags } from "./context
 import { OPPORTUNITY_DELIVERY_KEY, deliveryLogChanged, pruneDeliveryLog, readDeliveryLog, recordShowings } from "./delivery-state";
 import { dropOpportunity } from "./drop-opportunity";
 import { type DueCard, pendingAlert, respondByText } from "./pending-alert";
-import { cleanName, cleanText, cleanTitle, connectionsUrl, cronScanHit, envOrDotenv, matchFieldShapeHit, withoutDoubleQuotes } from "./proactive-text";
+import { cleanMatchField, cleanName, cleanText, cleanTitle, connectionsUrl, cronScanHit, envOrDotenv } from "./proactive-text";
 import { type LockOptions, LockStuck, LockTimeout, releaseHeldLocks, withStateLock } from "./state-lock";
 import { writeStateFile } from "./state-file";
 import { followUp } from "./summarize-negotiations";
@@ -94,8 +95,8 @@ import { backfillAnnounced, clearStage, dueSubjects, intentionLink, listAccepted
 import { type Delivery, deliveryFor, inWindow, isTeamTenant, minuteOfDay, prunePreviewFiles, readJobSettings } from "./job-settings";
 import { DEFAULT_NAME, agentName, readProfile } from "../../agent-profile/scripts/profile";
 
-/** OV-301 fix round 1: the address and instruction words a match field may not hold (proactive-text.ts). */
-export { MATCH_FIELD_MAX_WORDS, MATCH_FIELD_STOP_PHRASES, MATCH_FIELD_STOP_WORDS } from "./proactive-text";
+/** OV-301 fix rounds 1 and 2: what a match field may hold (proactive-text.ts). */
+export { MATCH_FIELD_MAX_LENGTH, MATCH_FIELD_MAX_WORDS, MATCH_FIELD_SCRIPTS, MATCH_FIELD_STOP_PHRASES, MATCH_FIELD_STOP_WORDS } from "./proactive-text";
 
 /** The default jobs' actions, one per installer job (install_index.ts DIGEST_CRON_SPECS). */
 export const ACTIONS = ["prefetch", "brief", "drop-midday", "drop-evening", "negotiation", "evening", "pending"] as const;
@@ -473,24 +474,15 @@ class Withheld {
     return this.counted(raw, cleanTitle(raw, max));
   }
   /**
-   * INDEX-COMMS A: one fact about a match (Index's headline, the resident's own intent): double
-   * quotes removed (the prompts quote the intent), the stricter cleaner, cut at a word, and
-   * withheld whole when the raw text or the whole cleaned text would trip the scanner, so a hit
-   * past the cap never leaves its first part behind. OV-301 fix round 1 (refute M1, S3): also
-   * withheld whole when it is not shaped like a short topic label (matchFieldShapeHit: an address
-   * or instruction word, look-alike letters, a digit run, a banned phrase or label, more than 8
-   * words, a sentence mark inside). A withheld field is an absent key and one more on the
-   * withheld count; nothing of its text is logged.
+   * INDEX-COMMS A: one fact about a match (Index's headline, the resident's own intent), cut at a
+   * word to `max`, or withheld whole (cleanMatchField, OV-301 fix round 2): the scanner on the raw
+   * text; NFKC, quotes and invisible characters out; then a closed allow-shape (every word letters
+   * of one allowed script, digits and `' - & /`; at most 6 words), the strong-signal word list and
+   * the scanner, on the whole text and again on the string that is sent. A withheld field is an
+   * absent key and one more on the withheld count; nothing of its text is logged.
    */
   matchField(raw: unknown, max: number): string | null {
-    if (typeof raw !== "string" || !raw.trim()) return this.counted(raw, null);
-    const unquoted = withoutDoubleQuotes(raw);
-    const whole = cleanTitle(unquoted, MATCH_SCAN_MAX);
-    if (!whole || cronScanHit(raw) || matchFieldShapeHit(unquoted, whole)) {
-      this.count++;
-      return null;
-    }
-    return this.counted(raw, cleanTitle(unquoted, max, "word"));
+    return this.counted(raw, cleanMatchField(raw, max));
   }
   private counted(raw: unknown, text: string | null): string | null {
     if (raw !== undefined && raw !== null && raw !== "" && !text) this.count++;
@@ -513,8 +505,6 @@ function person(card: { name?: unknown; userUrl?: unknown; acceptUrl?: unknown }
 export const MATCH_HEADLINE_MAX = 60;
 /** INDEX-COMMS A: most code points of the resident's own intent text for a card in a message. */
 export const MATCH_INTENT_MAX = 120;
-/** The whole cleaned text a match field is scanned at before it is cut. */
-const MATCH_SCAN_MAX = 4000;
 
 export interface MatchFacts {
   match?: { headline: string };
