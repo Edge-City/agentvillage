@@ -1211,6 +1211,92 @@ export function claimWelcome(home: string, now: Date = new Date()): boolean {
  * `waitMs` and `pollMs` replace WELCOME_BUDGET_MS, WELCOME_RELIST_RESERVE_MS,
  * WELCOME_SEED_WAIT_MS and WELCOME_SEED_POLL_MS.
  */
+
+// ── SEED-REJECT 3b: --reseed, the operator's one-shot second seed ────────────
+
+/** The operator's flag: seed again for a box whose welcome seeded nothing (Carter's ruling (4), 12 Oct 2026). */
+export const RESEED_FLAG = "--reseed";
+/** Each `--reseed` run's own marker, relative to `$HERMES_HOME`: `memory/welcome-reseed-<time>.json`. */
+export const WELCOME_RESEED_PREFIX = join("memory", "welcome-reseed-");
+
+/**
+ * The lines a `--reseed` sends: the profile's selected intentions as the
+ * welcome's seed reads them (selectedIntentions, verbatim), else, since the
+ * app leaves that section out once Telegram is paired, the lines Index refused
+ * at the welcome (the seed marker's `refused`, ov#302), as recorded. Never
+ * rewritten, trimmed or composed. Never throws.
+ */
+export function reseedLines(home: string): string[] {
+  const selected = selectedIntentions(home);
+  if (selected.length) return selected;
+  try {
+    const marker = record(JSON.parse(readFileSync(join(home, WELCOME_SEED_FILE), "utf8")));
+    const refused = Array.isArray(marker?.refused) ? marker.refused : [];
+    return refused.map((r) => record(r)?.line).filter((l): l is string => typeof l === "string" && l.trim() !== "");
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * `--reseed`: whatever welcome-state.json and the seed marker say (neither is
+ * read for permission nor written), list, then seed (seedLines: prepare
+ * first, create only on ready, refusals kept) up to MAX_LISTED of
+ * reseedLines that are not already listed in Index (seedKey, any status),
+ * and write a new marker WELCOME_RESEED_PREFIX<time>.json with the counts,
+ * the codes and the refused lines. The branch for the operator's trailer.
+ * Never throws.
+ */
+export async function reseedRun(home: string, options: WelcomeOptions = {}): Promise<WelcomeBranch> {
+  const now = options.now ?? new Date();
+  try {
+    const clock: Clock = {
+      deadline: Date.now() + (options.budgetMs ?? WELCOME_BUDGET_MS),
+      cap: options.timeoutMs,
+      reserve: options.reserveMs ?? WELCOME_RELIST_RESERVE_MS,
+      wait: 0,
+      poll: options.pollMs ?? WELCOME_SEED_POLL_MS,
+    };
+    const target: IndexMcpTarget = { apiKey: envOrDotenv("INDEX_API_KEY", home), mcpUrl: indexMcpUrl(), fetch: options.fetch };
+    const first = await listIntents({ ...target, timeoutMs: options.timeoutMs ?? WELCOME_INDEX_TIMEOUT_MS });
+    const all = reseedLines(home);
+    if (!first.rows) {
+      recordReseed(home, now, { selected: all.length, created: 0, failed: 0, codes: ["list-unavailable"], refused: [] });
+      return { ...welcomeBranch(UNREACHABLE), seed_codes: ["list-unavailable"] };
+    }
+    const sent = new Set(first.rows.flatMap((row) => row.keys));
+    const lines: SeedLineInput[] = [];
+    for (const text of all) {
+      if (lines.length === MAX_LISTED) break;
+      const key = seedKey(text);
+      if (key === null || sent.has(key)) continue;
+      sent.add(key);
+      lines.push({ text, title: cleanTitle(text, TITLE_MAX, "word")!, key });
+    }
+    if (lines.length === 0) {
+      recordReseed(home, now, { selected: all.length, created: 0, failed: 0, codes: [], refused: [] });
+      return welcomeBranch(first.read);
+    }
+    const { again, seeded, failed, refused, codes, kinds } = await seedLines(home, target, clock, lines, now);
+    recordReseed(home, now, { selected: all.length, created: seeded.length, failed, codes, refused });
+    const read = again.read.kind === "listed" ? again.read : first.read;
+    return welcomeBranch(read, { intents_seeded: seeded.length, seed_failed: failed, seed_codes: codes, seed_recovery_kinds: kinds });
+  } catch {
+    return { ...welcomeBranch(UNREACHABLE), seed_codes: ["error"] };
+  }
+}
+
+/** The `--reseed` run's own marker (0600, a new file each run); never touches welcome-state.json or the seed marker. Never throws. */
+function recordReseed(home: string, now: Date, body: { selected: number; created: number; failed: number; codes: string[]; refused: RefusedSeed[] }): void {
+  try {
+    const path = join(home, `${WELCOME_RESEED_PREFIX}${now.toISOString().replace(/[:.]/g, "-")}.json`);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${JSON.stringify({ reseededAt: now.toISOString(), ...body, ...(body.refused.length ? {} : { refused: undefined }) })}\n`, { mode: 0o600 });
+  } catch {
+    // Nothing to keep: the trailer still says what happened.
+  }
+}
+
 type WelcomeOptions = {
   fetch?: typeof fetch;
   timeoutMs?: number;
@@ -1229,6 +1315,7 @@ type WelcomeOptions = {
  */
 export async function welcomeRun(argv: string[], options: WelcomeOptions = {}): Promise<{ text: string; branch: WelcomeBranch | null }> {
   const home = homeFrom(argv);
+  if (argv.includes(RESEED_FLAG)) return { text: "", branch: await reseedRun(home, options) };
   const draft = argv.includes("--draft");
   const welcomed = welcomeAlreadySent(home);
   if (!draft && welcomed) return { text: await alreadySentText(home, options.now ?? new Date()), branch: null };
@@ -1277,8 +1364,10 @@ export async function main(
   } catch {
     out = { text: welcomeText(DEFAULT_NAME, UNREACHABLE, intentsPageUrl(homeFrom(argv))), branch: welcomeBranch(UNREACHABLE) };
   }
-  io.stdout(`${out.text}\n`);
-  if (argv.includes("--draft") && out.branch) io.stderr(`${draftTrailer(out.branch, seedTrailerV2(homeFrom(argv)))}\n`);
+  // `--reseed` (SEED-REJECT 3b) prints nothing for the resident, and its trailer, both extra keys included, for the operator.
+  const reseed = argv.includes(RESEED_FLAG);
+  if (!reseed) io.stdout(`${out.text}\n`);
+  if ((reseed || argv.includes("--draft")) && out.branch) io.stderr(`${draftTrailer(out.branch, reseed || seedTrailerV2(homeFrom(argv)))}\n`);
 }
 
 if (import.meta.main) {

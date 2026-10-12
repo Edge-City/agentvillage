@@ -16,13 +16,14 @@
  * pinned here as (1)..(5); Carter's ruling (18:23Z) as "verbatim".
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { PREPARE_UNAVAILABLE, indexPrepareUrl, prepareIntent } from "../index-mcp";
 import {
   ADMISSION_FEEDBACK,
+  RESEED_FLAG,
   REFUSED_SEEDS,
   SEED_CODE,
   SEED_SOURCE_TYPE,
@@ -33,6 +34,7 @@ import {
   draftTrailer,
   main,
   recoveryQuestions,
+  reseedLines,
   seedCode,
   seedTrailerV2,
   surfaceRefusedSeeds,
@@ -83,8 +85,8 @@ const ready = (): PrepareAnswer => ({ status: 200, body: { status: "ready", payl
 const revise = (feedback: string, recovery: unknown = RECOVERY): PrepareAnswer => ({ status: 200, body: { status: "needs_revision", payload: "x", feedback, recovery } });
 
 /** A fake Index: the MCP fake for list/create, and `prepare` answered by `plan` per payload. */
-function fakeIndex(plan: (payload: string, n: number) => PrepareAnswer, create?: (description: string) => ToolReply | undefined) {
-  const rows: Array<{ id: string; summary: string; status: string }> = [];
+function fakeIndex(plan: (payload: string, n: number) => PrepareAnswer, create?: (description: string) => ToolReply | undefined, initial: Array<{ id: string; summary: string; status: string }> = []) {
+  const rows: Array<{ id: string; summary: string; status: string }> = initial.map((r) => ({ ...r }));
   let n = 0;
   const fake = indexMcpFake({
     tools: {
@@ -413,4 +415,84 @@ describe("(3) the trailer: exactly the five keys, plus at most seed_codes and se
     expect(WELCOME_STATE_FILE).toBe(join("memory", "welcome-state.json"));
   });
 
+});
+
+describe("--reseed: the operator's one-shot second seed (Carter's ruling (4))", () => {
+  async function reseed(index: ReturnType<typeof fakeIndex>) {
+    process.env.INDEX_API_KEY = FAKE_API_KEY;
+    process.env.INDEX_MCP_URL = FAKE_MCP_URL;
+    const out: string[] = [];
+    const err: string[] = [];
+    await main(["--home", home, RESEED_FLAG], { stdout: (s) => out.push(s), stderr: (s) => err.push(s) }, (argv) => welcomeRun(argv, { fetch: index.fetch, timeoutMs: 200 }));
+    const creates = index.fake.calls.filter((c) => c.method === "tools/call" && c.name === "create_intent");
+    return { stdout: out.join(""), trailer: JSON.parse(err.join("").trim()) as Record<string, unknown>, creates };
+  }
+  const reseedMarkers = () => (existsSync(join(home, "memory")) ? readdirSync(join(home, "memory")).filter((f) => f.startsWith("welcome-reseed-")) : []);
+  function welcomed(): string {
+    mkdirSync(join(home, "memory"), { recursive: true });
+    const state = `${JSON.stringify({ welcomeSent: true, sentAt: "2026-10-12T15:48:14.000Z" })}\n`;
+    writeFileSync(join(home, WELCOME_STATE_FILE), state);
+    return state;
+  }
+
+  test("after a sent welcome: prints nothing on stdout, seeds through prepare, writes its own marker, leaves welcome-state and the seed marker untouched", async () => {
+    const state = welcomed();
+    const seedMarker = `${JSON.stringify({ seededAt: "2026-10-12T15:47:18.759Z", selected: 3, created: 0, failed: 3, done: true })}\n`;
+    writeFileSync(join(home, WELCOME_SEED_FILE), seedMarker);
+    writeLines(LINES);
+    const index = fakeIndex((p) => (p === LINES[0] ? revise(VAGUE) : ready()));
+    const { stdout, trailer, creates } = await reseed(index);
+    expect(stdout).toBe("");
+    expect(index.prepared.map((c) => c.payload)).toEqual(LINES);
+    expect(creates.map((c) => c.arguments?.description)).toEqual(LINES.slice(1));
+    expect(trailer).toMatchObject({ welcome: 1, intents_seeded: 2, seed_failed: 1, seed_codes: ["intent_needs_revision:vague_or_invalid"], seed_recovery_kinds: ["single", "multi", "text"] });
+    expect(readFileSync(join(home, WELCOME_STATE_FILE), "utf8")).toBe(state);
+    expect(readFileSync(join(home, WELCOME_SEED_FILE), "utf8")).toBe(seedMarker);
+    const files = reseedMarkers();
+    expect(files).toHaveLength(1);
+    const m = JSON.parse(readFileSync(join(home, "memory", files[0]!), "utf8"));
+    expect(m).toMatchObject({ selected: 3, created: 2, failed: 1, codes: ["intent_needs_revision:vague_or_invalid"] });
+    expect(m.refused.map((r: { line: string }) => r.line)).toEqual([LINES[0]]);
+  });
+
+  test("a line already in Index is skipped (not prepared, not created, not counted)", async () => {
+    welcomed();
+    writeLines(LINES);
+    const index = fakeIndex(() => ready(), undefined, [{ id: "bbbbbbbb-0000-4000-8000-000000000001", summary: LINES[1]!, status: "active" }]);
+    const { trailer, creates, stdout } = await reseed(index);
+    expect(stdout).toBe("");
+    expect(index.prepared.map((c) => c.payload)).toEqual([LINES[0], LINES[2]]);
+    expect(creates.map((c) => c.arguments?.description)).toEqual([LINES[0], LINES[2]]);
+    expect(trailer).toMatchObject({ intents_seeded: 2, seed_failed: 0 });
+  });
+
+  test("the profile's section empty (the app drops it once Telegram is paired): the welcome's refused lines, verbatim", async () => {
+    welcomed();
+    writeLines([]);
+    writeFileSync(join(home, WELCOME_SEED_FILE), `${JSON.stringify({ seededAt: "x", selected: 2, created: 0, failed: 2, done: true, refused: [{ line: LINES[1], feedback: null, code: "intent_needs_revision", at: "x", keys: [] }, { line: LINES[2], feedback: null, code: "intent_needs_revision", at: "x", keys: [] }] })}\n`);
+    expect(reseedLines(home)).toEqual([LINES[1], LINES[2]]);
+    const index = fakeIndex(() => ready());
+    const { creates } = await reseed(index);
+    expect(creates.map((c) => c.arguments?.description)).toEqual([LINES[1], LINES[2]]);
+  });
+
+  test("nothing to send: no Index write, a marker with zero counts, still no stdout; Index unreachable: the same, coded list-unavailable", async () => {
+    welcomed();
+    writeLines([]);
+    const index = fakeIndex(() => ready());
+    const quiet = await reseed(index);
+    expect(quiet.stdout).toBe("");
+    expect(index.prepared).toHaveLength(0);
+    expect(quiet.creates).toHaveLength(0);
+    expect(quiet.trailer).toMatchObject({ intents_seeded: 0, seed_failed: 0 });
+    expect(reseedMarkers()).toHaveLength(1);
+    writeLines(LINES);
+    process.env.INDEX_API_KEY = FAKE_API_KEY;
+    process.env.INDEX_MCP_URL = FAKE_MCP_URL;
+    const err: string[] = [];
+    const down = (async () => new Response("down", { status: 503 })) as unknown as typeof globalThis.fetch;
+    await new Promise((r) => setTimeout(r, 5));
+    await main(["--home", home, RESEED_FLAG], { stdout: () => { throw new Error("stdout written"); }, stderr: (s) => err.push(s) }, (argv) => welcomeRun(argv, { fetch: down, timeoutMs: 200 }));
+    expect(JSON.parse(err.join(""))).toMatchObject({ fallback: "unreachable", seed_codes: ["list-unavailable"] });
+  });
 });
