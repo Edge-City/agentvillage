@@ -487,6 +487,36 @@ describe("S1 / N6 (round 2): the message cursor lags the gate by 15 minutes; the
   });
 });
 
+describe("security review: the gate reads with the plugin's own functions", () => {
+  test("the shared declined-text vectors give the same results through the gate's plugin_core", () => {
+    const dir = home();
+    const code = [
+      "import importlib.util, json, sys",
+      "from pathlib import Path",
+      `spec = importlib.util.spec_from_file_location("gate", ${JSON.stringify(scriptPath)})`,
+      "g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)",
+      `core = g.plugin_core(Path(${JSON.stringify(dir)}))`,
+      `v = json.load(open(${JSON.stringify(join(REPO, "plugins", "av-events", "tests", "vectors", "loose_key.json"))}, encoding="utf-8"))`,
+      "bad = [p for p in v['pairs'] if (core.loose_key(p['a']) == core.loose_key(p['b'])) is not p['same']]",
+      "bad += [k for k in v['keys'] if core.loose_key(k['text']) != k['key']]",
+      "print(json.dumps({'file': str(Path(core.__file__).resolve()), 'bad': bad}))",
+    ].join("\n");
+    const proc = Bun.spawnSync(["python3", "-c", code], { stdout: "pipe", stderr: "pipe" });
+    expect(proc.stderr.toString()).toBe("");
+    const out = JSON.parse(proc.stdout.toString());
+    expect(out).toEqual({ file: join(REPO, "plugins", "av-events", "_core.py"), bad: [] });
+  });
+
+  test("a quoted, padded or odd spelling of AV_RECORD_INTENTION is read exactly as the plugin reads it", () => {
+    for (const [line, on] of [["AV_RECORD_INTENTION= 1 ", true], ['AV_RECORD_INTENTION="yes"', true], ["AV_RECORD_INTENTION=maybe", false], ["AV_RECORD_INTENTION=", false], ["AV_RECORD_INTENTION=0", false]] as const) {
+      const dir = home({ recording: false });
+      writeFileSync(join(dir, ".env"), `${line}\n`);
+      messages(dir, threeSubstantive());
+      expect({ line, wake: runGate(dir).json.wakeAgent }).toEqual({ line, wake: on });
+    }
+  });
+});
+
 describe("caps", () => {
   test("recording off: tool_unavailable without waking the model", () => {
     const dir = home({ recording: false });
@@ -718,6 +748,11 @@ describe("where the gate looks", () => {
     const installed = join(dir, "scripts", "agentvillage_memory_signal_gate.py");
     copyFileSync(scriptPath, installed);
     messages(dir, threeSubstantive());
+    // Without the av-events plugin beside it there is no record_intention: never a wake.
+    expect(runGate(dir, { script: installed, env: { HERMES_HOME: join(dir, "elsewhere") } }).json).toMatchObject({ wakeAgent: false, reason: "record_intention_off" });
+    // The installer puts the plugin at $HERMES_HOME/plugins/av-events; the gate reads its switch with the plugin's own reader.
+    mkdirSync(join(dir, "plugins", "av-events"), { recursive: true });
+    copyFileSync(join(REPO, "plugins", "av-events", "_core.py"), join(dir, "plugins", "av-events", "_core.py"));
     // A different HERMES_HOME (as under a shared gateway): the file's own place wins.
     const result = runGate(dir, { script: installed, env: { HERMES_HOME: join(dir, "elsewhere") } });
     expect(result.json).toMatchObject({ wakeAgent: true, stateFile: join(dir, "memory", "heartbeat-state.json"), inputsFile: join(dir, "memory", "memory-signal-inputs.md") });

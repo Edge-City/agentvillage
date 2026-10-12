@@ -228,6 +228,7 @@ from ._core import (
     FILE_MODE,
     NO_REDIRECT_OPENER,
     env,
+    env_flag_on,
     hermes_home,
     is_redirect,
     register_literal_secret,
@@ -251,7 +252,7 @@ logger = logging.getLogger("av-events")
 TOOL_NAME = RECORD_INTENTION_TOOL
 TOOLSET = "av-events"
 SWITCH = "AV_RECORD_INTENTION"
-TRUTHY = frozenset({"1", "true", "yes", "on"})
+from ._core import TRUTHY  # noqa: E402 - the one set of "on" spellings (`_core.env_flag_on`)
 #: Index's REST origin (DATA-249). `INDEX_API_URL` overrides it; see `api_origin`.
 DEFAULT_API_URL = "https://protocol.index.network"
 API_URL_ENV = "INDEX_API_URL"
@@ -520,7 +521,7 @@ REFUSALS: dict[str, str] = {
 
 
 def switch_on() -> bool:
-    return env(SWITCH).strip().lower() in TRUTHY
+    return env_flag_on(SWITCH)
 
 
 def _text(value: Any) -> Optional[str]:

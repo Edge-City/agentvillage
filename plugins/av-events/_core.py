@@ -210,6 +210,48 @@ def env_flag_disabled(name: str) -> bool:
     return env(name).strip().lower() in DISABLED_VALUES
 
 
+#: The spellings of "on" every av-events switch accepts (`AV_RECORD_INTENTION`,
+#: `AV_INFERENCE_RUN_EVENTS`, ...). Anything else, unset and blank included, is off.
+TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def env_flag_on(name: str) -> bool:
+    """THE reader for an av-events on-switch: `env` (process environment, then
+    `$HERMES_HOME/.env`, blank in the process environment authoritative), stripped,
+    case-folded, one of TRUTHY. The memory signal gate loads this module by path and
+    calls this same function, so the gate and the plugin can never disagree."""
+    return env(name).strip().lower() in TRUTHY
+
+
+# --------------------------------------------------------------------------
+# Declined-text key (DATA-470): shared by the memory signal gate and record_intention
+# --------------------------------------------------------------------------
+
+#: Hyphens and dashes join the words around them ("co-founder" = "cofounder").
+DASHES = frozenset("-\u2010\u2011\u2012\u2013\u2014\u2015\u2212\ufe58\ufe63\uff0d")
+#: Symbols that carry meaning in a want ("C++", "C#") are kept.
+KEPT_SYMBOLS = frozenset("+#")
+
+
+def loose_key(text: Any) -> str:
+    """THE declined-text key: NFKC, casefold; letters, digits, combining marks, `+` and `#`
+    kept; hyphens and dashes dropped (joined); every other character a word break; whitespace
+    collapsed to one space. "co-founder" = "cofounder"; "Learn C++" != "Learn C", "find
+    therapist" != "find the rapist", "1:1" != "11", and vowel signs still count. The memory
+    signal gate loads this module by path and calls this same function
+    (`tests/vectors/loose_key.json` is run on both sides)."""
+    import unicodedata
+
+    folded = unicodedata.normalize("NFKC", str(text or "")).casefold()
+    out = []
+    for ch in folded:
+        category = unicodedata.category(ch)
+        if ch in DASHES or category == "Pd":
+            continue
+        out.append(ch if category[0] in ("L", "N", "M") or ch in KEPT_SYMBOLS else " ")
+    return " ".join("".join(out).split())
+
+
 # --------------------------------------------------------------------------
 # uuid v7 (RFC 9562 §5.7)
 # --------------------------------------------------------------------------

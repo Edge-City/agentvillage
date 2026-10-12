@@ -1,0 +1,83 @@
+{
+ "about": "DATA-470 declined-text key (_core.loose_key). Run by plugins/av-events/tests/test_inference_run.py (the plugin) and scripts/tests/memory-signal-gate.test.ts (the gate, through plugin_core): both sides must give these results.",
+ "pairs": [
+  {
+   "a": "Learn C++ from a mentor",
+   "b": "Learn C from a mentor",
+   "same": false
+  },
+  {
+   "a": "Hire a C# developer",
+   "b": "Hire a C developer",
+   "same": false
+  },
+  {
+   "a": "find therapist",
+   "b": "find the rapist",
+   "same": false
+  },
+  {
+   "a": "1:1 mentoring",
+   "b": "11 mentoring",
+   "same": false
+  },
+  {
+   "a": "Find a co-founder for the clinic",
+   "b": "find a cofounder for the clinic",
+   "same": true
+  },
+  {
+   "a": "Find a co—founder for the clinic!!",
+   "b": "find a cofounder for the clinic",
+   "same": true
+  },
+  {
+   "a": "  FIND   a co‐founder, for the clinic.",
+   "b": "find a cofounder for the clinic",
+   "same": true
+  },
+  {
+   "a": "Ｆｉｎｄ a cofounder for the clinic",
+   "b": "find a cofounder for the clinic",
+   "same": true
+  },
+  {
+   "a": "find cofounders for the clinic",
+   "b": "find a cofounder for the clinic",
+   "same": false
+  },
+  {
+   "a": "काम के लिए",
+   "b": "कम के लिए",
+   "same": false
+  },
+  {
+   "a": "Meet 2-3 investors",
+   "b": "Meet 23 investors",
+   "same": true
+  },
+  {
+   "a": "🌱",
+   "b": "",
+   "same": true
+  }
+ ],
+ "keys": [
+  {
+   "text": "Learn C++ from a mentor",
+   "key": "learn c++ from a mentor"
+  },
+  {
+   "text": "1:1 mentoring",
+   "key": "1 1 mentoring"
+  },
+  {
+   "text": "Find a co-founder!",
+   "key": "find a cofounder"
+  },
+  {
+   "text": "",
+   "key": ""
+  }
+ ]
+}

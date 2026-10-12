@@ -39,7 +39,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import unicodedata
 import tempfile
 import threading
 import time
@@ -50,7 +49,7 @@ try:  # POSIX; without it the file is guarded by the in-process lock only.
 except ImportError:  # pragma: no cover - Windows
     fcntl = None  # type: ignore[assignment]
 
-from ._core import DIR_MODE, FILE_MODE, derived_uuid7, env, epoch_from_iso, iso_from_epoch, iso_from_text
+from ._core import DIR_MODE, FILE_MODE, derived_uuid7, env_flag_on, epoch_from_iso, iso_from_epoch, iso_from_text, loose_key
 from ._cron import INSTALLED_JOBS_FILE, load_installed_job_ids, load_job_names, match_audit, read_usage_audit
 
 #: The installer's name for the job (`install/install_index.ts`, `cron_job_names.json`).
@@ -60,7 +59,6 @@ JOB = "memory_signal_sync"
 EVENT_TYPE = "intention.inference_run"
 #: Off until the data release registering the type is live (the door first).
 FLAG = "AV_INFERENCE_RUN_EVENTS"
-TRUTHY = frozenset({"1", "true", "yes", "on"})
 #: `AV_HOOKS_DISABLED` name that stops the event (the record is still kept).
 HOOK_NAME = "inference_run"
 
@@ -104,7 +102,8 @@ _LOCK = threading.Lock()
 
 
 def flag_on() -> bool:
-    return env(FLAG).strip().lower() in TRUTHY
+    """The plugin's one switch reader (`_core.env_flag_on`), as every other av-events switch."""
+    return env_flag_on(FLAG)
 
 
 def _int(value: Any, cap: Optional[int] = None) -> int:
@@ -259,27 +258,7 @@ def note_refused(home: str, code: str, now: float) -> Optional[dict]:
     return update_current_run(home, change, now)
 
 
-#: Hyphens and dashes join the words around them ("co-founder" = "cofounder").
-DASHES = frozenset("-\u2010\u2011\u2012\u2013\u2014\u2015\u2212\ufe58\ufe63\uff0d")
-#: Symbols that carry meaning in a want ("C++", "C#") are kept.
-KEPT_SYMBOLS = frozenset("+#")
-
-
-def loose_key(text: Any) -> str:
-    """Declined-text matching (S4, round 2): NFKC, casefold; letters, digits, combining marks, `+` and
-    `#` kept; hyphens and dashes dropped (joined); every other character a word break; whitespace
-    collapsed to one space. So "co-founder" = "cofounder", while "Learn C++" != "Learn C",
-    "find therapist" != "find the rapist", "1:1" != "11" and vowel signs still count."""
-    folded = unicodedata.normalize("NFKC", str(text or "")).casefold()
-    out = []
-    for ch in folded:
-        if ch in DASHES or unicodedata.category(ch) == "Pd":
-            continue
-        if unicodedata.category(ch)[0] in ("L", "N", "M") or ch in KEPT_SYMBOLS:
-            out.append(ch)
-        else:
-            out.append(" ")
-    return " ".join("".join(out).split())
+# `loose_key` is `_core.loose_key`: one function, shared with the memory signal gate.
 
 
 def note_recorded(home: str, intention_id: str, text: str, now: float) -> Optional[dict]:

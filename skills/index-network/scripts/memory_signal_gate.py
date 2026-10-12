@@ -135,7 +135,6 @@ INPUTS_FILE = os.path.join("memory", "memory-signal-inputs.md")
 MAX_RUN_RECORDS = 30
 INTENTIONS_MAP = os.path.join("av-events", "intentions.json")
 RECORD_SWITCH = "AV_RECORD_INTENTION"
-TRUTHY = frozenset({"1", "true", "yes", "on"})
 INFERRED_CLASS = "intent.publish.inferred.index"
 #: `_intent_approval.LIVE`: a proposal the resident has not answered yet.
 LIVE_STATES = frozenset({"unfiled", "requested", "cleared", "starting", "publishing"})
@@ -274,21 +273,36 @@ def atomic_write_json(path: Path, data: Any, *, mode: Optional[int] = None) -> N
         raise
 
 
-def dotenv_value(home: Path, name: str) -> str:
-    """`name` from the process environment, else `$HERMES_HOME/.env`, as the av-events plugin
-    reads its switches (`_core.env`): present but blank in the process environment wins."""
-    raw = os.environ.get(name)
-    if raw is not None:
-        return raw.strip()
-    text = read_text(home / ".env") or ""
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        if key.strip() == name:
-            return value.strip().strip("'\"")
-    return ""
+def plugin_core(home: Path):
+    """The av-events plugin's `_core` module, loaded by path (it is standard library only): the ONE
+    switch reader (`env_flag_on`) and the ONE declined-text key (`loose_key`), so the gate and the
+    plugin can never read a switch or a text differently. The installed plugin under
+    `$HERMES_HOME/plugins/av-events/` first, else the repository's (tests). None without either."""
+    import importlib.util
+
+    here = Path(os.path.abspath(__file__))
+    candidates = [home / "plugins" / "av-events" / "_core.py"]
+    if len(here.parents) > 3:
+        candidates.append(here.parents[3] / "plugins" / "av-events" / "_core.py")
+    for path in candidates:
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location("agentvillage_av_events_core", path)
+            if spec is None or spec.loader is None:
+                continue
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+    return None
+
+
+def record_switch_on(home: Path) -> bool:
+    """`AV_RECORD_INTENTION` exactly as the plugin reads it (`_core.env_flag_on`). Without the
+    plugin there is no `record_intention` either: off."""
+    core = plugin_core(home)
+    if core is None:
+        return False
+    os.environ["HERMES_HOME"] = str(home)  # `_core.env` falls back to this home's .env
+    return bool(core.env_flag_on(RECORD_SWITCH))
 
 
 # ---- Memory ------------------------------------------------------------------
@@ -617,12 +631,18 @@ def declines_and_open(inferred: dict[str, dict], now: float) -> tuple[int, Optio
     return declined, last, open_card
 
 
-def declined_texts(runs: list[dict], inferred: dict[str, dict]) -> list[str]:
-    """The texts this pass recorded that the resident then declined, newest first."""
+def declined_texts(runs: list[dict], inferred: dict[str, dict], key: Any = None) -> list[str]:
+    """The texts this pass recorded that the resident then declined, newest first, one per
+    declined-text key (`_core.loose_key`, the tool's own matching) when the plugin is there."""
     out: list[str] = []
+    seen: set[str] = set()
     for run in reversed(runs):
         intention_id, text = run.get("recorded_intent_id"), run.get("recorded_text")
         if isinstance(text, str) and text.strip() and inferred.get(str(intention_id), {}).get("state") == DECLINED_STATE:
+            k = key(text) if key is not None else text.strip()
+            if k in seen:
+                continue
+            seen.add(k)
             out.append(text.strip())
     return out[:MAX_DECLINED_SHOWN]
 
@@ -941,7 +961,7 @@ def gate(home: Path, memory_path: Path, state_path: Path, *, now: float) -> dict
     give_up = len(no_outcome) >= MAX_UNCOMPLETED_WAKES
     if not evidence:
         exit_branch, reason, error_code = "gated_no_change", "no_evidence", None
-    elif dotenv_value(home, RECORD_SWITCH).lower() not in TRUTHY:
+    elif not record_switch_on(home):
         exit_branch, reason, error_code = "tool_unavailable", "record_intention_off", "tool_unavailable"
     elif map_error:
         exit_branch, reason, error_code = "error", map_error, "io_error"
@@ -988,7 +1008,7 @@ def gate(home: Path, memory_path: Path, state_path: Path, *, now: float) -> dict
             goals=goals,
             messages=messages_for_model(messages or []),
             removed=removed,
-            declined=declined_texts(runs, inferred),
+            declined=declined_texts(runs, inferred, getattr(plugin_core(home), "loose_key", None)),
             declined_count=declined_count,
             memory=memory,
             messages_note=messages_note,

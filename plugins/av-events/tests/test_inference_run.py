@@ -712,3 +712,90 @@ def test_round2_dashes_case_spacing_and_width_are_one_text(plugin):
                     "Ｆｉｎｄ a cofounder for the clinic"):
         assert ir.loose_key(variant) == key
     assert ir.loose_key("find cofounders for the clinic") != key
+
+
+# --------------------------------------------------------------------------
+# Round 2 security review: one switch reader, one declined-text key, the existing emit gate
+# --------------------------------------------------------------------------
+
+VECTORS = Path(__file__).resolve().parent / "vectors" / "loose_key.json"
+
+
+def _gate_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("memory_signal_gate_under_test", GATE)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_one_declined_text_key_shared_vectors(plugin):
+    import sys as _sys
+
+    core = _sys.modules[f"{plugin.__name__}._core"]
+    ir = _sys.modules[f"{plugin.__name__}._inference_run"]
+    assert ir.loose_key is core.loose_key
+    vectors = json.loads(VECTORS.read_text(encoding="utf-8"))
+    for pair in vectors["pairs"]:
+        assert (core.loose_key(pair["a"]) == core.loose_key(pair["b"])) is pair["same"], pair
+    for item in vectors["keys"]:
+        assert core.loose_key(item["text"]) == item["key"], item
+
+
+SPELLINGS = ["1", "1 ", " true", "TRUE", "yes", "on", "0", "", "off", "false", "maybe", '"1"', "'1'", "1\t", None]
+
+
+@pytest.mark.parametrize("where", ["process", "dotenv"])
+def test_one_switch_reader_the_gate_and_every_plugin_switch_agree(plugin, home, monkeypatch, where):
+    import sys as _sys
+
+    core = _sys.modules[f"{plugin.__name__}._core"]
+    ri = _sys.modules[f"{plugin.__name__}._record_intention"]
+    ir = _sys.modules[f"{plugin.__name__}._inference_run"]
+    gate = _gate_module()
+    seen = {}
+    for value in SPELLINGS:
+        for name in ("AV_RECORD_INTENTION", "AV_INFERENCE_RUN_EVENTS"):
+            monkeypatch.delenv(name, raising=False)
+        env_file = home / ".env"
+        if value is None:
+            env_file.unlink(missing_ok=True)
+        elif where == "process":
+            monkeypatch.setenv("AV_RECORD_INTENTION", value)
+            monkeypatch.setenv("AV_INFERENCE_RUN_EVENTS", value)
+        else:
+            env_file.write_text(f"AV_RECORD_INTENTION={value}\nAV_INFERENCE_RUN_EVENTS={value}\n")
+            # A fresh mtime so the memoised .env is re-read.
+            os.utime(env_file, ns=(time.time_ns() + len(seen), time.time_ns() + len(seen)))
+        reference = core.env_flag_on("AV_RECORD_INTENTION")
+        answers = (ri.switch_on(), ir.flag_on(), gate.record_switch_on(home), core.env_flag_on("AV_INFERENCE_RUN_EVENTS"))
+        assert answers == (reference,) * 4, (where, value, answers)
+        seen[repr(value)] = reference
+    # The spellings themselves, as Hermes's own truthiness reads them.
+    expected_on = {"'1'", "'1 '", "' true'", "'TRUE'", "'yes'", "'on'", "'1\\t'"}
+    if where == "dotenv":
+        expected_on |= {"'\"1\"'", "\"'1'\""}  # a quoted .env value is unquoted, as the plugin reads .env
+    assert {k for k, v in seen.items() if v} == expected_on
+
+
+@pytest.mark.parametrize("arrange", ["token_revoked", "events_disabled", "cron_run_disabled"])
+def test_the_run_event_goes_only_where_every_other_event_may(plugin, ctx, monkeypatch, box, av, arrange):
+    """No consent bypass: the event is emitted by the cron tail through `Collector.emit`, so the
+    box's own gates hold (a revoked token is the control plane's withdrawal; AV_EVENTS_ENABLED=0;
+    the cron tail switched off). There is no other box-side consent gate to reuse."""
+    monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
+    monkeypatch.setenv("AV_INFERENCE_RUN_EVENTS", "1")
+    plugin.register(ctx)
+    ctx.fire("on_session_start", session_id="s", model="m", platform="telegram")
+    box.run(woke=False, exit_branch="gated_no_change", finished_at=iso(84))
+    box.execution()
+    if arrange == "token_revoked":
+        monkeypatch.setenv("AV_EVENTS_TOKEN", "")
+    elif arrange == "events_disabled":
+        monkeypatch.setenv("AV_EVENTS_ENABLED", "0")
+    else:
+        monkeypatch.setenv("AV_HOOKS_DISABLED", "cron_run")
+    plugin._COLLECTOR.reload_config()
+    plugin._COLLECTOR.cron_tick()
+    assert events(av, plugin) == []
