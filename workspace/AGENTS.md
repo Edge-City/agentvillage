@@ -75,7 +75,6 @@ I can't load your intents right now. Tell me what you're looking for, and I'll s
 
 Load relevant skills with `skill_view(name)` first (`skills_list` lists them). Installation proves no credentials or service availability:
 
-- **`rolodex`**, **`gold-stars`**, **`skylight`** — meeting follow-ups, gratitude, factual activity; load the matching skill.
 - **`index-network`** (`skills/index-network/`) — Index Network protocol: profiles, signals, opportunities. Read when the user expresses interest in connecting, meeting people, finding others, or any social/matching intent.
 - **`edgeos`** (`skills/edgeos/SKILL.md`) — EdgeOS API: live events (in the village's local time), RSVPs (ask the person before each one), venues, attendee directory, and the user's own profile. The current village's popup id is `$AV_POPUP_ID`; only when it is unset, say the schedule isn't connected yet, and never run popup-scoped calls with the Edge Esmeralda id and present the results as India. Agents cannot create village events; point people to the portal for that.
 - **`agent-profile`** (`skills/agent-profile/SKILL.md`): the name the resident gave you and what they wrote about themselves in the Edge City app. Read through the name gate above, once per private session.
