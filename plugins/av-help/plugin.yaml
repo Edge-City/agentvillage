@@ -1,0 +1,5 @@
+name: av-help
+version: 0.1.0
+description: "A bare /help in chat is Hermes's built-in command list: every command and skill, dumped. At register() this plugin adds one pre_gateway_dispatch hook that rewrites a bare /help (also /help@botname) into the resident's own question, 'help - what can you do for me?', so the agent answers it in its own words from the 'When asked for help' section of AGENTS.md. Anything else, /help with arguments included, passes through untouched. No tools, no network, no state."
+author: Edge City
+kind: backend

@@ -79,6 +79,7 @@ import {
 } from "./config";
 import { configureTelegramDisplay } from "./display_defaults";
 import { configureAvDisplay } from "./av_display";
+import { configureAvHelp } from "./av_help";
 import { copySkillBundles, removeRetiredSkillDirs } from "./skill_copy";
 import { hermesBin, hermesExecEnv, hermesRunner } from "./hermes_cli";
 import {
@@ -313,6 +314,7 @@ function main(): void {
   configureAvEvents();
   configureIndexLinks();
   configureAvDisplay();
+  configureAvHelp();
   // Opt-in and off the core path: a failure here is counted, never fatal.
   safeInstallRecall(SOURCE_SKILLS);
 
