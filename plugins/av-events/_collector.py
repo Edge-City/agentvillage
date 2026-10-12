@@ -1343,6 +1343,10 @@ class Collector:
             return {}
         if codes:
             logger.info("av-events: headline_flagged_tick %s", " ".join(f"{code}={count}" for code, count in sorted(codes.items())))
+            # Commit review flag 2: a dropped flag is visible on the counters too, never silent.
+            for code, count in codes.items():
+                if code.startswith(_headline_flagged.DROPPED):
+                    self.count(f"headline_{code}", count)
         return codes
 
     def _cron_event_id(self, payload: dict) -> str:

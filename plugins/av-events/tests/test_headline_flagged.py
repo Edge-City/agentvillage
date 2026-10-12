@@ -119,7 +119,12 @@ def test_no_text_reaches_the_event(live, home, av):
     assert set(strings) == {OPP, PEER, "shape_withheld", "shape"}
 
 
-# -- refused: a closed payload -------------------------------------------------
+# -- dropped and counted: a closed payload, attributed strictly ----------------
+#
+# Commit review flag 1 (attribution): the ids are checked against the trigger's
+# own shapes (proactive.ts FLAG_OPPORTUNITY_ID, FLAG_USER_ID: an Index user id is
+# a UUID). Flag 2 (suppression): a bad record or file is dropped and counted
+# (`flag_dropped_<reason>`), never silently, and never blocks the good ones.
 
 
 @pytest.mark.parametrize("record", [
@@ -130,8 +135,11 @@ def test_no_text_reaches_the_event(live, home, av):
     {k: v for k, v in RECORD.items() if k != "counterpart_index_user_id"},
     {**RECORD, "opportunity_id": "x" * 65},                             # too long
     {**RECORD, "opportunity_id": ""},
+    {**RECORD, "opportunity_id": "op 1"},
     {**RECORD, "counterpart_index_user_id": "evil bot"},                # not an id
-    {**RECORD, "counterpart_index_user_id": "https://index.network/u/x"},
+    {**RECORD, "counterpart_index_user_id": "u-arjun"},                 # not the Index user id shape (a UUID)
+    {**RECORD, "counterpart_index_user_id": PEER + "0"},
+    {**RECORD, "counterpart_index_user_id": "https://index.network/u/" + PEER},
     {**RECORD, "counterpart_index_user_id": None},
     {**RECORD, "reason_code": "lure"},
     {**RECORD, "stage": "model"},
@@ -142,40 +150,86 @@ def test_no_text_reaches_the_event(live, home, av):
     {**RECORD, "headline_length": 2.5},
     {**RECORD, "headline_length": True},
     {**RECORD, "headline_length": "23"},
+    "not a record",
 ])
-def test_a_record_not_exactly_the_shape_refuses_the_whole_file(live, home, av, record):
-    path = hand_off(home, body(dict(RECORD), record))
-    assert tick(live).get("refused") == 1
+def test_a_record_not_exactly_the_shape_is_dropped_and_counted_and_the_good_ones_still_go(live, home, av, record):
+    path = hand_off(home, body(record, dict(RECORD)))
+    codes = tick(live)
+    assert codes == {"emitted": 1, "flag_dropped_bad_record": 1}
     assert not path.exists()
-    assert flagged(av, live) == []
+    assert [e["payload"] for e in flagged(av, live)] == [RECORD]
 
 
 @pytest.mark.parametrize("data", [
     body(note="x"),                                  # an extra top-level key
     body(v=2),
     body(records=[]),
-    body(records=[dict(RECORD)] * 51),               # more than a run can flag
     body(records="x"),
     body(written_at="yesterday"),
     {"v": 1, "records": [RECORD]},                   # written_at missing
     [RECORD],
-    "not json",
 ])
-def test_a_file_not_exactly_the_shape_is_refused(live, home, av, data):
+def test_a_file_not_exactly_the_shape_is_dropped_and_counted(live, home, av, data):
     path = hand_off(home, data)
-    assert tick(live).get("refused") == 1
+    assert tick(live) == {"flag_dropped_bad_file": 1}
     assert not path.exists()
     assert flagged(av, live) == []
 
 
-def test_a_file_anyone_else_could_write_is_refused(live, home, av):
+def test_an_unreadable_file_is_dropped_and_counted(live, home, av):
+    path = hand_off(home, "not json")
+    assert tick(live) == {"flag_dropped_unreadable": 1}
+    assert not path.exists()
+
+
+def test_a_file_anyone_else_could_write_is_dropped_and_counted(live, home, av):
     path = hand_off(home, body(), mode=0o644)
-    assert tick(live).get("refused") == 1
+    assert tick(live) == {"flag_dropped_not_private": 1}
     assert not path.exists()
     assert flagged(av, live) == []
 
 
-def test_a_symlink_is_refused_and_never_followed(live, home, av, tmp_path):
+def test_an_oversized_file_is_dropped_and_counted_and_the_next_file_still_goes(live, home, av):
+    big = hand_off(home, json.dumps(body()) + " " * 40_000, name="1-1-a.json")
+    good = hand_off(home, body(), name="2-1-b.json")
+    assert tick(live) == {"flag_dropped_too_big": 1, "emitted": 1}
+    assert not big.exists() and not good.exists()
+    assert len(flagged(av, live)) == 1
+
+
+def test_a_flood_keeps_the_first_records_and_counts_the_rest(live, home, av):
+    module = sys.modules[f"{live.__name__}._headline_flagged"]
+    records = [{**RECORD, "headline_length": n} for n in range(module.RECORDS_MAX + 10)]
+    hand_off(home, body(*records))
+    assert tick(live) == {"emitted": module.RECORDS_MAX, "flag_dropped_over_cap": 10}
+    assert [e["payload"]["headline_length"] for e in flagged(av, live)] == list(range(module.RECORDS_MAX))
+
+
+def test_a_failure_on_one_file_never_stops_the_others_or_raises(live, home, av, monkeypatch):
+    module = sys.modules[f"{live.__name__}._headline_flagged"]
+    real = module.valid_file
+    calls = []
+
+    def flaky(data):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("boom")
+        return real(data)
+
+    monkeypatch.setattr(module, "valid_file", flaky)
+    first = hand_off(home, body(), name="1-1-a.json")
+    hand_off(home, body(), name="2-1-b.json")
+    assert tick(live) == {"flag_dropped_error": 1, "emitted": 1}
+    assert not first.exists()
+
+
+def test_the_drops_are_visible_on_the_collector_counters(live, home, av):
+    hand_off(home, body(), mode=0o644)
+    tick(live)
+    assert live._COLLECTOR.counters.get("headline_flag_dropped_not_private") == 1
+
+
+def test_a_symlink_is_dropped_and_never_followed(live, home, av, tmp_path):
     target = tmp_path / "elsewhere.json"
     target.write_text(json.dumps(body()))
     os.chmod(target, 0o600)
@@ -184,17 +238,16 @@ def test_a_symlink_is_refused_and_never_followed(live, home, av, tmp_path):
     os.chmod(folder, 0o700)
     link = folder / "1760250600000-1-aa.json"
     link.symlink_to(target)
-    assert tick(live).get("refused") == 1
+    assert tick(live) == {"flag_dropped_not_regular": 1}
     assert not os.path.lexists(link)
     assert target.exists()
     assert flagged(av, live) == []
 
 
-def test_a_stale_or_future_file_is_dropped(live, home, av):
+def test_a_stale_or_future_file_is_dropped_and_counted(live, home, av):
     old = hand_off(home, body(at=time.time() - 4 * 24 * 3600), name="1-1-a.json")
     ahead = hand_off(home, body(at=time.time() + 3600), name="2-1-b.json")
-    codes = tick(live)
-    assert codes.get("stale") == 1 and codes.get("refused") == 1
+    assert tick(live) == {"flag_dropped_stale": 1, "flag_dropped_future": 1}
     assert not old.exists() and not ahead.exists()
     assert flagged(av, live) == []
 
@@ -236,3 +289,26 @@ def test_the_flusher_runs_the_pass_beside_the_outcome_ask(live):
     source = open(module.__file__, encoding="utf-8").read()
     loop = source[source.index("    def _loop(self)"):source.index("    def tick(self)")]
     assert "self.outcome_tick()" in loop and "self.headline_tick()" in loop
+
+
+def test_a_record_whose_emit_raises_or_is_refused_is_counted_and_the_file_is_still_consumed(live, home, av, monkeypatch):
+    collector = live._COLLECTOR
+    real = collector.emit
+    calls = []
+
+    def flaky(event_type, payload, **refs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("boom")
+        if len(calls) == 2:
+            return None
+        return real(event_type, payload, **refs)
+
+    monkeypatch.setattr(collector, "emit", flaky)
+    third = {**RECORD, "headline_length": 7}
+    path = hand_off(home, body(dict(RECORD), dict(RECORD), third))
+    assert tick(live) == {"flag_dropped_emit_error": 1, "flag_dropped_emit_refused": 1, "emitted": 1}
+    assert not path.exists()
+    assert [e["payload"] for e in flagged(av, live)] == [third]
+    # Consumed: the next pass reads nothing.
+    assert tick(live) == {}

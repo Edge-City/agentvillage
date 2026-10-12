@@ -9,7 +9,7 @@ counterpart who sends lures.
 The trigger (`skills/index-network/scripts/proactive.ts` writeHeadlineFlags)
 never writes an event itself: it writes one file per run into
 `av-events/proactive/headline-flagged/` (0600 in a 0700 folder, by temp file
-and rename):
+and rename, at most RECORDS_MAX records):
 
     {"v": 1, "written_at": "<ISO>", "records": [<record>, ...]}
 
@@ -19,28 +19,43 @@ and each record is exactly the closed payload below. The flusher's pass
 
 **Payload (closed, every key required, no text of any kind):**
 
-- `opportunity_id`: the Index opportunity id (at most 64 of `[A-Za-z0-9_-]`);
-  also the envelope's `opportunity_id`;
+- `opportunity_id`: the Index opportunity id, the trigger's shape
+  (`[A-Za-z0-9_-]`, at most 64); also the envelope's `opportunity_id`;
 - `counterpart_index_user_id`: the card's other party's Index user id, the id
-  behind `https://index.network/u/<userId>` (same shape);
+  behind `https://index.network/u/<userId>`: a UUID, as the trigger's
+  `attachIndexLinks` (USER_ID) and FLAG_USER_ID require;
 - `reason_code`: `cleaner_withheld` | `scanner_flagged` | `shape_withheld` |
   `length_capped`;
 - `stage`: `cleaner` | `scanner` | `shape`, in the pairs the trigger writes
   (PAIRS);
 - `headline_length`: the raw headline's length in code points, an int 0..2000.
 
-**Trust boundary.** The folder is in the agent's home, where the model can
-write. A file that is not exactly this shape (an extra or missing key, a value
-out of its set, not private, a symlink, too big, stale or from the future) is
-refused whole and removed, and nothing of it is emitted or logged. That catches
-accidents and keeps text out of the event; it does not stop a forger, who could
-write a well-shaped file: the events are `agent_report` like everything this
-plugin sends.
+**Trust boundary (commit review flag 1).** The folder is in the agent's home,
+and the agent runs as the same user as the trigger: it can write a
+well-shaped file naming any Index user. Nothing on the box can tell the
+trigger's file from a forged one: no ledger here records which cards the
+trigger saw that the agent could not also write, and a nonce would sit in the
+same home. So this module checks only what it can: a private regular file
+(0600, this user, not a symlink) in a private folder, the closed shape and
+the trigger's own id shapes. The events are `agent_report` like everything
+this plugin sends; attributing a lure to a counterpart needs a check off the
+box (the data side, against Index), not here.
+
+**Drops are counted, never silent (commit review flag 2).** Each file is
+handled alone and each record alone: a record not exactly the shape, or whose
+emit raises or is refused, is dropped and counted, and the others still go; a
+file that cannot be read, is not private, is too big, is not the shape, is
+stale or is from the future is dropped and counted; past RECORDS_MAX the first
+records go and the rest are counted. Every file read is consumed (removed),
+so nothing is re-read forever, and nothing raises out of `tick`. The codes are
+`flag_dropped_<reason>` (and `emitted`); the collector logs them and keeps
+them on its counters.
 
 Off with `headline_flagged` in `AV_HOOKS_DISABLED` (the trigger then writes no
-file either). An inert plugin (no token, `AV_EVENTS_ENABLED` off) leaves the
-files for a later pass; the trigger stops writing past FILES_MAX (proactive.ts
-HEADLINE_FLAG_FILES_MAX) and this pass drops a file older than FILE_MAX_AGE_S.
+file either). An inert plugin (no token, `AV_EVENTS_ENABLED` off) does not run
+the pass and leaves the files; the trigger stops writing past its folder cap
+(proactive.ts HEADLINE_FLAG_FILES_MAX) and this pass drops a file older than
+FILE_MAX_AGE_S.
 
 Logs: codes and counts only. Python 3.11, standard library only.
 """
@@ -74,13 +89,15 @@ PAIRS = frozenset({
     ("shape_withheld", "shape"),
     ("length_capped", "cleaner"),
 })
-#: An Index id: the trigger's FLAG_ID.
-INDEX_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+#: The trigger's FLAG_OPPORTUNITY_ID (build-daily-brief-context.ts ENTITY_ID, at most 64).
+OPPORTUNITY_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+#: The trigger's FLAG_USER_ID (build-daily-brief-context.ts USER_ID): an Index user id is a UUID.
+USER_ID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 HEADLINE_LENGTH_MAX = 2000
 
-#: A run flags at most a few cards (one drop, the pending alert's cards, the follow-up's rows).
+#: The trigger writes at most this many records per file (proactive.ts HEADLINE_FLAG_RECORDS_MAX); past it the rest are counted.
 RECORDS_MAX = 50
-FILE_MAX_BYTES = 16 * 1024
+FILE_MAX_BYTES = 32 * 1024
 #: Files read per pass at most; the rest wait for the next.
 FILES_PER_TICK = 50
 #: A file older than this is dropped unsent (the buffer's own horizon).
@@ -88,21 +105,22 @@ FILE_MAX_AGE_S = MAX_BUFFER_AGE_S
 #: Clock slack between the trigger (bun) and the plugin on one machine.
 CLOCK_SLACK_S = 5 * 60
 
+#: The drop codes: `flag_dropped_<reason>`.
+DROPPED = "flag_dropped_"
+
 
 def flag_dir(state_dir: str) -> str:
     return os.path.join(state_dir, "proactive", "headline-flagged")
-
-
-def _index_id(value: Any) -> bool:
-    return isinstance(value, str) and INDEX_ID.fullmatch(value) is not None
 
 
 def valid_record(data: Any) -> Optional[dict]:
     """The payload, keys in order, or None unless `data` is exactly the closed shape."""
     if not isinstance(data, dict) or set(data) != set(PAYLOAD_KEYS):
         return None
-    length = data["headline_length"]
-    if not (_index_id(data["opportunity_id"]) and _index_id(data["counterpart_index_user_id"])):
+    opportunity, counterpart, length = data["opportunity_id"], data["counterpart_index_user_id"], data["headline_length"]
+    if not (isinstance(opportunity, str) and OPPORTUNITY_ID.fullmatch(opportunity)):
+        return None
+    if not (isinstance(counterpart, str) and USER_ID.fullmatch(counterpart)):
         return None
     if (data["reason_code"], data["stage"]) not in PAIRS:
         return None
@@ -111,71 +129,86 @@ def valid_record(data: Any) -> Optional[dict]:
     return {key: data[key] for key in PAYLOAD_KEYS}
 
 
-def valid_file(data: Any) -> Optional[tuple[float, list[dict]]]:
-    """(written, records), or None unless every key and every record is exactly the shape."""
-    if not isinstance(data, dict) or set(data) != FILE_KEYS or data["v"] != FILE_VERSION or type(data["v"]) is not int:
+def valid_file(data: Any) -> Optional[tuple[float, list]]:
+    """(written, the raw records), or None unless the file's own keys are exactly the shape.
+    The records are checked one by one (valid_record)."""
+    if not isinstance(data, dict) or set(data) != FILE_KEYS or type(data["v"]) is not int or data["v"] != FILE_VERSION:
         return None
     written = epoch_from_iso(iso_from_text(data["written_at"]))
     records = data["records"]
-    if written is None or not isinstance(records, list) or not 1 <= len(records) <= RECORDS_MAX:
+    if written is None or not isinstance(records, list) or not records:
         return None
-    payloads = [valid_record(record) for record in records]
-    if any(payload is None for payload in payloads):
-        return None
-    return written, payloads  # type: ignore[return-value]
+    return written, records
 
 
 def _count(codes: dict, code: str, n: int = 1) -> None:
-    codes[code] = codes.get(code, 0) + n
+    if n:
+        codes[code] = codes.get(code, 0) + n
 
 
-def tick(state_dir: str, emit: Callable[..., Optional[dict]], now: Optional[float] = None) -> dict:
-    """Emit the waiting records, remove their files. Returns code -> count:
-    `emitted` (events), `refused` and `stale` (files removed unsent),
-    `emit_refused` (the plugin is inert: the file waits)."""
-    now = time.time() if now is None else now
-    codes: dict[str, int] = {}
-    folder = flag_dir(state_dir)
-    for name in _listing(folder)[:FILES_PER_TICK]:
-        path = os.path.join(folder, name)
-        data, why = private_file(path, FILE_MAX_BYTES)
-        valid = valid_file(data) if why is None else None
-        if valid is None:
-            _unlink(path)
-            _count(codes, "refused")
+def _one_file(path: str, name: str, emit: Callable[..., Optional[dict]], now: float, codes: dict) -> None:
+    data, why = private_file(path, FILE_MAX_BYTES)
+    if why is not None:
+        _count(codes, DROPPED + why)
+        return
+    valid = valid_file(data)
+    if valid is None:
+        _count(codes, DROPPED + "bad_file")
+        return
+    written, records = valid
+    if written > now + CLOCK_SLACK_S:
+        _count(codes, DROPPED + "future")
+        return
+    if now - written > FILE_MAX_AGE_S:
+        _count(codes, DROPPED + "stale")
+        return
+    _count(codes, DROPPED + "over_cap", max(0, len(records) - RECORDS_MAX))
+    occurred = iso_from_epoch(written)
+    for index, record in enumerate(records[:RECORDS_MAX]):
+        payload = valid_record(record)
+        if payload is None:
+            _count(codes, DROPPED + "bad_record")
             continue
-        written, payloads = valid
-        if written > now + CLOCK_SLACK_S:
-            _unlink(path)
-            _count(codes, "refused")
-            continue
-        if now - written > FILE_MAX_AGE_S:
-            _unlink(path)
-            _count(codes, "stale")
-            continue
-        occurred = iso_from_epoch(written)
-        emitted = 0
-        for index, payload in enumerate(payloads):
+        try:
             event = emit(
                 EVENT_TYPE,
                 payload,
-                # Derived from the file and the record: a pass that stops
-                # half-way emits the same ids again, and ingest keeps one.
+                # Derived from the file and the record: the same file read
+                # twice gives the same ids, and ingest keeps one row per id.
                 event_id=derived_uuid7(int(written * 1000), f"headline_flagged:{name}:{index}"),
                 occurred_at=occurred,
                 actor="system",
                 opportunity_id=payload["opportunity_id"],
             )
-            if event is None:
-                break
-            emitted += 1
-        if emitted:
-            _count(codes, "emitted", emitted)
-        if emitted < len(payloads):
-            _count(codes, "emit_refused")
-            break  # the plugin is inert: every file waits for a later pass
-        _unlink(path)
+        except Exception:  # noqa: BLE001 - one record never stops the others
+            _count(codes, DROPPED + "emit_error")
+            continue
+        _count(codes, "emitted" if event is not None else DROPPED + "emit_refused")
+
+
+def tick(state_dir: str, emit: Callable[..., Optional[dict]], now: Optional[float] = None) -> dict:
+    """Emit the waiting records and consume their files. Returns code -> count:
+    `emitted` (events) and `flag_dropped_<reason>` (files or records dropped:
+    the private_file codes, `bad_file`, `future`, `stale`, `over_cap`,
+    `bad_record`, `emit_error`, `emit_refused`, `error`). Never raises."""
+    now = time.time() if now is None else now
+    codes: dict[str, int] = {}
+    try:
+        folder = flag_dir(state_dir)
+        names = _listing(folder)[:FILES_PER_TICK]
+    except Exception:  # noqa: BLE001
+        _count(codes, DROPPED + "error")
+        return codes
+    for name in names:
+        path = os.path.join(folder, name)
+        try:
+            _one_file(path, name, emit, now, codes)
+        except Exception:  # noqa: BLE001 - one file never stops the others
+            _count(codes, DROPPED + "error")
+        finally:
+            # Consumed whatever happened: a file is read once, never again.
+            _unlink(path)
     return codes
 
 
-__all__ = ["EVENT_TYPE", "PAIRS", "PAYLOAD_KEYS", "REASON_CODES", "STAGES", "SWITCH", "flag_dir", "tick", "valid_file", "valid_record"]
+__all__ = ["DROPPED", "EVENT_TYPE", "PAIRS", "PAYLOAD_KEYS", "REASON_CODES", "RECORDS_MAX", "STAGES", "SWITCH", "flag_dir", "tick", "valid_file", "valid_record"]

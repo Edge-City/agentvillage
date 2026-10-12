@@ -150,8 +150,9 @@ export interface TriggerResult {
   withheld?: number;
   /** DATA-487: headline flags handed to the av-events plugin (writeHeadlineFlags). */
   flagged?: number;
-  /** DATA-487: headline flags not handed over (the plugin off, its folder full, the write failed). */
-  flagUnsent?: number;
+  /** DATA-487: headline flags not handed over, and why (`flag_dropped`, `flag_dropped_reason` in the run log). */
+  flagDropped?: number;
+  flagDroppedReason?: FlagDropReason;
   /** DATA-487: flagged headlines whose card had no Index opportunity id or counterpart user id: counted, never emitted. */
   flagUnattributed?: number;
   /** A code for something the run repaired on its way (STATE_HEALED). */
@@ -547,9 +548,14 @@ export interface HeadlineFlag {
 }
 /** `headline_length`'s cap (DATA-487: an int 0..2000). */
 export const HEADLINE_LENGTH_MAX = 2000;
-/** An Index id the event may carry: the Index id shape, at most 64 characters. */
-const FLAG_ID = /^[A-Za-z0-9_-]{1,64}$/;
-const INDEX_PAGE_ID = { o: /^https:\/\/index\.network\/o\/([A-Za-z0-9_-]{1,64})$/, u: /^https:\/\/index\.network\/u\/([A-Za-z0-9_-]{1,64})$/ } as const;
+/**
+ * The ids the event may carry (commit review flag 1: the same shapes the plugin checks,
+ * plugins/av-events/_headline_flagged.py): an Index opportunity id (build-daily-brief-context.ts
+ * ENTITY_ID, at most 64) and an Index user id, a UUID (USER_ID, as attachIndexLinks keeps it).
+ */
+export const FLAG_OPPORTUNITY_ID = /^[A-Za-z0-9_-]{1,64}$/;
+export const FLAG_USER_ID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const INDEX_PAGE = { o: /^https:\/\/index\.network\/o\/([^/?#]+)$/, u: /^https:\/\/index\.network\/u\/([^/?#]+)$/ } as const;
 
 /** The ids a card carries for the detection event: the ids themselves, else the Index pages attachIndexLinks built from them. */
 export interface CardIds {
@@ -559,11 +565,12 @@ export interface CardIds {
   userUrl?: unknown;
 }
 
-/** An Index id from the id field, else from its Index page link (`https://index.network/<kind>/<id>`); null when neither holds one. */
+/** An Index id of its shape from the id field, else from its Index page link (`https://index.network/<kind>/<id>`); null when neither holds one. */
 function indexIdOf(id: unknown, url: unknown, kind: "o" | "u"): string | null {
-  if (typeof id === "string" && FLAG_ID.test(id)) return id;
-  if (typeof url === "string") return url.match(INDEX_PAGE_ID[kind])?.[1] ?? null;
-  return null;
+  const shape = kind === "o" ? FLAG_OPPORTUNITY_ID : FLAG_USER_ID;
+  if (typeof id === "string" && shape.test(id)) return id;
+  const fromPage = typeof url === "string" ? url.match(INDEX_PAGE[kind])?.[1] : undefined;
+  return fromPage && shape.test(fromPage) ? fromPage : null;
 }
 
 export interface PersonView {
@@ -1187,6 +1194,10 @@ export function headlineFlagDir(home: string): string {
 }
 /** Files waiting in headlineFlagDir at most: past it the run hands nothing over (a plugin that never reads them). */
 export const HEADLINE_FLAG_FILES_MAX = 200;
+/** Records one run hands over at most (the plugin's RECORDS_MAX): past it the first go and the rest are counted. */
+export const HEADLINE_FLAG_RECORDS_MAX = 50;
+/** Why a run's flags, or some of them, were not handed over. */
+export type FlagDropReason = "plugin_off" | "folder_full" | "write_failed" | "over_cap";
 /** The plugin's own name for this in `AV_HOOKS_DISABLED`. */
 export const HEADLINE_FLAG_SWITCH = "headline_flagged";
 
@@ -1205,37 +1216,40 @@ export function headlineFlagPluginOff(home: string): boolean {
 /**
  * Write one hand-off file for the av-events plugin: `{"v":1,"written_at":<ISO>,"records":[...]}`,
  * each record exactly the five keys of HeadlineFlag (ids, codes and a length; no name, no
- * headline, no intent, no text), 0600 in a 0700 folder, by temp file and rename. True when it was
- * written; false when the plugin is off, the folder is full or the write failed. Never throws.
+ * headline, no intent, no text), 0600 in a 0700 folder, by temp file and rename, at most
+ * HEADLINE_FLAG_RECORDS_MAX records (the caller counts the rest). Null when it was written, else
+ * why not (the plugin off, the folder full, the write failed). Never throws.
  */
-export function writeHeadlineFlags(home: string, flags: readonly HeadlineFlag[], now: Date): boolean {
-  if (flags.length === 0) return false;
+export function writeHeadlineFlags(home: string, flags: readonly HeadlineFlag[], now: Date): FlagDropReason | null {
+  if (headlineFlagPluginOff(home)) return "plugin_off";
   try {
-    if (headlineFlagPluginOff(home)) return false;
     const dir = headlineFlagDir(home);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    if (readdirSync(dir).filter((name) => name.endsWith(".json")).length >= HEADLINE_FLAG_FILES_MAX) return false;
-    const records = flags.map(({ opportunity_id, counterpart_index_user_id, reason_code, stage, headline_length }) => ({ opportunity_id, counterpart_index_user_id, reason_code, stage, headline_length }));
+    if (readdirSync(dir).filter((name) => name.endsWith(".json")).length >= HEADLINE_FLAG_FILES_MAX) return "folder_full";
+    const records = flags.slice(0, HEADLINE_FLAG_RECORDS_MAX).map(({ opportunity_id, counterpart_index_user_id, reason_code, stage, headline_length }) => ({ opportunity_id, counterpart_index_user_id, reason_code, stage, headline_length }));
     const path = join(dir, `${now.getTime()}-${process.pid}-${randomBytes(6).toString("hex")}.json`);
     const tmp = `${path}.tmp`;
     writeFileSync(tmp, `${JSON.stringify({ v: 1, written_at: now.toISOString(), records })}\n`, { mode: 0o600 });
     chmodSync(tmp, 0o600);
     renameSync(tmp, path);
-    return true;
+    return null;
   } catch {
-    return false;
+    return "write_failed";
   }
 }
 
-/** Hand a decision's flags over and say, in counts only, what happened to them (the run log's `flagged`, `flag_unsent`, `flag_unattributed`). */
-function handOffFlags(home: string, decision: Flagged, now: Date): Pick<TriggerResult, "flagged" | "flagUnsent" | "flagUnattributed"> {
+/**
+ * Hand a decision's flags over and say, in counts only, what happened to them (the run log's
+ * `flagged`, `flag_dropped` with `flag_dropped_reason`, `flag_unattributed`): a drop is never silent.
+ */
+function handOffFlags(home: string, decision: Flagged, now: Date): Pick<TriggerResult, "flagged" | "flagDropped" | "flagDroppedReason" | "flagUnattributed"> {
   const flags = decision.flags ?? [];
-  const sent = flags.length > 0 && writeHeadlineFlags(home, flags, now);
-  return {
-    ...(sent ? { flagged: flags.length } : {}),
-    ...(flags.length && !sent ? { flagUnsent: flags.length } : {}),
-    ...(decision.flagUnattributed ? { flagUnattributed: decision.flagUnattributed } : {}),
-  };
+  const unattributed = decision.flagUnattributed ? { flagUnattributed: decision.flagUnattributed } : {};
+  if (flags.length === 0) return unattributed;
+  const failed = writeHeadlineFlags(home, flags, now);
+  if (failed) return { flagDropped: flags.length, flagDroppedReason: failed, ...unattributed };
+  const sent = Math.min(flags.length, HEADLINE_FLAG_RECORDS_MAX);
+  return { flagged: sent, ...(sent < flags.length ? { flagDropped: flags.length - sent, flagDroppedReason: "over_cap" as const } : {}), ...unattributed };
 }
 
 /** Private state copies a preview in this process is using, so the hard stop can remove them. */
@@ -1351,7 +1365,7 @@ export async function runProactive(action: ProactiveAction, options: ProactiveOp
     reason: reasonCode(result.reason),
     ...(result.withheld ? { withheld: result.withheld } : {}),
     ...(result.flagged ? { flagged: result.flagged } : {}),
-    ...(result.flagUnsent ? { flag_unsent: result.flagUnsent } : {}),
+    ...(result.flagDropped ? { flag_dropped: result.flagDropped, flag_dropped_reason: result.flagDroppedReason } : {}),
     ...(result.flagUnattributed ? { flag_unattributed: result.flagUnattributed } : {}),
     ...(result.note ? { note: reasonCode(result.note) } : {}),
     ...(result.detail ? { detail: reasonCode(result.detail) } : {}),

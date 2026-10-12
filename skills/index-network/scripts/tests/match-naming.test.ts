@@ -791,7 +791,10 @@ describe("fix round 3: the cron leave-out clause names links, handles, numbers a
 // ── Detection (DATA-487): one id-only flag per withheld, flagged or cut headline ──
 
 const FLAG_KEYS = ["counterpart_index_user_id", "headline_length", "opportunity_id", "reason_code", "stage"];
-const flagsOf = (raw: string, extra: Partial<Card> = {}) => dropView(DATE, card({ headline: raw, ...extra }) as BriefOpportunity);
+/** An Index user id is a UUID (attachIndexLinks USER_ID); the flag carries only that shape (commit review flag 1). */
+const PEER = "9f8e7d6c-5b4a-4321-8fed-cba987654321";
+const PEER_URL = `https://index.network/u/${PEER}`;
+const flagsOf = (raw: string, extra: Partial<Card> = {}) => dropView(DATE, card({ headline: raw, userUrl: PEER_URL, ...extra }) as BriefOpportunity);
 
 describe("detection (DATA-487): the views flag withheld, flagged and cut headlines with ids and codes only", () => {
   test("each gate gives its reason code and stage; ids from the card; the raw length", () => {
@@ -805,13 +808,13 @@ describe("detection (DATA-487): the views flag withheld, flagged and cut headlin
     ];
     for (const [raw, reason, stage] of cases) {
       const { flags, flagUnattributed } = flagsOf(raw);
-      expect({ raw, flags, flagUnattributed }).toEqual({ raw, flags: [{ opportunity_id: "op1", counterpart_index_user_id: "op1-user", reason_code: reason, stage, headline_length: [...raw].length }], flagUnattributed: undefined });
+      expect({ raw, flags, flagUnattributed }).toEqual({ raw, flags: [{ opportunity_id: "op1", counterpart_index_user_id: PEER, reason_code: reason, stage, headline_length: [...raw].length }], flagUnattributed: undefined });
     }
     // A cut that passes is flagged too: the headline went out shortened.
     const long = "biohacking longevity cryptography interoperability decentralisation";
     const cut = flagsOf(long);
     expect((cut.view?.match as { headline: string }).headline.endsWith("…")).toBe(true);
-    expect(cut.flags).toEqual([{ opportunity_id: "op1", counterpart_index_user_id: "op1-user", reason_code: "length_capped", stage: "cleaner", headline_length: [...long].length }]);
+    expect(cut.flags).toEqual([{ opportunity_id: "op1", counterpart_index_user_id: PEER, reason_code: "length_capped", stage: "cleaner", headline_length: [...long].length }]);
   });
 
   test("a headline that goes out whole, or none at all, flags nothing; the resident's intent never flags", () => {
@@ -825,7 +828,7 @@ describe("detection (DATA-487): the views flag withheld, flagged and cut headlin
 
   test("a flag holds exactly the five keys, and no text: no headline, no name, no intent, no summary", () => {
     const lure = "Telegram handle evilbot";
-    const { flags } = dropView(DATE, card({ headline: lure, matchedIntentText: "my private intent" }) as BriefOpportunity);
+    const { flags } = dropView(DATE, card({ headline: lure, matchedIntentText: "my private intent", userUrl: PEER_URL }) as BriefOpportunity);
     expect(flags).toHaveLength(1);
     expect(Object.keys(flags![0]).sort()).toEqual(FLAG_KEYS);
     const text = json(flags);
@@ -841,16 +844,29 @@ describe("detection (DATA-487): the views flag withheld, flagged and cut headlin
   test("B, C and D flag too: the evening and follow-up cards by their Index pages, the pending alert by its opportunity id and the card's user id", () => {
     const now = new Date("2026-10-12T09:30:00Z");
     const lure = "Telegram handle evilbot";
-    const evening = eveningView(DATE, { name: "Arjun", matchHeadline: lure, userUrl: "https://index.network/u/u-arjun", opportunityUrl: "https://index.network/o/o-arjun" } as never);
-    expect(evening.flags).toEqual([{ opportunity_id: "o-arjun", counterpart_index_user_id: "u-arjun", reason_code: "shape_withheld", stage: "shape", headline_length: 23 }]);
-    const follow = followUpView(DATE, { signals: [], needsAttention: [{ name: "Maya", matchHeadline: lure, userUrl: "https://index.network/u/u-maya", opportunityUrl: "https://index.network/o/o-maya" }, { name: "Jon", matchHeadline: "memory systems", userUrl: "https://index.network/u/u-jon", opportunityUrl: "https://index.network/o/o-jon" }], waiting: [], newlyResolved: [] } as never);
-    expect(follow.flags).toEqual([{ opportunity_id: "o-maya", counterpart_index_user_id: "u-maya", reason_code: "shape_withheld", stage: "shape", headline_length: 23 }]);
+    const ARJUN = "11111111-2222-4333-8444-555555555555";
+    const MAYA = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const evening = eveningView(DATE, { name: "Arjun", matchHeadline: lure, userUrl: `https://index.network/u/${ARJUN}`, opportunityUrl: "https://index.network/o/o-arjun" } as never);
+    expect(evening.flags).toEqual([{ opportunity_id: "o-arjun", counterpart_index_user_id: ARJUN, reason_code: "shape_withheld", stage: "shape", headline_length: 23 }]);
+    const follow = followUpView(DATE, { signals: [], needsAttention: [{ name: "Maya", matchHeadline: lure, userUrl: `https://index.network/u/${MAYA}`, opportunityUrl: "https://index.network/o/o-maya" }, { name: "Jon", matchHeadline: "memory systems", userUrl: "https://index.network/u/u-jon", opportunityUrl: "https://index.network/o/o-jon" }], waiting: [], newlyResolved: [] } as never);
+    expect(follow.flags).toEqual([{ opportunity_id: "o-maya", counterpart_index_user_id: MAYA, reason_code: "shape_withheld", stage: "shape", headline_length: 23 }]);
     const alert = pendingView([{ card: { name: "Asha", opportunityId: "a1", userId: "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d", status: "pending", headline: lure } as BriefOpportunity, opportunityId: "a1", firstSeen: now.toISOString() }], now);
     expect(alert.flags).toEqual([{ opportunity_id: "a1", counterpart_index_user_id: "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d", reason_code: "shape_withheld", stage: "shape", headline_length: 23 }]);
   });
 
   test("a flagged card with no Index opportunity id or no counterpart id is counted, never emitted with a guessed or partial id", () => {
-    for (const extra of [{ userUrl: undefined }, { opportunityId: undefined, opportunityUrl: undefined }, { userUrl: "https://evil.example/u/x" }, { userId: "not an id!", userUrl: undefined }]) {
+    for (const extra of [
+      { userUrl: undefined },
+      { opportunityId: undefined, opportunityUrl: undefined },
+      { userUrl: `https://evil.example/u/${PEER}` },
+      { userId: "not an id!", userUrl: undefined },
+      // Commit review flag 1: only the Index user id shape (a UUID), from the id or its Index page.
+      { userUrl: "https://index.network/u/op1-user" },
+      { userId: "u-arjun", userUrl: undefined },
+      { userUrl: `https://index.network/u/${PEER}0` },
+      { opportunityId: "x".repeat(65), opportunityUrl: undefined },
+      { opportunityId: undefined, opportunityUrl: "https://index.network/o/op 1" },
+    ]) {
       const result = flagsOf("Telegram handle evilbot", extra as Partial<Card>);
       expect({ extra, flags: result.flags, flagUnattributed: result.flagUnattributed, withheld: result.withheld }).toEqual({ extra, flags: undefined, flagUnattributed: 1, withheld: 1 });
     }
@@ -872,7 +888,7 @@ describe("detection (DATA-487): the trigger hands the flags to the av-events plu
         home,
         now: () => new Date("2026-10-12T06:30:00Z"),
         lock: { waitMs: 50, pollMs: 5 },
-        drop: async () => ({ opportunity: card({ headline: "Telegram handle evilbot", matchedIntentText: "my private intent", ...extra }) as BriefOpportunity }),
+        drop: async () => ({ opportunity: card({ headline: "Telegram handle evilbot", matchedIntentText: "my private intent", userUrl: PEER_URL, ...extra }) as BriefOpportunity }),
       });
       return { home, result };
     } finally {
@@ -904,7 +920,7 @@ describe("detection (DATA-487): the trigger hands the flags to the av-events plu
       expect(Object.keys(body).sort()).toEqual(["records", "v", "written_at"]);
       expect(body.v).toBe(1);
       expect(body.written_at).toBe("2026-10-12T06:30:00.000Z");
-      expect(body.records).toEqual([{ opportunity_id: "op1", counterpart_index_user_id: "op1-user", reason_code: "shape_withheld", stage: "shape", headline_length: 23 }]);
+      expect(body.records).toEqual([{ opportunity_id: "op1", counterpart_index_user_id: PEER, reason_code: "shape_withheld", stage: "shape", headline_length: 23 }]);
       for (const secret of ["Telegram", "evilbot", "Maya", "Rao", "private intent", SUMMARY, "accept", "sig="]) expect({ secret, hit: raw.includes(secret) }).toEqual({ secret, hit: false });
       expect((await logOf(home)).at(-1)).toMatchObject({ action: "drop-midday", decision: "woke", withheld: 2, flagged: 1 });
     } finally {
@@ -912,17 +928,68 @@ describe("detection (DATA-487): the trigger hands the flags to the av-events plu
     }
   });
 
-  test("the plugin off (no token, AV_EVENTS_ENABLED off, `headline_flagged` disabled): nothing handed over, counted as unsent", async () => {
+  test("the plugin off (no token, AV_EVENTS_ENABLED off, `headline_flagged` disabled): nothing handed over, counted as dropped with the reason", async () => {
     const { rmSync } = await import("node:fs");
     for (const dotenv of ["", "AV_EVENTS_TOKEN=t\nAV_EVENTS_ENABLED=0\n", "AV_EVENTS_TOKEN=t\nAV_HOOKS_DISABLED=pre_tool_call, Headline_Flagged\n"]) {
       const { home } = await run(dotenv);
       try {
         expect({ dotenv, files: (await files(home)).length }).toEqual({ dotenv, files: 0 });
         const last = (await logOf(home)).at(-1);
-        expect({ dotenv, flagged: last.flagged, unsent: last.flag_unsent }).toEqual({ dotenv, flagged: undefined, unsent: 1 });
+        expect({ dotenv, flagged: last.flagged, dropped: last.flag_dropped, reason: last.flag_dropped_reason }).toEqual({ dotenv, flagged: undefined, dropped: 1, reason: "plugin_off" });
       } finally {
         rmSync(home, { recursive: true, force: true });
       }
+    }
+  });
+
+  test("a full folder (a plugin that never reads): nothing handed over, `flag_dropped` with `folder_full` (commit review flag 2)", async () => {
+    const { mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+    const { home } = await run("AV_EVENTS_TOKEN=t\n");
+    try {
+      const dir = join(home, "av-events", "proactive", "headline-flagged");
+      for (const f of await files(home)) rmSync(f);
+      mkdirSync(dir, { recursive: true });
+      const max = (proactive as Record<string, unknown>).HEADLINE_FLAG_FILES_MAX as number;
+      for (let i = 0; i < max; i++) writeFileSync(join(dir, `old-${i}.json`), "{}");
+      const saved = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
+      for (const k of ENV) delete process.env[k];
+      try {
+        const again = await runProactive("drop-evening", {
+          home,
+          now: () => new Date("2026-10-12T13:30:00Z"),
+          lock: { waitMs: 50, pollMs: 5 },
+          drop: async () => ({ opportunity: card({ headline: "Telegram handle evilbot", userUrl: PEER_URL }) as BriefOpportunity }),
+        });
+        expect(again.reason).toBe("woke");
+      } finally {
+        for (const k of ENV) if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k];
+      }
+      expect((await files(home)).length).toBe(max);
+      expect((await logOf(home)).at(-1)).toMatchObject({ flag_dropped: 1, flag_dropped_reason: "folder_full" });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("past the per-run cap the first records go and the rest are counted (`over_cap`)", async () => {
+    const { readFileSync: readAbs, rmSync, mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const max = (proactive as Record<string, unknown>).HEADLINE_FLAG_RECORDS_MAX as number;
+    const home = mkdtempSync(join(tmpdir(), "av-flag-cap-"));
+    mkdirSync(join(home, "memory"), { recursive: true });
+    writeFileSync(join(home, ".env"), "AV_EVENTS_TOKEN=t\n");
+    const saved = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
+    for (const k of ENV) delete process.env[k];
+    try {
+      const now = new Date("2026-10-12T06:30:00Z");
+      const cards = Array.from({ length: max + 5 }, (_, i) => ({ card: { name: `Asha ${i}`, opportunityId: `a${i}`, userId: PEER, status: "pending", headline: "Telegram handle evilbot" } as BriefOpportunity, opportunityId: `a${i}`, firstSeen: now.toISOString() }));
+      await runProactive("pending", { home, now: () => now, lock: { waitMs: 50, pollMs: 5 }, pending: async () => ({ cards }) });
+      const [file] = await files(home);
+      expect(JSON.parse(readAbs(file, "utf8")).records.map((r: { opportunity_id: string }) => r.opportunity_id)).toEqual(cards.slice(0, max).map((c) => c.opportunityId));
+      expect((await logOf(home)).at(-1)).toMatchObject({ action: "pending", flagged: max, flag_dropped: 5, flag_dropped_reason: "over_cap" });
+    } finally {
+      for (const k of ENV) if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k];
+      rmSync(home, { recursive: true, force: true });
     }
   });
 
