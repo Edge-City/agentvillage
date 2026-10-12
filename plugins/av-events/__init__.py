@@ -21,7 +21,7 @@ import re
 import time
 from typing import Any, Callable, Optional
 
-from . import _approval, _approvals_reminder, _card_events, _edgeos, _intent_approval, _outcome_ask, _share_vote, _terminal_args
+from . import _approval, _approvals_reminder, _edgeos, _intent_approval, _outcome_ask, _share_vote, _terminal_args
 from ._collector import Collector, guarded, hermes_version, overlay_ref
 from ._consent import TOOL_NAME as CONSENT_TOOL_NAME
 from ._consent import register_consent_tool
@@ -36,6 +36,8 @@ from ._core import (
     uuid7,
 )
 from ._cron import cron_job_id_from
+# DATA-470 family, on its own line so it merges beside other lanes' imports.
+from . import _card_events
 from ._intentions import IntentionCall, classify_tool, valid_id
 from ._intentions import plan as plan_intentions
 from ._messages import is_injected_turn, is_silent, message_payload

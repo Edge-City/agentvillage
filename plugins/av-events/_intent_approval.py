@@ -318,8 +318,10 @@ def _set_state(intention_id: str, expect, state: str, *, claim: Optional[str] = 
 
 
 def _card_close(intention_id: str, expect, end: tuple[str, str]) -> None:
-    """End the open card without moving the proposal (a grant read before the claim)."""
-    if _cards.on():
+    """End the open card without moving the proposal (a grant read before the
+    claim). Only an entry that holds an open card is written, whatever the
+    switch says now (S1): an entry without cards is never touched."""
+    if _cards.has_open_card(approval_of(_ri().lookup(intention_id))):
         _cas(intention_id, frozenset(expect), lambda _entry, ap: _cards.mark(ap, "close", end))
 
 
@@ -562,6 +564,10 @@ def _execute(intention_id: str, ap: dict, kind: str) -> Optional[Outcome]:
         apx["back"] = back
         apx["claimed_at"] = now
         apx.pop("code", None)
+        if kind == "grant":
+            # N5: the grant ends the card in the claim's own write too, so a
+            # `_card_close` that could not be saved is not lost.
+            _cards.mark(apx, "close", _cards.GRANTED)
 
     # One compare-and-set: only one caller moves `back -> starting`, and every
     # later step checks this claim id. Then the authority is read again.

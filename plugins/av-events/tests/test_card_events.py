@@ -396,7 +396,6 @@ def test_with_the_switch_off_nothing_is_emitted_and_the_map_is_unchanged(tctx, s
     declined = call(tctx, {"text": TEXT + " too", "source": "ambient"}, tool_call_id="c2")["intention_id"]
     lapsed = call(tctx, {"text": TEXT + " three", "source": "ambient"}, tool_call_id="c3")["intention_id"]
     gone = call(tctx, {"text": TEXT + " four", "source": "ambient"}, tool_call_id="c4")["intention_id"]
-    assert mods.cards.note_origin(granted, "memory_signal_sync") is False
     serve.grant(f"{INFERRED}:{granted}")
     serve.reject(f"{INFERRED}:{declined}")
     serve.expire(f"{INFERRED}:{lapsed}")
@@ -420,30 +419,174 @@ def test_a_card_opened_while_the_switch_was_off_is_never_reported(tctx, serve, m
     assert cards(av, plugin) == []
 
 
-@pytest.mark.parametrize("origin", ["memory_signal_sync", "context_goal", "chat", "other"])
-def test_the_origin_the_capture_noted_is_carried(tctx, serve, mods, av, plugin, monkeypatch, origin):
-    """The memory-signal lane's hook: `note_origin` between `open_entry` and the advance."""
-    real_open = mods.ia.open_entry
-
-    def open_and_note(intention_id, **kw):
-        code = real_open(intention_id, **kw)
-        mods.cards.note_origin(intention_id, origin)
-        return code
-
-    monkeypatch.setattr(mods.ia, "open_entry", open_and_note)
+def test_origin_is_null_even_when_the_entry_names_one(tctx, serve, mods, av, plugin):
+    """Ruling S2: the data side derives origin from intention.captured by intent_id."""
     iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    ri = mods.ri
+    with ri._Locked():
+        entries, publishes = ri._load_locked()
+        entries[iid]["origin"] = "memory_signal_sync"
+        ri._save_locked(entries, publishes)
     serve.reject(f"{INFERRED}:{iid}")
     poll(mods)
     req, _ = one_card(av, plugin, iid, "declined", "resident")
-    assert req["payload"]["origin"] == origin
+    assert req["payload"]["origin"] is None
+    assert not hasattr(mods.cards, "note_origin")
 
 
-def test_an_origin_outside_the_list_is_not_written(tctx, mods):
+# --------------------------------------------------------------------------
+# Fix round: S1 (the switch gates creation only), N1, N2, N3/N4, N5
+# --------------------------------------------------------------------------
+
+
+def test_s1_a_card_resolved_while_the_switch_was_off_is_sent_when_it_is_back(tctx, serve, mods, av, plugin,
+                                                                            monkeypatch):
+    """The refuter's probe: on at capture, off at the decline, on again."""
     iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
-    assert mods.cards.note_origin(iid, "dreaming") is False
-    assert mods.cards.note_origin(iid, TEXT) is False
-    assert "origin" not in entry(mods, iid)
-    assert mods.cards.note_origin("0199d0a4-1b2c-7d3e-8f40-123456789abc", "chat") is False  # unknown id
+    assert [e["event_type"] for e in cards(av, plugin)] == [REQUESTED]
+    monkeypatch.setenv("AV_APPROVAL_CARD_EVENTS", "0")
+    serve.reject(f"{INFERRED}:{iid}")
+    poll(mods)
+    [card] = entry(mods, iid)["approval"]["cards"]
+    assert card["resolution"] == "declined" and card["resolved_sent"] is False  # closed, not sent
+    assert [e["event_type"] for e in cards(av, plugin)] == [REQUESTED]
+    monkeypatch.setenv("AV_APPROVAL_CARD_EVENTS", "1")
+    poll(mods)  # the entry is terminal: only the sweep can send it
+    poll(mods)
+    one_card(av, plugin, iid, "declined", "resident")
+
+
+@pytest.mark.parametrize("ending", ["grant", "withdraw", "expire"])
+def test_s1_every_close_applies_with_the_switch_off(tctx, serve, index, mods, av, plugin, monkeypatch, ending):
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    key = f"{INFERRED}:{iid}"
+    monkeypatch.setenv("AV_APPROVAL_CARD_EVENTS", "0")
+    if ending == "grant":
+        serve.grant(key)
+    elif ending == "expire":
+        serve.expire(key)
+    else:
+        call(tctx, {"action": "withdraw", "intention_id": iid}, tool_call_id="c2")
+    poll(mods)
+    cs = entry(mods, iid)["approval"]["cards"]
+    assert len(cs) == 1 and cs[0]["resolution"] is not None  # closed; a re-ask opens no card while off
+    monkeypatch.setenv("AV_APPROVAL_CARD_EVENTS", "1")
+    mods.cards.sweep()
+    expected = {"grant": ("granted", "resident"), "withdraw": ("withdrawn", "system"),
+                "expire": ("expired", "timeout")}[ending]
+    evs = cards(av, plugin)
+    [res] = of(evs, RESOLVED)
+    assert (res["payload"]["resolution"], res["payload"]["decided_by"]) == expected
+
+
+def test_s1_never_on_writes_no_bytes_across_every_ending(tctx, serve, index, mods, av, plugin, monkeypatch):
+    monkeypatch.setenv("AV_APPROVAL_CARD_EVENTS", "0")
+    ids = [call(tctx, {"text": f"{TEXT} {n}", "source": "ambient"}, tool_call_id=f"c{n}")["intention_id"]
+           for n in range(3)]
+    path = Path(mods.ri.map_path())
+    serve.grant(f"{INFERRED}:{ids[0]}")
+    mods.ia.run_intent_pass(execute=False)  # a grant read with nothing started
+    before = path.read_bytes()
+    for _ in range(3):
+        mods.ia.run_intent_pass(execute=False)
+    assert path.read_bytes() == before  # repeated grant reads write nothing
+    serve.reject(f"{INFERRED}:{ids[1]}")
+    serve.expire(f"{INFERRED}:{ids[2]}")
+    poll(mods)
+    text = path.read_text(encoding="utf-8")
+    assert '"cards"' not in text and cards(av, plugin) == []
+
+
+def test_n1_flush_and_sweep_respect_the_switch(tctx, serve, mods, av, plugin, monkeypatch):
+    real = mods.cards._emit_fn
+    monkeypatch.setattr(mods.cards, "_emit_fn", lambda *a, **k: False)
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    serve.reject(f"{INFERRED}:{iid}")
+    poll(mods)
+    monkeypatch.setattr(mods.cards, "_emit_fn", real)
+    monkeypatch.setenv("AV_APPROVAL_CARD_EVENTS", "0")
+    mods.cards.flush(iid)
+    mods.cards.sweep()
+    poll(mods)
+    assert cards(av, plugin) == []  # owed while on, not sent while off
+    monkeypatch.setenv("AV_APPROVAL_CARD_EVENTS", "1")
+    mods.cards.sweep()
+    one_card(av, plugin, iid, "declined", "resident")
+
+
+@pytest.mark.parametrize("bad", [
+    "00000000-0000-0000-0000-000000000000",  # no version, no variant
+    "0199d0a4-1b2c-4d3e-8f40-123456789abc",  # v4
+    "0199d0a4-1b2c-7d3e-cf40-123456789abc",  # wrong variant
+])
+def test_n2_a_card_id_must_be_a_v7_of_the_rfc_variant(mods, bad):
+    card = {"id": bad, "requested_at": 1760200000.0, "resolution": "declined", "decided_by": "resident",
+            "resolved_at": 1760200001.0}
+    assert mods.cards.requested_payload("0199d0a4-1b2c-7d3e-8f40-123456789abc", {"source": "ambient"},
+                                        {"class": INFERRED}, card) is None
+    assert mods.cards.resolved_payload("0199d0a4-1b2c-7d3e-8f40-123456789abc", card) is None
+    with pytest.raises(ValueError):
+        mods.cards.event_id(REQUESTED, card)
+
+
+def test_n2_an_intent_id_off_the_variant_goes_out_null(mods):
+    card = {"id": "0199d0a4-1b2c-7d3e-8f40-123456789abc", "requested_at": 1760200000.0}
+    body = mods.cards.requested_payload("00000000-0000-0000-0000-000000000000", {"source": "ambient"},
+                                        {"class": INFERRED}, card)
+    assert body["intent_id"] is None
+
+
+def test_n3_first_close_wins_granted_then_revoked_before_start(tctx, serve, index, mods, av, plugin):
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    key = f"{INFERRED}:{iid}"
+    serve.grant(key)
+    mods.ia.run_intent_pass(execute=False)  # the grant is read; the start waits
+    serve.on_wait = lambda n: (1, None, {"ok": False, "status": "revoked", "task": "t", "actions": []})
+    poll(mods)
+    assert entry(mods, iid)["approval"]["state"] == "rejected" and index.requests == []
+    one_card(av, plugin, iid, "granted", "resident")  # the resident did grant it; documented
+
+
+def test_n4_first_close_wins_granted_then_the_agents_withdraw(tctx, serve, index, mods, av, plugin):
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    serve.grant(f"{INFERRED}:{iid}")
+    mods.ia.run_intent_pass(execute=False)
+    call(tctx, {"action": "withdraw", "intention_id": iid}, tool_call_id="c2")
+    poll(mods)
+    assert entry(mods, iid)["approval"]["state"] == "withdrawn" and index.requests == []
+    one_card(av, plugin, iid, "granted", "resident")
+
+
+def test_n5_a_grant_close_that_could_not_be_saved_is_closed_by_the_claim(tctx, serve, index, mods, av, plugin,
+                                                                         monkeypatch):
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    serve.grant(f"{INFERRED}:{iid}")
+    real_cas = mods.ia._cas
+    failed = {"n": 0}
+
+    def flaky(intention_id, expect, change, *, claim=None):
+        if failed["n"] == 0 and expect == frozenset({"requested"}) and claim is None:
+            failed["n"] += 1  # the `_card_close` write is lost
+            return None
+        return real_cas(intention_id, expect, change, claim=claim)
+
+    monkeypatch.setattr(mods.ia, "_cas", flaky)
+    poll(mods)
+    assert failed["n"] == 1 and len(index.creates()) == 1
+    one_card(av, plugin, iid, "granted", "resident")
+
+
+def test_n5_a_lost_grant_close_in_a_resume_pass_is_closed_by_a_later_pass(tctx, serve, mods, av, plugin,
+                                                                          monkeypatch):
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    serve.grant(f"{INFERRED}:{iid}")
+    real_cas = mods.ia._cas
+    monkeypatch.setattr(mods.ia, "_cas", lambda *a, **k: None)  # every map write fails
+    mods.ia.run_intent_pass(execute=False)
+    assert entry(mods, iid)["approval"]["cards"][-1]["resolution"] is None
+    monkeypatch.setattr(mods.ia, "_cas", real_cas)
+    mods.ia.run_intent_pass(execute=False)  # the grant is read again: closed now
+    one_card(av, plugin, iid, "granted", "resident")
 
 
 def test_kind_for(mods):

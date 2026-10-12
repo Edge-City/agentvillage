@@ -35,18 +35,32 @@ and `digest.shared`): `derived_uuid7(<ms of the card's own timestamp>,
 collector left unsent.
 
 **The switch.** `AV_APPROVAL_CARD_EVENTS` (`1|true|yes|on`), process
-environment only like the rest of Lane B, default OFF. Off, nothing is
+environment only like the rest of Lane B, default OFF. Never on, nothing is
 recorded on the map and nothing is emitted: the map's bytes are exactly what
 they were before this module existed. Turn it on only after the data release
 that registers both event types is live (the door goes first: ingest
 quarantines an unknown type). A card opened while the switch was off is never
 reported, not even when it resolves after the switch goes on.
 
+**The switch gates creation only (refutation S1).** A card is opened only
+with the switch on; a card that exists is closed whenever its end is observed,
+switch or not (an entry has `approval.cards` only because the switch was on
+when its card opened), so a rollback, or a process whose environment predates
+the gateway restart, never leaves a requested card unresolved. Sending
+(`flush`, `sweep`) is gated: a close observed while off is sent by the first
+pass after the switch is back on.
+
+**First close wins.** A card ends once. A grant read and then revoked, or the
+agent's withdraw after a grant read but before the start, leaves the card
+`granted` (the resident did grant it) while the proposal ends `rejected` or
+`withdrawn` and nothing is published. `cards_granted` counts such a card.
+
 **`kind` and `origin`.** `kind` is `intent_publish_inferred` for the inferred
 class on an ambient entry, `intent_publish_stated` for the stated class on a
-stated source, `other` for anything else. `origin` is the entry's `origin`
-when the capture recorded one (`note_origin`, the memory-signal lane's hook),
-else null.
+stated source, `other` for anything else. The fleet rules key on `kind`,
+which survives consent nulling. `origin` is always null for now (ruling S2):
+the data side derives it for research tenants from `intention.captured.origin`
+joined on `intent_id`; a later lane may thread it here.
 
 **What a payload may hold.** Uuids (`card_id`, minted here; `intent_id`, the
 map key, sent only when it is a canonical uuid, else null), the contract's
@@ -84,7 +98,6 @@ REQUESTED = "approval.card_requested"
 RESOLVED = "approval.card_resolved"
 
 CARDS_KEY = "cards"
-ORIGIN_KEY = "origin"
 #: The contract's closed lists.
 ORIGINS = ("memory_signal_sync", "context_goal", "chat", "other")
 KINDS = ("intent_publish_inferred", "intent_publish_stated", "other")
@@ -97,7 +110,9 @@ STATED_SOURCES = frozenset({"message", "onboarding", "note"})
 
 #: The contract's `uuid`: canonical, lowercase. The map is the agent's to write
 #: (same uid), so nothing read back from it is sent unchecked.
-UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+#: `card_id` is always minted here by `uuid7()`: a v7, RFC 9562 variant.
+CARD_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 
 #: One per ask: the first, two re-asks after a lapse, ten after a void, with room.
 MAX_CARDS = 16
@@ -168,12 +183,19 @@ def _close(card: dict, end: tuple[str, str], now: float) -> None:
     card["resolved_at"] = now
 
 
+def has_open_card(ap: Any) -> bool:
+    return isinstance(ap, dict) and _open_card(ap) is not None
+
+
 def mark(ap: dict, op: str, end: Optional[tuple[str, str]] = None) -> None:
     """Record a card change on the approval dict `ap`, inside the caller's
     locked compare-and-set. `op`: `open` (a new ask), `open_close` (an ask
     whose answer arrived in the same reply), `close` (the open card ended).
-    A no-op with the switch off, and never raises."""
-    if not on():
+    Opening needs the switch on; a close applies to an open card whatever the
+    switch says, and is a no-op on an entry without one. Never raises."""
+    if op in ("open", "open_close") and not on():
+        return
+    if op == "close" and not has_open_card(ap):
         return
     try:
         now = _clock()
@@ -197,28 +219,6 @@ def mark(ap: dict, op: str, end: Optional[tuple[str, str]] = None) -> None:
         logger.warning("av-events: card_events mark_failed=%s", type(exc).__name__)
 
 
-def note_origin(intention_id: str, origin: Any) -> bool:
-    """Record where an intention came from (`memory_signal_sync`,
-    `context_goal`, `chat`, `other`) on its map entry, so its cards carry it.
-    Call it after `open_entry` and before the proposal is advanced. True when
-    it was written; an origin outside the contract's list is not."""
-    if not on() or origin not in ORIGINS:
-        return False
-    ri = _ri()
-    try:
-        with ri._Locked():
-            entries, publishes = ri._load_locked()
-            entry = entries.get(intention_id)
-            if not isinstance(entry, dict):
-                return False
-            entry[ORIGIN_KEY] = origin
-            ri._save_locked(entries, publishes)
-            return True
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("av-events: card_events origin_write_failed=%s", type(exc).__name__)
-        return False
-
-
 def _iso(value: Any) -> Optional[str]:
     return iso_from_epoch(value)
 
@@ -227,15 +227,19 @@ def _uuid(value: Any) -> Optional[str]:
     return value if isinstance(value, str) and UUID.fullmatch(value) else None
 
 
+def _card_id(value: Any) -> Optional[str]:
+    return value if isinstance(value, str) and CARD_ID.fullmatch(value) else None
+
+
 def requested_payload(intention_id: str, entry: dict, ap: dict, card: dict) -> Optional[dict]:
     requested_at = _iso(card.get("requested_at"))
-    if requested_at is None or _uuid(card.get("id")) is None:
+    if requested_at is None or _card_id(card.get("id")) is None:
         return None
-    origin = entry.get(ORIGIN_KEY)
     return {
         "card_id": card["id"],
         "intent_id": _uuid(intention_id),
-        "origin": origin if origin in ORIGINS else None,
+        # Null for now (ruling S2): the data side joins intention.captured.origin on intent_id.
+        "origin": None,
         "kind": kind_for(ap.get("class"), entry.get("source")),
         "requested_at": requested_at,
     }
@@ -243,7 +247,7 @@ def requested_payload(intention_id: str, entry: dict, ap: dict, card: dict) -> O
 
 def resolved_payload(intention_id: str, card: dict) -> Optional[dict]:
     requested_at, resolved_at = _iso(card.get("requested_at")), _iso(card.get("resolved_at"))
-    if (requested_at is None or resolved_at is None or _uuid(card.get("id")) is None
+    if (requested_at is None or resolved_at is None or _card_id(card.get("id")) is None
             or card.get("resolution") not in RESOLUTIONS or card.get("decided_by") not in DECIDERS):
         return None
     return {
@@ -260,7 +264,7 @@ def event_id(event_type: str, card: dict) -> str:
     """Fixed by the card: a re-send is the same row at ingest. Its inputs are
     the event type (a constant), the card's uuid and one of its times: nothing
     from the card's text, the intention or the resident."""
-    if event_type not in (REQUESTED, RESOLVED) or _uuid(card.get("id")) is None:
+    if event_type not in (REQUESTED, RESOLVED) or _card_id(card.get("id")) is None:
         raise ValueError("card_id")
     at = card.get("resolved_at") if event_type == RESOLVED else card.get("requested_at")
     return derived_uuid7(int(float(at) * 1000), f"av-events|{event_type}|{card['id']}")
@@ -359,8 +363,8 @@ __all__ = [
     "event_id",
     "flush",
     "kind_for",
+    "has_open_card",
     "mark",
-    "note_origin",
     "on",
     "resolution_of",
     "set_emitter",
