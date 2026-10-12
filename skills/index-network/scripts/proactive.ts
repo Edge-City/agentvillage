@@ -1197,7 +1197,7 @@ export const HEADLINE_FLAG_FILES_MAX = 200;
 /** Records one run hands over at most (the plugin's RECORDS_MAX): past it the first go and the rest are counted. */
 export const HEADLINE_FLAG_RECORDS_MAX = 50;
 /** Why a run's flags, or some of them, were not handed over. */
-export type FlagDropReason = "plugin_off" | "folder_full" | "write_failed" | "over_cap";
+export type FlagDropReason = "plugin_off" | "folder_full" | "unwritable" | "over_cap";
 /** The plugin's own name for this in `AV_HOOKS_DISABLED`. */
 export const HEADLINE_FLAG_SWITCH = "headline_flagged";
 
@@ -1234,7 +1234,7 @@ export function writeHeadlineFlags(home: string, flags: readonly HeadlineFlag[],
     renameSync(tmp, path);
     return null;
   } catch {
-    return "write_failed";
+    return "unwritable";
   }
 }
 
