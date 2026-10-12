@@ -38,11 +38,16 @@ on evidence:
   inferred approval card is open, none within DECLINE_COOLDOWN_S of a declined inferred
   suggestion; and none without `record_intention` (`AV_RECORD_INTENTION` off: `tool_unavailable`).
 * **State.** Every exit records `lastRunAt`, the reason and the counters. The evidence pointers
-  (`lastMemoryHash`, `lastGoalsHash`, `messageCursor`) move only when the evidence was dealt with:
-  at once on `gated_no_change`; for a wake, once that run completed (the next run commits its
-  `pendingEvidence`). A cap, the switch off, an unreadable map or an exception leaves them, so no
-  evidence the model never saw is discarded; a wake that never completes is retried at most
-  MAX_UNCOMPLETED_WAKES times on the same evidence, then given up as an error.
+  (memory hash, goals hash, and the message cursor with its overlap keys) live in the gate-owned
+  `av-events/memory_signal_runs.json` (the model never writes it; `memorySignals` keeps a mirror)
+  and move only when the evidence was dealt with: at once on `gated_no_change`; for a wake, once
+  that run completed (the next run commits the woken record's pointers). A cap, the switch off, an
+  unreadable map, an exception or a provider failure of a woken run leaves them, so no evidence the
+  model never saw is discarded. Two wakes on the same evidence that ran and never wrote their
+  outcome, and the next run gives up: it commits the newer of those wakes' pointers (later evidence
+  stays pending) and reports an error without waking. The cursor is committed CURSOR_LAG_S behind
+  the gate's time and the read stops at that time, so a message stamped before the read but written
+  after it is counted the next night, and none twice.
 * **Run record**: one entry per run in `$HERMES_HOME/av-events/memory_signal_runs.json`
   (counts and codes; the text of an intention this pass recorded, kept on the
   box only so a declined one is never proposed again). The av-events plugin
@@ -427,11 +432,22 @@ def is_delegate_child(source: Any, model_config: Any) -> bool:
     return isinstance(config, dict) and config.get("_delegate_from") is not None
 
 
-def resident_messages(state_db: Path, since: float) -> tuple[Optional[list[tuple[float, str]]], Optional[str]]:
-    """The resident's own turns after `since`, oldest first, or (None, code) when the store
-    cannot be read. Read only; a direct chat or a local surface, its reset, daily and compression
-    continuations included, never a delegate child; user turns that Hermes did not inject; no slash
-    command. A turn compression copied from a parent into its child is counted once (same text)."""
+def message_key(stamp: float, text: str) -> str:
+    """A turn's identity across sessions: compression copies keep the parent's timestamp and text
+    byte for byte (`hermes_state_messages.py` `_clone_message_rows`), a genuine resend does not."""
+    return hashlib.sha256(f"{stamp:.6f}|{text}".encode("utf-8", errors="replace")).hexdigest()[:32]
+
+
+Message = tuple[float, str, str]  # (timestamp, text, key)
+
+
+def resident_messages(state_db: Path, since: float, until: float,
+                      skip: frozenset = frozenset()) -> tuple[Optional[list[Message]], Optional[str]]:
+    """The resident's own turns stamped in (`since`, `until`], oldest first, minus the keys in `skip`
+    (counted by the previous run's overlap window), or (None, code) when the store cannot be read.
+    Read only; a direct chat or a local surface, its reset, daily and compression continuations
+    included, never a delegate child; user turns that Hermes did not inject; no slash command. A
+    turn compression copied from a parent into its child is counted once (same timestamp and text)."""
     if not state_db.exists():
         return [], None
     try:
@@ -448,6 +464,8 @@ def resident_messages(state_db: Path, since: float) -> tuple[Optional[list[tuple
             "m.content IS NOT NULL",
             "m.content != ''",
             "m.timestamp > ?",
+            # N6: never a row stamped after the gate's own time (it is counted next night, once).
+            "m.timestamp <= ?",
             f"(s.chat_type = 'dm' OR ((s.chat_type IS NULL OR s.chat_type = '') AND s.source IN ({local})))",
             "s.source NOT IN ('cron', 'subagent')",
         ]
@@ -461,13 +479,13 @@ def resident_messages(state_db: Path, since: float) -> tuple[Optional[list[tuple
         rows = conn.execute(
             f"SELECT m.timestamp, m.content, s.source, {config} FROM messages m JOIN sessions s ON s.id = m.session_id "
             f"WHERE {' AND '.join(where)} ORDER BY m.timestamp, m.id",
-            (since,),
+            (since, until),
         ).fetchall()
     except sqlite3.Error:
         return None, "session_store_unreadable"
     finally:
         conn.close()
-    out: list[tuple[float, str]] = []
+    out: list[Message] = []
     seen: set[str] = set()
     for stamp, content, source, model_config in rows:
         if is_delegate_child(source, model_config):
@@ -475,22 +493,23 @@ def resident_messages(state_db: Path, since: float) -> tuple[Optional[list[tuple
         text = str(content).strip()
         if not text or text.startswith("/") or text.startswith(INJECTED_OPENINGS):
             continue
-        key = hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
-        if key in seen:
-            continue
         try:
-            out.append((float(stamp), text))
+            when = float(stamp)
         except (TypeError, ValueError):
             continue
+        key = message_key(when, text)
+        if key in seen or key in skip:
+            continue
         seen.add(key)
+        out.append((when, text, key))
     return out, None
 
 
-def messages_for_model(messages: list[tuple[float, str]]) -> list[tuple[float, str]]:
+def messages_for_model(messages: list[Message]) -> list[tuple[float, str]]:
     """The newest MAX_MESSAGES, each cut to MAX_MESSAGE_CHARS, within MAX_MESSAGES_BYTES; oldest first."""
     chosen: list[tuple[float, str]] = []
     used = 0
-    for stamp, text in reversed(messages):
+    for stamp, text, _ in reversed(messages):
         if len(chosen) >= MAX_MESSAGES:
             break
         cut = text if len(text) <= MAX_MESSAGE_CHARS else text[:MAX_MESSAGE_CHARS].rstrip() + " …"
@@ -505,12 +524,18 @@ def messages_for_model(messages: list[tuple[float, str]]) -> list[tuple[float, s
 # ---- What the resident declined, and what is still open -------------------------------
 
 
-def read_runs(home: Path) -> list[dict]:
+def read_doc(home: Path) -> dict:
+    """The gate-owned `av-events/memory_signal_runs.json`: `runs` (one record per run) and
+    `pointers` (the committed evidence pointers). The model never writes this file (S2)."""
     try:
         data = read_json(home / RUNS_FILE)
     except Exception:
-        return []
-    runs = data.get("runs") if isinstance(data, dict) else None
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def read_runs(home: Path) -> list[dict]:
+    runs = read_doc(home).get("runs")
     return [r for r in runs if isinstance(r, dict)] if isinstance(runs, list) else []
 
 
@@ -518,11 +543,20 @@ class MapUnreadable(Exception):
     pass
 
 
-#: Branches on which the plugin closes a woken run that finished its work.
+#: Branches on which the plugin closes a woken run that finished its work. `capped` here is the
+#: tool's cap inside a woken run: the model saw the evidence (a gate cap never woke it).
 COMPLETED_BRANCHES = frozenset({"no_candidate", "candidate_already_covered", "candidate_previously_declined",
                                 "capped", "recorded"})
-#: A wake whose run never completes is retried at most this many times on the same evidence.
+#: Error codes of a woken run the provider failed (no answer, a timeout, Hermes cannot say): the
+#: model never had its chance, so it does not count toward the give-up.
+PROVIDER_FAILURES = frozenset({"model_error", "model_timeout", "unknown"})
+#: Two wakes on the same evidence that ran and never wrote their outcome; the next run gives up.
 MAX_UNCOMPLETED_WAKES = 2
+#: The message cursor is committed this far behind the gate's time: Hermes stamps a turn with the
+#: platform's event time and writes it at the turn's first flush, so a message stamped just before
+#: the read can be written after it. The overlap window's counted keys are skipped next time.
+CURSOR_LAG_S = 15 * 60
+MAX_OVERLAP_KEYS = 500
 
 
 class StateWriteFailed(Exception):
@@ -622,11 +656,21 @@ class RunsLock:
             self.fd = None
 
 
-def append_run(home: Path, record: dict) -> None:
+def append_run(home: Path, record: dict, *, pointers: Optional[dict] = None, settle: frozenset = frozenset()) -> None:
+    """Append a record and, with `pointers`, commit them; mark the woken runs in `settle` settled.
+    Every other key of the file (the plugin's notes on records included) is kept."""
     with RunsLock(home):
-        runs = read_runs(home)
+        doc = read_doc(home)
+        runs = [r for r in doc.get("runs", []) if isinstance(r, dict)] if isinstance(doc.get("runs"), list) else []
+        for run in runs:
+            if run.get("run_id") in settle:
+                run["settled"] = True
         runs.append(record)
-        atomic_write_json(home / RUNS_FILE, {"v": 1, "runs": runs[-MAX_RUN_RECORDS:]}, mode=0o600)
+        doc["v"] = 1
+        doc["runs"] = runs[-MAX_RUN_RECORDS:]
+        if pointers is not None:
+            doc["pointers"] = pointers
+        atomic_write_json(home / RUNS_FILE, doc, mode=0o600)
 
 
 def write_inputs(home: Path, text: Optional[str]) -> None:
@@ -676,7 +720,8 @@ def last_known_intents(runs: list[dict]) -> Optional[int]:
 
 def last_known(state: dict, runs: list[dict]) -> dict:
     """S3: the counters a run that could not compute its own reports: the last ones the gate wrote
-    (`memorySignals.lastSignal`), else 0 (never known), and the last listed intents."""
+    (`memorySignals.lastSignal`), else 0 (never known), and the last listed intents. A snapshot, never
+    additive: an error night repeats the last night's values."""
     signals = state.get("memorySignals") if isinstance(state.get("memorySignals"), dict) else {}
     last = signals.get("lastSignal") if isinstance(signals.get("lastSignal"), dict) else {}
 
@@ -748,14 +793,13 @@ def inputs_text(*, run_id: str, goals: list[str], messages: list[tuple[float, st
         ("## Your own memory notes about them (secondary; your housekeeping left out)", memory_lines),
     ]
     content = "\n".join(line for _, lines in sections for line in lines)
-    for _ in range(MAX_NONCE_TRIES):
-        if nonce and nonce not in content:
-            break
+    tries = 0
+    while not nonce or nonce in content:
+        # N8: every draw is checked, the last one included.
+        if tries >= MAX_NONCE_TRIES:
+            raise NonceCollision()
         nonce = new_nonce()
-    else:
-        raise NonceCollision()
-    if nonce in content:
-        raise NonceCollision()
+        tries += 1
     out = [
         "# Memory signal sync: the resident's material",
         "",
@@ -773,59 +817,76 @@ def inputs_text(*, run_id: str, goals: list[str], messages: list[tuple[float, st
 # ---- The gate ---------------------------------------------------------------------
 
 
-def run_completed(pending: dict, outcome: Any, runs: list[dict]) -> bool:
-    """A woken run finished its work: the model wrote its outcome for that run, or the tool noted a
-    capture, or the plugin closed its record on a branch that is not a failure."""
-    run_id = pending.get("runId")
-    if not run_id:
-        return False
-    if isinstance(outcome, dict) and outcome.get("runId") == run_id:
-        return True
-    for run in runs:
-        if run.get("run_id") == run_id:
-            return bool(run.get("recorded_intent_id")) or run.get("exit_branch") in COMPLETED_BRANCHES
-    return False
+def wake_status(run: dict, outcome: Any) -> str:
+    """A woken run's status, from the gate-owned record and the model's last outcome:
+    `completed` (its outcome for that run, a noted capture, or a record closed on a non-failure
+    branch), `provider` (the provider failed it: not the model's fault), or `no_outcome` (it ran and
+    never wrote its outcome; this alone counts toward the give-up)."""
+    if isinstance(outcome, dict) and outcome.get("runId") == run.get("run_id"):
+        return "completed"
+    if run.get("recorded_intent_id") or run.get("exit_branch") in COMPLETED_BRANCHES:
+        return "completed"
+    if run.get("exit_branch") == "error" and run.get("error_code") in PROVIDER_FAILURES:
+        return "provider"
+    return "no_outcome"
+
+
+def committed_pointers(doc: dict, signals: dict) -> dict:
+    """The committed evidence pointers: the gate-owned copy, else (first run of this gate, or a lost
+    file) the mirror in `memorySignals`."""
+    pointers = doc.get("pointers")
+    if isinstance(pointers, dict):
+        return dict(pointers)
+    out: dict[str, Any] = {}
+    for field, key in (("lastMemoryHash", "memoryHash"), ("lastGoalsHash", "goalsHash"), ("messageCursor", "cursor"),
+                       ("memoryFilterVersion", "memoryFilterVersion")):
+        if field in signals:
+            out[key] = signals[field]
+    return out
 
 
 def gate(home: Path, memory_path: Path, state_path: Path, *, now: float) -> dict:
-    """The final JSON line. Writes the state, the run record and (on a wake) the model's input.
+    """The final JSON line. Writes the run record, the pointers, the state mirror and (on a wake)
+    the model's input.
 
-    The evidence pointers (`lastMemoryHash`, `lastGoalsHash`, `messageCursor`) move only when the
-    evidence was dealt with: at once on a `gated_no_change` exit; for a wake, held as
-    `pendingEvidence` and committed by the next run once that run completed (its outcome written, a
-    capture noted, or its record closed on a non-failure branch). A stop for any other reason (record
-    off, a cap, an unreadable map, an exception) leaves them, so the next run reads the same
-    evidence again; it still records `lastRunAt`, the reason and the counters. A wake that never
-    completes is retried at most MAX_UNCOMPLETED_WAKES times on the same evidence, then committed and
-    reported as an error, so a model that never writes its outcome cannot cost a wake every night."""
+    The evidence pointers (memory hash, goals hash, message cursor and its overlap keys) live in
+    the gate-owned `av-events/memory_signal_runs.json` (S2: the model rewrites heartbeat-state and
+    could drop them; `memorySignals` keeps a mirror). They move only when the evidence was dealt
+    with: at once on a `gated_no_change` exit; for a wake, when that run completed, committed by the
+    next run from the woken run's record. A cap, recording off, an unreadable map, an exception, or a
+    provider failure of a woken run leaves them, so the next run reads the same evidence. Two wakes
+    on the same evidence that ran and never wrote their outcome: the next run gives up, commits the
+    newest such wake's pointers (newer evidence stays pending) and reports
+    `error`/`state_write_failed` without waking."""
     today = village_date(now)
     run_id = uuid7(now)
     state = read_state(state_path)
     previous = state.get("memorySignals") if isinstance(state.get("memorySignals"), dict) else {}
     signals = dict(previous)
-    runs = read_runs(home)
+    doc = read_doc(home)
+    runs = [r for r in doc.get("runs", []) if isinstance(r, dict)] if isinstance(doc.get("runs"), list) else []
+    committed = committed_pointers(doc, previous)
+    outcome = previous.get("lastOutcome")
 
-    # A wake from an earlier run: commit its evidence if it completed.
-    pending = previous.get("pendingEvidence") if isinstance(previous.get("pendingEvidence"), dict) else None
-    uncompleted_wakes = 0
-    if pending is not None:
-        if run_completed(pending, previous.get("lastOutcome"), runs):
-            for key, field in (("memoryHash", "lastMemoryHash"), ("goalsHash", "lastGoalsHash"), ("cursor", "messageCursor"),
-                               ("memoryFilterVersion", "memoryFilterVersion")):
-                if key in pending:
-                    signals[field] = pending[key]
-            signals.pop("pendingEvidence", None)
-            pending = None
-        else:
-            attempts = pending.get("attempts")
-            uncompleted_wakes = attempts if isinstance(attempts, int) and not isinstance(attempts, bool) else 1
-    committed = signals
+    # Woken runs not settled yet, newest first: commit the newest completed one; count the rest.
+    settle: set[str] = set()
+    unsettled = [r for r in runs if r.get("woke") is True and not r.get("settled") and isinstance(r.get("pointers"), dict)]
+    no_outcome: list[dict] = []
+    for run in reversed(unsettled):
+        status = wake_status(run, outcome)
+        if status == "completed":
+            committed = dict(run["pointers"])
+            settle.update(str(r.get("run_id")) for r in unsettled[: unsettled.index(run) + 1])
+            break
+        if status == "no_outcome":
+            no_outcome.append(run)
+    no_outcome = [r for r in no_outcome if str(r.get("run_id")) not in settle]
 
     # The agent's memory, secondary: no profile entry, no housekeeping.
     memory_text = resident_memory(read_text(memory_path) or "")
     memory = clip_bytes(memory_text, MAX_MEMORY_BYTES)
     current_memory_hash = memory_hash(memory_text)
-    stored_memory_hash = committed.get("lastMemoryHash") if isinstance(committed.get("lastMemoryHash"), str) else ""
+    stored_memory_hash = committed.get("memoryHash") if isinstance(committed.get("memoryHash"), str) else ""
     same_filter = committed.get("memoryFilterVersion") == MEMORY_FILTER_VERSION
     memory_changed = bool(memory_text.strip()) and same_filter and bool(stored_memory_hash) and stored_memory_hash != current_memory_hash
 
@@ -833,16 +894,17 @@ def gate(home: Path, memory_path: Path, state_path: Path, *, now: float) -> dict
     groups, removed = context_tags(read_text(home / "memories" / "USER.md"))
     goals = stated_goals(groups, removed)
     current_goals_hash = goals_hash(goals)
-    goals_changed = bool(goals) and committed.get("lastGoalsHash") != current_goals_hash
+    goals_changed = bool(goals) and committed.get("goalsHash") != current_goals_hash
 
-    # Their own messages since the evidence was last dealt with (the message cursor).
-    cursor = _stamp(committed.get("messageCursor"))
+    # Their own messages since the cursor, up to now, minus the overlap the last commit counted.
+    cursor = _stamp(committed.get("cursor"))
     if cursor is None or cursor > now:
         # No cursor yet, or one in the future (the clock went back): the first-run window.
         since = now - FIRST_RUN_WINDOW_S
     else:
         since = max(cursor, now - MAX_WINDOW_S)
-    messages, messages_note = resident_messages(home / "state.db", since)
+    overlap = committed.get("overlap") if isinstance(committed.get("overlap"), list) else []
+    messages, messages_note = resident_messages(home / "state.db", since, now, frozenset(str(k) for k in overlap))
     substantive = [m for m in (messages or []) if len(m[1]) >= SUBSTANTIVE_CHARS]
 
     # What the resident declined, and what is still open.
@@ -859,7 +921,24 @@ def gate(home: Path, memory_path: Path, state_path: Path, *, now: float) -> dict
         "stated_goals": len(goals),
         "prior_declines": declined_count + len(removed),
     }
+    # The pointers this run would commit: the cursor behind the gate's time, and the keys of the
+    # messages counted inside that overlap so the next run does not count them again.
+    lagged = now - CURSOR_LAG_S
+    if cursor is not None and cursor <= now and lagged < cursor:
+        lagged = cursor
+    fresh = {
+        "memoryHash": current_memory_hash,
+        "goalsHash": current_goals_hash,
+        "cursor": lagged,
+        "overlap": ([str(k) for k in overlap] + [m[2] for m in (messages or []) if m[0] > lagged])[-MAX_OVERLAP_KEYS:],
+        "memoryFilterVersion": MEMORY_FILTER_VERSION,
+    }
+    if not same_filter:
+        # A new filter re-bases the memory hash at once: that discards no evidence.
+        committed.update(memoryHash=current_memory_hash, memoryFilterVersion=MEMORY_FILTER_VERSION)
+
     evidence = len(substantive) >= EVIDENCE_MIN_MESSAGES or goals_changed or memory_changed
+    give_up = len(no_outcome) >= MAX_UNCOMPLETED_WAKES
     if not evidence:
         exit_branch, reason, error_code = "gated_no_change", "no_evidence", None
     elif dotenv_value(home, RECORD_SWITCH).lower() not in TRUTHY:
@@ -872,44 +951,19 @@ def gate(home: Path, memory_path: Path, state_path: Path, *, now: float) -> dict
         exit_branch, reason, error_code = "capped", "capped_open_card", None
     elif last_declined is not None and now - last_declined < DECLINE_COOLDOWN_S:
         exit_branch, reason, error_code = "capped", "capped_recent_decline", None
-    elif uncompleted_wakes >= MAX_UNCOMPLETED_WAKES:
-        # The same evidence woke the model this many times and no run completed: stop paying for it.
+    elif give_up:
         exit_branch, reason, error_code = "error", "uncompleted_wakes", "state_write_failed"
     else:
         exit_branch, reason, error_code = None, "evidence", None
 
-    fresh = {"memoryHash": current_memory_hash, "goalsHash": current_goals_hash, "cursor": now,
-             "memoryFilterVersion": MEMORY_FILTER_VERSION}
-    if not same_filter:
-        # A new filter re-bases the memory hash at once: that discards no evidence.
-        signals.update(lastMemoryHash=current_memory_hash, memoryFilterVersion=MEMORY_FILTER_VERSION)
-    if exit_branch in ("gated_no_change",) or reason == "uncompleted_wakes":
-        # The evidence was dealt with: move the pointers.
-        signals.update(lastMemoryHash=fresh["memoryHash"], lastGoalsHash=fresh["goalsHash"],
-                       messageCursor=fresh["cursor"], memoryFilterVersion=MEMORY_FILTER_VERSION)
-        signals.pop("pendingEvidence", None)
-    elif exit_branch is None:
-        # A wake: the pointers move when this run completes (the next run commits them).
-        signals["pendingEvidence"] = {"runId": run_id, **fresh, "attempts": uncompleted_wakes + 1}
-    # Any other stop leaves the pointers (and an uncompleted wake's pending evidence) as they were.
+    if exit_branch == "gated_no_change":
+        committed = dict(fresh)
+        settle.update(str(r.get("run_id")) for r in unsettled)
+    elif reason == "uncompleted_wakes":
+        # Give up on the evidence those wakes saw (the newest one's pointers); newer stays pending.
+        committed = dict(no_outcome[0]["pointers"])
+        settle.update(str(r.get("run_id")) for r in unsettled)
 
-    signals.update(
-        lastRunAt=now,
-        lastRunDate=today,
-        lastCheckDate=today,
-        lastGateReason=reason,
-        gateVersion=STATE_VERSION,
-        lastRunId=run_id,
-        lastSignal={
-            "residentMessages": len(messages or []),
-            "substantiveMessages": len(substantive),
-            "statedGoals": len(goals),
-            "goalsChanged": goals_changed,
-            "memoryChanged": memory_changed,
-            "priorDeclines": counters["prior_declines"],
-            "memoryBytes": counters["memory_bytes"],
-        },
-    )
     record = {
         "run_id": run_id,
         "village_date": today,
@@ -926,11 +980,9 @@ def gate(home: Path, memory_path: Path, state_path: Path, *, now: float) -> dict
         "recorded_intent_id": None,
         "recorded_text": None,
     }
-    append_run(home, record)
-    if exit_branch is not None:
-        write_inputs(home, None)
-        payload: dict[str, Any] = {**NO_REPLY, "reason": reason, "runId": run_id, "memoryHash": current_memory_hash}
-    else:
+    if exit_branch is None:
+        # The pointers a later run commits once this one completed.
+        record["pointers"] = fresh
         text, nonce = inputs_text(
             run_id=run_id,
             goals=goals,
@@ -942,7 +994,7 @@ def gate(home: Path, memory_path: Path, state_path: Path, *, now: float) -> dict
             messages_note=messages_note,
         )
         write_inputs(home, text)
-        payload = {
+        payload: dict[str, Any] = {
             "wakeAgent": True,
             "reason": reason,
             "runId": run_id,
@@ -956,11 +1008,40 @@ def gate(home: Path, memory_path: Path, state_path: Path, *, now: float) -> dict
             "dataNonce": nonce,
             "stateFile": str(state_path),
         }
-    # Last: an exception anywhere above leaves the evidence pointers where they were.
+    else:
+        write_inputs(home, None)
+        payload = {**NO_REPLY, "reason": reason, "runId": run_id, "memoryHash": current_memory_hash}
+    # N7: the record goes in last but one (no orphan woke record), with the pointers in one write.
+    append_run(home, record, pointers=committed, settle=frozenset(settle))
+
+    # The state mirror, best effort: the gate's own file above is the authority.
+    signals.pop("pendingEvidence", None)
+    signals.update(
+        lastRunAt=now,
+        lastRunDate=today,
+        lastCheckDate=today,
+        lastGateReason=reason,
+        gateVersion=STATE_VERSION,
+        lastRunId=run_id,
+        lastMemoryHash=committed.get("memoryHash", ""),
+        lastGoalsHash=committed.get("goalsHash", ""),
+        memoryFilterVersion=committed.get("memoryFilterVersion"),
+        lastSignal={
+            "residentMessages": len(messages or []),
+            "substantiveMessages": len(substantive),
+            "statedGoals": len(goals),
+            "goalsChanged": goals_changed,
+            "memoryChanged": memory_changed,
+            "priorDeclines": counters["prior_declines"],
+            "memoryBytes": counters["memory_bytes"],
+        },
+    )
+    if committed.get("cursor") is not None:
+        signals["messageCursor"] = committed["cursor"]
     try:
         write_state(state_path, state, signals)
-    except Exception as exc:
-        raise StateWriteFailed() from exc
+    except Exception:  # noqa: BLE001 - a mirror; the model's outcome still lands in its own write
+        pass
     return payload
 
 

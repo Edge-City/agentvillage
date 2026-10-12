@@ -328,8 +328,10 @@ describe("the evidence pointers move only when the evidence was dealt with (fail
         expect(s.lastGoalsHash).toBe("stale");
         expect(s.messageCursor).toBe(cursor);
       }
-      if (pointers === "pending") expect(s.pendingEvidence).toMatchObject({ runId: result.json.runId, attempts: 1 });
-      if (pointers === "keep") expect(s.pendingEvidence).toBeUndefined();
+      // S2 (round 2): pending pointers live in the gate-owned run record, never in the model's file.
+      expect(s.pendingEvidence).toBeUndefined();
+      if (pointers === "pending") expect(lastRun(dir).pointers).toMatchObject({ goalsHash: expect.any(String), cursor: expect.any(Number) });
+      else expect(lastRun(dir).pointers).toBeUndefined();
       const run = lastRun(dir);
       expect(run.run_id).toBe(result.json.runId as string);
       expect(run.exit_branch).toBe(exit || null);
@@ -347,11 +349,11 @@ describe("the evidence pointers move only when the evidence was dealt with (fail
     expect(runGate(dir).json).toMatchObject({ wakeAgent: true, evidence: { substantiveMessages: 3 } });
   });
 
-  test("a completed wake commits its pointers on the next run; an uncompleted one is retried, then given up as an error", () => {
+  test("a completed wake commits its pointers on the next run; two that never wrote their outcome, then the give-up", () => {
     const done = home();
     writeTags(done, "Here to:\n- Finding a hardware cofounder (you)");
     expect(runGate(done).json.wakeAgent).toBe(true);
-    const pending = signals(done).pendingEvidence as Record<string, unknown>;
+    const pending = lastRun(done).pointers as Record<string, unknown>;
     complete(done);
     expect(runGate(done).json).toMatchObject({ wakeAgent: false, reason: "no_evidence" });
     expect(signals(done)).toMatchObject({ lastGoalsHash: pending.goalsHash });
@@ -360,11 +362,64 @@ describe("the evidence pointers move only when the evidence was dealt with (fail
     writeTags(stuck, "Here to:\n- Finding a hardware cofounder (you)");
     expect(runGate(stuck).json.wakeAgent).toBe(true); // no outcome written
     expect(runGate(stuck).json.wakeAgent).toBe(true); // the same evidence, read again
-    expect(signals(stuck).pendingEvidence).toMatchObject({ attempts: 2 });
     const third = runGate(stuck);
     expect(third.json).toMatchObject({ wakeAgent: false, reason: "uncompleted_wakes" });
     expect(lastRun(stuck)).toMatchObject({ exit_branch: "error", error_code: "state_write_failed" });
     expect(runGate(stuck).json).toMatchObject({ wakeAgent: false, reason: "no_evidence" });
+  });
+
+  test("S2: a model that wipes memorySignals every night still hits the limit (the count is the gate's own)", () => {
+    const dir = home();
+    writeTags(dir, "Here to:\n- Finding a hardware cofounder (you)");
+    const wipe = () => writeFileSync(join(dir, "memory", "heartbeat-state.json"), JSON.stringify({ memorySignals: {} }));
+    const woke: boolean[] = [];
+    for (let night = 0; night < 4; night++) {
+      woke.push(runGate(dir).json.wakeAgent as boolean);
+      wipe();
+    }
+    expect(woke).toEqual([true, true, false, false]);
+  });
+
+  test("S2: a model that writes its outcome but drops the gate's keys completes, and is not woken again", () => {
+    const dir = home();
+    writeTags(dir, "Here to:\n- Finding a hardware cofounder (you)");
+    for (let night = 0; night < 3; night++) {
+      const result = runGate(dir);
+      expect(result.json.wakeAgent).toBe(night === 0);
+      writeFileSync(join(dir, "memory", "heartbeat-state.json"),
+        JSON.stringify({ memorySignals: { lastOutcome: { runId: result.json.runId, exit: "no_candidate", candidatesConsidered: 1 } } }));
+    }
+  });
+
+  test("give-up: a two-night provider outage does not count; the model's two silent nights do", () => {
+    const dir = home();
+    writeTags(dir, "Here to:\n- Finding a hardware cofounder (you)");
+    const close = (code: string) => {
+      const file = join(dir, "av-events", "memory_signal_runs.json");
+      const data = JSON.parse(readFileSync(file, "utf8")) as { runs: Run[] };
+      Object.assign(data.runs.at(-1)!, { exit_branch: "error", error_code: code, finished_at: "x" });
+      writeFileSync(file, JSON.stringify(data));
+    };
+    expect(runGate(dir).json.wakeAgent).toBe(true);
+    close("model_timeout");
+    expect(runGate(dir).json.wakeAgent).toBe(true);
+    close("model_error");
+    expect(runGate(dir).json.wakeAgent).toBe(true); // the outage left the evidence and the count alone
+    close("state_write_failed"); // ran, no outcome
+    expect(runGate(dir).json.wakeAgent).toBe(true);
+    close("state_write_failed");
+    expect(runGate(dir).json).toMatchObject({ wakeAgent: false, reason: "uncompleted_wakes" });
+  });
+
+  test("give-up commits the pending wake's pointers, not that night's: newer messages still wake the next night", () => {
+    const dir = home();
+    writeTags(dir, "Here to:\n- Finding a hardware cofounder (you)");
+    expect(runGate(dir).json.wakeAgent).toBe(true);
+    expect(runGate(dir).json.wakeAgent).toBe(true);
+    messages(dir, [1, 2, 3].map((n) => ({ text: LONG(n), ago: 0 }))); // after the second wake
+    expect(runGate(dir).json).toMatchObject({ wakeAgent: false, reason: "uncompleted_wakes" });
+    const next = runGate(dir);
+    expect(next.json).toMatchObject({ wakeAgent: true, evidence: { substantiveMessages: 3, goalsChanged: false } });
   });
 
   test("a run the plugin closed on a non-failure branch, or that recorded, counts as completed", () => {
@@ -393,6 +448,42 @@ describe("the evidence pointers move only when the evidence was dealt with (fail
     expect(s.lastRunAt as number).toBeGreaterThan(Date.now() / 1000 - 60);
     rmSync(join(dir, "av-events", "memory_signal_runs.json"), { recursive: true });
     expect(runGate(dir).json).toMatchObject({ wakeAgent: true, evidence: { substantiveMessages: 3, goalsChanged: true } });
+  });
+});
+
+describe("S1 / N6 (round 2): the message cursor lags the gate by 15 minutes; the read stops at the gate's time", () => {
+  test("a message stamped before the read but written after it counts next night; one stamped after the gate counts once", () => {
+    const dir = home();
+    writeState(dir, {});
+    const code = [
+      "import importlib.util, json, sqlite3, sys",
+      "from pathlib import Path",
+      `spec = importlib.util.spec_from_file_location("gate", ${JSON.stringify(scriptPath)})`,
+      "g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)",
+      `home = Path(${JSON.stringify(dir)})`,
+      "db = sqlite3.connect(home / 'state.db')",
+      "db.execute(\"CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, chat_type TEXT, parent_session_id TEXT, model_config TEXT, started_at REAL NOT NULL DEFAULT 0)\")",
+      "db.execute(\"CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT, timestamp REAL NOT NULL)\")",
+      "db.execute(\"INSERT INTO sessions (id, source, chat_type) VALUES ('dm', 'telegram', 'dm')\")",
+      "def add(ts, n): db.execute(\"INSERT INTO messages (session_id, role, content, timestamp) VALUES ('dm','user',?,?)\", (f'I am looking for a hardware cofounder for the seed library, number {n}', ts)); db.commit()",
+      "T = 1790000000.0",
+      "for n in range(3): add(T - 600 + n, n)",
+      "add(T + 30, 'late')  # stamped after the gate's time: not tonight (N6)",
+      "mem, st = home / 'memories' / 'MEMORY.md', home / 'memory' / 'heartbeat-state.json'",
+      "first = g.gate(home, mem, st, now=T)",
+      "runs = json.loads((home / 'av-events' / 'memory_signal_runs.json').read_text())['runs']",
+      "c1 = runs[-1]['resident_messages_since_last_run']",
+      "state = json.loads(st.read_text()); state['memorySignals']['lastOutcome'] = {'runId': first['runId'], 'exit': 'no_candidate', 'candidatesConsidered': 0}; st.write_text(json.dumps(state))",
+      "add(T - 10, 'flushed-late')  # stamped before the read, written after it (S1)",
+      "second = g.gate(home, mem, st, now=T + 86400)",
+      "runs = json.loads((home / 'av-events' / 'memory_signal_runs.json').read_text())['runs']",
+      "print(json.dumps({'first': first['wakeAgent'], 'c1': c1, 'c2': runs[-1]['resident_messages_since_last_run']}))",
+    ].join("\n");
+    const proc = Bun.spawnSync(["python3", "-c", code], { env: { ...process.env, AV_RECORD_INTENTION: "1" }, stdout: "pipe", stderr: "pipe" });
+    expect(proc.stderr.toString()).toBe("");
+    // Night 1: the three before the gate (the late one stamped after it is not read).
+    // Night 2: the late-flushed one and the post-gate one; the three already counted are skipped.
+    expect(JSON.parse(proc.stdout.toString())).toEqual({ first: true, c1: 3, c2: 2 });
   });
 });
 
@@ -632,15 +723,26 @@ describe("where the gate looks", () => {
     expect(result.json).toMatchObject({ wakeAgent: true, stateFile: join(dir, "memory", "heartbeat-state.json"), inputsFile: join(dir, "memory", "memory-signal-inputs.md") });
   });
 
-  test("a gate that fails still answers wakeAgent false, exits 0, and leaves an error run record", () => {
+  test("an unwritable heartbeat-state (a mirror) does not stop the gate: its own file holds the run and the pointers", () => {
     const dir = home();
-    mkdirSync(join(dir, "memory", "heartbeat-state.json"), { recursive: true }); // a directory: the state write fails
+    mkdirSync(join(dir, "memory", "heartbeat-state.json"), { recursive: true }); // a directory: the mirror write fails
     messages(dir, threeSubstantive());
     const result = runGate(dir);
     expect(result.code).toBe(0);
-    expect(result.json).toMatchObject({ wakeAgent: false, reason: "gate_failed" });
-    // The contract's closed list: the local detail stays in gate_reason, the event carries the code.
-    expect(lastRun(dir)).toMatchObject({ exit_branch: "error", error_code: "state_write_failed", gate_reason: "gate_failed" });
+    expect(result.json.wakeAgent).toBe(true);
+    expect(lastRun(dir)).toMatchObject({ woke: true, run_id: result.json.runId });
+  });
+
+  test("N3: the 40-character boundary: 40 counts, 39 and a padded 39 do not", () => {
+    const at = (n: number) => "x".repeat(n);
+    const forty = home();
+    messages(forty, [1, 2, 3].map((n) => ({ text: `${n}${at(39)}` })));
+    expect(runGate(forty).json).toMatchObject({ wakeAgent: true, evidence: { substantiveMessages: 3 } });
+    const thirtyNine = home();
+    messages(thirtyNine, [1, 2, 3].map((n) => ({ text: `   ${n}${at(38)}   ` })));
+    expect(runGate(thirtyNine).json).toMatchObject({ wakeAgent: false, reason: "no_evidence" });
+    expect(lastRun(thirtyNine).resident_messages_since_last_run).toBe(0);
+    expect(signals(thirtyNine).lastSignal).toMatchObject({ residentMessages: 3, substantiveMessages: 0 });
   });
 });
 

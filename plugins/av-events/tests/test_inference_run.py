@@ -681,3 +681,34 @@ def test_s3_a_gated_run_sends_the_last_listed_intents(live, box, av):
     box.run(woke=False, exit_branch="gated_no_change", finished_at=iso(84), existing_intents=5)
     box.execution()
     assert tick_one(av, live)["payload"]["existing_intents"] == 5
+
+
+# --------------------------------------------------------------------------
+# Round 2: declined-text matching keeps what carries meaning
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("a,b,same", [
+    ("Learn C++ from a mentor", "Learn C from a mentor", False),
+    ("Hire a C# developer", "Hire a C developer", False),
+    ("find therapist", "find the rapist", False),
+    ("1:1 mentoring", "11 mentoring", False),
+    ("Find a co-founder for the clinic", "find a cofounder for the clinic", True),
+    ("काम के लिए", "कम के लिए", False),  # vowel sign kept
+])
+def test_round2_loose_key_pairs(plugin, a, b, same):
+    import sys as _sys
+
+    ir = _sys.modules[f"{plugin.__name__}._inference_run"]
+    assert (ir.loose_key(a) == ir.loose_key(b)) is same
+
+
+def test_round2_dashes_case_spacing_and_width_are_one_text(plugin):
+    import sys as _sys
+
+    ir = _sys.modules[f"{plugin.__name__}._inference_run"]
+    key = ir.loose_key("find a cofounder for the clinic")
+    for variant in ("Find a co—founder for the clinic!!", "  FIND   a co‐founder, for the clinic.",
+                    "Ｆｉｎｄ a cofounder for the clinic"):
+        assert ir.loose_key(variant) == key
+    assert ir.loose_key("find cofounders for the clinic") != key

@@ -1450,7 +1450,7 @@ writes its state on every exit. It appends one record per run to
 | `nightly_limit_reached` | another run recorded one this village night |
 | `inferred_card_open` | an inferred proposal is still unanswered (`unfiled`, `requested`, `cleared`, `starting`, `publishing`) |
 | `recently_declined` | the resident declined an inferred proposal less than 3 days ago |
-| `previously_declined` | the text's held hash is a declined proposal's, or it matches a declined text this pass recorded, ignoring case, whitespace, punctuation, hyphens and unicode dashes |
+| `previously_declined` | the text's held hash is a declined proposal's, or it matches a declined text this pass recorded under `loose_key`: NFKC and case folded, hyphens and dashes joined ("co-founder" = "cofounder"), letters, digits, combining marks, `+` and `#` kept, every other character a word break ("Learn C++" ≠ "Learn C", "find therapist" ≠ "find the rapist", "1:1" ≠ "11") |
 | `caps_unknown` | the map cannot be read |
 
 The first refusal ends the pass: it is noted on the run record (`refusal`) and every later capture in

@@ -176,12 +176,17 @@ def load_runs(home: str) -> list[dict]:
 
 
 def _save_runs(home: str, runs: list[dict]) -> None:
+    """Under the lock. Every other key of the gate-owned file (its committed `pointers`) is kept."""
     path = os.path.join(home, RUNS_FILE)
+    doc = _read_json(path)
+    doc = doc if isinstance(doc, dict) else {}
+    doc["v"] = 1
+    doc["runs"] = runs[-MAX_RUN_RECORDS:]
     fd, tmp = tempfile.mkstemp(prefix=".memory_signal_runs.", dir=os.path.dirname(path))
     try:
         os.fchmod(fd, FILE_MODE)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump({"v": 1, "runs": runs[-MAX_RUN_RECORDS:]}, handle, indent=2, ensure_ascii=False)
+            json.dump(doc, handle, indent=2, ensure_ascii=False)
         os.replace(tmp, path)
     except BaseException:
         try:
@@ -254,11 +259,27 @@ def note_refused(home: str, code: str, now: float) -> Optional[dict]:
     return update_current_run(home, change, now)
 
 
+#: Hyphens and dashes join the words around them ("co-founder" = "cofounder").
+DASHES = frozenset("-\u2010\u2011\u2012\u2013\u2014\u2015\u2212\ufe58\ufe63\uff0d")
+#: Symbols that carry meaning in a want ("C++", "C#") are kept.
+KEPT_SYMBOLS = frozenset("+#")
+
+
 def loose_key(text: Any) -> str:
-    """Declined-text matching (S4): case, whitespace, punctuation, hyphens and every unicode dash
-    ignored, so "co-founder" and "cofounder" are the same text. Letters and digits only, NFKC."""
+    """Declined-text matching (S4, round 2): NFKC, casefold; letters, digits, combining marks, `+` and
+    `#` kept; hyphens and dashes dropped (joined); every other character a word break; whitespace
+    collapsed to one space. So "co-founder" = "cofounder", while "Learn C++" != "Learn C",
+    "find therapist" != "find the rapist", "1:1" != "11" and vowel signs still count."""
     folded = unicodedata.normalize("NFKC", str(text or "")).casefold()
-    return "".join(ch for ch in folded if unicodedata.category(ch)[0] in ("L", "N"))
+    out = []
+    for ch in folded:
+        if ch in DASHES or unicodedata.category(ch) == "Pd":
+            continue
+        if unicodedata.category(ch)[0] in ("L", "N", "M") or ch in KEPT_SYMBOLS:
+            out.append(ch)
+        else:
+            out.append(" ")
+    return " ".join("".join(out).split())
 
 
 def note_recorded(home: str, intention_id: str, text: str, now: float) -> Optional[dict]:
