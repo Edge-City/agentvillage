@@ -23,6 +23,10 @@ import { join } from "node:path";
 import { PREPARE_UNAVAILABLE, indexPrepareUrl, prepareIntent } from "../index-mcp";
 import {
   ADMISSION_FEEDBACK,
+  AGAIN_FLAG,
+  DRY_RUN_FLAG,
+  PREPARE_READY,
+  RESEED_ALREADY_RAN,
   RESEED_FLAG,
   REFUSED_SEEDS,
   SEED_CODE,
@@ -568,7 +572,101 @@ describe("--reseed: the operator's one-shot second seed (Carter's ruling (4))", 
     const err: string[] = [];
     const down = (async () => new Response("down", { status: 503 })) as unknown as typeof globalThis.fetch;
     await new Promise((r) => setTimeout(r, 5));
-    await main(["--home", home, RESEED_FLAG], { stdout: () => { throw new Error("stdout written"); }, stderr: (s) => err.push(s) }, (argv) => welcomeRun(argv, { fetch: down, timeoutMs: 200 }));
+    await main(["--home", home, RESEED_FLAG, AGAIN_FLAG], { stdout: () => { throw new Error("stdout written"); }, stderr: (s) => err.push(s) }, (argv) => welcomeRun(argv, { fetch: down, timeoutMs: 200 }));
     expect(JSON.parse(err.join(""))).toMatchObject({ fallback: "unreachable", seed_codes: ["list-unavailable"] });
+  });
+
+  describe("G2: --dry-run, and a run-once guard that --again overrides", () => {
+    /** Every file under the home, with its content: a dry run must leave this exactly as it was. */
+    function snapshot(): Record<string, string> {
+      const out: Record<string, string> = {};
+      const walk = (dir: string) => {
+        for (const f of readdirSync(join(home, dir), { withFileTypes: true })) {
+          const rel = dir ? join(dir, f.name) : f.name;
+          if (f.isDirectory()) walk(rel);
+          else out[rel] = readFileSync(join(home, rel), "utf8");
+        }
+      };
+      walk("");
+      return out;
+    }
+
+    test("--dry-run: one prepare per line, verbatim; no create, no file written; the trailer carries the codes a run would leave and intents_seeded 0", async () => {
+      welcomed();
+      writeFileSync(join(home, WELCOME_SEED_FILE), `${JSON.stringify({ seededAt: "2026-10-12T15:47:18.759Z", selected: 3, created: 0, failed: 3, done: true })}\n`);
+      writeLines(LINES);
+      const before = snapshot();
+      const index = fakeIndex((p) => (p === LINES[0] ? revise(VAGUE) : p === LINES[1] ? ready() : "throw"));
+      const { stdout, trailer, creates } = await reseed(index, [DRY_RUN_FLAG]);
+      expect(stdout).toBe("");
+      expect(index.prepared.map((c) => c.payload)).toEqual(LINES);
+      expect(creates).toHaveLength(0);
+      expect(index.fake.calls.filter((c) => c.method === "tools/call").map((c) => c.name)).toEqual(["list_intents"]);
+      expect(trailer).toEqual({
+        welcome: 1,
+        fallback: "questions",
+        intents_listed: 0,
+        intents_seeded: 0,
+        seed_failed: 0,
+        seed_codes: ["intent_needs_revision:vague_or_invalid", PREPARE_READY, "prepare_unavailable"],
+        seed_recovery_kinds: ["single", "multi", "text"],
+      });
+      expect(snapshot()).toEqual(before);
+      expect(reseedMarkers()).toHaveLength(0);
+    });
+
+    test("--dry-run is never refused by an earlier run's marker, and alone it is a dry reseed (no welcome claimed, nothing written)", async () => {
+      writeLines(LINES);
+      const index = fakeIndex(() => ready());
+      // Not welcomed, no marker: `--dry-run` without `--reseed` still creates and writes nothing.
+      const before = snapshot();
+      process.env.INDEX_API_KEY = FAKE_API_KEY;
+      process.env.INDEX_MCP_URL = FAKE_MCP_URL;
+      const err: string[] = [];
+      await main(["--home", home, DRY_RUN_FLAG], { stdout: () => { throw new Error("stdout written"); }, stderr: (s) => err.push(s) }, (argv) => welcomeRun(argv, { fetch: index.fetch, timeoutMs: 200 }));
+      expect(JSON.parse(err.join(""))).toMatchObject({ intents_seeded: 0, seed_codes: [PREPARE_READY, PREPARE_READY, PREPARE_READY] });
+      expect(snapshot()).toEqual(before);
+      expect(existsSync(join(home, WELCOME_STATE_FILE))).toBe(false);
+      welcomed();
+      // One Index across the runs: it remembers what the real run created.
+      const dry = fakeIndex((p) => (p === LINES[0] ? revise(VAGUE) : ready()));
+      const real = await reseed(dry);
+      expect(real.creates).toHaveLength(2);
+      expect(reseedMarkers()).toHaveLength(1);
+      const after = snapshot();
+      const prepared = dry.prepared.length;
+      const { trailer, creates } = await reseed(dry, [DRY_RUN_FLAG]);
+      expect(dry.prepared.slice(prepared).map((c) => c.payload)).toEqual([LINES[0]]);
+      expect(creates).toHaveLength(2);
+      expect(trailer).toMatchObject({ intents_seeded: 0, seed_failed: 0, seed_codes: ["intent_needs_revision:vague_or_invalid"] });
+      expect(snapshot()).toEqual(after);
+    });
+
+    test("a second real --reseed is refused whole: no Index call, nothing written, stdout empty, trailer coded reseed_already_ran; --again runs", async () => {
+      welcomed();
+      writeLines(LINES);
+      // One Index across the runs: refuses LINES[0] the first time, lets it through after.
+      const index = fakeIndex((p, n) => (p === LINES[0] && n <= 3 ? revise(VAGUE) : ready()));
+      const first = await reseed(index);
+      expect(first.trailer).toMatchObject({ intents_seeded: 2, seed_failed: 1 });
+      expect(reseedMarkers()).toHaveLength(1);
+      const after = snapshot();
+      const calls = index.fake.calls.length;
+      const prepared = index.prepared.length;
+      await new Promise((r) => setTimeout(r, 5));
+      const second = await reseed(index);
+      expect(second.stdout).toBe("");
+      expect(index.fake.calls).toHaveLength(calls);
+      expect(index.prepared).toHaveLength(prepared);
+      expect(second.trailer).toEqual({ welcome: 1, fallback: "unreachable", intents_listed: 0, intents_seeded: 0, seed_failed: 0, seed_codes: [RESEED_ALREADY_RAN] });
+      expect(snapshot()).toEqual(after);
+      // --again: runs, prepares the line still refused, writes a second marker.
+      const again = await reseed(index, [AGAIN_FLAG]);
+      expect(again.stdout).toBe("");
+      expect(index.prepared.slice(prepared).map((c) => c.payload)).toEqual([LINES[0]]);
+      expect(again.creates.map((c) => c.arguments?.description)).toEqual([...LINES.slice(1), LINES[0]]);
+      expect(again.trailer).toMatchObject({ intents_seeded: 1, seed_failed: 0 });
+      expect(reseedMarkers()).toHaveLength(2);
+    });
   });
 });

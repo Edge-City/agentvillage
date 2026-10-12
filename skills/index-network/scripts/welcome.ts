@@ -103,9 +103,9 @@
  * refused line again; `--draft` never prints the block.
  */
 
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { DEFAULT_NAME, agentName, readProfile } from "../../agent-profile/scripts/profile";
 import {
@@ -1218,6 +1218,28 @@ export function claimWelcome(home: string, now: Date = new Date()): boolean {
 export const RESEED_FLAG = "--reseed";
 /** Each `--reseed` run's own marker, relative to `$HERMES_HOME`: `memory/welcome-reseed-<time>.json`. */
 export const WELCOME_RESEED_PREFIX = join("memory", "welcome-reseed-");
+/**
+ * Gap G2: `--reseed --dry-run` prepares each line a run would send and
+ * creates and writes nothing (reseedRun). Alone, `--dry-run` means the same
+ * (never a real welcome).
+ */
+export const DRY_RUN_FLAG = "--dry-run";
+/** Gap G2: `--reseed --again` runs although an earlier `--reseed` left its marker (reseedRan). */
+export const AGAIN_FLAG = "--again";
+/** Gap G2: the code a real `--reseed` leaves, alone, when an earlier one already ran on this box: nothing listed, prepared, created or written. */
+export const RESEED_ALREADY_RAN = "reseed_already_ran";
+/** Gap G2: a dry run's code for a line Index's `prepare` answers `ready` (a real run would create it). */
+export const PREPARE_READY = "ready";
+
+/** True when a `--reseed` already ran here: a WELCOME_RESEED_PREFIX<time>.json marker exists, whatever it holds. Never throws. */
+export function reseedRan(home: string): boolean {
+  const name = basename(WELCOME_RESEED_PREFIX);
+  try {
+    return readdirSync(join(home, dirname(WELCOME_RESEED_PREFIX))).some((f) => f.startsWith(name) && f.endsWith(".json"));
+  } catch {
+    return false;
+  }
+}
 
 /**
  * The lines a `--reseed` sends: the profile's selected intentions as the
@@ -1246,12 +1268,17 @@ export function reseedLines(home: string): string[] {
  * and write a new marker WELCOME_RESEED_PREFIX<time>.json with the counts,
  * the codes and the refused lines. A refused line also goes into the seed
  * marker's `refused` (mergeReseedRefused, gap G1), so the first chat turn's
- * REFUSED_SEEDS block asks the resident about it. The branch for the
- * operator's trailer. Never throws.
+ * REFUSED_SEEDS block asks the resident about it. Gap G2: when an earlier
+ * `--reseed` left its marker (reseedRan), a run does nothing at all and leaves
+ * RESEED_ALREADY_RAN, unless `again`; with `dryRun` (never refused) it lists,
+ * then prepares the same lines (prepareLines) and creates and writes nothing,
+ * its codes those a run would leave. The branch for the operator's trailer.
+ * Never throws.
  */
-export async function reseedRun(home: string, options: WelcomeOptions = {}): Promise<WelcomeBranch> {
+export async function reseedRun(home: string, options: WelcomeOptions = {}, flags: { dryRun?: boolean; again?: boolean } = {}): Promise<WelcomeBranch> {
   const now = options.now ?? new Date();
   try {
+    if (!flags.dryRun && !flags.again && reseedRan(home)) return { ...welcomeBranch(UNREACHABLE), seed_codes: [RESEED_ALREADY_RAN] };
     const clock: Clock = {
       deadline: Date.now() + (options.budgetMs ?? WELCOME_BUDGET_MS),
       cap: options.timeoutMs,
@@ -1263,7 +1290,7 @@ export async function reseedRun(home: string, options: WelcomeOptions = {}): Pro
     const first = await listIntents({ ...target, timeoutMs: options.timeoutMs ?? WELCOME_INDEX_TIMEOUT_MS });
     const all = reseedLines(home);
     if (!first.rows) {
-      recordReseed(home, now, { selected: all.length, created: 0, failed: 0, codes: ["list-unavailable"], refused: [] });
+      if (!flags.dryRun) recordReseed(home, now, { selected: all.length, created: 0, failed: 0, codes: ["list-unavailable"], refused: [] });
       return { ...welcomeBranch(UNREACHABLE), seed_codes: ["list-unavailable"] };
     }
     const sent = new Set(first.rows.flatMap((row) => row.keys));
@@ -1276,9 +1303,10 @@ export async function reseedRun(home: string, options: WelcomeOptions = {}): Pro
       lines.push({ text, title: cleanTitle(text, TITLE_MAX, "word")!, key });
     }
     if (lines.length === 0) {
-      recordReseed(home, now, { selected: all.length, created: 0, failed: 0, codes: [], refused: [] });
+      if (!flags.dryRun) recordReseed(home, now, { selected: all.length, created: 0, failed: 0, codes: [], refused: [] });
       return welcomeBranch(first.read);
     }
+    if (flags.dryRun) return welcomeBranch(first.read, await prepareLines(target, clock, lines));
     const { again, seeded, failed, refused, codes, kinds } = await seedLines(home, target, clock, lines, now);
     const counts = { selected: all.length, created: seeded.length, failed };
     const merged = refused.length ? await mergeReseedRefused(home, now, refused, counts) : null;
@@ -1288,6 +1316,42 @@ export async function reseedRun(home: string, options: WelcomeOptions = {}): Pro
   } catch {
     return { ...welcomeBranch(UNREACHABLE), seed_codes: ["error"] };
   }
+}
+
+/**
+ * Gap G2, `--dry-run`: one `prepare` per line (prepareIntent: creates
+ * nothing), all at once, within the run's budget, no retry, the line exactly
+ * as reseedLines read it; never a create, never a write. The counts a dry run
+ * reports: nothing seeded or failed, `seed_codes` one per line in order
+ * (PREPARE_READY, `intent_needs_revision:<category>` as seedOne would leave
+ * it, PREPARE_UNAVAILABLE, BUDGET_EXHAUSTED; seedCode-shaped, at most
+ * SEED_CODES_MAX) and `seed_recovery_kinds` (the kinds of Index's questions
+ * for the refused lines as the marker would keep them, recoveryQuestions; at
+ * most SEED_RECOVERY_KINDS_MAX). Never throws.
+ */
+async function prepareLines(target: IndexMcpTarget, clock: Clock, lines: SeedLineInput[]): Promise<SeedCounts> {
+  const verdicts = await Promise.allSettled(
+    lines.map(async (line): Promise<{ code: string; kinds: RecoveryQuestion["kind"][] }> => {
+      const prepareTarget = timed(target, clock, WELCOME_SEED_TIMEOUT_MS, clock.reserve);
+      if (!prepareTarget) return { code: BUDGET_EXHAUSTED, kinds: [] };
+      try {
+        const verdict = await prepareIntent(prepareTarget, line.text);
+        if (verdict.status !== "needs_revision") return { code: PREPARE_READY, kinds: [] };
+        return { code: `${INTENT_NEEDS_REVISION}:${admissionCategory(verdict.feedback)}`, kinds: recoveryQuestions(verdict.recovery).map((q) => q.kind) };
+      } catch {
+        return { code: PREPARE_UNAVAILABLE, kinds: [] };
+      }
+    }),
+  );
+  const codes: string[] = [];
+  const kinds: RecoveryQuestion["kind"][] = [];
+  for (const v of verdicts) {
+    const one = v.status === "fulfilled" ? v.value : { code: "error", kinds: [] };
+    const shaped = seedCode(one.code);
+    if (shaped !== null && codes.length < SEED_CODES_MAX) codes.push(shaped);
+    kinds.push(...one.kinds);
+  }
+  return { intents_seeded: 0, seed_failed: 0, seed_codes: codes, seed_recovery_kinds: kinds.slice(0, SEED_RECOVERY_KINDS_MAX) };
 }
 
 /**
@@ -1382,7 +1446,10 @@ type WelcomeOptions = {
  */
 export async function welcomeRun(argv: string[], options: WelcomeOptions = {}): Promise<{ text: string; branch: WelcomeBranch | null }> {
   const home = homeFrom(argv);
-  if (argv.includes(RESEED_FLAG)) return { text: "", branch: await reseedRun(home, options) };
+  // `--dry-run` alone is `--reseed --dry-run` (gap G2): never a real welcome.
+  if (argv.includes(RESEED_FLAG) || argv.includes(DRY_RUN_FLAG)) {
+    return { text: "", branch: await reseedRun(home, options, { dryRun: argv.includes(DRY_RUN_FLAG), again: argv.includes(AGAIN_FLAG) }) };
+  }
   const draft = argv.includes("--draft");
   const welcomed = welcomeAlreadySent(home);
   if (!draft && welcomed) return { text: await alreadySentText(home, options.now ?? new Date()), branch: null };
@@ -1432,7 +1499,7 @@ export async function main(
     out = { text: welcomeText(DEFAULT_NAME, UNREACHABLE, intentsPageUrl(homeFrom(argv))), branch: welcomeBranch(UNREACHABLE) };
   }
   // `--reseed` (SEED-REJECT 3b) prints nothing for the resident, and its trailer, both extra keys included, for the operator.
-  const reseed = argv.includes(RESEED_FLAG);
+  const reseed = argv.includes(RESEED_FLAG) || argv.includes(DRY_RUN_FLAG);
   if (!reseed) io.stdout(`${out.text}\n`);
   if ((reseed || argv.includes("--draft")) && out.branch) io.stderr(`${draftTrailer(out.branch, reseed || seedTrailerV2(homeFrom(argv)))}\n`);
 }
