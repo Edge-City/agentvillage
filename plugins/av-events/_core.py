@@ -263,8 +263,8 @@ TOPIC_STOP_DECLINES = 2
 MAX_DECLINED_TOPICS = 50
 #: Words that say nothing about WHAT is wanted: English function words and the verbs every want
 #: line starts with ("looking for", "want to meet", "need help with"). A fixed list, never tuned
-#: per resident; other languages keep every word.
-TOPIC_STOPWORDS = frozenset("""
+#: per resident.
+_STOPWORDS_EN = """
 a about after again all also am an and another any anyone are around as at be been being but by can
 could did do does doing during each even ever every few for from get gets getting had has have having he
 her here him his how i if in into is it its just me might mine more most must my myself need needed
@@ -275,14 +275,55 @@ whose why will with would yet you your yours
 find finding connect connecting connected help helping hope hoping interested keen like look looking
 looks meet meeting meets people person folks seek seeking seeks try trying want wanted wanting wants
 currently month next today tomorrow tonight week year
-""".split())
+"""
+#: Round 2 (refute S1): kept function words make unrelated lines look alike under Jaccard ("Mujhe
+#: yoga ke liye ek partner chahiye" and "Mujhe startup ke liye ek investor chahiye" share 5 of 9
+#: words). Hindi and Hinglish, romanised (common spellings) and in Devanagari: pronouns, postpositions,
+#: the copula, "need/want", quantity and time words. None names what is wanted.
+_STOPWORDS_HI = """
+mujhe muje mujhko mere meri mera mai hum hume humein hamein humko apna apni apne
+ko ke ka ki liye se me mein par bhi aur ya ek koi kisi kuch kuchh jo yeh ye woh wo saath sath
+chahiye chahie chaiye chahta chahti karna karne hai hain ho hu hoon tha kya wala wali wale
+bahut zyada kam abhi aaj kal
+मुझे मुझको मेरे मेरी मेरा मैं हम हमें अपना अपनी अपने
+को के का की लिए लिये से में पर भी और या एक कोई किसी कुछ जो यह ये वह वो साथ
+चाहिए चाहता चाहती करना करने है हैं हो हूँ हूं था क्या वाला वाली वाले
+बहुत ज़्यादा ज्यादा कम अभी आज कल
+"""
+#: The same frame in Tamil, Bengali and Arabic ("I need a ...", "I want to find ... in ..."): a few
+#: pronouns, articles, postpositions and want verbs, so short lines in those scripts do not merge.
+#: Every other language keeps every word.
+_STOPWORDS_OTHER = """
+எனக்கு நான் என் என்னுடைய ஒரு வேண்டும் தேவை மற்றும்
+আমি আমার আমাকে একজন একটা একটি দরকার চাই জন্য এবং
+أنا انا أريد اريد أبحث ابحث أجد اجد أن ان عن في من على إلى الى مع أو او لي
+"""
+#: Each taken in its `loose_key` form (NFKC, casefolded): the precomposed "\u095b" in "ज़्यादा" above
+#: becomes the decomposed spelling a resident's text folds to.
+TOPIC_STOPWORDS = frozenset(loose_key(_STOPWORDS_EN + _STOPWORDS_HI + _STOPWORDS_OTHER).split(" "))
+
+
+def _singular(token: str) -> str:
+    """A plain ASCII plural of 4+ letters, folded: -sses/-ches/-shes/-xes/-zzes lose "es" ("classes"
+    = "class", "coaches" = "coach"), -ies of 5+ letters becomes -y ("companies" = "company"), any
+    other final "s" is dropped ("investors" = "investor"), but not after "ss", "us" or "is". Known
+    edge: a singular in -ie or -che ("movie", "niche") folds apart from its plural."""
+    if not token.isascii() or len(token) <= 3 or not token.endswith("s"):
+        return token
+    if token.endswith(("sses", "ches", "shes", "xes", "zzes")):
+        return token[:-2]
+    if token.endswith("ies") and len(token) > 4:
+        return token[:-3] + "y"
+    if token.endswith(("ss", "us", "is")):
+        return token
+    return token[:-1]
 
 
 def topic_words(text: Any) -> frozenset:
     """THE content words of a want line, for the declined-topic stop: the `loose_key` tokens (so
     "co-founder" = "cofounder" and "C++" != "C"), minus TOPIC_STOPWORDS and minus tokens with no
-    letter (numbers, a lone `+`); a plain ASCII plural loses its final "s" ("investors" =
-    "investor"; not after "ss", "us" or "is", and not under 4 letters). Never leaves the box."""
+    letter (numbers, a lone `+`); a plain ASCII plural folded to its singular (`_singular`). Never
+    leaves the box."""
     import unicodedata
 
     out = set()
@@ -291,10 +332,9 @@ def topic_words(text: Any) -> frozenset:
             continue
         if not any(unicodedata.category(ch)[0] == "L" for ch in token):
             continue
-        if token.isascii() and len(token) > 3 and token.endswith("s") and not token.endswith(("ss", "us", "is")):
-            token = token[:-1]
-            if token in TOPIC_STOPWORDS:
-                continue
+        token = _singular(token)
+        if token in TOPIC_STOPWORDS:
+            continue
         out.add(token)
     return frozenset(out)
 

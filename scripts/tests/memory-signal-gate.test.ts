@@ -596,7 +596,7 @@ describe("security review: the gate reads with the plugin's own functions", () =
     const proc = Bun.spawnSync(["python3", "-c", code], { stdout: "pipe", stderr: "pipe" });
     expect(proc.stderr.toString()).toBe("");
     const out = JSON.parse(proc.stdout.toString());
-    expect(out).toEqual({ file: join(REPO, "plugins", "av-events", "_core.py"), bad: [], n: 27 });
+    expect(out).toEqual({ file: join(REPO, "plugins", "av-events", "_core.py"), bad: [], n: 74 });
   });
 
   test("a quoted, padded or odd spelling of AV_RECORD_INTENTION is read exactly as the plugin reads it", () => {
@@ -861,6 +861,22 @@ describe("the model's input", () => {
     expect(text).toContain("- (a topic they declined twice; never propose anything on it) cofounder, hardware, library, seed");
     expect(text).toContain("- (a topic they declined twice; never propose anything on it) cofounder, library, seed");
     expect(text).not.toContain("scientist");
+  });
+
+  test("DREAM-1: stopped topics are listed newest first, at most five, each once", () => {
+    const dir = home();
+    mkdirSync(join(dir, "av-events"), { recursive: true });
+    const id = (n: number) => `01920000-0000-7000-8000-${String(n).padStart(12, "0")}`;
+    const topics = ["archery", "baking", "cycling", "diving", "embroidery", "fencing", "gardening"];
+    // Each topic declined twice (oldest first in the file, as the fold keeps them), plus one declined once.
+    const declinedTopics = topics.flatMap((word, n) => [0, 1].map((k) => ({ intention_id: id(2 * n + k), words: [word], declined_at: 10 * n + k })));
+    declinedTopics.push({ intention_id: id(99), words: ["hiking"], declined_at: 1000 });
+    writeFileSync(join(dir, "av-events", "memory_signal_runs.json"), JSON.stringify({ v: 1, runs: [], declined_topics: declinedTopics }));
+    messages(dir, threeSubstantive());
+    expect(runGate(dir).json.wakeAgent).toBe(true);
+    const prefix = "- (a topic they declined twice; never propose anything on it) ";
+    const listed = inputs(dir).split("\n").filter((l) => l.startsWith(prefix)).map((l) => l.slice(prefix.length));
+    expect(listed).toEqual(["gardening", "fencing", "embroidery", "diving", "cycling"]);
   });
 });
 

@@ -231,7 +231,7 @@ backlog can differ from `emitted_at` by minutes. Every `marts` time series is bu
 | `plugin.degraded` | the guard | `hook`, `scope` ∈ `session`\|`process`, `error_count`, `errors_by_hook`, `hermes_version`, `last_error` |
 | `plugin.buffer_dropped` | the flusher | `reason`, `count`, `files`, `rejected_files`, `rejected_events`, `oldest_event_at`, `newest_event_at` |
 | `intention.captured` | `post_tool_call` on Index `create_intent` (or the Index plugin's `index_create_intent`), or `record_intention(action="capture")` | `text_hash`, `summary_hash`, `index_intent_id`, `source`, `conditional`, `capture_path`, `index_status`, `parent_session_id`, `publish_refused`, `local_reason`, plus `text_length` / `summary_length` above `metadata` |
-| `intention.updated` | `post_tool_call` on Index `update_intent` (or `index_update_intent`) with a new `description`, Index `pause_intent` / `resume_intent` (`index_status` `paused` / `active`, both hashes null, `status_only: true`), or `record_intention` naming an id; and the resident's decline of a held proposal on the approval path (`approval_state` `rejected`, no text; DREAM-1) | as above |
+| `intention.updated` | `post_tool_call` on Index `update_intent` (or `index_update_intent`) with a new `description`, Index `pause_intent` / `resume_intent` (`index_status` `paused` / `active`, both hashes null, `status_only: true`), or `record_intention` naming an id; and the resident's decline of a held proposal on the approval path (`approval_state` `rejected`, no text, `status_only: true`, the card's `text_hash`, no Index id; DREAM-1) | as above |
 | `intention.withdrawn` | `post_tool_call` on Index `archive_intent` (or the legacy `delete_intent`, or a legacy `update_intent` to `archived`/`deleted`/`withdrawn`), or `record_intention(action="archive"\|"withdraw"\|"delete")` | as above; both hashes null |
 | `digest.shared` | the approval poller (or the tool call) after the resident's grant and `approval start` (lane O3) | `digest_id`, `scope`, `text`, `expires_at`, `idempotency_key`, `payload_hash`, `start_seq`, `authorization` — see "Sharing a digest and the weekly vote" |
 | `digest.revoked` | `share_digest(action="revoke")` on a shared digest | `digest_id` |
@@ -432,7 +432,9 @@ with anything else reported as `other`; and `parent_session_id`, the session tha
 (learned from `subagent_start`), else null. `text_length` and `summary_length` count characters
 (Python `len`, code points), not bytes. Every key is always present, and null when unknown, with
 one exception: `status_only: true` (DATA-249) appears only on the `intention.updated` of an Index
-`pause_intent` / `resume_intent`, an update of Index's status alone with both hashes null. It is
+`pause_intent` / `resume_intent`, an update of Index's status alone with both hashes null, and on
+every approval-path `intention.updated` (published, Index's refusal, ambiguous, failed, the
+resident's decline: the held text restated unchanged, the capture's `text_hash`; DREAM-1). It is
 the key the Index poller sets on its own status-only updates. The data side will treat such an
 update as no text version from the data release that carries DATA-248 (in progress); until then
 it is stored as sent. It is absent from every other intention event. A pause or resume whose
@@ -801,7 +803,7 @@ stops it.
 observer emits the one `intention.captured` (with `index_intent_id`, `approved_by`,
 `approval_state`). A later one (the poller, or `confirm`) is emitted by the plugin as
 `intention.updated` with `index_intent_id`, `approved_by` (`individual` for a human's grant, `rule`
-for the policy, from `start`'s `authorization`), `approval_state`, and the `text_hash` of the exact
+for the policy, from `start`'s `authorization`), `approval_state`, `status_only: true` (the held text, unchanged), and the `text_hash` of the exact
 string sent to Index. `approved_by` and `approval_state` are present only on this path. `confirm`'s
 own result records nothing.
 
@@ -1491,7 +1493,7 @@ writes its state on every exit. It appends one record per run to
 | `nightly_limit_reached` | another run recorded one this village night |
 | `inferred_card_open` | an inferred proposal is still unanswered (`unfiled`, `requested`, `cleared`, `starting`, `publishing`) |
 | `previously_declined` | the text's held hash is a declined proposal's, or it matches a declined text this pass recorded under `loose_key`: NFKC and case folded, hyphens and dashes joined ("co-founder" = "cofounder"), letters, digits, combining marks, `+` and `#` kept, every other character a word break ("Learn C++" ≠ "Learn C", "find therapist" ≠ "find the rapist", "1:1" ≠ "11") |
-| `topic_declined` | DREAM-1: the text is the same topic as two or more declined proposals. Words: the `loose_key` tokens minus a fixed list of stop words and tokens with no letter, an ASCII plural of 4+ letters without its final `s`; same topic: Jaccard overlap of at least 1/2 (`_core.topic_words`, `_core.same_topic`, vectors in `tests/vectors/topic_declined.json`, run by the gate's tests too). The declined word sets live in `memory_signal_runs.json` `declined_topics` (the gate folds them in on every run, the newest 50; never emitted). A decline no longer pauses other topics |
+| `topic_declined` | DREAM-1: the text is the same topic as two or more declined proposals. Words: the `loose_key` tokens minus a fixed list of stop words (English; Hindi and Hinglish, romanised and Devanagari; a few Tamil, Bengali and Arabic) and tokens with no letter, an ASCII plural of 4+ letters folded to its singular (`-es` after ss/ch/sh/x/zz, `-ies` to `-y`, else the final `s`); same topic: Jaccard overlap of at least 1/2 (`_core.topic_words`, `_core.same_topic`, vectors in `tests/vectors/topic_declined.json`, run by the gate's tests too). The declined word sets live in `memory_signal_runs.json` `declined_topics` (the gate folds them in on every run, the newest 50; never emitted). A decline no longer pauses other topics |
 | `caps_unknown` | the map cannot be read |
 
 The first refusal ends the pass: it is noted on the run record (`refusal`) and every later capture in

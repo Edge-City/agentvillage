@@ -865,6 +865,24 @@ def test_dream1_a_topic_declined_twice_is_refused_topic_declined_and_reported_pr
     assert capture(tool, OTHER_TOPIC)["success"] is True
 
 
+def test_dream1_an_exact_repeat_on_a_stopped_topic_is_refused_previously_declined_first(tool, box, plugin):
+    """Order (round 2): the exact-text checks come before the topic stop, so the very text the
+    resident declined is named as such (`previously_declined`), even when its topic is stopped too."""
+    import sys as _sys
+
+    ri = _sys.modules[f"{plugin.__name__}._record_intention"]
+    core = _sys.modules[f"{plugin.__name__}._core"]
+    recorded(box, ID1, DECLINED_A, 10, "2026-10-01")
+    recorded(box, ID2, DECLINED_B, 6, "2026-10-05")
+    box.run()
+    box.approvals((ID1, "rejected", 9 * DAY, None), (ID2, "rejected", 5 * DAY, None))
+    listed(tool)
+    declined = [{"intention_id": i, "words": sorted(core.topic_words(t))} for i, t in ((ID1, DECLINED_A), (ID2, DECLINED_B))]
+    assert core.topic_stopped(core.topic_words(DECLINED_A), declined)  # its topic is stopped too
+    out = capture(tool, "looking for a HARDWARE co-founder, for the seed library!")  # the same text, loosely
+    assert out == {"success": False, "error": "previously_declined", "message": ri.REFUSALS["previously_declined"]}
+
+
 def test_dream1_the_gate_keeps_the_declined_sets_and_the_tool_reads_them_after_the_runs_scroll_off(tool, box, home, plugin):
     import sys as _sys
 

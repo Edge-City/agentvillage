@@ -1,6 +1,6 @@
 {
  "about": "DREAM-1 declined-topic stop (_core.topic_words, _core.same_topic, _core.topic_stopped). Run by plugins/av-events/tests/test_inference_run.py (the plugin, on _core) and scripts/tests/memory-signal-gate.test.ts (the gate, through plugin_core): both sides must give these results.",
- "rule": "words: loose_key tokens, minus the fixed stop words and tokens with no letter; an ASCII plural of 4+ letters loses its final s (not after ss, us, is). same topic: both sets non-empty and 2 x shared >= all (Jaccard >= 1/2). stopped: the candidate is the same topic as 2 or more declined suggestions.",
+ "rule": "words: loose_key tokens, minus the fixed stop words (English; Hindi and Hinglish, romanised and Devanagari; a few Tamil, Bengali and Arabic) and tokens with no letter; an ASCII plural of 4+ letters is folded: -sses/-ches/-shes/-xes/-zzes lose 'es', -ies of 5+ letters becomes -y, any other -s is dropped (not after ss, us, is). Known edge: a singular in -ie or -che ('movie', 'niche') folds apart from its plural. same topic: both sets non-empty and 2 x shared >= all (Jaccard >= 1/2). stopped: the candidate is the same topic as 2 or more declined suggestions.",
  "words": [
   {"text": "Looking for a hardware co-founder for the seed library", "words": ["cofounder", "hardware", "library", "seed"]},
   {"text": "Meet 2-3 climate investors this month", "words": ["climate", "investor"]},
@@ -9,7 +9,21 @@
   {"text": "I need help with my business", "words": ["business"]},
   {"text": "Physics tutoring", "words": ["physic", "tutoring"]},
   {"text": "🌱", "words": []},
-  {"text": "the and of", "words": []}
+  {"text": "the and of", "words": []},
+  {"text": "Mujhe guitar sikhne ke liye ek teacher chahiye", "words": ["guitar", "sikhne", "teacher"]},
+  {"text": "Mujhe apne app ke liye ek designer chahiye", "words": ["app", "designer"]},
+  {"text": "Koi yoga partner hai kya?", "words": ["partner", "yoga"]},
+  {"text": "मुझे गिटार सीखने के लिए एक शिक्षक चाहिए", "words": ["गिटार", "शिक्षक", "सीखने"]},
+  {"text": "मुझे बहुत ज़्यादा योग चाहिए", "words": ["योग"]},
+  {"text": "मुझे ऐप के लिए एक डिज़ाइनर चाहिए", "words": ["ऐप", "डिज़ाइनर"]},
+  {"text": "எனக்கு ஒரு யோகா துணை வேண்டும்", "words": ["துணை", "யோகா"]},
+  {"text": "আমার একজন গিটার শিক্ষক দরকার", "words": ["গিটার", "শিক্ষক"]},
+  {"text": "أريد أن أجد معلم جيتار في غوا", "words": ["جيتار", "غوا", "معلم"]},
+  {"text": "Coaches for startup companies", "words": ["coach", "company", "startup"]},
+  {"text": "Yoga classes for small businesses", "words": ["business", "class", "small", "yoga"]},
+  {"text": "Wishes, boxes and taxes", "words": ["box", "tax", "wish"]},
+  {"text": "Ties and VCs", "words": ["tie", "vcs"]},
+  {"text": "Movies", "words": ["movy"]}
  ],
  "pairs": [
   {"a": "Looking for a hardware co-founder for the seed library", "b": "Find a cofounder for the seed library", "same": true},
@@ -23,7 +37,13 @@
   {"a": "Find cofounders", "b": "find a cofounder", "same": true},
   {"a": "Surfing", "b": "surfing lessons", "same": true},
   {"a": "Surfing", "b": "surfing lessons in Goa", "same": false},
-  {"a": "🌱", "b": "🌱", "same": false}
+  {"a": "🌱", "b": "🌱", "same": false},
+  {"a": "Coaches", "b": "a coach", "same": true},
+  {"a": "tech companies", "b": "a tech company", "same": true},
+  {"a": "Yoga classes", "b": "a yoga class", "same": true},
+  {"a": "Mujhe guitar sikhne ke liye ek teacher chahiye", "b": "Mujhe yoga ke liye ek partner chahiye", "same": false},
+  {"a": "मुझे गिटार सीखने के लिए एक शिक्षक चाहिए", "b": "मुझे योग के लिए एक साथी चाहिए", "same": false},
+  {"a": "Mujhe ek guitar teacher chahiye", "b": "guitar teacher", "same": true}
  ],
  "cases": [
   {"candidate": "Hardware cofounder wanted for the seed library", "declined": ["Looking for a hardware co-founder for the seed library"], "expected": null},
@@ -32,6 +52,33 @@
   {"candidate": "Hardware cofounder wanted for the seed library", "declined": ["Looking for a hardware co-founder for the seed library", "Looking for soil scientists"], "expected": null},
   {"candidate": "climate investors", "declined": ["Meet 2-3 climate investors this month", "investors for my climate startup"], "expected": "topic_declined"},
   {"candidate": "Find a tennis partner", "declined": ["Find a running partner", "Find a running partner"], "expected": null},
-  {"candidate": "🌱", "declined": ["🌱", "🌱"], "expected": null}
+  {"candidate": "🌱", "declined": ["🌱", "🌱"], "expected": null},
+  {"candidate": "Mujhe startup ke liye ek investor chahiye", "declined": ["Mujhe guitar sikhne ke liye ek teacher chahiye", "Mujhe yoga ke liye ek partner chahiye"], "expected": null},
+  {"candidate": "Mujhe Goa mein ek flat chahiye", "declined": ["Mujhe guitar sikhne ke liye ek teacher chahiye", "Mujhe yoga ke liye ek partner chahiye"], "expected": null},
+  {"candidate": "Mujhe coding ke liye ek mentor chahiye", "declined": ["Mujhe guitar sikhne ke liye ek teacher chahiye", "Mujhe yoga ke liye ek partner chahiye"], "expected": null},
+  {"candidate": "Mujhe running ke liye ek buddy chahiye", "declined": ["Mujhe guitar sikhne ke liye ek teacher chahiye", "Mujhe yoga ke liye ek partner chahiye"], "expected": null},
+  {"candidate": "Mujhe apne app ke liye ek designer chahiye", "declined": ["Mujhe guitar sikhne ke liye ek teacher chahiye", "Mujhe yoga ke liye ek partner chahiye"], "expected": null},
+  {"candidate": "Mujhe Spanish sikhne ke liye ek tutor chahiye", "declined": ["Mujhe guitar sikhne ke liye ek teacher chahiye", "Mujhe yoga ke liye ek partner chahiye"], "expected": null},
+  {"candidate": "Mujhe climbing ke liye ek partner chahiye", "declined": ["Mujhe guitar sikhne ke liye ek teacher chahiye", "Mujhe yoga ke liye ek partner chahiye"], "expected": null},
+  {"candidate": "Mujhe research ke liye ek co-author chahiye", "declined": ["Mujhe guitar sikhne ke liye ek teacher chahiye", "Mujhe yoga ke liye ek partner chahiye"], "expected": null},
+  {"candidate": "Guitar sikhne ke liye teacher chahiye", "declined": ["Mujhe guitar sikhne ke liye ek teacher chahiye", "Mujhe ek guitar teacher chahiye"], "expected": "topic_declined"},
+  {"candidate": "मुझे स्टार्टअप के लिए एक निवेशक चाहिए", "declined": ["मुझे गिटार सीखने के लिए एक शिक्षक चाहिए", "मुझे योग के लिए एक साथी चाहिए"], "expected": null},
+  {"candidate": "मुझे कोडिंग के लिए एक मेंटर चाहिए", "declined": ["मुझे गिटार सीखने के लिए एक शिक्षक चाहिए", "मुझे योग के लिए एक साथी चाहिए"], "expected": null},
+  {"candidate": "मुझे दौड़ने के लिए एक साथी चाहिए", "declined": ["मुझे गिटार सीखने के लिए एक शिक्षक चाहिए", "मुझे योग के लिए एक साथी चाहिए"], "expected": null},
+  {"candidate": "मुझे ऐप के लिए एक डिज़ाइनर चाहिए", "declined": ["मुझे गिटार सीखने के लिए एक शिक्षक चाहिए", "मुझे योग के लिए एक साथी चाहिए"], "expected": null},
+  {"candidate": "मुझे गोवा में एक फ्लैट चाहिए", "declined": ["मुझे गिटार सीखने के लिए एक शिक्षक चाहिए", "मुझे योग के लिए एक साथी चाहिए"], "expected": null},
+  {"candidate": "मुझे शोध के लिए एक सह-लेखक चाहिए", "declined": ["मुझे गिटार सीखने के लिए एक शिक्षक चाहिए", "मुझे योग के लिए एक साथी चाहिए"], "expected": null},
+  {"candidate": "गिटार सीखने के लिए शिक्षक चाहिए", "declined": ["मुझे गिटार सीखने के लिए एक शिक्षक चाहिए", "मुझे एक गिटार शिक्षक चाहिए"], "expected": "topic_declined"},
+  {"candidate": "எனக்கு ஒரு முதலீட்டாளர் வேண்டும்", "declined": ["எனக்கு ஒரு கிட்டார் ஆசிரியர் வேண்டும்", "எனக்கு ஒரு யோகா துணை வேண்டும்"], "expected": null},
+  {"candidate": "எனக்கு ஒரு வழிகாட்டி வேண்டும்", "declined": ["எனக்கு ஒரு கிட்டார் ஆசிரியர் வேண்டும்", "எனக்கு ஒரு யோகா துணை வேண்டும்"], "expected": null},
+  {"candidate": "எனக்கு ஒரு வடிவமைப்பாளர் வேண்டும்", "declined": ["எனக்கு ஒரு கிட்டார் ஆசிரியர் வேண்டும்", "எனக்கு ஒரு யோகா துணை வேண்டும்"], "expected": null},
+  {"candidate": "আমার একজন বিনিয়োগকারী দরকার", "declined": ["আমার একজন গিটার শিক্ষক দরকার", "আমার একজন যোগ সঙ্গী দরকার"], "expected": null},
+  {"candidate": "আমার একজন মেন্টর দরকার", "declined": ["আমার একজন গিটার শিক্ষক দরকার", "আমার একজন যোগ সঙ্গী দরকার"], "expected": null},
+  {"candidate": "আমার একজন ডিজাইনার দরকার", "declined": ["আমার একজন গিটার শিক্ষক দরকার", "আমার একজন যোগ সঙ্গী দরকার"], "expected": null},
+  {"candidate": "أريد أن أجد مستثمر في غوا", "declined": ["أريد أن أجد معلم جيتار في غوا", "أريد أن أجد شريك يوغا في غوا"], "expected": null},
+  {"candidate": "أريد أن أجد مرشد في غوا", "declined": ["أريد أن أجد معلم جيتار في غوا", "أريد أن أجد شريك يوغا في غوا"], "expected": null},
+  {"candidate": "أريد أن أجد مصمم في غوا", "declined": ["أريد أن أجد معلم جيتار في غوا", "أريد أن أجد شريك يوغا في غوا"], "expected": null},
+  {"candidate": "startup coaches", "declined": ["Find a startup coach", "Startup coaches wanted"], "expected": "topic_declined"},
+  {"candidate": "Tech companies hiring", "declined": ["tech companies", "a tech company hiring"], "expected": "topic_declined"}
  ]
 }

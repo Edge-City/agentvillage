@@ -688,8 +688,9 @@ def _intention_payload(call: IntentionCall, capture: str, parent_session_id: Opt
     }
     if call.status_only:
         # DATA-249: Index `pause_intent` / `resume_intent`, an update of the
-        # status alone (both hashes null). Same key as the Index poller's
-        # status-only updates; present only on those events.
+        # status alone (both hashes null); and (DREAM-1) every approval-path
+        # update, which restates the held text unchanged. Same key as the Index
+        # poller's status-only updates; present only on those events.
         payload["status_only"] = True
     # DATA-212 Lane B: present only on a `record_intention` event that went
     # through approval.md. `approved_by` = `individual` (a human's grant) or
@@ -825,8 +826,11 @@ def _emit_intention_update(
     `rejected`, no `index_intent_id`). One `intention.updated` with `index_intent_id`: the alias the data
     side registers, the poller's `sourceId` read corroborating it. Its
     `text_hash` is the plain SHA-256 of the exact string sent to Index.
-    Telemetry only: inert when the collector is, and never the publish's
-    record (the daemon's log is)."""
+    Every one of these restates the held text unchanged (the capture's
+    hash), so each says `status_only: true` (DATA-248: a row in the version
+    history, never a text version; with an Index id, data's publish-claim
+    shape). Telemetry only: inert when the collector is, and never the
+    publish's record (the daemon's log is)."""
     collector = _COLLECTOR
     if collector is None or not collector.config.active:
         return
@@ -840,6 +844,7 @@ def _emit_intention_update(
         source=source if source in ("message", "onboarding", "note", "ambient") else "ambient",
         capture_path="record_intention",
         publish_refused=publish_refused,
+        status_only=True,
         approved_by=approved_by,
         approval_state=approval_state,
     )

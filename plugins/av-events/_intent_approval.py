@@ -99,6 +99,8 @@ emitted here as `intention.updated` with `index_intent_id`, `approved_by`
 (`individual` for a human's grant, `rule` for the policy) and
 `approval_state`, through the emitter the plugin registers (`set_emitter`).
 So is the resident's decline (DREAM-1: `approval_state` `rejected`, no text).
+Each restates the held text unchanged, so the plugin marks it `status_only`;
+only the path whose compare-and-set made the change emits (`Outcome.won`).
 
 Python 3.11, standard library only.
 """
@@ -223,15 +225,18 @@ def text_of(payload: Any) -> Optional[str]:
 class Outcome:
     """Where an advance left the proposal."""
 
-    __slots__ = ("state", "code", "index_intent_id", "authorization", "task")
+    __slots__ = ("state", "code", "index_intent_id", "authorization", "task", "won")
 
     def __init__(self, state: str, *, code: Optional[str] = None, index_intent_id: Optional[str] = None,
-                 authorization: Optional[str] = None, task: Optional[str] = None) -> None:
+                 authorization: Optional[str] = None, task: Optional[str] = None, won: bool = True) -> None:
         self.state = state
         self.code = code
         self.index_intent_id = index_intent_id
         self.authorization = authorization
         self.task = task
+        #: False when another path's compare-and-set moved the proposal first (DREAM-1 round 2):
+        #: the state is the same, and that path reports it, so this one emits nothing.
+        self.won = won
 
     @property
     def approved_by(self) -> Optional[str]:
@@ -459,8 +464,8 @@ def _propose(intention_id: str, ap: dict) -> Optional[Outcome]:
     else:
         _note_code(intention_id, "bad_answer")
         return Outcome("unfiled", code="bad_answer")
-    _set_state(intention_id, {"unfiled"}, new, task=task, payload_hash=registered, code=None, card=card)
-    return Outcome(new, task=task) if stop else None
+    won = _set_state(intention_id, {"unfiled"}, new, task=task, payload_hash=registered, code=None, card=card) is not None
+    return Outcome(new, task=task, won=won) if stop else None
 
 
 def _repropose(intention_id: str, kind: str, cap: int, expect: set[str], claim: Optional[str] = None) -> Optional[Outcome]:
@@ -522,8 +527,9 @@ def _poll(intention_id: str, ap: dict, execute: bool = True) -> Optional[Outcome
         return None
     if exit_code == 1 and status in ("rejected", "revoked", "withdrawn"):
         terminal = "withdrawn" if status == "withdrawn" else "rejected"
-        _set_state(intention_id, {"requested"}, terminal, code=status, card=("close", _cards.resolution_of(status)))
-        return Outcome(terminal, task=task)
+        won = _set_state(intention_id, {"requested"}, terminal, code=status,
+                         card=("close", _cards.resolution_of(status))) is not None
+        return Outcome(terminal, task=task, won=won)
     if exit_code == 3 and status == "expired":
         return _repropose(intention_id, "expired", MAX_EXPIRED_REPROPOSALS, {"requested"})
     if exit_code == 7 and status == "void":
@@ -753,7 +759,9 @@ def _advance(intention_id: str, *, emit: bool, inline: bool = False, expect_clas
                     return result
                 continue
             if result is not None:
-                if emit and result.state in EMITTED:
+                # Only the path whose compare-and-set made the change reports it: a poller pass and a
+                # `confirm` that both read the daemon's no emit one `rejected` between them.
+                if emit and result.state in EMITTED and result.won:
                     _emit(intention_id, entry, ap, result)
                 return result
         return Outcome("unknown")

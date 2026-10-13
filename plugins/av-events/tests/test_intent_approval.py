@@ -484,6 +484,122 @@ def test_dream1_a_decline_read_by_confirm_in_chat_is_reported_once(tctx, serve, 
     assert updated[0]["payload"]["text_hash"] == sha(TEXT)
 
 
+# DREAM-1 round 2: every update the approval path sends restates the held text unchanged, so it
+# says `status_only: true` (DATA-248: a row in the version history, never a text version); and a
+# decline two paths read at once is reported once.
+
+
+def _state_only(**over: Any) -> dict:
+    """The exact payload of an approval-path `intention.updated`: the held text's hash and length
+    (the capture's), no summary, `status_only: true`."""
+    return {"text_hash": sha(TEXT), "summary_hash": None, "index_intent_id": None, "source": "ambient",
+            "conditional": None, "capture_path": "record_intention", "index_status": None,
+            "parent_session_id": None, "publish_refused": None, "local_reason": None, "status_only": True,
+            "text_length": len(TEXT), "summary_length": None, **over}
+
+
+def _arrange_crash_while_publishing(serve, mods, iid, monkeypatch):  # noqa: ANN001
+    now = time.time()
+    monkeypatch.setattr(mods.ri, "_clock", lambda: now)
+    mods.ia._set_state(iid, {"requested"}, "publishing", publishing_at=now - 5, task=task_id(INFERRED, f"{INFERRED}:{iid}"))
+    monkeypatch.setattr(mods.ri, "_clock", lambda: now + 120)
+
+
+@pytest.mark.parametrize("case, expected", [
+    ("rejected", _state_only(approval_state="rejected")),
+    ("published", _state_only(index_intent_id=INDEX_ID, approved_by="individual", approval_state="published")),
+    ("index_rejected", _state_only(publish_refused="rejected", approved_by="individual", approval_state="index_rejected")),
+    ("ambiguous", _state_only(publish_refused="timeout", approved_by="individual", approval_state="ambiguous")),
+    ("ambiguous_stale", _state_only(publish_refused="timeout", approval_state="ambiguous")),
+    ("index_failed", _state_only(publish_refused="http_503", approved_by="individual", approval_state="index_failed")),
+])
+def test_dream1_every_approval_path_update_is_status_only_with_the_captured_text_hash(
+        tctx, serve, index, mods, av, plugin, monkeypatch, case, expected):
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    key = f"{INFERRED}:{iid}"
+    if case == "rejected":
+        serve.reject(key)
+    elif case == "ambiguous_stale":
+        _arrange_crash_while_publishing(serve, mods, iid, monkeypatch)
+    else:
+        serve.grant(key)
+        index.answers = {"published": [], "index_rejected": [http_error(422)], "ambiguous": [{}],
+                         "index_failed": [urllib.error.URLError(ConnectionRefusedError()), http_error(503)]}[case]
+    poll(mods)
+    poll(mods)
+    captured, updated = events(av, plugin)
+    assert captured["event_type"] == "intention.captured" and updated["event_type"] == "intention.updated"
+    assert updated["intention_id"] == iid
+    assert updated["payload"] == expected
+    # The text is unchanged: the very hash the capture sent, so not a text version on the data side.
+    assert updated["payload"]["text_hash"] == captured["payload"]["text_hash"]
+    assert "status_only" not in captured["payload"]
+
+
+def test_dream1_the_text_updates_and_captures_of_record_intention_still_carry_no_status_only(
+        tctx, serve, index, mods, av, plugin):
+    out = call(tctx, {"text": STATED, "source": "message"})  # the stated class: published in this call
+    assert out["published"] is True
+    update = call(tctx, {"action": "update", "intention_id": out["intention_id"], "text": STATED + " too"},
+                  tool_call_id="c2")
+    assert update["success"] is True
+    kinds = [(e["event_type"], "status_only" in e["payload"]) for e in events(av, plugin)]
+    assert kinds == [("intention.captured", False), ("intention.updated", False)]
+
+
+@pytest.mark.parametrize("first", ["poller", "confirm"])
+def test_dream1_a_decline_the_poller_and_a_confirm_read_at_once_is_emitted_once(
+        tctx, serve, index, mods, av, plugin, first):
+    """Both paths read `requested` and both get the daemon's no; only the one whose
+    compare-and-set moved the proposal to `rejected` emits."""
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    serve.reject(f"{INFERRED}:{iid}")
+    seen: list[Any] = []
+
+    def other_path_meanwhile(n: int):
+        if n == 1:  # the first path asked the daemon; the other runs to the end before its answer lands
+            seen.append(poll(mods) if first == "confirm"
+                        else call(tctx, {"action": "confirm", "intention_id": iid}, tool_call_id="c2"))
+        return None
+
+    serve.on_wait = other_path_meanwhile
+    if first == "poller":
+        poll(mods)
+    else:
+        out = call(tctx, {"action": "confirm", "intention_id": iid}, tool_call_id="c2")
+        assert out["error"] == "resident_declined"
+    assert len(seen) == 1 and serve.waits == 2  # both read the daemon's no
+    assert entry(mods, iid)["approval"]["state"] == "rejected"
+    updated = [e for e in events(av, plugin) if e["event_type"] == "intention.updated"]
+    assert [e["payload"]["approval_state"] for e in updated] == ["rejected"]
+
+
+def test_dream1_a_proposal_time_rejection_two_paths_read_at_once_is_emitted_once(
+        tctx, serve, index, mods, av, plugin):
+    """`_propose`: the daemon answers `rejected` to a proposal the poller and a `confirm` both file."""
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    serve.reject(f"{INFERRED}:{iid}")
+    # Back to `unfiled` (as after a lost registration): the next step proposes the same bytes again.
+    assert mods.ia._set_state(iid, {"requested"}, "unfiled") is not None
+    real_propose = serve._propose
+    seen: list[dict] = []
+    proposals: list[int] = []
+
+    def propose(pos, flags):  # noqa: ANN001
+        proposals.append(1)
+        if len(proposals) == 1:  # the poller's: a confirm files it too before this answer lands
+            seen.append(call(tctx, {"action": "confirm", "intention_id": iid}, tool_call_id="c2"))
+        return real_propose(pos, flags)
+
+    serve._propose = propose  # type: ignore[method-assign]
+    poll(mods)
+    assert seen[0]["error"] == "resident_declined"
+    assert len(serve.proposals()) == 3  # the capture's, then both paths'
+    assert entry(mods, iid)["approval"]["state"] == "rejected"
+    updated = [e for e in events(av, plugin) if e["event_type"] == "intention.updated"]
+    assert [e["payload"]["approval_state"] for e in updated] == ["rejected"]
+
+
 def test_expiry_re_proposes_the_same_bytes_twice_then_gives_up(tctx, serve, index, mods):
     iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
     key = f"{INFERRED}:{iid}"
