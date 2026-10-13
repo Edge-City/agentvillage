@@ -39,6 +39,8 @@ optional_env:
   # DATA-470: intention.inference_run@1 for the memory signal sync, off until
   # the data release registering it is live.
   - AV_INFERENCE_RUN_EVENTS
+  # SEC-3: off until the data release registering plugin.inventory@1 / plugin.unknown@1 is live
+  - AV_PLUGIN_EVENTS
 # Documentation only — Hermes registers the tool from ctx.register_tool() (toolset
 # av-events, DATA-157); `hermes plugins` reads this list to name the toolset.
 provides_tools:

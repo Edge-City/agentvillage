@@ -62,6 +62,8 @@ AV_ENV_VARS = (
     "AV_TERMINAL_ARGS_FIX",
     # DATA-470: intention.inference_run, off until the data release registers it.
     "AV_INFERENCE_RUN_EVENTS",
+    # SEC-3: plugin.inventory / plugin.unknown, off until the data release registers them.
+    "AV_PLUGIN_EVENTS",
 )
 
 

@@ -38,6 +38,8 @@ from ._core import (
 from ._cron import cron_job_id_from
 # DATA-470 family, on its own line so it merges beside other lanes' imports.
 from . import _card_events
+# SEC-3, on its own line for the same reason.
+from . import _plugin_events
 from ._intentions import IntentionCall, classify_tool, valid_id
 from ._intentions import plan as plan_intentions
 from ._messages import is_injected_turn, is_silent, message_payload
@@ -1047,6 +1049,9 @@ def _on_memory_recalled(collector: Collector, **kwargs: Any) -> None:
 #: `AV_HOOKS_DISABLED=memory_recalled` turns this one off like any hook.
 SUBSCRIPTION_BODIES = {
     MEMORY_RECALLED_BUS_EVENT: ("memory_recalled", _on_memory_recalled),
+    # SEC-3: av-approval's plugin inventory, behind AV_PLUGIN_EVENTS (default off), `_plugin_events`.
+    _plugin_events.INVENTORY_BUS_EVENT: (_plugin_events.HOOK_NAME, _plugin_events.on_inventory),
+    _plugin_events.UNKNOWN_BUS_EVENT: (_plugin_events.HOOK_NAME, _plugin_events.on_unknown),
 }
 
 

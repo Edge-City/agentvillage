@@ -35,7 +35,9 @@ def recalled_events(plugin, av):
 
 def test_register_subscribes_to_the_recall_bus_event(plugin, ctx):
     plugin.register(ctx)
-    assert list(ctx.subscriptions) == ["recall:memory.recalled"]
+    # SEC-3 added av-approval's two plugin-inventory events (test_plugin_events.py).
+    assert list(ctx.subscriptions) == ["recall:memory.recalled", "av-approval:plugin.inventory", "av-approval:plugin.unknown"]
+    assert len(ctx.subscriptions["recall:memory.recalled"]) == 1
     # Subscribing adds no hook: the spec hook set is unchanged.
     assert set(ctx.hooks) == set(plugin.HOOK_BODIES)
 
