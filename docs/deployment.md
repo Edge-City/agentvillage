@@ -108,7 +108,8 @@ where this page is briefer.
    looks like a release has a number longer than 6 digits, a directory that
    `test.yml` runs `bun test` on does not exist at the commit
    (`suite_dir_missing`: the suites would otherwise pass without running it),
-   or the tags or the seed check changed while it ran. Text from the
+   the version and commit are not approved in `release/RC-MANIFEST.md` on
+   `main` (below), or the tags or the seed check changed while it ran. Text from the
    repository (commit subjects, seed `version` strings, tag names) is cleaned
    of control characters and shown as code in the summary; a seed `version`
    that is not one plain string is shown as `(unreadable version)` and counts
@@ -116,13 +117,26 @@ where this page is briefer.
    (`scripts/tag-release.ts` holds the logic). Its actions are pinned by
    commit SHA, unlike this repo's other workflows, because its tag job holds a
    token that can write; the suites it calls run in their own read-only jobs.
-   Fallback, by hand: `git tag -a v2.0.0-rcN <commit> -m "..."` and
-   `git push origin v2.0.0-rcN`.
+   Fallback, by hand, for Carter only: `git tag -a v2.0.0-rcN <commit> -m "..."`
+   and `git push origin v2.0.0-rcN`. It bypasses the manifest.
+
+   **Approving a tag (REL-1).** A real run tags only a version and commit
+   that `release/RC-MANIFEST.md` on `main` approves, with the line
+   `v2.0.0-rcN = <full 40-character commit id>` inside its `rc-manifest`
+   block. The file is read from `main` at run time, never from the commit
+   being tagged, and checked again just before the tag is pushed. The release
+   seat opens a pull request adding that line; Carter merges it after the
+   gate; then run Tag release with `ref` set to that commit id and `version`
+   to that version, dry run first (it says whether the manifest approves the
+   plan). A missing file, a line it cannot read, a short commit id or one
+   version listed with two commits refuses every real run (`manifest_missing`,
+   `manifest_invalid`; a plan the file does not name is `not_in_manifest`).
 
    | Tag release problem | What to do |
    |---|---|
    | The suites fail at the commit | Nothing was created. Fix on `main` and tag the new commit, or give an earlier `ref` whose suites pass. |
    | "The tags changed since this run planned" or the push was rejected | Someone tagged meanwhile; nothing of this run was pushed. Run again (a dry run first). |
+   | `not_in_manifest`, `manifest_missing` or `manifest_invalid` | Nothing was created. Get the line the refusal names approved (a pull request to `release/RC-MANIFEST.md`, merged by Carter after the gate), or fix the file, then run again with that exact commit and version. |
    | `suite_dir_missing` | The commit predates a suite directory that `test.yml` on `main` runs. Release a newer commit, or tag by hand after running the suites that exist at that commit. |
    | GitHub refuses the tag push from the workflow's token (a permission or rule error in the tag job) | Tag by hand with the fallback above. If it keeps happening, a repository admin can add a write deploy key as a secret and the workflow can push with it, as the control plane's and data repo's Deploy buttons do; not set up today. |
 2. If the tag changes `plugins/av-events/tool_categories.json`,
@@ -224,7 +238,8 @@ on it:
 7. The plan step's log has no stray annotations and the summary renders as a
    table with code spans.
 8. A real run with `dry_run` unticked, `ref` the full commit id from the dry
-   run, the same `version` and `note` if you gave them.
+   run, the same `version` and `note` if you gave them, once
+   `release/RC-MANIFEST.md` on `main` approves that version and commit.
 9. `git fetch --tags` and `git cat-file -p <tag>`: annotated, tagger
    `github-actions[bot]`, a message naming you, the run, the commit, the seed
    check and the commits; `git ls-remote --heads origin` unchanged.
@@ -726,7 +741,9 @@ tag and roll, then the manifest PR recording what is live.
 |---|---|
 | Merge to `main` after review | whoever the repo's merge rule names |
 | Deploy the control plane or landing | anyone with write access to that repo, with a group-chat line |
-| Tag this repo (the Tag release button, or by hand) | anyone with write access here |
+| Approve a tag (a line in `release/RC-MANIFEST.md`) | the release seat writes the pull request; Carter merges it |
+| Tag this repo with the Tag release button | anyone with write access here, for a tag the manifest approves |
+| Tag this repo by hand (bypasses the manifest) | Carter only |
 | Roll residents | anyone with write access to the controlplane repo, through the staged procedure |
 | Release ingest, run migrations | the data owner |
 | Change a Railway variable or setting | a Railway admin, stating the exact change first |

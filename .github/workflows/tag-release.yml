@@ -26,7 +26,20 @@
 # creates the annotated tag and pushes only refs/tags/<version>: never a branch,
 # never forced).
 # Logic and its tests: scripts/tag-release.ts, scripts/tests/tag-release.test.ts.
-# The hand fallback: git tag -a vX.Y.Z-rcN <commit> -m "..." && git push origin vX.Y.Z-rcN
+#
+# The manifest (REL-1, Carter 13 Oct, after rc34 was cut on ungated main): a
+# real run tags only when release/RC-MANIFEST.md on main, read from main as
+# fetched at run time (never from the ref being tagged), has the line
+# `<version> = <full commit id>` for exactly the planned version and commit.
+# The plan job checks it on real runs; the tag job checks it again after its
+# fetch, so an approval removed meanwhile refuses. No file, a line it cannot
+# parse, a short commit id, or one version with two commits refuses every real
+# run. A dry run creates nothing and only reports it (a warning when the line
+# is missing). To approve a tag: the release seat's pull request adds the line,
+# Carter merges it after the gate, then run this with ref = that commit id.
+#
+# The hand fallback, Carter only (it bypasses the manifest):
+#   git tag -a vX.Y.Z-rcN <commit> -m "..." && git push origin vX.Y.Z-rcN
 #
 # No secrets. The plan job reads test.yml's runs with its own GITHUB_TOKEN
 # (contents: read, actions: read), handed (as GH_TOKEN) only to the step that
@@ -51,7 +64,7 @@ on:
         required: true
         default: main
       dry_run:
-        description: 'Dry run: plan and test, create nothing (untick to tag)'
+        description: 'Dry run: plan and test, create nothing (untick to tag; needs the line in release/RC-MANIFEST.md on main)'
         type: boolean
         default: true
       version:
