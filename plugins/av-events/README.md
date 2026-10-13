@@ -1471,15 +1471,20 @@ stops the flusher.
 
 "Edge — memory signal sync" (01:00 IST) is the one path to an inferred (ambient) intent and an
 `intent.publish.inferred.index` approval card. Its preflight gate
-(`skills/index-network/scripts/memory_signal_gate.py`) assembles the resident's own material (the
-stated goals of their Context page, their own messages since the last run from `state.db`, the
-`Removed by you` list, the inferred suggestions they declined, and the agent's `MEMORY.md` without its
-housekeeping) into `$HERMES_HOME/memory/memory-signal-inputs.md` (0600), wakes the model only on
+(`skills/index-network/scripts/memory_signal_gate.py`) assembles six inputs (the stated goals of
+their Context page, their own messages since the last run from `state.db`, the `Removed by you` list,
+the inferred suggestions they declined, Index's connection matches already waiting for them (on a
+wake only, from the 02:00 prefetch; names and headlines cleaned by `match-evidence.ts`; evidence, never
+a reason to wake), and the agent's `MEMORY.md` without its housekeeping) into
+`$HERMES_HOME/memory/memory-signal-inputs.md` (0600), wakes the model only on
 evidence (3+ resident messages of 40+ characters since the last run, a changed stated goal, or a
 changed filtered memory hash), stops before the model when a cap or the switch forbids a capture, and
 writes its state on every exit. It appends one record per run to
 `$HERMES_HOME/av-events/memory_signal_runs.json` (counts and codes; under `flock` on
-`memory_signal_runs.json.lock`, which this plugin takes too). `_inference_run.py` does the rest.
+`memory_signal_runs.json.lock`, which this plugin takes too). A woken record also carries
+`match_evidence` (`{status, listed, shown, withheld}`: box-local counts and a code, never a name or a
+headline), which is never emitted: `intention.inference_run` copies named keys only.
+`_inference_run.py` does the rest.
 
 **The caps, in the tool.** In that job's own cron session (its id is in `installed_jobs.json` and
 `cron/jobs.json` names it "Edge — memory signal sync"; a subagent it delegated to counts as it),

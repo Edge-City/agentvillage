@@ -27,12 +27,13 @@ on evidence:
   - the "Removed by you" list, and the inferred suggestions the resident
     declined on their approval card (from the plugin's map
     `$HERMES_HOME/av-events/intentions.json` and this pass's run records);
-  - Index's matches already waiting for them (DREAM-1 PR-1b), on a wake only: each
-    counterpart's name and Index's headline for the pairing, from the 02:00 prefetch
-    `$HERMES_HOME/av-events/proactive/brief-context.json`, cleaned by the morning brief's own
-    cleaner (`match-evidence.ts`: cleanName, matchFieldVerdict at MATCH_HEADLINE_MAX), which the
-    gate runs with bun as a local subprocess only after it decided to wake. Evidence the model
-    weighs, never a reason to wake; a failure names its code in the block and the wake goes on;
+  - Index's matches already waiting for them (DREAM-1 PR-1b), on a wake only: the resident's
+    own connection matches (never a community ask), each counterpart's name and Index's headline
+    for the pairing, from the 02:00 prefetch `$HERMES_HOME/av-events/proactive/brief-context.json`,
+    cleaned by the morning brief's own cleaner (`match-evidence.ts`: cleanName, matchFieldVerdict
+    at MATCH_HEADLINE_MAX), which the gate runs with `bun --no-env-file` from the script's own
+    directory, as a local subprocess, only after it decided to wake. Evidence the model weighs,
+    never a reason to wake; a failure names its code in the block and the wake goes on;
   - the agent's `memories/MEMORY.md` as a secondary source, without the
     profile entries and without the agent's housekeeping entries.
   Existing intents come from Index: the model lists them first.
@@ -96,6 +97,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -159,7 +161,8 @@ MAX_DECLINED_SHOWN = 5
 #: `skills/index-network/scripts/proactive.ts` from `$HERMES_HOME`.
 MATCH_EVIDENCE_SCRIPT = ("skills", "index-network", "scripts", "match-evidence.ts")
 MATCH_EVIDENCE_TIMEOUT_S = 10
-#: The environment the cleaner gets: HERMES_HOME (set by the gate) and these, when set.
+#: The environment the cleaner gets: HERMES_HOME (set by the gate) and these, when set. bun runs
+#: with `--no-env-file` from the script's own directory, so no `.env` adds to it (see match_evidence).
 MATCH_EVIDENCE_ENV = ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ")
 #: More output than this is not the cleaner's: `bad_output`.
 MATCH_EVIDENCE_OUTPUT_MAX = 64 * 1024
@@ -167,6 +170,9 @@ MATCH_EVIDENCE_OUTPUT_MAX = 64 * 1024
 MAX_MATCH_ROWS = 12
 #: A cleaned name (cleanName, NAME_MAX 40) or headline (MATCH_HEADLINE_MAX 60, and an ellipsis), with room.
 MAX_MATCH_FIELD_CHARS = 120
+#: Unicode categories a shown field may not hold: controls, format and bidi characters,
+#: surrogates, private use and unassigned (a plain space is Zs, allowed).
+MATCH_FIELD_BAD_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co", "Cn"})
 #: The cleaner's own statuses; the gate adds `bun_unavailable`, `timeout` and `bad_output`.
 MATCH_SCRIPT_STATUSES = frozenset({"ok", "missing", "stale", "unreadable", "error"})
 #: `match_evidence.status` in the run record: a closed code, never text.
@@ -377,10 +383,19 @@ def _count(value: Any) -> Optional[int]:
 
 
 def _match_field(value: Any) -> tuple[bool, Optional[str]]:
-    """(valid, the field): None, or one line of at most MAX_MATCH_FIELD_CHARS that is not blank."""
+    """(valid, the field): None, or one line of at most MAX_MATCH_FIELD_CHARS that is not blank,
+    encodes as UTF-8 (no lone surrogate) and holds no character of MATCH_FIELD_BAD_CATEGORIES
+    (no control, format, bidi, private-use or unassigned character). The genuine cleaner never
+    prints one; anything else is not its output, and write_inputs must never meet it."""
     if value is None:
         return True, None
     if not isinstance(value, str) or not value.strip() or len(value) > MAX_MATCH_FIELD_CHARS or len(value.splitlines()) != 1:
+        return False, None
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False, None
+    if any(unicodedata.category(ch) in MATCH_FIELD_BAD_CATEGORIES for ch in value):
         return False, None
     return True, value
 
@@ -429,12 +444,15 @@ def match_evidence(home: Path) -> tuple[dict, list[MatchRow]]:
         if bun is None:
             return _match_counts("bun_unavailable"), []
         # The cleaner reads one file under HERMES_HOME: it gets that and what bun itself needs, never
-        # the gateway's other variables (keys included).
+        # the gateway's other variables. bun would also load a `.env` from its working directory and
+        # run a `bunfig.toml` preload from there: `--no-env-file`, and the script's own directory as
+        # the working directory (never HERMES_HOME, where the box's `.env` with its keys and any
+        # `bunfig.toml` would sit), so neither does.
         env = {key: os.environ[key] for key in MATCH_EVIDENCE_ENV if os.environ.get(key)}
         env["HERMES_HOME"] = str(home)
         try:
             proc = subprocess.run(
-                [bun, str(script)], cwd=str(home) if home.is_dir() else None, env=env, stdin=subprocess.DEVNULL,
+                [bun, "--no-env-file", str(script)], cwd=str(script.parent), env=env, stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=MATCH_EVIDENCE_TIMEOUT_S, check=False,
             )
         except subprocess.TimeoutExpired:
@@ -994,8 +1012,8 @@ def inputs_text(*, run_id: str, goals: list[str], messages: list[tuple[float, st
         ("## Their own messages since the last run (oldest first)", message_lines),
         ("## Removed by you (never propose these, or anything close to them)", removed_lines),
         ("## Suggestions they declined on their approval card (never propose these, or anything close to them)", declined_lines),
-        ("## Index matches waiting for them (name and headline as Index wrote them; what they are being paired on, "
-         "not their words)", match_lines),
+        ("## Index's matches waiting for them: each counterpart's name and the headline Index wrote for the pairing "
+         "(a counterpart's text, not theirs)", match_lines),
         ("## Your own memory notes about them (secondary; your housekeeping left out)", memory_lines),
     ]
     content = "\n".join(line for _, lines in sections for line in lines)
