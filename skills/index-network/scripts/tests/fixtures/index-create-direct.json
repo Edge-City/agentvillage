@@ -1,0 +1,55 @@
+{
+  "source": "Shape from source, not observed live: indexnetwork/index a91c3fffdcba849f3c61517e58026ebe3578a88b (origin/main, 'Merge dev: morning window'; contains e8859d0a1621eaa4d8df9d3ed083e4aa4a272739 'Skip intent admission for agentvillage source'). Read only, never run. No live Index call was made to build this file: a create is a production write. Agrees with the overlay's own production create, plugins/av-events/_record_intention.py publish_intent (CREATE_PATH, _send headers, intentId).",
+  "files": {
+    "controller": "services/api/src/controllers/intent.controller.ts:14-20 (CreateSchema, strict), :125-162 (POST '' under @Controller('/intents'), GLOBAL_PREFIX '/api' in services/api/src/main.ts:41)",
+    "service": "services/api/src/services/intent.service.ts:14 (AGENTVILLAGE_SOURCE_TYPE), :212-236 (create: no receipt and sourceType 'agentvillage' => preparation {metadata: null}, admission skipped, description persisted verbatim)",
+    "auth": "services/api/src/guards/auth.guard.ts AuthGuard (Authorization: Bearer, else x-api-key); services/api/src/main.ts:355-362 (401 {error})",
+    "mcpOnly": "services/api/src/lib/mcp/mcp.tools.ts:353-381: MCP create_intent always prepares and answers intent_needs_revision; POST /api/intents never does"
+  },
+  "request": {
+    "method": "POST",
+    "path": "/api/intents",
+    "headers": ["Content-Type", "Accept", "x-api-key"],
+    "body": {
+      "required": ["description"],
+      "optional": ["preparationReceipt", "networkIds", "sourceType", "sourceId"],
+      "strict": true
+    },
+    "welcomeSeed": { "description": "<the resident's line, verbatim>", "sourceType": "agentvillage" }
+  },
+  "responses": {
+    "created": {
+      "status": 200,
+      "body": { "intentId": "aaaaaaaa-0000-4000-8000-000000000001", "networkIds": [], "sourceType": "agentvillage", "sourceId": null }
+    },
+    "validation": {
+      "status": 400,
+      "body": { "error": "Validation failed", "details": { "formErrors": [], "fieldErrors": { "description": ["description is required"] } } }
+    },
+    "unauthorized": { "status": 401, "body": { "error": "Invalid API key" } },
+    "membership": {
+      "status": 403,
+      "note": "only when networkIds names a network the caller is not in; the welcome sends none",
+      "body": { "error": "forbidden", "code": "network_membership_required", "detail": "You are not a current member of this network", "networkId": "00000000-0000-4000-8000-000000000000" }
+    },
+    "rejected": {
+      "status": 422,
+      "note": "for sourceType agentvillage without a receipt the verifier never runs: this is the graph creating nothing, not a verdict on the line",
+      "body": { "error": "intent_rejected", "code": "intent_rejected", "detail": "The signal could not be created from this description." }
+    },
+    "preparationFailed": {
+      "status": 503,
+      "note": "not reachable for sourceType agentvillage without a receipt",
+      "body": { "error": "preparation_failed", "detail": "Could not prepare this signal. Your answers are kept; try again.", "retryable": true }
+    },
+    "serverError": { "status": 500, "body": { "error": "Failed to create intent" } }
+  },
+  "notInSource": {
+    "needsRevision": {
+      "note": "Not an answer POST /api/intents gives at this commit (MCP-only). The welcome still treats a non-2xx JSON body with this code as Index refusing the line (the ask-the-resident fallback, REFUSED_SEEDS); this body is the MCP error object's shape, hypothetical on REST.",
+      "status": 422,
+      "body": { "success": false, "code": "intent_needs_revision", "error": "The signal needs revision before it can be created.", "feedback": "Make the goal more concrete: specify the role, outcome, or particular help you need.", "proposedPayload": "Here to meet founders", "recovery": [] }
+    },
+    "rateLimit": "no 429 on /api/intents in the controller or main.ts at this commit"
+  }
+}

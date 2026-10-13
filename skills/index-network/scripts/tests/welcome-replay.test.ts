@@ -7,20 +7,22 @@
  *
  * Each case runs `bun welcome.ts --draft --home <tmp>` (and the default mode)
  * with HERMES_HOME=<tmp>, INDEX_API_KEY and INDEX_MCP_URL pointing at a local
- * Bun.serve on 127.0.0.1 that fronts indexMcpFake. The stub is stateful:
- * `list_intents` answers the current rows, `create_intent` adds one active
- * row with its `description` as summary, `pause_intent` pauses the row it
- * names, so a seeded welcome re-lists what it created. Every call the stub
- * receives is recorded (tool name, arguments, headers).
+ * Bun.serve on 127.0.0.1 that fronts indexMcpFake (its MCP endpoint and its
+ * REST `POST /api/intents`). The stub is stateful: `list_intents` answers the
+ * current rows, the REST create adds one active row with its `description`
+ * as summary, `pause_intent` pauses the row it names, so a seeded welcome
+ * re-lists what it created. Every call the stub receives is recorded (tool
+ * name or CREATE_CALL, arguments, headers).
  *
  * welcome.test.ts and welcome-seed.test.ts pin the texts, the trailer and the
  * markers in process; this file checks what only a replay shows, against W1's
  * final contract (welcome.ts header, DATA-416):
  *   - the exact Index calls a real run makes on each branch: `list_intents`
- *     only unless it seeds; then `create_intent({description, sourceType:
- *     "agentvillage"})` with exactly the selected texts (first three, after
- *     dedupe), `pause_intent({intentId})` for each created id in paused mode,
- *     and the second list; nothing but those three tools, ever;
+ *     only unless it seeds; then one REST `POST /api/intents {description,
+ *     sourceType: "agentvillage"}` (no `/prepare`, no receipt) per selected
+ *     text (first three, after dedupe), `pause_intent({intentId})` for each
+ *     created id in paused mode, and the second list; nothing but those,
+ *     ever;
  *   - stdout bytes against fixtures/welcome-texts.json (the derived seeded
  *     and listed texts are built by helpers that first reproduce the pinned
  *     ones byte for byte), exit 0, one five-key stderr line with --draft and
@@ -50,7 +52,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 
-import { FAKE_API_KEY, type FakeCall, type ToolHandler, type ToolReply, indexMcpFake } from "./index-mcp-fake";
+import { CREATE_CALL, type CreateReply, FAKE_API_KEY, type FakeCall, type ToolHandler, type ToolReply, createdReply, indexMcpFake } from "./index-mcp-fake";
 
 const SCRIPT = process.env.WELCOME_SCRIPT?.trim() || join(import.meta.dir, "..", "welcome.ts");
 /** The script under test as a module (its `import.meta.main` guard keeps it from running), for its timers only. */
@@ -63,10 +65,10 @@ const MARKER = join("memory", "welcome-state.json");
 const ALREADY_SENT = "WELCOME_ALREADY_SENT";
 /** The seed marker (welcome.ts WELCOME_SEED_FILE): claimed exclusively in both modes, `done` after the seed. */
 const SEED_MARKER = join("memory", "welcome-seed.json");
-/** create_intent's one constant besides the text (welcome.ts SEED_SOURCE_TYPE). */
+/** The create's one constant besides the text (welcome.ts SEED_SOURCE_TYPE). */
 const SOURCE_TYPE = "agentvillage";
-/** The only tools a welcome run may call. */
-const ALLOWED_TOOLS = ["list_intents", "create_intent", "pause_intent"];
+/** The only MCP tools a welcome run may call (the create is REST: CREATE_CALL). */
+const ALLOWED_TOOLS = ["list_intents", "pause_intent"];
 /** The trailer's keys, in this order, nothing else. */
 const TRAILER_KEYS = ["welcome", "fallback", "intents_listed", "intents_seeded", "seed_failed"];
 type Mode = "publish" | "paused";
@@ -191,22 +193,18 @@ function writeMemoryFile(path: string, body: string): void {
 
 type Row = { id: string; summary: string; description?: string; status: string; url: string };
 /**
- * How one create (chosen by its description) goes wrong: refused (`isError`,
- * `successFalse`), a server error before anything was created (`http500`), or
+ * How one create (chosen by its description) goes wrong: refused by Index
+ * (`rejected422`, `invalid400`), a server error before anything was created (`http500`), or
  * created in Index but the answer lost: a gateway error after the write
  * (`landed504`), or no answer until the client gives up (`landedHang`).
  */
-type CreateFailure = "isError" | "successFalse" | "http500" | "landed504" | "landedHang";
+type CreateFailure = "rejected422" | "invalid400" | "http500" | "landed504" | "landedHang";
 
 const idFor = (n: number) => `aaaaaaaa-0000-4000-8000-${n.toString(16).padStart(12, "0")}`;
 const row = (summary: string, n: number, status = "active"): Row => ({ id: idFor(n), summary, status, url: `https://index.network/i/${idFor(n)}` });
 /** A `list_intents` text in the live shape (markdown lead, blank line, JSON). */
 function intentsText(rows: Row[]): string {
   return `Your signals:\n\n${JSON.stringify({ success: true, intents: rows, totalWaitingOpportunities: 0, pagination: { limit: 20, offset: 0, count: rows.length } }, null, 2)}`;
-}
-/** A `create_intent` answer in the live shape: the signal link, a blank line, then the JSON. */
-function createAnswer(created: Row): string {
-  return `[${created.summary}](https://agents.edgecity.live/intents?intent=${created.id}) — created\n\n${JSON.stringify({ success: true, data: { intent: { id: created.id, summary: created.summary, status: created.status } } }, null, 2)}`;
 }
 
 const stub = {
@@ -215,7 +213,7 @@ const stub = {
   frozen: null as Row[] | null,
   /** Every request answers HTTP 500. */
   down: false,
-  /** create_intent failures, by description. */
+  /** REST create failures, by description. */
   failCreates: new Map<string, CreateFailure>(),
   /** Every create answers after this long. */
   createDelayMs: 0,
@@ -255,22 +253,6 @@ function resetStub(rows: string[] = []): void {
       after?.();
       return text;
     },
-    create_intent: async (args) => {
-      if (stub.down) return status(500);
-      const n = ++stub.creates;
-      const description = String(args.description ?? "");
-      const delay = stub.createDelays.get(description) ?? stub.createDelayMs;
-      if (delay) await Bun.sleep(delay);
-      const failure = stub.failCreates.get(description);
-      if (failure === "isError") return toolError("Could not create the intent.");
-      if (failure === "successFalse") return `Too vague to match on.\n\n${JSON.stringify({ success: false, error: "too vague" })}`;
-      if (failure === "http500") return status(500);
-      const created = row(description, 0x100 + n);
-      stub.rows.push(created);
-      if (failure === "landed504") return status(504);
-      if (failure === "landedHang") return { hang: true };
-      return createAnswer(created);
-    },
     pause_intent: (args) => {
       if (stub.down) return status(500);
       if (stub.failPause) return toolError("Could not pause the intent.");
@@ -280,7 +262,24 @@ function resetStub(rows: string[] = []): void {
       return `[${target.summary}](https://agents.edgecity.live/intents?intent=${target.id}) — paused\n\n${JSON.stringify({ success: true, data: { intentId: target.id, status: "paused", changed: true } })}`;
     },
   };
-  stub.fake = indexMcpFake({ url: "http://127.0.0.1/mcp", apiKey: FAKE_API_KEY, tools });
+  // Index's REST create (fixtures/index-create-direct.json): 200 `{intentId, ...}`, or the failure chosen for the line.
+  const create = async (body: Record<string, unknown>): Promise<CreateReply> => {
+    if (stub.down) return { response: new Response("upstream error", { status: 500 }) };
+    const n = ++stub.creates;
+    const description = String(body.description ?? "");
+    const delay = stub.createDelays.get(description) ?? stub.createDelayMs;
+    if (delay) await Bun.sleep(delay);
+    const failure = stub.failCreates.get(description);
+    if (failure === "rejected422") return { status: 422, body: { error: "intent_rejected", code: "intent_rejected", detail: "The signal could not be created from this description." } };
+    if (failure === "invalid400") return { status: 400, body: { error: "Validation failed", details: {} } };
+    if (failure === "http500") return { response: new Response("upstream error", { status: 500 }) };
+    const created = row(description, 0x100 + n);
+    stub.rows.push(created);
+    if (failure === "landed504") return { response: new Response("upstream error", { status: 504 }) };
+    if (failure === "landedHang") return { hang: true };
+    return createdReply(created.id);
+  };
+  stub.fake = indexMcpFake({ url: "http://127.0.0.1/mcp", apiKey: FAKE_API_KEY, tools, create });
 }
 
 let server: ReturnType<typeof Bun.serve>;
@@ -295,11 +294,12 @@ beforeAll(() => {
     hostname: "127.0.0.1",
     idleTimeout: 0,
     fetch: async (req) => {
-      // SEED-REJECT part 3b: welcome.ts asks Index's REST `prepare` (creates nothing) before each create. Here it
-      // answers 503, so every line takes today's create path (release gate (5)) and the MCP replay below is unchanged.
-      if (new URL(req.url).pathname === "/api/intents/prepare") {
-        prepared.push({ method: req.method, key: req.headers.get("x-api-key"), body: await req.text() });
-        return Response.json({ error: "preparation_failed" }, { status: 503 });
+      const path = new URL(req.url).pathname;
+      // The direct create is REST, at the MCP URL's origin; any other path but the MCP endpoint (a `/prepare`) is recorded and refused.
+      if (path === "/api/intents") return stub.fake.fetch(new URL(path, stub.fake.url).href, { method: req.method, headers: req.headers, body: await req.text(), signal: req.signal });
+      if (path !== "/mcp") {
+        stray.push(`${req.method} ${path}`);
+        return new Response("not found", { status: 404 });
       }
       return stub.fake.fetch(stub.fake.url, { method: req.method, headers: req.headers, body: await req.text(), signal: req.signal });
     },
@@ -313,15 +313,22 @@ afterAll(() => {
   server.stop(true);
 });
 
-/** SEED-REJECT part 3b: the `prepare` requests the stub received (answered 503): POST, with the key, `{payload}` only. */
-const prepared: Array<{ method: string; key: string | null; body: string }> = [];
+/** Requests to any path but the MCP endpoint and `/api/intents` (a `/api/intents/prepare` would land here): never one. */
+const stray: string[] = [];
 
-/** Whatever the case, every request that reached Index was a tools/call of an allowed tool, with the key (or a prepare, POST with the key and only a payload). */
+/** Whatever the case, every request that reached Index was a tools/call of an allowed tool or the REST create with only description and sourceType, with the key; no prepare. */
 afterEach(() => {
-  for (const p of prepared.splice(0)) {
-    expect({ method: p.method, key: p.key, keys: Object.keys(JSON.parse(p.body)) }).toEqual({ method: "POST", key: FAKE_API_KEY, keys: ["payload"] });
-  }
+  expect(stray.splice(0)).toEqual([]);
   for (const call of stub.fake.calls) {
+    if (call.method === "rest") {
+      expect({ name: call.name, keys: Object.keys(call.arguments ?? {}), sourceType: call.arguments?.sourceType, key: call.headers["x-api-key"] }).toEqual({
+        name: CREATE_CALL,
+        keys: ["description", "sourceType"],
+        sourceType: SOURCE_TYPE,
+        key: FAKE_API_KEY,
+      });
+      continue;
+    }
     expect({ method: call.method, name: call.name, allowed: ALLOWED_TOOLS.includes(String(call.name)), key: call.headers["x-api-key"] }).toEqual({
       method: "tools/call",
       name: call.name,
@@ -334,7 +341,7 @@ afterEach(() => {
 /** The tool calls the stub received since `from`. */
 const toolCalls = (from = 0): FakeCall[] => stub.fake.calls.slice(from);
 const names = (calls: FakeCall[]) => calls.map((c) => c.name);
-const creates = (calls: FakeCall[]) => calls.filter((c) => c.name === "create_intent");
+const creates = (calls: FakeCall[]) => calls.filter((c) => c.name === CREATE_CALL);
 const pauses = (calls: FakeCall[]) => calls.filter((c) => c.name === "pause_intent");
 
 // ---------------------------------------------------------------------------
@@ -510,7 +517,7 @@ function expectReadsOnly(calls: FakeCall[], count: number): void {
 function expectSeedCalls(calls: FakeCall[], texts: string[], pausedIds: string[] = []): void {
   expect(calls[0]?.name).toBe("list_intents");
   expect(calls.at(-1)?.name).toBe("list_intents");
-  expect(names(calls.slice(1, -1)).every((n) => n === "create_intent" || n === "pause_intent")).toBe(true);
+  expect(names(calls.slice(1, -1)).every((n) => n === CREATE_CALL || n === "pause_intent")).toBe(true);
   expect(creates(calls).map((c) => c.arguments)).toEqual(
     expect.arrayContaining(texts.map((description) => ({ description, sourceType: SOURCE_TYPE }))),
   );
@@ -707,7 +714,7 @@ describe("seeded: zero active intents and selected lines in USER.md", () => {
   for (const [n, nickname, texts, key] of cases) {
     const seeded = texts.slice(0, 3);
     test(
-      `${n} selected: create_intent({description, sourceType}) once per text, the first three, then the re-list; stdout is ${key}; trailer seeded ${seeded.length}, failed 0; --draft adds only the seed marker, done`,
+      `${n} selected: the REST create ({description, sourceType}) once per text, the first three, then the re-list; stdout is ${key}; trailer seeded ${seeded.length}, failed 0; --draft adds only the seed marker, done`,
       async () => {
         resetStub();
         if (nickname) writeProfile(nickname);
@@ -715,7 +722,7 @@ describe("seeded: zero active intents and selected lines in USER.md", () => {
         const run = await seedingDraft();
         expectDraft(run, golden[key], trailer("none", seeded.length, seeded.length, 0));
         const calls = toolCalls();
-        expect(names(calls)).toEqual(["list_intents", ...seeded.map(() => "create_intent"), "list_intents"]);
+        expect(names(calls)).toEqual(["list_intents", ...seeded.map(() => CREATE_CALL), "list_intents"]);
         expectSeedCalls(calls, seeded);
         expect(stub.rows.map((r) => r.summary).sort()).toEqual([...seeded].sort());
         expectSeedMarker({ selected: n, created: seeded.length, failed: 0 }, run.t0, run.t1);
@@ -736,7 +743,7 @@ describe("seeded: zero active intents and selected lines in USER.md", () => {
       const calls = toolCalls();
       expectSeedCalls(calls, [MEMORY, RUST, RAISE], stub.rows.map((r) => r.id));
       for (const created of stub.rows) {
-        const made = calls.findIndex((c) => c.name === "create_intent" && c.arguments?.description === created.summary);
+        const made = calls.findIndex((c) => c.name === CREATE_CALL && c.arguments?.description === created.summary);
         const paused = calls.findIndex((c) => c.name === "pause_intent" && c.arguments?.intentId === created.id);
         expect({ summary: created.summary, order: made >= 0 && paused > made }).toEqual({ summary: created.summary, order: true });
       }
@@ -754,7 +761,7 @@ describe("seeded: zero active intents and selected lines in USER.md", () => {
       writeUserMd([MEMORY]);
       const run = await seedingDraft({ env: { AV_WELCOME_SEED_MODE: "paused" } });
       expectDraft(run, golden.seededPausedOne, trailer("none", 1, 1, 0));
-      expect(names(toolCalls())).toEqual(["list_intents", "create_intent", "pause_intent", "list_intents"]);
+      expect(names(toolCalls())).toEqual(["list_intents", CREATE_CALL, "pause_intent", "list_intents"]);
       expectSeedCalls(toolCalls(), [MEMORY], [stub.rows[0].id]);
       expect(stub.rows.map((r) => [r.summary, r.status])).toEqual([[MEMORY, "paused"]]);
       expectSeedMarker({ selected: 1, created: 1, failed: 0 }, run.t0, run.t1);
@@ -818,8 +825,8 @@ describe("seeded: zero active intents and selected lines in USER.md", () => {
 
 describe("a create that fails: the others still go, and the failure is counted", () => {
   const failures: Array<[CreateFailure, number]> = [
-    ["isError", 0],
-    ["successFalse", 1],
+    ["rejected422", 0],
+    ["invalid400", 1],
     ["http500", 2],
   ];
   for (const [failure, which] of failures) {
@@ -905,7 +912,7 @@ describe("a create that fails: the others still go, and the failure is counted",
       writeUserMd([MEMORY]);
       const run = await seedingDraft({ env: { AV_WELCOME_SEED_MODE: "paused" } });
       expectDraft(run, listedWelcome(null, [MEMORY]), trailer("none", 1, 0, 1));
-      expect(names(toolCalls())).toEqual(["list_intents", "create_intent", "pause_intent", "list_intents"]);
+      expect(names(toolCalls())).toEqual(["list_intents", CREATE_CALL, "pause_intent", "list_intents"]);
       expectSeedCalls(toolCalls(), [MEMORY], [stub.rows[0].id]);
       expect(stub.rows.map((r) => [r.summary, r.status])).toEqual([[MEMORY, "active"]]);
       expectSeedMarker({ selected: 1, created: 0, failed: 1 }, run.t0, run.t1);

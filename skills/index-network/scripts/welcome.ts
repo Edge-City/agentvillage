@@ -29,9 +29,12 @@
  * selectedIntentions), and the seed marker `memory/welcome-seed.json` does
  * not exist, the script claims that marker (created exclusively, so the
  * creates run once per box, in both modes) and creates up to three of those
- * lines at once, each with `create_intent(description=<the line's text>,
- * sourceType="agentvillage")` and nothing else; a line that repeats another
- * one, or any intent Index lists whatever its status, is skipped.
+ * lines at once, each with one `POST <origin>/api/intents` of
+ * `{description: <the line's text>, sourceType: "agentvillage"}` and nothing
+ * else (index-mcp.ts createIntentDirect: no `/prepare`, no
+ * `preparationReceipt`, so Index stores the line as written and runs no
+ * admission); a line that repeats another one, or any intent Index lists
+ * whatever its status, is skipped.
  * `AV_WELCOME_SEED_MODE=paused` pauses each one it created (`pause_intent`).
  * It then lists the intents again (the creates leave it
  * WELCOME_RELIST_RESERVE_MS of the budget) and the welcome names the seeded
@@ -80,15 +83,17 @@
  * paused) and `seed_failed` the lines it meant to seed and could not (both 0
  * when nothing was attempted). It never carries text. It always exits 0.
  *
- * SEED-REVISION (routing (c), 12 Oct 2026): a line Index refuses with
- * `intent_needs_revision` (its admission verdict; the shared MCP client
- * hands that one refusal back instead of throwing, index-mcp.ts
- * intentRefusal) still counts in `seed_failed` exactly as before, and the
- * seed marker also keeps it under `refused`: the resident's own line (at most
- * REFUSED_LINE_MAX code points), Index's feedback (refusedFeedback: cleaned,
- * scanned, withheld whole as null on a hit), the code, the run's time and the
- * key names (never the values) of Index's answer (and, from a `prepare`
- * refusal, Index's category and recovery questions). The default run that
+ * SEED-REVISION (routing (c), 12 Oct 2026): a line whose create Index answers
+ * non-2xx with its `intent_needs_revision` refusal (index-mcp.ts
+ * intentRefusal; since the direct create, 13 Oct 2026, the only refusal kept:
+ * any other non-2xx, a timeout or no answer is a plain failed line) still
+ * counts in `seed_failed` exactly as before, and the seed marker also keeps
+ * it under `refused`: the resident's own line (at most REFUSED_LINE_MAX code
+ * points), Index's feedback (refusedFeedback: cleaned, scanned, withheld
+ * whole as null on a hit), the code, the run's time and the key names (never
+ * the values) of Index's answer (a marker written before the direct create
+ * may also hold Index's `prepare` category and recovery questions, which the
+ * block below still reads). The default run that
  * prints WELCOME_ALREADY_SENT (the AGENTS.md welcome gate, once the welcome
  * went out) then also prints, once ever, one line naming ONE refused line
  *
@@ -109,16 +114,15 @@ import { basename, dirname, join } from "node:path";
 
 import { DEFAULT_NAME, agentName, readProfile } from "../../agent-profile/scripts/profile";
 import {
+  type DirectCreate,
   type IndexMcpTarget,
   type IntentRefusal,
   type RecoveryQuestion,
-  INTENT_NEEDS_REVISION,
+  AGENTVILLAGE_SOURCE_TYPE,
   IndexMcpError,
-  PREPARE_UNAVAILABLE,
   callIndexTool,
+  createIntentDirect,
   indexMcpUrl,
-  intentRefusal,
-  prepareIntent,
   toolJsonArray,
   toolJsonObject,
 } from "./index-mcp";
@@ -156,8 +160,8 @@ export const INTENTS_URL_MAX = 200;
 /** The welcome's Index read gives up sooner than the brief's: the resident is waiting for a first reply. */
 export const WELCOME_INDEX_TIMEOUT_MS = 10_000;
 /**
- * One seed call (`create_intent`, `pause_intent`) at most: a create runs
- * Index's verification graph, which takes longer than a read.
+ * One seed call (the create, `pause_intent`) at most: a create runs Index's
+ * intent graph, which takes longer than a read.
  */
 export const WELCOME_SEED_TIMEOUT_MS = 20_000;
 /**
@@ -185,11 +189,11 @@ export const WELCOME_SEED_WAIT_MS = 25_000;
 export const WELCOME_SEED_POLL_MS = 500;
 /**
  * `sourceType` on every intent the overlay creates (the av-events plugin's
- * SOURCE_TYPE, which its poller reads; create_intent's input in
- * plugins/av-events/tests/vectors/index_intent_contract.json): a constant,
- * never resident text.
+ * SOURCE_TYPE, which its poller reads; index-mcp.ts AGENTVILLAGE_SOURCE_TYPE,
+ * which also tells Index to store the line as written): a constant, never
+ * resident text.
  */
-export const SEED_SOURCE_TYPE = "agentvillage";
+export const SEED_SOURCE_TYPE = AGENTVILLAGE_SOURCE_TYPE;
 /** SEED-REVISION: the line the default run prints after ALREADY_SENT, once, when Index refused seed lines. */
 export const REFUSED_SEEDS = "REFUSED_SEEDS";
 /** Code points of a refused line kept and printed at most (the resident's own text, cut at a word). */
@@ -209,21 +213,8 @@ export const REFUSED_QUESTION_MAX = QUESTION_MAX;
 export const SEED_CODES_MAX = 3;
 export const SEED_CODE = /^[A-Za-z0-9_.:-]{1,64}$/;
 export const SEED_RECOVERY_KINDS_MAX = 4;
-/** Index's recovery questions kept per refused line in the seed marker, and options per question, and code points per option. */
-export const RECOVERY_QUESTIONS_MAX = 4;
-export const RECOVERY_OPTIONS_MAX = 6;
-export const RECOVERY_OPTION_MAX = 60;
-/** A line whose `prepare` call or create could not even start: too little of the budget left. */
+/** A line whose create could not even start: too little of the budget left. */
 export const BUDGET_EXHAUSTED = "budget_exhausted";
-/**
- * Index's admission categories (protocol intent.admission.ts admissionFailure),
- * read from its two fixed feedback sentences; any other feedback is the
- * specificity warning, `broad`.
- */
-export const ADMISSION_FEEDBACK: Readonly<Record<string, "non_actionable" | "vague_or_invalid">> = {
-  "Describe who you want to reach and what you want to do together.": "non_actionable",
-  "Make the goal more concrete: specify the role, outcome, or particular help you need.": "vague_or_invalid",
-};
 
 /**
  * The app's intention categories, a closed set (agentvillage-app
@@ -564,26 +555,6 @@ function answerObject(text: string): Record<string, unknown> | null {
   return toolJsonObject(text)?.root ?? toolJsonObject(text.replace(/\n(?=[ \t]*\{)/g, "\n\n"))?.root ?? null;
 }
 
-/**
- * The intent a `create_intent` answer names: its id (the intent object's
- * `id` under `data.intent`, a one-item `data.intents` or `intent`, else
- * `intentId` at the top or under `data`, else the one intent link in the
- * text, `?intent=<id>` or `/i/<id>`) and its title (summary else
- * description, through cleanTitle), each null when the answer does not say.
- * Null when the answer is a refusal (writeRefused). Pure.
- */
-export function createdIntent(text: string): { id: string | null; title: string | null } | null {
-  if (writeRefused(text)) return null;
-  const root = answerObject(text);
-  const data = record(root?.data);
-  const many = data?.intents;
-  const intent = record(data?.intent) ?? (Array.isArray(many) && many.length === 1 ? record(many[0]) : null) ?? record(root?.intent);
-  const linked = [...new Set([...text.matchAll(/(?:[?&]intent=|\/i\/)([A-Za-z0-9_-]{8,100})/g)].map((m) => m[1]))];
-  const id = plainId(intent?.id) ?? plainId(root?.intentId) ?? plainId(data?.intentId) ?? (linked.length === 1 ? linked[0] : null);
-  const raw = typeof intent?.summary === "string" && intent.summary.trim() ? intent.summary : intent?.description;
-  return { id, title: cleanTitle(raw, TITLE_MAX, "word") };
-}
-
 /** One line Index refused, as the seed marker keeps it (SEED-REVISION). */
 export type RefusedSeed = {
   line: string;
@@ -592,15 +563,12 @@ export type RefusedSeed = {
   at: string;
   keys: string[];
   surfacedAt?: string;
-  /** SEED-REJECT part 3b, only from a `prepare` refusal: Index's category and its recovery questions (cleaned). */
+  /** SEED-REJECT part 3b, only in a marker written before the direct create (a `prepare` refusal): Index's category and its recovery questions (cleaned). */
   category?: string;
   /** Why Index's first recovery question will not be shown (a code, never text): set at the seed or when the block is printed. */
   questionWithheld?: QuestionWithheld;
   recovery?: Array<{ kind: RecoveryQuestion["kind"]; question: string; options?: string[] }>;
 };
-
-/** A `prepare` refusal as seedOne hands it on: the IntentRefusal ov#302 keeps, with the category and the raw questions. */
-export type PreparedRefusal = IntentRefusal & { category: string; recovery: RecoveryQuestion[] };
 
 /** A word joined by an underscore (`create_intent`, `source_type`): the shape of a tool or field name, never Index's prose. */
 const SNAKE_CASE = /\p{L}+_[\p{L}\p{N}_]*[\p{L}\p{N}]/u;
@@ -648,58 +616,16 @@ export function refusedLine(raw: unknown): string | null {
   return typeof raw === "string" && raw.trim() ? cutAtWord(raw, REFUSED_LINE_MAX) : null;
 }
 
-function refusedSeed(line: string, refusal: IntentRefusal | PreparedRefusal, now: Date): RefusedSeed | null {
+function refusedSeed(line: string, refusal: IntentRefusal, now: Date): RefusedSeed | null {
   const kept = refusedLine(line);
   if (kept === null) return null;
-  const seed: RefusedSeed = { line: kept, feedback: refusedFeedback(refusal.feedback), code: refusal.code, at: now.toISOString(), keys: refusal.keys };
-  if ("category" in refusal) {
-    seed.category = refusal.category;
-    const recovery = recoveryQuestions(refusal.recovery);
-    if (recovery.length) seed.recovery = recovery;
-    // Index's FIRST question is judged on its raw text here, before the marker's cleaner could strip a link out of it
-    // (commit review flag 1): withheld, the block carries null for this line whatever the kept list holds.
-    if (refusal.recovery.length) {
-      const { withheld } = refusedQuestion(refusal.recovery[0].question, line);
-      if (withheld) seed.questionWithheld = withheld;
-    }
-  }
-  return seed;
-}
-
-/**
- * Index's recovery questions as the seed marker keeps them for the agent's
- * first turn: at most RECOVERY_QUESTIONS_MAX, each question through
- * refusedFeedback (cleaned, scanned, withheld whole on a hit: the question is
- * then dropped), options (single and multi only) through the same cleaner at
- * RECOVERY_OPTION_MAX, at most RECOVERY_OPTIONS_MAX. Pure.
- */
-export function recoveryQuestions(raw: RecoveryQuestion[]): NonNullable<RefusedSeed["recovery"]> {
-  const out: NonNullable<RefusedSeed["recovery"]> = [];
-  for (const q of raw) {
-    if (out.length === RECOVERY_QUESTIONS_MAX) break;
-    const question = refusedFeedback(q.question);
-    if (question === null) continue;
-    const options = q.kind === "text" ? [] : q.options.map((o) => refusedOption(o)).filter((o): o is string => o !== null).slice(0, RECOVERY_OPTIONS_MAX);
-    out.push({ kind: q.kind, question, ...(options.length ? { options } : {}) });
-  }
-  return out;
-}
-
-function refusedOption(raw: unknown): string | null {
-  if (typeof raw !== "string" || cronScanHit(raw) || SNAKE_CASE.test(raw)) return null;
-  const clean = cleanTitle(raw, RECOVERY_OPTION_MAX, "word");
-  return clean === null || SNAKE_CASE.test(clean) || cronScanHit(clean) ? null : clean;
+  return { line: kept, feedback: refusedFeedback(refusal.feedback), code: refusal.code, at: now.toISOString(), keys: refusal.keys };
 }
 
 /** `code` as the trailer may carry it (SEED_CODE): characters outside the set become `_`, cut to 64; null when nothing is left. Pure. */
 export function seedCode(code: string): string | null {
   const shaped = code.replace(/[^A-Za-z0-9_.:-]/g, "_").slice(0, 64);
   return SEED_CODE.test(shaped) ? shaped : null;
-}
-
-/** Index's admission category for a `prepare` refusal's feedback (ADMISSION_FEEDBACK), else `broad`. Pure. */
-export function admissionCategory(feedback: string | null): string {
-  return (feedback !== null && ADMISSION_FEEDBACK[feedback.trim()]) || "broad";
 }
 
 /**
@@ -799,8 +725,8 @@ type SeedLineInput = { text: string; title: string; key: string };
 /**
  * Seed `lines` (seedOne, all at once), list again, and classify each line:
  * created (or landed after its own call gave up: publish mode, active in the
- * second list), else failed, a refused one (ov#302's create refusal, or part
- * 3b's `prepare` refusal) kept for the first chat turn. `codes`: the code each
+ * second list), else failed, a refused one (a non-2xx create with Index's
+ * `intent_needs_revision`, ov#302) kept for the first chat turn. `codes`: the code each
  * line left, in line order, shaped for the trailer (seedCode); `kinds`: the
  * kinds of the refused lines' recovery questions, at most
  * SEED_RECOVERY_KINDS_MAX.
@@ -907,58 +833,46 @@ async function seedWelcome(
 }
 
 /**
- * One selected line: `create_intent` with its text as `description` and
- * SEED_SOURCE_TYPE as `sourceType`, nothing else, then, in `paused` mode,
- * `pause_intent` with the id the answer names. The intent (its id and
- * title, when the answer says); Index's `intent_needs_revision` refusal
- * (SEED-REVISION: as the shared client hands it back for an `isError`
- * answer, or as the same JSON in a plain answer: intentRefusal); or null when
- * the line failed otherwise: a throw, another `isError` answer, another
- * refusal, too little time left to call (the second list's reserve kept
- * back), or in `paused` mode no id to pause or a pause that failed (never
- * retried).
+ * One selected line: one direct create (createIntentDirect: `POST
+ * <origin>/api/intents` with its text as `description` and SEED_SOURCE_TYPE
+ * as `sourceType`, nothing else, no `/prepare`, no receipt), then, in
+ * `paused` mode, `pause_intent` with the id Index's answer names. The intent
+ * (its id when the answer names one; Index's REST answer has no title, so
+ * the second list's title, else the line's, is shown); Index's
+ * `intent_needs_revision` refusal on a non-2xx answer (SEED-REVISION, kept
+ * for the first chat turn); or null when the line failed otherwise: any other
+ * non-2xx (`create-http-<status>`), a timeout (`create-timeout`), no answer
+ * (`create-unreachable`), too little time left to call (the second list's
+ * reserve kept back), or in `paused` mode no id to pause or a pause that
+ * failed (never retried).
  */
 /** One seed line's outcome (seedOne) and the code it left for the trailer (null: created, nothing to say). */
-type SeedLine = { out: { id: string | null; title: string | null } | IntentRefusal | PreparedRefusal | null; code: string | null };
+type SeedLine = { out: { id: string | null; title: string | null } | IntentRefusal | null; code: string | null };
 
-const withCode = (prefix: string | null, code: string): string => (prefix === null ? code : `${prefix}:${code}`);
+/** The trailer's code for a create that did not land: by its HTTP status, else timeout or unreachable. Pure. */
+export function createFailureCode(failed: Extract<DirectCreate, { ok: false }>): string {
+  if (failed.status > 0) return `create-http-${failed.status}`;
+  return failed.timedOut ? "create-timeout" : "create-unreachable";
+}
 
 async function seedOne(target: IndexMcpTarget, clock: Clock, mode: SeedMode, description: string): Promise<SeedLine> {
   // `description` is the resident's line exactly as selectedIntentions read it: never rewritten, trimmed or composed.
-  let prefix: string | null = null;
   try {
-    // SEED-REJECT part 3b, release gate (2): one `prepare` per line, inside the same budget and timeout, no retry.
-    const prepareTarget = timed(target, clock, WELCOME_SEED_TIMEOUT_MS, clock.reserve);
-    if (!prepareTarget) return { out: null, code: BUDGET_EXHAUSTED };
-    try {
-      const verdict = await prepareIntent(prepareTarget, description);
-      // Release gate (1): not ready, never created; the line is kept as revisable (seedWelcome), the welcome goes on.
-      if (verdict.status === "needs_revision") {
-        const category = admissionCategory(verdict.feedback);
-        const refusal: PreparedRefusal = { refused: true, code: INTENT_NEEDS_REVISION, feedback: verdict.feedback, keys: verdict.keys, category, recovery: verdict.recovery };
-        return { out: refusal, code: `${INTENT_NEEDS_REVISION}:${category}` };
-      }
-    } catch {
-      // Release gate (5): prepare unavailable (HTTP error, timeout, not JSON): today's create path, recorded.
-      prefix = PREPARE_UNAVAILABLE;
-    }
+    // One create per line, inside the run's budget and timeout, the second list's reserve kept back, no retry.
     const createTarget = timed(target, clock, WELCOME_SEED_TIMEOUT_MS, clock.reserve);
-    if (!createTarget) return { out: null, code: withCode(prefix, BUDGET_EXHAUSTED) };
-    const answer = await callIndexTool(createTarget, "create_intent", { description, sourceType: SEED_SOURCE_TYPE });
-    if (typeof answer !== "string") return { out: answer, code: withCode(prefix, answer.code) };
-    const refusal = intentRefusal(answer);
-    if (refusal) return { out: refusal, code: withCode(prefix, refusal.code) };
-    const made = createdIntent(answer);
-    if (!made) return { out: null, code: withCode(prefix, "create-refused") };
-    if (mode === "publish") return { out: made, code: prefix };
-    if (made.id === null) return { out: null, code: withCode(prefix, "pause-no-id") };
+    if (!createTarget) return { out: null, code: BUDGET_EXHAUSTED };
+    const created = await createIntentDirect(createTarget, description);
+    if (!created.ok) return created.refusal ? { out: created.refusal, code: created.refusal.code } : { out: null, code: createFailureCode(created) };
+    const made = { id: created.id, title: null };
+    if (mode === "publish") return { out: made, code: null };
+    if (made.id === null) return { out: null, code: "pause-no-id" };
     const pauseTarget = timed(target, clock, WELCOME_SEED_TIMEOUT_MS, clock.reserve);
-    if (!pauseTarget) return { out: null, code: withCode(prefix, BUDGET_EXHAUSTED) };
+    if (!pauseTarget) return { out: null, code: BUDGET_EXHAUSTED };
     return writeRefused(await callIndexTool(pauseTarget, "pause_intent", { intentId: made.id }))
-      ? { out: null, code: withCode(prefix, "pause-refused") }
-      : { out: made, code: prefix };
+      ? { out: null, code: "pause-refused" }
+      : { out: made, code: null };
   } catch (err) {
-    return { out: null, code: withCode(prefix, err instanceof IndexMcpError ? err.code : "error") };
+    return { out: null, code: err instanceof IndexMcpError ? err.code : "error" };
   }
 }
 
@@ -1229,17 +1143,17 @@ export const RESEED_FLAG = "--reseed";
 /** Each `--reseed` run's own marker, relative to `$HERMES_HOME`: `memory/welcome-reseed-<time>.json`. */
 export const WELCOME_RESEED_PREFIX = join("memory", "welcome-reseed-");
 /**
- * Gap G2: `--reseed --dry-run` prepares each line a run would send and
- * creates and writes nothing (reseedRun). Alone, `--dry-run` means the same
- * (never a real welcome).
+ * Gap G2: `--reseed --dry-run` lists, names each line a run would send
+ * (WOULD_CREATE), and asks Index nothing else, creates and writes nothing
+ * (reseedRun). Alone, `--dry-run` means the same (never a real welcome).
  */
 export const DRY_RUN_FLAG = "--dry-run";
 /** Gap G2: `--reseed --again` runs although an earlier `--reseed` left its marker (reseedRan). */
 export const AGAIN_FLAG = "--again";
-/** Gap G2: the code a real `--reseed` leaves, alone, when an earlier one already ran on this box: nothing listed, prepared, created or written. */
+/** Gap G2: the code a real `--reseed` leaves, alone, when an earlier one already ran on this box: nothing listed, created or written. */
 export const RESEED_ALREADY_RAN = "reseed_already_ran";
-/** Gap G2: a dry run's code for a line Index's `prepare` answers `ready` (a real run would create it). */
-export const PREPARE_READY = "ready";
+/** Gap G2: a dry run's code for each line a real run would send (create directly); nothing is asked of Index for it. */
+export const WOULD_CREATE = "would_create";
 /** The code a `--reseed` (or `--dry-run`) leaves, alone, when reseedLines finds no line: no Index call, nothing written. */
 export const RESEED_NO_LINES = "no_lines";
 /** The code a real `--reseed` leaves, alone, when another one holds WELCOME_RESEED_LOCK: no Index call, nothing written. */
@@ -1280,7 +1194,7 @@ function reseedSent(path: string): boolean {
 }
 
 /**
- * The lines a `--reseed` sends (and a `--dry-run` prepares): the profile's
+ * The lines a `--reseed` sends (and a `--dry-run` names): the profile's
  * selected intentions as the welcome's seed reads them (selectedIntentions,
  * verbatim), else, since the app leaves that section out once Telegram is
  * paired, the lines Index refused at the welcome (the seed marker's
@@ -1316,7 +1230,7 @@ export function reseedLines(home: string): string[] {
  * read for permission nor written), read reseedLines first (none: RESEED_NO_LINES,
  * no Index call, nothing written), take WELCOME_RESEED_LOCK (held by another
  * run: RESEED_IN_PROGRESS, no Index call, nothing written), list, then seed
- * (seedLines: prepare first, create only on ready, refusals kept) up to
+ * (seedLines: one direct create per line, refusals kept) up to
  * MAX_LISTED of those lines that are not already listed in Index (seedKey,
  * any status), and, when a line was sent, write a new marker
  * WELCOME_RESEED_PREFIX<time>.json with the counts, the codes and the refused
@@ -1326,9 +1240,9 @@ export function reseedLines(home: string): string[] {
  * chat turn's REFUSED_SEEDS block asks the resident about it. Gap G2: when an
  * earlier `--reseed` sent lines (reseedRan, checked again under the lock), a
  * run does nothing at all and leaves RESEED_ALREADY_RAN, unless `again`; with
- * `dryRun` (never refused, no lock) it lists, then prepares the same lines
- * (prepareLines) and creates and writes nothing, its codes those a run would
- * leave. The branch for the operator's trailer. Never throws.
+ * `dryRun` (never refused, no lock) it lists, then names the lines a run
+ * would send (wouldCreate) and creates and writes nothing. The branch for
+ * the operator's trailer. Never throws.
  */
 export async function reseedRun(home: string, options: WelcomeOptions = {}, flags: { dryRun?: boolean; again?: boolean } = {}): Promise<WelcomeBranch> {
   const now = options.now ?? new Date();
@@ -1365,7 +1279,7 @@ export async function reseedRun(home: string, options: WelcomeOptions = {}, flag
       lines.push({ text, title: cleanTitle(text, TITLE_MAX, "word")!, key });
     }
     if (lines.length === 0) return welcomeBranch(first.read);
-    if (flags.dryRun) return welcomeBranch(first.read, await prepareLines(target, clock, lines));
+    if (flags.dryRun) return welcomeBranch(first.read, wouldCreate(lines));
     const { again, seeded, failed, refused, codes, kinds } = await seedLines(home, target, clock, lines, now);
     const counts = { selected: all.length, created: seeded.length, failed };
     const merged = refused.length ? await mergeReseedRefused(home, now, refused, counts) : null;
@@ -1380,39 +1294,13 @@ export async function reseedRun(home: string, options: WelcomeOptions = {}, flag
 }
 
 /**
- * Gap G2, `--dry-run`: one `prepare` per line (prepareIntent: creates
- * nothing), all at once, within the run's budget, no retry, the line exactly
- * as reseedLines read it; never a create, never a write. The counts a dry run
- * reports: nothing seeded or failed, `seed_codes` one per line in order
- * (PREPARE_READY, `intent_needs_revision:<category>` as seedOne would leave
- * it, PREPARE_UNAVAILABLE, BUDGET_EXHAUSTED; seedCode-shaped, at most
- * SEED_CODES_MAX) and `seed_recovery_kinds` (the kinds of Index's questions
- * for the refused lines as the marker would keep them, recoveryQuestions; at
- * most SEED_RECOVERY_KINDS_MAX). Never throws.
+ * Gap G2, `--dry-run`: the lines a real run would send, each as WOULD_CREATE
+ * (in order, at most SEED_CODES_MAX), and nothing seeded or failed. No Index
+ * call: the direct create has no verdict to ask for first, and a create is a
+ * write. Pure.
  */
-async function prepareLines(target: IndexMcpTarget, clock: Clock, lines: SeedLineInput[]): Promise<SeedCounts> {
-  const verdicts = await Promise.allSettled(
-    lines.map(async (line): Promise<{ code: string; kinds: RecoveryQuestion["kind"][] }> => {
-      const prepareTarget = timed(target, clock, WELCOME_SEED_TIMEOUT_MS, clock.reserve);
-      if (!prepareTarget) return { code: BUDGET_EXHAUSTED, kinds: [] };
-      try {
-        const verdict = await prepareIntent(prepareTarget, line.text);
-        if (verdict.status !== "needs_revision") return { code: PREPARE_READY, kinds: [] };
-        return { code: `${INTENT_NEEDS_REVISION}:${admissionCategory(verdict.feedback)}`, kinds: recoveryQuestions(verdict.recovery).map((q) => q.kind) };
-      } catch {
-        return { code: PREPARE_UNAVAILABLE, kinds: [] };
-      }
-    }),
-  );
-  const codes: string[] = [];
-  const kinds: RecoveryQuestion["kind"][] = [];
-  for (const v of verdicts) {
-    const one = v.status === "fulfilled" ? v.value : { code: "error", kinds: [] };
-    const shaped = seedCode(one.code);
-    if (shaped !== null && codes.length < SEED_CODES_MAX) codes.push(shaped);
-    kinds.push(...one.kinds);
-  }
-  return { intents_seeded: 0, seed_failed: 0, seed_codes: codes, seed_recovery_kinds: kinds.slice(0, SEED_RECOVERY_KINDS_MAX) };
+function wouldCreate(lines: SeedLineInput[]): SeedCounts {
+  return { intents_seeded: 0, seed_failed: 0, seed_codes: lines.slice(0, SEED_CODES_MAX).map(() => WOULD_CREATE) };
 }
 
 /**

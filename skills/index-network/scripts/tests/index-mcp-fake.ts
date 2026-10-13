@@ -13,11 +13,20 @@
  * `{ hang: true }` reply never answers until the signal aborts (`hangBody`:
  * the headers arrive, the body never finishes until the signal aborts).
  *
- * It never touches the network: a request to any URL other than its own
+ * Index's REST `POST <origin>/api/intents` (the welcome's direct seed
+ * create: fixtures/index-create-direct.json) is served too, at the MCP URL's
+ * origin: a call recorded with `method: "rest"` and `name: CREATE_CALL`, the
+ * JSON body as `arguments`. Like Index's controller it answers 401 without
+ * `x-api-key` and 400 for a body that is not the strict create schema; else
+ * the `create` handler's reply (default: 200 with a new id, the fixture's
+ * shape).
+ *
+ * It never touches the network: a request to any URL other than those two
  * throws.
  */
 
 import fixture from "./fixtures/index-mcp-2026-07-28.json";
+import createFixture from "./fixtures/index-create-direct.json";
 
 export const FIXTURE = fixture;
 export const PROTOCOL = fixture.protocolVersion;
@@ -34,6 +43,20 @@ export type ToolReply =
   | { hangBody: true };
 /** `id` is the request's JSON-RPC id, for handlers that build their own response. */
 export type ToolHandler = (args: Record<string, unknown>, request: { id: unknown }) => ToolReply | Promise<ToolReply>;
+
+/** The name a REST create call is recorded under (`method: "rest"`). */
+export const CREATE_CALL = "POST /api/intents";
+/** The create body keys Index's strict CreateSchema accepts (fixtures/index-create-direct.json). */
+const CREATE_KEYS: string[] = [...createFixture.request.body.required, ...createFixture.request.body.optional];
+
+/** Index's answer to one REST create: a status and a JSON body, a raw Response, or none until the signal aborts. */
+export type CreateReply = { status: number; body?: unknown } | { response: Response } | { hang: true };
+export type CreateHandler = (body: Record<string, unknown>, n: number) => CreateReply | Promise<CreateReply>;
+
+/** A 200 create answer in the fixture's shape for `intentId`. */
+export function createdReply(intentId: string): CreateReply {
+  return { status: 200, body: { ...createFixture.responses.created.body, intentId } };
+}
 
 export interface FakeCall {
   url: string;
@@ -76,10 +99,33 @@ const DEFAULT_TOOLS: Record<string, ToolHandler> = {
   list_opportunities: () => fixture.responses.listOpportunities.result.content[0].text,
 };
 
-export function indexMcpFake(options: { tools?: Record<string, ToolHandler>; url?: string; apiKey?: string } = {}) {
+export function indexMcpFake(options: { tools?: Record<string, ToolHandler>; url?: string; apiKey?: string; create?: CreateHandler } = {}) {
   const url = options.url ?? FAKE_MCP_URL;
+  const createUrl = new URL(createFixture.request.path, url).href;
   const tools = { ...DEFAULT_TOOLS, ...(options.tools ?? {}) };
   const calls: FakeCall[] = [];
+  let createCount = 0;
+
+  /** Index's REST create (intent.controller.ts `create`, as the fixture pins it). */
+  async function answerCreate(call: FakeCall, init: RequestInit | undefined): Promise<Response> {
+    if ((init?.method ?? "GET").toUpperCase() !== "POST") return new Response("not found", { status: 404 });
+    const key = call.headers["x-api-key"];
+    if (!key || (options.apiKey !== undefined && key !== options.apiKey)) {
+      return Response.json(createFixture.responses.unauthorized.body, { status: 401 });
+    }
+    const body = call.body;
+    const valid =
+      !!body &&
+      Object.keys(body).every((k) => CREATE_KEYS.includes(k)) &&
+      typeof body.description === "string" &&
+      body.description.trim().length > 0;
+    if (!valid) return Response.json(createFixture.responses.validation.body, { status: 400 });
+    const n = ++createCount;
+    const reply = options.create ? await options.create(body!, n) : createdReply(`cccccccc-0000-4000-8000-${n.toString(16).padStart(12, "0")}`);
+    if ("hang" in reply) return HANG;
+    if ("response" in reply) return reply.response;
+    return reply.body === undefined ? new Response(null, { status: reply.status }) : Response.json(reply.body, { status: reply.status });
+  }
 
   async function answer(call: FakeCall, init: RequestInit | undefined): Promise<Response> {
     const h = call.headers;
@@ -160,7 +206,8 @@ export function indexMcpFake(options: { tools?: Record<string, ToolHandler>; url
 
   const fakeFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const target = String(input instanceof Request ? input.url : input);
-    if (target !== url) throw new Error(`index-mcp-fake: refusing a request to ${target}`);
+    const rest = target === createUrl;
+    if (target !== url && !rest) throw new Error(`index-mcp-fake: refusing a request to ${target}`);
     const headers: Record<string, string> = {};
     new Headers(init?.headers).forEach((value, key) => {
       headers[key] = value;
@@ -172,19 +219,21 @@ export function indexMcpFake(options: { tools?: Record<string, ToolHandler>; url
       body = null;
     }
     const params = asRecord(body?.params);
-    const call: FakeCall = {
-      url: target,
-      headers,
-      body,
-      method: typeof body?.method === "string" ? body.method : undefined,
-      name: typeof params?.name === "string" ? params.name : undefined,
-      arguments: asRecord(params?.arguments) ?? undefined,
-      status: 0,
-    };
+    const call: FakeCall = rest
+      ? { url: target, headers, body, method: "rest", name: CREATE_CALL, arguments: body ?? undefined, status: 0 }
+      : {
+          url: target,
+          headers,
+          body,
+          method: typeof body?.method === "string" ? body.method : undefined,
+          name: typeof params?.name === "string" ? params.name : undefined,
+          arguments: asRecord(params?.arguments) ?? undefined,
+          status: 0,
+        };
     calls.push(call);
     const signal = init?.signal ?? undefined;
     if (signal?.aborted) throw abortError(signal);
-    const response = await answer(call, init);
+    const response = rest ? await answerCreate(call, init) : await answer(call, init);
     if (response === HANG) {
       return await new Promise<Response>((_resolve, reject) => {
         signal?.addEventListener("abort", () => reject(abortError(signal)), { once: true });

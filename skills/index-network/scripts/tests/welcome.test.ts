@@ -764,8 +764,11 @@ describe("the AGENTS.md welcome gate", () => {
     // The gate names no intent tool: AGENTS.md speaks of them only on its one record_intention line (av-events test_index_contract.py, test_record_intention.py).
     expect(gate).not.toMatch(/create_intent|record_intention/);
     const source = readFileSync(SCRIPT, "utf8");
-    expect(source.match(/callIndexTool\(/g)).toHaveLength(3);
-    expect([...source.matchAll(/callIndexTool\(\w+, "(\w+)"/g)].map((m) => m[1])).toEqual(["list_intents", "create_intent", "pause_intent"]);
+    expect(source.match(/callIndexTool\(/g)).toHaveLength(2);
+    expect([...source.matchAll(/callIndexTool\(\w+, "(\w+)"/g)].map((m) => m[1])).toEqual(["list_intents", "pause_intent"]);
+    // The create is the one direct REST create (index-mcp.ts createIntentDirect), never the MCP create_intent, never a prepare.
+    expect(source.match(/await createIntentDirect\(/g)).toHaveLength(1);
+    expect(source).not.toMatch(/"create_intent"|prepareIntent|api\/intents\/prepare/);
     expect(source).not.toMatch(/update_intent|record_intention|archive_intent|resume_intent/);
   });
 

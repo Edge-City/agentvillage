@@ -37,7 +37,6 @@ import {
   WELCOME_STATE_FILE,
   type WelcomeBranch,
   claimSeed,
-  createdIntent,
   draftTrailer,
   intentRows,
   main,
@@ -53,7 +52,7 @@ import {
   writeRefused,
 } from "../welcome";
 import { questionDenylistHit } from "../question-guard";
-import { FAKE_API_KEY, type FakeCall, type ToolHandler, type ToolReply, indexMcpFake } from "./index-mcp-fake";
+import { CREATE_CALL, type CreateReply, FAKE_API_KEY, type FakeCall, type ToolHandler, type ToolReply, createdReply, indexMcpFake } from "./index-mcp-fake";
 import golden from "./fixtures/welcome-texts.json";
 
 const FIXTURE_PATH = join(import.meta.dir, "fixtures", "welcome-texts.json");
@@ -146,16 +145,14 @@ function intentsText(rows: unknown[]): string {
   return `Your signals:\n\n${JSON.stringify({ success: true, intents: rows, pagination: { limit: 20, offset: 0, count: rows.length } }, null, 2)}`;
 }
 const idFor = (n: number) => `bbbbbbbb-0000-4000-8000-${n.toString(16).padStart(12, "0")}`;
-/** A `create_intent` answer: a lead line with the signal link, a blank line, then the JSON. */
-function createAnswer(id: string, summary: string): string {
-  return `[${summary}](https://agents.edgecity.live/intents?intent=${id}) — created\n\n${JSON.stringify({ success: true, data: { intent: { id, summary, status: "active" } } })}`;
-}
 const toolError = (text: string): ToolReply => ({ result: { content: [{ type: "text", text }], isError: true } });
+/** A non-2xx answer to the REST create, Index's 500 body by default (fixtures/index-create-direct.json). */
+const createError = (status = 500, body: unknown = { error: "Failed to create intent" }): CreateReply => ({ status, body });
 
 type Plan = {
   rows?: Row[];
-  /** Replaces the answer to the nth create (1-based), now or later; `undefined` keeps the normal one. */
-  create?: (n: number, description: string, id: string) => ToolReply | Promise<ToolReply> | undefined;
+  /** Replaces the answer to the nth REST create (1-based), now or later; `undefined` keeps the normal one (created, active). */
+  create?: (n: number, description: string, id: string) => CreateReply | Promise<CreateReply> | undefined;
   pause?: (id: string) => ToolReply | undefined;
   /** list_intents ignores the creates (always these rows). */
   frozen?: boolean;
@@ -172,15 +169,6 @@ function fakeIndex(plan: Plan = {}) {
       lists++;
       return plan.list?.(lists) ?? intentsText(plan.frozen ? frozen : rows);
     },
-    create_intent: (args) => {
-      creates++;
-      const description = String(args.description);
-      const id = idFor(0x100 + creates);
-      const replaced = plan.create?.(creates, description, id);
-      if (replaced !== undefined) return replaced;
-      rows.push({ id, summary: description, status: "active" });
-      return createAnswer(id, description);
-    },
     pause_intent: (args) => {
       const id = String(args.intentId);
       const replaced = plan.pause?.(id);
@@ -191,7 +179,17 @@ function fakeIndex(plan: Plan = {}) {
       return `[${row.summary}](https://agents.edgecity.live/intents?intent=${id}) — paused\n\n${JSON.stringify({ success: true, data: { intentId: id, status: "paused", changed: true } })}`;
     },
   };
-  return { fake: indexMcpFake({ tools }), rows };
+  // The seed's create: Index's REST `POST /api/intents` (the welcome's direct create, no prepare).
+  const create = async (body: Record<string, unknown>): Promise<CreateReply> => {
+    creates++;
+    const description = String(body.description);
+    const id = idFor(0x100 + creates);
+    const replaced = await plan.create?.(creates, description, id);
+    if (replaced !== undefined) return replaced;
+    rows.push({ id, summary: description, status: "active" });
+    return createdReply(id);
+  };
+  return { fake: indexMcpFake({ tools, create }), rows };
 }
 
 const VARS = ["INDEX_API_KEY", "INDEX_MCP_URL", "AV_CONNECTIONS_URL", "HERMES_HOME", "AV_WELCOME_SEED_MODE"];
@@ -219,16 +217,16 @@ function writeNickname(nickname: string): void {
   writeFileSync(join(home, "av-profile.json"), JSON.stringify({ version: 1, nickname, about_me: "", interests: [], preferences: {} }));
 }
 
-/** welcomeRun against `index`; the text, the branch, and the tool calls in order. */
+/** welcomeRun against `index`; the text, the branch, and the calls in order: MCP tool calls by tool name, the REST create as CREATE_CALL. */
 type RunOptions = { timeoutMs?: number; budgetMs?: number; reserveMs?: number; waitMs?: number; pollMs?: number };
 async function run(index: ReturnType<typeof fakeIndex>, argv: string[] = [], options: RunOptions = {}) {
   process.env.INDEX_API_KEY = FAKE_API_KEY;
   process.env.INDEX_MCP_URL = index.fake.url;
   const out = await welcomeRun(["--home", home, ...argv], { fetch: index.fake.fetch, ...options, timeoutMs: options.timeoutMs ?? 200 });
-  const calls = index.fake.calls.filter((c) => c.method === "tools/call");
+  const calls = index.fake.calls.filter((c) => c.method === "tools/call" || c.method === "rest");
   return { ...out, calls, names: calls.map((c) => c.name) };
 }
-const creates = (calls: FakeCall[]) => calls.filter((c) => c.name === "create_intent");
+const creates = (calls: FakeCall[]) => calls.filter((c) => c.name === CREATE_CALL);
 const seedMarker = () => JSON.parse(readFileSync(join(home, WELCOME_SEED_FILE), "utf8"));
 const listedLines = (text: string) => text.split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
 
@@ -333,13 +331,13 @@ describe("selectedIntentions: the profile's selected intentions, in order, as th
 // ── The seed ─────────────────────────────────────────────────────────────────
 
 describe("the seed: zero active intents and selected intentions → up to three creates, then the list", () => {
-  test("three selected: exactly three create_intent calls, in order, each with only the selected text; then the seeded welcome", async () => {
+  test("three selected: exactly three REST creates, in order, each with only the selected text; then the seeded welcome", async () => {
     writeNickname("Mira");
     const userMd = profileText(draftWith(3));
     writeUserMd(userMd);
     const index = fakeIndex();
     const { text, branch, calls, names } = await run(index);
-    expect(names).toEqual(["list_intents", "create_intent", "create_intent", "create_intent", "list_intents"]);
+    expect(names).toEqual(["list_intents", CREATE_CALL, CREATE_CALL, CREATE_CALL, "list_intents"]);
     expect(creates(calls).map((c) => c.arguments)).toEqual(KEPT.slice(0, 3).map((k) => ({ description: k.text, sourceType: SEED_SOURCE_TYPE })));
     // Nothing else of USER.md went to Index: no tag, no other line, in any call.
     for (const call of calls) {
@@ -383,7 +381,7 @@ describe("the seed: zero active intents and selected intentions → up to three 
     writeUserMd(profileText(draftWith(1)));
     process.env.AV_WELCOME_SEED_MODE = "paused";
     const { text, branch, names } = await run(fakeIndex(), ["--draft"]);
-    expect(names).toEqual(["list_intents", "create_intent", "pause_intent", "list_intents"]);
+    expect(names).toEqual(["list_intents", CREATE_CALL, "pause_intent", "list_intents"]);
     expect(text).toBe(golden.seededPausedOne);
     expect(text).toContain(`\n${SEEDED_COPY_ONE.paused.lead}\n\n- ${KEPT[0].text}\n\n`);
     expect(text).toContain(`\n\n${SEEDED_COPY_ONE.paused.close}\n\n`);
@@ -434,15 +432,15 @@ describe("the seed: zero active intents and selected intentions → up to three 
   });
 
   for (const [label, reply] of [
-    ["a throw (HTTP 503)", { response: new Response("down", { status: 503 }) }],
-    ["an isError answer", toolError("Could not create the intent.")],
-    ["intent_needs_revision", "That intent is too vague to match on (intent_needs_revision). Nothing was created."],
-    ["success false", `Too vague.\n\n${JSON.stringify({ success: false, error: "too vague" })}`],
+    ["HTTP 503, not JSON", { response: new Response("down", { status: 503 }) }],
+    ["HTTP 500", createError()],
+    ["HTTP 422 intent_rejected", createError(422, { error: "intent_rejected", code: "intent_rejected", detail: "The signal could not be created from this description." })],
+    ["HTTP 400", createError(400, { error: "Validation failed", details: {} })],
   ] as const) {
     test(`one create failing (${label}): the others are created, seed_failed 1, and the welcome lists what is active`, async () => {
       writeNickname("Mira");
       writeUserMd(profileText(draftWith(3)));
-      const index = fakeIndex({ create: (n) => (n === 2 ? (reply as ToolReply) : undefined) });
+      const index = fakeIndex({ create: (n) => (n === 2 ? (reply as CreateReply) : undefined) });
       const { text, branch, calls } = await run(index, ["--draft"]);
       expect(creates(calls).map((c) => c.arguments?.description)).toEqual(KEPT.slice(0, 3).map((k) => k.text));
       expect(branch).toEqual({ fallback: "none", intents_listed: 2, intents_seeded: 2, seed_failed: 1 });
@@ -454,8 +452,8 @@ describe("the seed: zero active intents and selected intentions → up to three 
 
   test("every create failing: nothing seeded, so today's text from the list (no active intent, signup context: the context text)", async () => {
     writeUserMd(profileText(draftWith(3)));
-    const { text, branch, names } = await run(fakeIndex({ create: () => toolError("down") }), ["--draft"]);
-    expect(names).toEqual(["list_intents", "create_intent", "create_intent", "create_intent", "list_intents"]);
+    const { text, branch, names } = await run(fakeIndex({ create: () => createError() }), ["--draft"]);
+    expect(names).toEqual(["list_intents", CREATE_CALL, CREATE_CALL, CREATE_CALL, "list_intents"]);
     expect(text).toBe(golden.context);
     expect(branch).toEqual({ fallback: "context", intents_listed: 0, intents_seeded: 0, seed_failed: 3 });
   });
@@ -500,7 +498,7 @@ describe("the seed: zero active intents and selected intentions → up to three 
     // Each create answers after 150 ms: one after another would take 450 ms.
     const index = fakeIndex();
     const slow: typeof index.fake.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(init?.body ?? "").includes('"create_intent"')) await new Promise((r) => setTimeout(r, 150));
+      if (String(input).endsWith("/api/intents")) await new Promise((r) => setTimeout(r, 150));
       return index.fake.fetch(input, init);
     }) as typeof fetch;
     process.env.INDEX_API_KEY = FAKE_API_KEY;
@@ -514,19 +512,15 @@ describe("the seed: zero active intents and selected intentions → up to three 
     expect(listedLines(out.text)).toEqual(KEPT.slice(0, 3).map((k) => k.text));
   });
 
-  test("the second list failing: the titles come from the create answers, else the selected texts, cleaned", async () => {
+  test("the second list failing: the titles are the selected texts, cleaned (Index's create answer names an id, never a title)", async () => {
     writeUserMd(profileText(draftWith(3, { intentions: [
       { category: "learn", text: "Meet **builders** at evil.example", kept: true },
       { category: "learn", text: "Second want", kept: true },
     ] })));
-    const index = fakeIndex({
-      list: (n) => (n === 2 ? { response: new Response("down", { status: 503 }) } : undefined),
-      // The first answer names an id only (no summary): its title is the selected text, cleaned.
-      create: (n, _d, id) => (n === 1 ? `Created.\n\n${JSON.stringify({ success: true, data: { intentId: id } })}` : createAnswer(id, "Index's own summary")),
-    });
+    const index = fakeIndex({ list: (n) => (n === 2 ? { response: new Response("down", { status: 503 }) } : undefined) });
     const { text, branch } = await run(index, ["--draft"]);
     expect(branch).toMatchObject({ intents_seeded: 2, seed_failed: 0, intents_listed: 2 });
-    expect(listedLines(text)).toEqual(["Meet builders at evil. example", "Index's own summary"]);
+    expect(listedLines(text)).toEqual(["Meet builders at evil. example", "Second want"]);
   });
 
   test("a create answer with no id: its intent is matched in the second list by the text sent, so it is listed once, under Index's title", async () => {
@@ -534,7 +528,7 @@ describe("the seed: zero active intents and selected intentions → up to three 
     const index = fakeIndex({
       create: (n, description, id) => {
         index.rows.push({ id, summary: `Index's words for want ${n}`, description, status: "active" });
-        return n === 1 ? "Created your signal." : createAnswer(id, `Index's words for want ${n}`);
+        return n === 1 ? { status: 200, body: { networkIds: [], sourceType: "agentvillage", sourceId: null } } : createdReply(id);
       },
     });
     const { text, branch } = await run(index, ["--draft"]);
@@ -597,11 +591,11 @@ describe("the seed: zero active intents and selected intentions → up to three 
     console.error = console.log = console.warn = (...a: unknown[]) => void written.push(a.join(" "));
     process.stderr.write = ((s: string) => (written.push(String(s)), true)) as typeof process.stderr.write;
     try {
-      await run(fakeIndex({ create: (n) => (n === 2 ? toolError("x") : undefined) }));
+      await run(fakeIndex({ create: (n) => (n === 2 ? createError() : undefined) }));
       process.env.AV_WELCOME_SEED_MODE = "paused";
       rmSync(join(home, WELCOME_SEED_FILE));
       rmSync(join(home, WELCOME_STATE_FILE));
-      await run(fakeIndex({ create: (n, _d, id) => (n === 1 ? `Created.\n\n${JSON.stringify({ success: true })}` : createAnswer(id, "x")) }), ["--draft"]);
+      await run(fakeIndex({ create: (n) => (n === 1 ? { status: 200, body: {} } : undefined) }), ["--draft"]);
     } finally {
       Object.assign(console, { error: originals.error, log: originals.log, warn: originals.warn });
       process.stderr.write = originals.write;
@@ -624,7 +618,7 @@ describe("the seed: zero active intents and selected intentions → up to three 
     rmSync(join(home, WELCOME_SEED_FILE));
     // Three hanging creates at once (200 ms each, 300 ms left for them); the second list still has about 300 ms (100 ms of slack either way).
     const hung = await run(fakeIndex({ create: () => ({ hang: true }) }), ["--draft"], { timeoutMs: 200, budgetMs: 500, reserveMs: 200 });
-    expect(hung.names).toEqual(["list_intents", "create_intent", "create_intent", "create_intent", "list_intents"]);
+    expect(hung.names).toEqual(["list_intents", CREATE_CALL, CREATE_CALL, CREATE_CALL, "list_intents"]);
     expect(hung.branch).toEqual({ fallback: "context", intents_listed: 0, intents_seeded: 0, seed_failed: 3 });
   });
 
@@ -651,7 +645,7 @@ describe("the seed: zero active intents and selected intentions → up to three 
       // The clock jumps once the first list has answered; under the old 25 s budget neither run would create or list again.
       offset = 0;
       const made = await run(fakeIndex({ list: (n) => void (n === 1 && (offset = 44_000)) }), ["--draft"]);
-      expect(made.names).toEqual(["list_intents", "create_intent", "create_intent", "create_intent", "list_intents"]);
+      expect(made.names).toEqual(["list_intents", CREATE_CALL, CREATE_CALL, CREATE_CALL, "list_intents"]);
       expect(draftTrailer(made.branch!)).toBe(draftTrailer({ fallback: "none", intents_listed: 3, intents_seeded: 3, seed_failed: 0 }));
       rmSync(join(home, WELCOME_SEED_FILE));
       offset = 0;
@@ -817,10 +811,10 @@ describe("the seed marker: the creates run once per box, in both modes", () => {
           }, 0);
           return undefined;
         }
-        return new Promise<ToolReply>((resolve) =>
+        return new Promise<CreateReply>((resolve) =>
           setTimeout(() => {
             index.rows.push({ id, summary: description, status: "active" });
-            resolve(createAnswer(id, description));
+            resolve(createdReply(id));
           }, 400),
         );
       },
@@ -867,10 +861,10 @@ describe("the seed marker: the creates run once per box, in both modes", () => {
               second = welcomeRun(["--home", home, "--draft"], { fetch: index.fake.fetch, pollMs: 100 });
             }, 0);
           }
-          return new Promise<ToolReply>((resolve) =>
+          return new Promise<CreateReply>((resolve) =>
             setTimeout(() => {
               index.rows.push({ id, summary: description, status: "active" });
-              resolve(createAnswer(id, description));
+              resolve(createdReply(id));
             }, 18_000),
           );
         },
@@ -985,10 +979,10 @@ describe("AV_WELCOME_SEED_MODE=paused: create, then pause each one created", () 
     // Each line is created then paused; the three lines run at once.
     expect(names[0]).toBe("list_intents");
     expect(names.at(-1)).toBe("list_intents");
-    expect(names.filter((n) => n === "create_intent")).toHaveLength(3);
+    expect(names.filter((n) => n === CREATE_CALL)).toHaveLength(3);
     expect(calls.filter((c) => c.name === "pause_intent").map((c) => String(c.arguments?.intentId)).sort()).toEqual([0x101, 0x102, 0x103].map(idFor));
     for (const row of index.rows) {
-      const created = calls.findIndex((c) => c.name === "create_intent" && c.arguments?.description === row.summary);
+      const created = calls.findIndex((c) => c.name === CREATE_CALL && c.arguments?.description === row.summary);
       const paused = calls.findIndex((c) => c.name === "pause_intent" && c.arguments?.intentId === row.id);
       expect(created).toBeLessThan(paused);
     }
@@ -1016,11 +1010,11 @@ describe("AV_WELCOME_SEED_MODE=paused: create, then pause each one created", () 
       create: (_n, description, id) => {
         if (description !== KEPT[1].text) return undefined;
         index.rows.push({ id, summary: description, status: "active" });
-        return `Created your signal.\n\n${JSON.stringify({ success: true, data: { networkIds: [] } })}`;
+        return { status: 200, body: { networkIds: [], sourceType: "agentvillage", sourceId: null } };
       },
     });
     const { names, branch, text, calls } = await run(index, ["--draft"]);
-    expect([...names].sort()).toEqual(["create_intent", "create_intent", "create_intent", "list_intents", "list_intents", "pause_intent", "pause_intent"]);
+    expect([...names].sort()).toEqual([CREATE_CALL, CREATE_CALL, CREATE_CALL, "list_intents", "list_intents", "pause_intent", "pause_intent"].sort());
     const unnamed = index.rows.find((r) => r.summary === KEPT[1].text)!;
     expect(calls.some((c) => c.name === "pause_intent" && c.arguments?.intentId === unnamed.id)).toBe(false);
     expect(branch).toEqual({ fallback: "none", intents_listed: 2, intents_seeded: 2, seed_failed: 1 });
@@ -1033,27 +1027,18 @@ describe("AV_WELCOME_SEED_MODE=paused: create, then pause each one created", () 
     writeUserMd(profileText(draftWith(1)));
     process.env.AV_WELCOME_SEED_MODE = "paused";
     const { names, branch, text } = await run(fakeIndex({ pause: () => toolError("cannot pause") }), ["--draft"]);
-    expect(names).toEqual(["list_intents", "create_intent", "pause_intent", "list_intents"]);
+    expect(names).toEqual(["list_intents", CREATE_CALL, "pause_intent", "list_intents"]);
     expect(branch).toEqual({ fallback: "none", intents_listed: 1, intents_seeded: 0, seed_failed: 1 });
     expect(text).toContain("\n\nYour intents\n");
   });
 });
 
 describe("the answers the seed reads", () => {
-  test("createdIntent: the id and title in each shape, the link when that is all, null for a refusal", () => {
-    const id = idFor(9);
-    expect(createdIntent(createAnswer(id, "A **want**"))).toEqual({ id, title: "A want" });
-    expect(createdIntent(`[x](u)\n${JSON.stringify({ success: true, data: { intentId: id } })}`)).toEqual({ id, title: null });
-    expect(createdIntent(`${JSON.stringify({ success: true, data: { intents: [{ id, description: "From description" }] } })}`)).toEqual({ id, title: "From description" });
-    expect(createdIntent(`${JSON.stringify({ intent: { id, summary: "Top" } })}`)).toEqual({ id, title: "Top" });
-    expect(createdIntent(`${JSON.stringify({ intentId: id })}`)).toEqual({ id, title: null });
-    expect(createdIntent(`[x](https://agents.edgecity.live/intents?intent=${id}) — created`)).toEqual({ id, title: null });
-    expect(createdIntent(`[x](https://index.network/i/${id}) — created`)).toEqual({ id, title: null });
-    expect(createdIntent(`[a](https://index.network/i/${id}) and [b](https://index.network/i/${idFor(10)})`)).toEqual({ id: null, title: null });
-    expect(createdIntent(`${JSON.stringify({ data: { intent: { id: "bad id; rm -rf" } } })}`)).toEqual({ id: null, title: null });
-    expect(createdIntent("intent_needs_revision: say more")).toBeNull();
-    expect(createdIntent(JSON.stringify({ success: false, data: { intentId: id } }))).toBeNull();
+  test("writeRefused (the pause answer): a refusal or success not true is refused; plain prose is not", () => {
+    expect(writeRefused("intent_needs_revision: say more")).toBe(true);
+    expect(writeRefused(JSON.stringify({ success: false, data: { intentId: idFor(9) } }))).toBe(true);
     expect(writeRefused(JSON.stringify({ success: "true" }))).toBe(true);
+    expect(writeRefused(`Paused.\n\n${JSON.stringify({ success: true })}`)).toBe(false);
     expect(writeRefused("Paused.")).toBe(false);
   });
 
@@ -1210,8 +1195,8 @@ describe("the --draft trailer on the seeded branches", () => {
     ["seededPausedOne", () => {
       process.env.AV_WELCOME_SEED_MODE = "paused";
     }, {}, "seededPausedOne", { fallback: "none", intents_listed: 1, intents_seeded: 1, seed_failed: 0 }],
-    ["one failed", () => {}, { create: (n) => (n === 3 ? toolError("x") : undefined) }, null, { fallback: "none", intents_listed: 2, intents_seeded: 2, seed_failed: 1 }],
-    ["all failed", () => {}, { create: () => toolError("x") }, "context", { fallback: "context", intents_listed: 0, intents_seeded: 0, seed_failed: 3 }],
+    ["one failed", () => {}, { create: (n) => (n === 3 ? createError() : undefined) }, null, { fallback: "none", intents_listed: 2, intents_seeded: 2, seed_failed: 1 }],
+    ["all failed", () => {}, { create: () => createError() }, "context", { fallback: "context", intents_listed: 0, intents_seeded: 0, seed_failed: 3 }],
     ["unreachable", () => {}, { list: () => ({ response: new Response("down", { status: 503 }) }) }, "unreachable", { fallback: "unreachable", intents_listed: 0, intents_seeded: 0, seed_failed: 0 }],
   ];
 
@@ -1239,13 +1224,15 @@ describe("the --draft trailer on the seeded branches", () => {
 // ── SEED-REVISION: a line Index refuses is handed to the first chat turn ─────
 
 /**
- * Routing (c), 12 Oct: Index's admission verdict refuses most seed lines with
- * `intent_needs_revision`. The real refusal (Index's source, mcp.tools.ts
- * `mcpError`) is an `isError` answer whose text is
- * `{"success":false,"code":"intent_needs_revision","error":...,"feedback":...,"proposedPayload":...,"recovery":...}`,
- * not the plain-text answer of the fixture above. The welcome keeps the
- * resident's line and Index's cleaned feedback in the seed marker; the
- * AGENTS.md welcome gate's next run prints them once as REFUSED_SEEDS.
+ * Routing (c), 12 Oct: Index's refusal of a seed line is
+ * `{"success":false,"code":"intent_needs_revision","error":...,"feedback":...,"proposedPayload":...,"recovery":...}`
+ * (Index's source, mcp.tools.ts `mcpError`). Since the direct create (13 Oct)
+ * it is kept when a REST create answers non-2xx with that body (Index's REST
+ * create does not send it at a91c3ff: fixtures/index-create-direct.json
+ * notInSource; the fallback stays for a refused create, lead's ruling). The
+ * welcome keeps the resident's line and Index's cleaned feedback in the seed
+ * marker; the AGENTS.md welcome gate's next run prints them once as
+ * REFUSED_SEEDS.
  */
 describe("SEED-REVISION: a line Index refuses (intent_needs_revision) is kept, then handed to the first chat turn once", () => {
   const BLOCK = "REFUSED_SEEDS";
@@ -1253,8 +1240,8 @@ describe("SEED-REVISION: a line Index refuses (intent_needs_revision) is kept, t
   const RAW_FEEDBACK = "Say **which** kind of founder you want to meet, at https://evil.example or @someone: e.g. 'B2B SaaS in Goa'.";
   const CLEAN_FEEDBACK = "Say which kind of founder you want to meet, at or someone: e. g. 'B2B SaaS in Goa'.";
   const BODY_KEYS = ["success", "code", "error", "feedback", "proposedPayload", "recovery"];
-  /** The refusal as Index's source sends it: isError, JSON text. `feedback` undefined leaves the key out. */
-  function refusal(feedback: unknown, extra: Record<string, unknown> = {}): ToolReply {
+  /** The refusal as a non-2xx REST create body (422). `feedback` undefined leaves the key out. */
+  function refusal(feedback: unknown, extra: Record<string, unknown> = {}): CreateReply {
     const body: Record<string, unknown> = {
       success: false,
       code: "intent_needs_revision",
@@ -1265,7 +1252,7 @@ describe("SEED-REVISION: a line Index refuses (intent_needs_revision) is kept, t
       ...extra,
     };
     if (feedback === undefined) delete body.feedback;
-    return toolError(JSON.stringify(body));
+    return { status: 422, body };
   }
 
   async function captured(index: ReturnType<typeof fakeIndex>, argv: string[], now: Date = NOW) {
@@ -1294,11 +1281,11 @@ describe("SEED-REVISION: a line Index refuses (intent_needs_revision) is kept, t
     writeUserMd(profileText(draftWith(3)));
     const refused = await captured(fakeIndex({ create: (n) => (n === 2 ? refusal(RAW_FEEDBACK) : undefined) }), ["--draft"]);
     const generic = { stdout: "", stderr: "" };
-    // The same run with a generic isError failure: the same welcome and the same trailer.
+    // The same run with a generic non-2xx failure: the same welcome and the same trailer.
     {
       const marker = readFileSync(join(home, WELCOME_SEED_FILE), "utf8");
       rmSync(join(home, WELCOME_SEED_FILE));
-      Object.assign(generic, await captured(fakeIndex({ create: (n) => (n === 2 ? toolError("x") : undefined) }), ["--draft"]));
+      Object.assign(generic, await captured(fakeIndex({ create: (n) => (n === 2 ? createError() : undefined) }), ["--draft"]));
       expect(JSON.parse(readFileSync(join(home, WELCOME_SEED_FILE), "utf8")).refused).toBeUndefined();
       writeFileSync(join(home, WELCOME_SEED_FILE), marker);
     }
@@ -1379,20 +1366,20 @@ describe("SEED-REVISION: a line Index refuses (intent_needs_revision) is kept, t
     expect(long.startsWith(line.slice(0, -1))).toBe(true);
   });
 
-  test("a refusal in a non-error JSON answer is kept the same way; failures that are not this refusal keep nothing and the marker's shape is unchanged", async () => {
+  test("the refusal under any non-2xx status is kept the same way; failures that are not this refusal keep nothing and the marker's shape is unchanged", async () => {
     writeUserMd(profileText(draftWith(1)));
-    const body = JSON.stringify({ success: false, code: "intent_needs_revision", error: "x", feedback: "Name the stage." });
-    await captured(fakeIndex({ create: () => `Not created.\n\n${body}` }), ["--draft"]);
+    const body = { success: false, code: "intent_needs_revision", error: "x", feedback: "Name the stage." };
+    await captured(fakeIndex({ create: () => ({ status: 400, body }) }), ["--draft"]);
     expect(seedMarker().refused).toEqual([{ line: KEPT[0].text, feedback: "Name the stage.", code: "intent_needs_revision", at: NOW.toISOString(), keys: ["success", "code", "error", "feedback"] }]);
     for (const reply of [
-      toolError("Could not create the intent."),
-      toolError(JSON.stringify({ success: false, code: "intent_rejected", error: "x", feedback: "y" })),
-      toolError(JSON.stringify({ success: false, code: "preparation_failed", retryable: true })),
-      "That intent is too vague to match on (intent_needs_revision). Nothing was created.",
-      `Too vague.\n\n${JSON.stringify({ success: false, error: "too vague" })}`,
+      createError(),
+      createError(422, { error: "intent_rejected", code: "intent_rejected", detail: "x", feedback: "y" }),
+      createError(503, { error: "preparation_failed", detail: "x", retryable: true }),
+      { response: new Response("That intent is too vague to match on (intent_needs_revision). Nothing was created.", { status: 422 }) },
+      createError(400, { success: false, error: "too vague" }),
       { response: new Response("down", { status: 503 }) },
       { hang: true },
-    ] as ToolReply[]) {
+    ] as CreateReply[]) {
       rmSync(join(home, WELCOME_SEED_FILE));
       await captured(fakeIndex({ create: () => reply }), ["--draft"]);
       const raw = readFileSync(join(home, WELCOME_SEED_FILE), "utf8");
