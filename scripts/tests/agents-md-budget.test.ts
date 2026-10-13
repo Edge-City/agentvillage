@@ -88,7 +88,7 @@ describe("AGENTS.md budget (AGENTS-MD-CAP)", () => {
       "Their newer words in chat win.",
       'Never state, use or suggest an item under "Removed by you".',
       "Items marked (guess) and the `Summary:` line are the app's reading, never their words.",
-      "Never create an intention from it unless they ask; only the memory signal sync may propose an uncovered stated goal, held for their approval, never auto-published.",
+      "Never create an intention from it unless they ask; only the memory signal sync may propose an uncovered stated goal, for their approval.",
     ]) expect(agents).toContain(rule);
     // The connection-outcome rule stays loaded: its senders are render-only cron prompts that read no file (fix round 1, M-1).
     expect(agents).toContain("- **Connection outcomes:** a reply to an accepted-connection follow-up is ordinary conversation: never parse it deterministically;");
