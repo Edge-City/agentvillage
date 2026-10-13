@@ -9,8 +9,10 @@ const DEFAULT_MODEL_MAX_TOKENS = 4096;
 /**
  * LLM-429: the one Hermes fallback route the installer manages (`configureModelFallback`), the
  * only place this model string lives in the overlay. luna is the control plane's code default
- * (`DEFAULT_MODEL`, control-plane/src/tenants.js:291) and already on its model allowlist, so it
- * is a model every box can call through the same OpenRouter key. Why and the incident:
+ * (`DEFAULT_MODEL`, control-plane/src/tenants.js:291), a model every box can call through its own
+ * OpenRouter key: that key restricts no model (the control plane's `HERMES_MODEL_ALLOWLIST` gates
+ * only the per-tenant model PUT, tenant-model.js), and luna turns spend the key's lifetime limit
+ * like any other. Why and the incident:
  * private/handover/lanes-intro/LLM-429.md.
  */
 export const FALLBACK_PROVIDER = "openrouter";
