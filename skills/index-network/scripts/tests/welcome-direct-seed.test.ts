@@ -27,6 +27,7 @@ import * as welcomeModule from "../welcome";
 import { RESEED_FLAG, DRY_RUN_FLAG, SELECTED_HEADING, WELCOME_SEED_FILE, WELCOME_STATE_FILE, main, welcomeRun } from "../welcome";
 import createFixture from "./fixtures/index-create-direct.json";
 import golden from "./fixtures/welcome-texts.json";
+import originFixture from "./fixtures/index-origin-plugin.json";
 import { CREATE_CALL, type CreateReply, FAKE_API_KEY, FAKE_MCP_URL, type ToolReply, createdReply, indexMcpFake } from "./index-mcp-fake";
 
 const CREATE_URL = "https://index-mcp.fake.test/api/intents";
@@ -39,7 +40,7 @@ const NEEDS_REVISION = createFixture.notInSource.needsRevision;
 
 type DirectCreate =
   | { ok: true; id: string | null }
-  | { ok: false; status: number; refusal: { refused: true; code: string; feedback: string | null; keys: string[] } | null; timedOut?: boolean };
+  | { ok: false; status: number; refusal: { refused: true; code: string; feedback: string | null; keys: string[] } | null; timedOut?: boolean; badUrl?: true };
 /** `createIntentDirect` read off the module at call time, so a missing export fails each test, not the file. */
 function createIntentDirect(target: mcp.IndexMcpTarget, description: string): Promise<DirectCreate> {
   const fn = (mcp as Record<string, unknown>).createIntentDirect;
@@ -333,5 +334,238 @@ describe("--reseed: the same direct path; --dry-run lists only and reports would
     const { stderr } = await trailer(index, [RESEED_FLAG]);
     expect(JSON.parse(stderr)).toMatchObject({ intents_seeded: 0, seed_failed: 2, seed_codes: ["intent_needs_revision", "create-http-500"] });
     expect(marker().refused.map((r: { line: string }) => r.line)).toEqual([LINES[0]]);
+  });
+});
+
+// ── Fix round 2 (refute 57644408: S1, S2, N1) ────────────────────────────────
+
+describe("S1: a 2xx that names no intent id is not created on its own word; the second list decides", () => {
+  const html = () => ({ response: new Response("<html>ok</html>", { status: 200, headers: { "content-type": "text/html" } }) });
+
+  test("probe A5: 200 text/html, nothing stored, the second list empty: a failed line (create-no-id), marker created 0, never 'this intent is active'; --reseed may send it again", async () => {
+    writeLines(LINES.slice(0, 1));
+    process.env.AV_SEED_TRAILER_V2 = "1";
+    const index = fakeIndex(() => html());
+    const { stdout, stderr } = await trailer(index);
+    expect(JSON.parse(stderr)).toEqual({ welcome: 1, fallback: "context", intents_listed: 0, intents_seeded: 0, seed_failed: 1, seed_codes: ["create-no-id"] });
+    expect(marker()).toMatchObject({ created: 0, failed: 1, done: true });
+    expect(marker().refused).toBeUndefined();
+    expect(stdout).not.toContain("this intent is active");
+    expect(stdout).not.toContain(`- ${LINES[0]}`);
+    expect(index.rows).toHaveLength(0);
+
+    const err: string[] = [];
+    await main(["--home", home, RESEED_FLAG], { stdout: () => {}, stderr: (s) => err.push(s) }, (a) => welcomeRun(a, { fetch: index.fetch, timeoutMs: 200 }));
+    expect(JSON.parse(err.join(""))).toMatchObject({ intents_seeded: 0, seed_failed: 1, seed_codes: ["create-no-id"] });
+    expect(index.fake.calls.filter((c) => c.name === CREATE_CALL).map((c) => c.arguments?.description)).toEqual([LINES[0], LINES[0]]);
+  });
+
+  test("a 200 with no id whose line the second list shows active: seeded, as a create that timed out but landed", async () => {
+    writeLines(LINES.slice(0, 1));
+    process.env.AV_SEED_TRAILER_V2 = "1";
+    const index = fakeIndex((_n, description, id) => {
+      index.rows.push({ id, summary: description, status: "active" });
+      return { status: 200, body: {} };
+    });
+    const { stdout, stderr } = await trailer(index);
+    expect(JSON.parse(stderr)).toEqual({ welcome: 1, fallback: "none", intents_listed: 1, intents_seeded: 1, seed_failed: 0, seed_codes: ["create-no-id"] });
+    expect(marker()).toMatchObject({ created: 1, failed: 0, done: true });
+    expect(stdout).toContain(`- ${LINES[0]}`);
+  });
+
+  test("a 200 with no id and the second list failing: failed, never counted on the create's word", async () => {
+    writeLines(LINES.slice(0, 1));
+    process.env.AV_SEED_TRAILER_V2 = "1";
+    let lists = 0;
+    const base = fakeIndex(() => html());
+    const fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url) === FAKE_MCP_URL && String(init?.body ?? "").includes('"list_intents"') && ++lists === 2) return new Response("down", { status: 503 });
+      return base.fetch(url, init);
+    }) as typeof globalThis.fetch;
+    const { stderr } = await trailer({ ...base, fetch });
+    expect(JSON.parse(stderr)).toMatchObject({ intents_seeded: 0, seed_failed: 1, seed_codes: ["create-no-id"] });
+    expect(marker()).toMatchObject({ created: 0, failed: 1 });
+  });
+});
+
+describe("S2: the create's origin passes the av-events plugin's _origin rule, or no request is made", () => {
+  const indexCreateUrl = (mcpUrl: string): string | null => {
+    const fn = (mcp as Record<string, unknown>).indexCreateUrl;
+    expect(typeof fn).toBe("function");
+    return (fn as (u: string) => string | null)(mcpUrl);
+  };
+  const counting = () => {
+    const seen: Array<{ url: string; key: string | null }> = [];
+    const fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      seen.push({ url: String(url), key: new Headers(init?.headers).get("x-api-key") });
+      return Response.json(R.created.body, { status: 200 });
+    }) as typeof globalThis.fetch;
+    return { seen, fetch };
+  };
+  /** Shapes the plugin's `_origin(url, ("", "/", "/api", "/api/"))` refuses (plugins/av-events/_record_intention.py :535-566). */
+  const REJECTED_API_URLS = [
+    "http://evil.example", // plain http off loopback: the key in plaintext
+    "http://10.0.0.1/api",
+    "https://user:pw@evil.example", // userinfo
+    "https://@evil.example",
+    "https://protocol.index.network?x=", // ? anywhere
+    "https://protocol.index.network/api?x",
+    "https://protocol.index.network#frag", // # anywhere
+    "https://protocol.index.network/mcp", // a path beyond an optional /api
+    "https://protocol.index.network/api/intents",
+    "https://protocol.index.network//api",
+    "protocol.index.network", // no scheme, no host
+    "ftp://protocol.index.network",
+    "https://",
+    "https:///api",
+    "https://evil example.test", // a space or control character inside
+    "https://evil.example\t/api",
+    "https://evil_host.example", // a host outside [A-Za-z0-9.-]
+    "https://évil.example",
+    "https://evil.example:99999", // a port that does not parse
+    "https://evil.example:8o",
+    "https://[::1", // a bracket that does not close
+    "https://[not-v6]",
+  ];
+
+  test("indexOrigin agrees with the plugin's _origin on every vector of fixtures/index-origin-plugin.json (zone ids: stricter)", () => {
+    const fn = (mcp as Record<string, unknown>).indexOrigin;
+    expect(typeof fn).toBe("function");
+    const indexOrigin = fn as (url: string, paths: readonly string[]) => string | null;
+    const stricter = new Set(originFixture.stricter.urls);
+    for (const { url, api, mcp: viaMcp } of originFixture.cases) {
+      const want = stricter.has(url) ? { url, api: null, mcp: null } : { url, api, mcp: viaMcp };
+      expect({ url, api: indexOrigin(url, ["", "/", "/api", "/api/"]), mcp: indexOrigin(url, ["/mcp", "/mcp/"]) }).toEqual(want);
+    }
+    expect(originFixture.cases.filter((c) => c.api !== null).length).toBeGreaterThan(20);
+    expect(originFixture.cases.filter((c) => c.api === null).length).toBeGreaterThan(40);
+  });
+
+  test("each rejected $INDEX_API_URL shape: create-bad-url status 0, and the key never leaves (no request)", async () => {
+    for (const configured of REJECTED_API_URLS) {
+      process.env.INDEX_API_URL = configured;
+      expect({ configured, url: indexCreateUrl(FAKE_MCP_URL) }).toEqual({ configured, url: null });
+      const { seen, fetch } = counting();
+      expect({ configured, out: await createIntentDirect({ apiKey: FAKE_API_KEY, mcpUrl: FAKE_MCP_URL, fetch, timeoutMs: 200 }, "a line") }).toEqual({
+        configured,
+        out: { ok: false, status: 0, refusal: null, badUrl: true },
+      });
+      expect({ configured, seen }).toEqual({ configured, seen: [] });
+    }
+  });
+
+  test("accepted shapes, as the plugin accepts them: https, or http to a loopback host; an origin or <origin>/api; surrounding whitespace stripped", async () => {
+    const cases: Array<[string, string]> = [
+      ["https://api.example.test", "https://api.example.test/api/intents"],
+      ["https://api.example.test/", "https://api.example.test/api/intents"],
+      ["https://api.example.test/api", "https://api.example.test/api/intents"],
+      ["https://api.example.test/api/", "https://api.example.test/api/intents"],
+      ["https://api.example.test:8443/api", "https://api.example.test:8443/api/intents"],
+      ["HTTPS://api.example.test", "https://api.example.test/api/intents"],
+      ["  https://api.example.test/api\n", "https://api.example.test/api/intents"],
+      ["http://localhost:8080", "http://localhost:8080/api/intents"],
+      ["http://127.0.0.1:9/api", "http://127.0.0.1:9/api/intents"],
+      ["http://[::1]:9", "http://[::1]:9/api/intents"],
+    ];
+    for (const [configured, url] of cases) {
+      process.env.INDEX_API_URL = configured;
+      expect({ configured, url: indexCreateUrl(FAKE_MCP_URL) }).toEqual({ configured, url });
+    }
+    process.env.INDEX_API_URL = "https://api.example.test/api";
+    const { seen, fetch } = counting();
+    expect(await createIntentDirect({ apiKey: FAKE_API_KEY, mcpUrl: FAKE_MCP_URL, fetch, timeoutMs: 200 }, "a line")).toEqual({ ok: true, id: R.created.body.intentId });
+    expect(seen).toEqual([{ url: "https://api.example.test/api/intents", key: FAKE_API_KEY }]);
+  });
+
+  test("no $INDEX_API_URL (or a blank one): the MCP URL's origin, only when the MCP URL itself passes the rule with a /mcp path", async () => {
+    process.env.INDEX_API_URL = "   ";
+    expect(indexCreateUrl(FAKE_MCP_URL)).toBe(CREATE_URL);
+    delete process.env.INDEX_API_URL;
+    expect(indexCreateUrl("https://protocol.index.network/mcp")).toBe("https://protocol.index.network/api/intents");
+    expect(indexCreateUrl("https://index-mcp.fake.test/mcp/")).toBe(CREATE_URL);
+    expect(indexCreateUrl("http://127.0.0.1:4100/mcp")).toBe("http://127.0.0.1:4100/api/intents");
+    for (const mcpUrl of ["http://evil.example/mcp", "https://evil.example/anything", "https://evil.example/mcp?x", "https://u:p@evil.example/mcp", "https://evil.example/mcp#f"]) {
+      expect({ mcpUrl, url: indexCreateUrl(mcpUrl) }).toEqual({ mcpUrl, url: null });
+      const { seen, fetch } = counting();
+      expect(await createIntentDirect({ apiKey: FAKE_API_KEY, mcpUrl, fetch, timeoutMs: 200 }, "a line")).toEqual({ ok: false, status: 0, refusal: null, badUrl: true });
+      expect(seen).toEqual([]);
+    }
+  });
+
+  test("the welcome with a rejected $INDEX_API_URL: the lists go to the MCP URL, no create is sent anywhere, each line failed as create-bad-url", async () => {
+    writeLines(LINES);
+    process.env.AV_SEED_TRAILER_V2 = "1";
+    process.env.INDEX_API_URL = "http://evil.example";
+    const index = fakeIndex();
+    const { stderr } = await trailer(index);
+    expect(index.urls).toEqual([FAKE_MCP_URL, FAKE_MCP_URL]);
+    expect(index.fake.calls.map((c) => c.name)).toEqual(["list_intents", "list_intents"]);
+    expect(JSON.parse(stderr)).toEqual({
+      welcome: 1,
+      fallback: "context",
+      intents_listed: 0,
+      intents_seeded: 0,
+      seed_failed: 3,
+      seed_codes: ["create-bad-url", "create-bad-url", "create-bad-url"],
+    });
+    expect(marker()).toMatchObject({ created: 0, failed: 3, done: true });
+    expect(marker().refused).toBeUndefined();
+  });
+});
+
+describe("N1: --reseed never sends a line the seed marker kept cut", () => {
+  const seedMarkerWith = (lines: string[]) => {
+    mkdirSync(join(home, "memory"), { recursive: true });
+    const refused = lines.map((line) => ({ line, feedback: null, code: "intent_needs_revision", at: "2026-10-12T00:00:00.000Z", keys: [] }));
+    writeFileSync(join(home, WELCOME_SEED_FILE), `${JSON.stringify({ seededAt: "2026-10-12T00:00:00.000Z", selected: lines.length, created: 0, failed: lines.length, done: true, refused })}\n`);
+  };
+  const reseedFiles = () => (existsSync(join(home, "memory")) ? readdirSync(join(home, "memory")).filter((f) => f.startsWith("welcome-reseed-") && f.endsWith(".json")) : []);
+
+  test("probe V4: the only refused line is cut (295 code points kept as 200 ending in …): nothing is sent, reseed-cut-line, said in the run record", async () => {
+    const long = "Looking for collaborators " + "on open climate data tooling ".repeat(9) + "and more";
+    const kept = welcomeModule.refusedLine(long)!;
+    expect(kept.endsWith("…")).toBe(true);
+    writeLines([]);
+    seedMarkerWith([kept]);
+    const index = fakeIndex();
+    const { stderr } = await trailer(index, [RESEED_FLAG]);
+    expect(index.fake.calls.filter((c) => c.name === CREATE_CALL)).toEqual([]);
+    expect(JSON.parse(stderr).seed_codes).toContain("reseed-cut-line");
+    expect(JSON.parse(stderr)).toMatchObject({ intents_seeded: 0, seed_failed: 0 });
+    const files = reseedFiles();
+    expect(files).toHaveLength(1);
+    const record = JSON.parse(readFileSync(join(home, "memory", files[0]!), "utf8"));
+    expect(record).toMatchObject({ created: 0, failed: 0, cutSkipped: 1 });
+    expect(record.codes).toEqual(["reseed-cut-line"]);
+    // Nothing was sent, so the run-once guard is not spent.
+    expect(welcomeModule.reseedRan(home)).toBe(false);
+  });
+
+  test("a cut line and a whole one: only the whole one is sent, verbatim; the cut one is named in the trailer and the run record", async () => {
+    const whole = "Want advice on raising a seed round";
+    const cut = welcomeModule.refusedLine("Hiring a founding engineer " + "who loves Rust and distributed systems ".repeat(8))!;
+    writeLines([]);
+    seedMarkerWith([cut, whole]);
+    const index = fakeIndex();
+    const { stderr } = await trailer(index, [RESEED_FLAG]);
+    expect(index.fake.calls.filter((c) => c.name === CREATE_CALL).map((c) => c.arguments?.description)).toEqual([whole]);
+    expect(JSON.parse(stderr)).toMatchObject({ intents_seeded: 1, seed_failed: 0, seed_codes: ["reseed-cut-line"] });
+    const files = reseedFiles();
+    expect(files).toHaveLength(1);
+    expect(JSON.parse(readFileSync(join(home, "memory", files[0]!), "utf8"))).toMatchObject({ created: 1, failed: 0, cutSkipped: 1, codes: ["reseed-cut-line"] });
+  });
+
+  test("a stored line longer than REFUSED_LINE_MAX is never sent either; --dry-run names the cut line and writes nothing", async () => {
+    const over = "x".repeat(welcomeModule.REFUSED_LINE_MAX + 5);
+    writeLines([]);
+    seedMarkerWith([over]);
+    const index = fakeIndex();
+    const { stderr } = await trailer(index, [RESEED_FLAG, DRY_RUN_FLAG]);
+    expect(index.fake.calls).toEqual([]);
+    expect(JSON.parse(stderr).seed_codes).toContain("reseed-cut-line");
+    expect(reseedFiles()).toEqual([]);
+    const real = await trailer(index, [RESEED_FLAG]);
+    expect(index.fake.calls.filter((c) => c.name === CREATE_CALL)).toEqual([]);
+    expect(JSON.parse(real.stderr).seed_codes).toContain("reseed-cut-line");
   });
 });

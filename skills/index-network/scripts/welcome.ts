@@ -91,9 +91,12 @@
  * it under `refused`: the resident's own line (at most REFUSED_LINE_MAX code
  * points), Index's feedback (refusedFeedback: cleaned, scanned, withheld
  * whole as null on a hit), the code, the run's time and the key names (never
- * the values) of Index's answer (a marker written before the direct create
- * may also hold Index's `prepare` category and recovery questions, which the
- * block below still reads). The default run that
+ * the values) of Index's answer (the block below also reads a `prepare`
+ * category and recovery questions, but no marker on a box holds them: no
+ * roll shipped the prepare seed, rc34 carries neither ov#302 nor ov#303, and
+ * the direct create never writes them; and `refused` fills only on a REST
+ * `intent_needs_revision` answer, which Index's create does not send at
+ * a91c3ff: the ruling's defensive trigger). The default run that
  * prints WELCOME_ALREADY_SENT (the AGENTS.md welcome gate, once the welcome
  * went out) then also prints, once ever, one line naming ONE refused line
  *
@@ -563,7 +566,7 @@ export type RefusedSeed = {
   at: string;
   keys: string[];
   surfacedAt?: string;
-  /** SEED-REJECT part 3b, only in a marker written before the direct create (a `prepare` refusal): Index's category and its recovery questions (cleaned). */
+  /** SEED-REJECT part 3b, a `prepare` refusal's category and recovery questions (cleaned): read if present, never written now, and no shipped roll wrote them. */
   category?: string;
   /** Why Index's first recovery question will not be shown (a code, never text): set at the seed or when the block is printed. */
   questionWithheld?: QuestionWithheld;
@@ -724,8 +727,8 @@ type SeedLineInput = { text: string; title: string; key: string };
 
 /**
  * Seed `lines` (seedOne, all at once), list again, and classify each line:
- * created (or landed after its own call gave up: publish mode, active in the
- * second list), else failed, a refused one (a non-2xx create with Index's
+ * created (or, in publish mode, landed although its own call gave up or its
+ * 2xx named no id: active in the second list), else failed, a refused one (a non-2xx create with Index's
  * `intent_needs_revision`, ov#302) kept for the first chat turn. `codes`: the code each
  * line left, in line order, shaped for the trailer (seedCode); `kinds`: the
  * kinds of the refused lines' recovery questions, at most
@@ -746,7 +749,7 @@ async function seedLines(home: string, target: IndexMcpTarget, clock: Clock, lin
     const { out: one, code } = made[i]!;
     const created = one && !("refused" in one) ? one : null;
     if (created) seeded.push({ id: created.id, title: created.title ?? line.title, key: line.key });
-    // A create that landed after its own call gave up (publish mode: in paused mode it was never paused).
+    // A create that landed although its own call gave up or named no id (publish mode: in paused mode it was never paused).
     else if (mode === "publish" && again.rows?.some((row) => row.active && row.keys.includes(line.key))) seeded.push({ id: null, title: line.title, key: line.key });
     else {
       failed++;
@@ -770,8 +773,8 @@ async function seedLines(home: string, target: IndexMcpTarget, clock: Clock, lin
  * whatever its status, is skipped and not counted; a line with no key is
  * skipped), pausing each in `paused` mode, keeping WELCOME_RELIST_RESERVE_MS
  * of the budget for the second list; then list again. A create whose own
- * call failed but whose text the second list shows active is counted as
- * seeded (publish mode). When the marker already exists, whatever the first
+ * call failed, or whose 2xx named no id, is counted as seeded only when the
+ * second list shows its text active (publish mode). When the marker already exists, whatever the first
  * read listed (a run whose first list landed between another run's creates
  * sees only some of them: DATA-416 race 1), the run waits for it and lists
  * again (awaitSeed). The read the welcome is composed from, and the counts.
@@ -842,18 +845,31 @@ async function seedWelcome(
  * `intent_needs_revision` refusal on a non-2xx answer (SEED-REVISION, kept
  * for the first chat turn); or null when the line failed otherwise: any other
  * non-2xx (`create-http-<status>`), a timeout (`create-timeout`), no answer
- * (`create-unreachable`), too little time left to call (the second list's
- * reserve kept back), or in `paused` mode no id to pause or a pause that
- * failed (never retried).
+ * (`create-unreachable`), a create URL refused before sending
+ * (CREATE_BAD_URL), a 2xx naming no id (CREATE_NO_ID: in publish mode
+ * seedLines still counts it when the second list shows it), too little time
+ * left to call (the second list's reserve kept back), or in `paused` mode no
+ * id to pause or a pause that failed (never retried).
  */
 /** One seed line's outcome (seedOne) and the code it left for the trailer (null: created, nothing to say). */
 type SeedLine = { out: { id: string | null; title: string | null } | IntentRefusal | null; code: string | null };
 
-/** The trailer's code for a create that did not land: by its HTTP status, else timeout or unreachable. Pure. */
+/** The trailer's code for a create that did not land: by its HTTP status, else a refused URL (nothing sent), timeout or unreachable. Pure. */
 export function createFailureCode(failed: Extract<DirectCreate, { ok: false }>): string {
   if (failed.status > 0) return `create-http-${failed.status}`;
+  if (failed.badUrl) return CREATE_BAD_URL;
   return failed.timedOut ? "create-timeout" : "create-unreachable";
 }
+
+/** A create whose origin indexOrigin refused (`$INDEX_API_URL`, else the MCP URL): nothing sent, the key kept (refute 57644408 S2). */
+export const CREATE_BAD_URL = "create-bad-url";
+/**
+ * A 2xx create answer naming no intent id Index could have issued: not
+ * created on that answer alone (anything at the URL can say 2xx), so in
+ * publish mode the line counts only when the second list shows it active,
+ * as a create that timed out (refute 57644408 S1).
+ */
+export const CREATE_NO_ID = "create-no-id";
 
 async function seedOne(target: IndexMcpTarget, clock: Clock, mode: SeedMode, description: string): Promise<SeedLine> {
   // `description` is the resident's line exactly as selectedIntentions read it: never rewritten, trimmed or composed.
@@ -864,7 +880,7 @@ async function seedOne(target: IndexMcpTarget, clock: Clock, mode: SeedMode, des
     const created = await createIntentDirect(createTarget, description);
     if (!created.ok) return created.refusal ? { out: created.refusal, code: created.refusal.code } : { out: null, code: createFailureCode(created) };
     const made = { id: created.id, title: null };
-    if (mode === "publish") return { out: made, code: null };
+    if (mode === "publish") return made.id === null ? { out: null, code: CREATE_NO_ID } : { out: made, code: null };
     if (made.id === null) return { out: null, code: "pause-no-id" };
     const pauseTarget = timed(target, clock, WELCOME_SEED_TIMEOUT_MS, clock.reserve);
     if (!pauseTarget) return { out: null, code: BUDGET_EXHAUSTED };
@@ -1206,22 +1222,44 @@ function reseedSent(path: string): boolean {
  * composed. Never throws.
  */
 export function reseedLines(home: string): string[] {
+  return reseedPlan(home).lines;
+}
+
+/** The code a `--reseed` (or `--dry-run`) leaves for each refused line it did not send because the marker kept it cut (reseedPlan). */
+export const RESEED_CUT_LINE = "reseed-cut-line";
+
+/**
+ * reseedLines, and how many of the seed marker's refused lines it passed
+ * over as cut (refute 57644408 N1): a line refusedLine would not keep as it
+ * is (longer than REFUSED_LINE_MAX) or one ending in "\u2026" (the ellipsis
+ * cutAtWord puts on a line it cut; a line the resident ended with one is
+ * passed over too, since the two cannot be told apart) is never sent: the
+ * resident's whole line is not on the box. Only lines the filters above
+ * would have sent are counted. Never throws.
+ */
+export function reseedPlan(home: string): { lines: string[]; cut: number } {
   const selected = selectedIntentions(home);
-  if (selected.length) return selected;
+  if (selected.length) return { lines: selected, cut: 0 };
   try {
     const marker = record(JSON.parse(readFileSync(join(home, WELCOME_SEED_FILE), "utf8")));
     const refused = Array.isArray(marker?.refused) ? marker.refused : [];
-    if (refused.length === 0) return [];
+    if (refused.length === 0) return { lines: [], cut: 0 };
     const context = contextTagsState(home);
-    if (context === "unreadable") return [];
-    return refused.flatMap((entry) => {
+    if (context === "unreadable") return { lines: [], cut: 0 };
+    let cut = 0;
+    const lines = refused.flatMap((entry) => {
       const row = record(entry);
       const line = refusedLine(row?.line);
       if (!row || line === null || row.notShown === "gone" || !residentHolds(context, line)) return [];
+      if (line !== row.line || (row.line as string).endsWith("\u2026")) {
+        cut++;
+        return [];
+      }
       return [row.line as string];
     });
+    return { lines, cut };
   } catch {
-    return [];
+    return { lines: [], cut: 0 };
   }
 }
 
@@ -1241,8 +1279,11 @@ export function reseedLines(home: string): string[] {
  * earlier `--reseed` sent lines (reseedRan, checked again under the lock), a
  * run does nothing at all and leaves RESEED_ALREADY_RAN, unless `again`; with
  * `dryRun` (never refused, no lock) it lists, then names the lines a run
- * would send (wouldCreate) and creates and writes nothing. The branch for
- * the operator's trailer. Never throws.
+ * would send (wouldCreate) and creates and writes nothing. A refused line
+ * the marker kept cut is never sent (reseedPlan): each one leads the codes
+ * as RESEED_CUT_LINE, and a real run records `cutSkipped` in its own marker
+ * even when it sends nothing. The branch for the operator's trailer. Never
+ * throws.
  */
 export async function reseedRun(home: string, options: WelcomeOptions = {}, flags: { dryRun?: boolean; again?: boolean } = {}): Promise<WelcomeBranch> {
   const now = options.now ?? new Date();
@@ -1250,8 +1291,16 @@ export async function reseedRun(home: string, options: WelcomeOptions = {}, flag
   let claim: HeldLock | null = null;
   try {
     if (!flags.dryRun && !flags.again && reseedRan(home)) return alone(RESEED_ALREADY_RAN);
-    const all = reseedLines(home);
-    if (all.length === 0) return alone(RESEED_NO_LINES);
+    const { lines: all, cut } = reseedPlan(home);
+    // N1: each refused line passed over as cut is named first in the trailer, and a real run that passed one over
+    // writes its own marker even when it sends nothing (counts 0 and `cutSkipped`, so the run-once guard is not spent).
+    const cutCodes = Array.from({ length: cut }, () => RESEED_CUT_LINE);
+    const sentNothing = (read: IntentsRead, code?: string): WelcomeBranch => {
+      if (cut && !flags.dryRun) recordReseed(home, now, { selected: all.length, created: 0, failed: 0, codes: cutCodes.slice(0, SEED_CODES_MAX), refused: [], cutSkipped: cut });
+      const codes = [...cutCodes, ...(code === undefined ? [] : [code])];
+      return welcomeBranch(read, codes.length ? { ...NO_SEED, seed_codes: codes } : NO_SEED);
+    };
+    if (all.length === 0) return cut ? sentNothing(UNREACHABLE, RESEED_NO_LINES) : alone(RESEED_NO_LINES);
     if (!flags.dryRun) {
       claim = tryAcquireLock(join(home, WELCOME_RESEED_LOCK), { staleMs: RESEED_LOCK_STALE_MS });
       if (claim === null) return alone(RESEED_IN_PROGRESS);
@@ -1267,8 +1316,8 @@ export async function reseedRun(home: string, options: WelcomeOptions = {}, flag
     };
     const target: IndexMcpTarget = { apiKey: envOrDotenv("INDEX_API_KEY", home), mcpUrl: indexMcpUrl(), fetch: options.fetch };
     const first = await listIntents({ ...target, timeoutMs: options.timeoutMs ?? WELCOME_INDEX_TIMEOUT_MS });
-    // Nothing sent: no marker, so the run-once guard is not spent.
-    if (!first.rows) return alone("list-unavailable");
+    // Nothing sent: no marker with a line sent, so the run-once guard is not spent.
+    if (!first.rows) return sentNothing(UNREACHABLE, "list-unavailable");
     const sent = new Set(first.rows.flatMap((row) => row.keys));
     const lines: SeedLineInput[] = [];
     for (const text of all) {
@@ -1278,12 +1327,16 @@ export async function reseedRun(home: string, options: WelcomeOptions = {}, flag
       sent.add(key);
       lines.push({ text, title: cleanTitle(text, TITLE_MAX, "word")!, key });
     }
-    if (lines.length === 0) return welcomeBranch(first.read);
-    if (flags.dryRun) return welcomeBranch(first.read, wouldCreate(lines));
-    const { again, seeded, failed, refused, codes, kinds } = await seedLines(home, target, clock, lines, now);
+    if (lines.length === 0) return sentNothing(first.read);
+    if (flags.dryRun) {
+      const would = wouldCreate(lines);
+      return welcomeBranch(first.read, { ...would, seed_codes: [...cutCodes, ...(would.seed_codes ?? [])].slice(0, SEED_CODES_MAX) });
+    }
+    const { again, seeded, failed, refused, codes: sentCodes, kinds } = await seedLines(home, target, clock, lines, now);
+    const codes = [...cutCodes, ...sentCodes].slice(0, SEED_CODES_MAX);
     const counts = { selected: all.length, created: seeded.length, failed };
     const merged = refused.length ? await mergeReseedRefused(home, now, refused, counts) : null;
-    recordReseed(home, now, { ...counts, codes, refused, ...(merged === null ? {} : { refusedMerged: merged }) });
+    recordReseed(home, now, { ...counts, codes, refused, ...(merged === null ? {} : { refusedMerged: merged }), ...(cut ? { cutSkipped: cut } : {}) });
     const read = again.read.kind === "listed" ? again.read : first.read;
     return welcomeBranch(read, { intents_seeded: seeded.length, seed_failed: failed, seed_codes: codes, seed_recovery_kinds: kinds });
   } catch {
@@ -1363,11 +1416,17 @@ async function mergeReseedRefused(home: string, now: Date, refused: RefusedSeed[
 const RESEED_SEED_BUSY_MS = 2 * WELCOME_BUDGET_MS;
 
 /**
- * The `--reseed` run's own marker (0600, a new file each run that sent a line), with
- * `refusedMerged` when it saw refused lines (whether mergeReseedRefused wrote
- * them into the seed marker); never touches welcome-state.json. Never throws.
+ * The `--reseed` run's own marker (0600, a new file each run that sent a line
+ * or passed a cut one over), with `refusedMerged` when it saw refused lines
+ * (whether mergeReseedRefused wrote them into the seed marker) and
+ * `cutSkipped` when it passed cut lines over (reseedPlan); never touches
+ * welcome-state.json. Never throws.
  */
-function recordReseed(home: string, now: Date, body: { selected: number; created: number; failed: number; codes: string[]; refused: RefusedSeed[]; refusedMerged?: boolean }): void {
+function recordReseed(
+  home: string,
+  now: Date,
+  body: { selected: number; created: number; failed: number; codes: string[]; refused: RefusedSeed[]; refusedMerged?: boolean; cutSkipped?: number },
+): void {
   try {
     const path = join(home, `${WELCOME_RESEED_PREFIX}${now.toISOString().replace(/[:.]/g, "-")}.json`);
     mkdirSync(dirname(path), { recursive: true });

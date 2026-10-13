@@ -341,34 +341,115 @@ export function toolJsonArray(text: string, key: string): unknown[] {
  */
 export const AGENTVILLAGE_SOURCE_TYPE = "agentvillage";
 
-/** One of Index's recovery questions, raw (a seed marker written before the direct create may still hold some). */
+/** One of Index's recovery questions, raw (the REFUSED_SEEDS reader's type; no shipped roll wrote one into a seed marker). */
 export type RecoveryQuestion = { kind: "single" | "multi" | "text"; question: string; options: string[] };
 
 /** An intent id Index issues: a UUID, or the hex short id (the av-events plugin's INTENT_PATH_ID). */
 const INTENT_ID = /^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{4,32})$/;
 
-/**
- * Index's REST create URL: `$INDEX_API_URL` (an origin, or `<origin>/api`)
- * when set, else the MCP URL's origin, then `/api/intents` (the av-events
- * plugin's api_origin + CREATE_PATH, in the shape the welcome's earlier
- * `prepare` URL used).
- */
-export function indexCreateUrl(mcpUrl: string): string {
-  const configured = process.env.INDEX_API_URL?.trim();
-  const origin = configured ? configured.replace(/\/+$/, "").replace(/\/api$/, "") : new URL(mcpUrl).origin;
-  return `${origin}/api/intents`;
+/** Plain http is allowed to these hosts only (the av-events plugin's LOOPBACK_HOSTS). */
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
+/** `$INDEX_API_URL` may name the origin, or `<origin>/api` (the plugin's _API_URL_PATHS); no other path. */
+const API_URL_PATHS = ["", "/", "/api", "/api/"];
+/** The MCP URL's own path, when the create's origin is taken from it (the plugin's `_origin_from_mcp_url`). */
+const MCP_URL_PATHS = ["/mcp", "/mcp/"];
+/** A host the plugin's `_host_ok` takes, when not a bracketed IPv6 literal. */
+const HOSTNAME = /^[A-Za-z0-9.-]+$/;
+/** What Python's `str.strip()` strips (the plugin reads `env(API_URL_ENV).strip()`). */
+const PY_STRIP = /^[\t\n\v\f\r\x1c-\x1f \x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+|[\t\n\v\f\r\x1c-\x1f \x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+$/g;
+
+/** Whether `host` is an IPv6 literal (the plugin's `ipaddress.IPv6Address`; a zone id is refused here). */
+function ipv6(host: string): boolean {
+  if (!/^[0-9A-Fa-f:.]+$/.test(host) || !host.includes(":")) return false;
+  try {
+    new URL(`http://[${host}]/`);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
- * One direct create's outcome: created (Index's id when its 2xx answer names
- * one it could have issued, else null: the create still landed), or not,
- * with the HTTP status (0: no answer: a transport failure, a refused
- * redirect, or `timedOut`) and, only when the body is Index's
- * `intent_needs_revision` refusal (intentRefusal), that refusal.
+ * `scheme://netloc` of `url` when it is an Index origin the key may be sent
+ * to, else null: the av-events plugin's `_origin` (_record_intention.py
+ * :535-561, refutation A1), ported rule for rule, over a port of the parts
+ * of Python's `urlsplit` it reads: no `?` or `#` anywhere in the raw string;
+ * no control character or space; then (as urlsplit) a scheme, `//`, the
+ * netloc up to the first `/`, `?` or `#`, and the path; no userinfo (an `@`
+ * in the netloc); the host after the last `@` either a bracketed IPv6
+ * literal (zone ids refused: stricter than the plugin) or of `[A-Za-z0-9.-]`
+ * only; a port, if any, of ASCII digits 0-65535; a path in `paths`; https,
+ * or plain http to a loopback host only. The origin is rebuilt from the
+ * scheme (lower-cased) and the netloc alone, so nothing else in the string
+ * reaches a request. Pure.
+ */
+export function indexOrigin(url: string, paths: readonly string[]): string | null {
+  if (url.includes("?") || url.includes("#")) return null;
+  for (const ch of url) {
+    const code = ch.codePointAt(0)!;
+    if (code <= 0x20 || code === 0x7f) return null;
+  }
+  // urlsplit: leading C0 controls and spaces stripped, tab and newlines removed (a no-op after the check above).
+  const raw = url.replace(/^[\x00-\x20]+/, "").replace(/[\t\r\n]/g, "");
+  const split = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/?#]*)([^?#]*)/s.exec(raw);
+  if (!split) return null;
+  const scheme = split[1]!.toLowerCase();
+  const netloc = split[2]!;
+  const path = split[3]!;
+  if (netloc.includes("[") !== netloc.includes("]")) return null;
+  // urlsplit's _hostinfo: the host and port after the last `@`.
+  const hostinfo = netloc.slice(netloc.lastIndexOf("@") + 1);
+  let hostname: string;
+  let port: string;
+  const bracket = hostinfo.indexOf("[");
+  if (bracket >= 0) {
+    const inside = hostinfo.slice(bracket + 1);
+    const close = inside.indexOf("]");
+    hostname = close >= 0 ? inside.slice(0, close) : inside;
+    const after = close >= 0 ? inside.slice(close + 1) : "";
+    port = after.includes(":") ? after.slice(after.indexOf(":") + 1) : "";
+  } else {
+    const colon = hostinfo.indexOf(":");
+    hostname = colon >= 0 ? hostinfo.slice(0, colon) : hostinfo;
+    port = colon >= 0 ? hostinfo.slice(colon + 1) : "";
+  }
+  if (port !== "" && (!/^[0-9]+$/.test(port) || Number(port) > 65535)) return null;
+  if (!hostname || netloc.includes("@")) return null;
+  // _host_ok
+  if (hostinfo.startsWith("[") ? !ipv6(hostname) : !HOSTNAME.test(hostname)) return null;
+  if (!paths.includes(path)) return null;
+  if (scheme === "https" || (scheme === "http" && LOOPBACK_HOSTS.has(hostname.toLowerCase()))) return `${scheme}://${netloc}`;
+  return null;
+}
+
+/**
+ * Index's REST create URL, `<origin>/api/intents`, or null when no origin
+ * passes indexOrigin (then no create is sent and the key goes nowhere new).
+ * The origin: `$INDEX_API_URL` (stripped as the plugin strips it) when it is
+ * not blank, an origin or `<origin>/api`, never falling back when it is set
+ * but refused; else the MCP URL's, when that URL is `<origin>/mcp` (the
+ * plugin's api_origin and CREATE_PATH). Unlike the plugin's
+ * `_origin_from_mcp_url`, plain http to a loopback MCP URL is kept: the MCP
+ * calls already go there with the same key.
+ */
+export function indexCreateUrl(mcpUrl: string): string | null {
+  const configured = (process.env.INDEX_API_URL ?? "").replace(PY_STRIP, "");
+  const origin = configured ? indexOrigin(configured, API_URL_PATHS) : indexOrigin(mcpUrl, MCP_URL_PATHS);
+  return origin === null ? null : `${origin}/api/intents`;
+}
+
+/**
+ * One direct create's outcome: a 2xx answer (Index's id when the answer
+ * names one it could have issued, else null: then whatever answered may not
+ * be Index and may have stored nothing, so the caller counts that line only
+ * when Index lists it), or not, with the HTTP status (0: no answer: a
+ * transport failure, a refused redirect, `timedOut`, or `badUrl`: no origin
+ * passed indexOrigin, so nothing was sent) and, only when the body is
+ * Index's `intent_needs_revision` refusal (intentRefusal), that refusal.
  */
 export type DirectCreate =
   | { ok: true; id: string | null }
-  | { ok: false; status: number; refusal: IntentRefusal | null; timedOut?: boolean };
+  | { ok: false; status: number; refusal: IntentRefusal | null; timedOut?: boolean; badUrl?: true };
 
 /**
  * One `POST <origin>/api/intents` with `{description, sourceType:
@@ -379,13 +460,16 @@ export type DirectCreate =
  * no retry, the target's timeout, no redirect. The shape is the av-events
  * plugin's production create (`_record_intention.py` publish_intent) and
  * Index's controller (intent.controller.ts `create`, a91c3ff). Never throws:
- * any HTTP answer is a status, a transport failure or timeout is status 0.
+ * any HTTP answer is a status, a transport failure or timeout is status 0;
+ * a URL indexCreateUrl refuses is status 0 with `badUrl`, and no request.
  */
 export async function createIntentDirect(target: IndexMcpTarget, description: string): Promise<DirectCreate> {
+  const url = indexCreateUrl(target.mcpUrl);
+  if (url === null) return { ok: false, status: 0, refusal: null, badUrl: true };
   const send = target.fetch ?? globalThis.fetch;
   let res: Response;
   try {
-    res = await send(indexCreateUrl(target.mcpUrl), {
+    res = await send(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json", "x-api-key": target.apiKey },
       body: JSON.stringify({ description, sourceType: AGENTVILLAGE_SOURCE_TYPE }),
@@ -396,13 +480,13 @@ export async function createIntentDirect(target: IndexMcpTarget, description: st
     return { ok: false, status: 0, refusal: null, timedOut: isAbort(err) };
   }
   if (res.status >= 200 && res.status < 300) {
-    // Index answered the create: it landed, whatever the body says.
+    // A 2xx: the id when the answer names one Index could have issued; without one, the caller asks Index's list.
     let id: string | null = null;
     try {
       const intentId = asRecord(await res.json())?.intentId;
       id = typeof intentId === "string" && INTENT_ID.test(intentId) ? intentId : null;
     } catch {
-      // No body, or not JSON: created, id unknown.
+      // No body, or not JSON: id unknown.
     }
     return { ok: true, id };
   }

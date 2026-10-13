@@ -1,0 +1,407 @@
+{
+  "source": "plugins/av-events/_record_intention.py _origin (:535-561), run read-only on Python 3.11.8: api = _origin(url, ('', '/', '/api', '/api/')), mcp = _origin(url, ('/mcp', '/mcp/')); no strip",
+  "stricter": {
+    "urls": [
+      "https://[fe80::1%25eth0]",
+      "https://[fe80::1%eth0]"
+    ],
+    "why": "an IPv6 zone id: the plugin accepts it, indexOrigin refuses it"
+  },
+  "cases": [
+    {
+      "url": "https://protocol.index.network",
+      "api": "https://protocol.index.network",
+      "mcp": null
+    },
+    {
+      "url": "https://protocol.index.network/",
+      "api": "https://protocol.index.network",
+      "mcp": null
+    },
+    {
+      "url": "https://protocol.index.network/api",
+      "api": "https://protocol.index.network",
+      "mcp": null
+    },
+    {
+      "url": "https://protocol.index.network/api/",
+      "api": "https://protocol.index.network",
+      "mcp": null
+    },
+    {
+      "url": "https://protocol.index.network/api//",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://protocol.index.network//api",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://protocol.index.network/mcp",
+      "api": null,
+      "mcp": "https://protocol.index.network"
+    },
+    {
+      "url": "https://protocol.index.network/API",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "HTTPS://Protocol.Index.Network/api",
+      "api": "https://Protocol.Index.Network",
+      "mcp": null
+    },
+    {
+      "url": "Https://x.test",
+      "api": "https://x.test",
+      "mcp": null
+    },
+    {
+      "url": "http://localhost",
+      "api": "http://localhost",
+      "mcp": null
+    },
+    {
+      "url": "http://LOCALHOST:80",
+      "api": "http://LOCALHOST:80",
+      "mcp": null
+    },
+    {
+      "url": "http://127.0.0.1:9/api",
+      "api": "http://127.0.0.1:9",
+      "mcp": null
+    },
+    {
+      "url": "http://[::1]:9",
+      "api": "http://[::1]:9",
+      "mcp": null
+    },
+    {
+      "url": "http://[::1]",
+      "api": "http://[::1]",
+      "mcp": null
+    },
+    {
+      "url": "http://[0:0:0:0:0:0:0:1]",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "http://127.0.0.2",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "http://10.0.0.1",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "http://evil.example",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://user:pw@evil.example",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://user@evil.example",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://@evil.example",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://:pw@evil.example",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://a@b@evil.example",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://x.test?",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://x.test#",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://x.test/api?x",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://x.test\t",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://x .test",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://x.test",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://x.test",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://x.test ",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "protocol.index.network",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "//protocol.index.network",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https:protocol.index.network",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https:///api",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://:443",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "ftp://x.test",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "ws://localhost",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "h+ttps://x.test",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "1https://x.test",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://x_y.test",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://xn--evil-xx.test",
+      "api": "https://xn--evil-xx.test",
+      "mcp": null
+    },
+    {
+      "url": "https://évil.test",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://x.test:",
+      "api": "https://x.test:",
+      "mcp": null
+    },
+    {
+      "url": "https://x.test:443",
+      "api": "https://x.test:443",
+      "mcp": null
+    },
+    {
+      "url": "https://x.test:65535",
+      "api": "https://x.test:65535",
+      "mcp": null
+    },
+    {
+      "url": "https://x.test:65536",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://x.test:99999",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://x.test:8o",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://x.test:+80",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://x.test:-0",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://x.test:0",
+      "api": "https://x.test:0",
+      "mcp": null
+    },
+    {
+      "url": "https://x.test:00443",
+      "api": "https://x.test:00443",
+      "mcp": null
+    },
+    {
+      "url": "https://x.test:１２",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://[::1",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://::1]",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://[not-v6]",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://[]",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://[::1]:443",
+      "api": "https://[::1]:443",
+      "mcp": null
+    },
+    {
+      "url": "https://ab[::1]",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://[::1]x:80",
+      "api": "https://[::1]x:80",
+      "mcp": null
+    },
+    {
+      "url": "https://[fe80::1%25eth0]",
+      "api": "https://[fe80::1%25eth0]",
+      "mcp": null
+    },
+    {
+      "url": "https://[fe80::1%eth0]",
+      "api": "https://[fe80::1%eth0]",
+      "mcp": null
+    },
+    {
+      "url": "https://[::ffff:127.0.0.1]",
+      "api": "https://[::ffff:127.0.0.1]",
+      "mcp": null
+    },
+    {
+      "url": "https://[v1.x]",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "http://[::1]:9/mcp",
+      "api": null,
+      "mcp": "http://[::1]:9"
+    },
+    {
+      "url": "https://x.test/mcp",
+      "api": null,
+      "mcp": "https://x.test"
+    },
+    {
+      "url": "https://x.test/mcp/",
+      "api": null,
+      "mcp": "https://x.test"
+    },
+    {
+      "url": "https://x.test/mcp/x",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "http://127.0.0.1:4100/mcp",
+      "api": null,
+      "mcp": "http://127.0.0.1:4100"
+    },
+    {
+      "url": "http://evil.example/mcp",
+      "api": null,
+      "mcp": null
+    },
+    {
+      "url": "https://x.test./api",
+      "api": "https://x.test.",
+      "mcp": null
+    },
+    {
+      "url": "https://.x.test",
+      "api": "https://.x.test",
+      "mcp": null
+    },
+    {
+      "url": "https://-.test",
+      "api": "https://-.test",
+      "mcp": null
+    },
+    {
+      "url": "https://x..test",
+      "api": "https://x..test",
+      "mcp": null
+    },
+    {
+      "url": "https://1.2.3.4",
+      "api": "https://1.2.3.4",
+      "mcp": null
+    },
+    {
+      "url": "https://999.999.999.999",
+      "api": "https://999.999.999.999",
+      "mcp": null
+    }
+  ]
+}
