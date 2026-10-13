@@ -805,6 +805,24 @@ describe("parseManifest", () => {
     expect(parseManifest(`| Tag | Note |\n|---|---|\n| v2.0.0-rc34 | cut on ungated main |\n${manifestText([])}`)).toEqual({ ok: true, entries: [] });
   });
 
+  test("a release history table stays prose: run ids, dates and hex-looking words are not commit ids (N-a)", () => {
+    const rows = [
+      "| v2.0.0-rc34 | run 38290148219 | cut by hand |",
+      "| v2.0.0-rc34 | 38290148219 |",
+      "| v2.0.0-rc34 | 20261012 | cut by hand |",
+      "| `v2.0.0-rc34` | `20261012` |",
+      "| v2.0.0-rc34 | the tag was defaced |",
+      "| v1.0.0 | notes: cafebabe |",
+      "| v1.0.0 | deadbeef1 and more |",
+      "| v1.0.0 | abc123 |",
+      `| v1.0.0 | ${SHA_A}0 |`,
+      `| v1.0.0 | see ${SHA_A} |`,
+    ];
+    const table = `| Tag | Run | Note |\n|---|---|---|\n${rows.join("\n")}\n`;
+    expect(parseManifest(`${table}${manifestText([])}`)).toEqual({ ok: true, entries: [] });
+    expect(parseManifest(`${manifestText([])}${table}`)).toEqual({ ok: true, entries: [] });
+  });
+
   test("prose outside the block is ignored, even a version or an inline example", () => {
     const text = `Tags such as v2.0.0-rc34 were cut by hand; add \`v2.0.0-rc35 = <full commit id>\` below.\n${manifestText([])}`;
     expect(parseManifest(text)).toEqual({ ok: true, entries: [] });
@@ -829,6 +847,12 @@ describe("parseManifest", () => {
       `| v2.0.0-rc35 | ${SHA_A} |`,
       `| \`v2.0.0-rc35\` | approved | ${SHA_A.slice(0, 7)} |`,
       `| v2.0.0-rc35 = ${SHA_A} |`,
+      // N-a: a whole cell that is a commit id, wherever it sits after the version
+      `| v2.0.0-rc35 | 2026-10-12 | 3edfeff |`,
+      `| v2.0.0-rc35 | \`3edfeff0\` | note |`,
+      `|v2.0.0-rc35|${"1".repeat(40)}|`,
+      `| v2.0.0-rc35 | ${SHA_B}`,
+      `  | v2.0.0-rc35 | DEADBEEF12 |`,
     ]) {
       expect(problemOf(`${manifestText([])}${stray}\n`)).toBe("line 8 looks like an approval but is outside the rc-manifest block");
     }
@@ -945,19 +969,21 @@ describe("the manifest in a plan", () => {
       msg = (e as Refusal).message;
     }
     expect(msg).toContain(`adds the line \`v2.0.0-rc2 = ${f.c}\``);
-    expect(msg).toContain(`Then run Tag release again with ref set to the full commit id ${f.c}, not main.`);
+    expect(msg).toContain(`Then run Tag release again with ref set to the full commit id ${f.c}, not \`main\`.`);
     expect(msg).toContain("Merging the approval moves main, so main would then name another commit and the run would refuse again.");
-    expect(renderText(plan, "dry-run")).toContain(`Then run Tag release again with ref set to the full commit id ${f.c}, not main.`);
+    expect(renderText(plan, "dry-run")).toContain(`Then run Tag release again with ref set to the full commit id ${f.c}, not \`main\`.`);
+    // nothing to point at yet: no "already approves" lead
+    expect(msg).not.toContain("already approves");
     // another branch
     f.run(["branch", "rel", f.c]);
     f.run(["push", "--quiet", "origin", "rel"]);
     f.run(["fetch", "--quiet", "origin"]);
-    expect(refHint(makePlan(git, { ref: "rel" }))).toContain("Merging the approval moves main (and rel if it lands there)");
+    expect(refHint(makePlan(git, { ref: "rel" }))).toContain("not `rel`. Merging the approval moves main (and that branch, if it lands there), so the branch would then name another commit");
     // a short id or a tag name: give the full id, no claim that the ref moves
     const short = refHint(makePlan(git, { ref: f.c.slice(0, 7) }));
-    expect(short).toBe(`Then run Tag release again with ref set to the full commit id ${f.c}, not ${f.c.slice(0, 7)}.`);
+    expect(short).toBe(`Then run Tag release again with ref set to the full commit id ${f.c}, not \`${f.c.slice(0, 7)}\`.`);
     f.run(["tag", "marker", f.c]);
-    expect(refHint(makePlan(git, { ref: "marker" }))).toBe(`Then run Tag release again with ref set to the full commit id ${f.c}, not marker.`);
+    expect(refHint(makePlan(git, { ref: "marker" }))).toBe(`Then run Tag release again with ref set to the full commit id ${f.c}, not \`marker\`.`);
     // the full id: no such sentence
     const full = makePlan(git, { ref: f.c });
     expect(refHint(full)).toBe("");
@@ -966,6 +992,98 @@ describe("the manifest in a plan", () => {
     } catch (e) {
       expect((e as Refusal).message).not.toContain("run Tag release again with ref");
     }
+  });
+
+  test("approved at H, then run with ref = main (now the approval's merge): the refusal says to run with H (N-c)", () => {
+    const f = released();
+    const d = approve(f, [`v2.0.0-rc2 = ${f.c}`]);
+    const git = gitIn(f.work);
+    const plan = makePlan(git, { ref: "main" });
+    expect(plan.commit).toBe(d);
+    expect(plan.manifest).toMatchObject({ approved: false, code: "not_in_manifest", approvedAt: f.c });
+    let msg = "";
+    try {
+      enforceManifest(plan);
+    } catch (e) {
+      msg = (e as Refusal).message;
+    }
+    const lead = `Main's manifest already approves v2.0.0-rc2 at ${f.c}: run Tag release with ref set to that full commit id.`;
+    expect(msg).toContain(lead);
+    expect(msg.indexOf(lead)).toBeLessThan(msg.indexOf("To approve it"));
+    // the add-a-line route stays, second
+    expect(msg).toContain(`Only if ${d.slice(0, 7)} itself is to be released instead: To approve it, merge (after the gate) a pull request that adds the line \`v2.0.0-rc2 = ${d}\``);
+    expect(msg).toEndWith("Nothing was created.");
+    expect(renderText(plan, "dry-run")).toContain(lead);
+    expect(renderSummary(plan, "dry-run")).toContain(lead);
+    // following it: approved
+    expect(makePlan(git, { ref: f.c }).manifest.approved).toBe(true);
+    // a tag at the merge: the same lead
+    f.run(["tag", "marker", d]);
+    expect(refusalCode(() => enforceManifest(makePlan(git, { ref: "marker" })))).toBe("not_in_manifest");
+    try {
+      enforceManifest(makePlan(git, { ref: "marker" }));
+    } catch (e) {
+      expect((e as Refusal).message).toContain(lead);
+    }
+    // a commit id the operator chose: no redirect, only the add-a-line route
+    const chosen = makePlan(git, { ref: f.b });
+    expect(chosen.manifest.approvedAt).toBe(f.c);
+    try {
+      enforceManifest(chosen);
+    } catch (e) {
+      expect((e as Refusal).message).not.toContain("already approves");
+      expect((e as Refusal).message).toContain(`adds the line \`v2.0.0-rc2 = ${f.b}\``);
+    }
+    // approved or missing: no approvedAt
+    expect(makePlan(git, { ref: f.c }).manifest.approvedAt).toBeNull();
+    expect(makePlan(gitIn(released().work), { ref: "main" }).manifest.approvedAt).toBeNull();
+  });
+
+  test("a longest-allowed branch ref with the N-c lead still ends with 'Nothing was created.' under the 1000 clip", () => {
+    const f = released();
+    approve(f, [`v2.0.0-rc2 = ${f.c}`]);
+    const long = `r/${"x".repeat(126)}`;
+    expect(validRefInput(long)).toBe(true);
+    f.run(["branch", long, "main"]);
+    f.run(["push", "--quiet", "origin", long]);
+    f.run(["fetch", "--quiet", "origin"]);
+    try {
+      enforceManifest(makePlan(gitIn(f.work), { ref: long }));
+      throw new Error("no refusal");
+    } catch (e) {
+      expect((e as Refusal).message).toContain("already approves");
+      expect(refusalLine(e as Refusal, { GITHUB_ACTIONS: "true" })).toEndWith("Nothing was created.");
+    }
+  });
+
+  test("the ref in the hint is a code span, so the step summary never shows it as bare markdown (N-b)", () => {
+    const f = released();
+    const name = "www.evil.example/phish_x_";
+    f.run(["branch", name, f.c]);
+    f.run(["push", "--quiet", "origin", name]);
+    f.run(["fetch", "--quiet", "origin"]);
+    const plan = makePlan(gitIn(f.work), { ref: name });
+    const summary = renderSummary(plan, "dry-run");
+    expect(summary).toContain(`not \`${name}\`.`);
+    expect(summary.split("\n").filter((l) => l.includes(name)).every((l) => l.includes(`\`${name}\``))).toBe(true);
+    expect(summary).not.toMatch(/[^`]www\.evil\.example/);
+    // a backtick cannot close the span early (validRefInput refuses one; refHint neutralises it anyway)
+    const odd = refHint({ ref: "a`b<c>", refKind: "tag", commit: SHA_A });
+    expect(odd).toBe(`Then run Tag release again with ref set to the full commit id ${SHA_A}, not \`a'b\u2039c\u203a\`.`);
+  });
+
+  test("a real submodule at the manifest path (its commit not in this repository) is invalid, not missing (N-d)", () => {
+    const f = released();
+    const absent = "0123456789abcdef0123456789abcdef01234567";
+    expect(spawnSync("git", ["-C", f.work, "cat-file", "-e", absent]).status).not.toBe(0);
+    f.run(["update-index", "--add", "--cacheinfo", `160000,${absent},${MANIFEST_PATH}`]);
+    f.run(["commit", "--quiet", "-m", "a submodule at the manifest path"]);
+    f.run(["push", "--quiet", "origin", "main"]);
+    f.run(["fetch", "--quiet", "origin"]);
+    const plan = makePlan(gitIn(f.work), { ref: f.c });
+    expect(plan.manifest).toMatchObject({ approved: false, code: "manifest_invalid" });
+    expect(plan.manifest.reason).toContain("cannot be read (the path is a submodule, not a file)");
+    expect(refusalCode(() => enforceManifest(plan))).toBe("manifest_invalid");
   });
 
   test("a checkout lagging origin/main (the dispatch's GITHUB_SHA) still reads the approval on origin/main", () => {

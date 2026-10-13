@@ -516,11 +516,32 @@ const MANIFEST_MAX_BYTES = 64 * 1024;
 /**
  * A line outside the block that looks like an approval (the usual mistake:
  * appended after the fence): `v... =` plain, as a bullet or numbered item, in
- * backticks or after a table pipe; or a table row naming a version and then a
- * hexadecimal id.
+ * backticks or after a table pipe; or a table row (strayTableRow) naming a
+ * version and then a commit id.
  */
 const STRAY_APPROVAL_RE = /^\s*(?:[-*+]\s+|\d+[.)]\s+|\|\s*)?`?v\d+\.\d+\.\d+\S*?`?\s*=/;
-const STRAY_TABLE_RE = /^\s*\|\s*`?v\d+\.\d+\.\d+\S*?`?\s*\|.*\b[0-9a-fA-F]{7,40}\b/;
+/** A table cell that is a version, optionally in backticks. */
+const VERSION_CELL_RE = /^`?v\d+\.\d+\.\d+\S*$/;
+/** A table cell that is a commit id, optionally in backticks: 7 to 40 hexadecimal characters. */
+const COMMIT_CELL_RE = /^`?([0-9a-fA-F]{7,40})`?$/;
+
+/**
+ * A table row whose first cell is a version and a later cell is, as a whole,
+ * a commit id. A cell of decimal digits only (a date, a run id) is not one
+ * unless it has all 40 characters, and a hex-looking word inside other text
+ * (`notes: cafebabe`) is not either, so a release history table stays prose.
+ * Missing a stray row is fail-safe: a line outside the block never approves.
+ */
+function strayTableRow(line: string): boolean {
+  const t = line.trim();
+  if (!t.startsWith("|")) return false;
+  const cells = t.slice(1).replace(/\|$/, "").split("|").map((c) => c.trim());
+  if (cells.length < 2 || !VERSION_CELL_RE.test(cells[0])) return false;
+  return cells.slice(1).some((c) => {
+    const m = COMMIT_CELL_RE.exec(c);
+    return m !== null && (/[a-fA-F]/.test(m[1]) || m[1].length === 40);
+  });
+}
 
 export type ManifestEntry = { version: string; commit: string; line: number };
 export type ManifestParse = { ok: true; entries: ManifestEntry[] } | { ok: false; problem: string };
@@ -550,7 +571,7 @@ export function parseManifest(text: string | null): ManifestParse {
         blocks++;
         if (blocks > 1) return bad(`line ${n} opens a second rc-manifest block; there must be exactly one`);
         open = n;
-      } else if (STRAY_APPROVAL_RE.test(lines[i]) || STRAY_TABLE_RE.test(lines[i])) {
+      } else if (STRAY_APPROVAL_RE.test(lines[i]) || strayTableRow(lines[i])) {
         return bad(`line ${n} looks like an approval but is outside the rc-manifest block`);
       }
       continue;
@@ -585,6 +606,8 @@ export type ManifestCheck = {
   mainCommit: string;
   /** The approving line's number, when approved. */
   line: number | null;
+  /** When not approved: the full commit main's manifest approves this version at instead, if any. */
+  approvedAt: string | null;
   /** The line that approves this plan. */
   expected: string;
   /** One line: what approved it, or why not. */
@@ -594,9 +617,13 @@ export type ManifestCheck = {
 /** The manifest at a commit: its text, absent, or present but not usable (a directory, a submodule, too large, unreadable). */
 function manifestAt(git: Git, commit: string): { text: string } | { absent: true } | { problem: string } {
   const spec = `${commit}:${MANIFEST_PATH}`;
-  const t = git(["cat-file", "-t", spec], { allowFail: true });
-  if (t.code !== 0) return { absent: true };
-  const type = t.stdout.trim();
+  // The tree entry's type, read from the tree itself: a submodule's commit is
+  // usually not in this repository, so `cat-file -t` on the path would fail.
+  const ls = git(["ls-tree", "-z", commit, "--", MANIFEST_PATH], { allowFail: true });
+  if (ls.code !== 0) return { problem: "the path could not be read" };
+  const entry = ls.stdout.split("\0").find((e) => e.endsWith(`\t${MANIFEST_PATH}`));
+  if (entry === undefined) return { absent: true };
+  const type = entry.split("\t")[0].split(" ")[1];
   if (type !== "blob") return { problem: `the path is a ${type === "tree" ? "directory" : type === "commit" ? "submodule" : "non-file object"}, not a file` };
   const size = Number(git(["cat-file", "-s", spec], { allowFail: true }).stdout.trim());
   if (!Number.isSafeInteger(size)) return { problem: "its size could not be read" };
@@ -609,19 +636,31 @@ function manifestAt(git: Git, commit: string): { text: string } | { absent: true
 export function checkManifest(git: Git, mainCommit: string, version: string, commit: string): ManifestCheck {
   const expected = `${version} = ${commit}`;
   const where = `${MANIFEST_PATH} on main (${mainCommit.slice(0, 7)})`;
-  const no = (code: ManifestCheck["code"], reason: string): ManifestCheck => ({ approved: false, code, mainCommit, line: null, expected, reason: clean(reason, 600) });
+  const no = (code: ManifestCheck["code"], reason: string, approvedAt: string | null = null): ManifestCheck => ({
+    approved: false,
+    code,
+    mainCommit,
+    line: null,
+    approvedAt,
+    expected,
+    reason: clean(reason, 600),
+  });
   const at = manifestAt(git, mainCommit);
   if ("absent" in at) return no("manifest_missing", `${where} is missing, so no tag is approved`);
   const parsed: ManifestParse = "problem" in at ? { ok: false, problem: at.problem } : parseManifest(at.text);
   if (!parsed.ok) return no("manifest_invalid", `${where} cannot be read (${parsed.problem}), so no tag is approved until it is fixed`);
   const hit = parsed.entries.find((e) => e.version === version && e.commit === commit);
-  if (hit) return { approved: true, code: "approved", mainCommit, line: hit.line, expected, reason: `${where} approves ${version} at ${commit.slice(0, 7)} (line ${hit.line})` };
+  if (hit) return { approved: true, code: "approved", mainCommit, line: hit.line, approvedAt: null, expected, reason: `${where} approves ${version} at ${commit.slice(0, 7)} (line ${hit.line})` };
   const hints: string[] = [];
   const sameVersion = parsed.entries.find((e) => e.version === version);
   if (sameVersion) hints.push(`it approves ${version} at another commit, ${sameVersion.commit.slice(0, 7)} (line ${sameVersion.line})`);
   const sameCommit = parsed.entries.filter((e) => e.commit === commit);
   if (sameCommit.length > 0) hints.push(`it approves this commit as ${sameCommit.map((e) => e.version).join(", ")}: put that in the version input`);
-  return no("not_in_manifest", `${where} has no line approving ${version} at ${commit.slice(0, 7)}${hints.length ? `; ${hints.join("; ")}` : ""}`);
+  return no(
+    "not_in_manifest",
+    `${where} has no line approving ${version} at ${commit.slice(0, 7)}${hints.length ? `; ${hints.join("; ")}` : ""}`,
+    sameVersion ? sameVersion.commit : null,
+  );
 }
 
 /** How to get a plan approved: the line to add, and how it reaches main. */
@@ -636,17 +675,38 @@ export function approvalHint(check: ManifestCheck): string {
  */
 export function refHint(plan: Pick<Plan, "ref" | "refKind" | "commit">): string {
   if (plan.ref === plan.commit) return "";
+  const ref = refSpan(plan.ref);
   const why =
     plan.refKind === "branch"
-      ? ` Merging the approval moves ${plan.ref === "main" ? "main" : `main (and ${plan.ref} if it lands there)`}, so ${plan.ref} would then name another commit and the run would refuse again.`
+      ? ` Merging the approval moves ${plan.ref === "main" ? "main" : "main (and that branch, if it lands there)"}, so ${plan.ref === "main" ? "main" : "the branch"} would then name another commit and the run would refuse again.`
       : "";
-  return `Then run Tag release again with ref set to the full commit id ${plan.commit}, not ${plan.ref}.${why}`;
+  return `Then run Tag release again with ref set to the full commit id ${plan.commit}, not ${ref}.${why}`;
 }
 
-/** How to get this plan approved and tagged: the line to add, then the ref to give. */
+/**
+ * The ref as a markdown code span, so it reaches the step summary as code
+ * (never a bare link). validRefInput already rules out backticks; any that
+ * got here anyway are replaced, so the span cannot be closed early.
+ */
+function refSpan(ref: string): string {
+  return code(ref, MAX_TAG_NAME + 30);
+}
+
+/**
+ * How to get this plan approved and tagged: the line to add, then the ref to
+ * give. When the ref was a branch or tag and main's manifest already approves
+ * this version at another full commit (typically the operator approved it,
+ * then ran again with ref = main, which the approval's merge moved), the first
+ * step is to run with that already-approved commit instead.
+ */
 export function approvalSteps(plan: Plan): string {
+  const at = plan.manifest.approvedAt;
+  const lead =
+    at !== null && plan.refKind !== "commit" && FULL_SHA_RE.test(at)
+      ? `Main's manifest already approves ${plan.version} at ${at}: run Tag release with ref set to that full commit id. Only if ${plan.commit.slice(0, 7)} itself is to be released instead: `
+      : "";
   const hint = refHint(plan);
-  return hint ? `${approvalHint(plan.manifest)} ${hint}` : approvalHint(plan.manifest);
+  return `${lead}${hint ? `${approvalHint(plan.manifest)} ${hint}` : approvalHint(plan.manifest)}`;
 }
 
 /** Refuses unless main's manifest approves the plan's version at its commit. Every real run calls it before creating anything. */
