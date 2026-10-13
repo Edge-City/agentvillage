@@ -109,7 +109,8 @@ import { dotenvFileValue, readConfig, writeConfig } from "./config";
 import { persistedEnvVar, readCronJobs } from "./install_index";
 import { installStatusPath } from "./install_status";
 import { hermesHome } from "./paths";
-import { type Retirement, activateMoralmod, activeReleaseUnpinned, checkResidentHook, managedHookPresent, managedLoaderPinned, managedLoaderPresent, residentConfiguration, retireManagedAssets, retireManagedLoader } from "./moralmod_host";
+import { type Retirement, activateMoralmod, activeReleaseUnpinned, checkResidentHook, managedHookPresent, managedLoaderPinned, managedLoaderPresent, managedRuntimeReplaceable, residentConfiguration, retireManagedAssets, retireManagedLoader } from "./moralmod_host";
+import { morningReplaceable } from "./moralmod_morning";
 import { MORALMOD_RELEASE_SHA256, MoralmodReleaseUnpinned, installMoralmodRelease } from "./moralmod_release";
 
 export const INDEX_PLUGIN = "index-network";
@@ -384,6 +385,33 @@ export function sidecarPath(home: string): string {
 }
 
 /**
+ * Before --force, only complete upstream or known overlay bytes may be replaced. ov#288 refute M1:
+ * upstream is the checkout's own `HEAD:sidecar.py`, at whatever revision the tree is (on a plugin bump
+ * it is still the old one), and no file at all has nothing to protect.
+ */
+function sidecarReplaceable(home: string): boolean {
+  try {
+    const plugin = pluginDir(home), path = sidecarPath(home);
+    try {
+      if (!lstatSync(path).isFile()) return false;
+    } catch (err) {
+      return (err as { code?: unknown } | null)?.code === "ENOENT";
+    }
+    const original = Bun.spawnSync(["git", "show", "HEAD:sidecar.py"], { cwd: plugin });
+    if (original.exitCode) return false;
+    const base = original.stdout.toString(), current = readFileSync(path, "utf8");
+    // The upstream file, the current patch, and the two earlier patches a box may still hold.
+    return [base,
+      base.replace(SIDECAR_ANCHOR, () => SIDECAR_PATCHED),
+      base.replace(SIDECAR_ANCHOR, () => SIDECAR_PATCHED_V1),
+      base.replace(SIDECAR_ANCHOR, () => SIDECAR_PATCHED.replace(', "AV_MORALMOD_ARM"', "")),
+    ].includes(current);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Bring the installed sidecar.py to the env allowlist: no write when already patched; otherwise a
  * temp file beside it, created exclusively (a file, link or directory already at that path is
  * refused, never written through or removed), with its mode and owner, renamed over it and read back.
@@ -574,8 +602,11 @@ export function installIndexPlugin(
   // managed loader on disk to the pin. ov#284 refute M2: taking it out takes the marker hook and the
   // managed morning.py with it, so a later run never pairs the plugin's own negotiator.js with them.
   if (managedLoaderPresent(home) && !managedLoaderPinned(home, releasePin)) {
-    const reason = `a managed loader on disk is not MORALMOD_RELEASE_SHA256's release${retired(retireManagedLoader(home))}`;
+    const cleanup = retireManagedLoader(home);
+    const reason = `a managed loader on disk is not MORALMOD_RELEASE_SHA256's release${retired(cleanup)}`;
     if (!handed) return withholdForSidecar(run, home, reason, null, "release_unpinned", "MoralMod release not pinned");
+    // In particular, do not let a --force plugin reinstall erase a loader retirement refused.
+    if (cleanup.left.length) return withholdForSidecar(run, home, reason, null);
     console.warn(`  warning: index-network plugin: ${reason}`);
   }
   // ov#284 refute S1: active.json names a release that is not the pin (the pin moved, or the
@@ -646,6 +677,16 @@ export function installIndexPlugin(
   if (pinnedAtRef(home)) {
     console.log(`→ index-network plugin: at ${INDEX_PLUGIN_REF.slice(0, 8)}, no Hermes call`);
   } else {
+    // Hermes --force replaces the tree. Check all three files the overlay manages before the call;
+    // checking during activation would inspect fresh upstream bytes after customization was lost.
+    if (managed && existsSync(pluginDir(home))) {
+      if (!managedRuntimeReplaceable(home))
+        return withholdForSidecar(run, home, "existing runtime ownership unverified", null);
+      if (!morningReplaceable(home))
+        return withholdForSidecar(run, home, "existing morning adapter ownership unverified", null);
+      if (!sidecarReplaceable(home))
+        return withholdForSidecar(run, home, "existing sidecar ownership unverified", null);
+    }
     const before = new Set(installTmpDirs(home));
     try {
       run(pinnedInstallArgs(home));

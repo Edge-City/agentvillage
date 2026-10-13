@@ -170,6 +170,11 @@ test("the installer puts the India skill and every snapshot file into a temporar
   for (const path of snapshotPaths()) {
     expect(existsSync(join(home, "skills", "edge-india", "references", path))).toBe(true);
   }
+  for (const skill of ["rolodex", "gold-stars", "skylight"]) {
+    expect(readFileSync(join(home, "skills", skill, "SKILL.md"), "utf8")).toBe(
+      readFileSync(join(REPO_ROOT, "skills", skill, "SKILL.md"), "utf8"),
+    );
+  }
   const agents = readFileSync(join(home, "AGENTS.md"), "utf8");
   expect(agents).toContain("`edge-india`");
 });

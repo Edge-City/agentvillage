@@ -1,7 +1,7 @@
 ---
 name: edgeos
 description: Talk to the EdgeOS popup-village platform — read the event schedule in the village's local time, RSVP (after asking the person), list venues and who is going to an event, and, only when a human session token is set, look up the calling user's own profile and browse the attendee directory (the API key cannot reach those). The current village's popup id is `$AV_POPUP_ID`; the current event is Edge City India (Oct 11 – Nov 1 2026, Mandrem, Goa). Agents cannot create or edit village events.
-version: 1.3.2
+version: 1.4.0
 author: Edge City
 tags: [edgeos, events, directory, popup-village]
 required_environment_variables:
@@ -42,7 +42,7 @@ You need two tokens, both passed as `Authorization: Bearer <token>`:
 - **`$EDGEOS_BEARER_TOKEN`** — human session JWT. Required for: `/humans/me`, `/applications/my/directory/{popup_id}`. Scopes: `portal:profile:read` to read `/humans/me`, `portal:profile:write` to change it, `portal:directory:read` for the directory. A token without the scope gets `403`; an expired one gets `401`. It may be unset or expired: then those calls are unavailable (§0).
 - **`$EDGEOS_API_KEY`** — long-lived `eos_live_...` automation key. Required for events, RSVPs, venues and event participants. It never works for the directory or `/humans/me` (§0).
 
-In every curl example below, `<EDGEOS_API_KEY>` and `<EDGEOS_BEARER_TOKEN>` are placeholders — substitute the actual token values from your environment before running the command.
+Every curl recipe below names its token as `"$EDGEOS_API_KEY"` or `"$EDGEOS_BEARER_TOKEN"` inside double quotes, and the shell fills it in. Run the recipe as written. Never print, echo or paste a token's value, never type one into a command, and never put one in a message: a pasted value ends up in the conversation log and the approval log.
 
 ## 2. Conventions
 
@@ -55,7 +55,18 @@ In every curl example below, `<EDGEOS_API_KEY>` and `<EDGEOS_BEARER_TOKEN>` are 
 
 ## 3. Reading events
 
-All event-read recipes use `Authorization: Bearer <EDGEOS_API_KEY>`.
+**For "what's on today / tomorrow / this weekend / on a date", use the schedule script** rather than a curl and your own date arithmetic. It works out the local day window, reads the key itself, and prints local times with the zone label, the venue, the person's RSVP status and each event's id:
+
+```sh
+bun skills/edgeos/scripts/events.ts --when today
+bun skills/edgeos/scripts/events.ts --when weekend
+bun skills/edgeos/scripts/events.ts --when 2026-10-20 --days 3 --search yoga
+bun skills/edgeos/scripts/events.ts --when today --days 7 --rsvped
+```
+
+`--when` is `today`, `tomorrow`, `weekend` or a local date `YYYY-MM-DD`; `--days N` (up to 14) extends it (for `weekend`, N-1 more days after Sunday); each line ends with the event's id and `start <ISO>`, which is the `occurrence_start` to send when RSVPing to one occurrence of a recurring event (§6); `--search WORDS` and `--rsvped` narrow it; `--json` prints the raw events instead. Call `terminal` with exactly `command` (a `workdir` is fine) and nothing else. Do not add `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty`: the script finishes in seconds and its output comes straight back. If the call returns an error about background commands, the script did not run; call it once more without those arguments. Exit 2 with "not set" means the schedule isn't connected to this agent (§0 above); exit 1 means EdgeOS was unreachable or refused, so say you can't reach the schedule right now. For anything the script doesn't cover (a tag, venue or track filter, a single event), use the recipes below.
+
+All event-read recipes use `Authorization: Bearer $EDGEOS_API_KEY`.
 
 **REQUIRED parameters for all event list queries:** `popup_id={popup_id}` and `event_status=published`. `{popup_id}` is the value of `$AV_POPUP_ID` (see the top of this skill). Your API key is bound to one popup: a `popup_id` naming any other popup answers `403` ("This API key does not have access to this popup"), and an omitted one falls back to the key's own popup. Any other token without `popup_id` takes a different path: it ignores every filter except `search` (no `event_status`, `start_after`, `start_before`, `tags`, `kind`, venue or track filter) and returns at most the 100 most recently created events across every popup it can see. So always pass both.
 
@@ -63,39 +74,39 @@ All event-read recipes use `Authorization: Bearer <EDGEOS_API_KEY>`.
 
 **List upcoming events (next 30 days):**
 ```bash
-curl -s -H "Authorization: Bearer <EDGEOS_API_KEY>" \
+curl -s -H "Authorization: Bearer $EDGEOS_API_KEY" \
   "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events?popup_id={popup_id}&event_status=published&start_after={current_iso_timestamp}&start_before={end_iso}"
 ```
 `{current_iso_timestamp}` is now and `{end_iso}` is 30 days later, both literal ISO-8601 UTC strings (e.g. `2026-10-11T00:00:00Z` and `2026-11-10T00:00:00Z`): compute them in code or via the agent's date tools, not via shell substitution. Without `start_before` the call returns every future event, however far ahead.
 
 **List events in a date range:**
 ```bash
-curl -s -H "Authorization: Bearer <EDGEOS_API_KEY>" \
+curl -s -H "Authorization: Bearer $EDGEOS_API_KEY" \
   "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events?popup_id={popup_id}&event_status=published&start_after={start_iso}&start_before={end_iso}"
 ```
 
 **Search events by title:**
 ```bash
-curl -s -H "Authorization: Bearer <EDGEOS_API_KEY>" \
+curl -s -H "Authorization: Bearer $EDGEOS_API_KEY" \
   "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events?popup_id={popup_id}&event_status=published&search=KEYWORD&start_after={start_iso}"
 ```
 
 **Filter by tag, kind, venue, or track:**
 ```bash
-curl -s -H "Authorization: Bearer <EDGEOS_API_KEY>" \
+curl -s -H "Authorization: Bearer $EDGEOS_API_KEY" \
   "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events?popup_id={popup_id}&event_status=published&tags=AI&tags=Privacy&start_after={start_iso}&start_before={end_iso}"
 ```
 `tags` matches events carrying any of the given tags. The other filters are `kind`, `venue_id` (a venue's `id` from §7; repeat `venue_ids` for several) and repeated `track_ids` (an event's `track_id`).
 
 **Only events you've RSVPed to:**
 ```bash
-curl -s -H "Authorization: Bearer <EDGEOS_API_KEY>" \
+curl -s -H "Authorization: Bearer $EDGEOS_API_KEY" \
   "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events?popup_id={popup_id}&event_status=published&rsvped_only=true&start_after={current_iso_timestamp}"
 ```
 
 **Fetch a single event (includes caller's RSVP status):**
 ```bash
-curl -s -H "Authorization: Bearer <EDGEOS_API_KEY>" \
+curl -s -H "Authorization: Bearer $EDGEOS_API_KEY" \
   "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/events/portal/events/{event_id}"
 ```
 
@@ -121,7 +132,7 @@ Agents cannot create, edit, cancel, or send invitations for village events, and 
 
 **RSVP to a one-off event:**
 ```bash
-curl -s -X POST -H "Authorization: Bearer <EDGEOS_API_KEY>" \
+curl -s -X POST -H "Authorization: Bearer $EDGEOS_API_KEY" \
   -H "Content-Type: application/json" \
   "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/event-participants/portal/register/{event_id}" \
   -d '{}'
@@ -129,7 +140,7 @@ curl -s -X POST -H "Authorization: Bearer <EDGEOS_API_KEY>" \
 
 **RSVP to one occurrence of a recurring event:**
 ```bash
-curl -s -X POST -H "Authorization: Bearer <EDGEOS_API_KEY>" \
+curl -s -X POST -H "Authorization: Bearer $EDGEOS_API_KEY" \
   -H "Content-Type: application/json" \
   "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/event-participants/portal/register/{event_id}" \
   -d '{"occurrence_start":"{occurrence_iso}"}'
@@ -137,7 +148,7 @@ curl -s -X POST -H "Authorization: Bearer <EDGEOS_API_KEY>" \
 
 **Cancel a previous RSVP:**
 ```bash
-curl -s -X POST -H "Authorization: Bearer <EDGEOS_API_KEY>" \
+curl -s -X POST -H "Authorization: Bearer $EDGEOS_API_KEY" \
   -H "Content-Type: application/json" \
   "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/event-participants/portal/cancel-registration/{event_id}" \
   -d '{}'
@@ -145,7 +156,7 @@ curl -s -X POST -H "Authorization: Bearer <EDGEOS_API_KEY>" \
 
 **List who is going to one event (`event_id` is required):**
 ```bash
-curl -s -H "Authorization: Bearer <EDGEOS_API_KEY>" \
+curl -s -H "Authorization: Bearer $EDGEOS_API_KEY" \
   "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/event-participants/portal/participants?event_id={event_id}&skip=0&limit=100"
 ```
 
@@ -155,7 +166,7 @@ This lists the participants of **one** event, the caller included if they RSVPed
 
 **List active venues for a popup (`popup_id` is required: the UUID in `$AV_POPUP_ID`; your API key answers `403` for any other popup):**
 ```bash
-curl -s -H "Authorization: Bearer <EDGEOS_API_KEY>" \
+curl -s -H "Authorization: Bearer $EDGEOS_API_KEY" \
   "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/event-venues/portal/venues?popup_id={popup_id}&limit=100"
 ```
 
@@ -167,7 +178,7 @@ Only with `$EDGEOS_BEARER_TOKEN`. The API key gets `403` here; when the bearer t
 
 **Read the calling user's profile** (uses the human bearer, not the API key):
 ```bash
-curl -s -H "Authorization: Bearer <EDGEOS_BEARER_TOKEN>" \
+curl -s -H "Authorization: Bearer $EDGEOS_BEARER_TOKEN" \
   "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/humans/me"
 ```
 
@@ -175,7 +186,7 @@ Returns the bearer's own profile and nothing more: `id`, `tenant_id`, `email`, `
 
 **Update basic profile fields** (uses the human bearer; needs `portal:profile:write`):
 ```bash
-curl -s -X PATCH -H "Authorization: Bearer <EDGEOS_BEARER_TOKEN>" \
+curl -s -X PATCH -H "Authorization: Bearer $EDGEOS_BEARER_TOKEN" \
   -H "Content-Type: application/json" \
   "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/humans/me" \
   -d '{"first_name":"...","last_name":"...","telegram":"handle","residence":"...","picture_url":"https://..."}'
@@ -189,7 +200,7 @@ The directory does **not** work with your API key: EdgeOS answers an `eos_live_`
 
 **Search attendees in a popup** (uses the human bearer):
 ```bash
-curl -s -H "Authorization: Bearer <EDGEOS_BEARER_TOKEN>" \
+curl -s -H "Authorization: Bearer $EDGEOS_BEARER_TOKEN" \
   "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/applications/my/directory/{popup_id}?skip=0&limit=20&q=QUERY"
 ```
 

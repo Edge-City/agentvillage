@@ -122,6 +122,8 @@ describe("the morning brief", () => {
     expect(view.date).toBe(DATE);
     expect(view.connections).toEqual({ newMatchCount: 5, countIsAtLeast: false, names: ["Maya Rao", "Arjun"], link: DEFAULT_CONNECTIONS_URL });
     expect(view.approvalsWaiting).toBe(2);
+    // Timour's feedback (2026-10-11): the Agent Village front page, once, near the end of the brief.
+    expect(view.villageLink).toBe("https://agents.edgecity.live");
     expect(view.announcements).toEqual(["Lunch moves to the Banyan Stage at 1pm. Details:"]);
     expect(view.schedule.yourRsvps).toEqual([{ title: "Breathwork on the beach", time: "9:30 AM", venue: "Banyan Stage", link: "https://portal.example/events/e1" }]);
     // DATA-372 B1: no stated interests (the context carries memory tags only), so the brief names none.

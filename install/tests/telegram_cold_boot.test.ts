@@ -308,6 +308,8 @@ test("full installer config pass: sets the key once, keeps it, and is idempotent
   expect(read(path).compression).toEqual({ hygiene_max_turn_hold_seconds: 25 });
   expect(read(path).display).toBeUndefined();
   expect(read(path).auxiliary).toEqual({ compression: { reasoning_effort: "none" } });
+  // AGENT-DATE: per-message timestamps pinned in the same pass, and kept by the re-run.
+  expect((read(path).gateway as Record<string, unknown>).message_timestamps).toEqual({ enabled: true });
 });
 
 test("full installer config pass on a box's shape: hold raised, reasoning off, provider and model left to Hermes", () => {

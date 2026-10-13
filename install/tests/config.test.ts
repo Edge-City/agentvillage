@@ -7,6 +7,7 @@ import YAML from "yaml";
 
 import {
   capModelMaxTokens,
+  configureAvApproval,
   configureAvEvents,
   configureHostedGateway,
   configureIndexLinks,
@@ -14,7 +15,9 @@ import {
   disableTelegramLinkPreviews,
   dumpConfig,
   setTerminalCwd,
+  unlistPlugins,
 } from "../config";
+import { NOT_STAGED_PLUGINS } from "../install_approval";
 
 const ORIGINAL_ENV = {
   HERMES_HOME: process.env.HERMES_HOME,
@@ -40,6 +43,42 @@ function withConfig(doc: Record<string, unknown>): string {
 function readConfig(path: string): Record<string, unknown> {
   return YAML.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
 }
+
+test("OV-300 M1: unlistPlugins drops a not-staged plugin from plugins.enabled, keeps everything else, and is idempotent", () => {
+  const path = withConfig({
+    plugins: { enabled: ["existing", "village-bridge", "av-approval", "village-bridge"], disabled: ["village-bridge"], hook_callback_timeout: 30 },
+  });
+  expect(unlistPlugins(NOT_STAGED_PLUGINS)).toEqual(["village-bridge"]);
+  expect(readConfig(path).plugins).toEqual({ enabled: ["existing", "av-approval"], disabled: ["village-bridge"], hook_callback_timeout: 30 });
+  const first = readFileSync(path, "utf8");
+  expect(unlistPlugins(NOT_STAGED_PLUGINS)).toEqual([]);
+  expect(readFileSync(path, "utf8")).toBe(first);
+});
+
+test("OV-300 M1: unlistPlugins writes nothing when no listed plugin is enabled, or there is no plugins block", () => {
+  const raw = "# operator comment\nplugins:\n  enabled: [existing]\n";
+  const path = withConfig({});
+  writeFileSync(path, raw);
+  expect(unlistPlugins(NOT_STAGED_PLUGINS)).toEqual([]);
+  expect(readFileSync(path, "utf8")).toBe(raw);
+  writeFileSync(path, "model: {}\n");
+  expect(unlistPlugins(NOT_STAGED_PLUGINS)).toEqual([]);
+  expect(readFileSync(path, "utf8")).toBe("model: {}\n");
+});
+
+test("OV-300 M1: install.ts no longer enables village-bridge and runs the strip in the plugin config step", () => {
+  const install = readFileSync(join(import.meta.dir, "..", "install.ts"), "utf8");
+  const config = readFileSync(join(import.meta.dir, "..", "config.ts"), "utf8");
+  expect(install).not.toContain("configureVillageBridge");
+  expect(config).not.toContain("configureVillageBridge");
+  expect(install).not.toMatch(/["']village-bridge["']/);
+  const main = install.slice(install.indexOf("function main(): void {"));
+  const approval = main.indexOf("configureAvApproval();");
+  const strip = main.indexOf("unlistPlugins(NOT_STAGED_PLUGINS)");
+  expect(approval).toBeGreaterThan(0);
+  expect(strip).toBeGreaterThan(approval);
+  expect(main.indexOf("unlistPlugins(", strip + 1)).toBe(-1);
+});
 
 test("capModelMaxTokens adds a safe default cap when missing", () => {
   const configPath = withConfig({
@@ -141,6 +180,72 @@ test("configureHostedGateway is idempotent and preserves other platform keys", (
   const telegram = (readConfig(configPath).platforms as Record<string, Record<string, unknown>>).telegram;
   expect(telegram.gateway_restart_notification).toBe(false);
   expect((telegram.extra as Record<string, unknown>).disable_link_previews).toBe(false);
+});
+
+// AGENT-DATE: every resident message reaches the model stamped with the time it was sent, so a
+// continuing session's frozen "today's date" line is never the agent's only clock.
+const stampsOf = (path: string): unknown => (readConfig(path).gateway as Record<string, unknown>).message_timestamps;
+
+test("configureHostedGateway turns message timestamps on for a fresh config", () => {
+  const configPath = withConfig({});
+
+  logged(configureHostedGateway);
+
+  expect(stampsOf(configPath)).toEqual({ enabled: true });
+  // Written as a real YAML boolean, which Hermes's PyYAML reader takes as True.
+  expect(readFileSync(configPath, "utf8")).toMatch(/message_timestamps:\n\s+enabled: true\n/);
+});
+
+test("configureHostedGateway keeps every other gateway key and the timestamp block's own keys", () => {
+  const configPath = withConfig({
+    gateway: {
+      pairing: { global_mode: "open", code_ttl: 600 },
+      max_inbound_media_bytes: 1024,
+      message_timestamps: { enabled: true, note: "kept" },
+    },
+  });
+
+  logged(configureHostedGateway);
+
+  const gateway = readConfig(configPath).gateway as Record<string, unknown>;
+  expect(gateway.pairing).toEqual({ global_mode: "pair", code_ttl: 600 });
+  expect(gateway.max_inbound_media_bytes).toBe(1024);
+  expect(gateway.message_timestamps).toEqual({ enabled: true, note: "kept" });
+});
+
+test("configureHostedGateway pins timestamps on over a false or a non-mapping value, and says so", () => {
+  for (const [value, line] of [
+    [{ enabled: false }, "gateway.message_timestamps.enabled was not true; set to true"],
+    [{ enabled: "yes" }, "gateway.message_timestamps.enabled was not true; set to true"],
+    [false, "gateway.message_timestamps was not a mapping; replaced with { enabled: true }"],
+    ["on", "gateway.message_timestamps was not a mapping; replaced with { enabled: true }"],
+    [[1], "gateway.message_timestamps was not a mapping; replaced with { enabled: true }"],
+  ] as const) {
+    const configPath = withConfig({ gateway: { message_timestamps: value } });
+    const out = logged(configureHostedGateway).join("\n");
+    expect({ value, stamps: stampsOf(configPath) }).toEqual({ value, stamps: { enabled: true } });
+    expect(out).toContain(line);
+  }
+  // The bare `true` shorthand Hermes reads is normalised without a warning; null counts as unset.
+  for (const value of [true, null]) {
+    const configPath = withConfig({ gateway: { message_timestamps: value } });
+    const out = logged(configureHostedGateway).join("\n");
+    expect(stampsOf(configPath)).toEqual({ enabled: true });
+    expect(out).not.toContain("was not");
+  }
+});
+
+test("configureHostedGateway: timestamps survive a roll and a re-run writes the same bytes", () => {
+  const configPath = withConfig({ gateway: { pairing: { global_mode: "pair" } }, timezone: "Asia/Kolkata" });
+
+  logged(configureHostedGateway);
+  const first = readFileSync(configPath, "utf8");
+  logged(configureHostedGateway);
+  logged(configureHostedGateway);
+
+  expect(readFileSync(configPath, "utf8")).toBe(first);
+  expect(stampsOf(configPath)).toEqual({ enabled: true });
+  expect(readConfig(configPath).timezone).toBe("Asia/Kolkata");
 });
 
 // DATA-160: av-events is enabled on every tenant, token or not. The old
@@ -514,4 +619,42 @@ test.skipIf(!PYYAML)("DATA-434: PyYAML (Hermes's reader) reads every dumpConfig 
   const out = JSON.parse(run.stdout.toString()) as { values: [string, unknown][]; keys: [string, unknown][] };
   expect(out.values).toEqual(doc.values.map((v) => ["str", v]));
   expect(out.keys).toEqual([...YAML11_WORDS, ...PYYAML_ONLY, "="].map((w) => ["str", w]));
+});
+
+// Approval code-gap lane 2 (credential custody): av-approval is listed on every tenant, whatever
+// AV_APPROVAL_ENABLED says, so custody runs everywhere; the gate half stays off unless the switch is on.
+for (const approvalSwitch of [undefined, "0", "1"]) {
+  test(`configureAvApproval lists av-approval with AV_APPROVAL_ENABLED=${approvalSwitch ?? "unset"}, idempotently`, () => {
+    const before = process.env.AV_APPROVAL_ENABLED;
+    if (approvalSwitch === undefined) delete process.env.AV_APPROVAL_ENABLED;
+    else process.env.AV_APPROVAL_ENABLED = approvalSwitch;
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const configPath = withConfig({ plugins: { enabled: ["dashboard-auth-edgecity", "av-events"], extra: { keep: true } } });
+      configureAvApproval();
+      configureAvApproval();
+      const plugins = readConfig(configPath).plugins as Record<string, unknown>;
+      expect(plugins.enabled).toEqual(["dashboard-auth-edgecity", "av-events", "av-approval"]);
+      expect(plugins.extra).toEqual({ keep: true });
+    } finally {
+      log.mockRestore();
+      if (before === undefined) delete process.env.AV_APPROVAL_ENABLED;
+      else process.env.AV_APPROVAL_ENABLED = before;
+    }
+  });
+}
+
+test("configureAvApproval on a config with no plugins block, and a warning when it is disabled", () => {
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    const bare = withConfig({});
+    configureAvApproval();
+    expect((readConfig(bare).plugins as Record<string, unknown>).enabled).toEqual(["av-approval"]);
+    withConfig({ plugins: { enabled: [], disabled: ["av-approval"] } });
+    configureAvApproval();
+    const lines = log.mock.calls.map((args) => args.map(String).join(" "));
+    expect(lines.at(-1)).toBe("→ warning: av-approval is in plugins.disabled; Hermes will not load it and custody is off");
+  } finally {
+    log.mockRestore();
+  }
 });

@@ -145,7 +145,21 @@ export function capModelMaxTokens(): void {
   console.log(`→ capped model.max_tokens at ${model.max_tokens}`);
 }
 
-/** Hosted Telegram: pairing codes, no restart pings, no approval prompts. Idempotent. */
+/**
+ * Hosted Telegram: pairing codes, no restart pings, no approval prompts, and every message
+ * stamped with the time it was sent. Idempotent.
+ *
+ * `gateway.message_timestamps.enabled: true` (AGENT-DATE): Hermes 0.21.5 keeps a continuing
+ * session's system prompt byte for byte (agent/conversation_loop.py `_restore_or_build_system_prompt`),
+ * so its "today's date" line is the day of the last rebuild, often days old in a Telegram chat.
+ * With this on, the gateway prefixes each resident message in the model's context with
+ * `[Mon 2026-10-12 09:17:05 IST]` in Hermes's zone (gateway/run_turn.py:1495, read per message;
+ * gateway/run.py `_message_timestamps_enabled`; the stored transcript stays clean). Hermes's
+ * default is off (hermes_cli/config_defaults.py:2168). This is a pin, like
+ * `disableTelegramLinkPreviews`: a `false` set by hand, or the bare `message_timestamps: <bool>`
+ * shorthand Hermes also reads, becomes `{ enabled: true }`; other keys in the block are kept.
+ * AGENTS.md tells the agent to trust the stamp over the prompt's date.
+ */
 export function configureHostedGateway(): void {
   const doc = readConfig();
 
@@ -153,6 +167,14 @@ export function configureHostedGateway(): void {
   const pairing = { ...((gateway.pairing as Record<string, unknown>) ?? {}) };
   pairing.global_mode = "pair";
   gateway.pairing = pairing;
+  const rawStamps = gateway.message_timestamps;
+  if (rawStamps !== undefined && rawStamps !== null && !isMapping(rawStamps) && rawStamps !== true) {
+    // R3 fix round 4 (output injection): a config value is never echoed onto the installer's stdout.
+    console.log("→ gateway.message_timestamps was not a mapping; replaced with { enabled: true }");
+  } else if (isMapping(rawStamps) && "enabled" in rawStamps && rawStamps.enabled !== true) {
+    console.log("→ gateway.message_timestamps.enabled was not true; set to true");
+  }
+  gateway.message_timestamps = { ...(isMapping(rawStamps) ? rawStamps : {}), enabled: true };
   doc.gateway = gateway;
 
   const approvals = { ...((doc.approvals as Record<string, unknown>) ?? {}) };
@@ -166,7 +188,7 @@ export function configureHostedGateway(): void {
   doc.platforms = platforms;
 
   writeConfig(doc);
-  console.log("→ hosted gateway: pairing mode, approvals off, no telegram restart pings");
+  console.log("→ hosted gateway: pairing mode, approvals off, no telegram restart pings, message timestamps on");
 }
 
 /** Hermes `platforms.telegram.extra` key that decides whether a cold start discards the backlog. */
@@ -707,6 +729,36 @@ export function configureAvEvents(): void {
   }
 }
 
+const AV_APPROVAL_PLUGIN = "av-approval";
+
+/**
+ * List `av-approval` on every tenant, whatever `AV_APPROVAL_ENABLED` says.
+ *
+ * The plugin carries two halves. Credential custody (`_custody.py`: the
+ * service keys out of every child the agent's code runs in) must run on every
+ * box, so the plugin must load on every box. The gate's backstop does nothing
+ * unless the switch is on (`register` returns before registering any hook when
+ * it is unset or off), so listing it here blocks no tool on a box without the
+ * gate. The approval step lists it too; the kill switch keeps it listed. An
+ * `av-approval` entry in `plugins.disabled` is left alone and logged.
+ * Idempotent; every other entry keeps its place.
+ */
+export function configureAvApproval(): void {
+  const doc = readConfig();
+  const plugins = { ...((doc.plugins as Record<string, unknown>) ?? {}) };
+  const enabled = Array.isArray(plugins.enabled)
+    ? (plugins.enabled as unknown[]).filter((n) => typeof n === "string") as string[]
+    : [];
+  if (!enabled.includes(AV_APPROVAL_PLUGIN)) enabled.push(AV_APPROVAL_PLUGIN);
+  plugins.enabled = enabled;
+  doc.plugins = plugins;
+  writeConfig(doc);
+  console.log(`→ enabled plugin ${AV_APPROVAL_PLUGIN} (credential custody; the gate half follows AV_APPROVAL_ENABLED)`);
+  if (Array.isArray(plugins.disabled) && (plugins.disabled as unknown[]).includes(AV_APPROVAL_PLUGIN)) {
+    console.log(`→ warning: ${AV_APPROVAL_PLUGIN} is in plugins.disabled; Hermes will not load it and custody is off`);
+  }
+}
+
 const INDEX_LINKS_PLUGIN = "index-links";
 
 /** List `index-links` so Hermes loads the tool-result link rewrite. Idempotent. */
@@ -842,4 +894,24 @@ export function configureRecall(): void {
   }
   setRecallPluginEnabled(choice);
   console.log(choice ? `→ enabled plugin ${RECALL_PLUGIN}` : `→ disabled plugin ${RECALL_PLUGIN} (AV_RECALL_ENABLED off)`);
+}
+
+/**
+ * Drop each of `names` from `plugins.enabled` (install.ts passes `NOT_STAGED_PLUGINS`), so a box
+ * whose config an earlier installer wrote is healed (OV-300 M1: `village-bridge`). Writes only when
+ * an entry is removed; every other entry, `plugins.disabled` included, is left as it is. The names
+ * removed, for the log line.
+ */
+export function unlistPlugins(names: Iterable<string>): string[] {
+  const doc = readConfig();
+  const plugins = doc.plugins;
+  if (!plugins || typeof plugins !== "object" || Array.isArray(plugins)) return [];
+  const enabled = (plugins as Record<string, unknown>).enabled;
+  if (!Array.isArray(enabled)) return [];
+  const drop = new Set(names);
+  const removed = [...new Set(enabled.filter((n): n is string => typeof n === "string" && drop.has(n)))];
+  if (removed.length === 0) return [];
+  doc.plugins = { ...(plugins as Record<string, unknown>), enabled: enabled.filter((n) => !(typeof n === "string" && drop.has(n))) };
+  writeConfig(doc);
+  return removed;
 }

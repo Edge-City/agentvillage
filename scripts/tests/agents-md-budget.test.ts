@@ -105,6 +105,23 @@ describe("AGENTS.md budget (AGENTS-MD-CAP)", () => {
     expect(agents).toContain("**`edge-india`**");
   });
 
+  test("the date rule stays loaded and shows Hermes's message stamp (AGENT-DATE)", () => {
+    // config.ts pins gateway.message_timestamps.enabled, so each resident message reaches the model
+    // as `[Mon 2026-10-12 09:17:05 IST] ...` (gateway/message_timestamps.py, '%a %Y-%m-%d %H:%M:%S %Z');
+    // the session prompt's own date is frozen at its last rebuild, so the rule says which one wins.
+    const line = agents.split("\n").find((l) => l.startsWith("**Today's date:**"));
+    expect(line).toBeDefined();
+    const example = line!.match(/`(\[[^`]+\])`/)?.[1];
+    expect(example).toMatch(/^\[[A-Z][a-z]{2} \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} IST\]$/);
+    for (const words of ["in IST", "The newest is today", "conversation's start date", "your notes", "anything said earlier", "today, tomorrow and weekdays"]) {
+      expect(line).toContain(words);
+    }
+    // In Community context, next to the schedule rules it feeds; scoped to chat (a cron prompt has no stamp).
+    const community = agents.slice(agents.indexOf("\n## Community context\n"), agents.indexOf("\n## First-message gates\n"));
+    expect(community).toContain(line!);
+    expect(line).toContain("in chat,");
+  });
+
   test("tools.md keeps its own sections first and its pinned shape (on demand: no length limit)", () => {
     console.log(`skills/index-network/tools.md: ${tools.length} chars (read on demand, no limit)`);
     expect(tools.startsWith("# Index Network — Tools\n")).toBe(true);

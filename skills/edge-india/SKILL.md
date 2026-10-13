@@ -28,6 +28,7 @@ Village already has the live skills.
 | Housing, Riva, room shares, arrival, travel, visas, check-in, meals, venues, coworking, WiFi, health, packing, families, tickets, residencies, weekly themes, "what is Edge City" | **This skill**: the local copy of the published guide. |
 | What's on today or tomorrow, a session's time or place, whether an event moved or was cancelled, RSVPing or cancelling an RSVP | **`edgeos`** (the live calendar, read in village time). Follow its rules for when the schedule isn't connected (it then points the person to the portal) and ask before every RSVP or cancel, as that skill says. |
 | Who to meet, intros, matching | **`index-network`**, through its own rules and approvals. |
+| Rolodex cards, We met or Undo met; Gold Stars; Skylight characters and islands | **`rolodex`**, **`gold-stars`** or **`skylight`**. These skills give the right website links and current capability boundaries. |
 | Edge Esmeralda (the previous popup, Healdsburg CA) | `edge-esmeralda`, only when the person asks about it by name. Never use Esmeralda material for India. |
 
 A programming preview or weekly theme in this guide is background, not a

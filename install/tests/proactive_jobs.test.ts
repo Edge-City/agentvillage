@@ -153,6 +153,21 @@ describe("the seven proactive jobs (DATA-314, DATA-430)", () => {
     expect(brief).toContain("how they like their morning brief");
   });
 
+  test("the brief prompt puts a blank line between events and gives the Agent Village front page once, near the end", () => {
+    const brief = prompt(proactive.find((spec) => PROACTIVE[spec.name] === "brief")!);
+    expect(brief).toContain("Put each event on its own line, with one blank line between events, so they stay apart in Telegram.");
+    expect(brief).toContain("6. One line: `Agent Village: ` followed by `villageLink` exactly as given. Write it once, and nowhere else in the brief.");
+    expect(brief).toContain("- The only links are the `link` fields and `villageLink`, written exactly as given.");
+    expect(brief).toContain("as long as the Connections line and the Agent Village line stay.");
+    // After the Connections and approvals parts, before the closing question and the last line.
+    expect(brief.indexOf("`Connections: `")).toBeLessThan(brief.indexOf("`Agent Village: `"));
+    expect(brief.indexOf("5. When `approvalsWaiting`")).toBeLessThan(brief.indexOf("6. One line: `Agent Village: `"));
+    expect(brief.indexOf("6. One line: `Agent Village: `")).toBeLessThan(brief.indexOf("7. Optionally, one short closing question"));
+    expect(brief.indexOf("`Agent Village: `")).toBeLessThan(brief.indexOf("# Last line"));
+    // The url itself comes from the Script Output, never the prompt (Hermes scans a job prompt).
+    expect(brief).not.toContain("agents.edgecity.live");
+  });
+
   test("DATA-42: the 14:00 follow-up no longer asks how a connection went; the evening asks the one fixed question", () => {
     const followUpPrompt = prompt(proactive.find((spec) => PROACTIVE[spec.name] === "negotiation")!);
     expect(followUpPrompt).not.toMatch(/reply met|not useful|missed/i);

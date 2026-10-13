@@ -1,0 +1,7 @@
+name: village-bridge
+version: 1.1.0
+description: "Account-scoped Rolodex follow-up, confirmed Gold Stars and read-only Skylight status. Uses automatic, revocable access for the existing paired account; rejects groups, cron and delegated child turns."
+author: Edge City
+kind: standalone
+provides_tools:
+  - village

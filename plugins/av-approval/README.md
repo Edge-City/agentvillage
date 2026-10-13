@@ -74,6 +74,51 @@ What closes the gap, in order:
    Hermes post envelope to `/hook/hermes`, in a background worker so the agent
    loop is never held, and never raises.
 
+## Credential custody (every start, whatever the gate's switch)
+
+`_custody.py` keeps the service keys in `FLOOR` (`INDEX_API_KEY`,
+`INDEX_SESSION_TOKEN`, `AV_EVENTS_TOKEN`, `AV_BACKUP_TOKEN`, `ADMIN_TOKEN`), plus
+any more `custody_keys.json` marks `strip`, out of every child the agent's code
+runs in, while
+the gateway (the Index MCP client, av-events) keeps them. Three levers, each
+fail-soft and reported in one line on the `av-approval.custody` logger:
+
+- **provider**: a strip-only `TerminalEnvironmentProvider` (`av_custody`; never
+  available, never a backend). Hermes strips every provider's `strip_env_keys`
+  from the background/PTY terminal, cron and user scripts, search workers and
+  non-terminal spawns.
+- **foreground**: Hermes v2026.9.24's foreground terminal
+  (`tools.environments.local._make_run_env`, every command and the session
+  snapshot) passes an empty plugin key set, so the provider does not reach it;
+  the builder is wrapped to drop the same names.
+- **execute_code**: `tools.code_execution_env._scrub_child_env` is wrapped so a
+  skill's `required_environment_variables` cannot re-admit a stripped name.
+
+After wrapping, a probe checks the real path: one child spawned through the
+foreground builder must not see a canary under a strip name, `_scrub_child_env`
+must drop it even when declared passthrough, and `LocalEnvironment._run_bash` and
+`_build_child_env` must still call the wrapped names. A Hermes other than the
+measured 0.21.5 is named in a warning.
+
+`register` applies it after the backstop, on every box (the config step lists the
+plugin whatever `AV_APPROVAL_ENABLED` says; with the switch unset the backstop
+registers no hook), and never touches `ctx`. Every failure is a warning:
+`av-approval: custody: NOT covered: <surface>` (a missing lever, a failed probe,
+or `_custody` failing to load), and a decisions file that no longer marks a floor
+name (`... does not mark ... strip ...; they are stripped anyway`). The only off
+switch is `av_approval: {custody: false}` in `$HERMES_HOME/config.yaml`, read
+with Hermes's raw config loader. No environment variable is read: Hermes loads
+dotenv files the agent can write (`hermes-agent/.env`, `.op.env`) into the
+gateway. What the hook protects today: a write to config.yaml spelled
+`~/.hermes/config.yaml` or `$HOME/.hermes/config.yaml` is `policy.core`
+(human-only); the `$HERMES_HOME/config.yaml` spelling and the plugin directory
+(this module, which holds `FLOOR`) classify `files.write.workspace` and are
+covered by approval-md APRV-511 (0.4.5). Until then an agent can turn custody off
+or shrink the list through those spellings; an edit of `custody_keys.json` alone
+cannot shrink it.
+Not closed: `$HERMES_HOME/.env` and `/proc/<gateway pid>/environ` stay readable
+by the agent's user; see `skills/approval/README.md`.
+
 ## Kill switch
 
 The fail-open line tracks the gate, not the plugin. It is logged once per process:
@@ -99,3 +144,12 @@ Hermes (opt-in: `AV_HERMES_SRC=<Hermes source tree>
 AV_HERMES_PYTHON=<its interpreter>`): healthy, 35 shell hooks register (13 before R3b) and
 nothing blocks; with a mode-000 allowlist lock, `register_from_config` raises
 `PermissionError` and the backstop blocks `terminal`.
+
+`tests/test_custody.py`: the decisions file, each lever against fake Hermes
+modules, the switch, the inventory scan (every credential-shaped name the
+overlay reads has a decision; no stale decisions), and the skills (no pasted
+key placeholder, every `Authorization: Bearer` names a variable, no recipe
+names a stripped one). `test_against_real_hermes` runs when Hermes is
+importable (`PYTHONPATH=<Hermes source tree>`; it skips in CI): the real
+foreground, background and non-terminal builders, `execute_code` with the
+names registered as passthrough, and a real bash child and its snapshot file.

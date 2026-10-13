@@ -1,0 +1,110 @@
+{
+  "version": "av_custody_keys_v1",
+  "about": "Every credential-shaped name (a name holding KEY, TOKEN, SECRET, PASSWORD, CREDENTIAL, PASSWD, AUTH, DSN, WEBHOOK, CREDS, BEARER or APIKEY, the substrings Hermes's execute_code scrub treats as secret) that the overlay reads, or that the control plane puts on a village sandbox, with the decision taken for it. 'strip': av-approval removes it from every agent-run child (the five in _custody.FLOOR are stripped whatever this file says, since the agent's user can write it) (foreground and background terminal, execute_code, cron and other scripts Hermes spawns); the code that needs it reads $HERMES_HOME/.env itself or runs inside the gateway. 'hermes': Hermes v2026.9.24 (0.21.5) already removes it from terminal and execute_code children (measured against the real builders). 'agent_readable': left in the agent's environment on purpose, for the reason given. 'not_secret': the name has the shape but holds no credential. tests/test_custody.py fails when the overlay starts reading a credential-shaped name that has no entry here, so a new key cannot arrive without a decision.",
+  "names": {
+    "INDEX_API_KEY": {
+      "decision": "strip",
+      "reason": "Index writes are approval-gated (intent.publish.*, opportunity.accept); with the key agent code could call Index around the gate. The Index MCP client and record_intention run inside the gateway; the index-network scripts read $HERMES_HOME/.env (resolveIndexApiKey, envOrDotenv)."
+    },
+    "INDEX_SESSION_TOKEN": {
+      "decision": "strip",
+      "reason": "The Index owner session the Index Hermes plugin persists after `hermes index login` or the dashboard sign-in (indexnetwork/hermes-plugin auth_login.py); it acts as the owner and can mint a fresh INDEX_API_KEY. Only that plugin, inside the gateway, reads it."
+    },
+    "AV_EVENTS_TOKEN": {
+      "decision": "strip",
+      "reason": "The research ingest door; with it agent code could post or forge telemetry. Only av-events (inside the gateway) sends with it; proactive.ts only tests that it is set, through envOrDotenv."
+    },
+    "AV_BACKUP_TOKEN": {
+      "decision": "strip",
+      "reason": "Writes the tenant's memory backup. Only av-events (inside the gateway) and install/restore-memory.ts (run by the control plane before the gateway starts, never by the agent) use it."
+    },
+    "ADMIN_TOKEN": {
+      "decision": "strip",
+      "reason": "A control-plane admin credential (agent-commons search_forum.py, the daily brief's announcements). It is not on any village sandbox today and must never be; if a box ever carries it, agent code does not see it and those two readers report it missing."
+    },
+    "TURING_FALLS_CLAIM_TOKEN": {
+      "decision": "agent_readable",
+      "reason": "A third-party game credential the agent itself uses: Agent Plaza steering (skills/agent-plaza/SKILL.md, step 5) has the agent POST /action with it as a bearer to the Turing Falls origin, and lists the environment as one of its sources. No approval class gates Turing Falls. Not on village boxes today; the selfie script reads it from $HERMES_HOME/.env."
+    },
+    "OPENROUTER_API_KEY": {
+      "decision": "hermes",
+      "reason": "Provider key: Hermes's provider blocklist removes it from terminal children and the execute_code scrub removes it. The gateway uses it for the model."
+    },
+    "GROQ_API_KEY": {
+      "decision": "hermes",
+      "reason": "Provider key (speech-to-text): same as OPENROUTER_API_KEY."
+    },
+    "TELEGRAM_BOT_TOKEN": {
+      "decision": "hermes",
+      "reason": "Messaging credential: Hermes's blocklist removes it from terminal children and the execute_code scrub removes it. The gateway uses it for its own transport; the Agent Plaza selfie script reads it from $HERMES_HOME/.env (a residual, see APPROVAL-CUSTODY)."
+    },
+    "BROWSERBASE_API_KEY": {
+      "decision": "hermes",
+      "reason": "Tool credential written by the control plane: Hermes's blocklist (tool category) and the execute_code scrub remove it."
+    },
+    "BROWSERBASE_PROJECT_ID": {
+      "decision": "hermes",
+      "reason": "Tool setting written by the control plane: Hermes's blocklist removes it. Listed with its key for completeness."
+    },
+    "EDGEOS_API_KEY": {
+      "decision": "agent_readable",
+      "reason": "The edgeos skill's curl recipes name it as \"$EDGEOS_API_KEY\" and av-events reads RSVPs and their confirming reads from those curls (the 'Act on intentions' outcome). No approval class gates an EdgeOS call yet (edgeos.*.write is reserved). Moving it out needs a carrier script av-events can read; follow-up in APPROVAL-CUSTODY."
+    },
+    "EDGEOS_BEARER_TOKEN": {
+      "decision": "agent_readable",
+      "reason": "Same as EDGEOS_API_KEY: the directory and own-profile recipes name it as \"$EDGEOS_BEARER_TOKEN\"."
+    },
+    "AV_APPROVAL_TOKEN": {
+      "decision": "agent_readable",
+      "reason": "The approval AGENT credential (the hosted dogfood's form; co-located boxes use AV_APPROVAL_TOKEN_FILE and carry no such line). Scoped by design to the facade's catalog, hook route and five verbs; it can ask, never decide. The token file is readable by the agent's user anyway, so stripping the variable would claim a custody it cannot deliver."
+    },
+    "AV_APPROVAL_TOKEN_FILE": {
+      "decision": "not_secret",
+      "reason": "A path to the agent token file."
+    },
+    "APPROVAL_HOOK_TOKEN_ENV": {
+      "decision": "not_secret",
+      "reason": "Names the variable the shim reads its token from (AV_APPROVAL_TOKEN); holds a name, not a token."
+    },
+    "HERMES_MAX_TOKENS": {
+      "decision": "not_secret",
+      "reason": "The model's output token limit."
+    },
+    "TOKEN_USAGE_AUDIT_COOLDOWN_HOURS": {
+      "decision": "not_secret",
+      "reason": "token-usage-audit setting."
+    },
+    "TOKEN_USAGE_AUDIT_CRON": {
+      "decision": "not_secret",
+      "reason": "token-usage-audit setting."
+    },
+    "TOKEN_USAGE_AUDIT_DASHBOARD_URL": {
+      "decision": "not_secret",
+      "reason": "token-usage-audit setting."
+    },
+    "TOKEN_USAGE_AUDIT_LOOKBACK_HOURS": {
+      "decision": "not_secret",
+      "reason": "token-usage-audit setting."
+    },
+    "TOKEN_USAGE_AUDIT_TOTAL_THRESHOLD": {
+      "decision": "not_secret",
+      "reason": "token-usage-audit setting."
+    },
+    "TOKEN": {
+      "decision": "not_secret",
+      "reason": "A shell variable local to hermes-hook-shim.sh (the hook, which Hermes runs with its full environment; not agent-run code)."
+    },
+    "TOKEN_ENV": {
+      "decision": "not_secret",
+      "reason": "A shell variable local to hermes-hook-shim.sh."
+    },
+    "TOKEN_FILE": {
+      "decision": "not_secret",
+      "reason": "A shell variable local to hermes-hook-shim.sh."
+    },
+    "AUTH_HEADER": {
+      "decision": "not_secret",
+      "reason": "A shell variable local to hermes-hook-shim.sh."
+    }
+  }
+}

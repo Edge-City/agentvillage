@@ -46,7 +46,8 @@ def test_village_tools_get_a_verb_and_no_arguments(plugin, fake_display):
     for name in ("record_intention", "share_digest", "village_vote"):
         assert line(fake_display, name) == "Noting that"
     assert plugin.VILLAGE_VERBS["index_enrich_my_profile"] == "Working on Index"
-    assert len(plugin.VILLAGE_VERBS) == 3 * 14 + 1 + 3
+    assert line(fake_display, "village", '{"operation":"rolodex.search","query":"private person"}') == "Checking your village"
+    assert len(plugin.VILLAGE_VERBS) == 3 * 14 + 1 + 3 + 1
 
 
 def test_web_search_and_web_extract_keep_their_preview(plugin, fake_display):

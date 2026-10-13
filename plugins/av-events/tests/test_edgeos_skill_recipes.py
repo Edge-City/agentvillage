@@ -244,7 +244,7 @@ def test_the_skill_says_the_api_key_cannot_reach_the_directory_or_profile():
         assert "human session token only" in body.splitlines()[0], number
     # The directory and profile recipes carry the human bearer, never the key.
     for heading in ("Search attendees in a popup", "Read the calling user's profile", "Update basic profile fields"):
-        assert "<EDGEOS_BEARER_TOKEN>" in recipe(heading) and "<EDGEOS_API_KEY>" not in recipe(heading), heading
+        assert "$EDGEOS_BEARER_TOKEN" in recipe(heading) and "EDGEOS_API_KEY" not in recipe(heading), heading
 
 
 def test_the_participants_recipe_names_one_event():

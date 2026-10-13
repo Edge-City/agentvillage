@@ -24,11 +24,12 @@
  * loader is taken out by the next ON run, so the plugin's own negotiator.js never runs beside it.
  * S1: an active.json naming another release withholds every ON run not handed a release.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import YAML from "yaml";
 
 import {
@@ -39,14 +40,17 @@ import {
   MORNING_JOB,
   MORNING_LAUNCHER,
   NEGOTIATOR_SEED,
+  SIDECAR_ANCHOR,
   SIDECAR_PATCHED,
+  SIDECAR_PATCHED_V1,
   indexPluginFailedLine,
   installIndexPlugin,
   installMetadataPath,
   negotiatorPath,
+  patchSidecarSource,
   recordIndexPluginStatus,
 } from "../install_index_plugin";
-import { managedLoaderSource } from "../moralmod_host";
+import { managedLoaderSource, managedRuntimeReplaceable } from "../moralmod_host";
 import { morningSource } from "../moralmod_morning";
 import { INDEX_PLUGIN_REVISION, MORALMOD_HOOK_VERSION, MORALMOD_RELEASE_SHA256, installMoralmodRelease } from "../moralmod_release";
 import { installStatusPath, writeInstallStatus } from "../install_status";
@@ -55,6 +59,7 @@ const ENV_KEYS = ["HERMES_HOME", "INDEX_API_KEY", MORALMOD_ARM_ENV, "MORALMOD_RE
 const savedEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
 const ARGV = ["bun", "install.ts", "--index-api-key", "ix_arm_pin_test"];
 const FRESH = ["plugins", "install", INDEX_PLUGIN_SOURCE, "--ref", INDEX_PLUGIN_REF, "--no-enable"];
+const FORCED = ["plugins", "install", INDEX_PLUGIN_SOURCE, "--force", "--ref", INDEX_PLUGIN_REF, "--no-enable"];
 const BASE = "plugins:\n  enabled:\n    - av-events\n";
 const OFF_LINE = `→ index-network plugin: off (${MORALMOD_ARM_ENV} is not on); MoralMod release or resident config present, not activated: the managed negotiator runs only for ON`;
 const UNPINNED_LINE = "  warning: index-network plugin: not enabled, MoralMod release not pinned (its release.json is not MORALMOD_RELEASE_SHA256)";
@@ -92,11 +97,12 @@ afterEach(() => {
  * A self-consistent release (every file matches its own release.json) and a valid 0600 resident
  * config, both handed to the installer as an operator would; returns the release.json's sha256.
  */
-function supplyRelease(): string {
-  const source = join(outside, "release");
+function supplyRelease(variant = ""): string {
+  const source = join(outside, variant ? `release-${variant}` : "release");
   mkdirSync(source, { recursive: true });
   const content = {
-    "negotiator-core.js": "export const hookVersion='moralmod-lifecycle-2';",
+    // A variant is a second, distinct release (another release.json digest), as a new build is.
+    "negotiator-core.js": "export const hookVersion='moralmod-lifecycle-2';" + (variant ? `\n// release ${variant}\n` : ""),
     "negotiator-runtime.js": "export async function startResident(){return {port:1,stop(){}}}",
     "INDEX-LICENSE": "fixture MIT license",
   };
@@ -160,6 +166,7 @@ function recorder() {
     calls.push(args);
     if (args[0] === "plugins" && args[1] === "install") {
       const dest = join(home, "plugins", INDEX_PLUGIN);
+      if (args.includes("--force")) rmSync(dest, { recursive: true, force: true });
       mkdirSync(join(home, "plugins"), { recursive: true });
       if (Bun.spawnSync(["git", "clone", "--quiet", pluginRepo, dest]).exitCode !== 0) throw new Error("clone failed");
       if (Bun.spawnSync(["git", "checkout", "--quiet", INDEX_PLUGIN_REVISION], { cwd: dest }).exitCode !== 0) throw new Error("checkout failed");
@@ -521,6 +528,525 @@ describe("ov#282 M1: a plugin reinstall on an activated box keeps the receipt va
     },
     60_000,
   );
+});
+
+describe("automatic managed reinstalls validate the runtime before replacing the plugin", () => {
+  for (const receipt of [true, false]) {
+    for (const customization of ["modified upstream", "replacement runtime"] as const) {
+      test.skipIf(!havePlugin)(`${customization}, receipt ${receipt}: missing install metadata cannot authorize replacement`, () => {
+        process.env[MORALMOD_ARM_ENV] = "on";
+        writeFileSync(join(home, "config.yaml"), BASE);
+        const pin = supplyRelease();
+        expect(step(recorder().run, true, pin)).toMatchObject({ state: "installed", failed: null });
+        const plugin = join(home, "plugins", INDEX_PLUGIN);
+        const root = join(home, "index/moralmod");
+        const runtime = join(plugin, "runtime/dist/negotiator.js");
+        const upstream = Bun.spawnSync(["git", "show", "HEAD:runtime/dist/negotiator.js"], { cwd: plugin }).stdout.toString();
+        const customized = customization === "modified upstream"
+          ? upstream + "\n// resident customization\n"
+          : "export function negotiate() { return 'resident implementation'; }\n";
+        expect(customized).not.toContain("Managed MoralMod lifecycle");
+        expect(customized).not.toContain("/index/moralmod/");
+        writeFileSync(runtime, customized);
+        writeFileSync(join(plugin, "resident-notes.txt"), "keep the existing plugin tree\n");
+        writeFileSync(join(root, "fallback.sqlite"), "queued research evidence\n");
+        rmSync(installMetadataPath(home));
+        if (!receipt) rmSync(join(root, "active.json"));
+        const { calls, run } = recorder();
+        for (let retry = 0; retry < 2; retry++) {
+          expect(step(run, true, pin)).toMatchObject({ state: "failed", failed: "sidecar" });
+          expect(calls).toEqual([]);
+          expect(readFileSync(runtime, "utf8")).toBe(customized);
+          expect(readFileSync(join(plugin, "resident-notes.txt"), "utf8")).toBe("keep the existing plugin tree\n");
+          expect(readFileSync(join(root, "fallback.sqlite"), "utf8")).toBe("queued research evidence\n");
+          expect(enabled()).toEqual(["av-events"]);
+          expect(existsSync(installMetadataPath(home))).toBe(false);
+        }
+      });
+    }
+
+    for (const content of ["managed loader", "pinned upstream"] as const) {
+      test.skipIf(!havePlugin)(`${content}, receipt ${receipt}: missing install metadata permits a verified reinstall`, () => {
+        process.env[MORALMOD_ARM_ENV] = "on";
+        writeFileSync(join(home, "config.yaml"), BASE);
+        const pin = supplyRelease();
+        expect(step(recorder().run, true, pin)).toMatchObject({ state: "installed", failed: null });
+        const plugin = join(home, "plugins", INDEX_PLUGIN);
+        const root = join(home, "index/moralmod");
+        const runtime = join(plugin, "runtime/dist/negotiator.js");
+        if (content === "pinned upstream") {
+          expect(Bun.spawnSync(["git", "checkout", "--", "runtime/dist/negotiator.js"], { cwd: plugin }).exitCode).toBe(0);
+        }
+        rmSync(installMetadataPath(home));
+        if (!receipt) rmSync(join(root, "active.json"));
+        const { calls, run } = recorder();
+        expect(step(run, true, pin)).toMatchObject({ state: "installed", failed: null });
+        expect(calls).toEqual([["plugins", "install", INDEX_PLUGIN_SOURCE, "--force", "--ref", INDEX_PLUGIN_REF, "--no-enable"]]);
+        expect(readFileSync(runtime, "utf8")).toBe(managedLoaderSource(home, join(root, pin)));
+        expect(JSON.parse(readFileSync(join(root, "active.json"), "utf8"))).toMatchObject({ installed: true, entry_sha256: sha256(readFileSync(runtime)) });
+        expect(enabled()).toEqual(["av-events", INDEX_PLUGIN]);
+      });
+    }
+  }
+
+  for (const invalid of ["symlink", "directory", "missing checkout"] as const) {
+    test.skipIf(!havePlugin)(`${invalid}: existing runtime must be verifiable before a managed reinstall`, () => {
+      process.env[MORALMOD_ARM_ENV] = "on";
+      writeFileSync(join(home, "config.yaml"), BASE);
+      const pin = supplyRelease();
+      expect(step(recorder().run, true, pin)).toMatchObject({ state: "installed", failed: null });
+      const plugin = join(home, "plugins", INDEX_PLUGIN);
+      const runtime = join(plugin, "runtime/dist/negotiator.js");
+      const upstream = Bun.spawnSync(["git", "show", "HEAD:runtime/dist/negotiator.js"], { cwd: plugin }).stdout.toString();
+      rmSync(runtime);
+      if (invalid === "symlink") {
+        writeFileSync(join(outside, "runtime.js"), upstream);
+        fs.symlinkSync(join(outside, "runtime.js"), runtime);
+      } else if (invalid === "directory") {
+        mkdirSync(runtime);
+      } else {
+        writeFileSync(runtime, upstream);
+        rmSync(join(plugin, ".git"), { recursive: true });
+      }
+      rmSync(installMetadataPath(home));
+      const { calls, run } = recorder();
+      expect(step(run, true, pin)).toMatchObject({ state: "failed", failed: "sidecar" });
+      expect(calls).toEqual([]);
+      expect(enabled()).toEqual(["av-events"]);
+      if (invalid === "symlink") {
+        expect(fs.lstatSync(runtime).isSymbolicLink()).toBe(true);
+        expect(readFileSync(join(outside, "runtime.js"), "utf8")).toBe(upstream);
+      } else if (invalid === "directory") {
+        expect(fs.lstatSync(runtime).isDirectory()).toBe(true);
+      } else {
+        expect(readFileSync(runtime, "utf8")).toBe(upstream);
+        expect(existsSync(join(plugin, ".git"))).toBe(false);
+      }
+    });
+  }
+});
+
+describe("automatic managed reinstalls preserve morning and sidecar adapters", () => {
+  for (const file of ["morning.py", "sidecar.py"] as const) {
+    for (const receipt of [true, false]) {
+      for (const metadata of ["present", "missing"] as const) {
+        test.skipIf(!havePlugin)(`${file}, receipt ${receipt}, metadata ${metadata}: customized adapter survives repeated retries`, () => {
+          process.env[MORALMOD_ARM_ENV] = "on";
+          writeFileSync(join(home, "config.yaml"), BASE);
+          const pin = supplyRelease();
+          expect(step(recorder().run, true, pin)).toMatchObject({ state: "installed", failed: null });
+          const root = join(home, "index/moralmod"), plugin = join(home, "plugins", INDEX_PLUGIN);
+          const path = join(plugin, file), customized = readFileSync(path, "utf8") + "\n# resident customization\n";
+          writeFileSync(path, customized);
+          writeFileSync(join(root, "fallback.sqlite"), "queued research evidence\n");
+          if (!receipt) rmSync(join(root, "active.json"));
+          if (metadata === "missing") rmSync(installMetadataPath(home));
+          const { calls, run } = recorder();
+          for (let retry = 0; retry < 2; retry++) {
+            const result = step(run, true, pin);
+            if (metadata === "missing" || file === "morning.py")
+              expect(result).toMatchObject({ state: "failed", failed: "sidecar" });
+            else expect(result).toMatchObject({ state: "pinned", failed: null });
+            expect(calls).toEqual([]);
+            expect(readFileSync(path, "utf8")).toBe(customized);
+            expect(readFileSync(join(root, "fallback.sqlite"), "utf8")).toBe("queued research evidence\n");
+            if (metadata === "missing" || file === "morning.py") expect(enabled()).toEqual(["av-events"]);
+          }
+        });
+      }
+    }
+
+    test.skipIf(!havePlugin)(`${file}: customization of upstream bytes is preserved before a forced reinstall`, () => {
+      process.env[MORALMOD_ARM_ENV] = "on";
+      writeFileSync(join(home, "config.yaml"), BASE);
+      const pin = supplyRelease();
+      expect(step(recorder().run, true, pin)).toMatchObject({ state: "installed", failed: null });
+      const plugin = join(home, "plugins", INDEX_PLUGIN), path = join(plugin, file);
+      const upstream = Bun.spawnSync(["git", "show", `HEAD:${file}`], { cwd: plugin }).stdout.toString();
+      const customized = upstream + "\n# resident customization\n";
+      writeFileSync(path, customized);
+      rmSync(installMetadataPath(home));
+      const { calls, run } = recorder();
+      expect(step(run, true, pin)).toMatchObject({ state: "failed", failed: "sidecar" });
+      expect(calls).toEqual([]);
+      expect(readFileSync(path, "utf8")).toBe(customized);
+    });
+
+    // ov#288 refute M1: a missing adapter has nothing to protect; it is reinstalled (below).
+    for (const invalid of ["symlink", "directory"] as const) {
+      test.skipIf(!havePlugin)(`${file}, ${invalid}: unverifiable adapter is preserved before reinstall`, () => {
+        process.env[MORALMOD_ARM_ENV] = "on";
+        writeFileSync(join(home, "config.yaml"), BASE);
+        const pin = supplyRelease();
+        expect(step(recorder().run, true, pin)).toMatchObject({ state: "installed", failed: null });
+        const path = join(home, "plugins", INDEX_PLUGIN, file), original = readFileSync(path, "utf8");
+        rmSync(path);
+        if (invalid === "symlink") {
+          writeFileSync(join(outside, file), original);
+          fs.symlinkSync(join(outside, file), path);
+        } else if (invalid === "directory") mkdirSync(path);
+        rmSync(installMetadataPath(home));
+        const { calls, run } = recorder();
+        expect(step(run, true, pin)).toMatchObject({ state: "failed", failed: "sidecar" });
+        expect(calls).toEqual([]);
+        expect(enabled()).toEqual(["av-events"]);
+        if (invalid === "symlink") {
+          expect(fs.lstatSync(path).isSymbolicLink()).toBe(true);
+          expect(readFileSync(join(outside, file), "utf8")).toBe(original);
+        } else expect(fs.lstatSync(path).isDirectory()).toBe(true);
+      });
+    }
+
+    for (const receipt of [true, false]) {
+      test.skipIf(!havePlugin)(`${file}, missing, receipt ${receipt}, install record lost: nothing to protect, so run 1 reinstalls (installed) and activates, run 2 is pinned (ov#288 refute M1)`, () => {
+        process.env[MORALMOD_ARM_ENV] = "on";
+        writeFileSync(join(home, "config.yaml"), BASE);
+        const pin = supplyRelease();
+        expect(step(recorder().run, true, pin)).toMatchObject({ state: "installed", failed: null });
+        const plugin = join(home, "plugins", INDEX_PLUGIN), root = join(home, "index/moralmod");
+        const path = join(plugin, file), managedBytes = readFileSync(path, "utf8");
+        rmSync(path);
+        rmSync(installMetadataPath(home));
+        if (!receipt) rmSync(join(root, "active.json"));
+        const first = recorder();
+        expect(step(first.run, true, pin)).toMatchObject({ state: "installed", failed: null });
+        expect(first.calls).toEqual([FORCED]);
+        expect(readFileSync(path, "utf8")).toBe(managedBytes);
+        expect(readFileSync(join(plugin, "runtime/dist/negotiator.js"), "utf8")).toBe(managedLoaderSource(home, join(root, pin)));
+        expect(enabled()).toEqual(["av-events", INDEX_PLUGIN]);
+        const second = recorder();
+        expect(step(second.run, true, pin)).toMatchObject({ state: "pinned", failed: null });
+        expect(second.calls).toEqual([]);
+      });
+    }
+  }
+
+  for (const content of ["upstream morning", "upstream sidecar", "v1 sidecar", "v2 sidecar"] as const) {
+    test.skipIf(!havePlugin)(`${content}: verified adapter reinstall succeeds without an activation receipt`, () => {
+      process.env[MORALMOD_ARM_ENV] = "on";
+      writeFileSync(join(home, "config.yaml"), BASE);
+      const pin = supplyRelease();
+      expect(step(recorder().run, true, pin)).toMatchObject({ state: "installed", failed: null });
+      const plugin = join(home, "plugins", INDEX_PLUGIN), root = join(home, "index/moralmod");
+      const file = content === "upstream morning" ? "morning.py" : "sidecar.py";
+      const upstream = Bun.spawnSync(["git", "show", `HEAD:${file}`], { cwd: plugin }).stdout.toString();
+      const source = content === "v1 sidecar" ? upstream.replace(SIDECAR_ANCHOR, () => SIDECAR_PATCHED_V1)
+        : content === "v2 sidecar" ? upstream.replace(SIDECAR_ANCHOR, () => SIDECAR_PATCHED.replace(', "AV_MORALMOD_ARM"', "")) : upstream;
+      writeFileSync(join(plugin, file), source);
+      rmSync(installMetadataPath(home));
+      rmSync(join(root, "active.json"));
+      const { calls, run } = recorder();
+      expect(step(run, true, pin)).toMatchObject({ state: "installed", failed: null });
+      expect(calls).toEqual([["plugins", "install", INDEX_PLUGIN_SOURCE, "--force", "--ref", INDEX_PLUGIN_REF, "--no-enable"]]);
+      const baseMorning = Bun.spawnSync(["git", "show", "HEAD:morning.py"], { cwd: plugin }).stdout.toString();
+      const baseSidecar = Bun.spawnSync(["git", "show", "HEAD:sidecar.py"], { cwd: plugin }).stdout.toString();
+      expect(readFileSync(join(plugin, "morning.py"), "utf8")).toBe(morningSource(baseMorning));
+      expect(readFileSync(join(plugin, "sidecar.py"), "utf8")).toBe(baseSidecar.replace(SIDECAR_ANCHOR, () => SIDECAR_PATCHED));
+      expect(readFileSync(join(plugin, "runtime/dist/negotiator.js"), "utf8")).toBe(managedLoaderSource(home, join(root, pin)));
+      expect(enabled()).toEqual(["av-events", INDEX_PLUGIN]);
+    });
+  }
+});
+
+/**
+ * ov#288 refute M1: the checks before a forced reinstall compare each managed file with the box's
+ * own checkout (`HEAD`, whatever revision it is at), not with the revision the overlay now pins, and
+ * a missing file is reinstalled (there is nothing to protect).
+ *
+ * The overlay's pins are constants, so a plugin bump is modelled from the box's side: its checkout is
+ * at a revision other than `INDEX_PLUGIN_REF` and holds exactly what an overlay pinned at that
+ * revision left (the patched sidecar.py; for an activated box the managed morning.py and the loader;
+ * Hermes's install record at that revision). The overlay then runs as pinned and is handed a new
+ * release, as on the first run after a real bump. Two other revisions: a fixture commit on the pin
+ * that rebuilds runtime/dist/negotiator.js and changes morning.py and sidecar.py upstream, and the
+ * plugin's real 7f4c3ed5 (upstream's head after the pin; of the managed files only
+ * runtime/dist/negotiator.js differs), when the plugin test checkout has it.
+ */
+const BUMPED = "7f4c3ed5d656f3572ccaa90ab8b4105268fbe866";
+const haveBumped = havePlugin && Bun.spawnSync(["git", "cat-file", "-e", `${BUMPED}^{commit}`], { cwd: pluginRepo }).exitCode === 0;
+
+function git(cwd: string, ...args: string[]): string {
+  const result = Bun.spawnSync(["git", ...args], { cwd });
+  if (result.exitCode !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr.toString()}`);
+  return result.stdout.toString();
+}
+
+/** Moves the box's plugin checkout off the pin, as an overlay pinned at the other revision would have left it; returns that revision. */
+function moveCheckout(revision: "fixture" | typeof BUMPED, activated: boolean): string {
+  const plugin = join(home, "plugins", INDEX_PLUGIN);
+  const runtime = join(plugin, "runtime/dist/negotiator.js");
+  const loader = activated ? readFileSync(runtime, "utf8") : null;
+  git(plugin, "checkout", "--quiet", "--force", INDEX_PLUGIN_REVISION);
+  if (revision === "fixture") {
+    for (const [file, line] of [["runtime/dist/negotiator.js", "// upstream rebuild"], ["morning.py", "# upstream change"], ["sidecar.py", "# upstream change"]] as const)
+      writeFileSync(join(plugin, file), readFileSync(join(plugin, file), "utf8") + `\n${line} after the pin\n`);
+    git(plugin, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "--quiet", "--no-verify", "-am", "upstream after the pin");
+  } else git(plugin, "checkout", "--quiet", revision);
+  const head = git(plugin, "rev-parse", "HEAD").trim();
+  expect(head).not.toBe(INDEX_PLUGIN_REF);
+  const sidecar = patchSidecarSource(git(plugin, "show", "HEAD:sidecar.py"));
+  if ("reason" in sidecar) throw new Error(sidecar.reason);
+  writeFileSync(join(plugin, "sidecar.py"), sidecar.source);
+  if (loader !== null) {
+    writeFileSync(join(plugin, "morning.py"), morningSource(git(plugin, "show", "HEAD:morning.py")));
+    writeFileSync(runtime, loader);
+  }
+  writeFileSync(installMetadataPath(home), JSON.stringify({ [INDEX_PLUGIN]: { pinned: true, revision: head, source: "https://github.com/indexnetwork/hermes-plugin.git" } }));
+  return head;
+}
+
+describe("ov#288 refute M1: a plugin bump reinstalls a managed box, and a missing managed file is reinstalled", () => {
+  for (const [label, revision, have] of [["fixture revision", "fixture", havePlugin], ["real revision 7f4c3ed5", BUMPED, haveBumped]] as const) {
+    for (const activated of [true, false]) {
+      test.skipIf(!have)(`bump from the ${label}, ${activated ? "box activated with release A" : "box provisioned plain, never activated"}: handed release B, run 1 reinstalls at the pin (installed) and activates B, run 2 is pinned`, () => {
+        process.env[MORALMOD_ARM_ENV] = "on";
+        writeFileSync(join(home, "config.yaml"), BASE);
+        const plugin = join(home, "plugins", INDEX_PLUGIN), root = join(home, "index/moralmod");
+        const runtime = join(plugin, "runtime/dist/negotiator.js");
+        if (activated) {
+          const pinA = supplyRelease("a");
+          expect(step(recorder().run, true, pinA)).toMatchObject({ state: "installed", failed: null });
+          writeFileSync(join(root, "fallback.sqlite"), "queued research evidence\n");
+        } else {
+          expect(step(recorder().run, true)).toMatchObject({ state: "installed", failed: null });
+          expect(existsSync(root)).toBe(false);
+        }
+        expect(enabled()).toEqual(["av-events", INDEX_PLUGIN]);
+        moveCheckout(revision, activated);
+        const pinB = supplyRelease("b");
+        const first = recorder();
+        const result = step(first.run, true, pinB);
+        expect([result.state, result.failed, result.lines.filter((l) => l.includes("warning"))]).toEqual(["installed", null, activated ? [expect.stringContaining("a managed loader on disk is not MORALMOD_RELEASE_SHA256's release")] : []]);
+        expect(first.calls).toEqual([FORCED]);
+        expect(git(plugin, "rev-parse", "HEAD").trim()).toBe(INDEX_PLUGIN_REF);
+        expect(readFileSync(runtime, "utf8")).toBe(managedLoaderSource(home, join(root, pinB)));
+        expect(JSON.parse(readFileSync(join(root, "active.json"), "utf8"))).toMatchObject({ release_digest: pinB, installed: true, entry_sha256: sha256(readFileSync(runtime)) });
+        expect(readFileSync(join(plugin, "morning.py"), "utf8")).toBe(morningSource(git(plugin, "show", "HEAD:morning.py")));
+        expect(readFileSync(join(plugin, "sidecar.py"), "utf8")).toBe(git(plugin, "show", "HEAD:sidecar.py").replace(SIDECAR_ANCHOR, () => SIDECAR_PATCHED));
+        expect(enabled()).toEqual(["av-events", INDEX_PLUGIN]);
+        if (activated) expect(readFileSync(join(root, "fallback.sqlite"), "utf8")).toBe("queued research evidence\n");
+        const second = recorder();
+        expect(step(second.run, true, pinB)).toMatchObject({ state: "pinned", failed: null });
+        expect(second.calls).toEqual([]);
+        expect(readFileSync(runtime, "utf8")).toBe(managedLoaderSource(home, join(root, pinB)));
+        expect(enabled()).toEqual(["av-events", INDEX_PLUGIN]);
+      });
+    }
+
+    test.skipIf(!have)(`bump from the ${label}: a customized runtime, morning.py or sidecar.py is still kept and the plugin withheld (sidecar), with no Hermes call`, () => {
+      for (const file of ["runtime/dist/negotiator.js", "morning.py", "sidecar.py"]) {
+        rmSync(join(home, "plugins"), { recursive: true, force: true });
+        rmSync(join(home, "index"), { recursive: true, force: true });
+        delete process.env.MORALMOD_RELEASE_DIR;
+        delete process.env.MORALMOD_RESIDENT_CONFIG;
+        process.env[MORALMOD_ARM_ENV] = "on";
+        writeFileSync(join(home, "config.yaml"), BASE);
+        expect(step(recorder().run, true)).toMatchObject({ state: "installed", failed: null });
+        moveCheckout(revision, false);
+        const path = join(home, "plugins", INDEX_PLUGIN, file);
+        const customized = readFileSync(path, "utf8") + "\n// resident customization\n";
+        writeFileSync(path, customized);
+        const pinB = supplyRelease("b");
+        const { calls, run } = recorder();
+        expect([file, step(run, true, pinB)]).toMatchObject([file, { state: "failed", failed: "sidecar" }]);
+        expect([file, calls]).toEqual([file, []]);
+        expect(readFileSync(path, "utf8")).toBe(customized);
+        expect(enabled()).toEqual(["av-events"]);
+      }
+    });
+  }
+
+  for (const receipt of [true, false]) {
+    test.skipIf(!havePlugin)(`missing runtime, install record lost, receipt ${receipt}: run 1 reinstalls (installed) and activates, run 2 is pinned`, () => {
+      process.env[MORALMOD_ARM_ENV] = "on";
+      writeFileSync(join(home, "config.yaml"), BASE);
+      const pin = supplyRelease();
+      expect(step(recorder().run, true, pin)).toMatchObject({ state: "installed", failed: null });
+      const root = join(home, "index/moralmod");
+      const runtime = join(home, "plugins", INDEX_PLUGIN, "runtime/dist/negotiator.js");
+      rmSync(runtime);
+      rmSync(installMetadataPath(home));
+      if (!receipt) rmSync(join(root, "active.json"));
+      const first = recorder();
+      expect(step(first.run, true, pin)).toMatchObject({ state: "installed", failed: null });
+      expect(first.calls).toEqual([FORCED]);
+      expect(readFileSync(runtime, "utf8")).toBe(managedLoaderSource(home, join(root, pin)));
+      expect(enabled()).toEqual(["av-events", INDEX_PLUGIN]);
+      const second = recorder();
+      expect(step(second.run, true, pin)).toMatchObject({ state: "pinned", failed: null });
+      expect(second.calls).toEqual([]);
+    });
+  }
+
+  test("managedRuntimeReplaceable: no file, or our exact loader for a release directory of this home, may be replaced; a loader for another home or another directory, a changed loader, unverifiable bytes, a directory or a link may not", () => {
+    const runtime = join(home, "plugins", INDEX_PLUGIN, "runtime/dist/negotiator.js");
+    mkdirSync(dirname(runtime), { recursive: true });
+    expect(managedRuntimeReplaceable(home)).toBe(true);
+    const ours = managedLoaderSource(home, join(home, "index/moralmod", "a".repeat(64)));
+    writeFileSync(runtime, ours);
+    expect(managedRuntimeReplaceable(home)).toBe(true);
+    const others: [string, string][] = [
+      ["generated for another home", managedLoaderSource(outside, join(outside, "index/moralmod", "a".repeat(64)))],
+      ["this home's config, another home's release directory", managedLoaderSource(home, join(outside, "index/moralmod", "a".repeat(64)))],
+      ["a directory that is not a release digest", managedLoaderSource(home, join(home, "index/moralmod", "resident-custom-runtime"))],
+      ["an uppercase digest", managedLoaderSource(home, join(home, "index/moralmod", "A".repeat(64)))],
+      ["changed", ours + "// resident\n"],
+      ["no checkout to verify against", "// upstream negotiator\n"],
+    ];
+    for (const [label, body] of others) {
+      writeFileSync(runtime, body);
+      expect([label, managedRuntimeReplaceable(home)]).toEqual([label, false]);
+    }
+    rmSync(runtime);
+    writeFileSync(join(outside, "loader.js"), ours);
+    fs.symlinkSync(join(outside, "loader.js"), runtime);
+    expect(["link", managedRuntimeReplaceable(home)]).toEqual(["link", false]);
+    rmSync(runtime);
+    mkdirSync(runtime);
+    expect(["directory", managedRuntimeReplaceable(home)]).toEqual(["directory", false]);
+  });
+
+  // A read-only directory stops a write only for a user other than root.
+  test.skipIf(!havePlugin || process.getuid?.() === 0)("a handed run whose retirement of an unpinned loader cannot finish is withheld (sidecar) before any Hermes call, even with the install record lost", () => {
+    process.env[MORALMOD_ARM_ENV] = "on";
+    writeFileSync(join(home, "config.yaml"), BASE);
+    const pin = supplyRelease();
+    expect(step(recorder().run, true, pin)).toMatchObject({ state: "installed", failed: null });
+    const dist = join(home, "plugins", INDEX_PLUGIN, "runtime/dist");
+    const loader = managedLoaderSource(home, join(home, "index/moralmod", "d".repeat(64)));
+    writeFileSync(join(dist, "negotiator.js"), loader);
+    rmSync(installMetadataPath(home));
+    chmodSync(dist, 0o555);
+    try {
+      const { calls, run } = recorder();
+      expect(step(run, true, pin)).toMatchObject({ state: "failed", failed: "sidecar" });
+      expect(calls).toEqual([]);
+      expect(readFileSync(join(dist, "negotiator.js"), "utf8")).toBe(loader);
+      expect(enabled()).toEqual(["av-events"]);
+    } finally {
+      chmodSync(dist, 0o755);
+    }
+  });
+});
+
+/**
+ * ov#284's take-it-out rule stands (lead ruling, 11 Oct 14:55Z; ov#288 refute M2): a loader with the
+ * managed marker that is not the pinned release's exact loader is taken out on every ON run and on
+ * OFF, whoever changed it. Its bytes are never run, never kept beside a withheld plugin and never left
+ * on an OFF box. The next handed run writes a fresh loader. The resident's own files beside it stay.
+ */
+describe("ov#284 take-it-out rule: a changed managed loader is taken out on ON retries, reinstalls and OFF, never kept or run; interrupted activation recovers", () => {
+  const LOCAL = "export const residentCustomization = true;\n";
+  /** The pinned release activated, then its loader changed as `kind` says. */
+  function changedLoader(kind: "local runtime import" | "appended code") {
+    process.env[MORALMOD_ARM_ENV] = "on";
+    writeFileSync(join(home, "config.yaml"), BASE);
+    const pin = supplyRelease();
+    expect(step(recorder().run, true, pin)).toMatchObject({ state: "installed", failed: null });
+    const root = join(home, "index/moralmod"), plugin = join(home, "plugins", INDEX_PLUGIN);
+    const runtime = join(plugin, "runtime/dist/negotiator.js");
+    const local = join(root, "resident-custom-runtime", "negotiator-runtime.js");
+    mkdirSync(dirname(local));
+    writeFileSync(local, LOCAL);
+    const loader = readFileSync(runtime, "utf8");
+    const changed = kind === "local runtime import"
+      ? loader.replace(JSON.stringify(join(root, pin, "negotiator-runtime.js")), JSON.stringify(local))
+      : loader + "\n// resident customization\n";
+    expect(changed).not.toBe(loader);
+    writeFileSync(runtime, changed);
+    writeFileSync(join(root, "fallback.sqlite"), "queued research evidence\n");
+    return { pin, root, plugin, runtime, local, changed };
+  }
+
+  for (const kind of ["local runtime import", "appended code"] as const) {
+    for (const receipt of [true, false]) {
+      for (const action of ["ON retry", "ON reinstall", "OFF"] as const) {
+        const expected = action === "OFF"
+          ? "off with nothing left: the plugin's own negotiator.js put back, the credential, receipt and release removed"
+          : action === "ON retry" ? "the loader taken out and the pinned release's loader written (pinned), twice"
+          : "the install record lost too: the loader taken out, then a verified reinstall (installed) and activation; run 2 pinned";
+        test.skipIf(!havePlugin)(`${kind}, receipt ${receipt}, ${action}: ${expected}; the changed bytes are gone, the resident's own runtime file and queued evidence stay`, () => {
+          const { pin, root, plugin, runtime, local, changed } = changedLoader(kind);
+          if (!receipt) rmSync(join(root, "active.json"));
+          if (action === "ON reinstall") rmSync(installMetadataPath(home));
+          if (action === "OFF") process.env[MORALMOD_ARM_ENV] = "off";
+          const upstream = git(plugin, "show", "HEAD:runtime/dist/negotiator.js");
+          for (const attempt of [1, 2]) {
+            const { calls, run } = recorder();
+            const result = step(run, true, pin);
+            if (action === "OFF") {
+              expect([attempt, result.state, result.failed]).toEqual([attempt, "off", null]);
+              expect(calls.filter((call) => call[1] === "install")).toEqual([]);
+              expect(readFileSync(runtime, "utf8")).toBe(upstream);
+              expect(readdirSync(root).sort()).toEqual(["fallback.sqlite", "resident-custom-runtime"]);
+              expect(enabled()).toEqual(["av-events"]);
+            } else {
+              const reinstalled = attempt === 1 && action === "ON reinstall";
+              expect([attempt, result.state, result.failed]).toEqual([attempt, reinstalled ? "installed" : "pinned", null]);
+              expect(calls).toEqual(reinstalled ? [FORCED] : []);
+              expect(readFileSync(runtime, "utf8")).toBe(managedLoaderSource(home, join(root, pin)));
+              expect(enabled()).toEqual(["av-events", INDEX_PLUGIN]);
+            }
+            expect(readFileSync(runtime, "utf8")).not.toBe(changed);
+            expect(readFileSync(local, "utf8")).toBe(LOCAL);
+            expect(readFileSync(join(root, "fallback.sqlite"), "utf8")).toBe("queued research evidence\n");
+          }
+        });
+      }
+    }
+  }
+
+  for (const leaf of ["a".repeat(63), "A".repeat(64), "a".repeat(64) + ".backup"]) {
+    test.skipIf(!havePlugin)(`OFF takes out a loader importing ${leaf} and puts the plugin's own negotiator.js back`, () => {
+      process.env[MORALMOD_ARM_ENV] = "on";
+      writeFileSync(join(home, "config.yaml"), BASE);
+      const pin = supplyRelease();
+      expect(step(recorder().run, true, pin)).toMatchObject({ state: "installed", failed: null });
+      const plugin = join(home, "plugins", INDEX_PLUGIN), runtime = join(plugin, "runtime/dist/negotiator.js");
+      writeFileSync(runtime, readFileSync(runtime, "utf8").replace(pin, leaf));
+      process.env[MORALMOD_ARM_ENV] = "off";
+      expect(step(recorder().run, true, pin)).toMatchObject({ state: "off", failed: null });
+      expect(readFileSync(runtime, "utf8")).toBe(git(plugin, "show", "HEAD:runtime/dist/negotiator.js"));
+    });
+  }
+
+  test("OFF without a pinned checkout deletes marker-only text and a loader generated for another home (nothing to put back)", () => {
+    const runtime = join(home, "plugins", INDEX_PLUGIN, "runtime/dist/negotiator.js");
+    mkdirSync(dirname(runtime), { recursive: true });
+    for (const changed of ["// Managed MoralMod lifecycle 2; resident code\n", managedLoaderSource(outside, join(outside, "index/moralmod", "a".repeat(64)))]) {
+      writeFileSync(runtime, changed);
+      expect(step(recorder().run)).toMatchObject({ state: "off", failed: null });
+      expect(existsSync(runtime)).toBe(false);
+    }
+  });
+
+  const rename = fs.renameSync;
+  for (const phase of ["before", "after"] as const) {
+    for (const target of ["resident.json", "runtime", "hook", "active.json"] as const) {
+      test.skipIf(!havePlugin)(`actual installer recovers after interruption ${phase} ${target}`, () => {
+        process.env[MORALMOD_ARM_ENV] = "on";
+        writeFileSync(join(home, "config.yaml"), BASE);
+        const pin = supplyRelease();
+        const runtime = join(home, "plugins", INDEX_PLUGIN, "runtime/dist/negotiator.js");
+        const root = join(home, "index/moralmod");
+        const path = target === "runtime" ? runtime : target === "hook" ? negotiatorPath(home) : join(root, target);
+        const interrupted = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+          if (String(to) === path && phase === "before") throw Error("controlled activation interruption");
+          rename(from, to);
+          if (String(to) === path && phase === "after") throw Error("controlled activation interruption");
+        });
+        try {
+          expect(step(recorder().run, true, pin)).toMatchObject({ state: "failed", failed: "sidecar" });
+        } finally { interrupted.mockRestore(); }
+        const { calls, run } = recorder();
+        expect(step(run, true, pin)).toMatchObject({ state: "pinned", failed: null });
+        expect(calls).toEqual([]);
+        expect(readFileSync(runtime, "utf8")).toBe(managedLoaderSource(home, join(root, pin)));
+        expect(JSON.parse(readFileSync(join(root, "active.json"), "utf8"))).toMatchObject({ installed: true, ready: false, entry_sha256: sha256(readFileSync(runtime)) });
+        expect(enabled()).toEqual(["av-events", INDEX_PLUGIN]);
+      });
+    }
+  }
 });
 
 describe("ov#277 refute S1: a managed loader on disk is held to the pin on every ON run", () => {

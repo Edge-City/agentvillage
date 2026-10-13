@@ -421,6 +421,8 @@ export function indexUrl(kind: "u" | "o" | "i", url: unknown): string | null {
 
 /** Portal forms of Index links. Cron Script Output never passes through the index-links plugin. */
 const PORTAL_WEB = "https://agents.edgecity.live";
+/** The Agent Village front page: the morning brief's one `villageLink`, near its end. */
+export const VILLAGE_LINK = PORTAL_WEB;
 const lastSegment = (url: string) => url.slice(url.lastIndexOf("/") + 1);
 const profileLink = (url: unknown) => { const u = indexUrl("u", url); return u && `${PORTAL_WEB}/rolodex?person=${lastSegment(u)}`; };
 const signalLink = (url: unknown) => { const u = indexUrl("i", url); return u && `${PORTAL_WEB}/intents?intent=${lastSegment(u)}`; };
@@ -597,7 +599,7 @@ export function withPreferences(view: Record<string, unknown>, raw: readonly str
 /**
  * The morning brief's Script Output. The Index part is a count, at most
  * three cleaned names, and the Connections link; no card text, no person
- * link. `shownIds` are the cards named, recorded as shown when the model is
+ * link. `villageLink` is the Agent Village front page, written once near the end. `shownIds` are the cards named, recorded as shown when the model is
  * woken (as the old send recorded the cards of the brief it delivered).
  */
 export function briefView(
@@ -641,6 +643,7 @@ export function briefView(
       link,
     },
     approvalsWaiting: Math.max(0, Math.trunc(approvals)) || 0,
+    villageLink: VILLAGE_LINK,
   };
   return { view, withheld: w.count, shownIds: named.flatMap((entry) => (entry.id ? [entry.id] : [])) };
 }

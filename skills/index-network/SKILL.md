@@ -19,6 +19,13 @@ Edge's bundle for surfacing opportunities through Edge City India's Index Networ
 
 Read `get_my_profile` only to use the profile that already exists. Call `update_my_profile` only when they explicitly correct a field. A new want and a question about who is waiting both follow [tools.md](tools.md). The welcome in `AGENTS.md` is a separate first-message greeting. Do not send it again from here.
 
+For a live private-chat reply about someone you recommended or an evening
+meeting question, load `rolodex`. Check that person's current mark before
+describing it; an accepted introduction is not proof they met. Let the owner
+reflect, then offer `gold-stars` if they want to thank someone. Recording an
+Index outcome, marking a Rolodex meeting and sending a star are separate
+actions. Scheduled jobs still follow their exact prompt and script output.
+
 ## Handoff
 
 The MCP server's own instructions carry the protocol-level rules (voice, vocabulary, entity model, output translation). Tool descriptions are authoritative; read them before calling. This skill adds only Edge City India-specific framing on top — never duplicate the MCP's behavioural guidance here.

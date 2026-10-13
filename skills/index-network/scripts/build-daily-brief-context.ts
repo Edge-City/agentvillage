@@ -41,11 +41,12 @@ import { writeStateFile } from "./state-file";
 /**
  * Resolve the Index API key.
  *
- * The hermes agent framework does not reliably pass environment variables to
- * cron subprocess chains, so `process.env.INDEX_API_KEY` can be missing (or
- * stale) when this script runs. Fall back to the persisted $HERMES_HOME/.env
- * file, which is the authoritative source written during tenant provisioning
- * and is always available on the pod volume.
+ * Agent-run code never has `INDEX_API_KEY` in its environment: the av-approval
+ * plugin's credential custody strips it from every terminal, cron-script and
+ * execute_code child (plugins/av-approval/_custody.py), and Hermes's cron
+ * scripts did not reliably carry it before that either. So the persisted
+ * $HERMES_HOME/.env, written during tenant provisioning, is the normal source;
+ * the environment wins only where something still sets it (a local run).
  */
 export function resolveIndexApiKey(): string | undefined {
   const fromEnv = process.env.INDEX_API_KEY?.trim();
@@ -60,10 +61,7 @@ export function resolveIndexApiKey(): string | undefined {
       const match = line.match(/^\s*(?:export\s+)?INDEX_API_KEY\s*=\s*(.*)$/);
       if (!match?.[1]) continue;
       const value = match[1].trim().replace(/^["']|["']$/g, "");
-      if (value) {
-        console.error("warning: INDEX_API_KEY resolved from .env fallback, not process.env");
-        return value;
-      }
+      if (value) return value;
     }
   } catch {
     // unreadable .env — treat as unavailable

@@ -77,6 +77,7 @@ def _village_verbs() -> Dict[str, str]:
     for prefix in INDEX_TOOL_PREFIXES:
         verbs.update({prefix + name: CHECKING_INDEX for name in INDEX_READ_TOOLS})
         verbs.update({prefix + name: WORKING_ON_INDEX for name in INDEX_CHANGE_TOOLS})
+    verbs["village"] = "Checking your village"
     verbs["recall"] = LOOKING_BACK  # plugins/recall TOOL_NAME
     for name in ("record_intention", "share_digest", "village_vote"):  # plugins/av-events
         verbs[name] = NOTING_THAT

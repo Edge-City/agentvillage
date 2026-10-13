@@ -19,6 +19,9 @@ export function skillsDir(): string {
 export const EDGE_SKILL_NAMES = [
   "index-network",
   "edgeos",
+  "rolodex",
+  "gold-stars",
+  "skylight",
   // Edge City India public village knowledge (the current event): read from the
   // local copy the "Edge — knowledge sync" job keeps (K1), with the snapshot
   // installed here as the fallback; never fetched in a turn.

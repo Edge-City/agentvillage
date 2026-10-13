@@ -293,6 +293,62 @@ runs with `NoNewPrivs=1`, so a setuid binary would be inert. The daemon runs as
 its own uid (`approvald`, 10001); the hook still runs as `hermes` and reads its
 token from a `hermes` file (above).
 
+## Credential custody (`av-approval`, approval code-gap lane 2)
+
+The gateway holds the service keys; the code the agent runs should not. Hermes
+v2026.9.24 already removes provider and messaging keys (OpenRouter, Groq, the
+Telegram bot token, Browserbase) from `terminal` and `execute_code` children,
+but not the overlay's own: measured against the real builders, `INDEX_API_KEY`,
+`AV_EVENTS_TOKEN` and `AV_BACKUP_TOKEN` reached every terminal command, skill
+script and cron script, and the terminal's session snapshot file on disk. With
+`INDEX_API_KEY` agent code could publish to Index without passing the gate.
+
+At every start, whatever `AV_APPROVAL_ENABLED` says (the config step lists the
+plugin on every tenant; with the switch unset its backstop registers no hook and
+blocks nothing), the plugin removes `INDEX_API_KEY`, `INDEX_SESSION_TOKEN`,
+`AV_EVENTS_TOKEN`, `AV_BACKUP_TOKEN` and `ADMIN_TOKEN` (a floor in the code, plus
+any more `plugins/av-approval/custody_keys.json` marks `strip`) from every
+agent-run child: a strip-only terminal provider for the background terminal, cron and
+other scripts and every non-terminal spawn (Hermes's `strip_env_keys`), and a
+wrap of the foreground terminal's and `execute_code`'s env builders, which at
+this Hermes ignore a plugin's strip list (the foreground) or let a skill's
+`required_environment_variables` re-admit a name (`execute_code`). The gateway
+itself keeps every key: the Index MCP client and av-events run inside it. Skill
+scripts that need a stripped key read `$HERMES_HOME/.env` themselves (the
+index-network scripts already do). A probe then checks the real path (a child
+spawned through the foreground builder must not see a canary). One log line
+names the covered surfaces; a warning names any it could not cover, a decisions
+file that dropped a floor name, or a Hermes other than the measured 0.21.5.
+
+Each credential-shaped name the overlay reads has a decision in that file
+(`strip`, `hermes`, `agent_readable`, `not_secret`) with its reason, and
+`plugins/av-approval/tests/test_custody.py` fails when a new one appears
+without one. `EDGEOS_API_KEY` and `EDGEOS_BEARER_TOKEN` stay readable: the
+EdgeOS skill's curls name them (`"$EDGEOS_API_KEY"`, never a pasted value) and
+av-events reads RSVPs from those curls; no approval class gates EdgeOS yet.
+
+**What it does not close.** `$HERMES_HOME/.env` and `/proc/<gateway pid>/environ`
+are readable by the agent's own user, so code the agent writes can still open
+them and read every key. Closing that needs agent-run code under a second unix
+user (the proposal in the lane's report). The only off switch is
+`av_approval: {custody: false}` in `config.yaml` (an operator sets it from a
+sandbox shell with `hermes config set av_approval.custody false`), one warning
+line; use it only to rule custody out while debugging. The hook treats a write to
+config.yaml as `policy.core` when it is spelled `~/.hermes/...` or
+`$HOME/.hermes/...`; the `$HERMES_HOME/...` spelling and the plugin directory
+(`plugins/av-approval/_custody.py`, which holds the floor of stripped names) are
+covered by approval-md APRV-511 (0.4.5), and until then an agent can reach both
+through those spellings.
+
+**Listing av-approval on every tenant closes one failure mode that used to be
+open.** A box with `AV_APPROVAL_ENABLED=1` and no hook files (a failed first
+approval install, or a control-plane rewire that writes the switch and restarts
+without running the installer, tenants.js:849-857) used to run ungated, because
+the plugin was not listed. Now the plugin loads, its backstop finds the hooks
+missing, and every gated tool is blocked until a restart with the hooks in
+place. That is the intended fail-closed reading; whether the control plane may
+flip the switch without an install is Carter's question.
+
 ## Uncovered surfaces
 
 What the gate does not see, or does not judge, today:

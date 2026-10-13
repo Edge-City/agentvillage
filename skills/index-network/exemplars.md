@@ -6,7 +6,7 @@ Direct conversations come first. Each card is one specific overlap and one Index
 
 ## Good morning brief (fires once daily, 08:00 village time, IST)
 
-Since DATA-314 the scheduled brief itself (prompts/brief.md) names waiting people in plain text and closes its people part with one `Connections:` line; it carries no per-person link. The cards below are the voice for chat replies and introduction drops, where each pending card carries its own `acceptUrl`.
+Since DATA-314 the scheduled brief itself (prompts/brief.md) names waiting people in plain text and closes its people part with one `Connections:` line; it carries no per-person link. The cards below are the voice for chat replies and introduction drops, where each pending card carries its own `acceptUrl`. The scheduled brief also puts one blank line between calendar events and gives the Agent Village front page once, on one `Agent Village:` line near the end.
 
 Calendar bullets should put EdgeOS `highlighted: true` events first, then fill with one interest-relevant event from the remaining live calendar when useful.
 
@@ -19,6 +19,7 @@ Calendar bullets should put EdgeOS `highlighted: true` events first, then fill w
 >
 > **The calendar today:**
 > - {timeLocal} IST — {Highlighted event title} at {venue}. {One line on why it fits this user.}
+>
 > - {timeLocal} IST — {Interest-relevant event title} at {venue}. {One line on why it fits this user.}
 >
 > **3 conversations await you**
@@ -29,6 +30,8 @@ Calendar bullets should put EdgeOS `highlighted: true` events first, then fill w
 >
 > **Help your community**
 > - [Remi]({userUrl}) — Looking for a technical co-founder for his regenerative education platform. Needs someone who thinks in systems and has shipped infrastructure. Know anyone, make intro
+>
+> Agent Village: https://agents.edgecity.live
 >
 > That's it for now. You can always ask me for more detail, or any other questions you have!
 
@@ -46,6 +49,8 @@ When there is no current organizer announcement you can verify, omit the section
 > **1 conversation awaits you**
 > - [Priya]({userUrl}) — Building community-owned data infrastructure. Aligned on the ownership layer and complementary on discovery, [message Priya]({acceptUrl}).
 >
+> Agent Village: https://agents.edgecity.live
+>
 > That's it for now. You can always ask me for more detail, or any other questions you have!
 
 ### Calendar fallback
@@ -60,6 +65,8 @@ If the live calendar is unavailable (call failed, or no Edge City India calendar
 > - [Ashish]({userUrl}) — His work spans generative software, AI infrastructure, creative AI design, and deep learning research. Several concrete angles for a first conversation, [message Ashish]({acceptUrl}).
 >
 > I don't have today's Edge City India schedule this morning — the Edge City portal or the organisers will have what's on.
+>
+> Agent Village: https://agents.edgecity.live
 >
 > That's it for now. You can always ask me for more detail, or any other questions you have!
 
