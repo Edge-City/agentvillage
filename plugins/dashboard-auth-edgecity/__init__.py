@@ -581,6 +581,44 @@ def _stored_session(session_id, profile=None, *, prefix):
     return {"id": row.get("id"), "user_id": row.get("user_id"), "source": row.get("source")}
 
 
+def _session_owners(ids, profile=None):
+    """`{id: {"id", "user_id", "source"}}` for the stored sessions among `ids` (exact ids, the
+    profile's store, read only, one open), for the gateway's list rows. Raises on a store failure
+    (the guard then refuses the list)."""
+    from hermes_cli.web_server_sessions import _open_session_db_for_profile
+
+    db = _open_session_db_for_profile(profile or None, read_only=True)
+    try:
+        out = {}
+        for session_id in dict.fromkeys(ids):
+            row = db.get_session(session_id)
+            if row:
+                out[session_id] = {"id": row.get("id"), "user_id": row.get("user_id"), "source": row.get("source")}
+        return out
+    finally:
+        db.close()
+
+
+def _session_list_page(query, limit, offset):
+    """One page of Hermes's own `GET /api/sessions` handler (`web_routers/sessions.py` `get_sessions`)
+    under the request's filters and order, compact rows only: what the guard builds a resident's
+    own list from. The handler has already answered this query with a 200, so its parameters are
+    valid; anything it raises refuses the list."""
+    from hermes_cli.web_routers.sessions import get_sessions
+
+    return get_sessions(
+        limit=limit, offset=offset, min_messages=int(query.get("min_messages", 0)),
+        archived=query.get("archived", "exclude"), order=query.get("order", "created"),
+        source=query.get("source"), sources=query.get("sources"), exclude_sources=query.get("exclude_sources"),
+        cwd_prefix=query.get("cwd_prefix"), full=False, profile=query.get("profile"))
+
+
+def _reference_parser(text):
+    from agent.context_references import parse_context_references
+
+    return parse_context_references(text)
+
+
 def _prompt_sanitizer(text):
     from hermes_cli.input_sanitize import sanitize_user_prompt_text
 
@@ -595,9 +633,11 @@ _PRIVATE_DIR_NAME = ".dashboard-auth-edgecity"
 
 def _harden_agent_reads() -> None:
     """S-new-2, the cheap half: the key store and this plugin's own directory join Hermes's agent
-    read deny-list (`agent.file_safety._READ_DENIED_DIRS`), so read_file and `@file:` refuse them.
-    Required: if the list is gone or reshaped, the plugin refuses to load, as for the HTTP seam.
-    The agent's terminal can still read the store; moving the key out of its reach is SEC-2."""
+    read deny-list (`agent.file_safety._READ_DENIED_DIRS`), so read_file and `@file:` refuse them,
+    and `@file:`/`@folder:` to a private path under HERMES_HOME is refused for every caller
+    (`harden_reference_reads`). Both required: if either seam is gone or reshaped, the plugin
+    refuses to load, as for the HTTP seam. The agent's terminal can still read the store; moving
+    the key out of its reach is SEC-2."""
     guard = _resident_guard
     try:
         from agent import file_safety
@@ -614,11 +654,15 @@ def _harden_agent_reads() -> None:
         from agent import context_references
 
         refs_ok = guard.harden_reference_reads(context_references)
-    except Exception:  # noqa: BLE001
-        refs_ok = False
+    except Exception as exc:  # noqa: BLE001
+        _log.error("dashboard-auth-edgecity: @file: private-path check NOT installed (%s); refusing to load",
+                   type(exc).__name__)
+        raise ResidentGuardNotInstalled(type(exc).__name__) from exc
     if not refs_ok:
-        # The gateway still refuses a resident's @file:/@folder: tokens and pins the chat's cwd.
-        _log.warning("dashboard-auth-edgecity: @file: private-path check not installed (seam_missing)")
+        # Required as the deny-list is (SEC1-refute2 N-r3-3): in the messaging gateway this check is
+        # the only line against @file: to config.yaml, plugin code, hooks and the key store.
+        _log.error("dashboard-auth-edgecity: @file: private-path check NOT installed (seam_missing); refusing to load")
+        raise ResidentGuardNotInstalled("references_seam_missing")
 
 
 def _files_module():
@@ -671,6 +715,9 @@ def _install_resident_guard() -> None:
     guard.set_loader("gateway", _gateway_modules)
     guard.set_loader("files", _files_module)
     guard.set_session_lookup(_stored_session)
+    guard.set_session_owners(_session_owners)
+    guard.set_session_list(_session_list_page)
+    guard.set_reference_parser(_reference_parser)
     guard.set_prompt_sanitizer(_prompt_sanitizer)
     if "tui_gateway.server" in sys.modules and "tui_gateway.ws" in sys.modules:
         guard._ensure("gateway")

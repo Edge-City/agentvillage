@@ -28,9 +28,11 @@ closed allow-list for every session that is not a landing admin, on three seams:
   on that connection's own chats (`GatewayView`): a frame that names another login's chat, answers
   a request raised on one, or answers an approval with anything but once, session or deny is
   refused (SEC1-refute2 M-new-1, S-new-1). A resident's chat runs in RESIDENT_CWD_NAME and its
-  prompts carry no `@file:` / `@folder:` (S-new-3).
-- **Session routes.** A listed `/api/sessions/{id}...` route answers a resident only for one of its
-  own stored sessions (`session_visible`).
+  prompts carry no `@folder:` and no `@file:` but to a file in RESIDENT_FILE_DIRS (S-new-3, S-r3-2).
+- **Session routes and lists.** A listed `/api/sessions/{id}...` route answers a resident only for
+  one of its own stored sessions (`session_visible`), and every session list a resident keeps
+  (`GET /api/sessions`, gateway `session.list` and `session.most_recent`) carries only those rows
+  (SEC1-refute2 S-r3-1).
 - **The agent's reads.** The key store joins Hermes's agent read deny-list, and `@file:` references
   to private paths under HERMES_HOME are refused for everyone (`harden_agent_reads`,
   `harden_reference_reads`; S-new-2's cheap half, custody is SEC-2).
@@ -48,6 +50,7 @@ stand-ins. `__init__.register()` hands the Hermes modules in.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import contextvars
 import inspect
@@ -125,14 +128,13 @@ RESIDENT_HTTP: tuple[tuple[frozenset, str, str], ...] = (
     (GET, "/api/profiles", "profile read for the profile switcher"),
     (GET, "/api/profiles/active", "profile read: which profile the pages show"),
     (GET, "/api/dashboard/font", "the saved font preference"),
-    # -- the resident's own sessions (SessionsPage.tsx, ChatSessionList.tsx). The list and the counts
-    # are box-wide metadata (README "What a resident can see of other sessions"); a route that names
-    # one session (`/api/sessions/{id}...`) answers only for a session the resident owns
-    # (`session_visible`). Search, bulk delete, delete-empty and prune read or delete across sessions
-    # the guard cannot attribute before the handler runs, so they are admin only --
-    (GET, "/api/sessions", "list sessions (also the archive job's read-only bearer)"),
-    (GET, "/api/sessions/stats", "session counts"),
-    (GET, "/api/sessions/empty/count", "how many empty sessions there are"),
+    # -- the resident's own sessions (SessionsPage.tsx, ChatSessionList.tsx). The list carries only
+    # the resident's own rows (`resident_session_list`; `?full=1` is admin only), and a route that
+    # names one session (`/api/sessions/{id}...`) answers only for a session the resident owns
+    # (`session_visible`). The box-wide counts (stats, empty count), search, bulk delete,
+    # delete-empty and prune read or delete across sessions the guard cannot attribute before the
+    # handler runs, so they are admin only --
+    (GET, "/api/sessions", "list the resident's own sessions (the archive job's read-only bearer: all)"),
     (GET, "/api/sessions/{id}", "one of the resident's sessions"),
     (GET, "/api/sessions/{id}/messages", "read one of the resident's sessions (also the archive job's bearer)"),
     (GET, "/api/sessions/{id}/messages/around", "read around a message in one of the resident's sessions"),
@@ -145,7 +147,7 @@ RESIDENT_HTTP: tuple[tuple[frozenset, str, str], ...] = (
     (POST, "/api/chat/image-upload", "a pasted chat image, saved under HERMES_HOME/images with a random name"),
     # -- the overlay's approvals card --
     (GET_POST, "/api/plugins/av-approval/**",
-     "reserved for av-approval's own dashboard routes (the approvals card); none is mounted at 1.3.1"),
+     "reserved for av-approval's own dashboard routes (the approvals card); none is mounted at 1.3.2"),
 )
 
 #: WebSockets: socket paths a resident may open. Everything else (the console, the PTY, the PTY's
@@ -163,8 +165,9 @@ OWN_SESSION_IF_GIVEN = "own_session_if_given"  # the same, when the frame names 
 OWN_STORED = "own_stored"          # `session_id` is a stored session the resident owns (resume, delete)
 OWN_REQUEST = "own_request"        # a `request_id` must be pending on that same chat (no box-wide lookup)
 PINNED_CWD = "pinned_cwd"          # the chat runs in RESIDENT_CWD_NAME; a parent must be the resident's
-NO_FILE_REFS = "no_file_refs"      # no @file:/@folder: in the text, no gateway-internal `_` parameters
+NO_FILE_REFS = "no_file_refs"      # no @folder:, no @file: outside RESIDENT_FILE_DIRS, no `_` parameters
 ANSWER = "answer"                  # answers only a request the server raised on this connection
+OWN_ROWS = "own_rows"              # a session list: the reply carries only the resident's own rows
 
 #: Chat gateway methods on /api/ws: name -> (parameter rules, why). The SPA itself calls
 #: `session.create` (ChatSidebar.tsx:219) and `model.options` (ModelPickerDialog.tsx:125); the rest
@@ -177,14 +180,15 @@ RESIDENT_GATEWAY_METHODS: dict[str, tuple[tuple[str, ...], str]] = {
     "client.capabilities": ((), "handshake"),
     "session.create": ((PINNED_CWD,), "start a chat (ChatSidebar.tsx:219), in the resident chat directory"),
     "session.resume": ((OWN_STORED,), "reopen one of the resident's chats"),
-    "session.list": ((), "list chats (box-wide metadata, as GET /api/sessions)"),
-    "session.most_recent": ((), "the newest chat's id and title (box-wide metadata)"),
+    "session.list": ((OWN_ROWS,), "list the resident's own chats (rows filtered, as GET /api/sessions)"),
+    "session.most_recent": ((OWN_ROWS,), "the newest chat's id and title, when it is the resident's"),
     "session.title": ((OWN_SESSION,), "rename a chat"),
     "session.close": ((OWN_SESSION,), "close a chat"),
     "session.delete": ((OWN_STORED,), "delete one of the resident's stored chats"),
     "session.interrupt": ((OWN_SESSION,), "stop the agent's turn"),
     "session.events.since": ((OWN_SESSION,), "replay after a reconnect"),
-    "prompt.submit": ((OWN_SESSION, NO_FILE_REFS), "send a message (no @file:/@folder: references)"),
+    "prompt.submit": ((OWN_SESSION, NO_FILE_REFS),
+                      "send a message (no @folder:, no @file: but to an upload, a paste or the chat directory)"),
     "approval.pending": ((OWN_SESSION,), "the agent's open approval prompts"),
     "approval.received": ((OWN_SESSION, OWN_REQUEST), "acknowledge an approval prompt"),
     "approval.respond": ((OWN_SESSION, OWN_REQUEST, NO_ALWAYS), "answer an approval prompt: once, session or deny"),
@@ -228,6 +232,13 @@ RESIDENT_PROFILES = frozenset({"", "default"})
 #: HERMES_HOME (config.yaml, plugins, hooks, the key store) and not `/`.
 RESIDENT_CWD_NAME = "resident-chat"
 
+#: The directories under HERMES_HOME a resident's `@file:` may name a file in (S-r3-2), from a chat
+#: that runs in RESIDENT_CWD_NAME: Hermes's own uploads (`file.attach` stages into `attachments/`,
+#: `prompt_attachments.py:176`), the desktop app's long pastes (`composer-pastes/`,
+#: `context_references.py` COMPOSER_PASTES_DIRNAME) and the chat directory itself. Resolved through
+#: symlinks; a directory that is itself a link admits nothing.
+RESIDENT_FILE_DIRS = ("attachments", "composer-pastes", RESIDENT_CWD_NAME)
+
 # ==================================================================================================
 
 #: Where the PTY child connects back with the internal credential (`web_server_chat.py:438-445`).
@@ -254,6 +265,8 @@ PATH_PARAMS = frozenset({"path", "file", "file_path", "filepath", "filename", "r
 FORBIDDEN = {"error": "forbidden", "detail": "This dashboard feature is admin only.", "reason": "admin_only"}
 FORBIDDEN_PRIVATE = {"error": "forbidden", "detail": "That path is private.", "reason": "private_path"}
 FORBIDDEN_SESSION = {"error": "forbidden", "detail": "That session is not yours.", "reason": "not_own_session"}
+LIST_UNAVAILABLE = {"error": "unavailable", "detail": "The session list could not be read.",
+                    "reason": "session_list_unavailable"}
 GATEWAY_REFUSAL_CODE = 4031
 WS_REFUSAL = "edgecity_admin_only"
 
@@ -567,17 +580,39 @@ def _session_route_id(path: Any) -> Optional[str]:
     return _segments(path)[2]
 
 
+#: `GET /api/sessions?full=<one of these>` is Hermes's compact list; anything else (`full=1`, which
+#: adds each row's system prompt and model config) is admin only.
+_FALSE_WORDS = frozenset({"0", "false", "f", "no", "n", "off"})
+#: The session list a resident keeps (`web_routers/sessions.py` `get_sessions`).
+SESSION_LIST_PATH = "/api/sessions"
+
+
+def _token_request(state: Any) -> bool:
+    return bool(getattr(state, "token_authenticated", False)) or getattr(state, "token_principal", None) is not None
+
+
+def _query_pairs(query: Any) -> list:
+    if isinstance(query, (bytes, bytearray)):
+        query = bytes(query).decode("latin-1")
+    return urllib.parse.parse_qsl(query or "", keep_blank_values=True)
+
+
 def session_route_code(request: Any, url_path: Any, scope_path: Any, query: Any) -> str:
     """A listed route that names one stored session answers a resident only for the resident's own
     (`session_visible`), looked up the way the handler resolves it (exact id, else a unique prefix,
     in the `?profile=` store). No lookup, a failed lookup, an unknown id, a Hermes subroute word or
-    URL and scope paths that name different ids: refused. The archive job's bearer (a token
-    principal, scoped by `_archive` to two read routes) reads every session, as before."""
+    URL and scope paths that name different ids: refused. The session list with `full` other than
+    a false word is refused (S-r3-1: it carries every row's system prompt). The archive job's bearer
+    (a token principal, scoped by `_archive` to two read routes) reads every session, as before."""
+    state = request.state
+    if _token_request(state):
+        return "resident_allowed"
+    if SESSION_LIST_PATH in (url_path, scope_path):
+        if any(k == "full" and v.strip().lower() not in _FALSE_WORDS for k, v in _query_pairs(query)):
+            return "denied_full_list"
+        return "resident_allowed"
     ids = {_session_route_id(url_path), _session_route_id(scope_path)}
     if ids == {None}:
-        return "resident_allowed"
-    state = request.state
-    if getattr(state, "token_authenticated", False) or getattr(state, "token_principal", None) is not None:
         return "resident_allowed"
     if len(ids) != 1 or None in ids:
         return "denied_session_route"
@@ -594,6 +629,115 @@ def session_route_code(request: Any, url_path: Any, scope_path: Any, query: Any)
     if not session_visible(row, login):
         return "denied_not_own_session"
     return "resident_allowed"
+
+
+# ---- the session lists a resident keeps (S-r3-1) --------------------------------------------------
+
+#: Rows read per call when a resident's list is built (Hermes's own `limit` bound, `le=100`).
+LIST_PAGE_ROWS = 100
+#: The most stored rows read for one resident list; the resident's rows past them are not listed
+#: (fail closed: never another login's row, at worst fewer of the resident's own).
+LIST_SCAN_ROWS = 5000
+
+#: `page(query, limit, offset) -> Hermes's GET /api/sessions body` for the request's own filters,
+#: handed in by `__init__` (Hermes's handler, read only). None: a resident's list is refused.
+_session_list_page: Optional[Callable[[dict, int, int], dict]] = None
+#: `owners(ids, profile) -> {id: {"id", "user_id", "source"}}` from the stored sessions, handed in by
+#: `__init__` (the gateway's list rows carry no `user_id`). None: a resident's gateway list is refused.
+_session_owners: Optional[Callable[..., dict]] = None
+
+
+def set_session_list(fn: Optional[Callable[[dict, int, int], dict]]) -> None:
+    global _session_list_page
+    _session_list_page = fn
+
+
+def set_session_owners(fn: Optional[Callable[..., dict]]) -> None:
+    global _session_owners
+    _session_owners = fn
+
+
+def list_query(query: Any) -> dict:
+    """The list's query parameters, the last value of each winning, as FastAPI reads a scalar."""
+    return dict(_query_pairs(query))
+
+
+def own_session_page(page: Callable[[dict, int, int], dict], query: dict, login: Optional[str]) -> dict:
+    """The resident's own page of `GET /api/sessions`: Hermes's list under the request's filters and
+    order is read LIST_PAGE_ROWS at a time from the start, rows `session_visible` refuses are
+    dropped (a row carries `user_id` and `source`; one with neither is not the resident's), and
+    `limit`/`offset` page through what is left. `total` counts the resident's rows only, so the
+    page reveals nothing of other logins' sessions, not even how many there are. Raises on a body
+    that is not Hermes's list shape (the caller then refuses)."""
+    limit = int(query.get("limit", 20))
+    offset = int(query.get("offset", 0))
+    if limit < 0 or offset < 0:
+        raise ValueError("negative paging")
+    own: list = []
+    seen: set = set()
+    storage: dict = {}
+    read = 0
+    while True:
+        body = page(query, LIST_PAGE_ROWS, read)
+        rows, total = body.get("sessions"), body.get("total")
+        if not isinstance(rows, list) or type(total) is not int:
+            raise ValueError("not a session list")
+        if isinstance(body.get("storage"), dict):
+            storage = body["storage"]
+        for row in rows:
+            key = row.get("id") if isinstance(row, dict) else None
+            if type(key) is not str or key in seen:  # Hermes repeats pinned rows on every page
+                continue
+            seen.add(key)
+            if session_visible(row, login):
+                own.append(row)
+        read += LIST_PAGE_ROWS
+        if not rows or read >= total:
+            break
+        if read >= LIST_SCAN_ROWS:
+            _count("resident_list_truncated")
+            break
+    return {"sessions": own[offset:offset + limit], "total": len(own), "limit": limit, "offset": offset,
+            "storage": storage}
+
+
+async def _drain(response: Any) -> None:
+    """Read and drop a streamed body the guard replaces (the app's task finishes as it would)."""
+    iterator = getattr(response, "body_iterator", None)
+    if iterator is not None and hasattr(iterator, "__aiter__"):
+        async for _chunk in iterator:
+            pass
+
+
+def _is_resident_list(request: Any) -> bool:
+    try:
+        return (request.method in GET and request.url.path == SESSION_LIST_PATH
+                and request.scope.get("path") == SESSION_LIST_PATH and not _token_request(request.state))
+    except Exception:  # noqa: BLE001
+        return True  # the caller then builds the list itself, or refuses
+
+
+async def resident_session_list(request: Any, response: Any, json_response: Callable[..., Any]) -> Any:
+    """A resident's `GET /api/sessions` (S-r3-1). Hermes's handler has answered (its validation and
+    its errors stand: a response that is not a 200 goes out as it is, and carries no rows); its body
+    is replaced with `own_session_page`. No list reader, a failure or a body of the wrong shape is a
+    503, never Hermes's box-wide page."""
+    if getattr(response, "status_code", None) != 200:
+        return response
+    try:
+        await _drain(response)
+        page = _session_list_page
+        if page is None:
+            raise LookupError("no session list reader")
+        session = getattr(request.state, "session", None)
+        login = login_id(getattr(session, "provider", None), getattr(session, "user_id", None))
+        query = list_query(request.scope.get("query_string", b""))
+        body = await asyncio.to_thread(own_session_page, page, query, login)
+    except Exception:  # noqa: BLE001
+        _count("denied_session_list_error")
+        return json_response(dict(LIST_UNAVAILABLE), status_code=503)
+    _count("resident_list_filtered")
+    return json_response(body, status_code=200)
 
 
 #: Never read for the hide: API responses, the login page and the auth flow.
@@ -732,6 +876,8 @@ def make_gate_wrapper(original: Middleware, *, json_response: Callable[..., Any]
                 response = await call_next(req)
             finally:
                 _REQUEST_ROLE.reset(token)
+            if code == "resident_allowed" and _is_resident_list(req):
+                return await resident_session_list(req, response, json_response)
             if code == "resident_allowed" and _hide_candidate(req):
                 try:
                     response = await hide_plugins_page(response)
@@ -938,26 +1084,99 @@ def set_prompt_sanitizer(fn: Optional[Callable[[str], Any]]) -> None:
     _prompt_sanitizer = fn
 
 
-def names_file_reference(text: Any) -> bool:
+#: Hermes's own reference parser (`agent.context_references.parse_context_references`), handed in
+#: by `__init__`: the `@file:` references a resident may keep are read exactly as Hermes reads
+#: them. None: no reference is admitted.
+_reference_parser: Optional[Callable[[str], Any]] = None
+
+
+def set_reference_parser(fn: Optional[Callable[[str], Any]]) -> None:
+    global _reference_parser
+    _reference_parser = fn
+
+
+def _fold(text: str) -> str:
+    folded = unicodedata.normalize("NFKC", text)
+    for marker in _PASTE_MARKERS:
+        folded = folded.replace(marker, "")
+    return "".join(ch for ch in folded if unicodedata.category(ch)[0] not in ("C", "Z"))
+
+
+def names_file_reference(text: Any, admitted: Optional[Callable[[str], Any]] = None) -> bool:
     """Whether prompt text carries an `@file:` or `@folder:` reference: as written, after Hermes's
-    own sanitiser, and once Unicode is folded and control, format and space characters and paste
-    markers are dropped (so `@fi<ZWSP>le:` and `＠file:` count). Text that is not a string, or a
-    sanitiser that fails, counts as a reference (fail closed)."""
+    own sanitiser, and in each once Unicode is folded and control, format and space characters and
+    paste markers are dropped (so `@fi<ZWSP>le:` and `＠file:` count). `admitted(form)` first blanks
+    the references a resident may keep out of each form (`strip_admitted_references`). Text that is
+    not a string, or a sanitiser or `admitted` that fails, counts as a reference (fail closed)."""
     if text is None:
         return False
     if not isinstance(text, str):
         return True
-    forms = [text]
+    forms = []
     try:
-        folded = unicodedata.normalize("NFKC", text)
-        for marker in _PASTE_MARKERS:
-            folded = folded.replace(marker, "")
-        forms.append("".join(ch for ch in folded if unicodedata.category(ch)[0] not in ("C", "Z")))
-        if _prompt_sanitizer is not None:
-            forms.append(_prompt_sanitizer(text))
+        bases = [text] + ([_prompt_sanitizer(text)] if _prompt_sanitizer is not None else [])
+        for base in bases:
+            if isinstance(base, str) and admitted is not None:
+                base = admitted(base)
+            if not isinstance(base, str):
+                return True
+            forms += [base, _fold(base)]
     except Exception:  # noqa: BLE001
         return True
-    return any(not isinstance(form, str) or _FILE_REF.search(form) for form in forms)
+    return any(_FILE_REF.search(form) for form in forms)
+
+
+def resident_file_allowed(target: Any, cwd: Any) -> bool:
+    """Whether a resident's `@file:` target may stay in its prompt (S-r3-2): the chat runs in the
+    resident directory (`cwd`, resolved), and the target, resolved as Hermes resolves it (`~`, then
+    relative to the chat's cwd, `context_references.py:_resolve_path`) and then through every
+    symlink, is inside one of RESIDENT_FILE_DIRS (a directory that is itself a link admits
+    nothing), names no private file, and is a plain file or not there yet. Anything else, or
+    anything that cannot be read, is refused."""
+    try:
+        if type(target) is not str or not target.strip() or "\x00" in target:
+            return False
+        home = os.path.realpath(_hermes_home())
+        chat = os.path.join(home, RESIDENT_CWD_NAME)
+        if type(cwd) is not str or not cwd or os.path.realpath(os.path.expanduser(cwd)) != chat:
+            return False
+        resolved = os.path.realpath(os.path.join(chat, os.path.expanduser(target)))
+        inside = False
+        for name in RESIDENT_FILE_DIRS:
+            root = os.path.join(home, name)
+            if os.path.islink(root) or os.path.realpath(root) != root:
+                continue
+            inside = inside or resolved.startswith(root + os.sep)
+        if not inside or private_path(resolved):
+            return False
+        return not os.path.lexists(resolved) or os.path.isfile(resolved)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def strip_admitted_references(text: str, cwd: Any) -> Optional[str]:
+    """`text` with each `@file:` reference that Hermes's own parser reads and
+    `resident_file_allowed` admits replaced by a space. Every other reference stays, so the strict
+    check in `names_file_reference` still refuses it (`@folder:`, a file elsewhere). No parser: the
+    text unchanged (nothing admitted). A parser answer that is not well formed: None (refused)."""
+    parser = _reference_parser
+    if parser is None:
+        return text
+    spans = []
+    for ref in parser(text) or ():
+        kind, target = getattr(ref, "kind", None), getattr(ref, "target", None)
+        start, end = getattr(ref, "start", None), getattr(ref, "end", None)
+        if type(start) is not int or type(end) is not int or not 0 <= start < end <= len(text):
+            return None
+        if kind == "file" and resident_file_allowed(target, cwd):
+            spans.append((start, end))
+    out, last = [], 0
+    for start, end in sorted(spans):
+        if start < last:
+            return None
+        out += [text[last:start], " "]
+        last = end
+    return "".join(out) + text[last:]
 
 
 def resident_cwd() -> Optional[str]:
@@ -1208,10 +1427,14 @@ def gateway_decision(role: Any, req: Any, view: Optional[GatewayView] = None) ->
             return "denied_gateway_session", req
     if OWN_STORED in rules and (view is None or not view.own_stored(sid, profile)):
         return "denied_gateway_session", req
+    if OWN_ROWS in rules and view is None:
+        return "denied_gateway_list", req
     if NO_FILE_REFS in rules:
         if any(type(k) is not str or k.startswith("_") for k in params):
             return "denied_gateway_params", req
-        if names_file_reference(params.get("text")):
+        record = view.live(sid) if view is not None else None
+        cwd = record.get("cwd") if record is not None else None
+        if names_file_reference(params.get("text"), lambda form: strip_admitted_references(form, cwd)):
             return "denied_gateway_file_ref", req
     if ANSWER in rules:
         code = answer_code(params.get("id"), params.get("result"), False, view)
@@ -1251,6 +1474,71 @@ def _refusal(req: Any, method: Any, code: str = "denied_gateway_method") -> dict
         "data": {"reason": reason, "method": method if isinstance(method, str) else None}}}
 
 
+def own_rows_reply(method: Any, frame: Any, login: Optional[str], profile: Any) -> Any:
+    """A resident's `session.list` / `session.most_recent` reply with only the resident's rows
+    (S-r3-1). The rows (`methods_session.py:117`) carry no `user_id`, so each id's stored owner is
+    read through `_session_owners` and judged by `session_visible`. `session.most_recent` naming
+    another login's chat answers Hermes's own "none" (`{"session_id": null}`). An error reply goes
+    out as it is; a reply of another shape, no owner reader or a failing one is a refusal."""
+    if not isinstance(frame, dict) or "result" not in frame:
+        return frame
+    owners = _session_owners
+    try:
+        if owners is None:
+            raise LookupError("no session owner reader")
+        result = frame["result"]
+        if not isinstance(result, dict):
+            raise ValueError("not a session list")
+        name = profile if type(profile) is str and profile.strip() else None
+        if method == "session.most_recent":
+            sid = result.get("session_id")
+            if sid is None:
+                return frame
+            table = owners([sid], name) if type(sid) is str else {}
+            if session_visible(table.get(sid), login):
+                return frame
+            _count("resident_list_filtered")
+            return {**frame, "result": {"session_id": None}}
+        rows = result.get("sessions")
+        if not isinstance(rows, list):
+            raise ValueError("not a session list")
+        ids = [r.get("id") for r in rows if isinstance(r, dict) and type(r.get("id")) is str]
+        table = owners(ids, name) if ids else {}
+        kept = [r for r in rows if isinstance(r, dict) and type(r.get("id")) is str
+                and session_visible(table.get(r["id"]), login)]
+        _count("resident_list_filtered")
+        return {**frame, "result": {**result, "sessions": kept}}
+    except Exception:  # noqa: BLE001
+        _count("denied_gateway_list_error")
+        return _refusal(frame, method)
+
+
+class FilteredReplies:
+    """The transport one resident list call is dispatched with: Hermes runs `session.list` on its
+    long-handler pool, and the worker writes the reply through the transport it was handed
+    (`rpc_dispatch.py` `t.write(resp)`), so the reply to this call's id passes `keep` first. Every
+    other frame and attribute is the connection's own transport's."""
+
+    def __init__(self, inner: Any, rid: Any, keep: Callable[[Any], Any]) -> None:
+        self._edgecity_inner = inner
+        self._edgecity_rid = rid
+        self._edgecity_keep = keep
+
+    def _edgecity_pick(self, obj: Any) -> Any:
+        if isinstance(obj, dict) and "method" not in obj and obj.get("id") == self._edgecity_rid:
+            return self._edgecity_keep(obj)
+        return obj
+
+    def write(self, obj: Any) -> Any:
+        return self._edgecity_inner.write(self._edgecity_pick(obj))
+
+    async def write_async(self, obj: Any) -> Any:
+        return await self._edgecity_inner.write_async(self._edgecity_pick(obj))
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._edgecity_inner, name)
+
+
 def install_gateway(server_module: Any, ws_module: Any, requests_module: Any = None, approvals: Any = None) -> bool:
     """Wrap `tui_gateway.ws.handle_ws` (the connection's role into a context variable) and
     `tui_gateway.server.dispatch` (a resident connection's frame answered only by
@@ -1279,6 +1567,14 @@ def install_gateway(server_module: Any, ws_module: Any, requests_module: Any = N
         if code != "resident_allowed":
             _count(code if code.startswith("denied_") else "denied_gateway_method")
             return _refusal(req, method, code)
+        if method in RESIDENT_GATEWAY_METHODS and OWN_ROWS in RESIDENT_GATEWAY_METHODS[method][0]:
+            params = frame.get("params") if isinstance(frame.get("params"), dict) else {}
+
+            def keep(reply: Any) -> Any:
+                return own_rows_reply(method, reply, view.login, params.get("profile"))
+
+            response = base_dispatch(frame, FilteredReplies(transport, frame.get("id"), keep), *args, **kwargs)
+            return keep(response) if response is not None else None
         response = base_dispatch(frame, transport, *args, **kwargs)
         if method == "session.create":
             try:

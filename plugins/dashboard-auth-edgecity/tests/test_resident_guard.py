@@ -12,6 +12,7 @@ import asyncio
 import importlib.util
 import logging
 import os
+import re
 import urllib.parse
 from pathlib import Path
 from types import SimpleNamespace
@@ -138,6 +139,8 @@ class Dashboard:
         self.gate_calls = 0
         self.module = SimpleNamespace(gated_auth_middleware=self.gate, JSONResponse=json_response)
         assert guard.install(self.module) is True
+        self.list_calls = []
+        guard.set_session_list(list_page(LIST_ROWS, self.list_calls))
         self.html = INDEX
 
     async def gate(self, request, call_next):
@@ -191,6 +194,31 @@ SESSION_ROWS = {
 }
 
 
+#: Hermes's `GET /api/sessions` rows for the stored sessions above (compact: no system prompt), plus
+#: the shapes S-r3-1 names: no `user_id`, no `source`, neither.
+LIST_ROWS = [
+    {**row, "title": f"title of {sid}", "preview": f"first message of {sid}", "message_count": 1}
+    for sid, row in SESSION_ROWS.items()
+] + [
+    {"id": "no-user", "source": "tool", "title": "t", "preview": "first message of no-user"},
+    {"id": "no-source", "user_id": "edgecity:admin-9", "title": "t", "preview": "first message of no-source"},
+    {"id": "bare", "title": "t", "preview": "first message of bare"},
+]
+
+
+def list_page(rows, calls=None):
+    """Hermes's list handler in miniature: `rows` in order, `limit`/`offset` applied, the store's
+    total, as `__init__._session_list_page` hands the guard one page."""
+
+    def page(query, limit, offset):
+        if calls is not None:
+            calls.append((dict(query), limit, offset))
+        return {"sessions": [dict(r) for r in rows[offset:offset + limit]], "total": len(rows), "limit": limit,
+                "offset": offset, "storage": {}}
+
+    return page
+
+
 def session_lookup(rows=SESSION_ROWS):
     def lookup(session_id, profile=None, *, prefix):
         if session_id in rows:
@@ -201,6 +229,15 @@ def session_lookup(rows=SESSION_ROWS):
         return None
 
     return lookup
+
+
+def session_owners(rows=SESSION_ROWS):
+    """`__init__._session_owners` in miniature: the stored owner fields of each known id."""
+
+    def owners(ids, profile=None):
+        return {i: rows[i] for i in ids if i in rows}
+
+    return owners
 
 
 @pytest.fixture
@@ -260,6 +297,11 @@ NOT_LISTED = [
     ("POST", "/api/sessions/import"),
     ("POST", "/api/sessions/owner-backfill"),
     ("GET", "/api/sessions/search?q=plugins"),     # S-new-1: reads across sessions
+    ("GET", "/api/sessions/stats"),                # S-r3-1: box-wide counts
+    ("GET", "/api/sessions/empty/count"),          # S-r3-1: box-wide count
+    ("GET", "/api/sessions?full=1"),               # S-r3-1: every row's system prompt
+    ("GET", "/api/sessions?full=true&limit=5"),
+    ("GET", "/api/sessions?full=0&full=yes"),
     ("POST", "/api/sessions/bulk-delete"),         # S-new-1: deletes across sessions
     ("DELETE", "/api/sessions/empty"),
     ("POST", "/api/sessions/prune"),
@@ -307,8 +349,8 @@ LISTED = [
     ("GET", "/api/profiles/active"),
     ("GET", "/api/sessions"),
     ("GET", "/api/sessions?limit=20&offset=0&order=recent&profile=default"),
-    ("GET", "/api/sessions/stats"),
-    ("GET", "/api/sessions/empty/count"),
+    ("GET", "/api/sessions?full=0"),
+    ("GET", "/api/sessions?full=false&order=recent"),
     ("GET", "/api/sessions/abc123"),
     ("GET", "/api/sessions/abc123/messages"),
     ("GET", "/api/sessions/abc123/messages/around"),
@@ -547,7 +589,7 @@ def test_every_table_row_is_well_formed_and_explained(guard):
         assert pattern == guard.SPA or pattern.startswith("/")
         assert why.strip()
     known = {guard.BYTES_ONLY, guard.NO_ALWAYS, guard.OWN_SESSION, guard.OWN_SESSION_IF_GIVEN, guard.OWN_STORED,
-             guard.OWN_REQUEST, guard.PINNED_CWD, guard.NO_FILE_REFS, guard.ANSWER}
+             guard.OWN_REQUEST, guard.PINNED_CWD, guard.NO_FILE_REFS, guard.ANSWER, guard.OWN_ROWS}
     for name, (rules, why) in guard.RESIDENT_GATEWAY_METHODS.items():
         assert isinstance(rules, tuple) and set(rules) <= known and why.strip(), name
     for source, why in guard.RESIDENT_SESSION_SOURCES.items():
@@ -759,7 +801,8 @@ def test_logs_carry_codes_and_counts_never_the_email_token_or_path(dash, caplog,
     records = {r.getMessage().split(" (")[0].rsplit(" ", 1)[-1]: r.levelno for r in caplog.records
                if r.name == "dashboard-auth-edgecity.resident-guard"}
     assert records == {"denied_not_listed": logging.INFO, "admin_allowed": logging.DEBUG,
-                       "denied_private_path": logging.INFO, "resident_allowed": logging.DEBUG}
+                       "denied_private_path": logging.INFO, "resident_allowed": logging.DEBUG,
+                       "resident_list_filtered": logging.DEBUG}
     assert "denied_not_listed=1" in text
 
 
@@ -782,9 +825,8 @@ def test_the_spa_index_under_an_admin_is_byte_identical(dash, path):
 
 def test_the_login_page_and_api_responses_are_never_touched(dash):
     assert dash.request("GET", "/login")[0].body == LOGIN
-    for target in ("/api/sessions", "/api/auth/me"):
-        resp, _ = dash.request("GET", target, headers=dash.login(OWNER))
-        assert resp.body == {"path": target}
+    resp, _ = dash.request("GET", "/api/auth/me", headers=dash.login(OWNER))
+    assert resp.body == {"path": "/api/auth/me"}
 
 
 @pytest.mark.parametrize("response", [
@@ -958,6 +1000,14 @@ def gateway_stand_in():
         rid = req.get("id") if isinstance(req, dict) else None
         if isinstance(req, dict) and req.get("method") == "session.create":
             return {"id": rid, "result": {"session_id": "new-sid", "stored_session_id": "new-key"}}
+        if isinstance(req, dict) and req.get("method") == "session.list":
+            # `methods_session.py:117`: id, title, preview, started_at, message_count, source; no user_id.
+            return {"id": rid, "result": {"sessions": [
+                {"id": r["id"], "title": r.get("title", ""), "preview": r.get("preview", ""), "started_at": 0,
+                 "message_count": 1, "source": r.get("source") or ""} for r in LIST_ROWS]}}
+        if isinstance(req, dict) and req.get("method") == "session.most_recent":
+            return {"id": rid, "result": {"session_id": server.most_recent, "title": "t", "started_at": 0,
+                                          "source": "tool"}}
         return {"id": rid, "result": "ran"}
 
     def login(transport):
@@ -970,6 +1020,7 @@ def gateway_stand_in():
         dispatch=dispatch, _sessions=live_chats(), _sessions_lock=threading.Lock(),
         _session_transport_contains=lambda rec, t: login(t) in rec.get("attached", ()))
     server.frames = frames
+    server.most_recent = "abc123"
     requests = SimpleNamespace(_lock=threading.Lock(), _open={
         rid: SimpleNamespace(id=rid, method=m, sid=sid) for rid, (m, sid) in OPEN_REQUESTS.items()})
     server.requests = requests
@@ -1131,6 +1182,7 @@ def gateway(guard, home):
     server, gateway_ws, calls = gateway_stand_in()
     assert guard.install_gateway(server, gateway_ws, server.requests, server.approvals) is True
     guard.set_session_lookup(session_lookup())
+    guard.set_session_owners(session_owners())
 
     def talk(role, frames, user_id="u1", sock=None):
         sock = sock or ws("/api/ws")
@@ -1214,6 +1266,7 @@ def test_the_method_decision_allows_nothing_off_the_list_for_any_role_but_admin_
         assert guard.gateway_method_allowed(role, method, {}) is False, (role, method)
     for method in LISTED_METHODS:
         free = guard.RESIDENT_GATEWAY_METHODS[method][0] in ((), (guard.OWN_SESSION_IF_GIVEN,), (guard.PINNED_CWD,))
+        # OWN_ROWS (the session lists) needs the connection's login to filter by: no view, no list.
         assert guard.gateway_method_allowed(role, method, {}) is free, (role, method)
     assert guard.gateway_method_allowed(role, "prompt.submit", ["not", "a", "dict"]) is False
 
@@ -1664,6 +1717,385 @@ def test_hermess_own_refusal_still_comes_first(guard, home):
         refs._ensure_reference_path_allowed(home / "notes.md")
 
 
+# ---- S-r3-1: every session list a resident keeps carries only its own rows -----------------------
+
+
+def listed_ids(resp):
+    return [row["id"] for row in resp.body["sessions"]]
+
+
+def test_a_residents_session_list_carries_only_its_own_rows(dash):
+    """Own login, Telegram source: listed. Another login (on any source), no login on a terminal or
+    cron source, no user_id, no source, neither: not listed, and neither is their preview or title.
+    `total` counts the resident's rows only."""
+    resp, _ = dash.request("GET", "/api/sessions", headers=dash.login(OWNER))
+    assert resp.status_code == 200
+    assert listed_ids(resp) == ["abc123", "tg1"]
+    assert resp.body["total"] == 2 and resp.body["limit"] == 20 and resp.body["offset"] == 0
+    text = repr(resp.body)
+    for other in ("adm1", "pty1", "cron1", "tg-adm", "no-user", "no-source", "bare"):
+        assert f"first message of {other}" not in text and f"title of {other}" not in text, other
+    assert dash.mod.counts()["resident_list_filtered"] == 1
+
+
+def test_an_admin_and_the_archive_bearer_get_hermess_own_list(dash):
+    for kwargs in ({"headers": dash.login(ADMIN)}, {"token_principal": True}):
+        resp, _ = dash.request("GET", "/api/sessions?full=1", **kwargs)
+        assert resp.status_code == 200 and resp.body == {"path": "/api/sessions"}, kwargs
+    assert dash.list_calls == []
+
+
+@pytest.mark.parametrize("login,ids", [
+    (session(provider="edgecity", org_id="owner"), ["abc123", "tg1"]),
+    (SimpleNamespace(provider="edgecity", org_id="owner", user_id=None), ["tg1"]),
+    (session(provider="basic", org_id="owner"), ["tg1"]),
+])
+def test_a_resident_without_a_matching_login_sees_its_channels_only(dash, login, ids):
+    resp, _ = dash.request("GET", "/api/sessions", headers=dash.login(login))
+    assert listed_ids(resp) == ids
+
+
+def test_the_residents_list_pages_through_its_own_rows_past_other_logins(dash):
+    """250 cron rows before the resident's own: the resident's page 1 still shows its rows, and the
+    pages and the total are the resident's (Hermes's own `le=100` per read)."""
+    rows = [{"id": f"cron-{i}", "user_id": None, "source": "cron"} for i in range(250)]
+    rows += [{"id": f"own-{i}", "user_id": "edgecity:u1", "source": "tool"} for i in range(30)]
+    dash.mod.set_session_list(list_page(rows, dash.list_calls))
+    first, _ = dash.request("GET", "/api/sessions?limit=20&offset=0", headers=dash.login(OWNER))
+    second, _ = dash.request("GET", "/api/sessions?limit=20&offset=20", headers=dash.login(OWNER))
+    assert listed_ids(first) == [f"own-{i}" for i in range(20)] and first.body["total"] == 30
+    assert listed_ids(second) == [f"own-{i}" for i in range(20, 30)] and second.body["offset"] == 20
+    assert {limit for _q, limit, _o in dash.list_calls} == {100}
+    assert [o for _q, _l, o in dash.list_calls[:3]] == [0, 100, 200]
+
+
+def test_the_lists_filters_and_order_reach_hermess_handler(dash):
+    dash.request("GET", "/api/sessions?order=recent&exclude_sources=cron&min_messages=1&profile=default&limit=5",
+                 headers=dash.login(OWNER))
+    query, limit, offset = dash.list_calls[0]
+    assert query == {"order": "recent", "exclude_sources": "cron", "min_messages": "1", "profile": "default",
+                     "limit": "5"} and (limit, offset) == (100, 0)
+
+
+def test_rows_hermes_repeats_on_every_page_are_listed_once(dash):
+    pinned = {"id": "abc123", "user_id": "edgecity:u1", "source": "tool"}
+
+    def page(query, limit, offset):
+        rows = [{"id": f"cron-{offset + i}", "user_id": None, "source": "cron"} for i in range(min(limit, 150 - offset))]
+        return {"sessions": rows + [dict(pinned)], "total": 150, "storage": {}}
+
+    dash.mod.set_session_list(page)
+    resp, _ = dash.request("GET", "/api/sessions", headers=dash.login(OWNER))
+    assert listed_ids(resp) == ["abc123"] and resp.body["total"] == 1
+
+
+def test_a_box_bigger_than_the_scan_lists_none_of_the_rest(dash, monkeypatch):
+    monkeypatch.setattr(dash.mod, "LIST_SCAN_ROWS", 200)
+    rows = [{"id": f"cron-{i}", "user_id": None, "source": "cron"} for i in range(300)]
+    rows.append({"id": "own-late", "user_id": "edgecity:u1", "source": "tool"})
+    dash.mod.set_session_list(list_page(rows, dash.list_calls))
+    resp, _ = dash.request("GET", "/api/sessions", headers=dash.login(OWNER))
+    assert resp.status_code == 200 and listed_ids(resp) == [] and resp.body["total"] == 0
+    assert len(dash.list_calls) == 2 and dash.mod.counts()["resident_list_truncated"] == 1
+
+
+@pytest.mark.parametrize("breakage", ["no_reader", "raises", "not_a_list", "no_total", "bad_paging"])
+def test_a_list_the_guard_cannot_filter_is_a_503_never_hermess_page(dash, breakage):
+    target = "/api/sessions"
+    if breakage == "no_reader":
+        dash.mod.set_session_list(None)
+    elif breakage == "raises":
+        dash.mod.set_session_list(lambda q, l, o: (_ for _ in ()).throw(OSError("state.db busy")))
+    elif breakage == "not_a_list":
+        dash.mod.set_session_list(lambda q, l, o: {"sessions": "x", "total": 1})
+    elif breakage == "no_total":
+        dash.mod.set_session_list(lambda q, l, o: {"sessions": []})
+    else:
+        target = "/api/sessions?limit=x"
+    resp, _ = dash.request("GET", target, headers=dash.login(OWNER))
+    assert resp.status_code == 503 and resp.body["reason"] == "session_list_unavailable", resp.body
+    assert dash.mod.counts()["denied_session_list_error"] == 1
+
+
+def test_hermess_own_error_on_the_list_goes_out_as_it_is(dash):
+    async def router(request):
+        dash.routed.append((request.method, request.scope["path"]))
+        return Response(400, {"detail": "archived must be one of: exclude, only, include"})
+
+    dash.router = router
+    resp, _ = dash.request("GET", "/api/sessions?archived=x", headers=dash.login(OWNER))
+    assert resp.status_code == 400 and dash.list_calls == []
+
+
+def test_a_streamed_list_body_is_read_and_replaced(dash):
+    streamed = Streamed([b'{"sessions": [{"id": "adm1", "preview": "first message of adm1"}]}'],
+                        content_type="application/json")
+
+    async def router(request):
+        dash.routed.append((request.method, request.scope["path"]))
+        return streamed
+
+    dash.router = router
+    resp, _ = dash.request("GET", "/api/sessions", headers=dash.login(OWNER))
+    assert listed_ids(resp) == ["abc123", "tg1"] and "adm1" not in repr(resp.body)
+
+
+def test_the_box_wide_counts_are_an_admins(dash):
+    for target in ("/api/sessions/stats", "/api/sessions/empty/count"):
+        assert forbidden(dash.request("GET", target, headers=dash.login(OWNER))[0]), target
+        assert dash.request("GET", target, headers=dash.login(ADMIN))[0].status_code == 200, target
+
+
+@pytest.mark.parametrize("query,ok", [
+    ("full=1", False), ("full=true", False), ("full=True", False), ("full=yes", False), ("full=on", False),
+    ("full=", False), ("full=2", False), ("full=0&full=1", False), ("full=1&full=0", False),
+    ("full=0", True), ("full=false", True), ("full=FALSE", True), ("full=no", True), ("full=off", True),
+    ("full= 0 ", True), ("fully=1", True),
+])
+def test_the_full_list_is_an_admins(dash, query, ok):
+    resp, _ = dash.request("GET", f"/api/sessions?{query}", headers=dash.login(OWNER))
+    assert (resp.status_code == 200) is ok and (ok or forbidden(resp)), (query, resp.body)
+
+
+# ---- S-r3-1 on the gateway: session.list and session.most_recent ---------------------------------
+
+
+def test_a_residents_gateway_session_list_carries_only_its_own_rows(gateway):
+    [resp] = gateway.talk("resident", [rpc("session.list", {"limit": 50})])
+    assert [r["id"] for r in resp["result"]["sessions"]] == ["abc123", "tg1"]
+    assert "first message of adm1" not in repr(resp)
+    [admin] = gateway.talk("admin", [rpc("session.list", {})])
+    assert len(admin["result"]["sessions"]) == len(LIST_ROWS)
+
+
+def test_session_most_recent_names_only_the_residents_chat(gateway):
+    gateway.server.most_recent = "abc123"
+    [own] = gateway.talk("resident", [rpc("session.most_recent")])
+    assert own["result"]["session_id"] == "abc123"
+    for other in ("adm1", "pty1", "cron1", "tg-adm", "unknown-id", 7):
+        gateway.server.most_recent = other
+        [resp] = gateway.talk("resident", [rpc("session.most_recent")])
+        assert resp["result"] == {"session_id": None}, other
+    gateway.server.most_recent = None
+    assert gateway.talk("resident", [rpc("session.most_recent")])[0]["result"]["session_id"] is None
+    gateway.server.most_recent = "adm1"
+    assert gateway.talk("admin", [rpc("session.most_recent")])[0]["result"]["session_id"] == "adm1"
+
+
+def test_the_long_handler_reply_is_filtered_on_its_way_out(gateway):
+    """Hermes runs `session.list` on its pool and the worker writes the reply through the transport
+    it was handed (`rpc_dispatch.py`): that write is filtered, every other frame is not."""
+    written = []
+
+    def dispatch(req, transport=None):
+        gateway.calls.append(req.get("method"))
+        transport.write({"jsonrpc": "2.0", "method": "event", "params": {"type": "x", "id": req["id"]}})
+        transport.write({"jsonrpc": "2.0", "id": req["id"], "result": {"sessions": [
+            {"id": "adm1", "preview": "first message of adm1"}, {"id": "tg1", "preview": "mine"}]}})
+        return None
+
+    original = gateway.server.dispatch._edgecity_original
+    gateway.server.dispatch._edgecity_original = dispatch
+    gateway.guard.install_gateway(gateway.server, gateway.ws, gateway.server.requests, gateway.server.approvals)
+    sock = ws("/api/ws")
+    sock.transport = Transport(sock)
+    sock.transport.write = written.append
+    try:
+        assert gateway.talk("resident", [rpc("session.list", rid=5)], sock=sock) == [None]
+    finally:
+        gateway.server.dispatch._edgecity_original = original
+    assert written[0]["method"] == "event"
+    assert written[1]["id"] == 5 and [r["id"] for r in written[1]["result"]["sessions"]] == ["tg1"]
+
+
+def test_the_filtering_transport_is_the_connections_own_for_everything_else(guard):
+    inner = SimpleNamespace(auth_identity={"user_id": "u1"}, _ws="sock", writes=[])
+    inner.write = inner.writes.append
+    proxy = guard.FilteredReplies(inner, 9, lambda frame: {**frame, "result": "kept"})
+    assert proxy.auth_identity == {"user_id": "u1"} and proxy._ws == "sock"
+    proxy.write({"id": 9, "result": "all"})
+    proxy.write({"id": 8, "result": "other"})
+    proxy.write({"id": 9, "method": "event"})
+    assert inner.writes == [{"id": 9, "result": "kept"}, {"id": 8, "result": "other"}, {"id": 9, "method": "event"}]
+
+
+@pytest.mark.parametrize("breakage", ["no_owners", "owners_raise", "not_a_list", "not_a_dict"])
+def test_a_gateway_list_the_guard_cannot_filter_is_refused(gateway, breakage):
+    if breakage == "no_owners":
+        gateway.guard.set_session_owners(None)
+    elif breakage == "owners_raise":
+        gateway.guard.set_session_owners(lambda ids, profile=None: (_ for _ in ()).throw(OSError("busy")))
+    else:
+        reply = {"sessions": "x"} if breakage == "not_a_list" else "x"
+        gateway.server.dispatch._edgecity_original = lambda req, transport=None: {"id": req["id"], "result": reply}
+        gateway.guard.install_gateway(gateway.server, gateway.ws, gateway.server.requests, gateway.server.approvals)
+    [resp] = gateway.talk("resident", [rpc("session.list")])
+    assert refused(resp), resp
+    assert gateway.guard.counts()["denied_gateway_list_error"] == 1
+
+
+def test_a_gateway_lists_error_reply_goes_out_as_it_is(gateway):
+    gateway.server.dispatch._edgecity_original = lambda req, transport=None: {"id": req["id"], "error": {"code": 5006}}
+    gateway.guard.install_gateway(gateway.server, gateway.ws, gateway.server.requests, gateway.server.approvals)
+    assert gateway.talk("resident", [rpc("session.list")]) == [{"id": 1, "error": {"code": 5006}}]
+
+
+# ---- S-r3-2: a resident's @file: to its uploads, pastes and chat directory -----------------------
+
+_REF = re.compile(r"(?<![\w/])@(?P<kind>file|folder):(?P<value>`[^`\n]+`|\"[^\"\n]+\"|'[^'\n]+'|\S+)")
+
+
+def stand_in_parser(text):
+    """Hermes's `parse_context_references` in miniature (quotes stripped, no line ranges)."""
+    out = []
+    for m in _REF.finditer(text):
+        value = m.group("value").rstrip(",.;!?")
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "`\"'":
+            value = value[1:-1]
+        out.append(SimpleNamespace(kind=m.group("kind"), target=value, start=m.start(), end=m.end()))
+    return out
+
+
+@pytest.fixture
+def uploads(guard, home):
+    """HERMES_HOME with an upload, a paste, a chat-directory file and the hostile shapes S-r3-2 names."""
+    guard.set_reference_parser(stand_in_parser)
+    (home / "AGENTS.md").write_text("# village rules\n")
+    chat = Path(guard.resident_cwd())
+    assert os.path.islink(chat / "AGENTS.md")
+    (home / "attachments").mkdir()
+    (home / "attachments" / "notes.txt").write_text("harmless notes")
+    (home / "attachments" / "my notes.txt").write_text("harmless notes")
+    (home / "composer-pastes").mkdir()
+    (home / "composer-pastes" / "paste-1.txt").write_text("a long paste")
+    (chat / "draft.md").write_text("a draft")
+    (home / "config.yaml").write_text("probe_key: example-not-a-key\n")
+    (home / ".env").write_text("X=example-not-a-key\n")
+    os.symlink(home / "config.yaml", home / "attachments" / "cfg.txt")
+    os.symlink(home, home / "attachments" / "up")
+    (home / "attachments" / "sub").mkdir()
+    return SimpleNamespace(home=home, chat=str(chat))
+
+
+@pytest.mark.parametrize("target,ok", [
+    ("{home}/attachments/notes.txt", True),
+    ("{home}/attachments/my notes.txt", True),
+    ("{home}/attachments/not-there-yet.txt", True),
+    ("{home}/composer-pastes/paste-1.txt", True),
+    ("{home}/resident-chat/draft.md", True),
+    ("draft.md", True),                                     # relative to the chat's own directory
+    ("./draft.md", True),
+    ("../attachments/notes.txt", True),
+    ("{home}/attachments/../config.yaml", False),
+    ("{home}/attachments/cfg.txt", False),                  # a link to config.yaml
+    ("{home}/attachments/up/config.yaml", False),           # a link to HERMES_HOME
+    ("{home}/attachments/up/attachments/notes.txt", True),  # resolves back inside: the file itself
+    ("{home}/.env", False),
+    ("{home}/config.yaml", False),
+    ("../config.yaml", False),
+    ("{home}/attachments", False),                          # the directory, not a file in it
+    ("{home}/attachments/sub", False),                      # a directory
+    ("{home}/attachments/x.env", False),                    # a private name, even in the uploads
+    ("{home}/attachments/config.yaml", False),
+    ("{home}/resident-chat/AGENTS.md", False),              # the link out to the box's own
+    ("{home}/images/a.png", False),
+    ("{home}/attachments-other/a.txt", False),
+    ("/etc/hostname", False),
+    ("~/.ssh/id_ed25519", False),
+    ("", False), ("   ", False), (None, False), (7, False), ("{home}/attachments/a\x00.txt", False),
+])
+def test_resident_file_allowed(guard, uploads, target, ok):
+    value = target.format(home=uploads.home) if isinstance(target, str) else target
+    assert guard.resident_file_allowed(value, uploads.chat) is ok, value
+
+
+def test_no_file_is_admitted_from_a_chat_outside_the_resident_directory(guard, uploads):
+    good = f"{uploads.home}/attachments/notes.txt"
+    assert guard.resident_file_allowed(good, uploads.chat + "/") is True
+    for cwd in (str(uploads.home), "/", None, "", str(uploads.home / "attachments"), 7):
+        assert guard.resident_file_allowed(good, cwd) is False, cwd
+
+
+def test_an_uploads_directory_that_is_a_link_admits_nothing(guard, uploads, tmp_path):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "a.txt").write_text("x")
+    os.rename(uploads.home / "composer-pastes", tmp_path / "old-pastes")
+    os.symlink(elsewhere, uploads.home / "composer-pastes")
+    assert guard.resident_file_allowed(f"{uploads.home}/composer-pastes/a.txt", uploads.chat) is False
+
+
+def own_chat_in(gateway, cwd):
+    gateway.server._sessions["own-sid"]["cwd"] = cwd
+
+
+@pytest.mark.parametrize("text", [
+    "summarise @file:{home}/attachments/notes.txt",
+    "summarise @file:`{home}/attachments/my notes.txt`",
+    "@file:{home}/composer-pastes/paste-1.txt and @file:draft.md.",
+    "(see @file:{home}/attachments/notes.txt)",
+])
+def test_a_resident_prompt_may_name_its_own_uploads(gateway, uploads, text):
+    own_chat_in(gateway, uploads.chat)
+    [resp] = gateway.talk("resident", [rpc("prompt.submit", {"session_id": "own-sid",
+                                                             "text": text.format(home=uploads.home)})])
+    assert "error" not in resp, resp
+    assert gateway.calls == ["prompt.submit"]
+
+
+@pytest.mark.parametrize("text", [
+    "@file:{home}/attachments/../config.yaml",
+    "@file:{home}/attachments/cfg.txt",
+    "@file:{home}/.env",
+    "@folder:{home}/attachments",
+    "@folder:.",
+    "@folder:{home}/attachments/notes.txt",                   # @folder: is never admitted, even to a file
+    "@folder:{home}/attachments/not-there-yet",
+    "@file:{home}/attachments/notes.txt @file:{home}/config.yaml",
+    "@file:{home}/attachments/notes.txt @folder:{home}/attachments",
+    "@file:{home}/attachments/notes.txt ＠file:config.yaml",
+    "@fi @file:{home}/attachments/notes.txt le:config.yaml",  # blanking must not hide what folding builds
+    "x@file:{home}/attachments/notes.txt",                     # not a Hermes reference: the strict rule stands
+    "@FILE:{home}/attachments/notes.txt",
+])
+def test_a_resident_prompt_naming_anything_else_is_refused(gateway, uploads, text):
+    own_chat_in(gateway, uploads.chat)
+    [resp] = gateway.talk("resident", [rpc("prompt.submit", {"session_id": "own-sid",
+                                                             "text": text.format(home=uploads.home)})])
+    assert refused(resp) and gateway.calls == [], resp
+
+
+def test_an_upload_is_refused_from_a_chat_that_runs_elsewhere_or_without_a_parser(gateway, uploads):
+    text = f"summarise @file:{uploads.home}/attachments/notes.txt"
+    own_chat_in(gateway, str(uploads.home))
+    assert refused(gateway.talk("resident", [rpc("prompt.submit", {"session_id": "own-sid", "text": text})])[0])
+    own_chat_in(gateway, uploads.chat)
+    gateway.guard.set_reference_parser(None)
+    assert refused(gateway.talk("resident", [rpc("prompt.submit", {"session_id": "own-sid", "text": text})])[0])
+    gateway.guard.set_reference_parser(lambda t: (_ for _ in ()).throw(RuntimeError("broken")))
+    assert refused(gateway.talk("resident", [rpc("prompt.submit", {"session_id": "own-sid", "text": text})])[0])
+    gateway.guard.set_reference_parser(lambda t: [SimpleNamespace(kind="file", target="x", start=5, end=2)])
+    assert refused(gateway.talk("resident", [rpc("prompt.submit", {"session_id": "own-sid", "text": text})])[0])
+    assert gateway.calls == []
+
+
+def test_the_upload_check_also_reads_what_hermess_sanitiser_hands_on(gateway, uploads):
+    """Hermes expands the sanitised text (`methods_prompt.py:569`): a reference that only appears
+    once the sanitiser has run is judged too."""
+    own_chat_in(gateway, uploads.chat)
+    gateway.guard.set_prompt_sanitizer(lambda t: t.replace("<x>", ""))
+    text = f"@file:{uploads.home}/attachments/notes.txt<x>/../../config.yaml"
+    assert refused(gateway.talk("resident", [rpc("prompt.submit", {"session_id": "own-sid", "text": text})])[0])
+    ok = f"@file:{uploads.home}/attachments/notes.txt"
+    assert "error" not in gateway.talk("resident", [rpc("prompt.submit", {"session_id": "own-sid", "text": ok})])[0]
+
+
+def test_an_admin_prompt_is_not_judged(gateway, uploads):
+    [resp] = gateway.talk("admin", [rpc("prompt.submit", {"session_id": "admin-sid", "text": "@folder:/"})])
+    assert "error" not in resp
+
+
+
 # ---- lazy seams and Hermes's own read guard ------------------------------------------------------
 
 
@@ -1990,7 +2422,7 @@ def test_hermes_an_owner_keeps_the_resident_pages(hermes):
     owner = as_role(hermes, "owner")
     assert owner.get("/api/auth/me").json()["org_id"] == "owner"
     assert owner.get("/api/sessions").status_code == 200
-    assert owner.get("/api/sessions/stats").status_code == 200
+    assert admin_only(owner.get("/api/sessions/stats"))  # S-r3-1: box-wide counts are an admin's
     assert owner.get("/api/status").status_code == 200
     assert owner.get("/api/profiles").status_code == 200
     assert owner.get("/api/dashboard/plugins").status_code == 200
@@ -2638,6 +3070,233 @@ def test_hermes_slash_confirm_opt_outs_are_not_a_residents(quiet_turns):
             assert code_of(rpc_call(sock, "prompt.submit", {"session_id": sid, "text": text}, rid=20 + i)) is None
     approvals = (read_yaml(hermes.home / "config.yaml") or {}).get("approvals") or {}
     assert "mcp_reload_confirm" not in approvals and "destructive_slash_confirm" not in approvals
+
+
+# ---- SEC1-refute2 recheck d145378e (fix round 3): S-r3-1, S-r3-2, N-r3-3, N-r3-4 ----------------
+
+
+def seed_list_rows(hermes):
+    """`seed_rows`, plus what the recheck's P5 put in: an admin chat's first message and system
+    prompt, the owner's own messages, rows the gateway's `session.list` shows (it hides `tool`
+    sources) and rows with no `user_id` or no `source`."""
+    from hermes_state import SessionDB
+
+    seed_rows(hermes)
+    db = SessionDB(db_path=hermes.home / "state.db")
+    try:
+        db.append_message("admin-chat", "user", content="probe admin first message placeholder-not-a-secret")
+        db.update_system_prompt("admin-chat", "probe admin system prompt")
+        db.append_message("own-chat", "user", content="probe own first message")
+        db.append_message("tg-chat", "user", content="probe telegram first message")
+        for sid, source, user in (("own-web", "tui", "edgecity:owner-id"), ("admin-web", "tui", "edgecity:admin-id"),
+                                  ("no-user", "tool", None), ("no-source", "", "edgecity:admin-id")):
+            db.create_session(session_id=sid, source=source, user_id=user)
+        db.append_message("admin-web", "user", content="probe admin web message")
+    finally:
+        db.close()
+
+
+OWNER_ROWS = {"own-chat", "tg-chat", "own-web"}
+
+
+def test_hermes_s_r3_1_an_owners_session_list_carries_only_its_own_rows(hermes):
+    """The recheck's P5 on the real app: no landing admin's preview or system prompt in any list an
+    owner keeps; its own and its Telegram rows are there, paged and counted as its own; the admin
+    still sees every row."""
+    seed_list_rows(hermes)
+    owner, admin = as_role(hermes, "owner"), as_role(hermes, "admin")
+    everything = owner.get("/api/sessions", params={"limit": 100})
+    assert everything.status_code == 200, everything.text
+    body = everything.json()
+    assert {r["id"] for r in body["sessions"]} == OWNER_ROWS and body["total"] == 3
+    for query in ({}, {"order": "recent"}, {"full": "0"}, {"full": "false"}, {"min_messages": 1},
+                  {"exclude_sources": "cron"}, {"archived": "include"}, {"profile": "default"}):
+        resp = owner.get("/api/sessions", params=query)
+        assert resp.status_code == 200, (query, resp.text)
+        assert {r["id"] for r in resp.json()["sessions"]} <= OWNER_ROWS, query
+        assert "probe admin" not in resp.text and "admin-id" not in resp.text, query
+    paged = [owner.get("/api/sessions", params={"limit": 1, "offset": i}).json() for i in range(4)]
+    assert [len(p["sessions"]) for p in paged] == [1, 1, 1, 0] and {p["total"] for p in paged} == {3}
+    assert {p["sessions"][0]["id"] for p in paged[:3]} == OWNER_ROWS
+    for query in ({"full": "1"}, {"full": "true"}, {"full": "0", "limit": 5, "offset": 0}):
+        resp = owner.get("/api/sessions?" + urllib.parse.urlencode(query) + ("&full=1" if "limit" in query else ""))
+        assert admin_only(resp), query
+    for target in ("/api/sessions/stats", "/api/sessions/empty/count"):
+        assert admin_only(owner.get(target)), target
+    assert owner.get("/api/sessions", params={"archived": "nope"}).status_code == 400  # Hermes's own answer
+    # The admin: every row, the preview and, with full=1, the system prompt; the counts.
+    rows = {r["id"]: r for r in admin.get("/api/sessions", params={"limit": 100}).json()["sessions"]}
+    assert {"admin-chat", "pty-chat", "cron-chat", "no-user", "no-source"} | OWNER_ROWS <= set(rows)
+    assert "probe admin first message" in rows["admin-chat"]["preview"]
+    full = {r["id"]: r for r in admin.get("/api/sessions", params={"full": 1, "limit": 100}).json()["sessions"]}
+    assert full["admin-chat"].get("system_prompt") == "probe admin system prompt"
+    assert admin.get("/api/sessions/stats").json()["total"] >= 9
+    assert hermes.guard.counts()["resident_list_filtered"] >= 12
+
+
+def fresh_gateway_store(hermes, monkeypatch):
+    """The gateway opens its shared store once per process (`server._get_db`): point it at this
+    test's HERMES_HOME, as a box's gateway is at its own."""
+    monkeypatch.setattr(hermes.tui_server, "_db", None)
+
+
+def test_hermes_s_r3_1_an_owners_gateway_lists_carry_only_its_own_rows(hermes, monkeypatch):
+    from hermes_state import SessionDB
+
+    fresh_gateway_store(hermes, monkeypatch)
+    seed_list_rows(hermes)
+    owner, admin = as_role(hermes, "owner"), as_role(hermes, "admin")
+    with owner.websocket_connect(f"/api/ws?ticket={ticket(owner)}") as sock:
+        ready(sock)
+        listed = rpc_call(sock, "session.list", {"limit": 50}, rid=5)
+        ids = [s["id"] for s in listed["result"]["sessions"]]
+        assert set(ids) <= OWNER_ROWS and {"own-web", "tg-chat"} <= set(ids), ids
+        assert "probe admin" not in str(listed)
+        hidden = rpc_call(sock, "session.list", {"limit": 50, "include_hidden": True}, rid=6)
+        assert set(s["id"] for s in hidden["result"]["sessions"]) <= OWNER_ROWS
+        titled = rpc_call(sock, "session.list", {"title": "admin"}, rid=7)
+        assert titled["result"]["sessions"] == [] or "error" in titled
+        # The newest human-facing chat is the admin's: the owner is told there is none.
+        assert rpc_call(sock, "session.most_recent", {}, rid=8)["result"]["session_id"] is None
+    with admin.websocket_connect(f"/api/ws?ticket={ticket(admin)}") as asock:
+        ready(asock)
+        ids = [s["id"] for s in rpc_call(asock, "session.list", {"limit": 50}, rid=5)["result"]["sessions"]]
+        assert {"admin-web", "own-web", "tg-chat"} <= set(ids)
+        assert rpc_call(asock, "session.most_recent", {}, rid=6)["result"]["session_id"] == "admin-web"
+    db = SessionDB(db_path=hermes.home / "state.db")
+    try:
+        db.append_message("own-web", "user", content="probe own web message, now the newest")
+    finally:
+        db.close()
+    with owner.websocket_connect(f"/api/ws?ticket={ticket(owner)}") as sock:
+        ready(sock)
+        assert rpc_call(sock, "session.most_recent", {}, rid=8)["result"]["session_id"] == "own-web"
+
+
+def test_hermes_s_r3_2_an_owners_upload_reference_is_accepted_and_nothing_else(quiet_turns, monkeypatch):
+    """The recheck's P8 on the real app: `file.attach`, then `prompt.submit` with the `ref_text`
+    Hermes returned, is accepted, and so are a desktop paste and a file in the chat directory;
+    `..` out of the uploads, a link in them to config.yaml, `.env` and `@folder:` are 4031."""
+    import base64
+
+    hermes = quiet_turns
+    # The gateway stages uploads under the home it was imported with (`server.py:50`), on a box the
+    # dashboard's own HERMES_HOME; here, this test's.
+    monkeypatch.setattr(hermes.tui_server, "_hermes_home", hermes.home)
+    plant_private_files(hermes.home)
+    home = hermes.home
+    owner = as_role(hermes, "owner")
+    with owner.websocket_connect(f"/api/ws?ticket={ticket(owner)}") as sock:
+        ready(sock)
+        sid = create(sock)
+        chat = hermes.tui_server._sessions[sid]["cwd"]
+        data = "data:text/plain;base64," + base64.b64encode(b"harmless notes").decode()
+        att = rpc_call(sock, "file.attach", {"session_id": sid, "data_url": data, "name": "notes.txt"}, rid=3)
+        ref, path = att["result"]["ref_text"], att["result"]["path"]
+        assert os.path.dirname(path) == os.path.realpath(home / "attachments") and ref == f"@file:{path}", att
+        assert code_of(rpc_call(sock, "prompt.submit", {"session_id": sid, "text": "summarise " + ref}, rid=4)) is None
+        (home / "composer-pastes").mkdir()
+        (home / "composer-pastes" / "paste-1.txt").write_text("a long paste")
+        Path(chat, "draft.md").write_text("a draft")
+        for i, text in enumerate((f"@file:{home}/composer-pastes/paste-1.txt", "see @file:draft.md")):
+            other = create(sock, rid=10 + i)
+            assert code_of(rpc_call(sock, "prompt.submit", {"session_id": other, "text": text}, rid=20 + i)) is None, text
+        os.symlink(home / "config.yaml", home / "attachments" / "cfg.txt")
+        hostile = (f"@file:{home}/attachments/../config.yaml", f"@file:{home}/attachments/cfg.txt", f"@file:{home}/.env",
+                   f"@folder:{home}/attachments", f"{ref} @file:config.yaml", "@file:../config.yaml",
+                   f"{ref} @folder:.")
+        for i, text in enumerate(hostile):
+            frame = rpc_call(sock, "prompt.submit", {"session_id": sid, "text": text}, rid=40 + i)
+            assert code_of(frame) == 4031, (text, frame)
+    # What Hermes then does with the admitted references, as `prompt_turn.py:599` calls it from the
+    # resident directory: the paste and the chat file inline; the upload, outside the chat's
+    # directory, is Hermes's own "outside the allowed workspace" note (the agent reads it with
+    # read_file); nothing private ever inlines.
+    from agent.context_references import preprocess_context_references
+
+    def expand(text):
+        return preprocess_context_references(text, cwd=chat, allowed_root=chat, context_length=200000)
+
+    assert "a long paste" in expand(f"@file:{home}/composer-pastes/paste-1.txt").message
+    assert "a draft" in expand("@file:draft.md").message
+    upload = expand("summarise " + ref)
+    assert "harmless notes" not in upload.message and any("outside the allowed workspace" in w for w in upload.warnings)
+    for text in hostile:
+        assert "example-not-a-key" not in (expand(text).message or ""), text
+
+
+def test_hermes_s_r3_2_an_upload_from_a_chat_running_in_home_is_refused(quiet_turns, monkeypatch):
+    """A chat whose cwd is not the resident directory (a resumed Telegram chat runs where Hermes
+    put it) admits no `@file:` at all: Hermes's own workspace check there is HERMES_HOME."""
+    import base64
+
+    hermes = quiet_turns
+    monkeypatch.setattr(hermes.tui_server, "_hermes_home", hermes.home)
+    fresh_gateway_store(hermes, monkeypatch)
+    seed_rows(hermes)
+    owner = as_role(hermes, "owner")
+    with owner.websocket_connect(f"/api/ws?ticket={ticket(owner)}") as sock:
+        ready(sock)
+        tsid = rpc_call(sock, "session.resume", {"session_id": "tg-chat"}, rid=3)["result"]["session_id"]
+        hermes.tui_server._sessions[tsid]["cwd"] = str(hermes.home)
+        data = "data:text/plain;base64," + base64.b64encode(b"harmless notes").decode()
+        ref = rpc_call(sock, "file.attach", {"session_id": tsid, "data_url": data, "name": "n.txt"}, rid=4)["result"]["ref_text"]
+        assert code_of(rpc_call(sock, "prompt.submit", {"session_id": tsid, "text": ref}, rid=5)) == 4031
+
+
+@pytest.mark.parametrize("break_it", ["delete", "not_callable"])
+def test_hermes_without_the_reference_backstop_the_plugin_refuses_to_load(load_plugin, web_server, tmp_path, monkeypatch,
+                                                                          caplog, break_it):
+    """N-r3-3: a Hermes that renamed `_ensure_reference_path_allowed` loses the only `@file:` line
+    in the messaging gateway, so the plugin logs ERROR and refuses to load, as for the deny-list."""
+    plugin = load_plugin()  # skips where Hermes is not importable
+    from agent import context_references
+    from hermes_cli.dashboard_auth import registry
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("TENANT_ID", TENANT)
+    monkeypatch.setenv("CONTROL_PLANE_URL", "http://127.0.0.1:9")
+    if break_it == "delete":
+        monkeypatch.delattr(context_references, "_ensure_reference_path_allowed")
+    else:
+        monkeypatch.setattr(context_references, "_ensure_reference_path_allowed", "renamed")
+    registry.clear_providers()
+    caplog.set_level(logging.ERROR)
+    with pytest.raises(plugin.ResidentGuardNotInstalled):
+        plugin.register(Ctx())
+    assert registry.get_provider("edgecity") is None
+    assert any(r.levelno == logging.ERROR and "private-path check NOT installed" in r.getMessage() for r in caplog.records)
+
+
+def test_hermes_n_r3_4_a_second_connection_of_the_same_resident_cannot_answer_the_firsts_request(hermes):
+    """N-r3-4 (the recheck's P3, two connections): both carry the owner's login, so each may act on
+    chats stamped with it, but only the connection attached to a chat answers its requests."""
+    from tui_gateway import server_requests
+
+    owner = as_role(hermes, "owner")
+    with owner.websocket_connect(f"/api/ws?ticket={ticket(owner)}") as sock1:
+        ready(sock1)
+        answers_requests(sock1)
+        sid1 = create(sock1)
+        entry, frame = raise_approval(hermes, sock1, sid1, "req-conn1")
+        with owner.websocket_connect(f"/api/ws?ticket={ticket(owner)}") as sock2:
+            ready(sock2)
+            answers_requests(sock2)
+            create(sock2)
+            reply = frame_reply(sock2, {"jsonrpc": "2.0", "id": frame["id"], "result": {"choice": "once"}}, 11)
+            assert code_of(reply) == 4031 and reply["error"]["data"]["reason"] == "not_own_session", reply
+            answered = rpc_call(sock2, "request.answer", {"id": frame["id"], "result": {"choice": "once"}}, rid=12)
+            assert code_of(answered) == 4031, answered
+            assert entry.result is None and frame["id"] in server_requests._open
+        assert frame_reply(sock1, {"jsonrpc": "2.0", "id": frame["id"], "result": {"choice": "once"}}, 13) is None
+        for _ in range(50):
+            if entry.result is not None:
+                break
+            import time
+
+            time.sleep(0.02)
+        assert entry.result == "once"
+
 
 
 # ---- the hostile walk: every listed method, every frame shape, owner refused, admin served -------

@@ -640,7 +640,8 @@ def test_hermes_end_to_end_through_the_real_seam_and_gate(hermes):
     owner = hermes.registry.get_provider("edgecity")._mint("owner-id", "owner@example.org", "owner")
     client.cookies.set("hermes_session_at", owner.access_token)
     assert client.get("/api/sessions").status_code == 200
-    assert client.get("/api/sessions/stats").status_code == 200
+    # SEC-1 S-r3-1: the box-wide counts are an admin's; the list carries the owner's own rows.
+    assert client.get("/api/sessions/stats").status_code == 403
 
 
 def test_hermes_owner_session_bearer_still_reads_the_two_routes(hermes):
@@ -666,7 +667,9 @@ def test_hermes_owner_session_bearer_still_reads_the_two_routes(hermes):
         assert refused.status_code == 403 and refused.json()["reason"] == "not_own_session", sid
         archive = client.get(f"/api/sessions/{sid}/messages", headers={"Authorization": "Bearer " + A["token"]})
         assert archive.status_code == 200, sid
-    assert client.get("/api/sessions/stats", headers=session_bearer).status_code == 200
+    listed = client.get("/api/sessions", headers=session_bearer).json()
+    assert sorted(r["id"] for r in listed["sessions"]) == ["own-chat", "tg-chat"] and listed["total"] == 2
+    assert client.get("/api/sessions/stats", headers=session_bearer).status_code == 403
 
 
 def test_hermes_unregistered_provider_passes_a_valid_token_to_the_gates_401(hermes):

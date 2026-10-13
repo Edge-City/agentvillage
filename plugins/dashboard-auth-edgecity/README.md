@@ -164,21 +164,22 @@ The tables are at the top of `_resident_guard.py`, one row per capability with i
 - **The page shell**: every dashboard page (the SPA index), the bundle, fonts and icons, enabled
   dashboard plugins' static files, `GET /api/profiles`, `GET /api/profiles/active`,
   `GET /api/dashboard/font`.
-- **Their own sessions**: list, stats and the empty count (box-wide metadata, see "What a resident
+- **Their own sessions**: the list (`GET /api/sessions`, their own rows only, see "What a resident
   can see of other sessions"), and, for one of their own sessions only, read, read around a
   message, timeline, latest descendant, export, rename and delete. A session is the resident's
   when Hermes stamped the resident's own dashboard login on it (`<provider>:<user id>`), or when it
   came in on one of the box's messaging channels (`RESIDENT_SESSION_SOURCES`: Telegram and the
-  other platforms) and no other dashboard login owns it. Search, bulk delete, delete-empty and
-  prune act across sessions the guard cannot attribute before the handler runs, so from 1.3.1 they
-  are admin only.
+  other platforms) and no other dashboard login owns it; a row with neither is not. Search, bulk
+  delete, delete-empty and prune act across sessions the guard cannot attribute before the handler
+  runs, so from 1.3.1 they are admin only; from 1.3.2 so are the box-wide counts
+  (`GET /api/sessions/stats`, `GET /api/sessions/empty/count`) and the list with `?full=1`.
 - **The web chat's uploads**: `POST /api/chat/image-upload`.
 - **The approvals card**: `/api/plugins/av-approval/**`, reserved for av-approval's own dashboard
   routes. None is mounted at this version.
 - **Sockets**: only the chat gateway, `/api/ws`.
 - **Chat gateway methods** on `/api/ws`: handshake (`ping`, `gateway.capabilities`,
-  `client.capabilities`), chats (`session.create`, `.resume`, `.list`, `.most_recent`, `.title`,
-  `.close`, `.delete`, `.interrupt`, `.events.since`), `prompt.submit`, answering the agent
+  `client.capabilities`), chats (`session.create`, `.resume`, `.list` and `.most_recent` with their
+  own rows only, `.title`, `.close`, `.delete`, `.interrupt`, `.events.since`), `prompt.submit`, answering the agent
   (`approval.pending`, `approval.received`, `approval.respond`, `request.answer`), uploads
   (`image.attach_bytes`, `image.detach`, `file.attach` and `pdf.attach` with bytes only, never a
   host path) and `model.options`. Every method that names a chat answers only for one of the
@@ -188,7 +189,7 @@ The tables are at the top of `_resident_guard.py`, one row per capability with i
   which writes `command_allowlist` into `config.yaml` (`tools/approval.py:380-391`), and any other
   value are refused (`4031`) and counted (`denied_gateway_always`). **`always` is admin only.**
 
-### A resident's own chats on the gateway (1.3.1)
+### A resident's own chats on the gateway (1.3.1, 1.3.2)
 
 - **A live chat** is the resident's when this connection created it, or when Hermes stamped the
   connection's own login on it (`auth_user_id`, a reconnect or a resume). A landing admin's chat
@@ -216,20 +217,44 @@ The tables are at the top of `_resident_guard.py`, one row per capability with i
   refused, and if the directory itself is a symlink the chat is refused. Not `$HERMES_HOME`, because
   on village boxes that is where config.yaml, plugins, hooks and the key store live, and Hermes
   expands `@file:` against the chat's directory (`prompt_turn.py:590-604`).
-- **No file references.** A resident's `prompt.submit` whose text carries `@file:` or `@folder:`
-  (any case, after Unicode folding, paste markers and Hermes's own sanitiser) is refused, and so
-  is any gateway-internal `_` parameter (`_turn_author`, `_hosted_task`).
+- **File references (1.3.2).** A resident's `prompt.submit` may carry an `@file:` reference only to
+  a file in `RESIDENT_FILE_DIRS` under `$HERMES_HOME`: `attachments/` (where `file.attach` stages
+  an upload, so the `ref_text` it returns works), `composer-pastes/` (the desktop app's long
+  pastes) and `resident-chat/`. The reference is read by Hermes's own parser
+  (`parse_context_references`) from the text as sent and as Hermes's sanitiser hands it on, and its
+  target is resolved as Hermes resolves it (`~`, relative to the chat's directory) and through
+  every symlink: `attachments/../config.yaml`, a link in `attachments/` to config.yaml, a private
+  name (`.env`, `config.yaml`, ...), a directory or anything outside the three are refused, and
+  only from a chat that runs in `resident-chat` (a resumed Telegram chat runs elsewhere, so it
+  takes no `@file:`). Any other `@file:` and every `@folder:` (any case, after Unicode folding,
+  paste markers and the sanitiser) is refused, and so is any gateway-internal `_` parameter
+  (`_turn_author`, `_hosted_task`). Hermes then expands what it admits from the chat's directory
+  (`allowed_root` is the chat's cwd, plus `composer-pastes/`): a paste and a `resident-chat` file
+  are inlined; an upload in `attachments/` is outside that workspace, so Hermes keeps the
+  reference in the message with its own note and the agent reads the file with `read_file`.
 
 ### What a resident can see of other sessions
 
-- **Still visible: metadata.** `GET /api/sessions`, `GET /api/sessions/stats`, the empty count,
-  `session.list` and `session.most_recent` list every stored session on the box: ids, titles,
-  sources, timestamps, counts and Hermes's first-message preview. Hermes builds those lists in one
-  handler (a long one on the gateway pool), so the guard cannot filter them row by row before they
-  are sent; refusing them would take the Sessions page away.
-- **Not visible: content.** Messages, export, timeline and search, and every chat action, answer
-  only for the resident's own sessions. So a landing admin's dashboard chats, the terminal's and
-  cron's stay unreadable and unsteerable, except their titles and previews in the lists.
+Nothing, from 1.3.2 (SEC1-refute2 S-r3-1: the lists used to carry every session's title,
+first-message preview and, with `?full=1`, system prompt).
+
+- **`GET /api/sessions`** carries the resident's own rows only. Hermes's handler answers first (its
+  validation and errors stand); the guard then reads Hermes's own list under the request's filters
+  and order, 100 rows at a time from the start (`LIST_PAGE_ROWS`, at most `LIST_SCAN_ROWS` = 5000
+  stored rows), drops every row that is not the resident's, and pages through the rest with the
+  request's `limit` and `offset`. `total` counts the resident's rows only. A failure answers 503
+  `"reason":"session_list_unavailable"`, never Hermes's box-wide page. `?full=1` (any `full` but a
+  false word) is admin only.
+- **`GET /api/sessions/stats` and `GET /api/sessions/empty/count`** are admin only (box-wide
+  counts). The Sessions page then shows no stats strip and no "Delete empty" count; it already
+  could not delete empty sessions.
+- **Gateway `session.list`** (a long handler: the pool worker writes the reply through the
+  transport, so the guard dispatches it with a transport that filters that one reply) and
+  **`session.most_recent`** (inline) carry only the resident's rows; their rows carry no `user_id`,
+  so each id's owner is read from the store. When the box's newest chat is not the resident's,
+  `session.most_recent` answers Hermes's own "none" (`session_id: null`). A failure is a 4031.
+- **Content and actions** (messages, export, timeline, search, every chat action) answer only for
+  the resident's own sessions, as in 1.3.1. The archive job's bearer and admins see every row.
 
 ### What is admin only
 
@@ -276,8 +301,9 @@ scope path must match a row. A gateway method row is `name: (rule, why)`, where 
 a tuple of rules: `BYTES_ONLY` (no host `path`), `NO_ALWAYS` (no persistent approval),
 `OWN_SESSION` / `OWN_SESSION_IF_GIVEN` (a live chat of the resident's), `OWN_STORED` (a stored
 session of the resident's), `OWN_REQUEST` (the `request_id` is pending on that chat), `PINNED_CWD`
-(the resident chat directory), `NO_FILE_REFS` (no `@file:` / `@folder:`) or `ANSWER` (the response
-frame rules). `RESIDENT_SERVER_REQUESTS` names the agent's prompts a resident may answer and
+(the resident chat directory), `NO_FILE_REFS` (no `@folder:`, no `@file:` outside `RESIDENT_FILE_DIRS`), `ANSWER` (the response
+frame rules) or `OWN_ROWS` (a list whose reply carries only the resident's rows). `RESIDENT_FILE_DIRS`
+names where a resident's `@file:` may point. `RESIDENT_SERVER_REQUESTS` names the agent's prompts a resident may answer and
 `RESIDENT_SESSION_SOURCES` the channels whose sessions are the resident's. Admins are never checked
 against the tables. The Hermes-backed tests classify every route and method by these tables, so a
 new row needs no test change; removing a row a test relies on (for example `/api/sessions`) does.
@@ -296,14 +322,16 @@ added to Hermes's own read guard for the Files and `/api/fs` routes
 (`web_routers/files.py:78`), so nobody, admins included, downloads the signing key through the
 dashboard.
 
-**The agent's own reads (1.3.1).** At `register()` the key store (`.dashboard-auth-edgecity`) and
+**The agent's own reads (1.3.1, 1.3.2).** At `register()` the key store (`.dashboard-auth-edgecity`) and
 this plugin's own directory join Hermes's agent read deny-list
 (`agent.file_safety._READ_DENIED_DIRS`), which `read_file` and `@file:` consult. If that tuple is
 gone or reshaped the plugin refuses to load (`ResidentGuardNotInstalled`), as for the HTTP seam.
 And `agent.context_references._ensure_reference_path_allowed` is wrapped so that an `@file:` /
 `@folder:` reference to a private path under `$HERMES_HOME` (config.yaml, `plugins/`, `hooks/`, the
 key store, `state.db`) or in the Hermes checkout is refused for every caller, admins and the
-messaging gateway included, wherever this plugin loads. **This is defence in depth, not custody:**
+messaging gateway included, wherever this plugin loads. From 1.3.2 that wrapper is required too: if
+Hermes renames `_ensure_reference_path_allowed`, the plugin logs ERROR and refuses to load
+(SEC1-refute2 N-r3-3; in the messaging gateway it is the only `@file:` line). **This is defence in depth, not custody:**
 the agent's terminal can still read the store, and anyone holding the key and one live admin row
 can sign an admin cookie. Moving the key out of the `hermes` user's reach is SEC-2.
 
@@ -331,6 +359,8 @@ residents and admins, signs in again once after the roll.
 - A ticket minted inside a gateway call (`display.observe`, the Bot Desktop bridge) carries that
   connection's role: an admin's is an admin's; the PTY child's and a resident's are a resident's.
 - A session route or a resume whose owner lookup fails, or finds no session, is refused.
+- A resident's session list the guard cannot filter (no reader, a failure, a body of another
+  shape) answers 503 over HTTP and 4031 on the gateway, never the box-wide list.
 - The gateway seam installs the first time a resident opens `/api/ws` (`tui_gateway.server` starts
   threads at import, so it is not imported at plugin load); until it is in place, and if it ever
   fails, a resident's `/api/ws` is refused.
@@ -355,16 +385,20 @@ wrapper already there (an earlier load, or 1.2.0's) is replaced, wrapping what i
 | `tui_gateway.ws.handle_ws` and `tui_gateway.server.dispatch` | the `/api/ws` route imports `handle_ws` at call time (`chat_ws.py:588`); every frame goes through `server.dispatch(req, transport)` in `asyncio.to_thread` (`ws.py:361`) | carries the socket's role into every dispatch (a context variable; the socket on the transport as a fallback) and answers a resident only on `RESIDENT_GATEWAY_METHODS` |
 | `web_routers.files._SENSITIVE_MANAGED_DIR_NAMES` | read at call time by `_is_sensitive_path` (`files.py:92`) | adds `.dashboard-auth-edgecity`, for every session |
 | `agent.file_safety._READ_DENIED_DIRS` | read at call time by `get_read_block_error` (`file_safety.py:343-385`) | adds the key store and this plugin's directory; required (the plugin refuses to load without it) |
-| `agent.context_references._ensure_reference_path_allowed` | read at call time by `_expand_path_reference` (`context_references.py:291`) | also refuses a private path under `$HERMES_HOME` or the Hermes checkout, for every caller |
-| `hermes_cli.web_server_sessions._open_session_db_for_profile` | what the session routes read (`web_routers/sessions.py`) | the guard's read-only owner lookup for `/api/sessions/{id}...`, `session.resume` and `session.delete` |
+| `agent.context_references._ensure_reference_path_allowed` | read at call time by `_expand_path_reference` (`context_references.py:291`) | also refuses a private path under `$HERMES_HOME` or the Hermes checkout, for every caller; required (1.3.2) |
+| `hermes_cli.web_server_sessions._open_session_db_for_profile` | what the session routes read (`web_routers/sessions.py`) | the guard's read-only owner lookup for `/api/sessions/{id}...`, `session.resume`, `session.delete` and the gateway list rows |
+| `hermes_cli.web_routers.sessions.get_sessions` | the `GET /api/sessions` handler | called directly, compact rows, 100 at a time, to build a resident's own list |
+| `agent.context_references.parse_context_references` | Hermes's `@`-reference parser (`context_references.py:151`) | reads a resident's `@file:` references exactly as Hermes will |
 
 Logs go to `dashboard-auth-edgecity.resident-guard`: one code per decision and the running counts,
 never the email, a token, a ticket or a path. Denials at INFO (`denied_not_listed`,
 `denied_private_path`, `denied_error`, `denied_ws_resident`, `denied_ws_internal`,
 `denied_gateway_method`, `denied_gateway_always`, `denied_gateway_session`,
 `denied_gateway_file_ref`, `denied_gateway_cwd`, `denied_gateway_profile`, `denied_answer_*`,
-`denied_not_own_session`, `denied_context_reference`, `denied_display_ticket`,
-`denied_seam_*_missing`); allows and the hide at DEBUG. The install line is `resident guard on (...)`; anything at ERROR from this logger is a seam
+`denied_not_own_session`, `denied_context_reference`, `denied_display_ticket`, `denied_full_list`,
+`denied_session_list_error`, `denied_gateway_list`, `denied_gateway_list_error`,
+`denied_seam_*_missing`); allows, the hide and the list filter (`resident_list_filtered`,
+`resident_list_truncated`) at DEBUG. The install line is `resident guard on (...)`; anything at ERROR from this logger is a seam
 that did not install.
 
 ### What verify@b2 reads back after the roll
@@ -372,12 +406,12 @@ that did not install.
 Placeholders only (`<BOX>`, `<OWNER_AT>`, `<ADMIN_AT>`, `<T>`); never a cookie value in a report.
 Fresh owner and admin sign-ins are needed after the roll.
 
-- `plugin.yaml` says `version: 1.3.1`.
+- `plugin.yaml` says `version: 1.3.2`.
 - The install line `resident guard on (...)` is logged at INFO. If the dashboard logs at WARNING,
   its absence proves nothing; the proof is then no ERROR from `dashboard-auth-edgecity` plus the
   probes below.
 - **Old cookies are dead:** a cookie from before the roll (the one-time key replacement that
-  arrived in 1.3.0 and that 1.3.1 carries; `_KEY_EPOCH` is unchanged) answers `GET /api/auth/me` with 401
+  arrived in 1.3.0 and that 1.3.2 carries; `_KEY_EPOCH` is unchanged) answers `GET /api/auth/me` with 401
   `{"error":"session_expired",...}`.
 - **An owner on the fs routes:** `GET /api/fs/download?path=<home>/.dashboard-auth-edgecity/sessions.sqlite3`
   answers 403 `"reason":"admin_only"` (the guard); an admin's answers 403 with Hermes's own body.
@@ -386,6 +420,14 @@ Fresh owner and admin sign-ins are needed after the roll.
   `{"id":"srq-x","result":{"choice":"always"}}` answer error `4031`.
 - **An owner's session routes:** `GET /api/sessions/<an admin or terminal session id>/messages`
   answers 403 `"reason":"not_own_session"`; one of the owner's Telegram sessions answers 200.
+- **New in 1.3.2: an owner's `GET /api/sessions` shows no other login's rows:** every row's
+  `user_id` is the owner's own login or a Telegram sender (none is an admin's `edgecity:<id>`, none
+  is a `tui`/`cli`/`cron` row without a login), and `total` equals the number of the owner's rows;
+  `GET /api/sessions?full=1` and `GET /api/sessions/stats` answer 403 `"reason":"admin_only"`.
+- **New in 1.3.2: an owner's `@file:` to an upload is accepted:** over the owner's `/api/ws`,
+  `file.attach {"session_id":<own chat>,"data_url":"data:text/plain;base64,aGk=","name":"t.txt"}`,
+  then `prompt.submit` with the `ref_text` it returned, answers without error; `prompt.submit`
+  `@file:<home>/attachments/../config.yaml` answers error `4031`.
 - Kept from 1.3.0: owner `PUT /api/config` gives `admin_only`; owner `/api/env` 403; owner
   `/api/dashboard/plugins/hub` 403, admin 200; owner `/api/console` closes 4401
   `auth: edgecity_admin_only`; owner `/api/ws` `shell.exec` answers 4031; admin `/api/console` sends
