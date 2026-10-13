@@ -58,6 +58,8 @@ function mockList(text: string) {
 const MAYA_CARD = {
   name: "Maya",
   headline: "memory systems",
+  // INDEX-COMMS A: Index's own headline, with no fallback, for `match.headline`.
+  matchHeadline: "memory systems",
   userUrl: `https://index.network/u/${MAYA_ID}`,
   opportunityUrl: "https://index.network/o/opp-maya",
 };
@@ -144,6 +146,7 @@ describe("askQuestions", () => {
     expect(result).toEqual({
       name: "Jon",
       headline: "village tools",
+      matchHeadline: "village tools",
       userUrl: `https://index.network/u/${JON_ID}`,
       opportunityUrl: "https://index.network/o/opp-jon",
     });
@@ -262,7 +265,8 @@ describe("askQuestions against Index's answers", () => {
       peer: { name: "Maya", userId: "../../x", url: "javascript:alert(1)" },
     }] as unknown as ReturnType<typeof card>[]));
     const result = await askQuestions({ date: "2026-06-17", stateFile: "state.json", apiKey: "test-key" });
-    expect(result).toEqual({ name: "Maya", headline: "memory systems", opportunityUrl: "https://index.network/o/opp-maya" });
+    // INDEX-COMMS A: Index's own headline rides as `matchHeadline` (never the summary fallback).
+    expect(result).toEqual({ name: "Maya", headline: "memory systems", matchHeadline: "memory systems", opportunityUrl: "https://index.network/o/opp-maya" });
   });
 
   test("a card without a valid id is never the evening card", async () => {

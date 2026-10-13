@@ -118,6 +118,8 @@ describe("pendingAlert", () => {
           firstSeen: T1.toISOString(),
           // The recorded row carries no deadline field: never invented.
           respondBy: null,
+          // INDEX-COMMS A: Index's headline for the card; the row's summary never.
+          match: { headline: "h" },
         },
       ],
     });

@@ -45,7 +45,12 @@ const FINAL_REFLECTION_PROMPT =
 
 export interface EveningCard {
   name: string;
+  /** Index's headline, else the summary, else "New match": never handed to the model. */
   headline: string;
+  /** INDEX-COMMS A: Index's own `headline` only, no fallback: the evening note's `match.headline`. */
+  matchHeadline?: string;
+  /** INDEX-COMMS A: the resident's own intent text for this card (BriefOpportunity.matchedIntentText). */
+  matchedIntentText?: string;
   userUrl?: string;
   opportunityUrl?: string;
   acceptUrl?: string;
@@ -101,6 +106,8 @@ function cardFrom(opp: BriefOpportunity): EveningCard | null {
   return {
     name: linked.name,
     headline: linked.headline || linked.mainText || "New match",
+    ...(linked.headline ? { matchHeadline: linked.headline } : {}),
+    ...(linked.matchedIntentText ? { matchedIntentText: linked.matchedIntentText } : {}),
     userUrl: linked.userUrl,
     opportunityUrl: linked.opportunityUrl,
     ...(linked.acceptUrl ? { acceptUrl: linked.acceptUrl } : {}),

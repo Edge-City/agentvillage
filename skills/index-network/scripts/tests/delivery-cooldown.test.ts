@@ -165,7 +165,8 @@ describe("the follow-up's waiting-on-you list: re-showings only", () => {
     const parsed = JSON.parse(out);
     expect(parsed.needsAttention.map((c: { name: string }) => c.name)).toEqual(["Jon"]);
     expect(parsed.waiting.map((c: { name: string }) => c.name)).toEqual(["Maya", "Ana"]);
-    expect(Object.keys(parsed.waiting[0]).sort()).toEqual(["headline", "name", "opportunityUrl", "summary", "userUrl"]);
+    // INDEX-COMMS A: `matchHeadline` is Index's own headline (no fallback), for a Waiting on you row.
+    expect(Object.keys(parsed.waiting[0]).sort()).toEqual(["headline", "matchHeadline", "name", "opportunityUrl", "summary", "userUrl"]);
     expect(readLog(file)?.[MAYA]).toEqual(shown(addDays(DAY0, -3)));
   });
 

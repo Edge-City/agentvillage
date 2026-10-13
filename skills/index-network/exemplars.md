@@ -2,7 +2,7 @@
 
 Canonical user-facing renderings for Edge City India's people-finding flows. Mimic these exactly when composing an opportunity reply or an introduction drop. They are the bar for tone, structure, and information density. Edge City India (Mandrem, Goa, October 11 – November 1, 2026) is the literal community in every example — pull facts from `AGENTS.md` Community context, never invent dates, attendee counts, programming formats, announcements, events, venues, or attendees. Calendar lines below are `{placeholders}`: fill them only from the live calendar context, never with example or Edge Esmeralda content.
 
-Direct conversations come first. Each card is one specific overlap and one Index opportunity link. Do not describe backend activity, advertise virtual worlds, or turn the brief into a broad digest.
+Direct conversations come first. Each card names its topic in at most six words taken from Index's `headline` (never its `summary`, never a URL, a handle or a number), or leaves the topic out when the headline reads like a request, an instruction or an address to anyone, and carries one message link. Do not describe backend activity, advertise virtual worlds, or turn the brief into a broad digest.
 
 ## Good morning brief (fires once daily, 08:00 village time, IST)
 
@@ -23,13 +23,13 @@ Calendar bullets should put EdgeOS `highlighted: true` events first, then fill w
 > - {timeLocal} IST — {Interest-relevant event title} at {venue}. {One line on why it fits this user.}
 >
 > **3 conversations await you**
-> - [Maya]({userUrl}) — Talk to them about agent memory for long-running workflows. Direct overlap with how you handle persistent context, [message Maya]({acceptUrl}).
-> - [Theo]({userUrl}) — Researching how information surfaces in decentralized networks. That's the type of thinking that sharpens protocol design, [message Theo]({acceptUrl}).
-> - [Priya]({userUrl}) — Building community-owned data infrastructure. Aligned on the ownership layer and complementary on discovery, [message Priya]({acceptUrl}).
 > Tapping a link opens Agent Village, where one tap accepts; once you have both accepted, it opens Telegram with them.
+> - [Maya]({userUrl}) — waiting to hear from you about {topic}, [message Maya]({acceptUrl}).
+> - [Theo]({userUrl}) — waiting to hear from you about {topic}, [message Theo]({acceptUrl}).
+> - [Priya]({userUrl}) — waiting to hear from you about {topic}, [message Priya]({acceptUrl}).
 >
 > **Help your community**
-> - [Remi]({userUrl}) — Looking for a technical co-founder for his regenerative education platform. Needs someone who thinks in systems and has shipped infrastructure. Know anyone, make intro
+> - [Remi]({userUrl}) — asked for an introduction about {topic}. Know anyone, make intro
 >
 > Agent Village: https://agents.edgecity.live
 >
@@ -47,7 +47,8 @@ When there is no current organizer announcement you can verify, omit the section
 > - {timeLocal} IST — {Event title} at {venue}. {One line on why it fits this user.}
 >
 > **1 conversation awaits you**
-> - [Priya]({userUrl}) — Building community-owned data infrastructure. Aligned on the ownership layer and complementary on discovery, [message Priya]({acceptUrl}).
+> Tapping the link opens Agent Village, where one tap accepts; once you have both accepted, it opens Telegram with them.
+> - [Priya]({userUrl}) — waiting to hear from you about {topic}, [message Priya]({acceptUrl}).
 >
 > Agent Village: https://agents.edgecity.live
 >
@@ -62,7 +63,8 @@ If the live calendar is unavailable (call failed, or no Edge City India calendar
 > Here's what you need to know today:
 >
 > **1 conversation awaits you**
-> - [Ashish]({userUrl}) — His work spans generative software, AI infrastructure, creative AI design, and deep learning research. Several concrete angles for a first conversation, [message Ashish]({acceptUrl}).
+> Tapping the link opens Agent Village, where one tap accepts; once you have both accepted, it opens Telegram with them.
+> - [Ashish]({userUrl}) — waiting to hear from you about {topic}, [message Ashish]({acceptUrl}).
 >
 > I don't have today's Edge City India schedule this morning — the Edge City portal or the organisers will have what's on.
 >
@@ -79,9 +81,9 @@ One bullet per opportunity, each with its own `acceptUrl`. Do not merge several 
 The tool's lead line is the roster: names linked to their profiles, no message link. The reply keeps those profile links and adds, for every pending introduction (not a community ask), in the resident's own private chat, the message link copied from that card's `acceptUrl` in the JSON below the lead line. A `negotiating` card gets no message link yet. The reply never promises the link for a later turn and never labels a link "Profile".
 
 > **2 conversations await you**
-> - [Adam]({userUrl}) — Running the hardware track and wants a second pair of hands on the sensor demos. Overlaps with your embedded work, [message Adam]({acceptUrl}).
-> - [Paul]({userUrl}) — Writing about agent memory and looking for builders to interview. You have the long-running-context story, [message Paul]({acceptUrl}).
 > Tapping a link opens Agent Village, where one tap accepts; once you have both accepted, it opens Telegram with them.
+> - [Adam]({userUrl}) — waiting to hear from you about {topic}, [message Adam]({acceptUrl}).
+> - [Paul]({userUrl}) — waiting to hear from you about {topic}, [message Paul]({acceptUrl}).
 >
 > Still in motion: [Lena]({userUrl}) — your agents are still talking; nothing for you to do yet.
 

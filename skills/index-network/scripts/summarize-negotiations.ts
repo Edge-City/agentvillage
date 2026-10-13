@@ -290,7 +290,12 @@ export function failureCode(err: unknown): string {
 
 export interface FollowUpCard {
   name: string;
+  /** Index's headline, else the summary, else "New match": never handed to the model. */
   headline: string;
+  /** INDEX-COMMS A: Index's own `headline` only, no fallback: a Waiting on you row's `match.headline`. */
+  matchHeadline?: string;
+  /** INDEX-COMMS A: the resident's own intent text for this card (BriefOpportunity.matchedIntentText). */
+  matchedIntentText?: string;
   summary: string;
   userUrl?: string;
   opportunityUrl?: string;
@@ -306,6 +311,8 @@ function followUpCard(opp: BriefOpportunity): FollowUpCard | null {
   return {
     name: linked.name,
     headline,
+    ...(linked.headline ? { matchHeadline: linked.headline } : {}),
+    ...(linked.matchedIntentText ? { matchedIntentText: linked.matchedIntentText } : {}),
     summary: linked.mainText || headline,
     userUrl: linked.userUrl,
     opportunityUrl: linked.opportunityUrl,

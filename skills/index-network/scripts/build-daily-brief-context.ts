@@ -272,6 +272,18 @@ export interface BriefOpportunity {
    * stage only once outcome-ask.ts STAGE_FORMAT_V2 is on.
    */
   matchedIntentIds?: string[];
+  /**
+   * INDEX-COMMS A: the resident's OWN intent text for this card, for a
+   * message's `you.intent` (proactive.ts matchFacts, cleaned and scanned
+   * there). No parser sets it today. TODO(INDEX-COMMS): set it once a
+   * verified Index read links a card to the resident's intent: neither the
+   * `list_opportunities` row (no intent id) nor the `list_intents` row (no
+   * opportunity id) carries the link in the recorded fixture; the control
+   * plane joins them with one REST read per intent (`GET
+   * /api/intents/:id/opportunities`, CP-191), which is outside the overlay's
+   * verified MCP contract. Never guessed from the resident's intent list.
+   */
+  matchedIntentText?: string;
   /** `https://index.network/u/<userId>`. */
   userUrl?: string;
   /** `https://index.network/o/<opportunityId>`. */
