@@ -34,4 +34,5 @@ The hand fallback in `docs/deployment.md` ("Roll"), `git tag -a` and
 
 ```rc-manifest
 # Approved tags, one per line. Keep old lines: they are the record.
+v2.0.0-rc36 = 93b77aaf24a5edcec8ba82e85135d750ba9b7adb # rc35 + ov#310 + ov#299 + ov#311; checks 1-5 by release 13 Oct
 ```
