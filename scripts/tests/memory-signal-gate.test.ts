@@ -1039,7 +1039,7 @@ describe("DREAM-1 PR-1b: Index's matches waiting for them, shown on a wake", () 
     ...([
       ["a lone surrogate", "Ann\ud800a"], ["an escape character", "Asha\u001b[31m Rao"], ["a NUL", "Asha\u0000Rao"], ["a tab", "Asha\tRao"],
       ["a bidi override", "Asha \u202eoaR"], ["a zero-width space", "Asha\u200bRao"], ["a private-use character", "Asha \ue000"],
-      ["an unassigned code point", "Asha \u0378"],
+      ["a bidi isolate", "Asha \u2066Rao"],
     ] as const).map(([what, name]): [string, string, number, string] => [
       `shows a name with ${what}`, JSON.stringify({ status: "ok", listed: 1, shown: 1, withheld: 0, rows: [{ name, headline: "Soil scientist" }] }), 0, "bad_output",
     ]),
@@ -1076,15 +1076,19 @@ describe("DREAM-1 PR-1b: Index's matches waiting for them, shown on a wake", () 
     expect(lastRun(dir).match_evidence).toEqual({ status: "ok", listed: 1, shown: 1, withheld: 0 });
   });
 
-  test("N3: letters of any script, combining marks and a plain space pass the field check", () => {
+  test("N3: letters of any script, combining marks, a plain space and a character newer than Python's Unicode tables pass the field check", () => {
     const dir = home();
     messages(dir, threeSubstantive());
-    const rows = [{ name: "Zoë Núñez", headline: "Seed bank partner" }, { name: "अनन्या राव", headline: "मिट्टी विज्ञान" }, { name: "李 明", headline: null }];
-    const woke = runGate(dir, { env: fakeBun(dir, `${JSON.stringify({ status: "ok", listed: 3, shown: 3, withheld: 0, rows })}\n`) });
+    // Round 3: U+1FAE8 (Unicode 15) is unassigned (Cn) to Python 3.11's Unicode 14 tables; it must render, not blank the block.
+    const rows = [
+      { name: "Zoë Núñez", headline: "Seed bank partner" }, { name: "अनन्या राव", headline: "मिट्टी विज्ञान" }, { name: "李 明", headline: null },
+      { name: "Asha \u{1FAE8} Rao", headline: "Soil \u{1FAE8} scientist" },
+    ];
+    const woke = runGate(dir, { env: fakeBun(dir, `${JSON.stringify({ status: "ok", listed: 4, shown: 4, withheld: 0, rows })}\n`) });
     expect(block(inputs(dir), woke.json.dataNonce as string, MATCHES_HEADING)).toEqual([
-      "- Zoë Núñez: Seed bank partner", "- अनन्या राव: मिट्टी विज्ञान", "- 李 明",
+      "- Zoë Núñez: Seed bank partner", "- अनन्या राव: मिट्टी विज्ञान", "- 李 明", "- Asha \u{1FAE8} Rao: Soil \u{1FAE8} scientist",
     ]);
-    expect(lastRun(dir).match_evidence).toEqual({ status: "ok", listed: 3, shown: 3, withheld: 0 });
+    expect(lastRun(dir).match_evidence).toEqual({ status: "ok", listed: 4, shown: 4, withheld: 0 });
   });
 
   // S1: the real bun, as the gate runs it on a box. Skipped (with this reason) only when no bun is on PATH.

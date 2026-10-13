@@ -171,8 +171,10 @@ MAX_MATCH_ROWS = 12
 #: A cleaned name (cleanName, NAME_MAX 40) or headline (MATCH_HEADLINE_MAX 60, and an ellipsis), with room.
 MAX_MATCH_FIELD_CHARS = 120
 #: Unicode categories a shown field may not hold: controls, format and bidi characters,
-#: surrogates, private use and unassigned (a plain space is Zs, allowed).
-MATCH_FIELD_BAD_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co", "Cn"})
+#: surrogates and private use (a plain space is Zs, allowed). Not Cn (unassigned): this Python's
+#: Unicode tables (3.11: Unicode 14) are older than bun's, so a character assigned since (a newer
+#: emoji in a name) is Cn here and must not blank the block.
+MATCH_FIELD_BAD_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co"})
 #: The cleaner's own statuses; the gate adds `bun_unavailable`, `timeout` and `bad_output`.
 MATCH_SCRIPT_STATUSES = frozenset({"ok", "missing", "stale", "unreadable", "error"})
 #: `match_evidence.status` in the run record: a closed code, never text.
@@ -385,7 +387,7 @@ def _count(value: Any) -> Optional[int]:
 def _match_field(value: Any) -> tuple[bool, Optional[str]]:
     """(valid, the field): None, or one line of at most MAX_MATCH_FIELD_CHARS that is not blank,
     encodes as UTF-8 (no lone surrogate) and holds no character of MATCH_FIELD_BAD_CATEGORIES
-    (no control, format, bidi, private-use or unassigned character). The genuine cleaner never
+    (no control, format, bidi or private-use character). The genuine cleaner never
     prints one; anything else is not its output, and write_inputs must never meet it."""
     if value is None:
         return True, None
