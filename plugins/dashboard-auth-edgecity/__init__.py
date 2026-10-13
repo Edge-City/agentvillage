@@ -669,6 +669,26 @@ def _files_module():
     return sys.modules.get("hermes_cli.web_routers.files")
 
 
+def _install_chat_tab(guard) -> None:
+    """The Chat tab for residents (1.4.0): `/api/pty` with a credential bound to the resident's
+    login (README "The Chat tab"). Optional: without its seams a resident's `/api/pty` is refused,
+    as in 1.3.x, and everything else stands."""
+    try:
+        from fastapi import HTTPException
+        from hermes_cli import web_server_chat
+        from hermes_cli.dashboard_auth import ws_tickets
+        from hermes_cli.pty_session import RegistryFull
+
+        ok = guard.install_pty(web_server_chat, ws_tickets,
+                               refusal=lambda detail: HTTPException(status_code=403, detail=detail),
+                               registry_full=RegistryFull)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("dashboard-auth-edgecity: the Chat tab stays closed to residents (%s)", type(exc).__name__)
+        return
+    if not ok:
+        _log.warning("dashboard-auth-edgecity: the Chat tab stays closed to residents (seam_missing)")
+
+
 def _install_resident_guard() -> None:
     """Install the resident guard on its three seams (README "Resident guard"). The HTTP seam is
     required: without it the plugin does not load. Without the socket seam the embedded chat is
@@ -712,6 +732,10 @@ def _install_resident_guard() -> None:
         closed = web_server is not None and guard.close_embedded_chat(web_server)
         _log.error("dashboard-auth-edgecity: socket guard NOT installed (seam_missing); embedded chat %s",
                    "switched off for every session" if closed else "left to Hermes (no dashboard in this process)")
+    if ws_ok and tickets_ok:
+        _install_chat_tab(guard)
+    else:
+        _log.warning("dashboard-auth-edgecity: the Chat tab stays closed to residents (socket seam missing)")
     guard.set_loader("gateway", _gateway_modules)
     guard.set_loader("files", _files_module)
     guard.set_session_lookup(_stored_session)

@@ -594,7 +594,7 @@ def test_every_table_row_is_well_formed_and_explained(guard):
         assert isinstance(rules, tuple) and set(rules) <= known and why.strip(), name
     for source, why in guard.RESIDENT_SESSION_SOURCES.items():
         assert source == source.strip().lower() and why.strip()
-    assert set(guard.RESIDENT_WS_PATHS) == {"/api/ws"}
+    assert set(guard.RESIDENT_WS_PATHS) == {"/api/ws", "/api/pty"}
 
 
 def test_head_follows_get_and_options_is_not_listed(dash):
@@ -2117,6 +2117,523 @@ def test_the_file_guard_installs_on_the_first_request(dash):
     assert ".dashboard-auth-edgecity" in files._SENSITIVE_MANAGED_DIR_NAMES
 
 
+# ---- round 4 (1.4.0): the Chat tab with a per-PTY credential (stand-ins for chat_ws's PTY seams) --
+
+
+class Refused(Exception):
+    """What the PTY handler shows for a chat refused after accept (Hermes: HTTPException)."""
+
+
+class Full(Exception):
+    """Hermes's RegistryFull."""
+
+
+class Unavailable(RuntimeError):
+    """Hermes's PtyUnavailableError."""
+
+
+def pty_ticket_store():
+    """`ws_tickets` in miniature, with the process-wide internal credential."""
+    store = ticket_store()
+    store._internal_credential = "server-cred"
+
+    def consume_internal_credential(value):
+        if value != store._internal_credential:
+            raise TicketInvalid("internal credential mismatch")
+        return {"user_id": "server-internal", "provider": "server-internal"}
+
+    store.consume_internal_credential = consume_internal_credential
+    store.internal_ws_credential = lambda: store._internal_credential
+    return store
+
+
+class StandInBridge:
+    """`pty_bridge.PtyBridge` in miniature: `spawn` records the env; `read` gives EOF once `exit()`."""
+
+    spawned: list = []
+
+    def __init__(self, argv, env):
+        self.argv, self.env, self.closed, self.exited = argv, env, False, False
+
+    @classmethod
+    def spawn(cls, argv, *, cwd=None, env=None):
+        bridge = cls(argv, env)
+        StandInBridge.spawned.append(bridge)
+        return bridge
+
+    def read(self, timeout=0.2):
+        return None if self.exited else b""
+
+    def close(self):
+        self.closed = True
+
+
+class StandInSession:
+    def __init__(self, key, bridge):
+        self.key, self.bridge, self.alive, self.attached, self.last_detached_at = key, bridge, True, True, None
+
+    async def close(self):
+        self.alive = False
+        self.bridge.close()
+
+
+class StandInRegistry:
+    """`pty_session.PtySessionRegistry` as far as the guard and the handler use it."""
+
+    def __init__(self):
+        self._sessions = {}
+        self._attach_lock = None
+
+    async def attach_or_spawn(self, key, *, spawn):
+        existing = self._sessions.get(key)
+        if existing is not None and existing.alive:
+            existing.attached = True
+            return existing, False
+        bridge = await asyncio.to_thread(spawn)
+        self._sessions[key] = StandInSession(key, bridge)
+        return self._sessions[key], True
+
+    def detach(self, key, ws):
+        session = self._sessions.get(key)
+        if session is not None:
+            session.attached = False
+            session.last_detached_at = len(self._sessions) + (session.last_detached_at or 0)
+
+
+def pty_socket_auth(store, chat):
+    """`web_server_chat._ws_auth_reason` in miniature, gated: `?internal=` through
+    `consume_internal_credential` and `?ticket=` through `consume_ticket` (both looked up at call
+    time, as Hermes imports them inside the function), stamping `{user_id, provider}` on the socket
+    as `_stamp_identity` does; `?token=` is the loopback token."""
+
+    def _ws_auth_reason(sock):
+        q = dict(urllib.parse.parse_qsl(sock.scope.get("query_string", b"").decode("latin-1"), keep_blank_values=True))
+        if q.get("internal"):
+            try:
+                info = store.consume_internal_credential(q["internal"])
+            except TicketInvalid:
+                return "internal_invalid", "internal"
+            sock._hermes_auth_identity = {"user_id": info.get("user_id"), "provider": info.get("provider")}
+            return None, "internal"
+        if q.get("ticket"):
+            try:
+                info = store.consume_ticket(q["ticket"])
+            except TicketInvalid:
+                return "ticket_invalid", "ticket"
+            sock._hermes_auth_identity = {"user_id": info.get("user_id"), "provider": info.get("provider")}
+            return None, "ticket"
+        if q.get("token"):
+            return None, "token"
+        return "no_credential", "none"
+
+    chat._ws_auth_reason = _ws_auth_reason
+
+
+def psock(path, peer="127.0.0.1", **query):
+    """A socket stand-in with a real query string (lists repeat a name) and a peer."""
+    pairs = [(k, v) for k, vs in query.items() for v in (vs if isinstance(vs, list) else [vs])]
+    return SimpleNamespace(url=SimpleNamespace(path=path), client=SimpleNamespace(host=peer),
+                           scope={"type": "websocket", "path": path,
+                                  "query_string": urllib.parse.urlencode(pairs).encode("latin-1")})
+
+
+class ClosingSocket:
+    """A socket the guard may close: records the close."""
+
+    def __init__(self, path, **query):
+        self.__dict__.update(vars(psock(path, **query)))
+        self.closed_with = None
+
+    async def close(self, code=1000, reason=None):
+        self.closed_with = (code, reason)
+
+
+@pytest.fixture
+def chat_tab_free(guard, home):
+    """The guard's socket, ticket, gateway and PTY seams on stand-ins, with the session store of
+    SESSION_ROWS (the resident is `edgecity:u1`; adm1 is a landing admin's chat)."""
+    StandInBridge.spawned = []
+    store = pty_ticket_store()
+    chat = SimpleNamespace(PtyBridge=StandInBridge, PTY_REGISTRY=StandInRegistry(), PtyUnavailableError=Unavailable,
+                           _LOOPBACK_HOSTS=frozenset({"127.0.0.1", "::1", "localhost"}), resolved=[],
+                           descendants={})
+    pty_socket_auth(store, chat)
+
+    def _server_internal_ws_url(path, **extra):
+        return f"ws://127.0.0.1:9119{path}?" + urllib.parse.urlencode({"internal": store.internal_ws_credential(),
+                                                                       **extra})
+
+    async def _resolve_chat_argv_async(resume=None, sidecar_url=None, profile=None, active_session_file=None,
+                                       workspace_cwd=None):
+        chat.resolved.append({"resume": resume, "sidecar_url": sidecar_url, "profile": profile,
+                              "workspace_cwd": workspace_cwd})
+        env = {"HERMES_HOME": str(home), "STRAY": _server_internal_ws_url("/api/ws"), "HERMES_TUI_IMAGE": "/etc/x.png"}
+        scoped = bool((profile or "").strip()) and profile.strip().lower() != "current"
+        if scoped:
+            env["HERMES_HOME"] = str(home / "profiles" / profile)
+        else:
+            env["HERMES_TUI_GATEWAY_URL"] = _server_internal_ws_url("/api/ws")
+        if resume:
+            env["HERMES_TUI_RESUME"] = chat.descendants.get(resume, resume)
+        if sidecar_url:
+            env["HERMES_TUI_SIDECAR_URL"] = sidecar_url
+        if workspace_cwd:
+            env["HERMES_CWD"] = env["HERMES_TUI_CWD"] = workspace_cwd
+        return ["hermes", "--tui"], None, env
+
+    chat._server_internal_ws_url = _server_internal_ws_url
+    chat._resolve_chat_argv_async = _resolve_chat_argv_async
+    assert guard.install_tickets(store) is True
+    assert guard.install_ws(chat) is True
+    server, gateway_ws, _calls = gateway_stand_in()
+    guard.set_loader("gateway", lambda: (server, gateway_ws))
+    guard.set_session_lookup(session_lookup())
+    assert guard.install_pty(chat, store, refusal=Refused, registry_full=Full) is True
+    return SimpleNamespace(guard=guard, store=store, chat=chat, home=home, server=server)
+
+
+def open_pty(t, role="resident", peer="127.0.0.1", attach=None, **query):
+    """What `chat_ws.pty_ws` does, in one task: the gate, then (accepted) the argv resolution with
+    the handler's arguments, then the spawn (`attach`: through the registry). Returns
+    ("refused", reason) or ("ok", bridge, env, created)."""
+    if role == "token":
+        query["token"] = "tok"
+    else:  # a ticket minted inside a request the guard judged `role`; the admin is its own login
+        token = t.guard._REQUEST_ROLE.set(role)
+        try:
+            query["ticket"] = t.store.mint_ticket(user_id="admin-9" if role == "admin" else "u1", provider="edgecity")
+        finally:
+            t.guard._REQUEST_ROLE.reset(token)
+    sock = psock("/api/pty", peer=peer, **query)
+
+    async def run():
+        reason, _cred = t.chat._ws_auth_reason(sock)
+        if reason is not None:
+            return "refused", reason
+        last = dict(urllib.parse.parse_qsl(sock.scope["query_string"].decode("latin-1"), keep_blank_values=True))
+        channel = last.get("channel") if re.match(r"^[A-Za-z0-9._-]{1,128}$", last.get("channel", "")) else None
+        kwargs = {"resume": last.get("resume") or None, "profile": last.get("profile") or None,
+                  "sidecar_url": t.chat._server_internal_ws_url("/api/pub", channel=channel) if channel else None}
+        if not kwargs["resume"] and last.get("cwd"):
+            kwargs["workspace_cwd"] = last["cwd"]
+        argv, cwd, env = await t.chat._resolve_chat_argv_async(**kwargs)
+        if attach is None:
+            return "ok", t.chat.PtyBridge.spawn(argv, cwd=cwd, env=env), env, True
+        session, created = await t.chat.PTY_REGISTRY.attach_or_spawn(
+            attach, spawn=lambda: t.chat.PtyBridge.spawn(argv, cwd=cwd, env=env))
+        t.chat.PTY_REGISTRY.detach(attach, sock)
+        return "ok", session.bridge, env, created
+
+    return asyncio.run(run())
+
+
+def credential_of(env, name="HERMES_TUI_GATEWAY_URL"):
+    return urllib.parse.parse_qs(urllib.parse.urlsplit(env[name]).query)["internal"][0]
+
+
+def test_without_the_pty_seam_a_residents_chat_tab_is_refused(sockets):
+    sock = ws("/api/pty", ticket=mint_as(sockets.guard, sockets.store, "resident"))
+    assert sockets.chat._ws_auth_reason(sock) == ("edgecity_admin_only", "ticket")
+    assert sockets.guard.installed()["pty"] is False
+
+
+@pytest.mark.parametrize("query,reason", [
+    ({"profile": "work"}, "edgecity_pty_profile"),
+    ({"profile": "default"}, "edgecity_pty_profile"),
+    ({"profile": ["current", "work"]}, "edgecity_pty_profile"),
+    ({"cwd": "/"}, "edgecity_pty_cwd"),
+    ({"cwd": "{home}"}, "edgecity_pty_cwd"),
+    ({"cwd": "{home}/resident-chat/../plugins"}, "edgecity_pty_cwd"),
+    ({"cwd": ["{home}/resident-chat", "/"]}, "edgecity_pty_cwd"),
+    ({"resume": "adm1"}, "edgecity_pty_resume"),
+    ({"resume": "adm"}, "edgecity_pty_resume"),
+    ({"resume": "nope"}, "edgecity_pty_resume"),
+    ({"resume": " "}, "edgecity_pty_resume"),
+    ({"resume": ["abc123", "adm1"]}, "edgecity_pty_resume"),
+])
+def test_a_residents_chat_tab_is_refused_before_accept(chat_tab_free, query, reason):
+    t = chat_tab_free
+    query = {k: ([x.format(home=t.home) for x in v] if isinstance(v, list) else v.format(home=t.home))
+             for k, v in query.items()}
+    assert open_pty(t, **query) == ("refused", reason)
+    assert StandInBridge.spawned == [] and t.guard.pty_grants() == []
+    assert t.guard.counts()["denied_" + reason[len("edgecity_"):]] == 1
+
+
+@pytest.mark.parametrize("query", [{}, {"profile": "current"}, {"profile": ""}, {"profile": " Current "},
+                                   {"resume": "abc123"}, {"resume": "tg1"}, {"cwd": "{home}/resident-chat"},
+                                   {"channel": "chat-1", "fresh": "1"}])
+def test_a_residents_own_chat_tab_opens(chat_tab_free, query):
+    t = chat_tab_free
+    query = {k: v.format(home=t.home) for k, v in query.items()}
+    result = open_pty(t, **query)
+    assert result[0] == "ok", result
+    assert len(StandInBridge.spawned) == 1 and t.guard.pty_grants()[0].state == "bound"
+
+
+def test_no_login_no_chat_tab(chat_tab_free):
+    """The loopback token carries no login: no Chat tab (a loopback dashboard keeps 1.3.x)."""
+    assert open_pty(chat_tab_free, role="token") == ("refused", "edgecity_pty_no_login")
+
+
+def test_the_residents_child_env(chat_tab_free):
+    t, g = chat_tab_free, chat_tab_free.guard
+    _ok, bridge, env, _created = open_pty(t, channel="chat-1")
+    chat = os.path.realpath(t.home / "resident-chat")
+    (grant,) = g.pty_grants()
+    assert credential_of(env) == grant.credential and len(grant.credential) >= 43
+    assert urllib.parse.urlsplit(env["HERMES_TUI_GATEWAY_URL"])[:3] == ("ws", "127.0.0.1:9119", "/api/ws")
+    assert urllib.parse.parse_qs(urllib.parse.urlsplit(env["HERMES_TUI_SIDECAR_URL"]).query) == {
+        "internal": [grant.credential], "channel": ["chat-1"]}
+    assert not any("server-cred" in v for v in env.values()) and "STRAY" not in env and "HERMES_TUI_IMAGE" not in env
+    assert env["HERMES_CWD"] == env["HERMES_TUI_CWD"] == chat
+    assert env["HOME"] == env["HERMES_HOME"] == os.path.join(os.path.realpath(t.home), "resident-tui",
+                                                             __import__("hashlib").sha256(b"edgecity:u1").hexdigest()[:32])
+    for key, value in g.PTY_FORCED_ENV.items():
+        assert env[key] == value, key
+    assert t.chat.resolved[-1] == {"resume": None, "sidecar_url": None, "profile": None, "workspace_cwd": chat}
+    assert (grant.login, grant.channel, grant.info()) == ("edgecity:u1", "chat-1", {"user_id": "u1", "provider": "edgecity"})
+    assert isinstance(bridge, g.GrantBridge) and bridge.env is env
+
+
+def test_an_admins_chat_tab_is_hermess_own(chat_tab_free):
+    t = chat_tab_free
+    _ok, bridge, env, _created = open_pty(t, role="admin", channel="chat-a", profile="work")
+    assert credential_of(env, "STRAY") == "server-cred" and "VISUAL" not in env
+    assert t.chat.resolved[-1]["profile"] == "work" and t.guard.pty_grants() == []
+    assert not isinstance(bridge, t.guard.GrantBridge)
+
+
+def test_the_grant_is_the_resident_on_its_own_two_sockets_and_nowhere_else(chat_tab_free):
+    t = chat_tab_free
+    _ok, _bridge, env, _created = open_pty(t, channel="chat-1")
+    cred = credential_of(env)
+    sock = psock("/api/ws", internal=cred)
+    assert t.chat._ws_auth_reason(sock) == (None, "internal")
+    assert sock._edgecity_ws_role == "resident" and sock._hermes_auth_identity == {"user_id": "u1", "provider": "edgecity"}
+    assert t.chat._ws_auth_reason(psock("/api/pub", internal=cred, channel="chat-1")) == (None, "internal")
+    for path, query, reason in (
+            ("/api/pub", {"channel": "chat-2"}, "edgecity_pty_channel"),
+            ("/api/pub", {}, "edgecity_pty_channel"),
+            ("/api/pub", {"channel": ["chat-1", "chat-2"]}, "edgecity_pty_channel"),
+            ("/api/console", {}, "edgecity_admin_only"), ("/api/pty", {}, "edgecity_admin_only"),
+            ("/api/events", {"channel": "chat-1"}, "edgecity_admin_only")):
+        assert t.chat._ws_auth_reason(psock(path, internal=cred, **query)) == (reason, "internal"), (path, query)
+    assert t.chat._ws_auth_reason(psock("/api/ws", peer="203.0.113.9", internal=cred)) == ("edgecity_pty_peer", "internal")
+    assert t.chat._ws_auth_reason(psock("/api/ws", peer="::ffff:127.0.0.1", internal=cred)) == (None, "internal")
+    # Two open sockets per path at most (the TUI's and a reconnect); a closed one frees its slot.
+    assert t.chat._ws_auth_reason(psock("/api/ws", internal=cred)) == ("edgecity_pty_sockets", "internal")
+    sock._edgecity_closed = True
+    assert t.chat._ws_auth_reason(psock("/api/ws", internal=cred)) == (None, "internal")
+    # The process-wide credential is still the admin terminal's.
+    internal = psock("/api/ws", internal="server-cred")
+    assert t.chat._ws_auth_reason(internal) == (None, "internal") and internal._edgecity_ws_role == "internal"
+
+
+def test_the_grants_gateway_connection_is_judged_a_resident(chat_tab_free):
+    """The child's /api/ws is the resident's: off-list methods 4031, another login's chat 4031, its
+    own chat served."""
+    t = chat_tab_free
+    _ok, _bridge, env, _created = open_pty(t)
+    sock = psock("/api/ws", internal=credential_of(env))
+    assert t.chat._ws_auth_reason(sock)[0] is None
+    sock.frames = [rpc("shell.exec", {"command": "env"}), rpc("slash.exec", {"command": "/plugins install x"}),
+                   rpc("session.title", {"session_id": "admin-sid", "title": "x"}),
+                   rpc("session.title", {"session_id": "own-sid", "title": "x"})]
+    frames = asyncio.run(run_gateway(t, sock))
+    assert [f.get("error", {}).get("code") for f in frames] == [4031, 4031, 4031, None]
+
+
+async def run_gateway(t, sock):
+    """The socket's frames through the guarded stand-in `handle_ws`."""
+    _server, gateway_ws = t.guard._loaders["gateway"]()
+    return await gateway_ws.handle_ws(sock)
+
+
+def test_closing_the_pty_revokes_the_grant_and_closes_its_open_sockets(chat_tab_free):
+    t, g = chat_tab_free, chat_tab_free.guard
+    _ok, bridge, env, _created = open_pty(t, channel="chat-1")
+    cred = credential_of(env)
+
+    async def run():
+        ws_sock, pub_sock = ClosingSocket("/api/ws", internal=cred), ClosingSocket("/api/pub", internal=cred,
+                                                                                    channel="chat-1")
+        assert t.chat._ws_auth_reason(ws_sock) == (None, "internal")
+        assert t.chat._ws_auth_reason(pub_sock) == (None, "internal")
+        await asyncio.to_thread(bridge.close)
+        await asyncio.sleep(0.05)
+        return ws_sock, pub_sock
+
+    ws_sock, pub_sock = asyncio.run(run())
+    assert bridge.closed and ws_sock.closed_with == pub_sock.closed_with == (4401, "auth: edgecity_pty_revoked")
+    assert g.pty_grants() == []
+    assert t.chat._ws_auth_reason(psock("/api/ws", internal=cred)) == ("internal_invalid", "internal")
+    assert g.counts()["pty_revoked_closed"] == 1
+
+
+def test_the_childs_exit_revokes_the_grant(chat_tab_free):
+    t, g = chat_tab_free, chat_tab_free.guard
+    _ok, bridge, env, _created = open_pty(t)
+    assert bridge.read() == b"" and g.pty_grants()
+    bridge._edgecity_inner.exited = True
+    assert bridge.read() is None and g.pty_grants() == []
+    assert t.chat._ws_auth_reason(psock("/api/ws", internal=credential_of(env)))[0] == "internal_invalid"
+
+
+def test_a_frame_on_a_revoked_grants_connection_is_refused(chat_tab_free):
+    t, g = chat_tab_free, chat_tab_free.guard
+    _ok, bridge, env, _created = open_pty(t)
+    sock = psock("/api/ws", internal=credential_of(env))
+    assert t.chat._ws_auth_reason(sock)[0] is None
+    bridge.close()
+    sock.frames = [rpc("session.title", {"session_id": "own-sid", "title": "x"})]
+    (frame,) = asyncio.run(run_gateway(t, sock))
+    assert frame["error"]["code"] == 4031 and g.counts()["denied_pty_revoked"] == 1
+
+
+def test_the_chat_hermes_settles_on_is_checked_again_before_spawn(chat_tab_free):
+    """The handler's own resume (the channel's active-session file, Hermes's newest descendant) and
+    a profile-scoped env: refused after accept, before anything spawns."""
+    t, g = chat_tab_free, chat_tab_free.guard
+    t.chat.descendants["abc123"] = "adm1"  # an owned chat whose newest continuation is the admin's
+    with pytest.raises(Refused, match="not yours"):
+        open_pty(t, resume="abc123")
+    sock_query = {"ticket": mint_as(g, t.store, "resident")}
+
+    async def handler_resumes(resume):
+        sock = psock("/api/pty", **sock_query)
+        assert t.chat._ws_auth_reason(sock) == (None, "ticket")
+        return await t.chat._resolve_chat_argv_async(resume=resume, sidecar_url=None, profile=None)
+
+    with pytest.raises(Refused, match="not yours"):
+        asyncio.run(handler_resumes("adm1"))  # what an active-session file named
+    sock_query["ticket"] = mint_as(g, t.store, "resident")
+
+    async def scoped():
+        sock = psock("/api/pty", **sock_query)
+        assert t.chat._ws_auth_reason(sock) == (None, "ticket")
+        return await t.chat._resolve_chat_argv_async(resume=None, sidecar_url=None, profile="work")
+
+    with pytest.raises(Refused, match="admin only"):
+        asyncio.run(scoped())
+    assert StandInBridge.spawned == [] and g.pty_grants() == []
+    assert g.counts()["denied_pty_resume"] == 2 and g.counts()["denied_pty_profile"] == 1
+
+
+def test_without_a_pty_context_nothing_resolves_for_anyone_but_an_admin(chat_tab_free):
+    t = chat_tab_free
+    with pytest.raises(Refused):
+        asyncio.run(t.chat._resolve_chat_argv_async(resume=None, sidecar_url=None, profile=None))
+    assert t.guard.counts()["denied_pty_no_context"] == 1
+    # Hermes's own spawn for anything that is not a resident's Chat tab.
+    assert not isinstance(t.chat.PtyBridge.spawn(["x"], env={}), t.guard.GrantBridge)
+
+
+def test_no_attach_url_no_chat(chat_tab_free, monkeypatch):
+    """Without the attach URL the TUI would spawn a gateway of its own: refused, the grant dropped."""
+    t, g = chat_tab_free, chat_tab_free.guard
+    monkeypatch.setattr(g, "_pty_url_builder", lambda path, **q: None)
+    with pytest.raises(Refused):
+        open_pty(t)
+    monkeypatch.setattr(g, "_pty_url_builder", lambda path, **q: f"ws://127.0.0.1:9119{path}?token=legacy")
+    with pytest.raises(Refused):
+        open_pty(t)
+    assert StandInBridge.spawned == [] and g.pty_grants() == [] and g.counts()["denied_pty_attach_url"] == 2
+
+
+def test_a_spawn_that_fails_or_a_reattach_drops_the_unused_grant(chat_tab_free, monkeypatch):
+    t, g = chat_tab_free, chat_tab_free.guard
+    assert open_pty(t, attach="T1")[3] is True
+    (first,) = g.pty_grants()
+    _ok, bridge, _env, created = open_pty(t, attach="T1")
+    assert created is False and bridge._edgecity_grant is first and g.pty_grants() == [first]
+
+    def broken(argv, *, cwd=None, env=None):
+        raise OSError("no pty")
+
+    monkeypatch.setattr(StandInBridge, "spawn", staticmethod(broken))
+    with pytest.raises(OSError):
+        open_pty(t)
+    assert g.pty_grants() == [first] and g.counts()["pty_revoked_spawn_failed"] == 1
+
+
+def test_attach_tokens_are_per_login(chat_tab_free):
+    t = chat_tab_free
+    _ok, admin_bridge, _env, _created = open_pty(t, role="admin", attach="TOK")
+    _ok, own_bridge, _env, created = open_pty(t, attach="TOK")
+    assert created is True and own_bridge._edgecity_inner is not admin_bridge
+    keys = sorted(t.chat.PTY_REGISTRY._sessions)
+    assert keys[0] == "TOK" and keys[1].startswith("edgecity-resident:") and keys[1].endswith("\0TOK")
+
+
+def test_a_login_holds_at_most_its_limit_making_room_from_its_own_detached_terminals(chat_tab_free):
+    t, g = chat_tab_free, chat_tab_free.guard
+    registry = t.chat.PTY_REGISTRY
+    open_pty(t, role="admin", attach="ADM")
+    for tok in ("A", "B", "C"):
+        assert open_pty(t, attach=tok)[0] == "ok"
+    assert len(g.pty_grants()) == g.RESIDENT_PTYS_PER_LOGIN
+    # All three detached: a fourth closes the oldest of the resident's own, never the admin's.
+    assert open_pty(t, attach="D")[3] is True
+    alive = sorted(k.rsplit("\0", 1)[-1] for k, s in registry._sessions.items() if s.alive)
+    assert alive == ["ADM", "B", "C", "D"] and g.counts()["pty_resident_evicted"] == 1
+    # All attached: the next is refused.
+    for session in registry._sessions.values():
+        session.attached = True
+    with pytest.raises(Full):
+        open_pty(t, attach="E")
+    assert g.counts()["denied_pty_limit"] == 1
+    # The legacy path (no attach token) meets the same limit at spawn.
+    with pytest.raises(Unavailable):
+        open_pty(t)
+    assert len([gr for gr in g.pty_grants() if gr.login == "edgecity:u1"]) == g.RESIDENT_PTYS_PER_LOGIN
+
+
+def test_another_logins_channel_is_refused(chat_tab_free):
+    t = chat_tab_free
+    assert open_pty(t, role="admin", channel="chat-a")[0] == "ok"
+    assert open_pty(t, channel="chat-a") == ("refused", "edgecity_pty_channel")
+    assert open_pty(t, channel=["chat-a", "chat-r"]) == ("refused", "edgecity_pty_channel")
+    assert open_pty(t, channel="chat-r")[0] == "ok"
+    assert open_pty(t, channel="chat-r")[0] == "ok"  # its own again
+    assert open_pty(t, role="admin", channel="chat-r")[0] == "ok"  # an admin opens anything
+
+
+def test_the_channel_table_is_bounded(chat_tab_free, monkeypatch):
+    t, g = chat_tab_free, chat_tab_free.guard
+    monkeypatch.setattr(g, "PTY_CHANNELS_MAX", 1)
+    assert open_pty(t, channel="chat-1")[0] == "ok"
+    assert open_pty(t, channel="chat-2") == ("refused", "edgecity_pty_channel")
+
+
+def test_stale_unbound_grants_are_dropped(chat_tab_free, monkeypatch):
+    t, g = chat_tab_free, chat_tab_free.guard
+    ctx = g.PtyContext("resident", "edgecity:u1", {"user_id": "u1", "provider": "edgecity"})
+    old = g.mint_grant(ctx)
+    monkeypatch.setattr(old, "minted_at", old.minted_at - g.PTY_UNBOUND_SECONDS - 1)
+    fresh = g.mint_grant(ctx)
+    assert g.pty_grants() == [fresh] and old.state == "revoked"
+    with pytest.raises(TicketInvalid):  # minted but never spawned: opens nothing
+        t.store.consume_internal_credential(fresh.credential)
+
+
+def test_the_pty_seams_are_all_or_none_and_one_layer(chat_tab_free):
+    t, g = chat_tab_free, chat_tab_free.guard
+    for name in ("_resolve_chat_argv_async", "PtyBridge", "PTY_REGISTRY", "_server_internal_ws_url",
+                 "PtyUnavailableError"):
+        partial = SimpleNamespace(**{k: v for k, v in vars(t.chat).items() if k != name})
+        copy = load_copy(g, f"edgecity_test_resident_guard_pty_{name}")
+        assert copy.install_pty(partial, t.store) is False and copy.installed()["pty"] is False, name
+    resolve, bridge = t.chat._resolve_chat_argv_async, t.chat.PtyBridge
+    attach, consume = t.chat.PTY_REGISTRY.attach_or_spawn, t.store.consume_internal_credential
+    copy = load_copy(g, "edgecity_test_resident_guard_pty_again")
+    assert copy.install_pty(t.chat, t.store) is True
+    assert t.chat._resolve_chat_argv_async._edgecity_original is resolve._edgecity_original
+    assert t.chat.PtyBridge._edgecity_original is bridge._edgecity_original is StandInBridge
+    assert t.chat.PTY_REGISTRY.attach_or_spawn._edgecity_original is attach._edgecity_original
+    assert t.store.consume_internal_credential._edgecity_original is consume._edgecity_original
+
+
 # ==================================================================================================
 # Against the real Hermes gate, tickets, sockets, gateway and app (skipped without hermes_cli)
 # ==================================================================================================
@@ -2218,7 +2735,10 @@ def hermes(load_plugin, web_server, tmp_path, monkeypatch):
                          (ws_tickets, "mint_ticket"), (ws_tickets, "consume_ticket"),
                          (web_server_chat, "_ws_auth_reason"), (tui_server, "dispatch"), (tui_ws, "handle_ws"),
                          (files, "_SENSITIVE_MANAGED_DIR_NAMES"), (web_server, "_DASHBOARD_EMBEDDED_CHAT_ENABLED"),
-                         (file_safety, "_READ_DENIED_DIRS"), (context_references, "_ensure_reference_path_allowed")):
+                         (file_safety, "_READ_DENIED_DIRS"), (context_references, "_ensure_reference_path_allowed"),
+                         (ws_tickets, "consume_internal_credential"), (web_server_chat, "_resolve_chat_argv_async"),
+                         (web_server_chat, "PtyBridge"), (web_server_chat.PTY_REGISTRY, "attach_or_spawn"),
+                         (web_server_chat.PTY_REGISTRY, "detach")):
         monkeypatch.setattr(module, name, _unwrapped(getattr(module, name)))
     monkeypatch.setattr(web_server.app.state, "auth_required", True, raising=False)
     # Route bodies an admin reaches: stubbed, so nothing is cloned, installed or rescanned.
@@ -2290,14 +2810,15 @@ def rpc_call(sock, method, params=None, rid=1):
 
 
 SEAMS = (("middleware", "gated_auth_middleware"), ("ws_tickets", "mint_ticket"), ("ws_tickets", "consume_ticket"),
-         ("chat", "_ws_auth_reason"), ("tui_server", "dispatch"), ("tui_ws", "handle_ws"))
+         ("chat", "_ws_auth_reason"), ("tui_server", "dispatch"), ("tui_ws", "handle_ws"),
+         ("ws_tickets", "consume_internal_credential"), ("chat", "_resolve_chat_argv_async"), ("chat", "PtyBridge"))
 
 
 def test_hermes_register_installs_every_seam_once(hermes):
     g = hermes.guard
     assert {k: v for k, v in g.installed().items() if k != "files"} == {"http": True, "tickets": True, "ws": True,
                                                                          "gateway": True, "agent_reads": True,
-                                                                         "references": True}
+                                                                         "references": True, "pty": True}
     originals = {name: getattr(getattr(hermes, mod), name)._edgecity_original for mod, name in SEAMS}
     for name, original in originals.items():
         assert not getattr(original, "_edgecity_resident_guard", False), name
@@ -2537,9 +3058,10 @@ def test_hermes_tickets_carry_the_role_of_the_session_that_minted_them(hermes):
     assert hermes.ws_tickets.consume_ticket(ticket(admin))["edgecity_role"] == "admin"
 
 
-@pytest.mark.parametrize("url", ["/api/console", "/api/pty", "/api/pub?channel=c1", "/api/events?channel=c1",
+@pytest.mark.parametrize("url", ["/api/console", "/api/pub?channel=c1", "/api/events?channel=c1",
                                  "/api/audio/speak-stream", "/api/plugins/kanban/events"])
 def test_hermes_m1_an_owner_opens_no_socket_but_the_chat_gateway(hermes, url):
+    """Every socket but the chat gateway and (round 4, its own tests below) the Chat tab."""
     owner = as_role(hermes, "owner")
     sep = "&" if "?" in url else "?"
     code = ws_refused(owner, f"{url}{sep}ticket={ticket(owner)}")
@@ -3389,3 +3911,467 @@ def test_hermes_every_listed_method_refuses_hostile_parameters_to_an_owner_and_s
         for i, shape in enumerate(shapes[:2]):
             assert code_of(frame_reply(asock, shape, 6000 + i)) is None, shape
         assert _entry.result == "once"
+
+
+# ==================================================================================================
+# Round 4 (1.4.0): residents keep the Chat tab, with a credential bound to their own login
+# ==================================================================================================
+
+#: The child the Chat tab runs in these tests (Hermes's own tests swap `_resolve_chat_argv` for a
+#: tiny command the same way): it prints its whole env once, then waits (or exits at once with
+#: CHILD_EXIT=1). The env is the stand-in resolver's own, so it carries nothing of this machine's.
+CHILD_SCRIPT = (
+    "import json, os, sys, time\n"
+    "sys.stdout.write('ENV-BEGIN' + json.dumps(dict(os.environ)) + 'ENV-END\\n'); sys.stdout.flush()\n"
+    "time.sleep(0 if os.environ.get('CHILD_EXIT') == '1' else 60)\n"
+)
+
+
+@pytest.fixture
+def chat_tab(quiet_turns, monkeypatch):
+    """The real `/api/pty` handler, `PtyBridge` and registry, with `_resolve_chat_argv` replaced by
+    a resolver that does what Hermes's does with its arguments (the attach URL with the
+    process-wide credential unless profile-scoped, the newest descendant of a resume, the sidecar
+    URL, the workspace) around CHILD_SCRIPT. The child dials 127.0.0.1:9119 as far as
+    `_server_internal_ws_url` can tell (`HERMES_DASHBOARD_WS_HOST`, the bound port)."""
+    import sys
+
+    from hermes_cli import pty_bridge, web_server_chat
+    from hermes_cli.web_server_sessions import _open_session_db_for_profile, _session_latest_descendant
+
+    hermes = quiet_turns
+    monkeypatch.setenv("HERMES_DASHBOARD_WS_HOST", "127.0.0.1")  # the host the child dials
+    monkeypatch.setattr(hermes.app.state, "bound_port", 9119, raising=False)
+    monkeypatch.setattr(hermes.tui_server, "_hermes_home", hermes.home, raising=False)
+    state = SimpleNamespace(hermes=hermes, resolved=[], spawned=[], exit_at_once=False)
+
+    def resolve(resume=None, sidecar_url=None, profile=None, active_session_file=None, workspace_cwd=None):
+        state.resolved.append({"resume": resume, "sidecar_url": sidecar_url, "profile": profile,
+                               "active_session_file": active_session_file, "workspace_cwd": workspace_cwd})
+        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HERMES_HOME": str(hermes.home),
+               "CHILD_EXIT": "1" if state.exit_at_once else "0", "HERMES_TUI_NO_CONFIRM": "1"}
+        scoped = bool((profile or "").strip()) and (profile or "").strip().lower() != "current"
+        if resume:
+            db = _open_session_db_for_profile(None, read_only=True)
+            try:
+                latest, _path = _session_latest_descendant(resume, db)
+            finally:
+                db.close()
+            env["HERMES_TUI_RESUME"] = latest or resume
+        if sidecar_url:
+            env["HERMES_TUI_SIDECAR_URL"] = sidecar_url
+        if active_session_file:
+            env["HERMES_TUI_ACTIVE_SESSION_FILE"] = active_session_file
+        if workspace_cwd:
+            env["HERMES_CWD"] = env["HERMES_TUI_CWD"] = workspace_cwd
+        if not scoped:
+            url = web_server_chat._build_gateway_ws_url()
+            env["HERMES_TUI_GATEWAY_URL"] = url
+            env["SOME_OTHER_URL"] = url  # a stray copy of the process-wide credential
+        return [sys.executable, "-c", CHILD_SCRIPT], None, env
+
+    real_spawn = pty_bridge.PtyBridge.spawn
+
+    def counted_spawn(argv, **kwargs):
+        state.spawned.append(kwargs.get("env"))
+        return real_spawn(argv, **kwargs)
+
+    monkeypatch.setattr(web_server_chat, "_resolve_chat_argv", resolve)
+    monkeypatch.setattr(pty_bridge.PtyBridge, "spawn", staticmethod(counted_spawn))
+    yield state
+    for session in list(web_server_chat.PTY_REGISTRY._sessions.values()):
+        with __import__("contextlib").suppress(Exception):
+            session.bridge.close()
+    web_server_chat.PTY_REGISTRY._sessions.clear()
+
+
+def closed_with(client, url):
+    """(code, reason) of a socket refused before accept, or None when it was accepted."""
+    from starlette.websockets import WebSocketDisconnect
+
+    try:
+        with client.websocket_connect(url) as sock:
+            sock.close()
+            return None
+    except WebSocketDisconnect as exc:
+        return exc.code, exc.reason
+
+
+def read_pty(sock, until, limit=200):
+    """What the Chat tab's socket carries until `until` is in it: (bytes, text frames, close)."""
+    data, texts = b"", []
+    for _ in range(limit):
+        msg = sock.receive()
+        if msg["type"] == "websocket.close":
+            return data, texts, msg
+        if msg.get("bytes"):
+            data += msg["bytes"]
+        elif msg.get("text") is not None:
+            texts.append(msg["text"])
+        if until(data, texts):
+            return data, texts, None
+    raise AssertionError("the Chat tab never said it")
+
+
+def child_env(sock):
+    data, _texts, close = read_pty(sock, lambda d, t: b"ENV-END" in d)
+    assert close is None, close
+    import json
+
+    return json.loads(data.decode("utf-8", "replace").split("ENV-BEGIN", 1)[1].split("ENV-END", 1)[0])
+
+
+def query_of(url):
+    return urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+
+
+def wait_for(predicate, seconds=10.0):
+    import time
+
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    return predicate()
+
+
+def receive_close(sock, seconds=10.0):
+    """The close frame an open test socket gets, or None if none came in time."""
+    import threading
+
+    got = []
+
+    def run():
+        try:
+            while True:
+                msg = sock.receive()
+                if msg["type"] == "websocket.close":
+                    got.append(msg)
+                    return
+        except Exception as exc:  # noqa: BLE001 - the session ended: a disconnect
+            got.append({"type": "websocket.close", "code": getattr(exc, "code", None)})
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(seconds)
+    return got[0] if got else None
+
+
+#: Every gateway method the 0.21.5 TUI sends (`ui-tui/src`, read for round 4): at startup, per
+#: turn, from its slash commands, overlays and keybindings. `gateway.ping` is answered by
+#: `tui_gateway/ws.py:353-356` before any dispatch.
+TUI_METHODS = (
+    "client.capabilities", "config.get", "wake.start", "commands.catalog", "session.most_recent", "setup.status",
+    "session.close", "session.create", "session.title", "session.resume", "image.attach", "session.control.read",
+    "reload.mcp", "subagent.list", "process.list", "session.active_list", "pet.info.meta", "pet.cells",
+    "system.battery", "terminal.resize", "input.detect_drop", "prompt.submit", "session.interrupt", "session.steer",
+    "delegation.status", "spawn_tree.save", "paste.collapse", "image.detach", "clipboard.paste", "complete.slash",
+    "complete.path", "clarify.lock", "voice.record", "voice.toggle", "wake.resume", "config.set", "slash.exec",
+    "command.dispatch", "session.status", "session.save", "session.undo", "prompt.background", "prompt.btw",
+    "session.compress", "session.branch", "session.usage", "process.stop", "reload.env", "browser.manage",
+    "rollback.list", "rollback.diff", "rollback.restore", "delegation.pause", "spawn_tree.list", "spawn_tree.load",
+    "skills.reload", "skills.manage", "tools.configure", "wake.stop", "wake.status", "billing.state",
+    "billing.step_up", "billing.charge_status", "billing.auto_reload", "billing.charge", "subscription.preview",
+    "subscription.state", "subscription.resume", "subscription.change", "subscription.upgrade", "model.options",
+    "model.save_key", "model.disconnect", "session.list", "session.delete", "session.activate", "subagent.steer",
+    "subagent.tail", "subagent.interrupt", "learning.frames", "learning.delete", "learning.detail", "learning.edit",
+    "plugins.manage", "pet.gallery", "pet.select", "connection.respond", "connectors.connect", "shell.exec",
+)
+#: What each escape a resident could type in the TUI sends (`!cmd` and `{!cmd}`: shell.exec;
+#: `/plugins`, `/skills`, unknown commands: slash.exec then command.dispatch; `/model`: config.set;
+#: `/reload`: reload.env; `/reload-mcp`: reload.mcp; `/browser`: browser.manage).
+TUI_ESCAPES = (
+    ("shell.exec", {"command": "env"}),
+    ("slash.exec", {"command": "/plugins install https://example.invalid/evil.git"}),
+    ("command.dispatch", {"name": "config", "arg": "set x y"}),
+    ("cli.exec", {"argv": ["config", "set", "x", "y"]}),
+    ("config.set", {"key": "model", "value": "x"}),
+    ("config.get", {"key": "full"}),
+    ("plugins.manage", {"action": "install", "identifier": "https://example.invalid/evil.git"}),
+    ("reload.env", {}), ("reload.mcp", {"confirm": True}), ("browser.manage", {"action": "open"}),
+    ("model.save_key", {"provider": "x", "key": "y"}),
+)
+
+
+def test_hermes_r4_an_owner_chats_in_the_chat_tab_as_itself(chat_tab):
+    """The refuter's acceptance: an owner opens the Chat tab, its child gets a credential of its
+    own (never the process-wide one) on the attach URL, and on /api/ws that child is the owner:
+    the method table applies, its chats carry the owner's login, another login's chat is refused."""
+    hermes = chat_tab.hermes
+    g = hermes.guard
+    owner, admin, child = as_role(hermes, "owner"), as_role(hermes, "admin"), hermes.client()
+    chat = os.path.realpath(hermes.home / "resident-chat")
+    with owner.websocket_connect(f"/api/pty?ticket={ticket(owner)}&channel=chat-own-1") as pty:
+        env = child_env(pty)
+        process = hermes.ws_tickets.internal_ws_credential()
+        gateway = urllib.parse.urlsplit(env["HERMES_TUI_GATEWAY_URL"])
+        cred = query_of(env["HERMES_TUI_GATEWAY_URL"])["internal"][0]
+        assert (gateway.scheme, gateway.netloc, gateway.path) == ("ws", "127.0.0.1:9119", "/api/ws")
+        assert cred != process and len(cred) >= 43
+        assert query_of(env["HERMES_TUI_SIDECAR_URL"]) == {"internal": [cred], "channel": ["chat-own-1"]}
+        assert urllib.parse.urlsplit(env["HERMES_TUI_SIDECAR_URL"]).path == "/api/pub"
+        assert not any(process in value for value in env.values()), "the process-wide credential reached the child"
+        assert "SOME_OTHER_URL" not in env and "HERMES_TUI_NO_CONFIRM" not in env
+        assert env["HERMES_CWD"] == env["HERMES_TUI_CWD"] == chat
+        assert env["HOME"] == env["HERMES_HOME"] and os.path.dirname(env["HOME"]) == os.path.join(
+            os.path.realpath(hermes.home), "resident-tui")
+        assert oct(os.stat(env["HOME"]).st_mode & 0o777) == "0o700"
+        for key in ("VISUAL", "EDITOR", "HERMES_BIN", "BROWSER"):
+            assert env[key] == g.PTY_INERT_COMMAND and not os.path.exists(env[key]), key
+        assert (env["HERMES_TUI_DASHBOARD"], env["HERMES_TUI_DISABLE_MOUSE"], env["HERMES_TUI_DISABLE_MOUSE_CLICKS"]) == (
+            "1", "1", "1")
+        assert chat_tab.resolved[-1] == {"resume": None, "sidecar_url": None, "profile": None,
+                                         "active_session_file": chat_tab.resolved[-1]["active_session_file"],
+                                         "workspace_cwd": chat}
+        (grant,) = g.pty_grants()
+        assert (grant.login, grant.role, grant.state, grant.channel) == ("edgecity:owner-id", "resident", "bound",
+                                                                         "chat-own-1")
+        with admin.websocket_connect(f"/api/ws?ticket={ticket(admin)}") as asock:
+            ready(asock)
+            asid = create(asock)
+            with child.websocket_connect(f"/api/ws?internal={cred}") as tui:
+                ready(tui)
+                osid = create(tui, params={"cwd": chat})
+                assert hermes.tui_server._sessions[osid]["auth_user_id"] == "edgecity:owner-id"
+                assert hermes.tui_server._sessions[osid]["cwd"] == chat
+                for i, (method, params) in enumerate(TUI_ESCAPES):
+                    assert code_of(rpc_call(tui, method, params, rid=10 + i)) == 4031, method
+                assert code_of(rpc_call(tui, "approval.respond", {"session_id": osid, "choice": "always"}, rid=40)) == 4031
+                assert code_of(rpc_call(tui, "request.answer", {"id": "srq-x", "result": {"choice": "always"}},
+                                        rid=41)) == 4031
+                foreign = rpc_call(tui, "session.title", {"session_id": asid, "title": "x"}, rid=42)
+                assert code_of(foreign) == 4031 and foreign["error"]["data"]["reason"] == "not_own_session"
+                assert code_of(rpc_call(tui, "session.resume", {"session_id": "admin-chat"}, rid=43)) == 4031
+                assert code_of(rpc_call(tui, "session.title", {"session_id": osid, "title": "mine"}, rid=44)) is None
+                assert code_of(rpc_call(tui, "prompt.submit", {"session_id": osid, "text": "hello"}, rid=45)) is None
+        # Its sidecar publishes on its own channel only; it opens no other socket.
+        assert closed_with(child, f"/api/pub?internal={cred}&channel=chat-own-1") is None
+        for url in (f"/api/pub?internal={cred}&channel=chat-other", f"/api/pub?internal={cred}",
+                    f"/api/pub?internal={cred}&channel=chat-own-1&channel=chat-other",
+                    f"/api/console?internal={cred}", f"/api/pty?internal={cred}",
+                    f"/api/events?internal={cred}&channel=chat-own-1"):
+            assert closed_with(child, url) is not None and closed_with(child, url)[0] in (4401, 4403), url
+    # The tab closed: the PTY is closed and its credential is revoked.
+    assert wait_for(lambda: g.pty_grants() == [])
+    assert grant.state == "revoked"
+    assert closed_with(child, f"/api/ws?internal={cred}")[0] == 4401
+    assert g.counts().get("pty_revoked_closed", 0) + g.counts().get("pty_revoked_exited", 0) >= 1
+
+
+def test_hermes_r4_every_method_the_tui_sends_meets_the_resident_table(chat_tab):
+    """Every gateway method the 0.21.5 TUI can send (slash commands, overlays, keys, polls) over the
+    Chat tab child's own socket: on RESIDENT_GATEWAY_METHODS, or refused 4031 (never Hermes's
+    -32601, which the TUI would read as a version mismatch)."""
+    hermes = chat_tab.hermes
+    g = hermes.guard
+    owner = as_role(hermes, "owner")
+    assert set(TUI_METHODS) <= set(hermes.tui_server._methods) | {"gateway.ping"}
+    with owner.websocket_connect(f"/api/pty?ticket={ticket(owner)}") as pty:
+        cred = query_of(child_env(pty)["HERMES_TUI_GATEWAY_URL"])["internal"][0]
+        with hermes.client().websocket_connect(f"/api/ws?internal={cred}") as tui:
+            ready(tui)
+            refused = []
+            for i, method in enumerate(m for m in TUI_METHODS if m not in g.RESIDENT_GATEWAY_METHODS):
+                frame = rpc_call(tui, method, {}, rid=100 + i)
+                assert code_of(frame) == 4031, (method, frame)
+                refused.append(method)
+    assert "shell.exec" in refused and "slash.exec" in refused and "config.get" in refused
+    assert hermes.calls == []
+
+
+def test_hermes_r4_an_admins_chat_tab_keeps_the_process_credential(chat_tab):
+    hermes = chat_tab.hermes
+    admin = as_role(hermes, "admin")
+    with admin.websocket_connect(f"/api/pty?ticket={ticket(admin)}&channel=chat-adm-1") as pty:
+        env = child_env(pty)
+    process = hermes.ws_tickets.internal_ws_credential()
+    assert query_of(env["HERMES_TUI_GATEWAY_URL"])["internal"] == [process]
+    assert "VISUAL" not in env and env["HERMES_HOME"] == str(hermes.home)
+    assert hermes.guard.pty_grants() == []
+    with hermes.client().websocket_connect(f"/api/ws?internal={process}") as sock:
+        ready(sock)
+        assert code_of(rpc_call(sock, "plugins.manage", {"action": "list"})) != 4031
+
+
+@pytest.mark.parametrize("query,reason", [
+    ("profile=work", "edgecity_pty_profile"),
+    ("profile=default", "edgecity_pty_profile"),
+    ("profile=current&profile=work", "edgecity_pty_profile"),
+    ("cwd=HOME", "edgecity_pty_cwd"),
+    ("cwd=/", "edgecity_pty_cwd"),
+    ("cwd=HOME/resident-chat/..", "edgecity_pty_cwd"),
+    ("resume=admin-chat", "edgecity_pty_resume"),
+    ("resume=admin", "edgecity_pty_resume"),  # Hermes's prefix match lands on admin-chat
+    ("resume=pty-chat", "edgecity_pty_resume"),
+    ("resume=no-such-chat", "edgecity_pty_resume"),
+    ("resume=own-chat&resume=admin-chat", "edgecity_pty_resume"),
+])
+def test_hermes_r4_a_chat_tab_the_owner_may_not_open_is_refused_before_accept(chat_tab, query, reason):
+    hermes = chat_tab.hermes
+    seed_rows(hermes)
+    owner = as_role(hermes, "owner")
+    query = query.replace("HOME", urllib.parse.quote(str(hermes.home)))
+    assert closed_with(owner, f"/api/pty?ticket={ticket(owner)}&{query}") == (4401, f"auth: {reason}")
+    assert chat_tab.spawned == [] and chat_tab.resolved == [] and hermes.guard.pty_grants() == []
+
+
+@pytest.mark.parametrize("query", ["profile=current", "profile=", "cwd=HOME/resident-chat", "resume=own-chat",
+                                   "resume=tg-chat", "channel=chat-own-9&fresh=1"])
+def test_hermes_r4_the_owners_own_chat_tab_opens(chat_tab, query):
+    hermes = chat_tab.hermes
+    seed_rows(hermes)
+    owner = as_role(hermes, "owner")
+    query = query.replace("HOME", urllib.parse.quote(str(hermes.home)))
+    with owner.websocket_connect(f"/api/pty?ticket={ticket(owner)}&{query}") as pty:
+        env = child_env(pty)
+    assert len(chat_tab.spawned) == 1 and "HERMES_TUI_GATEWAY_URL" in env
+    if "resume=" in query:
+        assert env["HERMES_TUI_RESUME"] == query.split("=", 1)[1]
+
+
+def test_hermes_r4_another_logins_channel_is_refused(chat_tab):
+    """The channel ties a tab to its active-session file and its sidebar feed: an admin's is not
+    the owner's to open (it would resume the admin's chat or feed the admin's sidebar)."""
+    hermes = chat_tab.hermes
+    owner, admin = as_role(hermes, "owner"), as_role(hermes, "admin")
+    with admin.websocket_connect(f"/api/pty?ticket={ticket(admin)}&channel=chat-adm-2") as pty:
+        child_env(pty)
+    assert closed_with(owner, f"/api/pty?ticket={ticket(owner)}&channel=chat-adm-2") == (4401, "auth: edgecity_pty_channel")
+    assert closed_with(owner, f"/api/pty?ticket={ticket(owner)}&channel=chat-adm-2&channel=chat-own-3") == (
+        4401, "auth: edgecity_pty_channel")
+    with owner.websocket_connect(f"/api/pty?ticket={ticket(owner)}&channel=chat-own-3") as pty:
+        child_env(pty)
+    with owner.websocket_connect(f"/api/pty?ticket={ticket(owner)}&channel=chat-own-3") as pty:
+        child_env(pty)  # its own channel again (a refresh)
+
+
+def test_hermes_r4_the_chat_hermes_settles_on_must_be_the_owners_before_anything_spawns(chat_tab):
+    """The resume Hermes resolves after accept: the channel's active-session file (no `?resume=`)
+    and the newest descendant of an owned chat. Another login's: refused with a line in the tab and
+    1011, nothing spawned."""
+    from hermes_state import SessionDB
+
+    hermes = chat_tab.hermes
+    seed_rows(hermes)
+    db = SessionDB(db_path=hermes.home / "state.db")
+    try:
+        db.create_session(session_id="own-parent", source="tool", user_id="edgecity:owner-id")
+        # A continuation child (not `tool`: Hermes follows continuation edges only) under another login.
+        db.create_session(session_id="adm-child", source="tui", user_id="edgecity:admin-id",
+                          parent_session_id="own-parent")
+    finally:
+        db.close()
+    owner = as_role(hermes, "owner")
+    with owner.websocket_connect(f"/api/pty?ticket={ticket(owner)}&channel=chat-own-4") as pty:
+        child_env(pty)
+    spawned = len(chat_tab.spawned)
+    active = hermes.chat._active_session_file_for_channel(hermes.app, "chat-own-4")
+    active.write_text('{"session_id": "admin-chat"}', encoding="utf-8")
+    with owner.websocket_connect(f"/api/pty?ticket={ticket(owner)}&channel=chat-own-4") as pty:
+        data, texts, close = read_pty(pty, lambda d, t: any("not yours" in x for x in t))
+    assert any(x.startswith("\r\n\x1b[31mChat could not start: That chat is not yours.") for x in texts), texts
+    assert len(chat_tab.spawned) == spawned and hermes.guard.counts()["denied_pty_resume"] == 1
+    active.write_text('{"session_id": "own-chat"}', encoding="utf-8")
+    with owner.websocket_connect(f"/api/pty?ticket={ticket(owner)}&channel=chat-own-4") as pty:
+        assert child_env(pty)["HERMES_TUI_RESUME"] == "own-chat"
+    spawned = len(chat_tab.spawned)
+    with owner.websocket_connect(f"/api/pty?ticket={ticket(owner)}&resume=own-parent") as pty:
+        data, _texts, _close = read_pty(pty, lambda d, t: any("not yours" in x for x in t))
+    assert len(chat_tab.spawned) == spawned and hermes.guard.counts()["denied_pty_resume"] == 2
+    assert hermes.guard.pty_grants() == []
+
+
+def test_hermes_r4_revoked_when_the_child_exits_and_its_open_sockets_are_closed(chat_tab):
+    hermes = chat_tab.hermes
+    g = hermes.guard
+    owner = as_role(hermes, "owner")
+    pty_cm = owner.websocket_connect(f"/api/pty?ticket={ticket(owner)}&channel=chat-own-5")
+    pty = pty_cm.__enter__()
+    try:
+        cred = query_of(child_env(pty)["HERMES_TUI_GATEWAY_URL"])["internal"][0]
+        tui_cm = hermes.client().websocket_connect(f"/api/ws?internal={cred}")
+        tui = tui_cm.__enter__()
+        ready(tui)
+    finally:
+        pty_cm.__exit__(None, None, None)
+    # The tab is gone: Hermes closed the bridge, the guard revoked the credential and closes the
+    # child's open gateway socket.
+    closed = receive_close(tui)
+    assert closed is not None and closed.get("code") == 4401, closed
+    with __import__("contextlib").suppress(Exception):
+        tui_cm.__exit__(None, None, None)
+    assert closed_with(hermes.client(), f"/api/ws?internal={cred}")[0] == 4401
+    # A child that exits by itself (a crash, the TUI quitting): the session ends, never a shell.
+    chat_tab.exit_at_once = True
+    with owner.websocket_connect(f"/api/pty?ticket={ticket(owner)}&channel=chat-own-6") as pty:
+        cred2 = query_of(child_env(pty)["HERMES_TUI_GATEWAY_URL"])["internal"][0]
+        _data, _texts, close = read_pty(pty, lambda d, t: False)
+    assert close is not None  # Hermes closed the tab's socket on the child's EOF
+    assert wait_for(lambda: g.pty_grants() == [])
+    assert closed_with(hermes.client(), f"/api/ws?internal={cred2}")[0] == 4401
+
+
+def test_hermes_r4_attach_tokens_are_per_login_and_a_login_holds_at_most_its_limit(chat_tab, monkeypatch):
+    """`?attach=` is the client's own token: an owner presenting an admin's reattaches nothing of
+    the admin's (its terminal is keyed under its own login); four tabs held open by one owner: the
+    fourth is refused with Hermes's own "too many chat terminals"."""
+    from hermes_cli import pty_bridge
+
+    hermes = chat_tab.hermes
+    g = hermes.guard
+
+    class FakeBridge:
+        def __init__(self):
+            self.written = bytearray()
+
+        def read(self, timeout=0.2):
+            import time
+
+            time.sleep(min(timeout, 0.05))
+            return b""
+
+        async def write(self, data):
+            self.written.extend(data)
+            return True
+
+        def resize(self, cols, rows):
+            pass
+
+        def close(self):
+            pass
+
+    bridges = []
+
+    def fake_spawn(argv, **kwargs):
+        bridges.append(FakeBridge())
+        return bridges[-1]
+
+    monkeypatch.setattr(pty_bridge.PtyBridge, "spawn", staticmethod(fake_spawn))
+    owner, admin = as_role(hermes, "owner"), as_role(hermes, "admin")
+    registry = hermes.chat.PTY_REGISTRY
+    with admin.websocket_connect(f"/api/pty?ticket={ticket(admin)}&attach=TOK1") as asock:
+        asock.send_bytes(b"admin-typed")
+        assert wait_for(lambda: bytes(bridges[0].written) == b"admin-typed") if bridges else wait_for(lambda: bridges)
+    with owner.websocket_connect(f"/api/pty?ticket={ticket(owner)}&attach=TOK1") as osock:
+        osock.send_bytes(b"owner-typed")
+        assert wait_for(lambda: len(bridges) == 2), (len(bridges), sorted(registry._sessions), g.counts())
+    assert wait_for(lambda: bytes(bridges[1].written) == b"owner-typed")
+    assert b"owner-typed" not in bytes(bridges[0].written)
+    keys = sorted(registry._sessions)
+    assert keys[0] == "TOK1" and keys[1].startswith("edgecity-resident:") and keys[1].endswith("\0TOK1")
+    # The owner's limit (3): its own detached TOK1 makes room for a third open tab; with three open,
+    # a fourth is refused. The admin's detached terminal is never touched.
+    import contextlib
+
+    with contextlib.ExitStack() as stack:
+        for tok in ("A", "B", "C"):
+            stack.enter_context(owner.websocket_connect(f"/api/pty?ticket={ticket(owner)}&attach={tok}"))
+        assert wait_for(lambda: len(bridges) == 5)
+        assert g.counts()["pty_resident_evicted"] == 1 and not any(k.endswith("\0TOK1") for k in registry._sessions)
+        assert "TOK1" in registry._sessions
+        with owner.websocket_connect(f"/api/pty?ticket={ticket(owner)}&attach=D") as fourth:
+            _data, texts, close = read_pty(fourth, lambda d, t: any("too many" in x for x in t))
+        assert any("Chat could not start: too many chat terminals" in x for x in texts) and len(bridges) == 5
+        assert g.counts()["denied_pty_limit"] >= 1
+    assert len([gr for gr in g.pty_grants() if gr.login == "edgecity:owner-id"]) == g.RESIDENT_PTYS_PER_LOGIN

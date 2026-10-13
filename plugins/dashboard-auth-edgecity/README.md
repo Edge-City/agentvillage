@@ -176,7 +176,10 @@ The tables are at the top of `_resident_guard.py`, one row per capability with i
 - **The web chat's uploads**: `POST /api/chat/image-upload`.
 - **The approvals card**: `/api/plugins/av-approval/**`, reserved for av-approval's own dashboard
   routes. None is mounted at this version.
-- **Sockets**: only the chat gateway, `/api/ws`.
+- **Sockets**: the chat gateway, `/api/ws`, and (1.4.0) the Chat tab, `/api/pty`, on the terms in
+  "The Chat tab" below.
+- **The Chat tab (1.4.0)**: the dashboard's terminal chat with the resident's own agent, as the
+  resident's own login (below).
 - **Chat gateway methods** on `/api/ws`: handshake (`ping`, `gateway.capabilities`,
   `client.capabilities`), chats (`session.create`, `.resume`, `.list` and `.most_recent` with their
   own rows only, `.title`, `.close`, `.delete`, `.interrupt`, `.events.since`), `prompt.submit`, answering the agent
@@ -233,6 +236,90 @@ The tables are at the top of `_resident_guard.py`, one row per capability with i
   are inlined; an upload in `attachments/` is outside that workspace, so Hermes keeps the
   reference in the message with its own note and the agent reads the file with `read_file`.
 
+### The Chat tab (1.4.0)
+
+Residents keep the dashboard chat (Carter, 13 Oct 2026: six residents sent 34 dashboard-chat
+messages in 14 days). At Hermes 0.21.5 the Chat tab is `/api/pty` (`chat_ws.py:432`): `hermes --tui`
+behind a pseudo-terminal, attached to this dashboard's gateway over `/api/ws` with the URL in its
+environment (`HERMES_TUI_GATEWAY_URL`). In 1.3.x that URL carried Hermes's one process-wide internal
+credential (every method, no login), so the tab was admin only. From 1.4.0 a resident's tab gets a
+credential of its own, and the child is the resident on the gateway.
+
+**When a resident's `/api/pty` opens.** All checked before the socket is accepted (`pty_admission`);
+a refusal closes it `4401` with `auth: <reason>`:
+
+| Asked for | Rule | Reason |
+|---|---|---|
+| no login (the loopback token) | refused: the tab needs a ticket Hermes stamped the login from | `edgecity_pty_no_login` |
+| `profile` | none or `current` only (`RESIDENT_PTY_PROFILES`): any other scopes `HERMES_HOME` and skips the attach URL, so the TUI would spawn a gateway the guard never sees (`web_server_chat.py:325-389`) | `edgecity_pty_profile` |
+| `cwd` (the workspace) | none, or exactly `$HERMES_HOME/resident-chat` | `edgecity_pty_cwd` |
+| `resume` | a chat of the resident's own (`session_visible` on the stored owner; a prefix is read as Hermes reads it) | `edgecity_pty_resume` |
+| `channel` | new, or one this login opened a tab on before; never another login's (it names the tab's active-session file and its sidebar feed) | `edgecity_pty_channel` |
+| `attach` | anything: a resident's token is keyed under its own login in Hermes's PTY registry, so it never reattaches another login's terminal | |
+
+Every value of a repeated parameter is checked (Hermes reads the last).
+
+**Before anything spawns.** The PTY handler then settles the chat itself: with a channel and no
+`resume` it reopens the channel's active-session file, and Hermes follows a resume to its newest
+continuation (`web_server_sessions.py:36`). The guard checks that chat again (it must be the
+resident's) where Hermes resolves it (`_resolve_chat_argv_async`), and pins the workspace. A refusal
+there shows one red line in the tab (`Chat could not start: That chat is not yours.`) and closes
+it `1011`.
+
+**The per-PTY credential.** For an accepted tab the guard mints 32 random bytes, kept in memory with
+`{user_id, provider, role: resident, pty_id, minted_at}`, and builds the child's
+`HERMES_TUI_GATEWAY_URL` (`/api/ws`) and, with a channel, `HERMES_TUI_SIDECAR_URL` (`/api/pub`) with
+`?internal=<that credential>`, through Hermes's own URL builder. The attach URL is always set (without
+it the TUI spawns its own gateway); if it cannot be built the tab is refused. No value of the child's
+environment carries the process-wide credential. On a socket, `consume_internal_credential` answers
+that credential with the resident's own `{user_id, provider}`, which Hermes stamps on the socket
+exactly as it stamps a ticket's, so:
+
+- on `/api/ws` the child is a resident: `RESIDENT_GATEWAY_METHODS`, its own chats only, no
+  `always`; the chats it creates carry the resident's login (`auth_user_id`) and run in
+  `resident-chat`;
+- on `/api/pub` it publishes only on the tab's own channel;
+- it opens nothing else, only from a loopback peer, at most two sockets per path at once;
+- the process-wide credential stays the admin terminal's (ROLE_INTERNAL); an admin's tab is
+  Hermes's own, unchanged.
+
+The credential is revoked when its PTY closes (the tab closed, a registry reap or eviction,
+shutdown) or its child exits, and when a tab never spawned (a reattach, a failed start); a revoked
+credential is refused (`4401 auth: internal_invalid`), its open sockets are closed
+(`4401 auth: edgecity_pty_revoked`), and a frame still in flight is refused `4031`.
+
+**Limits.** Hermes's registry holds 16 terminals for the whole box, and a resident could fill them.
+So one login holds at most `RESIDENT_PTYS_PER_LOGIN` = 3: at the limit the login's own oldest
+detached terminal is closed to make room, and if all three are attached the fourth tab shows
+Hermes's own `Chat could not start: too many chat terminals are open in other tabs.`
+
+**What the TUI could do on its own, and what is closed.** The TUI process runs as `hermes` with the
+box's provider environment (secrets kept by Hermes's design, as for the Telegram gateway), and the
+resident's keystrokes reach it. Everything it sends to the gateway meets the method list; what it
+does locally is closed from the guard's side by the child's environment:
+
+| In the TUI | What it does | Closed by |
+|---|---|---|
+| `!cmd`, `{!cmd}` | `shell.exec` | the method list: `error: This gateway method is admin only.` |
+| `/plugins`, `/skills`, `/tools`, unknown commands | `slash.exec`, then `command.dispatch` | the method list |
+| `/model`, `/reload`, `/reload-mcp`, `/browser`, `/rollback`, `/compress`, `/branch`, billing, ... | `config.set`, `reload.*`, `browser.manage`, ... | the method list |
+| the composer's editor (`/prompt`, `/compose`, Ctrl+G), whose own shell escape is a shell | spawns `$VISUAL`/`$EDITOR` | both set to a path that does not exist: the spawn fails, the edit is dropped |
+| `/setup` | spawns `$HERMES_BIN setup`, which writes config | `HERMES_BIN` set to that path |
+| a link clicked in the transcript | spawns `xdg-open <url>` | mouse and clicks off (`HERMES_TUI_DISABLE_MOUSE`, `..._CLICKS`), `BROWSER` set to that path |
+| input history (Up arrow) | reads and appends `$HERMES_HOME/.hermes_history`, which every login's TUI shares | the child's `HOME` and `HERMES_HOME` are the login's own `resident-tui/<id>` (0700): its history, log, theme, widgets and `/terminal-setup` stay there |
+| `/exit`, `/quit`, `/update` | refused in hosted dashboard mode | `HERMES_TUI_DASHBOARD=1` forced |
+| the TUI exits (crash, Ctrl+C, Ctrl+D) | the PTY ends; Hermes closes the tab, never a shell (the child is `node`, spawned without one) | the credential is revoked with it |
+| `/theme-info` | prints four theme variables | nothing secret |
+
+There is no `$VAR` expansion and nothing in the TUI prints its environment. The git-branch probe
+runs `git rev-parse` in `resident-chat`, read-only.
+
+**What a resident sees.** On every start the TUI asks the gateway for a few things a resident may not
+read (`config.get`, `wake.start`, `commands.catalog`, `setup.status`), and it resizes with
+`terminal.resize`: each shows one `error: This gateway method is admin only.` line and the TUI
+carries on with its defaults (the method list is unchanged in this round). The sidebar's live feed
+(`/api/events`) stays admin only, so a resident's sidebar shows no tool feed.
+
 ### What a resident can see of other sessions
 
 Nothing, from 1.3.2 (SEC1-refute2 S-r3-1: the lists used to carry every session's title,
@@ -263,15 +350,11 @@ plugins (install, enable, disable, the hub), config and raw config, `.env` (read
 files and `/api/fs/*`, hooks, MCP servers, skills, cron, models and providers, credentials,
 profiles (beyond the two reads), pairing, webhooks, messaging platforms, logs, analytics, gateway
 start/stop/restart/update, Hermes update, backups and imports, git, local models, the Hermes
-Console (`/api/console`), the terminal (`/api/pty`), the PTY's event feed (`/api/pub`,
-`/api/events`), TTS streaming, the Bot Desktop bridge, dashboard plugins' own APIs (kanban), and
-every gateway method not listed above (`shell.exec`, `cli.exec`, `plugins.manage`, `slash.exec`,
-`command.dispatch`, `config.set`, `config.get`, ...).
-
-At Hermes 0.21.5 the dashboard's Chat tab is the terminal: it runs `hermes --tui` behind
-`/api/pty`, and that TUI drives the gateway with the server's own credential. So **a resident has no
-Chat tab on the dashboard**; the gateway chat methods above serve a chat client that speaks to
-`/api/ws` directly (the desktop app). Residents chat with their agent on Telegram as before.
+Console (`/api/console`), a Chat tab on another profile, workspace, channel or login's chat, the
+browser's event feed (`/api/events`, and `/api/pub` but for a Chat tab child on its own channel),
+TTS streaming, the Bot Desktop bridge, dashboard plugins' own APIs (kanban), and every gateway
+method not listed above (`shell.exec`, `cli.exec`, `plugins.manage`, `slash.exec`,
+`command.dispatch`, `config.set`, `config.get`, ...), from the desktop app and the Chat tab alike.
 
 ### What a resident sees
 
@@ -285,6 +368,11 @@ Chat tab on the dashboard**; the gateway chat methods above serve a chat client 
   chat's request answers `4031` with `"reason": "not_own_session"`.
 - A socket off the list closes before accept with `4401` and the reason `auth: edgecity_admin_only`
   (the SPA shows its sign-in banner for the terminal).
+- A Chat tab the resident may not open closes before accept with `4401` and
+  `auth: edgecity_pty_profile`, `_cwd`, `_resume`, `_channel` or `_no_login`; one whose settled chat
+  is another login's shows `Chat could not start: That chat is not yours.` and closes `1011`. A Chat
+  tab child's socket refused by its credential's rules closes `4401` with `auth: edgecity_pty_peer`,
+  `_sockets`, `_channel` or `edgecity_admin_only`.
 - A gateway method off the list answers a JSON-RPC error, code `4031`, data
   `{"reason": "admin_only", "method": ...}`.
 - The Plugins nav entry is hidden and `/plugins` is sent to `/` (kept from 1.2.0). The other nav
@@ -293,7 +381,9 @@ Chat tab on the dashboard**; the gateway chat methods above serve a chat client 
 
 ### Editing the list
 
-Edit `RESIDENT_HTTP`, `RESIDENT_WS_PATHS` or `RESIDENT_GATEWAY_METHODS` in `_resident_guard.py`.
+Edit `RESIDENT_HTTP`, `RESIDENT_WS_PATHS` or `RESIDENT_GATEWAY_METHODS` in `_resident_guard.py`
+(the Chat tab's terms are `RESIDENT_PTY_PROFILES`, `RESIDENT_PTYS_PER_LOGIN`, `PTY_SOCKETS_PER_PATH`,
+`PTY_FORCED_ENV` and `PTY_DROPPED_ENV`).
 An HTTP row is `(methods, pattern, why)`: a pattern matches path segments, `{x}` is one non-empty
 segment, a final `**` is one or more further segments, and `SPA` is the page rule (a GET outside
 `/api`, `/auth`, `/login`, the API docs and `/dashboard-plugins`). Both the URL path and the ASGI
@@ -364,12 +454,17 @@ residents and admins, signs in again once after the roll.
 - The gateway seam installs the first time a resident opens `/api/ws` (`tui_gateway.server` starts
   threads at import, so it is not imported at plugin load); until it is in place, and if it ever
   fails, a resident's `/api/ws` is refused.
+- The Chat tab's seams install all or none (`install_pty`). Without them, or without the gateway
+  seam, a resident's `/api/pty` is refused as in 1.3.x (logged at WARNING); nothing else changes.
+- A resident's tab without a login, a context the guard did not set, an environment it cannot
+  rebuild, an attach URL it cannot build, or a spawn that does not carry the credential it minted
+  is refused; a credential that is not live opens nothing.
 
 ### Loopback
 
 With the gate off (`auth_required` false: a local `hermes dashboard`), every request arrives with
 no session and the legacy socket token is a resident's, so a loopback dashboard gets the resident
-list: no console, no terminal, no config. On village boxes the gate is always on. A local operator
+list: no console, no Chat tab (the token carries no login), no config. On village boxes the gate is always on. A local operator
 who needs the full console runs Hermes without this plugin.
 
 ### How it is installed
@@ -386,6 +481,10 @@ wrapper already there (an earlier load, or 1.2.0's) is replaced, wrapping what i
 | `web_routers.files._SENSITIVE_MANAGED_DIR_NAMES` | read at call time by `_is_sensitive_path` (`files.py:92`) | adds `.dashboard-auth-edgecity`, for every session |
 | `agent.file_safety._READ_DENIED_DIRS` | read at call time by `get_read_block_error` (`file_safety.py:343-385`) | adds the key store and this plugin's directory; required (the plugin refuses to load without it) |
 | `agent.context_references._ensure_reference_path_allowed` | read at call time by `_expand_path_reference` (`context_references.py:291`) | also refuses a private path under `$HERMES_HOME` or the Hermes checkout, for every caller; required (1.3.2) |
+| `web_server_chat._resolve_chat_argv_async` | late-bound by `chat_ws.py:33`; resolves the PTY's argv and env after accept | a resident's tab: the settled chat must be its own; the env rebuilt with the per-PTY credential (`resident_chat_env`) |
+| `web_server_chat.PtyBridge` | imported at call time by the PTY handler (`chat_ws.py:434`) | a subclass whose `spawn` binds the credential to the bridge; closing it or the child's EOF revokes it |
+| `web_server_chat.PTY_REGISTRY.attach_or_spawn` / `.detach` | the keep-alive registry (`pty_session.py`) | a resident's `?attach=` keyed under its login; at most 3 terminals per login |
+| `dashboard_auth.ws_tickets.consume_internal_credential` | imported at call time by `_ws_auth_reason` (`web_server_chat.py:236`) | a per-PTY credential answers with the resident's identity; anything else is Hermes's |
 | `hermes_cli.web_server_sessions._open_session_db_for_profile` | what the session routes read (`web_routers/sessions.py`) | the guard's read-only owner lookup for `/api/sessions/{id}...`, `session.resume`, `session.delete` and the gateway list rows |
 | `hermes_cli.web_routers.sessions.get_sessions` | the `GET /api/sessions` handler | called directly, compact rows, 100 at a time, to build a resident's own list |
 | `agent.context_references.parse_context_references` | Hermes's `@`-reference parser (`context_references.py:151`) | reads a resident's `@file:` references exactly as Hermes will |
@@ -397,7 +496,10 @@ never the email, a token, a ticket or a path. Denials at INFO (`denied_not_liste
 `denied_gateway_file_ref`, `denied_gateway_cwd`, `denied_gateway_profile`, `denied_answer_*`,
 `denied_not_own_session`, `denied_context_reference`, `denied_display_ticket`, `denied_full_list`,
 `denied_session_list_error`, `denied_gateway_list`, `denied_gateway_list_error`,
-`denied_seam_*_missing`); allows, the hide and the list filter (`resident_list_filtered`,
+`denied_seam_*_missing`, and for the Chat tab `denied_pty_profile`, `_cwd`, `_resume`, `_channel`,
+`_no_login`, `_peer`, `_sockets`, `_revoked`, `_limit`, `_attach_url`, `_no_context`, `_error`);
+`pty_grant_minted`, `pty_resident_spawned`, `pty_revoked_<why>` and `pty_resident_evicted` at DEBUG;
+allows, the hide and the list filter (`resident_list_filtered`,
 `resident_list_truncated`) at DEBUG. The install line is `resident guard on (...)`; anything at ERROR from this logger is a seam
 that did not install.
 
@@ -406,7 +508,7 @@ that did not install.
 Placeholders only (`<BOX>`, `<OWNER_AT>`, `<ADMIN_AT>`, `<T>`); never a cookie value in a report.
 Fresh owner and admin sign-ins are needed after the roll.
 
-- `plugin.yaml` says `version: 1.3.2`.
+- `plugin.yaml` says `version: 1.4.0`.
 - The install line `resident guard on (...)` is logged at INFO. If the dashboard logs at WARNING,
   its absence proves nothing; the proof is then no ERROR from `dashboard-auth-edgecity` plus the
   probes below.
@@ -428,6 +530,17 @@ Fresh owner and admin sign-ins are needed after the roll.
   `file.attach {"session_id":<own chat>,"data_url":"data:text/plain;base64,aGk=","name":"t.txt"}`,
   then `prompt.submit` with the `ref_text` it returned, answers without error; `prompt.submit`
   `@file:<home>/attachments/../config.yaml` answers error `4031`.
+- **New in 1.4.0: the owner's Chat tab.**
+  - The owner opens the Chat tab and chats: the TUI answers, and a message gets the agent's reply.
+    (On every start a few `error: This gateway method is admin only.` lines are expected, see "The
+    Chat tab".)
+  - `/api/pty?ticket=<T>&profile=x` closes `4401` `auth: edgecity_pty_profile`.
+  - `/api/pty?ticket=<T>&resume=<an admin's chat id>` closes `4401` `auth: edgecity_pty_resume`.
+  - In the tab, `!env`, `/plugins install x` and `/reload` each answer one
+    `error: This gateway method is admin only.` line; Ctrl+G opens no editor.
+  - The tab's `/api/ws` connection is the owner's: a chat started in the tab appears in the owner's
+    `GET /api/sessions` once it has a message, with `user_id` `edgecity:<owner id>`.
+  - The dashboard log has no `pty start failed` for the owner's own tab.
 - Kept from 1.3.0: owner `PUT /api/config` gives `admin_only`; owner `/api/env` 403; owner
   `/api/dashboard/plugins/hub` 403, admin 200; owner `/api/console` closes 4401
   `auth: edgecity_admin_only`; owner `/api/ws` `shell.exec` answers 4031; admin `/api/console` sends

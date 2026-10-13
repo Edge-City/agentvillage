@@ -17,9 +17,13 @@ closed allow-list for every session that is not a landing admin, on three seams:
   (`web_server_chat.py:220`), which every gated socket but the display bridge calls before accepting
   (the console and PTY through `chat_ws._ws_gate` :118, the sidecars through `_ws_auth_ok` :298),
   is wrapped to read the role back from the consumed ticket, stamp it on the socket, and refuse a
-  socket path the role may not open (`RESIDENT_WS_PATHS`). The console (`/api/console`) and the PTY
-  (`/api/pty`) are therefore admin only. The display bridge consumes its own ticket
-  (`web_routers/display.py:61`); a display ticket minted under a non-admin request is refused there.
+  socket path the role may not open (`RESIDENT_WS_PATHS`). The console (`/api/console`) is
+  therefore admin only. The display bridge consumes its own ticket (`web_routers/display.py:61`); a
+  display ticket minted under a non-admin request is refused there.
+- **The Chat tab (1.4.0).** A resident's `/api/pty` opens only on `pty_admission`'s terms, and its
+  `hermes --tui` child attaches to the gateway with a credential minted for that one PTY and bound
+  to the resident's login (`PtyGrant`, `install_pty`), never the process-wide one: on /api/ws and
+  /api/pub that child is the resident, and the credential is revoked when the PTY ends.
 - **Gateway methods.** `/api/ws` (`chat_ws.py:583`) runs the TUI JSON-RPC table through
   `tui_gateway.server.dispatch(req, transport)` (`tui_gateway/ws.py:361`). This module wraps
   `tui_gateway.ws.handle_ws` (imported by the route at call time, `chat_ws.py:588`) to carry the
@@ -53,12 +57,17 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import hashlib
+import hmac
 import inspect
+import ipaddress
 import logging
 import os
 import re
+import secrets
 import sys
 import threading
+import time
 import unicodedata
 import urllib.parse
 from typing import Any, AsyncIterator, Awaitable, Callable, Iterable, Optional
@@ -147,15 +156,36 @@ RESIDENT_HTTP: tuple[tuple[frozenset, str, str], ...] = (
     (POST, "/api/chat/image-upload", "a pasted chat image, saved under HERMES_HOME/images with a random name"),
     # -- the overlay's approvals card --
     (GET_POST, "/api/plugins/av-approval/**",
-     "reserved for av-approval's own dashboard routes (the approvals card); none is mounted at 1.3.2"),
+     "reserved for av-approval's own dashboard routes (the approvals card); none is mounted at 1.4.0"),
 )
 
-#: WebSockets: socket paths a resident may open. Everything else (the console, the PTY, the PTY's
+#: WebSockets: socket paths a resident may open. Everything else (the console, the browser's
 #: /api/pub and /api/events feed, TTS streaming, the display bridge, plugin sockets) is refused
-#: before accept.
+#: before accept. The Chat tab's own child connects back on /api/ws and /api/pub with a credential
+#: bound to the resident's login (`PtyGrant`), never the process-wide one.
 RESIDENT_WS_PATHS: dict[str, str] = {
     "/api/ws": "the chat gateway; what it may call is RESIDENT_GATEWAY_METHODS",
+    "/api/pty": "the Chat tab (1.4.0): `hermes --tui` on this dashboard's gateway as the resident's own login, "
+                "under the RESIDENT_PTY_* rules (`pty_admission`)",
 }
+
+#: The Chat tab (1.4.0). A resident's `/api/pty` may name no `profile` but none or "current"
+#: (Hermes's own unscoped spellings, `web_server_chat.py:325-327`): any other scopes HERMES_HOME
+#: and skips the attach URL, so the TUI would spawn a gateway the guard never sees.
+RESIDENT_PTY_PROFILES = frozenset({"", "current"})
+#: Chat terminals one resident login holds at once. Hermes's registry holds 16 for the whole box
+#: (`web_server_chat.py:47`); at this limit the login's own oldest detached terminal is closed to
+#: make room, and if every one is attached the new one is refused.
+RESIDENT_PTYS_PER_LOGIN = 3
+#: Sockets one PTY credential may hold open at once on each of /api/ws and /api/pub: the TUI's
+#: connection, plus one for a reconnect racing the old socket's close.
+PTY_SOCKETS_PER_PATH = 2
+#: Channels remembered with the login that first opened a Chat tab on them (Hermes's channel id,
+#: `chat_ws.py:52`). When full, a resident cannot claim a new one (fail closed).
+PTY_CHANNELS_MAX = 4096
+#: A PTY credential minted for a chat that never spawned (a reattach, a failed start) is dropped
+#: at the latest after this many seconds.
+PTY_UNBOUND_SECONDS = 120
 
 #: Gateway parameter rules (see `gateway_decision`). A row names any number of them.
 BYTES_ONLY = "bytes_only"          # an upload from the client; a host `path` is refused
@@ -241,8 +271,10 @@ RESIDENT_FILE_DIRS = ("attachments", "composer-pastes", RESIDENT_CWD_NAME)
 
 # ==================================================================================================
 
-#: Where the PTY child connects back with the internal credential (`web_server_chat.py:438-445`).
+#: Where the PTY child connects back with the internal credential (`web_server_chat.py:438-445`),
+#: the process-wide one (an admin's terminal) or a resident's per-PTY one.
 INTERNAL_WS_PATHS = frozenset({"/api/ws", "/api/pub"})
+PTY_PATH = "/api/pty"
 APPROVAL_CHOICES = frozenset({"once", "session", "deny"})
 
 # ---- private paths (design rule 3) ---------------------------------------------------------------
@@ -312,11 +344,18 @@ _CONSUMED_ROLE: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("
 #: The role of the /api/ws connection whose frames are being dispatched (set by the `handle_ws`
 #: wrapper; `asyncio.to_thread` and the long-handler pool copy it).
 _GATEWAY_ROLE: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("edgecity_gateway_role", default=None)
+#: The per-PTY credential `consume_internal_credential` just recognised, for the `_ws_auth_reason`
+#: wrapper that called it (one synchronous call, one context).
+_CONSUMED_GRANT: contextvars.ContextVar[Any] = contextvars.ContextVar("edgecity_consumed_grant", default=None)
+#: The /api/pty socket being served (`PtyContext`), set by the `_ws_auth_reason` wrapper inside
+#: the PTY handler's own task and read by the wrappers it then calls (argv, registry, spawn). The
+#: spawn runs in `asyncio.to_thread`, which copies it.
+_PTY_CONTEXT: contextvars.ContextVar[Any] = contextvars.ContextVar("edgecity_pty_context", default=None)
 
 #: Which seams this copy of the module installed. /api/ws opens to a resident only while the
 #: gateway seam is in place (`ws_path_allowed`).
 _installed: dict[str, bool] = {"http": False, "tickets": False, "ws": False, "gateway": False, "files": False,
-                               "agent_reads": False, "references": False}
+                               "agent_reads": False, "references": False, "pty": False}
 #: Extra private roots (the Hermes checkout), set by `set_private_roots`.
 _private_roots: list[str] = []
 #: Loaders `__init__` hands in for the seams that live in modules too heavy to import at plugin
@@ -983,10 +1022,12 @@ def install_tickets(module: Any) -> bool:
 # ---- sockets -------------------------------------------------------------------------------------
 
 
-def ws_role(credential: Any, ticket_role: Any) -> str:
+def ws_role(credential: Any, ticket_role: Any, grant: Any = None) -> str:
     """The role a socket gets from what authenticated it: an admin-minted ticket is admin; the
-    internal credential is the PTY child's; a resident's ticket, the loopback token or anything
-    unknown is a resident."""
+    process-wide internal credential is an admin terminal's child; a resident's per-PTY credential
+    (`grant`), a resident's ticket, the loopback token or anything unknown is a resident."""
+    if grant is not None:
+        return ROLE_RESIDENT
     if credential == "internal":
         return ROLE_INTERNAL
     if credential in ("ticket", "ticket-subprotocol") and ticket_role == ROLE_ADMIN:
@@ -995,8 +1036,9 @@ def ws_role(credential: Any, ticket_role: Any) -> str:
 
 
 def ws_path_allowed(role: Any, url_path: Any, scope_path: Any) -> bool:
-    """Admin: every socket. The PTY child: /api/ws and /api/pub. A resident: RESIDENT_WS_PATHS, and
-    /api/ws only once the gateway method guard is installed. Both paths must agree."""
+    """Admin: every socket. The admin terminal's child: /api/ws and /api/pub. A resident:
+    RESIDENT_WS_PATHS; /api/ws only once the gateway method guard is installed, and /api/pty only
+    once the PTY seam is too (the child's own /api/ws must be guarded). Both paths must agree."""
     if role == ROLE_ADMIN:
         return True
     if not isinstance(url_path, str) or url_path != scope_path:
@@ -1005,7 +1047,9 @@ def ws_path_allowed(role: Any, url_path: Any, scope_path: Any) -> bool:
         return url_path in INTERNAL_WS_PATHS
     if url_path not in RESIDENT_WS_PATHS:
         return False
-    if url_path == "/api/ws" and not _ensure("gateway"):
+    if url_path in ("/api/ws", PTY_PATH) and not _ensure("gateway"):
+        return False
+    if url_path == PTY_PATH and not _installed["pty"]:
         return False
     return True
 
@@ -1014,6 +1058,14 @@ def _socket_paths(ws: Any) -> tuple[Any, Any]:
     url = getattr(ws, "url", None)
     scope = getattr(ws, "scope", None) or {}
     return getattr(url, "path", None), scope.get("path")
+
+
+def _refusal_code(reason: str) -> str:
+    """The count for a socket refusal: `denied_ws_resident` off the path list, else
+    `denied_<reason without the edgecity_ prefix>` (`denied_pty_profile`, `denied_pty_peer`, ...)."""
+    if reason == WS_REFUSAL:
+        return "denied_ws_resident"
+    return "denied_" + (reason[len("edgecity_"):] if reason.startswith("edgecity_") else reason)
 
 
 def install_ws(module: Any) -> bool:
@@ -1028,11 +1080,14 @@ def install_ws(module: Any) -> bool:
 
     def _ws_auth_reason(ws: Any) -> Any:
         token = _CONSUMED_ROLE.set(None)
+        grant_token = _CONSUMED_GRANT.set(None)
         try:
             result = base(ws)
             ticket_role = _CONSUMED_ROLE.get()
+            grant = _CONSUMED_GRANT.get()
         finally:
             _CONSUMED_ROLE.reset(token)
+            _CONSUMED_GRANT.reset(grant_token)
         try:
             reason, credential = result
         except Exception:  # noqa: BLE001
@@ -1040,14 +1095,28 @@ def install_ws(module: Any) -> bool:
         if reason is not None:
             return reason, credential
         try:
-            role = ws_role(credential, ticket_role)
+            if grant is not None and credential != "internal":
+                grant = None  # a grant is only ever presented as `?internal=`
+            role = ws_role(credential, ticket_role, grant)
             ws._edgecity_ws_role = role
             url_path, scope_path = _socket_paths(ws)
-            if ws_path_allowed(role, url_path, scope_path):
-                _count(f"ws_{role}_allowed")
+            if grant is not None:
+                refusal = grant_socket_refusal(grant, ws, url_path, scope_path)
+                if refusal is not None:
+                    _count(_refusal_code(refusal))
+                    return refusal, credential
+                _count("ws_pty_child_allowed")
                 return None, credential
-            _count(f"denied_ws_{role}")
-            return WS_REFUSAL, credential
+            if not ws_path_allowed(role, url_path, scope_path):
+                _count(f"denied_ws_{role}")
+                return WS_REFUSAL, credential
+            if url_path == PTY_PATH:
+                refusal = pty_admission(role, ws, credential)
+                if refusal is not None:
+                    _count(_refusal_code(refusal))
+                    return refusal, credential
+            _count(f"ws_{role}_allowed")
+            return None, credential
         except Exception:  # noqa: BLE001
             _count("denied_ws_error")
             return "edgecity_guard_error", credential
@@ -1064,6 +1133,684 @@ def close_embedded_chat(module: Any) -> bool:
     if not hasattr(module, "_DASHBOARD_EMBEDDED_CHAT_ENABLED"):
         return False
     module._DASHBOARD_EMBEDDED_CHAT_ENABLED = False
+    return True
+
+
+# ---- the Chat tab (1.4.0): a resident's /api/pty ------------------------------------------------
+#
+# At Hermes 0.21.5 the dashboard's Chat tab is `/api/pty` (`chat_ws.py:432`): `hermes --tui` behind a
+# pseudo-terminal, attached to this process's gateway over /api/ws with the URL in its env
+# (`HERMES_TUI_GATEWAY_URL`, `web_server_chat.py:388-389`), which carries ONE process-wide internal
+# credential (`ws_tickets.internal_ws_credential`, `:405-430`). A resident's Chat tab instead gets a
+# credential minted for that one PTY and bound to the resident's login (`PtyGrant`): its child is a
+# resident on /api/ws (the method table, own chats only) and may publish only to its own channel on
+# /api/pub. The process-wide credential stays the admin terminal's (ROLE_INTERNAL).
+#
+# Seams (all in `hermes_cli.web_server_chat` but the last; `install_pty`, all or none):
+# - `_ws_auth_reason` (the socket seam above): a resident's /api/pty is admitted only by
+#   `pty_admission`, before accept (4401 with a reason code);
+# - `_resolve_chat_argv_async` (late-bound by `chat_ws.py:33`): the chat Hermes actually resolved is
+#   checked again (the channel's active-session fallback, the newest descendant), the child's env is
+#   rebuilt (`resident_chat_env`) with the per-PTY credential, before anything is spawned;
+# - `PtyBridge` (imported at call time by `chat_ws.py:434`): a subclass whose `spawn` binds the
+#   credential to the bridge, which revokes it on close and on the child's exit;
+# - `PTY_REGISTRY.attach_or_spawn` / `.detach`: a resident's `?attach=` token is namespaced by its
+#   login, so no resident reattaches another login's terminal, and a login holds at most
+#   RESIDENT_PTYS_PER_LOGIN terminals;
+# - `ws_tickets.consume_internal_credential` (imported at call time by `_ws_auth_reason`,
+#   `web_server_chat.py:236`): a per-PTY credential answers with the resident's own identity, which
+#   Hermes stamps on the socket (`_stamp_identity`, `:245-252`) exactly as it does a ticket's.
+
+#: Hermes's channel id rule (`chat_ws.py:52`): a value that does not match is not a channel.
+_CHANNEL_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+#: The internal identity Hermes gives the process-wide credential (`ws_tickets.py:30-31`).
+_SERVER_INTERNAL = "server-internal"
+#: Where a resident's TUI keeps what it writes on its own (input history, its log, theme, widgets,
+#: `/terminal-setup`): one 0700 directory per login under HERMES_HOME, its child's HOME and
+#: HERMES_HOME. Not the box's HERMES_HOME, whose `.hermes_history` every login's TUI shares.
+RESIDENT_TUI_DIR_NAME = "resident-tui"
+#: What a resident's TUI may spawn on its own: nothing. `$VISUAL`/`$EDITOR` (the composer's
+#: editor, `lib/editor.ts:33-52`, whose own shell escape is a shell), `$HERMES_BIN` (`/setup`,
+#: `lib/externalCli.ts:8`) and `$BROWSER` (xdg-open's first choice) point at a path that does not
+#: exist: the spawn fails (ENOENT), which the TUI reports and survives.
+PTY_INERT_COMMAND = "/nonexistent/edgecity-resident-chat-runs-nothing"
+#: The child's env, forced for a resident: the editor, `/setup` and the opener inert; hosted
+#: dashboard mode (`/exit`, `/quit`, `/update` refused, `slash/commands/core.ts:84-151`); mouse and
+#: clicks off, so no link in the transcript is opened with a click (`entry.tsx:172-179`).
+PTY_FORCED_ENV = {
+    "VISUAL": PTY_INERT_COMMAND, "EDITOR": PTY_INERT_COMMAND, "HERMES_BIN": PTY_INERT_COMMAND,
+    "BROWSER": PTY_INERT_COMMAND, "HERMES_TUI_DASHBOARD": "1", "HERMES_TUI_DISABLE_MOUSE": "1",
+    "HERMES_TUI_DISABLE_MOUSE_CLICKS": "1", "HERMES_TUI_MOUSE_TRACKING": "0",
+}
+#: Dropped from a resident child's env: a host image path to attach at start, a query to send at
+#: start, the confirm opt-out, and dump/log paths outside its own directory.
+PTY_DROPPED_ENV = ("HERMES_TUI_IMAGE", "HERMES_TUI_QUERY", "HERMES_TUI_NO_CONFIRM", "HERMES_HEAPDUMP_DIR",
+                   "HERMES_DEV_PERF_LOG")
+_GRANT_LIVE = ("spawning", "bound")
+
+
+class PtyRefused(Exception):
+    """A resident's chat refused after accept; `code` is counted, `detail` is what the tab shows."""
+
+    def __init__(self, code: str, detail: str = "This chat cannot start here.") -> None:
+        super().__init__(detail)
+        self.code = code
+        self.detail = detail
+
+
+class PtyGrant:
+    """One per-PTY credential: 32 random bytes, in memory only, with `{user_id, provider, role:
+    resident, pty_id, minted_at}`. minted (env built) -> spawning -> bound (the child runs) ->
+    revoked (the PTY closed, the child exited, or the chat never started)."""
+
+    def __init__(self, *, user_id: str, provider: str, channel: Optional[str]) -> None:
+        self.credential = secrets.token_urlsafe(32)
+        self.pty_id = secrets.token_hex(8)
+        self.user_id = user_id
+        self.provider = provider
+        self.login = login_id(provider, user_id)
+        self.role = ROLE_RESIDENT
+        self.channel = channel
+        self.minted_at = time.time()
+        self.state = "minted"
+        #: path -> [(socket, the loop it runs on)], the sockets this credential opened.
+        self.sockets: dict[str, list] = {path: [] for path in INTERNAL_WS_PATHS}
+
+    def info(self) -> dict:
+        """What `consume_internal_credential` answers: the identity Hermes stamps on the socket."""
+        return {"user_id": self.user_id, "provider": self.provider}
+
+
+class PtyContext:
+    """The /api/pty socket being served: who opened it, its channel, its chat directory, and the
+    grant minted for its child (set by the argv wrapper)."""
+
+    def __init__(self, role: str, login: Optional[str], identity: Optional[dict] = None,
+                 channel: Optional[str] = None, chat: Optional[str] = None) -> None:
+        self.role = role
+        self.login = login
+        self.identity = dict(identity or {})
+        self.channel = channel
+        self.chat = chat
+        self.grant: Optional[PtyGrant] = None
+        digest = hashlib.sha256((login or "").encode("utf-8")).hexdigest()[:32]
+        #: A resident's `?attach=` tokens live under this prefix in Hermes's registry.
+        self.namespace = f"edgecity-resident:{digest}\0" if role == ROLE_RESIDENT else ""
+
+
+_pty_lock = threading.Lock()
+#: pty_id -> grant, every grant not yet revoked.
+_pty_grants: dict[str, PtyGrant] = {}
+#: channel -> the login that first opened a Chat tab on it (insertion ordered).
+_pty_channels: dict[str, str] = {}
+#: Hermes's loopback peer names (`web_server_chat._LOOPBACK_HOSTS`, which counts Starlette's
+#: TestClient), handed in by `install_pty`.
+_pty_loopback: frozenset = frozenset()
+#: `() -> the process-wide internal credential or None` (`ws_tickets._internal_credential`).
+_process_credential: Optional[Callable[[], Any]] = None
+#: `(path, **query) -> ws://... URL` for a server-spawned client (`_server_internal_ws_url`).
+_pty_url_builder: Optional[Callable[..., Any]] = None
+
+
+def pty_grants() -> list:
+    with _pty_lock:
+        return list(_pty_grants.values())
+
+
+def _query_pairs_of(ws: Any) -> Optional[list]:
+    """A socket's query as Starlette parses it (`parse_qsl` of the latin-1 query string, blanks
+    kept), every value of every name. None when it cannot be read."""
+    raw = (getattr(ws, "scope", None) or {}).get("query_string", b"")
+    if isinstance(raw, (bytes, bytearray)):
+        raw = bytes(raw).decode("latin-1")
+    if not isinstance(raw, str):
+        return None
+    return urllib.parse.parse_qsl(raw, keep_blank_values=True)
+
+
+def _identity_login(ws: Any) -> Optional[str]:
+    """The login Hermes stamped on the socket (`ws._hermes_auth_identity`), never the internal one."""
+    identity = getattr(ws, "_hermes_auth_identity", None)
+    if not isinstance(identity, dict):
+        return None
+    if identity.get("user_id") == _SERVER_INTERNAL or identity.get("provider") == _SERVER_INTERNAL:
+        return None
+    return login_id(identity.get("provider"), identity.get("user_id"))
+
+
+def _same_dir(value: Any, root: str) -> bool:
+    """`value`, read as Hermes reads a `?cwd=` (`chat_workspaces.py:32-38`: strip, `~`, absolute)
+    and then through every symlink, is exactly `root`."""
+    try:
+        if type(value) is not str or not value.strip():
+            return False
+        return os.path.realpath(os.path.abspath(os.path.expanduser(value.strip()))) == root
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def own_chat(session_id: Any, login: Optional[str], *, prefix: bool) -> bool:
+    """A stored chat the resident may reopen in its Chat tab: `session_visible` through the stored
+    owner (the box's own store, `profile` none). A prefix is read as Hermes's `resolve_session_id`
+    reads it (`web_server_sessions.py:42`). No lookup, a failure or an unknown id: False."""
+    lookup = _session_lookup
+    if lookup is None or type(session_id) is not str or not session_id or login is None:
+        return False
+    try:
+        return session_visible(lookup(session_id, None, prefix=prefix), login)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _claim_channel(channel: str, login: str, *, admin: bool = False) -> bool:
+    """Bind `channel` to `login` the first time a Chat tab opens on it. A resident may use only a
+    channel that is new or its own; an admin's claim always succeeds (it is not recorded over
+    another login's). The table is bounded: full, a resident's new channel is refused, an admin's
+    displaces the oldest entry."""
+    with _pty_lock:
+        owner = _pty_channels.get(channel)
+        if owner is not None:
+            return admin or owner == login
+        if len(_pty_channels) >= PTY_CHANNELS_MAX:
+            if not admin:
+                return False
+            _pty_channels.pop(next(iter(_pty_channels)))
+        _pty_channels[channel] = login
+        return True
+
+
+def pty_admission(role: Any, ws: Any, credential: Any) -> Optional[str]:
+    """Whether this /api/pty may open, before accept: None (open; the socket's `PtyContext` is set)
+    or the 4401 reason. An admin opens anything (its channel is recorded). A resident needs:
+
+    - a login: a ticket Hermes stamped `{user_id, provider}` from (never the loopback token);
+    - no `profile` but none or "current" (RESIDENT_PTY_PROFILES): any other spawns its own gateway;
+    - no `cwd` but `$HERMES_HOME/resident-chat` (a usable resident chat directory);
+    - no `resume` but a chat of its own (`own_chat`, the prefix read as Hermes reads it);
+    - no `channel` another login opened a Chat tab on.
+
+    Every value of a repeated name is checked (Hermes reads the last)."""
+    pairs = _query_pairs_of(ws)
+    if pairs is None:
+        return "edgecity_pty_query"
+    channels = [value for key, value in pairs if key == "channel"]
+    channel = channels[-1] if channels and _CHANNEL_RE.match(channels[-1]) else None
+    login = _identity_login(ws)
+    if role == ROLE_ADMIN:
+        if channel is not None:
+            _claim_channel(channel, login or ROLE_ADMIN, admin=True)
+        _PTY_CONTEXT.set(PtyContext(ROLE_ADMIN, login, channel=channel))
+        return None
+    if role != ROLE_RESIDENT or credential not in ("ticket", "ticket-subprotocol") or login is None:
+        return "edgecity_pty_no_login"
+    if any(key == "profile" and value.strip().lower() not in RESIDENT_PTY_PROFILES for key, value in pairs):
+        return "edgecity_pty_profile"
+    chat = resident_cwd()
+    if chat is None:
+        return "edgecity_pty_cwd"
+    if any(key == "cwd" and value.strip() and not _same_dir(value, chat) for key, value in pairs):
+        return "edgecity_pty_cwd"
+    if any(key == "resume" and value != "" and not own_chat(value, login, prefix=True) for key, value in pairs):
+        return "edgecity_pty_resume"
+    with _pty_lock:
+        taken = any(_CHANNEL_RE.match(v) and _pty_channels.get(v, login) != login for v in channels)
+    if taken or (channel is not None and not _claim_channel(channel, login)):
+        return "edgecity_pty_channel"
+    identity = getattr(ws, "_hermes_auth_identity", None)
+    _PTY_CONTEXT.set(PtyContext(ROLE_RESIDENT, login, identity, channel, chat))
+    return None
+
+
+def _loopback_peer(ws: Any) -> bool:
+    host = getattr(getattr(ws, "client", None), "host", None)
+    if type(host) is not str or not host:
+        return False
+    if host in _pty_loopback:
+        return True
+    try:
+        address = ipaddress.ip_address(host.strip("[]").split("%", 1)[0])
+    except ValueError:
+        return False
+    mapped = getattr(address, "ipv4_mapped", None)
+    return address.is_loopback or (mapped is not None and mapped.is_loopback)
+
+
+def _socket_closed(sock: Any) -> bool:
+    if getattr(sock, "_edgecity_closed", False):
+        return True
+    for name in ("client_state", "application_state"):
+        if getattr(getattr(sock, name, None), "name", None) == "DISCONNECTED":
+            return True
+    return False
+
+
+def _running_loop() -> Any:
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+
+
+def grant_socket_refusal(grant: PtyGrant, ws: Any, url_path: Any, scope_path: Any) -> Optional[str]:
+    """Whether the per-PTY credential may open this socket: None, or the 4401 reason. Only /api/ws
+    and /api/pub (both paths agreeing), only from a loopback peer (the child dials the dashboard
+    on the box itself), /api/pub only on the grant's own channel, at most PTY_SOCKETS_PER_PATH open
+    sockets per path, and only while the grant is live. An admitted socket is remembered so a
+    revocation closes it."""
+    if url_path not in INTERNAL_WS_PATHS or url_path != scope_path:
+        return WS_REFUSAL
+    if not _loopback_peer(ws):
+        return "edgecity_pty_peer"
+    if url_path == "/api/ws" and not _ensure("gateway"):
+        return WS_REFUSAL
+    if url_path == "/api/pub":
+        pairs = _query_pairs_of(ws) or []
+        channels = [value for key, value in pairs if key == "channel"]
+        if grant.channel is None or not channels or any(value != grant.channel for value in channels):
+            return "edgecity_pty_channel"
+    with _pty_lock:
+        if grant.state not in _GRANT_LIVE:
+            return "edgecity_pty_revoked"
+        live = [(sock, loop) for sock, loop in grant.sockets[url_path] if not _socket_closed(sock)]
+        if len(live) >= PTY_SOCKETS_PER_PATH:
+            grant.sockets[url_path] = live
+            return "edgecity_pty_sockets"
+        grant.sockets[url_path] = live + [(ws, _running_loop())]
+    ws._edgecity_pty_grant = grant
+    return None
+
+
+async def _close_quietly(sock: Any) -> None:
+    with contextlib.suppress(Exception):
+        await sock.close(code=4401, reason="auth: edgecity_pty_revoked")
+
+
+def _close_socket(sock: Any, loop: Any) -> None:
+    """Close an open socket of a revoked grant on its own loop, from whichever thread revokes."""
+    if loop is None or not callable(getattr(sock, "close", None)):
+        return
+    with contextlib.suppress(Exception):
+        loop.call_soon_threadsafe(lambda: loop.create_task(_close_quietly(sock)))
+
+
+def revoke_grant(grant: Any, reason: str) -> None:
+    """The credential no longer opens anything, and every socket it opened is closed. Idempotent."""
+    if not isinstance(grant, PtyGrant):
+        return
+    with _pty_lock:
+        if grant.state == "revoked":
+            return
+        grant.state = "revoked"
+        _pty_grants.pop(grant.pty_id, None)
+        sockets = [entry for path in sorted(grant.sockets) for entry in grant.sockets[path]]
+        grant.sockets = {path: [] for path in INTERNAL_WS_PATHS}
+    _count(f"pty_revoked_{reason}")
+    for sock, loop in sockets:
+        _close_socket(sock, loop)
+
+
+def mint_grant(ctx: PtyContext) -> PtyGrant:
+    """A new per-PTY credential for a resident's chat. Credentials minted for chats that never
+    spawned are dropped once older than PTY_UNBOUND_SECONDS."""
+    identity = ctx.identity
+    grant = PtyGrant(user_id=identity.get("user_id"), provider=identity.get("provider"), channel=ctx.channel)
+    if grant.login is None or grant.login != ctx.login:
+        raise PtyRefused("no_login")
+    now = time.time()
+    with _pty_lock:
+        stale = [g for g in _pty_grants.values() if g.state == "minted" and now - g.minted_at > PTY_UNBOUND_SECONDS]
+    for old in stale:
+        revoke_grant(old, "unbound")
+    with _pty_lock:
+        _pty_grants[grant.pty_id] = grant
+    _count("pty_grant_minted")
+    return grant
+
+
+def grant_for(value: Any) -> Optional[PtyGrant]:
+    """The grant whose credential is `value` (constant-time compare against each), or None."""
+    if type(value) is not str or not value:
+        return None
+    found = None
+    with _pty_lock:
+        grants = list(_pty_grants.values())
+    for grant in grants:
+        if hmac.compare_digest(grant.credential.encode("utf-8"), value.encode("utf-8")):
+            found = grant
+    return found
+
+
+def grant_url(build: Optional[Callable[..., Any]], path: str, credential: str, **query: Any) -> Optional[str]:
+    """Hermes's own URL for a server-spawned client (`_server_internal_ws_url`: the host the child
+    dials, the bound port), with the process-wide `internal=` replaced by `credential`. None when
+    Hermes builds none (no bound port) or one without exactly one `internal` (the gate is off)."""
+    if build is None:
+        return None
+    url = build(path, **query)
+    if not isinstance(url, str) or not url:
+        return None
+    parts = urllib.parse.urlsplit(url)
+    pairs = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+    if [key for key, _ in pairs].count("internal") != 1:
+        return None
+    pairs = [(key, credential if key == "internal" else value) for key, value in pairs]
+    return urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(pairs)))
+
+
+def resident_tui_dir(login: Optional[str]) -> Optional[str]:
+    """`<HERMES_HOME>/resident-tui/<sha256(login)[:32]>`, created 0700, a plain directory (not a
+    link) where it should be; None when it cannot be made."""
+    try:
+        if login is None:
+            return None
+        home = os.path.realpath(_hermes_home())
+        base = os.path.join(home, RESIDENT_TUI_DIR_NAME)
+        path = os.path.join(base, hashlib.sha256(login.encode("utf-8")).hexdigest()[:32])
+        for part in (base, path):
+            if os.path.islink(part):
+                return None
+            os.makedirs(part, mode=0o700, exist_ok=True)
+        if os.path.realpath(path) != path or not os.path.isdir(path) or private_path(path):
+            return None
+        return path
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def resident_chat_call(ctx: PtyContext, kwargs: dict) -> dict:
+    """The keyword arguments a resident's chat is resolved with, after the checks Hermes's own
+    resolution makes possible only now: the resume the handler settled on (an explicit `?resume=`
+    or the channel's active-session file, `chat_ws.py:459-475`) must be the resident's; no
+    profile; the workspace pinned to the resident chat directory. Hermes's sidecar URL (process
+    credential) is not passed on: `resident_chat_env` builds its own."""
+    known = {"resume", "sidecar_url", "profile", "active_session_file", "workspace_cwd"}
+    if set(kwargs) - known:
+        raise PtyRefused("args")
+    profile = kwargs.get("profile")
+    if profile is not None and (type(profile) is not str or profile.strip().lower() not in RESIDENT_PTY_PROFILES):
+        raise PtyRefused("profile", "That profile's chat is admin only.")
+    chat = resident_cwd()
+    if chat is None or chat != ctx.chat:
+        raise PtyRefused("cwd")
+    given = kwargs.get("workspace_cwd")
+    if given not in (None, "") and not _same_dir(given, chat):
+        raise PtyRefused("cwd", "That workspace is admin only.")
+    resume = kwargs.get("resume")
+    if resume not in (None, "") and not own_chat(resume, ctx.login, prefix=True):
+        raise PtyRefused("resume", "That chat is not yours.")
+    sidecar = kwargs.get("sidecar_url")
+    if (sidecar not in (None, "")) != (ctx.channel is not None):
+        raise PtyRefused("channel")
+    if sidecar not in (None, ""):
+        named = [v for k, v in urllib.parse.parse_qsl(urllib.parse.urlsplit(str(sidecar)).query) if k == "channel"]
+        if named != [ctx.channel]:
+            raise PtyRefused("channel")
+    call = {key: value for key, value in kwargs.items() if key not in ("sidecar_url", "workspace_cwd", "profile")}
+    call["profile"] = None
+    call["sidecar_url"] = None
+    if resume in (None, ""):
+        call["workspace_cwd"] = chat
+    return call
+
+
+def resident_chat_env(ctx: PtyContext, env: Any) -> dict:
+    """The child's env for a resident's chat, from the one Hermes resolved:
+
+    - the chat Hermes settled on (`HERMES_TUI_RESUME`, the newest descendant) is the resident's;
+    - HERMES_HOME is the box's own (not a profile's: that chat would run its own gateway);
+    - no value carries the process-wide credential; `HERMES_TUI_GATEWAY_URL` (always: without it
+      the TUI spawns its own gateway, `gatewayClient.ts:632-672`) and, with a channel,
+      `HERMES_TUI_SIDECAR_URL` carry the per-PTY credential instead;
+    - `HERMES_CWD` and `HERMES_TUI_CWD` are the resident chat directory (`session.create`'s cwd);
+    - the TUI's own files go to the login's own directory (HOME, HERMES_HOME), and what it could
+      spawn is inert (PTY_FORCED_ENV, PTY_DROPPED_ENV).
+
+    The grant is set on `ctx` for the spawn to bind."""
+    if not isinstance(env, dict):
+        raise PtyRefused("env")
+    env = dict(env)
+    home = os.path.realpath(_hermes_home())
+    if env.get("HERMES_HOME") not in (None, "") and os.path.realpath(str(env["HERMES_HOME"])) != home:
+        raise PtyRefused("profile", "That profile's chat is admin only.")
+    resumed = env.get("HERMES_TUI_RESUME")
+    if resumed not in (None, "") and not own_chat(resumed, ctx.login, prefix=False):
+        raise PtyRefused("resume", "That chat is not yours.")
+    tui_dir = resident_tui_dir(ctx.login)
+    if tui_dir is None or ctx.chat is None:
+        raise PtyRefused("cwd")
+    grant = mint_grant(ctx)
+    try:
+        gateway = grant_url(_pty_url_builder, "/api/ws", grant.credential)
+        sidecar = (grant_url(_pty_url_builder, "/api/pub", grant.credential, channel=ctx.channel)
+                   if ctx.channel is not None else None)
+        if gateway is None or (ctx.channel is not None and sidecar is None):
+            raise PtyRefused("attach_url")
+        process = _process_credential() if _process_credential is not None else None
+        process = process if type(process) is str and process else None
+        for key in list(env):
+            value = env[key]
+            if key in ("HERMES_TUI_GATEWAY_URL", "HERMES_TUI_SIDECAR_URL") or key in PTY_DROPPED_ENV or (
+                    process is not None and isinstance(value, str) and process in value):
+                del env[key]
+        env.update(PTY_FORCED_ENV)
+        env["HERMES_TUI_GATEWAY_URL"] = gateway
+        if sidecar is not None:
+            env["HERMES_TUI_SIDECAR_URL"] = sidecar
+        env["HERMES_CWD"] = env["HERMES_TUI_CWD"] = ctx.chat
+        env["HOME"] = env["HERMES_HOME"] = tui_dir
+        if process is not None and any(isinstance(v, str) and process in v for v in env.values()):
+            raise PtyRefused("process_credential")
+    except BaseException:
+        revoke_grant(grant, "unbuilt")
+        raise
+    ctx.grant = grant
+    return env
+
+
+class GrantBridge:
+    """Hermes's PTY bridge with the grant tied to it: closing the bridge (the legacy pump's end, a
+    registry reap or eviction, shutdown) or reading the child's exit (EOF) revokes the credential.
+    Everything else is the bridge's own."""
+
+    def __init__(self, inner: Any, grant: PtyGrant) -> None:
+        self._edgecity_inner = inner
+        self._edgecity_grant = grant
+
+    def read(self, *args: Any, **kwargs: Any) -> Any:
+        data = self._edgecity_inner.read(*args, **kwargs)
+        if data is None:
+            revoke_grant(self._edgecity_grant, "exited")
+        return data
+
+    def close(self, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return self._edgecity_inner.close(*args, **kwargs)
+        finally:
+            revoke_grant(self._edgecity_grant, "closed")
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._edgecity_inner, name)
+
+
+def _live_count(login: Optional[str], exclude: Any = None) -> int:
+    with _pty_lock:
+        return sum(1 for g in _pty_grants.values() if g.login == login and g.state in _GRANT_LIVE and g is not exclude)
+
+
+def install_pty(chat_module: Any, tickets_module: Any, *, refusal: Optional[Callable[[str], BaseException]] = None,
+                registry_full: Optional[Callable[[], BaseException]] = None) -> bool:
+    """Install the Chat tab's seams (see the section comment), all or none. False, changing
+    nothing, when one is missing: `_installed["pty"]` stays False and a resident's /api/pty is
+    refused (`ws_path_allowed`). `refusal(detail)` is the exception the PTY handler shows a
+    resident whose chat is refused after accept (Hermes's `HTTPException`, `chat_ws.py:494`);
+    `registry_full()` the one it shows when the login's terminals are all attached (`RegistryFull`)."""
+    global _pty_loopback, _process_credential, _pty_url_builder
+    resolve = getattr(chat_module, "_resolve_chat_argv_async", None)
+    bridge_cls = getattr(chat_module, "PtyBridge", None)
+    registry = getattr(chat_module, "PTY_REGISTRY", None)
+    build = getattr(chat_module, "_server_internal_ws_url", None)
+    unavailable = getattr(chat_module, "PtyUnavailableError", None)
+    consume = getattr(tickets_module, "consume_internal_credential", None)
+    invalid = getattr(tickets_module, "TicketInvalid", None)
+    base_resolve = _unwrap(resolve) if callable(resolve) else None
+    base_bridge = _unwrap(bridge_cls) if isinstance(bridge_cls, type) else None
+    base_consume = _unwrap(consume) if callable(consume) else None
+    attach = getattr(registry, "attach_or_spawn", None)
+    detach = getattr(registry, "detach", None)
+    base_attach = _unwrap(attach) if callable(attach) else None
+    base_detach = _unwrap(detach) if callable(detach) else None
+    if (base_resolve is None or base_bridge is None or base_consume is None or base_attach is None
+            or base_detach is None or not callable(build) or not isinstance(invalid, type)
+            or not callable(getattr(base_bridge, "spawn", None))
+            or not (isinstance(unavailable, type) and issubclass(unavailable, BaseException))):
+        return False
+    make_refusal = refusal if refusal is not None else (lambda detail: PermissionError(detail))
+    make_full = registry_full if registry_full is not None else (lambda: unavailable("too many chat terminals"))
+
+    def consume_internal_credential(value: Any, *args: Any, **kwargs: Any) -> Any:
+        grant = grant_for(value)
+        if grant is None:
+            return base_consume(value, *args, **kwargs)
+        if grant.state not in _GRANT_LIVE:
+            raise invalid("pty credential not live")
+        _CONSUMED_GRANT.set(grant)
+        return grant.info()
+
+    async def _resolve_chat_argv_async(*args: Any, **kwargs: Any) -> Any:
+        ctx = _PTY_CONTEXT.get()
+        if isinstance(ctx, PtyContext) and ctx.role == ROLE_ADMIN:
+            return await base_resolve(*args, **kwargs)
+        try:
+            if not isinstance(ctx, PtyContext) or ctx.role != ROLE_RESIDENT or args:
+                raise PtyRefused("no_context")
+            call = await asyncio.to_thread(resident_chat_call, ctx, kwargs)
+        except PtyRefused as exc:
+            _count(f"denied_pty_{exc.code}")
+            raise make_refusal(exc.detail) from None
+        except Exception:  # noqa: BLE001
+            _count("denied_pty_error")
+            raise make_refusal("This chat cannot start here.") from None
+        argv, cwd, env = await base_resolve(**call)
+        try:
+            env = await asyncio.to_thread(resident_chat_env, ctx, env)
+        except PtyRefused as exc:
+            _count(f"denied_pty_{exc.code}")
+            raise make_refusal(exc.detail) from None
+        except Exception:  # noqa: BLE001
+            _count("denied_pty_error")
+            raise make_refusal("This chat cannot start here.") from None
+        _count("pty_resident_resolved")
+        return argv, cwd, env
+
+    def guarded_spawn(argv: Any, args: tuple, kwargs: dict) -> Any:
+        ctx = _PTY_CONTEXT.get()
+        if not isinstance(ctx, PtyContext) or ctx.role != ROLE_RESIDENT:
+            # An admin's terminal, or no dashboard socket behind it (the argv seam has already
+            # refused a /api/pty without a context): Hermes's own spawn.
+            return base_bridge.spawn(argv, *args, **kwargs)
+        grant = ctx.grant
+        env = kwargs.get("env")
+        if (not isinstance(grant, PtyGrant) or grant.state != "minted" or args or not isinstance(env, dict)
+                or grant.credential not in str(env.get("HERMES_TUI_GATEWAY_URL") or "")):
+            revoke_grant(grant, "spawn_mismatch")
+            _count("denied_pty_spawn")
+            raise unavailable("this chat cannot start here")
+        with _pty_lock:
+            over = sum(1 for g in _pty_grants.values()
+                       if g.login == grant.login and g.state in _GRANT_LIVE and g is not grant)
+            if over < RESIDENT_PTYS_PER_LOGIN:
+                grant.state = "spawning"
+        if grant.state != "spawning":
+            revoke_grant(grant, "over_limit")
+            _count("denied_pty_limit")
+            raise unavailable(f"you already have {RESIDENT_PTYS_PER_LOGIN} chat terminals open; close one first")
+        try:
+            bridge = base_bridge.spawn(argv, **kwargs)
+        except BaseException:
+            revoke_grant(grant, "spawn_failed")
+            raise
+        guarded = GrantBridge(bridge, grant)
+        with _pty_lock:
+            if grant.state == "spawning":
+                grant.state = "bound"
+        _count("pty_resident_spawned")
+        return guarded
+
+    def spawn(cls: Any, argv: Any, *args: Any, **kwargs: Any) -> Any:
+        return guarded_spawn(argv, args, kwargs)
+
+    guarded_bridge = type(base_bridge.__name__, (base_bridge,), {
+        "spawn": classmethod(spawn), "__module__": __name__, "__doc__": base_bridge.__doc__,
+        "_edgecity_resident_guard": True, "_edgecity_original": base_bridge})
+
+    def _drop_unbound(ctx: PtyContext) -> None:
+        if ctx.grant is not None and ctx.grant.state == "minted":
+            revoke_grant(ctx.grant, "not_spawned")
+
+    async def _make_room(ctx: PtyContext, key: str) -> None:
+        """At the login's limit, close its own oldest detached terminals (never another login's,
+        never the one being reattached) until one fits."""
+        sessions = getattr(registry, "_sessions", None)
+        if not isinstance(sessions, dict) or _live_count(ctx.login, ctx.grant) < RESIDENT_PTYS_PER_LOGIN:
+            return
+        current = sessions.get(key)
+        if current is not None and getattr(current, "alive", False):
+            return
+        lock = getattr(registry, "_attach_lock", None)
+        async with (lock if lock is not None else contextlib.AsyncExitStack()):
+            idle = sorted(((getattr(s, "last_detached_at", None) or 0.0, k) for k, s in list(sessions.items())
+                           if k.startswith(ctx.namespace) and k != key and getattr(s, "alive", False)
+                           and not getattr(s, "attached", True)))
+            doomed = []
+            for _when, k in idle:
+                if _live_count(ctx.login, ctx.grant) - len(doomed) < RESIDENT_PTYS_PER_LOGIN:
+                    break
+                session = sessions.pop(k, None)
+                if session is not None:
+                    doomed.append(session)
+        for session in doomed:
+            _count("pty_resident_evicted")
+            with contextlib.suppress(Exception):
+                await session.close()
+            with contextlib.suppress(Exception):  # idempotent; revokes even if close() stopped early
+                await asyncio.to_thread(session.bridge.close)
+
+    async def attach_or_spawn(key: Any, *args: Any, **kwargs: Any) -> Any:
+        ctx = _PTY_CONTEXT.get()
+        if not isinstance(ctx, PtyContext) or ctx.role != ROLE_RESIDENT:
+            return await base_attach(key, *args, **kwargs)
+        key = f"{ctx.namespace}{key}"
+        try:
+            await _make_room(ctx, key)
+            if _live_count(ctx.login, ctx.grant) >= RESIDENT_PTYS_PER_LOGIN:
+                sessions = getattr(registry, "_sessions", None)
+                current = sessions.get(key) if isinstance(sessions, dict) else None
+                if current is None or not getattr(current, "alive", False):
+                    _count("denied_pty_limit")
+                    raise make_full()
+            session, created = await base_attach(key, *args, **kwargs)
+        except BaseException:
+            _drop_unbound(ctx)
+            raise
+        if not created:
+            _drop_unbound(ctx)  # reattached: the child already running keeps its own credential
+        return session, created
+
+    def detach_guarded(key: Any, *args: Any, **kwargs: Any) -> Any:
+        ctx = _PTY_CONTEXT.get()
+        if isinstance(ctx, PtyContext) and ctx.role == ROLE_RESIDENT:
+            key = f"{ctx.namespace}{key}"
+        return base_detach(key, *args, **kwargs)
+
+    _pty_loopback = frozenset(h for h in (getattr(chat_module, "_LOOPBACK_HOSTS", None) or ()) if isinstance(h, str))
+    _process_credential = lambda: getattr(tickets_module, "_internal_credential", None)  # noqa: E731
+    _pty_url_builder = build
+    tickets_module.consume_internal_credential = _mark(consume_internal_credential, base_consume)
+    chat_module._resolve_chat_argv_async = _mark(_resolve_chat_argv_async, base_resolve)
+    chat_module.PtyBridge = guarded_bridge
+    registry.attach_or_spawn = _mark(attach_or_spawn, base_attach)
+    registry.detach = _mark(detach_guarded, base_detach)
+    _installed["pty"] = True
     return True
 
 
@@ -1558,6 +2305,11 @@ def install_gateway(server_module: Any, ws_module: Any, requests_module: Any = N
         if role in (ROLE_ADMIN, ROLE_INTERNAL):
             return base_dispatch(req, transport, *args, **kwargs)
         method = req.get("method") if isinstance(req, dict) else None
+        grant = getattr(getattr(transport, "_ws", None), "_edgecity_pty_grant", None)
+        if grant is not None and getattr(grant, "state", None) not in _GRANT_LIVE:
+            # A Chat tab's child whose PTY has closed: its socket is being closed, nothing more runs.
+            _count("denied_pty_revoked")
+            return _refusal(req, method)
         try:
             view = GatewayView(transport, server_module, requests_module, approvals)
             code, frame = gateway_decision(role, req, view)
@@ -1605,6 +2357,8 @@ def install_gateway(server_module: Any, ws_module: Any, requests_module: Any = N
             return await base_handle(ws, *args, **kwargs)
         finally:
             _GATEWAY_ROLE.reset(token)
+            with contextlib.suppress(Exception):
+                ws._edgecity_closed = True  # no longer counts against its PTY credential's sockets
 
     server_module.dispatch = _mark(dispatch_guarded, base_dispatch)
     ws_module.handle_ws = _mark(handle_ws_guarded, base_handle)
