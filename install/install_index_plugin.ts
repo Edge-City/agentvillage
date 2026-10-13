@@ -124,7 +124,7 @@ export const INDEX_PLUGIN_SOURCE = "indexnetwork/hermes-plugin";
 export const INDEX_PLUGIN_REF = "04d833b840541fedabe78cbdad306c18853d784a";
 /**
  * The managed MoralMod release is pinned beside it: `MORALMOD_RELEASE_SHA256` in
- * `moralmod_release.ts`, the sha256 of the reviewed `release.json` (release e92a4857, Decision Studio bf51765).
+ * `moralmod_release.ts`, the sha256 of the reviewed `release.json` (release ea7ff353, Decision Studio f0fa616).
  */
 export { MORALMOD_RELEASE_SHA256 } from "./moralmod_release";
 /**
