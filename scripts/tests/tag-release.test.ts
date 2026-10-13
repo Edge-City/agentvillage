@@ -517,6 +517,8 @@ describe("makePlan", () => {
     expect(refusalCode(() => makePlan(git, { ref: "main", testWorkflow: null }))).toBe("suite_list_unreadable");
     expect(refusalCode(() => makePlan(git, { ref: "main", testWorkflow: "jobs: {}\n" }))).toBe("suite_list_unreadable");
     expect(() => checkSuiteDirs(git, f.c, TEST_YML_TEXT)).not.toThrow();
+    // from a subdirectory (--cwd <repo>/scripts) too: ls-tree must read the paths from the root
+    expect(() => checkSuiteDirs(gitIn(join(f.work, "scripts")), f.c, TEST_YML_TEXT)).not.toThrow();
     // the directory exists at main but not at the commit being released
     f.commit({ "skills/new/tests/c.test.ts": "\n" }, "new suite");
     f.run(["push", "--quiet", "origin", "main"]);
@@ -928,6 +930,14 @@ describe("the manifest in a plan", () => {
       expect(wrong.manifest.code).toBe("not_in_manifest");
       expect(wrong.manifest.reason).toContain(`it approves v2.0.0-rc2 at another commit, ${f.c.slice(0, 7)} (line 7)`);
     }
+  });
+
+  test("run from a subdirectory (--cwd <repo>/scripts): the manifest is still found and approves", () => {
+    const f = released();
+    const d = approve(f, [`v2.0.0-rc2 = ${f.c}`]);
+    const plan = makePlan(gitIn(join(f.work, "scripts")), { ref: f.c });
+    expect(plan.manifest).toMatchObject({ approved: true, code: "approved", line: 7, mainCommit: d });
+    expect(() => enforceManifest(plan)).not.toThrow();
   });
 
   test("an invalid manifest refuses every real run, even one a valid line approves", () => {

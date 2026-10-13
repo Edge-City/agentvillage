@@ -488,7 +488,7 @@ export function checkSuiteDirs(git: Git, commit: string, workflow: string | null
   // A directory must exist at the commit and hold at least one test file, or bun would run nothing there.
   const missing = dirs.filter((d) => {
     if (git(["cat-file", "-t", `${commit}:${d}`], { allowFail: true }).stdout.trim() !== "tree") return true;
-    const files = git(["ls-tree", "-r", "--name-only", commit, "--", `${d}/`]).stdout.split("\n");
+    const files = git(["ls-tree", "-r", "--name-only", "--full-tree", commit, "--", `${d}/`]).stdout.split("\n");
     return !files.some((f) => /\.test\.(ts|js)$/.test(f));
   });
   if (missing.length > 0) {
@@ -619,7 +619,9 @@ function manifestAt(git: Git, commit: string): { text: string } | { absent: true
   const spec = `${commit}:${MANIFEST_PATH}`;
   // The tree entry's type, read from the tree itself: a submodule's commit is
   // usually not in this repository, so `cat-file -t` on the path would fail.
-  const ls = git(["ls-tree", "-z", commit, "--", MANIFEST_PATH], { allowFail: true });
+  // --full-tree: ls-tree reads its path relative to the current directory
+  // (unlike a <commit>:<path> spec), so a --cwd in a subdirectory would miss it.
+  const ls = git(["ls-tree", "-z", "--full-tree", commit, "--", MANIFEST_PATH], { allowFail: true });
   if (ls.code !== 0) return { problem: "the path could not be read" };
   const entry = ls.stdout.split("\0").find((e) => e.endsWith(`\t${MANIFEST_PATH}`));
   if (entry === undefined) return { absent: true };
