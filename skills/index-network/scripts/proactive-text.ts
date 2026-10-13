@@ -517,10 +517,25 @@ const DESTINATION_WORD_MIN = 20;
 const DESTINATION_DIGITS_MIN = 9;
 /** A run of digits joined by spaces, `-`, `/`, `&`, `'` or `’` (`0171/123/4567`, `9876&543&210`). */
 const JOINED_DIGIT_RUN = /\p{Nd}+(?:[\s'’\-&/]+\p{Nd}+)*/gu;
+/**
+ * The fewest digits outside a date or a year pair in one joined digit run that read as a phone
+ * number (PHONE_SHAPE's floor, for the joiners it does not take: `9123&4567`, `555/0199`; fix
+ * round 6, recheck 5d9c079e M1).
+ */
+const JOINED_DIGITS_MIN = 7;
+/** A date (`12/10/2026`, `12/10/26`, `2026/10/12`) or a year pair (`2025/2026`, `2026/27`): not a number to call. */
+const DATE_OR_YEAR_PAIR = /^(?:\d{1,2}[/-]\d{1,2}[/-](?:19|20)?\d{2}|(?:19|20)\d{2}[/-]\d{1,2}[/-]\d{1,2}|(?:19|20)\d{2}\/(?:19|20)?\d{2})$/;
 /** A lower-case letter followed by a capital (`dC`); a word of DESTINATION_WORD_MIN or more with two of them reads as an address. */
 const LOWER_THEN_CAPITAL = /\p{Ll}\p{Lu}/gu;
 
 const countDigits = (text: string) => (text.match(/\p{Nd}/gu) ?? []).length;
+/**
+ * The digits of a joined run outside its dates and year pairs: the spaces around a joiner are
+ * dropped (`12 / 10 / 2026` is one date), the rest of the run is split at its spaces, and a part
+ * that is a date or a year pair counts none (`12/10/26 9am` counts 1).
+ */
+const digitsOutsideDates = (run: string) =>
+  run.replace(/\s*(['’\-&/]+)\s*/g, "$1").split(/\s+/).reduce((sum, part) => sum + (DATE_OR_YEAR_PAIR.test(part) ? 0 : countDigits(part)), 0);
 /**
  * Letters typed for digits (`O` or `o` for 0, `I` or `l` for 1), read as digits in a part of a word
  * (between joiners) made of digits and those letters only, with two or more digits (`O171/I23/4567`;
@@ -538,7 +553,10 @@ const digitLettersRead = (text: string) =>
  *   - a phone or account number: DESTINATION_DIGITS_MIN or more digits in one word (`0171x123x4567`)
  *     or in one run of digits joined by a space, `-`, `/`, `&`, `'` or `’` (`0171/123/4567`,
  *     `9876&543&210`), reading `O o` as 0 and `I l` as 1 in a part of a word made of digits and
- *     those letters, with two or more digits (`O171/I23/4567`).
+ *     those letters, with two or more digits (`O171/I23/4567`);
+ *   - a short phone number (fix round 6): JOINED_DIGITS_MIN or more digits in one joined run outside
+ *     its dates and year pairs (`9123&4567`, `call 9123/4567`, `912'345'67`; `12/10/2026`,
+ *     `2025/2026 cohort` and `Q4/2026` stay).
  */
 export function destinationShapeHit(text: string): boolean {
   for (const word of text.split(/\s+/)) {
@@ -547,7 +565,7 @@ export function destinationShapeHit(text: string): boolean {
   }
   const read = digitLettersRead(text.replace(/\s+/g, " "));
   if (read.split(" ").some((word) => countDigits(word) >= DESTINATION_DIGITS_MIN)) return true;
-  return (read.match(JOINED_DIGIT_RUN) ?? []).some((run) => countDigits(run) >= DESTINATION_DIGITS_MIN);
+  return (read.match(JOINED_DIGIT_RUN) ?? []).some((run) => countDigits(run) >= DESTINATION_DIGITS_MIN || digitsOutsideDates(run) >= JOINED_DIGITS_MIN);
 }
 /** Straight and typographic double quotes: a match field sits inside a quoted template (refute N5). */
 const DOUBLE_QUOTES = /["“”„‟«»″‶❝❞⹂〝〞〟＂]/g;
@@ -565,8 +583,9 @@ export function withoutDoubleQuotes(raw: string): string {
  *      and `-` may also stand alone); any other character, a mixed-script word or a stray mark
  *      withholds it;
  *   2. at most MATCH_FIELD_MAX_WORDS words, at most MATCH_FIELD_MAX_LENGTH code points;
- *   3. no IPv4- or phone-shaped digit run, and no wallet-address-shaped word or joined run of 9 or
- *      more digits (destinationShapeHit, fix round 5);
+ *   3. no IPv4- or phone-shaped digit run, and no wallet-address-shaped word, joined run of 9 or
+ *      more digits, or joined run of 7 or more digits outside its dates and year pairs
+ *      (destinationShapeHit, fix rounds 5 and 6);
  *   4. Hermes's scanner, on the text, then on every check reading of it (matchFieldReadings);
  *   5. in every reading: no word of MATCH_FIELD_STOP_WORDS and no phrase of
  *      MATCH_FIELD_STOP_PHRASES, also when two or more adjacent words are read as one

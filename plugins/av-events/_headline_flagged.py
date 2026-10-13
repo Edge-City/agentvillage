@@ -19,8 +19,9 @@ and each record is exactly the closed payload below. The flusher's pass
 
 **Payload (closed, every key required, no text of any kind):**
 
-- `opportunity_id`: the Index opportunity id, the trigger's shape
-  (`[A-Za-z0-9_-]`, at most 64); also the envelope's `opportunity_id`;
+- `opportunity_id`: the Index opportunity id, a UUID, either case (the
+  trigger's FLAG_OPPORTUNITY_ID; DATA-487: data's door admits UUID only);
+  also the envelope's `opportunity_id`;
 - `counterpart_index_user_id`: the card's other party's Index user id, the id
   behind `https://index.network/u/<userId>`: a UUID, as the trigger's
   `attachIndexLinks` (USER_ID) and FLAG_USER_ID require;
@@ -95,8 +96,8 @@ PAIRS = frozenset({
     ("shape_withheld", "shape"),
     ("length_capped", "cleaner"),
 })
-#: The trigger's FLAG_OPPORTUNITY_ID (build-daily-brief-context.ts ENTITY_ID, at most 64).
-OPPORTUNITY_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+#: The trigger's FLAG_OPPORTUNITY_ID: an Index opportunity id is a UUID, either case (DATA-487: data's door admits UUID only).
+OPPORTUNITY_ID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 #: The trigger's FLAG_USER_ID (build-daily-brief-context.ts USER_ID): an Index user id is a UUID.
 USER_ID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 HEADLINE_LENGTH_MAX = 2000

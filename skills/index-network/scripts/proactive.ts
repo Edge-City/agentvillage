@@ -537,7 +537,7 @@ class Withheld {
  * the plugin emits it (plugins/av-events/_headline_flagged.py).
  */
 export interface HeadlineFlag {
-  /** The Index opportunity id of the card (at most 64 of `[A-Za-z0-9_-]`). */
+  /** The Index opportunity id of the card (a UUID, either case). */
   opportunity_id: string;
   /** The card's other party's Index user id: the id behind `https://index.network/u/<userId>` (`peer.userId`). */
   counterpart_index_user_id: string;
@@ -550,10 +550,12 @@ export interface HeadlineFlag {
 export const HEADLINE_LENGTH_MAX = 2000;
 /**
  * The ids the event may carry (commit review flag 1: the same shapes the plugin checks,
- * plugins/av-events/_headline_flagged.py): an Index opportunity id (build-daily-brief-context.ts
- * ENTITY_ID, at most 64) and an Index user id, a UUID (USER_ID, as attachIndexLinks keeps it).
+ * plugins/av-events/_headline_flagged.py): an Index opportunity id and an Index user id, each a
+ * UUID, either case (USER_ID, as attachIndexLinks keeps it). DATA-487 (data, 13 Oct): data's door
+ * admits a UUID opportunity id only, so a card whose opportunity id is not one is counted as
+ * `flag_unattributed` and never handed off.
  */
-export const FLAG_OPPORTUNITY_ID = /^[A-Za-z0-9_-]{1,64}$/;
+export const FLAG_OPPORTUNITY_ID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 export const FLAG_USER_ID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 const INDEX_PAGE = { o: /^https:\/\/index\.network\/o\/([^/?#]+)$/, u: /^https:\/\/index\.network\/u\/([^/?#]+)$/ } as const;
 

@@ -113,6 +113,27 @@ def test_every_reason_code_the_trigger_writes_is_emitted(live, home, av, reason,
     assert flagged(av, live)[0]["payload"]["reason_code"] == reason
 
 
+def test_an_upper_case_uuid_opportunity_id_is_emitted_as_written(live, home, av):
+    """DATA-487: the opportunity id is a UUID, either case, exactly the trigger's FLAG_OPPORTUNITY_ID."""
+    record = {**RECORD, "opportunity_id": OPP.upper()}
+    hand_off(home, body(record))
+    assert tick(live).get("emitted") == 1
+    assert [e["payload"]["opportunity_id"] for e in flagged(av, live)] == [OPP.upper()]
+
+
+def test_the_id_shapes_are_the_triggers_own(live):
+    """DATA-487: the plugin's OPPORTUNITY_ID and USER_ID are the trigger's FLAG_OPPORTUNITY_ID and FLAG_USER_ID, character for character."""
+    import re
+    from pathlib import Path
+
+    module = sys.modules[f"{live.__name__}._headline_flagged"]
+    source = (Path(__file__).resolve().parents[3] / "skills" / "index-network" / "scripts" / "proactive.ts").read_text()
+    for name, pattern in (("FLAG_OPPORTUNITY_ID", module.OPPORTUNITY_ID), ("FLAG_USER_ID", module.USER_ID)):
+        trigger = re.search(rf"export const {name} = /\^(.+)\$/;", source)
+        assert trigger is not None, name
+        assert trigger.group(1) == pattern.pattern, name
+
+
 def test_no_text_reaches_the_event(live, home, av):
     hand_off(home, body())
     tick(live)
@@ -138,6 +159,15 @@ def test_no_text_reaches_the_event(live, home, av):
     {**RECORD, "opportunity_id": "x" * 65},                             # too long
     {**RECORD, "opportunity_id": ""},
     {**RECORD, "opportunity_id": "op 1"},
+    # DATA-487 (data, 13 Oct): data's door admits a UUID opportunity id only.
+    {**RECORD, "opportunity_id": "op1"},
+    {**RECORD, "opportunity_id": "o-arjun"},
+    {**RECORD, "opportunity_id": "x" * 64},
+    {**RECORD, "opportunity_id": OPP.replace("-", "")},
+    {**RECORD, "opportunity_id": OPP + "0"},
+    {**RECORD, "opportunity_id": "{" + OPP + "}"},
+    {**RECORD, "opportunity_id": OPP + "\n"},
+    {**RECORD, "opportunity_id": OPP.replace("0", "g", 1)},
     {**RECORD, "counterpart_index_user_id": "evil bot"},                # not an id
     {**RECORD, "counterpart_index_user_id": "u-arjun"},                 # not the Index user id shape (a UUID)
     {**RECORD, "counterpart_index_user_id": PEER + "0"},
