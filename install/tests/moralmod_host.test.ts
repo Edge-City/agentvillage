@@ -108,9 +108,10 @@ test.skipIf(
     // The published release must be the pinned one itself.
     const pin = createHash("sha256").update(readFileSync(join(bundle, "release.json"))).digest("hex");
     if (published) expect(pin).toBe(MORALMOD_RELEASE_SHA256);
+    const releasePin = published ? undefined : pin;
     use(f, () => {
       writeFileSync(join(f.home, "index", "negotiator.ts"), NEGOTIATOR_SEED);
-      installIndexPlugin(f.run, ["bun", "install"], true, pin);
+      installIndexPlugin(f.run, ["bun", "install"], true, releasePin);
       expect(f.calls[0]).toEqual([
         "plugins",
         "install",
@@ -128,6 +129,7 @@ test.skipIf(
         "negotiator.js",
       );
       expect(readFileSync(runtime, "utf8")).toContain("startResident");
+      expect(readFileSync(runtime, "utf8")).toContain(join(f.home, "index", "moralmod", pin, "negotiator-runtime.js"));
       expect(
         JSON.parse(
           readFileSync(
@@ -137,6 +139,8 @@ test.skipIf(
         ),
       ).toMatchObject({
         installed: true,
+        release_digest: pin,
+        plugin_revision: INDEX_PLUGIN_REVISION,
         ready: false,
         selected: "unverified",
       });
@@ -147,7 +151,7 @@ test.skipIf(
       const config = JSON.parse(readFileSync(f.config, "utf8"));
       config.VILLAGE_INSTALLATION_CREDENTIAL = "new-credential".repeat(4);
       writeFileSync(f.config, JSON.stringify(config));
-      installIndexPlugin(f.run, ["bun", "install"], true, pin);
+      installIndexPlugin(f.run, ["bun", "install"], true, releasePin);
       expect(f.calls.filter((a) => a[1] === "install")).toHaveLength(1);
       expect(
         JSON.parse(
@@ -158,7 +162,7 @@ test.skipIf(
         ).VILLAGE_INSTALLATION_CREDENTIAL,
       ).toBe(config.VILLAGE_INSTALLATION_CREDENTIAL);
       writeFileSync(runtime, "resident modification");
-      expect(installIndexPlugin(f.run, ["bun", "install"], true, pin).state).toBe("failed");
+      expect(installIndexPlugin(f.run, ["bun", "install"], true, releasePin).state).toBe("failed");
       expect(readFileSync(runtime, "utf8")).toBe("resident modification");
     });
   },
