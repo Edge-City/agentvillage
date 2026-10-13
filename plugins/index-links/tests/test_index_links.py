@@ -15,7 +15,9 @@ import pytest
 
 INDEX_TOOL = "mcp__index__list_opportunities"
 ACCEPT = "https://index.network/o/opp1?action=accept&viewer=v1&sig=s1"
-ACCEPT_OUT = ACCEPT + "&surface=telegram"
+#: INTRO-TELEGRAM: a signed accept link becomes the app's /intro page for that opportunity (the app
+#: accepts with the resident's own session and opens Telegram once both accepted); the signature is dropped.
+ACCEPT_OUT = "https://agents.edgecity.live/intro/opp1"
 #: Generous so CI under load stays stable; the refute's bound was 0.5 s.
 TIME_BOUND_S = 2.0
 
@@ -27,7 +29,7 @@ def hook(plugin, result, tool=INDEX_TOOL):
 # --- 1-6: behaviour that held before the patch -----------------------------
 
 
-def test_01_json_accept_url_gains_surface_and_keeps_key_order(plugin):
+def test_01_json_accept_url_becomes_the_intro_page_and_keeps_key_order(plugin):
     raw = json.dumps({"acceptUrl": ACCEPT, "userUrl": None, "id": "opp1"})
     out = hook(plugin, raw)
     assert out is not None
@@ -40,7 +42,8 @@ def test_02_rewrite_is_idempotent(plugin):
     once = hook(plugin, raw)
     assert once == f"[message Maya]({ACCEPT_OUT}) and also {ACCEPT_OUT}"
     assert hook(plugin, once) is None
-    assert once.count("surface=telegram") == 2
+    assert once.count("/intro/opp1") == 2
+    assert "sig=" not in once
 
 
 @pytest.mark.parametrize(
@@ -124,7 +127,7 @@ def test_11_unicode_lookalike_host_is_left_alone_not_deleted(plugin):
 
 
 def test_12_to_is_dropped_from_an_accept_link(plugin):
-    """N2: documents current behaviour. Re-pin once Index says whether `to` is signed."""
+    """N2: the whole signed link becomes the intro page, so `to` goes with it."""
     assert hook(plugin, f"{ACCEPT}&to=x") == ACCEPT_OUT
 
 
@@ -208,7 +211,7 @@ def test_signature_endings_survive(plugin, sig):
     url = f"https://index.network/o/opp1?action=accept&viewer=v1&sig={sig}"
     out = hook(plugin, f"Tap {url}. ok")
     assert out is not None
-    assert f"sig={sig.replace('=', '%3D')}&surface=telegram. ok" in out
+    assert out == f"Tap {ACCEPT_OUT}. ok"
 
 
 def test_person_link_at_sentence_end_is_rewritten(plugin):
@@ -434,3 +437,25 @@ def test_own_profile_exemption_keeps_the_off_switch_and_size_cap(plugin, monkeyp
     assert hook(plugin, f"{ACCEPT} {OWN} {filler}", tool=tool) is None
     monkeypatch.setenv("AV_INDEX_LINKS", "off")
     assert hook(plugin, f"{ACCEPT} {OWN}", tool=tool) is None
+
+
+# --- INTRO-TELEGRAM ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "url,out",
+    [
+        ("https://index.network/o/11111111-2222-4333-8444-555555555555?action=accept&viewer=v1&sig=s1", "https://agents.edgecity.live/intro/11111111-2222-4333-8444-555555555555"),
+        ("https://index.network/o/opp1/?action=accept&viewer=v1&sig=s1&surface=telegram", ACCEPT_OUT),
+        ("https://app.index.network/o/opp1?sig=s1&viewer=v1&action=accept", ACCEPT_OUT),
+    ],
+)
+def test_signed_accept_links_become_the_intro_page_without_the_signature(plugin, url, out):
+    result = hook(plugin, f"[message Maya]({url})")
+    assert result == f"[message Maya]({out})"
+    assert "sig" not in result and "viewer" not in result
+
+
+def test_decline_links_still_stay_on_index(plugin):
+    url = "https://index.network/o/opp1?action=decline&viewer=v1&sig=s1"
+    assert hook(plugin, f"[pass]({url})") is None

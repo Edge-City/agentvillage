@@ -4,8 +4,11 @@ Hermes calls ``transform_tool_result`` after a tool returns and before the
 model sees the result. A string return replaces that result. ``None`` leaves
 it unchanged.
 
-A signed accept link (``action=accept``) gains ``surface=telegram``. The
-signature does not cover surface, and a plain ``/o/<id>`` opportunity link
+A signed accept link (``action=accept``) becomes the Agent Village app's
+``https://agents.edgecity.live/intro/<opportunityId>`` (INTRO-TELEGRAM): the
+resident taps Accept there, signed in, and once both people have accepted it
+opens a Telegram chat with the other person. The signature is dropped, so the
+bearer link never reaches the chat. A plain ``/o/<id>`` opportunity link
 is left as Index minted it. A signed decline link is left as Index minted
 it. A person link becomes ``https://agents.edgecity.live/rolodex?person=<userId>``.
 A signal link becomes ``https://agents.edgecity.live/intents?intent=<intentId>``.
@@ -45,7 +48,7 @@ from __future__ import annotations
 import os
 import re
 from typing import Any, Optional
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlsplit
 
 _OPP_PATH = re.compile(r"^/o/([A-Za-z0-9_-]+)/?$")
 _USER_PATH = re.compile(r"^/u/([A-Za-z0-9_-]+)/?$")
@@ -80,7 +83,6 @@ OWN_PROFILE_TOOLS = frozenset(prefix + name for prefix in INDEX_TOOL_PREFIXES fo
 OFF_SWITCH = "AV_INDEX_LINKS"
 _OFF_VALUES = frozenset({"off", "0", "false", "no"})
 _PORTAL_HOST = "agents.edgecity.live"
-_SURFACE = "telegram"
 
 _REGISTERED = False
 
@@ -99,16 +101,8 @@ def _query_pairs(url: str) -> list[tuple[str, str]]:
     return parse_qsl(urlsplit(url).query, keep_blank_values=True)
 
 
-def _with_surface(url: str) -> str:
-    """Append ``surface=telegram``. Surface is not part of the signature."""
-    parts = urlsplit(url)
-    query = [(key, value) for key, value in parse_qsl(parts.query, keep_blank_values=True) if key not in ("surface", "to")]
-    query.append(("surface", _SURFACE))
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
-
-
 def rewrite_opportunity_link(url: str) -> str:
-    """A signed accept link gains ``surface=telegram``. A plain ``/o/<id>`` stays.
+    """A signed accept link becomes the app's ``/intro/<id>``. A plain ``/o/<id>`` stays.
 
     A link that repeats ``action``, ``viewer``, ``sig``, ``surface`` or ``to``
     stays as minted: which duplicate counts is the verifier's call, not ours.
@@ -119,7 +113,8 @@ def rewrite_opportunity_link(url: str) -> str:
         return url
     query = dict(pairs)
     if query.get("action", "") == "accept" and query.get("viewer") and query.get("sig"):
-        return _with_surface(url)
+        opp = _OPP_PATH.fullmatch(_url_path(url))
+        return _portal("/intro/" + opp.group(1)) if opp else url
     return url
 
 

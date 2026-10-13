@@ -233,6 +233,8 @@ backlog can differ from `emitted_at` by minutes. Every `marts` time series is bu
 | `digest.shared` | the approval poller (or the tool call) after the resident's grant and `approval start` (lane O3) | `digest_id`, `scope`, `text`, `expires_at`, `idempotency_key`, `payload_hash`, `start_seq`, `authorization` — see "Sharing a digest and the weekly vote" |
 | `digest.revoked` | `share_digest(action="revoke")` on a shared digest | `digest_id` |
 | `vote.cast` | the approval poller after the grant, or `village_vote(action="vote")` under an autonomous policy | `question_id`, `answer`, `idempotency_key`, `payload_hash`, `start_seq`, `authorization` |
+| `approval.card_requested` | the capture call or the approval poller, when approval.md asks the resident about an intention publish (behind `AV_APPROVAL_CARD_EVENTS`, default off) | `card_id`, `intent_id`, `origin`, `kind`, `requested_at`; ids, codes and times only — see "Approval card events" |
+| `approval.card_resolved` | the poller, the capture call, `confirm` or `withdraw`, when that card ends (sent by a later pass if it ended while the switch was off) | `card_id`, `intent_id`, `resolution`, `decided_by`, `requested_at`, `resolved_at` |
 | `memory.recalled` | `recall:memory.recalled` on the plugin event bus (published by `plugins/recall`) | `query_hash`, `hit_count`, `top_score`, `surface`; the hash and score are null in `metadata` — see below |
 | `memory.snapshot` | the backup thread, after `on_session_end` (rate-limited) or `on_session_finalize` asked for a snapshot and both uploads succeeded | `bytes`, `file_count`, `content_hash`, `manifest_ref` — exactly `memory.snapshot@1`'s closed key set, the same in every capture mode — see "Memory snapshot" |
 
@@ -831,6 +833,43 @@ retried), `unavailable` (nothing could be held). Map codes: `payload_hash_mismat
 `authorization_mismatch`, `claim_abandoned`, `map_invalid`, `rule_needs_capture`. Client codes in the logs: `url_missing`, `url_refused`,
 `token_missing`, `token_malformed`, `token_file_*`, `facade_listener_foreign`, `unauthorized`,
 `http_<status>`, `transport`, `timeout`, `bad_answer`.
+
+### Approval card events (DATA-470 family)
+
+`approval.card_requested@1` and `approval.card_resolved@1` (the ambient-intent telemetry contract,
+"Event types" item 3; `_card_events.py`) report every question approval.md asks the resident about
+an intention publish, and how it ended: ids, codes and times, never the card's text, summary or
+payload. **Off by default**: `AV_APPROVAL_CARD_EVENTS` (`1|true|yes|on`, process environment only).
+Never on, nothing is recorded and nothing is emitted, and the map's bytes are what they were before.
+The switch gates the **creation** of a card and the sending; a card that exists is closed whenever its
+end is observed, switch or not, and a close observed while off is sent by the first pass after it is
+back on (so a rollback, or a process started before the gateway restart, never leaves a card open).
+
+- **A card** is one ask: a `propose` answered `decision: requested`. A class the policy clears
+  raises none. A question core asks again under the same task (after a lapse or a void) is a new
+  card with a new `card_id` (uuid v7), so each card has exactly one requested and one resolved event.
+- **Ends.** The resident's grant (read from `wait`, before the start): `granted` / `resident`. A
+  rejection or revocation (human-only in core; the box's one human is the resident): `declined` /
+  `resident`. A lapse: `expired` / `timeout`. A withdrawal on the daemon, a void after a policy
+  re-attest, a task the log no longer knows, the agent's own `withdraw`: `withdrawn` / `system`.
+  `operator` is never sent: nothing on the box tells an operator's hand from the resident's.
+  **First close wins**: a grant read and then revoked, or the agent's withdraw after a grant read but
+  before the start, leaves the card `granted` (the resident did grant it) while the proposal ends
+  `rejected` / `withdrawn` and nothing is published; `cards_granted` counts it.
+- **`kind`**: `intent_publish_inferred` (the inferred class on an ambient entry),
+  `intent_publish_stated` (the stated class on `message`/`onboarding`/`note`), else `other`; the
+  fleet rules key on it, and it survives consent nulling. **`origin` is always null for now**: the
+  data side derives it for research tenants from `intention.captured.origin` joined on `intent_id`.
+  A later lane may thread it to the card.
+- **Once.** Each card lives on the intention's approval entry (`approval.cards`), opened and closed
+  inside the compare-and-set that moves the proposal, so only the caller whose transition won
+  touches it. Events are sent under the map's lock and marked sent in the same write; a lost mark
+  re-sends the same event id (`derived_uuid7` of the card's own timestamp and
+  `av-events|<type>|<card_id>`), which ingest keeps as one row. Every approval pass sweeps what an
+  inactive collector or a crash left unsent; a card opened while the switch was off is never sent.
+- **Release order.** The data release that registers both types (and puts them on the ops
+  allowlist) goes live first; then the overlay release carrying this code; then the switch, per
+  tenant. On before the door, ingest quarantines the events.
 
 ### Sharing a digest and the weekly vote (lane O3)
 

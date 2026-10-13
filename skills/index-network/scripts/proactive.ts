@@ -426,7 +426,17 @@ export const VILLAGE_LINK = PORTAL_WEB;
 const lastSegment = (url: string) => url.slice(url.lastIndexOf("/") + 1);
 const profileLink = (url: unknown) => { const u = indexUrl("u", url); return u && `${PORTAL_WEB}/rolodex?person=${lastSegment(u)}`; };
 const signalLink = (url: unknown) => { const u = indexUrl("i", url); return u && `${PORTAL_WEB}/intents?intent=${lastSegment(u)}`; };
-const messageLink = (url: unknown) => { const a = acceptLink(url); return a ? `${a}&surface=telegram` : null; };
+/**
+ * INTRO-TELEGRAM: the message link for a card Index minted a signed accept link for is the app's
+ * `<portal>/intro/<id>`, never Index's link: there one tap (signed in) accepts and, once both people
+ * have accepted, opens Telegram with the other person. Index's signature never reaches the chat.
+ */
+export const introLink = (url: unknown): string | null => {
+  const a = acceptLink(url);
+  const id = a?.match(/^https:\/\/[^/]+\/o\/([A-Za-z0-9_-]{1,128})\?/)?.[1];
+  return id ? `${PORTAL_WEB}/intro/${encodeURIComponent(id)}` : null;
+};
+const messageLink = introLink;
 /**
  * DATA-430: the app's deep link to one pending card, `<portal>/intents?opportunity=<id>#opportunity-<id>`
  * (the app half's literal: the Intents page scrolls to that card; an unknown id shows the page). The id
