@@ -180,8 +180,32 @@ class Dashboard:
         return resp, req
 
 
+#: Stored sessions the stand-in lookup knows (Hermes's `sessions` rows: id, user_id, source).
+SESSION_ROWS = {
+    "abc123": {"id": "abc123", "user_id": "edgecity:u1", "source": "tool"},        # the resident's dashboard chat
+    "tg1": {"id": "tg1", "user_id": "5550001", "source": "telegram"},             # the resident on Telegram
+    "adm1": {"id": "adm1", "user_id": "edgecity:admin-9", "source": "tool"},      # a landing admin's chat
+    "pty1": {"id": "pty1", "user_id": None, "source": "tui"},                     # the admin terminal's
+    "cron1": {"id": "cron1", "user_id": None, "source": "cron"},
+    "tg-adm": {"id": "tg-adm", "user_id": "edgecity:admin-9", "source": "telegram"},
+}
+
+
+def session_lookup(rows=SESSION_ROWS):
+    def lookup(session_id, profile=None, *, prefix):
+        if session_id in rows:
+            return rows[session_id]
+        if prefix:
+            found = [r for k, r in rows.items() if k.startswith(session_id)]
+            return found[0] if len(found) == 1 else None
+        return None
+
+    return lookup
+
+
 @pytest.fixture
 def dash(guard):
+    guard.set_session_lookup(session_lookup())
     return Dashboard(guard)
 
 
@@ -235,6 +259,10 @@ NOT_LISTED = [
     ("PUT", "/api/dashboard/font"),
     ("POST", "/api/sessions/import"),
     ("POST", "/api/sessions/owner-backfill"),
+    ("GET", "/api/sessions/search?q=plugins"),     # S-new-1: reads across sessions
+    ("POST", "/api/sessions/bulk-delete"),         # S-new-1: deletes across sessions
+    ("DELETE", "/api/sessions/empty"),
+    ("POST", "/api/sessions/prune"),
     ("GET", "/api/logs"),
     ("GET", "/api/plugins/kanban/board"),
     ("GET", "/docs"),
@@ -279,15 +307,18 @@ LISTED = [
     ("GET", "/api/profiles/active"),
     ("GET", "/api/sessions"),
     ("GET", "/api/sessions?limit=20&offset=0&order=recent&profile=default"),
-    ("GET", "/api/sessions/search?q=plugins"),
+    ("GET", "/api/sessions/stats"),
+    ("GET", "/api/sessions/empty/count"),
     ("GET", "/api/sessions/abc123"),
     ("GET", "/api/sessions/abc123/messages"),
+    ("GET", "/api/sessions/abc123/messages/around"),
+    ("GET", "/api/sessions/abc123/timeline"),
+    ("GET", "/api/sessions/abc123/latest-descendant"),
     ("GET", "/api/sessions/abc123/export"),
+    ("GET", "/api/sessions/abc1/messages"),
+    ("GET", "/api/sessions/tg1/messages?profile=default"),
     ("PATCH", "/api/sessions/abc123"),
-    ("DELETE", "/api/sessions/abc123"),
-    ("POST", "/api/sessions/bulk-delete"),
-    ("DELETE", "/api/sessions/empty"),
-    ("POST", "/api/sessions/prune"),
+    ("DELETE", "/api/sessions/tg1"),
     ("POST", "/api/chat/image-upload"),
     ("POST", "/api/plugins/av-approval/cards/x/approve"),
 ]
@@ -315,6 +346,84 @@ def test_an_edgecity_admin_reaches_everything(dash, method, target):
     # The gate reads no cookie on its public paths, so an admin arrives there without a session.
     public = req.url.path.startswith(Dashboard.PUBLIC)
     assert dash.routed == [(method, req.scope["path"])] and dash.roles == ["resident" if public else "admin"]
+
+
+# ---- S-new-1 on HTTP: a route that names one stored session answers only for the resident's own --
+
+
+@pytest.mark.parametrize("session_id,ok", [
+    ("abc123", True),     # its own dashboard login's
+    ("abc1", True),       # a unique prefix of it, resolved as the handler resolves it
+    ("tg1", True),        # the box's Telegram channel
+    ("adm1", False),      # a landing admin's dashboard chat
+    ("pty1", False),      # the admin terminal's (no login)
+    ("cron1", False),     # cron's (no login)
+    ("tg-adm", False),    # a messaging source, but another dashboard login's
+    ("nope", False),      # unknown
+    ("a", False),         # an ambiguous prefix
+])
+def test_a_session_route_answers_a_resident_only_for_its_own_sessions(dash, session_id, ok):
+    for method, suffix in (("GET", ""), ("GET", "/messages"), ("GET", "/export"), ("GET", "/timeline"),
+                           ("GET", "/messages/around"), ("GET", "/latest-descendant"), ("PATCH", ""), ("DELETE", "")):
+        dash.routed.clear()
+        resp, _ = dash.request(method, f"/api/sessions/{session_id}{suffix}", headers=dash.login(OWNER))
+        if ok:
+            assert resp.status_code == 200, (method, suffix, resp.body)
+        else:
+            assert forbidden(resp, "not_own_session") and dash.routed == [], (method, suffix, resp.body)
+
+
+def test_an_admin_and_the_archive_bearer_read_every_session(dash):
+    for session_id in ("adm1", "pty1", "nope"):
+        assert dash.request("GET", f"/api/sessions/{session_id}/messages", headers=dash.login(ADMIN))[0].status_code == 200
+        assert dash.request("GET", f"/api/sessions/{session_id}/messages", token_principal=True)[0].status_code == 200
+
+
+def test_a_hermes_subroute_word_is_never_a_session_id(dash):
+    for target in ("/api/sessions/search", "/api/sessions/stats/messages", "/api/sessions/prune",
+                   "/api/sessions/import", "/api/sessions/owner-backfill/export"):
+        resp, _ = dash.request("GET", target, headers=dash.login(OWNER))
+        assert forbidden(resp), target
+
+
+def test_without_a_session_lookup_every_session_route_is_refused(dash):
+    dash.mod.set_session_lookup(None)
+    resp, _ = dash.request("GET", "/api/sessions/abc123/messages", headers=dash.login(OWNER))
+    assert forbidden(resp, "not_own_session") and dash.routed == []
+    assert dash.request("GET", "/api/sessions", headers=dash.login(OWNER))[0].status_code == 200
+
+
+def test_a_failing_session_lookup_is_a_403(dash):
+    def boom(*a, **k):
+        raise OSError("state.db unreadable")
+
+    dash.mod.set_session_lookup(boom)
+    resp, _ = dash.request("GET", "/api/sessions/abc123", headers=dash.login(OWNER))
+    assert resp.status_code == 403 and dash.routed == []
+
+
+def test_the_lookup_gets_the_requests_profile(dash):
+    seen = []
+    dash.mod.set_session_lookup(lambda sid, profile=None, *, prefix: seen.append((sid, profile, prefix)) or None)
+    dash.request("GET", "/api/sessions/abc123/messages?profile=worker", headers=dash.login(OWNER))
+    assert seen == [("abc123", "worker", True)]
+
+
+@pytest.mark.parametrize("row,login,ok", [
+    ({"user_id": "edgecity:u1", "source": "tool"}, "edgecity:u1", True),
+    ({"user_id": "edgecity:u1", "source": "tool"}, None, False),
+    ({"user_id": "edgecity:u2", "source": "tool"}, "edgecity:u1", False),
+    ({"user_id": "5550001", "source": "telegram"}, None, True),
+    ({"user_id": None, "source": "telegram"}, "edgecity:u1", True),
+    ({"user_id": "basic:alice", "source": "telegram"}, "edgecity:u1", False),
+    ({"user_id": None, "source": "tui"}, "edgecity:u1", False),
+    ({"user_id": None, "source": "cron"}, "edgecity:u1", False),
+    ({"user_id": None, "source": "Telegram"}, "edgecity:u1", False),
+    (None, "edgecity:u1", False),
+    ("abc", "edgecity:u1", False),
+])
+def test_session_visible(guard, row, login, ok):
+    assert guard.session_visible(row, login) is ok
 
 
 def test_a_session_bearer_is_judged_like_a_cookie(dash):
@@ -437,8 +546,12 @@ def test_every_table_row_is_well_formed_and_explained(guard):
         assert methods and methods <= {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}
         assert pattern == guard.SPA or pattern.startswith("/")
         assert why.strip()
-    for name, (rule, why) in guard.RESIDENT_GATEWAY_METHODS.items():
-        assert rule in (None, guard.BYTES_ONLY, guard.NO_ALWAYS) and why.strip()
+    known = {guard.BYTES_ONLY, guard.NO_ALWAYS, guard.OWN_SESSION, guard.OWN_SESSION_IF_GIVEN, guard.OWN_STORED,
+             guard.OWN_REQUEST, guard.PINNED_CWD, guard.NO_FILE_REFS, guard.ANSWER}
+    for name, (rules, why) in guard.RESIDENT_GATEWAY_METHODS.items():
+        assert isinstance(rules, tuple) and set(rules) <= known and why.strip(), name
+    for source, why in guard.RESIDENT_SESSION_SOURCES.items():
+        assert source == source.strip().lower() and why.strip()
     assert set(guard.RESIDENT_WS_PATHS) == {"/api/ws"}
 
 
@@ -522,15 +635,15 @@ def test_a_value_that_is_not_a_path_string_is_private(guard, value):
 
 def test_a_listed_route_naming_a_private_path_is_refused_for_a_resident(dash, home):
     owner = dash.login(OWNER)
-    for target in (f"/api/sessions?path={home}/.env", f"/api/sessions/search?q=x&cwd={home}/plugins",
-                   "/api/sessions/search?q=/x/../.dashboard-auth-edgecity/sessions.sqlite3",
+    for target in (f"/api/sessions?path={home}/.env", f"/api/sessions/abc123?q=x&cwd={home}/plugins",
+                   "/api/sessions/abc123/messages?q=/x/../.dashboard-auth-edgecity/sessions.sqlite3",
                    f"/api/sessions?x=file://{home}/.env", "/.env", "/assets/.env.local",
                    "/hermes-agent/x", "/api/plugins/av-approval/state.db"):
         resp, _ = dash.request("GET", target, headers=owner)
         assert forbidden(resp, "private_path"), target
     assert dash.routed == []
     assert dash.request("GET", f"/api/sessions?path={home}/.env", headers=dash.login(ADMIN))[0].status_code == 200
-    assert dash.request("GET", "/api/sessions/search?q=plugins", headers=owner)[0].status_code == 200
+    assert dash.request("GET", "/api/sessions/abc123?q=plugins", headers=owner)[0].status_code == 200
 
 
 # ---- fail closed ---------------------------------------------------------------------------------
@@ -790,19 +903,22 @@ def mint_as(guard, store, role, provider="edgecity", extra=None):
 
 
 class Transport:
-    """`tui_gateway.ws.WSTransport` as far as the guard reads it."""
+    """`tui_gateway.ws.WSTransport` as far as the guard reads it: the socket and the server-minted
+    identity (`ws.py:99`)."""
 
-    def __init__(self, sock):
+    def __init__(self, sock, user_id="u1", provider="edgecity"):
         self._ws = sock
-        self.auth_identity = {"user_id": "u1", "provider": "edgecity"}
+        self.auth_identity = {"user_id": user_id, "provider": provider}
 
 
 def make_handle_ws(server):
     """`tui_gateway.ws.handle_ws` in miniature: every frame dispatched through `server.dispatch`,
-    looked up at call time, in `asyncio.to_thread` (which copies the context)."""
+    looked up at call time, in `asyncio.to_thread` (which copies the context). One transport per
+    connection, as Hermes's."""
 
     async def handle_ws(sock, *, auth_identity=None, subprotocol=None):
-        transport = Transport(sock)
+        transport = getattr(sock, "transport", None) or Transport(sock, getattr(sock, "user_id", "u1"))
+        sock.transport = transport
         out = []
         for frame in sock.frames:
             out.append(await asyncio.to_thread(server.dispatch, frame, transport))
@@ -811,14 +927,53 @@ def make_handle_ws(server):
     return handle_ws
 
 
+def live_chats():
+    """`server._sessions` in miniature: live chats with the login Hermes stamped on each
+    (`auth_user_id`, `methods_session.py:393`) and the logins attached to it."""
+    return {
+        "own-sid": {"session_key": "own-key", "auth_user_id": "edgecity:u1", "attached": {"edgecity:u1"}},
+        "admin-sid": {"session_key": "adm1", "auth_user_id": "edgecity:admin-9", "attached": {"edgecity:admin-9"}},
+        "pty-sid": {"session_key": "pty1", "auth_user_id": None, "attached": {None}},
+        "mirror-sid": {"session_key": "tg1", "auth_user_id": "edgecity:u1", "attached": set()},
+    }
+
+
+#: Open server->client requests (`server_requests._open`): id -> (method, chat).
+OPEN_REQUESTS = {
+    "srq-own-approval": ("approval", "own-sid"), "srq-own-clarify": ("clarify", "own-sid"),
+    "srq-own-secret": ("secret", "own-sid"), "srq-own-sudo": ("sudo", "own-sid"),
+    "srq-admin-approval": ("approval", "admin-sid"), "srq-pty-approval": ("approval", "pty-sid"),
+    "srq-mirror-approval": ("approval", "mirror-sid"),
+}
+#: Pending approvals per stored chat (`tools.approval.list_gateway_approvals`).
+PENDING = {"own-key": [{"request_id": "req-own-1"}], "adm1": [{"request_id": "req-admin-1"}]}
+
+
 def gateway_stand_in():
-    calls = []
+    calls, frames = [], []
 
     def dispatch(req, transport=None):
         calls.append(req.get("method") if isinstance(req, dict) else req)
-        return {"id": req.get("id") if isinstance(req, dict) else None, "result": "ran"}
+        frames.append(req)
+        rid = req.get("id") if isinstance(req, dict) else None
+        if isinstance(req, dict) and req.get("method") == "session.create":
+            return {"id": rid, "result": {"session_id": "new-sid", "stored_session_id": "new-key"}}
+        return {"id": rid, "result": "ran"}
 
-    server = SimpleNamespace(dispatch=dispatch)
+    def login(transport):
+        ident = transport.auth_identity
+        return f"{ident['provider']}:{ident['user_id']}" if ident else None
+
+    import threading
+
+    server = SimpleNamespace(
+        dispatch=dispatch, _sessions=live_chats(), _sessions_lock=threading.Lock(),
+        _session_transport_contains=lambda rec, t: login(t) in rec.get("attached", ()))
+    server.frames = frames
+    requests = SimpleNamespace(_lock=threading.Lock(), _open={
+        rid: SimpleNamespace(id=rid, method=m, sid=sid) for rid, (m, sid) in OPEN_REQUESTS.items()})
+    server.requests = requests
+    server.approvals = lambda key: PENDING.get(key, [])
     return server, SimpleNamespace(handle_ws=make_handle_ws(server)), calls
 
 
@@ -970,36 +1125,62 @@ def rpc(method, params=None, rid=1):
 
 
 @pytest.fixture
-def gateway(guard):
-    """The guard on a stand-in gateway whose original dispatch records what reaches it."""
+def gateway(guard, home):
+    """The guard on a stand-in gateway whose original dispatch records what reaches it, with live
+    chats, open server requests, pending approvals and stored sessions to judge ownership by."""
     server, gateway_ws, calls = gateway_stand_in()
-    assert guard.install_gateway(server, gateway_ws) is True
+    assert guard.install_gateway(server, gateway_ws, server.requests, server.approvals) is True
+    guard.set_session_lookup(session_lookup())
 
-    def talk(role, frames):
-        sock = ws("/api/ws")
+    def talk(role, frames, user_id="u1", sock=None):
+        sock = sock or ws("/api/ws")
         if role is not None:
             sock._edgecity_ws_role = role
+        sock.user_id = user_id
         sock.frames = frames
         return asyncio.run(gateway_ws.handle_ws(sock))
 
-    return SimpleNamespace(guard=guard, server=server, ws=gateway_ws, calls=calls, talk=talk)
+    return SimpleNamespace(guard=guard, server=server, ws=gateway_ws, calls=calls, talk=talk, home=home)
 
 
-def refused(resp):
-    return isinstance(resp, dict) and resp.get("error", {}).get("code") == 4031 and resp["error"]["data"]["reason"] == "admin_only"
+def refused(resp, reason="admin_only"):
+    return (isinstance(resp, dict) and resp.get("error", {}).get("code") == 4031
+            and resp["error"]["data"]["reason"] == reason)
 
 
 ADMIN_ONLY_METHODS = ["shell.exec", "cli.exec", "plugins.manage", "slash.exec", "command.dispatch", "config.set",
                       "browser.manage", "connectors.connect", "vault.add", "vault.unlock", "profiles.create",
-                      "display.start", "model.save_key", "session.foreign.import", "complete.path",
+                      "display.start", "display.observe", "model.save_key", "session.foreign.import", "complete.path",
                       "spawn_tree.save", "llm.oneshot", "onboarding.reset_setup_profile", "image.generate",
-                      "config.get", "unknown.method", "", None, 7]
+                      "config.get", "reload.mcp", "clarify.lock", "session.cwd.set", "session.activate",
+                      "session.branch_stored", "unknown.method", "", None, 7]
 
 LISTED_METHODS = [
     "ping", "gateway.capabilities", "client.capabilities", "session.create", "session.resume", "session.list",
     "session.most_recent", "session.title", "session.close", "session.delete", "session.interrupt",
     "session.events.since", "prompt.submit", "approval.pending", "approval.received", "approval.respond",
     "request.answer", "image.attach_bytes", "image.detach", "file.attach", "pdf.attach", "model.options"]
+
+#: Parameters under which each listed method is the resident's own business.
+GOOD_PARAMS = {
+    "session.create": {"source": "tool", "close_on_disconnect": True},
+    "session.resume": {"session_id": "abc123"},
+    "session.title": {"session_id": "own-sid", "title": "x"},
+    "session.close": {"session_id": "own-sid"},
+    "session.delete": {"session_id": "tg1"},
+    "session.interrupt": {"session_id": "own-sid"},
+    "session.events.since": {"session_id": "own-sid", "last_seen": 0},
+    "prompt.submit": {"session_id": "own-sid", "text": "hello, mail me at a@b.c"},
+    "approval.pending": {"session_id": "own-sid"},
+    "approval.received": {"session_id": "own-sid", "request_id": "req-own-1"},
+    "approval.respond": {"session_id": "own-sid", "request_id": "req-own-1", "choice": "once"},
+    "request.answer": {"id": "srq-own-approval", "result": {"choice": "session"}},
+    "image.attach_bytes": {"session_id": "own-sid", "content_base64": "aGk="},
+    "image.detach": {"session_id": "own-sid", "path": "img_1.png"},
+    "file.attach": {"session_id": "own-sid", "data_url": "data:,x"},
+    "pdf.attach": {"session_id": "own-sid", "content_base64": "JVBER"},
+    "model.options": {"session_id": "own-sid"},
+}
 
 
 @pytest.mark.parametrize("method", ADMIN_ONLY_METHODS)
@@ -1010,30 +1191,38 @@ def test_a_resident_connection_calls_nothing_off_the_method_list(gateway, method
 
 
 @pytest.mark.parametrize("method", LISTED_METHODS)
-def test_a_resident_connection_calls_the_listed_methods(gateway, method):
-    [resp] = gateway.talk("resident", [rpc(method)])
-    assert resp == {"id": 1, "result": "ran"} and gateway.calls == [method]
+def test_a_resident_connection_calls_the_listed_methods_on_its_own_chats(gateway, method):
+    [resp] = gateway.talk("resident", [rpc(method, dict(GOOD_PARAMS.get(method, {})))])
+    assert "error" not in resp and gateway.calls == [method], resp
 
 
 def test_the_method_list_is_the_one_in_the_module(guard):
     assert set(guard.RESIDENT_GATEWAY_METHODS) == set(LISTED_METHODS)
+    for name, (rules, why) in guard.RESIDENT_GATEWAY_METHODS.items():
+        assert isinstance(rules, tuple) and why.strip(), name
+    for name, (rule, why) in guard.RESIDENT_SERVER_REQUESTS.items():
+        assert rule in (None, guard.NO_ALWAYS) and why.strip(), name
+    assert set(guard.RESIDENT_SERVER_REQUESTS) == {"approval", "clarify"}
 
 
 @pytest.mark.parametrize("role", ["resident", None, "", "Admin", "admin ", "owner", "INTERNAL", "unknown", 0, object()])
-def test_the_method_decision_allows_nothing_off_the_list_for_any_role_but_admin_and_internal(guard, role):
-    """The decision function itself, every method a stand-in for Hermes's table, every role that is
-    not exactly "admin" or "internal" (a missing role included): only listed methods pass."""
+def test_the_method_decision_allows_nothing_off_the_list_for_any_role_but_admin_and_internal(guard, home, role):
+    """The decision function itself, every role that is not exactly "admin" or "internal" (a missing
+    role included): only listed methods pass, and without a view of the live state none that
+    touches a chat does (fail closed)."""
     for method in ADMIN_ONLY_METHODS + ["plugins.manage", "shell.exec", "Prompt.submit", "prompt.submit ", b"ping"]:
         assert guard.gateway_method_allowed(role, method, {}) is False, (role, method)
     for method in LISTED_METHODS:
-        assert guard.gateway_method_allowed(role, method, {}) is True, (role, method)
+        free = guard.RESIDENT_GATEWAY_METHODS[method][0] in ((), (guard.OWN_SESSION_IF_GIVEN,), (guard.PINNED_CWD,))
+        assert guard.gateway_method_allowed(role, method, {}) is free, (role, method)
     assert guard.gateway_method_allowed(role, "prompt.submit", ["not", "a", "dict"]) is False
 
 
 @pytest.mark.parametrize("role", ["admin", "internal"])
 def test_the_method_decision_allows_everything_for_admin_and_the_pty_child(guard, role):
     for method in ADMIN_ONLY_METHODS + LISTED_METHODS:
-        assert guard.gateway_method_allowed(role, method, {"choice": "always", "path": "/x"}) is True
+        assert guard.gateway_method_allowed(role, method, {"choice": "always", "path": "/x", "session_id": "x"}) is True
+    assert guard.gateway_decision(role, {"id": "srq-x", "result": {"choice": "always"}})[0] == "admin_allowed"
 
 
 def test_a_socket_without_a_role_is_judged_a_resident(guard):
@@ -1044,34 +1233,250 @@ def test_a_socket_without_a_role_is_judged_a_resident(guard):
 
 
 @pytest.mark.parametrize("frame,ok", [
-    (rpc("file.attach", {"data_url": "data:text/plain;base64,aGk=", "name": "a.txt"}), True),
-    (rpc("file.attach", {"path": "/etc/hostname"}), False),
-    (rpc("file.attach", {"path": "  /etc/hostname ", "data_url": "data:,x"}), False),
-    (rpc("pdf.attach", {"content_base64": "JVBER"}), True),
-    (rpc("pdf.attach", {"path": "/tmp/a.pdf"}), False),
-    (rpc("approval.respond", {"choice": "once"}), True),
-    (rpc("approval.respond", {"choice": "session"}), True),
-    (rpc("approval.respond", {"choice": "deny"}), True),
-    (rpc("approval.respond", {}), True),
-    (rpc("approval.respond", {"choice": "always"}), False),
-    (rpc("approval.respond", {"choice": "ALWAYS"}), False),
-    (rpc("session.create", {"cwd": "/tmp/work"}), True),
+    (rpc("file.attach", {"session_id": "own-sid", "data_url": "data:text/plain;base64,aGk=", "name": "a.txt"}), True),
+    (rpc("file.attach", {"session_id": "own-sid", "path": "/etc/hostname"}), False),
+    (rpc("file.attach", {"session_id": "own-sid", "path": "  /etc/hostname ", "data_url": "data:,x"}), False),
+    (rpc("pdf.attach", {"session_id": "own-sid", "content_base64": "JVBER"}), True),
+    (rpc("pdf.attach", {"session_id": "own-sid", "path": "/tmp/a.pdf"}), False),
+    (rpc("approval.respond", {"session_id": "own-sid", "choice": "once"}), True),
+    (rpc("approval.respond", {"session_id": "own-sid", "choice": "session"}), True),
+    (rpc("approval.respond", {"session_id": "own-sid", "choice": "deny"}), True),
+    (rpc("approval.respond", {"session_id": "own-sid"}), True),
+    (rpc("approval.respond", {"session_id": "own-sid", "choice": "always"}), False),
+    (rpc("approval.respond", {"session_id": "own-sid", "choice": "ALWAYS"}), False),
+    (rpc("approval.respond", {"session_id": "own-sid", "choice": None}), False),
+    (rpc("approval.respond", {"session_id": "own-sid", "choice": ["once"]}), False),
+    (rpc("approval.respond", {"session_id": "own-sid", "choice": "once", "all": True}), True),
+    (rpc("session.create", {"cwd": "{home}/resident-chat"}), True),
+    (rpc("session.create", {"cwd": "{home}/resident-chat/sub/.."}), True),
+    (rpc("session.create", {"cwd": "{home}"}), False),
+    (rpc("session.create", {"cwd": "/"}), False),
+    (rpc("session.create", {"cwd": "/tmp/work"}), False),
+    (rpc("session.create", {"cwd": "{home}/resident-chat/.."}), False),
     (rpc("session.create", {"cwd": "~/.hermes/plugins"}), False),
     (rpc("session.create", {"cwd": "{home}/.dashboard-auth-edgecity"}), False),
+    (rpc("session.create", {"profile": "worker"}), False),
+    (rpc("session.create", {"profile": "default"}), True),
+    (rpc("session.create", {"parent_session_id": "abc123"}), True),
+    (rpc("session.create", {"parent_session_id": "adm1"}), False),
     (rpc("prompt.submit", ["not", "a", "dict"]), False),
-    ({"jsonrpc": "2.0", "id": 1, "method": "prompt.submit"}, True),
+    ({"jsonrpc": "2.0", "id": 1, "method": "prompt.submit"}, False),
+    (rpc("prompt.submit", {"session_id": "own-sid", "text": "hi", "_turn_author": {"id": "x"}}), False),
+    (rpc("prompt.submit", {"session_id": "own-sid", "text": "hi", "_hosted_task": {}}), False),
+    (rpc("model.options", {}), True),
+    (rpc("model.options", {"session_id": "admin-sid"}), False),
+    (rpc("ping", {"profile": "other"}), False),
+    (rpc("session.list", {"profile": "default"}), True),
 ])
-def test_parameter_rules_for_a_resident(gateway, home, frame, ok):
+def test_parameter_rules_for_a_resident(gateway, frame, ok):
     if isinstance(frame.get("params"), dict) and "cwd" in frame["params"]:
-        frame["params"]["cwd"] = frame["params"]["cwd"].format(home=home)
+        frame["params"]["cwd"] = frame["params"]["cwd"].format(home=gateway.home)
+        (gateway.home / "resident-chat" / "sub").mkdir(parents=True, exist_ok=True)
     [resp] = gateway.talk("resident", [frame])
-    assert (resp == {"id": 1, "result": "ran"}) is ok and refused(resp) is (not ok)
+    assert ("error" not in resp) is ok, resp
+    if not ok:
+        assert refused(resp) or refused(resp, "not_own_session"), resp
+
+
+# ---- S-new-1: a resident's own chats --------------------------------------------------------------
+
+
+@pytest.mark.parametrize("method,params", [
+    ("session.title", {"session_id": "admin-sid", "title": "x"}),
+    ("session.close", {"session_id": "admin-sid"}),
+    ("session.interrupt", {"session_id": "pty-sid"}),
+    ("session.events.since", {"session_id": "admin-sid"}),
+    ("prompt.submit", {"session_id": "admin-sid", "text": "hi"}),
+    ("approval.pending", {"session_id": "pty-sid"}),
+    ("approval.received", {"session_id": "admin-sid", "request_id": "req-admin-1"}),
+    ("approval.respond", {"session_id": "admin-sid", "request_id": "req-admin-1", "choice": "once"}),
+    # Hermes's fallback (`methods_prompt.py:1206-1233`) looks a request_id up box-wide when the
+    # session id is not a live one: refused before it can run.
+    ("approval.respond", {"session_id": "not-a-live-sid", "request_id": "req-admin-1", "choice": "once"}),
+    ("approval.respond", {"session_id": "own-sid", "request_id": "req-admin-1", "choice": "once"}),
+    ("approval.respond", {"request_id": "req-admin-1", "choice": "deny"}),
+    ("approval.received", {"session_id": "own-sid", "request_id": "req-admin-1"}),
+    ("image.attach_bytes", {"session_id": "admin-sid", "content_base64": "aGk="}),
+    ("image.detach", {"session_id": "admin-sid", "path": "img_1.png"}),
+    ("file.attach", {"session_id": "admin-sid", "data_url": "data:,x"}),
+    ("pdf.attach", {"session_id": "admin-sid", "content_base64": "JVBER"}),
+    ("model.options", {"session_id": "pty-sid"}),
+    ("session.resume", {"session_id": "adm1"}),
+    ("session.resume", {"session_id": "pty1"}),
+    ("session.resume", {"session_id": "cron1"}),
+    ("session.resume", {"session_id": "nope"}),
+    ("session.resume", {"session_id": "abc"}),          # a prefix or a title: Hermes resolves those; the guard does not
+    ("session.resume", {"session_id": "tg1"}),          # the resident's Telegram chat, but a live chat elsewhere holds it
+    ("session.resume", {}),
+    ("session.delete", {"session_id": "adm1"}),
+    ("session.delete", {"session_id": 7}),
+    ("session.title", {"title": "no session named"}),
+    ("session.title", {"session_id": ["own-sid"]}),
+])
+def test_a_resident_touches_no_chat_but_its_own(gateway, method, params):
+    gateway.server._sessions["mirror-sid"]["auth_user_id"] = "edgecity:admin-9"
+    [resp] = gateway.talk("resident", [rpc(method, params)])
+    assert refused(resp, "not_own_session"), resp
+    assert gateway.calls == []
+
+
+def test_a_chat_this_connection_created_is_its_own_and_another_connection_of_the_same_login_too(gateway):
+    sock = ws("/api/ws")
+    out = gateway.talk("resident", [rpc("session.create", {}, rid=1)], sock=sock)
+    assert out[0]["result"]["session_id"] == "new-sid"
+    gateway.server._sessions["new-sid"] = {"session_key": "new-key", "auth_user_id": "edgecity:u1", "attached": {"edgecity:u1"}}
+    out = gateway.talk("resident", [rpc("prompt.submit", {"session_id": "new-sid", "text": "hi"}, rid=2),
+                                    rpc("session.resume", {"session_id": "new-key"}, rid=3)], sock=sock)
+    assert all("error" not in r for r in out), out
+    # A second socket of the same login (a reconnect) owns it by the login Hermes stamped on it.
+    [again] = gateway.talk("resident", [rpc("session.title", {"session_id": "new-sid"})])
+    assert "error" not in again
+    # Another login's socket does not.
+    [other] = gateway.talk("resident", [rpc("session.title", {"session_id": "new-sid"})], user_id="u2")
+    assert refused(other, "not_own_session")
+
+
+def test_a_chat_created_here_without_a_login_is_its_own_only_on_this_connection(gateway):
+    gateway.server._sessions["anon-sid"] = {"session_key": "anon-key", "auth_user_id": None, "attached": {None}}
+    sock = ws("/api/ws")
+    sock.transport = Transport(sock)
+    sock.transport.auth_identity = None
+    gateway.guard._own(sock.transport)["sids"].add("anon-sid")
+    [own] = gateway.talk("resident", [rpc("session.title", {"session_id": "anon-sid"})], sock=sock)
+    assert "error" not in own
+    [pty] = gateway.talk("resident", [rpc("session.title", {"session_id": "pty-sid"})], sock=sock)
+    assert refused(pty, "not_own_session")
+
+
+def test_a_resident_session_create_runs_in_the_resident_chat_directory(gateway):
+    (gateway.home / "AGENTS.md").write_text("# rules\n")
+    [resp] = gateway.talk("resident", [rpc("session.create", {"source": "tool"})])
+    assert "error" not in resp
+    cwd = gateway.server.frames[-1]["params"]["cwd"]
+    assert cwd == os.path.realpath(gateway.home / "resident-chat")
+    assert os.path.islink(os.path.join(cwd, "AGENTS.md"))
+    assert os.path.realpath(os.path.join(cwd, "AGENTS.md")) == os.path.realpath(gateway.home / "AGENTS.md")
+    assert (os.stat(cwd).st_mode & 0o777) == 0o700
+    # An admin's create is untouched.
+    gateway.talk("admin", [rpc("session.create", {"cwd": "/"})])
+    assert gateway.server.frames[-1]["params"] == {"cwd": "/"}
+
+
+def test_a_symlinked_resident_chat_directory_refuses_the_chat(gateway):
+    os.symlink(str(gateway.home), str(gateway.home / "resident-chat"))
+    [resp] = gateway.talk("resident", [rpc("session.create", {})])
+    assert refused(resp) and gateway.calls == []
+    assert gateway.guard.counts()["denied_gateway_cwd"] == 1
+
+
+@pytest.mark.parametrize("text", [
+    "@file:config.yaml", "look at @file:plugins/p1/__init__.py", "@folder:.dashboard-auth-edgecity",
+    "@FILE:config.yaml", "@File:'config.yaml'", "x@file:config.yaml", "@fi​le:config.yaml",
+    "@fi\x1b[200~le:config.yaml", "＠file:config.yaml", "@ file: config.yaml", "@folder:/",
+    "line one\n@file:.env", 7, ["@file:x"],
+])
+def test_a_resident_prompt_with_a_file_reference_is_refused(gateway, text):
+    [resp] = gateway.talk("resident", [rpc("prompt.submit", {"session_id": "own-sid", "text": text})])
+    assert refused(resp) and gateway.calls == []
+
+
+@pytest.mark.parametrize("text", ["hello", "mail me at a@b.c", "@diff", "a file: here", "@url:https://example.org", None])
+def test_a_resident_prompt_without_one_goes_through(gateway, text):
+    params = {"session_id": "own-sid"} if text is None else {"session_id": "own-sid", "text": text}
+    [resp] = gateway.talk("resident", [rpc("prompt.submit", params)])
+    assert "error" not in resp
+
+
+def test_the_file_reference_check_uses_hermess_sanitiser_too(guard):
+    guard.set_prompt_sanitizer(lambda text: text.replace("<x>", ""))
+    assert guard.names_file_reference("@fi<x>le:config.yaml") is True
+    guard.set_prompt_sanitizer(lambda text: (_ for _ in ()).throw(RuntimeError("broken")))
+    assert guard.names_file_reference("hello") is True  # a sanitiser that fails is a refusal
+    guard.set_prompt_sanitizer(None)
+    assert guard.names_file_reference("hello") is False
+
+
+# ---- M-new-1: a resident answers only its own requests, and never "always" ------------------------
+
+
+def answer(rid, result=None, error=None):
+    frame = {"jsonrpc": "2.0", "id": rid}
+    if error is not None:
+        frame["error"] = error
+    else:
+        frame["result"] = result
+    return frame
+
+
+@pytest.mark.parametrize("frame,code", [
+    (answer("srq-own-approval", {"choice": "always"}), "denied_gateway_always"),
+    (answer("srq-own-approval", {"choice": "ALWAYS"}), "denied_gateway_always"),
+    (answer("srq-own-approval", {"choice": "permanent"}), "denied_gateway_always"),
+    (answer("srq-own-approval", {"choice": None}), "denied_gateway_always"),
+    (answer("srq-own-approval", {"choice": ["once"]}), "denied_gateway_always"),
+    (answer("srq-own-approval", "always"), "denied_answer_result"),
+    (answer("srq-own-approval", None), "denied_answer_result"),
+    (answer("srq-admin-approval", {"choice": "once"}), "denied_answer_foreign"),
+    (answer("srq-pty-approval", {"choice": "deny"}), "denied_answer_foreign"),
+    (answer("srq-mirror-approval", {"choice": "once"}), "denied_answer_foreign"),  # own login, not attached here
+    (answer("srq-unknown", {"choice": "once"}), "denied_answer_unknown"),
+    (answer(7, {"choice": "once"}), "denied_answer_unknown"),
+    (answer("srq-unknown", error={"code": -32601}), "denied_answer_unknown"),
+    (answer("srq-own-secret", {"value": "placeholder"}), "denied_answer_kind"),
+    (answer("srq-own-sudo", {"value": "placeholder"}), "denied_answer_kind"),
+    ({"jsonrpc": "2.0", "id": "srq-own-approval"}, "denied_gateway_frame"),
+    ({"jsonrpc": "2.0", "result": {"choice": "once"}}, "denied_gateway_frame"),
+    ({"jsonrpc": "2.0"}, "denied_gateway_frame"),
+])
+def test_a_resident_response_frame_is_refused_unless_it_answers_its_own_request_with_once_session_or_deny(
+        gateway, frame, code):
+    [resp] = gateway.talk("resident", [frame])
+    assert refused(resp) or refused(resp, "not_own_session"), resp
+    assert gateway.calls == [] and gateway.guard.counts()[code] == 1
+
+
+@pytest.mark.parametrize("frame", [
+    answer("srq-own-approval", {"choice": "once"}), answer("srq-own-approval", {"choice": "session"}),
+    answer("srq-own-approval", {"choice": "deny"}), answer("srq-own-approval", {}),
+    answer("srq-own-approval", {"choice": "once", "all": True}),
+    answer("srq-own-approval", error={"code": -32601, "message": "no handler"}),
+    answer("srq-own-clarify", {"answer": "blue"}), answer("srq-own-clarify", {"answers": {"q1": "x"}}),
+])
+def test_a_resident_answers_its_own_approval_with_once_session_or_deny(gateway, frame):
+    [resp] = gateway.talk("resident", [frame])
+    assert resp == {"id": frame["id"], "result": "ran"} and gateway.calls == [None]
+
+
+@pytest.mark.parametrize("params,ok", [
+    ({"id": "srq-own-approval", "result": {"choice": "once"}}, True),
+    ({"id": "srq-own-clarify", "result": {"answer": "x"}}, True),
+    ({"id": "srq-own-approval", "result": {"choice": "always"}}, False),
+    ({"id": "srq-admin-approval", "result": {"choice": "once"}}, False),
+    ({"id": "srq-unknown", "result": {"choice": "once"}}, False),
+    ({"id": "srq-own-secret", "result": {"value": "x"}}, False),
+    ({"id": "srq-own-approval", "result": "always"}, False),
+    ({"id": "srq-own-approval"}, False),
+    ({}, False),
+])
+def test_request_answer_follows_the_rules_of_a_response_frame(gateway, params, ok):
+    [resp] = gateway.talk("resident", [rpc("request.answer", params)])
+    assert ("error" not in resp) is ok, resp
+    assert gateway.calls == (["request.answer"] if ok else [])
+
+
+@pytest.mark.parametrize("role", ["admin", "internal"])
+def test_admin_and_the_pty_child_answer_anything(gateway, role):
+    frames = [answer("srq-own-approval", {"choice": "always"}), answer("srq-admin-approval", {"choice": "always"}),
+              rpc("request.answer", {"id": "srq-x", "result": {"choice": "always"}}, rid=3)]
+    out = gateway.talk(role, frames)
+    assert all(r["result"] == "ran" for r in out) and gateway.calls == [None, None, "request.answer"]
 
 
 @pytest.mark.parametrize("role", ["admin", "internal"])
 def test_admin_and_the_pty_child_call_every_method(gateway, role):
-    names = ["shell.exec", "plugins.manage", "approval.respond", "file.attach"]
-    out = gateway.talk(role, [rpc(m, {"choice": "always", "path": "/x"}, rid=i) for i, m in enumerate(names)])
+    names = ["shell.exec", "plugins.manage", "approval.respond", "file.attach", "session.resume"]
+    out = gateway.talk(role, [rpc(m, {"choice": "always", "path": "/x", "session_id": "admin-sid"}, rid=i)
+                              for i, m in enumerate(names)])
     assert all(r["result"] == "ran" for r in out) and gateway.calls == names
 
 
@@ -1080,18 +1485,13 @@ def test_a_connection_without_a_role_is_a_resident(gateway):
     assert refused(resp) and gateway.calls == []
 
 
-def test_a_clients_answer_to_a_server_request_is_not_a_method_call(gateway):
-    answer = {"jsonrpc": "2.0", "id": "srv-1", "result": {"choice": "once"}}
-    [resp] = gateway.talk("resident", [answer])
-    assert resp["result"] == "ran" and gateway.calls == [None]
-
-
 def test_a_dispatch_with_no_dashboard_socket_behind_it_is_untouched(gateway):
     """The stdio TUI and in-process callers: no context role and no socket transport."""
     assert gateway.server.dispatch(rpc("shell.exec")) == {"id": 1, "result": "ran"}
     stdio = SimpleNamespace(write=lambda obj: True)
     assert gateway.server.dispatch(rpc("shell.exec"), stdio) == {"id": 1, "result": "ran"}
-    assert gateway.calls == ["shell.exec", "shell.exec"]
+    assert gateway.server.dispatch(answer("srq-admin-approval", {"choice": "always"}), stdio)["result"] == "ran"
+    assert gateway.calls == ["shell.exec", "shell.exec", None]
 
 
 def test_a_socket_transport_outside_the_context_is_judged_by_its_socket(gateway):
@@ -1102,7 +1502,9 @@ def test_a_socket_transport_outside_the_context_is_judged_by_its_socket(gateway)
     assert refused(gateway.server.dispatch(rpc("shell.exec"), Transport(resident)))
     assert refused(gateway.server.dispatch(rpc("shell.exec"), Transport(unknown)))
     assert gateway.server.dispatch(rpc("shell.exec"), Transport(admin))["result"] == "ran"
-    assert gateway.server.dispatch(rpc("prompt.submit"), Transport(resident))["result"] == "ran"
+    own = rpc("prompt.submit", {"session_id": "own-sid", "text": "hi"})
+    assert gateway.server.dispatch(own, Transport(resident))["result"] == "ran"
+    assert refused(gateway.server.dispatch(answer("srq-own-approval", {"choice": "always"}), Transport(resident)))
     assert gateway.calls == ["shell.exec", "prompt.submit"]
 
 
@@ -1110,9 +1512,31 @@ def test_an_exception_in_the_method_guard_is_a_refusal(gateway, monkeypatch):
     def boom(*a):
         raise RuntimeError("guard broke")
 
-    monkeypatch.setattr(gateway.guard, "gateway_method_allowed", boom)
-    [resp] = gateway.talk("resident", [rpc("prompt.submit")])
+    monkeypatch.setattr(gateway.guard, "gateway_decision", boom)
+    [resp] = gateway.talk("resident", [rpc("prompt.submit", {"session_id": "own-sid"})])
     assert refused(resp) and gateway.calls == []
+
+
+def test_an_exception_reading_the_live_state_is_a_refusal(gateway):
+    class Exploding(dict):
+        def get(self, *a):
+            raise RuntimeError("table broke")
+
+    gateway.server._sessions = Exploding()
+    [resp] = gateway.talk("resident", [rpc("session.title", {"session_id": "own-sid"})])
+    assert refused(resp) and gateway.calls == []
+
+
+def test_a_failing_stored_lookup_refuses_the_resume(gateway):
+    def boom(*a, **k):
+        raise OSError("state.db unreadable")
+
+    gateway.guard.set_session_lookup(boom)
+    [resp] = gateway.talk("resident", [rpc("session.resume", {"session_id": "abc123"})])
+    assert refused(resp) and gateway.calls == []
+    gateway.guard.set_session_lookup(None)
+    [resp] = gateway.talk("resident", [rpc("session.resume", {"session_id": "abc123"})])
+    assert refused(resp, "not_own_session") and gateway.calls == []
 
 
 def test_the_gateway_wrappers_are_one_layer_and_both_or_neither(gateway):
@@ -1141,6 +1565,103 @@ def test_the_role_reaches_a_long_handler_on_the_pool(gateway):
         gateway.guard._GATEWAY_ROLE.reset(token)
         pool.shutdown()
     assert seen == "resident"
+
+
+# ---- N3: a ticket minted inside a gateway call carries the connection's role ---------------------
+
+
+@pytest.mark.parametrize("gateway_role,request_role,stamped", [
+    ("admin", None, "admin"), ("resident", None, "resident"), ("internal", None, "resident"),
+    ("resident", "admin", "resident"), ("admin", "resident", "admin"), (None, "admin", "admin"),
+    (None, None, "resident"), ("Admin", None, "resident"),
+])
+def test_a_ticket_minted_inside_a_gateway_call_carries_the_connections_role(sockets, gateway_role, request_role, stamped):
+    g, store = sockets.guard, sockets.store
+    t1 = g._GATEWAY_ROLE.set(gateway_role)
+    t2 = g._REQUEST_ROLE.set(request_role)
+    try:
+        ticket = store.mint_ticket(user_id="display:v1", provider="bot-desktop", extra={"viewer_id": "v1"})
+    finally:
+        g._REQUEST_ROLE.reset(t2)
+        g._GATEWAY_ROLE.reset(t1)
+    assert store.tickets[ticket]["edgecity_role"] == stamped and store.tickets[ticket]["viewer_id"] == "v1"
+
+
+def test_an_admin_connection_outside_the_context_mints_as_admin(gateway):
+    """`dispatch_guarded` carries a socket's own role into the call when the handle_ws context is
+    missing, so a ticket minted inside it is stamped with that role."""
+    seen = []
+    g = gateway.guard
+    original = gateway.server.dispatch._edgecity_original
+
+    def dispatch(req, transport=None):
+        seen.append(g.minting_role())
+        return original(req, transport)
+
+    gateway.server.dispatch = dispatch
+    assert g.install_gateway(gateway.server, gateway.ws) is True
+    admin = ws("/api/ws")
+    admin._edgecity_ws_role = "admin"
+    gateway.server.dispatch(rpc("display.observe"), Transport(admin))
+    assert seen == ["admin"] and g._GATEWAY_ROLE.get() is None
+
+
+# ---- S-new-2 / S-new-3: Hermes's agent reads ------------------------------------------------------
+
+
+def file_safety_stand_in():
+    entries = (("mcp-tokens", "d", "f"), ("vault", "d", "f"))
+    return SimpleNamespace(_READ_DENIED_DIRS=entries, get_read_block_error=lambda path: None)
+
+
+def test_the_key_store_joins_the_agent_read_deny_list_once(guard):
+    fs = file_safety_stand_in()
+    assert guard.harden_agent_reads(fs, [".dashboard-auth-edgecity", "/opt/plugin"]) is True
+    assert guard.harden_agent_reads(fs, [".dashboard-auth-edgecity", "/opt/plugin"]) is True
+    names = [entry[0] for entry in fs._READ_DENIED_DIRS]
+    assert names == ["mcp-tokens", "vault", ".dashboard-auth-edgecity", "/opt/plugin"]
+    assert all(len(e) == 3 and all(isinstance(x, str) and x for x in e) for e in fs._READ_DENIED_DIRS)
+    assert guard.installed()["agent_reads"] is True
+
+
+@pytest.mark.parametrize("module", [
+    SimpleNamespace(),
+    SimpleNamespace(_READ_DENIED_DIRS=(("a", "b", "c"),)),                                  # no get_read_block_error
+    SimpleNamespace(_READ_DENIED_DIRS=["mcp-tokens"], get_read_block_error=lambda p: None),  # reshaped
+    SimpleNamespace(_READ_DENIED_DIRS=(("a", "b"),), get_read_block_error=lambda p: None),
+    SimpleNamespace(_READ_DENIED_DIRS=frozenset(), get_read_block_error=lambda p: None),
+])
+def test_a_reshaped_deny_list_is_not_touched_and_reported(guard, module):
+    before = getattr(module, "_READ_DENIED_DIRS", None)
+    assert guard.harden_agent_reads(module, [".dashboard-auth-edgecity"]) is False
+    assert getattr(module, "_READ_DENIED_DIRS", None) == before and guard.installed()["agent_reads"] is False
+
+
+def test_a_reference_to_a_private_path_under_home_is_refused_for_everyone(guard, home, tmp_path):
+    calls = []
+    refs = SimpleNamespace(_ensure_reference_path_allowed=lambda path: calls.append(path))
+    assert guard.harden_reference_reads(refs) is True
+    for private in (home / "config.yaml", home / "plugins" / "p1" / "__init__.py", home / "hooks" / "h.sh",
+                    home / ".dashboard-auth-edgecity", home / ".dashboard-auth-edgecity" / "sessions.sqlite3",
+                    home / "state.db"):
+        with pytest.raises(ValueError):
+            refs._ensure_reference_path_allowed(private)
+    for fine in (home / "resident-chat" / "notes.md", home / "AGENTS.md", tmp_path / "elsewhere" / "plugins" / "x.py"):
+        refs._ensure_reference_path_allowed(fine)
+    assert len(calls) == 9 and guard.counts()["denied_context_reference"] == 6
+    assert guard.harden_reference_reads(refs) is True
+    assert refs._ensure_reference_path_allowed._edgecity_original is not None
+    assert guard.harden_reference_reads(SimpleNamespace()) is False
+
+
+def test_hermess_own_refusal_still_comes_first(guard, home):
+    def hermes_refuses(path):
+        raise ValueError("path is a sensitive credential file")
+
+    refs = SimpleNamespace(_ensure_reference_path_allowed=hermes_refuses)
+    guard.harden_reference_reads(refs)
+    with pytest.raises(ValueError, match="sensitive credential"):
+        refs._ensure_reference_path_allowed(home / "notes.md")
 
 
 # ---- lazy seams and Hermes's own read guard ------------------------------------------------------
@@ -1254,6 +1775,7 @@ def hermes(load_plugin, web_server, tmp_path, monkeypatch):
     from hermes_cli.dashboard_auth import middleware, registry, token_auth, ws_tickets
     from hermes_cli.web_routers import dashboard_ui, files
     from tui_gateway import server as tui_server, ws as tui_ws
+    from agent import context_references, file_safety
 
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     monkeypatch.setenv("TENANT_ID", TENANT)
@@ -1263,7 +1785,8 @@ def hermes(load_plugin, web_server, tmp_path, monkeypatch):
     for module, name in ((middleware, "gated_auth_middleware"), (token_auth, "token_auth_middleware"),
                          (ws_tickets, "mint_ticket"), (ws_tickets, "consume_ticket"),
                          (web_server_chat, "_ws_auth_reason"), (tui_server, "dispatch"), (tui_ws, "handle_ws"),
-                         (files, "_SENSITIVE_MANAGED_DIR_NAMES"), (web_server, "_DASHBOARD_EMBEDDED_CHAT_ENABLED")):
+                         (files, "_SENSITIVE_MANAGED_DIR_NAMES"), (web_server, "_DASHBOARD_EMBEDDED_CHAT_ENABLED"),
+                         (file_safety, "_READ_DENIED_DIRS"), (context_references, "_ensure_reference_path_allowed")):
         monkeypatch.setattr(module, name, _unwrapped(getattr(module, name)))
     monkeypatch.setattr(web_server.app.state, "auth_required", True, raising=False)
     # Route bodies an admin reaches: stubbed, so nothing is cloned, installed or rescanned.
@@ -1285,7 +1808,8 @@ def hermes(load_plugin, web_server, tmp_path, monkeypatch):
     yield SimpleNamespace(plugin=plugin, guard=plugin._resident_guard, ctx=ctx, registry=registry,
                           token_auth=token_auth, middleware=middleware, ws_tickets=ws_tickets, chat=web_server_chat,
                           tui_server=tui_server, tui_ws=tui_ws, files=files, home=tmp_path,
-                          app=web_server.app, web_server=web_server, calls=calls,
+                          app=web_server.app, web_server=web_server, calls=calls, file_safety=file_safety,
+                          context_references=context_references,
                           client=lambda: TestClient(web_server.app))
     registry.clear_providers()
     token_auth.clear_token_routes()
@@ -1340,7 +1864,8 @@ SEAMS = (("middleware", "gated_auth_middleware"), ("ws_tickets", "mint_ticket"),
 def test_hermes_register_installs_every_seam_once(hermes):
     g = hermes.guard
     assert {k: v for k, v in g.installed().items() if k != "files"} == {"http": True, "tickets": True, "ws": True,
-                                                                         "gateway": True}
+                                                                         "gateway": True, "agent_reads": True,
+                                                                         "references": True}
     originals = {name: getattr(getattr(hermes, mod), name)._edgecity_original for mod, name in SEAMS}
     for name, original in originals.items():
         assert not getattr(original, "_edgecity_resident_guard", False), name
@@ -1702,3 +2227,506 @@ def test_hermes_loopback_mode_is_the_resident_list(hermes, monkeypatch):
     with client.websocket_connect(f"/api/ws?token={hermes.web_server._SESSION_TOKEN}") as sock:
         sock.receive_json()
         assert rpc_call(sock, "shell.exec", {"command": "echo x"})["error"]["code"] == 4031
+
+
+# ==================================================================================================
+# Fix round 2 (SEC1-refute2.md): the refuter's probes and the hostile walk, against the real app
+# ==================================================================================================
+
+
+def ready(sock):
+    frame = sock.receive_json()
+    assert frame["params"]["type"] == "gateway.ready", frame
+    return frame
+
+
+def create(sock, rid=2, params=None):
+    frame = rpc_call(sock, "session.create", params or {}, rid=rid)
+    assert "result" in frame, frame
+    return frame["result"]["session_id"]
+
+
+def answers_requests(sock, rid=90):
+    assert "result" in rpc_call(sock, "client.capabilities", {"server_requests": True}, rid=rid)
+
+
+def queue_entry(session_key, request_id):
+    """A pending approval in Hermes's own queue (`tools.approval._gateway_queues`), as the agent's
+    dangerous-command wait leaves it."""
+    import threading
+
+    import tools.approval as approval
+
+    entry = SimpleNamespace(data={"request_id": request_id}, result=None, event=threading.Event(),
+                            reason=None, settle=None, cancelled=None)
+    with approval._lock:
+        approval._gateway_queues.setdefault(session_key, []).append(entry)
+    return entry
+
+
+def raise_approval(hermes, sock, sid, request_id):
+    """The agent asks: Hermes's real `_emit_approval_request` sends an `approval` server request to
+    the chat's socket. Returns the queue entry and the request frame the client received."""
+    import threading
+
+    key = hermes.tui_server._sessions[sid]["session_key"]
+    entry = queue_entry(key, request_id)
+    threading.Thread(target=hermes.tui_server._emit_approval_request,
+                     args=(sid, {"request_id": request_id, "command": "print(1)", "description": "probe"})).start()
+    for _ in range(50):
+        frame = sock.receive_json()
+        if frame.get("method") == "approval":
+            return entry, frame
+    raise AssertionError("no approval frame")
+
+
+def frame_reply(sock, frame, sync_rid):
+    """Send a raw frame; return the reply carrying its id, or None when Hermes answered nothing
+    (a ping afterwards: frames are dispatched in order)."""
+    sock.send_json(frame)
+    sock.send_json({"jsonrpc": "2.0", "id": sync_rid, "method": "ping", "params": {}})
+    reply = None
+    while True:
+        got = sock.receive_json()
+        if got.get("id") == sync_rid:
+            return reply
+        if "id" in frame and got.get("id") == frame["id"] and "method" not in got:
+            reply = got
+
+
+def code_of(frame):
+    return (frame or {}).get("error", {}).get("code")
+
+
+def persist_like_the_waiter(approval, key, entry):
+    """What `tools.approval._human_decision` does with the answer once the wait ends
+    (`approval.py:830`): `session`/`always` persist; `always` writes config.yaml."""
+    if entry.result:
+        approval._persist_choice(key, entry.result, [("probe-pattern", "probe", False)])
+
+
+@pytest.fixture
+def config_writes(monkeypatch):
+    """Every config.yaml write Hermes's approval code makes (`hermes_cli.config.save_config`, imported
+    at call time by `save_permanent_allowlist`, `approval.py:448-470`), recorded instead of written."""
+    from hermes_cli import config
+
+    writes = []
+    monkeypatch.setattr(config, "save_config", lambda cfg, *a, **k: writes.append(dict(cfg)))
+    return writes
+
+
+def allowlists(writes):
+    return [w.get("command_allowlist") for w in writes if "command_allowlist" in w]
+
+
+def test_hermes_m_new_1_an_owner_cannot_say_always_by_response_frame_or_request_answer(hermes, config_writes):
+    import tools.approval as approval
+    from tui_gateway import server_requests
+
+    owner = as_role(hermes, "owner")
+    with owner.websocket_connect(f"/api/ws?ticket={ticket(owner)}") as sock:
+        ready(sock)
+        answers_requests(sock)
+        sid = create(sock)
+        key = hermes.tui_server._sessions[sid]["session_key"]
+        assert code_of(rpc_call(sock, "approval.respond", {"session_id": sid, "choice": "always"}, rid=3)) == 4031
+        entry, frame = raise_approval(hermes, sock, sid, "req-probe-1")
+        assert "always" in frame["params"]["choices"]  # Hermes offers it
+        for i, result in enumerate(({"choice": "always"}, {"choice": "ALWAYS"}, {"choice": None},
+                                    {"choice": "permanent"}, "always")):
+            reply = frame_reply(sock, {"jsonrpc": "2.0", "id": frame["id"], "result": result}, 10 + i)
+            assert code_of(reply) == 4031, (result, reply)
+            via = rpc_call(sock, "request.answer", {"id": frame["id"], "result": result}, rid=20 + i)
+            assert code_of(via) == 4031, (result, via)
+        assert entry.result is None and frame["id"] in server_requests._open  # still waiting
+        # Once is fine: the entry resolves, nothing persists.
+        assert frame_reply(sock, {"jsonrpc": "2.0", "id": frame["id"], "result": {"choice": "once"}}, 30) is None
+        assert entry.result == "once" and frame["id"] not in server_requests._open
+        persist_like_the_waiter(approval, key, entry)
+        # And session, through request.answer.
+        entry2, frame2 = raise_approval(hermes, sock, sid, "req-probe-2")
+        assert rpc_call(sock, "request.answer", {"id": frame2["id"], "result": {"choice": "session"}}, rid=31)["result"] == {"status": "ok"}
+        assert entry2.result == "session"
+        persist_like_the_waiter(approval, key, entry2)
+    assert allowlists(config_writes) == [] and read_yaml(hermes.home / "config.yaml") is None
+    assert hermes.guard.counts()["denied_gateway_always"] >= 9
+
+
+def test_hermes_m_new_1_an_admin_still_says_always(hermes, config_writes):
+    """The positive control: the same frame from an admin resolves `always`, and the waiter's
+    persistence writes `command_allowlist`, the write a resident can no longer cause."""
+    import tools.approval as approval
+
+    admin = as_role(hermes, "admin")
+    with admin.websocket_connect(f"/api/ws?ticket={ticket(admin)}") as sock:
+        ready(sock)
+        answers_requests(sock)
+        sid = create(sock)
+        key = hermes.tui_server._sessions[sid]["session_key"]
+        entry, frame = raise_approval(hermes, sock, sid, "req-admin-always")
+        assert frame_reply(sock, {"jsonrpc": "2.0", "id": frame["id"], "result": {"choice": "always"}}, 10) is None
+        assert entry.result == "always"
+        persist_like_the_waiter(approval, key, entry)
+    assert allowlists(config_writes) == [["probe-pattern"]]
+
+
+def seed_rows(hermes):
+    """Stored sessions as Hermes writes them: the owner's dashboard chat, its Telegram chat, a
+    landing admin's dashboard chat, the admin terminal's and cron's."""
+    from hermes_state import SessionDB
+
+    db = SessionDB(db_path=hermes.home / "state.db")
+    try:
+        for sid, source, user in (("own-chat", "tool", "edgecity:owner-id"), ("tg-chat", "telegram", "5550001"),
+                                  ("admin-chat", "tool", "edgecity:admin-id"), ("pty-chat", "tui", None),
+                                  ("cron-chat", "cron", None)):
+            db.create_session(session_id=sid, source=source, user_id=user)
+    finally:
+        db.close()
+
+
+def test_hermes_s_new_1_an_owner_cannot_touch_an_admins_chat(hermes):
+    seed_rows(hermes)
+    admin, owner = as_role(hermes, "admin"), as_role(hermes, "owner")
+    with admin.websocket_connect(f"/api/ws?ticket={ticket(admin)}") as asock:
+        ready(asock)
+        answers_requests(asock)
+        asid = create(asock)
+        akey = hermes.tui_server._sessions[asid]["session_key"]
+        entry, aframe = raise_approval(hermes, asock, asid, "req-admin-1")
+        with owner.websocket_connect(f"/api/ws?ticket={ticket(owner)}") as osock:
+            ready(osock)
+            osid = create(osock)
+            probes = [
+                ("approval.respond", {"session_id": "not-a-live-sid", "request_id": "req-admin-1", "choice": "once"}),
+                ("approval.respond", {"session_id": osid, "request_id": "req-admin-1", "choice": "once"}),
+                ("approval.respond", {"session_id": asid, "choice": "deny"}),
+                ("approval.pending", {"session_id": asid}),
+                ("approval.received", {"session_id": asid, "request_id": "req-admin-1"}),
+                ("session.interrupt", {"session_id": asid}),
+                ("session.close", {"session_id": asid}),
+                ("session.title", {"session_id": asid, "title": "x"}),
+                ("session.events.since", {"session_id": asid}),
+                ("prompt.submit", {"session_id": asid, "text": "hi"}),
+                ("image.detach", {"session_id": asid, "path": "x.png"}),
+                ("model.options", {"session_id": asid}),
+                ("request.answer", {"id": aframe["id"], "result": {"choice": "once"}}),
+                ("session.resume", {"session_id": akey}),
+                ("session.resume", {"session_id": "admin-chat"}),
+                ("session.resume", {"session_id": "pty-chat"}),
+                ("session.resume", {"session_id": "cron-chat"}),
+                ("session.resume", {"session_id": "admin"}),  # a prefix or a title
+                ("session.delete", {"session_id": "admin-chat"}),
+                ("session.create", {"parent_session_id": "admin-chat"}),
+            ]
+            for i, (method, params) in enumerate(probes):
+                frame = rpc_call(osock, method, params, rid=100 + i)
+                assert code_of(frame) == 4031, (method, params, frame)
+            reply = frame_reply(osock, {"jsonrpc": "2.0", "id": aframe["id"], "result": {"choice": "once"}}, 200)
+            assert code_of(reply) == 4031 and reply["error"]["data"]["reason"] == "not_own_session"
+            # Its own chats: the live one, its stored ones and its Telegram chat.
+            assert code_of(rpc_call(osock, "approval.pending", {"session_id": osid}, rid=201)) != 4031
+            for i, stored in enumerate(("own-chat", "tg-chat")):
+                assert code_of(rpc_call(osock, "session.resume", {"session_id": stored}, rid=202 + i)) != 4031, stored
+        assert entry.result is None and asid in hermes.tui_server._sessions
+        assert hermes.guard.counts()["denied_gateway_session"] >= 18
+
+
+def test_hermes_s_new_1_session_routes_answer_an_owner_for_its_own_sessions_only(hermes):
+    seed_rows(hermes)
+    owner, admin = as_role(hermes, "owner"), as_role(hermes, "admin")
+    for sid in ("admin-chat", "pty-chat", "cron-chat", "nope"):
+        for method, suffix in (("GET", "/messages"), ("GET", "/export"), ("GET", ""), ("GET", "/timeline"),
+                               ("PATCH", ""), ("DELETE", "")):
+            resp = owner.request(method, f"/api/sessions/{sid}{suffix}", json={"title": "x"})
+            assert resp.status_code == 403 and resp.json()["reason"] == "not_own_session", (sid, method, suffix)
+    for sid in ("own-chat", "tg-chat", "own-"):
+        assert owner.get(f"/api/sessions/{sid}/messages").status_code == 200, sid
+    for sid in ("admin-chat", "pty-chat", "own-chat"):
+        assert admin.get(f"/api/sessions/{sid}/messages").status_code == 200, sid
+    for method, target in (("GET", "/api/sessions/search?q=probe"), ("POST", "/api/sessions/bulk-delete"),
+                           ("POST", "/api/sessions/prune"), ("DELETE", "/api/sessions/empty")):
+        assert admin_only(owner.request(method, target, json={"ids": ["admin-chat"], "older_than_days": 1})), target
+    assert admin.get("/api/sessions/search", params={"q": "probe"}).status_code == 200
+    from hermes_state import SessionDB
+
+    db = SessionDB(db_path=hermes.home / "state.db")
+    try:
+        assert db.get_session("admin-chat") is not None and db.get_session("pty-chat") is not None
+    finally:
+        db.close()
+
+
+@pytest.fixture
+def quiet_turns(hermes, monkeypatch):
+    """prompt.submit accepted without running a turn (the test app has no model provider, so the
+    agent build fails fast and the turn would only report that)."""
+    monkeypatch.setattr(hermes.tui_server, "_run_after_agent_ready", lambda *a, **k: None)
+    return hermes
+
+
+FILE_REF_PROMPTS = ("@file:config.yaml", "please read @file:plugins/p1/__init__.py", "@folder:.dashboard-auth-edgecity",
+                    "@FILE:config.yaml", "@fi​le:config.yaml", "@fi\x1b[200~le:config.yaml",
+                    "@file:hooks/h.sh", "@file:'.dashboard-auth-edgecity/sessions.sqlite3'")
+
+
+def plant_private_files(home):
+    (home / "config.yaml").write_text("probe_key: example-not-a-key\n")
+    (home / "plugins" / "p1").mkdir(parents=True, exist_ok=True)
+    (home / "plugins" / "p1" / "__init__.py").write_text("print('example-not-a-key')\n")
+    (home / "hooks").mkdir(exist_ok=True)
+    (home / "hooks" / "h.sh").write_text("echo example-not-a-key\n")
+    (home / ".env").write_text("X=example-not-a-key\n")
+    (home / "AGENTS.md").write_text("# village rules\n")
+
+
+def test_hermes_s_new_3_an_owner_chat_runs_in_the_resident_directory_and_sends_no_file_references(quiet_turns):
+    hermes = quiet_turns
+    plant_private_files(hermes.home)
+    owner = as_role(hermes, "owner")
+    resident_dir = os.path.realpath(hermes.home / "resident-chat")
+    with owner.websocket_connect(f"/api/ws?ticket={ticket(owner)}") as sock:
+        ready(sock)
+        sid = create(sock, params={"source": "tool", "close_on_disconnect": True})
+        assert hermes.tui_server._sessions[sid]["cwd"] == resident_dir
+        assert os.path.realpath(os.path.join(resident_dir, "AGENTS.md")) == os.path.realpath(hermes.home / "AGENTS.md")
+        for i, cwd in enumerate((str(hermes.home), "/", str(hermes.home / "plugins"),
+                                 str(hermes.home / ".dashboard-auth-edgecity"), resident_dir + "/..", "~")):
+            assert code_of(rpc_call(sock, "session.create", {"cwd": cwd}, rid=10 + i)) == 4031, cwd
+        for i, text in enumerate(FILE_REF_PROMPTS):
+            assert code_of(rpc_call(sock, "prompt.submit", {"session_id": sid, "text": text}, rid=30 + i)) == 4031, text
+        ok = rpc_call(sock, "prompt.submit", {"session_id": sid, "text": "hello there"}, rid=60)
+        assert code_of(ok) is None, ok
+    admin = as_role(hermes, "admin")
+    with admin.websocket_connect(f"/api/ws?ticket={ticket(admin)}") as sock:
+        ready(sock)
+        asid = create(sock, params={"cwd": str(hermes.home)})
+        assert hermes.tui_server._sessions[asid]["cwd"] == str(hermes.home)
+
+
+def test_hermes_s_new_3_hermess_own_expansion_inlines_no_private_file(hermes):
+    """`agent.context_references.preprocess_context_references`, as `prompt_turn.py:599` calls it
+    (`cwd = allowed_root = the chat's cwd`): from the resident directory nothing private is in
+    reach, and even with HERMES_HOME as the cwd (the messaging gateway's `terminal.cwd` on village
+    boxes, or a workspace the agent moved) config.yaml, plugin code, hooks and the key store are
+    refused by the plugin's check."""
+    from agent.context_references import preprocess_context_references
+
+    plant_private_files(hermes.home)
+    resident_dir = hermes.guard.resident_cwd()
+    for cwd in (resident_dir, str(hermes.home)):
+        for ref in ("@file:config.yaml", "@file:../config.yaml", "@file:plugins/p1/__init__.py",
+                    "@file:../plugins/p1/__init__.py", "@file:hooks/h.sh", "@folder:.dashboard-auth-edgecity",
+                    "@folder:../.dashboard-auth-edgecity", "@file:.dashboard-auth-edgecity/sessions.sqlite3",
+                    "@file:.env", "@folder:plugins"):
+            ctx = preprocess_context_references(f"look {ref}", cwd=cwd, allowed_root=cwd, context_length=200000)
+            message = ctx.message or ""
+            assert "example-not-a-key" not in message and "sessions.sqlite3" not in message.replace(ref, ""), (cwd, ref)
+            assert "print(" not in message, (cwd, ref)
+    assert hermes.guard.counts().get("denied_context_reference", 0) >= 5
+    ok = preprocess_context_references("look @file:AGENTS.md", cwd=str(hermes.home), allowed_root=str(hermes.home),
+                                       context_length=200000)
+    assert "village rules" in (ok.message or "")
+
+
+def test_hermes_s_new_2_the_key_store_and_plugin_code_are_on_the_agent_read_deny_list(hermes):
+    from agent.file_safety import get_read_block_error
+
+    store = hermes.home / ".dashboard-auth-edgecity" / "sessions.sqlite3"
+    assert store.exists()
+    assert get_read_block_error(str(store)) is not None
+    assert get_read_block_error(str(store.parent)) is not None
+    assert get_read_block_error(str(Path(hermes.plugin.__file__))) is not None
+    assert get_read_block_error(str(hermes.home / ".env")) is not None  # Hermes's own, unchanged
+    assert get_read_block_error(str(hermes.home / "resident-chat" / "notes.md")) is None
+    names = [entry[0] for entry in hermes.file_safety._READ_DENIED_DIRS]
+    assert names.count(".dashboard-auth-edgecity") == 1
+    hermes.plugin.register(Ctx())
+    assert [entry[0] for entry in hermes.file_safety._READ_DENIED_DIRS] == names
+
+
+@pytest.mark.parametrize("break_it", ["delete", "reshape", "no_reader"])
+def test_hermes_without_the_agent_read_deny_list_the_plugin_refuses_to_load(load_plugin, web_server, tmp_path,
+                                                                             monkeypatch, break_it):
+    from agent import file_safety
+    from hermes_cli.dashboard_auth import registry
+
+    plugin = load_plugin()
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("TENANT_ID", TENANT)
+    monkeypatch.setenv("CONTROL_PLANE_URL", "http://127.0.0.1:9")
+    if break_it == "delete":
+        monkeypatch.delattr(file_safety, "_READ_DENIED_DIRS", raising=False)
+    elif break_it == "reshape":
+        monkeypatch.setattr(file_safety, "_READ_DENIED_DIRS", ["mcp-tokens", "vault"])
+    else:
+        monkeypatch.delattr(file_safety, "get_read_block_error", raising=False)
+    registry.clear_providers()
+    with pytest.raises(plugin.ResidentGuardNotInstalled):
+        plugin.register(Ctx())
+    assert registry.get_provider("edgecity") is None
+
+
+def test_hermes_n3_an_admins_display_ticket_is_an_admins(hermes, monkeypatch):
+    from tools.bot_desktop import runtime
+
+    monkeypatch.setattr(runtime, "rfb_socket_path", lambda *a, **k: hermes.home / "probe-rfb.sock")
+    admin, owner = as_role(hermes, "admin"), as_role(hermes, "owner")
+    with admin.websocket_connect(f"/api/ws?ticket={ticket(admin)}") as sock:
+        ready(sock)
+        frame = rpc_call(sock, "display.observe", {}, rid=3)
+        assert "result" in frame, frame
+        info = hermes.ws_tickets.consume_ticket(frame["result"]["ticket"])
+    assert info["edgecity_role"] == "admin" and info["provider"] == "bot-desktop"
+    assert hermes.guard.counts().get("denied_display_ticket", 0) == 0
+    with owner.websocket_connect(f"/api/ws?ticket={ticket(owner)}") as sock:
+        ready(sock)
+        assert code_of(rpc_call(sock, "display.observe", {}, rid=3)) == 4031
+
+
+@pytest.mark.parametrize("edgecity_configured", [True, False])
+def test_hermes_n_b_the_guard_is_on_whichever_login_provider_is_configured(hermes, monkeypatch, edgecity_configured):
+    """With Hermes's bundled username/password provider configured beside it (or instead of the
+    edgecity provider, which then fails to construct), the plugin still installs the guard, and a
+    basic-auth session is a resident."""
+    from plugins.dashboard_auth import basic
+
+    monkeypatch.setenv("HERMES_DASHBOARD_BASIC_AUTH_USERNAME", "probe-user")
+    monkeypatch.setenv("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD", "placeholder-not-a-secret")
+    if not edgecity_configured:
+        monkeypatch.delenv("TENANT_ID", raising=False)
+    hermes.registry.clear_providers()
+    basic.register(Ctx())
+    hermes.plugin.register(Ctx())
+    assert (hermes.registry.get_provider("edgecity") is not None) is edgecity_configured
+    g = hermes.guard
+    assert all(g.installed()[k] for k in ("http", "tickets", "ws", "gateway", "agent_reads", "references"))
+    assert getattr(hermes.middleware.gated_auth_middleware, "_edgecity_resident_guard", False)
+    session = hermes.registry.get_provider("basic").complete_password_login(
+        username="probe-user", password="placeholder-not-a-secret")
+    client = hermes.client()
+    client.cookies.set("hermes_session_at", session.access_token)
+    assert admin_only(client.put("/api/config", json={"config": {"plugins": {"disabled": ["av-approval"]}}}))
+    assert client.get("/api/sessions").status_code == 200
+    assert ws_refused(client, f"/api/console?ticket={ticket(client)}") == 4401
+    with client.websocket_connect(f"/api/ws?ticket={ticket(client)}") as sock:
+        ready(sock)
+        assert code_of(rpc_call(sock, "plugins.manage", {"action": "list"})) == 4031
+
+
+def test_hermes_slash_confirm_opt_outs_are_not_a_residents(quiet_turns):
+    """verify@b2's addition: `approvals.mcp_reload_confirm` / `destructive_slash_confirm` are
+    persisted by `reload.mcp {always}` (`methods_tools.py:320-327`) and by the slash commands,
+    none of which a resident may call. `prompt.submit` text is a prompt, never a slash command
+    (`methods_prompt.py:564-700`). The messaging gateway's own persistence
+    (`gateway/run_busy.py:1319-1325`, `gateway/slash_commands.py:1080-1084`) is Telegram's, not
+    the dashboard's."""
+    hermes = quiet_turns
+    owner = as_role(hermes, "owner")
+    with owner.websocket_connect(f"/api/ws?ticket={ticket(owner)}") as sock:
+        ready(sock)
+        sid = create(sock)
+        for i, (method, params) in enumerate((
+                ("reload.mcp", {"session_id": sid, "confirm": True, "always": True}),
+                ("slash.exec", {"session_id": sid, "command": "/reload-mcp always"}),
+                ("slash.exec", {"session_id": sid, "command": "/clear"}),
+                ("command.dispatch", {"session_id": sid, "name": "reload-mcp", "arg": "always"}),
+                ("config.set", {"key": "approvals.mcp_reload_confirm", "value": "false"}))):
+            assert code_of(rpc_call(sock, method, params, rid=10 + i)) == 4031, method
+        for i, text in enumerate(("/reload-mcp always", "/clear", "/new")):
+            assert code_of(rpc_call(sock, "prompt.submit", {"session_id": sid, "text": text}, rid=20 + i)) is None
+    approvals = (read_yaml(hermes.home / "config.yaml") or {}).get("approvals") or {}
+    assert "mcp_reload_confirm" not in approvals and "destructive_slash_confirm" not in approvals
+
+
+# ---- the hostile walk: every listed method, every frame shape, owner refused, admin served -------
+
+
+def contract_params(method):
+    from tui_gateway.contracts import registry
+
+    contract = registry.METHODS.get(method)
+    return set((contract.params.model_json_schema().get("properties") or {}) if contract else ())
+
+
+def test_hermes_every_listed_method_refuses_hostile_parameters_to_an_owner_and_serves_an_admin(quiet_turns):
+    """Each method on the resident list, sent by an owner with each hostile parameter its contract
+    takes (another user's chat, a foreign request id, `always`, `@file:`, cwd `/`, a private path,
+    another profile, a gateway-internal parameter): refused, 4031. The same frames from an admin
+    are not refused by the guard. Then every method-less frame shape. Every listed method takes at
+    least one hostile parameter or none at all (the handshake)."""
+    hermes = quiet_turns
+    seed_rows(hermes)
+    g = hermes.guard
+    admin, owner = as_role(hermes, "admin"), as_role(hermes, "owner")
+    with admin.websocket_connect(f"/api/ws?ticket={ticket(admin)}") as asock, \
+            owner.websocket_connect(f"/api/ws?ticket={ticket(owner)}") as osock:
+        ready(asock)
+        ready(osock)
+        answers_requests(asock)
+        answers_requests(osock, rid=91)
+        asid, osid = create(asock), create(osock)
+        _entry, aframe = raise_approval(hermes, asock, asid, "req-walk-admin")
+        _own_entry, oframe = raise_approval(hermes, osock, osid, "req-walk-own")
+        hostile = {
+            "session_id": asid, "request_id": "req-walk-admin", "choice": "always", "text": "@file:config.yaml",
+            "cwd": "/", "parent_session_id": "admin-chat", "path": str(hermes.home / ".env"), "profile": "worker",
+            "_turn_author": {"id": "x"},
+        }
+        stored = {"session.resume": "admin-chat", "session.delete": "pty-chat"}
+        base = {"session_id": osid}
+        walked, rid = {}, 1000
+        for method in sorted(g.RESIDENT_GATEWAY_METHODS):
+            takes = contract_params(method)
+            cases = []
+            if method == "request.answer":
+                cases = [{"id": aframe["id"], "result": {"choice": "once"}},
+                         {"id": oframe["id"], "result": {"choice": "always"}},
+                         {"id": "srq-unknown", "result": {"choice": "once"}}]
+            else:
+                for key, value in hostile.items():
+                    if key not in takes:
+                        continue
+                    if key == "session_id" and method in stored:
+                        value = stored[method]
+                    params = {**(base if "session_id" in takes and method not in stored else {}), key: value}
+                    if key == "request_id" or key == "choice":
+                        params["session_id"] = osid
+                    cases.append(params)
+            walked[method] = len(cases)
+            for params in cases:
+                rid += 1
+                frame = rpc_call(osock, method, params, rid=rid)
+                assert code_of(frame) == 4031, (method, params, frame)
+        assert {m for m, n in walked.items() if n == 0} == {"ping", "gateway.capabilities", "client.capabilities"}
+        # The admin's socket: the same hostile frames are the admin's to send (the owner's chat is
+        # the "other" chat here). Hermes may still answer an error of its own; never the guard's.
+        hostile_admin = {**hostile, "session_id": osid}
+        for method in sorted(g.RESIDENT_GATEWAY_METHODS):
+            if method in ("session.close", "session.delete", "request.answer"):
+                continue
+            takes = contract_params(method)
+            for key, value in hostile_admin.items():
+                if key not in takes or key == "_turn_author":
+                    continue
+                rid += 1
+                frame = rpc_call(asock, method, {"session_id": asid, key: value} if key != "session_id"
+                                 else {key: value}, rid=rid)
+                assert code_of(frame) != 4031, (method, key, frame)
+        # Method-less frames.
+        shapes = [{"jsonrpc": "2.0", "id": aframe["id"], "result": {"choice": "once"}},
+                  {"jsonrpc": "2.0", "id": oframe["id"], "result": {"choice": "always"}},
+                  {"jsonrpc": "2.0", "id": oframe["id"], "result": "always"},
+                  {"jsonrpc": "2.0", "id": "srq-unknown", "result": {"choice": "once"}},
+                  {"jsonrpc": "2.0", "id": "srq-unknown", "error": {"code": -32601, "message": "x"}},
+                  {"jsonrpc": "2.0", "id": "srq-noresult"},
+                  {"jsonrpc": "2.0", "result": {"choice": "once"}}]
+        for i, shape in enumerate(shapes):
+            reply = frame_reply(osock, shape, 5000 + i)
+            if "id" in shape:
+                assert code_of(reply) == 4031, (shape, reply)
+        assert _entry.result is None and _own_entry.result is None
+        for i, shape in enumerate(shapes[:2]):
+            assert code_of(frame_reply(asock, shape, 6000 + i)) is None, shape
+        assert _entry.result == "once"

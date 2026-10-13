@@ -552,11 +552,73 @@ class ResidentGuardNotInstalled(RuntimeError):
 
 
 def _gateway_modules():
-    """`tui_gateway.server` and `tui_gateway.ws`, loaded the first time a resident opens the chat
-    socket (in the dashboard, `start_server` has imported `tui_gateway.server` by then)."""
-    from tui_gateway import server, ws
+    """`tui_gateway.server`, `tui_gateway.ws` and `tui_gateway.server_requests`, loaded the first
+    time a resident opens the chat socket (in the dashboard, `start_server` has imported
+    `tui_gateway.server` by then)."""
+    from tui_gateway import server, server_requests, ws
 
-    return server, ws
+    return server, ws, server_requests
+
+
+def _stored_session(session_id, profile=None, *, prefix):
+    """One stored session's owner fields, read the way the session routes read it
+    (`web_routers/sessions.py`: the profile's store, read only; an exact id, else, with `prefix`, the
+    one unambiguous prefix match). None when there is no such session. Raises on a store failure
+    (the guard then refuses)."""
+    from hermes_cli.web_server_sessions import _open_session_db_for_profile
+
+    db = _open_session_db_for_profile(profile or None, read_only=True)
+    try:
+        if prefix:
+            resolved = db.resolve_session_id(session_id)
+        else:
+            resolved = session_id if db.get_session(session_id) else None
+        row = db.get_session(resolved) if resolved else None
+    finally:
+        db.close()
+    if not row:
+        return None
+    return {"id": row.get("id"), "user_id": row.get("user_id"), "source": row.get("source")}
+
+
+def _prompt_sanitizer(text):
+    from hermes_cli.input_sanitize import sanitize_user_prompt_text
+
+    return sanitize_user_prompt_text(text)
+
+
+#: Where this plugin's own files are, for the agent read deny-list.
+_PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
+#: This plugin's private directory under HERMES_HOME: the signing key and the session store.
+_PRIVATE_DIR_NAME = ".dashboard-auth-edgecity"
+
+
+def _harden_agent_reads() -> None:
+    """S-new-2, the cheap half: the key store and this plugin's own directory join Hermes's agent
+    read deny-list (`agent.file_safety._READ_DENIED_DIRS`), so read_file and `@file:` refuse them.
+    Required: if the list is gone or reshaped, the plugin refuses to load, as for the HTTP seam.
+    The agent's terminal can still read the store; moving the key out of its reach is SEC-2."""
+    guard = _resident_guard
+    try:
+        from agent import file_safety
+
+        ok = guard.harden_agent_reads(file_safety, [_PRIVATE_DIR_NAME, _PLUGIN_DIR])
+    except Exception as exc:  # noqa: BLE001
+        _log.error("dashboard-auth-edgecity: agent read deny-list NOT extended (%s); refusing to load",
+                   type(exc).__name__)
+        raise ResidentGuardNotInstalled(type(exc).__name__) from exc
+    if not ok:
+        _log.error("dashboard-auth-edgecity: agent read deny-list NOT extended (seam_missing); refusing to load")
+        raise ResidentGuardNotInstalled("agent_reads_seam_missing")
+    try:
+        from agent import context_references
+
+        refs_ok = guard.harden_reference_reads(context_references)
+    except Exception:  # noqa: BLE001
+        refs_ok = False
+    if not refs_ok:
+        # The gateway still refuses a resident's @file:/@folder: tokens and pins the chat's cwd.
+        _log.warning("dashboard-auth-edgecity: @file: private-path check not installed (seam_missing)")
 
 
 def _files_module():
@@ -569,6 +631,7 @@ def _install_resident_guard() -> None:
     switched off for every session. The gateway seam installs the first time a resident opens the
     chat socket; until it is in place, residents cannot open it."""
     guard = _resident_guard
+    _harden_agent_reads()
     try:
         import hermes_cli
 
@@ -607,6 +670,8 @@ def _install_resident_guard() -> None:
                    "switched off for every session" if closed else "left to Hermes (no dashboard in this process)")
     guard.set_loader("gateway", _gateway_modules)
     guard.set_loader("files", _files_module)
+    guard.set_session_lookup(_stored_session)
+    guard.set_prompt_sanitizer(_prompt_sanitizer)
     if "tui_gateway.server" in sys.modules and "tui_gateway.ws" in sys.modules:
         guard._ensure("gateway")
     _log.info("dashboard-auth-edgecity: resident guard on (edgecity admin sessions: everything; "

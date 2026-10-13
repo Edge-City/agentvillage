@@ -539,11 +539,17 @@ def hermes(load_plugin, home, monkeypatch):
     monkeypatch.setenv("CONTROL_PLANE_URL", "http://127.0.0.1:9")
     monkeypatch.setattr(plugin, "_post_json", lambda *args: (200, {"ok": True}))
     monkeypatch.setattr(token_auth, "token_auth_middleware", token_auth.token_auth_middleware)
+    from agent import context_references, file_safety
+    from hermes_cli.dashboard_auth import middleware
+
+    for module, name in ((file_safety, "_READ_DENIED_DIRS"), (context_references, "_ensure_reference_path_allowed"),
+                         (middleware, "gated_auth_middleware")):
+        monkeypatch.setattr(module, name, getattr(module, name))
     registry.clear_providers()
     token_auth.clear_token_routes()
     ctx = Ctx()
     plugin.register(ctx)
-    yield SimpleNamespace(plugin=plugin, ctx=ctx, registry=registry, token_auth=token_auth)
+    yield SimpleNamespace(plugin=plugin, ctx=ctx, registry=registry, token_auth=token_auth, home=home)
     registry.clear_providers()
     token_auth.clear_token_routes()
 
@@ -644,7 +650,22 @@ def test_hermes_owner_session_bearer_still_reads_the_two_routes(hermes):
     owner = hermes.registry.get_provider("edgecity")._mint("owner-id", "owner@example.org", "owner")
     session_bearer = {"Authorization": "Bearer " + owner.access_token}
     assert client.get("/api/sessions", headers=session_bearer).status_code == 200
-    assert client.get("/api/sessions/abc/messages", headers=session_bearer).status_code == 200
+    # SEC-1 S-new-1: a session route answers a resident for its own sessions only (the login Hermes
+    # stamps on its chats, or the box's Telegram channel); the archive bearer above reads them all.
+    from hermes_state import SessionDB
+
+    db = SessionDB(db_path=hermes.home / "state.db")
+    db.create_session(session_id="own-chat", source="tool", user_id="edgecity:owner-id")
+    db.create_session(session_id="tg-chat", source="telegram", user_id="5550001")
+    db.create_session(session_id="admin-chat", source="tool", user_id="edgecity:admin-id")
+    db.close()
+    for sid in ("own-chat", "tg-chat"):
+        assert client.get(f"/api/sessions/{sid}/messages", headers=session_bearer).status_code == 200, sid
+    for sid in ("admin-chat", "abc"):
+        refused = client.get(f"/api/sessions/{sid}/messages", headers=session_bearer)
+        assert refused.status_code == 403 and refused.json()["reason"] == "not_own_session", sid
+        archive = client.get(f"/api/sessions/{sid}/messages", headers={"Authorization": "Bearer " + A["token"]})
+        assert archive.status_code == 200, sid
     assert client.get("/api/sessions/stats", headers=session_bearer).status_code == 200
 
 

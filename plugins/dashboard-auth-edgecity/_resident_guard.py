@@ -24,7 +24,16 @@ closed allow-list for every session that is not a landing admin, on three seams:
   `tui_gateway.server.dispatch(req, transport)` (`tui_gateway/ws.py:361`). This module wraps
   `tui_gateway.ws.handle_ws` (imported by the route at call time, `chat_ws.py:588`) to carry the
   socket's role in a context variable that `asyncio.to_thread` copies into every dispatch, and wraps
-  `server.dispatch` to answer only `RESIDENT_GATEWAY_METHODS` for a resident connection.
+  `server.dispatch` to answer only `RESIDENT_GATEWAY_METHODS` for a resident connection, and only
+  on that connection's own chats (`GatewayView`): a frame that names another login's chat, answers
+  a request raised on one, or answers an approval with anything but once, session or deny is
+  refused (SEC1-refute2 M-new-1, S-new-1). A resident's chat runs in RESIDENT_CWD_NAME and its
+  prompts carry no `@file:` / `@folder:` (S-new-3).
+- **Session routes.** A listed `/api/sessions/{id}...` route answers a resident only for one of its
+  own stored sessions (`session_visible`).
+- **The agent's reads.** The key store joins Hermes's agent read deny-list, and `@file:` references
+  to private paths under HERMES_HOME are refused for everyone (`harden_agent_reads`,
+  `harden_reference_reads`; S-new-2's cheap half, custody is SEC-2).
 
 Who is admin: `session.provider == "edgecity" and session.org_id == "admin"`, which the edgecity
 provider mints only after the control plane's landing-admin exchange (`complete_login`). No session,
@@ -39,11 +48,15 @@ stand-ins. `__init__.register()` hands the Hermes modules in.
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import inspect
 import logging
 import os
+import re
+import sys
 import threading
+import unicodedata
 import urllib.parse
 from typing import Any, AsyncIterator, Awaitable, Callable, Iterable, Optional
 
@@ -112,27 +125,27 @@ RESIDENT_HTTP: tuple[tuple[frozenset, str, str], ...] = (
     (GET, "/api/profiles", "profile read for the profile switcher"),
     (GET, "/api/profiles/active", "profile read: which profile the pages show"),
     (GET, "/api/dashboard/font", "the saved font preference"),
-    # -- the resident's own sessions (SessionsPage.tsx, ChatSessionList.tsx); one tenant per box --
+    # -- the resident's own sessions (SessionsPage.tsx, ChatSessionList.tsx). The list and the counts
+    # are box-wide metadata (README "What a resident can see of other sessions"); a route that names
+    # one session (`/api/sessions/{id}...`) answers only for a session the resident owns
+    # (`session_visible`). Search, bulk delete, delete-empty and prune read or delete across sessions
+    # the guard cannot attribute before the handler runs, so they are admin only --
     (GET, "/api/sessions", "list sessions (also the archive job's read-only bearer)"),
-    (GET, "/api/sessions/search", "search sessions"),
     (GET, "/api/sessions/stats", "session counts"),
     (GET, "/api/sessions/empty/count", "how many empty sessions there are"),
-    (GET, "/api/sessions/{id}", "one session"),
-    (GET, "/api/sessions/{id}/messages", "read a session (also the archive job's read-only bearer)"),
-    (GET, "/api/sessions/{id}/messages/around", "read around a search hit"),
-    (GET, "/api/sessions/{id}/timeline", "a session's timeline"),
-    (GET, "/api/sessions/{id}/latest-descendant", "follow a compressed session to its newest part"),
-    (GET, "/api/sessions/{id}/export", "export a session as JSON"),
-    (PATCH, "/api/sessions/{id}", "rename a session"),
-    (DELETE, "/api/sessions/{id}", "delete a session"),
-    (POST, "/api/sessions/bulk-delete", "delete selected sessions"),
-    (DELETE, "/api/sessions/empty", "delete empty sessions"),
-    (POST, "/api/sessions/prune", "delete sessions older than N days"),
+    (GET, "/api/sessions/{id}", "one of the resident's sessions"),
+    (GET, "/api/sessions/{id}/messages", "read one of the resident's sessions (also the archive job's bearer)"),
+    (GET, "/api/sessions/{id}/messages/around", "read around a message in one of the resident's sessions"),
+    (GET, "/api/sessions/{id}/timeline", "one of the resident's sessions' timeline"),
+    (GET, "/api/sessions/{id}/latest-descendant", "follow one of the resident's compressed sessions"),
+    (GET, "/api/sessions/{id}/export", "export one of the resident's sessions as JSON"),
+    (PATCH, "/api/sessions/{id}", "rename one of the resident's sessions"),
+    (DELETE, "/api/sessions/{id}", "delete one of the resident's sessions"),
     # -- the web chat's uploads --
     (POST, "/api/chat/image-upload", "a pasted chat image, saved under HERMES_HOME/images with a random name"),
     # -- the overlay's approvals card --
     (GET_POST, "/api/plugins/av-approval/**",
-     "reserved for av-approval's own dashboard routes (the approvals card); none is mounted at 1.3.0"),
+     "reserved for av-approval's own dashboard routes (the approvals card); none is mounted at 1.3.1"),
 )
 
 #: WebSockets: socket paths a resident may open. Everything else (the console, the PTY, the PTY's
@@ -142,37 +155,78 @@ RESIDENT_WS_PATHS: dict[str, str] = {
     "/api/ws": "the chat gateway; what it may call is RESIDENT_GATEWAY_METHODS",
 }
 
-#: Gateway parameter rules (see `gateway_method_allowed`).
-BYTES_ONLY = "bytes_only"  # an upload from the client; a host `path` is refused
-NO_ALWAYS = "no_always"    # approve once or for the session; "always" writes config.yaml
+#: Gateway parameter rules (see `gateway_decision`). A row names any number of them.
+BYTES_ONLY = "bytes_only"          # an upload from the client; a host `path` is refused
+NO_ALWAYS = "no_always"            # approve once, for the session, or deny; "always" writes config.yaml
+OWN_SESSION = "own_session"        # `session_id` is a live chat this connection owns (required)
+OWN_SESSION_IF_GIVEN = "own_session_if_given"  # the same, when the frame names a session at all
+OWN_STORED = "own_stored"          # `session_id` is a stored session the resident owns (resume, delete)
+OWN_REQUEST = "own_request"        # a `request_id` must be pending on that same chat (no box-wide lookup)
+PINNED_CWD = "pinned_cwd"          # the chat runs in RESIDENT_CWD_NAME; a parent must be the resident's
+NO_FILE_REFS = "no_file_refs"      # no @file:/@folder: in the text, no gateway-internal `_` parameters
+ANSWER = "answer"                  # answers only a request the server raised on this connection
 
-#: Chat gateway methods on /api/ws: name -> (parameter rule or None, why). The SPA itself calls
+#: Chat gateway methods on /api/ws: name -> (parameter rules, why). The SPA itself calls
 #: `session.create` (ChatSidebar.tsx:219) and `model.options` (ModelPickerDialog.tsx:125); the rest
-#: is what a chat client needs to hold a conversation, answer its agent and upload into it.
-RESIDENT_GATEWAY_METHODS: dict[str, tuple[Optional[str], str]] = {
-    "ping": (None, "liveness"),
-    "gateway.capabilities": (None, "handshake"),
-    "client.capabilities": (None, "handshake"),
-    "session.create": (None, "start a chat (ChatSidebar.tsx:219)"),
-    "session.resume": (None, "reopen a chat"),
-    "session.list": (None, "list chats"),
-    "session.most_recent": (None, "reopen the last chat"),
-    "session.title": (None, "rename a chat"),
-    "session.close": (None, "close a chat"),
-    "session.delete": (None, "delete a chat"),
-    "session.interrupt": (None, "stop the agent's turn"),
-    "session.events.since": (None, "replay after a reconnect"),
-    "prompt.submit": (None, "send a message"),
-    "approval.pending": (None, "the agent's open approval prompts"),
-    "approval.received": (None, "acknowledge an approval prompt"),
-    "approval.respond": (NO_ALWAYS, "answer an approval prompt: once, session or deny"),
-    "request.answer": (None, "answer the agent's question"),
-    "image.attach_bytes": (None, "upload an image into the chat"),
-    "image.detach": (None, "remove an uploaded image"),
-    "file.attach": (BYTES_ONLY, "upload a file into the chat (data_url only)"),
-    "pdf.attach": (BYTES_ONLY, "upload a PDF into the chat (content_base64 only)"),
-    "model.options": (None, "read the model list (ModelPickerDialog.tsx:125)"),
+#: is what a chat client needs to hold a conversation, answer its agent and upload into it. Every
+#: method also refuses a `profile` outside RESIDENT_PROFILES (the guard reads ownership from the
+#: box's own session store only).
+RESIDENT_GATEWAY_METHODS: dict[str, tuple[tuple[str, ...], str]] = {
+    "ping": ((), "liveness"),
+    "gateway.capabilities": ((), "handshake"),
+    "client.capabilities": ((), "handshake"),
+    "session.create": ((PINNED_CWD,), "start a chat (ChatSidebar.tsx:219), in the resident chat directory"),
+    "session.resume": ((OWN_STORED,), "reopen one of the resident's chats"),
+    "session.list": ((), "list chats (box-wide metadata, as GET /api/sessions)"),
+    "session.most_recent": ((), "the newest chat's id and title (box-wide metadata)"),
+    "session.title": ((OWN_SESSION,), "rename a chat"),
+    "session.close": ((OWN_SESSION,), "close a chat"),
+    "session.delete": ((OWN_STORED,), "delete one of the resident's stored chats"),
+    "session.interrupt": ((OWN_SESSION,), "stop the agent's turn"),
+    "session.events.since": ((OWN_SESSION,), "replay after a reconnect"),
+    "prompt.submit": ((OWN_SESSION, NO_FILE_REFS), "send a message (no @file:/@folder: references)"),
+    "approval.pending": ((OWN_SESSION,), "the agent's open approval prompts"),
+    "approval.received": ((OWN_SESSION, OWN_REQUEST), "acknowledge an approval prompt"),
+    "approval.respond": ((OWN_SESSION, OWN_REQUEST, NO_ALWAYS), "answer an approval prompt: once, session or deny"),
+    "request.answer": ((ANSWER,), "answer the agent's question, by the rules of a response frame"),
+    "image.attach_bytes": ((OWN_SESSION,), "upload an image into the chat"),
+    "image.detach": ((OWN_SESSION,), "remove an uploaded image"),
+    "file.attach": ((OWN_SESSION, BYTES_ONLY), "upload a file into the chat (data_url only)"),
+    "pdf.attach": ((OWN_SESSION, BYTES_ONLY), "upload a PDF into the chat (content_base64 only)"),
+    "model.options": ((OWN_SESSION_IF_GIVEN,), "read the model list (ModelPickerDialog.tsx:125)"),
 }
+
+#: Server-to-client requests a resident may answer, by a response frame (`server_requests.py:201`)
+#: or `request.answer`: the request's method -> (rule, why). Everything else the agent can ask over
+#: the socket (`sudo`, `secret`, whose answer `agent_callbacks.py:205-207` saves into .env, the vault
+#: prompts, the desktop GUI reads, `tour`, `display.install.sudo`) is an admin's to answer.
+RESIDENT_SERVER_REQUESTS: dict[str, tuple[Optional[str], str]] = {
+    "approval": (NO_ALWAYS, "a dangerous-command prompt: once, session or deny (server.py:790-792)"),
+    "clarify": (None, "the agent's question to the user"),
+}
+
+#: Stored-session sources that are the resident's whoever is signed in: the box's messaging channels
+#: (one tenant per box; Hermes stamps the platform's sender as `user_id`). Any other stored session
+#: is the resident's only when its `user_id` is the resident's own dashboard login
+#: (`<provider>:<user id>`, `tui_gateway/server.py:2402`). So a landing admin's dashboard chats, the
+#: terminal's (`tui`/`cli`, no login) and cron's are not.
+RESIDENT_SESSION_SOURCES: dict[str, str] = {
+    "telegram": "the village channel",
+    "whatsapp": "messaging channel",
+    "signal": "messaging channel",
+    "discord": "messaging channel",
+    "slack": "messaging channel",
+    "sms": "messaging channel",
+    "email": "messaging channel",
+}
+
+#: The `profile` values a resident may name: none, or the box's one profile.
+RESIDENT_PROFILES = frozenset({"", "default"})
+
+#: The directory under HERMES_HOME a resident's chats run in (S-new-3), created on first use: empty
+#: but for an `AGENTS.md` link to the box's own, so the agent keeps the village rules. Not
+#: HERMES_HOME (config.yaml, plugins, hooks, the key store) and not `/`.
+RESIDENT_CWD_NAME = "resident-chat"
 
 # ==================================================================================================
 
@@ -199,6 +253,7 @@ PATH_PARAMS = frozenset({"path", "file", "file_path", "filepath", "filename", "r
 
 FORBIDDEN = {"error": "forbidden", "detail": "This dashboard feature is admin only.", "reason": "admin_only"}
 FORBIDDEN_PRIVATE = {"error": "forbidden", "detail": "That path is private.", "reason": "private_path"}
+FORBIDDEN_SESSION = {"error": "forbidden", "detail": "That session is not yours.", "reason": "not_own_session"}
 GATEWAY_REFUSAL_CODE = 4031
 WS_REFUSAL = "edgecity_admin_only"
 
@@ -247,7 +302,8 @@ _GATEWAY_ROLE: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("e
 
 #: Which seams this copy of the module installed. /api/ws opens to a resident only while the
 #: gateway seam is in place (`ws_path_allowed`).
-_installed: dict[str, bool] = {"http": False, "tickets": False, "ws": False, "gateway": False, "files": False}
+_installed: dict[str, bool] = {"http": False, "tickets": False, "ws": False, "gateway": False, "files": False,
+                               "agent_reads": False, "references": False}
 #: Extra private roots (the Hermes checkout), set by `set_private_roots`.
 _private_roots: list[str] = []
 #: Loaders `__init__` hands in for the seams that live in modules too heavy to import at plugin
@@ -448,11 +504,96 @@ def http_decision(request: Any) -> str:
         scope_path = request.scope.get("path")
         if not http_allowed(request.method, url_path, scope_path):
             return "denied_not_listed"
-        if request_names_private_path(url_path, scope_path, request.scope.get("query_string", b"")):
+        query = request.scope.get("query_string", b"")
+        if request_names_private_path(url_path, scope_path, query):
             return "denied_private_path"
-        return "resident_allowed"
+        return session_route_code(request, url_path, scope_path, query)
     except Exception:  # noqa: BLE001 - a broken request or session object is refused
         return "denied_error"
+
+
+# ---- whose session is it (S-new-1) ---------------------------------------------------------------
+
+#: Hermes's own literal subroutes of /api/sessions (`web_routers/sessions.py`): never a session id.
+_SESSION_SUBROUTES = frozenset({"search", "stats", "empty", "bulk-delete", "prune", "import", "owner-backfill"})
+#: Dashboard login providers: a `user_id` of the form `<one of these>:<id>` is a dashboard login,
+#: so a stored session carrying another one is not the resident's, whatever its source.
+_LOGIN_PROVIDERS = frozenset({"edgecity", "basic", "nous", "self_hosted", "drain", "oidc", "bot-desktop", "internal"})
+
+#: `lookup(session_id, profile, prefix=bool) -> {"id", "user_id", "source"} or None`, handed in by
+#: `__init__` (Hermes's own session store, read only). None: nothing names a session (fail closed).
+_session_lookup: Optional[Callable[..., Optional[dict]]] = None
+
+
+def set_session_lookup(fn: Optional[Callable[..., Optional[dict]]]) -> None:
+    global _session_lookup
+    _session_lookup = fn
+
+
+def login_id(provider: Any, user_id: Any) -> Optional[str]:
+    """`<provider>:<user id>`, as Hermes stamps a dashboard login on a session
+    (`tui_gateway/server.py:2402`), or None."""
+    if type(provider) is str and type(user_id) is str and provider.strip() and user_id.strip():
+        return f"{provider.strip()}:{user_id.strip()}"
+    return None
+
+
+def session_visible(row: Any, login: Optional[str]) -> bool:
+    """Whether a stored session is the resident's: its `user_id` is the resident's own login, or it
+    came in on one of the box's messaging channels and no other dashboard login owns it."""
+    if not isinstance(row, dict):
+        return False
+    owner = row.get("user_id")
+    if login is not None and type(owner) is str and owner == login:
+        return True
+    if type(owner) is str and ":" in owner and owner.split(":", 1)[0].strip() in _LOGIN_PROVIDERS:
+        return False
+    source = row.get("source")
+    return type(source) is str and source in RESIDENT_SESSION_SOURCES
+
+
+def _profile_param(query: Any) -> Optional[str]:
+    if isinstance(query, (bytes, bytearray)):
+        query = bytes(query).decode("latin-1")
+    values = [v for k, v in urllib.parse.parse_qsl(query or "", keep_blank_values=True) if k == "profile"]
+    return values[-1] if values else None
+
+
+def _session_route_id(path: Any) -> Optional[str]:
+    """The `{id}` of a listed `/api/sessions/{id}...` route, or None for any other path."""
+    row = http_row("GET", path) or http_row("PATCH", path) or http_row("DELETE", path)
+    if row is None or not row[1].startswith("/api/sessions/{id}"):
+        return None
+    return _segments(path)[2]
+
+
+def session_route_code(request: Any, url_path: Any, scope_path: Any, query: Any) -> str:
+    """A listed route that names one stored session answers a resident only for the resident's own
+    (`session_visible`), looked up the way the handler resolves it (exact id, else a unique prefix,
+    in the `?profile=` store). No lookup, a failed lookup, an unknown id, a Hermes subroute word or
+    URL and scope paths that name different ids: refused. The archive job's bearer (a token
+    principal, scoped by `_archive` to two read routes) reads every session, as before."""
+    ids = {_session_route_id(url_path), _session_route_id(scope_path)}
+    if ids == {None}:
+        return "resident_allowed"
+    state = request.state
+    if getattr(state, "token_authenticated", False) or getattr(state, "token_principal", None) is not None:
+        return "resident_allowed"
+    if len(ids) != 1 or None in ids:
+        return "denied_session_route"
+    (session_id,) = ids
+    if session_id in _SESSION_SUBROUTES:
+        return "denied_not_listed"
+    lookup = _session_lookup
+    if lookup is None:
+        return "denied_session_lookup"
+    profile = _profile_param(query)
+    row = lookup(session_id, profile, prefix=True)
+    session = getattr(state, "session", None)
+    login = login_id(getattr(session, "provider", None), getattr(session, "user_id", None))
+    if not session_visible(row, login):
+        return "denied_not_own_session"
+    return "resident_allowed"
 
 
 #: Never read for the hide: API responses, the login page and the auth flow.
@@ -582,7 +723,9 @@ def make_gate_wrapper(original: Middleware, *, json_response: Callable[..., Any]
             code = http_decision(req)
             _count(code)
             if code not in ("admin_allowed", "resident_allowed"):
-                body = FORBIDDEN_PRIVATE if code == "denied_private_path" else FORBIDDEN
+                body = (FORBIDDEN_PRIVATE if code == "denied_private_path" else
+                        FORBIDDEN_SESSION if code.startswith("denied_session") or code == "denied_not_own_session"
+                        else FORBIDDEN)
                 return json_response(dict(body), status_code=403)
             token = _REQUEST_ROLE.set(ROLE_ADMIN if code == "admin_allowed" else ROLE_RESIDENT)
             try:
@@ -644,6 +787,17 @@ def _takes_extra(fn: Any) -> bool:
     return "extra" in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
 
 
+def minting_role() -> str:
+    """The role a ticket minted now carries. Inside a chat-gateway call (`display.observe` mints the
+    Bot Desktop ticket there, `methods_display.py:162`) it is the connection's role; otherwise the
+    HTTP request's (`POST /api/auth/ws-ticket`). Only an admin's is admin; the PTY child's, a
+    resident's, or none is a resident's."""
+    gateway = _GATEWAY_ROLE.get()
+    if gateway is not None:
+        return ROLE_ADMIN if gateway == ROLE_ADMIN else ROLE_RESIDENT
+    return ROLE_ADMIN if _REQUEST_ROLE.get() == ROLE_ADMIN else ROLE_RESIDENT
+
+
 def install_tickets(module: Any) -> bool:
     """Wrap `ws_tickets.mint_ticket` (stamp the minting request's role into the ticket) and
     `ws_tickets.consume_ticket` (hand the role to the socket-auth wrapper; refuse a display ticket a
@@ -661,7 +815,7 @@ def install_tickets(module: Any) -> bool:
 
     def mint_ticket(*args: Any, **kwargs: Any) -> Any:
         extra = dict(kwargs.get("extra") or {})
-        extra[TICKET_ROLE_KEY] = ROLE_ADMIN if _REQUEST_ROLE.get() == ROLE_ADMIN else ROLE_RESIDENT
+        extra[TICKET_ROLE_KEY] = minting_role()
         kwargs["extra"] = extra
         return base_mint(*args, **kwargs)
 
@@ -770,46 +924,341 @@ def close_embedded_chat(module: Any) -> bool:
 # ---- gateway methods -----------------------------------------------------------------------------
 
 
+#: `@file:` / `@folder:` references (Hermes's own pattern is `agent/context_references.py:77`; this
+#: one is broader on purpose: any case, anywhere in the text).
+_FILE_REF = re.compile(r"@(?:file|folder):", re.IGNORECASE)
+#: Bracketed-paste markers Hermes strips before expanding (`hermes_cli/input_sanitize.py:50`).
+_PASTE_MARKERS = ("\x1b[200~", "\x1b[201~", "[200~", "[201~")
+#: Hermes's own prompt sanitiser, handed in by `__init__`, so the check also sees what Hermes sees.
+_prompt_sanitizer: Optional[Callable[[str], Any]] = None
+
+
+def set_prompt_sanitizer(fn: Optional[Callable[[str], Any]]) -> None:
+    global _prompt_sanitizer
+    _prompt_sanitizer = fn
+
+
+def names_file_reference(text: Any) -> bool:
+    """Whether prompt text carries an `@file:` or `@folder:` reference: as written, after Hermes's
+    own sanitiser, and once Unicode is folded and control, format and space characters and paste
+    markers are dropped (so `@fi<ZWSP>le:` and `＠file:` count). Text that is not a string, or a
+    sanitiser that fails, counts as a reference (fail closed)."""
+    if text is None:
+        return False
+    if not isinstance(text, str):
+        return True
+    forms = [text]
+    try:
+        folded = unicodedata.normalize("NFKC", text)
+        for marker in _PASTE_MARKERS:
+            folded = folded.replace(marker, "")
+        forms.append("".join(ch for ch in folded if unicodedata.category(ch)[0] not in ("C", "Z")))
+        if _prompt_sanitizer is not None:
+            forms.append(_prompt_sanitizer(text))
+    except Exception:  # noqa: BLE001
+        return True
+    return any(not isinstance(form, str) or _FILE_REF.search(form) for form in forms)
+
+
+def resident_cwd() -> Optional[str]:
+    """The directory a resident's chats run in: `<HERMES_HOME>/<RESIDENT_CWD_NAME>`, created (0700)
+    on first use, with an `AGENTS.md` link to the box's own when there is one. None (the chat is
+    refused) when it cannot be made or is not a plain directory where it should be (a symlink put
+    there would move the chat back into HERMES_HOME)."""
+    try:
+        home = os.path.realpath(_hermes_home())
+        path = os.path.join(home, RESIDENT_CWD_NAME)
+        if os.path.islink(path):
+            return None
+        os.makedirs(path, mode=0o700, exist_ok=True)
+        if os.path.realpath(path) != path or not os.path.isdir(path) or private_path(path):
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        link = os.path.join(path, "AGENTS.md")
+        if not os.path.lexists(link) and os.path.isfile(os.path.join(home, "AGENTS.md")):
+            os.symlink(os.path.join("..", "AGENTS.md"), link)
+    except OSError:
+        pass  # the chat still runs; the agent then has no AGENTS.md in it
+    return path
+
+
+def _within(value: Any, root: str) -> bool:
+    """`value`, resolved as Hermes resolves a chat's cwd (`~`, relative to the process) and then
+    through symlinks, is `root` or inside it."""
+    try:
+        if type(value) is not str or not value.strip():
+            return False
+        resolved = os.path.realpath(os.path.expanduser(value.strip()))
+        return resolved == root or resolved.startswith(root.rstrip(os.sep) + os.sep)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _role_of_ws(ws: Any) -> str:
     role = getattr(ws, "_edgecity_ws_role", None)
     return role if role in (ROLE_ADMIN, ROLE_INTERNAL, ROLE_RESIDENT) else ROLE_RESIDENT
 
 
-def gateway_method_allowed(role: Any, method: Any, params: Any) -> bool:
-    """Admin and the PTY child: every method. A resident: RESIDENT_GATEWAY_METHODS, with its
-    parameter rule, and no path parameter that names a private file."""
-    if role in (ROLE_ADMIN, ROLE_INTERNAL):
+#: The attribute on a gateway transport (`tui_gateway.ws.WSTransport`) that holds what this
+#: connection created: {"sids": live chat ids, "keys": their stored ids}.
+_OWN_ATTR = "_edgecity_own"
+
+
+def _own(transport: Any) -> Optional[dict]:
+    own = getattr(transport, _OWN_ATTR, None)
+    if isinstance(own, dict):
+        return own
+    own = {"sids": set(), "keys": set()}
+    try:
+        setattr(transport, _OWN_ATTR, own)
+    except Exception:  # noqa: BLE001 - nothing remembered: only the login can make a chat its own
+        return None
+    return own
+
+
+class GatewayView:
+    """What the decision reads about one resident connection and Hermes's live state:
+
+    - the connection's login, as Hermes stamps it on the chats it creates
+      (`server._transport_auth_user_id`, `server.py:2402`), and the chats it created here;
+    - the live chats (`server._sessions`) and whether this transport is attached to one
+      (`server._session_transport_contains`, `session_transports.py:20`);
+    - the open server requests (`server_requests._open`, `server_requests.py:75`);
+    - a chat's pending approvals (`tools.approval.list_gateway_approvals`);
+    - the stored-session lookup (`set_session_lookup`).
+
+    Anything missing answers "not yours" (fail closed)."""
+
+    def __init__(self, transport: Any, server: Any, requests: Any = None, approvals: Any = None) -> None:
+        self.transport = transport
+        self.server = server
+        self._requests = requests
+        self._approvals = approvals
+        self.own = _own(transport)
+        self.login = self._login()
+
+    def _login(self) -> Optional[str]:
+        stamp = getattr(self.server, "_transport_auth_user_id", None)
+        if callable(stamp):
+            value = stamp(self.transport)
+            return value if type(value) is str and value else None
+        identity = getattr(self.transport, "auth_identity", None)
+        if isinstance(identity, dict):
+            return login_id(identity.get("provider"), identity.get("user_id"))
+        return None
+
+    def _records(self) -> list:
+        sessions = getattr(self.server, "_sessions", None)
+        if not isinstance(sessions, dict):
+            return []
+        lock = getattr(self.server, "_sessions_lock", None)
+        with (lock if lock is not None else contextlib.nullcontext()):
+            return [(sid, rec) for sid, rec in list(sessions.items()) if isinstance(rec, dict)]
+
+    def live(self, sid: Any) -> Optional[dict]:
+        if type(sid) is not str or not sid:
+            return None
+        sessions = getattr(self.server, "_sessions", None)
+        record = sessions.get(sid) if isinstance(sessions, dict) else None
+        return record if isinstance(record, dict) else None
+
+    def own_live(self, sid: Any) -> bool:
+        """A live chat this connection created, or one stamped with this connection's login (a
+        reconnect, a resume). Never one stamped with another login, the PTY's (none) included."""
+        record = self.live(sid)
+        if record is None or self.own is None:
+            return False
+        owner = record.get("auth_user_id")
+        if sid in self.own["sids"]:
+            return owner == self.login
+        return self.login is not None and owner == self.login
+
+    def attached(self, sid: Any) -> bool:
+        record = self.live(sid)
+        contains = getattr(self.server, "_session_transport_contains", None)
+        return record is not None and callable(contains) and bool(contains(record, self.transport))
+
+    def own_stored(self, key: Any, profile: Any) -> bool:
+        """A stored session the resident may reopen or delete: one this connection created, or one
+        `session_visible` names the resident's. Never one that a live chat under another login (or
+        none, the PTY's) holds right now."""
+        if type(key) is not str or not key or self.own is None:
+            return False
+        for _sid, record in self._records():
+            if record.get("session_key") == key and record.get("auth_user_id") != self.login:
+                return False
+            if record.get("session_key") == key and self.login is None and key not in self.own["keys"]:
+                return False
+        if key in self.own["keys"]:
+            return True
+        lookup = _session_lookup
+        if lookup is None:
+            return False
+        return session_visible(lookup(key, profile or None, prefix=False), self.login)
+
+    def pending_approval(self, sid: Any, request_id: Any) -> bool:
+        record = self.live(sid)
+        approvals = self._approvals
+        if approvals is None:
+            module = sys.modules.get("tools.approval")
+            approvals = getattr(module, "list_gateway_approvals", None)
+        if record is None or not callable(approvals) or type(request_id) is not str:
+            return False
+        pending = approvals(str(record.get("session_key") or ""))
+        return any(isinstance(p, dict) and p.get("request_id") == request_id for p in pending or ())
+
+    def open_request(self, rid: Any) -> Optional[tuple]:
+        """(method, chat id) of the open server request `rid`, or None."""
+        module = self._requests if self._requests is not None else sys.modules.get("tui_gateway.server_requests")
+        opened = getattr(module, "_open", None)
+        if type(rid) is not str or not isinstance(opened, dict):
+            return None
+        lock = getattr(module, "_lock", None)
+        with (lock if lock is not None else contextlib.nullcontext()):
+            request = opened.get(rid)
+        if request is None:
+            return None
+        return getattr(request, "method", None), getattr(request, "sid", None)
+
+    def remember(self, response: Any) -> None:
+        """After `session.create` answered: the new chat and its stored id are this connection's."""
+        result = response.get("result") if isinstance(response, dict) else None
+        if not isinstance(result, dict) or self.own is None:
+            return
+        sid, key = result.get("session_id"), result.get("stored_session_id")
+        if type(sid) is str and sid:
+            self.own["sids"].add(sid)
+        if type(key) is str and key:
+            self.own["keys"].add(key)
+
+
+def _choice_ok(container: Any) -> bool:
+    """No `choice` (Hermes reads it as deny) or exactly once, session or deny."""
+    if not isinstance(container, dict):
+        return False
+    if "choice" not in container:
         return True
+    choice = container["choice"]
+    return type(choice) is str and choice in APPROVAL_CHOICES
+
+
+def answer_code(rid: Any, result: Any, is_error: bool, view: Optional[GatewayView]) -> str:
+    """A resident's answer to a server request (a response frame or `request.answer`): only to an
+    open request the server raised on a chat this connection owns and is attached to, of a kind in
+    RESIDENT_SERVER_REQUESTS, and for an approval only once, session or deny (M-new-1). An error
+    answer (the client cannot show it) withdraws the request and is let through."""
+    if view is None:
+        return "denied_answer_unknown"
+    opened = view.open_request(rid)
+    if opened is None:
+        return "denied_answer_unknown"
+    method, sid = opened
+    if not (view.own_live(sid) and view.attached(sid)):
+        return "denied_answer_foreign"
+    if type(method) is not str or method not in RESIDENT_SERVER_REQUESTS:
+        return "denied_answer_kind"
+    if is_error:
+        return "resident_allowed"
+    if not isinstance(result, dict):
+        return "denied_answer_result"
+    if RESIDENT_SERVER_REQUESTS[method][0] == NO_ALWAYS and not _choice_ok(result):
+        return "denied_gateway_always"
+    return "resident_allowed"
+
+
+def gateway_decision(role: Any, req: Any, view: Optional[GatewayView] = None) -> tuple[str, Any]:
+    """(`admin_allowed` / `resident_allowed` or a denial code, the frame to dispatch). Admin and the
+    PTY child: everything. A resident: a response frame by `answer_code`; a method on
+    RESIDENT_GATEWAY_METHODS with its rules, no profile but the box's and no path parameter that
+    names a private file. A rule that needs live state and has no view refuses."""
+    if role in (ROLE_ADMIN, ROLE_INTERNAL):
+        return "admin_allowed", req
+    if not isinstance(req, dict):
+        return "denied_gateway_method", req
+    if "method" not in req:
+        if "id" not in req or not ("result" in req or "error" in req):
+            return "denied_gateway_frame", req
+        return answer_code(req.get("id"), req.get("result"), "error" in req, view), req
+    method = req.get("method")
     if not isinstance(method, str) or method not in RESIDENT_GATEWAY_METHODS:
-        return False
-    if params is None:
-        params = {}
+        return "denied_gateway_method", req
+    params = req.get("params")
+    params = {} if params is None else params
     if not isinstance(params, dict):
-        return False
-    rule = RESIDENT_GATEWAY_METHODS[method][0]
-    if rule == BYTES_ONLY and str(params.get("path") or "").strip():
-        return False
-    if rule == NO_ALWAYS and params.get("choice", "deny") not in APPROVAL_CHOICES:
-        return False
+        return "denied_gateway_params", req
     for key, value in params.items():
         if isinstance(key, str) and key.lower() in PATH_PARAMS and value not in (None, "") and private_path(value):
-            return False
-    return True
+            return "denied_gateway_private_path", req
+    profile = params.get("profile")
+    if profile is not None and (type(profile) is not str or profile.strip() not in RESIDENT_PROFILES):
+        return "denied_gateway_profile", req
+    rules = RESIDENT_GATEWAY_METHODS[method][0]
+    sid = params.get("session_id")
+    if BYTES_ONLY in rules and str(params.get("path") or "").strip():
+        return "denied_gateway_params", req
+    if NO_ALWAYS in rules and not _choice_ok(params):
+        return "denied_gateway_always", req
+    if OWN_SESSION in rules or (OWN_SESSION_IF_GIVEN in rules and sid not in (None, "")):
+        if view is None or not view.own_live(sid):
+            return "denied_gateway_session", req
+    if OWN_REQUEST in rules and params.get("request_id") not in (None, ""):
+        if view is None or not view.pending_approval(sid, params.get("request_id")):
+            return "denied_gateway_session", req
+    if OWN_STORED in rules and (view is None or not view.own_stored(sid, profile)):
+        return "denied_gateway_session", req
+    if NO_FILE_REFS in rules:
+        if any(type(k) is not str or k.startswith("_") for k in params):
+            return "denied_gateway_params", req
+        if names_file_reference(params.get("text")):
+            return "denied_gateway_file_ref", req
+    if ANSWER in rules:
+        code = answer_code(params.get("id"), params.get("result"), False, view)
+        if code != "resident_allowed":
+            return code, req
+    if PINNED_CWD in rules:
+        parent = params.get("parent_session_id")
+        if parent not in (None, "") and (view is None or not view.own_stored(parent, profile)):
+            return "denied_gateway_session", req
+        cwd = resident_cwd()
+        if cwd is None:
+            return "denied_gateway_cwd", req
+        given = params.get("cwd")
+        if given in (None, ""):
+            req = {**req, "params": {**params, "cwd": cwd}}
+        elif not _within(given, cwd):
+            return "denied_gateway_cwd", req
+    return "resident_allowed", req
 
 
-def _refusal(req: Any, method: Any) -> dict:
+def gateway_method_allowed(role: Any, method: Any, params: Any, view: Optional[GatewayView] = None) -> bool:
+    """`gateway_decision` for a method call, as a yes or no."""
+    code, _ = gateway_decision(role, {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}, view)
+    return code in ("admin_allowed", "resident_allowed")
+
+
+#: Denials a client sees as "not your session" rather than "admin only".
+_SESSION_CODES = frozenset({"denied_gateway_session", "denied_answer_foreign"})
+
+
+def _refusal(req: Any, method: Any, code: str = "denied_gateway_method") -> dict:
     rid = req.get("id") if isinstance(req, dict) else None
+    reason = "not_own_session" if code in _SESSION_CODES else "admin_only"
     return {"jsonrpc": "2.0", "id": rid, "error": {
-        "code": GATEWAY_REFUSAL_CODE, "message": "This gateway method is admin only.",
-        "data": {"reason": "admin_only", "method": method if isinstance(method, str) else None}}}
+        "code": GATEWAY_REFUSAL_CODE, "message": "This gateway method is admin only." if reason == "admin_only"
+        else "That chat is not this connection's.",
+        "data": {"reason": reason, "method": method if isinstance(method, str) else None}}}
 
 
-def install_gateway(server_module: Any, ws_module: Any) -> bool:
+def install_gateway(server_module: Any, ws_module: Any, requests_module: Any = None, approvals: Any = None) -> bool:
     """Wrap `tui_gateway.ws.handle_ws` (the connection's role into a context variable) and
-    `tui_gateway.server.dispatch` (a resident connection's request answered only on the method
-    list). A dispatch with no dashboard socket behind it (the stdio TUI, in-process callers) is
-    untouched. Both or neither: without both, `_installed["gateway"]` stays False and /api/ws stays
-    closed to residents."""
+    `tui_gateway.server.dispatch` (a resident connection's frame answered only by
+    `gateway_decision`). A dispatch with no dashboard socket behind it (the stdio TUI, in-process
+    callers) is untouched. Both or neither: without both, `_installed["gateway"]` stays False and
+    /api/ws stays closed to residents. `requests_module` is `tui_gateway.server_requests` and
+    `approvals` is `tools.approval.list_gateway_approvals` (both looked up in `sys.modules` at call
+    time when not given)."""
     dispatch = getattr(server_module, "dispatch", None)
     handle_ws = getattr(ws_module, "handle_ws", None)
     base_dispatch = _unwrap(dispatch) if callable(dispatch) else None
@@ -817,26 +1266,42 @@ def install_gateway(server_module: Any, ws_module: Any) -> bool:
     if base_dispatch is None or base_handle is None:
         return False
 
-    def dispatch_guarded(req: Any, transport: Any = None, *args: Any, **kwargs: Any) -> Any:
+    def guarded_call(role: str, req: Any, transport: Any, args: tuple, kwargs: dict) -> Any:
+        if role in (ROLE_ADMIN, ROLE_INTERNAL):
+            return base_dispatch(req, transport, *args, **kwargs)
+        method = req.get("method") if isinstance(req, dict) else None
         try:
-            role = _GATEWAY_ROLE.get()
-            if role is None:
-                if transport is None or not hasattr(transport, "auth_identity"):
-                    return base_dispatch(req, transport, *args, **kwargs)
-                role = _role_of_ws(getattr(transport, "_ws", None))
-            if role in (ROLE_ADMIN, ROLE_INTERNAL) or (isinstance(req, dict) and "method" not in req):
-                # Admin, the PTY child, or a client's answer to one of the server's own requests
-                # (approval, clarify: `server_requests.is_response_frame`), which calls no method.
-                return base_dispatch(req, transport, *args, **kwargs)
-            method = req.get("method") if isinstance(req, dict) else None
-            allowed = gateway_method_allowed(role, method, req.get("params") if isinstance(req, dict) else None)
+            view = GatewayView(transport, server_module, requests_module, approvals)
+            code, frame = gateway_decision(role, req, view)
         except Exception:  # noqa: BLE001
             _count("denied_gateway_error")
             return _refusal(req, None)
-        if not allowed:
-            _count("denied_gateway_method")
-            return _refusal(req, method)
-        return base_dispatch(req, transport, *args, **kwargs)
+        if code != "resident_allowed":
+            _count(code if code.startswith("denied_") else "denied_gateway_method")
+            return _refusal(req, method, code)
+        response = base_dispatch(frame, transport, *args, **kwargs)
+        if method == "session.create":
+            try:
+                view.remember(response)
+            except Exception:  # noqa: BLE001 - the chat is then only its login's, as after a reconnect
+                _count("gateway_remember_error")
+        return response
+
+    def dispatch_guarded(req: Any, transport: Any = None, *args: Any, **kwargs: Any) -> Any:
+        role = _GATEWAY_ROLE.get()
+        if role is None and (transport is None or not hasattr(transport, "auth_identity")):
+            return base_dispatch(req, transport, *args, **kwargs)
+        token = None
+        try:
+            if role is None:
+                # A socket outside the handle_ws context: its own role, carried for this call (a
+                # ticket minted inside it, `minting_role`).
+                role = _role_of_ws(getattr(transport, "_ws", None))
+                token = _GATEWAY_ROLE.set(role)
+            return guarded_call(role, req, transport, args, kwargs)
+        finally:
+            if token is not None:
+                _GATEWAY_ROLE.reset(token)
 
     async def handle_ws_guarded(ws: Any, *args: Any, **kwargs: Any) -> Any:
         token = _GATEWAY_ROLE.set(_role_of_ws(ws))
@@ -848,6 +1313,70 @@ def install_gateway(server_module: Any, ws_module: Any) -> bool:
     server_module.dispatch = _mark(dispatch_guarded, base_dispatch)
     ws_module.handle_ws = _mark(handle_ws_guarded, base_handle)
     _installed["gateway"] = True
+    return True
+
+
+# ---- Hermes's agent reads (S-new-2, S-new-3) -----------------------------------------------------
+
+
+def home_private_path(value: Any) -> bool:
+    """`private_path` for a path inside HERMES_HOME or the Hermes checkout (resolved); a path
+    elsewhere is left to Hermes. Anything unreadable is private."""
+    try:
+        resolved = os.path.realpath(os.path.expanduser(os.fspath(value)))
+        roots = [os.path.realpath(_hermes_home())] + list(_private_roots)
+        inside = any(resolved == r or resolved.startswith(r.rstrip(os.sep) + os.sep) for r in roots)
+        return inside and private_path(resolved)
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def harden_reference_reads(module: Any) -> bool:
+    """Wrap `agent.context_references._ensure_reference_path_allowed` (read at call time by
+    `_expand_path_reference`, `context_references.py:291`) so an `@file:`/`@folder:` reference to a
+    private path under HERMES_HOME (config.yaml, plugins/, hooks/, the key store, the state store)
+    is refused for every caller: a second line behind the gateway's refusal of the tokens, and the
+    same rule for the messaging gateway where this plugin loads."""
+    current = getattr(module, "_ensure_reference_path_allowed", None)
+    base = _unwrap(current) if callable(current) else None
+    if base is None:
+        return False
+
+    def _ensure_reference_path_allowed(path: Any, *args: Any, **kwargs: Any) -> Any:
+        result = base(path, *args, **kwargs)
+        if home_private_path(path):
+            _count("denied_context_reference")
+            raise ValueError("path is private to this box and cannot be attached")
+        return result
+
+    module._ensure_reference_path_allowed = _mark(_ensure_reference_path_allowed, base)
+    _installed["references"] = True
+    return True
+
+
+#: What the agent is told when it reads the dashboard's key store (`agent/file_safety.py:329`).
+_KEY_DIR_MESSAGES = (
+    "is private to the dashboard sign-in plugin (its key store or code) and cannot be read directly.",
+    "is inside the dashboard sign-in plugin's private files and cannot be read directly.",
+)
+
+
+def harden_agent_reads(module: Any, directories: Iterable[Any]) -> bool:
+    """Add `directories` (relative to each Hermes home, or absolute) to Hermes's agent read
+    deny-list, `agent.file_safety._READ_DENIED_DIRS` (a tuple of (subdir, dir message, file
+    message), read at call time by `get_read_block_error`, `file_safety.py:343-385`; read_file and
+    `@file:` both consult it). False, changing nothing, when the tuple or the function is not there
+    in that shape: `__init__` then refuses to load. Defence in depth only: the agent's terminal can
+    still read the store (SEC-2 moves the key out of its reach)."""
+    current = getattr(module, "_READ_DENIED_DIRS", None)
+    if not callable(getattr(module, "get_read_block_error", None)) or not isinstance(current, tuple):
+        return False
+    if not all(isinstance(e, tuple) and len(e) == 3 and all(isinstance(x, str) for x in e) for e in current):
+        return False
+    have = {entry[0] for entry in current}
+    wanted = [str(d) for d in directories if d and str(d) not in have]
+    module._READ_DENIED_DIRS = current + tuple((d, *_KEY_DIR_MESSAGES) for d in dict.fromkeys(wanted))
+    _installed["agent_reads"] = True
     return True
 
 
