@@ -13,7 +13,6 @@ from agent.delegation_context import delegated_child_context
 
 spec = importlib.util.spec_from_file_location("village_canary", Path(__file__).parents[1] / "__init__.py")
 plugin = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = plugin
 spec.loader.exec_module(plugin)
 
 def refused():

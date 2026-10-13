@@ -330,10 +330,10 @@ classes:
   treasury.withdraw:             { autonomy: manual, agent_may_request: true }   # DATA-292, a resident's own proposal withdrawn by their agent's suggestion
   edgeos.event.write:            { autonomy: manual, agent_may_request: true }   # reserved; no tool uses this class before Oct 18; DATA-322
   edgeos.venue.write:            { autonomy: manual, agent_may_request: true }   # reserved; no tool uses this class before Oct 18; DATA-322
-  # Reviewed mini-app reads and actions are live; agent-driven installation remains reserved.
+  # The village marketplace (reserved namespace marketplace.*) and the model reviewer: reserved, R2.
   marketplace.app.install:       { autonomy: manual, agent_may_request: true }   # reserved; installing an agentic app or MCP server from the village marketplace
-  marketplace.app.action:        { autonomy: manual, agent_may_request: true }   # reviewed installed app; exact action preview requires a manual grant
-  marketplace.app.read:          { autonomy: autonomous, agent_may_request: true }   # reviewed installed app reads; routed village entry tool
+  marketplace.app.action:        { autonomy: manual, agent_may_request: true }   # reserved; an installed app acting for the agent; the request payload names the app and the verb
+  marketplace.app.read:          { autonomy: autonomous, agent_may_request: true }   # reserved; an installed app reads for the agent; recorded
   review.delegate.model:         { autonomy: manual }   # reserved; the resident may choose later to let a model reviewer act first; nothing acts on it today; no agent request
   resource.allocate:             { autonomy: manual, agent_may_request: true }   # reserved; the treasury/ODS allocation class: an allocation of village resources proposed for the resident
   opportunity.accept:            { autonomy: autonomous, agent_may_request: true }   # reserved; accepting or declining an Index opportunity (a connection or meeting) on the resident's behalf; Index's tools for it reach it through the hook; R3
@@ -417,7 +417,4 @@ tools:
   - { match: text_to_speech,                   class: network.call }
   - { match: vision_analyze,                   class: network.call }
   - { match: video_analyze,                    class: network.call }
-  # The entry tool handles reads here; a write additionally needs an exact-payload manual
-  # marketplace.app.action proposal. This matcher is never permission to bypass that gate.
-  - { match: village,                          class: marketplace.app.read }
 ```

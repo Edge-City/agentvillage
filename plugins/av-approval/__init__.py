@@ -151,7 +151,6 @@ GATED_MATCHERS: tuple[str, ...] = (
     "text_to_speech",
     "web_search",
     "x_search",
-    "village",
 )
 #: The installer's per-entry timeout.
 ENTRY_TIMEOUT_S = 300

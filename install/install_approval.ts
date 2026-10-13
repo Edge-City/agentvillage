@@ -203,11 +203,25 @@ export const APPROVAL_GATED_TOOLS = [
   "text_to_speech",
   "web_search",
   "x_search",
-  "village",
 ] as const;
 
-/** Reserved exclusions. Village is staged now: shim/backstop + internal manual action gate. */
-export const NOT_STAGED_PLUGINS: ReadonlySet<string> = new Set();
+/**
+ * Plugins in `plugins/` the installer never stages, and removes when an earlier
+ * installer staged them. Each entry says why. The plugin config step
+ * (`unlistPlugins` in config.ts, called from install.ts) also drops these names
+ * from `plugins.enabled`, so a box upgraded from a build that listed one is
+ * healed. `install/tests/plugin_tools_gated.test.ts` requires each of their
+ * tools to carry the reason "not staged: OV-300 M1 / BRIDGE-1" in its
+ * `NOT_GATED` table, and fails if the entry here is removed without the tool
+ * being gated.
+ */
+export const NOT_STAGED_PLUGINS: ReadonlySet<string> = new Set([
+  // OV-300 M1 (ov#300, a0b087c5): `village` is a write tool (star sends, meeting marks) in neither
+  // APPROVAL_GATED_TOOLS nor av-approval's GATED_MATCHERS. Off every box until BRIDGE-1 brings it back
+  // under the gate. Without its plugin.yaml on the box the control plane's token writer refuses
+  // (`village_plugin_missing`), so no village-bridge.json lands either (OV-300 M2).
+  "village-bridge",
+]);
 
 /** True when `path` exists, a dangling symlink included (`existsSync` follows links). */
 function lstatExists(path: string): boolean {

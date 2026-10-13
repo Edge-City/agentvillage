@@ -34,11 +34,7 @@ import { join } from "node:path";
 // agent_may_request), moralmod.share_context (human-only until the resident chooses ask) and
 // coordinator.contact (human-only, locked in October) rows and their two comment lines, five added
 // lines in the classes block, nothing else. Both copies carry the same five lines; the pins are equal.
-// ov#312 + cp#213 (the curated mini-apps) moved it: marketplace.app.action/read live (comments reworded),
-// marketplace.app.install comment kept, and `- { match: village, class: marketplace.app.read }` last in tools:
-// with its two comment lines. ov#312 deleted this pin and cp#213 its twin; both restored together
-// (rc37), the overlay copy taking the control plane's block byte for byte.
-const POLICY_BLOCK_SHA256 = "7ba5de7cfb029f46c5a1e7986f8aa0ddbddcdfca114be8ba956734cc6ad7c0d3";
+const POLICY_BLOCK_SHA256 = "8cb5db39b5a6049c77b4f3c9ab2ca8c3dcf64bd749a44c62d56c23a75cbee5ee";
 
 const OPEN = "```yaml approval-policy\n";
 function policyBlock(text: string): string {

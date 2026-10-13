@@ -763,17 +763,6 @@ export function configureAvApproval(): void {
   }
 }
 
-/** The bridge is inert without a reviewed projection and app bearer; writes also require daemon authority. */
-export function configureVillageBridge(): void {
-  const doc = readConfig();
-  const plugins = { ...((doc.plugins as Record<string, unknown>) ?? {}) };
-  const enabled = Array.isArray(plugins.enabled) ? plugins.enabled.filter((n): n is string => typeof n === "string") : [];
-  if (!enabled.includes("village-bridge")) enabled.push("village-bridge");
-  plugins.enabled = enabled;
-  doc.plugins = plugins;
-  writeConfig(doc);
-}
-
 const INDEX_LINKS_PLUGIN = "index-links";
 
 /** List `index-links` so Hermes loads the tool-result link rewrite. Idempotent. */
@@ -912,8 +901,10 @@ export function configureRecall(): void {
 }
 
 /**
- * Drop each of `names` from `plugins.enabled`. Writes only when an entry is removed;
- * every other entry, `plugins.disabled` included, is left as it is. Returns removed names.
+ * Drop each of `names` from `plugins.enabled` (install.ts passes `NOT_STAGED_PLUGINS`), so a box
+ * whose config an earlier installer wrote is healed (OV-300 M1: `village-bridge`). Writes only when
+ * an entry is removed; every other entry, `plugins.disabled` included, is left as it is. The names
+ * removed, for the log line.
  */
 export function unlistPlugins(names: Iterable<string>): string[] {
   const doc = readConfig();

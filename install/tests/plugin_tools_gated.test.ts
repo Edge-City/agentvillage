@@ -96,6 +96,7 @@ const NOT_GATED: readonly NotGated[] = [
     plugin: "recall",
     reason: "read: local SQLite FTS5 search over the agent's own notes and the owner's private sessions; no network, refuses in groups; opt-in (AV_RECALL_ENABLED)",
   },
+  { name: "village", plugin: "village-bridge", reason: NOT_STAGED_REASON },
 ];
 
 /**
@@ -232,10 +233,7 @@ const ROW = /(?<![\w.\])])\(\s*("[^"]*"|'[^']*'|[A-Za-z_]\w*)\s*,/g;
 const TARGET = "register_tool";
 
 /** E1: a literal that is a piece of `register_tool`, three characters or more (`"register"` is the entrypoint name). */
-const fragment = (piece: string, text = "") =>
-  piece.length >= 3 && piece !== "register" && TARGET.includes(piece) && (piece !== "tool" || REGISTER_LITERAL.test(text));
-/** E1 (ov#312): a `"register"` literal in the file, beside which `"tool"` can complete the name. */
-const REGISTER_LITERAL = /(["'])register\1/;
+const fragment = (piece: string) => piece.length >= 3 && piece !== "register" && TARGET.includes(piece);
 
 /**
  * E1, f-strings: one that could equal `register_tool`, every literal piece between the `{...}` a piece of
@@ -392,7 +390,7 @@ function inventory({ root = PLUGINS, nameTables = NAME_TABLES }: ScanOptions = {
         const content = /[rR]/.test(prefix!) ? body! : decode(body!);
         if (SPELLS.test(content)) {
           if (!inside(honest, i) && !inside(inline, i)) unreadable(i, `"register_tool" string literal outside \`register_tool = getattr(ctx, "register_tool", None)\``);
-        } else if (/[fF]/.test(prefix!) ? fStringSpells(content) : fragment(content, text)) {
+        } else if (/[fF]/.test(prefix!) ? fStringSpells(content) : fragment(content)) {
           unreadable(i, `string literal ${prefix}${quote}${body}${quote} can spell register_tool`);
         }
       }
@@ -617,13 +615,6 @@ describe("OV-304 S2: the scan reads or fails on the evasion forms (fixture plugi
       file: "fixture/__init__.py",
       marker: `"register_" + "tool"`,
       form: /string literal "register_" can spell register_tool/,
-    },
-    {
-      id: 'E1 "register" + "_" + "tool" (ov#312: "tool" alone is allowed only without a "register" literal)',
-      files: { "__init__.py": plugin(`    getattr(ctx, "register" + "_" + "tool")(name="evil_word", toolset="t", schema={}, handler=print)\n`) },
-      file: "fixture/__init__.py",
-      marker: `"register" + "_" + "tool"`,
-      form: /string literal "tool" can spell register_tool/,
     },
     {
       id: "E1 f-string",

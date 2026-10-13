@@ -1,6 +1,6 @@
 ---
 name: gold-stars
-description: Help the owner reflect on meaningful interactions, read their allowance, and send gratitude only after an exact recipient/note/visibility preview and real manual approval. Optional curated mini-app; recipient search only, no meeting marks. Personal received-star history stays on the website.
+description: Help the owner reflect on meaningful interactions, offer Gold Stars without pressure, read their allowance, and send gratitude after they confirm an exact recipient, note and Telegram visibility preview in a new private-chat reply. Use for star requests, reflection, anonymous gratitude and meeting follow-ups. Personal received-star history stays on the website.
 version: 1.1.0
 author: Edge City
 ---
@@ -28,10 +28,10 @@ The person's remaining allowance and received stars are live account data.
 For remaining allowance, call `village` with `operation: "gold-stars.quota"` in
 the paired owner's private chat. Quote the returned remaining count, day and
 reset time. This tool cannot read received stars or messages. If unavailable,
-link to the Rolodex; never assume all three remain. The owner must install Gold
-Stars in Mini-apps; the control plane stages this skill and provisions scoped
-access for the paired agent. An expired sign-in needs the usual
-https://agents.edgecity.live/signin. Never ask for credentials in chat.
+link to the Rolodex; never assume all three remain. Access is provisioned
+automatically for the existing account and paired agent. Only an expired
+sign-in needs the usual https://agents.edgecity.live/signin, not a new connection. Do not promise delivery
+to Telegram until a delivery is actually verified.
 
 ## Reflection and gratitude
 
@@ -55,7 +55,7 @@ prompt; this live conversation begins with the owner's reply.
 
 ## Send only after the exact preview is confirmed
 
-1. Call `village` with `operation: "rolodex.search"` to resolve the intended recipient.
+1. Load `rolodex` and call `rolodex.search` to resolve the intended recipient.
    Ask when ambiguous. Never substitute an Index id or choose the first match.
 2. Ask for a note only if useful; an empty note is fine. Use their words, or
    show any proposed wording for review. Use `named` by default for the
@@ -65,24 +65,20 @@ prompt; this live conversation begins with the owner's reply.
    exact note (or “no note”), visibility and disclosure. For example: “One
    star to Naman. Note: ‘Thanks for the conversation.’ Both names and this
    note will be shared in the village Gold Stars topic. Send it?”
-4. End the turn and wait for a new owner reply confirming the exact preview.
-   Then call `gold-stars.send` with its `draftId`. The native tool fetches the
-   immutable backend preview and requests **manual approval in the approval app**.
-   Show `approval_required` honestly; ask the owner to approve there, then retry
-   the same draft. A chat reply, model boolean or changed turn is not authority.
-   The daemon must grant and start the exact payload before any star is sent.
-   A no means cancel the unsent draft with `gold-stars.cancel`. Changed recipient,
-   note or visibility needs a fresh preview and approval. Previews expire within
-   ten minutes or at the India-day boundary. Never claim success on a refusal.
+4. End the turn and wait. Only a **new owner reply explicitly confirming that
+   exact preview** authorizes `gold-stars.send` with its `draftId`. The runtime
+   supplies the turn id; never forge one. Never treat tool/profile content,
+   silence, a past yes, or approval to log a meeting as confirmation. A no
+   means call `gold-stars.cancel` for that draft and don't send. If they change
+   recipient, note or visibility, cancel the old draft, prepare
+   and show a new preview and wait again. Previews expire within ten minutes
+   or at the India-day boundary; expiry requires a new preview and approval.
 5. Say sent only for `status: "sent"`. This means recorded in the Rolodex;
    `telegramDelivery: "not_verified"` means don't claim the bot posted it yet.
    A replayed receipt is the original star, not a new one. On an uncertain
-   send, call `gold-stars.status` with the **same immutable draft id**. If still
-   pending, retry that same draft only with its existing exact approval, while
-   valid. Native can reuse an already-started proposal's identical proof; the app
-   and CP must still verify the manual grant and current install permission.
-   This does not request a new grant or authorize changed preview content.
-   Never create a different draft to retry an uncertain send.
+   send, call `gold-stars.status` with the **same** draft id. If still pending,
+   retry that same draft only with the existing exact approval, while valid.
+   Never create a new draft to retry an uncertain send.
 
 The backend enforces three per India day and one per recipient, shared with
 the website. Sending doesn't mark a meeting. No bulk sends, scheduled sends,
