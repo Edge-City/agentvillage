@@ -487,6 +487,74 @@ describe("S1 / N6 (round 2): the message cursor lags the gate by 15 minutes; the
   });
 });
 
+describe("round 3: a session store the gate cannot read never moves the message cursor (S1)", () => {
+  const day = (): Msg[] => [1, 2, 3].map((n) => ({ text: LONG(n), ago: 8 * 3600 })); // the resident's day, before night 1
+  const broken: [string, (dir: string) => void][] = [
+    ["session_store_unreadable", (dir) => writeFileSync(join(dir, "state.db"), "not a database, not even close to one")],
+    ["session_store_schema", (dir) => {
+      const db = new Database(join(dir, "state.db"), { create: true });
+      db.run("CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, kind TEXT)"); // Hermes renamed chat_type
+      db.run("CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, timestamp REAL)");
+      db.close();
+    }],
+  ];
+  for (const [code, breakStore] of broken) {
+    test(`R4b (${code}): gated_no_change keeps the cursor; the day's three messages count the next night`, () => {
+      const dir = home();
+      const cursor = Date.now() / 1000 - DAY;
+      writeState(dir, { messageCursor: cursor, memoryFilterVersion: 2 });
+      breakStore(dir);
+      expect(runGate(dir).json).toMatchObject({ wakeAgent: false, reason: "no_evidence" });
+      expect(lastRun(dir)).toMatchObject({ exit_branch: "gated_no_change", messages_note: code, resident_messages_since_last_run: 0 });
+      expect(signals(dir).messageCursor).toBe(cursor);
+      rmSync(join(dir, "state.db"));
+      messages(dir, day());
+      expect(runGate(dir).json).toMatchObject({ wakeAgent: true, evidence: { substantiveMessages: 3 } });
+      expect(lastRun(dir).messages_note).toBeNull();
+    });
+  }
+
+  test("a wake on goals while the store is unreadable completes; the cursor stays and the messages count after", () => {
+    const dir = home();
+    const cursor = Date.now() / 1000 - DAY;
+    writeState(dir, { messageCursor: cursor, memoryFilterVersion: 2 });
+    writeTags(dir, "Here to:\n- Finding a hardware cofounder (you)");
+    broken[0][1](dir);
+    expect(runGate(dir).json).toMatchObject({ wakeAgent: true, evidence: { substantiveMessages: 0, goalsChanged: true } });
+    expect(lastRun(dir)).toMatchObject({ messages_note: "session_store_unreadable", pointers: { cursor } });
+    complete(dir);
+    rmSync(join(dir, "state.db"));
+    messages(dir, day());
+    const next = runGate(dir);
+    expect(next.json).toMatchObject({ wakeAgent: true, evidence: { substantiveMessages: 3, goalsChanged: false } });
+  });
+});
+
+describe("round 3: a model that reports tool_unavailable keeps the evidence, as a provider failure does (N3)", () => {
+  test("tool_unavailable keeps the evidence and never counts toward the give-up; a model error completes", () => {
+    const dir = home();
+    writeTags(dir, "Here to:\n- Finding a hardware cofounder (you)");
+    const closeRecord = (exit: string, code: string | null) => {
+      const file = join(dir, "av-events", "memory_signal_runs.json");
+      const data = JSON.parse(readFileSync(file, "utf8")) as { runs: Run[] };
+      Object.assign(data.runs.at(-1)!, { exit_branch: exit, error_code: code, finished_at: "x" });
+      writeFileSync(file, JSON.stringify(data));
+    };
+    for (let night = 0; night < 3; night++) {
+      // Index down: list_intents failed. The plugin closes the record from the outcome; the last
+      // night's is left open, so the newest run is judged by the model's outcome alone.
+      expect(runGate(dir).json).toMatchObject({ wakeAgent: true, evidence: { goalsChanged: true } });
+      complete(dir, "tool_unavailable");
+      if (night < 2) closeRecord("tool_unavailable", "tool_unavailable");
+    }
+    expect(runGate(dir).json).toMatchObject({ wakeAgent: true, evidence: { goalsChanged: true } });
+    // `error` is the model's own "anything else": the run completed, its evidence is committed.
+    complete(dir, "error");
+    closeRecord("error", "unknown");
+    expect(runGate(dir).json).toMatchObject({ wakeAgent: false, reason: "no_evidence" });
+  });
+});
+
 describe("security review: the gate reads with the plugin's own functions", () => {
   test("the shared declined-text vectors give the same results through the gate's plugin_core", () => {
     const dir = home();

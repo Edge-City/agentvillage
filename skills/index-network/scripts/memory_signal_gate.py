@@ -42,12 +42,19 @@ on evidence:
   `av-events/memory_signal_runs.json` (the model never writes it; `memorySignals` keeps a mirror)
   and move only when the evidence was dealt with: at once on `gated_no_change`; for a wake, once
   that run completed (the next run commits the woken record's pointers). A cap, the switch off, an
-  unreadable map, an exception or a provider failure of a woken run leaves them, so no evidence the
-  model never saw is discarded. Two wakes on the same evidence that ran and never wrote their
+  unreadable map, an exception, a provider failure of a woken run, or a woken run whose model
+  reported `tool_unavailable` (Index or `record_intention` unreachable) leaves them, so no evidence
+  the model never saw is discarded; neither failure counts toward the give-up. When Hermes's session
+  store cannot be read (or its schema is not the expected one), the message cursor and its overlap
+  stay put on every exit, goals and memory still move, and the run record's `messages_note` names
+  the code. Two wakes on the same evidence that ran and never wrote their
   outcome, and the next run gives up: it commits the newer of those wakes' pointers (later evidence
   stays pending) and reports an error without waking. The cursor is committed CURSOR_LAG_S behind
   the gate's time and the read stops at that time, so a message stamped before the read but written
-  after it is counted the next night, and none twice.
+  after it is counted the next night, and none twice. The bound is CURSOR_LAG_S (15 minutes): a
+  message flushed more than 15 minutes late (stamped more than 15 minutes before a gate's read and
+  written after it, e.g. a turn queued behind a long one or a backlog after a gateway restart) is
+  behind the cursor that gate commits and is never counted.
 * **Run record**: one entry per run in `$HERMES_HOME/av-events/memory_signal_runs.json`
   (counts and codes; the text of an intention this pass recorded, kept on the
   box only so a declined one is never proposed again). The av-events plugin
@@ -569,6 +576,7 @@ MAX_UNCOMPLETED_WAKES = 2
 #: The message cursor is committed this far behind the gate's time: Hermes stamps a turn with the
 #: platform's event time and writes it at the turn's first flush, so a message stamped just before
 #: the read can be written after it. The overlap window's counted keys are skipped next time.
+#: The bound: a message flushed more than this late is behind the committed cursor, never counted.
 CURSOR_LAG_S = 15 * 60
 MAX_OVERLAP_KEYS = 500
 
@@ -840,12 +848,17 @@ def inputs_text(*, run_id: str, goals: list[str], messages: list[tuple[float, st
 def wake_status(run: dict, outcome: Any) -> str:
     """A woken run's status, from the gate-owned record and the model's last outcome:
     `completed` (its outcome for that run, a noted capture, or a record closed on a non-failure
-    branch), `provider` (the provider failed it: not the model's fault), or `no_outcome` (it ran and
-    never wrote its outcome; this alone counts toward the give-up)."""
-    if isinstance(outcome, dict) and outcome.get("runId") == run.get("run_id"):
-        return "completed"
+    branch), `provider` (the provider failed it, or a tool it needed was down: not the model's
+    fault, so the evidence is kept and it does not count), or `no_outcome` (it ran and never wrote
+    its outcome; this alone counts toward the give-up). A model outcome of `tool_unavailable`
+    (`list_intents` or `record_intention` unreachable, e.g. Index down) is `provider`; a model
+    `error` ("anything else" in the prompt) is the model's own and stays `completed`."""
     if run.get("recorded_intent_id") or run.get("exit_branch") in COMPLETED_BRANCHES:
         return "completed"
+    if run.get("exit_branch") == "tool_unavailable":
+        return "provider"
+    if isinstance(outcome, dict) and outcome.get("runId") == run.get("run_id"):
+        return "provider" if outcome.get("exit") == "tool_unavailable" else "completed"
     if run.get("exit_branch") == "error" and run.get("error_code") in PROVIDER_FAILURES:
         return "provider"
     return "no_outcome"
@@ -873,8 +886,9 @@ def gate(home: Path, memory_path: Path, state_path: Path, *, now: float) -> dict
     the gate-owned `av-events/memory_signal_runs.json` (S2: the model rewrites heartbeat-state and
     could drop them; `memorySignals` keeps a mirror). They move only when the evidence was dealt
     with: at once on a `gated_no_change` exit; for a wake, when that run completed, committed by the
-    next run from the woken run's record. A cap, recording off, an unreadable map, an exception, or a
-    provider failure of a woken run leaves them, so the next run reads the same evidence. Two wakes
+    next run from the woken run's record. A cap, recording off, an unreadable map, an exception, a
+    provider failure of a woken run or its model's `tool_unavailable` leaves them, so the next run
+    reads the same evidence; an unreadable session store leaves the message cursor. Two wakes
     on the same evidence that ran and never wrote their outcome: the next run gives up, commits the
     newest such wake's pointers (newer evidence stays pending) and reports
     `error`/`state_write_failed` without waking."""
@@ -953,6 +967,10 @@ def gate(home: Path, memory_path: Path, state_path: Path, *, now: float) -> dict
         "overlap": ([str(k) for k in overlap] + [m[2] for m in (messages or []) if m[0] > lagged])[-MAX_OVERLAP_KEYS:],
         "memoryFilterVersion": MEMORY_FILTER_VERSION,
     }
+    if messages_note:
+        # The session store could not be read: nobody saw those messages, so the cursor and its
+        # overlap stay where they were (goals and memory still move); the run record names the code.
+        fresh.update(cursor=committed.get("cursor"), overlap=[str(k) for k in overlap][-MAX_OVERLAP_KEYS:])
     if not same_filter:
         # A new filter re-bases the memory hash at once: that discards no evidence.
         committed.update(memoryHash=current_memory_hash, memoryFilterVersion=MEMORY_FILTER_VERSION)
@@ -993,6 +1011,8 @@ def gate(home: Path, memory_path: Path, state_path: Path, *, now: float) -> dict
         "exit_branch": exit_branch,
         "gate_reason": reason,
         "error_code": error_code,
+        # `session_store_unreadable` / `session_store_schema` (a code, never text), else None.
+        "messages_note": messages_note,
         **counters,
         # The last list the model made (the gate cannot call Index): a stop reports what was last known.
         "existing_intents": last_known_intents(runs),
