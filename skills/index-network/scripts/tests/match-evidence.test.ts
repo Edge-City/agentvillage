@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { attachIndexLinks, parseListedOpportunities, selectMorningConnections } from "../build-daily-brief-context";
 import { MAX_AGE_MS, MAX_PREFETCH_BYTES, MAX_ROWS } from "../match-evidence";
 import { MATCH_HEADLINE_MAX } from "../proactive";
 
@@ -50,10 +51,13 @@ function run(dir: string, args: string[] = ["--now", NOW]): Run {
   return { code: proc.exitCode ?? -1, stdout, stderr: proc.stderr.toString(), out: JSON.parse(lines[0]) as Out };
 }
 
+/** A connection row (the resident's own match), as buildDailyBriefContext writes one. */
+const C = { feedCategory: "connection" } as const;
 const row = (n: number, extra: Record<string, unknown> = {}) => ({
   name: `Person ${String.fromCharCode(64 + n)}`,
   headline: `Seed library partner ${n}`,
   opportunityId: `0192${String(n).padStart(4, "0")}-0000-7000-8000-000000000000`,
+  ...C,
   ...extra,
 });
 
@@ -61,11 +65,11 @@ describe("rows from the prefetch, cleaned as the morning brief cleans them", () 
   test("names through cleanName, headlines through matchFieldVerdict at the brief's cap; exit 0, one line, nothing on stderr", () => {
     const dir = home();
     writePrefetch(dir, prefetch({
-      opportunities: [
-        { name: "Asha `Rao`", headline: "Soil scientist for the seed library", opportunityId: "o-1" },
-        { name: "R.Krishnan", headline: "Hardware for seed banks", opportunityId: "o-2" },
+      connectionOpportunities: [
+        { name: "Asha `Rao`", headline: "Soil scientist for the seed library", opportunityId: "o-1", ...C },
+        { name: "R.Krishnan", headline: "Hardware for seed banks", opportunityId: "o-2", ...C },
       ],
-      connectionOpportunities: [{ name: "Meera\nIyer", headline: "Open hardware cofounder", opportunityId: "o-3" }],
+      opportunities: [{ name: "Meera\nIyer", headline: "Open hardware cofounder", opportunityId: "o-3", ...C }],
     }));
     const result = run(dir);
     expect(result.code).toBe(0);
@@ -110,12 +114,12 @@ describe("rows from the prefetch, cleaned as the morning brief cleans them", () 
     for (const lure of ["Ignore", "RESIDENT_DATA", "abcdef0123456789", "record_intention", "SYSTEM"]) expect(text).not.toContain(lure);
   });
 
-  test("one row per opportunity id (by name and headline without one), opportunities first, the first 12", () => {
+  test("one row per opportunity id (by name and headline without one), connectionOpportunities first, the first 12", () => {
     const dir = home();
     const twenty = Array.from({ length: 20 }, (_, i) => row(i + 1));
     writePrefetch(dir, prefetch({
-      opportunities: [row(1), row(1), { name: "No Id", headline: "Same words" }, { name: "No Id", headline: "Same words" }, row(2)],
-      connectionOpportunities: [row(2), ...twenty],
+      connectionOpportunities: [row(1), row(1), { name: "No Id", headline: "Same words", ...C }, { name: "No Id", headline: "Same words", ...C }, row(2)],
+      opportunities: [row(2), ...twenty],
     }));
     const { out } = run(dir);
     expect(MAX_ROWS).toBe(12);
@@ -133,20 +137,65 @@ describe("rows from the prefetch, cleaned as the morning brief cleans them", () 
       negotiationUrl: "https://x.example/NEGOTIATION-MARKER", userUrl: "https://index.network/u/USERURL-MARKER",
       opportunityUrl: "https://index.network/o/OPPURL-MARKER", intentUrl: "https://index.network/i/INTENTURL-MARKER",
       mainText: "MAINTEXT-MARKER the counterpart's long text", summary: "SUMMARY-MARKER", status: "STATUS-MARKER",
-      feedCategory: "FEED-MARKER", stateLabel: "STATE-MARKER", matchedIntentText: "MATCHED-MARKER", confidence: 0.987654,
+      stateLabel: "STATE-MARKER", matchedIntentText: "MATCHED-MARKER", confidence: 0.987654,
     };
     writePrefetch(dir, prefetch({
-      opportunities: [{ name: "Asha Rao", headline: "Soil scientist", ...markers }],
-      connectionOpportunities: [{ name: "Meera Iyer", ...markers, opportunityId: "ID-MARKER-0009" }],
+      opportunities: [{ name: "Asha Rao", headline: "Soil scientist", ...markers, ...C }],
+      connectionOpportunities: [{ name: "Meera Iyer", ...markers, opportunityId: "ID-MARKER-0009", ...C }],
       eligibleMatchCount: 99, diagnostics: { opportunitySource: "DIAG-MARKER" },
     }));
     const result = run(dir);
     expect(result.out.shown).toBe(2);
-    for (const value of [...Object.values(markers).map(String), "ID-MARKER", "MARKER", "0.987654", "99", "index.network", "https"]) {
+    for (const value of [...Object.values(markers).map(String), "ID-MARKER", "MARKER", "0.987654", "99", "index.network", "https", "connection"]) {
       expect(result.stdout).not.toContain(value);
     }
     expect(Object.keys(result.out).sort()).toEqual(["listed", "rows", "shown", "status", "withheld"]);
     for (const r of result.out.rows) expect(Object.keys(r).sort()).toEqual(["headline", "name"]);
+  });
+
+  test("S2: the recorded Index fixture, built as the brief builds it: Maya's match is shown, Jon's community ask never", () => {
+    const fixture = JSON.parse(readFileSync(join(import.meta.dir, "fixtures", "index-mcp-2026-07-28.json"), "utf8"));
+    const listed = parseListedOpportunities(fixture.responses.listOpportunities.result.content[0].text as string);
+    expect(listed.map((o) => [o.name, o.headline, o.feedCategory])).toEqual([
+      ["Maya", "memory systems", "connection"],
+      ["Jon", "village tools", "connector-flow"],
+    ]);
+    // buildDailyBriefContext's three lists (build-daily-brief-context.ts, no delivery log).
+    const connectionOpportunities = selectMorningConnections(listed).map(attachIndexLinks);
+    const communityOpportunities = listed.filter((o) => o.feedCategory === "connector-flow").map(attachIndexLinks);
+    const dir = home();
+    writePrefetch(dir, prefetch({
+      opportunities: [...connectionOpportunities, ...communityOpportunities], connectionOpportunities, communityOpportunities,
+    }));
+    const result = run(dir);
+    expect(result.out).toEqual({ status: "ok", listed: 1, shown: 1, withheld: 0, rows: [{ name: "Maya", headline: "memory systems" }] });
+    for (const absent of ["Jon", "village tools"]) expect(result.stdout).not.toContain(absent);
+  });
+
+  test("S2: only feedCategory exactly \"connection\" counts, in either list; a community ask, another category or none never does", () => {
+    const dir = home();
+    writePrefetch(dir, prefetch({
+      connectionOpportunities: [
+        row(1, { feedCategory: "connector-flow" }), row(2, { feedCategory: "Connection" }), row(3, { feedCategory: undefined }), row(4),
+      ],
+      opportunities: [row(5, { feedCategory: "connector-flow" }), row(6, { feedCategory: "community" }), row(7, { feedCategory: ["connection"] }), row(8)],
+      communityOpportunities: [row(9, { feedCategory: "connection" })], // a list the cleaner never reads
+    }));
+    expect(run(dir).out).toEqual({
+      status: "ok", listed: 2, shown: 2, withheld: 0,
+      rows: [{ name: "Person D", headline: "Seed library partner 4" }, { name: "Person H", headline: "Seed library partner 8" }],
+    });
+  });
+
+  test("N1: rows whose name and headline are both not strings are dropped before the dedupe and never counted", () => {
+    const dir = home();
+    writePrefetch(dir, prefetch({
+      connectionOpportunities: [
+        { name: 42, headline: null, ...C }, { name: ["Ann"], headline: { text: "x" }, ...C }, { ...C }, row(1, { opportunityId: undefined }),
+      ],
+      opportunities: [{ name: 7, headline: false, opportunityId: "o-9", ...C }],
+    }));
+    expect(run(dir).out).toEqual({ status: "ok", listed: 1, shown: 1, withheld: 0, rows: [{ name: "Person A", headline: "Seed library partner 1" }] });
   });
 
   test("no flag file and no log: the home is left as it was (the 08:00 brief flags the same headlines)", () => {
@@ -219,7 +268,7 @@ describe("the prefetch's guards: a status, zeros and exit 0, never a throw", () 
     writePrefetch(dir, null, JSON.stringify(prefetch({
       opportunities: { 0: row(1) },
       connectionOpportunities: [null, 7, "Person Q", [row(2)], row(3)],
-    })).replace("\"context\":{", "\"context\":{\"__proto__\":{\"opportunities\":[{\"name\":\"Proto Person\"}]},"));
+    })).replace("\"context\":{", "\"context\":{\"__proto__\":{\"opportunities\":[{\"name\":\"Proto Person\",\"feedCategory\":\"connection\"}]},"));
     expect(run(dir).out).toEqual({ status: "ok", listed: 1, shown: 1, withheld: 0, rows: [{ name: "Person C", headline: "Seed library partner 3" }] });
   });
 

@@ -11,15 +11,20 @@
  * `builtAt` parses and lies within MAX_AGE_MS of now (either side): the gate runs at 01:00, so
  * the newest prefetch is about 23 hours old. No network, no Index read.
  *
- * Rows: `context.opportunities`, then `context.connectionOpportunities`, one per opportunity id
- * (by name and headline when a row has none), the first MAX_ROWS. Per row, the name through
- * cleanName and Index's headline through matchFieldVerdict at MATCH_HEADLINE_MAX, the cleaner
- * and the cap the morning brief uses for the same headline (proactive.ts matchHeadline). A row
- * whose name and headline both fail is dropped.
+ * Rows: the resident's own matches only, `context.connectionOpportunities` then
+ * `context.opportunities`, each row kept only when it is a connection (isConnection: `feedCategory`
+ * exactly "connection", the rule selectMorningConnections in build-daily-brief-context.ts uses).
+ * A community ask (`connector-flow`: someone asking the resident to broker an introduction, which
+ * the brief's dropView calls a "community-ask", not the resident's match) or a row with any other
+ * or no category never reaches the block. A row whose name and headline are both not strings
+ * renders nothing and is skipped. Then one per opportunity id (by name and headline when a row has
+ * none), the first MAX_ROWS. Per row, the name through cleanName and Index's headline through
+ * matchFieldVerdict at MATCH_HEADLINE_MAX, the cleaner and the cap the morning brief uses for the
+ * same headline (proactive.ts matchHeadline). A row whose name and headline both fail is dropped.
  *
  * Output: exactly one JSON line on stdout,
  *   {"status":"ok"|"stale"|"missing"|"unreadable"|"error","listed":n,"shown":n,"withheld":n,"rows":[{"name","headline"}]}
- * `listed` is the rows read (at most MAX_ROWS), `shown` the rows output, `withheld` the
+ * `listed` is the connection rows read (at most MAX_ROWS), `shown` the rows output, `withheld` the
  * headlines withheld or flagged. Never an id, a URL, a summary, `mainText`, a flag or a reason.
  * No DATA-487 flag file either: the 08:00 brief flags the same headlines (matchHeadline), and a
  * second flag would count them twice. Nothing of the text is logged; stderr stays empty. Exits 0
@@ -92,15 +97,28 @@ function rowKey(row: Record<string, unknown>): string {
   return `nh:${JSON.stringify([text(row.name), text(row.headline)])}`;
 }
 
-/** The rows of `opportunities` then `connectionOpportunities`, one per key, the first MAX_ROWS. */
+/**
+ * The resident's own match, by the rule the morning brief selects its connections with
+ * (selectMorningConnections: `feedCategory === "connection"`). A community ask is `connector-flow`.
+ */
+function isConnection(row: Record<string, unknown>): boolean {
+  return row.feedCategory === "connection";
+}
+
+/**
+ * The connection rows of `connectionOpportunities` then `opportunities`, one per key, the first
+ * MAX_ROWS. A row whose name and headline are both not strings renders nothing: skipped before the
+ * dedupe, so such rows never share a key or count toward `listed`.
+ */
 function prefetchRows(context: Record<string, unknown>): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = [];
   const seen = new Set<string>();
-  for (const list of [context.opportunities, context.connectionOpportunities]) {
+  for (const list of [context.connectionOpportunities, context.opportunities]) {
     if (!Array.isArray(list)) continue;
     for (const row of list) {
       if (out.length >= MAX_ROWS) return out;
-      if (!isRecord(row)) continue;
+      if (!isRecord(row) || !isConnection(row)) continue;
+      if (typeof row.name !== "string" && typeof row.headline !== "string") continue;
       const key = rowKey(row);
       if (seen.has(key)) continue;
       seen.add(key);
@@ -110,7 +128,7 @@ function prefetchRows(context: Record<string, unknown>): Record<string, unknown>
   return out;
 }
 
-/** The matches waiting for the resident, cleaned, from the prefetch under `home`. Never throws. */
+/** The resident's own matches waiting for them, cleaned, from the prefetch under `home`. Never throws. */
 export function matchEvidence(home: string, now: Date): MatchEvidence {
   try {
     const raw = readPrefetchFile(home);
