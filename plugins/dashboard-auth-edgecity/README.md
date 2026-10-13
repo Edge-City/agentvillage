@@ -254,7 +254,8 @@ a refusal closes it `4401` with `auth: <reason>`:
 | `profile` | none or `current` only (`RESIDENT_PTY_PROFILES`): any other scopes `HERMES_HOME` and skips the attach URL, so the TUI would spawn a gateway the guard never sees (`web_server_chat.py:325-389`) | `edgecity_pty_profile` |
 | `cwd` (the workspace) | none, or exactly `$HERMES_HOME/resident-chat` | `edgecity_pty_cwd` |
 | `resume` | a chat of the resident's own (`session_visible` on the stored owner; a prefix is read as Hermes reads it) | `edgecity_pty_resume` |
-| `channel` | new, or one this login opened a tab on before; never another login's (it names the tab's active-session file and its sidebar feed) | `edgecity_pty_channel` |
+| `channel` | new, or one this login's Chat tab runs on; never another login's (it names the tab's active-session file and its sidebar feed) | `edgecity_pty_channel` |
+| a new `channel` past the login's own bound | refused: the login already holds `PTY_CHANNELS_PER_LOGIN` = 16 channels (see Limits) | `edgecity_pty_channels` |
 | `attach` | anything: a resident's token is keyed under its own login in Hermes's PTY registry, so it never reattaches another login's terminal | |
 
 Every value of a repeated parameter is checked (Hermes reads the last).
@@ -293,6 +294,26 @@ So one login holds at most `RESIDENT_PTYS_PER_LOGIN` = 3: at the limit the login
 detached terminal is closed to make room, and if all three are attached the fourth tab shows
 Hermes's own `Chat could not start: too many chat terminals are open in other tabs.`
 
+**The channel table (1.4.0, round 5).** The guard remembers which login's Chat tab runs on each
+channel, so no resident opens a tab on another login's (SEC1-refute4 S-rf4-1: at first it was one
+box-wide table of 4096 that nothing emptied, written before any limit, so one resident's open-and-close
+tabs, or plain wear, since the SPA mints a channel per Chat mount, filled it in a minute and then
+refused every resident's next tab until a restart). Now:
+
+- a channel is recorded only when its tab's spawn is committed, after every other check, under the
+  same lock as the terminal limit; admission and a tab refused later record nothing;
+- a resident's entry is dropped when the channel's last live credential is revoked (the tab closed,
+  the child exited, a reap or eviction, a tab that never spawned, the 120 s sweep). That opens no
+  reach: a later tab on the channel has its resume re-checked against its own login, and `/api/pub`
+  is bound per credential;
+- the bound is per login, `PTY_CHANNELS_PER_LOGIN` = 16. A resident holds no more entries than live
+  terminals (3), so it meets the bound only if an entry outlives its terminal; a new channel past it
+  is refused `4401 auth: edgecity_pty_channels` for that login only. One login never blocks another;
+- an admin is never refused: its channel is recorded when its terminal runs and never over another
+  login's, and at the bound its own oldest entry makes room (an admin's tab holds no credential, so
+  nothing else drops it). The SPA's channels are `chat-<random UUID>`, so a displaced admin entry is
+  not one a resident can name.
+
 **What the TUI could do on its own, and what is closed.** The TUI process runs as `hermes` with the
 box's provider environment (secrets kept by Hermes's design, as for the Telegram gateway), and the
 resident's keystrokes reach it. Everything it sends to the gateway meets the method list; what it
@@ -310,9 +331,23 @@ does locally is closed from the guard's side by the child's environment:
 | `/exit`, `/quit`, `/update` | refused in hosted dashboard mode | `HERMES_TUI_DASHBOARD=1` forced |
 | the TUI exits (crash, Ctrl+C, Ctrl+D) | the PTY ends; Hermes closes the tab, never a shell (the child is `node`, spawned without one) | the credential is revoked with it |
 | `/theme-info` | prints four theme variables | nothing secret |
+| `/heapdump` (and a dump at start or at a memory threshold) | writes a V8 snapshot of the TUI, which holds its environment (the box's provider keys, the tab's own credential), to `$HERMES_HEAPDUMP_DIR`, up to 2 GiB per directory | `HERMES_HEAPDUMP_DIR` forced to a path under `/dev/null` (`PTY_NO_HEAPDUMP_DIR`): the dump's `mkdir` fails, whoever runs it, and the tab shows `heapdump failed: ...` |
+| user widgets | imports and runs every `$HERMES_HOME/tui-widgets/*.mjs` at start and on change, here `resident-tui/<id>/tui-widgets/` | not closed (carried, see below): nothing in the dashboard or the TUI writes there |
 
 There is no `$VAR` expansion and nothing in the TUI prints its environment. The git-branch probe
 runs `git rev-parse` in `resident-chat`, read-only.
+
+**Residual, carried (not closed by the guard).**
+
+- **User widgets** (SEC1-refute4 N-rf4-1). The TUI executes `tui-widgets/*.mjs` under its
+  `HERMES_HOME`, the login's `resident-tui/<id>`. Only the agent's own file tools (approval-gated,
+  running as `hermes`) can write there, the same class as the box's own `tui-widgets/` and `plugins/`
+  before 1.4.0, and those tools can already run code as `hermes`. There is no cheap closure: the TUI
+  runs as the same user, so a mode is no barrier, and the loader watches the directory's parent and
+  hot-loads a directory that appears in place of anything put there.
+- **The child's environment.** The TUI child holds the box's provider keys and its own credential,
+  as an admin terminal's holds the process-wide one; the agent's terminal can read
+  `/proc/<pid>/environ` (SEC-2).
 
 **What a resident sees.** On every start the TUI asks the gateway for a few things a resident may not
 read (`config.get`, `wake.start`, `commands.catalog`, `setup.status`), and it resizes with
@@ -369,7 +404,7 @@ method not listed above (`shell.exec`, `cli.exec`, `plugins.manage`, `slash.exec
 - A socket off the list closes before accept with `4401` and the reason `auth: edgecity_admin_only`
   (the SPA shows its sign-in banner for the terminal).
 - A Chat tab the resident may not open closes before accept with `4401` and
-  `auth: edgecity_pty_profile`, `_cwd`, `_resume`, `_channel` or `_no_login`; one whose settled chat
+  `auth: edgecity_pty_profile`, `_cwd`, `_resume`, `_channel`, `_channels` or `_no_login`; one whose settled chat
   is another login's shows `Chat could not start: That chat is not yours.` and closes `1011`. A Chat
   tab child's socket refused by its credential's rules closes `4401` with `auth: edgecity_pty_peer`,
   `_sockets`, `_channel` or `edgecity_admin_only`.
@@ -497,8 +532,9 @@ never the email, a token, a ticket or a path. Denials at INFO (`denied_not_liste
 `denied_not_own_session`, `denied_context_reference`, `denied_display_ticket`, `denied_full_list`,
 `denied_session_list_error`, `denied_gateway_list`, `denied_gateway_list_error`,
 `denied_seam_*_missing`, and for the Chat tab `denied_pty_profile`, `_cwd`, `_resume`, `_channel`,
-`_no_login`, `_peer`, `_sockets`, `_revoked`, `_limit`, `_attach_url`, `_no_context`, `_error`);
-`pty_grant_minted`, `pty_resident_spawned`, `pty_revoked_<why>` and `pty_resident_evicted` at DEBUG;
+`_channels`, `_no_login`, `_peer`, `_sockets`, `_revoked`, `_limit`, `_attach_url`, `_no_context`,
+`_error`); `pty_grant_minted`, `pty_resident_spawned`, `pty_revoked_<why>`, `pty_channel_released` and
+`pty_resident_evicted` at DEBUG;
 allows, the hide and the list filter (`resident_list_filtered`,
 `resident_list_truncated`) at DEBUG. The install line is `resident guard on (...)`; anything at ERROR from this logger is a seam
 that did not install.
@@ -541,6 +577,11 @@ Fresh owner and admin sign-ins are needed after the roll.
   - The tab's `/api/ws` connection is the owner's: a chat started in the tab appears in the owner's
     `GET /api/sessions` once it has a message, with `user_id` `edgecity:<owner id>`.
   - The dashboard log has no `pty start failed` for the owner's own tab.
+  - Round 5: the owner opens and closes the Chat tab 20 times (a reload or a chat switch each time),
+    and the 21st tab still opens and chats; no `edgecity_pty_channel` or `edgecity_pty_channels`
+    refusal for an owner's fresh tab.
+  - Round 5: `/heapdump` in the owner's tab answers `heapdump failed: ...`, and no file appears under
+    `<home>/resident-tui/*/.hermes/heapdumps/`.
 - Kept from 1.3.0: owner `PUT /api/config` gives `admin_only`; owner `/api/env` 403; owner
   `/api/dashboard/plugins/hub` 403, admin 200; owner `/api/console` closes 4401
   `auth: edgecity_admin_only`; owner `/api/ws` `shell.exec` answers 4031; admin `/api/console` sends

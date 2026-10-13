@@ -2292,16 +2292,17 @@ def chat_tab_free(guard, home):
     return SimpleNamespace(guard=guard, store=store, chat=chat, home=home, server=server)
 
 
-def open_pty(t, role="resident", peer="127.0.0.1", attach=None, **query):
+def open_pty(t, role="resident", peer="127.0.0.1", attach=None, user=None, **query):
     """What `chat_ws.pty_ws` does, in one task: the gate, then (accepted) the argv resolution with
     the handler's arguments, then the spawn (`attach`: through the registry). Returns
-    ("refused", reason) or ("ok", bridge, env, created)."""
+    ("refused", reason) or ("ok", bridge, env, created). `user`: another login than u1/admin-9."""
     if role == "token":
         query["token"] = "tok"
     else:  # a ticket minted inside a request the guard judged `role`; the admin is its own login
         token = t.guard._REQUEST_ROLE.set(role)
         try:
-            query["ticket"] = t.store.mint_ticket(user_id="admin-9" if role == "admin" else "u1", provider="edgecity")
+            query["ticket"] = t.store.mint_ticket(user_id=user or ("admin-9" if role == "admin" else "u1"),
+                                                  provider="edgecity")
         finally:
             t.guard._REQUEST_ROLE.reset(token)
     sock = psock("/api/pty", peer=peer, **query)
@@ -2391,6 +2392,10 @@ def test_the_residents_child_env(chat_tab_free):
                                                              __import__("hashlib").sha256(b"edgecity:u1").hexdigest()[:32])
     for key, value in g.PTY_FORCED_ENV.items():
         assert env[key] == value, key
+    # SEC1-refute4 N-rf4-1: no heap dump (a V8 snapshot holds the env): the dump's mkdir fails.
+    assert env["HERMES_HEAPDUMP_DIR"] == g.PTY_NO_HEAPDUMP_DIR
+    with pytest.raises(NotADirectoryError):
+        os.makedirs(env["HERMES_HEAPDUMP_DIR"], exist_ok=True)
     assert t.chat.resolved[-1] == {"resume": None, "sidecar_url": None, "profile": None, "workspace_cwd": chat}
     assert (grant.login, grant.channel, grant.info()) == ("edgecity:u1", "chat-1", {"user_id": "u1", "provider": "edgecity"})
     assert isinstance(bridge, g.GrantBridge) and bridge.env is env
@@ -2599,11 +2604,85 @@ def test_another_logins_channel_is_refused(chat_tab_free):
     assert open_pty(t, role="admin", channel="chat-r")[0] == "ok"  # an admin opens anything
 
 
-def test_the_channel_table_is_bounded(chat_tab_free, monkeypatch):
+def test_a_closed_tab_releases_its_channel_so_one_login_never_fills_the_table(chat_tab_free):
+    """SEC1-refute4 S-rf4-1: the table was box-wide and never released, so open-and-close tabs (or
+    wear: a new channel per Chat mount) filled it and every resident's next tab was refused. A
+    resident's entry now goes with the channel's last live credential."""
     t, g = chat_tab_free, chat_tab_free.guard
-    monkeypatch.setattr(g, "PTY_CHANNELS_MAX", 1)
-    assert open_pty(t, channel="chat-1")[0] == "ok"
-    assert open_pty(t, channel="chat-2") == ("refused", "edgecity_pty_channel")
+    for i in range(g.PTY_CHANNELS_PER_LOGIN + 8):
+        result = open_pty(t, channel=f"chat-{i}")
+        assert result[0] == "ok", (i, result)
+        assert g._pty_channels == {f"chat-{i}": "edgecity:u1"}
+        result[1].close()  # the tab closed: Hermes closes the bridge, the credential is revoked
+        assert g._pty_channels == {} and g.pty_grants() == []
+    assert g.counts()["pty_channel_released"] == g.PTY_CHANNELS_PER_LOGIN + 8
+    for user in ("u1", "u2"):
+        assert open_pty(t, user=user, channel=f"chat-new-{user}")[0] == "ok"
+    assert open_pty(t, role="admin", channel="chat-new-adm")[0] == "ok"
+    # The child's exit releases it too; a second live tab on the same channel keeps it.
+    _ok, first, _env, _created = open_pty(t, channel="chat-shared")
+    _ok, second, _env, _created = open_pty(t, channel="chat-shared")
+    first._edgecity_inner.exited = True
+    assert first.read() is None and g._pty_channels.get("chat-shared") == "edgecity:u1"
+    second.close()
+    assert "chat-shared" not in g._pty_channels
+
+
+def test_a_login_at_its_own_channel_bound_is_refused_with_its_own_code_and_no_one_else_is(chat_tab_free, monkeypatch):
+    t, g = chat_tab_free, chat_tab_free.guard
+    monkeypatch.setattr(g, "PTY_CHANNELS_PER_LOGIN", 2)
+    assert open_pty(t, channel="chat-1")[0] == "ok" and open_pty(t, channel="chat-2")[0] == "ok"
+    assert open_pty(t, channel="chat-3") == ("refused", "edgecity_pty_channels")
+    assert g.counts()["denied_pty_channels"] == 1
+    assert open_pty(t, channel="chat-1")[0] == "ok"  # its own channel again
+    # Another resident and an admin are untouched by u1's bound; an admin is never refused.
+    assert open_pty(t, user="u2", channel="chat-b1")[0] == "ok"
+    for i in range(3):
+        assert open_pty(t, role="admin", channel=f"chat-adm-{i}")[0] == "ok"
+    held = sorted(c for c, owner in g._pty_channels.items() if owner == "edgecity:admin-9")
+    assert held == ["chat-adm-1", "chat-adm-2"]  # the admin's own oldest made room
+    assert sorted(c for c, owner in g._pty_channels.items() if owner == "edgecity:u1") == ["chat-1", "chat-2"]
+
+
+def test_the_channel_is_recorded_only_when_the_spawn_is_committed(chat_tab_free, monkeypatch):
+    """Admission records nothing; a tab refused after it (its settled chat, its directory, its
+    limit) holds no entry; and the commit checks the channel again, so two logins admitted on one
+    new channel do not both run on it."""
+    t, g = chat_tab_free, chat_tab_free.guard
+    t.chat.descendants["abc123"] = "adm1"  # Hermes settles u1's own chat on an admin's continuation
+    with pytest.raises(Refused):
+        open_pty(t, channel="chat-w", resume="abc123")
+    assert g._pty_channels == {} and g.pty_grants() == []
+    with monkeypatch.context() as m:
+        m.setattr(g, "resident_tui_dir", lambda login: None)
+        with pytest.raises(Refused):
+            open_pty(t, channel="chat-x")
+    assert g._pty_channels == {}
+    for i in range(g.RESIDENT_PTYS_PER_LOGIN):
+        assert open_pty(t, channel=f"chat-{i}")[0] == "ok"
+    with pytest.raises(Unavailable):
+        open_pty(t, channel="chat-over")
+    assert "chat-over" not in g._pty_channels and g.counts()["denied_pty_limit"] == 1
+
+    # u2 is admitted on a new channel; before its spawn, an admin's tab starts running on it.
+    token = g._REQUEST_ROLE.set("resident")
+    try:
+        sock = psock("/api/pty", channel="chat-race", ticket=t.store.mint_ticket(user_id="u2", provider="edgecity"))
+    finally:
+        g._REQUEST_ROLE.reset(token)
+
+    async def race():
+        assert t.chat._ws_auth_reason(sock) == (None, "ticket")
+        assert g._pty_channels.get("chat-race") is None
+        assert (await asyncio.to_thread(open_pty, t, role="admin", channel="chat-race"))[0] == "ok"
+        sidecar = t.chat._server_internal_ws_url("/api/pub", channel="chat-race")
+        argv, cwd, env = await t.chat._resolve_chat_argv_async(resume=None, profile=None, sidecar_url=sidecar)
+        return t.chat.PtyBridge.spawn(argv, cwd=cwd, env=env)
+
+    with pytest.raises(Unavailable):
+        asyncio.run(race())
+    assert g._pty_channels["chat-race"] == "edgecity:admin-9" and g.counts()["denied_pty_channel"] == 1
+    assert not [gr for gr in g.pty_grants() if gr.login == "edgecity:u2"]
 
 
 def test_stale_unbound_grants_are_dropped(chat_tab_free, monkeypatch):
@@ -3949,7 +4028,8 @@ def chat_tab(quiet_turns, monkeypatch):
         state.resolved.append({"resume": resume, "sidecar_url": sidecar_url, "profile": profile,
                                "active_session_file": active_session_file, "workspace_cwd": workspace_cwd})
         env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HERMES_HOME": str(hermes.home),
-               "CHILD_EXIT": "1" if state.exit_at_once else "0", "HERMES_TUI_NO_CONFIRM": "1"}
+               "CHILD_EXIT": "1" if state.exit_at_once else "0", "HERMES_TUI_NO_CONFIRM": "1",
+               "HERMES_HEAPDUMP_DIR": str(hermes.home / "heapdumps")}  # an operator's dump directory
         scoped = bool((profile or "").strip()) and (profile or "").strip().lower() != "current"
         if resume:
             db = _open_session_db_for_profile(None, read_only=True)
@@ -4375,3 +4455,134 @@ def test_hermes_r4_attach_tokens_are_per_login_and_a_login_holds_at_most_its_lim
         assert any("Chat could not start: too many chat terminals" in x for x in texts) and len(bridges) == 5
         assert g.counts()["denied_pty_limit"] >= 1
     assert len([gr for gr in g.pty_grants() if gr.login == "edgecity:owner-id"]) == g.RESIDENT_PTYS_PER_LOGIN
+
+
+# ==================================================================================================
+# Round 5 (SEC1-refute4): the channel table per login and released; no heap dump
+# ==================================================================================================
+
+
+def as_user(hermes, user_id, role="owner"):
+    """A signed-in client for another login than `<role>-id` (a second resident on the box)."""
+    client = hermes.client()
+    client.cookies.set("hermes_session_at",
+                       hermes.registry.get_provider("edgecity")._mint(user_id, f"{user_id}@example.org", role).access_token)
+    return client
+
+
+def test_hermes_r5_open_and_close_tabs_never_fill_the_channel_table(chat_tab, monkeypatch):
+    """S-rf4-1, the refuter's fill probe (`test_refute4_fill.py`) past the per-login bound: one owner
+    opens and closes tabs on new channels, with children that end at once. It is never refused, its
+    entries go with its tabs, and then its own next tab, another owner's and an admin's open and
+    run. (At round 4 the box-wide table filled and refused every resident's next tab.)"""
+    from hermes_cli import pty_bridge
+
+    hermes = chat_tab.hermes
+    g = hermes.guard
+    counted = pty_bridge.PtyBridge.spawn  # the fixture's real, counted spawn
+    quick = {"on": True}
+
+    class EofBridge:
+        def read(self, timeout=0.2):
+            return None
+
+        async def write(self, data):
+            return True
+
+        def resize(self, cols, rows):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(pty_bridge.PtyBridge, "spawn",
+                        staticmethod(lambda argv, **kw: EofBridge() if quick["on"] else counted(argv, **kw)))
+    owner, other, admin = as_role(hermes, "owner"), as_user(hermes, "owner2-id"), as_role(hermes, "admin")
+    cycles = g.PTY_CHANNELS_PER_LOGIN + 8
+    for i in range(cycles):
+        # Each tab spawns (its child ends at once) and Hermes closes it; never refused before accept.
+        with owner.websocket_connect(f"/api/pty?ticket={ticket(owner)}&channel=chat-fill-{i}") as pty:
+            _data, texts, close = read_pty(pty, lambda d, t: False)
+        assert close is not None and not texts, (i, texts, g.counts())
+        assert wait_for(lambda: f"chat-fill-{i}" not in g._pty_channels), (i, g._pty_channels)
+    assert g.counts()["pty_resident_spawned"] == cycles and g._pty_channels == {}
+    quick["on"] = False
+    with owner.websocket_connect(f"/api/pty?ticket={ticket(owner)}&channel=chat-after") as pty:
+        child_env(pty)
+        assert g._pty_channels.get("chat-after") == "edgecity:owner-id"
+    assert wait_for(lambda: "chat-after" not in g._pty_channels)  # dropped with its credential
+    with other.websocket_connect(f"/api/pty?ticket={ticket(other)}&channel=chat-other") as pty:
+        child_env(pty)
+    with admin.websocket_connect(f"/api/pty?ticket={ticket(admin)}&channel=chat-adm-after") as pty:
+        child_env(pty)
+    counts = g.counts()
+    assert counts.get("pty_channel_released", 0) >= cycles + 1, counts
+    assert "denied_pty_channel" not in counts and "denied_pty_channels" not in counts
+
+
+def test_hermes_r5_a_login_at_its_channel_bound_gets_its_own_code_and_blocks_no_one(chat_tab, monkeypatch):
+    hermes = chat_tab.hermes
+    g = hermes.guard
+    monkeypatch.setattr(g, "PTY_CHANNELS_PER_LOGIN", 1)
+    owner, other, admin = as_role(hermes, "owner"), as_user(hermes, "owner2-id"), as_role(hermes, "admin")
+    with owner.websocket_connect(f"/api/pty?ticket={ticket(owner)}&channel=chat-o1") as pty:
+        child_env(pty)
+        assert closed_with(owner, f"/api/pty?ticket={ticket(owner)}&channel=chat-o2") == (
+            4401, "auth: edgecity_pty_channels")
+        with owner.websocket_connect(f"/api/pty?ticket={ticket(owner)}&channel=chat-o1") as again:
+            child_env(again)  # its own channel: a refresh
+        assert wait_for(lambda: len(g.pty_grants()) == 1) and g._pty_channels.get("chat-o1") == "edgecity:owner-id"
+        with other.websocket_connect(f"/api/pty?ticket={ticket(other)}&channel=chat-b1") as other_pty:
+            child_env(other_pty)  # another resident: untouched by the owner's bound
+        for name in ("chat-a1", "chat-a2"):  # an admin is never refused; its own oldest makes room
+            with admin.websocket_connect(f"/api/pty?ticket={ticket(admin)}&channel={name}") as admin_pty:
+                child_env(admin_pty)
+        assert g._pty_channels.get("chat-a2") == "edgecity:admin-id" and "chat-a1" not in g._pty_channels
+    assert g.counts()["denied_pty_channels"] == 1
+
+
+def test_hermes_r5_a_tab_refused_after_admission_holds_no_channel(chat_tab):
+    """The channel is recorded when the spawn is committed, not at admission: a tab whose settled
+    chat is another login's, or one over the login's terminal limit, leaves no entry."""
+    hermes = chat_tab.hermes
+    g = hermes.guard
+    seed_rows(hermes)
+    owner = as_role(hermes, "owner")
+    active = hermes.chat._active_session_file_for_channel(hermes.app, "chat-r5-w")
+    active.parent.mkdir(parents=True, exist_ok=True)
+    active.write_text('{"session_id": "admin-chat"}', encoding="utf-8")
+    try:
+        with owner.websocket_connect(f"/api/pty?ticket={ticket(owner)}&channel=chat-r5-w") as pty:
+            _data, texts, _close = read_pty(pty, lambda d, t: any("not yours" in x for x in t))
+    finally:
+        active.unlink(missing_ok=True)
+    assert "chat-r5-w" not in g._pty_channels and chat_tab.spawned == [] and g.pty_grants() == []
+    import contextlib
+
+    with contextlib.ExitStack() as stack:
+        for i in range(g.RESIDENT_PTYS_PER_LOGIN):
+            child_env(stack.enter_context(owner.websocket_connect(f"/api/pty?ticket={ticket(owner)}&channel=chat-l{i}")))
+        with owner.websocket_connect(f"/api/pty?ticket={ticket(owner)}&channel=chat-over") as over:
+            _data, texts, _close = read_pty(over, lambda d, t: any("chat terminals open" in x for x in t))
+        assert "chat-over" not in g._pty_channels
+        assert sorted(c for c, o in g._pty_channels.items() if o == "edgecity:owner-id") == ["chat-l0", "chat-l1", "chat-l2"]
+    assert wait_for(lambda: "edgecity:owner-id" not in g._pty_channels.values())
+
+
+def test_hermes_r5_a_residents_tui_writes_no_heap_dump(chat_tab):
+    """N-rf4-1: `/heapdump` (and the dump on start or at a memory threshold) writes a V8 snapshot
+    of the TUI, which holds its env (the box's provider keys, the tab's credential), to
+    `HERMES_HEAPDUMP_DIR`. A resident's child gets a directory that cannot be made, so the dump
+    fails; an admin's keeps the box's."""
+    hermes = chat_tab.hermes
+    g = hermes.guard
+    owner, admin = as_role(hermes, "owner"), as_role(hermes, "admin")
+    with owner.websocket_connect(f"/api/pty?ticket={ticket(owner)}&channel=chat-r5-h") as pty:
+        env = child_env(pty)
+    assert env["HERMES_HEAPDUMP_DIR"] == g.PTY_NO_HEAPDUMP_DIR
+    with pytest.raises(NotADirectoryError):  # what the TUI's `mkdir(dir, {recursive: true})` meets
+        os.makedirs(env["HERMES_HEAPDUMP_DIR"], exist_ok=True)
+    assert not (hermes.home / "heapdumps").exists()
+    assert not os.path.exists(os.path.join(env["HOME"], ".hermes", "heapdumps"))
+    with admin.websocket_connect(f"/api/pty?ticket={ticket(admin)}&channel=chat-r5-ha") as pty:
+        assert child_env(pty)["HERMES_HEAPDUMP_DIR"] == str(hermes.home / "heapdumps")

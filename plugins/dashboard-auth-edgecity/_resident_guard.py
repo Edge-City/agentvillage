@@ -180,9 +180,13 @@ RESIDENT_PTYS_PER_LOGIN = 3
 #: Sockets one PTY credential may hold open at once on each of /api/ws and /api/pub: the TUI's
 #: connection, plus one for a reconnect racing the old socket's close.
 PTY_SOCKETS_PER_PATH = 2
-#: Channels remembered with the login that first opened a Chat tab on them (Hermes's channel id,
-#: `chat_ws.py:52`). When full, a resident cannot claim a new one (fail closed).
-PTY_CHANNELS_MAX = 4096
+#: Channels one login holds at once in the channel table (`_pty_channels`: Hermes's channel id,
+#: `chat_ws.py:52`, with the login whose Chat tab runs on it). A resident's entry is recorded when
+#: its tab's spawn is committed and dropped when the channel's last live credential is revoked, so
+#: a resident holds at most RESIDENT_PTYS_PER_LOGIN; at this bound its new channel is refused
+#: (`edgecity_pty_channels`) and no other login is touched. An admin is never refused: at the bound
+#: its own oldest entry makes room.
+PTY_CHANNELS_PER_LOGIN = 16
 #: A PTY credential minted for a chat that never spawned (a reattach, a failed start) is dropped
 #: at the latest after this many seconds.
 PTY_UNBOUND_SECONDS = 120
@@ -1174,18 +1178,24 @@ RESIDENT_TUI_DIR_NAME = "resident-tui"
 #: `lib/externalCli.ts:8`) and `$BROWSER` (xdg-open's first choice) point at a path that does not
 #: exist: the spawn fails (ENOENT), which the TUI reports and survives.
 PTY_INERT_COMMAND = "/nonexistent/edgecity-resident-chat-runs-nothing"
+#: Where a resident's TUI would write a heap dump (`/heapdump`, `HERMES_HEAPDUMP_ON_START`, the
+#: memory monitor; `lib/memory.ts:151`, the only name ui-tui reads for it at 0.21.5): a path under a
+#: device, so the dump's `mkdir` fails (ENOTDIR, whoever runs it) and nothing is written. A V8
+#: snapshot of the TUI holds its env: the box's provider keys and the tab's own credential.
+PTY_NO_HEAPDUMP_DIR = "/dev/null/edgecity-resident-chat-writes-no-heapdump"
 #: The child's env, forced for a resident: the editor, `/setup` and the opener inert; hosted
 #: dashboard mode (`/exit`, `/quit`, `/update` refused, `slash/commands/core.ts:84-151`); mouse and
-#: clicks off, so no link in the transcript is opened with a click (`entry.tsx:172-179`).
+#: clicks off, so no link in the transcript is opened with a click (`entry.tsx:172-179`); no heap
+#: dump (`/heapdump` answers `heapdump failed: ...`).
 PTY_FORCED_ENV = {
     "VISUAL": PTY_INERT_COMMAND, "EDITOR": PTY_INERT_COMMAND, "HERMES_BIN": PTY_INERT_COMMAND,
     "BROWSER": PTY_INERT_COMMAND, "HERMES_TUI_DASHBOARD": "1", "HERMES_TUI_DISABLE_MOUSE": "1",
     "HERMES_TUI_DISABLE_MOUSE_CLICKS": "1", "HERMES_TUI_MOUSE_TRACKING": "0",
+    "HERMES_HEAPDUMP_DIR": PTY_NO_HEAPDUMP_DIR,
 }
 #: Dropped from a resident child's env: a host image path to attach at start, a query to send at
-#: start, the confirm opt-out, and dump/log paths outside its own directory.
-PTY_DROPPED_ENV = ("HERMES_TUI_IMAGE", "HERMES_TUI_QUERY", "HERMES_TUI_NO_CONFIRM", "HERMES_HEAPDUMP_DIR",
-                   "HERMES_DEV_PERF_LOG")
+#: start, the confirm opt-out, and a log path outside its own directory.
+PTY_DROPPED_ENV = ("HERMES_TUI_IMAGE", "HERMES_TUI_QUERY", "HERMES_TUI_NO_CONFIRM", "HERMES_DEV_PERF_LOG")
 _GRANT_LIVE = ("spawning", "bound")
 
 
@@ -1241,7 +1251,8 @@ class PtyContext:
 _pty_lock = threading.Lock()
 #: pty_id -> grant, every grant not yet revoked.
 _pty_grants: dict[str, PtyGrant] = {}
-#: channel -> the login that first opened a Chat tab on it (insertion ordered).
+#: channel -> the login whose Chat tab runs on it (insertion ordered). Written only when a spawn is
+#: committed; a resident's entry goes with the channel's last live credential (`revoke_grant`).
 _pty_channels: dict[str, str] = {}
 #: Hermes's loopback peer names (`web_server_chat._LOOPBACK_HOSTS`, which counts Starlette's
 #: TestClient), handed in by `install_pty`.
@@ -1302,34 +1313,51 @@ def own_chat(session_id: Any, login: Optional[str], *, prefix: bool) -> bool:
         return False
 
 
-def _claim_channel(channel: str, login: str, *, admin: bool = False) -> bool:
-    """Bind `channel` to `login` the first time a Chat tab opens on it. A resident may use only a
-    channel that is new or its own; an admin's claim always succeeds (it is not recorded over
-    another login's). The table is bounded: full, a resident's new channel is refused, an admin's
-    displaces the oldest entry."""
+def _channels_held(login: str) -> int:
+    """How many channel entries `login` holds. The caller holds `_pty_lock`."""
+    return sum(1 for owner in _pty_channels.values() if owner == login)
+
+
+def _channel_refusal(channel: Optional[str], login: str) -> Optional[str]:
+    """Whether a resident's tab may run on `channel`: None, or the reason. Another login's channel
+    is refused (`channel`); a new one at the login's own bound is refused (`channels`). The caller
+    holds `_pty_lock`."""
+    if channel is None:
+        return None
+    owner = _pty_channels.get(channel)
+    if owner is not None:
+        return None if owner == login else "channel"
+    return "channels" if _channels_held(login) >= PTY_CHANNELS_PER_LOGIN else None
+
+
+def _record_admin_channel(channel: str, login: str) -> None:
+    """Record an admin's spawned tab on `channel`, so no resident opens a tab on it. Never recorded
+    over another login's entry. Never refused: at PTY_CHANNELS_PER_LOGIN the admin's own oldest
+    entries make room (an admin's tab holds no credential, so nothing else drops them)."""
     with _pty_lock:
-        owner = _pty_channels.get(channel)
-        if owner is not None:
-            return admin or owner == login
-        if len(_pty_channels) >= PTY_CHANNELS_MAX:
-            if not admin:
-                return False
-            _pty_channels.pop(next(iter(_pty_channels)))
+        if channel in _pty_channels:
+            return
+        held = [name for name, owner in _pty_channels.items() if owner == login]
+        for name in held[:max(0, len(held) - PTY_CHANNELS_PER_LOGIN + 1)]:
+            _pty_channels.pop(name, None)
         _pty_channels[channel] = login
-        return True
 
 
 def pty_admission(role: Any, ws: Any, credential: Any) -> Optional[str]:
     """Whether this /api/pty may open, before accept: None (open; the socket's `PtyContext` is set)
-    or the 4401 reason. An admin opens anything (its channel is recorded). A resident needs:
+    or the 4401 reason. An admin opens anything (its channel is recorded once its terminal runs).
+    A resident needs:
 
     - a login: a ticket Hermes stamped `{user_id, provider}` from (never the loopback token);
     - no `profile` but none or "current" (RESIDENT_PTY_PROFILES): any other spawns its own gateway;
     - no `cwd` but `$HERMES_HOME/resident-chat` (a usable resident chat directory);
     - no `resume` but a chat of its own (`own_chat`, the prefix read as Hermes reads it);
-    - no `channel` another login opened a Chat tab on.
+    - no `channel` another login's Chat tab runs on (`edgecity_pty_channel`), and no new one past
+      its own PTY_CHANNELS_PER_LOGIN (`edgecity_pty_channels`).
 
-    Every value of a repeated name is checked (Hermes reads the last)."""
+    Every value of a repeated name is checked (Hermes reads the last). Nothing is recorded here:
+    the channel is recorded when the spawn is committed (`guarded_spawn`), where it is checked
+    again."""
     pairs = _query_pairs_of(ws)
     if pairs is None:
         return "edgecity_pty_query"
@@ -1337,8 +1365,6 @@ def pty_admission(role: Any, ws: Any, credential: Any) -> Optional[str]:
     channel = channels[-1] if channels and _CHANNEL_RE.match(channels[-1]) else None
     login = _identity_login(ws)
     if role == ROLE_ADMIN:
-        if channel is not None:
-            _claim_channel(channel, login or ROLE_ADMIN, admin=True)
         _PTY_CONTEXT.set(PtyContext(ROLE_ADMIN, login, channel=channel))
         return None
     if role != ROLE_RESIDENT or credential not in ("ticket", "ticket-subprotocol") or login is None:
@@ -1354,8 +1380,9 @@ def pty_admission(role: Any, ws: Any, credential: Any) -> Optional[str]:
         return "edgecity_pty_resume"
     with _pty_lock:
         taken = any(_CHANNEL_RE.match(v) and _pty_channels.get(v, login) != login for v in channels)
-    if taken or (channel is not None and not _claim_channel(channel, login)):
-        return "edgecity_pty_channel"
+        refused = "channel" if taken else _channel_refusal(channel, login)
+    if refused is not None:
+        return f"edgecity_pty_{refused}"
     identity = getattr(ws, "_hermes_auth_identity", None)
     _PTY_CONTEXT.set(PtyContext(ROLE_RESIDENT, login, identity, channel, chat))
     return None
@@ -1434,9 +1461,13 @@ def _close_socket(sock: Any, loop: Any) -> None:
 
 
 def revoke_grant(grant: Any, reason: str) -> None:
-    """The credential no longer opens anything, and every socket it opened is closed. Idempotent."""
+    """The credential no longer opens anything, and every socket it opened is closed. When it was
+    the last live credential of its login on its channel, the channel's entry goes too (the
+    channel then names nothing of the login's that is live: a later tab on it re-checks its resume
+    against its own login, and /api/pub is bound per credential). Idempotent."""
     if not isinstance(grant, PtyGrant):
         return
+    released = False
     with _pty_lock:
         if grant.state == "revoked":
             return
@@ -1444,7 +1475,15 @@ def revoke_grant(grant: Any, reason: str) -> None:
         _pty_grants.pop(grant.pty_id, None)
         sockets = [entry for path in sorted(grant.sockets) for entry in grant.sockets[path]]
         grant.sockets = {path: [] for path in INTERNAL_WS_PATHS}
+        channel = grant.channel
+        if channel is not None and _pty_channels.get(channel) == grant.login and not any(
+                g.channel == channel and g.login == grant.login and g.state in _GRANT_LIVE
+                for g in _pty_grants.values()):
+            del _pty_channels[channel]
+            released = True
     _count(f"pty_revoked_{reason}")
+    if released:
+        _count("pty_channel_released")
     for sock, loop in sockets:
         _close_socket(sock, loop)
 
@@ -1706,8 +1745,12 @@ def install_pty(chat_module: Any, tickets_module: Any, *, refusal: Optional[Call
         ctx = _PTY_CONTEXT.get()
         if not isinstance(ctx, PtyContext) or ctx.role != ROLE_RESIDENT:
             # An admin's terminal, or no dashboard socket behind it (the argv seam has already
-            # refused a /api/pty without a context): Hermes's own spawn.
-            return base_bridge.spawn(argv, *args, **kwargs)
+            # refused a /api/pty without a context): Hermes's own spawn. An admin's channel is
+            # recorded once its terminal runs.
+            bridge = base_bridge.spawn(argv, *args, **kwargs)
+            if isinstance(ctx, PtyContext) and ctx.role == ROLE_ADMIN and ctx.channel is not None:
+                _record_admin_channel(ctx.channel, ctx.login or ROLE_ADMIN)
+            return bridge
         grant = ctx.grant
         env = kwargs.get("env")
         if (not isinstance(grant, PtyGrant) or grant.state != "minted" or args or not isinstance(env, dict)
@@ -1715,15 +1758,25 @@ def install_pty(chat_module: Any, tickets_module: Any, *, refusal: Optional[Call
             revoke_grant(grant, "spawn_mismatch")
             _count("denied_pty_spawn")
             raise unavailable("this chat cannot start here")
+        # The commit: the login's limit and its channel, checked and recorded under one lock, so
+        # only a spawn that goes ahead holds a channel entry.
         with _pty_lock:
             over = sum(1 for g in _pty_grants.values()
                        if g.login == grant.login and g.state in _GRANT_LIVE and g is not grant)
-            if over < RESIDENT_PTYS_PER_LOGIN:
+            refused = "limit" if over >= RESIDENT_PTYS_PER_LOGIN else _channel_refusal(grant.channel, grant.login)
+            if refused is None:
                 grant.state = "spawning"
-        if grant.state != "spawning":
+                if grant.channel is not None:
+                    _pty_channels[grant.channel] = grant.login
+        if refused == "limit":
             revoke_grant(grant, "over_limit")
             _count("denied_pty_limit")
             raise unavailable(f"you already have {RESIDENT_PTYS_PER_LOGIN} chat terminals open; close one first")
+        if refused is not None:
+            revoke_grant(grant, "channel_taken" if refused == "channel" else "over_channels")
+            _count(f"denied_pty_{refused}")
+            raise unavailable("this chat's channel is another login's" if refused == "channel" else
+                              f"you already have {PTY_CHANNELS_PER_LOGIN} chat channels open; close one first")
         try:
             bridge = base_bridge.spawn(argv, **kwargs)
         except BaseException:
