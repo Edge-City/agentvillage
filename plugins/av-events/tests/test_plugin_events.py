@@ -131,7 +131,7 @@ def test_switch_spellings(live, ctx, monkeypatch, av, value, on):
 
 def test_unknown_id_is_derived_and_stable_across_resends(live, ctx, av):
     publish(ctx, "plugin.unknown", UNKNOWN)
-    publish(ctx, "plugin.unknown", dict(UNKNOWN, tools=4, action="unlisted"))  # same key, revision, state
+    publish(ctx, "plugin.unknown", dict(UNKNOWN, tools=4, pinned=True, install_host="git.example.org"))  # same tuple
     publish(ctx, "plugin.unknown", dict(UNKNOWN, state="enabled_not_loaded"))
     publish(ctx, "plugin.unknown", dict(UNKNOWN, revision=None))
     publish(ctx, "plugin.unknown", dict(UNKNOWN, name_hash="b" * 16))
@@ -140,7 +140,7 @@ def test_unknown_id_is_derived_and_stable_across_resends(live, ctx, av):
     assert len(set(ids)) == 4
     assert all(uuid.UUID(i).version == 7 for i in ids)
     pe = live._plugin_events
-    material = "|".join(("av-events|plugin.unknown", UNKNOWN["name_hash"], UNKNOWN["revision"], UNKNOWN["state"]))
+    material = "|".join(("av-events|plugin.unknown", UNKNOWN["name_hash"], UNKNOWN["revision"], UNKNOWN["state"], UNKNOWN["action"], UNKNOWN["source"]))
     assert ids[0] == pe.derived_uuid7(0, live._COLLECTOR.keyed_hash(material))
 
 
@@ -167,17 +167,18 @@ def test_inventory_id_is_fresh_per_emit(live, ctx, av):
     assert len(set(ids)) == 2
 
 
-@pytest.mark.parametrize("name", [f"https://{SENTINEL}.example/p?sig=1", f"/home/hermes/{SENTINEL}", f"home/{SENTINEL.lower()}/.ssh/key", "a" * 1_000_000 + SENTINEL])
-def test_a_path_or_url_shaped_name_is_nulled_and_leaks_nowhere(live, ctx, av, caplog, name):
+@pytest.mark.parametrize("field", ["name", "install_host"])
+@pytest.mark.parametrize("name", [f"https://{SENTINEL}.example/p?sig=1", f"/home/hermes/{SENTINEL}", f"home/{SENTINEL.lower()}/.ssh/key", "a" * 1_000_000 + SENTINEL, f"{SENTINEL}.example/x"])
+def test_a_path_or_url_shaped_name_or_host_is_nulled_and_leaks_nowhere(live, ctx, av, caplog, field, name):
     caplog.set_level(logging.DEBUG)
-    publish(ctx, "plugin.unknown", dict(UNKNOWN, name=name))
+    publish(ctx, "plugin.unknown", dict(UNKNOWN, **{field: name}))
     (event,) = emitted(live, av)
-    assert event["payload"]["name"] is None
+    assert event["payload"][field] is None
     blob = json.dumps([event, live._COLLECTOR.counters]) + caplog.text
     assert SENTINEL not in blob and SENTINEL.lower() not in blob
 
 
-@pytest.mark.parametrize("extra", [{"url": f"https://github.com/{SENTINEL}/x"}, {"path": f"/home/{SENTINEL}"}, {"tool_names": [SENTINEL]}, {"install_host": f"{SENTINEL}.example/x"}])
+@pytest.mark.parametrize("extra", [{"url": f"https://github.com/{SENTINEL}/x"}, {"path": f"/home/{SENTINEL}"}, {"tool_names": [SENTINEL]}, {"install_host": [f"{SENTINEL}.example"]}])
 def test_hostile_fields_drop_the_record_and_leak_nowhere(live, ctx, av, caplog, extra):
     caplog.set_level(logging.DEBUG)
     publish(ctx, "plugin.unknown", dict(UNKNOWN, **extra))
@@ -227,3 +228,100 @@ def test_idle_without_a_token(plugin, ctx, monkeypatch, av):
     plugin.register(ctx)
     publish(ctx, "plugin.unknown", UNKNOWN)
     assert emitted(plugin, av) == []
+
+
+# --------------------------------------------------------------------------
+# Round 2 (ov#317 refute 08a91b77, data's owner read, approval's §8 read)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("event_type", ["plugin.inventory", "plugin.unknown"])
+def test_a_collector_key_drops_as_extra_field_and_never_raises(live, ctx, av, event_type):
+    """S1: `collector` is positional-only, so a publisher key of that name is just an extra field."""
+    record = INVENTORY if event_type == "plugin.inventory" else UNKNOWN
+    publish(ctx, event_type, dict(record, collector="x", session_id=f"https://{SENTINEL}.example"))
+    assert emitted(live, av) == []
+    assert drops(live) == {"plugin_dropped_extra_field": 1}
+    assert live._COLLECTOR.total_failures == 0
+    assert [e for e in av.read_buffer(live._COLLECTOR) if e["event_type"] == "plugin.degraded"] == []
+
+
+@pytest.mark.parametrize("field", ["name", "install_host"])
+def test_a_value_sanitize_would_rewrite_is_nulled_not_redacted(live, ctx, av, field):
+    """S2 / data N3: a key-shaped value passes its regex but `sanitize` would rewrite it, and data
+    would then quarantine the event; it is sent as null instead."""
+    value = "sk-proj-" + "a" * 16
+    assert live._plugin_events.rebuild("plugin.unknown", dict(UNKNOWN, **{field: value}))[0][field] is None
+    publish(ctx, "plugin.unknown", dict(UNKNOWN, **{field: value}))
+    (event,) = emitted(live, av)
+    assert event["payload"][field] is None
+    assert "redacted" not in json.dumps(event["payload"])
+    assert drops(live) == {}
+
+
+def test_a_non_nullable_value_sanitize_would_rewrite_drops_as_bad_shape(live, ctx, av, monkeypatch):
+    pe = live._plugin_events
+    real = pe.sanitize
+    monkeypatch.setattr(pe, "sanitize", lambda v: "[redacted:x]" if v == UNKNOWN["name_hash"] else real(v))
+    publish(ctx, "plugin.unknown", UNKNOWN)
+    assert emitted(live, av) == []
+    assert drops(live) == {"plugin_dropped_bad_shape": 1}
+
+
+def test_tools_and_hooks_clamp_above_but_still_drop_below(live):
+    pe = live._plugin_events
+    payload, _ = pe.rebuild("plugin.unknown", dict(UNKNOWN, tools=10**5000, hooks=1001))
+    assert (payload["tools"], payload["hooks"]) == (1000, 1000)
+    assert type(payload["tools"]) is int
+    assert pe.rebuild("plugin.unknown", dict(UNKNOWN, hooks=-1)) == (None, "bad_range")
+    assert pe.rebuild("plugin.unknown", dict(UNKNOWN, tools=True)) == (None, "bad_type")
+    assert pe.rebuild("plugin.inventory", dict(INVENTORY, unknown_count=10001)) == (None, "bad_range")
+
+
+def test_unknown_id_covers_action_and_source(live, ctx, av):
+    """S4 / data C2: the report-mode row must not hide the quarantine outcome at ingest."""
+    publish(ctx, "plugin.unknown", UNKNOWN)
+    publish(ctx, "plugin.unknown", dict(UNKNOWN, action="unloaded_unlisted"))
+    publish(ctx, "plugin.unknown", dict(UNKNOWN, action="unlist_failed"))
+    publish(ctx, "plugin.unknown", dict(UNKNOWN, source="project"))
+    publish(ctx, "plugin.unknown", UNKNOWN)  # a true re-send
+    ids = [e["event_id"] for e in emitted(live, av)]
+    assert len(set(ids[:4])) == 4
+    assert ids[4] == ids[0]
+
+
+HERMES_SEGMENT = "(?:g[0-9a-f]{7,40}|d[0-9]{8}|rc[0-9]{1,4}|dev[0-9]{1,6}|post[0-9]{1,4}|[0-9]{1,8})"
+#: agentvillage-data `src/schemas/index.ts` `hermesVersion`, assembled the way data assembles it.
+DATA_HERMES_VERSION = (
+    "^(?:v?[0-9]{1,6}(?:\\.[0-9]{1,6}){1,3}(?:(?:a|b|rc)[0-9]{1,4})?(?:\\.post[0-9]{1,4})?(?:\\.dev[0-9]{1,6})?"
+    + f"(?:[-+]{HERMES_SEGMENT}(?:\\.{HERMES_SEGMENT}){{0,3}})?|[0-9a-f]{{7,40}})$"
+)
+
+
+def test_hermes_version_is_datas_pattern_character_for_character(plugin):
+    """Data C1: data's parity test compares this string with its own `u`-flag regex."""
+    rule = VECTORS["fields"]["plugin.inventory"]["hermes_version"]
+    assert rule == {"kind": "regex", "regex": DATA_HERMES_VERSION, "nullable": True, "mismatch": "null"}
+    assert plugin._plugin_events.FIELDS["plugin.inventory"]["hermes_version"]["regex"] == DATA_HERMES_VERSION
+    for good in ("0.21.5", "2026.9.24", "v2026.9.24+g1a2b3c4.d20260901", "0.22.0rc1", "0" * 40):
+        assert re.fullmatch(DATA_HERMES_VERSION, good), good
+    for bad in ("unknown", "v2026.9.24+local-1", "0.21.5\n", "0.21.5 (git abc)", "1" * 41):
+        assert not re.fullmatch(DATA_HERMES_VERSION, bad), bad
+
+
+def test_switch_off_is_counted_without_a_log_line(plugin, ctx, monkeypatch, caplog):
+    """Approval's §8 request: no new WARNING class on every box before the switch goes on."""
+    collector_module = __import__(f"{plugin.__name__}._collector", fromlist=["_collector"])
+    monkeypatch.setattr(collector_module, "_LOGGED_COUNTERS", set())
+    assert collector_module._QUIET_COUNTERS == ("backup_uploaded", "plugin_dropped_switch_off")
+    monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
+    plugin.register(ctx)
+    with caplog.at_level(logging.DEBUG):
+        publish(ctx, "plugin.inventory", INVENTORY)
+        publish(ctx, "plugin.inventory", INVENTORY)
+        monkeypatch.setenv("AV_PLUGIN_EVENTS", "1")
+        publish(ctx, "plugin.unknown", dict(UNKNOWN, state=7))
+        publish(ctx, "plugin.unknown", dict(UNKNOWN, state=7))
+    assert drops(plugin) == {"plugin_dropped_switch_off": 2, "plugin_dropped_bad_type": 2}
+    lines = [r.getMessage() for r in caplog.records if "plugin_dropped" in r.getMessage()]
+    assert lines == ["av-events: plugin_dropped_bad_type=1"]

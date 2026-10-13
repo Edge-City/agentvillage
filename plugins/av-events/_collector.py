@@ -89,6 +89,9 @@ logger = logging.getLogger("av-events")
 #: Counters already logged by this process. Each is logged once, as a name and
 #: a count — never the value that tripped it.
 _LOGGED_COUNTERS: set[str] = set()
+#: Counters `Collector.count` never logs: the routine ones (every backup; SEC-3's switch-off
+#: drops, on every box until `AV_PLUGIN_EVENTS` goes on).
+_QUIET_COUNTERS = ("backup_uploaded", "plugin_dropped_switch_off")
 
 #: Largest `prompt.registered` envelope this plugin will buffer, as compact
 #: UTF-8 JSON. Ingest refuses a whole batch when one envelope passes 64 KiB
@@ -981,7 +984,7 @@ class Collector:
             value = self.counters[name]
             first = name not in _LOGGED_COUNTERS
             _LOGGED_COUNTERS.add(name)
-        if first and name != "backup_uploaded":
+        if first and name not in _QUIET_COUNTERS:
             logger.warning("av-events: %s=%d", name, value)
 
     def request_snapshot(self, urgent: bool = False) -> bool:
