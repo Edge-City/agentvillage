@@ -294,7 +294,15 @@ beforeAll(() => {
     port: 0,
     hostname: "127.0.0.1",
     idleTimeout: 0,
-    fetch: async (req) => stub.fake.fetch(stub.fake.url, { method: req.method, headers: req.headers, body: await req.text(), signal: req.signal }),
+    fetch: async (req) => {
+      // SEED-REJECT part 3b: welcome.ts asks Index's REST `prepare` (creates nothing) before each create. Here it
+      // answers 503, so every line takes today's create path (release gate (5)) and the MCP replay below is unchanged.
+      if (new URL(req.url).pathname === "/api/intents/prepare") {
+        prepared.push({ method: req.method, key: req.headers.get("x-api-key"), body: await req.text() });
+        return Response.json({ error: "preparation_failed" }, { status: 503 });
+      }
+      return stub.fake.fetch(stub.fake.url, { method: req.method, headers: req.headers, body: await req.text(), signal: req.signal });
+    },
   });
   MCP_URL = `http://127.0.0.1:${server.port}/mcp`;
   const closed = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("") });
@@ -305,8 +313,14 @@ afterAll(() => {
   server.stop(true);
 });
 
-/** Whatever the case, every request that reached Index was a tools/call of an allowed tool, with the key. */
+/** SEED-REJECT part 3b: the `prepare` requests the stub received (answered 503): POST, with the key, `{payload}` only. */
+const prepared: Array<{ method: string; key: string | null; body: string }> = [];
+
+/** Whatever the case, every request that reached Index was a tools/call of an allowed tool, with the key (or a prepare, POST with the key and only a payload). */
 afterEach(() => {
+  for (const p of prepared.splice(0)) {
+    expect({ method: p.method, key: p.key, keys: Object.keys(JSON.parse(p.body)) }).toEqual({ method: "POST", key: FAKE_API_KEY, keys: ["payload"] });
+  }
   for (const call of stub.fake.calls) {
     expect({ method: call.method, name: call.name, allowed: ALLOWED_TOOLS.includes(String(call.name)), key: call.headers["x-api-key"] }).toEqual({
       method: "tools/call",

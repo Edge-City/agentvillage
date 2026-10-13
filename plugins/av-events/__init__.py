@@ -36,6 +36,8 @@ from ._core import (
     uuid7,
 )
 from ._cron import cron_job_id_from
+# DATA-470 family, on its own line so it merges beside other lanes' imports.
+from . import _card_events
 from ._intentions import IntentionCall, classify_tool, valid_id
 from ._intentions import plan as plan_intentions
 from ._messages import is_injected_turn, is_silent, message_payload
@@ -864,6 +866,21 @@ def _emit_share_vote(event_type: str, payload: dict, *, event_id: str, occurred_
     return event is not None
 
 
+def _emit_card_event(event_type: str, payload: dict, *, event_id: str, occurred_at: Optional[str],
+                     intention_id: Optional[str] = None) -> bool:
+    """`approval.card_requested` / `approval.card_resolved` (`_card_events.py`,
+    behind `AV_APPROVAL_CARD_EVENTS`). The event id is derived from the card by
+    the caller, so a re-send after a crash is the same row at ingest. True when
+    the event was buffered (a null sink buffers too, as every other event)."""
+    collector = _COLLECTOR
+    if collector is None or collector.plugin_disabled or not collector.config.active:
+        return False
+    event = collector.emit(event_type, payload, event_id=event_id, occurred_at=occurred_at,
+                           occurred_at_earliest=occurred_at, occurred_at_latest=occurred_at,
+                           intention_id=intention_id)
+    return event is not None
+
+
 def _share_vote_emitter_ready() -> bool:
     """An event emitted now would be sent: the collector is on with a token
     and a URL (a null sink buffers and never sends)."""
@@ -1192,6 +1209,7 @@ def _on_unload() -> None:
     try:
         _approval.stop_poller()
         _intent_approval.set_emitter(None)
+        _card_events.set_emitter(None)
         _share_vote.set_emitter(None, None)
     except Exception:  # noqa: BLE001 - an unload must never fail on us
         pass
@@ -1253,6 +1271,8 @@ def register(ctx) -> None:
     # guard, so the cron gate never depends on telemetry being on. Lane B: a
     # publish the approval poller (or a confirm) makes later is emitted here.
     register_record_intention_tool(ctx, emit=_emit_intention_update)
+    # DATA-470 family: approval card events, inert unless AV_APPROVAL_CARD_EVENTS is on.
+    _card_events.set_emitter(_emit_card_event)
     # Lane O3: `share_digest` and `village_vote`, each behind its own switch
     # (`AV_DIGEST_SHARE`, `AV_VILLAGE_VOTE`) and inert without approval.md.
     try:

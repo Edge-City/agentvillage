@@ -1,0 +1,220 @@
+{
+  "source": "BOARD row 153 (SEED-REJECT): Carter's three POST /api/intents/prepare probes from his own test box (tenant aa9a5de3), Mon 12 Oct 2026 18:1xZ, card-shaped synthetic lines. Index's answers verbatim (HTTP 200 each), as Carter pasted them to the lead; no resident text, no key.",
+  "bodies": [
+    {
+      "status": "needs_revision",
+      "payload": "Here to meet founders",
+      "feedback": "Make the goal more concrete: specify the role, outcome, or particular help you need.",
+      "recovery": [
+        {
+          "id": "founder_objective",
+          "label": "What is your primary goal in meeting founders?",
+          "kind": "single",
+          "options": [
+            {
+              "label": "Explore co-founder partnerships",
+              "description": "Looking to team up on a new or existing venture."
+            },
+            {
+              "label": "Invest or advise",
+              "description": "Offering capital, mentorship, or advisory support."
+            },
+            {
+              "label": "Sell services or tools",
+              "description": "Providing technical, design, marketing, or operational solutions."
+            },
+            {
+              "label": "Peer networking & knowledge sharing",
+              "description": "Exchanging insights and discussing shared startup challenges."
+            }
+          ]
+        },
+        {
+          "id": "target_domain",
+          "label": "Which industries or domains are you most interested in?",
+          "kind": "multi",
+          "options": [
+            {
+              "label": "AI & Machine Learning",
+              "description": "Generative AI, enterprise automation, core models."
+            },
+            {
+              "label": "B2B SaaS",
+              "description": "Cloud infrastructure, workflow tools, business software."
+            },
+            {
+              "label": "Fintech & Web3",
+              "description": "Payments, banking infrastructure, decentralized apps."
+            },
+            {
+              "label": "Consumer & E-commerce",
+              "description": "Direct-to-consumer, social apps, marketplaces."
+            }
+          ]
+        },
+        {
+          "id": "founder_stage",
+          "label": "What stage of startups are you focusing on?",
+          "kind": "multi",
+          "options": [
+            {
+              "label": "Idea / Pre-seed",
+              "description": "Validating concepts and building early prototypes."
+            },
+            {
+              "label": "Early Stage (Seed to Series A)",
+              "description": "Gaining initial traction and finding product-market fit."
+            },
+            {
+              "label": "Growth Stage (Series B+)",
+              "description": "Scaling operations and expanding customer base."
+            }
+          ]
+        },
+        {
+          "id": "specific_collaboration",
+          "label": "Briefly describe what you bring or specifically want to discuss",
+          "kind": "text",
+          "placeholder": "e.g., Looking to exchange GTM strategies for B2B developer tools, or sharing technical expertise in distributed systems."
+        }
+      ]
+    },
+    {
+      "status": "needs_revision",
+      "payload": "Wants to meet people working on climate tools",
+      "feedback": "Please specify the desired role, location, timeframe, or concrete collaboration goal to narrow down potential matches in climate tools.",
+      "recovery": [
+        {
+          "id": "climate_subsector",
+          "label": "Which climate tool areas are you most interested in?",
+          "kind": "multi",
+          "options": [
+            {
+              "label": "Carbon accounting & ESG analytics",
+              "description": "Software for emissions measurement, reporting, and lifecycle analysis"
+            },
+            {
+              "label": "Grid & renewable energy management",
+              "description": "Optimizing clean energy generation, storage, and grid distribution"
+            },
+            {
+              "label": "Climate intelligence & risk modeling",
+              "description": "Satellite imagery, weather prediction, and geospatial climate risk"
+            },
+            {
+              "label": "Supply chain & circular economy",
+              "description": "Tracking sustainable sourcing, materials recycling, and waste reduction"
+            }
+          ]
+        },
+        {
+          "id": "connection_purpose",
+          "label": "What is the primary goal of connecting?",
+          "kind": "single",
+          "options": [
+            {
+              "label": "Founder & technical co-founder matching",
+              "description": "Exploring partnerships to build a new climate-tech venture"
+            },
+            {
+              "label": "Product feedback & knowledge exchange",
+              "description": "Swapping notes on tooling, architecture, and industry challenges"
+            },
+            {
+              "label": "Hiring or joining a climate team",
+              "description": "Recruiting talent or seeking open roles at climate companies"
+            },
+            {
+              "label": "Informal networking",
+              "description": "Casual catch-ups with peers in the climate ecosystem"
+            }
+          ]
+        },
+        {
+          "id": "target_roles",
+          "label": "Who specifically would you like to speak with?",
+          "kind": "multi",
+          "options": [
+            {
+              "label": "Software engineers & data scientists",
+              "description": "Builders focused on climate modeling and data pipelines"
+            },
+            {
+              "label": "Product managers & founders",
+              "description": "People shaping climate product strategy and go-to-market"
+            },
+            {
+              "label": "Domain researchers & climate scientists",
+              "description": "Experts with deep domain science and regulatory background"
+            }
+          ]
+        },
+        {
+          "id": "specific_topic_or_project",
+          "label": "Describe your background or the specific project you want to discuss",
+          "kind": "text",
+          "placeholder": "e.g., Working on open-source carbon mapping for logistics; looking to connect with backend engineers"
+        }
+      ]
+    },
+    {
+      "status": "needs_revision",
+      "payload": "Working on a climate data startup",
+      "feedback": "Describe who you want to reach and what you want to do together.",
+      "recovery": [
+        {
+          "id": "climate_data_focus",
+          "label": "What core area of climate data are you addressing?",
+          "kind": "single",
+          "options": [
+            {
+              "label": "Carbon accounting & supply chain emissions",
+              "description": "Scope 1-3 reporting, ESG compliance, or verification."
+            },
+            {
+              "label": "Geospatial & climate risk intelligence",
+              "description": "Satellite imagery, flood/wildfire modeling, or physical asset risk."
+            },
+            {
+              "label": "Grid & renewable energy analytics",
+              "description": "Decarbonization optimization, power forecasting, or DERs."
+            },
+            {
+              "label": "Nature-based solutions & MRV",
+              "description": "Measurement, reporting, and verification for biodiversity or offsets."
+            }
+          ]
+        },
+        {
+          "id": "target_connection",
+          "label": "Who are you primarily looking to connect with?",
+          "kind": "multi",
+          "options": [
+            {
+              "label": "Technical co-founder or founding engineer",
+              "description": "Data scientists or engineers with climate/geospatial experience."
+            },
+            {
+              "label": "Climate tech angel investors or pre-seed funds",
+              "description": "Early capital and strategic domain support."
+            },
+            {
+              "label": "Design partners or pilot customers",
+              "description": "Enterprises or sustainability teams to test initial datasets."
+            },
+            {
+              "label": "Domain advisors & industry specialists",
+              "description": "Guidance on regulatory policy, certification, or go-to-market."
+            }
+          ]
+        },
+        {
+          "id": "immediate_ask",
+          "label": "What is the specific goal or milestone you need help with right now?",
+          "kind": "text",
+          "placeholder": "e.g., Finding 2 corporate sustainability teams for a 30-day pilot of our emissions API"
+        }
+      ]
+    }
+  ]
+}

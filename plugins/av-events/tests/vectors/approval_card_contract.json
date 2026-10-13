@@ -1,0 +1,34 @@
+{
+  "_comment": [
+    "approval.card_requested@1 and approval.card_resolved@1, hand-written from AMBIENT-CONTRACT.md 'Event types' item 3",
+    "(private/handover/lanes-data, Sun 11 Oct 2026) before the data release registers them: ids, codes and times only,",
+    "never the card text. Regenerate from the data repo's registration (src/schemas) at its merge sha; a change on either",
+    "side shows up as a failing test here. Closed shapes: every key required, nullable only where listed."
+  ],
+  "uuid_pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+  "rfc3339_pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$",
+  "schemas": {
+    "approval.card_requested@1": {
+      "additional_properties": false,
+      "required": ["card_id", "intent_id", "origin", "kind", "requested_at"],
+      "uuid": ["card_id", "intent_id"],
+      "times": ["requested_at"],
+      "nullable": ["intent_id", "origin"],
+      "enums": {
+        "origin": ["memory_signal_sync", "context_goal", "chat", "other"],
+        "kind": ["intent_publish_inferred", "intent_publish_stated", "other"]
+      }
+    },
+    "approval.card_resolved@1": {
+      "additional_properties": false,
+      "required": ["card_id", "intent_id", "resolution", "decided_by", "requested_at", "resolved_at"],
+      "uuid": ["card_id", "intent_id"],
+      "times": ["requested_at", "resolved_at"],
+      "nullable": ["intent_id"],
+      "enums": {
+        "resolution": ["granted", "declined", "expired", "withdrawn"],
+        "decided_by": ["resident", "operator", "timeout", "system"]
+      }
+    }
+  }
+}

@@ -132,13 +132,27 @@ export function contextTagsEntry(text: string): string | null {
 
 /** `$HERMES_HOME/memories/USER.md`'s Context tags, or null (no file, no entry, unreadable, oversized). Never throws. */
 export function readContextTags(home: string): ContextTags | null {
+  const state = contextTagsState(home);
+  return typeof state === "string" ? null : state;
+}
+
+/**
+ * readContextTags, telling the two kinds of "no tags" apart: `absent` (no
+ * file, or a file that never mentions the entry: the app never wrote one, so
+ * nothing was ever removed) and `unreadable` (unreadable, not a file,
+ * oversized, or a file that holds CONTEXT_TAGS_MARK but no entry that starts
+ * with it, so the entry does not parse: unknown, OV-302 N9). Never throws.
+ */
+export function contextTagsState(home: string): ContextTags | "absent" | "unreadable" {
   try {
     const path = join(home, MEMORY_USER_FILE);
-    if (statSync(path).size > MAX_BYTES) return null;
-    const entry = contextTagsEntry(readFileSync(path, "utf8"));
-    return entry ? parseContextTags(entry) : null;
-  } catch {
-    return null;
+    if (statSync(path).size > MAX_BYTES) return "unreadable";
+    const text = readFileSync(path, "utf8");
+    const entry = contextTagsEntry(text);
+    if (entry) return parseContextTags(entry);
+    return text.includes(CONTEXT_TAGS_MARK) ? "unreadable" : "absent";
+  } catch (err) {
+    return (err as NodeJS.ErrnoException)?.code === "ENOENT" ? "absent" : "unreadable";
   }
 }
 
@@ -155,17 +169,40 @@ function itemKey(text: string): string {
  * Pure.
  */
 export function statedItems(tags: ContextTags, group: ContextGroup): string[] {
+  const removed = removedBy(tags);
+  return tags.groups[group]
+    .filter((item) => item.marker !== "guess" && item.marker !== "chat")
+    .map((item) => item.text)
+    .filter((text) => !removed(itemKey(text)));
+}
+
+/** Whether an item key is under "Removed by you": the same item, or one that starts with a removal the app cut (`…`). */
+function removedBy(tags: ContextTags): (key: string) => boolean {
   const removed = tags.removed.map((item) => {
     const cut = item.text.trimEnd().endsWith("…");
     return { key: itemKey(item.text.trimEnd().replace(/…$/u, "")), cut };
   });
-  return tags.groups[group]
-    .filter((item) => item.marker !== "guess" && item.marker !== "chat")
-    .map((item) => item.text)
-    .filter((text) => {
-      const key = itemKey(text);
-      return !removed.some((gone) => gone.key && (key === gone.key || (gone.cut && key.startsWith(gone.key))));
-    });
+  return (key) => removed.some((gone) => gone.key && (key === gone.key || (gone.cut && key.startsWith(gone.key))));
+}
+
+/**
+ * True when the entry still holds `text` as one of the resident's items, in
+ * any group, and not under "Removed by you" (the app's itemKey match; a
+ * `text` cut with `…` matches the item it starts). SEED-REVISION S1: a refused
+ * seed line the resident has since removed or edited away is never shown
+ * again. Pure.
+ */
+export function contextHolds(tags: ContextTags, text: string): boolean {
+  const key = itemKey(text);
+  if (!key) return false;
+  const cut = text.trimEnd().endsWith("…");
+  const removed = removedBy(tags);
+  return GROUPS.some((group) =>
+    tags.groups[group].some((item) => {
+      const held = itemKey(item.text);
+      return (held === key || (cut && held.startsWith(key))) && !removed(held);
+    }),
+  );
 }
 
 const codePoints = (s: string) => [...s].length;

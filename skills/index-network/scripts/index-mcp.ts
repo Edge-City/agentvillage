@@ -196,24 +196,84 @@ export async function indexMcpRequest(
   return result;
 }
 
+/** The one `create_intent` refusal callIndexTool hands back instead of throwing (SEED-REVISION). */
+export const INTENT_NEEDS_REVISION = "intent_needs_revision";
+
 /**
- * Call one Index tool and return the text of its first `type: "text"` content
- * item. A result flagged `isError` throws `mcp-tool-error`; a result without
- * a text item throws `mcp-bad-response`.
+ * SEED-REVISION: Index's admission verdict said no to a `create_intent`.
+ * `feedback` is Index's model-written text about the line, raw (the caller
+ * cleans it before it goes anywhere), or null when the answer has none;
+ * `keys` the top-level key names of Index's answer (identifier-shaped ones
+ * only, at most 20), never a value, so the first real body's shape can be
+ * read without its text.
  */
-export async function callIndexTool(
-  target: IndexMcpTarget,
-  name: string,
-  args: Record<string, unknown> = {},
-): Promise<string> {
-  const result = await indexMcpRequest(target, "tools/call", { name, arguments: args });
-  if (result.isError === true) throw new IndexMcpError("mcp-tool-error");
-  if (!Array.isArray(result.content)) throw new IndexMcpError("mcp-bad-response");
+export type IntentRefusal = { refused: true; code: typeof INTENT_NEEDS_REVISION; feedback: string | null; keys: string[] };
+
+/** Index's refusal body is model-adjacent text; more than this of `feedback` is never kept. */
+const REFUSAL_FEEDBACK_MAX = 4_000;
+const REFUSAL_KEY = /^[A-Za-z][A-Za-z0-9_]{0,39}$/;
+const REFUSAL_KEYS_MAX = 20;
+
+/**
+ * The refusal a `create_intent` answer's text holds, or null. Index sends
+ * (services/api mcp.tools.ts `mcpError`, read from its source; no live body
+ * seen yet) `{"success":false,"code":"intent_needs_revision","error":...,
+ * "feedback":...,"proposedPayload":...,"recovery":...}`, the whole text, or
+ * after a markdown lead line (toolJsonObject). Only that code, and only an
+ * object whose `success` is not true, is a refusal; anything else, a body
+ * that does not parse included, is null. Pure.
+ */
+export function intentRefusal(text: string): IntentRefusal | null {
+  let root: Record<string, unknown> | null = null;
+  try {
+    root = asRecord(JSON.parse(text.trim()));
+  } catch {
+    root = toolJsonObject(text)?.root ?? null;
+  }
+  if (!root || root.code !== INTENT_NEEDS_REVISION || root.success === true) return null;
+  const feedback = typeof root.feedback === "string" && root.feedback.trim() ? root.feedback.slice(0, REFUSAL_FEEDBACK_MAX) : null;
+  const keys = Object.keys(root).filter((key) => REFUSAL_KEY.test(key)).slice(0, REFUSAL_KEYS_MAX);
+  return { refused: true, code: INTENT_NEEDS_REVISION, feedback, keys };
+}
+
+/** The text of a result's first `type: "text"` content item, or null. */
+function firstText(result: Record<string, unknown>): string | null {
+  if (!Array.isArray(result.content)) return null;
   for (const item of result.content) {
     const row = asRecord(item);
     if (row?.type === "text" && typeof row.text === "string") return row.text;
   }
-  throw new IndexMcpError("mcp-bad-response");
+  return null;
+}
+
+/**
+ * Call one Index tool and return the text of its first `type: "text"` content
+ * item. A result flagged `isError` throws `mcp-tool-error`; a result without
+ * a text item throws `mcp-bad-response`.
+ *
+ * SEED-REVISION: for `create_intent` only, an `isError` result whose text is
+ * Index's `intent_needs_revision` refusal (intentRefusal) is returned as an
+ * IntentRefusal instead of thrown, so the welcome can keep the refused line.
+ * Every other `isError` result, for that tool or any other, a malformed
+ * refusal body included, still throws `mcp-tool-error`.
+ */
+export async function callIndexTool(target: IndexMcpTarget, name: "create_intent", args?: Record<string, unknown>): Promise<string | IntentRefusal>;
+export async function callIndexTool(target: IndexMcpTarget, name: string, args?: Record<string, unknown>): Promise<string>;
+export async function callIndexTool(
+  target: IndexMcpTarget,
+  name: string,
+  args: Record<string, unknown> = {},
+): Promise<string | IntentRefusal> {
+  const result = await indexMcpRequest(target, "tools/call", { name, arguments: args });
+  if (result.isError === true) {
+    const text = name === "create_intent" ? firstText(result) : null;
+    const refusal = text === null ? null : intentRefusal(text);
+    if (refusal) return refusal;
+    throw new IndexMcpError("mcp-tool-error");
+  }
+  const text = firstText(result);
+  if (text === null) throw new IndexMcpError("mcp-bad-response");
+  return text;
 }
 
 /** Index of the `}` that closes the JSON object opening at `start`, or -1. */
@@ -284,4 +344,76 @@ export function toolJsonArray(text: string, key: string): unknown[] {
   const list = found.root[key];
   if (!Array.isArray(list)) throw new IndexMcpError("mcp-unparsed");
   return list;
+}
+
+// ── SEED-REJECT part 3b: Index's admission verdict before a create ──────────
+
+/** The code a seed line records when `prepare` could not be read and the create ran without it (release gate (5)). */
+export const PREPARE_UNAVAILABLE = "prepare_unavailable";
+
+/** One of Index's recovery questions, raw (the caller cleans every text before it goes anywhere). */
+export type RecoveryQuestion = { kind: "single" | "multi" | "text"; question: string; options: string[] };
+
+/**
+ * Index's `POST /api/intents/prepare` answer (services/api intent.controller.ts
+ * `prepare`; protocol intent.preparer.ts PrepareResult): `ready`, or
+ * `needs_revision` with Index's `feedback` (raw) and its `recovery` questions
+ * (raw), plus the answer's top-level key names (identifier-shaped, never a
+ * value).
+ */
+export type PrepareVerdict =
+  | { status: "ready" }
+  | { status: "needs_revision"; feedback: string | null; recovery: RecoveryQuestion[]; keys: string[] };
+
+const RECOVERY_KINDS = ["single", "multi", "text"] as const;
+
+/** `prepare`'s REST URL: `$INDEX_API_URL` (an origin, or `<origin>/api`) when set, else the MCP URL's origin. */
+export function indexPrepareUrl(mcpUrl: string): string {
+  const configured = process.env.INDEX_API_URL?.trim();
+  const origin = configured ? configured.replace(/\/+$/, "").replace(/\/api$/, "") : new URL(mcpUrl).origin;
+  return `${origin}/api/intents/prepare`;
+}
+
+/**
+ * One `prepare` (Index runs its admission verdict and creates NOTHING) for
+ * `payload`, sent exactly as given. Same key, `x-api-key`; one request, no
+ * retry, the target's timeout, no redirect. Throws
+ * IndexMcpError(PREPARE_UNAVAILABLE) on anything that is not an HTTP 200 JSON
+ * answer whose `status` is `ready` or `needs_revision`: a transport failure,
+ * a timeout, another status, a body that does not parse.
+ */
+export async function prepareIntent(target: IndexMcpTarget, payload: string): Promise<PrepareVerdict> {
+  const send = target.fetch ?? globalThis.fetch;
+  let body: Record<string, unknown> | null;
+  try {
+    const res = await send(indexPrepareUrl(target.mcpUrl), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json", "x-api-key": target.apiKey },
+      body: JSON.stringify({ payload }),
+      redirect: "error",
+      signal: AbortSignal.timeout(target.timeoutMs ?? INDEX_MCP_TIMEOUT_MS),
+    });
+    if (res.status !== 200) throw new Error("status");
+    body = asRecord(await res.json());
+  } catch {
+    throw new IndexMcpError(PREPARE_UNAVAILABLE);
+  }
+  if (body?.status === "ready") return { status: "ready" };
+  if (body?.status !== "needs_revision") throw new IndexMcpError(PREPARE_UNAVAILABLE);
+  const recovery: RecoveryQuestion[] = [];
+  for (const item of Array.isArray(body.recovery) ? body.recovery : []) {
+    const field = asRecord(item);
+    const kind = RECOVERY_KINDS.find((k) => k === field?.kind);
+    if (!field || !kind || typeof field.label !== "string") continue;
+    const options = (Array.isArray(field.options) ? field.options : [])
+      .map((o) => (typeof o === "string" ? o : asRecord(o)?.label))
+      .filter((o): o is string => typeof o === "string");
+    recovery.push({ kind, question: field.label, options: kind === "text" ? [] : options });
+  }
+  return {
+    status: "needs_revision",
+    feedback: typeof body.feedback === "string" ? body.feedback : null,
+    recovery,
+    keys: Object.keys(body).filter((key) => REFUSAL_KEY.test(key)).slice(0, REFUSAL_KEYS_MAX),
+  };
 }

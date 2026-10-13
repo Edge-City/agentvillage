@@ -110,7 +110,7 @@ import logging
 import sys
 from typing import Any, Callable, Optional
 
-from . import _approval
+from . import _approval, _card_events as _cards
 from ._core import uuid7
 
 logger = logging.getLogger("av-events")
@@ -300,7 +300,10 @@ def _cas(intention_id: str, expect: Optional[frozenset[str] | set[str] | tuple[s
         return None
 
 
-def _set_state(intention_id: str, expect, state: str, *, claim: Optional[str] = None, **fields: Any) -> Optional[dict]:
+def _set_state(intention_id: str, expect, state: str, *, claim: Optional[str] = None,
+               card: Optional[tuple] = None, **fields: Any) -> Optional[dict]:
+    """`card`: `(op, end)` for `_card_events.mark`, applied in the same
+    compare-and-set (a no-op with `AV_APPROVAL_CARD_EVENTS` off)."""
     def change(_entry: dict, ap: dict) -> None:
         ap["state"] = state
         for name, value in fields.items():
@@ -308,8 +311,18 @@ def _set_state(intention_id: str, expect, state: str, *, claim: Optional[str] = 
                 ap.pop(name, None)
             else:
                 ap[name] = value
+        if card is not None:
+            _cards.mark(ap, *card)
 
     return _cas(intention_id, None if expect is None else frozenset(expect), change, claim=claim)
+
+
+def _card_close(intention_id: str, expect, end: tuple[str, str]) -> None:
+    """End the open card without moving the proposal (a grant read before the
+    claim). Only an entry that holds an open card is written, whatever the
+    switch says now (S1): an entry without cards is never touched."""
+    if _cards.has_open_card(approval_of(_ri().lookup(intention_id))):
+        _cas(intention_id, frozenset(expect), lambda _entry, ap: _cards.mark(ap, "close", end))
 
 
 def _note_code(intention_id: str, code: str) -> None:
@@ -426,28 +439,37 @@ def _propose(intention_id: str, ap: dict) -> Optional[Outcome]:
         logger.warning("av-events: approval payload_hash_mismatch")
         return Outcome("refused", code="payload_hash_mismatch", task=task)
     decision, state = doc.get("decision"), doc.get("state")
+    # A card is a question core asks the resident: only `decision: requested`.
+    card: Optional[tuple] = None
     if state == "executed":
         new, stop = "start_unconfirmed", True
+        if decision == "requested":
+            card = ("open_close", _cards.GRANTED)
     elif decision == "requested":
         if state in ("requested", "granted"):
             # A grant is read from `wait`, never from this answer.
             new, stop = "requested", state == "requested"
+            card = ("open", None)
         else:
             new, stop = "rejected", True
+            card = ("open_close", _cards.resolution_of(state) if state in ("rejected", "revoked") else _cards.DECLINED)
     elif decision in ("autonomous", "supervised") and state is None:
         new, stop = "cleared", False
     else:
         _note_code(intention_id, "bad_answer")
         return Outcome("unfiled", code="bad_answer")
-    _set_state(intention_id, {"unfiled"}, new, task=task, payload_hash=registered, code=None)
+    _set_state(intention_id, {"unfiled"}, new, task=task, payload_hash=registered, code=None, card=card)
     return Outcome(new, task=task) if stop else None
 
 
 def _repropose(intention_id: str, kind: str, cap: int, expect: set[str], claim: Optional[str] = None) -> Optional[Outcome]:
-    """Back to `unfiled` so the same bytes are proposed again, or `expired` past the cap."""
+    """Back to `unfiled` so the same bytes are proposed again, or `expired` past the cap.
+    The open card ends either way (a lapse: `expired`; a void: `withdrawn`); a
+    re-ask is a new card."""
     counter = f"reproposals_{kind}"
 
     def change(_entry: dict, ap: dict) -> None:
+        _cards.mark(ap, "close", _cards.EXPIRED if kind == "expired" else _cards.WITHDRAWN)
         count = int(ap.get(counter) or 0)
         if count >= cap:
             ap["state"] = "expired"
@@ -468,13 +490,15 @@ def _poll(intention_id: str, ap: dict, execute: bool = True) -> Optional[Outcome
     """requested: the daemon's answer for this key, and on a grant, execute."""
     task = ap.get("task")
     if not isinstance(task, str):
-        _set_state(intention_id, {"requested"}, "unfiled")
+        _set_state(intention_id, {"requested"}, "unfiled", card=("close", _cards.WITHDRAWN))
         return None
     granted, answer, code = _granted(task)
     if answer is None:
         _note_code(intention_id, code or "transport")
         return Outcome("requested", code=code, task=task)
     if granted:
+        # The resident's yes ends the card, whatever the start and the publish do next.
+        _card_close(intention_id, {"requested"}, _cards.GRANTED)
         if not execute:
             # S3: a one-shot resume pass outside the gateway stops before start.
             return Outcome("requested", code="deferred", task=task)
@@ -486,18 +510,18 @@ def _poll(intention_id: str, ap: dict, execute: bool = True) -> Optional[Outcome
         if status in ("executed", "nothing-to-wait-for"):
             # The grant is spent, and only this actor can spend it: a start of
             # ours whose confirmation was lost. Not a grant; never published.
-            _set_state(intention_id, {"requested"}, "start_unconfirmed", code=status)
+            _set_state(intention_id, {"requested"}, "start_unconfirmed", code=status, card=("close", _cards.GRANTED))
             return Outcome("start_unconfirmed", code=status, task=task)
         _note_code(intention_id, f"wait_status_{status}")
         return Outcome("requested", code="not_granted", task=task)
     # S4: an exit code counts only together with the status that names it;
     # anything else is transient (asked again next pass).
     if exit_code == 1 and answer.error_code == "not-registered":
-        _set_state(intention_id, {"requested"}, "unfiled", code="not-registered")
+        _set_state(intention_id, {"requested"}, "unfiled", code="not-registered", card=("close", _cards.WITHDRAWN))
         return None
     if exit_code == 1 and status in ("rejected", "revoked", "withdrawn"):
         terminal = "withdrawn" if status == "withdrawn" else "rejected"
-        _set_state(intention_id, {"requested"}, terminal, code=status)
+        _set_state(intention_id, {"requested"}, terminal, code=status, card=("close", _cards.resolution_of(status)))
         return Outcome(terminal, task=task)
     if exit_code == 3 and status == "expired":
         return _repropose(intention_id, "expired", MAX_EXPIRED_REPROPOSALS, {"requested"})
@@ -540,6 +564,10 @@ def _execute(intention_id: str, ap: dict, kind: str) -> Optional[Outcome]:
         apx["back"] = back
         apx["claimed_at"] = now
         apx.pop("code", None)
+        if kind == "grant":
+            # N5: the grant ends the card in the claim's own write too, so a
+            # `_card_close` that could not be saved is not lost.
+            _cards.mark(apx, "close", _cards.GRANTED)
 
     # One compare-and-set: only one caller moves `back -> starting`, and every
     # later step checks this claim id. Then the authority is read again.
@@ -667,6 +695,15 @@ EMITTED = frozenset({"published", "index_rejected", "ambiguous", "index_failed"}
 
 def advance(intention_id: str, *, emit: bool, inline: bool = False, expect_class: Optional[str] = None,
             execute: bool = True) -> Outcome:
+    """`_advance`, then the card events its transitions owe (`_card_events`)."""
+    try:
+        return _advance(intention_id, emit=emit, inline=inline, expect_class=expect_class, execute=execute)
+    finally:
+        _cards.flush(intention_id)
+
+
+def _advance(intention_id: str, *, emit: bool, inline: bool = False, expect_class: Optional[str] = None,
+             execute: bool = True) -> Outcome:
     """Take the proposal as far as the daemon's answers allow now. Never raises.
 
     `emit`: report a publish (or Index's refusal) as `intention.updated` here,
@@ -763,7 +800,7 @@ def withdraw_local(intention_id: str) -> Optional[str]:
     # B1: a refused proposal ends too (its held text goes), so no later
     # `confirm` can reopen it.
     after = _set_state(intention_id, {"unfiled", "requested", "cleared", "refused"}, "withdrawn",
-                       code="agent_withdrew")
+                       code="agent_withdrew", card=("close", _cards.WITHDRAWN))
     if after is None:
         return "approval_publishing"
     if previous == "requested" and isinstance(task, str):
@@ -773,6 +810,7 @@ def withdraw_local(intention_id: str) -> Optional[str]:
             logger.info("av-events: approval withdraw_unsent=%s", exc.code)
         except Exception as exc:  # noqa: BLE001
             logger.info("av-events: approval withdraw_unsent=%s", type(exc).__name__)
+    _cards.flush(intention_id)
     return None
 
 
@@ -828,6 +866,8 @@ def run_intent_pass(execute: bool = True) -> None:
         counts[outcome.state] = counts.get(outcome.state, 0) + 1
     if counts:
         logger.info("av-events: approval pass %s", " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+    # Card events a crash or an inactive collector left unsent (any entry, live or not).
+    _cards.sweep()
 
 
 #: Hermes gateway platforms (`gateway/config.py` `Platform`), plus `cron`: the

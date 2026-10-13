@@ -26,7 +26,7 @@ Calendar bullets should put EdgeOS `highlighted: true` events first, then fill w
 > - [Maya]({userUrl}) — Talk to them about agent memory for long-running workflows. Direct overlap with how you handle persistent context, [message Maya]({acceptUrl}).
 > - [Theo]({userUrl}) — Researching how information surfaces in decentralized networks. That's the type of thinking that sharpens protocol design, [message Theo]({acceptUrl}).
 > - [Priya]({userUrl}) — Building community-owned data infrastructure. Aligned on the ownership layer and complementary on discovery, [message Priya]({acceptUrl}).
-> Tapping a link accepts the introduction and opens Telegram with them.
+> Tapping a link opens Agent Village, where one tap accepts; once you have both accepted, it opens Telegram with them.
 >
 > **Help your community**
 > - [Remi]({userUrl}) — Looking for a technical co-founder for his regenerative education platform. Needs someone who thinks in systems and has shipped infrastructure. Know anyone, make intro
@@ -81,7 +81,7 @@ The tool's lead line is the roster: names linked to their profiles, no message l
 > **2 conversations await you**
 > - [Adam]({userUrl}) — Running the hardware track and wants a second pair of hands on the sensor demos. Overlaps with your embedded work, [message Adam]({acceptUrl}).
 > - [Paul]({userUrl}) — Writing about agent memory and looking for builders to interview. You have the long-running-context story, [message Paul]({acceptUrl}).
-> Tapping a link accepts the introduction and opens Telegram with them.
+> Tapping a link opens Agent Village, where one tap accepts; once you have both accepted, it opens Telegram with them.
 >
 > Still in motion: [Lena]({userUrl}) — your agents are still talking; nothing for you to do yet.
 
