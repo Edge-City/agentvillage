@@ -114,7 +114,8 @@ export function isProactiveAction(value: unknown): value is ProactiveAction {
 export const RUNS_KEY = "proactiveRuns";
 /** The trigger stops itself (silently) after this; Hermes's own script timeout is the backstop. */
 export const HARD_DEADLINE_MS = 100_000;
-const PREFETCH_FILE = "brief-context.json";
+/** The 02:00 prefetch's file in proactiveDir (runPrefetch writes it; readPrefetch and match-evidence.ts read it). */
+export const PREFETCH_FILE = "brief-context.json";
 const LOG_MAX_BYTES = 512 * 1024;
 /** Most items of each list handed to the model. */
 const LIST_MAX = 6;
