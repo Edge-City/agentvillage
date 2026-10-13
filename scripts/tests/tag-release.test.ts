@@ -36,6 +36,7 @@ import {
   enforceManifest,
   MANIFEST_PATH,
   parseManifest,
+  refHint,
 } from "../tag-release.ts";
 
 const SCRIPT = join(import.meta.dir, "..", "tag-release.ts");
@@ -800,6 +801,10 @@ describe("parseManifest", () => {
     expect(parseManifest(text)).toEqual({ ok: true, entries: [{ version: "v2.0.0-rc35", commit: SHA_A, line: 7 }] });
   });
 
+  test("a table of versions without commit ids is prose", () => {
+    expect(parseManifest(`| Tag | Note |\n|---|---|\n| v2.0.0-rc34 | cut on ungated main |\n${manifestText([])}`)).toEqual({ ok: true, entries: [] });
+  });
+
   test("prose outside the block is ignored, even a version or an inline example", () => {
     const text = `Tags such as v2.0.0-rc34 were cut by hand; add \`v2.0.0-rc35 = <full commit id>\` below.\n${manifestText([])}`;
     expect(parseManifest(text)).toEqual({ ok: true, entries: [] });
@@ -814,7 +819,17 @@ describe("parseManifest", () => {
   });
 
   test("fails closed: an approval appended after the block", () => {
-    for (const stray of [`v2.0.0-rc35 = ${SHA_A}`, `- v2.0.0-rc35 = ${SHA_A}`, `\`v2.0.0-rc35\` = ${SHA_A}`, `  v2.0.0-rc35=${SHA_A}`]) {
+    for (const stray of [
+      `v2.0.0-rc35 = ${SHA_A}`,
+      `- v2.0.0-rc35 = ${SHA_A}`,
+      `\`v2.0.0-rc35\` = ${SHA_A}`,
+      `  v2.0.0-rc35=${SHA_A}`,
+      `1. v2.0.0-rc35 = ${SHA_A}`,
+      `12) \`v2.0.0-rc35\` = ${SHA_A}`,
+      `| v2.0.0-rc35 | ${SHA_A} |`,
+      `| \`v2.0.0-rc35\` | approved | ${SHA_A.slice(0, 7)} |`,
+      `| v2.0.0-rc35 = ${SHA_A} |`,
+    ]) {
       expect(problemOf(`${manifestText([])}${stray}\n`)).toBe("line 8 looks like an approval but is outside the rc-manifest block");
     }
   });
@@ -903,15 +918,71 @@ describe("the manifest in a plan", () => {
     expect(makePlan(gitIn(g.work), { ref: g.c }).manifest.code).toBe("manifest_invalid");
   });
 
-  test("a manifest path that is a directory, or a file too large, counts as missing", () => {
+  test("a manifest path that is a directory, or a file too large, is invalid (not missing) and refuses", () => {
     const f = released();
     f.commit({ [`${MANIFEST_PATH}/x`]: "y\n" }, "a directory");
     f.run(["push", "--quiet", "origin", "main"]);
     f.run(["fetch", "--quiet", "origin"]);
-    expect(makePlan(gitIn(f.work), { ref: f.c }).manifest.code).toBe("manifest_missing");
+    const dir = makePlan(gitIn(f.work), { ref: f.c });
+    expect(dir.manifest).toMatchObject({ approved: false, code: "manifest_invalid" });
+    expect(dir.manifest.reason).toContain("cannot be read (the path is a directory, not a file)");
+    expect(refusalCode(() => enforceManifest(dir))).toBe("manifest_invalid");
     const g = released();
     approve(g, [`v2.0.0-rc2 = ${g.c}`, `# ${"x".repeat(70 * 1024)}`]);
-    expect(makePlan(gitIn(g.work), { ref: g.c }).manifest.code).toBe("manifest_missing");
+    const big = makePlan(gitIn(g.work), { ref: g.c });
+    expect(big.manifest).toMatchObject({ approved: false, code: "manifest_invalid" });
+    expect(big.manifest.reason).toContain("cannot be read (the file is larger than 64 KiB)");
+  });
+
+  test("a branch or tag ref: the refusal says to approve the resolved commit AND run again with that full id", () => {
+    const f = released();
+    const git = gitIn(f.work);
+    const plan = makePlan(git, { ref: "main" });
+    let msg = "";
+    try {
+      enforceManifest(plan);
+    } catch (e) {
+      msg = (e as Refusal).message;
+    }
+    expect(msg).toContain(`adds the line \`v2.0.0-rc2 = ${f.c}\``);
+    expect(msg).toContain(`Then run Tag release again with ref set to the full commit id ${f.c}, not main.`);
+    expect(msg).toContain("Merging the approval moves main, so main would then name another commit and the run would refuse again.");
+    expect(renderText(plan, "dry-run")).toContain(`Then run Tag release again with ref set to the full commit id ${f.c}, not main.`);
+    // another branch
+    f.run(["branch", "rel", f.c]);
+    f.run(["push", "--quiet", "origin", "rel"]);
+    f.run(["fetch", "--quiet", "origin"]);
+    expect(refHint(makePlan(git, { ref: "rel" }))).toContain("Merging the approval moves main (and rel if it lands there)");
+    // a short id or a tag name: give the full id, no claim that the ref moves
+    const short = refHint(makePlan(git, { ref: f.c.slice(0, 7) }));
+    expect(short).toBe(`Then run Tag release again with ref set to the full commit id ${f.c}, not ${f.c.slice(0, 7)}.`);
+    f.run(["tag", "marker", f.c]);
+    expect(refHint(makePlan(git, { ref: "marker" }))).toBe(`Then run Tag release again with ref set to the full commit id ${f.c}, not marker.`);
+    // the full id: no such sentence
+    const full = makePlan(git, { ref: f.c });
+    expect(refHint(full)).toBe("");
+    try {
+      enforceManifest(full);
+    } catch (e) {
+      expect((e as Refusal).message).not.toContain("run Tag release again with ref");
+    }
+  });
+
+  test("a checkout lagging origin/main (the dispatch's GITHUB_SHA) still reads the approval on origin/main", () => {
+    const f = released();
+    const head = f.run(["rev-parse", "HEAD"]);
+    const other = cloneOther(f);
+    mkdirSync(join(other, "release"), { recursive: true });
+    writeFileSync(join(other, MANIFEST_PATH), manifestText([`v2.0.0-rc2 = ${f.c}`]));
+    sh(other, ["add", MANIFEST_PATH]);
+    sh(other, ["commit", "--quiet", "-m", "approve rc2"]);
+    sh(other, ["push", "--quiet", "origin", "main"]);
+    f.run(["fetch", "--quiet", "origin"]);
+    expect(f.run(["rev-parse", "HEAD"])).toBe(head);
+    expect(spawnSync("git", ["-C", f.work, "cat-file", "-e", `HEAD:${MANIFEST_PATH}`]).status).not.toBe(0);
+    const plan = makePlan(gitIn(f.work), { ref: f.c });
+    expect(plan.manifest.approved).toBe(true);
+    expect(() => enforceManifest(plan)).not.toThrow();
   });
 
   test("read from main only: not from a branch, the working tree, or the commit's own tree", () => {
@@ -1009,6 +1080,19 @@ describe("the manifest in a plan", () => {
     expect(ok.code).toBe(0);
     expect(ok.stdout).not.toContain("::warning");
     expect(cli(["plan", "--cwd", f.work, "--ref", f.c, "--dry-run", "false"]).code).toBe(0);
+  });
+
+  test("command line: an invalid manifest refuses a real plan (exit 1) and is reported by a dry run (exit 0)", () => {
+    const f = released();
+    approve(f, [`v2.0.0-rc2 = ${f.c}`, `v2.0.0-rc3 = ${f.b.slice(0, 10)}`]);
+    const real = cli(["plan", "--cwd", f.work, "--ref", f.c, "--dry-run", "false"]);
+    expect(real.code).toBe(1);
+    expect(real.stderr).toContain("Refused (manifest_invalid)");
+    expect(real.stderr).toContain("line 8 has a short commit id");
+    const dry = cli(["plan", "--cwd", f.work, "--ref", f.c, "--dry-run", "true"]);
+    expect(dry.code).toBe(0);
+    expect(dry.stdout).toContain("Manifest: NOT APPROVED.");
+    expect(dry.stdout).toContain("(manifest_invalid)");
   });
 
   test("command line: tag refuses without approval and pushes nothing", () => {

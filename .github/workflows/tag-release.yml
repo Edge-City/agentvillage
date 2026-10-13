@@ -3,7 +3,9 @@
 # is the procedure this is one step of.
 #
 #   Actions > Tag release > Run workflow (Use workflow from: main)
-#     ref       commit, branch or tag to release (default main; main must contain it)
+#     ref       commit to release (main must contain it). A real run needs the full
+#               commit id the manifest names; a branch or tag (the default main) only
+#               suits a dry run, since merging the approval moves main
 #     dry_run   default on: plan and check the suites, create nothing
 #     version   optional: the version to create (default: the highest vX.Y.Z-rcN + 1)
 #     note      optional: one line (at most 200 characters) for the tag message's Note: line
@@ -59,7 +61,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Commit, branch or tag to release (must be on main)
+        description: 'Commit to release, on main. A real run needs the full commit id named in release/RC-MANIFEST.md; main (or a branch/tag) suits a dry run only'
         type: string
         required: true
         default: main

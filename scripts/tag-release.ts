@@ -513,8 +513,14 @@ export const MANIFEST_PATH = "release/RC-MANIFEST.md";
 export const MANIFEST_FENCE_OPEN = "```rc-manifest";
 const MANIFEST_FENCE_CLOSE = "```";
 const MANIFEST_MAX_BYTES = 64 * 1024;
-/** A line outside the block that looks like an approval (the usual mistake: appended after the fence). */
-const STRAY_APPROVAL_RE = /^\s*(?:[-*+]\s+)?`?v\d+\.\d+\.\d+\S*\s*=/;
+/**
+ * A line outside the block that looks like an approval (the usual mistake:
+ * appended after the fence): `v... =` plain, as a bullet or numbered item, in
+ * backticks or after a table pipe; or a table row naming a version and then a
+ * hexadecimal id.
+ */
+const STRAY_APPROVAL_RE = /^\s*(?:[-*+]\s+|\d+[.)]\s+|\|\s*)?`?v\d+\.\d+\.\d+\S*?`?\s*=/;
+const STRAY_TABLE_RE = /^\s*\|\s*`?v\d+\.\d+\.\d+\S*?`?\s*\|.*\b[0-9a-fA-F]{7,40}\b/;
 
 export type ManifestEntry = { version: string; commit: string; line: number };
 export type ManifestParse = { ok: true; entries: ManifestEntry[] } | { ok: false; problem: string };
@@ -544,7 +550,7 @@ export function parseManifest(text: string | null): ManifestParse {
         blocks++;
         if (blocks > 1) return bad(`line ${n} opens a second rc-manifest block; there must be exactly one`);
         open = n;
-      } else if (STRAY_APPROVAL_RE.test(lines[i])) {
+      } else if (STRAY_APPROVAL_RE.test(lines[i]) || STRAY_TABLE_RE.test(lines[i])) {
         return bad(`line ${n} looks like an approval but is outside the rc-manifest block`);
       }
       continue;
@@ -585,14 +591,18 @@ export type ManifestCheck = {
   reason: string;
 };
 
-/** The manifest's text at a commit; null when absent, not a file, or too large to be a manifest. */
-function manifestAt(git: Git, commit: string): string | null {
+/** The manifest at a commit: its text, absent, or present but not usable (a directory, a submodule, too large, unreadable). */
+function manifestAt(git: Git, commit: string): { text: string } | { absent: true } | { problem: string } {
   const spec = `${commit}:${MANIFEST_PATH}`;
-  if (git(["cat-file", "-t", spec], { allowFail: true }).stdout.trim() !== "blob") return null;
+  const t = git(["cat-file", "-t", spec], { allowFail: true });
+  if (t.code !== 0) return { absent: true };
+  const type = t.stdout.trim();
+  if (type !== "blob") return { problem: `the path is a ${type === "tree" ? "directory" : type === "commit" ? "submodule" : "non-file object"}, not a file` };
   const size = Number(git(["cat-file", "-s", spec], { allowFail: true }).stdout.trim());
-  if (!Number.isSafeInteger(size) || size > MANIFEST_MAX_BYTES) return null;
+  if (!Number.isSafeInteger(size)) return { problem: "its size could not be read" };
+  if (size > MANIFEST_MAX_BYTES) return { problem: `the file is larger than ${MANIFEST_MAX_BYTES / 1024} KiB` };
   const r = git(["cat-file", "blob", spec], { allowFail: true });
-  return r.code === 0 ? r.stdout : null;
+  return r.code === 0 ? { text: r.stdout } : { problem: "the file could not be read" };
 }
 
 /** Whether main's manifest (at mainCommit) approves `version` at `commit`. Never throws a refusal; enforceManifest does. */
@@ -600,9 +610,9 @@ export function checkManifest(git: Git, mainCommit: string, version: string, com
   const expected = `${version} = ${commit}`;
   const where = `${MANIFEST_PATH} on main (${mainCommit.slice(0, 7)})`;
   const no = (code: ManifestCheck["code"], reason: string): ManifestCheck => ({ approved: false, code, mainCommit, line: null, expected, reason: clean(reason, 600) });
-  const text = manifestAt(git, mainCommit);
-  if (text === null) return no("manifest_missing", `${where} is missing, so no tag is approved`);
-  const parsed = parseManifest(text);
+  const at = manifestAt(git, mainCommit);
+  if ("absent" in at) return no("manifest_missing", `${where} is missing, so no tag is approved`);
+  const parsed: ManifestParse = "problem" in at ? { ok: false, problem: at.problem } : parseManifest(at.text);
   if (!parsed.ok) return no("manifest_invalid", `${where} cannot be read (${parsed.problem}), so no tag is approved until it is fixed`);
   const hit = parsed.entries.find((e) => e.version === version && e.commit === commit);
   if (hit) return { approved: true, code: "approved", mainCommit, line: hit.line, expected, reason: `${where} approves ${version} at ${commit.slice(0, 7)} (line ${hit.line})` };
@@ -619,11 +629,31 @@ export function approvalHint(check: ManifestCheck): string {
   return `To approve it, merge (after the gate) a pull request that adds the line \`${check.expected}\` inside the rc-manifest block of ${MANIFEST_PATH} on main.`;
 }
 
+/**
+ * When the ref was not the full commit id: the real run must give that id,
+ * because the approval's merge moves main (and any branch it lands on), so
+ * the same ref would then name a commit the line does not approve.
+ */
+export function refHint(plan: Pick<Plan, "ref" | "refKind" | "commit">): string {
+  if (plan.ref === plan.commit) return "";
+  const why =
+    plan.refKind === "branch"
+      ? ` Merging the approval moves ${plan.ref === "main" ? "main" : `main (and ${plan.ref} if it lands there)`}, so ${plan.ref} would then name another commit and the run would refuse again.`
+      : "";
+  return `Then run Tag release again with ref set to the full commit id ${plan.commit}, not ${plan.ref}.${why}`;
+}
+
+/** How to get this plan approved and tagged: the line to add, then the ref to give. */
+export function approvalSteps(plan: Plan): string {
+  const hint = refHint(plan);
+  return hint ? `${approvalHint(plan.manifest)} ${hint}` : approvalHint(plan.manifest);
+}
+
 /** Refuses unless main's manifest approves the plan's version at its commit. Every real run calls it before creating anything. */
 export function enforceManifest(plan: Plan): void {
   const m = plan.manifest;
   if (m.approved && m.expected === `${plan.version} = ${plan.commit}`) return;
-  throw new Refusal(m.approved ? "not_in_manifest" : m.code, `${m.reason}. ${approvalHint(m)} Nothing was created.`);
+  throw new Refusal(m.approved ? "not_in_manifest" : m.code, `${m.reason}. ${approvalSteps(plan)} Nothing was created.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -789,7 +819,7 @@ export type Stage = "dry-run" | "planned" | "created";
 function nextStep(plan: Plan, stage: Stage): string[] {
   const seedInput = plan.seedChanged ? "ticked ONLY after the data pipeline check above" : "off";
   if (stage === "dry-run") {
-    const approve = plan.manifest.approved ? [] : [`First get it approved, or the real run refuses (${plan.manifest.code}). ${approvalHint(plan.manifest)}`];
+    const approve = plan.manifest.approved ? [] : [`First get it approved, or the real run refuses (${plan.manifest.code}). ${approvalSteps(plan)}`];
     return [
       ...approve,
       `Nothing was created. To create it, run Tag release again with dry_run unticked and ref ${plan.commit} ` +

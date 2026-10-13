@@ -12,16 +12,22 @@ line inside the block below, for example `v2.0.0-rc35 = ` followed by the full
 40-character commit id. Carter merges it after the gate. Then run Tag release
 with `ref` set to that commit id and `version` set to that version (dry run
 first). The commit that merges this file is not the one to tag: tag the commit
-the line names.
+the line names, and give its full id as `ref` (not `main`, which the merge
+moved).
+
+Until `main` has branch protection and a CODEOWNERS entry for this file
+(Carter's repo-admin settings), "Carter merges it" is a procedure, not
+something GitHub enforces: anyone with write access could add a line.
 
 **The form.** Inside the one `rc-manifest` block, each line is blank, a
 comment starting with `#`, or `<version> = <full commit id>` with an optional
 trailing ` # comment`. The version is `vX.Y.Z` or `vX.Y.Z-rcN` with no leading
 zeros; the commit id is all 40 lowercase hexadecimal characters. Anything else
 (no block, two blocks, an unclosed block, a short id, an unknown line, the same
-version with two different commits, an approval line outside the block) makes
-every real run refuse until it is fixed. The `bun test` suite checks that this
-file parses, so a broken line fails the pull request that adds it.
+version with two different commits, or an approval line outside the block,
+whether plain, bulleted, numbered or a table row) makes every real run refuse
+until it is fixed. The `bun test` suite checks that this file parses, so a
+broken line turns the test check red on the pull request that adds it.
 
 The hand fallback in `docs/deployment.md` ("Roll"), `git tag -a` and
 `git push`, does not read this file. It is for Carter only.

@@ -131,6 +131,12 @@ where this page is briefer.
    plan). A missing file, a line it cannot read, a short commit id or one
    version listed with two commits refuses every real run (`manifest_missing`,
    `manifest_invalid`; a plan the file does not name is `not_in_manifest`).
+   Give the commit id even when you dry-ran `main`: merging the approval moves
+   `main`, so a real run with `ref` `main` names a commit no line approves.
+   Until `main` has branch protection and a CODEOWNERS entry for
+   `release/RC-MANIFEST.md` (Carter's repo-admin settings), "Carter merges it"
+   is a procedure, not something GitHub enforces: anyone with write access
+   could add a line.
 
    | Tag release problem | What to do |
    |---|---|
@@ -241,8 +247,9 @@ on it:
    run, the same `version` and `note` if you gave them, once
    `release/RC-MANIFEST.md` on `main` approves that version and commit.
 9. `git fetch --tags` and `git cat-file -p <tag>`: annotated, tagger
-   `github-actions[bot]`, a message naming you, the run, the commit, the seed
-   check and the commits; `git ls-remote --heads origin` unchanged.
+   `github-actions[bot]`, a message naming you, the run, the commit, the
+   `Approved by: release/RC-MANIFEST.md line N on main at <sha>` line, the
+   seed check and the commits; `git ls-remote --heads origin` unchanged.
 10. If the push was refused: tag by hand with the fallback and see the
     troubleshooting table above.
 11. If the seed check named files, confirm with the data owner that the data
@@ -712,12 +719,14 @@ Until the button's pre-flight is done (two GitHub environments limited to
 `main`, the Railway token on both, a deploy key for the first run), the hand
 procedure applies: a fast-forward push of `release` to a commit on `main`,
 never a reset or a blind force, then migrations run from inside the ingest
-container. The detail, the compatibility check and the manifest are in that
+container. The detail, the compatibility check and its `releases/manifest.yaml` are in that
 repo's `docs/release-process.md` and `docs/runbook.md` ("Deploy ingest and
 dbt").
 
 Order when a change spans components: data pipeline first, then the overlay
-tag and roll, then the manifest PR recording what is live.
+tag and roll, then the PR to the data repo's `releases/manifest.yaml` recording
+what is live (a record after the fact; not this repo's `release/RC-MANIFEST.md`,
+which approves a tag before it is cut).
 
 ## What the records give research
 
@@ -747,7 +756,7 @@ tag and roll, then the manifest PR recording what is live.
 | Roll residents | anyone with write access to the controlplane repo, through the staged procedure |
 | Release ingest, run migrations | the data owner |
 | Change a Railway variable or setting | a Railway admin, stating the exact change first |
-| Record the release in the manifest | a PR to `agentvillage-data` after the fact |
+| Record the release in `releases/manifest.yaml` (data repo) | a PR to `agentvillage-data` after the fact |
 
 Repository secrets are readable by any workflow on any branch, so everyone
 with write access to the controlplane repo effectively holds the Railway token
