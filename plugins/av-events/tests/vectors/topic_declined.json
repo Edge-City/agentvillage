@@ -1,0 +1,37 @@
+{
+ "about": "DREAM-1 declined-topic stop (_core.topic_words, _core.same_topic, _core.topic_stopped). Run by plugins/av-events/tests/test_inference_run.py (the plugin, on _core) and scripts/tests/memory-signal-gate.test.ts (the gate, through plugin_core): both sides must give these results.",
+ "rule": "words: loose_key tokens, minus the fixed stop words and tokens with no letter; an ASCII plural of 4+ letters loses its final s (not after ss, us, is). same topic: both sets non-empty and 2 x shared >= all (Jaccard >= 1/2). stopped: the candidate is the same topic as 2 or more declined suggestions.",
+ "words": [
+  {"text": "Looking for a hardware co-founder for the seed library", "words": ["cofounder", "hardware", "library", "seed"]},
+  {"text": "Meet 2-3 climate investors this month", "words": ["climate", "investor"]},
+  {"text": "Learn C++ from a mentor", "words": ["c++", "learn", "mentor"]},
+  {"text": "Find cofounders", "words": ["cofounder"]},
+  {"text": "I need help with my business", "words": ["business"]},
+  {"text": "Physics tutoring", "words": ["physic", "tutoring"]},
+  {"text": "🌱", "words": []},
+  {"text": "the and of", "words": []}
+ ],
+ "pairs": [
+  {"a": "Looking for a hardware co-founder for the seed library", "b": "Find a cofounder for the seed library", "same": true},
+  {"a": "Looking for a hardware co-founder for the seed library", "b": "Hardware cofounder wanted", "same": true},
+  {"a": "Looking for a hardware co-founder for the seed library", "b": "Looking for soil scientists to meet this month", "same": false},
+  {"a": "Find a cofounder for the seed library", "b": "Seed library volunteers", "same": true},
+  {"a": "Raise a seed round", "b": "Seed library volunteers", "same": false},
+  {"a": "Find a running partner", "b": "Find a tennis partner", "same": false},
+  {"a": "Climate investors", "b": "investors for my climate startup", "same": true},
+  {"a": "Learn C++", "b": "Learn C", "same": false},
+  {"a": "Find cofounders", "b": "find a cofounder", "same": true},
+  {"a": "Surfing", "b": "surfing lessons", "same": true},
+  {"a": "Surfing", "b": "surfing lessons in Goa", "same": false},
+  {"a": "🌱", "b": "🌱", "same": false}
+ ],
+ "cases": [
+  {"candidate": "Hardware cofounder wanted for the seed library", "declined": ["Looking for a hardware co-founder for the seed library"], "expected": null},
+  {"candidate": "Hardware cofounder wanted for the seed library", "declined": ["Looking for a hardware co-founder for the seed library", "Find a cofounder for the seed library"], "expected": "topic_declined"},
+  {"candidate": "Looking for soil scientists to meet this month", "declined": ["Looking for a hardware co-founder for the seed library", "Find a cofounder for the seed library"], "expected": null},
+  {"candidate": "Hardware cofounder wanted for the seed library", "declined": ["Looking for a hardware co-founder for the seed library", "Looking for soil scientists"], "expected": null},
+  {"candidate": "climate investors", "declined": ["Meet 2-3 climate investors this month", "investors for my climate startup"], "expected": "topic_declined"},
+  {"candidate": "Find a tennis partner", "declined": ["Find a running partner", "Find a running partner"], "expected": null},
+  {"candidate": "🌱", "declined": ["🌱", "🌱"], "expected": null}
+ ]
+}

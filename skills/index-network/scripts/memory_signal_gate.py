@@ -34,9 +34,10 @@ on evidence:
   messages of at least SUBSTANTIVE_CHARS characters since the last run, or a
   changed stated goal, or a changed filtered memory hash.
 * **Caps** keep it from waking when it may not record (`exit_branch` `capped`: a cap,
-  not a judgement): at most one inferred intent per resident per night, none while an
-  inferred approval card is open, none within DECLINE_COOLDOWN_S of a declined inferred
-  suggestion; and none without `record_intention` (`AV_RECORD_INTENTION` off: `tool_unavailable`).
+  not a judgement): at most one inferred intent per resident per night, and none while an
+  inferred approval card is open; and none without `record_intention` (`AV_RECORD_INTENTION`
+  off: `tool_unavailable`). A decline does not pause the pass (DREAM-1): the tool refuses the
+  declined text, and any want on a topic declined twice (`topic_declined`).
 * **State.** Every exit records `lastRunAt`, the reason and the counters. The evidence pointers
   (memory hash, goals hash, and the message cursor with its overlap keys) live in the gate-owned
   `av-events/memory_signal_runs.json` (the model never writes it; `memorySignals` keeps a mirror)
@@ -59,6 +60,11 @@ on evidence:
   (counts and codes; the text of an intention this pass recorded, kept on the
   box only so a declined one is never proposed again). The av-events plugin
   completes it and reports `intention.inference_run` from it.
+* **Declined topics** (DREAM-1): every run folds the content words of each recorded intention the
+  resident has since declined into the same file's `declined_topics` (`_core.fold_declined_topics`:
+  word sets, never the text; the newest `_core.MAX_DECLINED_TOPICS`), so a declined topic outlives the
+  30 run records. `record_intention` refuses a want on a topic declined twice; the inputs name those
+  topics in the declined block. Never emitted.
 
 Reads local files only, never the network. Prints the inputs (on a wake) and,
 last, one JSON line with `wakeAgent` for Hermes. Always exits 0: a failing
@@ -118,8 +124,6 @@ EVIDENCE_MIN_MESSAGES = 3
 #: The first run looks back this far; no run looks back further than MAX_WINDOW_S.
 FIRST_RUN_WINDOW_S = 48 * 3600
 MAX_WINDOW_S = 7 * 24 * 3600
-#: No inferred intent within this long of a declined inferred suggestion.
-DECLINE_COOLDOWN_S = 3 * 24 * 3600
 
 # ---- What reaches the model -------------------------------------------------
 
@@ -624,19 +628,31 @@ def _stamp(value: Any) -> Optional[float]:
     return float(value)
 
 
-def declines_and_open(inferred: dict[str, dict], now: float) -> tuple[int, Optional[float], bool]:
-    """(declined inferred proposals, when the last one was declined, whether one is still open)."""
-    declined, last, open_card = 0, None, False
+def declines_and_open(inferred: dict[str, dict]) -> tuple[int, bool]:
+    """(declined inferred proposals, whether one is still open)."""
+    declined, open_card = 0, False
     for approval in inferred.values():
         state = approval.get("state")
         if state in LIVE_STATES:
             open_card = True
         elif state == DECLINED_STATE:
             declined += 1
-            at = _stamp(approval.get("updated_at"))
-            if at is not None and (last is None or at > last):
-                last = at
-    return declined, last, open_card
+    return declined, open_card
+
+
+def declined_at(inferred: dict[str, dict]) -> dict[str, Any]:
+    """intention id -> when the resident declined it, for each declined inferred proposal."""
+    return {i: approval.get("updated_at") for i, approval in inferred.items() if approval.get("state") == DECLINED_STATE}
+
+
+def stopped_topics(core: Any, topics: list[dict]) -> list[list[str]]:
+    """The word sets of the topics declined twice (`_core.topic_stopped`, the tool's own rule), newest
+    first, each once, at most MAX_DECLINED_SHOWN: named in the inputs so the model leaves them out."""
+    out: list[list[str]] = []
+    for item in reversed(topics):
+        if core.topic_stopped(item["words"], topics) and item["words"] not in out:
+            out.append(item["words"])
+    return out[:MAX_DECLINED_SHOWN]
 
 
 def declined_texts(runs: list[dict], inferred: dict[str, dict], key: Any = None) -> list[str]:
@@ -684,8 +700,10 @@ class RunsLock:
             self.fd = None
 
 
-def append_run(home: Path, record: dict, *, pointers: Optional[dict] = None, settle: frozenset = frozenset()) -> None:
-    """Append a record and, with `pointers`, commit them; mark the woken runs in `settle` settled.
+def append_run(home: Path, record: dict, *, pointers: Optional[dict] = None, settle: frozenset = frozenset(),
+               fold: Any = None) -> None:
+    """Append a record and, with `pointers`, commit them; mark the woken runs in `settle` settled;
+    with `fold` (kept, runs) -> list, refresh `declined_topics` from the records before this one.
     Every other key of the file (the plugin's notes on records included) is kept."""
     with RunsLock(home):
         doc = read_doc(home)
@@ -693,6 +711,9 @@ def append_run(home: Path, record: dict, *, pointers: Optional[dict] = None, set
         for run in runs:
             if run.get("run_id") in settle:
                 run["settled"] = True
+        if fold is not None:
+            # Before the oldest record can drop off below: its declined text is folded first.
+            doc["declined_topics"] = fold(doc.get("declined_topics"), runs)
         runs.append(record)
         doc["v"] = 1
         doc["runs"] = runs[-MAX_RUN_RECORDS:]
@@ -792,7 +813,7 @@ class NonceCollision(Exception):
 
 def inputs_text(*, run_id: str, goals: list[str], messages: list[tuple[float, str]], removed: list[str],
                 declined: list[str], declined_count: int, memory: str, messages_note: Optional[str],
-                nonce: Optional[str] = None) -> tuple[str, str]:
+                nonce: Optional[str] = None, stopped: Optional[list[list[str]]] = None) -> tuple[str, str]:
     """(the file's text, its nonce). Content is never rewritten; it sits inside nonce-fenced blocks.
     A nonce found anywhere in the content is replaced by a fresh one."""
     zone = village_zone()
@@ -808,9 +829,11 @@ def inputs_text(*, run_id: str, goals: list[str], messages: list[tuple[float, st
         message_lines = ["(none)"]
     removed_lines = [f"- {item}" for item in removed[:MAX_REMOVED]] or ["(none)"]
     declined_lines = [f"- {' / '.join(item.splitlines())}" for item in declined]
+    declined_lines += [f"- (a topic they declined twice; never propose anything on it) {', '.join(words)}"
+                       for words in stopped or []]
     if declined_count > len(declined):
         declined_lines.append(f"({declined_count - len(declined)} more declined earlier; their words are not kept)")
-    if not declined and not declined_count:
+    if not declined and not declined_count and not stopped:
         declined_lines = ["(none)"]
     memory_lines = memory.split("\n") if memory.strip() else ["(none)"]
     sections = [
@@ -947,7 +970,13 @@ def gate(home: Path, memory_path: Path, state_path: Path, *, now: float) -> dict
         inferred = approvals(home)
     except MapUnreadable:
         inferred, map_error = {}, "map_unreadable"
-    declined_count, last_declined, open_card = declines_and_open(inferred, now)
+    declined_count, open_card = declines_and_open(inferred)
+    # DREAM-1: the declined topics, folded with the plugin's own function (none without the plugin).
+    core = plugin_core(home)
+    fold_topics = getattr(core, "fold_declined_topics", None)
+    when_declined = declined_at(inferred)
+    fold = (lambda kept, records: fold_topics(kept, records, when_declined)) if fold_topics is not None else None
+    topics = fold(doc.get("declined_topics"), runs) if fold is not None else []
 
     counters = {
         "memory_bytes": len(memory_text.encode("utf-8")),
@@ -987,8 +1016,6 @@ def gate(home: Path, memory_path: Path, state_path: Path, *, now: float) -> dict
         exit_branch, reason, error_code = "capped", "capped_nightly", None
     elif open_card:
         exit_branch, reason, error_code = "capped", "capped_open_card", None
-    elif last_declined is not None and now - last_declined < DECLINE_COOLDOWN_S:
-        exit_branch, reason, error_code = "capped", "capped_recent_decline", None
     elif give_up:
         exit_branch, reason, error_code = "error", "uncompleted_wakes", "state_write_failed"
     else:
@@ -1028,10 +1055,11 @@ def gate(home: Path, memory_path: Path, state_path: Path, *, now: float) -> dict
             goals=goals,
             messages=messages_for_model(messages or []),
             removed=removed,
-            declined=declined_texts(runs, inferred, getattr(plugin_core(home), "loose_key", None)),
+            declined=declined_texts(runs, inferred, getattr(core, "loose_key", None)),
             declined_count=declined_count,
             memory=memory,
             messages_note=messages_note,
+            stopped=stopped_topics(core, topics) if fold is not None else [],
         )
         write_inputs(home, text)
         payload: dict[str, Any] = {
@@ -1052,7 +1080,7 @@ def gate(home: Path, memory_path: Path, state_path: Path, *, now: float) -> dict
         write_inputs(home, None)
         payload = {**NO_REPLY, "reason": reason, "runId": run_id, "memoryHash": current_memory_hash}
     # N7: the record goes in last but one (no orphan woke record), with the pointers in one write.
-    append_run(home, record, pointers=committed, settle=frozenset(settle))
+    append_run(home, record, pointers=committed, settle=frozenset(settle), fold=fold)
 
     # The state mirror, best effort: the gate's own file above is the authority.
     signals.pop("pendingEvidence", None)

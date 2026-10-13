@@ -231,7 +231,7 @@ backlog can differ from `emitted_at` by minutes. Every `marts` time series is bu
 | `plugin.degraded` | the guard | `hook`, `scope` ∈ `session`\|`process`, `error_count`, `errors_by_hook`, `hermes_version`, `last_error` |
 | `plugin.buffer_dropped` | the flusher | `reason`, `count`, `files`, `rejected_files`, `rejected_events`, `oldest_event_at`, `newest_event_at` |
 | `intention.captured` | `post_tool_call` on Index `create_intent` (or the Index plugin's `index_create_intent`), or `record_intention(action="capture")` | `text_hash`, `summary_hash`, `index_intent_id`, `source`, `conditional`, `capture_path`, `index_status`, `parent_session_id`, `publish_refused`, `local_reason`, plus `text_length` / `summary_length` above `metadata` |
-| `intention.updated` | `post_tool_call` on Index `update_intent` (or `index_update_intent`) with a new `description`, Index `pause_intent` / `resume_intent` (`index_status` `paused` / `active`, both hashes null, `status_only: true`), or `record_intention` naming an id | as above |
+| `intention.updated` | `post_tool_call` on Index `update_intent` (or `index_update_intent`) with a new `description`, Index `pause_intent` / `resume_intent` (`index_status` `paused` / `active`, both hashes null, `status_only: true`), or `record_intention` naming an id; and the resident's decline of a held proposal on the approval path (`approval_state` `rejected`, no text; DREAM-1) | as above |
 | `intention.withdrawn` | `post_tool_call` on Index `archive_intent` (or the legacy `delete_intent`, or a legacy `update_intent` to `archived`/`deleted`/`withdrawn`), or `record_intention(action="archive"\|"withdraw"\|"delete")` | as above; both hashes null |
 | `digest.shared` | the approval poller (or the tool call) after the resident's grant and `approval start` (lane O3) | `digest_id`, `scope`, `text`, `expires_at`, `idempotency_key`, `payload_hash`, `start_seq`, `authorization` — see "Sharing a digest and the weekly vote" |
 | `digest.revoked` | `share_digest(action="revoke")` on a shared digest | `digest_id` |
@@ -1490,8 +1490,8 @@ writes its state on every exit. It appends one record per run to
 | `pass_limit_reached` | this run recorded one already |
 | `nightly_limit_reached` | another run recorded one this village night |
 | `inferred_card_open` | an inferred proposal is still unanswered (`unfiled`, `requested`, `cleared`, `starting`, `publishing`) |
-| `recently_declined` | the resident declined an inferred proposal less than 3 days ago |
 | `previously_declined` | the text's held hash is a declined proposal's, or it matches a declined text this pass recorded under `loose_key`: NFKC and case folded, hyphens and dashes joined ("co-founder" = "cofounder"), letters, digits, combining marks, `+` and `#` kept, every other character a word break ("Learn C++" ≠ "Learn C", "find therapist" ≠ "find the rapist", "1:1" ≠ "11") |
+| `topic_declined` | DREAM-1: the text is the same topic as two or more declined proposals. Words: the `loose_key` tokens minus a fixed list of stop words and tokens with no letter, an ASCII plural of 4+ letters without its final `s`; same topic: Jaccard overlap of at least 1/2 (`_core.topic_words`, `_core.same_topic`, vectors in `tests/vectors/topic_declined.json`, run by the gate's tests too). The declined word sets live in `memory_signal_runs.json` `declined_topics` (the gate folds them in on every run, the newest 50; never emitted). A decline no longer pauses other topics |
 | `caps_unknown` | the map cannot be read |
 
 The first refusal ends the pass: it is noted on the run record (`refusal`) and every later capture in
@@ -1519,7 +1519,7 @@ the execution's window), removes the inputs file, and, with `AV_INFERENCE_RUN_EV
 | `run_id` | the gate's uuid v7 (a v7 derived from the execution when the gate left no record) |
 | `job` | `memory_signal_sync` |
 | `started_at`, `finished_at` | the gate's start; the execution's finish |
-| `exit_branch` | the gate's stop (`gated_no_change`, `tool_unavailable`, `capped` for the nightly, open-card and recent-decline caps, `error`); for a woken run, `recorded` when the tool noted a capture, `capped` when the tool refused on a cap, `candidate_previously_declined` when it refused a declined text, else the model's `memorySignals.lastOutcome.exit` for this `runId` |
+| `exit_branch` | the gate's stop (`gated_no_change`, `tool_unavailable`, `capped` for the nightly and open-card caps, `error`); for a woken run, `recorded` when the tool noted a capture, `capped` when the tool refused on a cap, `candidate_previously_declined` when it refused a declined text or a topic declined twice (`topic_declined`), else the model's `memorySignals.lastOutcome.exit` for this `runId` |
 | `memory_bytes`, `resident_messages_since_last_run` (40+ characters), `stated_goals`, `prior_declines` (declined inferred proposals plus `Removed by you` items) | the gate; when it left no record or the run failed, the last known values (the newest gate record, else `memorySignals.lastSignal`), 0 only when never known |
 | `existing_intents` | the active intents in this run's list answer, else the last list's (0 when no run ever listed) |
 | `candidates_considered` | the model's count (at least 1 when recorded; 0 for a gate stop) |

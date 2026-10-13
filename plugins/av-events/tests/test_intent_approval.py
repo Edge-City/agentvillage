@@ -446,11 +446,42 @@ def test_a_rejection_drops_the_text_and_publishes_nothing(tctx, serve, index, mo
     poll(mods)
     ap = entry(mods, iid)["approval"]
     assert ap["state"] == "rejected" and "payload" not in ap
-    assert index.requests == [] and len(events(av, plugin)) == 1
+    # DREAM-1: the capture, then the resident's decline (`intention.updated`, `rejected`).
+    assert index.requests == [] and [e["event_type"] for e in events(av, plugin)] == [
+        "intention.captured", "intention.updated"]
     out = call(tctx, {"action": "confirm", "intention_id": iid}, tool_call_id="c2")
     assert out["error"] == "resident_declined"
     poll(mods)
     assert serve.verbs().count("wait") == 1  # a terminal proposal is never polled again
+    assert len(events(av, plugin)) == 2  # and its decline is reported once
+
+
+def test_dream1_a_resident_decline_emits_intention_updated_rejected_with_hashes_and_no_text(
+        tctx, serve, index, mods, av, plugin):
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    serve.reject(f"{INFERRED}:{iid}")
+    poll(mods)
+    [declined] = [e for e in events(av, plugin) if e["event_type"] == "intention.updated"]
+    payload = declined["payload"]
+    assert declined["intention_id"] == iid
+    assert payload["approval_state"] == "rejected"
+    assert payload["text_hash"] == sha(TEXT) and payload["text_length"] == len(TEXT)
+    assert payload["source"] == "ambient" and payload["capture_path"] == "record_intention"
+    assert payload["index_intent_id"] is None and payload["publish_refused"] is None
+    assert "approved_by" not in payload
+    serialized = json.dumps(declined)
+    assert TEXT not in serialized and "climbing" not in serialized and "Goa" not in serialized
+
+
+def test_dream1_a_decline_read_by_confirm_in_chat_is_reported_once(tctx, serve, index, mods, av, plugin):
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    serve.reject(f"{INFERRED}:{iid}")
+    out = call(tctx, {"action": "confirm", "intention_id": iid}, tool_call_id="c2")
+    assert out["error"] == "resident_declined"
+    poll(mods)
+    updated = [e for e in events(av, plugin) if e["event_type"] == "intention.updated"]
+    assert [e["payload"]["approval_state"] for e in updated] == ["rejected"]
+    assert updated[0]["payload"]["text_hash"] == sha(TEXT)
 
 
 def test_expiry_re_proposes_the_same_bytes_twice_then_gives_up(tctx, serve, index, mods):

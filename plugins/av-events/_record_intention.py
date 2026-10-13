@@ -498,13 +498,13 @@ REFUSALS: dict[str, str] = {
         "Nothing was recorded: an intention this agent inferred is still waiting for the resident's "
         "answer on their approval card, and nothing new is proposed until they answer. This pass ends here."
     ),
-    "recently_declined": (
-        "Nothing was recorded: the resident declined an inferred intention less than three days ago, "
-        "so nothing new is proposed yet. This pass ends here."
-    ),
     "previously_declined": (
         "Nothing was recorded: the resident declined this same intention on their approval card. "
         "Never propose it again. This pass ends here."
+    ),
+    "topic_declined": (
+        "Nothing was recorded: the resident declined suggestions on this topic twice on their approval "
+        "card. Never propose anything on it again. This pass ends here."
     ),
     "caps_unknown": (
         "Nothing was recorded: whether an inferred intention is still waiting for the resident could "

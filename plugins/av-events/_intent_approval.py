@@ -98,6 +98,7 @@ reported in the tool's result, and the observer emits the one
 emitted here as `intention.updated` with `index_intent_id`, `approved_by`
 (`individual` for a human's grant, `rule` for the policy) and
 `approval_state`, through the emitter the plugin registers (`set_emitter`).
+So is the resident's decline (DREAM-1: `approval_state` `rejected`, no text).
 
 Python 3.11, standard library only.
 """
@@ -689,8 +690,11 @@ def _stale(intention_id: str, ap: dict, emit: bool, entry: Optional[dict]) -> Op
     return None
 
 
-#: Outcomes worth an `intention.updated` when no tool result carries them.
-EMITTED = frozenset({"published", "index_rejected", "ambiguous", "index_failed"})
+#: Outcomes worth an `intention.updated` when no tool result carries them. `rejected` (DREAM-1):
+#: the resident's no on the card, read by the poller or a `confirm` (hashes and lengths, no text),
+#: so the decline rate can be counted. A proposal the daemon refused or a revoked card ends
+#: `rejected` too; the event's state does not tell them apart.
+EMITTED = frozenset({"published", "index_rejected", "ambiguous", "index_failed", "rejected"})
 
 
 def advance(intention_id: str, *, emit: bool, inline: bool = False, expect_class: Optional[str] = None,

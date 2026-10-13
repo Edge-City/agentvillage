@@ -821,7 +821,8 @@ def _emit_intention_update(
 ) -> None:
     """DATA-212 Lane B (R20): a held intention published through approval.md
     after its capture call (by the poller or a `confirm`), or refused by Index
-    then. One `intention.updated` with `index_intent_id`: the alias the data
+    then, or (DREAM-1) declined by the resident on the card (`approval_state`
+    `rejected`, no `index_intent_id`). One `intention.updated` with `index_intent_id`: the alias the data
     side registers, the poller's `sourceId` read corroborating it. Its
     `text_hash` is the plain SHA-256 of the exact string sent to Index.
     Telemetry only: inert when the collector is, and never the publish's

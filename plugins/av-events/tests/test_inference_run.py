@@ -467,19 +467,15 @@ def test_none_while_an_inferred_card_is_open(tool, box):
     assert capture(tool)["error"] == "inferred_card_open"
 
 
-def test_none_within_three_days_of_a_decline_and_never_the_declined_text_again(tool, box, plugin):
+def test_never_the_declined_text_again_even_two_days_on(tool, box, plugin):
     import sys as _sys
 
     ri = _sys.modules[f"{plugin.__name__}._record_intention"]
     box.run()
-    box.approvals((ID1, "rejected", 2 * 24 * 3600, None))
-    listed(tool)
-    assert capture(tool)["error"] == "recently_declined"
-    box.run(started_at=iso(80))  # the next night's run
-    box.approvals((ID1, "rejected", 4 * 24 * 3600, ri.held_norm_hash(TEXT)))
+    box.approvals((ID1, "rejected", 2 * 24 * 3600, ri.held_norm_hash(TEXT)))
     listed(tool)
     assert capture(tool)["error"] == "previously_declined"
-    box.run(started_at=iso(75))
+    box.run(started_at=iso(75))  # the next night's run
     listed(tool)
     assert capture(tool, "Looking for soil scientists to meet this month")["success"] is True
 
@@ -576,7 +572,7 @@ def test_end_to_end_gate_list_record_and_the_recorded_event(tool, box, av, plugi
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("reason", ["capped_nightly", "capped_open_card", "capped_recent_decline"])
+@pytest.mark.parametrize("reason", ["capped_nightly", "capped_open_card"])
 def test_s1_a_gate_cap_stop_is_reported_as_capped(live, box, av, reason):
     box.run(woke=False, exit_branch="capped", gate_reason=reason, finished_at=iso(84))
     box.execution()
@@ -799,3 +795,140 @@ def test_the_run_event_goes_only_where_every_other_event_may(plugin, ctx, monkey
     plugin._COLLECTOR.reload_config()
     plugin._COLLECTOR.cron_tick()
     assert events(av, plugin) == []
+
+
+# --------------------------------------------------------------------------
+# DREAM-1: no 3-day pause after a decline; two declines on a topic stop that topic
+# --------------------------------------------------------------------------
+
+DAY = 24 * 3600
+ID2 = "01920000-0000-7000-8000-000000000002"
+ID3 = "01920000-0000-7000-8000-000000000003"
+DECLINED_A = "Looking for a hardware co-founder for the seed library"
+DECLINED_B = "Find a cofounder for the seed library"
+SAME_TOPIC = "Hardware cofounder wanted for the seed library"
+OTHER_TOPIC = "Looking for soil scientists to meet this month"
+TOPIC_VECTORS = Path(__file__).resolve().parent / "vectors" / "topic_declined.json"
+
+
+def recorded(box: Box, intention_id: str, text: str, days_ago: float, night: str) -> dict:
+    """An earlier night's woken run that recorded `text` (the plugin's note on the gate's record)."""
+    return box.run(recorded_intent_id=intention_id, recorded_text=text, village_date=night,
+                   started_at=iso(days_ago * DAY + 120), finished_at=iso(days_ago * DAY + 60))
+
+
+def test_dream1_a_decline_yesterday_does_not_pause_an_unrelated_topic(tool, box):
+    recorded(box, ID1, DECLINED_A, 2, "2026-10-01")
+    box.run()
+    box.approvals((ID1, "rejected", DAY, None))
+    listed(tool)
+    assert capture(tool, OTHER_TOPIC)["success"] is True
+
+
+def test_dream1_a_topic_declined_once_still_proposes(tool, box):
+    # One decline on the topic (yesterday), and one card on it the resident took: not two declines.
+    recorded(box, ID1, DECLINED_A, 2, "2026-10-01")
+    recorded(box, ID2, DECLINED_B, 4, "2026-09-29")
+    box.run()
+    box.approvals((ID1, "rejected", DAY, None), (ID2, "published", 3 * DAY, None))
+    listed(tool)
+    assert capture(tool, SAME_TOPIC)["success"] is True
+
+
+def test_dream1_a_topic_declined_twice_is_refused_topic_declined_and_reported_previously_declined(
+        tool, box, av, plugin, monkeypatch):
+    import sys as _sys
+
+    ri = _sys.modules[f"{plugin.__name__}._record_intention"]
+    monkeypatch.setenv("AV_INFERENCE_RUN_EVENTS", "1")
+    recorded(box, ID1, DECLINED_A, 10, "2026-10-01")
+    recorded(box, ID2, DECLINED_B, 6, "2026-10-05")
+    record = box.run()
+    box.approvals((ID1, "rejected", 9 * DAY, None), (ID2, "rejected", 5 * DAY, None))
+    listed(tool)
+    out = capture(tool, SAME_TOPIC)
+    assert out == {"success": False, "error": "topic_declined", "message": ri.REFUSALS["topic_declined"]}
+    # The first refusal ends the pass, as every refusal does.
+    assert capture(tool, OTHER_TOPIC)["error"] == "topic_declined"
+    assert box.runs()[-1]["refusal"] == "topic_declined" and box.runs()[-1]["recorded_intent_id"] is None
+    # The model says nothing was left: the tool's refusal decides the branch.
+    box.outcome(record["run_id"], "no_candidate", considered=1)
+    box.execution()
+    plugin._COLLECTOR.cron_tick()
+    [event] = events(av, plugin)
+    check_contract(event["payload"])
+    assert event["payload"]["run_id"] == record["run_id"]
+    assert event["payload"]["exit_branch"] == "candidate_previously_declined"
+    # Another topic, the next night: proposed.
+    box.run(started_at=iso(30))
+    listed(tool)
+    assert capture(tool, OTHER_TOPIC)["success"] is True
+
+
+def test_dream1_the_gate_keeps_the_declined_sets_and_the_tool_reads_them_after_the_runs_scroll_off(tool, box, home, plugin):
+    import sys as _sys
+
+    core = _sys.modules[f"{plugin.__name__}._core"]
+    recorded(box, ID1, DECLINED_A, 10, "2026-10-01")
+    recorded(box, ID2, DECLINED_B, 6, "2026-10-05")
+    recorded(box, ID3, OTHER_TOPIC, 3, "2026-10-08")
+    box.approvals((ID1, "rejected", 9 * DAY, None), (ID2, "rejected", 5 * DAY, None), (ID3, "published", 2 * DAY, None))
+    env = {k: v for k, v in os.environ.items() if k != "AV_RECORD_INTENTION"}
+    env["HERMES_HOME"] = str(home)
+    gate = subprocess.run([sys.executable, str(GATE), "--json-only"], env=env, capture_output=True, text=True, check=True)
+    assert json.loads(gate.stdout.strip().splitlines()[-1])["wakeAgent"] is False
+    path = home / "av-events" / "memory_signal_runs.json"
+    doc = json.loads(path.read_text())
+    kept = doc["declined_topics"]
+    assert [item["intention_id"] for item in kept] == [ID1, ID2]  # the declined ones only, oldest first
+    assert kept[0]["words"] == sorted(core.topic_words(DECLINED_A)) == ["cofounder", "hardware", "library", "seed"]
+    assert kept[1]["declined_at"] == pytest.approx(time.time() - 5 * DAY, abs=60)
+    assert set(kept[0]) == {"intention_id", "words", "declined_at"}  # word sets, never the text
+    # Thirty nights later the run records that held the texts are gone, and so is the map's text.
+    doc["runs"] = []
+    path.write_text(json.dumps(doc))
+    box.run()
+    listed(tool)
+    assert capture(tool, SAME_TOPIC)["error"] == "topic_declined"
+
+
+def test_dream1_fold_declined_topics_round_trips_and_caps(plugin):
+    import sys as _sys
+
+    core = _sys.modules[f"{plugin.__name__}._core"]
+    runs = [{"recorded_intent_id": f"id-{n}", "recorded_text": f"Find a partner for project{n}"} for n in range(60)]
+    runs.append({"recorded_intent_id": "id-open", "recorded_text": "Find a partner for the open card"})
+    runs.append({"recorded_intent_id": "id-nowords", "recorded_text": "🌱"})
+    declined_at = {f"id-{n}": 1000.0 + n for n in range(60)}
+    declined_at["id-nowords"] = 5.0
+    folded = core.fold_declined_topics(None, runs, declined_at)
+    assert len(folded) == core.MAX_DECLINED_TOPICS == 50
+    assert folded[0]["intention_id"] == "id-10" and folded[-1]["intention_id"] == "id-59"
+    assert folded[-1] == {"intention_id": "id-59", "words": ["partner", "project59"], "declined_at": 1059.0}
+    # Round trip: what the gate writes is what a later fold (the gate's or the tool's) reads back, unchanged.
+    again = core.fold_declined_topics(json.loads(json.dumps(folded)), runs[-5:], declined_at)
+    assert again == folded
+    # A newer decline goes last; the oldest drops off; a malformed entry is dropped.
+    later = core.fold_declined_topics(folded + [{"intention_id": 7, "words": ["x"]}, {"intention_id": "bad", "words": []}],
+                                      [{"recorded_intent_id": "id-new", "recorded_text": "Hire a designer"}], {"id-new": 2000})
+    assert [item["intention_id"] for item in later][-2:] == ["id-59", "id-new"] and later[0]["intention_id"] == "id-11"
+    assert len(later) == 50
+
+
+def test_dream1_one_topic_rule_shared_vectors(plugin):
+    import sys as _sys
+
+    core = _sys.modules[f"{plugin.__name__}._core"]
+    ir = _sys.modules[f"{plugin.__name__}._inference_run"]
+    assert ir.fold_declined_topics is core.fold_declined_topics and ir.topic_stopped is core.topic_stopped
+    vectors = json.loads(TOPIC_VECTORS.read_text(encoding="utf-8"))
+    for item in vectors["words"]:
+        assert sorted(core.topic_words(item["text"])) == item["words"], item
+    for pair in vectors["pairs"]:
+        assert core.same_topic(core.topic_words(pair["a"]), core.topic_words(pair["b"])) is pair["same"], pair
+    for case in vectors["cases"]:
+        declined = [{"intention_id": f"d{n}", "words": sorted(core.topic_words(text))}
+                    for n, text in enumerate(case["declined"])]
+        stopped = core.topic_stopped(core.topic_words(case["candidate"]), declined)
+        assert ("topic_declined" if stopped else None) == case["expected"], case
+

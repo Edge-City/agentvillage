@@ -13,10 +13,11 @@ run's record from what this plugin sees itself, and reports every run:
 * `record_intention` in that session first checks the caps here
   (`cap_refusal`): Index's intents listed in this run; at most one capture per
   run and per village night; none while an inferred approval card is open;
-  none within DECLINE_COOLDOWN_S of a declined one; never the text of a
-  declined one again. A capture it lets through is noted on the record
-  (`recorded_intent_id`, and the text, kept on the box only so a declined one
-  is never proposed again);
+  never the text of a declined one again; never a want on a topic the resident
+  declined twice (DREAM-1: `_core.topic_stopped` over the declined word sets the
+  gate keeps in this file; a decline no longer pauses every other topic). A
+  capture it lets through is noted on the record (`recorded_intent_id`, and the
+  text, kept on the box only so a declined one is never proposed again);
 * the model writes its outcome to `memory/heartbeat-state.json`
   (`memorySignals.lastOutcome`: `runId`, `exit`, `candidatesConsidered`);
 * the flusher's cron tail (`Collector.cron_tick`), when the run's execution is
@@ -49,7 +50,8 @@ try:  # POSIX; without it the file is guarded by the in-process lock only.
 except ImportError:  # pragma: no cover - Windows
     fcntl = None  # type: ignore[assignment]
 
-from ._core import DIR_MODE, FILE_MODE, derived_uuid7, env_flag_on, epoch_from_iso, iso_from_epoch, iso_from_text, loose_key
+from ._core import (DIR_MODE, FILE_MODE, derived_uuid7, env_flag_on, epoch_from_iso, fold_declined_topics, iso_from_epoch,
+                    iso_from_text, loose_key, topic_stopped, topic_words)
 from ._cron import INSTALLED_JOBS_FILE, load_installed_job_ids, load_job_names, match_audit, read_usage_audit
 
 #: The installer's name for the job (`install/install_index.ts`, `cron_job_names.json`).
@@ -73,7 +75,13 @@ EXIT_BRANCHES = (
     "capped", "recorded", "tool_unavailable", "error",
 )
 #: Tool refusals inside a woken run that are caps (the contract's `capped`: not a model judgement).
+#: `recently_declined` is no longer refused (DREAM-1 dropped the 3-day pause); it stays here only so
+#: a record a run refused with it before the roll still reads as `capped`.
 CAP_REFUSALS = frozenset({"nightly_limit_reached", "inferred_card_open", "recently_declined"})
+#: Tool refusals of a candidate the resident declined: the exact text (`previously_declined`), or a
+#: topic declined twice (`topic_declined`, DREAM-1). Both are the contract's existing
+#: `candidate_previously_declined`: no new exit branch, no new code on the event.
+DECLINED_REFUSALS = frozenset({"previously_declined", "topic_declined"})
 #: What the model may report in `memorySignals.lastOutcome.exit`.
 MODEL_EXITS = frozenset({"no_candidate", "candidate_already_covered", "candidate_previously_declined",
                          "recorded", "tool_unavailable", "error"})
@@ -83,8 +91,6 @@ ORIGINS = ("memory_signal_sync", "context_goal", "chat", "other")
 INFERRED_CLASS = "intent.publish.inferred.index"
 LIVE_STATES = frozenset({"unfiled", "requested", "cleared", "starting", "publishing"})
 DECLINED_STATE = "rejected"
-#: No inferred intent within this long of a declined inferred suggestion.
-DECLINE_COOLDOWN_S = 3 * 24 * 3600
 #: A woken run whose record is older than this is not "current" for a tool call.
 CURRENT_RUN_MAX_AGE_S = 3 * 3600
 #: Slack around an execution's window when matching the gate's record to it.
@@ -305,22 +311,27 @@ def cap_refusal(home: str, now: float, entries: dict[str, dict], norm_hash: Opti
     for entry, approval in inferred.values():
         if approval.get("state") != DECLINED_STATE:
             continue
-        at = approval.get("updated_at")
-        if isinstance(at, (int, float)) and not isinstance(at, bool) and now - float(at) < DECLINE_COOLDOWN_S:
-            return "recently_declined"
-    for entry, approval in inferred.values():
-        if approval.get("state") != DECLINED_STATE:
-            continue
         if (norm_hash and entry.get("held_norm_hash") == norm_hash) or (
                 norm_hash_v2 and entry.get("held_norm_hash_v2") == norm_hash_v2):
             return "previously_declined"
+    declined_at = {i: approval.get("updated_at") for i, (_, approval) in inferred.items()
+                   if approval.get("state") == DECLINED_STATE}
+    runs = load_runs(home)
     key = loose_key(text)
     if key:
-        declined = {i for i, (_, approval) in inferred.items() if approval.get("state") == DECLINED_STATE}
-        for other in load_runs(home):
-            if other.get("recorded_intent_id") in declined and loose_key(other.get("recorded_text")) == key:
+        for other in runs:
+            if other.get("recorded_intent_id") in declined_at and loose_key(other.get("recorded_text")) == key:
                 return "previously_declined"
+    # DREAM-1: a topic declined twice. The word sets the gate kept, plus any decline it has not folded yet.
+    if topic_stopped(topic_words(text), fold_declined_topics(_declined_topics(home), runs, declined_at)):
+        return "topic_declined"
     return None
+
+
+def _declined_topics(home: str) -> Any:
+    """The gate's `declined_topics` in `memory_signal_runs.json` (read only here; the gate writes it)."""
+    data = _read_json(os.path.join(home, RUNS_FILE))
+    return data.get("declined_topics") if isinstance(data, dict) else None
 
 
 # ---- The event ----------------------------------------------------------------------
@@ -414,7 +425,7 @@ def build(run: Optional[dict], execution: dict, audit: Optional[dict], outcome: 
     elif run.get("refusal") in CAP_REFUSALS:
         # The tool stopped the pass on a cap (a race the gate did not see): a cap, not a judgement.
         exit_branch = "capped"
-    elif run.get("refusal") == "previously_declined":
+    elif run.get("refusal") in DECLINED_REFUSALS:
         exit_branch = "candidate_previously_declined"
     elif run.get("refusal") == "caps_unknown":
         exit_branch, error_code = "error", "io_error"
@@ -527,7 +538,7 @@ def finalize(home: str, execution: dict) -> dict:
 
 
 __all__ = [
-    "DECLINE_COOLDOWN_S",
+    "DECLINED_REFUSALS",
     "EVENT_TYPE",
     "EXIT_BRANCHES",
     "FLAG",
@@ -544,6 +555,7 @@ __all__ = [
     "failure_payload",
     "finalize",
     "flag_on",
+    "fold_declined_topics",
     "is_memory_signal_job",
     "last_known",
     "load_runs",
@@ -551,4 +563,5 @@ __all__ = [
     "note_listed",
     "note_refused",
     "note_recorded",
+    "topic_stopped",
 ]
