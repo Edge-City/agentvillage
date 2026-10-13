@@ -44,9 +44,12 @@ or a hex short id, and is URL-encoded. Redirects refused, proxies ignored
 Index's MCP tool names, which an agent may reach through Hermes's own client.
 
 **Deadline and the ambiguous timeout.** Each socket operation is bounded by
-`INDEX_TIMEOUT_S` and the whole request by `INDEX_DEADLINE_S` (30 s: Index's
-`create_intent` runs a multi-stage verification graph that can take tens of
-seconds). Past the deadline the capture is recorded locally with
+`INDEX_TIMEOUT_S` and the whole request by `INDEX_DEADLINE_S` (30 s, set
+when Index's `create_intent` ran a multi-stage verification graph that could
+take tens of seconds; since Index's a91c3ff, 13 Oct 2026, a create with
+`sourceType = "agentvillage"` and no `preparationReceipt` is stored verbatim
+without admission, and the deadline is unchanged). Past the deadline the
+capture is recorded locally with
 `publish_refused: timeout`, and Index may still finish the write, so one
 intention can then have two rows: this local one and the Index one the poller
 sees. The data side reconciles under provisional ruling R11
@@ -58,7 +61,8 @@ is timed only by Index's `createdAt`); every other code stays eligible.
 Dogfood latency is measured before the switch goes on anywhere else.
 
 **A rejected capture is not updated into a published one (M2).** The map
-labels a local capture that Index refused as too vague (`refused: rejected`).
+labels a local capture that Index refused with 422 (`refused: rejected`: too
+vague before Index's a91c3ff, a schema-invalid body since).
 `action=update` on it is refused with `capture_again`: the agent captures the
 clarified text as a new intention, and the rejected one stays ineligible
 (`index_rejected`) and never publishes. A withdrawal of it is still allowed.
@@ -642,9 +646,12 @@ AMBIGUOUS = "timeout"
 def status_code(status: int) -> str:
     """The `publish_refused` code for a non-2xx answer.
 
-    422 is Index refusing the text (`intent_rejected`: too vague, or an edit it
-    would not accept): `rejected`, which the map labels and the data side reads
-    as `index_rejected`. 503 is Index's retryable `preparation_failed`, raised
+    422 is Index refusing the body: `rejected`, which the map labels and the
+    data side reads as `index_rejected`. On a create that is a schema-invalid
+    body: since Index's a91c3ff (13 Oct 2026) a create with `sourceType =
+    "agentvillage"` and no `preparationReceipt` is stored verbatim without
+    admission, so it is no longer refused as too vague. On an edit, one Index
+    would not accept. 503 is Index's retryable `preparation_failed`, raised
     before anything is written: `http_503`. Any other 5xx (500, 502, 504, ...)
     may come after the write landed (a gateway timeout, a crash after the
     insert): `timeout`, the ambiguous code. Every other status (400 a body we
@@ -786,8 +793,10 @@ def publish_intent(text: str, *, source_id: Optional[str] = None, _gate: Any = N
 
     Body `{description, sourceType, sourceId?}` and nothing else (Index's
     schema is strict; we send neither `networkIds`, so the intent is shared in
-    every network the resident belongs to, nor `preparationReceipt`, so Index
-    prepares the text itself and refuses it with 422 when it is not ready).
+    every network the resident belongs to, nor `preparationReceipt`: since
+    Index's a91c3ff (13 Oct 2026) a create with `sourceType = "agentvillage"`
+    and no receipt is stored verbatim without admission; 422 remains
+    `rejected` for a schema-invalid body).
     `description` is `text` exactly as given: the event's `text_hash` is the
     plain SHA-256 of the same string, and Index persists it verbatim, so the
     poller's hash of the stored payload matches (DATA-246). Every create

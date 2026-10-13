@@ -27,6 +27,7 @@ import threading
 import time
 import urllib.error
 import urllib.parse
+import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -171,7 +172,9 @@ class FakeServe:
         if cls not in self.requestable:
             return self._error("class-not-agent-requestable")
         task = task_id(cls, key)
-        phash = hashlib.sha256(json.dumps(json.loads(payload), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        # JCS (RFC 8785) writes non-ASCII as UTF-8, not `\u` escapes: `ensure_ascii=False` (DREAM-1).
+        phash = hashlib.sha256(json.dumps(json.loads(payload), sort_keys=True, separators=(",", ":"),
+                                          ensure_ascii=False).encode()).hexdigest()
         manual = self.autonomy.get(cls) == "manual"
         t = self.tasks.get(task)
         if t is not None and t["hash"] != phash:
@@ -238,7 +241,7 @@ class FakeServe:
             return self._error("not-registered")
         assert flags["--action"] == t["key"]
         phash = hashlib.sha256(json.dumps(json.loads(flags["--payload-json"]), sort_keys=True,
-                                          separators=(",", ":")).encode()).hexdigest()
+                                          separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
         if phash != t["hash"]:
             return self._error("payload-mismatch")
         manual = self.autonomy.get(t["class"]) == "manual"
@@ -1747,3 +1750,126 @@ def test_link_never_on_update_withdraw_or_confirm_after_a_withdrawal(tctx, serve
     after = call(tctx, {"action": "confirm", "intention_id": iid}, tool_call_id="c4")
     assert after["success"] is True
     _no_link(after)
+
+
+# --------------------------------------------------------------------------
+# DREAM-1: the create body, pinned. Since Index's a91c3ff (13 Oct 2026) a
+# `POST /api/intents` with `sourceType = "agentvillage"` and no
+# `preparationReceipt` is stored as written, without admission. These tests
+# hold the plugin to exactly that body, on the direct path and the approval
+# path (Lane B). Already pinned elsewhere, not repeated here: on the direct
+# path a 422 is `rejected` and a 2xx without a valid `intentId` is the
+# ambiguous `timeout` (`test_record_intention.py::
+# test_index_refusal_is_a_local_capture_with_the_code`, every documented
+# status in `test_index_contract.py::
+# test_every_documented_error_status_yields_its_code`); on the approval path a
+# 422 is final (`test_index_refusing_the_text_is_final`).
+# --------------------------------------------------------------------------
+
+#: The only keys a create may carry; `sourceId` only when one is passed. A
+#: `preparationReceipt` would send the text back through Index's admission, and
+#: `networkIds` would narrow where it is shared.
+CREATE_KEYS = frozenset({"description", "sourceType", "sourceId"})
+NEVER_SENT = ("preparationReceipt", "networkIds")
+
+#: Texts whose characters must reach Index unchanged: edge spaces and a
+#: newline, non-Latin scripts, straight and curly apostrophes, a combining
+#: accent (NFD, so a normalisation would show), a tab and an emoji.
+VERBATIM = [
+    "  Looking for a climbing partner in Goa\non weekends  ",
+    "\u6771\u4eac\u3067\u9031\u672b\u306b\u30dc\u30eb\u30c0\u30ea\u30f3\u30b0\u4ef2\u9593\u3092\u63a2\u3057\u3066\u3044\u307e\u3059",
+    "\u0418\u0449\u0443 \u043f\u0430\u0440\u0442\u043d\u0451\u0440\u0430 \u043f\u043e \u0441\u043a\u0430\u043b\u043e\u043b\u0430\u0437\u0430\u043d\u0438\u044e \u0432 \u0413\u043e\u0430",
+    "I'm looking for someone who\u2019s into the founders' caf\u0065\u0301 climbs",
+    "\t\u0928\u092e\u0938\u094d\u0924\u0947 \u2014 looking for a co-founder \U0001F331 ",
+]
+VERBATIM_IDS = ["edge-spaces-newline", "japanese", "cyrillic", "apostrophes-nfd", "devanagari-tab-emoji"]
+HELD_SOURCE_ID = "01927f3e-1b2c-7d4e-8f00-1234567890ab"
+
+
+@pytest.fixture()
+def direct(mods, index, monkeypatch, home):
+    """Approval off: `publish_intent` is the direct create, no gate needed."""
+    monkeypatch.setenv("AV_RECORD_INTENTION", "1")
+    monkeypatch.setenv("INDEX_API_KEY", KEY)
+    assert mods.ri._approval_on() is False
+    return index
+
+
+def _one_create(mods, index) -> dict:
+    """The one request sent: a POST to `CREATE_PATH`, with a JSON body."""
+    [request] = index.requests
+    assert mods.ri.CREATE_PATH == "/api/intents"
+    assert (request["method"], request["path"]) == ("POST", mods.ri.CREATE_PATH)
+    assert isinstance(request["raw"], bytes) and isinstance(request["body"], dict)
+    return request["body"]
+
+
+def _assert_create_body(body: dict, text: str, source_id: Optional[str]) -> None:
+    for key in NEVER_SENT:
+        assert key not in body, f"the create sent {key!r}"
+    expected = {"description": text, "sourceType": "agentvillage"}
+    if source_id is not None:
+        expected["sourceId"] = source_id
+    assert set(body) <= CREATE_KEYS
+    assert body == expected
+
+
+@pytest.mark.parametrize("source_id", [None, HELD_SOURCE_ID])
+def test_dream1_the_direct_create_body_is_description_and_source_type_only(direct, mods, source_id):
+    """(a) `{description, sourceType: "agentvillage"}`, plus `sourceId` only
+    when one is given: no `preparationReceipt`, no `networkIds`, nothing else;
+    POST to `CREATE_PATH`."""
+    text = "Looking for a climbing partner in Goa on weekends"
+    assert mods.ri.publish_intent(text, source_id=source_id) == (INDEX_ID, None)
+    body = _one_create(mods, direct)
+    _assert_create_body(body, text, source_id)
+    assert ("sourceId" in body) is (source_id is not None)
+
+
+@pytest.mark.parametrize("text", VERBATIM, ids=VERBATIM_IDS)
+def test_dream1_the_description_is_the_text_byte_for_byte(direct, mods, text):
+    """(b) No strip, no normalisation, no rewrite: what Index stores verbatim
+    is exactly what the resident's text was."""
+    assert mods.ri.publish_intent(text) == (INDEX_ID, None)
+    body = _one_create(mods, direct)
+    _assert_create_body(body, text, None)
+    assert body["description"].encode("utf-8") == text.encode("utf-8")
+
+
+@pytest.mark.parametrize("text", VERBATIM, ids=VERBATIM_IDS)
+def test_dream1_the_approval_path_publishes_the_same_body_under_its_uuid7(tctx, serve, index, mods, text):
+    """(c) Lane B, on the resident's grant: the same body, with `sourceId` the
+    local uuid v7 the proposal was keyed on, and the text as captured."""
+    iid = call(tctx, {"text": text, "source": "ambient"})["intention_id"]
+    assert uuid.UUID(iid).version == 7
+    assert index.requests == []
+    serve.grant(f"{INFERRED}:{iid}")
+    poll(mods)
+    body = _one_create(mods, index)
+    _assert_create_body(body, text, iid)
+    assert body["description"].encode("utf-8") == text.encode("utf-8")
+    assert entry(mods, iid)["index_intent_id"] == INDEX_ID
+
+
+def test_dream1_a_stated_capture_on_the_approval_path_sends_the_same_body(tctx, serve, index, mods):
+    """(c) The stated class publishes in the capture call, under its uuid v7 too."""
+    text = VERBATIM[2]
+    out = call(tctx, {"text": text, "source": "message"})
+    iid = out["intention_id"]
+    assert out["published"] is True and out["index_intent_id"] == INDEX_ID
+    assert uuid.UUID(iid).version == 7
+    _assert_create_body(_one_create(mods, index), text, iid)
+
+
+@pytest.mark.parametrize("answer", [{}, {"success": True}, {"intentId": None}, {"intentId": "int-7f3a"}])
+def test_dream1_a_2xx_without_an_intent_id_on_the_approval_path_is_ambiguous(tctx, serve, index, mods, answer):
+    """(d) The create may have landed: `ambiguous` with the `timeout` code,
+    never published, never sent again."""
+    iid = call(tctx, {"text": TEXT, "source": "ambient"})["intention_id"]
+    serve.grant(f"{INFERRED}:{iid}")
+    index.answers = [answer]
+    poll(mods)
+    poll(mods)
+    e = entry(mods, iid)
+    assert e["approval"]["state"] == "ambiguous" and e["approval"]["code"] == mods.ri.AMBIGUOUS == "timeout"
+    assert e.get("published") is not True and len(index.creates()) == 1
