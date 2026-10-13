@@ -596,7 +596,7 @@ describe("security review: the gate reads with the plugin's own functions", () =
     const proc = Bun.spawnSync(["python3", "-c", code], { stdout: "pipe", stderr: "pipe" });
     expect(proc.stderr.toString()).toBe("");
     const out = JSON.parse(proc.stdout.toString());
-    expect(out).toEqual({ file: join(REPO, "plugins", "av-events", "_core.py"), bad: [], n: 74 });
+    expect(out).toEqual({ file: join(REPO, "plugins", "av-events", "_core.py"), bad: [], n: 119 });
   });
 
   test("a quoted, padded or odd spelling of AV_RECORD_INTENTION is read exactly as the plugin reads it", () => {

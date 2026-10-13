@@ -280,15 +280,21 @@ currently month next today tomorrow tonight week year
 #: yoga ke liye ek partner chahiye" and "Mujhe startup ke liye ek investor chahiye" share 5 of 9
 #: words). Hindi and Hinglish, romanised (common spellings) and in Devanagari: pronouns, postpositions,
 #: the copula, "need/want", quantity and time words. None names what is wanted.
+#: Round 3 (recheck S): the frame verbs and particles too ("dhundh raha hoon" = "am looking for",
+#: "seekhna", "milna", "ke baare mein jaanna"), as their English equivalents are above. "main"
+#: ("I"), "bare" and "banana" stay content words: each is also an English word in a want line.
 _STOPWORDS_HI = """
 mujhe muje mujhko mere meri mera mai hum hume humein hamein humko apna apni apne
 ko ke ka ki liye se me mein par bhi aur ya ek koi kisi kuch kuchh jo yeh ye woh wo saath sath
 chahiye chahie chaiye chahta chahti karna karne hai hain ho hu hoon tha kya wala wali wale
 bahut zyada kam abhi aaj kal
+dhundh dhund dhoondh dhundna dhoondhna raha rahi rahe hun chahte chaahiye milna milne milke baare
+jaanna janna jaanne seekhna sikhna seekhne sikhne dekhna lena lene dena dene banane shuru
 मुझे मुझको मेरे मेरी मेरा मैं हम हमें अपना अपनी अपने
 को के का की लिए लिये से में पर भी और या एक कोई किसी कुछ जो यह ये वह वो साथ
 चाहिए चाहता चाहती करना करने है हैं हो हूँ हूं था क्या वाला वाली वाले
 बहुत ज़्यादा ज्यादा कम अभी आज कल
+ढूंढ ढूँढ रहा रही रहे मिलना मिलने बारे जानना जानने सीखना सीखने देखना लेना लेने देना देने बनाना बनाने शुरू
 """
 #: The same frame in Tamil, Bengali and Arabic ("I need a ...", "I want to find ... in ..."): a few
 #: pronouns, articles, postpositions and want verbs, so short lines in those scripts do not merge.
@@ -304,19 +310,30 @@ TOPIC_STOPWORDS = frozenset(loose_key(_STOPWORDS_EN + _STOPWORDS_HI + _STOPWORDS
 
 
 def _singular(token: str) -> str:
-    """A plain ASCII plural of 4+ letters, folded: -sses/-ches/-shes/-xes/-zzes lose "es" ("classes"
-    = "class", "coaches" = "coach"), -ies of 5+ letters becomes -y ("companies" = "company"), any
-    other final "s" is dropped ("investors" = "investor"), but not after "ss", "us" or "is". Known
-    edge: a singular in -ie or -che ("movie", "niche") folds apart from its plural."""
-    if not token.isascii() or len(token) <= 3 or not token.endswith("s"):
+    """A plain ASCII word of 4+ letters, folded to one form for its singular and plural:
+    -sses/-ches/-shes/-xes lose "es" ("classes" = "class", "coaches" = "coach"), -zzes loses "zes"
+    ("quizzes" = "quiz"), -ies of 5+ letters becomes -y ("companies" = "company"), any other final "s"
+    is dropped ("investors" = "investor"), but not after "ss", "us" or "is". The singular is folded the
+    same way (round 3): -ie becomes -y ("movie" = "movies" = "movy", "foodie"), -che loses its "e"
+    ("niche" = "niches" = "nich") and -zz loses a "z" ("buzz" = "buzzes" = "buz"). Known edge: a
+    name in -ie folds onto one in -y ("Julie" = "July", "Katie" = "Katy")."""
+    if not token.isascii() or len(token) <= 3:
         return token
-    if token.endswith(("sses", "ches", "shes", "xes", "zzes")):
-        return token[:-2]
-    if token.endswith("ies") and len(token) > 4:
-        return token[:-3] + "y"
-    if token.endswith(("ss", "us", "is")):
-        return token
-    return token[:-1]
+    if token.endswith("s"):
+        if token.endswith("zzes"):
+            return token[:-3]
+        if token.endswith(("sses", "ches", "shes", "xes")):
+            return token[:-2]
+        if token.endswith("ies") and len(token) > 4:
+            return token[:-3] + "y"
+        if token.endswith(("ss", "us", "is")):
+            return token
+        token = token[:-1]
+    if len(token) > 3 and token.endswith("ie"):
+        return token[:-2] + "y"
+    if token.endswith(("che", "zz")):
+        return token[:-1]
+    return token
 
 
 def topic_words(text: Any) -> frozenset:
