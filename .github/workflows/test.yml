@@ -49,9 +49,11 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
           fetch-depth: 2
-      # Paths the bun suites never read (checked 2026-10-11): docs/, the root
-      # README.md and LICENSE, pytest.ini, the root tests/ (Python vectors).
-      # They do read plugins/, workspace/ and .github/workflows/, so those run it.
+      # Paths the bun suites never read (checked 2026-10-11; 2026-10-14): docs/,
+      # the root README.md and LICENSE, pytest.ini, the root tests/ (Python
+      # vectors), the notes in .github/ (*.md, instructions/). They do read
+      # plugins/, workspace/, .github/workflows/, every .md under skills/ and
+      # release/RC-MANIFEST.md (tag-release.test.ts parses it), so those run it.
       - name: Scope (pull requests only)
         id: scope
         env:
@@ -64,7 +66,7 @@ jobs:
               while IFS= read -r f; do
                 case "$f" in
                   '') ;;
-                  docs/*|README.md|LICENSE|pytest.ini|tests/*) ;;
+                  docs/*|README.md|LICENSE|pytest.ini|tests/*|.github/*.md|.github/instructions/*) ;;
                   *) run=true; echo "runs the suite: $f"; break ;;
                 esac
               done <<<"$files"
@@ -126,11 +128,13 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
           fetch-depth: 2
-      # Paths the pytest suites never read (checked 2026-10-11): docs/, LICENSE,
-      # .gitignore, the root scripts/, install/tests/, *.test.ts files,
-      # package.json, bun.lock, and workflows other than this one. They do read
-      # install/*.ts, skills/ (SKILL.md, prompts, fixtures, recall.ts),
-      # workspace/, the root README.md and tests/vectors, so those run it.
+      # Paths the pytest suites never read (checked 2026-10-11; 2026-10-14): docs/,
+      # LICENSE, .gitignore, scripts/tests/, install/tests/, *.test.ts files,
+      # package.json, bun.lock, release/ (the RC manifest), and workflows other
+      # than this one. They do read install/*.ts, the root scripts/*.ts (the
+      # custody scan in av-approval's test_custody.py), skills/ (SKILL.md,
+      # prompts, fixtures, recall.ts), workspace/, the root README.md and
+      # tests/vectors, so those run it.
       - name: Scope (pull requests only)
         id: scope
         env:
@@ -144,7 +148,7 @@ jobs:
                 case "$f" in
                   '') ;;
                   .github/workflows/test.yml) run=true; echo "runs the suite: $f"; break ;;
-                  docs/*|LICENSE|.gitignore|scripts/*|install/tests/*|*.test.ts|package.json|bun.lock|.github/*) ;;
+                  docs/*|LICENSE|.gitignore|scripts/tests/*|install/tests/*|*.test.ts|package.json|bun.lock|release/*|.github/*) ;;
                   *) run=true; echo "runs the suite: $f"; break ;;
                 esac
               done <<<"$files"
