@@ -16,9 +16,11 @@ import {
   days,
   dotenvValue,
   eventLine,
+  hasEnded,
   header,
   isoDay,
   localMidnightUtc,
+  nowLine,
   parseArgs,
   run,
   setting,
@@ -29,6 +31,8 @@ const KEY = "example-not-a-key";
 const POPUP = "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d";
 // Wed 14 Oct 2026, 10:00 IST.
 const NOW = new Date("2026-10-14T04:30:00Z");
+// Wed 14 Oct 2026, 06:00 IST: before the 7:00 swim below, so nothing today has ended yet (EVENTS-NOW).
+const DAWN = new Date("2026-10-14T00:30:00Z");
 
 function home(lines: string[] = []): string {
   const dir = mkdtempSync(join(tmpdir(), "edgeos-events-"));
@@ -156,7 +160,7 @@ describe("the call and the output", () => {
   test("one request with the window, popup and status; the key only in the header", async () => {
     const f = fakeFetch([event]);
     const r = await run(["--when", "today", "--search", "swim", "--rsvped"],
-      { HERMES_HOME: home([`EDGEOS_API_KEY=${KEY}`, `AV_POPUP_ID=${POPUP}`]) }, f.impl, NOW);
+      { HERMES_HOME: home([`EDGEOS_API_KEY=${KEY}`, `AV_POPUP_ID=${POPUP}`]) }, f.impl, DAWN);
     expect(r.code).toBe(0);
     expect(f.calls.length).toBe(1);
     const url = new URL(f.calls[0].url);
@@ -168,15 +172,16 @@ describe("the call and the output", () => {
     expect((f.calls[0].init.headers as Record<string, string>).Authorization).toBe(`Bearer ${KEY}`);
     expect(f.calls[0].url).not.toContain(KEY);
     expect(r.out).not.toContain(KEY);
-    expect(r.out).toBe("Today is Wed 2026-10-14 (IST)\nListing: today = Wed 2026-10-14\nWed 14 Oct (Asia/Kolkata)\n  7:00 AM–8:00 AM IST · Morning swim · Mandrem beach · RSVP: registered · id 5f0c7a3e-1b2d-4c3e-8f9a-0b1c2d3e4f5a · start 2026-10-14T01:30:00Z\n");
+    expect(r.out).toBe("Today is Wed 2026-10-14 (IST)\nNow: Wed 2026-10-14 06:00 IST (6:00 AM)\nListing: today = Wed 2026-10-14\nWed 14 Oct (Asia/Kolkata)\n  7:00 AM–8:00 AM IST · Morning swim · Mandrem beach · RSVP: registered · id 5f0c7a3e-1b2d-4c3e-8f9a-0b1c2d3e4f5a · start 2026-10-14T01:30:00Z\n");
   });
 
   test("an empty day says so; events are sorted and grouped by local day", async () => {
     const late = { ...event, id: undefined, title: "Late talk", start_time: "2026-10-15T15:00:00Z", end_time: null, venue_title: null, my_rsvp_status: null };
     const f = fakeFetch([late, event]);
-    const r = await run(["--when", "today", "--days", "3"], { HERMES_HOME: home([`EDGEOS_API_KEY=${KEY}`, `AV_POPUP_ID=${POPUP}`]) }, f.impl, NOW);
+    const r = await run(["--when", "today", "--days", "3"], { HERMES_HOME: home([`EDGEOS_API_KEY=${KEY}`, `AV_POPUP_ID=${POPUP}`]) }, f.impl, DAWN);
     expect(r.out.split("\n")).toEqual([
       "Today is Wed 2026-10-14 (IST)",
+      "Now: Wed 2026-10-14 06:00 IST (6:00 AM)",
       "Listing: today = Wed 2026-10-14 to Fri 2026-10-16",
       "Wed 14 Oct (Asia/Kolkata)",
       "  7:00 AM–8:00 AM IST · Morning swim · Mandrem beach · RSVP: registered · id 5f0c7a3e-1b2d-4c3e-8f9a-0b1c2d3e4f5a · start 2026-10-14T01:30:00Z",
@@ -196,10 +201,10 @@ describe("the call and the output", () => {
     expect([down.code, down.err]).toEqual([1, "events: EdgeOS unreachable (TypeError)\n"]);
   });
 
-  test("--json prints today, the listing, the window and the raw results", async () => {
+  test("--json prints today, now, the listing, the window and the raw results", async () => {
     const r = await run(["--when", "today", "--json"], { HERMES_HOME: home([`EDGEOS_API_KEY=${KEY}`, `AV_POPUP_ID=${POPUP}`]) },
-      fakeFetch([event]).impl, NOW);
-    expect(JSON.parse(r.out)).toEqual({ today: "Today is Wed 2026-10-14 (IST)", listing: "Listing: today = Wed 2026-10-14", time_zone: "Asia/Kolkata", start_after: "2026-10-13T18:30:00Z", start_before: "2026-10-14T18:30:00Z", results: [event] });
+      fakeFetch([event]).impl, DAWN);
+    expect(JSON.parse(r.out)).toEqual({ today: "Today is Wed 2026-10-14 (IST)", now: "Now: Wed 2026-10-14 06:00 IST (6:00 AM)", listing: "Listing: today = Wed 2026-10-14", time_zone: "Asia/Kolkata", start_after: "2026-10-13T18:30:00Z", start_before: "2026-10-14T18:30:00Z", ended_earlier_today: 0, results: [event] });
   });
 
   test("a line for a highlighted event in another zone", () => {
@@ -217,7 +222,9 @@ describe("today and the listing head every output (DATE-1)", () => {
   const firstTwo = async (argv: string[], now: Date, extra: Record<string, string> = {}) => {
     const r = await run(argv, { ...env(), ...extra }, fakeFetch([]).impl, now);
     expect(r.code).toBe(0);
-    return r.out.split("\n").slice(0, 2);
+    // Today and the listing; the Now line between them is pinned in the EVENTS-NOW tests below.
+    const lines = r.out.split("\n");
+    return [lines[0], lines[2]];
   };
 
   test("isoDay names the weekday of a local date", () => {
@@ -247,7 +254,7 @@ describe("today and the listing head every output (DATE-1)", () => {
     expect(await firstTwo(["--when", "weekend", "--days", "2"], AFTER_MIDNIGHT))
       .toEqual(["Today is Wed 2026-10-14 (IST)", "Listing: weekend = Sat 2026-10-17 to Mon 2026-10-19"]);
     const r = await run(["--when", "tomorrow"], env(), fakeFetch([]).impl, AFTER_MIDNIGHT);
-    expect(r.out).toBe("Today is Wed 2026-10-14 (IST)\nListing: tomorrow = Thu 2026-10-15\nThu 15 Oct (Asia/Kolkata)\n  no published events\n");
+    expect(r.out).toBe("Today is Wed 2026-10-14 (IST)\nNow: Wed 2026-10-14 00:15 IST (12:15 AM)\nListing: tomorrow = Thu 2026-10-15\nThu 15 Oct (Asia/Kolkata)\n  no published events\n");
   });
 
   test("today is the same local day the window uses", () => {
@@ -286,5 +293,125 @@ describe("the skill tells the agent to read the day from the script (DATE-1)", (
     expect(skill).not.toContain('Convert "tomorrow", "this Thursday", "next week" to actual ISO-8601 timestamps');
     expect(skill).toContain("never the date in your system prompt: that is the day this chat began");
     expect(skill).toContain("counting from the day in the newest message stamp");
+  });
+});
+
+describe("the Now line, and today's ended events left out (EVENTS-NOW)", () => {
+  // A heartbeat cron's prompt has no time of day; it offered a 10:30-11:00 IST session at 18:30 IST.
+  // Synthetic schedule for Wed 14 Oct 2026; NOW_EVE is 18:30 IST.
+  const NOW_EVE = new Date("2026-10-14T13:00:00Z");
+  const env = () => ({ HERMES_HOME: home([`EDGEOS_API_KEY=${KEY}`, `AV_POPUP_ID=${POPUP}`]) });
+  const ev = (title: string, start: string, end: string | null) => ({ title, start_time: start, end_time: end });
+  const morning = ev("Breathwork", "2026-10-14T05:00:00Z", "2026-10-14T05:30:00Z"); // 10:30-11:00 IST, ended
+  const justEnded = ev("Tea circle", "2026-10-14T12:00:00Z", "2026-10-14T13:00:00Z"); // ends exactly at now
+  const inProgress = ev("Sunset jam", "2026-10-14T12:30:00Z", "2026-10-14T13:30:00Z"); // 18:00-19:00 IST, on now
+  const noEnd = ev("Open studio", "2026-10-14T04:00:00Z", null); // 9:30 IST, no end time: kept
+  const later = ev("Night talk", "2026-10-14T15:00:00Z", "2026-10-14T16:00:00Z"); // 20:30 IST
+  const tomorrowAm = ev("Dawn walk", "2026-10-15T00:30:00Z", "2026-10-15T01:00:00Z"); // Thu 6:00 IST
+
+  test("Now gives the village date and clock in IST, 24-hour and 12-hour", () => {
+    expect(nowLine(NOW_EVE, "Asia/Kolkata")).toBe("Now: Wed 2026-10-14 18:30 IST (6:30 PM)");
+    expect(nowLine(NOW, "Asia/Kolkata")).toBe("Now: Wed 2026-10-14 10:00 IST (10:00 AM)");
+  });
+
+  test("near midnight IST the Now line is the IST date, not the UTC one", () => {
+    // 18:45Z on Wed the 14th is 00:15 IST on Thu the 15th; 18:15Z on Tue the 13th is 23:45 IST the same day.
+    expect(nowLine(new Date("2026-10-14T18:45:00Z"), "Asia/Kolkata")).toBe("Now: Thu 2026-10-15 00:15 IST (12:15 AM)");
+    expect(nowLine(new Date("2026-10-13T18:15:00Z"), "Asia/Kolkata")).toBe("Now: Tue 2026-10-13 23:45 IST (11:45 PM)");
+  });
+
+  test("the Now line is the second line of every listing, after Today is", async () => {
+    for (const when of ["today", "tomorrow", "weekend", "2026-10-20"]) {
+      const r = await run(["--when", when], env(), fakeFetch([]).impl, NOW_EVE);
+      expect(r.out.split("\n").slice(0, 2)).toEqual(["Today is Wed 2026-10-14 (IST)", "Now: Wed 2026-10-14 18:30 IST (6:30 PM)"]);
+    }
+  });
+
+  test("hasEnded: end at or before now ends it; in progress, future, no end time or an unreadable end do not", () => {
+    expect(hasEnded(morning, NOW_EVE)).toBe(true);
+    expect(hasEnded(justEnded, NOW_EVE)).toBe(true);
+    expect(hasEnded(inProgress, NOW_EVE)).toBe(false);
+    expect(hasEnded(later, NOW_EVE)).toBe(false);
+    expect(hasEnded(noEnd, NOW_EVE)).toBe(false);
+    expect(hasEnded(ev("Bad end", "2026-10-14T04:00:00Z", "not a time"), NOW_EVE)).toBe(false);
+  });
+
+  test("today drops what ended, keeps what is on, what has no end time and what is later; tomorrow is whole", async () => {
+    const r = await run(["--when", "today", "--days", "2"], env(),
+      fakeFetch([later, tomorrowAm, morning, inProgress, noEnd, justEnded]).impl, NOW_EVE);
+    expect(r.code).toBe(0);
+    expect(r.out.split("\n")).toEqual([
+      "Today is Wed 2026-10-14 (IST)",
+      "Now: Wed 2026-10-14 18:30 IST (6:30 PM)",
+      "Listing: today = Wed 2026-10-14 to Thu 2026-10-15",
+      "Wed 14 Oct (Asia/Kolkata)",
+      "  2 earlier events today already ended (not listed)",
+      "  9:30 AM IST · Open studio · RSVP: none · start 2026-10-14T04:00:00Z",
+      "  6:00 PM–7:00 PM IST · Sunset jam · RSVP: none · start 2026-10-14T12:30:00Z",
+      "  8:30 PM–9:30 PM IST · Night talk · RSVP: none · start 2026-10-14T15:00:00Z",
+      "Thu 15 Oct (Asia/Kolkata)",
+      "  6:00 AM–6:30 AM IST · Dawn walk · RSVP: none · start 2026-10-15T00:30:00Z",
+      "",
+    ]);
+    expect(r.out).not.toContain("Breathwork");
+    expect(r.out).not.toContain("Tea circle");
+  });
+
+  test("one ended event is counted in the singular; the count plus the listed lines is the whole day", async () => {
+    const r = await run(["--when", "today"], env(), fakeFetch([morning, later]).impl, NOW_EVE);
+    const lines = r.out.split("\n");
+    expect(lines.slice(3)).toEqual([
+      "Wed 14 Oct (Asia/Kolkata)",
+      "  1 earlier event today already ended (not listed)",
+      "  8:30 PM–9:30 PM IST · Night talk · RSVP: none · start 2026-10-14T15:00:00Z",
+      "",
+    ]);
+  });
+
+  test("everything ended: the day says nothing more, not no published events", async () => {
+    const all = await run(["--when", "today"], env(), fakeFetch([morning, justEnded]).impl, NOW_EVE);
+    expect(all.out.split("\n").slice(3)).toEqual(["Wed 14 Oct (Asia/Kolkata)", "  2 earlier events today already ended (not listed)", "  nothing more today", ""]);
+    const search = await run(["--when", "today", "--search", "breath"], env(), fakeFetch([morning]).impl, NOW_EVE);
+    expect(search.out.split("\n").slice(3)).toEqual(["Wed 14 Oct (Asia/Kolkata)", "  1 earlier event today already ended (not listed)", "  nothing more matching today", ""]);
+  });
+
+  test("near midnight IST the filter uses the IST day", async () => {
+    const after = new Date("2026-10-14T18:45:00Z"); // Thu 15 Oct, 00:15 IST
+    const pastMidnight = ev("Midnight swim", "2026-10-14T18:30:00Z", "2026-10-14T18:40:00Z"); // Thu 00:00-00:10 IST, ended
+    const r = await run(["--when", "today"], env(), fakeFetch([pastMidnight, tomorrowAm]).impl, after);
+    expect(r.out.split("\n")).toEqual([
+      "Today is Thu 2026-10-15 (IST)",
+      "Now: Thu 2026-10-15 00:15 IST (12:15 AM)",
+      "Listing: today = Thu 2026-10-15",
+      "Thu 15 Oct (Asia/Kolkata)",
+      "  1 earlier event today already ended (not listed)",
+      "  6:00 AM–6:30 AM IST · Dawn walk · RSVP: none · start 2026-10-15T00:30:00Z",
+      "",
+    ]);
+  });
+
+  test("a past date asked for by name is listed whole", async () => {
+    const past = ev("Old talk", "2026-10-10T05:00:00Z", "2026-10-10T06:00:00Z");
+    const r = await run(["--when", "2026-10-10"], env(), fakeFetch([past]).impl, NOW_EVE);
+    expect(r.out.split("\n").slice(3)).toEqual([
+      "Sat 10 Oct (Asia/Kolkata)",
+      "  10:30 AM–11:30 AM IST · Old talk · RSVP: none · start 2026-10-10T05:00:00Z",
+      "",
+    ]);
+  });
+
+  test("--json carries now, the ended count and only the events not yet over", async () => {
+    const r = await run(["--when", "today", "--json"], env(), fakeFetch([morning, inProgress, later]).impl, NOW_EVE);
+    const doc = JSON.parse(r.out);
+    expect(doc.now).toBe("Now: Wed 2026-10-14 18:30 IST (6:30 PM)");
+    expect(doc.ended_earlier_today).toBe(1);
+    expect(doc.results).toEqual([inProgress, later]);
+  });
+
+  test("the skill tells the agent to check Now and never offer an ended session", () => {
+    const skill = readFileSync(join(import.meta.dir, "../../SKILL.md"), "utf8");
+    const section = skill.slice(skill.indexOf("\n## 3. Reading events\n"), skill.indexOf("All event-read recipes use"));
+    expect(section).toContain("Check the Now line before offering a session; never offer one that has ended.");
+    expect(section).toContain("the second, `Now: <Wkd YYYY-MM-DD HH:MM> IST`, is the village clock");
   });
 });
