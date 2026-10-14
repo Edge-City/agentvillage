@@ -25,7 +25,8 @@ agent hears a refusal at once:
 - `reason`: NFC, then trimmed of ECMAScript whitespace (`String.prototype.trim`,
   so the control plane's JavaScript trims the same characters), then 1-600
   code points and at most 8 lines, with no C0 control but `\\n`, no DEL and no
-  C1 control. An email address, a phone-like run of 9 or more digits, an
+  C1 control, and no invisible character (`invisible`: bidi, zero-width, Unicode
+  tag characters, variation selectors; ov#341 refute N4). An email address, a phone-like run of 9 or more digits, an
   `@handle` or a `t.me/` link is refused as `reason_contact`.
 - Anything else (an unknown key, a wrong type, a bad kind, tier or model) is
   `invalid_body`.
@@ -37,7 +38,9 @@ The exact rules and their cases are the contract vector
 one-to-one chat type, or an empty one on the owner's local surface) and the
 agent's own scheduled runs (`record_intention`'s lineage rule: a `cron_`
 session id or `platform=cron` anywhere up the delegation chain, plus Hermes's
-`HERMES_CRON_SESSION=1`). Everything else, a group, a channel, a webhook or a
+`HERMES_CRON_SESSION=1`), but a cron run only when its output goes nowhere or
+to a Telegram DM (`cron_delivers_privately`: approval@edge's ruling, CLAIMS
+L6599; a job that reports to a group or channel is refused like a group). Everything else, a group, a channel, a webhook or a
 session whose kind cannot be read, is refused with `group_session` and nothing
 is sent. The tool registers the lineage listeners itself, so the cron rule
 works with `AV_RECORD_INTENTION` off. The kind travels as
@@ -214,7 +217,7 @@ MESSAGES: dict[str, str] = {
     "disabled": "Asking the god agents is switched off on this agent. Nothing was sent.",
     "group_session": (
         "Not sent: you can ask the god agents only in your private chat with your resident or in your own "
-        "scheduled runs, never from a group."
+        "scheduled runs that report to that chat, never from or into a group."
     ),
     "invalid_body": (
         "Not sent: the request is malformed. ask.kind is model_tier (with ask.tier, and optionally ask.model) or "
@@ -266,6 +269,24 @@ def _absent(value: Any) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
+#: Invisible characters that can hide or reorder text (ov#341 refute S2, N4): every format (Cf, which
+#: holds the bidi controls, the zero-width characters, U+00AD, U+180E and the Unicode tag characters
+#: U+E0001, U+E0020-E007F), private-use, surrogate and unassigned code point, every control but `\n`,
+#: the variation selectors U+FE00-FE0F and U+E0100-E01EF, U+034F, the Hangul fillers, and U+2028/U+2029.
+_VARIATION_SELECTORS = ((0xFE00, 0xFE0F), (0xE0100, 0xE01EF))
+_ALSO_INVISIBLE = frozenset({0x034F, 0x115F, 0x1160, 0x3164, 0xFFA0, 0x2028, 0x2029})
+
+
+def invisible(ch: str) -> bool:
+    """A character that renders as nothing (or reorders what is around it), `\n` excepted."""
+    if ch == "\n":
+        return False
+    code = ord(ch)
+    if code in _ALSO_INVISIBLE or any(lo <= code <= hi for lo, hi in _VARIATION_SELECTORS):
+        return True
+    return unicodedata.category(ch) in ("Cc", "Cf", "Co", "Cs", "Cn")
+
+
 def normalize_reason(raw: Any) -> tuple[Optional[str], Optional[str]]:
     """`(reason, None)` as it is sent, or `(None, code)`."""
     if not isinstance(raw, str):
@@ -276,6 +297,8 @@ def normalize_reason(raw: Any) -> tuple[Optional[str], Optional[str]]:
     if not 1 <= len(text) <= REASON_MAX:
         return None, "reason_invalid"
     if CONTROLS.search(text) or text.count("\n") + 1 > REASON_MAX_LINES:
+        return None, "reason_invalid"
+    if any(invisible(ch) for ch in text):  # bidi, zero-width, tag characters, variation selectors (N4)
         return None, "reason_invalid"
     if any(pattern.search(text) for pattern in CONTACT):
         return None, "reason_contact"
@@ -368,6 +391,27 @@ def _norm(value: Optional[str]) -> Optional[str]:
     return None if value is None else value.strip().lower()
 
 
+#: A Telegram private chat's id is the user's id, positive; a group's or a channel's is negative.
+_TELEGRAM_DM_CHAT = re.compile(r"[1-9][0-9]{0,19}")
+
+
+def cron_delivers_privately() -> bool:
+    """approval@edge's ruling (CLAIMS L6599, ov#341 refute S3): a cron run may use these tools only
+    when its output goes nowhere (no auto-delivery target: platform and chat both blank, or `local`)
+    or to a Telegram DM (a positive chat id). Hermes binds the job's target per task
+    (`cron/scheduler.py` `_reload_dotenv_and_publish_delivery_target`, the
+    `HERMES_CRON_AUTO_DELIVER_PLATFORM` / `_CHAT_ID` session variables). A group or channel (a
+    negative id), another platform, or a target that cannot be read is refused."""
+    platform = _norm(_session_value("HERMES_CRON_AUTO_DELIVER_PLATFORM"))
+    chat = _session_value("HERMES_CRON_AUTO_DELIVER_CHAT_ID")
+    if platform is None or chat is None:
+        return False
+    chat = chat.strip()
+    if platform in ("", "local") and chat == "":
+        return True
+    return platform == "telegram" and _TELEGRAM_DM_CHAT.fullmatch(chat) is not None
+
+
 def session_kind(session_id: Any) -> Optional[str]:
     """`cron`, `dm`, or None (refused: a group, a channel, anything else, or unknowable)."""
     sid = session_id.strip() if isinstance(session_id, str) else ""
@@ -383,7 +427,7 @@ def session_kind(session_id: Any) -> Optional[str]:
         lineage = None
     if (lineage == "cron" or cron_flag == "1" or "cron" in idents
             or any(s.startswith("cron_") for s in (sid, bound_id))):
-        return "cron"
+        return "cron" if cron_delivers_privately() else None
     if chat_type is None or any(v is None for v in raw_idents):
         return None
     if chat_type in DIRECT_CHAT_TYPES:
@@ -697,6 +741,7 @@ __all__ = [
     "CP_HOSTS",
     "answer",
     "cp_origin",
+    "cron_delivers_privately",
     "endpoint",
     "make_handler",
     "normalize_reason",

@@ -37,7 +37,8 @@ REASON = "My resident writes long research briefs and the current model runs out
 PRAYER_ID = VECTOR["ids"]["cases"][0]["prayer_id"]
 ARGS = {"ask": {"kind": "model_tier", "tier": "pro"}, "reason": REASON}
 SESSION_ENV = ("HERMES_SESSION_CHAT_TYPE", "HERMES_CRON_SESSION", "HERMES_PLATFORM", "HERMES_SESSION_PLATFORM",
-               "HERMES_SESSION_SOURCE", "HERMES_SESSION_ID", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+               "HERMES_SESSION_SOURCE", "HERMES_SESSION_ID", "HERMES_CRON_AUTO_DELIVER_PLATFORM",
+               "HERMES_CRON_AUTO_DELIVER_CHAT_ID", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
                "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy")
 
 
@@ -887,3 +888,32 @@ def test_an_upstream_error_body_is_never_echoed(tctx, cp, caplog):
             out = json.dumps(call(tctx, ARGS))
             assert REASON not in out and TOKEN not in out and TENANT not in out and "html" not in out
     assert REASON not in caplog.text and TOKEN not in caplog.text
+
+
+# ---- ov#341 fix round 1 -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("platform,chat,allowed", [
+    ("telegram", "123456789", True),
+    ("", "", True),
+    ("telegram", "-1001234567890", False),
+    ("telegram", "-4567", False),
+    ("slack", "C123", False),
+])
+def test_s3_a_cron_prayer_only_when_the_run_reports_to_the_dm(tctx, cp, monkeypatch, platform, chat, allowed):
+    """The session rule is shared with ask_village (`session_kind` / `cron_delivers_privately`)."""
+    monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "")
+    monkeypatch.setenv("HERMES_CRON_AUTO_DELIVER_PLATFORM", platform)
+    monkeypatch.setenv("HERMES_CRON_AUTO_DELIVER_CHAT_ID", chat)
+    out = call(tctx, ARGS, session="cron_job_p_1")
+    if allowed:
+        assert out["status"] == "received" and cp.requests[0]["headers"]["x-av-session-kind"] == "cron"
+    else:
+        assert out["error"] == "group_session" and cp.requests == []
+
+
+def test_n7_the_token_is_registered_as_a_secret(tctx, cp, plugin):
+    core = sys.modules[f"{plugin.__name__}._core"]
+    core._LITERAL_SECRETS.discard(TOKEN)  # the collector registers it too; pray must not rely on that
+    call(tctx, ARGS)
+    assert TOKEN in core._LITERAL_SECRETS

@@ -61,7 +61,8 @@
       "handle": "@[A-Za-z0-9_]{2,}",
       "telegram_link": "(?i)t\\.me/"
     },
-    "order": "type and keys (invalid_body), then reason length, controls and lines (reason_invalid), then contact (reason_contact)"
+    "order": "type and keys (invalid_body), then reason length, controls and lines (reason_invalid), then contact (reason_contact)",
+    "reason_invisible_refused": "any character in Unicode categories Cf Co Cs Cn (bidi controls, zero-width, U+00AD, U+180E, tag characters U+E0000-E007F), the variation selectors U+FE00-FE0F and U+E0100-E01EF, U+034F, U+115F, U+1160, U+3164, U+FFA0, U+2028, U+2029 (ov#341 refute N4); the box is stricter than the cp needs to be"
   },
   "ids": {
     "ns_av": "6d1f2d4e-6a6b-5c29-9b3a-0f0f9b1d4a11",
@@ -380,6 +381,42 @@
           "kind": "other"
         },
         "reason": "nul\u0000here"
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "need ‮orp‬ plan"
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "ok 󠁡󠁰󠁰󠁲󠁯󠁶󠁥"
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "vs ️ here"
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "zero​width"
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "soft­hyphen"
+      },
+      {
+        "ask": {
+          "kind": "other"
+        },
+        "reason": "line sep"
       }
     ],
     "reason_contact": [
