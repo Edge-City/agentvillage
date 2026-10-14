@@ -105,7 +105,7 @@ describe("AGENTS.md budget (AGENTS-MD-CAP)", () => {
     expect(agents).toContain("**`edge-india`**");
   });
 
-  test("the date rule stays loaded and shows Hermes's message stamp (AGENT-DATE)", () => {
+  test("the date rule stays loaded, comes first and shows Hermes's message stamp (AGENT-DATE, DATE-1)", () => {
     // config.ts pins gateway.message_timestamps.enabled, so each resident message reaches the model
     // as `[Mon 2026-10-12 09:17:05 IST] ...` (gateway/message_timestamps.py, '%a %Y-%m-%d %H:%M:%S %Z');
     // the session prompt's own date is frozen at its last rebuild, so the rule says which one wins.
@@ -116,9 +116,15 @@ describe("AGENTS.md budget (AGENTS-MD-CAP)", () => {
     for (const words of ["in IST", "The newest is today", "conversation's start date", "your notes", "anything said earlier", "today, tomorrow and weekdays"]) {
       expect(line).toContain(words);
     }
-    // In Community context, next to the schedule rules it feeds; scoped to chat (a cron prompt has no stamp).
-    const community = agents.slice(agents.indexOf("\n## Community context\n"), agents.indexOf("\n## First-message gates\n"));
-    expect(community).toContain(line!);
+    // DATE-1: the rule names the trap. Hermes's one date line, "Conversation started: <day>", is built
+    // once per session and kept for its life, so on a chat that began yesterday it names yesterday.
+    for (const words of ['the system prompt\'s "Conversation started" line is when this chat began, not today', 'say the day in any "today"/"tomorrow" answer']) {
+      expect(line).toContain(words);
+    }
+    // DATE-1: first in the file, directly under the title and above the identity block and the red lines,
+    // so it is read before anything it governs; scoped to chat (a cron prompt has no stamp).
+    expect(agents.startsWith(`# AGENTS.md — Your Workspace\n\n${line}\n\n`)).toBe(true);
+    expect(agents.split("\n").filter((l) => l.startsWith("**Today's date:**")).length).toBe(1);
     expect(line).toContain("in chat,");
   });
 

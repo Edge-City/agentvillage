@@ -10,6 +10,7 @@
  * turns their local midnights into the UTC window EdgeOS wants, calls the events list once with the
  * popup id and `event_status=published`, and prints one line per event grouped by local day: local
  * start and end with the zone label, the title, the venue, the person's RSVP status and the event id.
+ * The output opens with `Today is <Wkd YYYY-MM-DD> (<zone>)` and `Listing: <the days asked for>` (DATE-1).
  * Agents asked for "today" used to compute that window in inline Python, which the gate refuses.
  *
  * The script reads its own key. `EDGEOS_API_KEY`, `AV_POPUP_ID` and `EDGEOS_API_BASE` come from the
@@ -196,6 +197,25 @@ function clock(iso: string, tz: string): string {
     .format(new Date(iso));
 }
 
+/** A local date with its weekday, e.g. `Wed 2026-10-14`. */
+export function isoDay(date: string): string {
+  const weekday = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" })
+    .format(new Date(`${date}T00:00:00Z`));
+  return `${weekday} ${date}`;
+}
+
+/**
+ * The two lines every listing starts with (DATE-1): today in the village zone, then the days asked for.
+ * Hermes keeps the session's start date in the prompt for the life of a chat, so the model reads a
+ * fresh local "today" here, above the events, on every schedule answer.
+ */
+export function header(args: Args, wanted: string[], now: Date, tz: string): [string, string] {
+  const first = isoDay(wanted[0]);
+  const span = wanted.length === 1 ? first : `${first} to ${isoDay(wanted[wanted.length - 1])}`;
+  const named = /^\d/.test(args.when) ? span : `${args.when} = ${span}`;
+  return [`Today is ${isoDay(localDate(now, tz))} (${zoneLabel(tz, now)})`, `Listing: ${named}`];
+}
+
 export function dayHeading(date: string): string {
   return new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", weekday: "short", day: "numeric", month: "short" })
     .format(new Date(`${date}T00:00:00Z`));
@@ -271,10 +291,12 @@ export async function run(argv: string[], env: Env = process.env, fetchImpl: typ
   events = events
     .filter((e) => typeof e.start_time === "string" && !Number.isNaN(new Date(e.start_time).getTime()))
     .sort((a, b) => new Date(a.start_time!).getTime() - new Date(b.start_time!).getTime());
+  const [todayLine, listingLine] = header(parsed, wanted, now, tz);
   if (parsed.json) {
-    return { code: 0, out: `${JSON.stringify({ time_zone: tz, start_after: startIso, start_before: endIso, results: events })}\n`, err: "" };
+    // One JSON document, so the two header lines ride as its first fields rather than as text above it.
+    return { code: 0, out: `${JSON.stringify({ today: todayLine, listing: listingLine, time_zone: tz, start_after: startIso, start_before: endIso, results: events })}\n`, err: "" };
   }
-  const lines: string[] = [];
+  const lines: string[] = [todayLine, listingLine];
   for (const day of wanted) {
     const todays = events.filter((e) => localDate(new Date(e.start_time!), tz) === day);
     lines.push(`${dayHeading(day)} (${tz})`);

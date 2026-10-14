@@ -16,6 +16,8 @@ import {
   days,
   dotenvValue,
   eventLine,
+  header,
+  isoDay,
   localMidnightUtc,
   parseArgs,
   run,
@@ -166,7 +168,7 @@ describe("the call and the output", () => {
     expect((f.calls[0].init.headers as Record<string, string>).Authorization).toBe(`Bearer ${KEY}`);
     expect(f.calls[0].url).not.toContain(KEY);
     expect(r.out).not.toContain(KEY);
-    expect(r.out).toBe("Wed 14 Oct (Asia/Kolkata)\n  7:00 AM–8:00 AM IST · Morning swim · Mandrem beach · RSVP: registered · id 5f0c7a3e-1b2d-4c3e-8f9a-0b1c2d3e4f5a · start 2026-10-14T01:30:00Z\n");
+    expect(r.out).toBe("Today is Wed 2026-10-14 (IST)\nListing: today = Wed 2026-10-14\nWed 14 Oct (Asia/Kolkata)\n  7:00 AM–8:00 AM IST · Morning swim · Mandrem beach · RSVP: registered · id 5f0c7a3e-1b2d-4c3e-8f9a-0b1c2d3e4f5a · start 2026-10-14T01:30:00Z\n");
   });
 
   test("an empty day says so; events are sorted and grouped by local day", async () => {
@@ -174,6 +176,8 @@ describe("the call and the output", () => {
     const f = fakeFetch([late, event]);
     const r = await run(["--when", "today", "--days", "3"], { HERMES_HOME: home([`EDGEOS_API_KEY=${KEY}`, `AV_POPUP_ID=${POPUP}`]) }, f.impl, NOW);
     expect(r.out.split("\n")).toEqual([
+      "Today is Wed 2026-10-14 (IST)",
+      "Listing: today = Wed 2026-10-14 to Fri 2026-10-16",
       "Wed 14 Oct (Asia/Kolkata)",
       "  7:00 AM–8:00 AM IST · Morning swim · Mandrem beach · RSVP: registered · id 5f0c7a3e-1b2d-4c3e-8f9a-0b1c2d3e4f5a · start 2026-10-14T01:30:00Z",
       "Thu 15 Oct (Asia/Kolkata)",
@@ -192,14 +196,88 @@ describe("the call and the output", () => {
     expect([down.code, down.err]).toEqual([1, "events: EdgeOS unreachable (TypeError)\n"]);
   });
 
-  test("--json prints the window and the raw results", async () => {
+  test("--json prints today, the listing, the window and the raw results", async () => {
     const r = await run(["--when", "today", "--json"], { HERMES_HOME: home([`EDGEOS_API_KEY=${KEY}`, `AV_POPUP_ID=${POPUP}`]) },
       fakeFetch([event]).impl, NOW);
-    expect(JSON.parse(r.out)).toEqual({ time_zone: "Asia/Kolkata", start_after: "2026-10-13T18:30:00Z", start_before: "2026-10-14T18:30:00Z", results: [event] });
+    expect(JSON.parse(r.out)).toEqual({ today: "Today is Wed 2026-10-14 (IST)", listing: "Listing: today = Wed 2026-10-14", time_zone: "Asia/Kolkata", start_after: "2026-10-13T18:30:00Z", start_before: "2026-10-14T18:30:00Z", results: [event] });
   });
 
   test("a line for a highlighted event in another zone", () => {
     expect(eventLine({ title: "Demo", start_time: "2026-07-01T17:00:00Z", highlighted: true }, "America/Los_Angeles"))
       .toBe("10:00 AM PDT · Demo · highlighted · RSVP: none · start 2026-07-01T17:00:00Z");
+  });
+});
+
+describe("today and the listing head every output (DATE-1)", () => {
+  // Hermes keeps the session's start date in the prompt for the life of a chat; these two lines put a
+  // fresh village-zone day above the events. Pinned on both sides of IST midnight.
+  const AFTER_MIDNIGHT = new Date("2026-10-13T18:45:00Z"); // Wed 14 Oct 2026, 00:15 IST
+  const BEFORE_MIDNIGHT = new Date("2026-10-13T18:15:00Z"); // Tue 13 Oct 2026, 23:45 IST
+  const env = () => ({ HERMES_HOME: home([`EDGEOS_API_KEY=${KEY}`, `AV_POPUP_ID=${POPUP}`]) });
+  const firstTwo = async (argv: string[], now: Date, extra: Record<string, string> = {}) => {
+    const r = await run(argv, { ...env(), ...extra }, fakeFetch([]).impl, now);
+    expect(r.code).toBe(0);
+    return r.out.split("\n").slice(0, 2);
+  };
+
+  test("isoDay names the weekday of a local date", () => {
+    expect(isoDay("2026-10-14")).toBe("Wed 2026-10-14");
+    expect(isoDay("2026-10-18")).toBe("Sun 2026-10-18");
+  });
+
+  test("00:15 IST Wednesday: today is Wednesday, whatever the UTC date", async () => {
+    expect(await firstTwo(["--when", "today"], AFTER_MIDNIGHT)).toEqual(["Today is Wed 2026-10-14 (IST)", "Listing: today = Wed 2026-10-14"]);
+    expect(await firstTwo(["--when", "tomorrow"], AFTER_MIDNIGHT)).toEqual(["Today is Wed 2026-10-14 (IST)", "Listing: tomorrow = Thu 2026-10-15"]);
+    expect(await firstTwo(["--when", "weekend"], AFTER_MIDNIGHT))
+      .toEqual(["Today is Wed 2026-10-14 (IST)", "Listing: weekend = Sat 2026-10-17 to Sun 2026-10-18"]);
+    expect(await firstTwo(["--when", "2026-10-20"], AFTER_MIDNIGHT)).toEqual(["Today is Wed 2026-10-14 (IST)", "Listing: Tue 2026-10-20"]);
+  });
+
+  test("23:45 IST Tuesday: today is still Tuesday", async () => {
+    expect(await firstTwo(["--when", "today"], BEFORE_MIDNIGHT)).toEqual(["Today is Tue 2026-10-13 (IST)", "Listing: today = Tue 2026-10-13"]);
+    expect(await firstTwo(["--when", "tomorrow"], BEFORE_MIDNIGHT)).toEqual(["Today is Tue 2026-10-13 (IST)", "Listing: tomorrow = Wed 2026-10-14"]);
+    expect(await firstTwo(["--when", "weekend"], BEFORE_MIDNIGHT))
+      .toEqual(["Today is Tue 2026-10-13 (IST)", "Listing: weekend = Sat 2026-10-17 to Sun 2026-10-18"]);
+    expect(await firstTwo(["--when", "2026-10-20"], BEFORE_MIDNIGHT)).toEqual(["Today is Tue 2026-10-13 (IST)", "Listing: Tue 2026-10-20"]);
+  });
+
+  test("--days gives the listing a range; the events follow unchanged", async () => {
+    expect(await firstTwo(["--when", "2026-10-20", "--days", "3"], AFTER_MIDNIGHT))
+      .toEqual(["Today is Wed 2026-10-14 (IST)", "Listing: Tue 2026-10-20 to Thu 2026-10-22"]);
+    expect(await firstTwo(["--when", "weekend", "--days", "2"], AFTER_MIDNIGHT))
+      .toEqual(["Today is Wed 2026-10-14 (IST)", "Listing: weekend = Sat 2026-10-17 to Mon 2026-10-19"]);
+    const r = await run(["--when", "tomorrow"], env(), fakeFetch([]).impl, AFTER_MIDNIGHT);
+    expect(r.out).toBe("Today is Wed 2026-10-14 (IST)\nListing: tomorrow = Thu 2026-10-15\nThu 15 Oct (Asia/Kolkata)\n  no published events\n");
+  });
+
+  test("today is the same local day the window uses", () => {
+    for (const now of [AFTER_MIDNIGHT, BEFORE_MIDNIGHT]) {
+      const wanted = days(args({}), now, "Asia/Kolkata");
+      expect(header(args({}), wanted, now, "Asia/Kolkata")[0]).toBe(`Today is ${isoDay(wanted[0])} (IST)`);
+    }
+  });
+
+  test("another zone carries its own label", async () => {
+    expect(await firstTwo(["--when", "today"], AFTER_MIDNIGHT, { HERMES_TIMEZONE: "America/Los_Angeles" }))
+      .toEqual(["Today is Tue 2026-10-13 (PDT)", "Listing: today = Tue 2026-10-13"]);
+  });
+
+  test("error paths print no header", async () => {
+    const bad = await run(["--when", "next week"], env(), fakeFetch([]).impl, AFTER_MIDNIGHT);
+    expect([bad.code, bad.out]).toEqual([2, ""]);
+    const denied = await run(["--when", "today"], env(), fakeFetch([], 403).impl, AFTER_MIDNIGHT);
+    expect([denied.code, denied.out]).toEqual([1, ""]);
+  });
+});
+
+describe("the skill tells the agent to read the day from the script (DATE-1)", () => {
+  const skill = readFileSync(join(import.meta.dir, "../../SKILL.md"), "utf8");
+  const section = skill.slice(skill.indexOf("\n## 3. Reading events\n"), skill.indexOf("All event-read recipes use"));
+
+  test("pass the word, take the day from the first line, never from the conversation's start line", () => {
+    expect(section).toContain("pass the word (`--when today`, `--when tomorrow`, `--when weekend`), never a date you worked out");
+    expect(section).toContain("The script's first line, `Today is <Wkd YYYY-MM-DD> (IST)`, is today in the village");
+    expect(section).toContain("say it in your answer");
+    expect(section).toContain("Never take today's date from the conversation's start line in your prompt");
   });
 });
