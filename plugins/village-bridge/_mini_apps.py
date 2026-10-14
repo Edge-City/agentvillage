@@ -17,6 +17,13 @@ GOLD_STARS = {"version": "1.1.0", "skills": ["gold-stars"], "operations": ["rolo
 # either order; it carries no meeting or Skylight operation, so those stay refused under it.
 GOLD_STARS_PREVIOUS = {"version": "1.1.0", "skills": ["gold-stars"], "operations": ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel"]}
 
+# Every `village` operation, classified. A write changes the owner's account state; a read does not.
+# `rolodex.meeting` (mark/undo) is a WRITE: it rides the `village` tool's existing gate entry (no preview
+# step, CLAIMS L7216) and runs only while that gate is on and verified (gate_verified). `skylight.status`
+# is a READ of the owner's own status. Star sends also need their own daemon grant (authorize_send).
+READ_OPERATIONS = frozenset({"rolodex.search", "gold-stars.quota", "gold-stars.status", "skylight.status", "mini-app.read"})
+WRITE_OPERATIONS = frozenset({"rolodex.meeting", "gold-stars.prepare", "gold-stars.send", "gold-stars.cancel"})
+
 
 def installed(home: Path, app_id: str, operation: str) -> bool:
     try:
@@ -50,6 +57,13 @@ def installed(home: Path, app_id: str, operation: str) -> bool:
         return any(app["id"] == app_id and operation in app["operations"] for app in doc["apps"])
     except Exception:
         return False
+
+
+def gate_verified() -> None:
+    """A gated write never runs while the approval gate is off or unverified (no bypass of its entry)."""
+    backstop = importlib.import_module("hermes_plugins.av_approval")
+    if backstop.switch() != "on" or backstop.current_codes():
+        raise ValueError("approval_unavailable")
 
 
 def approval_modules():

@@ -90,7 +90,7 @@ class BridgeTest(unittest.TestCase):
   self.assertIn('data',self.call());self.transport.assert_called_once_with(self.config,{'operation':'gold-stars.quota'})
  def test_meeting_mark_and_undo_restore_ov300_request_shape(self):
   attendee='550e8400-e29b-41d4-a716-446655440000'
-  with patch.object(bridge,'authorize_send',side_effect=AssertionError('no daemon grant for a meeting mark')):
+  with patch.object(bridge,'authorize_send',side_effect=AssertionError('no daemon grant for a meeting mark')),patch.object(bridge,'gate_verified',return_value=None) as gate:
    mark=self.call({'operation':'rolodex.meeting','attendeeId':attendee.upper(),'met':True})
    self.assertIn('data',mark);sent=self.transport.call_args.args[1]
    # Exactly app#185's ToolRequest variant (strict): operation, attendeeId, met, requestId. No actor field.
@@ -106,7 +106,39 @@ class BridgeTest(unittest.TestCase):
    self.sc._VAR_MAP['HERMES_SESSION_MESSAGE_ID'].set('10')
    self.call({'operation':'rolodex.meeting','attendeeId':attendee,'met':True})
    self.assertNotEqual(self.transport.call_args.args[1]['requestId'],sent['requestId'])  # a later owner request is new
-  self.assertEqual(self.transport.call_count,4)
+  self.assertEqual(self.transport.call_count,4);self.assertEqual(gate.call_count,4)
+ def test_meeting_is_a_write_and_never_runs_without_the_verified_gate(self):
+  # rolodex.meeting changes the owner's Rolodex: classified WRITE everywhere, never READ.
+  self.assertIn('rolodex.meeting',mini.WRITE_OPERATIONS);self.assertNotIn('rolodex.meeting',mini.READ_OPERATIONS)
+  self.assertIn('skylight.status',mini.READ_OPERATIONS);self.assertNotIn('skylight.status',mini.WRITE_OPERATIONS)
+  self.assertFalse(mini.READ_OPERATIONS&mini.WRITE_OPERATIONS)
+  self.assertEqual(mini.READ_OPERATIONS|mini.WRITE_OPERATIONS,set(bridge.SCHEMA['parameters']['properties']['operation']['enum']))
+  self.assertEqual(mini.WRITE_OPERATIONS,{'rolodex.meeting','gold-stars.prepare','gold-stars.send','gold-stars.cancel'})
+  self.assertIn('rolodex.meeting is a write',bridge.SCHEMA['description']);self.assertIn('skylight.status is a read',bridge.SCHEMA['description'])
+  attendee='550e8400-e29b-41d4-a716-446655440000'
+  # The gate is off, unverified or absent: the write is refused before any network call.
+  for switch,codes in (('off',()),('unset',()),('on',('hook-missing:village',))):
+   backstop=types.SimpleNamespace(switch=lambda s=switch:s,current_codes=lambda c=codes:c)
+   with patch.object(mini.importlib,'import_module',return_value=backstop):
+    for met in (True,False):
+     with self.subTest(switch=switch,codes=codes,met=met):
+      self.assertEqual(self.call({'operation':'rolodex.meeting','attendeeId':attendee,'met':met})['error'],'approval_unavailable')
+  with patch.object(mini.importlib,'import_module',side_effect=ImportError('no av-approval')):
+   self.assertEqual(self.call({'operation':'rolodex.meeting','attendeeId':attendee,'met':True})['error'],'approval_unavailable')
+  self.transport.assert_not_called()
+  # Reads never consult it; a verified gate lets the write through with no grant or preview.
+  with patch.object(mini.importlib,'import_module',side_effect=AssertionError('reads are not gate-checked here')):
+   self.assertIn('data',self.call({'operation':'skylight.status'}))
+  backstop=types.SimpleNamespace(switch=lambda:'on',current_codes=lambda:())
+  with patch.object(mini.importlib,'import_module',return_value=backstop):
+   self.assertIn('data',self.call({'operation':'rolodex.meeting','attendeeId':attendee,'met':True}))
+  self.assertEqual([c.args[1]['operation'] for c in self.transport.call_args_list],['skylight.status','rolodex.meeting'])
+ def test_unclassified_operation_is_refused_before_install_lookup(self):
+  with patch.object(bridge,'installed',return_value=True) as inst:
+   for op in ['rolodex.delete','skylight.move','gold-stars.grant',None,['rolodex.meeting']]:
+    with self.subTest(op=op):self.assertEqual(self.call({'operation':op})['error'],'village_unavailable')
+   inst.assert_not_called()
+  self.transport.assert_not_called()
  def test_meeting_arguments_are_exact(self):
   attendee='550e8400-e29b-41d4-a716-446655440000'
   base={'operation':'rolodex.meeting','attendeeId':attendee,'met':True}

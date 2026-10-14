@@ -132,13 +132,16 @@ after ov#312 removed them; Carter's ruling, CLAIMS L7212/L7216):
 
 - `rolodex.meeting` with exactly `attendeeId` (a Rolodex search id) and
   `met` (`true` marks met, `false` undoes). An owner-requested, owner-scoped,
-  reversible write in one call, through the `village` tool's existing gate
-  entry; no preview step. The agent calls it only when the owner asks. The
+  reversible **write** in one call, through the `village` tool's existing gate
+  entry; no preview step and no daemon grant. The plugin classifies it in
+  `WRITE_OPERATIONS` and refuses it (`approval_unavailable`) while the
+  approval gate is off or unverified, so it never runs outside that entry.
+  The agent calls it only when the owner asks. The
   native tool adds `requestId`, stable for that turn, attendee and state; the
   app replays a `historicalReceipt` for a repeated request, so an old request
   cannot re-mark someone after a later undo.
 - `skylight.status` with no other argument: the owner's own Skylight status,
-  read-only. No tenant, person or agent argument exists; the app derives the
+  a **read** (`READ_OPERATIONS`). No tenant, person or agent argument exists; the app derives the
   account from the bearer.
 
 The CP catalog's gold-stars entry carries the same eight operations in the same
