@@ -132,14 +132,24 @@ released) and starts a 15-minute daemon tick. Nothing is classified or unloaded
 inside `register`. The first pass is `boot`, a later sweep `loaded`, the tick
 `tick` (an inventory only when something changed) or `daily` (every 24 h). The
 listener is removed through `ctx.on_unload`; a re-`register` after a forced
-re-discovery subscribes it again, never twice.
+re-discovery subscribes it again, never twice. A tick takes Hermes's discovery
+lock without waiting and is skipped while a sweep holds it, so it never reads a
+half-reloaded registry.
+
+**Gateway only.** All of this runs only in the process where Hermes set
+`_HERMES_GATEWAY=1` (at import of `gateway/run.py`, before discovery; the
+dashboard runs inside the gateway in 0.21.5). The TUI and a standalone `hermes`
+CLI that also discover plugins publish nothing and log nothing. The marker is
+inherited, so a `hermes` command run by the gateway's own children (the agent's
+terminal) also carries it and runs its own inventory: expect an occasional extra
+`plugin.inventory` row per box, de-duplicable by (box, trigger, window).
 
 **Classification** (the expected set is `expected_plugins.json`, derived from the
 installer and pinned by `install/tests/expected_plugins_parity.test.ts`):
 
 | Class | Rule |
 |---|---|
-| expected | a `user` plugin named like one of the overlay plugins (`readdir(plugins/)` minus `NOT_STAGED_PLUGINS`), in a directory of that name, with no `.install-metadata.json` record; or `index-network` pinned at exactly `INDEX_PLUGIN_REF`. `edgecity-village` (dashboard-only, no `__init__.py`) counts when its directory is present. `recall` and `index-network` are conditional: absent is not missing. |
+| expected | a `user` plugin named like one of the overlay plugins (`readdir(plugins/)` minus `NOT_STAGED_PLUGINS`), in a directory of that name, with no `.install-metadata.json` record for that directory; or `index-network` pinned at exactly `INDEX_PLUGIN_REF`. `edgecity-village` (`DASHBOARD_ONLY`: no `__init__.py` in the source tree, pinned by a test) counts when its directory is present; any other expected directory without `__init__.py` is a broken stage and counts as missing. `recall` and `index-network` are conditional: absent is not missing. |
 | bundled | source `bundled` AND a manifest path under `<hermes_cli package>/../plugins` (`HERMES_BUNDLED_PLUGINS` can point the scan anywhere, so the path is checked) |
 | unknown | everything else: a user directory overriding a bundled key, every `project` and `entrypoint` plugin, a bundled-sourced manifest outside Hermes's tree, `index-network` at another revision, an overlay name installed from git or from a directory of another name |
 
@@ -171,8 +181,13 @@ unknown.
   (`dashboard_set_agent_plugin_enabled(key, enabled=False)`: its key goes into
   `plugins.disabled`) before it loads; a loaded one is unloaded live
   (`PluginManager.unload`) and unlisted, so the next start is clean. The directory
-  and its metadata stay as evidence. A key an expected or bundled plugin also holds
-  is never unlisted (`unlist_failed`). No sticky gate block, no gateway exit.
+  and its metadata stay as evidence. A key an expected, bundled or allow-listed
+  plugin also holds is never unlisted. The `action` says what happened:
+  `unloaded_unlisted` only when both the unload and the unlist succeeded;
+  `unlisted` when the unlist succeeded and no unload was needed (or the unload
+  failed: `state=loaded` then shows it is still live, and a line says so);
+  `unlist_failed` whenever the key was not unlisted, whatever the unload did (an
+  unload that did succeed is logged). No sticky gate block, no gateway exit.
 - `off`: nothing subscribed, nothing sent.
 
 **Events** (bare names through `ctx.emit`; the host namespaces them
@@ -204,7 +219,10 @@ a dictionary. If the key cannot be read or created, a per-process key is used an
 - at boot and daily: `av-approval: plugins: <n> expected, <m> bundled, <u> unknown
   (mode <mode>)` (INFO; WARNING when `<u>` is not 0);
 - `av-approval: plugins: inventory NOT running`, only when the listener could not
-  be subscribed (no plugin manager, an unreadable or edited `expected_plugins.json`).
+  be subscribed (no plugin manager, an unreadable or edited `expected_plugins.json`);
+- quarantine mode only, never in report mode: `av-approval: plugins: quarantine: …`
+  (unloaded but not unlisted; could not be unloaded; a key shared with a protected
+  plugin). No plugin name is logged.
 
 **What verify reads back after the roll** (design §4.4):
 

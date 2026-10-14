@@ -33,6 +33,12 @@ REF = json.loads((PLUGIN_DIR / "expected_plugins.json").read_text(encoding="utf-
 OTHER = "1" * 40
 
 
+@pytest.fixture(autouse=True)
+def _gateway_process(monkeypatch):
+    """The inventory runs in the gateway process only (`_HERMES_GATEWAY=1`, set by Hermes's gateway)."""
+    monkeypatch.setenv("_HERMES_GATEWAY", "1")
+
+
 def _mod():
     plugin = load_plugin()
     return __import__(f"{plugin.__name__}._plugins", fromlist=["_plugins"])
@@ -169,6 +175,19 @@ def test_a_healthy_box_counts_everything_expected_and_nothing_missing(tmp_path):
     inv = mod.classify([r for r in records if r["key"] != "av-display"], expected=expected, metadata={},
                        bundled_root=bundled, bundled_keys=keys)
     assert inv["expected_missing"] == 1
+
+
+def test_a_dir_without_init_is_missing_except_the_dashboard_only_plugin(tmp_path):
+    mod = _mod()
+    bundled, user, keys = _world(tmp_path)
+    expected = mod.load_expected()
+    records = [_rec(n, user / n, loaded=n not in ("edgecity-village", "av-events"),
+                    dashboard_only=n in ("edgecity-village", "av-events")) for n in expected["overlay"]]
+    inv = mod.classify(records, expected=expected, metadata={}, bundled_root=bundled, bundled_keys=keys)
+    assert (inv["expected_missing"], inv["unknown_count"]) == (1, 0)  # av-events staged without __init__.py
+    # DASHBOARD_ONLY is exactly the overlay plugins the source tree ships without an agent half.
+    tree = sorted(n for n in expected["overlay"] if not (PLUGIN_DIR.parent / n / "__init__.py").exists())
+    assert tree == sorted(mod.DASHBOARD_ONLY)
 
 
 def test_expected_set_file_is_derived_sorted_and_versioned():
@@ -383,6 +402,46 @@ def test_off_subscribes_nothing_and_sends_nothing(box):
     assert manager.listeners == [] and "thread" not in mod._state() and ctx.unloads == []
 
 
+def test_outside_the_gateway_process_nothing_runs_and_nothing_is_logged(box, caplog):
+    mod, home, manager, _ = box
+    box_env = os.environ.copy()
+    try:
+        os.environ.pop("_HERMES_GATEWAY", None)
+        with caplog.at_level(logging.DEBUG, logger="av-approval.plugins"):
+            assert mod.start(FakeBusCtx(), manager_factory=lambda: manager) is False
+    finally:
+        os.environ.clear()
+        os.environ.update(box_env)
+    assert manager.listeners == [] and "thread" not in mod._state() and caplog.records == []
+
+
+def test_a_tick_during_a_discovery_sweep_is_skipped_and_publishes_nothing(box):
+    import threading
+
+    mod, home, manager, _ = box
+    manager._discovery_lock = threading.RLock()
+    ctx = FakeBusCtx()
+    mod.start(ctx, manager_factory=lambda: manager)
+    held, release = threading.Event(), threading.Event()
+
+    def sweep():  # another thread inside discover_and_load(force=True)
+        with manager._discovery_lock:
+            held.set()
+            release.wait(5)
+
+    t = threading.Thread(target=sweep)
+    t.start()
+    held.wait(5)
+    try:
+        assert mod.run_pass("tick") is None and ctx.emitted == []
+    finally:
+        release.set()
+        t.join(5)
+    assert mod.run_pass("tick")["trigger"] == "boot" and len(_events(ctx, "plugin.inventory")) == 1
+    assert manager._discovery_lock.acquire(blocking=False)  # the tick released it
+    manager._discovery_lock.release()
+
+
 def test_a_manager_that_cannot_subscribe_says_not_running_once(box, caplog):
     mod, home, manager, _ = box
 
@@ -464,6 +523,45 @@ def test_unlist_failures_and_protected_keys_are_unlist_failed(box, monkeypatch):
     outcomes = {u["name"]: u["action"] for u in _events(ctx, "plugin.unknown")}
     assert outcomes == {"av-events": "unlist_failed", "fixture-echo": "unlist_failed"}
     assert sorted(manager.unloaded) == ["av-events", "fixture-echo"] and unlisted == ["fixture-echo"]
+
+
+@pytest.mark.parametrize("unload_ok,unlist_ok,action,line", [
+    (True, True, "unloaded_unlisted", None),
+    (True, False, "unlist_failed", "UNLOADED_NOT_UNLISTED_LINE"),
+    (False, True, "unlisted", "UNLOAD_FAILED_LINE"),
+    (False, False, "unlist_failed", None),
+])
+def test_quarantine_labels_say_what_happened(box, monkeypatch, caplog, unload_ok, unlist_ok, action, line):
+    mod, home, manager, unlisted = box
+    _set_mode(home, "quarantine")
+    real_unload = manager.unload
+    monkeypatch.setattr(manager, "unload", lambda key: real_unload(key) and unload_ok)
+    monkeypatch.setattr(mod, "unlist", lambda key: unlisted.append(key) or unlist_ok)
+    ctx = FakeBusCtx()
+    mod.start(ctx, manager_factory=lambda: manager)
+    with caplog.at_level(logging.WARNING, logger="av-approval.plugins"):
+        manager.fire()
+    (unknown,) = _events(ctx, "plugin.unknown")
+    assert (unknown["state"], unknown["action"]) == ("loaded", action)
+    quarantine_lines = [r.getMessage() for r in caplog.records if "quarantine:" in r.getMessage()]
+    assert quarantine_lines == ([getattr(mod, line)] if line else [])
+    assert "fixture-echo" not in caplog.text
+
+
+def test_an_impostor_sharing_an_allow_listed_key_does_not_unlist_it(box, monkeypatch, caplog):
+    mod, home, manager, unlisted = box
+    _set_mode(home, "quarantine", plugins_allow=[{"name": "fixture-echo", "revision": OTHER}])
+    (home / "plugins" / "zzz").mkdir()  # same key, another dir, no metadata: not the allowed revision
+    (home / "plugins" / "zzz" / "plugin.yaml").write_text("name: fixture-echo\n", encoding="utf-8")
+    ctx = FakeBusCtx()
+    mod.start(ctx, manager_factory=lambda: manager)
+    with caplog.at_level(logging.WARNING, logger="av-approval.plugins"):
+        manager.fire()
+    assert unlisted == [] and manager.unloaded == []
+    assert [(u["name"], u["state"], u["action"]) for u in _events(ctx, "plugin.unknown")] == [
+        ("fixture-echo", "dir_only", "unlist_failed")]
+    assert _events(ctx, "plugin.inventory")[0]["allowed_count"] == 1
+    assert mod.PROTECTED_LINE in [r.getMessage() for r in caplog.records]
 
 
 def test_tick_sends_only_on_change_and_daily_every_24h(box, caplog):
@@ -675,6 +773,21 @@ def cfg():
 if scenario in ("install", "allow"):
     plugins_cmd.cmd_install("file://" + repo, enable=True, no_deps=True)
     manager.discover_and_load(force=True)
+elif scenario == "race":  # the refuter's shape: a tick lands while a forced re-discovery is loading
+    import threading
+    state = logging.getLogger("av-approval")._av_approval_plugins
+    real_load, fired = manager._load_plugin, []
+    def hooked(manifest):
+        if not fired:
+            fired.append(1)
+            t = threading.Thread(target=lambda: fired.append(state["run"]("tick")))
+            t.start(); t.join()
+        return real_load(manifest)
+    manager._load_plugin = hooked
+    manager.discover_and_load(force=True)
+    manager._load_plugin = real_load
+    seen.append(["mid-sweep-tick", fired[1:]])
+    seen.append(["after-tick", state["run"]("tick") is not None])
 elif scenario == "noenable":
     plugins_cmd.cmd_install("file://" + repo, enable=False, no_deps=True)
     with open(os.path.join(home, "config.yaml")) as fh:
@@ -710,7 +823,7 @@ def _fixture_repo(tmp_path: Path) -> tuple[Path, str]:
 
 def _hermes(home: Path, repo: Path, scenario: str, mode: str, allow_rev: str = "") -> dict:
     env = {k: v for k, v in os.environ.items() if not k.startswith(("AV_", "HERMES_"))}
-    env.update(PYTHONDONTWRITEBYTECODE="1", HERMES_HOME=str(home))
+    env.update(PYTHONDONTWRITEBYTECODE="1", HERMES_HOME=str(home), _HERMES_GATEWAY="1")
     out = subprocess.run([sys.executable, "-c", _RUN, str(home), str(PLUGIN_DIR), str(repo), scenario, mode, allow_rev],
                          capture_output=True, text=True, env=env, timeout=600, cwd=str(home.parent))
     assert out.returncode == 0, out.stderr[-3000:]
@@ -752,6 +865,19 @@ def test_hermes_run1_admin_install_mid_run(tmp_path, mode):
         assert "fixture-echo" in result["plugins"]["disabled"]
         assert "fixture-echo" not in restart["loaded"] and not restart["tool"]  # the next start is clean
     assert "av-approval" in restart["loaded"]
+
+
+@hermes_backed
+def test_hermes_a_tick_inside_a_forced_rediscovery_publishes_nothing(tmp_path):
+    repo, _sha = _fixture_repo(tmp_path)
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    result = _hermes(home, repo, "race", "report")
+    (mid,) = [p for e, p in result["events"] if e == "mid-sweep-tick"]
+    assert mid == [None]  # the tick ran mid-sweep and was skipped
+    (after,) = [p for e, p in result["events"] if e == "after-tick"]
+    assert after is True  # a tick with the lock free runs (and sends nothing: nothing changed)
+    assert [p["trigger"] for p in _bus(result, "plugin.inventory")] == ["boot"]
 
 
 @hermes_backed

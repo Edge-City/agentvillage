@@ -21,6 +21,10 @@ calls it after each discovery sweep with the discovery lock released; nothing he
 inside `register()`) and starts a 15-minute daemon tick. The first pass is `boot`, a later sweep is
 `loaded`, the tick is `tick` (an inventory only when something changed) or `daily` (every 24 h). The
 listener is removed through `ctx.on_unload`; Hermes's listeners belong to the process, not the plugin.
+A tick takes Hermes's discovery lock without waiting and is skipped while a sweep holds it (a forced
+re-discovery unloads and reloads everything under that lock). Only the gateway process runs any of this
+(`_HERMES_GATEWAY=1`, which Hermes sets before discovery); the TUI and a standalone CLI do not. The marker is
+inherited, so a `hermes` command the gateway's own children run also has it.
 
 Mode (`config.yaml` `av_approval.unknown_plugins`): `report` (the default; also for an unreadable config
 or a value it does not understand, with one log line), `quarantine`, or `off` (nothing subscribed,
@@ -85,11 +89,23 @@ HERMES_VERSION_RE = (
     r"|[0-9a-f]{7,40})$"
 )
 UNKNOWN_SOURCES = ("user", "project", "entrypoint", "bundled_path_mismatch")
+#: Overlay plugins with no agent half (`__init__.py`): present when their directory is. Any other expected
+#: directory without `__init__.py` is a broken stage and counts as missing. Pinned to the source tree by a test.
+DASHBOARD_ONLY = ("edgecity-village",)
+#: Set by Hermes at import of `gateway/run.py` (before plugin discovery) and inherited by its children.
+GATEWAY_MARKER = "_HERMES_GATEWAY"
 
 SUMMARY_FMT = "av-approval: plugins: {n} expected, {m} bundled, {u} unknown (mode {mode})"
 NOT_RUNNING_LINE = "av-approval: plugins: inventory NOT running"
 EPHEMERAL_LINE = "av-approval: plugins: hash key ephemeral"
 MODE_LINE = "av-approval: plugins: av_approval.unknown_plugins unreadable or not report|quarantine|off; mode report"
+#: Quarantine only (never in report mode); no plugin name is logged.
+UNLOADED_NOT_UNLISTED_LINE = ("av-approval: plugins: quarantine: a plugin was unloaded but not unlisted "
+                              "(unlist_failed); it loads again at the next start")
+UNLOAD_FAILED_LINE = "av-approval: plugins: quarantine: a plugin could not be unloaded; unlisted for the next start"
+PROTECTED_LINE = ("av-approval: plugins: quarantine: an unknown plugin shares the key of an expected, bundled "
+                  "or allow-listed plugin; that key is not unlisted")
+TICK_SKIPPED_LINE = "av-approval: plugins: tick skipped (a discovery sweep is running)"
 
 #: Process state lives on the `av-approval` logger, which outlives a module reload (Hermes re-imports a
 #: plugin on a forced re-discovery), so "subscribed once" and "once per process" survive one.
@@ -208,8 +224,9 @@ def _revision_matches(meta: Any, revision: str, *, pinned: bool = False) -> bool
 
 
 def _meta_for(record: Mapping[str, Any], metadata: Mapping[str, Any]) -> Any:
-    dirname = Path(record["path"]).name if record.get("path") else ""
-    return metadata.get(dirname, metadata.get(record["key"]))
+    """The install record of this record's own directory (Hermes keys it by the installed directory name).
+    Never by the plugin key: a same-keyed directory elsewhere must not borrow another's revision."""
+    return metadata.get(Path(record["path"]).name) if record.get("path") else None
 
 
 def _verdict(record: Mapping[str, Any], expected: Mapping[str, Any], metadata: Mapping[str, Any],
@@ -247,7 +264,7 @@ def classify(records: list, *, expected: Mapping[str, Any], metadata: Mapping[st
              allow: tuple = (), bundled_root: Optional[Path] = None, bundled_keys: frozenset = frozenset(),
              enabled: frozenset = frozenset(), disabled: frozenset = frozenset()) -> dict:
     """Counts plus one entry per unknown record. A record: {key, name, source, path, loaded, tools, hooks,
-    dashboard_only}. `protected`: keys an expected or bundled record holds (never unlisted)."""
+    dashboard_only}. `protected`: keys an expected, bundled or allowed record holds (never unlisted)."""
     present: set = set()
     protected: set = {SELF}
     bundled_loaded = allowed = 0
@@ -257,7 +274,7 @@ def classify(records: list, *, expected: Mapping[str, Any], metadata: Mapping[st
         key = record["key"]
         if verdict == "expected":
             protected.add(key)
-            if record.get("loaded") or record.get("dashboard_only"):
+            if record.get("loaded") or (record.get("dashboard_only") and key in DASHBOARD_ONLY):
                 present.add(key)
             continue
         if verdict == "bundled":
@@ -266,6 +283,7 @@ def classify(records: list, *, expected: Mapping[str, Any], metadata: Mapping[st
             continue
         meta = _meta_for(record, metadata)
         if _allowed(record, meta, allow):
+            protected.add(key)
             allowed += 1
             continue
         names = {key, record.get("name")}
@@ -446,23 +464,33 @@ def unlist(key: str) -> bool:
 
 
 def quarantine(entry: Mapping[str, Any], manager: Any, protected: set) -> str:
-    """L1: unload a loaded unknown, then unlist its key. Never raises."""
+    """L1: unload a loaded unknown, then unlist its key. The label says what happened: `unloaded_unlisted`
+    only when both succeeded, `unlist_failed` whenever the key is not unlisted (whatever the unload did; a
+    key a protected plugin shares is never unlisted), `unlisted` otherwise. Never raises."""
     key = entry["key"]
-    unloaded = False
+    unloaded = None  # None: not attempted (not loaded, or this plugin itself)
     if entry["loaded"] and key != SELF:
         try:
             unloaded = bool(manager.unload(key))
         except Exception:  # noqa: BLE001
             unloaded = False
+    listed_off = False
     if key in protected:
-        return "unlist_failed"
-    try:
-        listed_off = unlist(key)
-    except Exception:  # noqa: BLE001
-        listed_off = False
+        _log_once("q-protected:" + key, PROTECTED_LINE)
+    else:
+        try:
+            listed_off = unlist(key)
+        except Exception:  # noqa: BLE001
+            listed_off = False
     if not listed_off:
+        if unloaded:
+            _log_once("q-unloaded:" + key, UNLOADED_NOT_UNLISTED_LINE)
         return "unlist_failed"
-    return "unloaded_unlisted" if unloaded else "unlisted"
+    if unloaded:
+        return "unloaded_unlisted"
+    if unloaded is False:
+        _log_once("q-unload-failed:" + key, UNLOAD_FAILED_LINE)
+    return "unlisted"
 
 
 # ---------------------------------------------------------------------------
@@ -520,10 +548,25 @@ def run_pass(trigger: str, now: Optional[float] = None) -> Optional[dict]:
     """One classification pass (`loaded` from the listener, `tick` from the tick). Never raises."""
     state = _state()
     with state["pass_lock"]:
+        held = None
         try:
+            if trigger == "tick":
+                # S1: never classify a half-loaded manager. A forced re-discovery unloads everything and
+                # reloads under this lock; a tick that finds it busy is skipped (the next tick, or the
+                # listener after a sweep that loads something new, reads the settled registry). The lock is
+                # Hermes's RLock: a quarantine unload inside the pass re-enters it on this thread.
+                lock = getattr(state.get("manager"), "_discovery_lock", None)
+                if lock is not None:
+                    if not lock.acquire(blocking=False):
+                        _log(logging.DEBUG, TICK_SKIPPED_LINE)
+                        return None
+                    held = lock
             return _pass(state, trigger, time.time() if now is None else now)
         except Exception:  # noqa: BLE001
             return None
+        finally:
+            if held is not None:
+                held.release()
 
 
 def _pass(state: dict, trigger: str, now: float) -> Optional[dict]:
@@ -600,8 +643,11 @@ def _default_manager() -> Any:
 
 def start(ctx: Any, manager_factory: Optional[Callable[[], Any]] = None) -> bool:
     """From `register()`: subscribe the listener once per process, hook `ctx.on_unload`, start the tick.
-    Never unloads, never raises. False (and `inventory NOT running` once) when it could not subscribe."""
+    Never unloads, never raises. False (and `inventory NOT running` once) when it could not subscribe;
+    False and silent outside the gateway process (`_HERMES_GATEWAY` unset)."""
     try:
+        if os.environ.get(GATEWAY_MARKER) != "1":
+            return False  # N5: the gateway only, not the TUI or a standalone CLI that also discovers plugins
         home = hermes_home()
         cfg, readable = read_config(home)
         mode, understood = parse_mode(cfg if readable else None)
