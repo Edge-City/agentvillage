@@ -313,7 +313,8 @@ def test_switch_off_is_counted_without_a_log_line(plugin, ctx, monkeypatch, capl
     """Approval's §8 request: no new WARNING class on every box before the switch goes on."""
     collector_module = __import__(f"{plugin.__name__}._collector", fromlist=["_collector"])
     monkeypatch.setattr(collector_module, "_LOGGED_COUNTERS", set())
-    assert collector_module._QUIET_COUNTERS == ("backup_uploaded", "plugin_dropped_switch_off")
+    # SEC-6 added its own switch-off counter (test_model_events.py).
+    assert collector_module._QUIET_COUNTERS == ("backup_uploaded", "plugin_dropped_switch_off", "model_dropped_switch_off")
     monkeypatch.setenv("AV_EVENTS_TOKEN", "test-token")
     plugin.register(ctx)
     with caplog.at_level(logging.DEBUG):

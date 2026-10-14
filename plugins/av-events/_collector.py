@@ -90,8 +90,8 @@ logger = logging.getLogger("av-events")
 #: a count — never the value that tripped it.
 _LOGGED_COUNTERS: set[str] = set()
 #: Counters `Collector.count` never logs: the routine ones (every backup; SEC-3's switch-off
-#: drops, on every box until `AV_PLUGIN_EVENTS` goes on).
-_QUIET_COUNTERS = ("backup_uploaded", "plugin_dropped_switch_off")
+#: drops, on every box until `AV_PLUGIN_EVENTS` goes on; SEC-6's, until `AV_MODEL_EVENTS` goes on).
+_QUIET_COUNTERS = ("backup_uploaded", "plugin_dropped_switch_off", "model_dropped_switch_off")
 
 #: Largest `prompt.registered` envelope this plugin will buffer, as compact
 #: UTF-8 JSON. Ingest refuses a whole batch when one envelope passes 64 KiB

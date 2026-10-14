@@ -41,6 +41,8 @@ optional_env:
   - AV_INFERENCE_RUN_EVENTS
   # SEC-3: off until the data release registering plugin.inventory@1 / plugin.unknown@1 is live
   - AV_PLUGIN_EVENTS
+  # SEC-6 half 2: off until data's DATA-477 release registering model.observed@1 / model.offlist@1 is live
+  - AV_MODEL_EVENTS
 # Documentation only — Hermes registers the tool from ctx.register_tool() (toolset
 # av-events, DATA-157); `hermes plugins` reads this list to name the toolset.
 provides_tools:

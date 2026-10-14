@@ -35,9 +35,11 @@ def recalled_events(plugin, av):
 
 def test_register_subscribes_to_the_recall_bus_event(plugin, ctx):
     plugin.register(ctx)
-    # SEC-3 added av-approval's two plugin-inventory events (test_plugin_events.py).
-    # The set, not the order, so the next subscription does not have to edit this line.
-    assert set(ctx.subscriptions) == {"recall:memory.recalled", "av-approval:plugin.inventory", "av-approval:plugin.unknown"}
+    # SEC-3 added av-approval's two plugin-inventory events (test_plugin_events.py), SEC-6 its two
+    # model-observer events (test_model_events.py). The set, not the order.
+    assert set(ctx.subscriptions) == {
+        "recall:memory.recalled", "av-approval:plugin.inventory", "av-approval:plugin.unknown",
+        "av-approval:model.observed", "av-approval:model.offlist"}
     assert all(len(callbacks) == 1 for callbacks in ctx.subscriptions.values())
     # Subscribing adds no hook: the spec hook set is unchanged.
     assert set(ctx.hooks) == set(plugin.HOOK_BODIES)

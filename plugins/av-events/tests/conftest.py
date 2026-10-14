@@ -64,6 +64,8 @@ AV_ENV_VARS = (
     "AV_INFERENCE_RUN_EVENTS",
     # SEC-3: plugin.inventory / plugin.unknown, off until the data release registers them.
     "AV_PLUGIN_EVENTS",
+    # SEC-6 half 2: model.observed / model.offlist, off until data's DATA-477 release registers them.
+    "AV_MODEL_EVENTS",
 )
 
 

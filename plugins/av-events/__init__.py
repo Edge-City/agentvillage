@@ -40,6 +40,8 @@ from ._cron import cron_job_id_from
 from . import _card_events
 # SEC-3, on its own line for the same reason.
 from . import _plugin_events
+# SEC-6 half 2, on its own line for the same reason.
+from . import _model_events
 from ._intentions import IntentionCall, classify_tool, valid_id
 from ._intentions import plan as plan_intentions
 from ._messages import is_injected_turn, is_silent, message_payload
@@ -1052,6 +1054,9 @@ SUBSCRIPTION_BODIES = {
     # SEC-3: av-approval's plugin inventory, behind AV_PLUGIN_EVENTS (default off), `_plugin_events`.
     _plugin_events.INVENTORY_BUS_EVENT: (_plugin_events.HOOK_NAME, _plugin_events.on_inventory),
     _plugin_events.UNKNOWN_BUS_EVENT: (_plugin_events.HOOK_NAME, _plugin_events.on_unknown),
+    # SEC-6 half 2: av-approval's model observer, behind AV_MODEL_EVENTS (default off), `_model_events`.
+    _model_events.OBSERVED_BUS_EVENT: (_model_events.HOOK_NAME, _model_events.on_observed),
+    _model_events.OFFLIST_BUS_EVENT: (_model_events.HOOK_NAME, _model_events.on_offlist),
 }
 
 
