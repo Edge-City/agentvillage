@@ -14,9 +14,11 @@ import { join } from "node:path";
 import {
   EXIT_NOT_CONNECTED,
   EXIT_OK,
+  EXIT_SIGNIN,
   EXIT_UNAVAILABLE,
   EXIT_USAGE,
   CP_HOSTS,
+  SIGNIN_URL,
   FIELDS,
   attendeeLine,
   controlPlaneBase,
@@ -111,6 +113,7 @@ describe("arguments are allow-listed and checked here as the control plane check
       [["--search", "x".repeat(121)], "--search must be 1 to 120"],
       [["--search", "   "], "--search must be 1 to 120"],
       [["--search", "a\u0007b"], "control characters"],
+      [["--search", "a\u0085b"], "control characters"], // C1, as the control plane and the app refuse it
       [["--search"], "--search needs a value"],
       [["--skip", "5001"], "--skip must be"],
       [["--skip", "-1"], "--skip must be"],
@@ -279,9 +282,9 @@ describe("can't reach it right now: exit 1", () => {
     expect(Date.now() - started).toBeLessThan(5_000);
   });
 
-  test("the default timeout is bounded (15 s)", async () => {
+  test("the default timeout is bounded (22 s), above the control plane's 20 s forward (DATA-454b)", async () => {
     const { TIMEOUT_MS } = await import("../directory");
-    expect(TIMEOUT_MS).toBe(15_000);
+    expect(TIMEOUT_MS).toBe(22_000);
   });
 
   test("a 200 that is not a directory listing exits 1", async () => {
@@ -575,5 +578,46 @@ describe("associated attendees are projected too (refute S1)", () => {
     const junk = project({ results: [{ associated_attendees: [null, 7] }] })!.results[0].associated_attendees as Record<string, unknown>[];
     expect(junk.length).toBe(2);
     for (const a of junk) expect(Object.values(a).every((v) => v === null || (Array.isArray(v) && v.length === 0))).toBe(true);
+  });
+});
+
+describe("exit 4: the resident's sign-in to the app has lapsed (DATA-454b)", () => {
+  const LAPSED = { error: "not_connected" };
+  const RESTRICTED = { detail: "API keys are restricted to approved event automation routes" };
+  const LINE = `directory: sign-in lapsed: ask the person to sign in to the Agent Village app once at ${SIGNIN_URL}, then try again`;
+
+  test("cp 403 not_connected + direct 403 (EdgeOS today): exit 4 with the sign-in-once line, not exit 2", async () => {
+    const stub = stubBoth([403, LAPSED], [403, RESTRICTED]);
+    const r = await run(["--search", "Priya"], connected(), stub.impl);
+    expect(stub.directCalls().length).toBe(1);
+    expect([r.code, r.out]).toEqual([EXIT_SIGNIN, ""]);
+    expect(EXIT_SIGNIN).toBe(4);
+    expect(r.err).toBe(`${LINE} (cp 403 not_connected; direct answered 403) via=direct\n`);
+    expect(r.err).not.toContain("API keys are restricted");
+    expect(everything(r)).not.toContain(KEY);
+  });
+
+  test("cp 403 not_connected with no direct call possible (no popup): exit 4 via=cp", async () => {
+    const stub = stubBoth([403, LAPSED], [200, GOOD]);
+    const env = { HERMES_HOME: home([`CONTROL_PLANE_URL=${CP}`, `TENANT_ID=${TENANT}`, `EDGEOS_API_KEY=${KEY}`]) };
+    const r = await run([], env, stub.impl);
+    expect([r.code, r.err]).toEqual([EXIT_SIGNIN, `${LINE} (cp 403 not_connected) via=cp\n`]);
+    expect(stub.directCalls()).toEqual([]);
+  });
+
+  test("cp 403 not_connected + direct 200: the rows, exit 0 via=direct", async () => {
+    const r = await run([], connected(), stubBoth([403, LAPSED], [200, GOOD]).impl);
+    expect([r.code, r.err]).toEqual([EXIT_OK, "via=direct\n"]);
+  });
+
+  test("cp 403 not_connected + direct 5xx: still exit 4", async () => {
+    const r = await run([], connected(), stubBoth([403, LAPSED], [503, {}]).impl);
+    expect(r.code).toBe(EXIT_SIGNIN);
+  });
+
+  test("not_connected is a known code now: a cp 404 not_connected is named, and stays exit 2", async () => {
+    const r = await run([], connected(), stubBoth([404, LAPSED], [403, RESTRICTED]).impl);
+    expect([r.code, r.err]).toEqual([EXIT_NOT_CONNECTED,
+      "directory: not connected: cp answered 404 not_connected; direct answered 403 via=direct\n"]);
   });
 });
