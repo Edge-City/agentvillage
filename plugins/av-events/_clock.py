@@ -17,7 +17,8 @@ The line mirrors ov#347's `nowLine` in `skills/edgeos/scripts/events.ts` exactly
 `Now: <Wkd YYYY-MM-DD HH:MM> <zone> (<h:mm AM/PM>)`. The zone is `HERMES_TIMEZONE` (process env,
 then `$HERMES_HOME/.env`, as the installer reads it), else Asia/Kolkata; a name the runtime does not
 know is Asia/Kolkata. The label is `IST` for Asia/Kolkata and otherwise what `Intl` en-US `short`
-prints: the US abbreviations (`EDT`, `PST`, ...), `UTC`, else `GMT+H[:MM]`.
+prints: the North American abbreviations (`EDT`, `PST`, `ADT`, ...), `UTC`, else
+`GMT+H[:MM]` (checked against `nowLine` for 20 zones x 5 instants: identical).
 
 `with_clock_line` sits outside the telemetry guard (like DATA-444 and DATA-312): `AV_EVENTS_ENABLED=0`,
 no token, or `pre_llm_call` in `AV_HOOKS_DISABLED` do not stop it. Its one switch is `clock_line`
@@ -56,7 +57,7 @@ _IST_FIXED = timezone(timedelta(hours=5, minutes=30), "IST")
 #: The abbreviations `Intl.DateTimeFormat("en-US", {timeZoneName: "short"})` prints as such;
 #: every other zone prints `GMT+H[:MM]` (or `GMT` at offset zero, `UTC` for UTC itself).
 _US_SHORT = frozenset({
-    "EST", "EDT", "CST", "CDT", "MST", "MDT", "PST", "PDT", "AKST", "AKDT", "HST", "HDT",
+    "EST", "EDT", "CST", "CDT", "MST", "MDT", "PST", "PDT", "AKST", "AKDT", "HST", "HDT", "AST", "ADT",
 })
 _UTC_NAMES = frozenset({"UTC", "Etc/UTC", "Etc/UCT", "UCT", "Etc/Universal", "Universal", "Zulu", "Etc/Zulu"})
 
@@ -122,10 +123,8 @@ def now_line(now: Optional[datetime] = None, zone: Optional[str] = None) -> str:
     local = moment.astimezone(tz)
     hour12 = local.hour % 12 or 12
     meridiem = "AM" if local.hour < 12 else "PM"
-    return (
-        f"Now: {_WEEKDAYS[local.weekday()]} {local.year:04d}-{local.month:02d}-{local.day:02d} {local.hour:02d}:{local.minute:02d} {_label(local, name)} "
-        f"({hour12}:{local.minute:02d} {meridiem})"
-    )
+    day = f"{_WEEKDAYS[local.weekday()]} {local.year:04d}-{local.month:02d}-{local.day:02d}"
+    return f"Now: {day} {local.hour:02d}:{local.minute:02d} {_label(local, name)} ({hour12}:{local.minute:02d} {meridiem})"
 
 
 def disabled(collector: Any) -> bool:

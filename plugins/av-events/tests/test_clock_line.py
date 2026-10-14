@@ -271,6 +271,8 @@ def test_default_zone_is_asia_kolkata_not_utc(plugin, monkeypatch):
     ("Asia/Kathmandu", "2026-10-14T18:45:00Z", "Now: Thu 2026-10-15 00:30 GMT+5:45 (12:30 AM)"),
     ("America/Sao_Paulo", "2026-10-14T18:45:00Z", "Now: Wed 2026-10-14 15:45 GMT-3 (3:45 PM)"),
     ("UTC", "2026-10-14T18:45:00Z", "Now: Wed 2026-10-14 18:45 UTC (6:45 PM)"),
+    ("America/Halifax", "2026-12-01T08:05:00Z", "Now: Tue 2026-12-01 04:05 AST (4:05 AM)"),
+    ("Asia/Tokyo", "2026-10-14T18:45:00Z", "Now: Thu 2026-10-15 03:45 GMT+9 (3:45 AM)"),
 ])
 def test_another_zone_prints_its_own_label(plugin, monkeypatch, zone, instant, expected):
     monkeypatch.setenv("HERMES_TIMEZONE", zone)
