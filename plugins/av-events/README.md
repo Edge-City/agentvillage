@@ -29,6 +29,7 @@ plugins/av-events/
   _outcome_ask.py  the evening outcome ask: outcome.asked and the resident's answer (DATA-42)
   _headline_flagged.py  opportunity.headline_flagged from the proactive trigger's hand-off files: ids and codes, no text (DATA-487)
   _approvals_reminder.py  one Connect-approvals reminder per Telegram DM session while the welcome's button is unstarted (DATA-444)
+  _clock.py        the Now line on every turn, cron runs and subagents included: `Now: <Wkd YYYY-MM-DD HH:MM> IST (<h:mm AM/PM>)` (CLOCK-1)
   _backup.py       memory.snapshot: collect, pack and upload the memory files (backup thread only)
   _consent.py      the consent_status tool: GET /v1/consent and the answer in words (DATA-157)
   _pray.py         the pray tool, dark behind AV_PRAY: one request to the control plane for an admin to review (PRAYER P3)
@@ -50,7 +51,7 @@ plugins/av-events/
 | `AV_EVENTS_TOKEN` | *(unset)* | Per-tenant ingest token. **Unset or blank means the plugin idles**: hooks are registered, but no event is emitted or buffered and no flusher thread starts; memory backups still run when `AV_BACKUP_URL`, `AV_BACKUP_TOKEN` and the tenant id are set (the control plane sets them only while village consent is in force and `BACKUP_WRITE_MASTER` is configured). |
 | `AV_EVENTS_URL` | *(unset)* | Ingest base URL. Events are POSTed to `{AV_EVENTS_URL}/v1/events`; the `consent_status` tool GETs `{AV_EVENTS_URL}/v1/consent`. Empty with a token set is **null-sink mode** (see below). |
 | `AV_EVENTS_ENABLED` | `1` | Any of `0`, `false`, `no`, `off` (case-insensitive, whitespace ignored) disables everything. Re-read at every session boundary, and by the flusher before every pass. |
-| `AV_HOOKS_DISABLED` | *(empty)* | Comma-separated hook names to disable individually, e.g. `pre_tool_call,post_tool_call`. Matched case-insensitively, whitespace stripped. Ten names are not hooks: `memory_recalled` (the bus subscription), `memory_snapshot` (the memory backup upload, `_backup.run_once`), `plugin_events` (SEC-3's two av-approval bus subscriptions), `model_events` (SEC-6's two av-approval model-observer subscriptions), `cron_run` (the cron tail), `consent_status` (the tool, which then answers "could not check"), `outcome_ask` (the evening outcome ask: arming, answers and its pass), `headline_flagged` (the DATA-487 pass; the trigger then writes no hand-off file), `approvals_reminder` (the DATA-444 Connect-approvals reminder, which `AV_EVENTS_ENABLED=0` does not stop) and `inference_run` (the memory signal sync's `intention.inference_run` event; its run record is still completed). |
+| `AV_HOOKS_DISABLED` | *(empty)* | Comma-separated hook names to disable individually, e.g. `pre_tool_call,post_tool_call`. Matched case-insensitively, whitespace stripped. Eleven names are not hooks: `memory_recalled` (the bus subscription), `memory_snapshot` (the memory backup upload, `_backup.run_once`), `plugin_events` (SEC-3's two av-approval bus subscriptions), `model_events` (SEC-6's two av-approval model-observer subscriptions), `cron_run` (the cron tail), `consent_status` (the tool, which then answers "could not check"), `outcome_ask` (the evening outcome ask: arming, answers and its pass), `headline_flagged` (the DATA-487 pass; the trigger then writes no hand-off file), `approvals_reminder` (the DATA-444 Connect-approvals reminder, which `AV_EVENTS_ENABLED=0` does not stop), `clock_line` (the CLOCK-1 Now line on every turn, which `AV_EVENTS_ENABLED=0` does not stop either) and `inference_run` (the memory signal sync's `intention.inference_run` event; its run record is still completed). |
 | `AV_INFERENCE_RUN_EVENTS` | *(off)* | `1`, `true`, `yes` or `on` emits `intention.inference_run@1` for every run of the memory signal sync (see "The memory signal sync (DATA-470)"). **Off until the data release that registers the type is live**: ingest quarantines an unknown type. Read like the other switches (process environment, then `.env`), at every run's report. |
 | `AV_PLUGIN_EVENTS` | *(off)* | `1`, `true`, `yes` or `on` emits `plugin.inventory@1` and `plugin.unknown@1` from av-approval's plugin inventory (SEC-3; see "Events from other plugins"). **Off until the data release that registers both types is live**; while off each delivery is counted `plugin_dropped_switch_off` (a counter only: unlike the other drop reasons it never logs a line) and nothing is emitted. Read like the other switches (process environment, then `.env`), on every delivery. |
 | `AV_MODEL_EVENTS` | *(off)* | `1`, `true`, `yes` or `on` emits `model.observed@1` and `model.offlist@1` from av-approval's model observer (SEC-6 half 2; see "Events from other plugins"). A switch of its own, separate from `AV_PLUGIN_EVENTS`. **Off until agentvillage-data's DATA-477 release that registers both types is live**; while off each delivery is counted `model_dropped_switch_off` (a counter only, never a log line) and nothing is emitted. Rollback is this switch off. Read like the other switches (process environment, then `.env`), on every delivery. |
@@ -2295,7 +2296,7 @@ There is no generic abort; each call site interprets its own hook's returns.
   string, all returns joined). It cannot abort the call and cannot rewrite messages or the system
   prompt — the hook exists precisely to keep the system prompt byte-stable for prompt caching
   (`plugins.py:5586`, `agent/turn_context.py:1408`).
-  This plugin's only such return is the DATA-444 reminder (`with_approvals_reminder`,
+  This plugin returns two such contexts. One is the DATA-444 reminder (`with_approvals_reminder`,
   `_approvals_reminder.py`): `{"context": "[Agent Village note, not from the resident] In this reply
   only, add one line at the end: One more step: tap Connect approvals above to finish setting up
   approvals."}`, after any telemetry return, once per root Telegram DM session (no cron, subagent,
@@ -2310,6 +2311,19 @@ There is no generic abort; each call site interprets its own hook's returns.
   do not stop it); `approvals_reminder` in `AV_HOOKS_DISABLED` does, re-read at session boundaries.
   Each reminder given logs one info line, `av-events: approvals_reminder given`, with nothing about
   the session or the file. The plugin never writes that file.
+  The other is the CLOCK-1 Now line (`_clock.with_clock_line`, wrapped inside the reminder so the
+  order is telemetry return, Now line, reminder): `{"context": "Now: Thu 2026-10-15 00:54 IST (12:54 AM)"}`
+  on **every** turn, gateway DM and group, injected, cron (`platform=cron`) and subagent
+  (`parent_session_id`) alike, because a cron run and a delegated child carry Hermes's date line but
+  no time and no message stamp, and the gate refuses `date`. The format is ov#347's `events.ts`
+  `nowLine`; the zone is `HERMES_TIMEZONE` (process env, then `.env`), else or when unknown
+  Asia/Kolkata, labelled `IST` (another zone prints `Intl` en-US's short label). A chat turn then reads
+  `[Thu 2026-10-15 00:54:12 IST] <text>` + `\n\n` + the Now line. Like the reminder it is persisted
+  in `api_content` and replayed, so older turns keep their own (older) line; the newest is the
+  clock. Outside the telemetry guard; `clock_line` in `AV_HOOKS_DISABLED` turns it off. Idempotent
+  per turn: a Now line already in the inbound return is replaced, the same (session, turn) gets the
+  same bytes, and a user message already ending with the line gets none. Any failure is no line and
+  one warning naming the exception class only.
 - `post_llm_call`, `pre_api_request`, `post_api_request`, `on_session_*`, `subagent_*` and
   `on_stream_*` are **pure observers**; their returns are discarded.
 - Mutating the outbound provider payload requires **middleware**, not a hook:

@@ -128,6 +128,9 @@ describe("AGENTS.md budget (AGENTS-MD-CAP)", () => {
     expect(agents.startsWith(`# AGENTS.md — Your Workspace\n\n${line}\n\n`)).toBe(true);
     expect(agents.split("\n").filter((l) => l.startsWith("**Today's date:**")).length).toBe(1);
     expect(line).toContain("in chat,");
+    // CLOCK-1: av-events' pre_llm_call adds `Now: <Wkd YYYY-MM-DD HH:MM> IST (<h:mm AM/PM>)` to every turn,
+    // cron runs and delegated children included (they carry no message stamp); the rule names it.
+    expect(line).toContain("also carries a `Now:` line: the newest one is the current time");
   });
 
   test("tools.md keeps its own sections first and its pinned shape (on demand: no length limit)", () => {
