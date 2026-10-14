@@ -29,13 +29,46 @@ def live(plugin, ctx, monkeypatch):
     return plugin
 
 
-@pytest.mark.parametrize("bad", [["s1"], {"id": "s1"}, {"s1"}, 7, 1.5, True, b"s1"])
+class _NoHash(str):
+    """A str subclass that cannot be a dict key: `isinstance(x, str)` passes, `hash(x)` raises."""
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+class _NoBool:
+    """An object whose truth test raises (a numpy array does this)."""
+
+    def __bool__(self):
+        raise ValueError("ambiguous")
+
+
+RAISED_ON_MAIN = [["s1"], {"id": "s1"}, {"s1"}, _NoHash("s1"), _NoBool()]
+HASHABLE_NON_STR = [7, 1.5, True, b"s1"]
+
+
+@pytest.mark.parametrize("bad", RAISED_ON_MAIN)
 @pytest.mark.parametrize("key", ["session_id", "parent_session_id"])
 @pytest.mark.parametrize("bus, record, counter", CASES)
-def test_an_unhashable_session_id_is_dropped_by_the_body_not_raised(live, ctx, av, bad, key, bus, record, counter):
-    ctx.publish(bus, **dict(record, **{key: bad}))  # raised TypeError out of `guarded` before
+def test_a_value_that_raised_out_of_guarded_is_now_dropped_by_the_body(live, ctx, av, bad, key, bus, record, counter):
+    ctx.publish(bus, **dict(record, **{key: bad}))  # TypeError / ValueError out of `guarded` before
     assert live._COLLECTOR.counters.get(counter) == 1
     assert [e for e in av.read_buffer(live._COLLECTOR) if e["event_type"] in ("plugin.inventory", "model.observed")] == []
+
+
+@pytest.mark.parametrize("bad", HASHABLE_NON_STR)
+@pytest.mark.parametrize("key", ["session_id", "parent_session_id"])
+@pytest.mark.parametrize("bus, record, counter", CASES)
+def test_a_hashable_non_str_value_counts_as_no_session_and_the_body_drops_the_record(live, ctx, av, bad, key, bus, record, counter):
+    ctx.publish(bus, **dict(record, **{key: bad}))  # never raised; now also never names a session
+    assert live._COLLECTOR.counters.get(counter) == 1
+    assert bad not in live._COLLECTOR._config_seen
+    assert [e for e in av.read_buffer(live._COLLECTOR) if e["event_type"] in ("plugin.inventory", "model.observed")] == []
+
+
+def test_a_non_str_session_id_falls_back_to_a_str_parent(live, ctx):
+    ctx.publish(VECTORS["bus"]["inventory"], **dict(INVENTORY, session_id=["s1"], parent_session_id="p1"))
+    assert live._COLLECTOR.counters.get("plugin_dropped_extra_field") == 1
+    assert "p1" in live._COLLECTOR._config_seen
 
 
 @pytest.mark.parametrize("bus, record, counter", CASES)

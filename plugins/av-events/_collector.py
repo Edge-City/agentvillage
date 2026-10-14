@@ -1875,11 +1875,14 @@ def guarded(
             collector = collector_ref()
             if collector is None:
                 return None
-            # Only a string names a session: a publisher's unhashable value (a list, a dict) must
-            # not reach `peek_session` as a dict key, which would raise before the body's own
-            # validation drops the record (ov#333 refute S1).
-            raw = kwargs.get("session_id") or kwargs.get("parent_session_id")
-            session_id = raw if isinstance(raw, str) else None
+            # Only a plain, non-empty `str` names a session: a publisher's unhashable value (a list,
+            # a dict), a str subclass without a hash, or an object whose truth test raises must not
+            # reach `peek_session` as a dict key or be tested for truth, which raised before the
+            # body's own validation could drop the record (ov#333 refute S1, ov#336 refute N1).
+            session_id = next(
+                (v for v in (kwargs.get("session_id"), kwargs.get("parent_session_id")) if type(v) is str and v),
+                None,
+            )
             if not quiet:
                 try:
                     collector.begin(session_id)
