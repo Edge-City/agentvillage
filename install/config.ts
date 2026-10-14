@@ -1234,10 +1234,10 @@ export function configureRecall(): void {
 }
 
 /**
- * Drop each of `names` from `plugins.enabled` (install.ts passes `NOT_STAGED_PLUGINS`), so a box
- * whose config an earlier installer wrote is healed (OV-300 M1: `village-bridge`). Writes only when
- * an entry is removed; every other entry, `plugins.disabled` included, is left as it is. The names
- * removed, for the log line.
+ * Drop each of `names` from `plugins.enabled` (install.ts passes `NOT_STAGED_PLUGINS`, empty from
+ * rc41), so a box whose config an earlier installer wrote is healed. Writes only when an entry is
+ * removed; every other entry, `plugins.disabled` included, is left as it is. The names removed, for
+ * the log line.
  */
 export function unlistPlugins(names: Iterable<string>): string[] {
   const doc = readConfig();

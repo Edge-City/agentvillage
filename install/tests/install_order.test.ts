@@ -74,33 +74,20 @@ describe("stagePlugins: av-approval waits for the approval step on an upgrade", 
   });
 });
 
-describe("stagePlugins: OV-300 M1, a plugin in NOT_STAGED_PLUGINS is never staged and an installed copy is removed", () => {
-  test("village-bridge is in the set, and the real plugins/ tree has it", () => {
-    expect([...NOT_STAGED_PLUGINS]).toEqual(["village-bridge"]);
-    expect(existsSync(join(import.meta.dir, "..", "..", "plugins", "village-bridge", "plugin.yaml"))).toBe(true);
-  });
-
-  test("fresh install and upgrade: never staged in either phase; a copy an earlier installer staged is removed", () => {
+describe("stagePlugins: restored village bridge has internal approval and routed backstop", () => {
+  test("fresh install and upgrade stage the reviewed bridge, never its tests", () => {
+    expect(NOT_STAGED_PLUGINS.has("village-bridge")).toBe(false);
+    expect(APPROVAL_GATED_TOOLS).toContain("village");
     const { source, target } = world();
-    plugin(source, "village-bridge", "ungated village tool");
-    expect(stagePlugins(source, target, "before-approval")).toBe(4);
-    expect(existsSync(join(target, "village-bridge"))).toBe(false);
+    plugin(source, "village-bridge", "reviewed bridge");
+    expect(stagePlugins(source, target, "before-approval")).toBe(6);
+    expect(marker(target, "village-bridge")).toContain("reviewed bridge");
+    expect(existsSync(join(target, "village-bridge", "tests"))).toBe(false);
     expect(stagePlugins(source, target, "after-approval")).toBe(2);
-    expect(existsSync(join(target, "village-bridge"))).toBe(false);
-    // An upgrade from a build that staged it (rc34 was never rolled; this is the heal).
-    plugin(target, "village-bridge", "old ungated copy");
-    expect(stagePlugins(source, target, "before-approval")).toBe(2);
-    expect(existsSync(join(target, "village-bridge"))).toBe(false);
-    expect(marker(target, "av-events")).toContain("new events");
-  });
-
-  test("the heal also runs when the source tree is absent, and leaves every other installed plugin alone", () => {
-    const { target } = world();
-    plugin(target, "village-bridge", "old ungated copy");
-    plugin(target, "av-events", "old events");
-    expect(stagePlugins(join(target, "absent"), target, "before-approval")).toBe(0);
-    expect(existsSync(join(target, "village-bridge"))).toBe(false);
-    expect(marker(target, "av-events")).toContain("old events");
+    expect(marker(target, "village-bridge")).toContain("reviewed bridge");
+    plugin(target, "village-bridge", "old bridge");
+    expect(stagePlugins(source, target, "before-approval")).toBe(4);
+    expect(marker(target, "village-bridge")).toContain("reviewed bridge");
   });
 });
 
