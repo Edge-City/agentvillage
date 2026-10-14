@@ -6,7 +6,7 @@
  * reported. The control plane reads it as a report only, never failing an update for it.
  */
 
-import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export const INSTALL_STATUS_VERSION = 1;
@@ -38,4 +38,34 @@ export function writeInstallStatus(home: string, cronFailed: string[], at: Date 
   chmodSync(tmp, 0o600);
   renameSync(tmp, path);
   return status;
+}
+
+/** The one stdout line printed when the slash access step failed (SEC-6 fix round 1, S3). */
+export function slashAccessFailedLine(why: string): string {
+  return `agentvillage-install: slash_access_failed=${JSON.stringify(why)}`;
+}
+
+/**
+ * Set `slash_access_failed` (the reason, or null on a clean run) in this run's status file, which
+ * `writeInstallStatus` wrote earlier in the run; the same temp-file-and-rename write, mode 0600.
+ * A missing or unreadable file is left alone (the run could not write it either).
+ *
+ * @returns Whether the field was written.
+ */
+export function recordSlashAccessStatus(home: string, failed: string | null): boolean {
+  const path = installStatusPath(home);
+  let status: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+    status = parsed as Record<string, unknown>;
+  } catch {
+    return false;
+  }
+  status.slash_access_failed = failed;
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(status)}\n`, { mode: 0o600 });
+  chmodSync(tmp, 0o600);
+  renameSync(tmp, path);
+  return true;
 }

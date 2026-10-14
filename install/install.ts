@@ -12,6 +12,9 @@
  *   - `terminal.cwd` in config.yaml → `$HERMES_HOME`
  *   - Telegram display: no reasoning, no tool-progress message (only the 3-minute heartbeat; `display_defaults.ts`; `AV_DISPLAY_DEFAULTS=0` skips)
  *   - STT enabled with Groq Whisper so voice notes are auto-transcribed
+ *   - Telegram slash access (SEC-6): residents run only `RESIDENT_SLASH_COMMANDS`, no Telegram user is admin;
+ *     when it cannot be configured the run records `slash_access_failed` in the status file, prints
+ *     `agentvillage-install: slash_access_failed=<why>` and exits non-zero after every other step
  *   - Telegram backlog kept across gateway restarts (`platforms.telegram.extra.drop_pending_on_cold_boot: false`, only when unset)
  *   - Cron in village time (`timezone: Asia/Kolkata`, only when no zone is configured; a loud warning when another is)
  *   - `cron.script_timeout_seconds: 120` when unset, Hermes's default 3600, or lower (the proactive triggers' budgets)
@@ -93,7 +96,7 @@ import {
 } from "./paths";
 import { captureWelcomeState, restoreWelcomeState } from "./welcome_state";
 import { describeResult, regenerateKnowledgeIndex } from "./knowledge-index";
-import { cronFailedLine, writeInstallStatus } from "./install_status";
+import { cronFailedLine, recordSlashAccessStatus, slashAccessFailedLine, writeInstallStatus } from "./install_status";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const SOURCE_WORKSPACE = join(SCRIPT_DIR, "../workspace");
@@ -306,7 +309,8 @@ function main(): void {
   configureModelFallback();
   configureStt();
   configureHostedGateway();
-  configureSlashAccess();
+  // SEC-6: fail loud (fix round 1, S3): recorded below, and the run exits non-zero at its end.
+  const slashAccessFailed = configureSlashAccess();
   keepTelegramBacklogOnColdBoot();
   disableTelegramLinkPreviews();
   configureVillageTimezone();
@@ -338,6 +342,11 @@ function main(): void {
     writeInstallStatus(hermesHome(), cronFailures);
   } catch {
     console.warn("  warning: could not write av-events/install-status.json");
+  }
+  try {
+    recordSlashAccessStatus(hermesHome(), slashAccessFailed);
+  } catch {
+    console.warn("  warning: could not record the slash access step in av-events/install-status.json");
   }
   installEdgeos();
   restoreWelcomeState(welcomeState);
@@ -371,6 +380,13 @@ function main(): void {
   console.log(`  HERMES_HOME: ${TARGET_HOME}`);
   console.log("");
   console.log("next: message your Telegram bot — gateway uses terminal.cwd above");
+
+  // SEC-6 (fix round 1, S3): every other step ran; a box left without the slash gate fails the roll.
+  if (slashAccessFailed) {
+    console.log(slashAccessFailedLine(slashAccessFailed));
+    console.error("error: slash access was not configured (residents can run /model); see the line above");
+    process.exitCode = 1;
+  }
 
   // R3 fix round 4 (trust boundary): the gate receipt is the LAST line of this process's stdout,
   // carrying the control plane's per-exec nonce (AV_GATE_NONCE) and what Hermes's own parse of

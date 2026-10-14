@@ -1,17 +1,20 @@
 /**
  * SEC-6: `configureSlashAccess` turns on Hermes's slash access control for Telegram, so a resident
  * runs only `RESIDENT_SLASH_COMMANDS` (plus `/help`, `/whoami`) and `/model` is admin-only.
+ * Fix round 1: no env admin override (S1), competing blocks lose the keys (S2), fail loud (S3).
  */
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import YAML from "yaml";
 
-import { configureSlashAccess, RESIDENT_SLASH_COMMANDS, SLASH_NO_ADMIN, slashAccessKeys } from "../config";
+import { configureSlashAccess, RESIDENT_SLASH_COMMANDS, SLASH_ACCESS_KEYS, SLASH_NO_ADMIN, slashAccessKeys } from "../config";
+import { installStatusPath, recordSlashAccessStatus, writeInstallStatus } from "../install_status";
 
 const HERMES_REF = "/Users/carter/dev/hermes-agent-ref-v2026.9.24";
+const REPO_ROOT = join(import.meta.dir, "..", "..");
 const ORIGINAL = { home: process.env.HERMES_HOME, admins: process.env.AV_SLASH_ADMIN_IDS };
 let logSpy: ReturnType<typeof spyOn>;
 
@@ -41,17 +44,17 @@ const logged = () => logSpy.mock.calls.map((c) => String(c[0])).join("\n");
 
 /** Commands that change the model, cost, tools or config: never resident-runnable. */
 const ADMIN_ONLY = ["model", "reasoning", "fast", "yolo", "config", "plugins", "skills", "cron", "reload", "update", "tools"];
+const SENTINEL_KEYS = {
+  allow_admin_from: [SLASH_NO_ADMIN],
+  group_allow_admin_from: [SLASH_NO_ADMIN],
+  user_allowed_commands: [...RESIDENT_SLASH_COMMANDS],
+  group_user_allowed_commands: [...RESIDENT_SLASH_COMMANDS],
+};
 
 test("fresh config: writes the four keys under platforms.telegram.extra with the sentinel admin", () => {
   const path = withText(null);
-  configureSlashAccess();
-  const extra = read(path).platforms.telegram.extra;
-  expect(extra).toEqual({
-    allow_admin_from: [SLASH_NO_ADMIN],
-    group_allow_admin_from: [SLASH_NO_ADMIN],
-    user_allowed_commands: [...RESIDENT_SLASH_COMMANDS],
-    group_user_allowed_commands: [...RESIDENT_SLASH_COMMANDS],
-  });
+  expect(configureSlashAccess()).toBeNull();
+  expect(read(path).platforms.telegram.extra).toEqual(SENTINEL_KEYS);
   expect(logged()).toContain(
     `→ slash access: residents may run ${RESIDENT_SLASH_COMMANDS.length} commands; /model and config commands are admin-only`,
   );
@@ -71,7 +74,7 @@ test("keeps every other key, overwrites stale values and a promoted top-level co
       },
     }),
   );
-  configureSlashAccess();
+  expect(configureSlashAccess()).toBeNull();
   const doc = read(path);
   expect(doc.model).toEqual({ default: "x/y" });
   expect(doc.platforms.discord).toEqual({ enabled: false });
@@ -91,33 +94,94 @@ test("second run is byte-identical", () => {
   expect(readFileSync(path, "utf8")).toBe(first);
 });
 
-test("AV_SLASH_ADMIN_IDS sets both admin lists; unset falls back to the sentinel", () => {
-  process.env.AV_SLASH_ADMIN_IDS = "1, 2,, ";
+test("S1: AV_SLASH_ADMIN_IDS in the environment is ignored; the admin lists are exactly the sentinel", () => {
+  process.env.AV_SLASH_ADMIN_IDS = "123456, 2";
   const path = withText(null);
-  configureSlashAccess();
+  expect(configureSlashAccess()).toBeNull();
   const extra = read(path).platforms.telegram.extra;
-  expect(extra.allow_admin_from).toEqual(["1", "2"]);
-  expect(extra.group_allow_admin_from).toEqual(["1", "2"]);
-  // Numeric ids stay strings in the YAML (Hermes compares str(user_id)).
-  expect(readFileSync(path, "utf8")).toContain('"1"');
-  delete process.env.AV_SLASH_ADMIN_IDS;
-  expect(slashAccessKeys().allow_admin_from).toEqual([SLASH_NO_ADMIN]);
-  process.env.AV_SLASH_ADMIN_IDS = " , ";
-  expect(slashAccessKeys().group_allow_admin_from).toEqual([SLASH_NO_ADMIN]);
+  expect(extra.allow_admin_from).toEqual([SLASH_NO_ADMIN]);
+  expect(extra.group_allow_admin_from).toEqual([SLASH_NO_ADMIN]);
+  expect(slashAccessKeys()).toEqual(SENTINEL_KEYS);
+  expect(readFileSync(join(REPO_ROOT, "install", "config.ts"), "utf8")).not.toContain("AV_SLASH_ADMIN_IDS");
 });
 
-test("a non-mapping telegram block is left alone with a warning", () => {
-  const path = withText("platforms:\n  telegram: oops\n");
-  configureSlashAccess();
-  expect(readFileSync(path, "utf8")).toBe("platforms:\n  telegram: oops\n");
+test("S2: the four keys are deleted from every block Hermes may read over platforms.telegram", () => {
+  const competing = { allow_admin_from: [], user_allowed_commands: ["model"], require_mention: true };
+  const path = withText(
+    YAML.stringify({
+      telegram: { ...competing, extra: { group_user_allowed_commands: ["model"], keep: 1 } },
+      gateway: {
+        telegram: { group_allow_admin_from: [], extra: { allow_admin_from: [], keep: 2 } },
+        platforms: { telegram: { ...competing, extra: { group_allow_admin_from: [] } } },
+      },
+    }),
+  );
+  expect(configureSlashAccess()).toBeNull();
+  const doc = read(path);
+  for (const block of [doc.telegram, doc.telegram.extra, doc.gateway.telegram, doc.gateway.telegram.extra,
+    doc.gateway.platforms.telegram, doc.gateway.platforms.telegram.extra]) {
+    for (const key of SLASH_ACCESS_KEYS) expect(block).not.toHaveProperty(key);
+  }
+  expect(doc.telegram.require_mention).toBe(true);
+  expect(doc.telegram.extra.keep).toBe(1);
+  expect(doc.gateway.telegram.extra.keep).toBe(2);
+  expect(doc.platforms.telegram.extra).toEqual(SENTINEL_KEYS);
+  expect(logged()).toContain("→ slash access: removed telegram.allow_admin_from");
+  expect(logged()).toContain("→ slash access: removed gateway.telegram.extra.allow_admin_from");
+  expect(logged()).toContain("→ slash access: removed gateway.platforms.telegram.user_allowed_commands");
+});
+
+test("S3: an uneditable level writes nothing and returns the reason", () => {
+  for (const [text, why] of [
+    ["platforms:\n  telegram: oops\n", "platforms.telegram is not a mapping"],
+    ["base: &b {a: 1}\nplatforms:\n  telegram:\n    extra:\n      <<: *b\n", 'YAML merge key "<<" under platforms.telegram.extra'],
+    ["base: &b {a: 1}\ntelegram:\n  <<: *b\n", 'YAML merge key "<<" under telegram'],
+    ["- a list\n", "the top level of config.yaml is not a mapping"],
+  ] as const) {
+    const path = withText(text);
+    expect(configureSlashAccess()).toBe(why);
+    expect(readFileSync(path, "utf8")).toBe(text);
+  }
   expect(logged()).toContain("slash access NOT configured");
+  expect(logged()).not.toContain("residents may run");
 });
 
-test("a root telegram: block holding a slash key is warned about, not edited", () => {
-  const path = withText(YAML.stringify({ telegram: { allow_admin_from: ["5"] } }));
-  configureSlashAccess();
-  expect(read(path).telegram).toEqual({ allow_admin_from: ["5"] });
-  expect(logged()).toContain("telegram sets allow_admin_from");
+test("S3: recordSlashAccessStatus sets the field in this run's status file, null on a clean run", () => {
+  const home = mkdtempSync(join(tmpdir(), "agentvillage-slash-status-"));
+  expect(recordSlashAccessStatus(home, "x")).toBe(false); // no status file written this run
+  writeInstallStatus(home, []);
+  expect(recordSlashAccessStatus(home, "platforms.telegram is not a mapping")).toBe(true);
+  expect(JSON.parse(readFileSync(installStatusPath(home), "utf8"))).toMatchObject({
+    version: 1, cron_failed: [], slash_access_failed: "platforms.telegram is not a mapping",
+  });
+  writeInstallStatus(home, []);
+  recordSlashAccessStatus(home, null);
+  expect(JSON.parse(readFileSync(installStatusPath(home), "utf8")).slash_access_failed).toBeNull();
+});
+
+test("S3: install.ts runs every other step, records slash_access_failed and exits non-zero", () => {
+  const home = mkdtempSync(join(tmpdir(), "agentvillage-slash-install-"));
+  const fakeHermes = join(home, "fake-hermes");
+  writeFileSync(fakeHermes, "#!/bin/sh\nexit 127\n");
+  chmodSync(fakeHermes, 0o755);
+  // A scalar telegram block is turned into a mapping by configureHostedGateway first; a merge key is not.
+  writeFileSync(join(home, "config.yaml"), "base: &b {a: 1}\nplatforms:\n  telegram:\n    extra:\n      <<: *b\n");
+  const env: Record<string, string | undefined> = { ...process.env, HOME: home, HERMES_HOME: home, HERMES_BIN: fakeHermes };
+  for (const key of ["AV_APPROVAL_ENABLED", "AV_RECALL_ENABLED", "AV_SLASH_ADMIN_IDS"]) delete env[key];
+  const run = Bun.spawnSync({
+    cmd: ["bun", join(REPO_ROOT, "install", "install.ts"), "--no-restart", "--skip-crons", "--skip-index"],
+    cwd: REPO_ROOT,
+    env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const stdout = run.stdout.toString();
+  expect(run.exitCode).toBe(1);
+  const why = 'YAML merge key "<<" under platforms.telegram.extra';
+  expect(stdout).toContain(`agentvillage-install: slash_access_failed=${JSON.stringify(why)}`);
+  expect(stdout).toContain("✓ installed"); // the remaining steps ran first
+  expect(existsSync(join(home, "AGENTS.md"))).toBe(true);
+  expect(JSON.parse(readFileSync(installStatusPath(home), "utf8")).slash_access_failed).toBe(why);
 });
 
 /** The mutation check: adding any admin-only name (e.g. `model`) to the resident list fails here. */
