@@ -394,6 +394,107 @@ export function disableTelegramLinkPreviews(): void {
   console.log(`→ set platforms.telegram.extra.${key}: true (no link previews on signed links)${note}`);
 }
 
+/**
+ * SEC-6: the slash commands a resident may run. Every other command, built-in or plugin, is
+ * admin-only under Hermes's slash access control: `/model`, `/reasoning`, `/fast`, `/yolo`,
+ * `/config`, `/plugins`, `/skills`, `/cron`, `/reload`, `/update`, `/tools` and the rest. Names are
+ * Hermes canonical names (`hermes_cli/commands.py` `CommandDef`); aliases resolve to them first.
+ */
+export const RESIDENT_SLASH_COMMANDS: readonly string[] = Object.freeze([
+  // session
+  "start", "new", "clear", "history", "save", "retry", "undo", "title", "compress", "stop", "pause",
+  "approve", "deny", "btw", "queue", "steer", "status", "context", "resume", "sessions", "topic",
+  // info
+  "help", "whoami", "usage", "version", "commands", "insights", "image",
+  // display
+  "personality", "timestamps", "verbose", "busy", "footer",
+  // tools
+  "memory",
+]);
+
+/** Admin id that matches no Telegram user: a non-empty admin list is what turns gating on. */
+export const SLASH_NO_ADMIN = "av-approval:no-admin";
+
+/** Admin ids from `AV_SLASH_ADMIN_IDS` (comma list, trimmed), else the sentinel. */
+export function slashAdminIds(): string[] {
+  const ids = (process.env.AV_SLASH_ADMIN_IDS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  return ids.length ? ids : [SLASH_NO_ADMIN];
+}
+
+/** The four `platforms.telegram.extra` keys `configureSlashAccess` writes (admin lists are per scope in Hermes). */
+export function slashAccessKeys(): Record<string, string[]> {
+  const admins = slashAdminIds();
+  return {
+    allow_admin_from: admins,
+    group_allow_admin_from: [...admins],
+    user_allowed_commands: [...RESIDENT_SLASH_COMMANDS],
+    group_user_allowed_commands: [...RESIDENT_SLASH_COMMANDS],
+  };
+}
+
+/**
+ * SEC-6: residents may run only `RESIDENT_SLASH_COMMANDS` (plus Hermes's `/help`, `/whoami` floor);
+ * `/model` and every model, cost or config command is admin-only. Hermes v2026.9.24
+ * `gateway/slash_access.py` reads the four keys from the platform's `extra` per scope (dm, group)
+ * and gates both dispatch paths (`gateway/run_busy.py` `_check_slash_access`); a non-admin gets
+ * "⛔ /model is admin-only here. You can run: …". Plain chat is never gated.
+ *
+ * Written to `platforms.telegram.extra`, as `keepTelegramBacklogOnColdBoot` does. A safety setting
+ * like `disableTelegramLinkPreviews`: the four keys are overwritten every run (other keys kept).
+ * Hermes's shared-key bridge copies a top-level `platforms.telegram.<key>` over `extra`, so such a
+ * copy is overwritten too. A root `telegram:`, `gateway.telegram` or `gateway.platforms.telegram`
+ * block holding one of the keys gets a warning and is not edited. Skips with a warning when a level
+ * is not a mapping or holds a YAML merge key. Idempotent: an unchanged file is not rewritten.
+ */
+export function configureSlashAccess(): void {
+  const doc: unknown = readConfig();
+  const skip = (why: string): void => console.log(`→ warning: ${why}; slash access NOT configured`);
+  if (!isMapping(doc)) return skip("the top level of config.yaml is not a mapping");
+
+  const section = (parent: Record<string, unknown>, name: string, path: string): Record<string, unknown> | string => {
+    const value = parent[name] ?? {};
+    if (!isMapping(value)) return `${path} is not a mapping`;
+    if ("<<" in value) return `YAML merge key "<<" under ${path}; set it by hand`;
+    return value;
+  };
+  const rawPlatforms = section(doc, "platforms", "platforms");
+  if (typeof rawPlatforms === "string") return skip(rawPlatforms);
+  const rawTelegram = section(rawPlatforms, "telegram", "platforms.telegram");
+  if (typeof rawTelegram === "string") return skip(rawTelegram);
+  const rawExtra = section(rawTelegram, "extra", "platforms.telegram.extra");
+  if (typeof rawExtra === "string") return skip(rawExtra);
+
+  const want = slashAccessKeys();
+  const gateway = isMapping(doc.gateway) ? doc.gateway : {};
+  const others: Array<[string, unknown]> = [
+    ["telegram", doc.telegram],
+    ["gateway.telegram", gateway.telegram],
+    ["gateway.platforms.telegram", isMapping(gateway.platforms) ? gateway.platforms.telegram : undefined],
+  ];
+  for (const [path, block] of others) {
+    if (!isMapping(block)) continue;
+    const extraBlock = isMapping(block.extra) ? block.extra : {};
+    for (const key of Object.keys(want)) {
+      if (key in block || key in extraBlock) {
+        console.log(`→ warning: ${path} sets ${key}; Hermes may read it over platforms.telegram, check it by hand`);
+      }
+    }
+  }
+
+  const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+  const extra = { ...rawExtra, ...want };
+  const telegram: Record<string, unknown> = { ...rawTelegram, extra };
+  for (const key of Object.keys(want)) if (key in rawTelegram) telegram[key] = want[key];
+  if (!same(telegram, rawTelegram)) {
+    doc.platforms = { ...rawPlatforms, telegram };
+    writeConfig(doc);
+  }
+  const admins = want.allow_admin_from![0] === SLASH_NO_ADMIN ? "no admin ids" : `${want.allow_admin_from!.length} admin id(s)`;
+  console.log(
+    `→ slash access: residents may run ${RESIDENT_SLASH_COMMANDS.length} commands; /model and config commands are admin-only (${admins})`,
+  );
+}
+
 /** The village's zone: every schedule this overlay installs is written in it (DATA-314). */
 export const VILLAGE_TIMEZONE = "Asia/Kolkata";
 /** Names Hermes's zoneinfo resolves to the village's zone (the IANA link included). */

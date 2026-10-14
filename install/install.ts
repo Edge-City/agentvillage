@@ -71,6 +71,7 @@ import {
   configureDashboardAuth,
   configureHostedGateway,
   configureModelFallback,
+  configureSlashAccess,
   configureStt,
   configureVillageTimezone,
   disableTelegramLinkPreviews,
@@ -305,6 +306,7 @@ function main(): void {
   configureModelFallback();
   configureStt();
   configureHostedGateway();
+  configureSlashAccess();
   keepTelegramBacklogOnColdBoot();
   disableTelegramLinkPreviews();
   configureVillageTimezone();
