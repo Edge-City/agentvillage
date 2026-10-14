@@ -357,7 +357,22 @@ test("SEC-5 (a): the forward is one PR from bot/india-refs, never a push to main
   // M2: a branch head is kept only for the same tree over the same main; the file list comes from the pushed head.
   expect(commands).toContain(`[ "$(git rev-parse 'FETCH_HEAD^{tree}')" = "$(git rev-parse 'HEAD^{tree}')" ]`);
   expect(commands).toContain(`[ "$(git cat-file -p FETCH_HEAD | sed -n 's/^parent //p')" = "$base" ]`);
-  expect(commands).not.toContain("git log -1 --format=%B FETCH_HEAD");
+  expect(commands).not.toMatch(/grep -qF[^\n]*UPSTREAM/);
+  // N2: a kept head is the bot's own commit: author github-actions[bot], parent main, the message this run builds.
+  const own = 'git log -1 --format=\'%an <%ae>\' FETCH_HEAD)" = "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>" ]; then';
+  expect(commands).toContain(own);
+  // The fetched head's parent is checked before anything is read from it (the timestamp reuse sits inside this block).
+  expect(commands).toContain(`if git fetch --quiet --depth=1 origin "refs/heads/$BRANCH" 2>/dev/null \\\n            && [ "$(git cat-file -p FETCH_HEAD | sed -n 's/^parent //p')" = "$base" ] \\\n            && [ "$(${own}`);
+  expect(commands).toMatch(/if \[ "\$own" = yes \] \\\n\s*&& \[ "\$\(git rev-parse 'FETCH_HEAD\^\{tree\}'\)" = "\$\(git rev-parse 'HEAD\^\{tree\}'\)" \] \\\n\s*&& \[ "\$\(git cat-file -p FETCH_HEAD \| sed -n 's\/\^parent \/\/p'\)" = "\$base" \] \\\n\s*&& \[ "\$\(git log -1 --format=%B FETCH_HEAD\)" = "\$\(git log -1 --format=%B HEAD\)" \]; then/);
+  // S5: synced_at is reused only from the bot's own head over main (checked first), as a whole-string strict
+  // ISO-8601 UTC value that date parses and that lies between the upstream commit date and now.
+  const ownAt = commands.indexOf(own);
+  expect(ownAt).toBeGreaterThan(commands.indexOf('git fetch --quiet --depth=1 origin "refs/heads/$BRANCH"'));
+  expect(commands.indexOf("theirs=$(git show")).toBeGreaterThan(ownAt);
+  expect(commands).toContain("iso='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,3})?Z$'");
+  expect(commands).toContain('if [[ $theirs =~ $iso ]] && t=$(date -u -d "$theirs" +%s 2>/dev/null) \\');
+  expect(commands).toContain('&& [ "$t" -ge "$(date -u -d "$UPSTREAM_DATE" +%s)" ] && [ "$t" -le "$(date -u +%s)" ]; then');
+  expect(commands).not.toMatch(/printf '%s' "\$theirs" \| grep/);
   expect(commands).toContain('files=$(git diff --name-status "$base" "$head")');
   // M3 + S3: the head and the references tree are named in the body, the title and the commit.
   expect(commands).toContain('echo "- Head: $head"');
