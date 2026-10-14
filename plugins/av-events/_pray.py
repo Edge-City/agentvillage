@@ -46,9 +46,11 @@ not a credential.
 
 **The wire.** `POST {CONTROL_PLANE_URL}/tenants/{tenant}/prayers` with
 `Authorization: Bearer $AV_EVENTS_TOKEN`, the tenant being `AV_TENANT_ID`, else
-`TENANT_ID` (a UUID, lower-cased). `CONTROL_PLANE_URL` must be an https origin;
-plain http only to a loopback host (tests and local runs). No credentials,
-query, fragment or path in it. The body is compact JSON (UTF-8 as is), at most
+`TENANT_ID` (a UUID, lower-cased), from the box's environment only.
+`CONTROL_PLANE_URL` must be https on a `CP_HOSTS` host, pinned exactly as
+directory.ts pins it (port 443, no credentials, query, fragment or path);
+plain http only to a loopback host (tests and local runs). The arguments are
+a closed object: no tenant, URL, host or header can be passed in. The body is compact JSON (UTF-8 as is), at most
 4 KiB: `{ask, reason, idempotency_key}`, the key a uuid4 minted per call.
 Each attempt has a 10 s deadline (8 s per socket operation). Redirects are
 refused, never followed, and proxy variables are ignored
@@ -85,6 +87,7 @@ import threading
 import time
 import unicodedata
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from typing import Any, Callable, Optional
@@ -101,6 +104,10 @@ URL_ENV = "CONTROL_PLANE_URL"
 TOKEN_ENV = "AV_EVENTS_TOKEN"
 PRAYERS_PATH = "/tenants/{tenant}/prayers"
 SESSION_KIND_HEADER = "X-AV-Session-Kind"
+#: directory.ts `CP_HOSTS` (skills/edgeos/scripts/directory.ts): the only hosts a box credential is sent to
+#: over https, exact hostname, port 443 or none. Plain http only to a loopback host (tests, local runs).
+CP_HOSTS = frozenset({"control-plane-production-606c.up.railway.app"})
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 #: Per attempt; each socket operation is bounded below it.
 DEADLINE_S = 10.0
@@ -403,9 +410,29 @@ _sleep: Callable[[float], None] = time.sleep
 _new_key: Callable[[], str] = lambda: str(uuid.uuid4())  # noqa: E731
 
 
+def cp_origin(raw: str) -> Optional[str]:
+    """directory.ts `controlPlaneBase`: https on a `CP_HOSTS` host, port 443 or none, no userinfo, no path
+    beyond `/`, no query or fragment. Plus plain http to a loopback host (tests, local runs)."""
+    if not raw or "?" in raw or "#" in raw or any(ord(ch) <= 0x20 or ord(ch) == 0x7F for ch in raw):
+        return None
+    try:
+        parts = urllib.parse.urlsplit(raw)
+        host = (parts.hostname or "").lower()
+        port = parts.port
+    except ValueError:
+        return None
+    if not host or parts.username is not None or parts.password is not None or parts.path not in ("", "/"):
+        return None
+    if parts.scheme == "https" and host in CP_HOSTS and port in (None, 443):
+        return f"https://{host}"
+    if parts.scheme == "http" and host in LOOPBACK_HOSTS:
+        return f"http://{parts.netloc}"
+    return None
+
+
 def endpoint() -> tuple[Optional[str], Optional[str], Optional[str]]:
     """`(url, token, None)`, or `(None, None, "not_configured")`."""
-    origin = _ri._origin(env(URL_ENV).strip(), ("", "/"))  # noqa: SLF001 - one origin rule for the plugin
+    origin = cp_origin(env(URL_ENV).strip())
     token = env(TOKEN_ENV)
     tenant = (env("AV_TENANT_ID") or env("TENANT_ID")).strip().lower()
     if origin is None or not token or not TENANT.fullmatch(tenant):
@@ -667,7 +694,9 @@ __all__ = [
     "TOOL_DESCRIPTION",
     "TOOL_NAME",
     "TOOL_SCHEMA",
+    "CP_HOSTS",
     "answer",
+    "cp_origin",
     "endpoint",
     "make_handler",
     "normalize_reason",

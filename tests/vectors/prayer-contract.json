@@ -21,6 +21,10 @@
     },
     "body": "compact JSON, UTF-8 as is (no \\u escapes for non-ASCII), keys ask, reason, idempotency_key and no others",
     "max_body_bytes": 4096,
+    "cp_hosts": [
+      "control-plane-production-606c.up.railway.app"
+    ],
+    "origin": "https on a cp_hosts host only (exact hostname, port 443 or none, no userinfo, path, query or fragment), as skills/edgeos/scripts/directory.ts; plain http only to loopback (tests)",
     "deadline_s": 10,
     "attempts": "at most 2; the retry (after a transport failure, a deadline, a cut answer or a 5xx) sends the same bytes, so the same idempotency_key",
     "redirects": "refused, never followed"
@@ -577,5 +581,6 @@
       },
       "attempts": 2
     }
-  ]
+  ],
+  "answer_projection": "2xx: only prayer_id (lower-case uuid), status (a tenant_prayers status, else received), duplicate_open (only if true), plus the tool's fixed review and tell_resident; every other field dropped. Errors: an allowlisted code, retry_after_s and a fixed message; never the upstream body"
 }

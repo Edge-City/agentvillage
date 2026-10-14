@@ -75,7 +75,6 @@ import threading
 import time
 import unicodedata
 import urllib.error
-import urllib.parse
 import urllib.request
 from typing import Any, Callable, Optional
 
@@ -91,9 +90,8 @@ URL_ENV = "CONTROL_PLANE_URL"
 #: cp#227's box credential (directory.ts): the attendee key the box already holds.
 CREDENTIAL_ENV = "EDGEOS_API_KEY"
 ASK_PATH = "/tenants/{tenant}/village/ask"
-#: directory.ts `CP_HOSTS`: the only hosts the key is sent to over https.
-CP_HOSTS = frozenset({"control-plane-production-606c.up.railway.app"})
-LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+#: directory.ts `CP_HOSTS` (`_pray.CP_HOSTS`): the only hosts the key is sent to over https.
+CP_HOSTS = _pray.CP_HOSTS
 
 #: The cp waits about 60 s on the app; the box waits a little longer.
 DEADLINE_S = 65.0
@@ -237,24 +235,8 @@ def _join(worker: threading.Thread, deadline: float) -> None:
 _sleep: Callable[[float], None] = time.sleep
 
 
-def cp_origin(raw: str) -> Optional[str]:
-    """directory.ts `controlPlaneBase`: https on a `CP_HOSTS` host, port 443 or none, no userinfo, no path
-    beyond `/`, no query or fragment. Plus plain http to a loopback host (tests, local runs)."""
-    if not raw or "?" in raw or "#" in raw or any(ord(ch) <= 0x20 or ord(ch) == 0x7F for ch in raw):
-        return None
-    try:
-        parts = urllib.parse.urlsplit(raw)
-        host = (parts.hostname or "").lower()
-        port = parts.port
-    except ValueError:
-        return None
-    if not host or parts.username is not None or parts.password is not None or parts.path not in ("", "/"):
-        return None
-    if parts.scheme == "https" and host in CP_HOSTS and port in (None, 443):
-        return f"https://{host}"
-    if parts.scheme == "http" and host in LOOPBACK_HOSTS:
-        return f"http://{parts.netloc}"
-    return None
+#: One host rule for both tools (`_pray.cp_origin`, directory.ts's).
+cp_origin = _pray.cp_origin
 
 
 def endpoint() -> tuple[Optional[str], Optional[str], Optional[str]]:

@@ -1856,7 +1856,10 @@ reviews every request before anything changes; the tool itself grants and emits 
   (NFC and trimmed, 1-600 code points, at most 8 lines, no control characters but newlines, no
   email, phone-like number, `@handle` or `t.me/` link). The rules and their cases are the shared
   contract vector `tests/vectors/prayer-contract.json`; the control plane copies it.
-- **The wire:** `CONTROL_PLANE_URL` must be an https origin (plain http only to a loopback host).
+- **The wire:** `CONTROL_PLANE_URL` must be https on a `CP_HOSTS` host, pinned as directory.ts pins it
+  (plain http only to a loopback host, for tests); the tenant comes only from the box's environment, and
+  the arguments are a closed object (no tenant, URL, host or header). Only allowlisted answer fields
+  (`prayer_id`, `status`, `duplicate_open`) reach the agent; errors carry a fixed message, never the upstream body.
   The JSON body is at most 4 KiB, each attempt has a 10 s deadline, and redirects and proxy variables are
   refused (`_core.NO_REDIRECT_OPENER`). A transport failure, a deadline, a cut answer or a 5xx is
   retried once with the same idempotency key, so the control plane answers the retry with the outcome
