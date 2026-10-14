@@ -169,6 +169,8 @@ GATED_MATCHERS: tuple[str, ...] = (
     "text_to_speech",
     "web_search",
     "x_search",
+    # MINI-APPS (rc41, ov#312 re-cut): the village-bridge plugin's entry tool, exact name -> marketplace.app.read.
+    "village",
 )
 #: The installer's per-entry timeout.
 ENTRY_TIMEOUT_S = 300

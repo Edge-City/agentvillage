@@ -183,7 +183,7 @@ describe("install.ts runs the stages in that order", () => {
     const block = py.slice(py.indexOf("GATED_MATCHERS: tuple[str, ...] = ("), py.indexOf("\n)\n", py.indexOf("GATED_MATCHERS")));
     const listed = [...block.matchAll(/^ {4}"([^"]+)",$/gm)].map((m) => m[1]);
     expect(listed).toEqual([...APPROVAL_GATED_TOOLS]);
-    expect(listed).toHaveLength(35);
+    expect(listed).toHaveLength(36);
   });
 });
 

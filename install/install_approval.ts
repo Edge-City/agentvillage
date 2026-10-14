@@ -166,6 +166,15 @@ export const APPROVAL_PLUGIN = "av-approval";
  * records every call as `tool.call`, and the hook is for actions. Each
  * routed call costs one shim round trip and is blocked while the gate is
  * unverified, as every entry here is.
+ *
+ * MINI-APPS (rc41, ov#312 re-cut; approval@edge CLAIMS L6285): `village`, the
+ * village-bridge plugin's one entry tool, exact name, is the 36th entry. The
+ * resident policy maps it to `marketplace.app.read` (read-only: the app
+ * catalogue and the tenant's own installs). A Gold Star send through it also
+ * needs the plugin's own manual `marketplace.app.action` grant from the daemon
+ * (plugins/village-bridge/_mini_apps.py). The control plane accepts this list
+ * (36, 3cea251a) and the previous one without `village` (35, 9cb621bb) until
+ * the roll after rc41.
  */
 export const APPROVAL_GATED_TOOLS = [
   "terminal",
@@ -203,6 +212,7 @@ export const APPROVAL_GATED_TOOLS = [
   "text_to_speech",
   "web_search",
   "x_search",
+  "village",
 ] as const;
 
 /**
