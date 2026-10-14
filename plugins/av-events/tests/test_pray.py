@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import logging
 import sys
 import threading
@@ -41,6 +42,28 @@ SESSION_ENV = ("HERMES_SESSION_CHAT_TYPE", "HERMES_CRON_SESSION", "HERMES_PLATFO
                "HERMES_SESSION_SOURCE", "HERMES_SESSION_ID", "HERMES_CRON_AUTO_DELIVER_PLATFORM",
                "HERMES_CRON_AUTO_DELIVER_CHAT_ID", "TELEGRAM_HOME_CHANNEL", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
                "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy")
+
+
+#: Hermes's cron task id for the fake job below (`cron:{job_id}:{execution_id}`, scheduler.py:2302).
+CRON_TASK_ID = "cron:job1:e1"
+
+
+class FakeCron:
+    """Hermes's `get_job` and `_resolve_delivery_targets`, faked: `lanes[job_id] = (deliver, failure)`,
+    each a list of resolved targets (or an exception / non-list to return)."""
+
+    def __init__(self) -> None:
+        home = {"platform": "telegram", "chat_id": HOME_DM, "thread_id": None}
+        self.lanes: dict = {"job1": ([home], [home])}
+
+    def get_job(self, job_id: str):
+        return {"id": job_id} if job_id in self.lanes else None
+
+    def resolve(self, job: dict, *, for_failure: bool = False):
+        value = self.lanes[job["id"]][1 if for_failure else 0]
+        if isinstance(value, BaseException):
+            raise value
+        return value
 
 
 # --------------------------------------------------------------------------
@@ -148,6 +171,9 @@ class ToolFireCtx:
 def pr(plugin, av, monkeypatch):
     module = sys.modules[f"{av.MODULE_NAME}._pray"]
     monkeypatch.setattr(module, "_sleep", lambda _s: None)
+    cron = FakeCron()
+    monkeypatch.setattr(sys.modules[f"{av.MODULE_NAME}._pray"], "_hermes_cron", lambda: (cron.get_job, cron.resolve))
+    module.fake_cron = cron  # tests reach it as <fixture>.fake_cron
     for name in SESSION_ENV:
         monkeypatch.delenv(name, raising=False)
     return module
@@ -182,8 +208,9 @@ def tctx(plugin, pr, cp, on):
     return ctx
 
 
-def call(ctx: ToolFireCtx, args: Any, *, session: str = SESSION) -> dict:
-    result = ctx.tools["pray"]["handler"](args, task_id="task-1", session_id=session)
+def call(ctx: ToolFireCtx, args: Any, *, session: str = SESSION, task_id: str = CRON_TASK_ID) -> dict:
+    """Hermes passes `task_id` to every handler; a cron run's is `cron:{job}:{execution}`. The DM path ignores it."""
+    result = ctx.tools["pray"]["handler"](args, task_id=task_id, session_id=session)
     assert isinstance(result, str)
     return json.loads(result)
 
@@ -1050,5 +1077,125 @@ def test_fc_the_allow_condition_is_the_one_line(pr):
     import inspect  # noqa: PLC0415
 
     source = inspect.getsource(pr.cron_delivers_privately)
-    assert source.count("return platform == \"telegram\"") == 1 and "return True" not in source
+    assert source.count('return targets == [("telegram", home, "")] and platform == "telegram" and chat == home') == 1
+    assert "return True" not in source
     assert "return True" not in inspect.getsource(pr._session_kind)
+
+
+# ---- ov#341 fix round 2: the job's FULL delivery spec (recheck S1) ------------------------
+
+HOME = {"platform": "telegram", "chat_id": HOME_DM, "thread_id": None}
+GROUP = {"platform": "telegram", "chat_id": "-1001234567890", "thread_id": None}
+
+
+def _cron_call(ctx, *, task_id: str = CRON_TASK_ID) -> dict:
+    return call(ctx, ARGS, session="cron_job1_1", task_id=task_id)
+
+
+@pytest.mark.parametrize("deliver,failure,allowed", [
+    ([HOME], [HOME], True),                                     # `telegram` / `telegram:<home>` / `origin`
+    ([HOME], [], True),                                         # failure_deliver: local
+    ([HOME, GROUP], [HOME, GROUP], False),                      # home first, then a group
+    ([GROUP, HOME], [GROUP, HOME], False),                      # home last
+    ([HOME, HOME], [HOME, HOME], True),                         # home twice: Hermes dedups, one DM target
+    ([HOME], [GROUP], False),                                   # the failure lane goes to a group
+    ([], [], False),                                            # local delivery: an empty list
+    ([HOME, {**HOME, "chat_id": "987654321"}], [HOME], False),  # home plus another DM
+    ([{**HOME, "thread_id": 7}], [{**HOME, "thread_id": 7}], False),  # a thread, not the DM itself
+    ([{**HOME, "platform": "discord"}], [{**HOME, "platform": "discord"}], False),
+])
+def test_r2_a_cron_is_allowed_only_when_its_whole_spec_is_the_home_dm(tctx, pr, cp, monkeypatch, deliver, failure,
+                                                                        allowed):
+    monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "")
+    pr.fake_cron.lanes["job1"] = (deliver, failure)
+    out = _cron_call(tctx)
+    if allowed:
+        assert out["status"] == "received" and cp.requests[0]["headers"]["x-av-session-kind"] == "cron"
+    else:
+        assert out["error"] == "group_session" and cp.requests == []
+
+
+@pytest.mark.parametrize("lanes", [
+    (RuntimeError("jobs.json unreadable"), [HOME]),   # the resolver raises
+    ([HOME], RuntimeError("failure lane broke")),
+    ("telegram:123456789", [HOME]),                    # not a list
+    ([HOME, "telegram"], [HOME]),                      # a target that is not a dict
+    ([{"chat_id": HOME_DM}], [HOME]),                  # no platform
+    (None, None),
+])
+def test_r2_an_unreadable_or_unparseable_spec_is_refused(tctx, pr, cp, monkeypatch, lanes):
+    monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "")
+    pr.fake_cron.lanes["job1"] = lanes
+    assert _cron_call(tctx)["error"] == "group_session" and cp.requests == []
+
+
+@pytest.mark.parametrize("task_id", ["task-1", "", "cron:", "cron:job1", "cron:nojob:e1", "cron:job1:e1:x",
+                                     "CRON:job1:e1", "cron:../job1:e1"])
+def test_r2_no_readable_cron_task_or_job_is_refused(tctx, cp, monkeypatch, task_id):
+    monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "")
+    assert _cron_call(tctx, task_id=task_id)["error"] == "group_session" and cp.requests == []
+
+
+def test_r2_hermes_itself_missing_is_refused(tctx, pr, cp, monkeypatch):
+    def missing():
+        raise ImportError("no module named cron")
+
+    monkeypatch.setattr(pr, "_hermes_cron", missing)
+    monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "")
+    assert _cron_call(tctx)["error"] == "group_session" and cp.requests == []
+
+
+def test_r2_the_published_target_must_also_be_the_home_dm(tctx, cp, monkeypatch):
+    monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "")
+    monkeypatch.setenv("HERMES_CRON_AUTO_DELIVER_CHAT_ID", "-1001234567890")
+    assert _cron_call(tctx)["error"] == "group_session" and cp.requests == []
+
+
+def test_r2_n3_a_non_numeric_home_is_refused_even_when_everything_matches(tctx, pr, cp, monkeypatch):
+    odd = {"platform": "telegram", "chat_id": "123:456", "thread_id": None}
+    pr.fake_cron.lanes["job1"] = ([odd], [odd])
+    monkeypatch.setenv("TELEGRAM_HOME_CHANNEL", "123:456")
+    monkeypatch.setenv("HERMES_CRON_AUTO_DELIVER_CHAT_ID", "123:456")
+    monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "")
+    assert _cron_call(tctx)["error"] == "group_session" and cp.requests == []
+
+
+def test_r2_n3_a_refused_cron_never_falls_through_to_the_dm_rule(tctx, pr, cp, monkeypatch):
+    pr.fake_cron.lanes["job1"] = ([HOME, GROUP], [HOME, GROUP])
+    monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "dm")  # forced; Hermes binds "" in cron
+    assert _cron_call(tctx)["error"] == "group_session" and cp.requests == []
+
+
+HERMES_REF = Path(os.environ.get("HERMES_AGENT_SRC") or Path.home() / "dev" / "hermes-agent-ref-v2026.9.24")
+
+
+@pytest.mark.skipif(not (HERMES_REF / "cron" / "scheduler_delivery.py").is_file(), reason="Hermes source not available")
+def test_r2_the_fakes_match_hermes_own_resolver(tmp_path):
+    """Hermes v2026.9.24's `_resolve_delivery_targets`, run in a child (`python -I`, a scratch HERMES_HOME),
+    gives the lists the fake above uses: a multi-target spec keeps every target, a duplicate home is one."""
+    import subprocess  # noqa: PLC0415
+
+    script = (
+        "import json,sys; sys.path.insert(0, sys.argv[1])\n"
+        "from cron import scheduler_delivery as sd\n"
+        "out = {}\n"
+        "for d in ['telegram:123456789,telegram:-1001234567890', 'telegram:-1001234567890,telegram:123456789',\n"
+        "          'telegram:123456789,telegram:123456789', 'telegram', 'origin', 'local', '',\n"
+        "          'telegram,telegram:-1001234567890']:\n"
+        "    job = {'id': 'j', 'deliver': d, 'origin': {'platform': 'telegram', 'chat_id': '123456789'}}\n"
+        "    out[d] = [[t['platform'], str(t['chat_id']), t.get('thread_id')] for t in sd._resolve_delivery_targets(job)]\n"
+        "print(json.dumps(out))\n"
+    )
+    env = {"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path), "HERMES_HOME": str(tmp_path),
+           "TELEGRAM_HOME_CHANNEL": "123456789"}
+    done = subprocess.run([sys.executable, "-I", "-c", script, str(HERMES_REF)], capture_output=True, text=True,
+                          env=env, timeout=120)
+    assert done.returncode == 0, done.stderr[-2000:]
+    got = json.loads(done.stdout.strip().splitlines()[-1])
+    home, group = ["telegram", "123456789", None], ["telegram", "-1001234567890", None]
+    assert got["telegram:123456789,telegram:-1001234567890"] == [home, group]
+    assert got["telegram:-1001234567890,telegram:123456789"] == [group, home]
+    assert got["telegram,telegram:-1001234567890"] == [home, group]
+    assert got["telegram:123456789,telegram:123456789"] == [home]
+    assert got["telegram"] == [home] and got["origin"] == [home]
+    assert got["local"] == [] and got[""] == []

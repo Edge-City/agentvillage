@@ -227,7 +227,8 @@ MESSAGES: dict[str, str] = {
         "other (with neither); reason is required."
     ),
     "reason_invalid": (
-        "Not sent: the reason must be 1-600 characters and at most 8 lines, with no control characters."
+        "Not sent: the reason must be 1-600 characters and at most 8 lines of plain text, with no control or "
+        "invisible characters (emoji with variation selectors or joiners count as invisible here)."
     ),
     "reason_contact": (
         "Not sent: the reason holds contact details (an email, a phone number, an @handle or a t.me link). Write "
@@ -277,7 +278,8 @@ def _absent(value: Any) -> bool:
 #: U+E0001, U+E0020-E007F), private-use, surrogate and unassigned code point, every control but `\n`,
 #: the variation selectors U+FE00-FE0F and U+E0100-E01EF, U+034F, the Hangul fillers, and U+2028/U+2029.
 _VARIATION_SELECTORS = ((0xFE00, 0xFE0F), (0xE0100, 0xE01EF))
-_ALSO_INVISIBLE = frozenset({0x034F, 0x115F, 0x1160, 0x3164, 0xFFA0, 0x2028, 0x2029})
+_ALSO_INVISIBLE = frozenset({0x034F, 0x115F, 0x1160, 0x180B, 0x180C, 0x180D, 0x180F, 0x2800, 0x3164, 0xFFA0,
+                             0x2028, 0x2029})
 
 
 def invisible(ch: str) -> bool:
@@ -394,38 +396,87 @@ def _text_or_none(value: Any) -> Optional[str]:
     return value.strip().lower() if isinstance(value, str) else None
 
 
-def cron_delivers_privately() -> bool:
-    """approval@edge's ruling (CLAIMS L6599, ov#341 refute S3), FAIL CLOSED: a cron run may use these
-    tools only when its auto-delivery target is positively the resident's own Telegram DM. Hermes
-    binds the job's target per task (`cron/scheduler.py` `_reload_dotenv_and_publish_delivery_target`:
-    `HERMES_CRON_AUTO_DELIVER_PLATFORM` / `_CHAT_ID`); the resident's DM is `TELEGRAM_HOME_CHANNEL`.
-    Every other case is False: no target (local delivery), an empty or unreadable value, an exception,
-    another platform, a group or channel (a negative id), or any chat that is not the home DM."""
+#: Hermes's cron task id, `cron:{job_id}:{execution_id}` (`cron/scheduler.py:2302`), handed to every
+#: tool handler as `task_id` (`model_tools.py:825`, `tools/registry.py` dispatch).
+CRON_TASK = re.compile(r"cron:([A-Za-z0-9][A-Za-z0-9_.-]{0,127}):[A-Za-z0-9_.-]{1,128}")
+
+
+def _hermes_cron() -> tuple[Callable[[str], Any], Callable[..., Any]]:
+    """Hermes's own job loader and delivery resolver (v2026.9.24: `cron/jobs.py:1860` `get_job`,
+    `cron/scheduler_delivery.py:1071` `_resolve_delivery_targets`). Tests replace this. Absent or
+    renamed in another Hermes: the import or attribute error refuses."""
+    from cron import jobs, scheduler_delivery  # noqa: PLC0415 - Hermes, in-process on a box
+
+    return jobs.get_job, scheduler_delivery._resolve_delivery_targets  # noqa: SLF001
+
+
+def cron_delivery_targets(task_id: Any) -> Optional[list[tuple[str, str, str]]]:
+    """Every target the job of this cron run delivers to, through BOTH lanes, resolved the way Hermes
+    resolves them when it delivers (`_resolve_delivery_targets(job)` for the response, and
+    `(job, for_failure=True)` for failure notices: `failure_deliver`, else `deliver`;
+    `scheduler_delivery.py:1060-1103`): the comma-separated spec split, `all`/`origin`/home tokens
+    expanded, deduplicated by (platform, chat id, thread id) as Hermes does (`:1093-1096`). Hermes
+    publishes only the FIRST of them in `HERMES_CRON_AUTO_DELIVER_*` (`:1106-1109`,
+    `scheduler.py:2343-2349`) but `_deliver_result` sends to all (`:1906-1915`), so the full list is
+    what counts (ov#341 recheck S1). None when anything cannot be read: no cron task id, no job, a
+    resolver that fails or answers something else."""
+    match = CRON_TASK.fullmatch(task_id) if isinstance(task_id, str) else None
+    if match is None:
+        return None
+    get_job, resolve = _hermes_cron()
+    job = get_job(match.group(1))
+    if not isinstance(job, dict):
+        return None
+    targets: set[tuple[str, str, str]] = set()
+    for for_failure in (False, True):
+        lane = resolve(job, for_failure=for_failure)
+        if not isinstance(lane, list):
+            return None
+        for target in lane:
+            if not isinstance(target, dict) or not isinstance(target.get("platform"), str):
+                return None
+            thread = target.get("thread_id")
+            targets.add((target["platform"].strip().lower(), str(target.get("chat_id")).strip(),
+                         "" if thread is None else str(thread).strip()))
+    return sorted(targets)
+
+
+def cron_delivers_privately(task_id: Any = None) -> bool:
+    """approval@edge's ruling (CLAIMS L6599, ov#341 refute S3 and recheck S1), FAIL CLOSED: a cron run
+    may use these tools only when its job's FULL delivery spec, both lanes, resolves to exactly one
+    target and that target is the resident's own Telegram DM (`TELEGRAM_HOME_CHANNEL`, a positive
+    id, no thread), and the target Hermes published for this run is that same DM. A duplicate of the
+    home DM in the spec is allowed: Hermes deduplicates it and delivers once. Every other case is
+    False: more than one target, none (local delivery), another DM, a group or channel, another
+    platform, an unparseable or unreadable spec, no cron task id, an exception."""
     try:
+        home = _text_or_none(env(HOME_CHANNEL_ENV))
+        if home is None or _TELEGRAM_DM_CHAT.fullmatch(home) is None:
+            return False
         platform = _text_or_none(_session_value("HERMES_CRON_AUTO_DELIVER_PLATFORM"))
         chat = _text_or_none(_session_value("HERMES_CRON_AUTO_DELIVER_CHAT_ID"))
-        home = _text_or_none(env(HOME_CHANNEL_ENV))
+        targets = cron_delivery_targets(task_id)
         # THE allow condition, and the only one:
-        return platform == "telegram" and chat is not None and chat == home and _TELEGRAM_DM_CHAT.fullmatch(chat) is not None
+        return targets == [("telegram", home, "")] and platform == "telegram" and chat == home
     except Exception:  # noqa: BLE001 - unreadable is refused
         return False
 
 
-def session_kind(session_id: Any) -> Optional[str]:
+def session_kind(session_id: Any, task_id: Any = None) -> Optional[str]:
     """`dm`, `cron`, or None (refused), FAIL CLOSED for `pray` and `ask_village` alike: any exception,
     unknown, missing, empty or unexpected value is None. Allowed only:
     - `cron`: a session positively seen as the agent's own scheduled run (a `cron_` id, or
       `platform=cron`, up its delegation chain, or Hermes's `HERMES_CRON_SESSION=1`) AND
-      `cron_delivers_privately()`;
+      `cron_delivers_privately(task_id)` (its job's whole delivery spec is the home DM alone);
     - `dm`: a session whose bound chat type is positively a direct chat (`DIRECT_CHAT_TYPES`).
     An empty chat type (a local CLI, an unbound task) is refused."""
     try:
-        return _session_kind(session_id)
+        return _session_kind(session_id, task_id)
     except Exception:  # noqa: BLE001 - unreadable is refused
         return None
 
 
-def _session_kind(session_id: Any) -> Optional[str]:
+def _session_kind(session_id: Any, task_id: Any) -> Optional[str]:
     sid = session_id.strip() if isinstance(session_id, str) else ""
     bound_id = _session_value("HERMES_SESSION_ID")
     idents = [_text_or_none(os.environ.get("HERMES_PLATFORM")), _text_or_none(_session_value("HERMES_SESSION_PLATFORM")),
@@ -436,7 +487,7 @@ def _session_kind(session_id: Any) -> Optional[str]:
         lineage = None
     if (lineage == "cron" or _text_or_none(_session_value("HERMES_CRON_SESSION")) == "1" or "cron" in idents
             or sid.startswith("cron_") or (isinstance(bound_id, str) and bound_id.startswith("cron_"))):
-        return "cron" if cron_delivers_privately() is True else None
+        return "cron" if cron_delivers_privately(task_id) is True else None
     if _text_or_none(_session_value("HERMES_SESSION_CHAT_TYPE")) in DIRECT_CHAT_TYPES:
         return "dm"
     return None
@@ -629,14 +680,14 @@ def answer(attempt: Attempt) -> dict:
     return _error(code, _retry_after(attempt) if status in (429, 503) else None)
 
 
-def pray_answer(args: Any, session_id: Any) -> tuple[dict, dict]:
+def pray_answer(args: Any, session_id: Any, task_id: Any = None) -> tuple[dict, dict]:
     """The tool's answer, and the facts its one log line carries (codes only)."""
     facts: dict[str, Any] = {"kind": "-", "session": "-", "http": "-", "attempts": 0}
     if not switch_on():
         return _error("disabled"), facts
     if isinstance(args, dict) and isinstance(args.get("ask"), dict) and args["ask"].get("kind") in ASK_KINDS:
         facts["kind"] = args["ask"]["kind"]
-    kind = session_kind(session_id)
+    kind = session_kind(session_id, task_id)
     if kind is None:
         return _error("group_session"), facts
     facts["session"] = kind
@@ -662,7 +713,7 @@ def pray_answer(args: Any, session_id: Any) -> tuple[dict, dict]:
 def make_handler() -> Callable[..., str]:
     def pray_handler(args: Any = None, **kwargs: Any) -> str:
         try:
-            result, facts = pray_answer(args, kwargs.get("session_id"))
+            result, facts = pray_answer(args, kwargs.get("session_id"), kwargs.get("task_id"))
         except SystemExit:
             raise
         except BaseException as exc:  # noqa: BLE001 - fail open

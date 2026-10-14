@@ -1851,9 +1851,11 @@ reviews every request before anything changes; the tool itself grants and emits 
 
 - **Who may pray (fail closed):** only a task whose bound chat type is positively a direct chat, or
   the agent's own cron run (`record_intention`'s lineage rule; the tool registers those listeners
-  itself) whose auto-delivery target is positively the resident's Telegram DM
-  (`HERMES_CRON_AUTO_DELIVER_PLATFORM=telegram` and `_CHAT_ID` equal to `TELEGRAM_HOME_CHANNEL`;
-  approval@edge's ruling). Anything else (a group, a channel, a cron job that reports elsewhere or
+  itself) whose job's FULL delivery spec, both the `deliver` and the failure lane, resolves through
+  Hermes's own `_resolve_delivery_targets` to exactly one target, the resident's Telegram DM
+  (`TELEGRAM_HOME_CHANNEL`), and whose published `HERMES_CRON_AUTO_DELIVER_*` target is that DM
+  (approval@edge's ruling). Several targets, a home DM plus a group, or a spec that cannot be read
+  are refused; a home DM listed twice is one target (Hermes deduplicates it) and is allowed. Anything else (a group, a channel, a cron job that reports elsewhere or
   locally, an empty, unknown or unreadable value, an exception) is `group_session`, and nothing is sent.
 - **Checked before sending:** the closed object, the kind, the tier and model shapes, and the reason
   (NFC and trimmed, 1-600 code points, at most 8 lines, no control characters but newlines, no

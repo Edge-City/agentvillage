@@ -170,7 +170,10 @@ MESSAGES: dict[str, str] = {
         "your own scheduled runs that report to that chat, never from or into a group."
     ),
     "invalid_body": "Not sent: pass question (and optionally window: 24h, 7d or all), nothing else.",
-    "question_invalid": "Not sent: the question must be 1-500 characters of plain text.",
+    "question_invalid": (
+        "Not sent: the question must be 1-500 characters of plain text, with no control or invisible characters "
+        "(emoji with variation selectors or joiners count as invisible here)."
+    ),
     "window_invalid": "Not sent: window is 24h, 7d or all.",
     "not_configured": "Asking about the village group is not set up on this agent. Nothing was sent.",
     "not_available": "Asking about the village group is not available yet.",
@@ -435,11 +438,11 @@ def answer(attempt: _pray.Attempt) -> dict:
     return _error(code, _retry_after(attempt) if status in (429, 503) else None)
 
 
-def ask_answer(args: Any, session_id: Any) -> tuple[dict, dict]:
+def ask_answer(args: Any, session_id: Any, task_id: Any = None) -> tuple[dict, dict]:
     facts: dict[str, Any] = {"window": "-", "session": "-", "http": "-", "attempts": 0}
     if not switch_on():
         return _error("disabled"), facts
-    kind = _pray.session_kind(session_id)
+    kind = _pray.session_kind(session_id, task_id)
     if kind is None:
         return _error("group_session"), facts
     facts["session"] = kind
@@ -463,7 +466,7 @@ def ask_answer(args: Any, session_id: Any) -> tuple[dict, dict]:
 def make_handler() -> Callable[..., str]:
     def ask_village_handler(args: Any = None, **kwargs: Any) -> str:
         try:
-            result, facts = ask_answer(args, kwargs.get("session_id"))
+            result, facts = ask_answer(args, kwargs.get("session_id"), kwargs.get("task_id"))
         except SystemExit:
             raise
         except BaseException as exc:  # noqa: BLE001 - fail open

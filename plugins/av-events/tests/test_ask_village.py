@@ -39,6 +39,28 @@ SESSION_ENV = ("HERMES_SESSION_CHAT_TYPE", "HERMES_CRON_SESSION", "HERMES_PLATFO
                "http_proxy", "https_proxy", "all_proxy", "NO_PROXY", "no_proxy")
 
 
+#: Hermes's cron task id for the fake job below (`cron:{job_id}:{execution_id}`, scheduler.py:2302).
+CRON_TASK_ID = "cron:job1:e1"
+
+
+class FakeCron:
+    """Hermes's `get_job` and `_resolve_delivery_targets`, faked: `lanes[job_id] = (deliver, failure)`,
+    each a list of resolved targets (or an exception / non-list to return)."""
+
+    def __init__(self) -> None:
+        home = {"platform": "telegram", "chat_id": HOME_DM, "thread_id": None}
+        self.lanes: dict = {"job1": ([home], [home])}
+
+    def get_job(self, job_id: str):
+        return {"id": job_id} if job_id in self.lanes else None
+
+    def resolve(self, job: dict, *, for_failure: bool = False):
+        value = self.lanes[job["id"]][1 if for_failure else 0]
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+
 class Response:
     def __init__(self, status: int, body: bytes, headers: Optional[dict] = None, fail_read: bool = False) -> None:
         self.status = status
@@ -121,6 +143,9 @@ class ToolFireCtx:
 def av_mod(plugin, av, monkeypatch):
     module = sys.modules[f"{av.MODULE_NAME}._ask_village"]
     monkeypatch.setattr(module, "_sleep", lambda _s: None)
+    cron = FakeCron()
+    monkeypatch.setattr(sys.modules[f"{av.MODULE_NAME}._pray"], "_hermes_cron", lambda: (cron.get_job, cron.resolve))
+    module.fake_cron = cron  # tests reach it as <fixture>.fake_cron
     for name in SESSION_ENV:
         monkeypatch.delenv(name, raising=False)
     return module
@@ -154,8 +179,9 @@ def tctx(plugin, av_mod, cp, on):
     return ctx
 
 
-def call(ctx: ToolFireCtx, args: Any, *, session: str = SESSION) -> dict:
-    result = ctx.tools["ask_village"]["handler"](args, task_id="task-1", session_id=session)
+def call(ctx: ToolFireCtx, args: Any, *, session: str = SESSION, task_id: str = CRON_TASK_ID) -> dict:
+    """Hermes passes `task_id` to every handler; a cron run's is `cron:{job}:{execution}`. The DM path ignores it."""
+    result = ctx.tools["ask_village"]["handler"](args, task_id=task_id, session_id=session)
     assert isinstance(result, str)
     return json.loads(result)
 
@@ -732,8 +758,20 @@ def test_fc_ask_village_uses_the_shared_fail_closed_helper(tctx, av_mod, cp, mon
     assert av_mod._pray is pray
     real = pray.session_kind
     calls: list = []
-    monkeypatch.setattr(pray, "session_kind", lambda sid: calls.append(sid) or None)
-    assert call(tctx, ARGS)["error"] == "group_session" and calls == [SESSION] and cp.requests == []
+    monkeypatch.setattr(pray, "session_kind", lambda sid, task_id=None: calls.append((sid, task_id)) or None)
+    assert call(tctx, ARGS)["error"] == "group_session" and calls == [(SESSION, CRON_TASK_ID)] and cp.requests == []
     monkeypatch.setattr(pray, "session_kind", real)  # the real helper, with a broken reader
     monkeypatch.setattr(pray, "_session_value", lambda _n: (_ for _ in ()).throw(RuntimeError("x")))
     assert call(tctx, ARGS)["error"] == "group_session" and cp.requests == []
+
+
+
+def test_r2_a_multi_target_cron_cannot_ask(tctx, av_mod, cp, monkeypatch):
+    """The shared helper reads the job's whole delivery spec: home first plus a group is refused."""
+    home = {"platform": "telegram", "chat_id": HOME_DM, "thread_id": None}
+    group = {"platform": "telegram", "chat_id": "-1001234567890", "thread_id": None}
+    av_mod.fake_cron.lanes["job1"] = ([home, group], [home, group])
+    monkeypatch.setenv("HERMES_SESSION_CHAT_TYPE", "")
+    assert call(tctx, ARGS, session="cron_job1_1")["error"] == "group_session" and cp.requests == []
+    av_mod.fake_cron.lanes["job1"] = ([home], [home])
+    assert "answer" in call(tctx, ARGS, session="cron_job1_1")
