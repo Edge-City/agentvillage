@@ -1,6 +1,6 @@
 name: av-approval
-version: 0.3.0
-description: "Agent Village approval.md (DATA-43, opt-in): the approval gate's fail-closed backstop and the receipts stub. With AV_APPROVAL_ENABLED on, register() checks the installed gate before Hermes registers its shell hooks (hooks block, consent in config.yaml and .env, the consent allowlist and its lock, the shim's sha256, AV_APPROVAL_URL) and a pre_tool_call callback raises for every gated tool while that check fails (DATA-234). Receipts stay disabled: the facade has no surface that can record a Hermes receipt at this approval.md core version. AV_APPROVAL_ENABLED off logs a fail-open line. Credential custody, whatever that switch: the names custody_keys.json marks strip (INDEX_API_KEY, INDEX_SESSION_TOKEN, AV_EVENTS_TOKEN, AV_BACKUP_TOKEN, ADMIN_TOKEN) are removed from every agent-run child (terminal, execute_code, cron scripts); only config.yaml av_approval.custody: false turns it off."
+version: 0.4.0
+description: "Agent Village approval.md (DATA-43, opt-in): the approval gate's fail-closed backstop and the receipts stub. With AV_APPROVAL_ENABLED on, register() checks the installed gate before Hermes registers its shell hooks (hooks block, consent in config.yaml and .env, the consent allowlist and its lock, the shim's sha256, AV_APPROVAL_URL) and a pre_tool_call callback raises for every gated tool while that check fails (DATA-234). Receipts stay disabled: the facade has no surface that can record a Hermes receipt at this approval.md core version. AV_APPROVAL_ENABLED off logs a fail-open line. Credential custody, whatever that switch: the names custody_keys.json marks strip (INDEX_API_KEY, INDEX_SESSION_TOKEN, AV_EVENTS_TOKEN, AV_BACKUP_TOKEN, ADMIN_TOKEN) are removed from every agent-run child (terminal, execute_code, cron scripts); only config.yaml av_approval.custody: false turns it off. Plugin inventory (SEC-3), whatever that switch: an on_plugin_loaded listener and a 15-minute tick classify every plugin as expected (expected_plugins.json), bundled (Hermes's own tree) or unknown, publish plugin.inventory and plugin.unknown on the plugin bus for av-events (no paths, no tool names, a keyed name hash) and log one summary line at boot and daily; config.yaml av_approval.unknown_plugins report (default: events and the log line only), quarantine (unlist an unknown plugin, unload a loaded one live) or off."
 author: Edge City
 kind: backend
 optional_env:
@@ -8,6 +8,8 @@ optional_env:
   - AV_APPROVAL_URL
   - AV_APPROVAL_TOKEN
 # Documentation only — Hermes reads hooks from ctx.register_hook(). The
-# backstop registers pre_tool_call when the switch is on (README.md).
+# backstop registers pre_tool_call when the switch is on (README.md). The
+# plugin inventory registers no hook: it uses PluginManager.on_plugin_loaded,
+# ctx.on_unload and ctx.emit.
 provides_hooks:
   - pre_tool_call

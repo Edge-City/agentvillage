@@ -73,6 +73,15 @@ from every child the agent's code runs in (terminal, execute_code, cron
 scripts); the gateway keeps them. Only `config.yaml` `av_approval.custody: false` turns
 it off (no environment variable). It never touches `ctx`; a failure is logged as a warning.
 
+PLUGIN INVENTORY (`_plugins.py`, SEC-3, every start, whatever the gate's switch): after custody,
+`register` subscribes one `on_plugin_loaded` listener per process and a 15-minute tick that classify
+every plugin as expected (`expected_plugins.json`), bundled (Hermes's own tree) or unknown, publish
+`plugin.inventory` / `plugin.unknown` on the plugin bus for av-events, and log
+`av-approval: plugins: <n> expected, <m> bundled, <u> unknown (mode <mode>)` at boot and daily.
+`config.yaml` `av_approval.unknown_plugins`: `report` (default: events and the log line only),
+`quarantine` (L1: unlist, and unload a loaded unknown live), `off`. It touches `ctx` only to
+subscribe (`on_unload`) and to emit, never unloads from inside `register`, and never raises.
+
 Python 3.11, standard library and PyYAML (Hermes ships it). Never raises out
 of `register`; the pre-call callback raises only to block a gated call.
 """
@@ -90,7 +99,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-PLUGIN_VERSION = "0.3.0"
+PLUGIN_VERSION = "0.4.0"
 __version__ = PLUGIN_VERSION
 
 #: The core version whose facade was read for a receipt surface.
@@ -110,6 +119,8 @@ UNREGISTERED_LINE = "av-approval: the backstop could not be registered (gated ca
 #: Logged when custody cannot run at all (`_custody` failed to import or raised); `_custody.UNCOVERED_FMT`.
 CUSTODY_UNCOVERED_LINE = ("av-approval: custody: NOT covered: provider, foreground, execute_code; "
                           "those children still receive the service keys")
+#: Logged when the inventory cannot run at all (`_plugins` failed to import); `_plugins.NOT_RUNNING_LINE`.
+INVENTORY_NOT_RUNNING_LINE = "av-approval: plugins: inventory NOT running"
 #: The message a blocked gated call carries (Hermes prefixes the callback name and exception type).
 UNVERIFIED_FMT = "av-approval: gate unverified ({code})"
 
@@ -421,11 +432,27 @@ def _log_once(key: str, line: str) -> None:
 
 
 def register(ctx: Any) -> None:
-    """Hermes plugin entrypoint: the gate's backstop, then credential custody (whatever the gate's switch)."""
+    """Hermes plugin entrypoint: the gate's backstop, then credential custody and the plugin inventory
+    (both whatever the gate's switch)."""
     try:
         _register_backstop(ctx)
     finally:
         apply_custody()
+        start_inventory(ctx)
+
+
+def start_inventory(ctx: Any) -> bool:
+    """SEC-3 plugin inventory (`_plugins.py`): subscribe once, start the tick. Never raises."""
+    try:
+        from . import _plugins
+
+        return _plugins.start(ctx)
+    except Exception:  # noqa: BLE001 - the inventory must never break Hermes's plugin loading
+        try:
+            logging.getLogger("av-approval.plugins").warning(INVENTORY_NOT_RUNNING_LINE)
+        except Exception:  # noqa: BLE001
+            pass
+        return False
 
 
 def apply_custody() -> dict:
@@ -489,4 +516,5 @@ __all__ = [
     "is_gated",
     "switch",
     "register",
+    "start_inventory",
 ]

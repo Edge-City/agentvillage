@@ -1,6 +1,7 @@
 # av-approval (Hermes backend plugin, opt-in)
 
 The approval gate's fail-closed backstop at every gateway start (DATA-234),
+credential custody, the plugin inventory and unknown-plugin quarantine (SEC-3),
 and the receipts half of approval.md for Agent Village (DATA-43;
 approval-md-hosted `docs/03` section 3.3), still a stub. Enabled by
 `install/install_approval.ts` for a tenant with `AV_APPROVAL_ENABLED=1`, and
@@ -119,6 +120,112 @@ cannot shrink it.
 Not closed: `$HERMES_HOME/.env` and `/proc/<gateway pid>/environ` stay readable
 by the agent's user; see `skills/approval/README.md`.
 
+## Plugin inventory and unknown-plugin quarantine (SEC-3, every start)
+
+`_plugins.py`, started by `register` after custody whatever `AV_APPROVAL_ENABLED`
+says. Nothing on a box recorded which plugins were loaded, and nothing refused
+a plugin that is not ours; residents may not install plugins (admin only).
+
+**When.** `register` subscribes one `PluginManager.on_plugin_loaded` listener per
+process (Hermes calls it after each discovery sweep, with the discovery lock
+released) and starts a 15-minute daemon tick. Nothing is classified or unloaded
+inside `register`. The first pass is `boot`, a later sweep `loaded`, the tick
+`tick` (an inventory only when something changed) or `daily` (every 24 h). The
+listener is removed through `ctx.on_unload`; a re-`register` after a forced
+re-discovery subscribes it again, never twice.
+
+**Classification** (the expected set is `expected_plugins.json`, derived from the
+installer and pinned by `install/tests/expected_plugins_parity.test.ts`):
+
+| Class | Rule |
+|---|---|
+| expected | a `user` plugin named like one of the overlay plugins (`readdir(plugins/)` minus `NOT_STAGED_PLUGINS`), in a directory of that name, with no `.install-metadata.json` record; or `index-network` pinned at exactly `INDEX_PLUGIN_REF`. `edgecity-village` (dashboard-only, no `__init__.py`) counts when its directory is present. `recall` and `index-network` are conditional: absent is not missing. |
+| bundled | source `bundled` AND a manifest path under `<hermes_cli package>/../plugins` (`HERMES_BUNDLED_PLUGINS` can point the scan anywhere, so the path is checked) |
+| unknown | everything else: a user directory overriding a bundled key, every `project` and `entrypoint` plugin, a bundled-sourced manifest outside Hermes's tree, `index-network` at another revision, an overlay name installed from git or from a directory of another name |
+
+`expected_set_version` is the first 12 hex of sha256 over the canonical JSON of
+the set (keys sorted, no spaces).
+
+**Mode and allow-list** (`$HERMES_HOME/config.yaml`, the block that holds `custody`):
+
+```yaml
+av_approval:
+  unknown_plugins: report        # report (default) | quarantine | off
+  plugins_allow:                 # admin only: residents cannot write config.yaml (SEC-1)
+    - name: fixture-echo
+      revision: 0123456789abcdef0123456789abcdef01234567   # .install-metadata.json revision
+    - name: my-local-experiment
+      revision: local            # only a directory with NO install metadata
+```
+
+An unreadable config or a value other than the three modes runs as `report` and
+logs `av-approval: plugins: av_approval.unknown_plugins unreadable or not
+report|quarantine|off; mode report` once. A bare YAML `off` (read as false) is
+`off`. An allow entry whose revision does not match the metadata leaves the plugin
+unknown.
+
+- `report` (this release): events and the log line only. Nothing is unlisted or
+  unloaded; `plugins.disabled` is untouched.
+- `quarantine` (L1, the flip one rc later once verify reads back zero unknown
+  plugins fleet-wide): an unknown plugin that has not loaded is unlisted
+  (`dashboard_set_agent_plugin_enabled(key, enabled=False)`: its key goes into
+  `plugins.disabled`) before it loads; a loaded one is unloaded live
+  (`PluginManager.unload`) and unlisted, so the next start is clean. The directory
+  and its metadata stay as evidence. A key an expected or bundled plugin also holds
+  is never unlisted (`unlist_failed`). No sticky gate block, no gateway exit.
+- `off`: nothing subscribed, nothing sent.
+
+**Events** (bare names through `ctx.emit`; the host namespaces them
+`av-approval:`; av-events turns them into `plugin.inventory@1` and
+`plugin.unknown@1` behind its `AV_PLUGIN_EVENTS` switch). The fields, their order
+and their shapes are the contract file
+`plugins/av-events/tests/vectors/plugin_events_contract.json`, which
+`tests/test_plugins.py` reads:
+
+- `plugin.inventory`: `trigger`, `mode`, `expected_loaded`, `expected_missing`,
+  `bundled_loaded`, `unknown_count`, `allowed_count` (kept within 0..10000),
+  `expected_set_version`, `hermes_version` (null when it is not data's shape);
+- `plugin.unknown`, once per (plugin, source, state, action) per process: `name`
+  (the plugin key, null when it is not the contract's shape), `name_hash`,
+  `source`, `state` (`loaded`, `enabled_not_loaded`, `dir_only`,
+  `overrides_bundled`), `install_host` (the host of the install source only),
+  `revision`, `pinned`, `tools` and `hooks` (counts), `action` (`none` in report;
+  `unlisted`, `unloaded_unlisted` or `unlist_failed` in quarantine).
+
+**Privacy.** No path, no URL path, no tool name and no file text leaves this
+plugin. `name_hash` is HMAC-SHA256 under this plugin's own key
+`$HERMES_HOME/av-approval/hash.key` (64 hex, 0600, created once; never av-events'
+key) over `av-approval|plugin|<key>`, so the small name set cannot be reversed by
+a dictionary. If the key cannot be read or created, a per-process key is used and
+`av-approval: plugins: hash key ephemeral` is logged once.
+
+**Log lines** (no other new class):
+
+- at boot and daily: `av-approval: plugins: <n> expected, <m> bundled, <u> unknown
+  (mode <mode>)` (INFO; WARNING when `<u>` is not 0);
+- `av-approval: plugins: inventory NOT running`, only when the listener could not
+  be subscribed (no plugin manager, an unreadable or edited `expected_plugins.json`).
+
+**What verify reads back after the roll** (design §4.4):
+
+- every box: `plugins/av-approval/plugin.yaml` is `version: 0.4.0`; the gateway log
+  has `av-approval: plugins: <n> expected, <m> bundled, 0 unknown (mode report)`
+  and no `plugins: inventory NOT running`; `plugins.disabled` is unchanged (empty)
+  in report mode;
+- after data's release and the av-events switch: one `plugin.inventory` per live
+  tenant per 24 h with `unknown_count = 0` fleet-wide, zero `plugin.unknown` rows,
+  `plugin_inventory_silent` not firing;
+- Carter's tenant only: an admin install of the test fixture gives one
+  `plugin.unknown` with `state=loaded`, `action=none` in report mode
+  (`unloaded_unlisted` in quarantine), then `hermes plugins remove <fixture>`;
+- then verify's `box-plugins.sh` sweep, compared with the ingest counts.
+
+**Rollback** (design §4.5): `av_approval.unknown_plugins: off` per box (admin), or
+the previous rc's overlay; with `off` nothing is subscribed. Events: av-events'
+`AV_PLUGIN_EVENTS` off. A plugin quarantined in `quarantine` mode stays in
+`plugins.disabled` after a rollback by design: add an allow entry, then
+`hermes plugins enable <key>` (admin).
+
 ## Kill switch
 
 The fail-open line tracks the gate, not the plugin. It is logged once per process:
@@ -153,3 +260,17 @@ names a stripped one). `test_against_real_hermes` runs when Hermes is
 importable (`PYTHONPATH=<Hermes source tree>`; it skips in CI): the real
 foreground, background and non-terminal builders, `execute_code` with the
 names registered as passthrough, and a real bash child and its snapshot file.
+
+`tests/test_plugins.py` (SEC-3): the classification table (impostor, override,
+env-pointed bundled dir, the index pin, the allow-list binding), mode parsing,
+subscribe-once and unsubscribe-on-unload, report mode inert, quarantine outcomes,
+the closed payload (a sentinel in a directory name or install URL reaches no
+field but `name`, and only in the contract's shape), the hash key, PARITY with
+the contract file (every accept vector through the serializer, bus names, field
+order, `hermes_version` character for character), and three mutation checks
+(classification off, path check off, revision check off: each fails the table).
+The Hermes-backed runs (an install from a local `git init` fixture registering
+`fixture_echo`; `--no-enable` plus a hand-edited `enabled` unlisted by the tick;
+an allow-listed revision, a bundled `web/ddgs`, a same-named override) run in a
+subprocess when `hermes_cli` and `ruamel.yaml` import
+(`PYTHONPATH=<Hermes source tree>[:<ruamel>]`) and skip otherwise.

@@ -1,0 +1,20 @@
+{
+  "expected_set_version": "6181c538adff",
+  "overlay": [
+    "av-approval",
+    "av-display",
+    "av-events",
+    "dashboard-auth-edgecity",
+    "edgecity-village",
+    "index-links",
+    "recall"
+  ],
+  "index": {
+    "name": "index-network",
+    "ref": "04d833b840541fedabe78cbdad306c18853d784a"
+  },
+  "conditional": [
+    "index-network",
+    "recall"
+  ]
+}

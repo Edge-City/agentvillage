@@ -399,6 +399,8 @@ def test_the_check_runs_at_most_once_a_minute_and_reparses_config_only_on_change
     parses = []
     real_load = yaml.safe_load
     monkeypatch.setattr(yaml, "safe_load", lambda *a, **k: parses.append(1) or real_load(*a, **k))
+    # The SEC-3 inventory reads config.yaml once at register for its own mode; this counts the gate's parses.
+    monkeypatch.setattr(plugin, "start_inventory", lambda ctx: False)
     ctx = FakeCtx()
     plugin.register(ctx)
     cb = _callback(ctx)

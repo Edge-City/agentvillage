@@ -7,6 +7,7 @@ av-events suite does. Hermes is never imported.
 
 from __future__ import annotations
 
+import importlib
 import importlib.util
 import json
 import logging
@@ -105,6 +106,26 @@ class FakeFacade:
     def close(self) -> None:
         self.server.shutdown()
         self.server.server_close()
+
+
+def _no_manager():
+    raise RuntimeError("in-process tests never reach a real Hermes plugin manager")
+
+
+@pytest.fixture(autouse=True)
+def _inventory_reset(monkeypatch):
+    """The SEC-3 inventory keeps its listener, tick and once-marks on the `av-approval` logger (they
+    outlive a module reload); every test starts and ends without them. In process, `register()` never
+    reaches a real Hermes plugin manager, even when an earlier test left `hermes_cli` importable (the
+    Hermes-backed runs in `test_plugins.py` use a subprocess)."""
+    load_plugin()
+    module = importlib.import_module(MODULE_NAME + "._plugins")
+    module._reset()
+    monkeypatch.setattr(module, "_default_manager", _no_manager)
+    yield
+    module = sys.modules.get(MODULE_NAME + "._plugins")
+    if module is not None:
+        module._reset()
 
 
 @pytest.fixture
