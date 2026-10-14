@@ -38,11 +38,17 @@
  * Exit codes (the skill's fail-soft, §9):
  *   0 printed (no match included);
  *   2 not connected: the key missing, or the control plane not connected (a setting missing, or 401,
- *     403, 404 for the route not deployed yet or a popup without a directory, 409 for no live Edge City
- *     grant) and the direct path not connected either (401, 403, 404, 409, or nothing to call);
+ *     403, 404 for the route not deployed yet or a popup without a directory, 409) and the direct path
+ *     not connected either (401, 403, 404, 409, or nothing to call);
  *   1 can't reach it right now: 429, 5xx, a timeout, a network error or an unreadable answer from the
  *     path that answered last;
- *   3 a usage error (the line says which), or the answering path refused the arguments (400/422).
+ *   3 a usage error (the line says which), or the answering path refused the arguments (400/422);
+ *   4 the resident's Edge City sign-in in the Agent Village app has lapsed (DATA-454b): the control
+ *     plane answered `403 not_connected` (no live grant, or EdgeOS refused it) and the direct path did
+ *     not answer either. Signing in to the app once (SIGNIN_URL) brings it back, so the line says so.
+ *
+ * DATA-454b: profile.ts (the resident's own /humans/me) reuses `attempt`, the host pins, the exit
+ * codes and the exit 4 line from here.
  */
 import { DEFAULT_BASE, apiBase, setting } from "./events";
 
@@ -58,6 +64,11 @@ export const EXIT_OK = 0;
 export const EXIT_UNAVAILABLE = 1;
 export const EXIT_NOT_CONNECTED = 2;
 export const EXIT_USAGE = 3;
+/** The resident's sign-in to the Agent Village app has lapsed: ask them to sign in there once. */
+export const EXIT_SIGNIN = 4;
+
+/** Where the resident signs in to the Agent Village app; a new sign-in gives the app a fresh grant. */
+export const SIGNIN_URL = "https://agents.edgecity.live/signin";
 
 /** The §9 row fields, in order; anything else upstream is dropped. */
 export const FIELDS = [
@@ -69,15 +80,17 @@ export const PARTICIPATION_FIELDS = ["id", "name", "slug", "category", "duration
 const KNOWN_CODES = new Set([
   "unauthorized", "not_linked", "ambiguous", "directory_forbidden", "directory_not_found", "param_unknown",
   "param_invalid", "rate_limited", "busy", "edgeos_unavailable", "directory_unavailable", "not found",
+  "not_connected", "profile_forbidden", "profile_unavailable", "edgeos_error", "unavailable",
 ]);
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Control plane hosts the key may be sent to: the agentvillage-goa project's production service (CONTEXT.md §3). */
 export const CP_HOSTS = ["control-plane-production-606c.up.railway.app"] as const;
+// C0 and C1 controls, DEL included, as the control plane and the app refuse them.
 // deno-lint-ignore no-control-regex
-const CONTROL = /[\u0000-\u001f\u007f]/;
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
 
-type Env = Record<string, string | undefined>;
+export type Env = Record<string, string | undefined>;
 type Row = Record<string, unknown>;
 
 export interface Args {
@@ -284,15 +297,21 @@ async function readCapped(res: Response): Promise<string | null> {
   return new TextDecoder().decode(buf);
 }
 
-type Via = "cp" | "direct";
-type Attempt =
-  | { kind: "ok"; page: Page }
+export type Via = "cp" | "direct";
+export type Attempt<T> =
+  | { kind: "ok"; value: T }
   | { kind: "not_connected"; why: string }
+  /** `403 not_connected`: the control plane's "the resident's sign-in to the app has lapsed". */
+  | { kind: "signin"; why: string }
   | { kind: "unavailable"; why: string }
   | { kind: "usage"; why: string };
 
-/** One GET to one path, sorted into the fail-soft classes. Never reads out the key or an error body. */
-async function attempt(url: string, key: string, fetchImpl: typeof fetch, timeoutMs: number): Promise<Attempt> {
+/**
+ * One GET to one path, sorted into the fail-soft classes; a 200 goes through `projector` (null: not
+ * `what`, exit 1). Never reads out the key or an error body.
+ */
+export async function attempt<T>(url: string, key: string, fetchImpl: typeof fetch, timeoutMs: number,
+  projector: (body: unknown) => T | null, what: string): Promise<Attempt<T>> {
   let res: Response;
   let text: string | null;
   try {
@@ -318,11 +337,13 @@ async function attempt(url: string, key: string, fetchImpl: typeof fetch, timeou
     } catch {
       body = null;
     }
-    const page = project(body);
-    return page ? { kind: "ok", page } : { kind: "unavailable", why: "the answer was not a directory listing" };
+    const value = projector(body);
+    return value !== null ? { kind: "ok", value } : { kind: "unavailable", why: `the answer was not ${what}` };
   }
   const code = text ? errorCode(text) : "";
   const tag = code ? `${status} ${code}` : String(status);
+  // DATA-454b: the app's "no live grant for this resident", passed on by the control plane.
+  if (status === 403 && code === "not_connected") return { kind: "signin", why: tag };
   if (status === 404 && code === "directory_not_found") {
     return { kind: "not_connected", why: `this popup has no attendee directory (${tag})` };
   }
@@ -342,17 +363,31 @@ export function directUrl(base: string, popup: string, args: Args): string {
   return `${base}/applications/my/directory/${popup}?${params.toString()}`;
 }
 
+/**
+ * Exit 4: the control plane said the resident's sign-in to the app has lapsed, and the direct path did
+ * not answer either. `detail` names what each path answered (codes only); `via` the last path called.
+ */
+export function signinLapsed(script: "directory" | "profile", detail: string, via: Via): Result {
+  return {
+    code: EXIT_SIGNIN,
+    out: "",
+    err: `${script}: sign-in lapsed: ask the person to sign in to the Agent Village app once at ${SIGNIN_URL}, ` +
+      `then try again (${detail}) via=${via}\n`,
+  };
+}
+
 /** The printed result, the same for both paths; `via=<path>` is the last word on stderr. */
-function finish(a: Attempt, via: Via, args: Args, before = ""): Result {
+function finish(a: Attempt<Page>, via: Via, args: Args, before = ""): Result {
   const tail = ` via=${via}\n`;
   const prior = before ? `${before}; ` : "";
   if (a.kind === "ok") {
-    if (args.json) return { code: EXIT_OK, out: `${JSON.stringify(a.page)}\n`, err: `via=${via}\n` };
-    const lines = a.page.results.length ? a.page.results.map(attendeeLine) : ["no attendees matching"];
-    lines.push(pagingLine(a.page, args));
+    if (args.json) return { code: EXIT_OK, out: `${JSON.stringify(a.value)}\n`, err: `via=${via}\n` };
+    const lines = a.value.results.length ? a.value.results.map(attendeeLine) : ["no attendees matching"];
+    lines.push(pagingLine(a.value, args));
     return { code: EXIT_OK, out: `${lines.join("\n")}\n`, err: `via=${via}\n` };
   }
-  if (a.kind === "not_connected") {
+  // A `403 not_connected` from the direct path alone (EdgeOS never sends it) reads as not connected.
+  if (a.kind === "not_connected" || a.kind === "signin") {
     return { code: EXIT_NOT_CONNECTED, out: "", err: `directory: not connected: ${prior}${via} ${a.why}${tail}` };
   }
   if (a.kind === "usage") return { code: EXIT_USAGE, out: "", err: `directory: ${prior}${via} ${a.why}${tail}${USAGE}` };
@@ -368,7 +403,10 @@ const notConnected = (why: string): Result => ({
  * 409) is EdgeOS's own directory tried with the box's API key, on the EdgeOS host only. EdgeOS
  * answers an API key 403 on the directory today, so that ends in exit 2 as before; once EdgeOS grants
  * API keys `portal:directory:read`, the same script works with no overlay change. A 429, 5xx, timeout
- * or network error from the control plane is exit 1 at once, with no second call.
+ * or network error from the control plane is exit 1 at once, with no second call. A control plane
+ * `403 not_connected` (the resident's sign-in lapsed) still tries the direct path; unless that works,
+ * the answer is exit 4 (sign in to the app once), not 2: the control plane's reason is the one the
+ * person can act on.
  */
 export async function run(argv: string[], env: Env = process.env, fetchImpl: typeof fetch = fetch,
   options: Options = {}): Promise<Result> {
@@ -384,6 +422,7 @@ export async function run(argv: string[], env: Env = process.env, fetchImpl: typ
   const tenant = setting("TENANT_ID", env);
   let cpWhy = "";
   let cpCalled = false;
+  let lapsed = false;
   if (!rawBase) cpWhy = "CONTROL_PLANE_URL is not set";
   else if (!tenant) cpWhy = "TENANT_ID is not set";
   else if (!controlPlaneBase(rawBase)) cpWhy = `CONTROL_PLANE_URL is not https on ${CP_HOSTS.join(", ")}; the key is not sent there`;
@@ -392,9 +431,10 @@ export async function run(argv: string[], env: Env = process.env, fetchImpl: typ
   if (!cpWhy) {
     const params = query(parsed, popupDefault);
     const url = `${controlPlaneBase(rawBase)}/tenants/${tenant.toLowerCase()}/edgeos/directory?${params.toString()}`;
-    const cp = await attempt(url, key, fetchImpl, timeoutMs);
+    const cp = await attempt(url, key, fetchImpl, timeoutMs, project, "a directory listing");
     cpCalled = true;
-    if (cp.kind !== "not_connected") return finish(cp, "cp", parsed);
+    if (cp.kind === "signin") lapsed = true;
+    else if (cp.kind !== "not_connected") return finish(cp, "cp", parsed);
     cpWhy = `cp ${cp.why}`;
   }
 
@@ -402,9 +442,11 @@ export async function run(argv: string[], env: Env = process.env, fetchImpl: typ
   const edgeos = directBase(setting("EDGEOS_API_BASE", env));
   const popup = parsed.popup || (UUID.test(popupDefault) ? popupDefault.toLowerCase() : "");
   const via = cpCalled ? "cp" : "none";
+  if (lapsed && (!edgeos || !popup)) return signinLapsed("directory", cpWhy, "cp");
   if (!edgeos) return notConnected(`${cpWhy}; EDGEOS_API_BASE is not ${DEFAULT_BASE}, so no direct call via=${via}`);
   if (!popup) return notConnected(`${cpWhy}; AV_POPUP_ID is not set, so no direct call via=${via}`);
-  const direct = await attempt(directUrl(edgeos, popup, parsed), key, fetchImpl, timeoutMs);
+  const direct = await attempt(directUrl(edgeos, popup, parsed), key, fetchImpl, timeoutMs, project, "a directory listing");
+  if (lapsed && direct.kind !== "ok") return signinLapsed("directory", `${cpWhy}; direct ${direct.why}`, "direct");
   return finish(direct, "direct", parsed, cpWhy);
 }
 

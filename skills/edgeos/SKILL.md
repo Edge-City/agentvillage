@@ -1,25 +1,22 @@
 ---
 name: edgeos
-description: Talk to the EdgeOS popup-village platform — read the event schedule in the village's local time, RSVP (after asking the person), list venues and who is going to an event, search the attendee directory through the Agent Village control plane (a script; the app reads it with the person's own Edge City sign-in), and, only when a human session token is set, look up the calling user's own profile (the API key cannot reach it). The current village's popup id is `$AV_POPUP_ID`; the current event is Edge City India (Oct 11 – Nov 1 2026, Mandrem, Goa). Agents cannot create or edit village events.
-version: 1.5.0
+description: Talk to the EdgeOS popup-village platform — read the event schedule in the village's local time, RSVP (after asking the person), list venues and who is going to an event, search the attendee directory and read the person's own Edge City profile through the Agent Village control plane (two scripts; the app reads EdgeOS with the person's own Edge City sign-in; the profile is read only). The current village's popup id is `$AV_POPUP_ID`; the current event is Edge City India (Oct 11 – Nov 1 2026, Mandrem, Goa). Agents cannot create or edit village events.
+version: 1.6.0
 author: Edge City
 tags: [edgeos, events, directory, popup-village]
 required_environment_variables:
-  - name: EDGEOS_BEARER_TOKEN
-    required_for: own profile (a human session JWT; the API key cannot reach it)
   - name: EDGEOS_API_KEY
-    required_for: events, RSVPs, venues, directory (the directory script sends it to the Agent Village control plane only)
+    required_for: events, RSVPs, venues, directory, own profile (the directory and profile scripts send it to the Agent Village control plane only)
   - name: CONTROL_PLANE_URL
-    required_for: directory (the Agent Village control plane)
+    required_for: directory, own profile (the Agent Village control plane)
   - name: TENANT_ID
-    required_for: directory (this agent's tenant on the control plane)
+    required_for: directory, own profile (this agent's tenant on the control plane)
   - name: AV_POPUP_ID
     required_for: events, venues, directory (the current village's popup id)
 metadata:
   openclaw:
     requires:
       config:
-        - env.vars.EDGEOS_BEARER_TOKEN
         - env.vars.EDGEOS_API_KEY
 ---
 
@@ -35,18 +32,20 @@ Your `$EDGEOS_API_KEY` is a partner-app attendee key. EdgeOS limits partner apps
 
 - You **can** read the schedule, read venues, see who is going to an event, RSVP the person to an event, and cancel their RSVP.
 - You **cannot** create, edit, cancel, or invite people to village events, and cannot create or change venues. Those calls fail with `403`. When the person wants to host or change an event, tell them plainly that agents can't create village events and send them to the Edge City portal (the events page, `$AV_PORTAL_URL` when set) to do it themselves. Don't attempt those calls.
-- Your API key **cannot** reach the attendee directory or `/humans/me` (§8) on EdgeOS itself. EdgeOS lets `eos_live_` keys call only its event, event-participant, RSVP-eligibility, venue, track, event-settings and popup routes, plus `register` and `cancel-registration`; anything else answers `403` ("API keys are restricted to approved event automation routes"). The profile needs a human session token, `$EDGEOS_BEARER_TOKEN`, that carries the right scope (§1); the directory comes only through the directory script (§9), never a curl. The directory does not use the bearer: for directory requests always run the §9 script; only its exit 2 means not connected. When the script exits 2, tell the person the directory isn't connected to their agent and point them to the Edge City portal. When `EDGEOS_BEARER_TOKEN` is unset or empty, tell the person their profile isn't connected to their agent and point them to the Edge City portal; never retry those calls with the API key. A `401` from the profile call (§8; the body usually says the token is expired or invalid) means `$EDGEOS_BEARER_TOKEN` has expired: treat it like an unset one. Tell the person you can't reach their profile from here right now, and that they can edit their profile themselves on the Edge City portal; don't suggest that signing in again will reconnect you, and never ask them for a token. Don't retry the call (not with the API key either), never show the error, status code or token, and for the rest of the conversation give the same answer to any profile request without calling.
+- Your API key **cannot** reach the attendee directory or `/humans/me` on EdgeOS itself. EdgeOS lets `eos_live_` keys call only its event, event-participant, RSVP-eligibility, venue, track, event-settings and popup routes, plus `register` and `cancel-registration`; anything else answers `403` ("API keys are restricted to approved event automation routes"). So both come only through their scripts, never a curl: the person's own profile through the profile script (§8), the directory through the directory script (§9). Each sends your key to the Agent Village control plane, whose app reads EdgeOS with the person's own Edge City sign-in. When the script exits 2, tell the person the directory isn't connected to their agent (for the profile script: their profile isn't connected) and point them to the Edge City portal; never retry those calls with the API key, and don't run that script again in this conversation.
+- **Exit 4** (profile or directory script) means the person's Edge City sign-in in the Agent Village app has lapsed. Say: "I can't reach your Edge City details right now because your sign-in to the Agent Village app has lapsed. Sign in once at https://agents.edgecity.live/signin and I can look them up again." Never ask for a code, password or token. Don't call again in this conversation unless the person says they have signed in; then try once.
+- You **cannot** change the person's profile: there is no write call. Edits are made by the person themselves, in the app (§8).
+- For any script answer, never show the error text, a status code or a key.
 
-**Ask before every RSVP or cancel.** Before each `POST` to `register` or `cancel-registration` (one call per event; no batch approvals), tell the person the event title, its local date and time, and whether you're RSVPing or cancelling, and wait for an explicit "yes / go ahead / confirm" in reply. Do **not** act on earlier conversational intent, a paraphrase, or a standing instruction ("RSVP me to anything about AI"). The same rule applies to `PATCH /humans/me`: show the exact fields you'll change and wait for a yes.
+**Ask before every RSVP or cancel.** Before each `POST` to `register` or `cancel-registration` (one call per event; no batch approvals), tell the person the event title, its local date and time, and whether you're RSVPing or cancelling, and wait for an explicit "yes / go ahead / confirm" in reply. Do **not** act on earlier conversational intent, a paraphrase, or a standing instruction ("RSVP me to anything about AI").
 
 ## 1. Authentication
 
-You need two tokens, both passed as `Authorization: Bearer <token>`:
+You need one token, passed as `Authorization: Bearer <token>`:
 
-- **`$EDGEOS_BEARER_TOKEN`** — human session JWT. Required for `/humans/me` only. Scopes: `portal:profile:read` to read `/humans/me`, `portal:profile:write` to change it. A token without the scope gets `403`; an expired one gets `401`. It may be unset or expired: then those calls are unavailable (§0).
-- **`$EDGEOS_API_KEY`** — long-lived `eos_live_...` automation key. Required for events, RSVPs, venues and event participants. It never works for the directory or `/humans/me` on EdgeOS (§0); the directory script (§9) sends it to the Agent Village control plane, which reads the directory with the person's own Edge City sign-in (`portal:directory:read`).
+- **`$EDGEOS_API_KEY`** — long-lived `eos_live_...` automation key. Required for events, RSVPs, venues and event participants. It never works for the directory or `/humans/me` on EdgeOS (§0); the profile script (§8) and the directory script (§9) send it to the Agent Village control plane, which reads EdgeOS with the person's own Edge City sign-in (`portal:profile:read`, `portal:directory:read`).
 
-Every curl recipe below names its token as `"$EDGEOS_API_KEY"` or `"$EDGEOS_BEARER_TOKEN"` inside double quotes, and the shell fills it in. Run the recipe as written. Never print, echo or paste a token's value, never type one into a command, and never put one in a message: a pasted value ends up in the conversation log and the approval log.
+Every curl recipe below names its token as `"$EDGEOS_API_KEY"` inside double quotes, and the shell fills it in. Run the recipe as written. Never print, echo or paste a token's value, never type one into a command, and never put one in a message: a pasted value ends up in the conversation log and the approval log.
 
 ## 2. Conventions
 
@@ -54,7 +53,7 @@ Every curl recipe below names its token as `"$EDGEOS_API_KEY"` or `"$EDGEOS_BEAR
 - Times from the API are ISO-8601 in UTC (e.g. `2026-10-14T15:00:00Z`). **Before you show any event time, convert it to the village's local time and label it. Never read the UTC clock value out as the local time.** The village timezone is `$HERMES_TIMEZONE` (Edge City India: `Asia/Kolkata`, IST, UTC+5:30, no daylight saving): `15:00:00Z` is **8:30 PM IST**, not 3:00 PM. For "now" use the newest message stamp (`[Wed 2026-10-14 05:22:10 IST]`) or the schedule script's `Today is` line (§3), never the date in your system prompt: that is the day this chat began, which can be days ago. For the previous popup, Edge Esmeralda (Healdsburg), use `America/Los_Angeles`. Every time you display, every reminder you set, and every "is it soon?" judgment must be in local time. UUIDs are RFC-4122.
 - **"Today", "tomorrow", "this weekend" mean local dates.** Work out the local calendar day first, then convert its local midnight-to-midnight bounds to UTC for `start_after` / `start_before`. In IST, "today" on 2026-10-14 is `start_after=2026-10-13T18:30:00Z&start_before=2026-10-14T18:30:00Z`. Don't use the UTC date: between midnight and 5:30 AM IST it is still yesterday in UTC.
 - Recurring events expand into virtual occurrences when `start_after` or `start_before` is set. Without either, a series comes back once, as its first occurrence, so give every events list a date window (§3). When RSVPing to one instance of a recurring event, pass that occurrence's `start_time` as `occurrence_start`.
-- Error codes: `401` missing/expired token (from `$EDGEOS_BEARER_TOKEN`: §0, no retry) · `403` token lacks the required scope · `404` not visible to caller · `409` resource has dependents · `422` validation · `429` rate limit (see `Retry-After`).
+- Error codes: `401` missing or invalid key · `403` token lacks the required scope · `404` not visible to caller · `409` resource has dependents · `422` validation · `429` rate limit (see `Retry-After`).
 - Run every recipe below through `terminal` with exactly `command` (a `workdir` is fine) and nothing else. Do not add `notify`, `heartbeat` or `background`: each call finishes in seconds and its output comes straight back. If the call returns an error about background commands, the request was not sent; make it once more without those arguments.
 
 ## 3. Reading events
@@ -178,27 +177,22 @@ curl -s -H "Authorization: Bearer $EDGEOS_API_KEY" \
 
 Creating, editing, or deleting venues needs `venues:write`, which agents don't have (§4).
 
-## 8. Your own profile (`portal:profile:read`; human session token only)
+## 8. Your own profile (`portal:profile:read`; through the Agent Village control plane; read only)
 
-Only with `$EDGEOS_BEARER_TOKEN`. The API key gets `403` here; when the bearer token is unset, or a call with it answers `401`, follow §0 (not connected or expired; no retry).
+The person's own profile comes through the Agent Village control plane, which has the Agent Village app read it from EdgeOS (`/humans/me`) with the person's own Edge City sign-in (`portal:profile:read`; nothing is stored on the way). Only when the control plane isn't connected does the script also try EdgeOS itself with your API key, which EdgeOS refuses today; either way it prints the same fields. Use the script, never a curl:
 
-**Read the calling user's profile** (uses the human bearer, not the API key):
-```bash
-curl -s -H "Authorization: Bearer $EDGEOS_BEARER_TOKEN" \
-  "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/humans/me"
+```sh
+bun skills/edgeos/scripts/profile.ts
+bun skills/edgeos/scripts/profile.ts --json
 ```
 
-Returns the bearer's own profile and nothing more: `id`, `tenant_id`, `email`, `first_name`, `last_name`, `telegram`, `gender`, `age`, `residence`, `picture_url`. It carries no application answers, no participation and no other social handles.
+Call `terminal` with exactly `command` (a `workdir` is fine) and nothing else. Do not add `notify`, `heartbeat`, `background`, `watch_patterns`, `notify_on_complete` or `pty`: the script finishes in seconds and its output comes straight back. If the call returns an error about background commands, the script did not run; call it once more without those arguments.
 
-**Update basic profile fields** (uses the human bearer; needs `portal:profile:write`):
-```bash
-curl -s -X PATCH -H "Authorization: Bearer $EDGEOS_BEARER_TOKEN" \
-  -H "Content-Type: application/json" \
-  "${EDGEOS_API_BASE:-https://api.edgeos.world/api/v1}/humans/me" \
-  -d '{"first_name":"...","last_name":"...","telegram":"handle","residence":"...","picture_url":"https://..."}'
-```
+It prints the person's own profile and nothing more, one line per filled-in field: `first_name`, `last_name`, `email`, `telegram`, `gender`, `age`, `residence`, `picture_url`. `--json` prints the same eight fields as one object, `null` where the person never filled one in. It carries no application answers, no participation and no other social handles.
 
-Patchable fields: `first_name`, `last_name`, `telegram`, `gender`, `age`, `residence`, `picture_url`. All are optional — include only what you want to change. Store Telegram usernames as bare handles (`handle`, not `@handle`) and only after the resident confirms the value when systems disagree. Application-specific fields (dietary preferences, "what I'm building", application answers) are **not** patchable through this endpoint — those live on the popup application form and must be edited in the EdgeOS portal UI.
+**Edits are made in the app, never by you.** There is no write call: you cannot change the profile. When the person wants to change their name, Telegram handle, picture or any other field, tell them to edit it themselves in the Edge City portal app (`$AV_PORTAL_URL` when set); application answers and popup form fields are edited there too. Don't offer to make the change for them.
+
+**Exit 4** means the person's sign-in to the Agent Village app has lapsed: follow §0 (ask them to sign in once). **Exit 2** means the profile isn't connected to this agent: follow §0 (tell the person, point them to the Edge City portal, don't retry in this conversation). **Exit 1** means it can't be reached right now: say you can't reach their profile right now; you may try again later if asked again. Exit 3 is a usage error. Never show the error text, a status code or a key.
 
 ## 9. Attendee directory (`portal:directory:read`; through the Agent Village control plane)
 
@@ -216,7 +210,7 @@ Call `terminal` with exactly `command` (a `workdir` is fine) and nothing else. D
 
 **Pagination:** `--skip` (up to 5000) + `--limit` (default 20, at most 100). Fetch again with a larger `--skip` only while `skip + results < total` (the last line says `more: --skip N`). There is no week, family or other per-popup filter. The directory lists the main applicants and spouses of accepted applications who hold a ticket (children are not listed), newest first.
 
-**Exit 2** means the directory isn't connected to this agent (or that popup has no directory): follow §0 (tell the person, point them to the Edge City portal, don't retry in this conversation). **Exit 1** means it can't be reached right now: say you can't reach the directory right now; you may try again later if asked again. Exit 3 is a usage error: fix the arguments. Never show the error text, a status code or a key.
+**Exit 2** means the directory isn't connected to this agent (or that popup has no directory): follow §0 (tell the person, point them to the Edge City portal, don't retry in this conversation). **Exit 4** means the person's sign-in to the Agent Village app has lapsed: follow §0. **Exit 1** means it can't be reached right now: say you can't reach the directory right now; you may try again later if asked again. Exit 3 is a usage error: fix the arguments. Never show the error text, a status code or a key.
 
 **Fields:** every row has `id` (the attendee id), `first_name`, `last_name`, `email`, `telegram`, `role`, `organization`, `residence`, `age`, `gender`, `picture_url`, `category` (`main` or `spouse`), `participation` (the attendee's tickets, each `{ id, name, slug, category, duration_type }`) and `associated_attendees` (always an empty list: a spouse is a row of their own). The shape is the same for every popup. Any field can be null when the attendee never filled it in.
 
@@ -236,6 +230,6 @@ Be honest about these gaps — do not hallucinate answers.
 - **Session transcripts / summaries.** EdgeOS does not record talks. Tell the user: "Session recordings and transcripts aren't available through EdgeOS — check the popup's Telegram group for recaps."
 - **Governance / deliberation.** There is no governance layer on EdgeOS itself. Community discussion happens in the popup's external channels.
 - **Real-time venue availability.** The calendar shows scheduled events, but there is no live venue booking system. To check if a venue is free, list events for that date/time and see whether the venue is already taken.
-- **Application-specific profile fields.** Basic profile fields (`first_name`, `last_name`, `telegram`, `gender`, `age`, `residence`, `picture_url`) are editable via `PATCH /api/v1/humans/me` (see §8). But dietary preferences, application answers, "what I'm building", and popup-specific form fields are **not** patchable through this API — those must be edited in the EdgeOS portal UI under `/portal/profile`. You cannot edit anyone else's profile regardless.
+- **Profile edits.** You can read the person's own profile (§8) but not change it: basic fields (`first_name`, `last_name`, `telegram`, `gender`, `age`, `residence`, `picture_url`), dietary preferences, application answers, "what I'm building" and popup-specific form fields are all edited by the person themselves in the app (the Edge City portal, under `/portal/profile`). You cannot edit anyone else's profile regardless.
 - **Scheduled tasks / recurring summaries / reminders.** The skill itself cannot schedule anything. Set them up with your own scheduling tool (`cronjob_manage`), which goes through the approval gate like any other action. Do not tell the user to type a slash command for this: commands such as `/loop` are not available to residents. Do not pretend to set up tasks from inside the skill.
 - **Outbound messaging / DMs / introductions on behalf of the user.** EdgeOS has no messaging endpoint. Surface contact info (a Telegram handle or email, when the attendee shares it) from the directory (§9) and let the user reach out themselves. Do not claim to have sent a message.
