@@ -21,7 +21,7 @@ import re
 import time
 from typing import Any, Callable, Optional
 
-from . import _approval, _approvals_reminder, _edgeos, _inference_run, _intent_approval, _outcome_ask, _share_vote, _terminal_args
+from . import _approval, _approvals_reminder, _edgeos, _inference_run, _intent_approval, _outcome_ask, _referendum, _share_vote, _terminal_args
 from ._collector import Collector, guarded, hermes_version, overlay_ref
 from ._consent import TOOL_NAME as CONSENT_TOOL_NAME
 from ._consent import register_consent_tool
@@ -1290,6 +1290,10 @@ def register(ctx) -> None:
         _share_vote.register_share_vote_tools(ctx, emit=_emit_share_vote, ready=_share_vote_emitter_ready)
     except Exception:  # noqa: BLE001 - the tools are optional; the hooks are not
         pass
+    # Referendum callbacks ride the existing Telegram adapter. The explicit
+    # flag is a rollout gate; an enabled runtime without the Hermes 0.21.5
+    # handler capability fails directly instead of starting another listener.
+    _referendum.register_telegram_callback(ctx)
     # DATA-183: hear about the unload that clears the hooks. Optional in the
     # API (probe, fail open): without it register() behaves as before.
     on_unload = getattr(ctx, "on_unload", None)
