@@ -23,7 +23,8 @@ inside `register()`) and starts a 15-minute daemon tick. The first pass is `boot
 listener is removed through `ctx.on_unload`; Hermes's listeners belong to the process, not the plugin.
 A tick takes Hermes's discovery lock without waiting and is skipped while a sweep holds it (a forced
 re-discovery unloads and reloads everything under that lock). Only the gateway process runs any of this
-(`_HERMES_GATEWAY=1`, which Hermes sets before discovery); the TUI and a standalone CLI do not. The marker is
+(`gateway run|start` in its argv, or `_HERMES_GATEWAY=1`, which Hermes sets only when `gateway/run.py` is imported,
+AFTER `hermes gateway run` has started plugin discovery); the TUI and a standalone CLI do not. The marker is
 inherited, so a `hermes` command the gateway's own children run also has it.
 
 Mode (`config.yaml` `av_approval.unknown_plugins`): `report` (the default; also for an unreadable config
@@ -54,6 +55,7 @@ import logging
 import os
 import re
 import secrets
+import sys
 import threading
 import time
 from pathlib import Path
@@ -92,7 +94,8 @@ UNKNOWN_SOURCES = ("user", "project", "entrypoint", "bundled_path_mismatch")
 #: Overlay plugins with no agent half (`__init__.py`): present when their directory is. Any other expected
 #: directory without `__init__.py` is a broken stage and counts as missing. Pinned to the source tree by a test.
 DASHBOARD_ONLY = ("edgecity-village",)
-#: Set by Hermes at import of `gateway/run.py` (before plugin discovery) and inherited by its children.
+#: Set by Hermes at import of `gateway/run.py` and inherited by its children. NOT set yet when `hermes gateway run`
+#: starts its background plugin discovery (that runs first), so the gateway's own argv is the other signal.
 GATEWAY_MARKER = "_HERMES_GATEWAY"
 
 SUMMARY_FMT = "av-approval: plugins: {n} expected, {m} bundled, {u} unknown (mode {mode})"
@@ -635,6 +638,21 @@ def _tick_loop(stop: threading.Event) -> None:
             state["run"]("tick")
 
 
+def gateway_argv(argv: Optional[list] = None) -> bool:
+    """`hermes gateway run` (and `start`): the gateway's own command line (av-events' `_gateway_argv`).
+    `sys.argv[1:5]` covers the unit's `python -m hermes_cli.main [-p <profile>] gateway run`."""
+    args = [str(a) for a in (sys.argv if argv is None else argv)][1:5]
+    if "gateway" not in args:
+        return False
+    rest = args[args.index("gateway") + 1:]
+    return not rest or rest[0] in ("run", "start")
+
+
+def gateway_process() -> bool:
+    """This process is the gateway: its argv says so, or Hermes's gateway marker is set."""
+    return gateway_argv() or os.environ.get(GATEWAY_MARKER) == "1"
+
+
 def _default_manager() -> Any:
     from hermes_cli.plugins import get_plugin_manager
 
@@ -644,9 +662,9 @@ def _default_manager() -> Any:
 def start(ctx: Any, manager_factory: Optional[Callable[[], Any]] = None) -> bool:
     """From `register()`: subscribe the listener once per process, hook `ctx.on_unload`, start the tick.
     Never unloads, never raises. False (and `inventory NOT running` once) when it could not subscribe;
-    False and silent outside the gateway process (`_HERMES_GATEWAY` unset)."""
+    False and silent outside the gateway process (neither `gateway run|start` in argv nor `_HERMES_GATEWAY=1`)."""
     try:
-        if os.environ.get(GATEWAY_MARKER) != "1":
+        if not gateway_process():
             return False  # N5: the gateway only, not the TUI or a standalone CLI that also discovers plugins
         home = hermes_home()
         cfg, readable = read_config(home)

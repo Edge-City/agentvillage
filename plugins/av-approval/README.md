@@ -136,13 +136,18 @@ re-discovery subscribes it again, never twice. A tick takes Hermes's discovery
 lock without waiting and is skipped while a sweep holds it, so it never reads a
 half-reloaded registry.
 
-**Gateway only.** All of this runs only in the process where Hermes set
-`_HERMES_GATEWAY=1` (at import of `gateway/run.py`, before discovery; the
-dashboard runs inside the gateway in 0.21.5). The TUI and a standalone `hermes`
-CLI that also discover plugins publish nothing and log nothing. The marker is
-inherited, so a `hermes` command run by the gateway's own children (the agent's
-terminal) also carries it and runs its own inventory: expect an occasional extra
-`plugin.inventory` row per box, de-duplicable by (box, trigger, window).
+**Gateway only.** All of this runs only in the gateway process: its argv says
+`gateway run` or `gateway start` (`sys.argv[1:5]`, as av-events' `_gateway_argv`;
+this covers the unit's `python -m hermes_cli.main [-p <profile>] gateway run`),
+or Hermes's marker `_HERMES_GATEWAY=1` is set. The argv is what counts at boot:
+`hermes gateway run` starts plugin discovery in a background thread BEFORE it
+imports `gateway/run.py`, which is what sets the marker. The dashboard runs
+inside the gateway in 0.21.5. The TUI and a standalone `hermes` CLI that also
+discover plugins publish nothing and log nothing. The marker is inherited, so a
+`hermes` command run by the gateway's own children (the agent's terminal) also
+carries it, and an agent-terminal `hermes gateway run` matches the argv: either
+runs its own inventory. Expect an occasional extra `plugin.inventory` row per
+box, de-duplicable by (box, trigger, window).
 
 **Classification** (the expected set is `expected_plugins.json`, derived from the
 installer and pinned by `install/tests/expected_plugins_parity.test.ts`):
@@ -220,6 +225,7 @@ a dictionary. If the key cannot be read or created, a per-process key is used an
   (mode <mode>)` (INFO; WARNING when `<u>` is not 0);
 - `av-approval: plugins: inventory NOT running`, only when the listener could not
   be subscribed (no plugin manager, an unreadable or edited `expected_plugins.json`);
+- DEBUG: `av-approval: plugins: tick skipped (a discovery sweep is running)`;
 - quarantine mode only, never in report mode: `av-approval: plugins: quarantine: …`
   (unloaded but not unlisted; could not be unloaded; a key shared with a protected
   plugin). No plugin name is logged.

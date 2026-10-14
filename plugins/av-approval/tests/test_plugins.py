@@ -33,10 +33,15 @@ REF = json.loads((PLUGIN_DIR / "expected_plugins.json").read_text(encoding="utf-
 OTHER = "1" * 40
 
 
-@pytest.fixture(autouse=True)
-def _gateway_process(monkeypatch):
-    """The inventory runs in the gateway process only (`_HERMES_GATEWAY=1`, set by Hermes's gateway)."""
+@pytest.fixture
+def gateway(monkeypatch):
+    """Opt-in: this process is the gateway (Hermes's marker). Tests of the gate itself do not use it."""
     monkeypatch.setenv("_HERMES_GATEWAY", "1")
+
+
+def _not_the_gateway(monkeypatch):
+    monkeypatch.delenv("_HERMES_GATEWAY", raising=False)
+    monkeypatch.setattr(sys, "argv", ["hermes", "chat"])
 
 
 def _mod():
@@ -201,7 +206,7 @@ def test_expected_set_file_is_derived_sorted_and_versioned():
     assert "av-approval" in data["overlay"]
 
 
-def test_a_tampered_expected_set_does_not_run(tmp_path, clean_env, caplog):
+def test_a_tampered_expected_set_does_not_run(tmp_path, clean_env, caplog, gateway):
     mod = _mod()
     bad = json.loads(mod.EXPECTED_PATH.read_text(encoding="utf-8"))
     bad["overlay"].append("fixture-echo")
@@ -246,7 +251,7 @@ def test_mode_parsing_fails_safe_to_report(tmp_path, text, mode, understood):
     assert mod.parse_mode(cfg if readable else None) == (mode, understood)
 
 
-def test_a_mode_it_does_not_understand_is_logged_once_and_runs_as_report(tmp_path, clean_env, caplog):
+def test_a_mode_it_does_not_understand_is_logged_once_and_runs_as_report(tmp_path, clean_env, caplog, gateway):
     mod = _mod()
     (tmp_path / "config.yaml").write_text("av_approval: {unknown_plugins: bogus-SENTINEL}\n", encoding="utf-8")
     clean_env.setenv("HERMES_HOME", str(tmp_path))
@@ -318,7 +323,7 @@ class FakeManager:
 
 
 @pytest.fixture
-def box(tmp_path, clean_env, monkeypatch):
+def box(tmp_path, clean_env, monkeypatch, gateway):
     """A HERMES_HOME with the overlay staged, a fake manager holding it plus a loaded unknown plugin."""
     mod = _mod()
     home = tmp_path / ".hermes"
@@ -402,17 +407,39 @@ def test_off_subscribes_nothing_and_sends_nothing(box):
     assert manager.listeners == [] and "thread" not in mod._state() and ctx.unloads == []
 
 
-def test_outside_the_gateway_process_nothing_runs_and_nothing_is_logged(box, caplog):
+def test_outside_the_gateway_process_nothing_runs_and_nothing_is_logged(box, caplog, monkeypatch):
     mod, home, manager, _ = box
-    box_env = os.environ.copy()
-    try:
-        os.environ.pop("_HERMES_GATEWAY", None)
-        with caplog.at_level(logging.DEBUG, logger="av-approval.plugins"):
-            assert mod.start(FakeBusCtx(), manager_factory=lambda: manager) is False
-    finally:
-        os.environ.clear()
-        os.environ.update(box_env)
+    _not_the_gateway(monkeypatch)
+    with caplog.at_level(logging.DEBUG, logger="av-approval.plugins"):
+        assert mod.start(FakeBusCtx(), manager_factory=lambda: manager) is False
     assert manager.listeners == [] and "thread" not in mod._state() and caplog.records == []
+
+
+def test_the_gateway_argv_alone_runs_the_inventory(box, monkeypatch):
+    # `hermes gateway run` discovers plugins BEFORE gateway/run.py sets the marker (recheck M1).
+    mod, home, manager, _ = box
+    _not_the_gateway(monkeypatch)
+    monkeypatch.setattr(sys, "argv", ["/usr/bin/python3", "-m", "hermes_cli.main", "gateway", "run"])
+    assert mod.start(FakeBusCtx(), manager_factory=lambda: manager) is True and len(manager.listeners) == 1
+
+
+@pytest.mark.parametrize("argv,gateway", [
+    (["hermes", "gateway", "run"], True),
+    (["hermes", "gateway", "start"], True),
+    (["hermes", "gateway"], True),
+    (["hermes", "-p", "alt", "gateway", "run"], True),
+    (["python", "-m", "hermes_cli.main", "gateway", "run"], True),
+    (["/x/hermes_cli/main.py", "gateway", "run", "--replace"], True),
+    (["hermes", "gateway", "stop"], False),
+    (["hermes", "gateway", "status"], False),
+    (["hermes", "chat"], False),
+    (["hermes", "dashboard"], False),
+    (["hermes"], False),
+    (["hermes", "plugins", "install", "gateway"], True),  # av-events' rule, mirrored: a trailing bare `gateway`
+    ([], False),
+])
+def test_gateway_argv_predicate(argv, gateway):
+    assert _mod().gateway_argv(argv) is gateway
 
 
 def test_a_tick_during_a_discovery_sweep_is_skipped_and_publishes_nothing(box):
@@ -878,6 +905,66 @@ def test_hermes_a_tick_inside_a_forced_rediscovery_publishes_nothing(tmp_path):
     (after,) = [p for e, p in result["events"] if e == "after-tick"]
     assert after is True  # a tick with the lock free runs (and sends nothing: nothing changed)
     assert [p["trigger"] for p in _bus(result, "plugin.inventory")] == ["boot"]
+
+
+_MAIN = r"""
+import importlib.abc, json, logging, os, shutil, sys
+home, plugin_dir = sys.argv[1:3]
+os.environ["HERMES_HOME"] = home
+os.environ.pop("_HERMES_GATEWAY", None)
+import yaml
+shutil.copytree(plugin_dir, os.path.join(home, "plugins", "av-approval"), ignore=shutil.ignore_patterns("tests", "__pycache__"))
+with open(os.path.join(home, "config.yaml"), "w") as fh:
+    yaml.safe_dump({"plugins": {"enabled": ["av-approval"]}, "av_approval": {"unknown_plugins": "report"}}, fh)
+seen = {}
+class StopAtGatewayRun(importlib.abc.MetaPathFinder):  # stop where Hermes would import gateway/run.py
+    def find_spec(self, name, path, target=None):
+        if name == "gateway.run":
+            seen["marker_at_gateway_run_import"] = os.environ.get("_HERMES_GATEWAY")
+            raise SystemExit(0)
+        return None
+sys.meta_path.insert(0, StopAtGatewayRun())
+from hermes_cli import plugins as hp
+real_load = hp.PluginManager._load_plugin
+def load(self, manifest):
+    if manifest.name == "av-approval":
+        seen["marker_at_av_approval_load"] = os.environ.get("_HERMES_GATEWAY")
+    return real_load(self, manifest)
+hp.PluginManager._load_plugin = load
+import hermes_cli.main_web_build as mwb, hermes_cli.main_install_repair as mir
+mwb._sweep_stale_bytecode_if_checkout_changed = lambda: None  # never write into the Hermes tree
+mir._recover_from_interrupted_install = lambda: None
+from hermes_cli import main as hm
+hm._sweep_stale_bytecode_if_checkout_changed = lambda: None
+hm._recover_from_interrupted_install = lambda: None
+sys.argv = ["hermes", "gateway", "run"]
+try:
+    hm.main()
+except SystemExit:
+    pass
+hp._join_background_discovery()
+state = getattr(logging.getLogger("av-approval"), "_av_approval_plugins", None) or {}
+thread = state.get("thread")
+seen.update(listener=state.get("unsubscribe") is not None, active=bool(state.get("active")),
+            tick_alive=bool(thread is not None and thread.is_alive()), booted=bool(state.get("booted")))
+print("\n" + json.dumps(seen))
+"""
+
+
+@hermes_backed
+def test_hermes_gateway_run_without_the_marker_starts_the_inventory(tmp_path):
+    # Recheck M1: `hermes gateway run` discovers plugins BEFORE gateway/run.py sets _HERMES_GATEWAY.
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("AV_", "HERMES_", "_HERMES_", "INVOCATION_ID"))}
+    env.update(PYTHONDONTWRITEBYTECODE="1", HERMES_HOME=str(home))
+    out = subprocess.run([sys.executable, "-c", _MAIN, str(home), str(PLUGIN_DIR)], capture_output=True, text=True,
+                         env=env, timeout=600, cwd=str(tmp_path))
+    assert out.returncode == 0, out.stderr[-3000:]
+    seen = json.loads(out.stdout.strip().splitlines()[-1])
+    assert seen["marker_at_av_approval_load"] is None  # the race the marker alone loses
+    assert seen["marker_at_gateway_run_import"] is None
+    assert (seen["listener"], seen["active"], seen["tick_alive"], seen["booted"]) == (True, True, True, True)
 
 
 @hermes_backed
