@@ -64,11 +64,12 @@ describe("AGENTS.md budget (AGENTS-MD-CAP)", () => {
     expect(headings(agents).slice(0, 2)).toEqual(["# AGENTS.md — Your Workspace", "## Red lines"]);
     // The section byte for byte: main's red lines with only the URL-preservation pointer changed (R1)
     // and the Intentions bullet trimmed to the same rules in fewer words (rc38, test_intention_source.py pins it).
+    // PROMPT-FIT (rc41): the label bullet scoped to facts and terms, plus the "Fit and taste questions" bullet (12 bullets).
     const section = agents.slice(at + 1, agents.indexOf("\n## ", at + 1) + 1);
     const fixture = readFileSync(join(import.meta.dir, "fixtures", "agents-md-red-lines.txt"), "utf8");
     expect(section).toBe(fixture);
     expect(fixture).toContain("- No link strips or markdown link tables in chat — URL preservation rules in `skills/index-network/tools.md`.");
-    expect(fixture.split("\n").filter((l) => l.startsWith("- ")).length).toBe(11);
+    expect(fixture.split("\n").filter((l) => l.startsWith("- ")).length).toBe(12);
   });
 
   test("each moved section is in tools.md, once, and no longer in AGENTS.md, which points there", () => {
