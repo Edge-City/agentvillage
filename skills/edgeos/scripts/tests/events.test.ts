@@ -280,4 +280,11 @@ describe("the skill tells the agent to read the day from the script (DATE-1)", (
     expect(section).toContain("say it in your answer");
     expect(section).toContain("Never take today's date from the conversation's start line in your prompt");
   });
+
+  test("no other line sends the agent to its system prompt or to a computed date for today/tomorrow (refuter S1, S2)", () => {
+    expect(skill).not.toContain("Your own clock (the date and timezone in your system prompt)");
+    expect(skill).not.toContain('Convert "tomorrow", "this Thursday", "next week" to actual ISO-8601 timestamps');
+    expect(skill).toContain("never the date in your system prompt: that is the day this chat began");
+    expect(skill).toContain("counting from the day in the newest message stamp");
+  });
 });
