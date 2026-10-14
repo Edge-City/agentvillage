@@ -331,3 +331,26 @@ test("the sync writes only under its target: no staging or retired copy survives
   const adds = workflow.split("\n").filter((line) => /\bgit add\b/.test(line)).map((line) => line.trim());
   expect(adds).toEqual(["git add -A skills/edge-india/references/"]);
 });
+
+test("SEC-5 (a): the forward is one PR from bot/india-refs, never a push to main, and fails closed when the PR is refused", () => {
+  const workflow = readFileSync(join(REPO_ROOT, ".github", "workflows", "sync-edge-india-references.yml"), "utf8");
+  const commands = workflow.split("\n").filter((line) => !line.trim().startsWith("#")).join("\n");
+  // Permissions are exactly contents: write and pull-requests: write (no actions: write, no dispatch).
+  expect(commands).toMatch(/\npermissions:\n {2}contents: write\n {2}pull-requests: write\n\n/);
+  expect(commands).not.toContain("gh workflow run");
+  // The only push is the force-update of the fixed bot branch; nothing pushes, pulls or rebases onto main.
+  expect(commands).toContain("BRANCH: bot/india-refs");
+  const pushes = commands.split("\n").filter((line) => /\bgit push\b/.test(line)).map((line) => line.trim());
+  expect(pushes).toEqual(['git push --force origin "HEAD:refs/heads/$BRANCH"']);
+  expect(commands).not.toMatch(/git pull|GITHUB_REF_NAME|HEAD:main\b|:refs\/heads\/main\b/);
+  // Only a run on main forwards, and the PR targets main: open one, or refresh the open one.
+  expect(commands).toContain('if [ "$GITHUB_REF" != "refs/heads/main" ]; then');
+  expect(commands).toContain('gh pr list --head "$BRANCH" --base main --state open');
+  expect(commands).toContain('gh pr edit "$open" --title "$title" --body-file "$body"');
+  // A refused gh pr create fails the run; there is no fallback commit to main.
+  const refused = commands.slice(commands.indexOf('elif ! gh pr create --base main --head "$BRANCH"'));
+  expect(refused).toMatch(/^elif ! gh pr create[^\n]*\n\s*echo "::error::refused: [^\n]*Allow GitHub Actions to create and approve pull requests[^\n]*\n\s*exit 1\n\s*fi\n/);
+  // The body carries the sync's own check result, since a GITHUB_TOKEN PR starts no pull_request CI.
+  expect(commands).toContain("- Check result: passed, $SUMMARY");
+  expect(commands).toContain("p2p-lanes/edge-agent-skill@$UPSTREAM");
+});

@@ -74,10 +74,11 @@ test("the manifest URL the job defaults to is the path the sync workflow publish
   const target = workflowTarget();
   expect(target).toBe("skills/edge-india/references");
   expect(existsSync(join(REPO_ROOT, target, MANIFEST_FILE))).toBe(true);
-  // The workflow runs on a schedule (always the default branch, main) and pushes to the branch it runs on.
+  // The workflow runs on a schedule (always the default branch, main) and forwards as one PR to main (SEC-5 a):
+  // main, the path the job reads, moves only when a person merges it.
   const workflow = readFileSync(WORKFLOW, "utf8");
   expect(workflow).toMatch(/schedule:\s*\n\s*- cron:/);
-  expect(workflow).toContain('git pull --rebase origin "${GITHUB_REF_NAME}"');
+  expect(workflow).toContain('gh pr create --base main --head "$BRANCH"');
   const derived = `https://raw.githubusercontent.com/${REPO_SLUG}/main/${target}/${MANIFEST_FILE}`;
   expect(DEFAULT_SNAPSHOT_URL).toBe(derived);
   // refs.ts's opt-in live mirror is the same directory.

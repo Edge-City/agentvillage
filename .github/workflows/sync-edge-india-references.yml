@@ -2,19 +2,32 @@
 # (its indexer reads only the public wiki, website and Substack) into
 # skills/edge-india/references/, through scripts/sync-india-references.ts:
 # the whole tree or nothing. A missing, partial or non-India upstream tree fails
-# this run and leaves the committed snapshot as it was. Commits only when a file
-# changed. Replaces sync-edge-esmeralda-references.yml, which copied three
-# Esmeralda-era files and has failed since the upstream moved to India
-# (2026-10-01); skills/edge-esmeralda/references/ is now a frozen snapshot.
+# this run and leaves the committed snapshot as it was. Replaces
+# sync-edge-esmeralda-references.yml, which copied three Esmeralda-era files and
+# has failed since the upstream moved to India (2026-10-01);
+# skills/edge-esmeralda/references/ is now a frozen snapshot.
 #
-# Agents read this commit: each agent's "Edge — knowledge sync" job
+# Forwards as ONE pull request, never a commit to main (SEC-5 fix a): a changed
+# tree is committed on the fixed branch bot/india-refs (force-updated, one commit
+# over main) and one PR to main is opened, or refreshed when it is open already.
+# A person reads the diff and merges; nothing reaches main, the agents, the
+# next release's installed snapshot or the public agentvillage-skills repo
+# before that merge. The PR body carries this run's check result, because a PR
+# opened with GITHUB_TOKEN starts no pull_request CI. If GitHub refuses to open
+# the PR (the repo setting "Allow GitHub Actions to create and approve pull
+# requests" is off), the run fails with that message and nothing is committed
+# to main: there is no fallback to a direct commit. The alternative to that
+# setting is a GitHub App token. A tree identical to main closes a stale PR.
+#
+# Agents read main after the merge: each agent's "Edge — knowledge sync" job
 # (skills/edge-india/scripts/knowledge-sync.ts, every 30 minutes) fetches
 # skills/edge-india/references/manifest.json from main, its default URL, and
 # verifies every file against the SNAPSHOT.json this run writes. The skill's
 # refs.ts reads that local copy (or the snapshot installed at the agent's last
 # roll) and never fetches in a turn by default (skills/edge-india/README.md).
-# The sync refuses any tree that job would refuse, so a published snapshot is
-# always one every agent can take.
+# The sync refuses any tree that job would refuse, so a forwarded snapshot is
+# always one every agent can take. The merge (a push to main under skills/)
+# starts sync-skills.yml by itself, so this workflow dispatches nothing.
 name: Sync Edge City India References
 
 on:
@@ -34,7 +47,7 @@ on:
 
 permissions:
   contents: write
-  actions: write
+  pull-requests: write
 
 concurrency:
   group: sync-edge-india-references
@@ -82,33 +95,74 @@ jobs:
           echo "$result"
           echo "summary=$(echo "$result" | bun -e 'const r = JSON.parse(await Bun.stdin.text()); console.log(`${r.documents} documents; +${r.added.length} ~${r.updated.length} -${r.removed.length}`)')" >> "$GITHUB_OUTPUT"
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "commit_date=$commit_date" >> "$GITHUB_OUTPUT"
 
-      - name: Commit reference changes
-        id: commit
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A skills/edge-india/references/
-          if git diff --cached --quiet; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "No reference changes to commit."
-            exit 0
-          fi
-          git commit -m "Update Edge City India references [automated]" \
-            -m "${{ steps.sync.outputs.summary }} from p2p-lanes/edge-agent-skill@${{ steps.sync.outputs.commit }}"
-          for attempt in 1 2 3; do
-            if git push; then
-              echo "changed=true" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            git pull --rebase origin "${GITHUB_REF_NAME}"
-          done
-          echo "push failed after 3 attempts"
-          exit 1
-
-      - name: Dispatch skills sync
-        if: steps.commit.outputs.changed == 'true' && github.ref_name == 'main'
+      - name: Forward the change as one pull request (never a commit to main)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run sync-skills.yml --ref main
+          GH_REPO: ${{ github.repository }}
+          BRANCH: bot/india-refs
+          SUMMARY: ${{ steps.sync.outputs.summary }}
+          UPSTREAM: ${{ steps.sync.outputs.commit }}
+          UPSTREAM_DATE: ${{ steps.sync.outputs.commit_date }}
+          SOURCE_REF: ${{ github.event.inputs.source_ref || 'main' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # The PR's base is main, so only a run on main may forward: a run on any other branch checks and stops.
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "Checks passed on $GITHUB_REF; only a run on main forwards. Nothing pushed."
+            exit 0
+          fi
+          open=$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          base=$(git rev-parse HEAD)
+          git switch -c "$BRANCH"
+          git add -A skills/edge-india/references/
+          if git diff --cached --quiet; then
+            echo "No reference changes against main."
+            if [ -n "$open" ]; then
+              gh pr close "$open"
+              echo "Closed PR #$open: main already holds this upstream tree."
+            fi
+            exit 0
+          fi
+          files=$(git diff --cached --name-status HEAD -- skills/edge-india/references/)
+          git commit -m "Update Edge City India references [automated]" \
+            -m "$SUMMARY from p2p-lanes/edge-agent-skill@$UPSTREAM"
+          # Same upstream commit over the same main: the branch already holds this forward, so it is not re-pushed.
+          if git fetch --quiet --depth=1 origin "refs/heads/$BRANCH" 2>/dev/null \
+            && [ "$(git cat-file -p FETCH_HEAD | sed -n 's/^parent //p')" = "$base" ] \
+            && git log -1 --format=%B FETCH_HEAD | grep -qF "p2p-lanes/edge-agent-skill@$UPSTREAM"; then
+            echo "$BRANCH already holds p2p-lanes/edge-agent-skill@$UPSTREAM over main $base."
+          else
+            git push --force origin "HEAD:refs/heads/$BRANCH"
+          fi
+          body="$RUNNER_TEMP/india-refs-pr.md"
+          {
+            echo "Automated forward of the Edge City India references. Nothing reaches main, the agents, the next release or agentvillage-skills until a person merges this PR."
+            echo
+            echo "- Upstream: p2p-lanes/edge-agent-skill@$UPSTREAM (ref \`$SOURCE_REF\`, committed $UPSTREAM_DATE)"
+            echo "- Base: main $base"
+            echo "- Check result: passed, $SUMMARY (scripts/sync-india-references.ts: complete India-only tree, size caps, names, UTF-8 with no NUL or HTML, manifest links on the guide's hosts, shrink guard; SNAPSHOT.json records each file's sha256 and the upstream commit)"
+            echo "- Run: $RUN_URL"
+            echo
+            echo "Review the text, not just the checks: the checks prove shape, not content. A changed price, contact, date or instruction reaches every resident as fact within about 35 minutes of the merge."
+            echo
+            echo "This PR was opened with GITHUB_TOKEN, so no pull_request CI ran. To run the Test workflow on it, close and reopen the PR (a reopen by a person starts it). The merge starts sync-skills.yml and test.yml on main."
+            echo
+            echo "Files changed ($(printf '%s\n' "$files" | wc -l | tr -d ' ')):"
+            echo
+            echo '```'
+            printf '%s\n' "$files" | head -n 200
+            echo '```'
+          } > "$body"
+          title="Edge City India references from p2p-lanes/edge-agent-skill@${UPSTREAM:0:8} [automated]"
+          if [ -n "$open" ]; then
+            gh pr edit "$open" --title "$title" --body-file "$body"
+            echo "Refreshed PR #$open."
+          elif ! gh pr create --base main --head "$BRANCH" --title "$title" --body-file "$body"; then
+            echo "::error::refused: GitHub would not open the pull request (is the repo setting 'Allow GitHub Actions to create and approve pull requests' off? the alternative is a GitHub App token). Nothing was committed to main; the forward waits on $BRANCH. Never commit to main instead."
+            exit 1
+          fi
