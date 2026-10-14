@@ -56,7 +56,11 @@ export const MAX_Q = 120;
 export const MAX_SKIP = 5000;
 export const MAX_LIMIT = 100;
 export const DEFAULT_LIMIT = 20;
-export const TIMEOUT_MS = 15_000;
+/**
+ * Each call's own timeout. Above the control plane's 20 s forward (which waits on the app's 12 s budget,
+ * about 17 s at worst), so the box never gives up before the cp and the app have answered: box > cp > app.
+ */
+export const TIMEOUT_MS = 22_000;
 /** The largest answer read; 100 rows are far below it. */
 export const MAX_BODY_BYTES = 2 * 1024 * 1024;
 

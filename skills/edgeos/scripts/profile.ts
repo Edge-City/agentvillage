@@ -24,7 +24,8 @@
  * `CONTROL_PLANE_URL`, `TENANT_ID`, `EDGEOS_API_KEY` and `EDGEOS_API_BASE` come from the environment,
  * else from `$HERMES_HOME/.env` (`setting()` from events.ts). The key never appears in the command,
  * the output or an error, and travels only in the Authorization header, over https to an exact host
- * on a hard-coded list (`CP_HOSTS` and the EdgeOS base, directory.ts), with redirects not followed.
+ * on a hard-coded list (`CP_HOSTS` and the EdgeOS base, directory.ts), with redirects not followed and
+ * directory.ts's TIMEOUT_MS (22 s, above the control plane's 20 s).
  * The answer is projected to PROFILE_FIELDS, so a field added upstream cannot widen the output.
  *
  * Exit codes (the skill's fail-soft, §8):

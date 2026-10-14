@@ -472,7 +472,13 @@ def test_section_8_runs_the_profile_script_reads_only_and_sends_edits_to_the_app
     assert "PATCH" not in SKILL.read_text(encoding="utf-8")
     assert "Call `terminal` with exactly `command` (a `workdir` is fine) and nothing else." in body
     flat = re.sub(r"\s+", " ", body)
-    assert "**Edits are made in the app, never by you.** There is no write call" in flat
+    assert "**Edits are made in the Edge City portal app, never by you.** There is no write call" in flat
+    # Refute O-N3: the owner's profile is read and shared in their private chat only.
+    assert ("**Private chat only.** Read and share the person's profile only in your private chat with them "
+            "(or in your own scheduled job delivering to that private chat); never in a group or shared chat, "
+            "and never for anyone but the person whose agent you are.") in flat
+    # Refute O-N2: no bare "in the app" for edits anywhere in the skill.
+    assert "themselves, in the app" not in SKILL.read_text(encoding="utf-8")
     assert "**Exit 4** means the person's sign-in to the Agent Village app has lapsed: follow §0" in flat
     assert "**Exit 2** means the profile isn't connected to this agent" in flat
     assert "Never show the error text, a status code or a key." in flat

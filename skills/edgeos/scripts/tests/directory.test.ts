@@ -282,9 +282,9 @@ describe("can't reach it right now: exit 1", () => {
     expect(Date.now() - started).toBeLessThan(5_000);
   });
 
-  test("the default timeout is bounded (15 s)", async () => {
+  test("the default timeout is bounded (22 s), above the control plane's 20 s forward (DATA-454b)", async () => {
     const { TIMEOUT_MS } = await import("../directory");
-    expect(TIMEOUT_MS).toBe(15_000);
+    expect(TIMEOUT_MS).toBe(22_000);
   });
 
   test("a 200 that is not a directory listing exits 1", async () => {
