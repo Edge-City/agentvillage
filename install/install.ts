@@ -68,6 +68,7 @@ import {
   capModelMaxTokens,
   configureAvEvents,
   configureAvApproval,
+  configureVillageBridge,
   configureCronScriptTimeout,
   configureCronWrapResponse,
   configureIndexLinks,
@@ -346,6 +347,7 @@ function main(): void {
   configureDashboardAuth();
   configureAvEvents();
   configureAvApproval();
+  configureVillageBridge();
   for (const name of unlistPlugins(NOT_STAGED_PLUGINS)) console.log(`→ removed plugin ${name} from plugins.enabled (not staged: OV-300 M1)`);
   configureIndexLinks();
   configureAvDisplay();

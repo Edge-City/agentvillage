@@ -1,0 +1,13 @@
+{
+  "id": "gold-stars",
+  "name": "Gold Stars",
+  "description": "Send a thoughtful thank-you after an exact preview and manual approval.",
+  "version": "1.1.0",
+  "homepage": "https://agents.edgecity.live/rolodex#gold-stars",
+  "permissions": [
+    { "kind": "read", "label": "Find recipients and check allowance", "description": "Search shared Rolodex recipients and read your remaining Gold Stars and draft status." },
+    { "kind": "action", "label": "Send approved gratitude", "description": "Stage an exact recipient, note and visibility preview; send only after a real manual approval. Cancel unsent drafts." }
+  ],
+  "skills": ["gold-stars"],
+  "operations": ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel"]
+}

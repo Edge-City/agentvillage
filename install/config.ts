@@ -1085,6 +1085,17 @@ export function configureAvApproval(): void {
   }
 }
 
+/** The bridge is inert without a reviewed projection and app bearer; writes also require daemon authority. */
+export function configureVillageBridge(): void {
+  const doc = readConfig();
+  const plugins = { ...((doc.plugins as Record<string, unknown>) ?? {}) };
+  const enabled = Array.isArray(plugins.enabled) ? plugins.enabled.filter((n): n is string => typeof n === "string") : [];
+  if (!enabled.includes("village-bridge")) enabled.push("village-bridge");
+  plugins.enabled = enabled;
+  doc.plugins = plugins;
+  writeConfig(doc);
+}
+
 const INDEX_LINKS_PLUGIN = "index-links";
 
 /** List `index-links` so Hermes loads the tool-result link rewrite. Idempotent. */

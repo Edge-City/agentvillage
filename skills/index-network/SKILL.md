@@ -20,11 +20,11 @@ Edge's bundle for surfacing opportunities through Edge City India's Index Networ
 Read `get_my_profile` only to use the profile that already exists. Call `update_my_profile` only when they explicitly correct a field. A new want and a question about who is waiting both follow [tools.md](tools.md). The welcome in `AGENTS.md` is a separate first-message greeting. Do not send it again from here.
 
 For a live private-chat reply about someone you recommended or an evening
-meeting question, load `rolodex`. Check that person's current mark before
-describing it; an accepted introduction is not proof they met. Let the owner
-reflect, then offer `gold-stars` if they want to thank someone. Recording an
-Index outcome, marking a Rolodex meeting and sending a star are separate
-actions. Scheduled jobs still follow their exact prompt and script output.
+meeting question, load `rolodex`. An accepted introduction is not proof they
+met. Let the owner reflect; meeting marks are website-only. Offer the optional
+installed `gold-stars` mini-app when they want to thank someone, or its website.
+Recording an Index outcome, marking a meeting and sending a star are separate.
+Scheduled jobs still follow their exact prompt and script output.
 
 ## Handoff
 

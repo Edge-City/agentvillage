@@ -16,6 +16,12 @@ Today, capabilities come from **Index Network** (discovery + intent negotiation)
 - **Curates memory** every few days — distills daily notes into long-term `MEMORY.md`.
 - **Audits token usage quietly** with a deterministic local script. It only wakes the agent when meaningful spend has a clear actionable driver, such as scheduled background work dominating the last day.
 
+Hosted residents can opt into **curated mini-apps**: Gold Stars (exact-preview,
+manual approval before gratitude is sent) and Dizko (public event, artist and
+venue discovery). These skills are not baseline installs. The control plane
+owns reviewed versions and install intent; staging files is not proof the
+runtime loaded them. [Build a reviewed mini-app](mini-apps/README.md).
+
 AgentVillage never names the plumbing in chat. You see AgentVillage and (when relevant) your community.
 
 ## Architecture
@@ -35,6 +41,7 @@ See the project hub for the full diagram and decisions.
   - `skills/edge-esmeralda/` — background on the *previous* popup, Edge Esmeralda 2026: popup constants (popup id, week dates, themes), attendee field semantics, the curated wiki/website/newsletter references (a frozen 2026-10-01 snapshot), and the onboarding pointer for obtaining EdgeOS tokens. Background only: it hosts no cron prompts or scripts (they moved to `skills/index-network/` in DATA-361).
   - `skills/token-usage-audit/` — deterministic tenant-local token usage audit script and cron contract. It reads local usage summaries and cron metadata, never calls an LLM, and emits only sanitized aggregate facts.
 - `install/` — bootstrap scripts for plugging AgentVillage into a runtime
+- `mini-apps/` — reviewed bundle manifests and builder starter/contract; no arbitrary code upload or install hooks
 - `docs/negotiator.md` — how to write a resident's `$HERMES_HOME/index/negotiator.ts`
 
 ## Repos
