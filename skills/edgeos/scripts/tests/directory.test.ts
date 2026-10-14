@@ -16,9 +16,11 @@ import {
   EXIT_OK,
   EXIT_UNAVAILABLE,
   EXIT_USAGE,
+  CP_HOSTS,
   FIELDS,
   attendeeLine,
   controlPlaneBase,
+  directBase,
   parseArgs,
   project,
   run,
@@ -28,7 +30,7 @@ const KEY = "example-not-a-key";
 const TENANT = "3f2e1d0c-9b8a-4c7d-8e6f-5a4b3c2d1e0f";
 const POPUP = "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d";
 const ESMERALDA = "43746fd0-bce2-472b-93e4-a438177b2dff";
-const CP = "https://cp.example.test";
+const CP = "https://control-plane-production-606c.up.railway.app";
 
 function home(lines: string[] = []): string {
   const dir = mkdtempSync(join(tmpdir(), "edgeos-directory-"));
@@ -148,7 +150,7 @@ describe("the call", () => {
       q: "Priya Shah", skip: "20", limit: "50", hide_empty_rows: "true", popup_id: POPUP,
     });
     expect(cp.calls[0].init.method).toBe("GET");
-    expect(cp.calls[0].init.redirect).toBe("error");
+    expect(cp.calls[0].init.redirect).toBe("manual");
     expect(cp.calls[0].init.signal).toBeInstanceOf(AbortSignal);
     expect((cp.calls[0].init.headers as Record<string, string>).Authorization).toBe(`Bearer ${KEY}`);
     expect(cp.calls[0].url).not.toContain(KEY);
@@ -172,8 +174,9 @@ describe("the call", () => {
 
   test("settings from the environment win over $HERMES_HOME/.env; a trailing slash on the URL is fine", async () => {
     const cp = stubCp(200, GOOD);
-    await run([], { ...connected(), CONTROL_PLANE_URL: "https://cp2.example.test/", TENANT_ID: "tenant-2" }, cp.impl);
-    expect(cp.calls[0].url.startsWith("https://cp2.example.test/tenants/tenant-2/edgeos/directory?")).toBe(true);
+    const other = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+    await run([], { ...connected(), CONTROL_PLANE_URL: `${CP}/`, TENANT_ID: other.toUpperCase() }, cp.impl);
+    expect(cp.calls[0].url.startsWith(`${CP}/tenants/${other}/edgeos/directory?`)).toBe(true);
   });
 });
 
@@ -194,23 +197,37 @@ describe("not connected: exit 2, and nothing sent when a setting is missing", ()
     expect(cp.calls).toEqual([]);
   });
 
-  test("the key goes only to an https control plane, never with userinfo; a bad tenant id is refused", async () => {
-    expect(controlPlaneBase("https://cp.example.test/")).toBe("https://cp.example.test");
-    expect(controlPlaneBase("https://cp.example.test/base/")).toBe("https://cp.example.test/base");
-    for (const bad of ["http://cp.example.test", "https://u:p@cp.example.test", "https://cp.example.test/?x=1",
-      "https://cp.example.test/#f", "cp.example.test", "not a url", "file:///etc/passwd"]) {
+  test("controlPlaneBase: exact allow-listed host, https, no userinfo, no path, no other port", () => {
+    expect(CP_HOSTS).toEqual(["control-plane-production-606c.up.railway.app"]);
+    expect(controlPlaneBase(`${CP}/`)).toBe(CP);
+    expect(controlPlaneBase(CP.toUpperCase().replace("HTTPS", "https"))).toBe(CP);
+    expect(controlPlaneBase(`${CP}:443`)).toBe(CP);
+    for (const bad of [
+      "https://cp.example.test", // not on the list
+      "http://control-plane-production-606c.up.railway.app", // not https
+      "https://u:p@control-plane-production-606c.up.railway.app", // userinfo
+      "https://x@control-plane-production-606c.up.railway.app",
+      "https://control-plane-production-606c.up.railway.app.evil.example", // suffix
+      "https://evil-control-plane-production-606c.up.railway.app", // prefix
+      "https://control-plane-production-606c.up.railway.app:8443",
+      "https://control-plane-production-606c.up.railway.app/base",
+      "https://control-plane-production-606c.up.railway.app/?x=1",
+      "https://control-plane-production-606c.up.railway.app/#f",
+      "https://control-plane-production-b752.up.railway.app", // the old Esmeralda project
+      "control-plane-production-606c.up.railway.app", "not a url", "file:///etc/passwd",
+    ]) {
       expect(controlPlaneBase(bad)).toBeNull();
     }
-    // Neither is sent to the control plane; the direct path (EdgeOS 403 today) answers instead.
-    const stub = stubBoth([200, GOOD], [403, { detail: "API keys are restricted" }]);
-    const http = await run([], { ...connected(), CONTROL_PLANE_URL: "http://cp.example.test" }, stub.impl);
-    expect([http.code, http.err]).toEqual([EXIT_NOT_CONNECTED, expect.stringContaining("not an https URL")]);
-    const tenant = await run([], { ...connected(), TENANT_ID: "../admin" }, stub.impl);
-    expect([tenant.code, tenant.err]).toEqual([EXIT_NOT_CONNECTED, expect.stringContaining("TENANT_ID is not a tenant id")]);
-    expect(stub.calls.every((c) => c.url.startsWith(EDGEOS))).toBe(true);
-    expect(stub.calls.some((c) => c.url.includes("cp.example.test"))).toBe(false);
   });
 
+  test("directBase: only the documented EdgeOS base", () => {
+    expect(directBase("")).toBe(EDGEOS);
+    expect(directBase(`${EDGEOS}/`)).toBe(EDGEOS);
+    for (const bad of ["https://api.edgeos.world/api/v2", "https://api.edgeos.world/", "http://api.edgeos.world/api/v1",
+      "https://u:p@api.edgeos.world/api/v1", "https://api.edgeos.world.evil.example/api/v1", "https://collector.example/api/v1"]) {
+      expect(directBase(bad)).toBeNull();
+    }
+  });
   test.each([
     [404, { error: "not found" }, "answered 404 not found"], // the cp route not deployed yet
     [401, { error: "unauthorized" }, "answered 401 unauthorized"], // wrong or stale key
@@ -359,7 +376,7 @@ describe("the direct EdgeOS fallback (only when the control plane is not connect
     expect(`${url.origin}${url.pathname}`).toBe(`${EDGEOS}/applications/my/directory/${POPUP}`);
     expect(Object.fromEntries(url.searchParams)).toEqual({ skip: "20", limit: "50", q: "Priya", hide_empty_rows: "true" });
     expect((call.init.headers as Record<string, string>).Authorization).toBe(`Bearer ${KEY}`);
-    expect(call.init.redirect).toBe("error");
+    expect(call.init.redirect).toBe("manual");
     expect(call.url).not.toContain(KEY);
     expect(r.out).not.toContain(KEY);
   });
@@ -427,7 +444,7 @@ describe("the direct EdgeOS fallback (only when the control plane is not connect
   test("the key goes direct only to an EdgeOS host; no popup means no direct call", async () => {
     const off = stubBoth([404, {}], [200, GOOD]);
     const r = await run([], { ...connected(), EDGEOS_API_BASE: "https://collector.example/api/v1" }, off.impl);
-    expect([r.code, r.err]).toEqual([EXIT_NOT_CONNECTED, expect.stringContaining("not an EdgeOS host, so no direct call via=cp")]);
+    expect([r.code, r.err]).toEqual([EXIT_NOT_CONNECTED, expect.stringContaining("EDGEOS_API_BASE is not https://api.edgeos.world/api/v1, so no direct call via=cp")]);
     expect(off.calls.length).toBe(1);
     expect(off.calls[0].url.startsWith(CP)).toBe(true);
     const noPopup = stubBoth([404, {}], [200, GOOD]);
@@ -454,5 +471,78 @@ describe("the direct EdgeOS fallback (only when the control plane is not connect
         expect(everything(r)).not.toContain("Bearer");
       }
     }
+  });
+});
+
+describe("security: the key never leaves for a host off the lists (commit review, 14 Oct)", () => {
+  /** Settings with no popup, so the direct path has nothing to call either. */
+  const noPopup = (over: Record<string, string>) => ({
+    HERMES_HOME: home([`CONTROL_PLANE_URL=${CP}`, `TENANT_ID=${TENANT}`, `EDGEOS_API_KEY=${KEY}`]), ...over,
+  });
+
+  test.each([
+    ["a disallowed host", { CONTROL_PLANE_URL: "https://evil.example" }],
+    ["a look-alike suffix", { CONTROL_PLANE_URL: "https://control-plane-production-606c.up.railway.app.evil.example" }],
+    ["http", { CONTROL_PLANE_URL: "http://control-plane-production-606c.up.railway.app" }],
+    ["userinfo", { CONTROL_PLANE_URL: "https://user:pass@control-plane-production-606c.up.railway.app" }],
+    ["a non-UUID TENANT_ID", { TENANT_ID: "../../admin" }],
+    ["a path-shaped TENANT_ID", { TENANT_ID: `${TENANT}/../x` }],
+  ])("%s: exit 2 and no fetch at all", async (_name, over) => {
+    const stub = stubBoth([200, GOOD], [200, GOOD]);
+    const r = await run([], noPopup(over), stub.impl);
+    expect([r.code, r.out]).toEqual([EXIT_NOT_CONNECTED, ""]);
+    expect(stub.calls).toEqual([]);
+    expect(everything(r)).not.toContain(KEY);
+  });
+
+  test("with a popup set, a refused control plane is never called; only the EdgeOS host is", async () => {
+    for (const bad of ["https://evil.example", "http://control-plane-production-606c.up.railway.app",
+      "https://u:p@control-plane-production-606c.up.railway.app"]) {
+      const stub = stubBoth([200, GOOD], [403, {}]);
+      const r = await run([], { ...connected(), CONTROL_PLANE_URL: bad }, stub.impl);
+      expect(r.code).toBe(EXIT_NOT_CONNECTED);
+      expect(stub.calls.length).toBe(1);
+      expect(stub.calls[0].url.startsWith(`${EDGEOS}/applications/my/directory/`)).toBe(true);
+    }
+  });
+
+  test("a disallowed EdgeOS base: no direct fetch", async () => {
+    const stub = stubBoth([404, {}], [200, GOOD]);
+    const r = await run([], { ...connected(), EDGEOS_API_BASE: "https://evil.example/api/v1" }, stub.impl);
+    expect(r.code).toBe(EXIT_NOT_CONNECTED);
+    expect(stub.directCalls()).toEqual([]);
+    expect(stub.calls.every((c) => c.url.startsWith(CP))).toBe(true);
+  });
+
+  test("a 302 is not followed: redirect is manual, exit 1, one fetch, no fallback", async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const redirecting = (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(null, { status: 302, headers: { location: "https://evil.example/steal" } });
+    }) as unknown as typeof fetch;
+    const r = await run([], connected(), redirecting);
+    expect([r.code, r.out]).toEqual([EXIT_UNAVAILABLE, ""]);
+    expect(r.err).toContain("302 (a redirect, not followed)");
+    expect(calls.length).toBe(1);
+    expect(calls[0].init.redirect).toBe("manual");
+    expect(calls.some((c) => c.url.includes("evil.example"))).toBe(false);
+  });
+
+  test("a 302 on the direct path is not followed either", async () => {
+    const stub = stubBoth([404, {}], [302, {}]);
+    const r = await run([], connected(), stub.impl);
+    expect([r.code, r.err]).toEqual([EXIT_UNAVAILABLE, expect.stringContaining("direct answered 302 (a redirect, not followed) via=direct")]);
+    expect(stub.directCalls()[0].init.redirect).toBe("manual");
+  });
+
+  test("no argument changes the host or the path; the key is only in the header", async () => {
+    const stub = stubBoth([200, GOOD], [200, GOOD]);
+    await run(["--search", "x/../../admin?y=1#z", "--popup", ESMERALDA], connected(), stub.impl);
+    const url = new URL(stub.calls[0].url);
+    expect(`${url.origin}${url.pathname}`).toBe(`${CP}/tenants/${TENANT}/edgeos/directory`);
+    expect(url.searchParams.get("q")).toBe("x/../../admin?y=1#z");
+    expect(url.hash).toBe("");
+    expect(stub.calls[0].url).not.toContain(KEY);
+    expect((stub.calls[0].init.headers as Record<string, string>).Authorization).toBe(`Bearer ${KEY}`);
   });
 });

@@ -25,8 +25,13 @@
  *
  * `CONTROL_PLANE_URL`, `TENANT_ID`, `EDGEOS_API_KEY`, `EDGEOS_API_BASE` and `AV_POPUP_ID` come from the
  * environment, else from `$HERMES_HOME/.env` (`setting()` from events.ts). The key never appears in the
- * command, the output or an error; it is sent only over https, and a redirect is refused rather than
- * followed.
+ * command, the output or an error, and travels only in the Authorization header. Security (commit
+ * review, 14 Oct): it is sent only over https to an exact host on a hard-coded list, `CP_HOSTS` for the
+ * control plane and `EDGEOS_HOSTS` (events.ts) for EdgeOS, with no userinfo, no other port, and for
+ * EdgeOS only the documented `/api/v1` base; anything else is refused with no request sent (exit 2).
+ * `TENANT_ID` and `popup_id` must be UUIDs and the query goes through URLSearchParams, so no argument
+ * or setting can change the host or the path. Redirects are not followed (`redirect: "manual"`); a
+ * 3xx is exit 1.
  * The rows are projected to the skill's §9 fields, so a field added upstream cannot widen the output;
  * a `"*"` (a field the attendee hid) is kept as is (`hidden` in the line output).
  *
@@ -39,7 +44,7 @@
  *     path that answered last;
  *   3 a usage error (the line says which), or the answering path refused the arguments (400/422).
  */
-import { apiBase, setting } from "./events";
+import { DEFAULT_BASE, apiBase, setting } from "./events";
 
 export const MAX_Q = 120;
 export const MAX_SKIP = 5000;
@@ -67,7 +72,8 @@ const KNOWN_CODES = new Set([
 ]);
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const TENANT = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+/** Control plane hosts the key may be sent to: the agentvillage-goa project's production service (CONTEXT.md §3). */
+export const CP_HOSTS = ["control-plane-production-606c.up.railway.app"] as const;
 // deno-lint-ignore no-control-regex
 const CONTROL = /[\u0000-\u001f\u007f]/;
 
@@ -140,7 +146,11 @@ export function parseArgs(argv: string[]): Args | { error: string } {
   return args;
 }
 
-/** The control plane's origin and path when it is https with no userinfo, query or fragment; else null. */
+/**
+ * The control plane's origin when `raw` is exactly https on a host in `CP_HOSTS` (hostname compared
+ * exactly, no suffix match), port 443 or none, no userinfo, no path beyond `/`, no query or fragment;
+ * else null, and the key is not sent.
+ */
 export function controlPlaneBase(raw: string): string | null {
   let url: URL;
   try {
@@ -149,7 +159,16 @@ export function controlPlaneBase(raw: string): string | null {
     return null;
   }
   if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) return null;
-  return `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
+  if (url.port && url.port !== "443") return null;
+  if (url.pathname !== "/") return null;
+  if (!(CP_HOSTS as readonly string[]).includes(url.hostname.toLowerCase())) return null;
+  return `https://${url.hostname.toLowerCase()}`;
+}
+
+/** The EdgeOS base for the direct path: `apiBase()` from events.ts (EdgeOS hosts only), and only the documented path. */
+export function directBase(raw: string): string | null {
+  const base = apiBase(raw);
+  return base === DEFAULT_BASE ? base : null;
 }
 
 /** The query string: allow-listed parameters only. */
@@ -265,9 +284,12 @@ async function attempt(url: string, key: string, fetchImpl: typeof fetch, timeou
     res = await fetchImpl(url, {
       method: "GET",
       headers: { Authorization: `Bearer ${key}`, Accept: "application/json" },
-      redirect: "error",
+      redirect: "manual", // a redirect is never followed, so the key never goes on to another URL
       signal: AbortSignal.timeout(timeoutMs),
     });
+    if ((res.status >= 300 && res.status < 400) || res.type === "opaqueredirect") {
+      return { kind: "unavailable", why: `answered ${res.status} (a redirect, not followed)` };
+    }
     text = await readCapped(res);
   } catch (e) {
     const name = e instanceof Error ? e.name : "error";
@@ -349,12 +371,12 @@ export async function run(argv: string[], env: Env = process.env, fetchImpl: typ
   let cpCalled = false;
   if (!rawBase) cpWhy = "CONTROL_PLANE_URL is not set";
   else if (!tenant) cpWhy = "TENANT_ID is not set";
-  else if (!controlPlaneBase(rawBase)) cpWhy = "CONTROL_PLANE_URL is not an https URL; the key is not sent there";
-  else if (!TENANT.test(tenant)) cpWhy = "TENANT_ID is not a tenant id";
+  else if (!controlPlaneBase(rawBase)) cpWhy = `CONTROL_PLANE_URL is not https on ${CP_HOSTS.join(", ")}; the key is not sent there`;
+  else if (!UUID.test(tenant)) cpWhy = "TENANT_ID is not a tenant id (a UUID)";
 
   if (!cpWhy) {
     const params = query(parsed, popupDefault);
-    const url = `${controlPlaneBase(rawBase)}/tenants/${encodeURIComponent(tenant)}/edgeos/directory?${params.toString()}`;
+    const url = `${controlPlaneBase(rawBase)}/tenants/${tenant.toLowerCase()}/edgeos/directory?${params.toString()}`;
     const cp = await attempt(url, key, fetchImpl, timeoutMs);
     cpCalled = true;
     if (cp.kind !== "not_connected") return finish(cp, "cp", parsed);
@@ -362,10 +384,10 @@ export async function run(argv: string[], env: Env = process.env, fetchImpl: typ
   }
 
   // The direct path: EdgeOS's own directory, the key sent only over https to an EdgeOS host.
-  const edgeos = apiBase(setting("EDGEOS_API_BASE", env));
+  const edgeos = directBase(setting("EDGEOS_API_BASE", env));
   const popup = parsed.popup || (UUID.test(popupDefault) ? popupDefault.toLowerCase() : "");
   const via = cpCalled ? "cp" : "none";
-  if (!edgeos) return notConnected(`${cpWhy}; EDGEOS_API_BASE is not an EdgeOS host, so no direct call via=${via}`);
+  if (!edgeos) return notConnected(`${cpWhy}; EDGEOS_API_BASE is not ${DEFAULT_BASE}, so no direct call via=${via}`);
   if (!popup) return notConnected(`${cpWhy}; AV_POPUP_ID is not set, so no direct call via=${via}`);
   const direct = await attempt(directUrl(edgeos, popup, parsed), key, fetchImpl, timeoutMs);
   return finish(direct, "direct", parsed, cpWhy);
