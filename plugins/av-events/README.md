@@ -31,6 +31,7 @@ plugins/av-events/
   _approvals_reminder.py  one Connect-approvals reminder per Telegram DM session while the welcome's button is unstarted (DATA-444)
   _backup.py       memory.snapshot: collect, pack and upload the memory files (backup thread only)
   _consent.py      the consent_status tool: GET /v1/consent and the answer in words (DATA-157)
+  _pray.py         the pray tool, dark behind AV_PRAY: one request to the control plane for an admin to review (PRAYER P3)
   _brief_items.py  read-only count of inferred intentions awaiting an answer, for the morning brief (DATA-222, DATA-314); never imported by the plugin
   tool_categories.json        frozen seed: tool name -> category (tool_categories_v3)
   edgeos_tool_allowlist.json  frozen seed: EdgeOS operations (edgeos_tool_allowlist_v1)
@@ -61,6 +62,8 @@ plugins/av-events/
 | `AV_BACKUP_MAX_BYTES` | `33554432` | Most file bytes a snapshot reads (the rest are skipped and the snapshot marked partial) and largest compressed archive it uploads. |
 | `AV_BACKUP_MIN_INTERVAL_S` | `300` | Least time between two turn-triggered snapshot passes. A session finalize is not held to it. |
 | `AV_BACKUP_GRACE_S` | `90` | Least time between a snapshot request and the pass that covers it, so the background memory review's writes after a turn are included. |
+| `AV_PRAY` | *(off)* | `1`, `true`, `yes` or `on` registers the `pray` tool (see "Asking the god agents (PRAYER P3)"). Unset: the tool is not registered at all. The control plane writes it only while its own `PRAYERS_ENABLED=1`; a change takes effect at the next gateway restart. |
+| `CONTROL_PLANE_URL` | *(unset)* | The control plane's https origin, which it writes for `dashboard-auth-edgecity`. Read only by `pray`. |
 
 Every variable is read from the process environment first and then from `$HERMES_HOME/.env`, the
 same fallback `plugins/dashboard-auth-edgecity` uses. The dotfile is parsed once and memoised on its
@@ -1831,6 +1834,36 @@ line for the consent brief:
 
 > Your agent's memory files are backed up to restore your agent if its sandbox is rebuilt;
 > withdrawal deletes them.
+
+---
+
+## Asking the god agents (PRAYER P3)
+
+With `AV_PRAY` on, the plugin registers `pray` (toolset `av-events`, `_pray.py`). The agent asks the
+village's god agents for something it needs, today a different model plan:
+`pray({ask: {kind: "model_tier" | "other", tier?, model?}, reason})`. The tool sends one request to
+the control plane's `POST /tenants/{TENANT_ID}/prayers` with `Authorization: Bearer
+$AV_EVENTS_TOKEN` and `X-AV-Session-Kind: dm|cron`, and answers `{prayer_id, status: "received",
+duplicate_open?, review, tell_resident: true}` or `{error, retry_after_s?, message}`. A human admin
+reviews every request before anything changes; the tool itself grants and emits nothing.
+
+- **Who may pray:** the resident's direct chat (recall's rule) and the agent's own cron runs
+  (`record_intention`'s lineage rule; the tool registers those listeners itself). A group, a
+  channel or a session whose kind cannot be read is refused with `group_session`, and nothing is sent.
+- **Checked before sending:** the closed object, the kind, the tier and model shapes, and the reason
+  (NFC and trimmed, 1-600 code points, at most 8 lines, no control characters but newlines, no
+  email, phone-like number, `@handle` or `t.me/` link). The rules and their cases are the shared
+  contract vector `tests/vectors/prayer-contract.json`; the control plane copies it.
+- **The wire:** `CONTROL_PLANE_URL` must be an https origin (plain http only to a loopback host).
+  The JSON body is at most 4 KiB, each attempt has a 10 s deadline, and redirects and proxy variables are
+  refused (`_core.NO_REDIRECT_OPENER`). A transport failure, a deadline, a cut answer or a 5xx is
+  retried once with the same idempotency key, so the control plane answers the retry with the outcome
+  it stored.
+- **Not routed through the approval gate.** `APPROVAL_GATED_TOOLS` is unchanged; the tool has a
+  `NOT_GATED` entry in `install/tests/plugin_tools_gated.test.ts`. The admin's approval is the gate.
+- **Nothing private leaves:** `tool.call` carries only a keyed hash of the arguments, and `pray` is not in
+  `tool_categories.json`, so it leaves as `other` with no name. Log lines carry codes only, never the
+  reason, the token or the tenant.
 
 ---
 

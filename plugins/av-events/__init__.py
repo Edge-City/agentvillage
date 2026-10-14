@@ -22,6 +22,7 @@ import time
 from typing import Any, Callable, Optional
 
 from . import _approval, _approvals_reminder, _edgeos, _inference_run, _intent_approval, _outcome_ask, _share_vote, _terminal_args
+from ._pray import register_pray_tool
 from ._collector import Collector, guarded, hermes_version, overlay_ref
 from ._consent import TOOL_NAME as CONSENT_TOOL_NAME
 from ._consent import register_consent_tool
@@ -1250,7 +1251,8 @@ def register(ctx) -> None:
     when `ctx.register_tool` exists, and — only when `AV_RECORD_INTENTION` is
     on — `record_intention` (`_record_intention.py`, DATA-212); and, behind
     `AV_DIGEST_SHARE` / `AV_VILLAGE_VOTE`, `share_digest` and `village_vote`
-    (`_share_vote.py`, lane O3).
+    (`_share_vote.py`, lane O3); and, behind `AV_PRAY`, `pray` (`_pray.py`,
+    PRAYER P3).
 
     Idempotent. Hermes loads a plugin once per process, but a profile switch or
     a `force=True` reload can call `register()` again on a module that is still
@@ -1293,6 +1295,12 @@ def register(ctx) -> None:
     # (`AV_DIGEST_SHARE`, `AV_VILLAGE_VOTE`) and inert without approval.md.
     try:
         _share_vote.register_share_vote_tools(ctx, emit=_emit_share_vote, ready=_share_vote_emitter_ready)
+    except Exception:  # noqa: BLE001 - the tools are optional; the hooks are not
+        pass
+    # PRAYER P3: `pray`, one request to the control plane for an admin to review,
+    # behind `AV_PRAY` (unset: not registered). Not routed through the approval gate.
+    try:
+        register_pray_tool(ctx)
     except Exception:  # noqa: BLE001 - the tools are optional; the hooks are not
         pass
     # DATA-183: hear about the unload that clears the hooks. Optional in the

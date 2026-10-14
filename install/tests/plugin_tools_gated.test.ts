@@ -92,6 +92,14 @@ const NOT_GATED: readonly NotGated[] = [
       "approval.md propose/poll path (_share_vote.py), not through the pre_tool_call shim",
   },
   {
+    name: "pray",
+    plugin: "av-events",
+    reason:
+      "SIDE EFFECT, raised with the lead: sends one request with a ≤600-char reason to the cp for human review; nothing is " +
+      "granted without an admin's approval on /admin/prayers; registered only with AV_PRAY on; refused in group sessions; " +
+      "per-tenant limits on the cp",
+  },
+  {
     name: "recall",
     plugin: "recall",
     reason: "read: local SQLite FTS5 search over the agent's own notes and the owner's private sessions; no network, refuses in groups; opt-in (AV_RECALL_ENABLED)",
@@ -452,10 +460,10 @@ describe("OV-300 S2: every plugin tool is gated or explicitly NOT_GATED", () => 
   test("the scan finds the tools it should (a scan that finds nothing proves nothing)", () => {
     // Resolved by reading the source: consent_status (_consent.py TOOL_NAME), record_intention
     // (_record_intention.py TOOL_NAME = RECORD_INTENTION_TOOL, _intentions.py), share_digest and
-    // village_vote (_share_vote.py wanted table: SHARE_TOOL, VOTE_TOOL), recall (recall TOOL_NAME),
-    // village (village-bridge literal).
-    expect([...inv.tools.keys()].sort()).toEqual(["consent_status", "recall", "record_intention", "share_digest", "village", "village_vote"]);
-    expect(inv.found.filter((f) => f.includes("register_tool")).length).toBeGreaterThanOrEqual(6);
+    // village_vote (_share_vote.py wanted table: SHARE_TOOL, VOTE_TOOL), pray (_pray.py TOOL_NAME),
+    // recall (recall TOOL_NAME), village (village-bridge literal).
+    expect([...inv.tools.keys()].sort()).toEqual(["consent_status", "pray", "recall", "record_intention", "share_digest", "village", "village_vote"]);
+    expect(inv.found.filter((f) => f.includes("register_tool")).length).toBeGreaterThanOrEqual(7);
   });
 
   test("each tool full-matches an APPROVAL_GATED_TOOLS pattern or has a NOT_GATED entry for its plugin, not both", () => {

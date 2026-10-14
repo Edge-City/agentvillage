@@ -66,6 +66,9 @@ AV_ENV_VARS = (
     "AV_PLUGIN_EVENTS",
     # SEC-6 half 2: model.observed / model.offlist, off until data's DATA-477 release registers them.
     "AV_MODEL_EVENTS",
+    # PRAYER P3: the `pray` tool.
+    "AV_PRAY",
+    "CONTROL_PLANE_URL",
 )
 
 
