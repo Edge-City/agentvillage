@@ -146,8 +146,9 @@ after ov#312 removed them; Carter's ruling, CLAIMS L7212/L7216):
 
 The CP catalog's gold-stars entry carries the same eight operations in the same
 order. The helper and the plugin still accept the six-operation entry from
-before the restore (meeting and Skylight refused under it), so the overlay and
-the catalog can land in either order.
+before the restore (meeting and Skylight refused under it), so the overlay can
+roll out first. The order is one way only: overlay first, then the catalog
+(with a re-stage of installed rows); an older overlay refuses the eight-op entry.
 
 ## Disk staging and lifecycle
 

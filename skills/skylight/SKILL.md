@@ -29,7 +29,8 @@ friendships, companions or events. Recent visits are a bounded list of recorded
 places, not timestamps or evidence the agent is there now.
 
 This read comes with the optional **Gold Stars** mini-app. If `village` answers
-`mini_app_not_installed`, it is not installed (or the owner opted out): give the
+`mini_app_not_installed`, it is not available on this agent yet (or Gold Stars
+is not installed): give the
 Skylight link instead, and do not claim any live observation.
 
 When `live` is false or `current` is null, say live movement is unavailable;

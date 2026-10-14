@@ -13,8 +13,8 @@ MINI_APPS_GATE_VERSION = 1
 # (owner-requested mark/undo) and `skylight.status` (the owner's own read) ride the Gold Stars install,
 # appended in this exact order. The control-plane catalog's gold-stars entry must carry the same list.
 GOLD_STARS = {"version": "1.1.0", "skills": ["gold-stars"], "operations": ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel", "rolodex.meeting", "skylight.status"]}
-# The entry before the restore (ov#343). Still accepted so the overlay and the CP catalog can land in
-# either order; it carries no meeting or Skylight operation, so those stay refused under it.
+# The entry before the restore (ov#343). Still accepted so this overlay can roll out before the CP
+# catalog moves (one way only: overlay first, then the catalog); it carries no meeting or Skylight operation, so those stay refused under it.
 GOLD_STARS_PREVIOUS = {"version": "1.1.0", "skills": ["gold-stars"], "operations": ["rolodex.search", "gold-stars.quota", "gold-stars.prepare", "gold-stars.send", "gold-stars.status", "gold-stars.cancel"]}
 
 # Every `village` operation, classified. A write changes the owner's account state; a read does not.

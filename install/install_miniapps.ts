@@ -16,8 +16,8 @@ export const REVIEWED_MINI_APPS = [
   { id: "dizko", version: "1.0.0", operations: ["mini-app.read"], skills: ["dizko"] },
 ] as const;
 /**
- * The gold-stars entry before the restore (ov#343), still staged byte for byte so the overlay and the
- * CP catalog can land in either order. It carries no meeting or Skylight operation (the plugin refuses
+ * The gold-stars entry before the restore (ov#343), still staged byte for byte so this overlay can roll
+ * out BEFORE the CP catalog moves (overlay first, then the catalog with a re-stage; never the reverse). It carries no meeting or Skylight operation (the plugin refuses
  * them under it). Remove after the CP catalog serves the restored list everywhere.
  */
 export const PREVIOUS_REVIEWED_MINI_APPS = [

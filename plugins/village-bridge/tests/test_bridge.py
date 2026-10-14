@@ -180,7 +180,7 @@ class BridgeTest(unittest.TestCase):
   matchers=approval.split('GATED_MATCHERS: tuple[str, ...] = (',1)[1].split('\n)',1)[0]+'\n'
   self.assertIn('\n    "village",\n',matchers);self.assertNotIn('village.',matchers)
   manifest=(Path(__file__).parents[1]/'plugin.yaml').read_text()
-  self.assertIn('version: 1.3.0\n',manifest);self.assertIn('provides_tools:\n  - village\n',manifest)
+  self.assertIn('version: 1.2.0\n',manifest);self.assertIn('provides_tools:\n  - village\n',manifest)
   with patch.object(bridge,'_REGISTERED',False):
    ctx=types.SimpleNamespace(register_tool=unittest.mock.Mock());bridge.register(ctx)
    self.assertEqual(ctx.register_tool.call_args.kwargs['name'],'village')

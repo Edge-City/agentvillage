@@ -16,8 +16,8 @@ When asked, give the useful link immediately:
 https://agents.edgecity.live/rolodex
 
 The native operations below come with the optional **Gold Stars** mini-app.
-If `village` answers `mini_app_not_installed`, the owner has not installed it
-(or opted out): acknowledge the interaction, offer the Rolodex link where they
+If `village` answers `mini_app_not_installed`, it is not available on this agent
+yet (or Gold Stars is not installed): acknowledge the interaction, offer the Rolodex link where they
 can mark the meeting themselves, and never claim you updated a mark.
 
 For “I met Naman”, call `village` with `operation: "rolodex.search"` and
